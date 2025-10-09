@@ -1138,22 +1138,30 @@ source("R/pool_math.R")
 # ==============================================================================
 
 #' Compute log-likelihood for data given a model
-#' 
+#'
 #' @param model Model specification from new_API.R (race_spec or race_model_spec)
 #' @param data Data frame with columns: outcome, rt, (optionally: component)
-#' @return Log-likelihood value
-compute_loglik <- function(model, data) {
+#' @param cache_env Optional environment for memoising per-trial likelihoods
+#' @return Log-likelihood value with per-trial attributes
+compute_loglik <- function(model, data, cache_env = NULL) {
   if (!is.data.frame(data)) {
     stop("data must be a data frame")
   }
-  
+
   if (!"outcome" %in% names(data) || !"rt" %in% names(data)) {
     stop("data must contain 'outcome' and 'rt' columns")
   }
-  
+
+  # Shared cache for memoisation (allows reuse across repeated evaluations)
+  if (is.null(cache_env)) {
+    cache_env <- new.env(parent = emptyenv())
+  } else if (!is.environment(cache_env)) {
+    stop("cache_env must be an environment or NULL")
+  }
+
   # Prepare model
   prep <- .prepare_model_for_likelihood(model)
-  
+
   # Check if mixture model and whether weights are parameters (auto-estimate)
   comp_info <- prep$components
   is_mixture <- length(comp_info$ids) > 1
@@ -1161,49 +1169,455 @@ compute_loglik <- function(model, data) {
   if (!is.null(comp_info$has_weight_param)) {
     has_weight_param <- any(comp_info$has_weight_param)
   }
-  
-  # Compute likelihood for each trial
-  log_likes <- numeric(nrow(data))
-  
-  for (i in seq_len(nrow(data))) {
-    outcome <- as.character(data$outcome[[i]])
-    rt <- as.numeric(data$rt[[i]])
-    
+
+  # Helper to compute likelihood for a single data row (with memoisation key)
+  eval_row_likelihood <- function(idx) {
+    outcome <- as.character(data$outcome[[idx]])
+    rt_val <- as.numeric(data$rt[[idx]])
+    rt_key <- if (is.na(rt_val)) "NA" else format(rt_val, digits = 22, scientific = FALSE, trim = TRUE)
+    component_key <- ""
+
     if (is_mixture) {
-      # If mixture weights are being estimated (weight_param present),
-      # ignore any component assignment in data and marginalize with current weights.
       if (has_weight_param || !("component" %in% names(data))) {
+        # Mixture-averaged likelihood (weights may be parameters)
         comp_ids <- comp_info$ids
         weights <- comp_info$weights
         total_lik <- 0.0
         for (j in seq_along(comp_ids)) {
-          comp_lik <- .outcome_likelihood(outcome, rt, prep, comp_ids[[j]])
+          comp_lik <- .outcome_likelihood(outcome, rt_val, prep, comp_ids[[j]])
           total_lik <- total_lik + weights[[j]] * comp_lik
         }
+        component_key <- "__mixture__"
         lik <- total_lik
       } else {
-        # Use assigned component if present and weights are not parameters
-        component <- as.character(data$component[[i]])
-        lik <- .outcome_likelihood(outcome, rt, prep, component)
+        component <- as.character(data$component[[idx]])
+        component_key <- component
+        lik <- .outcome_likelihood(outcome, rt_val, prep, component)
       }
     } else {
-      # Single component
       component <- if (length(comp_info$ids) > 0) comp_info$ids[[1]] else "__default__"
-      lik <- .outcome_likelihood(outcome, rt, prep, component)
+      component_key <- component
+      lik <- .outcome_likelihood(outcome, rt_val, prep, component)
     }
-    
-    if (!is.finite(lik) || lik <= 0) {
-      log_likes[[i]] <- -Inf
+
+    key <- paste(component_key, outcome, rt_key, sep = "|")
+
+    if (!is.null(cache_env[[key]])) {
+      return(list(key = key, value = cache_env[[key]]))
+    }
+
+    cache_env[[key]] <- lik
+    list(key = key, value = lik)
+  }
+
+  # Pre-evaluate unique rows to make reuse/caching explicit
+  n_rows <- nrow(data)
+  if (n_rows == 0) {
+    total_ll <- 0.0
+    attr(total_ll, "contributions") <- numeric(0)
+    attr(total_ll, "log_contributions") <- numeric(0)
+    attr(total_ll, "cache") <- cache_env
+    attr(total_ll, "keys") <- character(0)
+    return(total_ll)
+  }
+
+  raw_keys <- character(n_rows)
+  for (i in seq_len(n_rows)) {
+    outcome <- as.character(data$outcome[[i]])
+    rt_val <- as.numeric(data$rt[[i]])
+    rt_key <- if (is.na(rt_val)) "NA" else format(rt_val, digits = 22, scientific = FALSE, trim = TRUE)
+    component_key <- ""
+    if (is_mixture) {
+      if (has_weight_param || !("component" %in% names(data))) {
+        component_key <- "__mixture__"
+      } else {
+        component_key <- as.character(data$component[[i]])
+      }
     } else {
-      log_likes[[i]] <- log(lik)
+      component_key <- if (length(comp_info$ids) > 0) comp_info$ids[[1]] else "__default__"
+    }
+    raw_keys[[i]] <- paste(component_key, outcome, rt_key, sep = "|")
+  }
+
+  unique_keys <- unique(raw_keys)
+  key_to_indices <- split(seq_len(n_rows), raw_keys)
+
+  for (key in unique_keys) {
+    idx <- key_to_indices[[key]][[1]]
+    res <- eval_row_likelihood(idx)
+    # Ensure cache is populated even if likelihood computed downstream encountered Inf/NaN
+    if (is.null(cache_env[[res$key]])) {
+      cache_env[[res$key]] <- res$value
     }
   }
-  
-  # Return total log-likelihood
+
+  lik_values <- vapply(raw_keys, function(key) cache_env[[key]], numeric(1))
+  log_likes <- ifelse(is.finite(lik_values) & lik_values > 0, log(lik_values), -Inf)
+
   total_ll <- sum(log_likes)
-  attr(total_ll, "contributions") <- exp(log_likes)
+  attr(total_ll, "contributions") <- lik_values
   attr(total_ll, "log_contributions") <- log_likes
-  
+  attr(total_ll, "keys") <- raw_keys
+  attr(total_ll, "cache") <- cache_env
+
+  total_ll
+}
+
+# ==============================================================================
+# PART 6b: Table-driven interface helpers
+# ==============================================================================
+
+.tables_active_edges <- function(struct_edges, component_edges, component_id) {
+  se <- struct_edges
+  ce <- component_edges[component_edges$component_id == component_id, ]
+  edges <- merge(se, ce, by = "edge_id", all.x = TRUE, suffixes = c("_struct", "_component"))
+  edges$active <- ifelse(is.na(edges$active), 1L, edges$active)
+  edges$weight <- ifelse(is.na(edges$weight_override), edges$weight_default, edges$weight_override)
+  edges[edges$active == 1L,
+        c("parent_struct_id", "child_struct_id", "role", "weight", "order_idx")]
+}
+
+.tables_payload_accessor <- function(struct_nodes, component_nodes, component_id) {
+  defaults <- setNames(lapply(struct_nodes$payload, function(x) x %||% list()),
+                       struct_nodes$struct_id)
+  comp_rows <- component_nodes[component_nodes$component_id == component_id, ]
+  overrides <- setNames(lapply(comp_rows$payload_override, function(x) x %||% list()),
+                        comp_rows$struct_id)
+  function(struct_id) {
+    payload <- defaults[[struct_id]] %||% list()
+    override <- overrides[[struct_id]]
+    if (!is.null(override) && length(override) > 0) {
+      payload <- modifyList(payload, override, keep.null = TRUE)
+    }
+    payload
+  }
+}
+
+.tables_param_accessor <- function(param_values) {
+  lookup <- setNames(param_values$value, param_values$param_id)
+  function(param_id) {
+    if (is.null(param_id) || length(param_id) == 0) return(NA_real_)
+    val <- lookup[[param_id]]
+    if (is.null(val)) stop(sprintf("No parameter value found for '%s'", param_id))
+    val
+  }
+}
+
+.tables_build_expr <- function(struct_id,
+                               struct_nodes,
+                               active_edges,
+                               payload_getter,
+                               visited = character()) {
+  if (struct_id %in% visited) {
+    stop(sprintf("Cycle detected while building expression for '%s'", struct_id))
+  }
+  row_idx <- match(struct_id, struct_nodes$struct_id)
+  if (is.na(row_idx)) stop(sprintf("Unknown struct_id '%s' in expression build", struct_id))
+  node_row <- struct_nodes[row_idx, ]
+  node_type <- node_row$node_type
+  node_label <- node_row$label
+  payload <- payload_getter(struct_id)
+
+  if (node_type %in% c("accumulator", "pool_k1", "pool")) {
+    return(list(kind = "event", source = node_label, k = payload$k %||% NULL))
+  }
+
+  if (node_type == "guard_blocker") {
+    edges <- active_edges[active_edges$parent_struct_id == struct_id & active_edges$role == "member", ,
+                          drop = FALSE]
+    if (nrow(edges) == 0) {
+      stop(sprintf("Guard blocker '%s' has no member edge", struct_id))
+    }
+    return(.tables_build_expr(edges$child_struct_id[[1]],
+                              struct_nodes,
+                              active_edges,
+                              payload_getter,
+                              c(visited, struct_id)))
+  }
+
+  if (node_type == "guard_reference") {
+    edges <- active_edges[active_edges$parent_struct_id == struct_id, , drop = FALSE]
+    ref_edge <- edges[edges$role == "member", , drop = FALSE]
+    blocker_edge <- edges[edges$role == "blocker", , drop = FALSE]
+    unless_edges <- edges[edges$role == "unless", , drop = FALSE]
+
+    if (nrow(ref_edge) == 0) stop(sprintf("Guard reference '%s' missing reference member", struct_id))
+    if (nrow(blocker_edge) == 0) stop(sprintf("Guard reference '%s' missing blocker", struct_id))
+
+    ref_expr <- .tables_build_expr(ref_edge$child_struct_id[[1]],
+                                   struct_nodes,
+                                   active_edges,
+                                   payload_getter,
+                                   c(visited, struct_id))
+    blocker_expr <- .tables_build_expr(blocker_edge$child_struct_id[[1]],
+                                       struct_nodes,
+                                       active_edges,
+                                       payload_getter,
+                                       c(visited, struct_id))
+    unless_exprs <- if (nrow(unless_edges) > 0) {
+      lapply(unless_edges$child_struct_id,
+             function(cid) .tables_build_expr(cid,
+                                              struct_nodes,
+                                              active_edges,
+                                              payload_getter,
+                                              c(visited, struct_id)))
+    } else {
+      list()
+    }
+
+    return(list(
+      kind = "guard",
+      blocker = blocker_expr,
+      reference = ref_expr,
+      unless = unless_exprs
+    ))
+  }
+
+  stop(sprintf("Unsupported node type '%s' for expression conversion", node_type))
+}
+
+.tables_collect_members <- function(parent_struct_id, role, active_edges, struct_nodes) {
+  edges <- active_edges[active_edges$parent_struct_id == parent_struct_id &
+                          active_edges$role == role, , drop = FALSE]
+  if (nrow(edges) == 0) return(character(0))
+  order_idx <- edges$order_idx
+  if (all(is.na(order_idx))) {
+    ord <- seq_len(nrow(edges))
+  } else {
+    fallback <- suppressWarnings(max(order_idx, na.rm = TRUE))
+    if (!is.finite(fallback)) fallback <- 0
+    order_idx_filled <- ifelse(is.na(order_idx),
+                               fallback + seq_len(nrow(edges)),
+                               order_idx)
+    ord <- order(order_idx_filled, seq_len(nrow(edges)))
+  }
+  edges <- edges[ord, , drop = FALSE]
+  labels <- vapply(edges$child_struct_id, function(cid) {
+    idx <- match(cid, struct_nodes$struct_id)
+    if (is.na(idx)) stop(sprintf("Unknown struct_id '%s' while collecting members", cid))
+    struct_nodes$label[[idx]]
+  }, character(1))
+  labels
+}
+
+tables_build_component_model <- function(struct_nodes,
+                                         struct_edges,
+                                         component_nodes,
+                                         component_edges,
+                                         param_values,
+                                         component_id) {
+  active_node_rows <- component_nodes[component_nodes$component_id == component_id &
+                                        component_nodes$active == 1L, , drop = FALSE]
+  if (nrow(active_node_rows) == 0) {
+    stop(sprintf("Component '%s' has no active nodes", component_id))
+  }
+  active_struct_ids <- active_node_rows$struct_id
+  struct_subset <- struct_nodes[struct_nodes$struct_id %in% active_struct_ids, , drop = FALSE]
+
+  payload_getter <- .tables_payload_accessor(struct_nodes, component_nodes, component_id)
+  param_getter <- .tables_param_accessor(param_values)
+  active_edges <- .tables_active_edges(struct_edges, component_edges, component_id)
+
+  struct_label_lookup <- setNames(struct_nodes$label, struct_nodes$struct_id)
+
+  # Accumulators ----------------------------------------------------------------
+  accumulator_rows <- struct_subset[struct_subset$node_type == "accumulator", , drop = FALSE]
+  accumulators <- lapply(seq_len(nrow(accumulator_rows)), function(i) {
+    row <- accumulator_rows[i, ]
+    payload <- payload_getter(row$struct_id)
+    params <- list()
+    slots <- row$param_slots[[1]]
+    if (length(slots) > 0) {
+      params <- lapply(slots, function(pid) param_getter(pid))
+      names(params) <- names(slots)
+    }
+    list(
+      id = row$label,
+      dist = row$dist_family,
+      onset = payload$onset %||% 0,
+      q = payload$q %||% 0,
+      params = params,
+      components = payload$components %||% NULL
+    )
+  })
+
+  # Pools -----------------------------------------------------------------------
+  pool_rows <- struct_subset[grepl("^pool", struct_subset$node_type), , drop = FALSE]
+  pools <- lapply(seq_len(nrow(pool_rows)), function(i) {
+    row <- pool_rows[i, ]
+    payload <- payload_getter(row$struct_id)
+    members <- unname(.tables_collect_members(row$struct_id, "member", active_edges, struct_nodes))
+    rule <- list(
+      k = payload$k %||% length(members),
+      weights = payload$weights %||% NULL
+    )
+    list(
+      id = row$label,
+      members = members,
+      rule = rule
+    )
+  })
+
+  # Outcomes --------------------------------------------------------------------
+  outcome_rows <- struct_subset[struct_subset$node_type == "outcome", , drop = FALSE]
+  outcomes <- list()
+
+  for (i in seq_len(nrow(outcome_rows))) {
+    row <- outcome_rows[i, ]
+    payload <- payload_getter(row$struct_id)
+    label <- payload$label %||% row$label
+    member_ids <- active_edges[active_edges$parent_struct_id == row$struct_id &
+                                 active_edges$role == "member", , drop = FALSE]
+    if (nrow(member_ids) == 0) {
+      stop(sprintf("Outcome '%s' has no member edge", row$struct_id))
+    }
+    expr <- .tables_build_expr(member_ids$child_struct_id[[1]],
+                               struct_nodes,
+                               active_edges,
+                               payload_getter)
+    outcomes[[length(outcomes) + 1L]] <- list(
+      label = label,
+      expr = expr,
+      options = list()
+    )
+  }
+
+  # Guess outcomes --------------------------------------------------------------
+  guess_rows <- struct_subset[struct_subset$node_type == "guess_sink", , drop = FALSE]
+  if (nrow(guess_rows) > 0) {
+    for (i in seq_len(nrow(guess_rows))) {
+      row <- guess_rows[i, ]
+      payload <- payload_getter(row$struct_id)
+      source_label <- payload$source %||% stop(sprintf("Guess sink '%s' missing source", row$struct_id))
+      source_struct_id <- names(struct_label_lookup)[match(source_label, struct_label_lookup)]
+      if (is.na(source_struct_id)) {
+        stop(sprintf("Guess sink '%s' references unknown source '%s'", row$struct_id, source_label))
+      }
+      expr <- .tables_build_expr(source_struct_id,
+                                 struct_nodes,
+                                 active_edges,
+                                 payload_getter)
+      target_edges <- active_edges[active_edges$parent_struct_id == row$struct_id &
+                                     active_edges$role == "target", , drop = FALSE]
+      if (nrow(target_edges) == 0) {
+        stop(sprintf("Guess sink '%s' must specify at least one target", row$struct_id))
+      }
+      target_labels <- vapply(target_edges$child_struct_id, function(cid) {
+        idx <- match(cid, struct_nodes$struct_id)
+        node_payload <- payload_getter(cid)
+        node_payload$label %||% struct_nodes$label[[idx]]
+      }, character(1))
+      weights <- as.numeric(target_edges$weight)
+      if (any(is.na(weights))) {
+        weights[is.na(weights)] <- 1 / length(weights)
+      }
+      weights <- weights / sum(weights)
+      guess_label <- payload$label %||% toupper(source_label)
+      guess_opts <- list(
+        labels = target_labels,
+        weights = weights,
+        rt_policy = payload$rt_policy %||% "keep"
+      )
+      existing_idx <- which(vapply(outcomes, function(o) identical(o$label, guess_label), logical(1)))
+      if (length(existing_idx) == 0) {
+        outcomes[[length(outcomes) + 1L]] <- list(
+          label = guess_label,
+          expr = expr,
+          options = list(guess = guess_opts)
+        )
+      } else {
+        outcomes[[existing_idx[[1]]]]$options$guess <- guess_opts
+      }
+    }
+  }
+
+  # Metadata --------------------------------------------------------------------
+  metadata <- list()
+  deadline_rows <- struct_subset[struct_subset$node_type == "deadline_sink", , drop = FALSE]
+  if (nrow(deadline_rows) > 0) {
+    payload <- payload_getter(deadline_rows$struct_id[[1]])
+    metadata$deadline <- payload$deadline %||% Inf
+  }
+
+  model <- list(
+    accumulators = accumulators,
+    pools = pools,
+    outcomes = outcomes,
+    metadata = metadata
+  )
+  class(model) <- "race_model_spec"
+  model
+}
+
+compute_loglik_from_tables <- function(struct_nodes,
+                                       struct_edges,
+                                       component_nodes,
+                                       component_edges,
+                                       trial_assignments,
+                                       param_values,
+                                       cache_env = NULL) {
+  required_cols <- c("trial_id", "component_id", "outcome_obs", "rt_obs")
+  missing_cols <- setdiff(required_cols, names(trial_assignments))
+  if (length(missing_cols) > 0) {
+    stop(sprintf("trial_assignments missing required columns: %s",
+                 paste(missing_cols, collapse = ", ")))
+  }
+
+  components <- unique(trial_assignments$component_id)
+  models <- setNames(vector("list", length(components)), components)
+  for (comp in components) {
+    models[[comp]] <- tables_build_component_model(
+      struct_nodes = struct_nodes,
+      struct_edges = struct_edges,
+      component_nodes = component_nodes,
+      component_edges = component_edges,
+      param_values = param_values,
+      component_id = comp
+    )
+  }
+
+  if (is.null(cache_env)) {
+    cache_env <- new.env(parent = emptyenv())
+  } else if (!is.environment(cache_env)) {
+    stop("cache_env must be an environment or NULL")
+  }
+
+  n_trials <- nrow(trial_assignments)
+  log_contributions <- rep(NA_real_, n_trials)
+  contributions <- rep(NA_real_, n_trials)
+  names(log_contributions) <- trial_assignments$trial_id
+  names(contributions) <- trial_assignments$trial_id
+
+  for (comp in components) {
+    idx <- which(trial_assignments$component_id == comp)
+    if (length(idx) == 0) next
+    data_comp <- data.frame(
+      outcome = trial_assignments$outcome_obs[idx],
+      rt = trial_assignments$rt_obs[idx],
+      component = comp,
+      stringsAsFactors = FALSE
+    )
+    ll_comp <- compute_loglik(models[[comp]], data_comp, cache_env = cache_env)
+    log_contrib <- attr(ll_comp, "log_contributions")
+   contrib <- attr(ll_comp, "contributions")
+    log_contributions[idx] <- log_contrib
+    contributions[idx] <- contrib
+  }
+
+  if (any(is.na(log_contributions))) {
+    missing_ids <- trial_assignments$trial_id[is.na(log_contributions)]
+    stop(sprintf("Missing log-likelihood contributions for trial(s): %s",
+                 paste(missing_ids, collapse = ", ")))
+  }
+
+  total_ll <- sum(log_contributions)
+  attr(total_ll, "log_contributions") <- log_contributions
+  attr(total_ll, "contributions") <- contributions
+  attr(total_ll, "cache") <- cache_env
+  attr(total_ll, "component_models") <- models
+  attr(total_ll, "components") <- components
+  attr(total_ll, "trial_assignments") <- trial_assignments
+
   total_ll
 }
 

@@ -251,3 +251,19 @@ head(component_nodes)
 head(component_edges)
 head(trial_assignments)
 head(param_values)
+
+## Demonstration: compute log-likelihood via new table interface ----------
+source("R/generator_new.R")
+source("R/likelihood_new.R")
+
+ll_value <- compute_loglik_from_tables(
+  struct_nodes = struct_nodes,
+  struct_edges = struct_edges,
+  component_nodes = component_nodes,
+  component_edges = component_edges,
+  trial_assignments = trial_assignments,
+  param_values = param_values
+)
+
+print(ll_value)
+print(attr(ll_value, "log_contributions"))

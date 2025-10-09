@@ -3,6 +3,7 @@
 
 source("R/dist.R")
 source("R/utils.R")
+source("R/model_tables.R")
 `%||%` <- function(lhs, rhs) if (is.null(lhs) || length(lhs) == 0) rhs else lhs
 
 # ---- Model preparation helpers ------------------------------------------------
@@ -464,6 +465,9 @@ prepare_model <- function(model) {
 # ---- Public API ----------------------------------------------------------------
 
 simulate_model <- function(model, n_trials, seed = NULL, keep_detail = FALSE) {
+  if (exists("is_model_tables", mode = "function") && is_model_tables(model)) {
+    model <- tables_to_model(model)
+  }
   if (!is.null(seed)) set.seed(seed)
   prep <- prepare_model(model)
   components <- prep[["components"]]

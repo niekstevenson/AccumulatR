@@ -8,6 +8,9 @@ source("R/likelihood_new.R")
 #' @param model Model specification
 #' @return List with parameter paths and values
 .extract_model_params <- function(model, include_component_weights = NULL) {
+  if (exists("is_model_tables", mode = "function") && is_model_tables(model)) {
+    model <- tables_to_model(model)
+  }
   prep <- prepare_model(model)
 
   params <- list()
@@ -124,6 +127,9 @@ source("R/likelihood_new.R")
 #' @param new_value New parameter value
 #' @return Modified model
 .modify_model_param <- function(model, param_info, param_key, new_value) {
+  if (exists("is_model_tables", mode = "function") && is_model_tables(model)) {
+    model <- tables_to_model(model)
+  }
   info <- param_info[[param_key]]
 
   if (identical(info$type, "accumulator")) {

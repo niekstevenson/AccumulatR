@@ -1,269 +1,30 @@
 rm(list = ls())
 
-## -------------------------------------------------------------------------
-## Three-tier representation of the likelihood graph
-## -------------------------------------------------------------------------
-
-## Structural template (component-agnostic) -------------------------------
-make_struct_node <- function(struct_id, label, node_type,
-                             dist_family = NA_character_,
-                             calc_mode = "density",
-                             param_slots = NULL,
-                             payload = NULL) {
-  if (is.null(param_slots)) param_slots <- list()
-  if (is.null(payload)) payload <- list()
-  data.frame(
-    struct_id   = struct_id,
-    label       = label,
-    node_type   = node_type,
-    dist_family = dist_family,
-    calc_mode   = calc_mode,
-    param_slots = I(list(param_slots)),
-    payload     = I(list(payload)),
-    stringsAsFactors = FALSE
-  )
-}
-
-struct_nodes <- do.call(
-  rbind,
-  list(
-    make_struct_node("acc_go_left_main", "go_left_main",
-                     "accumulator", "lognormal", "density",
-                     list(meanlog = "mu_go_left_main", sdlog = "sd_go_shared"),
-                     list(onset = 0)),
-    make_struct_node("acc_go_left_aux", "go_left_aux",
-                     "accumulator", "lognormal", "density",
-                     list(meanlog = "mu_go_left_aux", sdlog = "sd_go_shared"),
-                     list(onset = 0)),
-    make_struct_node("pool_left_k1", "pool_left",
-                     "pool_k1", NA_character_, "density",
-                     NULL,
-                     list(k = 1L, members_expected = 2L)),
-    make_struct_node("acc_go_right", "go_right",
-                     "accumulator", "lognormal", "density",
-                     list(meanlog = "mu_go_right", sdlog = "sd_go_shared"),
-                     list(onset = 0)),
-    make_struct_node("acc_stop", "stop_signal",
-                     "accumulator", "lognormal", "density",
-                     list(meanlog = "mu_stop", sdlog = "sd_stop"),
-                     list(onset = 0.05)),
-    make_struct_node("acc_timeout", "timeout",
-                     "accumulator", "lognormal", "density",
-                     list(meanlog = "mu_timeout", sdlog = "sd_timeout"),
-                     list(onset = 0.05)),
-    make_struct_node("guard_go_right_ref", "guard_reference",
-                     "guard_reference", NA_character_, "density",
-                     NULL,
-                     list(group = "go_vs_stop")),
-    make_struct_node("guard_go_right_blk", "guard_blocker",
-                     "guard_blocker", NA_character_, "density",
-                     NULL,
-                     list(group = "go_vs_stop")),
-    make_struct_node("out_left", "outcome_left",
-                     "outcome", NA_character_, "probability",
-                     NULL,
-                     list(label = "Left")),
-    make_struct_node("out_right", "outcome_right",
-                     "outcome", NA_character_, "probability",
-                     NULL,
-                     list(label = "Right")),
-    make_struct_node("guess_timeout", "guess_sink",
-                     "guess_sink", NA_character_, "probability",
-                     NULL,
-                     list(source = "timeout")),
-    make_struct_node("deadline_global", "deadline_sink",
-                     "deadline_sink", NA_character_, "probability",
-                     NULL,
-                     list(deadline = 0.700))
-  )
-)
-
-make_struct_edge <- function(edge_id, parent_struct_id, child_struct_id,
-                             role, weight = NA_real_, order_idx = NA_integer_) {
-  data.frame(
-    edge_id          = edge_id,
-    parent_struct_id = parent_struct_id,
-    child_struct_id  = child_struct_id,
-    role             = role,
-    weight_default   = weight,
-    order_idx        = order_idx,
-    stringsAsFactors = FALSE
-  )
-}
-
-struct_edges <- do.call(
-  rbind,
-  list(
-    make_struct_edge("E01", "pool_left_k1",    "acc_go_left_main", "member",     NA, 1L),
-    make_struct_edge("E02", "pool_left_k1",    "acc_go_left_aux",  "member",     NA, 2L),
-    make_struct_edge("E03", "out_left",        "pool_left_k1",     "member",     NA, 1L),
-    make_struct_edge("E04", "out_left",        "acc_go_right",     "competitor", NA, 1L),
-    make_struct_edge("E05", "out_left",        "acc_timeout",      "competitor", NA, 2L),
-    make_struct_edge("E06", "out_right",       "acc_go_right",     "member",     NA, 1L),
-    make_struct_edge("E07", "out_right",       "pool_left_k1",     "competitor", NA, 1L),
-    make_struct_edge("E08", "out_right",       "acc_timeout",      "competitor", NA, 2L),
-    make_struct_edge("E09", "guess_timeout",   "acc_timeout",      "donor",      NA, NA),
-    make_struct_edge("E10", "guess_timeout",   "out_left",         "target",     0.2, 1L),
-    make_struct_edge("E11", "guess_timeout",   "out_right",        "target",     0.8, 2L),
-    make_struct_edge("E12", "deadline_global", "pool_left_k1",     "competitor", NA, 1L),
-    make_struct_edge("E13", "deadline_global", "acc_go_right",     "competitor", NA, 2L),
-    make_struct_edge("E14", "deadline_global", "acc_timeout",      "competitor", NA, 3L),
-    make_struct_edge("E15", "out_left",        "guard_go_right_ref","competitor", NA, 1L),
-    make_struct_edge("E16", "out_right",       "guard_go_right_ref","member",     NA, 1L),
-    make_struct_edge("E17", "deadline_global", "guard_go_right_ref","competitor", NA, 2L),
-    make_struct_edge("E18", "guard_go_right_ref","acc_go_right",    "member",     NA, 1L),
-    make_struct_edge("E19", "guard_go_right_ref","guard_go_right_blk","blocker",  NA, 1L),
-    make_struct_edge("E20", "guard_go_right_blk","acc_stop",        "member",     NA, 1L),
-    make_struct_edge("E21", "guard_go_right_blk","acc_go_right",    "reference",  NA, 1L)
-  )
-)
-
-## Component activation tables -------------------------------------------
-make_component_node <- function(component_id, struct_id,
-                                active = TRUE, payload_override = NULL) {
-  if (is.null(payload_override)) payload_override <- list()
-  data.frame(
-    component_id     = component_id,
-    struct_id        = struct_id,
-    active           = as.integer(active),
-    payload_override = I(list(payload_override)),
-    stringsAsFactors = FALSE
-  )
-}
-
-component_nodes <- do.call(
-  rbind,
-  list(
-    ## Baseline component
-    make_component_node("baseline", "acc_go_left_main"),
-    make_component_node("baseline", "acc_go_left_aux"),
-    make_component_node("baseline", "pool_left_k1"),
-    make_component_node("baseline", "acc_go_right"),
-    make_component_node("baseline", "acc_stop", active = FALSE),
-    make_component_node("baseline", "acc_timeout"),
-    make_component_node("baseline", "guard_go_right_ref", active = FALSE),
-    make_component_node("baseline", "guard_go_right_blk", active = FALSE),
-    make_component_node("baseline", "out_left"),
-    make_component_node("baseline", "out_right"),
-    make_component_node("baseline", "guess_timeout"),
-    make_component_node("baseline", "deadline_global"),
-    ## Stop component
-    make_component_node("stop", "acc_go_left_main"),
-    make_component_node("stop", "acc_go_left_aux"),
-    make_component_node("stop", "pool_left_k1"),
-    make_component_node("stop", "acc_go_right"),
-    make_component_node("stop", "acc_stop", active = TRUE),
-    make_component_node("stop", "acc_timeout"),
-    make_component_node("stop", "guard_go_right_ref", active = TRUE),
-    make_component_node("stop", "guard_go_right_blk", active = TRUE),
-    make_component_node("stop", "out_left"),
-    make_component_node("stop", "out_right"),
-    make_component_node("stop", "guess_timeout"),
-    make_component_node("stop", "deadline_global")
-  )
-)
-
-make_component_edge <- function(component_id, edge_id,
-                                active = TRUE, weight_override = NA_real_) {
-  data.frame(
-    component_id    = component_id,
-    edge_id         = edge_id,
-    active          = as.integer(active),
-    weight_override = weight_override,
-    stringsAsFactors = FALSE
-  )
-}
-
-component_edges <- do.call(
-  rbind,
-  list(
-    ## Baseline: guard edges inactive, direct go_right edges active
-    make_component_edge("baseline", "E01"),
-    make_component_edge("baseline", "E02"),
-    make_component_edge("baseline", "E03"),
-    make_component_edge("baseline", "E04"),
-    make_component_edge("baseline", "E05"),
-    make_component_edge("baseline", "E06"),
-    make_component_edge("baseline", "E07"),
-    make_component_edge("baseline", "E08"),
-    make_component_edge("baseline", "E09"),
-    make_component_edge("baseline", "E10"),
-    make_component_edge("baseline", "E11"),
-    make_component_edge("baseline", "E12"),
-    make_component_edge("baseline", "E13"),
-    make_component_edge("baseline", "E14"),
-    make_component_edge("baseline", "E15", active = FALSE),
-    make_component_edge("baseline", "E16", active = FALSE),
-    make_component_edge("baseline", "E17", active = FALSE),
-    make_component_edge("baseline", "E18", active = FALSE),
-    make_component_edge("baseline", "E19", active = FALSE),
-    make_component_edge("baseline", "E20", active = FALSE),
-    make_component_edge("baseline", "E21", active = FALSE),
-    ## Stop: guard edges active, direct go_right edges inactive
-    make_component_edge("stop", "E01"),
-    make_component_edge("stop", "E02"),
-    make_component_edge("stop", "E03"),
-    make_component_edge("stop", "E04", active = FALSE),
-    make_component_edge("stop", "E05"),
-    make_component_edge("stop", "E06", active = FALSE),
-    make_component_edge("stop", "E07"),
-    make_component_edge("stop", "E08"),
-    make_component_edge("stop", "E09"),
-    make_component_edge("stop", "E10"),
-    make_component_edge("stop", "E11"),
-    make_component_edge("stop", "E12"),
-    make_component_edge("stop", "E13", active = FALSE),
-    make_component_edge("stop", "E14"),
-    make_component_edge("stop", "E15"),
-    make_component_edge("stop", "E16"),
-    make_component_edge("stop", "E17"),
-    make_component_edge("stop", "E18"),
-    make_component_edge("stop", "E19"),
-    make_component_edge("stop", "E20"),
-    make_component_edge("stop", "E21")
-  )
-)
-
-## Trial table ------------------------------------------------------------
-trial_assignments <- data.frame(
-  trial_id     = c(101, 102, 201, 202, 103),
-  component_id = c("baseline", "baseline", "stop", "stop", "baseline"),
-  outcome_obs  = c("Left", "Right", "Right", "Left", "Right"),
-  rt_obs       = c(0.312, 0.295, 0.348, 0.410, 0.287),
-  stringsAsFactors = FALSE
-)
-
-## Parameter values -------------------------------------------------------
-param_values <- data.frame(
-  param_id = c("mu_go_left_main", "mu_go_left_aux", "mu_go_right",
-               "mu_timeout", "mu_stop",
-               "sd_go_shared", "sd_timeout", "sd_stop"),
-  value    = c(-1.20, -1.28, -1.10,
-               -1.40, -1.45,
-                0.18,  0.10,  0.16),
-  stringsAsFactors = FALSE
-)
-
-## Optional: inspect structures ------------------------------------------
-head(struct_nodes)
-head(struct_edges)
-head(component_nodes)
-head(component_edges)
-head(trial_assignments)
-head(param_values)
-
-## Demonstration: compute log-likelihood via new table interface ----------
+source("examples/new_API.R")
+source("R/model_tables.R")
 source("R/generator_new.R")
 source("R/likelihood_new.R")
 
-ll_value <- compute_loglik_from_tables(
-  struct_nodes = struct_nodes,
-  struct_edges = struct_edges,
-  component_nodes = component_nodes,
-  component_edges = component_edges,
-  trial_assignments = trial_assignments,
-  param_values = param_values
-)
+# Choose an example specification
+model_spec <- new_api_examples[[5]]
 
-print(ll_value)
-print(attr(ll_value, "log_contributions"))
+# Translate specification to table representation
+model_tables <- model_to_tables(model_spec)
+
+cat("struct_nodes:\n")
+print(head(model_tables$struct_nodes))
+cat("\nparam_values:\n")
+print(head(model_tables$param_values))
+cat("\ncomponents:\n")
+print(model_tables$components)
+
+# Simulate a small data set via tables
+set.seed(123)
+sim_data <- simulate_model(model_tables, n_trials = 1000)
+
+cat("\nSimulation outcome proportions:\n")
+print(prop.table(table(sim_data$outcome)))
+
+# Compute likelihood directly from tables
+ll_value <- compute_loglik(model_tables, sim_data)
+cat(sprintf("\nLog-likelihood: %.4f\n", ll_value))

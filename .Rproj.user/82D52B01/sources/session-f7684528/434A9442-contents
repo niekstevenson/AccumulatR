@@ -1,0 +1,40 @@
+# Effective per-accumulator terms at time t
+
+tilde_f <- function(t, onset, q, dfun) {
+  # Indicator t >= onset handled by zeroing density below onset
+  out <- rep(0.0, length(t))
+  mask <- t >= onset
+  if (any(mask)) {
+    out[mask] <- (1 - q) * dfun(t[mask] - onset)
+  }
+  out
+}
+
+tilde_F <- function(t, onset, q, pfun) {
+  out <- rep(0.0, length(t))
+  mask <- t >= onset
+  if (any(mask)) {
+    out[mask] <- (1 - q) * pfun(t[mask] - onset)
+  }
+  out
+}
+
+tilde_S <- function(t, onset, q, pfun) {
+  1 - tilde_F(t, onset, q, pfun)
+}
+
+# Convenience: build dfun/pfun from dist registry + params
+make_dfun <- function(dist, par) {
+  validate_dist_params(dist, par)
+  d <- dist_registry(dist)$d
+  force(par)
+  function(x) d(x, par)
+}
+
+make_pfun <- function(dist, par) {
+  validate_dist_params(dist, par)
+  p <- dist_registry(dist)$p
+  force(par)
+  function(x) p(x, par)
+}
+

@@ -1,0 +1,147 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{bm}
+\usepackage[authoryear,round]{natbib}
+\usepackage[hidelinks]{hyperref}
+\title{A General Race-Model Likelihood: Structure, Notation, and Examples}
+\author{Cindy}
+\date{}
+\begin{document}
+\maketitle
+\begin{abstract}
+Race models explain choices and response times by positing latent \emph{accumulators} that finish at random times and compete to determine the observed outcome. This note presents a single, general likelihood recipe that covers common constructions (pooling, AND/OR logic, inhibition/exclusion, mixtures, terminals, censors, and deadlines) without enumerating many special cases. We express model structure with simple Boolean-like expressions over \emph{pools} of accumulators and show how each expression defines an \emph{event CDF} and its \emph{first-hit density}. Small DSL examples illustrate how specifications map directly to the mathematics. The development assumes only that finishing-time densities and cumulative distribution functions are available.
+\end{abstract}
+\section{Overview}
+Decisions are represented as contests among \emph{events} that become true over time. Events are built from \emph{pools} of accumulators using AND/OR/NOT-like operators and optional guards (inhibitors and protectors). An observed response occurs when its event becomes true \emph{first}. This view yields a compact, general per-trial likelihood that applies regardless of how events are composed.
+\section{Objects and Notation}
+Each accumulator $i$ has finishing-time CDF $F_i(t)$, PDF $f_i(t)$, and survival $S_i(t)=1-F_i(t)$. A \emph{pool} $P$ aggregates one or more accumulators under a completion rule. The most common rule is $k$-of-$n$: the pool completes when the $k$-th member finishes. For i.i.d. members with CDF $F$ and PDF $f$,
+\begin{equation}
+  F_{(k)}(t) = \sum_{m=k}^{n} {n\choose m} [F(t)]^{m} [1-F(t)]^{n-m},\qquad
+  f_{(k)}(t) = {n\choose k-1} f(t) [F(t)]^{k-1} [1-F(t)]^{n-k}.\label{eq:pool-kofn}
+\end{equation}
+For heterogeneous members $i=1..n$, the first-hit density is
+\begin{equation}
+  f_{(k)}(t) = \sum_{j=1}^{n} f_j(t)\; \sum_{\substack{S\subseteq \{1..n\}\setminus\{j\}\\ |S|=k-1}}\; \prod_{i\in S} F_i(t)\; \prod_{i\notin S,\ i\ne j} \bigl[1-F_i(t)\bigr],\label{eq:pool-kofn-hetero}
+\end{equation}
+with $F_{(k)}(t)$ the corresponding CDF.
+We build \emph{events} from pools using a small expression calculus. Every event $E$ has a completion probability $C_E(t)$ (true by $t$) and a first-hit density $h_E(t)$ (becomes true \emph{at} $t$). Throughout we assume independence between individual accumulators. 
+\section{Expression Calculus (Events from Pools)}
+Let $E_1,E_2$ be events. The following rules define $C_E$ and $h_E$ recursively.
+\paragraph{Event from a pool.} If $E$ is the event that pool $P$ completes, then $C_E(t)=F_P(t)$ and $h_E(t)=f_P(t)$.
+\paragraph{AND (all-of).} $E=E_1\land E_2$ becomes true when the last required part finishes:
+\begin{equation}
+  C_{\land}(t) = C_{E_1}(t)\,C_{E_2}(t),\qquad
+  h_{\land}(t) = h_{E_1}(t)\,C_{E_2}(t) + h_{E_2}(t)\,C_{E_1}(t).\label{eq:and}
+\end{equation}
+\paragraph{OR (first-of).} $E=E_1\lor E_2$ becomes true when the first part finishes:
+\begin{equation}
+  C_{\lor}(t) = 1 - \bigl[1-C_{E_1}(t)\bigr]\bigl[1-C_{E_2}(t)\bigr],\qquad
+  h_{\lor}(t) = h_{E_1}(t)\,\bigl[1-C_{E_2}(t)\bigr] + h_{E_2}(t)\,\bigl[1-C_{E_1}(t)\bigr].\label{eq:or}
+\end{equation}
+\paragraph{NOT / exclusion.} Absence constraints do not create new first-hits; instead, they multiply the likelihood by survival factors of the excluded elements. If outcome $R$ must exclude a set $\mathcal{X}_R$ and is inhibited by $\mathcal{I}_R$ (blockers), define
+\begin{equation}
+  M_R(t) = \prod_{X\in\mathcal{X}_R} S_X(t)\; \prod_{I\in\mathcal{I}_R} S_I(t).\label{eq:absence}
+\end{equation}
+Guards (\texttt{inhibit}/\texttt{guard} in the DSL) are encoded as such absence multipliers, optionally disabled by protectors that have finished earlier.
+\section{Unified Per-Trial Likelihood}
+Let the model offer responses $\{R\}$ (each an event expression), terminals $\{T\}$ that yield no choice, and censors $\{C\}$ that end observation. For a trial with observed outcome $o$ at time $t$, the contribution is
+\begin{equation}
+  \ell_{o}(t) = h_{o}(t)
+  \Biggl\{\prod_{S \neq o} \bigl[1 - C_S(t)\bigr]\Biggr\}
+  \Biggl\{\prod_{I \in \mathcal{I}_{o}} S_I(t)\Biggr\}
+  \Biggl\{\prod_{X \in \mathcal{X}_{o}} S_X(t)\Biggr\}
+  \Biggl\{\prod_T S_T(t)\Biggr\}
+  \Biggl\{\prod_C S_C(t)\Biggr\}.\label{eq:trial-lik}
+\end{equation}
+If a terminal $T$ or censor $C$ is observed instead, use their densities
+\begin{equation}
+  \tau_T(t) = f_T(t)\, \prod_R \bigl[1 - C_R(t)\bigr] \prod_{T'\neq T} S_{T'}(t) \prod_{C} S_C(t),\qquad
+  \gamma_C(t) = f_C(t)\, \prod_R \bigl[1 - C_R(t)\bigr] \prod_T S_T(t) \prod_{C'\neq C} S_{C'}(t).\label{eq:term-censor}
+\end{equation}
+With a deadline $D$, densities are truncated to $t\le D$ and the no-response probability collects remaining mass
+\begin{equation}
+  \Pr(\text{no response by } D) = \prod_R \bigl[1 - C_R(D)\bigr] \prod_k \bigl[1 - F_{\text{censor},k}(D)\bigr].\label{eq:deadline}
+\end{equation}
+The full log-likelihood sums $\log L = \sum_j \log \ell_{o_j}(t_j)$ over trials (with $\tau$/$\gamma$ replacing $\ell$ when appropriate).
+\section{Mixtures, Mapping, and Shared Parameters}
+Mixtures average component-wise likelihoods: for components $c$ with weights $w_c$,
+\begin{equation}
+  \ell(t,o) = \sum_c w_c\, \ell_c(t,o).\label{eq:mixture}
+\end{equation}
+Fixed relabelling or guessing maps the vector of response densities $\bm{p}(t)$ to $\bm{p}'(t)=\bm{M}\,\bm{p}(t)$ for a column-stochastic matrix $\bm{M}$. Shared parameters constrain subsets of $\bm{\theta}$ so two or more pools share distributional parameters; this changes $F$/$f$ but not the structural forms in Equations~\eqref{eq:and}--\eqref{eq:trial-lik}.
+\section{DSL Examples (specification \textrm{\texttt{examples/new\_API.R}})}
+We show how the DSL maps to the mathematics above. In the snippets, \texttt{add\_pool} declares a pool, \texttt{add\_outcome} names an outcome and attaches an event expression, and \texttt{inhibit}/\texttt{all\_of}/\texttt{first\_of} correspond to NOT/AND/OR semantics.
+\paragraph{Simple two-response race.} Two single-member pools compete.
+\begin{verbatim}
+example_1_simple <- race_spec() |>
+  add_accumulator("go1", "lognormal", meanlog = log(0.30), sdlog = 0.18) |>
+  add_accumulator("go2", "lognormal", meanlog = log(0.32), sdlog = 0.18) |>
+  add_pool("R1", "go1") |>
+  add_pool("R2", "go2") |>
+  add_outcome("R1", "R1") |>
+  add_outcome("R2", "R2") |>
+  build_model()
+\end{verbatim}
+Math at a glance: $h_{R1}(t)=f_{go1}(t)$, $C_{R2}(t)=F_{go2}(t)$; use Equation~\eqref{eq:trial-lik} for $\ell_{R1}(t)$ and swap roles for $R2$.
+\paragraph{Go/Stop with inhibition and gating.} One response is inhibited by a stop signal; another requires the stop as a gate.
+\begin{verbatim}
+example_2_stop_mixture <- race_spec() |>
+  add_pool("GO1", "go1") |>
+  add_pool("STOP", "stop") |>
+  add_pool("GO2", "go2") |>
+  add_outcome("R1", inhibit("GO1", by = "STOP")) |>
+  add_outcome("R2", all_of("GO2", "STOP")) |>
+  build_model()
+\end{verbatim}
+Here $h_{R1}(t)=h_{GO1}(t)$ with absence multiplier $M_{R1}(t)=S_{STOP}(t)$; and $h_{R2}(t)=h_{\land}(t)$ from Equation~\eqref{eq:and} with $E_1=GO2$, $E_2=STOP$.
+\paragraph{$k$-of-$n$ pool.} Outcome completes when two of three members finish.
+\begin{verbatim}
+example_9_advanced_k <- race_spec() |>
+  add_pool("A", c("a1","a2","a3"), k = 2L) |>
+  add_outcome("A", "A") |>
+  build_model()
+\end{verbatim}
+Use Equation~\eqref{eq:pool-kofn} (or \eqref{eq:pool-kofn-hetero}) to obtain $F_A$ and $f_A$, then plug into Equation~\eqref{eq:trial-lik}.
+\paragraph{Dual path via shared gate.} Two outcomes share a last pool (a gate), requiring tie resolution if the gate finishes at $t$.
+\begin{verbatim}
+example_6_dual_path <- race_spec() |>
+  add_pool("TaskA", "acc_taskA") |>
+  add_pool("TaskB", "acc_taskB") |>
+  add_pool("GateC", "acc_gateC") |>
+  add_outcome("Outcome_via_A", all_of("TaskA", "GateC")) |>
+  add_outcome("Outcome_via_B", all_of("TaskB", "GateC")) |>
+  build_model()
+\end{verbatim}
+When a group of outcomes shares the same last-required pool, split the at-$t$ mass from that pool across outcomes using time-varying weights based on which non-shared cores would have finished first; the engine handles this automatically.
+\paragraph{Censoring and deadline.} Add a censor stream and a hard deadline.
+\begin{verbatim}
+example_11_censor_deadline <- race_spec() |>
+  add_pool("L", "go_left") |>
+  add_pool("R", "go_right") |>
+  add_pool("CENSOR", "censor_watch") |>
+  add_outcome("Left", "L") |>
+  add_outcome("Right", "R") |>
+  add_outcome("NR_CENSOR", "CENSOR", options = list(class = "censor")) |>
+  set_metadata(deadline = 0.55) |>
+  build_model()
+\end{verbatim}
+Use Equation~\eqref{eq:term-censor} for $\gamma_{\text{CENSOR}}(t)$ and Equation~\eqref{eq:deadline} for the no-response mass beyond $D$.
+\paragraph{Mixture across components.} Average component-wise likelihoods.
+\begin{verbatim}
+example_7_mixture <- race_spec() |>
+  add_pool("TARGET", c("target_fast", "target_slow")) |>
+  add_pool("COMP", "competitor") |>
+  add_outcome("R1", "TARGET") |>
+  add_outcome("R2", "COMP") |>
+  set_metadata(mixture = list(components = list(
+    component("fast", weight = 0.2), component("slow", weight = 0.8)
+  ))) |>
+  build_model()
+\end{verbatim}
+Evaluate Equation~\eqref{eq:trial-lik} per component and average via Equation~\eqref{eq:mixture}.
+\section{Implementation Recipe}
+For each trial: (1) parse each outcome's expression into a tree of events; (2) compute $C_E(t)$ and $h_E(t)$ recursively using Equations~\eqref{eq:pool-kofn}--\eqref{eq:or}; (3) evaluate the per-trial contribution with Equation~\eqref{eq:trial-lik}; (4) include terminals/censors via Equation~\eqref{eq:term-censor} or deadlines via Equation~\eqref{eq:deadline} if present; (5) apply mixtures and any label mappings; (6) sum logs. Absence constraints multiply in as survival factors and do not change first-hit forms.
+\paragraph{Relationships and special cases.} (i) Gates are just ANDs over required pools; (ii) Excluders and inhibitors are absence multipliers; (iii) Terminals/censors are symmetric to responses in the competition, differing only in labelling; (iv) Shared last-pool ties redistribute the at-$t$ mass from the shared pool across tied outcomes; without shared last pools, no tie handling is needed.
+\bibliographystyle{apalike}
+\bibliography{refs}
+\end{document}

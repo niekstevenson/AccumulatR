@@ -1,0 +1,272 @@
+# Likelihood helpers refactored out of likelihood.R
+
+# --- Low-level time-slice helpers ---
+
+.coef_degree <- function(coeff, degree) {
+  idx <- degree + 1L
+  if (idx < 1L || idx > length(coeff)) return(0.0)
+  coeff[[idx]]
+}
+
+.pool_rows <- function(acc_df, pool_id) {
+  pool_col <- acc_df[["pool_id"]]
+  acc_df[pool_col == pool_id, , drop = FALSE]
+}
+
+.pool_coeffs_at <- function(rows, u) {
+  if (nrow(rows) == 0) return(1.0)  # polynomial 1
+  Svec <- numeric(nrow(rows))
+  Fvec <- numeric(nrow(rows))
+  par_col <- rows[["par"]]
+  dist_col <- rows[["dist"]]
+  onset_col <- rows[["onset"]]
+  q_col <- rows[["q"]]
+  for (i in seq_len(nrow(rows))) {
+    pfun <- make_pfun(dist_col[i], par_col[[i]])
+    Svec[i] <- tilde_S(u, onset_col[i], q_col[i], pfun)
+    Fvec[i] <- tilde_F(u, onset_col[i], q_col[i], pfun)
+  }
+  pool_coeffs(Svec, Fvec)
+}
+
+.prefix_at <- function(rows, K, u) {
+  coeff <- .pool_coeffs_at(rows, u)
+  prefix_sum(coeff, K)
+}
+
+.tilde_f_i <- function(row, u) {
+  par_list <- row[["par"]][[1]]
+  dfun <- make_dfun(row[["dist"]], par_list)
+  as.numeric(tilde_f(u, row[["onset"]], row[["q"]], dfun))
+}
+
+.first_hit_density_at <- function(rows, k, u) {
+  k <- as.integer(k)
+  if (nrow(rows) == 0 || k < 1L) return(0.0)
+  if (nrow(rows) == 1L) {
+    rowj <- rows[1, , drop = FALSE]
+    fj <- .tilde_f_i(rowj, u)
+    coeff_excl <- if (k == 1L) 1.0 else 0.0
+    return(fj * coeff_excl)
+  }
+
+  sum_val <- 0.0
+  for (j in seq_len(nrow(rows))) {
+    rowj <- rows[j, , drop = FALSE]
+    fj <- .tilde_f_i(rowj, u)
+    coeff_excl <- .pool_coeffs_at(rows[-j, , drop = FALSE], u)
+    coeff_km1 <- .coef_degree(coeff_excl, k - 1L)
+    sum_val <- sum_val + fj * coeff_km1
+  }
+  sum_val
+}
+
+# --- Conjunction helpers (gated AND) ---
+
+.conj_pools_for_response <- function(response_specs, gate_specs, r_label) {
+  lst <- list(response_specs[[r_label]])
+  if (!is.null(gate_specs) && length(gate_specs) > 0 && !is.null(gate_specs[[r_label]])) {
+    lst <- c(lst, gate_specs[[r_label]])
+  }
+  names(lst) <- vapply(lst, function(x) x$pool_id, character(1))
+  lst
+}
+
+.reduce_conjunction <- function(conj_list, known_map) {
+  if (is.null(conj_list) || length(conj_list) == 0) return(conj_list)
+  lst <- lapply(conj_list, function(spec) {
+    k_known <- 0
+    if (!is.null(known_map)) {
+      nm <- spec$pool_id
+      if (!is.null(names(known_map)) && nm %in% names(known_map)) {
+        k_known <- known_map[[nm]]
+      }
+    }
+    k_remaining <- spec$k - k_known
+    if (k_remaining <= 0) NULL else list(pool_id = spec$pool_id, k = k_remaining)
+  })
+  lst <- lst[!vapply(lst, is.null, logical(1))]
+  if (length(lst) == 0) return(NULL)
+  names(lst) <- vapply(lst, function(spec) spec$pool_id, character(1))
+  lst
+}
+
+.pr_pool_ge_k <- function(rows, k, u) {
+  1.0 - .prefix_at(rows, k - 1L, u)
+}
+
+.pr_conj_true_at <- function(acc_df, pool_spec_list, u) {
+  if (length(pool_spec_list) == 0) return(0.0)
+  vals <- numeric(length(pool_spec_list))
+  i <- 0L
+  for (pid in names(pool_spec_list)) {
+    i <- i + 1L
+    sp <- pool_spec_list[[pid]]
+    rows <- .pool_rows(acc_df, sp$pool_id)
+    vals[i] <- .pr_pool_ge_k(rows, sp$k, u)
+  }
+  safe_prod(vals)
+}
+
+.density_conj_last_pool_at <- function(acc_df, pool_spec_list, last_pool_id, u) {
+  sp_last <- pool_spec_list[[last_pool_id]]
+  rows_last <- .pool_rows(acc_df, sp_last$pool_id)
+  if (nrow(rows_last) == 0) return(0.0)
+  k_last <- sp_last$k
+
+  sum_last <- 0.0
+  if (nrow(rows_last) == 1L) {
+    rowj <- rows_last[1, , drop = FALSE]
+    fj <- .tilde_f_i(rowj, u)
+    coeff_excl_km1 <- if (k_last == 1L) 1.0 else 0.0
+    sum_last <- sum_last + fj * coeff_excl_km1
+  } else {
+    for (j in seq_len(nrow(rows_last))) {
+      rowj <- rows_last[j, , drop = FALSE]
+      fj <- .tilde_f_i(rowj, u)
+      coeff_excl <- .pool_coeffs_at(rows_last[-j, , drop = FALSE], u)
+      coeff_km1 <- .coef_degree(coeff_excl, k_last - 1L)
+      sum_last <- sum_last + fj * coeff_km1
+    }
+  }
+  if (sum_last == 0) return(0.0)
+
+  vals <- numeric(max(0, length(pool_spec_list) - 1L))
+  k <- 0L
+  for (pid in names(pool_spec_list)) {
+    if (pid == last_pool_id) next
+    sp <- pool_spec_list[[pid]]
+    rows <- .pool_rows(acc_df, sp$pool_id)
+    k <- k + 1L
+    vals[k] <- .pr_pool_ge_k(rows, sp$k, u)
+  }
+  sum_last * if (length(vals) == 0) 1.0 else safe_prod(vals)
+}
+
+.density_conj_total_at <- function(acc_df, pool_spec_list, u) {
+  if (is.null(pool_spec_list) || length(pool_spec_list) == 0) {
+    return(rep(0.0, length(u)))
+  }
+  vapply(u, function(tt) {
+    if (!is.finite(tt) || tt < 0) return(0.0)
+    total <- 0.0
+    for (pid in names(pool_spec_list)) {
+      total <- total + .density_conj_last_pool_at(acc_df, pool_spec_list, pid, tt)
+    }
+    total
+  }, numeric(1))
+}
+
+.make_pool_entry <- function(acc_df, pool_id, k) {
+  list(
+    pool_id = pool_id,
+    rows = .pool_rows(acc_df, pool_id),
+    k = as.integer(k),
+    survival_k = max(as.integer(k) - 1L, 0L)
+  )
+}
+
+.make_inhibitor_entry <- function(acc_df, pool_id, k, protectors = NULL) {
+  entry <- .make_pool_entry(acc_df, pool_id, k)
+  if (!is.null(protectors) && length(protectors) > 0) {
+    entry$protectors <- lapply(protectors, function(sp) .make_pool_entry(acc_df, sp$pool_id, sp$k))
+  } else {
+    entry$protectors <- NULL
+  }
+  entry$cache_survival <- new.env(parent = emptyenv())
+  entry
+}
+
+.protector_survival_prod <- function(protectors, u) {
+  if (is.null(protectors) || length(protectors) == 0) {
+    return(rep(1.0, length(u)))
+  }
+  vapply(u, function(tt) {
+    vals <- vapply(protectors, function(entry) .calc_entry_survival(entry, tt), numeric(1))
+    safe_prod(vals)
+  }, numeric(1))
+}
+
+.effective_inhibitor_density <- function(entry, u) {
+  vapply(u, function(tt) {
+    if (!is.finite(tt) || tt < 0) return(0.0)
+    base <- .first_hit_density_at(entry$rows, entry$k, tt)
+    if (base <= 0) return(0.0)
+    guard <- .protector_survival_prod(entry$protectors, tt)
+    base * guard
+  }, numeric(1))
+}
+
+.merge_protector_entries <- function(existing, extra) {
+  if (is.null(existing) || length(existing) == 0) return(extra)
+  if (is.null(extra) || length(extra) == 0) return(existing)
+  combined <- existing
+  for (item in extra) {
+    found <- FALSE
+    for (idx in seq_along(combined)) {
+      if (identical(combined[[idx]]$pool_id, item$pool_id) && identical(combined[[idx]]$k, item$k)) {
+        found <- TRUE
+        break
+      }
+    }
+    if (!found) combined[[length(combined) + 1L]] <- item
+  }
+  combined
+}
+
+.calc_entry_survival <- function(entry, u) {
+  if (is.null(entry) || length(entry) == 0) return(1.0)
+  rows <- entry$rows
+  if (is.null(rows) || nrow(rows) == 0) return(1.0)
+
+  has_protectors <- !is.null(entry$protectors) && length(entry$protectors) > 0
+  if (!has_protectors) {
+    return(.prefix_at(rows, entry$survival_k, u))
+  }
+
+  surv_env <- entry$cache_survival
+  if (is.null(surv_env) || !inherits(surv_env, "environment")) {
+    surv_env <- new.env(parent = emptyenv())
+  }
+
+  vapply(u, function(tt) {
+    if (is.nan(tt)) return(NA_real_)
+    if (tt <= 0) return(1.0)
+    if (!is.finite(tt) && tt < 0) return(1.0)
+    key <- if (is.infinite(tt)) "Inf" else format(tt, digits = 15)
+    cached <- if (!is.null(surv_env[[key]])) surv_env[[key]] else NULL
+    if (!is.null(cached)) return(cached)
+    dens_fun <- function(x) .effective_inhibitor_density(entry, x)
+    integral <- stats::integrate(dens_fun, lower = 0, upper = tt, rel.tol = 1e-6, abs.tol = 1e-9)$value
+    surv <- max(0.0, 1.0 - integral)
+    assign(key, surv, envir = surv_env)
+    surv
+  }, numeric(1))
+}
+
+.calc_entry_density <- function(entry, u) {
+  if (is.null(entry) || length(entry) == 0) return(0.0)
+  rows <- entry$rows
+  if (is.null(rows) || nrow(rows) == 0) return(0.0)
+
+  has_protectors <- !is.null(entry$protectors) && length(entry$protectors) > 0
+  if (!has_protectors) {
+    return(.first_hit_density_at(rows, entry$k, u))
+  }
+
+  .effective_inhibitor_density(entry, u)
+}
+
+.calc_entry_group_survival <- function(entries, u) {
+  if (is.null(entries) || length(entries) == 0) return(1.0)
+  vals <- vapply(entries, function(entry) .calc_entry_survival(entry, u), numeric(1))
+  safe_prod(vals)
+}
+
+
+
+
+
+# --- Response density preparation -----------------------------------------
+
+# --- Spec construction and trial utilities --------------------------------

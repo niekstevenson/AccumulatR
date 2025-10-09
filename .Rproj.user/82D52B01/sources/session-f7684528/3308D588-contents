@@ -1,0 +1,608 @@
+# Likelihood and integral helpers
+
+# Ensure helpers are available when this file is sourced standalone
+source("R/likelihood_helpers.R")
+
+# --- Low-level time-slice helpers moved to likelihood_helpers.R ---
+
+# --- Stop-signal: probability of stop success (single stop pool) ---
+
+prob_stop_success <- function(acc_df, response_df, terminal_df, stop_label,
+                              gate_df = NULL,
+                              censor_df = NULL,
+                              deadline = Inf,
+                              rel.tol = 1e-6, abs.tol = 1e-9, max.subdivisions = 200L,
+                              acc_param_df = NULL) {
+  acc_df <- resolve_acc_params(acc_df, acc_param_df)
+  stop_label_norm <- normalize_label(stop_label)
+  specs <- build_specs_context(
+    acc_rows = acc_df,
+    response_rows = response_df,
+    gate_rows = gate_df,
+    terminal_rows = terminal_df,
+    censor_rows = censor_df
+  )
+  response_specs <- specs$response_specs
+  gate_specs <- specs$gate_specs
+  influence_ctx <- build_influence_context(acc_df, specs)
+  if (!influence_ctx$terminal$has(stop_label_norm)) {
+    stop(sprintf("Unknown terminal label '%s'", stop_label))
+  }
+  upper <- if (is.finite(deadline)) deadline else Inf
+  val <- integrate(.integrand_terminal_density, lower = 0, upper = upper, subdivisions = max.subdivisions,
+                   rel.tol = rel.tol, abs.tol = abs.tol, stop.on.error = FALSE,
+                   acc_df = acc_df, response_specs = response_specs, gate_specs = gate_specs,
+                   stop_label_norm = stop_label_norm,
+                   influence_ctx = influence_ctx, deadline = deadline)
+  as.numeric(val$value)
+}
+
+# --- Observed response RT density for response r at time t (supports gated AND) ---
+
+ll_response_rt <- function(acc_df, response_df, t, response_label,
+                           inhibitor_df = NULL,
+                           gate_df = NULL,
+                           exclude_df = NULL,
+                           terminal_df = NULL,
+                           censor_df = NULL,
+                           deadline = Inf,
+                           acc_param_df = NULL) {
+
+  acc_df <- resolve_acc_params(acc_df, acc_param_df)
+  response_label_norm <- normalize_label(response_label)
+  specs <- build_specs_context(
+    acc_rows = acc_df,
+    response_rows = response_df,
+    gate_rows = gate_df,
+    exclude_rows = exclude_df,
+    inhibitor_rows = inhibitor_df,
+    terminal_rows = terminal_df,
+    censor_rows = censor_df
+  )
+  density_ctx <- prepare_response_density(acc_df, specs, response_label_norm, deadline)
+  density_ctx$density(t)
+}
+
+ll_terminal_rt <- function(acc_df, response_df, terminal_df, t, terminal_label,
+                           gate_df = NULL,
+                           censor_df = NULL,
+                           deadline = Inf,
+                           acc_param_df = NULL,
+                           tie_policy = c("default", "weighted"),
+                           tie_weights = NULL) {
+  tie_policy <- match.arg(tie_policy)
+  acc_df <- resolve_acc_params(acc_df, acc_param_df)
+  terminal_label_norm <- normalize_label(terminal_label)
+  specs <- build_specs_context(
+    acc_rows = acc_df,
+    response_rows = response_df,
+    gate_rows = gate_df,
+    terminal_rows = terminal_df,
+    censor_rows = censor_df
+  )
+  response_specs <- specs$response_specs
+  gate_specs <- specs$gate_specs
+  influence_ctx <- build_influence_context(acc_df, specs)
+  if (!influence_ctx$terminal$has(terminal_label_norm)) {
+    stop(sprintf("Unknown terminal label '%s'", terminal_label))
+  }
+  .terminal_density_vec(acc_df, response_specs, gate_specs, terminal_label_norm, t, influence_ctx, deadline)
+}
+
+ll_censor_rt <- function(acc_df, response_df, t,
+                          gate_df = NULL,
+                          terminal_df = NULL,
+                          censor_df = NULL,
+                          deadline = Inf,
+                          acc_param_df = NULL) {
+  acc_df <- resolve_acc_params(acc_df, acc_param_df)
+  specs <- build_specs_context(
+    acc_rows = acc_df,
+    response_rows = response_df,
+    gate_rows = gate_df,
+    terminal_rows = terminal_df,
+    censor_rows = censor_df
+  )
+  response_specs <- specs$response_specs
+  gate_specs <- specs$gate_specs
+  influence_ctx <- build_influence_context(acc_df, specs)
+  .censor_density_vec(acc_df, response_specs, gate_specs, t, influence_ctx, deadline)
+}
+
+# --- Simple closed-form exclusion likelihood for 2 responses (k=1), one exclusion ---
+# Assumptions:
+# - Exactly two responses in response_df, each with k=1 and exactly one accumulator row in acc_df
+# - No gates, inhibitors, terminals, or censors
+# - exclude_df contains exactly one row: response = A_label, pool_id = X_pool, k = 1
+# - Independent accumulators. Uses tilde_f and tilde_S (onset, q) with registered distributions
+ll_exclusion_simple <- function(data, acc_df, response_df, exclude_df) {
+  data <- as.data.frame(data)
+  if (!all(c("outcome", "rt") %in% names(data))) stop("data must contain outcome and rt")
+  if (nrow(response_df) != 2) stop("response_df must contain exactly two responses")
+  if (any(response_df$k != 1L)) stop("k must be 1 for both responses")
+  if (nrow(exclude_df) != 1) stop("exclude_df must have exactly one row")
+
+  r_labels <- as.character(response_df$response)
+  A_label <- as.character(exclude_df$response[[1]])
+  if (!(A_label %in% r_labels)) stop("exclude_df$response must match a response label")
+  B_label <- setdiff(r_labels, A_label)[[1]]
+  A_pool <- as.character(response_df$pool_id[response_df$response == A_label][[1]])
+  B_pool <- as.character(response_df$pool_id[response_df$response == B_label][[1]])
+  X_pool <- as.character(exclude_df$pool_id[[1]])
+
+  get_row <- function(pool) {
+    rows <- acc_df[acc_df$pool_id == pool, , drop = FALSE]
+    if (nrow(rows) != 1) stop(sprintf("Pool %s must have exactly one accumulator row", pool))
+    rows[1, , drop = FALSE]
+  }
+  rowA <- get_row(A_pool)
+  rowB <- get_row(B_pool)
+  rowX <- get_row(X_pool)
+
+  dfA <- make_dfun(rowA$dist, rowA$par[[1]]); pfA <- make_pfun(rowA$dist, rowA$par[[1]])
+  dfB <- make_dfun(rowB$dist, rowB$par[[1]]); pfB <- make_pfun(rowB$dist, rowB$par[[1]])
+  dfX <- make_dfun(rowX$dist, rowX$par[[1]]); pfX <- make_pfun(rowX$dist, rowX$par[[1]])
+
+  tfA <- function(t) as.numeric(tilde_f(t, rowA$onset, rowA$q, dfA))
+  tS_A <- function(t) as.numeric(tilde_S(t, rowA$onset, rowA$q, pfA))
+  tfB <- function(t) as.numeric(tilde_f(t, rowB$onset, rowB$q, dfB))
+  tS_B <- function(t) as.numeric(tilde_S(t, rowB$onset, rowB$q, pfB))
+  tS_X <- function(t) as.numeric(tilde_S(t, rowX$onset, rowX$q, pfX))
+
+  # Observed densities
+  dens_R1 <- function(t) {
+    tfA(t) * tS_X(t) * tS_B(t)
+  }
+  dens_R2 <- function(t) {
+    base <- tfB(t)
+    # integrate 0..t; handle t<=0
+    if (!is.finite(t) || t <= 0) return(0.0)
+    val <- stats::integrate(.integrand_tilde_f_S, lower = 0, upper = t,
+                            subdivisions = 100L, rel.tol = 1e-6, abs.tol = 1e-9,
+                            stop.on.error = FALSE,
+                            row_f = rowA, row_S = rowX)$value
+    base * (1 - max(0.0, min(1.0, as.numeric(val))))
+  }
+
+  dens_by_label <- function(lbl, t) {
+    if (lbl == A_label) dens_R1(t) else if (lbl == B_label) dens_R2(t) else 0.0
+  }
+
+  contrib <- vapply(seq_len(nrow(data)), function(i) {
+    lbl <- as.character(data$outcome[[i]])
+    t <- as.numeric(data$rt[[i]])
+    if (!is.finite(t) || t < 0) return(NA_real_)
+    val <- dens_by_label(lbl, t)
+    if (!is.finite(val) || val <= 0) NA_real_ else val
+  }, numeric(1))
+  if (any(is.na(contrib))) return(-Inf)
+  ll <- sum(log(contrib))
+  attr(ll, "contributions") <- contrib
+  ll
+}
+
+prob_response_success <- function(acc_df, response_df, response_label,
+                                  gate_df = NULL,
+                                  exclude_df = NULL,
+                                  inhibitor_df = NULL,
+                                  terminal_df = NULL,
+                                  censor_df = NULL,
+                                  deadline = Inf,
+                                  rel.tol = 1e-6, abs.tol = 1e-9, max.subdivisions = 200L,
+                                  acc_param_df = NULL) {
+  acc_df <- resolve_acc_params(acc_df, acc_param_df)
+  response_label_norm <- normalize_label(response_label)
+  upper <- if (is.finite(deadline)) deadline else Inf
+  specs <- build_specs_context(
+    acc_rows = acc_df,
+    response_rows = response_df,
+    gate_rows = gate_df,
+    exclude_rows = exclude_df,
+    inhibitor_rows = inhibitor_df,
+    terminal_rows = terminal_df,
+    censor_rows = censor_df
+  )
+  density_ctx <- prepare_response_density(acc_df, specs, response_label_norm, deadline)
+  val <- integrate_response_density(
+    density_ctx = density_ctx,
+    upper = upper,
+    rel.tol = rel.tol,
+    abs.tol = abs.tol,
+    max.subdivisions = max.subdivisions
+  )
+  as.numeric(val$value)
+}
+
+# --- No-response with censors and/or deadline ---
+
+prob_nr_censor_first <- function(acc_df, response_df, censor_df, C,
+                                 gate_df = NULL,
+                                 terminal_df = NULL,
+                                 rel.tol = 1e-6, abs.tol = 1e-9, max.subdivisions = 200L,
+                                 acc_param_df = NULL) {
+  acc_df <- resolve_acc_params(acc_df, acc_param_df)
+  specs <- build_specs_context(
+    acc_rows = acc_df,
+    response_rows = response_df,
+    gate_rows = gate_df,
+    terminal_rows = terminal_df,
+    censor_rows = censor_df
+  )
+  response_specs <- specs$response_specs
+  gate_specs <- specs$gate_specs
+  influence_ctx <- build_influence_context(acc_df, specs)
+  if (!influence_ctx$censor$any()) stop("No censor specs provided")
+
+  val <- integrate(.integrand_censor_density, lower = 0, upper = C, subdivisions = max.subdivisions,
+                   rel.tol = rel.tol, abs.tol = abs.tol, stop.on.error = FALSE,
+                   acc_df = acc_df, response_specs = response_specs, gate_specs = gate_specs,
+                   influence_ctx = influence_ctx, deadline = C)
+  as.numeric(val$value)
+}
+
+prob_no_outcome_by_C <- function(acc_df, response_df, C, gate_df = NULL, censor_df = NULL, terminal_df = NULL, acc_param_df = NULL) {
+  acc_df <- resolve_acc_params(acc_df, acc_param_df)
+  specs <- build_specs_context(
+    acc_rows = acc_df,
+    response_rows = response_df,
+    gate_rows = gate_df,
+    terminal_rows = terminal_df,
+    censor_rows = censor_df
+  )
+  response_specs <- specs$response_specs
+  gate_specs <- specs$gate_specs
+  influence_ctx <- build_influence_context(acc_df, specs)
+  # Product over responses Prefix(k_r - 1; C) times product over censors Prefix(k_c - 1; C)
+  vec_r <- vapply(names(response_specs), function(r) {
+    conj <- .conj_pools_for_response(response_specs, gate_specs, r)
+    pr_true <- .pr_conj_true_at(acc_df, conj, C)
+    1.0 - pr_true
+  }, numeric(1))
+  pr <- safe_prod(vec_r)
+  pr <- pr * influence_ctx$censor$survival(C)
+  pr <- pr * influence_ctx$terminal$survival(C)
+  pr
+}
+
+prob_NR <- function(acc_df, response_df, C, mode = c("censor_first", "no_outcome", "both"),
+                    gate_df = NULL,
+                    censor_df = NULL,
+                    terminal_df = NULL,
+                    rel.tol = 1e-6, abs.tol = 1e-9, max.subdivisions = 200L) {
+  mode <- match.arg(mode)
+  out <- 0.0
+  specs <- build_specs_context(
+    acc_rows = acc_df,
+    response_rows = response_df,
+    gate_rows = gate_df,
+    terminal_rows = terminal_df,
+    censor_rows = censor_df
+  )
+  influence_ctx <- build_influence_context(acc_df, specs)
+  if (mode %in% c("censor_first", "both") && influence_ctx$censor$any()) {
+    out <- out + prob_nr_censor_first(acc_df, response_df, censor_df, C, gate_df = gate_df,
+                                      terminal_df = terminal_df,
+                                      rel.tol = rel.tol, abs.tol = abs.tol, max.subdivisions = max.subdivisions)
+  }
+  if (mode %in% c("no_outcome", "both")) {
+    out <- out + prob_no_outcome_by_C(acc_df, response_df, C, gate_df = gate_df, censor_df = censor_df, terminal_df = terminal_df)
+  }
+  out
+}
+
+
+# --- Trial-level likelihood aggregation ---
+
+
+.build_guess_inverse_map <- function(guess_policies) {
+  if (is.null(guess_policies) || length(guess_policies) == 0) return(NULL)
+  out <- list()
+  for (term_label in names(guess_policies)) {
+    term_norm <- normalize_label(term_label)
+    gp <- guess_policies[[term_label]]
+    if (is.null(gp$labels) || is.null(gp$weights)) {
+      stop('guess_policies entries must have labels and weights')
+    }
+    labels <- as.character(gp$labels)
+    weights <- as.numeric(gp$weights)
+    if (length(labels) != length(weights)) stop('guess_policies labels/weights length mismatch')
+    rt_policy <- if (!is.null(gp$rt_policy)) gp$rt_policy else 'keep'
+    for (i in seq_along(labels)) {
+      lab_norm <- normalize_label(labels[[i]])
+      entry <- list(terminal = term_norm, weight = weights[[i]], rt_policy = rt_policy)
+      if (is.null(out[[lab_norm]])) {
+        out[[lab_norm]] <- list(entry)
+      } else {
+        out[[lab_norm]] <- c(out[[lab_norm]], list(entry))
+      }
+    }
+  }
+  out
+}
+
+.trial_likelihood_value <- function(outcome, rt, acc_rows, response_rows, gate_rows, exclude_rows, inhibitor_rows, terminal_rows, censor_rows, deadline, guess_map) {
+  specs <- build_specs_context(
+    acc_rows = acc_rows,
+    response_rows = response_rows,
+    gate_rows = gate_rows,
+    exclude_rows = exclude_rows,
+    inhibitor_rows = inhibitor_rows,
+    terminal_rows = terminal_rows,
+    censor_rows = censor_rows
+  )
+  response_specs <- specs$response_specs
+  gate_specs <- specs$gate_specs
+  inhibitor_specs <- specs$inhibitor_specs
+  terminal_specs <- specs$terminal_specs
+  censor_specs <- specs$censor_specs
+
+  value <- 0.0
+  outcome_is_na <- is.na(outcome)
+  outcome_norm <- normalize_label(outcome)
+
+  if (outcome_norm %in% names(response_specs)) {
+    density_ctx <- prepare_response_density(acc_rows, specs, outcome_norm, deadline)
+    if (is.na(rt)) {
+      upper <- if (is.finite(deadline)) deadline else Inf
+      prob_resp <- integrate_response_density(
+        density_ctx = density_ctx,
+        upper = upper,
+        rel.tol = 1e-6,
+        abs.tol = 1e-9,
+        max.subdivisions = 200L
+      )
+      value <- value + as.numeric(prob_resp$value)
+    } else {
+      dens_resp <- density_ctx$density(rt)
+      value <- value + dens_resp
+    }
+    if (!is.null(guess_map) && !is.null(guess_map[[outcome_norm]])) {
+      for (entry in guess_map[[outcome_norm]]) {
+        if (!identical(entry$rt_policy, 'keep')) {
+          stop("guess_policies with rt_policy != 'keep' are not supported in calculate_ll")
+        }
+        if (!is.na(rt)) {
+          dens_term <- ll_terminal_rt(
+            acc_df = acc_rows,
+            response_df = response_rows,
+            terminal_df = terminal_rows,
+            t = rt,
+            terminal_label = entry$terminal,
+            gate_df = gate_rows,
+            censor_df = censor_rows,
+            deadline = deadline
+          )
+          value <- value + entry$weight * dens_term
+        }
+      }
+    }
+  } else if (!is.null(terminal_specs) && outcome_norm %in% names(terminal_specs)) {
+    if (is.na(rt)) {
+      value <- prob_stop_success(
+        acc_df = acc_rows,
+        response_df = response_rows,
+        terminal_df = terminal_rows,
+        stop_label = outcome_norm,
+        gate_df = gate_rows,
+        censor_df = censor_rows,
+        deadline = deadline
+      )
+    } else {
+      value <- ll_terminal_rt(
+        acc_df = acc_rows,
+        response_df = response_rows,
+        terminal_df = terminal_rows,
+        t = rt,
+        terminal_label = outcome_norm,
+        gate_df = gate_rows,
+        censor_df = censor_rows,
+        deadline = deadline
+      )
+    }
+  } else if (!outcome_is_na && identical(outcome_norm, 'NR_CENSOR')) {
+    if (is.na(rt)) return(0.0)
+    value <- ll_censor_rt(
+      acc_df = acc_rows,
+      response_df = response_rows,
+      t = rt,
+      gate_df = gate_rows,
+      terminal_df = terminal_rows,
+      censor_df = censor_rows,
+      deadline = deadline
+    )
+  } else if (!outcome_is_na && identical(outcome_norm, 'NR_DEADLINE')) {
+    if (!is.finite(deadline)) return(0.0)
+    value <- prob_no_outcome_by_C(
+      acc_df = acc_rows,
+      response_df = response_rows,
+      C = deadline,
+      gate_df = gate_rows,
+      censor_df = censor_rows,
+      terminal_df = terminal_rows
+    )
+  } else {
+    stop(sprintf('Unknown outcome label: %s', if (outcome_is_na) "<NA>" else outcome_norm))
+  }
+  value
+}
+
+calculate_ll <- function(data,
+                         acc_df,
+                         response_df,
+                         gate_df = NULL,
+                         exclude_df = NULL,
+                         inhibitor_df = NULL,
+                         terminal_df = NULL,
+                         censor_df = NULL,
+                         deadline = Inf,
+                         guess_policies = NULL,
+                         acc_param_df = NULL) {
+  if (missing(data) || is.null(data)) stop('data must be provided')
+  data <- as.data.frame(data)
+  if (!'outcome' %in% names(data)) stop("data must contain outcome column")
+  if (!'rt' %in% names(data)) stop("data must contain rt column")
+  trials <- if ('trial' %in% names(data)) data$trial else seq_len(nrow(data))
+  acc_df <- resolve_acc_params(acc_df, acc_param_df)
+  guess_map <- .build_guess_inverse_map(guess_policies)
+  contrib <- vapply(seq_len(nrow(data)), function(i) {
+    tr <- trials[[i]]
+    acc_rows <- filter_by_trial(acc_df, tr)
+    response_rows <- filter_by_trial(response_df, tr)
+    gate_rows <- filter_by_trial(gate_df, tr)
+    exclude_rows <- filter_by_trial(exclude_df, tr)
+    inhibitor_rows <- filter_by_trial(inhibitor_df, tr)
+    terminal_rows <- filter_by_trial(terminal_df, tr)
+    censor_rows <- filter_by_trial(censor_df, tr)
+    if (nrow(acc_rows) == 0) stop(sprintf('No accumulator rows for trial %s', tr))
+    if (nrow(response_rows) == 0) stop(sprintf('No response rows for trial %s', tr))
+    trial_deadline <- if ('deadline' %in% names(data)) data$deadline[[i]] else deadline
+    val <- .trial_likelihood_value(
+      outcome = data$outcome[[i]],
+      rt = data$rt[[i]],
+      acc_rows = acc_rows,
+      response_rows = response_rows,
+      gate_rows = gate_rows,
+      exclude_rows = exclude_rows,
+      inhibitor_rows = inhibitor_rows,
+      terminal_rows = terminal_rows,
+      censor_rows = censor_rows,
+      deadline = trial_deadline,
+      guess_map = guess_map
+    )
+    if (!is.finite(val) || val <= 0) return(NA_real_)
+    val
+  }, numeric(1))
+  if (any(is.na(contrib))) return(-Inf)
+  loglik <- sum(log(contrib))
+  attr(loglik, 'contributions') <- contrib
+  loglik
+}
+
+calculate_ll_mixture <- function(data,
+                                 acc_df,
+                                 response_df,
+                                 gate_df = NULL,
+                                 exclude_df = NULL,
+                                 inhibitor_df = NULL,
+                                 terminal_df = NULL,
+                                 censor_df = NULL,
+                                 component_params,
+                                 weights = NULL,
+                                 assign = NULL,
+                                 acc_param_df = NULL) {
+  if (!'component_id' %in% names(acc_df)) stop('acc_df must contain component_id for mixture likelihood')
+  data <- as.data.frame(data)
+  if (!'outcome' %in% names(data)) stop("data must contain outcome column")
+  if (!'rt' %in% names(data)) stop("data must contain rt column")
+  trials <- if ('trial' %in% names(data)) data$trial else seq_len(nrow(data))
+  acc_df <- resolve_acc_params(acc_df, acc_param_df)
+  acc_comp <- component_column_or_default(acc_df)
+
+  comp_ids <- NULL
+  if (!missing(component_params) && !is.null(component_params)) {
+    comp_ids <- unique(as.character(component_params$component_id))
+    comp_ids <- comp_ids[!is.na(comp_ids)]
+  }
+  if (is.null(comp_ids) || length(comp_ids) == 0) {
+    comp_ids <- unique(acc_comp)
+    comp_ids <- comp_ids[!is.na(comp_ids)]
+    comp_ids <- setdiff(comp_ids, "__all__")
+  }
+  if (length(comp_ids) == 0) stop('No component definitions found in acc_df/component_params')
+
+  component_params <- ensure_component_params(component_params, comp_ids)
+
+  specific_acc <- unique(as.character(acc_df$component_id))
+  specific_acc <- specific_acc[!is.na(specific_acc) & specific_acc != "__all__"]
+  unknown_acc <- setdiff(specific_acc, comp_ids)
+  if (length(unknown_acc) > 0) {
+    stop(sprintf('acc_df references unknown component_id values: %s', paste(unknown_acc, collapse = ', ')))
+  }
+  if (!is.null(assign) && !is.null(weights)) stop('Provide either assign or weights, not both')
+  if (is.null(assign) && 'component' %in% names(data)) assign <- data$component
+  assign_vec <- NULL
+  if (!is.null(assign)) {
+    assign_vec <- as.character(assign)
+    if (length(assign_vec) != nrow(data)) stop('assign length must match number of rows in data')
+    if (!all(assign_vec %in% comp_ids)) stop('assign values must match component ids')
+  }
+
+  weight_info <- resolve_component_weights(component_params, comp_ids, weights_override = if (is.null(assign_vec)) weights else NULL)
+  component_params <- weight_info$component_params
+  mix_weights <- weight_info$weights
+
+  resp_comp <- component_column_or_default(response_df)
+  gate_comp <- component_column_or_default(gate_df)
+  inh_comp <- component_column_or_default(inhibitor_df)
+  term_comp <- component_column_or_default(terminal_df)
+  cen_comp <- component_column_or_default(censor_df)
+
+  components <- lapply(comp_ids, function(cid) {
+    list(
+      acc = filter_by_component(acc_df, acc_comp, cid),
+      response = filter_by_component(response_df, resp_comp, cid),
+      gate = filter_by_component(gate_df, gate_comp, cid),
+      inhibitor = filter_by_component(inhibitor_df, inh_comp, cid),
+      terminal = filter_by_component(terminal_df, term_comp, cid),
+      censor = filter_by_component(censor_df, cen_comp, cid),
+      deadline = get_component_deadline(component_params, cid),
+      guess_map = .build_guess_inverse_map(get_component_guess(component_params, cid))
+    )
+  })
+  names(components) <- comp_ids
+
+  contrib <- vapply(seq_len(nrow(data)), function(i) {
+    tr <- trials[[i]]
+    if (!is.null(assign_vec)) {
+      comp <- components[[assign_vec[[i]]]]
+      acc_rows <- filter_by_trial(comp$acc, tr)
+      response_rows <- filter_by_trial(comp$response, tr)
+      gate_rows <- filter_by_trial(comp$gate, tr)
+      inhibitor_rows <- filter_by_trial(comp$inhibitor, tr)
+      terminal_rows <- filter_by_trial(comp$terminal, tr)
+      censor_rows <- filter_by_trial(comp$censor, tr)
+      val <- .trial_likelihood_value(
+        outcome = data$outcome[[i]],
+        rt = data$rt[[i]],
+        acc_rows = acc_rows,
+        response_rows = response_rows,
+        gate_rows = gate_rows,
+        exclude_rows = filter_by_trial(exclude_df, tr),
+        inhibitor_rows = inhibitor_rows,
+        terminal_rows = terminal_rows,
+        censor_rows = censor_rows,
+        deadline = comp$deadline,
+        guess_map = comp$guess_map
+      )
+      if (!is.finite(val) || val <= 0) return(NA_real_)
+      return(val)
+    }
+    vals <- vapply(components, function(comp) {
+      acc_rows <- filter_by_trial(comp$acc, tr)
+      response_rows <- filter_by_trial(comp$response, tr)
+      gate_rows <- filter_by_trial(comp$gate, tr)
+      inhibitor_rows <- filter_by_trial(comp$inhibitor, tr)
+      terminal_rows <- filter_by_trial(comp$terminal, tr)
+      censor_rows <- filter_by_trial(comp$censor, tr)
+      .trial_likelihood_value(
+        outcome = data$outcome[[i]],
+        rt = data$rt[[i]],
+        acc_rows = acc_rows,
+        response_rows = response_rows,
+        gate_rows = gate_rows,
+        exclude_rows = filter_by_trial(exclude_df, tr),
+        inhibitor_rows = inhibitor_rows,
+        terminal_rows = terminal_rows,
+        censor_rows = censor_rows,
+        deadline = comp$deadline,
+        guess_map = comp$guess_map
+      )
+    }, numeric(1))
+    if (any(!is.finite(vals) | vals <= 0)) return(NA_real_)
+    sum(mix_weights * vals)
+  }, numeric(1))
+  if (any(is.na(contrib))) return(-Inf)
+  loglik <- sum(log(contrib))
+  attr(loglik, 'contributions') <- contrib
+  loglik
+}

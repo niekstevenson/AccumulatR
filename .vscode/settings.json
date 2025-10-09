@@ -1,0 +1,25 @@
+{
+    "latex-workshop.latex.recipes": [
+        {
+            "name": "latexmk with BibTeX",
+            "tools": ["latexmk-bibtex"]
+        }
+    ],
+    "latex-workshop.latex.tools": [
+        {
+            "name": "latexmk-bibtex",
+            "command": "latexmk",
+            "args": [
+                "-bibtex",
+                "-pdf",
+                "-synctex=1",
+                "-interaction=nonstopmode",
+                "-file-line-error",
+                "%DOC%"
+            ]
+        }
+    ],
+    "latex-workshop.latex.recipe.default": "latexmk with BibTeX",
+    "latex-workshop.latex.forceRecipeUsage": true,
+    "workbench.colorTheme": "Default Light+"
+}

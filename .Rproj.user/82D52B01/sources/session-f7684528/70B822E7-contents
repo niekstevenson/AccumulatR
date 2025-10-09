@@ -1,0 +1,182 @@
+rm(list = ls())
+## -------------------------------------------------------------------------
+## Example graph specification in long-form tables (base R only)
+## -------------------------------------------------------------------------
+
+## Trials table ------------------------------------------------------------
+trials_df <- data.frame(
+  trial_id     = c(101, 102, 201, 202, 103),
+  component_id = c("baseline", "baseline", "stop", "stop", "baseline"),
+  outcome_obs  = c("Left", "Right", "Right", "Left", "Right"),
+  rt_obs       = c(0.312, 0.295, 0.348, 0.410, 0.287),
+  stringsAsFactors = FALSE
+)
+
+## Helpers ----------------------------------------------------------------
+make_node_row <- function(trial_id, component_id, node_id, struct_id,
+                          node_type, active, dist_family,
+                          param_slots, calc_mode, payload) {
+  if (is.null(dist_family)) dist_family <- NA_character_
+  if (is.null(param_slots)) param_slots <- list()
+  if (is.null(payload))     payload     <- list()
+  data.frame(
+    trial_id     = trial_id,
+    component_id = component_id,
+    node_id      = node_id,
+    struct_id    = struct_id,
+    node_type    = node_type,
+    active       = as.integer(active),
+    dist_family  = dist_family,
+    calc_mode    = calc_mode,
+    param_slots  = I(list(param_slots)),
+    payload      = I(list(payload)),
+    stringsAsFactors = FALSE
+  )
+}
+
+make_edge_row <- function(trial_id, parent_id, child_id, role,
+                          weight = NA_real_, order_idx = NA_integer_) {
+  data.frame(
+    trial_id  = trial_id,
+    parent_id = parent_id,
+    child_id  = child_id,
+    role      = role,
+    weight    = weight,
+    order_idx = order_idx,
+    stringsAsFactors = FALSE
+  )
+}
+
+add_baseline_trial <- function(trial_id, component_id) {
+  nodes <- list(
+    make_node_row(trial_id, component_id, "go_left_main",
+                  "acc_go_left_main", "accumulator", 1, "lognormal",
+                  list(meanlog = "mu_go_left_main", sdlog = "sd_go_shared"),
+                  "density", list(onset = 0)),
+    make_node_row(trial_id, component_id, "go_left_aux",
+                  "acc_go_left_aux", "accumulator", 1, "lognormal",
+                  list(meanlog = "mu_go_left_aux", sdlog = "sd_go_shared"),
+                  "density", list(onset = 0)),
+    make_node_row(trial_id, component_id, "pool_left",
+                  "pool_left_k1", "pool_k1", 1, NA, NULL,
+                  "density", list(k = 1L, members_expected = 2L)),
+    make_node_row(trial_id, component_id, "go_right",
+                  "acc_go_right", "accumulator", 1, "lognormal",
+                  list(meanlog = "mu_go_right", sdlog = "sd_go_shared"),
+                  "density", list(onset = 0)),
+    make_node_row(trial_id, component_id, "timeout",
+                  "acc_timeout", "accumulator", 1, "lognormal",
+                  list(meanlog = "mu_timeout", sdlog = "sd_timeout"),
+                  "density", list(onset = 0.05)),
+    make_node_row(trial_id, component_id, "outcome_left",
+                  "out_left", "outcome", 1, NA, NULL,
+                  "probability", list(label = "Left")),
+    make_node_row(trial_id, component_id, "outcome_right",
+                  "out_right", "outcome", 1, NA, NULL,
+                  "probability", list(label = "Right")),
+    make_node_row(trial_id, component_id, "guess_sink",
+                  "guess_timeout", "guess_sink", 1, NA, NULL,
+                  "probability", list(source = "timeout")),
+    make_node_row(trial_id, component_id, "deadline_sink",
+                  "deadline_global", "deadline_sink", 1, NA, NULL,
+                  "probability", list(deadline = 0.700))
+  )
+
+  edges <- list(
+    make_edge_row(trial_id, "pool_left",    "go_left_main", "member",     NA, 1L),
+    make_edge_row(trial_id, "pool_left",    "go_left_aux",  "member",     NA, 2L),
+    make_edge_row(trial_id, "outcome_left", "pool_left",    "member",     NA, 1L),
+    make_edge_row(trial_id, "outcome_left", "go_right",     "competitor", NA, 1L),
+    make_edge_row(trial_id, "outcome_left", "timeout",      "competitor", NA, 2L),
+    make_edge_row(trial_id, "outcome_right","go_right",     "member",     NA, 1L),
+    make_edge_row(trial_id, "outcome_right","pool_left",    "competitor", NA, 1L),
+    make_edge_row(trial_id, "outcome_right","timeout",      "competitor", NA, 2L),
+    make_edge_row(trial_id, "guess_sink",   "timeout",      "donor",      NA, NA),
+    make_edge_row(trial_id, "guess_sink",   "outcome_left", "target",     0.2, 1L),
+    make_edge_row(trial_id, "guess_sink",   "outcome_right","target",     0.8, 2L),
+    make_edge_row(trial_id, "deadline_sink","pool_left",    "competitor", NA, 1L),
+    make_edge_row(trial_id, "deadline_sink","go_right",     "competitor", NA, 2L),
+    make_edge_row(trial_id, "deadline_sink","timeout",      "competitor", NA, 3L)
+  )
+
+  list(nodes = nodes, edges = edges)
+}
+
+add_stop_trial <- function(trial_id, component_id) {
+  base <- add_baseline_trial(trial_id, component_id)
+
+  nodes_extra <- list(
+    make_node_row(trial_id, component_id, "stop_signal",
+                  "acc_stop", "accumulator", 1, "lognormal",
+                  list(meanlog = "mu_stop", sdlog = "sd_stop"),
+                  "density", list(onset = 0.05)),
+    make_node_row(trial_id, component_id, "guard_ref",
+                  "guard_go_right_ref", "guard_reference", 1, NA, NULL,
+                  "density", list(group = "go_vs_stop")),
+    make_node_row(trial_id, component_id, "guard_blocker",
+                  "guard_go_right_blk", "guard_blocker", 1, NA, NULL,
+                  "density", list(group = "go_vs_stop"))
+  )
+
+  edges_override <- list(
+    make_edge_row(trial_id, "outcome_left", "guard_ref",     "competitor", NA, 1L),
+    make_edge_row(trial_id, "outcome_right","guard_ref",     "member",     NA, 1L),
+    make_edge_row(trial_id, "deadline_sink","guard_ref",     "competitor", NA, 2L),
+    make_edge_row(trial_id, "guard_ref",    "go_right",      "member",     NA, 1L),
+    make_edge_row(trial_id, "guard_ref",    "guard_blocker", "blocker",    NA, 1L),
+    make_edge_row(trial_id, "guard_blocker","stop_signal",   "member",     NA, 1L),
+    make_edge_row(trial_id, "guard_blocker","go_right",      "reference",  NA, 1L)
+  )
+
+  ## Remove baseline edges that reference go_right directly as competitor/member
+  keep_idx <- vapply(base$edges, function(df) {
+    !(df$parent_id[1] == "outcome_left"  && df$child_id[1] == "go_right") &&
+      !(df$parent_id[1] == "outcome_right" && df$child_id[1] == "go_right") &&
+      !(df$parent_id[1] == "deadline_sink" && df$child_id[1] == "go_right")
+  }, logical(1))
+
+  edges_pruned <- base$edges[keep_idx]
+
+  list(
+    nodes = c(base$nodes, nodes_extra),
+    edges = c(edges_pruned, edges_override)
+  )
+}
+
+## Assemble per-trial data ------------------------------------------------
+nodes_parts <- list()
+edges_parts <- list()
+
+for (i in seq_len(nrow(trials_df))) {
+  trial_id     <- trials_df$trial_id[i]
+  component_id <- trials_df$component_id[i]
+
+  if (component_id == "baseline") {
+    spec <- add_baseline_trial(trial_id, component_id)
+  } else {
+    spec <- add_stop_trial(trial_id, component_id)
+  }
+
+  nodes_parts <- c(nodes_parts, spec$nodes)
+  edges_parts <- c(edges_parts, spec$edges)
+}
+
+nodes_df <- do.call(rbind, nodes_parts)
+edges_df <- do.call(rbind, edges_parts)
+
+## Parameter values -------------------------------------------------------
+params_df <- data.frame(
+  param_id = c("mu_go_left_main", "mu_go_left_aux", "mu_go_right",
+               "mu_timeout", "mu_stop",
+               "sd_go_shared", "sd_timeout", "sd_stop"),
+  value    = c(-1.20, -1.28, -1.10,
+               -1.40, -1.45,
+               0.18,  0.10,  0.16),
+  stringsAsFactors = FALSE
+)
+
+## Optional: peek at the resulting objects --------------------------------
+# str(trials_df)
+# str(nodes_df)
+# str(edges_df)
+# str(params_df)

@@ -1,14 +1,14 @@
 # Fdb version 4
-["bibtex new_try"] 1759954303.99052 "new_try.aux" "new_try.bbl" "new_try" 1759998216.05587 0
+["bibtex new_try"] 1759954303.99052 "new_try.aux" "new_try.bbl" "new_try" 1760366738.2005 0
   "./refs.bib" 1759339352.02192 129970 34618e21f501e27de685ce6ecaf104f6 ""
   "/usr/local/texlive/2025/texmf-dist/bibtex/bst/base/apalike.bst" 1292289607 24635 604dafcc79f521a11ea73e506e1fbd98 ""
-  "new_try.aux" 1759998215.87826 2909 04406a570a9bdf4b07e1125ffa099c81 "pdflatex"
+  "new_try.aux" 1760366738.01085 2909 04406a570a9bdf4b07e1125ffa099c81 "pdflatex"
   (generated)
   "new_try.bbl"
   "new_try.blg"
   (rewritten before read)
-["pdflatex"] 1759998215.57615 "/Users/nstevenson/Documents/2025/UberUbermodel_newercopy/LatexFiles/new_try.tex" "new_try.pdf" "new_try" 1759998216.05599 0
-  "/Users/nstevenson/Documents/2025/UberUbermodel_newercopy/LatexFiles/new_try.tex" 1759998215.38081 10555 fb1718c5f31224dc1694eec396ff4aba ""
+["pdflatex"] 1760366737.65813 "/Users/nstevenson/Documents/2025/UberUbermodel_newercopy/LatexFiles/new_try.tex" "new_try.pdf" "new_try" 1760366738.20061 0
+  "/Users/nstevenson/Documents/2025/UberUbermodel_newercopy/LatexFiles/new_try.tex" 1760366737.46198 10558 71fc487ea34748f0a16ac0e85dadc702 ""
   "/usr/local/texlive/2025/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "/usr/local/texlive/2025/texmf-dist/fonts/tfm/public/amsfonts/cmextra/cmbsy6.tfm" 1246382020 1124 14ccf5552bc7f77ca02a8a402bea8bfb ""
   "/usr/local/texlive/2025/texmf-dist/fonts/tfm/public/amsfonts/cmextra/cmbsy8.tfm" 1246382020 1120 200be8b775682cdf80acad4be5ef57e4 ""
@@ -107,10 +107,10 @@
   "/usr/local/texlive/2025/texmf-var/fonts/map/pdftex/updmap/pdftex.map" 1746085411 5467155 19efa205003f9ecad95fbbaa6ff24da1 ""
   "/usr/local/texlive/2025/texmf-var/web2c/pdftex/pdflatex.fmt" 1746085328 3345732 d9818e4e3f112a5c7ec99ecb34f94def ""
   "/usr/local/texlive/2025/texmf.cnf" 1741450484 577 418a7058ec8e006d8704f60ecd22c938 ""
-  "new_try.aux" 1759998215.87826 2909 04406a570a9bdf4b07e1125ffa099c81 "pdflatex"
+  "new_try.aux" 1760366738.01085 2909 04406a570a9bdf4b07e1125ffa099c81 "pdflatex"
   "new_try.bbl" 1759954304.06713 49 0eba253fc001332e731e8aba3f23127b "bibtex new_try"
-  "new_try.out" 1759998215.87883 1379 2db9951f56579e67bf437068b4ada9b5 "pdflatex"
-  "new_try.tex" 1759998215.38081 10555 fb1718c5f31224dc1694eec396ff4aba ""
+  "new_try.out" 1760366738.01118 1379 2db9951f56579e67bf437068b4ada9b5 "pdflatex"
+  "new_try.tex" 1760366737.46198 10558 71fc487ea34748f0a16ac0e85dadc702 ""
   (generated)
   "new_try.aux"
   "new_try.log"

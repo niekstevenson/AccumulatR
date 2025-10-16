@@ -51,7 +51,8 @@ source("R/model_tables.R")
       if (!is.null(attrs$shared_params)) {
         for (m in members) {
           if (!is.null(defs[[m]])) {
-            defs[[m]]$params <- modifyList(attrs$shared_params, defs[[m]]$params, keep.null = TRUE)
+            # Shared parameters should override member defaults so they stay linked
+            defs[[m]]$params <- modifyList(defs[[m]]$params, attrs$shared_params, keep.null = TRUE)
           }
         }
       }

@@ -53,18 +53,55 @@ model_to_tables <- function(model) {
     )
   }
 
+  shared_param_map <- list()
+  shared_param_values <- list()
+  shared_group_counter <- 0L
+  if (!is.null(model$groups) && length(model$groups) > 0) {
+    for (grp in model$groups) {
+      sp <- grp$attrs$shared_params %||% NULL
+      if (is.null(sp) || length(sp) == 0) next
+      shared_group_counter <- shared_group_counter + 1L
+      gid <- grp$id %||% sprintf("shared_group_%d", shared_group_counter)
+      members <- grp$members %||% character(0)
+      if (length(members) == 0) next
+      for (member in members) {
+        if (is.null(shared_param_map[[member]])) shared_param_map[[member]] <- list()
+        for (pname in names(sp)) {
+          shared_id <- sprintf("shared:%s:%s", gid, pname)
+          shared_param_map[[member]][[pname]] <- shared_id
+          if (!is.null(sp[[pname]])) {
+            if (is.null(shared_param_values[[shared_id]])) {
+              shared_param_values[[shared_id]] <- sp[[pname]]
+            }
+          }
+        }
+      }
+    }
+  }
+
+  added_param_ids <- character(0)
+
   for (acc in model$accumulators) {
     struct_id <- sprintf("acc:%s", acc$id)
     param_slots <- list()
     if (!is.null(acc$params) && length(acc$params) > 0) {
       for (pname in names(acc$params)) {
-        param_id <- .make_param_id(struct_id, pname)
+        shared_mapping <- shared_param_map[[acc$id]] %||% list()
+        param_id <- shared_mapping[[pname]] %||% .make_param_id(struct_id, pname)
         param_slots[[pname]] <- param_id
-        param_rows[[length(param_rows) + 1L]] <- data.frame(
-          param_id = param_id,
-          value = acc$params[[pname]],
-          stringsAsFactors = FALSE
-        )
+        if (!(param_id %in% added_param_ids)) {
+          param_value <- shared_param_values[[param_id]]
+          if (is.null(param_value)) {
+            param_value <- acc$params[[pname]]
+            shared_param_values[[param_id]] <- param_value
+          }
+          param_rows[[length(param_rows) + 1L]] <- data.frame(
+            param_id = param_id,
+            value = param_value,
+            stringsAsFactors = FALSE
+          )
+          added_param_ids <- c(added_param_ids, param_id)
+        }
       }
     }
     payload <- list(

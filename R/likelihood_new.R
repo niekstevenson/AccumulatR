@@ -11,8 +11,8 @@ source("R/model_tables.R")
 .integrate_rel_tol <- function() getOption("uuber.integrate.rel.tol", 1e-5)
 .integrate_abs_tol <- function() getOption("uuber.integrate.abs.tol", 1e-6)
 
-.event_cache_enabled <- function() isTRUE(getOption("uuber.enable.event.cache", FALSE))
-.integral_cache_enabled <- function() isTRUE(getOption("uuber.enable.integral.cache", FALSE))
+.event_cache_enabled <- function() FALSE
+.integral_cache_enabled <- function() FALSE
 
 .time_key <- function(x) {
   vapply(x, function(xx) {
@@ -116,9 +116,6 @@ source("R/model_tables.R")
   prep[[".pair_cache_env"]] <- new.env(parent = emptyenv())
   prep[[".pair_cache_env"]]$pair_ids <- list()
   prep[[".pair_cache_env"]]$next_id <- 1L
-  prep[[".pair_cache_env"]]$integral_cache <- list()
-  prep[[".integral_cache_env"]] <- new.env(parent = emptyenv())
-  prep[[".integral_cache_env"]]$integral_cache <- list()
   state <- new.env(parent = emptyenv())
   state$counter <- 0L
   assign_ids <- function(e) .assign_expr_ids(e, state = state)
@@ -210,18 +207,6 @@ source("R/model_tables.R")
     }
   }
   active
-}
-
-# Per-call memoization cache helpers
-.cache_get <- function(cache, key, default = NULL) {
-  if (is.null(cache)) return(default)
-  val <- cache[[key]]
-  if (is.null(val)) default else val
-}
-
-.cache_set <- function(cache, key, value) {
-  if (!is.null(cache)) cache[[key]] <- value
-  value
 }
 
 .append_unique <- function(base_set, additions) {
@@ -324,177 +309,17 @@ source("R/model_tables.R")
 
 .event_cache_fetch <- function(cache, prep, type, id, component, t,
                                forced_complete, forced_survive) {
-  if (is.null(cache) || !.event_cache_enabled()) return(NULL)
-  store <- cache$event_cache
-  if (is.null(store)) return(NULL)
-  type_store <- store[[type]]
-  if (is.null(type_store)) return(NULL)
-  id_store <- type_store[[id]]
-  if (is.null(id_store)) return(NULL)
-  comp_slot <- .component_slot(prep, component)
-  if (comp_slot > length(id_store)) return(NULL)
-  comp_store <- id_store[[comp_slot]]
-  if (is.null(comp_store)) return(NULL)
-  fc_idx <- .normalize_forced_ids(forced_complete, prep)
-  fs_idx <- .normalize_forced_ids(forced_survive, prep)
-  entry_idx <- .forced_entry_index(comp_store, fc_idx, fs_idx)
-  if (entry_idx == 0L) return(NULL)
-  map_env <- if (!is.null(comp_store$maps) && length(comp_store$maps) >= entry_idx)
-    comp_store$maps[[entry_idx]]
-  else NULL
-  if (is.null(map_env)) return(NULL)
-  tk <- .time_key(t)
-  pos <- map_env[[tk]]
-  if (is.null(pos)) return(NULL)
-  comp_store$values[[entry_idx]][[as.integer(pos)]]
+  NULL
 }
 
 .event_cache_store <- function(cache, prep, type, id, component, t,
                                forced_complete, forced_survive, value) {
-  if (is.null(cache) || !.event_cache_enabled()) return(value)
-  fc_idx <- .normalize_forced_ids(forced_complete, prep)
-  fs_idx <- .normalize_forced_ids(forced_survive, prep)
-  comp_slot <- .component_slot(prep, component)
-  store <- cache$event_cache
-  if (is.null(store)) {
-    store <- list(survival = list(), density = list())
-  }
-  type_store <- store[[type]]
-  if (is.null(type_store)) type_store <- list()
-  id_store <- type_store[[id]]
-  if (is.null(id_store)) id_store <- vector("list", comp_slot)
-  if (length(id_store) < comp_slot) {
-    id_store <- c(id_store, vector("list", comp_slot - length(id_store)))
-  }
-  comp_store <- id_store[[comp_slot]]
-  if (is.null(comp_store)) {
-    comp_store <- list(fc = list(), fs = list(), times = list(), values = list(), maps = list(), entry_map = new.env(hash = TRUE, parent = emptyenv()))
-  }
-  entry_idx <- .forced_entry_index(comp_store, fc_idx, fs_idx)
-  if (entry_idx == 0L) {
-    entry_idx <- length(comp_store$fc) + 1L
-    comp_store$fc[[entry_idx]] <- fc_idx
-    comp_store$fs[[entry_idx]] <- fs_idx
-    comp_store$times[[entry_idx]] <- numeric(0)
-    comp_store$values[[entry_idx]] <- numeric(0)
-    comp_store$maps[[entry_idx]] <- new.env(hash = TRUE, parent = emptyenv())
-    key <- paste0('FC=', if (length(fc_idx)) paste(fc_idx, collapse = ',') else '', '|FS=', if (length(fs_idx)) paste(fs_idx, collapse = ',') else '')
-    comp_store$entry_map[[key]] <- entry_idx
-  }
-  map_env <- comp_store$maps[[entry_idx]]
-  if (is.null(map_env)) {
-    map_env <- new.env(hash = TRUE, parent = emptyenv())
-    comp_store$maps[[entry_idx]] <- map_env
-  }
-  tk <- .time_key(t)
-  pos <- map_env[[tk]]
-  if (is.null(pos)) {
-    new_index <- length(comp_store$values[[entry_idx]]) + 1L
-    comp_store$values[[entry_idx]][[new_index]] <- value
-    comp_store$times[[entry_idx]][[new_index]] <- t
-    map_env[[tk]] <- new_index
-  } else {
-    comp_store$values[[entry_idx]][[as.integer(pos)]] <- value
-  }
-  id_store[[comp_slot]] <- comp_store
-  type_store[[id]] <- id_store
-  store[[type]] <- type_store
-  cache$event_cache <- store
-  value
-}
-
-.integral_cache_fetch <- function(cache, tag, expr_id, comp_slot, fc_idx, fs_idx, upper) {
-  if (is.null(cache) || !.integral_cache_enabled() || expr_id <= 0) return(NULL)
-  store <- cache$integral_cache
-  if (is.null(store)) return(NULL)
-  if (tag > length(store)) return(NULL)
-  tag_store <- store[[tag]]
-  if (is.null(tag_store)) return(NULL)
-  if (expr_id > length(tag_store)) return(NULL)
-  expr_store <- tag_store[[expr_id]]
-  if (is.null(expr_store)) return(NULL)
-  if (comp_slot > length(expr_store)) return(NULL)
-  comp_store <- expr_store[[comp_slot]]
-  if (is.null(comp_store)) return(NULL)
-  entry_idx <- .forced_entry_index(comp_store, fc_idx, fs_idx)
-  if (entry_idx == 0L) return(NULL)
-  map_env <- if (!is.null(comp_store$maps) && length(comp_store$maps) >= entry_idx)
-    comp_store$maps[[entry_idx]]
-  else NULL
-  if (is.null(map_env)) return(NULL)
-  tk <- .time_key(upper)
-  pos <- map_env[[tk]]
-  if (is.null(pos)) return(NULL)
-  comp_store$values[[entry_idx]][[as.integer(pos)]]
-}
-
-.integral_cache_store <- function(cache, tag, expr_id, comp_slot, fc_idx, fs_idx, upper, value) {
-  if (is.null(cache) || !.integral_cache_enabled() || expr_id <= 0) return(value)
-  store <- cache$integral_cache
-  if (is.null(store)) store <- list()
-  if (length(store) < tag) {
-    store <- c(store, vector("list", tag - length(store)))
-  }
-  tag_store <- store[[tag]]
-  if (is.null(tag_store)) tag_store <- vector("list", expr_id)
-  if (length(tag_store) < expr_id) {
-    tag_store <- c(tag_store, vector("list", expr_id - length(tag_store)))
-  }
-  expr_store <- tag_store[[expr_id]]
-  if (is.null(expr_store)) expr_store <- vector("list", comp_slot)
-  if (length(expr_store) < comp_slot) {
-    expr_store <- c(expr_store, vector("list", comp_slot - length(expr_store)))
-  }
-  comp_store <- expr_store[[comp_slot]]
-  if (is.null(comp_store)) {
-    comp_store <- list(fc = list(), fs = list(), times = list(), values = list(), maps = list(), entry_map = new.env(hash = TRUE, parent = emptyenv()))
-  }
-  entry_idx <- .forced_entry_index(comp_store, fc_idx, fs_idx)
-  if (entry_idx == 0L) {
-    entry_idx <- length(comp_store$fc) + 1L
-    comp_store$fc[[entry_idx]] <- fc_idx
-    comp_store$fs[[entry_idx]] <- fs_idx
-    comp_store$times[[entry_idx]] <- numeric(0)
-    comp_store$values[[entry_idx]] <- numeric(0)
-    comp_store$maps[[entry_idx]] <- new.env(hash = TRUE, parent = emptyenv())
-    key <- paste0('FC=', if (length(fc_idx)) paste(fc_idx, collapse = ',') else '', '|FS=', if (length(fs_idx)) paste(fs_idx, collapse = ',') else '')
-    comp_store$entry_map[[key]] <- entry_idx
-  }
-  map_env <- comp_store$maps[[entry_idx]]
-  if (is.null(map_env)) {
-    map_env <- new.env(hash = TRUE, parent = emptyenv())
-    comp_store$maps[[entry_idx]] <- map_env
-  }
-  tk <- .time_key(upper)
-  pos <- map_env[[tk]]
-  if (is.null(pos)) {
-    new_index <- length(comp_store$values[[entry_idx]]) + 1L
-    comp_store$values[[entry_idx]][[new_index]] <- value
-    comp_store$times[[entry_idx]][[new_index]] <- upper
-    map_env[[tk]] <- new_index
-  } else {
-    comp_store$values[[entry_idx]][[as.integer(pos)]] <- value
-  }
-  expr_store[[comp_slot]] <- comp_store
-  tag_store[[expr_id]] <- expr_store
-  store[[tag]] <- tag_store
-  cache$integral_cache <- store
   value
 }
 
 .cached_integral <- function(cache, prep, tag, expr = NULL, expr_id = NULL,
                              component, forced_complete, forced_survive, upper, compute_fn) {
-  if (is.null(cache) || !.integral_cache_enabled()) return(compute_fn())
-  if (is.null(expr_id)) expr_id <- .expr_id(expr)
-  expr_id <- expr_id %||% 0L
-  if (expr_id <= 0) return(compute_fn())
-  comp_slot <- .component_slot(prep, component)
-  fc_idx <- .normalize_forced_ids(forced_complete, prep)
-  fs_idx <- .normalize_forced_ids(forced_survive, prep)
-  hit <- .integral_cache_fetch(cache, tag, expr_id, comp_slot, fc_idx, fs_idx, upper)
-  if (!is.null(hit)) return(hit)
-  val <- compute_fn()
-  .integral_cache_store(cache, tag, expr_id, comp_slot, fc_idx, fs_idx, upper, val)
+  compute_fn()
 }
 # Event helpers that honor forced sets and cache
 .event_survival_at <- function(prep, id, component, t,
@@ -765,22 +590,6 @@ source("R/model_tables.R")
                                cache = NULL) {
   if (is.null(expr) || is.null(expr[["kind"]])) return(list())
   kind <- expr[["kind"]]
-  if (is.null(cache)) cache <- new.env(parent = emptyenv())
-
-  .expr_key <- function(e) {
-    srcs <- sort(.expr_sources(e, prep))
-    comp_key <- if (is.null(component)) "__NULL__" else paste(component, collapse = "|")
-    paste0("scen|", kind, "|", paste(srcs, collapse = ","), "|t=", .time_key(t), "|comp=", comp_key)
-  }
-  scen_cacheable <- (length(forced_complete) == 0L && length(forced_survive) == 0L)
-  scen_key <- if (scen_cacheable) .expr_key(expr) else NULL
-  cached_scen <- if (!is.null(scen_key)) .cache_get(cache, scen_key, NULL) else NULL
-  if (!is.null(cached_scen)) return(cached_scen)
-
-  set_cache <- function(res) {
-    if (!is.null(scen_key)) .cache_set(cache, scen_key, res)
-    res
-  }
 
   make_scenario <- function(weight, fcomp, fsurv) {
     if (!is.finite(weight) || weight <= 0) return(NULL)
@@ -799,7 +608,7 @@ source("R/model_tables.R")
       forced_survive = forced_survive,
       cache = cache
     )
-    if (weight <= 0) return(set_cache(list()))
+    if (!is.finite(weight) || weight <= 0) return(list())
     pool_scenarios <- attr(weight, "scenarios")
     if (!is.null(pool_scenarios) && length(pool_scenarios) > 0) {
       out <- list()
@@ -812,21 +621,19 @@ source("R/model_tables.R")
         sc <- make_scenario(w, fcomp, fsurv)
         if (!is.null(sc)) out[[length(out) + 1L]] <- sc
       }
-      return(set_cache(out))
+      return(out)
     }
     sc <- make_scenario(
       weight,
       fcomp = .append_unique(forced_complete, source_id),
       fsurv = forced_survive
     )
-    return(set_cache(if (is.null(sc)) list() else list(sc)))
+    return(if (is.null(sc)) list() else list(sc))
   }
 
   if (identical(kind, "and")) {
-    # Scenario-based AND (max): enumerate which arg finishes last at t,
-    # conditioning other args to have completed by t given forced sets.
     args <- expr[["args"]] %||% list()
-    if (length(args) == 0) return(set_cache(list()))
+    if (length(args) == 0) return(list())
     out <- list()
     for (i in seq_along(args)) {
       si <- .expr_scenarios_at(
@@ -855,24 +662,23 @@ source("R/model_tables.R")
             break
           }
           weight <- weight * Fj
-          if (weight <= 0) {
+          if (!is.finite(weight) || weight <= 0) {
             ok <- FALSE
             break
           }
-        fcomp <- .append_unique(fcomp, .expr_sources(aj, prep))
+          fcomp <- .append_unique(fcomp, .expr_sources(aj, prep))
         }
         if (!ok) next
-        out[[length(out) + 1L]] <- make_scenario(weight, fcomp, fsurv)
+        sc_out <- make_scenario(weight, fcomp, fsurv)
+        if (!is.null(sc_out)) out[[length(out) + 1L]] <- sc_out
       }
     }
-    return(set_cache(out))
+    return(out)
   }
 
   if (identical(kind, "or")) {
-    # Shared-event safe OR enumeration:
-    # for each branch finishing at t, enforce competitors remain incomplete
     args <- expr[["args"]] %||% list()
-    if (length(args) == 0) return(set_cache(list()))
+    if (length(args) == 0) return(list())
     out <- list()
     for (i in seq_along(args)) {
       si <- .expr_scenarios_at(
@@ -906,28 +712,27 @@ source("R/model_tables.R")
           }
         }
         if (!valid) next
-        out[[length(out) + 1L]] <- make_scenario(weight, fcomp, fsurv)
+        sc_out <- make_scenario(weight, fcomp, fsurv)
+        if (!is.null(sc_out)) out[[length(out) + 1L]] <- sc_out
       }
     }
-    return(set_cache(out))
+    return(out)
   }
 
-  # Fallback for other expression kinds (e.g., nested guards) uses numeric density.
   weight <- .eval_expr_likelihood(expr, t, prep, component, cache = cache)
-  if (!is.finite(weight) || weight <= 0) return(set_cache(list()))
+  if (!is.finite(weight) || weight <= 0) return(list())
   sc <- make_scenario(
     weight,
     fcomp = .append_unique(forced_complete, .expr_sources(expr, prep)),
     fsurv = forced_survive
   )
-  set_cache(if (is.null(sc)) list() else list(sc))
+  if (is.null(sc)) list() else list(sc)
 }
 
 .eval_expr_cdf_cond <- function(expr, t, prep, component,
                                 forced_complete = character(0),
                                 forced_survive = character(0),
                                 cache = NULL) {
-  if (is.null(cache)) cache <- new.env(parent = emptyenv())
   if (is.null(expr) || is.null(expr[["kind"]])) return(0.0)
   kind <- expr[["kind"]]
   if (identical(kind, "event")) {
@@ -988,7 +793,6 @@ source("R/model_tables.R")
                                      forced_complete = character(0),
                                      forced_survive = character(0),
                                      cache = NULL) {
-  if (is.null(cache)) cache <- new.env(parent = emptyenv())
   if (is.null(expr) || is.null(expr[["kind"]])) return(1.0)
   kind <- expr[["kind"]]
   if (identical(kind, "event")) {
@@ -1043,36 +847,6 @@ source("R/model_tables.R")
 .eval_expr_survival(expr, t, prep, component, cache = cache)
 }
 
-.expr_cache_id <- function(expr, prep) {
-  if (is.null(expr) || is.null(expr[['kind']])) return("NULL")
-  kind <- expr[['kind']]
-  sources <- sort(.expr_sources(expr, prep))
-  paste0(kind, "|", paste(sources, collapse = ","), "|", length(expr[['args']] %||% list()))
-}
-
-.forced_key <- function(ids, prep) {
-  if (length(ids) == 0) return("")
-  idx_map <- prep[[".id_index"]]
-  if (is.null(idx_map)) {
-    return(paste(sort(unique(ids)), collapse = ","))
-  }
-  ints <- idx_map[ids]
-  ints <- ints[!is.na(ints)]
-  if (length(ints) == 0) return("")
-  paste(sort(unique(ints)), collapse = ",")
-}
-
-.survival_cache_key <- function(expr, t, forced_complete, forced_survive, component, prep) {
-  comp_key <- if (is.null(component)) "__NULL__" else as.character(component)
-  paste0(
-    "surv|", .expr_cache_id(expr, prep),
-    "|comp=", comp_key,
-    "|t=", .time_key(t),
-    "|FC=", .forced_key(forced_complete, prep),
-    "|FS=", .forced_key(forced_survive, prep)
-  )
-}
-
 .scenario_density_with_competitors <- function(expr, t, prep, component,
                                                competitor_exprs = list(),
                                                cache = NULL) {
@@ -1081,7 +855,6 @@ source("R/model_tables.R")
     attr(val, "scenarios") <- list()
     return(val)
   }
-  if (is.null(cache)) cache <- new.env(parent = emptyenv())
   simple_event <- function(e) {
     if (is.null(e) || is.null(e[['kind']]) || !identical(e[['kind']], "event")) return(FALSE)
     src <- e[['source']]
@@ -1098,7 +871,6 @@ source("R/model_tables.R")
     val <- dens * .compute_survival_product(expr, competitor_exprs, prep, component, t)
     return(val)
   }
-  competitor_cache <- if (length(competitor_exprs) > 0) cache else NULL
   scenarios <- .expr_scenarios_at(
     expr, t, prep, component,
     forced_complete = character(0),
@@ -1115,19 +887,17 @@ source("R/model_tables.R")
     if (length(competitor_exprs) > 0) {
       surv_prod <- 1.0
       for (comp_expr in competitor_exprs) {
-        surv_key <- .survival_cache_key(comp_expr, t, sc$forced_complete, sc$forced_survive, component, prep)
-        surv_val <- if (is.null(competitor_cache)) NULL else .cache_get(competitor_cache, surv_key, NULL)
-        if (is.null(surv_val)) {
-          surv_val <- .eval_expr_survival_cond(
-            comp_expr, t, prep, component,
-            forced_complete = sc$forced_complete,
-            forced_survive = sc$forced_survive,
-            cache = cache
-          )
-          if (!is.null(competitor_cache)) .cache_set(competitor_cache, surv_key, surv_val)
+        surv_val <- .eval_expr_survival_cond(
+          comp_expr, t, prep, component,
+          forced_complete = sc$forced_complete,
+          forced_survive = sc$forced_survive,
+          cache = cache
+        )
+        if (!is.finite(surv_val) || surv_val <= 0) {
+          surv_prod <- 0.0
+          break
         }
         surv_prod <- surv_prod * surv_val
-        if (surv_prod == 0) break
       }
       weight <- weight * surv_prod
     }
@@ -1287,7 +1057,6 @@ source("R/model_tables.R")
 # Get CDF (cumulative probability) for an expression
 .eval_expr_cdf <- function(expr, t, prep, component, cache = NULL) {
   kind <- expr[['kind']]
-  if (is.null(cache)) cache <- new.env(parent = emptyenv())
 
   if (identical(kind, "event")) {
     source_id <- expr[['source']]
@@ -1375,7 +1144,6 @@ source("R/model_tables.R")
 # Get survival function for an expression
 .eval_expr_survival <- function(expr, t, prep, component, cache = NULL) {
   kind <- expr[['kind']]
-  if (is.null(cache)) cache <- new.env(parent = emptyenv())
 
   if (identical(kind, "event")) {
     source_id <- expr[['source']]
@@ -1457,7 +1225,6 @@ source("R/model_tables.R")
 # Compute likelihood (density or probability) for an expression
 .eval_expr_likelihood <- function(expr, t, prep, component, cache = NULL) {
   kind <- expr[['kind']]
-  if (is.null(cache)) cache <- new.env(parent = emptyenv())
 
   if (identical(kind, "event")) {
     source_id <- expr[['source']]
@@ -1573,22 +1340,12 @@ source("R/model_tables.R")
       if (length(unless_list) == 0) {
         return(.eval_expr_survival(blocker, t, prep, component, cache = cache))
       }
-      blk_srcs <- sort(.expr_sources(blocker, prep))
-      prot_srcs <- sort(unique(unlist(lapply(unless_list, function(u) .expr_sources(u, prep)))))
-      seff_key <- paste0("Seff|blk:", paste(blk_srcs, collapse = ","), "|prot:", paste(prot_srcs, collapse = ","), "|t=", .time_key(t))
-      hit <- .cache_get(cache, seff_key, NULL)
-      if (!is.null(hit)) return(hit)
       f_blocker <- function(tt) .eval_expr_likelihood(blocker, tt, prep, component, cache = cache)
       S_prot_prod <- function(tt) {
         if (length(unless_list) == 0) return(rep(1.0, length(tt)))
         vapply(tt, function(ui) {
-          pkey <- paste0("ProtProd|", paste(prot_srcs, collapse = ","), "|u=", .time_key(ui))
-          phit <- .cache_get(cache, pkey, NULL)
-          if (!is.null(phit)) return(phit)
           vals <- vapply(unless_list, function(unl) .eval_expr_survival(unl, ui, prep, component, cache = cache), numeric(1))
-          prodv <- prod(vals)
-          .cache_set(cache, pkey, prodv)
-          prodv
+          prod(vals)
         }, numeric(1))
       }
       tryCatch({
@@ -1604,13 +1361,8 @@ source("R/model_tables.R")
           stop.on.error = FALSE
         )[["value"]]
         s <- 1.0 - as.numeric(val)
-        s <- if (!is.finite(s)) 0.0 else max(0.0, min(1.0, s))
-        .cache_set(cache, seff_key, s)
-        s
-      }, error = function(e) {
-        .cache_set(cache, seff_key, 1.0)
-        1.0
-      })
+        if (!is.finite(s)) 0.0 else max(0.0, min(1.0, s))
+      }, error = function(e) 1.0)
     })()
     if (!is.finite(S_eff)) S_eff <- 0.0
     if (S_eff < 0) S_eff <- 0.0
@@ -1656,7 +1408,7 @@ source("R/model_tables.R")
 # competitor_exprs retained for backward compatibility but ignored.
 .integrate_outcome_probability <- function(expr, prep, component, upper_limit = Inf, competitor_exprs = NULL) {
   if (!is.finite(upper_limit)) upper_limit <- Inf
-  cache <- new.env(parent = emptyenv())
+  cache <- NULL
   res <- tryCatch(
     stats::integrate(
       .integrand_outcome_density,
@@ -1946,7 +1698,7 @@ source("R/model_tables.R")
 # Compute likelihood for a single trial/outcome
 .outcome_likelihood <- function(outcome_label, rt, prep, component) {
   outcome_defs <- prep[["outcomes"]]
-  scenario_cache <- new.env(hash = TRUE, parent = emptyenv())
+  scenario_cache <- NULL
 
   # FIRST: Check for GUESS outcomes (can be both defined and from guess policy)
   # GUESS outcomes arise from component-level guess policies
@@ -2276,7 +2028,7 @@ source("R/model_tables.R")
 #'
 #' @param model Model specification from new_API.R (race_spec or race_model_spec)
 #' @param data Data frame with columns: outcome, rt, (optionally: component)
-#' @param cache_env Optional environment for memoising per-trial likelihoods
+#' @param cache_env Deprecated; retained for API compatibility but ignored
 #' @return Log-likelihood value with per-trial attributes
 compute_loglik <- function(model, data, cache_env = NULL) {
   if (!is.data.frame(data)) {
@@ -2290,114 +2042,72 @@ compute_loglik <- function(model, data, cache_env = NULL) {
   if (!"outcome" %in% names(data) || !"rt" %in% names(data)) {
     stop("data must contain 'outcome' and 'rt' columns")
   }
-
-  # Shared cache for memoisation (allows reuse across repeated evaluations)
-  if (is.null(cache_env)) {
-    cache_env <- new.env(parent = emptyenv())
-  } else if (!is.environment(cache_env)) {
+  if (!is.null(cache_env) && !is.environment(cache_env)) {
     stop("cache_env must be an environment or NULL")
   }
 
-  # Prepare model
   prep <- .prepare_model_for_likelihood(model)
 
-  # Check if mixture model and whether weights are parameters (auto-estimate)
   comp_info <- prep[["components"]]
-  is_mixture <- length(comp_info[['ids']]) > 1
-  has_weight_param <- FALSE
-  if (!is.null(comp_info[['has_weight_param']])) {
-    has_weight_param <- any(comp_info[['has_weight_param']])
-  }
+  comp_ids <- comp_info[['ids']] %||% list()
+  weights <- comp_info[['weights']] %||% numeric(0)
+  is_mixture <- length(comp_ids) > 1
+  has_weight_param <- isTRUE(any(comp_info[['has_weight_param']] %||% FALSE))
+  default_component <- if (length(comp_ids) > 0) comp_ids[[1]] else "__default__"
 
-  # Helper to compute likelihood for a single data row (with memoisation key)
-  eval_row_likelihood <- function(idx) {
-    outcome <- as.character(data[['outcome']][[idx]])
-    rt_val <- as.numeric(data[['rt']][[idx]])
-    rt_key <- if (is.na(rt_val)) "NA" else .time_key(rt_val)
-    component_key <- ""
-
-    if (is_mixture) {
-      if (has_weight_param || !("component" %in% names(data))) {
-        # Mixture-averaged likelihood (weights may be parameters)
-        comp_ids <- comp_info[['ids']]
-        weights <- comp_info[['weights']]
-        total_lik <- 0.0
-        for (j in seq_along(comp_ids)) {
-          comp_lik <- .outcome_likelihood(outcome, rt_val, prep, comp_ids[[j]])
-          total_lik <- total_lik + weights[[j]] * comp_lik
-        }
-        component_key <- "__mixture__"
-        lik <- total_lik
-      } else {
-        component <- as.character(data[['component']][[idx]])
-        component_key <- component
-        lik <- .outcome_likelihood(outcome, rt_val, prep, component)
-      }
-    } else {
-      component <- if (length(comp_info[['ids']]) > 0) comp_info[['ids']][[1]] else "__default__"
-      component_key <- component
-      lik <- .outcome_likelihood(outcome, rt_val, prep, component)
-    }
-
-    key <- paste(component_key, outcome, rt_key, sep = "|")
-
-    if (!is.null(cache_env[[key]])) {
-      return(list(key = key, value = cache_env[[key]]))
-    }
-
-    cache_env[[key]] <- lik
-    list(key = key, value = lik)
-  }
-
-  # Pre-evaluate unique rows to make reuse/caching explicit
   n_rows <- nrow(data)
   if (n_rows == 0) {
     total_ll <- 0.0
     attr(total_ll, "contributions") <- numeric(0)
     attr(total_ll, "log_contributions") <- numeric(0)
-    attr(total_ll, "cache") <- cache_env
     attr(total_ll, "keys") <- character(0)
+    attr(total_ll, "cache") <- NULL
     return(total_ll)
   }
 
-  raw_keys <- character(n_rows)
+  contributions <- numeric(n_rows)
+  log_contributions <- numeric(n_rows)
+  keys <- character(n_rows)
+
+  has_component_col <- "component" %in% names(data)
+
   for (i in seq_len(n_rows)) {
     outcome <- as.character(data[['outcome']][[i]])
     rt_val <- as.numeric(data[['rt']][[i]])
     rt_key <- if (is.na(rt_val)) "NA" else .time_key(rt_val)
-    component_key <- ""
-    if (is_mixture) {
-      if (has_weight_param || !("component" %in% names(data))) {
-        component_key <- "__mixture__"
-      } else {
-        component_key <- as.character(data[['component']][[i]])
+
+    if (is_mixture && (has_weight_param || !has_component_col)) {
+      lik <- 0.0
+      for (j in seq_along(comp_ids)) {
+        w_j <- if (length(weights) >= j) weights[[j]] else 1 / length(comp_ids)
+        lik <- lik + w_j * .outcome_likelihood(outcome, rt_val, prep, comp_ids[[j]])
       }
+      component_key <- "__mixture__"
     } else {
-      component_key <- if (length(comp_info[['ids']]) > 0) comp_info[['ids']][[1]] else "__default__"
+      if (is_mixture) {
+        raw_component <- data[['component']][[i]]
+        if (is.na(raw_component)) {
+          component_key <- default_component
+        } else {
+          component_chr <- as.character(raw_component)
+          component_key <- if (nzchar(component_chr)) component_chr else default_component
+        }
+      } else {
+        component_key <- default_component
+      }
+      lik <- .outcome_likelihood(outcome, rt_val, prep, component_key)
     }
-    raw_keys[[i]] <- paste(component_key, outcome, rt_key, sep = "|")
+
+    contributions[[i]] <- lik
+    log_contributions[[i]] <- if (is.finite(lik) && lik > 0) log(lik) else -Inf
+    keys[[i]] <- paste(component_key, outcome, rt_key, sep = "|")
   }
 
-  unique_keys <- unique(raw_keys)
-  key_to_indices <- split(seq_len(n_rows), raw_keys)
-
-  for (key in unique_keys) {
-    idx <- key_to_indices[[key]][[1]]
-    res <- eval_row_likelihood(idx)
-    # Ensure cache is populated even if likelihood computed downstream encountered Inf/NaN
-    if (is.null(cache_env[[res[['key']]]])) {
-      cache_env[[res[['key']]]] <- res[['value']]
-    }
-  }
-
-  lik_values <- vapply(raw_keys, function(key) cache_env[[key]], numeric(1))
-  log_likes <- ifelse(is.finite(lik_values) & lik_values > 0, log(lik_values), -Inf)
-
-  total_ll <- sum(log_likes)
-  attr(total_ll, "contributions") <- lik_values
-  attr(total_ll, "log_contributions") <- log_likes
-  attr(total_ll, "keys") <- raw_keys
-  attr(total_ll, "cache") <- cache_env
+  total_ll <- sum(log_contributions)
+  attr(total_ll, "contributions") <- contributions
+  attr(total_ll, "log_contributions") <- log_contributions
+  attr(total_ll, "keys") <- keys
+  attr(total_ll, "cache") <- NULL
 
   total_ll
 }

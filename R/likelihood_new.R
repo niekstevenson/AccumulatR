@@ -225,13 +225,17 @@ source("R/model_tables.R")
 }
 
 .append_unique <- function(base_set, additions) {
-  if (is.null(base_set)) base_set <- character(0)
-  if (length(additions) == 0) return(base_set)
+  if (is.null(additions) || length(additions) == 0L) {
+    return(if (is.null(base_set)) character(0) else as.character(base_set))
+  }
   add_chr <- as.character(additions)
-  if (length(base_set) == 0) return(add_chr)
-  new_vals <- add_chr[!(add_chr %in% base_set)]
-  if (length(new_vals) == 0) return(base_set)
-  c(base_set, new_vals)
+  if (is.null(base_set) || length(base_set) == 0L) {
+    return(add_chr)
+  }
+  base_chr <- as.character(base_set)
+  new_mask <- match(add_chr, base_chr, nomatch = 0L) == 0L
+  if (!any(new_mask)) return(base_chr)
+  c(base_chr, add_chr[new_mask])
 }
 
 .assign_expr_ids <- function(expr, state) {
@@ -588,21 +592,39 @@ source("R/model_tables.R")
     return(val)
   }
 
+  idx_seq <- seq_len(n)
+  others_idx_list <- lapply(idx_seq, function(i) idx_seq[idx_seq != i])
   dens_vec <- numeric(n)
   cdf_vec <- numeric(n)
   surv_vec <- numeric(n)
-  for (i in seq_len(n)) {
+  for (i in idx_seq) {
     mid <- members[[i]]
-    dens_vec[[i]] <- .event_density_at(prep, mid, component, t,
-                                       forced_complete = forced_complete,
-                                       forced_survive = forced_survive,
-                                       cache = cache)
-    cdf_vec[[i]] <- .event_cdf_at(prep, mid, component, t,
-                                  forced_complete = forced_complete,
-                                  forced_survive = forced_survive,
-                                  cache = cache)
+    dens_vec[[i]] <- .event_density_at(
+      prep, mid, component, t,
+      forced_complete = forced_complete,
+      forced_survive = forced_survive,
+      cache = cache
+    )
+    cdf_vec[[i]] <- .event_cdf_at(
+      prep, mid, component, t,
+      forced_complete = forced_complete,
+      forced_survive = forced_survive,
+      cache = cache
+    )
     surv_vec[[i]] <- 1.0 - cdf_vec[[i]]
   }
+
+  forced_complete_flags <- if (length(forced_complete) > 0L) {
+    !is.na(match(members, forced_complete))
+  } else {
+    rep(FALSE, n)
+  }
+  forced_survive_flags <- if (length(forced_survive) > 0L) {
+    !is.na(match(members, forced_survive))
+  } else {
+    rep(FALSE, n)
+  }
+  free_mask_base <- !(forced_complete_flags | forced_survive_flags)
 
   scenarios <- list()
   add_scenario <- function(weight, fcomp, fsurv) {
@@ -614,82 +636,88 @@ source("R/model_tables.R")
     )
   }
 
-  pool_forced_complete <- intersect(members, forced_complete)
-  pool_forced_survive <- intersect(members, forced_survive)
-
-  for (idx in seq_len(n)) {
-    mid <- members[[idx]]
-    if (mid %in% forced_survive) next
+  for (idx in idx_seq) {
+    if (forced_survive_flags[[idx]]) next
     dens_mid <- dens_vec[[idx]]
     if (!is.finite(dens_mid) || dens_mid <= 0) next
 
     need <- k - 1L
-    others_idx <- setdiff(seq_len(n), idx)
-    if (length(others_idx) < need) next
+    others_idx <- others_idx_list[[idx]]
+    if (need > length(others_idx)) next
 
-    fc_idx <- others_idx[members[others_idx] %in% pool_forced_complete]
-    fs_idx <- others_idx[members[others_idx] %in% pool_forced_survive]
+    fc_idx <- if (length(others_idx) > 0L) others_idx[forced_complete_flags[others_idx]] else integer(0)
+    fs_idx <- if (length(others_idx) > 0L) others_idx[forced_survive_flags[others_idx]] else integer(0)
     forced_count <- length(fc_idx)
     if (forced_count > need) next
-
     remaining_need <- need - forced_count
-    free_idx <- setdiff(others_idx, c(fc_idx, fs_idx))
+
+    free_idx <- if (length(others_idx) > 0L) others_idx[free_mask_base[others_idx]] else integer(0)
     if (remaining_need > length(free_idx)) next
 
     base_factor <- dens_mid
-    if (forced_count > 0) {
-      base_factor <- base_factor * prod(cdf_vec[fc_idx])
-    }
-    if (length(fs_idx) > 0) {
-      base_factor <- base_factor * prod(surv_vec[fs_idx])
-    }
+    if (length(fc_idx) > 0L) base_factor <- base_factor * prod(cdf_vec[fc_idx])
+    if (length(fs_idx) > 0L) base_factor <- base_factor * prod(surv_vec[fs_idx])
+    if (!is.finite(base_factor) || base_factor <= 0) next
+
+    forced_complete_ids <- .append_unique(forced_complete, c(members[[idx]], members[fc_idx], pool_id))
+    base_survive_ids <- .append_unique(forced_survive, members[fs_idx])
 
     if (remaining_need == 0L) {
-      optional_survivors <- members[free_idx]
+      survivors_idx <- free_idx
       weight <- base_factor
-      if (length(free_idx) > 0) {
-        weight <- weight * prod(surv_vec[free_idx])
-      }
-      if (weight > 0) {
-        fcomp <- .append_unique(forced_complete, c(mid, members[fc_idx], pool_id))
-        fsurv <- .append_unique(forced_survive, c(optional_survivors, members[fs_idx]))
-        add_scenario(weight, fcomp, fsurv)
+      if (length(survivors_idx) > 0L) weight <- weight * prod(surv_vec[survivors_idx])
+      if (is.finite(weight) && weight > 0) {
+        add_scenario(
+          weight,
+          forced_complete_ids,
+          .append_unique(base_survive_ids, members[survivors_idx])
+        )
       }
       next
     }
 
-    combo_list <- if (remaining_need == length(free_idx)) {
+    combos <- if (remaining_need == length(free_idx)) {
       list(free_idx)
     } else if (remaining_need == 1L) {
       lapply(free_idx, function(i) i)
-    } else if (remaining_need == 0L) {
+    } else if (remaining_need <= 0L) {
       list(integer(0))
     } else {
       utils::combn(free_idx, remaining_need, simplify = FALSE)
     }
 
-    for (combo_idx in combo_list) {
-      combo_members <- members[combo_idx]
+    if (length(combos) == 0L) next
+
+    for (combo_idx in combos) {
       if (length(combo_idx) != remaining_need) next
+
       combo_weight <- base_factor
-      survivor_idx <- setdiff(free_idx, combo_idx)
+      if (length(combo_idx) > 0L) combo_weight <- combo_weight * prod(cdf_vec[combo_idx])
+      if (!is.finite(combo_weight) || combo_weight <= 0) next
 
-      if (length(combo_idx) > 0) {
-        combo_weight <- combo_weight * prod(cdf_vec[combo_idx])
+      if (length(free_idx) > 0L) {
+        drop_pos <- match(combo_idx, free_idx, nomatch = 0L)
+        drop_pos <- drop_pos[drop_pos > 0L]
+        survivors_idx <- if (length(drop_pos) > 0L) free_idx[-drop_pos] else free_idx
+      } else {
+        survivors_idx <- integer(0)
       }
-      if (length(survivor_idx) > 0) {
-        combo_weight <- combo_weight * prod(surv_vec[survivor_idx])
-      }
-      if (combo_weight <= 0) next
 
-      fcomp <- .append_unique(forced_complete, c(mid, members[fc_idx], combo_members, pool_id))
-      fsurv <- .append_unique(forced_survive, c(members[fs_idx], members[survivor_idx]))
-      add_scenario(combo_weight, fcomp, fsurv)
+      if (length(survivors_idx) > 0L) {
+        combo_weight <- combo_weight * prod(surv_vec[survivors_idx])
+      }
+      if (!is.finite(combo_weight) || combo_weight <= 0) next
+
+      add_scenario(
+        combo_weight,
+        .append_unique(forced_complete_ids, members[combo_idx]),
+        .append_unique(base_survive_ids, members[survivors_idx])
+      )
     }
   }
 
   total_density <- sum(vapply(scenarios, `[[`, numeric(1), "weight"))
-  if (length(scenarios) > 0) attr(total_density, "scenarios") <- scenarios
+  if (length(scenarios) > 0L) attr(total_density, "scenarios") <- scenarios
   total_density
 }
 

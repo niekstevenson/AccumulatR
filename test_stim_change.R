@@ -6,7 +6,7 @@ source("R/likelihood_new.R")
 source("R/profile_plot_new.R")
 source("R/processing_tree.R")
 
-model_spec <- stim_selective_versions[[2]]
+model_spec <- stim_selective_versions[[1]]
 
 # Translate model specification to table representation
 model_tables <- model_to_tables(model_spec)

@@ -1,8 +1,6 @@
 # Profile plot system for new API likelihood
 # Tests parameter identifiability by varying each parameter around its true value
 
-source("R/likelihood_new.R")
-
 #' Extract all parameters from a model
 #'
 #' @param model Model specification

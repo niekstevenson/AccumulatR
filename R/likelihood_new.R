@@ -207,7 +207,9 @@ source("R/model_tables.R")
       kind = kind,
       expr = expr,
       child_ids = integer(0),
-      sources = .expr_sources(expr, prep)
+      sources = .expr_sources(expr, prep),
+      guard_ids = integer(0),
+      finish_ids = integer(0)
     )
     nodes[[node_id]] <<- placeholder
     index[[sig]] <<- as.integer(node_id)
@@ -220,9 +222,21 @@ source("R/model_tables.R")
         child_ids <- vapply(args, register_expr, integer(1))
         node[["child_ids"]] <- as.integer(child_ids)
         node[["args"]] <- args
+        child_complete <- lapply(child_ids, function(cid) nodes[[cid]][["complete_ids"]] %||% integer(0))
+        child_guard <- lapply(child_ids, function(cid) nodes[[cid]][["guard_ids"]] %||% integer(0))
+        child_finish <- lapply(child_ids, function(cid) nodes[[cid]][["finish_ids"]] %||% integer(0))
+        comb <- unique(unlist(child_complete, use.names = FALSE))
+        guard_comb <- unique(unlist(child_guard, use.names = FALSE))
+        finish_comb <- unique(unlist(child_finish, use.names = FALSE))
+        node[["complete_ids"]] <- if (length(comb) > 0) as.integer(sort(comb)) else integer(0)
+        node[["guard_ids"]] <- if (length(guard_comb) > 0) as.integer(sort(guard_comb)) else integer(0)
+        node[["finish_ids"]] <- if (length(finish_comb) > 0) as.integer(sort(finish_comb)) else integer(0)
       } else {
         node[["child_ids"]] <- integer(0)
         node[["args"]] <- list()
+        node[["complete_ids"]] <- integer(0)
+        node[["guard_ids"]] <- integer(0)
+        node[["finish_ids"]] <- integer(0)
       }
     } else if (identical(kind, "guard")) {
       ref_id <- register_expr(expr[["reference"]])
@@ -237,14 +251,48 @@ source("R/model_tables.R")
       child_ids <- child_ids[!is.na(child_ids)]
       node[["child_ids"]] <- if (length(child_ids) > 0) as.integer(child_ids) else integer(0)
       node[["args"]] <- list()
+      ref_complete <- if (!is.na(ref_id)) nodes[[ref_id]][["complete_ids"]] %||% integer(0) else integer(0)
+      ref_guard <- if (!is.na(ref_id)) nodes[[ref_id]][["guard_ids"]] %||% integer(0) else integer(0)
+      ref_finish <- if (!is.na(ref_id)) nodes[[ref_id]][["finish_ids"]] %||% integer(0) else integer(0)
+      blocker_complete <- if (!is.na(blocker_id)) nodes[[blocker_id]][["complete_ids"]] %||% integer(0) else integer(0)
+      blocker_guard <- if (!is.na(blocker_id)) nodes[[blocker_id]][["guard_ids"]] %||% integer(0) else integer(0)
+      blocker_finish <- if (!is.na(blocker_id)) nodes[[blocker_id]][["finish_ids"]] %||% integer(0) else integer(0)
+      unless_complete <- if (length(unless_ids) > 0) unique(unlist(lapply(unless_ids, function(uid) nodes[[uid]][["complete_ids"]] %||% integer(0)), use.names = FALSE)) else integer(0)
+      unless_guard <- if (length(unless_ids) > 0) unique(unlist(lapply(unless_ids, function(uid) nodes[[uid]][["guard_ids"]] %||% integer(0)), use.names = FALSE)) else integer(0)
+      node[["complete_ids"]] <- if (length(ref_complete) > 0) as.integer(sort(unique(ref_complete))) else integer(0)
+      node[["guard_ids"]] <- if (length(ref_guard) > 0) as.integer(sort(unique(c(ref_guard, unless_guard)))) else if (length(unless_guard) > 0) as.integer(sort(unique(unless_guard))) else integer(0)
+      node[["finish_ids"]] <- if (length(ref_finish) > 0) as.integer(sort(unique(ref_finish))) else integer(0)
+      node[["blocker_complete_ids"]] <- if (length(blocker_complete) > 0) as.integer(sort(unique(blocker_complete))) else integer(0)
+      node[["blocker_guard_ids"]] <- if (length(blocker_guard) > 0) as.integer(sort(unique(blocker_guard))) else integer(0)
+      node[["blocker_finish_ids"]] <- if (length(blocker_finish) > 0) as.integer(sort(unique(blocker_finish))) else integer(0)
+      node[["unless_complete_ids"]] <- if (length(unless_complete) > 0) as.integer(sort(unique(unless_complete))) else integer(0)
+      node[["unless_guard_ids"]] <- if (length(unless_guard) > 0) as.integer(sort(unique(unless_guard))) else integer(0)
     } else {
       node[["args"]] <- list()
+      node[["complete_ids"]] <- node[["complete_ids"]] %||% integer(0)
+      node[["guard_ids"]] <- node[["guard_ids"]] %||% integer(0)
+      node[["finish_ids"]] <- node[["finish_ids"]] %||% integer(0)
     }
 
     if (identical(kind, "event")) {
       node[["source_label"]] <- expr[["source"]] %||% NA_character_
       node[["source_idx"]] <- .label_to_id(prep, node[["source_label"]])
+      source_ids <- node[["sources"]] %||% integer(0)
+      node[["complete_ids"]] <- if (length(source_ids) > 0) as.integer(sort(unique(source_ids))) else integer(0)
+      guard_ids <- source_ids
+      finish_ids <- source_ids
+      src_idx <- node[["source_idx"]] %||% NA_integer_
+      if (!is.na(src_idx)) {
+        guard_ids <- c(guard_ids, as.integer(src_idx))
+        finish_ids <- c(finish_ids, as.integer(src_idx))
+      }
+      node[["guard_ids"]] <- if (length(guard_ids) > 0) as.integer(sort(unique(guard_ids))) else integer(0)
+      node[["finish_ids"]] <- if (length(finish_ids) > 0) as.integer(sort(unique(finish_ids))) else integer(0)
     }
+
+    if (is.null(node[["complete_ids"]])) node[["complete_ids"]] <- integer(0)
+    if (is.null(node[["guard_ids"]])) node[["guard_ids"]] <- integer(0)
+    if (is.null(node[["finish_ids"]])) node[["finish_ids"]] <- integer(0)
 
     nodes[[node_id]] <<- node
     as.integer(node_id)
@@ -306,10 +354,11 @@ source("R/model_tables.R")
       kind,
       "event" = {
         source_label <- node[["source_label"]] %||% NA_character_
-        source_ids <- {
-          idx <- node[["source_idx"]] %||% NA_integer_
-          if (is.na(idx)) integer(0) else as.integer(idx)
-        }
+        source_idx <- node[["source_idx"]] %||% NA_integer_
+        complete_ids <- node[["complete_ids"]] %||% integer(0)
+        finish_ids <- node[["finish_ids"]] %||% integer(0)
+        complete_ids <- .forced_union(prep, complete_ids, if (!is.na(source_idx)) as.integer(source_idx) else integer(0))
+        finish_ids <- .forced_union(prep, finish_ids, if (!is.na(source_idx)) as.integer(source_idx) else integer(0))
         function(t, component,
                  ctx,
                  forced_complete = integer(0),
@@ -335,12 +384,14 @@ source("R/model_tables.R")
               if (is.null(psc)) next
               w <- psc$weight
               if (!is.finite(w) || w <= 0) next
-              fcomp <- .forced_union(prep, forced_complete, c(source_ids, psc$forced_complete))
-              fsurv <- .forced_union(prep, forced_survive, psc$forced_survive)
+              fcomp <- .forced_union(prep, forced_complete, .forced_union(prep, complete_ids, psc$forced_complete %||% integer(0)))
+              fsurv <- .forced_union(prep, forced_survive, psc$forced_survive %||% integer(0))
+              fins <- .forced_union(prep, finish_ids, psc$finish_ids %||% integer(0))
               sc <- list(
                 weight = as.numeric(w),
                 forced_complete = .coerce_forced_ids(prep, fcomp),
-                forced_survive = .coerce_forced_ids(prep, fsurv)
+                forced_survive = .coerce_forced_ids(prep, fsurv),
+                finish_ids = .coerce_forced_ids(prep, fins)
               )
               out[[length(out) + 1L]] <- sc
             }
@@ -349,8 +400,9 @@ source("R/model_tables.R")
           }
           sc <- list(
             weight = as.numeric(weight),
-            forced_complete = .coerce_forced_ids(prep, .forced_union(prep, forced_complete, source_ids)),
-            forced_survive = .coerce_forced_ids(prep, forced_survive)
+            forced_complete = .coerce_forced_ids(prep, .forced_union(prep, forced_complete, complete_ids)),
+            forced_survive = .coerce_forced_ids(prep, forced_survive),
+            finish_ids = .coerce_forced_ids(prep, finish_ids)
           )
           out <- list(sc)
           if (!is.null(ctx)) ctx$scenario_memo[[.ctx_key("sc", id, component, t, forced_complete, forced_survive)]] <- out
@@ -389,6 +441,7 @@ source("R/model_tables.R")
                 weight <- sc$weight
                 fcomp <- sc$forced_complete
                 fsurv <- sc$forced_survive
+                finish_ids <- sc$finish_ids %||% integer(0)
                 ok <- TRUE
                 if (length(others_idx) > 0) {
                   for (j in others_idx) {
@@ -415,7 +468,8 @@ source("R/model_tables.R")
                 out[[length(out) + 1L]] <- list(
                   weight = as.numeric(weight),
                   forced_complete = .coerce_forced_ids(prep, fcomp),
-                  forced_survive = .coerce_forced_ids(prep, fsurv)
+                  forced_survive = .coerce_forced_ids(prep, fsurv),
+                  finish_ids = .coerce_forced_ids(prep, finish_ids)
                 )
               }
             }
@@ -451,11 +505,12 @@ source("R/model_tables.R")
               if (length(si) == 0) next
               others_idx <- idx_all[idx_all != i]
               req_list <- child_sources[others_idx]
-              for (sc in si) {
+             for (sc in si) {
                 if (is.null(sc) || sc$weight <= 0) next
                 weight <- sc$weight
                 fcomp <- sc$forced_complete
                 fsurv <- sc$forced_survive
+                finish_ids <- sc$finish_ids %||% integer(0)
                 valid <- TRUE
                 if (length(others_idx) > 0) {
                   for (k in seq_along(others_idx)) {
@@ -478,7 +533,8 @@ source("R/model_tables.R")
                 out[[length(out) + 1L]] <- list(
                   weight = as.numeric(weight),
                   forced_complete = .coerce_forced_ids(prep, fcomp),
-                  forced_survive = .coerce_forced_ids(prep, fsurv)
+                  forced_survive = .coerce_forced_ids(prep, fsurv),
+                  finish_ids = .coerce_forced_ids(prep, finish_ids)
                 )
               }
             }
@@ -492,6 +548,8 @@ source("R/model_tables.R")
         blocker_id <- node[["blocker_id"]] %||% NA_integer_
         unless_ids <- node[["unless_ids"]] %||% integer(0)
         blocker_sources <- if (!is.na(blocker_id)) (nodes[[blocker_id]][["sources"]] %||% integer(0)) else integer(0)
+        self_complete <- node[["complete_ids"]] %||% integer(0)
+        self_finish <- node[["finish_ids"]] %||% integer(0)
         ref_scen_fn <- if (!is.na(ref_id)) build_scenario_fn(ref_id) else function(...) list()
         surv_blocker_fn <- if (!is.na(blocker_id)) build_surv_cond_fn(blocker_id) else NULL
         surv_unless_fns <- if (length(unless_ids) > 0) lapply(unless_ids, build_surv_cond_fn) else list()
@@ -565,12 +623,14 @@ source("R/model_tables.R")
             if (is.null(sc)) next
             w <- sc$weight * S_eff
             if (!is.finite(w) || w <= 0) next
-            fcomp <- sc$forced_complete
+            fcomp <- .forced_union(prep, sc$forced_complete, self_complete)
             fsurv <- .forced_union(prep, sc$forced_survive, blocker_sources)
+            finish_ids <- .forced_union(prep, sc$finish_ids %||% integer(0), self_finish)
             scenarios[[length(scenarios) + 1L]] <- list(
               weight = as.numeric(w),
               forced_complete = .coerce_forced_ids(prep, fcomp),
-              forced_survive = .coerce_forced_ids(prep, fsurv)
+              forced_survive = .coerce_forced_ids(prep, fsurv),
+              finish_ids = .coerce_forced_ids(prep, finish_ids)
             )
           }
           if (!is.null(ctx)) ctx$scenario_memo[[.ctx_key("sc", id, component, t, forced_complete, forced_survive)]] <- scenarios
@@ -1083,12 +1143,14 @@ make_eval_ctx <- function(prep) {
       if (length(combo_idx) > 0L) finisher_ids <- c(finisher_ids, member_ids[combo_idx])
       if (!is.na(pool_idx)) finisher_ids <- c(finisher_ids, pool_idx)
       finisher_ids <- finisher_ids[!is.na(finisher_ids)]
+      finish_ids <- c(member_ids[idx], if (!is.na(pool_idx)) pool_idx else integer(0))
       templates[[template_count]] <- list(
         finisher_idx = idx,
         complete_idx = if (length(combo_idx) > 0L) combo_idx else integer(0),
         survivor_idx = survivors,
         forced_complete_ids = finisher_ids,
-        forced_survive_ids = if (length(survivors) > 0L) member_ids[survivors] else integer(0)
+        forced_survive_ids = if (length(survivors) > 0L) member_ids[survivors] else integer(0),
+        finish_ids = finish_ids
       )
       idx_entries[[j]] <- template_count
     }
@@ -1223,12 +1285,13 @@ make_eval_ctx <- function(prep) {
   }
 
   scenarios <- list()
-  add_scenario <- function(weight, fcomp, fsurv) {
+  add_scenario <- function(weight, fcomp, fsurv, finish_ids = integer(0)) {
     if (!is.finite(weight) || weight <= 0) return()
     scenarios[[length(scenarios) + 1L]] <<- list(
       weight = as.numeric(weight),
       forced_complete = .coerce_forced_ids(prep, fcomp),
-      forced_survive = .coerce_forced_ids(prep, fsurv)
+      forced_survive = .coerce_forced_ids(prep, fsurv),
+      finish_ids = .coerce_forced_ids(prep, finish_ids)
     )
   }
 
@@ -1238,13 +1301,13 @@ make_eval_ctx <- function(prep) {
     if (k == 1L) {
       if (n == 1L) {
         weight <- dens_vec[[1]]
-        if (is.finite(weight) && weight > 0) {
-          finisher_ids <- member_ids[1]
-          if (!is.na(pool_idx)) finisher_ids <- c(finisher_ids, pool_idx)
-          finisher_ids <- finisher_ids[!is.na(finisher_ids)]
-          add_scenario(weight, finisher_ids, integer(0))
-          fast_done <- TRUE
-        }
+      if (is.finite(weight) && weight > 0) {
+        finisher_ids <- member_ids[1]
+        if (!is.na(pool_idx)) finisher_ids <- c(finisher_ids, pool_idx)
+        finisher_ids <- finisher_ids[!is.na(finisher_ids)]
+        add_scenario(weight, finisher_ids, integer(0), finisher_ids)
+        fast_done <- TRUE
+      }
       } else {
         for (idx in idx_seq) {
           dens_mid <- dens_vec[[idx]]
@@ -1254,32 +1317,34 @@ make_eval_ctx <- function(prep) {
           if (length(survivors_idx) > 0L) {
             weight <- weight * prod(surv_vec[survivors_idx])
           }
-          if (!is.finite(weight) || weight <= 0) next
-          finisher_ids <- member_ids[idx]
-          if (!is.na(pool_idx)) finisher_ids <- c(finisher_ids, pool_idx)
-          finisher_ids <- finisher_ids[!is.na(finisher_ids)]
-          survivor_ids <- if (length(survivors_idx) > 0L) member_ids[survivors_idx] else integer(0)
-          add_scenario(weight, finisher_ids, survivor_ids)
-          fast_done <- TRUE
-        }
+        if (!is.finite(weight) || weight <= 0) next
+        finisher_ids <- member_ids[idx]
+        if (!is.na(pool_idx)) finisher_ids <- c(finisher_ids, pool_idx)
+        finisher_ids <- finisher_ids[!is.na(finisher_ids)]
+        survivor_ids <- if (length(survivors_idx) > 0L) member_ids[survivors_idx] else integer(0)
+        finish_ids <- c(member_ids[idx], if (!is.na(pool_idx)) pool_idx else integer(0))
+        add_scenario(weight, finisher_ids, survivor_ids, finish_ids)
+        fast_done <- TRUE
       }
-    } else if (k == n) {
-      for (idx in idx_seq) {
+    }
+  } else if (k == n) {
+    for (idx in idx_seq) {
         dens_mid <- dens_vec[[idx]]
         if (!is.finite(dens_mid) || dens_mid <= 0) next
         others_idx <- idx_seq[idx_seq != idx]
-        weight <- dens_mid
-        if (length(others_idx) > 0L) {
-          weight <- weight * prod(cdf_vec[others_idx])
-        }
-        if (!is.finite(weight) || weight <= 0) next
-        finisher_ids <- member_ids
-        if (!is.na(pool_idx)) finisher_ids <- c(finisher_ids, pool_idx)
-        finisher_ids <- finisher_ids[!is.na(finisher_ids)]
-        add_scenario(weight, finisher_ids, integer(0))
-        fast_done <- TRUE
+      weight <- dens_mid
+      if (length(others_idx) > 0L) {
+        weight <- weight * prod(cdf_vec[others_idx])
       }
-    } else {
+      if (!is.finite(weight) || weight <= 0) next
+      finisher_ids <- member_ids
+      if (!is.na(pool_idx)) finisher_ids <- c(finisher_ids, pool_idx)
+      finisher_ids <- finisher_ids[!is.na(finisher_ids)]
+      finish_ids <- c(member_ids[idx], if (!is.na(pool_idx)) pool_idx else integer(0))
+      add_scenario(weight, finisher_ids, integer(0), finish_ids)
+      fast_done <- TRUE
+    }
+  } else {
       template_info <- .build_pool_templates(pool_id, members, member_ids, pool_idx, k)
       if (!is.null(template_info) && length(template_info$templates) > 0L) {
         templates <- template_info$templates
@@ -1295,13 +1360,13 @@ make_eval_ctx <- function(prep) {
             if (length(tmpl$complete_idx) > 0L) {
               weight <- weight * prod(cdf_vec[tmpl$complete_idx])
             }
-            if (length(tmpl$survivor_idx) > 0L) {
-              weight <- weight * prod(surv_vec[tmpl$survivor_idx])
-            }
-            if (!is.finite(weight) || weight <= 0) next
-            add_scenario(weight, tmpl$forced_complete_ids, tmpl$forced_survive_ids)
-            fast_done <- TRUE
-          }
+        if (length(tmpl$survivor_idx) > 0L) {
+          weight <- weight * prod(surv_vec[tmpl$survivor_idx])
+        }
+        if (!is.finite(weight) || weight <= 0) next
+        add_scenario(weight, tmpl$forced_complete_ids, tmpl$forced_survive_ids, tmpl$finish_ids %||% integer(0))
+        fast_done <- TRUE
+      }
         }
       }
     }
@@ -1556,18 +1621,68 @@ make_eval_ctx <- function(prep) {
   if (length(scenarios) == 0) {
     return(0.0)
   }
+  registry <- prep[[".expr_registry"]]
+  nodes <- registry[["nodes"]] %||% list()
+  comp_meta <- NULL
+  if (length(competitor_exprs) > 0) {
+    comp_meta <- lapply(competitor_exprs, function(expr_i) {
+      meta <- list(expr = expr_i,
+                   kind = NA_character_,
+                   finish_ids = integer(0),
+                   guard_blocker_finish = integer(0))
+      if (!is.null(registry)) {
+        expr_id <- .expr_registry_lookup_id(registry, expr_i)
+        if (!is.na(expr_id) && expr_id > 0 && expr_id <= length(nodes)) {
+          node <- nodes[[expr_id]]
+          meta$kind <- node[["kind"]] %||% NA_character_
+          meta$finish_ids <- node[["finish_ids"]] %||% integer(0)
+          if (identical(meta$kind, "guard")) {
+            meta$guard_blocker_finish <- node[["blocker_finish_ids"]] %||% integer(0)
+          }
+        }
+      }
+      meta
+    })
+  }
+
   total <- 0.0
   for (sc in scenarios) {
     if (is.null(sc) || sc$weight <= 0) next
     weight <- sc$weight
-    if (length(competitor_exprs) > 0) {
+    finish_ids <- .coerce_forced_ids(prep, sc$finish_ids %||% integer(0))
+    forced_complete <- sc$forced_complete
+    forced_survive <- sc$forced_survive %||% integer(0)
+    if (!is.null(comp_meta) && length(comp_meta) > 0) {
       surv_prod <- 1.0
-      for (comp_expr in competitor_exprs) {
-        surv_val <- .eval_expr_survival_cond(
-          comp_expr, t, prep, component,
-          forced_complete = sc$forced_complete,
-          forced_survive = sc$forced_survive,
-          ctx = ctx)
+      for (meta in comp_meta) {
+        expr_i <- meta$expr
+        kind_i <- meta$kind
+        guard_blocker_finish <- .coerce_forced_ids(prep, meta$guard_blocker_finish)
+        fsurv_adj <- forced_survive
+        surv_val <- 1.0
+        if (identical(kind_i, "guard")) {
+          if (length(guard_blocker_finish) == 0 || length(finish_ids) == 0 ||
+              !any(finish_ids %in% guard_blocker_finish)) {
+            surv_val <- .eval_expr_survival_cond(
+              expr_i, t, prep, component,
+              forced_complete = forced_complete,
+              forced_survive = fsurv_adj,
+              ctx = ctx)
+          }
+        } else {
+          comp_finish_ids <- .coerce_forced_ids(prep, meta$finish_ids)
+          if (length(comp_finish_ids) > 0 && length(finish_ids) > 0) {
+            finish_conflict <- finish_ids[finish_ids %in% comp_finish_ids]
+            if (length(finish_conflict) > 0) {
+              fsurv_adj <- .forced_union(prep, fsurv_adj, finish_conflict)
+            }
+          }
+          surv_val <- .eval_expr_survival_cond(
+            expr_i, t, prep, component,
+            forced_complete = forced_complete,
+            forced_survive = fsurv_adj,
+            ctx = ctx)
+        }
         if (!is.finite(surv_val) || surv_val <= 0) {
           surv_prod <- 0.0
           break

@@ -107,6 +107,55 @@ source("R/model_tables.R")
     }
     prep[[".competitors"]] <- comp_map
   }
+  prep[[".expr_registry"]] <- .build_expr_registry(prep)
+  # Attach stable numeric IDs directly onto expr objects to avoid signature drift
+  .attach_expr_ids <- function(prep, registry) {
+    outcomes <- prep[["outcomes"]] %||% list()
+    if (length(outcomes) > 0) {
+      for (lbl in names(outcomes)) {
+        ex <- outcomes[[lbl]][['expr']]
+        if (!is.null(ex)) {
+          id <- .expr_registry_lookup_id(registry, ex)
+          if (!is.na(id)) {
+            ex[["._id"]] <- as.integer(id)
+            outcomes[[lbl]][['expr']] <- ex
+          }
+        }
+      }
+      prep[["outcomes"]] <- outcomes
+    }
+    comp_map <- prep[[".competitors"]] %||% list()
+    if (length(comp_map) > 0) {
+      for (lbl in names(comp_map)) {
+        exprs <- comp_map[[lbl]] %||% list()
+        if (length(exprs) == 0) next
+        for (i in seq_along(exprs)) {
+          ex <- exprs[[i]]
+          if (is.null(ex)) next
+          id <- .expr_registry_lookup_id(registry, ex)
+          if (!is.na(id)) {
+            ex[["._id"]] <- as.integer(id)
+            exprs[[i]] <- ex
+          }
+        }
+        comp_map[[lbl]] <- exprs
+      }
+      prep[[".competitors"]] <- comp_map
+    }
+    prep
+  }
+  prep <- .attach_expr_ids(prep, prep[[".expr_registry"]])
+  # Precompute outcome expression IDs for O(1) lookup
+  reg <- prep[[".expr_registry"]]
+  outcomes <- prep[["outcomes"]] %||% list()
+  if (!is.null(reg) && length(outcomes) > 0) {
+    expr_ids <- vapply(outcomes, function(od) {
+      .expr_registry_lookup_id(reg, od[["expr"]])
+    }, integer(1))
+    prep[[".outcome_expr_ids"]] <- stats::setNames(as.integer(expr_ids), names(outcomes))
+  } else {
+    prep[[".outcome_expr_ids"]] <- integer(0)
+  }
   prep
 }
 
@@ -117,6 +166,690 @@ source("R/model_tables.R")
   val <- idx_map[[as.character(label)]]
   if (is.null(val) || is.na(val)) return(NA_integer_)
   as.integer(val)
+}
+
+.expr_signature <- function(expr) {
+  if (is.null(expr)) return("NULL")
+  rawToChar(serialize(expr, NULL, ascii = TRUE))
+}
+
+.expr_registry_lookup_id <- function(registry, expr) {
+  if (is.null(expr) || is.null(expr[["kind"]])) return(NA_integer_)
+  # Prefer attached numeric id when present
+  if (!is.null(expr[["._id"]])) {
+    id <- as.integer(expr[["._id"]])
+    if (is.finite(id) && id > 0) return(id)
+  }
+  idx_env <- registry[["index"]]
+  if (is.null(idx_env)) return(NA_integer_)
+  sig <- .expr_signature(expr)
+  val <- idx_env[[sig]]
+  if (is.null(val)) return(NA_integer_)
+  as.integer(val)
+}
+
+.build_expr_registry <- function(prep) {
+  nodes <- list()
+  index <- new.env(parent = emptyenv(), hash = TRUE)
+
+  register_expr <- function(expr) {
+    if (is.null(expr) || is.null(expr[["kind"]])) return(NA_integer_)
+    sig <- .expr_signature(expr)
+    existing <- index[[sig]]
+    if (!is.null(existing)) return(as.integer(existing))
+
+    node_id <- length(nodes) + 1L
+    kind <- expr[["kind"]] %||% NA_character_
+    # Reserve ID and index EARLY to avoid child registration colliding with this ID
+    # Place a minimal placeholder node which we will fill in after registering children
+    placeholder <- list(
+      id = as.integer(node_id),
+      kind = kind,
+      expr = expr,
+      child_ids = integer(0),
+      sources = .expr_sources(expr, prep)
+    )
+    nodes[[node_id]] <<- placeholder
+    index[[sig]] <<- as.integer(node_id)
+
+    node <- placeholder
+
+    if (identical(kind, "and") || identical(kind, "or")) {
+      args <- expr[["args"]] %||% list()
+      if (length(args) > 0) {
+        child_ids <- vapply(args, register_expr, integer(1))
+        node[["child_ids"]] <- as.integer(child_ids)
+        node[["args"]] <- args
+      } else {
+        node[["child_ids"]] <- integer(0)
+        node[["args"]] <- list()
+      }
+    } else if (identical(kind, "guard")) {
+      ref_id <- register_expr(expr[["reference"]])
+      blocker_expr <- expr[["blocker"]] %||% NULL
+      blocker_id <- if (!is.null(blocker_expr)) register_expr(blocker_expr) else NA_integer_
+      unless_list <- expr[["unless"]] %||% list()
+      unless_ids <- if (length(unless_list) > 0) vapply(unless_list, register_expr, integer(1)) else integer(0)
+      node[["reference_id"]] <- if (is.na(ref_id)) NA_integer_ else as.integer(ref_id)
+      node[["blocker_id"]] <- if (is.na(blocker_id)) NA_integer_ else as.integer(blocker_id)
+      node[["unless_ids"]] <- as.integer(unless_ids)
+      child_ids <- c(ref_id, blocker_id, unless_ids)
+      child_ids <- child_ids[!is.na(child_ids)]
+      node[["child_ids"]] <- if (length(child_ids) > 0) as.integer(child_ids) else integer(0)
+      node[["args"]] <- list()
+    } else {
+      node[["args"]] <- list()
+    }
+
+    if (identical(kind, "event")) {
+      node[["source_label"]] <- expr[["source"]] %||% NA_character_
+      node[["source_idx"]] <- .label_to_id(prep, node[["source_label"]])
+    }
+
+    nodes[[node_id]] <<- node
+    as.integer(node_id)
+  }
+
+  # Register all expressions referenced in outcomes and competitor maps
+  outcomes <- prep[["outcomes"]] %||% list()
+  for (expr in lapply(outcomes, `[[`, "expr")) {
+    register_expr(expr)
+  }
+  comp_map <- prep[[".competitors"]] %||% list()
+  if (length(comp_map) > 0) {
+    for (expr_list in comp_map) {
+      if (length(expr_list) == 0) next
+      for (expr in expr_list) {
+        register_expr(expr)
+      }
+    }
+  }
+
+  registry <- list(
+    nodes = nodes,
+    index = index
+  )
+
+  registry <- .compile_expr_registry(prep, registry)
+  registry
+}
+
+.compile_expr_registry <- function(prep, registry) {
+  nodes <- registry[["nodes"]] %||% list()
+  n <- length(nodes)
+  if (n == 0) {
+    registry[["scenario_fns"]] <- list()
+    registry[["cdf_cond_fns"]] <- list()
+    registry[["survival_cond_fns"]] <- list()
+    return(registry)
+  }
+
+  scenario_memo <- vector("list", n)
+  cdf_cond_memo <- vector("list", n)
+  surv_cond_memo <- vector("list", n)
+
+  build_scenario_fn <- NULL
+  build_cdf_cond_fn <- NULL
+  build_surv_cond_fn <- NULL
+
+  build_scenario_fn <- function(id) {
+    if (is.null(id) || is.na(id) || id <= 0 || id > n) return(function(...) list())
+    cached <- scenario_memo[[id]]
+    if (!is.null(cached)) return(cached)
+    node <- nodes[[id]]
+    kind <- node[["kind"]] %||% NA_character_
+
+    # Re-entrancy guard to break potential cycles during construction
+    scenario_memo[[id]] <<- function(...) list()
+
+    fn <- switch(
+      kind,
+      "event" = {
+        source_label <- node[["source_label"]] %||% NA_character_
+        source_ids <- {
+          idx <- node[["source_idx"]] %||% NA_integer_
+          if (is.na(idx)) integer(0) else as.integer(idx)
+        }
+        function(t, component,
+                 ctx,
+                 forced_complete = integer(0),
+                 forced_survive = integer(0)) {
+          if (!is.null(ctx)) {
+            key <- .ctx_key("sc", id, component, t, forced_complete, forced_survive)
+            cached_val <- ctx$scenario_memo[[key]]
+            if (!is.null(cached_val)) return(cached_val)
+          }
+          forced_complete <- .coerce_forced_ids(prep, forced_complete)
+          forced_survive <- .coerce_forced_ids(prep, forced_survive)
+          weight <- .event_density_at(
+            prep, source_label, component, t,
+            forced_complete = forced_complete,
+            forced_survive = forced_survive,
+            ctx = ctx
+          )
+          if (!is.finite(weight) || weight <= 0) return(list())
+          pool_scenarios <- attr(weight, "scenarios")
+          if (!is.null(pool_scenarios) && length(pool_scenarios) > 0) {
+            out <- list()
+            for (psc in pool_scenarios) {
+              if (is.null(psc)) next
+              w <- psc$weight
+              if (!is.finite(w) || w <= 0) next
+              fcomp <- .forced_union(prep, forced_complete, c(source_ids, psc$forced_complete))
+              fsurv <- .forced_union(prep, forced_survive, psc$forced_survive)
+              sc <- list(
+                weight = as.numeric(w),
+                forced_complete = .coerce_forced_ids(prep, fcomp),
+                forced_survive = .coerce_forced_ids(prep, fsurv)
+              )
+              out[[length(out) + 1L]] <- sc
+            }
+            if (!is.null(ctx)) ctx$scenario_memo[[.ctx_key("sc", id, component, t, forced_complete, forced_survive)]] <- out
+            return(out)
+          }
+          sc <- list(
+            weight = as.numeric(weight),
+            forced_complete = .coerce_forced_ids(prep, .forced_union(prep, forced_complete, source_ids)),
+            forced_survive = .coerce_forced_ids(prep, forced_survive)
+          )
+          out <- list(sc)
+          if (!is.null(ctx)) ctx$scenario_memo[[.ctx_key("sc", id, component, t, forced_complete, forced_survive)]] <- out
+          out
+        }
+      },
+      "and" = {
+        child_ids <- node[["child_ids"]] %||% integer(0)
+        if (length(child_ids) == 0) {
+          function(...) list()
+        } else {
+          child_scenario <- lapply(child_ids, build_scenario_fn)
+          child_cdf <- lapply(child_ids, build_cdf_cond_fn)
+          child_sources <- lapply(child_ids, function(cid) nodes[[cid]][["sources"]] %||% character(0))
+          function(t, component,
+                   ctx,
+                   forced_complete = integer(0),
+                   forced_survive = integer(0)) {
+            if (!is.null(ctx)) {
+              key <- .ctx_key("sc", id, component, t, forced_complete, forced_survive)
+              cached_val <- ctx$scenario_memo[[key]]
+              if (!is.null(cached_val)) return(cached_val)
+            }
+            forced_complete <- .coerce_forced_ids(prep, forced_complete)
+            forced_survive <- .coerce_forced_ids(prep, forced_survive)
+            out <- list()
+            idx_all <- seq_along(child_ids)
+            for (i in idx_all) {
+              si <- child_scenario[[i]](t, component, ctx,
+                                        forced_complete = forced_complete,
+                                        forced_survive = forced_survive)
+              if (length(si) == 0) next
+              others_idx <- idx_all[idx_all != i]
+              for (sc in si) {
+                if (is.null(sc) || sc$weight <= 0) next
+                weight <- sc$weight
+                fcomp <- sc$forced_complete
+                fsurv <- sc$forced_survive
+                ok <- TRUE
+                if (length(others_idx) > 0) {
+                  for (j in others_idx) {
+                    Fj <- child_cdf[[j]](
+                      t = t,
+                      component = component,
+                      ctx = ctx,
+                      forced_complete = fcomp,
+                      forced_survive = fsurv
+                    )
+                    if (!is.finite(Fj) || Fj <= 0) {
+                      ok <- FALSE
+                      break
+                    }
+                    weight <- weight * Fj
+                    if (!is.finite(weight) || weight <= 0) {
+                      ok <- FALSE
+                      break
+                    }
+                    fcomp <- .forced_union(prep, fcomp, child_sources[[j]])
+                  }
+                }
+                if (!ok) next
+                out[[length(out) + 1L]] <- list(
+                  weight = as.numeric(weight),
+                  forced_complete = .coerce_forced_ids(prep, fcomp),
+                  forced_survive = .coerce_forced_ids(prep, fsurv)
+                )
+              }
+            }
+            if (!is.null(ctx)) ctx$scenario_memo[[.ctx_key("sc", id, component, t, forced_complete, forced_survive)]] <- out
+            out
+          }
+        }
+      },
+      "or" = {
+        child_ids <- node[["child_ids"]] %||% integer(0)
+        if (length(child_ids) == 0) {
+          function(...) list()
+        } else {
+          child_scenario <- lapply(child_ids, build_scenario_fn)
+          child_sources <- lapply(child_ids, function(cid) nodes[[cid]][["sources"]] %||% character(0))
+          function(t, component,
+                   ctx,
+                   forced_complete = integer(0),
+                   forced_survive = integer(0)) {
+            if (!is.null(ctx)) {
+              key <- .ctx_key("sc", id, component, t, forced_complete, forced_survive)
+              cached_val <- ctx$scenario_memo[[key]]
+              if (!is.null(cached_val)) return(cached_val)
+            }
+            forced_complete <- .coerce_forced_ids(prep, forced_complete)
+            forced_survive <- .coerce_forced_ids(prep, forced_survive)
+            out <- list()
+            idx_all <- seq_along(child_ids)
+            for (i in idx_all) {
+              si <- child_scenario[[i]](t, component, ctx,
+                                        forced_complete = forced_complete,
+                                        forced_survive = forced_survive)
+              if (length(si) == 0) next
+              others_idx <- idx_all[idx_all != i]
+              req_list <- child_sources[others_idx]
+              for (sc in si) {
+                if (is.null(sc) || sc$weight <= 0) next
+                weight <- sc$weight
+                fcomp <- sc$forced_complete
+                fsurv <- sc$forced_survive
+                valid <- TRUE
+                if (length(others_idx) > 0) {
+                  for (k in seq_along(others_idx)) {
+                    req_j <- req_list[[k]]
+                    if (length(req_j) == 0L) next
+                    if (all(req_j %in% fcomp)) {
+                      valid <- FALSE
+                      break
+                    }
+                    witness <- req_j[!(req_j %in% fcomp)]
+                    if (length(witness) >= 1L) {
+                      fsurv <- .forced_union(prep, fsurv, witness[[1]])
+                    } else {
+                      valid <- FALSE
+                      break
+                    }
+                  }
+                }
+                if (!valid) next
+                out[[length(out) + 1L]] <- list(
+                  weight = as.numeric(weight),
+                  forced_complete = .coerce_forced_ids(prep, fcomp),
+                  forced_survive = .coerce_forced_ids(prep, fsurv)
+                )
+              }
+            }
+            if (!is.null(ctx)) ctx$scenario_memo[[.ctx_key("sc", id, component, t, forced_complete, forced_survive)]] <- out
+            out
+          }
+        }
+      },
+      "guard" = {
+        ref_id <- node[["reference_id"]] %||% NA_integer_
+        blocker_id <- node[["blocker_id"]] %||% NA_integer_
+        unless_ids <- node[["unless_ids"]] %||% integer(0)
+        blocker_sources <- if (!is.na(blocker_id)) (nodes[[blocker_id]][["sources"]] %||% integer(0)) else integer(0)
+        ref_scen_fn <- if (!is.na(ref_id)) build_scenario_fn(ref_id) else function(...) list()
+        surv_blocker_fn <- if (!is.na(blocker_id)) build_surv_cond_fn(blocker_id) else NULL
+        surv_unless_fns <- if (length(unless_ids) > 0) lapply(unless_ids, build_surv_cond_fn) else list()
+        blocker_density_at <- if (!is.na(blocker_id)) {
+          bl_scen_fn <- build_scenario_fn(blocker_id)
+          function(u, component, ctx, forced_complete, forced_survive) {
+            scs <- bl_scen_fn(u, component, ctx,
+                              forced_complete = forced_complete,
+                              forced_survive = forced_survive)
+            if (length(scs) == 0) return(0.0)
+            sum(vapply(scs, `[[`, numeric(1), "weight"))
+          }
+        } else {
+          function(u, component, ctx, forced_complete, forced_survive) 0.0
+        }
+        function(t, component,
+                 ctx,
+                 forced_complete = integer(0),
+                 forced_survive = integer(0)) {
+          if (!is.null(ctx)) {
+            key <- .ctx_key("sc", id, component, t, forced_complete, forced_survive)
+            cached_val <- ctx$scenario_memo[[key]]
+            if (!is.null(cached_val)) return(cached_val)
+          }
+          forced_complete <- .coerce_forced_ids(prep, forced_complete)
+          forced_survive <- .coerce_forced_ids(prep, forced_survive)
+          ref_scen <- ref_scen_fn(t, component, ctx,
+                                   forced_complete = forced_complete,
+                                   forced_survive = forced_survive)
+          if (length(ref_scen) == 0) {
+            if (!is.null(ctx)) ctx$scenario_memo[[.ctx_key("sc", id, component, t, forced_complete, forced_survive)]] <- list()
+            return(list())
+          }
+          S_eff <- (function() {
+            if (is.na(blocker_id)) return(1.0)
+            if (length(unless_ids) == 0) {
+              return(surv_blocker_fn(t, component, ctx,
+                                     forced_complete = forced_complete,
+                                     forced_survive = forced_survive))
+            }
+            if (!is.finite(t) || t <= 0) return(1.0)
+            integrand <- function(u) {
+              bd <- blocker_density_at(u, component, ctx,
+                                       forced_complete = forced_complete,
+                                       forced_survive = forced_survive)
+              if (!is.finite(bd) || bd <= 0) return(0.0)
+              prods <- 1.0
+              if (length(surv_unless_fns) > 0) {
+                for (fn in surv_unless_fns) {
+                  sv <- fn(u, component, ctx,
+                           forced_complete = forced_complete,
+                           forced_survive = forced_survive)
+                  prods <- prods * sv
+                  if (!is.finite(prods) || prods == 0) break
+                }
+              }
+              bd * prods
+            }
+            val <- tryCatch(stats::integrate(integrand, lower = 0, upper = t,
+                                             rel.tol = .integrate_rel_tol(), abs.tol = .integrate_abs_tol(),
+                                             stop.on.error = FALSE)[["value"]],
+                            error = function(e) 0.0)
+            s <- 1.0 - as.numeric(val)
+            if (!is.finite(s)) s <- 0.0
+            if (s < 0) s <- 0.0
+            if (s > 1) s <- 1.0
+            s
+          })()
+          scenarios <- list()
+          for (sc in ref_scen) {
+            if (is.null(sc)) next
+            w <- sc$weight * S_eff
+            if (!is.finite(w) || w <= 0) next
+            fcomp <- sc$forced_complete
+            fsurv <- .forced_union(prep, sc$forced_survive, blocker_sources)
+            scenarios[[length(scenarios) + 1L]] <- list(
+              weight = as.numeric(w),
+              forced_complete = .coerce_forced_ids(prep, fcomp),
+              forced_survive = .coerce_forced_ids(prep, fsurv)
+            )
+          }
+          if (!is.null(ctx)) ctx$scenario_memo[[.ctx_key("sc", id, component, t, forced_complete, forced_survive)]] <- scenarios
+          scenarios
+        }
+      },
+      {
+        function(...) list()
+      }
+    )
+
+    scenario_memo[[id]] <<- fn
+    fn
+  }
+
+  build_cdf_cond_fn <- function(id) {
+    if (is.null(id) || is.na(id) || id <= 0 || id > n) return(function(...) 0.0)
+    cached <- cdf_cond_memo[[id]]
+    if (!is.null(cached)) return(cached)
+    node <- nodes[[id]]
+    kind <- node[["kind"]] %||% NA_character_
+
+    # Re-entrancy guard
+    cdf_cond_memo[[id]] <<- function(...) 0.0
+
+    fn <- switch(
+      kind,
+      "event" = {
+        src <- node[["source_label"]] %||% NA_character_
+        function(t, component,
+                 ctx,
+                 forced_complete = integer(0),
+                 forced_survive = integer(0)) {
+          if (!is.null(ctx)) {
+            key <- .ctx_key("cdf", id, component, t, forced_complete, forced_survive)
+            cached_val <- ctx$cdf_cond_memo[[key]]
+            if (!is.null(cached_val)) return(cached_val)
+          }
+          forced_complete <- .coerce_forced_ids(prep, forced_complete)
+          forced_survive <- .coerce_forced_ids(prep, forced_survive)
+          val <- .event_cdf_at(
+            prep, src, component, t,
+            forced_complete = forced_complete,
+            forced_survive = forced_survive,
+            ctx = ctx
+          )
+          if (!is.null(ctx)) ctx$cdf_cond_memo[[.ctx_key("cdf", id, component, t, forced_complete, forced_survive)]] <- val
+          val
+        }
+      },
+      "and" = {
+        child_ids <- node[["child_ids"]] %||% integer(0)
+        if (length(child_ids) == 0) {
+          function(...) 0.0
+        } else {
+          child_cdf <- lapply(child_ids, build_cdf_cond_fn)
+          function(t, component,
+                   ctx,
+                   forced_complete = integer(0),
+                   forced_survive = integer(0)) {
+            if (!is.null(ctx)) {
+              key <- .ctx_key("cdf", id, component, t, forced_complete, forced_survive)
+              cached_val <- ctx$cdf_cond_memo[[key]]
+              if (!is.null(cached_val)) return(cached_val)
+            }
+            forced_complete <- .coerce_forced_ids(prep, forced_complete)
+            forced_survive <- .coerce_forced_ids(prep, forced_survive)
+            prod_val <- 1.0
+            for (fn_child in child_cdf) {
+              val <- fn_child(t, component, ctx,
+                              forced_complete = forced_complete,
+                              forced_survive = forced_survive)
+              prod_val <- prod_val * val
+              if (prod_val == 0) break
+            }
+            if (!is.null(ctx)) ctx$cdf_cond_memo[[.ctx_key("cdf", id, component, t, forced_complete, forced_survive)]] <- prod_val
+            prod_val
+          }
+        }
+      },
+      "or" = {
+        child_ids <- node[["child_ids"]] %||% integer(0)
+        if (length(child_ids) == 0) {
+          function(...) 0.0
+        } else {
+          child_surv <- lapply(child_ids, build_surv_cond_fn)
+          function(t, component,
+                   ctx,
+                   forced_complete = integer(0),
+                   forced_survive = integer(0)) {
+            if (!is.null(ctx)) {
+              key <- .ctx_key("cdf", id, component, t, forced_complete, forced_survive)
+              cached_val <- ctx$cdf_cond_memo[[key]]
+              if (!is.null(cached_val)) return(cached_val)
+            }
+            forced_complete <- .coerce_forced_ids(prep, forced_complete)
+            forced_survive <- .coerce_forced_ids(prep, forced_survive)
+            prod_surv <- 1.0
+            for (fn_child in child_surv) {
+              val <- fn_child(t, component, ctx,
+                              forced_complete = forced_complete,
+                              forced_survive = forced_survive)
+              prod_surv <- prod_surv * val
+              if (prod_surv == 0) break
+            }
+            val <- 1.0 - prod_surv
+            if (!is.null(ctx)) ctx$cdf_cond_memo[[.ctx_key("cdf", id, component, t, forced_complete, forced_survive)]] <- val
+            val
+          }
+        }
+      },
+      "guard" = {
+        scen_self <- NULL
+        function(t, component,
+                 ctx,
+                 forced_complete = integer(0),
+                 forced_survive = integer(0)) {
+          if (is.null(scen_self)) scen_self <<- build_scenario_fn(id)
+          if (!is.null(ctx)) {
+            key <- .ctx_key("cdf", id, component, t, forced_complete, forced_survive)
+            cached_val <- ctx$cdf_cond_memo[[key]]
+            if (!is.null(cached_val)) return(cached_val)
+          }
+          if (t <= 0) {
+            if (!is.null(ctx)) ctx$cdf_cond_memo[[.ctx_key("cdf", id, component, t, forced_complete, forced_survive)]] <- 0.0
+            return(0.0)
+          }
+          dens_fun <- function(u) {
+            scs <- scen_self(u, component, ctx,
+                             forced_complete = forced_complete,
+                             forced_survive = forced_survive)
+            if (length(scs) == 0) return(0.0)
+            sum(vapply(scs, `[[`, numeric(1), "weight"))
+          }
+          val <- tryCatch(stats::integrate(dens_fun, lower = 0, upper = t,
+                                           rel.tol = .integrate_rel_tol(), abs.tol = .integrate_abs_tol(),
+                                           stop.on.error = FALSE)[["value"]],
+                          error = function(e) 0.0)
+          out <- as.numeric(val)
+          if (!is.finite(out)) out <- 0.0
+          out <- max(0.0, min(1.0, out))
+          if (!is.null(ctx)) ctx$cdf_cond_memo[[.ctx_key("cdf", id, component, t, forced_complete, forced_survive)]] <- out
+          out
+        }
+      },
+      {
+        function(...) 0.0
+      }
+    )
+
+    cdf_cond_memo[[id]] <<- fn
+    fn
+  }
+
+  build_surv_cond_fn <- function(id) {
+    if (is.null(id) || is.na(id) || id <= 0 || id > n) return(function(...) 1.0)
+    cached <- surv_cond_memo[[id]]
+    if (!is.null(cached)) return(cached)
+    node <- nodes[[id]]
+    kind <- node[["kind"]] %||% NA_character_
+
+    # Re-entrancy guard
+    surv_cond_memo[[id]] <<- function(...) 1.0
+
+    fn <- switch(
+      kind,
+      "event" = {
+        src <- node[["source_label"]] %||% NA_character_
+        function(t, component,
+                 ctx,
+                 forced_complete = integer(0),
+                 forced_survive = integer(0)) {
+          if (!is.null(ctx)) {
+            key <- .ctx_key("surv", id, component, t, forced_complete, forced_survive)
+            cached_val <- ctx$surv_cond_memo[[key]]
+            if (!is.null(cached_val)) return(cached_val)
+          }
+          forced_complete <- .coerce_forced_ids(prep, forced_complete)
+          forced_survive <- .coerce_forced_ids(prep, forced_survive)
+          val <- .event_survival_at(
+            prep, src, component, t,
+            forced_complete = forced_complete,
+            forced_survive = forced_survive,
+            ctx = ctx
+          )
+          if (!is.null(ctx)) ctx$surv_cond_memo[[.ctx_key("surv", id, component, t, forced_complete, forced_survive)]] <- val
+          val
+        }
+      },
+      "and" = {
+        child_ids <- node[["child_ids"]] %||% integer(0)
+        if (length(child_ids) == 0) {
+          function(...) 1.0
+        } else {
+          self_cdf <- build_cdf_cond_fn(id)
+          function(t, component,
+                   ctx,
+                   forced_complete = integer(0),
+                   forced_survive = integer(0)) {
+            if (!is.null(ctx)) {
+              key <- .ctx_key("surv", id, component, t, forced_complete, forced_survive)
+              cached_val <- ctx$surv_cond_memo[[key]]
+              if (!is.null(cached_val)) return(cached_val)
+            }
+            val <- 1.0 - self_cdf(
+              t, component, ctx,
+              forced_complete = forced_complete,
+              forced_survive = forced_survive
+            )
+            if (!is.null(ctx)) ctx$surv_cond_memo[[.ctx_key("surv", id, component, t, forced_complete, forced_survive)]] <- val
+            val
+          }
+        }
+      },
+      "or" = {
+        child_ids <- node[["child_ids"]] %||% integer(0)
+        if (length(child_ids) == 0) {
+          function(...) 1.0
+        } else {
+          child_surv <- lapply(child_ids, build_surv_cond_fn)
+          function(t, component,
+                   ctx,
+                   forced_complete = integer(0),
+                   forced_survive = integer(0)) {
+            if (!is.null(ctx)) {
+              key <- .ctx_key("surv", id, component, t, forced_complete, forced_survive)
+              cached_val <- ctx$surv_cond_memo[[key]]
+              if (!is.null(cached_val)) return(cached_val)
+            }
+            forced_complete <- .coerce_forced_ids(prep, forced_complete)
+            forced_survive <- .coerce_forced_ids(prep, forced_survive)
+            prod_val <- 1.0
+            for (fn_child in child_surv) {
+              val <- fn_child(t, component, ctx,
+                              forced_complete = forced_complete,
+                              forced_survive = forced_survive)
+              prod_val <- prod_val * val
+              if (!is.finite(prod_val) || prod_val == 0) break
+            }
+            if (!is.null(ctx)) ctx$surv_cond_memo[[.ctx_key("surv", id, component, t, forced_complete, forced_survive)]] <- prod_val
+            prod_val
+          }
+        }
+      },
+      "guard" = {
+        self_cdf <- build_cdf_cond_fn(id)
+        function(t, component,
+                 ctx,
+                 forced_complete = integer(0),
+                 forced_survive = integer(0)) {
+          if (!is.null(ctx)) {
+            key <- .ctx_key("surv", id, component, t, forced_complete, forced_survive)
+            cached_val <- ctx$surv_cond_memo[[key]]
+            if (!is.null(cached_val)) return(cached_val)
+          }
+          val <- 1.0 - self_cdf(t, component, ctx,
+                                 forced_complete = forced_complete,
+                                 forced_survive = forced_survive)
+          if (!is.null(ctx)) ctx$surv_cond_memo[[.ctx_key("surv", id, component, t, forced_complete, forced_survive)]] <- val
+          val
+        }
+      },
+      {
+        function(...) 1.0
+      }
+    )
+
+    surv_cond_memo[[id]] <<- fn
+    fn
+  }
+
+  scenario_fns <- lapply(seq_len(n), build_scenario_fn)
+  cdf_cond_fns <- lapply(seq_len(n), build_cdf_cond_fn)
+  survival_cond_fns <- lapply(seq_len(n), build_surv_cond_fn)
+
+  registry[["scenario_fns"]] <- scenario_fns
+  registry[["cdf_cond_fns"]] <- cdf_cond_fns
+  registry[["survival_cond_fns"]] <- survival_cond_fns
+  registry
 }
 
 .labels_to_ids <- function(prep, labels) {
@@ -170,6 +903,75 @@ source("R/model_tables.R")
   out <- as.integer(out)
   if (length(out) > 1L) out <- sort(unique(out))
   out
+}
+
+# ============================================================================
+# PART 2a: Evaluation Context (per-trial) and cache keys
+# ============================================================================
+
+# Create a per-trial evaluation context that holds memo tables only for
+# the duration of a single trial.
+make_eval_ctx <- function(prep) {
+  list(
+    scenario_memo = new.env(parent = emptyenv(), hash = TRUE),
+    cdf_cond_memo = new.env(parent = emptyenv(), hash = TRUE),
+    surv_cond_memo = new.env(parent = emptyenv(), hash = TRUE),
+    event_density_memo = new.env(parent = emptyenv(), hash = TRUE),
+    event_cdf_memo = new.env(parent = emptyenv(), hash = TRUE),
+    event_surv_memo = new.env(parent = emptyenv(), hash = TRUE),
+    pool_density_memo = new.env(parent = emptyenv(), hash = TRUE),
+    pool_surv_memo = new.env(parent = emptyenv(), hash = TRUE)
+  )
+}
+
+# Lightweight diagnostic helpers for registry/ID mapping and cache pressure
+.diagnose_registry_mapping <- function(prep) {
+  reg <- prep[[".expr_registry"]]
+  outcomes <- prep[["outcomes"]] %||% list()
+  if (is.null(reg) || length(outcomes) == 0) return(invisible(NULL))
+  bad <- character(0)
+  for (lbl in names(outcomes)) {
+    ex <- outcomes[[lbl]][["expr"]]
+    id <- .expr_registry_lookup_id(reg, ex)
+    if (is.na(id) || id <= 0 || id > length(reg[["nodes"]] %||% list())) {
+      bad <- c(bad, lbl)
+    }
+  }
+  if (length(bad) > 0) {
+    warning(sprintf("Expr->node mapping failed for: %s", paste(bad, collapse = ", ")))
+  }
+  invisible(NULL)
+}
+
+.ctx_env_size <- function(env) {
+  if (is.null(env) || !is.environment(env)) return(0L)
+  length(ls(env, all.names = TRUE))
+}
+
+.ctx_pressure <- function(ctx) {
+  if (is.null(ctx)) return(0L)
+  .ctx_env_size(ctx$scenario_memo) +
+    .ctx_env_size(ctx$cdf_cond_memo) +
+    .ctx_env_size(ctx$surv_cond_memo) +
+    .ctx_env_size(ctx$event_density_memo) +
+    .ctx_env_size(ctx$event_cdf_memo) +
+    .ctx_env_size(ctx$event_surv_memo) +
+    .ctx_env_size(ctx$pool_density_memo) +
+    .ctx_env_size(ctx$pool_surv_memo)
+}
+
+.ids_key <- function(ids) {
+  if (is.null(ids) || length(ids) == 0L) return("")
+  ids <- as.integer(ids)
+  if (length(ids) > 1L) ids <- sort(unique(ids))
+  paste(ids, collapse = ",")
+}
+
+.ctx_key <- function(prefix, node_id_or_label, component, t, forced_complete, forced_survive) {
+  t_key <- .time_key(t)
+  fc_key <- .ids_key(forced_complete)
+  fs_key <- .ids_key(forced_survive)
+  paste(prefix, as.character(node_id_or_label), as.character(component %||% "__default__"), t_key, fc_key, fs_key, sep = "|")
 }
 
 # ==============================================================================
@@ -242,92 +1044,7 @@ source("R/model_tables.R")
   active
 }
 
-.pool_density_fast_value <- function(prep, pool_id, component, t) {
-  if (is.na(t) || !is.finite(t) || t < 0) return(0.0)
-  pool_defs <- prep[["pools"]]
-  acc_defs <- prep[["accumulators"]]
-  pool_def <- pool_defs[[pool_id]]
-  if (is.null(pool_def)) return(0.0)
-  members <- .pool_active_members(prep, pool_id, component)
-  n <- length(members)
-  if (n == 0L) return(0.0)
-  k <- as.integer(pool_def[["k"]] %||% 1L)
-  if (k < 1L || k > n) return(0.0)
-
-  total_density <- 0.0
-  for (i in seq_len(n)) {
-    mid <- members[[i]]
-    dens_i <- if (!is.null(acc_defs[[mid]])) {
-      .acc_density(acc_defs[[mid]], t)
-    } else if (!is.null(pool_defs[[mid]])) {
-      .pool_density_fast_value(prep, mid, component, t)
-    } else {
-      0.0
-    }
-    if (!is.finite(dens_i) || dens_i <= 0) next
-    others <- members[-i]
-    if (length(others) == 0L) {
-      if (k == 1L) total_density <- total_density + dens_i
-      next
-    }
-    Svec <- Fvec <- numeric(length(others))
-    for (j in seq_along(others)) {
-      oid <- others[[j]]
-      surv_j <- if (!is.null(acc_defs[[oid]])) {
-        .acc_survival(acc_defs[[oid]], t)
-      } else if (!is.null(pool_defs[[oid]])) {
-        .pool_survival_fast_value(prep, oid, component, t)
-      } else {
-        1.0
-      }
-      Svec[[j]] <- surv_j
-      Fvec[[j]] <- 1.0 - surv_j
-    }
-    coeffs <- pool_coeffs(Svec, Fvec)
-    if (k <= length(coeffs)) {
-      total_density <- total_density + dens_i * coeffs[[k]]
-    }
-  }
-  total_density
-}
-
-.pool_survival_fast_value <- function(prep, pool_id, component, t) {
-  if (is.na(t)) return(1.0)
-  pool_defs <- prep[["pools"]]
-  acc_defs <- prep[["accumulators"]]
-  pool_def <- pool_defs[[pool_id]]
-  if (is.null(pool_def)) return(1.0)
-  members <- .pool_active_members(prep, pool_id, component)
-  n <- length(members)
-  if (n == 0L) return(1.0)
-  k <- as.integer(pool_def[["k"]] %||% 1L)
-  if (k > n) return(1.0)
-  if (k < 1L) return(0.0)
-
-  if (!is.finite(t)) {
-    if (t < 0) return(1.0)
-    t <- Inf
-  }
-
-  Svec <- numeric(n)
-  Fvec <- numeric(n)
-  for (i in seq_len(n)) {
-    mid <- members[[i]]
-    surv <- if (!is.null(acc_defs[[mid]])) {
-      .acc_survival(acc_defs[[mid]], t)
-    } else if (!is.null(pool_defs[[mid]])) {
-      .pool_survival_fast_value(prep, mid, component, t)
-    } else {
-      1.0
-    }
-    Svec[[i]] <- surv
-    Fvec[[i]] <- 1.0 - surv
-  }
-  coeffs <- pool_coeffs(Svec, Fvec)
-  upto <- min(length(coeffs), k)
-  if (upto <= 0L) return(0.0)
-  sum(coeffs[seq_len(upto)])
-}
+ 
 
 .build_pool_templates <- function(pool_id, members, member_ids, pool_idx, k) {
   n <- length(members)
@@ -382,7 +1099,13 @@ source("R/model_tables.R")
 
 .event_survival_at <- function(prep, id, component, t,
                                forced_complete = integer(0),
-                               forced_survive = integer(0)) {
+                               forced_survive = integer(0),
+                               ctx = NULL) {
+  if (!is.null(ctx)) {
+    key <- .ctx_key("evS", id, component, t, forced_complete, forced_survive)
+    cached <- ctx$event_surv_memo[[key]]
+    if (!is.null(cached)) return(cached)
+  }
   id_idx <- .label_to_id(prep, id)
   if (!is.na(id_idx)) {
     if (length(forced_survive) > 0L && any(forced_survive == id_idx)) return(1.0)
@@ -390,26 +1113,44 @@ source("R/model_tables.R")
   }
   is_pool <- !is.null(prep[["pools"]][[id]])
   if (is_pool) {
-    return(.pool_survival(prep, id, component, t,
+    val <- .pool_survival(prep, id, component, t,
                          forced_complete = forced_complete,
-                         forced_survive = forced_survive))
+                         forced_survive = forced_survive)
+    if (!is.null(ctx)) ctx$event_surv_memo[[key]] <- val
+    return(val)
   }
   acc_def <- prep[["accumulators"]][[id]]
-  if (!is.null(acc_def)) return(.acc_survival(acc_def, t))
-  0.0
+  val <- if (!is.null(acc_def)) .acc_survival(acc_def, t) else 0.0
+  if (!is.null(ctx)) ctx$event_surv_memo[[key]] <- val
+  val
 }
 
 .event_cdf_at <- function(prep, id, component, t,
                           forced_complete = integer(0),
-                          forced_survive = integer(0)) {
-  1.0 - .event_survival_at(prep, id, component, t,
+                          forced_survive = integer(0),
+                          ctx = NULL) {
+  if (!is.null(ctx)) {
+    key <- .ctx_key("evF", id, component, t, forced_complete, forced_survive)
+    cached <- ctx$event_cdf_memo[[key]]
+    if (!is.null(cached)) return(cached)
+  }
+  val <- 1.0 - .event_survival_at(prep, id, component, t,
                            forced_complete = forced_complete,
-                           forced_survive = forced_survive)
+                           forced_survive = forced_survive,
+                           ctx = ctx)
+  if (!is.null(ctx)) ctx$event_cdf_memo[[.ctx_key("evF", id, component, t, forced_complete, forced_survive)]] <- val
+  val
 }
 
 .event_density_at <- function(prep, id, component, t,
                               forced_complete = integer(0),
-                              forced_survive = integer(0)) {
+                              forced_survive = integer(0),
+                              ctx = NULL) {
+  if (!is.null(ctx)) {
+    key <- .ctx_key("evD", id, component, t, forced_complete, forced_survive)
+    cached <- ctx$event_density_memo[[key]]
+    if (!is.null(cached)) return(cached)
+  }
   id_idx <- .label_to_id(prep, id)
   if (!is.na(id_idx)) {
     if (length(forced_survive) > 0L && any(forced_survive == id_idx)) return(0.0)
@@ -417,21 +1158,31 @@ source("R/model_tables.R")
   }
   is_pool <- !is.null(prep[["pools"]][[id]])
   if (is_pool) {
-    return(.pool_density(prep, id, component, t,
+    val <- .pool_density(prep, id, component, t,
                          forced_complete = forced_complete,
-                         forced_survive = forced_survive))
+                         forced_survive = forced_survive)
+    if (!is.null(ctx)) ctx$event_density_memo[[.ctx_key("evD", id, component, t, forced_complete, forced_survive)]] <- val
+    return(val)
   }
   acc_def <- prep[["accumulators"]][[id]]
-  if (!is.null(acc_def)) return(.acc_density(acc_def, t))
-  0.0
+  val <- if (!is.null(acc_def)) .acc_density(acc_def, t) else 0.0
+  if (!is.null(ctx)) ctx$event_density_memo[[.ctx_key("evD", id, component, t, forced_complete, forced_survive)]] <- val
+  val
 }
 
 .pool_density <- function(prep, pool_id, component, t,
                           forced_complete = integer(0),
-                          forced_survive = integer(0)) {
+                          forced_survive = integer(0),
+                          ctx = NULL) {
+  if (!is.null(ctx)) {
+    key <- .ctx_key("poolD", pool_id, component, t, forced_complete, forced_survive)
+    cached <- ctx$pool_density_memo[[key]]
+    if (!is.null(cached)) return(cached)
+  }
   if (!is.finite(t) || t < 0) {
     val <- 0.0
     attr(val, "scenarios") <- list()
+    if (!is.null(ctx)) ctx$pool_density_memo[[.ctx_key("poolD", pool_id, component, t, forced_complete, forced_survive)]] <- val
     return(val)
   }
 
@@ -461,11 +1212,13 @@ source("R/model_tables.R")
     dens_vec[[i]] <- .event_density_at(
       prep, mid, component, t,
       forced_complete = forced_complete,
-      forced_survive = forced_survive)
+      forced_survive = forced_survive,
+      ctx = ctx)
     cdf_vec[[i]] <- .event_cdf_at(
       prep, mid, component, t,
       forced_complete = forced_complete,
-      forced_survive = forced_survive)
+      forced_survive = forced_survive,
+      ctx = ctx)
     surv_vec[[i]] <- 1.0 - cdf_vec[[i]]
   }
 
@@ -740,12 +1493,19 @@ source("R/model_tables.R")
   } else {
     attr(total_density, "scenarios") <- list()
   }
+  if (!is.null(ctx)) ctx$pool_density_memo[[.ctx_key("poolD", pool_id, component, t, forced_complete, forced_survive)]] <- total_density
   total_density
 }
 
 .pool_survival <- function(prep, pool_id, component, t,
                            forced_complete = integer(0),
-                           forced_survive = integer(0)) {
+                           forced_survive = integer(0),
+                           ctx = NULL) {
+  if (!is.null(ctx)) {
+    key <- .ctx_key("poolS", pool_id, component, t, forced_complete, forced_survive)
+    cached <- ctx$pool_surv_memo[[key]]
+    if (!is.null(cached)) return(cached)
+  }
   if (!is.finite(t)) return(0.0)
   pool_defs <- prep[["pools"]]
   pool_def <- pool_defs[[pool_id]]
@@ -765,473 +1525,34 @@ source("R/model_tables.R")
     id <- members[[i]]
     Fvec[[i]] <- .event_cdf_at(prep, id, component, t,
                                forced_complete = forced_complete,
-                               forced_survive = forced_survive)
+                               forced_survive = forced_survive,
+                               ctx = ctx)
   }
   Svec <- 1.0 - Fvec
   coeffs <- pool_coeffs(Svec, Fvec)
   upto <- min(length(coeffs), k)
-  sum(coeffs[seq_len(upto)])
+  val <- sum(coeffs[seq_len(upto)])
+  if (!is.null(ctx)) ctx$pool_surv_memo[[.ctx_key("poolS", pool_id, component, t, forced_complete, forced_survive)]] <- val
+  val
 }
 
 # ==============================================================================
 # PART 4: Expression Evaluation (Likelihood)
 # ==============================================================================
-
-# Scenario helpers for generic expressions at time t.
-# Returns a list of scenario records:
-#   list(weight = numeric(1),
-#        forced_complete = integer(),
-#        forced_survive  = integer())
-.expr_scenarios_at <- function(expr, t, prep, component,
-                               forced_complete = integer(0),
-                               forced_survive = integer(0)) {
-  if (is.null(expr) || is.null(expr[["kind"]])) return(list())
-  kind <- expr[["kind"]]
-  forced_complete <- .coerce_forced_ids(prep, forced_complete)
-  forced_survive <- .coerce_forced_ids(prep, forced_survive)
-
-  make_scenario <- function(weight, fcomp, fsurv) {
-    if (!is.finite(weight) || weight <= 0) return(NULL)
-    list(
-      weight = as.numeric(weight),
-      forced_complete = .coerce_forced_ids(prep, fcomp),
-      forced_survive = .coerce_forced_ids(prep, fsurv)
-    )
-  }
-
-  if (identical(kind, "event")) {
-    source_id <- expr[["source"]]
-    source_idx <- .label_to_id(prep, source_id)
-    source_ids <- if (is.na(source_idx)) integer(0) else source_idx
-    weight <- .event_density_at(
-      prep, source_id, component, t,
-      forced_complete = forced_complete,
-      forced_survive = forced_survive)
-    if (!is.finite(weight) || weight <= 0) return(list())
-    pool_scenarios <- attr(weight, "scenarios")
-    if (!is.null(pool_scenarios) && length(pool_scenarios) > 0) {
-      out <- list()
-      for (psc in pool_scenarios) {
-        if (is.null(psc)) next
-        w <- psc$weight
-        if (!is.finite(w) || w <= 0) next
-        fcomp <- .forced_union(prep, forced_complete, c(source_ids, psc$forced_complete))
-        fsurv <- .forced_union(prep, forced_survive, psc$forced_survive)
-        sc <- make_scenario(w, fcomp, fsurv)
-        if (!is.null(sc)) out[[length(out) + 1L]] <- sc
-      }
-      return(out)
-    }
-    sc <- make_scenario(
-      weight,
-      fcomp = .forced_union(prep, forced_complete, source_ids),
-      fsurv = forced_survive
-    )
-    return(if (is.null(sc)) list() else list(sc))
-  }
-
-  if (identical(kind, "and")) {
-    args <- expr[["args"]] %||% list()
-    if (length(args) == 0) return(list())
-    out <- list()
-    for (i in seq_along(args)) {
-      si <- .expr_scenarios_at(
-        args[[i]], t, prep, component,
-        forced_complete = forced_complete,
-        forced_survive = forced_survive)
-      if (length(si) == 0) next
-      others <- args[-i]
-      for (sc in si) {
-        if (is.null(sc) || sc$weight <= 0) next
-        weight <- sc$weight
-        fcomp <- sc$forced_complete
-        fsurv <- sc$forced_survive
-        ok <- TRUE
-        for (aj in others) {
-          Fj <- .eval_expr_cdf_cond(
-            aj, t, prep, component,
-            forced_complete = fcomp,
-            forced_survive = fsurv)
-          if (!is.finite(Fj) || Fj <= 0) {
-            ok <- FALSE
-            break
-          }
-          weight <- weight * Fj
-          if (!is.finite(weight) || weight <= 0) {
-            ok <- FALSE
-            break
-          }
-          fcomp <- .forced_union(prep, fcomp, .expr_sources(aj, prep))
-        }
-        if (!ok) next
-        sc_out <- make_scenario(weight, fcomp, fsurv)
-        if (!is.null(sc_out)) out[[length(out) + 1L]] <- sc_out
-      }
-    }
-    return(out)
-  }
-
-  if (identical(kind, "or")) {
-    args <- expr[["args"]] %||% list()
-    if (length(args) == 0) return(list())
-    out <- list()
-    for (i in seq_along(args)) {
-      si <- .expr_scenarios_at(
-        args[[i]], t, prep, component,
-        forced_complete = forced_complete,
-        forced_survive = forced_survive)
-      if (length(si) == 0) next
-      others <- args[-i]
-      others_req <- lapply(others, function(aj) .expr_sources(aj, prep))
-      for (sc in si) {
-        if (is.null(sc) || sc$weight <= 0) next
-        weight <- sc$weight
-        fcomp <- sc$forced_complete
-        fsurv <- sc$forced_survive
-        valid <- TRUE
-        for (idx in seq_along(others)) {
-          req_j <- others_req[[idx]]
-          if (length(req_j) == 0L) next
-          if (all(req_j %in% fcomp)) {
-            valid <- FALSE
-            break
-          }
-          witness <- req_j[!(req_j %in% fcomp)]
-          if (length(witness) >= 1L) {
-            fsurv <- .forced_union(prep, fsurv, witness[[1]])
-          } else {
-            valid <- FALSE
-            break
-          }
-        }
-        if (!valid) next
-        sc_out <- make_scenario(weight, fcomp, fsurv)
-        if (!is.null(sc_out)) out[[length(out) + 1L]] <- sc_out
-      }
-    }
-    return(out)
-  }
-
-  weight <- .eval_expr_likelihood(expr, t, prep, component)
-  if (!is.finite(weight) || weight <= 0) return(list())
-  sc <- make_scenario(
-    weight,
-    fcomp = .forced_union(prep, forced_complete, .expr_sources(expr, prep)),
-    fsurv = forced_survive
-  )
-  if (is.null(sc)) list() else list(sc)
-}
-
-.eval_expr_cdf_cond <- function(expr, t, prep, component,
-                                forced_complete = integer(0),
-                                forced_survive = integer(0)) {
-  if (is.null(expr) || is.null(expr[["kind"]])) return(0.0)
-  kind <- expr[["kind"]]
-  forced_complete <- .coerce_forced_ids(prep, forced_complete)
-  forced_survive <- .coerce_forced_ids(prep, forced_survive)
-  if (identical(kind, "event")) {
-    src <- expr[["source"]]
-    return(.event_cdf_at(prep, src, component, t,
-                         forced_complete = forced_complete,
-                         forced_survive = forced_survive))
-  }
-  if (identical(kind, "and")) {
-    args <- expr[["args"]] %||% list()
-    if (length(args) == 0) return(0.0)
-    prod_val <- 1.0
-    for (a in args) {
-      Fa <- .eval_expr_cdf_cond(a, t, prep, component,
-                                forced_complete = forced_complete,
-                                forced_survive = forced_survive)
-      prod_val <- prod_val * Fa
-      if (prod_val == 0) break
-    }
-    return(prod_val)
-  }
-  if (identical(kind, "or")) {
-    args <- expr[["args"]] %||% list()
-    if (length(args) == 0) return(0.0)
-    prod_surv <- 1.0
-    for (a in args) {
-      Sa <- .eval_expr_survival_cond(a, t, prep, component,
-                                     forced_complete = forced_complete,
-                                     forced_survive = forced_survive)
-      prod_surv <- prod_surv * Sa
-      if (prod_surv == 0) break
-    }
-    return(1.0 - prod_surv)
-  }
-  if (identical(kind, "guard")) {
-    if (t <= 0) return(0.0)
-    dens_fun <- function(u) {
-      vapply(u, function(ui) {
-        if (!is.finite(ui) || ui < 0) return(0.0)
-        .eval_expr_likelihood(expr, ui, prep, component)
-      }, numeric(1))
-    }
-    val <- tryCatch(stats::integrate(dens_fun, lower = 0, upper = t,
-                                     rel.tol = .integrate_rel_tol(), abs.tol = .integrate_abs_tol(),
-                                     stop.on.error = FALSE)$value,
-                    error = function(e) 0.0)
-    out <- as.numeric(val)
-    if (!is.finite(out)) out <- 0.0
-    max(0.0, min(1.0, out))
-  }
-  .eval_expr_cdf(expr, t, prep, component)
-}
-
-.eval_expr_survival_cond <- function(expr, t, prep, component,
-                                     forced_complete = integer(0),
-                                     forced_survive = integer(0)) {
-  if (is.null(expr) || is.null(expr[["kind"]])) return(1.0)
-  kind <- expr[["kind"]]
-  forced_complete <- .coerce_forced_ids(prep, forced_complete)
-  forced_survive <- .coerce_forced_ids(prep, forced_survive)
-  if (identical(kind, "event")) {
-    src <- expr[["source"]]
-    return(.event_survival_at(prep, src, component, t,
-                              forced_complete = forced_complete,
-                              forced_survive = forced_survive))
-  }
-  if (identical(kind, "and")) {
-    return(1.0 - .eval_expr_cdf_cond(expr, t, prep, component,
-                                     forced_complete = forced_complete,
-                                     forced_survive = forced_survive))
-  }
-  if (identical(kind, "or")) {
-    args <- expr[["args"]] %||% list()
-    if (length(args) == 0) return(1.0)
-    prod_val <- 1.0
-    for (a in args) {
-      Sa <- .eval_expr_survival_cond(a, t, prep, component,
-                                     forced_complete = forced_complete,
-                                     forced_survive = forced_survive)
-      prod_val <- prod_val * Sa
-      if (prod_val == 0) break
-    }
-    return(prod_val)
-  }
-  if (identical(kind, "guard")) {
-    if (!is.finite(t)) return(0.0)
-    if (t <= 0) return(1.0)
-    dens_fun <- function(u) {
-      vapply(u, function(uu) {
-        if (!is.finite(uu) || uu < 0) return(0.0)
-        .eval_expr_likelihood(expr, uu, prep, component)
-      }, numeric(1))
-    }
-    compute_integral <- function() {
-      tryCatch(stats::integrate(dens_fun, lower = 0, upper = t,
-                                rel.tol = .integrate_rel_tol(), abs.tol = .integrate_abs_tol(),
-                                stop.on.error = FALSE)[["value"]],
-               error = function(e) 0.0)
-    }
-    val <- compute_integral()
-    out <- 1.0 - as.numeric(val)
-    if (!is.finite(out)) out <- 0.0
-    max(0.0, min(1.0, out))
-  }
-.eval_expr_survival(expr, t, prep, component)
-}
-
-.expr_fastpath_supported <- function(expr) {
-  if (is.null(expr) || is.null(expr[["kind"]])) return(FALSE)
-  kind <- expr[["kind"]]
-  if (identical(kind, "event")) return(TRUE)
-  if (kind %in% c("and", "or")) {
-    args <- expr[["args"]] %||% list()
-    if (length(args) == 0) return(FALSE)
-    return(all(vapply(args, .expr_fastpath_supported, logical(1))))
-  }
-  FALSE
-}
-
-.expr_cdf_fast <- function(expr, t, prep, component) {
-  if (is.na(t)) return(0.0)
-  if (is.infinite(t) && t < 0) return(0.0)
-  if (is.null(expr) || is.null(expr[["kind"]])) return(0.0)
-  kind <- expr[["kind"]]
-  if (identical(kind, "event")) {
-    src <- expr[["source"]]
-    if (is.null(src)) return(0.0)
-    if (identical(src, "__DEADLINE__") || identical(src, "__GUESS__")) {
-      return(if (t >= 0) 1.0 else 0.0)
-    }
-    if (!is.null(prep[["pools"]][[src]])) {
-      surv <- .pool_survival_fast_value(prep, src, component, t)
-      return(1.0 - surv)
-    }
-    return(.event_cdf_at(prep, src, component, t,
-                         forced_complete = integer(0),
-                         forced_survive = integer(0)))
-  }
-  args <- expr[["args"]] %||% list()
-  if (length(args) == 0) return(0.0)
-  if (identical(kind, "and")) {
-    prod_val <- 1.0
-    for (a in args) {
-      Fa <- .expr_cdf_fast(a, t, prep, component)
-      prod_val <- prod_val * Fa
-      if (!is.finite(prod_val) || prod_val == 0) break
-    }
-    return(max(0.0, min(1.0, prod_val)))
-  }
-  if (identical(kind, "or")) {
-    surv_prod <- 1.0
-    for (a in args) {
-      Sa <- .expr_survival_fast(a, t, prep, component)
-      surv_prod <- surv_prod * Sa
-      if (!is.finite(surv_prod) || surv_prod == 0) break
-    }
-    val <- 1.0 - surv_prod
-    if (!is.finite(val)) val <- 0.0
-    return(max(0.0, min(1.0, val)))
-  }
-  0.0
-}
-
-.expr_survival_fast <- function(expr, t, prep, component) {
-  if (is.na(t)) return(1.0)
-  if (is.infinite(t) && t < 0) return(1.0)
-  if (is.null(expr) || is.null(expr[["kind"]])) return(1.0)
-  kind <- expr[["kind"]]
-  if (identical(kind, "event")) {
-    src <- expr[["source"]]
-    if (is.null(src)) return(1.0)
-    if (identical(src, "__DEADLINE__") || identical(src, "__GUESS__")) {
-      return(if (t < 0) 1.0 else 0.0)
-    }
-    if (!is.null(prep[["pools"]][[src]])) {
-      return(.pool_survival_fast_value(prep, src, component, t))
-    }
-    return(.event_survival_at(prep, src, component, t,
-                              forced_complete = integer(0),
-                              forced_survive = integer(0)))
-  }
-  args <- expr[["args"]] %||% list()
-  if (length(args) == 0) return(1.0)
-  if (identical(kind, "and")) {
-    val <- 1.0 - .expr_cdf_fast(expr, t, prep, component)
-    if (!is.finite(val)) val <- 0.0
-    return(max(0.0, min(1.0, val)))
-  }
-  if (identical(kind, "or")) {
-    prod_val <- 1.0
-    for (a in args) {
-      Sa <- .expr_survival_fast(a, t, prep, component)
-      prod_val <- prod_val * Sa
-      if (!is.finite(prod_val) || prod_val == 0) break
-    }
-    return(max(0.0, min(1.0, prod_val)))
-  }
-  1.0
-}
-
-.expr_density_fast <- function(expr, t, prep, component) {
-  if (is.na(t) || !is.finite(t) || t < 0) return(0.0)
-  if (is.null(expr) || is.null(expr[["kind"]])) return(0.0)
-  kind <- expr[["kind"]]
-  if (identical(kind, "event")) {
-    src <- expr[["source"]]
-    if (is.null(src)) return(0.0)
-    if (identical(src, "__DEADLINE__") || identical(src, "__GUESS__")) return(0.0)
-    if (!is.null(prep[["pools"]][[src]])) {
-      return(.pool_density_fast_value(prep, src, component, t))
-    }
-    return(.event_density_at(prep, src, component, t,
-                             forced_complete = integer(0),
-                             forced_survive = integer(0)))
-  }
-  args <- expr[["args"]] %||% list()
-  if (length(args) == 0) return(0.0)
-  if (identical(kind, "and")) {
-    total <- 0.0
-    for (i in seq_along(args)) {
-      dens_i <- .expr_density_fast(args[[i]], t, prep, component)
-      if (!is.finite(dens_i) || dens_i <= 0) next
-      prod_cdf <- 1.0
-      for (j in seq_along(args)) {
-        if (i == j) next
-        Fj <- .expr_cdf_fast(args[[j]], t, prep, component)
-        prod_cdf <- prod_cdf * Fj
-        if (!is.finite(prod_cdf) || prod_cdf == 0) break
-      }
-      if (!is.finite(prod_cdf) || prod_cdf == 0) next
-      total <- total + dens_i * prod_cdf
-    }
-    if (!is.finite(total)) total <- 0.0
-    return(max(0.0, total))
-  }
-  if (identical(kind, "or")) {
-    total <- 0.0
-    for (i in seq_along(args)) {
-      dens_i <- .expr_density_fast(args[[i]], t, prep, component)
-      if (!is.finite(dens_i) || dens_i <= 0) next
-      prod_surv <- 1.0
-      for (j in seq_along(args)) {
-        if (i == j) next
-        Sj <- .expr_survival_fast(args[[j]], t, prep, component)
-        prod_surv <- prod_surv * Sj
-        if (!is.finite(prod_surv) || prod_surv == 0) break
-      }
-      if (!is.finite(prod_surv) || prod_surv == 0) next
-      total <- total + dens_i * prod_surv
-    }
-    if (!is.finite(total)) total <- 0.0
-    return(max(0.0, total))
-  }
-  0.0
-}
-
+ 
 .scenario_density_with_competitors <- function(expr, t, prep, component,
-                                               competitor_exprs = list()) {
+                                               competitor_exprs = list(),
+                                               ctx = NULL) {
   if (is.na(t) || !is.finite(t) || t < 0) {
     val <- 0.0
     attr(val, "scenarios") <- list()
     return(val)
   }
-  simple_event <- function(e) {
-    if (is.null(e) || is.null(e[['kind']]) || !identical(e[['kind']], "event")) return(FALSE)
-    src <- e[['source']]
-    !is.null(prep[["accumulators"]][[src]]) && is.null(prep[["pools"]][[src]])
-  }
-  expr_is_simple <- .expr_fastpath_supported(expr)
-  if (expr_is_simple) {
-    dens_fast <- .expr_density_fast(expr, t, prep, component)
-    if (!is.finite(dens_fast) || dens_fast <= 0) {
-      return(max(0.0, dens_fast))
-    }
-    if (length(competitor_exprs) > 0) {
-      if (simple_event(expr) && all(vapply(competitor_exprs, simple_event, logical(1)))) {
-        surv_fast <- .compute_survival_product(expr, competitor_exprs, prep, component, t)
-      } else {
-        surv_fast <- 1.0
-        for (comp_expr in competitor_exprs) {
-          if (.expr_fastpath_supported(comp_expr)) {
-            Sv <- .expr_survival_fast(comp_expr, t, prep, component)
-          } else {
-            Sv <- .eval_expr_survival_cond(
-              comp_expr, t, prep, component,
-              forced_complete = integer(0),
-              forced_survive = integer(0)
-            )
-          }
-          if (!is.finite(Sv) || Sv <= 0) {
-            surv_fast <- 0.0
-            break
-          }
-          surv_fast <- surv_fast * Sv
-        }
-      }
-      dens_fast <- dens_fast * surv_fast
-    }
-    if (!is.finite(dens_fast) || dens_fast <= 0) return(0.0)
-    return(dens_fast)
-  }
   scenarios <- .expr_scenarios_at(
     expr, t, prep, component,
     forced_complete = integer(0),
-    forced_survive = integer(0))
+    forced_survive = integer(0),
+    ctx = ctx)
   if (length(scenarios) == 0) {
     return(0.0)
   }
@@ -1245,7 +1566,8 @@ source("R/model_tables.R")
         surv_val <- .eval_expr_survival_cond(
           comp_expr, t, prep, component,
           forced_complete = sc$forced_complete,
-          forced_survive = sc$forced_survive)
+          forced_survive = sc$forced_survive,
+          ctx = ctx)
         if (!is.finite(surv_val) || surv_val <= 0) {
           surv_prod <- 0.0
           break
@@ -1260,496 +1582,29 @@ source("R/model_tables.R")
   total
 }
 
-# ============================================================================== 
-# Fast-path helpers for competitor survival products (ported from legacy API)
-# ==============================================================================
-
-.cluster_competitors <- function(exprs, prep) {
-  n <- length(exprs)
-  if (n == 0) return(list())
-  src_sets <- lapply(exprs, .expr_sources, prep)
-  visited <- rep(FALSE, n)
-  clusters <- list()
-  for (i in seq_len(n)) {
-    if (visited[[i]]) next
-    stack <- i
-    visited[[i]] <- TRUE
-    members <- integer(0)
-    while (length(stack) > 0) {
-      idx <- stack[[length(stack)]]
-      stack <- stack[-length(stack)]
-      members <- c(members, idx)
-      for (j in seq_len(n)) {
-        if (visited[[j]]) next
-        if (length(intersect(src_sets[[idx]], src_sets[[j]])) > 0) {
-          visited[[j]] <- TRUE
-          stack <- c(stack, j)
-        }
-      }
-    }
-    clusters[[length(clusters) + 1L]] <- list(indices = members, exprs = exprs[members], sources = src_sets[members])
-  }
-  clusters
-}
-
-.get_event_source <- function(node) {
-  if (is.null(node)) return(NULL)
-  if (!is.null(node$kind) && identical(node$kind, "event")) {
-    return(node$source %||% NULL)
-  }
-  NULL
-}
-
-.extract_guard_plus <- function(expr) {
-  if (is.null(expr) || is.null(expr$kind)) return(NULL)
-  if (identical(expr$kind, "guard")) {
-    ref_id <- .get_event_source(expr$reference)
-    blk_id <- .get_event_source(expr$blocker)
-    if (is.null(ref_id) || is.null(blk_id)) return(NULL)
-    return(list(guard = expr, ref = ref_id, block = blk_id, extras = character(0)))
-  }
-  if (identical(expr$kind, "and")) {
-    args <- expr$args %||% list()
-    guard_idx <- which(vapply(args, function(arg) !is.null(arg$kind) && identical(arg$kind, "guard"), logical(1)))
-    if (length(guard_idx) != 1) return(NULL)
-    guard <- args[[guard_idx[[1]]]]
-    ref_id <- .get_event_source(guard$reference)
-    blk_id <- .get_event_source(guard$blocker)
-    if (is.null(ref_id) || is.null(blk_id)) return(NULL)
-    extras <- args[-guard_idx[[1]]]
-    extra_sources <- character(0)
-    for (extra in extras) {
-      src <- .get_event_source(extra)
-      if (is.null(src)) return(NULL)
-      extra_sources <- c(extra_sources, src)
-    }
-    return(list(guard = guard, ref = ref_id, block = blk_id, extras = unique(extra_sources)))
-  }
-  NULL
-}
-
-.event_density_fn <- function(source_id, prep, component) {
-  event_expr <- list(kind = "event", source = source_id, k = NULL)
-  function(t) vapply(
-    t,
-    function(tt) .eval_expr_likelihood(event_expr, tt, prep, component),
-    numeric(1)
-  )
-}
-
-.event_survival_fn <- function(source_id, prep, component) {
-  event_expr <- list(kind = "event", source = source_id, k = NULL)
-  function(t) vapply(
-    t,
-    function(tt) .eval_expr_survival(event_expr, tt, prep, component),
-    numeric(1)
-  )
-}
-
-.guard_pair_joint_survival <- function(t, prep, component, ref_a, block_a, extras) {
-  if (t <= 0) return(1.0)
-  f_a <- .event_density_fn(ref_a, prep, component)
-  S_a <- .event_survival_fn(ref_a, prep, component)
-  f_b <- .event_density_fn(block_a, prep, component)
-  S_b <- .event_survival_fn(block_a, prep, component)
-  S_extra_t <- 1.0
-  if (length(extras) > 0) {
-    S_extra_t <- prod(vapply(extras, function(src) .event_survival_fn(src, prep, component)(t), numeric(1)))
-  }
-  rel_tol <- .integrate_rel_tol()
-  abs_tol <- .integrate_abs_tol()
-  term_case2 <- if (is.finite(t)) {
-    stats::integrate(function(v) f_a(v) * S_b(v), lower = t, upper = Inf,
-                     rel.tol = rel_tol, abs.tol = abs_tol,
-                     stop.on.error = FALSE)$value
-  } else 0.0
-  term_s1_gt_t <- stats::integrate(function(u) f_b(u) * S_a(u), lower = t, upper = Inf,
-                                   rel.tol = rel_tol, abs.tol = abs_tol,
-                                   stop.on.error = FALSE)$value
-  if (!is.finite(term_s1_gt_t)) term_s1_gt_t <- 0.0
-  term_s1_le_t <- stats::integrate(function(u) f_b(u) * S_a(u), lower = 0, upper = t,
-                                   rel.tol = rel_tol, abs.tol = abs_tol,
-                                   stop.on.error = FALSE)$value
-  if (!is.finite(term_s1_le_t)) term_s1_le_t <- 0.0
-  val <- term_case2 + term_s1_gt_t + S_extra_t * term_s1_le_t
-  if (!is.finite(val)) val <- 0.0
-  if (val < 0) val <- 0.0
-  if (val > 1) val <- 1.0
-  val
-}
-
-.compute_survival_product <- function(outcome_expr, competitor_exprs, prep, component, t) {
-  if (length(competitor_exprs) == 0) return(1.0)
-  clusters <- .cluster_competitors(competitor_exprs, prep)
-  prod_val <- 1.0
-  for (cluster in clusters) {
-    exprs <- cluster$exprs
-    cluster_val <- NULL
-    if (length(exprs) == 2) {
-      info1 <- .extract_guard_plus(exprs[[1]])
-      info2 <- .extract_guard_plus(exprs[[2]])
-      if (!is.null(info1) && !is.null(info2)) {
-        if (identical(info1$ref, info2$block) && identical(info1$block, info2$ref)) {
-          guard_go1 <- info1
-          guard_stop <- info2
-        } else if (identical(info2$ref, info1$block) && identical(info2$block, info1$ref)) {
-          guard_go1 <- info2
-          guard_stop <- info1
-        } else {
-          guard_go1 <- NULL
-          guard_stop <- NULL
-        }
-        if (!is.null(guard_go1) && length(guard_stop$extras) == length(unique(guard_stop$extras))) {
-          cluster_val <- .guard_pair_joint_survival(t, prep, component,
-                                                    ref_a = guard_go1$ref,
-                                                    block_a = guard_go1$block,
-                                                    extras = guard_stop$extras)
-        }
-      }
-    }
-    if (is.null(cluster_val)) {
-      cluster_val <- prod(vapply(exprs, function(ce) .eval_expr_survival(ce, t, prep, component), numeric(1)))
-    }
-    prod_val <- prod_val * cluster_val
-  }
-  prod_val
-}
-
-# Get CDF (cumulative probability) for an expression
-.eval_expr_cdf <- function(expr, t, prep, component) {
-  kind <- expr[['kind']]
-  if (identical(kind, "event")) {
-    source_id <- expr[['source']]
-
-    if (identical(source_id, "__DEADLINE__") || identical(source_id, "__GUESS__")) {
-      return(if (t >= 0) 1.0 else 0.0)
-    }
-
-    if (!is.null(prep[["pools"]][[source_id]])) {
-      return(.event_cdf_at(prep, source_id, component, t,
-                           forced_complete = integer(0),
-                           forced_survive = integer(0)))
-    }
-
-    acc_def <- prep[["accumulators"]][[source_id]]
-    if (!is.null(acc_def)) {
-      comps <- acc_def[['components']]
-      if (length(comps) > 0 && !is.null(component) &&
-          !identical(component, "__default__") && !(component %in% comps)) {
-        return(1.0)  # Not active = instant completion
-      }
-      return(.event_cdf_at(prep, source_id, component, t,
-                           forced_complete = integer(0),
-                           forced_survive = integer(0)))
-    }
-
-    return(1.0)
-  }
-
-  if (identical(kind, "and")) {
-    # CDF of max: product of CDFs
-    args <- expr[['args']]
-    prod_cdf <- 1.0
-    for (arg in args) {
-      cdf_arg <- .eval_expr_cdf(arg, t, prep, component)
-      prod_cdf <- prod_cdf * cdf_arg
-    }
-    return(prod_cdf)
-  }
-
-  if (identical(kind, "or")) {
-    # CDF of min: 1 - product of survivals
-    args <- expr[['args']]
-    prod_surv <- 1.0
-    for (arg in args) {
-      surv_arg <- .eval_expr_survival(arg, t, prep, component)
-      prod_surv <- prod_surv * surv_arg
-    }
-    return(1 - prod_surv)
-  }
-
-  if (identical(kind, "guard")) {
-    # Guard: integrate density to obtain CDF
-    if (t <= 0) return(0.0)
-    if (!is.finite(t)) return(1.0)
-    dens_fun <- function(u) {
-      vapply(u, function(ui) {
-        if (!is.finite(ui) || ui < 0) return(0.0)
-        .eval_expr_likelihood(expr, ui, prep, component)
-      }, numeric(1))
-    }
-    compute_integral <- function() {
-      tryCatch(
-        stats::integrate(dens_fun, lower = 0, upper = t,
-                         rel.tol = .integrate_rel_tol(), abs.tol = .integrate_abs_tol(),
-                         stop.on.error = FALSE)$value,
-        error = function(e) 0.0
-      )
-    }
-    val <- compute_integral()
-    cdf <- as.numeric(val)
-    if (!is.finite(cdf)) cdf <- 0.0
-    if (cdf < 0) cdf <- 0.0
-    if (cdf > 1) cdf <- 1.0
-    return(cdf)
-  }
-
-  return(NA_real_)
-}
-
-# Get survival function for an expression
-.eval_expr_survival <- function(expr, t, prep, component) {
-  kind <- expr[['kind']]
-
-  if (identical(kind, "event")) {
-    source_id <- expr[['source']]
-
-    if (identical(source_id, "__DEADLINE__") || identical(source_id, "__GUESS__")) {
-      return(if (t < 0) 1.0 else 0.0)
-    }
-
-    if (!is.null(prep[["pools"]][[source_id]])) {
-      return(.event_survival_at(prep, source_id, component, t,
-                                forced_complete = integer(0),
-                                forced_survive = integer(0)))
-    }
-
-    acc_def <- prep[["accumulators"]][[source_id]]
-    if (!is.null(acc_def)) {
-      comps <- acc_def[['components']]
-      if (length(comps) > 0 && !is.null(component) &&
-          !identical(component, "__default__") && !(component %in% comps)) {
-        return(1.0)  # Not active = always survive (never fires)
-      }
-      return(.event_survival_at(prep, source_id, component, t,
-                                forced_complete = integer(0),
-                                forced_survive = integer(0)))
-    }
-
-    return(1.0)
-  }
-
-  if (identical(kind, "and")) {
-    # Survival of max: at least one must be > t
-    # S_max(t) = 1 - F_max(t) = 1 - Π F_i(t)
-    return(1 - .eval_expr_cdf(expr, t, prep, component))
-  }
-
-  if (identical(kind, "or")) {
-    # Survival of min: all must be > t
-    # S_min(t) = Π S_i(t)
-    args <- expr[['args']]
-    prod_surv <- 1.0
-    for (arg in args) {
-      surv_arg <- .eval_expr_survival(arg, t, prep, component)
-      prod_surv <- prod_surv * surv_arg
-    }
-    return(prod_surv)
-  }
-
-  if (identical(kind, "guard")) {
-    # Survival of guard = 1 - ∫_0^t f_guard(u) du
-    if (!is.finite(t)) return(0.0)
-    if (t <= 0) return(1.0)
-    dens_fun <- function(u) {
-      vapply(u, function(uu) {
-        if (!is.finite(uu) || uu < 0) return(0.0)
-        .eval_expr_likelihood(expr, uu, prep, component)
-      }, numeric(1))
-    }
-    compute_integral <- function() {
-      tryCatch(stats::integrate(dens_fun, lower = 0, upper = t,
-                                rel.tol = .integrate_rel_tol(), abs.tol = .integrate_abs_tol(),
-                                stop.on.error = FALSE)[['value']],
-               error = function(e) 0.0)
-    }
-    val <- compute_integral()
-    s <- 1.0 - as.numeric(val)
-    if (!is.finite(s)) s <- 0.0
-    if (s < 0) s <- 0.0
-    if (s > 1) s <- 1.0
-    return(s)
-  }
-
-  return(0.0)
-}
-
-# Compute likelihood (density or probability) for an expression
-.eval_expr_likelihood <- function(expr, t, prep, component) {
-  kind <- expr[['kind']]
-
-  if (identical(kind, "event")) {
-    source_id <- expr[['source']]
-
-    # Handle special sources
-    if (identical(source_id, "__DEADLINE__") || identical(source_id, "__GUESS__")) {
-      # These don't contribute density directly
-      return(0.0)
-    }
-
-    # Check if it's a pool
-    if (!is.null(prep[["pools"]][[source_id]])) {
-      return(.event_density_at(prep, source_id, component, t,
-                               forced_complete = integer(0),
-                               forced_survive = integer(0)))
-    }
-
-    # Check if it's an accumulator
-    acc_def <- prep[["accumulators"]][[source_id]]
-    if (!is.null(acc_def)) {
-      # Check component membership
-      comps <- acc_def[['components']]
-      if (length(comps) > 0 && !is.null(component) &&
-          !identical(component, "__default__") && !(component %in% comps)) {
-        return(0.0)  # Not active in this component
-      }
-      return(.event_density_at(prep, source_id, component, t,
-                               forced_complete = integer(0),
-                               forced_survive = integer(0)))
-    }
-
-    return(0.0)
-  }
-
-  if (identical(kind, "and")) {
-    if (!is.finite(t) || t < 0) {
-      val <- 0.0
-      attr(val, "scenarios") <- list()
-      return(val)
-    }
-    scenarios <- .expr_scenarios_at(
-      expr, t, prep, component,
-      forced_complete = integer(0),
-      forced_survive = integer(0))
-    if (length(scenarios) == 0) {
-      val <- 0.0
-      attr(val, "scenarios") <- list()
-      return(val)
-    }
-    total_density <- sum(vapply(scenarios, `[[`, numeric(1), "weight"))
-    attr(total_density, "scenarios") <- scenarios
-    return(total_density)
-  }
-
-  if (identical(kind, "or")) {
-    if (!is.finite(t) || t < 0) {
-      val <- 0.0
-      attr(val, "scenarios") <- list()
-      return(val)
-    }
-    scenarios <- .expr_scenarios_at(
-      expr, t, prep, component,
-      forced_complete = integer(0),
-      forced_survive = integer(0))
-    if (length(scenarios) == 0) {
-      val <- 0.0
-      attr(val, "scenarios") <- list()
-      return(val)
-    }
-    total_density <- sum(vapply(scenarios, `[[`, numeric(1), "weight"))
-    attr(total_density, "scenarios") <- scenarios
-    return(total_density)
-  }
-
-  if (identical(kind, "not")) {
-    # NOT typically doesn't have density, only affects probability
-    # If we reach here, it means NOT is used in an outcome expression
-    # This is unusual but could mean "outcome never happens"
-    return(0.0)
-  }
-
-  if (identical(kind, "guard")) {
-    reference <- expr[["reference"]]
-    blocker <- expr[["blocker"]]
-    unless_list <- expr[["unless"]] %||% list()
-
-    if (!is.finite(t) || t < 0) {
-      val <- 0.0
-      attr(val, "scenarios") <- list()
-      return(val)
-    }
-
-    ref_scen <- .expr_scenarios_at(
-      reference, t, prep, component,
-      forced_complete = integer(0),
-      forced_survive = integer(0))
-    if (length(ref_scen) == 0) {
-      val <- 0.0
-      attr(val, "scenarios") <- list()
-      return(val)
-    }
-
-    S_eff <- (function() {
-      if (is.null(blocker)) return(1.0)
-      if (length(unless_list) == 0) {
-        return(.eval_expr_survival(blocker, t, prep, component))
-      }
-      f_blocker <- function(tt) .eval_expr_likelihood(blocker, tt, prep, component)
-      S_prot_prod <- function(tt) {
-        if (length(unless_list) == 0) return(rep(1.0, length(tt)))
-        vapply(tt, function(ui) {
-          vals <- vapply(unless_list, function(unl) .eval_expr_survival(unl, ui, prep, component), numeric(1))
-          prod(vals)
-        }, numeric(1))
-      }
-      tryCatch({
-        if (!is.finite(t) || t <= 0) return(1.0)
-        val <- stats::integrate(
-          function(u) {
-            vapply(u, function(ui) f_blocker(ui) * S_prot_prod(ui), numeric(1))
-          },
-          lower = 0,
-          upper = t,
-          rel.tol = .integrate_rel_tol(),
-          abs.tol = .integrate_abs_tol(),
-          stop.on.error = FALSE
-        )[["value"]]
-        s <- 1.0 - as.numeric(val)
-        if (!is.finite(s)) 0.0 else max(0.0, min(1.0, s))
-      }, error = function(e) 1.0)
-    })()
-    if (!is.finite(S_eff)) S_eff <- 0.0
-    if (S_eff < 0) S_eff <- 0.0
-    if (S_eff > 1) S_eff <- 1.0
-
-    blocker_sources <- if (!is.null(blocker)) .expr_sources(blocker, prep) else integer(0)
-    scenarios <- list()
-    for (sc in ref_scen) {
-      if (is.null(sc)) next
-      weight <- sc$weight * S_eff
-      if (!is.finite(weight) || weight <= 0) next
-      fcomp <- sc$forced_complete
-      fsurv <- .forced_union(prep, sc$forced_survive, blocker_sources)
-      scenarios[[length(scenarios) + 1L]] <- list(
-        weight = as.numeric(weight),
-        forced_complete = .coerce_forced_ids(prep, fcomp),
-        forced_survive = .coerce_forced_ids(prep, fsurv)
-      )
-    }
-    total <- sum(vapply(scenarios, `[[`, numeric(1), "weight"))
-    attr(total, "scenarios") <- scenarios
-    return(total)
-  }
-
-  stop(sprintf("Unsupported expression kind '%s'", kind))
-}
+ 
 
 # ==============================================================================
 # PART 5: Outcome Likelihood
 # ==============================================================================
 
 # Integrand for scenario-conditioned probability (density already encodes competitors)
-.integrand_outcome_density <- function(t, expr, prep, component, competitor_exprs) {
+.integrand_outcome_density <- function(t, expr, prep, component, competitor_exprs, ctx) {
+  # To prevent unbounded memo growth during quadrature, use a fresh
+  # per-t evaluation context unless explicitly disabled.
+  use_fresh_ctx <- getOption("uuber.integrate.fresh_ctx_per_t", default = TRUE)
   vapply(t, function(tt) {
     if (!is.finite(tt) || tt < 0) return(0.0)
+    local_ctx <- if (isTRUE(use_fresh_ctx)) make_eval_ctx(prep) else ctx
     .scenario_density_with_competitors(expr, tt, prep, component,
-                                       competitor_exprs = competitor_exprs)
+                                       competitor_exprs = competitor_exprs,
+                                       ctx = local_ctx)
   }, numeric(1))
 }
 
 # Scenario-conditioned probability of an expression over [0, upper_limit].
 # competitor_exprs retained for backward compatibility but ignored.
-.integrate_outcome_probability <- function(expr, prep, component, upper_limit = Inf, competitor_exprs = NULL) {
+.integrate_outcome_probability <- function(expr, prep, component, upper_limit = Inf, competitor_exprs = NULL, ctx = NULL) {
   if (!is.finite(upper_limit)) upper_limit <- Inf
   res <- tryCatch(
     stats::integrate(
@@ -1760,6 +1615,7 @@ source("R/model_tables.R")
       prep = prep,
       component = component,
       competitor_exprs = competitor_exprs %||% list(),
+      ctx = if (isTRUE(getOption("uuber.integrate.fresh_ctx_per_t", default = TRUE))) NULL else ctx,
       rel.tol = .integrate_rel_tol(),
       abs.tol = .integrate_abs_tol(),
       stop.on.error = FALSE
@@ -1832,6 +1688,8 @@ source("R/model_tables.R")
     comps <- lapply(comps, function(comp_expr) {
       if (!is.null(comp_expr[['kind']]) && identical(comp_expr[['kind']], "guard")) {
         blocker_sources <- .expr_sources(comp_expr[['blocker']], prep)
+        # Match legacy: if ALL target sources are within the guard's blocker set,
+        # then use the guard's reference as the effective competitor.
         if (length(target_sources) > 0 && all(target_sources %in% blocker_sources)) {
           return(comp_expr[['reference']])
         }
@@ -1872,233 +1730,8 @@ source("R/model_tables.R")
   comps
 }
 
-# Detect shared-gate pattern (A & C) vs (B & C) across outcome definitions
-.detect_shared_gate <- function(outcome_defs, target_label) {
-  out_def <- outcome_defs[[target_label]]
-  if (is.null(out_def) || is.null(out_def[['expr']])) return(NULL)
-  expr <- out_def[['expr']]
-  if (is.null(expr[['kind']]) || !identical(expr[['kind']], "and") || length(expr[['args']]) != 2) return(NULL)
-  get_evt_id <- function(node) {
-    if (!is.null(node) && !is.null(node[['kind']]) && identical(node[['kind']], "event")) return(node[['source']])
-    NULL
-  }
-  x_id <- get_evt_id(expr[['args']][[1]])
-  c_id <- get_evt_id(expr[['args']][[2]])
-  if (is.null(x_id) || is.null(c_id)) {
-    x_id <- get_evt_id(expr[['args']][[2]])
-    c_id <- get_evt_id(expr[['args']][[1]])
-  }
-  if (is.null(x_id) || is.null(c_id)) return(NULL)
-  # Find another outcome with same gate c_id
-  for (lbl in names(outcome_defs)) {
-    if (identical(lbl, target_label)) next
-    other_def <- outcome_defs[[lbl]]
-    if (!is.null(other_def[['options']][['alias_of']])) next
-    other <- other_def[['expr']]
-    if (is.null(other) || is.null(other[['kind']]) || !identical(other[['kind']], "and") || length(other[['args']]) != 2) next
-    a1 <- get_evt_id(other[['args']][[1]])
-    a2 <- get_evt_id(other[['args']][[2]])
-    ids_other <- c(a1, a2)
-    if (c_id %in% ids_other) {
-      y_id <- setdiff(ids_other, c_id)
-      if (length(y_id) == 1 && !identical(y_id[[1]], x_id)) {
-        return(list(x_id = x_id, y_id = y_id[[1]], c_id = c_id))
-      }
-    }
-  }
-  NULL
-}
-
-# Find a single shared-gate pair among non-alias outcomes, if present
-.find_shared_gate_pair <- function(outcome_defs) {
-  labels <- names(outcome_defs)
-  core_labels <- Filter(function(lbl) is.null(outcome_defs[[lbl]][['options']][['alias_of']]), labels)
-  # collect all ANDs with two events
-  events <- lapply(core_labels, function(lbl) {
-    ex <- outcome_defs[[lbl]][['expr']]
-    if (!is.null(ex[['kind']]) && identical(ex[['kind']], "and") && length(ex[['args']]) == 2) {
-      a1 <- if (!is.null(ex[['args']][[1]][['kind']]) && ex[['args']][[1]][['kind']] == "event") ex[['args']][[1]][['source']] else NULL
-      a2 <- if (!is.null(ex[['args']][[2]][['kind']]) && ex[['args']][[2]][['kind']] == "event") ex[['args']][[2]][['source']] else NULL
-      if (!is.null(a1) && !is.null(a2)) return(list(label = lbl, ids = c(a1, a2)))
-    }
-    NULL
-  })
-  events <- events[!vapply(events, is.null, logical(1))]
-  if (length(events) < 2) return(NULL)
-  # try to find two with exactly one shared id (the gate)
-  for (i in seq_along(events)) {
-    for (j in seq_along(events)) {
-      if (j <= i) next
-      ids_i <- events[[i]][['ids']]
-      ids_j <- events[[j]][['ids']]
-      shared <- intersect(ids_i, ids_j)
-      if (length(shared) == 1) {
-        c_id <- shared[[1]]
-        x_id <- setdiff(ids_i, c_id)[[1]]
-        y_id <- setdiff(ids_j, c_id)[[1]]
-        return(list(
-          label_x = events[[i]][['label']],
-          label_y = events[[j]][['label']],
-          x_id = x_id,
-          y_id = y_id,
-          c_id = c_id
-        ))
-      }
-    }
-  }
-  NULL
-}
-
-# Vectorized integrands for shared-gate pair; returns list(prob_x, prob_y)
-.shared_gate_pair_probs <- function(prep, component, pair_info,
-                                   rel.tol = .integrate_rel_tol(), abs.tol = .integrate_abs_tol()) {
-  get_f <- function(id) {
-    function(tt) {
-      vapply(tt, function(ti) {
-        if (!is.finite(ti) || ti < 0) return(0.0)
-        if (!is.null(prep[["pools"]][[id]])) {
-          return(.pool_density(
-            prep, id, component, ti,
-            forced_complete = integer(0),
-            forced_survive = integer(0)
-          ))
-        }
-        if (!is.null(prep[["accumulators"]][[id]])) {
-          return(.event_density_at(
-            prep, id, component, ti,
-            forced_complete = integer(0),
-            forced_survive = integer(0)
-          ))
-        }
-        0.0
-      }, numeric(1))
-    }
-  }
-
-  get_S <- function(id) {
-    function(tt) {
-      vapply(tt, function(ti) {
-        if (!is.finite(ti)) return(0.0)
-        if (ti < 0) return(1.0)
-        if (!is.null(prep[["pools"]][[id]])) {
-          return(.pool_survival(
-            prep, id, component, ti,
-            forced_complete = integer(0),
-            forced_survive = integer(0)
-          ))
-        }
-        if (!is.null(prep[["accumulators"]][[id]])) {
-          return(.event_survival_at(
-            prep, id, component, ti,
-            forced_complete = integer(0),
-            forced_survive = integer(0)
-          ))
-        }
-        0.0
-      }, numeric(1))
-    }
-  }
-
-  get_F <- function(id) {
-    Sfun <- get_S(id)
-    function(tt) 1.0 - Sfun(tt)
-  }
-
-  fX <- get_f(pair_info[['x_id']])
-  fY <- get_f(pair_info[['y_id']])
-  fC <- get_f(pair_info[['c_id']])
-  FX <- get_F(pair_info[['x_id']])
-  FY <- get_F(pair_info[['y_id']])
-  FC <- get_F(pair_info[['c_id']])
-  SX <- get_S(pair_info[['x_id']])
-  SY <- get_S(pair_info[['y_id']])
-
-  palloc_x_single <- function(tt) {
-    if (!is.finite(tt) || tt <= 0) return(0.0)
-    denom <- FX(tt) * FY(tt)
-    if (!is.finite(denom) || denom <= 0) return(0.0)
-    integral_val <- tryCatch(
-      stats::integrate(
-        function(u) fX(u) * FY(u),
-        lower = 0,
-        upper = tt,
-        rel.tol = rel.tol,
-        abs.tol = abs.tol,
-        stop.on.error = FALSE
-      )[["value"]],
-      error = function(e) 0.0
-    )
-    out <- 1.0 - (as.numeric(integral_val) / as.numeric(denom))
-    if (!is.finite(out)) out <- 0.0
-    max(0.0, min(1.0, out))
-  }
-
-  palloc_x <- function(t) {
-    vapply(t, palloc_x_single, numeric(1))
-  }
-
-  integrand_x <- function(t) {
-    vapply(t, function(tt) {
-      if (!is.finite(tt) || tt < 0) return(0.0)
-      term1 <- fX(tt) * FC(tt) * SY(tt)
-      termCother <- fC(tt) * FX(tt) * SY(tt)
-      den <- FX(tt) * FY(tt)
-      tie <- if (is.finite(den) && den > 0) {
-        fC(tt) * FX(tt) * FY(tt) * palloc_x(tt)
-      } else {
-        0.0
-      }
-      term1 + termCother + tie
-    }, numeric(1))
-  }
-
-  integrand_y <- function(t) {
-    vapply(t, function(tt) {
-      if (!is.finite(tt) || tt < 0) return(0.0)
-      term1 <- fY(tt) * FC(tt) * SX(tt)
-      termCother <- fC(tt) * FY(tt) * SX(tt)
-      den <- FX(tt) * FY(tt)
-      tie <- if (is.finite(den) && den > 0) {
-        fC(tt) * FX(tt) * FY(tt) * (1.0 - palloc_x(tt))
-      } else {
-        0.0
-      }
-      term1 + termCother + tie
-    }, numeric(1))
-  }
-
-  px <- tryCatch(
-    stats::integrate(
-      integrand_x,
-      lower = 0,
-      upper = Inf,
-      rel.tol = rel.tol,
-      abs.tol = abs.tol,
-      stop.on.error = FALSE
-    )[["value"]],
-    error = function(e) 0.0
-  )
-  py <- tryCatch(
-    stats::integrate(
-      integrand_y,
-      lower = 0,
-      upper = Inf,
-      rel.tol = rel.tol,
-      abs.tol = abs.tol,
-      stop.on.error = FALSE
-    )[["value"]],
-    error = function(e) 0.0
-  )
-
-  px <- as.numeric(px)
-  py <- as.numeric(py)
-  if (!is.finite(px) || px < 0) px <- 0.0
-  if (!is.finite(py) || py < 0) py <- 0.0
-  c(px, py)
-}
-
 # Compute likelihood for a single trial/outcome
-.outcome_likelihood <- function(outcome_label, rt, prep, component) {
+.outcome_likelihood <- function(outcome_label, rt, prep, component, ctx = NULL) {
   outcome_defs <- prep[["outcomes"]]
 
   # FIRST: Check for GUESS outcomes (can be both defined and from guess policy)
@@ -2129,7 +1762,8 @@ source("R/model_tables.R")
             expr <- outcome_defs[[label]][['expr']]
             comp_exprs_guess <- prep[['.competitors']][[label]] %||% list()
             prob_outcome <- .integrate_outcome_probability(expr, prep, component, deadline,
-                                                           competitor_exprs = comp_exprs_guess)
+                                                           competitor_exprs = comp_exprs_guess,
+                                                           ctx = ctx)
             keep_prob <- as.numeric(guess_weights[[label]])
             guess_prob <- 1.0 - keep_prob
             total_prob <- total_prob + prob_outcome * guess_prob
@@ -2142,7 +1776,8 @@ source("R/model_tables.R")
             expr <- outcome_defs[[label]][['expr']]
             comp_exprs_guess <- prep[['.competitors']][[label]] %||% list()
             dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
-                                                         competitor_exprs = comp_exprs_guess)
+                                                         competitor_exprs = comp_exprs_guess,
+                                                         ctx = ctx)
             if (dens_r == 0) next
             keep_prob <- as.numeric(guess_weights[[label]])
             guess_prob <- 1.0 - keep_prob
@@ -2171,16 +1806,18 @@ source("R/model_tables.R")
             expr <- out_def[['expr']]
             if (is.na(rt)) {
               # Integrate race probability for the mapped source outcome
-            deadline <- .get_component_attr(prep, component, "deadline")
-            deadline <- deadline %||% prep[["default_deadline"]]
+              deadline <- .get_component_attr(prep, component, "deadline")
+              deadline <- deadline %||% prep[["default_deadline"]]
               comp_exprs_map <- prep[['.competitors']][[label]] %||% list()
               return(.integrate_outcome_probability(expr, prep, component, deadline,
-                                                    competitor_exprs = comp_exprs_map))
+                                                    competitor_exprs = comp_exprs_map,
+                                                    ctx = ctx))
             } else {
               # Race density at rt for the mapped source outcome
               comp_exprs_map <- prep[['.competitors']][[label]] %||% list()
               dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
-                                                           competitor_exprs = comp_exprs_map)
+                                                           competitor_exprs = comp_exprs_map,
+                                                           ctx = ctx)
               return(as.numeric(dens_r))
             }
           }
@@ -2206,7 +1843,7 @@ source("R/model_tables.R")
         out_def <- outcome_defs[[label]]
         expr <- out_def[['expr']]
         # Survival of this outcome at deadline
-        surv <- .eval_expr_survival(expr, deadline, prep, component)
+        surv <- .eval_expr_survival_cond(expr, deadline, prep, component, ctx = ctx)
         prob_none <- prob_none * surv
       }
       return(prob_none)
@@ -2253,117 +1890,23 @@ source("R/model_tables.R")
     )
   }
 
-  # Detect shared-gate AND pattern: (X & C) vs (Y & C)
-  shared_gate_info <- .detect_shared_gate(outcome_defs, outcome_label)
-
-  # Helper closures to get density/CDF for pools or accumulators
-  get_f <- function(id) {
-    function(tt) {
-      vapply(tt, function(ti) {
-        if (!is.finite(ti) || ti < 0) return(0.0)
-        .event_density_at(prep, id, component, ti,
-                          forced_complete = integer(0),
-                          forced_survive = integer(0))
-      }, numeric(1))
-    }
-  }
-  get_S <- function(id) {
-    function(tt) {
-      vapply(tt, function(ti) {
-        if (!is.finite(ti)) return(0.0)
-        if (ti < 0) return(1.0)
-        .event_survival_at(prep, id, component, ti,
-                            forced_complete = integer(0),
-                            forced_survive = integer(0))
-      }, numeric(1))
-    }
-  }
-  get_F <- function(id) {
-    Sfun <- get_S(id)
-    function(tt) { 1.0 - Sfun(tt) }
-  }
-
-  shared_palloc <- NULL
-  if (!is.null(shared_gate_info)) {
-    fX <- get_f(shared_gate_info[['x_id']])
-    fY <- get_f(shared_gate_info[['y_id']])
-    fC <- get_f(shared_gate_info[['c_id']])
-    FX <- get_F(shared_gate_info[['x_id']])
-    FY <- get_F(shared_gate_info[['y_id']])
-    FC <- get_F(shared_gate_info[['c_id']])
-    SY <- get_S(shared_gate_info[['y_id']])
-    shared_palloc <- function(limit) {
-      if (!is.finite(limit) || limit <= 0) return(0.0)
-      denom <- FX(limit) * FY(limit)
-      if (!is.finite(denom) || denom <= 0) return(0.0)
-      integral_val <- tryCatch(
-        stats::integrate(
-          function(u) fX(u) * FY(u),
-          lower = 0,
-          upper = limit,
-          rel.tol = .integrate_rel_tol(),
-          abs.tol = .integrate_abs_tol(),
-          stop.on.error = FALSE
-        )[["value"]],
-        error = function(e) 0.0
-      )
-      out <- 1.0 - (as.numeric(integral_val) / as.numeric(denom))
-      if (!is.finite(out)) out <- 0.0
-      max(0.0, min(1.0, out))
-    }
-  }
-
   # Handle NA/infinite RT by integration of race density
   if (is.na(rt) || !is.finite(rt) || rt < 0) {
     deadline <- .get_component_attr(prep, component, "deadline")
     deadline <- deadline %||% prep[["default_deadline"]]
-    if (!is.null(shared_gate_info)) {
-      integrand <- function(t) {
-        vapply(t, function(tt) {
-          term1 <- fX(tt) * FC(tt) * SY(tt)
-          denom <- FX(tt) * FY(tt)
-          termCother <- fC(tt) * FX(tt) * SY(tt)
-          term2 <- if (!is.null(shared_palloc) && is.finite(denom) && denom > 0) {
-            fC(tt) * FX(tt) * FY(tt) * shared_palloc(tt)
-          } else {
-            0.0
-          }
-          term1 + termCother + term2
-        }, numeric(1))
-      }
-      keep_prob <- 1.0
-      gp_comp <- .get_component_attr(prep, component, "guess")
-      if (!is.null(gp_comp) && !is.null(gp_comp[['weights']])) {
-        kp <- gp_comp[['weights']][[outcome_label]] %||% gp_comp[['weights']][[normalize_label(outcome_label)]] %||% NULL
-        if (!is.null(kp)) keep_prob <- as.numeric(kp)
-      }
-      upper_lim <- if (is.finite(deadline)) deadline else Inf
-      res <- tryCatch(
-        stats::integrate(
-          integrand,
-          lower = 0,
-          upper = upper_lim,
-          rel.tol = .integrate_rel_tol(),
-          abs.tol = .integrate_abs_tol(),
-          stop.on.error = FALSE
-        )[["value"]],
-        error = function(e) 0.0
-      )
-      res <- as.numeric(res)
-      if (!is.finite(res) || res < 0) res <- 0.0
-      return(keep_prob * res)
-    }
     integrand <- function(t) {
       vapply(t, function(tt) {
         if (!is.finite(tt) || tt < 0) return(0.0)
         base <- .scenario_density_with_competitors(expr, tt, prep, component,
-                                                   competitor_exprs = competitor_exprs)
+                                                   competitor_exprs = competitor_exprs,
+                                                   ctx = ctx)
         if (base == 0) return(0.0)
         add <- 0.0
         if (length(donors) > 0) {
           for (d in donors) {
             dens_d <- .scenario_density_with_competitors(d[['expr']], tt, prep, component,
-                                                          competitor_exprs = d[['competitors']] %||% list())
+                                                          competitor_exprs = d[['competitors']] %||% list(),
+                                                          ctx = ctx)
             if (dens_d == 0) next
             add <- add + d[['weight']] * dens_d
           }
@@ -2389,33 +1932,23 @@ source("R/model_tables.R")
   }
 
   # Race density at observed RT
-  if (!is.null(shared_gate_info)) {
-    term1 <- fX(rt) * FC(rt) * SY(rt)
-    denom <- FX(rt) * FY(rt)
-    term2 <- 0.0
-    termCother <- fC(rt) * FX(rt) * SY(rt)
-    if (!is.null(shared_palloc) && is.finite(denom) && denom > 0) {
-      palloc <- shared_palloc(rt)
-      term2 <- fC(rt) * FX(rt) * FY(rt) * palloc
+  dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
+                                               competitor_exprs = competitor_exprs,
+                                               ctx = ctx)
+  if (dens_r == 0) return(0.0)
+  base_val <- dens_r
+  # Include donor mass (e.g., timeout guesses) that keeps the observed RT
+  if (length(donors) > 0) {
+    donor_add <- 0.0
+    for (d in donors) {
+      if (identical(d[['rt_policy']], "na")) next
+      dens_d <- .scenario_density_with_competitors(d[['expr']], rt, prep, component,
+                                                   competitor_exprs = d[['competitors']] %||% list(),
+                                                   ctx = ctx)
+      if (dens_d == 0) next
+      donor_add <- donor_add + d[['weight']] * dens_d
     }
-    base_val <- term1 + termCother + term2
-  } else {
-    dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
-                                                 competitor_exprs = competitor_exprs)
-    if (dens_r == 0) return(0.0)
-    base_val <- dens_r
-    # Include donor mass (e.g., timeout guesses) that keeps the observed RT
-    if (length(donors) > 0) {
-      donor_add <- 0.0
-      for (d in donors) {
-        if (identical(d[['rt_policy']], "na")) next
-        dens_d <- .scenario_density_with_competitors(d[['expr']], rt, prep, component,
-                                                     competitor_exprs = d[['competitors']] %||% list())
-        if (dens_d == 0) next
-        donor_add <- donor_add + d[['weight']] * dens_d
-      }
-      base_val <- base_val + donor_add
-    }
+    base_val <- base_val + donor_add
   }
   # Apply component-level keep probability to base density for observed labels
   keep_prob_rt <- 1.0
@@ -2452,6 +1985,8 @@ compute_loglik <- function(model, data) {
   }
 
   prep <- .prepare_model_for_likelihood(model)
+  # Sanity check: ensure expressions are mapped to compiled node IDs
+  .diagnose_registry_mapping(prep)
 
   comp_info <- prep[["components"]]
   comp_ids <- comp_info[['ids']] %||% list()
@@ -2498,6 +2033,7 @@ compute_loglik <- function(model, data) {
     if (!is.null(cached_val)) {
       lik <- cached_val
     } else {
+      ctx <- make_eval_ctx(prep)
       if (is_mixture) {
         if (identical(component_key, "__mixture__")) {
           base_weights <- if (length(comp_ids) > 0 && length(weights) == length(comp_ids)) {
@@ -2510,14 +2046,14 @@ compute_loglik <- function(model, data) {
           lik <- 0.0
           if (length(comp_ids) > 0) {
             for (j in seq_along(comp_ids)) {
-              lik <- lik + base_weights[[j]] * .outcome_likelihood(outcome, rt_val, prep, comp_ids[[j]])
+              lik <- lik + base_weights[[j]] * .outcome_likelihood(outcome, rt_val, prep, comp_ids[[j]], ctx = ctx)
             }
           }
         } else {
-          lik <- .outcome_likelihood(outcome, rt_val, prep, component_key)
+          lik <- .outcome_likelihood(outcome, rt_val, prep, component_key, ctx = ctx)
         }
       } else {
-        lik <- .outcome_likelihood(outcome, rt_val, prep, component_key)
+        lik <- .outcome_likelihood(outcome, rt_val, prep, component_key, ctx = ctx)
       }
 
       cache_env[[key]] <- lik
@@ -2562,24 +2098,15 @@ response_probability <- function(model, outcome_label, component = NULL) {
 
   # Helper for a single component
   .prob_for_component <- function(comp_id) {
-    # Shared-gate pair fast-path (can be disabled globally)
-    use_fastpath <- getOption("uuber.shared_gate_fastpath", default = TRUE)
-    if (isTRUE(use_fastpath)) {
-      pair <- .find_shared_gate_pair(prep[["outcomes"]])
-      if (!is.null(pair) && outcome_label %in% c(pair[['label_x']], pair[['label_y']])) {
-        vals <- .shared_gate_pair_probs(prep, comp_id, pair)
-        if (identical(outcome_label, pair[['label_x']])) return(vals[[1]]) else return(vals[[2]])
-      }
-    }
     # Alias-of outcomes: sum of referenced labels
     out_def <- prep[["outcomes"]][[outcome_label]]
     if (!is.null(out_def[['options']][['alias_of']])) {
       refs <- out_def[['options']][['alias_of']]
       refs <- as.character(refs)
-      vals <- vapply(refs, function(lbl) as.numeric(.outcome_likelihood(lbl, NA_real_, prep, comp_id)), numeric(1))
+      vals <- vapply(refs, function(lbl) as.numeric(.outcome_likelihood(lbl, NA_real_, prep, comp_id, ctx = make_eval_ctx(prep))), numeric(1))
       return(sum(vals))
     }
-    base <- as.numeric(.outcome_likelihood(outcome_label, NA_real_, prep, comp_id))
+    base <- as.numeric(.outcome_likelihood(outcome_label, NA_real_, prep, comp_id, ctx = make_eval_ctx(prep)))
     # Apply component-level keep for non-special labels (complement goes to GUESS)
     if (!identical(outcome_label, "GUESS")) {
       gp <- .get_component_attr(prep, comp_id, "guess")
@@ -2680,4 +2207,102 @@ observed_response_probabilities <- function(model, component = NULL, include_na 
     }
   }
   obs
+}
+.expr_scenarios_at <- function(expr, t, prep, component,
+                               forced_complete = integer(0),
+                               forced_survive = integer(0),
+                               ctx = NULL) {
+  registry <- prep[[".expr_registry"]]
+  if (!is.null(registry)) {
+    expr_id <- .expr_registry_lookup_id(registry, expr)
+    if (!is.na(expr_id)) {
+      if (!is.null(ctx)) {
+        key <- .ctx_key("scId", expr_id, component, t, forced_complete, forced_survive)
+        cached <- ctx$scenario_memo[[key]]
+        if (!is.null(cached)) return(cached)
+      }
+      scen_fns <- registry[["scenario_fns"]]
+      if (!is.null(scen_fns) && length(scen_fns) >= expr_id) {
+        fn <- scen_fns[[expr_id]]
+        if (is.function(fn)) {
+          res <- fn(
+            t = t,
+            component = component,
+            ctx = ctx,
+            forced_complete = forced_complete,
+            forced_survive = forced_survive
+          )
+          if (!is.null(ctx)) ctx$scenario_memo[[.ctx_key("scId", expr_id, component, t, forced_complete, forced_survive)]] <- res
+          return(res)
+        }
+      }
+    }
+  }
+  list()
+}
+
+.eval_expr_cdf_cond <- function(expr, t, prep, component,
+                                forced_complete = integer(0),
+                                forced_survive = integer(0),
+                                ctx = NULL) {
+  registry <- prep[[".expr_registry"]]
+  if (!is.null(registry)) {
+    expr_id <- .expr_registry_lookup_id(registry, expr)
+    if (!is.na(expr_id)) {
+      if (!is.null(ctx)) {
+        key <- .ctx_key("cdfId", expr_id, component, t, forced_complete, forced_survive)
+        cached <- ctx$cdf_cond_memo[[key]]
+        if (!is.null(cached)) return(cached)
+      }
+      cdf_fns <- registry[["cdf_cond_fns"]]
+      if (!is.null(cdf_fns) && length(cdf_fns) >= expr_id) {
+        fn <- cdf_fns[[expr_id]]
+        if (is.function(fn)) {
+          val <- fn(
+            t = t,
+            component = component,
+            ctx = ctx,
+            forced_complete = forced_complete,
+            forced_survive = forced_survive
+          )
+          if (!is.null(ctx)) ctx$cdf_cond_memo[[.ctx_key("cdfId", expr_id, component, t, forced_complete, forced_survive)]] <- val
+          return(val)
+        }
+      }
+    }
+  }
+  0.0
+}
+
+.eval_expr_survival_cond <- function(expr, t, prep, component,
+                                     forced_complete = integer(0),
+                                     forced_survive = integer(0),
+                                     ctx = NULL) {
+  registry <- prep[[".expr_registry"]]
+  if (!is.null(registry)) {
+    expr_id <- .expr_registry_lookup_id(registry, expr)
+    if (!is.na(expr_id)) {
+      if (!is.null(ctx)) {
+        key <- .ctx_key("survId", expr_id, component, t, forced_complete, forced_survive)
+        cached <- ctx$surv_cond_memo[[key]]
+        if (!is.null(cached)) return(cached)
+      }
+      surv_fns <- registry[["survival_cond_fns"]]
+      if (!is.null(surv_fns) && length(surv_fns) >= expr_id) {
+        fn <- surv_fns[[expr_id]]
+        if (is.function(fn)) {
+          val <- fn(
+            t = t,
+            component = component,
+            ctx = ctx,
+            forced_complete = forced_complete,
+            forced_survive = forced_survive
+          )
+          if (!is.null(ctx)) ctx$surv_cond_memo[[.ctx_key("survId", expr_id, component, t, forced_complete, forced_survive)]] <- val
+          return(val)
+        }
+      }
+    }
+  }
+  1.0
 }

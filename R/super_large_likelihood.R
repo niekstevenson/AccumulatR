@@ -5,6 +5,7 @@ source("R/dist.R")
 source("R/utils.R")
 source("R/pool_math.R")
 source("R/model_tables.R")
+source("R/likelihood_cache.R")
 
 `%||%` <- function(lhs, rhs) if (is.null(lhs) || length(lhs) == 0) rhs else lhs
 
@@ -105,36 +106,26 @@ source("R/model_tables.R")
   )
 }
 
-.likelihood_cache_env <- function(cache = NULL) {
+.prep_runtime_get <- function(prep, key, default = NULL) {
+  runtime <- prep[[".runtime"]]
+  if (is.null(runtime)) return(default)
+  val <- runtime[[key]]
+  if (is.null(val)) default else val
+}
+
+.prep_likelihood_cache <- function(prep) {
+  cache <- .prep_runtime_get(prep, "cache")
   if (is.environment(cache)) return(cache)
-  new.env(parent = emptyenv(), hash = TRUE)
+  cache <- prep[[".lik_cache"]]
+  if (is.environment(cache)) return(cache)
+  lik_cache_create()
 }
 
-.forced_key <- function(ids) {
-  if (length(ids) == 0L) return(".")
-  paste(as.integer(ids), collapse = ",")
-}
-
-.likelihood_cache_key <- function(prefix, expr_id, component, t,
-                                  forced_complete, forced_survive) {
-  if (is.null(expr_id) || is.na(expr_id)) return(NULL)
-  comp_key <- component %||% "__default__"
-  t_key <- .time_key(t)[[1]]
-  fc_key <- .forced_key(forced_complete)
-  fs_key <- .forced_key(forced_survive)
-  paste(prefix, expr_id, comp_key, t_key, fc_key, fs_key, sep = "|")
-}
-
-.cache_lookup <- function(cache, key) {
-  if (is.null(cache) || is.null(key) || !is.environment(cache)) return(NULL)
-  cache[[key]]
-}
-
-.cache_store <- function(cache, key, value) {
-  if (is.null(cache) || is.null(key) || !is.environment(cache)) return(value)
-  cache[[key]] <- value
-  value
-}
+.prep_expr_compiled <- function(prep) .prep_runtime_get(prep, "expr_compiled")
+.prep_label_cache <- function(prep) .prep_runtime_get(prep, "label_cache")
+.prep_competitors <- function(prep) .prep_runtime_get(prep, "competitor_map")
+.prep_id_index <- function(prep) .prep_runtime_get(prep, "id_index")
+.prep_id_labels <- function(prep) .prep_runtime_get(prep, "id_labels")
 
 # ==============================================================================
 # PART 1: Model Preparation
@@ -165,6 +156,17 @@ source("R/model_tables.R")
   prep[[".label_cache"]] <- new.env(parent = emptyenv(), hash = TRUE)
   prep <- .precompile_likelihood_expressions(prep)
   prep[[".competitors"]] <- .prepare_competitor_map(prep)
+  lik_cache <- lik_cache_create()
+  runtime <- list(
+    cache = lik_cache,
+    expr_compiled = prep[[".expr_compiled"]],
+    label_cache = prep[[".label_cache"]],
+    competitor_map = prep[[".competitors"]],
+    id_index = prep[[".id_index"]],
+    id_labels = prep[[".id_labels"]]
+  )
+  prep[[".lik_cache"]] <- lik_cache
+  prep[[".runtime"]] <- runtime
   prep
 }
 
@@ -240,7 +242,7 @@ source("R/model_tables.R")
 }
 
 .expr_lookup_compiled <- function(expr, prep) {
-  comp <- prep[[".expr_compiled"]]
+  comp <- .prep_expr_compiled(prep)
   if (is.null(comp)) return(NULL)
   node_id <- attr(expr, ".lik_id", exact = TRUE)
   if (is.null(node_id) || is.na(node_id)) {
@@ -527,7 +529,7 @@ source("R/model_tables.R")
     if (!is.finite(t)) return(1.0)
     forced_complete <- .coerce_forced_ids(prep, forced_complete)
     forced_survive <- .coerce_forced_ids(prep, forced_survive)
-    local_cache <- .likelihood_cache_env()
+    local_cache <- lik_cache_create()
     dens_fun <- function(u) {
       vapply(u, function(ui) {
         if (!is.finite(ui) || ui < 0) return(0.0)
@@ -570,7 +572,7 @@ source("R/model_tables.R")
 
 .label_to_id <- function(prep, label) {
   if (is.null(label) || length(label) == 0L) return(NA_integer_)
-  idx_map <- prep[[".id_index"]]
+  idx_map <- .prep_id_index(prep)
   if (is.null(idx_map)) return(NA_integer_)
   val <- idx_map[[as.character(label)]]
   if (is.null(val) || is.na(val)) return(NA_integer_)
@@ -579,11 +581,11 @@ source("R/model_tables.R")
 
 .labels_to_ids <- function(prep, labels) {
   if (is.null(labels) || length(labels) == 0L) return(integer(0))
-  idx_map <- prep[[".id_index"]]
+  idx_map <- .prep_id_index(prep)
   if (is.null(idx_map)) return(integer(0))
   chr <- as.character(labels)
   if (length(chr) == 0L) return(integer(0))
-  cache_env <- prep[[".label_cache"]]
+  cache_env <- .prep_label_cache(prep)
   cache_key <- NULL
   if (!is.null(cache_env)) {
     cache_key <- paste(chr, collapse = "\r")
@@ -603,7 +605,7 @@ source("R/model_tables.R")
 
 .ids_to_labels <- function(prep, ids) {
   if (is.null(ids) || length(ids) == 0L) return(character(0))
-  labels <- prep[[".id_labels"]]
+  labels <- .prep_id_labels(prep)
   if (is.null(labels) || length(labels) == 0L) return(character(0))
   ids <- as.integer(ids)
   out <- labels[ids]
@@ -1246,11 +1248,12 @@ source("R/model_tables.R")
                                cache = NULL) {
   forced_complete <- .coerce_forced_ids(prep, forced_complete)
   forced_survive <- .coerce_forced_ids(prep, forced_survive)
+  cache <- lik_cache_resolve(cache, prep)
   compiled <- .expr_lookup_compiled(expr, prep)
   node_id <- if (!is.null(compiled)) compiled$id else attr(expr, ".lik_id", exact = TRUE)
-  cache_key <- .likelihood_cache_key("scen", node_id, component, t,
-                                     forced_complete, forced_survive)
-  cached <- .cache_lookup(cache, cache_key)
+  cache_key <- lik_cache_key("scen", node_id, component, t,
+                             forced_complete, forced_survive)
+  cached <- lik_cache_get(cache, cache_key)
   if (!is.null(cached)) return(cached)
   if (!is.null(compiled) && is.function(compiled$scenario_fn)) {
     res <- compiled$scenario_fn(t, component, forced_complete, forced_survive)
@@ -1262,7 +1265,7 @@ source("R/model_tables.R")
       cache = cache
     )
   }
-  if (!is.null(cache_key)) .cache_store(cache, cache_key, res) else res
+  if (!is.null(cache_key)) lik_cache_set(cache, cache_key, res) else res
 }
 
 .expr_scenarios_at_slow <- function(expr, t, prep, component,
@@ -1454,11 +1457,12 @@ source("R/model_tables.R")
   if (is.null(expr) || is.null(expr[["kind"]])) return(0.0)
   forced_complete <- .coerce_forced_ids(prep, forced_complete)
   forced_survive <- .coerce_forced_ids(prep, forced_survive)
+  cache <- lik_cache_resolve(cache, prep)
   compiled <- .expr_lookup_compiled(expr, prep)
   node_id <- if (!is.null(compiled)) compiled$id else attr(expr, ".lik_id", exact = TRUE)
-  cache_key <- .likelihood_cache_key("cdf", node_id, component, t,
-                                     forced_complete, forced_survive)
-  cached <- .cache_lookup(cache, cache_key)
+  cache_key <- lik_cache_key("cdf", node_id, component, t,
+                             forced_complete, forced_survive)
+  cached <- lik_cache_get(cache, cache_key)
   if (!is.null(cached)) return(cached)
   res <- if (!is.null(compiled) && is.function(compiled$cdf_fn)) {
     compiled$cdf_fn(t, component, forced_complete, forced_survive)
@@ -1470,7 +1474,7 @@ source("R/model_tables.R")
       cache = cache
     )
   }
-  if (!is.null(cache_key)) .cache_store(cache, cache_key, res) else res
+  if (!is.null(cache_key)) lik_cache_set(cache, cache_key, res) else res
 }
 
 .eval_expr_cdf_cond_slow <- function(expr, t, prep, component,
@@ -1546,11 +1550,12 @@ source("R/model_tables.R")
   if (is.null(expr) || is.null(expr[["kind"]])) return(1.0)
   forced_complete <- .coerce_forced_ids(prep, forced_complete)
   forced_survive <- .coerce_forced_ids(prep, forced_survive)
+  cache <- lik_cache_resolve(cache, prep)
   compiled <- .expr_lookup_compiled(expr, prep)
   node_id <- if (!is.null(compiled)) compiled$id else attr(expr, ".lik_id", exact = TRUE)
-  cache_key <- .likelihood_cache_key("surv", node_id, component, t,
-                                     forced_complete, forced_survive)
-  cached <- .cache_lookup(cache, cache_key)
+  cache_key <- lik_cache_key("surv", node_id, component, t,
+                             forced_complete, forced_survive)
+  cached <- lik_cache_get(cache, cache_key)
   if (!is.null(cached)) return(cached)
   res <- if (!is.null(compiled) && is.function(compiled$surv_fn)) {
     compiled$surv_fn(t, component, forced_complete, forced_survive)
@@ -1562,7 +1567,7 @@ source("R/model_tables.R")
       cache = cache
     )
   }
-  if (!is.null(cache_key)) .cache_store(cache, cache_key, res) else res
+  if (!is.null(cache_key)) lik_cache_set(cache, cache_key, res) else res
 }
 
 .eval_expr_survival_cond_slow <- function(expr, t, prep, component,
@@ -1784,7 +1789,7 @@ source("R/model_tables.R")
     attr(val, "scenarios") <- list()
     return(val)
   }
-  cache <- .likelihood_cache_env(cache)
+  cache <- lik_cache_resolve(cache, prep)
   simple_event <- function(e) {
     if (is.null(e) || is.null(e[['kind']]) || !identical(e[['kind']], "event")) return(FALSE)
     src <- e[['source']]
@@ -2379,7 +2384,7 @@ source("R/model_tables.R")
 # Integrand for scenario-conditioned probability (density already encodes competitors)
 .integrand_outcome_density <- function(t, expr, prep, component, competitor_exprs,
                                        cache = NULL) {
-  cache <- .likelihood_cache_env(cache)
+  cache <- lik_cache_resolve(cache, prep)
   vapply(t, function(tt) {
     if (!is.finite(tt) || tt < 0) return(0.0)
     .scenario_density_with_competitors(expr, tt, prep, component,
@@ -2394,7 +2399,7 @@ source("R/model_tables.R")
                                            competitor_exprs = NULL,
                                            cache = NULL) {
   if (!is.finite(upper_limit)) upper_limit <- Inf
-  cache <- .likelihood_cache_env(cache)
+  cache <- lik_cache_resolve(cache, prep)
   integrand <- function(t) {
     val <- .integrand_outcome_density(
       t,
@@ -2751,7 +2756,8 @@ source("R/model_tables.R")
 # Compute likelihood for a single trial/outcome
 .outcome_likelihood <- function(outcome_label, rt, prep, component) {
   outcome_defs <- prep[["outcomes"]]
-  cache <- .likelihood_cache_env()
+  competitor_map <- .prep_competitors(prep) %||% list()
+  cache <- lik_cache_resolve(NULL, prep)
   
   # FIRST: Check for GUESS outcomes (can be both defined and from guess policy)
   # GUESS outcomes arise from component-level guess policies
@@ -2779,7 +2785,7 @@ source("R/model_tables.R")
           for (label in names(guess_weights)) {
             if (!label %in% names(outcome_defs)) next
             expr <- outcome_defs[[label]][['expr']]
-            comp_exprs_guess <- prep[['.competitors']][[label]] %||% list()
+            comp_exprs_guess <- competitor_map[[label]] %||% list()
             prob_outcome <- .integrate_outcome_probability(expr, prep, component, deadline,
                                                            competitor_exprs = comp_exprs_guess,
                                                            cache = cache)
@@ -2793,7 +2799,7 @@ source("R/model_tables.R")
           for (label in names(guess_weights)) {
             if (!label %in% names(outcome_defs)) next
             expr <- outcome_defs[[label]][['expr']]
-            comp_exprs_guess <- prep[['.competitors']][[label]] %||% list()
+            comp_exprs_guess <- competitor_map[[label]] %||% list()
             dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
                                                          competitor_exprs = comp_exprs_guess,
                                                          cache = cache)
@@ -2909,7 +2915,7 @@ source("R/model_tables.R")
     return(0.0)
   }
   
-  competitor_exprs <- prep[['.competitors']][[outcome_label]] %||% list()
+  competitor_exprs <- competitor_map[[outcome_label]] %||% list()
   
   # Build donor (guess) contributions: outcomes that guess into this label
   donors <- list()
@@ -2927,7 +2933,7 @@ source("R/model_tables.R")
       expr = outcome_defs[[dlbl]][['expr']],
       weight = w,
       rt_policy = rt_policy,
-      competitors = prep[['.competitors']][[dlbl]] %||% list()
+      competitors = competitor_map[[dlbl]] %||% list()
     )
   }
   

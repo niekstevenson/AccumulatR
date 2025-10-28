@@ -88,12 +88,27 @@
   node <- list(
     kind = kind,
     sources = .expr_sources(expr, prep),
-    expr = expr
+    expr = expr,
+    needs_forced = FALSE,
+    scenario_sensitive = FALSE,
+    density_fast_fn = NULL,
+    surv_fast_fn = NULL,
+    cdf_fast_fn = NULL
   )
   if (identical(kind, "event")) {
     node$cdf_fn <- .compile_once(.make_event_cdf_fn(expr, prep))
     node$surv_fn <- .compile_once(.make_event_survival_fn(expr, prep))
+    node$density_fn <- .compile_once(.make_event_density_fn(expr, prep))
     node$scenario_fn <- .compile_once(.make_event_scenario_fn(expr, prep))
+    node$needs_forced <- TRUE
+    source_id <- expr[["source"]]
+    node$scenario_sensitive <- !is.null(prep[["pools"]][[source_id]])
+    fast_cdf <- .make_event_cdf_fast_fn(expr, prep)
+    fast_surv <- .make_event_survival_fast_fn(expr, prep)
+    fast_dens <- .make_event_density_fast_fn(expr, prep)
+    node$cdf_fast_fn <- if (is.function(fast_cdf)) .compile_once(fast_cdf) else NULL
+    node$surv_fast_fn <- if (is.function(fast_surv)) .compile_once(fast_surv) else NULL
+    node$density_fast_fn <- if (is.function(fast_dens)) .compile_once(fast_dens) else NULL
     return(node)
   }
   if (kind %in% c("and", "or")) {
@@ -109,21 +124,39 @@
     if (any(vapply(child_nodes, is.null, logical(1)))) {
       node$cdf_fn <- NULL
       node$surv_fn <- NULL
+      node$density_fn <- NULL
       node$scenario_fn <- NULL
       return(node)
     }
+    node$needs_forced <- any(vapply(child_nodes, function(n) isTRUE(n$needs_forced), logical(1)))
+    node$scenario_sensitive <- any(vapply(child_nodes, function(n) isTRUE(n$scenario_sensitive), logical(1)))
     if (identical(kind, "and")) {
       have_child_cdf <- all(vapply(child_nodes, function(n) is.function(n$cdf_fn), logical(1)))
       have_child_scen <- all(vapply(child_nodes, function(n) is.function(n$scenario_fn), logical(1)))
+      have_child_density <- all(vapply(child_nodes, function(n) is.function(n$density_fn), logical(1)))
       node$cdf_fn <- if (have_child_cdf) .compile_once(.make_and_cdf_fn(child_nodes, prep)) else NULL
       node$surv_fn <- if (is.function(node$cdf_fn)) .compile_once(.make_and_survival_fn(node$cdf_fn)) else NULL
+      node$density_fn <- if (have_child_density && have_child_cdf) .compile_once(.make_and_density_fn(child_nodes, prep)) else NULL
       node$scenario_fn <- if (have_child_cdf && have_child_scen) .compile_once(.make_and_scenario_fn(child_nodes, prep)) else NULL
+      if (!node$scenario_sensitive) {
+        raw_cdf_fast <- .make_and_cdf_fast_fn(child_nodes, prep)
+        node$cdf_fast_fn <- .compile_once(raw_cdf_fast)
+        node$surv_fast_fn <- if (is.function(node$cdf_fast_fn)) .compile_once(.make_and_survival_fast_fn(node$cdf_fast_fn)) else NULL
+        node$density_fast_fn <- .compile_once(.make_and_density_fast_fn(child_nodes, prep))
+      }
     } else {
       have_child_surv <- all(vapply(child_nodes, function(n) is.function(n$surv_fn), logical(1)))
       have_child_scen <- all(vapply(child_nodes, function(n) is.function(n$scenario_fn), logical(1)))
+      have_child_density <- all(vapply(child_nodes, function(n) is.function(n$density_fn), logical(1)))
       node$cdf_fn <- if (have_child_surv) .compile_once(.make_or_cdf_fn(child_nodes, prep)) else NULL
       node$surv_fn <- if (have_child_surv) .compile_once(.make_or_survival_fn(child_nodes, prep)) else NULL
+      node$density_fn <- if (have_child_density && have_child_surv) .compile_once(.make_or_density_fn(child_nodes, prep)) else NULL
       node$scenario_fn <- if (have_child_scen) .compile_once(.make_or_scenario_fn(child_nodes, prep)) else NULL
+      if (!node$scenario_sensitive) {
+        node$surv_fast_fn <- .compile_once(.make_or_survival_fast_fn(child_nodes, prep))
+        node$cdf_fast_fn <- if (is.function(node$surv_fast_fn)) .compile_once(.make_or_cdf_fast_fn(node$surv_fast_fn)) else NULL
+        node$density_fast_fn <- .compile_once(.make_or_density_fast_fn(child_nodes, prep))
+      }
     }
     return(node)
   }
@@ -135,10 +168,30 @@
     node$surv_fn <- .compile_once(.make_guard_survival_fn(expr, prep))
     guard_scen <- .make_guard_scenario_fn(expr, prep)
     node$scenario_fn <- if (is.function(guard_scen)) .compile_once(guard_scen) else NULL
+    node$density_fn <- .compile_once(.make_guard_density_fn(expr, prep))
+    node$needs_forced <- TRUE
+    node$scenario_sensitive <- TRUE
+    ref_node_compiled <- if (!is.na(node$reference_id)) nodes_env$nodes[[as.integer(node$reference_id)]] else NULL
+    block_node_compiled <- if (!is.na(node$blocker_id)) nodes_env$nodes[[as.integer(node$blocker_id)]] else NULL
+    unless_nodes_compiled <- if (length(node$unless_ids) > 0L) {
+      lapply(node$unless_ids, function(uid) nodes_env$nodes[[as.integer(uid)]])
+    } else {
+      list()
+    }
+    fast_guard <- .make_guard_fast_fns(
+      expr, prep,
+      ref_node_override = ref_node_compiled,
+      block_node_override = block_node_compiled,
+      unless_nodes_override = unless_nodes_compiled
+    )
+    node$density_fast_fn <- fast_guard$density
+    node$surv_fast_fn <- fast_guard$survival
+    node$cdf_fast_fn <- fast_guard$cdf
     return(node)
   }
   node$cdf_fn <- NULL
   node$surv_fn <- NULL
+  node$density_fn <- NULL
   node$scenario_fn <- NULL
   node
 }
@@ -162,6 +215,19 @@
     forced_complete <- .coerce_forced_ids(prep, forced_complete)
     forced_survive <- .coerce_forced_ids(prep, forced_survive)
     .event_survival_at(
+      prep, source_id, component, t,
+      forced_complete = forced_complete,
+      forced_survive = forced_survive
+    )
+  }
+}
+
+.make_event_density_fn <- function(expr, prep) {
+  source_id <- expr[["source"]]
+  function(t, component, forced_complete, forced_survive) {
+    forced_complete <- .coerce_forced_ids(prep, forced_complete)
+    forced_survive <- .coerce_forced_ids(prep, forced_survive)
+    .event_density_at(
       prep, source_id, component, t,
       forced_complete = forced_complete,
       forced_survive = forced_survive
@@ -206,6 +272,100 @@
   }
 }
 
+.make_event_component_active <- function(component, components) {
+  if (length(components) == 0L) return(TRUE)
+  if (is.null(component) || identical(component, "__default__")) return(TRUE)
+  comp_chr <- as.character(component)
+  if (length(comp_chr) == 0L) return(TRUE)
+  comp_val <- comp_chr[[1]]
+  if (!nzchar(comp_val) || is.na(comp_val)) return(TRUE)
+  comp_val %in% components
+}
+
+.make_event_density_fast_fn <- function(expr, prep) {
+  source_id <- expr[["source"]]
+  pool_def <- prep[["pools"]][[source_id]]
+  if (!is.null(pool_def)) {
+    return(function(t, component) {
+      t_vals <- as.numeric(t)
+      if (length(t_vals) == 0L) return(numeric(0))
+      vapply(t_vals, function(tt) {
+        if (!is.finite(tt) || tt < 0) return(0.0)
+        .pool_density_fast_value(prep, source_id, component, tt)
+      }, numeric(1))
+    })
+  }
+  acc_def <- prep[["accumulators"]][[source_id]]
+  if (is.null(acc_def)) return(NULL)
+  components <- acc_def[["components"]] %||% character(0)
+  function(t, component) {
+    active <- .make_event_component_active(component, components)
+    if (!active) return(rep(0.0, length(t)))
+    vapply(t, function(tt) .acc_density(acc_def, tt), numeric(1))
+  }
+}
+
+.make_event_survival_fast_fn <- function(expr, prep) {
+  source_id <- expr[["source"]]
+  pool_def <- prep[["pools"]][[source_id]]
+  if (!is.null(pool_def)) {
+    return(function(t, component) {
+      t_vals <- as.numeric(t)
+      if (length(t_vals) == 0L) return(numeric(0))
+      vapply(t_vals, function(tt) {
+        .pool_survival_fast_value(prep, source_id, component, tt)
+      }, numeric(1))
+    })
+  }
+  acc_def <- prep[["accumulators"]][[source_id]]
+  if (is.null(acc_def)) return(NULL)
+  components <- acc_def[["components"]] %||% character(0)
+  function(t, component) {
+    active <- .make_event_component_active(component, components)
+    if (!active) return(rep(1.0, length(t)))
+    vals <- vapply(t, function(tt) .acc_survival(acc_def, tt), numeric(1))
+    out <- vals
+    out[!is.finite(out)] <- 0.0
+    out[out < 0] <- 0.0
+    out[out > 1] <- 1.0
+    out
+  }
+}
+
+.make_event_cdf_fast_fn <- function(expr, prep) {
+  source_id <- expr[["source"]]
+  pool_def <- prep[["pools"]][[source_id]]
+  if (!is.null(pool_def)) {
+    surv_fast <- function(t, component) {
+      t_vals <- as.numeric(t)
+      if (length(t_vals) == 0L) return(numeric(0))
+      vapply(t_vals, function(tt) .pool_survival_fast_value(prep, source_id, component, tt), numeric(1))
+    }
+    return(function(t, component) {
+      surv_vals <- surv_fast(t, component)
+      if (length(surv_vals) == 0L) return(numeric(0))
+      out <- 1.0 - surv_vals
+      out[!is.finite(out)] <- 0.0
+      out[out < 0] <- 0.0
+      out[out > 1] <- 1.0
+      out
+    })
+  }
+  acc_def <- prep[["accumulators"]][[source_id]]
+  if (is.null(acc_def)) return(NULL)
+  components <- acc_def[["components"]] %||% character(0)
+  function(t, component) {
+    active <- .make_event_component_active(component, components)
+    if (!active) return(rep(0.0, length(t)))
+    surv_vals <- vapply(t, function(tt) .acc_survival(acc_def, tt), numeric(1))
+    out <- 1.0 - surv_vals
+    out[!is.finite(out)] <- 0.0
+    out[out < 0] <- 0.0
+    out[out > 1] <- 1.0
+    out
+  }
+}
+
 .make_and_cdf_fn <- function(child_nodes, prep) {
   child_cdf <- lapply(child_nodes, `[[`, "cdf_fn")
   function(t, component, forced_complete, forced_survive) {
@@ -230,6 +390,65 @@
     if (out < 0) out <- 0.0
     if (out > 1) out <- 1.0
     out
+  }
+}
+
+.make_and_cdf_fast_fn <- function(child_nodes, prep) {
+  child_cdf <- lapply(child_nodes, `[[`, "cdf_fast_fn")
+  if (!all(vapply(child_cdf, is.function, logical(1)))) return(NULL)
+  function(t, component) {
+    vapply(t, function(tt) {
+      prod_val <- 1.0
+      for (fn in child_cdf) {
+        val_vec <- fn(tt, component)
+        val <- if (length(val_vec) > 0L) val_vec[[1]] else 0.0
+        prod_val <- prod_val * val
+        if (!is.finite(prod_val) || prod_val == 0) break
+      }
+      prod_val
+    }, numeric(1))
+  }
+}
+
+.make_and_survival_fast_fn <- function(cdf_fast_fn) {
+  if (!is.function(cdf_fast_fn)) return(NULL)
+  function(t, component) {
+    vals <- cdf_fast_fn(t, component)
+    out <- 1.0 - vals
+    out[!is.finite(out)] <- 0.0
+    out[out < 0] <- 0.0
+    out[out > 1] <- 1.0
+    out
+  }
+}
+
+.make_and_density_fast_fn <- function(child_nodes, prep) {
+  child_density <- lapply(child_nodes, `[[`, "density_fast_fn")
+  child_cdf <- lapply(child_nodes, `[[`, "cdf_fast_fn")
+  if (!all(vapply(child_density, is.function, logical(1)))) return(NULL)
+  if (!all(vapply(child_cdf, is.function, logical(1)))) return(NULL)
+  function(t, component) {
+    vapply(t, function(tt) {
+      total <- 0.0
+      n <- length(child_density)
+      for (i in seq_len(n)) {
+        dens_vec <- child_density[[i]](tt, component)
+        dens_i <- if (length(dens_vec) > 0L) dens_vec[[1]] else 0.0
+        if (!is.finite(dens_i) || dens_i <= 0) next
+        prod_cdf <- 1.0
+        for (j in seq_len(n)) {
+          if (i == j) next
+          Fj_vec <- child_cdf[[j]](tt, component)
+          Fj <- if (length(Fj_vec) > 0L) Fj_vec[[1]] else 0.0
+          prod_cdf <- prod_cdf * Fj
+          if (!is.finite(prod_cdf) || prod_cdf == 0) break
+        }
+        if (!is.finite(prod_cdf) || prod_cdf == 0) next
+        total <- total + dens_i * prod_cdf
+      }
+      if (!is.finite(total) || total < 0) total <- 0.0
+      total
+    }, numeric(1))
   }
 }
 
@@ -258,6 +477,125 @@
     if (out < 0) out <- 0.0
     if (out > 1) out <- 1.0
     out
+  }
+}
+
+.make_and_density_fn <- function(child_nodes, prep) {
+  child_density <- lapply(child_nodes, `[[`, "density_fn")
+  child_cdf <- lapply(child_nodes, `[[`, "cdf_fn")
+  if (!all(vapply(child_density, is.function, logical(1))) ||
+      !all(vapply(child_cdf, is.function, logical(1)))) {
+    return(NULL)
+  }
+  function(t, component, forced_complete, forced_survive) {
+    forced_complete <- .coerce_forced_ids(prep, forced_complete)
+    forced_survive <- .coerce_forced_ids(prep, forced_survive)
+    total <- 0.0
+    n <- length(child_density)
+    for (i in seq_len(n)) {
+      dens_i <- child_density[[i]](t, component, forced_complete, forced_survive)
+      if (!is.finite(dens_i) || dens_i <= 0) next
+      prod_cdf <- 1.0
+      for (j in seq_len(n)) {
+        if (i == j) next
+        Fj <- child_cdf[[j]](t, component, forced_complete, forced_survive)
+        prod_cdf <- prod_cdf * Fj
+        if (!is.finite(prod_cdf) || prod_cdf == 0) break
+      }
+      if (!is.finite(prod_cdf) || prod_cdf == 0) next
+      total <- total + dens_i * prod_cdf
+    }
+    if (!is.finite(total) || total < 0) total <- 0.0
+    total
+  }
+}
+
+.make_or_density_fn <- function(child_nodes, prep) {
+  child_density <- lapply(child_nodes, `[[`, "density_fn")
+  child_surv <- lapply(child_nodes, `[[`, "surv_fn")
+  if (!all(vapply(child_density, is.function, logical(1))) ||
+      !all(vapply(child_surv, is.function, logical(1)))) {
+    return(NULL)
+  }
+  function(t, component, forced_complete, forced_survive) {
+    forced_complete <- .coerce_forced_ids(prep, forced_complete)
+    forced_survive <- .coerce_forced_ids(prep, forced_survive)
+    total <- 0.0
+    n <- length(child_density)
+    for (i in seq_len(n)) {
+      dens_i <- child_density[[i]](t, component, forced_complete, forced_survive)
+      if (!is.finite(dens_i) || dens_i <= 0) next
+      prod_surv <- 1.0
+      for (j in seq_len(n)) {
+        if (i == j) next
+        Sj <- child_surv[[j]](t, component, forced_complete, forced_survive)
+        prod_surv <- prod_surv * Sj
+        if (!is.finite(prod_surv) || prod_surv == 0) break
+      }
+      if (!is.finite(prod_surv) || prod_surv == 0) next
+      total <- total + dens_i * prod_surv
+    }
+    if (!is.finite(total) || total < 0) total <- 0.0
+    total
+  }
+}
+
+.make_or_survival_fast_fn <- function(child_nodes, prep) {
+  child_surv <- lapply(child_nodes, `[[`, "surv_fast_fn")
+  if (!all(vapply(child_surv, is.function, logical(1)))) return(NULL)
+  function(t, component) {
+    vapply(t, function(tt) {
+      prod_val <- 1.0
+      for (fn in child_surv) {
+        val_vec <- fn(tt, component)
+        val <- if (length(val_vec) > 0L) val_vec[[1]] else 1.0
+        prod_val <- prod_val * val
+        if (!is.finite(prod_val) || prod_val == 0) break
+      }
+      prod_val
+    }, numeric(1))
+  }
+}
+
+.make_or_cdf_fast_fn <- function(surv_fast_fn) {
+  if (!is.function(surv_fast_fn)) return(NULL)
+  function(t, component) {
+    surv_vals <- surv_fast_fn(t, component)
+    out <- 1.0 - surv_vals
+    out[!is.finite(out)] <- 0.0
+    out[out < 0] <- 0.0
+    out[out > 1] <- 1.0
+    out
+  }
+}
+
+.make_or_density_fast_fn <- function(child_nodes, prep) {
+  child_density <- lapply(child_nodes, `[[`, "density_fast_fn")
+  child_surv <- lapply(child_nodes, `[[`, "surv_fast_fn")
+  if (!all(vapply(child_density, is.function, logical(1)))) return(NULL)
+  if (!all(vapply(child_surv, is.function, logical(1)))) return(NULL)
+  function(t, component) {
+    vapply(t, function(tt) {
+      total <- 0.0
+      n <- length(child_density)
+      for (i in seq_len(n)) {
+        dens_vec <- child_density[[i]](tt, component)
+        dens_i <- if (length(dens_vec) > 0L) dens_vec[[1]] else 0.0
+        if (!is.finite(dens_i) || dens_i <= 0) next
+        prod_surv <- 1.0
+        for (j in seq_len(n)) {
+          if (i == j) next
+          Sj_vec <- child_surv[[j]](tt, component)
+          Sj <- if (length(Sj_vec) > 0L) Sj_vec[[1]] else 1.0
+          prod_surv <- prod_surv * Sj
+          if (!is.finite(prod_surv) || prod_surv == 0) break
+        }
+        if (!is.finite(prod_surv) || prod_surv == 0) next
+        total <- total + dens_i * prod_surv
+      }
+      if (!is.finite(total) || total < 0) total <- 0.0
+      total
+    }, numeric(1))
   }
 }
 
@@ -398,6 +736,113 @@
     if (!is.finite(out)) out <- 0.0
     max(0.0, min(1.0, out))
   }
+}
+
+.make_guard_density_fn <- function(expr, prep) {
+  local_cache <- lik_cache_create()
+  function(t, component, forced_complete, forced_survive) {
+    forced_complete <- .coerce_forced_ids(prep, forced_complete)
+    forced_survive <- .coerce_forced_ids(prep, forced_survive)
+    val <- .guard_density_at(
+      expr, t, prep, component,
+      forced_complete = forced_complete,
+      forced_survive = forced_survive,
+      cache = local_cache
+    )
+    as.numeric(val)
+  }
+}
+
+.make_guard_fast_fns <- function(expr, prep,
+                                 ref_node_override = NULL,
+                                 block_node_override = NULL,
+                                 unless_nodes_override = NULL) {
+  reference <- expr[["reference"]]
+  blocker <- expr[["blocker"]]
+  unless_list <- expr[["unless"]] %||% list()
+  ref_node <- ref_node_override %||% .expr_lookup_compiled(reference, prep)
+  block_node <- if (!is.null(blocker)) {
+    block_node_override %||% .expr_lookup_compiled(blocker, prep)
+  } else {
+    NULL
+  }
+  unless_nodes <- if (!is.null(unless_nodes_override)) {
+    unless_nodes_override
+  } else {
+    lapply(unless_list, function(unl) .expr_lookup_compiled(unl, prep))
+  }
+  if (is.null(ref_node) || !is.function(ref_node$density_fast_fn)) {
+    return(list(density = NULL, survival = NULL, cdf = NULL))
+  }
+  ref_density_fast <- ref_node$density_fast_fn
+  block_surv_fast <- if (!is.null(block_node)) block_node$surv_fast_fn else NULL
+  block_surv <- if (!is.null(block_node)) block_node$surv_fn else NULL
+  unless_surv_fast <- lapply(unless_nodes, `[[`, "surv_fast_fn")
+  if (length(unless_list) > 0 && any(vapply(unless_surv_fast, Negate(is.function), logical(1)))) {
+    return(list(density = NULL, survival = NULL, cdf = NULL))
+  }
+  density_fast <- function(t, component) {
+    t_vals <- as.numeric(t)
+    if (length(t_vals) == 0L) return(numeric(0))
+    vapply(t_vals, function(tt) {
+      if (!is.finite(tt) || tt < 0) return(0.0)
+      dens_ref_vec <- ref_density_fast(tt, component)
+      dens_ref <- if (length(dens_ref_vec) == 0L) 0.0 else dens_ref_vec[[1]]
+      if (!is.finite(dens_ref) || dens_ref <= 0) return(0.0)
+      surv_block <- if (is.function(block_surv_fast)) {
+        surv_vec <- block_surv_fast(tt, component)
+        if (length(surv_vec) == 0L) 1.0 else surv_vec[[1]]
+      } else if (is.function(block_surv)) {
+        block_surv(tt, component, integer(0), integer(0))
+      } else {
+        1.0
+      }
+      if (!is.finite(surv_block) || surv_block <= 0) return(0.0)
+      unless_prod <- 1.0
+      if (length(unless_list) > 0) {
+        for (idx in seq_along(unless_list)) {
+          surv_vec <- unless_surv_fast[[idx]](tt, component)
+          val <- if (length(surv_vec) == 0L) 1.0 else surv_vec[[1]]
+          unless_prod <- unless_prod * val
+          if (!is.finite(unless_prod) || unless_prod <= 0) return(0.0)
+        }
+      }
+      total <- dens_ref * surv_block * unless_prod
+      if (!is.finite(total) || total <= 0) return(0.0)
+      total
+    }, numeric(1))
+  }
+  cdf_fast <- function(t, component) {
+    t_vals <- as.numeric(t)
+    if (length(t_vals) == 0L) return(numeric(0))
+    vapply(t_vals, function(tt) {
+      if (tt <= 0) return(0.0)
+      if (!is.finite(tt)) return(1.0)
+      tryCatch({
+        val <- stats::integrate(
+          function(u) density_fast(u, component),
+          lower = 0,
+          upper = tt,
+          rel.tol = .integrate_rel_tol(),
+          abs.tol = .integrate_abs_tol(),
+          stop.on.error = FALSE
+        )[["value"]]
+        out <- as.numeric(val)
+        if (!is.finite(out)) out <- 0.0
+        max(0.0, min(1.0, out))
+      }, error = function(e) 0.0)
+    }, numeric(1))
+  }
+  survival_fast <- function(t, component) {
+    vals <- cdf_fast(t, component)
+    if (length(vals) == 0L) return(vals)
+    out <- 1.0 - vals
+    out[!is.finite(out)] <- 0.0
+    out[out < 0] <- 0.0
+    out[out > 1] <- 1.0
+    out
+  }
+  list(density = density_fast, survival = survival_fast, cdf = cdf_fast)
 }
 
 .guard_effective_survival <- function(guard_expr, t, prep, component,
@@ -1186,7 +1631,12 @@
                              forced_complete, forced_survive)
   cached <- lik_cache_get(cache, cache_key)
   if (!is.null(cached)) return(cached)
-  res <- if (!is.null(compiled) && is.function(compiled$cdf_fn)) {
+  res <- if (!is.null(compiled) &&
+             length(forced_complete) == 0L &&
+             length(forced_survive) == 0L &&
+             is.function(compiled$cdf_fast_fn)) {
+    compiled$cdf_fast_fn(t, component)
+  } else if (!is.null(compiled) && is.function(compiled$cdf_fn)) {
     compiled$cdf_fn(t, component, forced_complete, forced_survive)
   } else {
     .eval_expr_cdf_cond_slow(
@@ -1279,7 +1729,12 @@
                              forced_complete, forced_survive)
   cached <- lik_cache_get(cache, cache_key)
   if (!is.null(cached)) return(cached)
-  res <- if (!is.null(compiled) && is.function(compiled$surv_fn)) {
+  res <- if (!is.null(compiled) &&
+             length(forced_complete) == 0L &&
+             length(forced_survive) == 0L &&
+             is.function(compiled$surv_fast_fn)) {
+    compiled$surv_fast_fn(t, component)
+  } else if (!is.null(compiled) && is.function(compiled$surv_fn)) {
     compiled$surv_fn(t, component, forced_complete, forced_survive)
   } else {
     .eval_expr_survival_cond_slow(
@@ -1363,6 +1818,38 @@
     return(val)
   }
   cache <- lik_cache_resolve(cache, prep)
+  compiled <- .expr_lookup_compiled(expr, prep)
+  density_fn <- if (!is.null(compiled)) compiled$density_fn else NULL
+  if (!is.null(compiled) && is.function(compiled$density_fast_fn)) {
+    dens <- compiled$density_fast_fn(t, component)
+  } else if (is.function(density_fn)) {
+    dens <- density_fn(t, component, integer(0), integer(0))
+  } else {
+    dens <- NULL
+  }
+  if (!is.null(dens)) {
+    dens_val <- as.numeric(dens)
+    dens_scalar <- if (length(dens_val) > 0L) dens_val[[1]] else 0.0
+    if (!is.finite(dens_scalar) || dens_scalar <= 0) {
+      dens_scalar <- 0.0
+    } else if (length(competitor_exprs) > 0) {
+      surv_prod <- .compute_survival_product(
+        outcome_expr = expr,
+        competitor_exprs = competitor_exprs,
+        prep = prep,
+        component = component,
+        t = t,
+        cache = cache
+      )
+      if (!is.finite(surv_prod) || surv_prod <= 0) {
+        dens_scalar <- 0.0
+      } else {
+        dens_scalar <- dens_scalar * surv_prod
+      }
+    }
+    attr(dens_scalar, "scenarios") <- list()
+    return(dens_scalar)
+  }
   scenarios <- .expr_scenarios_at(
     expr, t, prep, component,
     forced_complete = integer(0),
@@ -1485,14 +1972,29 @@
   prod_val <- 1.0
   for (cluster in clusters) {
     exprs <- cluster$exprs
-    cluster_val <- prod(vapply(exprs, function(ce) {
-      .eval_expr_survival_cond(
-        ce, t, prep, component,
-        forced_complete = integer(0),
-        forced_survive = integer(0),
-        cache = cache
-      )
-    }, numeric(1)))
+    cluster_indices <- cluster$indices %||% seq_along(exprs)
+    component_key <- if (is.null(component)) "__default__" else as.character(component)[[1]]
+    cache_key <- paste(
+      "comp_surv",
+      paste(cluster_indices, collapse = ","),
+      component_key,
+      lik_cache_time_key(t),
+      sep = "|"
+    )
+    cached <- lik_cache_get(cache, cache_key)
+    if (!is.null(cached)) {
+      cluster_val <- cached
+    } else {
+      cluster_val <- prod(vapply(exprs, function(ce) {
+        .eval_expr_survival_cond(
+          ce, t, prep, component,
+          forced_complete = integer(0),
+          forced_survive = integer(0),
+          cache = cache
+        )
+      }, numeric(1)))
+      lik_cache_set(cache, cache_key, cluster_val)
+    }
     prod_val <- prod_val * cluster_val
   }
   prod_val

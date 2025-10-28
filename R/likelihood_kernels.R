@@ -1705,38 +1705,6 @@
   )
 }
 
-.guard_pair_joint_survival <- function(t, prep, component, ref_a, block_a, extras) {
-  if (t <= 0) return(1.0)
-  f_a <- .event_density_fn(ref_a, prep, component)
-  S_a <- .event_survival_fn(ref_a, prep, component)
-  f_b <- .event_density_fn(block_a, prep, component)
-  S_b <- .event_survival_fn(block_a, prep, component)
-  S_extra_t <- 1.0
-  if (length(extras) > 0) {
-    S_extra_t <- prod(vapply(extras, function(src) .event_survival_fn(src, prep, component)(t), numeric(1)))
-  }
-  rel_tol <- .integrate_rel_tol()
-  abs_tol <- .integrate_abs_tol()
-  term_case2 <- if (is.finite(t)) {
-    stats::integrate(function(v) f_a(v) * S_b(v), lower = t, upper = Inf,
-                     rel.tol = rel_tol, abs.tol = abs_tol,
-                     stop.on.error = FALSE)$value
-  } else 0.0
-  term_s1_gt_t <- stats::integrate(function(u) f_b(u) * S_a(u), lower = t, upper = Inf,
-                                   rel.tol = rel_tol, abs.tol = abs_tol,
-                                   stop.on.error = FALSE)$value
-  if (!is.finite(term_s1_gt_t)) term_s1_gt_t <- 0.0
-  term_s1_le_t <- stats::integrate(function(u) f_b(u) * S_a(u), lower = 0, upper = t,
-                                   rel.tol = rel_tol, abs.tol = abs_tol,
-                                   stop.on.error = FALSE)$value
-  if (!is.finite(term_s1_le_t)) term_s1_le_t <- 0.0
-  val <- term_case2 + term_s1_gt_t + S_extra_t * term_s1_le_t
-  if (!is.finite(val)) val <- 0.0
-  if (val < 0) val <- 0.0
-  if (val > 1) val <- 1.0
-  val
-}
-
 .compute_survival_product <- function(outcome_expr, competitor_exprs, prep, component, t,
                                       cache = NULL) {
   if (length(competitor_exprs) == 0) return(1.0)
@@ -1744,39 +1712,14 @@
   prod_val <- 1.0
   for (cluster in clusters) {
     exprs <- cluster$exprs
-    cluster_val <- NULL
-    if (length(exprs) == 2) {
-      info1 <- .extract_guard_plus(exprs[[1]])
-      info2 <- .extract_guard_plus(exprs[[2]])
-      if (!is.null(info1) && !is.null(info2)) {
-        if (identical(info1$ref, info2$block) && identical(info1$block, info2$ref)) {
-          guard_go1 <- info1
-          guard_stop <- info2
-        } else if (identical(info2$ref, info1$block) && identical(info2$block, info1$ref)) {
-          guard_go1 <- info2
-          guard_stop <- info1
-        } else {
-          guard_go1 <- NULL
-          guard_stop <- NULL
-        }
-        if (!is.null(guard_go1) && length(guard_stop$extras) == length(unique(guard_stop$extras))) {
-          cluster_val <- .guard_pair_joint_survival(t, prep, component,
-                                                    ref_a = guard_go1$ref,
-                                                    block_a = guard_go1$block,
-                                                    extras = guard_stop$extras)
-        }
-      }
-    }
-    if (is.null(cluster_val)) {
-      cluster_val <- prod(vapply(exprs, function(ce) {
-        .eval_expr_survival_cond(
-          ce, t, prep, component,
-          forced_complete = integer(0),
-          forced_survive = integer(0),
-          cache = cache
-        )
-      }, numeric(1)))
-    }
+    cluster_val <- prod(vapply(exprs, function(ce) {
+      .eval_expr_survival_cond(
+        ce, t, prep, component,
+        forced_complete = integer(0),
+        forced_survive = integer(0),
+        cache = cache
+      )
+    }, numeric(1)))
     prod_val <- prod_val * cluster_val
   }
   prod_val

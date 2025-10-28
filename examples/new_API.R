@@ -690,7 +690,22 @@ example_15_component_metadata <- race_spec() |>
   )) |>
   build_model()
 
-example_16_k_of_n_inhibitors <- race_spec() |>
+# Guard tie – shared gate with stop control
+example_16_guard_tie_simple <- race_spec() |>
+  add_accumulator("go_fast", "lognormal", params = list(meanlog = log(0.28), sdlog = 0.18)) |>
+  add_accumulator("go_slow", "lognormal", params = list(meanlog = log(0.34), sdlog = 0.18)) |>
+  add_accumulator("gate_shared", "lognormal", params = list(meanlog = log(0.30), sdlog = 0.16)) |>
+  add_accumulator("stop_control", "lognormal", onset = 0.05,
+                  params = list(meanlog = log(0.27), sdlog = 0.15)) |>
+  add_pool("FAST", "go_fast") |>
+  add_pool("SLOW", "go_slow") |>
+  add_pool("GATE", "gate_shared") |>
+  add_pool("STOP", "stop_control") |>
+  add_outcome("Fast", inhibit(all_of("FAST", "GATE"), by = "STOP")) |>
+  add_outcome("Slow", all_of("SLOW", "GATE")) |>
+  build_model()
+
+example_17_k_of_n_inhibitors <- race_spec() |>
   add_accumulator("a1", "lognormal") |>
   add_accumulator("a2", "lognormal") |>
   add_accumulator("a3", "lognormal") |>
@@ -751,5 +766,6 @@ new_api_examples <- list(
   example_13_nested_pools = example_13_nested_pools,
   example_14_weighted_pool = example_14_weighted_pool,
   example_15_component_metadata = example_15_component_metadata,
-  example_16_k_of_n_inhibitors = example_16_k_of_n_inhibitors
+  example_16_guard_tie_simple = example_16_guard_tie_simple,
+  example_17_k_of_n_inhibitors = example_17_k_of_n_inhibitors
 )

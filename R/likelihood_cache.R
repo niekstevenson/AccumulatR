@@ -26,13 +26,6 @@ lik_cache_resolve <- function(cache = NULL, prep = NULL) {
         return(existing)
       }
     }
-    stored <- prep[[".lik_cache"]]
-    if (is.environment(stored)) {
-      if (!lik_cache_is(stored)) {
-        class(stored) <- c("likelihood_cache", class(stored))
-      }
-      return(stored)
-    }
   }
   lik_cache_create()
 }

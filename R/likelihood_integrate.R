@@ -142,10 +142,63 @@
   outcome_defs <- prep[["outcomes"]] %||% list()
   if (length(outcome_defs) == 0) return(list())
   comps <- lapply(names(outcome_defs), function(lbl) {
-    .build_competitor_exprs(prep, lbl, outcome_defs[[lbl]][['expr']])
+    exprs <- .build_competitor_exprs(prep, lbl, outcome_defs[[lbl]][['expr']])
+    attr(exprs, ".lik_outcome_label") <- lbl
+    exprs
   })
   names(comps) <- names(outcome_defs)
-  comps
+  .attach_competitor_fast_clusters(prep, comps)
+}
+
+.attach_competitor_fast_clusters <- function(prep, competitor_map) {
+  if (length(competitor_map) == 0) return(competitor_map)
+  cluster_counter <- 0L
+  for (lbl in names(competitor_map)) {
+    expr_list <- competitor_map[[lbl]] %||% list()
+    if (!is.list(expr_list)) expr_list <- list(expr_list)
+    if (length(expr_list) == 0) {
+      competitor_map[[lbl]] <- expr_list
+      next
+    }
+    clusters <- .cluster_competitors(expr_list, prep)
+    if (length(clusters) == 0) {
+      competitor_map[[lbl]] <- expr_list
+      next
+    }
+    for (cl in clusters) {
+      nodes <- lapply(cl$exprs, function(expr) .expr_lookup_compiled(expr, prep))
+      if (length(nodes) == 0) next
+      has_fast <- all(vapply(nodes, function(node) is.function(node$surv_fast_fn) && !isTRUE(node$scenario_sensitive), logical(1)))
+      if (!has_fast) next
+      cluster_counter <- cluster_counter + 1L
+      key <- paste0("fast_comp_cluster_", cluster_counter)
+      fast_fn <- .make_competitor_cluster_fast_closure(nodes)
+      indices <- cl$indices %||% seq_along(cl$exprs)
+      for (idx in indices) {
+        if (is.na(idx) || idx < 1L || idx > length(expr_list)) next
+        expr_obj <- expr_list[[idx]]
+        attr(expr_obj, ".lik_cluster_fast_fn") <- fast_fn
+        attr(expr_obj, ".lik_cluster_fast_key") <- key
+        attr(expr_obj, ".lik_outcome_label") <- lbl
+        expr_list[[idx]] <- expr_obj
+      }
+    }
+    competitor_map[[lbl]] <- expr_list
+  }
+  competitor_map
+}
+
+.make_competitor_cluster_fast_closure <- function(nodes) {
+  function(t, component) {
+    t_vals <- as.numeric(t)
+    if (length(t_vals) == 0L) return(numeric(0))
+    vapply(t_vals, function(tt) {
+      prod(vapply(nodes, function(node) {
+        vals <- node$surv_fast_fn(tt, component)
+        if (length(vals) == 0L) 1.0 else vals[[1]]
+      }, numeric(1)))
+    }, numeric(1))
+  }
 }
 
 # Detect shared-gate pattern (A & C) vs (B & C) across outcome definitions

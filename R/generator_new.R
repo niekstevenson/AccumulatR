@@ -151,6 +151,156 @@ prepare_model <- function(model) {
   )
 }
 
+# ---- Structure + parameter helpers ------------------------------------------
+
+.build_component_table <- function(comp_defs) {
+  comp_ids <- comp_defs$ids
+  comp_tbl <- data.frame(
+    component_id = comp_ids,
+    weight = comp_defs$weights,
+    stringsAsFactors = FALSE
+  )
+  comp_tbl$has_weight_param <- comp_defs$has_weight_param
+  comp_tbl$attrs <- I(comp_defs$attrs[match(comp_ids, names(comp_defs$attrs))])
+  comp_tbl
+}
+
+.build_accumulator_template <- function(acc_defs) {
+  acc_ids <- names(acc_defs)
+  if (length(acc_ids) == 0L) {
+    return(data.frame(
+      accumulator_id = character(0),
+      accumulator_index = integer(0),
+      dist = character(0),
+      onset = numeric(0),
+      q = numeric(0),
+      role = character(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+  acc_df <- data.frame(
+    accumulator_id = acc_ids,
+    accumulator_index = seq_along(acc_ids),
+    dist = vapply(acc_defs, function(acc) acc$dist %||% NA_character_, character(1)),
+    onset = vapply(acc_defs, function(acc) acc$onset %||% 0, numeric(1)),
+    q = vapply(acc_defs, function(acc) acc$q %||% 0, numeric(1)),
+    role = rep("std", length(acc_ids)),
+    stringsAsFactors = FALSE
+  )
+  acc_df$params <- I(lapply(acc_defs, function(acc) acc$params %||% list()))
+  acc_df$components <- I(lapply(acc_defs, function(acc) acc$components %||% character(0)))
+  acc_df
+}
+
+build_generator_structure <- function(model) {
+  prep <- prepare_model(model)
+  structure <- list(
+    prep = prep,
+    accumulators = .build_accumulator_template(prep$accumulators),
+    components = .build_component_table(prep$components),
+    default_deadline = prep$default_deadline,
+    special_outcomes = prep$special_outcomes
+  )
+  class(structure) <- c("generator_structure", class(structure))
+  structure
+}
+
+.as_generator_structure <- function(x) {
+  if (inherits(x, "generator_structure")) return(x)
+  if (is.list(x) && !is.null(x$prep) && !is.null(x$accumulators) && !is.null(x$components)) {
+    class(x) <- unique(c("generator_structure", class(x)))
+    return(x)
+  }
+  build_generator_structure(x)
+}
+
+.resolve_accumulator_id <- function(structure, acc_value) {
+  if (is.null(acc_value) || (length(acc_value) == 1 && (is.na(acc_value) || acc_value == ""))) {
+    return(NA_character_)
+  }
+  acc_tbl <- structure$accumulators
+  if (length(acc_tbl$accumulator_id) == 0L) return(NA_character_)
+  if (is.numeric(acc_value)) {
+    idx <- which(acc_tbl$accumulator_index == as.integer(acc_value[[1]]))
+    if (length(idx) == 0L) {
+      stop(sprintf("Unknown accumulator index '%s'", as.character(acc_value)))
+    }
+    return(acc_tbl$accumulator_id[[idx[[1]]]])
+  }
+  acc_char <- as.character(acc_value)
+  if (acc_char %in% acc_tbl$accumulator_id) return(acc_char)
+  stop(sprintf("Unknown accumulator id '%s'", acc_char))
+}
+
+.collect_param_names <- function(df, base_cols) {
+  setdiff(names(df), base_cols)
+}
+
+.coerce_param_list <- function(row_idx, params_df, param_cols, existing = NULL) {
+  params_list <- existing %||% list()
+  if (length(param_cols) == 0L) return(params_list)
+  for (col in param_cols) {
+    vals <- params_df[[col]]
+    if (length(vals) < row_idx) next
+    val <- vals[[row_idx]]
+    if (length(val) == 1L && is.na(val)) next
+    params_list[[col]] <- val
+  }
+  params_list
+}
+
+.build_trial_overrides <- function(structure, params_rows) {
+  if (is.null(params_rows) || nrow(params_rows) == 0L) return(NULL)
+  prep <- structure$prep
+  base_cols <- c(
+    "trial", "component", "accumulator", "accumulator_id",
+    "accumulator_index", "acc_idx",
+    "type", "role", "outcome", "rt", "params",
+    "onset", "q", "condition", "component_weight"
+  )
+  param_cols <- .collect_param_names(params_rows, base_cols)
+  overrides <- list()
+  for (i in seq_len(nrow(params_rows))) {
+    row <- params_rows[i, , drop = FALSE]
+    acc_value <- if ("accumulator_id" %in% names(row)) {
+      row[[ "accumulator_id" ]]
+    } else if ("accumulator" %in% names(row)) {
+      row[[ "accumulator" ]]
+    } else {
+      stop("Parameter rows must include 'accumulator' or 'accumulator_id'")
+    }
+    acc_id <- .resolve_accumulator_id(structure, acc_value)
+    if (is.na(acc_id)) next
+    base_def <- prep$accumulators[[acc_id]]
+    if (is.null(base_def)) {
+      stop(sprintf("No accumulator definition found for '%s'", acc_id))
+    }
+    override <- base_def
+    if ("onset" %in% names(row) && length(row$onset) >= 1L && !is.na(row$onset[[1]])) {
+      override$onset <- as.numeric(row$onset[[1]])
+    }
+    if ("q" %in% names(row) && length(row$q) >= 1L && !is.na(row$q[[1]])) {
+      override$q <- as.numeric(row$q[[1]])
+    }
+    param_list <- NULL
+    if ("params" %in% names(row)) {
+      param_entry <- row$params[[1]]
+      if (!is.null(param_entry) && !is.list(param_entry)) {
+        stop("Column 'params' must contain lists of parameter values")
+      }
+      param_list <- param_entry
+    }
+    if (length(param_cols) > 0L) {
+      param_list <- .coerce_param_list(i, params_rows, param_cols, existing = param_list)
+    }
+    if (!is.null(param_list)) {
+      override$params <- param_list
+    }
+    overrides[[acc_id]] <- override
+  }
+  overrides
+}
+
 # ---- Component activity helpers ----------------------------------------------
 
 .acc_active_in_component <- function(acc_def, component) {
@@ -183,8 +333,10 @@ prepare_model <- function(model) {
 .get_acc_time <- function(ctx, acc_id) {
   acc_defs <- ctx$model[["accumulators"]]
   if (!acc_id %in% names(acc_defs)) stop(sprintf("Unknown accumulator '%s'", acc_id))
+  acc_def <- ctx$trial_accs[[acc_id]] %||% acc_defs[[acc_id]]
+  if (is.null(acc_def)) stop(sprintf("Accumulator '%s' is not available in this trial context", acc_id))
   if (is.null(ctx$acc_times[[acc_id]])) {
-    ctx$acc_times[[acc_id]] <- .sample_accumulator(acc_defs[[acc_id]])
+    ctx$acc_times[[acc_id]] <- .sample_accumulator(acc_def)
   }
   ctx$acc_times[[acc_id]]
 }
@@ -359,7 +511,7 @@ prepare_model <- function(model) {
 
 # ---- Trial simulation ---------------------------------------------------------
 
-.simulate_trial <- function(prep, component, keep_detail = FALSE) {
+.simulate_trial <- function(prep, component, keep_detail = FALSE, acc_overrides = NULL) {
   comp_info <- prep[["components"]]
   component_attr <- comp_info$attrs[[component]]
   if (is.null(component_attr)) component_attr <- list()
@@ -368,7 +520,8 @@ prepare_model <- function(model) {
     component = component,
     acc_times = new.env(parent = emptyenv()),
     pool_cache = new.env(parent = emptyenv()),
-    event_cache = new.env(parent = emptyenv())
+    event_cache = new.env(parent = emptyenv()),
+    trial_accs = acc_overrides %||% list()
   )
 
   outcomes <- .evaluate_outcomes(ctx)
@@ -465,6 +618,114 @@ prepare_model <- function(model) {
 
 # ---- Public API ----------------------------------------------------------------
 
+simulate_trials_from_params <- function(structure, params_df,
+                                        component_weights = NULL,
+                                        seed = NULL,
+                                        keep_detail = FALSE) {
+  if (is.null(params_df) || nrow(params_df) == 0L) {
+    stop("Parameter data frame must contain at least one row")
+  }
+  structure <- .as_generator_structure(structure)
+  prep <- structure$prep
+  comp_table <- structure$components
+  comp_ids <- comp_table$component_id
+  if (!"trial" %in% names(params_df)) {
+    params_df$trial <- 1L
+  }
+  params_df$trial <- params_df$trial
+  if ("component" %in% names(params_df)) {
+    params_df$component <- as.character(params_df$component)
+  }
+  if (!is.null(component_weights)) {
+    if (!all(c("trial", "component", "weight") %in% names(component_weights))) {
+      stop("component_weights must have columns 'trial', 'component', and 'weight'")
+    }
+    component_weights$component <- as.character(component_weights$component)
+  }
+  if (!is.null(seed)) set.seed(seed)
+  trial_ids <- unique(params_df$trial)
+  trial_ids <- trial_ids[order(trial_ids)]
+  outcomes <- character(length(trial_ids))
+  rts <- numeric(length(trial_ids))
+  comp_record <- rep(NA_character_, length(trial_ids))
+  details <- if (keep_detail) vector("list", length(trial_ids)) else NULL
+
+  for (i in seq_along(trial_ids)) {
+    tid <- trial_ids[[i]]
+    trial_rows <- params_df[params_df$trial == tid, , drop = FALSE]
+    available_components <- comp_ids
+    if ("component" %in% names(trial_rows)) {
+      trial_comp <- unique(trial_rows$component)
+      trial_comp <- trial_comp[!is.na(trial_comp)]
+      if (length(trial_comp) > 0L) {
+        available_components <- intersect(comp_ids, trial_comp)
+      }
+    }
+    if (length(available_components) == 0L) available_components <- comp_ids
+    weights <- comp_table$weight[match(available_components, comp_table$component_id)]
+    if (!is.null(component_weights)) {
+      w_rows <- component_weights[
+        component_weights$trial == tid &
+          component_weights$component %in% available_components,
+        ,
+        drop = FALSE
+      ]
+      if (nrow(w_rows) > 0L) {
+        weights <- w_rows$weight
+      }
+    }
+    if (length(weights) != length(available_components) || all(is.na(weights))) {
+      weights <- rep(1 / length(available_components), length(available_components))
+    } else {
+      if (any(!is.finite(weights) | weights < 0)) {
+        stop("Component weights must be non-negative finite numbers")
+      }
+      total_w <- sum(weights)
+      if (!is.finite(total_w) || total_w <= 0) {
+        weights <- rep(1 / length(available_components), length(available_components))
+      } else {
+        weights <- weights / total_w
+      }
+    }
+    chosen_component <- if (length(available_components) == 1L) {
+      available_components[[1]]
+    } else {
+      sample(available_components, size = 1L, prob = weights)
+    }
+    comp_record[[i]] <- chosen_component
+    component_rows <- trial_rows
+    if ("component" %in% names(trial_rows)) {
+      component_rows <- trial_rows[
+        is.na(trial_rows$component) | trial_rows$component == chosen_component,
+        ,
+        drop = FALSE
+      ]
+    }
+    acc_overrides <- .build_trial_overrides(structure, component_rows)
+    result <- .simulate_trial(
+      prep,
+      chosen_component,
+      keep_detail = keep_detail,
+      acc_overrides = acc_overrides
+    )
+    outcomes[[i]] <- result$outcome
+    rts[[i]] <- result$rt
+    if (keep_detail) details[[i]] <- result$detail
+  }
+
+  out_df <- data.frame(
+    trial = trial_ids,
+    outcome = outcomes,
+    rt = rts,
+    stringsAsFactors = FALSE
+  )
+  if (length(comp_ids) > 1L || "component" %in% names(params_df)) {
+    out_df$component <- comp_record
+  }
+  if (keep_detail) attr(out_df, "details") <- details
+  out_df
+}
+
 simulate_model <- function(model, n_trials, seed = NULL, keep_detail = FALSE) {
   if (exists("is_model_tables", mode = "function") && is_model_tables(model)) {
     model <- tables_to_model(model)
@@ -487,7 +748,7 @@ simulate_model <- function(model, n_trials, seed = NULL, keep_detail = FALSE) {
 
   for (i in seq_len(n_trials)) {
     comp <- trial_components[[i]]
-    res <- .simulate_trial(prep, comp, keep_detail = keep_detail)
+    res <- .simulate_trial(prep, comp, keep_detail = keep_detail, acc_overrides = NULL)
     outcomes[[i]] <- res$outcome
     rts[[i]] <- res$rt
     if (keep_detail) details[[i]] <- res$detail

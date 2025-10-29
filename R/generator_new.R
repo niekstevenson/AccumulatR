@@ -39,7 +39,8 @@ source("R/model_tables.R")
       q = acc$q %||% 0,
       params = acc$params %||% list(),
       components = character(0),
-      shared_trigger_id = NULL
+      shared_trigger_id = NULL,
+      shared_trigger_q = NULL
     )
   }
 
@@ -104,6 +105,8 @@ source("R/model_tables.R")
         for (m in members) {
           if (!is.null(defs[[m]])) {
             defs[[m]]$shared_trigger_id <- trig_id
+            defs[[m]]$shared_trigger_q <- as.numeric(default_q)
+            defs[[m]]$q <- as.numeric(default_q)
           }
         }
       }
@@ -221,6 +224,7 @@ prepare_model <- function(model) {
       q = numeric(0),
       role = character(0),
       shared_trigger_id = character(0),
+      shared_trigger_q = numeric(0),
       stringsAsFactors = FALSE
     ))
   }
@@ -232,6 +236,7 @@ prepare_model <- function(model) {
     q = vapply(acc_defs, function(acc) acc$q %||% 0, numeric(1)),
     role = rep("std", length(acc_ids)),
     shared_trigger_id = vapply(acc_defs, function(acc) acc$shared_trigger_id %||% NA_character_, character(1)),
+    shared_trigger_q = vapply(acc_defs, function(acc) acc$shared_trigger_q %||% NA_real_, numeric(1)),
     stringsAsFactors = FALSE
   )
   acc_df$params <- I(lapply(acc_defs, function(acc) acc$params %||% list()))
@@ -330,6 +335,7 @@ build_generator_structure <- function(model) {
     }
     if ("q" %in% names(row) && length(row$q) >= 1L && !is.na(row$q[[1]])) {
       override$q <- as.numeric(row$q[[1]])
+      override$shared_trigger_q <- as.numeric(row$q[[1]])
     }
     param_list <- NULL
     if ("params" %in% names(row)) {
@@ -413,9 +419,10 @@ build_generator_structure <- function(model) {
     if (.shared_trigger_fail(ctx, shared_id)) {
       return(Inf)
     }
+  } else {
+    success <- stats::runif(1) < (1 - acc_def$q)
+    if (!success) return(Inf)
   }
-  success <- stats::runif(1) < (1 - acc_def$q)
-  if (!success) return(Inf)
   reg <- dist_registry(acc_def$dist)
   if (is.null(reg) || is.null(reg$r)) stop(sprintf("No sampler registered for distribution '%s'", acc_def$dist))
   draw <- reg$r(1L, acc_def$params)

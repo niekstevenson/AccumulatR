@@ -38,9 +38,12 @@ source("R/model_tables.R")
       onset = acc$onset %||% 0,
       q = acc$q %||% 0,
       params = acc$params %||% list(),
-      components = character(0)
+      components = character(0),
+      shared_trigger_id = NULL
     )
   }
+
+  shared_triggers <- list()
 
   # Apply group-level attributes (shared params, components)
   if (!is.null(model$groups) && length(model$groups) > 0) {
@@ -64,6 +67,46 @@ source("R/model_tables.R")
           }
         }
       }
+      shared_trigger <- attrs$shared_trigger %||% NULL
+      if (!is.null(shared_trigger)) {
+        trig_id <- shared_trigger$id %||% grp$id
+        if (is.null(trig_id) || trig_id == "") {
+          stop(sprintf("Group '%s' shared_trigger must provide a non-empty id", grp$id %||% "<unnamed>"))
+        }
+        default_q <- shared_trigger$q %||% NA_real_
+        if (is.na(default_q)) {
+          q_vals <- vapply(members, function(m) {
+            acc_def <- defs[[m]]
+            if (is.null(acc_def)) return(NA_real_)
+            acc_def$q %||% NA_real_
+          }, numeric(1))
+          q_vals <- q_vals[!is.na(q_vals)]
+          if (length(q_vals) == 0) {
+            default_q <- 0
+          } else if (length(unique(q_vals)) == 1) {
+            default_q <- q_vals[[1]]
+          } else {
+            stop(sprintf(
+              "Group '%s' shared_trigger requires a single q value; found %s",
+              trig_id,
+              paste(format(unique(q_vals)), collapse = ", ")
+            ))
+          }
+        }
+        param_name <- shared_trigger$param %||% NULL
+        shared_triggers[[trig_id]] <- list(
+          id = trig_id,
+          group_id = grp$id %||% trig_id,
+          members = members,
+          q = as.numeric(default_q),
+          param = param_name
+        )
+        for (m in members) {
+          if (!is.null(defs[[m]])) {
+            defs[[m]]$shared_trigger_id <- trig_id
+          }
+        }
+      }
     }
   }
 
@@ -71,7 +114,7 @@ source("R/model_tables.R")
   for (acc_id in names(defs)) {
     if (is.null(defs[[acc_id]]$params)) defs[[acc_id]]$params <- list()
   }
-  defs
+  list(acc = defs, shared_triggers = shared_triggers)
 }
 
 .extract_components <- function(model) {
@@ -137,7 +180,8 @@ source("R/model_tables.R")
 
 prepare_model <- function(model) {
   model <- .normalize_model(model)
-  acc_defs <- .prepare_acc_defs(model)
+  acc_prep <- .prepare_acc_defs(model)
+  acc_defs <- acc_prep$acc
   pool_defs <- .prepare_pool_defs(model)
   outcome_defs <- .prepare_outcomes(model)
   component_defs <- .extract_components(model)
@@ -147,7 +191,8 @@ prepare_model <- function(model) {
     outcomes = outcome_defs,
     components = component_defs,
     default_deadline = model$metadata$deadline %||% Inf,
-    special_outcomes = model$metadata$special_outcomes %||% list()
+    special_outcomes = model$metadata$special_outcomes %||% list(),
+    shared_triggers = acc_prep$shared_triggers %||% list()
   )
 }
 
@@ -175,6 +220,7 @@ prepare_model <- function(model) {
       onset = numeric(0),
       q = numeric(0),
       role = character(0),
+      shared_trigger_id = character(0),
       stringsAsFactors = FALSE
     ))
   }
@@ -185,6 +231,7 @@ prepare_model <- function(model) {
     onset = vapply(acc_defs, function(acc) acc$onset %||% 0, numeric(1)),
     q = vapply(acc_defs, function(acc) acc$q %||% 0, numeric(1)),
     role = rep("std", length(acc_ids)),
+    shared_trigger_id = vapply(acc_defs, function(acc) acc$shared_trigger_id %||% NA_character_, character(1)),
     stringsAsFactors = FALSE
   )
   acc_df$params <- I(lapply(acc_defs, function(acc) acc$params %||% list()))
@@ -199,7 +246,8 @@ build_generator_structure <- function(model) {
     accumulators = .build_accumulator_template(prep$accumulators),
     components = .build_component_table(prep$components),
     default_deadline = prep$default_deadline,
-    special_outcomes = prep$special_outcomes
+    special_outcomes = prep$special_outcomes,
+    shared_triggers = prep$shared_triggers %||% list()
   )
   class(structure) <- c("generator_structure", class(structure))
   structure
@@ -256,10 +304,11 @@ build_generator_structure <- function(model) {
     "trial", "component", "accumulator", "accumulator_id",
     "accumulator_index", "acc_idx",
     "type", "role", "outcome", "rt", "params",
-    "onset", "q", "condition", "component_weight"
+    "onset", "q", "condition", "component_weight", "shared_trigger_id"
   )
   param_cols <- .collect_param_names(params_rows, base_cols)
-  overrides <- list()
+  acc_overrides <- list()
+  shared_overrides <- list()
   for (i in seq_len(nrow(params_rows))) {
     row <- params_rows[i, , drop = FALSE]
     acc_value <- if ("accumulator_id" %in% names(row)) {
@@ -296,9 +345,30 @@ build_generator_structure <- function(model) {
     if (!is.null(param_list)) {
       override$params <- param_list
     }
-    overrides[[acc_id]] <- override
+    acc_overrides[[acc_id]] <- override
+
+    trig_id <- override$shared_trigger_id %||% prep$accumulators[[acc_id]]$shared_trigger_id %||% NA_character_
+    if (!is.null(trig_id) && !is.na(trig_id) && trig_id != "") {
+      prob_override <- NULL
+      if ("q" %in% names(row) && length(row$q) >= 1L && !is.na(row$q[[1]])) {
+        prob_override <- as.numeric(row$q[[1]])
+      }
+      shared_entry <- shared_overrides[[trig_id]] %||% list(prob = NULL)
+      if (!is.null(prob_override)) {
+        if (!is.null(shared_entry$prob) && !isTRUE(all.equal(shared_entry$prob, prob_override))) {
+          stop(sprintf(
+            "Shared trigger '%s' received conflicting q overrides (%s vs %s)",
+            trig_id,
+            format(shared_entry$prob),
+            format(prob_override)
+          ))
+        }
+        shared_entry$prob <- prob_override
+      }
+      shared_overrides[[trig_id]] <- shared_entry
+    }
   }
-  overrides
+  list(acc = acc_overrides, shared = shared_overrides)
 }
 
 # ---- Component activity helpers ----------------------------------------------
@@ -319,7 +389,31 @@ build_generator_structure <- function(model) {
 
 # ---- Sampling primitives ------------------------------------------------------
 
-.sample_accumulator <- function(acc_def) {
+.shared_trigger_fail <- function(ctx, trigger_id) {
+  if (is.null(trigger_id) || is.na(trigger_id) || trigger_id == "") return(FALSE)
+  cached <- ctx$shared_trigger_state[[trigger_id]]
+  if (!is.null(cached)) return(isTRUE(cached$fail))
+  base_info <- ctx$model[["shared_triggers"]][[trigger_id]] %||% list()
+  prob <- base_info$q %||% 0
+  override <- ctx$trial_shared_triggers[[trigger_id]] %||% list()
+  if (!is.null(override$prob) && !is.na(override$prob)) {
+    prob <- as.numeric(override$prob)
+  }
+  if (!is.numeric(prob) || length(prob) != 1L || prob < 0 || prob > 1) {
+    stop(sprintf("Shared trigger '%s' requires a probability between 0 and 1", trigger_id))
+  }
+  fail <- stats::runif(1) < prob
+  ctx$shared_trigger_state[[trigger_id]] <- list(fail = fail, prob = prob)
+  fail
+}
+
+.sample_accumulator <- function(acc_def, ctx) {
+  shared_id <- acc_def$shared_trigger_id %||% NULL
+  if (!is.null(shared_id) && !is.na(shared_id) && shared_id != "") {
+    if (.shared_trigger_fail(ctx, shared_id)) {
+      return(Inf)
+    }
+  }
   success <- stats::runif(1) < (1 - acc_def$q)
   if (!success) return(Inf)
   reg <- dist_registry(acc_def$dist)
@@ -336,7 +430,7 @@ build_generator_structure <- function(model) {
   acc_def <- ctx$trial_accs[[acc_id]] %||% acc_defs[[acc_id]]
   if (is.null(acc_def)) stop(sprintf("Accumulator '%s' is not available in this trial context", acc_id))
   if (is.null(ctx$acc_times[[acc_id]])) {
-    ctx$acc_times[[acc_id]] <- .sample_accumulator(acc_def)
+    ctx$acc_times[[acc_id]] <- .sample_accumulator(acc_def, ctx)
   }
   ctx$acc_times[[acc_id]]
 }
@@ -511,7 +605,9 @@ build_generator_structure <- function(model) {
 
 # ---- Trial simulation ---------------------------------------------------------
 
-.simulate_trial <- function(prep, component, keep_detail = FALSE, acc_overrides = NULL) {
+.simulate_trial <- function(prep, component, keep_detail = FALSE,
+                            acc_overrides = NULL,
+                            shared_trigger_overrides = NULL) {
   comp_info <- prep[["components"]]
   component_attr <- comp_info$attrs[[component]]
   if (is.null(component_attr)) component_attr <- list()
@@ -521,7 +617,9 @@ build_generator_structure <- function(model) {
     acc_times = new.env(parent = emptyenv()),
     pool_cache = new.env(parent = emptyenv()),
     event_cache = new.env(parent = emptyenv()),
-    trial_accs = acc_overrides %||% list()
+    trial_accs = acc_overrides %||% list(),
+    trial_shared_triggers = shared_trigger_overrides %||% list(),
+    shared_trigger_state = new.env(parent = emptyenv())
   )
 
   outcomes <- .evaluate_outcomes(ctx)
@@ -701,12 +799,20 @@ simulate_trials_from_params <- function(structure, params_df,
         drop = FALSE
       ]
     }
-    acc_overrides <- .build_trial_overrides(structure, component_rows)
+    override_bundle <- .build_trial_overrides(structure, component_rows)
+    if (is.null(override_bundle)) {
+      acc_overrides <- list()
+      shared_overrides <- list()
+    } else {
+      acc_overrides <- override_bundle$acc %||% list()
+      shared_overrides <- override_bundle$shared %||% list()
+    }
     result <- .simulate_trial(
       prep,
       chosen_component,
       keep_detail = keep_detail,
-      acc_overrides = acc_overrides
+      acc_overrides = acc_overrides,
+      shared_trigger_overrides = shared_overrides
     )
     outcomes[[i]] <- result$outcome
     rts[[i]] <- result$rt

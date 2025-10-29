@@ -16,6 +16,21 @@
   success_prob * dens
 }
 
+.acc_density_success <- function(acc_def, t) {
+  if (!is.finite(t) || t < 0) return(0.0)
+  if (t < acc_def[['onset']]) return(0.0)
+
+  reg <- dist_registry(acc_def[['dist']])
+  if (is.null(reg) || is.null(reg[['d']])) {
+    stop(sprintf("No density function for distribution '%s'", acc_def[['dist']]))
+  }
+
+  t_adj <- t - acc_def[['onset']]
+  dens <- reg[['d']](t_adj, acc_def[['params']])
+
+  dens
+}
+
 .acc_survival <- function(acc_def, t) {
   if (!is.finite(t)) return(0.0)
   if (t < 0) return(1.0)
@@ -30,6 +45,41 @@
   surv_underlying <- 1 - reg[['p']](t_adj, acc_def[['params']])
 
   acc_def[['q']] + (1 - acc_def[['q']]) * surv_underlying
+}
+
+.acc_survival_success <- function(acc_def, t) {
+  if (!is.finite(t)) return(0.0)
+  if (t < 0) return(1.0)
+  if (t < acc_def[['onset']]) return(1.0)
+
+  reg <- dist_registry(acc_def[['dist']])
+  if (is.null(reg) || is.null(reg[['p']])) {
+    stop(sprintf("No CDF function for distribution '%s'", acc_def[['dist']]))
+  }
+
+  t_adj <- t - acc_def[['onset']]
+  surv_underlying <- 1 - reg[['p']](t_adj, acc_def[['params']])
+  surv_underlying
+}
+
+.acc_cdf_success <- function(acc_def, t) {
+  if (!is.finite(t)) return(1.0)
+  if (t < 0) return(0.0)
+  if (t < acc_def[['onset']]) return(0.0)
+
+  reg <- dist_registry(acc_def[['dist']])
+  if (is.null(reg) || is.null(reg[['p']])) {
+    stop(sprintf("No CDF function for distribution '%s'", acc_def[['dist']]))
+  }
+
+  t_adj <- t - acc_def[['onset']]
+  reg[['p']](t_adj, acc_def[['params']])
+}
+
+.acc_shared_trigger_id <- function(acc_def) {
+  sid <- acc_def[['shared_trigger_id']]
+  if (is.null(sid) || is.na(sid) || identical(sid, "")) return(NA_character_)
+  as.character(sid)[[1]]
 }
 
 .pool_active_members <- function(prep, pool_id, component) {
@@ -293,7 +343,14 @@
   for (i in seq_len(n)) {
     mid <- members[[i]]
     dens_vec[[i]] <- if (!is.null(acc_defs[[mid]])) {
-      .acc_density(acc_defs[[mid]], t)
+      acc_def <- acc_defs[[mid]]
+      shared_id <- .acc_shared_trigger_id(acc_def)
+      if (!is.na(shared_id)) {
+        q_val <- acc_def[['q']] %||% 0
+        (1 - q_val) * .acc_density_success(acc_def, t)
+      } else {
+        .acc_density(acc_def, t)
+      }
     } else if (!is.null(pool_defs[[mid]])) {
       .pool_density(prep, mid, component, t,
                     forced_complete = forced_complete,
@@ -302,7 +359,13 @@
       0.0
     }
     cdf_vec[[i]] <- if (!is.null(acc_defs[[mid]])) {
-      1.0 - .acc_survival(acc_defs[[mid]], t)
+      acc_def <- acc_defs[[mid]]
+      shared_id <- .acc_shared_trigger_id(acc_def)
+      if (!is.na(shared_id)) {
+        .acc_cdf_success(acc_def, t)
+      } else {
+        1.0 - .acc_survival(acc_def, t)
+      }
     } else if (!is.null(pool_defs[[mid]])) {
       .event_cdf_at(prep, mid, component, t,
                     forced_complete = forced_complete,
@@ -311,6 +374,47 @@
       0.0
     }
     surv_vec[[i]] <- 1.0 - cdf_vec[[i]]
+  }
+
+  shared_ids <- vapply(seq_len(n), function(i) {
+    mid <- members[[i]]
+    acc_def <- acc_defs[[mid]]
+    if (is.null(acc_def)) NA_character_ else .acc_shared_trigger_id(acc_def)
+  }, character(1))
+
+  cdf_success_vec <- numeric(n)
+  surv_success_vec <- numeric(n)
+  for (i in seq_len(n)) {
+    mid <- members[[i]]
+    acc_def <- acc_defs[[mid]]
+    if (!is.null(acc_def) && !is.na(shared_ids[[i]])) {
+      cdf_success_vec[[i]] <- .acc_cdf_success(acc_def, t)
+      surv_success_vec[[i]] <- 1.0 - cdf_success_vec[[i]]
+    } else {
+      cdf_success_vec[[i]] <- cdf_vec[[i]]
+      surv_success_vec[[i]] <- surv_vec[[i]]
+    }
+  }
+
+  same_shared <- function(i, j) {
+    if (i < 1L || i > n || j < 1L || j > n) return(FALSE)
+    sid_i <- shared_ids[[i]]
+    sid_j <- shared_ids[[j]]
+    !is.na(sid_i) && !is.na(sid_j) && identical(sid_i, sid_j)
+  }
+
+  prod_survival <- function(finisher_idx, idx_set) {
+    if (length(idx_set) == 0L) return(1.0)
+    prod(vapply(idx_set, function(j) {
+      if (same_shared(finisher_idx, j)) surv_success_vec[[j]] else surv_vec[[j]]
+    }, numeric(1)))
+  }
+
+  prod_cdf <- function(finisher_idx, idx_set) {
+    if (length(idx_set) == 0L) return(1.0)
+    prod(vapply(idx_set, function(j) {
+      if (same_shared(finisher_idx, j)) cdf_success_vec[[j]] else cdf_vec[[j]]
+    }, numeric(1)))
   }
 
   scenarios <- list()
@@ -335,6 +439,25 @@
     if (length(complete_idx) > 0L) dens_mid <- dens_mid * prod(cdf_vec[complete_idx])
     if (length(survivor_idx) > 0L) dens_mid <- dens_mid * prod(surv_vec[survivor_idx])
     if (!is.finite(dens_mid) || dens_mid <= 0) next
+
+    if (length(complete_idx) > 0L) {
+      dens_mid <- dens_mid * prod(vapply(complete_idx, function(j) {
+        if (same_shared(idx, j)) {
+          cdf_success_vec[[j]] / pmax(cdf_vec[[j]], .Machine$double.eps)
+        } else {
+          1.0
+        }
+      }, numeric(1)))
+    }
+    if (length(survivor_idx) > 0L) {
+      dens_mid <- dens_mid * prod(vapply(survivor_idx, function(j) {
+        if (same_shared(idx, j)) {
+          surv_success_vec[[j]] / pmax(surv_vec[[j]], .Machine$double.eps)
+        } else {
+          1.0
+        }
+      }, numeric(1)))
+    }
 
     add_scenario(dens_mid, forced_complete_ids, forced_survive_ids)
   }

@@ -20,6 +20,9 @@ mixture_spec <- race_spec() |>
   add_outcome("STOP", "STOP", options = list(map_outcome_to = NA_character_)) |>
   add_group("stop_fast_component", members = "stop_fast", attrs = list(component = "fast")) |>
   add_group("stop_slow_component", members = "stop_slow", attrs = list(component = "slow")) |>
+  add_group("shared_stop_trigger",
+            members = c("stop_fast", "stop_slow"),
+            attrs = list(shared_trigger = list(id = "stop_gate", q = 0.05))) |>
   set_metadata(mixture = list(
     components = list(
       component("fast", weight = 0.25),
@@ -31,7 +34,7 @@ mixture_spec <- race_spec() |>
 mixture_structure <- build_generator_structure(mixture_spec)
 
 mixture_acc_lookup <- mixture_structure$accumulators[, c(
-  "accumulator_index", "accumulator_id", "role", "dist", "onset", "q"
+  "accumulator_index", "accumulator_id", "role", "dist", "onset", "q", "shared_trigger_id"
 )]
 mixture_acc_lookup$params <- mixture_structure$accumulators$params
 mixture_acc_lookup$components <- mixture_structure$accumulators$components
@@ -56,7 +59,7 @@ mixture_param_table <- data.frame(
   component = rep(NA_character_, n_mix_acc * n_mix_trials),
   role = rep(mixture_acc_lookup$role, times = n_mix_trials),
   onset = rep(mixture_acc_lookup$onset, times = n_mix_trials),
-  q = rep(mixture_acc_lookup$q, times = n_mix_trials),
+  q = NA_real_,
   stringsAsFactors = FALSE
 )
 
@@ -79,14 +82,10 @@ if (length(mixture_param_names) > 0L) {
   }
 }
 
-# Shared trigger failure: draw once per trial and apply to both stop processes
-set.seed(99)
-trigger_fail_prob <- 0.05
-trigger_fail <- stats::rbinom(n_mix_trials, 1, trigger_fail_prob) == 1
-mixture_param_table$trigger_fail_flag <- rep(trigger_fail, each = n_mix_acc)
+# Demonstrate condition-specific trigger failure overrides (shared across members)
 stop_rows <- mixture_param_table$accumulator_id %in% c("stop_fast", "stop_slow")
-mixture_param_table$q[stop_rows & mixture_param_table$trigger_fail_flag] <- 1
-mixture_param_table$q[stop_rows & !mixture_param_table$trigger_fail_flag] <- 0
+mixture_param_table$q[stop_rows & mixture_param_table$condition == "BASE"] <- 0.05
+mixture_param_table$q[stop_rows & mixture_param_table$condition == "STOP"] <- 0.10
 
 print("Mixture parameter table (first 16 rows)")
 print(head(mixture_param_table, 16))
@@ -99,9 +98,7 @@ mixture_sim <- merge(
   by = "trial",
   sort = TRUE
 )
-mixture_sim$trigger_fail <- trigger_fail[match(mixture_sim$trial, mixture_trial_layout$trial)]
 
 print("Mixture simulation summary")
 print(mixture_sim)
 print(table(component = mixture_sim$component))
-print(table(trigger_fail = mixture_sim$trigger_fail))

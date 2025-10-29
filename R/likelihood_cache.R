@@ -1,36 +1,18 @@
-# Helper utilities for memoizing likelihood computations.
+# Evaluation state helpers for compiled likelihood execution.
 
-lik_cache_create <- function(parent = emptyenv()) {
-  env <- new.env(parent = parent, hash = TRUE)
-  class(env) <- c("likelihood_cache", class(env))
-  env
+.eval_state_create <- function(parent = emptyenv()) {
+  new.env(parent = parent, hash = TRUE)
 }
 
-lik_cache_is <- function(x) inherits(x, "likelihood_cache")
-
-lik_cache_resolve <- function(cache = NULL, prep = NULL) {
-  if (is.environment(cache)) {
-    if (!lik_cache_is(cache)) {
-      class(cache) <- c("likelihood_cache", class(cache))
-    }
-    return(cache)
+.eval_state_component_key <- function(component) {
+  if (is.null(component) || length(component) == 0L) {
+    "__default__"
+  } else {
+    as.character(component)[[1]]
   }
-  if (!is.null(prep)) {
-    runtime <- prep[[".runtime"]]
-    if (!is.null(runtime)) {
-      existing <- runtime[["cache"]]
-      if (is.environment(existing)) {
-        if (!lik_cache_is(existing)) {
-          class(existing) <- c("likelihood_cache", class(existing))
-        }
-        return(existing)
-      }
-    }
-  }
-  lik_cache_create()
 }
 
-lik_cache_time_key <- function(x) {
+.eval_state_time_key <- function(x) {
   if (length(x) == 0L) return(".")
   vapply(x, function(xx) {
     if (is.na(xx)) return("NA")
@@ -43,37 +25,58 @@ lik_cache_time_key <- function(x) {
   }, character(1), USE.NAMES = FALSE)[[1]]
 }
 
-lik_cache_forced_key <- function(ids) {
+.eval_state_ids_key <- function(ids) {
   if (length(ids) == 0L) return(".")
   ids <- as.integer(ids)
   if (length(ids) > 1L) ids <- sort(unique(ids))
   paste(ids, collapse = ",")
 }
 
-lik_cache_key <- function(kind, expr_id, component, t,
-                          forced_complete = integer(0),
-                          forced_survive = integer(0),
-                          extra = NULL) {
-  if (is.null(expr_id) || is.na(expr_id)) return(NULL)
-  comp_key <- if (is.null(component) || length(component) == 0L) "__default__" else as.character(component)[[1]]
-  t_key <- lik_cache_time_key(t)
-  fc_key <- lik_cache_forced_key(forced_complete)
-  fs_key <- lik_cache_forced_key(forced_survive)
-  parts <- c(kind, expr_id, comp_key, t_key, fc_key, fs_key)
+.eval_state_key <- function(node_id, component, t,
+                            forced_complete = integer(0),
+                            forced_survive = integer(0),
+                            extra = NULL) {
+  if (is.null(node_id) || is.na(node_id)) return(NULL)
+  parts <- c(
+    as.integer(node_id),
+    .eval_state_component_key(component),
+    .eval_state_time_key(t),
+    .eval_state_ids_key(forced_complete),
+    .eval_state_ids_key(forced_survive)
+  )
   if (!is.null(extra) && nzchar(extra)) {
     parts <- c(parts, extra)
   }
   paste(parts, collapse = "|")
 }
 
-lik_cache_get <- function(cache, key, default = NULL) {
-  if (is.null(key) || !is.environment(cache)) return(default)
-  val <- cache[[key]]
-  if (is.null(val)) default else val
+.eval_state_entry <- function(state, node_id, component, t,
+                              forced_complete = integer(0),
+                              forced_survive = integer(0),
+                              extra = NULL,
+                              init = TRUE) {
+  if (is.null(state) || !is.environment(state)) return(NULL)
+  key <- .eval_state_key(node_id, component, t, forced_complete, forced_survive, extra)
+  if (is.null(key)) return(NULL)
+  entry <- state[[key]]
+  if (!is.null(entry) || !isTRUE(init)) return(entry)
+  entry <- new.env(parent = emptyenv())
+  entry$density <- NULL
+  entry$survival <- NULL
+  entry$cdf <- NULL
+  entry$scenarios <- NULL
+  entry$meta <- list()
+  state[[key]] <- entry
+  entry
 }
 
-lik_cache_set <- function(cache, key, value) {
-  if (is.null(key) || !is.environment(cache)) return(value)
-  cache[[key]] <- value
+.eval_state_get_extra <- function(state, tag) {
+  if (is.null(state) || !is.environment(state) || !nzchar(tag)) return(NULL)
+  state[[paste0("extra::", tag)]]
+}
+
+.eval_state_set_extra <- function(state, tag, value) {
+  if (is.null(state) || !is.environment(state) || !nzchar(tag)) return(value)
+  state[[paste0("extra::", tag)]] <- value
   value
 }

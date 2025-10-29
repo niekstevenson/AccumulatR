@@ -96,4 +96,3 @@
 .prep_label_cache <- function(prep) .prep_runtime_get(prep, "label_cache")
 .prep_competitors <- function(prep) .prep_runtime_get(prep, "competitor_map")
 .prep_id_index <- function(prep) .prep_runtime_get(prep, "id_index")
-.prep_id_labels <- function(prep) .prep_runtime_get(prep, "id_labels")

@@ -287,10 +287,3 @@ tables_to_model <- function(tables) {
   class(model) <- "race_model_spec"
   model
 }
-
-simulate_model_from_tables <- function(model_tables, n_trials, seed = NULL,
-                                       keep_detail = FALSE) {
-  if (!missing(seed) && !is.null(seed)) set.seed(seed)
-  simulate_model(tables_to_model(model_tables), n_trials = n_trials,
-                 seed = NULL, keep_detail = keep_detail)
-}

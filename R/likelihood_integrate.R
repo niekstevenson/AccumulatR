@@ -3,13 +3,13 @@
 
 # Integrand for scenario-conditioned probability (density already encodes competitors)
 .integrand_outcome_density <- function(t, expr, prep, component, competitor_exprs,
-                                       cache = NULL) {
-  cache <- lik_cache_resolve(cache, prep)
+                                       state = NULL) {
+  state <- state %||% .eval_state_create()
   vapply(t, function(tt) {
     if (!is.finite(tt) || tt < 0) return(0.0)
     .scenario_density_with_competitors(expr, tt, prep, component,
                                        competitor_exprs = competitor_exprs,
-                                       cache = cache)
+                                       state = state)
   }, numeric(1))
 }
 
@@ -17,9 +17,9 @@
 # competitor_exprs retained for backward compatibility but ignored.
 .integrate_outcome_probability <- function(expr, prep, component, upper_limit = Inf,
                                            competitor_exprs = NULL,
-                                           cache = NULL) {
+                                           state = NULL) {
   if (!is.finite(upper_limit)) upper_limit <- Inf
-  cache <- lik_cache_resolve(cache, prep)
+  state <- state %||% .eval_state_create()
   integrand <- function(t) {
     val <- .integrand_outcome_density(
       t,
@@ -27,7 +27,7 @@
       prep = prep,
       component = component,
       competitor_exprs = competitor_exprs %||% list(),
-      cache = cache
+      state = state
     )
     val
   }
@@ -286,11 +286,115 @@
   }, numeric(1))
 }
 
+.shared_gate_fast_context <- function(prep, component, info, state) {
+  if (is.null(info)) return(NULL)
+  make_event_expr <- function(event_id) list(kind = "event", source = event_id)
+  fetch_node <- function(event_id) {
+    expr <- make_event_expr(event_id)
+    .expr_lookup_compiled(expr, prep)
+  }
+  nodes <- list(
+    x = fetch_node(info$x_id),
+    y = fetch_node(info$y_id),
+    c = fetch_node(info$c_id)
+  )
+  if (any(vapply(nodes, is.null, logical(1)))) return(NULL)
+  if (any(vapply(nodes, function(node) {
+    !is.function(node$density_fast_fn) || !is.function(node$surv_fast_fn)
+  }, logical(1)))) {
+    return(NULL)
+  }
+  wrap_density <- function(node) {
+    fast <- node$density_fast_fn
+    function(t_vec) {
+      tv <- as.numeric(t_vec)
+      if (length(tv) == 0L) return(numeric(0))
+      vals <- fast(tv, component)
+      out <- as.numeric(vals)
+      out[!is.finite(out)] <- 0.0
+      out
+    }
+  }
+  wrap_survival <- function(node) {
+    fast <- node$surv_fast_fn
+    function(t_vec) {
+      tv <- as.numeric(t_vec)
+      if (length(tv) == 0L) return(numeric(0))
+      vals <- fast(tv, component)
+      out <- as.numeric(vals)
+      out[!is.finite(out)] <- 0.0
+      out[out < 0] <- 0.0
+      out[out > 1] <- 1.0
+      out
+    }
+  }
+  fX <- wrap_density(nodes$x)
+  fY <- wrap_density(nodes$y)
+  fC <- wrap_density(nodes$c)
+  SX <- wrap_survival(nodes$x)
+  SY <- wrap_survival(nodes$y)
+  SC <- wrap_survival(nodes$c)
+  FX <- function(t_vec) {
+    1.0 - SX(t_vec)
+  }
+  FY <- function(t_vec) {
+    1.0 - SY(t_vec)
+  }
+  FC <- function(t_vec) {
+    1.0 - SC(t_vec)
+  }
+  comp_key <- .eval_state_component_key(component)
+  base_tag <- paste("shared_palloc", info$x_id, info$y_id, info$c_id, comp_key, sep = "|")
+  shared_palloc <- function(limit) {
+    limits <- as.numeric(limit)
+    if (length(limits) == 0L) return(numeric(0))
+    vapply(limits, function(lim) {
+      if (!is.finite(lim) || lim <= 0) return(0.0)
+      limit_key <- paste(base_tag, .eval_state_time_key(lim), sep = "|")
+      cached <- .eval_state_get_extra(state, limit_key)
+      if (!is.null(cached)) return(as.numeric(cached))
+      denom_val <- as.numeric(FX(lim) * FY(lim))
+      denom <- if (length(denom_val) == 0L) 0.0 else denom_val[[1]]
+      if (!is.finite(denom) || denom <= 0) {
+        out <- 0.0
+      } else {
+        integral_val <- tryCatch(
+          stats::integrate(
+            function(u) fX(u) * FY(u),
+            lower = 0,
+            upper = lim,
+            rel.tol = .integrate_rel_tol(),
+            abs.tol = .integrate_abs_tol(),
+            stop.on.error = FALSE
+          )[["value"]],
+          error = function(e) 0.0
+        )
+        out <- 1.0 - (as.numeric(integral_val) / denom)
+        if (!is.finite(out)) out <- 0.0
+        if (out < 0) out <- 0.0
+        if (out > 1) out <- 1.0
+      }
+      .eval_state_set_extra(state, limit_key, out)
+      out
+    }, numeric(1))
+  }
+  list(
+    fX = fX,
+    fY = fY,
+    fC = fC,
+    FX = FX,
+    FY = FY,
+    FC = FC,
+    SY = SY,
+    palloc = shared_palloc
+  )
+}
+
 # Compute likelihood for a single trial/outcome
 .outcome_likelihood <- function(outcome_label, rt, prep, component) {
   outcome_defs <- prep[["outcomes"]]
   competitor_map <- .prep_competitors(prep) %||% list()
-  cache <- lik_cache_resolve(NULL, prep)
+  state <- .eval_state_create()
   
   # FIRST: Check for GUESS outcomes (can be both defined and from guess policy)
   # GUESS outcomes arise from component-level guess policies
@@ -321,7 +425,7 @@
             comp_exprs_guess <- competitor_map[[label]] %||% list()
             prob_outcome <- .integrate_outcome_probability(expr, prep, component, deadline,
                                                            competitor_exprs = comp_exprs_guess,
-                                                           cache = cache)
+                                                           state = state)
             keep_prob <- as.numeric(guess_weights[[label]])
             guess_prob <- 1.0 - keep_prob
             total_prob <- total_prob + prob_outcome * guess_prob
@@ -335,7 +439,7 @@
             comp_exprs_guess <- competitor_map[[label]] %||% list()
             dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
                                                          competitor_exprs = comp_exprs_guess,
-                                                         cache = cache)
+                                                         state = state)
             if (dens_r == 0) next
             keep_prob <- as.numeric(guess_weights[[label]])
             guess_prob <- 1.0 - keep_prob
@@ -380,7 +484,7 @@
               comp_exprs_map <- if (length(comp_labels_map) > 0) lapply(comp_labels_map, function(lbl) outcome_defs[[lbl]][['expr']]) else list()
               return(.integrate_outcome_probability(expr, prep, component, deadline,
                                                     competitor_exprs = comp_exprs_map,
-                                                    cache = cache))
+                                                    state = state))
             } else {
               # Race density at rt for the mapped source outcome
               comp_labels_map <- setdiff(names(outcome_defs), label)
@@ -397,7 +501,7 @@
               comp_exprs_map <- if (length(comp_labels_map) > 0) lapply(comp_labels_map, function(lbl) outcome_defs[[lbl]][['expr']]) else list()
               dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
                                                            competitor_exprs = comp_exprs_map,
-                                                           cache = cache)
+                                                           state = state)
               return(as.numeric(dens_r))
             }
           }
@@ -501,7 +605,20 @@
   }
   
   shared_palloc <- NULL
+  shared_gate_ctx <- NULL
   if (!is.null(shared_gate_info)) {
+    shared_gate_ctx <- .shared_gate_fast_context(prep, component, shared_gate_info, state)
+  }
+  if (!is.null(shared_gate_ctx)) {
+    fX <- shared_gate_ctx$fX
+    fY <- shared_gate_ctx$fY
+    fC <- shared_gate_ctx$fC
+    FX <- shared_gate_ctx$FX
+    FY <- shared_gate_ctx$FY
+    FC <- shared_gate_ctx$FC
+    SY <- shared_gate_ctx$SY
+    shared_palloc <- shared_gate_ctx$palloc
+  } else if (!is.null(shared_gate_info)) {
     fX <- get_f(shared_gate_info[['x_id']])
     fY <- get_f(shared_gate_info[['y_id']])
     fC <- get_f(shared_gate_info[['c_id']])
@@ -575,14 +692,14 @@
         if (!is.finite(tt) || tt < 0) return(0.0)
         base <- .scenario_density_with_competitors(expr, tt, prep, component,
                                                    competitor_exprs = competitor_exprs,
-                                                   cache = cache)
+                                                   state = state)
         if (base == 0) return(0.0)
         add <- 0.0
         if (length(donors) > 0) {
           for (d in donors) {
             dens_d <- .scenario_density_with_competitors(d[['expr']], tt, prep, component,
                                                          competitor_exprs = d[['competitors']] %||% list(),
-                                                         cache = cache)
+                                                         state = state)
             if (dens_d == 0) next
             add <- add + d[['weight']] * dens_d
           }
@@ -619,9 +736,9 @@
     }
     base_val <- term1 + termCother + term2
   } else {
-    dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
-                                                 competitor_exprs = competitor_exprs,
-                                                 cache = cache)
+      dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
+                                                   competitor_exprs = competitor_exprs,
+                                                   state = state)
     if (dens_r == 0) return(0.0)
     base_val <- dens_r
     # Include donor mass (e.g., timeout guesses) that keeps the observed RT
@@ -631,7 +748,7 @@
         if (identical(d[['rt_policy']], "na")) next
         dens_d <- .scenario_density_with_competitors(d[['expr']], rt, prep, component,
                                                      competitor_exprs = d[['competitors']] %||% list(),
-                                                     cache = cache)
+                                                     state = state)
         if (dens_d == 0) next
         donor_add <- donor_add + d[['weight']] * dens_d
       }
@@ -698,7 +815,7 @@ compute_loglik <- function(model, data) {
   for (i in seq_len(n_rows)) {
     outcome <- as.character(data[['outcome']][[i]])
     rt_val <- as.numeric(data[['rt']][[i]])
-    rt_key <- lik_cache_time_key(rt_val)
+    rt_key <- .eval_state_time_key(rt_val)
     component_key <- default_component
     if (is_mixture) {
       if (has_weight_param || !has_component_col) {

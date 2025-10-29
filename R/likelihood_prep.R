@@ -10,25 +10,14 @@
   pool_ids <- names(prep[["pools"]] %||% list())
   all_ids <- unique(c(acc_ids, pool_ids))
   prep[[".id_index"]] <- setNames(seq_along(all_ids), all_ids)
-  if (length(all_ids) > 0) {
-    idx_map <- prep[[".id_index"]]
-    rev_labels <- rep(NA_character_, length(idx_map))
-    rev_labels[as.integer(idx_map)] <- names(idx_map)
-    prep[[".id_labels"]] <- rev_labels
-  } else {
-    prep[[".id_labels"]] <- character(0)
-  }
   prep[[".label_cache"]] <- new.env(parent = emptyenv(), hash = TRUE)
   prep <- .precompile_likelihood_expressions(prep)
   prep[[".competitors"]] <- .prepare_competitor_map(prep)
-  lik_cache <- lik_cache_create()
   runtime <- list(
-    cache = lik_cache,
     expr_compiled = prep[[".expr_compiled"]],
     label_cache = prep[[".label_cache"]],
     competitor_map = prep[[".competitors"]],
-    id_index = prep[[".id_index"]],
-    id_labels = prep[[".id_labels"]]
+    id_index = prep[[".id_index"]]
   )
   prep[[".runtime"]] <- runtime
   prep
@@ -65,15 +54,6 @@
     cache_env[[cache_key]] <- ids
   }
   ids
-}
-
-.ids_to_labels <- function(prep, ids) {
-  if (is.null(ids) || length(ids) == 0L) return(character(0))
-  labels <- .prep_id_labels(prep)
-  if (is.null(labels) || length(labels) == 0L) return(character(0))
-  ids <- as.integer(ids)
-  out <- labels[ids]
-  out[!is.na(out)]
 }
 
 .coerce_forced_ids <- function(prep, values) {

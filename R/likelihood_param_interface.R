@@ -299,7 +299,8 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
   comp_ids <- structure$components$component_id
 
   prep_cache <- new.env(parent = emptyenv(), hash = TRUE)
-  likelihood_cache <- new.env(parent = emptyenv(), hash = TRUE)
+  cache_across_trials <- isTRUE(getOption("uuber.param_cache_across_trials", TRUE))
+  likelihood_cache <- if (cache_across_trials) new.env(parent = emptyenv(), hash = TRUE) else NULL
 
   if (!"trial" %in% names(params_df)) params_df$trial <- 1L
   params_df$trial <- params_df$trial
@@ -327,6 +328,11 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
     outcome <- data_row$outcome[[1]] %||% NA_character_
     rt_val <- data_row$rt[[1]] %||% NA_real_
     forced_component <- if ("component" %in% names(data_row)) data_row$component[[1]] else NULL
+    lik_cache <- if (cache_across_trials && !is.null(likelihood_cache)) {
+      likelihood_cache
+    } else {
+      new.env(parent = emptyenv(), hash = TRUE)
+    }
     mixture <- .likelihood_mixture_likelihood(
       structure,
       prep_eval_base,
@@ -337,7 +343,7 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
       rt_val,
       forced_component = forced_component,
       prep_cache = prep_cache,
-      lik_cache = likelihood_cache
+      lik_cache = lik_cache
     )
     if (!is.finite(mixture) || mixture <= 0) {
       per_trial_loglik[[i]] <- -Inf
@@ -408,6 +414,7 @@ observed_response_probabilities_from_params <- function(structure, params_df,
   }
   prep_eval_base <- .prepare_model_for_likelihood(structure$model_spec)
   comp_ids <- structure$components$component_id
+  prep_cache <- new.env(parent = emptyenv(), hash = TRUE)
 
   if (!"trial" %in% names(params_df)) params_df$trial <- 1L
   params_df$trial <- params_df$trial

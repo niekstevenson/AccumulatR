@@ -750,6 +750,35 @@ example_17_k_of_n_inhibitors <- race_spec() |>
             attrs = list(shared_params = list(meanlog = log(0.30), sdlog = 0.15))) |>
   build_model()
 
+example_18_shared_triggers <- race_spec() |>
+  add_accumulator("go_left", "lognormal",
+                  params = list(meanlog = log(0.30), sdlog = 0.20)) |>
+  add_accumulator("go_right", "lognormal",
+                  params = list(meanlog = log(0.32), sdlog = 0.20)) |>
+  add_accumulator("stop_fast", "lognormal", onset = 0.15,
+                  params = list(meanlog = log(0.16), sdlog = 0.15)) |>
+  add_accumulator("stop_slow", "lognormal", onset = 0.15,
+                  params = list(meanlog = log(0.18), sdlog = 0.15)) |>
+  add_pool("L", "go_left") |>
+  add_pool("R", "go_right") |>
+  add_pool("STOP", c("stop_fast", "stop_slow")) |>
+  add_outcome("Left", "L") |>
+  add_outcome("Right", "R") |>
+  add_outcome("STOP", "STOP", options = list(map_outcome_to = NA_character_)) |>
+  add_group("stop_fast_component", members = "stop_fast", attrs = list(component = "fast")) |>
+  add_group("stop_slow_component", members = "stop_slow", attrs = list(component = "slow")) |>
+  add_group("shared_stop_trigger",
+            members = c("stop_fast", "stop_slow"),
+            attrs = list(shared_trigger = list(id = "stop_gate", q = 0.25))) |>
+  set_metadata(mixture = list(
+    components = list(
+      component("fast", weight = 0.25),
+      component("slow", weight = 0.75)
+    )
+  )) |>
+  build_model()
+
+
 new_api_examples <- list(
   example_1_simple = example_1_simple,
   example_2_stop_mixture = example_2_stop_mixture,
@@ -767,5 +796,6 @@ new_api_examples <- list(
   example_14_weighted_pool = example_14_weighted_pool,
   example_15_component_metadata = example_15_component_metadata,
   example_16_guard_tie_simple = example_16_guard_tie_simple,
-  example_17_k_of_n_inhibitors = example_17_k_of_n_inhibitors
+  example_17_k_of_n_inhibitors = example_17_k_of_n_inhibitors,
+  example_18_shared_triggers = example_18_shared_triggers
 )

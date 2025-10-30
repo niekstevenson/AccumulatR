@@ -1,5 +1,5 @@
 rm(list = ls())
-
+options(uuber.param_cache_across_trials = TRUE)
 source("examples/new_API.R")
 source("R/generator_new.R")
 source("R/super_large_likelihood.R")

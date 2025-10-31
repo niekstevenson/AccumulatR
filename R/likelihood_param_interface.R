@@ -259,15 +259,12 @@
       cached <- lik_cache[[cache_key]]
       if (!is.null(cached)) {
         lik_val <- cached
-        .eval_state_touch_key(lik_cache, cache_key)
       }
     }
     if (is.null(lik_val)) {
       lik_val <- .outcome_likelihood(outcome_label, rt_val, trial_prep, comp_id)
       if (!is.null(lik_cache) && is.environment(lik_cache)) {
-        was_present <- !is.null(lik_cache[[cache_key]])
         lik_cache[[cache_key]] <- lik_val
-        .eval_state_register_insert(lik_cache, cache_key, was_present)
       }
     }
     total <- total + weights[[idx]] * as.numeric(lik_val)
@@ -296,12 +293,6 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
   prep_cache <- new.env(parent = emptyenv(), hash = TRUE)
   cache_across_trials <- isTRUE(getOption("uuber.param_cache_across_trials", TRUE))
   likelihood_cache <- if (cache_across_trials) new.env(parent = emptyenv(), hash = TRUE) else NULL
-  if (!is.null(likelihood_cache)) {
-    likelihood_cache[[".lru_tick"]] <- 0L
-    likelihood_cache[[".lru_index"]] <- new.env(parent = emptyenv(), hash = TRUE)
-    likelihood_cache[[".key_count"]] <- 0L
-    likelihood_cache[[".max_entries"]] <- as.integer(getOption("uuber.lik_cache_max_entries", NA_integer_))
-  }
 
   if (!"trial" %in% names(params_df)) params_df$trial <- 1L
   params_df$trial <- params_df$trial
@@ -332,12 +323,7 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
     lik_cache <- if (cache_across_trials && !is.null(likelihood_cache)) {
       likelihood_cache
     } else {
-      env <- new.env(parent = emptyenv(), hash = TRUE)
-      env[[".lru_tick"]] <- 0L
-      env[[".lru_index"]] <- new.env(parent = emptyenv(), hash = TRUE)
-      env[[".key_count"]] <- 0L
-      env[[".max_entries"]] <- as.integer(getOption("uuber.lik_cache_max_entries", NA_integer_))
-      env
+      new.env(parent = emptyenv(), hash = TRUE)
     }
     mixture <- .likelihood_mixture_likelihood(
       structure,

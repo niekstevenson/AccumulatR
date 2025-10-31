@@ -21,5 +21,5 @@
     ],
     "latex-workshop.latex.recipe.default": "latexmk with BibTeX",
     "latex-workshop.latex.forceRecipeUsage": true,
-    "workbench.colorTheme": "GitHub Sharp"
+    "workbench.colorTheme": "Default Light+"
 }

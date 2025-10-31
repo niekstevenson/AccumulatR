@@ -2,7 +2,7 @@ rm(list = ls())
 source("examples/stim_selective_versions.R")
 source("R/model_tables.R")
 source("R/generator_new.R")
-source("R/likelihood_old.R")
+source("R/super_large_likelihood.R")
 source("R/profile_plot_new.R")
 source("R/processing_tree.R")
 
@@ -34,6 +34,7 @@ print(table(data$outcome, useNA = "ifany")/nrow(data))
 # #
 # 3) Analytic probability check via likelihood helpers
 # cat("\nAnalytic outcome probabilities:\n")
+options(uuber.response_probabilities.method="analytic")
 probs <- observed_response_probabilities(model_tables, include_na = TRUE)
 print(round(probs, 6))
 cat(sprintf("Sum of probabilities: %.6f\n", sum(probs)))

@@ -91,6 +91,9 @@
 .expr_lookup_compiled <- function(expr, prep) {
   comp <- .prep_expr_compiled(prep)
   if (is.null(comp)) return(NULL)
+  if (!is.null(expr) && !is.null(expr[["kind"]]) && identical(expr[["kind"]], "guard")) {
+    return(NULL)
+  }
   node_id <- attr(expr, ".lik_id", exact = TRUE)
   if (is.null(node_id) || is.na(node_id)) {
     sig <- .expr_signature(expr)
@@ -791,30 +794,25 @@
   reference <- expr[["reference"]]
   blocker <- expr[["blocker"]]
   unless_list <- expr[["unless"]] %||% list()
+  # Fast path is only valid when there are no protectors; otherwise we need
+  # the full integral for effective blocker survival.
+  if (length(unless_list) > 0L) {
+    return(list(density = NULL, survival = NULL, cdf = NULL))
+  }
   ref_node <- ref_node_override %||% .expr_lookup_compiled(reference, prep)
   block_node <- if (!is.null(blocker)) {
     block_node_override %||% .expr_lookup_compiled(blocker, prep)
   } else {
     NULL
   }
-  unless_nodes <- if (!is.null(unless_nodes_override)) {
-    unless_nodes_override
-  } else {
-    lapply(unless_list, function(unl) .expr_lookup_compiled(unl, prep))
-  }
+  # With no protectors, we can use a simple fast-path.
+  unless_nodes <- list()
   if (is.null(ref_node) || !is.function(ref_node$density_fast_fn)) {
     return(list(density = NULL, survival = NULL, cdf = NULL))
   }
   ref_density_fast <- ref_node$density_fast_fn
   block_surv_fast <- if (!is.null(block_node)) block_node$surv_fast_fn else NULL
   block_surv <- if (!is.null(block_node)) block_node$surv_fn else NULL
-  unless_surv_fast <- lapply(unless_nodes, `[[`, "surv_fast_fn")
-  if (length(unless_list) > 0 && any(vapply(unless_surv_fast, Negate(is.function), logical(1)))) {
-    return(list(density = NULL, survival = NULL, cdf = NULL))
-  }
-  # Local eval-state and guard signature for memoization of S_eff(t)
-  local_state <- .eval_state_create()
-  guard_sig <- tryCatch(.expr_signature(expr), error = function(e) "guard")
   density_fast <- function(t, component) {
     t_vals <- as.numeric(t)
     if (length(t_vals) == 0L) return(numeric(0))
@@ -823,41 +821,16 @@
       dens_ref_vec <- ref_density_fast(tt, component)
       dens_ref <- if (length(dens_ref_vec) == 0L) 0.0 else dens_ref_vec[[1]]
       if (!is.finite(dens_ref) || dens_ref <= 0) return(0.0)
-      # Compute effective survival S_eff(tt):
-      # - If there are no protectors, use the blocker survival fast path (no extra integral)
-      # - If protectors exist, use exact effective survival with memoization
-      if (length(unless_list) == 0) {
-        S_eff <- if (is.function(block_surv_fast)) {
-          surv_vec <- block_surv_fast(tt, component)
-          if (length(surv_vec) == 0L) 1.0 else surv_vec[[1]]
-        } else if (is.function(block_surv)) {
-          block_surv(tt, component, integer(0), integer(0))
-        } else {
-          1.0
-        }
-        if (!is.finite(S_eff) || S_eff <= 0) return(0.0)
-        total <- dens_ref * S_eff
-        if (!is.finite(total) || total <= 0) return(0.0)
-        return(total)
+      surv_block <- if (is.function(block_surv_fast)) {
+        surv_vec <- block_surv_fast(tt, component)
+        if (length(surv_vec) == 0L) 1.0 else surv_vec[[1]]
+      } else if (is.function(block_surv)) {
+        block_surv(tt, component, integer(0), integer(0))
+      } else {
+        1.0
       }
-      # With protectors: exact S_eff via .guard_effective_survival, memoized
-      comp_key <- .eval_state_component_key(component)
-      time_key <- .eval_state_time_key(tt)
-      cache_tag <- paste("guard_eff", guard_sig, comp_key, time_key, sep = "|")
-      S_eff <- .eval_state_get_extra(local_state, cache_tag)
-      if (is.null(S_eff)) {
-        S_eff <- .guard_effective_survival(
-          expr, tt, prep, component,
-          integer(0), integer(0), local_state,
-          block_node = block_node,
-          unless_nodes = unless_nodes
-        )
-        if (!is.finite(S_eff) || S_eff < 0) S_eff <- 0.0
-        if (S_eff > 1) S_eff <- 1.0
-        .eval_state_set_extra(local_state, cache_tag, S_eff)
-      }
-      if (!is.finite(S_eff) || S_eff <= 0) return(0.0)
-      total <- dens_ref * S_eff
+      if (!is.finite(surv_block) || surv_block <= 0) return(0.0)
+      total <- dens_ref * surv_block
       if (!is.finite(total) || total <= 0) return(0.0)
       total
     }, numeric(1))
@@ -1066,20 +1039,25 @@
     return(prod_val)
   }
   if (identical(kind, "guard")) {
-    block_node <- .compiled_node_fetch(prep, node$blocker_id)
-    unless_nodes <- if (length(node$unless_ids %||% integer(0)) > 0L) {
-      lapply(node$unless_ids, function(uid) .compiled_node_fetch(prep, uid))
-    } else {
-      list()
+    # Survival of guard = 1 - ∫_0^t f_guard(u) du (use direct guard density)
+    dens_fun <- function(u) {
+      vapply(u, function(uu) {
+        if (!is.finite(uu) || uu < 0) return(0.0)
+        .guard_density_at(
+          node$expr, uu, prep, component,
+          forced_complete = forced_complete,
+          forced_survive = forced_survive,
+          state = state
+        )
+      }, numeric(1))
     }
-    out <- .guard_effective_survival(
-      node$expr, t, prep, component,
-      forced_complete = forced_complete,
-      forced_survive = forced_survive,
-      state = state,
-      block_node = block_node,
-      unless_nodes = unless_nodes
-    )
+    val <- tryCatch(stats::integrate(dens_fun, lower = 0, upper = t,
+                                     rel.tol = .integrate_rel_tol(), abs.tol = .integrate_abs_tol(),
+                                     stop.on.error = FALSE)[["value"]],
+                    error = function(e) 0.0)
+    out <- 1.0 - as.numeric(val)
+    if (!is.finite(out) || out < 0) out <- 0.0
+    if (out > 1) out <- 1.0
     if (!is.null(entry)) entry$survival <- out
     return(out)
   }
@@ -1535,25 +1513,39 @@
                               state = NULL) {
   forced_complete <- .coerce_forced_ids(prep, forced_complete)
   forced_survive <- .coerce_forced_ids(prep, forced_survive)
-  compiled <- .expr_lookup_compiled(expr, prep)
-  if (!is.null(compiled)) {
-    scenarios <- .node_scenarios_at(
-      compiled, t, prep, component,
-      forced_complete = forced_complete,
-      forced_survive = forced_survive,
-      state = state
-    )
-  } else {
-    scenarios <- .guard_scenarios_slow(
-      expr, t, prep, component,
-      forced_complete = forced_complete,
-      forced_survive = forced_survive,
-      state = state
-    )
+  # Direct formulation: f_guard(t) = f_ref(t) * S_eff_blocker(t)
+  reference <- expr[["reference"]]
+  if (is.null(reference)) return(0.0)
+  dens_ref <- .eval_expr_likelihood(
+    reference, t, prep, component,
+    forced_complete = forced_complete,
+    forced_survive = forced_survive,
+    state = state
+  )
+  if (!is.finite(dens_ref) || dens_ref <= 0) {
+    val <- 0.0
+    attr(val, "scenarios") <- list()
+    return(val)
   }
-  total <- if (length(scenarios) == 0) 0.0 else sum(vapply(scenarios, `[[`, numeric(1), "weight"))
-  attr(total, "scenarios") <- scenarios %||% list()
-  total
+  # Reuse compiled nodes when available for efficiency
+  block_node <- NULL
+  unless_nodes <- list()
+  blocker <- expr[["blocker"]]
+  unless_list <- expr[["unless"]] %||% list()
+  if (!is.null(blocker)) block_node <- .expr_lookup_compiled(blocker, prep)
+  if (length(unless_list) > 0L) unless_nodes <- lapply(unless_list, function(unl) .expr_lookup_compiled(unl, prep))
+  S_eff <- .guard_effective_survival(
+    expr, t, prep, component,
+    forced_complete = forced_complete,
+    forced_survive = forced_survive,
+    state = state,
+    block_node = block_node,
+    unless_nodes = unless_nodes
+  )
+  out <- as.numeric(dens_ref) * as.numeric(S_eff)
+  if (!is.finite(out) || out < 0) out <- 0.0
+  attr(out, "scenarios") <- list()
+  out
 }
 
 .make_guard_scenario_fn <- function(expr, prep) {
@@ -2416,7 +2408,7 @@
     dens_fun <- function(u) {
       vapply(u, function(uu) {
         if (!is.finite(uu) || uu < 0) return(0.0)
-        .eval_expr_likelihood(
+        .guard_density_at(
           expr, uu, prep, component,
           forced_complete = forced_complete,
           forced_survive = forced_survive,
@@ -2447,6 +2439,35 @@
     return(val)
   }
   state <- state %||% .eval_state_create()
+  # Guard: compute density directly to avoid stale compiled closures and ensure
+  # correct protector handling.
+  if (!is.null(expr) && !is.null(expr$kind) && identical(expr$kind, "guard")) {
+    dens_scalar <- .guard_density_at(
+      expr, t, prep, component,
+      forced_complete = integer(0),
+      forced_survive = integer(0),
+      state = state
+    )
+    if (!is.finite(dens_scalar) || dens_scalar <= 0) {
+      dens_scalar <- 0.0
+    } else if (length(competitor_exprs) > 0) {
+      surv_prod <- .compute_survival_product(
+        outcome_expr = expr,
+        competitor_exprs = competitor_exprs,
+        prep = prep,
+        component = component,
+        t = t,
+        state = state
+      )
+      if (!is.finite(surv_prod) || surv_prod <= 0) {
+        dens_scalar <- 0.0
+      } else {
+        dens_scalar <- dens_scalar * surv_prod
+      }
+    }
+    attr(dens_scalar, "scenarios") <- list()
+    return(dens_scalar)
+  }
   compiled <- .expr_lookup_compiled(expr, prep)
   density_fn <- if (!is.null(compiled)) compiled$density_fn else NULL
   if (!is.null(compiled) && is.function(compiled$density_fast_fn)) {
@@ -2568,38 +2589,88 @@
 }
 
 .compute_survival_product <- function(outcome_expr, competitor_exprs, prep, component, t,
-                                      state = NULL) {
+                                     state = NULL) {
   if (length(competitor_exprs) == 0) return(1.0)
   state <- state %||% .eval_state_create()
+  clusters <- .cluster_competitors(competitor_exprs, prep)
+  if (length(clusters) == 0) return(1.0)
   prod_val <- 1.0
-  processed_keys <- character(0)
-  fallback_exprs <- list()
-  for (expr in competitor_exprs) {
-    fast_fn <- attr(expr, ".lik_cluster_fast_fn", exact = TRUE)
-    fast_key <- attr(expr, ".lik_cluster_fast_key", exact = TRUE)
-    if (is.function(fast_fn) && is.character(fast_key) && length(fast_key) == 1L && nzchar(fast_key)) {
-      if (!(fast_key %in% processed_keys)) {
-        comp_key <- .eval_state_component_key(component)
-        time_key <- .eval_state_time_key(t)
-        fast_tag <- paste("fast_cluster", fast_key, comp_key, time_key, sep = "|")
-        cluster_val <- .eval_state_get_extra(state, fast_tag)
-        if (is.null(cluster_val)) {
-          vals <- fast_fn(t, component)
-          cluster_val <- if (length(vals) == 0L) 1.0 else vals[[1]]
-          if (!is.finite(cluster_val) || cluster_val < 0) cluster_val <- 0.0
-          .eval_state_set_extra(state, fast_tag, cluster_val)
-        }
-        processed_keys <- c(processed_keys, fast_key)
-        prod_val <- prod_val * cluster_val
-      }
+  for (cluster in clusters) {
+    cluster_exprs <- cluster$exprs %||% list()
+    cluster_indices <- cluster$indices %||% seq_along(cluster_exprs)
+    component_key <- .eval_state_component_key(component)
+    time_key <- .eval_state_time_key(t)
+    cache_key <- paste(
+      "joint_cluster",
+      paste(cluster_indices, collapse = ","),
+      component_key,
+      time_key,
+      sep = "|"
+    )
+    cached <- .eval_state_get_extra(state, cache_key)
+    if (!is.null(cached)) {
+      cluster_val <- cached
     } else {
-      fallback_exprs[[length(fallback_exprs) + 1L]] <- expr
+      cluster_val <- .joint_survival_for_cluster(cluster_exprs, prep, component, t, state)
+      if (!is.finite(cluster_val) || cluster_val < 0) cluster_val <- 0.0
+      if (cluster_val > 1) cluster_val <- 1.0
+      .eval_state_set_extra(state, cache_key, cluster_val)
     }
+    prod_val <- prod_val * cluster_val
+    if (!is.finite(prod_val) || prod_val == 0) return(0.0)
   }
-  if (length(fallback_exprs) > 0L) {
-    prod_val <- prod_val * .compute_survival_product_legacy(fallback_exprs, prep, component, t, state)
-  }
+  if (!is.finite(prod_val) || prod_val < 0) prod_val <- 0.0
+  if (prod_val > 1) prod_val <- 1.0
   prod_val
+}
+
+# Compute joint survival for a cluster of dependent competitor expressions at time t
+# using scenario-based conditioning. This is fully general (supports guards on guards).
+.joint_survival_for_cluster <- function(cluster_exprs, prep, component, t, state) {
+  n <- length(cluster_exprs)
+  if (n == 0) return(1.0)
+  if (n == 1) {
+    return(.eval_expr_survival_cond(
+      cluster_exprs[[1]], t, prep, component,
+      forced_complete = integer(0),
+      forced_survive = integer(0),
+      state = state
+    ))
+  }
+  # Build a synthetic OR expression over the cluster to represent the union
+  or_expr <- list(kind = "or", args = cluster_exprs)
+  # CDF of the union via integrating scenario-derived density
+  dens_fun <- function(u) {
+    vapply(u, function(ui) {
+      if (!is.finite(ui) || ui < 0) return(0.0)
+      scenarios <- .expr_scenarios_at(
+        or_expr, ui, prep, component,
+        forced_complete = integer(0),
+        forced_survive = integer(0),
+        state = state
+      )
+      if (length(scenarios) == 0) return(0.0)
+      sum(vapply(scenarios, `[[`, numeric(1), "weight"))
+    }, numeric(1))
+  }
+  cdf_val <- tryCatch(
+    stats::integrate(
+      dens_fun,
+      lower = 0,
+      upper = t,
+      rel.tol = .integrate_rel_tol(),
+      abs.tol = .integrate_abs_tol(),
+      stop.on.error = FALSE
+    )[["value"]],
+    error = function(e) 0.0
+  )
+  cdf_val <- as.numeric(cdf_val)
+  if (!is.finite(cdf_val) || cdf_val < 0) cdf_val <- 0.0
+  if (cdf_val > 1) cdf_val <- 1.0
+  surv <- 1.0 - cdf_val
+  if (!is.finite(surv) || surv < 0) surv <- 0.0
+  if (surv > 1) surv <- 1.0
+  surv
 }
 
 .compute_survival_product_legacy <- function(exprs, prep, component, t, state) {
@@ -2772,13 +2843,13 @@
   }
   
   if (identical(kind, "guard")) {
-    # Survival of guard = 1 - ∫_0^t f_guard(u) du
+    # Survival of guard = 1 - ∫_0^t f_guard(u) du (use direct guard density)
     if (!is.finite(t)) return(0.0)
     if (t <= 0) return(1.0)
     dens_fun <- function(u) {
       vapply(u, function(uu) {
         if (!is.finite(uu) || uu < 0) return(0.0)
-        .eval_expr_likelihood(expr, uu, prep, component)
+        .guard_density_at(expr, uu, prep, component, integer(0), integer(0), state = NULL)
       }, numeric(1))
     }
     compute_integral <- function() {

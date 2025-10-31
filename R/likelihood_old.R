@@ -8,6 +8,12 @@ source("R/model_tables.R")
 
 `%||%` <- function(lhs, rhs) if (is.null(lhs) || length(lhs) == 0) rhs else lhs
 
+prefix_sum <- function(coeff, K) {
+  if (length(coeff) == 0) return(0.0)
+  idx <- seq_len(min(K, length(coeff) - 1) + 1L)
+  sum(coeff[idx])
+}
+
 .integrate_rel_tol <- function() getOption("uuber.integrate.rel.tol", 1e-5)
 .integrate_abs_tol <- function() getOption("uuber.integrate.abs.tol", 1e-6)
 
@@ -1433,10 +1439,6 @@ compute_loglik <- function(model, data, cache_env = NULL) {
   attr(total_ll, "cache") <- cache_env
 
   total_ll
-}
-
-compute_loglik_from_tables <- function(model_tables, data, cache_env = NULL) {
-  compute_loglik(model_tables, data, cache_env = cache_env)
 }
 
 # ==============================================================================

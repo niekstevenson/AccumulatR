@@ -812,6 +812,9 @@
   if (length(unless_list) > 0 && any(vapply(unless_surv_fast, Negate(is.function), logical(1)))) {
     return(list(density = NULL, survival = NULL, cdf = NULL))
   }
+  # Local eval-state and guard signature for memoization of S_eff(t)
+  local_state <- .eval_state_create()
+  guard_sig <- tryCatch(.expr_signature(expr), error = function(e) "guard")
   density_fast <- function(t, component) {
     t_vals <- as.numeric(t)
     if (length(t_vals) == 0L) return(numeric(0))
@@ -820,25 +823,41 @@
       dens_ref_vec <- ref_density_fast(tt, component)
       dens_ref <- if (length(dens_ref_vec) == 0L) 0.0 else dens_ref_vec[[1]]
       if (!is.finite(dens_ref) || dens_ref <= 0) return(0.0)
-      surv_block <- if (is.function(block_surv_fast)) {
-        surv_vec <- block_surv_fast(tt, component)
-        if (length(surv_vec) == 0L) 1.0 else surv_vec[[1]]
-      } else if (is.function(block_surv)) {
-        block_surv(tt, component, integer(0), integer(0))
-      } else {
-        1.0
-      }
-      if (!is.finite(surv_block) || surv_block <= 0) return(0.0)
-      unless_prod <- 1.0
-      if (length(unless_list) > 0) {
-        for (idx in seq_along(unless_list)) {
-          surv_vec <- unless_surv_fast[[idx]](tt, component)
-          val <- if (length(surv_vec) == 0L) 1.0 else surv_vec[[1]]
-          unless_prod <- unless_prod * val
-          if (!is.finite(unless_prod) || unless_prod <= 0) return(0.0)
+      # Compute effective survival S_eff(tt):
+      # - If there are no protectors, use the blocker survival fast path (no extra integral)
+      # - If protectors exist, use exact effective survival with memoization
+      if (length(unless_list) == 0) {
+        S_eff <- if (is.function(block_surv_fast)) {
+          surv_vec <- block_surv_fast(tt, component)
+          if (length(surv_vec) == 0L) 1.0 else surv_vec[[1]]
+        } else if (is.function(block_surv)) {
+          block_surv(tt, component, integer(0), integer(0))
+        } else {
+          1.0
         }
+        if (!is.finite(S_eff) || S_eff <= 0) return(0.0)
+        total <- dens_ref * S_eff
+        if (!is.finite(total) || total <= 0) return(0.0)
+        return(total)
       }
-      total <- dens_ref * surv_block * unless_prod
+      # With protectors: exact S_eff via .guard_effective_survival, memoized
+      comp_key <- .eval_state_component_key(component)
+      time_key <- .eval_state_time_key(tt)
+      cache_tag <- paste("guard_eff", guard_sig, comp_key, time_key, sep = "|")
+      S_eff <- .eval_state_get_extra(local_state, cache_tag)
+      if (is.null(S_eff)) {
+        S_eff <- .guard_effective_survival(
+          expr, tt, prep, component,
+          integer(0), integer(0), local_state,
+          block_node = block_node,
+          unless_nodes = unless_nodes
+        )
+        if (!is.finite(S_eff) || S_eff < 0) S_eff <- 0.0
+        if (S_eff > 1) S_eff <- 1.0
+        .eval_state_set_extra(local_state, cache_tag, S_eff)
+      }
+      if (!is.finite(S_eff) || S_eff <= 0) return(0.0)
+      total <- dens_ref * S_eff
       if (!is.finite(total) || total <= 0) return(0.0)
       total
     }, numeric(1))
@@ -2546,60 +2565,6 @@
     clusters[[length(clusters) + 1L]] <- list(indices = members, exprs = exprs[members], sources = src_sets[members])
   }
   clusters
-}
-
-.get_event_source <- function(node) {
-  if (is.null(node)) return(NULL)
-  if (!is.null(node$kind) && identical(node$kind, "event")) {
-    return(node$source %||% NULL)
-  }
-  NULL
-}
-
-.extract_guard_plus <- function(expr) {
-  if (is.null(expr) || is.null(expr$kind)) return(NULL)
-  if (identical(expr$kind, "guard")) {
-    ref_id <- .get_event_source(expr$reference)
-    blk_id <- .get_event_source(expr$blocker)
-    if (is.null(ref_id) || is.null(blk_id)) return(NULL)
-    return(list(guard = expr, ref = ref_id, block = blk_id, extras = character(0)))
-  }
-  if (identical(expr$kind, "and")) {
-    args <- expr$args %||% list()
-    guard_idx <- which(vapply(args, function(arg) !is.null(arg$kind) && identical(arg$kind, "guard"), logical(1)))
-    if (length(guard_idx) != 1) return(NULL)
-    guard <- args[[guard_idx[[1]]]]
-    ref_id <- .get_event_source(guard$reference)
-    blk_id <- .get_event_source(guard$blocker)
-    if (is.null(ref_id) || is.null(blk_id)) return(NULL)
-    extras <- args[-guard_idx[[1]]]
-    extra_sources <- character(0)
-    for (extra in extras) {
-      src <- .get_event_source(extra)
-      if (is.null(src)) return(NULL)
-      extra_sources <- c(extra_sources, src)
-    }
-    return(list(guard = guard, ref = ref_id, block = blk_id, extras = unique(extra_sources)))
-  }
-  NULL
-}
-
-.event_density_fn <- function(source_id, prep, component) {
-  event_expr <- list(kind = "event", source = source_id, k = NULL)
-  function(t) vapply(
-    t,
-    function(tt) .eval_expr_likelihood(event_expr, tt, prep, component),
-    numeric(1)
-  )
-}
-
-.event_survival_fn <- function(source_id, prep, component) {
-  event_expr <- list(kind = "event", source = source_id, k = NULL)
-  function(t) vapply(
-    t,
-    function(tt) .eval_expr_survival(event_expr, tt, prep, component),
-    numeric(1)
-  )
 }
 
 .compute_survival_product <- function(outcome_expr, competitor_exprs, prep, component, t,

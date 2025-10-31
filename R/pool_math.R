@@ -10,10 +10,3 @@ pool_coeffs <- function(Svec, Fvec) {
   }
   as.numeric(coeff)
 }
-
-prefix_sum <- function(coeff, K) {
-  if (length(coeff) == 0) return(0.0)
-  idx <- seq_len(min(K, length(coeff) - 1) + 1L)
-  sum(coeff[idx])
-}
-

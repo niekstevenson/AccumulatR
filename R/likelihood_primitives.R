@@ -47,21 +47,6 @@
   acc_def[['q']] + (1 - acc_def[['q']]) * surv_underlying
 }
 
-.acc_survival_success <- function(acc_def, t) {
-  if (!is.finite(t)) return(0.0)
-  if (t < 0) return(1.0)
-  if (t < acc_def[['onset']]) return(1.0)
-
-  reg <- dist_registry(acc_def[['dist']])
-  if (is.null(reg) || is.null(reg[['p']])) {
-    stop(sprintf("No CDF function for distribution '%s'", acc_def[['dist']]))
-  }
-
-  t_adj <- t - acc_def[['onset']]
-  surv_underlying <- 1 - reg[['p']](t_adj, acc_def[['params']])
-  surv_underlying
-}
-
 .acc_cdf_success <- function(acc_def, t) {
   if (!is.finite(t)) return(1.0)
   if (t < 0) return(0.0)

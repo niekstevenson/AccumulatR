@@ -2,13 +2,14 @@ rm(list = ls())
 source("examples/stim_selective_versions.R")
 source("R/model_tables.R")
 source("R/generator_new.R")
-source("R/super_large_likelihood.R")
+source("R/likelihood_old.R")
 source("R/profile_plot_new.R")
 source("R/processing_tree.R")
 
 set.seed(123456)
 # model_spec <- stim_selective_versions[[1]]
-model_spec <- new_api_examples[[1]]
+# 12 is very interesting!
+model_spec <- new_api_examples[[12]]
 
 # Translate model specification to table representation
 model_tables <- model_to_tables(model_spec)
@@ -17,7 +18,7 @@ model_tables <- model_to_tables(model_spec)
 
 
 # More trials for curvature
-data <- simulate_model(model_tables, n_trials = 1000)
+data <- simulate_model(model_tables, n_trials = 2000)
 
 # ---- Simple sanity checks (similar to examples/1_simple_two_response_race.R) ----
 
@@ -29,32 +30,32 @@ cat("\nSimulation probabilities:\n")
 print(table(data$outcome, useNA = "ifany")/nrow(data))
 
 
-
-#
+# 
+# #
 # 3) Analytic probability check via likelihood helpers
 # cat("\nAnalytic outcome probabilities:\n")
 probs <- observed_response_probabilities(model_tables, include_na = TRUE)
 print(round(probs, 6))
 cat(sprintf("Sum of probabilities: %.6f\n", sum(probs)))
-#
 # #
-# 4) Ensure likelihood is finite on provided data
-ll <- compute_loglik(model_tables, data)
-
-
-
-
-cat(sprintf("\nLog-likelihood on test data: %.4f\n", ll))
-#
-profile_res <- profile_likelihood(
-  model = model_tables,
-  data = data,
-  n_points = 10,
-  percent = 0.10,
-  n_cores = 10
-)
-
-print(profile_res)
-
-plot_profile(profile_res)
-
+# # #
+# # 4) Ensure likelihood is finite on provided data
+# ll <- compute_loglik(model_tables, data)
+# 
+# 
+# 
+# 
+# cat(sprintf("\nLog-likelihood on test data: %.4f\n", ll))
+# #
+# profile_res <- profile_likelihood(
+#   model = model_tables,
+#   data = data,
+#   n_points = 10,
+#   percent = 0.10,
+#   n_cores = 10
+# )
+# 
+# print(profile_res)
+# 
+# plot_profile(profile_res)
+# 

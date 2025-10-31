@@ -874,10 +874,6 @@ compute_loglik <- function(model, data) {
   total_ll
 }
 
-compute_loglik_from_tables <- function(model_tables, data) {
-  compute_loglik(model_tables, data)
-}
-
 # ==============================================================================
 # PART 7b: Response probability helpers (analytic, no simulation)
 # ==============================================================================

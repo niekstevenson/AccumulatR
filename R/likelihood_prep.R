@@ -58,12 +58,23 @@
 }
 
 .coerce_forced_ids <- function(prep, values) {
-  if (is.null(values) || length(values) == 0L) return(integer(0))
-  if (is.integer(values)) {
-    if (length(values) > 1L) return(sort(unique(values)))
+  if (inherits(values, "forced_ids")) {
     return(values)
   }
-  .labels_to_ids(prep, values)
+  if (is.null(values) || length(values) == 0L) {
+    out <- integer(0)
+    class(out) <- c("forced_ids", "integer")
+    return(out)
+  }
+  if (is.integer(values)) {
+    out <- values
+    if (length(out) > 1L) out <- sort(unique(out))
+    class(out) <- unique(c("forced_ids", class(out)))
+    return(out)
+  }
+  out <- .labels_to_ids(prep, values)
+  class(out) <- unique(c("forced_ids", class(out)))
+  out
 }
 
 .forced_union <- function(prep, base_set, additions) {
@@ -74,5 +85,6 @@
   out <- c(base_ids, add_ids)
   out <- as.integer(out)
   if (length(out) > 1L) out <- sort(unique(out))
+  class(out) <- unique(c("forced_ids", class(out)))
   out
 }

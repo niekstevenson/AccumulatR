@@ -236,6 +236,10 @@
   }
   is_pool <- !is.null(prep[["pools"]][[id]])
   if (is_pool) {
+    # Fast-path when no conditional forcing is present
+    if ((length(forced_complete) == 0L) && (length(forced_survive) == 0L)) {
+      return(.pool_survival_fast_value(prep, id, component, t))
+    }
     return(.pool_survival(prep, id, component, t,
                           forced_complete = forced_complete,
                           forced_survive = forced_survive))
@@ -272,6 +276,12 @@
 
   pool_def <- prep[["pools"]][[id]]
   if (!is.null(pool_def)) {
+    # Fast-path when no conditional forcing is present
+    if ((length(forced_complete) == 0L) && (length(forced_survive) == 0L)) {
+      dens <- .pool_density_fast_value(prep, id, component, t)
+      attr(dens, "scenarios") <- list()
+      return(dens)
+    }
     return(.pool_density(
       prep, id, component, t,
       forced_complete = forced_complete,

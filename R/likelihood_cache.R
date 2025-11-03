@@ -37,16 +37,20 @@
                             forced_survive = integer(0),
                             extra = NULL) {
   if (is.null(node_id) || is.na(node_id)) return(NULL)
+  # Use compact time id when provided via extra = "tid:<id>"
+  time_part <- NULL
+  if (!is.null(extra) && is.character(extra) && length(extra) == 1L && grepl("^tid:", extra, fixed = FALSE)) {
+    time_part <- extra
+  } else {
+    time_part <- .eval_state_time_key(t)
+  }
   parts <- c(
     as.integer(node_id),
     .eval_state_component_key(component),
-    .eval_state_time_key(t),
+    time_part,
     .eval_state_ids_key(forced_complete),
     .eval_state_ids_key(forced_survive)
   )
-  if (!is.null(extra) && nzchar(extra)) {
-    parts <- c(parts, extra)
-  }
   paste(parts, collapse = "|")
 }
 
@@ -79,4 +83,25 @@
   if (is.null(state) || !is.environment(state) || !nzchar(tag)) return(value)
   state[[paste0("extra::", tag)]] <- value
   value
+}
+
+# Assign a compact integer id for each distinct time value in this state.
+# Falls back to the formatted time key if state is unavailable.
+.eval_state_time_id <- function(state, t) {
+  if (is.null(state) || !is.environment(state)) {
+    return(.eval_state_time_key(t))
+  }
+  idx_env <- .eval_state_get_extra(state, "time_idx_env")
+  if (is.null(idx_env)) {
+    idx_env <- new.env(parent = emptyenv(), hash = TRUE)
+    idx_env$counter <- 0L
+    .eval_state_set_extra(state, "time_idx_env", idx_env)
+  }
+  t_key <- .eval_state_time_key(t)
+  existing <- idx_env[[t_key]]
+  if (!is.null(existing)) return(existing)
+  idx_env$counter <- as.integer(idx_env$counter) + 1L
+  id <- as.character(idx_env$counter)
+  idx_env[[t_key]] <- id
+  id
 }

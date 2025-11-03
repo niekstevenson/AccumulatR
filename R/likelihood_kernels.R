@@ -91,9 +91,6 @@
 .expr_lookup_compiled <- function(expr, prep) {
   comp <- .prep_expr_compiled(prep)
   if (is.null(comp)) return(NULL)
-  if (!is.null(expr) && !is.null(expr[["kind"]]) && identical(expr[["kind"]], "guard")) {
-    return(NULL)
-  }
   node_id <- attr(expr, ".lik_id", exact = TRUE)
   if (is.null(node_id) || is.na(node_id)) {
     sig <- .expr_signature(expr)
@@ -876,7 +873,8 @@
   forced_survive <- .coerce_forced_ids(prep, forced_survive)
   entry <- .node_eval_entry(state, node, component, t,
                             forced_complete = forced_complete,
-                            forced_survive = forced_survive)
+                            forced_survive = forced_survive,
+                            extra = paste0("tid:", .eval_state_time_id(state, t)))
   if (!is.null(entry)) {
     cached <- entry$cdf
     if (!is.null(cached)) return(cached)
@@ -975,10 +973,36 @@
   forced_survive <- .coerce_forced_ids(prep, forced_survive)
   entry <- .node_eval_entry(state, node, component, t,
                             forced_complete = forced_complete,
-                            forced_survive = forced_survive)
+                            forced_survive = forced_survive,
+                            extra = paste0("tid:", .eval_state_time_id(state, t)))
   if (!is.null(entry)) {
     cached <- entry$survival
     if (!is.null(cached)) return(cached)
+  }
+  expr <- node$expr
+  kind <- expr[["kind"]]
+  if (identical(kind, "guard")) {
+    # Survival of guard = 1 - ∫_0^t f_guard(u) du (use direct guard density)
+    dens_fun <- function(u) {
+      vapply(u, function(uu) {
+        if (!is.finite(uu) || uu < 0) return(0.0)
+        .guard_density_at(
+          node$expr, uu, prep, component,
+          forced_complete = forced_complete,
+          forced_survive = forced_survive,
+          state = state
+        )
+      }, numeric(1))
+    }
+    val <- tryCatch(stats::integrate(dens_fun, lower = 0, upper = t,
+                                     rel.tol = .integrate_rel_tol(), abs.tol = .integrate_abs_tol(),
+                                     stop.on.error = FALSE)[["value"]],
+                    error = function(e) 0.0)
+    out <- 1.0 - as.numeric(val)
+    if (!is.finite(out) || out < 0) out <- 0.0
+    if (out > 1) out <- 1.0
+    if (!is.null(entry)) entry$survival <- out
+    return(out)
   }
   if (length(forced_complete) == 0L && length(forced_survive) == 0L &&
       is.function(node$surv_fast_fn)) {
@@ -993,8 +1017,6 @@
     if (!is.null(entry)) entry$survival <- out
     return(out)
   }
-  expr <- node$expr
-  kind <- expr[["kind"]]
   if (identical(kind, "event")) {
     out <- .event_survival_at(
       prep, expr[["source"]], component, t,
@@ -1073,7 +1095,8 @@
   forced_survive <- .coerce_forced_ids(prep, forced_survive)
   entry <- .node_eval_entry(state, node, component, t,
                             forced_complete = forced_complete,
-                            forced_survive = forced_survive)
+                            forced_survive = forced_survive,
+                            extra = paste0("tid:", .eval_state_time_id(state, t)))
   if (!is.null(entry)) {
     cached <- entry$density
     if (!is.null(cached)) return(cached)
@@ -1199,7 +1222,8 @@
   forced_survive <- .coerce_forced_ids(prep, forced_survive)
   entry <- .node_eval_entry(state, node, component, t,
                             forced_complete = forced_complete,
-                            forced_survive = forced_survive)
+                            forced_survive = forced_survive,
+                            extra = paste0("tid:", .eval_state_time_id(state, t)))
   if (!is.null(entry)) {
     cached <- entry$scenarios
     if (!is.null(cached)) return(cached)
@@ -1389,6 +1413,15 @@
                                       forced_complete, forced_survive,
                                       state, block_node = NULL,
                                       unless_nodes = list()) {
+  # Cache S_eff per (guard signature, component, t, forced sets)
+  comp_key <- .eval_state_component_key(component)
+  time_key <- .eval_state_time_key(t)
+  fc_key <- .eval_state_ids_key(forced_complete)
+  fs_key <- .eval_state_ids_key(forced_survive)
+  sig <- .expr_signature(guard_expr)
+  cache_tag <- paste("guard_S_eff", sig, comp_key, time_key, fc_key, fs_key, sep = "|")
+  cached <- .eval_state_get_extra(state, cache_tag)
+  if (!is.null(cached)) return(as.numeric(cached))
   blocker <- guard_expr[["blocker"]]
   unless_list <- guard_expr[["unless"]] %||% list()
   if (is.null(blocker)) return(1.0)
@@ -1434,7 +1467,7 @@
       prod(vals)
     }, numeric(1))
   }
-  tryCatch({
+  val <- tryCatch({
     if (!is.finite(t) || t <= 0) return(1.0)
     val <- stats::integrate(
       function(u) {
@@ -1447,8 +1480,11 @@
       stop.on.error = FALSE
     )[["value"]]
     s <- 1.0 - as.numeric(val)
-    if (!is.finite(s)) 0.0 else max(0.0, min(1.0, s))
+    s <- if (!is.finite(s)) 0.0 else max(0.0, min(1.0, s))
+    s
   }, error = function(e) 1.0)
+  .eval_state_set_extra(state, cache_tag, val)
+  val
 }
 
 .guard_scenarios_slow <- function(expr, t, prep, component,
@@ -2599,7 +2635,7 @@
     cluster_exprs <- cluster$exprs %||% list()
     cluster_indices <- cluster$indices %||% seq_along(cluster_exprs)
     component_key <- .eval_state_component_key(component)
-    time_key <- .eval_state_time_key(t)
+    time_key <- .eval_state_time_id(state, t)
     cache_key <- paste(
       "joint_cluster",
       paste(cluster_indices, collapse = ","),
@@ -2637,40 +2673,53 @@
       state = state
     ))
   }
-  # Build a synthetic OR expression over the cluster to represent the union
-  or_expr <- list(kind = "or", args = cluster_exprs)
-  # CDF of the union via integrating scenario-derived density
-  dens_fun <- function(u) {
-    vapply(u, function(ui) {
-      if (!is.finite(ui) || ui < 0) return(0.0)
-      scenarios <- .expr_scenarios_at(
-        or_expr, ui, prep, component,
-        forced_complete = integer(0),
-        forced_survive = integer(0),
-        state = state
-      )
-      if (length(scenarios) == 0) return(0.0)
-      sum(vapply(scenarios, `[[`, numeric(1), "weight"))
-    }, numeric(1))
-  }
-  cdf_val <- tryCatch(
-    stats::integrate(
-      dens_fun,
-      lower = 0,
-      upper = t,
-      rel.tol = .integrate_rel_tol(),
-      abs.tol = .integrate_abs_tol(),
-      stop.on.error = FALSE
-    )[["value"]],
-    error = function(e) 0.0
+  # Chain-rule conditional product with heuristic ordering
+  # Precompute metadata for ordering
+  meta <- lapply(cluster_exprs, function(ex) {
+    node <- .expr_lookup_compiled(ex, prep)
+    sources_chr <- .expr_sources(ex, prep)
+    sources_ids <- .labels_to_ids(prep, sources_chr)
+    is_fast <- if (!is.null(node)) is.function(node$surv_fast_fn) else FALSE
+    scenario_sensitive <- if (!is.null(node)) isTRUE(node$scenario_sensitive) else TRUE
+    list(expr = ex, node = node, src = sources_ids, is_fast = is_fast, sens = scenario_sensitive)
+  })
+  # Overlap heuristic: fewer overlaps and smaller src sets first; fast and non-sensitive first
+  all_src <- unique(unlist(lapply(meta, function(m) m$src)))
+  overlap_counts <- vapply(meta, function(m) length(intersect(m$src, all_src)), integer(1))
+  ord <- order(
+    vapply(meta, function(m) if (m$is_fast) 0L else 1L, integer(1)),
+    vapply(meta, function(m) if (m$sens) 1L else 0L, integer(1)),
+    vapply(meta, function(m) length(m$src), integer(1)),
+    overlap_counts,
+    decreasing = FALSE
   )
-  cdf_val <- as.numeric(cdf_val)
-  if (!is.finite(cdf_val) || cdf_val < 0) cdf_val <- 0.0
-  if (cdf_val > 1) cdf_val <- 1.0
-  surv <- 1.0 - cdf_val
-  if (!is.finite(surv) || surv < 0) surv <- 0.0
-  if (surv > 1) surv <- 1.0
-  surv
+  meta <- meta[ord]
+  forced_surv <- integer(0)
+  prod_val <- 1.0
+  for (m in meta) {
+    s_i <- .eval_expr_survival_cond(
+      m$expr, t, prep, component,
+      forced_complete = integer(0),
+      forced_survive = forced_surv,
+      state = state
+    )
+    if (!is.finite(s_i) || s_i <= 0) return(0.0)
+    prod_val <- prod_val * s_i
+    if (!is.finite(prod_val) || prod_val <= 0) return(0.0)
+    if (length(m$src) > 0) {
+      # Append-only when disjoint; fallback to union when overlap exists
+      if (length(forced_surv) == 0L) {
+        forced_surv <- as.integer(m$src)
+      } else if (all(!(m$src %in% forced_surv))) {
+        forced_surv <- c(forced_surv, as.integer(m$src))
+      } else {
+        forced_surv <- .forced_union(prep, forced_surv, m$src)
+      }
+    }
+  }
+  if (!is.finite(prod_val) || prod_val < 0) prod_val <- 0.0
+  if (prod_val > 1) prod_val <- 1.0
+  prod_val
 }
 
 .compute_survival_product_legacy <- function(exprs, prep, component, t, state) {
@@ -2682,7 +2731,7 @@
     cluster_exprs <- cluster$exprs
     cluster_indices <- cluster$indices %||% seq_along(cluster_exprs)
     component_key <- if (is.null(component)) "__default__" else as.character(component)[[1]]
-    time_key <- .eval_state_time_key(t)
+    time_key <- .eval_state_time_id(state, t)
     cache_key <- paste(
       "legacy_cluster",
       paste(cluster_indices, collapse = ","),

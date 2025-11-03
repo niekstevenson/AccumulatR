@@ -17,7 +17,8 @@
     expr_compiled = prep[[".expr_compiled"]],
     label_cache = prep[[".label_cache"]],
     competitor_map = prep[[".competitors"]],
-    id_index = prep[[".id_index"]]
+    id_index = prep[[".id_index"]],
+    pool_members_cache = new.env(parent = emptyenv(), hash = TRUE)
   )
   prep[[".runtime"]] <- runtime
   prep

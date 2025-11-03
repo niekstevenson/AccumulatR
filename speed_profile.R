@@ -5,15 +5,14 @@ source("R/generator_new.R")
 source("R/super_large_likelihood.R")
 
 set.seed(123456)
-model_spec <- new_api_examples[[12]]
+model_spec <- new_api_examples[[2]]
 
 # Translate model specification to table representation
 model_tables <- model_to_tables(model_spec)
 
-data <- simulate_model(model_tables, n_trials = 50)
-# ll <- compute_loglik(model_tables, data)
-# sum(ll)
-# New likelihood
+data <- simulate_model(model_tables, n_trials = 1000)
+ll <- compute_loglik(model_tables, data)
+sum(ll)
 library(profvis)
 profvis({
   ll <- compute_loglik(model_tables, data)
@@ -26,6 +25,9 @@ write.csv(df_new$by.self, file = "ll_new_self.csv")
 
 # Old likelihood
 source("R/likelihood_old.R")
+ll <- compute_loglik(model_tables, data)
+sum(ll)
+
 library(profvis)
 profvis({
   ll <- compute_loglik(model_tables, data)

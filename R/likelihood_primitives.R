@@ -72,6 +72,22 @@
   acc_defs <- prep[["accumulators"]]
   pool_def <- pool_defs[[pool_id]]
   if (is.null(pool_def)) stop(sprintf("Unknown pool '%s'", pool_id))
+
+  runtime_cache <- .prep_runtime_get(prep, "pool_members_cache")
+  component_key <- if (is.null(component) || length(component) == 0L) {
+    "__default__"
+  } else {
+    as.character(component)[[1]]
+  }
+  cached_members <- NULL
+  if (is.environment(runtime_cache)) {
+    pool_cache <- runtime_cache[[pool_id]]
+    if (is.environment(pool_cache)) {
+      cached_members <- pool_cache[[component_key]]
+    }
+  }
+  if (!is.null(cached_members)) return(cached_members)
+
   members <- pool_def[["members"]]
   active <- character(0)
   for (m in members) {
@@ -84,6 +100,14 @@
     } else if (!is.null(pool_defs[[m]])) {
       active <- c(active, m)
     }
+  }
+  if (is.environment(runtime_cache)) {
+    pool_cache <- runtime_cache[[pool_id]]
+    if (!is.environment(pool_cache)) {
+      pool_cache <- new.env(parent = emptyenv(), hash = TRUE)
+      runtime_cache[[pool_id]] <- pool_cache
+    }
+    pool_cache[[component_key]] <- active
   }
   active
 }

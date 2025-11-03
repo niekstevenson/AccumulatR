@@ -350,7 +350,7 @@
     if (length(limits) == 0L) return(numeric(0))
     vapply(limits, function(lim) {
       if (!is.finite(lim) || lim <= 0) return(0.0)
-      limit_key <- paste(base_tag, .eval_state_time_id(state, lim), sep = "|")
+      limit_key <- paste(base_tag, .eval_state_time_key(lim), sep = "|")
       cached <- .eval_state_get_extra(state, limit_key)
       if (!is.null(cached)) return(as.numeric(cached))
       denom_val <- as.numeric(FX(lim) * FY(lim))

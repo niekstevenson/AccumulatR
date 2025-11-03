@@ -11,6 +11,9 @@
   compile_expr <- function(expr) {
     if (is.null(expr) || is.null(expr[["kind"]])) return(expr)
     sig <- .expr_signature(expr)
+    if (is.null(attr(expr, ".lik_signature", exact = TRUE))) {
+      attr(expr, ".lik_signature") <- sig
+    }
     existing_id <- sig_env[[sig]]
     if (!is.null(existing_id)) {
       attr(expr, ".lik_id") <- as.integer(existing_id)
@@ -50,6 +53,7 @@
     node <- .build_compiled_node(expr, child_info, prep, nodes_env)
     node_id <- length(nodes_env$nodes) + 1L
     node$id <- node_id
+    node$signature <- sig
     nodes_env$nodes[[node_id]] <- node
     sig_env[[sig]] <- node_id
     attr(expr, ".lik_id") <- node_id
@@ -873,8 +877,7 @@
   forced_survive <- .coerce_forced_ids(prep, forced_survive)
   entry <- .node_eval_entry(state, node, component, t,
                             forced_complete = forced_complete,
-                            forced_survive = forced_survive,
-                            extra = paste0("tid:", .eval_state_time_id(state, t)))
+                            forced_survive = forced_survive)
   if (!is.null(entry)) {
     cached <- entry$cdf
     if (!is.null(cached)) return(cached)
@@ -966,22 +969,36 @@
 }
 
 .node_survival_cond <- function(node, t, prep, component,
-                                forced_complete = integer(0),
-                                forced_survive = integer(0),
-                                state = NULL) {
+                               forced_complete = integer(0),
+                               forced_survive = integer(0),
+                               state = NULL) {
   forced_complete <- .coerce_forced_ids(prep, forced_complete)
   forced_survive <- .coerce_forced_ids(prep, forced_survive)
-  entry <- .node_eval_entry(state, node, component, t,
-                            forced_complete = forced_complete,
-                            forced_survive = forced_survive,
-                            extra = paste0("tid:", .eval_state_time_id(state, t)))
-  if (!is.null(entry)) {
-    cached <- entry$survival
-    if (!is.null(cached)) return(cached)
+  state_env <- if (is.environment(state)) state else NULL
+  entry <- NULL
+  if (!is.null(state_env)) {
+    entry <- .node_eval_entry(
+      state_env, node, component, t,
+      forced_complete = forced_complete,
+      forced_survive = forced_survive,
+      init = FALSE
+    )
+    if (!is.null(entry)) {
+      cached <- entry$survival
+      if (!is.null(cached)) return(cached)
+    }
   }
   expr <- node$expr
   kind <- expr[["kind"]]
   if (identical(kind, "guard")) {
+    if (!is.null(state_env) && is.null(entry)) {
+      entry <- .node_eval_entry(
+        state_env, node, component, t,
+        forced_complete = forced_complete,
+        forced_survive = forced_survive,
+        init = TRUE
+      )
+    }
     # Survival of guard = 1 - ∫_0^t f_guard(u) du (use direct guard density)
     dens_fun <- function(u) {
       vapply(u, function(uu) {
@@ -1004,12 +1021,31 @@
     if (!is.null(entry)) entry$survival <- out
     return(out)
   }
-  if (length(forced_complete) == 0L && length(forced_survive) == 0L &&
-      is.function(node$surv_fast_fn)) {
+  fast_unforced <- length(forced_complete) == 0L && length(forced_survive) == 0L &&
+    is.function(node$surv_fast_fn)
+  if (fast_unforced) {
     val <- node$surv_fast_fn(t, component)
     out <- if (length(val) == 0L) 1.0 else as.numeric(val[[1]])
-    if (!is.null(entry)) entry$survival <- out
+    if (!is.null(state_env)) {
+      if (is.null(entry)) {
+        entry <- .node_eval_entry(
+          state_env, node, component, t,
+          forced_complete = forced_complete,
+          forced_survive = forced_survive,
+          init = TRUE
+        )
+      }
+      if (!is.null(entry)) entry$survival <- out
+    }
     return(out)
+  }
+  if (!is.null(state_env) && is.null(entry)) {
+    entry <- .node_eval_entry(
+      state_env, node, component, t,
+      forced_complete = forced_complete,
+      forced_survive = forced_survive,
+      init = TRUE
+    )
   }
   if (is.function(node$surv_fn)) {
     val <- node$surv_fn(t, component, forced_complete, forced_survive)
@@ -1060,53 +1096,55 @@
     if (!is.null(entry)) entry$survival <- prod_val
     return(prod_val)
   }
-  if (identical(kind, "guard")) {
-    # Survival of guard = 1 - ∫_0^t f_guard(u) du (use direct guard density)
-    dens_fun <- function(u) {
-      vapply(u, function(uu) {
-        if (!is.finite(uu) || uu < 0) return(0.0)
-        .guard_density_at(
-          node$expr, uu, prep, component,
-          forced_complete = forced_complete,
-          forced_survive = forced_survive,
-          state = state
-        )
-      }, numeric(1))
-    }
-    val <- tryCatch(stats::integrate(dens_fun, lower = 0, upper = t,
-                                     rel.tol = .integrate_rel_tol(), abs.tol = .integrate_abs_tol(),
-                                     stop.on.error = FALSE)[["value"]],
-                    error = function(e) 0.0)
-    out <- 1.0 - as.numeric(val)
-    if (!is.finite(out) || out < 0) out <- 0.0
-    if (out > 1) out <- 1.0
-    if (!is.null(entry)) entry$survival <- out
-    return(out)
-  }
   if (!is.null(entry)) entry$survival <- 1.0
   1.0
 }
 
 .node_density <- function(node, t, prep, component,
-                          forced_complete = integer(0),
-                          forced_survive = integer(0),
-                          state = NULL) {
+                         forced_complete = integer(0),
+                         forced_survive = integer(0),
+                         state = NULL) {
   forced_complete <- .coerce_forced_ids(prep, forced_complete)
   forced_survive <- .coerce_forced_ids(prep, forced_survive)
-  entry <- .node_eval_entry(state, node, component, t,
-                            forced_complete = forced_complete,
-                            forced_survive = forced_survive,
-                            extra = paste0("tid:", .eval_state_time_id(state, t)))
-  if (!is.null(entry)) {
-    cached <- entry$density
-    if (!is.null(cached)) return(cached)
+  state_env <- if (is.environment(state)) state else NULL
+  entry <- NULL
+  if (!is.null(state_env)) {
+    entry <- .node_eval_entry(
+      state_env, node, component, t,
+      forced_complete = forced_complete,
+      forced_survive = forced_survive,
+      init = FALSE
+    )
+    if (!is.null(entry)) {
+      cached <- entry$density
+      if (!is.null(cached)) return(cached)
+    }
   }
-  if (length(forced_complete) == 0L && length(forced_survive) == 0L &&
-      is.function(node$density_fast_fn)) {
+  fast_unforced <- length(forced_complete) == 0L && length(forced_survive) == 0L &&
+    is.function(node$density_fast_fn)
+  if (fast_unforced) {
     val <- node$density_fast_fn(t, component)
     out <- if (length(val) == 0L) 0.0 else as.numeric(val[[1]])
-    if (!is.null(entry)) entry$density <- out
+    if (!is.null(state_env)) {
+      if (is.null(entry)) {
+        entry <- .node_eval_entry(
+          state_env, node, component, t,
+          forced_complete = forced_complete,
+          forced_survive = forced_survive,
+          init = TRUE
+        )
+      }
+      if (!is.null(entry)) entry$density <- out
+    }
     return(out)
+  }
+  if (!is.null(state_env) && is.null(entry)) {
+    entry <- .node_eval_entry(
+      state_env, node, component, t,
+      forced_complete = forced_complete,
+      forced_survive = forced_survive,
+      init = TRUE
+    )
   }
   if (is.function(node$density_fn)) {
     val <- node$density_fn(t, component, forced_complete, forced_survive)
@@ -1222,8 +1260,7 @@
   forced_survive <- .coerce_forced_ids(prep, forced_survive)
   entry <- .node_eval_entry(state, node, component, t,
                             forced_complete = forced_complete,
-                            forced_survive = forced_survive,
-                            extra = paste0("tid:", .eval_state_time_id(state, t)))
+                            forced_survive = forced_survive)
   if (!is.null(entry)) {
     cached <- entry$scenarios
     if (!is.null(cached)) return(cached)
@@ -1361,11 +1398,11 @@
   if (identical(kind, "guard")) {
     reference_node <- .compiled_node_fetch(prep, node$reference_id)
     blocker_node <- .compiled_node_fetch(prep, node$blocker_id)
-    unless_nodes <- if (length(node$unless_ids %||% integer(0)) > 0L) {
-      lapply(node$unless_ids, function(uid) .compiled_node_fetch(prep, uid))
-    } else {
-      list()
-    }
+  unless_nodes <- if (length(node$unless_ids %||% integer(0)) > 0L) {
+    lapply(node$unless_ids, function(uid) .compiled_node_fetch(prep, uid))
+  } else {
+    list()
+  }
     ref_scen <- if (is.null(reference_node)) list() else .node_scenarios_at(
       reference_node, t, prep, component,
       forced_complete = forced_complete,
@@ -1385,8 +1422,8 @@
     out <- list()
     for (sc in ref_scen) {
       if (is.null(sc)) next
-      fc_ctx <- .coerce_forced_ids(prep, sc$forced_complete)
-      fs_ctx <- .coerce_forced_ids(prep, sc$forced_survive)
+      fc_ctx <- sc$forced_complete %||% integer(0)
+      fs_ctx <- sc$forced_survive %||% integer(0)
       S_eff <- .guard_effective_survival(
         node$expr, t, prep, component,
         fc_ctx, fs_ctx, state,
@@ -1426,8 +1463,16 @@
   unless_list <- guard_expr[["unless"]] %||% list()
   if (is.null(blocker)) return(1.0)
   if (length(unless_list) == 0) {
-    if (!is.null(block_node) && is.function(block_node$surv_fn)) {
-      return(block_node$surv_fn(t, component, forced_complete, forced_survive))
+    if (!is.null(block_node)) {
+      if (length(forced_complete) == 0L && length(forced_survive) == 0L &&
+          is.function(block_node$surv_fast_fn)) {
+        val <- block_node$surv_fast_fn(t, component)
+        return(if (length(val) == 0L) 1.0 else as.numeric(val[[1]]))
+      }
+      if (is.function(block_node$surv_fn)) {
+        val <- block_node$surv_fn(t, component, forced_complete, forced_survive)
+        return(if (length(val) == 0L) 1.0 else as.numeric(val))
+      }
     }
     return(.eval_expr_survival_cond(
       blocker, t, prep, component,
@@ -1436,9 +1481,20 @@
       state = state
     ))
   }
+  block_fast_unforced <- length(forced_complete) == 0L && length(forced_survive) == 0L &&
+    !is.null(block_node) && is.function(block_node$density_fast_fn)
+  block_has_density_fn <- !is.null(block_node) && is.function(block_node$density_fn)
   blocker_density <- function(u) {
     vapply(u, function(ui) {
       if (!is.finite(ui) || ui < 0) return(0.0)
+      if (block_fast_unforced) {
+        val <- block_node$density_fast_fn(ui, component)
+        return(if (length(val) == 0L) 0.0 else as.numeric(val[[1]]))
+      }
+      if (block_has_density_fn) {
+        val <- block_node$density_fn(ui, component, forced_complete, forced_survive)
+        return(if (length(val) == 0L) 0.0 else as.numeric(val))
+      }
       .eval_expr_likelihood(
         blocker, ui, prep, component,
         forced_complete = forced_complete,
@@ -1453,16 +1509,23 @@
       vals <- vapply(seq_along(unless_list), function(idx) {
         unl <- unless_list[[idx]]
         unl_node <- unless_nodes[[idx]]
-        if (!is.null(unl_node) && is.function(unl_node$surv_fn)) {
-          unl_node$surv_fn(ui, component, forced_complete, forced_survive)
-        } else {
-          .eval_expr_survival_cond(
-            unl, ui, prep, component,
-            forced_complete = forced_complete,
-            forced_survive = forced_survive,
-            state = state
-          )
+        if (!is.null(unl_node)) {
+          if (length(forced_complete) == 0L && length(forced_survive) == 0L &&
+              is.function(unl_node$surv_fast_fn)) {
+            val <- unl_node$surv_fast_fn(ui, component)
+            return(if (length(val) == 0L) 1.0 else as.numeric(val[[1]]))
+          }
+          if (is.function(unl_node$surv_fn)) {
+            val <- unl_node$surv_fn(ui, component, forced_complete, forced_survive)
+            return(if (length(val) == 0L) 1.0 else as.numeric(val))
+          }
         }
+        .eval_expr_survival_cond(
+          unl, ui, prep, component,
+          forced_complete = forced_complete,
+          forced_survive = forced_survive,
+          state = state
+        )
       }, numeric(1))
       prod(vals)
     }, numeric(1))
@@ -1522,8 +1585,8 @@
   out <- list()
   for (sc in ref_scen) {
     if (is.null(sc)) next
-    fc_ctx <- .coerce_forced_ids(prep, sc$forced_complete)
-    fs_ctx <- .coerce_forced_ids(prep, sc$forced_survive)
+    fc_ctx <- sc$forced_complete %||% integer(0)
+    fs_ctx <- sc$forced_survive %||% integer(0)
     S_eff <- .guard_effective_survival(
       expr, t, prep, component,
       fc_ctx, fs_ctx, state,
@@ -2624,6 +2687,26 @@
   clusters
 }
 
+.expr_guard_free <- function(expr) {
+  if (is.null(expr) || is.null(expr[["kind"]])) return(TRUE)
+  kind <- expr[["kind"]]
+  if (identical(kind, "guard")) return(FALSE)
+  if (kind %in% c("and", "or")) {
+    args <- expr[["args"]] %||% list()
+    if (length(args) == 0L) return(TRUE)
+    return(all(vapply(args, .expr_guard_free, logical(1))))
+  }
+  if (identical(kind, "not")) {
+    return(.expr_guard_free(expr[["arg"]]))
+  }
+  TRUE
+}
+
+.cluster_is_guard_free <- function(exprs) {
+  if (length(exprs) == 0L) return(TRUE)
+  all(vapply(exprs, .expr_guard_free, logical(1)))
+}
+
 .compute_survival_product <- function(outcome_expr, competitor_exprs, prep, component, t,
                                      state = NULL) {
   if (length(competitor_exprs) == 0) return(1.0)
@@ -2634,8 +2717,14 @@
   for (cluster in clusters) {
     cluster_exprs <- cluster$exprs %||% list()
     cluster_indices <- cluster$indices %||% seq_along(cluster_exprs)
+    if (.cluster_is_guard_free(cluster_exprs)) {
+      cluster_val <- .compute_survival_product_legacy(cluster_exprs, prep, component, t, state)
+      prod_val <- prod_val * cluster_val
+      if (!is.finite(prod_val) || prod_val == 0) return(0.0)
+      next
+    }
     component_key <- .eval_state_component_key(component)
-    time_key <- .eval_state_time_id(state, t)
+    time_key <- .eval_state_time_key(t)
     cache_key <- paste(
       "joint_cluster",
       paste(cluster_indices, collapse = ","),
@@ -2731,7 +2820,7 @@
     cluster_exprs <- cluster$exprs
     cluster_indices <- cluster$indices %||% seq_along(cluster_exprs)
     component_key <- if (is.null(component)) "__default__" else as.character(component)[[1]]
-    time_key <- .eval_state_time_id(state, t)
+    time_key <- .eval_state_time_key(t)
     cache_key <- paste(
       "legacy_cluster",
       paste(cluster_indices, collapse = ","),

@@ -43,6 +43,8 @@
 }
 
 .expr_signature <- function(expr) {
+  cached <- attr(expr, ".lik_signature", exact = TRUE)
+  if (!is.null(cached)) return(cached)
   if (is.null(expr) || is.null(expr[["kind"]])) return("null")
   kind <- expr[["kind"]]
   if (identical(kind, "event")) {
@@ -52,7 +54,9 @@
   }
   if (kind %in% c("and", "or")) {
     args <- expr[["args"]] %||% list()
-    if (length(args) == 0L) return(sprintf("%s:empty", kind))
+    if (length(args) == 0L) {
+      return(sprintf("%s:empty", kind))
+    }
     parts <- vapply(args, .expr_signature, character(1))
     return(sprintf("%s[%s]", kind, paste(parts, collapse = ",")))
   }

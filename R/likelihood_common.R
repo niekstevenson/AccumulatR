@@ -100,3 +100,196 @@
 .prep_label_cache <- function(prep) .prep_runtime_get(prep, "label_cache")
 .prep_competitors <- function(prep) .prep_runtime_get(prep, "competitor_map")
 .prep_id_index <- function(prep) .prep_runtime_get(prep, "id_index")
+.prep_cache_bundle <- function(prep) .prep_runtime_get(prep, "cache_bundle")
+
+.cache_component_key <- function(component) {
+  if (is.null(component) || length(component) == 0L) {
+    "__default__"
+  } else {
+    comp_chr <- as.character(component)
+    if (length(comp_chr) == 0L) "__default__" else comp_chr[[1]] %||% "__default__"
+  }
+}
+
+.build_likelihood_cache_bundle <- function(prep) {
+  structure(
+    list(
+      node_plan = prep[[".expr_compiled"]],
+      precomputed_values = new.env(parent = emptyenv(), hash = TRUE),
+      pool_templates = new.env(parent = emptyenv(), hash = TRUE),
+      guard_quadrature = new.env(parent = emptyenv(), hash = TRUE),
+      version = Sys.time()
+    ),
+    class = "likelihood_cache_bundle"
+  )
+}
+
+.prep_set_cache_bundle <- function(prep, bundle) {
+  runtime <- prep[[".runtime"]]
+  if (is.null(runtime)) return(prep)
+  runtime$cache_bundle <- bundle
+  prep[[".runtime"]] <- runtime
+  prep
+}
+
+.likelihood_cache_bundle_clone <- function(bundle) {
+  if (is.null(bundle)) return(NULL)
+  structure(
+    list(
+      node_plan = bundle$node_plan,
+      precomputed_values = {
+        env <- new.env(parent = emptyenv(), hash = TRUE)
+        if (!is.null(bundle$precomputed_values)) {
+          keys <- ls(bundle$precomputed_values, all.names = TRUE)
+          for (k in keys) {
+            env[[k]] <- bundle$precomputed_values[[k]]
+          }
+        }
+        env
+      },
+      pool_templates = {
+        env <- new.env(parent = emptyenv(), hash = TRUE)
+        if (!is.null(bundle$pool_templates)) {
+          keys <- ls(bundle$pool_templates, all.names = TRUE)
+          for (k in keys) {
+            env[[k]] <- bundle$pool_templates[[k]]
+          }
+        }
+        env
+      },
+      guard_quadrature = {
+        env <- new.env(parent = emptyenv(), hash = TRUE)
+        if (!is.null(bundle$guard_quadrature)) {
+          keys <- ls(bundle$guard_quadrature, all.names = TRUE)
+          for (k in keys) {
+            env[[k]] <- bundle$guard_quadrature[[k]]
+          }
+        }
+        env
+      },
+      version = bundle$version
+    ),
+    class = "likelihood_cache_bundle"
+  )
+}
+
+.likelihood_outcome_cache_key <- function(bundle_key, outcome_label, rt_val) {
+  outcome_chr <- if (is.null(outcome_label) || length(outcome_label) == 0L || is.na(outcome_label[[1]])) {
+    "NA"
+  } else {
+    as.character(outcome_label)[[1]]
+  }
+  rt_key <- .eval_state_time_key(rt_val)
+  paste(bundle_key, outcome_chr, rt_key, sep = "|")
+}
+
+.bundle_precomputed_get <- function(bundle, key) {
+  if (is.null(bundle) || is.null(bundle$precomputed_values) || !nzchar(key)) return(NULL)
+  bundle$precomputed_values[[key]]
+}
+
+.bundle_precomputed_set <- function(bundle, key, value) {
+  if (is.null(bundle) || is.null(bundle$precomputed_values) || !nzchar(key)) return(value)
+  bundle$precomputed_values[[key]] <- value
+  value
+}
+
+.pool_template_cache_key <- function(pool_id, component, k) {
+  comp_key <- .cache_component_key(component)
+  paste(pool_id %||% "", comp_key, as.integer(k) %||% 0L, sep = "|")
+}
+
+.bundle_pool_templates_get <- function(bundle, key) {
+  if (is.null(bundle) || is.null(bundle$pool_templates) || !nzchar(key)) return(NULL)
+  bundle$pool_templates[[key]]
+}
+
+.bundle_pool_templates_set <- function(bundle, key, value) {
+  if (is.null(bundle) || is.null(bundle$pool_templates) || !nzchar(key)) return(value)
+  bundle$pool_templates[[key]] <- value
+  value
+}
+
+.cache_bundle_ensure <- function(prep) {
+  bundle <- .prep_cache_bundle(prep)
+  if (is.null(bundle)) {
+    bundle <- .build_likelihood_cache_bundle(prep)
+    prep <- .prep_set_cache_bundle(prep, bundle)
+  }
+  list(prep = prep, bundle = bundle)
+}
+
+.likelihood_outcome_cache_key <- function(component_key, outcome_label, rt_val) {
+  outcome_chr <- if (is.null(outcome_label) || length(outcome_label) == 0L || is.na(outcome_label[[1]])) {
+    "NA"
+  } else {
+    as.character(outcome_label)[[1]]
+  }
+  rt_key <- .eval_state_time_key(rt_val)
+  paste(component_key, outcome_chr, rt_key, sep = "|")
+}
+
+.likelihood_outcome_cached <- function(prep, cache_key, compute_fn) {
+  info <- .cache_bundle_ensure(prep)
+  prep <- info$prep
+  bundle <- info$bundle
+  cached <- .bundle_precomputed_get(bundle, cache_key)
+  if (is.null(cached)) {
+    cached <- compute_fn()
+    .bundle_precomputed_set(bundle, cache_key, cached)
+  }
+  list(value = cached, prep = prep)
+}
+
+.guard_integral_cache_key <- function(guard_signature, component_key, upper_limit, competitor_signature) {
+  upper_tag <- .eval_state_time_key(upper_limit)
+  paste("guard_int", guard_signature, component_key, upper_tag, competitor_signature, sep = "|")
+}
+
+.guard_integral_fetch <- function(prep, cache_key) {
+  bundle <- .prep_cache_bundle(prep)
+  if (is.null(bundle)) return(NULL)
+  bundle$guard_quadrature[[cache_key]]
+}
+
+.guard_integral_store <- function(prep, cache_key, value) {
+  info <- .cache_bundle_ensure(prep)
+  bundle <- info$bundle
+  bundle$guard_quadrature[[cache_key]] <- value
+  invisible(NULL)
+}
+.inspect_likelihood_plan <- function(prep, include_cache = FALSE) {
+  comp <- .prep_expr_compiled(prep)
+  if (is.null(comp)) {
+    if (!isTRUE(include_cache)) return(data.frame())
+    bundle <- .prep_cache_bundle(prep)
+    return(list(nodes = data.frame(), cache = list(
+      precomputed_values = if (is.null(bundle)) character(0) else ls(bundle$precomputed_values, all.names = TRUE),
+      pool_templates = if (is.null(bundle)) character(0) else ls(bundle$pool_templates, all.names = TRUE),
+      guard_quadrature = if (is.null(bundle)) character(0) else ls(bundle$guard_quadrature, all.names = TRUE)
+    )))
+  }
+  nodes <- comp$nodes %||% list()
+  node_df <- do.call(rbind, lapply(nodes, function(node) {
+    data.frame(
+      id = node$id,
+      kind = node$kind,
+      needs_forced = isTRUE(node$needs_forced),
+      scenario_sensitive = isTRUE(node$scenario_sensitive),
+      sources = paste(node$sources %||% integer(0), collapse = ","),
+      args = paste(node$args %||% integer(0), collapse = ","),
+      has_fast_density = is.function(node$density_fast_fn),
+      has_fast_survival = is.function(node$surv_fast_fn),
+      has_fast_cdf = is.function(node$cdf_fast_fn),
+      stringsAsFactors = FALSE
+    )
+  }))
+  if (!isTRUE(include_cache)) return(node_df)
+  bundle <- .prep_cache_bundle(prep)
+  cache_summary <- list(
+    precomputed_values = if (is.null(bundle)) character(0) else ls(bundle$precomputed_values, all.names = TRUE),
+    pool_templates = if (is.null(bundle)) character(0) else ls(bundle$pool_templates, all.names = TRUE),
+    guard_quadrature = if (is.null(bundle)) character(0) else ls(bundle$guard_quadrature, all.names = TRUE)
+  )
+  list(nodes = node_df, cache = cache_summary)
+}

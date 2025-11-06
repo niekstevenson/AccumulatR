@@ -1,10 +1,12 @@
 .likelihood_apply_overrides <- function(prep, acc_overrides, shared_overrides) {
   trial_prep <- prep
+  modified <- FALSE
   if (!is.null(acc_overrides) && length(acc_overrides) > 0) {
     for (acc_id in names(acc_overrides)) {
       override <- acc_overrides[[acc_id]]
       if (is.null(override)) next
       trial_prep$accumulators[[acc_id]] <- override
+      modified <- TRUE
     }
   }
   if (!is.null(shared_overrides) && length(shared_overrides) > 0) {
@@ -23,8 +25,21 @@
       } else {
         trial_prep$shared_triggers[[shared_id]]$q <- as.numeric(prob)
       }
+      modified <- TRUE
     }
   }
+
+  runtime <- trial_prep[[".runtime"]] %||% list()
+  base_bundle <- runtime$cache_bundle
+  if (modified) {
+    if (!is.null(base_bundle)) {
+      runtime$cache_bundle <- .likelihood_cache_bundle_clone(base_bundle)
+    } else {
+      runtime$cache_bundle <- .build_likelihood_cache_bundle(trial_prep)
+    }
+    trial_prep[[".runtime"]] <- runtime
+  }
+
   trial_prep
 }
 
@@ -184,9 +199,9 @@
 }
 
 .likelihood_fetch_component_prep <- function(structure, prep_base, trial_rows, component,
-                                             cache_env = NULL, bundle = NULL) {
-  bundle <- bundle %||% .likelihood_component_override_bundle(structure, trial_rows, component)
-  key <- bundle$key
+                                             cache_env = NULL, override_bundle = NULL) {
+  override_bundle <- override_bundle %||% .likelihood_component_override_bundle(structure, trial_rows, component)
+  key <- override_bundle$key
   base_key <- .likelihood_base_override_key(component)
 
   if (!is.null(cache_env) && is.environment(cache_env)) {
@@ -197,7 +212,7 @@
   if (identical(key, base_key)) {
     prep_val <- prep_base
   } else {
-    prep_val <- .likelihood_apply_overrides(prep_base, bundle$acc, bundle$shared)
+    prep_val <- .likelihood_apply_overrides(prep_base, override_bundle$acc, override_bundle$shared)
   }
 
   if (!is.null(cache_env) && is.environment(cache_env) && !identical(key, base_key)) {
@@ -220,8 +235,7 @@
                                            component_ids, component_weights,
                                            outcome_label, rt_val,
                                            forced_component = NULL,
-                                           prep_cache = NULL,
-                                           lik_cache = NULL) {
+                                           prep_cache = NULL) {
   results <- numeric(0)
   comps <- component_ids
   if (!is.null(forced_component) && !is.na(forced_component)) {
@@ -244,29 +258,24 @@
   total <- 0.0
   for (idx in seq_along(comps)) {
     comp_id <- comps[[idx]]
-    bundle <- .likelihood_component_override_bundle(structure, trial_rows, comp_id)
+    override_bundle <- .likelihood_component_override_bundle(structure, trial_rows, comp_id)
     trial_prep <- .likelihood_fetch_component_prep(
       structure,
       prep_eval_base,
       trial_rows,
       comp_id,
       cache_env = prep_cache,
-      bundle = bundle
+      override_bundle = override_bundle
     )
-    cache_key <- .likelihood_outcome_cache_key(bundle$key, outcome_label, rt_val)
-    lik_val <- NULL
-    if (!is.null(lik_cache) && is.environment(lik_cache)) {
-      cached <- lik_cache[[cache_key]]
-      if (!is.null(cached)) {
-        lik_val <- cached
-      }
+    cache_key <- .likelihood_outcome_cache_key(override_bundle$key, outcome_label, rt_val)
+    res <- .likelihood_outcome_cached(trial_prep, cache_key, function() {
+      .outcome_likelihood(outcome_label, rt_val, trial_prep, comp_id)
+    })
+    trial_prep <- res$prep
+    if (identical(override_bundle$key, .likelihood_base_override_key(comp_id))) {
+      prep_eval_base <- trial_prep
     }
-    if (is.null(lik_val)) {
-      lik_val <- .outcome_likelihood(outcome_label, rt_val, trial_prep, comp_id)
-      if (!is.null(lik_cache) && is.environment(lik_cache)) {
-        lik_cache[[cache_key]] <- lik_val
-      }
-    }
+    lik_val <- res$value
     total <- total + weights[[idx]] * as.numeric(lik_val)
   }
   total
@@ -288,11 +297,15 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
     stop("generator structure must include model_spec; rebuild with build_generator_structure")
   }
   prep_eval_base <- .prepare_model_for_likelihood(structure$model_spec)
+  if (is.null(prep_eval_base[[".runtime"]])) {
+    prep_eval_base <- .prep_set_cache_bundle(
+      prep_eval_base,
+      .build_likelihood_cache_bundle(prep_eval_base)
+    )
+  }
   comp_ids <- structure$components$component_id
 
   prep_cache <- new.env(parent = emptyenv(), hash = TRUE)
-  cache_across_trials <- isTRUE(getOption("uuber.param_cache_across_trials", TRUE))
-  likelihood_cache <- if (cache_across_trials) new.env(parent = emptyenv(), hash = TRUE) else NULL
 
   if (!"trial" %in% names(params_df)) params_df$trial <- 1L
   params_df$trial <- params_df$trial
@@ -320,11 +333,6 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
     outcome <- data_row$outcome[[1]] %||% NA_character_
     rt_val <- data_row$rt[[1]] %||% NA_real_
     forced_component <- if ("component" %in% names(data_row)) data_row$component[[1]] else NULL
-    lik_cache <- if (cache_across_trials && !is.null(likelihood_cache)) {
-      likelihood_cache
-    } else {
-      new.env(parent = emptyenv(), hash = TRUE)
-    }
     mixture <- .likelihood_mixture_likelihood(
       structure,
       prep_eval_base,
@@ -334,8 +342,7 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
       outcome,
       rt_val,
       forced_component = forced_component,
-      prep_cache = prep_cache,
-      lik_cache = lik_cache
+      prep_cache = prep_cache
     )
     if (!is.finite(mixture) || mixture <= 0) {
       per_trial_loglik[[i]] <- -Inf

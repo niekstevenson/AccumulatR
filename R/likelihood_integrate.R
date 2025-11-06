@@ -20,16 +20,32 @@
                                            state = NULL) {
   if (!is.finite(upper_limit)) upper_limit <- Inf
   state <- state %||% .eval_state_create()
+  guard_cache_key <- NULL
+  component_key <- .cache_component_key(component)
+  competitor_exprs <- competitor_exprs %||% list()
+  expr_kind <- expr[['kind']]
+  if (identical(expr_kind, "guard")) {
+    guard_sig <- .expr_signature(expr)
+    competitor_sig <- if (length(competitor_exprs) == 0L) {
+      "none"
+    } else {
+      paste(sort(vapply(competitor_exprs, .expr_signature, character(1))), collapse = ",")
+    }
+    guard_cache_key <- .guard_integral_cache_key(guard_sig, component_key, upper_limit, competitor_sig)
+    cached_guard <- .guard_integral_fetch(prep, guard_cache_key)
+    if (!is.null(cached_guard)) {
+      return(cached_guard)
+    }
+  }
   integrand <- function(t) {
-    val <- .integrand_outcome_density(
+    .integrand_outcome_density(
       t,
       expr = expr,
       prep = prep,
       component = component,
-      competitor_exprs = competitor_exprs %||% list(),
+      competitor_exprs = competitor_exprs,
       state = state
     )
-    val
   }
   res <- tryCatch(
     stats::integrate(
@@ -46,6 +62,9 @@
   if (!is.finite(val)) val <- 0.0
   if (val < 0) val <- 0.0
   if (val > 1) val <- 1.0
+  if (!is.null(guard_cache_key)) {
+    .guard_integral_store(prep, guard_cache_key, val)
+  }
   val
 }
 
@@ -810,8 +829,7 @@ compute_loglik <- function(model, data) {
   has_component_col <- "component" %in% names(data)
   raw_keys <- character(n_rows)
   lik_values <- numeric(n_rows)
-  cache_env <- new.env(parent = emptyenv())
-  
+
   for (i in seq_len(n_rows)) {
     outcome <- as.character(data[['outcome']][[i]])
     rt_val <- as.numeric(data[['rt']][[i]])
@@ -830,38 +848,36 @@ compute_loglik <- function(model, data) {
         }
       }
     }
-    key <- paste(component_key, outcome, rt_key, sep = "|")
-    
-    cached_val <- cache_env[[key]]
-    if (!is.null(cached_val)) {
-      lik <- cached_val
-    } else {
-      if (is_mixture) {
-        if (identical(component_key, "__mixture__")) {
-          base_weights <- if (length(comp_ids) > 0 && length(weights) == length(comp_ids)) {
-            weights
-          } else if (length(comp_ids) > 0) {
-            rep(1 / length(comp_ids), length(comp_ids))
-          } else {
-            numeric(0)
-          }
-          lik <- 0.0
-          if (length(comp_ids) > 0) {
-            for (j in seq_along(comp_ids)) {
-              lik <- lik + base_weights[[j]] * .outcome_likelihood(outcome, rt_val, prep, comp_ids[[j]])
-            }
-          }
+    cache_key <- .likelihood_outcome_cache_key(component_key, outcome, rt_val)
+    res <- .likelihood_outcome_cached(prep, cache_key, function() {
+      if (is_mixture && identical(component_key, "__mixture__")) {
+        base_weights <- if (length(comp_ids) > 0 && length(weights) == length(comp_ids)) {
+          weights
+        } else if (length(comp_ids) > 0) {
+          rep(1 / length(comp_ids), length(comp_ids))
         } else {
-          lik <- .outcome_likelihood(outcome, rt_val, prep, component_key)
+          numeric(0)
         }
+        total_mix <- 0.0
+        if (length(comp_ids) > 0) {
+          for (j in seq_along(comp_ids)) {
+            sub_key <- .likelihood_outcome_cache_key(comp_ids[[j]], outcome, rt_val)
+            sub_res <- .likelihood_outcome_cached(prep, sub_key, function() {
+              .outcome_likelihood(outcome, rt_val, prep, comp_ids[[j]])
+            })
+            prep <<- sub_res$prep
+            total_mix <- total_mix + base_weights[[j]] * as.numeric(sub_res$value)
+          }
+        }
+        total_mix
       } else {
-        lik <- .outcome_likelihood(outcome, rt_val, prep, component_key)
+        .outcome_likelihood(outcome, rt_val, prep, component_key)
       }
-      
-      cache_env[[key]] <- lik
-    }
+    })
+    prep <- res$prep
+    lik <- res$value
     
-    raw_keys[[i]] <- key
+    raw_keys[[i]] <- cache_key
     lik_values[[i]] <- lik
   }
   log_lik_values <- ifelse(is.finite(lik_values) & lik_values > 0, log(lik_values), -Inf)

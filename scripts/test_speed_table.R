@@ -1,8 +1,8 @@
 rm(list = ls())
-options(uuber.param_cache_across_trials = TRUE)
 source("examples/new_API.R")
 source("R/generator_new.R")
 source("R/super_large_likelihood.R")
+source("R/likelihood_old.R")
 
 # Model: example_3_stop_na
 model_spec <- new_api_examples[[3]]
@@ -52,7 +52,7 @@ model_tables <- model_to_tables(model_spec)
 
 library(profvis)
 profvis({
-  ll_old <- compute_loglik(model_tables, data_df)
+  ll_old <- compute_loglik_old(model_tables, data_df)
 }, prof_output = "ll_old_table.out")
 
 prof_old <- summaryRprof("ll_old_table.out")

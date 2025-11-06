@@ -9,7 +9,7 @@ source("R/processing_tree.R")
 set.seed(123456)
 # model_spec <- stim_selective_versions[[1]]
 # 12 is very interesting!
-model_spec <- new_api_examples[[12]]
+model_spec <- stim_selective_versions[[1]]
 
 # Translate model specification to table representation
 model_tables <- model_to_tables(model_spec)
@@ -34,7 +34,6 @@ print(table(data$outcome, useNA = "ifany")/nrow(data))
 # #
 # 3) Analytic probability check via likelihood helpers
 # cat("\nAnalytic outcome probabilities:\n")
-options(uuber.response_probabilities.method="analytic")
 probs <- observed_response_probabilities(model_tables, include_na = TRUE)
 print(round(probs, 6))
 cat(sprintf("Sum of probabilities: %.6f\n", sum(probs)))

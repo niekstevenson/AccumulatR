@@ -1,3 +1,25 @@
+.refresh_compiled_prep_refs <- function(prep) {
+  comp <- prep[[".expr_compiled"]] %||% list()
+  nodes <- comp$nodes %||% list()
+  if (length(nodes) == 0L) return(prep)
+  update_env_prep <- function(fn) {
+    if (!is.function(fn)) return()
+    env <- environment(fn)
+    if (is.null(env)) return()
+    if (exists("prep", envir = env, inherits = FALSE)) {
+      env$prep <- prep
+    }
+  }
+  lapply(nodes, function(node) {
+    if (!is.list(node)) return(NULL)
+    lapply(c("density_fn", "surv_fn", "cdf_fn", "scenario_fn",
+             "density_fast_fn", "surv_fast_fn", "cdf_fast_fn"),
+           function(name) update_env_prep(node[[name]]))
+    NULL
+  })
+  prep
+}
+
 .prepare_model_for_likelihood <- function(model) {
   if (exists("is_model_tables", mode = "function") && is_model_tables(model)) {
     model <- tables_to_model(model)
@@ -18,9 +40,11 @@
     label_cache = prep[[".label_cache"]],
     competitor_map = prep[[".competitors"]],
     id_index = prep[[".id_index"]],
-    pool_members_cache = new.env(parent = emptyenv(), hash = TRUE)
+    pool_members_cache = new.env(parent = emptyenv(), hash = TRUE),
+    cache_bundle = .build_likelihood_cache_bundle(prep)
   )
   prep[[".runtime"]] <- runtime
+  prep <- .refresh_compiled_prep_refs(prep)
   prep
 }
 

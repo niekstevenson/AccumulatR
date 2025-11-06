@@ -350,7 +350,15 @@
 
   member_ids <- .labels_to_ids(prep, members)
   pool_idx <- .label_to_id(prep, pool_id)
-  templates_info <- .build_pool_templates(pool_id, members, member_ids, pool_idx, k)
+  bundle_info <- .cache_bundle_ensure(prep)
+  prep <- bundle_info$prep
+  bundle <- bundle_info$bundle
+  template_key <- .pool_template_cache_key(pool_id, component, k)
+  templates_info <- .bundle_pool_templates_get(bundle, template_key)
+  if (is.null(templates_info)) {
+    templates_info <- .build_pool_templates(pool_id, members, member_ids, pool_idx, k)
+    .bundle_pool_templates_set(bundle, template_key, templates_info)
+  }
   templates <- templates_info$templates
   finisher_map <- templates_info$finisher_map
 

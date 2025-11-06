@@ -766,12 +766,77 @@
   }
 }
 
+guard_scope_ids <- function(expr, prep) {
+  prep_idx <- .prep_id_index(prep)
+  if (is.null(prep_idx)) {
+    idx_map <- prep[[".id_index"]] %||% NULL
+    if (!is.null(idx_map)) {
+      prep_tmp <- prep
+      prep_tmp[[".runtime"]] <- list(id_index = idx_map)
+      prep <- prep_tmp
+    }
+  }
+  base_ids <- .expr_sources(expr, prep)
+  gather_label_ids <- function(node) {
+    if (is.null(node) || is.null(node[["kind"]])) return(integer(0))
+    kind <- node[["kind"]]
+    if (identical(kind, "event")) {
+      lab <- node[["source"]]
+      id <- .label_to_id(prep, lab)
+      if (is.na(id)) integer(0) else id
+    } else if (kind %in% c("and", "or")) {
+      args <- node[["args"]] %||% list()
+      if (length(args) == 0L) return(integer(0))
+      unique(unlist(lapply(args, gather_label_ids)))
+    } else if (identical(kind, "guard")) {
+      ref_ids <- gather_label_ids(node[["reference"]])
+      blk_ids <- gather_label_ids(node[["blocker"]])
+      unl_ids <- unique(unlist(lapply(node[["unless"]] %||% list(), gather_label_ids)))
+      unique(c(ref_ids, blk_ids, unl_ids))
+    } else if (identical(kind, "not")) {
+      gather_label_ids(node[["arg"]])
+    } else {
+      integer(0)
+    }
+  }
+  label_ids <- gather_label_ids(expr)
+  ids <- c(base_ids, label_ids)
+  if (length(ids) == 0L) return(integer(0))
+  ids <- unique(ids)
+  ids[!is.na(ids)]
+}
+
+.guard_prepare_for_ids <- function(prep) {
+  if (!is.null(.prep_id_index(prep))) return(prep)
+  idx_map <- prep[[".id_index"]] %||% NULL
+  if (is.null(idx_map)) return(prep)
+  prep_stub <- prep
+  prep_stub[[".runtime"]] <- list(id_index = idx_map)
+  prep_stub
+}
+
+.guard_filter_forced_ids <- function(ids, scope_ids, prep) {
+  prep_ids <- .guard_prepare_for_ids(prep)
+  if (length(scope_ids) == 0L) {
+    return(.coerce_forced_ids(prep_ids, integer(0)))
+  }
+  if (length(ids) == 0L) {
+    return(.coerce_forced_ids(prep_ids, integer(0)))
+  }
+  raw <- as.integer(ids)
+  keep <- raw[!is.na(raw) & raw %in% scope_ids]
+  .coerce_forced_ids(prep_ids, keep)
+}
+
 .make_guard_cdf_fn <- function(expr, prep) {
   function(t, component, forced_complete, forced_survive) {
     if (t <= 0) return(0.0)
     if (!is.finite(t)) return(1.0)
     forced_complete <- .coerce_forced_ids(prep, forced_complete)
     forced_survive <- .coerce_forced_ids(prep, forced_survive)
+    scope_ids <- guard_scope_ids(expr, prep)
+    forced_complete <- .guard_filter_forced_ids(forced_complete, scope_ids, prep)
+    forced_survive <- .guard_filter_forced_ids(forced_survive, scope_ids, prep)
     local_state <- .eval_state_create()
     dens_fun <- function(u) {
       vapply(u, function(ui) {
@@ -819,6 +884,9 @@
   function(t, component, forced_complete, forced_survive) {
     forced_complete <- .coerce_forced_ids(prep, forced_complete)
     forced_survive <- .coerce_forced_ids(prep, forced_survive)
+    scope_ids <- guard_scope_ids(expr, prep)
+    forced_complete <- .guard_filter_forced_ids(forced_complete, scope_ids, prep)
+    forced_survive <- .guard_filter_forced_ids(forced_survive, scope_ids, prep)
     val <- .guard_density_at(
       expr, t, prep, component,
       forced_complete = forced_complete,
@@ -829,33 +897,9 @@
   }
 }
 
-.make_guard_fast_fns <- function(expr, prep,
-                                 ref_node_override = NULL,
-                                 block_node_override = NULL,
-                                 unless_nodes_override = NULL) {
-  reference <- expr[["reference"]]
-  blocker <- expr[["blocker"]]
-  unless_list <- expr[["unless"]] %||% list()
-  # Fast path is only valid when there are no protectors; otherwise we need
-  # the full integral for effective blocker survival.
-  if (length(unless_list) > 0L) {
-    return(list(density = NULL, survival = NULL, cdf = NULL))
-  }
-  ref_node <- ref_node_override %||% .expr_lookup_compiled(reference, prep)
-  block_node <- if (!is.null(blocker)) {
-    block_node_override %||% .expr_lookup_compiled(blocker, prep)
-  } else {
-    NULL
-  }
-  # With no protectors, we can use a simple fast-path.
-  unless_nodes <- list()
-  ref_density_fast <- .node_ops_get(ref_node, "density_fast", NULL)
-  if (!is.function(ref_density_fast)) {
-    return(list(density = NULL, survival = NULL, cdf = NULL))
-  }
-  block_surv_fast <- .node_ops_get(block_node, "survival_fast", NULL)
-  block_surv <- .node_ops_get(block_node, "survival", NULL)
-  density_fast <- function(t, component) {
+.guard_density_fast_builder <- function(ref_density_fast, block_surv_fast, block_surv) {
+  if (!is.function(ref_density_fast)) return(NULL)
+  function(t, component) {
     t_vals <- as.numeric(t)
     if (length(t_vals) == 0L) return(numeric(0))
     vapply(t_vals, function(tt) {
@@ -877,29 +921,34 @@
       total
     }, numeric(1))
   }
-  cdf_fast <- function(t, component) {
+}
+
+.guard_fast_survival_from_density <- function(density_fast) {
+  if (!is.function(density_fast)) return(list(cdf = NULL, survival = NULL))
+  guard_cdf <- function(t, component) {
     t_vals <- as.numeric(t)
     if (length(t_vals) == 0L) return(numeric(0))
     vapply(t_vals, function(tt) {
       if (tt <= 0) return(0.0)
       if (!is.finite(tt)) return(1.0)
-      tryCatch({
-        val <- stats::integrate(
+      val <- tryCatch(
+        stats::integrate(
           function(u) density_fast(u, component),
           lower = 0,
           upper = tt,
           rel.tol = .integrate_rel_tol(),
           abs.tol = .integrate_abs_tol(),
           stop.on.error = FALSE
-        )[["value"]]
-        out <- as.numeric(val)
-        if (!is.finite(out)) out <- 0.0
-        max(0.0, min(1.0, out))
-      }, error = function(e) 0.0)
+        )[["value"]],
+        error = function(e) 0.0
+      )
+      out <- as.numeric(val)
+      if (!is.finite(out)) out <- 0.0
+      max(0.0, min(1.0, out))
     }, numeric(1))
   }
-  survival_fast <- function(t, component) {
-    vals <- cdf_fast(t, component)
+  guard_survival <- function(t, component) {
+    vals <- guard_cdf(t, component)
     if (length(vals) == 0L) return(vals)
     out <- 1.0 - vals
     out[!is.finite(out)] <- 0.0
@@ -907,7 +956,39 @@
     out[out > 1] <- 1.0
     out
   }
-  list(density = density_fast, survival = survival_fast, cdf = cdf_fast)
+  list(cdf = guard_cdf, survival = guard_survival)
+}
+
+.make_guard_fast_fns <- function(expr, prep,
+                                 ref_node_override = NULL,
+                                 block_node_override = NULL,
+                                 unless_nodes_override = NULL) {
+  reference <- expr[["reference"]]
+  blocker <- expr[["blocker"]]
+  unless_list <- expr[["unless"]] %||% list()
+  # Fast path is only valid when there are no protectors; otherwise we need
+  # the full integral for effective blocker survival.
+  if (length(unless_list) > 0L) {
+    return(list(density = NULL, survival = NULL, cdf = NULL))
+  }
+  ref_node <- ref_node_override %||% .expr_lookup_compiled(reference, prep)
+  block_node <- if (!is.null(blocker)) {
+    block_node_override %||% .expr_lookup_compiled(blocker, prep)
+  } else {
+    NULL
+  }
+  density_fast <- .guard_density_fast_builder(
+    .node_ops_get(ref_node, "density_fast", NULL),
+    .node_ops_get(block_node, "survival_fast", NULL),
+    .node_ops_get(block_node, "survival", NULL)
+  )
+  if (!is.function(density_fast)) {
+    return(list(density = NULL, survival = NULL, cdf = NULL))
+  }
+  fast_surv_cdf <- .guard_fast_survival_from_density(density_fast)
+  list(density = density_fast,
+       survival = fast_surv_cdf$survival,
+       cdf = fast_surv_cdf$cdf)
 }
 
 .node_cdf_cond <- function(node, t, prep, component,
@@ -1485,6 +1566,11 @@
                                       forced_complete, forced_survive,
                                       state, block_node = NULL,
                                       unless_nodes = list()) {
+  forced_complete <- .coerce_forced_ids(prep, forced_complete)
+  forced_survive <- .coerce_forced_ids(prep, forced_survive)
+  scope_ids <- guard_scope_ids(guard_expr, prep)
+  forced_complete <- .guard_filter_forced_ids(forced_complete, scope_ids, prep)
+  forced_survive <- .guard_filter_forced_ids(forced_survive, scope_ids, prep)
   # Cache S_eff per (guard signature, component, t, forced sets)
   comp_key <- .eval_state_component_key(component)
   time_key <- .eval_state_time_key(t)
@@ -1653,6 +1739,9 @@
                               state = NULL) {
   forced_complete <- .coerce_forced_ids(prep, forced_complete)
   forced_survive <- .coerce_forced_ids(prep, forced_survive)
+  scope_ids <- guard_scope_ids(expr, prep)
+  forced_complete <- .guard_filter_forced_ids(forced_complete, scope_ids, prep)
+  forced_survive <- .guard_filter_forced_ids(forced_survive, scope_ids, prep)
   # Direct formulation: f_guard(t) = f_ref(t) * S_eff_blocker(t)
   reference <- expr[["reference"]]
   if (is.null(reference)) return(0.0)
@@ -2698,7 +2787,7 @@
 }
 
 # ============================================================================== 
-# Fast-path helpers for competitor survival products (ported from legacy API)
+# Fast-path helpers for competitor survival products
 # ==============================================================================
 
 .cluster_competitors <- function(exprs, prep) {
@@ -2768,7 +2857,7 @@
     cluster_exprs <- cluster$exprs %||% list()
     cluster_indices <- cluster$indices %||% seq_along(cluster_exprs)
     if (.cluster_is_guard_free(cluster_exprs)) {
-      cluster_val <- .compute_survival_product_legacy(cluster_exprs, prep, component, t, state)
+      cluster_val <- .compute_survival_product_cluster(cluster_exprs, prep, component, t, state)
       prod_val <- prod_val * cluster_val
       if (!is.finite(prod_val) || prod_val == 0) return(0.0)
       next
@@ -2861,7 +2950,7 @@
   prod_val
 }
 
-.compute_survival_product_legacy <- function(exprs, prep, component, t, state) {
+.compute_survival_product_cluster <- function(exprs, prep, component, t, state) {
   if (length(exprs) == 0) return(1.0)
   state <- state %||% .eval_state_create()
   clusters <- .cluster_competitors(exprs, prep)
@@ -2872,7 +2961,7 @@
     component_key <- if (is.null(component)) "__default__" else as.character(component)[[1]]
     time_key <- .eval_state_time_key(t)
     cache_key <- paste(
-      "legacy_cluster",
+      "cluster",
       paste(cluster_indices, collapse = ","),
       component_key,
       time_key,

@@ -26,8 +26,18 @@
    - Reimplement `pool_coeffs`, `.pool_density_fast_value`, `.pool_survival_fast_value` in C++, threading across pools or time points with RcppParallel.
    - Ensure shared caches (pool member maps) stay on the R side; pass precomputed member indices/parameters into the C++ worker structs.
 4. **Forced Templates & Scenarios**
-   - Move `.build_pool_templates`, `.pool_density`, `.pool_survival` into C++, emitting template metadata once per pool and storing it in the existing cache bundle.
-   - Return scenario weights and forced ID vectors as simple C++ structs, converting to R lists after returning to the main thread.
+   - ✅ `.build_pool_templates`, `.pool_density`, `.pool_survival` now live in C++, templates cached in the bundle.
+   - ✅ Scenario weights/forced IDs returned as structs (converted to R lists on the main thread).
+   - **Next extension**: port guarded-expression evaluation (density/survival/scenario) to C++ so R only dispatches calls.
+
+5. **Native Guard Evaluator Roadmap**
+   1. Extend the native context to include compiled-node metadata (node kind, child IDs, fast ops) so C++ code can resolve references/blockers/unless expressions without touching R closures.
+      - ✅ `native_context_build()` now emits accumulator, pool, and compiled-node tables (IDs, kinds, child links) so native code can look up references/blockers/unless nodes directly.
+   2. Build reusable native event/pool evaluators (density/survival/cdf with forced IDs) on top of the accumulator/pool kernels to support guards and other expression types.
+      - ✅ `native_node_eval_cpp` now walks AND/OR/NOT nodes recursively using the accumulator/pool kernels, memoizes per-node evaluations, and mirrors forced-ID/component handling (validated in `tests/test_native_node_eval.R`).
+   3. Port `guard_density`, `guard_effective_survival`, and guard scenario assembly to C++ (using the Boost Gauss–Kronrod integrator). Wire R guard helpers to call into the native module.
+      - ✅ Guard density/effective survival live in C++ (`native_guard_eval_cpp` / `native_guard_effective_survival_cpp`), and scenario lists now come from `native_guard_scenarios_cpp` so R guard helpers only marshal arguments.
+   4. After guards, port competitor clustering/survival products to C++ so `.scenario_density_with_competitors()` is fully native.
 5. **Guard Integrals**
    - Introduce a C++ guard evaluator that consumes the accumulator/pool interfaces, computes densities, and integrates with a Gauss–Kronrod or adaptive Simpson routine honoring `.integrate_rel_tol()` / `.integrate_abs_tol()`.
    - Replace `.make_guard_*` closures with thin R wrappers around the native functions; thread the setup via compiled node metadata.

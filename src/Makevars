@@ -1,0 +1,2 @@
+BOOST_INCLUDEDIR ?= /opt/homebrew/opt/boost/include
+PKG_CPPFLAGS += -I$(BOOST_INCLUDEDIR)

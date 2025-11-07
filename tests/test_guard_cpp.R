@@ -53,12 +53,44 @@ prep$.runtime <- list(
 prep[[".id_index"]] <- id_index
 prep[[".label_cache"]] <- prep$.runtime$label_cache
 
+ctx_ptr <- .lik_native_fn("native_context_build")(prep)
+if (is.null(ctx_ptr) || !inherits(ctx_ptr, "externalptr")) {
+  stop("Failed to build native context pointer")
+}
+
+guard_simple_id <- attr(prep$outcomes$guard_simple$expr, ".lik_id", exact = TRUE)
+guard_protected_id <- attr(prep$outcomes$guard_protected$expr, ".lik_id", exact = TRUE)
+if (is.na(guard_simple_id) || is.na(guard_protected_id)) {
+  stop("Missing guard node ids")
+}
+
+native_guard_eval <- .lik_native_fn("native_guard_eval_cpp")
+native_guard_surv <- .lik_native_fn("native_guard_effective_survival_cpp")
+
 times <- c(0.25, 0.6, 1.1, 1.8)
 for (tt in times) {
   surv_new <- .guard_effective_survival(guard_simple, tt, prep, NULL, integer(0), integer(0), .eval_state_create())
   surv_block <- .acc_survival(acc_defs$B, tt)
   if (!isTRUE(all.equal(surv_new, surv_block, tolerance = 1e-10))) {
     stop(sprintf("Simple guard survival mismatch at t=%g", tt))
+  }
+  res_native <- native_guard_eval(
+    ctx_ptr,
+    as.integer(guard_simple_id),
+    as.numeric(tt),
+    NULL,
+    integer(0),
+    integer(0),
+    .integrate_rel_tol(),
+    .integrate_abs_tol(),
+    12L
+  )
+  if (abs(as.numeric(res_native$effective_survival) - surv_block) > 1e-10) {
+    stop(sprintf("Native simple guard S_eff mismatch at t=%g", tt))
+  }
+  dens_r <- .guard_density_at(guard_simple, tt, prep, NULL, integer(0), integer(0))
+  if (abs(as.numeric(res_native$density) - dens_r) > 1e-10) {
+    stop(sprintf("Native simple guard density mismatch at t=%g", tt))
   }
 }
 
@@ -84,15 +116,68 @@ manual_protected_survival <- function(t) {
 }
 
 times_guard <- c(0.3, 0.8, 1.4)
-native_guard <- .lik_native_fn("guard_effective_survival_cpp")
+
 for (tt in times_guard) {
-  integrand <- function(u) {
-    .acc_density(acc_defs$B, u) * .acc_survival(acc_defs$C, u)
-  }
-  surv_cpp <- native_guard(integrand, tt, .integrate_rel_tol(), .integrate_abs_tol(), 12L)
+  surv_native <- native_guard_surv(
+    ctx_ptr,
+    as.integer(guard_protected_id),
+    as.numeric(tt),
+    NULL,
+    integer(0),
+    integer(0),
+    .integrate_rel_tol(),
+    .integrate_abs_tol(),
+    12L
+  )
   surv_manual <- manual_protected_survival(tt)
-  if (abs(surv_cpp - surv_manual) > 5e-4) {
-    stop(sprintf("Protected guard survival mismatch at t=%g (cpp=%.6f manual=%.6f)", tt, surv_cpp, surv_manual))
+  if (abs(surv_native - surv_manual) > 5e-4) {
+    stop(sprintf("Native protected guard S_eff mismatch at t=%g (cpp=%.6f manual=%.6f)", tt, surv_native, surv_manual))
+  }
+}
+
+scenario_compare <- function(a, b, tol = 1e-10) {
+  if (length(a) != length(b)) return(FALSE)
+  normalize <- function(x) {
+    lapply(x, function(sc) {
+      list(
+        weight = as.numeric(sc$weight),
+        forced_complete = sort(as.integer(sc$forced_complete)),
+        forced_survive = sort(as.integer(sc$forced_survive))
+      )
+    })
+  }
+  na <- normalize(a)
+  nb <- normalize(b)
+  for (i in seq_along(na)) {
+    wa <- na[[i]]$weight
+    wb <- nb[[i]]$weight
+    if (!isTRUE(all.equal(wa, wb, tolerance = tol))) return(FALSE)
+    if (!identical(na[[i]]$forced_complete, nb[[i]]$forced_complete)) return(FALSE)
+    if (!identical(na[[i]]$forced_survive, nb[[i]]$forced_survive)) return(FALSE)
+  }
+  TRUE
+}
+
+guard_simple_node <- prep[[".expr_compiled"]]$nodes[[guard_simple_id]]
+guard_protected_node <- prep[[".expr_compiled"]]$nodes[[guard_protected_id]]
+scenario_fn_simple <- .node_ops_get(guard_simple_node, "scenario", guard_simple_node$scenario_fn)
+scenario_fn_protected <- .node_ops_get(guard_protected_node, "scenario", guard_protected_node$scenario_fn)
+if (!is.function(scenario_fn_simple)) stop("Guard simple scenario function missing")
+if (!is.function(scenario_fn_protected)) stop("Guard protected scenario function missing")
+
+for (tt in times) {
+  scen_native <- scenario_fn_simple(tt, NULL, integer(0), integer(0))
+  scen_ref <- .guard_scenarios_slow(guard_simple, tt, prep, NULL, integer(0), integer(0))
+  if (!scenario_compare(scen_native, scen_ref)) {
+    stop(sprintf("Simple guard scenario mismatch at t=%g", tt))
+  }
+}
+
+for (tt in times_guard) {
+  scen_native <- scenario_fn_protected(tt, NULL, integer(0), integer(0))
+  scen_ref <- .guard_scenarios_slow(guard_protected, tt, prep, NULL, integer(0), integer(0))
+  if (!scenario_compare(scen_native, scen_ref, tol = 5e-4)) {
+    stop(sprintf("Protected guard scenario mismatch at t=%g", tt))
   }
 }
 

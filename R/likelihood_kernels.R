@@ -850,16 +850,13 @@ guard_scope_ids <- function(expr, prep) {
         as.numeric(val)
       }, numeric(1))
     }
-    val <- tryCatch(
-      stats::integrate(
-        dens_fun,
-        lower = 0,
-        upper = t,
-        rel.tol = .integrate_rel_tol(),
-        abs.tol = .integrate_abs_tol(),
-        stop.on.error = FALSE
-      )[["value"]],
-      error = function(e) 0.0
+    val <- .native_integrate(
+      dens_fun,
+      lower = 0,
+      upper = t,
+      rel.tol = .integrate_rel_tol(),
+      abs.tol = .integrate_abs_tol(),
+      max.depth = 12L
     )
     out <- as.numeric(val)
     if (!is.finite(out)) out <- 0.0
@@ -1580,6 +1577,32 @@ guard_scope_ids <- function(expr, prep) {
   cache_tag <- paste("guard_S_eff", sig, comp_key, time_key, fc_key, fs_key, sep = "|")
   cached <- .eval_state_get_extra(state, cache_tag)
   if (!is.null(cached)) return(as.numeric(cached))
+  compiled_guard <- .expr_lookup_compiled(guard_expr, prep)
+  native_ctx <- NULL
+  if (!is.null(compiled_guard)) {
+    native_ctx <- .prep_native_context(prep)
+  }
+  if (!is.null(native_ctx)) {
+    native_fn <- .lik_native_fn("native_guard_effective_survival_cpp")
+    val <- native_fn(
+      native_ctx,
+      as.integer(compiled_guard$id),
+      as.numeric(t),
+      component,
+      forced_complete,
+      forced_survive,
+      .integrate_rel_tol(),
+      .integrate_abs_tol(),
+      12L
+    )
+    val <- as.numeric(val)
+    if (!is.finite(val)) {
+      val <- 1.0
+    }
+    val <- max(0.0, min(1.0, val))
+    .eval_state_set_extra(state, cache_tag, val)
+    return(val)
+  }
   blocker <- guard_expr[["blocker"]]
   unless_list <- guard_expr[["unless"]] %||% list()
   if (is.null(blocker)) return(1.0)
@@ -1744,6 +1767,29 @@ guard_scope_ids <- function(expr, prep) {
   scope_ids <- guard_scope_ids(expr, prep)
   forced_complete <- .guard_filter_forced_ids(forced_complete, scope_ids, prep)
   forced_survive <- .guard_filter_forced_ids(forced_survive, scope_ids, prep)
+  compiled_guard <- .expr_lookup_compiled(expr, prep)
+  native_ctx <- NULL
+  if (!is.null(compiled_guard)) {
+    native_ctx <- .prep_native_context(prep)
+  }
+  if (!is.null(native_ctx)) {
+    native_fn <- .lik_native_fn("native_guard_eval_cpp")
+    res <- native_fn(
+      native_ctx,
+      as.integer(compiled_guard$id),
+      as.numeric(t),
+      component,
+      forced_complete,
+      forced_survive,
+      .integrate_rel_tol(),
+      .integrate_abs_tol(),
+      12L
+    )
+    val <- as.numeric(res$density)
+    if (!is.finite(val) || val < 0) val <- 0.0
+    attr(val, "scenarios") <- list()
+    return(val)
+  }
   # Direct formulation: f_guard(t) = f_ref(t) * S_eff_blocker(t)
   reference <- expr[["reference"]]
   if (is.null(reference)) return(0.0)
@@ -1780,20 +1826,52 @@ guard_scope_ids <- function(expr, prep) {
 }
 
 .make_guard_scenario_fn <- function(expr, prep) {
+  native_fn <- .lik_native_fn("native_guard_scenarios_cpp")
   reference <- expr[["reference"]]
-  ref_node <- .expr_lookup_compiled(reference, prep)
-  ref_scen_fn <- .node_ops_get(ref_node, "scenario", NULL)
-  if (!is.function(ref_scen_fn)) return(NULL)
   blocker <- expr[["blocker"]]
   unless_list <- expr[["unless"]] %||% list()
-  block_node <- if (!is.null(blocker)) .expr_lookup_compiled(blocker, prep) else NULL
-  unless_nodes <- lapply(unless_list, function(unl) .expr_lookup_compiled(unl, prep))
   function(t, component, forced_complete, forced_survive) {
     forced_complete <- .coerce_forced_ids(prep, forced_complete)
     forced_survive <- .coerce_forced_ids(prep, forced_survive)
-    state_local <- .eval_state_create()
+    ref_node <- .expr_lookup_compiled(reference, prep)
+    ref_scen_fn <- .node_ops_get(ref_node, "scenario", NULL)
+    if (!is.function(ref_scen_fn)) return(list())
     ref_scen <- ref_scen_fn(t, component, forced_complete, forced_survive)
     if (length(ref_scen) == 0) return(list())
+    guard_node <- .expr_lookup_compiled(expr, prep)
+    if (!is.null(guard_node)) {
+      native_ctx <- .prep_native_context(prep)
+      res <- tryCatch(
+        native_fn(
+          native_ctx,
+          as.integer(guard_node$id),
+          as.numeric(t),
+          ref_scen,
+          component,
+          forced_complete,
+          forced_survive,
+          .integrate_rel_tol(),
+          .integrate_abs_tol(),
+          12L
+        ),
+        error = function(e) NULL
+      )
+      if (!is.null(res)) {
+        out <- list()
+        for (sc in res) {
+          rec <- .make_scenario_record(
+            prep,
+            sc$weight,
+            sc$forced_complete,
+            sc$forced_survive
+          )
+          if (!is.null(rec)) out[[length(out) + 1L]] <- rec
+        }
+        return(out)
+      }
+    }
+    # Fallback to R implementation if native path unavailable
+    state_local <- .eval_state_create()
     blocker_sources <- integer(0)
     if (!is.null(blocker)) {
       blocker_sources <- .expr_sources(blocker, prep)
@@ -1802,6 +1880,8 @@ guard_scope_ids <- function(expr, prep) {
         blocker_sources <- .forced_union(prep, blocker_sources, blocker_label)
       }
     }
+    block_node <- if (!is.null(blocker)) .expr_lookup_compiled(blocker, prep) else NULL
+    unless_nodes <- lapply(unless_list, function(unl) .expr_lookup_compiled(unl, prep))
     out <- list()
     for (sc in ref_scen) {
       if (is.null(sc)) next
@@ -1818,11 +1898,8 @@ guard_scope_ids <- function(expr, prep) {
       if (!is.finite(weight) || weight <= 0) next
       fcomp <- fc_ctx
       fsurv <- .forced_union(prep, fs_ctx, blocker_sources)
-      out[[length(out) + 1L]] <- list(
-        weight = as.numeric(weight),
-        forced_complete = fcomp,
-        forced_survive = fsurv
-      )
+      rec <- .make_scenario_record(prep, weight, fcomp, fsurv)
+      if (!is.null(rec)) out[[length(out) + 1L]] <- rec
     }
     out
   }

@@ -47,18 +47,14 @@
       state = state
     )
   }
-  res <- tryCatch(
-    stats::integrate(
-      integrand,
-      lower = 0,
-      upper = upper_limit,
-      rel.tol = .integrate_rel_tol(),
-      abs.tol = .integrate_abs_tol(),
-      stop.on.error = FALSE
-    ),
-    error = function(e) list(value = 0.0)
+  val <- .native_integrate(
+    integrand,
+    lower = 0,
+    upper = upper_limit,
+    rel.tol = .integrate_rel_tol(),
+    abs.tol = .integrate_abs_tol(),
+    max.depth = 12L
   )
-  val <- as.numeric(res[["value"]])
   if (!is.finite(val)) val <- 0.0
   if (val < 0) val <- 0.0
   if (val > 1) val <- 1.0

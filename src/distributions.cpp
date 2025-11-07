@@ -9,6 +9,875 @@
 #include <string>
 #include <vector>
 #include <limits>
+#include <unordered_set>
+#include <unordered_map>
+#include <functional>
+#include <sstream>
+#if __has_include(<boost/math/quadrature/gauss_kronrod.hpp>)
+#define UUBER_HAVE_BOOST_GK 1
+#include <boost/math/quadrature/gauss_kronrod.hpp>
+#else
+#define UUBER_HAVE_BOOST_GK 0
+#endif
+
+#include "native_context.hpp"
+#include "native_integrate.hpp"
+
+// [[Rcpp::export]]
+SEXP native_context_build(SEXP prepSEXP) {
+  Rcpp::List prep(prepSEXP);
+  return uuber::build_native_context(prep);
+}
+
+// [[Rcpp::export]]
+double boost_integrate_cpp(Rcpp::Function integrand,
+                           double lower,
+                           double upper,
+                           double rel_tol,
+                           double abs_tol,
+                           int max_depth) {
+  return uuber::integrate_boost(integrand, lower, upper, rel_tol, abs_tol, max_depth);
+}
+
+double acc_density_cpp(double, double, double, const std::string&, const Rcpp::List&);
+double acc_survival_cpp(double, double, double, const std::string&, const Rcpp::List&);
+double acc_cdf_success_cpp(double, double, double, const std::string&, const Rcpp::List&);
+double pool_density_fast_cpp(const Rcpp::NumericVector&, const Rcpp::NumericVector&, int);
+double pool_survival_fast_cpp(const Rcpp::NumericVector&, int);
+
+namespace {
+
+void sort_unique(std::vector<int>& vec);
+
+constexpr double kDefaultRelTol = 1e-5;
+constexpr double kDefaultAbsTol = 1e-6;
+constexpr int kDefaultMaxDepth = 12;
+
+inline double clamp_probability(double value) {
+  if (!std::isfinite(value)) return 0.0;
+  if (value < 0.0) return 0.0;
+  if (value > 1.0) return 1.0;
+  return value;
+}
+
+inline double safe_density(double value) {
+  if (!std::isfinite(value) || value <= 0.0) return 0.0;
+  return value;
+}
+
+struct NodeEvalResult {
+  double density{0.0};
+  double survival{1.0};
+  double cdf{0.0};
+};
+
+inline NodeEvalResult make_node_result(double density,
+                                       double survival,
+                                       double cdf) {
+  NodeEvalResult out;
+  out.density = safe_density(density);
+  out.survival = clamp_probability(survival);
+  out.cdf = clamp_probability(cdf);
+  return out;
+}
+
+inline Rcpp::List node_result_to_list(const NodeEvalResult& res) {
+  return Rcpp::List::create(
+    Rcpp::Named("density") = res.density,
+    Rcpp::Named("survival") = res.survival,
+    Rcpp::Named("cdf") = res.cdf
+  );
+}
+
+inline std::unordered_set<int> make_scope_set(const std::vector<int>& ids) {
+  std::unordered_set<int> scope;
+  scope.reserve(ids.size());
+  for (int id : ids) {
+    if (id == NA_INTEGER) continue;
+    scope.insert(id);
+  }
+  return scope;
+}
+
+inline std::vector<int> set_to_sorted_vector(const std::unordered_set<int>& items) {
+  if (items.empty()) return {};
+  std::vector<int> out(items.begin(), items.end());
+  sort_unique(out);
+  return out;
+}
+
+inline std::vector<int> union_vectors(const std::vector<int>& a,
+                                      const std::vector<int>& b) {
+  if (a.empty()) {
+    std::vector<int> out = b;
+    sort_unique(out);
+    return out;
+  }
+  std::vector<int> out = a;
+  out.insert(out.end(), b.begin(), b.end());
+  sort_unique(out);
+  return out;
+}
+
+std::unordered_set<int> filter_forced_scope(const std::unordered_set<int>& forced,
+                                            const std::vector<int>& scope_ids) {
+  if (forced.empty() || scope_ids.empty()) {
+    return std::unordered_set<int>();
+  }
+  std::unordered_set<int> scope = make_scope_set(scope_ids);
+  if (scope.empty()) {
+    return std::unordered_set<int>();
+  }
+  std::unordered_set<int> out;
+  out.reserve(scope.size());
+  for (int id : forced) {
+    if (scope.count(id)) {
+      out.insert(id);
+    }
+  }
+  return out;
+}
+
+std::vector<int> forced_vec_from_sexp(SEXP vec) {
+  std::vector<int> out;
+  if (Rf_isNull(vec)) return out;
+  Rcpp::IntegerVector iv(vec);
+  out.reserve(iv.size());
+  for (int val : iv) {
+    if (val == NA_INTEGER) continue;
+    out.push_back(val);
+  }
+  return out;
+}
+
+std::unordered_set<int> make_forced_set(const std::vector<int>& ids) {
+  return std::unordered_set<int>(ids.begin(), ids.end());
+}
+
+inline int label_id(const uuber::NativeContext& ctx, const std::string& label) {
+  auto it = ctx.label_to_id.find(label);
+  if (it == ctx.label_to_id.end()) return NA_INTEGER;
+  return it->second;
+}
+
+bool component_active(const uuber::NativeAccumulator& acc, const std::string& component) {
+  if (component.empty() || component == "__default__") return true;
+  if (acc.components.empty()) return true;
+  return std::find(acc.components.begin(), acc.components.end(), component) != acc.components.end();
+}
+
+NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
+                                const std::string& label,
+                                double t,
+                                const std::string& component,
+                                const std::unordered_set<int>& forced_complete,
+                                const std::unordered_set<int>& forced_survive) {
+  if (label.empty()) {
+    Rcpp::stop("native_event_eval: empty label");
+  }
+  int label_idx = label_id(ctx, label);
+  if (label_idx != NA_INTEGER) {
+    if (forced_complete.count(label_idx)) {
+      return make_node_result(0.0, 0.0, 1.0);
+    }
+    if (forced_survive.count(label_idx)) {
+      return make_node_result(0.0, 1.0, 0.0);
+    }
+  }
+
+  auto acc_it = ctx.accumulator_index.find(label);
+  if (acc_it != ctx.accumulator_index.end()) {
+    const uuber::NativeAccumulator& acc = ctx.accumulators[acc_it->second];
+    if (!component_active(acc, component)) {
+      return make_node_result(0.0, 1.0, 0.0);
+    }
+    double density = acc_density_cpp(t, acc.onset, acc.q, acc.dist, acc.params);
+    double survival = acc_survival_cpp(t, acc.onset, acc.q, acc.dist, acc.params);
+    double cdf = acc_cdf_success_cpp(t, acc.onset, acc.q, acc.dist, acc.params);
+    if (!std::isfinite(cdf)) {
+      cdf = clamp_probability(1.0 - survival);
+    }
+    if (!std::isfinite(survival)) {
+      survival = 0.0;
+    }
+    return make_node_result(density, survival, cdf);
+  }
+
+  auto pool_it = ctx.pool_index.find(label);
+  if (pool_it != ctx.pool_index.end()) {
+    const uuber::NativePool& pool = ctx.pools[pool_it->second];
+    if (pool.members.empty()) {
+      return make_node_result(0.0, 1.0, 0.0);
+    }
+    std::vector<std::string> active_members;
+    active_members.reserve(pool.members.size());
+    for (const auto& member : pool.members) {
+      auto member_acc = ctx.accumulator_index.find(member);
+      if (member_acc != ctx.accumulator_index.end()) {
+        const uuber::NativeAccumulator& acc = ctx.accumulators[member_acc->second];
+        if (!component_active(acc, component)) continue;
+      }
+      active_members.push_back(member);
+    }
+    if (active_members.empty()) {
+      return make_node_result(0.0, 1.0, 0.0);
+    }
+    Rcpp::NumericVector density_vec(active_members.size());
+    Rcpp::NumericVector survival_vec(active_members.size());
+    for (std::size_t i = 0; i < active_members.size(); ++i) {
+      NodeEvalResult child = eval_event_label(
+        ctx,
+        active_members[i],
+        t,
+        component,
+        forced_complete,
+        forced_survive
+      );
+      density_vec[i] = child.density;
+      survival_vec[i] = child.survival;
+    }
+    double density = pool_density_fast_cpp(density_vec, survival_vec, pool.k);
+    double survival = pool_survival_fast_cpp(survival_vec, pool.k);
+    double cdf = clamp_probability(1.0 - survival);
+    if (!std::isfinite(density) || density < 0.0) density = 0.0;
+    if (!std::isfinite(survival)) survival = 0.0;
+    return make_node_result(density, survival, cdf);
+  }
+
+  Rcpp::stop("native_event_eval: unknown label '%s'", label);
+}
+
+struct NodeEvalState {
+  NodeEvalState(const uuber::NativeContext& ctx_,
+                double time,
+                const std::string& component_label,
+                const std::unordered_set<int>& forced_complete_ref,
+                const std::unordered_set<int>& forced_survive_ref)
+    : ctx(ctx_),
+      t(time),
+      component(component_label),
+      forced_complete(forced_complete_ref),
+      forced_survive(forced_survive_ref) {}
+
+  const uuber::NativeContext& ctx;
+  double t;
+  std::string component;
+  const std::unordered_set<int>& forced_complete;
+  const std::unordered_set<int>& forced_survive;
+  std::unordered_map<int, NodeEvalResult> cache;
+};
+
+struct IntegrationSettings {
+  double rel_tol{kDefaultRelTol};
+  double abs_tol{kDefaultAbsTol};
+  int max_depth{kDefaultMaxDepth};
+};
+
+struct ScenarioRecord {
+  double weight{0.0};
+  std::vector<int> forced_complete;
+  std::vector<int> forced_survive;
+};
+
+NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state);
+NodeEvalResult eval_guard_node(const uuber::NativeNode& node, NodeEvalState& parent_state);
+
+const uuber::NativeNode& fetch_node(const uuber::NativeContext& ctx, int node_id) {
+  auto node_it = ctx.node_index.find(node_id);
+  if (node_it == ctx.node_index.end()) {
+    Rcpp::stop("native_node_eval: unknown node id %d", node_id);
+  }
+  return ctx.nodes[node_it->second];
+}
+
+NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
+                                     int node_id,
+                                     double time,
+                                     const std::string& component,
+                                     const std::unordered_set<int>& forced_complete,
+                                     const std::unordered_set<int>& forced_survive) {
+  NodeEvalState local(ctx, time, component, forced_complete, forced_survive);
+  return eval_node_recursive(node_id, local);
+}
+
+NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state);
+NodeEvalResult eval_guard_node(const uuber::NativeNode& node, NodeEvalState& parent_state);
+
+NodeEvalResult eval_and_node(const uuber::NativeNode& node, NodeEvalState& state) {
+  const std::vector<int>& child_ids = node.args;
+  if (child_ids.empty()) {
+    return make_node_result(0.0, 1.0, 0.0);
+  }
+  std::size_t n = child_ids.size();
+  std::vector<NodeEvalResult> children;
+  children.reserve(n);
+  for (int child_id : child_ids) {
+    children.push_back(eval_node_recursive(child_id, state));
+  }
+  std::vector<double> child_cdf(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    child_cdf[i] = clamp_probability(children[i].cdf);
+  }
+  std::vector<double> prefix(n + 1, 1.0);
+  std::vector<double> suffix(n + 1, 1.0);
+  for (std::size_t i = 0; i < n; ++i) {
+    prefix[i + 1] = prefix[i] * child_cdf[i];
+    if (!std::isfinite(prefix[i + 1])) prefix[i + 1] = 0.0;
+  }
+  for (std::size_t i = n; i-- > 0;) {
+    suffix[i] = suffix[i + 1] * child_cdf[i];
+    if (!std::isfinite(suffix[i])) suffix[i] = 0.0;
+  }
+  double total_cdf = clamp_probability(prefix[n]);
+  double survival = clamp_probability(1.0 - total_cdf);
+  double density = 0.0;
+  for (std::size_t i = 0; i < n; ++i) {
+    double child_density = children[i].density;
+    if (!std::isfinite(child_density) || child_density <= 0.0) continue;
+    double others = prefix[i] * suffix[i + 1];
+    if (!std::isfinite(others) || others <= 0.0) continue;
+    density += child_density * clamp_probability(others);
+  }
+  if (!std::isfinite(density) || density < 0.0) density = 0.0;
+  return make_node_result(density, survival, total_cdf);
+}
+
+NodeEvalResult eval_or_node(const uuber::NativeNode& node, NodeEvalState& state) {
+  const std::vector<int>& child_ids = node.args;
+  if (child_ids.empty()) {
+    return make_node_result(0.0, 1.0, 0.0);
+  }
+  std::size_t n = child_ids.size();
+  std::vector<NodeEvalResult> children;
+  children.reserve(n);
+  for (int child_id : child_ids) {
+    children.push_back(eval_node_recursive(child_id, state));
+  }
+  std::vector<double> child_surv(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    child_surv[i] = clamp_probability(children[i].survival);
+  }
+  std::vector<double> prefix(n + 1, 1.0);
+  std::vector<double> suffix(n + 1, 1.0);
+  for (std::size_t i = 0; i < n; ++i) {
+    prefix[i + 1] = prefix[i] * child_surv[i];
+    if (!std::isfinite(prefix[i + 1])) prefix[i + 1] = 0.0;
+  }
+  for (std::size_t i = n; i-- > 0;) {
+    suffix[i] = suffix[i + 1] * child_surv[i];
+    if (!std::isfinite(suffix[i])) suffix[i] = 0.0;
+  }
+  double total_surv = clamp_probability(prefix[n]);
+  double cdf = clamp_probability(1.0 - total_surv);
+  double density = 0.0;
+  for (std::size_t i = 0; i < n; ++i) {
+    double child_density = children[i].density;
+    if (!std::isfinite(child_density) || child_density <= 0.0) continue;
+    double others = prefix[i] * suffix[i + 1];
+    if (!std::isfinite(others) || others <= 0.0) continue;
+    density += child_density * clamp_probability(others);
+  }
+  if (!std::isfinite(density) || density < 0.0) density = 0.0;
+  return make_node_result(density, total_surv, cdf);
+}
+
+NodeEvalResult eval_not_node(const uuber::NativeNode& node, NodeEvalState& state) {
+  int child_id = node.arg_id;
+  if (child_id < 0) {
+    return make_node_result(0.0, 1.0, 0.0);
+  }
+  NodeEvalResult child = eval_node_recursive(child_id, state);
+  double child_cdf = clamp_probability(child.cdf);
+  double self_cdf = clamp_probability(1.0 - child_cdf);
+  double survival = clamp_probability(1.0 - self_cdf);
+  return make_node_result(0.0, survival, self_cdf);
+}
+
+struct GuardEvalInput {
+  const uuber::NativeContext& ctx;
+  const uuber::NativeNode& node;
+  std::string component;
+  std::unordered_set<int> forced_complete;
+  std::unordered_set<int> forced_survive;
+};
+
+GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
+                                const uuber::NativeNode& node,
+                                const std::string& component,
+                                const std::unordered_set<int>& forced_complete,
+                                const std::unordered_set<int>& forced_survive) {
+  GuardEvalInput input{ctx, node, component, {}, {}};
+  input.forced_complete = filter_forced_scope(forced_complete, node.source_ids);
+  input.forced_survive = filter_forced_scope(forced_survive, node.source_ids);
+  return input;
+}
+
+double guard_effective_survival_internal(const GuardEvalInput& input,
+                                         double t,
+                                         const IntegrationSettings& settings);
+
+double guard_density_internal(const GuardEvalInput& input,
+                              double t,
+                              const IntegrationSettings& settings);
+
+double guard_cdf_internal(const GuardEvalInput& input,
+                          double t,
+                          const IntegrationSettings& settings);
+
+NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state) {
+  auto cached = state.cache.find(node_id);
+  if (cached != state.cache.end()) {
+    return cached->second;
+  }
+  const uuber::NativeNode& node = fetch_node(state.ctx, node_id);
+  NodeEvalResult result;
+  if (node.kind == "event") {
+    if (node.source.empty()) {
+      Rcpp::stop("native_node_eval: event node missing source id");
+    }
+    result = eval_event_label(
+      state.ctx,
+      node.source,
+      state.t,
+      state.component,
+      state.forced_complete,
+      state.forced_survive
+    );
+  } else if (node.kind == "and") {
+    result = eval_and_node(node, state);
+  } else if (node.kind == "or") {
+    result = eval_or_node(node, state);
+  } else if (node.kind == "not") {
+    result = eval_not_node(node, state);
+  } else if (node.kind == "guard") {
+    GuardEvalInput guard_input = make_guard_input(state.ctx,
+                                                  node,
+                                                  state.component,
+                                                  state.forced_complete,
+                                                  state.forced_survive);
+    IntegrationSettings settings;
+    double density = guard_density_internal(guard_input, state.t, settings);
+    double cdf = guard_cdf_internal(guard_input, state.t, settings);
+    double survival = clamp_probability(1.0 - cdf);
+    result = make_node_result(density, survival, cdf);
+  } else {
+    Rcpp::stop("native_node_eval: unsupported node kind '%s'", node.kind);
+  }
+  state.cache.emplace(node_id, result);
+  return result;
+}
+
+double guard_effective_survival_internal(const GuardEvalInput& input,
+                                         double t,
+                                         const IntegrationSettings& settings) {
+  if (!std::isfinite(t)) {
+    return 1.0;
+  }
+  if (t <= 0.0) {
+    return 1.0;
+  }
+  int blocker_id = input.node.blocker_id;
+  if (blocker_id < 0) {
+    return 1.0;
+  }
+  if (input.node.unless_ids.empty()) {
+    NodeEvalResult block = eval_node_with_forced(
+      input.ctx,
+      blocker_id,
+      t,
+      input.component,
+      input.forced_complete,
+      input.forced_survive
+    );
+    return clamp_probability(block.survival);
+  }
+  auto integrand = [&](double u) -> double {
+    if (!std::isfinite(u) || u < 0.0) return 0.0;
+    NodeEvalResult block = eval_node_with_forced(
+      input.ctx,
+      blocker_id,
+      u,
+      input.component,
+      input.forced_complete,
+      input.forced_survive
+    );
+    double density = block.density;
+    if (!std::isfinite(density) || density <= 0.0) return 0.0;
+    double prod = 1.0;
+    for (int unl_id : input.node.unless_ids) {
+      if (unl_id < 0) continue;
+      NodeEvalResult protector = eval_node_with_forced(
+        input.ctx,
+        unl_id,
+        u,
+        input.component,
+        input.forced_complete,
+        input.forced_survive
+      );
+      prod *= clamp_probability(protector.survival);
+      if (!std::isfinite(prod) || prod <= 0.0) {
+        prod = 0.0;
+        break;
+      }
+    }
+    if (prod <= 0.0) return 0.0;
+    double val = density * prod;
+    if (!std::isfinite(val) || val <= 0.0) return 0.0;
+    return val;
+  };
+  double integral = uuber::integrate_boost_fn(
+    integrand,
+    0.0,
+    t,
+    settings.rel_tol,
+    settings.abs_tol,
+    settings.max_depth
+  );
+  double surv = 1.0 - integral;
+  return clamp_probability(surv);
+}
+
+double guard_reference_density(const GuardEvalInput& input,
+                               double t) {
+  if (!std::isfinite(t) || t < 0.0) {
+    return 0.0;
+  }
+  int reference_id = input.node.reference_id;
+  if (reference_id < 0) {
+    return 0.0;
+  }
+  NodeEvalResult ref = eval_node_with_forced(
+    input.ctx,
+    reference_id,
+    t,
+    input.component,
+    input.forced_complete,
+    input.forced_survive
+  );
+  double dens_ref = ref.density;
+  if (!std::isfinite(dens_ref) || dens_ref <= 0.0) return 0.0;
+  return dens_ref;
+}
+
+double guard_density_internal(const GuardEvalInput& input,
+                              double t,
+                              const IntegrationSettings& settings) {
+  double dens_ref = guard_reference_density(input, t);
+  if (dens_ref <= 0.0) return 0.0;
+  double s_eff = guard_effective_survival_internal(input, t, settings);
+  double val = dens_ref * s_eff;
+  if (!std::isfinite(val) || val <= 0.0) return 0.0;
+  return val;
+}
+
+double guard_cdf_internal(const GuardEvalInput& input,
+                          double t,
+                          const IntegrationSettings& settings) {
+  if (!std::isfinite(t)) {
+    return 1.0;
+  }
+  if (t <= 0.0) {
+    return 0.0;
+  }
+  auto integrand = [&](double u) -> double {
+    return guard_density_internal(input, u, settings);
+  };
+  double val = uuber::integrate_boost_fn(
+    integrand,
+    0.0,
+    t,
+    settings.rel_tol,
+    settings.abs_tol,
+    settings.max_depth
+  );
+  if (!std::isfinite(val) || val < 0.0) val = 0.0;
+  return clamp_probability(val);
+}
+
+IntegrationSettings resolve_integration_settings(double rel_tol,
+                                                 double abs_tol,
+                                                 int max_depth) {
+  IntegrationSettings settings;
+  if (std::isfinite(rel_tol) && rel_tol > 0.0) {
+    settings.rel_tol = rel_tol;
+  }
+  if (std::isfinite(abs_tol) && abs_tol > 0.0) {
+    settings.abs_tol = abs_tol;
+  }
+  if (max_depth > 0) {
+    settings.max_depth = max_depth;
+  }
+  return settings;
+}
+
+GuardEvalInput resolve_guard_input(uuber::NativeContext& ctx,
+                                   int node_id,
+                                   const std::string& component,
+                                   const std::unordered_set<int>& forced_complete,
+                                   const std::unordered_set<int>& forced_survive) {
+  auto node_it = ctx.node_index.find(node_id);
+  if (node_it == ctx.node_index.end()) {
+    Rcpp::stop("native_guard_eval: unknown node id %d", node_id);
+  }
+  const uuber::NativeNode& node = ctx.nodes[node_it->second];
+  if (node.kind != "guard") {
+    Rcpp::stop("native_guard_eval: node id %d is not a guard expression", node_id);
+  }
+  return make_guard_input(ctx, node, component, forced_complete, forced_survive);
+}
+
+std::vector<int> gather_blocker_sources(const uuber::NativeContext& ctx,
+                                        const uuber::NativeNode& guard_node) {
+  std::vector<int> sources;
+  if (guard_node.blocker_id < 0) return sources;
+  const uuber::NativeNode& blocker = fetch_node(ctx, guard_node.blocker_id);
+  sources = blocker.source_ids;
+  if (blocker.kind == "event" && !blocker.source.empty()) {
+    int lid = label_id(ctx, blocker.source);
+    if (lid != NA_INTEGER) {
+      sources.push_back(lid);
+    }
+  }
+  sort_unique(sources);
+  return sources;
+}
+
+Rcpp::List native_guard_eval_impl(SEXP ctxSEXP,
+                                  int guard_node_id,
+                                  double t,
+                                  Rcpp::Nullable<Rcpp::String> component,
+                                  SEXP forced_complete,
+                                  SEXP forced_survive,
+                                  double rel_tol,
+                                  double abs_tol,
+                                  int max_depth) {
+  if (Rf_isNull(ctxSEXP)) {
+    Rcpp::stop("native_guard_eval: context pointer is null");
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
+  std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
+  std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
+  std::unordered_set<int> fc_set = make_forced_set(fc_vec);
+  std::unordered_set<int> fs_set = make_forced_set(fs_vec);
+  GuardEvalInput guard_input = resolve_guard_input(*ctx,
+                                                   guard_node_id,
+                                                   component_label,
+                                                   fc_set,
+                                                   fs_set);
+  IntegrationSettings settings = resolve_integration_settings(rel_tol, abs_tol, max_depth);
+  double density = guard_density_internal(guard_input, t, settings);
+  double cdf = guard_cdf_internal(guard_input, t, settings);
+  double survival = clamp_probability(1.0 - cdf);
+  double eff_surv = guard_effective_survival_internal(guard_input, t, settings);
+  NodeEvalResult result = make_node_result(density, survival, cdf);
+  Rcpp::List out = node_result_to_list(result);
+  out["effective_survival"] = eff_surv;
+  return out;
+}
+
+double native_guard_effective_survival_impl(SEXP ctxSEXP,
+                                            int guard_node_id,
+                                            double t,
+                                            Rcpp::Nullable<Rcpp::String> component,
+                                            SEXP forced_complete,
+                                            SEXP forced_survive,
+                                            double rel_tol,
+                                            double abs_tol,
+                                            int max_depth) {
+  if (Rf_isNull(ctxSEXP)) {
+    Rcpp::stop("native_guard_effective_survival: context pointer is null");
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
+  std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
+  std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
+  std::unordered_set<int> fc_set = make_forced_set(fc_vec);
+  std::unordered_set<int> fs_set = make_forced_set(fs_vec);
+  GuardEvalInput guard_input = resolve_guard_input(*ctx,
+                                                   guard_node_id,
+                                                   component_label,
+                                                   fc_set,
+                                                   fs_set);
+  IntegrationSettings settings = resolve_integration_settings(rel_tol, abs_tol, max_depth);
+  return guard_effective_survival_internal(guard_input, t, settings);
+}
+
+Rcpp::List native_guard_scenarios_impl(SEXP ctxSEXP,
+                                       int guard_node_id,
+                                       double t,
+                                       const Rcpp::List& reference_scenarios,
+                                       Rcpp::Nullable<Rcpp::String> component,
+                                       SEXP forced_complete,
+                                       SEXP forced_survive,
+                                       double rel_tol,
+                                       double abs_tol,
+                                       int max_depth) {
+  if (Rf_isNull(ctxSEXP)) {
+    Rcpp::stop("native_guard_scenarios: context pointer is null");
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  auto guard_it = ctx->node_index.find(guard_node_id);
+  if (guard_it == ctx->node_index.end()) {
+    Rcpp::stop("native_guard_scenarios: unknown guard node id %d", guard_node_id);
+  }
+  const uuber::NativeNode& guard_node = ctx->nodes[guard_it->second];
+  if (guard_node.kind != "guard") {
+    Rcpp::stop("native_guard_scenarios: node %d is not a guard", guard_node_id);
+  }
+  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
+  std::vector<int> base_fc_vec = forced_vec_from_sexp(forced_complete);
+  std::vector<int> base_fs_vec = forced_vec_from_sexp(forced_survive);
+  std::unordered_set<int> base_fc_set = make_forced_set(base_fc_vec);
+  std::unordered_set<int> base_fs_set = make_forced_set(base_fs_vec);
+  IntegrationSettings settings = resolve_integration_settings(rel_tol, abs_tol, max_depth);
+  std::vector<int> blocker_sources = gather_blocker_sources(*ctx, guard_node);
+  std::vector<ScenarioRecord> records;
+  records.reserve(static_cast<std::size_t>(reference_scenarios.size()));
+  for (R_xlen_t i = 0; i < reference_scenarios.size(); ++i) {
+    Rcpp::List sc(reference_scenarios[i]);
+    if (sc.isNULL()) continue;
+    double weight = Rcpp::as<double>(sc["weight"]);
+    if (!std::isfinite(weight) || weight <= 0.0) continue;
+    std::vector<int> sc_fc_vec = forced_vec_from_sexp(sc["forced_complete"]);
+    std::vector<int> sc_fs_vec = forced_vec_from_sexp(sc["forced_survive"]);
+    std::unordered_set<int> sc_fc_set = make_forced_set(sc_fc_vec);
+    std::unordered_set<int> sc_fs_set = make_forced_set(sc_fs_vec);
+    sc_fc_set.insert(base_fc_set.begin(), base_fc_set.end());
+    sc_fs_set.insert(base_fs_set.begin(), base_fs_set.end());
+    GuardEvalInput scenario_input = make_guard_input(*ctx,
+                                                     guard_node,
+                                                     component_label,
+                                                     sc_fc_set,
+                                                     sc_fs_set);
+    double s_eff = guard_effective_survival_internal(scenario_input, t, settings);
+    if (!std::isfinite(s_eff) || s_eff <= 0.0) continue;
+    double final_weight = weight * s_eff;
+    if (!std::isfinite(final_weight) || final_weight <= 0.0) continue;
+    ScenarioRecord record;
+    record.weight = final_weight;
+    record.forced_complete = set_to_sorted_vector(scenario_input.forced_complete);
+    record.forced_survive = union_vectors(set_to_sorted_vector(scenario_input.forced_survive), blocker_sources);
+    records.push_back(std::move(record));
+  }
+  Rcpp::List out(records.size());
+  for (std::size_t i = 0; i < records.size(); ++i) {
+    const ScenarioRecord& rec = records[i];
+    out[i] = Rcpp::List::create(
+      Rcpp::Named("weight") = rec.weight,
+      Rcpp::Named("forced_complete") = Rcpp::IntegerVector(rec.forced_complete.begin(), rec.forced_complete.end()),
+      Rcpp::Named("forced_survive") = Rcpp::IntegerVector(rec.forced_survive.begin(), rec.forced_survive.end())
+    );
+  }
+  return out;
+}
+
+
+Rcpp::List native_node_eval_impl(SEXP ctxSEXP,
+                                 int node_id,
+                                 double t,
+                                 Rcpp::Nullable<Rcpp::String> component,
+                                 SEXP forced_complete,
+                                 SEXP forced_survive) {
+  if (Rf_isNull(ctxSEXP)) {
+    Rcpp::stop("native_node_eval: context pointer is null");
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
+  std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
+  std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
+  std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
+  std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
+  NodeEvalState state(*ctx,
+                      t,
+                      component_label,
+                      forced_complete_set,
+                      forced_survive_set);
+  NodeEvalResult result = eval_node_recursive(node_id, state);
+  return node_result_to_list(result);
+}
+
+} // namespace
+
+// [[Rcpp::export]]
+Rcpp::List native_guard_eval_cpp(SEXP ctxSEXP,
+                                 int guard_node_id,
+                                 double t,
+                                 Rcpp::Nullable<Rcpp::String> component,
+                                 SEXP forced_complete,
+                                 SEXP forced_survive,
+                                 double rel_tol,
+                                 double abs_tol,
+                                 int max_depth) {
+  return native_guard_eval_impl(ctxSEXP,
+                                guard_node_id,
+                                t,
+                                component,
+                                forced_complete,
+                                forced_survive,
+                                rel_tol,
+                                abs_tol,
+                                max_depth);
+}
+
+// [[Rcpp::export]]
+double native_guard_effective_survival_cpp(SEXP ctxSEXP,
+                                           int guard_node_id,
+                                           double t,
+                                           Rcpp::Nullable<Rcpp::String> component,
+                                           SEXP forced_complete,
+                                           SEXP forced_survive,
+                                           double rel_tol,
+                                           double abs_tol,
+                                           int max_depth) {
+  return native_guard_effective_survival_impl(ctxSEXP,
+                                              guard_node_id,
+                                              t,
+                                              component,
+                                              forced_complete,
+                                              forced_survive,
+                                              rel_tol,
+                                              abs_tol,
+                                              max_depth);
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_guard_scenarios_cpp(SEXP ctxSEXP,
+                                      int guard_node_id,
+                                      double t,
+                                      Rcpp::List reference_scenarios,
+                                      Rcpp::Nullable<Rcpp::String> component,
+                                      SEXP forced_complete,
+                                      SEXP forced_survive,
+                                      double rel_tol,
+                                      double abs_tol,
+                                      int max_depth) {
+  return native_guard_scenarios_impl(ctxSEXP,
+                                     guard_node_id,
+                                     t,
+                                     reference_scenarios,
+                                     component,
+                                     forced_complete,
+                                     forced_survive,
+                                     rel_tol,
+                                     abs_tol,
+                                     max_depth);
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_node_eval_cpp(SEXP ctxSEXP,
+                                int node_id,
+                                double t,
+                                Rcpp::Nullable<Rcpp::String> component,
+                                SEXP forced_complete,
+                                SEXP forced_survive) {
+  return native_node_eval_impl(ctxSEXP,
+                               node_id,
+                               t,
+                               component,
+                               forced_complete,
+                               forced_survive);
+}
 
 // Forward declarations for native distribution helpers
 Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector& x,
@@ -1043,48 +1912,6 @@ double pool_survival_general_cpp(const Rcpp::NumericVector& Fvec,
   return clamp(total, 0.0, 1.0);
 }
 
-double eval_integrand(Rcpp::Function& fn, double x) {
-  Rcpp::NumericVector res = fn(Rcpp::NumericVector::create(x));
-  if (res.size() == 0) return 0.0;
-  double val = res[0];
-  if (!std::isfinite(val) || val < 0.0) return 0.0;
-  return val;
-}
-
-inline double simpson_estimate(double a, double b, double fa, double fb, double fm) {
-  return (b - a) * (fa + 4.0 * fm + fb) / 6.0;
-}
-
-double adaptive_simpson_guard(Rcpp::Function& integrand,
-                              double a,
-                              double b,
-                              double fa,
-                              double fb,
-                              double fm,
-                              double whole,
-                              double abs_tol,
-                              double rel_tol,
-                              int depth) {
-  double m = 0.5 * (a + b);
-  double left_mid = 0.5 * (a + m);
-  double right_mid = 0.5 * (m + b);
-  double f_left_mid = eval_integrand(integrand, left_mid);
-  double f_right_mid = eval_integrand(integrand, right_mid);
-  double left = simpson_estimate(a, m, fa, fm, f_left_mid);
-  double right = simpson_estimate(m, b, fm, fb, f_right_mid);
-  double result = left + right;
-  double error = std::fabs(result - whole);
-  double tol = std::max(abs_tol, rel_tol * std::fabs(result));
-  if (error <= 15.0 * tol || depth <= 0) {
-    return result + (result - whole) / 15.0;
-  }
-  double half_abs = abs_tol * 0.5;
-  return adaptive_simpson_guard(integrand, a, m, fa, fm, f_left_mid, left,
-                                half_abs, rel_tol, depth - 1) +
-         adaptive_simpson_guard(integrand, m, b, fm, fb, f_right_mid, right,
-                                half_abs, rel_tol, depth - 1);
-}
-
 //' @noRd
 // [[Rcpp::export]]
 double guard_effective_survival_cpp(Rcpp::Function integrand,
@@ -1096,16 +1923,12 @@ double guard_effective_survival_cpp(Rcpp::Function integrand,
   if (upper <= 0.0) return 1.0;
   if (rel_tol <= 0.0) rel_tol = 1e-6;
   if (abs_tol <= 0.0) abs_tol = 1e-8;
-  if (max_depth <= 0) max_depth = 12;
-
-  double a = 0.0;
-  double b = upper;
-  double fa = eval_integrand(integrand, a);
-  double fb = eval_integrand(integrand, b);
-  double fm = eval_integrand(integrand, 0.5 * (a + b));
-  double whole = simpson_estimate(a, b, fa, fb, fm);
-  double integral = adaptive_simpson_guard(integrand, a, b, fa, fb, fm, whole,
-                                           abs_tol, rel_tol, max_depth);
+  double integral = 0.0;
+  try {
+    integral = uuber::integrate_boost(integrand, 0.0, upper, rel_tol, abs_tol, max_depth);
+  } catch (...) {
+    integral = 0.0;
+  }
   if (!std::isfinite(integral) || integral < 0.0) integral = 0.0;
   double surv = 1.0 - integral;
   if (!std::isfinite(surv)) surv = 0.0;

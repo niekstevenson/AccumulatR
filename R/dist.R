@@ -14,7 +14,31 @@
   if (!file.exists(cpp_path)) {
     stop(sprintf("Native distribution source not found at '%s'", cpp_path), call. = FALSE)
   }
-  Rcpp::sourceCpp(cpp_path, env = env, rebuild = FALSE)
+  boost_dirs <- c(
+    Sys.getenv("UUBER_BOOST_INCLUDE", unset = NA_character_),
+    "/opt/homebrew/opt/boost/include"
+  )
+  boost_dirs <- boost_dirs[nzchar(boost_dirs)]
+  boost_dir <- NULL
+  if (length(boost_dirs) > 0) {
+    for (bd in boost_dirs) {
+      if (!is.null(bd) && length(bd) > 0 && nzchar(bd) && file.exists(bd)) {
+        boost_dir <- bd
+        break
+      }
+    }
+  }
+  old_cppflags <- NULL
+  if (!is.null(boost_dir)) {
+    old_cppflags <- Sys.getenv("PKG_CPPFLAGS", unset = "")
+    new_flags <- paste(sprintf("-I%s", boost_dir), old_cppflags)
+    Sys.setenv(PKG_CPPFLAGS = new_flags)
+    on.exit({
+      Sys.setenv(PKG_CPPFLAGS = old_cppflags)
+    }, add = TRUE)
+  }
+  rebuild_flag <- getOption("uuber.native.rebuild", TRUE)
+  Rcpp::sourceCpp(cpp_path, env = env, rebuild = isTRUE(rebuild_flag))
   env$loaded <- TRUE
   env
 }

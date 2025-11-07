@@ -3,6 +3,37 @@
 .integrate_rel_tol <- function() getOption("uuber.integrate.rel.tol", 1e-5)
 .integrate_abs_tol <- function() getOption("uuber.integrate.abs.tol", 1e-6)
 
+.native_integrate <- function(fn, lower, upper,
+                              rel.tol = .integrate_rel_tol(),
+                              abs.tol = .integrate_abs_tol(),
+                              max.depth = 10L) {
+  if (!is.finite(lower) || !is.finite(upper)) {
+    res <- tryCatch(
+      stats::integrate(fn,
+                       lower = lower,
+                       upper = upper,
+                       rel.tol = rel.tol,
+                       abs.tol = abs.tol,
+                       stop.on.error = FALSE),
+      error = function(e) list(value = NA_real_)
+    )
+    val <- as.numeric(res[["value"]])
+    if (!is.finite(val)) val <- 0.0
+    return(val)
+  }
+  native <- .lik_native_fn("boost_integrate_cpp")
+  val <- native(
+    fn,
+    as.numeric(lower),
+    as.numeric(upper),
+    rel.tol,
+    abs.tol,
+    as.integer(max.depth)
+  )
+  if (!is.finite(val)) val <- 0.0
+  val
+}
+
 .expr_is_event <- function(expr) {
   !is.null(expr) && !is.null(expr[["kind"]]) && identical(expr[["kind"]], "event")
 }
@@ -101,6 +132,11 @@
 .prep_competitors <- function(prep) .prep_runtime_get(prep, "competitor_map")
 .prep_id_index <- function(prep) .prep_runtime_get(prep, "id_index")
 .prep_cache_bundle <- function(prep) .prep_runtime_get(prep, "cache_bundle")
+
+.prep_native_context <- function(prep) {
+  builder <- .lik_native_fn("native_context_build")
+  builder(prep)
+}
 
 .cache_component_key <- function(component) {
   if (is.null(component) || length(component) == 0L) {

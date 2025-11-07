@@ -1,49 +1,145 @@
+.dist_native_env <- local({
+  env <- new.env(parent = baseenv())
+  env$loaded <- FALSE
+  env
+})
+
+.load_dist_native <- function() {
+  env <- .dist_native_env
+  if (isTRUE(env$loaded)) return(env)
+  if (!requireNamespace("Rcpp", quietly = TRUE)) {
+    stop("Rcpp package is required to use the native distribution kernels", call. = FALSE)
+  }
+  cpp_path <- file.path("src", "distributions.cpp")
+  if (!file.exists(cpp_path)) {
+    stop(sprintf("Native distribution source not found at '%s'", cpp_path), call. = FALSE)
+  }
+  Rcpp::sourceCpp(cpp_path, env = env, rebuild = FALSE)
+  env$loaded <- TRUE
+  env
+}
+
+.get_dist_native <- function() {
+  env <- .dist_native_env
+  if (!isTRUE(env$loaded)) {
+    env <- .load_dist_native()
+  }
+  env
+}
+
+.lik_native_fn <- function(name) {
+  env <- .get_dist_native()
+  fn <- env[[name]]
+  if (!is.function(fn)) {
+    stop(sprintf("Native likelihood routine '%s' is unavailable", name), call. = FALSE)
+  }
+  fn
+}
+
+.dist_param_scalar <- function(par, name) {
+  val <- par[[name]]
+  if (is.null(val) || length(val) == 0L) {
+    stop(sprintf("Missing parameter '%s' for distribution", name), call. = FALSE)
+  }
+  as.numeric(val)[1]
+}
+
+.dist_as_count <- function(n) {
+  if (length(n) == 0L) return(0L)
+  n_val <- as.numeric(n)[1]
+  if (is.na(n_val) || n_val < 0) {
+    stop("Sample size 'n' must be a non-negative numeric value", call. = FALSE)
+  }
+  as.integer(n_val)
+}
+
 dist_registry <- local({
-  # Registry of base distributions supported: lognormal, gamma, exgauss
-  # Each entry returns list(r, d, p) functions operating on scalar x and param list.
-  exgauss_pdf <- function(x, par) {
-    mu <- par$mu; sigma <- par$sigma; tau <- par$tau
-    if (!is.finite(x)) return(0.0)
-    # Handle sigma or tau edge cases
-    if (sigma <= 0 || tau <= 0) return(NA_real_)
-    z <- (x - mu) / sigma
-    w <- sigma / tau
-    # f(x) = (1/tau) * exp( (sigma^2)/(2 tau^2) - (x-mu)/tau ) * Phi( z - w )
-    return((1.0/tau) * exp( (sigma*sigma)/(2.0*tau*tau) - (x - mu)/tau ) * pnorm(z - w))
-  }
-  exgauss_cdf <- function(x, par) {
-    mu <- par$mu; sigma <- par$sigma; tau <- par$tau
-    if (!is.finite(x)) return(NA_real_)
-    if (sigma <= 0 || tau <= 0) return(NA_real_)
-    z <- (x - mu) / sigma
-    w <- sigma / tau
-    # F(x) = Phi(z) - exp( (sigma^2)/(2 tau^2) - (x-mu)/tau ) * Phi( z - w )
-    return(pnorm(z) - exp( (sigma*sigma)/(2.0*tau*tau) - (x - mu)/tau ) * pnorm(z - w))
-  }
-  exgauss_rng <- function(n, par) {
-    mu <- par$mu; sigma <- par$sigma; tau <- par$tau
-    if (sigma <= 0 || tau <= 0) stop("Invalid exgauss parameters")
-    rnorm(n, mean = mu, sd = sigma) + rexp(n, rate = 1.0/tau)
-  }
-
   reg <- new.env(parent = emptyenv())
+
   reg$lognormal <- list(
-    r = function(n, par) rlnorm(n, meanlog = par$meanlog, sdlog = par$sdlog),
-    d = function(x, par) dlnorm(x, meanlog = par$meanlog, sdlog = par$sdlog),
-    p = function(x, par) plnorm(x, meanlog = par$meanlog, sdlog = par$sdlog)
-  )
-  reg$gamma <- list(
-    r = function(n, par) rgamma(n, shape = par$shape, rate = par$rate),
-    d = function(x, par) dgamma(x, shape = par$shape, rate = par$rate),
-    p = function(x, par) pgamma(x, shape = par$shape, rate = par$rate)
-  )
-  reg$exgauss <- list(
-    r = function(n, par) exgauss_rng(n, par),
-    d = function(x, par) exgauss_pdf(x, par),
-    p = function(x, par) exgauss_cdf(x, par)
+    r = function(n, par) {
+      native <- .get_dist_native()
+      native$dist_lognormal_rng(
+        .dist_as_count(n),
+        .dist_param_scalar(par, "meanlog"),
+        .dist_param_scalar(par, "sdlog")
+      )
+    },
+    d = function(x, par) {
+      native <- .get_dist_native()
+      native$dist_lognormal_pdf(
+        x,
+        .dist_param_scalar(par, "meanlog"),
+        .dist_param_scalar(par, "sdlog")
+      )
+    },
+    p = function(x, par) {
+      native <- .get_dist_native()
+      native$dist_lognormal_cdf(
+        x,
+        .dist_param_scalar(par, "meanlog"),
+        .dist_param_scalar(par, "sdlog")
+      )
+    }
   )
 
-  # accessor
+  reg$gamma <- list(
+    r = function(n, par) {
+      native <- .get_dist_native()
+      native$dist_gamma_rng(
+        .dist_as_count(n),
+        .dist_param_scalar(par, "shape"),
+        .dist_param_scalar(par, "rate")
+      )
+    },
+    d = function(x, par) {
+      native <- .get_dist_native()
+      native$dist_gamma_pdf(
+        x,
+        .dist_param_scalar(par, "shape"),
+        .dist_param_scalar(par, "rate")
+      )
+    },
+    p = function(x, par) {
+      native <- .get_dist_native()
+      native$dist_gamma_cdf(
+        x,
+        .dist_param_scalar(par, "shape"),
+        .dist_param_scalar(par, "rate")
+      )
+    }
+  )
+
+  reg$exgauss <- list(
+    r = function(n, par) {
+      native <- .get_dist_native()
+      native$dist_exgauss_rng(
+        .dist_as_count(n),
+        .dist_param_scalar(par, "mu"),
+        .dist_param_scalar(par, "sigma"),
+        .dist_param_scalar(par, "tau")
+      )
+    },
+    d = function(x, par) {
+      native <- .get_dist_native()
+      native$dist_exgauss_pdf(
+        x,
+        .dist_param_scalar(par, "mu"),
+        .dist_param_scalar(par, "sigma"),
+        .dist_param_scalar(par, "tau")
+      )
+    },
+    p = function(x, par) {
+      native <- .get_dist_native()
+      native$dist_exgauss_cdf(
+        x,
+        .dist_param_scalar(par, "mu"),
+        .dist_param_scalar(par, "sigma"),
+        .dist_param_scalar(par, "tau")
+      )
+    }
+  )
+
   function(name) {
     if (!exists(name, envir = reg, inherits = FALSE)) {
       stop(sprintf("Unknown distribution '%s'", name))
@@ -51,4 +147,3 @@ dist_registry <- local({
     get(name, envir = reg, inherits = FALSE)
   }
 })
-

@@ -1,64 +1,70 @@
-.acc_density <- function(acc_def, t) {
-  if (!is.finite(t) || t < 0) return(0.0)
-  if (t < acc_def[['onset']]) return(0.0)
+.acc_native_fn <- function(name) .lik_native_fn(name)
 
-  success_prob <- 1 - acc_def[['q']]
-  if (success_prob <= 0) return(0.0)
+.acc_numeric_scalar <- function(value, default, name) {
+  if (is.null(value) || length(value) == 0L) return(default)
+  val <- as.numeric(value)[[1]]
+  if (!is.finite(val)) {
+    stop(sprintf("Accumulator parameter '%s' must be a finite numeric value", name),
+         call. = FALSE)
+  }
+  val
+}
 
-  reg <- dist_registry(acc_def[['dist']])
-  if (is.null(reg) || is.null(reg[['d']])) {
-    stop(sprintf("No density function for distribution '%s'", acc_def[['dist']]))
+.acc_extract_args <- function(acc_def) {
+  dist_raw <- acc_def[["dist"]]
+  if (is.null(dist_raw) || length(dist_raw) == 0L) {
+    stop("Accumulator definition missing 'dist'", call. = FALSE)
+  }
+  dist_chr <- as.character(dist_raw)[[1]]
+  if (!nzchar(dist_chr)) {
+    stop("Accumulator definition has empty distribution name", call. = FALSE)
+  }
+  dist_chr <- tolower(dist_chr)
+
+  params <- acc_def[["params"]]
+  if (is.null(params) || length(params) == 0L) {
+    stop(sprintf("Accumulator '%s' missing parameter list", dist_chr), call. = FALSE)
+  }
+  if (!is.list(params)) {
+    params <- as.list(params)
   }
 
-  t_adj <- t - acc_def[['onset']]
-  dens <- reg[['d']](t_adj, acc_def[['params']])
+  list(
+    dist = dist_chr,
+    params = params,
+    onset = .acc_numeric_scalar(acc_def[["onset"]], 0, "onset"),
+    q = .acc_numeric_scalar(acc_def[["q"]], 0, "q")
+  )
+}
 
-  success_prob * dens
+.acc_eval <- function(fn_name, acc_def, t) {
+  t_vals <- as.numeric(t)
+  if (length(t_vals) == 0L) return(numeric(0))
+  args <- .acc_extract_args(acc_def)
+  fn <- .acc_native_fn(fn_name)
+  res <- vapply(
+    t_vals,
+    function(tt) fn(tt, args$onset, args$q, args$dist, args$params),
+    numeric(1),
+    USE.NAMES = FALSE
+  )
+  if (length(res) == 1L) res[[1]] else res
+}
+
+.acc_density <- function(acc_def, t) {
+  .acc_eval("acc_density_cpp", acc_def, t)
 }
 
 .acc_density_success <- function(acc_def, t) {
-  if (!is.finite(t) || t < 0) return(0.0)
-  if (t < acc_def[['onset']]) return(0.0)
-
-  reg <- dist_registry(acc_def[['dist']])
-  if (is.null(reg) || is.null(reg[['d']])) {
-    stop(sprintf("No density function for distribution '%s'", acc_def[['dist']]))
-  }
-
-  t_adj <- t - acc_def[['onset']]
-  dens <- reg[['d']](t_adj, acc_def[['params']])
-
-  dens
+  .acc_eval("acc_density_success_cpp", acc_def, t)
 }
 
 .acc_survival <- function(acc_def, t) {
-  if (!is.finite(t)) return(0.0)
-  if (t < 0) return(1.0)
-  if (t < acc_def[['onset']]) return(1.0)
-
-  reg <- dist_registry(acc_def[['dist']])
-  if (is.null(reg) || is.null(reg[['p']])) {
-    stop(sprintf("No CDF function for distribution '%s'", acc_def[['dist']]))
-  }
-
-  t_adj <- t - acc_def[['onset']]
-  surv_underlying <- 1 - reg[['p']](t_adj, acc_def[['params']])
-
-  acc_def[['q']] + (1 - acc_def[['q']]) * surv_underlying
+  .acc_eval("acc_survival_cpp", acc_def, t)
 }
 
 .acc_cdf_success <- function(acc_def, t) {
-  if (!is.finite(t)) return(1.0)
-  if (t < 0) return(0.0)
-  if (t < acc_def[['onset']]) return(0.0)
-
-  reg <- dist_registry(acc_def[['dist']])
-  if (is.null(reg) || is.null(reg[['p']])) {
-    stop(sprintf("No CDF function for distribution '%s'", acc_def[['dist']]))
-  }
-
-  t_adj <- t - acc_def[['onset']]
-  reg[['p']](t_adj, acc_def[['params']])
+  .acc_eval("acc_cdf_success_cpp", acc_def, t)
 }
 
 .acc_shared_trigger_id <- function(acc_def) {
@@ -123,42 +129,25 @@
   if (n == 0L) return(0.0)
   k <- as.integer(pool_def[["k"]] %||% 1L)
   if (k < 1L || k > n) return(0.0)
-
-  total_density <- 0.0
+  dens_vec <- numeric(n)
+  surv_vec <- numeric(n)
   for (i in seq_len(n)) {
     mid <- members[[i]]
-    dens_i <- if (!is.null(acc_defs[[mid]])) {
-      .acc_density(acc_defs[[mid]], t)
+    if (!is.null(acc_defs[[mid]])) {
+      acc_def <- acc_defs[[mid]]
+      dens_vec[[i]] <- .acc_density(acc_def, t)
+      surv_vec[[i]] <- .acc_survival(acc_def, t)
     } else if (!is.null(pool_defs[[mid]])) {
-      .pool_density_fast_value(prep, mid, component, t)
+      dens_vec[[i]] <- .pool_density_fast_value(prep, mid, component, t)
+      surv_vec[[i]] <- .pool_survival_fast_value(prep, mid, component, t)
     } else {
-      0.0
-    }
-    if (!is.finite(dens_i) || dens_i <= 0) next
-    others <- members[-i]
-    if (length(others) == 0L) {
-      if (k == 1L) total_density <- total_density + dens_i
-      next
-    }
-    Svec <- Fvec <- numeric(length(others))
-    for (j in seq_along(others)) {
-      oid <- others[[j]]
-      surv_j <- if (!is.null(acc_defs[[oid]])) {
-        .acc_survival(acc_defs[[oid]], t)
-      } else if (!is.null(pool_defs[[oid]])) {
-        .pool_survival_fast_value(prep, oid, component, t)
-      } else {
-        1.0
-      }
-      Svec[[j]] <- surv_j
-      Fvec[[j]] <- 1.0 - surv_j
-    }
-    coeffs <- pool_coeffs(Svec, Fvec)
-    if (k <= length(coeffs)) {
-      total_density <- total_density + dens_i * coeffs[[k]]
+      dens_vec[[i]] <- 0.0
+      surv_vec[[i]] <- 1.0
     }
   }
-  total_density
+  native <- .lik_native_fn("pool_density_fast_cpp")
+  total_density <- native(dens_vec, surv_vec, as.integer(k))
+  if (!is.finite(total_density) || total_density <= 0) 0.0 else as.numeric(total_density)
 }
 
 .pool_survival_fast_value <- function(prep, pool_id, component, t) {
@@ -180,7 +169,6 @@
   }
 
   Svec <- numeric(n)
-  Fvec <- numeric(n)
   for (i in seq_len(n)) {
     mid <- members[[i]]
     surv <- if (!is.null(acc_defs[[mid]])) {
@@ -191,63 +179,17 @@
       1.0
     }
     Svec[[i]] <- surv
-    Fvec[[i]] <- 1.0 - surv
   }
-  coeffs <- pool_coeffs(Svec, Fvec)
-  upto <- min(length(coeffs), k)
-  if (upto <= 0L) return(0.0)
-  sum(coeffs[seq_len(upto)])
+  native <- .lik_native_fn("pool_survival_fast_cpp")
+  val <- native(Svec, as.integer(k))
+  if (!is.finite(val)) 0.0 else as.numeric(val)
 }
 
 .build_pool_templates <- function(pool_id, members, member_ids, pool_idx, k) {
-  n <- length(members)
-  if (n == 0L || k < 1L || k > n) {
-    return(list(templates = list(), finisher_map = vector("list", n)))
-  }
-  need <- k - 1L
-  finisher_map <- vector("list", n)
-  templates <- list()
-  template_count <- 0L
-  for (idx in seq_len(n)) {
-    others <- seq_len(n)
-    others <- others[others != idx]
-    if (need > length(others)) {
-      finisher_map[[idx]] <- integer(0)
-      next
-    }
-    combos <- if (need <= 0L) {
-      list(integer(0))
-    } else if (need == length(others)) {
-      list(others)
-    } else if (need == 1L) {
-      lapply(others, function(j) j)
-    } else {
-      utils::combn(others, need, simplify = FALSE)
-    }
-    idx_entries <- integer(length(combos))
-    for (j in seq_along(combos)) {
-      combo_idx <- combos[[j]]
-      survivors <- if (length(combo_idx) == 0L) others else {
-        remainder <- others[!(others %in% combo_idx)]
-        if (length(remainder) == 0L) integer(0) else remainder
-      }
-      template_count <- template_count + 1L
-      finisher_ids <- member_ids[idx]
-      if (length(combo_idx) > 0L) finisher_ids <- c(finisher_ids, member_ids[combo_idx])
-      if (!is.na(pool_idx)) finisher_ids <- c(finisher_ids, pool_idx)
-      finisher_ids <- finisher_ids[!is.na(finisher_ids)]
-      templates[[template_count]] <- list(
-        finisher_idx = idx,
-        complete_idx = if (length(combo_idx) > 0L) combo_idx else integer(0),
-        survivor_idx = survivors,
-        forced_complete_ids = finisher_ids,
-        forced_survive_ids = if (length(survivors) > 0L) member_ids[survivors] else integer(0)
-      )
-      idx_entries[[j]] <- template_count
-    }
-    finisher_map[[idx]] <- idx_entries
-  }
-  list(templates = templates, finisher_map = finisher_map)
+  native <- .lik_native_fn("pool_build_templates_cpp")
+  member_ids_int <- as.integer(member_ids)
+  pool_idx_int <- if (is.na(pool_idx)) NA_integer_ else as.integer(pool_idx)
+  native(length(members), member_ids_int, pool_idx_int, as.integer(k))
 }
 
 .event_survival_at <- function(prep, id, component, t,
@@ -414,7 +356,7 @@
   for (i in seq_len(n)) {
     mid <- members[[i]]
     acc_def <- acc_defs[[mid]]
-    if (!is.null(acc_def) && !is.na(shared_ids[[i]])) {
+    if (!is.null(acc_def) && !is.na(shared_ids[[i]]) && nzchar(shared_ids[[i]])) {
       cdf_success_vec[[i]] <- .acc_cdf_success(acc_def, t)
       surv_success_vec[[i]] <- 1.0 - cdf_success_vec[[i]]
     } else {
@@ -423,78 +365,45 @@
     }
   }
 
-  same_shared <- function(i, j) {
-    if (i < 1L || i > n || j < 1L || j > n) return(FALSE)
-    sid_i <- shared_ids[[i]]
-    sid_j <- shared_ids[[j]]
-    !is.na(sid_i) && !is.na(sid_j) && identical(sid_i, sid_j)
+  shared_groups <- integer(n)
+  if (n > 0L) {
+    non_na <- which(!is.na(shared_ids) & nzchar(shared_ids))
+    if (length(non_na) > 0L) {
+      unique_vals <- unique(shared_ids[non_na])
+      shared_groups[non_na] <- match(shared_ids[non_na], unique_vals)
+    }
   }
 
-  prod_survival <- function(finisher_idx, idx_set) {
-    if (length(idx_set) == 0L) return(1.0)
-    prod(vapply(idx_set, function(j) {
-      if (same_shared(finisher_idx, j)) surv_success_vec[[j]] else surv_vec[[j]]
-    }, numeric(1)))
-  }
+  native_density <- .lik_native_fn("pool_density_combine_cpp")
+  res <- native_density(
+    dens_vec,
+    cdf_vec,
+    surv_vec,
+    cdf_success_vec,
+    surv_success_vec,
+    as.integer(shared_groups),
+    templates,
+    as.integer(forced_complete),
+    as.integer(forced_survive)
+  )
 
-  prod_cdf <- function(finisher_idx, idx_set) {
-    if (length(idx_set) == 0L) return(1.0)
-    prod(vapply(idx_set, function(j) {
-      if (same_shared(finisher_idx, j)) cdf_success_vec[[j]] else cdf_vec[[j]]
-    }, numeric(1)))
-  }
+  total_density <- as.numeric(res$value)
+  if (!is.finite(total_density) || total_density < 0) total_density <- 0.0
 
+  scenarios_raw <- res$scenarios %||% list()
   scenarios <- list()
-  add_scenario <- function(weight, fcomp, fsurv) {
-    sc <- .make_scenario_record(prep, weight, fcomp, fsurv)
-    if (!is.null(sc)) scenarios[[length(scenarios) + 1L]] <<- sc
-  }
-
-  idx_seq <- seq_len(n)
-  for (template in templates) {
-    idx <- template$finisher_idx
-    others_idx_list <- finisher_map
-    others_idx <- others_idx_list[[idx]]
-    dens_mid <- dens_vec[[idx]]
-    if (!is.finite(dens_mid) || dens_mid <= 0) next
-
-    complete_idx <- template$complete_idx
-    survivor_idx <- template$survivor_idx
-    forced_complete_ids <- .forced_union(prep, forced_complete, template$forced_complete_ids)
-    forced_survive_ids <- .forced_union(prep, forced_survive, template$forced_survive_ids)
-
-    if (length(complete_idx) > 0L) dens_mid <- dens_mid * prod(cdf_vec[complete_idx])
-    if (length(survivor_idx) > 0L) dens_mid <- dens_mid * prod(surv_vec[survivor_idx])
-    if (!is.finite(dens_mid) || dens_mid <= 0) next
-
-    if (length(complete_idx) > 0L) {
-      dens_mid <- dens_mid * prod(vapply(complete_idx, function(j) {
-        if (same_shared(idx, j)) {
-          cdf_success_vec[[j]] / pmax(cdf_vec[[j]], .Machine$double.eps)
-        } else {
-          1.0
-        }
-      }, numeric(1)))
+  if (length(scenarios_raw) > 0L) {
+    for (sr in scenarios_raw) {
+      sc <- .make_scenario_record(
+        prep,
+        sr$weight,
+        sr$forced_complete,
+        sr$forced_survive
+      )
+      if (!is.null(sc)) scenarios[[length(scenarios) + 1L]] <- sc
     }
-    if (length(survivor_idx) > 0L) {
-      dens_mid <- dens_mid * prod(vapply(survivor_idx, function(j) {
-        if (same_shared(idx, j)) {
-          surv_success_vec[[j]] / pmax(surv_vec[[j]], .Machine$double.eps)
-        } else {
-          1.0
-        }
-      }, numeric(1)))
-    }
-
-    add_scenario(dens_mid, forced_complete_ids, forced_survive_ids)
   }
-
-  total_density <- if (length(scenarios) == 0L) 0.0 else sum(vapply(scenarios, `[[`, numeric(1), "weight"))
-  if (length(scenarios) > 0L) {
-    attr(total_density, "scenarios") <- scenarios
-  } else {
-    attr(total_density, "scenarios") <- list()
-  }
+  attr(total_density, "scenarios") <- scenarios
   total_density
 }
 
@@ -522,8 +431,6 @@
                                forced_complete = forced_complete,
                                forced_survive = forced_survive)
   }
-  Svec <- 1.0 - Fvec
-  coeffs <- pool_coeffs(Svec, Fvec)
-  upto <- min(length(coeffs), k)
-  sum(coeffs[seq_len(upto)])
+  native_surv <- .lik_native_fn("pool_survival_general_cpp")
+  as.numeric(native_surv(Fvec, as.integer(k)))
 }

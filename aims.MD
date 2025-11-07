@@ -12,8 +12,8 @@
 
 ## 3. Favour principled optimizations over ad-hoc patches
 
-- **Current status**: Fast-path logic is encapsulated in reusable helpers (e.g. pool density/survival, guard effective survival) rather than duplicated branches. Competitor handling uses structural clustering instead of outcome-specific checks.
-- **Still to do**: Unify duplicated guard logic between fast and full evaluators, and ensure new shortcuts (e.g. forced pool fast paths) are derived algebraically. Document invariants for each optimization to keep future tweaks grounded in first principles.
+- **Current status**: Fast-path logic is encapsulated in reusable helpers (pool templates, guard effective survival) rather than duplicated branches, and competitor handling uses structural clustering instead of outcome-specific tweaks. Guard fast paths now share a single algebraic formulation, and their invariants (together with the pool shortcuts) are documented in `docs/fast_paths.md`.
+- **Still to do**: Extend coverage to the remaining expression forms (e.g. `not`), add verification sweeps comparing fast and general paths over random parameters, and keep the documentation in sync as we introduce new optimisations.
 
 ## 4. Restrict caching to within-trial reuse
 

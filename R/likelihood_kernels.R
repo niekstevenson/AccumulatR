@@ -1657,22 +1657,24 @@ guard_scope_ids <- function(expr, prep) {
       prod(vals)
     }, numeric(1))
   }
-  val <- tryCatch({
-    if (!is.finite(t) || t <= 0) return(1.0)
-    val <- stats::integrate(
-      function(u) {
-        blocker_density(u) * protector_survival_product(u)
-      },
-      lower = 0,
-      upper = t,
-      rel.tol = .integrate_rel_tol(),
-      abs.tol = .integrate_abs_tol(),
-      stop.on.error = FALSE
-    )[["value"]]
-    s <- 1.0 - as.numeric(val)
-    s <- if (!is.finite(s)) 0.0 else max(0.0, min(1.0, s))
-    s
-  }, error = function(e) 1.0)
+  if (!is.finite(t) || t <= 0) {
+    .eval_state_set_extra(state, cache_tag, 1.0)
+    return(1.0)
+  }
+  integrand <- function(u) blocker_density(u) * protector_survival_product(u)
+  native_guard <- .lik_native_fn("guard_effective_survival_cpp")
+  val <- tryCatch(
+    native_guard(
+      integrand,
+      as.numeric(t),
+      .integrate_rel_tol(),
+      .integrate_abs_tol(),
+      12L
+    ),
+    error = function(e) 1.0
+  )
+  if (!is.finite(val)) val <- 1.0
+  val <- max(0.0, min(1.0, as.numeric(val)))
   .eval_state_set_extra(state, cache_tag, val)
   val
 }

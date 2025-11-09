@@ -1,4 +1,4 @@
-// [[Rcpp::depends(Rcpp, RcppParallel)]]
+// [[Rcpp::depends(Rcpp, RcppParallel, BH)]]
 // [[Rcpp::plugins(cpp17)]]
 
 #include <Rcpp.h>
@@ -6,13 +6,17 @@
 #include <cmath>
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <limits>
 #include <unordered_set>
 #include <unordered_map>
 #include <functional>
+#include <memory>
+#include <queue>
 #include <sstream>
+#include <iomanip>
 #if __has_include(<boost/math/quadrature/gauss_kronrod.hpp>)
 #define UUBER_HAVE_BOOST_GK 1
 #include <boost/math/quadrature/gauss_kronrod.hpp>
@@ -20,13 +24,65 @@
 #define UUBER_HAVE_BOOST_GK 0
 #endif
 
-#include "native_context.hpp"
+#include "native_context.h"
+#include "native_accumulator.hpp"
+#include "native_prep_builder.hpp"
+#include "native_proto.hpp"
 #include "native_integrate.hpp"
+
+using uuber::AccDistParams;
+using uuber::resolve_acc_params_entries;
+
+Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector& x,
+                                       double meanlog,
+                                       double sdlog);
+Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector& x,
+                                       double meanlog,
+                                       double sdlog);
+Rcpp::NumericVector dist_gamma_pdf(const Rcpp::NumericVector& x,
+                                   double shape,
+                                   double rate);
+Rcpp::NumericVector dist_gamma_cdf(const Rcpp::NumericVector& x,
+                                   double shape,
+                                   double rate);
+Rcpp::NumericVector dist_exgauss_pdf(const Rcpp::NumericVector& x,
+                                     double mu,
+                                     double sigma,
+                                     double tau);
+Rcpp::NumericVector dist_exgauss_cdf(const Rcpp::NumericVector& x,
+                                     double mu,
+                                     double sigma,
+                                     double tau);
 
 // [[Rcpp::export]]
 SEXP native_context_build(SEXP prepSEXP) {
   Rcpp::List prep(prepSEXP);
   return uuber::build_native_context(prep);
+}
+
+// [[Rcpp::export]]
+Rcpp::RawVector native_prep_serialize_cpp(SEXP prepSEXP) {
+  Rcpp::List prep(prepSEXP);
+  uuber::NativePrepProto proto = uuber::build_prep_proto(prep);
+  std::vector<std::uint8_t> bytes = uuber::serialize_native_prep(proto);
+  Rcpp::RawVector out(bytes.size());
+  if (!bytes.empty()) {
+    std::copy(bytes.begin(), bytes.end(), out.begin());
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+SEXP native_context_from_proto_cpp(Rcpp::RawVector blob) {
+  if (blob.size() == 0) {
+    Rcpp::stop("native_context_from_proto: buffer is empty");
+  }
+  uuber::NativePrepProto proto = uuber::deserialize_native_prep(
+    reinterpret_cast<const std::uint8_t*>(blob.begin()),
+    static_cast<std::size_t>(blob.size())
+  );
+  std::unique_ptr<uuber::NativeContext> ctx = uuber::build_context_from_proto(proto);
+  return Rcpp::XPtr<uuber::NativeContext>(ctx.release(), true);
 }
 
 // [[Rcpp::export]]
@@ -44,14 +100,94 @@ double acc_survival_cpp(double, double, double, const std::string&, const Rcpp::
 double acc_cdf_success_cpp(double, double, double, const std::string&, const Rcpp::List&);
 double pool_density_fast_cpp(const Rcpp::NumericVector&, const Rcpp::NumericVector&, int);
 double pool_survival_fast_cpp(const Rcpp::NumericVector&, int);
+std::vector<uuber::ProtoParamEntry> params_from_rcpp(const Rcpp::List& params,
+                                                     const std::string& dist) {
+  if (params.size() == 0) {
+    Rcpp::stop("Distribution '%s' received empty parameter list", dist);
+  }
+  Rcpp::CharacterVector names = params.names();
+  if (names.isNULL()) {
+    Rcpp::stop("Distribution '%s' parameter list must be named", dist);
+  }
+  std::vector<uuber::ProtoParamEntry> out;
+  out.reserve(params.size());
+  for (R_xlen_t i = 0; i < params.size(); ++i) {
+    if (params[i] == R_NilValue) continue;
+    if (names[i] == NA_STRING) {
+      Rcpp::stop("Distribution '%s' missing parameter name at index %d",
+                 dist, static_cast<int>(i + 1));
+    }
+    uuber::ProtoParamEntry entry;
+    entry.name = Rcpp::as<std::string>(names[i]);
+    SEXP val = params[i];
+    if (Rf_isLogical(val)) {
+      Rcpp::LogicalVector lv(val);
+      if (lv.size() == 1) {
+        entry.tag = uuber::ParamValueTag::LogicalScalar;
+        entry.logical_scalar = lv[0];
+      } else {
+        entry.tag = uuber::ParamValueTag::LogicalVector;
+        entry.logical_values.reserve(lv.size());
+        for (int v : lv) entry.logical_values.push_back(v);
+      }
+    } else if (Rf_isInteger(val) || Rf_isReal(val)) {
+      Rcpp::NumericVector nv(val);
+      if (nv.size() == 1) {
+        entry.tag = uuber::ParamValueTag::NumericScalar;
+        entry.numeric_scalar = nv[0];
+      } else {
+        entry.tag = uuber::ParamValueTag::NumericVector;
+        entry.numeric_values.reserve(nv.size());
+        for (double v : nv) entry.numeric_values.push_back(v);
+      }
+    } else {
+      Rcpp::stop("Distribution '%s' parameter '%s' must be numeric/logical",
+                 dist, entry.name);
+    }
+    out.push_back(std::move(entry));
+  }
+  return out;
+}
+Rcpp::List pool_build_templates_cpp(int n,
+                                    const Rcpp::IntegerVector& member_ids,
+                                    int pool_idx,
+                                    int k);
+Rcpp::List pool_density_combine_cpp(const Rcpp::NumericVector& dens_vec,
+                                    const Rcpp::NumericVector& cdf_vec,
+                                    const Rcpp::NumericVector& surv_vec,
+                                    const Rcpp::NumericVector& cdf_success_vec,
+                                    const Rcpp::NumericVector& surv_success_vec,
+                                    const Rcpp::IntegerVector& shared_index,
+                                    const Rcpp::List& templates,
+                                    const Rcpp::IntegerVector& forced_complete,
+                                    const Rcpp::IntegerVector& forced_survive);
 
 namespace {
 
 void sort_unique(std::vector<int>& vec);
+std::vector<int> integer_vector_to_std(const Rcpp::IntegerVector& src,
+                                       bool subtract_one = false);
 
 constexpr double kDefaultRelTol = 1e-5;
 constexpr double kDefaultAbsTol = 1e-6;
 constexpr int kDefaultMaxDepth = 12;
+
+template <typename T>
+inline T clamp(T val, T lo, T hi) {
+  if (!std::isfinite(val)) {
+    return val;
+  }
+  if (val < lo) return lo;
+  if (val > hi) return hi;
+  return val;
+}
+
+inline double clamp_unit(double val) {
+  if (!std::isfinite(val)) return 0.0;
+  if (val < 0.0) return 0.0;
+  if (val > 1.0) return 1.0;
+  return val;
+}
 
 inline double clamp_probability(double value) {
   if (!std::isfinite(value)) return 0.0;
@@ -63,6 +199,107 @@ inline double clamp_probability(double value) {
 inline double safe_density(double value) {
   if (!std::isfinite(value) || value <= 0.0) return 0.0;
   return value;
+}
+
+inline double eval_pdf_single(const AccDistParams& cfg, double x) {
+  switch (cfg.code) {
+  case uuber::ACC_DIST_LOGNORMAL:
+    return dist_lognormal_pdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2)[0];
+  case uuber::ACC_DIST_GAMMA:
+    return dist_gamma_pdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2)[0];
+  case uuber::ACC_DIST_EXGAUSS:
+    return dist_exgauss_pdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2, cfg.p3)[0];
+  default:
+    Rcpp::stop("Invalid accumulator distribution code '%d'", cfg.code);
+  }
+}
+
+inline double eval_cdf_single(const AccDistParams& cfg, double x) {
+  switch (cfg.code) {
+  case uuber::ACC_DIST_LOGNORMAL:
+    return dist_lognormal_cdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2)[0];
+  case uuber::ACC_DIST_GAMMA:
+    return dist_gamma_cdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2)[0];
+  case uuber::ACC_DIST_EXGAUSS:
+    return dist_exgauss_cdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2, cfg.p3)[0];
+  default:
+    Rcpp::stop("Invalid accumulator distribution code '%d'", cfg.code);
+  }
+}
+
+inline double acc_density_from_cfg(double t,
+                                   double onset,
+                                   double q,
+                                   const AccDistParams& cfg) {
+  if (!std::isfinite(onset)) {
+    Rcpp::stop("Accumulator parameter 'onset' must be finite");
+  }
+  if (!std::isfinite(q)) {
+    Rcpp::stop("Accumulator parameter 'q' must be finite");
+  }
+  if (!std::isfinite(t) || t < 0.0) return 0.0;
+  if (t < onset) return 0.0;
+  double success_prob = 1.0 - q;
+  if (success_prob <= 0.0) return 0.0;
+  double dens = eval_pdf_single(cfg, t - onset);
+  if (Rcpp::NumericVector::is_na(dens) || !std::isfinite(dens)) {
+    return NA_REAL;
+  }
+  return success_prob * dens;
+}
+
+inline double acc_density_success_from_cfg(double t,
+                                           double onset,
+                                           const AccDistParams& cfg) {
+  if (!std::isfinite(onset)) {
+    Rcpp::stop("Accumulator parameter 'onset' must be finite");
+  }
+  if (!std::isfinite(t) || t < 0.0) return 0.0;
+  if (t < onset) return 0.0;
+  double dens = eval_pdf_single(cfg, t - onset);
+  if (Rcpp::NumericVector::is_na(dens) || !std::isfinite(dens)) {
+    return NA_REAL;
+  }
+  return dens;
+}
+
+inline double acc_survival_from_cfg(double t,
+                                    double onset,
+                                    double q,
+                                    const AccDistParams& cfg) {
+  if (!std::isfinite(onset)) {
+    Rcpp::stop("Accumulator parameter 'onset' must be finite");
+  }
+  if (!std::isfinite(q)) {
+    Rcpp::stop("Accumulator parameter 'q' must be finite");
+  }
+  if (!std::isfinite(t)) return 0.0;
+  if (t < 0.0) return 1.0;
+  if (t < onset) return 1.0;
+  double cdf = eval_cdf_single(cfg, t - onset);
+  if (Rcpp::NumericVector::is_na(cdf) || !std::isfinite(cdf)) {
+    return NA_REAL;
+  }
+  double surv_underlying = clamp(1.0 - cdf, 0.0, 1.0);
+  double success_prob = 1.0 - q;
+  double result = q + success_prob * surv_underlying;
+  return clamp(result, 0.0, 1.0);
+}
+
+inline double acc_cdf_success_from_cfg(double t,
+                                       double onset,
+                                       const AccDistParams& cfg) {
+  if (!std::isfinite(onset)) {
+    Rcpp::stop("Accumulator parameter 'onset' must be finite");
+  }
+  if (!std::isfinite(t)) return 1.0;
+  if (t < 0.0) return 0.0;
+  if (t < onset) return 0.0;
+  double cdf = eval_cdf_single(cfg, t - onset);
+  if (Rcpp::NumericVector::is_na(cdf) || !std::isfinite(cdf)) {
+    return NA_REAL;
+  }
+  return clamp(cdf, 0.0, 1.0);
 }
 
 struct NodeEvalResult {
@@ -119,6 +356,60 @@ inline std::vector<int> union_vectors(const std::vector<int>& a,
   return out;
 }
 
+inline bool vector_contains(const std::vector<int>& values, int target) {
+  if (values.empty()) return false;
+  return std::find(values.begin(), values.end(), target) != values.end();
+}
+
+struct ScenarioRecord {
+  double weight{0.0};
+  std::vector<int> forced_complete;
+  std::vector<int> forced_survive;
+};
+
+inline ScenarioRecord make_scenario_record(double weight,
+                                           const std::vector<int>& forced_complete,
+                                           const std::vector<int>& forced_survive) {
+  ScenarioRecord rec;
+  rec.weight = weight;
+  rec.forced_complete = forced_complete;
+  rec.forced_survive = forced_survive;
+  return rec;
+}
+
+inline Rcpp::List scenario_records_to_r(const std::vector<ScenarioRecord>& records) {
+  Rcpp::List out(records.size());
+  for (std::size_t i = 0; i < records.size(); ++i) {
+    const ScenarioRecord& rec = records[i];
+    out[i] = Rcpp::List::create(
+      Rcpp::Named("weight") = rec.weight,
+      Rcpp::Named("forced_complete") = Rcpp::IntegerVector(rec.forced_complete.begin(), rec.forced_complete.end()),
+      Rcpp::Named("forced_survive") = Rcpp::IntegerVector(rec.forced_survive.begin(), rec.forced_survive.end())
+    );
+  }
+  return out;
+}
+
+inline Rcpp::IntegerVector forced_set_to_vector(const std::unordered_set<int>& ids) {
+  std::vector<int> sorted = set_to_sorted_vector(ids);
+  return Rcpp::IntegerVector(sorted.begin(), sorted.end());
+}
+
+std::vector<ScenarioRecord> rcpp_scenarios_to_records(const Rcpp::List& scenarios) {
+  std::vector<ScenarioRecord> out;
+  out.reserve(scenarios.size());
+  for (R_xlen_t i = 0; i < scenarios.size(); ++i) {
+    if (scenarios[i] == R_NilValue) continue;
+    Rcpp::List sc(scenarios[i]);
+    double weight = Rcpp::as<double>(sc["weight"]);
+    if (!std::isfinite(weight) || weight <= 0.0) continue;
+    std::vector<int> fc = integer_vector_to_std(sc["forced_complete"], false);
+    std::vector<int> fs = integer_vector_to_std(sc["forced_survive"], false);
+    out.push_back(make_scenario_record(weight, fc, fs));
+  }
+  return out;
+}
+
 std::unordered_set<int> filter_forced_scope(const std::unordered_set<int>& forced,
                                             const std::vector<int>& scope_ids) {
   if (forced.empty() || scope_ids.empty()) {
@@ -160,10 +451,52 @@ inline int label_id(const uuber::NativeContext& ctx, const std::string& label) {
   return it->second;
 }
 
-bool component_active(const uuber::NativeAccumulator& acc, const std::string& component) {
+inline std::vector<int> ensure_source_ids(const uuber::NativeContext& ctx,
+                                          const uuber::NativeNode& node) {
+  std::vector<int> ids = node.source_ids;
+  if (ids.empty() && !node.source.empty()) {
+    int label_idx = label_id(ctx, node.source);
+    if (label_idx != NA_INTEGER) {
+      ids.push_back(label_idx);
+    }
+  }
+  sort_unique(ids);
+  return ids;
+}
+
+struct TrialAccumulatorOverride {
+  double onset{0.0};
+  double q{0.0};
+  AccDistParams dist_cfg{};
+  bool has_components{false};
+  std::vector<std::string> components;
+  std::string shared_trigger_id;
+};
+
+struct TrialOverrides {
+  std::unordered_map<int, TrialAccumulatorOverride> acc_overrides;
+};
+
+inline const TrialAccumulatorOverride* get_trial_override(const TrialOverrides* overrides,
+                                                          int acc_index) {
+  if (!overrides) return nullptr;
+  auto it = overrides->acc_overrides.find(acc_index);
+  if (it == overrides->acc_overrides.end()) return nullptr;
+  return &it->second;
+}
+
+bool component_active(const uuber::NativeAccumulator& acc,
+                      const std::string& component,
+                      const TrialAccumulatorOverride* override = nullptr) {
   if (component.empty() || component == "__default__") return true;
-  if (acc.components.empty()) return true;
-  return std::find(acc.components.begin(), acc.components.end(), component) != acc.components.end();
+  const std::vector<std::string>* comps = nullptr;
+  if (override && override->has_components) {
+    comps = &override->components;
+  } else if (!acc.components.empty()) {
+    comps = &acc.components;
+  }
+  if (!comps || comps->empty()) return true;
+  return std::find(comps->begin(), comps->end(), component) != comps->end();
 }
 
 NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
@@ -171,7 +504,8 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
                                 double t,
                                 const std::string& component,
                                 const std::unordered_set<int>& forced_complete,
-                                const std::unordered_set<int>& forced_survive) {
+                                const std::unordered_set<int>& forced_survive,
+                                const TrialOverrides* overrides = nullptr) {
   if (label.empty()) {
     Rcpp::stop("native_event_eval: empty label");
   }
@@ -187,19 +521,18 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
 
   auto acc_it = ctx.accumulator_index.find(label);
   if (acc_it != ctx.accumulator_index.end()) {
-    const uuber::NativeAccumulator& acc = ctx.accumulators[acc_it->second];
-    if (!component_active(acc, component)) {
+    int acc_idx = acc_it->second;
+    const uuber::NativeAccumulator& acc = ctx.accumulators[acc_idx];
+    const TrialAccumulatorOverride* override = get_trial_override(overrides, acc_idx);
+    if (!component_active(acc, component, override)) {
       return make_node_result(0.0, 1.0, 0.0);
     }
-    double density = acc_density_cpp(t, acc.onset, acc.q, acc.dist, acc.params);
-    double survival = acc_survival_cpp(t, acc.onset, acc.q, acc.dist, acc.params);
-    double cdf = acc_cdf_success_cpp(t, acc.onset, acc.q, acc.dist, acc.params);
-    if (!std::isfinite(cdf)) {
-      cdf = clamp_probability(1.0 - survival);
-    }
-    if (!std::isfinite(survival)) {
-      survival = 0.0;
-    }
+    double onset = override ? override->onset : acc.onset;
+    double q = override ? override->q : acc.q;
+    const AccDistParams& cfg = override ? override->dist_cfg : acc.dist_cfg;
+    double density = acc_density_from_cfg(t, onset, q, cfg);
+    double survival = acc_survival_from_cfg(t, onset, q, cfg);
+    double cdf = acc_cdf_success_from_cfg(t, onset, cfg);
     return make_node_result(density, survival, cdf);
   }
 
@@ -215,7 +548,8 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
       auto member_acc = ctx.accumulator_index.find(member);
       if (member_acc != ctx.accumulator_index.end()) {
         const uuber::NativeAccumulator& acc = ctx.accumulators[member_acc->second];
-        if (!component_active(acc, component)) continue;
+        const TrialAccumulatorOverride* override = get_trial_override(overrides, member_acc->second);
+        if (!component_active(acc, component, override)) continue;
       }
       active_members.push_back(member);
     }
@@ -231,7 +565,8 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
         t,
         component,
         forced_complete,
-        forced_survive
+        forced_survive,
+        overrides
       );
       density_vec[i] = child.density;
       survival_vec[i] = child.survival;
@@ -247,25 +582,169 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
   Rcpp::stop("native_event_eval: unknown label '%s'", label);
 }
 
+struct ForcedKey {
+  int complete_id{0};
+  int survive_id{0};
+};
+
+struct TimeKey {
+  double value{0.0};
+};
+
+struct CacheEntry {
+  bool has_density{false};
+  bool has_survival{false};
+  bool has_cdf{false};
+  bool scenarios_cached{false};
+  NodeEvalResult result;
+  std::vector<ScenarioRecord> scenarios;
+};
+
+struct TimeCache {
+  std::unordered_map<std::string, CacheEntry> entries;
+};
+
+struct ComponentCache {
+  std::unordered_map<std::string, TimeCache> times;
+};
+
+struct NodeCache {
+  std::unordered_map<std::string, ComponentCache> components;
+};
+
+struct EvalCache {
+  std::unordered_map<int, NodeCache> nodes;
+};
+
+std::string component_cache_key(const std::string& component) {
+  if (component.empty()) return "__default__";
+  return component;
+}
+
+std::string time_cache_key(double t) {
+  if (std::isnan(t)) return "NA";
+  if (!std::isfinite(t)) {
+    if (t > 0) return "Inf";
+    if (t < 0) return "-Inf";
+    return "NA";
+  }
+  std::ostringstream oss;
+  oss << std::setprecision(15) << t;
+  return oss.str();
+}
+
+std::string ids_to_string(const std::unordered_set<int>& ids) {
+  if (ids.empty()) return ".";
+  std::vector<int> vec(ids.begin(), ids.end());
+  sort_unique(vec);
+  std::ostringstream oss;
+  for (std::size_t i = 0; i < vec.size(); ++i) {
+    if (i > 0) oss << ",";
+    oss << vec[i];
+  }
+  return oss.str();
+}
+
 struct NodeEvalState {
   NodeEvalState(const uuber::NativeContext& ctx_,
+                EvalCache& cache_,
                 double time,
                 const std::string& component_label,
                 const std::unordered_set<int>& forced_complete_ref,
-                const std::unordered_set<int>& forced_survive_ref)
+                const std::unordered_set<int>& forced_survive_ref,
+                const TrialOverrides* overrides_ptr = nullptr)
     : ctx(ctx_),
+      cache(cache_),
       t(time),
       component(component_label),
       forced_complete(forced_complete_ref),
-      forced_survive(forced_survive_ref) {}
+      forced_survive(forced_survive_ref),
+      trial_overrides(overrides_ptr) {}
 
   const uuber::NativeContext& ctx;
+  EvalCache& cache;
   double t;
   std::string component;
   const std::unordered_set<int>& forced_complete;
   const std::unordered_set<int>& forced_survive;
-  std::unordered_map<int, NodeEvalResult> cache;
+  const TrialOverrides* trial_overrides;
 };
+
+std::string forced_key_string(const std::unordered_set<int>& forced_complete,
+                              const std::unordered_set<int>& forced_survive) {
+  return ids_to_string(forced_complete) + "|" + ids_to_string(forced_survive);
+}
+
+inline const TrialAccumulatorOverride* get_state_override(const NodeEvalState& state,
+                                                          int acc_index) {
+  return get_trial_override(state.trial_overrides, acc_index);
+}
+
+std::string member_ids_signature(const Rcpp::IntegerVector& ids) {
+  if (ids.size() == 0) return ".";
+  std::ostringstream oss;
+  for (R_xlen_t i = 0; i < ids.size(); ++i) {
+    if (i > 0) oss << ",";
+    oss << static_cast<int>(ids[i]);
+  }
+  return oss.str();
+}
+
+std::string pool_template_cache_key(const std::string& pool_label,
+                                    const std::string& component,
+                                    int k,
+                                    const Rcpp::IntegerVector& member_ids) {
+  std::ostringstream oss;
+  oss << pool_label << "|" << component_cache_key(component) << "|" << k << "|"
+      << member_ids_signature(member_ids);
+  return oss.str();
+}
+
+CacheEntry& fetch_cache_entry(NodeEvalState& state, int node_id) {
+  NodeCache& node_cache = state.cache.nodes[node_id];
+  ComponentCache& comp_cache = node_cache.components[component_cache_key(state.component)];
+  TimeCache& time_cache = comp_cache.times[time_cache_key(state.t)];
+  std::string forced_key = forced_key_string(state.forced_complete, state.forced_survive);
+  return time_cache.entries[forced_key];
+}
+
+bool fetch_cached_result(NodeEvalState& state,
+                         int node_id,
+                         NodeEvalResult& out) {
+  CacheEntry& entry = fetch_cache_entry(state, node_id);
+  if (!entry.has_density && !entry.has_survival && !entry.has_cdf) {
+    return false;
+  }
+  out = entry.result;
+  return true;
+}
+
+void store_cached_result(NodeEvalState& state,
+                         int node_id,
+                         const NodeEvalResult& res) {
+  CacheEntry& entry = fetch_cache_entry(state, node_id);
+  entry.result = res;
+  entry.has_density = true;
+  entry.has_survival = true;
+  entry.has_cdf = true;
+}
+
+bool fetch_cached_scenarios(NodeEvalState& state,
+                            int node_id,
+                            std::vector<ScenarioRecord>& out) {
+  CacheEntry& entry = fetch_cache_entry(state, node_id);
+  if (!entry.scenarios_cached) return false;
+  out = entry.scenarios;
+  return true;
+}
+
+void store_cached_scenarios(NodeEvalState& state,
+                            int node_id,
+                            const std::vector<ScenarioRecord>& records) {
+  CacheEntry& entry = fetch_cache_entry(state, node_id);
+  entry.scenarios = records;
+  entry.scenarios_cached = true;
+}
 
 struct IntegrationSettings {
   double rel_tol{kDefaultRelTol};
@@ -273,11 +752,411 @@ struct IntegrationSettings {
   int max_depth{kDefaultMaxDepth};
 };
 
-struct ScenarioRecord {
-  double weight{0.0};
-  std::vector<int> forced_complete;
-  std::vector<int> forced_survive;
+struct GuardEvalInput {
+  const uuber::NativeContext& ctx;
+  const uuber::NativeNode& node;
+  EvalCache& cache;
+  std::string component;
+  std::unordered_set<int> forced_complete;
+  std::unordered_set<int> forced_survive;
 };
+
+std::string guard_survival_cache_key(const GuardEvalInput& input, double t) {
+  std::ostringstream oss;
+  oss << input.node.id << "|" << component_cache_key(input.component) << "|"
+      << time_cache_key(t) << "|" << forced_key_string(input.forced_complete, input.forced_survive);
+  return oss.str();
+}
+
+const uuber::NativeNode& fetch_node(const uuber::NativeContext& ctx, int node_id);
+NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
+                                     EvalCache& cache,
+                                     int node_id,
+                                     double time,
+                                     const std::string& component,
+                                     const std::unordered_set<int>& forced_complete,
+                                     const std::unordered_set<int>& forced_survive);
+NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
+                                     int node_id,
+                                     double time,
+                                     const std::string& component,
+                                     const std::unordered_set<int>& forced_complete,
+                                     const std::unordered_set<int>& forced_survive);
+GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
+                                const uuber::NativeNode& node,
+                                EvalCache& cache,
+                                const std::string& component,
+                                const std::unordered_set<int>& forced_complete,
+                                const std::unordered_set<int>& forced_survive);
+double guard_effective_survival_internal(const GuardEvalInput& input,
+                                         double t,
+                                         const IntegrationSettings& settings);
+std::vector<int> gather_blocker_sources(const uuber::NativeContext& ctx,
+                                        const uuber::NativeNode& guard_node);
+
+std::vector<ScenarioRecord> compute_node_scenarios(int node_id, NodeEvalState& state);
+
+int first_missing_id(const std::vector<int>& forced_complete,
+                     const std::vector<int>& required) {
+  if (required.empty()) return NA_INTEGER;
+  for (int id : required) {
+    if (!vector_contains(forced_complete, id)) {
+      return id;
+    }
+  }
+  return NA_INTEGER;
+}
+
+std::vector<ScenarioRecord> compute_pool_event_scenarios(const uuber::NativeNode& node,
+                                                         NodeEvalState& state) {
+  const std::string& pool_label = node.source;
+  if (pool_label.empty()) return {};
+  auto pool_it = state.ctx.pool_index.find(pool_label);
+  if (pool_it == state.ctx.pool_index.end()) return {};
+  const uuber::NativePool& pool = state.ctx.pools[pool_it->second];
+  if (pool.members.empty()) return {};
+  int k = pool.k;
+  if (k < 1) return {};
+
+  std::vector<std::string> active_members;
+  active_members.reserve(pool.members.size());
+  for (const auto& member : pool.members) {
+    auto acc_it = state.ctx.accumulator_index.find(member);
+    if (acc_it != state.ctx.accumulator_index.end()) {
+      const uuber::NativeAccumulator& acc = state.ctx.accumulators[acc_it->second];
+      const TrialAccumulatorOverride* override = get_state_override(state, acc_it->second);
+      if (!component_active(acc, state.component, override)) continue;
+    }
+    active_members.push_back(member);
+  }
+  std::size_t n = active_members.size();
+  if (n == 0 || k > static_cast<int>(n)) return {};
+
+  Rcpp::NumericVector dens_vec(static_cast<R_xlen_t>(n));
+  Rcpp::NumericVector cdf_vec(static_cast<R_xlen_t>(n));
+  Rcpp::NumericVector surv_vec(static_cast<R_xlen_t>(n));
+  Rcpp::NumericVector cdf_success_vec(static_cast<R_xlen_t>(n));
+  Rcpp::NumericVector surv_success_vec(static_cast<R_xlen_t>(n));
+  Rcpp::IntegerVector shared_index_vec(static_cast<R_xlen_t>(n));
+  Rcpp::IntegerVector member_ids_vec(static_cast<R_xlen_t>(n));
+
+  std::vector<std::string> shared_ids(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    const std::string& member_label = active_members[i];
+    member_ids_vec[static_cast<R_xlen_t>(i)] = label_id(state.ctx, member_label);
+    auto acc_it = state.ctx.accumulator_index.find(member_label);
+    if (acc_it != state.ctx.accumulator_index.end()) {
+      const uuber::NativeAccumulator& acc = state.ctx.accumulators[acc_it->second];
+      const TrialAccumulatorOverride* override = get_state_override(state, acc_it->second);
+      const std::string& shared_id = override ? override->shared_trigger_id : acc.shared_trigger_id;
+      if (!shared_id.empty()) {
+        shared_ids[i] = shared_id;
+      }
+    }
+  }
+
+  std::unordered_map<std::string, int> shared_group_map;
+  int next_shared_group = 1;
+  for (std::size_t i = 0; i < n; ++i) {
+    if (shared_ids[i].empty()) {
+      shared_index_vec[static_cast<R_xlen_t>(i)] = NA_INTEGER;
+    } else {
+      auto it = shared_group_map.find(shared_ids[i]);
+      if (it == shared_group_map.end()) {
+        shared_group_map[shared_ids[i]] = next_shared_group;
+        shared_index_vec[static_cast<R_xlen_t>(i)] = next_shared_group;
+        ++next_shared_group;
+      } else {
+        shared_index_vec[static_cast<R_xlen_t>(i)] = it->second;
+      }
+    }
+  }
+
+  for (std::size_t i = 0; i < n; ++i) {
+    const std::string& member_label = active_members[i];
+    NodeEvalResult eval = eval_event_label(
+      state.ctx,
+      member_label,
+      state.t,
+      state.component,
+      state.forced_complete,
+      state.forced_survive,
+      state.trial_overrides
+    );
+    double density = eval.density;
+    double cdf = clamp_probability(eval.cdf);
+    double survival = clamp_probability(eval.survival);
+    double cdf_success = cdf;
+    double surv_success = survival;
+    auto acc_it = state.ctx.accumulator_index.find(member_label);
+    if (acc_it != state.ctx.accumulator_index.end()) {
+      const uuber::NativeAccumulator& acc = state.ctx.accumulators[acc_it->second];
+      const TrialAccumulatorOverride* override = get_state_override(state, acc_it->second);
+      const std::string& shared_id = override ? override->shared_trigger_id : acc.shared_trigger_id;
+      if (!shared_id.empty()) {
+        double onset = override ? override->onset : acc.onset;
+        const AccDistParams& cfg = override ? override->dist_cfg : acc.dist_cfg;
+        cdf_success = clamp_probability(acc_cdf_success_from_cfg(
+          state.t,
+          onset,
+          cfg
+        ));
+        surv_success = clamp_probability(1.0 - cdf_success);
+        cdf = cdf_success;
+        survival = surv_success;
+      }
+    }
+    dens_vec[static_cast<R_xlen_t>(i)] = density;
+    cdf_vec[static_cast<R_xlen_t>(i)] = cdf;
+    surv_vec[static_cast<R_xlen_t>(i)] = survival;
+    cdf_success_vec[static_cast<R_xlen_t>(i)] = cdf_success;
+    surv_success_vec[static_cast<R_xlen_t>(i)] = surv_success;
+  }
+
+  int pool_label_id = label_id(state.ctx, pool.id);
+  std::string template_key = pool_template_cache_key(
+    pool_label,
+    component_cache_key(state.component),
+    k,
+    member_ids_vec
+  );
+  Rcpp::List template_info;
+  auto tmpl_it = state.ctx.pool_template_cache.find(template_key);
+  if (tmpl_it != state.ctx.pool_template_cache.end()) {
+    template_info = tmpl_it->second;
+  } else {
+    template_info = pool_build_templates_cpp(
+      static_cast<int>(n),
+      member_ids_vec,
+      pool_label_id,
+      k
+    );
+    state.ctx.pool_template_cache[template_key] = template_info;
+  }
+  Rcpp::List templates = template_info["templates"];
+  if (templates.size() == 0) {
+    return {};
+  }
+
+  Rcpp::IntegerVector forced_complete_vec = forced_set_to_vector(state.forced_complete);
+  Rcpp::IntegerVector forced_survive_vec = forced_set_to_vector(state.forced_survive);
+
+  Rcpp::List combine_res = pool_density_combine_cpp(
+    dens_vec,
+    cdf_vec,
+    surv_vec,
+    cdf_success_vec,
+    surv_success_vec,
+    shared_index_vec,
+    templates,
+    forced_complete_vec,
+    forced_survive_vec
+  );
+  Rcpp::List scenario_list = combine_res["scenarios"];
+  return rcpp_scenarios_to_records(scenario_list);
+}
+
+std::vector<ScenarioRecord> compute_event_scenarios(const uuber::NativeNode& node,
+                                                    NodeEvalState& state) {
+  std::vector<ScenarioRecord> out;
+  if (node.source.empty()) {
+    return out;
+  }
+  auto pool_lookup = state.ctx.pool_index.find(node.source);
+  if (pool_lookup != state.ctx.pool_index.end()) {
+    std::vector<ScenarioRecord> pool_records = compute_pool_event_scenarios(node, state);
+    if (!pool_records.empty()) {
+      return pool_records;
+    }
+  }
+  NodeEvalResult eval = eval_event_label(
+    state.ctx,
+    node.source,
+    state.t,
+    state.component,
+    state.forced_complete,
+    state.forced_survive
+  );
+  double weight = eval.density;
+  if (!std::isfinite(weight) || weight <= 0.0) {
+    return out;
+  }
+  std::vector<int> base_fc = set_to_sorted_vector(state.forced_complete);
+  std::vector<int> base_fs = set_to_sorted_vector(state.forced_survive);
+  std::vector<int> source_ids = ensure_source_ids(state.ctx, node);
+  std::vector<int> merged_fc = union_vectors(base_fc, source_ids);
+  ScenarioRecord rec = make_scenario_record(weight, merged_fc, base_fs);
+  if (rec.weight > 0.0) {
+    out.push_back(std::move(rec));
+  }
+  return out;
+}
+
+std::vector<ScenarioRecord> compute_and_scenarios(const uuber::NativeNode& node,
+                                                  NodeEvalState& state) {
+  std::vector<ScenarioRecord> out;
+  const std::vector<int>& child_ids = node.args;
+  if (child_ids.empty()) return out;
+  std::vector<const uuber::NativeNode*> child_nodes;
+  std::vector<std::vector<int>> child_sources;
+  child_nodes.reserve(child_ids.size());
+  child_sources.reserve(child_ids.size());
+  for (int child_id : child_ids) {
+    const uuber::NativeNode& child = fetch_node(state.ctx, child_id);
+    child_nodes.push_back(&child);
+    child_sources.push_back(ensure_source_ids(state.ctx, child));
+  }
+  for (std::size_t idx = 0; idx < child_ids.size(); ++idx) {
+    std::vector<ScenarioRecord> child_scen = compute_node_scenarios(child_ids[idx], state);
+    if (child_scen.empty()) continue;
+    for (const auto& sc : child_scen) {
+      if (!std::isfinite(sc.weight) || sc.weight <= 0.0) continue;
+      double weight = sc.weight;
+      std::vector<int> forced_complete = sc.forced_complete;
+      std::vector<int> forced_survive = sc.forced_survive;
+      bool ok = true;
+      for (std::size_t other_idx = 0; other_idx < child_ids.size(); ++other_idx) {
+        if (other_idx == idx) continue;
+        std::unordered_set<int> fc_set = make_forced_set(forced_complete);
+        std::unordered_set<int> fs_set = make_forced_set(forced_survive);
+        NodeEvalResult sibling = eval_node_with_forced(state.ctx,
+                                                       state.cache,
+                                                       child_ids[other_idx],
+                                                       state.t,
+                                                       state.component,
+                                                       fc_set,
+                                                       fs_set);
+        double Fj = clamp_probability(sibling.cdf);
+        if (!std::isfinite(Fj) || Fj <= 0.0) {
+          ok = false;
+          break;
+        }
+        weight *= Fj;
+        if (!std::isfinite(weight) || weight <= 0.0) {
+          ok = false;
+          break;
+        }
+        forced_complete = union_vectors(forced_complete, child_sources[other_idx]);
+      }
+      if (!ok) continue;
+      ScenarioRecord merged = make_scenario_record(weight, forced_complete, forced_survive);
+      if (merged.weight > 0.0) {
+        out.push_back(std::move(merged));
+      }
+    }
+  }
+  return out;
+}
+
+std::vector<ScenarioRecord> compute_or_scenarios(const uuber::NativeNode& node,
+                                                 NodeEvalState& state) {
+  std::vector<ScenarioRecord> out;
+  const std::vector<int>& child_ids = node.args;
+  if (child_ids.empty()) return out;
+  std::vector<const uuber::NativeNode*> child_nodes;
+  std::vector<std::vector<int>> child_sources;
+  child_nodes.reserve(child_ids.size());
+  child_sources.reserve(child_ids.size());
+  for (int child_id : child_ids) {
+    const uuber::NativeNode& child = fetch_node(state.ctx, child_id);
+    child_nodes.push_back(&child);
+    child_sources.push_back(ensure_source_ids(state.ctx, child));
+  }
+  for (std::size_t idx = 0; idx < child_ids.size(); ++idx) {
+    std::vector<ScenarioRecord> child_scen = compute_node_scenarios(child_ids[idx], state);
+    if (child_scen.empty()) continue;
+    for (const auto& sc : child_scen) {
+      if (!std::isfinite(sc.weight) || sc.weight <= 0.0) continue;
+      double weight = sc.weight;
+      std::vector<int> forced_complete = sc.forced_complete;
+      std::vector<int> forced_survive = sc.forced_survive;
+      bool valid = true;
+      for (std::size_t other_idx = 0; other_idx < child_ids.size(); ++other_idx) {
+        if (other_idx == idx) continue;
+        const std::vector<int>& required = child_sources[other_idx];
+        if (required.empty()) continue;
+        bool all_forced = true;
+        for (int req : required) {
+          if (!vector_contains(forced_complete, req)) {
+            all_forced = false;
+            break;
+          }
+        }
+        if (all_forced) {
+          valid = false;
+          break;
+        }
+        int witness = first_missing_id(forced_complete, required);
+        if (witness == NA_INTEGER) {
+          valid = false;
+          break;
+        }
+        std::vector<int> witness_vec{witness};
+        forced_survive = union_vectors(forced_survive, witness_vec);
+      }
+      if (!valid) continue;
+      ScenarioRecord merged = make_scenario_record(weight, forced_complete, forced_survive);
+      if (merged.weight > 0.0) {
+        out.push_back(std::move(merged));
+      }
+    }
+  }
+  return out;
+}
+
+std::vector<ScenarioRecord> compute_guard_scenarios(const uuber::NativeNode& node,
+                                                    NodeEvalState& state) {
+  std::vector<ScenarioRecord> out;
+  if (node.reference_id < 0) {
+    return out;
+  }
+  std::vector<ScenarioRecord> ref_scen = compute_node_scenarios(node.reference_id, state);
+  if (ref_scen.empty()) return out;
+  std::vector<int> blocker_sources = gather_blocker_sources(state.ctx, node);
+  IntegrationSettings settings;
+  out.reserve(ref_scen.size());
+  for (const auto& sc : ref_scen) {
+    if (!std::isfinite(sc.weight) || sc.weight <= 0.0) continue;
+    std::unordered_set<int> fc_set = make_forced_set(sc.forced_complete);
+    std::unordered_set<int> fs_set = make_forced_set(sc.forced_survive);
+    GuardEvalInput guard_input = make_guard_input(state.ctx,
+                                                  node,
+                                                  state.cache,
+                                                  state.component,
+                                                  fc_set,
+                                                  fs_set);
+    double eff = guard_effective_survival_internal(guard_input, state.t, settings);
+    if (!std::isfinite(eff) || eff <= 0.0) continue;
+    double weight = sc.weight * eff;
+    if (!std::isfinite(weight) || weight <= 0.0) continue;
+    ScenarioRecord rec;
+    rec.weight = weight;
+    rec.forced_complete = sc.forced_complete;
+    rec.forced_survive = union_vectors(sc.forced_survive, blocker_sources);
+    out.push_back(std::move(rec));
+  }
+  return out;
+}
+
+std::vector<ScenarioRecord> compute_node_scenarios(int node_id, NodeEvalState& state) {
+  std::vector<ScenarioRecord> cached;
+  if (fetch_cached_scenarios(state, node_id, cached)) {
+    return cached;
+  }
+  const uuber::NativeNode& node = fetch_node(state.ctx, node_id);
+  std::vector<ScenarioRecord> result;
+  if (node.kind == "event") {
+    result = compute_event_scenarios(node, state);
+  } else if (node.kind == "and") {
+    result = compute_and_scenarios(node, state);
+  } else if (node.kind == "or") {
+    result = compute_or_scenarios(node, state);
+  } else if (node.kind == "guard") {
+    result = compute_guard_scenarios(node, state);
+  }
+  store_cached_scenarios(state, node_id, result);
+  return result;
+}
 
 NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state);
 NodeEvalResult eval_guard_node(const uuber::NativeNode& node, NodeEvalState& parent_state);
@@ -291,13 +1170,24 @@ const uuber::NativeNode& fetch_node(const uuber::NativeContext& ctx, int node_id
 }
 
 NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
+                                     EvalCache& cache,
                                      int node_id,
                                      double time,
                                      const std::string& component,
                                      const std::unordered_set<int>& forced_complete,
                                      const std::unordered_set<int>& forced_survive) {
-  NodeEvalState local(ctx, time, component, forced_complete, forced_survive);
+  NodeEvalState local(ctx, cache, time, component, forced_complete, forced_survive);
   return eval_node_recursive(node_id, local);
+}
+
+NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
+                                     int node_id,
+                                     double time,
+                                     const std::string& component,
+                                     const std::unordered_set<int>& forced_complete,
+                                     const std::unordered_set<int>& forced_survive) {
+  EvalCache cache;
+  return eval_node_with_forced(ctx, cache, node_id, time, component, forced_complete, forced_survive);
 }
 
 NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state);
@@ -393,20 +1283,13 @@ NodeEvalResult eval_not_node(const uuber::NativeNode& node, NodeEvalState& state
   return make_node_result(0.0, survival, self_cdf);
 }
 
-struct GuardEvalInput {
-  const uuber::NativeContext& ctx;
-  const uuber::NativeNode& node;
-  std::string component;
-  std::unordered_set<int> forced_complete;
-  std::unordered_set<int> forced_survive;
-};
-
 GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
                                 const uuber::NativeNode& node,
+                                EvalCache& cache,
                                 const std::string& component,
                                 const std::unordered_set<int>& forced_complete,
                                 const std::unordered_set<int>& forced_survive) {
-  GuardEvalInput input{ctx, node, component, {}, {}};
+  GuardEvalInput input{ctx, node, cache, component, {}, {}};
   input.forced_complete = filter_forced_scope(forced_complete, node.source_ids);
   input.forced_survive = filter_forced_scope(forced_survive, node.source_ids);
   return input;
@@ -425,9 +1308,9 @@ double guard_cdf_internal(const GuardEvalInput& input,
                           const IntegrationSettings& settings);
 
 NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state) {
-  auto cached = state.cache.find(node_id);
-  if (cached != state.cache.end()) {
-    return cached->second;
+  NodeEvalResult cached;
+  if (fetch_cached_result(state, node_id, cached)) {
+    return cached;
   }
   const uuber::NativeNode& node = fetch_node(state.ctx, node_id);
   NodeEvalResult result;
@@ -441,7 +1324,8 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state) {
       state.t,
       state.component,
       state.forced_complete,
-      state.forced_survive
+      state.forced_survive,
+      state.trial_overrides
     );
   } else if (node.kind == "and") {
     result = eval_and_node(node, state);
@@ -452,6 +1336,7 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state) {
   } else if (node.kind == "guard") {
     GuardEvalInput guard_input = make_guard_input(state.ctx,
                                                   node,
+                                                  state.cache,
                                                   state.component,
                                                   state.forced_complete,
                                                   state.forced_survive);
@@ -463,7 +1348,7 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state) {
   } else {
     Rcpp::stop("native_node_eval: unsupported node kind '%s'", node.kind);
   }
-  state.cache.emplace(node_id, result);
+  store_cached_result(state, node_id, result);
   return result;
 }
 
@@ -480,21 +1365,30 @@ double guard_effective_survival_internal(const GuardEvalInput& input,
   if (blocker_id < 0) {
     return 1.0;
   }
+  std::string cache_key = guard_survival_cache_key(input, t);
+  auto cached_surv = input.ctx.guard_survival_cache.find(cache_key);
+  if (cached_surv != input.ctx.guard_survival_cache.end()) {
+    return cached_surv->second;
+  }
   if (input.node.unless_ids.empty()) {
     NodeEvalResult block = eval_node_with_forced(
       input.ctx,
+      input.cache,
       blocker_id,
       t,
       input.component,
       input.forced_complete,
       input.forced_survive
     );
-    return clamp_probability(block.survival);
+    double surv = clamp_probability(block.survival);
+    input.ctx.guard_survival_cache[cache_key] = surv;
+    return surv;
   }
   auto integrand = [&](double u) -> double {
     if (!std::isfinite(u) || u < 0.0) return 0.0;
     NodeEvalResult block = eval_node_with_forced(
       input.ctx,
+      input.cache,
       blocker_id,
       u,
       input.component,
@@ -508,6 +1402,7 @@ double guard_effective_survival_internal(const GuardEvalInput& input,
       if (unl_id < 0) continue;
       NodeEvalResult protector = eval_node_with_forced(
         input.ctx,
+        input.cache,
         unl_id,
         u,
         input.component,
@@ -534,7 +1429,9 @@ double guard_effective_survival_internal(const GuardEvalInput& input,
     settings.max_depth
   );
   double surv = 1.0 - integral;
-  return clamp_probability(surv);
+  surv = clamp_probability(surv);
+  input.ctx.guard_survival_cache[cache_key] = surv;
+  return surv;
 }
 
 double guard_reference_density(const GuardEvalInput& input,
@@ -548,6 +1445,7 @@ double guard_reference_density(const GuardEvalInput& input,
   }
   NodeEvalResult ref = eval_node_with_forced(
     input.ctx,
+    input.cache,
     reference_id,
     t,
     input.component,
@@ -612,6 +1510,7 @@ IntegrationSettings resolve_integration_settings(double rel_tol,
 
 GuardEvalInput resolve_guard_input(uuber::NativeContext& ctx,
                                    int node_id,
+                                   EvalCache& cache,
                                    const std::string& component,
                                    const std::unordered_set<int>& forced_complete,
                                    const std::unordered_set<int>& forced_survive) {
@@ -623,7 +1522,7 @@ GuardEvalInput resolve_guard_input(uuber::NativeContext& ctx,
   if (node.kind != "guard") {
     Rcpp::stop("native_guard_eval: node id %d is not a guard expression", node_id);
   }
-  return make_guard_input(ctx, node, component, forced_complete, forced_survive);
+  return make_guard_input(ctx, node, cache, component, forced_complete, forced_survive);
 }
 
 std::vector<int> gather_blocker_sources(const uuber::NativeContext& ctx,
@@ -643,14 +1542,14 @@ std::vector<int> gather_blocker_sources(const uuber::NativeContext& ctx,
 }
 
 Rcpp::List native_guard_eval_impl(SEXP ctxSEXP,
-                                  int guard_node_id,
-                                  double t,
-                                  Rcpp::Nullable<Rcpp::String> component,
-                                  SEXP forced_complete,
-                                  SEXP forced_survive,
-                                  double rel_tol,
-                                  double abs_tol,
-                                  int max_depth) {
+                                   int guard_node_id,
+                                   double t,
+                                   Rcpp::Nullable<Rcpp::String> component,
+                                   SEXP forced_complete,
+                                   SEXP forced_survive,
+                                   double rel_tol,
+                                   double abs_tol,
+                                   int max_depth) {
   if (Rf_isNull(ctxSEXP)) {
     Rcpp::stop("native_guard_eval: context pointer is null");
   }
@@ -660,8 +1559,10 @@ Rcpp::List native_guard_eval_impl(SEXP ctxSEXP,
   std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
   std::unordered_set<int> fc_set = make_forced_set(fc_vec);
   std::unordered_set<int> fs_set = make_forced_set(fs_vec);
+  EvalCache guard_cache;
   GuardEvalInput guard_input = resolve_guard_input(*ctx,
                                                    guard_node_id,
+                                                   guard_cache,
                                                    component_label,
                                                    fc_set,
                                                    fs_set);
@@ -694,14 +1595,804 @@ double native_guard_effective_survival_impl(SEXP ctxSEXP,
   std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
   std::unordered_set<int> fc_set = make_forced_set(fc_vec);
   std::unordered_set<int> fs_set = make_forced_set(fs_vec);
+  EvalCache guard_cache2;
   GuardEvalInput guard_input = resolve_guard_input(*ctx,
                                                    guard_node_id,
+                                                   guard_cache2,
                                                    component_label,
                                                    fc_set,
                                                    fs_set);
   IntegrationSettings settings = resolve_integration_settings(rel_tol, abs_tol, max_depth);
   return guard_effective_survival_internal(guard_input, t, settings);
 }
+
+struct CompetitorMeta {
+  int node_id;
+  const uuber::NativeNode* node;
+  std::vector<int> sources;
+  bool has_guard{false};
+  bool scenario_sensitive{false};
+};
+
+bool node_contains_guard(int node_id,
+                         const uuber::NativeContext& ctx,
+                         std::unordered_map<int, bool>& memo) {
+  auto it = memo.find(node_id);
+  if (it != memo.end()) return it->second;
+  const uuber::NativeNode& node = fetch_node(ctx, node_id);
+  bool result = false;
+  if (node.kind == "guard") {
+    result = true;
+  } else if (node.kind == "and" || node.kind == "or") {
+    for (int child_id : node.args) {
+      if (child_id < 0) continue;
+      if (node_contains_guard(child_id, ctx, memo)) {
+        result = true;
+        break;
+      }
+    }
+  } else if (node.kind == "not") {
+    if (node.arg_id >= 0) {
+      result = node_contains_guard(node.arg_id, ctx, memo);
+    }
+  } else if (node.kind == "guard") {
+    result = true;
+  }
+  memo[node_id] = result;
+  return result;
+}
+
+bool share_sources(const std::vector<int>& a, const std::vector<int>& b) {
+  if (a.empty() || b.empty()) return false;
+  std::size_t i = 0, j = 0;
+  while (i < a.size() && j < b.size()) {
+    if (a[i] == b[j]) return true;
+    if (a[i] < b[j]) {
+      ++i;
+    } else {
+      ++j;
+    }
+  }
+  return false;
+}
+
+std::vector<std::vector<int>> build_competitor_clusters(const std::vector<CompetitorMeta>& metas) {
+  std::vector<std::vector<int>> clusters;
+  const std::size_t n = metas.size();
+  if (n == 0) return clusters;
+  std::vector<bool> visited(n, false);
+  for (std::size_t i = 0; i < n; ++i) {
+    if (visited[i]) continue;
+    std::vector<int> cluster;
+    std::queue<std::size_t> q;
+    q.push(i);
+    visited[i] = true;
+    while (!q.empty()) {
+      std::size_t idx = q.front();
+      q.pop();
+      cluster.push_back(static_cast<int>(idx));
+      for (std::size_t j = 0; j < n; ++j) {
+        if (visited[j]) continue;
+        if (share_sources(metas[idx].sources, metas[j].sources)) {
+          visited[j] = true;
+          q.push(j);
+        }
+      }
+    }
+    clusters.push_back(cluster);
+  }
+  return clusters;
+}
+
+double evaluate_survival_with_forced(int node_id,
+                                     const std::unordered_set<int>& forced_survive,
+                                     const std::string& component,
+                                     double t,
+                                     const uuber::NativeContext& ctx) {
+  static const std::unordered_set<int> empty_forced_complete;
+  EvalCache cache;
+  NodeEvalState state(ctx, cache, t, component, empty_forced_complete, forced_survive);
+  NodeEvalResult res = eval_node_recursive(node_id, state);
+  return clamp_probability(res.survival);
+}
+
+double compute_guard_free_cluster_value(const std::vector<int>& cluster_indices,
+                                        const std::vector<CompetitorMeta>& metas,
+                                        const uuber::NativeContext& ctx,
+                                        double t,
+                                        const std::string& component) {
+  std::unordered_set<int> empty_forced;
+  double prod = 1.0;
+  for (int idx : cluster_indices) {
+    double surv = evaluate_survival_with_forced(metas[static_cast<std::size_t>(idx)].node_id,
+                                                empty_forced,
+                                                component,
+                                                t,
+                                                ctx);
+    if (!std::isfinite(surv) || surv <= 0.0) return 0.0;
+    prod *= surv;
+    if (!std::isfinite(prod) || prod <= 0.0) return 0.0;
+  }
+  return clamp_probability(prod);
+}
+
+double compute_guard_cluster_value(const std::vector<int>& cluster_indices,
+                                   const std::vector<CompetitorMeta>& metas,
+                                   const uuber::NativeContext& ctx,
+                                   double t,
+                                   const std::string& component) {
+  struct OrderingMeta {
+    int index;
+    std::size_t source_count;
+    bool scenario_sensitive;
+  };
+  std::vector<OrderingMeta> order;
+  order.reserve(cluster_indices.size());
+  for (int idx : cluster_indices) {
+    const CompetitorMeta& meta = metas[static_cast<std::size_t>(idx)];
+    order.push_back({idx,
+                     meta.sources.size(),
+                     meta.scenario_sensitive});
+  }
+  std::sort(order.begin(), order.end(), [&](const OrderingMeta& a, const OrderingMeta& b) {
+    if (a.scenario_sensitive != b.scenario_sensitive) {
+      return !a.scenario_sensitive && b.scenario_sensitive;
+    }
+    if (a.source_count != b.source_count) {
+      return a.source_count < b.source_count;
+    }
+    return a.index < b.index;
+  });
+
+  std::unordered_set<int> forced_survive;
+  double prod = 1.0;
+  for (const OrderingMeta& meta : order) {
+    const CompetitorMeta& node_meta = metas[static_cast<std::size_t>(meta.index)];
+    double surv = evaluate_survival_with_forced(node_meta.node_id,
+                                                forced_survive,
+                                                component,
+                                                t,
+                                                ctx);
+    if (!std::isfinite(surv) || surv <= 0.0) return 0.0;
+    prod *= surv;
+    if (!std::isfinite(prod) || prod <= 0.0) return 0.0;
+    for (int src : node_meta.sources) {
+      forced_survive.insert(src);
+    }
+  }
+  return clamp_probability(prod);
+}
+
+double competitor_survival_internal(const uuber::NativeContext& ctx,
+                                    const std::vector<int>& competitor_ids,
+                                    double t,
+                                    const std::string& component_label) {
+  if (competitor_ids.empty()) return 1.0;
+  std::vector<CompetitorMeta> metas;
+  metas.reserve(competitor_ids.size());
+  std::unordered_map<int, bool> guard_memo;
+  for (int node_id : competitor_ids) {
+    if (node_id == NA_INTEGER) {
+      Rcpp::stop("native_competitor_survival: invalid node id");
+    }
+    const uuber::NativeNode& node = fetch_node(ctx, node_id);
+    CompetitorMeta meta;
+    meta.node_id = node_id;
+    meta.node = &node;
+    meta.sources = node.source_ids;
+    sort_unique(meta.sources);
+    meta.has_guard = node_contains_guard(node_id, ctx, guard_memo);
+    meta.scenario_sensitive = node.scenario_sensitive;
+    metas.push_back(std::move(meta));
+  }
+
+  std::vector<std::vector<int>> clusters = build_competitor_clusters(metas);
+  if (clusters.empty()) return 1.0;
+
+  double product = 1.0;
+  for (const auto& cluster : clusters) {
+    bool cluster_has_guard = false;
+    for (int idx : cluster) {
+      if (metas[static_cast<std::size_t>(idx)].has_guard) {
+        cluster_has_guard = true;
+        break;
+      }
+    }
+    double cluster_val = cluster_has_guard
+      ? compute_guard_cluster_value(cluster, metas, ctx, t, component_label)
+      : compute_guard_free_cluster_value(cluster, metas, ctx, t, component_label);
+    if (!std::isfinite(cluster_val) || cluster_val <= 0.0) {
+      return 0.0;
+    }
+    product *= cluster_val;
+    if (!std::isfinite(product) || product <= 0.0) {
+      return 0.0;
+    }
+  }
+  return clamp_probability(product);
+}
+
+double native_competitor_survival_impl(SEXP ctxSEXP,
+                                       const Rcpp::IntegerVector& competitor_ids,
+                                       double t,
+                                       Rcpp::Nullable<Rcpp::String> component) {
+  if (competitor_ids.size() == 0) return 1.0;
+  if (Rf_isNull(ctxSEXP)) {
+    Rcpp::stop("native_competitor_survival: context pointer is null");
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
+  std::vector<int> ids = integer_vector_to_std(competitor_ids, false);
+  return competitor_survival_internal(*ctx, ids, t, component_label);
+}
+
+double node_density_with_competitors_internal(
+  const uuber::NativeContext& ctx,
+  int node_id,
+  double t,
+  const std::string& component_label,
+  const std::unordered_set<int>& forced_complete,
+  const std::unordered_set<int>& forced_survive,
+  const std::vector<int>& competitor_ids,
+  const TrialOverrides* overrides) {
+  if (!std::isfinite(t) || t < 0.0) {
+    return 0.0;
+  }
+  EvalCache eval_cache;
+  NodeEvalState state(ctx,
+                      eval_cache,
+                      t,
+                      component_label,
+                      forced_complete,
+                      forced_survive,
+                      overrides);
+  NodeEvalResult base = eval_node_recursive(node_id, state);
+  double density = base.density;
+  if (!std::isfinite(density) || density <= 0.0) {
+    return 0.0;
+  }
+  if (!competitor_ids.empty()) {
+    double surv = competitor_survival_internal(ctx, competitor_ids, t, component_label);
+    if (!std::isfinite(surv) || surv <= 0.0) {
+      return 0.0;
+    }
+    density *= surv;
+  }
+  return density;
+}
+
+Rcpp::List native_density_with_competitors_impl(SEXP ctxSEXP,
+                                                int node_id,
+                                                double t,
+                                                Rcpp::Nullable<Rcpp::String> component,
+                                                SEXP forced_complete,
+                                                SEXP forced_survive,
+                                                const Rcpp::IntegerVector& competitor_ids,
+                                                const TrialOverrides* overrides) {
+  if (Rf_isNull(ctxSEXP)) {
+    Rcpp::stop("native_density_with_competitors: context pointer is null");
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
+  std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
+  std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
+  std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
+  std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
+  std::vector<int> comp_vec = integer_vector_to_std(competitor_ids, false);
+  double density = node_density_with_competitors_internal(
+    *ctx,
+    node_id,
+    t,
+    component_label,
+    forced_complete_set,
+    forced_survive_set,
+    comp_vec,
+    overrides
+  );
+  if (!std::isfinite(density) || density <= 0.0) {
+    density = 0.0;
+  }
+  return Rcpp::List::create(Rcpp::Named("density") = density);
+}
+
+double native_outcome_probability_impl(SEXP ctxSEXP,
+                                       int node_id,
+                                       double upper,
+                                       Rcpp::Nullable<Rcpp::String> component,
+                                       SEXP forced_complete,
+                                       SEXP forced_survive,
+                                       const Rcpp::IntegerVector& competitor_ids,
+                                       double rel_tol,
+                                       double abs_tol,
+                                       int max_depth,
+                                       const TrialOverrides* overrides) {
+  if (upper <= 0.0 || !std::isfinite(upper)) {
+    return 0.0;
+  }
+  auto integrand = [&](double u) -> double {
+    if (!std::isfinite(u) || u < 0.0) return 0.0;
+    Rcpp::List dens = native_density_with_competitors_impl(ctxSEXP,
+                                                          node_id,
+                                                          u,
+                                                          component,
+                                                          forced_complete,
+                                                          forced_survive,
+                                                          competitor_ids,
+                                                          overrides);
+    double val = Rcpp::as<double>(dens["density"]);
+    if (!std::isfinite(val) || val <= 0.0) return 0.0;
+    return val;
+  };
+  double integral = uuber::integrate_boost_fn(
+    integrand,
+    0.0,
+    upper,
+    rel_tol,
+    abs_tol,
+    max_depth
+  );
+  if (!std::isfinite(integral)) integral = 0.0;
+  return clamp_probability(integral);
+}
+
+Rcpp::List native_component_plan_impl(const Rcpp::List& structure,
+                                      const Rcpp::Nullable<Rcpp::DataFrame>& trial_rows_opt,
+                                      const Rcpp::Nullable<Rcpp::String>& forced_component_opt,
+                                      const Rcpp::Nullable<Rcpp::DataFrame>& component_weights_opt) {
+  if (!structure.containsElementNamed("components")) {
+    Rcpp::stop("native_component_plan: structure is missing 'components'");
+  }
+  Rcpp::DataFrame comp_tbl(structure["components"]);
+  if (!comp_tbl.containsElementNamed("component_id") ||
+      !comp_tbl.containsElementNamed("weight")) {
+    Rcpp::stop("native_component_plan: components table must have component_id and weight");
+  }
+  Rcpp::CharacterVector component_ids = comp_tbl["component_id"];
+  Rcpp::NumericVector base_weights = comp_tbl["weight"];
+  if (component_ids.size() == 0) {
+    Rcpp::stop("native_component_plan: no components supplied");
+  }
+
+  std::unordered_map<std::string, double> base_weight_map;
+  base_weight_map.reserve(component_ids.size());
+  for (R_xlen_t i = 0; i < component_ids.size(); ++i) {
+    if (component_ids[i] == NA_STRING) continue;
+    std::string id = Rcpp::as<std::string>(component_ids[i]);
+    double weight = (i < base_weights.size()) ? static_cast<double>(base_weights[i]) : NA_REAL;
+    base_weight_map[id] = weight;
+  }
+
+  std::unordered_set<std::string> component_set;
+  for (auto& kv : base_weight_map) {
+    component_set.insert(kv.first);
+  }
+
+  std::string forced_component;
+  if (forced_component_opt.isNotNull()) {
+    forced_component = Rcpp::as<std::string>(forced_component_opt.get());
+  }
+
+  std::unordered_set<std::string> trial_component_filter;
+  double trial_id = NA_REAL;
+  if (trial_rows_opt.isNotNull()) {
+    Rcpp::DataFrame trial_df(trial_rows_opt.get());
+    if (trial_df.containsElementNamed("trial")) {
+      Rcpp::NumericVector trial_col(trial_df["trial"]);
+      if (trial_col.size() > 0) {
+        trial_id = trial_col[0];
+      }
+    }
+    if (trial_df.containsElementNamed("component")) {
+      Rcpp::CharacterVector trial_comp = trial_df["component"];
+      for (R_xlen_t i = 0; i < trial_comp.size(); ++i) {
+        if (trial_comp[i] == NA_STRING) continue;
+        std::string comp = Rcpp::as<std::string>(trial_comp[i]);
+        if (component_set.find(comp) != component_set.end()) {
+          trial_component_filter.insert(comp);
+        }
+      }
+    }
+  }
+
+  std::vector<std::string> selected_components;
+  if (!forced_component.empty()) {
+    if (component_set.find(forced_component) != component_set.end()) {
+      selected_components.push_back(forced_component);
+    }
+  } else if (!trial_component_filter.empty()) {
+    for (const auto& comp : component_set) {
+      if (trial_component_filter.find(comp) != trial_component_filter.end()) {
+        selected_components.push_back(comp);
+      }
+    }
+  }
+  if (selected_components.empty()) {
+    selected_components.assign(component_set.begin(), component_set.end());
+  }
+  std::sort(selected_components.begin(), selected_components.end(), [&](const std::string& a, const std::string& b) {
+    return a < b;
+  });
+
+  if (selected_components.empty()) {
+    Rcpp::stop("native_component_plan: unable to determine available components");
+  }
+
+  std::vector<double> weights(selected_components.size(), NA_REAL);
+  for (std::size_t i = 0; i < selected_components.size(); ++i) {
+    auto it = base_weight_map.find(selected_components[i]);
+    if (it != base_weight_map.end()) {
+      weights[i] = it->second;
+    }
+  }
+
+  if (component_weights_opt.isNotNull() && !std::isnan(trial_id)) {
+    Rcpp::DataFrame cw_df(component_weights_opt.get());
+    if (cw_df.containsElementNamed("trial") &&
+        cw_df.containsElementNamed("component") &&
+        cw_df.containsElementNamed("weight")) {
+      Rcpp::NumericVector cw_trial(cw_df["trial"]);
+      Rcpp::CharacterVector cw_component(cw_df["component"]);
+      Rcpp::NumericVector cw_weight(cw_df["weight"]);
+      for (R_xlen_t i = 0; i < cw_trial.size(); ++i) {
+        if (cw_component[i] == NA_STRING) continue;
+        double trial_val = cw_trial[i];
+        if (std::isnan(trial_val) || std::fabs(trial_val - trial_id) > 1e-9) continue;
+        std::string comp = Rcpp::as<std::string>(cw_component[i]);
+        auto it = std::find(selected_components.begin(), selected_components.end(), comp);
+        if (it == selected_components.end()) continue;
+        std::size_t idx = static_cast<std::size_t>(std::distance(selected_components.begin(), it));
+        double w = cw_weight[i];
+        if (std::isfinite(w) && w >= 0.0) {
+          weights[idx] = w;
+        }
+      }
+    }
+  }
+
+  bool need_uniform = weights.size() == 0;
+  if (!need_uniform) {
+    bool has_finite = false;
+    bool invalid = false;
+    for (double w : weights) {
+      if (std::isfinite(w) && w >= 0.0) {
+        has_finite = true;
+      } else if (!std::isnan(w)) {
+        invalid = true;
+        break;
+      }
+    }
+    if (!has_finite || invalid) {
+      need_uniform = true;
+    } else {
+      double total = 0.0;
+      for (double w : weights) {
+        total += std::isfinite(w) ? w : 0.0;
+      }
+      if (!std::isfinite(total) || total <= 0.0) {
+        need_uniform = true;
+      } else {
+        for (double& w : weights) {
+          w = std::isfinite(w) ? w / total : 0.0;
+        }
+      }
+    }
+  }
+  if (need_uniform) {
+    double uniform = 1.0 / static_cast<double>(selected_components.size());
+    std::fill(weights.begin(), weights.end(), uniform);
+  }
+
+  Rcpp::CharacterVector comp_out(selected_components.begin(), selected_components.end());
+  Rcpp::NumericVector weight_out(weights.begin(), weights.end());
+  return Rcpp::List::create(
+    Rcpp::Named("components") = comp_out,
+    Rcpp::Named("weights") = weight_out
+  );
+}
+
+std::vector<std::string> string_vector_from_entry(SEXP entry) {
+  if (Rf_isNull(entry)) return {};
+  Rcpp::CharacterVector vec(entry);
+  std::vector<std::string> out;
+  out.reserve(vec.size());
+  for (R_xlen_t i = 0; i < vec.size(); ++i) {
+    if (vec[i] == NA_STRING) continue;
+    out.push_back(Rcpp::as<std::string>(vec[i]));
+  }
+  return out;
+}
+
+std::unique_ptr<TrialOverrides> build_trial_overrides_from_df(
+  const uuber::NativeContext& ctx,
+  const Rcpp::Nullable<Rcpp::DataFrame>& rows_opt) {
+  if (rows_opt.isNull()) return nullptr;
+  Rcpp::DataFrame rows(rows_opt.get());
+  R_xlen_t n = rows.nrows();
+  if (n == 0) return nullptr;
+
+  bool has_acc_id = rows.containsElementNamed("accumulator_id");
+  bool has_acc = rows.containsElementNamed("accumulator");
+  if (!has_acc_id && !has_acc) {
+    Rcpp::stop("trial parameter rows must include 'accumulator_id' or 'accumulator'");
+  }
+  Rcpp::CharacterVector acc_id_col;
+  if (has_acc_id) {
+    acc_id_col = Rcpp::CharacterVector(rows["accumulator_id"]);
+  }
+  Rcpp::RObject acc_col_obj;
+  if (has_acc && !has_acc_id) {
+    acc_col_obj = rows["accumulator"];
+  }
+
+  Rcpp::CharacterVector dist_col = rows.containsElementNamed("dist")
+    ? Rcpp::CharacterVector(rows["dist"])
+    : Rcpp::CharacterVector();
+  Rcpp::NumericVector onset_col = rows.containsElementNamed("onset")
+    ? Rcpp::NumericVector(rows["onset"])
+    : Rcpp::NumericVector();
+  Rcpp::NumericVector q_col = rows.containsElementNamed("q")
+    ? Rcpp::NumericVector(rows["q"])
+    : Rcpp::NumericVector();
+  Rcpp::CharacterVector shared_col = rows.containsElementNamed("shared_trigger_id")
+    ? Rcpp::CharacterVector(rows["shared_trigger_id"])
+    : Rcpp::CharacterVector();
+  Rcpp::List comps_col = rows.containsElementNamed("components")
+    ? Rcpp::List(rows["components"])
+    : Rcpp::List();
+  Rcpp::List params_list_col = rows.containsElementNamed("params")
+    ? Rcpp::List(rows["params"])
+    : Rcpp::List();
+
+  std::unordered_set<std::string> base_cols = {
+    "trial", "component", "accumulator", "accumulator_id",
+    "accumulator_index", "acc_idx", "type", "role",
+    "outcome", "rt", "params", "onset", "q",
+    "condition", "component_weight", "shared_trigger_id",
+    "dist", "components"
+  };
+  std::vector<std::string> param_cols;
+  std::vector<SEXP> param_col_data;
+  std::vector<int> param_col_types;
+  Rcpp::CharacterVector df_names = rows.names();
+  if (!df_names.isNULL()) {
+    for (R_xlen_t i = 0; i < df_names.size(); ++i) {
+      if (df_names[i] == NA_STRING) continue;
+      std::string col_name = Rcpp::as<std::string>(df_names[i]);
+      if (base_cols.find(col_name) != base_cols.end()) continue;
+      SEXP column = rows[col_name];
+      param_cols.push_back(col_name);
+      param_col_data.push_back(column);
+      param_col_types.push_back(TYPEOF(column));
+    }
+  }
+
+  auto overrides = std::make_unique<TrialOverrides>();
+
+  auto upsert_param_entry = [](std::vector<uuber::ProtoParamEntry>& entries,
+                               uuber::ProtoParamEntry entry) {
+    for (auto& existing : entries) {
+      if (existing.name == entry.name) {
+        existing = std::move(entry);
+        return;
+      }
+    }
+    entries.push_back(std::move(entry));
+  };
+
+  auto append_scalar_entry = [&](std::vector<uuber::ProtoParamEntry>& entries,
+                                 const std::string& name,
+                                 double value,
+                                 bool logical_scalar = false) {
+    if (!std::isfinite(value)) return;
+    uuber::ProtoParamEntry entry;
+    entry.name = name;
+    if (logical_scalar) {
+      entry.tag = uuber::ParamValueTag::LogicalScalar;
+      entry.logical_scalar = static_cast<int>(value != 0.0);
+    } else {
+      entry.tag = uuber::ParamValueTag::NumericScalar;
+      entry.numeric_scalar = value;
+    }
+    upsert_param_entry(entries, std::move(entry));
+  };
+
+  auto append_numeric_vector_entry = [&](std::vector<uuber::ProtoParamEntry>& entries,
+                                         const std::string& name,
+                                         const Rcpp::NumericVector& vec) {
+    if (vec.size() == 0) return;
+    uuber::ProtoParamEntry entry;
+    entry.name = name;
+    entry.tag = uuber::ParamValueTag::NumericVector;
+    entry.numeric_values.reserve(vec.size());
+    for (double val : vec) {
+      entry.numeric_values.push_back(val);
+    }
+    upsert_param_entry(entries, std::move(entry));
+  };
+
+  auto append_logical_vector_entry = [&](std::vector<uuber::ProtoParamEntry>& entries,
+                                         const std::string& name,
+                                         const Rcpp::LogicalVector& vec) {
+    if (vec.size() == 0) return;
+    uuber::ProtoParamEntry entry;
+    entry.name = name;
+    entry.tag = uuber::ParamValueTag::LogicalVector;
+    entry.logical_values.reserve(vec.size());
+    for (int val : vec) {
+      entry.logical_values.push_back(val);
+    }
+    upsert_param_entry(entries, std::move(entry));
+  };
+
+  for (R_xlen_t i = 0; i < n; ++i) {
+    int acc_idx = -1;
+    if (has_acc_id) {
+      if (acc_id_col[i] == NA_STRING) continue;
+      std::string acc_label = Rcpp::as<std::string>(acc_id_col[i]);
+      auto it = ctx.accumulator_index.find(acc_label);
+      if (it == ctx.accumulator_index.end()) {
+        Rcpp::stop("trial parameter rows reference unknown accumulator '%s'", acc_label);
+      }
+      acc_idx = it->second;
+    } else if (has_acc) {
+      if (Rf_isNumeric(acc_col_obj)) {
+        Rcpp::NumericVector acc_num(acc_col_obj);
+        if (i >= acc_num.size()) continue;
+        double raw_val = acc_num[i];
+        if (Rcpp::NumericVector::is_na(raw_val)) continue;
+        int idx_val = static_cast<int>(std::llround(raw_val)) - 1;
+        if (idx_val < 0 || idx_val >= static_cast<int>(ctx.accumulators.size())) {
+          Rcpp::stop("trial parameter rows reference invalid accumulator index '%d'",
+                     idx_val + 1);
+        }
+        acc_idx = idx_val;
+      } else {
+        Rcpp::CharacterVector acc_chr(acc_col_obj);
+        if (acc_chr[i] == NA_STRING) continue;
+        std::string acc_label = Rcpp::as<std::string>(acc_chr[i]);
+        auto it = ctx.accumulator_index.find(acc_label);
+        if (it == ctx.accumulator_index.end()) {
+          Rcpp::stop("trial parameter rows reference unknown accumulator '%s'", acc_label);
+        }
+        acc_idx = it->second;
+      }
+    }
+    if (acc_idx < 0 || acc_idx >= static_cast<int>(ctx.accumulators.size())) continue;
+    const uuber::NativeAccumulator& base = ctx.accumulators[acc_idx];
+
+    TrialAccumulatorOverride override;
+    override.onset = (i < onset_col.size() && !Rcpp::NumericVector::is_na(onset_col[i]))
+      ? static_cast<double>(onset_col[i])
+      : base.onset;
+    override.q = (i < q_col.size() && !Rcpp::NumericVector::is_na(q_col[i]))
+      ? static_cast<double>(q_col[i])
+      : base.q;
+    if (i < shared_col.size() && shared_col[i] != NA_STRING) {
+      override.shared_trigger_id = Rcpp::as<std::string>(shared_col[i]);
+    } else {
+      override.shared_trigger_id = base.shared_trigger_id;
+    }
+    SEXP comp_entry = (i < comps_col.size()) ? comps_col[i] : R_NilValue;
+    if (comp_entry != R_NilValue) {
+      override.components = string_vector_from_entry(comp_entry);
+      override.has_components = !override.components.empty();
+    } else {
+      override.has_components = false;
+    }
+
+    std::string dist_name = base.dist;
+    if (i < dist_col.size() && dist_col[i] != NA_STRING) {
+      dist_name = Rcpp::as<std::string>(dist_col[i]);
+    }
+    override.dist_cfg = base.dist_cfg;
+    std::vector<uuber::ProtoParamEntry> param_entries;
+    if (params_list_col.size() > 0) {
+      SEXP param_entry = (i < params_list_col.size()) ? params_list_col[i] : R_NilValue;
+      if (param_entry != R_NilValue) {
+        Rcpp::List param_list(param_entry);
+        std::vector<uuber::ProtoParamEntry> entries = params_from_rcpp(param_list, dist_name);
+        for (auto& entry : entries) {
+          upsert_param_entry(param_entries, entry);
+        }
+      }
+    }
+    for (std::size_t pc = 0; pc < param_cols.size(); ++pc) {
+      SEXP column = param_col_data[pc];
+      int type = param_col_types[pc];
+      const std::string& col_name = param_cols[pc];
+      switch (type) {
+      case REALSXP: {
+        Rcpp::NumericVector vec(column);
+        if (i < vec.size()) {
+          double val = vec[i];
+          if (!Rcpp::NumericVector::is_na(val)) {
+            append_scalar_entry(param_entries, col_name, val, false);
+          }
+        }
+        break;
+      }
+      case INTSXP: {
+        Rcpp::IntegerVector vec(column);
+        if (i < vec.size()) {
+          int val = vec[i];
+          if (val != NA_INTEGER) {
+            append_scalar_entry(param_entries, col_name, static_cast<double>(val), false);
+          }
+        }
+        break;
+      }
+      case LGLSXP: {
+        Rcpp::LogicalVector vec(column);
+        if (i < vec.size()) {
+          int val = vec[i];
+          if (val != NA_LOGICAL) {
+            append_scalar_entry(param_entries, col_name, static_cast<double>(val), true);
+          }
+        }
+        break;
+      }
+      case STRSXP:
+        // Strings are not supported as distribution params; skip.
+        break;
+      case VECSXP: {
+        Rcpp::List vec(column);
+        if (i >= vec.size()) break;
+        SEXP cell = vec[i];
+        if (cell == R_NilValue) break;
+        if (Rf_isReal(cell)) {
+          Rcpp::NumericVector nv(cell);
+          if (nv.size() == 1) {
+            double val = nv[0];
+            if (!Rcpp::NumericVector::is_na(val)) {
+              append_scalar_entry(param_entries, col_name, val, false);
+            }
+          } else {
+            append_numeric_vector_entry(param_entries, col_name, nv);
+          }
+        } else if (Rf_isInteger(cell)) {
+          Rcpp::IntegerVector iv(cell);
+          if (iv.size() == 1) {
+            int val = iv[0];
+            if (val != NA_INTEGER) {
+              append_scalar_entry(param_entries, col_name, static_cast<double>(val), false);
+            }
+          } else {
+            Rcpp::NumericVector nv = Rcpp::as<Rcpp::NumericVector>(iv);
+            append_numeric_vector_entry(param_entries, col_name, nv);
+          }
+        } else if (Rf_isLogical(cell)) {
+          Rcpp::LogicalVector lv(cell);
+          if (lv.size() == 1) {
+            int val = lv[0];
+            if (val != NA_LOGICAL) {
+              append_scalar_entry(param_entries, col_name, static_cast<double>(val), true);
+            }
+          } else {
+            append_logical_vector_entry(param_entries, col_name, lv);
+          }
+        }
+        break;
+      }
+      default:
+        break;
+      }
+    }
+    if (!param_entries.empty() || dist_name != base.dist) {
+      if (param_entries.empty()) {
+        Rcpp::stop("trial parameter rows for '%s' missing distribution parameters", base.id);
+      }
+      override.dist_cfg = resolve_acc_params_entries(dist_name, param_entries);
+    }
+
+    overrides->acc_overrides[acc_idx] = std::move(override);
+  }
+
+  if (overrides->acc_overrides.empty()) {
+    return nullptr;
+  }
+  return overrides;
+}
+
 
 Rcpp::List native_guard_scenarios_impl(SEXP ctxSEXP,
                                        int guard_node_id,
@@ -745,8 +2436,10 @@ Rcpp::List native_guard_scenarios_impl(SEXP ctxSEXP,
     std::unordered_set<int> sc_fs_set = make_forced_set(sc_fs_vec);
     sc_fc_set.insert(base_fc_set.begin(), base_fc_set.end());
     sc_fs_set.insert(base_fs_set.begin(), base_fs_set.end());
+    EvalCache scenario_cache;
     GuardEvalInput scenario_input = make_guard_input(*ctx,
                                                      guard_node,
+                                                     scenario_cache,
                                                      component_label,
                                                      sc_fc_set,
                                                      sc_fs_set);
@@ -788,7 +2481,9 @@ Rcpp::List native_node_eval_impl(SEXP ctxSEXP,
   std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
   std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
   std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
+  EvalCache eval_cache;
   NodeEvalState state(*ctx,
+                      eval_cache,
                       t,
                       component_label,
                       forced_complete_set,
@@ -797,7 +2492,279 @@ Rcpp::List native_node_eval_impl(SEXP ctxSEXP,
   return node_result_to_list(result);
 }
 
+Rcpp::List native_node_scenarios_impl(SEXP ctxSEXP,
+                                      int node_id,
+                                      double t,
+                                      Rcpp::Nullable<Rcpp::String> component,
+                                      SEXP forced_complete,
+                                      SEXP forced_survive) {
+  if (Rf_isNull(ctxSEXP)) {
+    Rcpp::stop("native_node_scenarios: context pointer is null");
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
+  std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
+  std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
+  std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
+  std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
+  EvalCache eval_cache;
+  NodeEvalState state(*ctx,
+                      eval_cache,
+                      t,
+                      component_label,
+                      forced_complete_set,
+                      forced_survive_set);
+  std::vector<ScenarioRecord> records = compute_node_scenarios(node_id, state);
+  return scenario_records_to_r(records);
+}
+
+Rcpp::List native_likelihood_driver_impl(SEXP ctxSEXP,
+                                         Rcpp::IntegerVector node_ids,
+                                         Rcpp::NumericVector times,
+                                         Rcpp::Nullable<Rcpp::String> component,
+                                         SEXP forced_complete,
+                                         SEXP forced_survive) {
+  if (Rf_isNull(ctxSEXP)) {
+    Rcpp::stop("native_likelihood_driver: context pointer is null");
+  }
+  if (node_ids.size() == 0 || times.size() == 0) {
+    return Rcpp::List();
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
+  std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
+  std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
+  std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
+  std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
+  Rcpp::List node_results(node_ids.size());
+  for (R_xlen_t i = 0; i < node_ids.size(); ++i) {
+    int node_id = node_ids[i];
+    if (node_id == NA_INTEGER) {
+      node_results[i] = R_NilValue;
+      continue;
+    }
+    Rcpp::List evals(times.size());
+    for (R_xlen_t j = 0; j < times.size(); ++j) {
+      double t = static_cast<double>(times[j]);
+      EvalCache eval_cache;
+      NodeEvalState state(*ctx,
+                          eval_cache,
+                          t,
+                          component_label,
+                          forced_complete_set,
+                          forced_survive_set);
+      NodeEvalResult result = eval_node_recursive(node_id, state);
+      evals[j] = Rcpp::List::create(
+        Rcpp::Named("time") = t,
+        Rcpp::Named("density") = result.density,
+        Rcpp::Named("survival") = result.survival,
+        Rcpp::Named("cdf") = result.cdf
+      );
+    }
+    node_results[i] = Rcpp::List::create(
+      Rcpp::Named("node_id") = node_id,
+      Rcpp::Named("evaluations") = evals
+    );
+  }
+  return node_results;
+}
+
+Rcpp::List native_likelihood_eval_impl(SEXP ctxSEXP,
+                                       const Rcpp::List& task_list) {
+  if (Rf_isNull(ctxSEXP)) {
+    Rcpp::stop("native_likelihood_eval: context pointer is null");
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  Rcpp::List out(task_list.size());
+  for (R_xlen_t i = 0; i < task_list.size(); ++i) {
+    Rcpp::List task(task_list[i]);
+    if (task.isNULL() || task.size() == 0) {
+      out[i] = R_NilValue;
+      continue;
+    }
+    int node_id = task.containsElementNamed("node_id")
+      ? Rcpp::as<int>(task["node_id"])
+      : NA_INTEGER;
+    if (node_id == NA_INTEGER) {
+      out[i] = R_NilValue;
+      continue;
+    }
+    Rcpp::NumericVector times = task.containsElementNamed("times")
+      ? Rcpp::NumericVector(task["times"])
+      : Rcpp::NumericVector();
+    if (times.size() == 0) {
+      out[i] = Rcpp::List::create(
+        Rcpp::Named("node_id") = node_id,
+        Rcpp::Named("evaluations") = Rcpp::List()
+      );
+      continue;
+    }
+    std::string component_label;
+    if (task.containsElementNamed("component") && !Rf_isNull(task["component"])) {
+      component_label = Rcpp::as<std::string>(task["component"]);
+    }
+    std::vector<int> fc_vec = forced_vec_from_sexp(task.containsElementNamed("forced_complete")
+                                                   ? task["forced_complete"] : R_NilValue);
+    std::vector<int> fs_vec = forced_vec_from_sexp(task.containsElementNamed("forced_survive")
+                                                   ? task["forced_survive"] : R_NilValue);
+    std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
+    std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
+    EvalCache eval_cache;
+    Rcpp::List eval_list(times.size());
+    for (R_xlen_t j = 0; j < times.size(); ++j) {
+      double t = static_cast<double>(times[j]);
+      NodeEvalState state(*ctx,
+                          eval_cache,
+                          t,
+                          component_label,
+                          forced_complete_set,
+                          forced_survive_set);
+      NodeEvalResult result = eval_node_recursive(node_id, state);
+      eval_list[j] = Rcpp::List::create(
+        Rcpp::Named("time") = t,
+        Rcpp::Named("density") = result.density,
+        Rcpp::Named("survival") = result.survival,
+        Rcpp::Named("cdf") = result.cdf
+      );
+    }
+    out[i] = Rcpp::List::create(
+      Rcpp::Named("node_id") = node_id,
+      Rcpp::Named("component") = component_label,
+      Rcpp::Named("evaluations") = eval_list
+    );
+  }
+  return out;
+}
+
 } // namespace
+
+double normalize_weights(std::vector<double>& weights) {
+  if (weights.empty()) return 0.0;
+  bool need_uniform = false;
+  double total = 0.0;
+  for (double w : weights) {
+    if (!std::isfinite(w) || w < 0.0) {
+      need_uniform = true;
+      break;
+    }
+    total += w;
+  }
+  if (!need_uniform && total > 0.0) {
+    for (double& w : weights) {
+      w /= total;
+    }
+    return total;
+  }
+  double uniform = 1.0 / static_cast<double>(weights.size());
+  std::fill(weights.begin(), weights.end(), uniform);
+  return 1.0;
+}
+
+// [[Rcpp::export(name = "native_trial_mixture_cpp")]]
+double native_trial_mixture_driver(SEXP ctxSEXP,
+                                   int node_id,
+                                   double t,
+                                   Rcpp::CharacterVector component_ids,
+                                   Rcpp::NumericVector weights,
+                                   Rcpp::Nullable<Rcpp::String> forced_component,
+                                   Rcpp::IntegerVector competitor_ids,
+                                   SEXP trial_overrides) {
+  if (Rf_isNull(ctxSEXP)) {
+    Rcpp::stop("native_trial_mixture: context pointer is null");
+  }
+  if (!std::isfinite(t) || t < 0.0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  if (component_ids.size() == 0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  std::vector<std::string> components;
+  components.reserve(component_ids.size());
+  for (R_xlen_t i = 0; i < component_ids.size(); ++i) {
+    if (component_ids[i] == NA_STRING) {
+      components.emplace_back("__default__");
+    } else {
+      components.push_back(Rcpp::as<std::string>(component_ids[i]));
+    }
+  }
+  std::vector<double> mix_weights(components.size(), std::numeric_limits<double>::quiet_NaN());
+  if (weights.size() == component_ids.size()) {
+    for (R_xlen_t i = 0; i < weights.size(); ++i) {
+      mix_weights[static_cast<std::size_t>(i)] = weights[i];
+    }
+  }
+  normalize_weights(mix_weights);
+
+  if (forced_component.isNotNull()) {
+    std::string forced = Rcpp::as<std::string>(forced_component);
+    bool found = false;
+    for (std::size_t i = 0; i < components.size(); ++i) {
+      if (components[i] == forced) {
+        components = {components[i]};
+        mix_weights = {1.0};
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+  }
+
+  std::vector<int> comp_ids = integer_vector_to_std(competitor_ids, false);
+  const TrialOverrides* overrides_ptr = nullptr;
+  if (!Rf_isNull(trial_overrides)) {
+    Rcpp::XPtr<TrialOverrides> ptr(trial_overrides);
+    overrides_ptr = ptr.get();
+  }
+  std::unordered_set<int> forced_empty;
+  double total = 0.0;
+  for (std::size_t i = 0; i < components.size(); ++i) {
+    double contrib = node_density_with_competitors_internal(
+      *ctx,
+      node_id,
+      t,
+      components[i],
+      forced_empty,
+      forced_empty,
+      comp_ids,
+      overrides_ptr
+    );
+    if (!std::isfinite(contrib) || contrib < 0.0) {
+      contrib = 0.0;
+    }
+    total += mix_weights[i] * contrib;
+  }
+  if (!std::isfinite(total) || total <= 0.0) {
+    return 0.0;
+  }
+  return total;
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_component_plan_exported(SEXP structureSEXP,
+                                          SEXP trial_rowsSEXP,
+                                          SEXP forced_componentSEXP,
+                                          SEXP component_weightsSEXP) {
+  Rcpp::List structure = Rcpp::as<Rcpp::List>(structureSEXP);
+  Rcpp::Nullable<Rcpp::DataFrame> trial_rows;
+  if (!Rf_isNull(trial_rowsSEXP)) {
+    trial_rows = Rcpp::Nullable<Rcpp::DataFrame>(trial_rowsSEXP);
+  }
+  Rcpp::Nullable<Rcpp::String> forced_component;
+  if (!Rf_isNull(forced_componentSEXP)) {
+    forced_component = Rcpp::Nullable<Rcpp::String>(forced_componentSEXP);
+  }
+  Rcpp::Nullable<Rcpp::DataFrame> component_weights;
+  if (!Rf_isNull(component_weightsSEXP)) {
+    component_weights = Rcpp::Nullable<Rcpp::DataFrame>(component_weightsSEXP);
+  }
+  return native_component_plan_impl(structure,
+                                    trial_rows,
+                                    forced_component,
+                                    component_weights);
+}
 
 // [[Rcpp::export]]
 Rcpp::List native_guard_eval_cpp(SEXP ctxSEXP,
@@ -879,6 +2846,317 @@ Rcpp::List native_node_eval_cpp(SEXP ctxSEXP,
                                forced_survive);
 }
 
+// [[Rcpp::export]]
+Rcpp::List native_node_scenarios_cpp(SEXP ctxSEXP,
+                                     int node_id,
+                                     double t,
+                                     Rcpp::Nullable<Rcpp::String> component,
+                                     SEXP forced_complete,
+                                     SEXP forced_survive) {
+  return native_node_scenarios_impl(ctxSEXP,
+                                    node_id,
+                                    t,
+                                    component,
+                                    forced_complete,
+                                    forced_survive);
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_likelihood_driver_cpp(SEXP ctxSEXP,
+                                        Rcpp::IntegerVector node_ids,
+                                        Rcpp::NumericVector times,
+                                        Rcpp::Nullable<Rcpp::String> component,
+                                        SEXP forced_complete,
+                                        SEXP forced_survive) {
+  return native_likelihood_driver_impl(ctxSEXP,
+                                       node_ids,
+                                       times,
+                                       component,
+                                       forced_complete,
+                                       forced_survive);
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_likelihood_eval_cpp(SEXP ctxSEXP,
+                                      Rcpp::List task_list) {
+  return native_likelihood_eval_impl(ctxSEXP, task_list);
+}
+
+// [[Rcpp::export]]
+SEXP native_build_trial_overrides_cpp(SEXP ctxSEXP,
+                                      Rcpp::Nullable<Rcpp::DataFrame> trial_rows) {
+  if (Rf_isNull(ctxSEXP) || trial_rows.isNull()) {
+    return R_NilValue;
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  std::unique_ptr<TrialOverrides> overrides =
+    build_trial_overrides_from_df(*ctx, trial_rows);
+  if (!overrides) {
+    return R_NilValue;
+  }
+  return Rcpp::XPtr<TrialOverrides>(overrides.release(), true);
+}
+
+// [[Rcpp::export]]
+double native_competitor_survival_cpp(SEXP ctxSEXP,
+                                      Rcpp::IntegerVector competitor_ids,
+                                      double t,
+                                      Rcpp::Nullable<Rcpp::String> component) {
+  return native_competitor_survival_impl(ctxSEXP,
+                                         competitor_ids,
+                                         t,
+                                         component);
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_density_with_competitors_cpp(SEXP ctxSEXP,
+                                               int node_id,
+                                               double t,
+                                               Rcpp::Nullable<Rcpp::String> component,
+                                               SEXP forced_complete,
+                                               SEXP forced_survive,
+                                               Rcpp::IntegerVector competitor_ids,
+                                               double rel_tol,
+                                               double abs_tol,
+                                               int max_depth) {
+  (void)rel_tol;
+  (void)abs_tol;
+  (void)max_depth;
+  return native_density_with_competitors_impl(ctxSEXP,
+                                              node_id,
+                                              t,
+                                              component,
+                                              forced_complete,
+                                              forced_survive,
+                                              competitor_ids,
+                                              nullptr);
+}
+
+// [[Rcpp::export]]
+double native_outcome_probability_cpp(SEXP ctxSEXP,
+                                      int node_id,
+                                      double upper,
+                                      Rcpp::Nullable<Rcpp::String> component,
+                                      SEXP forced_complete,
+                                      SEXP forced_survive,
+                                      Rcpp::IntegerVector competitor_ids,
+                                      double rel_tol,
+                                      double abs_tol,
+                                      int max_depth) {
+  return native_outcome_probability_impl(ctxSEXP,
+                                         node_id,
+                                         upper,
+                                         component,
+                                         forced_complete,
+                                         forced_survive,
+                                         competitor_ids,
+                                         rel_tol,
+                                         abs_tol,
+                                         max_depth,
+                                         nullptr);
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_density_with_competitors_params_cpp(SEXP ctxSEXP,
+                                                      int node_id,
+                                                      double t,
+                                                      Rcpp::Nullable<Rcpp::String> component,
+                                                      SEXP forced_complete,
+                                                      SEXP forced_survive,
+                                                      Rcpp::IntegerVector competitor_ids,
+                                                      Rcpp::Nullable<Rcpp::DataFrame> trial_rows) {
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  std::unique_ptr<TrialOverrides> overrides = build_trial_overrides_from_df(*ctx, trial_rows);
+  return native_density_with_competitors_impl(ctxSEXP,
+                                              node_id,
+                                              t,
+                                              component,
+                                              forced_complete,
+                                              forced_survive,
+                                             competitor_ids,
+                                             overrides ? overrides.get() : nullptr);
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_density_with_competitors_overrides_cpp(SEXP ctxSEXP,
+                                                         int node_id,
+                                                         double t,
+                                                         Rcpp::Nullable<Rcpp::String> component,
+                                                         SEXP forced_complete,
+                                                         SEXP forced_survive,
+                                                         Rcpp::IntegerVector competitor_ids,
+                                                         SEXP overridesSEXP) {
+  TrialOverrides* overrides = nullptr;
+  if (!Rf_isNull(overridesSEXP)) {
+    Rcpp::XPtr<TrialOverrides> ptr(overridesSEXP);
+    overrides = ptr.get();
+  }
+  return native_density_with_competitors_impl(ctxSEXP,
+                                              node_id,
+                                              t,
+                                              component,
+                                              forced_complete,
+                                              forced_survive,
+                                              competitor_ids,
+                                              overrides);
+}
+
+Rcpp::NumericVector native_density_with_competitors_vector_impl(SEXP ctxSEXP,
+                                                                int node_id,
+                                                                const Rcpp::NumericVector& times,
+                                                                Rcpp::Nullable<Rcpp::String> component,
+                                                                SEXP forced_complete,
+                                                                SEXP forced_survive,
+                                                                const Rcpp::IntegerVector& competitor_ids,
+                                                                const TrialOverrides* overrides) {
+  if (Rf_isNull(ctxSEXP)) {
+    Rcpp::stop("native_density_with_competitors_vector: context pointer is null");
+  }
+  if (times.size() == 0) {
+    return Rcpp::NumericVector();
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
+  std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
+  std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
+  std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
+  std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
+  EvalCache eval_cache;
+  Rcpp::NumericVector out(times.size());
+  for (R_xlen_t i = 0; i < times.size(); ++i) {
+    double t = times[i];
+    if (!std::isfinite(t) || t < 0.0) {
+      out[i] = 0.0;
+      continue;
+    }
+    NodeEvalState state(*ctx,
+                        eval_cache,
+                        t,
+                        component_label,
+                        forced_complete_set,
+                        forced_survive_set,
+                        overrides);
+    NodeEvalResult base = eval_node_recursive(node_id, state);
+    double density = base.density;
+    if (!std::isfinite(density) || density <= 0.0) {
+      out[i] = 0.0;
+      continue;
+    }
+    if (competitor_ids.size() > 0) {
+      double surv = native_competitor_survival_impl(ctxSEXP,
+                                                    competitor_ids,
+                                                    t,
+                                                    component);
+      if (!std::isfinite(surv) || surv <= 0.0) {
+        density = 0.0;
+      } else {
+        density *= surv;
+      }
+    }
+    out[i] = density;
+  }
+  return out;
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericVector native_density_with_competitors_vec_cpp(SEXP ctxSEXP,
+                                                            int node_id,
+                                                            Rcpp::NumericVector times,
+                                                            Rcpp::Nullable<Rcpp::String> component,
+                                                            SEXP forced_complete,
+                                                            SEXP forced_survive,
+                                                            Rcpp::IntegerVector competitor_ids) {
+  return native_density_with_competitors_vector_impl(ctxSEXP,
+                                                     node_id,
+                                                     times,
+                                                     component,
+                                                     forced_complete,
+                                                     forced_survive,
+                                                     competitor_ids,
+                                                     nullptr);
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericVector native_density_with_competitors_overrides_vec_cpp(SEXP ctxSEXP,
+                                                                      int node_id,
+                                                                      Rcpp::NumericVector times,
+                                                                      Rcpp::Nullable<Rcpp::String> component,
+                                                                      SEXP forced_complete,
+                                                                      SEXP forced_survive,
+                                                                      Rcpp::IntegerVector competitor_ids,
+                                                                      SEXP overridesSEXP) {
+  TrialOverrides* overrides = nullptr;
+  if (!Rf_isNull(overridesSEXP)) {
+    Rcpp::XPtr<TrialOverrides> ptr(overridesSEXP);
+    overrides = ptr.get();
+  }
+  return native_density_with_competitors_vector_impl(ctxSEXP,
+                                                     node_id,
+                                                     times,
+                                                     component,
+                                                     forced_complete,
+                                                     forced_survive,
+                                                     competitor_ids,
+                                                     overrides);
+}
+
+// [[Rcpp::export]]
+double native_outcome_probability_params_cpp(SEXP ctxSEXP,
+                                             int node_id,
+                                             double upper,
+                                             Rcpp::Nullable<Rcpp::String> component,
+                                             SEXP forced_complete,
+                                             SEXP forced_survive,
+                                             Rcpp::IntegerVector competitor_ids,
+                                             double rel_tol,
+                                             double abs_tol,
+                                             int max_depth,
+                                             Rcpp::Nullable<Rcpp::DataFrame> trial_rows) {
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  std::unique_ptr<TrialOverrides> overrides = build_trial_overrides_from_df(*ctx, trial_rows);
+  return native_outcome_probability_impl(ctxSEXP,
+                                         node_id,
+                                         upper,
+                                         component,
+                                         forced_complete,
+                                         forced_survive,
+                                         competitor_ids,
+                                         rel_tol,
+                                         abs_tol,
+                                         max_depth,
+                                         overrides ? overrides.get() : nullptr);
+}
+
+// [[Rcpp::export]]
+double native_outcome_probability_overrides_cpp(SEXP ctxSEXP,
+                                                int node_id,
+                                                double upper,
+                                                Rcpp::Nullable<Rcpp::String> component,
+                                                SEXP forced_complete,
+                                                SEXP forced_survive,
+                                                Rcpp::IntegerVector competitor_ids,
+                                                double rel_tol,
+                                                double abs_tol,
+                                                int max_depth,
+                                                SEXP overridesSEXP) {
+  TrialOverrides* overrides = nullptr;
+  if (!Rf_isNull(overridesSEXP)) {
+    Rcpp::XPtr<TrialOverrides> ptr(overridesSEXP);
+    overrides = ptr.get();
+  }
+  return native_outcome_probability_impl(ctxSEXP,
+                                         node_id,
+                                         upper,
+                                         component,
+                                         forced_complete,
+                                         forced_survive,
+                                         competitor_ids,
+                                         rel_tol,
+                                         abs_tol,
+                                         max_depth,
+                                         overrides);
+}
+
 // Forward declarations for native distribution helpers
 Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector& x,
                                        double meanlog,
@@ -907,112 +3185,16 @@ inline bool is_invalid_positive(double value) {
   return !std::isfinite(value) || value <= 0.0;
 }
 
-template <typename T>
-inline T clamp(T val, T lo, T hi) {
-  if (!std::isfinite(val)) {
-    return val;
-  }
-  if (val < lo) return lo;
-  if (val > hi) return hi;
-  return val;
-}
-
-inline double clamp_unit(double val) {
-  if (!std::isfinite(val)) return 0.0;
-  if (val < 0.0) return 0.0;
-  if (val > 1.0) return 1.0;
-  return val;
-}
-
-enum AccDistKind {
-  ACC_DIST_LOGNORMAL = 1,
-  ACC_DIST_GAMMA = 2,
-  ACC_DIST_EXGAUSS = 3
-};
-
-struct AccDistParams {
-  int code;
-  double p1;
-  double p2;
-  double p3;
-};
-
-inline std::string normalize_dist_name(const std::string& dist) {
-  std::string out(dist);
-  std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return out;
-}
-
-inline double get_required_param(const Rcpp::List& params,
-                                 const char* name,
-                                 const std::string& dist) {
-  if (!params.containsElementNamed(name)) {
-    Rcpp::stop("Distribution '%s' missing required parameter '%s'",
-               dist, name);
-  }
-  SEXP val = params[name];
-  if (val == R_NilValue) {
-    Rcpp::stop("Distribution '%s' missing required parameter '%s'",
-               dist, name);
-  }
-  return Rcpp::as<double>(val);
-}
-
 inline AccDistParams resolve_acc_params(const std::string& dist,
                                         const Rcpp::List& params) {
-  if (params.size() == 0) {
-    Rcpp::stop("Distribution '%s' received empty parameter list", dist);
-  }
-  AccDistParams cfg{};
-  std::string dist_name = normalize_dist_name(dist);
-  if (dist_name == "lognormal") {
-    cfg.code = ACC_DIST_LOGNORMAL;
-    cfg.p1 = get_required_param(params, "meanlog", dist_name);
-    cfg.p2 = get_required_param(params, "sdlog", dist_name);
-    cfg.p3 = 0.0;
-  } else if (dist_name == "gamma") {
-    cfg.code = ACC_DIST_GAMMA;
-    cfg.p1 = get_required_param(params, "shape", dist_name);
-    cfg.p2 = get_required_param(params, "rate", dist_name);
-    cfg.p3 = 0.0;
-  } else if (dist_name == "exgauss") {
-    cfg.code = ACC_DIST_EXGAUSS;
-    cfg.p1 = get_required_param(params, "mu", dist_name);
-    cfg.p2 = get_required_param(params, "sigma", dist_name);
-    cfg.p3 = get_required_param(params, "tau", dist_name);
-  } else {
-    Rcpp::stop("Unsupported accumulator distribution '%s'", dist);
-  }
-  return cfg;
-}
-
-inline double eval_pdf_single(const AccDistParams& cfg, double x) {
-  switch (cfg.code) {
-  case ACC_DIST_LOGNORMAL:
-    return dist_lognormal_pdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2)[0];
-  case ACC_DIST_GAMMA:
-    return dist_gamma_pdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2)[0];
-  case ACC_DIST_EXGAUSS:
-    return dist_exgauss_pdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2, cfg.p3)[0];
-  default:
-    Rcpp::stop("Invalid accumulator distribution code '%d'", cfg.code);
+  std::vector<uuber::ProtoParamEntry> entries = params_from_rcpp(params, dist);
+  try {
+    return resolve_acc_params_entries(dist, entries);
+  } catch (const std::exception& e) {
+    Rcpp::stop("%s", e.what());
   }
 }
 
-inline double eval_cdf_single(const AccDistParams& cfg, double x) {
-  switch (cfg.code) {
-  case ACC_DIST_LOGNORMAL:
-    return dist_lognormal_cdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2)[0];
-  case ACC_DIST_GAMMA:
-    return dist_gamma_cdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2)[0];
-  case ACC_DIST_EXGAUSS:
-    return dist_exgauss_cdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2, cfg.p3)[0];
-  default:
-    Rcpp::stop("Invalid accumulator distribution code '%d'", cfg.code);
-  }
-}
 
 inline std::vector<double> expand_poly(const std::vector<double>& coeff,
                                        double surv,
@@ -1080,7 +3262,7 @@ inline void sort_unique(std::vector<int>& vec) {
 }
 
 inline std::vector<int> integer_vector_to_std(const Rcpp::IntegerVector& src,
-                                              bool subtract_one = false) {
+                                              bool subtract_one) {
   std::vector<int> out;
   out.reserve(src.size());
   for (int val : src) {
@@ -1418,10 +3600,6 @@ Rcpp::NumericVector dist_exgauss_rng(int n,
   return normals;
 }
 
-// ------------------------------------------------------------------
-// Accumulator helpers built on the native distributions
-// ------------------------------------------------------------------
-
 //' @noRd
 // [[Rcpp::export]]
 double acc_density_cpp(double t,
@@ -1429,24 +3607,8 @@ double acc_density_cpp(double t,
                        double q,
                        const std::string& dist,
                        const Rcpp::List& params) {
-  if (!std::isfinite(onset)) {
-    Rcpp::stop("Accumulator parameter 'onset' must be finite");
-  }
-  if (!std::isfinite(q)) {
-    Rcpp::stop("Accumulator parameter 'q' must be finite");
-  }
-  if (!std::isfinite(t) || t < 0.0) return 0.0;
-  if (t < onset) return 0.0;
-
-  double success_prob = 1.0 - q;
-  if (success_prob <= 0.0) return 0.0;
-
   AccDistParams cfg = resolve_acc_params(dist, params);
-  double dens = eval_pdf_single(cfg, t - onset);
-  if (Rcpp::NumericVector::is_na(dens) || !std::isfinite(dens)) {
-    return NA_REAL;
-  }
-  return success_prob * dens;
+  return acc_density_from_cfg(t, onset, q, cfg);
 }
 
 //' @noRd
@@ -1456,19 +3618,9 @@ double acc_density_success_cpp(double t,
                                double q,
                                const std::string& dist,
                                const Rcpp::List& params) {
-  if (!std::isfinite(onset)) {
-    Rcpp::stop("Accumulator parameter 'onset' must be finite");
-  }
   (void)q;
-  if (!std::isfinite(t) || t < 0.0) return 0.0;
-  if (t < onset) return 0.0;
-
   AccDistParams cfg = resolve_acc_params(dist, params);
-  double dens = eval_pdf_single(cfg, t - onset);
-  if (Rcpp::NumericVector::is_na(dens) || !std::isfinite(dens)) {
-    return NA_REAL;
-  }
-  return dens;
+  return acc_density_success_from_cfg(t, onset, cfg);
 }
 
 //' @noRd
@@ -1478,26 +3630,8 @@ double acc_survival_cpp(double t,
                         double q,
                         const std::string& dist,
                         const Rcpp::List& params) {
-  if (!std::isfinite(onset)) {
-    Rcpp::stop("Accumulator parameter 'onset' must be finite");
-  }
-  if (!std::isfinite(q)) {
-    Rcpp::stop("Accumulator parameter 'q' must be finite");
-  }
-  if (!std::isfinite(t)) return 0.0;
-  if (t < 0.0) return 1.0;
-  if (t < onset) return 1.0;
-
   AccDistParams cfg = resolve_acc_params(dist, params);
-  double cdf = eval_cdf_single(cfg, t - onset);
-  if (Rcpp::NumericVector::is_na(cdf) || !std::isfinite(cdf)) {
-    return NA_REAL;
-  }
-  double surv_underlying = 1.0 - cdf;
-  surv_underlying = clamp(surv_underlying, 0.0, 1.0);
-  double success_prob = 1.0 - q;
-  double result = q + success_prob * surv_underlying;
-  return clamp(result, 0.0, 1.0);
+  return acc_survival_from_cfg(t, onset, q, cfg);
 }
 
 //' @noRd
@@ -1507,20 +3641,9 @@ double acc_cdf_success_cpp(double t,
                            double q,
                            const std::string& dist,
                            const Rcpp::List& params) {
-  if (!std::isfinite(onset)) {
-    Rcpp::stop("Accumulator parameter 'onset' must be finite");
-  }
   (void)q;
-  if (!std::isfinite(t)) return 1.0;
-  if (t < 0.0) return 0.0;
-  if (t < onset) return 0.0;
-
   AccDistParams cfg = resolve_acc_params(dist, params);
-  double cdf = eval_cdf_single(cfg, t - onset);
-  if (Rcpp::NumericVector::is_na(cdf) || !std::isfinite(cdf)) {
-    return NA_REAL;
-  }
-  return clamp(cdf, 0.0, 1.0);
+  return acc_cdf_success_from_cfg(t, onset, cfg);
 }
 
 // ------------------------------------------------------------------

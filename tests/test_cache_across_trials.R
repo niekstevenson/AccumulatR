@@ -1,4 +1,5 @@
 rm(list = ls())
+options(uuber.native.rebuild = TRUE)
 
 base::source("R/super_large_likelihood.R")
 base::source("R/generator_new.R")
@@ -94,4 +95,18 @@ if (count_new_first != na_unique_count) {
     "Expected param interface to integrate %d times on first pass, saw %d",
     na_unique_count, count_new_first
   ))
+}
+
+native_option_old <- getOption("uuber.use.native.param.rows")
+options(uuber.use.native.param.rows = FALSE)
+legacy_res <- log_likelihood_from_params(structure, base_table, data_df)
+options(uuber.use.native.param.rows = TRUE)
+native_res <- log_likelihood_from_params(structure, base_table, data_df)
+options(uuber.use.native.param.rows = native_option_old)
+
+if (!isTRUE(all.equal(as.numeric(legacy_res$loglik), as.numeric(native_res$loglik), tolerance = 1e-9))) {
+  stop("Native param-row likelihood does not match legacy override path")
+}
+if (!isTRUE(all.equal(as.numeric(legacy_res$per_trial), as.numeric(native_res$per_trial), tolerance = 1e-9))) {
+  stop("Per-trial log-likelihood differs between native and override paths")
 }

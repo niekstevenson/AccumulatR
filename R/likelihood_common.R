@@ -134,8 +134,47 @@
 .prep_cache_bundle <- function(prep) .prep_runtime_get(prep, "cache_bundle")
 
 .prep_native_context <- function(prep) {
+  bundle <- .prep_cache_bundle(prep)
+  native_env <- NULL
+  if (!is.null(bundle) && !is.null(bundle$native_ctx) && is.environment(bundle$native_ctx)) {
+    native_env <- bundle$native_ctx
+  }
+  if (!is.null(bundle) && is.null(native_env)) {
+    native_env <- new.env(parent = emptyenv())
+    native_env$ptr <- NULL
+    native_env$proto <- raw(0)
+    bundle$native_ctx <- native_env
+  }
+  proto_blob <- if (!is.null(native_env)) native_env$proto %||% raw(0) else raw(0)
+  native_ptr <- if (!is.null(native_env)) native_env$ptr %||% NULL else NULL
+  if (inherits(native_ptr, "externalptr")) {
+    return(native_ptr)
+  }
+  if (length(proto_blob) > 0L) {
+    from_proto <- .lik_native_fn("native_context_from_proto_cpp")
+    native_ptr <- tryCatch(from_proto(proto_blob), error = function(e) NULL)
+    if (inherits(native_ptr, "externalptr")) {
+      if (!is.null(native_env)) {
+        native_env$ptr <- native_ptr
+      } else {
+        attr(native_ptr, "native_proto") <- proto_blob
+      }
+      return(native_ptr)
+    }
+  }
   builder <- .lik_native_fn("native_context_build")
-  builder(prep)
+  native_ptr <- builder(prep)
+  if (inherits(native_ptr, "externalptr")) {
+    serialize_fn <- .lik_native_fn("native_prep_serialize_cpp")
+    proto_blob <- tryCatch(serialize_fn(prep), error = function(e) raw(0))
+    if (!is.null(native_env)) {
+      native_env$ptr <- native_ptr
+      native_env$proto <- proto_blob
+    } else {
+      attr(native_ptr, "native_proto") <- proto_blob
+    }
+  }
+  native_ptr
 }
 
 .cache_component_key <- function(component) {
@@ -148,12 +187,26 @@
 }
 
 .build_likelihood_cache_bundle <- function(prep) {
+  native_ctx_env <- new.env(parent = emptyenv())
+  native_ctx_env$ptr <- NULL
+  native_ctx_env$proto <- raw(0)
+  native_builder <- NULL
+  native_proto_builder <- NULL
+  native_ctx_env$ptr <- tryCatch({
+    native_builder <- .lik_native_fn("native_context_build")
+    native_builder(prep)
+  }, error = function(e) NULL)
+  native_ctx_env$proto <- tryCatch({
+    native_proto_builder <- .lik_native_fn("native_prep_serialize_cpp")
+    native_proto_builder(prep)
+  }, error = function(e) raw(0))
   structure(
     list(
       node_plan = prep[[".expr_compiled"]],
       precomputed_values = new.env(parent = emptyenv(), hash = TRUE),
       pool_templates = new.env(parent = emptyenv(), hash = TRUE),
       guard_quadrature = new.env(parent = emptyenv(), hash = TRUE),
+      native_ctx = native_ctx_env,
       version = Sys.time()
     ),
     class = "likelihood_cache_bundle"
@@ -166,6 +219,47 @@
   runtime$cache_bundle <- bundle
   prep[[".runtime"]] <- runtime
   prep
+}
+
+likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
+  if (is.null(prep)) {
+    if (is.null(model_spec)) {
+      stop("Provide either a prepared likelihood object or a model_spec", call. = FALSE)
+    }
+    prep <- .prepare_model_for_likelihood(model_spec)
+  }
+  if (is.null(prep[[".runtime"]]) || is.null(prep$.runtime$cache_bundle)) {
+    prep <- .prep_set_cache_bundle(prep, .build_likelihood_cache_bundle(prep))
+  }
+  serialize_fn <- .lik_native_fn("native_prep_serialize_cpp")
+  proto_blob <- serialize_fn(prep)
+  ctx_fn <- .lik_native_fn("native_context_from_proto_cpp")
+  ctx_ptr <- ctx_fn(proto_blob)
+  list(
+    prep = prep,
+    proto = proto_blob,
+    context = ctx_ptr
+  )
+}
+
+.native_node_batch_eval <- function(prep, node_ids, times, component = NULL,
+                                    forced_complete = integer(0),
+                                    forced_survive = integer(0)) {
+  node_ids <- as.integer(node_ids)
+  times <- as.numeric(times)
+  if (length(node_ids) == 0L || length(times) == 0L) return(list())
+  native_ctx <- .prep_native_context(prep)
+  native_fn <- .lik_native_fn("native_likelihood_eval_cpp")
+  tasks <- lapply(node_ids, function(nid) {
+    list(
+      node_id = as.integer(nid),
+      times = times,
+      component = component,
+      forced_complete = forced_complete,
+      forced_survive = forced_survive
+    )
+  })
+  native_fn(native_ctx, tasks)
 }
 
 .likelihood_cache_bundle_clone <- function(bundle) {
@@ -200,6 +294,17 @@
           for (k in keys) {
             env[[k]] <- bundle$guard_quadrature[[k]]
           }
+        }
+        env
+      },
+      native_ctx = {
+        env <- new.env(parent = emptyenv())
+        if (!is.null(bundle$native_ctx) && is.environment(bundle$native_ctx)) {
+          env$ptr <- bundle$native_ctx$ptr %||% NULL
+          env$proto <- bundle$native_ctx$proto %||% raw(0)
+        } else {
+          env$ptr <- NULL
+          env$proto <- raw(0)
         }
         env
       },

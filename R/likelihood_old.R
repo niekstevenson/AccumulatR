@@ -650,7 +650,7 @@ likelihood_old <- local({
   # ==============================================================================
 
   # Integrand function for probability integration
-  .integrand_outcome_density <- function(t, expr, prep, component) {
+  .integrand_outcome_density <- function(t, expr, prep, component, trial_rows = NULL) {
     vapply(t, function(tt) {
       if (!is.finite(tt) || tt < 0) return(0.0)
       .eval_expr_likelihood(expr, tt, prep, component)
@@ -660,7 +660,7 @@ likelihood_old <- local({
   # Compute probability by integrating race density
   # If competitor_exprs is provided, integrates:
   #   f_r(t) * prod_j S_j(t)  over t in [0, upper]
-  .integrate_outcome_probability <- function(expr, prep, component, upper_limit = Inf, competitor_exprs = NULL) {
+  .integrate_outcome_probability <- function(expr, prep, component, upper_limit = Inf, competitor_exprs = NULL, trial_rows = NULL) {
     # Set integration upper bound
     if (!is.finite(upper_limit)) {
       upper_limit <- Inf

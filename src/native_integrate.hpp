@@ -3,8 +3,20 @@
 #include <Rcpp.h>
 #include <algorithm>
 #include <cmath>
-#include <boost/math/quadrature/gauss_kronrod.hpp>
 #include <functional>
+
+// Detect availability of Boost Gauss-Kronrod header if not already set
+#if !defined(UUBER_HAVE_BOOST_GK)
+# if __has_include(<boost/math/quadrature/gauss_kronrod.hpp>)
+#  define UUBER_HAVE_BOOST_GK 1
+# else
+#  define UUBER_HAVE_BOOST_GK 0
+# endif
+#endif
+
+#if UUBER_HAVE_BOOST_GK
+#include <boost/math/quadrature/gauss_kronrod.hpp>
+#endif
 
 namespace uuber {
 
@@ -41,6 +53,7 @@ inline double integrate_boost(Rcpp::Function integrand,
   };
 
   double integral = 0.0;
+  #if UUBER_HAVE_BOOST_GK
   try {
     integral = boost::math::quadrature::gauss_kronrod<double, 61>::integrate(
       wrapper,
@@ -52,6 +65,9 @@ inline double integrate_boost(Rcpp::Function integrand,
   } catch (...) {
     integral = 0.0;
   }
+  #else
+  Rcpp::stop("Boost Gauss-Kronrod header not available; install BH or set include path to Boost");
+  #endif
   if (!std::isfinite(integral)) integral = 0.0;
   return sign * integral;
 }
@@ -85,6 +101,7 @@ inline double integrate_boost_fn(Fn&& integrand,
     return val;
   };
   double integral = 0.0;
+  #if UUBER_HAVE_BOOST_GK
   try {
     integral = boost::math::quadrature::gauss_kronrod<double, 61>::integrate(
       wrapper,
@@ -96,6 +113,9 @@ inline double integrate_boost_fn(Fn&& integrand,
   } catch (...) {
     integral = 0.0;
   }
+  #else
+  Rcpp::stop("Boost Gauss-Kronrod header not available; install BH or set include path to Boost");
+  #endif
   if (!std::isfinite(integral)) integral = 0.0;
   return sign * integral;
 }

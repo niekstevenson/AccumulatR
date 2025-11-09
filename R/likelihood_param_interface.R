@@ -43,6 +43,82 @@
   trial_prep
 }
 
+.likelihood_component_rows <- function(trial_rows, component) {
+  if (is.null(trial_rows) || nrow(trial_rows) == 0L) return(trial_rows)
+  if (!"component" %in% names(trial_rows)) return(trial_rows)
+  comp_label <- component %||% "__default__"
+  mask <- is.na(trial_rows$component)
+  if (!identical(comp_label, "__default__")) {
+    mask <- mask | trial_rows$component == comp_label
+  }
+  trial_rows[mask, , drop = FALSE]
+}
+
+.likelihood_build_trial_plan <- function(structure, params_df, prep) {
+  if (is.null(params_df) || nrow(params_df) == 0L) {
+    return(list(order = character(0), trials = list()))
+  }
+  if (!"trial" %in% names(params_df)) params_df$trial <- 1L
+  params_df$trial <- params_df$trial
+  if ("component" %in% names(params_df)) {
+    params_df$component <- as.character(params_df$component)
+  }
+  trial_rows_map <- .likelihood_params_by_trial(params_df)
+  native_ctx <- .prep_native_context(prep)
+  builder <- .lik_native_fn("native_build_trial_overrides_cpp")
+  component_ids <- structure$components$component_id
+  comp_labels <- component_ids
+  if (length(comp_labels) == 0L) comp_labels <- "__default__"
+  comp_labels <- unique(c(comp_labels, "__default__"))
+
+  trials <- list()
+  trial_order <- character(0)
+  for (trial_key in names(trial_rows_map)) {
+    trial_df <- as.data.frame(trial_rows_map[[trial_key]])
+    trial_id <- trial_df$trial[[1]] %||% NA
+    override_ptr <- if (nrow(trial_df) > 0L) builder(native_ctx, trial_df) else NULL
+    comp_entries <- list()
+    for (comp_id in comp_labels) {
+      rows_df <- .likelihood_component_rows(trial_df, comp_id)
+      key <- if (!is.null(rows_df) && nrow(rows_df) > 0L) {
+        .likelihood_override_key(comp_id, rows_df)
+      } else {
+        .likelihood_base_override_key(comp_id)
+      }
+      comp_entries[[comp_id]] <- list(rows = rows_df, key = key)
+    }
+    trials[[trial_key]] <- list(
+      trial_id = trial_id,
+      rows = trial_df,
+      components = comp_entries,
+      override_ptr = override_ptr
+    )
+    trial_order <- c(trial_order, trial_key)
+  }
+  order_idx <- order(suppressWarnings(as.numeric(trial_order)))
+  trial_order <- trial_order[order_idx]
+  trials <- trials[trial_order]
+  list(order = trial_order, trials = trials)
+}
+
+.likelihood_params_by_trial <- function(params_df) {
+  if (is.null(params_df) || nrow(params_df) == 0L) return(list())
+  trials <- params_df$trial %||% seq_len(nrow(params_df))
+  if (is.factor(trials)) trials <- as.character(trials)
+  split(params_df, as.character(trials))
+}
+
+.likelihood_params_by_trial_component <- function(trial_map) {
+  if (length(trial_map) == 0) return(list())
+  lapply(trial_map, function(df) {
+    if (nrow(df) == 0L) return(list())
+    comp_vals <- if ("component" %in% names(df)) df$component else rep("__default__", nrow(df))
+    if (is.factor(comp_vals)) comp_vals <- as.character(comp_vals)
+    comp_vals[is.na(comp_vals)] <- "__default__"
+    split(df, comp_vals)
+  })
+}
+
 .likelihood_component_weights <- function(structure, trial_id, available_components,
                                           base_weights, component_weights) {
   weights <- base_weights[match(available_components, structure$components$component_id)]
@@ -105,6 +181,69 @@
   base
 }
 
+.component_plan_fallback <- function(structure, component_ids, trial_rows,
+                                     forced_component = NULL, component_weights = NULL) {
+  comps <- component_ids
+  if (!is.null(forced_component) && !is.na(forced_component)) {
+    comps <- intersect(component_ids, as.character(forced_component))
+  } else if (!is.null(trial_rows) && "component" %in% names(trial_rows)) {
+    listed <- unique(trial_rows$component)
+    listed <- listed[!is.na(listed)]
+    if (length(listed) > 0L) {
+      comps <- intersect(component_ids, listed)
+    }
+  }
+  if (length(comps) == 0L) comps <- component_ids
+  trial_id <- if (!is.null(trial_rows) && "trial" %in% names(trial_rows) && nrow(trial_rows) > 0L) {
+    trial_rows$trial[[1]]
+  } else NA_integer_
+  weights <- .likelihood_component_weights(
+    structure,
+    trial_id,
+    comps,
+    structure$components$weight,
+    component_weights
+  )
+  list(components = comps, weights = weights)
+}
+
+.native_component_plan <- function(structure, trial_rows,
+                                   forced_component = NULL,
+                                   component_weights = NULL,
+                                   component_ids = NULL) {
+  native_fn <- .lik_native_fn("native_component_plan_exported")
+  forced_chr <- forced_component
+  if (length(forced_chr) == 0L || is.null(forced_chr) || is.na(forced_chr)) {
+    forced_chr <- NULL
+  } else {
+    forced_chr <- as.character(forced_chr)[[1]]
+  }
+  trial_df <- if (is.null(trial_rows)) {
+    data.frame()
+  } else {
+    trial_rows
+  }
+  component_weights_df <- component_weights %||% NULL
+  plan <- tryCatch(
+    native_fn(
+      structure,
+      trial_df,
+      forced_chr,
+      component_weights_df
+    ),
+    error = function(e) NULL
+  )
+  if (is.null(plan)) {
+    return(.component_plan_fallback(structure, component_ids, trial_rows, forced_component, component_weights))
+  }
+  comps <- as.character(plan$components %||% character(0))
+  weights <- as.numeric(plan$weights %||% numeric(0))
+  if (length(comps) == 0L || length(weights) != length(comps)) {
+    return(.component_plan_fallback(structure, component_ids, trial_rows, forced_component, component_weights))
+  }
+  list(components = comps, weights = weights)
+}
+
 .likelihood_component_label <- function(component) {
   if (is.null(component) || length(component) == 0L) {
     "__default__"
@@ -163,19 +302,22 @@
   paste(.likelihood_component_label(component), raw_hex, sep = "|")
 }
 
-.likelihood_component_override_bundle <- function(structure, trial_rows, component) {
+.likelihood_component_override_bundle <- function(structure, trial_rows, component, component_rows = NULL) {
   base_key <- .likelihood_base_override_key(component)
   if (is.null(trial_rows) || nrow(trial_rows) == 0L) {
     return(list(acc = list(), shared = list(), key = base_key))
   }
 
-  effective_rows <- trial_rows
-  if ("component" %in% names(effective_rows)) {
-    effective_rows <- effective_rows[
-      is.na(effective_rows$component) | effective_rows$component == component,
-      ,
-      drop = FALSE
-    ]
+  effective_rows <- component_rows
+  if (is.null(effective_rows)) {
+    effective_rows <- trial_rows
+    if ("component" %in% names(effective_rows)) {
+      effective_rows <- effective_rows[
+        is.na(effective_rows$component) | effective_rows$component == component,
+        ,
+        drop = FALSE
+      ]
+    }
   }
   if (nrow(effective_rows) == 0L) {
     return(list(acc = list(), shared = list(), key = base_key))
@@ -231,58 +373,152 @@
   paste(bundle_key, outcome_chr, rt_key, sep = "|")
 }
 
+.native_trial_mixture_eval <- function(prep, outcome_label, rt_val, component_plan,
+                                       forced_component = NULL,
+                                       trial_override_ptr = NULL) {
+  if (is.null(prep) || is.null(outcome_label) || length(outcome_label) == 0L) return(NULL)
+  outcome_chr <- as.character(outcome_label)[[1]]
+  if (is.na(outcome_chr) || is.na(rt_val) || !is.finite(rt_val) || rt_val < 0) return(NULL)
+  components <- component_plan$components %||% character(0)
+  if (length(components) == 0L) return(NULL)
+  outcome_defs <- prep[["outcomes"]] %||% list()
+  outcome_def <- outcome_defs[[outcome_chr]]
+  if (is.null(outcome_def)) return(NULL)
+  expr <- outcome_def[["expr"]]
+  if (is.null(expr)) return(NULL)
+  compiled <- .expr_lookup_compiled(expr, prep)
+  if (is.null(compiled)) return(NULL)
+  competitor_map <- .prep_competitors(prep) %||% list()
+  competitor_exprs <- competitor_map[[outcome_chr]] %||% list()
+  if (length(competitor_exprs) > 0L) {
+    comp_nodes <- lapply(competitor_exprs, function(ex) .expr_lookup_compiled(ex, prep))
+    if (any(vapply(comp_nodes, is.null, logical(1)))) return(NULL)
+    comp_ids <- vapply(comp_nodes, function(node) as.integer(node$id %||% NA_integer_), integer(1))
+    if (any(is.na(comp_ids))) return(NULL)
+  } else {
+    comp_ids <- integer(0)
+  }
+  native_ctx <- .prep_native_context(prep)
+  if (!inherits(native_ctx, "externalptr")) return(NULL)
+  native_fn <- .lik_native_fn("native_trial_mixture_cpp")
+  forced_chr <- NULL
+  if (!is.null(forced_component) && !is.na(forced_component)) {
+    forced_chr <- as.character(forced_component)[[1]]
+  }
+  res <- tryCatch(
+    native_fn(
+      native_ctx,
+      as.integer(compiled$id),
+      as.numeric(rt_val),
+      as.character(components),
+      as.numeric(component_plan$weights %||% numeric(0)),
+      forced_chr,
+      as.integer(comp_ids),
+      trial_override_ptr %||% NULL
+    ),
+    error = function(e) NA_real_
+  )
+  if (!is.finite(res) || res < 0) return(NULL)
+  res
+}
+
 .likelihood_mixture_likelihood <- function(structure, prep_eval_base, trial_rows,
                                            component_ids, component_weights,
                                            outcome_label, rt_val,
                                            forced_component = NULL,
-                                           prep_cache = NULL) {
+                                           prep_cache = NULL,
+                                           component_rows_map = NULL,
+                                           component_plan_entries = NULL,
+                                           trial_override_ptr = NULL,
+                                           use_native_rows = isTRUE(getOption("uuber.use.native.param.rows", TRUE))) {
   results <- numeric(0)
-  comps <- component_ids
-  if (!is.null(forced_component) && !is.na(forced_component)) {
-    comps <- intersect(component_ids, as.character(forced_component))
-  } else if ("component" %in% names(trial_rows)) {
-    listed <- unique(trial_rows$component)
-    listed <- listed[!is.na(listed)]
-    if (length(listed) > 0L) {
-      comps <- intersect(component_ids, listed)
+  plan <- .native_component_plan(
+    structure = structure,
+    trial_rows = trial_rows,
+    forced_component = forced_component,
+    component_weights = component_weights,
+    component_ids = component_ids
+  )
+  comps <- plan$components
+  weights <- plan$weights
+  component_plan_entries <- component_plan_entries %||% list()
+  if (use_native_rows) {
+    native_mix <- .native_trial_mixture_eval(
+      prep = prep_eval_base,
+      outcome_label = outcome_label,
+      rt_val = rt_val,
+      component_plan = plan,
+      forced_component = forced_component,
+      trial_override_ptr = trial_override_ptr
+    )
+    if (!is.null(native_mix)) {
+      return(as.numeric(native_mix))
     }
   }
-  if (length(comps) == 0L) comps <- component_ids
-  weights <- .likelihood_component_weights(
-    structure,
-    if ("trial" %in% names(trial_rows) && nrow(trial_rows) > 0L) trial_rows$trial[[1]] else NA_integer_,
-    comps,
-    structure$components$weight,
-    component_weights
-  )
   total <- 0.0
   for (idx in seq_along(comps)) {
     comp_id <- comps[[idx]]
-    override_bundle <- .likelihood_component_override_bundle(structure, trial_rows, comp_id)
-    trial_prep <- .likelihood_fetch_component_prep(
-      structure,
-      prep_eval_base,
-      trial_rows,
-      comp_id,
-      cache_env = prep_cache,
-      override_bundle = override_bundle
-    )
-    cache_key <- .likelihood_outcome_cache_key(override_bundle$key, outcome_label, rt_val)
-    res <- .likelihood_outcome_cached(trial_prep, cache_key, function() {
-      .outcome_likelihood(outcome_label, rt_val, trial_prep, comp_id)
-    })
-    trial_prep <- res$prep
-    if (identical(override_bundle$key, .likelihood_base_override_key(comp_id))) {
-      prep_eval_base <- trial_prep
+    comp_rows <- NULL
+    if (!is.null(component_rows_map) && length(component_rows_map) > 0L) {
+      comp_rows <- component_rows_map[[comp_id]] %||% component_rows_map[["__default__"]] %||% NULL
     }
-    lik_val <- res$value
+    comp_rows_df <- if (!is.null(comp_rows)) as.data.frame(comp_rows) else NULL
+    plan_entry <- component_plan_entries[[comp_id]] %||% component_plan_entries[["__default__"]] %||% NULL
+    if (!is.null(plan_entry)) {
+      comp_rows_df <- plan_entry$rows
+      if (is.null(comp_rows)) {
+        comp_rows <- plan_entry$rows
+      }
+    }
+    use_trial_rows <- use_native_rows &&
+      !is.null(comp_rows_df) &&
+      nrow(comp_rows_df) > 0L
+
+    if (use_trial_rows) {
+      override_key <- if (!is.null(plan_entry)) plan_entry$key else .likelihood_override_key(comp_id, comp_rows_df)
+      cache_key <- .likelihood_outcome_cache_key(override_key, outcome_label, rt_val)
+      res <- .likelihood_outcome_cached(prep_eval_base, cache_key, function() {
+        .outcome_likelihood(
+          outcome_label,
+          rt_val,
+          prep_eval_base,
+          comp_id,
+          trial_rows = comp_rows_df,
+          trial_overrides = trial_override_ptr
+        )
+      })
+      prep_eval_base <- res$prep
+      lik_val <- res$value
+    } else {
+      override_bundle <- .likelihood_component_override_bundle(structure, trial_rows, comp_id, component_rows = comp_rows)
+      trial_prep <- .likelihood_fetch_component_prep(
+        structure,
+        prep_eval_base,
+        trial_rows,
+        comp_id,
+        cache_env = prep_cache,
+        override_bundle = override_bundle
+      )
+      cache_key <- .likelihood_outcome_cache_key(override_bundle$key, outcome_label, rt_val)
+      res <- .likelihood_outcome_cached(trial_prep, cache_key, function() {
+        .outcome_likelihood(outcome_label, rt_val, trial_prep, comp_id)
+      })
+      trial_prep <- res$prep
+      if (identical(override_bundle$key, .likelihood_base_override_key(comp_id))) {
+        prep_eval_base <- trial_prep
+      }
+      lik_val <- res$value
+    }
     total <- total + weights[[idx]] * as.numeric(lik_val)
   }
   total
 }
 
 log_likelihood_from_params <- function(structure, params_df, data_df,
-                                       component_weights = NULL) {
+                                       component_weights = NULL,
+                                       prep = NULL,
+                                       trial_plan = NULL,
+                                       native_bundle = NULL) {
   if (is.null(params_df) || nrow(params_df) == 0L) {
     stop("Parameter data frame must contain at least one row")
   }
@@ -296,7 +532,10 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
   if (is.null(structure$model_spec)) {
     stop("generator structure must include model_spec; rebuild with build_generator_structure")
   }
-  prep_eval_base <- .prepare_model_for_likelihood(structure$model_spec)
+  if (!is.null(native_bundle)) {
+    prep <- native_bundle$prep %||% prep
+  }
+  prep_eval_base <- prep %||% .prepare_model_for_likelihood(structure$model_spec)
   if (is.null(prep_eval_base[[".runtime"]])) {
     prep_eval_base <- .prep_set_cache_bundle(
       prep_eval_base,
@@ -307,11 +546,6 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
 
   prep_cache <- new.env(parent = emptyenv(), hash = TRUE)
 
-  if (!"trial" %in% names(params_df)) params_df$trial <- 1L
-  params_df$trial <- params_df$trial
-  if ("component" %in% names(params_df)) {
-    params_df$component <- as.character(params_df$component)
-  }
   if (!"trial" %in% names(data_df)) {
     stop("Data frame must include a 'trial' column")
   }
@@ -320,12 +554,25 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
     data_df$component <- as.character(data_df$component)
   }
 
-  trial_ids <- sort(unique(params_df$trial))
+  plan <- trial_plan %||% .likelihood_build_trial_plan(structure, params_df, prep_eval_base)
+  trial_ids <- unique(data_df$trial)
   per_trial_loglik <- numeric(length(trial_ids))
+  use_native_rows <- isTRUE(getOption("uuber.use.native.param.rows", TRUE))
 
   for (i in seq_along(trial_ids)) {
     tid <- trial_ids[[i]]
-    trial_rows <- params_df[params_df$trial == tid, , drop = FALSE]
+    trial_key <- as.character(tid %||% NA)
+    entry <- plan$trials[[trial_key]]
+    if (is.null(entry)) {
+      fallback_rows <- params_df[params_df$trial == tid, , drop = FALSE]
+      entry <- list(
+        trial_id = tid,
+        rows = fallback_rows,
+        components = list(),
+        override_ptr = NULL
+      )
+    }
+    trial_rows <- entry$rows
     data_row <- data_df[data_df$trial == tid, , drop = FALSE]
     if (nrow(data_row) != 1L) {
       stop(sprintf("Expected exactly one data row for trial %s", tid))
@@ -333,16 +580,23 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
     outcome <- data_row$outcome[[1]] %||% NA_character_
     rt_val <- data_row$rt[[1]] %||% NA_real_
     forced_component <- if ("component" %in% names(data_row)) data_row$component[[1]] else NULL
+    component_entries <- entry$components %||% list()
+    overrides_ptr <- entry$override_ptr
+
     mixture <- .likelihood_mixture_likelihood(
-      structure,
-      prep_eval_base,
-      trial_rows,
-      comp_ids,
-      component_weights,
-      outcome,
-      rt_val,
+      structure = structure,
+      prep_eval_base = prep_eval_base,
+      trial_rows = trial_rows,
+      component_ids = comp_ids,
+      component_weights = component_weights,
+      outcome_label = outcome,
+      rt_val = rt_val,
       forced_component = forced_component,
-      prep_cache = prep_cache
+      prep_cache = prep_cache,
+      component_rows_map = NULL,
+      component_plan_entries = component_entries,
+      trial_override_ptr = overrides_ptr,
+      use_native_rows = use_native_rows
     )
     if (!is.finite(mixture) || mixture <= 0) {
       per_trial_loglik[[i]] <- -Inf

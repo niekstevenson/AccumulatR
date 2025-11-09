@@ -3,21 +3,26 @@
 
 # Integrand for scenario-conditioned probability (density already encodes competitors)
 .integrand_outcome_density <- function(t, expr, prep, component, competitor_exprs,
-                                       state = NULL) {
+                                       state = NULL, trial_rows = NULL,
+                                       trial_overrides = NULL) {
   state <- state %||% .eval_state_create()
-  vapply(t, function(tt) {
-    if (!is.finite(tt) || tt < 0) return(0.0)
-    .scenario_density_with_competitors(expr, tt, prep, component,
-                                       competitor_exprs = competitor_exprs,
-                                       state = state)
-  }, numeric(1))
+  times <- as.numeric(t)
+  if (!length(times)) return(numeric(0))
+  res <- .scenario_density_with_competitors(expr, times, prep, component,
+                                            competitor_exprs = competitor_exprs,
+                                            state = state,
+                                            trial_rows = trial_rows,
+                                            trial_overrides = trial_overrides)
+  as.numeric(res)
 }
 
 # Scenario-conditioned probability of an expression over [0, upper_limit].
 # competitor_exprs retained for backward compatibility but ignored.
 .integrate_outcome_probability <- function(expr, prep, component, upper_limit = Inf,
                                            competitor_exprs = NULL,
-                                           state = NULL) {
+                                           state = NULL,
+                                           trial_rows = NULL,
+                                           trial_overrides = NULL) {
   if (!is.finite(upper_limit)) upper_limit <- Inf
   state <- state %||% .eval_state_create()
   guard_cache_key <- NULL
@@ -37,24 +42,93 @@
       return(cached_guard)
     }
   }
-  integrand <- function(t) {
-    .integrand_outcome_density(
-      t,
-      expr = expr,
-      prep = prep,
-      component = component,
-      competitor_exprs = competitor_exprs,
-      state = state
+  native_ctx <- NULL
+  compiled <- .expr_lookup_compiled(expr, prep)
+  competitor_exprs <- competitor_exprs %||% list()
+  comp_ids <- integer(0)
+  if (length(competitor_exprs) > 0L) {
+    comp_nodes <- lapply(competitor_exprs, .expr_lookup_compiled, prep = prep)
+    if (!any(vapply(comp_nodes, is.null, logical(1)))) {
+      comp_ids <- vapply(comp_nodes, function(node) as.integer(node$id %||% NA_integer_), integer(1))
+      if (any(is.na(comp_ids))) comp_ids <- NULL
+    } else {
+      comp_ids <- NULL
+    }
+  }
+  trial_rows_df <- NULL
+  if (!is.null(trial_rows) && inherits(trial_rows, "data.frame") && nrow(trial_rows) > 0L) {
+    trial_rows_df <- as.data.frame(trial_rows)
+  }
+  use_native <- is.finite(upper_limit) && !is.null(compiled) && !is.null(comp_ids)
+  if (use_native) {
+    native_ctx <- .prep_native_context(prep)
+    if (!is.null(trial_overrides) && inherits(trial_overrides, "externalptr")) {
+      native_fn <- .lik_native_fn("native_outcome_probability_overrides_cpp")
+      val <- native_fn(
+        native_ctx,
+        as.integer(compiled$id),
+        as.numeric(upper_limit),
+        component,
+        integer(0),
+        integer(0),
+        as.integer(comp_ids),
+        .integrate_rel_tol(),
+        .integrate_abs_tol(),
+        12L,
+        trial_overrides
+      )
+    } else if (!is.null(trial_rows_df)) {
+      native_fn <- .lik_native_fn("native_outcome_probability_params_cpp")
+      val <- native_fn(
+        native_ctx,
+        as.integer(compiled$id),
+        as.numeric(upper_limit),
+        component,
+        integer(0),
+        integer(0),
+        as.integer(comp_ids),
+        .integrate_rel_tol(),
+        .integrate_abs_tol(),
+        12L,
+        trial_rows_df
+      )
+    } else {
+      native_fn <- .lik_native_fn("native_outcome_probability_cpp")
+      val <- native_fn(
+        native_ctx,
+        as.integer(compiled$id),
+        as.numeric(upper_limit),
+        component,
+        integer(0),
+        integer(0),
+        as.integer(comp_ids),
+        .integrate_rel_tol(),
+        .integrate_abs_tol(),
+        12L
+      )
+    }
+  } else {
+    integrand <- function(t) {
+      .integrand_outcome_density(
+        t,
+        expr = expr,
+        prep = prep,
+        component = component,
+        competitor_exprs = competitor_exprs,
+        state = state,
+        trial_rows = trial_rows_df,
+        trial_overrides = trial_overrides
+      )
+    }
+    val <- .native_integrate(
+      integrand,
+      lower = 0,
+      upper = upper_limit,
+      rel.tol = .integrate_rel_tol(),
+      abs.tol = .integrate_abs_tol(),
+      max.depth = 12L
     )
   }
-  val <- .native_integrate(
-    integrand,
-    lower = 0,
-    upper = upper_limit,
-    rel.tol = .integrate_rel_tol(),
-    abs.tol = .integrate_abs_tol(),
-    max.depth = 12L
-  )
   if (!is.finite(val)) val <- 0.0
   if (val < 0) val <- 0.0
   if (val > 1) val <- 1.0
@@ -406,10 +480,16 @@
 }
 
 # Compute likelihood for a single trial/outcome
-.outcome_likelihood <- function(outcome_label, rt, prep, component) {
+.outcome_likelihood <- function(outcome_label, rt, prep, component,
+                                trial_rows = NULL,
+                                trial_overrides = NULL) {
   outcome_defs <- prep[["outcomes"]]
   competitor_map <- .prep_competitors(prep) %||% list()
   state <- .eval_state_create()
+  trial_rows_df <- NULL
+  if (!is.null(trial_rows) && inherits(trial_rows, "data.frame") && nrow(trial_rows) > 0L) {
+    trial_rows_df <- as.data.frame(trial_rows)
+  }
   
   # FIRST: Check for GUESS outcomes (can be both defined and from guess policy)
   # GUESS outcomes arise from component-level guess policies
@@ -440,7 +520,9 @@
             comp_exprs_guess <- competitor_map[[label]] %||% list()
             prob_outcome <- .integrate_outcome_probability(expr, prep, component, deadline,
                                                            competitor_exprs = comp_exprs_guess,
-                                                           state = state)
+                                                           state = state,
+                                                           trial_rows = trial_rows_df,
+                                                           trial_overrides = trial_overrides)
             keep_prob <- as.numeric(guess_weights[[label]])
             guess_prob <- 1.0 - keep_prob
             total_prob <- total_prob + prob_outcome * guess_prob
@@ -454,7 +536,9 @@
             comp_exprs_guess <- competitor_map[[label]] %||% list()
             dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
                                                          competitor_exprs = comp_exprs_guess,
-                                                         state = state)
+                                                         state = state,
+                                                         trial_rows = trial_rows_df,
+                                                         trial_overrides = trial_overrides)
             if (dens_r == 0) next
             keep_prob <- as.numeric(guess_weights[[label]])
             guess_prob <- 1.0 - keep_prob
@@ -499,7 +583,9 @@
               comp_exprs_map <- if (length(comp_labels_map) > 0) lapply(comp_labels_map, function(lbl) outcome_defs[[lbl]][['expr']]) else list()
               return(.integrate_outcome_probability(expr, prep, component, deadline,
                                                     competitor_exprs = comp_exprs_map,
-                                                    state = state))
+                                                    state = state,
+                                                    trial_rows = trial_rows_df,
+                                                    trial_overrides = trial_overrides))
             } else {
               # Race density at rt for the mapped source outcome
               comp_labels_map <- setdiff(names(outcome_defs), label)
@@ -516,7 +602,9 @@
               comp_exprs_map <- if (length(comp_labels_map) > 0) lapply(comp_labels_map, function(lbl) outcome_defs[[lbl]][['expr']]) else list()
               dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
                                                            competitor_exprs = comp_exprs_map,
-                                                           state = state)
+                                                           state = state,
+                                                           trial_rows = trial_rows_df,
+                                                           trial_overrides = trial_overrides)
               return(as.numeric(dens_r))
             }
           }
@@ -707,14 +795,18 @@
         if (!is.finite(tt) || tt < 0) return(0.0)
         base <- .scenario_density_with_competitors(expr, tt, prep, component,
                                                    competitor_exprs = competitor_exprs,
-                                                   state = state)
+                                                   state = state,
+                                                   trial_rows = trial_rows_df,
+                                                   trial_overrides = trial_overrides)
         if (base == 0) return(0.0)
         add <- 0.0
         if (length(donors) > 0) {
           for (d in donors) {
             dens_d <- .scenario_density_with_competitors(d[['expr']], tt, prep, component,
                                                          competitor_exprs = d[['competitors']] %||% list(),
-                                                         state = state)
+                                                         state = state,
+                                                         trial_rows = trial_rows_df,
+                                                         trial_overrides = trial_overrides)
             if (dens_d == 0) next
             add <- add + d[['weight']] * dens_d
           }
@@ -753,7 +845,9 @@
   } else {
       dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
                                                    competitor_exprs = competitor_exprs,
-                                                   state = state)
+                                                   state = state,
+                                                   trial_rows = trial_rows_df,
+                                                   trial_overrides = trial_overrides)
     if (dens_r == 0) return(0.0)
     base_val <- dens_r
     # Include donor mass (e.g., timeout guesses) that keeps the observed RT
@@ -763,7 +857,9 @@
         if (identical(d[['rt_policy']], "na")) next
         dens_d <- .scenario_density_with_competitors(d[['expr']], rt, prep, component,
                                                      competitor_exprs = d[['competitors']] %||% list(),
-                                                     state = state)
+                                                     state = state,
+                                                     trial_rows = trial_rows_df,
+                                                     trial_overrides = trial_overrides)
         if (dens_d == 0) next
         donor_add <- donor_add + d[['weight']] * dens_d
       }

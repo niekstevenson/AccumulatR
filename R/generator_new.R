@@ -316,12 +316,24 @@ build_generator_structure <- function(model) {
   param_cols <- .collect_param_names(params_rows, base_cols)
   acc_overrides <- list()
   shared_overrides <- list()
+  require_full_params <- isTRUE(getOption("uuber.require.param.table", TRUE))
+
+  extract_scalar <- function(row, name) {
+    if (!name %in% names(row)) return(NULL)
+    val <- row[[name]]
+    if (is.null(val) || length(val) == 0L) return(NULL)
+    val <- val[[1]]
+    if (is.na(val)) return(NULL)
+    val
+  }
+
   for (i in seq_len(nrow(params_rows))) {
     row <- params_rows[i, , drop = FALSE]
+    trial_label <- if ("trial" %in% names(row) && length(row$trial) > 0L) row$trial[[1]] else NA
     acc_value <- if ("accumulator_id" %in% names(row)) {
-      row[[ "accumulator_id" ]]
+      row[["accumulator_id"]]
     } else if ("accumulator" %in% names(row)) {
-      row[[ "accumulator" ]]
+      row[["accumulator"]]
     } else {
       stop("Parameter rows must include 'accumulator' or 'accumulator_id'")
     }
@@ -331,27 +343,31 @@ build_generator_structure <- function(model) {
     if (is.null(base_def)) {
       stop(sprintf("No accumulator definition found for '%s'", acc_id))
     }
-    existing_override <- acc_overrides[[acc_id]] %||% base_def
-    override <- existing_override
 
-    if ("onset" %in% names(row) && length(row$onset) >= 1L && !is.na(row$onset[[1]])) {
-      new_onset <- as.numeric(row$onset[[1]])
-      current_onset <- existing_override$onset %||% base_def$onset %||% NA_real_
-      if (!isTRUE(all.equal(current_onset, new_onset))) {
-        override$onset <- new_onset
+    dist_val <- extract_scalar(row, "dist")
+    if (is.null(dist_val)) {
+      dist_val <- base_def$dist %||% NA_character_
+      if (require_full_params && !nzchar(dist_val)) {
+        stop(sprintf("Trial %s accumulator '%s' missing 'dist'", trial_label %||% "NA", acc_id))
       }
     }
 
-    q_changed <- FALSE
-    if ("q" %in% names(row) && length(row$q) >= 1L && !is.na(row$q[[1]])) {
-      new_q <- as.numeric(row$q[[1]])
-      base_q <- base_def$q %||% base_def$shared_trigger_q %||% NA_real_
-      current_q <- override$q %||% override$shared_trigger_q %||% base_q
-      if (!isTRUE(all.equal(current_q, new_q))) {
-        override$q <- new_q
-        override$shared_trigger_q <- new_q
-        q_changed <- TRUE
-      }
+    onset_val <- extract_scalar(row, "onset")
+    if (is.null(onset_val)) onset_val <- base_def$onset %||% 0
+
+    q_val <- extract_scalar(row, "q")
+    if (is.null(q_val)) q_val <- base_def$q %||% base_def$shared_trigger_q %||% 0
+
+    shared_id <- extract_scalar(row, "shared_trigger_id")
+    if (is.null(shared_id)) {
+      shared_id <- base_def$shared_trigger_id %||% NA_character_
+    } else {
+      shared_id <- as.character(shared_id)
+    }
+
+    components_val <- row$components %||% base_def$components
+    if (!is.null(components_val) && !is.character(components_val)) {
+      components_val <- as.character(components_val)
     }
 
     param_list <- NULL
@@ -365,43 +381,30 @@ build_generator_structure <- function(model) {
     if (length(param_cols) > 0L) {
       param_list <- .coerce_param_list(i, params_rows, param_cols, existing = param_list)
     }
-    if (!is.null(param_list)) {
-      base_params <- base_def$params %||% list()
-      if (!identical(param_list, base_params)) {
-        override$params <- param_list
+    if (is.null(param_list)) {
+      param_list <- base_def$params %||% list()
+      if (require_full_params && length(param_list) == 0L) {
+        stop(sprintf("Trial %s accumulator '%s' missing parameter values",
+                     trial_label %||% "NA", acc_id))
       }
     }
 
-    final_q <- override$q %||% override$shared_trigger_q %||% base_def$q %||% base_def$shared_trigger_q %||% NA_real_
-    base_q_val <- base_def$q %||% base_def$shared_trigger_q %||% NA_real_
-    if (q_changed && isTRUE(all.equal(base_q_val, final_q))) {
-      q_changed <- FALSE
+    override <- list(
+      dist = dist_val,
+      params = param_list,
+      onset = as.numeric(onset_val),
+      q = as.numeric(q_val),
+      shared_trigger_id = shared_id,
+      components = components_val
+    )
+
+    base_shared <- prep$accumulators[[acc_id]]$shared_trigger_id %||% NA_character_
+    trig_id <- override$shared_trigger_id %||% base_shared %||% NA_character_
+    if (!is.null(trig_id) && !is.na(trig_id) && trig_id != "") {
+      shared_overrides[[trig_id]] <- list(prob = as.numeric(override$q))
     }
 
-    if (identical(override, base_def)) {
-      acc_overrides[[acc_id]] <- NULL
-    } else {
-      acc_overrides[[acc_id]] <- override
-    }
-
-    trig_id <- override$shared_trigger_id %||% prep$accumulators[[acc_id]]$shared_trigger_id %||% NA_character_
-    if (!is.null(trig_id) && !is.na(trig_id) && trig_id != "" && q_changed) {
-      prob_override <- override$q %||% override$shared_trigger_q
-      if (!is.null(prob_override)) {
-        prob_override <- as.numeric(prob_override)
-        shared_entry <- shared_overrides[[trig_id]] %||% list(prob = NULL)
-        if (!is.null(shared_entry$prob) && !isTRUE(all.equal(shared_entry$prob, prob_override))) {
-          stop(sprintf(
-            "Shared trigger '%s' received conflicting q overrides (%s vs %s)",
-            trig_id,
-            format(shared_entry$prob),
-            format(prob_override)
-          ))
-        }
-        shared_entry$prob <- prob_override
-        shared_overrides[[trig_id]] <- shared_entry
-      }
-    }
+    acc_overrides[[acc_id]] <- override
   }
   list(acc = acc_overrides, shared = shared_overrides)
 }

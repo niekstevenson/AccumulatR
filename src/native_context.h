@@ -5,6 +5,8 @@
 #include <vector>
 #include <unordered_map>
 
+#include "native_accumulator.hpp"
+
 namespace uuber {
 
 struct NativeAccumulator {
@@ -12,9 +14,9 @@ struct NativeAccumulator {
   std::string dist;
   double onset{};
   double q{};
-  Rcpp::List params;
   std::vector<std::string> components;
   std::string shared_trigger_id;
+  AccDistParams dist_cfg;
 };
 
 struct NativePool {
@@ -45,6 +47,9 @@ struct NativeContext {
   std::unordered_map<std::string, int> pool_index;
   std::unordered_map<int, int> node_index;
   std::unordered_map<std::string, int> label_to_id;
+  mutable std::unordered_map<std::string, Rcpp::List> pool_template_cache;
+  mutable std::unordered_map<std::string, double> guard_survival_cache;
+  std::unordered_map<std::string, std::vector<int>> shared_trigger_map;
 };
 
 Rcpp::XPtr<NativeContext> build_native_context(Rcpp::List prep);

@@ -159,6 +159,26 @@
   prod_val
 }
 
+.native_competitor_survival <- function(exprs, prep, component, t) {
+  if (length(exprs) == 0) return(1.0)
+  node_ids <- integer(length(exprs))
+  for (i in seq_along(exprs)) {
+    node <- .expr_lookup_compiled(exprs[[i]], prep)
+    if (is.null(node) || is.null(node$id)) return(NULL)
+    node_ids[[i]] <- as.integer(node$id)
+  }
+  if (any(is.na(node_ids))) return(NULL)
+  native_ctx <- .prep_native_context(prep)
+  native_fn <- .lik_native_fn("native_competitor_survival_cpp")
+  val <- native_fn(
+    native_ctx,
+    as.integer(node_ids),
+    as.numeric(t),
+    component
+  )
+  as.numeric(val)
+}
+
 .build_compiled_node <- function(expr, child_info, prep, nodes_env) {
   kind <- expr[["kind"]]
   node <- list(
@@ -1382,6 +1402,40 @@ guard_scope_ids <- function(expr, prep) {
     .state_entry_set(entry, "scenarios", res)
     res
   }
+  node_id <- node$id %||% NA_integer_
+  native_ctx <- NULL
+  if (!is.na(node_id)) {
+    native_ctx <- .prep_native_context(prep)
+  }
+  if (!is.null(native_ctx)) {
+    native_fn <- .lik_native_fn("native_node_scenarios_cpp")
+    native_res <- tryCatch(
+      native_fn(
+        native_ctx,
+        as.integer(node_id),
+        as.numeric(t),
+        component,
+        forced_complete,
+        forced_survive
+      ),
+      error = function(e) NULL
+    )
+    if (!is.null(native_res)) {
+      out <- list()
+      if (length(native_res) > 0L) {
+        for (sc in native_res) {
+          rec <- .make_scenario_record(
+            prep,
+            sc$weight,
+            sc$forced_complete,
+            sc$forced_survive
+          )
+          if (!is.null(rec)) out[[length(out) + 1L]] <- rec
+        }
+      }
+      return(store(out))
+    }
+  }
   if (identical(kind, "event")) {
     weight <- .event_density_at(
       prep, expr[["source"]], component, t,
@@ -2327,23 +2381,58 @@ guard_scope_ids <- function(expr, prep) {
     cached <- entry$scenarios
     if (!is.null(cached)) return(cached)
   }
-  res <- if (!is.null(compiled)) {
-    .node_scenarios_at(
+  store <- function(res) {
+    if (!is.null(entry)) entry$scenarios <- res
+    res
+  }
+  if (!is.null(compiled)) {
+    native_ctx <- .prep_native_context(prep)
+    if (!is.null(native_ctx)) {
+      native_fn <- .lik_native_fn("native_node_scenarios_cpp")
+      native_res <- tryCatch(
+        native_fn(
+          native_ctx,
+          as.integer(compiled$id),
+          as.numeric(t),
+          component,
+          forced_complete,
+          forced_survive
+        ),
+        error = function(e) NULL
+      )
+      if (!is.null(native_res)) {
+        out <- list()
+        if (length(native_res) > 0L) {
+          for (sc in native_res) {
+            rec <- .make_scenario_record(
+              prep,
+              sc$weight,
+              sc$forced_complete,
+              sc$forced_survive
+            )
+            if (!is.null(rec)) out[[length(out) + 1L]] <- rec
+          }
+        }
+        return(store(out))
+      }
+    }
+  }
+  if (!is.null(compiled)) {
+    res <- .node_scenarios_at(
       compiled, t, prep, component,
       forced_complete = forced_complete,
       forced_survive = forced_survive,
       state = state
     )
-  } else {
-    .expr_scenarios_at_slow(
-      expr, t, prep, component,
-      forced_complete = forced_complete,
-      forced_survive = forced_survive,
-      state = state
-    )
+    return(store(res))
   }
-  if (!is.null(entry)) entry$scenarios <- res
-  res
+  res <- .expr_scenarios_at_slow(
+    expr, t, prep, component,
+    forced_complete = forced_complete,
+    forced_survive = forced_survive,
+    state = state
+  )
+  store(res)
 }
 
 .expr_scenarios_at_slow <- function(expr, t, prep, component,
@@ -2741,101 +2830,171 @@ guard_scope_ids <- function(expr, prep) {
 
 .scenario_density_with_competitors <- function(expr, t, prep, component,
                                                competitor_exprs = list(),
-                                               state = NULL) {
+                                               state = NULL,
+                                               trial_rows = NULL,
+                                               trial_overrides = NULL) {
+  times <- as.numeric(t)
+  if (length(times) == 0L) {
+    val <- numeric(0)
+    attr(val, "scenarios") <- list()
+    return(val)
+  }
+  if (length(times) > 1L && any(is.na(times) | !is.finite(times) | times < 0)) {
+    bad <- which(is.na(times) | !is.finite(times) | times < 0)
+    res <- numeric(length(times))
+    res[bad] <- 0
+    good_idx <- setdiff(seq_along(times), bad)
+    if (length(good_idx) == 0L) {
+      attr(res, "scenarios") <- list()
+      return(res)
+    }
+    res[good_idx] <- Recall(expr,
+                            times[good_idx],
+                            prep,
+                            component,
+                            competitor_exprs = competitor_exprs,
+                            state = state,
+                            trial_rows = trial_rows,
+                            trial_overrides = trial_overrides)
+    attr(res, "scenarios") <- list()
+    return(res)
+  }
+  if (length(times) > 1L) {
+    compiled <- .expr_lookup_compiled(expr, prep)
+    if (!is.null(compiled)) {
+      comp_ids <- integer(0)
+      if (length(competitor_exprs) > 0) {
+        comp_nodes <- lapply(competitor_exprs, function(ex) .expr_lookup_compiled(ex, prep))
+        if (any(vapply(comp_nodes, is.null, logical(1)))) {
+          comp_ids <- NULL
+        } else {
+          comp_ids <- vapply(comp_nodes, function(node) as.integer(node$id %||% NA_integer_), integer(1))
+          if (any(is.na(comp_ids))) comp_ids <- NULL
+        }
+      }
+      if (!is.null(comp_ids)) {
+        trial_rows_df <- NULL
+        if (!is.null(trial_rows) && inherits(trial_rows, "data.frame") && nrow(trial_rows) > 0L) {
+          trial_rows_df <- as.data.frame(trial_rows)
+        }
+        native_ctx <- .prep_native_context(prep)
+        override_ptr <- trial_overrides
+        if (is.null(override_ptr) && !is.null(trial_rows_df)) {
+          builder <- .lik_native_fn("native_build_trial_overrides_cpp")
+          override_ptr <- builder(native_ctx, trial_rows_df)
+        }
+        dens_vec <- if (!is.null(override_ptr) && inherits(override_ptr, "externalptr")) {
+          native_fn <- .lik_native_fn("native_density_with_competitors_overrides_vec_cpp")
+          native_fn(
+            native_ctx,
+            as.integer(compiled$id),
+            as.numeric(times),
+            component,
+            integer(0),
+            integer(0),
+            as.integer(comp_ids %||% integer(0)),
+            override_ptr
+          )
+        } else {
+          native_fn <- .lik_native_fn("native_density_with_competitors_vec_cpp")
+          native_fn(
+            native_ctx,
+            as.integer(compiled$id),
+            as.numeric(times),
+            component,
+            integer(0),
+            integer(0),
+            as.integer(comp_ids %||% integer(0))
+          )
+        }
+        dens_vec[!is.finite(dens_vec) | dens_vec <= 0] <- 0
+        attr(dens_vec, "scenarios") <- list()
+        return(dens_vec)
+      }
+    }
+    res <- vapply(times, function(tt) {
+      .scenario_density_with_competitors(expr,
+                                         tt,
+                                         prep,
+                                         component,
+                                         competitor_exprs = competitor_exprs,
+                                         state = state,
+                                         trial_rows = trial_rows,
+                                         trial_overrides = trial_overrides)
+    }, numeric(1))
+    attr(res, "scenarios") <- list()
+    return(res)
+  }
+  t <- times[[1]]
   if (is.na(t) || !is.finite(t) || t < 0) {
     val <- 0.0
     attr(val, "scenarios") <- list()
     return(val)
   }
-  state <- state %||% .eval_state_create()
-  # Guard: compute density directly to avoid stale compiled closures and ensure
-  # correct protector handling.
-  if (!is.null(expr) && !is.null(expr$kind) && identical(expr$kind, "guard")) {
-    dens_scalar <- .guard_density_at(
-      expr, t, prep, component,
-      forced_complete = integer(0),
-      forced_survive = integer(0),
-      state = state
-    )
-    if (!is.finite(dens_scalar) || dens_scalar <= 0) {
-      dens_scalar <- 0.0
-    } else if (length(competitor_exprs) > 0) {
-      surv_prod <- .compute_survival_product(
-        outcome_expr = expr,
-        competitor_exprs = competitor_exprs,
-        prep = prep,
-        component = component,
-        t = t,
-        state = state
-      )
-      if (!is.finite(surv_prod) || surv_prod <= 0) {
-        dens_scalar <- 0.0
-      } else {
-        dens_scalar <- dens_scalar * surv_prod
-      }
-    }
-    attr(dens_scalar, "scenarios") <- list()
-    return(dens_scalar)
-  }
   compiled <- .expr_lookup_compiled(expr, prep)
-  density_fn <- if (!is.null(compiled)) compiled$density_fn else NULL
-  if (!is.null(compiled) && is.function(compiled$density_fast_fn)) {
-    dens <- compiled$density_fast_fn(t, component)
-  } else if (is.function(density_fn)) {
-    dens <- density_fn(t, component, integer(0), integer(0))
-  } else {
-    dens <- NULL
-  }
-  if (!is.null(dens)) {
-    dens_val <- as.numeric(dens)
-    dens_scalar <- if (length(dens_val) > 0L) dens_val[[1]] else 0.0
-    if (!is.finite(dens_scalar) || dens_scalar <= 0) {
-      dens_scalar <- 0.0
-    } else if (length(competitor_exprs) > 0) {
-      surv_prod <- .compute_survival_product(
-        outcome_expr = expr,
-        competitor_exprs = competitor_exprs,
-        prep = prep,
-        component = component,
-        t = t,
-        state = state
-      )
-      if (!is.finite(surv_prod) || surv_prod <= 0) {
-        dens_scalar <- 0.0
-      } else {
-        dens_scalar <- dens_scalar * surv_prod
-      }
-    }
-    attr(dens_scalar, "scenarios") <- list()
-    return(dens_scalar)
-  }
   if (!is.null(compiled)) {
-    dens_scalar <- .node_density(
-      compiled, t, prep, component,
-      forced_complete = integer(0),
-      forced_survive = integer(0),
-      state = state
-    )
-    if (!is.finite(dens_scalar) || dens_scalar <= 0) {
-      dens_scalar <- 0.0
-    } else if (length(competitor_exprs) > 0) {
-      surv_prod <- .compute_survival_product(
-        outcome_expr = expr,
-        competitor_exprs = competitor_exprs,
-        prep = prep,
-        component = component,
-        t = t,
-        state = state
-      )
-      if (!is.finite(surv_prod) || surv_prod <= 0) {
-        dens_scalar <- 0.0
+    comp_ids <- integer(0)
+    if (length(competitor_exprs) > 0) {
+      comp_nodes <- lapply(competitor_exprs, function(ex) .expr_lookup_compiled(ex, prep))
+      if (any(vapply(comp_nodes, is.null, logical(1)))) {
+        comp_ids <- NULL
       } else {
-        dens_scalar <- dens_scalar * surv_prod
+        comp_ids <- vapply(comp_nodes, function(node) as.integer(node$id %||% NA_integer_), integer(1))
+        if (any(is.na(comp_ids))) comp_ids <- NULL
       }
     }
-    attr(dens_scalar, "scenarios") <- list()
-    return(dens_scalar)
+    if (!is.null(comp_ids)) {
+      trial_rows_df <- NULL
+      if (!is.null(trial_rows) && inherits(trial_rows, "data.frame") && nrow(trial_rows) > 0L) {
+        trial_rows_df <- as.data.frame(trial_rows)
+      }
+      native_ctx <- .prep_native_context(prep)
+      if (!is.null(trial_overrides) && inherits(trial_overrides, "externalptr")) {
+        native_fn <- .lik_native_fn("native_density_with_competitors_overrides_cpp")
+        res <- native_fn(
+          native_ctx,
+          as.integer(compiled$id),
+          as.numeric(t),
+          component,
+          integer(0),
+          integer(0),
+          as.integer(comp_ids %||% integer(0)),
+          trial_overrides
+        )
+      } else if (!is.null(trial_rows_df)) {
+        native_fn <- .lik_native_fn("native_density_with_competitors_params_cpp")
+        res <- native_fn(
+          native_ctx,
+          as.integer(compiled$id),
+          as.numeric(t),
+          component,
+          integer(0),
+          integer(0),
+          as.integer(comp_ids %||% integer(0)),
+          trial_rows_df
+        )
+      } else {
+        native_fn <- .lik_native_fn("native_density_with_competitors_cpp")
+        res <- native_fn(
+          native_ctx,
+          as.integer(compiled$id),
+          as.numeric(t),
+          component,
+          integer(0),
+          integer(0),
+          as.integer(comp_ids %||% integer(0)),
+          .integrate_rel_tol(),
+          .integrate_abs_tol(),
+          12L
+        )
+      }
+      dens_scalar <- as.numeric(res$density)
+      if (!is.finite(dens_scalar) || dens_scalar <= 0) dens_scalar <- 0.0
+      attr(dens_scalar, "scenarios") <- list()
+      return(dens_scalar)
+    }
   }
+  state <- state %||% .eval_state_create()
   scenarios <- .expr_scenarios_at(
     expr, t, prep, component,
     forced_complete = integer(0),
@@ -2920,6 +3079,12 @@ guard_scope_ids <- function(expr, prep) {
 .compute_survival_product <- function(outcome_expr, competitor_exprs, prep, component, t,
                                      state = NULL) {
   if (length(competitor_exprs) == 0) return(1.0)
+  native_val <- .native_competitor_survival(competitor_exprs, prep, component, t)
+  if (!is.null(native_val)) {
+    if (!is.finite(native_val) || native_val < 0) native_val <- 0.0
+    if (native_val > 1) native_val <- 1.0
+    return(native_val)
+  }
   fast_val <- .fast_survival_product(competitor_exprs, prep, component, t)
   if (!is.null(fast_val)) {
     fast_vec <- as.numeric(fast_val)

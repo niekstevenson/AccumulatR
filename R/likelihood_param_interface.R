@@ -54,9 +54,16 @@
   trial_rows[mask, , drop = FALSE]
 }
 
-.likelihood_build_trial_plan <- function(structure, params_df, prep) {
+.likelihood_build_trial_plan <- function(structure, params_df, prep,
+                                         build_override_ptr = TRUE,
+                                         keep_trial_rows = TRUE,
+                                         keep_component_rows = TRUE) {
   if (is.null(params_df) || nrow(params_df) == 0L) {
     return(list(order = character(0), trials = list()))
+  }
+  params_df <- as.data.frame(params_df)
+  if (is.null(rownames(params_df))) {
+    rownames(params_df) <- as.character(seq_len(nrow(params_df)))
   }
   if (!"trial" %in% names(params_df)) params_df$trial <- 1L
   params_df$trial <- params_df$trial
@@ -76,20 +83,45 @@
   for (trial_key in names(trial_rows_map)) {
     trial_df <- as.data.frame(trial_rows_map[[trial_key]])
     trial_id <- trial_df$trial[[1]] %||% NA
-    override_ptr <- if (nrow(trial_df) > 0L) builder(native_ctx, trial_df) else NULL
+    override_ptr <- NULL
+    if (build_override_ptr && nrow(trial_df) > 0L) {
+      override_ptr <- builder(native_ctx, trial_df)
+    }
+    trial_row_index <- suppressWarnings(as.integer(rownames(trial_df)))
+    if (anyNA(trial_row_index)) {
+      trial_row_index <- seq_len(nrow(trial_df)) - 1L
+    } else {
+      trial_row_index <- trial_row_index - 1L
+    }
     comp_entries <- list()
     for (comp_id in comp_labels) {
-      rows_df <- .likelihood_component_rows(trial_df, comp_id)
+      rows_df <- NULL
+      if (keep_component_rows) {
+        rows_df <- .likelihood_component_rows(trial_df, comp_id)
+      }
       key <- if (!is.null(rows_df) && nrow(rows_df) > 0L) {
         .likelihood_override_key(comp_id, rows_df)
       } else {
         .likelihood_base_override_key(comp_id)
       }
-      comp_entries[[comp_id]] <- list(rows = rows_df, key = key)
+      comp_row_index <- if (!is.null(rows_df) && nrow(rows_df) > 0L) {
+        idx <- suppressWarnings(as.integer(rownames(rows_df)))
+        if (anyNA(idx)) {
+          seq_len(nrow(rows_df)) - 1L
+        } else {
+          idx - 1L
+        }
+      } else {
+        integer(0)
+      }
+      comp_entries[[comp_id]] <- list(rows = if (keep_component_rows) rows_df else NULL,
+                                      key = key,
+                                      row_index = comp_row_index)
     }
     trials[[trial_key]] <- list(
       trial_id = trial_id,
-      rows = trial_df,
+      rows = if (keep_trial_rows) trial_df else NULL,
+      row_index = trial_row_index,
       components = comp_entries,
       override_ptr = override_ptr
     )
@@ -422,6 +454,211 @@
   res
 }
 
+.native_loglikelihood_batch <- function(structure, prep, plan, trial_ids,
+                                        data_df, data_row_indices,
+                                        component_weights = NULL,
+                                        params_df = NULL,
+                                        use_buffer = FALSE) {
+  if (use_buffer && is.null(params_df)) {
+    stop("params_df must be supplied when use_buffer = TRUE")
+  }
+  native_ctx <- .prep_native_context(prep)
+  if (!inherits(native_ctx, "externalptr")) return(NULL)
+  trials <- plan$trials %||% list()
+  if (length(trials) == 0L) return(NULL)
+  outcome_defs <- prep[["outcomes"]] %||% list()
+  competitor_map <- .prep_competitors(prep) %||% list()
+  compiled_nodes <- lapply(outcome_defs, function(def) {
+    expr <- def[["expr"]]
+    if (is.null(expr)) return(NULL)
+    .expr_lookup_compiled(expr, prep)
+  })
+  names(compiled_nodes) <- names(outcome_defs)
+  compiled_competitors <- lapply(names(outcome_defs), function(lbl) {
+    comp_exprs <- competitor_map[[lbl]] %||% list()
+    if (length(comp_exprs) == 0) return(integer(0))
+    comp_nodes <- lapply(comp_exprs, function(ex) .expr_lookup_compiled(ex, prep))
+    if (any(vapply(comp_nodes, is.null, logical(1)))) return(NULL)
+    ids <- vapply(comp_nodes, function(node) as.integer(node$id %||% NA_integer_), integer(1))
+    if (any(is.na(ids))) return(NULL)
+    ids
+  })
+  names(compiled_competitors) <- names(outcome_defs)
+  shared_gate_specs <- lapply(names(outcome_defs), function(lbl) {
+    info <- .detect_shared_gate(outcome_defs, lbl)
+    if (is.null(info)) return(NULL)
+    x_lbl <- info$x_id %||% NULL
+    y_lbl <- info$y_id %||% NULL
+    c_lbl <- info$c_id %||% NULL
+    if (is.null(x_lbl) || is.null(y_lbl) || is.null(c_lbl)) return(NULL)
+    list(
+      x_label = as.character(x_lbl),
+      y_label = as.character(y_lbl),
+      c_label = as.character(c_lbl)
+    )
+  })
+  names(shared_gate_specs) <- names(outcome_defs)
+  na_source_labels <- Filter(function(lbl) {
+    def <- outcome_defs[[lbl]]
+    map_to <- def[['options']][['map_outcome_to']]
+    if (is.null(map_to)) return(FALSE)
+    if (is.na(map_to)) return(TRUE)
+    identical(map_to, "NA")
+  }, names(outcome_defs))
+  na_source_specs <- NULL
+  if (length(na_source_labels) > 0L) {
+    na_source_specs <- lapply(na_source_labels, function(lbl) {
+      node <- compiled_nodes[[lbl]]
+      comp_ids <- compiled_competitors[[lbl]]
+      if (is.null(node) || is.null(comp_ids)) return(NULL)
+      list(
+        node_id = as.integer(node$id),
+        competitor_ids = comp_ids %||% integer(0)
+      )
+    })
+    if (any(vapply(na_source_specs, is.null, logical(1)))) na_source_specs <- NULL
+  }
+  default_deadline <- prep$default_deadline %||% Inf
+  rel_tol <- .integrate_rel_tol()
+  abs_tol <- .integrate_abs_tol()
+  max_depth <- 12L
+  entries <- vector("list", length(trial_ids))
+  for (i in seq_along(trial_ids)) {
+    tid <- trial_ids[[i]]
+    trial_key <- as.character(tid %||% NA)
+    entry <- trials[[trial_key]]
+    if (is.null(entry)) {
+      if (use_buffer) stop(sprintf("Buffer plan missing trial entry for key '%s'", trial_key))
+      return(NULL)
+    }
+    row_index <- entry$row_index %||% integer(0)
+    if (use_buffer && length(row_index) == 0L && is.null(entry$override_ptr)) {
+      stop("Buffer trial plan is missing row indices; rebuild with keep_trial_rows = FALSE / keep_component_rows = FALSE")
+    }
+    data_idx <- data_row_indices[[trial_key]]
+    if (is.null(data_idx) || length(data_idx) != 1L) {
+      if (use_buffer) stop(sprintf("Expected exactly one data row for trial %s", trial_key))
+      return(NULL)
+    }
+    data_row <- data_df[data_idx, , drop = FALSE]
+    outcome_lbl <- data_row$outcome[[1]] %||% NA_character_
+    rt_val <- data_row$rt[[1]] %||% NA_real_
+    forced_component <- if ("component" %in% names(data_row)) data_row$component[[1]] else NULL
+    if (is.na(outcome_lbl) || identical(outcome_lbl, "NA")) {
+      if (is.null(na_source_specs)) {
+        if (use_buffer) stop("NA map encountered but na_source_specs unavailable")
+        return(NULL)
+      }
+      entries[[i]] <- list(
+        type = "na_map",
+        trial_rows = entry$rows %||% data.frame(),
+        rt = if (is.null(rt_val)) NA_real_ else as.numeric(rt_val),
+        forced_component = if (!is.null(forced_component) && !is.na(forced_component)) as.character(forced_component) else NULL,
+        na_sources = na_source_specs,
+        override_ptr = entry$override_ptr,
+        row_index = row_index
+      )
+      next
+    }
+    outcome_def <- outcome_defs[[outcome_lbl]]
+    if (is.null(outcome_def)) {
+      if (use_buffer) stop(sprintf("Outcome '%s' not found in prep", outcome_lbl))
+      return(NULL)
+    }
+    alias_refs <- outcome_def[['options']][['alias_of']]
+    if (!is.null(alias_refs)) {
+      refs <- as.character(alias_refs)
+      alias_sources <- lapply(refs, function(ref_lbl) {
+        node <- compiled_nodes[[ref_lbl]]
+        comp_ids <- compiled_competitors[[ref_lbl]]
+        if (is.null(node) || is.null(comp_ids)) return(NULL)
+        list(
+          node_id = as.integer(node$id),
+          competitor_ids = comp_ids %||% integer(0)
+        )
+      })
+      if (any(vapply(alias_sources, is.null, logical(1)))) {
+        if (use_buffer) stop("Alias sources missing compiled nodes")
+        return(NULL)
+      }
+      entries[[i]] <- list(
+        type = "alias_sum",
+        trial_rows = entry$rows %||% data.frame(),
+        rt = as.numeric(rt_val),
+        forced_component = if (!is.null(forced_component) && !is.na(forced_component)) as.character(forced_component) else NULL,
+        alias_sources = alias_sources,
+        override_ptr = entry$override_ptr,
+        row_index = row_index
+      )
+      next
+    }
+    compiled <- compiled_nodes[[outcome_lbl]]
+    if (is.null(compiled)) {
+      if (use_buffer) stop(sprintf("Outcome '%s' missing compiled node", outcome_lbl))
+      return(NULL)
+    }
+    comp_ids <- compiled_competitors[[outcome_lbl]]
+    if (is.null(comp_ids)) {
+      if (use_buffer) stop(sprintf("Outcome '%s' missing competitor ids", outcome_lbl))
+      return(NULL)
+    }
+    if (is.na(rt_val) || !is.finite(rt_val) || rt_val < 0) {
+      if (use_buffer) stop("Encountered invalid RT in buffer path")
+      return(NULL)
+    }
+    entry_fields <- list(
+      type = "direct",
+      trial_rows = entry$rows %||% data.frame(),
+      node_id = as.integer(compiled$id),
+      rt = as.numeric(rt_val),
+      forced_component = if (!is.null(forced_component) && !is.na(forced_component)) as.character(forced_component) else NULL,
+      competitor_ids = comp_ids,
+      override_ptr = entry$override_ptr,
+      row_index = row_index
+    )
+    shared_info <- shared_gate_specs[[outcome_lbl]]
+    if (!is.null(shared_info)) {
+      entry_fields$shared_gate <- shared_info
+    }
+    entries[[i]] <- entry_fields
+  }
+  component_weights_df <- if (!is.null(component_weights)) as.data.frame(component_weights) else NULL
+  if (use_buffer) {
+    if (is.null(params_df)) {
+      stop("params_df must be supplied when use_buffer = TRUE")
+    }
+    params_df_export <- as.data.frame(params_df)
+    native_fn <- .lik_native_fn("native_loglik_from_buffer_cpp")
+    res <- native_fn(
+      native_ctx,
+      structure,
+      entries,
+      params_df_export,
+      component_weights_df,
+      as.numeric(default_deadline),
+      as.numeric(rel_tol),
+      as.numeric(abs_tol),
+      as.integer(max_depth)
+    )
+  } else {
+    native_fn <- .lik_native_fn("native_loglik_from_params_cpp")
+    res <- native_fn(
+      native_ctx,
+      structure,
+      entries,
+      component_weights_df,
+      as.numeric(default_deadline),
+      as.numeric(rel_tol),
+      as.numeric(abs_tol),
+      as.integer(max_depth)
+    )
+  }
+  list(
+    loglik = as.numeric(res$loglik),
+    per_trial = as.numeric(res$per_trial)
+  )
+}
+
 .likelihood_mixture_likelihood <- function(structure, prep_eval_base, trial_rows,
                                            component_ids, component_weights,
                                            outcome_label, rt_val,
@@ -553,11 +790,36 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
   if ("component" %in% names(data_df)) {
     data_df$component <- as.character(data_df$component)
   }
+  trial_lookup_keys <- as.character(data_df$trial %||% NA)
+  data_row_indices <- split(seq_len(nrow(data_df)), trial_lookup_keys)
 
-  plan <- trial_plan %||% .likelihood_build_trial_plan(structure, params_df, prep_eval_base)
+  plan <- trial_plan %||% .likelihood_build_trial_plan(structure,
+                                                      params_df,
+                                                      prep_eval_base,
+                                                      build_override_ptr = TRUE,
+                                                      keep_trial_rows = TRUE,
+                                                      keep_component_rows = TRUE)
   trial_ids <- unique(data_df$trial)
   per_trial_loglik <- numeric(length(trial_ids))
   use_native_rows <- isTRUE(getOption("uuber.use.native.param.rows", TRUE))
+  batch_res <- NULL
+  if (use_native_rows) {
+    batch_res <- .native_loglikelihood_batch(
+      structure = structure,
+      prep = prep_eval_base,
+      plan = plan,
+      trial_ids = trial_ids,
+      data_df = data_df,
+      data_row_indices = data_row_indices,
+      component_weights = component_weights
+    )
+  }
+  if (!is.null(batch_res)) {
+    return(list(
+      loglik = batch_res$loglik,
+      per_trial = batch_res$per_trial
+    ))
+  }
 
   for (i in seq_along(trial_ids)) {
     tid <- trial_ids[[i]]
@@ -573,10 +835,11 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
       )
     }
     trial_rows <- entry$rows
-    data_row <- data_df[data_df$trial == tid, , drop = FALSE]
-    if (nrow(data_row) != 1L) {
+    data_idx <- data_row_indices[[trial_key]]
+    if (is.null(data_idx) || length(data_idx) != 1L) {
       stop(sprintf("Expected exactly one data row for trial %s", tid))
     }
+    data_row <- data_df[data_idx, , drop = FALSE]
     outcome <- data_row$outcome[[1]] %||% NA_character_
     rt_val <- data_row$rt[[1]] %||% NA_real_
     forced_component <- if ("component" %in% names(data_row)) data_row$component[[1]] else NULL
@@ -607,6 +870,73 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
   list(
     loglik = sum(per_trial_loglik),
     per_trial = per_trial_loglik
+  )
+}
+
+log_likelihood_from_params_buffer <- function(structure, params_df, data_df,
+                                              component_weights = NULL,
+                                              prep = NULL,
+                                              trial_plan = NULL,
+                                              native_bundle = NULL) {
+  if (is.null(params_df) || nrow(params_df) == 0L) {
+    stop("Parameter data frame must contain at least one row")
+  }
+  if (is.null(data_df) || nrow(data_df) == 0L) {
+    stop("Data frame must contain outcome/rt per trial")
+  }
+  structure <- .as_generator_structure(structure)
+  if (!exists(".build_trial_overrides", mode = "function")) {
+    stop("likelihood param interface requires generator_new.R to be sourced")
+  }
+  if (is.null(structure$model_spec)) {
+    stop("generator structure must include model_spec; rebuild with build_generator_structure")
+  }
+  if (!is.null(native_bundle)) {
+    prep <- native_bundle$prep %||% prep
+  }
+  prep_eval_base <- prep %||% .prepare_model_for_likelihood(structure$model_spec)
+  if (is.null(prep_eval_base[[".runtime"]])) {
+    prep_eval_base <- .prep_set_cache_bundle(
+      prep_eval_base,
+      .build_likelihood_cache_bundle(prep_eval_base)
+    )
+  }
+  if (!"trial" %in% names(data_df)) {
+    stop("Data frame must include a 'trial' column")
+  }
+  data_df$trial <- data_df$trial
+  if ("component" %in% names(data_df)) {
+    data_df$component <- as.character(data_df$component)
+  }
+  trial_lookup_keys <- as.character(data_df$trial %||% NA)
+  data_row_indices <- split(seq_len(nrow(data_df)), trial_lookup_keys)
+
+  plan <- trial_plan %||% .likelihood_build_trial_plan(
+    structure,
+    params_df,
+    prep_eval_base,
+    build_override_ptr = FALSE,
+    keep_trial_rows = FALSE,
+    keep_component_rows = FALSE
+  )
+  trial_ids <- unique(data_df$trial)
+  batch_res <- .native_loglikelihood_batch(
+    structure = structure,
+    prep = prep_eval_base,
+    plan = plan,
+    trial_ids = trial_ids,
+    data_df = data_df,
+    data_row_indices = data_row_indices,
+    component_weights = component_weights,
+    params_df = params_df,
+    use_buffer = TRUE
+  )
+  if (is.null(batch_res)) {
+    stop("native_loglik_from_buffer_cpp returned NULL; rebuild the trial plan or inspect params_df")
+  }
+  list(
+    loglik = batch_res$loglik,
+    per_trial = batch_res$per_trial
   )
 }
 

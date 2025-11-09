@@ -28,7 +28,7 @@
 4. **Forced Templates & Scenarios**
    - ✅ `.build_pool_templates`, `.pool_density`, `.pool_survival` now live in C++, templates cached in the bundle.
    - ✅ Scenario weights/forced IDs returned as structs (converted to R lists on the main thread).
-   - **Next extension**: port guarded-expression evaluation (density/survival/scenario) to C++ so R only dispatches calls.
+   - ✅ Guarded-expression evaluation (density/survival/scenario) now runs in C++; R only marshals arguments and reads results.
 
 5. **Native Guard Evaluator Roadmap**
    1. Extend the native context to include compiled-node metadata (node kind, child IDs, fast ops) so C++ code can resolve references/blockers/unless expressions without touching R closures.
@@ -61,7 +61,8 @@
 7. **Native Trial Driver**
    - ✅ `native_trial_mixture_cpp` evaluates compiled outcome nodes for every component in a trial using the shared native context, competitor IDs, and the per-trial `TrialOverrides*`, returning the weighted mixture density entirely in C++.
    - ✅ `.likelihood_mixture_likelihood()` now calls the native driver whenever trial rows were materialized via `.likelihood_build_trial_plan()`, so `log_likelihood_from_params()` issues a single `.Call` per trial and falls back to the R loop only when RTs are missing or nodes lack compiled fast paths.
-   - **Next extension**: teach the driver about NA/alias outcomes, donor/guess redistribution, and guard-integrated probabilities so R no longer needs to special-case those paths before accumulating log-likelihoods.
+   - ✅ Full native batch driver (`native_loglik_from_params_cpp`) evaluates every trial in one `.Call`, handling component planning, overrides, and per-trial mixture densities; R now uses this path whenever compiled nodes and finite RTs are available.
+   - **Next extension**: teach the driver about NA/alias outcomes, donor/guess redistribution, and guard-integrated probabilities so pure C++ callers never need the R fallback.
 
 ## Operational Considerations
 - Cache compatibility: continue to populate and clone `likelihood_cache_bundle` (`R/likelihood_common.R:133`) so overrides still get copy-on-write bundles.

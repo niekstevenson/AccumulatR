@@ -16,6 +16,7 @@
 #include <memory>
 #include <queue>
 #include <sstream>
+#include <numeric>
 #include <iomanip>
 #if __has_include(<boost/math/quadrature/gauss_kronrod.hpp>)
 #define UUBER_HAVE_BOOST_GK 1
@@ -445,6 +446,86 @@ std::unordered_set<int> make_forced_set(const std::vector<int>& ids) {
   return std::unordered_set<int>(ids.begin(), ids.end());
 }
 
+struct TrialOverrides;
+
+struct TrialRowColumns {
+  R_xlen_t nrows{0};
+  bool has_acc_id{false};
+  Rcpp::CharacterVector acc_id_col;
+  bool has_acc_column{false};
+  bool acc_is_numeric{false};
+  Rcpp::NumericVector acc_num_col;
+  Rcpp::CharacterVector acc_chr_col;
+  Rcpp::CharacterVector dist_col;
+  Rcpp::NumericVector onset_col;
+  Rcpp::NumericVector q_col;
+  Rcpp::CharacterVector shared_col;
+  Rcpp::List comps_col;
+  Rcpp::List params_list_col;
+  std::vector<std::string> param_cols;
+  std::vector<SEXP> param_col_data;
+  std::vector<int> param_col_types;
+};
+
+TrialRowColumns capture_trial_row_columns(const Rcpp::DataFrame& df) {
+  TrialRowColumns cols;
+  cols.nrows = df.nrows();
+  cols.has_acc_id = df.containsElementNamed("accumulator_id");
+  if (cols.has_acc_id) {
+    cols.acc_id_col = Rcpp::CharacterVector(df["accumulator_id"]);
+  }
+  cols.has_acc_column = df.containsElementNamed("accumulator");
+  if (cols.has_acc_column) {
+    SEXP acc_col = df["accumulator"];
+    if (Rf_isNumeric(acc_col)) {
+      cols.acc_is_numeric = true;
+      cols.acc_num_col = Rcpp::NumericVector(acc_col);
+    } else {
+      cols.acc_is_numeric = false;
+      cols.acc_chr_col = Rcpp::CharacterVector(acc_col);
+    }
+  }
+  cols.dist_col = df.containsElementNamed("dist")
+    ? Rcpp::CharacterVector(df["dist"])
+    : Rcpp::CharacterVector();
+  cols.onset_col = df.containsElementNamed("onset")
+    ? Rcpp::NumericVector(df["onset"])
+    : Rcpp::NumericVector();
+  cols.q_col = df.containsElementNamed("q")
+    ? Rcpp::NumericVector(df["q"])
+    : Rcpp::NumericVector();
+  cols.shared_col = df.containsElementNamed("shared_trigger_id")
+    ? Rcpp::CharacterVector(df["shared_trigger_id"])
+    : Rcpp::CharacterVector();
+  cols.comps_col = df.containsElementNamed("components")
+    ? Rcpp::List(df["components"])
+    : Rcpp::List();
+  cols.params_list_col = df.containsElementNamed("params")
+    ? Rcpp::List(df["params"])
+    : Rcpp::List();
+
+  static const std::unordered_set<std::string> kBaseCols = {
+    "trial", "component", "accumulator", "accumulator_id",
+    "accumulator_index", "acc_idx", "type", "role",
+    "outcome", "rt", "params", "onset", "q",
+    "condition", "component_weight", "shared_trigger_id",
+    "dist", "components"
+  };
+  Rcpp::CharacterVector df_names = df.names();
+  if (!df_names.isNULL()) {
+    for (R_xlen_t i = 0; i < df_names.size(); ++i) {
+      if (df_names[i] == NA_STRING) continue;
+      std::string col_name = Rcpp::as<std::string>(df_names[i]);
+      if (kBaseCols.find(col_name) != kBaseCols.end()) continue;
+      SEXP column = df[col_name];
+      cols.param_cols.push_back(col_name);
+      cols.param_col_data.push_back(column);
+      cols.param_col_types.push_back(TYPEOF(column));
+    }
+  }
+  return cols;
+}
+
 inline int label_id(const uuber::NativeContext& ctx, const std::string& label) {
   auto it = ctx.label_to_id.find(label);
   if (it == ctx.label_to_id.end()) return NA_INTEGER;
@@ -771,12 +852,6 @@ std::string guard_survival_cache_key(const GuardEvalInput& input, double t) {
 const uuber::NativeNode& fetch_node(const uuber::NativeContext& ctx, int node_id);
 NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
                                      EvalCache& cache,
-                                     int node_id,
-                                     double time,
-                                     const std::string& component,
-                                     const std::unordered_set<int>& forced_complete,
-                                     const std::unordered_set<int>& forced_survive);
-NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
                                      int node_id,
                                      double time,
                                      const std::string& component,
@@ -1159,7 +1234,6 @@ std::vector<ScenarioRecord> compute_node_scenarios(int node_id, NodeEvalState& s
 }
 
 NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state);
-NodeEvalResult eval_guard_node(const uuber::NativeNode& node, NodeEvalState& parent_state);
 
 const uuber::NativeNode& fetch_node(const uuber::NativeContext& ctx, int node_id) {
   auto node_it = ctx.node_index.find(node_id);
@@ -1179,19 +1253,6 @@ NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
   NodeEvalState local(ctx, cache, time, component, forced_complete, forced_survive);
   return eval_node_recursive(node_id, local);
 }
-
-NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
-                                     int node_id,
-                                     double time,
-                                     const std::string& component,
-                                     const std::unordered_set<int>& forced_complete,
-                                     const std::unordered_set<int>& forced_survive) {
-  EvalCache cache;
-  return eval_node_with_forced(ctx, cache, node_id, time, component, forced_complete, forced_survive);
-}
-
-NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state);
-NodeEvalResult eval_guard_node(const uuber::NativeNode& node, NodeEvalState& parent_state);
 
 NodeEvalResult eval_and_node(const uuber::NativeNode& node, NodeEvalState& state) {
   const std::vector<int>& child_ids = node.args;
@@ -1906,7 +1967,7 @@ double native_outcome_probability_impl(SEXP ctxSEXP,
                                        double abs_tol,
                                        int max_depth,
                                        const TrialOverrides* overrides) {
-  if (upper <= 0.0 || !std::isfinite(upper)) {
+  if (upper <= 0.0) {
     return 0.0;
   }
   auto integrand = [&](double u) -> double {
@@ -1923,14 +1984,36 @@ double native_outcome_probability_impl(SEXP ctxSEXP,
     if (!std::isfinite(val) || val <= 0.0) return 0.0;
     return val;
   };
-  double integral = uuber::integrate_boost_fn(
-    integrand,
-    0.0,
-    upper,
-    rel_tol,
-    abs_tol,
-    max_depth
-  );
+  double integral = 0.0;
+  if (std::isfinite(upper)) {
+    integral = uuber::integrate_boost_fn(
+      integrand,
+      0.0,
+      upper,
+      rel_tol,
+      abs_tol,
+      max_depth
+    );
+  } else {
+    auto transformed = [&](double x) -> double {
+      if (x <= 0.0) return 0.0;
+      if (x >= 1.0) x = std::nextafter(1.0, 0.0);
+      double t = x / (1.0 - x);
+      double jac = 1.0 / ((1.0 - x) * (1.0 - x));
+      double val = integrand(t);
+      if (!std::isfinite(val) || val <= 0.0) return 0.0;
+      double out = val * jac;
+      return std::isfinite(out) ? out : 0.0;
+    };
+    integral = uuber::integrate_boost_fn(
+      transformed,
+      0.0,
+      1.0,
+      rel_tol,
+      abs_tol,
+      max_depth
+    );
+  }
   if (!std::isfinite(integral)) integral = 0.0;
   return clamp_probability(integral);
 }
@@ -2100,6 +2183,217 @@ std::vector<std::string> string_vector_from_entry(SEXP entry) {
     out.push_back(Rcpp::as<std::string>(vec[i]));
   }
   return out;
+}
+
+std::unique_ptr<TrialOverrides> build_trial_overrides_from_columns(
+  const uuber::NativeContext& ctx,
+  const TrialRowColumns& cols,
+  const std::vector<int>& row_positions) {
+  if (row_positions.empty()) return nullptr;
+
+  auto overrides = std::make_unique<TrialOverrides>();
+
+  auto upsert_param_entry = [](std::vector<uuber::ProtoParamEntry>& entries,
+                               uuber::ProtoParamEntry entry) {
+    for (auto& existing : entries) {
+      if (existing.name == entry.name) {
+        existing = std::move(entry);
+        return;
+      }
+    }
+    entries.push_back(std::move(entry));
+  };
+
+  auto append_scalar_entry = [&](std::vector<uuber::ProtoParamEntry>& entries,
+                                 const std::string& name,
+                                 double value,
+                                 bool logical_scalar = false) {
+    if (!std::isfinite(value)) return;
+    uuber::ProtoParamEntry entry;
+    entry.name = name;
+    if (logical_scalar) {
+      entry.tag = uuber::ParamValueTag::LogicalScalar;
+      entry.logical_scalar = static_cast<int>(value != 0.0);
+    } else {
+      entry.tag = uuber::ParamValueTag::NumericScalar;
+      entry.numeric_scalar = value;
+    }
+    upsert_param_entry(entries, std::move(entry));
+  };
+
+  auto append_numeric_vector_entry = [&](std::vector<uuber::ProtoParamEntry>& entries,
+                                         const std::string& name,
+                                         const Rcpp::NumericVector& vec) {
+    if (vec.size() == 0) return;
+    uuber::ProtoParamEntry entry;
+    entry.name = name;
+    entry.tag = uuber::ParamValueTag::NumericVector;
+    entry.numeric_values.reserve(vec.size());
+    for (double val : vec) {
+      entry.numeric_values.push_back(val);
+    }
+    upsert_param_entry(entries, std::move(entry));
+  };
+
+  auto append_logical_vector_entry = [&](std::vector<uuber::ProtoParamEntry>& entries,
+                                         const std::string& name,
+                                         const Rcpp::LogicalVector& vec) {
+    if (vec.size() == 0) return;
+    uuber::ProtoParamEntry entry;
+    entry.name = name;
+    entry.tag = uuber::ParamValueTag::LogicalVector;
+    entry.logical_values.reserve(vec.size());
+    for (int val : vec) {
+      entry.logical_values.push_back(val);
+    }
+    upsert_param_entry(entries, std::move(entry));
+  };
+
+  for (int raw_row : row_positions) {
+    if (raw_row < 0) continue;
+    R_xlen_t pos = static_cast<R_xlen_t>(raw_row);
+    if (pos >= cols.nrows) continue;
+    int acc_idx = -1;
+    if (cols.has_acc_id) {
+      if (pos >= cols.acc_id_col.size()) continue;
+      Rcpp::String acc_val = cols.acc_id_col[pos];
+      if (acc_val == NA_STRING) continue;
+      std::string acc_label = std::string(acc_val);
+      auto it = ctx.accumulator_index.find(acc_label);
+      if (it == ctx.accumulator_index.end()) {
+        Rcpp::stop("trial parameter rows reference unknown accumulator '%s'", acc_label);
+      }
+      acc_idx = it->second;
+    } else if (cols.has_acc_column) {
+      if (cols.acc_is_numeric) {
+        if (pos >= cols.acc_num_col.size()) continue;
+        double raw_val = cols.acc_num_col[pos];
+        if (Rcpp::NumericVector::is_na(raw_val)) continue;
+        int idx_val = static_cast<int>(std::llround(raw_val)) - 1;
+        if (idx_val < 0 || idx_val >= static_cast<int>(ctx.accumulators.size())) {
+          Rcpp::stop("trial parameter rows reference invalid accumulator index '%d'",
+                     idx_val + 1);
+        }
+        acc_idx = idx_val;
+      } else {
+        if (pos >= cols.acc_chr_col.size()) continue;
+        Rcpp::String acc_val = cols.acc_chr_col[pos];
+        if (acc_val == NA_STRING) continue;
+        std::string acc_label = std::string(acc_val);
+        auto it = ctx.accumulator_index.find(acc_label);
+        if (it == ctx.accumulator_index.end()) {
+          Rcpp::stop("trial parameter rows reference unknown accumulator '%s'", acc_label);
+        }
+        acc_idx = it->second;
+      }
+    }
+    if (acc_idx < 0 || acc_idx >= static_cast<int>(ctx.accumulators.size())) continue;
+    const uuber::NativeAccumulator& base = ctx.accumulators[acc_idx];
+
+    TrialAccumulatorOverride override;
+    override.onset = (pos < cols.onset_col.size() && !Rcpp::NumericVector::is_na(cols.onset_col[pos]))
+      ? static_cast<double>(cols.onset_col[pos])
+      : base.onset;
+    override.q = (pos < cols.q_col.size() && !Rcpp::NumericVector::is_na(cols.q_col[pos]))
+      ? static_cast<double>(cols.q_col[pos])
+      : base.q;
+    if (pos < cols.shared_col.size()) {
+      Rcpp::String shared_val = cols.shared_col[pos];
+      if (shared_val != NA_STRING) {
+        override.shared_trigger_id = std::string(shared_val);
+      } else {
+        override.shared_trigger_id = base.shared_trigger_id;
+      }
+    } else {
+      override.shared_trigger_id = base.shared_trigger_id;
+    }
+    SEXP comp_entry = (pos < cols.comps_col.size()) ? cols.comps_col[pos] : R_NilValue;
+    if (comp_entry != R_NilValue) {
+      override.components = string_vector_from_entry(comp_entry);
+      override.has_components = !override.components.empty();
+    } else {
+      override.has_components = false;
+    }
+
+    std::string dist_name = base.dist;
+    if (pos < cols.dist_col.size()) {
+      Rcpp::String dist_val = cols.dist_col[pos];
+      if (dist_val != NA_STRING) {
+        dist_name = std::string(dist_val);
+      }
+    }
+    override.dist_cfg = base.dist_cfg;
+    std::vector<uuber::ProtoParamEntry> param_entries;
+    if (cols.params_list_col.size() > 0) {
+      SEXP param_entry = (pos < cols.params_list_col.size()) ? cols.params_list_col[pos] : R_NilValue;
+      if (param_entry != R_NilValue) {
+        Rcpp::List param_list(param_entry);
+        std::vector<uuber::ProtoParamEntry> entries = params_from_rcpp(param_list, dist_name);
+        for (auto& entry_obj : entries) {
+          upsert_param_entry(param_entries, entry_obj);
+        }
+      }
+    }
+    for (std::size_t pc = 0; pc < cols.param_cols.size(); ++pc) {
+      SEXP column = cols.param_col_data[pc];
+      int type = cols.param_col_types[pc];
+      const std::string& col_name = cols.param_cols[pc];
+      switch (type) {
+      case REALSXP: {
+        Rcpp::NumericVector vec(column);
+        if (pos < vec.size()) {
+          double val = vec[pos];
+          if (!Rcpp::NumericVector::is_na(val)) {
+            append_scalar_entry(param_entries, col_name, val, false);
+          }
+        }
+        break;
+      }
+      case INTSXP: {
+        Rcpp::IntegerVector vec(column);
+        if (pos < vec.size()) {
+          int val = vec[pos];
+          if (val != NA_INTEGER) {
+            append_scalar_entry(param_entries, col_name, static_cast<double>(val), false);
+          }
+        }
+        break;
+      }
+      case LGLSXP: {
+        Rcpp::LogicalVector vec(column);
+        if (pos < vec.size()) {
+          int val = vec[pos];
+          if (val != NA_LOGICAL) {
+            append_scalar_entry(param_entries, col_name, static_cast<double>(val), true);
+          }
+        }
+        break;
+      }
+      case VECSXP: {
+        Rcpp::List vec(column);
+        if (pos < vec.size()) {
+          SEXP entry = vec[pos];
+          if (Rf_isNull(entry)) break;
+          if (Rf_isNumeric(entry)) {
+            append_numeric_vector_entry(param_entries, col_name, Rcpp::NumericVector(entry));
+          } else if (Rf_isLogical(entry)) {
+            append_logical_vector_entry(param_entries, col_name, Rcpp::LogicalVector(entry));
+          }
+        }
+        break;
+      }
+      default:
+        break;
+      }
+    }
+    override.dist_cfg = resolve_acc_params_entries(dist_name, param_entries);
+    overrides->acc_overrides[acc_idx] = override;
+  }
+
+  if (overrides->acc_overrides.empty()) {
+    return nullptr;
+  }
+  return overrides;
 }
 
 std::unique_ptr<TrialOverrides> build_trial_overrides_from_df(
@@ -2393,6 +2687,15 @@ std::unique_ptr<TrialOverrides> build_trial_overrides_from_df(
   return overrides;
 }
 
+std::unique_ptr<TrialOverrides> build_trial_overrides_from_indices(
+  const uuber::NativeContext& ctx,
+  const Rcpp::DataFrame& params_df,
+  const std::vector<int>& row_index) {
+  if (row_index.empty()) return nullptr;
+  TrialRowColumns cols = capture_trial_row_columns(params_df);
+  return build_trial_overrides_from_columns(ctx, cols, row_index);
+}
+
 
 Rcpp::List native_guard_scenarios_impl(SEXP ctxSEXP,
                                        int guard_node_id,
@@ -2660,6 +2963,384 @@ double normalize_weights(std::vector<double>& weights) {
   return 1.0;
 }
 
+struct SharedGateSpec {
+  std::string x_label;
+  std::string y_label;
+  std::string c_label;
+};
+
+bool build_component_mix(const Rcpp::CharacterVector& component_ids,
+                         const Rcpp::NumericVector& weights_in,
+                         Rcpp::Nullable<Rcpp::String> forced_component,
+                         std::vector<std::string>& components_out,
+                         std::vector<double>& weights_out) {
+  if (component_ids.size() == 0) return false;
+  components_out.clear();
+  components_out.reserve(component_ids.size());
+  for (R_xlen_t i = 0; i < component_ids.size(); ++i) {
+    Rcpp::String comp(component_ids[i]);
+    if (comp == NA_STRING) {
+      components_out.emplace_back("__default__");
+    } else {
+      components_out.emplace_back(comp.get_cstring());
+    }
+  }
+  weights_out.assign(components_out.size(), std::numeric_limits<double>::quiet_NaN());
+  if (weights_in.size() == component_ids.size()) {
+    for (R_xlen_t i = 0; i < weights_in.size(); ++i) {
+      weights_out[static_cast<std::size_t>(i)] = weights_in[i];
+    }
+  }
+  normalize_weights(weights_out);
+  if (forced_component.isNotNull()) {
+    std::string forced = Rcpp::as<std::string>(forced_component);
+    auto it = std::find(components_out.begin(), components_out.end(), forced);
+    if (it == components_out.end()) {
+      return false;
+    }
+    std::string selected = *it;
+    components_out.clear();
+    components_out.push_back(selected);
+    weights_out.clear();
+    weights_out.push_back(1.0);
+  }
+  return !components_out.empty();
+}
+
+double native_trial_mixture_driver(SEXP ctxSEXP,
+                                   int node_id,
+                                   double t,
+                                   Rcpp::CharacterVector component_ids,
+                                   Rcpp::NumericVector weights,
+                                   Rcpp::Nullable<Rcpp::String> forced_component,
+                                   Rcpp::IntegerVector competitor_ids,
+                                   SEXP trial_overrides);
+
+std::unordered_map<std::string, double> build_component_deadlines(const Rcpp::List& structure,
+                                                                  double default_deadline) {
+  std::unordered_map<std::string, double> out;
+  if (!structure.containsElementNamed("components")) {
+    return out;
+  }
+  Rcpp::DataFrame comp_df(structure["components"]);
+  if (!comp_df.containsElementNamed("component_id")) {
+    return out;
+  }
+  Rcpp::CharacterVector comp_ids(comp_df["component_id"]);
+  Rcpp::List attrs = comp_df.containsElementNamed("attrs")
+    ? Rcpp::List(comp_df["attrs"])
+    : Rcpp::List(comp_ids.size());
+  for (R_xlen_t i = 0; i < comp_ids.size(); ++i) {
+    std::string comp_label = "__default__";
+    if (comp_ids[i] != NA_STRING) {
+      comp_label = Rcpp::as<std::string>(comp_ids[i]);
+    }
+    double deadline = default_deadline;
+    if (i < attrs.size()) {
+      Rcpp::RObject attr_obj = attrs[i];
+      if (!attr_obj.isNULL()) {
+        Rcpp::List attr_list(attr_obj);
+        if (attr_list.containsElementNamed("deadline")) {
+          Rcpp::RObject val = attr_list["deadline"];
+          if (!Rf_isNull(val)) {
+            double attr_deadline = Rcpp::as<double>(val);
+            if (std::isfinite(attr_deadline)) {
+              deadline = attr_deadline;
+            }
+          }
+        }
+      }
+    }
+    out[comp_label] = deadline;
+  }
+  return out;
+}
+
+double lookup_component_deadline(const std::unordered_map<std::string, double>& map,
+                                 const std::string& component,
+                                 double default_deadline) {
+  auto it = map.find(component);
+  if (it == map.end()) return default_deadline;
+  return it->second;
+}
+
+const TrialOverrides* extract_overrides(SEXP override_ptr) {
+  if (Rf_isNull(override_ptr)) return nullptr;
+  Rcpp::XPtr<TrialOverrides> ptr(override_ptr);
+  return ptr.get();
+}
+
+double evaluate_alias_mix(SEXP ctxSEXP,
+                          const Rcpp::CharacterVector& components,
+                          const Rcpp::NumericVector& weights,
+                          const Rcpp::List& alias_sources,
+                          double t,
+                          Rcpp::Nullable<Rcpp::String> forced_component,
+                          SEXP override_ptr) {
+  double mix = 0.0;
+  for (R_xlen_t i = 0; i < alias_sources.size(); ++i) {
+    Rcpp::List src(alias_sources[i]);
+    if (!src.containsElementNamed("node_id")) continue;
+    int node_id = Rcpp::as<int>(src["node_id"]);
+    Rcpp::IntegerVector comp_ids = src.containsElementNamed("competitor_ids")
+      ? Rcpp::IntegerVector(src["competitor_ids"])
+      : Rcpp::IntegerVector();
+    double contrib = native_trial_mixture_driver(ctxSEXP,
+                                                 node_id,
+                                                 t,
+                                                 components,
+                                                 weights,
+                                                 forced_component,
+                                                 comp_ids,
+                                                 override_ptr);
+    mix += contrib;
+  }
+  return mix;
+}
+
+double evaluate_na_map_mix(SEXP ctxSEXP,
+                           const Rcpp::CharacterVector& components,
+                           const Rcpp::NumericVector& weights,
+                           const Rcpp::List& na_sources,
+                           double rt,
+                           const std::unordered_map<std::string, double>& component_deadlines,
+                           double default_deadline,
+                           double rel_tol,
+                           double abs_tol,
+                           int max_depth,
+                           Rcpp::Nullable<Rcpp::String> forced_component,
+                           SEXP override_ptr) {
+  if (std::isfinite(rt) && rt >= 0.0) {
+    return evaluate_alias_mix(ctxSEXP,
+                              components,
+                              weights,
+                              na_sources,
+                              rt,
+                              forced_component,
+                              override_ptr);
+  }
+  const TrialOverrides* overrides_ptr = extract_overrides(override_ptr);
+  double mix = 0.0;
+  for (R_xlen_t i = 0; i < components.size(); ++i) {
+    SEXP comp_sexp = components[i];
+    bool comp_is_na = comp_sexp == NA_STRING;
+    Rcpp::String comp_val(comp_sexp);
+    std::string comp_label = "__default__";
+    if (!comp_is_na) {
+      comp_label = static_cast<std::string>(comp_val);
+    }
+    double deadline = lookup_component_deadline(component_deadlines, comp_label, default_deadline);
+    if (deadline <= 0.0) continue;
+    Rcpp::Nullable<Rcpp::String> component_str;
+    if (!comp_is_na) {
+      component_str = Rcpp::Nullable<Rcpp::String>(comp_sexp);
+    }
+    double component_sum = 0.0;
+    for (R_xlen_t s = 0; s < na_sources.size(); ++s) {
+      Rcpp::List src(na_sources[s]);
+      if (!src.containsElementNamed("node_id")) continue;
+      int node_id = Rcpp::as<int>(src["node_id"]);
+      Rcpp::IntegerVector comp_ids = src.containsElementNamed("competitor_ids")
+        ? Rcpp::IntegerVector(src["competitor_ids"])
+        : Rcpp::IntegerVector();
+      double prob = native_outcome_probability_impl(ctxSEXP,
+                                                    node_id,
+                                                    deadline,
+                                                    component_str,
+                                                    R_NilValue,
+                                                    R_NilValue,
+                                                    comp_ids,
+                                                    rel_tol,
+                                                    abs_tol,
+                                                    max_depth,
+                                                    overrides_ptr);
+      if (std::isfinite(prob) && prob > 0.0) {
+        component_sum += prob;
+      }
+    }
+    double weight = (i < weights.size()) ? static_cast<double>(weights[i]) : 0.0;
+    mix += weight * component_sum;
+  }
+  return mix;
+}
+
+bool extract_shared_gate_spec(const Rcpp::List& entry, SharedGateSpec& spec) {
+  if (!entry.containsElementNamed("shared_gate")) return false;
+  Rcpp::RObject obj = entry["shared_gate"];
+  if (obj.isNULL()) return false;
+  Rcpp::List sg(obj);
+  spec = SharedGateSpec();
+  auto fetch_label = [&](const char* key, std::string& out) -> bool {
+    if (!sg.containsElementNamed(key)) return false;
+    Rcpp::RObject val = sg[key];
+    if (Rf_isNull(val)) return false;
+    Rcpp::CharacterVector cv(val);
+    if (cv.size() == 0 || cv[0] == NA_STRING) return false;
+    out = Rcpp::as<std::string>(cv[0]);
+    return true;
+  };
+  if (!fetch_label("x_label", spec.x_label)) return false;
+  if (!fetch_label("y_label", spec.y_label)) return false;
+  if (!fetch_label("c_label", spec.c_label)) return false;
+  return !(spec.x_label.empty() || spec.y_label.empty() || spec.c_label.empty());
+}
+
+const std::unordered_set<int> kEmptyForcedSet{};
+
+double compute_shared_gate_palloc(const uuber::NativeContext& ctx,
+                                  const SharedGateSpec& spec,
+                                  double limit,
+                                  double denom,
+                                  const std::string& component,
+                                  const TrialOverrides* overrides,
+                                  double rel_tol,
+                                  double abs_tol,
+                                  int max_depth) {
+  if (!std::isfinite(limit) || limit <= 0.0) return 0.0;
+  if (!std::isfinite(denom) || denom <= 0.0) return 0.0;
+  auto integrand = [&](double u) -> double {
+    if (!std::isfinite(u) || u < 0.0) return 0.0;
+    NodeEvalResult x_res = eval_event_label(ctx,
+                                            spec.x_label,
+                                            u,
+                                            component,
+                                            kEmptyForcedSet,
+                                            kEmptyForcedSet,
+                                            overrides);
+    NodeEvalResult y_res = eval_event_label(ctx,
+                                            spec.y_label,
+                                            u,
+                                            component,
+                                            kEmptyForcedSet,
+                                            kEmptyForcedSet,
+                                            overrides);
+    double fX = safe_density(x_res.density);
+    double FY = clamp_probability(1.0 - clamp_unit(y_res.survival));
+    double val = fX * FY;
+    if (!std::isfinite(val) || val <= 0.0) return 0.0;
+    return val;
+  };
+  double integral = uuber::integrate_boost_fn(
+    integrand,
+    0.0,
+    limit,
+    rel_tol,
+    abs_tol,
+    max_depth
+  );
+  if (!std::isfinite(integral) || integral <= 0.0) {
+    return 0.0;
+  }
+  double out = 1.0 - (integral / denom);
+  if (!std::isfinite(out)) return 0.0;
+  if (out < 0.0) out = 0.0;
+  if (out > 1.0) out = 1.0;
+  return out;
+}
+
+double shared_gate_density_component(const uuber::NativeContext& ctx,
+                                     const SharedGateSpec& spec,
+                                     double t,
+                                     const std::string& component,
+                                     const TrialOverrides* overrides,
+                                     double rel_tol,
+                                     double abs_tol,
+                                     int max_depth) {
+  if (spec.x_label.empty() || spec.y_label.empty() || spec.c_label.empty()) {
+    return 0.0;
+  }
+  if (!std::isfinite(t) || t < 0.0) {
+    return 0.0;
+  }
+  NodeEvalResult x_res = eval_event_label(ctx,
+                                          spec.x_label,
+                                          t,
+                                          component,
+                                          kEmptyForcedSet,
+                                          kEmptyForcedSet,
+                                          overrides);
+  NodeEvalResult y_res = eval_event_label(ctx,
+                                          spec.y_label,
+                                          t,
+                                          component,
+                                          kEmptyForcedSet,
+                                          kEmptyForcedSet,
+                                          overrides);
+  NodeEvalResult c_res = eval_event_label(ctx,
+                                          spec.c_label,
+                                          t,
+                                          component,
+                                          kEmptyForcedSet,
+                                          kEmptyForcedSet,
+                                          overrides);
+  double fX = safe_density(x_res.density);
+  double fC = safe_density(c_res.density);
+  double FX = clamp_probability(1.0 - clamp_unit(x_res.survival));
+  double FY = clamp_probability(1.0 - clamp_unit(y_res.survival));
+  double FC = clamp_probability(1.0 - clamp_unit(c_res.survival));
+  double SY = clamp_unit(y_res.survival);
+  double term1 = fX * FC * SY;
+  double termCother = fC * FX * SY;
+  double term2 = 0.0;
+  double denom = FX * FY;
+  if (denom > 0.0 && fC > 0.0) {
+    double palloc = compute_shared_gate_palloc(ctx,
+                                               spec,
+                                               t,
+                                               denom,
+                                               component,
+                                               overrides,
+                                               rel_tol,
+                                               abs_tol,
+                                               max_depth);
+    if (palloc > 0.0) {
+      term2 = fC * FX * FY * palloc;
+    }
+  }
+  double density = term1 + termCother + term2;
+  if (!std::isfinite(density) || density <= 0.0) {
+    return 0.0;
+  }
+  return density;
+}
+
+double evaluate_shared_gate_mix(const uuber::NativeContext& ctx,
+                                const SharedGateSpec& spec,
+                                double t,
+                                const Rcpp::CharacterVector& component_ids,
+                                const Rcpp::NumericVector& weights,
+                                Rcpp::Nullable<Rcpp::String> forced_component,
+                                const TrialOverrides* overrides,
+                                double rel_tol,
+                                double abs_tol,
+                                int max_depth) {
+  if (!std::isfinite(t) || t < 0.0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  std::vector<std::string> components;
+  std::vector<double> mix_weights;
+  if (!build_component_mix(component_ids, weights, forced_component, components, mix_weights)) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  double total = 0.0;
+  for (std::size_t i = 0; i < components.size(); ++i) {
+    double contrib = shared_gate_density_component(ctx,
+                                                   spec,
+                                                   t,
+                                                   components[i],
+                                                   overrides,
+                                                   rel_tol,
+                                                   abs_tol,
+                                                   max_depth);
+    if (!std::isfinite(contrib) || contrib <= 0.0) continue;
+    total += mix_weights[i] * contrib;
+  }
+  if (!std::isfinite(total) || total <= 0.0) {
+    return 0.0;
+  }
+  return total;
+}
+
 // [[Rcpp::export(name = "native_trial_mixture_cpp")]]
 double native_trial_mixture_driver(SEXP ctxSEXP,
                                    int node_id,
@@ -2675,43 +3356,12 @@ double native_trial_mixture_driver(SEXP ctxSEXP,
   if (!std::isfinite(t) || t < 0.0) {
     return std::numeric_limits<double>::quiet_NaN();
   }
-  if (component_ids.size() == 0) {
-    return std::numeric_limits<double>::quiet_NaN();
-  }
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   std::vector<std::string> components;
-  components.reserve(component_ids.size());
-  for (R_xlen_t i = 0; i < component_ids.size(); ++i) {
-    if (component_ids[i] == NA_STRING) {
-      components.emplace_back("__default__");
-    } else {
-      components.push_back(Rcpp::as<std::string>(component_ids[i]));
-    }
+  std::vector<double> mix_weights;
+  if (!build_component_mix(component_ids, weights, forced_component, components, mix_weights)) {
+    return std::numeric_limits<double>::quiet_NaN();
   }
-  std::vector<double> mix_weights(components.size(), std::numeric_limits<double>::quiet_NaN());
-  if (weights.size() == component_ids.size()) {
-    for (R_xlen_t i = 0; i < weights.size(); ++i) {
-      mix_weights[static_cast<std::size_t>(i)] = weights[i];
-    }
-  }
-  normalize_weights(mix_weights);
-
-  if (forced_component.isNotNull()) {
-    std::string forced = Rcpp::as<std::string>(forced_component);
-    bool found = false;
-    for (std::size_t i = 0; i < components.size(); ++i) {
-      if (components[i] == forced) {
-        components = {components[i]};
-        mix_weights = {1.0};
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      return std::numeric_limits<double>::quiet_NaN();
-    }
-  }
-
   std::vector<int> comp_ids = integer_vector_to_std(competitor_ids, false);
   const TrialOverrides* overrides_ptr = nullptr;
   if (!Rf_isNull(trial_overrides)) {
@@ -2740,6 +3390,310 @@ double native_trial_mixture_driver(SEXP ctxSEXP,
     return 0.0;
   }
   return total;
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
+                                         Rcpp::List structure,
+                                         Rcpp::List trial_entries,
+                                         Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt,
+                                         double default_deadline,
+                                         double rel_tol,
+                                         double abs_tol,
+                                         int max_depth) {
+  if (Rf_isNull(ctxSEXP)) {
+    Rcpp::stop("native_loglik_from_params_cpp: context pointer is null");
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  R_xlen_t n_trials = trial_entries.size();
+  Rcpp::NumericVector per_trial(n_trials);
+  double total_loglik = 0.0;
+  bool hit_neg_inf = false;
+  std::unordered_map<std::string, double> component_deadlines =
+    build_component_deadlines(structure, default_deadline);
+
+  for (R_xlen_t i = 0; i < n_trials; ++i) {
+    Rcpp::List entry(trial_entries[i]);
+    std::string entry_type = entry.containsElementNamed("type")
+      ? Rcpp::as<std::string>(entry["type"])
+      : "direct";
+    double t = entry.containsElementNamed("rt")
+      ? Rcpp::as<double>(entry["rt"])
+      : NA_REAL;
+    SEXP trial_rows_sexp = entry.containsElementNamed("trial_rows")
+      ? entry["trial_rows"]
+      : R_NilValue;
+    Rcpp::Nullable<Rcpp::DataFrame> trial_rows(trial_rows_sexp);
+    SEXP forced_component_sexp = entry.containsElementNamed("forced_component")
+      ? entry["forced_component"]
+      : R_NilValue;
+    Rcpp::Nullable<Rcpp::String> forced_component(forced_component_sexp);
+    Rcpp::IntegerVector competitor_ids = entry.containsElementNamed("competitor_ids")
+      ? Rcpp::IntegerVector(entry["competitor_ids"])
+      : Rcpp::IntegerVector();
+    SEXP override_ptr = entry.containsElementNamed("override_ptr")
+      ? entry["override_ptr"]
+      : R_NilValue;
+
+    Rcpp::List plan = native_component_plan_impl(structure,
+                                                 trial_rows,
+                                                 forced_component,
+                                                 component_weights_opt);
+    Rcpp::CharacterVector components(plan["components"]);
+    Rcpp::NumericVector weights(plan["weights"]);
+    double mix = std::numeric_limits<double>::quiet_NaN();
+    if (entry_type == "alias_sum") {
+      if (!entry.containsElementNamed("alias_sources") || !std::isfinite(t) || t < 0.0) {
+        per_trial[i] = R_NegInf;
+        hit_neg_inf = true;
+        continue;
+      }
+      Rcpp::List alias_sources(entry["alias_sources"]);
+      mix = evaluate_alias_mix(ctxSEXP,
+                               components,
+                               weights,
+                               alias_sources,
+                               t,
+                               forced_component,
+                               override_ptr);
+    } else if (entry_type == "na_map") {
+      if (!entry.containsElementNamed("na_sources")) {
+        per_trial[i] = R_NegInf;
+        hit_neg_inf = true;
+        continue;
+      }
+      Rcpp::List na_sources(entry["na_sources"]);
+      mix = evaluate_na_map_mix(ctxSEXP,
+                                components,
+                                weights,
+                                na_sources,
+                                t,
+                                component_deadlines,
+                                default_deadline,
+                                rel_tol,
+                                abs_tol,
+                                max_depth,
+                                forced_component,
+                                override_ptr);
+    } else {
+      SharedGateSpec shared_spec;
+      bool has_shared_gate = extract_shared_gate_spec(entry, shared_spec);
+      if (has_shared_gate) {
+        const TrialOverrides* overrides_ptr = extract_overrides(override_ptr);
+        mix = evaluate_shared_gate_mix(*ctx,
+                                       shared_spec,
+                                       t,
+                                       components,
+                                       weights,
+                                       forced_component,
+                                       overrides_ptr,
+                                       rel_tol,
+                                       abs_tol,
+                                       max_depth);
+      } else {
+        if (!entry.containsElementNamed("node_id") ||
+            !entry.containsElementNamed("competitor_ids") ||
+            !std::isfinite(t) || t < 0.0) {
+          per_trial[i] = R_NegInf;
+          hit_neg_inf = true;
+          continue;
+        }
+        int node_id = Rcpp::as<int>(entry["node_id"]);
+        Rcpp::IntegerVector comp_ids(entry["competitor_ids"]);
+        mix = native_trial_mixture_driver(ctxSEXP,
+                                          node_id,
+                                          t,
+                                          components,
+                                          weights,
+                                          forced_component,
+                                          comp_ids,
+                                          override_ptr);
+      }
+    }
+    double log_contrib = R_NegInf;
+    if (std::isfinite(mix) && mix > 0.0) {
+      log_contrib = std::log(mix);
+    } else {
+      hit_neg_inf = true;
+    }
+    per_trial[i] = log_contrib;
+    if (!hit_neg_inf && std::isfinite(log_contrib)) {
+      total_loglik += log_contrib;
+    }
+  }
+
+  if (hit_neg_inf) {
+    total_loglik = R_NegInf;
+  }
+
+  return Rcpp::List::create(
+    Rcpp::Named("loglik") = total_loglik,
+    Rcpp::Named("per_trial") = per_trial
+  );
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_loglik_from_buffer_cpp(SEXP ctxSEXP,
+                                         Rcpp::List structure,
+                                         Rcpp::List trial_entries,
+                                         Rcpp::DataFrame params_df,
+                                         Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt,
+                                         double default_deadline,
+                                         double rel_tol,
+                                         double abs_tol,
+                                         int max_depth) {
+  if (Rf_isNull(ctxSEXP)) {
+    Rcpp::stop("native_loglik_from_params_cpp: context pointer is null");
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  R_xlen_t n_trials = trial_entries.size();
+  Rcpp::NumericVector per_trial(n_trials);
+  double total_loglik = 0.0;
+  bool hit_neg_inf = false;
+  std::unordered_map<std::string, double> component_deadlines =
+    build_component_deadlines(structure, default_deadline);
+  std::vector<std::unique_ptr<TrialOverrides>> override_cache;
+  override_cache.reserve(static_cast<std::size_t>(n_trials));
+  std::vector<Rcpp::XPtr<TrialOverrides>> override_handles;
+  override_handles.reserve(static_cast<std::size_t>(n_trials));
+
+  for (R_xlen_t i = 0; i < n_trials; ++i) {
+    Rcpp::List entry(trial_entries[i]);
+    std::string entry_type = entry.containsElementNamed("type")
+      ? Rcpp::as<std::string>(entry["type"])
+      : "direct";
+    double t = entry.containsElementNamed("rt")
+      ? Rcpp::as<double>(entry["rt"])
+      : NA_REAL;
+    SEXP trial_rows_sexp = entry.containsElementNamed("trial_rows")
+      ? entry["trial_rows"]
+      : R_NilValue;
+    Rcpp::Nullable<Rcpp::DataFrame> trial_rows(trial_rows_sexp);
+    SEXP forced_component_sexp = entry.containsElementNamed("forced_component")
+      ? entry["forced_component"]
+      : R_NilValue;
+    Rcpp::Nullable<Rcpp::String> forced_component(forced_component_sexp);
+    Rcpp::IntegerVector competitor_ids = entry.containsElementNamed("competitor_ids")
+      ? Rcpp::IntegerVector(entry["competitor_ids"])
+      : Rcpp::IntegerVector();
+    SEXP override_ptr = entry.containsElementNamed("override_ptr")
+      ? entry["override_ptr"]
+      : R_NilValue;
+    if (Rf_isNull(override_ptr) && entry.containsElementNamed("row_index")) {
+      Rcpp::IntegerVector row_vec(entry["row_index"]);
+      std::vector<int> row_index;
+      row_index.reserve(row_vec.size());
+      for (int val : row_vec) {
+        if (val == NA_INTEGER) continue;
+        row_index.push_back(val);
+      }
+      if (!row_index.empty()) {
+        std::unique_ptr<TrialOverrides> overrides =
+          build_trial_overrides_from_indices(*ctx, params_df, row_index);
+        if (overrides) {
+          TrialOverrides* raw_ptr = overrides.get();
+          override_cache.push_back(std::move(overrides));
+          override_handles.emplace_back(Rcpp::XPtr<TrialOverrides>(raw_ptr, false));
+          override_ptr = override_handles.back();
+        }
+      }
+    }
+
+    Rcpp::List plan = native_component_plan_impl(structure,
+                                                 trial_rows,
+                                                 forced_component,
+                                                 component_weights_opt);
+    Rcpp::CharacterVector components(plan["components"]);
+    Rcpp::NumericVector weights(plan["weights"]);
+    double mix = std::numeric_limits<double>::quiet_NaN();
+    if (entry_type == "alias_sum") {
+      if (!entry.containsElementNamed("alias_sources") || !std::isfinite(t) || t < 0.0) {
+        per_trial[i] = R_NegInf;
+        hit_neg_inf = true;
+        continue;
+      }
+      Rcpp::List alias_sources(entry["alias_sources"]);
+      mix = evaluate_alias_mix(ctxSEXP,
+                               components,
+                               weights,
+                               alias_sources,
+                               t,
+                               forced_component,
+                               override_ptr);
+    } else if (entry_type == "na_map") {
+      if (!entry.containsElementNamed("na_sources")) {
+        per_trial[i] = R_NegInf;
+        hit_neg_inf = true;
+        continue;
+      }
+      Rcpp::List na_sources(entry["na_sources"]);
+      mix = evaluate_na_map_mix(ctxSEXP,
+                                components,
+                                weights,
+                                na_sources,
+                                t,
+                                component_deadlines,
+                                default_deadline,
+                                rel_tol,
+                                abs_tol,
+                                max_depth,
+                                forced_component,
+                                override_ptr);
+    } else {
+      SharedGateSpec shared_spec;
+      bool has_shared_gate = extract_shared_gate_spec(entry, shared_spec);
+      if (has_shared_gate) {
+        const TrialOverrides* overrides_ptr = extract_overrides(override_ptr);
+        mix = evaluate_shared_gate_mix(*ctx,
+                                       shared_spec,
+                                       t,
+                                       components,
+                                       weights,
+                                       forced_component,
+                                       overrides_ptr,
+                                       rel_tol,
+                                       abs_tol,
+                                       max_depth);
+      } else {
+        if (!entry.containsElementNamed("node_id") ||
+            !entry.containsElementNamed("competitor_ids") ||
+            !std::isfinite(t) || t < 0.0) {
+          per_trial[i] = R_NegInf;
+          hit_neg_inf = true;
+          continue;
+        }
+        int node_id = Rcpp::as<int>(entry["node_id"]);
+        Rcpp::IntegerVector comp_ids(entry["competitor_ids"]);
+        mix = native_trial_mixture_driver(ctxSEXP,
+                                          node_id,
+                                          t,
+                                          components,
+                                          weights,
+                                          forced_component,
+                                          comp_ids,
+                                          override_ptr);
+      }
+    }
+    double log_contrib = R_NegInf;
+    if (std::isfinite(mix) && mix > 0.0) {
+      log_contrib = std::log(mix);
+    } else {
+      hit_neg_inf = true;
+    }
+    per_trial[i] = log_contrib;
+    if (!hit_neg_inf && std::isfinite(log_contrib)) {
+      total_loglik += log_contrib;
+    }
+  }
+
+  if (hit_neg_inf) {
+    total_loglik = R_NegInf;
+  }
+
+  return Rcpp::List::create(
+    Rcpp::Named("loglik") = total_loglik,
+    Rcpp::Named("per_trial") = per_trial
+  );
 }
 
 // [[Rcpp::export]]

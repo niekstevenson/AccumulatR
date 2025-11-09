@@ -21,10 +21,10 @@ set.seed(1234)
 # -----------------------------------------------------------------------------#
 # 1. Build a model, simulate data, and capture its parameter table
 # -----------------------------------------------------------------------------#
-model_spec <- new_api_examples[[1]]
+model_spec <- new_api_examples[[2]]
 model_tables <- model_to_tables(model_spec)
 structure <- build_generator_structure(model_spec)
-sim_data <- simulate_model(model_tables, n_trials = 10000)
+sim_data <- simulate_model(model_tables, n_trials = 1000)
 cat(sprintf("Simulated %d trials for example '%s'\n",
             nrow(sim_data),
             names(new_api_examples)[[1]]))
@@ -190,8 +190,8 @@ profvis({
                                            trial_plan = trial_plan)
 }, prof_output = "profiles/ll_params.out")
 df_params <- summaryRprof("profiles/ll_params.out")
-write.csv(df_tables$by.total, file = "profiles/ll_params_total.csv")
-write.csv(df_tables$by.self, file = "profiles/ll_params_self.csv")
+write.csv(df_params$by.total, file = "profiles/ll_params_total.csv")
+write.csv(df_params$by.self, file = "profiles/ll_params_self.csv")
 
 cat(sprintf("\nFull R (model_tables) log-likelihood : %.4f\n", ll_r))
 cat(sprintf("Table/log_likelihood_from_params result: %.4f\n", ll_params$loglik))

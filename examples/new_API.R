@@ -792,6 +792,50 @@ example_18_shared_triggers <- race_spec() |>
   )) |>
   build_model()
 
+# Example 19 univalent stop change - bimanual
+example_19_univalent_stop_change <- race_spec() |>
+  add_accumulator("go_left", "lognormal", meanlog = log(0.35), sdlog = 0.2) |>
+  add_accumulator("go_right", "lognormal", meanlog = log(0.35), sdlog = 0.2) |>
+  
+  add_accumulator("stop", "exgauss", onset = 0.20,
+                  params = list(mu = 0.1, sigma = 0.04, tau = 0.1)) |>
+  add_accumulator("change2left", "lognormal", meanlog = log(0.3), sdlog = 0.18,
+                  onset = 0.20) |>
+  add_accumulator("change2right", "lognormal", meanlog = log(0.3), sdlog = 0.18,
+                  onset = 0.20) |>
+  add_pool("GO_LEFT", "go_left") |>
+  add_pool("GO_RIGHT", "go_right") |>
+  add_pool("STOP", "stop") |>
+  add_pool("C2L", "change2left") |>
+  add_pool("C2R", "change2right") |>
+  
+  add_outcome(
+    "Left",
+    first_of(
+      inhibit("GO_LEFT", by = "STOP"),
+      all_of("STOP", "C2L")
+    ),
+    options = list(component = c("go_only", "go_stop"))
+  ) |>
+  add_outcome(
+    "Right",
+    first_of(
+      inhibit("GO_RIGHT", by = "STOP"),
+      all_of("STOP", "C2R")
+    ),
+    options = list(component = c("go_only", "go_stop"))
+  ) |>
+  add_group("component:go_only", members = c("go_left", "go_right"),
+            attrs = list(component = "go_only")) |>
+  add_group("component:go_stop",
+            members = c("go_left", "go_right", "stop", "change2left", "change2right"),
+            attrs = list(component = "go_stop")) |>
+  set_metadata(mixture = list(
+    components = list(component("go_only", weight = 0.5),
+                      component("go_stop", weight = 0.5))
+  )) |>
+  build_model()
+
 
 new_api_examples <- list(
   example_1_simple = example_1_simple,
@@ -811,5 +855,6 @@ new_api_examples <- list(
   example_15_component_metadata = example_15_component_metadata,
   example_16_guard_tie_simple = example_16_guard_tie_simple,
   example_17_k_of_n_inhibitors = example_17_k_of_n_inhibitors,
-  example_18_shared_triggers = example_18_shared_triggers
+  example_18_shared_triggers = example_18_shared_triggers,
+  example_19_univalent_stop_change = example_19_univalent_stop_change
 )

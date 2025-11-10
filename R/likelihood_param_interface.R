@@ -454,18 +454,17 @@
   res
 }
 
-.native_loglikelihood_batch <- function(structure, prep, plan, trial_ids,
+.build_native_trial_entries <- function(structure, prep, plan, trial_ids,
                                         data_df, data_row_indices,
                                         component_weights = NULL,
-                                        params_df = NULL,
                                         use_buffer = FALSE) {
-  if (use_buffer && is.null(params_df)) {
-    stop("params_df must be supplied when use_buffer = TRUE")
-  }
-  native_ctx <- .prep_native_context(prep)
-  if (!inherits(native_ctx, "externalptr")) return(NULL)
   trials <- plan$trials %||% list()
-  if (length(trials) == 0L) return(NULL)
+  if (length(trials) == 0L) {
+    if (use_buffer) {
+      stop("Trial plan is empty; rebuild before constructing native entries", call. = FALSE)
+    }
+    return(NULL)
+  }
   outcome_defs <- prep[["outcomes"]] %||% list()
   competitor_map <- .prep_competitors(prep) %||% list()
   compiled_nodes <- lapply(outcome_defs, function(def) {
@@ -528,16 +527,16 @@
     trial_key <- as.character(tid %||% NA)
     entry <- trials[[trial_key]]
     if (is.null(entry)) {
-      if (use_buffer) stop(sprintf("Buffer plan missing trial entry for key '%s'", trial_key))
+      if (use_buffer) stop(sprintf("Buffer plan missing trial entry for key '%s'", trial_key), call. = FALSE)
       return(NULL)
     }
     row_index <- entry$row_index %||% integer(0)
     if (use_buffer && length(row_index) == 0L && is.null(entry$override_ptr)) {
-      stop("Buffer trial plan is missing row indices; rebuild with keep_trial_rows = FALSE / keep_component_rows = FALSE")
+      stop("Buffer trial plan is missing row indices; rebuild with keep_trial_rows = FALSE / keep_component_rows = FALSE", call. = FALSE)
     }
     data_idx <- data_row_indices[[trial_key]]
     if (is.null(data_idx) || length(data_idx) != 1L) {
-      if (use_buffer) stop(sprintf("Expected exactly one data row for trial %s", trial_key))
+      if (use_buffer) stop(sprintf("Expected exactly one data row for trial %s", trial_key), call. = FALSE)
       return(NULL)
     }
     data_row <- data_df[data_idx, , drop = FALSE]
@@ -546,7 +545,7 @@
     forced_component <- if ("component" %in% names(data_row)) data_row$component[[1]] else NULL
     if (is.na(outcome_lbl) || identical(outcome_lbl, "NA")) {
       if (is.null(na_source_specs)) {
-        if (use_buffer) stop("NA map encountered but na_source_specs unavailable")
+        if (use_buffer) stop("NA map encountered but na_source_specs unavailable", call. = FALSE)
         return(NULL)
       }
       entries[[i]] <- list(
@@ -562,7 +561,7 @@
     }
     outcome_def <- outcome_defs[[outcome_lbl]]
     if (is.null(outcome_def)) {
-      if (use_buffer) stop(sprintf("Outcome '%s' not found in prep", outcome_lbl))
+      if (use_buffer) stop(sprintf("Outcome '%s' not found in prep", outcome_lbl), call. = FALSE)
       return(NULL)
     }
     alias_refs <- outcome_def[['options']][['alias_of']]
@@ -578,7 +577,7 @@
         )
       })
       if (any(vapply(alias_sources, is.null, logical(1)))) {
-        if (use_buffer) stop("Alias sources missing compiled nodes")
+        if (use_buffer) stop("Alias sources missing compiled nodes", call. = FALSE)
         return(NULL)
       }
       entries[[i]] <- list(
@@ -594,16 +593,16 @@
     }
     compiled <- compiled_nodes[[outcome_lbl]]
     if (is.null(compiled)) {
-      if (use_buffer) stop(sprintf("Outcome '%s' missing compiled node", outcome_lbl))
+      if (use_buffer) stop(sprintf("Outcome '%s' missing compiled node", outcome_lbl), call. = FALSE)
       return(NULL)
     }
     comp_ids <- compiled_competitors[[outcome_lbl]]
     if (is.null(comp_ids)) {
-      if (use_buffer) stop(sprintf("Outcome '%s' missing competitor ids", outcome_lbl))
+      if (use_buffer) stop(sprintf("Outcome '%s' missing competitor ids", outcome_lbl), call. = FALSE)
       return(NULL)
     }
     if (is.na(rt_val) || !is.finite(rt_val) || rt_val < 0) {
-      if (use_buffer) stop("Encountered invalid RT in buffer path")
+      if (use_buffer) stop("Encountered invalid RT in buffer path", call. = FALSE)
       return(NULL)
     }
     entry_fields <- list(
@@ -623,6 +622,43 @@
     entries[[i]] <- entry_fields
   }
   component_weights_df <- if (!is.null(component_weights)) as.data.frame(component_weights) else NULL
+  list(
+    entries = entries,
+    component_weights_df = component_weights_df,
+    default_deadline = as.numeric(default_deadline),
+    rel_tol = as.numeric(rel_tol),
+    abs_tol = as.numeric(abs_tol),
+    max_depth = as.integer(max_depth)
+  )
+}
+
+.native_loglikelihood_batch <- function(structure, prep, plan, trial_ids,
+                                        data_df, data_row_indices,
+                                        component_weights = NULL,
+                                        params_df = NULL,
+                                        use_buffer = FALSE) {
+  if (use_buffer && is.null(params_df)) {
+    stop("params_df must be supplied when use_buffer = TRUE")
+  }
+  native_ctx <- .prep_native_context(prep)
+  if (!inherits(native_ctx, "externalptr")) return(NULL)
+  builder <- .build_native_trial_entries(
+    structure = structure,
+    prep = prep,
+    plan = plan,
+    trial_ids = trial_ids,
+    data_df = data_df,
+    data_row_indices = data_row_indices,
+    component_weights = component_weights,
+    use_buffer = use_buffer
+  )
+  if (is.null(builder)) return(NULL)
+  entries <- builder$entries
+  component_weights_df <- builder$component_weights_df
+  default_deadline <- builder$default_deadline
+  rel_tol <- builder$rel_tol
+  abs_tol <- builder$abs_tol
+  max_depth <- builder$max_depth
   if (use_buffer) {
     if (is.null(params_df)) {
       stop("params_df must be supplied when use_buffer = TRUE")
@@ -937,6 +973,76 @@ log_likelihood_from_params_buffer <- function(structure, params_df, data_df,
   list(
     loglik = batch_res$loglik,
     per_trial = batch_res$per_trial
+  )
+}
+
+build_buffer_trial_entries <- function(structure, params_df, data_df,
+                                       component_weights = NULL,
+                                       prep = NULL,
+                                       trial_plan = NULL,
+                                       native_bundle = NULL) {
+  if (is.null(params_df) || nrow(params_df) == 0L) {
+    stop("Parameter data frame must contain at least one row")
+  }
+  if (is.null(data_df) || nrow(data_df) == 0L) {
+    stop("Data frame must contain outcome/rt per trial")
+  }
+  structure <- .as_generator_structure(structure)
+  if (!exists(".build_trial_overrides", mode = "function")) {
+    stop("likelihood param interface requires generator_new.R to be sourced")
+  }
+  if (is.null(structure$model_spec)) {
+    stop("generator structure must include model_spec; rebuild with build_generator_structure")
+  }
+  if (!is.null(native_bundle)) {
+    prep <- native_bundle$prep %||% prep
+  }
+  prep_eval_base <- prep %||% .prepare_model_for_likelihood(structure$model_spec)
+  if (is.null(prep_eval_base[[".runtime"]])) {
+    prep_eval_base <- .prep_set_cache_bundle(
+      prep_eval_base,
+      .build_likelihood_cache_bundle(prep_eval_base)
+    )
+  }
+  if (!"trial" %in% names(data_df)) {
+    stop("Data frame must include a 'trial' column")
+  }
+  data_df$trial <- data_df$trial
+  if ("component" %in% names(data_df)) {
+    data_df$component <- as.character(data_df$component)
+  }
+  trial_lookup_keys <- as.character(data_df$trial %||% NA)
+  data_row_indices <- split(seq_len(nrow(data_df)), trial_lookup_keys)
+
+  plan <- trial_plan %||% .likelihood_build_trial_plan(
+    structure,
+    params_df,
+    prep_eval_base,
+    build_override_ptr = FALSE,
+    keep_trial_rows = FALSE,
+    keep_component_rows = FALSE
+  )
+  trial_ids <- unique(data_df$trial)
+  builder <- .build_native_trial_entries(
+    structure = structure,
+    prep = prep_eval_base,
+    plan = plan,
+    trial_ids = trial_ids,
+    data_df = data_df,
+    data_row_indices = data_row_indices,
+    component_weights = component_weights,
+    use_buffer = TRUE
+  )
+  list(
+    entries = builder$entries,
+    default_deadline = builder$default_deadline,
+    rel_tol = builder$rel_tol,
+    abs_tol = builder$abs_tol,
+    max_depth = builder$max_depth,
+    component_weights = builder$component_weights_df,
+    prep = prep_eval_base,
+    trial_plan = plan,
+    data_row_indices = data_row_indices
   )
 }
 

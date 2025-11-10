@@ -70,7 +70,10 @@ run_example_check <- function(example_idx, seed = 2025, n_trials = 400L,
                                                    build_override_ptr = FALSE,
                                                    keep_trial_rows = FALSE,
                                                    keep_component_rows = FALSE)
-  ll_r <- compute_loglik(model_tables, sim_data)
+  system.time(
+    ll_r <- compute_loglik(model_tables, sim_data)
+  )
+
   ll_params <- log_likelihood_from_params(structure,
                                           param_table,
                                           sim_data,
@@ -92,9 +95,7 @@ run_example_check <- function(example_idx, seed = 2025, n_trials = 400L,
   invisible(TRUE)
 }
 
-if (isdebugged(run_example_check)) {
-  undebug(run_example_check)
-}
+debug(run_example_check)
 examples_to_check <- c(2, 3, 6)
 for (idx in examples_to_check) {
   run_example_check(idx)

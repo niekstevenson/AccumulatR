@@ -51,3 +51,65 @@ This is the first step in the “native buffer” roadmap:
 4. Layer additional caching for repeated NA/guard integrals keyed by parameter signatures.
 
 For now the API is deliberately conservative so existing callers can flip between the two helpers. As we shave more R-side scaffolding, the buffer path will become the default for high-volume likelihood calls (e.g., samplers, optimisers, large grids). 
+
+### Rcpp Demo
+
+`scripts/demo_buffer_batch_cpp.cpp` shows how an Rcpp sampler can evaluate multiple parameter draws without returning to R between proposals. Compile it once per session:
+
+```r
+Rcpp::sourceCpp("scripts/demo_buffer_batch_cpp.cpp")
+```
+
+The exported `demo_buffer_batch_loglik_cpp()` expects:
+
+- `ctx_ptr` – the external pointer from `likelihood_build_native_bundle(model_spec)$context`.
+- `structure` – the generator structure returned by `build_generator_structure(model_spec)`.
+- `trial_entries` – the per-trial evaluation records returned by `build_buffer_trial_entries()` (the same list R hands to `native_loglik_from_buffer_cpp`).
+- `params_list` – a list of parameter data frames (one per proposal).
+- optional component weights plus the usual guard/NA integration tolerances.
+
+Example workflow (borrowing objects assembled in `scripts/demo_mcmc_buffer_example6.R`):
+
+```r
+source("scripts/demo_mcmc_buffer_example6.R")   # builds model, data, buffer_plan, native_bundle
+library(Rcpp)
+Rcpp::sourceCpp("scripts/demo_buffer_batch_cpp.cpp")
+
+buffer_bundle <- build_buffer_trial_entries(
+  structure = structure,
+  params_df = param_table,
+  data_df = sim_data,
+  prep = prep,
+  trial_plan = buffer_plan
+)
+
+param_proposals <- list(
+  param_table,
+  {
+    df <- param_table
+    mask <- df$accumulator_id == "acc_taskA"
+    df$meanlog[mask] <- df$meanlog[mask] + 0.02
+    df
+  },
+  {
+    df <- param_table
+    mask <- df$accumulator_id == "acc_taskB"
+    df$meanlog[mask] <- df$meanlog[mask] - 0.01
+    df
+  }
+)
+
+batch_ll <- demo_buffer_batch_loglik_cpp(
+  ctx_ptr       = native_bundle$context,
+  structure     = structure,
+  trial_entries = buffer_bundle$entries,
+  params_list   = param_proposals,
+  component_weights = buffer_bundle$component_weights,
+  default_deadline  = buffer_bundle$default_deadline,
+  rel_tol = buffer_bundle$rel_tol,
+  abs_tol = buffer_bundle$abs_tol,
+  max_depth = buffer_bundle$max_depth
+)
+```
+
+The helper loops entirely in C++, calling `native_loglik_from_buffer_cpp` for each parameter data frame and returning the summed log-likelihood vector—exactly what an Rcpp-based MCMC loop needs.

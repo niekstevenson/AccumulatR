@@ -7,9 +7,9 @@ source("R/profile_plot_new.R")
 source("R/processing_tree.R")
 
 set.seed(123456)
-model_spec <- stim_selective_versions[[1]]
+# model_spec <- stim_selective_versions[[1]]
 # 12 is very interesting!
-# model_spec <- new_api_examples[[6]]
+model_spec <- new_api_examples[[19]]
 
 # Translate model specification to table representation
 model_tables <- model_to_tables(model_spec)
@@ -25,7 +25,7 @@ data <- simulate_model(model_tables, n_trials = 2000)
 # 2) Compute and print simulation counts
 cat("\nSimulation counts:\n")
 print(table(data$outcome, useNA = "ifany"))
-# print(table(data$component, data$outcome, useNA = "ifany"))
+print(table(data$component, data$outcome, useNA = "ifany"))
 cat("\nSimulation probabilities:\n")
 print(table(data$outcome, useNA = "ifany")/nrow(data))
 

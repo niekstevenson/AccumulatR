@@ -7,7 +7,17 @@ approx_equal <- function(a, b, tol = 1e-10) {
   isTRUE(all.equal(a, b, tolerance = tol, check.attributes = FALSE))
 }
 
-make_acc <- function(dist, params, onset = 0, q = 0) {
+make_acc <- function(dist, params, onset = 0, q = 0, t0 = NULL) {
+  if (is.null(params)) params <- list()
+  if (is.null(t0)) {
+    if (is.null(params$t0) || length(params$t0) == 0L) {
+      params$t0 <- 0
+    } else {
+      params$t0 <- as.numeric(params$t0)[1]
+    }
+  } else {
+    params$t0 <- as.numeric(t0)[1]
+  }
   list(
     dist = dist,
     params = params,
@@ -20,9 +30,9 @@ make_acc <- function(dist, params, onset = 0, q = 0) {
 # Lognormal accumulator
 # ------------------------------------------------------------------------------
 
-acc_ln <- make_acc("lognormal", list(meanlog = 0.2, sdlog = 0.5), onset = 0.3, q = 0.1)
+acc_ln <- make_acc("lognormal", list(meanlog = 0.2, sdlog = 0.5), onset = 0.3, q = 0.1, t0 = 0.12)
 t_ln <- 1.5
-t_ln_adj <- t_ln - acc_ln$onset
+t_ln_adj <- t_ln - (acc_ln$onset + acc_ln$params$t0)
 expected_pdf_ln <- dlnorm(t_ln_adj, meanlog = acc_ln$params$meanlog, sdlog = acc_ln$params$sdlog)
 expected_cdf_ln <- plnorm(t_ln_adj, meanlog = acc_ln$params$meanlog, sdlog = acc_ln$params$sdlog)
 
@@ -43,15 +53,15 @@ if (!approx_equal(.acc_survival(acc_ln, t_ln), expected_surv_ln)) {
   stop("lognormal accumulator survival mismatch")
 }
 
-vec_t <- acc_ln$onset + c(0.2, 0.7, 1.3)
-vec_expected <- (1 - acc_ln$q) * dlnorm(vec_t - acc_ln$onset,
+vec_t <- acc_ln$onset + acc_ln$params$t0 + c(0.2, 0.7, 1.3)
+vec_expected <- (1 - acc_ln$q) * dlnorm(vec_t - (acc_ln$onset + acc_ln$params$t0),
                                        meanlog = acc_ln$params$meanlog,
                                        sdlog = acc_ln$params$sdlog)
 if (!approx_equal(.acc_density(acc_ln, vec_t), vec_expected)) {
   stop("lognormal accumulator vector density mismatch")
 }
 
-t_before <- max(0, acc_ln$onset - 0.05)
+t_before <- max(0, acc_ln$onset + acc_ln$params$t0 - 0.05)
 if (!approx_equal(.acc_density(acc_ln, t_before), 0.0)) {
   stop("lognormal accumulator early density should be zero")
 }
@@ -90,9 +100,9 @@ if (!approx_equal(.acc_survival(acc_fail, t_ln), 1.0)) {
 # Gamma accumulator
 # ------------------------------------------------------------------------------
 
-acc_gam <- make_acc("gamma", list(shape = 2.3, rate = 1.2), onset = 0.1, q = 0.25)
+acc_gam <- make_acc("gamma", list(shape = 2.3, rate = 1.2), onset = 0.1, q = 0.25, t0 = 0.05)
 t_gam <- 1.8
-t_gam_adj <- t_gam - acc_gam$onset
+t_gam_adj <- t_gam - (acc_gam$onset + acc_gam$params$t0)
 expected_pdf_gam <- dgamma(t_gam_adj, shape = acc_gam$params$shape, rate = acc_gam$params$rate)
 expected_cdf_gam <- pgamma(t_gam_adj, shape = acc_gam$params$shape, rate = acc_gam$params$rate)
 
@@ -115,9 +125,9 @@ if (!approx_equal(.acc_survival(acc_gam, t_gam), expected_surv_gam)) {
 # Ex-Gaussian accumulator
 # ------------------------------------------------------------------------------
 
-acc_ex <- make_acc("exgauss", list(mu = 0.5, sigma = 0.6, tau = 0.9), onset = 0.2, q = 0.05)
+acc_ex <- make_acc("exgauss", list(mu = 0.5, sigma = 0.6, tau = 0.9), onset = 0.2, q = 0.05, t0 = 0.08)
 t_ex <- 1.7
-t_ex_adj <- t_ex - acc_ex$onset
+t_ex_adj <- t_ex - (acc_ex$onset + acc_ex$params$t0)
 expected_pdf_ex <- {
   mu <- acc_ex$params$mu
   sigma <- acc_ex$params$sigma

@@ -46,9 +46,17 @@ build_param_table <- function(structure, n_trials) {
 }
 
 run_example_check <- function(example_idx, seed = 2025, n_trials = 400L,
-                              tol = 5e-3) {
+                              tol = 5e-3, t0_shift = NULL) {
   set.seed(seed)
   model_spec <- new_api_examples[[example_idx]]
+  if (!is.null(t0_shift)) {
+    model_spec$accumulators <- lapply(model_spec$accumulators, function(acc) {
+      params <- acc$params %||% list()
+      params$t0 <- t0_shift
+      acc$params <- params
+      acc
+    })
+  }
   model_tables <- model_to_tables(model_spec)
   structure <- build_generator_structure(model_spec)
   sim_data <- simulate_model(model_tables, n_trials = n_trials)
@@ -92,3 +100,5 @@ for (idx in examples_to_check) {
   run_example_check(idx)
   cat(sprintf("Example %d native likelihood matches baseline\n", idx))
 }
+run_example_check(2, t0_shift = 0.05)
+cat("Example 2 native likelihood matches baseline with t0 shift\n")

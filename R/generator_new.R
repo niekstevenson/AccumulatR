@@ -6,6 +6,18 @@ source("R/utils.R")
 source("R/model_tables.R")
 `%||%` <- function(lhs, rhs) if (is.null(lhs) || length(lhs) == 0) rhs else lhs
 
+.ensure_acc_param_t0 <- function(params) {
+  if (is.null(params) || length(params) == 0L) {
+    params <- list()
+  }
+  if (is.null(params$t0) || length(params$t0) == 0L) {
+    params$t0 <- 0
+  } else {
+    params$t0 <- as.numeric(params$t0)[1]
+  }
+  params
+}
+
 # ---- Model preparation helpers ------------------------------------------------
 
 .normalize_model <- function(model) {
@@ -37,7 +49,7 @@ source("R/model_tables.R")
       dist = acc$dist,
       onset = acc$onset %||% 0,
       q = acc$q %||% 0,
-      params = acc$params %||% list(),
+      params = .ensure_acc_param_t0(acc$params %||% list()),
       components = character(0),
       shared_trigger_id = NULL,
       shared_trigger_q = NULL
@@ -115,7 +127,7 @@ source("R/model_tables.R")
 
   # Final sanity: ensure each accumulator has params list ready
   for (acc_id in names(defs)) {
-    if (is.null(defs[[acc_id]]$params)) defs[[acc_id]]$params <- list()
+    defs[[acc_id]]$params <- .ensure_acc_param_t0(defs[[acc_id]]$params)
   }
   list(acc = defs, shared_triggers = shared_triggers)
 }
@@ -239,7 +251,7 @@ prepare_model <- function(model) {
     shared_trigger_q = vapply(acc_defs, function(acc) acc$shared_trigger_q %||% NA_real_, numeric(1)),
     stringsAsFactors = FALSE
   )
-  acc_df$params <- I(lapply(acc_defs, function(acc) acc$params %||% list()))
+  acc_df$params <- I(lapply(acc_defs, function(acc) .ensure_acc_param_t0(acc$params %||% list())))
   acc_df$components <- I(lapply(acc_defs, function(acc) acc$components %||% character(0)))
   acc_df
 }
@@ -382,7 +394,7 @@ build_generator_structure <- function(model) {
       param_list <- .coerce_param_list(i, params_rows, param_cols, existing = param_list)
     }
     if (is.null(param_list)) {
-      param_list <- base_def$params %||% list()
+      param_list <- .ensure_acc_param_t0(base_def$params %||% list())
       if (require_full_params && length(param_list) == 0L) {
         stop(sprintf("Trial %s accumulator '%s' missing parameter values",
                      trial_label %||% "NA", acc_id))

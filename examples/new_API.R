@@ -278,14 +278,27 @@ race_spec <- function() {
   dots
 }
 
+.ensure_acc_param_t0 <- function(params) {
+  if (is.null(params) || length(params) == 0L) {
+    params <- list()
+  }
+  if (is.null(params$t0) || length(params$t0) == 0L) {
+    params$t0 <- 0
+  } else {
+    params$t0 <- as.numeric(params$t0)[1]
+  }
+  params
+}
+
 add_accumulator <- function(spec, id, dist, onset = 0, q = 0,
                             tags = list(), params = NULL, ...) {
   stopifnot(inherits(spec, "race_spec"))
   param_list <- .collect_params(params, list(...))
+  param_list <- .ensure_acc_param_t0(param_list)
   spec$accumulators[[length(spec$accumulators) + 1L]] <- list(
     id = id,
     dist = dist,
-    params = param_list %||% list(),
+    params = param_list,
     onset = onset,
     q = q,
     tags = tags %||% list()
@@ -355,6 +368,7 @@ build_model <- function(spec) {
 # --- Core constructors --------------------------------------------------------
 
 acc <- function(id, dist, params, onset = 0, q = 0, tags = list()) {
+  params <- .ensure_acc_param_t0(params %||% list())
   list(id = id, dist = dist, params = params, onset = onset, q = q, tags = tags)
 }
 

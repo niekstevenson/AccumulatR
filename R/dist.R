@@ -60,12 +60,26 @@
   fn
 }
 
-.dist_param_scalar <- function(par, name) {
+.dist_param_scalar <- function(par, name, default = NULL, required = TRUE) {
   val <- par[[name]]
   if (is.null(val) || length(val) == 0L) {
+    if (!isTRUE(required)) {
+      return(default)
+    }
     stop(sprintf("Missing parameter '%s' for distribution", name), call. = FALSE)
   }
   as.numeric(val)[1]
+}
+
+.dist_param_t0 <- function(par) {
+  .dist_param_scalar(par, "t0", default = 0, required = FALSE)
+}
+
+.dist_zero_before_t0 <- function(values, shifted) {
+  if (length(values) == 0L) return(values)
+  mask <- !is.na(shifted) & shifted <= 0 & !is.na(values)
+  if (any(mask)) values[mask] <- 0
+  values
 }
 
 .dist_as_count <- function(n) {
@@ -83,84 +97,87 @@ dist_registry <- local({
   reg$lognormal <- list(
     r = function(n, par) {
       native <- .get_dist_native()
-      native$dist_lognormal_rng(
-        .dist_as_count(n),
-        .dist_param_scalar(par, "meanlog"),
-        .dist_param_scalar(par, "sdlog")
-      )
+      meanlog <- .dist_param_scalar(par, "meanlog")
+      sdlog <- .dist_param_scalar(par, "sdlog")
+      t0 <- .dist_param_t0(par)
+      native$dist_lognormal_rng(.dist_as_count(n), meanlog, sdlog) + t0
     },
     d = function(x, par) {
       native <- .get_dist_native()
-      native$dist_lognormal_pdf(
-        x,
-        .dist_param_scalar(par, "meanlog"),
-        .dist_param_scalar(par, "sdlog")
-      )
+      meanlog <- .dist_param_scalar(par, "meanlog")
+      sdlog <- .dist_param_scalar(par, "sdlog")
+      t0 <- .dist_param_t0(par)
+      shifted <- x - t0
+      out <- native$dist_lognormal_pdf(shifted, meanlog, sdlog)
+      .dist_zero_before_t0(out, shifted)
     },
     p = function(x, par) {
       native <- .get_dist_native()
-      native$dist_lognormal_cdf(
-        x,
-        .dist_param_scalar(par, "meanlog"),
-        .dist_param_scalar(par, "sdlog")
-      )
+      meanlog <- .dist_param_scalar(par, "meanlog")
+      sdlog <- .dist_param_scalar(par, "sdlog")
+      t0 <- .dist_param_t0(par)
+      shifted <- x - t0
+      out <- native$dist_lognormal_cdf(shifted, meanlog, sdlog)
+      .dist_zero_before_t0(out, shifted)
     }
   )
 
   reg$gamma <- list(
     r = function(n, par) {
       native <- .get_dist_native()
-      native$dist_gamma_rng(
-        .dist_as_count(n),
-        .dist_param_scalar(par, "shape"),
-        .dist_param_scalar(par, "rate")
-      )
+      shape <- .dist_param_scalar(par, "shape")
+      rate <- .dist_param_scalar(par, "rate")
+      t0 <- .dist_param_t0(par)
+      native$dist_gamma_rng(.dist_as_count(n), shape, rate) + t0
     },
     d = function(x, par) {
       native <- .get_dist_native()
-      native$dist_gamma_pdf(
-        x,
-        .dist_param_scalar(par, "shape"),
-        .dist_param_scalar(par, "rate")
-      )
+      shape <- .dist_param_scalar(par, "shape")
+      rate <- .dist_param_scalar(par, "rate")
+      t0 <- .dist_param_t0(par)
+      shifted <- x - t0
+      out <- native$dist_gamma_pdf(shifted, shape, rate)
+      .dist_zero_before_t0(out, shifted)
     },
     p = function(x, par) {
       native <- .get_dist_native()
-      native$dist_gamma_cdf(
-        x,
-        .dist_param_scalar(par, "shape"),
-        .dist_param_scalar(par, "rate")
-      )
+      shape <- .dist_param_scalar(par, "shape")
+      rate <- .dist_param_scalar(par, "rate")
+      t0 <- .dist_param_t0(par)
+      shifted <- x - t0
+      out <- native$dist_gamma_cdf(shifted, shape, rate)
+      .dist_zero_before_t0(out, shifted)
     }
   )
 
   reg$exgauss <- list(
     r = function(n, par) {
       native <- .get_dist_native()
-      native$dist_exgauss_rng(
-        .dist_as_count(n),
-        .dist_param_scalar(par, "mu"),
-        .dist_param_scalar(par, "sigma"),
-        .dist_param_scalar(par, "tau")
-      )
+      mu <- .dist_param_scalar(par, "mu")
+      sigma <- .dist_param_scalar(par, "sigma")
+      tau <- .dist_param_scalar(par, "tau")
+      t0 <- .dist_param_t0(par)
+      native$dist_exgauss_rng(.dist_as_count(n), mu, sigma, tau) + t0
     },
     d = function(x, par) {
       native <- .get_dist_native()
-      native$dist_exgauss_pdf(
-        x,
-        .dist_param_scalar(par, "mu"),
-        .dist_param_scalar(par, "sigma"),
-        .dist_param_scalar(par, "tau")
-      )
+      mu <- .dist_param_scalar(par, "mu")
+      sigma <- .dist_param_scalar(par, "sigma")
+      tau <- .dist_param_scalar(par, "tau")
+      t0 <- .dist_param_t0(par)
+      shifted <- x - t0
+      out <- native$dist_exgauss_pdf(shifted, mu, sigma, tau)
+      .dist_zero_before_t0(out, shifted)
     },
     p = function(x, par) {
       native <- .get_dist_native()
-      native$dist_exgauss_cdf(
-        x,
-        .dist_param_scalar(par, "mu"),
-        .dist_param_scalar(par, "sigma"),
-        .dist_param_scalar(par, "tau")
-      )
+      mu <- .dist_param_scalar(par, "mu")
+      sigma <- .dist_param_scalar(par, "sigma")
+      tau <- .dist_param_scalar(par, "tau")
+      t0 <- .dist_param_t0(par)
+      shifted <- x - t0
+      out <- native$dist_exgauss_cdf(shifted, mu, sigma, tau)
+      .dist_zero_before_t0(out, shifted)
     }
   )
 

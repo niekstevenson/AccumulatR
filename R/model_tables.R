@@ -1,5 +1,17 @@
 `%||%` <- function(lhs, rhs) if (is.null(lhs) || length(lhs) == 0) rhs else lhs
 
+.ensure_acc_param_t0 <- function(params) {
+  if (is.null(params) || length(params) == 0L) {
+    params <- list()
+  }
+  if (is.null(params$t0) || length(params$t0) == 0L) {
+    params$t0 <- 0
+  } else {
+    params$t0 <- as.numeric(params$t0)[1]
+  }
+  params
+}
+
 is_model_tables <- function(x) {
   is.list(x) &&
     all(c("struct_nodes", "component_nodes", "param_values") %in% names(x))
@@ -84,15 +96,16 @@ model_to_tables <- function(model) {
   for (acc in model$accumulators) {
     struct_id <- sprintf("acc:%s", acc$id)
     param_slots <- list()
-    if (!is.null(acc$params) && length(acc$params) > 0) {
-      for (pname in names(acc$params)) {
+    acc_params <- .ensure_acc_param_t0(acc$params %||% list())
+    if (length(acc_params) > 0) {
+      for (pname in names(acc_params)) {
         shared_mapping <- shared_param_map[[acc$id]] %||% list()
         param_id <- shared_mapping[[pname]] %||% .make_param_id(struct_id, pname)
         param_slots[[pname]] <- param_id
         if (!(param_id %in% added_param_ids)) {
           param_value <- shared_param_values[[param_id]]
           if (is.null(param_value)) {
-            param_value <- acc$params[[pname]]
+            param_value <- acc_params[[pname]]
             shared_param_values[[param_id]] <- param_value
           }
           param_rows[[length(param_rows) + 1L]] <- data.frame(
@@ -234,7 +247,7 @@ tables_to_model <- function(tables) {
       dist = row$dist_family,
       onset = payload$onset %||% 0,
       q = payload$q %||% 0,
-      params = params,
+      params = .ensure_acc_param_t0(params),
       components = payload$components %||% NULL
     )
   })

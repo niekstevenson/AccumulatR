@@ -228,21 +228,30 @@ inline double eval_cdf_single(const AccDistParams& cfg, double x) {
   }
 }
 
+inline double total_onset_with_t0(double onset,
+                                  const AccDistParams& cfg) {
+  if (!std::isfinite(onset)) {
+    Rcpp::stop("Accumulator parameter 'onset' must be finite");
+  }
+  if (!std::isfinite(cfg.t0)) {
+    Rcpp::stop("Accumulator parameter 't0' must be finite");
+  }
+  return onset + cfg.t0;
+}
+
 inline double acc_density_from_cfg(double t,
                                    double onset,
                                    double q,
                                    const AccDistParams& cfg) {
-  if (!std::isfinite(onset)) {
-    Rcpp::stop("Accumulator parameter 'onset' must be finite");
-  }
+  double effective_onset = total_onset_with_t0(onset, cfg);
   if (!std::isfinite(q)) {
     Rcpp::stop("Accumulator parameter 'q' must be finite");
   }
   if (!std::isfinite(t) || t < 0.0) return 0.0;
-  if (t < onset) return 0.0;
+  if (t < effective_onset) return 0.0;
   double success_prob = 1.0 - q;
   if (success_prob <= 0.0) return 0.0;
-  double dens = eval_pdf_single(cfg, t - onset);
+  double dens = eval_pdf_single(cfg, t - effective_onset);
   if (Rcpp::NumericVector::is_na(dens) || !std::isfinite(dens)) {
     return NA_REAL;
   }
@@ -252,12 +261,10 @@ inline double acc_density_from_cfg(double t,
 inline double acc_density_success_from_cfg(double t,
                                            double onset,
                                            const AccDistParams& cfg) {
-  if (!std::isfinite(onset)) {
-    Rcpp::stop("Accumulator parameter 'onset' must be finite");
-  }
+  double effective_onset = total_onset_with_t0(onset, cfg);
   if (!std::isfinite(t) || t < 0.0) return 0.0;
-  if (t < onset) return 0.0;
-  double dens = eval_pdf_single(cfg, t - onset);
+  if (t < effective_onset) return 0.0;
+  double dens = eval_pdf_single(cfg, t - effective_onset);
   if (Rcpp::NumericVector::is_na(dens) || !std::isfinite(dens)) {
     return NA_REAL;
   }
@@ -268,16 +275,14 @@ inline double acc_survival_from_cfg(double t,
                                     double onset,
                                     double q,
                                     const AccDistParams& cfg) {
-  if (!std::isfinite(onset)) {
-    Rcpp::stop("Accumulator parameter 'onset' must be finite");
-  }
+  double effective_onset = total_onset_with_t0(onset, cfg);
   if (!std::isfinite(q)) {
     Rcpp::stop("Accumulator parameter 'q' must be finite");
   }
   if (!std::isfinite(t)) return 0.0;
   if (t < 0.0) return 1.0;
-  if (t < onset) return 1.0;
-  double cdf = eval_cdf_single(cfg, t - onset);
+  if (t < effective_onset) return 1.0;
+  double cdf = eval_cdf_single(cfg, t - effective_onset);
   if (Rcpp::NumericVector::is_na(cdf) || !std::isfinite(cdf)) {
     return NA_REAL;
   }
@@ -290,13 +295,11 @@ inline double acc_survival_from_cfg(double t,
 inline double acc_cdf_success_from_cfg(double t,
                                        double onset,
                                        const AccDistParams& cfg) {
-  if (!std::isfinite(onset)) {
-    Rcpp::stop("Accumulator parameter 'onset' must be finite");
-  }
+  double effective_onset = total_onset_with_t0(onset, cfg);
   if (!std::isfinite(t)) return 1.0;
   if (t < 0.0) return 0.0;
-  if (t < onset) return 0.0;
-  double cdf = eval_cdf_single(cfg, t - onset);
+  if (t < effective_onset) return 0.0;
+  double cdf = eval_cdf_single(cfg, t - effective_onset);
   if (Rcpp::NumericVector::is_na(cdf) || !std::isfinite(cdf)) {
     return NA_REAL;
   }

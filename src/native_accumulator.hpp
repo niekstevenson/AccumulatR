@@ -21,6 +21,7 @@ struct AccDistParams {
   double p1{};
   double p2{};
   double p3{};
+  double t0{0.0};
 };
 
 inline std::string normalize_dist_name(const std::string& dist) {
@@ -82,6 +83,12 @@ inline AccDistParams resolve_acc_params_entries(const std::string& dist,
     cfg.p3 = extract_param_numeric(find_param(entries, "tau"), dist_name, "tau");
   } else {
     throw std::runtime_error("Unsupported accumulator distribution '" + dist_name + "'");
+  }
+  const ProtoParamEntry* t0_entry = find_param(entries, "t0");
+  if (t0_entry != nullptr) {
+    cfg.t0 = extract_param_numeric(t0_entry, dist_name, "t0");
+  } else {
+    cfg.t0 = 0.0;
   }
   return cfg;
 }

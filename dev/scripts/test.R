@@ -1,7 +1,6 @@
 rm(list = ls())
-source("R/generator_new.R"); 
+library(AccumulatR)
 source("examples/new_API.R"); 
-source("R/super_large_likelihood.R"); 
 examples <- names(new_api_examples)[c(1:11, 13:16, 18)]
 
 for (nm in examples) {

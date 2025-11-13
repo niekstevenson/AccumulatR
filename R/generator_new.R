@@ -1,9 +1,5 @@
 # Interpreter-driven race simulator for the boolean-expression DSL defined in new_API.R
 # Depends on core distribution and sampling helpers from the existing codebase.
-
-source("R/dist.R")
-source("R/utils.R")
-source("R/model_tables.R")
 `%||%` <- function(lhs, rhs) if (is.null(lhs) || length(lhs) == 0) rhs else lhs
 
 .ensure_acc_param_t0 <- function(params) {

@@ -1,8 +1,6 @@
 rm(list = ls())
 source("examples/new_API.R")
-source("R/generator_new.R")
-source("R/super_large_likelihood.R")
-source("R/likelihood_old.R")
+library(AccumulatR)
 
 # Model: example_3_stop_na
 model_spec <- new_api_examples[[3]]
@@ -77,22 +75,22 @@ library(dplyr)
 load_profile <- function(path_total, path_self) {
   total_df <- read.csv(path_total, stringsAsFactors = FALSE)
   self_df <- read.csv(path_self, stringsAsFactors = FALSE)
-  total_df <- rename(total_df, total_time = total.time, total_pct = total.pct, fn = X)
-  self_df <- rename(self_df, self_time = self.time, self_pct = self.pct, fn = X)
-  full_join(total_df, self_df, by = "fn")
+  total_df <- dplyr::rename(total_df, total_time = total.time, total_pct = total.pct, fn = X)
+  self_df <- dplyr::rename(self_df, self_time = self.time, self_pct = self.pct, fn = X)
+  dplyr::full_join(total_df, self_df, by = "fn")
 }
 
 old_profile <- load_profile("ll_old_table_total.csv", "ll_old_table_self.csv")
 new_profile <- load_profile("ll_new_table_total.csv", "ll_new_table_self.csv")
 
-compare_profile <- full_join(old_profile, new_profile, by = "fn", suffix = c("_old", "_new")) %>%
-  mutate(
+compare_profile <- dplyr::full_join(old_profile, new_profile, by = "fn", suffix = c("_old", "_new")) %>%
+  dplyr::mutate(
     total_time_diff = total_time_new - total_time_old,
     total_pct_diff = total_pct_new - total_pct_old,
     self_time_diff = self_time_new - self_time_old,
     self_pct_diff = self_pct_new - self_pct_old
   ) %>%
-  arrange(desc(abs(total_pct_diff)))
+  dplyr::arrange(dplyr::desc(abs(total_pct_diff)))
 
 write.csv(compare_profile, file = "ll_table_profile_comparison.csv", row.names = FALSE)
 

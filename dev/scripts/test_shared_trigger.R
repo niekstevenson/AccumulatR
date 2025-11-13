@@ -1,7 +1,6 @@
 rm(list = ls())
 
-source("R/generator_new.R")
-source("R/super_large_likelihood.R")
+library(AccumulatR)
 source("examples/new_API.R")
 
 # Build the shared-trigger stop model

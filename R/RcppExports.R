@@ -201,4 +201,3 @@ guard_effective_survival_cpp <- function(integrand, upper, rel_tol, abs_tol, max
     .Call(`_AccumulatR_guard_effective_survival_cpp`, integrand, upper, rel_tol, abs_tol, max_depth)
 }
 
-

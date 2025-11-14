@@ -19,15 +19,17 @@ with_native_flags <- function(node_eval, param_rows, expr) {
   force(expr)
 }
 
-compare_response_probabilities <- function(model, component = NULL) {
+compare_response_probabilities <- function(model, params_df, component = NULL) {
+  structure <- build_generator_structure(model)
+  if (!is.null(component)) {
+    params_df$component <- component
+  }
   resp_r <- with_native_flags(FALSE, FALSE, {
-    response_probabilities(model, component = component)
+    observed_response_probabilities_from_params(structure, params_df, include_na = TRUE)
   })
-
   resp_cpp <- with_native_flags(TRUE, TRUE, {
-    response_probabilities(model, component = component)
+    observed_response_probabilities_from_params(structure, params_df, include_na = TRUE)
   })
-
   diff <- resp_cpp - resp_r
   list(
     R = resp_r,
@@ -185,13 +187,21 @@ compare_speed <- function(model = NULL,
 }
 
 compare_response_suite <- function(model_list,
+                                   params_list,
                                    example_ids = names(model_list),
                                    component = NULL) {
   if (length(example_ids) == 0) stop("No example ids supplied")
+  if (missing(params_list)) {
+    stop("Parameter tables must be supplied for each model")
+  }
   rows <- lapply(example_ids, function(id) {
     model <- model_list[[id]]
     if (is.null(model)) stop(sprintf("Model '%s' not found in supplied list", id))
-    cmp <- compare_response_probabilities(model, component = component)
+    params_df <- params_list[[id]]
+    if (is.null(params_df)) {
+      stop(sprintf("Parameter table for model '%s' not found", id))
+    }
+    cmp <- compare_response_probabilities(model, params_df, component = component)
     data.frame(
       model = id,
       max_abs_diff = cmp$max_abs_diff,
@@ -202,37 +212,6 @@ compare_response_suite <- function(model_list,
     )
   })
   do.call(rbind, rows)
-}
-
-build_param_table_from_structure <- function(structure, n_trials = 1000L) {
-  acc_lookup <- structure$accumulators
-  if (is.null(acc_lookup) || nrow(acc_lookup) == 0L) {
-    stop("Structure must contain accumulator definitions")
-  }
-  comp_ids <- structure$components$component_id
-  component_label <- if (length(comp_ids) == 1L) comp_ids[[1]] else NA_character_
-  n_acc <- nrow(acc_lookup)
-  base <- data.frame(
-    trial = rep(seq_len(n_trials), each = n_acc),
-    accumulator_id = rep(acc_lookup$accumulator_id, times = n_trials),
-    accumulator = rep(acc_lookup$accumulator_index, times = n_trials),
-    component = rep(component_label, times = n_trials * n_acc),
-    role = rep(acc_lookup$role, times = n_trials),
-    onset = rep(acc_lookup$onset, times = n_trials),
-    q = rep(acc_lookup$q, times = n_trials),
-    stringsAsFactors = FALSE
-  )
-  param_names <- unique(unlist(lapply(acc_lookup$params, names)))
-  if (length(param_names) > 0L) {
-    for (param_name in param_names) {
-      base_vals <- vapply(acc_lookup$params, function(p) {
-        val <- p[[param_name]]
-        if (is.null(val)) NA_real_ else as.numeric(val)
-      }, numeric(1))
-      base[[param_name]] <- rep(base_vals, times = n_trials)
-    }
-  }
-  base
 }
 
 simulate_data_from_params_table <- function(structure,
@@ -248,11 +227,13 @@ simulate_data_from_params_table <- function(structure,
 }
 
 run_param_table_benchmark <- function(model_spec,
+                                      core_params,
                                       n_trials = 1000L,
                                       seed = 2025,
                                       bench_reps = 3) {
-  structure <- build_generator_structure(model_spec)
-  param_table <- build_param_table_from_structure(structure, n_trials = n_trials)
+  model_with_defaults <- AccumulatR:::.apply_core_params_to_spec(model_spec, core_params)
+  structure <- build_generator_structure(model_with_defaults)
+  param_table <- build_params_df(model_spec, core_params, n_trials = n_trials)
   data_df <- simulate_data_from_params_table(structure, param_table, seed = seed)
   prep_base <- AccumulatR:::.prepare_model_for_likelihood(structure$model_spec)
   if (is.null(prep_base[[".runtime"]]) || is.null(prep_base$.runtime$cache_bundle)) {

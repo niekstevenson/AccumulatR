@@ -573,3 +573,25 @@ new_api_examples <- list(
   example_18_shared_triggers = example_18_shared_triggers,
   example_19_univalent_stop_change = example_19_univalent_stop_change
 )
+
+new_api_example_params <- list(
+  example_1_simple = params_example_1_simple,
+  example_2_stop_mixture = params_example_2_stop_mixture,
+  example_3_stop_na = params_example_3_stop_na,
+  example_4_two_on_one = params_example_4_two_on_one,
+  example_5_timeout_guess = params_example_5_timeout_guess,
+  example_6_dual_path = params_example_6_dual_path,
+  example_7_mixture = params_example_7_mixture,
+  example_8_shared_params = params_example_8_shared_params,
+  example_9_advanced_k = params_example_9_advanced_k,
+  example_10_exclusion = params_example_10_exclusion,
+  example_11_censor_deadline = params_example_11_censor_deadline,
+  example_12_inhibitor_with_protector = params_example_12_inhibitor_with_protector,
+  example_13_nested_pools = params_example_13_nested_pools,
+  example_14_weighted_pool = params_example_14_weighted_pool,
+  example_15_component_metadata = params_example_15_component_metadata,
+  example_16_guard_tie_simple = params_example_16_guard_tie_simple,
+  example_17_k_of_n_inhibitors = params_example_17_k_of_n_inhibitors,
+  example_18_shared_triggers = params_example_18_shared_triggers,
+  example_19_univalent_stop_change = params_example_19_univalent_stop_change
+)

@@ -421,19 +421,139 @@ param_table <- function(model, ...) {
   )
 }
 
-populate_model_defaults <- function(model, param_values) {
+build_params_df <- function(model,
+                            param_values,
+                            n_trials = 1L,
+                            component = NA_character_) {
+  spec <- race_model(model)
+  accs <- spec[["accumulators"]] %||% list()
+  if (length(accs) == 0) {
+    stop("Model must define accumulators before building parameter tables")
+  }
+  if (is.null(param_values) || length(param_values) == 0) {
+    stop("Named parameter values are required")
+  }
+  if (is.null(names(param_values)) || any(!nzchar(names(param_values)))) {
+    stop("Parameter values must be a named vector")
+  }
+  if (!is.numeric(n_trials) || length(n_trials) != 1L || n_trials < 1) {
+    stop("n_trials must be a positive integer")
+  }
+  n_trials <- as.integer(n_trials)
+
+  value_names <- names(param_values)
+  param_values <- as.numeric(param_values)
+  names(param_values) <- value_names
+
+  acc_ids <- vapply(accs, `[[`, character(1), "id")
+  acc_dists <- vapply(accs, `[[`, character(1), "dist")
+
+  per_acc_params <- setNames(
+    lapply(acc_dists, function(dist) c(dist_param_names(dist), "onset", "q", "t0")),
+    acc_ids
+  )
+  all_required_names <- unlist(mapply(function(acc, fields) {
+    paste0(acc, ".", fields)
+  }, acc_ids, per_acc_params, SIMPLIFY = FALSE))
+  optional_suffixes <- c("onset", "q", "t0")
+  suffix_union <- unique(unlist(per_acc_params))
+  shared_map <- setNames(vector("list", length(acc_ids)), acc_ids)
+  spec_groups <- spec[["groups"]] %||% list()
+  if (length(spec_groups) > 0) {
+    for (grp in spec_groups) {
+      grp_attrs <- grp[["attrs"]] %||% list()
+      sp <- grp_attrs[["shared_params"]] %||% NULL
+      members <- grp[["members"]] %||% character(0)
+      if (is.null(sp) || length(members) == 0) next
+      fields <- names(sp)
+      if (is.null(fields) || any(!nzchar(fields))) {
+        fields <- as.character(unlist(sp, use.names = FALSE))
+      }
+      grp_id <- grp[["id"]] %||% NA_character_
+      for (member in members) {
+        if (is.null(shared_map[[member]])) shared_map[[member]] <- list()
+        for (field in fields) {
+          shared_map[[member]][[field]] <- paste0(grp_id, ".", field)
+        }
+      }
+    }
+  }
+  missing <- character(0)
+  for (acc_id in acc_ids) {
+    required_suffixes <- setdiff(per_acc_params[[acc_id]], optional_suffixes)
+    for (suffix in required_suffixes) {
+      nm <- paste0(acc_id, ".", suffix)
+      shared_nm <- shared_map[[acc_id]][[suffix]] %||% NA_character_
+      if (nm %in% names(param_values)) next
+      if (!is.na(shared_nm) && shared_nm %in% names(param_values)) next
+      missing <- c(missing, nm)
+    }
+  }
+  if (length(missing) > 0L) {
+    stop("Missing parameter values for: ", paste(missing, collapse = ", "))
+  }
+  base_rows <- lapply(seq_along(accs), function(idx) {
+    acc <- accs[[idx]]
+    acc_id <- acc_ids[[idx]]
+    role_value <- (acc[["tags"]] %||% list())[["role"]] %||% "std"
+    row_vals <- setNames(as.list(rep(NA_real_, length(suffix_union))), suffix_union)
+    for (suffix in per_acc_params[[acc_id]]) {
+      nm <- paste0(acc_id, ".", suffix)
+      if (nm %in% names(param_values)) {
+        row_vals[[suffix]] <- as.numeric(param_values[[nm]])
+      } else if (!is.null(shared_map[[acc_id]][[suffix]])) {
+        shared_nm <- shared_map[[acc_id]][[suffix]]
+        if (!shared_nm %in% names(param_values)) {
+          stop(sprintf("Missing shared parameter value '%s' for member '%s'", shared_nm, acc_id))
+        }
+        row_vals[[suffix]] <- as.numeric(param_values[[shared_nm]])
+      } else if (suffix %in% optional_suffixes) {
+        row_vals[[suffix]] <- 0
+      } else {
+        stop(sprintf("Missing parameter value for '%s.%s'", acc_id, suffix))
+      }
+    }
+    data.frame(
+      trial = 1L,
+      accumulator_id = acc_id,
+      accumulator = idx,
+      accumulator_index = idx,
+      component = if (is.null(component)) NA_character_ else as.character(component),
+      role = role_value,
+      row_vals,
+      stringsAsFactors = FALSE
+    )
+  })
+  base_df <- do.call(rbind, base_rows)
+  extra_names <- setdiff(names(param_values), all_required_names)
+  if (length(extra_names) > 0L) {
+    for (nm in extra_names) {
+      base_df[[nm]] <- as.numeric(param_values[[nm]])
+    }
+  }
+  base_n <- nrow(base_df)
+  if (n_trials > 1L) {
+    base_df <- base_df[rep(seq_len(base_n), times = n_trials), , drop = FALSE]
+  }
+  base_df$trial <- rep(seq_len(n_trials), each = base_n)
+  rownames(base_df) <- NULL
+  base_df
+}
+
+.apply_core_params_to_spec <- function(model, param_values) {
   spec <- race_model(model)
   accs <- spec[["accumulators"]] %||% list()
   groups <- spec[["groups"]] %||% list()
-  if (missing(param_values) || length(param_values) == 0) return(spec)
-  if (is.null(names(param_values)) || any(!nzchar(names(param_values)))) {
-    stop("populate_model_defaults() requires named parameter values")
+  if (length(accs) == 0 || is.null(param_values) || length(param_values) == 0) {
+    return(spec)
   }
-
+  if (is.null(names(param_values)) || any(!nzchar(names(param_values)))) {
+    stop("Core parameter values must be a named vector")
+  }
   acc_ids <- vapply(accs, `[[`, character(1), "id")
   acc_lookup <- setNames(seq_along(acc_ids), acc_ids)
-  group_ids <- vapply(groups, `[[`, character(1), "id")
-  group_lookup <- setNames(seq_along(group_ids), group_ids)
+  grp_ids <- vapply(groups, function(g) g[["id"]] %||% "", character(1))
+  group_lookup <- setNames(seq_along(groups), grp_ids)
 
   split_name <- function(x) {
     idx <- regexpr("\\.[^.]+$", x)
@@ -449,14 +569,11 @@ populate_model_defaults <- function(model, param_values) {
     if (!is.list(shared)) shared <- as.list(shared)
     nm <- names(shared)
     out <- list()
-    for (i in seq_along(shared)) {
-      key <- nm[[i]]
-      val <- shared[[i]]
-      if (!is.null(key) && nzchar(key)) {
-        out[[key]] <- val
-      } else if (is.character(val) && length(val) == 1L && nzchar(val)) {
-        out[[val]] <- out[[val]] %||% NULL
-      }
+    if (is.null(nm) || any(!nzchar(nm))) {
+      fields <- as.character(unlist(shared, use.names = FALSE))
+      for (fld in fields) out[[fld]] <- NULL
+    } else {
+      for (fld in nm) out[[fld]] <- shared[[fld]]
     }
     out
   }
@@ -482,7 +599,7 @@ populate_model_defaults <- function(model, param_values) {
     } else if (target %in% names(group_lookup)) {
       idx <- group_lookup[[target]]
       grp <- groups[[idx]]
-      grp_attrs <- grp$attrs %||% list()
+      grp_attrs <- grp[["attrs"]] %||% list()
       shared <- coerce_shared_params(grp_attrs$shared_params)
       shared[[param]] <- value
       grp_attrs$shared_params <- shared

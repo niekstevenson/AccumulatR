@@ -593,6 +593,20 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
   if (label.empty()) {
     Rcpp::stop("native_event_eval: empty label");
   }
+  if (label == "__DEADLINE__" || label == "__GUESS__") {
+    double survival = 0.0;
+    double cdf = 1.0;
+    if (std::isfinite(t)) {
+      if (t < 0.0) {
+        survival = 1.0;
+        cdf = 0.0;
+      } else {
+        survival = 0.0;
+        cdf = 1.0;
+      }
+    }
+    return make_node_result(0.0, survival, cdf);
+  }
   int label_idx = label_id(ctx, label);
   if (label_idx != NA_INTEGER) {
     if (forced_complete.count(label_idx)) {

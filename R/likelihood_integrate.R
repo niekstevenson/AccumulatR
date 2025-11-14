@@ -59,7 +59,12 @@
   if (!is.null(trial_rows) && inherits(trial_rows, "data.frame") && nrow(trial_rows) > 0L) {
     trial_rows_df <- as.data.frame(trial_rows)
   }
-  use_native <- is.finite(upper_limit) && !is.null(compiled) && !is.null(comp_ids)
+  upper_val <- as.numeric(upper_limit)[1]
+  if (is.na(upper_val)) {
+    use_native <- FALSE
+  } else {
+    use_native <- !is.null(compiled) && !is.null(comp_ids)
+  }
   if (use_native) {
     native_ctx <- .prep_native_context(prep)
     if (!is.null(trial_overrides) && inherits(trial_overrides, "externalptr")) {

@@ -139,6 +139,81 @@
   fallback
 }
 
+.native_node_eval_enabled <- function() {
+  isTRUE(getOption("uuber.use.native.node.eval", FALSE))
+}
+
+.native_component_label <- function(component) {
+  if (is.null(component) || length(component) == 0L) return(NULL)
+  comp_chr <- as.character(component)
+  if (length(comp_chr) == 0L) return(NULL)
+  val <- comp_chr[[1]]
+  if (is.na(val) || !nzchar(val)) return(NULL)
+  val
+}
+
+.native_forced_ids <- function(ids) {
+  vec <- as.integer(ids)
+  if (length(vec) == 0L) return(integer(0))
+  vec <- vec[!is.na(vec)]
+  if (length(vec) == 0L) integer(0) else as.integer(vec)
+}
+
+.native_node_eval_result <- function(node, t, prep, component,
+                                     forced_complete, forced_survive) {
+  if (!.native_node_eval_enabled()) return(NULL)
+  if (is.null(node) || is.null(node$id)) return(NULL)
+  if (length(t) != 1L) return(NULL)
+  tt <- as.numeric(t)[1]
+  if (is.na(tt)) return(NULL)
+  native_ctx <- .prep_native_context(prep)
+  if (!inherits(native_ctx, "externalptr")) return(NULL)
+  native_fn <- .lik_native_fn("native_node_eval_cpp")
+  component_label <- .native_component_label(component)
+  fc_vec <- .native_forced_ids(forced_complete)
+  fs_vec <- .native_forced_ids(forced_survive)
+  res <- tryCatch(
+    native_fn(
+      native_ctx,
+      as.integer(node$id),
+      tt,
+      component_label,
+      fc_vec,
+      fs_vec
+    ),
+    error = function(e) NULL
+  )
+  if (is.null(res)) return(NULL)
+  sanitize_density <- function(val) {
+    num <- as.numeric(val)[1]
+    if (is.na(num) || !is.finite(num) || num < 0) 0.0 else num
+  }
+  sanitize_prob <- function(val) {
+    num <- as.numeric(val)[1]
+    if (is.na(num) || !is.finite(num)) {
+      0.0
+    } else if (num < 0) {
+      0.0
+    } else if (num > 1) {
+      1.0
+    } else {
+      num
+    }
+  }
+  list(
+    density = sanitize_density(res$density),
+    survival = sanitize_prob(res$survival),
+    cdf = sanitize_prob(res$cdf)
+  )
+}
+
+.cache_native_node_eval <- function(entry, res) {
+  if (is.null(entry) || is.null(res)) return()
+  if (!is.null(res$density)) .state_entry_set(entry, "density", res$density)
+  if (!is.null(res$survival)) .state_entry_set(entry, "survival", res$survival)
+  if (!is.null(res$cdf)) .state_entry_set(entry, "cdf", res$cdf)
+}
+
 .fast_survival_product <- function(exprs, prep, component, t) {
   n <- length(exprs)
   if (n == 0) return(1.0)
@@ -1024,6 +1099,15 @@ guard_scope_ids <- function(expr, prep) {
                             extra = entry_extra)
   cached <- .state_entry_get(entry, "cdf")
   if (!is.null(cached)) return(cached)
+  native_res <- .native_node_eval_result(
+    node, t, prep, component,
+    forced_complete = forced_complete,
+    forced_survive = forced_survive
+  )
+  if (!is.null(native_res)) {
+    .cache_native_node_eval(entry, native_res)
+    return(native_res$cdf)
+  }
   if (length(forced_complete) == 0L && length(forced_survive) == 0L &&
       is.function(cdf_fast_fn)) {
     val <- cdf_fast_fn(t, component)
@@ -1134,6 +1218,26 @@ guard_scope_ids <- function(expr, prep) {
   }
   cached <- .state_entry_get(entry, "survival")
   if (!is.null(cached)) return(cached)
+  native_res <- .native_node_eval_result(
+    node, t, prep, component,
+    forced_complete = forced_complete,
+    forced_survive = forced_survive
+  )
+  if (!is.null(native_res)) {
+    if (!is.null(state_env)) {
+      if (is.null(entry)) {
+        entry <- .node_eval_entry(
+          state_env, node, component, t,
+          forced_complete = forced_complete,
+          forced_survive = forced_survive,
+          extra = entry_extra,
+          init = TRUE
+        )
+      }
+    }
+    .cache_native_node_eval(entry, native_res)
+    return(native_res$survival)
+  }
   expr <- node$expr
   kind <- expr[["kind"]]
   if (identical(kind, "guard")) {
@@ -1260,6 +1364,24 @@ guard_scope_ids <- function(expr, prep) {
   }
   cached <- .state_entry_get(entry, "density")
   if (!is.null(cached)) return(cached)
+  native_res <- .native_node_eval_result(
+    node, t, prep, component,
+    forced_complete = forced_complete,
+    forced_survive = forced_survive
+  )
+  if (!is.null(native_res)) {
+    if (!is.null(state_env) && is.null(entry)) {
+      entry <- .node_eval_entry(
+        state_env, node, component, t,
+        forced_complete = forced_complete,
+        forced_survive = forced_survive,
+        extra = entry_extra,
+        init = TRUE
+      )
+    }
+    .cache_native_node_eval(entry, native_res)
+    return(native_res$density)
+  }
   fast_unforced <- length(forced_complete) == 0L && length(forced_survive) == 0L &&
     is.function(density_fast_fn)
   if (fast_unforced) {

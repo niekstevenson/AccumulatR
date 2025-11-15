@@ -18,7 +18,8 @@ response_summary <- compare_response_suite(
   example_ids
 )
 print(response_summary[c("model", "max_abs_diff")])
-
+names(response_summary$R) <- example_ids
+response_summary$R
 param_example <- "example_3_stop_na"
 param_results <- run_param_table_benchmark(
   model_spec = new_api_examples[[param_example]],

@@ -7,6 +7,13 @@
 - Retain `sampled_pars()` (and `sampled_parameters`) as the authoritative description of the core parameter slots so downstream tools know which base parameters exist before design-matrix expansion.
 - Lay groundwork for distinguishing *core* parameters from trial-by-trial variations driven by design matrices or condition-level modifiers.
 
+### Canonical Parameter Tables Are Mandatory
+
+- Every downstream consumer (simulation, response-probability utilities, likelihood evaluation, tests) must receive a fully populated `params_df`. There are no implicit defaults or auto-populated overrides.
+- Specs produced via `race_spec()` are purely structural; the DSL no longer carries numeric defaults.
+- The canonical table layout includes: `trial`, `accumulator_id` (and/or index), `component`, `role`, per-accumulator distribution parameters (as reported by `sampled_pars()`), and timing slots (`onset`, `q`, `t0`).
+- Helper `build_params_df(model, core_params, n_trials, component)` converts core vectors into this table; design-matrix logic will later expand core parameters across trials/conditions.
+
 ## Implementation Steps
 
 1. **Define Canonical Parameter Tables**

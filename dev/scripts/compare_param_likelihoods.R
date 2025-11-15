@@ -54,10 +54,7 @@ run_speed_test <- function(example_idx = 6,
   plan_buffer <- .likelihood_build_trial_plan(
     structure = structure,
     params_df = param_table,
-    prep = prep,
-    build_override_ptr = FALSE,
-    keep_trial_rows = FALSE,
-    keep_component_rows = FALSE
+    prep = prep
   )
 
   cat(sprintf("Example %d, %d trials\n", example_idx, n_trials))

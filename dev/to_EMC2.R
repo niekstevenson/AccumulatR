@@ -69,10 +69,7 @@ default_deadline <- prep$default_deadline %||% Inf
 buffer_plan <- .likelihood_build_trial_plan(
   structure = structure,
   params_df = param_table,
-  prep = prep,
-  build_override_ptr = FALSE,
-  keep_trial_rows = FALSE,
-  keep_component_rows = FALSE
+  prep = prep
 )
 
 buffer_bundle <- build_buffer_trial_entries(

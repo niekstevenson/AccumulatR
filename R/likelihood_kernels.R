@@ -2953,8 +2953,7 @@ guard_scope_ids <- function(expr, prep) {
 .scenario_density_with_competitors <- function(expr, t, prep, component,
                                                competitor_exprs = list(),
                                                state = NULL,
-                                               trial_rows = NULL,
-                                               trial_overrides = NULL) {
+                                               trial_rows = NULL) {
   times <- as.numeric(t)
   if (length(times) == 0L) {
     val <- numeric(0)
@@ -2976,8 +2975,7 @@ guard_scope_ids <- function(expr, prep) {
                             component,
                             competitor_exprs = competitor_exprs,
                             state = state,
-                            trial_rows = trial_rows,
-                            trial_overrides = trial_overrides)
+                            trial_rows = trial_rows)
     attr(res, "scenarios") <- list()
     return(res)
   }
@@ -2995,44 +2993,43 @@ guard_scope_ids <- function(expr, prep) {
         }
       }
       if (!is.null(comp_ids)) {
-        trial_rows_df <- NULL
-        if (!is.null(trial_rows) && inherits(trial_rows, "data.frame") && nrow(trial_rows) > 0L) {
-          trial_rows_df <- as.data.frame(trial_rows)
-        }
-        native_ctx <- .prep_native_context(prep)
-        override_ptr <- trial_overrides
-        if (is.null(override_ptr) && !is.null(trial_rows_df)) {
-          builder <- .lik_native_fn("native_build_trial_overrides_cpp")
-          override_ptr <- builder(native_ctx, trial_rows_df)
-        }
-        dens_vec <- if (!is.null(override_ptr) && inherits(override_ptr, "externalptr")) {
-          native_fn <- .lik_native_fn("native_density_with_competitors_overrides_vec_cpp")
-          native_fn(
+      trial_rows_df <- NULL
+      if (!is.null(trial_rows) && inherits(trial_rows, "data.frame") && nrow(trial_rows) > 0L) {
+        trial_rows_df <- as.data.frame(trial_rows)
+      }
+      native_ctx <- .prep_native_context(prep)
+      if (!is.null(trial_rows_df) && nrow(trial_rows_df) > 0L) {
+        native_fn <- .lik_native_fn("native_density_with_competitors_params_cpp")
+        dens_vec <- vapply(times, function(tt) {
+          res <- native_fn(
             native_ctx,
             as.integer(compiled$id),
-            as.numeric(times),
+            as.numeric(tt),
             component,
             integer(0),
             integer(0),
             as.integer(comp_ids %||% integer(0)),
-            override_ptr
+            trial_rows_df
           )
-        } else {
-          native_fn <- .lik_native_fn("native_density_with_competitors_vec_cpp")
-          native_fn(
-            native_ctx,
-            as.integer(compiled$id),
-            as.numeric(times),
-            component,
-            integer(0),
-            integer(0),
-            as.integer(comp_ids %||% integer(0))
-          )
-        }
+          dens_scalar <- as.numeric(res$density)
+          if (!is.finite(dens_scalar) || dens_scalar <= 0) 0.0 else dens_scalar
+        }, numeric(1))
+      } else {
+        native_fn <- .lik_native_fn("native_density_with_competitors_vec_cpp")
+        dens_vec <- native_fn(
+          native_ctx,
+          as.integer(compiled$id),
+          as.numeric(times),
+          component,
+          integer(0),
+          integer(0),
+          as.integer(comp_ids %||% integer(0))
+        )
         dens_vec[!is.finite(dens_vec) | dens_vec <= 0] <- 0
-        attr(dens_vec, "scenarios") <- list()
-        return(dens_vec)
       }
+      attr(dens_vec, "scenarios") <- list()
+      return(dens_vec)
+    }
     }
     res <- vapply(times, function(tt) {
       .scenario_density_with_competitors(expr,
@@ -3041,8 +3038,7 @@ guard_scope_ids <- function(expr, prep) {
                                          component,
                                          competitor_exprs = competitor_exprs,
                                          state = state,
-                                         trial_rows = trial_rows,
-                                         trial_overrides = trial_overrides)
+                                         trial_rows = trial_rows)
     }, numeric(1))
     attr(res, "scenarios") <- list()
     return(res)
@@ -3071,19 +3067,7 @@ guard_scope_ids <- function(expr, prep) {
         trial_rows_df <- as.data.frame(trial_rows)
       }
       native_ctx <- .prep_native_context(prep)
-      if (!is.null(trial_overrides) && inherits(trial_overrides, "externalptr")) {
-        native_fn <- .lik_native_fn("native_density_with_competitors_overrides_cpp")
-        res <- native_fn(
-          native_ctx,
-          as.integer(compiled$id),
-          as.numeric(t),
-          component,
-          integer(0),
-          integer(0),
-          as.integer(comp_ids %||% integer(0)),
-          trial_overrides
-        )
-      } else if (!is.null(trial_rows_df)) {
+      if (!is.null(trial_rows_df) && nrow(trial_rows_df) > 0L) {
         native_fn <- .lik_native_fn("native_density_with_competitors_params_cpp")
         res <- native_fn(
           native_ctx,

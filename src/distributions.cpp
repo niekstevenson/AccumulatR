@@ -2704,15 +2704,6 @@ std::unique_ptr<TrialOverrides> build_trial_overrides_from_df(
   return overrides;
 }
 
-std::unique_ptr<TrialOverrides> build_trial_overrides_from_indices(
-  const uuber::NativeContext& ctx,
-  const Rcpp::DataFrame& params_df,
-  const std::vector<int>& row_index) {
-  if (row_index.empty()) return nullptr;
-  TrialRowColumns cols = capture_trial_row_columns(params_df);
-  return build_trial_overrides_from_columns(ctx, cols, row_index);
-}
-
 
 Rcpp::List native_guard_scenarios_impl(SEXP ctxSEXP,
                                        int guard_node_id,
@@ -3024,6 +3015,39 @@ bool build_component_mix(const Rcpp::CharacterVector& component_ids,
   return !components_out.empty();
 }
 
+double native_trial_mixture_internal(uuber::NativeContext& ctx,
+                                     int node_id,
+                                     double t,
+                                     const std::vector<std::string>& component_ids,
+                                     const std::vector<double>& weights,
+                                     Rcpp::Nullable<Rcpp::String> forced_component,
+                                     const std::vector<int>& competitor_ids,
+                                     const TrialOverrides* overrides_ptr) {
+  if (!std::isfinite(t) || t < 0.0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  std::unordered_set<int> forced_empty;
+  double total = 0.0;
+  for (std::size_t i = 0; i < component_ids.size(); ++i) {
+    double contrib = node_density_with_competitors_internal(
+      ctx,
+      node_id,
+      t,
+      component_ids[i],
+      forced_empty,
+      forced_empty,
+      competitor_ids,
+      overrides_ptr
+    );
+    if (!std::isfinite(contrib) || contrib < 0.0) contrib = 0.0;
+    total += weights[i] * contrib;
+  }
+  if (!std::isfinite(total) || total <= 0.0) {
+    return 0.0;
+  }
+  return total;
+}
+
 double native_trial_mixture_driver(SEXP ctxSEXP,
                                    int node_id,
                                    double t,
@@ -3093,7 +3117,13 @@ double evaluate_alias_mix(SEXP ctxSEXP,
                           const Rcpp::List& alias_sources,
                           double t,
                           Rcpp::Nullable<Rcpp::String> forced_component,
-                          SEXP override_ptr) {
+                          const TrialOverrides* overrides_ptr) {
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  std::vector<std::string> comp_labels;
+  std::vector<double> mix_weights;
+  if (!build_component_mix(components, weights, forced_component, comp_labels, mix_weights)) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
   double mix = 0.0;
   for (R_xlen_t i = 0; i < alias_sources.size(); ++i) {
     Rcpp::List src(alias_sources[i]);
@@ -3102,14 +3132,14 @@ double evaluate_alias_mix(SEXP ctxSEXP,
     Rcpp::IntegerVector comp_ids = src.containsElementNamed("competitor_ids")
       ? Rcpp::IntegerVector(src["competitor_ids"])
       : Rcpp::IntegerVector();
-    double contrib = native_trial_mixture_driver(ctxSEXP,
-                                                 node_id,
-                                                 t,
-                                                 components,
-                                                 weights,
-                                                 forced_component,
-                                                 comp_ids,
-                                                 override_ptr);
+    double contrib = native_trial_mixture_internal(*ctx,
+                                                   node_id,
+                                                   t,
+                                                   comp_labels,
+                                                   mix_weights,
+                                                   forced_component,
+                                                   integer_vector_to_std(comp_ids, false),
+                                                   overrides_ptr);
     mix += contrib;
   }
   return mix;
@@ -3126,7 +3156,7 @@ double evaluate_na_map_mix(SEXP ctxSEXP,
                            double abs_tol,
                            int max_depth,
                            Rcpp::Nullable<Rcpp::String> forced_component,
-                           SEXP override_ptr) {
+                           const TrialOverrides* overrides_ptr) {
   if (std::isfinite(rt) && rt >= 0.0) {
     return evaluate_alias_mix(ctxSEXP,
                               components,
@@ -3134,9 +3164,8 @@ double evaluate_na_map_mix(SEXP ctxSEXP,
                               na_sources,
                               rt,
                               forced_component,
-                              override_ptr);
+                              overrides_ptr);
   }
-  const TrialOverrides* overrides_ptr = extract_overrides(override_ptr);
   double mix = 0.0;
   for (R_xlen_t i = 0; i < components.size(); ++i) {
     SEXP comp_sexp = components[i];
@@ -3370,9 +3399,6 @@ double native_trial_mixture_driver(SEXP ctxSEXP,
   if (Rf_isNull(ctxSEXP)) {
     Rcpp::stop("native_trial_mixture: context pointer is null");
   }
-  if (!std::isfinite(t) || t < 0.0) {
-    return std::numeric_limits<double>::quiet_NaN();
-  }
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   std::vector<std::string> components;
   std::vector<double> mix_weights;
@@ -3380,33 +3406,15 @@ double native_trial_mixture_driver(SEXP ctxSEXP,
     return std::numeric_limits<double>::quiet_NaN();
   }
   std::vector<int> comp_ids = integer_vector_to_std(competitor_ids, false);
-  const TrialOverrides* overrides_ptr = nullptr;
-  if (!Rf_isNull(trial_overrides)) {
-    Rcpp::XPtr<TrialOverrides> ptr(trial_overrides);
-    overrides_ptr = ptr.get();
-  }
-  std::unordered_set<int> forced_empty;
-  double total = 0.0;
-  for (std::size_t i = 0; i < components.size(); ++i) {
-    double contrib = node_density_with_competitors_internal(
-      *ctx,
-      node_id,
-      t,
-      components[i],
-      forced_empty,
-      forced_empty,
-      comp_ids,
-      overrides_ptr
-    );
-    if (!std::isfinite(contrib) || contrib < 0.0) {
-      contrib = 0.0;
-    }
-    total += mix_weights[i] * contrib;
-  }
-  if (!std::isfinite(total) || total <= 0.0) {
-    return 0.0;
-  }
-  return total;
+  const TrialOverrides* overrides_ptr = extract_overrides(trial_overrides);
+  return native_trial_mixture_internal(*ctx,
+                                       node_id,
+                                       t,
+                                       components,
+                                       mix_weights,
+                                       forced_component,
+                                       comp_ids,
+                                       overrides_ptr);
 }
 
 // [[Rcpp::export]]
@@ -3428,6 +3436,9 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
   bool hit_neg_inf = false;
   std::unordered_map<std::string, double> component_deadlines =
     build_component_deadlines(structure, default_deadline);
+
+  std::vector<std::unique_ptr<TrialOverrides>> override_cache;
+  override_cache.reserve(static_cast<std::size_t>(n_trials));
 
   for (R_xlen_t i = 0; i < n_trials; ++i) {
     Rcpp::List entry(trial_entries[i]);
@@ -3451,6 +3462,16 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
     SEXP override_ptr = entry.containsElementNamed("override_ptr")
       ? entry["override_ptr"]
       : R_NilValue;
+    const TrialOverrides* overrides_ptr = nullptr;
+    if (!Rf_isNull(override_ptr)) {
+      overrides_ptr = extract_overrides(override_ptr);
+    } else if (!trial_rows.isNull()) {
+      std::unique_ptr<TrialOverrides> holder = build_trial_overrides_from_df(*ctx, trial_rows);
+      if (holder) {
+        overrides_ptr = holder.get();
+        override_cache.emplace_back(std::move(holder));
+      }
+    }
 
     Rcpp::List plan = native_component_plan_impl(structure,
                                                  trial_rows,
@@ -3472,7 +3493,7 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
                                alias_sources,
                                t,
                                forced_component,
-                               override_ptr);
+                               overrides_ptr);
     } else if (entry_type == "na_map") {
       if (!entry.containsElementNamed("na_sources")) {
         per_trial[i] = R_NegInf;
@@ -3491,12 +3512,11 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
                                 abs_tol,
                                 max_depth,
                                 forced_component,
-                                override_ptr);
+                                overrides_ptr);
     } else {
       SharedGateSpec shared_spec;
       bool has_shared_gate = extract_shared_gate_spec(entry, shared_spec);
       if (has_shared_gate) {
-        const TrialOverrides* overrides_ptr = extract_overrides(override_ptr);
         mix = evaluate_shared_gate_mix(*ctx,
                                        shared_spec,
                                        t,
@@ -3517,14 +3537,14 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
         }
         int node_id = Rcpp::as<int>(entry["node_id"]);
         Rcpp::IntegerVector comp_ids(entry["competitor_ids"]);
-        mix = native_trial_mixture_driver(ctxSEXP,
-                                          node_id,
-                                          t,
-                                          components,
-                                          weights,
-                                          forced_component,
-                                          comp_ids,
-                                          override_ptr);
+        mix = native_trial_mixture_internal(*ctx,
+                                           node_id,
+                                           t,
+                                           std::vector<std::string>(components.begin(), components.end()),
+                                           std::vector<double>(weights.begin(), weights.end()),
+                                           forced_component,
+                                           integer_vector_to_std(comp_ids, false),
+                                           overrides_ptr);
       }
     }
     double log_contrib = R_NegInf;
@@ -3559,158 +3579,15 @@ Rcpp::List native_loglik_from_buffer_cpp(SEXP ctxSEXP,
                                          double rel_tol,
                                          double abs_tol,
                                          int max_depth) {
-  if (Rf_isNull(ctxSEXP)) {
-    Rcpp::stop("native_loglik_from_params_cpp: context pointer is null");
-  }
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  R_xlen_t n_trials = trial_entries.size();
-  Rcpp::NumericVector per_trial(n_trials);
-  double total_loglik = 0.0;
-  bool hit_neg_inf = false;
-  std::unordered_map<std::string, double> component_deadlines =
-    build_component_deadlines(structure, default_deadline);
-  std::vector<std::unique_ptr<TrialOverrides>> override_cache;
-  override_cache.reserve(static_cast<std::size_t>(n_trials));
-  std::vector<Rcpp::XPtr<TrialOverrides>> override_handles;
-  override_handles.reserve(static_cast<std::size_t>(n_trials));
-
-  for (R_xlen_t i = 0; i < n_trials; ++i) {
-    Rcpp::List entry(trial_entries[i]);
-    std::string entry_type = entry.containsElementNamed("type")
-      ? Rcpp::as<std::string>(entry["type"])
-      : "direct";
-    double t = entry.containsElementNamed("rt")
-      ? Rcpp::as<double>(entry["rt"])
-      : NA_REAL;
-    SEXP trial_rows_sexp = entry.containsElementNamed("trial_rows")
-      ? entry["trial_rows"]
-      : R_NilValue;
-    Rcpp::Nullable<Rcpp::DataFrame> trial_rows(trial_rows_sexp);
-    SEXP forced_component_sexp = entry.containsElementNamed("forced_component")
-      ? entry["forced_component"]
-      : R_NilValue;
-    Rcpp::Nullable<Rcpp::String> forced_component(forced_component_sexp);
-    Rcpp::IntegerVector competitor_ids = entry.containsElementNamed("competitor_ids")
-      ? Rcpp::IntegerVector(entry["competitor_ids"])
-      : Rcpp::IntegerVector();
-    SEXP override_ptr = entry.containsElementNamed("override_ptr")
-      ? entry["override_ptr"]
-      : R_NilValue;
-    if (Rf_isNull(override_ptr) && entry.containsElementNamed("row_index")) {
-      Rcpp::IntegerVector row_vec(entry["row_index"]);
-      std::vector<int> row_index;
-      row_index.reserve(row_vec.size());
-      for (int val : row_vec) {
-        if (val == NA_INTEGER) continue;
-        row_index.push_back(val);
-      }
-      if (!row_index.empty()) {
-        std::unique_ptr<TrialOverrides> overrides =
-          build_trial_overrides_from_indices(*ctx, params_df, row_index);
-        if (overrides) {
-          TrialOverrides* raw_ptr = overrides.get();
-          override_cache.push_back(std::move(overrides));
-          override_handles.emplace_back(Rcpp::XPtr<TrialOverrides>(raw_ptr, false));
-          override_ptr = override_handles.back();
-        }
-      }
-    }
-
-    Rcpp::List plan = native_component_plan_impl(structure,
-                                                 trial_rows,
-                                                 forced_component,
-                                                 component_weights_opt);
-    Rcpp::CharacterVector components(plan["components"]);
-    Rcpp::NumericVector weights(plan["weights"]);
-    double mix = std::numeric_limits<double>::quiet_NaN();
-    if (entry_type == "alias_sum") {
-      if (!entry.containsElementNamed("alias_sources") || !std::isfinite(t) || t < 0.0) {
-        per_trial[i] = R_NegInf;
-        hit_neg_inf = true;
-        continue;
-      }
-      Rcpp::List alias_sources(entry["alias_sources"]);
-      mix = evaluate_alias_mix(ctxSEXP,
-                               components,
-                               weights,
-                               alias_sources,
-                               t,
-                               forced_component,
-                               override_ptr);
-    } else if (entry_type == "na_map") {
-      if (!entry.containsElementNamed("na_sources")) {
-        per_trial[i] = R_NegInf;
-        hit_neg_inf = true;
-        continue;
-      }
-      Rcpp::List na_sources(entry["na_sources"]);
-      mix = evaluate_na_map_mix(ctxSEXP,
-                                components,
-                                weights,
-                                na_sources,
-                                t,
-                                component_deadlines,
-                                default_deadline,
-                                rel_tol,
-                                abs_tol,
-                                max_depth,
-                                forced_component,
-                                override_ptr);
-    } else {
-      SharedGateSpec shared_spec;
-      bool has_shared_gate = extract_shared_gate_spec(entry, shared_spec);
-      if (has_shared_gate) {
-        const TrialOverrides* overrides_ptr = extract_overrides(override_ptr);
-        mix = evaluate_shared_gate_mix(*ctx,
-                                       shared_spec,
-                                       t,
-                                       components,
-                                       weights,
-                                       forced_component,
-                                       overrides_ptr,
+  (void) params_df;
+  return native_loglik_from_params_cpp(ctxSEXP,
+                                       structure,
+                                       trial_entries,
+                                       component_weights_opt,
+                                       default_deadline,
                                        rel_tol,
                                        abs_tol,
                                        max_depth);
-      } else {
-        if (!entry.containsElementNamed("node_id") ||
-            !entry.containsElementNamed("competitor_ids") ||
-            !std::isfinite(t) || t < 0.0) {
-          per_trial[i] = R_NegInf;
-          hit_neg_inf = true;
-          continue;
-        }
-        int node_id = Rcpp::as<int>(entry["node_id"]);
-        Rcpp::IntegerVector comp_ids(entry["competitor_ids"]);
-        mix = native_trial_mixture_driver(ctxSEXP,
-                                          node_id,
-                                          t,
-                                          components,
-                                          weights,
-                                          forced_component,
-                                          comp_ids,
-                                          override_ptr);
-      }
-    }
-    double log_contrib = R_NegInf;
-    if (std::isfinite(mix) && mix > 0.0) {
-      log_contrib = std::log(mix);
-    } else {
-      hit_neg_inf = true;
-    }
-    per_trial[i] = log_contrib;
-    if (!hit_neg_inf && std::isfinite(log_contrib)) {
-      total_loglik += log_contrib;
-    }
-  }
-
-  if (hit_neg_inf) {
-    total_loglik = R_NegInf;
-  }
-
-  return Rcpp::List::create(
-    Rcpp::Named("loglik") = total_loglik,
-    Rcpp::Named("per_trial") = per_trial
-  );
 }
 
 // [[Rcpp::export]]

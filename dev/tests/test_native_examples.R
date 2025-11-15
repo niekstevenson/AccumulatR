@@ -64,12 +64,9 @@ run_example_check <- function(example_idx, seed = 2025, n_trials = 400L,
   native_bundle <- likelihood_build_native_bundle(model_spec = model_spec)
   prep <- native_bundle$prep
   trial_plan <- .likelihood_build_trial_plan(structure, param_table, prep)
-  trial_plan_buffer <- .likelihood_build_trial_plan(structure,
-                                                   param_table,
-                                                   prep,
-                                                   build_override_ptr = FALSE,
-                                                   keep_trial_rows = FALSE,
-                                                   keep_component_rows = FALSE)
+trial_plan_buffer <- .likelihood_build_trial_plan(structure,
+                                                 param_table,
+                                                 prep)
   system.time(
     ll_r <- compute_loglik(model_tables, sim_data)
   )

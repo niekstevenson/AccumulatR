@@ -277,146 +277,6 @@ build_generator_structure <- function(model) {
   build_generator_structure(x)
 }
 
-.resolve_accumulator_id <- function(structure, acc_value) {
-  if (is.null(acc_value) || (length(acc_value) == 1 && (is.na(acc_value) || acc_value == ""))) {
-    return(NA_character_)
-  }
-  acc_tbl <- structure$accumulators
-  if (length(acc_tbl$accumulator_id) == 0L) return(NA_character_)
-  if (is.numeric(acc_value)) {
-    idx <- which(acc_tbl$accumulator_index == as.integer(acc_value[[1]]))
-    if (length(idx) == 0L) {
-      stop(sprintf("Unknown accumulator index '%s'", as.character(acc_value)))
-    }
-    return(acc_tbl$accumulator_id[[idx[[1]]]])
-  }
-  acc_char <- as.character(acc_value)
-  if (acc_char %in% acc_tbl$accumulator_id) return(acc_char)
-  stop(sprintf("Unknown accumulator id '%s'", acc_char))
-}
-
-.collect_param_names <- function(df, base_cols) {
-  setdiff(names(df), base_cols)
-}
-
-.coerce_param_list <- function(row_idx, params_df, param_cols, existing = NULL) {
-  params_list <- existing %||% list()
-  if (length(param_cols) == 0L) return(params_list)
-  for (col in param_cols) {
-    vals <- params_df[[col]]
-    if (length(vals) < row_idx) next
-    val <- vals[[row_idx]]
-    if (length(val) == 1L && is.na(val)) next
-    params_list[[col]] <- val
-  }
-  params_list
-}
-
-.build_trial_overrides <- function(structure, params_rows) {
-  if (is.null(params_rows) || nrow(params_rows) == 0L) return(NULL)
-  prep <- structure$prep
-  base_cols <- c(
-    "trial", "component", "accumulator", "accumulator_id",
-    "accumulator_index", "acc_idx",
-    "type", "role", "outcome", "rt", "params",
-    "onset", "q", "condition", "component_weight", "shared_trigger_id"
-  )
-  param_cols <- .collect_param_names(params_rows, base_cols)
-  acc_overrides <- list()
-  shared_overrides <- list()
-  require_full_params <- isTRUE(getOption("uuber.require.param.table", TRUE))
-
-  extract_scalar <- function(row, name) {
-    if (!name %in% names(row)) return(NULL)
-    val <- row[[name]]
-    if (is.null(val) || length(val) == 0L) return(NULL)
-    val <- val[[1]]
-    if (is.na(val)) return(NULL)
-    val
-  }
-
-  for (i in seq_len(nrow(params_rows))) {
-    row <- params_rows[i, , drop = FALSE]
-    trial_label <- if ("trial" %in% names(row) && length(row$trial) > 0L) row$trial[[1]] else NA
-    acc_value <- if ("accumulator_id" %in% names(row)) {
-      row[["accumulator_id"]]
-    } else if ("accumulator" %in% names(row)) {
-      row[["accumulator"]]
-    } else {
-      stop("Parameter rows must include 'accumulator' or 'accumulator_id'")
-    }
-    acc_id <- .resolve_accumulator_id(structure, acc_value)
-    if (is.na(acc_id)) next
-    base_def <- prep$accumulators[[acc_id]]
-    if (is.null(base_def)) {
-      stop(sprintf("No accumulator definition found for '%s'", acc_id))
-    }
-
-    dist_val <- extract_scalar(row, "dist")
-    if (is.null(dist_val)) {
-      dist_val <- base_def$dist %||% NA_character_
-      if (require_full_params && !nzchar(dist_val)) {
-        stop(sprintf("Trial %s accumulator '%s' missing 'dist'", trial_label %||% "NA", acc_id))
-      }
-    }
-
-    onset_val <- extract_scalar(row, "onset")
-    if (is.null(onset_val)) onset_val <- base_def$onset %||% 0
-
-    q_val <- extract_scalar(row, "q")
-    if (is.null(q_val)) q_val <- base_def$q %||% base_def$shared_trigger_q %||% 0
-
-    shared_id <- extract_scalar(row, "shared_trigger_id")
-    if (is.null(shared_id)) {
-      shared_id <- base_def$shared_trigger_id %||% NA_character_
-    } else {
-      shared_id <- as.character(shared_id)
-    }
-
-    components_val <- row$components %||% base_def$components
-    if (!is.null(components_val) && !is.character(components_val)) {
-      components_val <- as.character(components_val)
-    }
-
-    param_list <- NULL
-    if ("params" %in% names(row)) {
-      param_entry <- row$params[[1]]
-      if (!is.null(param_entry) && !is.list(param_entry)) {
-        stop("Column 'params' must contain lists of parameter values")
-      }
-      param_list <- param_entry
-    }
-    if (length(param_cols) > 0L) {
-      param_list <- .coerce_param_list(i, params_rows, param_cols, existing = param_list)
-    }
-    if (is.null(param_list)) {
-      param_list <- .ensure_acc_param_t0(base_def$params %||% list())
-      if (require_full_params && length(param_list) == 0L) {
-        stop(sprintf("Trial %s accumulator '%s' missing parameter values",
-                     trial_label %||% "NA", acc_id))
-      }
-    }
-
-    override <- list(
-      dist = dist_val,
-      params = param_list,
-      onset = as.numeric(onset_val),
-      q = as.numeric(q_val),
-      shared_trigger_id = shared_id,
-      components = components_val
-    )
-
-    base_shared <- prep$accumulators[[acc_id]]$shared_trigger_id %||% NA_character_
-    trig_id <- override$shared_trigger_id %||% base_shared %||% NA_character_
-    if (!is.null(trig_id) && !is.na(trig_id) && trig_id != "") {
-      shared_overrides[[trig_id]] <- list(prob = as.numeric(override$q))
-    }
-
-    acc_overrides[[acc_id]] <- override
-  }
-  list(acc = acc_overrides, shared = shared_overrides)
-}
-
 # ---- Component activity helpers ----------------------------------------------
 
 .acc_active_in_component <- function(acc_def, component) {
@@ -650,11 +510,131 @@ build_generator_structure <- function(model) {
   res
 }
 
+.resolve_param_row_acc_id <- function(row, acc_ids) {
+  pick_id <- function(val) {
+    if (is.null(val) || length(val) == 0L) return(NULL)
+    v <- val[[1]]
+    if (is.null(v) || (length(v) == 1L && is.na(v))) return(NULL)
+    v
+  }
+  raw <- NULL
+  if ("accumulator_id" %in% names(row)) {
+    raw <- pick_id(row[["accumulator_id"]])
+    if (!is.null(raw)) {
+      id <- as.character(raw)
+      if (nzchar(id)) return(id)
+    }
+  }
+  if ("accumulator" %in% names(row)) {
+    raw <- pick_id(row[["accumulator"]])
+  } else if ("accumulator_index" %in% names(row)) {
+    raw <- pick_id(row[["accumulator_index"]])
+  } else if ("acc_idx" %in% names(row)) {
+    raw <- pick_id(row[["acc_idx"]])
+  }
+  if (!is.null(raw)) {
+    if (is.numeric(raw)) {
+      idx <- as.integer(raw)
+      if (!is.na(idx) && idx >= 1L && idx <= length(acc_ids)) {
+        return(acc_ids[[idx]])
+      }
+    } else {
+      id <- as.character(raw)
+      if (nzchar(id)) return(id)
+    }
+  }
+  stop("Parameter rows must include a valid 'accumulator_id' or index column")
+}
+
+.build_trial_param_bundle <- function(prep, params_rows) {
+  if (is.null(params_rows) || nrow(params_rows) == 0L) {
+    return(list(acc = list(), shared = list()))
+  }
+  acc_defs <- prep$accumulators %||% list()
+  if (length(acc_defs) == 0L) return(list(acc = list(), shared = list()))
+  acc_ids <- names(acc_defs)
+  base_cols <- c(
+    "trial", "component", "accumulator", "accumulator_id",
+    "accumulator_index", "acc_idx", "type", "role",
+    "outcome", "rt", "params", "condition",
+    "component_weight"
+  )
+  param_cols <- setdiff(names(params_rows), c(base_cols, "onset", "q", "shared_trigger_id"))
+  acc_overrides <- list()
+  shared_overrides <- list()
+
+  for (i in seq_len(nrow(params_rows))) {
+    row <- params_rows[i, , drop = FALSE]
+    acc_id <- .resolve_param_row_acc_id(row, acc_ids)
+    base_def <- acc_defs[[acc_id]]
+    if (is.null(base_def)) {
+      stop(sprintf("No accumulator definition found for '%s'", acc_id))
+    }
+    override_params <- base_def$params %||% list()
+    if ("params" %in% names(row)) {
+      entry <- row$params[[1]]
+      if (!is.null(entry)) {
+        if (!is.list(entry)) stop("Column 'params' must contain lists of parameter values")
+        override_params <- modifyList(override_params, entry, keep.null = TRUE)
+      }
+    }
+    if (length(param_cols) > 0L) {
+      for (col in param_cols) {
+        vals <- row[[col]]
+        if (is.null(vals) || length(vals) == 0L) next
+        val <- vals[[1]]
+        if (length(val) == 1L && is.na(val)) next
+        override_params[[col]] <- val
+      }
+    }
+    override_params <- .ensure_acc_param_t0(override_params)
+    onset_val <- row$onset
+    if (!is.null(onset_val) && length(onset_val) > 0L && !is.na(onset_val[[1]])) {
+      onset_val <- as.numeric(onset_val[[1]])
+    } else {
+      onset_val <- base_def$onset %||% 0
+    }
+    q_val <- row$q
+    if (!is.null(q_val) && length(q_val) > 0L && !is.na(q_val[[1]])) {
+      q_val <- as.numeric(q_val[[1]])
+    } else {
+      q_val <- base_def$q %||% base_def$shared_trigger_q %||% 0
+    }
+    shared_id <- NULL
+    if ("shared_trigger_id" %in% names(row)) {
+      shared_raw <- row$shared_trigger_id
+      if (!is.null(shared_raw) && length(shared_raw) > 0L) {
+        val <- shared_raw[[1]]
+        if (!is.null(val) && !(length(val) == 1L && is.na(val))) {
+          shared_id <- as.character(val)
+        }
+      }
+    }
+    base_shared <- base_def$shared_trigger_id %||% NA_character_
+    trig_id <- shared_id %||% base_shared %||% NA_character_
+
+    acc_overrides[[acc_id]] <- list(
+      dist = base_def$dist,
+      params = override_params,
+      onset = onset_val,
+      q = q_val,
+      shared_trigger_id = trig_id,
+      components = base_def$components %||% character(0)
+    )
+
+    if (!is.null(trig_id) && !is.na(trig_id) && nzchar(trig_id)) {
+      shared_overrides[[trig_id]] <- list(prob = as.numeric(q_val))
+    }
+  }
+  list(acc = acc_overrides, shared = shared_overrides)
+}
+
+# Back-compat helper for legacy paths (e.g., likelihood) that still expect overrides.
 # ---- Trial simulation ---------------------------------------------------------
 
 .simulate_trial <- function(prep, component, keep_detail = FALSE,
-                            acc_overrides = NULL,
-                            shared_trigger_overrides = NULL) {
+                            trial_accs = NULL,
+                            trial_shared_triggers = NULL) {
   comp_info <- prep[["components"]]
   component_attr <- comp_info$attrs[[component]]
   if (is.null(component_attr)) component_attr <- list()
@@ -664,8 +644,8 @@ build_generator_structure <- function(model) {
     acc_times = new.env(parent = emptyenv()),
     pool_cache = new.env(parent = emptyenv()),
     event_cache = new.env(parent = emptyenv()),
-    trial_accs = acc_overrides %||% list(),
-    trial_shared_triggers = shared_trigger_overrides %||% list(),
+    trial_accs = trial_accs %||% list(),
+    trial_shared_triggers = trial_shared_triggers %||% list(),
     shared_trigger_state = new.env(parent = emptyenv())
   )
 
@@ -846,20 +826,13 @@ simulate_trials_from_params <- function(structure, params_df,
         drop = FALSE
       ]
     }
-    override_bundle <- .build_trial_overrides(structure, component_rows)
-    if (is.null(override_bundle)) {
-      acc_overrides <- list()
-      shared_overrides <- list()
-    } else {
-      acc_overrides <- override_bundle$acc %||% list()
-      shared_overrides <- override_bundle$shared %||% list()
-    }
+    param_bundle <- .build_trial_param_bundle(prep, component_rows)
     result <- .simulate_trial(
       prep,
       chosen_component,
       keep_detail = keep_detail,
-      acc_overrides = acc_overrides,
-      shared_trigger_overrides = shared_overrides
+      trial_accs = param_bundle$acc,
+      trial_shared_triggers = param_bundle$shared
     )
     outcomes[[i]] <- result$outcome
     rts[[i]] <- result$rt
@@ -874,47 +847,6 @@ simulate_trials_from_params <- function(structure, params_df,
   )
   if (length(comp_ids) > 1L || "component" %in% names(params_df)) {
     out_df$component <- comp_record
-  }
-  if (keep_detail) attr(out_df, "details") <- details
-  out_df
-}
-
-simulate_model <- function(model, n_trials, seed = NULL, keep_detail = FALSE) {
-  if (exists("is_model_tables", mode = "function") && is_model_tables(model)) {
-    model <- tables_to_model(model)
-  }
-  if (!is.null(seed)) set.seed(seed)
-  prep <- prepare_model(model)
-  components <- prep[["components"]]
-  comp_ids <- components$ids
-  weights <- components$weights
-
-  trial_components <- if (length(comp_ids) == 1L) {
-    rep(comp_ids, n_trials)
-  } else {
-    sample(comp_ids, size = n_trials, replace = TRUE, prob = weights)
-  }
-
-  outcomes <- character(n_trials)
-  rts <- numeric(n_trials)
-  details <- if (keep_detail) vector("list", n_trials) else NULL
-
-  for (i in seq_len(n_trials)) {
-    comp <- trial_components[[i]]
-    res <- .simulate_trial(prep, comp, keep_detail = keep_detail, acc_overrides = NULL)
-    outcomes[[i]] <- res$outcome
-    rts[[i]] <- res$rt
-    if (keep_detail) details[[i]] <- res$detail
-  }
-
-  out_df <- data.frame(
-    trial = seq_len(n_trials),
-    outcome = outcomes,
-    rt = rts,
-    stringsAsFactors = FALSE
-  )
-  if (length(comp_ids) > 1L) {
-    out_df$component <- trial_components
   }
   if (keep_detail) attr(out_df, "details") <- details
   out_df

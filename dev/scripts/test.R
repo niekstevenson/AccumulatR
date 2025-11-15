@@ -1,6 +1,6 @@
 rm(list = ls())
 
-devtools::load_all(quiet = TRUE)
+devtools::load_all()
 
 
 source("dev/examples/new_API.R")

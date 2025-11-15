@@ -10,6 +10,75 @@ if (!"AccumulatR" %in% loadedNamespaces()) {
 
 `%||%` <- function(lhs, rhs) if (is.null(lhs) || length(lhs) == 0) rhs else lhs
 
+apply_core_params_to_spec <- function(model, core_params) {
+  spec <- race_model(model)
+  accs <- spec[["accumulators"]] %||% list()
+  groups <- spec[["groups"]] %||% list()
+  if (length(accs) == 0 || is.null(core_params) || length(core_params) == 0) {
+    return(spec)
+  }
+  if (is.null(names(core_params)) || any(!nzchar(names(core_params)))) {
+    stop("Core parameter values must be a named vector")
+  }
+  acc_ids <- vapply(accs, `[[`, character(1), "id")
+  acc_lookup <- setNames(seq_along(acc_ids), acc_ids)
+  grp_ids <- vapply(groups, function(g) g[["id"]] %||% "", character(1))
+  group_lookup <- setNames(seq_along(groups), grp_ids)
+
+  split_name <- function(x) {
+    idx <- regexpr("\\.[^.]+$", x)
+    if (idx <= 0) return(NULL)
+    list(target = substr(x, 1, idx - 1), param = substr(x, idx + 1, nchar(x)))
+  }
+
+  coerce_shared_params <- function(shared) {
+    if (is.null(shared)) return(list())
+    if (!is.list(shared)) shared <- as.list(shared)
+    nm <- names(shared)
+    out <- list()
+    if (is.null(nm) || any(!nzchar(nm))) {
+      fields <- as.character(unlist(shared, use.names = FALSE))
+      for (fld in fields) out[[fld]] <- NULL
+    } else {
+      for (fld in nm) out[[fld]] <- shared[[fld]]
+    }
+    out
+  }
+
+  for (nm in names(core_params)) {
+    pieces <- split_name(nm)
+    if (is.null(pieces)) next
+    target <- pieces$target
+    param <- pieces$param
+    value <- core_params[[nm]]
+    if (target %in% names(acc_lookup)) {
+      idx <- acc_lookup[[target]]
+      acc <- accs[[idx]]
+      if (identical(param, "onset")) {
+        acc$onset <- value
+      } else if (identical(param, "q")) {
+        acc$q <- value
+      } else {
+        acc$params <- acc$params %||% list()
+        acc$params[[param]] <- value
+      }
+      accs[[idx]] <- acc
+    } else if (target %in% names(group_lookup)) {
+      idx <- group_lookup[[target]]
+      grp <- groups[[idx]]
+      grp_attrs <- grp[["attrs"]] %||% list()
+      shared <- coerce_shared_params(grp_attrs$shared_params)
+      shared[[param]] <- value
+      grp_attrs$shared_params <- shared
+      grp$attrs <- grp_attrs
+      groups[[idx]] <- grp
+    }
+  }
+  spec[["accumulators"]] <- accs
+  spec[["groups"]] <- groups
+  spec
+}
+
 with_native_flags <- function(node_eval, param_rows, expr) {
   old_opts <- options(
     uuber.use.native.node.eval = node_eval,
@@ -70,10 +139,7 @@ compare_log_likelihood <- function(structure,
     plan_base <- trial_plan %||% AccumulatR:::.likelihood_build_trial_plan(
       structure_obj,
       params_df,
-      prep_base,
-      build_override_ptr = TRUE,
-      keep_trial_rows = TRUE,
-      keep_component_rows = TRUE
+      prep_base
     )
     data_df$trial <- data_df$trial
     trial_ids <- unique(data_df$trial)
@@ -85,9 +151,7 @@ compare_log_likelihood <- function(structure,
       trial_ids = trial_ids,
       data_df = data_df,
       data_row_indices = data_row_indices,
-      component_weights = component_weights,
-      params_df = params_df,
-      use_buffer = FALSE
+      component_weights = component_weights
     )
     log_likelihood_from_params(
       structure_obj,
@@ -231,8 +295,8 @@ run_param_table_benchmark <- function(model_spec,
                                       n_trials = 1000L,
                                       seed = 2025,
                                       bench_reps = 3) {
-  model_with_defaults <- AccumulatR:::.apply_core_params_to_spec(model_spec, core_params)
-  structure <- build_generator_structure(model_with_defaults)
+  patched_model <- apply_core_params_to_spec(model_spec, core_params)
+  structure <- build_generator_structure(patched_model)
   param_table <- build_params_df(model_spec, core_params, n_trials = n_trials)
   data_df <- simulate_data_from_params_table(structure, param_table, seed = seed)
   prep_base <- AccumulatR:::.prepare_model_for_likelihood(structure$model_spec)
@@ -245,10 +309,7 @@ run_param_table_benchmark <- function(model_spec,
   plan_base <- AccumulatR:::.likelihood_build_trial_plan(
     structure,
     param_table,
-    prep_base,
-    build_override_ptr = TRUE,
-    keep_trial_rows = TRUE,
-    keep_component_rows = TRUE
+    prep_base
   )
   loglik_cmp <- compare_log_likelihood(
     structure,

@@ -3,16 +3,14 @@
 
 # Integrand for scenario-conditioned probability (density already encodes competitors)
 .integrand_outcome_density <- function(t, expr, prep, component, competitor_exprs,
-                                       state = NULL, trial_rows = NULL,
-                                       trial_overrides = NULL) {
+                                       state = NULL, trial_rows = NULL) {
   state <- state %||% .eval_state_create()
   times <- as.numeric(t)
   if (!length(times)) return(numeric(0))
   res <- .scenario_density_with_competitors(expr, times, prep, component,
                                             competitor_exprs = competitor_exprs,
                                             state = state,
-                                            trial_rows = trial_rows,
-                                            trial_overrides = trial_overrides)
+                                            trial_rows = trial_rows)
   as.numeric(res)
 }
 
@@ -21,8 +19,7 @@
 .integrate_outcome_probability <- function(expr, prep, component, upper_limit = Inf,
                                            competitor_exprs = NULL,
                                            state = NULL,
-                                           trial_rows = NULL,
-                                           trial_overrides = NULL) {
+                                           trial_rows = NULL) {
   if (!is.finite(upper_limit)) upper_limit <- Inf
   state <- state %||% .eval_state_create()
   guard_cache_key <- NULL
@@ -67,22 +64,7 @@
   }
   if (use_native) {
     native_ctx <- .prep_native_context(prep)
-    if (!is.null(trial_overrides) && inherits(trial_overrides, "externalptr")) {
-      native_fn <- .lik_native_fn("native_outcome_probability_overrides_cpp")
-      val <- native_fn(
-        native_ctx,
-        as.integer(compiled$id),
-        as.numeric(upper_limit),
-        component,
-        integer(0),
-        integer(0),
-        as.integer(comp_ids),
-        .integrate_rel_tol(),
-        .integrate_abs_tol(),
-        12L,
-        trial_overrides
-      )
-    } else if (!is.null(trial_rows_df)) {
+    if (!is.null(trial_rows_df) && nrow(trial_rows_df) > 0L) {
       native_fn <- .lik_native_fn("native_outcome_probability_params_cpp")
       val <- native_fn(
         native_ctx,
@@ -121,8 +103,7 @@
         component = component,
         competitor_exprs = competitor_exprs,
         state = state,
-        trial_rows = trial_rows_df,
-        trial_overrides = trial_overrides
+        trial_rows = trial_rows_df
       )
     }
     val <- .native_integrate(
@@ -486,8 +467,7 @@
 
 # Compute likelihood for a single trial/outcome
 .outcome_likelihood <- function(outcome_label, rt, prep, component,
-                                trial_rows = NULL,
-                                trial_overrides = NULL) {
+                                trial_rows = NULL) {
   outcome_defs <- prep[["outcomes"]]
   competitor_map <- .prep_competitors(prep) %||% list()
   state <- .eval_state_create()
@@ -526,8 +506,7 @@
             prob_outcome <- .integrate_outcome_probability(expr, prep, component, deadline,
                                                            competitor_exprs = comp_exprs_guess,
                                                            state = state,
-                                                           trial_rows = trial_rows_df,
-                                                           trial_overrides = trial_overrides)
+                                                           trial_rows = trial_rows_df)
             keep_prob <- as.numeric(guess_weights[[label]])
             guess_prob <- 1.0 - keep_prob
             total_prob <- total_prob + prob_outcome * guess_prob
@@ -542,8 +521,7 @@
             dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
                                                          competitor_exprs = comp_exprs_guess,
                                                          state = state,
-                                                         trial_rows = trial_rows_df,
-                                                         trial_overrides = trial_overrides)
+                                                         trial_rows = trial_rows_df)
             if (dens_r == 0) next
             keep_prob <- as.numeric(guess_weights[[label]])
             guess_prob <- 1.0 - keep_prob
@@ -589,8 +567,7 @@
               return(.integrate_outcome_probability(expr, prep, component, deadline,
                                                     competitor_exprs = comp_exprs_map,
                                                     state = state,
-                                                    trial_rows = trial_rows_df,
-                                                    trial_overrides = trial_overrides))
+                                                    trial_rows = trial_rows_df))
             } else {
               # Race density at rt for the mapped source outcome
               comp_labels_map <- setdiff(names(outcome_defs), label)
@@ -608,8 +585,7 @@
               dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
                                                            competitor_exprs = comp_exprs_map,
                                                            state = state,
-                                                           trial_rows = trial_rows_df,
-                                                           trial_overrides = trial_overrides)
+                                                           trial_rows = trial_rows_df)
               return(as.numeric(dens_r))
             }
           }
@@ -801,8 +777,7 @@
         base <- .scenario_density_with_competitors(expr, tt, prep, component,
                                                    competitor_exprs = competitor_exprs,
                                                    state = state,
-                                                   trial_rows = trial_rows_df,
-                                                   trial_overrides = trial_overrides)
+                                                   trial_rows = trial_rows_df)
         if (base == 0) return(0.0)
         add <- 0.0
         if (length(donors) > 0) {
@@ -810,8 +785,7 @@
             dens_d <- .scenario_density_with_competitors(d[['expr']], tt, prep, component,
                                                          competitor_exprs = d[['competitors']] %||% list(),
                                                          state = state,
-                                                         trial_rows = trial_rows_df,
-                                                         trial_overrides = trial_overrides)
+                                                         trial_rows = trial_rows_df)
             if (dens_d == 0) next
             add <- add + d[['weight']] * dens_d
           }
@@ -851,8 +825,7 @@
       dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
                                                    competitor_exprs = competitor_exprs,
                                                    state = state,
-                                                   trial_rows = trial_rows_df,
-                                                   trial_overrides = trial_overrides)
+                                                   trial_rows = trial_rows_df)
     if (dens_r == 0) return(0.0)
     base_val <- dens_r
     # Include donor mass (e.g., timeout guesses) that keeps the observed RT
@@ -863,8 +836,7 @@
         dens_d <- .scenario_density_with_competitors(d[['expr']], rt, prep, component,
                                                      competitor_exprs = d[['competitors']] %||% list(),
                                                      state = state,
-                                                     trial_rows = trial_rows_df,
-                                                     trial_overrides = trial_overrides)
+                                                     trial_rows = trial_rows_df)
         if (dens_d == 0) next
         donor_add <- donor_add + d[['weight']] * dens_d
       }

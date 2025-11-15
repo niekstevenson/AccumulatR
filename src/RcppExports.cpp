@@ -60,8 +60,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // native_trial_mixture_driver
-double native_trial_mixture_driver(SEXP ctxSEXP, int node_id, double t, Rcpp::CharacterVector component_ids, Rcpp::NumericVector weights, Rcpp::Nullable<Rcpp::String> forced_component, Rcpp::IntegerVector competitor_ids, SEXP trial_overrides);
-RcppExport SEXP _AccumulatR_native_trial_mixture_driver(SEXP ctxSEXPSEXP, SEXP node_idSEXP, SEXP tSEXP, SEXP component_idsSEXP, SEXP weightsSEXP, SEXP forced_componentSEXP, SEXP competitor_idsSEXP, SEXP trial_overridesSEXP) {
+double native_trial_mixture_driver(SEXP ctxSEXP, int node_id, double t, Rcpp::CharacterVector component_ids, Rcpp::NumericVector weights, Rcpp::Nullable<Rcpp::String> forced_component, Rcpp::IntegerVector competitor_ids, Rcpp::Nullable<Rcpp::DataFrame> trial_rows);
+RcppExport SEXP _AccumulatR_native_trial_mixture_driver(SEXP ctxSEXPSEXP, SEXP node_idSEXP, SEXP tSEXP, SEXP component_idsSEXP, SEXP weightsSEXP, SEXP forced_componentSEXP, SEXP competitor_idsSEXP, SEXP trial_rowsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -72,8 +72,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::NumericVector >::type weights(weightsSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::String> >::type forced_component(forced_componentSEXP);
     Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type competitor_ids(competitor_idsSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type trial_overrides(trial_overridesSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_trial_mixture_driver(ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_overrides));
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::DataFrame> >::type trial_rows(trial_rowsSEXP);
+    rcpp_result_gen = Rcpp::wrap(native_trial_mixture_driver(ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -246,18 +246,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// native_build_trial_overrides_cpp
-SEXP native_build_trial_overrides_cpp(SEXP ctxSEXP, Rcpp::Nullable<Rcpp::DataFrame> trial_rows);
-RcppExport SEXP _AccumulatR_native_build_trial_overrides_cpp(SEXP ctxSEXPSEXP, SEXP trial_rowsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type ctxSEXP(ctxSEXPSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::DataFrame> >::type trial_rows(trial_rowsSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_build_trial_overrides_cpp(ctxSEXP, trial_rows));
-    return rcpp_result_gen;
-END_RCPP
-}
 // native_competitor_survival_cpp
 double native_competitor_survival_cpp(SEXP ctxSEXP, Rcpp::IntegerVector competitor_ids, double t, Rcpp::Nullable<Rcpp::String> component);
 RcppExport SEXP _AccumulatR_native_competitor_survival_cpp(SEXP ctxSEXPSEXP, SEXP competitor_idsSEXP, SEXP tSEXP, SEXP componentSEXP) {
@@ -330,24 +318,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// native_density_with_competitors_overrides_cpp
-Rcpp::List native_density_with_competitors_overrides_cpp(SEXP ctxSEXP, int node_id, double t, Rcpp::Nullable<Rcpp::String> component, SEXP forced_complete, SEXP forced_survive, Rcpp::IntegerVector competitor_ids, SEXP overridesSEXP);
-RcppExport SEXP _AccumulatR_native_density_with_competitors_overrides_cpp(SEXP ctxSEXPSEXP, SEXP node_idSEXP, SEXP tSEXP, SEXP componentSEXP, SEXP forced_completeSEXP, SEXP forced_surviveSEXP, SEXP competitor_idsSEXP, SEXP overridesSEXPSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type ctxSEXP(ctxSEXPSEXP);
-    Rcpp::traits::input_parameter< int >::type node_id(node_idSEXP);
-    Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::String> >::type component(componentSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type forced_complete(forced_completeSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type forced_survive(forced_surviveSEXP);
-    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type competitor_ids(competitor_idsSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type overridesSEXP(overridesSEXPSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_density_with_competitors_overrides_cpp(ctxSEXP, node_id, t, component, forced_complete, forced_survive, competitor_ids, overridesSEXP));
-    return rcpp_result_gen;
-END_RCPP
-}
 // native_density_with_competitors_vec_cpp
 Rcpp::NumericVector native_density_with_competitors_vec_cpp(SEXP ctxSEXP, int node_id, Rcpp::NumericVector times, Rcpp::Nullable<Rcpp::String> component, SEXP forced_complete, SEXP forced_survive, Rcpp::IntegerVector competitor_ids);
 RcppExport SEXP _AccumulatR_native_density_with_competitors_vec_cpp(SEXP ctxSEXPSEXP, SEXP node_idSEXP, SEXP timesSEXP, SEXP componentSEXP, SEXP forced_completeSEXP, SEXP forced_surviveSEXP, SEXP competitor_idsSEXP) {
@@ -362,24 +332,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< SEXP >::type forced_survive(forced_surviveSEXP);
     Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type competitor_ids(competitor_idsSEXP);
     rcpp_result_gen = Rcpp::wrap(native_density_with_competitors_vec_cpp(ctxSEXP, node_id, times, component, forced_complete, forced_survive, competitor_ids));
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_density_with_competitors_overrides_vec_cpp
-Rcpp::NumericVector native_density_with_competitors_overrides_vec_cpp(SEXP ctxSEXP, int node_id, Rcpp::NumericVector times, Rcpp::Nullable<Rcpp::String> component, SEXP forced_complete, SEXP forced_survive, Rcpp::IntegerVector competitor_ids, SEXP overridesSEXP);
-RcppExport SEXP _AccumulatR_native_density_with_competitors_overrides_vec_cpp(SEXP ctxSEXPSEXP, SEXP node_idSEXP, SEXP timesSEXP, SEXP componentSEXP, SEXP forced_completeSEXP, SEXP forced_surviveSEXP, SEXP competitor_idsSEXP, SEXP overridesSEXPSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type ctxSEXP(ctxSEXPSEXP);
-    Rcpp::traits::input_parameter< int >::type node_id(node_idSEXP);
-    Rcpp::traits::input_parameter< Rcpp::NumericVector >::type times(timesSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::String> >::type component(componentSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type forced_complete(forced_completeSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type forced_survive(forced_surviveSEXP);
-    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type competitor_ids(competitor_idsSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type overridesSEXP(overridesSEXPSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_density_with_competitors_overrides_vec_cpp(ctxSEXP, node_id, times, component, forced_complete, forced_survive, competitor_ids, overridesSEXP));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -401,27 +353,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< int >::type max_depth(max_depthSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::DataFrame> >::type trial_rows(trial_rowsSEXP);
     rcpp_result_gen = Rcpp::wrap(native_outcome_probability_params_cpp(ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows));
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_outcome_probability_overrides_cpp
-double native_outcome_probability_overrides_cpp(SEXP ctxSEXP, int node_id, double upper, Rcpp::Nullable<Rcpp::String> component, SEXP forced_complete, SEXP forced_survive, Rcpp::IntegerVector competitor_ids, double rel_tol, double abs_tol, int max_depth, SEXP overridesSEXP);
-RcppExport SEXP _AccumulatR_native_outcome_probability_overrides_cpp(SEXP ctxSEXPSEXP, SEXP node_idSEXP, SEXP upperSEXP, SEXP componentSEXP, SEXP forced_completeSEXP, SEXP forced_surviveSEXP, SEXP competitor_idsSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP, SEXP overridesSEXPSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type ctxSEXP(ctxSEXPSEXP);
-    Rcpp::traits::input_parameter< int >::type node_id(node_idSEXP);
-    Rcpp::traits::input_parameter< double >::type upper(upperSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::String> >::type component(componentSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type forced_complete(forced_completeSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type forced_survive(forced_surviveSEXP);
-    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type competitor_ids(competitor_idsSEXP);
-    Rcpp::traits::input_parameter< double >::type rel_tol(rel_tolSEXP);
-    Rcpp::traits::input_parameter< double >::type abs_tol(abs_tolSEXP);
-    Rcpp::traits::input_parameter< int >::type max_depth(max_depthSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type overridesSEXP(overridesSEXPSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_outcome_probability_overrides_cpp(ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, overridesSEXP));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -719,16 +650,12 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_native_node_scenarios_cpp", (DL_FUNC) &_AccumulatR_native_node_scenarios_cpp, 6},
     {"_AccumulatR_native_likelihood_driver_cpp", (DL_FUNC) &_AccumulatR_native_likelihood_driver_cpp, 6},
     {"_AccumulatR_native_likelihood_eval_cpp", (DL_FUNC) &_AccumulatR_native_likelihood_eval_cpp, 2},
-    {"_AccumulatR_native_build_trial_overrides_cpp", (DL_FUNC) &_AccumulatR_native_build_trial_overrides_cpp, 2},
     {"_AccumulatR_native_competitor_survival_cpp", (DL_FUNC) &_AccumulatR_native_competitor_survival_cpp, 4},
     {"_AccumulatR_native_density_with_competitors_cpp", (DL_FUNC) &_AccumulatR_native_density_with_competitors_cpp, 10},
     {"_AccumulatR_native_outcome_probability_cpp", (DL_FUNC) &_AccumulatR_native_outcome_probability_cpp, 10},
     {"_AccumulatR_native_density_with_competitors_params_cpp", (DL_FUNC) &_AccumulatR_native_density_with_competitors_params_cpp, 8},
-    {"_AccumulatR_native_density_with_competitors_overrides_cpp", (DL_FUNC) &_AccumulatR_native_density_with_competitors_overrides_cpp, 8},
     {"_AccumulatR_native_density_with_competitors_vec_cpp", (DL_FUNC) &_AccumulatR_native_density_with_competitors_vec_cpp, 7},
-    {"_AccumulatR_native_density_with_competitors_overrides_vec_cpp", (DL_FUNC) &_AccumulatR_native_density_with_competitors_overrides_vec_cpp, 8},
     {"_AccumulatR_native_outcome_probability_params_cpp", (DL_FUNC) &_AccumulatR_native_outcome_probability_params_cpp, 11},
-    {"_AccumulatR_native_outcome_probability_overrides_cpp", (DL_FUNC) &_AccumulatR_native_outcome_probability_overrides_cpp, 11},
     {"_AccumulatR_dist_lognormal_pdf", (DL_FUNC) &_AccumulatR_dist_lognormal_pdf, 3},
     {"_AccumulatR_dist_lognormal_cdf", (DL_FUNC) &_AccumulatR_dist_lognormal_cdf, 3},
     {"_AccumulatR_dist_lognormal_rng", (DL_FUNC) &_AccumulatR_dist_lognormal_rng, 3},

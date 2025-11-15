@@ -449,7 +449,7 @@ std::unordered_set<int> make_forced_set(const std::vector<int>& ids) {
   return std::unordered_set<int>(ids.begin(), ids.end());
 }
 
-struct TrialOverrides;
+struct TrialParamSet;
 
 struct TrialRowColumns {
   R_xlen_t nrows{0};
@@ -548,7 +548,7 @@ inline std::vector<int> ensure_source_ids(const uuber::NativeContext& ctx,
   return ids;
 }
 
-struct TrialAccumulatorOverride {
+struct TrialAccumulatorParams {
   double onset{0.0};
   double q{0.0};
   AccDistParams dist_cfg{};
@@ -557,21 +557,21 @@ struct TrialAccumulatorOverride {
   std::string shared_trigger_id;
 };
 
-struct TrialOverrides {
-  std::unordered_map<int, TrialAccumulatorOverride> acc_overrides;
+struct TrialParamSet {
+  std::unordered_map<int, TrialAccumulatorParams> acc_params;
 };
 
-inline const TrialAccumulatorOverride* get_trial_override(const TrialOverrides* overrides,
+inline const TrialAccumulatorParams* get_trial_param_entry(const TrialParamSet* trial_params,
                                                           int acc_index) {
-  if (!overrides) return nullptr;
-  auto it = overrides->acc_overrides.find(acc_index);
-  if (it == overrides->acc_overrides.end()) return nullptr;
+  if (!trial_params) return nullptr;
+  auto it = trial_params->acc_params.find(acc_index);
+  if (it == trial_params->acc_params.end()) return nullptr;
   return &it->second;
 }
 
 bool component_active(const uuber::NativeAccumulator& acc,
                       const std::string& component,
-                      const TrialAccumulatorOverride* override = nullptr) {
+                      const TrialAccumulatorParams* override = nullptr) {
   if (component.empty() || component == "__default__") return true;
   const std::vector<std::string>* comps = nullptr;
   if (override && override->has_components) {
@@ -589,7 +589,7 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
                                 const std::string& component,
                                 const std::unordered_set<int>& forced_complete,
                                 const std::unordered_set<int>& forced_survive,
-                                const TrialOverrides* overrides = nullptr) {
+                                const TrialParamSet* trial_params = nullptr) {
   if (label.empty()) {
     Rcpp::stop("native_event_eval: empty label");
   }
@@ -621,7 +621,7 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
   if (acc_it != ctx.accumulator_index.end()) {
     int acc_idx = acc_it->second;
     const uuber::NativeAccumulator& acc = ctx.accumulators[acc_idx];
-    const TrialAccumulatorOverride* override = get_trial_override(overrides, acc_idx);
+    const TrialAccumulatorParams* override = get_trial_param_entry(trial_params, acc_idx);
     if (!component_active(acc, component, override)) {
       return make_node_result(0.0, 1.0, 0.0);
     }
@@ -646,7 +646,7 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
       auto member_acc = ctx.accumulator_index.find(member);
       if (member_acc != ctx.accumulator_index.end()) {
         const uuber::NativeAccumulator& acc = ctx.accumulators[member_acc->second];
-        const TrialAccumulatorOverride* override = get_trial_override(overrides, member_acc->second);
+        const TrialAccumulatorParams* override = get_trial_param_entry(trial_params, member_acc->second);
         if (!component_active(acc, component, override)) continue;
       }
       active_members.push_back(member);
@@ -664,7 +664,7 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
         component,
         forced_complete,
         forced_survive,
-        overrides
+        trial_params
       );
       density_vec[i] = child.density;
       survival_vec[i] = child.survival;
@@ -750,14 +750,14 @@ struct NodeEvalState {
                 const std::string& component_label,
                 const std::unordered_set<int>& forced_complete_ref,
                 const std::unordered_set<int>& forced_survive_ref,
-                const TrialOverrides* overrides_ptr = nullptr)
+                const TrialParamSet* params_ptr = nullptr)
     : ctx(ctx_),
       cache(cache_),
       t(time),
       component(component_label),
       forced_complete(forced_complete_ref),
       forced_survive(forced_survive_ref),
-      trial_overrides(overrides_ptr) {}
+      trial_params(params_ptr) {}
 
   const uuber::NativeContext& ctx;
   EvalCache& cache;
@@ -765,7 +765,7 @@ struct NodeEvalState {
   std::string component;
   const std::unordered_set<int>& forced_complete;
   const std::unordered_set<int>& forced_survive;
-  const TrialOverrides* trial_overrides;
+  const TrialParamSet* trial_params;
 };
 
 std::string forced_key_string(const std::unordered_set<int>& forced_complete,
@@ -773,9 +773,9 @@ std::string forced_key_string(const std::unordered_set<int>& forced_complete,
   return ids_to_string(forced_complete) + "|" + ids_to_string(forced_survive);
 }
 
-inline const TrialAccumulatorOverride* get_state_override(const NodeEvalState& state,
+inline const TrialAccumulatorParams* get_state_params(const NodeEvalState& state,
                                                           int acc_index) {
-  return get_trial_override(state.trial_overrides, acc_index);
+  return get_trial_param_entry(state.trial_params, acc_index);
 }
 
 std::string member_ids_signature(const Rcpp::IntegerVector& ids) {
@@ -916,7 +916,7 @@ std::vector<ScenarioRecord> compute_pool_event_scenarios(const uuber::NativeNode
     auto acc_it = state.ctx.accumulator_index.find(member);
     if (acc_it != state.ctx.accumulator_index.end()) {
       const uuber::NativeAccumulator& acc = state.ctx.accumulators[acc_it->second];
-      const TrialAccumulatorOverride* override = get_state_override(state, acc_it->second);
+      const TrialAccumulatorParams* override = get_state_params(state, acc_it->second);
       if (!component_active(acc, state.component, override)) continue;
     }
     active_members.push_back(member);
@@ -939,7 +939,7 @@ std::vector<ScenarioRecord> compute_pool_event_scenarios(const uuber::NativeNode
     auto acc_it = state.ctx.accumulator_index.find(member_label);
     if (acc_it != state.ctx.accumulator_index.end()) {
       const uuber::NativeAccumulator& acc = state.ctx.accumulators[acc_it->second];
-      const TrialAccumulatorOverride* override = get_state_override(state, acc_it->second);
+      const TrialAccumulatorParams* override = get_state_params(state, acc_it->second);
       const std::string& shared_id = override ? override->shared_trigger_id : acc.shared_trigger_id;
       if (!shared_id.empty()) {
         shared_ids[i] = shared_id;
@@ -973,7 +973,7 @@ std::vector<ScenarioRecord> compute_pool_event_scenarios(const uuber::NativeNode
       state.component,
       state.forced_complete,
       state.forced_survive,
-      state.trial_overrides
+      state.trial_params
     );
     double density = eval.density;
     double cdf = clamp_probability(eval.cdf);
@@ -983,7 +983,7 @@ std::vector<ScenarioRecord> compute_pool_event_scenarios(const uuber::NativeNode
     auto acc_it = state.ctx.accumulator_index.find(member_label);
     if (acc_it != state.ctx.accumulator_index.end()) {
       const uuber::NativeAccumulator& acc = state.ctx.accumulators[acc_it->second];
-      const TrialAccumulatorOverride* override = get_state_override(state, acc_it->second);
+      const TrialAccumulatorParams* override = get_state_params(state, acc_it->second);
       const std::string& shared_id = override ? override->shared_trigger_id : acc.shared_trigger_id;
       if (!shared_id.empty()) {
         double onset = override ? override->onset : acc.onset;
@@ -1403,7 +1403,7 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state) {
       state.component,
       state.forced_complete,
       state.forced_survive,
-      state.trial_overrides
+      state.trial_params
     );
   } else if (node.kind == "and") {
     result = eval_and_node(node, state);
@@ -1912,7 +1912,7 @@ double node_density_with_competitors_internal(
   const std::unordered_set<int>& forced_complete,
   const std::unordered_set<int>& forced_survive,
   const std::vector<int>& competitor_ids,
-  const TrialOverrides* overrides) {
+  const TrialParamSet* trial_params) {
   if (!std::isfinite(t) || t < 0.0) {
     return 0.0;
   }
@@ -1923,7 +1923,7 @@ double node_density_with_competitors_internal(
                       component_label,
                       forced_complete,
                       forced_survive,
-                      overrides);
+                      trial_params);
   NodeEvalResult base = eval_node_recursive(node_id, state);
   double density = base.density;
   if (!std::isfinite(density) || density <= 0.0) {
@@ -1946,7 +1946,7 @@ Rcpp::List native_density_with_competitors_impl(SEXP ctxSEXP,
                                                 SEXP forced_complete,
                                                 SEXP forced_survive,
                                                 const Rcpp::IntegerVector& competitor_ids,
-                                                const TrialOverrides* overrides) {
+                                                const TrialParamSet* trial_params) {
   if (Rf_isNull(ctxSEXP)) {
     Rcpp::stop("native_density_with_competitors: context pointer is null");
   }
@@ -1965,7 +1965,7 @@ Rcpp::List native_density_with_competitors_impl(SEXP ctxSEXP,
     forced_complete_set,
     forced_survive_set,
     comp_vec,
-    overrides
+    trial_params
   );
   if (!std::isfinite(density) || density <= 0.0) {
     density = 0.0;
@@ -1983,7 +1983,7 @@ double native_outcome_probability_impl(SEXP ctxSEXP,
                                        double rel_tol,
                                        double abs_tol,
                                        int max_depth,
-                                       const TrialOverrides* overrides) {
+                                       const TrialParamSet* trial_params) {
   if (upper <= 0.0) {
     return 0.0;
   }
@@ -1996,7 +1996,7 @@ double native_outcome_probability_impl(SEXP ctxSEXP,
                                                           forced_complete,
                                                           forced_survive,
                                                           competitor_ids,
-                                                          overrides);
+                                                          trial_params);
     double val = Rcpp::as<double>(dens["density"]);
     if (!std::isfinite(val) || val <= 0.0) return 0.0;
     return val;
@@ -2202,218 +2202,7 @@ std::vector<std::string> string_vector_from_entry(SEXP entry) {
   return out;
 }
 
-std::unique_ptr<TrialOverrides> build_trial_overrides_from_columns(
-  const uuber::NativeContext& ctx,
-  const TrialRowColumns& cols,
-  const std::vector<int>& row_positions) {
-  if (row_positions.empty()) return nullptr;
-
-  auto overrides = std::make_unique<TrialOverrides>();
-
-  auto upsert_param_entry = [](std::vector<uuber::ProtoParamEntry>& entries,
-                               uuber::ProtoParamEntry entry) {
-    for (auto& existing : entries) {
-      if (existing.name == entry.name) {
-        existing = std::move(entry);
-        return;
-      }
-    }
-    entries.push_back(std::move(entry));
-  };
-
-  auto append_scalar_entry = [&](std::vector<uuber::ProtoParamEntry>& entries,
-                                 const std::string& name,
-                                 double value,
-                                 bool logical_scalar = false) {
-    if (!std::isfinite(value)) return;
-    uuber::ProtoParamEntry entry;
-    entry.name = name;
-    if (logical_scalar) {
-      entry.tag = uuber::ParamValueTag::LogicalScalar;
-      entry.logical_scalar = static_cast<int>(value != 0.0);
-    } else {
-      entry.tag = uuber::ParamValueTag::NumericScalar;
-      entry.numeric_scalar = value;
-    }
-    upsert_param_entry(entries, std::move(entry));
-  };
-
-  auto append_numeric_vector_entry = [&](std::vector<uuber::ProtoParamEntry>& entries,
-                                         const std::string& name,
-                                         const Rcpp::NumericVector& vec) {
-    if (vec.size() == 0) return;
-    uuber::ProtoParamEntry entry;
-    entry.name = name;
-    entry.tag = uuber::ParamValueTag::NumericVector;
-    entry.numeric_values.reserve(vec.size());
-    for (double val : vec) {
-      entry.numeric_values.push_back(val);
-    }
-    upsert_param_entry(entries, std::move(entry));
-  };
-
-  auto append_logical_vector_entry = [&](std::vector<uuber::ProtoParamEntry>& entries,
-                                         const std::string& name,
-                                         const Rcpp::LogicalVector& vec) {
-    if (vec.size() == 0) return;
-    uuber::ProtoParamEntry entry;
-    entry.name = name;
-    entry.tag = uuber::ParamValueTag::LogicalVector;
-    entry.logical_values.reserve(vec.size());
-    for (int val : vec) {
-      entry.logical_values.push_back(val);
-    }
-    upsert_param_entry(entries, std::move(entry));
-  };
-
-  for (int raw_row : row_positions) {
-    if (raw_row < 0) continue;
-    R_xlen_t pos = static_cast<R_xlen_t>(raw_row);
-    if (pos >= cols.nrows) continue;
-    int acc_idx = -1;
-    if (cols.has_acc_id) {
-      if (pos >= cols.acc_id_col.size()) continue;
-      Rcpp::String acc_val = cols.acc_id_col[pos];
-      if (acc_val == NA_STRING) continue;
-      std::string acc_label = std::string(acc_val);
-      auto it = ctx.accumulator_index.find(acc_label);
-      if (it == ctx.accumulator_index.end()) {
-        Rcpp::stop("trial parameter rows reference unknown accumulator '%s'", acc_label);
-      }
-      acc_idx = it->second;
-    } else if (cols.has_acc_column) {
-      if (cols.acc_is_numeric) {
-        if (pos >= cols.acc_num_col.size()) continue;
-        double raw_val = cols.acc_num_col[pos];
-        if (Rcpp::NumericVector::is_na(raw_val)) continue;
-        int idx_val = static_cast<int>(std::llround(raw_val)) - 1;
-        if (idx_val < 0 || idx_val >= static_cast<int>(ctx.accumulators.size())) {
-          Rcpp::stop("trial parameter rows reference invalid accumulator index '%d'",
-                     idx_val + 1);
-        }
-        acc_idx = idx_val;
-      } else {
-        if (pos >= cols.acc_chr_col.size()) continue;
-        Rcpp::String acc_val = cols.acc_chr_col[pos];
-        if (acc_val == NA_STRING) continue;
-        std::string acc_label = std::string(acc_val);
-        auto it = ctx.accumulator_index.find(acc_label);
-        if (it == ctx.accumulator_index.end()) {
-          Rcpp::stop("trial parameter rows reference unknown accumulator '%s'", acc_label);
-        }
-        acc_idx = it->second;
-      }
-    }
-    if (acc_idx < 0 || acc_idx >= static_cast<int>(ctx.accumulators.size())) continue;
-    const uuber::NativeAccumulator& base = ctx.accumulators[acc_idx];
-
-    TrialAccumulatorOverride override;
-    override.onset = (pos < cols.onset_col.size() && !Rcpp::NumericVector::is_na(cols.onset_col[pos]))
-      ? static_cast<double>(cols.onset_col[pos])
-      : base.onset;
-    override.q = (pos < cols.q_col.size() && !Rcpp::NumericVector::is_na(cols.q_col[pos]))
-      ? static_cast<double>(cols.q_col[pos])
-      : base.q;
-    if (pos < cols.shared_col.size()) {
-      Rcpp::String shared_val = cols.shared_col[pos];
-      if (shared_val != NA_STRING) {
-        override.shared_trigger_id = std::string(shared_val);
-      } else {
-        override.shared_trigger_id = base.shared_trigger_id;
-      }
-    } else {
-      override.shared_trigger_id = base.shared_trigger_id;
-    }
-    SEXP comp_entry = (pos < cols.comps_col.size()) ? cols.comps_col[pos] : R_NilValue;
-    if (comp_entry != R_NilValue) {
-      override.components = string_vector_from_entry(comp_entry);
-      override.has_components = !override.components.empty();
-    } else {
-      override.has_components = false;
-    }
-
-    std::string dist_name = base.dist;
-    if (pos < cols.dist_col.size()) {
-      Rcpp::String dist_val = cols.dist_col[pos];
-      if (dist_val != NA_STRING) {
-        dist_name = std::string(dist_val);
-      }
-    }
-    override.dist_cfg = base.dist_cfg;
-    std::vector<uuber::ProtoParamEntry> param_entries;
-    if (cols.params_list_col.size() > 0) {
-      SEXP param_entry = (pos < cols.params_list_col.size()) ? cols.params_list_col[pos] : R_NilValue;
-      if (param_entry != R_NilValue) {
-        Rcpp::List param_list(param_entry);
-        std::vector<uuber::ProtoParamEntry> entries = params_from_rcpp(param_list, dist_name);
-        for (auto& entry_obj : entries) {
-          upsert_param_entry(param_entries, entry_obj);
-        }
-      }
-    }
-    for (std::size_t pc = 0; pc < cols.param_cols.size(); ++pc) {
-      SEXP column = cols.param_col_data[pc];
-      int type = cols.param_col_types[pc];
-      const std::string& col_name = cols.param_cols[pc];
-      switch (type) {
-      case REALSXP: {
-        Rcpp::NumericVector vec(column);
-        if (pos < vec.size()) {
-          double val = vec[pos];
-          if (!Rcpp::NumericVector::is_na(val)) {
-            append_scalar_entry(param_entries, col_name, val, false);
-          }
-        }
-        break;
-      }
-      case INTSXP: {
-        Rcpp::IntegerVector vec(column);
-        if (pos < vec.size()) {
-          int val = vec[pos];
-          if (val != NA_INTEGER) {
-            append_scalar_entry(param_entries, col_name, static_cast<double>(val), false);
-          }
-        }
-        break;
-      }
-      case LGLSXP: {
-        Rcpp::LogicalVector vec(column);
-        if (pos < vec.size()) {
-          int val = vec[pos];
-          if (val != NA_LOGICAL) {
-            append_scalar_entry(param_entries, col_name, static_cast<double>(val), true);
-          }
-        }
-        break;
-      }
-      case VECSXP: {
-        Rcpp::List vec(column);
-        if (pos < vec.size()) {
-          SEXP entry = vec[pos];
-          if (Rf_isNull(entry)) break;
-          if (Rf_isNumeric(entry)) {
-            append_numeric_vector_entry(param_entries, col_name, Rcpp::NumericVector(entry));
-          } else if (Rf_isLogical(entry)) {
-            append_logical_vector_entry(param_entries, col_name, Rcpp::LogicalVector(entry));
-          }
-        }
-        break;
-      }
-      default:
-        break;
-      }
-    }
-    override.dist_cfg = resolve_acc_params_entries(dist_name, param_entries);
-    overrides->acc_overrides[acc_idx] = override;
-  }
-
-  if (overrides->acc_overrides.empty()) {
-    return nullptr;
-  }
-  return overrides;
-}
-
-std::unique_ptr<TrialOverrides> build_trial_overrides_from_df(
+std::unique_ptr<TrialParamSet> build_trial_params_from_df(
   const uuber::NativeContext& ctx,
   const Rcpp::Nullable<Rcpp::DataFrame>& rows_opt) {
   if (rows_opt.isNull()) return nullptr;
@@ -2477,7 +2266,7 @@ std::unique_ptr<TrialOverrides> build_trial_overrides_from_df(
     }
   }
 
-  auto overrides = std::make_unique<TrialOverrides>();
+  auto params_set = std::make_unique<TrialParamSet>();
 
   auto upsert_param_entry = [](std::vector<uuber::ProtoParamEntry>& entries,
                                uuber::ProtoParamEntry entry) {
@@ -2571,7 +2360,7 @@ std::unique_ptr<TrialOverrides> build_trial_overrides_from_df(
     if (acc_idx < 0 || acc_idx >= static_cast<int>(ctx.accumulators.size())) continue;
     const uuber::NativeAccumulator& base = ctx.accumulators[acc_idx];
 
-    TrialAccumulatorOverride override;
+    TrialAccumulatorParams override;
     override.onset = (i < onset_col.size() && !Rcpp::NumericVector::is_na(onset_col[i]))
       ? static_cast<double>(onset_col[i])
       : base.onset;
@@ -2695,13 +2484,13 @@ std::unique_ptr<TrialOverrides> build_trial_overrides_from_df(
       override.dist_cfg = resolve_acc_params_entries(dist_name, param_entries);
     }
 
-    overrides->acc_overrides[acc_idx] = std::move(override);
+    params_set->acc_params[acc_idx] = std::move(override);
   }
 
-  if (overrides->acc_overrides.empty()) {
+  if (params_set->acc_params.empty()) {
     return nullptr;
   }
-  return overrides;
+  return params_set;
 }
 
 
@@ -3022,7 +2811,7 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
                                      const std::vector<double>& weights,
                                      Rcpp::Nullable<Rcpp::String> forced_component,
                                      const std::vector<int>& competitor_ids,
-                                     const TrialOverrides* overrides_ptr) {
+                                     const TrialParamSet* params_ptr) {
   if (!std::isfinite(t) || t < 0.0) {
     return std::numeric_limits<double>::quiet_NaN();
   }
@@ -3037,7 +2826,7 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
       forced_empty,
       forced_empty,
       competitor_ids,
-      overrides_ptr
+      params_ptr
     );
     if (!std::isfinite(contrib) || contrib < 0.0) contrib = 0.0;
     total += weights[i] * contrib;
@@ -3055,7 +2844,7 @@ double native_trial_mixture_driver(SEXP ctxSEXP,
                                    Rcpp::NumericVector weights,
                                    Rcpp::Nullable<Rcpp::String> forced_component,
                                    Rcpp::IntegerVector competitor_ids,
-                                   SEXP trial_overrides);
+                                   SEXP trial_params);
 
 std::unordered_map<std::string, double> build_component_deadlines(const Rcpp::List& structure,
                                                                   double default_deadline) {
@@ -3105,19 +2894,13 @@ double lookup_component_deadline(const std::unordered_map<std::string, double>& 
   return it->second;
 }
 
-const TrialOverrides* extract_overrides(SEXP override_ptr) {
-  if (Rf_isNull(override_ptr)) return nullptr;
-  Rcpp::XPtr<TrialOverrides> ptr(override_ptr);
-  return ptr.get();
-}
-
 double evaluate_alias_mix(SEXP ctxSEXP,
                           const Rcpp::CharacterVector& components,
                           const Rcpp::NumericVector& weights,
                           const Rcpp::List& alias_sources,
                           double t,
                           Rcpp::Nullable<Rcpp::String> forced_component,
-                          const TrialOverrides* overrides_ptr) {
+                          const TrialParamSet* params_ptr) {
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   std::vector<std::string> comp_labels;
   std::vector<double> mix_weights;
@@ -3139,7 +2922,7 @@ double evaluate_alias_mix(SEXP ctxSEXP,
                                                    mix_weights,
                                                    forced_component,
                                                    integer_vector_to_std(comp_ids, false),
-                                                   overrides_ptr);
+                                                   params_ptr);
     mix += contrib;
   }
   return mix;
@@ -3156,7 +2939,7 @@ double evaluate_na_map_mix(SEXP ctxSEXP,
                            double abs_tol,
                            int max_depth,
                            Rcpp::Nullable<Rcpp::String> forced_component,
-                           const TrialOverrides* overrides_ptr) {
+                           const TrialParamSet* params_ptr) {
   if (std::isfinite(rt) && rt >= 0.0) {
     return evaluate_alias_mix(ctxSEXP,
                               components,
@@ -3164,7 +2947,7 @@ double evaluate_na_map_mix(SEXP ctxSEXP,
                               na_sources,
                               rt,
                               forced_component,
-                              overrides_ptr);
+                              params_ptr);
   }
   double mix = 0.0;
   for (R_xlen_t i = 0; i < components.size(); ++i) {
@@ -3199,7 +2982,7 @@ double evaluate_na_map_mix(SEXP ctxSEXP,
                                                     rel_tol,
                                                     abs_tol,
                                                     max_depth,
-                                                    overrides_ptr);
+                                                    params_ptr);
       if (std::isfinite(prob) && prob > 0.0) {
         component_sum += prob;
       }
@@ -3238,7 +3021,7 @@ double compute_shared_gate_palloc(const uuber::NativeContext& ctx,
                                   double limit,
                                   double denom,
                                   const std::string& component,
-                                  const TrialOverrides* overrides,
+                                  const TrialParamSet* trial_params,
                                   double rel_tol,
                                   double abs_tol,
                                   int max_depth) {
@@ -3252,14 +3035,14 @@ double compute_shared_gate_palloc(const uuber::NativeContext& ctx,
                                             component,
                                             kEmptyForcedSet,
                                             kEmptyForcedSet,
-                                            overrides);
+                                            trial_params);
     NodeEvalResult y_res = eval_event_label(ctx,
                                             spec.y_label,
                                             u,
                                             component,
                                             kEmptyForcedSet,
                                             kEmptyForcedSet,
-                                            overrides);
+                                            trial_params);
     double fX = safe_density(x_res.density);
     double FY = clamp_probability(1.0 - clamp_unit(y_res.survival));
     double val = fX * FY;
@@ -3288,7 +3071,7 @@ double shared_gate_density_component(const uuber::NativeContext& ctx,
                                      const SharedGateSpec& spec,
                                      double t,
                                      const std::string& component,
-                                     const TrialOverrides* overrides,
+                                     const TrialParamSet* trial_params,
                                      double rel_tol,
                                      double abs_tol,
                                      int max_depth) {
@@ -3304,21 +3087,21 @@ double shared_gate_density_component(const uuber::NativeContext& ctx,
                                           component,
                                           kEmptyForcedSet,
                                           kEmptyForcedSet,
-                                          overrides);
+                                          trial_params);
   NodeEvalResult y_res = eval_event_label(ctx,
                                           spec.y_label,
                                           t,
                                           component,
                                           kEmptyForcedSet,
                                           kEmptyForcedSet,
-                                          overrides);
+                                          trial_params);
   NodeEvalResult c_res = eval_event_label(ctx,
                                           spec.c_label,
                                           t,
                                           component,
                                           kEmptyForcedSet,
                                           kEmptyForcedSet,
-                                          overrides);
+                                          trial_params);
   double fX = safe_density(x_res.density);
   double fC = safe_density(c_res.density);
   double FX = clamp_probability(1.0 - clamp_unit(x_res.survival));
@@ -3335,7 +3118,7 @@ double shared_gate_density_component(const uuber::NativeContext& ctx,
                                                t,
                                                denom,
                                                component,
-                                               overrides,
+                                               trial_params,
                                                rel_tol,
                                                abs_tol,
                                                max_depth);
@@ -3356,7 +3139,7 @@ double evaluate_shared_gate_mix(const uuber::NativeContext& ctx,
                                 const Rcpp::CharacterVector& component_ids,
                                 const Rcpp::NumericVector& weights,
                                 Rcpp::Nullable<Rcpp::String> forced_component,
-                                const TrialOverrides* overrides,
+                                const TrialParamSet* trial_params,
                                 double rel_tol,
                                 double abs_tol,
                                 int max_depth) {
@@ -3374,7 +3157,7 @@ double evaluate_shared_gate_mix(const uuber::NativeContext& ctx,
                                                    spec,
                                                    t,
                                                    components[i],
-                                                   overrides,
+                                                   trial_params,
                                                    rel_tol,
                                                    abs_tol,
                                                    max_depth);
@@ -3395,7 +3178,7 @@ double native_trial_mixture_driver(SEXP ctxSEXP,
                                    Rcpp::NumericVector weights,
                                    Rcpp::Nullable<Rcpp::String> forced_component,
                                    Rcpp::IntegerVector competitor_ids,
-                                   SEXP trial_overrides) {
+                                   Rcpp::Nullable<Rcpp::DataFrame> trial_rows) {
   if (Rf_isNull(ctxSEXP)) {
     Rcpp::stop("native_trial_mixture: context pointer is null");
   }
@@ -3406,7 +3189,12 @@ double native_trial_mixture_driver(SEXP ctxSEXP,
     return std::numeric_limits<double>::quiet_NaN();
   }
   std::vector<int> comp_ids = integer_vector_to_std(competitor_ids, false);
-  const TrialOverrides* overrides_ptr = extract_overrides(trial_overrides);
+  std::unique_ptr<TrialParamSet> param_holder;
+  const TrialParamSet* params_ptr = nullptr;
+  if (!trial_rows.isNull()) {
+    param_holder = build_trial_params_from_df(*ctx, trial_rows);
+    params_ptr = param_holder.get();
+  }
   return native_trial_mixture_internal(*ctx,
                                        node_id,
                                        t,
@@ -3414,7 +3202,7 @@ double native_trial_mixture_driver(SEXP ctxSEXP,
                                        mix_weights,
                                        forced_component,
                                        comp_ids,
-                                       overrides_ptr);
+                                       params_ptr);
 }
 
 // [[Rcpp::export]]
@@ -3437,8 +3225,8 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
   std::unordered_map<std::string, double> component_deadlines =
     build_component_deadlines(structure, default_deadline);
 
-  std::vector<std::unique_ptr<TrialOverrides>> override_cache;
-  override_cache.reserve(static_cast<std::size_t>(n_trials));
+  std::vector<std::unique_ptr<TrialParamSet>> params_cache;
+  params_cache.reserve(static_cast<std::size_t>(n_trials));
 
   for (R_xlen_t i = 0; i < n_trials; ++i) {
     Rcpp::List entry(trial_entries[i]);
@@ -3459,17 +3247,12 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
     Rcpp::IntegerVector competitor_ids = entry.containsElementNamed("competitor_ids")
       ? Rcpp::IntegerVector(entry["competitor_ids"])
       : Rcpp::IntegerVector();
-    SEXP override_ptr = entry.containsElementNamed("override_ptr")
-      ? entry["override_ptr"]
-      : R_NilValue;
-    const TrialOverrides* overrides_ptr = nullptr;
-    if (!Rf_isNull(override_ptr)) {
-      overrides_ptr = extract_overrides(override_ptr);
-    } else if (!trial_rows.isNull()) {
-      std::unique_ptr<TrialOverrides> holder = build_trial_overrides_from_df(*ctx, trial_rows);
+    const TrialParamSet* params_ptr = nullptr;
+    if (!trial_rows.isNull()) {
+      std::unique_ptr<TrialParamSet> holder = build_trial_params_from_df(*ctx, trial_rows);
       if (holder) {
-        overrides_ptr = holder.get();
-        override_cache.emplace_back(std::move(holder));
+        params_ptr = holder.get();
+        params_cache.emplace_back(std::move(holder));
       }
     }
 
@@ -3493,7 +3276,7 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
                                alias_sources,
                                t,
                                forced_component,
-                               overrides_ptr);
+                               params_ptr);
     } else if (entry_type == "na_map") {
       if (!entry.containsElementNamed("na_sources")) {
         per_trial[i] = R_NegInf;
@@ -3512,7 +3295,7 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
                                 abs_tol,
                                 max_depth,
                                 forced_component,
-                                overrides_ptr);
+                                params_ptr);
     } else {
       SharedGateSpec shared_spec;
       bool has_shared_gate = extract_shared_gate_spec(entry, shared_spec);
@@ -3523,7 +3306,7 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
                                        components,
                                        weights,
                                        forced_component,
-                                       overrides_ptr,
+                                       params_ptr,
                                        rel_tol,
                                        abs_tol,
                                        max_depth);
@@ -3544,7 +3327,7 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
                                            std::vector<double>(weights.begin(), weights.end()),
                                            forced_component,
                                            integer_vector_to_std(comp_ids, false),
-                                           overrides_ptr);
+                                           params_ptr);
       }
     }
     double log_contrib = R_NegInf;
@@ -3731,21 +3514,6 @@ Rcpp::List native_likelihood_eval_cpp(SEXP ctxSEXP,
 }
 
 // [[Rcpp::export]]
-SEXP native_build_trial_overrides_cpp(SEXP ctxSEXP,
-                                      Rcpp::Nullable<Rcpp::DataFrame> trial_rows) {
-  if (Rf_isNull(ctxSEXP) || trial_rows.isNull()) {
-    return R_NilValue;
-  }
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::unique_ptr<TrialOverrides> overrides =
-    build_trial_overrides_from_df(*ctx, trial_rows);
-  if (!overrides) {
-    return R_NilValue;
-  }
-  return Rcpp::XPtr<TrialOverrides>(overrides.release(), true);
-}
-
-// [[Rcpp::export]]
 double native_competitor_survival_cpp(SEXP ctxSEXP,
                                       Rcpp::IntegerVector competitor_ids,
                                       double t,
@@ -3814,31 +3582,7 @@ Rcpp::List native_density_with_competitors_params_cpp(SEXP ctxSEXP,
                                                       Rcpp::IntegerVector competitor_ids,
                                                       Rcpp::Nullable<Rcpp::DataFrame> trial_rows) {
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::unique_ptr<TrialOverrides> overrides = build_trial_overrides_from_df(*ctx, trial_rows);
-  return native_density_with_competitors_impl(ctxSEXP,
-                                              node_id,
-                                              t,
-                                              component,
-                                              forced_complete,
-                                              forced_survive,
-                                             competitor_ids,
-                                             overrides ? overrides.get() : nullptr);
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_density_with_competitors_overrides_cpp(SEXP ctxSEXP,
-                                                         int node_id,
-                                                         double t,
-                                                         Rcpp::Nullable<Rcpp::String> component,
-                                                         SEXP forced_complete,
-                                                         SEXP forced_survive,
-                                                         Rcpp::IntegerVector competitor_ids,
-                                                         SEXP overridesSEXP) {
-  TrialOverrides* overrides = nullptr;
-  if (!Rf_isNull(overridesSEXP)) {
-    Rcpp::XPtr<TrialOverrides> ptr(overridesSEXP);
-    overrides = ptr.get();
-  }
+  std::unique_ptr<TrialParamSet> params_holder = build_trial_params_from_df(*ctx, trial_rows);
   return native_density_with_competitors_impl(ctxSEXP,
                                               node_id,
                                               t,
@@ -3846,7 +3590,7 @@ Rcpp::List native_density_with_competitors_overrides_cpp(SEXP ctxSEXP,
                                               forced_complete,
                                               forced_survive,
                                               competitor_ids,
-                                              overrides);
+                                              params_holder ? params_holder.get() : nullptr);
 }
 
 Rcpp::NumericVector native_density_with_competitors_vector_impl(SEXP ctxSEXP,
@@ -3856,7 +3600,7 @@ Rcpp::NumericVector native_density_with_competitors_vector_impl(SEXP ctxSEXP,
                                                                 SEXP forced_complete,
                                                                 SEXP forced_survive,
                                                                 const Rcpp::IntegerVector& competitor_ids,
-                                                                const TrialOverrides* overrides) {
+                                                                const TrialParamSet* trial_params) {
   if (Rf_isNull(ctxSEXP)) {
     Rcpp::stop("native_density_with_competitors_vector: context pointer is null");
   }
@@ -3883,7 +3627,7 @@ Rcpp::NumericVector native_density_with_competitors_vector_impl(SEXP ctxSEXP,
                         component_label,
                         forced_complete_set,
                         forced_survive_set,
-                        overrides);
+                        trial_params);
     NodeEvalResult base = eval_node_recursive(node_id, state);
     double density = base.density;
     if (!std::isfinite(density) || density <= 0.0) {
@@ -3925,30 +3669,6 @@ Rcpp::NumericVector native_density_with_competitors_vec_cpp(SEXP ctxSEXP,
 }
 
 // [[Rcpp::export]]
-Rcpp::NumericVector native_density_with_competitors_overrides_vec_cpp(SEXP ctxSEXP,
-                                                                      int node_id,
-                                                                      Rcpp::NumericVector times,
-                                                                      Rcpp::Nullable<Rcpp::String> component,
-                                                                      SEXP forced_complete,
-                                                                      SEXP forced_survive,
-                                                                      Rcpp::IntegerVector competitor_ids,
-                                                                      SEXP overridesSEXP) {
-  TrialOverrides* overrides = nullptr;
-  if (!Rf_isNull(overridesSEXP)) {
-    Rcpp::XPtr<TrialOverrides> ptr(overridesSEXP);
-    overrides = ptr.get();
-  }
-  return native_density_with_competitors_vector_impl(ctxSEXP,
-                                                     node_id,
-                                                     times,
-                                                     component,
-                                                     forced_complete,
-                                                     forced_survive,
-                                                     competitor_ids,
-                                                     overrides);
-}
-
-// [[Rcpp::export]]
 double native_outcome_probability_params_cpp(SEXP ctxSEXP,
                                              int node_id,
                                              double upper,
@@ -3961,7 +3681,7 @@ double native_outcome_probability_params_cpp(SEXP ctxSEXP,
                                              int max_depth,
                                              Rcpp::Nullable<Rcpp::DataFrame> trial_rows) {
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::unique_ptr<TrialOverrides> overrides = build_trial_overrides_from_df(*ctx, trial_rows);
+  std::unique_ptr<TrialParamSet> params_holder = build_trial_params_from_df(*ctx, trial_rows);
   return native_outcome_probability_impl(ctxSEXP,
                                          node_id,
                                          upper,
@@ -3972,37 +3692,7 @@ double native_outcome_probability_params_cpp(SEXP ctxSEXP,
                                          rel_tol,
                                          abs_tol,
                                          max_depth,
-                                         overrides ? overrides.get() : nullptr);
-}
-
-// [[Rcpp::export]]
-double native_outcome_probability_overrides_cpp(SEXP ctxSEXP,
-                                                int node_id,
-                                                double upper,
-                                                Rcpp::Nullable<Rcpp::String> component,
-                                                SEXP forced_complete,
-                                                SEXP forced_survive,
-                                                Rcpp::IntegerVector competitor_ids,
-                                                double rel_tol,
-                                                double abs_tol,
-                                                int max_depth,
-                                                SEXP overridesSEXP) {
-  TrialOverrides* overrides = nullptr;
-  if (!Rf_isNull(overridesSEXP)) {
-    Rcpp::XPtr<TrialOverrides> ptr(overridesSEXP);
-    overrides = ptr.get();
-  }
-  return native_outcome_probability_impl(ctxSEXP,
-                                         node_id,
-                                         upper,
-                                         component,
-                                         forced_complete,
-                                         forced_survive,
-                                         competitor_ids,
-                                         rel_tol,
-                                         abs_tol,
-                                         max_depth,
-                                         overrides);
+                                         params_holder ? params_holder.get() : nullptr);
 }
 
 // Forward declarations for native distribution helpers

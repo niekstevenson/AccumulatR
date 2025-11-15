@@ -83,16 +83,13 @@ trial_rows <- trial_entry$rows %||% param_table[param_table$trial == trial_id, ,
 component_entries <- trial_entry$components %||% list()
 comp_entry <- component_entries[[component_for_r]] %||% component_entries[["__default__"]] %||% list(rows = NULL)
 comp_rows_df <- comp_entry$rows
-trial_override_ptr <- trial_entry$override_ptr
-
 # R path: use the standard outcome likelihood helper with the component rows
 r_density <- .outcome_likelihood(
   outcome_lbl,
   rt_val,
   prep,
   component_for_r,
-  trial_rows = comp_rows_df,
-  trial_overrides = trial_override_ptr
+  trial_rows = comp_rows_df
 )
 
 # Collect competitor node IDs for the native call
@@ -108,7 +105,7 @@ comp_ids <- comp_ids[!is.na(comp_ids)]
 expr <- prep$outcomes[[outcome_lbl]]$expr
 node_id <- attr(expr, ".lik_id", exact = TRUE)
 
-native_density_fn <- .lik_native_fn("native_density_with_competitors_overrides_cpp")
+native_density_fn <- .lik_native_fn("native_density_with_competitors_params_cpp")
 native_density <- native_density_fn(
   ctx_from_proto,
   as.integer(node_id),
@@ -117,7 +114,7 @@ native_density <- native_density_fn(
   integer(0),
   integer(0),
   comp_ids,
-  trial_override_ptr
+  trial_rows
 )$density
 
 cat("\nOutcome density comparison (single trial)\n")
@@ -138,7 +135,7 @@ r_prob <- .integrate_outcome_probability(
   trial_rows = comp_rows_df
 )
 
-native_prob_fn <- .lik_native_fn("native_outcome_probability_overrides_cpp")
+native_prob_fn <- .lik_native_fn("native_outcome_probability_params_cpp")
 native_prob <- native_prob_fn(
   ctx_from_proto,
   as.integer(node_id),
@@ -150,7 +147,7 @@ native_prob <- native_prob_fn(
   .integrate_rel_tol(),
   .integrate_abs_tol(),
   12L,
-  trial_override_ptr
+  trial_rows
 )
 
 cat("\nOutcome probability up to deadline\n")

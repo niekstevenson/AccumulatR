@@ -17,8 +17,8 @@ boost_integrate_cpp <- function(integrand, lower, upper, rel_tol, abs_tol, max_d
     .Call(`_AccumulatR_boost_integrate_cpp`, integrand, lower, upper, rel_tol, abs_tol, max_depth)
 }
 
-native_trial_mixture_cpp <- function(ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_overrides) {
-    .Call(`_AccumulatR_native_trial_mixture_driver`, ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_overrides)
+native_trial_mixture_cpp <- function(ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows) {
+    .Call(`_AccumulatR_native_trial_mixture_driver`, ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows)
 }
 
 native_loglik_from_params_cpp <- function(ctxSEXP, structure, trial_entries, component_weights_opt, default_deadline, rel_tol, abs_tol, max_depth) {
@@ -61,10 +61,6 @@ native_likelihood_eval_cpp <- function(ctxSEXP, task_list) {
     .Call(`_AccumulatR_native_likelihood_eval_cpp`, ctxSEXP, task_list)
 }
 
-native_build_trial_overrides_cpp <- function(ctxSEXP, trial_rows) {
-    .Call(`_AccumulatR_native_build_trial_overrides_cpp`, ctxSEXP, trial_rows)
-}
-
 native_competitor_survival_cpp <- function(ctxSEXP, competitor_ids, t, component) {
     .Call(`_AccumulatR_native_competitor_survival_cpp`, ctxSEXP, competitor_ids, t, component)
 }
@@ -81,24 +77,12 @@ native_density_with_competitors_params_cpp <- function(ctxSEXP, node_id, t, comp
     .Call(`_AccumulatR_native_density_with_competitors_params_cpp`, ctxSEXP, node_id, t, component, forced_complete, forced_survive, competitor_ids, trial_rows)
 }
 
-native_density_with_competitors_overrides_cpp <- function(ctxSEXP, node_id, t, component, forced_complete, forced_survive, competitor_ids, overridesSEXP) {
-    .Call(`_AccumulatR_native_density_with_competitors_overrides_cpp`, ctxSEXP, node_id, t, component, forced_complete, forced_survive, competitor_ids, overridesSEXP)
-}
-
 native_density_with_competitors_vec_cpp <- function(ctxSEXP, node_id, times, component, forced_complete, forced_survive, competitor_ids) {
     .Call(`_AccumulatR_native_density_with_competitors_vec_cpp`, ctxSEXP, node_id, times, component, forced_complete, forced_survive, competitor_ids)
 }
 
-native_density_with_competitors_overrides_vec_cpp <- function(ctxSEXP, node_id, times, component, forced_complete, forced_survive, competitor_ids, overridesSEXP) {
-    .Call(`_AccumulatR_native_density_with_competitors_overrides_vec_cpp`, ctxSEXP, node_id, times, component, forced_complete, forced_survive, competitor_ids, overridesSEXP)
-}
-
 native_outcome_probability_params_cpp <- function(ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows) {
     .Call(`_AccumulatR_native_outcome_probability_params_cpp`, ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows)
-}
-
-native_outcome_probability_overrides_cpp <- function(ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, overridesSEXP) {
-    .Call(`_AccumulatR_native_outcome_probability_overrides_cpp`, ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, overridesSEXP)
 }
 
 #' @noRd

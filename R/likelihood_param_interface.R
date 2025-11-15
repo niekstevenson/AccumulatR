@@ -311,7 +311,8 @@
 }
 
 .native_trial_mixture_eval <- function(prep, outcome_label, rt_val, component_plan,
-                                       forced_component = NULL) {
+                                       forced_component = NULL,
+                                       trial_rows = NULL) {
   if (is.null(prep) || is.null(outcome_label) || length(outcome_label) == 0L) return(NULL)
   outcome_chr <- as.character(outcome_label)[[1]]
   if (is.na(outcome_chr) || is.na(rt_val) || !is.finite(rt_val) || rt_val < 0) return(NULL)
@@ -341,6 +342,7 @@
   if (!is.null(forced_component) && !is.na(forced_component)) {
     forced_chr <- as.character(forced_component)[[1]]
   }
+  trial_df <- if (is.null(trial_rows)) data.frame() else trial_rows
   res <- tryCatch(
     native_fn(
       native_ctx,
@@ -350,7 +352,7 @@
       as.numeric(component_plan$weights %||% numeric(0)),
       forced_chr,
       as.integer(comp_ids),
-      NULL
+      trial_df
     ),
     error = function(e) NA_real_
   )
@@ -560,7 +562,8 @@
       outcome_label = outcome_label,
       rt_val = rt_val,
       component_plan = plan,
-      forced_component = forced_component
+      forced_component = forced_component,
+      trial_rows = trial_rows
     )
     if (!is.null(native_mix)) {
       return(as.numeric(native_mix))

@@ -354,10 +354,16 @@
 }
 
 # Compute probabilities for a shared-gate pair using the general likelihood machinery
-.shared_gate_pair_probs <- function(prep, component, pair_info) {
+.shared_gate_pair_probs <- function(prep, component, pair_info, trial_rows = NULL) {
   labels <- c(pair_info$label_x, pair_info$label_y)
   vapply(labels, function(lbl) {
-    .outcome_likelihood(lbl, NA_real_, prep, component)
+    .outcome_likelihood(
+      outcome_label = lbl,
+      rt = NA_real_,
+      prep = prep,
+      component = component,
+      trial_rows = trial_rows
+    )
   }, numeric(1))
 }
 
@@ -885,6 +891,8 @@ compute_loglik <- function(model, data) {
   has_weight_param <- isTRUE(any(comp_info[['has_weight_param']] %||% FALSE))
   is_mixture <- length(comp_ids) > 1
   default_component <- if (length(comp_ids) > 0) comp_ids[[1]] else "__default__"
+  structure_hash <- .structure_hash_value(prep)
+  legacy_hash <- "__legacy__"
   
   n_rows <- nrow(data)
   if (n_rows == 0) {
@@ -917,7 +925,8 @@ compute_loglik <- function(model, data) {
         }
       }
     }
-    cache_key <- .likelihood_outcome_cache_key(component_key, outcome, rt_val)
+    trial_type_key <- paste(structure_hash, component_key, sep = "|")
+    cache_key <- .likelihood_outcome_cache_key(trial_type_key, legacy_hash, outcome, rt_val)
     res <- .likelihood_outcome_cached(prep, cache_key, function() {
       if (is_mixture && identical(component_key, "__mixture__")) {
         base_weights <- if (length(comp_ids) > 0 && length(weights) == length(comp_ids)) {
@@ -930,7 +939,8 @@ compute_loglik <- function(model, data) {
         total_mix <- 0.0
         if (length(comp_ids) > 0) {
           for (j in seq_along(comp_ids)) {
-            sub_key <- .likelihood_outcome_cache_key(comp_ids[[j]], outcome, rt_val)
+            sub_trial_key <- paste(structure_hash, comp_ids[[j]], sep = "|")
+            sub_key <- .likelihood_outcome_cache_key(sub_trial_key, legacy_hash, outcome, rt_val)
             sub_res <- .likelihood_outcome_cached(prep, sub_key, function() {
               .outcome_likelihood(outcome, rt_val, prep, comp_ids[[j]])
             })

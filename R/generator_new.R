@@ -557,7 +557,7 @@ build_generator_structure <- function(model) {
     "trial", "component", "accumulator", "accumulator_id",
     "accumulator_index", "acc_idx", "type", "role",
     "outcome", "rt", "params", "condition",
-    "component_weight"
+    "component_weight", "params_hash"
   )
   param_cols <- setdiff(names(params_rows), c(base_cols, "onset", "q", "shared_trigger_id"))
   acc_overrides <- list()

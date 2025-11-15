@@ -430,6 +430,8 @@ build_params_df <- function(model,
   if (length(accs) == 0) {
     stop("Model must define accumulators before building parameter tables")
   }
+  prep_defaults <- .prepare_model_for_likelihood(spec)
+  prep_accs <- prep_defaults$accumulators %||% list()
   if (is.null(param_values) || length(param_values) == 0) {
     stop("Named parameter values are required")
   }
@@ -492,9 +494,26 @@ build_params_df <- function(model,
   if (length(missing) > 0L) {
     stop("Missing parameter values for: ", paste(missing, collapse = ", "))
   }
+  optional_default <- function(spec_acc, prep_acc, suffix) {
+    acc <- prep_acc %||% spec_acc %||% list()
+    if (identical(suffix, "onset")) {
+      return(as.numeric(acc$onset %||% 0))
+    }
+    if (identical(suffix, "q")) {
+      val <- acc$q %||% acc$shared_trigger_q %||% spec_acc$q %||% 0
+      return(as.numeric(val %||% 0))
+    }
+    if (identical(suffix, "t0")) {
+      params <- acc$params %||% spec_acc$params %||% list()
+      return(as.numeric(params[[suffix]] %||% 0))
+    }
+    0
+  }
+
   base_rows <- lapply(seq_along(accs), function(idx) {
     acc <- accs[[idx]]
     acc_id <- acc_ids[[idx]]
+    prep_acc <- prep_accs[[acc_id]] %||% list()
     role_value <- (acc[["tags"]] %||% list())[["role"]] %||% "std"
     row_vals <- setNames(as.list(rep(NA_real_, length(suffix_union))), suffix_union)
     for (suffix in per_acc_params[[acc_id]]) {
@@ -508,7 +527,7 @@ build_params_df <- function(model,
         }
         row_vals[[suffix]] <- as.numeric(param_values[[shared_nm]])
       } else if (suffix %in% optional_suffixes) {
-        row_vals[[suffix]] <- 0
+        row_vals[[suffix]] <- optional_default(acc, prep_acc, suffix)
       } else {
         stop(sprintf("Missing parameter value for '%s.%s'", acc_id, suffix))
       }
@@ -537,5 +556,6 @@ build_params_df <- function(model,
   }
   base_df$trial <- rep(seq_len(n_trials), each = base_n)
   rownames(base_df) <- NULL
+  base_df <- .params_hash_attach(base_df)
   base_df
 }

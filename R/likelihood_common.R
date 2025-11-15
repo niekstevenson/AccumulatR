@@ -186,6 +186,80 @@
   }
 }
 
+.canonical_named_list <- function(x) {
+  if (!is.list(x)) return(x)
+  nm <- names(x)
+  if (is.null(nm)) return(lapply(x, .canonical_named_list))
+  ord <- order(nm)
+  res <- lapply(x[ord], .canonical_named_list)
+  names(res) <- nm[ord]
+  res
+}
+
+.structure_hash_payload <- function(prep) {
+  accs <- prep$accumulators %||% list()
+  acc_ids <- sort(names(accs))
+  acc_payload <- lapply(acc_ids, function(id) {
+    acc <- accs[[id]] %||% list()
+    list(
+      id = acc$id %||% id,
+      dist = acc$dist %||% "",
+      components = sort(acc$components %||% character(0)),
+      tags = .canonical_named_list(acc$tags %||% list()),
+      attrs = .canonical_named_list(acc$attrs %||% list()),
+      shared_trigger_id = acc$shared_trigger_id %||% NA_character_,
+      shared_trigger_q = acc$shared_trigger_q %||% NA_real_
+    )
+  })
+  pools <- prep$pools %||% list()
+  pool_ids <- sort(names(pools))
+  pool_payload <- lapply(pool_ids, function(id) {
+    pool <- pools[[id]] %||% list()
+    list(
+      id = pool$id %||% id,
+      members = sort(pool$members %||% character(0)),
+      k = as.integer(pool$k %||% 1L),
+      attrs = .canonical_named_list(pool$attrs %||% list())
+    )
+  })
+  outcomes <- prep$outcomes %||% list()
+  outcome_ids <- sort(names(outcomes))
+  outcome_payload <- lapply(outcome_ids, function(id) {
+    def <- outcomes[[id]] %||% list()
+    sig <- .expr_signature(def$expr %||% list())
+    list(
+      label = id,
+      signature = sig,
+      options = .canonical_named_list(def$options %||% list())
+    )
+  })
+  shared <- prep$shared_triggers %||% list()
+  shared_ids <- sort(names(shared))
+  shared_payload <- lapply(shared_ids, function(id) {
+    trig <- shared[[id]] %||% list()
+    list(
+      id = trig$id %||% id,
+      q = trig$q %||% NA_real_,
+      members = sort(trig$members %||% character(0))
+    )
+  })
+  list(
+    accumulators = acc_payload,
+    pools = pool_payload,
+    outcomes = outcome_payload,
+    components = .canonical_named_list(prep$components %||% list()),
+    default_deadline = prep$default_deadline %||% NA_real_,
+    special_outcomes = .canonical_named_list(prep$special_outcomes %||% list()),
+    shared_triggers = shared_payload
+  )
+}
+
+.structure_hash_value <- function(prep) {
+  payload <- .structure_hash_payload(prep)
+  raw_bytes <- serialize(payload, connection = NULL, ascii = TRUE)
+  paste(as.character(raw_bytes), collapse = "")
+}
+
 .build_likelihood_cache_bundle <- function(prep) {
   native_ctx_env <- new.env(parent = emptyenv())
   native_ctx_env$ptr <- NULL
@@ -314,14 +388,20 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
   )
 }
 
-.likelihood_outcome_cache_key <- function(bundle_key, outcome_label, rt_val) {
+.likelihood_outcome_cache_key <- function(bundle_key, params_hash, outcome_label, rt_val) {
   outcome_chr <- if (is.null(outcome_label) || length(outcome_label) == 0L || is.na(outcome_label[[1]])) {
     "NA"
   } else {
     as.character(outcome_label)[[1]]
   }
+  hash_key <- params_hash %||% "__base__"
+  if (length(hash_key) == 0L || is.na(hash_key[[1]]) || !nzchar(hash_key[[1]])) {
+    hash_key <- "__base__"
+  } else {
+    hash_key <- as.character(hash_key[[1]])
+  }
   rt_key <- .eval_state_time_key(rt_val)
-  paste(bundle_key, outcome_chr, rt_key, sep = "|")
+  paste(bundle_key, hash_key, outcome_chr, rt_key, sep = "|")
 }
 
 .bundle_precomputed_get <- function(bundle, key) {
@@ -360,14 +440,20 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
   list(prep = prep, bundle = bundle)
 }
 
-.likelihood_outcome_cache_key <- function(component_key, outcome_label, rt_val) {
+.likelihood_outcome_cache_key <- function(component_key, params_hash, outcome_label, rt_val) {
   outcome_chr <- if (is.null(outcome_label) || length(outcome_label) == 0L || is.na(outcome_label[[1]])) {
     "NA"
   } else {
     as.character(outcome_label)[[1]]
   }
+  hash_key <- params_hash %||% "__base__"
+  if (length(hash_key) == 0L || is.na(hash_key[[1]]) || !nzchar(hash_key[[1]])) {
+    hash_key <- "__base__"
+  } else {
+    hash_key <- as.character(hash_key[[1]])
+  }
   rt_key <- .eval_state_time_key(rt_val)
-  paste(component_key, outcome_chr, rt_key, sep = "|")
+  paste(component_key, hash_key, outcome_chr, rt_key, sep = "|")
 }
 
 .likelihood_outcome_cached <- function(prep, cache_key, compute_fn) {

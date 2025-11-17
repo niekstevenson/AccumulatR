@@ -335,6 +335,161 @@ run_param_table_benchmark <- function(model_spec,
   )
 }
 
+summarize_model_performance <- function(model_spec,
+                                        core_params,
+                                        model_id = NA_character_,
+                                        n_trials = 1000L,
+                                        seed = 2025) {
+  metric_names <- c(
+    "struct_hits", "struct_misses",
+    "guard_hits", "guard_misses",
+    "na_hits", "na_misses",
+    "scratch_hits", "scratch_misses"
+  )
+  native_metric_names <- c(
+    "guard_hits", "guard_misses",
+    "na_hits", "na_misses",
+    "scratch_hits", "scratch_misses"
+  )
+  zero_metrics <- stats::setNames(rep(0, length(metric_names)), metric_names)
+  zero_native <- stats::setNames(rep(0, length(native_metric_names)), native_metric_names)
+  bucket_values <- function(stats_list, bucket_name = "r") {
+    bucket <- stats_list[[bucket_name]]
+    if (is.null(bucket)) return(zero_metrics)
+    out <- zero_metrics
+    for (nm in names(bucket)) {
+      if (nm %in% names(out)) {
+        out[[nm]] <- as.numeric(bucket[[nm]])
+      }
+    }
+    out
+  }
+  native_values <- function(native_stats) {
+    if (is.null(native_stats)) return(zero_native)
+    out <- zero_native
+    for (nm in names(native_stats)) {
+      if (nm %in% names(out)) {
+        out[[nm]] <- as.numeric(native_stats[[nm]])
+      }
+    }
+    out
+  }
+  cache_reset <- AccumulatR:::likelihood_cache_reset_stats
+  cache_stats <- AccumulatR:::likelihood_cache_stats
+  build_prep_plan <- function() {
+    prep <- AccumulatR:::.prepare_model_for_likelihood(structure$model_spec)
+    prep <- AccumulatR:::.likelihood_seed_prep_from_params(prep, param_table)
+    if (is.null(prep[[".runtime"]]) || is.null(prep$.runtime$cache_bundle)) {
+      prep <- AccumulatR:::.prep_set_cache_bundle(
+        prep,
+        AccumulatR:::.build_likelihood_cache_bundle(prep)
+      )
+    }
+    plan <- AccumulatR:::.likelihood_build_trial_plan(
+      structure,
+      param_table,
+      prep
+    )
+    list(prep = prep, plan = plan)
+  }
+
+  patched_model <- apply_core_params_to_spec(model_spec, core_params)
+  structure <- build_generator_structure(patched_model)
+  single_params <- build_params_df(model_spec, core_params, n_trials = 1L)
+  r_prob <- with_native_flags(FALSE, FALSE, {
+    observed_response_probabilities_from_params(structure, single_params, include_na = TRUE)
+  })
+  c_prob <- with_native_flags(TRUE, TRUE, {
+    observed_response_probabilities_from_params(structure, single_params, include_na = TRUE)
+  })
+  param_table <- build_params_df(model_spec, core_params, n_trials = n_trials)
+  data_df <- simulate_data_from_params_table(structure, param_table, seed = seed)
+  prep_plan_r <- build_prep_plan()
+  r_eval <- NULL
+  r_time <- system.time({
+    cache_reset(prep_plan_r$prep)
+    r_eval <- with_native_flags(FALSE, FALSE, {
+      log_likelihood_from_params(
+        structure,
+        param_table,
+        data_df,
+        prep = prep_plan_r$prep,
+        trial_plan = prep_plan_r$plan
+      )
+    })
+  })[["elapsed"]]
+  r_stats <- cache_stats()
+  r_metrics <- bucket_values(r_stats, "r")
+
+  prep_plan_c <- build_prep_plan()
+  c_eval <- NULL
+  c_time <- system.time({
+    cache_reset(prep_plan_c$prep)
+    c_eval <- with_native_flags(TRUE, TRUE, {
+      log_likelihood_from_params(
+        structure,
+        param_table,
+        data_df,
+        prep = prep_plan_c$prep,
+        trial_plan = prep_plan_c$plan
+      )
+    })
+  })[["elapsed"]]
+  c_stats <- cache_stats(prep_plan_c$prep)
+  c_struct_metrics <- bucket_values(c_stats, "r")
+  c_native_metrics <- native_values(c_stats$native)
+  data.frame(
+    Model = model_id %||% "",
+    R_prob = I(list(r_prob)),
+    C_prob = I(list(c_prob)),
+    R_ll = as.numeric(r_eval$loglik),
+    C_ll = as.numeric(c_eval$loglik),
+    R_time = as.numeric(r_time),
+    C_time = as.numeric(c_time),
+    R_struct_hits = r_metrics[["struct_hits"]],
+    R_struct_misses = r_metrics[["struct_misses"]],
+    R_guard_hits = r_metrics[["guard_hits"]],
+    R_guard_misses = r_metrics[["guard_misses"]],
+    R_na_hits = r_metrics[["na_hits"]],
+    R_na_misses = r_metrics[["na_misses"]],
+    R_scratch_hits = r_metrics[["scratch_hits"]],
+    R_scratch_misses = r_metrics[["scratch_misses"]],
+    C_struct_hits = c_struct_metrics[["struct_hits"]],
+    C_struct_misses = c_struct_metrics[["struct_misses"]],
+    C_guard_hits = c_native_metrics[["guard_hits"]],
+    C_guard_misses = c_native_metrics[["guard_misses"]],
+    C_na_hits = c_native_metrics[["na_hits"]],
+    C_na_misses = c_native_metrics[["na_misses"]],
+    C_scratch_hits = c_native_metrics[["scratch_hits"]],
+    C_scratch_misses = c_native_metrics[["scratch_misses"]],
+    stringsAsFactors = FALSE
+  )
+}
+
+summarize_example_models <- function(model_list,
+                                     params_list,
+                                     example_ids = names(model_list),
+                                     n_trials = 1000L,
+                                     seed = 2025) {
+  if (length(example_ids) == 0) stop("No example ids supplied")
+  rows <- lapply(example_ids, function(id) {
+    model <- model_list[[id]]
+    if (is.null(model)) stop(sprintf("Model '%s' not found in supplied list", id))
+    core_params <- params_list[[id]]
+    if (is.null(core_params)) {
+      stop(sprintf("Parameter vector for model '%s' not found", id))
+    }
+    summarize_model_performance(
+      model_spec = model,
+      core_params = core_params,
+      model_id = id,
+      n_trials = n_trials,
+      seed = seed
+    )
+  })
+  do.call(rbind, rows)
+}
+
 # Example usage (run inside dev/scripts/test.R or the console):
 # mdl <- new_api_examples[[1]]
 # compare_response_probabilities(mdl)

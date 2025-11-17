@@ -60,8 +60,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // native_trial_mixture_driver
-double native_trial_mixture_driver(SEXP ctxSEXP, int node_id, double t, Rcpp::CharacterVector component_ids, Rcpp::NumericVector weights, Rcpp::Nullable<Rcpp::String> forced_component, Rcpp::IntegerVector competitor_ids, Rcpp::Nullable<Rcpp::DataFrame> trial_rows);
-RcppExport SEXP _AccumulatR_native_trial_mixture_driver(SEXP ctxSEXPSEXP, SEXP node_idSEXP, SEXP tSEXP, SEXP component_idsSEXP, SEXP weightsSEXP, SEXP forced_componentSEXP, SEXP competitor_idsSEXP, SEXP trial_rowsSEXP) {
+double native_trial_mixture_driver(SEXP ctxSEXP, int node_id, double t, Rcpp::CharacterVector component_ids, Rcpp::NumericVector weights, Rcpp::Nullable<Rcpp::String> forced_component, Rcpp::IntegerVector competitor_ids, Rcpp::Nullable<Rcpp::DataFrame> trial_rows, Rcpp::Nullable<Rcpp::List> guess_donors);
+RcppExport SEXP _AccumulatR_native_trial_mixture_driver(SEXP ctxSEXPSEXP, SEXP node_idSEXP, SEXP tSEXP, SEXP component_idsSEXP, SEXP weightsSEXP, SEXP forced_componentSEXP, SEXP competitor_idsSEXP, SEXP trial_rowsSEXP, SEXP guess_donorsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -73,7 +73,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::String> >::type forced_component(forced_componentSEXP);
     Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type competitor_ids(competitor_idsSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::DataFrame> >::type trial_rows(trial_rowsSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_trial_mixture_driver(ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows));
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type guess_donors(guess_donorsSEXP);
+    rcpp_result_gen = Rcpp::wrap(native_trial_mixture_driver(ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows, guess_donors));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -354,6 +355,27 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::DataFrame> >::type trial_rows(trial_rowsSEXP);
     rcpp_result_gen = Rcpp::wrap(native_outcome_probability_params_cpp(ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows));
     return rcpp_result_gen;
+END_RCPP
+}
+// native_cache_stats_cpp
+Rcpp::List native_cache_stats_cpp(SEXP ctxSEXP);
+RcppExport SEXP _AccumulatR_native_cache_stats_cpp(SEXP ctxSEXPSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type ctxSEXP(ctxSEXPSEXP);
+    rcpp_result_gen = Rcpp::wrap(native_cache_stats_cpp(ctxSEXP));
+    return rcpp_result_gen;
+END_RCPP
+}
+// native_cache_reset_stats_cpp
+void native_cache_reset_stats_cpp(SEXP ctxSEXP);
+RcppExport SEXP _AccumulatR_native_cache_reset_stats_cpp(SEXP ctxSEXPSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type ctxSEXP(ctxSEXPSEXP);
+    native_cache_reset_stats_cpp(ctxSEXP);
+    return R_NilValue;
 END_RCPP
 }
 // dist_lognormal_pdf
@@ -639,7 +661,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_native_prep_serialize_cpp", (DL_FUNC) &_AccumulatR_native_prep_serialize_cpp, 1},
     {"_AccumulatR_native_context_from_proto_cpp", (DL_FUNC) &_AccumulatR_native_context_from_proto_cpp, 1},
     {"_AccumulatR_boost_integrate_cpp", (DL_FUNC) &_AccumulatR_boost_integrate_cpp, 6},
-    {"_AccumulatR_native_trial_mixture_driver", (DL_FUNC) &_AccumulatR_native_trial_mixture_driver, 8},
+    {"_AccumulatR_native_trial_mixture_driver", (DL_FUNC) &_AccumulatR_native_trial_mixture_driver, 9},
     {"_AccumulatR_native_loglik_from_params_cpp", (DL_FUNC) &_AccumulatR_native_loglik_from_params_cpp, 8},
     {"_AccumulatR_native_loglik_from_buffer_cpp", (DL_FUNC) &_AccumulatR_native_loglik_from_buffer_cpp, 9},
     {"_AccumulatR_native_component_plan_exported", (DL_FUNC) &_AccumulatR_native_component_plan_exported, 4},
@@ -656,6 +678,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_native_density_with_competitors_params_cpp", (DL_FUNC) &_AccumulatR_native_density_with_competitors_params_cpp, 8},
     {"_AccumulatR_native_density_with_competitors_vec_cpp", (DL_FUNC) &_AccumulatR_native_density_with_competitors_vec_cpp, 7},
     {"_AccumulatR_native_outcome_probability_params_cpp", (DL_FUNC) &_AccumulatR_native_outcome_probability_params_cpp, 11},
+    {"_AccumulatR_native_cache_stats_cpp", (DL_FUNC) &_AccumulatR_native_cache_stats_cpp, 1},
+    {"_AccumulatR_native_cache_reset_stats_cpp", (DL_FUNC) &_AccumulatR_native_cache_reset_stats_cpp, 1},
     {"_AccumulatR_dist_lognormal_pdf", (DL_FUNC) &_AccumulatR_dist_lognormal_pdf, 3},
     {"_AccumulatR_dist_lognormal_cdf", (DL_FUNC) &_AccumulatR_dist_lognormal_cdf, 3},
     {"_AccumulatR_dist_lognormal_rng", (DL_FUNC) &_AccumulatR_dist_lognormal_rng, 3},

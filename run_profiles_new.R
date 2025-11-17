@@ -1,54 +1,39 @@
 rm(list = ls())
-source("examples/stim_selective_versions.R")
-source("R/model_tables.R")
-source("R/generator_new.R")
-source("R/super_large_likelihood.R")
-source("R/profile_plot_new.R")
-source("R/processing_tree.R")
-
+devtools::load_all()
+source("examples/new_API.R")
 set.seed(123456)
-# model_spec <- stim_selective_versions[[1]]
-# 12 is very interesting!
-model_spec <- new_api_examples[[19]]
+example_id <- 1
+model_spec <- new_api_examples[[example_id]]
+core_params <- new_api_example_params[[example_id]]
+structure <- build_generator_structure(model_spec)
+n_trials <- 2000L
+params_df <- build_params_df(model_spec, core_params, n_trials = n_trials)
 
-# Translate model specification to table representation
-model_tables <- model_to_tables(model_spec)
-# 
-# processing_math_tree(model_tables, "GO1")
+# Simulate data under the parameter table
+data <- simulate_trials_from_params(structure, params_df, seed = 123456)
 
-
-# More trials for curvature
-data <- simulate_model(model_tables, n_trials = 2000)
-
-# ---- Simple sanity checks (similar to examples/1_simple_two_response_race.R) ----
-
-# 2) Compute and print simulation counts
 cat("\nSimulation counts:\n")
 print(table(data$outcome, useNA = "ifany"))
-print(table(data$component, data$outcome, useNA = "ifany"))
 cat("\nSimulation probabilities:\n")
-print(table(data$outcome, useNA = "ifany")/nrow(data))
+print(round(prop.table(table(data$outcome, useNA = "ifany")), 6))
 
-
-# 
-# #
-# 3) Analytic probability check via likelihood helpers
-# cat("\nAnalytic outcome probabilities:\n")
-probs <- observed_response_probabilities(model_tables, include_na = TRUE)
+# Analytic probabilities from the parameter table
+single_params <- build_params_df(model_spec, core_params, n_trials = 1L)
+probs <- observed_response_probabilities_from_params(structure, single_params, include_na = TRUE)
+cat("\nAnalytic outcome probabilities (single-trial params):\n")
 print(round(probs, 6))
 cat(sprintf("Sum of probabilities: %.6f\n", sum(probs)))
-# #
-# # #
-# 4) Ensure likelihood is finite on provided data
-ll <- compute_loglik(model_tables, data)
 
+# Log-likelihood check on simulated data
+ll_res <- log_likelihood_from_params(structure, params_df, data)
+cat(sprintf("\nLog-likelihood on test data: %.4f\n", ll_res$loglik))
 
-
-
-cat(sprintf("\nLog-likelihood on test data: %.4f\n", ll))
-#
+source("dev/R_extra/profile_plot_new.R")
+# Profile likelihood using the new parameter-table pipeline
 profile_res <- profile_likelihood(
-  model = model_tables,
+  structure = structure,
+  model_spec = model_spec,
+  base_params = core_params,
   data = data,
   n_points = 10,
   percent = 0.10,
@@ -56,6 +41,4 @@ profile_res <- profile_likelihood(
 )
 
 print(profile_res)
-
 plot_profile(profile_res)
-

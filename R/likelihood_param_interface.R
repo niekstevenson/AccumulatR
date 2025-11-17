@@ -13,8 +13,8 @@
   if (is.null(prep) || is.null(params_df) || nrow(params_df) == 0L) {
     return(prep)
   }
-  bundle <- .build_trial_param_bundle(prep, params_df)
-  acc_overrides <- bundle$acc %||% list()
+  param_state <- .generator_param_state_from_rows(prep, params_df)
+  acc_overrides <- param_state$accs %||% list()
   if (length(acc_overrides) > 0L) {
     acc_defs <- prep$accumulators %||% list()
     for (acc_id in names(acc_overrides)) {
@@ -29,7 +29,7 @@
     }
     prep$accumulators <- acc_defs
   }
-  shared_overrides <- bundle$shared %||% list()
+  shared_overrides <- param_state$shared %||% list()
   if (length(shared_overrides) > 0L) {
     prep$shared_triggers <- prep$shared_triggers %||% list()
     for (shared_id in names(shared_overrides)) {
@@ -56,8 +56,8 @@
   if (is.null(params_df) || nrow(params_df) == 0L) return(model_spec)
   spec_copy <- unserialize(serialize(model_spec, NULL))
   prep_tmp <- .prepare_model_for_likelihood(model_spec)
-  bundle <- .build_trial_param_bundle(prep_tmp, params_df)
-  acc_overrides <- bundle$acc %||% list()
+  param_state <- .generator_param_state_from_rows(prep_tmp, params_df)
+  acc_overrides <- param_state$accs %||% list()
   if (length(acc_overrides) > 0L) {
     acc_defs <- spec_copy$accumulators %||% list()
     acc_index <- setNames(seq_along(acc_defs), vapply(acc_defs, `[[`, character(1), "id"))
@@ -181,12 +181,15 @@
   weights
 }
 
-.likelihood_response_prob_component <- function(prep, outcome_label, component, trial_rows = NULL) {
+.likelihood_response_prob_component <- function(prep, outcome_label, component,
+                                                trial_rows = NULL,
+                                                trial_state = NULL) {
   use_fastpath <- getOption("uuber.shared_gate_fastpath", default = TRUE)
   if (isTRUE(use_fastpath)) {
     pair <- .find_shared_gate_pair(prep[["outcomes"]])
     if (!is.null(pair) && outcome_label %in% c(pair[['label_x']], pair[['label_y']])) {
-      vals <- .shared_gate_pair_probs(prep, component, pair, trial_rows = trial_rows)
+      vals <- .shared_gate_pair_probs(prep, component, pair, trial_rows = trial_rows,
+                                      trial_state = trial_state)
       if (identical(outcome_label, pair[['label_x']])) {
         return(vals[[1]])
       } else {
@@ -210,7 +213,14 @@
     return(sum(vals))
   }
 
-  base <- as.numeric(.outcome_likelihood(outcome_label, NA_real_, prep, component, trial_rows = trial_rows))
+  base <- as.numeric(.outcome_likelihood(
+    outcome_label,
+    NA_real_,
+    prep,
+    component,
+    trial_rows = trial_rows,
+    state = trial_state
+  ))
   if (!identical(outcome_label, "GUESS")) {
     gp <- .get_component_attr(prep, component, "guess")
     if (!is.null(gp) && !is.null(gp[['weights']])) {
@@ -299,7 +309,8 @@
 }
 .native_trial_mixture_eval <- function(prep, outcome_label, rt_val, component_plan,
                                        forced_component = NULL,
-                                       trial_rows = NULL) {
+                                       trial_rows = NULL,
+                                       guess_donors = NULL) {
   if (is.null(prep) || is.null(outcome_label) || length(outcome_label) == 0L) return(NULL)
   outcome_chr <- as.character(outcome_label)[[1]]
   if (is.na(outcome_chr) || is.na(rt_val) || !is.finite(rt_val) || rt_val < 0) return(NULL)
@@ -339,7 +350,8 @@
       as.numeric(component_plan$weights %||% numeric(0)),
       forced_chr,
       as.integer(comp_ids),
-      trial_df
+      trial_df,
+      guess_donors %||% list()
     ),
     error = function(e) NA_real_
   )
@@ -402,7 +414,8 @@
       if (is.null(node) || is.null(comp_ids)) return(NULL)
       list(
         node_id = as.integer(node$id),
-        competitor_ids = comp_ids %||% integer(0)
+        competitor_ids = comp_ids %||% integer(0),
+        source_label = lbl
       )
     })
     if (any(vapply(na_source_specs, is.null, logical(1)))) na_source_specs <- NULL
@@ -411,6 +424,38 @@
   rel_tol <- .integrate_rel_tol()
   abs_tol <- .integrate_abs_tol()
   max_depth <- 12L
+
+  guess_target_specs <- list()
+  for (lbl in names(outcome_defs)) {
+    def <- outcome_defs[[lbl]]
+    opts <- def[['options']] %||% list()
+    guess_opts <- opts[['guess']]
+    if (is.null(guess_opts)) next
+    donor_node <- compiled_nodes[[lbl]]
+    if (is.null(donor_node)) next
+    donor_comp <- compiled_competitors[[lbl]] %||% integer(0)
+    labels <- guess_opts[['labels']] %||% character(0)
+    weights <- guess_opts[['weights']] %||% numeric(0)
+    if (!length(labels) || length(labels) != length(weights)) next
+    rt_policy <- guess_opts[['rt_policy']] %||% "keep"
+    for (j in seq_along(labels)) {
+      tgt <- labels[[j]]
+      tgt_key <- if (is.na(tgt)) "NA" else as.character(tgt)
+      release_val <- as.numeric(weights[[j]])
+      release_val <- if (is.finite(release_val)) release_val else 0
+      if (release_val < 0) release_val <- 0
+      if (release_val > 1) release_val <- 1
+      donor_rec <- list(
+        node_id = as.integer(donor_node$id),
+        competitor_ids = donor_comp %||% integer(0),
+        source_label = lbl,
+        release = release_val,
+        rt_policy = rt_policy
+      )
+      guess_target_specs[[tgt_key]] <- c(guess_target_specs[[tgt_key]] %||% list(), list(donor_rec))
+    }
+  }
+
   entries <- vector("list", length(trial_ids))
   for (i in seq_along(trial_ids)) {
     tid <- trial_ids[[i]]
@@ -436,16 +481,28 @@
     outcome_lbl <- data_row$outcome[[1]] %||% NA_character_
     rt_val <- data_row$rt[[1]] %||% NA_real_
     forced_component <- if ("component" %in% names(data_row)) data_row$component[[1]] else NULL
+    comp_plan <- .native_component_plan(
+      structure = structure,
+      trial_rows = entry$rows,
+      forced_component = forced_component,
+      component_weights = component_weights,
+      component_ids = structure$components$component_id
+    )
     if (is.na(outcome_lbl) || identical(outcome_lbl, "NA")) {
       if (is.null(na_source_specs)) return(NULL)
-      entries[[i]] <- list(
+      guess_key <- "NA"
+      guess_donors <- guess_target_specs[[guess_key]] %||% NULL
+      entry_na <- list(
         type = "na_map",
         trial_rows = entry$rows %||% data.frame(),
         rt = if (is.null(rt_val)) NA_real_ else as.numeric(rt_val),
         forced_component = if (!is.null(forced_component) && !is.na(forced_component)) as.character(forced_component) else NULL,
         na_sources = na_source_specs,
+        component_plan = comp_plan,
         component_cache = component_cache
       )
+      if (!is.null(guess_donors)) entry_na$guess_donors <- guess_donors
+      entries[[i]] <- entry_na
       next
     }
     outcome_def <- outcome_defs[[outcome_lbl]]
@@ -459,7 +516,8 @@
         if (is.null(node) || is.null(comp_ids)) return(NULL)
         list(
           node_id = as.integer(node$id),
-          competitor_ids = comp_ids %||% integer(0)
+          competitor_ids = comp_ids %||% integer(0),
+          source_label = ref_lbl
         )
       })
       if (any(vapply(alias_sources, is.null, logical(1)))) return(NULL)
@@ -469,7 +527,9 @@
         rt = as.numeric(rt_val),
         forced_component = if (!is.null(forced_component) && !is.na(forced_component)) as.character(forced_component) else NULL,
         alias_sources = alias_sources,
-        component_cache = component_cache
+        component_cache = component_cache,
+        component_plan = comp_plan,
+        outcome_label = outcome_lbl
       )
       next
     }
@@ -478,6 +538,8 @@
     comp_ids <- compiled_competitors[[outcome_lbl]]
     if (is.null(comp_ids)) return(NULL)
     if (is.na(rt_val) || !is.finite(rt_val) || rt_val < 0) return(NULL)
+    guess_key <- as.character(outcome_lbl)
+    guess_donors <- guess_target_specs[[guess_key]] %||% NULL
     entry_fields <- list(
       type = "direct",
       trial_rows = entry$rows %||% data.frame(),
@@ -485,8 +547,11 @@
       rt = as.numeric(rt_val),
       forced_component = if (!is.null(forced_component) && !is.na(forced_component)) as.character(forced_component) else NULL,
       competitor_ids = comp_ids,
-      component_cache = component_cache
+      component_cache = component_cache,
+      component_plan = comp_plan,
+      outcome_label = outcome_lbl
     )
+    if (!is.null(guess_donors)) entry_fields$guess_donors <- guess_donors
     shared_info <- shared_gate_specs[[outcome_lbl]]
     if (!is.null(shared_info)) {
       entry_fields$shared_gate <- shared_info
@@ -548,7 +613,8 @@
                                            outcome_label, rt_val,
                                            forced_component = NULL,
                                            component_plan_entries = NULL,
-                                           use_native_rows = isTRUE(getOption("uuber.use.native.param.rows", TRUE))) {
+                                           use_native_rows = isTRUE(getOption("uuber.use.native.param.rows", TRUE)),
+                                           trial_state = NULL) {
   results <- numeric(0)
   structure_hash <- .structure_hash_value(prep_eval_base)
   plan <- .native_component_plan(
@@ -603,7 +669,8 @@
         rt_val,
         prep_eval_base,
         comp_id,
-        trial_rows = comp_rows_df
+        trial_rows = comp_rows_df,
+        state = trial_state
       )
     })
     prep_eval_base <- res$prep
@@ -671,10 +738,8 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
     )
   }
   if (!is.null(batch_res)) {
-    return(list(
-      loglik = batch_res$loglik,
-      per_trial = batch_res$per_trial
-    ))
+    attr(batch_res, "prep") <- prep_eval_base
+    return(batch_res)
   }
 
   for (i in seq_along(trial_ids)) {
@@ -700,6 +765,7 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
     forced_component <- if ("component" %in% names(data_row)) data_row$component[[1]] else NULL
     component_entries <- entry$components %||% list()
 
+    trial_state <- .eval_state_create()
     mixture <- .likelihood_mixture_likelihood(
       structure = structure,
       prep_eval_base = prep_eval_base,
@@ -710,7 +776,8 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
       rt_val = rt_val,
       forced_component = forced_component,
       component_plan_entries = component_entries,
-      use_native_rows = use_native_rows
+      use_native_rows = use_native_rows,
+      trial_state = trial_state
     )
     if (!is.finite(mixture) || mixture <= 0) {
       per_trial_loglik[[i]] <- -Inf
@@ -718,10 +785,12 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
       per_trial_loglik[[i]] <- log(mixture)
     }
   }
-  list(
+  result <- list(
     loglik = sum(per_trial_loglik),
     per_trial = per_trial_loglik
   )
+  attr(result, "prep") <- prep_eval_base
+  result
 }
 
 log_likelihood_from_params_buffer <- function(structure, params_df, data_df,
@@ -778,10 +847,12 @@ log_likelihood_from_params_buffer <- function(structure, params_df, data_df,
   if (is.null(batch_res)) {
     stop("native log-likelihood batch evaluation failed; rebuild the trial plan or inspect params_df")
   }
-  list(
+  result <- list(
     loglik = batch_res$loglik,
     per_trial = batch_res$per_trial
   )
+  attr(result, "prep") <- prep_eval_base
+  result
 }
 
 build_buffer_trial_entries <- function(structure, params_df, data_df,
@@ -920,6 +991,7 @@ observed_response_probabilities_from_params <- function(structure, params_df,
   for (i in seq_along(trial_ids)) {
     tid <- trial_ids[[i]]
     trial_rows <- params_df[params_df$trial == tid, , drop = FALSE]
+    trial_state <- .eval_state_create()
     comps <- comp_ids
     if ("component" %in% names(trial_rows)) {
       listed <- unique(trial_rows$component)
@@ -944,7 +1016,8 @@ observed_response_probabilities_from_params <- function(structure, params_df,
           prep_eval_base,
           lbl,
           comp_id,
-          trial_rows = comp_rows
+          trial_rows = comp_rows,
+          trial_state = trial_state
         )
       }, numeric(1)), labels)
       weighted <- weights[[idx]] * base_probs

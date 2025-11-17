@@ -24,6 +24,11 @@
   state <- state %||% .eval_state_create()
   guard_cache_key <- NULL
   component_key <- .cache_component_key(component)
+  trial_rows_df <- NULL
+  if (!is.null(trial_rows) && inherits(trial_rows, "data.frame") && nrow(trial_rows) > 0L) {
+    trial_rows_df <- as.data.frame(trial_rows)
+  }
+  params_hash <- .params_hash_from_rows(trial_rows_df)
   competitor_exprs <- competitor_exprs %||% list()
   expr_kind <- expr[['kind']]
   if (identical(expr_kind, "guard")) {
@@ -33,8 +38,8 @@
     } else {
       paste(sort(vapply(competitor_exprs, .expr_signature, character(1))), collapse = ",")
     }
-    guard_cache_key <- .guard_integral_cache_key(guard_sig, component_key, upper_limit, competitor_sig)
-    cached_guard <- .guard_integral_fetch(prep, guard_cache_key)
+    guard_cache_key <- .guard_integral_cache_key(guard_sig, component_key, upper_limit, competitor_sig, params_hash)
+    cached_guard <- .guard_integral_fetch(prep, component_key, guard_cache_key)
     if (!is.null(cached_guard)) {
       return(cached_guard)
     }
@@ -51,10 +56,6 @@
     } else {
       comp_ids <- NULL
     }
-  }
-  trial_rows_df <- NULL
-  if (!is.null(trial_rows) && inherits(trial_rows, "data.frame") && nrow(trial_rows) > 0L) {
-    trial_rows_df <- as.data.frame(trial_rows)
   }
   upper_val <- as.numeric(upper_limit)[1]
   if (is.na(upper_val)) {
@@ -119,7 +120,7 @@
   if (val < 0) val <- 0.0
   if (val > 1) val <- 1.0
   if (!is.null(guard_cache_key)) {
-    .guard_integral_store(prep, guard_cache_key, val)
+    .guard_integral_store(prep, component_key, guard_cache_key, val)
   }
   val
 }
@@ -354,7 +355,9 @@
 }
 
 # Compute probabilities for a shared-gate pair using the general likelihood machinery
-.shared_gate_pair_probs <- function(prep, component, pair_info, trial_rows = NULL) {
+.shared_gate_pair_probs <- function(prep, component, pair_info,
+                                    trial_rows = NULL,
+                                    trial_state = NULL) {
   labels <- c(pair_info$label_x, pair_info$label_y)
   vapply(labels, function(lbl) {
     .outcome_likelihood(
@@ -362,7 +365,8 @@
       rt = NA_real_,
       prep = prep,
       component = component,
-      trial_rows = trial_rows
+      trial_rows = trial_rows,
+      state = trial_state
     )
   }, numeric(1))
 }
@@ -473,14 +477,17 @@
 
 # Compute likelihood for a single trial/outcome
 .outcome_likelihood <- function(outcome_label, rt, prep, component,
-                                trial_rows = NULL) {
+                                trial_rows = NULL,
+                                state = NULL) {
   outcome_defs <- prep[["outcomes"]]
   competitor_map <- .prep_competitors(prep) %||% list()
-  state <- .eval_state_create()
+  state <- state %||% .eval_state_create()
   trial_rows_df <- NULL
   if (!is.null(trial_rows) && inherits(trial_rows, "data.frame") && nrow(trial_rows) > 0L) {
     trial_rows_df <- as.data.frame(trial_rows)
   }
+  component_key <- .cache_component_key(component)
+  params_hash <- .params_hash_from_rows(trial_rows_df)
   
   # FIRST: Check for GUESS outcomes (can be both defined and from guess policy)
   # GUESS outcomes arise from component-level guess policies
@@ -554,31 +561,50 @@
           if (is.na(mapped) || identical(mapped, "NA")) {
             # Found the outcome that maps to NA
             expr <- out_def[['expr']]
-            if (is.na(rt)) {
-              # Integrate race probability for the mapped source outcome
-              deadline <- .get_component_attr(prep, component, "deadline")
-              deadline <- deadline %||% prep[["default_deadline"]]
-              comp_labels_map <- setdiff(names(outcome_defs), label)
-              if (length(comp_labels_map) > 0) {
-                comp_labels_map <- Filter(function(lbl) {
-                  expr_lbl <- outcome_defs[[lbl]][['expr']]
-                  if (!is.null(expr_lbl[['kind']]) && identical(expr_lbl[['kind']], "event")) {
-                    src <- expr_lbl[['source']]
-                    if (identical(src, "__GUESS__") || identical(src, "__DEADLINE__")) return(FALSE)
-                  }
-                  TRUE
-                }, comp_labels_map)
-              }
-              comp_exprs_map <- if (length(comp_labels_map) > 0) lapply(comp_labels_map, function(lbl) outcome_defs[[lbl]][['expr']]) else list()
-              return(.integrate_outcome_probability(expr, prep, component, deadline,
-                                                    competitor_exprs = comp_exprs_map,
-                                                    state = state,
-                                                    trial_rows = trial_rows_df))
-            } else {
-              # Race density at rt for the mapped source outcome
-              comp_labels_map <- setdiff(names(outcome_defs), label)
-              if (length(comp_labels_map) > 0) {
-                comp_labels_map <- Filter(function(lbl) {
+      if (is.na(rt)) {
+        # Integrate race probability for the mapped source outcome
+        deadline <- .get_component_attr(prep, component, "deadline")
+        deadline <- deadline %||% prep[["default_deadline"]]
+        comp_labels_map <- setdiff(names(outcome_defs), label)
+        if (length(comp_labels_map) > 0) {
+          comp_labels_map <- Filter(function(lbl) {
+            expr_lbl <- outcome_defs[[lbl]][['expr']]
+            if (!is.null(expr_lbl[['kind']]) && identical(expr_lbl[['kind']], "event")) {
+              src <- expr_lbl[['source']]
+              if (identical(src, "__GUESS__") || identical(src, "__DEADLINE__")) return(FALSE)
+            }
+            TRUE
+          }, comp_labels_map)
+        }
+        comp_exprs_map <- if (length(comp_labels_map) > 0) lapply(comp_labels_map, function(lbl) outcome_defs[[lbl]][['expr']]) else list()
+        competitor_sig <- if (length(comp_exprs_map) == 0L) {
+          "none"
+        } else {
+          paste(sort(vapply(comp_exprs_map, .expr_signature, character(1))), collapse = ",")
+        }
+        source_sig <- .expr_signature(expr)
+        na_cache_key <- .na_integral_cache_key(
+          source_signature = source_sig,
+          component_key = component_key,
+          upper_limit = deadline,
+          competitor_signature = competitor_sig,
+          params_hash = params_hash
+        )
+        cached_na <- .na_integral_fetch(prep, component_key, na_cache_key)
+        if (!is.null(cached_na)) {
+          return(as.numeric(cached_na))
+        }
+        val <- .integrate_outcome_probability(expr, prep, component, deadline,
+                                              competitor_exprs = comp_exprs_map,
+                                              state = state,
+                                              trial_rows = trial_rows_df)
+        .na_integral_store(prep, component_key, na_cache_key, val)
+        return(val)
+      } else {
+        # Race density at rt for the mapped source outcome
+        comp_labels_map <- setdiff(names(outcome_defs), label)
+        if (length(comp_labels_map) > 0) {
+          comp_labels_map <- Filter(function(lbl) {
                   expr_lbl <- outcome_defs[[lbl]][['expr']]
                   if (!is.null(expr_lbl[['kind']]) && identical(expr_lbl[['kind']], "event")) {
                     src <- expr_lbl[['source']]

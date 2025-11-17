@@ -260,6 +260,14 @@
   paste(as.character(raw_bytes), collapse = "")
 }
 
+.guard_cache_limit_value <- function() {
+  opt <- getOption("uuber.cache.guard.max_per_trial", 128L)
+  if (!is.numeric(opt) || length(opt) == 0L || is.na(opt[[1]])) return(128L)
+  val <- as.integer(opt[[1]])
+  if (!is.finite(val) || val < 0L) return(0L)
+  val
+}
+
 .build_likelihood_cache_bundle <- function(prep) {
   native_ctx_env <- new.env(parent = emptyenv())
   native_ctx_env$ptr <- NULL
@@ -280,6 +288,8 @@
       precomputed_values = new.env(parent = emptyenv(), hash = TRUE),
       pool_templates = new.env(parent = emptyenv(), hash = TRUE),
       guard_quadrature = new.env(parent = emptyenv(), hash = TRUE),
+      guard_quadrature_meta = new.env(parent = emptyenv(), hash = TRUE),
+      guard_quadrature_limit = .guard_cache_limit_value(),
       native_ctx = native_ctx_env,
       version = Sys.time()
     ),
@@ -371,6 +381,17 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
         }
         env
       },
+      guard_quadrature_meta = {
+        env <- new.env(parent = emptyenv(), hash = TRUE)
+        if (!is.null(bundle$guard_quadrature_meta)) {
+          keys <- ls(bundle$guard_quadrature_meta, all.names = TRUE)
+          for (k in keys) {
+            env[[k]] <- bundle$guard_quadrature_meta[[k]]
+          }
+        }
+        env
+      },
+      guard_quadrature_limit = bundle$guard_quadrature_limit %||% .guard_cache_limit_value(),
       native_ctx = {
         env <- new.env(parent = emptyenv())
         if (!is.null(bundle$native_ctx) && is.environment(bundle$native_ctx)) {
@@ -431,13 +452,78 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
   value
 }
 
+.guard_cache_component_key <- function(component_key) {
+  if (is.null(component_key) || length(component_key) == 0L) return("__default__")
+  comp_chr <- as.character(component_key)[[1]]
+  if (!nzchar(comp_chr) || is.na(comp_chr)) "__default__" else comp_chr
+}
+
+.guard_cache_limit <- function(bundle = NULL) {
+  limit <- NULL
+  if (!is.null(bundle)) limit <- bundle$guard_quadrature_limit
+  if (is.null(limit) || !is.numeric(limit) || length(limit) == 0L || is.na(limit[[1]])) {
+    limit <- .guard_cache_limit_value()
+    if (!is.null(bundle)) bundle$guard_quadrature_limit <- limit
+  }
+  limit <- as.integer(limit[[1]])
+  if (!is.finite(limit) || limit < 0L) return(0L)
+  limit
+}
+
+.guard_cache_touch <- function(bundle, component_key, cache_key) {
+  if (is.null(bundle) || is.null(bundle$guard_quadrature) || !nzchar(cache_key)) return(invisible(NULL))
+  comp_key <- .guard_cache_component_key(component_key)
+  order_env <- bundle$guard_quadrature_meta
+  if (is.null(order_env) || !is.environment(order_env)) {
+    order_env <- new.env(parent = emptyenv(), hash = TRUE)
+    bundle$guard_quadrature_meta <- order_env
+  }
+  order_vec <- order_env[[comp_key]]
+  if (is.null(order_vec)) order_vec <- character(0)
+  if (length(order_vec) > 0L) {
+    order_vec <- order_vec[order_vec != cache_key]
+  }
+  order_vec <- c(order_vec, cache_key)
+  limit <- .guard_cache_limit(bundle)
+  if (limit <= 0L) {
+    if (length(order_vec) > 0L) {
+      for (drop_key in order_vec) {
+        if (exists(drop_key, envir = bundle$guard_quadrature, inherits = FALSE)) {
+          rm(list = drop_key, envir = bundle$guard_quadrature)
+        }
+      }
+    }
+    order_env[[comp_key]] <- character(0)
+    return(invisible(NULL))
+  }
+  while (length(order_vec) > limit) {
+    drop_key <- order_vec[[1]]
+    order_vec <- order_vec[-1]
+    if (exists(drop_key, envir = bundle$guard_quadrature, inherits = FALSE)) {
+      rm(list = drop_key, envir = bundle$guard_quadrature)
+    }
+  }
+  order_env[[comp_key]] <- order_vec
+  invisible(NULL)
+}
+
 .cache_bundle_ensure <- function(prep) {
   bundle <- .prep_cache_bundle(prep)
   if (is.null(bundle)) {
+    .cache_metrics_inc("struct_misses")
     bundle <- .build_likelihood_cache_bundle(prep)
     prep <- .prep_set_cache_bundle(prep, bundle)
+  } else {
+    .cache_metrics_inc("struct_hits")
   }
   list(prep = prep, bundle = bundle)
+}
+
+likelihood_reset_cache <- function(prep) {
+  if (is.null(prep)) return(prep)
+  runtime <- prep[[".runtime"]]
+  if (is.null(runtime)) return(prep)
+  .prep_set_cache_bundle(prep, .build_likelihood_cache_bundle(prep))
 }
 
 .likelihood_outcome_cache_key <- function(component_key, params_hash, outcome_label, rt_val) {
@@ -468,21 +554,97 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
   list(value = cached, prep = prep)
 }
 
-.guard_integral_cache_key <- function(guard_signature, component_key, upper_limit, competitor_signature) {
+.params_hash_from_rows <- function(rows) {
+  if (is.null(rows) || !nrow(rows)) return("__base__")
+  if ("params_hash" %in% names(rows)) {
+    vals <- rows$params_hash
+    vals <- vals[!is.na(vals) & nzchar(as.character(vals))]
+    if (length(vals) > 0L) {
+      hash_val <- as.character(vals[[1]])
+      if (nzchar(hash_val)) return(hash_val)
+    }
+  }
+  tmp <- rows
+  if ("params_hash" %in% names(tmp)) tmp$params_hash <- NULL
+  hash_val <- .param_rows_hash_value(tmp)
+  if (!nzchar(hash_val)) "__base__" else hash_val
+}
+
+.guard_integral_cache_key <- function(guard_signature, component_key, upper_limit, competitor_signature,
+                                      params_hash = "__base__") {
   upper_tag <- .eval_state_time_key(upper_limit)
-  paste("guard_int", guard_signature, component_key, upper_tag, competitor_signature, sep = "|")
+  hash_tag <- params_hash %||% "__base__"
+  if (!nzchar(hash_tag) || is.na(hash_tag)) hash_tag <- "__base__"
+  paste("guard_int", guard_signature, component_key, hash_tag, upper_tag, competitor_signature, sep = "|")
 }
 
-.guard_integral_fetch <- function(prep, cache_key) {
+.guard_integral_fetch <- function(prep, component_key, cache_key) {
   bundle <- .prep_cache_bundle(prep)
-  if (is.null(bundle)) return(NULL)
-  bundle$guard_quadrature[[cache_key]]
+  if (is.null(bundle)) {
+    .cache_metrics_inc("guard_misses")
+    return(NULL)
+  }
+  val <- bundle$guard_quadrature[[cache_key]]
+  if (!is.null(val)) {
+    .cache_metrics_inc("guard_hits")
+    .guard_cache_touch(bundle, component_key, cache_key)
+  } else {
+    .cache_metrics_inc("guard_misses")
+  }
+  val
 }
 
-.guard_integral_store <- function(prep, cache_key, value) {
+.guard_integral_store <- function(prep, component_key, cache_key, value) {
   info <- .cache_bundle_ensure(prep)
   bundle <- info$bundle
+  if (.guard_cache_limit(bundle) <= 0L) {
+    if (exists(cache_key, envir = bundle$guard_quadrature, inherits = FALSE)) {
+      rm(list = cache_key, envir = bundle$guard_quadrature)
+    }
+    .guard_cache_touch(bundle, component_key, cache_key)
+    return(invisible(NULL))
+  }
   bundle$guard_quadrature[[cache_key]] <- value
+  .guard_cache_touch(bundle, component_key, cache_key)
+  invisible(NULL)
+}
+
+.na_integral_cache_key <- function(source_signature, component_key, upper_limit, competitor_signature,
+                                   params_hash = "__base__") {
+  upper_tag <- .eval_state_time_key(upper_limit)
+  hash_tag <- params_hash %||% "__base__"
+  if (!nzchar(hash_tag) || is.na(hash_tag)) hash_tag <- "__base__"
+  paste("na_map", source_signature, component_key, hash_tag, upper_tag, competitor_signature, sep = "|")
+}
+
+.na_integral_fetch <- function(prep, component_key, cache_key) {
+  bundle <- .prep_cache_bundle(prep)
+  if (is.null(bundle)) {
+    .cache_metrics_inc("na_misses")
+    return(NULL)
+  }
+  val <- bundle$guard_quadrature[[cache_key]]
+  if (!is.null(val)) {
+    .cache_metrics_inc("na_hits")
+    .guard_cache_touch(bundle, component_key, cache_key)
+  } else {
+    .cache_metrics_inc("na_misses")
+  }
+  val
+}
+
+.na_integral_store <- function(prep, component_key, cache_key, value) {
+  info <- .cache_bundle_ensure(prep)
+  bundle <- info$bundle
+  if (.guard_cache_limit(bundle) <= 0L) {
+    if (exists(cache_key, envir = bundle$guard_quadrature, inherits = FALSE)) {
+      rm(list = cache_key, envir = bundle$guard_quadrature)
+    }
+    .guard_cache_touch(bundle, component_key, cache_key)
+    return(invisible(NULL))
+  }
+  bundle$guard_quadrature[[cache_key]] <- value
+  .guard_cache_touch(bundle, component_key, cache_key)
   invisible(NULL)
 }
 .inspect_likelihood_plan <- function(prep, include_cache = FALSE) {
@@ -490,10 +652,15 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
   if (is.null(comp)) {
     if (!isTRUE(include_cache)) return(data.frame())
     bundle <- .prep_cache_bundle(prep)
+    guard_meta <- if (is.null(bundle) || is.null(bundle$guard_quadrature_meta)) list() else {
+      keys <- ls(bundle$guard_quadrature_meta, all.names = TRUE)
+      stats::setNames(lapply(keys, function(k) bundle$guard_quadrature_meta[[k]]), keys)
+    }
     return(list(nodes = data.frame(), cache = list(
       precomputed_values = if (is.null(bundle)) character(0) else ls(bundle$precomputed_values, all.names = TRUE),
       pool_templates = if (is.null(bundle)) character(0) else ls(bundle$pool_templates, all.names = TRUE),
-      guard_quadrature = if (is.null(bundle)) character(0) else ls(bundle$guard_quadrature, all.names = TRUE)
+      guard_quadrature = if (is.null(bundle)) character(0) else ls(bundle$guard_quadrature, all.names = TRUE),
+      guard_quadrature_orders = guard_meta
     )))
   }
   nodes <- comp$nodes %||% list()
@@ -513,10 +680,15 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
   }))
   if (!isTRUE(include_cache)) return(node_df)
   bundle <- .prep_cache_bundle(prep)
+  guard_meta <- if (is.null(bundle) || is.null(bundle$guard_quadrature_meta)) list() else {
+    keys <- ls(bundle$guard_quadrature_meta, all.names = TRUE)
+    stats::setNames(lapply(keys, function(k) bundle$guard_quadrature_meta[[k]]), keys)
+  }
   cache_summary <- list(
     precomputed_values = if (is.null(bundle)) character(0) else ls(bundle$precomputed_values, all.names = TRUE),
     pool_templates = if (is.null(bundle)) character(0) else ls(bundle$pool_templates, all.names = TRUE),
-    guard_quadrature = if (is.null(bundle)) character(0) else ls(bundle$guard_quadrature, all.names = TRUE)
+    guard_quadrature = if (is.null(bundle)) character(0) else ls(bundle$guard_quadrature, all.names = TRUE),
+    guard_quadrature_orders = guard_meta
   )
   list(nodes = node_df, cache = cache_summary)
 }

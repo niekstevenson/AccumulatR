@@ -17,8 +17,8 @@ boost_integrate_cpp <- function(integrand, lower, upper, rel_tol, abs_tol, max_d
     .Call(`_AccumulatR_boost_integrate_cpp`, integrand, lower, upper, rel_tol, abs_tol, max_depth)
 }
 
-native_trial_mixture_cpp <- function(ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows) {
-    .Call(`_AccumulatR_native_trial_mixture_driver`, ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows)
+native_trial_mixture_cpp <- function(ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows, guess_donors) {
+    .Call(`_AccumulatR_native_trial_mixture_driver`, ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows, guess_donors)
 }
 
 native_loglik_from_params_cpp <- function(ctxSEXP, structure, trial_entries, component_weights_opt, default_deadline, rel_tol, abs_tol, max_depth) {
@@ -83,6 +83,14 @@ native_density_with_competitors_vec_cpp <- function(ctxSEXP, node_id, times, com
 
 native_outcome_probability_params_cpp <- function(ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows) {
     .Call(`_AccumulatR_native_outcome_probability_params_cpp`, ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows)
+}
+
+native_cache_stats_cpp <- function(ctxSEXP) {
+    .Call(`_AccumulatR_native_cache_stats_cpp`, ctxSEXP)
+}
+
+native_cache_reset_stats_cpp <- function(ctxSEXP) {
+    invisible(.Call(`_AccumulatR_native_cache_reset_stats_cpp`, ctxSEXP))
 }
 
 #' @noRd

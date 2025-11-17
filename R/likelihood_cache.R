@@ -67,6 +67,7 @@
   handle <- .state_entry_handle(forced_env, forced_info$key, init = init)
   if (is.null(handle)) return(NULL)
   if (.state_entry_is_new(handle)) {
+    .cache_metrics_inc("scratch_misses")
     .state_entry_set(handle, "meta", list(
       node_id = as.integer(node_id),
       component_id = comp_id,
@@ -75,6 +76,8 @@
       forced_survive_id = forced_info$fs_id
     ))
     attr(handle, "created") <- NULL
+  } else {
+    .cache_metrics_inc("scratch_hits")
   }
   handle
 }

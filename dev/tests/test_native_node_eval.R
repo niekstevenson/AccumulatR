@@ -79,7 +79,7 @@ prep[[".id_index"]] <- prep$.runtime$id_index
 prep[[".label_cache"]] <- prep$.runtime$label_cache
 prep <- .refresh_compiled_prep_refs(prep)
 
-ctx_ptr <- .lik_native_fn("native_context_build")(prep)
+ctx_ptr <- native_context_build(prep)
 if (is.null(ctx_ptr) || !inherits(ctx_ptr, "externalptr")) {
   stop("Failed to build native context pointer")
 }
@@ -133,7 +133,6 @@ compare_results <- function(native_res, ref_res, label, tt, tol = 1e-8) {
 }
 
 t_values <- c(0.2, 0.5, 1.0)
-native_eval <- .lik_native_fn("native_node_eval_cpp")
 test_nodes <- c(
   accA = node_ids[["accA"]],
   poolP = node_ids[["poolP"]],
@@ -145,7 +144,7 @@ test_nodes <- c(
 for (label in names(test_nodes)) {
   node_id <- as.integer(test_nodes[[label]])
   for (tt in t_values) {
-    native_res <- native_eval(
+    native_res <- native_node_eval_cpp(
       ctx_ptr,
       node_id,
       as.numeric(tt),
@@ -165,7 +164,7 @@ if (length(forced_survive_vec) == 0L || is.na(forced_survive_vec)) {
 forced_survive_vec <- forced_survive_vec[!is.na(forced_survive_vec)]
 
 forced_time <- 0.65
-native_forced <- native_eval(
+native_forced <- native_node_eval_cpp(
   ctx_ptr,
   as.integer(node_ids[["orAB"]]),
   forced_time,

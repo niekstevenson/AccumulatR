@@ -45,7 +45,6 @@ prep[[".id_index"]] <- prep$.runtime$id_index
 prep[[".label_cache"]] <- prep$.runtime$label_cache
 
 native_ctx <- .prep_native_context(prep)
-native_prob <- .lik_native_fn("native_outcome_probability_cpp")
 
 guard_id <- attr(prep$outcomes$guard$expr, ".lik_id", exact = TRUE)
 event_id <- attr(prep$outcomes$eventA$expr, ".lik_id", exact = TRUE)
@@ -53,7 +52,7 @@ if (is.na(guard_id) || is.na(event_id)) stop("Missing compiled node ids")
 
 upper_limits <- c(0.5, 1.0, 1.5)
 for (upper in upper_limits) {
-  native_val <- native_prob(
+  native_val <- native_outcome_probability_cpp(
     native_ctx,
     as.integer(guard_id),
     as.numeric(upper),
@@ -82,7 +81,7 @@ competitors <- list(list(kind = "event", source = "B"))
 comp_node <- .expr_lookup_compiled(competitors[[1]], prep)
 if (is.null(comp_node)) stop("Competitor node missing")
 for (upper in upper_limits) {
-  native_val <- native_prob(
+  native_val <- native_outcome_probability_cpp(
     native_ctx,
     as.integer(event_id),
     as.numeric(upper),

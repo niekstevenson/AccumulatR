@@ -1,4 +1,6 @@
 rm(list = ls())
+devtools::load_all()
+
 
 if (!"AccumulatR" %in% loadedNamespaces()) {
   skip_devtools <- identical(Sys.getenv("UUBER_SKIP_DEVTOOLS"), "1")
@@ -14,7 +16,7 @@ source("dev/scripts/compare_likelihoods.R")
 
 # example_ids <- names(new_api_examples)[c(1:11, 13:16, 18)]
 # example_ids <- names(new_api_examples)[c(5, 15)]
-example_ids <- names(new_api_examples)[18]
+example_ids <- names(new_api_examples)[1]
 
 summary_table <- summarize_example_models(
   model_list = new_api_examples,

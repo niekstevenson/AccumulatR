@@ -93,6 +93,10 @@ native_cache_reset_stats_cpp <- function(ctxSEXP) {
     invisible(.Call(`_AccumulatR_native_cache_reset_stats_cpp`, ctxSEXP))
 }
 
+native_context_touch_cpp <- function(ctxSEXP) {
+    invisible(.Call(`_AccumulatR_native_context_touch_cpp`, ctxSEXP))
+}
+
 #' @noRd
 dist_lognormal_pdf <- function(x, meanlog, sdlog) {
     .Call(`_AccumulatR_dist_lognormal_pdf`, x, meanlog, sdlog)

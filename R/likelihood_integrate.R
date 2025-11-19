@@ -22,7 +22,6 @@
                                            trial_rows = NULL) {
   if (!is.finite(upper_limit)) upper_limit <- Inf
   state <- state %||% .eval_state_create()
-  guard_cache_key <- NULL
   component_key <- .cache_component_key(component)
   trial_rows_df <- NULL
   if (!is.null(trial_rows) && inherits(trial_rows, "data.frame") && nrow(trial_rows) > 0L) {
@@ -32,17 +31,7 @@
   competitor_exprs <- competitor_exprs %||% list()
   expr_kind <- expr[['kind']]
   if (identical(expr_kind, "guard")) {
-    guard_sig <- .expr_signature(expr)
-    competitor_sig <- if (length(competitor_exprs) == 0L) {
-      "none"
-    } else {
-      paste(sort(vapply(competitor_exprs, .expr_signature, character(1))), collapse = ",")
-    }
-    guard_cache_key <- .guard_integral_cache_key(guard_sig, component_key, upper_limit, competitor_sig, params_hash)
-    cached_guard <- .guard_integral_fetch(prep, component_key, guard_cache_key)
-    if (!is.null(cached_guard)) {
-      return(cached_guard)
-    }
+    # guard caches removed; always compute directly
   }
   native_ctx <- NULL
   compiled <- .expr_lookup_compiled(expr, prep)
@@ -66,8 +55,7 @@
   if (use_native) {
     native_ctx <- .prep_native_context(prep)
     if (!is.null(trial_rows_df) && nrow(trial_rows_df) > 0L) {
-      native_fn <- .lik_native_fn("native_outcome_probability_params_cpp")
-      val <- native_fn(
+      val <- native_outcome_probability_params_cpp(
         native_ctx,
         as.integer(compiled$id),
         as.numeric(upper_limit),
@@ -81,8 +69,7 @@
         trial_rows_df
       )
     } else {
-      native_fn <- .lik_native_fn("native_outcome_probability_cpp")
-      val <- native_fn(
+      val <- native_outcome_probability_cpp(
         native_ctx,
         as.integer(compiled$id),
         as.numeric(upper_limit),
@@ -119,9 +106,6 @@
   if (!is.finite(val)) val <- 0.0
   if (val < 0) val <- 0.0
   if (val > 1) val <- 1.0
-  if (!is.null(guard_cache_key)) {
-    .guard_integral_store(prep, component_key, guard_cache_key, val)
-  }
   val
 }
 

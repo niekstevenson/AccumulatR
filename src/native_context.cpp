@@ -158,10 +158,10 @@ void populate_outcome_metadata(const Rcpp::List& prep, NativeContext& ctx) {
   }
 }
 
-int resolve_guard_cache_limit() {
+int resolve_na_cache_limit() {
   int default_limit = 128;
   Rcpp::Function getOption("getOption");
-  Rcpp::RObject opt = getOption("uuber.cache.guard.max_per_trial", Rcpp::wrap(default_limit));
+  Rcpp::RObject opt = getOption("uuber.cache.na.max_per_trial", Rcpp::wrap(default_limit));
   if (opt.isNULL()) return default_limit;
   try {
     double val = Rcpp::as<double>(opt);
@@ -181,7 +181,9 @@ Rcpp::XPtr<NativeContext> build_native_context(Rcpp::List prep) {
   std::unique_ptr<NativeContext> ctx = build_context_from_proto(proto);
   populate_component_metadata(prep, *ctx);
   populate_outcome_metadata(prep, *ctx);
-  ctx->guard_cache_limit = resolve_guard_cache_limit();
+  ctx->na_cache_limit = resolve_na_cache_limit();
+  ctx->context_builds = 1;
+  ctx->context_reuses = 0;
   return Rcpp::XPtr<NativeContext>(ctx.release(), true);
 }
 

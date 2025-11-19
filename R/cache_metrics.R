@@ -1,6 +1,5 @@
 .likelihood_cache_metric_fields <- c(
   "struct_hits", "struct_misses",
-  "guard_hits", "guard_misses",
   "na_hits", "na_misses",
   "scratch_hits", "scratch_misses"
 )
@@ -26,8 +25,7 @@ likelihood_cache_reset_stats <- function(prep = NULL) {
   if (!is.null(prep)) {
     native_ctx <- try(.prep_native_context(prep), silent = TRUE)
     if (!inherits(native_ctx, "try-error") && inherits(native_ctx, "externalptr")) {
-      native_reset <- .lik_native_fn("native_cache_reset_stats_cpp")
-      try(native_reset(native_ctx), silent = TRUE)
+      try(native_cache_reset_stats_cpp(native_ctx), silent = TRUE)
     }
   }
   invisible(NULL)
@@ -38,8 +36,7 @@ likelihood_cache_stats <- function(prep = NULL) {
   if (!is.null(prep)) {
     native_ctx <- try(.prep_native_context(prep), silent = TRUE)
     if (!inherits(native_ctx, "try-error") && inherits(native_ctx, "externalptr")) {
-      native_fn <- .lik_native_fn("native_cache_stats_cpp")
-      native_stats <- try(native_fn(native_ctx), silent = TRUE)
+      native_stats <- try(native_cache_stats_cpp(native_ctx), silent = TRUE)
       if (inherits(native_stats, "try-error")) native_stats <- NULL
     }
   }

@@ -45,20 +45,13 @@ int extract_int(SEXP obj, int default_value = -1) {
 }
 
 std::vector<ProtoParamEntry> extract_params(SEXP obj) {
-  std::vector<ProtoParamEntry> params;
-  if (Rf_isNull(obj)) return params;
+  if (Rf_isNull(obj)) return {};
   Rcpp::List lst(obj);
-  if (lst.size() == 0) return params;
+  if (lst.size() == 0) return {};
   Rcpp::CharacterVector names = lst.names();
-  if (names.isNULL()) {
-    Rcpp::stop("Accumulator parameter list must be named");
-  }
+  std::vector<ProtoParamEntry> params;
   params.reserve(lst.size());
   for (R_xlen_t i = 0; i < lst.size(); ++i) {
-    if (lst[i] == R_NilValue) continue;
-    if (names[i] == NA_STRING) {
-      Rcpp::stop("Accumulator parameter name missing at index %d", static_cast<int>(i + 1));
-    }
     ProtoParamEntry entry;
     entry.name = Rcpp::as<std::string>(names[i]);
     SEXP val = lst[i];
@@ -69,25 +62,17 @@ std::vector<ProtoParamEntry> extract_params(SEXP obj) {
         entry.logical_scalar = lv[0];
       } else {
         entry.tag = ParamValueTag::LogicalVector;
-        entry.logical_values.reserve(lv.size());
-        for (int v : lv) {
-          entry.logical_values.push_back(v);
-        }
+        entry.logical_values.assign(lv.begin(), lv.end());
       }
-    } else if (Rf_isInteger(val) || Rf_isReal(val)) {
+    } else {
       Rcpp::NumericVector nv(val);
       if (nv.size() == 1) {
         entry.tag = ParamValueTag::NumericScalar;
         entry.numeric_scalar = nv[0];
       } else {
         entry.tag = ParamValueTag::NumericVector;
-        entry.numeric_values.reserve(nv.size());
-        for (double v : nv) {
-          entry.numeric_values.push_back(v);
-        }
+        entry.numeric_values.assign(nv.begin(), nv.end());
       }
-    } else {
-      Rcpp::stop("Unsupported accumulator parameter type for '%s'", entry.name);
     }
     params.push_back(std::move(entry));
   }

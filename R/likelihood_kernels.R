@@ -168,12 +168,11 @@
   if (is.na(tt)) return(NULL)
   native_ctx <- .prep_native_context(prep)
   if (!inherits(native_ctx, "externalptr")) return(NULL)
-  native_fn <- .lik_native_fn("native_node_eval_cpp")
   component_label <- .native_component_label(component)
   fc_vec <- .native_forced_ids(forced_complete)
   fs_vec <- .native_forced_ids(forced_survive)
   res <- tryCatch(
-    native_fn(
+    native_node_eval_cpp(
       native_ctx,
       as.integer(node$id),
       tt,
@@ -244,8 +243,7 @@
   }
   if (any(is.na(node_ids))) return(NULL)
   native_ctx <- .prep_native_context(prep)
-  native_fn <- .lik_native_fn("native_competitor_survival_cpp")
-  val <- native_fn(
+  val <- native_competitor_survival_cpp(
     native_ctx,
     as.integer(node_ids),
     as.numeric(t),
@@ -1530,9 +1528,8 @@ guard_scope_ids <- function(expr, prep) {
     native_ctx <- .prep_native_context(prep)
   }
   if (!is.null(native_ctx)) {
-    native_fn <- .lik_native_fn("native_node_scenarios_cpp")
     native_res <- tryCatch(
-      native_fn(
+      native_node_scenarios_cpp(
         native_ctx,
         as.integer(node_id),
         as.numeric(t),
@@ -1759,8 +1756,7 @@ guard_scope_ids <- function(expr, prep) {
     native_ctx <- .prep_native_context(prep)
   }
   if (!is.null(native_ctx)) {
-    native_fn <- .lik_native_fn("native_guard_effective_survival_cpp")
-    val <- native_fn(
+    val <- native_guard_effective_survival_cpp(
       native_ctx,
       as.integer(compiled_guard$id),
       as.numeric(t),
@@ -1861,9 +1857,8 @@ guard_scope_ids <- function(expr, prep) {
     return(1.0)
   }
   integrand <- function(u) blocker_density(u) * protector_survival_product(u)
-  native_guard <- .lik_native_fn("guard_effective_survival_cpp")
   val <- tryCatch(
-    native_guard(
+    guard_effective_survival_cpp(
       integrand,
       as.numeric(t),
       .integrate_rel_tol(),
@@ -1949,8 +1944,7 @@ guard_scope_ids <- function(expr, prep) {
     native_ctx <- .prep_native_context(prep)
   }
   if (!is.null(native_ctx)) {
-    native_fn <- .lik_native_fn("native_guard_eval_cpp")
-    res <- native_fn(
+    res <- native_guard_eval_cpp(
       native_ctx,
       as.integer(compiled_guard$id),
       as.numeric(t),
@@ -2002,7 +1996,6 @@ guard_scope_ids <- function(expr, prep) {
 }
 
 .make_guard_scenario_fn <- function(expr, prep) {
-  native_fn <- .lik_native_fn("native_guard_scenarios_cpp")
   reference <- expr[["reference"]]
   blocker <- expr[["blocker"]]
   unless_list <- expr[["unless"]] %||% list()
@@ -2018,7 +2011,7 @@ guard_scope_ids <- function(expr, prep) {
     if (!is.null(guard_node)) {
       native_ctx <- .prep_native_context(prep)
       res <- tryCatch(
-        native_fn(
+        native_guard_scenarios_cpp(
           native_ctx,
           as.integer(guard_node$id),
           as.numeric(t),
@@ -2510,9 +2503,8 @@ guard_scope_ids <- function(expr, prep) {
   if (!is.null(compiled)) {
     native_ctx <- .prep_native_context(prep)
     if (!is.null(native_ctx)) {
-      native_fn <- .lik_native_fn("native_node_scenarios_cpp")
       native_res <- tryCatch(
-        native_fn(
+        native_node_scenarios_cpp(
           native_ctx,
           as.integer(compiled$id),
           as.numeric(t),
@@ -2999,9 +2991,8 @@ guard_scope_ids <- function(expr, prep) {
       }
       native_ctx <- .prep_native_context(prep)
       if (!is.null(trial_rows_df) && nrow(trial_rows_df) > 0L) {
-        native_fn <- .lik_native_fn("native_density_with_competitors_params_cpp")
         dens_vec <- vapply(times, function(tt) {
-          res <- native_fn(
+          res <- native_density_with_competitors_params_cpp(
             native_ctx,
             as.integer(compiled$id),
             as.numeric(tt),
@@ -3015,8 +3006,7 @@ guard_scope_ids <- function(expr, prep) {
           if (!is.finite(dens_scalar) || dens_scalar <= 0) 0.0 else dens_scalar
         }, numeric(1))
       } else {
-        native_fn <- .lik_native_fn("native_density_with_competitors_vec_cpp")
-        dens_vec <- native_fn(
+        dens_vec <- native_density_with_competitors_vec_cpp(
           native_ctx,
           as.integer(compiled$id),
           as.numeric(times),
@@ -3068,8 +3058,7 @@ guard_scope_ids <- function(expr, prep) {
       }
       native_ctx <- .prep_native_context(prep)
       if (!is.null(trial_rows_df) && nrow(trial_rows_df) > 0L) {
-        native_fn <- .lik_native_fn("native_density_with_competitors_params_cpp")
-        res <- native_fn(
+        res <- native_density_with_competitors_params_cpp(
           native_ctx,
           as.integer(compiled$id),
           as.numeric(t),
@@ -3080,8 +3069,7 @@ guard_scope_ids <- function(expr, prep) {
           trial_rows_df
         )
       } else {
-        native_fn <- .lik_native_fn("native_density_with_competitors_cpp")
-        res <- native_fn(
+        res <- native_density_with_competitors_cpp(
           native_ctx,
           as.integer(compiled$id),
           as.numeric(t),

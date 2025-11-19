@@ -53,7 +53,7 @@ prep$.runtime <- list(
 prep[[".id_index"]] <- id_index
 prep[[".label_cache"]] <- prep$.runtime$label_cache
 
-ctx_ptr <- .lik_native_fn("native_context_build")(prep)
+ctx_ptr <- native_context_build(prep)
 if (is.null(ctx_ptr) || !inherits(ctx_ptr, "externalptr")) {
   stop("Failed to build native context pointer")
 }
@@ -64,9 +64,6 @@ if (is.na(guard_simple_id) || is.na(guard_protected_id)) {
   stop("Missing guard node ids")
 }
 
-native_guard_eval <- .lik_native_fn("native_guard_eval_cpp")
-native_guard_surv <- .lik_native_fn("native_guard_effective_survival_cpp")
-
 times <- c(0.25, 0.6, 1.1, 1.8)
 for (tt in times) {
   surv_new <- .guard_effective_survival(guard_simple, tt, prep, NULL, integer(0), integer(0), .eval_state_create())
@@ -74,7 +71,7 @@ for (tt in times) {
   if (!isTRUE(all.equal(surv_new, surv_block, tolerance = 1e-10))) {
     stop(sprintf("Simple guard survival mismatch at t=%g", tt))
   }
-  res_native <- native_guard_eval(
+  res_native <- native_guard_eval_cpp(
     ctx_ptr,
     as.integer(guard_simple_id),
     as.numeric(tt),
@@ -118,7 +115,7 @@ manual_protected_survival <- function(t) {
 times_guard <- c(0.3, 0.8, 1.4)
 
 for (tt in times_guard) {
-  surv_native <- native_guard_surv(
+  surv_native <- native_guard_effective_survival_cpp(
     ctx_ptr,
     as.integer(guard_protected_id),
     as.numeric(tt),

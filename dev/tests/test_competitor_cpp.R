@@ -49,12 +49,10 @@ prep$.runtime <- list(
 prep[[".id_index"]] <- id_index
 prep[[".label_cache"]] <- prep$.runtime$label_cache
 
-ctx_ptr <- .lik_native_fn("native_context_build")(prep)
+ctx_ptr <- native_context_build(prep)
 if (is.null(ctx_ptr) || !inherits(ctx_ptr, "externalptr")) {
   stop("Failed to build native context pointer")
 }
-
-native_comp_surv <- .lik_native_fn("native_competitor_survival_cpp")
 
 expr_event <- function(id) list(kind = "event", source = id)
 competitors_simple <- list(expr_event("B"), expr_event("C"))
@@ -72,7 +70,7 @@ node_ids_guard <- vapply(competitors_guard, function(ex) {
 
 times <- c(0.2, 0.6, 1.0)
 for (tt in times) {
-  native_val <- native_comp_surv(
+  native_val <- native_competitor_survival_cpp(
     ctx_ptr,
     as.integer(node_ids_simple),
     as.numeric(tt),
@@ -91,7 +89,7 @@ for (tt in times) {
 }
 
 for (tt in times) {
-  native_val <- native_comp_surv(
+  native_val <- native_competitor_survival_cpp(
     ctx_ptr,
     as.integer(node_ids_guard),
     as.numeric(tt),

@@ -51,3 +51,21 @@ This reproduces the regression table (`max_abs_diff = 0` for every example) and 
 ```bash
 rm -rf /tmp/accumlib
 ```
+
+## Profiling Native Code (Examples 1–3)
+
+Use `dev/scripts/profile_examples.R` to drive a native-only workload for the first three `new_api_examples`. This script loops over examples 1, 2, and 3, builds their generator structures, and runs the native log-likelihood so that external profilers (e.g., `perf`, Instruments) can attribute time inside `src/AccumulatR.so`.
+
+1. Install the package into the temp library if you have not already (same as above).
+2. Run the profiling workload:
+   ```bash
+   cd /Users/nstevenson/Documents/2025/UberUbermodel_newercopy
+   R --vanilla --quiet -f dev/scripts/profile_examples.R
+   ```
+   Set `UUBER_PROFILE_TRIALS` to change the per-example trial count (default `2000`).
+3. Wrap the command with your preferred profiler to capture C++ stacks. For example, on Linux:
+   ```bash
+   perf record -g -- R --vanilla --quiet -f dev/scripts/profile_examples.R
+   perf report
+   ```
+   On macOS you can use Instruments’ “Time Profiler” template and point it at `R --vanilla --quiet -f dev/scripts/profile_examples.R`.

@@ -21,8 +21,7 @@
     if (!is.finite(val)) val <- 0.0
     return(val)
   }
-  native <- .lik_native_fn("boost_integrate_cpp")
-  val <- native(
+  val <- boost_integrate_cpp(
     fn,
     as.numeric(lower),
     as.numeric(upper),
@@ -147,26 +146,28 @@
   }
   proto_blob <- if (!is.null(native_env)) native_env$proto %||% raw(0) else raw(0)
   native_ptr <- if (!is.null(native_env)) native_env$ptr %||% NULL else NULL
+  touch_ctx <- function(ptr) {
+    if (!inherits(ptr, "externalptr")) return(ptr)
+    try(native_context_touch_cpp(ptr), silent = TRUE)
+    ptr
+  }
   if (inherits(native_ptr, "externalptr")) {
-    return(native_ptr)
+    return(touch_ctx(native_ptr))
   }
   if (length(proto_blob) > 0L) {
-    from_proto <- .lik_native_fn("native_context_from_proto_cpp")
-    native_ptr <- tryCatch(from_proto(proto_blob), error = function(e) NULL)
+    native_ptr <- tryCatch(native_context_from_proto_cpp(proto_blob), error = function(e) NULL)
     if (inherits(native_ptr, "externalptr")) {
       if (!is.null(native_env)) {
         native_env$ptr <- native_ptr
       } else {
         attr(native_ptr, "native_proto") <- proto_blob
       }
-      return(native_ptr)
+      return(touch_ctx(native_ptr))
     }
   }
-  builder <- .lik_native_fn("native_context_build")
-  native_ptr <- builder(prep)
+  native_ptr <- native_context_build(prep)
   if (inherits(native_ptr, "externalptr")) {
-    serialize_fn <- .lik_native_fn("native_prep_serialize_cpp")
-    proto_blob <- tryCatch(serialize_fn(prep), error = function(e) raw(0))
+    proto_blob <- tryCatch(native_prep_serialize_cpp(prep), error = function(e) raw(0))
     if (!is.null(native_env)) {
       native_env$ptr <- native_ptr
       native_env$proto <- proto_blob
@@ -174,7 +175,7 @@
       attr(native_ptr, "native_proto") <- proto_blob
     }
   }
-  native_ptr
+  touch_ctx(native_ptr)
 }
 
 .cache_component_key <- function(component) {
@@ -260,8 +261,8 @@
   paste(as.character(raw_bytes), collapse = "")
 }
 
-.guard_cache_limit_value <- function() {
-  opt <- getOption("uuber.cache.guard.max_per_trial", 128L)
+.na_cache_limit_value <- function() {
+  opt <- getOption("uuber.cache.na.max_per_trial", 128L)
   if (!is.numeric(opt) || length(opt) == 0L || is.na(opt[[1]])) return(128L)
   val <- as.integer(opt[[1]])
   if (!is.finite(val) || val < 0L) return(0L)
@@ -272,16 +273,8 @@
   native_ctx_env <- new.env(parent = emptyenv())
   native_ctx_env$ptr <- NULL
   native_ctx_env$proto <- raw(0)
-  native_builder <- NULL
-  native_proto_builder <- NULL
-  native_ctx_env$ptr <- tryCatch({
-    native_builder <- .lik_native_fn("native_context_build")
-    native_builder(prep)
-  }, error = function(e) NULL)
-  native_ctx_env$proto <- tryCatch({
-    native_proto_builder <- .lik_native_fn("native_prep_serialize_cpp")
-    native_proto_builder(prep)
-  }, error = function(e) raw(0))
+  native_ctx_env$ptr <- tryCatch(native_context_build(prep), error = function(e) NULL)
+  native_ctx_env$proto <- tryCatch(native_prep_serialize_cpp(prep), error = function(e) raw(0))
   structure(
     list(
       node_plan = prep[[".expr_compiled"]],
@@ -289,7 +282,7 @@
       pool_templates = new.env(parent = emptyenv(), hash = TRUE),
       guard_quadrature = new.env(parent = emptyenv(), hash = TRUE),
       guard_quadrature_meta = new.env(parent = emptyenv(), hash = TRUE),
-      guard_quadrature_limit = .guard_cache_limit_value(),
+      guard_quadrature_limit = .na_cache_limit_value(),
       native_ctx = native_ctx_env,
       version = Sys.time()
     ),
@@ -315,10 +308,8 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
   if (is.null(prep[[".runtime"]]) || is.null(prep$.runtime$cache_bundle)) {
     prep <- .prep_set_cache_bundle(prep, .build_likelihood_cache_bundle(prep))
   }
-  serialize_fn <- .lik_native_fn("native_prep_serialize_cpp")
-  proto_blob <- serialize_fn(prep)
-  ctx_fn <- .lik_native_fn("native_context_from_proto_cpp")
-  ctx_ptr <- ctx_fn(proto_blob)
+  proto_blob <- native_prep_serialize_cpp(prep)
+  ctx_ptr <- native_context_from_proto_cpp(proto_blob)
   list(
     prep = prep,
     proto = proto_blob,
@@ -333,7 +324,6 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
   times <- as.numeric(times)
   if (length(node_ids) == 0L || length(times) == 0L) return(list())
   native_ctx <- .prep_native_context(prep)
-  native_fn <- .lik_native_fn("native_likelihood_eval_cpp")
   tasks <- lapply(node_ids, function(nid) {
     list(
       node_id = as.integer(nid),
@@ -343,7 +333,7 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
       forced_survive = forced_survive
     )
   })
-  native_fn(native_ctx, tasks)
+  native_likelihood_eval_cpp(native_ctx, tasks)
 }
 
 .likelihood_cache_bundle_clone <- function(bundle) {
@@ -391,7 +381,7 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
         }
         env
       },
-      guard_quadrature_limit = bundle$guard_quadrature_limit %||% .guard_cache_limit_value(),
+      guard_quadrature_limit = bundle$guard_quadrature_limit %||% .na_cache_limit_value(),
       native_ctx = {
         env <- new.env(parent = emptyenv())
         if (!is.null(bundle$native_ctx) && is.environment(bundle$native_ctx)) {
@@ -452,17 +442,17 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
   value
 }
 
-.guard_cache_component_key <- function(component_key) {
+.na_cache_component_key <- function(component_key) {
   if (is.null(component_key) || length(component_key) == 0L) return("__default__")
   comp_chr <- as.character(component_key)[[1]]
   if (!nzchar(comp_chr) || is.na(comp_chr)) "__default__" else comp_chr
 }
 
-.guard_cache_limit <- function(bundle = NULL) {
+.na_cache_limit <- function(bundle = NULL) {
   limit <- NULL
   if (!is.null(bundle)) limit <- bundle$guard_quadrature_limit
   if (is.null(limit) || !is.numeric(limit) || length(limit) == 0L || is.na(limit[[1]])) {
-    limit <- .guard_cache_limit_value()
+    limit <- .na_cache_limit_value()
     if (!is.null(bundle)) bundle$guard_quadrature_limit <- limit
   }
   limit <- as.integer(limit[[1]])
@@ -470,9 +460,9 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
   limit
 }
 
-.guard_cache_touch <- function(bundle, component_key, cache_key) {
+.na_cache_touch <- function(bundle, component_key, cache_key) {
   if (is.null(bundle) || is.null(bundle$guard_quadrature) || !nzchar(cache_key)) return(invisible(NULL))
-  comp_key <- .guard_cache_component_key(component_key)
+  comp_key <- .na_cache_component_key(component_key)
   order_env <- bundle$guard_quadrature_meta
   if (is.null(order_env) || !is.environment(order_env)) {
     order_env <- new.env(parent = emptyenv(), hash = TRUE)
@@ -484,7 +474,7 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
     order_vec <- order_vec[order_vec != cache_key]
   }
   order_vec <- c(order_vec, cache_key)
-  limit <- .guard_cache_limit(bundle)
+  limit <- .na_cache_limit(bundle)
   if (limit <= 0L) {
     if (length(order_vec) > 0L) {
       for (drop_key in order_vec) {
@@ -570,45 +560,6 @@ likelihood_reset_cache <- function(prep) {
   if (!nzchar(hash_val)) "__base__" else hash_val
 }
 
-.guard_integral_cache_key <- function(guard_signature, component_key, upper_limit, competitor_signature,
-                                      params_hash = "__base__") {
-  upper_tag <- .eval_state_time_key(upper_limit)
-  hash_tag <- params_hash %||% "__base__"
-  if (!nzchar(hash_tag) || is.na(hash_tag)) hash_tag <- "__base__"
-  paste("guard_int", guard_signature, component_key, hash_tag, upper_tag, competitor_signature, sep = "|")
-}
-
-.guard_integral_fetch <- function(prep, component_key, cache_key) {
-  bundle <- .prep_cache_bundle(prep)
-  if (is.null(bundle)) {
-    .cache_metrics_inc("guard_misses")
-    return(NULL)
-  }
-  val <- bundle$guard_quadrature[[cache_key]]
-  if (!is.null(val)) {
-    .cache_metrics_inc("guard_hits")
-    .guard_cache_touch(bundle, component_key, cache_key)
-  } else {
-    .cache_metrics_inc("guard_misses")
-  }
-  val
-}
-
-.guard_integral_store <- function(prep, component_key, cache_key, value) {
-  info <- .cache_bundle_ensure(prep)
-  bundle <- info$bundle
-  if (.guard_cache_limit(bundle) <= 0L) {
-    if (exists(cache_key, envir = bundle$guard_quadrature, inherits = FALSE)) {
-      rm(list = cache_key, envir = bundle$guard_quadrature)
-    }
-    .guard_cache_touch(bundle, component_key, cache_key)
-    return(invisible(NULL))
-  }
-  bundle$guard_quadrature[[cache_key]] <- value
-  .guard_cache_touch(bundle, component_key, cache_key)
-  invisible(NULL)
-}
-
 .na_integral_cache_key <- function(source_signature, component_key, upper_limit, competitor_signature,
                                    params_hash = "__base__") {
   upper_tag <- .eval_state_time_key(upper_limit)
@@ -626,7 +577,7 @@ likelihood_reset_cache <- function(prep) {
   val <- bundle$guard_quadrature[[cache_key]]
   if (!is.null(val)) {
     .cache_metrics_inc("na_hits")
-    .guard_cache_touch(bundle, component_key, cache_key)
+    .na_cache_touch(bundle, component_key, cache_key)
   } else {
     .cache_metrics_inc("na_misses")
   }
@@ -636,15 +587,15 @@ likelihood_reset_cache <- function(prep) {
 .na_integral_store <- function(prep, component_key, cache_key, value) {
   info <- .cache_bundle_ensure(prep)
   bundle <- info$bundle
-  if (.guard_cache_limit(bundle) <= 0L) {
+  if (.na_cache_limit(bundle) <= 0L) {
     if (exists(cache_key, envir = bundle$guard_quadrature, inherits = FALSE)) {
       rm(list = cache_key, envir = bundle$guard_quadrature)
     }
-    .guard_cache_touch(bundle, component_key, cache_key)
+    .na_cache_touch(bundle, component_key, cache_key)
     return(invisible(NULL))
   }
   bundle$guard_quadrature[[cache_key]] <- value
-  .guard_cache_touch(bundle, component_key, cache_key)
+  .na_cache_touch(bundle, component_key, cache_key)
   invisible(NULL)
 }
 .inspect_likelihood_plan <- function(prep, include_cache = FALSE) {

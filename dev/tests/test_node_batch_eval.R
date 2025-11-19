@@ -67,7 +67,7 @@ if (length(batches) != length(node_ids)) {
   stop(sprintf("Batch result length mismatch (got %d expected %d)", length(batches), length(node_ids)))
 }
 
-native_single <- .lik_native_fn("native_node_eval_cpp")
+native_single <- native_node_eval_cpp
 ctx_ptr <- .prep_native_context(prep)
 
 for (idx in seq_along(node_ids)) {

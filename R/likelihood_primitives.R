@@ -1,5 +1,3 @@
-.acc_native_fn <- function(name) .lik_native_fn(name)
-
 .acc_numeric_scalar <- function(value, default, name) {
   if (is.null(value) || length(value) == 0L) return(default)
   val <- as.numeric(value)[[1]]
@@ -37,11 +35,10 @@
   )
 }
 
-.acc_eval <- function(fn_name, acc_def, t) {
+.acc_eval <- function(fn, acc_def, t) {
   t_vals <- as.numeric(t)
   if (length(t_vals) == 0L) return(numeric(0))
   args <- .acc_extract_args(acc_def)
-  fn <- .acc_native_fn(fn_name)
   res <- vapply(
     t_vals,
     function(tt) fn(tt, args$onset, args$q, args$dist, args$params),
@@ -52,19 +49,19 @@
 }
 
 .acc_density <- function(acc_def, t) {
-  .acc_eval("acc_density_cpp", acc_def, t)
+  .acc_eval(acc_density_cpp, acc_def, t)
 }
 
 .acc_density_success <- function(acc_def, t) {
-  .acc_eval("acc_density_success_cpp", acc_def, t)
+  .acc_eval(acc_density_success_cpp, acc_def, t)
 }
 
 .acc_survival <- function(acc_def, t) {
-  .acc_eval("acc_survival_cpp", acc_def, t)
+  .acc_eval(acc_survival_cpp, acc_def, t)
 }
 
 .acc_cdf_success <- function(acc_def, t) {
-  .acc_eval("acc_cdf_success_cpp", acc_def, t)
+  .acc_eval(acc_cdf_success_cpp, acc_def, t)
 }
 
 .acc_shared_trigger_id <- function(acc_def) {
@@ -145,8 +142,7 @@
       surv_vec[[i]] <- 1.0
     }
   }
-  native <- .lik_native_fn("pool_density_fast_cpp")
-  total_density <- native(dens_vec, surv_vec, as.integer(k))
+  total_density <- pool_density_fast_cpp(dens_vec, surv_vec, as.integer(k))
   if (!is.finite(total_density) || total_density <= 0) 0.0 else as.numeric(total_density)
 }
 
@@ -180,16 +176,14 @@
     }
     Svec[[i]] <- surv
   }
-  native <- .lik_native_fn("pool_survival_fast_cpp")
-  val <- native(Svec, as.integer(k))
+  val <- pool_survival_fast_cpp(Svec, as.integer(k))
   if (!is.finite(val)) 0.0 else as.numeric(val)
 }
 
 .build_pool_templates <- function(pool_id, members, member_ids, pool_idx, k) {
-  native <- .lik_native_fn("pool_build_templates_cpp")
   member_ids_int <- as.integer(member_ids)
   pool_idx_int <- if (is.na(pool_idx)) NA_integer_ else as.integer(pool_idx)
-  native(length(members), member_ids_int, pool_idx_int, as.integer(k))
+  pool_build_templates_cpp(length(members), member_ids_int, pool_idx_int, as.integer(k))
 }
 
 .event_survival_at <- function(prep, id, component, t,
@@ -374,8 +368,7 @@
     }
   }
 
-  native_density <- .lik_native_fn("pool_density_combine_cpp")
-  res <- native_density(
+  res <- pool_density_combine_cpp(
     dens_vec,
     cdf_vec,
     surv_vec,
@@ -431,6 +424,5 @@
                                forced_complete = forced_complete,
                                forced_survive = forced_survive)
   }
-  native_surv <- .lik_native_fn("pool_survival_general_cpp")
-  as.numeric(native_surv(Fvec, as.integer(k)))
+  as.numeric(pool_survival_general_cpp(Fvec, as.integer(k)))
 }

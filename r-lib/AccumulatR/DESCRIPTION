@@ -19,4 +19,4 @@ RoxygenNote: 7.3.2
 Config/testthat/edition: 3
 Author: Niek Stevenson [aut, cre]
 Maintainer: Niek Stevenson <niek.stevenson@gmail.com>
-Built: R 4.5.1; aarch64-apple-darwin20; 2025-11-17 03:59:16 UTC; unix
+Built: R 4.5.1; aarch64-apple-darwin20; 2025-11-17 19:15:18 UTC; unix

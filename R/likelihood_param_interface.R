@@ -1,3 +1,59 @@
+.likelihood_context_structure <- function(structure, params_df,
+                                          component_weights = NULL,
+                                          prep = NULL,
+                                          trial_plan = NULL,
+                                          native_bundle = NULL) {
+  if (is.null(params_df) || nrow(params_df) == 0L) {
+    stop("Parameter data frame must contain at least one row", call. = FALSE)
+  }
+  params_df <- .params_hash_attach(params_df)
+  structure <- .as_generator_structure(structure)
+  if (is.null(structure$model_spec)) {
+    stop("generator structure must include model_spec; rebuild with build_generator_structure")
+  }
+  if (!is.null(native_bundle)) {
+    prep <- native_bundle$prep %||% prep
+  }
+  prep_eval_base <- prep %||% .prepare_model_for_likelihood(structure$model_spec)
+  prep_eval_base <- .likelihood_seed_prep_from_params(prep_eval_base, params_df)
+  if (is.null(prep_eval_base[[".runtime"]]) || is.null(prep_eval_base$.runtime$cache_bundle)) {
+    prep_eval_base <- .prep_set_cache_bundle(
+      prep_eval_base,
+      .build_likelihood_cache_bundle(prep_eval_base)
+    )
+  }
+  plan <- trial_plan %||% .likelihood_build_trial_plan(structure, params_df, prep_eval_base)
+  native_ctx <- .prep_native_context(prep_eval_base)
+  structure(list(
+    structure = structure,
+    params_df = params_df,
+    prep = prep_eval_base,
+    plan = plan,
+    component_weights = component_weights,
+    native_ctx = native_ctx
+  ), class = "likelihood_context")
+}
+
+build_likelihood_context <- function(structure, params_df,
+                                     component_weights = NULL,
+                                     prep = NULL,
+                                     trial_plan = NULL,
+                                     native_bundle = NULL) {
+  .likelihood_context_structure(
+    structure = structure,
+    params_df = params_df,
+    component_weights = component_weights,
+    prep = prep,
+    trial_plan = trial_plan,
+    native_bundle = native_bundle
+  )
+}
+
+.validate_likelihood_context <- function(context) {
+  if (inherits(context, "likelihood_context")) return(context)
+  stop("likelihood context must be created via build_likelihood_context()", call. = FALSE)
+}
+
 .likelihood_component_rows <- function(trial_rows, component) {
   if (is.null(trial_rows) || nrow(trial_rows) == 0L) return(trial_rows)
   if (!"component" %in% names(trial_rows)) return(trial_rows)
@@ -261,7 +317,6 @@
                                    forced_component = NULL,
                                    component_weights = NULL,
                                    component_ids = NULL) {
-  native_fn <- .lik_native_fn("native_component_plan_exported")
   forced_chr <- forced_component
   if (length(forced_chr) == 0L || is.null(forced_chr) || is.na(forced_chr)) {
     forced_chr <- NULL
@@ -275,7 +330,7 @@
   }
   component_weights_df <- component_weights %||% NULL
   plan <- tryCatch(
-    native_fn(
+    native_component_plan_exported(
       structure,
       trial_df,
       forced_chr,
@@ -335,14 +390,13 @@
   }
   native_ctx <- .prep_native_context(prep)
   if (!inherits(native_ctx, "externalptr")) return(NULL)
-  native_fn <- .lik_native_fn("native_trial_mixture_cpp")
   forced_chr <- NULL
   if (!is.null(forced_component) && !is.na(forced_component)) {
     forced_chr <- as.character(forced_component)[[1]]
   }
   trial_df <- if (is.null(trial_rows)) data.frame() else trial_rows
   res <- tryCatch(
-    native_fn(
+    native_trial_mixture_cpp(
       native_ctx,
       as.integer(compiled$id),
       as.numeric(rt_val),
@@ -590,8 +644,7 @@
   rel_tol <- builder$rel_tol
   abs_tol <- builder$abs_tol
   max_depth <- builder$max_depth
-  native_fn <- .lik_native_fn("native_loglik_from_params_cpp")
-  res <- native_fn(
+  res <- native_loglik_from_params_cpp(
     native_ctx,
     structure,
     entries,
@@ -680,35 +733,7 @@
   total
 }
 
-log_likelihood_from_params <- function(structure, params_df, data_df,
-                                       component_weights = NULL,
-                                       prep = NULL,
-                                       trial_plan = NULL,
-                                       native_bundle = NULL) {
-  if (is.null(params_df) || nrow(params_df) == 0L) {
-    stop("Parameter data frame must contain at least one row")
-  }
-  params_df <- .params_hash_attach(params_df)
-  if (is.null(data_df) || nrow(data_df) == 0L) {
-    stop("Data frame must contain outcome/rt per trial")
-  }
-  structure <- .as_generator_structure(structure)
-  if (is.null(structure$model_spec)) {
-    stop("generator structure must include model_spec; rebuild with build_generator_structure")
-  }
-  if (!is.null(native_bundle)) {
-    prep <- native_bundle$prep %||% prep
-  }
-  prep_eval_base <- prep %||% .prepare_model_for_likelihood(structure$model_spec)
-  prep_eval_base <- .likelihood_seed_prep_from_params(prep_eval_base, params_df)
-  if (is.null(prep_eval_base[[".runtime"]])) {
-    prep_eval_base <- .prep_set_cache_bundle(
-      prep_eval_base,
-      .build_likelihood_cache_bundle(prep_eval_base)
-    )
-  }
-  comp_ids <- structure$components$component_id
-
+.ensure_trial_columns <- function(data_df) {
   if (!"trial" %in% names(data_df)) {
     stop("Data frame must include a 'trial' column")
   }
@@ -716,14 +741,26 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
   if ("component" %in% names(data_df)) {
     data_df$component <- as.character(data_df$component)
   }
+  data_df
+}
+
+log_likelihood_from_context <- function(likelihood_context,
+                                        data_df,
+                                        component_weights = NULL) {
+  ctx <- .validate_likelihood_context(likelihood_context)
+  if (is.null(data_df) || nrow(data_df) == 0L) {
+    stop("Data frame must contain outcome/rt per trial")
+  }
+  structure <- ctx$structure
+  params_df <- ctx$params_df
+  prep_eval_base <- ctx$prep
+  plan <- ctx$plan
+  comp_weights <- component_weights %||% ctx$component_weights
+  comp_ids <- structure$components$component_id
+  data_df <- .ensure_trial_columns(data_df)
   trial_lookup_keys <- as.character(data_df$trial %||% NA)
   data_row_indices <- split(seq_len(nrow(data_df)), trial_lookup_keys)
-
-  plan <- trial_plan %||% .likelihood_build_trial_plan(structure,
-                                                      params_df,
-                                                      prep_eval_base)
   trial_ids <- unique(data_df$trial)
-  per_trial_loglik <- numeric(length(trial_ids))
   use_native_rows <- isTRUE(getOption("uuber.use.native.param.rows", TRUE))
   batch_res <- NULL
   if (use_native_rows) {
@@ -734,14 +771,19 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
       trial_ids = trial_ids,
       data_df = data_df,
       data_row_indices = data_row_indices,
-      component_weights = component_weights
+      component_weights = comp_weights
     )
   }
   if (!is.null(batch_res)) {
-    attr(batch_res, "prep") <- prep_eval_base
-    return(batch_res)
+    result <- list(
+      loglik = batch_res$loglik,
+      per_trial = batch_res$per_trial
+    )
+    attr(result, "prep") <- prep_eval_base
+    return(result)
   }
 
+  per_trial_loglik <- numeric(length(trial_ids))
   for (i in seq_along(trial_ids)) {
     tid <- trial_ids[[i]]
     trial_key <- as.character(tid %||% NA)
@@ -764,14 +806,13 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
     rt_val <- data_row$rt[[1]] %||% NA_real_
     forced_component <- if ("component" %in% names(data_row)) data_row$component[[1]] else NULL
     component_entries <- entry$components %||% list()
-
     trial_state <- .eval_state_create()
     mixture <- .likelihood_mixture_likelihood(
       structure = structure,
       prep_eval_base = prep_eval_base,
       trial_rows = trial_rows,
       component_ids = comp_ids,
-      component_weights = component_weights,
+      component_weights = comp_weights,
       outcome_label = outcome,
       rt_val = rt_val,
       forced_component = forced_component,
@@ -793,32 +834,39 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
   result
 }
 
+log_likelihood_from_params <- function(structure, params_df, data_df,
+                                       component_weights = NULL,
+                                       prep = NULL,
+                                       trial_plan = NULL,
+                                       native_bundle = NULL) {
+  ctx <- build_likelihood_context(
+    structure = structure,
+    params_df = params_df,
+    component_weights = component_weights,
+    prep = prep,
+    trial_plan = trial_plan,
+    native_bundle = native_bundle
+  )
+  log_likelihood_from_context(
+    ctx,
+    data_df = data_df,
+    component_weights = component_weights
+  )
+}
+
 log_likelihood_from_params_buffer <- function(structure, params_df, data_df,
                                               component_weights = NULL,
                                               prep = NULL,
                                               trial_plan = NULL,
                                               native_bundle = NULL) {
-  if (is.null(params_df) || nrow(params_df) == 0L) {
-    stop("Parameter data frame must contain at least one row")
-  }
-  if (is.null(data_df) || nrow(data_df) == 0L) {
-    stop("Data frame must contain outcome/rt per trial")
-  }
-  structure <- .as_generator_structure(structure)
-  if (is.null(structure$model_spec)) {
-    stop("generator structure must include model_spec; rebuild with build_generator_structure")
-  }
-  if (!is.null(native_bundle)) {
-    prep <- native_bundle$prep %||% prep
-  }
-  prep_eval_base <- prep %||% .prepare_model_for_likelihood(structure$model_spec)
-  prep_eval_base <- .likelihood_seed_prep_from_params(prep_eval_base, params_df)
-  if (is.null(prep_eval_base[[".runtime"]])) {
-    prep_eval_base <- .prep_set_cache_bundle(
-      prep_eval_base,
-      .build_likelihood_cache_bundle(prep_eval_base)
-    )
-  }
+  ctx <- build_likelihood_context(
+    structure = structure,
+    params_df = params_df,
+    component_weights = component_weights,
+    prep = prep,
+    trial_plan = trial_plan,
+    native_bundle = native_bundle
+  )
   if (!"trial" %in% names(data_df)) {
     stop("Data frame must include a 'trial' column")
   }
@@ -828,17 +876,11 @@ log_likelihood_from_params_buffer <- function(structure, params_df, data_df,
   }
   trial_lookup_keys <- as.character(data_df$trial %||% NA)
   data_row_indices <- split(seq_len(nrow(data_df)), trial_lookup_keys)
-
-  plan <- trial_plan %||% .likelihood_build_trial_plan(
-    structure,
-    params_df,
-    prep_eval_base
-  )
   trial_ids <- unique(data_df$trial)
   batch_res <- .native_loglikelihood_batch(
-    structure = structure,
-    prep = prep_eval_base,
-    plan = plan,
+    structure = ctx$structure,
+    prep = ctx$prep,
+    plan = ctx$plan,
     trial_ids = trial_ids,
     data_df = data_df,
     data_row_indices = data_row_indices,
@@ -851,7 +893,7 @@ log_likelihood_from_params_buffer <- function(structure, params_df, data_df,
     loglik = batch_res$loglik,
     per_trial = batch_res$per_trial
   )
-  attr(result, "prep") <- prep_eval_base
+  attr(result, "prep") <- ctx$prep
   result
 }
 

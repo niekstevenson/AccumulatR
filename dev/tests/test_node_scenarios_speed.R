@@ -99,8 +99,6 @@ if (any(is.na(node_ids))) {
 
 expr_uncompiled <- lapply(prep$outcomes, function(outcome) strip_compiled_expr(outcome$expr))
 
-native_scenarios_fn <- .lik_native_fn("native_node_scenarios_cpp")
-
 forced_id <- function(label) {
   val <- prep$.runtime$id_index[[label]]
   if (is.null(val) || is.na(val)) return(integer(0))
@@ -131,7 +129,7 @@ run_native <- function(iterations) {
     name <- case_grid$name[[case_idx]]
     node_id <- node_ids[[name]]
     forced <- forced_sets[[case_grid$forced[[case_idx]]]]
-    native_scenarios_fn(
+    native_node_scenarios_cpp(
       native_ctx,
       as.integer(node_id),
       as.numeric(times[[time_idx]]),

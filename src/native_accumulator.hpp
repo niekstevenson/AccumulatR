@@ -32,64 +32,41 @@ inline std::string normalize_dist_name(const std::string& dist) {
   return out;
 }
 
-inline const ProtoParamEntry* find_param(const std::vector<ProtoParamEntry>& entries,
-                                         const std::string& name) {
+inline double numeric_param(const std::vector<ProtoParamEntry>& entries,
+                            const std::string& name,
+                            double default_value = 0.0) {
   for (const auto& entry : entries) {
     if (entry.name == name) {
-      return &entry;
+      if (entry.tag == ParamValueTag::NumericScalar) {
+        return entry.numeric_scalar;
+      }
+      if (!entry.numeric_values.empty()) {
+        return entry.numeric_values.front();
+      }
     }
   }
-  return nullptr;
-}
-
-inline double extract_param_numeric(const ProtoParamEntry* entry,
-                                    const std::string& dist_name,
-                                    const std::string& param_name) {
-  if (entry == nullptr) {
-    throw std::runtime_error("Accumulator distribution '" + dist_name +
-                             "' missing parameter '" + param_name + "'");
-  }
-  if (entry->tag == ParamValueTag::NumericScalar) {
-    return entry->numeric_scalar;
-  }
-  if (entry->tag == ParamValueTag::NumericVector && !entry->numeric_values.empty()) {
-    return entry->numeric_values.front();
-  }
-  throw std::runtime_error("Accumulator distribution '" + dist_name +
-                           "' parameter '" + param_name + "' must be numeric");
+  return default_value;
 }
 
 inline AccDistParams resolve_acc_params_entries(const std::string& dist,
                                                 const std::vector<ProtoParamEntry>& entries) {
-  if (entries.empty()) {
-    throw std::runtime_error("Accumulator distribution '" + dist + "' missing parameter list");
-  }
   AccDistParams cfg{};
   std::string dist_name = normalize_dist_name(dist);
   if (dist_name == "lognormal") {
     cfg.code = ACC_DIST_LOGNORMAL;
-    cfg.p1 = extract_param_numeric(find_param(entries, "meanlog"), dist_name, "meanlog");
-    cfg.p2 = extract_param_numeric(find_param(entries, "sdlog"), dist_name, "sdlog");
-    cfg.p3 = 0.0;
+    cfg.p1 = numeric_param(entries, "meanlog");
+    cfg.p2 = numeric_param(entries, "sdlog");
   } else if (dist_name == "gamma") {
     cfg.code = ACC_DIST_GAMMA;
-    cfg.p1 = extract_param_numeric(find_param(entries, "shape"), dist_name, "shape");
-    cfg.p2 = extract_param_numeric(find_param(entries, "rate"), dist_name, "rate");
-    cfg.p3 = 0.0;
+    cfg.p1 = numeric_param(entries, "shape");
+    cfg.p2 = numeric_param(entries, "rate");
   } else if (dist_name == "exgauss") {
     cfg.code = ACC_DIST_EXGAUSS;
-    cfg.p1 = extract_param_numeric(find_param(entries, "mu"), dist_name, "mu");
-    cfg.p2 = extract_param_numeric(find_param(entries, "sigma"), dist_name, "sigma");
-    cfg.p3 = extract_param_numeric(find_param(entries, "tau"), dist_name, "tau");
-  } else {
-    throw std::runtime_error("Unsupported accumulator distribution '" + dist_name + "'");
+    cfg.p1 = numeric_param(entries, "mu");
+    cfg.p2 = numeric_param(entries, "sigma");
+    cfg.p3 = numeric_param(entries, "tau");
   }
-  const ProtoParamEntry* t0_entry = find_param(entries, "t0");
-  if (t0_entry != nullptr) {
-    cfg.t0 = extract_param_numeric(t0_entry, dist_name, "t0");
-  } else {
-    cfg.t0 = 0.0;
-  }
+  cfg.t0 = numeric_param(entries, "t0");
   return cfg;
 }
 

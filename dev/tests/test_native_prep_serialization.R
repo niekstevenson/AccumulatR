@@ -49,22 +49,19 @@ prep[[".id_index"]] <- id_index
 prep[[".label_cache"]] <- prep$.runtime$label_cache
 
 native_ctx <- .prep_native_context(prep)
-serialize_fn <- .lik_native_fn("native_prep_serialize_cpp")
-deserialize_fn <- .lik_native_fn("native_context_from_proto_cpp")
-
-blob <- serialize_fn(prep)
+blob <- native_prep_serialize_cpp(prep)
 if (!is.raw(blob) || length(blob) == 0L) {
   stop("Serialized prep blob is empty")
 }
 
-ctx_from_blob <- deserialize_fn(blob)
+ctx_from_blob <- native_context_from_proto_cpp(blob)
 
 node_ids <- vapply(prep$outcomes, function(outcome) attr(outcome$expr, ".lik_id", exact = TRUE), integer(1))
 node_ids <- node_ids[!is.na(node_ids)]
 if (length(node_ids) == 0L) stop("No compiled nodes found")
 
 times <- c(0.3, 0.8)
-eval_fn <- .lik_native_fn("native_node_eval_cpp")
+eval_fn <- native_node_eval_cpp
 
 for (node_id in node_ids) {
   for (tt in times) {
@@ -106,11 +103,9 @@ override_rows <- data.frame(
 )
 override_rows$params <- I(list(list(meanlog = -0.05, sdlog = 0.55)))
 
-density_params_fn <- .lik_native_fn("native_density_with_competitors_params_cpp")
-density_expected_fn <- .lik_native_fn("acc_density_cpp")
 event_id <- attr(prep$outcomes$eventA$expr, ".lik_id", exact = TRUE)
 
-param_density <- density_params_fn(
+param_density <- native_density_with_competitors_params_cpp(
   native_ctx,
   as.integer(event_id),
   0.4,
@@ -121,7 +116,7 @@ param_density <- density_params_fn(
   override_rows
 )$density
 
-density_expected <- density_expected_fn(
+density_expected <- acc_density_cpp(
   0.4,
   0.25,
   0.15,
@@ -152,7 +147,7 @@ prob_trial_rows <- .integrate_outcome_probability(
   upper_limit = 0.6,
   trial_rows = override_rows
 )
-prob_params <- .lik_native_fn("native_outcome_probability_params_cpp")(
+prob_params <- native_outcome_probability_params_cpp(
   native_ctx,
   as.integer(event_id),
   0.6,

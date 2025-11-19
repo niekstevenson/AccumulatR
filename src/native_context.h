@@ -29,6 +29,20 @@ struct NativePool {
   std::vector<std::string> members;
 };
 
+struct PoolTemplateEntry {
+  int finisher_idx{0};
+  std::vector<int> complete_idx;
+  std::vector<int> survivor_idx;
+  std::vector<int> forced_complete_ids;
+  std::vector<int> forced_survive_ids;
+};
+
+struct PoolTemplateCacheEntry {
+  std::vector<PoolTemplateEntry> templates;
+  std::vector<std::vector<int>> finisher_map;
+  std::vector<int> shared_index;
+};
+
 struct NativeNode {
   int id{};
   std::string kind;
@@ -69,8 +83,6 @@ struct OutcomeContextInfo {
 };
 
 struct CacheMetrics {
-  std::uint64_t guard_hits{0};
-  std::uint64_t guard_misses{0};
   std::uint64_t na_hits{0};
   std::uint64_t na_misses{0};
   std::uint64_t scratch_hits{0};
@@ -85,12 +97,13 @@ struct NativeContext {
   std::unordered_map<std::string, int> pool_index;
   std::unordered_map<int, int> node_index;
   std::unordered_map<std::string, int> label_to_id;
-  mutable std::unordered_map<std::string, Rcpp::List> pool_template_cache;
-  mutable std::unordered_map<std::string, double> guard_survival_cache;
+  mutable std::unordered_map<std::string, PoolTemplateCacheEntry> pool_template_cache;
   mutable std::unordered_map<std::string, double> na_map_cache;
-  mutable std::unordered_map<std::string, std::deque<std::string>> guard_cache_order;
-  int guard_cache_limit{128};
+  mutable std::unordered_map<std::string, std::deque<std::string>> na_cache_order;
+  int na_cache_limit{128};
   mutable CacheMetrics cache_metrics;
+  mutable std::uint64_t context_builds{0};
+  mutable std::uint64_t context_reuses{0};
   std::unordered_map<std::string, std::vector<int>> shared_trigger_map;
   std::unordered_map<std::string, ComponentContextInfo> component_info;
   std::unordered_map<std::string, OutcomeContextInfo> outcome_info;

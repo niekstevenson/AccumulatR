@@ -60,7 +60,7 @@ ctx_ptr <- native_bundle$context
 cat(sprintf("Proto blob size: %d bytes\n", length(proto_blob)))
 
 # Demonstrate that we can rebuild the context from only the proto
-ctx_from_proto <- .lik_native_fn("native_context_from_proto_cpp")(proto_blob)
+ctx_from_proto <- native_context_from_proto_cpp(proto_blob)
 
 trial_plan <- .likelihood_build_trial_plan(structure, param_table, prep)
 
@@ -105,8 +105,7 @@ comp_ids <- comp_ids[!is.na(comp_ids)]
 expr <- prep$outcomes[[outcome_lbl]]$expr
 node_id <- attr(expr, ".lik_id", exact = TRUE)
 
-native_density_fn <- .lik_native_fn("native_density_with_competitors_params_cpp")
-native_density <- native_density_fn(
+native_density <- native_density_with_competitors_params_cpp(
   ctx_from_proto,
   as.integer(node_id),
   as.numeric(rt_val),
@@ -135,8 +134,7 @@ r_prob <- .integrate_outcome_probability(
   trial_rows = comp_rows_df
 )
 
-native_prob_fn <- .lik_native_fn("native_outcome_probability_params_cpp")
-native_prob <- native_prob_fn(
+native_prob <- native_outcome_probability_params_cpp(
   ctx_from_proto,
   as.integer(node_id),
   as.numeric(upper_limit),

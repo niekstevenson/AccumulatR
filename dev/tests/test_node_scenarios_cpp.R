@@ -84,8 +84,6 @@ if (any(is.na(node_ids))) {
 
 compiled_nodes <- prep[[".expr_compiled"]]$nodes
 
-native_scenarios_fn <- .lik_native_fn("native_node_scenarios_cpp")
-
 normalize_scenarios <- function(lst) {
   if (length(lst) == 0L) {
     return(list())
@@ -178,7 +176,7 @@ for (case in test_cases) {
   forced_complete <- case$forced_complete %||% integer(0)
   forced_survive <- case$forced_survive %||% integer(0)
   for (tt in times) {
-    native <- native_scenarios_fn(
+    native <- native_node_scenarios_cpp(
       native_ctx,
       as.integer(node_id),
       as.numeric(tt),

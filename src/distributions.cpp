@@ -4716,26 +4716,87 @@ inline std::vector<double> expand_poly(const std::vector<double>& coeff,
   return out;
 }
 
-inline std::vector<std::vector<double>> build_prefix(const std::vector<double>& surv,
-                                                     const std::vector<double>& fail) {
-  std::size_t n = surv.size();
-  std::vector<std::vector<double>> prefix(n + 1);
-  prefix[0] = {1.0};
-  for (std::size_t i = 0; i < n; ++i) {
-    prefix[i + 1] = expand_poly(prefix[i], surv[i], fail[i]);
+struct PoolPolyScratch {
+  std::vector<std::vector<double>> prefix;
+  std::vector<std::vector<double>> suffix;
+};
+
+inline void ensure_prefix_shape(std::vector<std::vector<double>>& prefix,
+                                std::size_t n) {
+  if (prefix.size() != n + 1) {
+    prefix.resize(n + 1);
   }
-  return prefix;
+  for (std::size_t i = 0; i <= n; ++i) {
+    if (prefix[i].size() != i + 1) {
+      prefix[i].assign(i + 1, 0.0);
+    }
+  }
 }
 
-inline std::vector<std::vector<double>> build_suffix(const std::vector<double>& surv,
-                                                     const std::vector<double>& fail) {
-  std::size_t n = surv.size();
-  std::vector<std::vector<double>> suffix(n + 1);
-  suffix[n] = {1.0};
-  for (std::size_t i = n; i-- > 0;) {
-    suffix[i] = expand_poly(suffix[i + 1], surv[i], fail[i]);
+inline void ensure_suffix_shape(std::vector<std::vector<double>>& suffix,
+                                std::size_t n) {
+  if (suffix.size() != n + 1) {
+    suffix.resize(n + 1);
   }
-  return suffix;
+  for (std::size_t i = 0; i <= n; ++i) {
+    std::size_t len = (n - i) + 1;
+    if (suffix[i].size() != len) {
+      suffix[i].assign(len, 0.0);
+    }
+  }
+}
+
+inline PoolPolyScratch& fetch_pool_poly_scratch(std::size_t n,
+                                                bool need_suffix) {
+  thread_local std::unordered_map<std::size_t, PoolPolyScratch> scratch_map;
+  PoolPolyScratch& scratch = scratch_map[n];
+  ensure_prefix_shape(scratch.prefix, n);
+  if (need_suffix) {
+    ensure_suffix_shape(scratch.suffix, n);
+  }
+  return scratch;
+}
+
+inline void fill_prefix_buffers(std::vector<std::vector<double>>& prefix,
+                                const std::vector<double>& surv,
+                                const std::vector<double>& fail) {
+  const std::size_t n = surv.size();
+  std::fill(prefix[0].begin(), prefix[0].end(), 0.0);
+  prefix[0][0] = 1.0;
+  for (std::size_t i = 0; i < n; ++i) {
+    const std::vector<double>& prev = prefix[i];
+    std::vector<double>& out = prefix[i + 1];
+    std::fill(out.begin(), out.end(), 0.0);
+    double surv_i = surv[i];
+    double fail_i = fail[i];
+    for (std::size_t j = 0; j < prev.size(); ++j) {
+      double base = prev[j];
+      if (base == 0.0) continue;
+      out[j] += base * surv_i;
+      out[j + 1] += base * fail_i;
+    }
+  }
+}
+
+inline void fill_suffix_buffers(std::vector<std::vector<double>>& suffix,
+                                const std::vector<double>& surv,
+                                const std::vector<double>& fail) {
+  const std::size_t n = surv.size();
+  std::fill(suffix[n].begin(), suffix[n].end(), 0.0);
+  suffix[n][0] = 1.0;
+  for (std::size_t idx = n; idx-- > 0;) {
+    const std::vector<double>& next = suffix[idx + 1];
+    std::vector<double>& out = suffix[idx];
+    std::fill(out.begin(), out.end(), 0.0);
+    double surv_i = surv[idx];
+    double fail_i = fail[idx];
+    for (std::size_t j = 0; j < next.size(); ++j) {
+      double base = next[j];
+      if (base == 0.0) continue;
+      out[j] += base * surv_i;
+      out[j + 1] += base * fail_i;
+    }
+  }
 }
 
 inline double coefficient_for_order(const std::vector<double>& pref,
@@ -5238,11 +5299,16 @@ double pool_density_fast_cpp(const Rcpp::NumericVector& density,
     fail[i] = clamp_unit(1.0 - s);
   }
 
-  auto prefix = build_prefix(surv, fail);
-  auto suffix = build_suffix(surv, fail);
+  PoolPolyScratch& scratch = fetch_pool_poly_scratch(n, true);
+  fill_prefix_buffers(scratch.prefix, surv, fail);
+  fill_suffix_buffers(scratch.suffix, surv, fail);
 
-  PoolDensityWorker worker(density, prefix, suffix, k - 1);
+  PoolDensityWorker worker(density, scratch.prefix, scratch.suffix, k - 1);
+#if defined(RCPP_PARALLEL_USE_TBB) && RCPP_PARALLEL_USE_TBB
   RcppParallel::parallelReduce(0, n, worker);
+#else
+  worker(0, n);
+#endif
 
   double total = worker.total;
   if (!std::isfinite(total) || total < 0.0) return 0.0;
@@ -5265,8 +5331,9 @@ double pool_survival_fast_cpp(const Rcpp::NumericVector& survival,
     fail[i] = clamp_unit(1.0 - s);
   }
 
-  auto prefix = build_prefix(surv, fail);
-  const std::vector<double>& poly = prefix.back();
+  PoolPolyScratch& scratch = fetch_pool_poly_scratch(n, false);
+  fill_prefix_buffers(scratch.prefix, surv, fail);
+  const std::vector<double>& poly = scratch.prefix.back();
   int upto = std::min<int>(k, static_cast<int>(poly.size()));
   if (upto <= 0) return 0.0;
   double total = 0.0;

@@ -186,7 +186,134 @@ build_likelihood_context <- function(structure, params_df,
   order_idx <- order(suppressWarnings(as.numeric(trial_order)))
   trial_order <- trial_order[order_idx]
   trials <- trials[trial_order]
-  list(order = trial_order, trials = trials)
+  list(
+    order = trial_order,
+    trials = trials,
+    .cache_env = new.env(parent = emptyenv())
+  )
+}
+
+.likelihood_trial_metadata <- function(structure, prep) {
+  structure_hash <- .structure_hash_value(prep)
+  outcome_defs <- prep[["outcomes"]] %||% list()
+  competitor_map <- .prep_competitors(prep) %||% list()
+  compiled_nodes <- lapply(outcome_defs, function(def) {
+    expr <- def[["expr"]]
+    if (is.null(expr)) return(NULL)
+    .expr_lookup_compiled(expr, prep)
+  })
+  names(compiled_nodes) <- names(outcome_defs)
+  compiled_competitors <- lapply(names(outcome_defs), function(lbl) {
+    comp_exprs <- competitor_map[[lbl]] %||% list()
+    if (length(comp_exprs) == 0) return(integer(0))
+    comp_nodes <- lapply(comp_exprs, function(ex) .expr_lookup_compiled(ex, prep))
+    if (any(vapply(comp_nodes, is.null, logical(1)))) return(NULL)
+    ids <- vapply(comp_nodes, function(node) as.integer(node$id %||% NA_integer_), integer(1))
+    if (any(is.na(ids))) return(NULL)
+    ids
+  })
+  names(compiled_competitors) <- names(outcome_defs)
+  shared_gate_specs <- lapply(names(outcome_defs), function(lbl) {
+    info <- .detect_shared_gate(outcome_defs, lbl)
+    if (is.null(info)) return(NULL)
+    x_lbl <- info$x_id %||% NULL
+    y_lbl <- info$y_id %||% NULL
+    c_lbl <- info$c_id %||% NULL
+    if (is.null(x_lbl) || is.null(y_lbl) || is.null(c_lbl)) return(NULL)
+    list(
+      x_label = as.character(x_lbl),
+      y_label = as.character(y_lbl),
+      c_label = as.character(c_lbl)
+    )
+  })
+  names(shared_gate_specs) <- names(outcome_defs)
+  na_source_labels <- Filter(function(lbl) {
+    def <- outcome_defs[[lbl]]
+    map_to <- def[['options']][['map_outcome_to']]
+    if (is.null(map_to)) return(FALSE)
+    if (is.na(map_to)) return(TRUE)
+    identical(map_to, "NA")
+  }, names(outcome_defs))
+  na_source_specs <- NULL
+  if (length(na_source_labels) > 0L) {
+    na_source_specs <- lapply(na_source_labels, function(lbl) {
+      node <- compiled_nodes[[lbl]]
+      comp_ids <- compiled_competitors[[lbl]]
+      if (is.null(node) || is.null(comp_ids)) return(NULL)
+      list(
+        node_id = as.integer(node$id),
+        competitor_ids = comp_ids %||% integer(0),
+        source_label = lbl
+      )
+    })
+    if (any(vapply(na_source_specs, is.null, logical(1)))) na_source_specs <- NULL
+  }
+  guess_target_specs <- list()
+  for (lbl in names(outcome_defs)) {
+    def <- outcome_defs[[lbl]]
+    opts <- def[['options']] %||% list()
+    guess_opts <- opts[['guess']]
+    if (is.null(guess_opts)) next
+    donor_node <- compiled_nodes[[lbl]]
+    if (is.null(donor_node)) next
+    donor_comp <- compiled_competitors[[lbl]] %||% integer(0)
+    labels <- guess_opts[['labels']] %||% character(0)
+    weights <- guess_opts[['weights']] %||% numeric(0)
+    if (!length(labels) || length(labels) != length(weights)) next
+    rt_policy <- guess_opts[['rt_policy']] %||% "keep"
+    for (j in seq_along(labels)) {
+      tgt <- labels[[j]]
+      tgt_key <- if (is.na(tgt)) "NA" else as.character(tgt)
+      release_val <- as.numeric(weights[[j]])
+      release_val <- if (is.finite(release_val)) release_val else 0
+      if (release_val < 0) release_val <- 0
+      if (release_val > 1) release_val <- 1
+      donor_rec <- list(
+        node_id = as.integer(donor_node$id),
+        competitor_ids = donor_comp %||% integer(0),
+        source_label = lbl,
+        release = release_val,
+        rt_policy = rt_policy
+      )
+      guess_target_specs[[tgt_key]] <- c(guess_target_specs[[tgt_key]] %||% list(), list(donor_rec))
+    }
+  }
+  alias_specs <- lapply(names(outcome_defs), function(lbl) {
+    def <- outcome_defs[[lbl]]
+    alias_refs <- def[['options']][['alias_of']]
+    if (is.null(alias_refs)) return(NULL)
+    refs <- as.character(alias_refs)
+    alias_sources <- lapply(refs, function(ref_lbl) {
+      node <- compiled_nodes[[ref_lbl]]
+      comp_ids <- compiled_competitors[[ref_lbl]]
+      if (is.null(node) || is.null(comp_ids)) return(NULL)
+      list(
+        node_id = as.integer(node$id),
+        competitor_ids = comp_ids %||% integer(0),
+        source_label = ref_lbl
+      )
+    })
+    if (any(vapply(alias_sources, is.null, logical(1)))) return(NULL)
+    alias_sources
+  })
+  names(alias_specs) <- names(outcome_defs)
+  default_deadline <- prep$default_deadline %||% Inf
+  rel_tol <- .integrate_rel_tol()
+  abs_tol <- .integrate_abs_tol()
+  max_depth <- 12L
+  list(
+    structure_hash = structure_hash,
+    compiled_nodes = compiled_nodes,
+    compiled_competitors = compiled_competitors,
+    shared_gate_specs = shared_gate_specs,
+    na_source_specs = na_source_specs,
+    guess_target_specs = guess_target_specs,
+    alias_specs = alias_specs,
+    default_deadline = as.numeric(default_deadline),
+    rel_tol = as.numeric(rel_tol),
+    abs_tol = as.numeric(abs_tol),
+    max_depth = as.integer(max_depth)
+  )
 }
 
 .likelihood_params_by_trial <- function(params_df) {
@@ -420,95 +547,20 @@ build_likelihood_context <- function(structure, params_df,
   if (length(trials) == 0L) {
     return(NULL)
   }
-  structure_hash <- .structure_hash_value(prep)
+  metadata <- .likelihood_trial_metadata(structure, prep)
+  if (is.null(metadata)) return(NULL)
   outcome_defs <- prep[["outcomes"]] %||% list()
-  competitor_map <- .prep_competitors(prep) %||% list()
-  compiled_nodes <- lapply(outcome_defs, function(def) {
-    expr <- def[["expr"]]
-    if (is.null(expr)) return(NULL)
-    .expr_lookup_compiled(expr, prep)
-  })
-  names(compiled_nodes) <- names(outcome_defs)
-  compiled_competitors <- lapply(names(outcome_defs), function(lbl) {
-    comp_exprs <- competitor_map[[lbl]] %||% list()
-    if (length(comp_exprs) == 0) return(integer(0))
-    comp_nodes <- lapply(comp_exprs, function(ex) .expr_lookup_compiled(ex, prep))
-    if (any(vapply(comp_nodes, is.null, logical(1)))) return(NULL)
-    ids <- vapply(comp_nodes, function(node) as.integer(node$id %||% NA_integer_), integer(1))
-    if (any(is.na(ids))) return(NULL)
-    ids
-  })
-  names(compiled_competitors) <- names(outcome_defs)
-  shared_gate_specs <- lapply(names(outcome_defs), function(lbl) {
-    info <- .detect_shared_gate(outcome_defs, lbl)
-    if (is.null(info)) return(NULL)
-    x_lbl <- info$x_id %||% NULL
-    y_lbl <- info$y_id %||% NULL
-    c_lbl <- info$c_id %||% NULL
-    if (is.null(x_lbl) || is.null(y_lbl) || is.null(c_lbl)) return(NULL)
-    list(
-      x_label = as.character(x_lbl),
-      y_label = as.character(y_lbl),
-      c_label = as.character(c_lbl)
-    )
-  })
-  names(shared_gate_specs) <- names(outcome_defs)
-  na_source_labels <- Filter(function(lbl) {
-    def <- outcome_defs[[lbl]]
-    map_to <- def[['options']][['map_outcome_to']]
-    if (is.null(map_to)) return(FALSE)
-    if (is.na(map_to)) return(TRUE)
-    identical(map_to, "NA")
-  }, names(outcome_defs))
-  na_source_specs <- NULL
-  if (length(na_source_labels) > 0L) {
-    na_source_specs <- lapply(na_source_labels, function(lbl) {
-      node <- compiled_nodes[[lbl]]
-      comp_ids <- compiled_competitors[[lbl]]
-      if (is.null(node) || is.null(comp_ids)) return(NULL)
-      list(
-        node_id = as.integer(node$id),
-        competitor_ids = comp_ids %||% integer(0),
-        source_label = lbl
-      )
-    })
-    if (any(vapply(na_source_specs, is.null, logical(1)))) na_source_specs <- NULL
-  }
-  default_deadline <- prep$default_deadline %||% Inf
-  rel_tol <- .integrate_rel_tol()
-  abs_tol <- .integrate_abs_tol()
-  max_depth <- 12L
-
-  guess_target_specs <- list()
-  for (lbl in names(outcome_defs)) {
-    def <- outcome_defs[[lbl]]
-    opts <- def[['options']] %||% list()
-    guess_opts <- opts[['guess']]
-    if (is.null(guess_opts)) next
-    donor_node <- compiled_nodes[[lbl]]
-    if (is.null(donor_node)) next
-    donor_comp <- compiled_competitors[[lbl]] %||% integer(0)
-    labels <- guess_opts[['labels']] %||% character(0)
-    weights <- guess_opts[['weights']] %||% numeric(0)
-    if (!length(labels) || length(labels) != length(weights)) next
-    rt_policy <- guess_opts[['rt_policy']] %||% "keep"
-    for (j in seq_along(labels)) {
-      tgt <- labels[[j]]
-      tgt_key <- if (is.na(tgt)) "NA" else as.character(tgt)
-      release_val <- as.numeric(weights[[j]])
-      release_val <- if (is.finite(release_val)) release_val else 0
-      if (release_val < 0) release_val <- 0
-      if (release_val > 1) release_val <- 1
-      donor_rec <- list(
-        node_id = as.integer(donor_node$id),
-        competitor_ids = donor_comp %||% integer(0),
-        source_label = lbl,
-        release = release_val,
-        rt_policy = rt_policy
-      )
-      guess_target_specs[[tgt_key]] <- c(guess_target_specs[[tgt_key]] %||% list(), list(donor_rec))
-    }
-  }
+  structure_hash <- metadata$structure_hash
+  compiled_nodes <- metadata$compiled_nodes
+  compiled_competitors <- metadata$compiled_competitors
+  shared_gate_specs <- metadata$shared_gate_specs
+  na_source_specs <- metadata$na_source_specs
+  guess_target_specs <- metadata$guess_target_specs
+  alias_specs <- metadata$alias_specs
+  default_deadline <- metadata$default_deadline
+  rel_tol <- metadata$rel_tol
+  abs_tol <- metadata$abs_tol
+  max_depth <- metadata$max_depth
 
   entries <- vector("list", length(trial_ids))
   for (i in seq_along(trial_ids)) {
@@ -561,20 +613,8 @@ build_likelihood_context <- function(structure, params_df,
     }
     outcome_def <- outcome_defs[[outcome_lbl]]
     if (is.null(outcome_def)) return(NULL)
-    alias_refs <- outcome_def[['options']][['alias_of']]
-    if (!is.null(alias_refs)) {
-      refs <- as.character(alias_refs)
-      alias_sources <- lapply(refs, function(ref_lbl) {
-        node <- compiled_nodes[[ref_lbl]]
-        comp_ids <- compiled_competitors[[ref_lbl]]
-        if (is.null(node) || is.null(comp_ids)) return(NULL)
-        list(
-          node_id = as.integer(node$id),
-          competitor_ids = comp_ids %||% integer(0),
-          source_label = ref_lbl
-        )
-      })
-      if (any(vapply(alias_sources, is.null, logical(1)))) return(NULL)
+    alias_sources <- alias_specs[[outcome_lbl]]
+    if (!is.null(alias_sources)) {
       entries[[i]] <- list(
         type = "alias_sum",
         trial_rows = entry$rows %||% data.frame(),
@@ -628,32 +668,89 @@ build_likelihood_context <- function(structure, params_df,
                                         component_weights = NULL) {
   native_ctx <- .prep_native_context(prep)
   if (!inherits(native_ctx, "externalptr")) return(NULL)
-  builder <- .build_native_trial_entries(
-    structure = structure,
-    prep = prep,
-    plan = plan,
-    trial_ids = trial_ids,
-    data_df = data_df,
-    data_row_indices = data_row_indices,
-    component_weights = component_weights
+  metadata <- .likelihood_trial_metadata(structure, prep)
+  if (is.null(metadata)) return(NULL)
+  component_weights_df <- if (!is.null(component_weights)) as.data.frame(component_weights) else NULL
+  if (!"trial" %in% names(data_df)) {
+    stop("Data frame must include a 'trial' column")
+  }
+  if (!"outcome" %in% names(data_df)) {
+    stop("Data frame must include an 'outcome' column")
+  }
+  if (!"rt" %in% names(data_df)) {
+    stop("Data frame must include an 'rt' column")
+  }
+  data_df$trial <- data_df$trial
+  data_df$outcome <- as.character(data_df$outcome)
+  data_df$rt <- as.numeric(data_df$rt)
+  if ("component" %in% names(data_df)) {
+    data_df$component <- as.character(data_df$component)
+  }
+  normalize_keys <- function(keys) {
+    vals <- as.character(keys %||% NA)
+    vals[is.na(vals)] <- "NA"
+    vals
+  }
+  trial_keys_raw <- as.character(trial_ids %||% NA)
+  trial_keys_norm <- normalize_keys(trial_ids)
+  data_trial_keys <- as.character(data_df$trial %||% NA)
+  plan_keys_raw <- as.character((plan$order %||% names(plan$trials)) %||% NA)
+  plan_keys_norm <- plan_keys_raw
+  plan_keys_norm[is.na(plan_keys_norm)] <- "NA"
+  cache_env <- plan$.cache_env
+  if (!is.environment(cache_env)) {
+    cache_env <- new.env(parent = emptyenv())
+  }
+  entries_cache <- cache_env$native_entries
+  cache_names <- cache_env$native_entry_names
+  if (is.null(entries_cache) ||
+      is.null(cache_names) ||
+      length(cache_names) != length(plan_keys_norm) ||
+      !identical(cache_names, plan_keys_norm)) {
+    entries_cache <- native_plan_entries_cpp(
+      native_ctx,
+      structure,
+      plan,
+      plan_keys_raw,
+      data_trial_keys,
+      data_df,
+      component_weights_df,
+      metadata$shared_gate_specs %||% list(),
+      metadata$na_source_specs %||% list(),
+      metadata$guess_target_specs %||% list(),
+      metadata$alias_specs %||% list()
+    )
+    cache_names <- names(entries_cache)
+    cache_env$native_entries <- entries_cache
+    cache_env$native_entry_names <- cache_names
+  }
+  if (is.null(cache_names)) {
+    cache_names <- rep_len("", length(entries_cache))
+  }
+  selected_entries <- entries_cache[integer(0)]
+  if (length(trial_keys_norm) > 0L) {
+    idx <- match(trial_keys_norm, cache_names)
+    if (any(is.na(idx))) {
+      missing_keys <- unique(trial_keys_norm[is.na(idx)])
+      stop(sprintf("Missing cached trial entries for: %s", paste(missing_keys, collapse = ", ")))
+    }
+    selected_entries <- entries_cache[idx]
+    names(selected_entries) <- NULL
+  }
+  res <- tryCatch(
+    native_loglik_from_params_cpp(
+      native_ctx,
+      structure,
+      selected_entries,
+      component_weights_df,
+      as.numeric(metadata$default_deadline %||% Inf),
+      as.numeric(metadata$rel_tol %||% .integrate_rel_tol()),
+      as.numeric(metadata$abs_tol %||% .integrate_abs_tol()),
+      as.integer(metadata$max_depth %||% 12L)
+    ),
+    error = function(e) NULL
   )
-  if (is.null(builder)) return(NULL)
-  entries <- builder$entries
-  component_weights_df <- builder$component_weights_df
-  default_deadline <- builder$default_deadline
-  rel_tol <- builder$rel_tol
-  abs_tol <- builder$abs_tol
-  max_depth <- builder$max_depth
-  res <- native_loglik_from_params_cpp(
-    native_ctx,
-    structure,
-    entries,
-    component_weights_df,
-    as.numeric(default_deadline),
-    as.numeric(rel_tol),
-    as.numeric(abs_tol),
-    as.integer(max_depth)
-  )
+  if (is.null(res)) return(NULL)
   list(
     loglik = as.numeric(res$loglik),
     per_trial = as.numeric(res$per_trial)

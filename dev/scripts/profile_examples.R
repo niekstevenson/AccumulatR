@@ -31,7 +31,11 @@ build_native_plan <- function(structure, param_table) {
     param_table,
     prep
   )
-  list(prep = prep, plan = plan)
+  list(
+    prep = prep,
+    prep_native = AccumulatR:::.prep_native_payload(prep),
+    plan = plan
+  )
 }
 
 profile_example <- function(example_id,
@@ -53,12 +57,18 @@ profile_example <- function(example_id,
   AccumulatR:::likelihood_cache_reset_stats(plan_bundle$prep)
   elapsed <- system.time({
     with_native_flags(TRUE, TRUE, {
-      log_likelihood_from_params(
-        structure,
-        param_table,
-        data_df,
-        prep = plan_bundle$prep,
-        trial_plan = plan_bundle$plan
+      trial_keys <- as.character(data_df$trial)
+      trial_keys[is.na(trial_keys)] <- NA_character_
+      data_row_indices <- split(seq_len(nrow(data_df)), trial_keys)
+      trial_ids <- unique(data_df$trial)
+      AccumulatR:::.native_loglikelihood_batch(
+        structure = structure,
+        prep = plan_bundle$prep_native,
+        plan = plan_bundle$plan,
+        trial_ids = trial_ids,
+        data_df = data_df,
+        data_row_indices = data_row_indices,
+        component_weights = NULL
       )
     })
   })[["elapsed"]]

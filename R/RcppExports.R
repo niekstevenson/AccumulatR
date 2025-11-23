@@ -33,6 +33,10 @@ native_plan_entries_cpp <- function(ctxSEXP, structure, plan, selection_keys, da
     .Call(`_AccumulatR_native_plan_entries_cpp`, ctxSEXP, structure, plan, selection_keys, data_trial_keys, data_df, component_weights_opt, shared_gate_specs, na_source_specs, guess_target_specs, alias_specs)
 }
 
+native_refresh_trial_params_cpp <- function(ctxSEXP, entries) {
+    invisible(.Call(`_AccumulatR_native_refresh_trial_params_cpp`, ctxSEXP, entries))
+}
+
 native_loglik_from_plan_cpp <- function(ctxSEXP, structure, plan, trial_keys, data_trial_keys, data_df, component_weights_opt, shared_gate_specs, na_source_specs, guess_target_specs, alias_specs, default_deadline, rel_tol, abs_tol, max_depth) {
     .Call(`_AccumulatR_native_loglik_from_plan_cpp`, ctxSEXP, structure, plan, trial_keys, data_trial_keys, data_df, component_weights_opt, shared_gate_specs, na_source_specs, guess_target_specs, alias_specs, default_deadline, rel_tol, abs_tol, max_depth)
 }

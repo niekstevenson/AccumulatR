@@ -24,7 +24,6 @@ collect_native_debug <- function(example_id = "example_5_timeout_guess",
   data_df <- simulate_data_from_params_table(structure, params_df, seed = seed)
 
   prep <- AccumulatR:::.prepare_model_for_likelihood(structure$model_spec)
-  prep <- AccumulatR:::.likelihood_seed_prep_from_params(prep, params_df)
   plan <- AccumulatR:::.likelihood_build_trial_plan(structure, params_df, prep)
   trial_ids <- unique(data_df$trial)
   data_row_indices <- split(seq_len(nrow(data_df)), as.character(data_df$trial))

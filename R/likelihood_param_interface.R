@@ -6,7 +6,6 @@
   if (is.null(params_df) || nrow(params_df) == 0L) {
     stop("Parameter data frame must contain at least one row", call. = FALSE)
   }
-  params_df <- .params_hash_attach(params_df)
   structure <- .as_generator_structure(structure)
   if (is.null(structure$model_spec)) {
     stop("generator structure must include model_spec; rebuild with build_generator_structure")
@@ -15,7 +14,6 @@
     prep <- native_bundle$prep %||% prep
   }
   prep_eval_base <- prep %||% .prepare_model_for_likelihood(structure$model_spec)
-  prep_eval_base <- .likelihood_seed_prep_from_params(prep_eval_base, params_df)
   if (is.null(prep_eval_base[[".runtime"]]) || is.null(prep_eval_base$.runtime$cache_bundle)) {
     prep_eval_base <- .prep_set_cache_bundle(
       prep_eval_base,
@@ -65,49 +63,6 @@ build_likelihood_context <- function(structure, params_df,
   trial_rows[mask, , drop = FALSE]
 }
 
-.likelihood_seed_prep_from_params <- function(prep, params_df) {
-  if (is.null(prep) || is.null(params_df) || nrow(params_df) == 0L) {
-    return(prep)
-  }
-  param_state <- .generator_param_state_from_rows(prep, params_df)
-  acc_overrides <- param_state$accs %||% list()
-  if (length(acc_overrides) > 0L) {
-    acc_defs <- prep$accumulators %||% list()
-    for (acc_id in names(acc_overrides)) {
-      override <- acc_overrides[[acc_id]]
-      if (is.null(override)) next
-      base <- acc_defs[[acc_id]] %||% list(id = acc_id)
-      base$params <- override$params
-      base$onset <- override$onset
-      base$q <- override$q
-      base$shared_trigger_id <- override$shared_trigger_id
-      acc_defs[[acc_id]] <- base
-    }
-    prep$accumulators <- acc_defs
-  }
-  shared_overrides <- param_state$shared %||% list()
-  if (length(shared_overrides) > 0L) {
-    prep$shared_triggers <- prep$shared_triggers %||% list()
-    for (shared_id in names(shared_overrides)) {
-      entry <- shared_overrides[[shared_id]]
-      prob <- entry$prob
-      if (is.null(prob) || length(prob) == 0L) next
-      val <- as.numeric(prob[[1]])
-      if (!is.finite(val)) next
-      if (is.null(prep$shared_triggers[[shared_id]])) {
-        prep$shared_triggers[[shared_id]] <- list(
-          id = shared_id,
-          members = character(0),
-          q = val
-        )
-      } else {
-        prep$shared_triggers[[shared_id]]$q <- val
-      }
-    }
-  }
-  prep
-}
-
 .model_spec_with_params <- function(model_spec, params_df) {
   if (is.null(params_df) || nrow(params_df) == 0L) return(model_spec)
   spec_copy <- unserialize(serialize(model_spec, NULL))
@@ -145,8 +100,6 @@ build_likelihood_context <- function(structure, params_df,
   if ("component" %in% names(params_df)) {
     params_df$component <- as.character(params_df$component)
   }
-  params_df <- .params_hash_attach(params_df)
-  structure_hash <- .structure_hash_value(prep)
   trial_rows_map <- .likelihood_params_by_trial(params_df)
   component_ids <- structure$components$component_id
   comp_labels <- component_ids
@@ -161,20 +114,7 @@ build_likelihood_context <- function(structure, params_df,
     comp_entries <- list()
     for (comp_id in comp_labels) {
       rows_df <- .likelihood_component_rows(trial_df, comp_id)
-      hash_val <- NULL
-      if (!is.null(rows_df) && nrow(rows_df) > 0L && "params_hash" %in% names(rows_df)) {
-        vals <- rows_df$params_hash
-        vals <- vals[!is.na(vals)]
-        if (length(vals) > 0L) hash_val <- vals[[1]]
-      }
-      if (is.null(hash_val) || !nzchar(hash_val)) {
-        temp_rows <- rows_df
-        if (!is.null(temp_rows)) temp_rows$params_hash <- NULL
-        hash_val <- .param_rows_hash_value(temp_rows)
-      }
-      if (is.null(hash_val) || !nzchar(hash_val)) hash_val <- "__base__"
-      key <- .likelihood_param_key(structure_hash, comp_id)
-      comp_entries[[comp_id]] <- list(rows = rows_df, key = key, hash = hash_val)
+      comp_entries[[comp_id]] <- list(rows = rows_df)
     }
     trials[[trial_key]] <- list(
       trial_id = trial_id,
@@ -188,8 +128,7 @@ build_likelihood_context <- function(structure, params_df,
   trials <- trials[trial_order]
   list(
     order = trial_order,
-    trials = trials,
-    .cache_env = new.env(parent = emptyenv())
+    trials = trials
   )
 }
 
@@ -483,12 +422,6 @@ build_likelihood_context <- function(structure, params_df,
     as.character(component)[[1]]
   }
 }
-
-.likelihood_param_key <- function(structure_hash, component) {
-  struct_chr <- structure_hash %||% "__structure__"
-  comp_chr <- .likelihood_component_label(component)
-  paste(struct_chr, comp_chr, sep = "|")
-}
 .native_trial_mixture_eval <- function(prep, outcome_label, rt_val, component_plan,
                                        forced_component = NULL,
                                        trial_rows = NULL,
@@ -550,7 +483,6 @@ build_likelihood_context <- function(structure, params_df,
   metadata <- .likelihood_trial_metadata(structure, prep)
   if (is.null(metadata)) return(NULL)
   outcome_defs <- prep[["outcomes"]] %||% list()
-  structure_hash <- metadata$structure_hash
   compiled_nodes <- metadata$compiled_nodes
   compiled_competitors <- metadata$compiled_competitors
   shared_gate_specs <- metadata$shared_gate_specs
@@ -568,19 +500,6 @@ build_likelihood_context <- function(structure, params_df,
     trial_key <- as.character(tid %||% NA)
     entry <- trials[[trial_key]]
     if (is.null(entry)) return(NULL)
-    raw_components <- entry$components %||% list()
-    component_cache <- lapply(names(raw_components), function(lbl) {
-      comp_entry <- raw_components[[lbl]] %||% list()
-      key_val <- comp_entry$key %||% .likelihood_param_key(structure_hash, lbl)
-      hash_val <- comp_entry$hash %||% "__base__"
-      if (is.null(hash_val) || !nzchar(hash_val)) hash_val <- "__base__"
-      list(
-        component = lbl,
-        key = key_val,
-        hash = hash_val
-      )
-    })
-    names(component_cache) <- names(raw_components)
     data_idx <- data_row_indices[[trial_key]]
     if (is.null(data_idx) || length(data_idx) != 1L) return(NULL)
     data_row <- data_df[data_idx, , drop = FALSE]
@@ -604,8 +523,7 @@ build_likelihood_context <- function(structure, params_df,
         rt = if (is.null(rt_val)) NA_real_ else as.numeric(rt_val),
         forced_component = if (!is.null(forced_component) && !is.na(forced_component)) as.character(forced_component) else NULL,
         na_sources = na_source_specs,
-        component_plan = comp_plan,
-        component_cache = component_cache
+        component_plan = comp_plan
       )
       if (!is.null(guess_donors)) entry_na$guess_donors <- guess_donors
       entries[[i]] <- entry_na
@@ -621,7 +539,6 @@ build_likelihood_context <- function(structure, params_df,
         rt = as.numeric(rt_val),
         forced_component = if (!is.null(forced_component) && !is.na(forced_component)) as.character(forced_component) else NULL,
         alias_sources = alias_sources,
-        component_cache = component_cache,
         component_plan = comp_plan,
         outcome_label = outcome_lbl
       )
@@ -641,7 +558,6 @@ build_likelihood_context <- function(structure, params_df,
       rt = as.numeric(rt_val),
       forced_component = if (!is.null(forced_component) && !is.na(forced_component)) as.character(forced_component) else NULL,
       competitor_ids = comp_ids,
-      component_cache = component_cache,
       component_plan = comp_plan,
       outcome_label = outcome_lbl
     )
@@ -694,47 +610,37 @@ build_likelihood_context <- function(structure, params_df,
   trial_keys_raw <- as.character(trial_ids %||% NA)
   trial_keys_norm <- normalize_keys(trial_ids)
   data_trial_keys <- as.character(data_df$trial %||% NA)
-  plan_keys_raw <- as.character((plan$order %||% names(plan$trials)) %||% NA)
-  plan_keys_norm <- plan_keys_raw
-  plan_keys_norm[is.na(plan_keys_norm)] <- "NA"
-  cache_env <- plan$.cache_env
-  if (!is.environment(cache_env)) {
-    cache_env <- new.env(parent = emptyenv())
+  plan_keys_raw <- as.character((plan$order %||% names(plan$trials)) %||% character(0))
+  if (length(plan_keys_raw) == 0L) {
+    stop("Plan contains no trials")
   }
-  entries_cache <- cache_env$native_entries
-  cache_names <- cache_env$native_entry_names
-  if (is.null(entries_cache) ||
-      is.null(cache_names) ||
-      length(cache_names) != length(plan_keys_norm) ||
-      !identical(cache_names, plan_keys_norm)) {
-    entries_cache <- native_plan_entries_cpp(
-      native_ctx,
-      structure,
-      plan,
-      plan_keys_raw,
-      data_trial_keys,
-      data_df,
-      component_weights_df,
-      metadata$shared_gate_specs %||% list(),
-      metadata$na_source_specs %||% list(),
-      metadata$guess_target_specs %||% list(),
-      metadata$alias_specs %||% list()
-    )
-    cache_names <- names(entries_cache)
-    cache_env$native_entries <- entries_cache
-    cache_env$native_entry_names <- cache_names
+  entries_all <- native_plan_entries_cpp(
+    native_ctx,
+    structure,
+    plan,
+    plan_keys_raw,
+    data_trial_keys,
+    data_df,
+    component_weights_df,
+    metadata$shared_gate_specs %||% list(),
+    metadata$na_source_specs %||% list(),
+    metadata$guess_target_specs %||% list(),
+    metadata$alias_specs %||% list()
+  )
+  entry_names <- names(entries_all)
+  if (is.null(entry_names)) {
+    entry_names <- plan_keys_raw
   }
-  if (is.null(cache_names)) {
-    cache_names <- rep_len("", length(entries_cache))
-  }
-  selected_entries <- entries_cache[integer(0)]
+  entry_names_norm <- entry_names
+  entry_names_norm[is.na(entry_names_norm)] <- "NA"
+  selected_entries <- entries_all
   if (length(trial_keys_norm) > 0L) {
-    idx <- match(trial_keys_norm, cache_names)
+    idx <- match(trial_keys_norm, entry_names_norm)
     if (any(is.na(idx))) {
       missing_keys <- unique(trial_keys_norm[is.na(idx)])
-      stop(sprintf("Missing cached trial entries for: %s", paste(missing_keys, collapse = ", ")))
+      stop(sprintf("Missing native entries for: %s", paste(missing_keys, collapse = ", ")))
     }
-    selected_entries <- entries_cache[idx]
+    selected_entries <- entries_all[idx]
     names(selected_entries) <- NULL
   }
   res <- tryCatch(
@@ -766,7 +672,6 @@ build_likelihood_context <- function(structure, params_df,
                                            use_native_rows = isTRUE(getOption("uuber.use.native.param.rows", TRUE)),
                                            trial_state = NULL) {
   results <- numeric(0)
-  structure_hash <- .structure_hash_value(prep_eval_base)
   plan <- .native_component_plan(
     structure = structure,
     trial_rows = trial_rows,
@@ -801,18 +706,8 @@ build_likelihood_context <- function(structure, params_df,
     if (is.null(comp_rows_df) || nrow(comp_rows_df) == 0L) {
       comp_rows_df <- .likelihood_component_rows(trial_rows, comp_id)
     }
-    trial_type_key <- if (!is.null(plan_entry)) plan_entry$key else .likelihood_param_key(structure_hash, comp_id)
-    params_hash <- NULL
-    if (!is.null(plan_entry)) params_hash <- plan_entry$hash
-    if (is.null(params_hash) || !nzchar(params_hash)) {
-      if (!is.null(comp_rows_df) && nrow(comp_rows_df) > 0L && "params_hash" %in% names(comp_rows_df)) {
-        vals <- comp_rows_df$params_hash
-        vals <- vals[!is.na(vals)]
-        if (length(vals) > 0L) params_hash <- vals[[1]]
-      }
-    }
-    if (is.null(params_hash) || !nzchar(params_hash)) params_hash <- "__base__"
-    cache_key <- .likelihood_outcome_cache_key(trial_type_key, params_hash, outcome_label, rt_val)
+    trial_type_key <- .likelihood_component_label(comp_id)
+    cache_key <- .likelihood_outcome_cache_key(trial_type_key, "__structure__", outcome_label, rt_val)
     res <- .likelihood_outcome_cached(prep_eval_base, cache_key, function() {
       .outcome_likelihood(
         outcome_label,
@@ -1013,7 +908,6 @@ build_buffer_trial_entries <- function(structure, params_df, data_df,
     prep <- native_bundle$prep %||% prep
   }
   prep_eval_base <- prep %||% .prepare_model_for_likelihood(structure$model_spec)
-  prep_eval_base <- .likelihood_seed_prep_from_params(prep_eval_base, params_df)
   if (is.null(prep_eval_base[[".runtime"]])) {
     prep_eval_base <- .prep_set_cache_bundle(
       prep_eval_base,
@@ -1108,7 +1002,6 @@ observed_response_probabilities_from_params <- function(structure, params_df,
   if (is.null(params_df) || nrow(params_df) == 0L) {
     stop("Parameter data frame must contain at least one row")
   }
-  params_df <- .params_hash_attach(params_df)
   structure <- .as_generator_structure(structure)
   if (is.null(structure$model_spec)) {
     stop("generator structure must include model_spec; rebuild with build_generator_structure")

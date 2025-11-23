@@ -375,7 +375,6 @@ summarize_model_performance <- function(model_spec,
   cache_stats <- AccumulatR:::likelihood_cache_stats
   build_prep_plan <- function() {
     prep_full <- AccumulatR:::.prepare_model_for_likelihood(structure$model_spec)
-    prep_full <- AccumulatR:::.likelihood_seed_prep_from_params(prep_full, param_table)
     if (is.null(prep_full[[".runtime"]]) || is.null(prep_full$.runtime$cache_bundle)) {
       prep_full <- AccumulatR:::.prep_set_cache_bundle(
         prep_full,

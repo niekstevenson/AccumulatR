@@ -136,6 +136,17 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// native_refresh_trial_params_cpp
+void native_refresh_trial_params_cpp(SEXP ctxSEXP, Rcpp::List entries);
+RcppExport SEXP _AccumulatR_native_refresh_trial_params_cpp(SEXP ctxSEXPSEXP, SEXP entriesSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type ctxSEXP(ctxSEXPSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type entries(entriesSEXP);
+    native_refresh_trial_params_cpp(ctxSEXP, entries);
+    return R_NilValue;
+END_RCPP
+}
 // native_loglik_from_plan_cpp
 Rcpp::List native_loglik_from_plan_cpp(SEXP ctxSEXP, Rcpp::List structure, Rcpp::List plan, Rcpp::CharacterVector trial_keys, Rcpp::CharacterVector data_trial_keys, Rcpp::DataFrame data_df, Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt, Rcpp::List shared_gate_specs, Rcpp::List na_source_specs, Rcpp::List guess_target_specs, Rcpp::List alias_specs, double default_deadline, double rel_tol, double abs_tol, int max_depth);
 RcppExport SEXP _AccumulatR_native_loglik_from_plan_cpp(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP planSEXP, SEXP trial_keysSEXP, SEXP data_trial_keysSEXP, SEXP data_dfSEXP, SEXP component_weights_optSEXP, SEXP shared_gate_specsSEXP, SEXP na_source_specsSEXP, SEXP guess_target_specsSEXP, SEXP alias_specsSEXP, SEXP default_deadlineSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP) {
@@ -721,6 +732,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_native_loglik_from_params_cpp", (DL_FUNC) &_AccumulatR_native_loglik_from_params_cpp, 8},
     {"_AccumulatR_native_loglik_from_buffer_cpp", (DL_FUNC) &_AccumulatR_native_loglik_from_buffer_cpp, 9},
     {"_AccumulatR_native_plan_entries_cpp", (DL_FUNC) &_AccumulatR_native_plan_entries_cpp, 11},
+    {"_AccumulatR_native_refresh_trial_params_cpp", (DL_FUNC) &_AccumulatR_native_refresh_trial_params_cpp, 2},
     {"_AccumulatR_native_loglik_from_plan_cpp", (DL_FUNC) &_AccumulatR_native_loglik_from_plan_cpp, 15},
     {"_AccumulatR_native_component_plan_exported", (DL_FUNC) &_AccumulatR_native_component_plan_exported, 4},
     {"_AccumulatR_native_guard_eval_cpp", (DL_FUNC) &_AccumulatR_native_guard_eval_cpp, 9},

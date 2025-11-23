@@ -575,7 +575,6 @@ double native_outcome_probability_impl(SEXP ctxSEXP,
                                        int max_depth,
                                        const TrialParamSet* trial_params,
                                        const std::string& trial_type_key,
-                                       const std::string& params_hash,
                                        bool include_na_donors,
                                        const std::string& outcome_label_context);
 
@@ -591,7 +590,6 @@ double node_density_with_competitors_internal(
   const std::vector<int>& competitor_ids,
   const TrialParamSet* trial_params,
   const std::string& trial_type_key,
-  const std::string& params_hash,
   EvalCache* eval_cache_override,
   bool include_na_donors = false,
   const std::string& outcome_label_context = std::string());
@@ -602,7 +600,6 @@ double evaluate_outcome_density_label(const uuber::NativeContext& ctx,
                                       const std::string& component,
                                       const TrialParamSet* trial_params,
                                       const std::string& trial_type_key,
-                                      const std::string& params_hash,
                                       EvalCache* eval_cache_override,
                                       bool include_na_donors,
                                       const std::string& outcome_label_context = std::string()) {
@@ -620,7 +617,6 @@ double evaluate_outcome_density_label(const uuber::NativeContext& ctx,
     info.competitor_ids,
     trial_params,
     trial_type_key,
-    params_hash,
     eval_cache_override,
     include_na_donors,
     outcome_label_context);
@@ -632,7 +628,6 @@ double accumulate_component_guess_density(const uuber::NativeContext& ctx,
                                           const std::string& component,
                                           const TrialParamSet* trial_params,
                                           const std::string& trial_type_key,
-                                          const std::string& params_hash,
                                           EvalCache* eval_cache_override) {
   auto comp_it = ctx.component_info.find(component);
   if (comp_it == ctx.component_info.end()) return 0.0;
@@ -646,17 +641,16 @@ double accumulate_component_guess_density(const uuber::NativeContext& ctx,
     double keep_prob = entry.second;
     double release = 1.0 - keep_prob;
     if (release <= 0.0) continue;
-    total += release * evaluate_outcome_density_label(
-      ctx,
-      entry.first,
-      t,
-      component,
-      trial_params,
-      trial_type_key,
-      params_hash,
-      eval_cache_override,
-      false,
-      entry.first);
+      total += release * evaluate_outcome_density_label(
+        ctx,
+        entry.first,
+        t,
+        component,
+        trial_params,
+        trial_type_key,
+        eval_cache_override,
+        false,
+        entry.first);
   }
   return total;
 }
@@ -667,7 +661,6 @@ double accumulate_outcome_alias_density(const uuber::NativeContext& ctx,
                                         const std::string& component,
                                         const TrialParamSet* trial_params,
                                         const std::string& trial_type_key,
-                                        const std::string& params_hash,
                                         EvalCache* eval_cache_override,
                                         bool include_na_donors) {
   double total = 0.0;
@@ -681,7 +674,6 @@ double accumulate_outcome_alias_density(const uuber::NativeContext& ctx,
         component,
         trial_params,
         trial_type_key,
-        params_hash,
         eval_cache_override,
         include_na_donors,
         source_label);
@@ -698,7 +690,6 @@ double accumulate_outcome_alias_density(const uuber::NativeContext& ctx,
         component,
         trial_params,
         trial_type_key,
-        params_hash,
         eval_cache_override,
         include_na_donors,
         donor.label);
@@ -749,7 +740,6 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
                                 const std::unordered_set<int>& forced_survive,
                                 const TrialParamSet* trial_params = nullptr,
                                 const std::string& trial_type_key = std::string(),
-                                const std::string& params_hash = std::string(),
                                 EvalCache* eval_cache_override = nullptr,
                                 bool include_na_donors = false,
                                 const std::string& outcome_label_context = std::string()) {
@@ -777,7 +767,6 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
                                                       component,
                                                       trial_params,
                                                       trial_type_key,
-                                                      params_hash,
                                                       eval_cache_override);
   const std::string& target_label = outcome_label_context.empty() ? label : outcome_label_context;
   donor_density += accumulate_outcome_alias_density(ctx,
@@ -786,7 +775,6 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
                                                     component,
                                                     trial_params,
                                                     trial_type_key,
-                                                    params_hash,
                                                     eval_cache_override,
                                                     include_na_donors);
   if (label == "__GUESS__") {
@@ -860,7 +848,6 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
         forced_survive,
         trial_params,
         std::string(),
-        std::string(),
         nullptr
       );
       density_vec[i] = child.density;
@@ -897,20 +884,8 @@ struct CacheEntry {
   std::vector<ScenarioRecord> scenarios;
 };
 
-struct TimeCache {
-  std::unordered_map<std::string, CacheEntry> entries;
-};
-
-struct ParamCache {
-  std::unordered_map<std::string, TimeCache> times;
-};
-
-struct ComponentCache {
-  std::unordered_map<std::string, ParamCache> params;
-};
-
 struct NodeCache {
-  std::unordered_map<std::string, ComponentCache> components;
+  std::unordered_map<std::string, CacheEntry> entries;
 };
 
 struct EvalCache {
@@ -920,11 +895,8 @@ struct EvalCache {
 std::string component_cache_key(const std::string& component,
                                 const std::string& trial_key);
 
-std::string params_cache_key(const std::string& params_hash);
-
 struct ComponentCacheEntry {
   std::string trial_type_key;
-  std::string params_hash;
 };
 
 std::string na_cache_component_key(const std::string& trial_type_key) {
@@ -952,71 +924,21 @@ void na_cache_touch(const uuber::NativeContext& ctx,
 }
 
 ComponentCacheEntry make_component_cache_entry(const std::string& component,
-                                               const std::string& trial_key,
-                                               const std::string& hash) {
+                                               const std::string& trial_key) {
   ComponentCacheEntry entry;
   entry.trial_type_key = component_cache_key(component, trial_key);
-  entry.params_hash = params_cache_key(hash);
   return entry;
 }
 
 ComponentCacheEntry default_component_cache_entry(const std::string& component) {
-  return make_component_cache_entry(component, std::string(), std::string());
-}
-
-using ComponentCacheMap = std::unordered_map<std::string, ComponentCacheEntry>;
-
-ComponentCacheMap build_component_cache_map(const Rcpp::Nullable<Rcpp::List>& cache_opt) {
-  ComponentCacheMap out;
-  if (cache_opt.isNull()) return out;
-  Rcpp::List cache_list(cache_opt.get());
-  Rcpp::CharacterVector cache_names = cache_list.names();
-  for (R_xlen_t i = 0; i < cache_list.size(); ++i) {
-    Rcpp::RObject obj = cache_list[i];
-    if (obj.isNULL()) continue;
-    Rcpp::List entry(obj);
-    std::string comp_label;
-    if (!cache_names.isNULL() && cache_names.size() > i && cache_names[i] != NA_STRING) {
-      comp_label = Rcpp::as<std::string>(cache_names[i]);
-    }
-    if (entry.containsElementNamed("component")) {
-      Rcpp::RObject comp_obj = entry["component"];
-      if (!comp_obj.isNULL()) {
-        comp_label = Rcpp::as<std::string>(comp_obj);
-      }
-    }
-    std::string trial_key;
-    std::string params_hash;
-    if (entry.containsElementNamed("key")) {
-      Rcpp::RObject key_obj = entry["key"];
-      if (!key_obj.isNULL()) {
-        trial_key = Rcpp::as<std::string>(key_obj);
-      }
-    }
-    if (entry.containsElementNamed("hash")) {
-      Rcpp::RObject hash_obj = entry["hash"];
-      if (!hash_obj.isNULL()) {
-        params_hash = Rcpp::as<std::string>(hash_obj);
-      }
-    }
-    ComponentCacheEntry cache_entry = make_component_cache_entry(comp_label, trial_key, params_hash);
-    out[comp_label] = cache_entry;
-  }
-  return out;
-}
-
-ComponentCacheEntry lookup_component_cache_entry(const ComponentCacheMap& map,
-                                                 const std::string& component) {
-  auto it = map.find(component);
-  if (it != map.end()) return it->second;
-  return default_component_cache_entry(component);
+  return make_component_cache_entry(component, std::string());
 }
 
 double accumulate_plan_guess_density(const uuber::NativeContext& ctx,
                                      const Rcpp::List& donors,
                                      double t,
                                      const std::string& component,
-                                     const ComponentCacheEntry& cache_entry,
+                                     const std::string& trial_type_key,
                                      EvalCache& eval_cache,
                                      const TrialParamSet* trial_params,
                                      bool include_na_donors) {
@@ -1056,8 +978,7 @@ double accumulate_plan_guess_density(const uuber::NativeContext& ctx,
       kEmptyForcedSet,
       comp_vec,
       trial_params,
-      cache_entry.trial_type_key,
-      cache_entry.params_hash,
+      trial_type_key,
       &eval_cache,
       include_na_donors,
       donor_label
@@ -1073,7 +994,7 @@ double accumulate_plan_guess_probability(SEXP ctxSEXP,
                                          const Rcpp::List& donors,
                                          double upper_limit,
                                          Rcpp::Nullable<Rcpp::String> component,
-                                         const ComponentCacheEntry& cache_entry,
+                                         const std::string& trial_type_key,
                                          double rel_tol,
                                          double abs_tol,
                                          int max_depth,
@@ -1114,8 +1035,7 @@ double accumulate_plan_guess_probability(SEXP ctxSEXP,
                                                   abs_tol,
                                                   max_depth,
                                                   trial_params,
-                                                  cache_entry.trial_type_key,
-                                                  cache_entry.params_hash,
+                                                  trial_type_key,
                                                   true,
                                                   donor_label);
     if (!std::isfinite(prob) || prob <= 0.0) continue;
@@ -1125,16 +1045,11 @@ double accumulate_plan_guess_probability(SEXP ctxSEXP,
 }
 
 std::vector<ComponentCacheEntry> build_component_cache_entries(
-  const std::vector<std::string>& components,
-  const ComponentCacheMap& cache_map) {
+  const std::vector<std::string>& components) {
   std::vector<ComponentCacheEntry> entries;
   entries.reserve(components.size());
   for (const auto& comp : components) {
-    if (cache_map.empty()) {
-      entries.push_back(default_component_cache_entry(comp));
-    } else {
-      entries.push_back(lookup_component_cache_entry(cache_map, comp));
-    }
+    entries.push_back(default_component_cache_entry(comp));
   }
   return entries;
 }
@@ -1158,11 +1073,6 @@ std::string component_cache_key(const std::string& component,
   if (!trial_key.empty()) return trial_key;
   if (component.empty()) return "__default__";
   return component;
-}
-
-std::string params_cache_key(const std::string& params_hash) {
-  if (params_hash.empty()) return "__base__";
-  return params_hash;
 }
 
 std::string normalize_label_string(const std::string& label) {
@@ -1287,12 +1197,10 @@ inline std::string forced_key_string(const std::unordered_set<int>& forced_compl
 std::string na_map_cache_key(int node_id,
                              double upper_limit,
                              const std::string& component_key,
-                             const std::string& params_hash,
                              const std::vector<int>& competitor_ids) {
   std::ostringstream oss;
   oss << "na|" << node_id
       << "|" << component_key
-      << "|" << params_hash
       << "|" << time_cache_key(upper_limit)
       << "|" << vector_signature(competitor_ids);
   return oss.str();
@@ -1307,7 +1215,6 @@ struct NodeEvalState {
                 const std::unordered_set<int>& forced_survive_ref,
                 const TrialParamSet* params_ptr = nullptr,
                 const std::string& trial_key = std::string(),
-                const std::string& params_hash_key = std::string(),
                 bool include_na = false,
                 const std::string& outcome_label_ctx = std::string())
     : ctx(ctx_),
@@ -1318,7 +1225,6 @@ struct NodeEvalState {
       forced_survive(forced_survive_ref),
       trial_params(params_ptr),
       trial_type_key(component_cache_key(component_label, trial_key)),
-      params_hash(params_cache_key(params_hash_key)),
       include_na_donors(include_na),
       outcome_label(outcome_label_ctx),
       time_key(time_cache_key(time)),
@@ -1332,12 +1238,21 @@ struct NodeEvalState {
   const std::unordered_set<int>& forced_survive;
   const TrialParamSet* trial_params;
   std::string trial_type_key;
-  std::string params_hash;
   bool include_na_donors;
   std::string outcome_label;
   std::string time_key;
   std::string forced_key;
 };
+
+inline std::string eval_cache_key(const NodeEvalState& state) {
+  std::ostringstream oss;
+  oss << state.trial_type_key
+      << "|" << state.time_key
+      << "|" << state.forced_key
+      << "|" << (state.include_na_donors ? "na" : "std")
+      << "|" << state.outcome_label;
+  return oss.str();
+}
 
 inline const TrialAccumulatorParams* get_state_params(const NodeEvalState& state,
                                                           int acc_index) {
@@ -1400,10 +1315,8 @@ std::string pool_template_cache_key(const std::string& pool_label,
 
 CacheEntry& fetch_cache_entry(NodeEvalState& state, int node_id) {
   NodeCache& node_cache = state.cache.nodes[node_id];
-  ComponentCache& comp_cache = node_cache.components[state.trial_type_key];
-  ParamCache& param_cache = comp_cache.params[state.params_hash];
-  TimeCache& time_cache = param_cache.times[state.time_key];
-  return time_cache.entries[state.forced_key];
+  std::string cache_key = eval_cache_key(state);
+  return node_cache.entries[cache_key];
 }
 
 bool fetch_cached_result(NodeEvalState& state,
@@ -1458,7 +1371,6 @@ struct GuardEvalInput {
   EvalCache& cache;
   std::string component;
   std::string trial_type_key;
-  std::string params_hash;
   std::unordered_set<int> forced_complete;
   std::unordered_set<int> forced_survive;
   const TrialParamSet* trial_params;
@@ -1479,7 +1391,6 @@ GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
                                 const std::unordered_set<int>& forced_complete,
                                 const std::unordered_set<int>& forced_survive,
                                 const std::string& trial_key,
-                                const std::string& params_hash,
                                 const TrialParamSet* trial_params);
 double guard_effective_survival_internal(const GuardEvalInput& input,
                                          double t,
@@ -1558,7 +1469,6 @@ std::vector<ScenarioRecord> compute_pool_event_scenarios(const uuber::NativeNode
       state.forced_survive,
       state.trial_params,
       state.trial_type_key,
-      state.params_hash,
       &state.cache
     );
     double density = eval.density;
@@ -1667,7 +1577,6 @@ std::vector<ScenarioRecord> compute_event_scenarios(const uuber::NativeNode& nod
     state.forced_survive,
     state.trial_params,
     state.trial_type_key,
-    state.params_hash,
     &state.cache
   );
   double weight = eval.density;
@@ -1819,7 +1728,6 @@ std::vector<ScenarioRecord> compute_guard_scenarios(const uuber::NativeNode& nod
                                                   fc_set,
                                                   fs_set,
                                                   state.trial_type_key,
-                                                  state.params_hash,
                                                   state.trial_params);
     double eff = guard_effective_survival_internal(guard_input, state.t, settings);
     if (!std::isfinite(eff) || eff <= 0.0) continue;
@@ -1968,7 +1876,6 @@ GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
                                 const std::unordered_set<int>& forced_complete,
                                 const std::unordered_set<int>& forced_survive,
                                 const std::string& trial_key = std::string(),
-                                const std::string& params_hash = std::string(),
                                 const TrialParamSet* trial_params = nullptr) {
   GuardEvalInput input{
     ctx,
@@ -1976,7 +1883,6 @@ GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
     cache,
     component,
     component_cache_key(component, trial_key),
-    params_cache_key(params_hash),
     {},
     {},
     trial_params
@@ -2015,7 +1921,6 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state) {
       state.forced_survive,
       state.trial_params,
       state.trial_type_key,
-      state.params_hash,
       &state.cache,
       state.include_na_donors,
       state.outcome_label
@@ -2034,7 +1939,6 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state) {
                                                   state.forced_complete,
                                                   state.forced_survive,
                                                   state.trial_type_key,
-                                                  state.params_hash,
                                                   state.trial_params);
     IntegrationSettings settings;
     double density = guard_density_internal(guard_input, state.t, settings);
@@ -2202,7 +2106,7 @@ GuardEvalInput resolve_guard_input(uuber::NativeContext& ctx,
                                    const std::unordered_set<int>& forced_complete,
                                    const std::unordered_set<int>& forced_survive) {
   const uuber::NativeNode& node = ctx.nodes[ctx.node_index.at(node_id)];
-  return make_guard_input(ctx, node, cache, component, forced_complete, forced_survive, std::string(), std::string(), nullptr);
+  return make_guard_input(ctx, node, cache, component, forced_complete, forced_survive, std::string(), nullptr);
 }
 
 std::vector<int> gather_blocker_sources(const uuber::NativeContext& ctx,
@@ -2437,7 +2341,6 @@ double evaluate_survival_with_forced(int node_id,
                                      double t,
                                      const uuber::NativeContext& ctx,
                                      const std::string& trial_key = std::string(),
-                                     const std::string& params_hash = std::string(),
                                      const TrialParamSet* trial_params = nullptr,
                                      EvalCache* eval_cache_override = nullptr) {
   static const std::unordered_set<int> empty_forced_complete;
@@ -2450,8 +2353,7 @@ double evaluate_survival_with_forced(int node_id,
                       empty_forced_complete,
                       forced_survive,
                       trial_params,
-                      trial_key,
-                      params_hash);
+                      trial_key);
   NodeEvalResult res = eval_node_recursive(node_id, state);
   return clamp_probability(res.survival);
 }
@@ -2462,7 +2364,6 @@ double compute_guard_free_cluster_value(const std::vector<int>& cluster_indices,
                                         double t,
                                         const std::string& component,
                                         const std::string& trial_key = std::string(),
-                                        const std::string& params_hash = std::string(),
                                         const TrialParamSet* trial_params = nullptr,
                                         EvalCache* eval_cache_override = nullptr) {
   std::unordered_set<int> empty_forced;
@@ -2474,7 +2375,6 @@ double compute_guard_free_cluster_value(const std::vector<int>& cluster_indices,
                                                 t,
                                                 ctx,
                                                 trial_key,
-                                                params_hash,
                                                 trial_params,
                                                 eval_cache_override);
     if (!std::isfinite(surv) || surv <= 0.0) return 0.0;
@@ -2490,7 +2390,6 @@ double compute_guard_cluster_value(const std::vector<int>& cluster_indices,
                                    double t,
                                    const std::string& component,
                                    const std::string& trial_key = std::string(),
-                                   const std::string& params_hash = std::string(),
                                    const TrialParamSet* trial_params = nullptr,
                                    EvalCache* eval_cache_override = nullptr) {
   struct OrderingMeta {
@@ -2526,7 +2425,6 @@ double compute_guard_cluster_value(const std::vector<int>& cluster_indices,
                                                 t,
                                                 ctx,
                                                 trial_key,
-                                                params_hash,
                                                 trial_params,
                                                 eval_cache_override);
     if (!std::isfinite(surv) || surv <= 0.0) return 0.0;
@@ -2544,7 +2442,6 @@ double competitor_survival_internal(const uuber::NativeContext& ctx,
                                     double t,
                                     const std::string& component_label,
                                     const std::string& trial_type_key = std::string(),
-                                    const std::string& params_hash = std::string(),
                                     const TrialParamSet* trial_params = nullptr,
                                     EvalCache* eval_cache_override = nullptr) {
   if (competitor_ids.empty()) return 1.0;
@@ -2582,7 +2479,6 @@ double competitor_survival_internal(const uuber::NativeContext& ctx,
                                     t,
                                     component_label,
                                     trial_type_key,
-                                    params_hash,
                                     trial_params,
                                     eval_cache_override)
       : compute_guard_free_cluster_value(cluster,
@@ -2591,7 +2487,6 @@ double competitor_survival_internal(const uuber::NativeContext& ctx,
                                          t,
                                          component_label,
                                          trial_type_key,
-                                         params_hash,
                                          trial_params,
                                          eval_cache_override);
     if (!std::isfinite(cluster_val) || cluster_val <= 0.0) {
@@ -2626,7 +2521,6 @@ double node_density_with_competitors_internal(
   const std::vector<int>& competitor_ids,
   const TrialParamSet* trial_params,
   const std::string& trial_type_key = std::string(),
-  const std::string& params_hash = std::string(),
   EvalCache* eval_cache_override = nullptr,
   bool include_na_donors,
   const std::string& outcome_label_context) {
@@ -2644,7 +2538,6 @@ double node_density_with_competitors_internal(
                       forced_survive,
                       trial_params,
                       trial_type_key,
-                      params_hash,
                       include_na_donors,
                       outcome_label_context);
   NodeEvalResult base = eval_node_recursive(node_id, state);
@@ -2658,7 +2551,6 @@ double node_density_with_competitors_internal(
                                                t,
                                                component_label,
                                                state.trial_type_key,
-                                               state.params_hash,
                                                trial_params,
                                                cache_ptr);
     if (!std::isfinite(surv) || surv <= 0.0) {
@@ -2712,7 +2604,6 @@ double native_outcome_probability_impl(SEXP ctxSEXP,
                                        int max_depth,
                                        const TrialParamSet* trial_params,
                                        const std::string& trial_type_key = std::string(),
-                                       const std::string& params_hash = std::string(),
                                        bool include_na_donors = false,
                                        const std::string& outcome_label_context = std::string()) {
   if (upper <= 0.0) {
@@ -2739,7 +2630,6 @@ double native_outcome_probability_impl(SEXP ctxSEXP,
       comp_vec,
       trial_params,
       trial_type_key,
-      params_hash,
       nullptr,
       include_na_donors,
       outcome_label_context
@@ -2836,7 +2726,7 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
     "accumulator_index", "acc_idx", "type", "role",
     "outcome", "rt", "params", "onset", "q",
     "condition", "component_weight", "shared_trigger_id",
-    "dist", "components", "params_hash"
+    "dist", "components"
   };
   std::vector<std::string> param_cols;
   std::vector<SEXP> param_col_data;
@@ -3117,7 +3007,6 @@ Rcpp::List native_guard_scenarios_impl(SEXP ctxSEXP,
                                                      component_label,
                                                      sc_fc_set,
                                                      sc_fs_set,
-                                                     std::string(),
                                                      std::string(),
                                                      nullptr);
     double s_eff = guard_effective_survival_internal(scenario_input, t, settings);
@@ -3494,7 +3383,6 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
             component_ids[i],
             params_ptr,
             cache_entry.trial_type_key,
-            cache_entry.params_hash,
             &shared_cache
           );
           used_guess_shortcut = true;
@@ -3512,7 +3400,6 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
         competitor_ids,
         params_ptr,
         cache_entry.trial_type_key,
-        cache_entry.params_hash,
         &shared_cache,
         false,
         keep_label
@@ -3528,7 +3415,7 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
           guess_donors,
           t,
           component_ids[i],
-          cache_entry,
+          cache_entry.trial_type_key,
           shared_cache,
           params_ptr,
           false
@@ -3609,15 +3496,14 @@ double evaluate_alias_mix(SEXP ctxSEXP,
                           double t,
                           Rcpp::Nullable<Rcpp::String> forced_component,
                           const std::string& keep_label,
-                          const TrialParamSet* params_ptr,
-                          const ComponentCacheMap& cache_map) {
+                          const TrialParamSet* params_ptr) {
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   std::vector<std::string> comp_labels;
   std::vector<double> mix_weights;
   if (!build_component_mix(components, weights, forced_component, comp_labels, mix_weights)) {
     return std::numeric_limits<double>::quiet_NaN();
   }
-  std::vector<ComponentCacheEntry> cache_entries = build_component_cache_entries(comp_labels, cache_map);
+  std::vector<ComponentCacheEntry> cache_entries = build_component_cache_entries(comp_labels);
   EvalCache shared_cache;
   double mix = 0.0;
   for (R_xlen_t i = 0; i < alias_sources.size(); ++i) {
@@ -3655,7 +3541,6 @@ double evaluate_na_map_mix(SEXP ctxSEXP,
                            int max_depth,
                            Rcpp::Nullable<Rcpp::String> forced_component,
                            const TrialParamSet* params_ptr,
-                           const ComponentCacheMap& cache_map,
                            Rcpp::List guess_donors) {
   if (std::isfinite(rt) && rt >= 0.0) {
     return evaluate_alias_mix(ctxSEXP,
@@ -3665,12 +3550,11 @@ double evaluate_na_map_mix(SEXP ctxSEXP,
                               rt,
                               forced_component,
                               std::string(),
-                              params_ptr,
-                              cache_map);
+                              params_ptr);
   }
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   std::vector<std::string> component_labels = character_vector_to_std(components);
-  std::vector<ComponentCacheEntry> cache_entries = build_component_cache_entries(component_labels, cache_map);
+  std::vector<ComponentCacheEntry> cache_entries = build_component_cache_entries(component_labels);
   bool has_guess_donors = guess_donors.size() > 0;
   double mix = 0.0;
   for (R_xlen_t i = 0; i < components.size(); ++i) {
@@ -3710,7 +3594,6 @@ double evaluate_na_map_mix(SEXP ctxSEXP,
         node_id,
         deadline,
         cache_entry.trial_type_key,
-        cache_entry.params_hash,
         comp_idx
       );
       double prob = 0.0;
@@ -3733,7 +3616,6 @@ double evaluate_na_map_mix(SEXP ctxSEXP,
                                                max_depth,
                                                params_ptr,
                                                cache_entry.trial_type_key,
-                                               cache_entry.params_hash,
                                                true,
                                                source_label);
         if (!std::isfinite(prob) || prob <= 0.0) {
@@ -3758,7 +3640,7 @@ double evaluate_na_map_mix(SEXP ctxSEXP,
                                                          guess_donors,
                                                          deadline,
                                                          component_str,
-                                                         cache_entry,
+                                                         cache_entry.trial_type_key,
                                                          rel_tol,
                                                          abs_tol,
                                                          max_depth,
@@ -3815,7 +3697,6 @@ double compute_shared_gate_palloc(const uuber::NativeContext& ctx,
                                             kEmptyForcedSet,
                                             trial_params,
                                             std::string(),
-                                            std::string(),
                                             cache_ptr);
     NodeEvalResult y_res = eval_event_label(ctx,
                                             spec.y_label,
@@ -3824,7 +3705,6 @@ double compute_shared_gate_palloc(const uuber::NativeContext& ctx,
                                             kEmptyForcedSet,
                                             kEmptyForcedSet,
                                             trial_params,
-                                            std::string(),
                                             std::string(),
                                             cache_ptr);
     double fX = safe_density(x_res.density);
@@ -3876,7 +3756,6 @@ double shared_gate_density_component(const uuber::NativeContext& ctx,
                                           kEmptyForcedSet,
                                           trial_params,
                                           std::string(),
-                                          std::string(),
                                           cache_ptr);
   NodeEvalResult y_res = eval_event_label(ctx,
                                           spec.y_label,
@@ -3886,7 +3765,6 @@ double shared_gate_density_component(const uuber::NativeContext& ctx,
                                           kEmptyForcedSet,
                                           trial_params,
                                           std::string(),
-                                          std::string(),
                                           cache_ptr);
   NodeEvalResult c_res = eval_event_label(ctx,
                                           spec.c_label,
@@ -3895,7 +3773,6 @@ double shared_gate_density_component(const uuber::NativeContext& ctx,
                                           kEmptyForcedSet,
                                           kEmptyForcedSet,
                                           trial_params,
-                                          std::string(),
                                           std::string(),
                                           cache_ptr);
   double fX = safe_density(x_res.density);
@@ -3940,7 +3817,6 @@ double evaluate_shared_gate_mix(const uuber::NativeContext& ctx,
                                 double rel_tol,
                                 double abs_tol,
                                 int max_depth,
-                                const ComponentCacheMap& cache_map,
                                 const std::string& keep_label = std::string(),
                                 const Rcpp::List& guess_donors = Rcpp::List(),
                                 EvalCache* eval_cache_override = nullptr) {
@@ -3952,7 +3828,7 @@ double evaluate_shared_gate_mix(const uuber::NativeContext& ctx,
   if (!build_component_mix(component_ids, weights, forced_component, components, mix_weights)) {
     return std::numeric_limits<double>::quiet_NaN();
   }
-  std::vector<ComponentCacheEntry> cache_entries = build_component_cache_entries(components, cache_map);
+  std::vector<ComponentCacheEntry> cache_entries = build_component_cache_entries(components);
   EvalCache local_eval_cache;
   EvalCache* shared_cache = eval_cache_override ? eval_cache_override : &local_eval_cache;
   double total = 0.0;
@@ -3983,7 +3859,7 @@ double evaluate_shared_gate_mix(const uuber::NativeContext& ctx,
         guess_donors,
         t,
         components[i],
-        cache_entry,
+        cache_entry.trial_type_key,
         *shared_cache,
         trial_params,
         false
@@ -4020,8 +3896,7 @@ double native_trial_mixture_driver(SEXP ctxSEXP,
     param_holder = build_trial_params_from_df(*ctx, trial_rows);
     params_ptr = param_holder.get();
   }
-  ComponentCacheMap cache_map;
-  std::vector<ComponentCacheEntry> cache_entries = build_component_cache_entries(components, cache_map);
+  std::vector<ComponentCacheEntry> cache_entries = build_component_cache_entries(components);
   EvalCache trial_eval_cache;
   return native_trial_mixture_internal(*ctx,
                                        node_id,
@@ -4106,21 +3981,22 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
       ? Rcpp::IntegerVector(entry["competitor_ids"])
       : Rcpp::IntegerVector();
     const TrialParamSet* params_ptr = nullptr;
-    if (!trial_rows.isNull()) {
+    if (entry.containsElementNamed("trial_params_ptr")) {
+      Rcpp::RObject ptr_obj = entry["trial_params_ptr"];
+      if (!ptr_obj.isNULL()) {
+        Rcpp::XPtr<TrialParamSet> ptr(ptr_obj);
+        if (!ptr.isNULL()) {
+          params_ptr = ptr.get();
+        }
+      }
+    }
+    if (!params_ptr && !trial_rows.isNull()) {
       std::unique_ptr<TrialParamSet> holder = build_trial_params_from_df(*ctx, trial_rows);
       if (holder) {
         params_ptr = holder.get();
         params_cache.emplace_back(std::move(holder));
       }
     }
-    ComponentCacheMap component_cache_map;
-    if (entry.containsElementNamed("component_cache")) {
-      Rcpp::RObject cache_obj = entry["component_cache"];
-      if (!cache_obj.isNULL()) {
-        component_cache_map = build_component_cache_map(Rcpp::Nullable<Rcpp::List>(cache_obj));
-      }
-    }
-
     Rcpp::CharacterVector components;
     Rcpp::NumericVector weights;
     if (entry.containsElementNamed("component_plan")) {
@@ -4151,8 +4027,7 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
       hit_neg_inf = true;
       continue;
     }
-    std::vector<ComponentCacheEntry> plan_cache_entries = build_component_cache_entries(component_labels,
-                                                                                       component_cache_map);
+    std::vector<ComponentCacheEntry> plan_cache_entries = build_component_cache_entries(component_labels);
     EvalCache trial_eval_cache;
     bool has_guess_donors = entry.containsElementNamed("guess_donors") &&
       !Rf_isNull(entry["guess_donors"]);
@@ -4171,15 +4046,14 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
         continue;
       }
       Rcpp::List alias_sources(entry["alias_sources"]);
-      mix = evaluate_alias_mix(ctxSEXP,
-                               components,
-                               weights,
-                               alias_sources,
-                               t,
-                               forced_component,
-                               outcome_label,
-                               params_ptr,
-                               component_cache_map);
+        mix = evaluate_alias_mix(ctxSEXP,
+                                 components,
+                                 weights,
+                                 alias_sources,
+                                 t,
+                                 forced_component,
+                                 outcome_label,
+                                 params_ptr);
     } else if (entry_type == "na_map") {
       if (!entry.containsElementNamed("na_sources")) {
         per_trial[i] = R_NegInf;
@@ -4199,7 +4073,6 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
                                 max_depth,
                                 forced_component,
                                 params_ptr,
-                                component_cache_map,
                                 has_guess_donors ? guess_donors : Rcpp::List());
     } else {
       SharedGateSpec shared_spec;
@@ -4215,7 +4088,6 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
                                        rel_tol,
                                        abs_tol,
                                        max_depth,
-                                       component_cache_map,
                                        outcome_label,
                                        has_guess_donors ? guess_donors : Rcpp::List(),
                                        &trial_eval_cache);
@@ -4418,27 +4290,6 @@ Rcpp::List build_plan_entries(SEXP ctxSEXP,
         trial_id_value = Rcpp::as<double>(tid_obj);
       }
     }
-    Rcpp::List raw_components = trial_entry["components"];
-    Rcpp::CharacterVector comp_names = raw_components.names();
-    R_xlen_t comp_count = raw_components.size();
-    Rcpp::List component_cache(comp_count);
-    for (R_xlen_t j = 0; j < comp_count; ++j) {
-      Rcpp::List comp_entry(raw_components[j]);
-      Rcpp::String comp_label = comp_names[j];
-      std::string cache_comp = (comp_label == NA_STRING) ? std::string() : std::string(comp_label);
-      std::string cache_key = comp_entry.containsElementNamed("key")
-        ? Rcpp::as<std::string>(comp_entry["key"])
-        : component_cache_key(cache_comp);
-      std::string hash_val = comp_entry.containsElementNamed("hash")
-        ? Rcpp::as<std::string>(comp_entry["hash"])
-        : "__base__";
-      component_cache[j] = Rcpp::List::create(
-        Rcpp::Named("component") = comp_label,
-        Rcpp::Named("key") = cache_key,
-        Rcpp::Named("hash") = hash_val
-      );
-    }
-    component_cache.attr("names") = comp_names;
     auto data_it = data_index.find(trial_key);
     if (data_it == data_index.end()) {
       Rcpp::stop("Missing data row for trial '%s'", trial_key);
@@ -4472,11 +4323,18 @@ Rcpp::List build_plan_entries(SEXP ctxSEXP,
                                                             component_weights_sexp);
     Rcpp::List entry;
     entry["trial_rows"] = trial_rows_df;
+    std::unique_ptr<TrialParamSet> params_holder = build_trial_params_from_df(
+      *ctx,
+      Rcpp::Nullable<Rcpp::DataFrame>(trial_rows_df)
+    );
+    if (params_holder) {
+      Rcpp::XPtr<TrialParamSet> params_ptr(params_holder.release(), true);
+      entry["trial_params_ptr"] = params_ptr;
+    }
     entry["rt"] = rt_val;
     if (forced_component_ptr) {
       entry["forced_component"] = forced_component;
     }
-    entry["component_cache"] = component_cache;
     entry["component_plan"] = component_plan;
     Rcpp::RObject shared_obj = lookup_named_entry(shared_gate_specs, outcome_label);
     if (!shared_obj.isNULL()) {
@@ -4543,6 +4401,33 @@ Rcpp::List native_plan_entries_cpp(SEXP ctxSEXP,
                             na_source_specs,
                             guess_target_specs,
                             alias_specs);
+}
+
+// [[Rcpp::export]]
+void native_refresh_trial_params_cpp(SEXP ctxSEXP,
+                                     Rcpp::List entries) {
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  for (R_xlen_t i = 0; i < entries.size(); ++i) {
+    Rcpp::List entry(entries[i]);
+    if (!entry.containsElementNamed("trial_params_ptr") ||
+        !entry.containsElementNamed("trial_rows")) {
+      continue;
+    }
+    Rcpp::RObject ptr_obj = entry["trial_params_ptr"];
+    if (ptr_obj.isNULL()) continue;
+    Rcpp::XPtr<TrialParamSet> params_ptr(ptr_obj);
+    if (params_ptr.isNULL()) continue;
+    Rcpp::DataFrame trial_rows(entry["trial_rows"]);
+    std::unique_ptr<TrialParamSet> rebuilt = build_trial_params_from_df(
+      *ctx,
+      Rcpp::Nullable<Rcpp::DataFrame>(trial_rows)
+    );
+    if (rebuilt) {
+      *params_ptr = *rebuilt;
+    } else {
+      params_ptr->acc_params.clear();
+    }
+  }
 }
 
 // [[Rcpp::export]]

@@ -19,7 +19,6 @@ source("dev/scripts/compare_likelihoods.R")
 
 build_native_plan <- function(structure, param_table) {
   prep <- AccumulatR:::.prepare_model_for_likelihood(structure$model_spec)
-  prep <- AccumulatR:::.likelihood_seed_prep_from_params(prep, param_table)
   if (is.null(prep[[".runtime"]]) || is.null(prep$.runtime$cache_bundle)) {
     prep <- AccumulatR:::.prep_set_cache_bundle(
       prep,

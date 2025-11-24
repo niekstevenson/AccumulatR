@@ -118,57 +118,30 @@ compare_log_likelihood <- function(structure,
                                    prep = NULL,
                                    trial_plan = NULL) {
   structure_obj <- AccumulatR:::.as_generator_structure(structure)
-
-  data_df$trial <- data_df$trial
-  trial_keys <- as.character(data_df$trial)
-  trial_keys[is.na(trial_keys)] <- NA_character_
-  data_row_indices <- split(seq_len(nrow(data_df)), trial_keys)
-  trial_ids <- unique(data_df$trial)
-
-  prep_base <- prep %||% AccumulatR:::.prepare_model_for_likelihood(structure_obj$model_spec)
-  if (is.null(prep_base[[".runtime"]]) || is.null(prep_base$.runtime$cache_bundle)) {
-    prep_base <- AccumulatR:::.prep_set_cache_bundle(
-      prep_base,
-      AccumulatR:::.build_likelihood_cache_bundle(prep_base)
-    )
-  }
-  plan_base <- trial_plan %||% AccumulatR:::.likelihood_build_trial_plan(
-    structure_obj,
-    params_df,
-    prep_base
+  context <- build_likelihood_context(
+    structure = structure_obj,
+    params_df = params_df,
+    data_df = data_df,
+    component_weights = component_weights,
+    prep = prep,
+    trial_plan = trial_plan
   )
-  prep_native <- AccumulatR:::.prep_native_payload(prep_base)
 
   r_path <- with_native_flags(FALSE, FALSE, {
-    log_likelihood_from_params(
-      structure_obj,
-      params_df,
-      data_df,
-      component_weights = component_weights,
-      prep = prep_base,
-      trial_plan = plan_base
-    )
+    log_likelihood_from_context(context)
   })
 
-  c_eval <- with_native_flags(TRUE, TRUE, {
-    AccumulatR:::.native_loglikelihood_batch(
-      structure = structure_obj,
-      prep = prep_native,
-      plan = plan_base,
-      trial_ids = trial_ids,
-      data_df = data_df,
-      data_row_indices = data_row_indices,
-      component_weights = component_weights
-    )
+  native_eval <- with_native_flags(TRUE, TRUE, {
+    log_likelihood_from_context(context)
   })
-  native_used <- !is.null(c_eval)
+  native_used <- !is.null(native_eval)
 
   list(
     R = r_path,
-    native = c_eval,
+    native = native_eval,
     native_batch_used = native_used,
-    loglik_diff = if (native_used) c_eval$loglik - r_path$loglik else NA_real_,
-    per_trial_diff = if (native_used) c_eval$per_trial - r_path$per_trial else NA_real_
+    loglik_diff = if (native_used) native_eval$loglik - r_path$loglik else NA_real_,
+    per_trial_diff = if (native_used) native_eval$per_trial - r_path$per_trial else NA_real_
   )
 }
 
@@ -373,26 +346,6 @@ summarize_model_performance <- function(model_spec,
   }
   cache_reset <- AccumulatR:::likelihood_cache_reset_stats
   cache_stats <- AccumulatR:::likelihood_cache_stats
-  build_prep_plan <- function() {
-    prep_full <- AccumulatR:::.prepare_model_for_likelihood(structure$model_spec)
-    if (is.null(prep_full[[".runtime"]]) || is.null(prep_full$.runtime$cache_bundle)) {
-      prep_full <- AccumulatR:::.prep_set_cache_bundle(
-        prep_full,
-        AccumulatR:::.build_likelihood_cache_bundle(prep_full)
-      )
-    }
-    plan <- AccumulatR:::.likelihood_build_trial_plan(
-      structure,
-      param_table,
-      prep_full
-    )
-    list(
-      prep = prep_full,
-      prep_native = AccumulatR:::.prep_native_payload(prep_full),
-      plan = plan
-    )
-  }
-
   patched_model <- apply_core_params_to_spec(model_spec, core_params)
   structure <- build_generator_structure(patched_model)
   single_params <- build_params_df(model_spec, core_params, n_trials = 1L)
@@ -404,42 +357,31 @@ summarize_model_performance <- function(model_spec,
   })
   param_table <- build_params_df(model_spec, core_params, n_trials = n_trials)
   data_df <- simulate_data_from_params_table(structure, param_table, seed = seed)
-  data_df$trial <- data_df$trial
-  trial_keys <- as.character(data_df$trial)
-  trial_keys[is.na(trial_keys)] <- NA_character_
-  data_row_indices <- split(seq_len(nrow(data_df)), trial_keys)
-  trial_ids <- unique(data_df$trial)
-  prep_plan_r <- build_prep_plan()
+  build_context <- function() {
+    ctx <- build_likelihood_context(
+      structure = structure,
+      params_df = param_table,
+      data_df = data_df
+    )
+    ctx
+  }
+  prep_plan_r <- build_context()
   r_eval <- NULL
   r_time <- system.time({
     cache_reset(prep_plan_r$prep)
     r_eval <- with_native_flags(FALSE, FALSE, {
-      log_likelihood_from_params(
-        structure,
-        param_table,
-        data_df,
-        prep = prep_plan_r$prep,
-        trial_plan = prep_plan_r$plan
-      )
+      log_likelihood_from_context(prep_plan_r)
     })
   })[["elapsed"]]
   r_stats <- cache_stats()
   r_metrics <- bucket_values(r_stats, "r")
 
-  prep_plan_c <- build_prep_plan()
+  prep_plan_c <- build_context()
   c_eval <- NULL
   c_time <- system.time({
     cache_reset(prep_plan_c$prep)
     c_eval <- with_native_flags(TRUE, TRUE, {
-      AccumulatR:::.native_loglikelihood_batch(
-        structure = structure,
-        prep = prep_plan_c$prep_native,
-        plan = prep_plan_c$plan,
-        trial_ids = trial_ids,
-        data_df = data_df,
-        data_row_indices = data_row_indices,
-        component_weights = NULL
-      )
+      log_likelihood_from_context(prep_plan_c)
     })
   })[["elapsed"]]
   native_used <- !is.null(c_eval)

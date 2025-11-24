@@ -24,10 +24,16 @@ collect_native_debug <- function(example_id = "example_5_timeout_guess",
   data_df <- simulate_data_from_params_table(structure, params_df, seed = seed)
 
   prep <- AccumulatR:::.prepare_model_for_likelihood(structure$model_spec)
-  plan <- AccumulatR:::.likelihood_build_trial_plan(structure, params_df, prep)
-  trial_ids <- unique(data_df$trial)
-  data_row_indices <- split(seq_len(nrow(data_df)), as.character(data_df$trial))
-  trial_lookup <- split(data_df, as.character(data_df$trial))
+  ctx <- build_likelihood_context(
+    structure = structure,
+    params_df = params_df,
+    data_df = data_df,
+    prep = prep
+  )
+  plan <- ctx$plan
+  trial_ids <- ctx$trial_ids
+  data_row_indices <- ctx$data_row_indices
+  trial_lookup <- split(ctx$data_df, as.character(ctx$data_df$trial))
   trial_frames <- lapply(trial_ids, function(tid) trial_lookup[[as.character(tid)]])
 
   r_eval <- with(list(), {
@@ -38,19 +44,17 @@ collect_native_debug <- function(example_id = "example_5_timeout_guess",
 
   native_eval <- AccumulatR:::.native_loglikelihood_batch(
     structure = structure,
-    prep = prep,
+    prep = ctx$prep,
     plan = plan,
-    trial_ids = trial_ids,
-    data_df = data_df,
-    data_row_indices = data_row_indices
+    trial_ids = trial_ids
   )
 
   builder <- AccumulatR:::.build_native_trial_entries(
     structure = structure,
-    prep = prep,
+    prep = ctx$prep,
     plan = plan,
     trial_ids = trial_ids,
-    data_df = data_df,
+    data_df = ctx$data_df,
     data_row_indices = data_row_indices,
     component_weights = NULL
   )
@@ -72,7 +76,7 @@ collect_native_debug <- function(example_id = "example_5_timeout_guess",
     )
     manual_native[[i]] <- log(
       AccumulatR:::.native_trial_mixture_eval(
-        prep = prep,
+        prep = ctx$prep,
         outcome_label = outcome_lbl,
         rt_val = rt_val,
         component_plan = comp_plan,

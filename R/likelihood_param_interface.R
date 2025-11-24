@@ -1,4 +1,4 @@
-.likelihood_context_structure <- function(structure, params_df,
+.likelihood_context_structure <- function(structure, params_df, data_df,
                                           component_weights = NULL,
                                           prep = NULL,
                                           trial_plan = NULL,
@@ -6,10 +6,28 @@
   if (is.null(params_df) || nrow(params_df) == 0L) {
     stop("Parameter data frame must contain at least one row", call. = FALSE)
   }
+  if (is.null(data_df) || nrow(data_df) == 0L) {
+    stop("Data frame must contain outcome/rt per trial", call. = FALSE)
+  }
   structure <- .as_generator_structure(structure)
   if (is.null(structure$model_spec)) {
     stop("generator structure must include model_spec; rebuild with build_generator_structure")
   }
+  data_df <- as.data.frame(data_df)
+  required_cols <- c("trial", "outcome", "rt")
+  missing_cols <- setdiff(required_cols, names(data_df))
+  if (length(missing_cols) > 0L) {
+    stop(sprintf("Data frame must include columns: %s", paste(missing_cols, collapse = ", ")), call. = FALSE)
+  }
+  data_df$trial <- data_df$trial
+  data_df$outcome <- as.character(data_df$outcome)
+  data_df$rt <- as.numeric(data_df$rt)
+  if ("component" %in% names(data_df)) {
+    data_df$component <- as.character(data_df$component)
+  }
+  trial_lookup_keys <- as.character(data_df$trial %||% NA)
+  data_row_indices <- split(seq_len(nrow(data_df)), trial_lookup_keys)
+  trial_ids <- unique(data_df$trial)
   if (!is.null(native_bundle)) {
     prep <- native_bundle$prep %||% prep
   }
@@ -21,18 +39,76 @@
     )
   }
   plan <- trial_plan %||% .likelihood_build_trial_plan(structure, params_df, prep_eval_base)
+  if (is.null(plan$.native_cache)) {
+    plan$.native_cache <- new.env(parent = emptyenv())
+  }
   native_ctx <- .prep_native_context(prep_eval_base)
+  if (!inherits(native_ctx, "externalptr")) {
+    native_ctx <- NULL
+  }
+  plan_cache <- plan$.native_cache
+  plan_cache$entries <- NULL
+  plan_cache$entry_names <- NULL
+  plan_cache$eval_config <- NULL
+  plan_cache$component_weights_df <- NULL
+  component_weights_df <- if (!is.null(component_weights)) as.data.frame(component_weights) else NULL
+  if (!is.null(native_ctx)) {
+    metadata <- .likelihood_trial_metadata(structure, prep_eval_base)
+    if (!is.null(metadata)) {
+      plan_keys_raw <- as.character((plan$order %||% names(plan$trials)) %||% character(0))
+      if (length(plan_keys_raw) == 0L) {
+        stop("Plan contains no trials", call. = FALSE)
+      }
+      data_trial_keys <- as.character(data_df$trial %||% NA)
+      entries_all <- tryCatch(
+        native_plan_entries_cpp(
+          native_ctx,
+          structure,
+          plan,
+          plan_keys_raw,
+          data_trial_keys,
+          data_df,
+          component_weights_df,
+          metadata$shared_gate_specs %||% list(),
+          metadata$na_source_specs %||% list(),
+          metadata$guess_target_specs %||% list(),
+          metadata$alias_specs %||% list()
+        ),
+        error = function(e) NULL
+      )
+      if (!is.null(entries_all)) {
+        entry_names <- names(entries_all)
+        if (is.null(entry_names)) {
+          entry_names <- plan_keys_raw
+        }
+        entry_names_norm <- entry_names
+        entry_names_norm[is.na(entry_names_norm)] <- "NA"
+        plan_cache$entries <- entries_all
+        plan_cache$entry_names <- entry_names_norm
+        plan_cache$eval_config <- list(
+          default_deadline = as.numeric(metadata$default_deadline),
+          rel_tol = as.numeric(metadata$rel_tol),
+          abs_tol = as.numeric(metadata$abs_tol),
+          max_depth = as.integer(metadata$max_depth)
+        )
+        plan_cache$component_weights_df <- component_weights_df
+      }
+    }
+  }
   structure(list(
     structure = structure,
     params_df = params_df,
     prep = prep_eval_base,
     plan = plan,
     component_weights = component_weights,
-    native_ctx = native_ctx
+    native_ctx = native_ctx,
+    data_df = data_df,
+    data_row_indices = data_row_indices,
+    trial_ids = trial_ids
   ), class = "likelihood_context")
 }
 
-build_likelihood_context <- function(structure, params_df,
+build_likelihood_context <- function(structure, params_df, data_df,
                                      component_weights = NULL,
                                      prep = NULL,
                                      trial_plan = NULL,
@@ -40,6 +116,7 @@ build_likelihood_context <- function(structure, params_df,
   .likelihood_context_structure(
     structure = structure,
     params_df = params_df,
+    data_df = data_df,
     component_weights = component_weights,
     prep = prep,
     trial_plan = trial_plan,
@@ -128,7 +205,8 @@ build_likelihood_context <- function(structure, params_df,
   trials <- trials[trial_order]
   list(
     order = trial_order,
-    trials = trials
+    trials = trials,
+    .native_cache = new.env(parent = emptyenv())
   )
 }
 
@@ -579,66 +657,26 @@ build_likelihood_context <- function(structure, params_df,
   )
 }
 
-.native_loglikelihood_batch <- function(structure, prep, plan, trial_ids,
-                                        data_df, data_row_indices,
-                                        component_weights = NULL) {
+.native_loglikelihood_batch <- function(structure, prep, plan, trial_ids) {
   native_ctx <- .prep_native_context(prep)
   if (!inherits(native_ctx, "externalptr")) return(NULL)
-  metadata <- .likelihood_trial_metadata(structure, prep)
-  if (is.null(metadata)) return(NULL)
-  component_weights_df <- if (!is.null(component_weights)) as.data.frame(component_weights) else NULL
-  if (!"trial" %in% names(data_df)) {
-    stop("Data frame must include a 'trial' column")
+  cache <- plan$.native_cache %||% NULL
+  entries_all <- cache$entries %||% NULL
+  entry_names_norm <- cache$entry_names %||% NULL
+  eval_cfg <- cache$eval_config %||% NULL
+  component_weights_df <- cache$component_weights_df %||% NULL
+  if (is.null(entries_all) || is.null(entry_names_norm) || is.null(eval_cfg)) {
+    stop("Plan is missing cached native entries; rebuild the likelihood context with data_df", call. = FALSE)
   }
-  if (!"outcome" %in% names(data_df)) {
-    stop("Data frame must include an 'outcome' column")
-  }
-  if (!"rt" %in% names(data_df)) {
-    stop("Data frame must include an 'rt' column")
-  }
-  data_df$trial <- data_df$trial
-  data_df$outcome <- as.character(data_df$outcome)
-  data_df$rt <- as.numeric(data_df$rt)
-  if ("component" %in% names(data_df)) {
-    data_df$component <- as.character(data_df$component)
-  }
-  normalize_keys <- function(keys) {
-    vals <- as.character(keys %||% NA)
-    vals[is.na(vals)] <- "NA"
-    vals
-  }
-  trial_keys_raw <- as.character(trial_ids %||% NA)
-  trial_keys_norm <- normalize_keys(trial_ids)
-  data_trial_keys <- as.character(data_df$trial %||% NA)
-  plan_keys_raw <- as.character((plan$order %||% names(plan$trials)) %||% character(0))
-  if (length(plan_keys_raw) == 0L) {
-    stop("Plan contains no trials")
-  }
-  entries_all <- native_plan_entries_cpp(
-    native_ctx,
-    structure,
-    plan,
-    plan_keys_raw,
-    data_trial_keys,
-    data_df,
-    component_weights_df,
-    metadata$shared_gate_specs %||% list(),
-    metadata$na_source_specs %||% list(),
-    metadata$guess_target_specs %||% list(),
-    metadata$alias_specs %||% list()
-  )
-  entry_names <- names(entries_all)
-  if (is.null(entry_names)) {
-    entry_names <- plan_keys_raw
-  }
-  entry_names_norm <- entry_names
   entry_names_norm[is.na(entry_names_norm)] <- "NA"
   selected_entries <- entries_all
-  if (length(trial_keys_norm) > 0L) {
+  if (!is.null(trial_ids) && length(trial_ids) > 0L) {
+    trial_keys_norm <- as.character(trial_ids %||% NA)
+    trial_keys_norm[is.na(trial_keys_norm)] <- "NA"
     idx <- match(trial_keys_norm, entry_names_norm)
     if (any(is.na(idx))) {
       missing_keys <- unique(trial_keys_norm[is.na(idx)])
-      stop(sprintf("Missing native entries for: %s", paste(missing_keys, collapse = ", ")))
+      stop(sprintf("Missing native entries for: %s", paste(missing_keys, collapse = ", ")), call. = FALSE)
     }
     selected_entries <- entries_all[idx]
     names(selected_entries) <- NULL
@@ -649,10 +687,10 @@ build_likelihood_context <- function(structure, params_df,
       structure,
       selected_entries,
       component_weights_df,
-      as.numeric(metadata$default_deadline %||% Inf),
-      as.numeric(metadata$rel_tol %||% .integrate_rel_tol()),
-      as.numeric(metadata$abs_tol %||% .integrate_abs_tol()),
-      as.integer(metadata$max_depth %||% 12L)
+      as.numeric(eval_cfg$default_deadline %||% Inf),
+      as.numeric(eval_cfg$rel_tol %||% .integrate_rel_tol()),
+      as.numeric(eval_cfg$abs_tol %||% .integrate_abs_tol()),
+      as.integer(eval_cfg$max_depth %||% 12L)
     ),
     error = function(e) NULL
   )
@@ -725,34 +763,25 @@ build_likelihood_context <- function(structure, params_df,
   total
 }
 
-.ensure_trial_columns <- function(data_df) {
-  if (!"trial" %in% names(data_df)) {
-    stop("Data frame must include a 'trial' column")
-  }
-  data_df$trial <- data_df$trial
-  if ("component" %in% names(data_df)) {
-    data_df$component <- as.character(data_df$component)
-  }
-  data_df
-}
-
 log_likelihood_from_context <- function(likelihood_context,
-                                        data_df,
                                         component_weights = NULL) {
   ctx <- .validate_likelihood_context(likelihood_context)
-  if (is.null(data_df) || nrow(data_df) == 0L) {
-    stop("Data frame must contain outcome/rt per trial")
-  }
   structure <- ctx$structure
   params_df <- ctx$params_df
   prep_eval_base <- ctx$prep
   plan <- ctx$plan
-  comp_weights <- component_weights %||% ctx$component_weights
+  ctx_weights <- ctx$component_weights
+  if (!is.null(component_weights) && !identical(component_weights, ctx_weights)) {
+    stop("component_weights overrides must be supplied when building the context", call. = FALSE)
+  }
+  comp_weights <- ctx_weights
   comp_ids <- structure$components$component_id
-  data_df <- .ensure_trial_columns(data_df)
-  trial_lookup_keys <- as.character(data_df$trial %||% NA)
-  data_row_indices <- split(seq_len(nrow(data_df)), trial_lookup_keys)
-  trial_ids <- unique(data_df$trial)
+  data_df <- ctx$data_df
+  data_row_indices <- ctx$data_row_indices
+  trial_ids <- ctx$trial_ids
+  if (is.null(data_df) || length(data_row_indices) == 0L || length(trial_ids) == 0L) {
+    stop("Likelihood context is missing cached trial data; rebuild with data_df", call. = FALSE)
+  }
   use_native_rows <- isTRUE(getOption("uuber.use.native.param.rows", TRUE))
   batch_res <- NULL
   if (use_native_rows) {
@@ -760,10 +789,7 @@ log_likelihood_from_context <- function(likelihood_context,
       structure = structure,
       prep = prep_eval_base,
       plan = plan,
-      trial_ids = trial_ids,
-      data_df = data_df,
-      data_row_indices = data_row_indices,
-      component_weights = comp_weights
+      trial_ids = trial_ids
     )
   }
   if (!is.null(batch_res)) {
@@ -834,6 +860,7 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
   ctx <- build_likelihood_context(
     structure = structure,
     params_df = params_df,
+    data_df = data_df,
     component_weights = component_weights,
     prep = prep,
     trial_plan = trial_plan,
@@ -841,7 +868,6 @@ log_likelihood_from_params <- function(structure, params_df, data_df,
   )
   log_likelihood_from_context(
     ctx,
-    data_df = data_df,
     component_weights = component_weights
   )
 }
@@ -854,29 +880,17 @@ log_likelihood_from_params_buffer <- function(structure, params_df, data_df,
   ctx <- build_likelihood_context(
     structure = structure,
     params_df = params_df,
+    data_df = data_df,
     component_weights = component_weights,
     prep = prep,
     trial_plan = trial_plan,
     native_bundle = native_bundle
   )
-  if (!"trial" %in% names(data_df)) {
-    stop("Data frame must include a 'trial' column")
-  }
-  data_df$trial <- data_df$trial
-  if ("component" %in% names(data_df)) {
-    data_df$component <- as.character(data_df$component)
-  }
-  trial_lookup_keys <- as.character(data_df$trial %||% NA)
-  data_row_indices <- split(seq_len(nrow(data_df)), trial_lookup_keys)
-  trial_ids <- unique(data_df$trial)
   batch_res <- .native_loglikelihood_batch(
     structure = ctx$structure,
     prep = ctx$prep,
     plan = ctx$plan,
-    trial_ids = trial_ids,
-    data_df = data_df,
-    data_row_indices = data_row_indices,
-    component_weights = component_weights
+    trial_ids = ctx$trial_ids
   )
   if (is.null(batch_res)) {
     stop("native log-likelihood batch evaluation failed; rebuild the trial plan or inspect params_df")
@@ -1078,4 +1092,48 @@ observed_response_probabilities_from_params <- function(structure, params_df,
     }
   }
   result
+}
+
+refresh_likelihood_context_params <- function(likelihood_context, params_df) {
+  ctx <- .validate_likelihood_context(likelihood_context)
+  if (is.null(params_df) || nrow(params_df) == 0L) {
+    stop("Parameter data frame must contain at least one row", call. = FALSE)
+  }
+  params_df <- as.data.frame(params_df)
+  ctx$params_df <- params_df
+  cache <- ctx$plan$.native_cache %||% NULL
+  entries <- cache$entries %||% NULL
+  eval_cfg <- cache$eval_config %||% NULL
+  comp_w <- cache$component_weights_df %||% NULL
+  native_ctx <- ctx$native_ctx
+  if (!is.null(entries) && inherits(native_ctx, "externalptr") && !is.null(eval_cfg)) {
+    cache$entries <- native_update_entries_from_params_cpp(native_ctx, entries, params_df)
+    ctx$plan$.native_cache <- cache
+    return(ctx)
+  }
+  ctx$plan <- .likelihood_plan_refresh_params(ctx$plan, params_df)
+  ctx$plan <- .native_refresh_plan_entries(ctx$plan, native_ctx)
+  ctx
+}
+
+native_loglikelihood_param_repeat <- function(likelihood_context, params_list) {
+  ctx <- .validate_likelihood_context(likelihood_context)
+  cache <- ctx$plan$.native_cache %||% NULL
+  entries <- cache$entries %||% NULL
+  eval_cfg <- cache$eval_config %||% NULL
+  if (is.null(entries) || is.null(eval_cfg) || !inherits(ctx$native_ctx, "externalptr")) {
+    stop("Cached native entries are required; build the context with data_df first", call. = FALSE)
+  }
+  params_list <- lapply(params_list, as.data.frame)
+  native_loglik_param_repeat_cpp(
+    ctx$native_ctx,
+    ctx$structure,
+    entries,
+    cache$component_weights_df %||% NULL,
+    params_list,
+    as.numeric(eval_cfg$default_deadline %||% Inf),
+    as.numeric(eval_cfg$rel_tol %||% .integrate_rel_tol()),
+    as.numeric(eval_cfg$abs_tol %||% .integrate_abs_tol()),
+    as.integer(eval_cfg$max_depth %||% 12L)
+  )
 }

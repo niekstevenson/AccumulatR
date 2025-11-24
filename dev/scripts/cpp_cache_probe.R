@@ -91,13 +91,10 @@ run_cpp_evals <- function(example_id,
   for (i in seq_len(reps)) {
     perturbed_core <- perturb_core_params(core_params, seed = seed + i)
     iter_table <- build_params_df(model_spec, perturbed_core, n_trials = n_trials)
-    context <- build_likelihood_context(structure, iter_table)
+    context <- build_likelihood_context(structure, iter_table, data_df = data_df)
     prep <- context$prep
     AccumulatR:::likelihood_cache_reset_stats(prep)
-    invisible(log_likelihood_from_context(
-      context,
-      data_df = data_df
-    ))
+    invisible(log_likelihood_from_context(context))
     stats_rows[[i]] <- cbind(
       data.frame(example = example_id, iteration = i),
       extract_native_stats(prep)

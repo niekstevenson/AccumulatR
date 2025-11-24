@@ -17,7 +17,7 @@ source("dev/scripts/compare_likelihoods.R")
 # example_ids <- names(new_api_examples)[c(1:11, 13:16, 18)]
 # example_ids <- names(new_api_examples)[c(5, 15)]
 
-example_ids <- names(new_api_examples)[1:6]
+example_ids <- names(new_api_examples)[1:3]
 
 summary_table <- summarize_example_models(
   model_list = new_api_examples,

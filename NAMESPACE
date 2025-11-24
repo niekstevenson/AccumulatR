@@ -47,6 +47,8 @@ export(log_likelihood_from_params)
 export(log_likelihood_from_params_buffer)
 export(build_buffer_trial_entries)
 export(observed_response_probabilities_from_params)
+export(refresh_likelihood_context_params)
+export(native_loglikelihood_param_repeat)
 
 export(is_model_tables)
 export(model_to_tables)

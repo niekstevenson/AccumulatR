@@ -4184,13 +4184,6 @@ Rcpp::List native_loglik_from_buffer_cpp(SEXP ctxSEXP,
 
 namespace {
 
-inline std::string normalize_trial_key(const Rcpp::CharacterVector& vec, R_xlen_t idx) {
-  if (idx < 0 || idx >= vec.size()) return "NA";
-  Rcpp::String val(vec[idx]);
-  if (val == NA_STRING) return "NA";
-  return std::string(val);
-}
-
 std::unordered_map<std::string, int> build_trial_index(const Rcpp::CharacterVector& keys) {
   std::unordered_map<std::string, int> map;
   for (R_xlen_t i = 0; i < keys.size(); ++i) {
@@ -4219,8 +4212,158 @@ Rcpp::RObject lookup_named_entry(const Rcpp::List& source, const std::string& ke
 
 } // namespace
 
-// [[Rcpp::export]]
 namespace {
+
+std::string normalize_plan_key(const Rcpp::CharacterVector& keys, R_xlen_t idx) {
+  if (idx < 0 || idx >= keys.size()) return "NA";
+  Rcpp::String val(keys[idx]);
+  return (val == NA_STRING) ? "NA" : std::string(val);
+}
+
+Rcpp::List resolve_component_plan(SEXP structure_sexp,
+                                  const Rcpp::List& structure,
+                                  const Rcpp::DataFrame* trial_rows_ptr,
+                                  double trial_id_value,
+                                  const std::string* forced_component_ptr,
+                                  const Rcpp::DataFrame* component_weights_ptr,
+                                  SEXP trial_rows_sexp,
+                                  SEXP component_weights_sexp) {
+  return fetch_component_plan_cached(structure_sexp,
+                                     structure,
+                                     trial_rows_ptr,
+                                     trial_id_value,
+                                     forced_component_ptr,
+                                     component_weights_ptr,
+                                     trial_rows_sexp,
+                                     component_weights_sexp);
+}
+
+SEXP build_trial_params_sexp(uuber::NativeContext& ctx,
+                             const Rcpp::DataFrame& trial_rows_df) {
+  std::unique_ptr<TrialParamSet> params_holder = build_trial_params_from_df(
+    ctx,
+    Rcpp::Nullable<Rcpp::DataFrame>(trial_rows_df)
+  );
+  if (!params_holder) {
+    return R_NilValue;
+  }
+  Rcpp::XPtr<TrialParamSet> ptr(params_holder.release(), true);
+  return ptr;
+}
+
+Rcpp::List make_trial_entry(uuber::NativeContext& ctx,
+                            const Rcpp::List& structure,
+                            SEXP structure_sexp,
+                            const Rcpp::List& trials,
+                            const std::unordered_map<std::string, int>& trial_index_map,
+                            const std::unordered_map<std::string, int>& data_index,
+                            const std::string& trial_key,
+                            const Rcpp::CharacterVector& outcome_col,
+                            Rcpp::NumericVector& rt_col,
+                            bool has_component,
+                            Rcpp::CharacterVector& component_col,
+                            const Rcpp::DataFrame* component_weights_ptr,
+                            SEXP component_weights_sexp,
+                            const Rcpp::List& shared_gate_specs,
+                            const Rcpp::List& na_source_specs,
+                            const Rcpp::List& guess_target_specs,
+                            const Rcpp::List& alias_specs) {
+  auto trial_it = trial_index_map.find(trial_key);
+  if (trial_it == trial_index_map.end()) {
+    Rcpp::stop("Missing trial '%s' in plan", trial_key);
+  }
+  Rcpp::List trial_entry(trials[trial_it->second]);
+  Rcpp::RObject rows_obj = trial_entry.containsElementNamed("rows")
+    ? trial_entry["rows"]
+    : R_NilValue;
+  Rcpp::DataFrame trial_rows_df = rows_obj.isNULL()
+    ? Rcpp::DataFrame(Rcpp::List::create())
+    : Rcpp::DataFrame(rows_obj);
+  const Rcpp::DataFrame* trial_rows_ptr = rows_obj.isNULL() ? nullptr : &trial_rows_df;
+  double trial_id_value = NA_REAL;
+  if (trial_entry.containsElementNamed("trial_id")) {
+    Rcpp::RObject tid_obj = trial_entry["trial_id"];
+    if (!tid_obj.isNULL()) {
+      trial_id_value = Rcpp::as<double>(tid_obj);
+    }
+  }
+  auto data_it = data_index.find(trial_key);
+  if (data_it == data_index.end()) {
+    Rcpp::stop("Missing data row for trial '%s'", trial_key);
+  }
+  int data_idx = data_it->second;
+  std::string outcome_label;
+  bool outcome_is_na = false;
+  Rcpp::String outcome_value(outcome_col[data_idx]);
+  if (outcome_value == NA_STRING) {
+    outcome_is_na = true;
+  } else {
+    outcome_label = std::string(outcome_value.get_cstring());
+    if (outcome_label == "NA") {
+      outcome_is_na = true;
+    }
+  }
+  double rt_val = rt_col[data_idx];
+  std::string forced_component;
+  const std::string* forced_component_ptr = nullptr;
+  if (has_component && component_col[data_idx] != NA_STRING) {
+    forced_component = Rcpp::as<std::string>(component_col[data_idx]);
+    forced_component_ptr = &forced_component;
+  }
+  Rcpp::List entry;
+  entry["trial_rows"] = trial_rows_df;
+  Rcpp::RObject params_ptr = build_trial_params_sexp(ctx, trial_rows_df);
+  if (!params_ptr.isNULL()) {
+    entry["trial_params_ptr"] = params_ptr;
+  }
+  entry["rt"] = rt_val;
+  if (forced_component_ptr) {
+    entry["forced_component"] = forced_component;
+  }
+  entry["component_plan"] = resolve_component_plan(structure_sexp,
+                                                   structure,
+                                                   trial_rows_ptr,
+                                                   trial_id_value,
+                                                   forced_component_ptr,
+                                                   component_weights_ptr,
+                                                   rows_obj,
+                                                   component_weights_sexp);
+  Rcpp::RObject shared_obj = lookup_named_entry(shared_gate_specs, outcome_label);
+  if (!shared_obj.isNULL()) {
+    entry["shared_gate"] = shared_obj;
+  }
+  std::string guess_key = outcome_is_na ? "NA" : outcome_label;
+  Rcpp::RObject guess_obj = lookup_named_entry(guess_target_specs, guess_key);
+  if (!guess_obj.isNULL()) {
+    entry["guess_donors"] = guess_obj;
+  }
+  if (outcome_is_na) {
+    if (na_source_specs.size() == 0) {
+      Rcpp::stop("NA mapping requested but na_source_specs missing");
+    }
+    entry["type"] = "na_map";
+    entry["na_sources"] = na_source_specs;
+  } else {
+    Rcpp::RObject alias_obj = lookup_named_entry(alias_specs, outcome_label);
+    if (!alias_obj.isNULL()) {
+      entry["type"] = "alias_sum";
+      entry["alias_sources"] = alias_obj;
+      entry["outcome_label"] = outcome_label;
+    } else {
+      auto info_it = ctx.outcome_info.find(outcome_label);
+      if (info_it == ctx.outcome_info.end()) {
+        Rcpp::stop("Outcome '%s' missing from context", outcome_label);
+      }
+      const auto& info = info_it->second;
+      entry["type"] = "direct";
+      entry["node_id"] = info.node_id;
+      entry["competitor_ids"] = Rcpp::IntegerVector(info.competitor_ids.begin(),
+                                                    info.competitor_ids.end());
+      entry["outcome_label"] = outcome_label;
+    }
+  }
+  return entry;
+}
 
 Rcpp::List build_plan_entries(SEXP ctxSEXP,
                               Rcpp::List structure,
@@ -4270,107 +4413,24 @@ Rcpp::List build_plan_entries(SEXP ctxSEXP,
   SEXP structure_sexp = structure;
   Rcpp::List entries(keys.size());
   for (R_xlen_t i = 0; i < keys.size(); ++i) {
-    std::string trial_key = normalize_trial_key(keys, i);
-    auto trial_it = trial_index_map.find(trial_key);
-    if (trial_it == trial_index_map.end()) {
-      Rcpp::stop("Missing trial '%s' in plan", trial_key);
-    }
-    Rcpp::List trial_entry(trials[trial_it->second]);
-    Rcpp::RObject rows_obj = trial_entry.containsElementNamed("rows")
-      ? trial_entry["rows"]
-      : R_NilValue;
-    Rcpp::DataFrame trial_rows_df = rows_obj.isNULL()
-      ? Rcpp::DataFrame(Rcpp::List::create())
-      : Rcpp::DataFrame(rows_obj);
-    const Rcpp::DataFrame* trial_rows_ptr = rows_obj.isNULL() ? nullptr : &trial_rows_df;
-    double trial_id_value = NA_REAL;
-    if (trial_entry.containsElementNamed("trial_id")) {
-      Rcpp::RObject tid_obj = trial_entry["trial_id"];
-      if (!tid_obj.isNULL()) {
-        trial_id_value = Rcpp::as<double>(tid_obj);
-      }
-    }
-    auto data_it = data_index.find(trial_key);
-    if (data_it == data_index.end()) {
-      Rcpp::stop("Missing data row for trial '%s'", trial_key);
-    }
-    int data_idx = data_it->second;
-    std::string outcome_label;
-    bool outcome_is_na = false;
-    if (outcome_col[data_idx] == NA_STRING) {
-      outcome_is_na = true;
-    } else {
-      outcome_label = Rcpp::as<std::string>(outcome_col[data_idx]);
-      if (outcome_label == "NA") {
-        outcome_is_na = true;
-      }
-    }
-    double rt_val = rt_col[data_idx];
-    std::string forced_component;
-    const std::string* forced_component_ptr = nullptr;
-    if (has_component && component_col[data_idx] != NA_STRING) {
-      forced_component = Rcpp::as<std::string>(component_col[data_idx]);
-      forced_component_ptr = &forced_component;
-    }
-    SEXP trial_rows_sexp = rows_obj;
-    Rcpp::List component_plan = fetch_component_plan_cached(structure_sexp,
-                                                            structure,
-                                                            trial_rows_ptr,
-                                                            trial_id_value,
-                                                            forced_component_ptr,
-                                                            component_weights_ptr,
-                                                            trial_rows_sexp,
-                                                            component_weights_sexp);
-    Rcpp::List entry;
-    entry["trial_rows"] = trial_rows_df;
-    std::unique_ptr<TrialParamSet> params_holder = build_trial_params_from_df(
-      *ctx,
-      Rcpp::Nullable<Rcpp::DataFrame>(trial_rows_df)
-    );
-    if (params_holder) {
-      Rcpp::XPtr<TrialParamSet> params_ptr(params_holder.release(), true);
-      entry["trial_params_ptr"] = params_ptr;
-    }
-    entry["rt"] = rt_val;
-    if (forced_component_ptr) {
-      entry["forced_component"] = forced_component;
-    }
-    entry["component_plan"] = component_plan;
-    Rcpp::RObject shared_obj = lookup_named_entry(shared_gate_specs, outcome_label);
-    if (!shared_obj.isNULL()) {
-      entry["shared_gate"] = shared_obj;
-    }
-    std::string guess_key = outcome_is_na ? "NA" : outcome_label;
-    Rcpp::RObject guess_obj = lookup_named_entry(guess_target_specs, guess_key);
-    if (!guess_obj.isNULL()) {
-      entry["guess_donors"] = guess_obj;
-    }
-    if (outcome_is_na) {
-      if (na_source_specs.size() == 0) {
-        Rcpp::stop("NA mapping requested but na_source_specs missing");
-      }
-      entry["type"] = "na_map";
-      entry["na_sources"] = na_source_specs;
-    } else {
-      Rcpp::RObject alias_obj = lookup_named_entry(alias_specs, outcome_label);
-      if (!alias_obj.isNULL()) {
-        entry["type"] = "alias_sum";
-        entry["alias_sources"] = alias_obj;
-        entry["outcome_label"] = outcome_label;
-      } else {
-        auto info_it = ctx->outcome_info.find(outcome_label);
-        if (info_it == ctx->outcome_info.end()) {
-          Rcpp::stop("Outcome '%s' missing from context", outcome_label);
-        }
-        const auto& info = info_it->second;
-        entry["type"] = "direct";
-        entry["node_id"] = info.node_id;
-        entry["competitor_ids"] = Rcpp::IntegerVector(info.competitor_ids.begin(),
-                                                      info.competitor_ids.end());
-        entry["outcome_label"] = outcome_label;
-      }
-    }
-    entries[i] = entry;
+    std::string trial_key = normalize_plan_key(keys, i);
+    entries[i] = make_trial_entry(*ctx,
+                                  structure,
+                                  structure_sexp,
+                                  trials,
+                                  trial_index_map,
+                                  data_index,
+                                  trial_key,
+                                  outcome_col,
+                                  rt_col,
+                                  has_component,
+                                  component_col,
+                                  component_weights_ptr,
+                                  component_weights_sexp,
+                                  shared_gate_specs,
+                                  na_source_specs,
+                                  guess_target_specs,
+                                  alias_specs);
   }
   entries.attr("names") = keys;
   return entries;
@@ -4428,6 +4488,184 @@ void native_refresh_trial_params_cpp(SEXP ctxSEXP,
       params_ptr->acc_params.clear();
     }
   }
+}
+
+// [[Rcpp::export]]
+Rcpp::List native_update_entries_from_params_cpp(SEXP ctxSEXP,
+                                                 Rcpp::List entries,
+                                                 SEXP params_obj) {
+  bool is_df = Rf_isFrame(params_obj);
+  bool is_matrix = Rf_isMatrix(params_obj) && TYPEOF(params_obj) == REALSXP;
+  if (!is_df && !is_matrix) {
+    Rcpp::stop("params must be a data.frame or numeric matrix");
+  }
+
+  Rcpp::CharacterVector trial_chr;
+  int nrow_params = 0;
+  if (is_df) {
+    Rcpp::DataFrame params_df(params_obj);
+    if (!params_df.containsElementNamed("trial")) {
+      Rcpp::stop("params_df must include a 'trial' column");
+    }
+    trial_chr = Rcpp::as<Rcpp::CharacterVector>(
+      Rcpp::wrap(Rf_coerceVector(params_df["trial"], STRSXP))
+    );
+    nrow_params = params_df.nrows();
+  } else {
+    // matrix path must carry a trial column separately; enforce via attribute
+    Rcpp::NumericMatrix params_mat(params_obj);
+    nrow_params = params_mat.nrow();
+    SEXP trial_attr = Rf_getAttrib(params_obj, Rf_install("trial"));
+    if (Rf_isNull(trial_attr)) {
+      Rcpp::stop("numeric matrix params must carry a 'trial' attribute");
+    }
+    trial_chr = Rcpp::as<Rcpp::CharacterVector>(
+      Rcpp::wrap(Rf_coerceVector(trial_attr, STRSXP))
+    );
+    if (trial_chr.size() != nrow_params) {
+      Rcpp::stop("trial attribute length must match matrix rows");
+    }
+  }
+
+  // Map trial key -> row indices
+  std::unordered_map<std::string, std::vector<int>> trial_index;
+  for (R_xlen_t i = 0; i < trial_chr.size(); ++i) {
+    std::string key = (trial_chr[i] == NA_STRING) ? std::string("NA")
+                                                  : Rcpp::as<std::string>(trial_chr[i]);
+    trial_index[key].push_back(static_cast<int>(i));
+  }
+
+  // Column lookup for numeric columns only
+  std::unordered_map<std::string, int> param_col_index;
+  if (is_df) {
+    Rcpp::DataFrame params_df(params_obj);
+    Rcpp::CharacterVector param_names = params_df.names();
+    for (R_xlen_t i = 0; i < param_names.size(); ++i) {
+      if (param_names[i] == NA_STRING) continue;
+      SEXP col = params_df[i];
+      if (TYPEOF(col) != REALSXP && TYPEOF(col) != INTSXP) continue;
+      param_col_index[Rcpp::as<std::string>(param_names[i])] = static_cast<int>(i);
+    }
+  } else {
+    Rcpp::CharacterVector param_names = Rcpp::as<Rcpp::CharacterVector>(
+      Rcpp::wrap(Rf_getAttrib(params_obj, R_NamesSymbol))
+    );
+    for (R_xlen_t i = 0; i < param_names.size(); ++i) {
+      if (param_names[i] == NA_STRING) continue;
+      param_col_index[Rcpp::as<std::string>(param_names[i])] = static_cast<int>(i);
+    }
+  }
+
+  Rcpp::CharacterVector entry_names = entries.names();
+  if (entry_names.size() != entries.size()) {
+    Rcpp::stop("Entries must be a named list");
+  }
+
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  for (R_xlen_t i = 0; i < entries.size(); ++i) {
+    std::string trial_key = "NA";
+    if (entry_names[i] != NA_STRING) {
+      trial_key = Rcpp::as<std::string>(entry_names[i]);
+    }
+    auto it = trial_index.find(trial_key);
+    if (it == trial_index.end()) {
+      Rcpp::stop("No parameter rows for trial '%s'", trial_key.c_str());
+    }
+    const std::vector<int>& idx = it->second;
+
+    Rcpp::List entry(entries[i]);
+    if (!entry.containsElementNamed("trial_rows")) {
+      Rcpp::stop("Entry missing trial_rows");
+    }
+    Rcpp::DataFrame trial_rows(entry["trial_rows"]);
+    if (trial_rows.nrows() != static_cast<int>(idx.size())) {
+      Rcpp::stop("Mismatch in trial row counts for trial '%s'", trial_key.c_str());
+    }
+
+    Rcpp::CharacterVector trial_cols = trial_rows.names();
+    for (R_xlen_t c = 0; c < trial_cols.size(); ++c) {
+      if (trial_cols[c] == NA_STRING) continue;
+      std::string col_name = Rcpp::as<std::string>(trial_cols[c]);
+      auto src_it = param_col_index.find(col_name);
+      if (src_it == param_col_index.end()) continue;
+      SEXP dst_col = trial_rows[c];
+      if (TYPEOF(dst_col) != REALSXP && TYPEOF(dst_col) != INTSXP) {
+        continue; // only update numeric columns
+      }
+      if (is_df) {
+        Rcpp::DataFrame params_df(params_obj);
+        SEXP src_col = params_df[src_it->second];
+        if (TYPEOF(src_col) != REALSXP && TYPEOF(src_col) != INTSXP) continue;
+        if (TYPEOF(dst_col) == REALSXP) {
+          Rcpp::NumericVector dst(dst_col);
+          Rcpp::NumericVector src(src_col);
+          for (std::size_t j = 0; j < idx.size(); ++j) {
+            dst[j] = src[idx[j]];
+          }
+        } else {
+          Rcpp::IntegerVector dst(dst_col);
+          Rcpp::IntegerVector src(src_col);
+          for (std::size_t j = 0; j < idx.size(); ++j) {
+            dst[j] = src[idx[j]];
+          }
+        }
+      } else {
+        Rcpp::NumericMatrix params_mat(params_obj);
+        Rcpp::NumericVector dst(dst_col);
+        int col_idx = src_it->second;
+        for (std::size_t j = 0; j < idx.size(); ++j) {
+          dst[j] = params_mat(idx[j], col_idx);
+        }
+      }
+    }
+
+    if (entry.containsElementNamed("trial_params_ptr")) {
+      Rcpp::RObject ptr_obj = entry["trial_params_ptr"];
+      if (!ptr_obj.isNULL()) {
+        Rcpp::XPtr<TrialParamSet> params_ptr(ptr_obj);
+        if (!params_ptr.isNULL()) {
+          std::unique_ptr<TrialParamSet> rebuilt = build_trial_params_from_df(
+            *ctx,
+            Rcpp::Nullable<Rcpp::DataFrame>(trial_rows)
+          );
+          if (rebuilt) {
+            *params_ptr = *rebuilt;
+          } else {
+            params_ptr->acc_params.clear();
+          }
+        }
+      }
+    }
+    entries[i] = entry;
+  }
+  return entries;
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericVector native_loglik_param_repeat_cpp(SEXP ctxSEXP,
+                                                   Rcpp::List structure,
+                                                   Rcpp::List entries,
+                                                   Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt,
+                                                   Rcpp::List params_list,
+                                                   double default_deadline,
+                                                   double rel_tol,
+                                                   double abs_tol,
+                                                   int max_depth) {
+  Rcpp::NumericVector out(params_list.size());
+  for (R_xlen_t i = 0; i < params_list.size(); ++i) {
+    SEXP params_obj = params_list[i];
+    entries = native_update_entries_from_params_cpp(ctxSEXP, entries, params_obj);
+    Rcpp::List res = native_loglik_from_params_cpp(ctxSEXP,
+                                                   structure,
+                                                   entries,
+                                                   component_weights_opt,
+                                                   default_deadline,
+                                                   rel_tol,
+                                                   abs_tol,
+                                                   max_depth);
+    out[i] = Rcpp::as<double>(res["loglik"]);
+  }
+  return out;
 }
 
 // [[Rcpp::export]]

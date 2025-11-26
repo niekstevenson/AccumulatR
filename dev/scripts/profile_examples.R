@@ -75,7 +75,7 @@ profile_example <- function(example_id,
   invisible(elapsed)
 }
 
-example_ids <- names(new_api_examples)[2]
+example_ids <- names(new_api_examples)[1]
 trial_count <- as.integer(Sys.getenv("UUBER_PROFILE_TRIALS", "200"))
 seed <- as.integer(Sys.getenv("UUBER_PROFILE_SEED", "2025"))
 

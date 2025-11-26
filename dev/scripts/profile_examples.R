@@ -28,7 +28,7 @@ profile_example <- function(example_id,
   if (is.null(spec) || is.null(core_params)) {
     stop(sprintf("Example '%s' not found", example_id))
   }
-
+  
   message(sprintf("Profiling example %s", example_id))
   patched_model <- apply_core_params_to_spec(spec, core_params)
   structure <- build_generator_structure(patched_model)
@@ -42,17 +42,22 @@ profile_example <- function(example_id,
     params_df = param_table,
     data_df = data_df
   )
-
+  
   AccumulatR:::likelihood_cache_reset_stats(ctx$prep)
   param_tables <- lapply(seq_len(repeat_count), function(i) {
     df <- param_table
     if ("params_hash" %in% names(df)) {
       df$params_hash <- NULL
     }
-    if("meanlog" %in% colnames(df)){
-      df[,"meanlog"] <- df[,"meanlog"] + rnorm(nrow(df), sd = 0.05)
+    num_cols <- vapply(df, is.numeric, logical(1))
+    if ("trial" %in% names(df)) num_cols[match("trial", names(df))] <- FALSE
+    if (any(num_cols)) {
+      delta <- (i - 1) * 1e-4
+      for (nm in names(df)[num_cols]) {
+        df[[nm]] <- df[[nm]] + delta
+      }
     }
-    AccumulatR:::.params_df_to_matrix(df)
+    df
   })
   elapsed <- system.time({
     with_native_flags(TRUE, TRUE, {
@@ -62,7 +67,7 @@ profile_example <- function(example_id,
       )
     })
   })[["elapsed"]]
-
+  
   message(sprintf(
     "Example %s native log-likelihood repeat (%d proposals) took %.3f seconds",
     example_id, repeat_count, elapsed
@@ -70,7 +75,7 @@ profile_example <- function(example_id,
   invisible(elapsed)
 }
 
-example_ids <- names(new_api_examples)[1]
+example_ids <- names(new_api_examples)[2]
 trial_count <- as.integer(Sys.getenv("UUBER_PROFILE_TRIALS", "200"))
 seed <- as.integer(Sys.getenv("UUBER_PROFILE_SEED", "2025"))
 

@@ -179,6 +179,8 @@ std::vector<int> integer_vector_to_std(const Rcpp::IntegerVector& src,
 constexpr double kDefaultRelTol = 1e-5;
 constexpr double kDefaultAbsTol = 1e-6;
 constexpr int kDefaultMaxDepth = 12;
+constexpr double kGuardRelTol = 1e-5;
+constexpr double kGuardAbsTol = 1e-6;
 
 template <typename T>
 inline T clamp(T val, T lo, T hi) {
@@ -1456,7 +1458,26 @@ NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
                                      double time,
                                      const std::string& component,
                                      const std::unordered_set<int>& forced_complete,
-                                     const std::unordered_set<int>& forced_survive);
+                                     const std::unordered_set<int>& forced_survive,
+                                     const TrialParamSet* trial_params,
+                                     const std::string& trial_key);
+inline NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
+                                            EvalCache& cache,
+                                            int node_id,
+                                            double time,
+                                            const std::string& component,
+                                            const std::unordered_set<int>& forced_complete,
+                                            const std::unordered_set<int>& forced_survive) {
+  return eval_node_with_forced(ctx,
+                               cache,
+                               node_id,
+                               time,
+                               component,
+                               forced_complete,
+                               forced_survive,
+                               nullptr,
+                               std::string());
+}
 GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
                                 const uuber::NativeNode& node,
                                 EvalCache& cache,
@@ -1847,8 +1868,17 @@ NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
                                      double time,
                                      const std::string& component,
                                      const std::unordered_set<int>& forced_complete,
-                                     const std::unordered_set<int>& forced_survive) {
-  NodeEvalState local(ctx, cache, time, component, forced_complete, forced_survive);
+                                     const std::unordered_set<int>& forced_survive,
+                                     const TrialParamSet* trial_params,
+                                     const std::string& trial_key) {
+  NodeEvalState local(ctx,
+                      cache,
+                      time,
+                      component,
+                      forced_complete,
+                      forced_survive,
+                      trial_params,
+                      trial_key);
   return eval_node_recursive(node_id, local);
 }
 
@@ -2073,7 +2103,9 @@ double guard_effective_survival_internal(const GuardEvalInput& input,
         u,
         input.component,
         input.forced_complete,
-        input.forced_survive
+        input.forced_survive,
+        input.trial_params,
+        input.trial_type_key
       );
       prod *= clamp_probability(protector.survival);
       if (!std::isfinite(prod) || prod <= 0.0) {
@@ -2086,12 +2118,12 @@ double guard_effective_survival_internal(const GuardEvalInput& input,
     if (!std::isfinite(val) || val <= 0.0) return 0.0;
     return val;
   };
-  double integral = uuber::integrate_boost_fn(
+  double integral = uuber::integrate_boost_fn_21(
     integrand,
     0.0,
     t,
-    settings.rel_tol,
-    settings.abs_tol,
+    kGuardRelTol,
+    kGuardAbsTol,
     settings.max_depth
   );
   double surv = 1.0 - integral;
@@ -2144,12 +2176,12 @@ double guard_cdf_internal(const GuardEvalInput& input,
   auto integrand = [&](double u) -> double {
     return guard_density_internal(input, u, settings);
   };
-  double val = uuber::integrate_boost_fn(
+  double val = uuber::integrate_boost_fn_21(
     integrand,
     0.0,
     t,
-    settings.rel_tol,
-    settings.abs_tol,
+    kGuardRelTol,
+    kGuardAbsTol,
     settings.max_depth
   );
   if (!std::isfinite(val) || val < 0.0) val = 0.0;

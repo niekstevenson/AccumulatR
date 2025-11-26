@@ -120,4 +120,53 @@ inline double integrate_boost_fn(Fn&& integrand,
   return sign * integral;
 }
 
+// Variant using a lower-order Gauss-Kronrod rule (21-point) to reduce per-interval evaluations.
+template <typename Fn>
+inline double integrate_boost_fn_21(Fn&& integrand,
+                                    double lower,
+                                    double upper,
+                                    double rel_tol,
+                                    double abs_tol,
+                                    int max_depth) {
+  if (!std::isfinite(lower) || !std::isfinite(upper)) {
+    Rcpp::stop("integrate_boost_fn_21 requires finite bounds");
+  }
+  if (max_depth <= 0) max_depth = 10;
+  if (rel_tol <= 0.0) rel_tol = 1e-6;
+  if (abs_tol <= 0.0) abs_tol = 1e-8;
+  double tol = std::max(abs_tol, rel_tol);
+  if (!(tol > 0.0)) tol = 1e-8;
+  double a = lower;
+  double b = upper;
+  double sign = 1.0;
+  if (b < a) {
+    std::swap(a, b);
+    sign = -1.0;
+  }
+  auto wrapper = [&](double x) -> double {
+    if (!std::isfinite(x)) return 0.0;
+    double val = integrand(x);
+    if (!std::isfinite(val)) return 0.0;
+    return val;
+  };
+  double integral = 0.0;
+  #if UUBER_HAVE_BOOST_GK
+  try {
+    integral = boost::math::quadrature::gauss_kronrod<double, 21>::integrate(
+      wrapper,
+      a,
+      b,
+      tol,
+      max_depth
+    );
+  } catch (...) {
+    integral = 0.0;
+  }
+  #else
+  Rcpp::stop("Boost Gauss-Kronrod header not available; install BH or set include path to Boost");
+  #endif
+  if (!std::isfinite(integral)) integral = 0.0;
+  return sign * integral;
+}
+
 } // namespace uuber

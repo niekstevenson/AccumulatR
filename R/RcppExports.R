@@ -24,9 +24,6 @@ native_trial_mixture_cpp <- function(ctxSEXP, node_id, t, component_ids, weights
 native_loglik_from_params_cpp <- function(ctxSEXP, structure, trial_entries, component_weights_opt, default_deadline, rel_tol, abs_tol, max_depth) {
     .Call(`_AccumulatR_native_loglik_from_params_cpp`, ctxSEXP, structure, trial_entries, component_weights_opt, default_deadline, rel_tol, abs_tol, max_depth)
 }
-native_loglik_param_repeat_cpp <- function(ctxSEXP, structure, entries, component_weights_opt, params_list, default_deadline, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_native_loglik_param_repeat_cpp`, ctxSEXP, structure, entries, component_weights_opt, params_list, default_deadline, rel_tol, abs_tol, max_depth)
-}
 
 native_loglik_from_buffer_cpp <- function(ctxSEXP, structure, trial_entries, params_df, component_weights_opt, default_deadline, rel_tol, abs_tol, max_depth) {
     .Call(`_AccumulatR_native_loglik_from_buffer_cpp`, ctxSEXP, structure, trial_entries, params_df, component_weights_opt, default_deadline, rel_tol, abs_tol, max_depth)
@@ -39,8 +36,17 @@ native_plan_entries_cpp <- function(ctxSEXP, structure, plan, selection_keys, da
 native_refresh_trial_params_cpp <- function(ctxSEXP, entries) {
     invisible(.Call(`_AccumulatR_native_refresh_trial_params_cpp`, ctxSEXP, entries))
 }
+
 native_update_entries_from_params_cpp <- function(ctxSEXP, entries, params_obj) {
     .Call(`_AccumulatR_native_update_entries_from_params_cpp`, ctxSEXP, entries, params_obj)
+}
+
+native_debug_trial_params_cpp <- function(entry) {
+    .Call(`_AccumulatR_native_debug_trial_params_cpp`, entry)
+}
+
+native_loglik_param_repeat_cpp <- function(ctxSEXP, structure, entries, component_weights_opt, params_list, default_deadline, rel_tol, abs_tol, max_depth) {
+    .Call(`_AccumulatR_native_loglik_param_repeat_cpp`, ctxSEXP, structure, entries, component_weights_opt, params_list, default_deadline, rel_tol, abs_tol, max_depth)
 }
 
 native_loglik_from_plan_cpp <- function(ctxSEXP, structure, plan, trial_keys, data_trial_keys, data_df, component_weights_opt, shared_gate_specs, na_source_specs, guess_target_specs, alias_specs, default_deadline, rel_tol, abs_tol, max_depth) {
@@ -214,3 +220,4 @@ pool_survival_general_cpp <- function(Fvec, k) {
 guard_effective_survival_cpp <- function(integrand, upper, rel_tol, abs_tol, max_depth) {
     .Call(`_AccumulatR_guard_effective_survival_cpp`, integrand, upper, rel_tol, abs_tol, max_depth)
 }
+

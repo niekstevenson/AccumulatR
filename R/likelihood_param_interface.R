@@ -333,6 +333,19 @@ build_likelihood_context <- function(structure, params_df, data_df,
   )
 }
 
+.params_df_to_matrix <- function(df) {
+  if (!"trial" %in% names(df)) {
+    stop("Parameter table must include 'trial'", call. = FALSE)
+  }
+  numeric_cols <- names(Filter(is.numeric, df))
+  numeric_cols <- setdiff(numeric_cols, "trial")
+  mat <- as.matrix(df[, c("trial", numeric_cols), drop = FALSE])
+  storage.mode(mat) <- "double"
+  attr(mat, "trial") <- df$trial
+  colnames(mat) <- c("trial", numeric_cols)
+  mat
+}
+
 .likelihood_params_by_trial <- function(params_df) {
   if (is.null(params_df) || nrow(params_df) == 0L) return(list())
   trials <- params_df$trial %||% seq_len(nrow(params_df))
@@ -1100,20 +1113,18 @@ refresh_likelihood_context_params <- function(likelihood_context, params_df) {
     stop("Parameter data frame must contain at least one row", call. = FALSE)
   }
   params_df <- as.data.frame(params_df)
+  mat <- .params_df_to_matrix(params_df)
   ctx$params_df <- params_df
   cache <- ctx$plan$.native_cache %||% NULL
   entries <- cache$entries %||% NULL
   eval_cfg <- cache$eval_config %||% NULL
-  comp_w <- cache$component_weights_df %||% NULL
   native_ctx <- ctx$native_ctx
   if (!is.null(entries) && inherits(native_ctx, "externalptr") && !is.null(eval_cfg)) {
-    cache$entries <- native_update_entries_from_params_cpp(native_ctx, entries, params_df)
+    cache$entries <- native_update_entries_from_params_cpp(native_ctx, entries, mat)
     ctx$plan$.native_cache <- cache
     return(ctx)
   }
-  ctx$plan <- .likelihood_plan_refresh_params(ctx$plan, params_df)
-  ctx$plan <- .native_refresh_plan_entries(ctx$plan, native_ctx)
-  ctx
+  stop("Cached native entries are missing; rebuild the context with data_df", call. = FALSE)
 }
 
 native_loglikelihood_param_repeat <- function(likelihood_context, params_list) {
@@ -1124,7 +1135,7 @@ native_loglikelihood_param_repeat <- function(likelihood_context, params_list) {
   if (is.null(entries) || is.null(eval_cfg) || !inherits(ctx$native_ctx, "externalptr")) {
     stop("Cached native entries are required; build the context with data_df first", call. = FALSE)
   }
-  params_list <- lapply(params_list, as.data.frame)
+  params_list <- lapply(params_list, function(df) .params_df_to_matrix(as.data.frame(df)))
   native_loglik_param_repeat_cpp(
     ctx$native_ctx,
     ctx$structure,

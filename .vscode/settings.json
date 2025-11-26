@@ -21,7 +21,7 @@
     ],
     "latex-workshop.latex.recipe.default": "latexmk with BibTeX",
     "latex-workshop.latex.forceRecipeUsage": true,
-    "workbench.colorTheme": "Default Light+",
+    "workbench.colorTheme": "GitHub Sharp",
     "files.associations": {
         "cctype": "cpp",
         "cmath": "cpp",

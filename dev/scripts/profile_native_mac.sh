@@ -16,13 +16,22 @@ if [[ ! -f "$PROFILE_R_SCRIPT" ]]; then
   exit 1
 fi
 
-PROFILE_FILE=${UUBER_PROFILE_FILE:-/tmp/uuber_profile_r.txt}
+PROFILE_FILE=${UUBER_PROFILE_FILE:-"$REPO_ROOT/dev/uuber_profile_r.txt"}
 PROFILE_DURATION=${UUBER_PROFILE_DURATION:-20}
 PROFILE_INTERVAL=${UUBER_PROFILE_INTERVAL:-1}
 
 export UUBER_PROFILE_TRIALS=${UUBER_PROFILE_TRIALS:-2000}
 export UUBER_PROFILE_SEED=${UUBER_PROFILE_SEED:-2025}
 export UUBER_REPO_ROOT="$REPO_ROOT"
+export UUBER_SKIP_DEVTOOLS=1
+
+# Rebuild AccumulatR with profiling-friendly flags into a temp library
+PROFILE_LIB=$(mktemp -d /tmp/uuber_profile_lib.XXXXXX)
+PKG_CXXFLAGS="-O2 -g -fno-omit-frame-pointer" \
+PKG_CFLAGS="-O2 -g -fno-omit-frame-pointer" \
+PKG_CPPFLAGS="-g" \
+R CMD INSTALL --preclean --no-multiarch --with-keep.source --library="${PROFILE_LIB}" "${REPO_ROOT}"
+export R_LIBS_USER="${PROFILE_LIB}${R_LIBS_USER:+":${R_LIBS_USER}"}"
 
 cd "$REPO_ROOT"
 
@@ -37,8 +46,6 @@ cleanup() {
 }
 trap cleanup EXIT
 
-sleep 1
-
 if ! ps -p $R_PID >/dev/null 2>&1; then
   echo "R process exited before sampling could start" >&2
   wait $R_PID || true
@@ -46,7 +53,20 @@ if ! ps -p $R_PID >/dev/null 2>&1; then
 fi
 
 echo "Sampling PID $R_PID for ${PROFILE_DURATION}s (interval ${PROFILE_INTERVAL}ms) -> ${PROFILE_FILE}" >&2
-if ! sample $R_PID $PROFILE_DURATION $PROFILE_INTERVAL -file "$PROFILE_FILE"; then
+sample_args=("$R_PID" "$PROFILE_DURATION")
+if [[ "${PROFILE_INTERVAL}" -gt 0 ]]; then
+  sample_args+=("$PROFILE_INTERVAL")
+fi
+sample_ok=0
+for attempt in 1 2 3; do
+  if sample "${sample_args[@]}" -file "$PROFILE_FILE"; then
+    sample_ok=1
+    break
+  fi
+  # Give the R process a moment to finish starting up before retrying
+  sleep 0.2
+done
+if [[ $sample_ok -ne 1 ]]; then
   echo "Warning: 'sample' exited with a non-zero status" >&2
 fi
 

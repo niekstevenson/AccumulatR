@@ -19,6 +19,7 @@
 #include <sstream>
 #include <numeric>
 #include <iomanip>
+#include <cstring>
 #if __has_include(<boost/math/quadrature/gauss_kronrod.hpp>)
 #define UUBER_HAVE_BOOST_GK 1
 #include <boost/math/quadrature/gauss_kronrod.hpp>
@@ -546,14 +547,25 @@ struct TrialAccumulatorParams {
   double onset{0.0};
   double q{0.0};
   AccDistParams dist_cfg{};
+  // Flags/components unused in flat fast path but kept for compatibility with component checks.
   bool has_components{false};
   std::vector<std::string> components;
   std::string shared_trigger_id;
+  bool has_override{false};
 };
 
 struct TrialParamSet {
-  std::unordered_map<int, TrialAccumulatorParams> acc_params;
+  std::vector<TrialAccumulatorParams> acc_params;
 };
+
+inline TrialAccumulatorParams base_params(const uuber::NativeAccumulator& base) {
+  TrialAccumulatorParams p;
+  p.onset = base.onset;
+  p.q = base.q;
+  p.dist_cfg = base.dist_cfg;
+  p.has_override = false;
+  return p;
+}
 
 struct EvalCache;
 struct ComponentCacheEntry;
@@ -713,9 +725,12 @@ double accumulate_plan_guess_probability(SEXP ctxSEXP,
 inline const TrialAccumulatorParams* get_trial_param_entry(const TrialParamSet* trial_params,
                                                           int acc_index) {
   if (!trial_params) return nullptr;
-  auto it = trial_params->acc_params.find(acc_index);
-  if (it == trial_params->acc_params.end()) return nullptr;
-  return &it->second;
+  if (acc_index < 0 || acc_index >= static_cast<int>(trial_params->acc_params.size())) {
+    return nullptr;
+  }
+  const TrialAccumulatorParams& entry = trial_params->acc_params[acc_index];
+  if (!entry.has_override) return nullptr;
+  return &entry;
 }
 
 bool component_active(const uuber::NativeAccumulator& acc,
@@ -884,8 +899,38 @@ struct CacheEntry {
   std::vector<ScenarioRecord> scenarios;
 };
 
+struct CacheKey {
+  std::string trial_type_key;
+  std::uint64_t time_bits{0};
+  std::uint64_t forced_complete_hash{0};
+  std::uint64_t forced_survive_hash{0};
+  bool include_na_donors{false};
+  std::string outcome_label;
+
+  bool operator==(const CacheKey& other) const noexcept {
+    return time_bits == other.time_bits &&
+           forced_complete_hash == other.forced_complete_hash &&
+           forced_survive_hash == other.forced_survive_hash &&
+           include_na_donors == other.include_na_donors &&
+           trial_type_key == other.trial_type_key &&
+           outcome_label == other.outcome_label;
+  }
+};
+
+struct CacheKeyHash {
+  std::size_t operator()(const CacheKey& key) const noexcept {
+    std::size_t h = std::hash<std::string>{}(key.trial_type_key);
+    h ^= static_cast<std::size_t>(key.time_bits + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+    h ^= static_cast<std::size_t>(key.forced_complete_hash + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+    h ^= static_cast<std::size_t>(key.forced_survive_hash + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+    h ^= static_cast<std::size_t>(key.include_na_donors) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+    h ^= std::hash<std::string>{}(key.outcome_label);
+    return h;
+  }
+};
+
 struct NodeCache {
-  std::unordered_map<std::string, CacheEntry> entries;
+  std::unordered_map<CacheKey, CacheEntry, CacheKeyHash> entries;
 };
 
 struct EvalCache {
@@ -1167,16 +1212,42 @@ std::string time_cache_key(double t) {
   return oss.str();
 }
 
-std::string ids_to_string(const std::unordered_set<int>& ids) {
-  if (ids.empty()) return ".";
-  std::vector<int> vec(ids.begin(), ids.end());
-  sort_unique(vec);
-  std::ostringstream oss;
-  for (std::size_t i = 0; i < vec.size(); ++i) {
-    if (i > 0) oss << ",";
-    oss << vec[i];
+inline std::uint64_t double_to_bits(double value) {
+  std::uint64_t bits = 0;
+  std::memcpy(&bits, &value, sizeof(bits));
+  return bits;
+}
+
+inline std::vector<std::uint64_t> build_forced_bits(const uuber::NativeContext& ctx,
+                                                    const std::unordered_set<int>& forced) {
+  std::size_t node_count = ctx.nodes.size();
+  std::size_t word_count = (node_count + 63) / 64;
+  std::vector<std::uint64_t> bits(word_count, 0);
+  if (forced.empty() || word_count == 0) return bits;
+  for (int id : forced) {
+    auto it = ctx.node_index.find(id);
+    if (it == ctx.node_index.end()) continue;
+    std::size_t idx = static_cast<std::size_t>(it->second);
+    std::size_t word = idx >> 6;
+    std::size_t offset = idx & 63;
+    if (word < bits.size()) {
+      bits[word] |= (std::uint64_t{1} << offset);
+    }
   }
-  return oss.str();
+  return bits;
+}
+
+inline std::uint64_t hash_combine_u64(std::uint64_t seed, std::uint64_t value) {
+  seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+  return seed;
+}
+
+inline std::uint64_t hash_forced_bits(const std::vector<std::uint64_t>& bits) {
+  std::uint64_t h = 0x9e3779b185ebca87ULL;
+  for (std::uint64_t v : bits) {
+    h = hash_combine_u64(h, v);
+  }
+  return h;
 }
 
 std::string vector_signature(const std::vector<int>& vec) {
@@ -1187,11 +1258,6 @@ std::string vector_signature(const std::vector<int>& vec) {
     oss << vec[i];
   }
   return oss.str();
-}
-
-inline std::string forced_key_string(const std::unordered_set<int>& forced_complete,
-                                     const std::unordered_set<int>& forced_survive) {
-  return ids_to_string(forced_complete) + "|" + ids_to_string(forced_survive);
 }
 
 std::string na_map_cache_key(int node_id,
@@ -1227,8 +1293,11 @@ struct NodeEvalState {
       trial_type_key(component_cache_key(component_label, trial_key)),
       include_na_donors(include_na),
       outcome_label(outcome_label_ctx),
-      time_key(time_cache_key(time)),
-      forced_key(forced_key_string(forced_complete_ref, forced_survive_ref)) {}
+      forced_complete_bits(build_forced_bits(ctx_, forced_complete_ref)),
+      forced_survive_bits(build_forced_bits(ctx_, forced_survive_ref)),
+      forced_complete_hash(hash_forced_bits(forced_complete_bits)),
+      forced_survive_hash(hash_forced_bits(forced_survive_bits)),
+      time_bits(double_to_bits(time)) {}
 
   const uuber::NativeContext& ctx;
   EvalCache& cache;
@@ -1240,18 +1309,22 @@ struct NodeEvalState {
   std::string trial_type_key;
   bool include_na_donors;
   std::string outcome_label;
-  std::string time_key;
-  std::string forced_key;
+  std::vector<std::uint64_t> forced_complete_bits;
+  std::vector<std::uint64_t> forced_survive_bits;
+  std::uint64_t forced_complete_hash;
+  std::uint64_t forced_survive_hash;
+  std::uint64_t time_bits;
 };
 
-inline std::string eval_cache_key(const NodeEvalState& state) {
-  std::ostringstream oss;
-  oss << state.trial_type_key
-      << "|" << state.time_key
-      << "|" << state.forced_key
-      << "|" << (state.include_na_donors ? "na" : "std")
-      << "|" << state.outcome_label;
-  return oss.str();
+inline CacheKey eval_cache_key(const NodeEvalState& state) {
+  CacheKey key;
+  key.trial_type_key = state.trial_type_key;
+  key.time_bits = state.time_bits;
+  key.forced_complete_hash = state.forced_complete_hash;
+  key.forced_survive_hash = state.forced_survive_hash;
+  key.include_na_donors = state.include_na_donors;
+  key.outcome_label = state.outcome_label;
+  return key;
 }
 
 inline const TrialAccumulatorParams* get_state_params(const NodeEvalState& state,
@@ -1315,7 +1388,7 @@ std::string pool_template_cache_key(const std::string& pool_label,
 
 CacheEntry& fetch_cache_entry(NodeEvalState& state, int node_id) {
   NodeCache& node_cache = state.cache.nodes[node_id];
-  std::string cache_key = eval_cache_key(state);
+  CacheKey cache_key = eval_cache_key(state);
   return node_cache.entries[cache_key];
 }
 
@@ -2192,6 +2265,29 @@ struct CompetitorMeta {
   bool scenario_sensitive{false};
 };
 
+struct CompetitorClusterCacheEntry {
+  std::vector<CompetitorMeta> metas;
+  std::vector<std::vector<int>> clusters;
+  std::vector<uint8_t> cluster_has_guard;
+  std::vector<std::vector<int>> guard_orders;
+};
+
+using CompetitorCacheMap = std::unordered_map<std::string, CompetitorClusterCacheEntry>;
+
+static std::unordered_map<const uuber::NativeContext*, CompetitorCacheMap> g_competitor_cache;
+
+std::string competitor_cache_key(const std::vector<int>& ids) {
+  std::ostringstream oss;
+  for (std::size_t i = 0; i < ids.size(); ++i) {
+    if (i > 0) oss << ",";
+    oss << ids[i];
+  }
+  return oss.str();
+}
+
+// Forward declaration
+std::vector<std::vector<int>> build_competitor_clusters(const std::vector<CompetitorMeta>& metas);
+
 bool node_contains_guard(int node_id,
                          const uuber::NativeContext& ctx,
                          std::unordered_map<int, bool>& memo) {
@@ -2213,6 +2309,78 @@ bool node_contains_guard(int node_id,
   }
   memo[node_id] = result;
   return result;
+}
+
+const CompetitorClusterCacheEntry& fetch_competitor_cluster_cache(
+  const uuber::NativeContext& ctx,
+  const std::vector<int>& competitor_ids) {
+  CompetitorCacheMap& cache = g_competitor_cache[&ctx];
+  const std::string key = competitor_cache_key(competitor_ids);
+  auto it = cache.find(key);
+  if (it != cache.end()) {
+    return it->second;
+  }
+
+  CompetitorClusterCacheEntry entry;
+  entry.metas.reserve(competitor_ids.size());
+  std::unordered_map<int, bool> guard_memo;
+  for (int node_id : competitor_ids) {
+    const uuber::NativeNode& node = fetch_node(ctx, node_id);
+    CompetitorMeta meta;
+    meta.node_id = node_id;
+    meta.node = &node;
+    meta.sources = node.source_ids;
+    sort_unique(meta.sources);
+    meta.has_guard = node_contains_guard(node_id, ctx, guard_memo);
+    meta.scenario_sensitive = node.scenario_sensitive;
+    entry.metas.push_back(std::move(meta));
+  }
+
+  entry.clusters = build_competitor_clusters(entry.metas);
+  entry.cluster_has_guard.reserve(entry.clusters.size());
+  entry.guard_orders.resize(entry.clusters.size());
+  for (std::size_t i = 0; i < entry.clusters.size(); ++i) {
+    const auto& cluster = entry.clusters[i];
+    bool has_guard = false;
+    for (int idx : cluster) {
+      if (entry.metas[static_cast<std::size_t>(idx)].has_guard) {
+        has_guard = true;
+        break;
+      }
+    }
+    entry.cluster_has_guard.push_back(has_guard ? 1 : 0);
+    if (has_guard) {
+      struct OrderingMeta {
+        int index;
+        std::size_t source_count;
+        bool scenario_sensitive;
+      };
+      std::vector<OrderingMeta> order;
+      order.reserve(cluster.size());
+      for (int idx : cluster) {
+        const CompetitorMeta& meta = entry.metas[static_cast<std::size_t>(idx)];
+        order.push_back({idx, meta.sources.size(), meta.scenario_sensitive});
+      }
+      std::sort(order.begin(), order.end(), [&](const OrderingMeta& a, const OrderingMeta& b) {
+        if (a.scenario_sensitive != b.scenario_sensitive) {
+          return !a.scenario_sensitive && b.scenario_sensitive;
+        }
+        if (a.source_count != b.source_count) {
+          return a.source_count < b.source_count;
+        }
+        return a.index < b.index;
+      });
+      std::vector<int> guard_order;
+      guard_order.reserve(order.size());
+      for (const auto& rec : order) {
+        guard_order.push_back(rec.index);
+      }
+      entry.guard_orders[i] = std::move(guard_order);
+    }
+  }
+
+  auto inserted = cache.emplace(key, std::move(entry));
+  return inserted.first->second;
 }
 
 bool share_sources(const std::vector<int>& a, const std::vector<int>& b) {
@@ -2391,34 +2559,16 @@ double compute_guard_cluster_value(const std::vector<int>& cluster_indices,
                                    const std::string& component,
                                    const std::string& trial_key = std::string(),
                                    const TrialParamSet* trial_params = nullptr,
-                                   EvalCache* eval_cache_override = nullptr) {
-  struct OrderingMeta {
-    int index;
-    std::size_t source_count;
-    bool scenario_sensitive;
-  };
-  std::vector<OrderingMeta> order;
-  order.reserve(cluster_indices.size());
-  for (int idx : cluster_indices) {
-    const CompetitorMeta& meta = metas[static_cast<std::size_t>(idx)];
-    order.push_back({idx,
-                     meta.sources.size(),
-                     meta.scenario_sensitive});
-  }
-  std::sort(order.begin(), order.end(), [&](const OrderingMeta& a, const OrderingMeta& b) {
-    if (a.scenario_sensitive != b.scenario_sensitive) {
-      return !a.scenario_sensitive && b.scenario_sensitive;
-    }
-    if (a.source_count != b.source_count) {
-      return a.source_count < b.source_count;
-    }
-    return a.index < b.index;
-  });
-
-  std::unordered_set<int> forced_survive;
+                                   EvalCache* eval_cache_override = nullptr,
+                                   const std::vector<int>* guard_order = nullptr,
+                                   std::unordered_set<int>* forced_survive_scratch = nullptr) {
+  const std::vector<int>& order = guard_order ? *guard_order : cluster_indices;
+  std::unordered_set<int> local_forced;
+  std::unordered_set<int>& forced_survive = forced_survive_scratch ? *forced_survive_scratch : local_forced;
+  forced_survive.clear();
   double prod = 1.0;
-  for (const OrderingMeta& meta : order) {
-    const CompetitorMeta& node_meta = metas[static_cast<std::size_t>(meta.index)];
+  for (int idx : order) {
+    const CompetitorMeta& node_meta = metas[static_cast<std::size_t>(idx)];
     double surv = evaluate_survival_with_forced(node_meta.node_id,
                                                 forced_survive,
                                                 component,
@@ -2445,44 +2595,27 @@ double competitor_survival_internal(const uuber::NativeContext& ctx,
                                     const TrialParamSet* trial_params = nullptr,
                                     EvalCache* eval_cache_override = nullptr) {
   if (competitor_ids.empty()) return 1.0;
-  std::vector<CompetitorMeta> metas;
-  metas.reserve(competitor_ids.size());
-  std::unordered_map<int, bool> guard_memo;
-  for (int node_id : competitor_ids) {
-    const uuber::NativeNode& node = fetch_node(ctx, node_id);
-    CompetitorMeta meta;
-    meta.node_id = node_id;
-    meta.node = &node;
-    meta.sources = node.source_ids;
-    sort_unique(meta.sources);
-    meta.has_guard = node_contains_guard(node_id, ctx, guard_memo);
-    meta.scenario_sensitive = node.scenario_sensitive;
-    metas.push_back(std::move(meta));
-  }
-
-  std::vector<std::vector<int>> clusters = build_competitor_clusters(metas);
-  if (clusters.empty()) return 1.0;
+  const CompetitorClusterCacheEntry& cache = fetch_competitor_cluster_cache(ctx, competitor_ids);
+  if (cache.clusters.empty()) return 1.0;
 
   double product = 1.0;
-  for (const auto& cluster : clusters) {
-    bool cluster_has_guard = false;
-    for (int idx : cluster) {
-      if (metas[static_cast<std::size_t>(idx)].has_guard) {
-        cluster_has_guard = true;
-        break;
-      }
-    }
+  std::unordered_set<int> forced_survive_scratch;
+  for (std::size_t i = 0; i < cache.clusters.size(); ++i) {
+    const auto& cluster = cache.clusters[i];
+    const bool cluster_has_guard = (i < cache.cluster_has_guard.size()) && cache.cluster_has_guard[i];
     double cluster_val = cluster_has_guard
       ? compute_guard_cluster_value(cluster,
-                                    metas,
+                                    cache.metas,
                                     ctx,
                                     t,
                                     component_label,
                                     trial_type_key,
                                     trial_params,
-                                    eval_cache_override)
+                                    eval_cache_override,
+                                    (i < cache.guard_orders.size() ? &cache.guard_orders[i] : nullptr),
+                                    &forced_survive_scratch)
       : compute_guard_free_cluster_value(cluster,
-                                         metas,
+                                         cache.metas,
                                          ctx,
                                          t,
                                          component_label,
@@ -2745,6 +2878,7 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
   }
 
   auto params_set = std::make_unique<TrialParamSet>();
+  params_set->acc_params.assign(ctx.accumulators.size(), TrialAccumulatorParams{});
 
   auto upsert_param_entry = [](std::vector<uuber::ProtoParamEntry>& entries,
                                uuber::ProtoParamEntry entry) {
@@ -2955,12 +3089,10 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
       override.dist_cfg = resolve_acc_params_entries(dist_name, param_entries);
     }
 
+    override.has_override = true;
     params_set->acc_params[acc_idx] = std::move(override);
   }
 
-  if (params_set->acc_params.empty()) {
-    return nullptr;
-  }
   return params_set;
 }
 
@@ -3355,34 +3487,35 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
   if (!std::isfinite(t) || t < 0.0) {
     return std::numeric_limits<double>::quiet_NaN();
   }
-  std::unordered_set<int> forced_empty;
+  static const std::unordered_set<int> kEmptyForced;
   EvalCache local_eval_cache;
   EvalCache& shared_cache = eval_cache_override ? *eval_cache_override : local_eval_cache;
   double total = 0.0;
+  const bool has_keep = !keep_label.empty();
+  const std::string keep_norm = has_keep ? normalize_label_string(keep_label) : std::string();
   for (std::size_t i = 0; i < component_ids.size(); ++i) {
-    ComponentCacheEntry cache_entry;
+    const ComponentCacheEntry* cache_entry_ptr = nullptr;
+    ComponentCacheEntry fallback;
     if (i < cache_entries.size()) {
-      cache_entry = cache_entries[i];
+      cache_entry_ptr = &cache_entries[i];
     } else {
-      cache_entry = default_component_cache_entry(component_ids[i]);
+      fallback = default_component_cache_entry(component_ids[i]);
+      cache_entry_ptr = &fallback;
     }
     double contrib = 0.0;
     bool used_guess_shortcut = false;
-    if (!keep_label.empty()) {
+    if (has_keep) {
       auto comp_meta = ctx.component_info.find(component_ids[i]);
       if (comp_meta != ctx.component_info.end()) {
-        std::string keep_norm = normalize_label_string(keep_label);
         std::string target_norm = normalize_label_string(comp_meta->second.guess.target);
-        if (comp_meta->second.guess.valid &&
-            !keep_norm.empty() &&
-            keep_norm == target_norm) {
+        if (comp_meta->second.guess.valid && !keep_norm.empty() && keep_norm == target_norm) {
           contrib = accumulate_component_guess_density(
             ctx,
             keep_label,
             t,
             component_ids[i],
             params_ptr,
-            cache_entry.trial_type_key,
+            cache_entry_ptr->trial_type_key,
             &shared_cache
           );
           used_guess_shortcut = true;
@@ -3395,17 +3528,17 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
         node_id,
         t,
         component_ids[i],
-        forced_empty,
-        forced_empty,
+        kEmptyForced,
+        kEmptyForced,
         competitor_ids,
         params_ptr,
-        cache_entry.trial_type_key,
+        cache_entry_ptr->trial_type_key,
         &shared_cache,
         false,
         keep_label
       );
       if (!std::isfinite(contrib) || contrib < 0.0) contrib = 0.0;
-      if (!keep_label.empty()) {
+      if (has_keep) {
         double keep_w = component_keep_weight(ctx, component_ids[i], keep_label);
         contrib *= keep_w;
       }
@@ -3415,7 +3548,7 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
           guess_donors,
           t,
           component_ids[i],
-          cache_entry.trial_type_key,
+          cache_entry_ptr->trial_type_key,
           shared_cache,
           params_ptr,
           false
@@ -3428,6 +3561,44 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
   if (!std::isfinite(total) || total <= 0.0) {
     return 0.0;
   }
+  return total;
+}
+
+// Fast path: direct mixture with no keep/guess/na/alias/shared gates
+double native_trial_mixture_fast(uuber::NativeContext& ctx,
+                                 int node_id,
+                                 double t,
+                                 const std::vector<std::string>& component_ids,
+                                 const std::vector<double>& weights,
+                                 const std::vector<int>& competitor_ids,
+                                 const TrialParamSet* params_ptr,
+                                 EvalCache* eval_cache_override = nullptr) {
+  if (!std::isfinite(t) || t < 0.0) {
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  static const std::unordered_set<int> kEmptyForced;
+  EvalCache local_eval_cache;
+  EvalCache& cache = eval_cache_override ? *eval_cache_override : local_eval_cache;
+  double total = 0.0;
+  for (std::size_t i = 0; i < component_ids.size(); ++i) {
+    double contrib = node_density_with_competitors_internal(
+      ctx,
+      node_id,
+      t,
+      component_ids[i],
+      kEmptyForced,
+      kEmptyForced,
+      competitor_ids,
+      params_ptr,
+      std::string(),
+      &cache,
+      false,
+      std::string()
+    );
+    if (!std::isfinite(contrib) || contrib < 0.0) contrib = 0.0;
+    total += weights[i] * contrib;
+  }
+  if (!std::isfinite(total) || total <= 0.0) return 0.0;
   return total;
 }
 
@@ -3977,6 +4148,20 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
       forced_component_value = Rcpp::as<std::string>(forced_component.get());
       forced_component_ptr = &forced_component_value;
     }
+    // Precomputed competitor ids (std::vector) if available
+    const std::vector<int>* comp_vec_ptr = nullptr;
+    if (entry.containsElementNamed("competitor_vec_ptr")) {
+      Rcpp::RObject comp_ptr_obj = entry["competitor_vec_ptr"];
+      if (!comp_ptr_obj.isNULL()) {
+        Rcpp::XPtr<std::vector<int>> ptr(comp_ptr_obj);
+        if (!ptr.isNULL()) {
+          comp_vec_ptr = ptr.get();
+        }
+      }
+    }
+    bool has_competitors = entry.containsElementNamed("has_competitors")
+      ? Rcpp::as<bool>(entry["has_competitors"])
+      : true;
     Rcpp::IntegerVector competitor_ids = entry.containsElementNamed("competitor_ids")
       ? Rcpp::IntegerVector(entry["competitor_ids"])
       : Rcpp::IntegerVector();
@@ -4020,12 +4205,36 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
       components = Rcpp::CharacterVector(plan["components"]);
       weights = Rcpp::NumericVector(plan["weights"]);
     }
+    // Prefer precomputed mix vectors if present
+    const std::vector<std::string>* mix_comps_ptr = nullptr;
+    const std::vector<double>* mix_weights_ptr = nullptr;
+    if (entry.containsElementNamed("mix_components_ptr")) {
+      Rcpp::RObject mco = entry["mix_components_ptr"];
+      if (!mco.isNULL()) {
+        Rcpp::XPtr<std::vector<std::string>> ptr(mco);
+        if (!ptr.isNULL()) mix_comps_ptr = ptr.get();
+      }
+    }
+    if (entry.containsElementNamed("mix_weights_ptr")) {
+      Rcpp::RObject mwo = entry["mix_weights_ptr"];
+      if (!mwo.isNULL()) {
+        Rcpp::XPtr<std::vector<double>> ptr(mwo);
+        if (!ptr.isNULL()) mix_weights_ptr = ptr.get();
+      }
+    }
     std::vector<std::string> component_labels;
     std::vector<double> weight_vec;
-    if (!build_component_mix(components, weights, forced_component, component_labels, weight_vec)) {
-      per_trial[i] = R_NegInf;
-      hit_neg_inf = true;
-      continue;
+    if (mix_comps_ptr && mix_weights_ptr &&
+        mix_comps_ptr->size() == mix_weights_ptr->size() &&
+        !mix_comps_ptr->empty()) {
+      component_labels = *mix_comps_ptr;
+      weight_vec = *mix_weights_ptr;
+    } else {
+      if (!build_component_mix(components, weights, forced_component, component_labels, weight_vec)) {
+        per_trial[i] = R_NegInf;
+        hit_neg_inf = true;
+        continue;
+      }
     }
     std::vector<ComponentCacheEntry> plan_cache_entries = build_component_cache_entries(component_labels);
     EvalCache trial_eval_cache;
@@ -4077,6 +4286,9 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
     } else {
       SharedGateSpec shared_spec;
       bool has_shared_gate = extract_shared_gate_spec(entry, shared_spec);
+      bool fast_path = entry.containsElementNamed("fast_path")
+        ? Rcpp::as<bool>(entry["fast_path"])
+        : false;
       if (has_shared_gate) {
         mix = evaluate_shared_gate_mix(*ctx,
                                        shared_spec,
@@ -4100,27 +4312,59 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
           continue;
         }
         int node_id = Rcpp::as<int>(entry["node_id"]);
-        Rcpp::IntegerVector comp_ids(entry["competitor_ids"]);
-    bool is_guess = !outcome_label.empty() && outcome_label == "GUESS";
-    bool needs_keep = false;
-    if (!outcome_label.empty() && !is_guess) {
-      for (const auto& comp_label : component_labels) {
-        double keep_w = component_keep_weight(*ctx, comp_label, outcome_label);
-        if (std::fabs(keep_w - 1.0) > 1e-12) {
-          needs_keep = true;
-          break;
+        std::vector<int> comp_vec;
+        if (comp_vec_ptr) {
+          comp_vec = *comp_vec_ptr;
+        } else {
+          comp_vec = integer_vector_to_std(competitor_ids, false);
         }
-      }
-    }
-    bool use_internal = is_guess || needs_keep;
-        if (use_internal) {
+        bool is_guess = !outcome_label.empty() && outcome_label == "GUESS";
+        bool needs_keep = false;
+        // Precomputed keep weights if available
+        if (!outcome_label.empty() && !is_guess) {
+          const std::vector<double>* keep_ptr = nullptr;
+          if (entry.containsElementNamed("keep_weights_ptr")) {
+            Rcpp::RObject kwo = entry["keep_weights_ptr"];
+            if (!kwo.isNULL()) {
+              Rcpp::XPtr<std::vector<double>> kp(kwo);
+              if (!kp.isNULL()) keep_ptr = kp.get();
+            }
+          }
+          if (keep_ptr && keep_ptr->size() == component_labels.size()) {
+            for (double kw : *keep_ptr) {
+              if (std::fabs(kw - 1.0) > 1e-12) {
+                needs_keep = true;
+                break;
+              }
+            }
+          } else {
+            for (const auto& comp_label : component_labels) {
+              double keep_w = component_keep_weight(*ctx, comp_label, outcome_label);
+              if (std::fabs(keep_w - 1.0) > 1e-12) {
+                needs_keep = true;
+                break;
+              }
+            }
+          }
+        }
+        bool use_internal = is_guess || needs_keep || !fast_path;
+        if (fast_path && !use_internal) {
+          mix = native_trial_mixture_fast(*ctx,
+                                          node_id,
+                                          t,
+                                          component_labels,
+                                          weight_vec,
+                                          comp_vec,
+                                          params_ptr,
+                                          &trial_eval_cache);
+        } else if (use_internal) {
           mix = native_trial_mixture_internal(*ctx,
                                               node_id,
                                               t,
                                               component_labels,
                                               weight_vec,
                                               forced_component,
-                                              integer_vector_to_std(comp_ids, false),
+                                              comp_vec,
                                               params_ptr,
                                               plan_cache_entries,
                                               &trial_eval_cache,
@@ -4133,7 +4377,7 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
                                             components,
                                             weights,
                                             forced_component,
-                                            comp_ids,
+                                            competitor_ids,
                                             trial_rows,
                                             has_guess_donors ? guess_donors : Rcpp::List());
         }
@@ -4328,6 +4572,31 @@ Rcpp::List make_trial_entry(uuber::NativeContext& ctx,
                                                    component_weights_ptr,
                                                    rows_obj,
                                                    component_weights_sexp);
+  // Precompute normalized mix components/weights from component_plan
+  if (entry.containsElementNamed("component_plan")) {
+    Rcpp::List comp_plan(entry["component_plan"]);
+    if (comp_plan.containsElementNamed("components")) {
+      Rcpp::CharacterVector comps_cv(comp_plan["components"]);
+      Rcpp::NumericVector weights_nv = comp_plan.containsElementNamed("weights")
+        ? Rcpp::NumericVector(comp_plan["weights"])
+        : Rcpp::NumericVector(comps_cv.size(), 1.0);
+      std::vector<std::string> comps_vec;
+      comps_vec.reserve(static_cast<std::size_t>(comps_cv.size()));
+      for (R_xlen_t i = 0; i < comps_cv.size(); ++i) {
+        Rcpp::String s(comps_cv[i]);
+        comps_vec.push_back(s == NA_STRING ? "__default__" : std::string(s.get_cstring()));
+      }
+      std::vector<double> weights_vec(static_cast<std::size_t>(weights_nv.size()), 1.0);
+      for (R_xlen_t i = 0; i < weights_nv.size(); ++i) {
+        weights_vec[static_cast<std::size_t>(i)] = static_cast<double>(weights_nv[i]);
+      }
+      normalize_weights(weights_vec);
+      entry["mix_components_ptr"] = Rcpp::XPtr<std::vector<std::string>>(
+        new std::vector<std::string>(std::move(comps_vec)), true);
+      entry["mix_weights_ptr"] = Rcpp::XPtr<std::vector<double>>(
+        new std::vector<double>(std::move(weights_vec)), true);
+    }
+  }
   Rcpp::RObject shared_obj = lookup_named_entry(shared_gate_specs, outcome_label);
   if (!shared_obj.isNULL()) {
     entry["shared_gate"] = shared_obj;
@@ -4343,12 +4612,14 @@ Rcpp::List make_trial_entry(uuber::NativeContext& ctx,
     }
     entry["type"] = "na_map";
     entry["na_sources"] = na_source_specs;
+    entry["fast_path"] = false;
   } else {
     Rcpp::RObject alias_obj = lookup_named_entry(alias_specs, outcome_label);
     if (!alias_obj.isNULL()) {
       entry["type"] = "alias_sum";
       entry["alias_sources"] = alias_obj;
       entry["outcome_label"] = outcome_label;
+      entry["fast_path"] = false;
     } else {
       auto info_it = ctx.outcome_info.find(outcome_label);
       if (info_it == ctx.outcome_info.end()) {
@@ -4359,7 +4630,36 @@ Rcpp::List make_trial_entry(uuber::NativeContext& ctx,
       entry["node_id"] = info.node_id;
       entry["competitor_ids"] = Rcpp::IntegerVector(info.competitor_ids.begin(),
                                                     info.competitor_ids.end());
+      // Cache competitor ids as a std::vector for fast reuse
+      auto* comp_vec = new std::vector<int>(info.competitor_ids.begin(), info.competitor_ids.end());
+      entry["competitor_vec_ptr"] = Rcpp::XPtr<std::vector<int>>(comp_vec, true);
+      entry["has_competitors"] = Rcpp::wrap(!comp_vec->empty());
       entry["outcome_label"] = outcome_label;
+      // Compute fast-path eligibility: direct outcome, no shared/guess/alias/na, keep weights ~1
+      bool fast_ok = true;
+      if (!shared_obj.isNULL()) fast_ok = false;
+      Rcpp::RObject guess_obj = lookup_named_entry(guess_target_specs, outcome_label);
+      if (!guess_obj.isNULL()) fast_ok = false;
+      // Precompute keep weights per component for this outcome
+      if (entry.containsElementNamed("mix_components_ptr")) {
+        Rcpp::RObject mixc_obj = entry["mix_components_ptr"];
+        Rcpp::XPtr<std::vector<std::string>> mixc_ptr(mixc_obj);
+        if (!mixc_ptr.isNULL()) {
+          std::vector<double> keep_w;
+          keep_w.reserve(mixc_ptr->size());
+          for (const auto& comp_label : *mixc_ptr) {
+            double kw = component_keep_weight(ctx, comp_label, outcome_label);
+            keep_w.push_back(kw);
+            if (std::fabs(kw - 1.0) > 1e-12) {
+              fast_ok = false;
+            }
+          }
+          entry["keep_weights_ptr"] = Rcpp::XPtr<std::vector<double>>(
+            new std::vector<double>(std::move(keep_w)), true);
+        }
+      }
+      // check keep weights
+      entry["fast_path"] = fast_ok;
     }
   }
   return entry;
@@ -4466,95 +4766,90 @@ Rcpp::List native_plan_entries_cpp(SEXP ctxSEXP,
 // [[Rcpp::export]]
 void native_refresh_trial_params_cpp(SEXP ctxSEXP,
                                      Rcpp::List entries) {
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  for (R_xlen_t i = 0; i < entries.size(); ++i) {
-    Rcpp::List entry(entries[i]);
-    if (!entry.containsElementNamed("trial_params_ptr") ||
-        !entry.containsElementNamed("trial_rows")) {
-      continue;
-    }
-    Rcpp::RObject ptr_obj = entry["trial_params_ptr"];
-    if (ptr_obj.isNULL()) continue;
-    Rcpp::XPtr<TrialParamSet> params_ptr(ptr_obj);
-    if (params_ptr.isNULL()) continue;
-    Rcpp::DataFrame trial_rows(entry["trial_rows"]);
-    std::unique_ptr<TrialParamSet> rebuilt = build_trial_params_from_df(
-      *ctx,
-      Rcpp::Nullable<Rcpp::DataFrame>(trial_rows)
-    );
-    if (rebuilt) {
-      *params_ptr = *rebuilt;
-    } else {
-      params_ptr->acc_params.clear();
-    }
-  }
+  Rcpp::stop("native_refresh_trial_params_cpp is deprecated; use matrix fast path");
 }
 
 // [[Rcpp::export]]
 Rcpp::List native_update_entries_from_params_cpp(SEXP ctxSEXP,
                                                  Rcpp::List entries,
                                                  SEXP params_obj) {
-  bool is_df = Rf_isFrame(params_obj);
-  bool is_matrix = Rf_isMatrix(params_obj) && TYPEOF(params_obj) == REALSXP;
-  if (!is_df && !is_matrix) {
-    Rcpp::stop("params must be a data.frame or numeric matrix");
+  if (!(Rf_isMatrix(params_obj) && TYPEOF(params_obj) == REALSXP)) {
+    Rcpp::stop("params must be a numeric matrix");
+  }
+  Rcpp::NumericMatrix params_mat(params_obj);
+  SEXP trial_attr = Rf_getAttrib(params_obj, Rf_install("trial"));
+  if (Rf_isNull(trial_attr)) {
+    Rcpp::stop("numeric matrix params must carry a 'trial' attribute");
+  }
+  Rcpp::CharacterVector trial_chr = Rcpp::as<Rcpp::CharacterVector>(
+    Rcpp::wrap(Rf_coerceVector(trial_attr, STRSXP))
+  );
+  if (trial_chr.size() != params_mat.nrow()) {
+    Rcpp::stop("trial attribute length must match matrix rows");
   }
 
-  Rcpp::CharacterVector trial_chr;
-  int nrow_params = 0;
-  if (is_df) {
-    Rcpp::DataFrame params_df(params_obj);
-    if (!params_df.containsElementNamed("trial")) {
-      Rcpp::stop("params_df must include a 'trial' column");
+  // Cache trial buckets (trial -> row indices) on entries so we don't rebuild every refresh
+  std::unordered_map<std::string, std::vector<int>>* trial_index_ptr = nullptr;
+  {
+    SEXP cached = entries.attr(".trial_bucket_ptr");
+    if (cached != R_NilValue && TYPEOF(cached) == EXTPTRSXP) {
+      trial_index_ptr = reinterpret_cast<std::unordered_map<std::string, std::vector<int>>*>(
+        R_ExternalPtrAddr(cached)
+      );
     }
-    trial_chr = Rcpp::as<Rcpp::CharacterVector>(
-      Rcpp::wrap(Rf_coerceVector(params_df["trial"], STRSXP))
-    );
-    nrow_params = params_df.nrows();
-  } else {
-    // matrix path must carry a trial column separately; enforce via attribute
-    Rcpp::NumericMatrix params_mat(params_obj);
-    nrow_params = params_mat.nrow();
-    SEXP trial_attr = Rf_getAttrib(params_obj, Rf_install("trial"));
-    if (Rf_isNull(trial_attr)) {
-      Rcpp::stop("numeric matrix params must carry a 'trial' attribute");
-    }
-    trial_chr = Rcpp::as<Rcpp::CharacterVector>(
-      Rcpp::wrap(Rf_coerceVector(trial_attr, STRSXP))
-    );
-    if (trial_chr.size() != nrow_params) {
-      Rcpp::stop("trial attribute length must match matrix rows");
+    if (trial_index_ptr == nullptr) {
+      auto* buckets = new std::unordered_map<std::string, std::vector<int>>();
+      buckets->reserve(static_cast<std::size_t>(trial_chr.size()));
+      for (R_xlen_t i = 0; i < trial_chr.size(); ++i) {
+        std::string key = (trial_chr[i] == NA_STRING) ? std::string("NA")
+                                                      : Rcpp::as<std::string>(trial_chr[i]);
+        (*buckets)[key].push_back(static_cast<int>(i));
+      }
+      entries.attr(".trial_bucket_ptr") = Rcpp::XPtr<std::unordered_map<std::string, std::vector<int>>>(
+        buckets, true
+      );
+      trial_index_ptr = buckets;
     }
   }
+  const auto& trial_index = *trial_index_ptr;
 
-  // Map trial key -> row indices
-  std::unordered_map<std::string, std::vector<int>> trial_index;
-  for (R_xlen_t i = 0; i < trial_chr.size(); ++i) {
-    std::string key = (trial_chr[i] == NA_STRING) ? std::string("NA")
-                                                  : Rcpp::as<std::string>(trial_chr[i]);
-    trial_index[key].push_back(static_cast<int>(i));
-  }
-
-  // Column lookup for numeric columns only
-  std::unordered_map<std::string, int> param_col_index;
-  if (is_df) {
-    Rcpp::DataFrame params_df(params_obj);
-    Rcpp::CharacterVector param_names = params_df.names();
-    for (R_xlen_t i = 0; i < param_names.size(); ++i) {
-      if (param_names[i] == NA_STRING) continue;
-      SEXP col = params_df[i];
-      if (TYPEOF(col) != REALSXP && TYPEOF(col) != INTSXP) continue;
-      param_col_index[Rcpp::as<std::string>(param_names[i])] = static_cast<int>(i);
+  // Column indices from matrix colnames (cached)
+  std::unordered_map<std::string, int>* param_col_index_ptr = nullptr;
+  {
+    SEXP cached = entries.attr(".param_col_index_ptr");
+    if (cached != R_NilValue && TYPEOF(cached) == EXTPTRSXP) {
+      param_col_index_ptr = reinterpret_cast<std::unordered_map<std::string, int>*>(
+        R_ExternalPtrAddr(cached)
+      );
     }
-  } else {
-    Rcpp::CharacterVector param_names = Rcpp::as<Rcpp::CharacterVector>(
-      Rcpp::wrap(Rf_getAttrib(params_obj, R_NamesSymbol))
-    );
-    for (R_xlen_t i = 0; i < param_names.size(); ++i) {
-      if (param_names[i] == NA_STRING) continue;
-      param_col_index[Rcpp::as<std::string>(param_names[i])] = static_cast<int>(i);
+    if (param_col_index_ptr == nullptr) {
+      auto* col_index = new std::unordered_map<std::string, int>();
+      SEXP dimnames = Rf_getAttrib(params_obj, R_DimNamesSymbol);
+      if (dimnames != R_NilValue) {
+        Rcpp::List dn(dimnames);
+        if (dn.size() >= 2) {
+          SEXP cols = dn[1];
+          if (!Rf_isNull(cols)) {
+            Rcpp::CharacterVector param_names(cols);
+            col_index->reserve(static_cast<std::size_t>(param_names.size()));
+            for (R_xlen_t i = 0; i < param_names.size(); ++i) {
+              if (param_names[i] == NA_STRING) continue;
+              (*col_index)[Rcpp::as<std::string>(param_names[i])] = static_cast<int>(i);
+            }
+          }
+        }
+      }
+      if (col_index->empty()) {
+        delete col_index;
+        Rcpp::stop("params matrix must have column names");
+      }
+      entries.attr(".param_col_index_ptr") = Rcpp::XPtr<std::unordered_map<std::string, int>>(
+        col_index, true
+      );
+      param_col_index_ptr = col_index;
     }
   }
+  const auto& param_col_index = *param_col_index_ptr;
 
   Rcpp::CharacterVector entry_names = entries.names();
   if (entry_names.size() != entries.size()) {
@@ -4562,6 +4857,26 @@ Rcpp::List native_update_entries_from_params_cpp(SEXP ctxSEXP,
   }
 
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  // Cache base flat params per accumulator
+  std::vector<TrialAccumulatorParams>* base_params_vec_ptr = nullptr;
+  {
+    SEXP cached = entries.attr(".base_params_ptr");
+    if (cached != R_NilValue && TYPEOF(cached) == EXTPTRSXP) {
+      base_params_vec_ptr = reinterpret_cast<std::vector<TrialAccumulatorParams>*>(
+        R_ExternalPtrAddr(cached)
+      );
+    }
+    if (base_params_vec_ptr == nullptr) {
+      auto* base_vec = new std::vector<TrialAccumulatorParams>(ctx->accumulators.size());
+      for (std::size_t k = 0; k < ctx->accumulators.size(); ++k) {
+        (*base_vec)[k] = base_params(ctx->accumulators[k]);
+      }
+      entries.attr(".base_params_ptr") = Rcpp::XPtr<std::vector<TrialAccumulatorParams>>(base_vec, true);
+      base_params_vec_ptr = base_vec;
+    }
+  }
+  const auto& base_params_vec = *base_params_vec_ptr;
+
   for (R_xlen_t i = 0; i < entries.size(); ++i) {
     std::string trial_key = "NA";
     if (entry_names[i] != NA_STRING) {
@@ -4574,71 +4889,142 @@ Rcpp::List native_update_entries_from_params_cpp(SEXP ctxSEXP,
     const std::vector<int>& idx = it->second;
 
     Rcpp::List entry(entries[i]);
-    if (!entry.containsElementNamed("trial_rows")) {
-      Rcpp::stop("Entry missing trial_rows");
+    if (!entry.containsElementNamed("trial_params_ptr")) {
+      continue;
     }
-    Rcpp::DataFrame trial_rows(entry["trial_rows"]);
-    if (trial_rows.nrows() != static_cast<int>(idx.size())) {
-      Rcpp::stop("Mismatch in trial row counts for trial '%s'", trial_key.c_str());
+    Rcpp::RObject ptr_obj = entry["trial_params_ptr"];
+    if (ptr_obj.isNULL()) continue;
+    Rcpp::XPtr<TrialParamSet> params_ptr(ptr_obj);
+    if (params_ptr.isNULL()) continue;
+    if (params_ptr->acc_params.size() != ctx->accumulators.size()) {
+      params_ptr->acc_params.assign(ctx->accumulators.size(), TrialAccumulatorParams{});
+    }
+    // reset to base
+    std::copy(base_params_vec.begin(), base_params_vec.end(), params_ptr->acc_params.begin());
+
+    // binding: [acc_col, onset, q, t0, p1, p2, p3]
+    Rcpp::IntegerVector binding;
+    if (entry.containsElementNamed(".param_binding")) {
+      binding = Rcpp::IntegerVector(entry[".param_binding"]);
+    } else {
+      Rcpp::IntegerVector b(7);
+      auto idx_for = [&](const std::string& name) -> int {
+        auto hit = param_col_index.find(name);
+        if (hit == param_col_index.end()) return -1;
+        return hit->second;
+      };
+      int acc_col = idx_for("accumulator_index");
+      if (acc_col < 0) acc_col = idx_for("accumulator");
+      b[0] = acc_col;
+      b[1] = idx_for("onset");
+      b[2] = idx_for("q");
+      b[3] = idx_for("t0");
+      int p1 = idx_for("p1");
+      if (p1 < 0) p1 = idx_for("meanlog");
+      if (p1 < 0) p1 = idx_for("shape");
+      if (p1 < 0) p1 = idx_for("mu");
+      b[4] = p1;
+      int p2 = idx_for("p2");
+      if (p2 < 0) p2 = idx_for("sdlog");
+      if (p2 < 0) p2 = idx_for("rate");
+      if (p2 < 0) p2 = idx_for("sigma");
+      b[5] = p2;
+      int p3 = idx_for("p3");
+      if (p3 < 0) p3 = idx_for("tau");
+      b[6] = p3;
+      entry[".param_binding"] = b;
+      binding = b;
     }
 
-    Rcpp::CharacterVector trial_cols = trial_rows.names();
-    for (R_xlen_t c = 0; c < trial_cols.size(); ++c) {
-      if (trial_cols[c] == NA_STRING) continue;
-      std::string col_name = Rcpp::as<std::string>(trial_cols[c]);
-      auto src_it = param_col_index.find(col_name);
-      if (src_it == param_col_index.end()) continue;
-      SEXP dst_col = trial_rows[c];
-      if (TYPEOF(dst_col) != REALSXP && TYPEOF(dst_col) != INTSXP) {
-        continue; // only update numeric columns
-      }
-      if (is_df) {
-        Rcpp::DataFrame params_df(params_obj);
-        SEXP src_col = params_df[src_it->second];
-        if (TYPEOF(src_col) != REALSXP && TYPEOF(src_col) != INTSXP) continue;
-        if (TYPEOF(dst_col) == REALSXP) {
-          Rcpp::NumericVector dst(dst_col);
-          Rcpp::NumericVector src(src_col);
-          for (std::size_t j = 0; j < idx.size(); ++j) {
-            dst[j] = src[idx[j]];
-          }
-        } else {
-          Rcpp::IntegerVector dst(dst_col);
-          Rcpp::IntegerVector src(src_col);
-          for (std::size_t j = 0; j < idx.size(); ++j) {
-            dst[j] = src[idx[j]];
-          }
-        }
-      } else {
-        Rcpp::NumericMatrix params_mat(params_obj);
-        Rcpp::NumericVector dst(dst_col);
-        int col_idx = src_it->second;
-        for (std::size_t j = 0; j < idx.size(); ++j) {
-          dst[j] = params_mat(idx[j], col_idx);
-        }
-      }
+    int acc_col_idx = binding[0];
+    if (acc_col_idx < 0) {
+      Rcpp::stop("params matrix missing accumulator/accumulator_index column");
     }
+    int onset_idx = binding[1];
+    int q_idx = binding[2];
+    int t0_idx = binding[3];
+    int p1_idx = binding[4];
+    int p2_idx = binding[5];
+    int p3_idx = binding[6];
 
-    if (entry.containsElementNamed("trial_params_ptr")) {
-      Rcpp::RObject ptr_obj = entry["trial_params_ptr"];
-      if (!ptr_obj.isNULL()) {
-        Rcpp::XPtr<TrialParamSet> params_ptr(ptr_obj);
-        if (!params_ptr.isNULL()) {
-          std::unique_ptr<TrialParamSet> rebuilt = build_trial_params_from_df(
-            *ctx,
-            Rcpp::Nullable<Rcpp::DataFrame>(trial_rows)
-          );
-          if (rebuilt) {
-            *params_ptr = *rebuilt;
-          } else {
-            params_ptr->acc_params.clear();
-          }
-        }
+    for (std::size_t j = 0; j < idx.size(); ++j) {
+      int row_idx = idx[j];
+      double raw_acc = params_mat(row_idx, acc_col_idx);
+      if (!std::isfinite(raw_acc)) continue;
+      int acc_idx = static_cast<int>(std::llround(raw_acc)) - 1;
+      if (acc_idx < 0 || acc_idx >= static_cast<int>(ctx->accumulators.size())) continue;
+      const uuber::NativeAccumulator& base = ctx->accumulators[acc_idx];
+
+      TrialAccumulatorParams& override = params_ptr->acc_params[acc_idx];
+      override.has_override = true;
+      if (onset_idx >= 0) {
+        double v = params_mat(row_idx, onset_idx);
+        if (std::isfinite(v)) override.onset = v;
+      }
+      if (q_idx >= 0) {
+        double v = params_mat(row_idx, q_idx);
+        if (std::isfinite(v)) override.q = v;
+      }
+      auto assign_p = [&](int cidx, double& field) {
+        if (cidx < 0) return;
+        double v = params_mat(row_idx, cidx);
+        if (std::isfinite(v)) field = v;
+      };
+      switch (base.dist_cfg.code) {
+      case uuber::ACC_DIST_LOGNORMAL:
+        assign_p(p1_idx, override.dist_cfg.p1);
+        assign_p(p2_idx, override.dist_cfg.p2);
+        break;
+      case uuber::ACC_DIST_GAMMA:
+        assign_p(p1_idx, override.dist_cfg.p1);
+        assign_p(p2_idx, override.dist_cfg.p2);
+        break;
+      case uuber::ACC_DIST_EXGAUSS:
+        assign_p(p1_idx, override.dist_cfg.p1);
+        assign_p(p2_idx, override.dist_cfg.p2);
+        assign_p(p3_idx, override.dist_cfg.p3);
+        break;
+      default:
+        break;
+      }
+      if (t0_idx >= 0) {
+        double v = params_mat(row_idx, t0_idx);
+        if (std::isfinite(v)) override.dist_cfg.t0 = v;
       }
     }
     entries[i] = entry;
   }
   return entries;
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericMatrix native_debug_trial_params_cpp(Rcpp::List entry) {
+  if (!entry.containsElementNamed("trial_params_ptr")) {
+    Rcpp::stop("entry missing trial_params_ptr");
+  }
+  Rcpp::RObject ptr_obj = entry["trial_params_ptr"];
+  if (ptr_obj.isNULL()) {
+    Rcpp::stop("trial_params_ptr is NULL");
+  }
+  Rcpp::XPtr<TrialParamSet> ptr(ptr_obj);
+  if (ptr.isNULL()) {
+    Rcpp::stop("trial_params_ptr is NULL");
+  }
+  // Collect acc_idx and dist params
+  Rcpp::NumericMatrix out(ptr->acc_params.size(), 5);
+  Rcpp::CharacterVector row_names(ptr->acc_params.size());
+  for (std::size_t i = 0; i < ptr->acc_params.size(); ++i) {
+    const TrialAccumulatorParams& p = ptr->acc_params[i];
+    out(i, 0) = static_cast<double>(i);
+    out(i, 1) = p.dist_cfg.p1;
+    out(i, 2) = p.dist_cfg.p2;
+    out(i, 3) = p.dist_cfg.p3;
+    out(i, 4) = p.dist_cfg.t0;
+    row_names[i] = std::to_string(i);
+  }
+  Rcpp::colnames(out) = Rcpp::CharacterVector::create("acc_idx", "p1", "p2", "p3", "t0");
+  out.attr("dimnames") = Rcpp::List::create(row_names, Rcpp::colnames(out));
+  return out;
 }
 
 // [[Rcpp::export]]

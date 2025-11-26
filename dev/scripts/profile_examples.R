@@ -1,7 +1,7 @@
 rm(list = ls())
 
-repeat_count <- as.integer(Sys.getenv("UUBER_PROFILE_REPEATS", "10"))
-n_rep <- 10
+repeat_count <- as.integer(Sys.getenv("UUBER_PROFILE_REPEATS", "200"))
+n_rep <- 1
 
 repo_root <- Sys.getenv("UUBER_REPO_ROOT", unset = NA_character_)
 if (!is.na(repo_root) && nzchar(repo_root)) {
@@ -49,15 +49,10 @@ profile_example <- function(example_id,
     if ("params_hash" %in% names(df)) {
       df$params_hash <- NULL
     }
-    num_cols <- vapply(df, is.numeric, logical(1))
-    if ("trial" %in% names(df)) num_cols[match("trial", names(df))] <- FALSE
-    if (any(num_cols)) {
-      delta <- (i - 1) * 1e-4
-      for (nm in names(df)[num_cols]) {
-        df[[nm]] <- df[[nm]] + delta
-      }
+    if("meanlog" %in% colnames(df)){
+      df[,"meanlog"] <- df[,"meanlog"] + rnorm(nrow(df), sd = 0.05)
     }
-    df
+    AccumulatR:::.params_df_to_matrix(df)
   })
   elapsed <- system.time({
     with_native_flags(TRUE, TRUE, {

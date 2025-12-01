@@ -211,10 +211,38 @@ inline double safe_density(double value) {
   return value;
 }
 
+inline double lognormal_pdf_fast(double x, double meanlog, double sdlog) {
+  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(meanlog) || !std::isfinite(sdlog) || sdlog <= 0.0) {
+    return 0.0;
+  }
+  const double inv_sigma = 1.0 / sdlog;
+  const double logx = std::log(x);
+  const double z = (logx - meanlog) * inv_sigma;
+  const double norm = 0.3989422804014327 * inv_sigma; // 1/sqrt(2*pi) * 1/sdlog
+  double val = (norm / x) * std::exp(-0.5 * z * z);
+  return std::isfinite(val) && val > 0.0 ? val : 0.0;
+}
+
+inline double lognormal_cdf_fast(double x, double meanlog, double sdlog) {
+  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(meanlog) || !std::isfinite(sdlog) || sdlog <= 0.0) {
+    return 0.0;
+  }
+  const double inv_sigma = 1.0 / sdlog;
+  const double logx = std::log(x);
+  const double z = (logx - meanlog) * inv_sigma;
+  // 0.5 * erfc(-z / sqrt(2))
+  const double arg = -z * 0.7071067811865475;
+  double val = 0.5 * std::erfc(arg);
+  if (!std::isfinite(val)) return 0.0;
+  if (val < 0.0) return 0.0;
+  if (val > 1.0) return 1.0;
+  return val;
+}
+
 inline double eval_pdf_single(const AccDistParams& cfg, double x) {
   switch (cfg.code) {
   case uuber::ACC_DIST_LOGNORMAL:
-    return dist_lognormal_pdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2)[0];
+    return lognormal_pdf_fast(x, cfg.p1, cfg.p2);
   case uuber::ACC_DIST_GAMMA:
     return dist_gamma_pdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2)[0];
   case uuber::ACC_DIST_EXGAUSS:
@@ -227,7 +255,7 @@ inline double eval_pdf_single(const AccDistParams& cfg, double x) {
 inline double eval_cdf_single(const AccDistParams& cfg, double x) {
   switch (cfg.code) {
   case uuber::ACC_DIST_LOGNORMAL:
-    return dist_lognormal_cdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2)[0];
+    return lognormal_cdf_fast(x, cfg.p1, cfg.p2);
   case uuber::ACC_DIST_GAMMA:
     return dist_gamma_cdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2)[0];
   case uuber::ACC_DIST_EXGAUSS:
@@ -1384,9 +1412,6 @@ GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
                                 const std::unordered_set<int>& forced_survive,
                                 const std::string& trial_key,
                                 const TrialParamSet* trial_params);
-double guard_effective_survival_internal(const GuardEvalInput& input,
-                                         double t,
-                                         const IntegrationSettings& settings);
 std::vector<int> gather_blocker_sources(const uuber::NativeContext& ctx,
                                         const uuber::NativeNode& guard_node);
 
@@ -1698,6 +1723,75 @@ std::vector<ScenarioRecord> compute_or_scenarios(const uuber::NativeNode& node,
   return out;
 }
 
+struct GuardMemoKey {
+  int node_id;
+  std::uint64_t t_bits;
+  bool operator==(const GuardMemoKey& other) const noexcept {
+    return node_id == other.node_id && t_bits == other.t_bits;
+  }
+};
+
+struct GuardMemoKeyHash {
+  std::size_t operator()(const GuardMemoKey& key) const noexcept {
+    std::size_t h = static_cast<std::size_t>(key.node_id);
+    h ^= static_cast<std::size_t>(key.t_bits + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+    return h;
+  }
+};
+
+using GuardMemo = std::unordered_map<GuardMemoKey, NodeEvalResult, GuardMemoKeyHash>;
+
+inline NodeEvalResult eval_node_guard_cached(const GuardEvalInput& input,
+                                             int node_id,
+                                             double t,
+                                             GuardMemo* memo) {
+  if (!memo) {
+    return eval_node_with_forced(
+      input.ctx,
+      input.cache,
+      node_id,
+      t,
+      input.component,
+      input.forced_complete,
+      input.forced_survive,
+      input.trial_params,
+      input.trial_type_key
+    );
+  }
+  GuardMemoKey key{node_id, double_to_bits(t)};
+  auto it = memo->find(key);
+  if (it != memo->end()) {
+    return it->second;
+  }
+  NodeEvalResult res = eval_node_with_forced(
+    input.ctx,
+    input.cache,
+    node_id,
+    t,
+    input.component,
+    input.forced_complete,
+    input.forced_survive,
+    input.trial_params,
+    input.trial_type_key
+  );
+  memo->emplace(key, res);
+  return res;
+}
+
+double guard_effective_survival_internal(const GuardEvalInput& input,
+                                         double t,
+                                         const IntegrationSettings& settings,
+                                         GuardMemo* memo = nullptr);
+
+double guard_density_internal(const GuardEvalInput& input,
+                              double t,
+                              const IntegrationSettings& settings,
+                              GuardMemo* memo = nullptr);
+
+double guard_cdf_internal(const GuardEvalInput& input,
+                          double t,
+                          const IntegrationSettings& settings);
+
 std::vector<ScenarioRecord> compute_guard_scenarios(const uuber::NativeNode& node,
                                                     NodeEvalState& state) {
   std::vector<ScenarioRecord> out;
@@ -1888,18 +1982,6 @@ GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
   return input;
 }
 
-double guard_effective_survival_internal(const GuardEvalInput& input,
-                                         double t,
-                                         const IntegrationSettings& settings);
-
-double guard_density_internal(const GuardEvalInput& input,
-                              double t,
-                              const IntegrationSettings& settings);
-
-double guard_cdf_internal(const GuardEvalInput& input,
-                          double t,
-                          const IntegrationSettings& settings);
-
 NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state) {
   const uuber::NativeNode& node = fetch_node(state.ctx, node_id);
   NodeEvalResult result;
@@ -1945,7 +2027,8 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state) {
 
 double guard_effective_survival_internal(const GuardEvalInput& input,
                                          double t,
-                                         const IntegrationSettings& settings) {
+                                         const IntegrationSettings& settings,
+                                         GuardMemo* memo) {
   if (!std::isfinite(t)) {
     return 1.0;
   }
@@ -1957,43 +2040,32 @@ double guard_effective_survival_internal(const GuardEvalInput& input,
     return 1.0;
   }
   if (input.node.unless_ids.empty()) {
-    NodeEvalResult block = eval_node_with_forced(
-      input.ctx,
-      input.cache,
+    NodeEvalResult block = eval_node_guard_cached(
+      input,
       blocker_id,
       t,
-      input.component,
-      input.forced_complete,
-      input.forced_survive
+      memo
     );
     return clamp_probability(block.survival);
   }
   auto integrand = [&](double u) -> double {
     if (!std::isfinite(u) || u < 0.0) return 0.0;
-    NodeEvalResult block = eval_node_with_forced(
-      input.ctx,
-      input.cache,
+    NodeEvalResult block = eval_node_guard_cached(
+      input,
       blocker_id,
       u,
-      input.component,
-      input.forced_complete,
-      input.forced_survive
+      memo
     );
     double density = block.density;
     if (!std::isfinite(density) || density <= 0.0) return 0.0;
     double prod = 1.0;
     for (int unl_id : input.node.unless_ids) {
       if (unl_id < 0) continue;
-      NodeEvalResult protector = eval_node_with_forced(
-        input.ctx,
-        input.cache,
+      NodeEvalResult protector = eval_node_guard_cached(
+        input,
         unl_id,
         u,
-        input.component,
-        input.forced_complete,
-        input.forced_survive,
-        input.trial_params,
-        input.trial_type_key
+        memo
       );
       prod *= clamp_probability(protector.survival);
       if (!std::isfinite(prod) || prod <= 0.0) {
@@ -2006,20 +2078,14 @@ double guard_effective_survival_internal(const GuardEvalInput& input,
     if (!std::isfinite(val) || val <= 0.0) return 0.0;
     return val;
   };
-  double integral = uuber::integrate_boost_fn_21(
-    integrand,
-    0.0,
-    t,
-    kGuardRelTol,
-    kGuardAbsTol,
-    settings.max_depth
-  );
+  double integral = uuber::integrate_fixed_gauss15(integrand, 0.0, t);
   double surv = 1.0 - integral;
   return clamp_probability(surv);
 }
 
 double guard_reference_density(const GuardEvalInput& input,
-                               double t) {
+                               double t,
+                               GuardMemo* memo = nullptr) {
   if (!std::isfinite(t) || t < 0.0) {
     return 0.0;
   }
@@ -2027,14 +2093,11 @@ double guard_reference_density(const GuardEvalInput& input,
   if (reference_id < 0) {
     return 0.0;
   }
-  NodeEvalResult ref = eval_node_with_forced(
-    input.ctx,
-    input.cache,
+  NodeEvalResult ref = eval_node_guard_cached(
+    input,
     reference_id,
     t,
-    input.component,
-    input.forced_complete,
-    input.forced_survive
+    memo
   );
   double dens_ref = ref.density;
   if (!std::isfinite(dens_ref) || dens_ref <= 0.0) return 0.0;
@@ -2043,10 +2106,11 @@ double guard_reference_density(const GuardEvalInput& input,
 
 double guard_density_internal(const GuardEvalInput& input,
                               double t,
-                              const IntegrationSettings& settings) {
-  double dens_ref = guard_reference_density(input, t);
+                              const IntegrationSettings& settings,
+                              GuardMemo* memo) {
+  double dens_ref = guard_reference_density(input, t, memo);
   if (dens_ref <= 0.0) return 0.0;
-  double s_eff = guard_effective_survival_internal(input, t, settings);
+  double s_eff = guard_effective_survival_internal(input, t, settings, memo);
   double val = dens_ref * s_eff;
   if (!std::isfinite(val) || val <= 0.0) return 0.0;
   return val;
@@ -2061,17 +2125,11 @@ double guard_cdf_internal(const GuardEvalInput& input,
   if (t <= 0.0) {
     return 0.0;
   }
+  GuardMemo memo;
   auto integrand = [&](double u) -> double {
-    return guard_density_internal(input, u, settings);
+    return guard_density_internal(input, u, settings, &memo);
   };
-  double val = uuber::integrate_boost_fn_21(
-    integrand,
-    0.0,
-    t,
-    kGuardRelTol,
-    kGuardAbsTol,
-    settings.max_depth
-  );
+  double val = uuber::integrate_fixed_gauss15(integrand, 0.0, t);
   if (!std::isfinite(val) || val < 0.0) val = 0.0;
   return clamp_probability(val);
 }
@@ -6280,8 +6338,8 @@ double guard_effective_survival_cpp(Rcpp::Function integrand,
                                     int max_depth) {
   if (!std::isfinite(upper)) return 0.0;
   if (upper <= 0.0) return 1.0;
-  if (rel_tol <= 0.0) rel_tol = 1e-6;
-  if (abs_tol <= 0.0) abs_tol = 1e-8;
+  if (rel_tol <= 0.0) rel_tol = 1e-5;
+  if (abs_tol <= 0.0) abs_tol = 1e-6;
   double integral = 0.0;
   try {
     integral = uuber::integrate_boost(integrand, 0.0, upper, rel_tol, abs_tol, max_depth);

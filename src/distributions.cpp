@@ -179,9 +179,6 @@ std::vector<int> integer_vector_to_std(const Rcpp::IntegerVector& src,
 constexpr double kDefaultRelTol = 1e-5;
 constexpr double kDefaultAbsTol = 1e-6;
 constexpr int kDefaultMaxDepth = 12;
-constexpr double kGuardRelTol = 1e-5;
-constexpr double kGuardAbsTol = 1e-6;
-
 template <typename T>
 inline T clamp(T val, T lo, T hi) {
   if (!std::isfinite(val)) {
@@ -419,11 +416,6 @@ inline Rcpp::List scenario_records_to_r(const std::vector<ScenarioRecord>& recor
   return out;
 }
 
-inline Rcpp::IntegerVector forced_set_to_vector(const std::unordered_set<int>& ids) {
-  std::vector<int> sorted = set_to_sorted_vector(ids);
-  return Rcpp::IntegerVector(sorted.begin(), sorted.end());
-}
-
 std::vector<ScenarioRecord> rcpp_scenarios_to_records(const Rcpp::List& scenarios) {
   std::vector<ScenarioRecord> out;
   out.reserve(scenarios.size());
@@ -475,84 +467,6 @@ std::unordered_set<int> make_forced_set(const std::vector<int>& ids) {
 }
 
 struct TrialParamSet;
-
-struct TrialRowColumns {
-  R_xlen_t nrows{0};
-  bool has_acc_id{false};
-  Rcpp::CharacterVector acc_id_col;
-  bool has_acc_column{false};
-  bool acc_is_numeric{false};
-  Rcpp::NumericVector acc_num_col;
-  Rcpp::CharacterVector acc_chr_col;
-  Rcpp::CharacterVector dist_col;
-  Rcpp::NumericVector onset_col;
-  Rcpp::NumericVector q_col;
-  Rcpp::CharacterVector shared_col;
-  Rcpp::List comps_col;
-  Rcpp::List params_list_col;
-  std::vector<std::string> param_cols;
-  std::vector<SEXP> param_col_data;
-  std::vector<int> param_col_types;
-};
-
-TrialRowColumns capture_trial_row_columns(const Rcpp::DataFrame& df) {
-  TrialRowColumns cols;
-  cols.nrows = df.nrows();
-  cols.has_acc_id = df.containsElementNamed("accumulator_id");
-  if (cols.has_acc_id) {
-    cols.acc_id_col = Rcpp::CharacterVector(df["accumulator_id"]);
-  }
-  cols.has_acc_column = df.containsElementNamed("accumulator");
-  if (cols.has_acc_column) {
-    SEXP acc_col = df["accumulator"];
-    if (Rf_isNumeric(acc_col)) {
-      cols.acc_is_numeric = true;
-      cols.acc_num_col = Rcpp::NumericVector(acc_col);
-    } else {
-      cols.acc_is_numeric = false;
-      cols.acc_chr_col = Rcpp::CharacterVector(acc_col);
-    }
-  }
-  cols.dist_col = df.containsElementNamed("dist")
-    ? Rcpp::CharacterVector(df["dist"])
-    : Rcpp::CharacterVector();
-  cols.onset_col = df.containsElementNamed("onset")
-    ? Rcpp::NumericVector(df["onset"])
-    : Rcpp::NumericVector();
-  cols.q_col = df.containsElementNamed("q")
-    ? Rcpp::NumericVector(df["q"])
-    : Rcpp::NumericVector();
-  cols.shared_col = df.containsElementNamed("shared_trigger_id")
-    ? Rcpp::CharacterVector(df["shared_trigger_id"])
-    : Rcpp::CharacterVector();
-  cols.comps_col = df.containsElementNamed("components")
-    ? Rcpp::List(df["components"])
-    : Rcpp::List();
-  cols.params_list_col = df.containsElementNamed("params")
-    ? Rcpp::List(df["params"])
-    : Rcpp::List();
-
-  static const std::unordered_set<std::string> kBaseCols = {
-    "trial", "component", "accumulator", "accumulator_id",
-    "accumulator_index", "acc_idx", "type", "role",
-    "outcome", "rt", "params", "onset", "q",
-    "condition", "component_weight", "shared_trigger_id",
-    "dist", "components"
-  };
-  Rcpp::CharacterVector df_names = df.names();
-  if (!df_names.isNULL()) {
-    for (R_xlen_t i = 0; i < df_names.size(); ++i) {
-      if (df_names[i] == NA_STRING) continue;
-      std::string col_name = Rcpp::as<std::string>(df_names[i]);
-      if (kBaseCols.find(col_name) != kBaseCols.end()) continue;
-      SEXP column = df[col_name];
-      cols.param_cols.push_back(col_name);
-      cols.param_col_data.push_back(column);
-      cols.param_col_types.push_back(TYPEOF(column));
-    }
-  }
-  return cols;
-}
 
 inline int label_id(const uuber::NativeContext& ctx, const std::string& label) {
   auto it = ctx.label_to_id.find(label);
@@ -740,17 +654,6 @@ double accumulate_outcome_alias_density(const uuber::NativeContext& ctx,
   return total;
 }
 
-
-double accumulate_plan_guess_probability(SEXP ctxSEXP,
-                                         const uuber::NativeContext& ctx,
-                                         const Rcpp::List& donors,
-                                         double upper_limit,
-                                         Rcpp::Nullable<Rcpp::String> component,
-                                         const ComponentCacheEntry& cache_entry,
-                                         double rel_tol,
-                                         double abs_tol,
-                                         int max_depth,
-                                         const TrialParamSet* trial_params);
 
 inline const TrialAccumulatorParams* get_trial_param_entry(const TrialParamSet* trial_params,
                                                           int acc_index) {
@@ -4137,9 +4040,6 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
         }
       }
     }
-    bool has_competitors = entry.containsElementNamed("has_competitors")
-      ? Rcpp::as<bool>(entry["has_competitors"])
-      : true;
     Rcpp::IntegerVector competitor_ids = entry.containsElementNamed("competitor_ids")
       ? Rcpp::IntegerVector(entry["competitor_ids"])
       : Rcpp::IntegerVector();
@@ -5595,17 +5495,6 @@ inline std::vector<int> integer_vector_to_std(const Rcpp::IntegerVector& src,
   }
   sort_unique(out);
   return out;
-}
-
-inline std::vector<int> merge_forced_vectors(const std::vector<int>& base,
-                                             const Rcpp::IntegerVector& addition) {
-  std::vector<int> result = base;
-  for (int val : addition) {
-    if (val == NA_INTEGER) continue;
-    result.push_back(val);
-  }
-  sort_unique(result);
-  return result;
 }
 
 inline std::vector<int> merge_forced_vectors(const std::vector<int>& base,

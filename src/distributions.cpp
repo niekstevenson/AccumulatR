@@ -892,52 +892,7 @@ struct TimeKey {
   double value{0.0};
 };
 
-struct CacheEntry {
-  bool has_density{false};
-  bool has_survival{false};
-  bool has_cdf{false};
-  bool scenarios_cached{false};
-  NodeEvalResult result;
-  std::vector<ScenarioRecord> scenarios;
-};
-
-struct CacheKey {
-  std::string trial_type_key;
-  std::uint64_t time_bits{0};
-  std::uint64_t forced_complete_hash{0};
-  std::uint64_t forced_survive_hash{0};
-  bool include_na_donors{false};
-  std::string outcome_label;
-
-  bool operator==(const CacheKey& other) const noexcept {
-    return time_bits == other.time_bits &&
-           forced_complete_hash == other.forced_complete_hash &&
-           forced_survive_hash == other.forced_survive_hash &&
-           include_na_donors == other.include_na_donors &&
-           trial_type_key == other.trial_type_key &&
-           outcome_label == other.outcome_label;
-  }
-};
-
-struct CacheKeyHash {
-  std::size_t operator()(const CacheKey& key) const noexcept {
-    std::size_t h = std::hash<std::string>{}(key.trial_type_key);
-    h ^= static_cast<std::size_t>(key.time_bits + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
-    h ^= static_cast<std::size_t>(key.forced_complete_hash + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
-    h ^= static_cast<std::size_t>(key.forced_survive_hash + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
-    h ^= static_cast<std::size_t>(key.include_na_donors) + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-    h ^= std::hash<std::string>{}(key.outcome_label);
-    return h;
-  }
-};
-
-struct NodeCache {
-  std::unordered_map<CacheKey, CacheEntry, CacheKeyHash> entries;
-};
-
-struct EvalCache {
-  std::unordered_map<int, NodeCache> nodes;
-};
+struct EvalCache {};
 
 std::string component_cache_key(const std::string& component,
                                 const std::string& trial_key);
@@ -1318,17 +1273,6 @@ struct NodeEvalState {
   std::uint64_t time_bits;
 };
 
-inline CacheKey eval_cache_key(const NodeEvalState& state) {
-  CacheKey key;
-  key.trial_type_key = state.trial_type_key;
-  key.time_bits = state.time_bits;
-  key.forced_complete_hash = state.forced_complete_hash;
-  key.forced_survive_hash = state.forced_survive_hash;
-  key.include_na_donors = state.include_na_donors;
-  key.outcome_label = state.outcome_label;
-  return key;
-}
-
 inline const TrialAccumulatorParams* get_state_params(const NodeEvalState& state,
                                                           int acc_index) {
   return get_trial_param_entry(state.trial_params, acc_index);
@@ -1386,52 +1330,6 @@ std::string pool_template_cache_key(const std::string& pool_label,
   oss << pool_label << "|" << component_cache_key(component) << "|" << k << "|"
       << member_ids_signature(member_ids) << "|" << shared_signature;
   return oss.str();
-}
-
-CacheEntry& fetch_cache_entry(NodeEvalState& state, int node_id) {
-  NodeCache& node_cache = state.cache.nodes[node_id];
-  CacheKey cache_key = eval_cache_key(state);
-  return node_cache.entries[cache_key];
-}
-
-bool fetch_cached_result(NodeEvalState& state,
-                            int node_id,
-                            NodeEvalResult& out) {
-  CacheEntry& entry = fetch_cache_entry(state, node_id);
-  if (!entry.has_density && !entry.has_survival && !entry.has_cdf) {
-    state.ctx.cache_metrics.scratch_misses++;
-    return false;
-  }
-  state.ctx.cache_metrics.scratch_hits++;
-  out = entry.result;
-  return true;
-}
-
-void store_cached_result(NodeEvalState& state,
-                         int node_id,
-                         const NodeEvalResult& res) {
-  CacheEntry& entry = fetch_cache_entry(state, node_id);
-  entry.result = res;
-  entry.has_density = true;
-  entry.has_survival = true;
-  entry.has_cdf = true;
-}
-
-bool fetch_cached_scenarios(NodeEvalState& state,
-                            int node_id,
-                            std::vector<ScenarioRecord>& out) {
-  CacheEntry& entry = fetch_cache_entry(state, node_id);
-  if (!entry.scenarios_cached) return false;
-  out = entry.scenarios;
-  return true;
-}
-
-void store_cached_scenarios(NodeEvalState& state,
-                            int node_id,
-                            const std::vector<ScenarioRecord>& records) {
-  CacheEntry& entry = fetch_cache_entry(state, node_id);
-  entry.scenarios = records;
-  entry.scenarios_cached = true;
 }
 
 struct IntegrationSettings {
@@ -1837,10 +1735,6 @@ std::vector<ScenarioRecord> compute_guard_scenarios(const uuber::NativeNode& nod
 }
 
 std::vector<ScenarioRecord> compute_node_scenarios(int node_id, NodeEvalState& state) {
-  std::vector<ScenarioRecord> cached;
-  if (fetch_cached_scenarios(state, node_id, cached)) {
-    return cached;
-  }
   const uuber::NativeNode& node = fetch_node(state.ctx, node_id);
   std::vector<ScenarioRecord> result;
   if (node.kind == "event") {
@@ -1852,7 +1746,6 @@ std::vector<ScenarioRecord> compute_node_scenarios(int node_id, NodeEvalState& s
   } else if (node.kind == "guard") {
     result = compute_guard_scenarios(node, state);
   }
-  store_cached_scenarios(state, node_id, result);
   return result;
 }
 
@@ -2008,10 +1901,6 @@ double guard_cdf_internal(const GuardEvalInput& input,
                           const IntegrationSettings& settings);
 
 NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state) {
-  NodeEvalResult cached;
-  if (fetch_cached_result(state, node_id, cached)) {
-    return cached;
-  }
   const uuber::NativeNode& node = fetch_node(state.ctx, node_id);
   NodeEvalResult result;
   if (node.kind == "event") {
@@ -2051,7 +1940,6 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state) {
   } else {
     result = make_node_result(0.0, 1.0, 0.0);
   }
-  store_cached_result(state, node_id, result);
   return result;
 }
 
@@ -5460,8 +5348,6 @@ Rcpp::List native_cache_stats_cpp(SEXP ctxSEXP) {
   return Rcpp::List::create(
     Rcpp::Named("na_hits") = Rcpp::wrap(static_cast<double>(stats.na_hits)),
     Rcpp::Named("na_misses") = Rcpp::wrap(static_cast<double>(stats.na_misses)),
-    Rcpp::Named("scratch_hits") = Rcpp::wrap(static_cast<double>(stats.scratch_hits)),
-    Rcpp::Named("scratch_misses") = Rcpp::wrap(static_cast<double>(stats.scratch_misses)),
     Rcpp::Named("context_builds") = Rcpp::wrap(static_cast<double>(ctx->context_builds)),
     Rcpp::Named("context_reuses") = Rcpp::wrap(static_cast<double>(ctx->context_reuses))
   );

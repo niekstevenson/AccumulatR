@@ -313,12 +313,10 @@ summarize_model_performance <- function(model_spec,
                                         seed = 2025) {
   metric_names <- c(
     "struct_hits", "struct_misses",
-    "na_hits", "na_misses",
-    "scratch_hits", "scratch_misses"
+    "na_hits", "na_misses"
   )
   native_metric_names <- c(
     "na_hits", "na_misses",
-    "scratch_hits", "scratch_misses",
     "context_builds", "context_reuses"
   )
   zero_metrics <- stats::setNames(rep(0, length(metric_names)), metric_names)
@@ -401,14 +399,10 @@ summarize_model_performance <- function(model_spec,
     R_struct_misses = r_metrics[["struct_misses"]],
     R_na_hits = r_metrics[["na_hits"]],
     R_na_misses = r_metrics[["na_misses"]],
-    R_scratch_hits = r_metrics[["scratch_hits"]],
-    R_scratch_misses = r_metrics[["scratch_misses"]],
     C_struct_hits = c_struct_metrics[["struct_hits"]],
     C_struct_misses = c_struct_metrics[["struct_misses"]],
     C_na_hits = c_native_metrics[["na_hits"]],
     C_na_misses = c_native_metrics[["na_misses"]],
-    C_scratch_hits = c_native_metrics[["scratch_hits"]],
-    C_scratch_misses = c_native_metrics[["scratch_misses"]],
     C_context_builds = c_native_metrics[["context_builds"]],
     C_context_reuses = c_native_metrics[["context_reuses"]],
     stringsAsFactors = FALSE

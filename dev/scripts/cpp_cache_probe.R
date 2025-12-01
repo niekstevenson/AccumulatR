@@ -35,8 +35,6 @@ extract_native_stats <- function(prep) {
       struct_misses = struct_misses,
       na_hits = NA_real_,
       na_misses = NA_real_,
-      scratch_hits = NA_real_,
-      scratch_misses = NA_real_,
       context_builds = NA_real_,
       context_reuses = NA_real_
     ))
@@ -46,8 +44,6 @@ extract_native_stats <- function(prep) {
     struct_misses = struct_misses,
     na_hits = native$na_hits %||% 0,
     na_misses = native$na_misses %||% 0,
-    scratch_hits = native$scratch_hits %||% 0,
-    scratch_misses = native$scratch_misses %||% 0,
     context_builds = native$context_builds %||% 0,
     context_reuses = native$context_reuses %||% 0
   )

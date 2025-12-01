@@ -85,8 +85,6 @@ struct OutcomeContextInfo {
 struct CacheMetrics {
   std::uint64_t na_hits{0};
   std::uint64_t na_misses{0};
-  std::uint64_t scratch_hits{0};
-  std::uint64_t scratch_misses{0};
 };
 
 struct NativeContext {

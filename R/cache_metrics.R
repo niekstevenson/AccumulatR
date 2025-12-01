@@ -1,7 +1,6 @@
 .likelihood_cache_metric_fields <- c(
   "struct_hits", "struct_misses",
-  "na_hits", "na_misses",
-  "scratch_hits", "scratch_misses"
+  "na_hits", "na_misses"
 )
 
 .likelihood_cache_metrics_env <- local({

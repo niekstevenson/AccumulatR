@@ -82,11 +82,6 @@ struct OutcomeContextInfo {
   bool maps_to_na{false};
 };
 
-struct CacheMetrics {
-  std::uint64_t na_hits{0};
-  std::uint64_t na_misses{0};
-};
-
 struct NativeContext {
   std::vector<NativeAccumulator> accumulators;
   std::vector<NativePool> pools;
@@ -99,9 +94,6 @@ struct NativeContext {
   mutable std::unordered_map<std::string, double> na_map_cache;
   mutable std::unordered_map<std::string, std::deque<std::string>> na_cache_order;
   int na_cache_limit{128};
-  mutable CacheMetrics cache_metrics;
-  mutable std::uint64_t context_builds{0};
-  mutable std::uint64_t context_reuses{0};
   std::unordered_map<std::string, std::vector<int>> shared_trigger_map;
   std::unordered_map<std::string, ComponentContextInfo> component_info;
   std::unordered_map<std::string, OutcomeContextInfo> outcome_info;

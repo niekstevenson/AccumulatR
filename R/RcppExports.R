@@ -109,18 +109,6 @@ native_outcome_probability_params_cpp <- function(ctxSEXP, node_id, upper, compo
     .Call(`_AccumulatR_native_outcome_probability_params_cpp`, ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows)
 }
 
-native_cache_stats_cpp <- function(ctxSEXP) {
-    .Call(`_AccumulatR_native_cache_stats_cpp`, ctxSEXP)
-}
-
-native_cache_reset_stats_cpp <- function(ctxSEXP) {
-    invisible(.Call(`_AccumulatR_native_cache_reset_stats_cpp`, ctxSEXP))
-}
-
-native_context_touch_cpp <- function(ctxSEXP) {
-    invisible(.Call(`_AccumulatR_native_context_touch_cpp`, ctxSEXP))
-}
-
 #' @noRd
 dist_lognormal_pdf <- function(x, meanlog, sdlog) {
     .Call(`_AccumulatR_dist_lognormal_pdf`, x, meanlog, sdlog)

@@ -1,4 +1,4 @@
-source("examples/new_API.R")
+source("dev/examples/new_API.R")
 
 # Helper: shared accumulator definitions for stimulus-selective race
 .stim_base_spec <- function() {

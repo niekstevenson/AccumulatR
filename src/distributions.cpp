@@ -3651,11 +3651,9 @@ double evaluate_na_map_mix(SEXP ctxSEXP,
       double prob = 0.0;
       auto cached = ctx->na_map_cache.find(cache_key);
       if (cached != ctx->na_map_cache.end()) {
-        ctx->cache_metrics.na_hits++;
         na_cache_touch(*ctx, cache_entry.trial_type_key, cache_key);
         prob = cached->second;
       } else {
-        ctx->cache_metrics.na_misses++;
         prob = native_outcome_probability_impl(ctxSEXP,
                                                node_id,
                                                deadline,
@@ -5297,31 +5295,6 @@ double native_outcome_probability_params_cpp(SEXP ctxSEXP,
                                          abs_tol,
                                          max_depth,
                                          params_holder ? params_holder.get() : nullptr);
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_cache_stats_cpp(SEXP ctxSEXP) {
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  const uuber::CacheMetrics& stats = ctx->cache_metrics;
-  return Rcpp::List::create(
-    Rcpp::Named("na_hits") = Rcpp::wrap(static_cast<double>(stats.na_hits)),
-    Rcpp::Named("na_misses") = Rcpp::wrap(static_cast<double>(stats.na_misses)),
-    Rcpp::Named("context_builds") = Rcpp::wrap(static_cast<double>(ctx->context_builds)),
-    Rcpp::Named("context_reuses") = Rcpp::wrap(static_cast<double>(ctx->context_reuses))
-  );
-}
-
-// [[Rcpp::export]]
-void native_cache_reset_stats_cpp(SEXP ctxSEXP) {
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  ctx->cache_metrics = uuber::CacheMetrics();
-  ctx->context_reuses = 0;
-}
-
-// [[Rcpp::export]]
-void native_context_touch_cpp(SEXP ctxSEXP) {
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  ctx->context_reuses++;
 }
 
 // Forward declarations for native distribution helpers

@@ -8,7 +8,8 @@
                                  label,
                                  percent,
                                  n_points,
-                                 n_trials) {
+                                 n_trials,
+                                 ctx) {
   base_value <- base_params[[param_name]]
   span <- if (!is.finite(base_value) || base_value == 0) {
     percent
@@ -16,13 +17,12 @@
     abs(base_value) * percent
   }
   grid <- seq(base_value - span, base_value + span, length.out = n_points)
-  log_liks <- vapply(grid, function(val) {
+  param_tables <- lapply(grid, function(val) {
     candidate <- base_params
     candidate[[param_name]] <- val
-    params_df <- build_params_df(model_spec, candidate, n_trials = n_trials)
-    res <- log_likelihood_from_params(structure, params_df, data)
-    res$loglik %||% -Inf
-  }, numeric(1))
+    build_params_df(model_spec, candidate, n_trials = n_trials)
+  })
+  log_liks <- native_loglikelihood_param_repeat(ctx, param_tables)
   data.frame(
     parameter = param_name,
     label = label,
@@ -63,7 +63,12 @@ profile_likelihood <- function(structure,
   }
   n_trials <- length(unique(data$trial %||% seq_len(nrow(data))))
   base_table <- build_params_df(model_spec, base_params, n_trials = n_trials)
-  true_ll <- log_likelihood_from_params(structure, base_table, data)$loglik
+  ctx <- build_likelihood_context(
+    structure = structure,
+    params_df = base_table,
+    data_df = data
+  )
+  true_ll <- native_loglikelihood_param_repeat(ctx, list(base_table))[[1]]
   label_map <- param_labels %||% stats::setNames(names(base_params), names(base_params))
   param_names <- names(base_params)
   compute_curve <- function(param_name) {
@@ -76,7 +81,8 @@ profile_likelihood <- function(structure,
       label = label_map[[param_name]] %||% param_name,
       percent = percent,
       n_points = n_points,
-      n_trials = n_trials
+      n_trials = n_trials,
+      ctx = ctx
     )
   }
   if (length(param_names) == 0) {

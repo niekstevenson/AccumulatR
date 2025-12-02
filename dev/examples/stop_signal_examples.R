@@ -1,4 +1,4 @@
-source("examples/new_API.R")
+source("dev/examples/new_API.R")
 
 # Stop-signal focused examples derived from the new API library
 

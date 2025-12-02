@@ -245,13 +245,8 @@
   }
   proto_blob <- if (!is.null(native_env)) native_env$proto %||% raw(0) else raw(0)
   native_ptr <- if (!is.null(native_env)) native_env$ptr %||% NULL else NULL
-  touch_ctx <- function(ptr) {
-    if (!inherits(ptr, "externalptr")) return(ptr)
-    try(native_context_touch_cpp(ptr), silent = TRUE)
-    ptr
-  }
   if (inherits(native_ptr, "externalptr")) {
-    return(touch_ctx(native_ptr))
+    return(native_ptr)
   }
   if (length(proto_blob) > 0L) {
     native_ptr <- tryCatch(native_context_from_proto_cpp(proto_blob), error = function(e) NULL)
@@ -261,7 +256,7 @@
       } else {
         attr(native_ptr, "native_proto") <- proto_blob
       }
-      return(touch_ctx(native_ptr))
+      return(native_ptr)
     }
   }
   payload <- .prep_native_payload(prep)
@@ -275,7 +270,7 @@
       attr(native_ptr, "native_proto") <- proto_blob
     }
   }
-  touch_ctx(native_ptr)
+  native_ptr
 }
 
 .cache_component_key <- function(component) {
@@ -398,24 +393,6 @@
   prep
 }
 
-likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
-  if (is.null(prep)) {
-    if (is.null(model_spec)) {
-      stop("Provide either a prepared likelihood object or a model_spec", call. = FALSE)
-    }
-    prep <- .prepare_model_for_likelihood(model_spec)
-  }
-  if (is.null(prep[[".runtime"]]) || is.null(prep$.runtime$cache_bundle)) {
-    prep <- .prep_set_cache_bundle(prep, .build_likelihood_cache_bundle(prep))
-  }
-  proto_blob <- native_prep_serialize_cpp(prep)
-  ctx_ptr <- native_context_from_proto_cpp(proto_blob)
-  list(
-    prep = prep,
-    proto = proto_blob,
-    context = ctx_ptr
-  )
-}
 
 .native_node_batch_eval <- function(prep, node_ids, times, component = NULL,
                                     forced_complete = integer(0),
@@ -436,68 +413,6 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
   native_likelihood_eval_cpp(native_ctx, tasks)
 }
 
-.likelihood_cache_bundle_clone <- function(bundle) {
-  if (is.null(bundle)) return(NULL)
-  structure(
-    list(
-      node_plan = bundle$node_plan,
-      precomputed_values = {
-        env <- new.env(parent = emptyenv(), hash = TRUE)
-        if (!is.null(bundle$precomputed_values)) {
-          keys <- ls(bundle$precomputed_values, all.names = TRUE)
-          for (k in keys) {
-            env[[k]] <- bundle$precomputed_values[[k]]
-          }
-        }
-        env
-      },
-      pool_templates = {
-        env <- new.env(parent = emptyenv(), hash = TRUE)
-        if (!is.null(bundle$pool_templates)) {
-          keys <- ls(bundle$pool_templates, all.names = TRUE)
-          for (k in keys) {
-            env[[k]] <- bundle$pool_templates[[k]]
-          }
-        }
-        env
-      },
-      guard_quadrature = {
-        env <- new.env(parent = emptyenv(), hash = TRUE)
-        if (!is.null(bundle$guard_quadrature)) {
-          keys <- ls(bundle$guard_quadrature, all.names = TRUE)
-          for (k in keys) {
-            env[[k]] <- bundle$guard_quadrature[[k]]
-          }
-        }
-        env
-      },
-      guard_quadrature_meta = {
-        env <- new.env(parent = emptyenv(), hash = TRUE)
-        if (!is.null(bundle$guard_quadrature_meta)) {
-          keys <- ls(bundle$guard_quadrature_meta, all.names = TRUE)
-          for (k in keys) {
-            env[[k]] <- bundle$guard_quadrature_meta[[k]]
-          }
-        }
-        env
-      },
-      guard_quadrature_limit = bundle$guard_quadrature_limit %||% .na_cache_limit_value(),
-      native_ctx = {
-        env <- new.env(parent = emptyenv())
-        if (!is.null(bundle$native_ctx) && is.environment(bundle$native_ctx)) {
-          env$ptr <- bundle$native_ctx$ptr %||% NULL
-          env$proto <- bundle$native_ctx$proto %||% raw(0)
-        } else {
-          env$ptr <- NULL
-          env$proto <- raw(0)
-        }
-        env
-      },
-      version = bundle$version
-    ),
-    class = "likelihood_cache_bundle"
-  )
-}
 
 .likelihood_outcome_cache_key <- function(bundle_key, params_hash, outcome_label, rt_val) {
   outcome_chr <- if (is.null(outcome_label) || length(outcome_label) == 0L || is.na(outcome_label[[1]])) {
@@ -600,11 +515,9 @@ likelihood_build_native_bundle <- function(model_spec = NULL, prep = NULL) {
 .cache_bundle_ensure <- function(prep) {
   bundle <- .prep_cache_bundle(prep)
   if (is.null(bundle)) {
-    .cache_metrics_inc("struct_misses")
     bundle <- .build_likelihood_cache_bundle(prep)
     prep <- .prep_set_cache_bundle(prep, bundle)
   } else {
-    .cache_metrics_inc("struct_hits")
   }
   list(prep = prep, bundle = bundle)
 }
@@ -671,15 +584,12 @@ likelihood_reset_cache <- function(prep) {
 .na_integral_fetch <- function(prep, component_key, cache_key) {
   bundle <- .prep_cache_bundle(prep)
   if (is.null(bundle)) {
-    .cache_metrics_inc("na_misses")
     return(NULL)
   }
   val <- bundle$guard_quadrature[[cache_key]]
   if (!is.null(val)) {
-    .cache_metrics_inc("na_hits")
     .na_cache_touch(bundle, component_key, cache_key)
   } else {
-    .cache_metrics_inc("na_misses")
   }
   val
 }

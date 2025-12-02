@@ -551,6 +551,86 @@ params_example_19_univalent_stop_change <- c(
   change2right.onset = 0.20
 )
 
+# Helper: shared accumulator definitions for stimulus-selective race
+.stim_base_spec <- function() {
+  race_spec() |>
+    add_accumulator("go1", "lognormal") |>
+    add_accumulator("ignore_high", "lognormal") |>
+    add_accumulator("ignore_low", "lognormal") |>
+    add_accumulator("go2", "lognormal") |>
+    add_accumulator("stop1", "exgauss") |>
+    add_accumulator("stop2", "exgauss")
+}
+
+# Stimulus selective stopping
+example_20_stim_select_stop <- .stim_base_spec() |>
+  add_pool("GO1", "go1") |>
+  add_pool("IGNORE", c("ignore_high", "ignore_low")) |>
+  add_pool("GO2", "go2") |>
+  add_pool("STOP1", "stop1") |>
+  add_pool("STOP2", "stop2") |>
+  add_outcome(
+    "GO1",
+    inhibit("GO1", by = "STOP1"),
+    options = list(component = c("go_only", "stop_ignore", "stop_true"))
+  ) |>
+  add_outcome(
+    "GO2",
+    all_of("GO2", inhibit("IGNORE", by = "STOP2")),
+    options = list(component = c("stop_ignore", "stop_true"))
+  ) |>
+  add_outcome(
+    "StopSuccess",
+    all_of(
+      inhibit("STOP1", by = "GO1"),
+      inhibit("STOP2", by = "IGNORE")
+    ),
+    options = list(component = c("stop_ignore", "stop_true"), map_outcome_to = NA_character_)
+  ) |>
+  add_group("component:go_only",
+            members = c("go1"),
+            attrs = list(component = "go_only")) |>
+  add_group("component:stop_ignore",
+            members = c("go1", "ignore_high", "go2", "stop1", "stop2"),
+            attrs = list(component = "stop_ignore")) |>
+  add_group("component:stop_true",
+            members = c("go1", "ignore_low", "go2", "stop1", "stop2"),
+            attrs = list(component = "stop_true")) |>
+  add_group("shared_ignore_sdlog",
+            members = c("ignore_high", "ignore_low"),
+            attrs = list(shared_params = list("sdlog"))) |>
+  add_group("shared_stop_params",
+            members = c("stop1", "stop2"),
+            attrs = list(shared_params = list("sigma", "tau"))) |>
+  set_metadata(mixture = list(
+    components = list(
+      component("go_only", weight = 0.2),
+      component("stop_ignore", weight = 0.4),
+      component("stop_true", weight = 0.4)
+    )
+  )) |>
+  build_model()
+
+params_example_20_stim_select_stop <- c(
+  go1.meanlog = log(0.50),
+  go1.sdlog = 0.18,
+  ignore_high.meanlog = log(0.20),
+  ignore_high.onset = 0.20,
+  ignore_low.meanlog = log(0.30),
+  ignore_low.onset = 0.20,
+  go2.meanlog = log(0.25),
+  go2.sdlog = 0.16,
+  go2.onset = 0.20,
+  stop1.mu = 0.2,
+  stop1.onset = 0.20,
+  stop2.mu = 0.15,
+  stop2.onset = 0.20,
+  `shared_ignore_sdlog.sdlog` = 0.16,
+  `shared_stop_params.sigma` = 0.05,
+  `shared_stop_params.tau` = 0.08
+)
+
+
 
 new_api_examples <- list(
   example_1_simple = example_1_simple,
@@ -571,8 +651,11 @@ new_api_examples <- list(
   example_16_guard_tie_simple = example_16_guard_tie_simple,
   example_17_k_of_n_inhibitors = example_17_k_of_n_inhibitors,
   example_18_shared_triggers = example_18_shared_triggers,
-  example_19_univalent_stop_change = example_19_univalent_stop_change
+  example_19_univalent_stop_change = example_19_univalent_stop_change,
+  example_20_stim_select_stop = example_20_stim_select_stop
 )
+
+
 
 new_api_example_params <- list(
   example_1_simple = params_example_1_simple,
@@ -593,5 +676,6 @@ new_api_example_params <- list(
   example_16_guard_tie_simple = params_example_16_guard_tie_simple,
   example_17_k_of_n_inhibitors = params_example_17_k_of_n_inhibitors,
   example_18_shared_triggers = params_example_18_shared_triggers,
-  example_19_univalent_stop_change = params_example_19_univalent_stop_change
+  example_19_univalent_stop_change = params_example_19_univalent_stop_change,
+  example_20_stim_select_stop = params_example_20_stim_select_stop
 )

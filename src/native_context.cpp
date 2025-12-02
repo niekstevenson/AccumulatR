@@ -182,8 +182,6 @@ Rcpp::XPtr<NativeContext> build_native_context(Rcpp::List prep) {
   populate_component_metadata(prep, *ctx);
   populate_outcome_metadata(prep, *ctx);
   ctx->na_cache_limit = resolve_na_cache_limit();
-  ctx->context_builds = 1;
-  ctx->context_reuses = 0;
   return Rcpp::XPtr<NativeContext>(ctx.release(), true);
 }
 

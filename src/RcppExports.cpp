@@ -457,37 +457,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// native_cache_stats_cpp
-Rcpp::List native_cache_stats_cpp(SEXP ctxSEXP);
-RcppExport SEXP _AccumulatR_native_cache_stats_cpp(SEXP ctxSEXPSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type ctxSEXP(ctxSEXPSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_cache_stats_cpp(ctxSEXP));
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_cache_reset_stats_cpp
-void native_cache_reset_stats_cpp(SEXP ctxSEXP);
-RcppExport SEXP _AccumulatR_native_cache_reset_stats_cpp(SEXP ctxSEXPSEXP) {
-BEGIN_RCPP
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type ctxSEXP(ctxSEXPSEXP);
-    native_cache_reset_stats_cpp(ctxSEXP);
-    return R_NilValue;
-END_RCPP
-}
-// native_context_touch_cpp
-void native_context_touch_cpp(SEXP ctxSEXP);
-RcppExport SEXP _AccumulatR_native_context_touch_cpp(SEXP ctxSEXPSEXP) {
-BEGIN_RCPP
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type ctxSEXP(ctxSEXPSEXP);
-    native_context_touch_cpp(ctxSEXP);
-    return R_NilValue;
-END_RCPP
-}
 // dist_lognormal_pdf
 Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector& x, double meanlog, double sdlog);
 RcppExport SEXP _AccumulatR_dist_lognormal_pdf(SEXP xSEXP, SEXP meanlogSEXP, SEXP sdlogSEXP) {
@@ -794,9 +763,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_native_density_with_competitors_params_cpp", (DL_FUNC) &_AccumulatR_native_density_with_competitors_params_cpp, 8},
     {"_AccumulatR_native_density_with_competitors_vec_cpp", (DL_FUNC) &_AccumulatR_native_density_with_competitors_vec_cpp, 7},
     {"_AccumulatR_native_outcome_probability_params_cpp", (DL_FUNC) &_AccumulatR_native_outcome_probability_params_cpp, 11},
-    {"_AccumulatR_native_cache_stats_cpp", (DL_FUNC) &_AccumulatR_native_cache_stats_cpp, 1},
-    {"_AccumulatR_native_cache_reset_stats_cpp", (DL_FUNC) &_AccumulatR_native_cache_reset_stats_cpp, 1},
-    {"_AccumulatR_native_context_touch_cpp", (DL_FUNC) &_AccumulatR_native_context_touch_cpp, 1},
     {"_AccumulatR_dist_lognormal_pdf", (DL_FUNC) &_AccumulatR_dist_lognormal_pdf, 3},
     {"_AccumulatR_dist_lognormal_cdf", (DL_FUNC) &_AccumulatR_dist_lognormal_cdf, 3},
     {"_AccumulatR_dist_lognormal_rng", (DL_FUNC) &_AccumulatR_dist_lognormal_rng, 3},

@@ -1,6 +1,6 @@
 ## Running `dev/scripts/test.R` Without `devtools::load_all()`
 
-Some environments block `processx` (and therefore `devtools::load_all()`), which breaks `dev/scripts/test.R`. To exercise the full test suite anyway, install the package into a temporary library and run the script from there:
+Some environments block `processx` (and therefore `devtools::load_all()`), which breaks `dev/scripts/test.R`. To exercise the dev script anyway, install the package into a temporary library and run the script from there:
 
 1. **Install the package to a writable temp library**  
    ```bash
@@ -15,38 +15,11 @@ Some environments block `processx` (and therefore `devtools::load_all()`), which
    rm(list = ls())
    .libPaths(c('/tmp/accumlib', .libPaths()))
    library(AccumulatR)
-   source('dev/examples/new_API.R')
-   source('dev/scripts/compare_likelihoods.R')
-
-   example_param_tables <- lapply(names(new_api_examples), function(id) {
-     build_params_df(new_api_examples[[id]], new_api_example_params[[id]], n_trials = 1L)
-   })
-   names(example_param_tables) <- names(new_api_examples)
-   example_ids <- names(new_api_examples)[c(1:11, 13:16, 18)]
-   response_summary <- compare_response_suite(
-     new_api_examples,
-     example_param_tables,
-     example_ids
-   )
-   print(response_summary[c('model', 'max_abs_diff')])
-   names(response_summary$R) <- example_ids
-   print(response_summary$R)
-
-   param_example <- 'example_3_stop_na'
-   param_results <- run_param_table_benchmark(
-     model_spec = new_api_examples[[param_example]],
-     core_params = new_api_example_params[[param_example]],
-     n_trials = 1000L,
-     seed = 2025,
-     bench_reps = 3
-   )
-   cat('\\nLog-likelihood difference (native - R):', param_results$loglik$loglik_diff, '\\n')
-   cat('Native batch used:', param_results$loglik$native_batch_used, '\\n')
-   print(param_results$speed$timings)
+   source('dev/scripts/test.R')
    RS
    ```
 
-This reproduces the regression table (`max_abs_diff = 0` for every example) and the benchmark/consistency checks, without relying on `devtools::load_all()`. Clean up the temporary library afterwards if needed:
+This exercises the native probability, simulation, and profiling flow without relying on `devtools::load_all()`. Clean up the temporary library afterwards if needed:
 
 ```bash
 rm -rf /tmp/accumlib
@@ -54,7 +27,7 @@ rm -rf /tmp/accumlib
 
 ## Profiling Native Code (Examples 1–3)
 
-Use `dev/scripts/profile_examples.R` to drive a native-only workload for the first three `new_api_examples`. This script loops over examples 1, 2, and 3, builds their generator structures, and runs the native log-likelihood so that external profilers (e.g., `perf`, Instruments) can attribute time inside `src/AccumulatR.so`.
+Use `dev/scripts/profile_examples.R` (invoked by `dev/scripts/profile_native_mac.sh`) to drive a native-only workload for the first three `new_api_examples`. This script loops over examples 1, 2, and 3, builds their generator structures, and runs the native log-likelihood so that external profilers (e.g., `perf`, Instruments) can attribute time inside `src/AccumulatR.so`.
 
 1. Install the package into the temp library if you have not already (same as above).
 2. Run the profiling workload:

@@ -4653,6 +4653,9 @@ Rcpp::List native_update_entries_from_params_cpp(SEXP ctxSEXP,
     Rcpp::stop("params must be a numeric matrix");
   }
   Rcpp::NumericMatrix params_mat(params_obj);
+  if (params_mat.ncol() < 5) {
+    Rcpp::stop("params matrix must include at least trial, accumulator_index, onset, q, and t0 columns");
+  }
   SEXP trial_attr = Rf_getAttrib(params_obj, Rf_install("trial"));
   if (Rf_isNull(trial_attr)) {
     Rcpp::stop("numeric matrix params must carry a 'trial' attribute");
@@ -4663,69 +4666,18 @@ Rcpp::List native_update_entries_from_params_cpp(SEXP ctxSEXP,
   if (trial_chr.size() != params_mat.nrow()) {
     Rcpp::stop("trial attribute length must match matrix rows");
   }
+  // Clear any stale cached pointers on entries (older runs may attach these).
+  entries.attr(".trial_bucket_ptr") = R_NilValue;
+  entries.attr(".base_params_ptr") = R_NilValue;
 
-  // Cache trial buckets (trial -> row indices) on entries so we don't rebuild every refresh
-  std::unordered_map<std::string, std::vector<int>>* trial_index_ptr = nullptr;
-  {
-    SEXP cached = entries.attr(".trial_bucket_ptr");
-    if (cached != R_NilValue && TYPEOF(cached) == EXTPTRSXP) {
-      trial_index_ptr = reinterpret_cast<std::unordered_map<std::string, std::vector<int>>*>(
-        R_ExternalPtrAddr(cached)
-      );
-    }
-    if (trial_index_ptr == nullptr) {
-      auto* buckets = new std::unordered_map<std::string, std::vector<int>>();
-      buckets->reserve(static_cast<std::size_t>(trial_chr.size()));
-      for (R_xlen_t i = 0; i < trial_chr.size(); ++i) {
-        std::string key = (trial_chr[i] == NA_STRING) ? std::string("NA")
-                                                      : Rcpp::as<std::string>(trial_chr[i]);
-        (*buckets)[key].push_back(static_cast<int>(i));
-      }
-      entries.attr(".trial_bucket_ptr") = Rcpp::XPtr<std::unordered_map<std::string, std::vector<int>>>(
-        buckets, true
-      );
-      trial_index_ptr = buckets;
-    }
+  // Build trial buckets (trial -> row indices) fresh for this matrix.
+  std::unordered_map<std::string, std::vector<int>> trial_index;
+  trial_index.reserve(static_cast<std::size_t>(trial_chr.size()));
+  for (R_xlen_t i = 0; i < trial_chr.size(); ++i) {
+    std::string key = (trial_chr[i] == NA_STRING) ? std::string("NA")
+                                                  : Rcpp::as<std::string>(trial_chr[i]);
+    trial_index[key].push_back(static_cast<int>(i));
   }
-  const auto& trial_index = *trial_index_ptr;
-
-  // Column indices from matrix colnames (cached)
-  std::unordered_map<std::string, int>* param_col_index_ptr = nullptr;
-  {
-    SEXP cached = entries.attr(".param_col_index_ptr");
-    if (cached != R_NilValue && TYPEOF(cached) == EXTPTRSXP) {
-      param_col_index_ptr = reinterpret_cast<std::unordered_map<std::string, int>*>(
-        R_ExternalPtrAddr(cached)
-      );
-    }
-    if (param_col_index_ptr == nullptr) {
-      auto* col_index = new std::unordered_map<std::string, int>();
-      SEXP dimnames = Rf_getAttrib(params_obj, R_DimNamesSymbol);
-      if (dimnames != R_NilValue) {
-        Rcpp::List dn(dimnames);
-        if (dn.size() >= 2) {
-          SEXP cols = dn[1];
-          if (!Rf_isNull(cols)) {
-            Rcpp::CharacterVector param_names(cols);
-            col_index->reserve(static_cast<std::size_t>(param_names.size()));
-            for (R_xlen_t i = 0; i < param_names.size(); ++i) {
-              if (param_names[i] == NA_STRING) continue;
-              (*col_index)[Rcpp::as<std::string>(param_names[i])] = static_cast<int>(i);
-            }
-          }
-        }
-      }
-      if (col_index->empty()) {
-        delete col_index;
-        Rcpp::stop("params matrix must have column names");
-      }
-      entries.attr(".param_col_index_ptr") = Rcpp::XPtr<std::unordered_map<std::string, int>>(
-        col_index, true
-      );
-      param_col_index_ptr = col_index;
-    }
-  }
-  const auto& param_col_index = *param_col_index_ptr;
 
   Rcpp::CharacterVector entry_names = entries.names();
   if (entry_names.size() != entries.size()) {
@@ -4733,25 +4685,11 @@ Rcpp::List native_update_entries_from_params_cpp(SEXP ctxSEXP,
   }
 
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  // Cache base flat params per accumulator
-  std::vector<TrialAccumulatorParams>* base_params_vec_ptr = nullptr;
-  {
-    SEXP cached = entries.attr(".base_params_ptr");
-    if (cached != R_NilValue && TYPEOF(cached) == EXTPTRSXP) {
-      base_params_vec_ptr = reinterpret_cast<std::vector<TrialAccumulatorParams>*>(
-        R_ExternalPtrAddr(cached)
-      );
-    }
-    if (base_params_vec_ptr == nullptr) {
-      auto* base_vec = new std::vector<TrialAccumulatorParams>(ctx->accumulators.size());
-      for (std::size_t k = 0; k < ctx->accumulators.size(); ++k) {
-        (*base_vec)[k] = base_params(ctx->accumulators[k]);
-      }
-      entries.attr(".base_params_ptr") = Rcpp::XPtr<std::vector<TrialAccumulatorParams>>(base_vec, true);
-      base_params_vec_ptr = base_vec;
-    }
+  // Base flat params per accumulator (rebuilt each call to avoid stale pointers)
+  std::vector<TrialAccumulatorParams> base_params_vec(ctx->accumulators.size());
+  for (std::size_t k = 0; k < ctx->accumulators.size(); ++k) {
+    base_params_vec[k] = base_params(ctx->accumulators[k]);
   }
-  const auto& base_params_vec = *base_params_vec_ptr;
 
   for (R_xlen_t i = 0; i < entries.size(); ++i) {
     std::string trial_key = "NA";
@@ -4778,50 +4716,15 @@ Rcpp::List native_update_entries_from_params_cpp(SEXP ctxSEXP,
     // reset to base
     std::copy(base_params_vec.begin(), base_params_vec.end(), params_ptr->acc_params.begin());
 
-    // binding: [acc_col, onset, q, t0, p1, p2, p3]
-    Rcpp::IntegerVector binding;
-    if (entry.containsElementNamed(".param_binding")) {
-      binding = Rcpp::IntegerVector(entry[".param_binding"]);
-    } else {
-      Rcpp::IntegerVector b(7);
-      auto idx_for = [&](const std::string& name) -> int {
-        auto hit = param_col_index.find(name);
-        if (hit == param_col_index.end()) return -1;
-        return hit->second;
-      };
-      int acc_col = idx_for("accumulator_index");
-      if (acc_col < 0) acc_col = idx_for("accumulator");
-      b[0] = acc_col;
-      b[1] = idx_for("onset");
-      b[2] = idx_for("q");
-      b[3] = idx_for("t0");
-      int p1 = idx_for("p1");
-      if (p1 < 0) p1 = idx_for("meanlog");
-      if (p1 < 0) p1 = idx_for("shape");
-      if (p1 < 0) p1 = idx_for("mu");
-      b[4] = p1;
-      int p2 = idx_for("p2");
-      if (p2 < 0) p2 = idx_for("sdlog");
-      if (p2 < 0) p2 = idx_for("rate");
-      if (p2 < 0) p2 = idx_for("sigma");
-      b[5] = p2;
-      int p3 = idx_for("p3");
-      if (p3 < 0) p3 = idx_for("tau");
-      b[6] = p3;
-      entry[".param_binding"] = b;
-      binding = b;
+    // Positional binding: [trial, acc_idx, onset, q, t0, p1, p2, p3...]
+    const int acc_col_idx = 1;
+    const int onset_idx = 2;
+    const int q_idx = 3;
+    const int t0_idx = 4;
+    const int param_count = static_cast<int>(params_mat.ncol()) - (t0_idx + 1);
+    if (param_count < 0) {
+      Rcpp::stop("params matrix must include at least t0 parameter column");
     }
-
-    int acc_col_idx = binding[0];
-    if (acc_col_idx < 0) {
-      Rcpp::stop("params matrix missing accumulator/accumulator_index column");
-    }
-    int onset_idx = binding[1];
-    int q_idx = binding[2];
-    int t0_idx = binding[3];
-    int p1_idx = binding[4];
-    int p2_idx = binding[5];
-    int p3_idx = binding[6];
 
     for (std::size_t j = 0; j < idx.size(); ++j) {
       int row_idx = idx[j];
@@ -4842,25 +4745,46 @@ Rcpp::List native_update_entries_from_params_cpp(SEXP ctxSEXP,
         if (std::isfinite(v)) override.q = v;
       }
       auto assign_p = [&](int cidx, double& field) {
-        if (cidx < 0) return;
+        if (cidx < 0 || cidx >= params_mat.ncol()) return;
         double v = params_mat(row_idx, cidx);
         if (std::isfinite(v)) field = v;
       };
+      // Parameter slots: slot0 = t0, slot1 = p1, slot2 = p2, slot3 = p3, ...
+      int slot_p1 = t0_idx + 1;
+      int slot_p2 = t0_idx + 2;
+      int slot_p3 = t0_idx + 3;
       switch (base.dist_cfg.code) {
       case uuber::ACC_DIST_LOGNORMAL:
-        assign_p(p1_idx, override.dist_cfg.p1);
-        assign_p(p2_idx, override.dist_cfg.p2);
+        if (param_count >= 1) {
+          assign_p(slot_p1, override.dist_cfg.p1);
+        }
+        if (param_count >= 2) {
+          assign_p(slot_p2, override.dist_cfg.p2);
+        }
         break;
       case uuber::ACC_DIST_GAMMA:
-        assign_p(p1_idx, override.dist_cfg.p1);
-        assign_p(p2_idx, override.dist_cfg.p2);
+        if (param_count >= 1) {
+          assign_p(slot_p1, override.dist_cfg.p1);
+        }
+        if (param_count >= 2) {
+          assign_p(slot_p2, override.dist_cfg.p2);
+        }
         break;
       case uuber::ACC_DIST_EXGAUSS:
-        assign_p(p1_idx, override.dist_cfg.p1);
-        assign_p(p2_idx, override.dist_cfg.p2);
-        assign_p(p3_idx, override.dist_cfg.p3);
+        if (param_count >= 1) {
+          assign_p(slot_p1, override.dist_cfg.p1);
+        }
+        if (param_count >= 2) {
+          assign_p(slot_p2, override.dist_cfg.p2);
+        }
+        if (param_count >= 3) {
+          assign_p(slot_p3, override.dist_cfg.p3);
+        }
         break;
       default:
+        if (param_count >= 1) assign_p(slot_p1, override.dist_cfg.p1);
+        if (param_count >= 2) assign_p(slot_p2, override.dist_cfg.p2);
+        if (param_count >= 3) assign_p(slot_p3, override.dist_cfg.p3);
         break;
       }
       if (t0_idx >= 0) {

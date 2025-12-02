@@ -23,7 +23,7 @@ with_native_only <- function(expr) {
 }
 
 # 1. Which examples to run
-example_ids <- names(new_api_examples)[2]
+example_ids <- names(new_api_examples)[20]
 
 # Optional overrides via env vars
 if (nzchar(Sys.getenv("UUBER_EXAMPLES"))) {

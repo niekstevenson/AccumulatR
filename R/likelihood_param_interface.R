@@ -337,12 +337,65 @@ build_likelihood_context <- function(structure, params_df, data_df,
   if (!"trial" %in% names(df)) {
     stop("Parameter table must include 'trial'", call. = FALSE)
   }
-  numeric_cols <- names(Filter(is.numeric, df))
-  numeric_cols <- setdiff(numeric_cols, "trial")
-  mat <- as.matrix(df[, c("trial", numeric_cols), drop = FALSE])
+
+  n <- nrow(df)
+  if (is.null(n) || n == 0L) {
+    stop("Parameter table must contain rows", call. = FALSE)
+  }
+
+  # Core columns
+  trial <- as.numeric(df$trial)
+  acc_idx <- if ("accumulator_index" %in% names(df)) {
+    as.numeric(df$accumulator_index)
+  } else if ("accumulator" %in% names(df)) {
+    as.numeric(df$accumulator)
+  } else {
+    stop("Parameter table must include 'accumulator_index' (or numeric 'accumulator')", call. = FALSE)
+  }
+  onset <- as.numeric(df$onset %||% 0)
+  q <- as.numeric(df$q %||% 0)
+  t0 <- as.numeric(df$t0 %||% 0)
+
+  # Helper: per-row first-non-NA across candidate columns
+  pick_slot <- function(candidates) {
+    out <- rep(NA_real_, n)
+    for (nm in candidates) {
+      if (is.null(nm) || !nm %in% names(df)) next
+      col <- as.numeric(df[[nm]])
+      update_mask <- is.na(out) & !is.na(col)
+      if (any(update_mask)) {
+        out[update_mask] <- col[update_mask]
+      }
+      if (all(!is.na(out))) break
+    }
+    out
+  }
+
+  # Slot priorities (t0 is always the first parameter column)
+  p1 <- pick_slot(c("p1", "meanlog", "shape", "mu"))
+  p2 <- pick_slot(c("p2", "sdlog", "rate", "sigma"))
+  p3 <- pick_slot(c("p3", "tau"))
+
+  max_params <- 0L
+  if (!all(is.na(p1))) max_params <- max(max_params, 1L)
+  if (!all(is.na(p2))) max_params <- max(max_params, 2L)
+  if (!all(is.na(p3))) max_params <- max(max_params, 3L)
+
+  cols <- list(
+    trial = trial,
+    accumulator_index = acc_idx,
+    onset = onset,
+    q = q,
+    t0 = t0
+  )
+  if (max_params >= 1L) cols$p1 <- p1
+  if (max_params >= 2L) cols$p2 <- p2
+  if (max_params >= 3L) cols$p3 <- p3
+
+  mat <- do.call(cbind, cols)
   storage.mode(mat) <- "double"
-  attr(mat, "trial") <- df$trial
-  colnames(mat) <- c("trial", numeric_cols)
+  attr(mat, "trial") <- trial
+  colnames(mat) <- names(cols)
   mat
 }
 

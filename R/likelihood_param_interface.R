@@ -442,66 +442,60 @@ build_likelihood_context <- function(structure, params_df, data_df,
   if (!is.null(out_def[['options']][['alias_of']])) {
     refs <- as.character(out_def[['options']][['alias_of']])
     vals <- vapply(refs, function(lbl) {
-      .outcome_likelihood(
-        outcome_label = lbl,
-        rt = NA_real_,
+      .likelihood_response_prob_component(
         prep = prep,
+        outcome_label = lbl,
         component = component,
-        trial_rows = trial_rows
+        trial_rows = trial_rows,
+        trial_state = trial_state
       )
     }, numeric(1))
-    return(sum(vals))
+    return(sum(vals, na.rm = TRUE))
   }
 
-  # Prefer native probability (upper = Inf) so shared triggers and guards follow the
-  # same path as the main likelihood. Fall back to the pure-R integrator if needed.
-  base <- NA_real_
+  # Native-only probability (upper = Inf) so shared triggers and guards follow the
+  # same path as the main likelihood.
   native_ctx <- .prep_native_context(prep)
-  if (inherits(native_ctx, "externalptr")) {
-    compiled <- .expr_lookup_compiled(out_def[['expr']], prep)
-    comp_exprs <- (.prep_competitors(prep) %||% list())[[outcome_label]] %||% list()
-    comp_ids <- integer(0)
-    if (length(comp_exprs) > 0L) {
-      comp_nodes <- lapply(comp_exprs, function(ex) .expr_lookup_compiled(ex, prep))
-      if (!any(vapply(comp_nodes, is.null, logical(1)))) {
-        comp_ids <- vapply(comp_nodes, function(node) as.integer(node$id %||% NA_integer_), integer(1))
-      } else {
-        comp_ids <- integer(0)
-      }
-    }
-    trial_rows_df <- if (is.null(trial_rows)) data.frame() else as.data.frame(trial_rows)
-    if (!is.null(compiled) && length(comp_ids) > 0L) {
-      prob_native <- tryCatch(
-        native_outcome_probability_params_cpp(
-          native_ctx,
-          as.integer(compiled$id),
-          Inf,
-          component,
-          integer(0),
-          integer(0),
-          as.integer(comp_ids),
-          .integrate_rel_tol(),
-          .integrate_abs_tol(),
-          12L,
-          trial_rows_df
-        ),
-        error = function(e) NA_real_
-      )
-      if (is.finite(prob_native) && prob_native >= 0) {
-        base <- as.numeric(prob_native)
-      }
+  if (!inherits(native_ctx, "externalptr")) {
+    stop("Native context required for response probabilities; R fallback removed", call. = FALSE)
+  }
+
+  compiled <- .expr_lookup_compiled(out_def[['expr']], prep)
+  if (is.null(compiled)) {
+    stop(sprintf("No compiled node for outcome '%s'", outcome_label), call. = FALSE)
+  }
+
+  comp_exprs <- (.prep_competitors(prep) %||% list())[[outcome_label]] %||% list()
+  comp_ids <- integer(0)
+  if (length(comp_exprs) > 0L) {
+    comp_nodes <- lapply(comp_exprs, function(ex) .expr_lookup_compiled(ex, prep))
+    if (!any(vapply(comp_nodes, is.null, logical(1)))) {
+      comp_ids <- vapply(comp_nodes, function(node) as.integer(node$id %||% NA_integer_), integer(1))
     }
   }
-  if (is.na(base)) {
-    base <- as.numeric(.outcome_likelihood(
-      outcome_label,
-      NA_real_,
-      prep,
+
+  trial_rows_df <- if (is.null(trial_rows)) data.frame() else as.data.frame(trial_rows)
+  prob_native <- tryCatch(
+    native_outcome_probability_params_cpp(
+      native_ctx,
+      as.integer(compiled$id),
+      Inf,
       component,
-      trial_rows = trial_rows,
-      state = trial_state
-    ))
+      integer(0),
+      integer(0),
+      as.integer(comp_ids),
+      .integrate_rel_tol(),
+      .integrate_abs_tol(),
+      12L,
+      trial_rows_df
+    ),
+    error = function(e) NA_real_
+  )
+  if (!is.finite(prob_native) || prob_native < 0) {
+    stop(sprintf("Native outcome probability failed for outcome '%s'", outcome_label), call. = FALSE)
   }
+  base <- as.numeric(prob_native)
+
   if (!identical(outcome_label, "GUESS")) {
     gp <- .get_component_attr(prep, component, "guess")
     if (!is.null(gp) && !is.null(gp[['weights']])) {

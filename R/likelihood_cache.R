@@ -47,10 +47,6 @@
   value
 }
 
-.state_entry_is_new <- function(entry) {
-  FALSE
-}
-
 .state_entry_get <- function(entry, field) {
   NULL
 }

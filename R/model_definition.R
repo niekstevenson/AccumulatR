@@ -286,19 +286,6 @@ build_model <- function(spec) {
   ), class = "race_model_spec")
 }
 
-# ------------------------------------------------------------------------------
-# Low-level constructors
-# ------------------------------------------------------------------------------
-
-acc <- function(id, dist, params, onset = 0, q = 0, tags = list()) {
-  params <- .ensure_acc_param_t0(params %||% list())
-  list(id = id, dist = dist, params = params, onset = onset, q = q, tags = tags)
-}
-
-rule_k_of_n <- function(k = 1L, weights = NULL) {
-  list(kind = "k_of_n", k = k, weights = weights)
-}
-
 # Trigger/helpers for clearer API ---------------------------------------------------
 
 # Joint trigger gate: one Bernoulli applied to all members in the group.
@@ -313,25 +300,6 @@ joint_trigger <- function(id, q = NULL, param = NULL) {
 shared_q <- function() {
   list(shared_params = list("q"))
 }
-
-# Generic shared parameter helper.
-shared_params <- function(...) {
-  params <- c(...)
-  if (length(params) == 0) stop("shared_params requires at least one parameter name")
-  list(shared_params = as.character(params))
-}
-
-pool <- function(id, members, rule = rule_k_of_n(1L), tags = list()) {
-  list(id = id, members = members, rule = rule, tags = tags)
-}
-
-expr_event <- function(source_id, k = NULL) {
-  list(kind = "event", source = source_id, k = k)
-}
-
-expr_and <- function(...) list(kind = "and", args = list(...))
-expr_or  <- function(...) list(kind = "or",  args = list(...))
-expr_not <- function(expr) list(kind = "not", arg = expr)
 
 expr_guard <- function(blocker, reference, unless = list()) {
   list(kind = "guard", blocker = blocker, reference = reference, unless = unless)
@@ -354,10 +322,6 @@ outcome_def <- function(label, expr, options = list()) {
     expr = build_outcome_expr(expr),
     options = options %||% list()
   )
-}
-
-group <- function(id, members, attrs = list()) {
-  list(id = id, members = members, attrs = attrs %||% list())
 }
 
 component <- function(id, weight = NULL, attrs = list()) {

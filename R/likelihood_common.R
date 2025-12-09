@@ -390,27 +390,6 @@
   prep
 }
 
-
-.native_node_batch_eval <- function(prep, node_ids, times, component = NULL,
-                                    forced_complete = integer(0),
-                                    forced_survive = integer(0)) {
-  node_ids <- as.integer(node_ids)
-  times <- as.numeric(times)
-  if (length(node_ids) == 0L || length(times) == 0L) return(list())
-  native_ctx <- .prep_native_context(prep)
-  tasks <- lapply(node_ids, function(nid) {
-    list(
-      node_id = as.integer(nid),
-      times = times,
-      component = component,
-      forced_complete = forced_complete,
-      forced_survive = forced_survive
-    )
-  })
-  native_likelihood_eval_cpp(native_ctx, tasks)
-}
-
-
 .likelihood_outcome_cache_key <- function(bundle_key, params_hash, outcome_label, rt_val) {
   outcome_chr <- if (is.null(outcome_label) || length(outcome_label) == 0L || is.na(outcome_label[[1]])) {
     "NA"
@@ -519,13 +498,6 @@
   list(prep = prep, bundle = bundle)
 }
 
-likelihood_reset_cache <- function(prep) {
-  if (is.null(prep)) return(prep)
-  runtime <- prep[[".runtime"]]
-  if (is.null(runtime)) return(prep)
-  .prep_set_cache_bundle(prep, .build_likelihood_cache_bundle(prep))
-}
-
 .likelihood_outcome_cache_key <- function(component_key, params_hash, outcome_label, rt_val) {
   outcome_chr <- if (is.null(outcome_label) || length(outcome_label) == 0L || is.na(outcome_label[[1]])) {
     "NA"
@@ -604,49 +576,4 @@ likelihood_reset_cache <- function(prep) {
   bundle$guard_quadrature[[cache_key]] <- value
   .na_cache_touch(bundle, component_key, cache_key)
   invisible(NULL)
-}
-.inspect_likelihood_plan <- function(prep, include_cache = FALSE) {
-  comp <- .prep_expr_compiled(prep)
-  if (is.null(comp)) {
-    if (!isTRUE(include_cache)) return(data.frame())
-    bundle <- .prep_cache_bundle(prep)
-    guard_meta <- if (is.null(bundle) || is.null(bundle$guard_quadrature_meta)) list() else {
-      keys <- ls(bundle$guard_quadrature_meta, all.names = TRUE)
-      stats::setNames(lapply(keys, function(k) bundle$guard_quadrature_meta[[k]]), keys)
-    }
-    return(list(nodes = data.frame(), cache = list(
-      precomputed_values = if (is.null(bundle)) character(0) else ls(bundle$precomputed_values, all.names = TRUE),
-      pool_templates = if (is.null(bundle)) character(0) else ls(bundle$pool_templates, all.names = TRUE),
-      guard_quadrature = if (is.null(bundle)) character(0) else ls(bundle$guard_quadrature, all.names = TRUE),
-      guard_quadrature_orders = guard_meta
-    )))
-  }
-  nodes <- comp$nodes %||% list()
-  node_df <- do.call(rbind, lapply(nodes, function(node) {
-    data.frame(
-      id = node$id,
-      kind = node$kind,
-      needs_forced = isTRUE(node$needs_forced),
-      scenario_sensitive = isTRUE(node$scenario_sensitive),
-      sources = paste(node$sources %||% integer(0), collapse = ","),
-      args = paste(node$args %||% integer(0), collapse = ","),
-      has_fast_density = is.function(node$density_fast_fn),
-      has_fast_survival = is.function(node$surv_fast_fn),
-      has_fast_cdf = is.function(node$cdf_fast_fn),
-      stringsAsFactors = FALSE
-    )
-  }))
-  if (!isTRUE(include_cache)) return(node_df)
-  bundle <- .prep_cache_bundle(prep)
-  guard_meta <- if (is.null(bundle) || is.null(bundle$guard_quadrature_meta)) list() else {
-    keys <- ls(bundle$guard_quadrature_meta, all.names = TRUE)
-    stats::setNames(lapply(keys, function(k) bundle$guard_quadrature_meta[[k]]), keys)
-  }
-  cache_summary <- list(
-    precomputed_values = if (is.null(bundle)) character(0) else ls(bundle$precomputed_values, all.names = TRUE),
-    pool_templates = if (is.null(bundle)) character(0) else ls(bundle$pool_templates, all.names = TRUE),
-    guard_quadrature = if (is.null(bundle)) character(0) else ls(bundle$guard_quadrature, all.names = TRUE),
-    guard_quadrature_orders = guard_meta
-  )
-  list(nodes = node_df, cache = cache_summary)
 }

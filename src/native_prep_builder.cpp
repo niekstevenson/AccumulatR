@@ -2,11 +2,21 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <cmath>
 
 #include "native_accumulator.hpp"
 
 namespace uuber {
 namespace {
+
+inline double inv_logit(double x) {
+  if (x >= 0) {
+    double z = std::exp(-x);
+    return 1.0 / (1.0 + z);
+  }
+  double z = std::exp(x);
+  return z / (1.0 + z);
+}
 
 std::vector<std::string> extract_string_vector(SEXP obj) {
   if (Rf_isNull(obj)) return {};
@@ -193,7 +203,8 @@ std::unique_ptr<NativeContext> build_context_from_proto(const NativePrepProto& p
     acc.id = acc_proto.id;
     acc.dist = acc_proto.dist;
     acc.onset = acc_proto.onset;
-    acc.q = acc_proto.q;
+    // q supplied on logit scale from R; convert to probability for native context
+    acc.q = inv_logit(acc_proto.q);
     acc.components = acc_proto.components;
     acc.shared_trigger_id = acc_proto.shared_trigger_id;
     try {

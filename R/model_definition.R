@@ -213,7 +213,7 @@ race_spec <- function() {
   params
 }
 
-add_accumulator <- function(spec, id, dist, onset = 0, q = 0,
+add_accumulator <- function(spec, id, dist, onset = 0, q = -Inf,
                             tags = list(), params = NULL, ...) {
   stopifnot(inherits(spec, "race_spec"))
   param_list <- .collect_params(params, list(...))
@@ -297,6 +297,28 @@ acc <- function(id, dist, params, onset = 0, q = 0, tags = list()) {
 
 rule_k_of_n <- function(k = 1L, weights = NULL) {
   list(kind = "k_of_n", k = k, weights = weights)
+}
+
+# Trigger/helpers for clearer API ---------------------------------------------------
+
+# Joint trigger gate: one Bernoulli applied to all members in the group.
+joint_trigger <- function(id, q = NULL, param = NULL) {
+  if (missing(id) || is.null(id) || !nzchar(id)) {
+    stop("joint_trigger requires a non-empty id")
+  }
+  list(shared_trigger = list(id = id, q = q, param = param))
+}
+
+# Independent shared q across members (per-accumulator Bernoulli with shared param).
+shared_q <- function() {
+  list(shared_params = list("q"))
+}
+
+# Generic shared parameter helper.
+shared_params <- function(...) {
+  params <- c(...)
+  if (length(params) == 0) stop("shared_params requires at least one parameter name")
+  list(shared_params = as.character(params))
 }
 
 pool <- function(id, members, rule = rule_k_of_n(1L), tags = list()) {
@@ -383,7 +405,8 @@ sampled_pars <- function(model) {
   params <- character(0)
   for (acc in spec$accumulators) {
     base <- dist_param_names(acc$dist)
-    acc_params <- c(base, "onset", "q", "t0")
+    # onset is a fixed accumulator attribute; only q and t0 are estimated
+    acc_params <- c(base, "q", "t0")
     params <- c(params, paste0(acc$id, ".", acc_params))
   }
   for (grp in spec$groups %||% list()) {
@@ -548,6 +571,43 @@ build_params_df <- function(model,
   if (length(extra_names) > 0L) {
     for (nm in extra_names) {
       base_df[[nm]] <- as.numeric(param_values[[nm]])
+    }
+  }
+  # Propagate shared trigger parameters (group-level) into per-acc rows:
+  # - set per-acc q to 0 (success-path) and attach shared_trigger_id so the
+  #   native layer applies the joint gate once using shared_trigger_q.
+  # - if the param value is on the logit scale, store raw value; native will
+  #   convert as needed.
+  if (!is.null(spec$groups) && length(spec$groups) > 0) {
+    if (!"shared_trigger_id" %in% names(base_df)) {
+      base_df$shared_trigger_id <- NA_character_
+    }
+    if (!"shared_trigger_q" %in% names(base_df)) {
+      base_df$shared_trigger_q <- NA_real_
+    }
+    for (grp in spec$groups) {
+      trig <- grp$attrs$shared_trigger %||% NULL
+      if (is.null(trig)) next
+      param_nm <- trig$param %||% NULL
+      members <- grp$members %||% character(0)
+      if (length(members) == 0) next
+      mask <- base_df$accumulator_id %in% members
+      if (!any(mask)) next
+      base_df$shared_trigger_id[mask] <- grp$id %||% trig$id %||% param_nm
+      if (!is.null(param_nm) && nzchar(param_nm) && param_nm %in% names(param_values)) {
+        trig_q <- as.numeric(param_values[[param_nm]])
+        base_df$shared_trigger_q[mask] <- trig_q
+      } else if (!is.null(trig$q)) {
+        base_df$shared_trigger_q[mask] <- as.numeric(trig$q)
+      }
+      # Joint gate: per-acc q is handled by the gate; avoid per-acc q overrides.
+      # Leave q as NA for these rows so downstream logic does not treat it as an override.
+      base_df$q[mask] <- NA_real_
+      # Keep q on logit scale for inspection; add passthrough column
+      if (!"shared_trigger_q_logit" %in% names(base_df)) {
+        base_df$shared_trigger_q_logit <- NA_real_
+      }
+      base_df$shared_trigger_q_logit[mask] <- base_df$shared_trigger_q[mask]
     }
   }
   base_n <- nrow(base_df)

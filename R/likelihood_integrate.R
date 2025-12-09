@@ -261,204 +261,6 @@
   }
 }
 
-# Detect shared-gate pattern (A & C) vs (B & C) across outcome definitions
-.detect_shared_gate <- function(outcome_defs, target_label) {
-  out_def <- outcome_defs[[target_label]]
-  if (is.null(out_def) || is.null(out_def[['expr']])) return(NULL)
-  expr <- out_def[['expr']]
-  if (is.null(expr[['kind']]) || !identical(expr[['kind']], "and") || length(expr[['args']]) != 2) return(NULL)
-  get_evt_id <- function(node) {
-    if (!is.null(node) && !is.null(node[['kind']]) && identical(node[['kind']], "event")) return(node[['source']])
-    NULL
-  }
-  x_id <- get_evt_id(expr[['args']][[1]])
-  c_id <- get_evt_id(expr[['args']][[2]])
-  if (is.null(x_id) || is.null(c_id)) {
-    x_id <- get_evt_id(expr[['args']][[2]])
-    c_id <- get_evt_id(expr[['args']][[1]])
-  }
-  if (is.null(x_id) || is.null(c_id)) return(NULL)
-  # Find another outcome with same gate c_id
-  for (lbl in names(outcome_defs)) {
-    if (identical(lbl, target_label)) next
-    other_def <- outcome_defs[[lbl]]
-    if (!is.null(other_def[['options']][['alias_of']])) next
-    other <- other_def[['expr']]
-    if (is.null(other) || is.null(other[['kind']]) || !identical(other[['kind']], "and") || length(other[['args']]) != 2) next
-    a1 <- get_evt_id(other[['args']][[1]])
-    a2 <- get_evt_id(other[['args']][[2]])
-    ids_other <- c(a1, a2)
-    if (c_id %in% ids_other) {
-      y_id <- setdiff(ids_other, c_id)
-      if (length(y_id) == 1 && !identical(y_id[[1]], x_id)) {
-        return(list(x_id = x_id, y_id = y_id[[1]], c_id = c_id))
-      }
-    }
-  }
-  NULL
-}
-
-# Find a single shared-gate pair among non-alias outcomes, if present
-.find_shared_gate_pair <- function(outcome_defs) {
-  labels <- names(outcome_defs)
-  core_labels <- Filter(function(lbl) is.null(outcome_defs[[lbl]][['options']][['alias_of']]), labels)
-  # collect all ANDs with two events
-  events <- lapply(core_labels, function(lbl) {
-    ex <- outcome_defs[[lbl]][['expr']]
-    if (!is.null(ex[['kind']]) && identical(ex[['kind']], "and") && length(ex[['args']]) == 2) {
-      a1 <- if (!is.null(ex[['args']][[1]][['kind']]) && ex[['args']][[1]][['kind']] == "event") ex[['args']][[1]][['source']] else NULL
-      a2 <- if (!is.null(ex[['args']][[2]][['kind']]) && ex[['args']][[2]][['kind']] == "event") ex[['args']][[2]][['source']] else NULL
-      if (!is.null(a1) && !is.null(a2)) return(list(label = lbl, ids = c(a1, a2)))
-    }
-    NULL
-  })
-  events <- events[!vapply(events, is.null, logical(1))]
-  if (length(events) < 2) return(NULL)
-  # try to find two with exactly one shared id (the gate)
-  for (i in seq_along(events)) {
-    for (j in seq_along(events)) {
-      if (j <= i) next
-      ids_i <- events[[i]][['ids']]
-      ids_j <- events[[j]][['ids']]
-      shared <- intersect(ids_i, ids_j)
-      if (length(shared) == 1) {
-        c_id <- shared[[1]]
-        x_id <- setdiff(ids_i, c_id)[[1]]
-        y_id <- setdiff(ids_j, c_id)[[1]]
-        return(list(
-          label_x = events[[i]][['label']],
-          label_y = events[[j]][['label']],
-          x_id = x_id,
-          y_id = y_id,
-          c_id = c_id
-        ))
-      }
-    }
-  }
-  NULL
-}
-
-# Compute probabilities for a shared-gate pair using the general likelihood machinery
-.shared_gate_pair_probs <- function(prep, component, pair_info,
-                                    trial_rows = NULL,
-                                    trial_state = NULL) {
-  labels <- c(pair_info$label_x, pair_info$label_y)
-  vapply(labels, function(lbl) {
-    .outcome_likelihood(
-      outcome_label = lbl,
-      rt = NA_real_,
-      prep = prep,
-      component = component,
-      trial_rows = trial_rows,
-      state = trial_state
-    )
-  }, numeric(1))
-}
-
-.shared_gate_fast_context <- function(prep, component, info, state) {
-  if (is.null(info)) return(NULL)
-  make_event_expr <- function(event_id) list(kind = "event", source = event_id)
-  fetch_node <- function(event_id) {
-    expr <- make_event_expr(event_id)
-    .expr_lookup_compiled(expr, prep)
-  }
-  nodes <- list(
-    x = fetch_node(info$x_id),
-    y = fetch_node(info$y_id),
-    c = fetch_node(info$c_id)
-  )
-  if (any(vapply(nodes, is.null, logical(1)))) return(NULL)
-  if (any(vapply(nodes, function(node) {
-    !is.function(node$density_fast_fn) || !is.function(node$surv_fast_fn)
-  }, logical(1)))) {
-    return(NULL)
-  }
-  wrap_density <- function(node) {
-    fast <- node$density_fast_fn
-    function(t_vec) {
-      tv <- as.numeric(t_vec)
-      if (length(tv) == 0L) return(numeric(0))
-      vals <- fast(tv, component)
-      out <- as.numeric(vals)
-      out[!is.finite(out)] <- 0.0
-      out
-    }
-  }
-  wrap_survival <- function(node) {
-    fast <- node$surv_fast_fn
-    function(t_vec) {
-      tv <- as.numeric(t_vec)
-      if (length(tv) == 0L) return(numeric(0))
-      vals <- fast(tv, component)
-      out <- as.numeric(vals)
-      out[!is.finite(out)] <- 0.0
-      out[out < 0] <- 0.0
-      out[out > 1] <- 1.0
-      out
-    }
-  }
-  fX <- wrap_density(nodes$x)
-  fY <- wrap_density(nodes$y)
-  fC <- wrap_density(nodes$c)
-  SX <- wrap_survival(nodes$x)
-  SY <- wrap_survival(nodes$y)
-  SC <- wrap_survival(nodes$c)
-  FX <- function(t_vec) {
-    1.0 - SX(t_vec)
-  }
-  FY <- function(t_vec) {
-    1.0 - SY(t_vec)
-  }
-  FC <- function(t_vec) {
-    1.0 - SC(t_vec)
-  }
-  comp_key <- .eval_state_component_key(component)
-  base_tag <- paste("shared_palloc", info$x_id, info$y_id, info$c_id, comp_key, sep = "|")
-  shared_palloc <- function(limit) {
-    limits <- as.numeric(limit)
-    if (length(limits) == 0L) return(numeric(0))
-    vapply(limits, function(lim) {
-      if (!is.finite(lim) || lim <= 0) return(0.0)
-      limit_key <- paste(base_tag, .eval_state_time_key(lim), sep = "|")
-      cached <- .eval_state_get_extra(state, limit_key)
-      if (!is.null(cached)) return(as.numeric(cached))
-      denom_val <- as.numeric(FX(lim) * FY(lim))
-      denom <- if (length(denom_val) == 0L) 0.0 else denom_val[[1]]
-      if (!is.finite(denom) || denom <= 0) {
-        out <- 0.0
-      } else {
-        integral_val <- tryCatch(
-          stats::integrate(
-            function(u) fX(u) * FY(u),
-            lower = 0,
-            upper = lim,
-            rel.tol = .integrate_rel_tol(),
-            abs.tol = .integrate_abs_tol(),
-            stop.on.error = FALSE
-          )[["value"]],
-          error = function(e) 0.0
-        )
-        out <- 1.0 - (as.numeric(integral_val) / denom)
-        if (!is.finite(out)) out <- 0.0
-        if (out < 0) out <- 0.0
-        if (out > 1) out <- 1.0
-      }
-      .eval_state_set_extra(state, limit_key, out)
-      out
-    }, numeric(1))
-  }
-  list(
-    fX = fX,
-    fY = fY,
-    fC = fC,
-    FX = FX,
-    FY = FY,
-    FC = FC,
-    SY = SY,
-    palloc = shared_palloc
-  )
-}
-
 # Compute likelihood for a single trial/outcome
 .outcome_likelihood <- function(outcome_label, rt, prep, component,
                                 trial_rows = NULL,
@@ -490,45 +292,41 @@
       # Sum over outcomes: P(outcome fires) * P(guess | outcome)
       # P(guess | outcome) = 1 - weight[outcome]
       
-      deadline <- .get_component_attr(prep, component, "deadline")
-      deadline <- deadline %||% prep[["default_deadline"]]
-      
-      if (is.finite(deadline)) {
-        if (is.na(rt)) {
-          total_prob <- 0.0
-          for (label in names(guess_weights)) {
-            if (!label %in% names(outcome_defs)) next
-            expr <- outcome_defs[[label]][['expr']]
-            comp_exprs_guess <- competitor_map[[label]] %||% list()
-            prob_outcome <- .integrate_outcome_probability(expr, prep, component, deadline,
-                                                           competitor_exprs = comp_exprs_guess,
-                                                           state = state,
-                                                           trial_rows = trial_rows_df)
-            keep_prob <- as.numeric(guess_weights[[label]])
-            guess_prob <- 1.0 - keep_prob
-            total_prob <- total_prob + prob_outcome * guess_prob
-          }
-          return(total_prob)
-        } else {
-          total_dens <- 0.0
-          for (label in names(guess_weights)) {
-            if (!label %in% names(outcome_defs)) next
-            expr <- outcome_defs[[label]][['expr']]
-            comp_exprs_guess <- competitor_map[[label]] %||% list()
-            dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
+      upper_limit <- Inf
+      if (is.na(rt)) {
+        total_prob <- 0.0
+        for (label in names(guess_weights)) {
+          if (!label %in% names(outcome_defs)) next
+          expr <- outcome_defs[[label]][['expr']]
+          comp_exprs_guess <- competitor_map[[label]] %||% list()
+          prob_outcome <- .integrate_outcome_probability(expr, prep, component, upper_limit,
                                                          competitor_exprs = comp_exprs_guess,
                                                          state = state,
                                                          trial_rows = trial_rows_df)
-            if (dens_r == 0) next
-            keep_prob <- as.numeric(guess_weights[[label]])
-            guess_prob <- 1.0 - keep_prob
-            total_dens <- total_dens + guess_prob * dens_r
-          }
-          return(total_dens)
+          keep_prob <- as.numeric(guess_weights[[label]])
+          guess_prob <- 1.0 - keep_prob
+          total_prob <- total_prob + prob_outcome * guess_prob
         }
+        return(total_prob)
+      } else {
+        total_dens <- 0.0
+        for (label in names(guess_weights)) {
+          if (!label %in% names(outcome_defs)) next
+          expr <- outcome_defs[[label]][['expr']]
+          comp_exprs_guess <- competitor_map[[label]] %||% list()
+          dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
+                                                       competitor_exprs = comp_exprs_guess,
+                                                       state = state,
+                                                       trial_rows = trial_rows_df)
+          if (dens_r == 0) next
+          keep_prob <- as.numeric(guess_weights[[label]])
+          guess_prob <- 1.0 - keep_prob
+          total_dens <- total_dens + guess_prob * dens_r
+        }
+        return(total_dens)
       }
     }
-    # If no guess policy or deadline, fall through to regular handling
+    # If no guess policy, fall through to regular handling
   }
   
   # Find the outcome
@@ -547,8 +345,7 @@
             expr <- out_def[['expr']]
       if (is.na(rt)) {
         # Integrate race probability for the mapped source outcome
-        deadline <- .get_component_attr(prep, component, "deadline")
-        deadline <- deadline %||% prep[["default_deadline"]]
+        upper_limit <- Inf
         comp_labels_map <- setdiff(names(outcome_defs), label)
         if (length(comp_labels_map) > 0) {
           comp_labels_map <- Filter(function(lbl) {
@@ -570,7 +367,7 @@
         na_cache_key <- .na_integral_cache_key(
           source_signature = source_sig,
           component_key = component_key,
-          upper_limit = deadline,
+          upper_limit = upper_limit,
           competitor_signature = competitor_sig,
           params_hash = params_hash
         )
@@ -578,7 +375,7 @@
         if (!is.null(cached_na)) {
           return(as.numeric(cached_na))
         }
-        val <- .integrate_outcome_probability(expr, prep, component, deadline,
+        val <- .integrate_outcome_probability(expr, prep, component, upper_limit,
                                               competitor_exprs = comp_exprs_map,
                                               state = state,
                                               trial_rows = trial_rows_df)
@@ -612,25 +409,8 @@
       return(0.0)
     }
     
-    # Check for special deadline outcomes
-    if (identical(outcome_label, "NR_DEADLINE")) {
-      # Deadline reached - compute probability that no outcome occurred by deadline
-      deadline <- .get_component_attr(prep, component, "deadline")
-      deadline <- deadline %||% prep[["default_deadline"]]
-      
-      if (!is.finite(deadline)) return(0.0)
-      
-      # P(no outcome by deadline) = Π_i S_i(deadline)
-      # where i ranges over all possible outcomes
-      prob_none <- 1.0
-      for (label in names(outcome_defs)) {
-        out_def <- outcome_defs[[label]]
-        expr <- out_def[['expr']]
-        # Survival of this outcome at deadline
-        surv <- .eval_expr_survival(expr, deadline, prep, component)
-        prob_none <- prob_none * surv
-      }
-      return(prob_none)
+    if (identical(outcome_label, "NR_DEADLINE") || identical(outcome_label, "__DEADLINE__")) {
+      return(0.0)
     }
     
     warning(sprintf("Unknown outcome '%s'", outcome_label))
@@ -674,119 +454,8 @@
     )
   }
   
-  # Detect shared-gate AND pattern: (X & C) vs (Y & C)
-  shared_gate_info <- .detect_shared_gate(outcome_defs, outcome_label)
-  
-  # Helper closures to get density/CDF for pools or accumulators
-  get_f <- function(id) {
-    function(tt) {
-      vapply(tt, function(ti) {
-        if (!is.finite(ti) || ti < 0) return(0.0)
-        .event_density_at(prep, id, component, ti,
-                          forced_complete = integer(0),
-                          forced_survive = integer(0))
-      }, numeric(1))
-    }
-  }
-  get_S <- function(id) {
-    function(tt) {
-      vapply(tt, function(ti) {
-        if (!is.finite(ti)) return(0.0)
-        if (ti < 0) return(1.0)
-        .event_survival_at(prep, id, component, ti,
-                           forced_complete = integer(0),
-                           forced_survive = integer(0))
-      }, numeric(1))
-    }
-  }
-  get_F <- function(id) {
-    Sfun <- get_S(id)
-    function(tt) { 1.0 - Sfun(tt) }
-  }
-  
-  shared_palloc <- NULL
-  shared_gate_ctx <- NULL
-  if (!is.null(shared_gate_info)) {
-    shared_gate_ctx <- .shared_gate_fast_context(prep, component, shared_gate_info, state)
-  }
-  if (!is.null(shared_gate_ctx)) {
-    fX <- shared_gate_ctx$fX
-    fY <- shared_gate_ctx$fY
-    fC <- shared_gate_ctx$fC
-    FX <- shared_gate_ctx$FX
-    FY <- shared_gate_ctx$FY
-    FC <- shared_gate_ctx$FC
-    SY <- shared_gate_ctx$SY
-    shared_palloc <- shared_gate_ctx$palloc
-  } else if (!is.null(shared_gate_info)) {
-    fX <- get_f(shared_gate_info[['x_id']])
-    fY <- get_f(shared_gate_info[['y_id']])
-    fC <- get_f(shared_gate_info[['c_id']])
-    FX <- get_F(shared_gate_info[['x_id']])
-    FY <- get_F(shared_gate_info[['y_id']])
-    FC <- get_F(shared_gate_info[['c_id']])
-    SY <- get_S(shared_gate_info[['y_id']])
-    shared_palloc <- function(limit) {
-      if (!is.finite(limit) || limit <= 0) return(0.0)
-      denom <- FX(limit) * FY(limit)
-      if (!is.finite(denom) || denom <= 0) return(0.0)
-      integral_val <- tryCatch(
-        stats::integrate(
-          function(u) fX(u) * FY(u),
-          lower = 0,
-          upper = limit,
-          rel.tol = .integrate_rel_tol(),
-          abs.tol = .integrate_abs_tol(),
-          stop.on.error = FALSE
-        )[["value"]],
-        error = function(e) 0.0
-      )
-      out <- 1.0 - (as.numeric(integral_val) / as.numeric(denom))
-      if (!is.finite(out)) out <- 0.0
-      max(0.0, min(1.0, out))
-    }
-  }
-  
   # Handle NA/infinite RT by integration of race density
   if (is.na(rt) || !is.finite(rt) || rt < 0) {
-    deadline <- .get_component_attr(prep, component, "deadline")
-    deadline <- deadline %||% prep[["default_deadline"]]
-    if (!is.null(shared_gate_info)) {
-      integrand <- function(t) {
-        vapply(t, function(tt) {
-          term1 <- fX(tt) * FC(tt) * SY(tt)
-          denom <- FX(tt) * FY(tt)
-          termCother <- fC(tt) * FX(tt) * SY(tt)
-          term2 <- if (!is.null(shared_palloc) && is.finite(denom) && denom > 0) {
-            fC(tt) * FX(tt) * FY(tt) * shared_palloc(tt)
-          } else {
-            0.0
-          }
-          term1 + termCother + term2
-        }, numeric(1))
-      }
-      keep_prob <- 1.0
-      gp_comp <- .get_component_attr(prep, component, "guess")
-      if (!is.null(gp_comp) && !is.null(gp_comp[['weights']])) {
-        kp <- gp_comp[['weights']][[outcome_label]] %||% gp_comp[['weights']][[normalize_label(outcome_label)]] %||% NULL
-        if (!is.null(kp)) keep_prob <- as.numeric(kp)
-      }
-      upper_lim <- if (is.finite(deadline)) deadline else Inf
-      res <- tryCatch(
-        stats::integrate(
-          integrand,
-          lower = 0,
-          upper = upper_lim,
-          rel.tol = .integrate_rel_tol(),
-          abs.tol = .integrate_abs_tol(),
-          stop.on.error = FALSE
-        )[["value"]],
-        error = function(e) 0.0
-      )
-      res <- as.numeric(res)
-      if (!is.finite(res) || res < 0) res <- 0.0
-      return(keep_prob * res)
-    }
     integrand <- function(t) {
       vapply(t, function(tt) {
         if (!is.finite(tt) || tt < 0) return(0.0)
@@ -809,7 +478,7 @@
         base + add
       }, numeric(1))
     }
-    upper_lim <- if (is.finite(deadline)) deadline else Inf
+    upper_lim <- Inf
     res <- tryCatch(
       stats::integrate(
         integrand,
@@ -827,37 +496,25 @@
   }
   
   # Race density at observed RT
-  if (!is.null(shared_gate_info)) {
-    term1 <- fX(rt) * FC(rt) * SY(rt)
-    denom <- FX(rt) * FY(rt)
-    term2 <- 0.0
-    termCother <- fC(rt) * FX(rt) * SY(rt)
-    if (!is.null(shared_palloc) && is.finite(denom) && denom > 0) {
-      palloc <- shared_palloc(rt)
-      term2 <- fC(rt) * FX(rt) * FY(rt) * palloc
-    }
-    base_val <- term1 + termCother + term2
-  } else {
-      dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
-                                                   competitor_exprs = competitor_exprs,
+  dens_r <- .scenario_density_with_competitors(expr, rt, prep, component,
+                                               competitor_exprs = competitor_exprs,
+                                               state = state,
+                                               trial_rows = trial_rows_df)
+  if (dens_r == 0) return(0.0)
+  base_val <- dens_r
+  # Include donor mass (e.g., timeout guesses) that keeps the observed RT
+  if (length(donors) > 0) {
+    donor_add <- 0.0
+    for (d in donors) {
+      if (identical(d[['rt_policy']], "na")) next
+      dens_d <- .scenario_density_with_competitors(d[['expr']], rt, prep, component,
+                                                   competitor_exprs = d[['competitors']] %||% list(),
                                                    state = state,
                                                    trial_rows = trial_rows_df)
-    if (dens_r == 0) return(0.0)
-    base_val <- dens_r
-    # Include donor mass (e.g., timeout guesses) that keeps the observed RT
-    if (length(donors) > 0) {
-      donor_add <- 0.0
-      for (d in donors) {
-        if (identical(d[['rt_policy']], "na")) next
-        dens_d <- .scenario_density_with_competitors(d[['expr']], rt, prep, component,
-                                                     competitor_exprs = d[['competitors']] %||% list(),
-                                                     state = state,
-                                                     trial_rows = trial_rows_df)
-        if (dens_d == 0) next
-        donor_add <- donor_add + d[['weight']] * dens_d
-      }
-      base_val <- base_val + donor_add
+      if (dens_d == 0) next
+      donor_add <- donor_add + d[['weight']] * dens_d
     }
+    base_val <- base_val + donor_add
   }
   # Apply component-level keep probability to base density for observed labels
   keep_prob_rt <- 1.0

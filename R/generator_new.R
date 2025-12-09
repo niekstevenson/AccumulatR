@@ -114,6 +114,7 @@
           if (!is.null(defs[[m]])) {
             defs[[m]]$shared_trigger_id <- trig_id
             defs[[m]]$shared_trigger_q <- as.numeric(default_q)
+            # Keep q carrying the gate probability for downstream likelihood/native use.
             defs[[m]]$q <- as.numeric(default_q)
           }
         }
@@ -134,7 +135,7 @@
     list(
       ids = "__default__",
       weights = 1,
-      attrs = list(`__default__` = list(deadline = model$metadata$deadline %||% Inf, guess = NULL)),
+      attrs = list(`__default__` = list(guess = NULL)),
       has_weight_param = FALSE
     )
   } else {
@@ -149,7 +150,6 @@
       wp <- comps[[i]]$attrs$weight_param %||% NULL
       has_wparam[[i]] <- !is.null(wp)
       attrs[[ids[[i]]]] <- list(
-        deadline = comps[[i]]$attrs$deadline %||% model$metadata$deadline %||% Inf,
         guess = comps[[i]]$attrs$guess %||% NULL,
         weight_param = wp
       )
@@ -201,7 +201,6 @@ prepare_model <- function(model) {
     pools = pool_defs,
     outcomes = outcome_defs,
     components = component_defs,
-    default_deadline = model$metadata$deadline %||% Inf,
     special_outcomes = model$metadata$special_outcomes %||% list(),
     shared_triggers = acc_prep$shared_triggers %||% list()
   )
@@ -253,14 +252,38 @@ prepare_model <- function(model) {
 }
 
 build_generator_structure <- function(model) {
-  model_norm <- .normalize_model(model)
+  unwrap_model_spec <- function(x) {
+    seen <- 0L
+    repeat {
+      if (inherits(x, "generator_structure")) {
+        x <- x$model_spec %||% stop("generator_structure missing model_spec")
+      } else if (!inherits(x, "race_model_spec") && !is.null(x$model_spec)) {
+        x <- x$model_spec
+      } else {
+        break
+      }
+      seen <- seen + 1L
+      if (seen > 20L) stop("generator_structure nesting too deep")
+    }
+    x
+  }
+
+  # Unwrap any generator_structures and normalize to a plain race_model_spec
+  model_norm <- unwrap_model_spec(model)
+  model_norm <- .normalize_model(model_norm)
+  model_norm <- unwrap_model_spec(model_norm)
+  if (!inherits(model_norm, "race_model_spec")) {
+    stop("build_generator_structure requires a race_model_spec")
+  }
+
+  # Deep copy to prevent accidental aliasing back into the enclosing structure.
+  model_norm <- unserialize(serialize(model_norm, NULL))
   prep <- prepare_model(model_norm)
   structure <- list(
     model_spec = model_norm,
     prep = prep,
     accumulators = .build_accumulator_template(prep$accumulators),
     components = .build_component_table(prep$components),
-    default_deadline = prep$default_deadline,
     special_outcomes = prep$special_outcomes,
     shared_triggers = prep$shared_triggers %||% list()
   )
@@ -404,12 +427,9 @@ build_generator_structure <- function(model) {
   if (!is.null(ctx$event_cache[[key]])) return(ctx$event_cache[[key]])
   source_id <- ev$source
   if (identical(source_id, "__DEADLINE__")) {
-    deadline <- .get_component_attr(ctx$model, ctx$component, "deadline")
-    if (is.null(deadline) || !is.finite(deadline)) deadline <- ctx$model[["default_deadline"]]
-    result <- list(time = deadline %||% Inf, core = numeric(0))
+    result <- list(time = Inf, core = numeric(0))
   } else if (identical(source_id, "__GUESS__")) {
-    deadline <- .get_component_attr(ctx$model, ctx$component, "deadline")
-    result <- list(time = deadline %||% Inf, core = numeric(0))
+    result <- list(time = Inf, core = numeric(0))
   } else if (!is.null(ctx$model[["pools"]][[source_id]])) {
     result <- .resolve_pool(ctx, source_id)
   } else if (!is.null(ctx$model[["accumulators"]][[source_id]])) {
@@ -591,6 +611,22 @@ build_generator_structure <- function(model) {
   acc_entries <- list()
   shared_entries <- list()
 
+  # Shared trigger parameter overrides (group-level param names)
+  if (!is.null(prep$shared_triggers) && length(prep$shared_triggers) > 0) {
+    for (trig in prep$shared_triggers) {
+      param_name <- trig$param %||% NULL
+      if (is.null(param_name) || !nzchar(param_name)) next
+      if (!param_name %in% names(params_rows)) next
+      vals <- params_rows[[param_name]]
+      if (is.null(vals) || length(vals) == 0L) next
+      val <- vals[[1]]
+      if (length(val) == 1L && !is.na(val)) {
+        prob <- if (val < 0 || val > 1) plogis(val) else as.numeric(val)
+        shared_entries[[trig$id]] <- list(prob = prob)
+      }
+    }
+  }
+
   for (i in seq_len(nrow(params_rows))) {
     row <- params_rows[i, , drop = FALSE]
     entry <- .acc_override_entry(row, acc_defs, acc_ids, param_cols)
@@ -632,12 +668,24 @@ build_generator_structure <- function(model) {
   } else {
     onset_val <- base_def$onset %||% 0
   }
-  q_val <- row$q
-  if (!is.null(q_val) && length(q_val) > 0L && !is.na(q_val[[1]])) {
-    q_val <- as.numeric(q_val[[1]])
-  } else {
-    q_val <- base_def$q %||% base_def$shared_trigger_q %||% 0
+  # Distinguish between gate probability (shared trigger) and per-acc q
+  has_shared <- !is.null(base_def$shared_trigger_id) && !is.na(base_def$shared_trigger_id)
+  q_raw <- row$q
+  q_override <- NULL
+  if (!is.null(q_raw) && length(q_raw) > 0L && !is.na(q_raw[[1]])) {
+    tmp <- as.numeric(q_raw[[1]])
+    if (has_shared && identical(tmp, base_def$q %||% 0)) {
+      q_override <- NULL
+    } else {
+      q_override <- tmp
+    }
   }
+  # q values are supplied on the logit scale; convert to probability when used
+  q_prob_override <- if (!is.null(q_override)) plogis(q_override) else NULL
+  base_shared_prob <- if (!is.null(base_def$shared_trigger_q)) plogis(base_def$shared_trigger_q) else NULL
+  base_q_prob <- if (!is.null(base_def$q)) plogis(base_def$q) else NULL
+  gate_prob <- q_prob_override %||% base_shared_prob %||% base_q_prob %||% 0
+  q_val <- if (has_shared) 0 else (q_prob_override %||% base_q_prob %||% 0)
   shared_id <- NULL
   if ("shared_trigger_id" %in% names(row)) {
     shared_raw <- row$shared_trigger_id
@@ -660,7 +708,7 @@ build_generator_structure <- function(model) {
   )
   shared_entry <- NULL
   if (!is.null(trig_id) && !is.na(trig_id) && nzchar(trig_id)) {
-    shared_entry <- list(prob = as.numeric(q_val))
+    shared_entry <- list(prob = as.numeric(gate_prob))
   }
   list(acc_id = acc_id, acc = acc_entry, shared_id = trig_id, shared = shared_entry)
 }
@@ -697,16 +745,6 @@ build_generator_structure <- function(model) {
     cand_times <- c(cand_times, time)
     cand_core[[lbl]] <- outcomes[[lbl]]$core
     cand_options[[lbl]] <- outcomes[[lbl]]$options
-  }
-
-  # Include global deadline if not already represented
-  default_deadline <- component_attr$deadline %||% prep[["default_deadline"]]
-  if (is.finite(default_deadline) && !("NR_DEADLINE" %in% cand_labels)) {
-    special_deadline_label <- prep[["special_outcomes"]]$deadline %||% "NR_DEADLINE"
-    cand_labels <- c(cand_labels, special_deadline_label)
-    cand_times <- c(cand_times, default_deadline)
-    cand_core[[tail(cand_labels, 1)]] <- numeric(0)
-    cand_options[[tail(cand_labels, 1)]] <- list()
   }
 
   if (length(cand_times) == 0) {

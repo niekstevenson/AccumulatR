@@ -79,8 +79,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // native_loglik_from_params_cpp
-Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP, Rcpp::List structure, Rcpp::List trial_entries, Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt, double default_deadline, double rel_tol, double abs_tol, int max_depth);
-RcppExport SEXP _AccumulatR_native_loglik_from_params_cpp(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP trial_entriesSEXP, SEXP component_weights_optSEXP, SEXP default_deadlineSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP) {
+Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP, Rcpp::List structure, Rcpp::List trial_entries, Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt, double rel_tol, double abs_tol, int max_depth);
+RcppExport SEXP _AccumulatR_native_loglik_from_params_cpp(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP trial_entriesSEXP, SEXP component_weights_optSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -88,17 +88,16 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::List >::type structure(structureSEXP);
     Rcpp::traits::input_parameter< Rcpp::List >::type trial_entries(trial_entriesSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::DataFrame> >::type component_weights_opt(component_weights_optSEXP);
-    Rcpp::traits::input_parameter< double >::type default_deadline(default_deadlineSEXP);
     Rcpp::traits::input_parameter< double >::type rel_tol(rel_tolSEXP);
     Rcpp::traits::input_parameter< double >::type abs_tol(abs_tolSEXP);
     Rcpp::traits::input_parameter< int >::type max_depth(max_depthSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_loglik_from_params_cpp(ctxSEXP, structure, trial_entries, component_weights_opt, default_deadline, rel_tol, abs_tol, max_depth));
+    rcpp_result_gen = Rcpp::wrap(native_loglik_from_params_cpp(ctxSEXP, structure, trial_entries, component_weights_opt, rel_tol, abs_tol, max_depth));
     return rcpp_result_gen;
 END_RCPP
 }
 // native_loglik_from_buffer_cpp
-Rcpp::List native_loglik_from_buffer_cpp(SEXP ctxSEXP, Rcpp::List structure, Rcpp::List trial_entries, Rcpp::DataFrame params_df, Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt, double default_deadline, double rel_tol, double abs_tol, int max_depth);
-RcppExport SEXP _AccumulatR_native_loglik_from_buffer_cpp(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP trial_entriesSEXP, SEXP params_dfSEXP, SEXP component_weights_optSEXP, SEXP default_deadlineSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP) {
+Rcpp::List native_loglik_from_buffer_cpp(SEXP ctxSEXP, Rcpp::List structure, Rcpp::List trial_entries, Rcpp::DataFrame params_df, Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt, double rel_tol, double abs_tol, int max_depth);
+RcppExport SEXP _AccumulatR_native_loglik_from_buffer_cpp(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP trial_entriesSEXP, SEXP params_dfSEXP, SEXP component_weights_optSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -107,17 +106,16 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::List >::type trial_entries(trial_entriesSEXP);
     Rcpp::traits::input_parameter< Rcpp::DataFrame >::type params_df(params_dfSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::DataFrame> >::type component_weights_opt(component_weights_optSEXP);
-    Rcpp::traits::input_parameter< double >::type default_deadline(default_deadlineSEXP);
     Rcpp::traits::input_parameter< double >::type rel_tol(rel_tolSEXP);
     Rcpp::traits::input_parameter< double >::type abs_tol(abs_tolSEXP);
     Rcpp::traits::input_parameter< int >::type max_depth(max_depthSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_loglik_from_buffer_cpp(ctxSEXP, structure, trial_entries, params_df, component_weights_opt, default_deadline, rel_tol, abs_tol, max_depth));
+    rcpp_result_gen = Rcpp::wrap(native_loglik_from_buffer_cpp(ctxSEXP, structure, trial_entries, params_df, component_weights_opt, rel_tol, abs_tol, max_depth));
     return rcpp_result_gen;
 END_RCPP
 }
 // native_plan_entries_cpp
-Rcpp::List native_plan_entries_cpp(SEXP ctxSEXP, Rcpp::List structure, Rcpp::List plan, Rcpp::CharacterVector selection_keys, Rcpp::CharacterVector data_trial_keys, Rcpp::DataFrame data_df, Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt, Rcpp::List shared_gate_specs, Rcpp::List na_source_specs, Rcpp::List guess_target_specs, Rcpp::List alias_specs);
-RcppExport SEXP _AccumulatR_native_plan_entries_cpp(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP planSEXP, SEXP selection_keysSEXP, SEXP data_trial_keysSEXP, SEXP data_dfSEXP, SEXP component_weights_optSEXP, SEXP shared_gate_specsSEXP, SEXP na_source_specsSEXP, SEXP guess_target_specsSEXP, SEXP alias_specsSEXP) {
+Rcpp::List native_plan_entries_cpp(SEXP ctxSEXP, Rcpp::List structure, Rcpp::List plan, Rcpp::CharacterVector selection_keys, Rcpp::CharacterVector data_trial_keys, Rcpp::DataFrame data_df, Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt, Rcpp::List na_source_specs, Rcpp::List guess_target_specs, Rcpp::List alias_specs);
+RcppExport SEXP _AccumulatR_native_plan_entries_cpp(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP planSEXP, SEXP selection_keysSEXP, SEXP data_trial_keysSEXP, SEXP data_dfSEXP, SEXP component_weights_optSEXP, SEXP na_source_specsSEXP, SEXP guess_target_specsSEXP, SEXP alias_specsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -128,11 +126,10 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type data_trial_keys(data_trial_keysSEXP);
     Rcpp::traits::input_parameter< Rcpp::DataFrame >::type data_df(data_dfSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::DataFrame> >::type component_weights_opt(component_weights_optSEXP);
-    Rcpp::traits::input_parameter< Rcpp::List >::type shared_gate_specs(shared_gate_specsSEXP);
     Rcpp::traits::input_parameter< Rcpp::List >::type na_source_specs(na_source_specsSEXP);
     Rcpp::traits::input_parameter< Rcpp::List >::type guess_target_specs(guess_target_specsSEXP);
     Rcpp::traits::input_parameter< Rcpp::List >::type alias_specs(alias_specsSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_plan_entries_cpp(ctxSEXP, structure, plan, selection_keys, data_trial_keys, data_df, component_weights_opt, shared_gate_specs, na_source_specs, guess_target_specs, alias_specs));
+    rcpp_result_gen = Rcpp::wrap(native_plan_entries_cpp(ctxSEXP, structure, plan, selection_keys, data_trial_keys, data_df, component_weights_opt, na_source_specs, guess_target_specs, alias_specs));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -172,8 +169,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // native_loglik_param_repeat_cpp
-Rcpp::NumericVector native_loglik_param_repeat_cpp(SEXP ctxSEXP, Rcpp::List structure, Rcpp::List entries, Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt, Rcpp::List params_list, double default_deadline, double rel_tol, double abs_tol, int max_depth);
-RcppExport SEXP _AccumulatR_native_loglik_param_repeat_cpp(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP entriesSEXP, SEXP component_weights_optSEXP, SEXP params_listSEXP, SEXP default_deadlineSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP) {
+Rcpp::NumericVector native_loglik_param_repeat_cpp(SEXP ctxSEXP, Rcpp::List structure, Rcpp::List entries, Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt, Rcpp::List params_list, double rel_tol, double abs_tol, int max_depth);
+RcppExport SEXP _AccumulatR_native_loglik_param_repeat_cpp(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP entriesSEXP, SEXP component_weights_optSEXP, SEXP params_listSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -182,17 +179,16 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::List >::type entries(entriesSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::DataFrame> >::type component_weights_opt(component_weights_optSEXP);
     Rcpp::traits::input_parameter< Rcpp::List >::type params_list(params_listSEXP);
-    Rcpp::traits::input_parameter< double >::type default_deadline(default_deadlineSEXP);
     Rcpp::traits::input_parameter< double >::type rel_tol(rel_tolSEXP);
     Rcpp::traits::input_parameter< double >::type abs_tol(abs_tolSEXP);
     Rcpp::traits::input_parameter< int >::type max_depth(max_depthSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_loglik_param_repeat_cpp(ctxSEXP, structure, entries, component_weights_opt, params_list, default_deadline, rel_tol, abs_tol, max_depth));
+    rcpp_result_gen = Rcpp::wrap(native_loglik_param_repeat_cpp(ctxSEXP, structure, entries, component_weights_opt, params_list, rel_tol, abs_tol, max_depth));
     return rcpp_result_gen;
 END_RCPP
 }
 // native_loglik_from_plan_cpp
-Rcpp::List native_loglik_from_plan_cpp(SEXP ctxSEXP, Rcpp::List structure, Rcpp::List plan, Rcpp::CharacterVector trial_keys, Rcpp::CharacterVector data_trial_keys, Rcpp::DataFrame data_df, Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt, Rcpp::List shared_gate_specs, Rcpp::List na_source_specs, Rcpp::List guess_target_specs, Rcpp::List alias_specs, double default_deadline, double rel_tol, double abs_tol, int max_depth);
-RcppExport SEXP _AccumulatR_native_loglik_from_plan_cpp(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP planSEXP, SEXP trial_keysSEXP, SEXP data_trial_keysSEXP, SEXP data_dfSEXP, SEXP component_weights_optSEXP, SEXP shared_gate_specsSEXP, SEXP na_source_specsSEXP, SEXP guess_target_specsSEXP, SEXP alias_specsSEXP, SEXP default_deadlineSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP) {
+Rcpp::List native_loglik_from_plan_cpp(SEXP ctxSEXP, Rcpp::List structure, Rcpp::List plan, Rcpp::CharacterVector trial_keys, Rcpp::CharacterVector data_trial_keys, Rcpp::DataFrame data_df, Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt, Rcpp::List na_source_specs, Rcpp::List guess_target_specs, Rcpp::List alias_specs, double rel_tol, double abs_tol, int max_depth);
+RcppExport SEXP _AccumulatR_native_loglik_from_plan_cpp(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP planSEXP, SEXP trial_keysSEXP, SEXP data_trial_keysSEXP, SEXP data_dfSEXP, SEXP component_weights_optSEXP, SEXP na_source_specsSEXP, SEXP guess_target_specsSEXP, SEXP alias_specsSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -203,15 +199,13 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type data_trial_keys(data_trial_keysSEXP);
     Rcpp::traits::input_parameter< Rcpp::DataFrame >::type data_df(data_dfSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::DataFrame> >::type component_weights_opt(component_weights_optSEXP);
-    Rcpp::traits::input_parameter< Rcpp::List >::type shared_gate_specs(shared_gate_specsSEXP);
     Rcpp::traits::input_parameter< Rcpp::List >::type na_source_specs(na_source_specsSEXP);
     Rcpp::traits::input_parameter< Rcpp::List >::type guess_target_specs(guess_target_specsSEXP);
     Rcpp::traits::input_parameter< Rcpp::List >::type alias_specs(alias_specsSEXP);
-    Rcpp::traits::input_parameter< double >::type default_deadline(default_deadlineSEXP);
     Rcpp::traits::input_parameter< double >::type rel_tol(rel_tolSEXP);
     Rcpp::traits::input_parameter< double >::type abs_tol(abs_tolSEXP);
     Rcpp::traits::input_parameter< int >::type max_depth(max_depthSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_loglik_from_plan_cpp(ctxSEXP, structure, plan, trial_keys, data_trial_keys, data_df, component_weights_opt, shared_gate_specs, na_source_specs, guess_target_specs, alias_specs, default_deadline, rel_tol, abs_tol, max_depth));
+    rcpp_result_gen = Rcpp::wrap(native_loglik_from_plan_cpp(ctxSEXP, structure, plan, trial_keys, data_trial_keys, data_df, component_weights_opt, na_source_specs, guess_target_specs, alias_specs, rel_tol, abs_tol, max_depth));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -741,14 +735,14 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_native_context_from_proto_cpp", (DL_FUNC) &_AccumulatR_native_context_from_proto_cpp, 1},
     {"_AccumulatR_boost_integrate_cpp", (DL_FUNC) &_AccumulatR_boost_integrate_cpp, 6},
     {"_AccumulatR_native_trial_mixture_driver", (DL_FUNC) &_AccumulatR_native_trial_mixture_driver, 9},
-    {"_AccumulatR_native_loglik_from_params_cpp", (DL_FUNC) &_AccumulatR_native_loglik_from_params_cpp, 8},
-    {"_AccumulatR_native_loglik_from_buffer_cpp", (DL_FUNC) &_AccumulatR_native_loglik_from_buffer_cpp, 9},
-    {"_AccumulatR_native_plan_entries_cpp", (DL_FUNC) &_AccumulatR_native_plan_entries_cpp, 11},
+    {"_AccumulatR_native_loglik_from_params_cpp", (DL_FUNC) &_AccumulatR_native_loglik_from_params_cpp, 7},
+    {"_AccumulatR_native_loglik_from_buffer_cpp", (DL_FUNC) &_AccumulatR_native_loglik_from_buffer_cpp, 8},
+    {"_AccumulatR_native_plan_entries_cpp", (DL_FUNC) &_AccumulatR_native_plan_entries_cpp, 10},
     {"_AccumulatR_native_refresh_trial_params_cpp", (DL_FUNC) &_AccumulatR_native_refresh_trial_params_cpp, 2},
     {"_AccumulatR_native_update_entries_from_params_cpp", (DL_FUNC) &_AccumulatR_native_update_entries_from_params_cpp, 3},
     {"_AccumulatR_native_debug_trial_params_cpp", (DL_FUNC) &_AccumulatR_native_debug_trial_params_cpp, 1},
-    {"_AccumulatR_native_loglik_param_repeat_cpp", (DL_FUNC) &_AccumulatR_native_loglik_param_repeat_cpp, 9},
-    {"_AccumulatR_native_loglik_from_plan_cpp", (DL_FUNC) &_AccumulatR_native_loglik_from_plan_cpp, 15},
+    {"_AccumulatR_native_loglik_param_repeat_cpp", (DL_FUNC) &_AccumulatR_native_loglik_param_repeat_cpp, 8},
+    {"_AccumulatR_native_loglik_from_plan_cpp", (DL_FUNC) &_AccumulatR_native_loglik_from_plan_cpp, 13},
     {"_AccumulatR_native_component_plan_exported", (DL_FUNC) &_AccumulatR_native_component_plan_exported, 4},
     {"_AccumulatR_native_guard_eval_cpp", (DL_FUNC) &_AccumulatR_native_guard_eval_cpp, 9},
     {"_AccumulatR_native_guard_effective_survival_cpp", (DL_FUNC) &_AccumulatR_native_guard_effective_survival_cpp, 9},

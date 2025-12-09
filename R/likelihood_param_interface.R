@@ -69,7 +69,6 @@
           data_trial_keys,
           data_df,
           component_weights_df,
-          metadata$shared_gate_specs %||% list(),
           metadata$na_source_specs %||% list(),
           metadata$guess_target_specs %||% list(),
           metadata$alias_specs %||% list()
@@ -86,7 +85,6 @@
         plan_cache$entries <- entries_all
         plan_cache$entry_names <- entry_names_norm
         plan_cache$eval_config <- list(
-          default_deadline = as.numeric(metadata$default_deadline),
           rel_tol = as.numeric(metadata$rel_tol),
           abs_tol = as.numeric(metadata$abs_tol),
           max_depth = as.integer(metadata$max_depth)
@@ -161,6 +159,20 @@ build_likelihood_context <- function(structure, params_df, data_df,
     }
     spec_copy$accumulators <- acc_defs
   }
+  shared_overrides <- param_state$shared %||% list()
+  if (length(shared_overrides) > 0L && length(spec_copy$groups) > 0L) {
+    for (g in seq_along(spec_copy$groups)) {
+      grp <- spec_copy$groups[[g]] %||% list()
+      trig <- grp$attrs$shared_trigger %||% NULL
+      if (is.null(trig)) next
+      trig_id <- trig$id %||% grp$id
+      if (is.null(trig_id) || !nzchar(trig_id)) next
+      override <- shared_overrides[[trig_id]] %||% NULL
+      if (is.null(override) || is.null(override$prob)) next
+      grp$attrs$shared_trigger$q <- override$prob
+      spec_copy$groups[[g]] <- grp
+    }
+  }
   spec_copy
 }
 
@@ -230,20 +242,6 @@ build_likelihood_context <- function(structure, params_df, data_df,
     ids
   })
   names(compiled_competitors) <- names(outcome_defs)
-  shared_gate_specs <- lapply(names(outcome_defs), function(lbl) {
-    info <- .detect_shared_gate(outcome_defs, lbl)
-    if (is.null(info)) return(NULL)
-    x_lbl <- info$x_id %||% NULL
-    y_lbl <- info$y_id %||% NULL
-    c_lbl <- info$c_id %||% NULL
-    if (is.null(x_lbl) || is.null(y_lbl) || is.null(c_lbl)) return(NULL)
-    list(
-      x_label = as.character(x_lbl),
-      y_label = as.character(y_lbl),
-      c_label = as.character(c_lbl)
-    )
-  })
-  names(shared_gate_specs) <- names(outcome_defs)
   na_source_labels <- Filter(function(lbl) {
     def <- outcome_defs[[lbl]]
     map_to <- def[['options']][['map_outcome_to']]
@@ -255,6 +253,7 @@ build_likelihood_context <- function(structure, params_df, data_df,
   if (length(na_source_labels) > 0L) {
     na_source_specs <- lapply(na_source_labels, function(lbl) {
       node <- compiled_nodes[[lbl]]
+      def <- outcome_defs[[lbl]] %||% list()
       comp_ids <- compiled_competitors[[lbl]]
       if (is.null(node) || is.null(comp_ids)) return(NULL)
       list(
@@ -314,7 +313,6 @@ build_likelihood_context <- function(structure, params_df, data_df,
     alias_sources
   })
   names(alias_specs) <- names(outcome_defs)
-  default_deadline <- prep$default_deadline %||% Inf
   rel_tol <- .integrate_rel_tol()
   abs_tol <- .integrate_abs_tol()
   max_depth <- 12L
@@ -322,11 +320,9 @@ build_likelihood_context <- function(structure, params_df, data_df,
     structure_hash = structure_hash,
     compiled_nodes = compiled_nodes,
     compiled_competitors = compiled_competitors,
-    shared_gate_specs = shared_gate_specs,
     na_source_specs = na_source_specs,
     guess_target_specs = guess_target_specs,
     alias_specs = alias_specs,
-    default_deadline = as.numeric(default_deadline),
     rel_tol = as.numeric(rel_tol),
     abs_tol = as.numeric(abs_tol),
     max_depth = as.integer(max_depth)
@@ -355,6 +351,8 @@ build_likelihood_context <- function(structure, params_df, data_df,
   onset <- as.numeric(df$onset %||% 0)
   q <- as.numeric(df$q %||% 0)
   t0 <- as.numeric(df$t0 %||% 0)
+  shared_id <- if ("shared_trigger_id" %in% names(df)) as.character(df$shared_trigger_id) else rep(NA_character_, n)
+  shared_q <- if ("shared_trigger_q" %in% names(df)) as.numeric(df$shared_trigger_q) else rep(NA_real_, n)
 
   # Helper: per-row first-non-NA across candidate columns
   pick_slot <- function(candidates) {
@@ -386,7 +384,8 @@ build_likelihood_context <- function(structure, params_df, data_df,
     accumulator_index = acc_idx,
     onset = onset,
     q = q,
-    t0 = t0
+    t0 = t0,
+    shared_trigger_q = shared_q
   )
   if (max_params >= 1L) cols$p1 <- p1
   if (max_params >= 2L) cols$p2 <- p2
@@ -450,20 +449,6 @@ build_likelihood_context <- function(structure, params_df, data_df,
 .likelihood_response_prob_component <- function(prep, outcome_label, component,
                                                 trial_rows = NULL,
                                                 trial_state = NULL) {
-  use_fastpath <- getOption("uuber.shared_gate_fastpath", default = TRUE)
-  if (isTRUE(use_fastpath)) {
-    pair <- .find_shared_gate_pair(prep[["outcomes"]])
-    if (!is.null(pair) && outcome_label %in% c(pair[['label_x']], pair[['label_y']])) {
-      vals <- .shared_gate_pair_probs(prep, component, pair, trial_rows = trial_rows,
-                                      trial_state = trial_state)
-      if (identical(outcome_label, pair[['label_x']])) {
-        return(vals[[1]])
-      } else {
-        return(vals[[2]])
-      }
-    }
-  }
-
   out_def <- prep[["outcomes"]][[outcome_label]]
   if (!is.null(out_def[['options']][['alias_of']])) {
     refs <- as.character(out_def[['options']][['alias_of']])
@@ -479,14 +464,55 @@ build_likelihood_context <- function(structure, params_df, data_df,
     return(sum(vals))
   }
 
-  base <- as.numeric(.outcome_likelihood(
-    outcome_label,
-    NA_real_,
-    prep,
-    component,
-    trial_rows = trial_rows,
-    state = trial_state
-  ))
+  # Prefer native probability (upper = Inf) so shared triggers and guards follow the
+  # same path as the main likelihood. Fall back to the pure-R integrator if needed.
+  base <- NA_real_
+  native_ctx <- .prep_native_context(prep)
+  if (inherits(native_ctx, "externalptr")) {
+    compiled <- .expr_lookup_compiled(out_def[['expr']], prep)
+    comp_exprs <- (.prep_competitors(prep) %||% list())[[outcome_label]] %||% list()
+    comp_ids <- integer(0)
+    if (length(comp_exprs) > 0L) {
+      comp_nodes <- lapply(comp_exprs, function(ex) .expr_lookup_compiled(ex, prep))
+      if (!any(vapply(comp_nodes, is.null, logical(1)))) {
+        comp_ids <- vapply(comp_nodes, function(node) as.integer(node$id %||% NA_integer_), integer(1))
+      } else {
+        comp_ids <- integer(0)
+      }
+    }
+    trial_rows_df <- if (is.null(trial_rows)) data.frame() else as.data.frame(trial_rows)
+    if (!is.null(compiled) && length(comp_ids) > 0L) {
+      prob_native <- tryCatch(
+        native_outcome_probability_params_cpp(
+          native_ctx,
+          as.integer(compiled$id),
+          Inf,
+          component,
+          integer(0),
+          integer(0),
+          as.integer(comp_ids),
+          .integrate_rel_tol(),
+          .integrate_abs_tol(),
+          12L,
+          trial_rows_df
+        ),
+        error = function(e) NA_real_
+      )
+      if (is.finite(prob_native) && prob_native >= 0) {
+        base <- as.numeric(prob_native)
+      }
+    }
+  }
+  if (is.na(base)) {
+    base <- as.numeric(.outcome_likelihood(
+      outcome_label,
+      NA_real_,
+      prep,
+      component,
+      trial_rows = trial_rows,
+      state = trial_state
+    ))
+  }
   if (!identical(outcome_label, "GUESS")) {
     gp <- .get_component_attr(prep, component, "guess")
     if (!is.null(gp) && !is.null(gp[['weights']])) {
@@ -629,11 +655,9 @@ build_likelihood_context <- function(structure, params_df, data_df,
   outcome_defs <- prep[["outcomes"]] %||% list()
   compiled_nodes <- metadata$compiled_nodes
   compiled_competitors <- metadata$compiled_competitors
-  shared_gate_specs <- metadata$shared_gate_specs
   na_source_specs <- metadata$na_source_specs
   guess_target_specs <- metadata$guess_target_specs
   alias_specs <- metadata$alias_specs
-  default_deadline <- metadata$default_deadline
   rel_tol <- metadata$rel_tol
   abs_tol <- metadata$abs_tol
   max_depth <- metadata$max_depth
@@ -658,16 +682,16 @@ build_likelihood_context <- function(structure, params_df, data_df,
       component_ids = structure$components$component_id
     )
     if (is.na(outcome_lbl) || identical(outcome_lbl, "NA")) {
-      if (is.null(na_source_specs)) return(NULL)
       guess_key <- "NA"
       guess_donors <- guess_target_specs[[guess_key]] %||% NULL
       entry_na <- list(
-        type = "na_map",
+        type = "direct",
         trial_rows = entry$rows %||% data.frame(),
         rt = if (is.null(rt_val)) NA_real_ else as.numeric(rt_val),
         forced_component = if (!is.null(forced_component) && !is.na(forced_component)) as.character(forced_component) else NULL,
-        na_sources = na_source_specs,
-        component_plan = comp_plan
+        na_sources = na_source_specs %||% list(),
+        component_plan = comp_plan,
+        outcome_label = "NA"
       )
       if (!is.null(guess_donors)) entry_na$guess_donors <- guess_donors
       entries[[i]] <- entry_na
@@ -706,17 +730,12 @@ build_likelihood_context <- function(structure, params_df, data_df,
       outcome_label = outcome_lbl
     )
     if (!is.null(guess_donors)) entry_fields$guess_donors <- guess_donors
-    shared_info <- shared_gate_specs[[outcome_lbl]]
-    if (!is.null(shared_info)) {
-      entry_fields$shared_gate <- shared_info
-    }
     entries[[i]] <- entry_fields
   }
   component_weights_df <- if (!is.null(component_weights)) as.data.frame(component_weights) else NULL
   list(
     entries = entries,
     component_weights_df = component_weights_df,
-    default_deadline = as.numeric(default_deadline),
     rel_tol = as.numeric(rel_tol),
     abs_tol = as.numeric(abs_tol),
     max_depth = as.integer(max_depth)
@@ -753,7 +772,6 @@ build_likelihood_context <- function(structure, params_df, data_df,
       structure,
       selected_entries,
       component_weights_df,
-      as.numeric(eval_cfg$default_deadline %||% Inf),
       as.numeric(eval_cfg$rel_tol %||% .integrate_rel_tol()),
       as.numeric(eval_cfg$abs_tol %||% .integrate_abs_tol()),
       as.integer(eval_cfg$max_depth %||% 12L)
@@ -963,17 +981,34 @@ native_loglikelihood_param_repeat <- function(likelihood_context, params_list) {
   cache <- ctx$plan$.native_cache %||% NULL
   entries <- cache$entries %||% NULL
   eval_cfg <- cache$eval_config %||% NULL
-  if (is.null(entries) || is.null(eval_cfg) || !inherits(ctx$native_ctx, "externalptr")) {
-    stop("Cached native entries are required; build the context with data_df first", call. = FALSE)
+  native_ctx <- ctx$native_ctx
+  if (is.null(entries) || is.null(eval_cfg) || !inherits(native_ctx, "externalptr")) {
+    # Fallback: rebuild context from stored data/params in the likelihood_context
+    if (!is.null(ctx$data_df) && !is.null(ctx$params_df)) {
+      rebuilt <- build_likelihood_context(
+        structure = ctx$structure,
+        params_df = ctx$params_df,
+        data_df = ctx$data_df,
+        component_weights = ctx$component_weights,
+        prep = ctx$prep
+      )
+      ctx <- rebuilt
+      cache <- ctx$plan$.native_cache %||% cache
+      entries <- cache$entries %||% entries
+      eval_cfg <- cache$eval_config %||% eval_cfg
+      native_ctx <- ctx$native_ctx
+    }
+    if (is.null(entries) || is.null(eval_cfg) || !inherits(native_ctx, "externalptr")) {
+      stop("Cached native entries are required; build the context with data_df first", call. = FALSE)
+    }
   }
   params_list <- lapply(params_list, function(df) .params_df_to_matrix(as.data.frame(df)))
   native_loglik_param_repeat_cpp(
-    ctx$native_ctx,
+    native_ctx,
     ctx$structure,
     entries,
     cache$component_weights_df %||% NULL,
     params_list,
-    as.numeric(eval_cfg$default_deadline %||% Inf),
     as.numeric(eval_cfg$rel_tol %||% .integrate_rel_tol()),
     as.numeric(eval_cfg$abs_tol %||% .integrate_abs_tol()),
     as.integer(eval_cfg$max_depth %||% 12L)

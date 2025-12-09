@@ -24,8 +24,8 @@ params_example_1_simple <- c(
 # Example 2 – stop/go mixture with gating and inhibition
 example_2_stop_mixture <- race_spec() |>
   add_accumulator("go1", "lognormal") |>
-  add_accumulator("stop", "exgauss") |>
-  add_accumulator("go2", "lognormal") |>
+  add_accumulator("stop", "exgauss", onset = 0.20) |>
+  add_accumulator("go2", "lognormal", onset = 0.20) |>
   add_pool("GO1", "go1") |>
   add_pool("STOP", "stop") |>
   add_pool("GO2", "go2") |>
@@ -47,17 +47,15 @@ params_example_2_stop_mixture <- c(
   stop.mu = 0.1,
   stop.sigma = 0.04,
   stop.tau = 0.1,
-  stop.onset = 0.20,
   go2.meanlog = log(0.60),
-  go2.sdlog = 0.18,
-  go2.onset = 0.20
+  go2.sdlog = 0.18
 )
 
 # Example 3 – stop outcome mapped to NA
 example_3_stop_na <- race_spec() |>
   add_accumulator("go_left", "lognormal") |>
   add_accumulator("go_right", "lognormal") |>
-  add_accumulator("stop", "lognormal") |>
+  add_accumulator("stop", "lognormal", onset = 0.15) |>
   add_pool("L", "go_left") |>
   add_pool("R", "go_right") |>
   add_pool("STOP", "stop") |>
@@ -71,8 +69,7 @@ params_example_3_stop_na <- c(
   go_right.meanlog = log(0.32),
   go_right.sdlog = 0.20,
   stop.meanlog = log(0.15),
-  stop.sdlog = 0.18,
-  stop.onset = 0.15
+  stop.sdlog = 0.18
 )
 
 # Example 4 – two accumulators vs one
@@ -98,7 +95,7 @@ params_example_4_two_on_one <- c(
 example_5_timeout_guess <- race_spec() |>
   add_accumulator("go_left", "lognormal") |>
   add_accumulator("go_right", "lognormal") |>
-  add_accumulator("timeout", "lognormal") |>
+  add_accumulator("timeout", "lognormal", onset = 0.05) |>
   add_pool("L", "go_left") |>
   add_pool("R", "go_right") |>
   add_pool("TO", "timeout") |>
@@ -114,8 +111,7 @@ params_example_5_timeout_guess <- c(
   go_right.meanlog = log(0.325),
   go_right.sdlog = 0.18,
   timeout.meanlog = log(0.25),
-  timeout.sdlog = 0.10,
-  timeout.onset = 0.05
+  timeout.sdlog = 0.10
 )
 
 # Example 6 – dual path (A & C) OR (B & C)
@@ -247,9 +243,7 @@ example_11_censor_deadline <- race_spec() |>
   add_outcome("Left", "L") |>
   add_outcome("Right", "R") |>
   add_outcome("NR_CENSOR", "CENSOR", options = list(class = "censor")) |>
-  add_outcome("NR_DEADLINE", "__DEADLINE__", options = list(class = "deadline")) |>
-  set_metadata(deadline = 0.55,
-               special_outcomes = list(censor = "NR_CENSOR", deadline = "NR_DEADLINE")) |>
+  set_metadata(special_outcomes = list(censor = "NR_CENSOR")) |>
   build_model()
 params_example_11_censor_deadline <- c(
   go_left.meanlog = log(0.28),
@@ -263,9 +257,9 @@ params_example_11_censor_deadline <- c(
 # Example 12 – inhibitor with protector
 example_12_inhibitor_with_protector <- race_spec() |>
   add_accumulator("go1", "lognormal") |>
-  add_accumulator("stop", "exgauss") |>
-  add_accumulator("go2", "lognormal") |>
-  add_accumulator("safety", "lognormal") |>
+  add_accumulator("stop", "exgauss", onset = 0.20) |>
+  add_accumulator("go2", "lognormal", onset = 0.20) |>
+  add_accumulator("safety", "lognormal", onset = 0.125) |>
   add_pool("GO1", "go1") |>
   add_pool("STOP", "stop") |>
   add_pool("GO2", "go2") |>
@@ -288,13 +282,10 @@ params_example_12_inhibitor_with_protector <- c(
   stop.mu = 0.1,
   stop.sigma = 0.04,
   stop.tau = 0.1,
-  stop.onset = 0.20,
   go2.meanlog = log(0.60),
   go2.sdlog = 0.18,
-  go2.onset = 0.20,
   safety.meanlog = log(0.22),
-  safety.sdlog = 0.13,
-  safety.onset = 0.125
+  safety.sdlog = 0.13
 )
 
 # Example 13 – nested pools
@@ -361,10 +352,9 @@ example_15_component_metadata <- race_spec() |>
   set_metadata(mixture = list(
     components = list(
       component("fast", weight = 0.6, attrs = list(
-        deadline = 0.45,
         guess = list(outcome = "GUESS", weights = c(Response = 0.7))
       )),
-      component("slow", weight = 0.4, attrs = list(deadline = 0.75))
+      component("slow", weight = 0.4)
     )
   )) |>
   build_model()
@@ -400,8 +390,7 @@ params_example_16_guard_tie_simple <- c(
   gate_shared.meanlog = log(0.30),
   gate_shared.sdlog = 0.16,
   stop_control.meanlog = log(0.27),
-  stop_control.sdlog = 0.15,
-  stop_control.onset = 0.05
+  stop_control.sdlog = 0.15
 )
 
 example_17_k_of_n_inhibitors <- race_spec() |>
@@ -462,8 +451,8 @@ params_example_17_k_of_n_inhibitors <- c(
 example_18_shared_triggers <- race_spec() |>
   add_accumulator("go_left", "lognormal") |>
   add_accumulator("go_right", "lognormal") |>
-  add_accumulator("stop_fast", "lognormal") |>
-  add_accumulator("stop_slow", "lognormal") |>
+  add_accumulator("stop_fast", "lognormal", onset = 0.1) |>
+  add_accumulator("stop_slow", "lognormal", onset = 0.1) |>
   add_pool("L", "go_left") |>
   add_pool("R", "go_right") |>
   add_pool("STOP", c("stop_fast", "stop_slow")) |>
@@ -474,7 +463,7 @@ example_18_shared_triggers <- race_spec() |>
   add_group("stop_slow_component", members = "stop_slow", attrs = list(component = "slow")) |>
   add_group("shared_stop_trigger",
             members = c("stop_fast", "stop_slow"),
-            attrs = list(shared_trigger = list(id = "stop_gate", q = 0.25))) |>
+            attrs = list(shared_trigger = list(id = "stop_gate", q = qlogis(0.01)))) |>
   set_metadata(mixture = list(
     components = list(
       component("fast", weight = 0.25),
@@ -489,19 +478,17 @@ params_example_18_shared_triggers <- c(
   go_right.sdlog = 0.20,
   stop_fast.meanlog = log(0.16),
   stop_fast.sdlog = 0.15,
-  stop_fast.onset = 0.15,
   stop_slow.meanlog = log(0.18),
-  stop_slow.sdlog = 0.15,
-  stop_slow.onset = 0.15
+  stop_slow.sdlog = 0.15
 )
 
 # Example 19 univalent stop change - bimanual
 example_19_univalent_stop_change <- race_spec() |>
   add_accumulator("go_left", "lognormal") |>
   add_accumulator("go_right", "lognormal") |>
-  add_accumulator("stop", "exgauss") |>
-  add_accumulator("change2left", "lognormal") |>
-  add_accumulator("change2right", "lognormal") |>
+  add_accumulator("stop", "lognormal", onset = 0.15) |>
+  add_accumulator("change2left", "lognormal", onset = 0.20) |>
+  add_accumulator("change2right", "lognormal", onset = 0.20) |>
   add_pool("GO_LEFT", "go_left") |>
   add_pool("GO_RIGHT", "go_right") |>
   add_pool("STOP", "stop") |>
@@ -539,27 +526,23 @@ params_example_19_univalent_stop_change <- c(
   go_left.sdlog = 0.2,
   go_right.meanlog = log(0.35),
   go_right.sdlog = 0.2,
-  stop.mu = 0.1,
-  stop.sigma = 0.04,
-  stop.tau = 0.1,
-  stop.onset = 0.20,
+  stop.meanlog = log(.2),
+  stop.sdlog = .1,
   change2left.meanlog = log(0.3),
   change2left.sdlog = 0.18,
-  change2left.onset = 0.20,
   change2right.meanlog = log(0.3),
-  change2right.sdlog = 0.18,
-  change2right.onset = 0.20
+  change2right.sdlog = 0.18
 )
 
 # Helper: shared accumulator definitions for stimulus-selective race
 .stim_base_spec <- function() {
   race_spec() |>
     add_accumulator("go1", "lognormal") |>
-    add_accumulator("ignore_high", "lognormal") |>
-    add_accumulator("ignore_low", "lognormal") |>
-    add_accumulator("go2", "lognormal") |>
-    add_accumulator("stop1", "exgauss") |>
-    add_accumulator("stop2", "exgauss")
+    add_accumulator("ignore_high", "lognormal", onset = 0.20) |>
+    add_accumulator("ignore_low", "lognormal", onset = 0.20) |>
+    add_accumulator("go2", "lognormal", onset = 0.20) |>
+    add_accumulator("stop1", "exgauss", onset = 0.20) |>
+    add_accumulator("stop2", "exgauss", onset = 0.20)
 }
 
 # Stimulus selective stopping
@@ -615,21 +598,155 @@ params_example_20_stim_select_stop <- c(
   go1.meanlog = log(0.50),
   go1.sdlog = 0.18,
   ignore_high.meanlog = log(0.20),
-  ignore_high.onset = 0.20,
   ignore_low.meanlog = log(0.30),
-  ignore_low.onset = 0.20,
   go2.meanlog = log(0.25),
   go2.sdlog = 0.16,
-  go2.onset = 0.20,
   stop1.mu = 0.2,
-  stop1.onset = 0.20,
   stop2.mu = 0.15,
-  stop2.onset = 0.20,
   `shared_ignore_sdlog.sdlog` = 0.16,
   `shared_stop_params.sigma` = 0.05,
   `shared_stop_params.tau` = 0.08
 )
 
+
+# Example 21 simple stop change
+example_21_simple_stop_change <- race_spec() |>
+  add_accumulator("go_left", "lognormal") |>
+  add_accumulator("go_right", "lognormal") |>
+  add_accumulator("stop", "lognormal") |>
+  add_accumulator("change2right", "lognormal", onset = 0.20) |>
+  add_pool("GO_LEFT", "go_left") |>
+  add_pool("GO_RIGHT", "go_right") |>
+  add_pool("STOP", "stop") |>
+  add_pool("C2R", "change2right") |>
+  
+  add_outcome(
+    "Left",
+    inhibit("GO_LEFT", by = "STOP"),
+    options = list(component = c("go_only", "go_stop"))
+  ) |>
+  add_outcome(
+    "Right",
+    first_of(
+      inhibit("GO_RIGHT", by = "STOP"),
+      all_of("STOP", "C2R")
+    ),
+    options = list(component = c("go_only", "go_stop"))
+  ) |>
+  add_group("component:go_only", members = c("go_left", "go_right"),
+            attrs = list(component = "go_only")) |>
+  add_group("component:go_stop",
+            members = c("go_left", "go_right", "stop", "change2right"),
+            attrs = list(component = "go_stop")) |>
+  set_metadata(mixture = list(
+    components = list(component("go_only", weight = 0.5),
+                      component("go_stop", weight = 0.5))
+  )) |>
+  build_model()
+params_example_21_simple_stop_change <- c(
+  go_left.meanlog = log(0.35),
+  go_left.sdlog = 0.2,
+  go_left.t0 = .1,
+  go_right.meanlog = log(0.35),
+  go_right.sdlog = 0.2,
+  stop.meanlog = log(.35),
+  stop.sdlog = 0.2,
+  change2right.meanlog = log(0.5),
+  change2right.sdlog = 0.18
+)
+
+
+# Example 22 – simple two-response race with trigger failure
+example_22_simple_q <- race_spec() |>
+  add_accumulator("go1", "lognormal") |>
+  add_accumulator("go2", "lognormal") |>
+  add_pool("R1", "go1") |>
+  add_pool("R2", "go2") |>
+  add_outcome("R1", "R1") |>
+  add_outcome("R2", "R2") |>
+  add_group(
+    "shared_trigger",
+    members = c("go1", "go2"),
+    attrs = joint_trigger(id = "go_trigger",
+                          q = qlogis(0.10),
+                          param = "go_trigger_q") # name to estimate
+  ) |>
+  build_model()
+
+params_example_22_simple_q <- c(
+  go1.meanlog = log(0.30),
+  go1.sdlog   = 0.18,
+  go2.meanlog = log(0.32),
+  go2.sdlog   = 0.18,
+  go_trigger_q = qlogis(0.10)  # estimable shared gate parameter
+)
+
+# Example 23 – independent shared q (per-acc Bernoulli) for go accumulators
+example_23_shared_q <- race_spec() |>
+  add_accumulator("go_left", "lognormal") |>
+  add_accumulator("go_right", "lognormal") |>
+  add_pool("L", "go_left") |>
+  add_pool("R", "go_right") |>
+  add_outcome("Left", "L") |>
+  add_outcome("Right", "R") |>
+  add_group("par:q_shared", members = c("go_left", "go_right"),
+            attrs = shared_q()) |>
+  build_model()
+
+params_example_23_shared_q <- c(
+  go_left.meanlog = log(0.30),
+  go_left.sdlog = 0.18,
+  go_right.meanlog = log(0.32),
+  go_right.sdlog = 0.18,
+  `par:q_shared.q` = qlogis(0.10)
+)
+
+# Example 24 univalent stop change - bimanual
+example_24_univalent_stop_change <- race_spec() |>
+  add_accumulator("go_left", "lognormal") |>
+  add_accumulator("stop", "lognormal", onset = 0.15) |>
+  add_accumulator("change2right", "lognormal", onset = 0.20) |>
+  add_pool("GO_LEFT", "go_left") |>
+  add_pool("STOP", "stop") |>
+  add_pool("C2R", "change2right") |>
+  
+  add_outcome(
+    "Left",
+    inhibit("GO_LEFT", by = "STOP"),
+    options = list(component = c("go_only", "go_stop"))
+  ) |>
+  add_outcome(
+    "Right",
+    all_of("STOP", "C2R"),
+    options = list(component = c("go_only", "go_stop"))
+  ) |>
+  add_group("component:go_only", members = c("go_left"),
+            attrs = list(component = "go_only")) |>
+  add_group("component:go_stop",
+            members = c("go_left", "stop", "change2right"),
+            attrs = list(component = "go_stop")) |>
+    add_group("go_shared_q", members = c("go_left"),
+            attrs = shared_q()) |>
+    add_group("stop_shared_q", members = c("stop", "change2right"),
+        attrs = shared_q()) |>
+
+  set_metadata(
+    mixture = list(
+    components = list(component("go_only", weight = 0.5),
+                      component("go_stop", weight = 0.5))
+    )
+  ) |>
+  build_model()
+params_example_24_univalent_stop_change <- c(
+  go_left.meanlog = log(0.35),
+  go_left.sdlog = 0.2,
+  stop.meanlog = log(.2),
+  stop.sdlog = .1,
+  change2right.meanlog = log(0.3),
+  change2right.sdlog = 0.18,
+  go_shared_q.q = qlogis(0.10),
+  stop_shared_q.q = qlogis(0.10)
+)
 
 
 new_api_examples <- list(
@@ -652,7 +769,11 @@ new_api_examples <- list(
   example_17_k_of_n_inhibitors = example_17_k_of_n_inhibitors,
   example_18_shared_triggers = example_18_shared_triggers,
   example_19_univalent_stop_change = example_19_univalent_stop_change,
-  example_20_stim_select_stop = example_20_stim_select_stop
+  example_20_stim_select_stop = example_20_stim_select_stop,
+  example_21_simple_stop_change = example_21_simple_stop_change,
+  example_22_simple_q = example_22_simple_q,
+  example_23_shared_q = example_23_shared_q,
+  example_24_univalent_stop_change = example_24_univalent_stop_change
 )
 
 
@@ -677,5 +798,9 @@ new_api_example_params <- list(
   example_17_k_of_n_inhibitors = params_example_17_k_of_n_inhibitors,
   example_18_shared_triggers = params_example_18_shared_triggers,
   example_19_univalent_stop_change = params_example_19_univalent_stop_change,
-  example_20_stim_select_stop = params_example_20_stim_select_stop
+  example_20_stim_select_stop = params_example_20_stim_select_stop,
+  example_21_simple_stop_change = params_example_21_simple_stop_change,
+  example_22_simple_q = params_example_22_simple_q,
+  example_23_shared_q = params_example_23_shared_q,
+  example_24_univalent_stop_change = params_example_24_univalent_stop_change
 )

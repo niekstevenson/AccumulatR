@@ -64,7 +64,6 @@ struct ComponentGuessPolicy {
 };
 
 struct ComponentContextInfo {
-  double deadline{std::numeric_limits<double>::quiet_NaN()};
   ComponentGuessPolicy guess;
 };
 

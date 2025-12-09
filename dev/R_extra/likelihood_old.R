@@ -917,8 +917,7 @@ likelihood_old <- local({
         # Sum over outcomes: P(outcome fires) * P(guess | outcome)
         # P(guess | outcome) = 1 - weight[outcome]
 
-        deadline <- .get_component_attr(prep, component, "deadline")
-        deadline <- deadline %||% prep[["default_deadline"]]
+        deadline <- Inf
 
         if (is.finite(deadline)) {
           # GUESS probability/density comes from diverting mass from base labels
@@ -996,7 +995,7 @@ likelihood_old <- local({
               if (is.na(rt)) {
                 # Integrate race probability for the mapped source outcome
                 deadline <- .get_component_attr(prep, component, "deadline")
-                deadline <- deadline %||% prep[["default_deadline"]]
+                deadline <- Inf
                 # competitors exclude the mapped source label
                 comp_labels_map <- setdiff(names(outcome_defs), label)
                 competitor_exprs_map <- if (length(comp_labels_map) > 0) lapply(comp_labels_map, function(lbl) outcome_defs[[lbl]][['expr']]) else list()
@@ -1022,7 +1021,7 @@ likelihood_old <- local({
       if (identical(outcome_label, "NR_DEADLINE")) {
         # Deadline reached - compute probability that no outcome occurred by deadline
         deadline <- .get_component_attr(prep, component, "deadline")
-        deadline <- deadline %||% prep[["default_deadline"]]
+        deadline <- Inf
 
         if (!is.finite(deadline)) return(0.0)
 
@@ -1174,7 +1173,7 @@ likelihood_old <- local({
     # Handle NA/infinite RT by integration of race density
     if (is.na(rt) || !is.finite(rt) || rt < 0) {
       deadline <- .get_component_attr(prep, component, "deadline")
-      deadline <- deadline %||% prep[["default_deadline"]]
+      deadline <- Inf
       if (!is.null(shared_gate_info)) {
         fX <- get_f(shared_gate_info[['x_id']]); fC <- get_f(shared_gate_info[['c_id']])
         FX <- get_F(shared_gate_info[['x_id']]); FY <- get_F(shared_gate_info[['y_id']])

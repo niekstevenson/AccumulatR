@@ -18,16 +18,9 @@ void populate_component_metadata(const Rcpp::List& prep, NativeContext& ctx) {
     if (comp_ids[i] == NA_STRING) continue;
     std::string comp_label = Rcpp::as<std::string>(comp_ids[i]);
     ComponentContextInfo meta;
-    meta.deadline = std::numeric_limits<double>::quiet_NaN();
     Rcpp::RObject attrs_obj = comp_attrs[i];
     if (!attrs_obj.isNULL()) {
       Rcpp::List attrs(attrs_obj);
-      if (attrs.containsElementNamed("deadline")) {
-        Rcpp::RObject deadline_obj = attrs["deadline"];
-        if (!deadline_obj.isNULL()) {
-          meta.deadline = Rcpp::as<double>(deadline_obj);
-        }
-      }
       if (attrs.containsElementNamed("guess")) {
         Rcpp::RObject guess_obj = attrs["guess"];
         if (!guess_obj.isNULL()) {

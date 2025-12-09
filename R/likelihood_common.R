@@ -125,11 +125,9 @@
     "pools",
     "components",
     "outcomes",
-    "shared_triggers",
-    "default_deadline"
+    "shared_triggers"
   )
   payload <- prep[intersect(keep, names(prep))]
-  payload$default_deadline <- payload$default_deadline %||% prep$default_deadline %||% Inf
 
   expr_compiled <- prep[[".expr_compiled"]] %||% .prep_expr_compiled(prep)
   expr_compiled <- .trim_expr_compiled(expr_compiled)
@@ -344,7 +342,6 @@
     pools = pool_payload,
     outcomes = outcome_payload,
     components = .canonical_named_list(prep$components %||% list()),
-    default_deadline = prep$default_deadline %||% NA_real_,
     special_outcomes = .canonical_named_list(prep$special_outcomes %||% list()),
     shared_triggers = shared_payload
   )

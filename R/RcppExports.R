@@ -21,16 +21,16 @@ native_trial_mixture_cpp <- function(ctxSEXP, node_id, t, component_ids, weights
     .Call(`_AccumulatR_native_trial_mixture_driver`, ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows, guess_donors)
 }
 
-native_loglik_from_params_cpp <- function(ctxSEXP, structure, trial_entries, component_weights_opt, default_deadline, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_native_loglik_from_params_cpp`, ctxSEXP, structure, trial_entries, component_weights_opt, default_deadline, rel_tol, abs_tol, max_depth)
+native_loglik_from_params_cpp <- function(ctxSEXP, structure, trial_entries, component_weights_opt, rel_tol, abs_tol, max_depth) {
+    .Call(`_AccumulatR_native_loglik_from_params_cpp`, ctxSEXP, structure, trial_entries, component_weights_opt, rel_tol, abs_tol, max_depth)
 }
 
-native_loglik_from_buffer_cpp <- function(ctxSEXP, structure, trial_entries, params_df, component_weights_opt, default_deadline, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_native_loglik_from_buffer_cpp`, ctxSEXP, structure, trial_entries, params_df, component_weights_opt, default_deadline, rel_tol, abs_tol, max_depth)
+native_loglik_from_buffer_cpp <- function(ctxSEXP, structure, trial_entries, params_df, component_weights_opt, rel_tol, abs_tol, max_depth) {
+    .Call(`_AccumulatR_native_loglik_from_buffer_cpp`, ctxSEXP, structure, trial_entries, params_df, component_weights_opt, rel_tol, abs_tol, max_depth)
 }
 
-native_plan_entries_cpp <- function(ctxSEXP, structure, plan, selection_keys, data_trial_keys, data_df, component_weights_opt, shared_gate_specs, na_source_specs, guess_target_specs, alias_specs) {
-    .Call(`_AccumulatR_native_plan_entries_cpp`, ctxSEXP, structure, plan, selection_keys, data_trial_keys, data_df, component_weights_opt, shared_gate_specs, na_source_specs, guess_target_specs, alias_specs)
+native_plan_entries_cpp <- function(ctxSEXP, structure, plan, selection_keys, data_trial_keys, data_df, component_weights_opt, na_source_specs, guess_target_specs, alias_specs) {
+    .Call(`_AccumulatR_native_plan_entries_cpp`, ctxSEXP, structure, plan, selection_keys, data_trial_keys, data_df, component_weights_opt, na_source_specs, guess_target_specs, alias_specs)
 }
 
 native_refresh_trial_params_cpp <- function(ctxSEXP, entries) {
@@ -45,12 +45,12 @@ native_debug_trial_params_cpp <- function(entry) {
     .Call(`_AccumulatR_native_debug_trial_params_cpp`, entry)
 }
 
-native_loglik_param_repeat_cpp <- function(ctxSEXP, structure, entries, component_weights_opt, params_list, default_deadline, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_native_loglik_param_repeat_cpp`, ctxSEXP, structure, entries, component_weights_opt, params_list, default_deadline, rel_tol, abs_tol, max_depth)
+native_loglik_param_repeat_cpp <- function(ctxSEXP, structure, entries, component_weights_opt, params_list, rel_tol, abs_tol, max_depth) {
+    .Call(`_AccumulatR_native_loglik_param_repeat_cpp`, ctxSEXP, structure, entries, component_weights_opt, params_list, rel_tol, abs_tol, max_depth)
 }
 
-native_loglik_from_plan_cpp <- function(ctxSEXP, structure, plan, trial_keys, data_trial_keys, data_df, component_weights_opt, shared_gate_specs, na_source_specs, guess_target_specs, alias_specs, default_deadline, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_native_loglik_from_plan_cpp`, ctxSEXP, structure, plan, trial_keys, data_trial_keys, data_df, component_weights_opt, shared_gate_specs, na_source_specs, guess_target_specs, alias_specs, default_deadline, rel_tol, abs_tol, max_depth)
+native_loglik_from_plan_cpp <- function(ctxSEXP, structure, plan, trial_keys, data_trial_keys, data_df, component_weights_opt, na_source_specs, guess_target_specs, alias_specs, rel_tol, abs_tol, max_depth) {
+    .Call(`_AccumulatR_native_loglik_from_plan_cpp`, ctxSEXP, structure, plan, trial_keys, data_trial_keys, data_df, component_weights_opt, na_source_specs, guess_target_specs, alias_specs, rel_tol, abs_tol, max_depth)
 }
 
 native_component_plan_exported <- function(structureSEXP, trial_rowsSEXP, forced_componentSEXP, component_weightsSEXP) {

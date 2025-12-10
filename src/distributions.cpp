@@ -27,11 +27,11 @@
 #define UUBER_HAVE_BOOST_GK 0
 #endif
 
-#include "native_context.h"
-#include "native_accumulator.hpp"
-#include "native_prep_builder.hpp"
-#include "native_proto.hpp"
-#include "native_integrate.hpp"
+#include "context.h"
+#include "accumulator.h"
+#include "prep_builder.h"
+#include "proto.h"
+#include "integrate.h"
 
 using uuber::AccDistParams;
 using uuber::resolve_acc_params_entries;
@@ -283,19 +283,6 @@ inline double acc_density_from_cfg(double t,
   return success_prob * dens;
 }
 
-inline double acc_density_success_from_cfg(double t,
-                                           double onset,
-                                           const AccDistParams& cfg) {
-  double effective_onset = total_onset_with_t0(onset, cfg);
-  if (!std::isfinite(t) || t < 0.0) return 0.0;
-  if (t < effective_onset) return 0.0;
-  double dens = eval_pdf_single(cfg, t - effective_onset);
-  if (Rcpp::NumericVector::is_na(dens) || !std::isfinite(dens)) {
-    return NA_REAL;
-  }
-  return dens;
-}
-
 inline double acc_survival_from_cfg(double t,
                                     double onset,
                                     double q,
@@ -342,14 +329,6 @@ inline NodeEvalResult make_node_result(double density,
   out.survival = clamp_probability(survival);
   out.cdf = clamp_probability(cdf);
   return out;
-}
-
-inline Rcpp::List node_result_to_list(const NodeEvalResult& res) {
-  return Rcpp::List::create(
-    Rcpp::Named("density") = res.density,
-    Rcpp::Named("survival") = res.survival,
-    Rcpp::Named("cdf") = res.cdf
-  );
 }
 
 inline std::unordered_set<int> make_scope_set(const std::vector<int>& ids) {
@@ -401,19 +380,6 @@ inline ScenarioRecord make_scenario_record(double weight,
   rec.forced_complete = forced_complete;
   rec.forced_survive = forced_survive;
   return rec;
-}
-
-inline Rcpp::List scenario_records_to_r(const std::vector<ScenarioRecord>& records) {
-  Rcpp::List out(records.size());
-  for (std::size_t i = 0; i < records.size(); ++i) {
-    const ScenarioRecord& rec = records[i];
-    out[i] = Rcpp::List::create(
-      Rcpp::Named("weight") = rec.weight,
-      Rcpp::Named("forced_complete") = Rcpp::IntegerVector(rec.forced_complete.begin(), rec.forced_complete.end()),
-      Rcpp::Named("forced_survive") = Rcpp::IntegerVector(rec.forced_survive.begin(), rec.forced_survive.end())
-    );
-  }
-  return out;
 }
 
 std::vector<ScenarioRecord> rcpp_scenarios_to_records(const Rcpp::List& scenarios) {
@@ -933,30 +899,6 @@ struct ComponentCacheEntry {
   std::string trial_type_key;
 };
 
-std::string na_cache_component_key(const std::string& trial_type_key) {
-  if (trial_type_key.empty()) return "__default__";
-  return trial_type_key;
-}
-
-void na_cache_touch(const uuber::NativeContext& ctx,
-                    const std::string& trial_type_key,
-                    const std::string& cache_key) {
-  if (ctx.na_cache_limit <= 0) {
-    ctx.na_map_cache.erase(cache_key);
-    ctx.na_cache_order.clear();
-    return;
-  }
-  std::string comp_key = na_cache_component_key(trial_type_key);
-  std::deque<std::string>& order = ctx.na_cache_order[comp_key];
-  order.erase(std::remove(order.begin(), order.end(), cache_key), order.end());
-  order.push_back(cache_key);
-  while (order.size() > static_cast<std::size_t>(ctx.na_cache_limit)) {
-    const std::string& drop_key = order.front();
-    order.pop_front();
-    ctx.na_map_cache.erase(drop_key);
-  }
-}
-
 ComponentCacheEntry make_component_cache_entry(const std::string& component,
                                                const std::string& trial_key) {
   ComponentCacheEntry entry;
@@ -1088,20 +1030,6 @@ std::vector<ComponentCacheEntry> build_component_cache_entries(
   return entries;
 }
 
-std::vector<std::string> character_vector_to_std(const Rcpp::CharacterVector& vec) {
-  std::vector<std::string> out;
-  out.reserve(vec.size());
-  for (R_xlen_t i = 0; i < vec.size(); ++i) {
-    Rcpp::String s(vec[i]);
-    if (s == NA_STRING) {
-      out.emplace_back("__default__");
-    } else {
-      out.emplace_back(s.get_cstring());
-    }
-  }
-  return out;
-}
-
 std::string component_cache_key(const std::string& component,
                                 const std::string& trial_key = std::string()) {
   if (!trial_key.empty()) return trial_key;
@@ -1189,18 +1117,6 @@ Rcpp::List fetch_component_plan_cached(SEXP structure_sexp,
 }
 
 
-std::string time_cache_key(double t) {
-  if (std::isnan(t)) return "NA";
-  if (!std::isfinite(t)) {
-    if (t > 0) return "Inf";
-    if (t < 0) return "-Inf";
-    return "NA";
-  }
-  std::ostringstream oss;
-  oss << std::setprecision(15) << t;
-  return oss.str();
-}
-
 inline std::uint64_t double_to_bits(double value) {
   std::uint64_t bits = 0;
   std::memcpy(&bits, &value, sizeof(bits));
@@ -1237,28 +1153,6 @@ inline std::uint64_t hash_forced_bits(const std::vector<std::uint64_t>& bits) {
     h = hash_combine_u64(h, v);
   }
   return h;
-}
-
-std::string vector_signature(const std::vector<int>& vec) {
-  if (vec.empty()) return ".";
-  std::ostringstream oss;
-  for (std::size_t i = 0; i < vec.size(); ++i) {
-    if (i > 0) oss << ",";
-    oss << vec[i];
-  }
-  return oss.str();
-}
-
-std::string na_map_cache_key(int node_id,
-                             double upper_limit,
-                             const std::string& component_key,
-                             const std::vector<int>& competitor_ids) {
-  std::ostringstream oss;
-  oss << "na|" << node_id
-      << "|" << component_key
-      << "|" << time_cache_key(upper_limit)
-      << "|" << vector_signature(competitor_ids);
-  return oss.str();
 }
 
 struct NodeEvalState {
@@ -2138,32 +2032,6 @@ double guard_cdf_internal(const GuardEvalInput& input,
   return clamp_probability(val);
 }
 
-IntegrationSettings resolve_integration_settings(double rel_tol,
-                                                 double abs_tol,
-                                                 int max_depth) {
-  IntegrationSettings settings;
-  if (std::isfinite(rel_tol) && rel_tol > 0.0) {
-    settings.rel_tol = rel_tol;
-  }
-  if (std::isfinite(abs_tol) && abs_tol > 0.0) {
-    settings.abs_tol = abs_tol;
-  }
-  if (max_depth > 0) {
-    settings.max_depth = max_depth;
-  }
-  return settings;
-}
-
-GuardEvalInput resolve_guard_input(uuber::NativeContext& ctx,
-                                   int node_id,
-                                   EvalCache& cache,
-                                   const std::string& component,
-                                   const std::unordered_set<int>& forced_complete,
-                                   const std::unordered_set<int>& forced_survive) {
-  const uuber::NativeNode& node = ctx.nodes[ctx.node_index.at(node_id)];
-  return make_guard_input(ctx, node, cache, component, forced_complete, forced_survive, std::string(), nullptr);
-}
-
 std::vector<int> gather_blocker_sources(const uuber::NativeContext& ctx,
                                         const uuber::NativeNode& guard_node) {
   std::vector<int> sources;
@@ -2174,69 +2042,6 @@ std::vector<int> gather_blocker_sources(const uuber::NativeContext& ctx,
   }
   sort_unique(sources);
   return sources;
-}
-
-Rcpp::List native_guard_eval_impl(SEXP ctxSEXP,
-                                   int guard_node_id,
-                                   double t,
-                                   Rcpp::Nullable<Rcpp::String> component,
-                                   SEXP forced_complete,
-                                   SEXP forced_survive,
-                                   double rel_tol,
-                                   double abs_tol,
-                                   int max_depth,
-                                   EvalCache* eval_cache_override = nullptr) {
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
-  std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
-  std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
-  std::unordered_set<int> fc_set = make_forced_set(fc_vec);
-  std::unordered_set<int> fs_set = make_forced_set(fs_vec);
-  EvalCache local_cache;
-  EvalCache& guard_eval_cache = eval_cache_override ? *eval_cache_override : local_cache;
-  GuardEvalInput guard_input = resolve_guard_input(*ctx,
-                                                   guard_node_id,
-                                                   guard_eval_cache,
-                                                   component_label,
-                                                   fc_set,
-                                                   fs_set);
-  IntegrationSettings settings = resolve_integration_settings(rel_tol, abs_tol, max_depth);
-  double density = guard_density_internal(guard_input, t, settings);
-  double cdf = guard_cdf_internal(guard_input, t, settings);
-  double survival = clamp_probability(1.0 - cdf);
-  double eff_surv = guard_effective_survival_internal(guard_input, t, settings);
-  NodeEvalResult result = make_node_result(density, survival, cdf);
-  Rcpp::List out = node_result_to_list(result);
-  out["effective_survival"] = eff_surv;
-  return out;
-}
-
-double native_guard_effective_survival_impl(SEXP ctxSEXP,
-                                            int guard_node_id,
-                                            double t,
-                                            Rcpp::Nullable<Rcpp::String> component,
-                                            SEXP forced_complete,
-                                            SEXP forced_survive,
-                                            double rel_tol,
-                                            double abs_tol,
-                                            int max_depth,
-                                            EvalCache* eval_cache_override = nullptr) {
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
-  std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
-  std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
-  std::unordered_set<int> fc_set = make_forced_set(fc_vec);
-  std::unordered_set<int> fs_set = make_forced_set(fs_vec);
-  EvalCache local_cache;
-  EvalCache& guard_eval_cache2 = eval_cache_override ? *eval_cache_override : local_cache;
-  GuardEvalInput guard_input = resolve_guard_input(*ctx,
-                                                   guard_node_id,
-                                                   guard_eval_cache2,
-                                                   component_label,
-                                                   fc_set,
-                                                   fs_set);
-  IntegrationSettings settings = resolve_integration_settings(rel_tol, abs_tol, max_depth);
-  return guard_effective_survival_internal(guard_input, t, settings);
 }
 
 struct CompetitorMeta {
@@ -2615,17 +2420,6 @@ double competitor_survival_internal(const uuber::NativeContext& ctx,
   return clamp_probability(product);
 }
 
-double native_competitor_survival_impl(SEXP ctxSEXP,
-                                       const Rcpp::IntegerVector& competitor_ids,
-                                       double t,
-                                       Rcpp::Nullable<Rcpp::String> component) {
-  if (competitor_ids.size() == 0) return 1.0;
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
-  std::vector<int> ids = integer_vector_to_std(competitor_ids, false);
-  return competitor_survival_internal(*ctx, ids, t, component_label);
-}
-
 double node_density_with_competitors_internal(
   const uuber::NativeContext& ctx,
   int node_id,
@@ -2674,37 +2468,6 @@ double node_density_with_competitors_internal(
     density *= surv;
   }
   return density;
-}
-
-Rcpp::List native_density_with_competitors_impl(SEXP ctxSEXP,
-                                                int node_id,
-                                                double t,
-                                                Rcpp::Nullable<Rcpp::String> component,
-                                                SEXP forced_complete,
-                                                SEXP forced_survive,
-                                                const Rcpp::IntegerVector& competitor_ids,
-                                                const TrialParamSet* trial_params) {
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
-  std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
-  std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
-  std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
-  std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
-  std::vector<int> comp_vec = integer_vector_to_std(competitor_ids, false);
-  double density = node_density_with_competitors_internal(
-    *ctx,
-    node_id,
-    t,
-    component_label,
-    forced_complete_set,
-    forced_survive_set,
-    comp_vec,
-    trial_params
-  );
-  if (!std::isfinite(density) || density <= 0.0) {
-    density = 0.0;
-  }
-  return Rcpp::List::create(Rcpp::Named("density") = density);
 }
 
 double native_outcome_probability_impl(SEXP ctxSEXP,
@@ -3133,231 +2896,6 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
 }
 
 
-Rcpp::List native_guard_scenarios_impl(SEXP ctxSEXP,
-                                       int guard_node_id,
-                                       double t,
-                                       const Rcpp::List& reference_scenarios,
-                                       Rcpp::Nullable<Rcpp::String> component,
-                                       SEXP forced_complete,
-                                       SEXP forced_survive,
-                                       double rel_tol,
-                                       double abs_tol,
-                                       int max_depth,
-                                       EvalCache* eval_cache_override = nullptr) {
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  const uuber::NativeNode& guard_node = ctx->nodes[ctx->node_index.at(guard_node_id)];
-  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
-  std::vector<int> base_fc_vec = forced_vec_from_sexp(forced_complete);
-  std::vector<int> base_fs_vec = forced_vec_from_sexp(forced_survive);
-  std::unordered_set<int> base_fc_set = make_forced_set(base_fc_vec);
-  std::unordered_set<int> base_fs_set = make_forced_set(base_fs_vec);
-  IntegrationSettings settings = resolve_integration_settings(rel_tol, abs_tol, max_depth);
-  std::vector<int> blocker_sources = gather_blocker_sources(*ctx, guard_node);
-  std::vector<ScenarioRecord> records;
-  records.reserve(static_cast<std::size_t>(reference_scenarios.size()));
-  EvalCache local_cache;
-  EvalCache* guard_cache = eval_cache_override ? eval_cache_override : &local_cache;
-  for (R_xlen_t i = 0; i < reference_scenarios.size(); ++i) {
-    Rcpp::List sc(reference_scenarios[i]);
-    if (sc.isNULL()) continue;
-    double weight = Rcpp::as<double>(sc["weight"]);
-    if (!std::isfinite(weight) || weight <= 0.0) continue;
-    std::vector<int> sc_fc_vec = forced_vec_from_sexp(sc["forced_complete"]);
-    std::vector<int> sc_fs_vec = forced_vec_from_sexp(sc["forced_survive"]);
-    std::unordered_set<int> sc_fc_set = make_forced_set(sc_fc_vec);
-    std::unordered_set<int> sc_fs_set = make_forced_set(sc_fs_vec);
-    sc_fc_set.insert(base_fc_set.begin(), base_fc_set.end());
-    sc_fs_set.insert(base_fs_set.begin(), base_fs_set.end());
-    EvalCache& scenario_cache = *guard_cache;
-    GuardEvalInput scenario_input = make_guard_input(*ctx,
-                                                     guard_node,
-                                                     scenario_cache,
-                                                     component_label,
-                                                     sc_fc_set,
-                                                     sc_fs_set,
-                                                     std::string(),
-                                                     nullptr);
-    double s_eff = guard_effective_survival_internal(scenario_input, t, settings);
-    if (!std::isfinite(s_eff) || s_eff <= 0.0) continue;
-    double final_weight = weight * s_eff;
-    if (!std::isfinite(final_weight) || final_weight <= 0.0) continue;
-    ScenarioRecord record;
-    record.weight = final_weight;
-    record.forced_complete = set_to_sorted_vector(scenario_input.forced_complete);
-    record.forced_survive = union_vectors(set_to_sorted_vector(scenario_input.forced_survive), blocker_sources);
-    records.push_back(std::move(record));
-  }
-  Rcpp::List out(records.size());
-  for (std::size_t i = 0; i < records.size(); ++i) {
-    const ScenarioRecord& rec = records[i];
-    out[i] = Rcpp::List::create(
-      Rcpp::Named("weight") = rec.weight,
-      Rcpp::Named("forced_complete") = Rcpp::IntegerVector(rec.forced_complete.begin(), rec.forced_complete.end()),
-      Rcpp::Named("forced_survive") = Rcpp::IntegerVector(rec.forced_survive.begin(), rec.forced_survive.end())
-    );
-  }
-  return out;
-}
-
-
-Rcpp::List native_node_eval_impl(SEXP ctxSEXP,
-                                 int node_id,
-                                 double t,
-                                 Rcpp::Nullable<Rcpp::String> component,
-                                 SEXP forced_complete,
-                                 SEXP forced_survive) {
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
-  std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
-  std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
-  std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
-  std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
-  EvalCache eval_cache;
-  NodeEvalState state(*ctx,
-                      eval_cache,
-                      t,
-                      component_label,
-                      forced_complete_set,
-                      forced_survive_set);
-  NodeEvalResult result = eval_node_recursive(node_id, state);
-  return node_result_to_list(result);
-}
-
-Rcpp::List native_node_scenarios_impl(SEXP ctxSEXP,
-                                      int node_id,
-                                      double t,
-                                      Rcpp::Nullable<Rcpp::String> component,
-                                      SEXP forced_complete,
-                                      SEXP forced_survive) {
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
-  std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
-  std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
-  std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
-  std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
-  EvalCache eval_cache;
-  NodeEvalState state(*ctx,
-                      eval_cache,
-                      t,
-                      component_label,
-                      forced_complete_set,
-                      forced_survive_set);
-  std::vector<ScenarioRecord> records = compute_node_scenarios(node_id, state);
-  return scenario_records_to_r(records);
-}
-
-Rcpp::List native_likelihood_driver_impl(SEXP ctxSEXP,
-                                         Rcpp::IntegerVector node_ids,
-                                         Rcpp::NumericVector times,
-                                         Rcpp::Nullable<Rcpp::String> component,
-                                         SEXP forced_complete,
-                                         SEXP forced_survive) {
-  if (node_ids.size() == 0 || times.size() == 0) {
-    return Rcpp::List();
-  }
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
-  std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
-  std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
-  std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
-  std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
-  Rcpp::List node_results(node_ids.size());
-  for (R_xlen_t i = 0; i < node_ids.size(); ++i) {
-    int node_id = node_ids[i];
-    if (node_id == NA_INTEGER) {
-      node_results[i] = R_NilValue;
-      continue;
-    }
-    Rcpp::List evals(times.size());
-    for (R_xlen_t j = 0; j < times.size(); ++j) {
-      double t = static_cast<double>(times[j]);
-      EvalCache eval_cache;
-      NodeEvalState state(*ctx,
-                          eval_cache,
-                          t,
-                          component_label,
-                          forced_complete_set,
-                          forced_survive_set);
-      NodeEvalResult result = eval_node_recursive(node_id, state);
-      evals[j] = Rcpp::List::create(
-        Rcpp::Named("time") = t,
-        Rcpp::Named("density") = result.density,
-        Rcpp::Named("survival") = result.survival,
-        Rcpp::Named("cdf") = result.cdf
-      );
-    }
-    node_results[i] = Rcpp::List::create(
-      Rcpp::Named("node_id") = node_id,
-      Rcpp::Named("evaluations") = evals
-    );
-  }
-  return node_results;
-}
-
-Rcpp::List native_likelihood_eval_impl(SEXP ctxSEXP,
-                                       const Rcpp::List& task_list) {
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  Rcpp::List out(task_list.size());
-  for (R_xlen_t i = 0; i < task_list.size(); ++i) {
-    Rcpp::List task(task_list[i]);
-    if (task.isNULL() || task.size() == 0) {
-      out[i] = R_NilValue;
-      continue;
-    }
-    int node_id = task.containsElementNamed("node_id")
-      ? Rcpp::as<int>(task["node_id"])
-      : NA_INTEGER;
-    if (node_id == NA_INTEGER) {
-      out[i] = R_NilValue;
-      continue;
-    }
-    Rcpp::NumericVector times = task.containsElementNamed("times")
-      ? Rcpp::NumericVector(task["times"])
-      : Rcpp::NumericVector();
-    if (times.size() == 0) {
-      out[i] = Rcpp::List::create(
-        Rcpp::Named("node_id") = node_id,
-        Rcpp::Named("evaluations") = Rcpp::List()
-      );
-      continue;
-    }
-    std::string component_label;
-    if (task.containsElementNamed("component") && !Rf_isNull(task["component"])) {
-      component_label = Rcpp::as<std::string>(task["component"]);
-    }
-    std::vector<int> fc_vec = forced_vec_from_sexp(task.containsElementNamed("forced_complete")
-                                                   ? task["forced_complete"] : R_NilValue);
-    std::vector<int> fs_vec = forced_vec_from_sexp(task.containsElementNamed("forced_survive")
-                                                   ? task["forced_survive"] : R_NilValue);
-    std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
-    std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
-    EvalCache eval_cache;
-    Rcpp::List eval_list(times.size());
-    for (R_xlen_t j = 0; j < times.size(); ++j) {
-      double t = static_cast<double>(times[j]);
-      NodeEvalState state(*ctx,
-                          eval_cache,
-                          t,
-                          component_label,
-                          forced_complete_set,
-                          forced_survive_set);
-      NodeEvalResult result = eval_node_recursive(node_id, state);
-      eval_list[j] = Rcpp::List::create(
-        Rcpp::Named("time") = t,
-        Rcpp::Named("density") = result.density,
-        Rcpp::Named("survival") = result.survival,
-        Rcpp::Named("cdf") = result.cdf
-      );
-    }
-    out[i] = Rcpp::List::create(
-      Rcpp::Named("node_id") = node_id,
-      Rcpp::Named("component") = component_label,
-      Rcpp::Named("evaluations") = eval_list
-    );
-  }
-  return out;
-}
-
 } // namespace
 
 Rcpp::List native_component_plan_impl(const Rcpp::List& structure,
@@ -3783,7 +3321,6 @@ double evaluate_na_map_mix(SEXP ctxSEXP,
   return mix;
 }
 
-// [[Rcpp::export]]
 Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
                                          Rcpp::List structure,
                                          Rcpp::List trial_entries,
@@ -4078,25 +3615,6 @@ Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
     Rcpp::Named("loglik") = total_loglik,
     Rcpp::Named("per_trial") = per_trial
   );
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_loglik_from_buffer_cpp(SEXP ctxSEXP,
-                                         Rcpp::List structure,
-                                         Rcpp::List trial_entries,
-                                         Rcpp::DataFrame params_df,
-                                         Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt,
-                                         double rel_tol,
-                                         double abs_tol,
-                                         int max_depth) {
-  (void) params_df;
-  return native_loglik_from_params_cpp(ctxSEXP,
-                                       structure,
-                                       trial_entries,
-                                       component_weights_opt,
-                                       rel_tol,
-                                       abs_tol,
-                                       max_depth);
 }
 
 namespace {
@@ -4423,13 +3941,6 @@ Rcpp::List native_plan_entries_cpp(SEXP ctxSEXP,
                             alias_specs);
 }
 
-// [[Rcpp::export]]
-void native_refresh_trial_params_cpp(SEXP ctxSEXP,
-                                     Rcpp::List entries) {
-  Rcpp::stop("native_refresh_trial_params_cpp is deprecated; use matrix fast path");
-}
-
-// [[Rcpp::export]]
 Rcpp::List native_update_entries_from_params_cpp(SEXP ctxSEXP,
                                                  Rcpp::List entries,
                                                  SEXP params_obj) {
@@ -4596,7 +4107,6 @@ Rcpp::List native_update_entries_from_params_cpp(SEXP ctxSEXP,
   return entries;
 }
 
-// [[Rcpp::export]]
 Rcpp::NumericMatrix native_debug_trial_params_cpp(Rcpp::List entry) {
   if (!entry.containsElementNamed("trial_params_ptr")) {
     Rcpp::stop("entry missing trial_params_ptr");
@@ -4664,39 +4174,6 @@ Rcpp::NumericVector native_loglik_param_repeat_cpp(SEXP ctxSEXP,
 }
 
 // [[Rcpp::export]]
-Rcpp::List native_loglik_from_plan_cpp(SEXP ctxSEXP,
-                                       Rcpp::List structure,
-                                       Rcpp::List plan,
-                                       Rcpp::CharacterVector trial_keys,
-                                       Rcpp::CharacterVector data_trial_keys,
-                                       Rcpp::DataFrame data_df,
-                                       Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt,
-                                       Rcpp::List na_source_specs,
-                                       Rcpp::List guess_target_specs,
-                                       Rcpp::List alias_specs,
-                                       double rel_tol,
-                                       double abs_tol,
-                                       int max_depth) {
-  Rcpp::List entries = build_plan_entries(ctxSEXP,
-                                          structure,
-                                          plan,
-                                          trial_keys,
-                                          data_trial_keys,
-                                          data_df,
-                                          component_weights_opt,
-                                          na_source_specs,
-                                          guess_target_specs,
-                                          alias_specs);
-  return native_loglik_from_params_cpp(ctxSEXP,
-                                       structure,
-                                       entries,
-                                       component_weights_opt,
-                                       rel_tol,
-                                       abs_tol,
-                                       max_depth);
-}
-
-// [[Rcpp::export]]
 Rcpp::List native_component_plan_exported(SEXP structureSEXP,
                                           SEXP trial_rowsSEXP,
                                           SEXP forced_componentSEXP,
@@ -4729,280 +4206,6 @@ Rcpp::List native_component_plan_exported(SEXP structureSEXP,
                                      component_weights_ptr,
                                      trial_rowsSEXP,
                                      component_weightsSEXP);
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_guard_eval_cpp(SEXP ctxSEXP,
-                                 int guard_node_id,
-                                 double t,
-                                 Rcpp::Nullable<Rcpp::String> component,
-                                 SEXP forced_complete,
-                                 SEXP forced_survive,
-                                 double rel_tol,
-                                 double abs_tol,
-                                 int max_depth) {
-  return native_guard_eval_impl(ctxSEXP,
-                                guard_node_id,
-                                t,
-                                component,
-                                forced_complete,
-                                forced_survive,
-                                rel_tol,
-                                abs_tol,
-                                max_depth);
-}
-
-// [[Rcpp::export]]
-double native_guard_effective_survival_cpp(SEXP ctxSEXP,
-                                           int guard_node_id,
-                                           double t,
-                                           Rcpp::Nullable<Rcpp::String> component,
-                                           SEXP forced_complete,
-                                           SEXP forced_survive,
-                                           double rel_tol,
-                                           double abs_tol,
-                                           int max_depth) {
-  return native_guard_effective_survival_impl(ctxSEXP,
-                                              guard_node_id,
-                                              t,
-                                              component,
-                                              forced_complete,
-                                              forced_survive,
-                                              rel_tol,
-                                              abs_tol,
-                                              max_depth);
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_guard_scenarios_cpp(SEXP ctxSEXP,
-                                      int guard_node_id,
-                                      double t,
-                                      Rcpp::List reference_scenarios,
-                                      Rcpp::Nullable<Rcpp::String> component,
-                                      SEXP forced_complete,
-                                      SEXP forced_survive,
-                                      double rel_tol,
-                                      double abs_tol,
-                                      int max_depth) {
-  return native_guard_scenarios_impl(ctxSEXP,
-                                     guard_node_id,
-                                     t,
-                                     reference_scenarios,
-                                     component,
-                                     forced_complete,
-                                     forced_survive,
-                                     rel_tol,
-                                     abs_tol,
-                                     max_depth);
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_node_eval_cpp(SEXP ctxSEXP,
-                                int node_id,
-                                double t,
-                                Rcpp::Nullable<Rcpp::String> component,
-                                SEXP forced_complete,
-                                SEXP forced_survive) {
-  return native_node_eval_impl(ctxSEXP,
-                               node_id,
-                               t,
-                               component,
-                               forced_complete,
-                               forced_survive);
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_node_scenarios_cpp(SEXP ctxSEXP,
-                                     int node_id,
-                                     double t,
-                                     Rcpp::Nullable<Rcpp::String> component,
-                                     SEXP forced_complete,
-                                     SEXP forced_survive) {
-  return native_node_scenarios_impl(ctxSEXP,
-                                    node_id,
-                                    t,
-                                    component,
-                                    forced_complete,
-                                    forced_survive);
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_likelihood_driver_cpp(SEXP ctxSEXP,
-                                        Rcpp::IntegerVector node_ids,
-                                        Rcpp::NumericVector times,
-                                        Rcpp::Nullable<Rcpp::String> component,
-                                        SEXP forced_complete,
-                                        SEXP forced_survive) {
-  return native_likelihood_driver_impl(ctxSEXP,
-                                       node_ids,
-                                       times,
-                                       component,
-                                       forced_complete,
-                                       forced_survive);
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_likelihood_eval_cpp(SEXP ctxSEXP,
-                                      Rcpp::List task_list) {
-  return native_likelihood_eval_impl(ctxSEXP, task_list);
-}
-
-// [[Rcpp::export]]
-double native_competitor_survival_cpp(SEXP ctxSEXP,
-                                      Rcpp::IntegerVector competitor_ids,
-                                      double t,
-                                      Rcpp::Nullable<Rcpp::String> component) {
-  return native_competitor_survival_impl(ctxSEXP,
-                                         competitor_ids,
-                                         t,
-                                         component);
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_density_with_competitors_cpp(SEXP ctxSEXP,
-                                               int node_id,
-                                               double t,
-                                               Rcpp::Nullable<Rcpp::String> component,
-                                               SEXP forced_complete,
-                                               SEXP forced_survive,
-                                               Rcpp::IntegerVector competitor_ids,
-                                               double rel_tol,
-                                               double abs_tol,
-                                               int max_depth) {
-  (void)rel_tol;
-  (void)abs_tol;
-  (void)max_depth;
-  return native_density_with_competitors_impl(ctxSEXP,
-                                              node_id,
-                                              t,
-                                              component,
-                                              forced_complete,
-                                              forced_survive,
-                                              competitor_ids,
-                                              nullptr);
-}
-
-// [[Rcpp::export]]
-double native_outcome_probability_cpp(SEXP ctxSEXP,
-                                      int node_id,
-                                      double upper,
-                                      Rcpp::Nullable<Rcpp::String> component,
-                                      SEXP forced_complete,
-                                      SEXP forced_survive,
-                                      Rcpp::IntegerVector competitor_ids,
-                                      double rel_tol,
-                                      double abs_tol,
-                                      int max_depth) {
-  return native_outcome_probability_impl(ctxSEXP,
-                                         node_id,
-                                         upper,
-                                         component,
-                                         forced_complete,
-                                         forced_survive,
-                                         competitor_ids,
-                                         rel_tol,
-                                         abs_tol,
-                                         max_depth,
-                                         nullptr);
-}
-
-// [[Rcpp::export]]
-Rcpp::List native_density_with_competitors_params_cpp(SEXP ctxSEXP,
-                                                      int node_id,
-                                                      double t,
-                                                      Rcpp::Nullable<Rcpp::String> component,
-                                                      SEXP forced_complete,
-                                                      SEXP forced_survive,
-                                                      Rcpp::IntegerVector competitor_ids,
-                                                      Rcpp::Nullable<Rcpp::DataFrame> trial_rows) {
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::unique_ptr<TrialParamSet> params_holder = build_trial_params_from_df(*ctx, trial_rows);
-  return native_density_with_competitors_impl(ctxSEXP,
-                                              node_id,
-                                              t,
-                                              component,
-                                              forced_complete,
-                                              forced_survive,
-                                              competitor_ids,
-                                              params_holder ? params_holder.get() : nullptr);
-}
-
-Rcpp::NumericVector native_density_with_competitors_vector_impl(SEXP ctxSEXP,
-                                                                int node_id,
-                                                                const Rcpp::NumericVector& times,
-                                                                Rcpp::Nullable<Rcpp::String> component,
-                                                                SEXP forced_complete,
-                                                                SEXP forced_survive,
-                                                                const Rcpp::IntegerVector& competitor_ids,
-                                                                const TrialParamSet* trial_params) {
-  if (times.size() == 0) {
-    return Rcpp::NumericVector();
-  }
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::string component_label = component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
-  std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
-  std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
-  std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
-  std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
-  EvalCache eval_cache;
-  Rcpp::NumericVector out(times.size());
-  for (R_xlen_t i = 0; i < times.size(); ++i) {
-    double t = times[i];
-    if (!std::isfinite(t) || t < 0.0) {
-      out[i] = 0.0;
-      continue;
-    }
-    NodeEvalState state(*ctx,
-                        eval_cache,
-                        t,
-                        component_label,
-                        forced_complete_set,
-                        forced_survive_set,
-                        trial_params);
-    NodeEvalResult base = eval_node_recursive(node_id, state);
-    double density = base.density;
-    if (!std::isfinite(density) || density <= 0.0) {
-      out[i] = 0.0;
-      continue;
-    }
-    if (competitor_ids.size() > 0) {
-      std::vector<int> comp_vec = integer_vector_to_std(competitor_ids, false);
-      double surv = competitor_survival_internal(
-        *ctx,
-        comp_vec,
-        t,
-        component_label,
-        std::string(),
-        trial_params,
-        &eval_cache
-      );
-      if (!std::isfinite(surv) || surv <= 0.0) {
-        density = 0.0;
-      } else {
-        density *= surv;
-      }
-    }
-    out[i] = density;
-  }
-  return out;
-}
-
-// [[Rcpp::export]]
-Rcpp::NumericVector native_density_with_competitors_vec_cpp(SEXP ctxSEXP,
-                                                            int node_id,
-                                                            Rcpp::NumericVector times,
-                                                            Rcpp::Nullable<Rcpp::String> component,
-                                                            SEXP forced_complete,
-                                                            SEXP forced_survive,
-                                                            Rcpp::IntegerVector competitor_ids) {
-  return native_density_with_competitors_vector_impl(ctxSEXP,
-                                                     node_id,
-                                                     times,
-                                                     component,
-                                                     forced_complete,
-                                                     forced_survive,
-                                                     competitor_ids,
-                                                     nullptr);
 }
 
 // [[Rcpp::export]]
@@ -5059,13 +4262,6 @@ namespace {
 inline bool is_invalid_positive(double value) {
   return !std::isfinite(value) || value <= 0.0;
 }
-
-inline AccDistParams resolve_acc_params(const std::string& dist,
-                                        const Rcpp::List& params) {
-  std::vector<uuber::ProtoParamEntry> entries = params_from_rcpp(params, dist);
-  return resolve_acc_params_entries(dist, entries);
-}
-
 
 inline std::vector<double> expand_poly(const std::vector<double>& coeff,
                                        double surv,
@@ -5523,52 +4719,6 @@ Rcpp::NumericVector dist_exgauss_rng(int n,
   return normals;
 }
 
-//' @noRd
-// [[Rcpp::export]]
-double acc_density_cpp(double t,
-                       double onset,
-                       double q,
-                       const std::string& dist,
-                       const Rcpp::List& params) {
-  AccDistParams cfg = resolve_acc_params(dist, params);
-  return acc_density_from_cfg(t, onset, q, cfg);
-}
-
-//' @noRd
-// [[Rcpp::export]]
-double acc_density_success_cpp(double t,
-                               double onset,
-                               double q,
-                               const std::string& dist,
-                               const Rcpp::List& params) {
-  (void)q;
-  AccDistParams cfg = resolve_acc_params(dist, params);
-  return acc_density_success_from_cfg(t, onset, cfg);
-}
-
-//' @noRd
-// [[Rcpp::export]]
-double acc_survival_cpp(double t,
-                        double onset,
-                        double q,
-                        const std::string& dist,
-                        const Rcpp::List& params) {
-  AccDistParams cfg = resolve_acc_params(dist, params);
-  return acc_survival_from_cfg(t, onset, q, cfg);
-}
-
-//' @noRd
-// [[Rcpp::export]]
-double acc_cdf_success_cpp(double t,
-                           double onset,
-                           double q,
-                           const std::string& dist,
-                           const Rcpp::List& params) {
-  (void)q;
-  AccDistParams cfg = resolve_acc_params(dist, params);
-  return acc_cdf_success_from_cfg(t, onset, cfg);
-}
-
 // ------------------------------------------------------------------
 // Pool helpers
 // ------------------------------------------------------------------
@@ -5635,8 +4785,6 @@ Rcpp::NumericVector pool_coeffs_cpp(const Rcpp::NumericVector& Svec,
   return out;
 }
 
-//' @noRd
-// [[Rcpp::export]]
 double pool_density_fast_cpp(const Rcpp::NumericVector& density,
                              const Rcpp::NumericVector& survival,
                              int k) {
@@ -5669,8 +4817,6 @@ double pool_density_fast_cpp(const Rcpp::NumericVector& density,
   return total;
 }
 
-//' @noRd
-// [[Rcpp::export]]
 double pool_survival_fast_cpp(const Rcpp::NumericVector& survival,
                               int k) {
   const std::size_t n = survival.size();
@@ -5697,8 +4843,6 @@ double pool_survival_fast_cpp(const Rcpp::NumericVector& survival,
   return clamp(total, 0.0, 1.0);
 }
 
-//' @noRd
-// [[Rcpp::export]]
 Rcpp::List pool_build_templates_cpp(int n,
                                     const Rcpp::IntegerVector& member_ids,
                                     int pool_idx,
@@ -5860,8 +5004,6 @@ Rcpp::List pool_density_combine_native(const Rcpp::NumericVector& dens_vec,
   );
 }
 
-//' @noRd
-// [[Rcpp::export]]
 Rcpp::List pool_density_combine_cpp(const Rcpp::NumericVector& dens_vec,
                                     const Rcpp::NumericVector& cdf_vec,
                                     const Rcpp::NumericVector& surv_vec,
@@ -5898,8 +5040,6 @@ Rcpp::List pool_density_combine_cpp(const Rcpp::NumericVector& dens_vec,
                                      base_fs);
 }
 
-//' @noRd
-// [[Rcpp::export]]
 double pool_survival_general_cpp(const Rcpp::NumericVector& Fvec,
                                  int k) {
   const std::size_t n = Fvec.size();
@@ -5926,8 +5066,6 @@ double pool_survival_general_cpp(const Rcpp::NumericVector& Fvec,
   return clamp(total, 0.0, 1.0);
 }
 
-//' @noRd
-// [[Rcpp::export]]
 double guard_effective_survival_cpp(Rcpp::Function integrand,
                                     double upper,
                                     double rel_tol,

@@ -60,7 +60,7 @@ example_1_stimulus_selective <- race_spec() |>
       component("stop_true", weight = 0.4)
     )
   )) |>
-  build_model()
+  finalize_model()
 
 # Example 2 – go/stop mixture with late go2 activation when STOP wins
 example_2_stop_mixture <- race_spec() |>
@@ -85,7 +85,7 @@ example_2_stop_mixture <- race_spec() |>
       component("go_stop", weight = 0.5)
     )
   )) |>
-  build_model()
+  finalize_model()
 
 # Example 3 – stop outcome mapped to NA (censor)
 example_3_stop_na <- race_spec() |>
@@ -101,7 +101,7 @@ example_3_stop_na <- race_spec() |>
   add_outcome("Left", "L") |>
   add_outcome("Right", "R") |>
   add_outcome("STOP", "STOP", options = list(map_outcome_to = NA_character_)) |>
-  build_model()
+  finalize_model()
 
 # Example 4 – mixture with inhibitor vs censor components
 # Half the trials behave like Example 2 (stop permits slow response), the other half like Example 3 (stop censors to NA).
@@ -146,7 +146,7 @@ example_4_stop_inhibit_vs_censor <- race_spec() |>
       component("censor", weight = 0.5)
     )
   )) |>
-  build_model()
+  finalize_model()
 
 stop_signal_examples <- list(
   example_1_stimulus_selective = example_1_stimulus_selective,

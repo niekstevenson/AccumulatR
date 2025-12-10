@@ -9,9 +9,9 @@
   if (is.null(data_df) || nrow(data_df) == 0L) {
     stop("Data frame must contain outcome/rt per trial", call. = FALSE)
   }
-  structure <- .as_generator_structure(structure)
+  structure <- .as_model_structure(structure)
   if (is.null(structure$model_spec)) {
-    stop("generator structure must include model_spec; rebuild with build_generator_structure")
+    stop("model structure must include model_spec; rebuild with finalize_model")
   }
   data_df <- as.data.frame(data_df)
   required_cols <- c("trial", "outcome", "rt")
@@ -106,6 +106,30 @@
   ), class = "likelihood_context")
 }
 
+#' Build a likelihood context
+#'
+#' @param structure Generator structure
+#' @param params_df Parameter data frame
+#' @param data_df Data frame with observed outcome/rt
+#' @param component_weights Optional component weights
+#' @param prep Optional prep bundle
+#' @param trial_plan Optional trial plan
+#' @param native_bundle Optional native bundle
+#' @return likelihood_context object
+#' @examples
+#' spec <- race_spec()
+#' spec <- add_accumulator(spec, "A", "lognormal",
+#'   params = list(meanlog = 0, sdlog = 0.1))
+#' spec <- add_outcome(spec, "A_win", "A")
+#' structure <- finalize_model(spec)
+#' params_df <- build_params_df(
+#'   spec,
+#'   c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0),
+#'   n_trials = 2
+#' )
+#' data_df <- simulate(structure, params_df, seed = 1)
+#' build_likelihood_context(structure, params_df, data_df)
+#' @export
 build_likelihood_context <- function(structure, params_df, data_df,
                                      component_weights = NULL,
                                      prep = NULL,
@@ -670,15 +694,47 @@ build_likelihood_context <- function(structure, params_df, data_df,
   obs
 }
 
-observed_response_probabilities_from_params <- function(structure, params_df,
-                                                        component_weights = NULL,
-                                                        include_na = TRUE) {
+#' @rdname response_probabilities
+#' @export
+response_probabilities.default <- function(structure, ...) {
+  stop("response_probabilities() expects a model_structure", call. = FALSE)
+}
+
+#' Analytic outcome probabilities for a parameter set
+#'
+#' @param structure Model structure
+#' @param params_df Parameter data frame (one or more trials)
+#' @param component_weights Optional component weights
+#' @param include_na Whether to include NA outcome mass
+#' @return Named numeric vector of probabilities
+#' @examples
+#' spec <- race_spec()
+#' spec <- add_accumulator(spec, "A", "lognormal",
+#'   params = list(meanlog = 0, sdlog = 0.1))
+#' spec <- add_outcome(spec, "A_win", "A")
+#' structure <- finalize_model(spec)
+#' params_df <- build_params_df(
+#'   spec,
+#'   c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0),
+#'   n_trials = 1
+#' )
+#' response_probabilities(structure, params_df)
+#' @export
+response_probabilities <- function(structure, ...) {
+  UseMethod("response_probabilities")
+}
+
+#' @rdname response_probabilities
+#' @export
+response_probabilities.model_structure <- function(structure, params_df,
+                                                   component_weights = NULL,
+                                                   include_na = TRUE) {
   if (is.null(params_df) || nrow(params_df) == 0L) {
     stop("Parameter data frame must contain at least one row")
   }
-  structure <- .as_generator_structure(structure)
+  structure <- .as_model_structure(structure)
   if (is.null(structure$model_spec)) {
-    stop("generator structure must include model_spec; rebuild with build_generator_structure")
+    stop("model structure must include model_spec; rebuild with finalize_model")
   }
   model_spec <- .model_spec_with_params(structure$model_spec, params_df)
   prep_eval_base <- .prepare_model_for_likelihood(model_spec)
@@ -755,7 +811,33 @@ observed_response_probabilities_from_params <- function(structure, params_df,
 }
 
 
-native_loglikelihood_param_repeat <- function(likelihood_context, params_list) {
+#' Native log-likelihood evaluation over multiple parameter sets
+#'
+#' @param likelihood_context Context built by build_likelihood_context
+#' @param parameters Parameter data frame, or list of parameter data frames
+#' @return Numeric vector of log-likelihood values
+#' @examples
+#' spec <- race_spec()
+#' spec <- add_accumulator(spec, "A", "lognormal",
+#'   params = list(meanlog = 0, sdlog = 0.1))
+#' spec <- add_outcome(spec, "A_win", "A")
+#' structure <- finalize_model(spec)
+#' params_df <- build_params_df(
+#'   spec,
+#'   c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0),
+#'   n_trials = 2
+#' )
+#' data_df <- simulate(structure, params_df, seed = 1)
+#' ctx <- build_likelihood_context(structure, params_df, data_df)
+#' log_likelihood(ctx, list(params_df))
+#' @export
+log_likelihood <- function(likelihood_context, ...) {
+  UseMethod("log_likelihood")
+}
+
+#' @rdname log_likelihood
+#' @export
+log_likelihood.likelihood_context <- function(likelihood_context, parameters) {
   ctx <- .validate_likelihood_context(likelihood_context)
   cache <- ctx$plan$.native_cache %||% NULL
   entries <- cache$entries %||% NULL
@@ -781,7 +863,10 @@ native_loglikelihood_param_repeat <- function(likelihood_context, params_list) {
       stop("Cached native entries are required; build the context with data_df first", call. = FALSE)
     }
   }
-  params_list <- lapply(params_list, function(df) .params_df_to_matrix(as.data.frame(df)))
+  if (is.data.frame(parameters) || is.matrix(parameters)) {
+    parameters <- list(.params_df_to_matrix(as.data.frame(parameters)))
+  }
+  params_list <- lapply(parameters, function(df) .params_df_to_matrix(as.data.frame(df)))
   native_loglik_param_repeat_cpp(
     native_ctx,
     ctx$structure,
@@ -792,4 +877,10 @@ native_loglikelihood_param_repeat <- function(likelihood_context, params_list) {
     as.numeric(eval_cfg$abs_tol %||% .integrate_abs_tol()),
     as.integer(eval_cfg$max_depth %||% 12L)
   )
+}
+
+#' @rdname log_likelihood
+#' @export
+log_likelihood.default <- function(likelihood_context, ...) {
+  stop("log_likelihood() expects a likelihood_context", call. = FALSE)
 }

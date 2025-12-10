@@ -22,8 +22,8 @@ is_model_tables <- function(x) {
 }
 
 model_to_tables <- function(model) {
-  if (inherits(model, "race_spec") && exists("build_model", mode = "function")) {
-    model <- build_model(model)
+  if (inherits(model, "race_spec")) {
+    model <- finalize_model(model)
   }
   if (!is.list(model) || is.null(model$accumulators) || is.null(model$outcomes)) {
     stop("model_to_tables expects a race model specification")

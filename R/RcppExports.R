@@ -21,88 +21,16 @@ native_trial_mixture_cpp <- function(ctxSEXP, node_id, t, component_ids, weights
     .Call(`_AccumulatR_native_trial_mixture_driver`, ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows, guess_donors)
 }
 
-native_loglik_from_params_cpp <- function(ctxSEXP, structure, trial_entries, component_weights_opt, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_native_loglik_from_params_cpp`, ctxSEXP, structure, trial_entries, component_weights_opt, rel_tol, abs_tol, max_depth)
-}
-
-native_loglik_from_buffer_cpp <- function(ctxSEXP, structure, trial_entries, params_df, component_weights_opt, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_native_loglik_from_buffer_cpp`, ctxSEXP, structure, trial_entries, params_df, component_weights_opt, rel_tol, abs_tol, max_depth)
-}
-
 native_plan_entries_cpp <- function(ctxSEXP, structure, plan, selection_keys, data_trial_keys, data_df, component_weights_opt, na_source_specs, guess_target_specs, alias_specs) {
     .Call(`_AccumulatR_native_plan_entries_cpp`, ctxSEXP, structure, plan, selection_keys, data_trial_keys, data_df, component_weights_opt, na_source_specs, guess_target_specs, alias_specs)
-}
-
-native_refresh_trial_params_cpp <- function(ctxSEXP, entries) {
-    invisible(.Call(`_AccumulatR_native_refresh_trial_params_cpp`, ctxSEXP, entries))
-}
-
-native_update_entries_from_params_cpp <- function(ctxSEXP, entries, params_obj) {
-    .Call(`_AccumulatR_native_update_entries_from_params_cpp`, ctxSEXP, entries, params_obj)
-}
-
-native_debug_trial_params_cpp <- function(entry) {
-    .Call(`_AccumulatR_native_debug_trial_params_cpp`, entry)
 }
 
 native_loglik_param_repeat_cpp <- function(ctxSEXP, structure, entries, component_weights_opt, params_list, rel_tol, abs_tol, max_depth) {
     .Call(`_AccumulatR_native_loglik_param_repeat_cpp`, ctxSEXP, structure, entries, component_weights_opt, params_list, rel_tol, abs_tol, max_depth)
 }
 
-native_loglik_from_plan_cpp <- function(ctxSEXP, structure, plan, trial_keys, data_trial_keys, data_df, component_weights_opt, na_source_specs, guess_target_specs, alias_specs, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_native_loglik_from_plan_cpp`, ctxSEXP, structure, plan, trial_keys, data_trial_keys, data_df, component_weights_opt, na_source_specs, guess_target_specs, alias_specs, rel_tol, abs_tol, max_depth)
-}
-
 native_component_plan_exported <- function(structureSEXP, trial_rowsSEXP, forced_componentSEXP, component_weightsSEXP) {
     .Call(`_AccumulatR_native_component_plan_exported`, structureSEXP, trial_rowsSEXP, forced_componentSEXP, component_weightsSEXP)
-}
-
-native_guard_eval_cpp <- function(ctxSEXP, guard_node_id, t, component, forced_complete, forced_survive, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_native_guard_eval_cpp`, ctxSEXP, guard_node_id, t, component, forced_complete, forced_survive, rel_tol, abs_tol, max_depth)
-}
-
-native_guard_effective_survival_cpp <- function(ctxSEXP, guard_node_id, t, component, forced_complete, forced_survive, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_native_guard_effective_survival_cpp`, ctxSEXP, guard_node_id, t, component, forced_complete, forced_survive, rel_tol, abs_tol, max_depth)
-}
-
-native_guard_scenarios_cpp <- function(ctxSEXP, guard_node_id, t, reference_scenarios, component, forced_complete, forced_survive, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_native_guard_scenarios_cpp`, ctxSEXP, guard_node_id, t, reference_scenarios, component, forced_complete, forced_survive, rel_tol, abs_tol, max_depth)
-}
-
-native_node_eval_cpp <- function(ctxSEXP, node_id, t, component, forced_complete, forced_survive) {
-    .Call(`_AccumulatR_native_node_eval_cpp`, ctxSEXP, node_id, t, component, forced_complete, forced_survive)
-}
-
-native_node_scenarios_cpp <- function(ctxSEXP, node_id, t, component, forced_complete, forced_survive) {
-    .Call(`_AccumulatR_native_node_scenarios_cpp`, ctxSEXP, node_id, t, component, forced_complete, forced_survive)
-}
-
-native_likelihood_driver_cpp <- function(ctxSEXP, node_ids, times, component, forced_complete, forced_survive) {
-    .Call(`_AccumulatR_native_likelihood_driver_cpp`, ctxSEXP, node_ids, times, component, forced_complete, forced_survive)
-}
-
-native_likelihood_eval_cpp <- function(ctxSEXP, task_list) {
-    .Call(`_AccumulatR_native_likelihood_eval_cpp`, ctxSEXP, task_list)
-}
-
-native_competitor_survival_cpp <- function(ctxSEXP, competitor_ids, t, component) {
-    .Call(`_AccumulatR_native_competitor_survival_cpp`, ctxSEXP, competitor_ids, t, component)
-}
-
-native_density_with_competitors_cpp <- function(ctxSEXP, node_id, t, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_native_density_with_competitors_cpp`, ctxSEXP, node_id, t, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth)
-}
-
-native_outcome_probability_cpp <- function(ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_native_outcome_probability_cpp`, ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth)
-}
-
-native_density_with_competitors_params_cpp <- function(ctxSEXP, node_id, t, component, forced_complete, forced_survive, competitor_ids, trial_rows) {
-    .Call(`_AccumulatR_native_density_with_competitors_params_cpp`, ctxSEXP, node_id, t, component, forced_complete, forced_survive, competitor_ids, trial_rows)
-}
-
-native_density_with_competitors_vec_cpp <- function(ctxSEXP, node_id, times, component, forced_complete, forced_survive, competitor_ids) {
-    .Call(`_AccumulatR_native_density_with_competitors_vec_cpp`, ctxSEXP, node_id, times, component, forced_complete, forced_survive, competitor_ids)
 }
 
 native_outcome_probability_params_cpp <- function(ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows) {
@@ -155,57 +83,7 @@ dist_exgauss_rng <- function(n, mu, sigma, tau) {
 }
 
 #' @noRd
-acc_density_cpp <- function(t, onset, q, dist, params) {
-    .Call(`_AccumulatR_acc_density_cpp`, t, onset, q, dist, params)
-}
-
-#' @noRd
-acc_density_success_cpp <- function(t, onset, q, dist, params) {
-    .Call(`_AccumulatR_acc_density_success_cpp`, t, onset, q, dist, params)
-}
-
-#' @noRd
-acc_survival_cpp <- function(t, onset, q, dist, params) {
-    .Call(`_AccumulatR_acc_survival_cpp`, t, onset, q, dist, params)
-}
-
-#' @noRd
-acc_cdf_success_cpp <- function(t, onset, q, dist, params) {
-    .Call(`_AccumulatR_acc_cdf_success_cpp`, t, onset, q, dist, params)
-}
-
-#' @noRd
 pool_coeffs_cpp <- function(Svec, Fvec) {
     .Call(`_AccumulatR_pool_coeffs_cpp`, Svec, Fvec)
-}
-
-#' @noRd
-pool_density_fast_cpp <- function(density, survival, k) {
-    .Call(`_AccumulatR_pool_density_fast_cpp`, density, survival, k)
-}
-
-#' @noRd
-pool_survival_fast_cpp <- function(survival, k) {
-    .Call(`_AccumulatR_pool_survival_fast_cpp`, survival, k)
-}
-
-#' @noRd
-pool_build_templates_cpp <- function(n, member_ids, pool_idx, k) {
-    .Call(`_AccumulatR_pool_build_templates_cpp`, n, member_ids, pool_idx, k)
-}
-
-#' @noRd
-pool_density_combine_cpp <- function(dens_vec, cdf_vec, surv_vec, cdf_success_vec, surv_success_vec, shared_index, templates, forced_complete, forced_survive) {
-    .Call(`_AccumulatR_pool_density_combine_cpp`, dens_vec, cdf_vec, surv_vec, cdf_success_vec, surv_success_vec, shared_index, templates, forced_complete, forced_survive)
-}
-
-#' @noRd
-pool_survival_general_cpp <- function(Fvec, k) {
-    .Call(`_AccumulatR_pool_survival_general_cpp`, Fvec, k)
-}
-
-#' @noRd
-guard_effective_survival_cpp <- function(integrand, upper, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_guard_effective_survival_cpp`, integrand, upper, rel_tol, abs_tol, max_depth)
 }
 

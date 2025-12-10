@@ -12,6 +12,10 @@ if (!"AccumulatR" %in% loadedNamespaces()) {
 # Bring in example definitions and profiling helpers
 source("dev/examples/stim_selective_versions.R")
 source("dev/R_extra/profile_plot_new.R")
+source("dev/R_extra/processing_tree.R")
+
+
+
 # Simple helper to force native likelihood code paths
 with_native_only <- function(expr) {
   old_opts <- options(
@@ -23,7 +27,7 @@ with_native_only <- function(expr) {
 }
 
 # 1. Which examples to run
-example_ids <- names(new_api_examples)[17]
+example_ids <- names(new_api_examples)[1]
 
 # Optional overrides via env vars
 if (nzchar(Sys.getenv("UUBER_EXAMPLES"))) {
@@ -40,13 +44,13 @@ for (example_id in example_ids) {
   cat(sprintf("\n=== Example %s ===\n", example_id))
   model_spec <- new_api_examples[[example_id]]
   core_params <- new_api_example_params[[example_id]]
-
+  # processing_math_tree(model_spec, "A")
+  
   # 2. Parameter table for this example
-  structure <- build_generator_structure(model_spec)
   params_df <- build_params_df(model_spec, core_params, n_trials = n_trials)
 
   # 3. Simulate data and compute observed probabilities
-  sim <- simulate_trials_from_params(structure, params_df, seed = seed)
+  sim <- simulate(model_spec, params_df, seed = seed)
   data_df <- data.frame(
     trial = sim$trial,
     outcome = sim$outcome,
@@ -61,7 +65,7 @@ for (example_id in example_ids) {
   # 4. Analytic response probabilities (native)
   single_params <- build_params_df(model_spec, core_params, n_trials = 1L)
   analytic_probs <- with_native_only({
-    observed_response_probabilities_from_params(structure, single_params, include_na = TRUE)
+    response_probabilities(model_spec, single_params, include_na = TRUE)
   })
   cat("Analytic outcome probabilities (native):\n")
   print(round(analytic_probs, 6))
@@ -69,12 +73,12 @@ for (example_id in example_ids) {
 
   # 5. Native profiling over parameter grids and repeat log-likelihoods
   ctx <- build_likelihood_context(
-    structure = structure,
+    structure = model_spec,
     params_df = params_df,
     data_df = data_df
   )
   profile_res <- profile_likelihood(
-    structure = structure,
+    structure = model_spec,
     model_spec = model_spec,
     base_params = core_params,
     data = data_df,

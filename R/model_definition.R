@@ -126,6 +126,13 @@
   .expr_from_value(expr)
 }
 
+#' Normalize an outcome expression
+#'
+#' @param expr Expression or symbol describing an event/guard
+#' @return Expression list used in model specs
+#' @examples
+#' build_outcome_expr(A & !B)
+#' @export
 build_outcome_expr <- function(expr) {
   .build_expr(expr)
 }
@@ -134,6 +141,15 @@ build_outcome_expr <- function(expr) {
 # Public DSL helpers
 # ------------------------------------------------------------------------------
 
+#' Define an inhibitory relationship
+#'
+#' @param reference Outcome expression or label to inhibit
+#' @param by Blocking expression or label
+#' @param unless Optional list of unless expressions
+#' @return Guard expression list
+#' @examples
+#' inhibit("A", "B")
+#' @export
 inhibit <- function(reference, by, unless = NULL) {
   ref_expr <- if (is.character(reference) && length(reference) == 1L) {
     list(kind = "event", source = reference, k = NULL)
@@ -149,6 +165,13 @@ inhibit <- function(reference, by, unless = NULL) {
   list(kind = "guard", blocker = blocker_expr, reference = ref_expr, unless = unless_list)
 }
 
+#' First-of expression helper
+#'
+#' @param ... Expressions or labels to combine with OR
+#' @return Expression list
+#' @examples
+#' first_of("A", "B")
+#' @export
 first_of <- function(...) {
   args <- list(...)
   if (length(args) == 0) stop("first_of() requires at least one argument")
@@ -158,6 +181,13 @@ first_of <- function(...) {
   list(kind = "or", args = lapply(args, .expr_from_value))
 }
 
+#' All-of expression helper
+#'
+#' @param ... Expressions or labels to combine with AND
+#' @return Expression list
+#' @examples
+#' all_of("A", "B")
+#' @export
 all_of <- function(...) {
   args <- list(...)
   if (length(args) == 0) stop("all_of() requires at least one argument")
@@ -167,6 +197,14 @@ all_of <- function(...) {
   list(kind = "and", args = lapply(args, .expr_from_value))
 }
 
+#' None-of expression helper
+#'
+#' @param expr Expression or label to negate
+#' @return Expression list
+#' @export
+#' @aliases exclude
+#' @examples
+#' none_of("A")
 none_of <- function(expr) {
   inner <- if (is.character(expr) && length(expr) == 1L) {
     list(kind = "event", source = expr, k = NULL)
@@ -176,12 +214,20 @@ none_of <- function(expr) {
   list(kind = "not", arg = inner)
 }
 
+#' @rdname none_of
+#' @export
 exclude <- none_of
 
 # ------------------------------------------------------------------------------
 # Model builder
 # ------------------------------------------------------------------------------
 
+#' Create an empty race specification
+#'
+#' @return A race_spec object
+#' @examples
+#' race_spec()
+#' @export
 race_spec <- function() {
   structure(list(
     accumulators = list(),
@@ -213,6 +259,22 @@ race_spec <- function() {
   params
 }
 
+#' Add an accumulator definition
+#'
+#' @param spec race_spec object
+#' @param id Accumulator id
+#' @param dist Distribution name
+#' @param onset Onset shift
+#' @param q Guess probability (logit allowed)
+#' @param tags Optional tags list
+#' @param params Optional parameter list
+#' @param ... Additional named parameters
+#' @return Updated race_spec
+#' @examples
+#' spec <- race_spec()
+#' spec <- add_accumulator(spec, "A", "lognormal",
+#'   params = list(meanlog = 0, sdlog = 0.1))
+#' @export
 add_accumulator <- function(spec, id, dist, onset = 0, q = -Inf,
                             tags = list(), params = NULL, ...) {
   stopifnot(inherits(spec, "race_spec"))
@@ -229,6 +291,19 @@ add_accumulator <- function(spec, id, dist, onset = 0, q = -Inf,
   spec
 }
 
+#' Add a pool definition
+#'
+#' @param spec race_spec object
+#' @param id Pool id
+#' @param members Member ids
+#' @param k Threshold parameter
+#' @param weights Optional weights
+#' @param tags Optional tags
+#' @return Updated race_spec
+#' @examples
+#' spec <- race_spec()
+#' spec <- add_pool(spec, "P1", members = c("A", "B"), k = 1L)
+#' @export
 add_pool <- function(spec, id, members, k = 1L, weights = NULL, tags = list()) {
   stopifnot(inherits(spec, "race_spec"))
   if (missing(members) || length(members) == 0) {
@@ -243,6 +318,17 @@ add_pool <- function(spec, id, members, k = 1L, weights = NULL, tags = list()) {
   spec
 }
 
+#' Add an outcome definition
+#'
+#' @param spec race_spec object
+#' @param label Outcome label
+#' @param expr Outcome expression
+#' @param options Optional list of options
+#' @return Updated race_spec
+#' @examples
+#' spec <- race_spec()
+#' spec <- add_outcome(spec, "A_win", "A")
+#' @export
 add_outcome <- function(spec, label, expr, options = list()) {
   stopifnot(inherits(spec, "race_spec"))
   spec$outcomes[[length(spec$outcomes) + 1L]] <- list(
@@ -253,6 +339,18 @@ add_outcome <- function(spec, label, expr, options = list()) {
   spec
 }
 
+#' Add a group of members
+#'
+#' @param spec race_spec object
+#' @param id Group id
+#' @param members Member ids
+#' @param attrs Attributes list
+#' @return Updated race_spec
+#' @examples
+#' spec <- race_spec()
+#' spec <- add_group(spec, "G1", members = c("A", "B"),
+#'   attrs = list(shared_params = list(q = 0.2)))
+#' @export
 add_group <- function(spec, id, members, attrs = list()) {
   stopifnot(inherits(spec, "race_spec"))
   if (missing(members) || is.null(members) || length(members) == 0) {
@@ -266,6 +364,15 @@ add_group <- function(spec, id, members, attrs = list()) {
   spec
 }
 
+#' Set metadata on a specification
+#'
+#' @param spec race_spec object
+#' @param ... Named metadata entries
+#' @return Updated race_spec
+#' @examples
+#' spec <- race_spec()
+#' spec <- set_metadata(spec, rel_tol = 1e-4)
+#' @export
 set_metadata <- function(spec, ...) {
   stopifnot(inherits(spec, "race_spec"))
   updates <- list(...)
@@ -275,20 +382,33 @@ set_metadata <- function(spec, ...) {
   spec
 }
 
+#' Finalize a model (deprecated alias)
+#'
+#' @param spec race_spec object
+#' @return model_structure
+#' @examples
+#' spec <- race_spec()
+#' spec <- add_accumulator(spec, "A", "lognormal",
+#'   params = list(meanlog = 0, sdlog = 0.1))
+#' spec <- add_outcome(spec, "A_win", "A")
+#' build_model(spec)
+#' @export
 build_model <- function(spec) {
-  stopifnot(inherits(spec, "race_spec"))
-  structure(list(
-    accumulators = unname(spec$accumulators),
-    pools = unname(spec$pools),
-    outcomes = unname(spec$outcomes),
-    groups = unname(spec$groups),
-    metadata = spec$metadata
-  ), class = "race_model_spec")
+  .Deprecated("finalize_model")
+  finalize_model(spec)
 }
 
 # Trigger/helpers for clearer API ---------------------------------------------------
 
-# Joint trigger gate: one Bernoulli applied to all members in the group.
+#' Define a joint trigger gate shared across members
+#'
+#' @param id Trigger id
+#' @param q Optional probability value
+#' @param param Optional parameter name supplying q
+#' @return Trigger descriptor list
+#' @examples
+#' joint_trigger("gate1", q = 0.2)
+#' @export
 joint_trigger <- function(id, q = NULL, param = NULL) {
   if (missing(id) || is.null(id) || !nzchar(id)) {
     stop("joint_trigger requires a non-empty id")
@@ -296,11 +416,25 @@ joint_trigger <- function(id, q = NULL, param = NULL) {
   list(shared_trigger = list(id = id, q = q, param = param))
 }
 
-# Independent shared q across members (per-accumulator Bernoulli with shared param).
+#' Shared trigger probability placeholder
+#'
+#' @return Placeholder used in model specs
+#' @examples
+#' shared_q()
+#' @export
 shared_q <- function() {
   list(shared_params = list("q"))
 }
 
+#' Build an expression guard node
+#'
+#' @param blocker Blocker expression or id
+#' @param reference Reference expression or id
+#' @param unless Optional list of unless expressions
+#' @return Guard expression list
+#' @examples
+#' expr_guard("B", "A")
+#' @export
 expr_guard <- function(blocker, reference, unless = list()) {
   list(kind = "guard", blocker = blocker, reference = reference, unless = unless)
 }
@@ -324,6 +458,15 @@ outcome_def <- function(label, expr, options = list()) {
   )
 }
 
+#' Define a component entry
+#'
+#' @param id Component id
+#' @param weight Optional weight
+#' @param attrs Optional attributes list
+#' @return Component list
+#' @examples
+#' component("fast", weight = 0.7)
+#' @export
 component <- function(id, weight = NULL, attrs = list()) {
   list(id = id, weight = weight, attrs = attrs %||% list())
 }
@@ -333,7 +476,13 @@ race_model <- function(accumulators, pools = list(), outcomes, groups = list(), 
     if (!missing(pools) || !missing(outcomes) || !missing(groups) || !missing(metadata)) {
       stop("When passing a race_spec, provide it alone and call race_model(spec)")
     }
-    return(build_model(accumulators))
+    finalized <- finalize_model(accumulators)
+    return(finalized$model_spec)
+  }
+  if (inherits(accumulators, "model_structure") || inherits(accumulators, "generator_structure")) {
+    spec <- accumulators$model_spec %||% NULL
+    if (is.null(spec)) stop("model_structure is missing model_spec")
+    return(spec)
   }
   if (inherits(accumulators, "race_model_spec")) return(accumulators)
   if (missing(accumulators) || missing(outcomes)) {
@@ -364,6 +513,17 @@ dist_param_names <- function(dist) {
   character(0)
 }
 
+#' List sampled parameter names for a model
+#'
+#' @param model race_spec or race_model_spec
+#' @return Character vector of parameter names
+#' @examples
+#' spec <- race_spec()
+#' spec <- add_accumulator(spec, "A", "lognormal",
+#'   params = list(meanlog = 0, sdlog = 0.1))
+#' spec <- add_outcome(spec, "A_win", "A")
+#' sampled_pars(spec)
+#' @export
 sampled_pars <- function(model) {
   spec <- race_model(model)
   params <- character(0)
@@ -408,6 +568,21 @@ param_table <- function(model, ...) {
   )
 }
 
+#' Build a parameter data frame for likelihood/simulation
+#'
+#' @param model Model definition
+#' @param param_values Named numeric vector of parameter values
+#' @param n_trials Number of trial rows to generate
+#' @param component Optional component label(s)
+#' @return Data frame of parameters per trial
+#' @examples
+#' spec <- race_spec()
+#' spec <- add_accumulator(spec, "A", "lognormal",
+#'   params = list(meanlog = 0, sdlog = 0.1))
+#' spec <- add_outcome(spec, "A_win", "A")
+#' vals <- c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0)
+#' build_params_df(spec, vals, n_trials = 2)
+#' @export
 build_params_df <- function(model,
                             param_values,
                             n_trials = 1L,

@@ -22,7 +22,7 @@
     candidate[[param_name]] <- val
     build_params_df(model_spec, candidate, n_trials = n_trials)
   })
-  log_liks <- native_loglikelihood_param_repeat(ctx, param_tables)
+  log_liks <- log_likelihood(ctx, param_tables)
   data.frame(
     parameter = param_name,
     label = label,
@@ -41,7 +41,7 @@
 #' `build_params_df()`. Each grid point rebuilds the params table and
 #' evaluates `log_likelihood_from_params()`.
 #'
-#' @param structure Generator structure from `build_generator_structure()`
+#' @param structure Model structure from `finalize_model()`
 #' @param model_spec Model definition (race_spec or race_model_spec)
 #' @param base_params Named numeric vector of core parameter values
 #' @param data Data frame of simulated trials
@@ -68,7 +68,7 @@ profile_likelihood <- function(structure,
     params_df = base_table,
     data_df = data
   )
-  true_ll <- native_loglikelihood_param_repeat(ctx, list(base_table))[[1]]
+  true_ll <- log_likelihood(ctx, list(base_table))[[1]]
   label_map <- param_labels %||% stats::setNames(names(base_params), names(base_params))
   param_names <- names(base_params)
   compute_curve <- function(param_name) {

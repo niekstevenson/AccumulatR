@@ -18,9 +18,6 @@
 
 .normalize_model <- function(model) {
   if (inherits(model, "race_spec")) {
-    if (exists("build_model", mode = "function")) {
-      return(build_model(model))
-    }
     return(structure(list(
       accumulators = unname(model$accumulators),
       pools = unname(model$pools),
@@ -251,7 +248,18 @@ prepare_model <- function(model) {
   acc_df
 }
 
-build_generator_structure <- function(model) {
+#' Finalize a model for simulation/likelihood
+#'
+#' @param model Model specification
+#' @return A model_structure list
+#' @examples
+#' spec <- race_spec()
+#' spec <- add_accumulator(spec, "A", "lognormal",
+#'   params = list(meanlog = 0, sdlog = 0.1))
+#' spec <- add_outcome(spec, "A_win", "A")
+#' finalize_model(spec)
+#' @export
+finalize_model <- function(model) {
   unwrap_model_spec <- function(x) {
     seen <- 0L
     repeat {
@@ -273,7 +281,7 @@ build_generator_structure <- function(model) {
   model_norm <- .normalize_model(model_norm)
   model_norm <- unwrap_model_spec(model_norm)
   if (!inherits(model_norm, "race_model_spec")) {
-    stop("build_generator_structure requires a race_model_spec")
+    stop("finalize_model requires a race_model_spec")
   }
 
   # Deep copy to prevent accidental aliasing back into the enclosing structure.
@@ -287,18 +295,30 @@ build_generator_structure <- function(model) {
     special_outcomes = prep$special_outcomes,
     shared_triggers = prep$shared_triggers %||% list()
   )
-  class(structure) <- c("generator_structure", class(structure))
+  class(structure) <- c("model_structure", "generator_structure", class(structure))
   structure
 }
 
-.as_generator_structure <- function(x) {
+#' @rdname finalize_model
+#' @export
+#' @note Deprecated: use finalize_model().
+build_model_structure <- function(model) {
+  .Deprecated("finalize_model")
+  finalize_model(model)
+}
+
+.as_model_structure <- function(x) {
   if (inherits(x, "generator_structure")) return(x)
+  if (inherits(x, "model_structure")) return(x)
   if (is.list(x) && !is.null(x$prep) && !is.null(x$accumulators) && !is.null(x$components)) {
-    class(x) <- unique(c("generator_structure", class(x)))
+    class(x) <- unique(c("model_structure", "generator_structure", class(x)))
     return(x)
   }
-  build_generator_structure(x)
+  finalize_model(x)
 }
+
+# Backward-compatible alias for older code paths
+.as_generator_structure <- .as_model_structure
 
 # ---- Component activity helpers ----------------------------------------------
 
@@ -816,14 +836,38 @@ build_generator_structure <- function(model) {
 
 # ---- Public API ----------------------------------------------------------------
 
-simulate_trials_from_params <- function(structure, params_df,
-                                        component_weights = NULL,
-                                        seed = NULL,
-                                        keep_detail = FALSE) {
+#' Simulate trials from parameter rows
+#'
+#' @param structure Model structure
+#' @param params_df Parameter data frame
+#' @param component_weights Optional component weight overrides
+#' @param seed Optional RNG seed
+#' @param keep_detail Whether to retain per-trial detail
+#' @return Data frame of simulated outcomes/RTs (with optional detail)
+#' @examples
+#' spec <- race_spec()
+#' spec <- add_accumulator(spec, "A", "lognormal",
+#'   params = list(meanlog = 0, sdlog = 0.1))
+#' spec <- add_outcome(spec, "A_win", "A")
+#' structure <- finalize_model(spec)
+#' params <- c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0)
+#' df <- build_params_df(spec, params, n_trials = 3)
+#' simulate(structure, df, seed = 123)
+#' @export
+simulate <- function(structure, ...) {
+  UseMethod("simulate")
+}
+
+#' @rdname simulate
+#' @export
+simulate.model_structure <- function(structure, params_df,
+                                     component_weights = NULL,
+                                     seed = NULL,
+                                     keep_detail = FALSE) {
   if (is.null(params_df) || nrow(params_df) == 0L) {
     stop("Parameter data frame must contain at least one row")
   }
-  structure <- .as_generator_structure(structure)
+  structure <- .as_model_structure(structure)
   prep <- structure$prep
   comp_table <- structure$components
   comp_ids <- comp_table$component_id
@@ -930,4 +974,10 @@ simulate_trials_from_params <- function(structure, params_df,
   }
   if (keep_detail) attr(out_df, "details") <- details
   out_df
+}
+
+#' @rdname simulate
+#' @export
+simulate.default <- function(structure, ...) {
+  stop("simulate() expects a model_structure", call. = FALSE)
 }

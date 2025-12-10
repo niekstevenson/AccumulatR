@@ -58,7 +58,7 @@ stim_sel_guarded <- .stim_base_spec() |>
       component("stop_true", weight = 0.4)
     )
   )) |>
-  build_model()
+  finalize_model()
 
 # Version 2: GO2 requires IGNORE completion (no STOP2 coupling)
 stim_sel_ignore_then_go2 <- .stim_base_spec() |>
@@ -104,7 +104,7 @@ stim_sel_ignore_then_go2 <- .stim_base_spec() |>
       component("stop_true", weight = 0.4)
     )
   )) |>
-  build_model()
+  finalize_model()
 
 # Version 3: Duplicate STOP2 accumulators so guards depend on disjoint primitives
 stim_sel_split_stop2 <- race_spec() |>
@@ -166,7 +166,7 @@ stim_sel_split_stop2 <- race_spec() |>
       component("stop_true", weight = 0.4)
     )
   )) |>
-  build_model()
+  finalize_model()
 
 # Version 4: Guarded model with shared trigger failures across response groups
 stim_sel_guarded_triggered <- .stim_base_spec() |>
@@ -225,7 +225,7 @@ stim_sel_guarded_triggered <- .stim_base_spec() |>
       component("stop_true", weight = 0.4)
     )
   )) |>
-  build_model()
+  finalize_model()
 
 stim_selective_versions <- list(
   guarded = stim_sel_guarded,

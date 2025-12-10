@@ -9,13 +9,16 @@ Description: AccumulatR is a R/C++ toolkit for building simulators and likelihoo
 License: GPL-3
 Encoding: UTF-8
 Depends: R (>= 4.0)
-Imports: Rcpp, RcppParallel
+Imports: 
+    Rcpp,
+    RcppParallel,
+    stats,
+    utils
 Suggests:
     testthat (>= 3.0.0)
 LinkingTo: Rcpp, RcppParallel, BH
 SystemRequirements: C++17
 NeedsCompilation: yes
 LazyData: false
-RoxygenNote: 7.3.2
+RoxygenNote: 7.3.3
 Config/testthat/edition: 3
-

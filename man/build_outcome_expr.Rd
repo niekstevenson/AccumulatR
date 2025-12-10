@@ -16,5 +16,5 @@ Expression list used in model specs
 Normalize an outcome expression
 }
 \examples{
-build_outcome_expr(A & !B)
+build_outcome_expr(quote(A & !B))
 }

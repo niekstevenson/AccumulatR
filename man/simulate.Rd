@@ -6,14 +6,22 @@
 \alias{simulate.default}
 \title{Simulate trials from parameter rows}
 \usage{
-simulate(structure, ...)
+simulate(
+  structure,
+  params_df,
+  component_weights = NULL,
+  seed = NULL,
+  keep_detail = FALSE,
+  ...
+)
 
 \method{simulate}{model_structure}(
   structure,
   params_df,
   component_weights = NULL,
   seed = NULL,
-  keep_detail = FALSE
+  keep_detail = FALSE,
+  ...
 )
 
 \method{simulate}{default}(structure, ...)
@@ -28,6 +36,8 @@ simulate(structure, ...)
 \item{seed}{Optional RNG seed}
 
 \item{keep_detail}{Whether to retain per-trial detail}
+
+\item{...}{Unused; for S3 compatibility}
 }
 \value{
 Data frame of simulated outcomes/RTs (with optional detail)

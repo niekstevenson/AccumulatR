@@ -106,7 +106,7 @@
   ), class = "likelihood_context")
 }
 
-#' Build a likelihood context
+#' Build a likelihood context. Needed for efficient C++ evaluation
 #'
 #' @param structure Generator structure
 #' @param params_df Parameter data frame
@@ -706,6 +706,7 @@ response_probabilities.default <- function(structure, ...) {
 #' @param params_df Parameter data frame (one or more trials)
 #' @param component_weights Optional component weights
 #' @param include_na Whether to include NA outcome mass
+#' @param ... Unused; for S3 compatibility
 #' @return Named numeric vector of probabilities
 #' @examples
 #' spec <- race_spec()
@@ -720,15 +721,21 @@ response_probabilities.default <- function(structure, ...) {
 #' )
 #' response_probabilities(structure, params_df)
 #' @export
-response_probabilities <- function(structure, ...) {
+response_probabilities <- function(structure,
+                                   params_df,
+                                   component_weights = NULL,
+                                   include_na = TRUE,
+                                   ...) {
   UseMethod("response_probabilities")
 }
 
 #' @rdname response_probabilities
 #' @export
-response_probabilities.model_structure <- function(structure, params_df,
+response_probabilities.model_structure <- function(structure,
+                                                   params_df,
                                                    component_weights = NULL,
-                                                   include_na = TRUE) {
+                                                   include_na = TRUE,
+                                                   ...) {
   if (is.null(params_df) || nrow(params_df) == 0L) {
     stop("Parameter data frame must contain at least one row")
   }
@@ -815,6 +822,7 @@ response_probabilities.model_structure <- function(structure, params_df,
 #'
 #' @param likelihood_context Context built by build_likelihood_context
 #' @param parameters Parameter data frame, or list of parameter data frames
+#' @param ... Unused; for S3 compatibility
 #' @return Numeric vector of log-likelihood values
 #' @examples
 #' spec <- race_spec()
@@ -831,13 +839,13 @@ response_probabilities.model_structure <- function(structure, params_df,
 #' ctx <- build_likelihood_context(structure, params_df, data_df)
 #' log_likelihood(ctx, list(params_df))
 #' @export
-log_likelihood <- function(likelihood_context, ...) {
+log_likelihood <- function(likelihood_context, parameters, ...) {
   UseMethod("log_likelihood")
 }
 
 #' @rdname log_likelihood
 #' @export
-log_likelihood.likelihood_context <- function(likelihood_context, parameters) {
+log_likelihood.likelihood_context <- function(likelihood_context, parameters, ...) {
   ctx <- .validate_likelihood_context(likelihood_context)
   cache <- ctx$plan$.native_cache %||% NULL
   entries <- cache$entries %||% NULL

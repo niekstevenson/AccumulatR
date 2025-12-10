@@ -299,14 +299,6 @@ finalize_model <- function(model) {
   structure
 }
 
-#' @rdname finalize_model
-#' @export
-#' @note Deprecated: use finalize_model().
-build_model_structure <- function(model) {
-  .Deprecated("finalize_model")
-  finalize_model(model)
-}
-
 .as_model_structure <- function(x) {
   if (inherits(x, "generator_structure")) return(x)
   if (inherits(x, "model_structure")) return(x)
@@ -843,6 +835,7 @@ build_model_structure <- function(model) {
 #' @param component_weights Optional component weight overrides
 #' @param seed Optional RNG seed
 #' @param keep_detail Whether to retain per-trial detail
+#' @param ... Unused; for S3 compatibility
 #' @return Data frame of simulated outcomes/RTs (with optional detail)
 #' @examples
 #' spec <- race_spec()
@@ -854,16 +847,23 @@ build_model_structure <- function(model) {
 #' df <- build_params_df(spec, params, n_trials = 3)
 #' simulate(structure, df, seed = 123)
 #' @export
-simulate <- function(structure, ...) {
+simulate <- function(structure,
+                     params_df,
+                     component_weights = NULL,
+                     seed = NULL,
+                     keep_detail = FALSE,
+                     ...) {
   UseMethod("simulate")
 }
 
 #' @rdname simulate
 #' @export
-simulate.model_structure <- function(structure, params_df,
+simulate.model_structure <- function(structure,
+                                     params_df,
                                      component_weights = NULL,
                                      seed = NULL,
-                                     keep_detail = FALSE) {
+                                     keep_detail = FALSE,
+                                     ...) {
   if (is.null(params_df) || nrow(params_df) == 0L) {
     stop("Parameter data frame must contain at least one row")
   }

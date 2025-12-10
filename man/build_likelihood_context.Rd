@@ -2,7 +2,7 @@
 % Please edit documentation in R/likelihood_param_interface.R
 \name{build_likelihood_context}
 \alias{build_likelihood_context}
-\title{Build a likelihood context}
+\title{Build a likelihood context. Needed for efficient C++ evaluation}
 \usage{
 build_likelihood_context(
   structure,
@@ -33,7 +33,7 @@ build_likelihood_context(
 likelihood_context object
 }
 \description{
-Build a likelihood context
+Build a likelihood context. Needed for efficient C++ evaluation
 }
 \examples{
 spec <- race_spec()

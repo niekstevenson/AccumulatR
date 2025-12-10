@@ -131,7 +131,7 @@
 #' @param expr Expression or symbol describing an event/guard
 #' @return Expression list used in model specs
 #' @examples
-#' build_outcome_expr(A & !B)
+#' build_outcome_expr(quote(A & !B))
 #' @export
 build_outcome_expr <- function(expr) {
   .build_expr(expr)
@@ -380,22 +380,6 @@ set_metadata <- function(spec, ...) {
     spec$metadata[[nm]] <- updates[[nm]]
   }
   spec
-}
-
-#' Finalize a model (deprecated alias)
-#'
-#' @param spec race_spec object
-#' @return model_structure
-#' @examples
-#' spec <- race_spec()
-#' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1))
-#' spec <- add_outcome(spec, "A_win", "A")
-#' build_model(spec)
-#' @export
-build_model <- function(spec) {
-  .Deprecated("finalize_model")
-  finalize_model(spec)
 }
 
 # Trigger/helpers for clearer API ---------------------------------------------------

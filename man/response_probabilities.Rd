@@ -8,17 +8,26 @@
 \usage{
 \method{response_probabilities}{default}(structure, ...)
 
-response_probabilities(structure, ...)
+response_probabilities(
+  structure,
+  params_df,
+  component_weights = NULL,
+  include_na = TRUE,
+  ...
+)
 
 \method{response_probabilities}{model_structure}(
   structure,
   params_df,
   component_weights = NULL,
-  include_na = TRUE
+  include_na = TRUE,
+  ...
 )
 }
 \arguments{
 \item{structure}{Model structure}
+
+\item{...}{Unused; for S3 compatibility}
 
 \item{params_df}{Parameter data frame (one or more trials)}
 

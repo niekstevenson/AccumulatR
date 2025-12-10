@@ -6,9 +6,9 @@
 \alias{log_likelihood.default}
 \title{Native log-likelihood evaluation over multiple parameter sets}
 \usage{
-log_likelihood(likelihood_context, ...)
+log_likelihood(likelihood_context, parameters, ...)
 
-\method{log_likelihood}{likelihood_context}(likelihood_context, parameters)
+\method{log_likelihood}{likelihood_context}(likelihood_context, parameters, ...)
 
 \method{log_likelihood}{default}(likelihood_context, ...)
 }
@@ -16,6 +16,8 @@ log_likelihood(likelihood_context, ...)
 \item{likelihood_context}{Context built by build_likelihood_context}
 
 \item{parameters}{Parameter data frame, or list of parameter data frames}
+
+\item{...}{Unused; for S3 compatibility}
 }
 \value{
 Numeric vector of log-likelihood values

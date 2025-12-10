@@ -2,12 +2,9 @@
 % Please edit documentation in R/generator_new.R
 \name{finalize_model}
 \alias{finalize_model}
-\alias{build_model_structure}
 \title{Finalize a model for simulation/likelihood}
 \usage{
 finalize_model(model)
-
-build_model_structure(model)
 }
 \arguments{
 \item{model}{Model specification}
@@ -17,9 +14,6 @@ A model_structure list
 }
 \description{
 Finalize a model for simulation/likelihood
-}
-\note{
-Deprecated: use finalize_model().
 }
 \examples{
 spec <- race_spec()

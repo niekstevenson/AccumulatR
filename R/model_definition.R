@@ -485,6 +485,293 @@ race_model <- function(accumulators, pools = list(), outcomes, groups = list(), 
   ), class = "race_model_spec")
 }
 
+# ----------------------------------------------------------------------
+# Model normalization/finalization (shared by simulation and likelihood)
+# ----------------------------------------------------------------------
+
+.normalize_model <- function(model) {
+  if (inherits(model, "race_spec")) {
+    return(structure(list(
+      accumulators = unname(model$accumulators),
+      pools = unname(model$pools),
+      outcomes = unname(model$outcomes),
+      groups = unname(model$groups),
+      metadata = model$metadata %||% list()
+    ), class = "race_model_spec"))
+  }
+  if (inherits(model, "race_model_spec")) return(model)
+  model
+}
+
+.prepare_acc_defs <- function(model) {
+  accs <- model$accumulators
+  if (length(accs) == 0) stop("Model must define at least one accumulator")
+
+  defs <- setNames(vector("list", length(accs)), vapply(accs, `[[`, character(1), "id"))
+  for (acc in accs) {
+    defs[[acc$id]] <- list(
+      id = acc$id,
+      dist = acc$dist,
+      onset = acc$onset %||% 0,
+      q = acc$q %||% 0,
+      params = .ensure_acc_param_t0(acc$params %||% list()),
+      components = character(0),
+      shared_trigger_id = NULL,
+      shared_trigger_q = NULL
+    )
+  }
+
+  shared_triggers <- list()
+  if (!is.null(model$groups) && length(model$groups) > 0) {
+    for (grp in model$groups) {
+      members <- grp$members
+      attrs <- grp$attrs
+      if (is.null(members) || length(members) == 0) next
+      if (!is.null(attrs$shared_params)) {
+        for (m in members) {
+          if (!is.null(defs[[m]])) {
+            defs[[m]]$params <- modifyList(defs[[m]]$params, attrs$shared_params, keep.null = TRUE)
+          }
+        }
+      }
+      if (!is.null(attrs$component)) {
+        comp_id <- attrs$component
+        for (m in members) {
+          if (!is.null(defs[[m]])) {
+            defs[[m]]$components <- unique(c(defs[[m]]$components, comp_id))
+          }
+        }
+      }
+      shared_trigger <- attrs$shared_trigger %||% NULL
+      if (!is.null(shared_trigger)) {
+        trig_id <- shared_trigger$id %||% grp$id
+        if (is.null(trig_id) || trig_id == "") {
+          stop(sprintf("Group '%s' shared_trigger must provide a non-empty id", grp$id %||% "<unnamed>"))
+        }
+        default_q <- shared_trigger$q %||% NA_real_
+        if (is.na(default_q)) {
+          q_vals <- vapply(members, function(m) {
+            acc_def <- defs[[m]]
+            if (is.null(acc_def)) return(NA_real_)
+            acc_def$q %||% NA_real_
+          }, numeric(1))
+          q_vals <- q_vals[!is.na(q_vals)]
+          if (length(q_vals) == 0) {
+            default_q <- 0
+          } else if (length(unique(q_vals)) == 1) {
+            default_q <- q_vals[[1]]
+          } else {
+            stop(sprintf(
+              "Group '%s' shared_trigger requires a single q value; found %s",
+              trig_id,
+              paste(format(unique(q_vals)), collapse = ", ")
+            ))
+          }
+        }
+        param_name <- shared_trigger$param %||% NULL
+        shared_triggers[[trig_id]] <- list(
+          id = trig_id,
+          group_id = grp$id %||% trig_id,
+          members = members,
+          q = as.numeric(default_q),
+          param = param_name
+        )
+        for (m in members) {
+          if (!is.null(defs[[m]])) {
+            defs[[m]]$shared_trigger_id <- trig_id
+            defs[[m]]$shared_trigger_q <- as.numeric(default_q)
+            defs[[m]]$q <- as.numeric(default_q)
+          }
+        }
+      }
+    }
+  }
+
+  for (acc_id in names(defs)) {
+    defs[[acc_id]]$params <- .ensure_acc_param_t0(defs[[acc_id]]$params)
+  }
+  list(acc = defs, shared_triggers = shared_triggers)
+}
+
+.extract_components <- function(model) {
+  mixture <- model$metadata$mixture
+  if (is.null(mixture) || is.null(mixture$components) || length(mixture$components) == 0) {
+    list(
+      ids = "__default__",
+      weights = 1,
+      attrs = list(`__default__` = list(guess = NULL)),
+      has_weight_param = FALSE
+    )
+  } else {
+    comps <- mixture$components
+    ids <- vapply(comps, `[[`, character(1), "id")
+    weights <- vapply(comps, function(cmp) cmp$weight %||% 1, numeric(1))
+    if (all(is.na(weights))) weights <- rep(1, length(weights))
+    weights <- weights / sum(weights)
+    attrs <- setNames(vector("list", length(ids)), ids)
+    has_wparam <- logical(length(ids))
+    for (i in seq_along(ids)) {
+      wp <- comps[[i]]$attrs$weight_param %||% NULL
+      has_wparam[[i]] <- !is.null(wp)
+      attrs[[ids[[i]]]] <- list(
+        guess = comps[[i]]$attrs$guess %||% NULL,
+        weight_param = wp
+      )
+    }
+    list(ids = ids, weights = weights, attrs = attrs, has_weight_param = has_wparam)
+  }
+}
+
+.prepare_pool_defs <- function(model) {
+  pools <- model$pools
+  if (is.null(pools)) pools <- list()
+  defs <- setNames(vector("list", length(pools)), vapply(pools, `[[`, character(1), "id"))
+  for (pl in pools) {
+    rule <- pl$rule
+    k <- rule$k
+    if (is.infinite(k)) k <- length(pl$members)
+    defs[[pl$id]] <- list(
+      id = pl$id,
+      members = pl$members,
+      k = k,
+      weights = rule$weights %||% NULL,
+      tags = pl$tags %||% list()
+    )
+  }
+  defs
+}
+
+.prepare_outcomes <- function(model) {
+  outs <- model$outcomes
+  if (is.null(outs) || length(outs) == 0) stop("Model must define outcomes")
+  outs <- lapply(outs, function(out) {
+    if (is.null(out$label)) stop("Outcome missing label")
+    if (is.null(out$expr)) stop(sprintf("Outcome '%s' missing expr", out$label))
+    out$options <- out$options %||% list()
+    out
+  })
+  setNames(outs, vapply(outs, `[[`, character(1), "label"))
+}
+
+prepare_model <- function(model) {
+  model <- .normalize_model(model)
+  acc_prep <- .prepare_acc_defs(model)
+  acc_defs <- acc_prep$acc
+  pool_defs <- .prepare_pool_defs(model)
+  outcome_defs <- .prepare_outcomes(model)
+  component_defs <- .extract_components(model)
+  list(
+    accumulators = acc_defs,
+    pools = pool_defs,
+    outcomes = outcome_defs,
+    components = component_defs,
+    special_outcomes = model$metadata$special_outcomes %||% list(),
+    shared_triggers = acc_prep$shared_triggers %||% list()
+  )
+}
+
+.build_component_table <- function(comp_defs) {
+  comp_ids <- comp_defs$ids
+  comp_tbl <- data.frame(
+    component_id = comp_ids,
+    weight = comp_defs$weights,
+    stringsAsFactors = FALSE
+  )
+  comp_tbl$has_weight_param <- comp_defs$has_weight_param
+  comp_tbl$attrs <- I(comp_defs$attrs[match(comp_ids, names(comp_defs$attrs))])
+  comp_tbl
+}
+
+.build_accumulator_template <- function(acc_defs) {
+  acc_ids <- names(acc_defs)
+  if (length(acc_ids) == 0L) {
+    return(data.frame(
+      accumulator_id = character(0),
+      accumulator_index = integer(0),
+      dist = character(0),
+      onset = numeric(0),
+      q = numeric(0),
+      role = character(0),
+      shared_trigger_id = character(0),
+      shared_trigger_q = numeric(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+  acc_df <- data.frame(
+    accumulator_id = acc_ids,
+    accumulator_index = seq_along(acc_ids),
+    dist = vapply(acc_defs, function(acc) acc$dist %||% NA_character_, character(1)),
+    onset = vapply(acc_defs, function(acc) acc$onset %||% 0, numeric(1)),
+    q = vapply(acc_defs, function(acc) acc$q %||% 0, numeric(1)),
+    role = rep("std", length(acc_ids)),
+    shared_trigger_id = vapply(acc_defs, function(acc) acc$shared_trigger_id %||% NA_character_, character(1)),
+    shared_trigger_q = vapply(acc_defs, function(acc) acc$shared_trigger_q %||% NA_real_, numeric(1)),
+    stringsAsFactors = FALSE
+  )
+  acc_df$params <- I(lapply(acc_defs, function(acc) .ensure_acc_param_t0(acc$params %||% list())))
+  acc_df$components <- I(lapply(acc_defs, function(acc) acc$components %||% character(0)))
+  acc_df
+}
+
+#' Finalize a model for simulation/likelihood
+#'
+#' @param model Model specification
+#' @return A model_structure list
+#' @examples
+#' spec <- race_spec()
+#' spec <- add_accumulator(spec, "A", "lognormal",
+#'   params = list(meanlog = 0, sdlog = 0.1))
+#' spec <- add_outcome(spec, "A_win", "A")
+#' finalize_model(spec)
+#' @export
+finalize_model <- function(model) {
+  unwrap_model_spec <- function(x) {
+    seen <- 0L
+    repeat {
+      if (inherits(x, "generator_structure")) {
+        x <- x$model_spec %||% stop("generator_structure missing model_spec")
+      } else if (!inherits(x, "race_model_spec") && !is.null(x$model_spec)) {
+        x <- x$model_spec
+      } else {
+        break
+      }
+      seen <- seen + 1L
+      if (seen > 20L) stop("generator_structure nesting too deep")
+    }
+    x
+  }
+
+  model_norm <- unwrap_model_spec(model)
+  model_norm <- .normalize_model(model_norm)
+  model_norm <- unwrap_model_spec(model_norm)
+  if (!inherits(model_norm, "race_model_spec")) {
+    stop("finalize_model requires a race_model_spec")
+  }
+
+  model_norm <- unserialize(serialize(model_norm, NULL))
+  prep <- prepare_model(model_norm)
+  structure <- list(
+    model_spec = model_norm,
+    prep = prep,
+    accumulators = .build_accumulator_template(prep$accumulators),
+    components = .build_component_table(prep$components),
+    special_outcomes = prep$special_outcomes,
+    shared_triggers = prep$shared_triggers %||% list()
+  )
+  class(structure) <- c("model_structure", "generator_structure", class(structure))
+  structure
+}
+
+.as_model_structure <- function(x) {
+  if (inherits(x, "generator_structure")) return(x)
+  if (inherits(x, "model_structure")) return(x)
+  if (is.list(x) && !is.null(x$prep) && !is.null(x$accumulators) && !is.null(x$components)) {
+    class(x) <- unique(c("model_structure", "generator_structure", class(x)))
+    return(x)
+  }
+  finalize_model(x)
+}
+
 # ------------------------------------------------------------------------------
 # Parameter utilities
 # ------------------------------------------------------------------------------

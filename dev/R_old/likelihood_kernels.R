@@ -3502,3 +3502,7 @@ guard_scope_ids <- function(expr, prep) {
 }
 
 # ==============================================================================
+pool_coeffs <- function(Svec, Fvec) {
+  stopifnot(length(Svec) == length(Fvec))
+  as.numeric(pool_coeffs_cpp(as.numeric(Svec), as.numeric(Fvec)))
+}

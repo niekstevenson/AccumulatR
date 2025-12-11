@@ -575,13 +575,13 @@ simulate.model_structure <- function(structure,
     component_weights$component <- as.character(component_weights$component)
   }
   if (!is.null(seed)) set.seed(seed)
-  if (isTRUE(getOption("uuber.sim.native", TRUE))) {
-    native_res <- tryCatch(
-      native_simulate_cpp(structure, params_df, component_weights, keep_detail),
-      error = function(e) NULL
-    )
-    if (!is.null(native_res)) return(native_res)
-  }
+  # if (isTRUE(getOption("uuber.sim.native", TRUE))) {
+  #   native_res <- tryCatch(
+  #     native_simulate_cpp(structure, params_df, component_weights, keep_detail),
+  #     error = function(e) NULL
+  #   )
+  #   if (!is.null(native_res)) return(native_res)
+  # }
   trial_ids <- unique(params_df$trial)
   trial_ids <- trial_ids[order(trial_ids)]
   outcomes <- character(length(trial_ids))

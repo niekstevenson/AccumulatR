@@ -51,7 +51,11 @@
   plan_cache$entry_names <- NULL
   plan_cache$eval_config <- NULL
   plan_cache$component_weights_df <- NULL
-  component_weights_df <- if (!is.null(component_weights)) as.data.frame(component_weights) else NULL
+  component_weights_df <- .likelihood_component_weights_df(
+    structure = structure,
+    params_df = params_df,
+    component_weights = component_weights
+  )
   if (!is.null(native_ctx)) {
     metadata <- .likelihood_trial_metadata(structure, prep_eval_base)
     if (!is.null(metadata)) {
@@ -430,33 +434,139 @@ build_likelihood_context <- function(structure, params_df, data_df,
 }
 
 .likelihood_component_weights <- function(structure, trial_id, available_components,
-                                          base_weights, component_weights) {
-  weights <- base_weights[match(available_components, structure$components$component_id)]
-  if (!is.null(component_weights)) {
-    rows <- component_weights[
-      component_weights$trial == trial_id &
-        component_weights$component %in% available_components,
-      ,
-      drop = FALSE
-    ]
-    if (nrow(rows) > 0L) {
-      weights <- rows$weight
+                                          base_weights, component_weights,
+                                          trial_rows = NULL) {
+  mode <- structure$components$mode[[1]] %||% "fixed"
+  comp_table <- structure$components
+  if (!identical(mode, "sample")) {
+    weights <- base_weights[match(available_components, comp_table$component_id)]
+    if (!is.null(component_weights)) {
+      rows <- component_weights[
+        component_weights$trial == trial_id &
+          component_weights$component %in% available_components,
+        ,
+        drop = FALSE
+      ]
+      if (nrow(rows) > 0L) {
+        weights <- rows$weight
+      }
     }
-  }
-  if (length(weights) != length(available_components) || all(is.na(weights))) {
-    weights <- rep(1 / length(available_components), length(available_components))
-  } else {
-    if (any(!is.finite(weights) | weights < 0)) {
-      stop("Component weights must be non-negative finite numbers")
-    }
-    total <- sum(weights)
-    if (!is.finite(total) || total <= 0) {
+    if (length(weights) != length(available_components) || all(is.na(weights))) {
       weights <- rep(1 / length(available_components), length(available_components))
     } else {
-      weights <- weights / total
+      if (any(!is.finite(weights) | weights < 0)) {
+        stop("Component weights must be non-negative finite numbers")
+      }
+      total <- sum(weights)
+      if (!is.finite(total) || total <= 0) {
+        weights <- rep(1 / length(available_components), length(available_components))
+      } else {
+        weights <- weights / total
+      }
     }
+    return(weights)
+  }
+  ref_id <- comp_table$reference[[1]] %||% available_components[[1]]
+  comp_attrs <- comp_table$attrs
+  weights <- numeric(length(available_components))
+  names(weights) <- available_components
+  sum_nonref <- 0
+  for (i in seq_along(available_components)) {
+    cid <- available_components[[i]]
+    if (identical(cid, ref_id)) next
+    attrs <- comp_attrs[[cid]] %||% list()
+    wp <- attrs$weight_param
+    if (is.null(wp) || !nzchar(wp)) {
+      stop(sprintf("Component '%s' missing weight_param for sampled mixture", cid))
+    }
+    val <- NA_real_
+    if (!is.null(trial_rows) && wp %in% names(trial_rows)) {
+      vals <- trial_rows[[wp]]
+      if (!is.null(vals) && length(vals) > 0) val <- as.numeric(vals[[1]])
+    }
+    if (is.na(val) && !is.null(component_weights) && wp %in% names(component_weights)) {
+      rows <- component_weights[
+        component_weights$trial == trial_id &
+          component_weights$component %in% available_components,
+        ,
+        drop = FALSE
+      ]
+      if (nrow(rows) > 0L && wp %in% names(rows)) {
+        val <- as.numeric(rows[[wp]][[1]])
+      }
+    }
+    if (is.na(val)) {
+      idx <- which(comp_table$component_id == cid)
+      if (length(idx) == 1) val <- comp_table$weight[[idx]]
+    }
+    if (is.na(val) || !is.finite(val) || val < 0 || val > 1) {
+      stop(sprintf("Mixture weight '%s' must be a probability in [0,1]", wp))
+    }
+    weights[[i]] <- val
+    sum_nonref <- sum_nonref + val
+  }
+  if (ref_id %in% available_components) {
+    ref_idx <- match(ref_id, available_components)
+    ref_weight <- 1 - sum_nonref
+    if (ref_weight < -1e-8) stop("Mixture weights sum to >1; check non-reference weight params")
+    if (ref_weight < 0) ref_weight <- 0
+    weights[[ref_idx]] <- ref_weight
+  }
+  total <- sum(weights)
+  if (!is.finite(total) || total <= 0) {
+    weights <- rep(1 / length(available_components), length(available_components))
+  } else {
+    weights <- weights / total
   }
   weights
+}
+
+.likelihood_component_weights_df <- function(structure, params_df, component_weights = NULL) {
+  if (!is.null(component_weights)) {
+    return(as.data.frame(component_weights))
+  }
+  comp_table <- structure$components %||% NULL
+  if (is.null(comp_table) || nrow(comp_table) == 0L) return(NULL)
+  mode <- comp_table$mode[[1]] %||% "fixed"
+  if (!identical(mode, "sample")) return(NULL)
+  params_df <- as.data.frame(params_df)
+  if (!"trial" %in% names(params_df)) params_df$trial <- 1L
+  params_df$trial <- params_df$trial
+  if ("component" %in% names(params_df)) {
+    params_df$component <- as.character(params_df$component)
+  }
+  trial_rows_map <- .likelihood_params_by_trial(params_df)
+  comp_ids <- comp_table$component_id
+  weight_rows <- list()
+  for (trial_key in names(trial_rows_map)) {
+    trial_df <- as.data.frame(trial_rows_map[[trial_key]])
+    tid <- trial_df$trial[[1]] %||% NA
+    comps <- comp_ids
+    if ("component" %in% names(trial_df)) {
+      listed <- unique(trial_df$component)
+      listed <- listed[!is.na(listed)]
+      if (length(listed) > 0L) {
+        comps <- intersect(comps, listed)
+      }
+    }
+    if (length(comps) == 0L) comps <- comp_ids
+    weights <- .likelihood_component_weights(
+      structure,
+      tid,
+      comps,
+      comp_table$weight,
+      NULL,
+      trial_rows = trial_df
+    )
+    weight_rows[[length(weight_rows) + 1L]] <- data.frame(
+      trial = tid,
+      component = comps,
+      weight = weights,
+      stringsAsFactors = FALSE
+    )
+  }
+  if (length(weight_rows) == 0L) return(NULL)
+  do.call(rbind, weight_rows)
 }
 
 .likelihood_response_prob_component <- function(prep, outcome_label, component,
@@ -653,7 +763,8 @@ response_probabilities.model_structure <- function(structure,
       tid,
       comps,
       structure$components$weight,
-      component_weights
+      component_weights,
+      trial_rows = trial_rows
     )
     trial_probs <- numeric(0)
     for (idx in seq_along(comps)) {
@@ -752,8 +863,64 @@ log_likelihood.likelihood_context <- function(likelihood_context, parameters, ..
     }
   }
   if (is.data.frame(parameters) || is.matrix(parameters)) {
-    parameters <- list(.params_df_to_matrix(as.data.frame(parameters)))
+    parameters <- list(as.data.frame(parameters))
+  } else {
+    parameters <- lapply(parameters, as.data.frame)
   }
+
+  comp_mode <- ctx$structure$components$mode[[1]] %||% "fixed"
+  if (identical(comp_mode, "sample")) {
+    if (is.null(native_ctx) || !inherits(native_ctx, "externalptr")) {
+      stop("Native context required for log_likelihood", call. = FALSE)
+    }
+    plan_keys_raw <- as.character((ctx$plan$order %||% names(ctx$plan$trials)) %||% character(0))
+    if (length(plan_keys_raw) == 0L) {
+      stop("Plan contains no trials", call. = FALSE)
+    }
+    data_trial_keys <- as.character(ctx$data_df$trial %||% NA)
+    metadata <- .likelihood_trial_metadata(ctx$structure, ctx$prep)
+    rel_tol <- as.numeric(metadata$rel_tol %||% .integrate_rel_tol())
+    abs_tol <- as.numeric(metadata$abs_tol %||% .integrate_abs_tol())
+    max_depth <- as.integer(metadata$max_depth %||% 12L)
+    na_specs <- metadata$na_source_specs %||% list()
+    guess_specs <- metadata$guess_target_specs %||% list()
+    alias_specs <- metadata$alias_specs %||% list()
+    out <- numeric(length(parameters))
+    for (i in seq_along(parameters)) {
+      df <- parameters[[i]]
+      comp_weights_df <- .likelihood_component_weights_df(
+        structure = ctx$structure,
+        params_df = df,
+        component_weights = ctx$component_weights
+      )
+      params_mat <- .params_df_to_matrix(df)
+      entries_i <- native_plan_entries_cpp(
+        native_ctx,
+        ctx$structure,
+        ctx$plan,
+        plan_keys_raw,
+        data_trial_keys,
+        ctx$data_df,
+        comp_weights_df,
+        na_specs,
+        guess_specs,
+        alias_specs
+      )
+      res <- cpp_loglik_multiple(
+        native_ctx,
+        ctx$structure,
+        entries_i,
+        comp_weights_df,
+        list(params_mat),
+        rel_tol,
+        abs_tol,
+        max_depth
+      )
+      out[[i]] <- as.numeric(res[[1]])
+    }
+    return(out)
+  }
+
   params_list <- lapply(parameters, function(df) .params_df_to_matrix(as.data.frame(df)))
   cpp_loglik_multiple(
     native_ctx,

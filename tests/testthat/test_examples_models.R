@@ -140,9 +140,11 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       add_group("component:slow", members = c("target_slow", "competitor"),
                 attrs = list(component = "slow")) |>
       set_metadata(mixture = list(
+        mode = "sample",
+        reference = "slow",
         components = list(
-          component("fast", weight = 0.2, attrs = list(weight_param = "logit_fast")),
-          component("slow", weight = 0.8, attrs = list(weight_param = "logit_slow"))
+          component("fast", attrs = list(weight_param = "p_fast")),
+          component("slow")
         )
       )) |>
       finalize_model()
@@ -154,8 +156,7 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     target_slow.sdlog = 0.20,
     competitor.meanlog = log(0.35),
     competitor.sdlog = 0.18,
-    logit_fast = qlogis(0.2),
-    logit_slow = qlogis(0.8)
+    p_fast = 0.2
   )
 
   example_10_exclusion <- function() {
@@ -220,7 +221,7 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       add_group("stop_slow_component", members = "stop_slow", attrs = list(component = "slow")) |>
       add_group("shared_stop_trigger",
                 members = c("stop_fast", "stop_slow"),
-                attrs = list(shared_trigger = list(id = "stop_gate", q = qlogis(0.01)))) |>
+                attrs = list(shared_trigger = list(id = "stop_gate", q = 0.01))) |>
       set_metadata(mixture = list(
         components = list(
           component("fast", weight = 0.25),
@@ -248,21 +249,22 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       add_pool("R2", "go2") |>
       add_outcome("R1", "R1") |>
       add_outcome("R2", "R2") |>
-      add_group(
-        "shared_trigger",
-        members = c("go1", "go2"),
-        attrs = joint_trigger(id = "go_trigger",
-                              q = qlogis(0.10),
-                              param = "go_trigger_q")
-      ) |>
-      finalize_model()
+    add_group(
+      "shared_trigger",
+      members = c("go1", "go2"),
+      attrs = trigger(id = "go_trigger",
+                      q = 0.10,
+                      param = "go_trigger_q",
+                      draw = "shared")
+    ) |>
+    finalize_model()
   }
   params_example_22_simple_q <- c(
     go1.meanlog = log(0.30),
     go1.sdlog   = 0.18,
     go2.meanlog = log(0.32),
     go2.sdlog   = 0.18,
-    go_trigger_q = qlogis(0.10)
+    go_trigger_q = 0.10
   )
 
   example_23_shared_q <- function() {
@@ -274,7 +276,7 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       add_outcome("Left", "L") |>
       add_outcome("Right", "R") |>
       add_group("par:q_shared", members = c("go_left", "go_right"),
-                attrs = shared_q()) |>
+                attrs = trigger(q = 0.10, param = "q_shared", draw = "independent")) |>
       finalize_model()
   }
   params_example_23_shared_q <- c(
@@ -282,7 +284,7 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     go_left.sdlog = 0.18,
     go_right.meanlog = log(0.32),
     go_right.sdlog = 0.18,
-    `par:q_shared.q` = qlogis(0.10)
+    q_shared = 0.10
   )
 
   # Bundle target models -------------------------------------------------------

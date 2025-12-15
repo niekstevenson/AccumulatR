@@ -37,6 +37,7 @@ example_2_stop_mixture <- race_spec() |>
   add_group("component:go_stop", members = c("go1", "stop", "go2"),
             attrs = list(component = "go_stop")) |>
   set_metadata(mixture = list(
+    mode = "fixed",
     components = list(component("go_only", weight = 0.5),
                        component("go_stop", weight = 0.5))
   )) |>
@@ -148,9 +149,11 @@ example_7_mixture <- race_spec() |>
   add_group("component:slow", members = c("target_slow", "competitor"),
             attrs = list(component = "slow")) |>
   set_metadata(mixture = list(
+    mode = "sample",
+    reference = "slow",
     components = list(
-      component("fast", weight = 0.2, attrs = list(weight_param = "logit_fast")),
-      component("slow", weight = 0.8, attrs = list(weight_param = "logit_slow"))
+      component("fast", attrs = list(weight_param = "p_fast")),
+      component("slow")
     )
   )) |>
   finalize_model()
@@ -161,8 +164,7 @@ params_example_7_mixture <- c(
   target_slow.sdlog = 0.20,
   competitor.meanlog = log(0.35),
   competitor.sdlog = 0.18,
-  logit_fast = qlogis(0.2),
-  logit_slow = qlogis(0.8)
+  p_fast = 0.2
 )
 
 # Example 8 – shared parameter group
@@ -272,6 +274,7 @@ example_12_inhibitor_with_protector <- race_spec() |>
   add_group("component:go_stop", members = c("go1", "stop", "go2", "safety"),
             attrs = list(component = "go_stop")) |>
   set_metadata(mixture = list(
+    mode = "fixed",
     components = list(component("go_only", weight = 0.5),
                        component("go_stop", weight = 0.5))
   )) |>
@@ -350,6 +353,7 @@ example_15_component_metadata <- race_spec() |>
   add_group("component:slow", members = c("acc_slow", "acc_shared_slow"),
             attrs = list(component = "slow")) |>
   set_metadata(mixture = list(
+    mode = "fixed",
     components = list(
       component("fast", weight = 0.6, attrs = list(
         guess = list(outcome = "GUESS", weights = c(Response = 0.7))
@@ -463,8 +467,9 @@ example_18_shared_triggers <- race_spec() |>
   add_group("stop_slow_component", members = "stop_slow", attrs = list(component = "slow")) |>
   add_group("shared_stop_trigger",
             members = c("stop_fast", "stop_slow"),
-            attrs = list(shared_trigger = list(id = "stop_gate", q = qlogis(0.01)))) |>
+            attrs = trigger(id = "stop_gate", q = 0.01, draw = "shared")) |>
   set_metadata(mixture = list(
+    mode = "fixed",
     components = list(
       component("fast", weight = 0.25),
       component("slow", weight = 0.75)
@@ -517,6 +522,7 @@ example_19_univalent_stop_change <- race_spec() |>
             members = c("go_left", "go_right", "stop", "change2left", "change2right"),
             attrs = list(component = "go_stop")) |>
   set_metadata(mixture = list(
+    mode = "fixed",
     components = list(component("go_only", weight = 0.5),
                       component("go_stop", weight = 0.5))
   )) |>
@@ -586,6 +592,7 @@ example_20_stim_select_stop <- .stim_base_spec() |>
             members = c("stop1", "stop2"),
             attrs = list(shared_params = list("sigma", "tau"))) |>
   set_metadata(mixture = list(
+    mode = "fixed",
     components = list(
       component("go_only", weight = 0.2),
       component("stop_ignore", weight = 0.4),
@@ -639,6 +646,7 @@ example_21_simple_stop_change <- race_spec() |>
             members = c("go_left", "go_right", "stop", "change2right"),
             attrs = list(component = "go_stop")) |>
   set_metadata(mixture = list(
+    mode = "fixed",
     components = list(component("go_only", weight = 0.5),
                       component("go_stop", weight = 0.5))
   )) |>
@@ -667,9 +675,12 @@ example_22_simple_q <- race_spec() |>
   add_group(
     "shared_trigger",
     members = c("go1", "go2"),
-    attrs = joint_trigger(id = "go_trigger",
-                          q = qlogis(0.10),
-                          param = "go_trigger_q") # name to estimate
+    attrs = trigger(
+      id = "go_trigger",
+      q = 0.10,
+      param = "go_trigger_q",
+      draw = "shared"
+    ) # single gate draw for both
   ) |>
   finalize_model()
 
@@ -678,7 +689,7 @@ params_example_22_simple_q <- c(
   go1.sdlog   = 0.18,
   go2.meanlog = log(0.32),
   go2.sdlog   = 0.18,
-  go_trigger_q = qlogis(0.10)  # estimable shared gate parameter
+  go_trigger_q = 0.10  # estimable shared gate parameter (probability)
 )
 
 # Example 23 – independent shared q (per-acc Bernoulli) for go accumulators
@@ -690,7 +701,7 @@ example_23_shared_q <- race_spec() |>
   add_outcome("Left", "L") |>
   add_outcome("Right", "R") |>
   add_group("par:q_shared", members = c("go_left", "go_right"),
-            attrs = shared_q()) |>
+            attrs = trigger(q = 0.10, param = "q_shared", draw = "independent")) |>
   finalize_model()
 
 params_example_23_shared_q <- c(
@@ -698,7 +709,7 @@ params_example_23_shared_q <- c(
   go_left.sdlog = 0.18,
   go_right.meanlog = log(0.32),
   go_right.sdlog = 0.18,
-  `par:q_shared.q` = qlogis(0.10)
+  q_shared = 0.10
 )
 
 # Example 24 univalent stop change - bimanual
@@ -726,12 +737,13 @@ example_24_univalent_stop_change <- race_spec() |>
             members = c("go_left", "stop", "change2right"),
             attrs = list(component = "go_stop")) |>
     add_group("go_shared_q", members = c("go_left"),
-            attrs = shared_q()) |>
+            attrs = trigger(q = 0.10, param = "go_shared_q", draw = "independent")) |>
     add_group("stop_shared_q", members = c("stop", "change2right"),
-        attrs = shared_q()) |>
+        attrs = trigger(q = 0.10, param = "stop_shared_q", draw = "independent")) |>
 
   set_metadata(
     mixture = list(
+    mode = "fixed",
     components = list(component("go_only", weight = 0.5),
                       component("go_stop", weight = 0.5))
     )
@@ -744,8 +756,8 @@ params_example_24_univalent_stop_change <- c(
   stop.sdlog = .1,
   change2right.meanlog = log(0.3),
   change2right.sdlog = 0.18,
-  go_shared_q.q = qlogis(0.10),
-  stop_shared_q.q = qlogis(0.10)
+  go_shared_q = 0.10,
+  stop_shared_q = 0.10
 )
 
 

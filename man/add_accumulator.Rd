@@ -24,7 +24,7 @@ add_accumulator(
 
 \item{onset}{Onset shift}
 
-\item{q}{Guess probability (logit allowed)}
+\item{q}{Guess probability (0-1)}
 
 \item{tags}{Optional tags list}
 

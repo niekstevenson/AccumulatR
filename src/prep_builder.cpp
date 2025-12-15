@@ -9,13 +9,11 @@
 namespace uuber {
 namespace {
 
-inline double inv_logit(double x) {
-  if (x >= 0) {
-    double z = std::exp(-x);
-    return 1.0 / (1.0 + z);
-  }
-  double z = std::exp(x);
-  return z / (1.0 + z);
+inline double clamp_probability(double value) {
+  if (!std::isfinite(value)) return 0.0;
+  if (value < 0.0) return 0.0;
+  if (value > 1.0) return 1.0;
+  return value;
 }
 
 std::vector<std::string> extract_string_vector(SEXP obj) {
@@ -203,8 +201,7 @@ std::unique_ptr<NativeContext> build_context_from_proto(const NativePrepProto& p
     acc.id = acc_proto.id;
     acc.dist = acc_proto.dist;
     acc.onset = acc_proto.onset;
-    // q supplied on logit scale from R; convert to probability for native context
-    acc.q = inv_logit(acc_proto.q);
+    acc.q = clamp_probability(acc_proto.q);
     acc.components = acc_proto.components;
     acc.shared_trigger_id = acc_proto.shared_trigger_id;
     try {

@@ -265,7 +265,7 @@ race_spec <- function() {
 #' @param id Accumulator id
 #' @param dist Distribution name
 #' @param onset Onset shift
-#' @param q Guess probability (logit allowed)
+#' @param q Guess probability (0-1)
 #' @param tags Optional tags list
 #' @param params Optional parameter list
 #' @param ... Additional named parameters
@@ -275,7 +275,7 @@ race_spec <- function() {
 #' spec <- add_accumulator(spec, "A", "lognormal",
 #'   params = list(meanlog = 0, sdlog = 0.1))
 #' @export
-add_accumulator <- function(spec, id, dist, onset = 0, q = -Inf,
+add_accumulator <- function(spec, id, dist, onset = 0, q = 0,
                             tags = list(), params = NULL, ...) {
   stopifnot(inherits(spec, "race_spec"))
   param_list <- .collect_params(params, list(...))
@@ -385,29 +385,18 @@ set_metadata <- function(spec, ...) {
 # Trigger/helpers for clearer API ---------------------------------------------------
 
 #' Define a joint trigger gate shared across members
-#'
-#' @param id Trigger id
-#' @param q Optional probability value
+#' 
+#' @param id Trigger id (optional; defaults to group id)
+#' @param q Probability (0-1) for trigger failure
 #' @param param Optional parameter name supplying q
+#' @param draw Either "shared" (one draw for all members) or "independent" (same q, independent draws)
 #' @return Trigger descriptor list
 #' @examples
-#' joint_trigger("gate1", q = 0.2)
+#' trigger(q = 0.1, param = "gate_q", draw = "shared")
 #' @export
-joint_trigger <- function(id, q = NULL, param = NULL) {
-  if (missing(id) || is.null(id) || !nzchar(id)) {
-    stop("joint_trigger requires a non-empty id")
-  }
-  list(shared_trigger = list(id = id, q = q, param = param))
-}
-
-#' Shared trigger probability placeholder
-#'
-#' @return Placeholder used in model specs
-#' @examples
-#' shared_q()
-#' @export
-shared_q <- function() {
-  list(shared_params = list("q"))
+trigger <- function(id = NULL, q = NULL, param = NULL, draw = c("shared", "independent")) {
+  draw <- match.arg(draw)
+  list(shared_trigger = list(id = id, q = q, param = param, draw = draw))
 }
 
 #' Build an expression guard node
@@ -527,6 +516,60 @@ race_model <- function(accumulators, pools = list(), outcomes, groups = list(), 
       members <- grp$members
       attrs <- grp$attrs
       if (is.null(members) || length(members) == 0) next
+      trig <- attrs$shared_trigger %||% NULL
+      if (!is.null(trig)) {
+        draw_mode <- trig$draw %||% "shared"
+        trig_id <- trig$id %||% grp$id
+        if (is.null(trig_id) || trig_id == "") {
+          stop(sprintf("Group '%s' trigger must provide a non-empty id", grp$id %||% "<unnamed>"))
+        }
+        default_q <- trig$q %||% NA_real_
+        if (is.na(default_q)) {
+          q_vals <- vapply(members, function(m) {
+            acc_def <- defs[[m]]
+            if (is.null(acc_def)) return(NA_real_)
+            acc_def$q %||% NA_real_
+          }, numeric(1))
+          q_vals <- q_vals[!is.na(q_vals)]
+          if (length(q_vals) == 0) {
+            default_q <- 0
+          } else if (length(unique(q_vals)) == 1) {
+            default_q <- q_vals[[1]]
+          } else {
+            stop(sprintf(
+              "Group '%s' trigger requires a single q value; found %s",
+              trig_id,
+              paste(format(unique(q_vals)), collapse = ", ")
+            ))
+          }
+        }
+        param_name <- trig$param %||% NULL
+        if (identical(draw_mode, "shared")) {
+          shared_triggers[[trig_id]] <- list(
+            id = trig_id,
+            group_id = grp$id %||% trig_id,
+            members = members,
+            q = as.numeric(default_q),
+            param = param_name,
+            draw = draw_mode
+          )
+          for (m in members) {
+            if (!is.null(defs[[m]])) {
+              defs[[m]]$shared_trigger_id <- trig_id
+              defs[[m]]$shared_trigger_q <- as.numeric(default_q)
+              defs[[m]]$q <- as.numeric(default_q)
+            }
+          }
+        } else if (identical(draw_mode, "independent")) {
+          for (m in members) {
+            if (!is.null(defs[[m]])) {
+              defs[[m]]$q <- as.numeric(default_q)
+            }
+          }
+        } else {
+          stop(sprintf("Unknown trigger draw mode '%s'", draw_mode))
+        }
+      }
       if (!is.null(attrs$shared_params)) {
         for (m in members) {
           if (!is.null(defs[[m]])) {
@@ -542,48 +585,6 @@ race_model <- function(accumulators, pools = list(), outcomes, groups = list(), 
           }
         }
       }
-      shared_trigger <- attrs$shared_trigger %||% NULL
-      if (!is.null(shared_trigger)) {
-        trig_id <- shared_trigger$id %||% grp$id
-        if (is.null(trig_id) || trig_id == "") {
-          stop(sprintf("Group '%s' shared_trigger must provide a non-empty id", grp$id %||% "<unnamed>"))
-        }
-        default_q <- shared_trigger$q %||% NA_real_
-        if (is.na(default_q)) {
-          q_vals <- vapply(members, function(m) {
-            acc_def <- defs[[m]]
-            if (is.null(acc_def)) return(NA_real_)
-            acc_def$q %||% NA_real_
-          }, numeric(1))
-          q_vals <- q_vals[!is.na(q_vals)]
-          if (length(q_vals) == 0) {
-            default_q <- 0
-          } else if (length(unique(q_vals)) == 1) {
-            default_q <- q_vals[[1]]
-          } else {
-            stop(sprintf(
-              "Group '%s' shared_trigger requires a single q value; found %s",
-              trig_id,
-              paste(format(unique(q_vals)), collapse = ", ")
-            ))
-          }
-        }
-        param_name <- shared_trigger$param %||% NULL
-        shared_triggers[[trig_id]] <- list(
-          id = trig_id,
-          group_id = grp$id %||% trig_id,
-          members = members,
-          q = as.numeric(default_q),
-          param = param_name
-        )
-        for (m in members) {
-          if (!is.null(defs[[m]])) {
-            defs[[m]]$shared_trigger_id <- trig_id
-            defs[[m]]$shared_trigger_q <- as.numeric(default_q)
-            defs[[m]]$q <- as.numeric(default_q)
-          }
-        }
-      }
     }
   }
 
@@ -594,32 +595,71 @@ race_model <- function(accumulators, pools = list(), outcomes, groups = list(), 
 }
 
 .extract_components <- function(model) {
-  mixture <- model$metadata$mixture
-  if (is.null(mixture) || is.null(mixture$components) || length(mixture$components) == 0) {
-    list(
+  mixture <- model$metadata$mixture %||% list()
+  mode <- mixture$mode %||% "fixed"
+  comps <- mixture$components %||% list()
+  if (length(comps) == 0) {
+    return(list(
       ids = "__default__",
       weights = 1,
       attrs = list(`__default__` = list(guess = NULL)),
-      has_weight_param = FALSE
-    )
+      has_weight_param = FALSE,
+      mode = mode,
+      reference = "__default__"
+    ))
+  }
+  ids <- vapply(comps, `[[`, character(1), "id")
+  attrs <- setNames(vector("list", length(ids)), ids)
+  has_wparam <- logical(length(ids))
+  weights <- vapply(comps, function(cmp) cmp$weight %||% 1, numeric(1))
+  weight_params <- vapply(comps, function(cmp) cmp$attrs$weight_param %||% NA_character_, character(1))
+
+  reference <- mixture$reference %||% NA_character_
+  if (identical(mode, "sample")) {
+    if (is.na(reference) || !nzchar(reference)) {
+      # choose first component without a weight_param, else first component
+      idx_no_param <- which(is.na(weight_params) | !nzchar(weight_params))
+      ref_idx <- if (length(idx_no_param) > 0) idx_no_param[[length(idx_no_param)]] else 1L
+      reference <- ids[[ref_idx]]
+      message(sprintf("mixture reference not provided; using '%s' as reference component", reference))
+    } else if (!reference %in% ids) {
+      stop("mixture reference '", reference, "' must match a component id")
+    }
+    for (i in seq_along(ids)) {
+      cmp_id <- ids[[i]]
+      wp <- comps[[i]]$attrs$weight_param %||% NULL
+      if (!identical(cmp_id, reference) && (is.null(wp) || !nzchar(wp))) {
+        stop(sprintf("Component '%s' must define weight_param in sampled mixtures (reference is '%s')", cmp_id, reference))
+      }
+      has_wparam[[i]] <- !is.null(wp) && nzchar(wp)
+      attrs[[cmp_id]] <- list(
+        guess = comps[[i]]$attrs$guess %||% NULL,
+        weight_param = wp
+      )
+    }
   } else {
-    comps <- mixture$components
-    ids <- vapply(comps, `[[`, character(1), "id")
-    weights <- vapply(comps, function(cmp) cmp$weight %||% 1, numeric(1))
+    # fixed mode: weights only used for defaults
     if (all(is.na(weights))) weights <- rep(1, length(weights))
     weights <- weights / sum(weights)
-    attrs <- setNames(vector("list", length(ids)), ids)
-    has_wparam <- logical(length(ids))
     for (i in seq_along(ids)) {
       wp <- comps[[i]]$attrs$weight_param %||% NULL
-      has_wparam[[i]] <- !is.null(wp)
+      has_wparam[[i]] <- !is.null(wp) && nzchar(wp)
       attrs[[ids[[i]]]] <- list(
         guess = comps[[i]]$attrs$guess %||% NULL,
         weight_param = wp
       )
     }
-    list(ids = ids, weights = weights, attrs = attrs, has_weight_param = has_wparam)
+    if (is.na(reference) || !nzchar(reference)) reference <- ids[[1]]
   }
+
+  list(
+    ids = ids,
+    weights = weights,
+    attrs = attrs,
+    has_weight_param = has_wparam,
+    mode = mode,
+    reference = reference
+  )
 }
 
 .prepare_pool_defs <- function(model) {
@@ -679,6 +719,8 @@ prepare_model <- function(model) {
   )
   comp_tbl$has_weight_param <- comp_defs$has_weight_param
   comp_tbl$attrs <- I(comp_defs$attrs[match(comp_ids, names(comp_defs$attrs))])
+  comp_tbl$mode <- comp_defs$mode %||% "fixed"
+  comp_tbl$reference <- comp_defs$reference %||% comp_ids[[1]]
   comp_tbl
 }
 
@@ -897,6 +939,18 @@ build_params_df <- function(model,
   if (length(spec_groups) > 0) {
     for (grp in spec_groups) {
       grp_attrs <- grp[["attrs"]] %||% list()
+      trig <- grp_attrs[["shared_trigger"]] %||% NULL
+      if (!is.null(trig)) {
+        draw_mode <- trig$draw %||% "shared"
+        if (identical(draw_mode, "independent")) {
+          param_nm <- trig$param %||% paste0(grp[["id"]] %||% "trigger", ".q")
+          members <- grp[["members"]] %||% character(0)
+          for (member in members) {
+            if (is.null(shared_map[[member]])) shared_map[[member]] <- list()
+            shared_map[[member]][["q"]] <- param_nm
+          }
+        }
+      }
       sp <- grp_attrs[["shared_params"]] %||% NULL
       members <- grp[["members"]] %||% character(0)
       if (is.null(sp) || length(members) == 0) next
@@ -977,6 +1031,35 @@ build_params_df <- function(model,
     )
   })
   base_df <- do.call(rbind, base_rows)
+
+  # Mixture weight parameters (sampled mixtures only, non-reference components)
+  mix <- spec$metadata$mixture %||% list()
+  mix_mode <- mix$mode %||% "fixed"
+  if (identical(mix_mode, "sample")) {
+    comps <- mix$components %||% list()
+    if (length(comps) == 0) stop("Sampled mixtures require component definitions")
+    ids <- vapply(comps, `[[`, character(1), "id")
+    attrs_list <- lapply(comps, function(cmp) cmp$attrs %||% list())
+    reference <- mix$reference %||% ids[[1]]
+    if (!reference %in% ids) stop("mixture reference must match a component id")
+    for (i in seq_along(ids)) {
+      cmp_id <- ids[[i]]
+      if (identical(cmp_id, reference)) next
+      wp <- attrs_list[[i]][["weight_param"]]
+      if (is.null(wp) || !nzchar(wp)) {
+        stop(sprintf("Component '%s' must define weight_param for sampled mixtures (reference %s)", cmp_id, reference))
+      }
+      if (!wp %in% names(param_values)) {
+        stop(sprintf("Missing mixture weight parameter '%s' for component '%s'", wp, cmp_id))
+      }
+      wval <- as.numeric(param_values[[wp]])
+      if (length(wval) != 1L || is.na(wval) || wval < 0 || wval > 1) {
+        stop(sprintf("Mixture weight parameter '%s' must be a probability in [0,1]", wp))
+      }
+      base_df[[wp]] <- rep(wval, nrow(base_df))
+    }
+  }
+
   extra_names <- setdiff(names(param_values), all_required_names)
   if (length(extra_names) > 0L) {
     for (nm in extra_names) {
@@ -986,8 +1069,6 @@ build_params_df <- function(model,
   # Propagate shared trigger parameters (group-level) into per-acc rows:
   # - set per-acc q to 0 (success-path) and attach shared_trigger_id so the
   #   native layer applies the joint gate once using shared_trigger_q.
-  # - if the param value is on the logit scale, store raw value; native will
-  #   convert as needed.
   if (!is.null(spec$groups) && length(spec$groups) > 0) {
     if (!"shared_trigger_id" %in% names(base_df)) {
       base_df$shared_trigger_id <- NA_character_
@@ -998,6 +1079,8 @@ build_params_df <- function(model,
     for (grp in spec$groups) {
       trig <- grp$attrs$shared_trigger %||% NULL
       if (is.null(trig)) next
+      draw_mode <- trig$draw %||% "shared"
+      if (!identical(draw_mode, "shared")) next
       param_nm <- trig$param %||% NULL
       members <- grp$members %||% character(0)
       if (length(members) == 0) next
@@ -1013,11 +1096,6 @@ build_params_df <- function(model,
       # Joint gate: per-acc q is handled by the gate; avoid per-acc q overrides.
       # Leave q as NA for these rows so downstream logic does not treat it as an override.
       base_df$q[mask] <- NA_real_
-      # Keep q on logit scale for inspection; add passthrough column
-      if (!"shared_trigger_q_logit" %in% names(base_df)) {
-        base_df$shared_trigger_q_logit <- NA_real_
-      }
-      base_df$shared_trigger_q_logit[mask] <- base_df$shared_trigger_q[mask]
     }
   }
   base_n <- nrow(base_df)

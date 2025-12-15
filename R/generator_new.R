@@ -301,6 +301,86 @@
   if (is.null(val) || !nzchar(val)) "__base__" else val
 }
 
+.component_weights_for_trial <- function(structure, trial_id, available_components,
+                                         trial_rows = NULL, component_weights = NULL) {
+  comp_table <- structure$components
+  base_weights <- comp_table$weight[match(available_components, comp_table$component_id)]
+  mode <- comp_table$mode[[1]] %||% "fixed"
+  if (!identical(mode, "sample")) {
+    if (!is.null(component_weights)) {
+      rows <- component_weights[
+        component_weights$trial == trial_id &
+          component_weights$component %in% available_components,
+        ,
+        drop = FALSE
+      ]
+      if (nrow(rows) > 0L) {
+        base_weights <- rows$weight
+      }
+    }
+    if (length(base_weights) != length(available_components) || all(is.na(base_weights))) {
+      base_weights <- rep(1 / length(available_components), length(available_components))
+    } else {
+      if (any(!is.finite(base_weights) | base_weights < 0)) {
+        stop("Component weights must be non-negative finite numbers")
+      }
+      total <- sum(base_weights)
+      if (!is.finite(total) || total <= 0) {
+        base_weights <- rep(1 / length(available_components), length(available_components))
+      } else {
+        base_weights <- base_weights / total
+      }
+    }
+    return(base_weights)
+  }
+  # mode == "sample": use per-component weight_param values (probabilities) for non-reference,
+  # reference weight is residual.
+  comp_attrs <- comp_table$attrs
+  ref_id <- comp_table$reference[[1]] %||% available_components[[1]]
+  weights <- numeric(length(available_components))
+  names(weights) <- available_components
+  sum_nonref <- 0
+  for (i in seq_along(available_components)) {
+    cid <- available_components[[i]]
+    if (identical(cid, ref_id)) next
+    attrs <- comp_attrs[[cid]] %||% list()
+    wp <- attrs$weight_param
+    if (is.null(wp) || !nzchar(wp)) {
+      stop(sprintf("Component '%s' missing weight_param for sampled mixture", cid))
+    }
+    val <- NA_real_
+    if (!is.null(trial_rows) && wp %in% names(trial_rows)) {
+      vals <- trial_rows[[wp]]
+      if (!is.null(vals) && length(vals) > 0) val <- as.numeric(vals[[1]])
+    }
+    if (is.na(val)) {
+      # fallback to base weight if provided
+      idx <- which(comp_table$component_id == cid)
+      if (length(idx) == 1) val <- comp_table$weight[[idx]]
+    }
+    if (is.na(val) || !is.finite(val) || val < 0 || val > 1) {
+      stop(sprintf("Mixture weight '%s' must be a probability in [0,1]", wp))
+    }
+    weights[[i]] <- val
+    sum_nonref <- sum_nonref + val
+  }
+  # reference weight
+  if (ref_id %in% available_components) {
+    ref_idx <- match(ref_id, available_components)
+    ref_weight <- 1 - sum_nonref
+    if (ref_weight < -1e-8) stop("Mixture weights sum to >1; check non-reference weight params")
+    if (ref_weight < 0) ref_weight <- 0
+    weights[[ref_idx]] <- ref_weight
+  }
+  total <- sum(weights)
+  if (!is.finite(total) || total <= 0) {
+    weights <- rep(1 / length(available_components), length(available_components))
+  } else {
+    weights <- weights / total
+  }
+  weights
+}
+
 .generator_param_state_from_rows <- function(prep, params_rows) {
   if (is.null(params_rows) || nrow(params_rows) == 0L) {
     return(list(accs = list(), shared = list()))
@@ -322,7 +402,10 @@
       if (is.null(vals) || length(vals) == 0L) next
       val <- vals[[1]]
       if (length(val) == 1L && !is.na(val)) {
-        prob <- if (val < 0 || val > 1) plogis(val) else as.numeric(val)
+        if (val < 0 || val > 1) {
+          stop(sprintf("Shared trigger '%s' probability must be in [0,1]", param_name))
+        }
+        prob <- as.numeric(val)
         shared_entries[[trig$id]] <- list(prob = prob)
       }
     }
@@ -375,18 +458,19 @@
   q_override <- NULL
   if (!is.null(q_raw) && length(q_raw) > 0L && !is.na(q_raw[[1]])) {
     tmp <- as.numeric(q_raw[[1]])
+    if (tmp < 0 || tmp > 1) {
+      stop("q must be a probability in [0,1]")
+    }
     if (has_shared && identical(tmp, base_def$q %||% 0)) {
       q_override <- NULL
     } else {
       q_override <- tmp
     }
   }
-  # q values are supplied on the logit scale; convert to probability when used
-  q_prob_override <- if (!is.null(q_override)) plogis(q_override) else NULL
-  base_shared_prob <- if (!is.null(base_def$shared_trigger_q)) plogis(base_def$shared_trigger_q) else NULL
-  base_q_prob <- if (!is.null(base_def$q)) plogis(base_def$q) else NULL
-  gate_prob <- q_prob_override %||% base_shared_prob %||% base_q_prob %||% 0
-  q_val <- if (has_shared) 0 else (q_prob_override %||% base_q_prob %||% 0)
+  base_shared_prob <- if (!is.null(base_def$shared_trigger_q)) as.numeric(base_def$shared_trigger_q) else NULL
+  base_q_prob <- if (!is.null(base_def$q)) as.numeric(base_def$q) else NULL
+  gate_prob <- q_override %||% base_shared_prob %||% base_q_prob %||% 0
+  q_val <- if (has_shared) 0 else (q_override %||% base_q_prob %||% 0)
   shared_id <- NULL
   if ("shared_trigger_id" %in% names(row)) {
     shared_raw <- row$shared_trigger_id
@@ -614,35 +698,19 @@ simulate.model_structure <- function(structure,
       }
     }
     if (length(available_components) == 0L) available_components <- comp_ids
-    weights <- comp_table$weight[match(available_components, comp_table$component_id)]
-    if (!is.null(component_weights)) {
-      w_rows <- component_weights[
-        component_weights$trial == tid &
-          component_weights$component %in% available_components,
-        ,
-        drop = FALSE
-      ]
-      if (nrow(w_rows) > 0L) {
-        weights <- w_rows$weight
-      }
-    }
-    if (length(weights) != length(available_components) || all(is.na(weights))) {
-      weights <- rep(1 / length(available_components), length(available_components))
-    } else {
-      if (any(!is.finite(weights) | weights < 0)) {
-        stop("Component weights must be non-negative finite numbers")
-      }
-      total_w <- sum(weights)
-      if (!is.finite(total_w) || total_w <= 0) {
-        weights <- rep(1 / length(available_components), length(available_components))
-      } else {
-        weights <- weights / total_w
-      }
-    }
-    chosen_component <- if (length(available_components) == 1L) {
+
+    comp_weights <- .component_weights_for_trial(
+      structure,
+      tid,
+      available_components,
+      trial_rows = trial_rows,
+      component_weights = component_weights
+    )
+    chosen_component <- if (length(available_components) == 1L ||
+                             !identical(comp_table$mode[[1]] %||% "fixed", "sample")) {
       available_components[[1]]
     } else {
-      sample(available_components, size = 1L, prob = weights)
+      sample(available_components, size = 1L, prob = comp_weights)
     }
     comp_record[[i]] <- chosen_component
     component_rows <- .generator_component_rows(trial_rows, chosen_component)

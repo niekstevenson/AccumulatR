@@ -480,16 +480,6 @@ inline TrialAccumulatorParams base_params(const uuber::NativeAccumulator& base) 
   return p;
 }
 
-inline double inv_logit(double x) {
-  if (x >= 0) {
-    double z = std::exp(-x);
-    return 1.0 / (1.0 + z);
-  } else {
-    double z = std::exp(x);
-    return z / (1.0 + z);
-  }
-}
-
 // Build a full parameter set from base context when no trial-level overrides are supplied.
 inline TrialParamSet build_base_paramset(const uuber::NativeContext& ctx) {
   TrialParamSet ps;
@@ -532,12 +522,7 @@ inline std::vector<SharedTriggerInfo> collect_shared_triggers(
         }
       }
       if (!q_set) continue;
-      // If stored on the logit scale, convert to prob for the gate Bernoulli.
-      if (q_val < 0.0 || q_val > 1.0) {
-        q_val = inv_logit(q_val);
-      }
-      if (q_val < 0.0) q_val = 0.0;
-      if (q_val > 1.0) q_val = 1.0;
+      q_val = clamp_probability(q_val);
       info.q = q_val;
       out.push_back(info);
     }
@@ -2758,19 +2743,18 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
       override.shared_trigger_id = base.shared_trigger_id;
       has_shared = !override.shared_trigger_id.empty();
     }
-    // Shared gate probability from column (logit allowed) or base; per-acc q=0 on success path.
+    // Shared gate probability from column or base; per-acc q=0 on success path.
     if (has_shared) {
       double gate_q = base.q;
       if (i < shared_q_col.size() && !Rcpp::NumericVector::is_na(shared_q_col[i])) {
         gate_q = static_cast<double>(shared_q_col[i]);
       }
-      if (gate_q < 0.0 || gate_q > 1.0) gate_q = inv_logit(gate_q);
       gate_q = clamp_probability(gate_q);
       override.shared_q = gate_q;
       override.q = 0.0;
     } else {
       if (i < q_col.size() && !Rcpp::NumericVector::is_na(q_col[i])) {
-        override.q = inv_logit(static_cast<double>(q_col[i]));
+        override.q = clamp_probability(static_cast<double>(q_col[i]));
       } else {
         override.q = base.q;
       }
@@ -4039,20 +4023,19 @@ Rcpp::List cpp_update_entries(SEXP ctxSEXP,
         if (std::isfinite(v)) override.onset = v;
       }
       // Joint gate: if shared_trigger_id is present, use shared_trigger_q column for the gate
-      // (logit allowed) and force per-acc q to 0 for the success path. Otherwise, use q as
-      // an independent per-acc Bernoulli (logit).
+      // and force per-acc q to 0 for the success path. Otherwise, use q as
+      // an independent per-acc Bernoulli (probability scale).
       bool has_shared = !override.shared_trigger_id.empty();
       double gate_q = params_mat(row_idx, shared_q_idx);
       if (has_shared) {
         if (!std::isfinite(gate_q)) gate_q = override.shared_q;
-        if (gate_q < 0.0 || gate_q > 1.0) gate_q = inv_logit(gate_q);
         gate_q = clamp_probability(gate_q);
         override.shared_q = gate_q;
         override.q = 0.0;
       } else if (q_idx >= 0) {
         double v = params_mat(row_idx, q_idx);
         if (std::isfinite(v)) {
-          override.q = inv_logit(v);
+          override.q = clamp_probability(v);
           override.shared_q = override.q;
         }
       }

@@ -27,14 +27,14 @@ with_native_only <- function(expr) {
 }
 
 # 1. Which examples to run
-example_ids <- names(new_api_examples)[7]
+example_ids <- names(new_api_examples)[23]
 
 # Optional overrides via env vars
 if (nzchar(Sys.getenv("UUBER_EXAMPLES"))) {
   example_ids <- strsplit(Sys.getenv("UUBER_EXAMPLES"), ",", fixed = TRUE)[[1]]
   example_ids <- trimws(example_ids)
 }
-n_trials <- as.integer(Sys.getenv("UUBER_N_TRIALS", "1000"))
+n_trials <- as.integer(Sys.getenv("UUBER_N_TRIALS", "3000"))
 seed <- as.integer(Sys.getenv("UUBER_SEED", "2025"))
 profile_percent <- as.numeric(Sys.getenv("UUBER_PROFILE_PERCENT", "0.10"))
 profile_points <- as.integer(Sys.getenv("UUBER_PROFILE_POINTS", "10"))

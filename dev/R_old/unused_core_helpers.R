@@ -223,7 +223,7 @@ likelihood_reset_cache <- function(prep) {
     names(selected_entries) <- NULL
   }
   res <- tryCatch(
-    native_loglik_from_params_cpp(
+    cpp_loglik(
       native_ctx,
       structure,
       selected_entries,
@@ -301,4 +301,3 @@ likelihood_reset_cache <- function(prep) {
   }
   total
 }
-

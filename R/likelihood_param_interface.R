@@ -530,126 +530,6 @@ build_likelihood_context <- function(structure, params_df, data_df,
   base
 }
 
-.component_plan_fallback <- function(structure, component_ids, trial_rows,
-                                     forced_component = NULL, component_weights = NULL) {
-  comps <- component_ids
-  if (!is.null(forced_component) && !is.na(forced_component)) {
-    comps <- intersect(component_ids, as.character(forced_component))
-  } else if (!is.null(trial_rows) && "component" %in% names(trial_rows)) {
-    listed <- unique(trial_rows$component)
-    listed <- listed[!is.na(listed)]
-    if (length(listed) > 0L) {
-      comps <- intersect(component_ids, listed)
-    }
-  }
-  if (length(comps) == 0L) comps <- component_ids
-  trial_id <- if (!is.null(trial_rows) && "trial" %in% names(trial_rows) && nrow(trial_rows) > 0L) {
-    trial_rows$trial[[1]]
-  } else NA_integer_
-  weights <- .likelihood_component_weights(
-    structure,
-    trial_id,
-    comps,
-    structure$components$weight,
-    component_weights
-  )
-  list(components = comps, weights = weights)
-}
-
-.native_component_plan <- function(structure, trial_rows,
-                                   forced_component = NULL,
-                                   component_weights = NULL,
-                                   component_ids = NULL) {
-  forced_chr <- forced_component
-  if (length(forced_chr) == 0L || is.null(forced_chr) || is.na(forced_chr)) {
-    forced_chr <- NULL
-  } else {
-    forced_chr <- as.character(forced_chr)[[1]]
-  }
-  trial_df <- if (is.null(trial_rows)) {
-    data.frame()
-  } else {
-    trial_rows
-  }
-  component_weights_df <- component_weights %||% NULL
-  plan <- tryCatch(
-    native_component_plan_exported(
-      structure,
-      trial_df,
-      forced_chr,
-      component_weights_df
-    ),
-    error = function(e) NULL
-  )
-  if (is.null(plan)) {
-    return(.component_plan_fallback(structure, component_ids, trial_rows, forced_component, component_weights))
-  }
-  comps <- as.character(plan$components %||% character(0))
-  weights <- as.numeric(plan$weights %||% numeric(0))
-  if (length(comps) == 0L || length(weights) != length(comps)) {
-    return(.component_plan_fallback(structure, component_ids, trial_rows, forced_component, component_weights))
-  }
-  list(components = comps, weights = weights)
-}
-
-.likelihood_component_label <- function(component) {
-  if (is.null(component) || length(component) == 0L) {
-    "__default__"
-  } else {
-    as.character(component)[[1]]
-  }
-}
-.native_trial_mixture_eval <- function(prep, outcome_label, rt_val, component_plan,
-                                       forced_component = NULL,
-                                       trial_rows = NULL,
-                                       guess_donors = NULL) {
-  if (is.null(prep) || is.null(outcome_label) || length(outcome_label) == 0L) return(NULL)
-  outcome_chr <- as.character(outcome_label)[[1]]
-  if (is.na(outcome_chr) || is.na(rt_val) || !is.finite(rt_val) || rt_val < 0) return(NULL)
-  components <- component_plan$components %||% character(0)
-  if (length(components) == 0L) return(NULL)
-  outcome_defs <- prep[["outcomes"]] %||% list()
-  outcome_def <- outcome_defs[[outcome_chr]]
-  if (is.null(outcome_def)) return(NULL)
-  expr <- outcome_def[["expr"]]
-  if (is.null(expr)) return(NULL)
-  compiled <- .expr_lookup_compiled(expr, prep)
-  if (is.null(compiled)) return(NULL)
-  competitor_map <- .prep_competitors(prep) %||% list()
-  competitor_exprs <- competitor_map[[outcome_chr]] %||% list()
-  if (length(competitor_exprs) > 0L) {
-    comp_nodes <- lapply(competitor_exprs, function(ex) .expr_lookup_compiled(ex, prep))
-    if (any(vapply(comp_nodes, is.null, logical(1)))) return(NULL)
-    comp_ids <- vapply(comp_nodes, function(node) as.integer(node$id %||% NA_integer_), integer(1))
-    if (any(is.na(comp_ids))) return(NULL)
-  } else {
-    comp_ids <- integer(0)
-  }
-  native_ctx <- .prep_native_context(prep)
-  if (!inherits(native_ctx, "externalptr")) return(NULL)
-  forced_chr <- NULL
-  if (!is.null(forced_component) && !is.na(forced_component)) {
-    forced_chr <- as.character(forced_component)[[1]]
-  }
-  trial_df <- if (is.null(trial_rows)) data.frame() else trial_rows
-  res <- tryCatch(
-    native_trial_mixture_cpp(
-      native_ctx,
-      as.integer(compiled$id),
-      as.numeric(rt_val),
-      as.character(components),
-      as.numeric(component_plan$weights %||% numeric(0)),
-      forced_chr,
-      as.integer(comp_ids),
-      trial_df,
-      guess_donors %||% list()
-    ),
-    error = function(e) NA_real_
-  )
-  if (!is.finite(res) || res < 0) return(NULL)
-  res
-}
-
 .aggregate_observed_probs <- function(prep, probs, include_na = TRUE) {
   labels <- names(prep[["outcomes"]])
   labels <- Filter(function(lbl) {
@@ -875,7 +755,7 @@ log_likelihood.likelihood_context <- function(likelihood_context, parameters, ..
     parameters <- list(.params_df_to_matrix(as.data.frame(parameters)))
   }
   params_list <- lapply(parameters, function(df) .params_df_to_matrix(as.data.frame(df)))
-  native_loglik_param_repeat_cpp(
+  cpp_loglik_multiple(
     native_ctx,
     ctx$structure,
     entries,

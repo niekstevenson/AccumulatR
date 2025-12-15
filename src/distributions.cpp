@@ -3321,13 +3321,14 @@ double evaluate_na_map_mix(SEXP ctxSEXP,
   return mix;
 }
 
-Rcpp::List native_loglik_from_params_cpp(SEXP ctxSEXP,
-                                         Rcpp::List structure,
-                                         Rcpp::List trial_entries,
-                                         Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt,
-                                         double rel_tol,
-                                         double abs_tol,
-                                         int max_depth) {
+// [[Rcpp::export]]
+Rcpp::List cpp_loglik(SEXP ctxSEXP,
+                      Rcpp::List structure,
+                      Rcpp::List trial_entries,
+                      Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt,
+                      double rel_tol,
+                      double abs_tol,
+                      int max_depth) {
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   R_xlen_t n_trials = trial_entries.size();
   Rcpp::NumericVector per_trial(n_trials);
@@ -3941,9 +3942,10 @@ Rcpp::List native_plan_entries_cpp(SEXP ctxSEXP,
                             alias_specs);
 }
 
-Rcpp::List native_update_entries_from_params_cpp(SEXP ctxSEXP,
-                                                 Rcpp::List entries,
-                                                 SEXP params_obj) {
+// [[Rcpp::export]]
+Rcpp::List cpp_update_entries(SEXP ctxSEXP,
+                              Rcpp::List entries,
+                              SEXP params_obj) {
   if (!(Rf_isMatrix(params_obj) && TYPEOF(params_obj) == REALSXP)) {
     Rcpp::stop("params must be a numeric matrix");
   }
@@ -4139,14 +4141,14 @@ Rcpp::NumericMatrix native_debug_trial_params_cpp(Rcpp::List entry) {
 }
 
 // [[Rcpp::export]]
-Rcpp::NumericVector native_loglik_param_repeat_cpp(SEXP ctxSEXP,
-                                                   Rcpp::List structure,
-                                                   Rcpp::List entries,
-                                                   Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt,
-                                                   Rcpp::List params_list,
-                                                   double rel_tol,
-                                                   double abs_tol,
-                                                   int max_depth) {
+Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP,
+                                        Rcpp::List structure,
+                                        Rcpp::List entries,
+                                        Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt,
+                                        Rcpp::List params_list,
+                                        double rel_tol,
+                                        double abs_tol,
+                                        int max_depth) {
   // Switching parameter sets must invalidate caches that depend on them (notably NA maps).
   auto reset_param_sensitive_caches = [](uuber::NativeContext& ctx) {
     ctx.na_map_cache.clear();
@@ -4157,17 +4159,17 @@ Rcpp::NumericVector native_loglik_param_repeat_cpp(SEXP ctxSEXP,
   Rcpp::NumericVector out(params_list.size());
   for (R_xlen_t i = 0; i < params_list.size(); ++i) {
     SEXP params_obj = params_list[i];
-    entries = native_update_entries_from_params_cpp(ctxSEXP, entries, params_obj);
+    entries = cpp_update_entries(ctxSEXP, entries, params_obj);
     if (ctx) {
       reset_param_sensitive_caches(*ctx);
     }
-    Rcpp::List res = native_loglik_from_params_cpp(ctxSEXP,
-                                                   structure,
-                                                   entries,
-                                                   component_weights_opt,
-                                                   rel_tol,
-                                                   abs_tol,
-                                                   max_depth);
+    Rcpp::List res = cpp_loglik(ctxSEXP,
+                                structure,
+                                entries,
+                                component_weights_opt,
+                                rel_tol,
+                                abs_tol,
+                                max_depth);
     out[i] = Rcpp::as<double>(res["loglik"]);
   }
   return out;

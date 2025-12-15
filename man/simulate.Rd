@@ -6,9 +6,23 @@
 \alias{simulate.default}
 \title{Simulate trials from parameter rows}
 \usage{
-simulate(structure, params_df, seed = NULL, keep_detail = FALSE, ...)
+simulate(
+  structure,
+  params_df,
+  seed = NULL,
+  keep_detail = FALSE,
+  keep_component = NULL,
+  ...
+)
 
-\method{simulate}{model_structure}(structure, params_df, seed = NULL, keep_detail = FALSE, ...)
+\method{simulate}{model_structure}(
+  structure,
+  params_df,
+  seed = NULL,
+  keep_detail = FALSE,
+  keep_component = NULL,
+  ...
+)
 
 \method{simulate}{default}(structure, ...)
 }
@@ -20,6 +34,9 @@ simulate(structure, params_df, seed = NULL, keep_detail = FALSE, ...)
 \item{seed}{Optional RNG seed}
 
 \item{keep_detail}{Whether to retain per-trial detail}
+
+\item{keep_component}{Whether to include the chosen component in the output (if multiple components exist).
+If `NULL` (default), fixed mixtures keep the component; sampled mixtures drop it.}
 
 \item{...}{Unused; for S3 compatibility}
 }

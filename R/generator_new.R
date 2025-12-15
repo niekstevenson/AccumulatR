@@ -253,7 +253,7 @@
 .param_override_columns <- function(params_rows) {
   base_cols <- c(
     "trial", "component", "accumulator",
-    "type", "role",
+    "type",
     "outcome", "rt", "params", "condition",
     "component_weight"
   )
@@ -566,6 +566,8 @@
 #' @param params_df Parameter data frame
 #' @param seed Optional RNG seed
 #' @param keep_detail Whether to retain per-trial detail
+#' @param keep_component Whether to include the chosen component in the output (if multiple components exist).
+#'   If `NULL` (default), fixed mixtures keep the component; sampled mixtures drop it.
 #' @param ... Unused; for S3 compatibility
 #' @return Data frame of simulated outcomes/RTs (with optional detail)
 #' @examples
@@ -582,6 +584,7 @@ simulate <- function(structure,
                      params_df,
                      seed = NULL,
                      keep_detail = FALSE,
+                     keep_component = NULL,
                      ...) {
   UseMethod("simulate")
 }
@@ -592,6 +595,7 @@ simulate.model_structure <- function(structure,
                                      params_df,
                                      seed = NULL,
                                      keep_detail = FALSE,
+                                     keep_component = NULL,
                                      ...) {
   if (is.null(params_df) || nrow(params_df) == 0L) {
     stop("Parameter data frame must contain at least one row")
@@ -600,6 +604,7 @@ simulate.model_structure <- function(structure,
   prep <- structure$prep
   comp_table <- structure$components
   comp_ids <- comp_table$component_id
+  mix_mode <- comp_table$mode[[1]] %||% "fixed"
   if (!"trial" %in% names(params_df)) {
     params_df$trial <- 1L
   }
@@ -671,7 +676,8 @@ simulate.model_structure <- function(structure,
     rt = rts,
     stringsAsFactors = FALSE
   )
-  if (length(comp_ids) > 1L || "component" %in% names(params_df)) {
+  keep_component <- keep_component %||% if (identical(mix_mode, "sample")) FALSE else TRUE
+  if (keep_component && (length(comp_ids) > 1L || "component" %in% names(params_df))) {
     out_df$component <- comp_record
   }
   if (keep_detail) attr(out_df, "details") <- details

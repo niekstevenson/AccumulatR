@@ -261,8 +261,8 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     example_7_mixture = list(spec = example_7_mixture, params = params_example_7_mixture),
     example_10_exclusion = list(spec = example_10_exclusion, params = params_example_10_exclusion),
     example_16_guard_tie_simple = list(spec = example_16_guard_tie_simple, params = params_example_16_guard_tie_simple),
-    example_21_simple_q = list(spec = example_21_simple_q, params = params_example_22_simple_q),
-    example_22_shared_q = list(spec = example_22_shared_q, params = params_example_23_shared_q)
+    example_21_simple_q = list(spec = example_21_simple_q, params = params_example_21_simple_q),
+    example_22_shared_q = list(spec = example_22_shared_q, params = params_example_22_shared_q)
   )
 
   # Test each model -----------------------------------------------------------

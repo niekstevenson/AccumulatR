@@ -728,24 +728,18 @@ prepare_model <- function(model) {
   acc_ids <- names(acc_defs)
   if (length(acc_ids) == 0L) {
     return(data.frame(
-      accumulator_id = character(0),
-      accumulator_index = integer(0),
       dist = character(0),
       onset = numeric(0),
       q = numeric(0),
-      role = character(0),
       shared_trigger_id = character(0),
       shared_trigger_q = numeric(0),
       stringsAsFactors = FALSE
     ))
   }
   acc_df <- data.frame(
-    accumulator_id = acc_ids,
-    accumulator_index = seq_along(acc_ids),
     dist = vapply(acc_defs, function(acc) acc$dist %||% NA_character_, character(1)),
     onset = vapply(acc_defs, function(acc) acc$onset %||% 0, numeric(1)),
     q = vapply(acc_defs, function(acc) acc$q %||% 0, numeric(1)),
-    role = rep("std", length(acc_ids)),
     shared_trigger_id = vapply(acc_defs, function(acc) acc$shared_trigger_id %||% NA_character_, character(1)),
     shared_trigger_q = vapply(acc_defs, function(acc) acc$shared_trigger_q %||% NA_real_, numeric(1)),
     stringsAsFactors = FALSE
@@ -1001,7 +995,6 @@ build_params_df <- function(model,
     acc <- accs[[idx]]
     acc_id <- acc_ids[[idx]]
     prep_acc <- prep_accs[[acc_id]] %||% list()
-    role_value <- (acc[["tags"]] %||% list())[["role"]] %||% "std"
     row_vals <- setNames(as.list(rep(NA_real_, length(suffix_union))), suffix_union)
     for (suffix in per_acc_params[[acc_id]]) {
       nm <- paste0(acc_id, ".", suffix)
@@ -1023,7 +1016,6 @@ build_params_df <- function(model,
       trial = 1L,
       accumulator = idx,
       component = if (is.null(component)) NA_character_ else as.character(component),
-      role = role_value,
       row_vals,
       stringsAsFactors = FALSE
     )

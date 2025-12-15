@@ -27,7 +27,7 @@ with_native_only <- function(expr) {
 }
 
 # 1. Which examples to run
-example_ids <- names(new_api_examples)[3]
+example_ids <- names(new_api_examples)[2]
 
 # Optional overrides via env vars
 if (nzchar(Sys.getenv("UUBER_EXAMPLES"))) {
@@ -57,6 +57,7 @@ for (example_id in example_ids) {
     rt = sim$rt,
     stringsAsFactors = FALSE
   )
+  data_df$component <- sim$component
   obs_counts <- table(data_df$outcome, useNA = "ifany")
   obs_probs <- prop.table(obs_counts)
   cat("Observed outcome probabilities (simulated data):\n")

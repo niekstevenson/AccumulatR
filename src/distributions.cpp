@@ -2567,7 +2567,7 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
 
   std::unordered_set<std::string> base_cols = {
     "trial", "component", "accumulator",
-    "type", "role", "outcome", "rt", "params", "onset", "q",
+    "type", "outcome", "rt", "params", "onset", "q",
     "condition", "component_weight", "shared_trigger_id",
     "dist", "components"
   };

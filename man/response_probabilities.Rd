@@ -8,21 +8,9 @@
 \usage{
 \method{response_probabilities}{default}(structure, ...)
 
-response_probabilities(
-  structure,
-  params_df,
-  component_weights = NULL,
-  include_na = TRUE,
-  ...
-)
+response_probabilities(structure, params_df, include_na = TRUE, ...)
 
-\method{response_probabilities}{model_structure}(
-  structure,
-  params_df,
-  component_weights = NULL,
-  include_na = TRUE,
-  ...
-)
+\method{response_probabilities}{model_structure}(structure, params_df, include_na = TRUE, ...)
 }
 \arguments{
 \item{structure}{Model structure}
@@ -30,8 +18,6 @@ response_probabilities(
 \item{...}{Unused; for S3 compatibility}
 
 \item{params_df}{Parameter data frame (one or more trials)}
-
-\item{component_weights}{Optional component weights}
 
 \item{include_na}{Whether to include NA outcome mass}
 }

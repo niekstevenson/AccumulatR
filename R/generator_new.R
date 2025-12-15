@@ -302,22 +302,11 @@
 }
 
 .component_weights_for_trial <- function(structure, trial_id, available_components,
-                                         trial_rows = NULL, component_weights = NULL) {
+                                         trial_rows = NULL) {
   comp_table <- structure$components
   base_weights <- comp_table$weight[match(available_components, comp_table$component_id)]
   mode <- comp_table$mode[[1]] %||% "fixed"
   if (!identical(mode, "sample")) {
-    if (!is.null(component_weights)) {
-      rows <- component_weights[
-        component_weights$trial == trial_id &
-          component_weights$component %in% available_components,
-        ,
-        drop = FALSE
-      ]
-      if (nrow(rows) > 0L) {
-        base_weights <- rows$weight
-      }
-    }
     if (length(base_weights) != length(available_components) || all(is.na(base_weights))) {
       base_weights <- rep(1 / length(available_components), length(available_components))
     } else {
@@ -605,7 +594,6 @@
 #'
 #' @param structure Model structure
 #' @param params_df Parameter data frame
-#' @param component_weights Optional component weight overrides
 #' @param seed Optional RNG seed
 #' @param keep_detail Whether to retain per-trial detail
 #' @param ... Unused; for S3 compatibility
@@ -622,7 +610,6 @@
 #' @export
 simulate <- function(structure,
                      params_df,
-                     component_weights = NULL,
                      seed = NULL,
                      keep_detail = FALSE,
                      ...) {
@@ -633,7 +620,6 @@ simulate <- function(structure,
 #' @export
 simulate.model_structure <- function(structure,
                                      params_df,
-                                     component_weights = NULL,
                                      seed = NULL,
                                      keep_detail = FALSE,
                                      ...) {
@@ -652,16 +638,10 @@ simulate.model_structure <- function(structure,
   if ("component" %in% names(params_df)) {
     params_df$component <- as.character(params_df$component)
   }
-  if (!is.null(component_weights)) {
-    if (!all(c("trial", "component", "weight") %in% names(component_weights))) {
-      stop("component_weights must have columns 'trial', 'component', and 'weight'")
-    }
-    component_weights$component <- as.character(component_weights$component)
-  }
   if (!is.null(seed)) set.seed(seed)
   # if (isTRUE(getOption("uuber.sim.native", TRUE))) {
   #   native_res <- tryCatch(
-  #     native_simulate_cpp(structure, params_df, component_weights, keep_detail),
+  #     native_simulate_cpp(structure, params_df, keep_detail),
   #     error = function(e) NULL
   #   )
   #   if (!is.null(native_res)) return(native_res)
@@ -703,11 +683,9 @@ simulate.model_structure <- function(structure,
       structure,
       tid,
       available_components,
-      trial_rows = trial_rows,
-      component_weights = component_weights
+      trial_rows = trial_rows
     )
-    chosen_component <- if (length(available_components) == 1L ||
-                             !identical(comp_table$mode[[1]] %||% "fixed", "sample")) {
+    chosen_component <- if (length(available_components) == 1L) {
       available_components[[1]]
     } else {
       sample(available_components, size = 1L, prob = comp_weights)

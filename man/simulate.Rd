@@ -6,23 +6,9 @@
 \alias{simulate.default}
 \title{Simulate trials from parameter rows}
 \usage{
-simulate(
-  structure,
-  params_df,
-  component_weights = NULL,
-  seed = NULL,
-  keep_detail = FALSE,
-  ...
-)
+simulate(structure, params_df, seed = NULL, keep_detail = FALSE, ...)
 
-\method{simulate}{model_structure}(
-  structure,
-  params_df,
-  component_weights = NULL,
-  seed = NULL,
-  keep_detail = FALSE,
-  ...
-)
+\method{simulate}{model_structure}(structure, params_df, seed = NULL, keep_detail = FALSE, ...)
 
 \method{simulate}{default}(structure, ...)
 }
@@ -30,8 +16,6 @@ simulate(
 \item{structure}{Model structure}
 
 \item{params_df}{Parameter data frame}
-
-\item{component_weights}{Optional component weight overrides}
 
 \item{seed}{Optional RNG seed}
 

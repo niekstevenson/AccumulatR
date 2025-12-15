@@ -8,7 +8,6 @@ build_likelihood_context(
   structure,
   params_df,
   data_df,
-  component_weights = NULL,
   prep = NULL,
   trial_plan = NULL,
   native_bundle = NULL
@@ -20,8 +19,6 @@ build_likelihood_context(
 \item{params_df}{Parameter data frame}
 
 \item{data_df}{Data frame with observed outcome/rt}
-
-\item{component_weights}{Optional component weights}
 
 \item{prep}{Optional prep bundle}
 

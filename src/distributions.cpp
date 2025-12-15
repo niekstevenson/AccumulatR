@@ -149,8 +149,7 @@ Rcpp::List pool_build_templates_cpp(int n,
 Rcpp::List native_component_plan_impl(const Rcpp::List& structure,
                                       const Rcpp::DataFrame* trial_rows,
                                       double trial_id,
-                                      const std::string* forced_component,
-                                      const Rcpp::DataFrame* component_weights);
+                                      const std::string* forced_component);
 Rcpp::List pool_density_combine_cpp(const Rcpp::NumericVector& dens_vec,
                                     const Rcpp::NumericVector& cdf_vec,
                                     const Rcpp::NumericVector& surv_vec,
@@ -1056,8 +1055,7 @@ inline double extract_trial_id(const Rcpp::DataFrame* trial_rows) {
 inline std::string component_plan_cache_key(SEXP structure_ptr,
                                             const std::string* forced_component,
                                             double trial_id,
-                                            SEXP trial_rows_ptr,
-                                            SEXP component_weights_ptr) {
+                                            SEXP trial_rows_ptr) {
   std::ostringstream oss;
   oss << reinterpret_cast<std::uintptr_t>(structure_ptr) << "|";
   if (forced_component) {
@@ -1069,8 +1067,7 @@ inline std::string component_plan_cache_key(SEXP structure_ptr,
   } else {
     oss << std::setprecision(15) << trial_id;
   }
-  oss << "|" << reinterpret_cast<std::uintptr_t>(trial_rows_ptr)
-      << "|" << reinterpret_cast<std::uintptr_t>(component_weights_ptr);
+  oss << "|" << reinterpret_cast<std::uintptr_t>(trial_rows_ptr);
   return oss.str();
 }
 
@@ -1079,15 +1076,12 @@ Rcpp::List fetch_component_plan_cached(SEXP structure_sexp,
                                        const Rcpp::DataFrame* trial_rows,
                                        double trial_id,
                                        const std::string* forced_component,
-                                       const Rcpp::DataFrame* component_weights,
-                                       SEXP trial_rows_sexp,
-                                       SEXP component_weights_sexp) {
+                                       SEXP trial_rows_sexp) {
   static std::unordered_map<std::string, Rcpp::List> cache;
   std::string key = component_plan_cache_key(structure_sexp,
                                              forced_component,
                                              trial_id,
-                                             trial_rows_sexp,
-                                             component_weights_sexp);
+                                             trial_rows_sexp);
   auto it = cache.find(key);
   if (it != cache.end()) {
     return it->second;
@@ -1095,8 +1089,7 @@ Rcpp::List fetch_component_plan_cached(SEXP structure_sexp,
   Rcpp::List plan = native_component_plan_impl(structure,
                                                trial_rows,
                                                trial_id,
-                                               forced_component,
-                                               component_weights);
+                                               forced_component);
   cache.emplace(key, plan);
   return plan;
 }
@@ -2885,11 +2878,28 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
 Rcpp::List native_component_plan_impl(const Rcpp::List& structure,
                                       const Rcpp::DataFrame* trial_rows,
                                       double trial_id,
-                                      const std::string* forced_component,
-                                      const Rcpp::DataFrame* component_weights) {
+                                      const std::string* forced_component) {
   Rcpp::DataFrame comp_tbl(structure["components"]);
   Rcpp::CharacterVector component_ids = comp_tbl["component_id"];
   Rcpp::NumericVector base_weights = comp_tbl["weight"];
+  std::string mode = "fixed";
+  if (comp_tbl.containsElementNamed("mode")) {
+    Rcpp::CharacterVector mode_vec(comp_tbl["mode"]);
+    if (mode_vec.size() > 0 && mode_vec[0] != NA_STRING) {
+      mode = Rcpp::as<std::string>(mode_vec[0]);
+    }
+  }
+  std::string reference;
+  if (comp_tbl.containsElementNamed("reference")) {
+    Rcpp::CharacterVector ref_vec(comp_tbl["reference"]);
+    if (ref_vec.size() > 0 && ref_vec[0] != NA_STRING) {
+      reference = Rcpp::as<std::string>(ref_vec[0]);
+    }
+  }
+  Rcpp::List attrs_list;
+  if (comp_tbl.containsElementNamed("attrs")) {
+    attrs_list = Rcpp::List(comp_tbl["attrs"]);
+  }
 
   std::vector<std::string> all_components;
   all_components.reserve(component_ids.size());
@@ -2924,26 +2934,63 @@ Rcpp::List native_component_plan_impl(const Rcpp::List& structure,
     selected_components = all_components;
   }
 
-  std::vector<double> weights;
-  weights.reserve(selected_components.size());
-  for (const auto& comp : selected_components) {
-    auto it = base_weight_map.find(comp);
-    weights.push_back(it != base_weight_map.end() ? it->second : 0.0);
-  }
+  std::vector<double> weights(selected_components.size(), 0.0);
 
-  if (component_weights && !std::isnan(trial_id)) {
-    Rcpp::NumericVector cw_trial = (*component_weights)["trial"];
-    Rcpp::CharacterVector cw_component = (*component_weights)["component"];
-    Rcpp::NumericVector cw_weight = (*component_weights)["weight"];
-    std::unordered_map<std::string, std::size_t> index_map;
+  if (mode == "sample") {
+    // Weight parameters come from trial_rows for non-reference components.
+    // Reference weight = 1 - sum(nonref), then normalize to guard against rounding.
+    std::unordered_map<std::string, int> comp_index;
     for (std::size_t i = 0; i < selected_components.size(); ++i) {
-      index_map[selected_components[i]] = i;
+      comp_index[selected_components[i]] = static_cast<int>(i);
     }
-    for (R_xlen_t i = 0; i < cw_trial.size(); ++i) {
-      if (std::fabs(cw_trial[i] - trial_id) > 1e-9) continue;
-      auto it = index_map.find(Rcpp::as<std::string>(cw_component[i]));
-      if (it == index_map.end()) continue;
-      weights[it->second] = cw_weight[i];
+    std::string ref_id = reference.empty() ? selected_components.front() : reference;
+    double sum_nonref = 0.0;
+    for (R_xlen_t i = 0; i < component_ids.size(); ++i) {
+      std::string cid = Rcpp::as<std::string>(component_ids[i]);
+      if (cid == ref_id) continue;
+      auto it_idx = comp_index.find(cid);
+      if (it_idx == comp_index.end()) continue;
+      std::string wp;
+      if (attrs_list.size() > 0 && i < attrs_list.size()) {
+        Rcpp::List attr(attrs_list[i]);
+        if (attr.containsElementNamed("weight_param")) {
+          wp = Rcpp::as<std::string>(attr["weight_param"]);
+        }
+      }
+      if (wp.empty()) {
+        Rcpp::stop("Component '%s' missing weight_param for sampled mixture", cid.c_str());
+      }
+      double val = std::numeric_limits<double>::quiet_NaN();
+      if (trial_rows && trial_rows->containsElementNamed(wp.c_str())) {
+        Rcpp::NumericVector col((*trial_rows)[wp]);
+        if (col.size() > 0) {
+          double cand = col[0];
+          if (std::isfinite(cand)) val = cand;
+        }
+      }
+      if (!std::isfinite(val)) {
+        auto it = base_weight_map.find(cid);
+        if (it != base_weight_map.end()) val = it->second;
+      }
+      if (!std::isfinite(val) || val < 0.0 || val > 1.0) {
+        Rcpp::stop("Mixture weight '%s' must be a probability in [0,1]", wp.c_str());
+      }
+      weights[static_cast<std::size_t>(it_idx->second)] = val;
+      sum_nonref += val;
+    }
+    auto ref_it = comp_index.find(ref_id);
+    if (ref_it != comp_index.end()) {
+      double ref_weight = 1.0 - sum_nonref;
+      if (ref_weight < -1e-8) {
+        Rcpp::stop("Mixture weights sum to >1; check non-reference weight params");
+      }
+      if (ref_weight < 0.0) ref_weight = 0.0;
+      weights[static_cast<std::size_t>(ref_it->second)] = ref_weight;
+    }
+  } else {
+    for (std::size_t i = 0; i < selected_components.size(); ++i) {
+      auto it = base_weight_map.find(selected_components[i]);
+      weights[i] = (it != base_weight_map.end()) ? it->second : 0.0;
     }
   }
 
@@ -3309,7 +3356,6 @@ double evaluate_na_map_mix(SEXP ctxSEXP,
 Rcpp::List cpp_loglik(SEXP ctxSEXP,
                       Rcpp::List structure,
                       Rcpp::List trial_entries,
-                      Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt,
                       double rel_tol,
                       double abs_tol,
                       int max_depth) {
@@ -3319,14 +3365,6 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
   double total_loglik = 0.0;
   bool hit_neg_inf = false;
   SEXP structure_sexp = structure;
-  Rcpp::DataFrame component_weights_df;
-  const Rcpp::DataFrame* component_weights_ptr = nullptr;
-  SEXP component_weights_sexp_raw = R_NilValue;
-  if (!component_weights_opt.isNull()) {
-    component_weights_df = Rcpp::DataFrame(component_weights_opt.get());
-    component_weights_ptr = &component_weights_df;
-    component_weights_sexp_raw = component_weights_opt.get();
-  }
 
   std::vector<std::unique_ptr<TrialParamSet>> params_cache;
   params_cache.reserve(static_cast<std::size_t>(n_trials));
@@ -3428,9 +3466,7 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
                                                     trial_rows_ptr,
                                                     trial_id_value,
                                                     forced_component_ptr,
-                                                    component_weights_ptr,
-                                                    trial_rows_sexp,
-                                                    component_weights_sexp_raw);
+                                                    trial_rows_sexp);
       components = Rcpp::CharacterVector(plan["components"]);
       weights = Rcpp::NumericVector(plan["weights"]);
     }
@@ -3645,17 +3681,13 @@ Rcpp::List resolve_component_plan(SEXP structure_sexp,
                                   const Rcpp::DataFrame* trial_rows_ptr,
                                   double trial_id_value,
                                   const std::string* forced_component_ptr,
-                                  const Rcpp::DataFrame* component_weights_ptr,
-                                  SEXP trial_rows_sexp,
-                                  SEXP component_weights_sexp) {
+                                  SEXP trial_rows_sexp) {
   return fetch_component_plan_cached(structure_sexp,
                                      structure,
                                      trial_rows_ptr,
                                      trial_id_value,
                                      forced_component_ptr,
-                                     component_weights_ptr,
-                                     trial_rows_sexp,
-                                     component_weights_sexp);
+                                     trial_rows_sexp);
 }
 
 SEXP build_trial_params_sexp(uuber::NativeContext& ctx,
@@ -3682,8 +3714,6 @@ Rcpp::List make_trial_entry(uuber::NativeContext& ctx,
                             Rcpp::NumericVector& rt_col,
                             bool has_component,
                             Rcpp::CharacterVector& component_col,
-                            const Rcpp::DataFrame* component_weights_ptr,
-                            SEXP component_weights_sexp,
                             const Rcpp::List& na_source_specs,
                             const Rcpp::List& guess_target_specs,
                             const Rcpp::List& alias_specs) {
@@ -3744,9 +3774,7 @@ Rcpp::List make_trial_entry(uuber::NativeContext& ctx,
                                                    trial_rows_ptr,
                                                    trial_id_value,
                                                    forced_component_ptr,
-                                                   component_weights_ptr,
-                                                   rows_obj,
-                                                   component_weights_sexp);
+                                                   rows_obj);
   // Precompute normalized mix components/weights from component_plan
   if (entry.containsElementNamed("component_plan")) {
     Rcpp::List comp_plan(entry["component_plan"]);
@@ -3838,7 +3866,6 @@ Rcpp::List build_plan_entries(SEXP ctxSEXP,
                               Rcpp::CharacterVector selection_keys,
                               Rcpp::CharacterVector data_trial_keys,
                               Rcpp::DataFrame data_df,
-                              Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt,
                               Rcpp::List na_source_specs,
                               Rcpp::List guess_target_specs,
                               Rcpp::List alias_specs) {
@@ -3868,14 +3895,6 @@ Rcpp::List build_plan_entries(SEXP ctxSEXP,
   if (keys.size() == 0) {
     keys = trial_names;
   }
-  Rcpp::DataFrame component_weights_df;
-  const Rcpp::DataFrame* component_weights_ptr = nullptr;
-  SEXP component_weights_sexp = R_NilValue;
-  if (!component_weights_opt.isNull()) {
-    component_weights_df = Rcpp::DataFrame(component_weights_opt.get());
-    component_weights_ptr = &component_weights_df;
-    component_weights_sexp = component_weights_opt.get();
-  }
   SEXP structure_sexp = structure;
   Rcpp::List entries(keys.size());
   for (R_xlen_t i = 0; i < keys.size(); ++i) {
@@ -3891,8 +3910,6 @@ Rcpp::List build_plan_entries(SEXP ctxSEXP,
                                   rt_col,
                                   has_component,
                                   component_col,
-                                  component_weights_ptr,
-                                  component_weights_sexp,
                                   na_source_specs,
                                   guess_target_specs,
                                   alias_specs);
@@ -3910,7 +3927,6 @@ Rcpp::List native_plan_entries_cpp(SEXP ctxSEXP,
                                    Rcpp::CharacterVector selection_keys,
                                    Rcpp::CharacterVector data_trial_keys,
                                    Rcpp::DataFrame data_df,
-                                   Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt,
                                    Rcpp::List na_source_specs,
                                    Rcpp::List guess_target_specs,
                                    Rcpp::List alias_specs) {
@@ -3920,7 +3936,6 @@ Rcpp::List native_plan_entries_cpp(SEXP ctxSEXP,
                             selection_keys,
                             data_trial_keys,
                             data_df,
-                            component_weights_opt,
                             na_source_specs,
                             guess_target_specs,
                             alias_specs);
@@ -4127,7 +4142,6 @@ Rcpp::NumericMatrix native_debug_trial_params_cpp(Rcpp::List entry) {
 Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP,
                                         Rcpp::List structure,
                                         Rcpp::List entries,
-                                        Rcpp::Nullable<Rcpp::DataFrame> component_weights_opt,
                                         Rcpp::List params_list,
                                         double rel_tol,
                                         double abs_tol,
@@ -4149,7 +4163,6 @@ Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP,
     Rcpp::List res = cpp_loglik(ctxSEXP,
                                 structure,
                                 entries,
-                                component_weights_opt,
                                 rel_tol,
                                 abs_tol,
                                 max_depth);
@@ -4161,8 +4174,7 @@ Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP,
 // [[Rcpp::export]]
 Rcpp::List native_component_plan_exported(SEXP structureSEXP,
                                           SEXP trial_rowsSEXP,
-                                          SEXP forced_componentSEXP,
-                                          SEXP component_weightsSEXP) {
+                                          SEXP forced_componentSEXP) {
   Rcpp::List structure = Rcpp::as<Rcpp::List>(structureSEXP);
   Rcpp::DataFrame trial_rows_df;
   const Rcpp::DataFrame* trial_rows_ptr = nullptr;
@@ -4177,20 +4189,12 @@ Rcpp::List native_component_plan_exported(SEXP structureSEXP,
     forced_component_value = Rcpp::as<std::string>(forced_componentSEXP);
     forced_component_ptr = &forced_component_value;
   }
-  Rcpp::DataFrame component_weights_df;
-  const Rcpp::DataFrame* component_weights_ptr = nullptr;
-  if (!Rf_isNull(component_weightsSEXP)) {
-    component_weights_df = Rcpp::DataFrame(component_weightsSEXP);
-    component_weights_ptr = &component_weights_df;
-  }
   return fetch_component_plan_cached(structureSEXP,
                                      structure,
                                      trial_rows_ptr,
                                      trial_id,
                                      forced_component_ptr,
-                                     component_weights_ptr,
-                                     trial_rowsSEXP,
-                                     component_weightsSEXP);
+                                     trial_rowsSEXP);
 }
 
 // [[Rcpp::export]]

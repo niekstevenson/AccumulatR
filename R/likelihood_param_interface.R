@@ -1,5 +1,4 @@
 .likelihood_context_structure <- function(structure, params_df, data_df,
-                                          component_weights = NULL,
                                           prep = NULL,
                                           trial_plan = NULL,
                                           native_bundle = NULL) {
@@ -50,12 +49,6 @@
   plan_cache$entries <- NULL
   plan_cache$entry_names <- NULL
   plan_cache$eval_config <- NULL
-  plan_cache$component_weights_df <- NULL
-  component_weights_df <- .likelihood_component_weights_df(
-    structure = structure,
-    params_df = params_df,
-    component_weights = component_weights
-  )
   if (!is.null(native_ctx)) {
     metadata <- .likelihood_trial_metadata(structure, prep_eval_base)
     if (!is.null(metadata)) {
@@ -72,7 +65,6 @@
           plan_keys_raw,
           data_trial_keys,
           data_df,
-          component_weights_df,
           metadata$na_source_specs %||% list(),
           metadata$guess_target_specs %||% list(),
           metadata$alias_specs %||% list()
@@ -93,7 +85,6 @@
           abs_tol = as.numeric(metadata$abs_tol),
           max_depth = as.integer(metadata$max_depth)
         )
-        plan_cache$component_weights_df <- component_weights_df
       }
     }
   }
@@ -102,7 +93,6 @@
     params_df = params_df,
     prep = prep_eval_base,
     plan = plan,
-    component_weights = component_weights,
     native_ctx = native_ctx,
     data_df = data_df,
     data_row_indices = data_row_indices,
@@ -115,7 +105,6 @@
 #' @param structure Generator structure
 #' @param params_df Parameter data frame
 #' @param data_df Data frame with observed outcome/rt
-#' @param component_weights Optional component weights
 #' @param prep Optional prep bundle
 #' @param trial_plan Optional trial plan
 #' @param native_bundle Optional native bundle
@@ -135,7 +124,6 @@
 #' build_likelihood_context(structure, params_df, data_df)
 #' @export
 build_likelihood_context <- function(structure, params_df, data_df,
-                                     component_weights = NULL,
                                      prep = NULL,
                                      trial_plan = NULL,
                                      native_bundle = NULL) {
@@ -143,7 +131,6 @@ build_likelihood_context <- function(structure, params_df, data_df,
     structure = structure,
     params_df = params_df,
     data_df = data_df,
-    component_weights = component_weights,
     prep = prep,
     trial_plan = trial_plan,
     native_bundle = native_bundle
@@ -434,23 +421,12 @@ build_likelihood_context <- function(structure, params_df, data_df,
 }
 
 .likelihood_component_weights <- function(structure, trial_id, available_components,
-                                          base_weights, component_weights,
+                                          base_weights,
                                           trial_rows = NULL) {
   mode <- structure$components$mode[[1]] %||% "fixed"
   comp_table <- structure$components
   if (!identical(mode, "sample")) {
     weights <- base_weights[match(available_components, comp_table$component_id)]
-    if (!is.null(component_weights)) {
-      rows <- component_weights[
-        component_weights$trial == trial_id &
-          component_weights$component %in% available_components,
-        ,
-        drop = FALSE
-      ]
-      if (nrow(rows) > 0L) {
-        weights <- rows$weight
-      }
-    }
     if (length(weights) != length(available_components) || all(is.na(weights))) {
       weights <- rep(1 / length(available_components), length(available_components))
     } else {
@@ -484,17 +460,6 @@ build_likelihood_context <- function(structure, params_df, data_df,
       vals <- trial_rows[[wp]]
       if (!is.null(vals) && length(vals) > 0) val <- as.numeric(vals[[1]])
     }
-    if (is.na(val) && !is.null(component_weights) && wp %in% names(component_weights)) {
-      rows <- component_weights[
-        component_weights$trial == trial_id &
-          component_weights$component %in% available_components,
-        ,
-        drop = FALSE
-      ]
-      if (nrow(rows) > 0L && wp %in% names(rows)) {
-        val <- as.numeric(rows[[wp]][[1]])
-      }
-    }
     if (is.na(val)) {
       idx <- which(comp_table$component_id == cid)
       if (length(idx) == 1) val <- comp_table$weight[[idx]]
@@ -519,54 +484,6 @@ build_likelihood_context <- function(structure, params_df, data_df,
     weights <- weights / total
   }
   weights
-}
-
-.likelihood_component_weights_df <- function(structure, params_df, component_weights = NULL) {
-  if (!is.null(component_weights)) {
-    return(as.data.frame(component_weights))
-  }
-  comp_table <- structure$components %||% NULL
-  if (is.null(comp_table) || nrow(comp_table) == 0L) return(NULL)
-  mode <- comp_table$mode[[1]] %||% "fixed"
-  if (!identical(mode, "sample")) return(NULL)
-  params_df <- as.data.frame(params_df)
-  if (!"trial" %in% names(params_df)) params_df$trial <- 1L
-  params_df$trial <- params_df$trial
-  if ("component" %in% names(params_df)) {
-    params_df$component <- as.character(params_df$component)
-  }
-  trial_rows_map <- .likelihood_params_by_trial(params_df)
-  comp_ids <- comp_table$component_id
-  weight_rows <- list()
-  for (trial_key in names(trial_rows_map)) {
-    trial_df <- as.data.frame(trial_rows_map[[trial_key]])
-    tid <- trial_df$trial[[1]] %||% NA
-    comps <- comp_ids
-    if ("component" %in% names(trial_df)) {
-      listed <- unique(trial_df$component)
-      listed <- listed[!is.na(listed)]
-      if (length(listed) > 0L) {
-        comps <- intersect(comps, listed)
-      }
-    }
-    if (length(comps) == 0L) comps <- comp_ids
-    weights <- .likelihood_component_weights(
-      structure,
-      tid,
-      comps,
-      comp_table$weight,
-      NULL,
-      trial_rows = trial_df
-    )
-    weight_rows[[length(weight_rows) + 1L]] <- data.frame(
-      trial = tid,
-      component = comps,
-      weight = weights,
-      stringsAsFactors = FALSE
-    )
-  }
-  if (length(weight_rows) == 0L) return(NULL)
-  do.call(rbind, weight_rows)
 }
 
 .likelihood_response_prob_component <- function(prep, outcome_label, component,
@@ -694,7 +611,6 @@ response_probabilities.default <- function(structure, ...) {
 #'
 #' @param structure Model structure
 #' @param params_df Parameter data frame (one or more trials)
-#' @param component_weights Optional component weights
 #' @param include_na Whether to include NA outcome mass
 #' @param ... Unused; for S3 compatibility
 #' @return Named numeric vector of probabilities
@@ -713,7 +629,6 @@ response_probabilities.default <- function(structure, ...) {
 #' @export
 response_probabilities <- function(structure,
                                    params_df,
-                                   component_weights = NULL,
                                    include_na = TRUE,
                                    ...) {
   UseMethod("response_probabilities")
@@ -723,7 +638,6 @@ response_probabilities <- function(structure,
 #' @export
 response_probabilities.model_structure <- function(structure,
                                                    params_df,
-                                                   component_weights = NULL,
                                                    include_na = TRUE,
                                                    ...) {
   if (is.null(params_df) || nrow(params_df) == 0L) {
@@ -763,7 +677,6 @@ response_probabilities.model_structure <- function(structure,
       tid,
       comps,
       structure$components$weight,
-      component_weights,
       trial_rows = trial_rows
     )
     trial_probs <- numeric(0)
@@ -849,7 +762,6 @@ log_likelihood.likelihood_context <- function(likelihood_context, parameters, ..
         structure = ctx$structure,
         params_df = ctx$params_df,
         data_df = ctx$data_df,
-        component_weights = ctx$component_weights,
         prep = ctx$prep
       )
       ctx <- rebuilt
@@ -873,10 +785,6 @@ log_likelihood.likelihood_context <- function(likelihood_context, parameters, ..
     if (is.null(native_ctx) || !inherits(native_ctx, "externalptr")) {
       stop("Native context required for log_likelihood", call. = FALSE)
     }
-    plan_keys_raw <- as.character((ctx$plan$order %||% names(ctx$plan$trials)) %||% character(0))
-    if (length(plan_keys_raw) == 0L) {
-      stop("Plan contains no trials", call. = FALSE)
-    }
     data_trial_keys <- as.character(ctx$data_df$trial %||% NA)
     metadata <- .likelihood_trial_metadata(ctx$structure, ctx$prep)
     rel_tol <- as.numeric(metadata$rel_tol %||% .integrate_rel_tol())
@@ -888,20 +796,19 @@ log_likelihood.likelihood_context <- function(likelihood_context, parameters, ..
     out <- numeric(length(parameters))
     for (i in seq_along(parameters)) {
       df <- parameters[[i]]
-      comp_weights_df <- .likelihood_component_weights_df(
-        structure = ctx$structure,
-        params_df = df,
-        component_weights = ctx$component_weights
-      )
       params_mat <- .params_df_to_matrix(df)
+      plan_local <- .likelihood_build_trial_plan(ctx$structure, df, ctx$prep)
+      plan_keys <- as.character((plan_local$order %||% names(plan_local$trials)) %||% character(0))
+      if (length(plan_keys) == 0L) {
+        stop("Plan contains no trials", call. = FALSE)
+      }
       entries_i <- native_plan_entries_cpp(
         native_ctx,
         ctx$structure,
-        ctx$plan,
-        plan_keys_raw,
+        plan_local,
+        plan_keys,
         data_trial_keys,
         ctx$data_df,
-        comp_weights_df,
         na_specs,
         guess_specs,
         alias_specs
@@ -910,7 +817,6 @@ log_likelihood.likelihood_context <- function(likelihood_context, parameters, ..
         native_ctx,
         ctx$structure,
         entries_i,
-        comp_weights_df,
         list(params_mat),
         rel_tol,
         abs_tol,
@@ -926,7 +832,6 @@ log_likelihood.likelihood_context <- function(likelihood_context, parameters, ..
     native_ctx,
     ctx$structure,
     entries,
-    cache$component_weights_df %||% NULL,
     params_list,
     as.numeric(eval_cfg$rel_tol %||% .integrate_rel_tol()),
     as.numeric(eval_cfg$abs_tol %||% .integrate_abs_tol()),

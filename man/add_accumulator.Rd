@@ -9,7 +9,7 @@ add_accumulator(
   id,
   dist,
   onset = 0,
-  q = -Inf,
+  q = 0,
   tags = list(),
   params = NULL,
   ...

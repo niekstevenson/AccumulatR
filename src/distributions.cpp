@@ -1052,48 +1052,6 @@ inline double extract_trial_id(const Rcpp::DataFrame* trial_rows) {
   return static_cast<double>(val);
 }
 
-inline std::string component_plan_cache_key(SEXP structure_ptr,
-                                            const std::string* forced_component,
-                                            double trial_id,
-                                            SEXP trial_rows_ptr) {
-  std::ostringstream oss;
-  oss << reinterpret_cast<std::uintptr_t>(structure_ptr) << "|";
-  if (forced_component) {
-    oss << *forced_component;
-  }
-  oss << "|";
-  if (std::isnan(trial_id)) {
-    oss << "NA";
-  } else {
-    oss << std::setprecision(15) << trial_id;
-  }
-  oss << "|" << reinterpret_cast<std::uintptr_t>(trial_rows_ptr);
-  return oss.str();
-}
-
-Rcpp::List fetch_component_plan_cached(SEXP structure_sexp,
-                                       const Rcpp::List& structure,
-                                       const Rcpp::DataFrame* trial_rows,
-                                       double trial_id,
-                                       const std::string* forced_component,
-                                       SEXP trial_rows_sexp) {
-  static std::unordered_map<std::string, Rcpp::List> cache;
-  std::string key = component_plan_cache_key(structure_sexp,
-                                             forced_component,
-                                             trial_id,
-                                             trial_rows_sexp);
-  auto it = cache.find(key);
-  if (it != cache.end()) {
-    return it->second;
-  }
-  Rcpp::List plan = native_component_plan_impl(structure,
-                                               trial_rows,
-                                               trial_id,
-                                               forced_component);
-  cache.emplace(key, plan);
-  return plan;
-}
-
 
 inline std::uint64_t double_to_bits(double value) {
   std::uint64_t bits = 0;
@@ -2990,7 +2948,9 @@ Rcpp::List native_component_plan_impl(const Rcpp::List& structure,
   } else {
     for (std::size_t i = 0; i < selected_components.size(); ++i) {
       auto it = base_weight_map.find(selected_components[i]);
-      weights[i] = (it != base_weight_map.end()) ? it->second : 0.0;
+      double w = (it != base_weight_map.end()) ? it->second : 0.0;
+      if (!std::isfinite(w) || w < 0.0) w = 0.0;
+      weights[i] = w;
     }
   }
 
@@ -3364,7 +3324,6 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
   Rcpp::NumericVector per_trial(n_trials);
   double total_loglik = 0.0;
   bool hit_neg_inf = false;
-  SEXP structure_sexp = structure;
 
   std::vector<std::unique_ptr<TrialParamSet>> params_cache;
   params_cache.reserve(static_cast<std::size_t>(n_trials));
@@ -3461,12 +3420,10 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
       }
     }
     if (components.size() == 0) {
-      Rcpp::List plan = fetch_component_plan_cached(structure_sexp,
-                                                    structure,
-                                                    trial_rows_ptr,
-                                                    trial_id_value,
-                                                    forced_component_ptr,
-                                                    trial_rows_sexp);
+      Rcpp::List plan = native_component_plan_impl(structure,
+                                                   trial_rows_ptr,
+                                                   trial_id_value,
+                                                   forced_component_ptr);
       components = Rcpp::CharacterVector(plan["components"]);
       weights = Rcpp::NumericVector(plan["weights"]);
     }
@@ -3682,12 +3639,12 @@ Rcpp::List resolve_component_plan(SEXP structure_sexp,
                                   double trial_id_value,
                                   const std::string* forced_component_ptr,
                                   SEXP trial_rows_sexp) {
-  return fetch_component_plan_cached(structure_sexp,
-                                     structure,
-                                     trial_rows_ptr,
-                                     trial_id_value,
-                                     forced_component_ptr,
-                                     trial_rows_sexp);
+  (void)structure_sexp; // structure pointer no longer used for caching
+  (void)trial_rows_sexp;
+  return native_component_plan_impl(structure,
+                                    trial_rows_ptr,
+                                    trial_id_value,
+                                    forced_component_ptr);
 }
 
 SEXP build_trial_params_sexp(uuber::NativeContext& ctx,
@@ -4189,12 +4146,10 @@ Rcpp::List native_component_plan_exported(SEXP structureSEXP,
     forced_component_value = Rcpp::as<std::string>(forced_componentSEXP);
     forced_component_ptr = &forced_component_value;
   }
-  return fetch_component_plan_cached(structureSEXP,
-                                     structure,
-                                     trial_rows_ptr,
-                                     trial_id,
-                                     forced_component_ptr,
-                                     trial_rowsSEXP);
+  return native_component_plan_impl(structure,
+                                    trial_rows_ptr,
+                                    trial_id,
+                                    forced_component_ptr);
 }
 
 // [[Rcpp::export]]

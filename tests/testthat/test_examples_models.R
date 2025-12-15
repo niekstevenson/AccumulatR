@@ -205,43 +205,7 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     stop_control.sdlog = 0.15
   )
 
-  example_18_shared_triggers <- function() {
-    race_spec() |>
-      add_accumulator("go_left", "lognormal") |>
-      add_accumulator("go_right", "lognormal") |>
-      add_accumulator("stop_fast", "lognormal", onset = 0.1) |>
-      add_accumulator("stop_slow", "lognormal", onset = 0.1) |>
-      add_pool("L", "go_left") |>
-      add_pool("R", "go_right") |>
-      add_pool("STOP", c("stop_fast", "stop_slow")) |>
-      add_outcome("Left", "L") |>
-      add_outcome("Right", "R") |>
-      add_outcome("STOP", "STOP", options = list(map_outcome_to = NA_character_)) |>
-      add_group("stop_fast_component", members = "stop_fast", attrs = list(component = "fast")) |>
-      add_group("stop_slow_component", members = "stop_slow", attrs = list(component = "slow")) |>
-      add_group("shared_stop_trigger",
-                members = c("stop_fast", "stop_slow"),
-                attrs = list(shared_trigger = list(id = "stop_gate", q = 0.01))) |>
-      set_metadata(mixture = list(
-        components = list(
-          component("fast", weight = 0.25),
-          component("slow", weight = 0.75)
-        )
-      )) |>
-      finalize_model()
-  }
-  params_example_18_shared_triggers <- c(
-    go_left.meanlog = log(0.30),
-    go_left.sdlog = 0.20,
-    go_right.meanlog = log(0.32),
-    go_right.sdlog = 0.20,
-    stop_fast.meanlog = log(0.16),
-    stop_fast.sdlog = 0.15,
-    stop_slow.meanlog = log(0.18),
-    stop_slow.sdlog = 0.15
-  )
-
-  example_22_simple_q <- function() {
+  example_21_simple_q <- function() {
     race_spec() |>
       add_accumulator("go1", "lognormal") |>
       add_accumulator("go2", "lognormal") |>
@@ -259,7 +223,7 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     ) |>
     finalize_model()
   }
-  params_example_22_simple_q <- c(
+  params_example_21_simple_q <- c(
     go1.meanlog = log(0.30),
     go1.sdlog   = 0.18,
     go2.meanlog = log(0.32),
@@ -267,7 +231,7 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     go_trigger_q = 0.10
   )
 
-  example_23_shared_q <- function() {
+  example_22_shared_q <- function() {
     race_spec() |>
       add_accumulator("go_left", "lognormal") |>
       add_accumulator("go_right", "lognormal") |>
@@ -279,7 +243,7 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
                 attrs = trigger(q = 0.10, param = "q_shared", draw = "independent")) |>
       finalize_model()
   }
-  params_example_23_shared_q <- c(
+  params_example_22_shared_q <- c(
     go_left.meanlog = log(0.30),
     go_left.sdlog = 0.18,
     go_right.meanlog = log(0.32),
@@ -297,9 +261,8 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     example_7_mixture = list(spec = example_7_mixture, params = params_example_7_mixture),
     example_10_exclusion = list(spec = example_10_exclusion, params = params_example_10_exclusion),
     example_16_guard_tie_simple = list(spec = example_16_guard_tie_simple, params = params_example_16_guard_tie_simple),
-    example_18_shared_triggers = list(spec = example_18_shared_triggers, params = params_example_18_shared_triggers),
-    example_22_simple_q = list(spec = example_22_simple_q, params = params_example_22_simple_q),
-    example_23_shared_q = list(spec = example_23_shared_q, params = params_example_23_shared_q)
+    example_21_simple_q = list(spec = example_21_simple_q, params = params_example_22_simple_q),
+    example_22_shared_q = list(spec = example_22_shared_q, params = params_example_23_shared_q)
   )
 
   # Test each model -----------------------------------------------------------

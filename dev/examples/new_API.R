@@ -452,43 +452,8 @@ params_example_17_k_of_n_inhibitors <- c(
   `par:shared_D.sdlog` = 0.15
 )
 
-example_18_shared_triggers <- race_spec() |>
-  add_accumulator("go_left", "lognormal") |>
-  add_accumulator("go_right", "lognormal") |>
-  add_accumulator("stop_fast", "lognormal", onset = 0.1) |>
-  add_accumulator("stop_slow", "lognormal", onset = 0.1) |>
-  add_pool("L", "go_left") |>
-  add_pool("R", "go_right") |>
-  add_pool("STOP", c("stop_fast", "stop_slow")) |>
-  add_outcome("Left", "L") |>
-  add_outcome("Right", "R") |>
-  add_outcome("STOP", "STOP", options = list(map_outcome_to = NA_character_)) |>
-  add_group("stop_fast_component", members = "stop_fast", attrs = list(component = "fast")) |>
-  add_group("stop_slow_component", members = "stop_slow", attrs = list(component = "slow")) |>
-  add_group("shared_stop_trigger",
-            members = c("stop_fast", "stop_slow"),
-            attrs = trigger(id = "stop_gate", q = 0.01, draw = "shared")) |>
-  set_metadata(mixture = list(
-    mode = "fixed",
-    components = list(
-      component("fast", weight = 0.25),
-      component("slow", weight = 0.75)
-    )
-  )) |>
-  finalize_model()
-params_example_18_shared_triggers <- c(
-  go_left.meanlog = log(0.30),
-  go_left.sdlog = 0.20,
-  go_right.meanlog = log(0.32),
-  go_right.sdlog = 0.20,
-  stop_fast.meanlog = log(0.16),
-  stop_fast.sdlog = 0.15,
-  stop_slow.meanlog = log(0.18),
-  stop_slow.sdlog = 0.15
-)
-
-# Example 19 univalent stop change - bimanual
-example_19_univalent_stop_change <- race_spec() |>
+# Example 18 univalent stop change - bimanual
+example_18_univalent_stop_change <- race_spec() |>
   add_accumulator("go_left", "lognormal") |>
   add_accumulator("go_right", "lognormal") |>
   add_accumulator("stop", "lognormal", onset = 0.15) |>
@@ -527,7 +492,7 @@ example_19_univalent_stop_change <- race_spec() |>
                       component("go_stop", weight = 0.5))
   )) |>
   finalize_model()
-params_example_19_univalent_stop_change <- c(
+params_example_18_univalent_stop_change <- c(
   go_left.meanlog = log(0.35),
   go_left.sdlog = 0.2,
   go_right.meanlog = log(0.35),
@@ -552,7 +517,7 @@ params_example_19_univalent_stop_change <- c(
 }
 
 # Stimulus selective stopping
-example_20_stim_select_stop <- .stim_base_spec() |>
+example_19_stim_select_stop <- .stim_base_spec() |>
   add_pool("GO1", "go1") |>
   add_pool("IGNORE", c("ignore_high", "ignore_low")) |>
   add_pool("GO2", "go2") |>
@@ -601,7 +566,7 @@ example_20_stim_select_stop <- .stim_base_spec() |>
   )) |>
   finalize_model()
 
-params_example_20_stim_select_stop <- c(
+params_example_19_stim_select_stop <- c(
   go1.meanlog = log(0.50),
   go1.sdlog = 0.18,
   ignore_high.meanlog = log(0.20),
@@ -617,7 +582,7 @@ params_example_20_stim_select_stop <- c(
 
 
 # Example 21 simple stop change
-example_21_simple_stop_change <- race_spec() |>
+example_20_simple_stop_change <- race_spec() |>
   add_accumulator("go_left", "lognormal") |>
   add_accumulator("go_right", "lognormal") |>
   add_accumulator("stop", "lognormal") |>
@@ -651,7 +616,7 @@ example_21_simple_stop_change <- race_spec() |>
                       component("go_stop", weight = 0.5))
   )) |>
   finalize_model()
-params_example_21_simple_stop_change <- c(
+params_example_20_simple_stop_change <- c(
   go_left.meanlog = log(0.35),
   go_left.sdlog = 0.2,
   go_left.t0 = .1,
@@ -665,7 +630,7 @@ params_example_21_simple_stop_change <- c(
 
 
 # Example 22 – simple two-response race with trigger failure
-example_22_simple_q <- race_spec() |>
+example_21_simple_q <- race_spec() |>
   add_accumulator("go1", "lognormal") |>
   add_accumulator("go2", "lognormal") |>
   add_pool("R1", "go1") |>
@@ -684,7 +649,7 @@ example_22_simple_q <- race_spec() |>
   ) |>
   finalize_model()
 
-params_example_22_simple_q <- c(
+params_example_21_simple_q <- c(
   go1.meanlog = log(0.30),
   go1.sdlog   = 0.18,
   go2.meanlog = log(0.32),
@@ -693,7 +658,7 @@ params_example_22_simple_q <- c(
 )
 
 # Example 23 – independent shared q (per-acc Bernoulli) for go accumulators
-example_23_shared_q <- race_spec() |>
+example_22_shared_q <- race_spec() |>
   add_accumulator("go_left", "lognormal") |>
   add_accumulator("go_right", "lognormal") |>
   add_pool("L", "go_left") |>
@@ -704,7 +669,7 @@ example_23_shared_q <- race_spec() |>
             attrs = trigger(q = 0.10, param = "q_shared", draw = "independent")) |>
   finalize_model()
 
-params_example_23_shared_q <- c(
+params_example_22_shared_q <- c(
   go_left.meanlog = log(0.30),
   go_left.sdlog = 0.18,
   go_right.meanlog = log(0.32),
@@ -713,7 +678,7 @@ params_example_23_shared_q <- c(
 )
 
 # Example 24 univalent stop change - bimanual
-example_24_univalent_stop_change <- race_spec() |>
+example_23_univalent_stop_change <- race_spec() |>
   add_accumulator("go_left", "lognormal") |>
   add_accumulator("stop", "lognormal", onset = 0.15) |>
   add_accumulator("change2right", "lognormal", onset = 0.20) |>
@@ -749,7 +714,7 @@ example_24_univalent_stop_change <- race_spec() |>
     )
   ) |>
   finalize_model()
-params_example_24_univalent_stop_change <- c(
+params_example_23_univalent_stop_change <- c(
   go_left.meanlog = log(0.35),
   go_left.sdlog = 0.2,
   stop.meanlog = log(.2),
@@ -779,13 +744,12 @@ new_api_examples <- list(
   example_15_component_metadata = example_15_component_metadata,
   example_16_guard_tie_simple = example_16_guard_tie_simple,
   example_17_k_of_n_inhibitors = example_17_k_of_n_inhibitors,
-  example_18_shared_triggers = example_18_shared_triggers,
-  example_19_univalent_stop_change = example_19_univalent_stop_change,
-  example_20_stim_select_stop = example_20_stim_select_stop,
-  example_21_simple_stop_change = example_21_simple_stop_change,
-  example_22_simple_q = example_22_simple_q,
-  example_23_shared_q = example_23_shared_q,
-  example_24_univalent_stop_change = example_24_univalent_stop_change
+  example_18_univalent_stop_change = example_18_univalent_stop_change,
+  example_19_stim_select_stop = example_19_stim_select_stop,
+  example_20_simple_stop_change = example_20_simple_stop_change,
+  example_21_simple_q = example_21_simple_q,
+  example_22_shared_q = example_22_shared_q,
+  example_23_univalent_stop_change = example_23_univalent_stop_change
 )
 
 
@@ -808,11 +772,10 @@ new_api_example_params <- list(
   example_15_component_metadata = params_example_15_component_metadata,
   example_16_guard_tie_simple = params_example_16_guard_tie_simple,
   example_17_k_of_n_inhibitors = params_example_17_k_of_n_inhibitors,
-  example_18_shared_triggers = params_example_18_shared_triggers,
-  example_19_univalent_stop_change = params_example_19_univalent_stop_change,
-  example_20_stim_select_stop = params_example_20_stim_select_stop,
-  example_21_simple_stop_change = params_example_21_simple_stop_change,
-  example_22_simple_q = params_example_22_simple_q,
-  example_23_shared_q = params_example_23_shared_q,
-  example_24_univalent_stop_change = params_example_24_univalent_stop_change
+  example_18_univalent_stop_change = params_example_18_univalent_stop_change,
+  example_19_stim_select_stop = params_example_19_stim_select_stop,
+  example_20_simple_stop_change = params_example_20_simple_stop_change,
+  example_21_simple_q = params_example_21_simple_q,
+  example_22_shared_q = params_example_22_shared_q,
+  example_23_univalent_stop_change = params_example_23_univalent_stop_change
 )

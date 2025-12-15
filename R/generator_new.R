@@ -238,41 +238,24 @@
     if (is.null(v) || (length(v) == 1L && is.na(v))) return(NULL)
     v
   }
-  raw <- NULL
-  if ("accumulator_id" %in% names(row)) {
-    raw <- pick_id(row[["accumulator_id"]])
-    if (!is.null(raw)) {
-      id <- as.character(raw)
-      if (nzchar(id)) return(id)
-    }
-  }
-  if ("accumulator" %in% names(row)) {
-    raw <- pick_id(row[["accumulator"]])
-  } else if ("accumulator_index" %in% names(row)) {
-    raw <- pick_id(row[["accumulator_index"]])
-  } else if ("acc_idx" %in% names(row)) {
-    raw <- pick_id(row[["acc_idx"]])
-  }
+  raw <- if ("accumulator" %in% names(row)) pick_id(row[["accumulator"]]) else NULL
   if (!is.null(raw)) {
     if (is.numeric(raw)) {
       idx <- as.integer(raw)
       if (!is.na(idx) && idx >= 1L && idx <= length(acc_ids)) {
         return(acc_ids[[idx]])
       }
-    } else {
-      id <- as.character(raw)
-      if (nzchar(id)) return(id)
     }
   }
-  stop("Parameter rows must include a valid 'accumulator_id' or index column")
+  stop("Parameter rows must include a valid numeric 'accumulator' column")
 }
 
 .param_override_columns <- function(params_rows) {
   base_cols <- c(
-    "trial", "component", "accumulator", "accumulator_id",
-    "accumulator_index", "acc_idx", "type", "role",
+    "trial", "component", "accumulator",
+    "type", "role",
     "outcome", "rt", "params", "condition",
-    "component_weight", "params_hash"
+    "component_weight"
   )
   setdiff(names(params_rows), c(base_cols, "onset", "q", "shared_trigger_id"))
 }
@@ -286,19 +269,6 @@
     mask <- mask | trial_rows$component == comp_label
   }
   trial_rows[mask, , drop = FALSE]
-}
-
-.generator_component_hash <- function(rows_df) {
-  if (is.null(rows_df) || nrow(rows_df) == 0L) return("__base__")
-  if ("params_hash" %in% names(rows_df)) {
-    vals <- rows_df$params_hash
-    vals <- vals[!is.na(vals) & nzchar(vals)]
-    if (length(vals) > 0L) return(vals[[1]])
-  }
-  tmp <- rows_df
-  if (!is.null(tmp)) tmp$params_hash <- NULL
-  val <- .param_rows_hash_value(tmp)
-  if (is.null(val) || !nzchar(val)) "__base__" else val
 }
 
 .component_weights_for_trial <- function(structure, trial_id, available_components,
@@ -630,7 +600,6 @@ simulate.model_structure <- function(structure,
   prep <- structure$prep
   comp_table <- structure$components
   comp_ids <- comp_table$component_id
-  params_df <- .params_hash_attach(params_df)
   if (!"trial" %in% names(params_df)) {
     params_df$trial <- 1L
   }
@@ -653,17 +622,8 @@ simulate.model_structure <- function(structure,
   comp_record <- rep(NA_character_, length(trial_ids))
   details <- if (keep_detail) vector("list", length(trial_ids)) else NULL
 
-  param_state_cache <- new.env(parent = emptyenv())
   get_component_state <- function(component_label, rows_df) {
-    comp_key <- component_label %||% "__default__"
-    hash_val <- .generator_component_hash(rows_df)
-    cache_key <- paste(comp_key, hash_val, sep = "::")
-    entry <- param_state_cache[[cache_key]]
-    if (is.null(entry)) {
-      entry <- .generator_param_state_from_rows(prep, rows_df)
-      param_state_cache[[cache_key]] <- entry
-    }
-    entry
+    .generator_param_state_from_rows(prep, rows_df)
   }
 
   for (i in seq_along(trial_ids)) {

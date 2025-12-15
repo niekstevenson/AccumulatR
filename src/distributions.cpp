@@ -2537,14 +2537,9 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
   R_xlen_t n = rows.nrows();
   if (n == 0) return nullptr;
 
-  bool has_acc_id = rows.containsElementNamed("accumulator_id");
   bool has_acc = rows.containsElementNamed("accumulator");
-  Rcpp::CharacterVector acc_id_col;
-  if (has_acc_id) {
-    acc_id_col = Rcpp::CharacterVector(rows["accumulator_id"]);
-  }
   Rcpp::RObject acc_col_obj;
-  if (has_acc && !has_acc_id) {
+  if (has_acc) {
     acc_col_obj = rows["accumulator"];
   }
 
@@ -2571,9 +2566,8 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
     : Rcpp::List();
 
   std::unordered_set<std::string> base_cols = {
-    "trial", "component", "accumulator", "accumulator_id",
-    "accumulator_index", "acc_idx", "type", "role",
-    "outcome", "rt", "params", "onset", "q",
+    "trial", "component", "accumulator",
+    "type", "role", "outcome", "rt", "params", "onset", "q",
     "condition", "component_weight", "shared_trigger_id",
     "dist", "components"
   };
@@ -2654,29 +2648,17 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
 
   for (R_xlen_t i = 0; i < n; ++i) {
     int acc_idx = -1;
-    if (has_acc_id) {
-      if (acc_id_col[i] == NA_STRING) continue;
-      std::string acc_label = Rcpp::as<std::string>(acc_id_col[i]);
-      auto it = ctx.accumulator_index.find(acc_label);
-      if (it == ctx.accumulator_index.end()) continue;
-      acc_idx = it->second;
-    } else if (has_acc) {
-      if (Rf_isNumeric(acc_col_obj)) {
-        Rcpp::NumericVector acc_num(acc_col_obj);
-        if (i >= acc_num.size()) continue;
-        double raw_val = acc_num[i];
-        if (Rcpp::NumericVector::is_na(raw_val)) continue;
-        int idx_val = static_cast<int>(std::llround(raw_val)) - 1;
-        if (idx_val < 0 || idx_val >= static_cast<int>(ctx.accumulators.size())) continue;
-        acc_idx = idx_val;
-      } else {
-        Rcpp::CharacterVector acc_chr(acc_col_obj);
-        if (acc_chr[i] == NA_STRING) continue;
-        std::string acc_label = Rcpp::as<std::string>(acc_chr[i]);
-        auto it = ctx.accumulator_index.find(acc_label);
-        if (it == ctx.accumulator_index.end()) continue;
-        acc_idx = it->second;
+    if (has_acc) {
+      if (!Rf_isNumeric(acc_col_obj)) {
+        Rcpp::stop("Column 'accumulator' must be numeric (1-based index)");
       }
+      Rcpp::NumericVector acc_num(acc_col_obj);
+      if (i >= acc_num.size()) continue;
+      double raw_val = acc_num[i];
+      if (Rcpp::NumericVector::is_na(raw_val)) continue;
+      int idx_val = static_cast<int>(std::llround(raw_val)) - 1;
+      if (idx_val < 0 || idx_val >= static_cast<int>(ctx.accumulators.size())) continue;
+      acc_idx = idx_val;
     }
     if (acc_idx < 0 || acc_idx >= static_cast<int>(ctx.accumulators.size())) continue;
     const uuber::NativeAccumulator& base = ctx.accumulators[acc_idx];

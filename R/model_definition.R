@@ -1021,9 +1021,7 @@ build_params_df <- function(model,
     }
     data.frame(
       trial = 1L,
-      accumulator_id = acc_id,
       accumulator = idx,
-      accumulator_index = idx,
       component = if (is.null(component)) NA_character_ else as.character(component),
       role = role_value,
       row_vals,
@@ -1084,7 +1082,7 @@ build_params_df <- function(model,
       param_nm <- trig$param %||% NULL
       members <- grp$members %||% character(0)
       if (length(members) == 0) next
-      mask <- base_df$accumulator_id %in% members
+      mask <- acc_ids %in% members
       if (!any(mask)) next
       base_df$shared_trigger_id[mask] <- grp$id %||% trig$id %||% param_nm
       if (!is.null(param_nm) && nzchar(param_nm) && param_nm %in% names(param_values)) {
@@ -1104,6 +1102,5 @@ build_params_df <- function(model,
   }
   base_df$trial <- rep(seq_len(n_trials), each = base_n)
   rownames(base_df) <- NULL
-  base_df <- .params_hash_attach(base_df)
   base_df
 }

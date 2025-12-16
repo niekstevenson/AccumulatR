@@ -12,7 +12,8 @@ Depends: R (>= 4.0)
 Imports: 
     Rcpp,
     stats,
-    utils
+    utils,
+    RcppParallel
 Suggests:
     testthat (>= 3.0.0)
 LinkingTo: Rcpp, RcppParallel, BH

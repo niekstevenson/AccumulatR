@@ -1,4 +1,3 @@
 CXX_STD = CXX17
-PKG_CPPFLAGS += -DRCPP_PARALLEL_USE_TBB=0
-PKG_CXXFLAGS += $(shell ${R_HOME}/bin/Rscript -e "RcppParallel::CxxFlags()")
-PKG_LIBS +=
+PKG_CPPFLAGS = -DRCPP_PARALLEL_USE_TBB=1 -I/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/RcppParallel/include
+PKG_LIBS = -L/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/RcppParallel/lib -Wl,-rpath,/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/RcppParallel/lib -ltbb -ltbbmalloc

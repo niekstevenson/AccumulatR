@@ -19,6 +19,7 @@
 #include <sstream>
 #include <numeric>
 #include <iomanip>
+#include <iomanip>
 #include <cstring>
 #if __has_include(<boost/math/quadrature/gauss_kronrod.hpp>)
 #define UUBER_HAVE_BOOST_GK 1
@@ -467,6 +468,18 @@ struct TrialAccumulatorParams {
 struct TrialParamSet {
   std::vector<TrialAccumulatorParams> acc_params;
 };
+
+std::string param_signature(const TrialParamSet* params_ptr) {
+  if (!params_ptr) return std::string();
+  std::ostringstream oss;
+  oss << std::setprecision(12);
+  for (const auto& acc : params_ptr->acc_params) {
+    oss << acc.q << '|' << acc.shared_q << '|' << acc.onset << '|'
+        << acc.dist_cfg.t0 << '|' << acc.dist_cfg.p1 << '|'
+        << acc.dist_cfg.p2 << '|' << acc.dist_cfg.p3 << ';';
+  }
+  return oss.str();
+}
 
 inline TrialAccumulatorParams base_params(const uuber::NativeAccumulator& base) {
   TrialAccumulatorParams p;
@@ -3218,16 +3231,16 @@ std::vector<TrialParamSet> params_from_matrix(const uuber::NativeContext& ctx,
   return out;
 }
 
-double mix_outcome_prob(SEXP ctxSEXP,
-                        const uuber::OutcomeContextInfo& info,
-                        double rt,
-                        const std::vector<std::string>& comp_labels,
-                        const std::vector<double>& comp_weights,
-                        const TrialParamSet* params_ptr,
-                        double rel_tol,
-                        double abs_tol,
-                        int max_depth,
-                        const std::string& outcome_label_context) {
+double mix_outcome_density(SEXP ctxSEXP,
+                           const uuber::OutcomeContextInfo& info,
+                           double rt,
+                           const std::vector<std::string>& comp_labels,
+                           const std::vector<double>& comp_weights,
+                           const TrialParamSet* params_ptr,
+                           double rel_tol,
+                           double abs_tol,
+                           int max_depth,
+                           const std::string& outcome_label_context) {
   if (info.node_id < 0) return 0.0;
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   std::vector<ComponentCacheEntry> cache_entries = build_component_cache_entries(comp_labels);
@@ -3250,6 +3263,71 @@ double mix_outcome_prob(SEXP ctxSEXP,
   return density;
 }
 
+double mix_outcome_mass(SEXP ctxSEXP,
+                        const uuber::OutcomeContextInfo& info,
+                        const std::vector<std::string>& comp_labels,
+                        const std::vector<double>& comp_weights,
+                        const TrialParamSet* params_ptr,
+                        double rel_tol,
+                        double abs_tol,
+                        int max_depth,
+                        const std::string& outcome_label_context) {
+  if (info.node_id < 0) return 0.0;
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  // Cache NA-map integrals when no RT is provided (maps_to_na cases).
+  std::string cache_key;
+  bool use_cache = params_ptr != nullptr;
+  if (use_cache) {
+    std::ostringstream oss;
+    oss << outcome_label_context << "|node:" << info.node_id << "|sig:" << param_signature(params_ptr) << "|comp:";
+    for (std::size_t i = 0; i < comp_labels.size(); ++i) {
+      oss << comp_labels[i] << "@" << (i < comp_weights.size() ? comp_weights[i] : 0.0) << ";";
+    }
+    cache_key = oss.str();
+    auto hit = ctx->na_map_cache.find(cache_key);
+    if (hit != ctx->na_map_cache.end()) {
+      return hit->second;
+    }
+  }
+  Rcpp::IntegerVector comp_ids(info.competitor_ids.begin(), info.competitor_ids.end());
+  double total = 0.0;
+  for (std::size_t i = 0; i < comp_labels.size(); ++i) {
+    double w = (i < comp_weights.size()) ? comp_weights[i] : 0.0;
+    if (w <= 0.0) continue;
+    const std::string& comp = comp_labels[i];
+    Rcpp::Nullable<Rcpp::String> comp_val(comp.empty() ? R_NilValue : Rcpp::wrap(comp));
+    double p = native_outcome_probability_impl(
+      ctxSEXP,
+      info.node_id,
+      std::numeric_limits<double>::infinity(),
+      comp_val,
+      R_NilValue,
+      R_NilValue,
+      comp_ids,
+      rel_tol,
+      abs_tol,
+      max_depth,
+      params_ptr,
+      std::string(),
+      false,
+      outcome_label_context
+    );
+    if (std::isfinite(p) && p > 0.0) {
+      double keep_w = component_keep_weight(*ctx, comp, outcome_label_context);
+      total += w * p * keep_w;
+    }
+  }
+  double out = clamp_probability(total);
+  if (use_cache) {
+    if (static_cast<int>(ctx->na_map_cache.size()) >= ctx->na_cache_limit) {
+      ctx->na_map_cache.clear();
+      ctx->na_cache_order.clear();
+    }
+    ctx->na_map_cache[cache_key] = out;
+  }
+  return out;
+}
+
 // [[Rcpp::export]]
 Rcpp::List cpp_loglik(SEXP ctxSEXP,
                       Rcpp::List structure,
@@ -3259,6 +3337,9 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
                       double abs_tol,
                       int max_depth) {
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  // Params change invalidates NA cache
+  ctx->na_map_cache.clear();
+  ctx->na_cache_order.clear();
   int n_acc = static_cast<int>(ctx->accumulators.size());
   if (n_acc == 0) Rcpp::stop("No accumulators in native context");
   if (params_mat.nrow() % n_acc != 0) {
@@ -3329,9 +3410,8 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
         const std::string& lbl = kv.first;
         if (lbl == "__DEADLINE__") continue;
         const uuber::OutcomeContextInfo& info = kv.second;
-        double p = mix_outcome_prob(ctxSEXP,
+        double p = mix_outcome_mass(ctxSEXP,
                                     info,
-                                    rt,
                                     comp_labels,
                                     comp_weights,
                                     params_ptr,
@@ -3346,10 +3426,7 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
           non_na += p;
         }
       }
-      double residual = 1.0 - na_explicit - non_na;
-      if (!std::isfinite(residual)) residual = 0.0;
-      if (residual < 0.0) residual = 0.0;
-      prob = clamp_probability(na_explicit + residual);
+      prob = clamp_probability(na_explicit);
     } else {
       auto it = ctx->outcome_info.find(outcome_label);
       if (it == ctx->outcome_info.end() || it->second.node_id < 0) {
@@ -3357,16 +3434,16 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
       } else if (!std::isfinite(rt) || rt < 0.0) {
         prob = 0.0;
       } else {
-        prob = mix_outcome_prob(ctxSEXP,
-                                it->second,
-                                rt,
-                                comp_labels,
-                                comp_weights,
-                                params_ptr,
-                                rel_tol,
-                                abs_tol,
-                                max_depth,
-                                outcome_label);
+        prob = mix_outcome_density(ctxSEXP,
+                                   it->second,
+                                   rt,
+                                   comp_labels,
+                                   comp_weights,
+                                   params_ptr,
+                                   rel_tol,
+                                   abs_tol,
+                                   max_depth,
+                                   outcome_label);
       }
     }
 
@@ -3401,10 +3478,16 @@ Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP,
                                         double abs_tol,
                                         int max_depth) {
   Rcpp::NumericVector out(params_list.size());
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   for (R_xlen_t i = 0; i < params_list.size(); ++i) {
     if (params_list[i] == R_NilValue) {
       out[i] = NA_REAL;
       continue;
+    }
+    // reset NA caches between parameter sets
+    if (ctx) {
+      ctx->na_map_cache.clear();
+      ctx->na_cache_order.clear();
     }
     Rcpp::NumericMatrix pm(params_list[i]);
     Rcpp::List res = cpp_loglik(ctxSEXP, structure, pm, data_df, rel_tol, abs_tol, max_depth);

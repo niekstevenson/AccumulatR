@@ -77,12 +77,16 @@ void populate_outcome_metadata(const Rcpp::List& prep, NativeContext& ctx) {
         if (options.containsElementNamed("map_outcome_to")) {
           Rcpp::RObject map_obj = options["map_outcome_to"];
           if (!map_obj.isNULL()) {
-            if (map_obj == NA_STRING) {
-              ctx.alias_sources["__NA__"].push_back(outcome_label);
-              info.maps_to_na = true;
-            } else if (Rf_isString(map_obj)) {
-              std::string target = Rcpp::as<std::string>(map_obj);
-              ctx.alias_sources[target].push_back(outcome_label);
+            Rcpp::CharacterVector map_cv(map_obj);
+            if (map_cv.size() > 0) {
+              Rcpp::String map_val = map_cv[0];
+              if (map_val == NA_STRING) {
+                ctx.alias_sources["__NA__"].push_back(outcome_label);
+                info.maps_to_na = true;
+              } else {
+                std::string target = Rcpp::as<std::string>(Rcpp::CharacterVector::create(map_val)[0]);
+                ctx.alias_sources[target].push_back(outcome_label);
+              }
             }
           }
         }

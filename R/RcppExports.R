@@ -21,20 +21,12 @@ native_trial_mixture_cpp <- function(ctxSEXP, node_id, t, component_ids, weights
     .Call(`_AccumulatR_native_trial_mixture_driver`, ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows, guess_donors)
 }
 
-cpp_loglik <- function(ctxSEXP, structure, trial_entries, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_cpp_loglik`, ctxSEXP, structure, trial_entries, rel_tol, abs_tol, max_depth)
+cpp_loglik <- function(ctxSEXP, structure, params_mat, data_df, rel_tol, abs_tol, max_depth) {
+    .Call(`_AccumulatR_cpp_loglik`, ctxSEXP, structure, params_mat, data_df, rel_tol, abs_tol, max_depth)
 }
 
-native_plan_entries_cpp <- function(ctxSEXP, structure, plan, selection_keys, data_trial_keys, data_df, na_source_specs, guess_target_specs, alias_specs) {
-    .Call(`_AccumulatR_native_plan_entries_cpp`, ctxSEXP, structure, plan, selection_keys, data_trial_keys, data_df, na_source_specs, guess_target_specs, alias_specs)
-}
-
-cpp_update_entries <- function(ctxSEXP, entries, params_obj) {
-    .Call(`_AccumulatR_cpp_update_entries`, ctxSEXP, entries, params_obj)
-}
-
-cpp_loglik_multiple <- function(ctxSEXP, structure, entries, params_list, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_cpp_loglik_multiple`, ctxSEXP, structure, entries, params_list, rel_tol, abs_tol, max_depth)
+cpp_loglik_multiple <- function(ctxSEXP, structure, params_list, data_df, rel_tol, abs_tol, max_depth) {
+    .Call(`_AccumulatR_cpp_loglik_multiple`, ctxSEXP, structure, params_list, data_df, rel_tol, abs_tol, max_depth)
 }
 
 native_component_plan_exported <- function(structureSEXP, trial_rowsSEXP, forced_componentSEXP) {
@@ -43,6 +35,10 @@ native_component_plan_exported <- function(structureSEXP, trial_rowsSEXP, forced
 
 native_outcome_probability_params_cpp <- function(ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows) {
     .Call(`_AccumulatR_native_outcome_probability_params_cpp`, ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows)
+}
+
+native_outcome_labels_cpp <- function(ctxSEXP) {
+    .Call(`_AccumulatR_native_outcome_labels_cpp`, ctxSEXP)
 }
 
 #' @noRd

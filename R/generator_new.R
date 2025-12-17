@@ -597,73 +597,116 @@ simulate.model_structure <- function(structure,
                                      keep_detail = FALSE,
                                      keep_component = NULL,
                                      ...) {
-  if (is.null(params_df) || nrow(params_df) == 0L) {
-    stop("Parameter data frame must contain at least one row")
+  if (is.null(params_df)) {
+    stop("Parameter matrix must be provided")
   }
   structure <- .as_model_structure(structure)
   prep <- structure$prep
+  acc_defs <- prep$accumulators %||% list()
+  acc_ids <- names(acc_defs)
+  n_acc <- length(acc_ids)
+  if (n_acc == 0L) stop("No accumulators defined in model structure")
+
+  params_mat <- if (is.matrix(params_df)) params_df else as.matrix(params_df)
+  if (!is.numeric(params_mat)) stop("Parameter matrix must be numeric")
+  if (nrow(params_mat) == 0L) stop("Parameter matrix must have rows")
+  if (nrow(params_mat) %% n_acc != 0) {
+    stop(sprintf("Parameter rows (%d) not divisible by number of accumulators (%d)",
+                 nrow(params_mat), n_acc))
+  }
+  required_cols <- c("q", "w", "t0")
+  if (is.null(colnames(params_mat))) {
+    stop("Parameter matrix must have column names")
+  }
+  missing_cols <- setdiff(required_cols, colnames(params_mat))
+  if (length(missing_cols) > 0) {
+    stop("Parameter matrix missing columns: ", paste(missing_cols, collapse = ", "))
+  }
+  p_cols <- grep("^p[0-9]+$", colnames(params_mat), value = TRUE)
+  if (length(p_cols) == 0L) stop("Parameter matrix must include at least p1")
+
+  n_trials <- nrow(params_mat) / n_acc
   comp_table <- structure$components
-  comp_ids <- comp_table$component_id
+  comp_ids <- comp_table$component_id %||% "__default__"
   mix_mode <- comp_table$mode[[1]] %||% "fixed"
-  if (!"trial" %in% names(params_df)) {
-    params_df$trial <- 1L
+
+  # Map components to a leader accumulator index (first member carrying that component)
+  comp_leader_idx <- setNames(rep(NA_integer_, length(comp_ids)), comp_ids)
+  for (i in seq_along(acc_ids)) {
+    comps <- acc_defs[[acc_ids[[i]]]]$components %||% character(0)
+    for (c_id in comps) {
+      if (is.na(comp_leader_idx[[c_id]])) {
+        comp_leader_idx[[c_id]] <- i
+      }
+    }
   }
-  params_df$trial <- params_df$trial
-  if ("component" %in% names(params_df)) {
-    params_df$component <- as.character(params_df$component)
-  }
+
   if (!is.null(seed)) set.seed(seed)
-  # if (isTRUE(getOption("uuber.sim.native", TRUE))) {
-  #   native_res <- tryCatch(
-  #     native_simulate_cpp(structure, params_df, keep_detail),
-  #     error = function(e) NULL
-  #   )
-  #   if (!is.null(native_res)) return(native_res)
-  # }
-  trial_ids <- unique(params_df$trial)
-  trial_ids <- trial_ids[order(trial_ids)]
+  trial_ids <- seq_len(n_trials)
   outcomes <- character(length(trial_ids))
   rts <- numeric(length(trial_ids))
   comp_record <- rep(NA_character_, length(trial_ids))
   details <- if (keep_detail) vector("list", length(trial_ids)) else NULL
 
-  get_component_state <- function(component_label, rows_df) {
-    .generator_param_state_from_rows(prep, rows_df)
-  }
-
   for (i in seq_along(trial_ids)) {
-    tid <- trial_ids[[i]]
-    trial_rows <- params_df[params_df$trial == tid, , drop = FALSE]
-    available_components <- comp_ids
-    if ("component" %in% names(trial_rows)) {
-      trial_comp <- unique(trial_rows$component)
-      trial_comp <- trial_comp[!is.na(trial_comp)]
-      if (length(trial_comp) > 0L) {
-        available_components <- intersect(comp_ids, trial_comp)
+    start <- (i - 1L) * n_acc
+    # Component weights from w column (leader row per component)
+    comp_weights <- numeric(length(comp_ids))
+    for (ci in seq_along(comp_ids)) {
+      leader_idx <- comp_leader_idx[[comp_ids[[ci]]]]
+      if (!is.na(leader_idx)) {
+        row_idx <- start + leader_idx
+        w_val <- params_mat[row_idx, "w"]
+        comp_weights[[ci]] <- if (is.finite(w_val) && w_val >= 0) w_val else 0
+      } else {
+        comp_weights[[ci]] <- 1
       }
     }
-    if (length(available_components) == 0L) available_components <- comp_ids
-
-    comp_weights <- .component_weights_for_trial(
-      structure,
-      tid,
-      available_components,
-      trial_rows = trial_rows
-    )
-    chosen_component <- if (length(available_components) == 1L) {
-      available_components[[1]]
+    if (length(comp_weights) == 0L) comp_weights <- 1
+    if (sum(comp_weights) <= 0 || any(!is.finite(comp_weights))) {
+      comp_weights <- rep(1 / length(comp_weights), length(comp_weights))
     } else {
-      sample(available_components, size = 1L, prob = comp_weights)
+      comp_weights <- comp_weights / sum(comp_weights)
+    }
+    chosen_component <- if (length(comp_ids) == 1L) {
+      comp_ids[[1]]
+    } else {
+      sample(comp_ids, size = 1L, prob = comp_weights)
     }
     comp_record[[i]] <- chosen_component
-    component_rows <- .generator_component_rows(trial_rows, chosen_component)
-    param_state <- get_component_state(chosen_component, component_rows)
+
+    trial_accs <- list()
+    shared_map <- list()
+    for (j in seq_len(n_acc)) {
+      acc_id <- acc_ids[[j]]
+      row_idx <- start + j
+      row_vals <- params_mat[row_idx, ]
+      dist_params <- dist_param_names(acc_defs[[acc_id]]$dist)
+      dist_list <- setNames(as.list(row_vals[p_cols][seq_along(dist_params)]), dist_params)
+      dist_list$t0 <- row_vals[["t0"]]
+      acc_entry <- list(
+        dist = acc_defs[[acc_id]]$dist,
+        params = dist_list,
+        onset = acc_defs[[acc_id]]$onset %||% 0,
+        q = row_vals[["q"]] %||% 0,
+        shared_trigger_id = acc_defs[[acc_id]]$shared_trigger_id %||% NA_character_,
+        components = acc_defs[[acc_id]]$components %||% character(0)
+      )
+      trial_accs[[acc_id]] <- acc_entry
+      stid <- acc_entry$shared_trigger_id
+      if (!is.null(stid) && !is.na(stid) && nzchar(stid)) {
+        if (is.null(shared_map[[stid]])) {
+          shared_map[[stid]] <- list(prob = row_vals[["q"]] %||% 0)
+        }
+      }
+    }
+
     result <- .simulate_trial(
       prep,
       chosen_component,
       keep_detail = keep_detail,
-      trial_accs = param_state$accs,
-      trial_shared_triggers = param_state$shared
+      trial_accs = trial_accs,
+      trial_shared_triggers = shared_map
     )
     outcomes[[i]] <- result$outcome
     rts[[i]] <- result$rt
@@ -677,7 +720,7 @@ simulate.model_structure <- function(structure,
     stringsAsFactors = FALSE
   )
   keep_component <- keep_component %||% if (identical(mix_mode, "sample")) FALSE else TRUE
-  if (keep_component && (length(comp_ids) > 1L || "component" %in% names(params_df))) {
+  if (keep_component && (length(comp_ids) > 1L)) {
     out_df$component <- comp_record
   }
   if (keep_detail) attr(out_df, "details") <- details

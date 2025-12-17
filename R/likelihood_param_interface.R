@@ -2,8 +2,8 @@
                                           prep = NULL,
                                           trial_plan = NULL,
                                           native_bundle = NULL) {
-  if (is.null(params_df) || nrow(params_df) == 0L) {
-    stop("Parameter data frame must contain at least one row", call. = FALSE)
+  if (is.null(params_df)) {
+    stop("Parameter matrix must be provided", call. = FALSE)
   }
   if (is.null(data_df) || nrow(data_df) == 0L) {
     stop("Data frame must contain outcome/rt per trial", call. = FALSE)
@@ -12,91 +12,57 @@
   if (is.null(structure$model_spec)) {
     stop("model structure must include model_spec; rebuild with finalize_model")
   }
+  params_mat <- if (is.matrix(params_df) || inherits(params_df, "param_matrix")) {
+    params_df
+  } else {
+    as.matrix(params_df)
+  }
+  if (is.null(colnames(params_mat))) {
+    stop("Parameter matrix must include column names")
+  }
+  n_acc <- nrow(structure$accumulators)
+  if (n_acc == 0L) stop("Model has no accumulators")
+  if (nrow(params_mat) %% n_acc != 0) {
+    stop("Parameter rows must be a multiple of the number of accumulators")
+  }
+  n_trials <- nrow(params_mat) / n_acc
   data_df <- as.data.frame(data_df)
   required_cols <- c("trial", "outcome", "rt")
   missing_cols <- setdiff(required_cols, names(data_df))
   if (length(missing_cols) > 0L) {
     stop(sprintf("Data frame must include columns: %s", paste(missing_cols, collapse = ", ")), call. = FALSE)
   }
-  data_df$trial <- data_df$trial
+  if (nrow(data_df) != n_trials) {
+    warning("Number of data rows differs from parameter trials; ensure trial indexing matches.")
+  }
+  data_df$trial <- as.integer(data_df$trial)
   data_df$outcome <- as.character(data_df$outcome)
   data_df$rt <- as.numeric(data_df$rt)
   if ("component" %in% names(data_df)) {
     data_df$component <- as.character(data_df$component)
   }
-  trial_lookup_keys <- as.character(data_df$trial %||% NA)
-  data_row_indices <- split(seq_len(nrow(data_df)), trial_lookup_keys)
-  trial_ids <- unique(data_df$trial)
   if (!is.null(native_bundle)) {
     prep <- native_bundle$prep %||% prep
   }
-  prep_eval_base <- prep %||% .prepare_model_for_likelihood(structure$model_spec)
-  if (is.null(prep_eval_base[[".runtime"]]) || is.null(prep_eval_base$.runtime$cache_bundle)) {
-    prep_eval_base <- .prep_set_cache_bundle(
-      prep_eval_base,
-      .build_likelihood_cache_bundle(prep_eval_base)
-    )
-  }
-  plan <- trial_plan %||% .likelihood_build_trial_plan(structure, params_df, prep_eval_base)
-  if (is.null(plan$.native_cache)) {
-    plan$.native_cache <- new.env(parent = emptyenv())
+  # ensure runtime caches (compiled expressions, id index, etc.) are present
+  prep_eval_base <- prep
+  if (is.null(prep_eval_base) || is.null(prep_eval_base[[".runtime"]])) {
+    prep_eval_base <- .prepare_model_for_likelihood(structure$model_spec)
   }
   native_ctx <- .prep_native_context(prep_eval_base)
   if (!inherits(native_ctx, "externalptr")) {
     native_ctx <- NULL
   }
-  plan_cache <- plan$.native_cache
-  plan_cache$entries <- NULL
-  plan_cache$entry_names <- NULL
-  plan_cache$eval_config <- NULL
-  if (!is.null(native_ctx)) {
-    metadata <- .likelihood_trial_metadata(structure, prep_eval_base)
-    if (!is.null(metadata)) {
-      plan_keys_raw <- as.character((plan$order %||% names(plan$trials)) %||% character(0))
-      if (length(plan_keys_raw) == 0L) {
-        stop("Plan contains no trials", call. = FALSE)
-      }
-      data_trial_keys <- as.character(data_df$trial %||% NA)
-      entries_all <- tryCatch(
-        native_plan_entries_cpp(
-          native_ctx,
-          structure,
-          plan,
-          plan_keys_raw,
-          data_trial_keys,
-          data_df,
-          metadata$na_source_specs %||% list(),
-          metadata$guess_target_specs %||% list(),
-          metadata$alias_specs %||% list()
-        ),
-        error = function(e) NULL
-      )
-      if (!is.null(entries_all)) {
-        entry_names <- names(entries_all)
-        if (is.null(entry_names)) {
-          entry_names <- plan_keys_raw
-        }
-        entry_names_norm <- entry_names
-        entry_names_norm[is.na(entry_names_norm)] <- "NA"
-        plan_cache$entries <- entries_all
-        plan_cache$entry_names <- entry_names_norm
-        plan_cache$eval_config <- list(
-          rel_tol = as.numeric(metadata$rel_tol),
-          abs_tol = as.numeric(metadata$abs_tol),
-          max_depth = as.integer(metadata$max_depth)
-        )
-      }
-    }
-  }
   structure(list(
     structure = structure,
-    params_df = params_df,
+    params_df = params_mat,
+    params_mat = params_mat,
     prep = prep_eval_base,
-    plan = plan,
     native_ctx = native_ctx,
     data_df = data_df,
-    data_row_indices = data_row_indices,
-    trial_ids = trial_ids
+    rel_tol = .integrate_rel_tol(),
+    abs_tol = .integrate_abs_tol(),
+    max_depth = getOption("uuber.integrate.max.depth", 12L)
   ), class = "likelihood_context")
 }
 
@@ -140,6 +106,98 @@ build_likelihood_context <- function(structure, params_df, data_df,
 .validate_likelihood_context <- function(context) {
   if (inherits(context, "likelihood_context")) return(context)
   stop("likelihood context must be created via build_likelihood_context()", call. = FALSE)
+}
+
+.param_matrix_to_rows <- function(structure, params_mat) {
+  prep <- structure$prep %||% stop("structure missing prep")
+  acc_defs <- prep$accumulators %||% list()
+  acc_ids <- names(acc_defs)
+  n_acc <- length(acc_ids)
+  if (is.null(colnames(params_mat))) {
+    stop("Parameter matrix must have column names")
+  }
+  if (nrow(params_mat) %% n_acc != 0) {
+    stop(sprintf("Parameter rows (%d) not divisible by accumulators (%d)", nrow(params_mat), n_acc))
+  }
+  n_trials <- nrow(params_mat) / n_acc
+  p_cols <- grep("^p[0-9]+$", colnames(params_mat), value = TRUE)
+  if (length(p_cols) == 0L) stop("Parameter matrix must include p1.. columns")
+  dist_param_list <- lapply(acc_defs, function(acc) dist_param_names(acc$dist))
+
+  # Component leaders for weight params
+  comp_ids <- structure$components$component_id %||% character(0)
+  comp_leader_idx <- setNames(rep(NA_integer_, length(comp_ids)), comp_ids)
+  for (i in seq_along(acc_ids)) {
+    comps <- acc_defs[[acc_ids[[i]]]]$components %||% character(0)
+    for (c_id in comps) {
+      if (is.na(comp_leader_idx[[c_id]])) comp_leader_idx[[c_id]] <- i
+    }
+  }
+  comp_attrs <- structure$components$attrs %||% vector("list", length(comp_ids))
+  comp_weight_param <- setNames(rep(NA_character_, length(comp_ids)), comp_ids)
+  for (i in seq_along(comp_ids)) {
+    attrs <- comp_attrs[[i]] %||% list()
+    if (!is.null(attrs$weight_param) && nzchar(attrs$weight_param)) {
+      comp_weight_param[[i]] <- attrs$weight_param
+    }
+  }
+  # All column names we may emit (dist params can differ by accumulator)
+  global_dist_params <- unique(unlist(dist_param_list))
+  weight_param_names <- unique(comp_weight_param[!is.na(comp_weight_param) & nzchar(comp_weight_param)])
+  all_cols <- c(
+    "trial", "accumulator", "q", "t0", "onset",
+    "shared_trigger_id", "shared_trigger_q",
+    global_dist_params,
+    weight_param_names
+  )
+
+  rows <- vector("list", nrow(params_mat))
+  row_idx <- 1L
+  for (t in seq_len(n_trials)) {
+    # per-trial weight params pulled from w in leader rows
+    weight_vals <- list()
+    for (i in seq_along(comp_ids)) {
+      wp <- comp_weight_param[[i]]
+      if (is.na(wp) || !nzchar(wp)) next
+      leader_idx <- comp_leader_idx[[comp_ids[[i]]]]
+      if (is.na(leader_idx)) next
+      row_num <- (t - 1L) * n_acc + leader_idx
+      weight_vals[[wp]] <- params_mat[row_num, "w"]
+    }
+    for (i in seq_len(n_acc)) {
+      acc <- acc_defs[[acc_ids[[i]]]] %||% list()
+      dist_params <- dist_param_list[[i]] %||% character(0)
+      p_vals <- params_mat[row_idx, p_cols][seq_along(dist_params)]
+      row <- list(
+        trial = t,
+        accumulator = i,
+        q = params_mat[row_idx, "q"],
+        t0 = params_mat[row_idx, "t0"],
+        onset = acc$onset %||% 0,
+        shared_trigger_id = acc$shared_trigger_id %||% NA_character_,
+        shared_trigger_q = params_mat[row_idx, "q"]
+      )
+      for (k in seq_along(dist_params)) {
+        row[[dist_params[[k]]]] <- as.numeric(p_vals[[k]])
+      }
+      # pad any missing columns with NA and order consistently
+      missing_cols <- setdiff(all_cols, names(row))
+      if (length(missing_cols)) {
+        for (nm in missing_cols) row[[nm]] <- NA
+      }
+      row <- row[all_cols]
+      if (length(weight_vals) > 0) {
+        for (nm in names(weight_vals)) {
+          row[[nm]] <- weight_vals[[nm]]
+        }
+      }
+      rows[[row_idx]] <- row
+      row_idx <- row_idx + 1L
+    }
+  }
+  df <- do.call(rbind, lapply(rows, as.data.frame, stringsAsFactors = FALSE))
+  rownames(df) <- NULL
+  df
 }
 
 .likelihood_component_rows <- function(trial_rows, component) {
@@ -647,6 +705,9 @@ response_probabilities.model_structure <- function(structure,
   if (is.null(structure$model_spec)) {
     stop("model structure must include model_spec; rebuild with finalize_model")
   }
+  if (is.matrix(params_df) || inherits(params_df, "param_matrix")) {
+    params_df <- .param_matrix_to_rows(structure, params_df)
+  }
   model_spec <- .model_spec_with_params(structure$model_spec, params_df)
   prep_eval_base <- .prepare_model_for_likelihood(model_spec)
   comp_ids <- structure$components$component_id
@@ -751,91 +812,30 @@ log_likelihood <- function(likelihood_context, parameters, ...) {
 #' @export
 log_likelihood.likelihood_context <- function(likelihood_context, parameters, ...) {
   ctx <- .validate_likelihood_context(likelihood_context)
-  cache <- ctx$plan$.native_cache %||% NULL
-  entries <- cache$entries %||% NULL
-  eval_cfg <- cache$eval_config %||% NULL
   native_ctx <- ctx$native_ctx
-  if (is.null(entries) || is.null(eval_cfg) || !inherits(native_ctx, "externalptr")) {
-    # Fallback: rebuild context from stored data/params in the likelihood_context
-    if (!is.null(ctx$data_df) && !is.null(ctx$params_df)) {
-      rebuilt <- build_likelihood_context(
-        structure = ctx$structure,
-        params_df = ctx$params_df,
-        data_df = ctx$data_df,
-        prep = ctx$prep
-      )
-      ctx <- rebuilt
-      cache <- ctx$plan$.native_cache %||% cache
-      entries <- cache$entries %||% entries
-      eval_cfg <- cache$eval_config %||% eval_cfg
-      native_ctx <- ctx$native_ctx
-    }
-    if (is.null(entries) || is.null(eval_cfg) || !inherits(native_ctx, "externalptr")) {
-      stop("Cached native entries are required; build the context with data_df first", call. = FALSE)
-    }
+  if (is.null(native_ctx) || !inherits(native_ctx, "externalptr")) {
+    stop("Native context required for log_likelihood", call. = FALSE)
   }
-  if (is.data.frame(parameters) || is.matrix(parameters)) {
-    parameters <- list(as.data.frame(parameters))
+  params_list <- if (is.data.frame(parameters) || is.matrix(parameters) || inherits(parameters, "param_matrix")) {
+    list(parameters)
   } else {
-    parameters <- lapply(parameters, as.data.frame)
+    parameters
   }
-
-  comp_mode <- ctx$structure$components$mode[[1]] %||% "fixed"
-  if (identical(comp_mode, "sample")) {
-    if (is.null(native_ctx) || !inherits(native_ctx, "externalptr")) {
-      stop("Native context required for log_likelihood", call. = FALSE)
-    }
-    data_trial_keys <- as.character(ctx$data_df$trial %||% NA)
-    metadata <- .likelihood_trial_metadata(ctx$structure, ctx$prep)
-    rel_tol <- as.numeric(metadata$rel_tol %||% .integrate_rel_tol())
-    abs_tol <- as.numeric(metadata$abs_tol %||% .integrate_abs_tol())
-    max_depth <- as.integer(metadata$max_depth %||% 12L)
-    na_specs <- metadata$na_source_specs %||% list()
-    guess_specs <- metadata$guess_target_specs %||% list()
-    alias_specs <- metadata$alias_specs %||% list()
-    out <- numeric(length(parameters))
-    for (i in seq_along(parameters)) {
-      df <- parameters[[i]]
-      params_mat <- .params_df_to_matrix(df)
-      plan_local <- .likelihood_build_trial_plan(ctx$structure, df, ctx$prep)
-      plan_keys <- as.character((plan_local$order %||% names(plan_local$trials)) %||% character(0))
-      if (length(plan_keys) == 0L) {
-        stop("Plan contains no trials", call. = FALSE)
-      }
-      entries_i <- native_plan_entries_cpp(
-        native_ctx,
-        ctx$structure,
-        plan_local,
-        plan_keys,
-        data_trial_keys,
-        ctx$data_df,
-        na_specs,
-        guess_specs,
-        alias_specs
-      )
-      res <- cpp_loglik_multiple(
-        native_ctx,
-        ctx$structure,
-        entries_i,
-        list(params_mat),
-        rel_tol,
-        abs_tol,
-        max_depth
-      )
-      out[[i]] <- as.numeric(res[[1]])
-    }
-    return(out)
-  }
-
-  params_list <- lapply(parameters, function(df) .params_df_to_matrix(as.data.frame(df)))
+  params_list <- lapply(params_list, function(pm) {
+    if (inherits(pm, "param_matrix") || is.matrix(pm)) return(pm)
+    as.matrix(pm)
+  })
+  rel_tol <- ctx$rel_tol %||% .integrate_rel_tol()
+  abs_tol <- ctx$abs_tol %||% .integrate_abs_tol()
+  max_depth <- ctx$max_depth %||% 12L
   cpp_loglik_multiple(
     native_ctx,
     ctx$structure,
-    entries,
     params_list,
-    as.numeric(eval_cfg$rel_tol %||% .integrate_rel_tol()),
-    as.numeric(eval_cfg$abs_tol %||% .integrate_abs_tol()),
-    as.integer(eval_cfg$max_depth %||% 12L)
+    ctx$data_df,
+    rel_tol,
+    abs_tol,
+    max_depth
   )
 }
 

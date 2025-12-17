@@ -893,15 +893,27 @@ param_table <- function(model, ...) {
 build_params_df <- function(model,
                             param_values,
                             n_trials = 1L,
-                            component = NA_character_) {
+                            component = NULL) {
+  build_param_matrix(model, param_values, n_trials = n_trials)
+}
+
+#' Build a positional parameter matrix (q, w, t0, p1..pK)
+#'
+#' @param model Model definition (race_spec or race_model_spec)
+#' @param param_values Named numeric vector of core parameters
+#' @param n_trials Number of trials to replicate
+#' @return Numeric matrix with columns `q`, `w`, `t0`, `p1`, `p2`, `p3`
+#'   and attributes `acc_ids`, `n_trials`, `layout`
+#' @export
+build_param_matrix <- function(model,
+                               param_values,
+                               n_trials = 1L) {
   spec <- race_model(model)
-  accs <- spec[["accumulators"]] %||% list()
-  if (length(accs) == 0) {
-    stop("Model must define accumulators before building parameter tables")
+  accs <- spec$accumulators %||% list()
+  if (length(accs) == 0L) {
+    stop("Model must define accumulators before building parameter matrices")
   }
-  prep_defaults <- .prepare_model_for_likelihood(spec)
-  prep_accs <- prep_defaults$accumulators %||% list()
-  if (is.null(param_values) || length(param_values) == 0) {
+  if (is.null(param_values) || length(param_values) == 0L) {
     stop("Named parameter values are required")
   }
   if (is.null(names(param_values)) || any(!nzchar(names(param_values)))) {
@@ -912,187 +924,156 @@ build_params_df <- function(model,
   }
   n_trials <- as.integer(n_trials)
 
-  value_names <- names(param_values)
+  param_names <- names(param_values)
   param_values <- as.numeric(param_values)
-  names(param_values) <- value_names
+  names(param_values) <- param_names
 
   acc_ids <- vapply(accs, `[[`, character(1), "id")
   acc_dists <- vapply(accs, `[[`, character(1), "dist")
+  dist_param_list <- lapply(acc_dists, dist_param_names)
+  max_p <- max(vapply(dist_param_list, length, integer(1)), 0L)
+  max_p <- max(3L, max_p)
+  col_names <- c("q", "w", "t0", paste0("p", seq_len(max_p)))
 
-  per_acc_params <- setNames(
-    lapply(acc_dists, function(dist) c(dist_param_names(dist), "onset", "q", "t0")),
-    acc_ids
-  )
-  all_required_names <- unlist(mapply(function(acc, fields) {
-    paste0(acc, ".", fields)
-  }, acc_ids, per_acc_params, SIMPLIFY = FALSE))
-  optional_suffixes <- c("onset", "q", "t0")
-  suffix_union <- unique(unlist(per_acc_params))
-  shared_map <- setNames(vector("list", length(acc_ids)), acc_ids)
-  spec_groups <- spec[["groups"]] %||% list()
-  if (length(spec_groups) > 0) {
-    for (grp in spec_groups) {
-      grp_attrs <- grp[["attrs"]] %||% list()
-      trig <- grp_attrs[["shared_trigger"]] %||% NULL
-      if (!is.null(trig)) {
-        draw_mode <- trig$draw %||% "shared"
-        if (identical(draw_mode, "independent")) {
-          param_nm <- trig$param %||% paste0(grp[["id"]] %||% "trigger", ".q")
-          members <- grp[["members"]] %||% character(0)
-          for (member in members) {
-            if (is.null(shared_map[[member]])) shared_map[[member]] <- list()
-            shared_map[[member]][["q"]] <- param_nm
-          }
-        }
-      }
-      sp <- grp_attrs[["shared_params"]] %||% NULL
-      members <- grp[["members"]] %||% character(0)
-      if (is.null(sp) || length(members) == 0) next
-      fields <- names(sp)
-      if (is.null(fields) || any(!nzchar(fields))) {
-        fields <- as.character(unlist(sp, use.names = FALSE))
-      }
-      grp_id <- grp[["id"]] %||% NA_character_
-      for (member in members) {
-        if (is.null(shared_map[[member]])) shared_map[[member]] <- list()
-        for (field in fields) {
-          shared_map[[member]][[field]] <- paste0(grp_id, ".", field)
-        }
-      }
+  # Map accumulators to components (if any) via group attrs$component
+  comp_attr <- list()
+  for (grp in spec$groups %||% list()) {
+    attrs <- grp$attrs %||% list()
+    comp_val <- attrs$component %||% NULL
+    if (is.null(comp_val)) next
+    members <- grp$members %||% character(0)
+    for (m in members) {
+      comp_attr[[m]] <- comp_val
     }
-  }
-  missing <- character(0)
-  for (acc_id in acc_ids) {
-    required_suffixes <- setdiff(per_acc_params[[acc_id]], optional_suffixes)
-    for (suffix in required_suffixes) {
-      nm <- paste0(acc_id, ".", suffix)
-      shared_nm <- shared_map[[acc_id]][[suffix]] %||% NA_character_
-      if (nm %in% names(param_values)) next
-      if (!is.na(shared_nm) && shared_nm %in% names(param_values)) next
-      missing <- c(missing, nm)
-    }
-  }
-  if (length(missing) > 0L) {
-    stop("Missing parameter values for: ", paste(missing, collapse = ", "))
-  }
-  optional_default <- function(spec_acc, prep_acc, suffix) {
-    acc <- prep_acc %||% spec_acc %||% list()
-    if (identical(suffix, "onset")) {
-      return(as.numeric(acc$onset %||% 0))
-    }
-    if (identical(suffix, "q")) {
-      val <- acc$q %||% acc$shared_trigger_q %||% spec_acc$q %||% 0
-      return(as.numeric(val %||% 0))
-    }
-    if (identical(suffix, "t0")) {
-      params <- acc$params %||% spec_acc$params %||% list()
-      return(as.numeric(params[[suffix]] %||% 0))
-    }
-    0
   }
 
-  base_rows <- lapply(seq_along(accs), function(idx) {
-    acc <- accs[[idx]]
-    acc_id <- acc_ids[[idx]]
-    prep_acc <- prep_accs[[acc_id]] %||% list()
-    row_vals <- setNames(as.list(rep(NA_real_, length(suffix_union))), suffix_union)
-    for (suffix in per_acc_params[[acc_id]]) {
-      nm <- paste0(acc_id, ".", suffix)
-      if (nm %in% names(param_values)) {
-        row_vals[[suffix]] <- as.numeric(param_values[[nm]])
-      } else if (!is.null(shared_map[[acc_id]][[suffix]])) {
-        shared_nm <- shared_map[[acc_id]][[suffix]]
-        if (!shared_nm %in% names(param_values)) {
-          stop(sprintf("Missing shared parameter value '%s' for member '%s'", shared_nm, acc_id))
-        }
-        row_vals[[suffix]] <- as.numeric(param_values[[shared_nm]])
-      } else if (suffix %in% optional_suffixes) {
-        row_vals[[suffix]] <- optional_default(acc, prep_acc, suffix)
-      } else {
-        stop(sprintf("Missing parameter value for '%s.%s'", acc_id, suffix))
-      }
-    }
-    data.frame(
-      trial = 1L,
-      accumulator = idx,
-      component = if (is.null(component)) NA_character_ else as.character(component),
-      row_vals,
-      stringsAsFactors = FALSE
-    )
-  })
-  base_df <- do.call(rbind, base_rows)
-
-  # Mixture weight parameters (sampled mixtures only, non-reference components)
+  # Mixture component weights (mapped to components, then to member rows)
   mix <- spec$metadata$mixture %||% list()
-  mix_mode <- mix$mode %||% "fixed"
-  if (identical(mix_mode, "sample")) {
-    comps <- mix$components %||% list()
-    if (length(comps) == 0) stop("Sampled mixtures require component definitions")
-    ids <- vapply(comps, `[[`, character(1), "id")
-    attrs_list <- lapply(comps, function(cmp) cmp$attrs %||% list())
-    reference <- mix$reference %||% ids[[1]]
-    if (!reference %in% ids) stop("mixture reference must match a component id")
-    for (i in seq_along(ids)) {
-      cmp_id <- ids[[i]]
-      if (identical(cmp_id, reference)) next
-      wp <- attrs_list[[i]][["weight_param"]]
-      if (is.null(wp) || !nzchar(wp)) {
-        stop(sprintf("Component '%s' must define weight_param for sampled mixtures (reference %s)", cmp_id, reference))
+  comp_defs <- mix$components %||% list()
+  comp_ids <- vapply(comp_defs, `[[`, character(1), "id")
+  comp_weights <- setNames(rep(NA_real_, length(comp_defs)), comp_ids)
+  comp_mode <- mix$mode %||% "fixed"
+  comp_ref <- mix$reference %||% if (length(comp_ids) > 0) comp_ids[[1]] else NA_character_
+  if (length(comp_defs) > 0) {
+    for (i in seq_along(comp_defs)) {
+      comp <- comp_defs[[i]]
+      attrs <- comp$attrs %||% list()
+      wp <- attrs$weight_param %||% NULL
+      if (!is.null(wp) && wp %in% names(param_values)) {
+        comp_weights[[i]] <- as.numeric(param_values[[wp]])
+      } else if (!is.null(comp$weight)) {
+        comp_weights[[i]] <- as.numeric(comp$weight)
       }
-      if (!wp %in% names(param_values)) {
-        stop(sprintf("Missing mixture weight parameter '%s' for component '%s'", wp, cmp_id))
+    }
+    if (identical(comp_mode, "sample")) {
+      non_ref_ids <- setdiff(comp_ids, comp_ref)
+      non_ref_sum <- sum(comp_weights[non_ref_ids], na.rm = TRUE)
+      if (is.na(comp_weights[[comp_ref]])) {
+        ref_val <- 1 - non_ref_sum
+        if (!is.finite(ref_val) || ref_val < 0) ref_val <- 0
+        comp_weights[[comp_ref]] <- ref_val
       }
-      wval <- as.numeric(param_values[[wp]])
-      if (length(wval) != 1L || is.na(wval) || wval < 0 || wval > 1) {
-        stop(sprintf("Mixture weight parameter '%s' must be a probability in [0,1]", wp))
+    }
+    if (any(is.na(comp_weights))) {
+      if (length(comp_weights) > 0) {
+        comp_weights[is.na(comp_weights)] <- 1 / length(comp_weights)
       }
-      base_df[[wp]] <- rep(wval, nrow(base_df))
+    }
+    total_w <- sum(comp_weights)
+    if (is.finite(total_w) && total_w > 0) {
+      comp_weights <- comp_weights / total_w
     }
   }
 
-  extra_names <- setdiff(names(param_values), all_required_names)
-  if (length(extra_names) > 0L) {
-    for (nm in extra_names) {
-      base_df[[nm]] <- as.numeric(param_values[[nm]])
+  # Shared trigger q per group id
+  trigger_q_map <- list()
+  trigger_draw_map <- list()
+  for (grp in spec$groups %||% list()) {
+    trig <- grp$attrs$shared_trigger %||% NULL
+    if (is.null(trig)) next
+    trig_id <- trig$id %||% grp$id %||% trig$param %||% NA_character_
+    if (is.null(trig_id) || !nzchar(trig_id)) next
+    draw_mode <- trig$draw %||% "shared"
+    trigger_draw_map[[trig_id]] <- draw_mode
+    q_val <- NA_real_
+    if (!is.null(trig$param) && trig$param %in% names(param_values)) {
+      q_val <- as.numeric(param_values[[trig$param]])
+    } else if (!is.null(trig$q)) {
+      q_val <- as.numeric(trig$q)
     }
+    trigger_q_map[[trig_id]] <- q_val %||% 0
   }
-  # Propagate shared trigger parameters (group-level) into per-acc rows:
-  # - set per-acc q to 0 (success-path) and attach shared_trigger_id so the
-  #   native layer applies the joint gate once using shared_trigger_q.
-  if (!is.null(spec$groups) && length(spec$groups) > 0) {
-    if (!"shared_trigger_id" %in% names(base_df)) {
-      base_df$shared_trigger_id <- NA_character_
-    }
-    if (!"shared_trigger_q" %in% names(base_df)) {
-      base_df$shared_trigger_q <- NA_real_
-    }
-    for (grp in spec$groups) {
-      trig <- grp$attrs$shared_trigger %||% NULL
-      if (is.null(trig)) next
-      draw_mode <- trig$draw %||% "shared"
-      if (!identical(draw_mode, "shared")) next
-      param_nm <- trig$param %||% NULL
-      members <- grp$members %||% character(0)
-      if (length(members) == 0) next
-      mask <- acc_ids %in% members
-      if (!any(mask)) next
-      base_df$shared_trigger_id[mask] <- grp$id %||% trig$id %||% param_nm
-      if (!is.null(param_nm) && nzchar(param_nm) && param_nm %in% names(param_values)) {
-        trig_q <- as.numeric(param_values[[param_nm]])
-        base_df$shared_trigger_q[mask] <- trig_q
-      } else if (!is.null(trig$q)) {
-        base_df$shared_trigger_q[mask] <- as.numeric(trig$q)
+
+  # Build one row per accumulator
+  base_mat <- matrix(NA_real_, nrow = length(accs), ncol = length(col_names))
+  colnames(base_mat) <- col_names
+  for (i in seq_along(accs)) {
+    acc <- accs[[i]]
+    acc_id <- acc_ids[[i]]
+    dist <- acc$dist
+    dist_params <- dist_param_names(dist)
+    needed <- length(dist_params)
+    if (needed > max_p) stop("Unexpected dist param count > max_p")
+    # Distribution parameters
+    p_vals <- numeric(max_p)
+    for (j in seq_along(dist_params)) {
+      nm <- paste0(acc_id, ".", dist_params[[j]])
+      if (nm %in% names(param_values)) {
+        p_vals[[j]] <- as.numeric(param_values[[nm]])
+      } else if (!is.null(acc$params[[dist_params[[j]]]])) {
+        p_vals[[j]] <- as.numeric(acc$params[[dist_params[[j]]]])
+      } else {
+        stop(sprintf("Missing required parameter '%s' for accumulator '%s'", dist_params[[j]], acc_id))
       }
-      # Joint gate: per-acc q is handled by the gate; avoid per-acc q overrides.
-      # Leave q as NA for these rows so downstream logic does not treat it as an override.
-      base_df$q[mask] <- NA_real_
     }
+    # q
+    q_nm <- paste0(acc_id, ".q")
+    q_val <- if (q_nm %in% names(param_values)) {
+      as.numeric(param_values[[q_nm]])
+    } else if (!is.null(acc$q)) {
+      as.numeric(acc$q)
+    } else {
+      NA_real_
+    }
+    if (!is.null(acc$shared_trigger_id) && nzchar(acc$shared_trigger_id)) {
+      q_val <- trigger_q_map[[acc$shared_trigger_id]] %||% q_val %||% 0
+    }
+    if (is.na(q_val)) q_val <- 0
+    # t0
+    t0_nm <- paste0(acc_id, ".t0")
+    t0_val <- if (t0_nm %in% names(param_values)) {
+      as.numeric(param_values[[t0_nm]])
+    } else if (!is.null(acc$params$t0)) {
+      as.numeric(acc$params$t0)
+    } else {
+      0
+    }
+    # w
+    w_nm <- paste0(acc_id, ".w")
+    w_val <- if (w_nm %in% names(param_values)) {
+      as.numeric(param_values[[w_nm]])
+    } else {
+      comp_id <- comp_attr[[acc_id]] %||% NA_character_
+      if (!is.null(comp_id) && !is.na(comp_id) && comp_id %in% names(comp_weights)) {
+        as.numeric(comp_weights[[comp_id]])
+      } else {
+        1
+      }
+    }
+    base_mat[i, ] <- c(q_val, w_val, t0_val, p_vals)
   }
-  base_n <- nrow(base_df)
-  if (n_trials > 1L) {
-    base_df <- base_df[rep(seq_len(base_n), times = n_trials), , drop = FALSE]
-  }
-  base_df$trial <- rep(seq_len(n_trials), each = base_n)
-  rownames(base_df) <- NULL
-  base_df
+
+  # Replicate for n_trials (pure positional)
+  params_mat <- base_mat[rep(seq_len(nrow(base_mat)), times = n_trials), , drop = FALSE]
+  layout <- data.frame(
+    row = seq_len(nrow(params_mat)),
+    trial = rep(seq_len(n_trials), each = nrow(base_mat)),
+    accumulator = rep(acc_ids, times = n_trials),
+    stringsAsFactors = FALSE
+  )
+  attr(params_mat, "acc_ids") <- acc_ids
+  attr(params_mat, "n_trials") <- n_trials
+  attr(params_mat, "layout") <- layout
+  class(params_mat) <- c("param_matrix", class(params_mat))
+  params_mat
 }

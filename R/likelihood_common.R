@@ -328,10 +328,10 @@
   if (is.null(val)) default else val
 }
 
-.prep_expr_compiled <- function(prep) .prep_runtime_get(prep, "expr_compiled")
-.prep_label_cache <- function(prep) .prep_runtime_get(prep, "label_cache")
-.prep_competitors <- function(prep) .prep_runtime_get(prep, "competitor_map")
-.prep_id_index <- function(prep) .prep_runtime_get(prep, "id_index")
+.prep_expr_compiled <- function(prep) .prep_runtime_get(prep, "expr_compiled", prep[[".expr_compiled"]])
+.prep_label_cache <- function(prep) .prep_runtime_get(prep, "label_cache", prep[[".label_cache"]])
+.prep_competitors <- function(prep) .prep_runtime_get(prep, "competitor_map", prep[[".competitors"]])
+.prep_id_index <- function(prep) .prep_runtime_get(prep, "id_index", prep[[".id_index"]])
 .prep_cache_bundle <- function(prep) .prep_runtime_get(prep, "cache_bundle")
 
 .prep_native_context <- function(prep) {

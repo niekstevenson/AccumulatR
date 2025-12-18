@@ -1641,6 +1641,639 @@ const uuber::NativeNode& fetch_node(const uuber::NativeContext& ctx, int node_id
   return ctx.nodes.at(ctx.node_index.at(node_id));
 }
 
+bool share_sources(const std::vector<int>& a, const std::vector<int>& b);
+
+struct SharedGatePair {
+  std::string x;
+  std::string y;
+  std::string c;
+};
+
+struct SharedGateNWay {
+  std::string gate;
+  std::string target_x;
+  std::vector<std::string> competitor_xs;
+};
+
+bool detect_shared_gate_pair(const uuber::NativeContext& ctx,
+                             int node_id,
+                             int competitor_node_id,
+                             SharedGatePair& out) {
+  if (node_id < 0 || competitor_node_id < 0) return false;
+  const uuber::NativeNode& target = fetch_node(ctx, node_id);
+  const uuber::NativeNode& competitor = fetch_node(ctx, competitor_node_id);
+  if (target.kind != "and" || competitor.kind != "and") return false;
+  if (target.args.size() != 2 || competitor.args.size() != 2) return false;
+
+  const uuber::NativeNode& t0 = fetch_node(ctx, target.args[0]);
+  const uuber::NativeNode& t1 = fetch_node(ctx, target.args[1]);
+  const uuber::NativeNode& c0 = fetch_node(ctx, competitor.args[0]);
+  const uuber::NativeNode& c1 = fetch_node(ctx, competitor.args[1]);
+  if (t0.kind != "event" || t1.kind != "event" || c0.kind != "event" || c1.kind != "event") {
+    return false;
+  }
+  if (t0.source.empty() || t1.source.empty() || c0.source.empty() || c1.source.empty()) {
+    return false;
+  }
+
+  std::string target_a = t0.source;
+  std::string target_b = t1.source;
+  std::string comp_a = c0.source;
+  std::string comp_b = c1.source;
+
+  std::string shared;
+  std::string x;
+  std::string y;
+  if (target_a == comp_a) {
+    shared = target_a;
+    x = target_b;
+    y = comp_b;
+  } else if (target_a == comp_b) {
+    shared = target_a;
+    x = target_b;
+    y = comp_a;
+  } else if (target_b == comp_a) {
+    shared = target_b;
+    x = target_a;
+    y = comp_b;
+  } else if (target_b == comp_b) {
+    shared = target_b;
+    x = target_a;
+    y = comp_a;
+  } else {
+    return false;
+  }
+
+  if (shared.empty() || x.empty() || y.empty()) return false;
+  if (x == y) return false;
+  if (x == shared || y == shared) return false;
+
+  out.x = std::move(x);
+  out.y = std::move(y);
+  out.c = std::move(shared);
+  return true;
+}
+
+bool detect_shared_gate_nway(const uuber::NativeContext& ctx,
+                             int node_id,
+                             const std::vector<int>& competitor_node_ids,
+                             SharedGateNWay& out) {
+  if (node_id < 0) return false;
+  if (competitor_node_ids.empty()) return false;
+
+  std::vector<int> node_ids;
+  node_ids.reserve(1 + competitor_node_ids.size());
+  node_ids.push_back(node_id);
+  for (int cid : competitor_node_ids) {
+    if (cid == NA_INTEGER || cid < 0) return false;
+    node_ids.push_back(cid);
+  }
+  if (node_ids.size() < 3) return false;  // N-way means >= 3 outcomes
+
+  struct AndPair {
+    std::string a;
+    std::string b;
+    int child0_id;
+    int child1_id;
+  };
+  std::vector<AndPair> pairs;
+  pairs.reserve(node_ids.size());
+  for (int id : node_ids) {
+    const uuber::NativeNode& node = fetch_node(ctx, id);
+    if (node.kind != "and") return false;
+    if (node.args.size() != 2) return false;
+    int c0_id = node.args[0];
+    int c1_id = node.args[1];
+    const uuber::NativeNode& c0 = fetch_node(ctx, c0_id);
+    const uuber::NativeNode& c1 = fetch_node(ctx, c1_id);
+    if (c0.kind != "event" || c1.kind != "event") return false;
+    if (c0.source.empty() || c1.source.empty()) return false;
+    pairs.push_back(AndPair{c0.source, c1.source, c0_id, c1_id});
+  }
+
+  const std::string& cand1 = pairs[0].a;
+  const std::string& cand2 = pairs[0].b;
+  if (cand1.empty() || cand2.empty()) return false;
+  if (cand1 == cand2) return false;
+
+  bool cand1_all = true;
+  bool cand2_all = true;
+  for (std::size_t i = 1; i < pairs.size(); ++i) {
+    const AndPair& p = pairs[i];
+    if (!(p.a == cand1 || p.b == cand1)) cand1_all = false;
+    if (!(p.a == cand2 || p.b == cand2)) cand2_all = false;
+  }
+  if (cand1_all == cand2_all) return false;  // either none shared or both shared
+  const std::string shared_gate = cand1_all ? cand1 : cand2;
+
+  std::unordered_set<std::string> seen_x;
+  seen_x.reserve(pairs.size());
+  std::string target_x;
+  std::vector<std::string> competitor_xs;
+  competitor_xs.reserve(pairs.size() - 1);
+
+  std::vector<int> gate_source_ids;
+  std::unordered_map<std::string, std::vector<int>> x_source_ids;
+  x_source_ids.reserve(pairs.size());
+
+  for (std::size_t i = 0; i < pairs.size(); ++i) {
+    const AndPair& p = pairs[i];
+    const bool a_is_gate = (p.a == shared_gate);
+    const bool b_is_gate = (p.b == shared_gate);
+    if (a_is_gate == b_is_gate) return false;
+    const std::string& x_lbl = a_is_gate ? p.b : p.a;
+    if (x_lbl.empty() || x_lbl == shared_gate) return false;
+    if (!seen_x.insert(x_lbl).second) return false;
+
+    int gate_child_id = a_is_gate ? p.child0_id : p.child1_id;
+    int x_child_id = a_is_gate ? p.child1_id : p.child0_id;
+    const uuber::NativeNode& gate_child = fetch_node(ctx, gate_child_id);
+    const uuber::NativeNode& x_child = fetch_node(ctx, x_child_id);
+    if (gate_source_ids.empty()) {
+      gate_source_ids = ensure_source_ids(ctx, gate_child);
+    }
+    x_source_ids.emplace(x_lbl, ensure_source_ids(ctx, x_child));
+
+    if (i == 0) {
+      target_x = x_lbl;
+    } else {
+      competitor_xs.push_back(x_lbl);
+    }
+  }
+
+  if (shared_gate.empty() || target_x.empty() || competitor_xs.empty()) return false;
+
+  // Ensure the shared gate and all X leaves are independent (disjoint underlying sources).
+  std::vector<std::vector<int>> sets;
+  sets.reserve(1 + x_source_ids.size());
+  sets.push_back(gate_source_ids);
+  for (const auto& kv : x_source_ids) {
+    sets.push_back(kv.second);
+  }
+  for (std::size_t i = 0; i < sets.size(); ++i) {
+    for (std::size_t j = i + 1; j < sets.size(); ++j) {
+      if (share_sources(sets[i], sets[j])) {
+        return false;
+      }
+    }
+  }
+
+  out.gate = shared_gate;
+  out.target_x = std::move(target_x);
+  out.competitor_xs = std::move(competitor_xs);
+  return true;
+}
+
+NodeEvalResult eval_event_unforced(const uuber::NativeContext& ctx,
+                                   const std::string& label,
+                                   double t,
+                                   const std::string& component,
+                                   const TrialParamSet* trial_params,
+                                   const std::string& trial_type_key,
+                                   EvalCache* eval_cache_override,
+                                   bool include_na_donors,
+                                   const std::string& outcome_label_context) {
+  static const std::unordered_set<int> kEmptyForced;
+  return eval_event_label(ctx,
+                          label,
+                          t,
+                          component,
+                          kEmptyForced,
+                          kEmptyForced,
+                          trial_params,
+                          trial_type_key,
+                          eval_cache_override,
+                          include_na_donors,
+                          outcome_label_context);
+}
+
+double shared_gate_pair_density(const uuber::NativeContext& ctx,
+                                const SharedGatePair& pair,
+                                double t,
+                                const std::string& component,
+                                const TrialParamSet* trial_params,
+                                const std::string& trial_type_key,
+                                EvalCache* eval_cache_override,
+                                bool include_na_donors,
+                                const std::string& outcome_label_context) {
+  if (!std::isfinite(t) || t < 0.0) return 0.0;
+
+  NodeEvalResult ex = eval_event_unforced(ctx,
+                                         pair.x,
+                                         t,
+                                         component,
+                                         trial_params,
+                                         trial_type_key,
+                                         eval_cache_override,
+                                         include_na_donors,
+                                         outcome_label_context);
+  NodeEvalResult ey = eval_event_unforced(ctx,
+                                         pair.y,
+                                         t,
+                                         component,
+                                         trial_params,
+                                         trial_type_key,
+                                         eval_cache_override,
+                                         include_na_donors,
+                                         outcome_label_context);
+  NodeEvalResult ec = eval_event_unforced(ctx,
+                                         pair.c,
+                                         t,
+                                         component,
+                                         trial_params,
+                                         trial_type_key,
+                                         eval_cache_override,
+                                         include_na_donors,
+                                         outcome_label_context);
+
+  double fX = ex.density;
+  double fC = ec.density;
+  double SY = clamp_probability(ey.survival);
+  double FY = clamp_probability(1.0 - SY);
+  double SC = clamp_probability(ec.survival);
+  double FC = clamp_probability(1.0 - SC);
+  double SX = clamp_probability(ex.survival);
+  double FX = clamp_probability(1.0 - SX);
+
+  double term1 = (std::isfinite(fX) && fX > 0.0) ? (fX * FC * SY) : 0.0;
+  double termCother = (std::isfinite(fC) && fC > 0.0) ? (fC * FX * SY) : 0.0;
+  double term2 = 0.0;
+
+  double denom = FX * FY;
+  if (std::isfinite(fC) && fC > 0.0 && std::isfinite(denom) && denom > 0.0 && t > 0.0) {
+    auto integrand = [&](double u) -> double {
+      if (!std::isfinite(u) || u < 0.0) return 0.0;
+      NodeEvalResult ex_u = eval_event_unforced(ctx,
+                                               pair.x,
+                                               u,
+                                               component,
+                                               trial_params,
+                                               trial_type_key,
+                                               eval_cache_override,
+                                               include_na_donors,
+                                               outcome_label_context);
+      NodeEvalResult ey_u = eval_event_unforced(ctx,
+                                               pair.y,
+                                               u,
+                                               component,
+                                               trial_params,
+                                               trial_type_key,
+                                               eval_cache_override,
+                                               include_na_donors,
+                                               outcome_label_context);
+      double fx_u = ex_u.density;
+      if (!std::isfinite(fx_u) || fx_u <= 0.0) return 0.0;
+      double fy_u = clamp_probability(1.0 - clamp_probability(ey_u.survival));
+      double val = fx_u * fy_u;
+      if (!std::isfinite(val) || val <= 0.0) return 0.0;
+      return val;
+    };
+    double integral = uuber::integrate_boost_fn(integrand,
+                                                0.0,
+                                                t,
+                                                kDefaultRelTol,
+                                                kDefaultAbsTol,
+                                                kDefaultMaxDepth);
+    if (!std::isfinite(integral) || integral < 0.0) integral = 0.0;
+    double term = denom - integral;
+    if (term < 0.0) term = 0.0;
+    term2 = fC * term;
+  }
+
+  double out = term1 + termCother + term2;
+  if (!std::isfinite(out) || out < 0.0) return 0.0;
+  return out;
+}
+
+double shared_gate_nway_density(const uuber::NativeContext& ctx,
+                                const SharedGateNWay& gate,
+                                double t,
+                                const std::string& component,
+                                const TrialParamSet* trial_params,
+                                const std::string& trial_type_key,
+                                EvalCache* eval_cache_override,
+                                bool include_na_donors,
+                                const std::string& outcome_label_context) {
+  if (!std::isfinite(t) || t < 0.0) return 0.0;
+  if (gate.target_x.empty() || gate.gate.empty() || gate.competitor_xs.empty()) return 0.0;
+
+  NodeEvalResult ex = eval_event_unforced(ctx,
+                                         gate.target_x,
+                                         t,
+                                         component,
+                                         trial_params,
+                                         trial_type_key,
+                                         eval_cache_override,
+                                         include_na_donors,
+                                         outcome_label_context);
+  NodeEvalResult ec = eval_event_unforced(ctx,
+                                         gate.gate,
+                                         t,
+                                         component,
+                                         trial_params,
+                                         trial_type_key,
+                                         eval_cache_override,
+                                         include_na_donors,
+                                         outcome_label_context);
+
+  double prod_surv = 1.0;
+  for (const auto& lbl : gate.competitor_xs) {
+    NodeEvalResult ej = eval_event_unforced(ctx,
+                                           lbl,
+                                           t,
+                                           component,
+                                           trial_params,
+                                           trial_type_key,
+                                           eval_cache_override,
+                                           include_na_donors,
+                                           outcome_label_context);
+    double sj = clamp_probability(ej.survival);
+    prod_surv *= sj;
+    if (!std::isfinite(prod_surv) || prod_surv <= 0.0) {
+      prod_surv = 0.0;
+      break;
+    }
+  }
+
+  double fX = ex.density;
+  double fC = ec.density;
+  double FC = clamp_probability(1.0 - clamp_probability(ec.survival));
+
+  double term1 = (std::isfinite(fX) && fX > 0.0 && prod_surv > 0.0 && FC > 0.0)
+    ? (fX * FC * prod_surv)
+    : 0.0;
+
+  double term2 = 0.0;
+  if (std::isfinite(fC) && fC > 0.0 && t > 0.0) {
+    auto integrand = [&](double u) -> double {
+      if (!std::isfinite(u) || u < 0.0) return 0.0;
+      NodeEvalResult ex_u = eval_event_unforced(ctx,
+                                               gate.target_x,
+                                               u,
+                                               component,
+                                               trial_params,
+                                               trial_type_key,
+                                               eval_cache_override,
+                                               include_na_donors,
+                                               outcome_label_context);
+      double fx_u = ex_u.density;
+      if (!std::isfinite(fx_u) || fx_u <= 0.0) return 0.0;
+      double prod = 1.0;
+      for (const auto& lbl : gate.competitor_xs) {
+        NodeEvalResult ej_u = eval_event_unforced(ctx,
+                                                 lbl,
+                                                 u,
+                                                 component,
+                                                 trial_params,
+                                                 trial_type_key,
+                                                 eval_cache_override,
+                                                 include_na_donors,
+                                                 outcome_label_context);
+        prod *= clamp_probability(ej_u.survival);
+        if (!std::isfinite(prod) || prod <= 0.0) return 0.0;
+      }
+      double val = fx_u * prod;
+      return (std::isfinite(val) && val > 0.0) ? val : 0.0;
+    };
+    double integral = uuber::integrate_boost_fn(integrand,
+                                                0.0,
+                                                t,
+                                                kDefaultRelTol,
+                                                kDefaultAbsTol,
+                                                kDefaultMaxDepth);
+    if (!std::isfinite(integral) || integral < 0.0) integral = 0.0;
+    term2 = fC * integral;
+  }
+
+  double out = term1 + term2;
+  if (!std::isfinite(out) || out < 0.0) return 0.0;
+  return out;
+}
+
+double shared_gate_nway_probability(const uuber::NativeContext& ctx,
+                                    const SharedGateNWay& gate,
+                                    double upper,
+                                    const std::string& component,
+                                    const TrialParamSet* trial_params,
+                                    const std::string& trial_type_key,
+                                    double rel_tol,
+                                    double abs_tol,
+                                    int max_depth,
+                                    bool include_na_donors,
+                                    const std::string& outcome_label_context) {
+  if (gate.target_x.empty() || gate.gate.empty() || gate.competitor_xs.empty()) return 0.0;
+  if (!std::isfinite(upper)) {
+    upper = std::numeric_limits<double>::infinity();
+  }
+  if (upper <= 0.0) return 0.0;
+
+  auto eval_unforced = [&](const std::string& lbl, double t) -> NodeEvalResult {
+    return eval_event_unforced(ctx,
+                               lbl,
+                               t,
+                               component,
+                               trial_params,
+                               trial_type_key,
+                               nullptr,
+                               include_na_donors,
+                               outcome_label_context);
+  };
+
+  // Gate must finish by `upper` for any outcome to be observed by `upper`.
+  double gate_cdf = 0.0;
+  if (std::isfinite(upper)) {
+    NodeEvalResult ec_upper = eval_unforced(gate.gate, upper);
+    gate_cdf = clamp_probability(1.0 - clamp_probability(ec_upper.survival));
+    if (!std::isfinite(gate_cdf) || gate_cdf <= 0.0) return 0.0;
+  } else {
+    // For upper = Inf, compute probability of a finite gate time by integrating its density.
+    auto gate_dens = [&](double t) -> double {
+      NodeEvalResult ec = eval_unforced(gate.gate, t);
+      double fc = ec.density;
+      return (std::isfinite(fc) && fc > 0.0) ? fc : 0.0;
+    };
+    auto transformed_gate = [&](double x) -> double {
+      if (x <= 0.0) return 0.0;
+      if (x >= 1.0) x = std::nextafter(1.0, 0.0);
+      double t = x / (1.0 - x);
+      double jac = 1.0 / ((1.0 - x) * (1.0 - x));
+      double val = gate_dens(t);
+      if (!std::isfinite(val) || val <= 0.0) return 0.0;
+      double out = val * jac;
+      return std::isfinite(out) ? out : 0.0;
+    };
+    gate_cdf = uuber::integrate_boost_fn(transformed_gate, 0.0, 1.0, rel_tol, abs_tol, max_depth);
+    if (!std::isfinite(gate_cdf) || gate_cdf < 0.0) gate_cdf = 0.0;
+    gate_cdf = clamp_probability(gate_cdf);
+    if (gate_cdf <= 0.0) return 0.0;
+  }
+
+  auto order_integrand = [&](double t) -> double {
+    NodeEvalResult ex = eval_unforced(gate.target_x, t);
+    double fx = ex.density;
+    if (!std::isfinite(fx) || fx <= 0.0) return 0.0;
+    double prod = 1.0;
+    for (const auto& lbl : gate.competitor_xs) {
+      NodeEvalResult ej = eval_unforced(lbl, t);
+      prod *= clamp_probability(ej.survival);
+      if (!std::isfinite(prod) || prod <= 0.0) return 0.0;
+    }
+    double val = fx * prod;
+    return (std::isfinite(val) && val > 0.0) ? val : 0.0;
+  };
+
+  double order_mass = 0.0;
+  if (std::isfinite(upper)) {
+    order_mass = uuber::integrate_boost_fn(order_integrand, 0.0, upper, rel_tol, abs_tol, max_depth);
+  } else {
+    auto transformed = [&](double x) -> double {
+      if (x <= 0.0) return 0.0;
+      if (x >= 1.0) x = std::nextafter(1.0, 0.0);
+      double t = x / (1.0 - x);
+      double jac = 1.0 / ((1.0 - x) * (1.0 - x));
+      double val = order_integrand(t);
+      if (!std::isfinite(val) || val <= 0.0) return 0.0;
+      double out = val * jac;
+      return std::isfinite(out) ? out : 0.0;
+    };
+    order_mass = uuber::integrate_boost_fn(transformed, 0.0, 1.0, rel_tol, abs_tol, max_depth);
+  }
+  if (!std::isfinite(order_mass) || order_mass < 0.0) order_mass = 0.0;
+
+  double total = gate_cdf * order_mass;
+  if (!std::isfinite(total) || total < 0.0) total = 0.0;
+  return clamp_probability(total);
+}
+
+double shared_gate_pair_probability(const uuber::NativeContext& ctx,
+                                    const SharedGatePair& pair,
+                                    double upper,
+                                    const std::string& component,
+                                    const TrialParamSet* trial_params,
+                                    const std::string& trial_type_key,
+                                    double rel_tol,
+                                    double abs_tol,
+                                    int max_depth,
+                                    bool include_na_donors,
+                                    const std::string& outcome_label_context) {
+  if (!std::isfinite(upper)) {
+    upper = std::numeric_limits<double>::infinity();
+  }
+  if (upper <= 0.0) return 0.0;
+
+  auto integrate = [&](const std::function<double(double)>& integrand) -> double {
+    if (std::isfinite(upper)) {
+      return uuber::integrate_boost_fn(integrand, 0.0, upper, rel_tol, abs_tol, max_depth);
+    }
+    auto transformed = [&](double x) -> double {
+      if (x <= 0.0) return 0.0;
+      if (x >= 1.0) x = std::nextafter(1.0, 0.0);
+      double t = x / (1.0 - x);
+      double jac = 1.0 / ((1.0 - x) * (1.0 - x));
+      double val = integrand(t);
+      if (!std::isfinite(val) || val <= 0.0) return 0.0;
+      double out = val * jac;
+      return std::isfinite(out) ? out : 0.0;
+    };
+    return uuber::integrate_boost_fn(transformed, 0.0, 1.0, rel_tol, abs_tol, max_depth);
+  };
+
+  auto eval_unforced = [&](const std::string& lbl, double t) -> NodeEvalResult {
+    return eval_event_unforced(ctx,
+                               lbl,
+                               t,
+                               component,
+                               trial_params,
+                               trial_type_key,
+                               nullptr,
+                               include_na_donors,
+                               outcome_label_context);
+  };
+
+  auto I1 = integrate([&](double t) -> double {
+    NodeEvalResult ex = eval_unforced(pair.x, t);
+    NodeEvalResult ey = eval_unforced(pair.y, t);
+    NodeEvalResult ec = eval_unforced(pair.c, t);
+    double fx = ex.density;
+    if (!std::isfinite(fx) || fx <= 0.0) return 0.0;
+    double sc = clamp_probability(ec.survival);
+    double fc = clamp_probability(1.0 - sc);
+    double sy = clamp_probability(ey.survival);
+    double val = fx * fc * sy;
+    return (std::isfinite(val) && val > 0.0) ? val : 0.0;
+  });
+
+  auto I2 = integrate([&](double t) -> double {
+    NodeEvalResult ex = eval_unforced(pair.x, t);
+    NodeEvalResult ey = eval_unforced(pair.y, t);
+    NodeEvalResult ec = eval_unforced(pair.c, t);
+    double fc_dens = ec.density;
+    if (!std::isfinite(fc_dens) || fc_dens <= 0.0) return 0.0;
+    double fx = clamp_probability(1.0 - clamp_probability(ex.survival));
+    double sy = clamp_probability(ey.survival);
+    double val = fc_dens * fx * sy;
+    return (std::isfinite(val) && val > 0.0) ? val : 0.0;
+  });
+
+  auto I3 = integrate([&](double t) -> double {
+    NodeEvalResult ex = eval_unforced(pair.x, t);
+    NodeEvalResult ey = eval_unforced(pair.y, t);
+    NodeEvalResult ec = eval_unforced(pair.c, t);
+    double fc_dens = ec.density;
+    if (!std::isfinite(fc_dens) || fc_dens <= 0.0) return 0.0;
+    double fx = clamp_probability(1.0 - clamp_probability(ex.survival));
+    double fy = clamp_probability(1.0 - clamp_probability(ey.survival));
+    double val = fc_dens * fx * fy;
+    return (std::isfinite(val) && val > 0.0) ? val : 0.0;
+  });
+
+  double total = 0.0;
+  if (std::isfinite(upper)) {
+    NodeEvalResult ec_upper = eval_unforced(pair.c, upper);
+    double fc_upper = clamp_probability(1.0 - clamp_probability(ec_upper.survival));
+
+    auto J = integrate([&](double t) -> double {
+      NodeEvalResult ex = eval_unforced(pair.x, t);
+      NodeEvalResult ey = eval_unforced(pair.y, t);
+      double fx_dens = ex.density;
+      if (!std::isfinite(fx_dens) || fx_dens <= 0.0) return 0.0;
+      double fy = clamp_probability(1.0 - clamp_probability(ey.survival));
+      double val = fx_dens * fy;
+      return (std::isfinite(val) && val > 0.0) ? val : 0.0;
+    });
+
+    auto K = integrate([&](double t) -> double {
+      NodeEvalResult ex = eval_unforced(pair.x, t);
+      NodeEvalResult ey = eval_unforced(pair.y, t);
+      NodeEvalResult ec = eval_unforced(pair.c, t);
+      double fx_dens = ex.density;
+      if (!std::isfinite(fx_dens) || fx_dens <= 0.0) return 0.0;
+      double fy = clamp_probability(1.0 - clamp_probability(ey.survival));
+      double fc = clamp_probability(1.0 - clamp_probability(ec.survival));
+      double val = fx_dens * fy * fc;
+      return (std::isfinite(val) && val > 0.0) ? val : 0.0;
+    });
+
+    total = I1 + I2 + I3 - fc_upper * J + K;
+  } else {
+    auto I4 = integrate([&](double t) -> double {
+      NodeEvalResult ex = eval_unforced(pair.x, t);
+      NodeEvalResult ey = eval_unforced(pair.y, t);
+      NodeEvalResult ec = eval_unforced(pair.c, t);
+      double fx_dens = ex.density;
+      if (!std::isfinite(fx_dens) || fx_dens <= 0.0) return 0.0;
+      double fy = clamp_probability(1.0 - clamp_probability(ey.survival));
+      double sc = clamp_probability(ec.survival);
+      double val = fx_dens * fy * sc;
+      return (std::isfinite(val) && val > 0.0) ? val : 0.0;
+    });
+    total = I1 + I2 + I3 - I4;
+  }
+
+  if (!std::isfinite(total) || total < 0.0) total = 0.0;
+  return clamp_probability(total);
+}
+
 NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
                                      EvalCache& cache,
                                      int node_id,
@@ -2333,6 +2966,39 @@ double node_density_with_competitors_internal(
   EvalCache local_cache;
   EvalCache& eval_cache = eval_cache_override ? *eval_cache_override : local_cache;
   EvalCache* cache_ptr = eval_cache_override ? eval_cache_override : &eval_cache;
+  if (competitor_ids.size() >= 2 &&
+      forced_complete.empty() &&
+      forced_survive.empty()) {
+    SharedGateNWay shared_gate;
+    if (detect_shared_gate_nway(ctx, node_id, competitor_ids, shared_gate)) {
+      return shared_gate_nway_density(ctx,
+                                      shared_gate,
+                                      t,
+                                      component_label,
+                                      trial_params,
+                                      trial_type_key,
+                                      cache_ptr,
+                                      include_na_donors,
+                                      outcome_label_context);
+    }
+  }
+  if (competitor_ids.size() == 1 &&
+      forced_complete.empty() &&
+      forced_survive.empty() &&
+      competitor_ids[0] != NA_INTEGER) {
+    SharedGatePair shared_gate;
+    if (detect_shared_gate_pair(ctx, node_id, competitor_ids[0], shared_gate)) {
+      return shared_gate_pair_density(ctx,
+                                      shared_gate,
+                                      t,
+                                      component_label,
+                                      trial_params,
+                                      trial_type_key,
+                                      cache_ptr,
+                                      include_na_donors,
+                                      outcome_label_context);
+    }
+  }
   NodeEvalState state(ctx,
                       eval_cache,
                       t,
@@ -2390,6 +3056,20 @@ double native_outcome_probability_impl(SEXP ctxSEXP,
   std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
   std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
   std::vector<int> comp_vec = integer_vector_to_std(competitor_ids, false);
+  SharedGatePair shared_gate;
+  SharedGateNWay shared_gate_nway;
+  bool use_shared_gate = false;
+  bool use_shared_gate_nway = false;
+  if (comp_vec.size() == 1 &&
+      comp_vec[0] != NA_INTEGER &&
+      forced_complete_set.empty() &&
+      forced_survive_set.empty()) {
+    use_shared_gate = detect_shared_gate_pair(*ctx, node_id, comp_vec[0], shared_gate);
+  } else if (comp_vec.size() >= 2 &&
+             forced_complete_set.empty() &&
+             forced_survive_set.empty()) {
+    use_shared_gate_nway = detect_shared_gate_nway(*ctx, node_id, comp_vec, shared_gate_nway);
+  }
   auto integrand = [&](double u, const TrialParamSet* params_ptr) -> double {
     if (!std::isfinite(u) || u < 0.0) return 0.0;
     double val = node_density_with_competitors_internal(
@@ -2410,6 +3090,32 @@ double native_outcome_probability_impl(SEXP ctxSEXP,
     return val;
   };
   auto integrate_with_params = [&](const TrialParamSet* params_ptr) -> double {
+    if (use_shared_gate) {
+      return shared_gate_pair_probability(*ctx,
+                                          shared_gate,
+                                          upper,
+                                          component_label,
+                                          params_ptr,
+                                          trial_type_key,
+                                          rel_tol,
+                                          abs_tol,
+                                          max_depth,
+                                          include_na_donors,
+                                          outcome_label_context);
+    }
+    if (use_shared_gate_nway) {
+      return shared_gate_nway_probability(*ctx,
+                                          shared_gate_nway,
+                                          upper,
+                                          component_label,
+                                          params_ptr,
+                                          trial_type_key,
+                                          rel_tol,
+                                          abs_tol,
+                                          max_depth,
+                                          include_na_donors,
+                                          outcome_label_context);
+    }
     double integral = 0.0;
     if (std::isfinite(upper)) {
       integral = uuber::integrate_boost_fn(

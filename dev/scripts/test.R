@@ -1,14 +1,6 @@
 rm(list = ls())
 
-# Load the package (devtools if available, otherwise the installed build)
-if (!"AccumulatR" %in% loadedNamespaces()) {
-  if (requireNamespace("devtools", quietly = TRUE)) {
-    devtools::load_all(quiet = TRUE)
-  } else {
-    library(AccumulatR)
-  }
-}
-
+devtools::load_all()
 # Bring in example definitions and profiling helpers
 source("dev/examples/stim_selective_versions.R")
 source("dev/R_extra/profile_plot_new.R")
@@ -27,7 +19,8 @@ with_native_only <- function(expr) {
 }
 
 # 1. Which examples to run
-example_ids <- names(new_api_examples)[4]
+example_ids <- names(new_api_examples)[9]
+
 
 # Optional overrides via env vars
 if (nzchar(Sys.getenv("UUBER_EXAMPLES"))) {

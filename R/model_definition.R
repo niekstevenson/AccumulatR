@@ -935,6 +935,38 @@ build_param_matrix <- function(model,
   max_p <- max(3L, max_p)
   col_names <- c("q", "w", "t0", paste0("p", seq_len(max_p)))
 
+  # Shared parameter groups (R-side only): expand group-level values to member accumulators.
+  shared_param_values <- list()
+  for (grp in spec$groups %||% list()) {
+    attrs <- grp$attrs %||% list()
+    shared <- attrs$shared_params %||% NULL
+    if (is.null(shared)) next
+    shared <- unique(as.character(unlist(shared)))
+    shared <- shared[nzchar(shared)]
+    if (length(shared) == 0L) next
+    members <- grp$members %||% character(0)
+    if (length(members) == 0L) next
+    for (par_name in shared) {
+      group_nm <- paste0(grp$id, ".", par_name)
+      if (!group_nm %in% names(param_values)) next
+      value <- as.numeric(param_values[[group_nm]])
+      for (m in members) {
+        if (!m %in% acc_ids) next
+        leaf_nm <- paste0(m, ".", par_name)
+        if (leaf_nm %in% names(param_values)) next
+        if (!is.null(shared_param_values[[leaf_nm]]) &&
+            !isTRUE(all.equal(shared_param_values[[leaf_nm]], value))) {
+          stop(sprintf("Conflicting shared parameter values for '%s'", leaf_nm))
+        }
+        shared_param_values[[leaf_nm]] <- value
+      }
+    }
+  }
+  if (length(shared_param_values) > 0L) {
+    expanded <- unlist(shared_param_values, use.names = TRUE)
+    param_values <- c(param_values, expanded[setdiff(names(expanded), names(param_values))])
+  }
+
   # Map accumulators to components (if any) via group attrs$component
   comp_attr <- list()
   for (grp in spec$groups %||% list()) {

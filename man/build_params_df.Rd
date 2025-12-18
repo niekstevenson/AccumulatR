@@ -4,7 +4,7 @@
 \alias{build_params_df}
 \title{Build a parameter data frame for likelihood/simulation}
 \usage{
-build_params_df(model, param_values, n_trials = 1L, component = NA_character_)
+build_params_df(model, param_values, n_trials = 1L, component = NULL)
 }
 \arguments{
 \item{model}{Model definition}

@@ -547,13 +547,25 @@ inline std::vector<SharedTriggerInfo> collect_shared_triggers(
       SharedTriggerInfo& info = derived[acc.shared_trigger_id];
       info.id = acc.shared_trigger_id;
       info.acc_indices.push_back(static_cast<int>(i));
-      info.q = acc.q;
+      info.q = acc.shared_q;
     }
     for (auto& kv : derived) {
       out.push_back(std::move(kv.second));
     }
   }
   return out;
+}
+
+inline double shared_trigger_mask_weight(const std::vector<SharedTriggerInfo>& triggers,
+                                        std::uint64_t mask) {
+  double w = 1.0;
+  for (std::size_t i = 0; i < triggers.size(); ++i) {
+    double q = clamp_probability(triggers[i].q);
+    bool fail = ((mask >> i) & 1ULL) != 0ULL;
+    w *= fail ? q : (1.0 - q);
+    if (!std::isfinite(w) || w <= 0.0) return 0.0;
+  }
+  return w;
 }
 
 // Apply a trigger success/fail mask to a base parameter set.
@@ -3092,6 +3104,76 @@ double node_density_with_competitors_internal(
   return density;
 }
 
+inline double node_density_with_shared_triggers(const uuber::NativeContext& ctx,
+                                                int node_id,
+                                                double t,
+                                                const std::string& component_label,
+                                                const std::unordered_set<int>& forced_complete,
+                                                const std::unordered_set<int>& forced_survive,
+                                                const std::vector<int>& competitor_ids,
+                                                const TrialParamSet* trial_params,
+                                                const std::string& trial_type_key,
+                                                EvalCache* eval_cache_override,
+                                                bool include_na_donors,
+                                                const std::string& outcome_label_context) {
+  if (!trial_params) {
+    return node_density_with_competitors_internal(ctx,
+                                                 node_id,
+                                                 t,
+                                                 component_label,
+                                                 forced_complete,
+                                                 forced_survive,
+                                                 competitor_ids,
+                                                 trial_params,
+                                                 trial_type_key,
+                                                 eval_cache_override,
+                                                 include_na_donors,
+                                                 outcome_label_context);
+  }
+  std::vector<SharedTriggerInfo> triggers = collect_shared_triggers(ctx, *trial_params);
+  if (triggers.empty()) {
+    return node_density_with_competitors_internal(ctx,
+                                                 node_id,
+                                                 t,
+                                                 component_label,
+                                                 forced_complete,
+                                                 forced_survive,
+                                                 competitor_ids,
+                                                 trial_params,
+                                                 trial_type_key,
+                                                 eval_cache_override,
+                                                 include_na_donors,
+                                                 outcome_label_context);
+  }
+  if (triggers.size() >= 63) {
+    Rcpp::stop("Too many shared triggers for density evaluation");
+  }
+  const std::uint64_t n_states = 1ULL << triggers.size();
+  double total = 0.0;
+  for (std::uint64_t mask = 0; mask < n_states; ++mask) {
+    double w = shared_trigger_mask_weight(triggers, mask);
+    if (w <= 0.0) continue;
+    TrialParamSet conditioned = apply_trigger_state(*trial_params, triggers, mask);
+    double d = node_density_with_competitors_internal(ctx,
+                                                      node_id,
+                                                      t,
+                                                      component_label,
+                                                      forced_complete,
+                                                      forced_survive,
+                                                      competitor_ids,
+                                                      &conditioned,
+                                                      trial_type_key,
+                                                      eval_cache_override,
+                                                      include_na_donors,
+                                                      outcome_label_context);
+    if (std::isfinite(d) && d > 0.0) {
+      total += w * d;
+    }
+  }
+  if (!std::isfinite(total) || total <= 0.0) return 0.0;
+  return total;
+}
+
 double native_outcome_probability_impl(SEXP ctxSEXP,
                                        int node_id,
                                        double upper,
@@ -3226,20 +3308,20 @@ double native_outcome_probability_impl(SEXP ctxSEXP,
     return integrate_with_params(params_ptr);
   }
 
-  // Joint gate: trigger must succeed once per shared id. When it fails, all linked
-  // accumulators are disabled; when it succeeds, they race with q set to 0 to avoid
-  // double-counting the gate probability.
-  double gate_keep = 1.0;
-  for (const auto& trig : triggers) {
-    double q = trig.q;
-    if (q < 0.0) q = 0.0;
-    if (q > 1.0) q = 1.0;
-    gate_keep *= (1.0 - q);
+  if (triggers.size() >= 63) {
+    Rcpp::stop("Too many shared triggers for outcome probability evaluation");
   }
-  TrialParamSet success_params = apply_trigger_state(*params_ptr, triggers, 0ULL);
-  double success_prob = integrate_with_params(&success_params);
-  if (!std::isfinite(success_prob) || success_prob < 0.0) success_prob = 0.0;
-  double total = gate_keep * success_prob;
+  const std::uint64_t n_states = 1ULL << triggers.size();
+  double total = 0.0;
+  for (std::uint64_t mask = 0; mask < n_states; ++mask) {
+    double w = shared_trigger_mask_weight(triggers, mask);
+    if (w <= 0.0) continue;
+    TrialParamSet conditioned = apply_trigger_state(*params_ptr, triggers, mask);
+    double p = integrate_with_params(&conditioned);
+    if (std::isfinite(p) && p > 0.0) {
+      total += w * p;
+    }
+  }
   return clamp_probability(total);
 }
 
@@ -3790,20 +3872,18 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
       }
     }
     if (!used_guess_shortcut) {
-      contrib = node_density_with_competitors_internal(
-        ctx,
-        node_id,
-        t,
-        component_ids[i],
-        kEmptyForced,
-        kEmptyForced,
-        competitor_ids,
-        params_ptr,
-        cache_entry_ptr->trial_type_key,
-        &shared_cache,
-        false,
-        keep_label
-      );
+      contrib = node_density_with_shared_triggers(ctx,
+                                                 node_id,
+                                                 t,
+                                                 component_ids[i],
+                                                 kEmptyForced,
+                                                 kEmptyForced,
+                                                 competitor_ids,
+                                                 params_ptr,
+                                                 cache_entry_ptr->trial_type_key,
+                                                 &shared_cache,
+                                                 false,
+                                                 keep_label);
       if (!std::isfinite(contrib) || contrib < 0.0) contrib = 0.0;
       if (has_keep) {
         double keep_w = component_keep_weight(ctx, component_ids[i], keep_label);
@@ -3977,14 +4057,22 @@ std::vector<TrialParamSet> params_from_matrix(const uuber::NativeContext& ctx,
     ps.acc_params.reserve(ctx.accumulators.size());
     for (int a = 0; a < n_acc; ++a) {
       int row_idx = t * n_acc + a;
-    TrialAccumulatorParams tap = base_params(ctx.accumulators[a]);
-    tap.q = clamp_probability(params_mat(row_idx, q_col));
-    tap.shared_q = tap.q;
-    tap.shared_trigger_id = ctx.accumulators[a].shared_trigger_id;
-    tap.dist_cfg.t0 = params_mat(row_idx, t0_col);
-    tap.has_components = !ctx.accumulators[a].components.empty();
-    tap.components = ctx.accumulators[a].components;
-    tap.has_override = true;
+      TrialAccumulatorParams tap = base_params(ctx.accumulators[a]);
+      tap.shared_trigger_id = ctx.accumulators[a].shared_trigger_id;
+      double q_val = clamp_probability(params_mat(row_idx, q_col));
+      if (!tap.shared_trigger_id.empty()) {
+        // Matrix 'q' column carries the shared gate failure probability; the per-acc failure
+        // is applied by enumerating shared-trigger states (q=0 on success, q=1 on failure).
+        tap.shared_q = q_val;
+        tap.q = 0.0;
+      } else {
+        tap.q = q_val;
+        tap.shared_q = q_val;
+      }
+      tap.dist_cfg.t0 = params_mat(row_idx, t0_col);
+      tap.has_components = !ctx.accumulators[a].components.empty();
+      tap.components = ctx.accumulators[a].components;
+      tap.has_override = true;
       if (tap.dist_cfg.code == uuber::ACC_DIST_LOGNORMAL ||
           tap.dist_cfg.code == uuber::ACC_DIST_GAMMA ||
           tap.dist_cfg.code == uuber::ACC_DIST_EXGAUSS) {
@@ -4046,7 +4134,7 @@ double mix_outcome_mass(SEXP ctxSEXP,
       params_ptr,
       std::string(),
       false,
-      outcome_label_context
+      std::string()
     );
     if (std::isfinite(p) && p > 0.0) {
       double keep_w = component_keep_weight(*ctx, comp, outcome_label_context);
@@ -4169,7 +4257,7 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
 
     double prob = 0.0;
     if (outcome_is_na) {
-      double na_explicit = 0.0;
+      double non_na_total = 0.0;
       for (const auto& kv : ctx->outcome_info) {
         const std::string& lbl = kv.first;
         if (lbl == "__DEADLINE__") continue;
@@ -4184,11 +4272,9 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
                                     max_depth,
                                     lbl);
         if (!std::isfinite(p) || p <= 0.0) continue;
-        if (info.maps_to_na) {
-          na_explicit += p;
-        }
+        if (!info.maps_to_na) non_na_total += p;
       }
-      prob = clamp_probability(na_explicit);
+      prob = clamp_probability(1.0 - non_na_total);
     } else {
       auto it = ctx->outcome_info.find(outcome_label);
       if (it == ctx->outcome_info.end() || it->second.node_id < 0) {
@@ -4223,18 +4309,18 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
           for (std::size_t c = 0; c < comp_labels_ptr->size(); ++c) {
             double w = (c < comp_weights_ptr->size()) ? (*comp_weights_ptr)[c] : 0.0;
             if (!std::isfinite(w) || w <= 0.0) continue;
-            double contrib = node_density_with_competitors_internal(*ctx,
-                                                                    info.node_id,
-                                                                    rt,
-                                                                    (*comp_labels_ptr)[c],
-                                                                    kEmptyForced,
-                                                                    kEmptyForced,
-                                                                    info.competitor_ids,
-                                                                    params_ptr,
-                                                                    std::string(),
-                                                                    &eval_cache,
-                                                                    false,
-                                                                    std::string());
+            double contrib = node_density_with_shared_triggers(*ctx,
+                                                               info.node_id,
+                                                               rt,
+                                                               (*comp_labels_ptr)[c],
+                                                               kEmptyForced,
+                                                               kEmptyForced,
+                                                               info.competitor_ids,
+                                                               params_ptr,
+                                                               std::string(),
+                                                               &eval_cache,
+                                                               false,
+                                                               std::string());
             if (std::isfinite(contrib) && contrib > 0.0) {
               total += w * contrib;
             }

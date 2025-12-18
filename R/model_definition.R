@@ -1017,23 +1017,40 @@ build_param_matrix <- function(model,
     }
   }
 
-  # Shared trigger q per group id
-  trigger_q_map <- list()
-  trigger_draw_map <- list()
+  # Shared trigger groups (q may be shared or independent draws)
+  acc_trigger_map <- setNames(vector("list", length(acc_ids)), acc_ids)
   for (grp in spec$groups %||% list()) {
     trig <- grp$attrs$shared_trigger %||% NULL
     if (is.null(trig)) next
     trig_id <- trig$id %||% grp$id %||% trig$param %||% NA_character_
     if (is.null(trig_id) || !nzchar(trig_id)) next
     draw_mode <- trig$draw %||% "shared"
-    trigger_draw_map[[trig_id]] <- draw_mode
     q_val <- NA_real_
     if (!is.null(trig$param) && trig$param %in% names(param_values)) {
       q_val <- as.numeric(param_values[[trig$param]])
     } else if (!is.null(trig$q)) {
       q_val <- as.numeric(trig$q)
     }
-    trigger_q_map[[trig_id]] <- q_val %||% 0
+    if (!is.finite(q_val) || is.na(q_val)) q_val <- 0
+
+    members <- grp$members %||% character(0)
+    if (length(members) == 0L) next
+    for (m in members) {
+      if (!m %in% acc_ids) next
+      existing <- acc_trigger_map[[m]]
+      if (!is.null(existing)) {
+        stop(sprintf(
+          "Accumulator '%s' is assigned to multiple trigger groups ('%s' and '%s')",
+          m, existing$id %||% "<unknown>", trig_id
+        ))
+      }
+      acc_trigger_map[[m]] <- list(
+        id = trig_id,
+        draw = draw_mode,
+        q = q_val,
+        param = trig$param %||% NULL
+      )
+    }
   }
 
   # Build one row per accumulator
@@ -1060,17 +1077,31 @@ build_param_matrix <- function(model,
     }
     # q
     q_nm <- paste0(acc_id, ".q")
-    q_val <- if (q_nm %in% names(param_values)) {
+    has_explicit_q <- q_nm %in% names(param_values)
+    q_val <- if (has_explicit_q) {
       as.numeric(param_values[[q_nm]])
     } else if (!is.null(acc$q)) {
       as.numeric(acc$q)
     } else {
       NA_real_
     }
-    if (!is.null(acc$shared_trigger_id) && nzchar(acc$shared_trigger_id)) {
-      q_val <- trigger_q_map[[acc$shared_trigger_id]] %||% q_val %||% 0
+    trig_info <- acc_trigger_map[[acc_id]] %||% NULL
+    if (!is.null(trig_info)) {
+      if (identical(trig_info$draw, "shared")) {
+        if (has_explicit_q && !isTRUE(all.equal(q_val, trig_info$q))) {
+          stop(sprintf(
+            "Accumulator '%s' provides '%s' but belongs to shared trigger '%s' with q=%.6f",
+            acc_id, q_nm, trig_info$id, trig_info$q
+          ))
+        }
+        q_val <- trig_info$q
+      } else if (identical(trig_info$draw, "independent")) {
+        if (!has_explicit_q) q_val <- trig_info$q
+      } else {
+        stop(sprintf("Unknown trigger draw mode '%s'", trig_info$draw))
+      }
     }
-    if (is.na(q_val)) q_val <- 0
+    if (!is.finite(q_val) || is.na(q_val)) q_val <- 0
     # t0
     t0_nm <- paste0(acc_id, ".t0")
     t0_val <- if (t0_nm %in% names(param_values)) {

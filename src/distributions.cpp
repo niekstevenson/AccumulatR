@@ -1655,6 +1655,18 @@ struct SharedGateNWay {
   std::vector<std::string> competitor_xs;
 };
 
+struct SharedGatePairCacheEntry {
+  bool computed{false};
+  bool is_shared{false};
+  SharedGatePair spec;
+};
+
+struct SharedGateNWayCacheEntry {
+  bool computed{false};
+  bool is_shared{false};
+  SharedGateNWay spec;
+};
+
 bool detect_shared_gate_pair(const uuber::NativeContext& ctx,
                              int node_id,
                              int competitor_node_id,
@@ -1821,6 +1833,56 @@ bool detect_shared_gate_nway(const uuber::NativeContext& ctx,
   out.gate = shared_gate;
   out.target_x = std::move(target_x);
   out.competitor_xs = std::move(competitor_xs);
+  return true;
+}
+
+bool shared_gate_pair_cached(const uuber::NativeContext& ctx,
+                             int node_id,
+                             int competitor_node_id,
+                             SharedGatePair& out) {
+  if (node_id < 0 || competitor_node_id < 0) return false;
+  static std::unordered_map<const uuber::NativeContext*, std::unordered_map<std::uint64_t, SharedGatePairCacheEntry>>
+    cache_by_ctx;
+  std::uint64_t key = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(node_id)) << 32) ^
+    static_cast<std::uint32_t>(competitor_node_id);
+  SharedGatePairCacheEntry& entry = cache_by_ctx[&ctx][key];
+  if (!entry.computed) {
+    SharedGatePair spec;
+    if (detect_shared_gate_pair(ctx, node_id, competitor_node_id, spec)) {
+      entry.is_shared = true;
+      entry.spec = std::move(spec);
+    }
+    entry.computed = true;
+  }
+  if (!entry.is_shared) return false;
+  out = entry.spec;
+  return true;
+}
+
+std::string competitor_cache_key(const std::vector<int>& ids);
+
+bool shared_gate_nway_cached(const uuber::NativeContext& ctx,
+                             int node_id,
+                             const std::vector<int>& competitor_node_ids,
+                             SharedGateNWay& out) {
+  if (node_id < 0) return false;
+  if (competitor_node_ids.empty()) return false;
+  static std::unordered_map<const uuber::NativeContext*, std::unordered_map<std::string, SharedGateNWayCacheEntry>>
+    cache_by_ctx;
+  std::string key = std::to_string(node_id);
+  key.push_back('|');
+  key.append(competitor_cache_key(competitor_node_ids));
+  SharedGateNWayCacheEntry& entry = cache_by_ctx[&ctx][key];
+  if (!entry.computed) {
+    SharedGateNWay spec;
+    if (detect_shared_gate_nway(ctx, node_id, competitor_node_ids, spec)) {
+      entry.is_shared = true;
+      entry.spec = std::move(spec);
+    }
+    entry.computed = true;
+  }
+  if (!entry.is_shared) return false;
+  out = entry.spec;
   return true;
 }
 
@@ -2970,7 +3032,7 @@ double node_density_with_competitors_internal(
       forced_complete.empty() &&
       forced_survive.empty()) {
     SharedGateNWay shared_gate;
-    if (detect_shared_gate_nway(ctx, node_id, competitor_ids, shared_gate)) {
+    if (shared_gate_nway_cached(ctx, node_id, competitor_ids, shared_gate)) {
       return shared_gate_nway_density(ctx,
                                       shared_gate,
                                       t,
@@ -2987,7 +3049,7 @@ double node_density_with_competitors_internal(
       forced_survive.empty() &&
       competitor_ids[0] != NA_INTEGER) {
     SharedGatePair shared_gate;
-    if (detect_shared_gate_pair(ctx, node_id, competitor_ids[0], shared_gate)) {
+    if (shared_gate_pair_cached(ctx, node_id, competitor_ids[0], shared_gate)) {
       return shared_gate_pair_density(ctx,
                                       shared_gate,
                                       t,
@@ -3937,38 +3999,6 @@ std::vector<TrialParamSet> params_from_matrix(const uuber::NativeContext& ctx,
   return out;
 }
 
-double mix_outcome_density(SEXP ctxSEXP,
-                           const uuber::OutcomeContextInfo& info,
-                           double rt,
-                           const std::vector<std::string>& comp_labels,
-                           const std::vector<double>& comp_weights,
-                           const TrialParamSet* params_ptr,
-                           double rel_tol,
-                           double abs_tol,
-                           int max_depth,
-                           const std::string& outcome_label_context) {
-  if (info.node_id < 0) return 0.0;
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::vector<ComponentCacheEntry> cache_entries = build_component_cache_entries(comp_labels);
-  EvalCache eval_cache;
-  double density = native_trial_mixture_internal(
-    *ctx,
-    info.node_id,
-    rt,
-    comp_labels,
-    comp_weights,
-    R_NilValue,
-    info.competitor_ids,
-    params_ptr,
-    cache_entries,
-    &eval_cache,
-    outcome_label_context,
-    Rcpp::List()
-  );
-  if (!std::isfinite(density) || density < 0.0) return 0.0;
-  return density;
-}
-
 double mix_outcome_mass(SEXP ctxSEXP,
                         const uuber::OutcomeContextInfo& info,
                         const std::vector<std::string>& comp_labels,
@@ -4052,7 +4082,7 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
     Rcpp::stop("Parameter rows must be a multiple of the number of accumulators");
   }
   int n_trials = params_mat.nrow() / n_acc;
-  ComponentMap comp_map = build_component_map(*ctx, structure);
+  const ComponentMap comp_map = build_component_map(*ctx, structure);
   Rcpp::RObject dimnames = params_mat.attr("dimnames");
   Rcpp::CharacterVector col_names;
   if (!dimnames.isNULL()) {
@@ -4076,6 +4106,25 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
   double total_loglik = 0.0;
   bool hit_neg_inf = false;
 
+  // Precompute default component mix once to avoid per-row allocations.
+  const std::vector<std::string>& default_components = comp_map.ids;
+  const std::size_t n_components = default_components.size();
+  const std::vector<ComponentCacheEntry> default_cache_entries =
+    build_component_cache_entries(default_components);
+
+  std::vector<double> single_weight_vec;
+  if (n_components == 1) {
+    single_weight_vec = {1.0};
+  }
+  std::vector<std::vector<double>> weights_by_trial;
+  if (n_components > 1) {
+    weights_by_trial.resize(static_cast<std::size_t>(n_trials));
+    for (int t = 0; t < n_trials; ++t) {
+      weights_by_trial[static_cast<std::size_t>(t)] =
+        component_weights_for_trial(comp_map, params_mat, t, n_acc, w_col);
+    }
+  }
+
   for (R_xlen_t i = 0; i < n_obs; ++i) {
     int trial_idx = static_cast<int>(trial_col[i]);
     if (trial_idx == NA_INTEGER) {
@@ -4090,36 +4139,45 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
     Rcpp::String out_str(outcome_col[i]);
     bool outcome_is_na = (out_str == NA_STRING);
     std::string outcome_label = outcome_is_na ? std::string() : std::string(out_str.get_cstring());
+    const std::vector<std::string>* comp_labels_ptr = &default_components;
+    const std::vector<ComponentCacheEntry>* cache_entries_ptr = &default_cache_entries;
+    const std::vector<double>* comp_weights_ptr = nullptr;
+    if (n_components == 1) {
+      comp_weights_ptr = &single_weight_vec;
+    } else {
+      comp_weights_ptr = &weights_by_trial[static_cast<std::size_t>(trial_idx)];
+    }
+
     std::string forced_component;
+    std::vector<std::string> forced_components;
+    std::vector<double> forced_weights;
+    std::vector<ComponentCacheEntry> forced_cache_entries;
     if (has_component && comp_col.size() > i) {
       Rcpp::String comp_val(comp_col[i]);
       if (comp_val != NA_STRING) {
         forced_component = std::string(comp_val.get_cstring());
       }
     }
-
-    std::vector<std::string> comp_labels;
-    std::vector<double> comp_weights;
     if (!forced_component.empty()) {
-      comp_labels.push_back(forced_component);
-      comp_weights.push_back(1.0);
-    } else {
-      comp_labels = comp_map.ids;
-      comp_weights = component_weights_for_trial(comp_map, params_mat, trial_idx, n_acc, w_col);
+      forced_components = {forced_component};
+      forced_weights = {1.0};
+      forced_cache_entries = build_component_cache_entries(forced_components);
+      comp_labels_ptr = &forced_components;
+      comp_weights_ptr = &forced_weights;
+      cache_entries_ptr = &forced_cache_entries;
     }
 
     double prob = 0.0;
     if (outcome_is_na) {
       double na_explicit = 0.0;
-      double non_na = 0.0;
       for (const auto& kv : ctx->outcome_info) {
         const std::string& lbl = kv.first;
         if (lbl == "__DEADLINE__") continue;
         const uuber::OutcomeContextInfo& info = kv.second;
         double p = mix_outcome_mass(ctxSEXP,
                                     info,
-                                    comp_labels,
-                                    comp_weights,
+                                    *comp_labels_ptr,
+                                    *comp_weights_ptr,
                                     params_ptr,
                                     rel_tol,
                                     abs_tol,
@@ -4128,8 +4186,6 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
         if (!std::isfinite(p) || p <= 0.0) continue;
         if (info.maps_to_na) {
           na_explicit += p;
-        } else {
-          non_na += p;
         }
       }
       prob = clamp_probability(na_explicit);
@@ -4140,16 +4196,64 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
       } else if (!std::isfinite(rt) || rt < 0.0) {
         prob = 0.0;
       } else {
-        prob = mix_outcome_density(ctxSEXP,
-                                   it->second,
-                                   rt,
-                                   comp_labels,
-                                   comp_weights,
-                                   params_ptr,
-                                   rel_tol,
-                                   abs_tol,
-                                   max_depth,
-                                   outcome_label);
+        const uuber::OutcomeContextInfo& info = it->second;
+        EvalCache eval_cache;
+        bool can_fast = true;
+        if (ctx->alias_sources.find(outcome_label) != ctx->alias_sources.end()) {
+          can_fast = false;
+        } else if (ctx->guess_target_map.find(outcome_label) != ctx->guess_target_map.end()) {
+          can_fast = false;
+        } else {
+          for (const auto& comp_id : *comp_labels_ptr) {
+            auto comp_it = ctx->component_info.find(comp_id);
+            if (comp_it != ctx->component_info.end() && comp_it->second.guess.valid) {
+              can_fast = false;
+              break;
+            }
+            double kw = component_keep_weight(*ctx, comp_id, outcome_label);
+            if (std::fabs(kw - 1.0) > 1e-12) {
+              can_fast = false;
+              break;
+            }
+          }
+        }
+        if (can_fast) {
+          static const std::unordered_set<int> kEmptyForced;
+          double total = 0.0;
+          for (std::size_t c = 0; c < comp_labels_ptr->size(); ++c) {
+            double w = (c < comp_weights_ptr->size()) ? (*comp_weights_ptr)[c] : 0.0;
+            if (!std::isfinite(w) || w <= 0.0) continue;
+            double contrib = node_density_with_competitors_internal(*ctx,
+                                                                    info.node_id,
+                                                                    rt,
+                                                                    (*comp_labels_ptr)[c],
+                                                                    kEmptyForced,
+                                                                    kEmptyForced,
+                                                                    info.competitor_ids,
+                                                                    params_ptr,
+                                                                    std::string(),
+                                                                    &eval_cache,
+                                                                    false,
+                                                                    std::string());
+            if (std::isfinite(contrib) && contrib > 0.0) {
+              total += w * contrib;
+            }
+          }
+          prob = total;
+        } else {
+          prob = native_trial_mixture_internal(*ctx,
+                                               info.node_id,
+                                               rt,
+                                               *comp_labels_ptr,
+                                               *comp_weights_ptr,
+                                               R_NilValue,
+                                               info.competitor_ids,
+                                               params_ptr,
+                                               *cache_entries_ptr,
+                                               &eval_cache,
+                                               outcome_label,
+                                               Rcpp::List());
+        }
       }
     }
 
@@ -4851,7 +4955,14 @@ double pool_density_fast_cpp(const Rcpp::NumericVector& density,
 
   PoolDensityWorker worker(density, scratch.prefix, scratch.suffix, k - 1);
 #if defined(RCPP_PARALLEL_USE_TBB) && RCPP_PARALLEL_USE_TBB
-  RcppParallel::parallelReduce(0, n, worker);
+  // TBB parallel overhead dwarfs work for typical pool sizes (n is usually small),
+  // so only parallelize once the pool is large enough to benefit.
+  constexpr std::size_t kParallelThreshold = 512;
+  if (n >= kParallelThreshold) {
+    RcppParallel::parallelReduce(0, n, worker);
+  } else {
+    worker(0, n);
+  }
 #else
   worker(0, n);
 #endif

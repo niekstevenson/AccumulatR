@@ -37,6 +37,6 @@ params_df <- build_params_df(
   n_trials = 2
 )
 data_df <- simulate(structure, params_df, seed = 1)
-ctx <- build_likelihood_context(structure, params_df, data_df)
+ctx <- build_likelihood_context(structure, data_df)
 log_likelihood(ctx, list(params_df))
 }

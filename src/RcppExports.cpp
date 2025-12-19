@@ -10,6 +10,16 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// register_ccallables_cpp
+SEXP register_ccallables_cpp();
+RcppExport SEXP _AccumulatR_register_ccallables_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(register_ccallables_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
 // native_context_build
 SEXP native_context_build(SEXP prepSEXP);
 RcppExport SEXP _AccumulatR_native_context_build(SEXP prepSEXPSEXP) {
@@ -79,7 +89,7 @@ BEGIN_RCPP
 END_RCPP
 }
 // cpp_loglik
-Rcpp::List cpp_loglik(SEXP ctxSEXP, Rcpp::List structure, Rcpp::NumericMatrix params_mat, Rcpp::DataFrame data_df, double rel_tol, double abs_tol, int max_depth);
+double cpp_loglik(SEXP ctxSEXP, Rcpp::List structure, Rcpp::NumericMatrix params_mat, Rcpp::DataFrame data_df, double rel_tol, double abs_tol, int max_depth);
 RcppExport SEXP _AccumulatR_cpp_loglik(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP params_matSEXP, SEXP data_dfSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
@@ -291,6 +301,7 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_AccumulatR_register_ccallables_cpp", (DL_FUNC) &_AccumulatR_register_ccallables_cpp, 0},
     {"_AccumulatR_native_context_build", (DL_FUNC) &_AccumulatR_native_context_build, 1},
     {"_AccumulatR_native_prep_serialize_cpp", (DL_FUNC) &_AccumulatR_native_prep_serialize_cpp, 1},
     {"_AccumulatR_native_context_from_proto_cpp", (DL_FUNC) &_AccumulatR_native_context_from_proto_cpp, 1},

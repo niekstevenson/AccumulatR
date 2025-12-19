@@ -65,7 +65,6 @@ profile_likelihood <- function(structure,
   base_table <- build_params_df(model_spec, base_params, n_trials = n_trials)
   ctx <- build_likelihood_context(
     structure = structure,
-    params_df = base_table,
     data_df = data
   )
   true_ll <- log_likelihood(ctx, list(base_table))[[1]]

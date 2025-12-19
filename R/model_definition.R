@@ -903,11 +903,11 @@ build_params_df <- function(model,
 #' @param param_values Named numeric vector of core parameters
 #' @param n_trials Number of trials to replicate
 #' @return Numeric matrix with columns `q`, `w`, `t0`, `p1`, `p2`, `p3`
-#'   and attributes `acc_ids`, `n_trials`, `layout`
 #' @export
 build_param_matrix <- function(model,
                                param_values,
-                               n_trials = 1L) {
+                               n_trials = 1L,
+                               component = NULL) {
   spec <- race_model(model)
   accs <- spec$accumulators %||% list()
   if (length(accs) == 0L) {
@@ -1126,17 +1126,41 @@ build_param_matrix <- function(model,
     base_mat[i, ] <- c(q_val, w_val, t0_val, p_vals)
   }
 
-  # Replicate for n_trials (pure positional)
-  params_mat <- base_mat[rep(seq_len(nrow(base_mat)), times = n_trials), , drop = FALSE]
-  layout <- data.frame(
-    row = seq_len(nrow(params_mat)),
-    trial = rep(seq_len(n_trials), each = nrow(base_mat)),
-    accumulator = rep(acc_ids, times = n_trials),
-    stringsAsFactors = FALSE
-  )
-  attr(params_mat, "acc_ids") <- acc_ids
-  attr(params_mat, "n_trials") <- n_trials
-  attr(params_mat, "layout") <- layout
-  class(params_mat) <- c("param_matrix", class(params_mat))
-  params_mat
+  # If component labels are provided per trial, build only the rows for accumulators
+  # that participate in that component; otherwise, fall back to the full rectangular
+  # layout (all accumulators per trial).
+  if (!is.null(component)) {
+    if (length(component) != n_trials) {
+      stop("component vector must have length n_trials when provided")
+    }
+    rows <- list()
+    row_acc <- character(0)
+    row_trial <- integer(0)
+    row_comp <- character(0)
+    for (t in seq_len(n_trials)) {
+      comp_lbl <- as.character(component[[t]])
+      for (i in seq_along(accs)) {
+        acc_comp <- accs[[i]]$components %||% character(0)
+        if (length(acc_comp) > 0 && !comp_lbl %in% acc_comp) {
+          next
+        }
+        rows[[length(rows) + 1L]] <- base_mat[i, , drop = FALSE]
+        row_acc <- c(row_acc, acc_ids[[i]])
+        row_trial <- c(row_trial, t)
+        row_comp <- c(row_comp, comp_lbl)
+      }
+    }
+    if (length(rows) == 0L) {
+      stop("No accumulator rows matched the provided component labels")
+    }
+    params_mat <- do.call(rbind, rows)
+    colnames(params_mat) <- col_names
+    attr(params_mat, "row_trial") <- row_trial
+    attr(params_mat, "row_acc") <- row_acc
+    attr(params_mat, "row_component") <- row_comp
+    params_mat
+  } else {
+    # Replicate for n_trials (pure positional, all accumulators)
+    base_mat[rep(seq_len(nrow(base_mat)), times = n_trials), , drop = FALSE]
+  }
 }

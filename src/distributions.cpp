@@ -4153,13 +4153,13 @@ double mix_outcome_mass(SEXP ctxSEXP,
 }
 
 // [[Rcpp::export]]
-Rcpp::List cpp_loglik(SEXP ctxSEXP,
-                      Rcpp::List structure,
-                      Rcpp::NumericMatrix params_mat,
-                      Rcpp::DataFrame data_df,
-                      double rel_tol,
-                      double abs_tol,
-                      int max_depth) {
+double cpp_loglik(SEXP ctxSEXP,
+                  Rcpp::List structure,
+                  Rcpp::NumericMatrix params_mat,
+                  Rcpp::DataFrame data_df,
+                  double rel_tol,
+                  double abs_tol,
+                  int max_depth) {
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   // Params change invalidates NA cache
   ctx->na_map_cache.clear();
@@ -4190,9 +4190,7 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
   Rcpp::CharacterVector comp_col = has_component ? Rcpp::CharacterVector(data_df["component"]) : Rcpp::CharacterVector();
 
   R_xlen_t n_obs = outcome_col.size();
-  Rcpp::NumericVector per_trial(n_obs);
   double total_loglik = 0.0;
-  bool hit_neg_inf = false;
 
   // Precompute default component mix once to avoid per-row allocations.
   const std::vector<std::string>& default_components = comp_map.ids;
@@ -4343,26 +4341,14 @@ Rcpp::List cpp_loglik(SEXP ctxSEXP,
       }
     }
 
-    double log_contrib = R_NegInf;
     if (std::isfinite(prob) && prob > 0.0) {
-      log_contrib = std::log(prob);
+      total_loglik += std::log(prob);
     } else {
-      hit_neg_inf = true;
-    }
-    per_trial[i] = log_contrib;
-    if (!hit_neg_inf && std::isfinite(log_contrib)) {
-      total_loglik += log_contrib;
+      return R_NegInf;
     }
   }
 
-  if (hit_neg_inf) {
-    total_loglik = R_NegInf;
-  }
-
-  return Rcpp::List::create(
-    Rcpp::Named("loglik") = total_loglik,
-    Rcpp::Named("per_trial") = per_trial
-  );
+  return total_loglik;
 }
 
 // [[Rcpp::export]]
@@ -4386,8 +4372,7 @@ Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP,
       ctx->na_cache_order.clear();
     }
     Rcpp::NumericMatrix pm(params_list[i]);
-    Rcpp::List res = cpp_loglik(ctxSEXP, structure, pm, data_df, rel_tol, abs_tol, max_depth);
-    out[i] = Rcpp::as<double>(res["loglik"]);
+    out[i] = cpp_loglik(ctxSEXP, structure, pm, data_df, rel_tol, abs_tol, max_depth);
   }
   return out;
 }

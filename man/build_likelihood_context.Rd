@@ -4,25 +4,14 @@
 \alias{build_likelihood_context}
 \title{Build a likelihood context. Needed for efficient C++ evaluation}
 \usage{
-build_likelihood_context(
-  structure,
-  params_df,
-  data_df,
-  prep = NULL,
-  trial_plan = NULL,
-  native_bundle = NULL
-)
+build_likelihood_context(structure, data_df, prep = NULL, native_bundle = NULL)
 }
 \arguments{
 \item{structure}{Generator structure}
 
-\item{params_df}{Parameter data frame}
-
 \item{data_df}{Data frame with observed outcome/rt}
 
 \item{prep}{Optional prep bundle}
-
-\item{trial_plan}{Optional trial plan}
 
 \item{native_bundle}{Optional native bundle}
 }
@@ -44,5 +33,5 @@ params_df <- build_params_df(
   n_trials = 2
 )
 data_df <- simulate(structure, params_df, seed = 1)
-build_likelihood_context(structure, params_df, data_df)
+build_likelihood_context(structure, data_df)
 }

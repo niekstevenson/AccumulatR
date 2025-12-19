@@ -1,10 +1,7 @@
-.likelihood_context_structure <- function(structure, params_df, data_df,
+.likelihood_context_structure <- function(structure,
+                                          data_df,
                                           prep = NULL,
-                                          trial_plan = NULL,
                                           native_bundle = NULL) {
-  if (is.null(params_df)) {
-    stop("Parameter matrix must be provided", call. = FALSE)
-  }
   if (is.null(data_df) || nrow(data_df) == 0L) {
     stop("Data frame must contain outcome/rt per trial", call. = FALSE)
   }
@@ -12,28 +9,11 @@
   if (is.null(structure$model_spec)) {
     stop("model structure must include model_spec; rebuild with finalize_model")
   }
-  params_mat <- if (is.matrix(params_df) || inherits(params_df, "param_matrix")) {
-    params_df
-  } else {
-    as.matrix(params_df)
-  }
-  if (is.null(colnames(params_mat))) {
-    stop("Parameter matrix must include column names")
-  }
-  n_acc <- nrow(structure$accumulators)
-  if (n_acc == 0L) stop("Model has no accumulators")
-  if (nrow(params_mat) %% n_acc != 0) {
-    stop("Parameter rows must be a multiple of the number of accumulators")
-  }
-  n_trials <- nrow(params_mat) / n_acc
   data_df <- as.data.frame(data_df)
   required_cols <- c("trial", "outcome", "rt")
   missing_cols <- setdiff(required_cols, names(data_df))
   if (length(missing_cols) > 0L) {
     stop(sprintf("Data frame must include columns: %s", paste(missing_cols, collapse = ", ")), call. = FALSE)
-  }
-  if (nrow(data_df) != n_trials) {
-    warning("Number of data rows differs from parameter trials; ensure trial indexing matches.")
   }
   data_df$trial <- as.integer(data_df$trial)
   data_df$outcome <- as.character(data_df$outcome)
@@ -55,8 +35,6 @@
   }
   structure(list(
     structure = structure,
-    params_df = params_mat,
-    params_mat = params_mat,
     prep = prep_eval_base,
     native_ctx = native_ctx,
     data_df = data_df,
@@ -69,10 +47,8 @@
 #' Build a likelihood context. Needed for efficient C++ evaluation
 #'
 #' @param structure Generator structure
-#' @param params_df Parameter data frame
 #' @param data_df Data frame with observed outcome/rt
 #' @param prep Optional prep bundle
-#' @param trial_plan Optional trial plan
 #' @param native_bundle Optional native bundle
 #' @return likelihood_context object
 #' @examples
@@ -87,18 +63,16 @@
 #'   n_trials = 2
 #' )
 #' data_df <- simulate(structure, params_df, seed = 1)
-#' build_likelihood_context(structure, params_df, data_df)
+#' build_likelihood_context(structure, data_df)
 #' @export
-build_likelihood_context <- function(structure, params_df, data_df,
+build_likelihood_context <- function(structure,
+                                     data_df,
                                      prep = NULL,
-                                     trial_plan = NULL,
                                      native_bundle = NULL) {
   .likelihood_context_structure(
     structure = structure,
-    params_df = params_df,
     data_df = data_df,
     prep = prep,
-    trial_plan = trial_plan,
     native_bundle = native_bundle
   )
 }
@@ -801,7 +775,7 @@ response_probabilities.model_structure <- function(structure,
 #'   n_trials = 2
 #' )
 #' data_df <- simulate(structure, params_df, seed = 1)
-#' ctx <- build_likelihood_context(structure, params_df, data_df)
+#' ctx <- build_likelihood_context(structure, data_df)
 #' log_likelihood(ctx, list(params_df))
 #' @export
 log_likelihood <- function(likelihood_context, parameters, ...) {

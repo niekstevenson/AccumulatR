@@ -3,3 +3,5 @@
 ^\.Rproj\.user$
 ^\.gitignore$
 ^\.vscode/
+^src/.*\\.o$
+^src/.*\\.(so|dll|dylib)$

@@ -293,7 +293,7 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     testthat::expect_true(max(abs(probs[common] - emp[common])) < 0.35, info = name)
 
     # Likelihood equivalence across argument forms
-    ctx <- build_likelihood_context(structure, params_df, data_df)
+    ctx <- build_likelihood_context(structure, data_df)
     ll_list <- as.numeric(log_likelihood(ctx, list(params_df)))
     ll_df <- as.numeric(log_likelihood(ctx, params_df))
     testthat::expect_equal(ll_list, ll_df, tolerance = 1e-8, info = name)

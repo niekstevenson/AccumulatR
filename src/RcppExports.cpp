@@ -89,8 +89,8 @@ BEGIN_RCPP
 END_RCPP
 }
 // cpp_loglik
-double cpp_loglik(SEXP ctxSEXP, Rcpp::List structure, Rcpp::NumericMatrix params_mat, Rcpp::DataFrame data_df, double rel_tol, double abs_tol, int max_depth);
-RcppExport SEXP _AccumulatR_cpp_loglik(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP params_matSEXP, SEXP data_dfSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP) {
+double cpp_loglik(SEXP ctxSEXP, Rcpp::List structure, Rcpp::NumericMatrix params_mat, Rcpp::DataFrame data_df, Rcpp::Nullable<Rcpp::List> layout_opt, double rel_tol, double abs_tol, int max_depth);
+RcppExport SEXP _AccumulatR_cpp_loglik(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP params_matSEXP, SEXP data_dfSEXP, SEXP layout_optSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -98,16 +98,17 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::List >::type structure(structureSEXP);
     Rcpp::traits::input_parameter< Rcpp::NumericMatrix >::type params_mat(params_matSEXP);
     Rcpp::traits::input_parameter< Rcpp::DataFrame >::type data_df(data_dfSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type layout_opt(layout_optSEXP);
     Rcpp::traits::input_parameter< double >::type rel_tol(rel_tolSEXP);
     Rcpp::traits::input_parameter< double >::type abs_tol(abs_tolSEXP);
     Rcpp::traits::input_parameter< int >::type max_depth(max_depthSEXP);
-    rcpp_result_gen = Rcpp::wrap(cpp_loglik(ctxSEXP, structure, params_mat, data_df, rel_tol, abs_tol, max_depth));
+    rcpp_result_gen = Rcpp::wrap(cpp_loglik(ctxSEXP, structure, params_mat, data_df, layout_opt, rel_tol, abs_tol, max_depth));
     return rcpp_result_gen;
 END_RCPP
 }
 // cpp_loglik_multiple
-Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP, Rcpp::List structure, Rcpp::List params_list, Rcpp::DataFrame data_df, double rel_tol, double abs_tol, int max_depth);
-RcppExport SEXP _AccumulatR_cpp_loglik_multiple(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP params_listSEXP, SEXP data_dfSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP) {
+Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP, Rcpp::List structure, Rcpp::List params_list, Rcpp::DataFrame data_df, Rcpp::Nullable<Rcpp::List> layout_opt, double rel_tol, double abs_tol, int max_depth);
+RcppExport SEXP _AccumulatR_cpp_loglik_multiple(SEXP ctxSEXPSEXP, SEXP structureSEXP, SEXP params_listSEXP, SEXP data_dfSEXP, SEXP layout_optSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -115,10 +116,11 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::List >::type structure(structureSEXP);
     Rcpp::traits::input_parameter< Rcpp::List >::type params_list(params_listSEXP);
     Rcpp::traits::input_parameter< Rcpp::DataFrame >::type data_df(data_dfSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::List> >::type layout_opt(layout_optSEXP);
     Rcpp::traits::input_parameter< double >::type rel_tol(rel_tolSEXP);
     Rcpp::traits::input_parameter< double >::type abs_tol(abs_tolSEXP);
     Rcpp::traits::input_parameter< int >::type max_depth(max_depthSEXP);
-    rcpp_result_gen = Rcpp::wrap(cpp_loglik_multiple(ctxSEXP, structure, params_list, data_df, rel_tol, abs_tol, max_depth));
+    rcpp_result_gen = Rcpp::wrap(cpp_loglik_multiple(ctxSEXP, structure, params_list, data_df, layout_opt, rel_tol, abs_tol, max_depth));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -307,8 +309,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_native_context_from_proto_cpp", (DL_FUNC) &_AccumulatR_native_context_from_proto_cpp, 1},
     {"_AccumulatR_boost_integrate_cpp", (DL_FUNC) &_AccumulatR_boost_integrate_cpp, 6},
     {"_AccumulatR_native_trial_mixture_driver", (DL_FUNC) &_AccumulatR_native_trial_mixture_driver, 9},
-    {"_AccumulatR_cpp_loglik", (DL_FUNC) &_AccumulatR_cpp_loglik, 7},
-    {"_AccumulatR_cpp_loglik_multiple", (DL_FUNC) &_AccumulatR_cpp_loglik_multiple, 7},
+    {"_AccumulatR_cpp_loglik", (DL_FUNC) &_AccumulatR_cpp_loglik, 8},
+    {"_AccumulatR_cpp_loglik_multiple", (DL_FUNC) &_AccumulatR_cpp_loglik_multiple, 8},
     {"_AccumulatR_native_component_plan_exported", (DL_FUNC) &_AccumulatR_native_component_plan_exported, 3},
     {"_AccumulatR_native_outcome_probability_params_cpp", (DL_FUNC) &_AccumulatR_native_outcome_probability_params_cpp, 11},
     {"_AccumulatR_native_outcome_labels_cpp", (DL_FUNC) &_AccumulatR_native_outcome_labels_cpp, 1},

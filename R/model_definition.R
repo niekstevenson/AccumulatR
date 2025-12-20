@@ -893,8 +893,15 @@ param_table <- function(model, ...) {
 build_params_df <- function(model,
                             param_values,
                             n_trials = 1L,
-                            component = NULL) {
-  build_param_matrix(model, param_values, n_trials = n_trials)
+                            component = NULL,
+                            layout = NULL) {
+  build_param_matrix(
+    model,
+    param_values,
+    n_trials = n_trials,
+    component = component,
+    layout = layout
+  )
 }
 
 #' Build a positional parameter matrix (q, w, t0, p1..pK)
@@ -907,7 +914,8 @@ build_params_df <- function(model,
 build_param_matrix <- function(model,
                                param_values,
                                n_trials = 1L,
-                               component = NULL) {
+                               component = NULL,
+                               layout = NULL) {
   spec <- race_model(model)
   accs <- spec$accumulators %||% list()
   if (length(accs) == 0L) {
@@ -986,6 +994,7 @@ build_param_matrix <- function(model,
   comp_weights <- setNames(rep(NA_real_, length(comp_defs)), comp_ids)
   comp_mode <- mix$mode %||% "fixed"
   comp_ref <- mix$reference %||% if (length(comp_ids) > 0) comp_ids[[1]] else NA_character_
+  comp_index <- setNames(seq_along(comp_ids), comp_ids)
   if (length(comp_defs) > 0) {
     for (i in seq_along(comp_defs)) {
       comp <- comp_defs[[i]]
@@ -1055,6 +1064,7 @@ build_param_matrix <- function(model,
 
   # Build one row per accumulator
   base_mat <- matrix(NA_real_, nrow = length(accs), ncol = length(col_names))
+  colnames(base_mat) <- col_names
   colnames(base_mat) <- col_names
   for (i in seq_along(accs)) {
     acc <- accs[[i]]
@@ -1126,6 +1136,29 @@ build_param_matrix <- function(model,
     base_mat[i, ] <- c(q_val, w_val, t0_val, p_vals)
   }
 
+  # If a pre-built layout is provided (static mapping stored in context), honor it.
+  if (!is.null(layout)) {
+    row_trial <- layout$row_trial %||% layout$trial
+    row_acc <- layout$row_acc %||% layout$acc
+    if (is.null(row_trial) || is.null(row_acc)) {
+      stop("layout must include row_trial and row_acc")
+    }
+    if (length(row_trial) != length(row_acc)) {
+      stop("layout row_trial/row_acc lengths must match")
+    }
+    rows <- lapply(seq_along(row_trial), function(idx) {
+      t <- as.integer(row_trial[[idx]])
+      a <- as.integer(row_acc[[idx]])
+      if (is.na(t) || is.na(a) || a < 1L || a > length(accs)) {
+        stop("layout indices out of range")
+      }
+      base_mat[a, , drop = FALSE]
+    })
+    params_mat <- do.call(rbind, rows)
+    colnames(params_mat) <- col_names
+    return(params_mat)
+  }
+
   # If component labels are provided per trial, build only the rows for accumulators
   # that participate in that component; otherwise, fall back to the full rectangular
   # layout (all accumulators per trial).
@@ -1134,9 +1167,6 @@ build_param_matrix <- function(model,
       stop("component vector must have length n_trials when provided")
     }
     rows <- list()
-    row_acc <- character(0)
-    row_trial <- integer(0)
-    row_comp <- character(0)
     for (t in seq_len(n_trials)) {
       comp_lbl <- as.character(component[[t]])
       for (i in seq_along(accs)) {
@@ -1145,9 +1175,6 @@ build_param_matrix <- function(model,
           next
         }
         rows[[length(rows) + 1L]] <- base_mat[i, , drop = FALSE]
-        row_acc <- c(row_acc, acc_ids[[i]])
-        row_trial <- c(row_trial, t)
-        row_comp <- c(row_comp, comp_lbl)
       }
     }
     if (length(rows) == 0L) {
@@ -1155,12 +1182,11 @@ build_param_matrix <- function(model,
     }
     params_mat <- do.call(rbind, rows)
     colnames(params_mat) <- col_names
-    attr(params_mat, "row_trial") <- row_trial
-    attr(params_mat, "row_acc") <- row_acc
-    attr(params_mat, "row_component") <- row_comp
     params_mat
   } else {
     # Replicate for n_trials (pure positional, all accumulators)
-    base_mat[rep(seq_len(nrow(base_mat)), times = n_trials), , drop = FALSE]
+    params_mat <- base_mat[rep(seq_len(nrow(base_mat)), times = n_trials), , drop = FALSE]
+    colnames(params_mat) <- col_names
+    params_mat
   }
 }

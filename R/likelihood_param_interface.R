@@ -29,6 +29,7 @@
   if (is.null(prep_eval_base) || is.null(prep_eval_base[[".runtime"]])) {
     prep_eval_base <- .prepare_model_for_likelihood(structure$model_spec)
   }
+  param_layout <- .param_layout_from_data(structure, data_df, prep_eval_base)
   native_ctx <- .prep_native_context(prep_eval_base)
   if (!inherits(native_ctx, "externalptr")) {
     native_ctx <- NULL
@@ -38,6 +39,7 @@
     prep = prep_eval_base,
     native_ctx = native_ctx,
     data_df = data_df,
+    param_layout = param_layout,
     rel_tol = .integrate_rel_tol(),
     abs_tol = .integrate_abs_tol(),
     max_depth = getOption("uuber.integrate.max.depth", 12L)
@@ -80,6 +82,66 @@ build_likelihood_context <- function(structure,
 .validate_likelihood_context <- function(context) {
   if (inherits(context, "likelihood_context")) return(context)
   stop("likelihood context must be created via build_likelihood_context()", call. = FALSE)
+}
+
+.param_layout_from_data <- function(structure, data_df, prep) {
+  acc_defs <- prep$accumulators %||% list()
+  acc_ids <- names(acc_defs)
+  n_acc <- length(acc_ids)
+  if (n_acc == 0L) {
+    stop("No accumulators in model", call. = FALSE)
+  }
+  if (is.null(data_df) || nrow(data_df) == 0L) {
+    return(list(
+      row_trial = rep(seq_len(1L), each = n_acc),
+      row_acc = rep(seq_len(n_acc), times = 1L),
+      row_component = rep(NA_integer_, n_acc),
+      n_trials = 1L,
+      rectangular = TRUE
+    ))
+  }
+  data_df <- as.data.frame(data_df)
+  trials <- as.integer(data_df$trial)
+  if (any(is.na(trials))) {
+    stop("Data must include trial indices to build param layout", call. = FALSE)
+  }
+  n_trials <- max(trials)
+  comp_table <- structure$components %||% list()
+  comp_ids <- comp_table$component_id %||% character(0)
+  comp_index <- setNames(seq_along(comp_ids), comp_ids)
+  has_data_comp <- "component" %in% names(data_df)
+  row_trial <- integer(0)
+  row_acc <- integer(0)
+  row_comp <- integer(0)
+  for (t in seq_len(n_trials)) {
+    trial_comp <- NA_character_
+    if (has_data_comp) {
+      vals <- data_df$component[trials == t]
+      vals <- vals[!is.na(vals)]
+      if (length(vals) > 0L) trial_comp <- vals[[1]]
+    }
+    comp_idx <- comp_index[[trial_comp]] %||% NA_integer_
+    for (i in seq_along(acc_ids)) {
+      acc_comp <- acc_defs[[i]]$components %||% character(0)
+      if (has_data_comp && length(acc_comp) > 0L) {
+        if (is.na(trial_comp) || !trial_comp %in% acc_comp) next
+      }
+      row_trial <- c(row_trial, t)
+      row_acc <- c(row_acc, i)
+      row_comp <- c(row_comp, comp_idx)
+    }
+  }
+  if (length(row_trial) == 0L) {
+    stop("No rows produced for parameter layout", call. = FALSE)
+  }
+  rectangular <- (length(row_trial) == n_trials * n_acc)
+  list(
+    row_trial = as.integer(row_trial),
+    row_acc = as.integer(row_acc),
+    row_component = as.integer(row_comp),
+    n_trials = as.integer(n_trials),
+    rectangular = rectangular
+  )
 }
 
 .param_matrix_to_rows <- function(structure, params_mat) {
@@ -128,7 +190,6 @@ build_likelihood_context <- function(structure,
   rows <- vector("list", nrow(params_mat))
   row_idx <- 1L
   for (t in seq_len(n_trials)) {
-    # per-trial weight params pulled from w in leader rows
     weight_vals <- list()
     for (i in seq_along(comp_ids)) {
       wp <- comp_weight_param[[i]]
@@ -807,6 +868,7 @@ log_likelihood.likelihood_context <- function(likelihood_context, parameters, ..
     ctx$structure,
     params_list,
     ctx$data_df,
+    ctx$param_layout %||% NULL,
     rel_tol,
     abs_tol,
     max_depth

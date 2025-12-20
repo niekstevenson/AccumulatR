@@ -9,7 +9,8 @@
                                  percent,
                                  n_points,
                                  n_trials,
-                                 ctx) {
+                                 ctx,
+                                 layout) {
   base_value <- base_params[[param_name]]
   span <- if (!is.finite(base_value) || base_value == 0) {
     percent
@@ -20,7 +21,7 @@
   param_tables <- lapply(grid, function(val) {
     candidate <- base_params
     candidate[[param_name]] <- val
-    build_params_df(model_spec, candidate, n_trials = n_trials)
+    build_params_df(model_spec, candidate, n_trials = n_trials, layout = layout)
   })
   log_liks <- log_likelihood(ctx, param_tables)
   data.frame(
@@ -62,11 +63,11 @@ profile_likelihood <- function(structure,
     stop("base_params must be a named numeric vector")
   }
   n_trials <- length(unique(data$trial %||% seq_len(nrow(data))))
-  base_table <- build_params_df(model_spec, base_params, n_trials = n_trials)
   ctx <- build_likelihood_context(
     structure = structure,
     data_df = data
   )
+  base_table <- build_params_df(model_spec, base_params, n_trials = n_trials, layout = ctx$param_layout)
   true_ll <- log_likelihood(ctx, list(base_table))[[1]]
   label_map <- param_labels %||% stats::setNames(names(base_params), names(base_params))
   param_names <- names(base_params)
@@ -81,7 +82,8 @@ profile_likelihood <- function(structure,
       percent = percent,
       n_points = n_points,
       n_trials = n_trials,
-      ctx = ctx
+      ctx = ctx,
+      layout = ctx$param_layout
     )
   }
   if (length(param_names) == 0) {

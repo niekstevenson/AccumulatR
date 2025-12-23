@@ -36,6 +36,7 @@
 
 using uuber::AccDistParams;
 using uuber::resolve_acc_params_entries;
+using uuber::ComponentMap;
 
 Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector& x,
                                        double meanlog,
@@ -3958,12 +3959,6 @@ double native_trial_mixture_driver(SEXP ctxSEXP,
                                        guess_donors.isNotNull() ? Rcpp::List(guess_donors.get()) : Rcpp::List());
 }
 
-struct ComponentMap {
-  std::vector<std::string> ids;
-  std::vector<int> leader_idx;
-  std::vector<double> base_weights;
-};
-
 struct ParamRowMeta {
   int trial{-1};   // 0-based trial index
   int acc{-1};     // 0-based accumulator index
@@ -4116,42 +4111,6 @@ int col_index(const Rcpp::CharacterVector& cols, const std::string& name) {
     if (name == std::string(s.get_cstring())) return static_cast<int>(i);
   }
   return -1;
-}
-
-ComponentMap build_component_map(const uuber::NativeContext& ctx, const Rcpp::List& structure) {
-  ComponentMap map;
-  if (structure.containsElementNamed("components")) {
-    Rcpp::DataFrame comp_df(structure["components"]);
-    Rcpp::CharacterVector ids = comp_df["component_id"];
-    Rcpp::NumericVector weights = comp_df["weight"];
-    map.ids.reserve(ids.size());
-    map.base_weights.reserve(ids.size());
-    for (R_xlen_t i = 0; i < ids.size(); ++i) {
-      if (ids[i] == NA_STRING) continue;
-      map.ids.push_back(Rcpp::as<std::string>(ids[i]));
-      double w = (i < weights.size()) ? static_cast<double>(weights[i]) : 1.0;
-      map.base_weights.push_back(std::isfinite(w) && w >= 0.0 ? w : 1.0);
-    }
-  }
-  if (map.ids.empty()) {
-    map.ids.push_back("__default__");
-    map.base_weights.push_back(1.0);
-  }
-  map.leader_idx.assign(map.ids.size(), -1);
-  for (std::size_t c = 0; c < map.ids.size(); ++c) {
-    const std::string& cid = map.ids[c];
-    for (std::size_t a = 0; a < ctx.accumulators.size(); ++a) {
-      const auto& comps = ctx.accumulators[a].components;
-      if (std::find(comps.begin(), comps.end(), cid) != comps.end()) {
-        map.leader_idx[c] = static_cast<int>(a);
-        break;
-      }
-    }
-    if (map.leader_idx[c] < 0 && !ctx.accumulators.empty()) {
-      map.leader_idx[c] = 0;
-    }
-  }
-  return map;
 }
 
 std::vector<double> component_weights_for_trial(const ComponentMap& map,
@@ -4325,10 +4284,8 @@ double mix_outcome_mass(SEXP ctxSEXP,
 
 // [[Rcpp::export]]
 double cpp_loglik(SEXP ctxSEXP,
-                  Rcpp::List structure,
                   Rcpp::NumericMatrix params_mat,
                   Rcpp::DataFrame data_df,
-                  Rcpp::Nullable<Rcpp::List> layout_opt,
                   Rcpp::LogicalVector ok,
                   Rcpp::IntegerVector expand,
                   double min_ll,
@@ -4336,139 +4293,165 @@ double cpp_loglik(SEXP ctxSEXP,
                   double abs_tol,
                   int max_depth) {
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  // Params change invalidates NA cache
   ctx->na_map_cache.clear();
   ctx->na_cache_order.clear();
-  int n_acc = static_cast<int>(ctx->accumulators.size());
-  if (n_acc == 0) Rcpp::stop("No accumulators in native context");
-  ParamLayout layout = build_param_layout_from_list(layout_opt, n_acc);
-  if (layout.n_trials <= 0) {
-    layout = build_param_layout(params_mat, n_acc);
-  } else if (!layout.rectangular &&
-             static_cast<int>(layout.rows.size()) != params_mat.nrow()) {
-    // Fallback to dense interpretation if the supplied layout does not match row count.
-    layout = build_param_layout(params_mat, n_acc);
-  }
-  if (layout.n_trials <= 0) {
-    Rcpp::stop("Parameter matrix must include at least one trial");
-  }
-  int n_trials = layout.n_trials;
-  const ComponentMap comp_map = build_component_map(*ctx, structure);
-  Rcpp::RObject dimnames = params_mat.attr("dimnames");
-  Rcpp::CharacterVector col_names;
-  if (!dimnames.isNULL()) {
-    Rcpp::List dn(dimnames);
-    if (dn.size() > 1) {
-      col_names = Rcpp::as<Rcpp::CharacterVector>(dn[1]);
-    }
-  }
-  int w_col = col_index(col_names, "w");
-  if (w_col < 0) Rcpp::stop("Parameter matrix missing column 'w'");
-  std::vector<TrialParamSet> param_sets = params_from_matrix(*ctx, params_mat, layout);
+  const int n_acc = static_cast<int>(ctx->accumulators.size());
+  const int q_col = 0;
+  const int w_col = 1;
+  const int t0_col = 2;
+  const int p1_col = 3;
+  const int p2_col = params_mat.ncol() > 4 ? 4 : -1;
+  const int p3_col = params_mat.ncol() > 5 ? 5 : -1;
 
   Rcpp::NumericVector trial_col = data_df["trial"];
+  Rcpp::CharacterVector acc_col = data_df["accumulator"];
   Rcpp::CharacterVector outcome_col = data_df["R"];
   Rcpp::NumericVector rt_col = data_df["rt"];
   bool has_component = data_df.containsElementNamed("component");
   Rcpp::CharacterVector comp_col = has_component ? Rcpp::CharacterVector(data_df["component"]) : Rcpp::CharacterVector();
+  bool has_onset = data_df.containsElementNamed("onset");
+  Rcpp::NumericVector onset_col = has_onset ? Rcpp::NumericVector(data_df["onset"]) : Rcpp::NumericVector();
 
-  R_xlen_t n_obs = outcome_col.size();
-  double total_loglik = 0.0;
+  TrialParamSet base_template = build_base_paramset(*ctx);
+  const ComponentMap& comp_map = ctx->components;
 
-  // Validate expand (expansion happens after evaluation)
-  R_xlen_t n_expand = expand.size();
-  if (n_expand == 0) {
-    expand = Rcpp::seq(1, n_obs);
-    n_expand = expand.size();
-  }
-  for (R_xlen_t i = 0; i < n_expand; ++i) {
-    int comp_idx = expand[i];
-    if (comp_idx == NA_INTEGER || comp_idx < 1 || comp_idx > n_obs) {
-      Rcpp::stop("expand indices must reference rows in data_df");
+  std::vector<TrialParamSet> param_sets;
+  std::vector<Rcpp::String> outcome_by_trial;
+  std::vector<double> rt_by_trial;
+  std::vector<std::string> component_by_trial;
+  std::vector<std::vector<double>> weight_override_by_trial;
+
+  const std::size_t comp_count = comp_map.ids.size();
+
+  const R_xlen_t n_rows = params_mat.nrow();
+  int current_trial_label = std::numeric_limits<int>::min();
+  int trial_idx = -1;
+  for (R_xlen_t r = 0; r < n_rows; ++r) {
+    int trial_label = static_cast<int>(trial_col[r]);
+    if (r == 0 || trial_label != current_trial_label) {
+      current_trial_label = trial_label;
+      ++trial_idx;
+      param_sets.push_back(base_template);
+      outcome_by_trial.push_back(Rcpp::String(NA_STRING));
+      rt_by_trial.push_back(std::numeric_limits<double>::quiet_NaN());
+      component_by_trial.emplace_back();
+      weight_override_by_trial.push_back(std::vector<double>(comp_count, std::numeric_limits<double>::quiet_NaN()));
+    }
+    int acc_idx = ctx->accumulator_index.at(Rcpp::as<std::string>(acc_col[r]));
+    TrialAccumulatorParams tap = param_sets[static_cast<std::size_t>(trial_idx)].acc_params[static_cast<std::size_t>(acc_idx)];
+    double q_val = clamp_probability(params_mat(r, q_col));
+    if (!tap.shared_trigger_id.empty()) {
+      tap.shared_q = q_val;
+      tap.q = 0.0;
+    } else {
+      tap.q = q_val;
+      tap.shared_q = q_val;
+    }
+    tap.dist_cfg.t0 = params_mat(r, t0_col);
+    double onset_val = (has_onset && r < onset_col.size()) ? static_cast<double>(onset_col[r]) : 0.0;
+    tap.onset = std::isfinite(onset_val) ? onset_val : 0.0;
+    tap.has_components = !ctx->accumulators[acc_idx].components.empty();
+    tap.components = ctx->accumulators[acc_idx].components;
+    tap.has_override = true;
+    if (tap.dist_cfg.code == uuber::ACC_DIST_LOGNORMAL ||
+        tap.dist_cfg.code == uuber::ACC_DIST_GAMMA ||
+        tap.dist_cfg.code == uuber::ACC_DIST_EXGAUSS) {
+      tap.dist_cfg.p1 = params_mat(r, p1_col);
+      if (p2_col >= 0) tap.dist_cfg.p2 = params_mat(r, p2_col);
+      if (p3_col >= 0) tap.dist_cfg.p3 = params_mat(r, p3_col);
+    }
+    param_sets[static_cast<std::size_t>(trial_idx)].acc_params[static_cast<std::size_t>(acc_idx)] = std::move(tap);
+
+    for (std::size_t c = 0; c < comp_map.leader_idx.size(); ++c) {
+      if (comp_map.leader_idx[c] == acc_idx) {
+        weight_override_by_trial[static_cast<std::size_t>(trial_idx)][c] = params_mat(r, w_col);
+      }
+    }
+
+    if (outcome_by_trial[trial_idx] == NA_STRING && r < outcome_col.size()) {
+      outcome_by_trial[trial_idx] = Rcpp::String(outcome_col[r]);
+    }
+    if (!std::isfinite(rt_by_trial[trial_idx]) && r < rt_col.size()) {
+      rt_by_trial[trial_idx] = static_cast<double>(rt_col[r]);
+    }
+    if (has_component && component_by_trial[trial_idx].empty() && r < comp_col.size()) {
+      Rcpp::String comp_val(comp_col[r]);
+      if (comp_val != NA_STRING) {
+        component_by_trial[trial_idx] = std::string(comp_val.get_cstring());
+      }
     }
   }
-  // ok must align to observed data rows
-  if (ok.size() == 0) {
-    ok = Rcpp::LogicalVector(n_obs, true);
-  } else if (ok.size() != n_obs) {
-    Rcpp::stop("Length of ok must equal number of observations");
-  }
 
-  std::vector<double> trial_loglik(static_cast<std::size_t>(n_obs), min_ll);
+  int n_trials = static_cast<int>(param_sets.size());
 
-  // Precompute default component mix once to avoid per-row allocations.
   const std::vector<std::string>& default_components = comp_map.ids;
   const std::size_t n_components = default_components.size();
   const std::vector<ComponentCacheEntry> default_cache_entries =
     build_component_cache_entries(default_components);
 
-  std::vector<double> single_weight_vec;
-  if (n_components == 1) {
-    single_weight_vec = {1.0};
-  }
-  std::vector<std::vector<double>> weights_by_trial;
-  if (n_components > 1) {
-    weights_by_trial.resize(static_cast<std::size_t>(n_trials));
-    for (int t = 0; t < n_trials; ++t) {
-      weights_by_trial[static_cast<std::size_t>(t)] =
-        component_weights_for_trial(comp_map, params_mat, t, n_acc, w_col, &layout);
+  std::vector<std::vector<double>> weights_by_trial(static_cast<std::size_t>(n_trials),
+                                                    std::vector<double>(n_components, 0.0));
+  for (int t = 0; t < n_trials; ++t) {
+    std::vector<double> w = comp_map.base_weights;
+    const auto& overrides = weight_override_by_trial[static_cast<std::size_t>(t)];
+    for (std::size_t c = 0; c < w.size(); ++c) {
+      double cand = overrides[c];
+      if (std::isfinite(cand)) w[c] = cand;
     }
-  }
-
-  std::unordered_map<int, int> trial_lookup;
-  if (!layout.trial_ids.empty()) {
-    for (std::size_t i = 0; i < layout.trial_ids.size(); ++i) {
-      trial_lookup[layout.trial_ids[i]] = static_cast<int>(i);
-    }
-  }
-
-  for (R_xlen_t i = 0; i < n_obs; ++i) {
-    int trial_idx_val = static_cast<int>(trial_col[i]);
-    if (trial_idx_val == NA_INTEGER) {
-      Rcpp::stop("Data frame contains NA trial index");
-    }
-    int trial_idx = -1;
-    if (!trial_lookup.empty()) {
-      auto it = trial_lookup.find(trial_idx_val);
-      if (it == trial_lookup.end()) {
-        Rcpp::stop("Trial index not found in layout");
-      }
-      trial_idx = it->second;
+    double total = 0.0;
+    for (double v : w) total += v;
+    if (!std::isfinite(total) || total <= 0.0) {
+      double uni = 1.0 / static_cast<double>(w.size());
+      std::fill(w.begin(), w.end(), uni);
     } else {
-      trial_idx = trial_idx_val - 1;
+      for (double& v : w) v /= total;
     }
-    if (trial_idx < 0 || trial_idx >= n_trials) {
-      Rcpp::stop("Trial index out of range for parameter matrix");
+    weights_by_trial[static_cast<std::size_t>(t)] = std::move(w);
+  }
+
+  if (ok.size() == 0) {
+    ok = Rcpp::LogicalVector(n_trials, true);
+  } else if (ok.size() != n_trials) {
+    Rcpp::stop("Length of ok must equal number of trials");
+  }
+
+  R_xlen_t n_expand = expand.size();
+  if (n_expand == 0) {
+    expand = Rcpp::seq(1, n_trials);
+    n_expand = expand.size();
+  }
+  for (R_xlen_t i = 0; i < n_expand; ++i) {
+    int comp_idx = expand[i];
+    if (comp_idx == NA_INTEGER || comp_idx < 1 || comp_idx > n_trials) {
+      Rcpp::stop("expand indices must reference trials");
     }
-    if (i >= ok.size() || !ok[i]) {
-      trial_loglik[static_cast<std::size_t>(i)] = min_ll;
+  }
+
+  std::vector<double> trial_loglik(static_cast<std::size_t>(n_trials), min_ll);
+
+  for (int t = 0; t < n_trials; ++t) {
+    if (t >= ok.size() || !ok[t]) {
+      trial_loglik[static_cast<std::size_t>(t)] = min_ll;
       continue;
     }
 
-    TrialParamSet* params_ptr = &param_sets[static_cast<std::size_t>(trial_idx)];
-    double rt = rt_col[i];
-    Rcpp::String out_str(outcome_col[i]);
+    TrialParamSet* params_ptr = &param_sets[static_cast<std::size_t>(t)];
+    double rt = (t < static_cast<int>(rt_by_trial.size()))
+      ? rt_by_trial[static_cast<std::size_t>(t)]
+      : std::numeric_limits<double>::quiet_NaN();
+    Rcpp::String out_str = outcome_by_trial[static_cast<std::size_t>(t)];
     bool outcome_is_na = (out_str == NA_STRING);
     std::string outcome_label = outcome_is_na ? std::string() : std::string(out_str.get_cstring());
     const std::vector<std::string>* comp_labels_ptr = &default_components;
     const std::vector<ComponentCacheEntry>* cache_entries_ptr = &default_cache_entries;
-    const std::vector<double>* comp_weights_ptr = nullptr;
-    if (n_components == 1) {
-      comp_weights_ptr = &single_weight_vec;
-    } else {
-      comp_weights_ptr = &weights_by_trial[static_cast<std::size_t>(trial_idx)];
-    }
+    const std::vector<double>* comp_weights_ptr = &weights_by_trial[static_cast<std::size_t>(t)];
 
-    std::string forced_component;
+    std::string forced_component = (t < static_cast<int>(component_by_trial.size()))
+      ? component_by_trial[static_cast<std::size_t>(t)]
+      : std::string();
     std::vector<std::string> forced_components;
     std::vector<double> forced_weights;
     std::vector<ComponentCacheEntry> forced_cache_entries;
-    if (has_component && comp_col.size() > i) {
-      Rcpp::String comp_val(comp_col[i]);
-      if (comp_val != NA_STRING) {
-        forced_component = std::string(comp_val.get_cstring());
-      }
-    }
     if (!forced_component.empty()) {
       forced_components = {forced_component};
       forced_weights = {1.0};
@@ -4573,10 +4556,10 @@ double cpp_loglik(SEXP ctxSEXP,
       double lp = std::log(prob);
       ll_val = (std::isfinite(lp) && lp > min_ll) ? lp : min_ll;
     }
-    trial_loglik[static_cast<std::size_t>(i)] = ll_val;
+    trial_loglik[static_cast<std::size_t>(t)] = ll_val;
   }
 
-  // Sum expanded trials (post-expansion)
+  double total_loglik = 0.0;
   for (R_xlen_t i = 0; i < n_expand; ++i) {
     int comp_idx = expand[i];
     total_loglik += trial_loglik[static_cast<std::size_t>(comp_idx - 1)];
@@ -4587,30 +4570,27 @@ double cpp_loglik(SEXP ctxSEXP,
 
 // [[Rcpp::export]]
 Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP,
-                                        Rcpp::List structure,
                                         Rcpp::List params_list,
                                         Rcpp::DataFrame data_df,
-                                        Rcpp::Nullable<Rcpp::List> layout_opt,
                                         Rcpp::LogicalVector ok,
                                         Rcpp::IntegerVector expand,
                                         double min_ll,
                                         double rel_tol,
                                         double abs_tol,
                                         int max_depth) {
-  Rcpp::NumericVector out(params_list.size());
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  Rcpp::NumericVector out(params_list.size());
   for (R_xlen_t i = 0; i < params_list.size(); ++i) {
     if (params_list[i] == R_NilValue) {
       out[i] = NA_REAL;
       continue;
     }
-    // reset NA caches between parameter sets
     if (ctx) {
       ctx->na_map_cache.clear();
       ctx->na_cache_order.clear();
     }
     Rcpp::NumericMatrix pm(params_list[i]);
-    out[i] = cpp_loglik(ctxSEXP, structure, pm, data_df, layout_opt, ok, expand, min_ll, rel_tol, abs_tol, max_depth);
+    out[i] = cpp_loglik(ctxSEXP, pm, data_df, ok, expand, min_ll, rel_tol, abs_tol, max_depth);
   }
   return out;
 }

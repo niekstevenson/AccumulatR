@@ -81,6 +81,12 @@ struct OutcomeContextInfo {
   bool maps_to_na{false};
 };
 
+struct ComponentMap {
+  std::vector<std::string> ids;
+  std::vector<int> leader_idx;
+  std::vector<double> base_weights;
+};
+
 struct NativeContext {
   std::vector<NativeAccumulator> accumulators;
   std::vector<NativePool> pools;
@@ -98,6 +104,7 @@ struct NativeContext {
   std::unordered_map<std::string, OutcomeContextInfo> outcome_info;
   std::unordered_map<std::string, std::vector<std::string>> alias_sources;
   std::unordered_map<std::string, std::vector<OutcomeGuessDonor>> guess_target_map;
+  ComponentMap components;
 };
 
 Rcpp::XPtr<NativeContext> build_native_context(Rcpp::List prep);

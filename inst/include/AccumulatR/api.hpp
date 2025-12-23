@@ -5,8 +5,8 @@
 
 namespace accumulatr {
 
-using cpp_loglik_ccallable_t = double (*)(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, double, double, double, int);
-using cpp_loglik_multiple_ccallable_t = SEXP (*)(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, double, double, double, int);
+using cpp_loglik_ccallable_t = double (*)(SEXP, SEXP, SEXP, SEXP, SEXP, double, double, double, int);
+using cpp_loglik_multiple_ccallable_t = SEXP (*)(SEXP, SEXP, SEXP, SEXP, SEXP, double, double, double, int);
 
 inline cpp_loglik_ccallable_t cpp_loglik_ccallable() {
   static cpp_loglik_ccallable_t fn = nullptr;
@@ -33,10 +33,8 @@ inline cpp_loglik_multiple_ccallable_t cpp_loglik_multiple_ccallable() {
 
 inline double cpp_loglik(
     SEXP ctx_ptr,
-    const Rcpp::List& structure,
     const Rcpp::NumericMatrix& param_matrix,
     const Rcpp::DataFrame& data_df,
-    SEXP layout_opt,
     const Rcpp::LogicalVector& ok,
     const Rcpp::IntegerVector& expand,
     double min_ll,
@@ -44,10 +42,8 @@ inline double cpp_loglik(
     double abs_tol,
     int max_depth) {
   return cpp_loglik_ccallable()(ctx_ptr,
-                                structure,
                                 param_matrix,
                                 data_df,
-                                layout_opt,
                                 ok,
                                 expand,
                                 min_ll,
@@ -58,10 +54,8 @@ inline double cpp_loglik(
 
 inline Rcpp::NumericVector cpp_loglik_multiple(
     SEXP ctx_ptr,
-    const Rcpp::List& structure,
     const Rcpp::List& params_list,
     const Rcpp::DataFrame& data_df,
-    SEXP layout_opt,
     const Rcpp::LogicalVector& ok,
     const Rcpp::IntegerVector& expand,
     double min_ll,
@@ -69,10 +63,8 @@ inline Rcpp::NumericVector cpp_loglik_multiple(
     double abs_tol,
     int max_depth) {
   SEXP out = cpp_loglik_multiple_ccallable()(ctx_ptr,
-                                            structure,
                                             params_list,
                                             data_df,
-                                            layout_opt,
                                             ok,
                                             expand,
                                             min_ll,

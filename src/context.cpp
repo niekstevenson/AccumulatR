@@ -155,6 +155,47 @@ void populate_outcome_metadata(const Rcpp::List& prep, NativeContext& ctx) {
   }
 }
 
+ComponentMap build_component_map(const Rcpp::List& prep, const NativeContext& ctx) {
+  ComponentMap map;
+  Rcpp::List components = prep["components"];
+  if (!components.isNULL()) {
+    Rcpp::CharacterVector comp_ids = components.containsElementNamed("ids")
+      ? Rcpp::CharacterVector(components["ids"])
+      : Rcpp::CharacterVector();
+    Rcpp::NumericVector weights = components.containsElementNamed("weights")
+      ? Rcpp::NumericVector(components["weights"])
+      : Rcpp::NumericVector();
+    map.ids.reserve(comp_ids.size());
+    map.base_weights.reserve(comp_ids.size());
+    for (R_xlen_t i = 0; i < comp_ids.size(); ++i) {
+      if (comp_ids[i] == NA_STRING) continue;
+      map.ids.push_back(Rcpp::as<std::string>(comp_ids[i]));
+      double w = (i < weights.size()) ? static_cast<double>(weights[i]) : 1.0;
+      if (!std::isfinite(w) || w < 0.0) w = 1.0;
+      map.base_weights.push_back(w);
+    }
+  }
+  if (map.ids.empty()) {
+    map.ids.push_back("__default__");
+    map.base_weights.push_back(1.0);
+  }
+  map.leader_idx.assign(map.ids.size(), -1);
+  for (std::size_t c = 0; c < map.ids.size(); ++c) {
+    const std::string& cid = map.ids[c];
+    for (std::size_t a = 0; a < ctx.accumulators.size(); ++a) {
+      const auto& comps = ctx.accumulators[a].components;
+      if (std::find(comps.begin(), comps.end(), cid) != comps.end()) {
+        map.leader_idx[c] = static_cast<int>(a);
+        break;
+      }
+    }
+    if (map.leader_idx[c] < 0 && !ctx.accumulators.empty()) {
+      map.leader_idx[c] = 0;
+    }
+  }
+  return map;
+}
+
 int resolve_na_cache_limit() {
   int default_limit = 128;
   Rcpp::Function getOption("getOption");
@@ -178,6 +219,7 @@ Rcpp::XPtr<NativeContext> build_native_context(Rcpp::List prep) {
   std::unique_ptr<NativeContext> ctx = build_context_from_proto(proto);
   populate_component_metadata(prep, *ctx);
   populate_outcome_metadata(prep, *ctx);
+  ctx->components = build_component_map(prep, *ctx);
   ctx->na_cache_limit = resolve_na_cache_limit();
   return Rcpp::XPtr<NativeContext>(ctx.release(), true);
 }

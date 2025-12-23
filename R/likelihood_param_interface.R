@@ -21,6 +21,17 @@
   if ("component" %in% names(data_df)) {
     data_df$component <- as.character(data_df$component)
   }
+  data_df <- nest_accumulators(structure, data_df)
+  if (!"onset" %in% names(data_df)) {
+    data_df$onset <- 0
+  }
+  data_df$trial <- as.integer(data_df$trial)
+  data_df$R <- as.character(data_df$R)
+  data_df$rt <- as.numeric(data_df$rt)
+  data_df$accumulator <- as.character(data_df$accumulator)
+  if ("component" %in% names(data_df)) {
+    data_df$component <- as.character(data_df$component)
+  }
   if (!is.null(native_bundle)) {
     prep <- native_bundle$prep %||% prep
   }
@@ -55,12 +66,16 @@
   if (!inherits(native_ctx, "externalptr")) {
     native_ctx <- NULL
   }
+  trial_ids <- unique(data_df$trial)
+  n_trials <- length(trial_ids)
   structure(list(
     structure = structure,
     prep = prep_eval_base,
     native_ctx = native_ctx,
     data_df = data_df,
     param_layout = param_layout,
+    n_trials = n_trials,
+    trial_ids = trial_ids,
     rel_tol = .integrate_rel_tol(),
     abs_tol = .integrate_abs_tol(),
     max_depth = getOption("uuber.integrate.max.depth", 12L)
@@ -112,60 +127,34 @@ build_likelihood_context <- function(structure,
   if (n_acc == 0L) {
     stop("No accumulators in model", call. = FALSE)
   }
-  if (is.null(data_df) || nrow(data_df) == 0L) {
-    return(list(
-      row_trial = rep(seq_len(1L), each = n_acc),
-      row_acc = rep(seq_len(n_acc), times = 1L),
-      row_component = rep(NA_integer_, n_acc),
-      n_trials = 1L,
-      rectangular = TRUE
-    ))
-  }
   data_df <- as.data.frame(data_df)
-  trials <- as.integer(data_df$trial)
-  if (any(is.na(trials))) {
-    stop("Data must include trial indices to build param layout", call. = FALSE)
+  if (!"accumulator" %in% names(data_df)) {
+    data_df <- nest_accumulators(structure, data_df)
   }
-  trial_ids <- sort(unique(trials))
-  n_trials <- length(trial_ids)
-  comp_table <- structure$components %||% list()
-  comp_ids <- comp_table$component_id %||% character(0)
-  comp_index <- setNames(seq_along(comp_ids), comp_ids)
-  has_data_comp <- "component" %in% names(data_df)
-  row_trial <- integer(0)
-  row_acc <- integer(0)
-  row_comp <- integer(0)
-  for (t_idx in seq_along(trial_ids)) {
-    int_id <- trial_ids[[t_idx]]
-    trial_comp <- NA_character_
-    if (has_data_comp) {
-      vals <- data_df$component[trials == int_id]
-      vals <- vals[!is.na(vals)]
-      if (length(vals) > 0L) trial_comp <- vals[[1]]
-    }
-    comp_idx <- NA_integer_
-    if (!is.na(trial_comp) && trial_comp %in% names(comp_index)) {
-      comp_idx <- comp_index[[trial_comp]]
-    }
-    for (i in seq_along(acc_ids)) {
-      acc_comp <- acc_defs[[i]]$components %||% character(0)
-      if (has_data_comp && length(acc_comp) > 0L) {
-        if (is.na(trial_comp) || !trial_comp %in% acc_comp) next
-      }
-      row_trial <- c(row_trial, t_idx)
-      row_acc <- c(row_acc, i)
-      row_comp <- c(row_comp, comp_idx)
-    }
+  data_df$trial <- as.integer(data_df$trial)
+  acc_col <- data_df$accumulator
+  if (is.factor(acc_col)) acc_col <- as.character(acc_col)
+  row_acc <- match(acc_col, acc_ids)
+  if (any(is.na(row_acc))) {
+    stop("Accumulator labels must match model accumulators", call. = FALSE)
   }
-  if (length(row_trial) == 0L) {
-    stop("No rows produced for parameter layout", call. = FALSE)
+  trial_ids <- unique(data_df$trial)
+  row_trial <- match(data_df$trial, trial_ids)
+  comp_ids <- structure$components$component_id %||% character(0)
+  comp_col <- NULL
+  if ("component" %in% names(data_df)) comp_col <- data_df$component
+  if (is.factor(comp_col)) comp_col <- as.character(comp_col)
+  row_comp <- if (is.null(comp_col)) {
+    rep(NA_integer_, length(row_trial))
+  } else {
+    match(comp_col, comp_ids)
   }
-  rectangular <- (length(row_trial) == n_trials * n_acc)
+  rectangular <- (length(row_trial) == length(trial_ids) * n_acc)
   list(
     row_trial = as.integer(row_trial),
     row_acc = as.integer(row_acc),
     row_component = as.integer(row_comp),
-    n_trials = as.integer(n_trials),
+    n_trials = as.integer(length(trial_ids)),
     trial_ids = as.integer(trial_ids),
     rectangular = rectangular
   )
@@ -893,18 +882,18 @@ log_likelihood.likelihood_context <- function(likelihood_context,
     as.matrix(pm)
   })
   data_df <- ctx$data_df
-  n_obs <- nrow(data_df)
+  n_trials <- ctx$n_trials %||% length(unique(data_df$trial))
   if (is.null(expand) || length(expand) == 0L) {
-    expand <- seq_len(n_obs)
+    expand <- seq_len(n_trials)
   }
   expand <- as.integer(expand)
-  if (any(is.na(expand)) || any(expand < 1L) || any(expand > n_obs)) {
-    stop("expand indices must reference rows in data_df", call. = FALSE)
+  if (any(is.na(expand)) || any(expand < 1L) || any(expand > n_trials)) {
+    stop("expand indices must reference trials in data_df", call. = FALSE)
   }
   if (is.null(ok) || length(ok) == 0L) {
-    ok <- rep_len(TRUE, n_obs)
-  } else if (length(ok) != n_obs) {
-    stop("Length of ok must equal nrow(data_df)", call. = FALSE)
+    ok <- rep_len(TRUE, n_trials)
+  } else if (length(ok) != n_trials) {
+    stop("Length of ok must equal number of trials in data_df", call. = FALSE)
   }
   ok <- as.logical(ok)
   ok[is.na(ok)] <- FALSE
@@ -913,10 +902,8 @@ log_likelihood.likelihood_context <- function(likelihood_context,
   max_depth <- ctx$max_depth %||% 12L
   cpp_loglik_multiple(
     native_ctx,
-    ctx$structure,
     params_list,
     data_df,
-    ctx$param_layout %||% NULL,
     ok,
     expand,
     min_ll,

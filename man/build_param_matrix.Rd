@@ -2,21 +2,38 @@
 % Please edit documentation in R/model_definition.R
 \name{build_param_matrix}
 \alias{build_param_matrix}
-\title{Build a positional parameter matrix (q, w, t0, p1..pK)}
+\title{Build a parameter data frame for likelihood/simulation}
 \usage{
-build_param_matrix(model, param_values, n_trials = 1L)
+build_param_matrix(
+  model,
+  param_values,
+  n_trials = 1L,
+  component = NULL,
+  layout = NULL
+)
 }
 \arguments{
-\item{model}{Model definition (race_spec or race_model_spec)}
+\item{model}{Model definition}
 
-\item{param_values}{Named numeric vector of core parameters}
+\item{param_values}{Named numeric vector of parameter values}
 
-\item{n_trials}{Number of trials to replicate}
+\item{n_trials}{Number of trial rows to generate}
+
+\item{component}{Optional component label(s)}
+
+\item{layout}{Optional layout for slimmed down construction}
 }
 \value{
-Numeric matrix with columns `q`, `w`, `t0`, `p1`, `p2`, `p3`
-  and attributes `acc_ids`, `n_trials`, `layout`
+Data frame of parameters per trial
 }
 \description{
-Build a positional parameter matrix (q, w, t0, p1..pK)
+Build a parameter data frame for likelihood/simulation
+}
+\examples{
+spec <- race_spec()
+spec <- add_accumulator(spec, "A", "lognormal",
+  params = list(meanlog = 0, sdlog = 0.1))
+spec <- add_outcome(spec, "A_win", "A")
+vals <- c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0)
+build_param_matrix(spec, vals, n_trials = 2)
 }

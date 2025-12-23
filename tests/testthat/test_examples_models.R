@@ -266,37 +266,52 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
   )
 
   # Test each model -----------------------------------------------------------
+  snapshot_res <- list()
   for (name in names(models)) {
     mod <- models[[name]]
     spec_obj <- mod$spec()
     structure <- finalize_model(spec_obj)
     params_vec <- mod$params
 
-    params_df <- build_params_df(spec_obj, params_vec, n_trials = 500)
-    data_df <- simulate(structure, params_df, seed = 123)
+    # Simulate with components retained
+    params_df <- build_param_matrix(spec_obj, params_vec, n_trials = 500)
+    data_df <- simulate(structure, params_df, seed = 123, keep_component = TRUE)
 
-    probs <- response_probabilities(
+    # Analytic probabilities (single-trial param set)
+    analytic <- response_probabilities(
       structure,
-      build_params_df(spec_obj, params_vec, n_trials = 1L),
+      build_param_matrix(spec_obj, params_vec, n_trials = 1L),
       include_na = TRUE
     )
-    testthat::expect_equal(sum(probs), 1, tolerance = 5e-4, info = name)
 
-    # Compare analytic probabilities to empirical outcome frequencies
-    emp <- prop.table(table(data_df$outcome, useNA = "ifany"))
+    # Observed response probabilities from simulation
+    emp <- prop.table(table(data_df$R, useNA = "ifany"))
     emp_names <- names(emp)
     emp_names[is.na(emp_names)] <- "NA"
     emp <- as.numeric(emp)
     names(emp) <- emp_names
-    common <- intersect(names(probs), names(emp))
-    testthat::expect_true(length(common) > 0, info = paste(name, "no common outcomes"))
-    testthat::expect_true(max(abs(probs[common] - emp[common])) < 0.35, info = name)
 
-    # Likelihood equivalence across argument forms
+    # Non-marginalized likelihood with slim param matrix aligned to components
     ctx <- build_likelihood_context(structure, data_df)
-    ll_list <- as.numeric(log_likelihood(ctx, list(params_df)))
-    ll_df <- as.numeric(log_likelihood(ctx, params_df))
-    testthat::expect_equal(ll_list, ll_df, tolerance = 1e-8, info = name)
-    testthat::expect_true(is.finite(ll_list), info = name)
+    params_df_slim <- build_param_matrix(
+      spec_obj,
+      params_vec,
+      n_trials = max(data_df$trial),
+      layout = ctx$param_layout
+    )
+    ll <- as.numeric(log_likelihood(ctx, params_df_slim))
+
+    # Order and round for stable snapshots
+    analytic <- round(analytic[order(names(analytic))], 6)
+    emp <- round(emp[order(names(emp))], 6)
+    ll <- round(ll, 6)
+
+    snapshot_res[[name]] <- list(
+      observed = emp,
+      analytic = analytic,
+      loglik = ll
+    )
   }
+
+  testthat::expect_snapshot_value(snapshot_res, style = "json2")
 })

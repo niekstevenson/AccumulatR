@@ -17,6 +17,10 @@ native_context_from_proto_cpp <- function(blob) {
     .Call(`_AccumulatR_native_context_from_proto_cpp`, blob)
 }
 
+native_ctx_invalid <- function(ptr) {
+    .Call(`_AccumulatR_native_ctx_invalid`, ptr)
+}
+
 boost_integrate_cpp <- function(integrand, lower, upper, rel_tol, abs_tol, max_depth) {
     .Call(`_AccumulatR_boost_integrate_cpp`, integrand, lower, upper, rel_tol, abs_tol, max_depth)
 }
@@ -25,12 +29,12 @@ native_trial_mixture_cpp <- function(ctxSEXP, node_id, t, component_ids, weights
     .Call(`_AccumulatR_native_trial_mixture_driver`, ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows, guess_donors)
 }
 
-cpp_loglik <- function(ctxSEXP, structure, params_mat, data_df, layout_opt, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_cpp_loglik`, ctxSEXP, structure, params_mat, data_df, layout_opt, rel_tol, abs_tol, max_depth)
+cpp_loglik <- function(ctxSEXP, structure, params_mat, data_df, layout_opt, ok, expand, min_ll, rel_tol, abs_tol, max_depth) {
+    .Call(`_AccumulatR_cpp_loglik`, ctxSEXP, structure, params_mat, data_df, layout_opt, ok, expand, min_ll, rel_tol, abs_tol, max_depth)
 }
 
-cpp_loglik_multiple <- function(ctxSEXP, structure, params_list, data_df, layout_opt, rel_tol, abs_tol, max_depth) {
-    .Call(`_AccumulatR_cpp_loglik_multiple`, ctxSEXP, structure, params_list, data_df, layout_opt, rel_tol, abs_tol, max_depth)
+cpp_loglik_multiple <- function(ctxSEXP, structure, params_list, data_df, layout_opt, ok, expand, min_ll, rel_tol, abs_tol, max_depth) {
+    .Call(`_AccumulatR_cpp_loglik_multiple`, ctxSEXP, structure, params_list, data_df, layout_opt, ok, expand, min_ll, rel_tol, abs_tol, max_depth)
 }
 
 native_component_plan_exported <- function(structureSEXP, trial_rowsSEXP, forced_componentSEXP) {

@@ -21,7 +21,7 @@
   param_tables <- lapply(grid, function(val) {
     candidate <- base_params
     candidate[[param_name]] <- val
-    build_params_df(model_spec, candidate, n_trials = n_trials, layout = layout)
+    build_param_matrix(model_spec, candidate, n_trials = n_trials, layout = layout)
   })
   log_liks <- log_likelihood(ctx, param_tables)
   data.frame(
@@ -39,7 +39,7 @@
 #' This version operates directly on the new param-table API:
 #' you supply the generator structure, the model specification,
 #' and the named vector of core parameter values that are passed to
-#' `build_params_df()`. Each grid point rebuilds the params table and
+#' `build_param_matrix()`. Each grid point rebuilds the params table and
 #' evaluates `log_likelihood_from_params()`.
 #'
 #' @param structure Model structure from `finalize_model()`
@@ -67,7 +67,7 @@ profile_likelihood <- function(structure,
     structure = structure,
     data_df = data
   )
-  base_table <- build_params_df(model_spec, base_params, n_trials = n_trials, layout = ctx$param_layout)
+  base_table <- build_param_matrix(model_spec, base_params, n_trials = n_trials, layout = ctx$param_layout)
   true_ll <- log_likelihood(ctx, list(base_table))[[1]]
   label_map <- param_labels %||% stats::setNames(names(base_params), names(base_params))
   param_names <- names(base_params)

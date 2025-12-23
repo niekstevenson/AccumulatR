@@ -881,6 +881,7 @@ param_table <- function(model, ...) {
 #' @param param_values Named numeric vector of parameter values
 #' @param n_trials Number of trial rows to generate
 #' @param component Optional component label(s)
+#' @param layout Optional layout for slimmed down construction
 #' @return Data frame of parameters per trial
 #' @examples
 #' spec <- race_spec()
@@ -888,28 +889,7 @@ param_table <- function(model, ...) {
 #'   params = list(meanlog = 0, sdlog = 0.1))
 #' spec <- add_outcome(spec, "A_win", "A")
 #' vals <- c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0)
-#' build_params_df(spec, vals, n_trials = 2)
-#' @export
-build_params_df <- function(model,
-                            param_values,
-                            n_trials = 1L,
-                            component = NULL,
-                            layout = NULL) {
-  build_param_matrix(
-    model,
-    param_values,
-    n_trials = n_trials,
-    component = component,
-    layout = layout
-  )
-}
-
-#' Build a positional parameter matrix (q, w, t0, p1..pK)
-#'
-#' @param model Model definition (race_spec or race_model_spec)
-#' @param param_values Named numeric vector of core parameters
-#' @param n_trials Number of trials to replicate
-#' @return Numeric matrix with columns `q`, `w`, `t0`, `p1`, `p2`, `p3`
+#' build_param_matrix(spec, vals, n_trials = 2)
 #' @export
 build_param_matrix <- function(model,
                                param_values,
@@ -1189,4 +1169,110 @@ build_param_matrix <- function(model,
     colnames(params_mat) <- col_names
     params_mat
   }
+}
+
+#' Nest data by accumulator
+#'
+#' Expand a trial-level data frame so each trial is repeated for every accumulator
+#' in a finalized model, adding `trial` (if missing) and `accumulator` columns.
+#'
+#' @param model_spec Finalized model (from `finalize_model()`)
+#' @param data Data frame with one row per trial
+#' @return Data frame with rows repeated per accumulator and an `accumulator` column
+#' @export
+nest_accumulators <- function(model_spec, data) {
+  structure <- .as_model_structure(model_spec)
+  acc_defs <- structure$prep$accumulators %||% list()
+  acc_ids <- names(acc_defs)
+  if (length(acc_ids) == 0L) {
+    stop("Model must define accumulators")
+  }
+  df <- as.data.frame(data)
+  if (!"trial" %in% names(df)) {
+    df$trial <- seq_len(nrow(df))
+  }
+
+  use_component <- "component" %in% names(df)
+  comp_ids <- structure$components$component_id %||% character(0)
+  acc_by_comp <- NULL
+  if (use_component) {
+    comp_col <- df$component
+    comp_levels <- if (is.factor(comp_col)) levels(comp_col) else NULL
+    data_comps <- unique(as.character(stats::na.omit(comp_col)))
+    if (length(data_comps) > 0L && !all(data_comps %in% comp_ids)) {
+      stop("component column values must match model components")
+    }
+    acc_by_comp <- lapply(comp_ids, function(cmp) {
+      keep <- vapply(acc_defs, function(a) {
+        comps <- a$components %||% character(0)
+        length(comps) == 0L || cmp %in% comps
+      }, logical(1))
+      acc_ids[keep]
+    })
+    names(acc_by_comp) <- comp_ids
+  }
+
+  n_trials <- nrow(df)
+  accs_per_trial <- vector("list", n_trials)
+  if (use_component) {
+    for (t in seq_len(n_trials)) {
+      comp_val <- comp_col[t]
+      if (is.na(comp_val) || !nzchar(as.character(comp_val))) {
+        accs_per_trial[[t]] = acc_ids
+      } else {
+        accs_per_trial[[t]] = acc_by_comp[[as.character(comp_val)]] %||% acc_ids
+      }
+    }
+  } else {
+    for (t in seq_len(n_trials)) accs_per_trial[[t]] <- acc_ids
+  }
+
+  total_rows <- sum(vapply(accs_per_trial, length, integer(1)))
+  out <- vector("list", length(df) + 1L)
+  names(out) <- c(names(df), "accumulator")
+  idx <- 1L
+  for (nm in names(df)) {
+    col <- df[[nm]]
+    if (is.factor(col)) {
+      out[[nm]] <- character(total_rows)
+    } else if (is.logical(col)) {
+      out[[nm]] <- logical(total_rows)
+    } else if (is.integer(col)) {
+      out[[nm]] <- integer(total_rows)
+    } else if (is.numeric(col)) {
+      out[[nm]] <- numeric(total_rows)
+    } else {
+      out[[nm]] <- vector(mode(col), total_rows)
+    }
+  }
+  out$accumulator <- character(total_rows)
+
+  for (t in seq_len(n_trials)) {
+    accs_t <- accs_per_trial[[t]]
+    len <- length(accs_t)
+    if (len == 0L) next
+    rng <- idx:(idx + len - 1L)
+    for (nm in names(df)) {
+      col <- df[[nm]]
+      val <- col[t]
+      if (is.factor(col)) {
+        out[[nm]][rng] <- as.character(val)
+      } else {
+        out[[nm]][rng] <- val
+      }
+    }
+    out$accumulator[rng] <- accs_t
+    idx <- idx + len
+  }
+  out_df <- as.data.frame(out, stringsAsFactors = FALSE)
+  for (nm in names(df)) {
+    col <- df[[nm]]
+    if (is.factor(col)) {
+      out_df[[nm]] <- factor(out_df[[nm]], levels = levels(col), ordered = is.ordered(col))
+    }
+  }
+  if (use_component && is.factor(df$component)) {
+    out_df$component <- factor(out_df$component, levels = levels(df$component), ordered = is.ordered(df$component))
+  }
+  out_df
 }

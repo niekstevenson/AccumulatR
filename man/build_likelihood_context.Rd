@@ -27,7 +27,7 @@ spec <- add_accumulator(spec, "A", "lognormal",
   params = list(meanlog = 0, sdlog = 0.1))
 spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
-params_df <- build_params_df(
+params_df <- build_param_matrix(
   spec,
   c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0),
   n_trials = 2

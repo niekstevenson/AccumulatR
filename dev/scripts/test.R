@@ -27,7 +27,7 @@ if (nzchar(Sys.getenv("UUBER_EXAMPLES"))) {
   example_ids <- strsplit(Sys.getenv("UUBER_EXAMPLES"), ",", fixed = TRUE)[[1]]
   example_ids <- trimws(example_ids)
 }
-n_trials <- as.integer(Sys.getenv("UUBER_N_TRIALS", "500"))
+n_trials <- as.integer(Sys.getenv("UUBER_N_TRIALS", "3000"))
 seed <- as.integer(Sys.getenv("UUBER_SEED", "2025"))
 profile_percent <- as.numeric(Sys.getenv("UUBER_PROFILE_PERCENT", "0.10"))
 profile_points <- as.integer(Sys.getenv("UUBER_PROFILE_POINTS", "10"))
@@ -40,24 +40,24 @@ for (example_id in example_ids) {
   # processing_math_tree(model_spec, "A")
   
   # 2. Parameter table for this example
-  params_df <- build_params_df(model_spec, core_params, n_trials = n_trials)
+  params_df <- build_param_matrix(model_spec, core_params, n_trials = n_trials)
 
   # 3. Simulate data and compute observed probabilities
   sim <- simulate(model_spec, params_df, seed = seed)
   data_df <- data.frame(
     trial = sim$trial,
-    outcome = sim$outcome,
+    R = sim$R,
     rt = sim$rt,
     stringsAsFactors = FALSE
   )
   data_df$component <- sim$component
-  obs_counts <- table(data_df$outcome, useNA = "ifany")
+  obs_counts <- table(data_df$R, useNA = "ifany")
   obs_probs <- prop.table(obs_counts)
   cat("Observed outcome probabilities (simulated data):\n")
   print(round(obs_probs, 6))
 
   # 4. Analytic response probabilities (native)
-  single_params <- build_params_df(model_spec, core_params, n_trials = 1L)
+  single_params <- build_param_matrix(model_spec, core_params, n_trials = 1L)
   analytic_probs <- with_native_only({
     response_probabilities(model_spec, single_params, include_na = TRUE)
   })

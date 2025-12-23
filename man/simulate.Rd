@@ -53,6 +53,6 @@ spec <- add_accumulator(spec, "A", "lognormal",
 spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
 params <- c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0)
-df <- build_params_df(spec, params, n_trials = 3)
+df <- build_param_matrix(spec, params, n_trials = 3)
 simulate(structure, df, seed = 123)
 }

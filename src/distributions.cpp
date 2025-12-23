@@ -87,6 +87,12 @@ SEXP native_context_from_proto_cpp(Rcpp::RawVector blob) {
 }
 
 // [[Rcpp::export]]
+bool native_ctx_invalid(SEXP ptr) {
+  if (TYPEOF(ptr) != EXTPTRSXP) return true;
+  return R_ExternalPtrAddr(ptr) == nullptr;
+}
+
+// [[Rcpp::export]]
 double boost_integrate_cpp(Rcpp::Function integrand,
                            double lower,
                            double upper,
@@ -3969,6 +3975,7 @@ struct ParamLayout {
   int n_trials{0};
   bool has_component{false};
   bool rectangular{false};
+  std::vector<int> trial_ids; // original trial labels; empty means 1..n_trials
 };
 
 ParamLayout build_param_layout(const Rcpp::NumericMatrix& params_mat, int n_acc) {
@@ -4068,6 +4075,9 @@ ParamLayout build_param_layout_from_list(const Rcpp::Nullable<Rcpp::List>& layou
   Rcpp::LogicalVector rect = layout.containsElementNamed("rectangular")
     ? Rcpp::LogicalVector(layout["rectangular"])
     : Rcpp::LogicalVector();
+  Rcpp::IntegerVector trial_ids = layout.containsElementNamed("trial_ids")
+    ? Rcpp::IntegerVector(layout["trial_ids"])
+    : Rcpp::IntegerVector();
   if (trial.size() != acc.size() || trial.size() == 0) {
     return ParamLayout();
   }
@@ -4085,7 +4095,12 @@ ParamLayout build_param_layout_from_list(const Rcpp::Nullable<Rcpp::List>& layou
     if (meta.comp >= 0) out.has_component = true;
   }
   if (out.rows.empty()) return ParamLayout();
-  out.n_trials = max_trial + 1;
+  if (trial_ids.size() > 0) {
+    out.trial_ids.assign(trial_ids.begin(), trial_ids.end());
+    out.n_trials = static_cast<int>(out.trial_ids.size());
+  } else {
+    out.n_trials = max_trial + 1;
+  }
   out.rectangular = (rect.size() > 0 && rect[0] == TRUE);
   if (!out.rectangular && out.n_trials > 0 &&
       static_cast<int>(out.rows.size()) == out.n_trials * n_acc) {
@@ -4314,6 +4329,9 @@ double cpp_loglik(SEXP ctxSEXP,
                   Rcpp::NumericMatrix params_mat,
                   Rcpp::DataFrame data_df,
                   Rcpp::Nullable<Rcpp::List> layout_opt,
+                  Rcpp::LogicalVector ok,
+                  Rcpp::IntegerVector expand,
+                  double min_ll,
                   double rel_tol,
                   double abs_tol,
                   int max_depth) {
@@ -4349,13 +4367,34 @@ double cpp_loglik(SEXP ctxSEXP,
   std::vector<TrialParamSet> param_sets = params_from_matrix(*ctx, params_mat, layout);
 
   Rcpp::NumericVector trial_col = data_df["trial"];
-  Rcpp::CharacterVector outcome_col = data_df["outcome"];
+  Rcpp::CharacterVector outcome_col = data_df["R"];
   Rcpp::NumericVector rt_col = data_df["rt"];
   bool has_component = data_df.containsElementNamed("component");
   Rcpp::CharacterVector comp_col = has_component ? Rcpp::CharacterVector(data_df["component"]) : Rcpp::CharacterVector();
 
   R_xlen_t n_obs = outcome_col.size();
   double total_loglik = 0.0;
+
+  // Validate expand (expansion happens after evaluation)
+  R_xlen_t n_expand = expand.size();
+  if (n_expand == 0) {
+    expand = Rcpp::seq(1, n_obs);
+    n_expand = expand.size();
+  }
+  for (R_xlen_t i = 0; i < n_expand; ++i) {
+    int comp_idx = expand[i];
+    if (comp_idx == NA_INTEGER || comp_idx < 1 || comp_idx > n_obs) {
+      Rcpp::stop("expand indices must reference rows in data_df");
+    }
+  }
+  // ok must align to observed data rows
+  if (ok.size() == 0) {
+    ok = Rcpp::LogicalVector(n_obs, true);
+  } else if (ok.size() != n_obs) {
+    Rcpp::stop("Length of ok must equal number of observations");
+  }
+
+  std::vector<double> trial_loglik(static_cast<std::size_t>(n_obs), min_ll);
 
   // Precompute default component mix once to avoid per-row allocations.
   const std::vector<std::string>& default_components = comp_map.ids;
@@ -4376,15 +4415,36 @@ double cpp_loglik(SEXP ctxSEXP,
     }
   }
 
+  std::unordered_map<int, int> trial_lookup;
+  if (!layout.trial_ids.empty()) {
+    for (std::size_t i = 0; i < layout.trial_ids.size(); ++i) {
+      trial_lookup[layout.trial_ids[i]] = static_cast<int>(i);
+    }
+  }
+
   for (R_xlen_t i = 0; i < n_obs; ++i) {
-    int trial_idx = static_cast<int>(trial_col[i]);
-    if (trial_idx == NA_INTEGER) {
+    int trial_idx_val = static_cast<int>(trial_col[i]);
+    if (trial_idx_val == NA_INTEGER) {
       Rcpp::stop("Data frame contains NA trial index");
     }
-    trial_idx -= 1;
+    int trial_idx = -1;
+    if (!trial_lookup.empty()) {
+      auto it = trial_lookup.find(trial_idx_val);
+      if (it == trial_lookup.end()) {
+        Rcpp::stop("Trial index not found in layout");
+      }
+      trial_idx = it->second;
+    } else {
+      trial_idx = trial_idx_val - 1;
+    }
     if (trial_idx < 0 || trial_idx >= n_trials) {
       Rcpp::stop("Trial index out of range for parameter matrix");
     }
+    if (i >= ok.size() || !ok[i]) {
+      trial_loglik[static_cast<std::size_t>(i)] = min_ll;
+      continue;
+    }
+
     TrialParamSet* params_ptr = &param_sets[static_cast<std::size_t>(trial_idx)];
     double rt = rt_col[i];
     Rcpp::String out_str(outcome_col[i]);
@@ -4506,11 +4566,20 @@ double cpp_loglik(SEXP ctxSEXP,
       }
     }
 
-    if (std::isfinite(prob) && prob > 0.0) {
-      total_loglik += std::log(prob);
+    double ll_val = min_ll;
+    if (!std::isfinite(prob) || prob <= 0.0) {
+      ll_val = min_ll;
     } else {
-      return R_NegInf;
+      double lp = std::log(prob);
+      ll_val = (std::isfinite(lp) && lp > min_ll) ? lp : min_ll;
     }
+    trial_loglik[static_cast<std::size_t>(i)] = ll_val;
+  }
+
+  // Sum expanded trials (post-expansion)
+  for (R_xlen_t i = 0; i < n_expand; ++i) {
+    int comp_idx = expand[i];
+    total_loglik += trial_loglik[static_cast<std::size_t>(comp_idx - 1)];
   }
 
   return total_loglik;
@@ -4522,6 +4591,9 @@ Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP,
                                         Rcpp::List params_list,
                                         Rcpp::DataFrame data_df,
                                         Rcpp::Nullable<Rcpp::List> layout_opt,
+                                        Rcpp::LogicalVector ok,
+                                        Rcpp::IntegerVector expand,
+                                        double min_ll,
                                         double rel_tol,
                                         double abs_tol,
                                         int max_depth) {
@@ -4538,7 +4610,7 @@ Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP,
       ctx->na_cache_order.clear();
     }
     Rcpp::NumericMatrix pm(params_list[i]);
-    out[i] = cpp_loglik(ctxSEXP, structure, pm, data_df, layout_opt, rel_tol, abs_tol, max_depth);
+    out[i] = cpp_loglik(ctxSEXP, structure, pm, data_df, layout_opt, ok, expand, min_ll, rel_tol, abs_tol, max_depth);
   }
   return out;
 }

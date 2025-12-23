@@ -3,20 +3,20 @@
                                           prep = NULL,
                                           native_bundle = NULL) {
   if (is.null(data_df) || nrow(data_df) == 0L) {
-    stop("Data frame must contain outcome/rt per trial", call. = FALSE)
+    stop("Data frame must contain R/rt per trial", call. = FALSE)
   }
   structure <- .as_model_structure(structure)
   if (is.null(structure$model_spec)) {
     stop("model structure must include model_spec; rebuild with finalize_model")
   }
   data_df <- as.data.frame(data_df)
-  required_cols <- c("trial", "outcome", "rt")
+  required_cols <- c("trial", "R", "rt")
   missing_cols <- setdiff(required_cols, names(data_df))
   if (length(missing_cols) > 0L) {
     stop(sprintf("Data frame must include columns: %s", paste(missing_cols, collapse = ", ")), call. = FALSE)
   }
   data_df$trial <- as.integer(data_df$trial)
-  data_df$outcome <- as.character(data_df$outcome)
+  data_df$R <- as.character(data_df$R)
   data_df$rt <- as.numeric(data_df$rt)
   if ("component" %in% names(data_df)) {
     data_df$component <- as.character(data_df$component)
@@ -25,10 +25,31 @@
     prep <- native_bundle$prep %||% prep
   }
   # ensure runtime caches (compiled expressions, id index, etc.) are present
-  prep_eval_base <- prep
-  if (is.null(prep_eval_base) || is.null(prep_eval_base[[".runtime"]])) {
-    prep_eval_base <- .prepare_model_for_likelihood(structure$model_spec)
+  prep_eval_base <- prep %||% structure$prep %||% NULL
+  if (is.null(prep_eval_base)) {
+    prep_eval_base <- prepare_model(structure$model_spec)
   }
+  # attach runtime/id_index if missing
+  prep_eval_base <- (function(prep_obj) {
+    if (!is.null(prep_obj[[".runtime"]]) && !is.null(prep_obj[[".id_index"]])) return(prep_obj)
+    acc_ids <- names(prep_obj[["accumulators"]] %||% list())
+    pool_ids <- names(prep_obj[["pools"]] %||% list())
+    all_ids <- unique(c(acc_ids, pool_ids))
+    prep_obj[[".id_index"]] <- setNames(seq_along(all_ids), all_ids)
+    prep_obj[[".label_cache"]] <- new.env(parent = emptyenv(), hash = TRUE)
+    prep_obj <- .precompile_likelihood_expressions(prep_obj)
+    prep_obj[[".competitors"]] <- .prepare_competitor_map(prep_obj)
+    runtime <- list(
+      expr_compiled = prep_obj[[".expr_compiled"]],
+      label_cache = prep_obj[[".label_cache"]],
+      competitor_map = prep_obj[[".competitors"]],
+      id_index = prep_obj[[".id_index"]],
+      pool_members_cache = new.env(parent = emptyenv(), hash = TRUE),
+      cache_bundle = .build_likelihood_cache_bundle(prep_obj)
+    )
+    prep_obj[[".runtime"]] <- runtime
+    .refresh_compiled_prep_refs(prep_obj)
+  })(prep_eval_base)
   param_layout <- .param_layout_from_data(structure, data_df, prep_eval_base)
   native_ctx <- .prep_native_context(prep_eval_base)
   if (!inherits(native_ctx, "externalptr")) {
@@ -59,7 +80,7 @@
 #'   params = list(meanlog = 0, sdlog = 0.1))
 #' spec <- add_outcome(spec, "A_win", "A")
 #' structure <- finalize_model(spec)
-#' params_df <- build_params_df(
+#' params_df <- build_param_matrix(
 #'   spec,
 #'   c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0),
 #'   n_trials = 2
@@ -105,7 +126,8 @@ build_likelihood_context <- function(structure,
   if (any(is.na(trials))) {
     stop("Data must include trial indices to build param layout", call. = FALSE)
   }
-  n_trials <- max(trials)
+  trial_ids <- sort(unique(trials))
+  n_trials <- length(trial_ids)
   comp_table <- structure$components %||% list()
   comp_ids <- comp_table$component_id %||% character(0)
   comp_index <- setNames(seq_along(comp_ids), comp_ids)
@@ -113,20 +135,24 @@ build_likelihood_context <- function(structure,
   row_trial <- integer(0)
   row_acc <- integer(0)
   row_comp <- integer(0)
-  for (t in seq_len(n_trials)) {
+  for (t_idx in seq_along(trial_ids)) {
+    int_id <- trial_ids[[t_idx]]
     trial_comp <- NA_character_
     if (has_data_comp) {
-      vals <- data_df$component[trials == t]
+      vals <- data_df$component[trials == int_id]
       vals <- vals[!is.na(vals)]
       if (length(vals) > 0L) trial_comp <- vals[[1]]
     }
-    comp_idx <- comp_index[[trial_comp]] %||% NA_integer_
+    comp_idx <- NA_integer_
+    if (!is.na(trial_comp) && trial_comp %in% names(comp_index)) {
+      comp_idx <- comp_index[[trial_comp]]
+    }
     for (i in seq_along(acc_ids)) {
       acc_comp <- acc_defs[[i]]$components %||% character(0)
       if (has_data_comp && length(acc_comp) > 0L) {
         if (is.na(trial_comp) || !trial_comp %in% acc_comp) next
       }
-      row_trial <- c(row_trial, t)
+      row_trial <- c(row_trial, t_idx)
       row_acc <- c(row_acc, i)
       row_comp <- c(row_comp, comp_idx)
     }
@@ -140,6 +166,7 @@ build_likelihood_context <- function(structure,
     row_acc = as.integer(row_acc),
     row_component = as.integer(row_comp),
     n_trials = as.integer(n_trials),
+    trial_ids = as.integer(trial_ids),
     rectangular = rectangular
   )
 }
@@ -713,7 +740,7 @@ response_probabilities.default <- function(structure, ...) {
 #'   params = list(meanlog = 0, sdlog = 0.1))
 #' spec <- add_outcome(spec, "A_win", "A")
 #' structure <- finalize_model(spec)
-#' params_df <- build_params_df(
+#' params_df <- build_param_matrix(
 #'   spec,
 #'   c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0),
 #'   n_trials = 1
@@ -830,7 +857,7 @@ response_probabilities.model_structure <- function(structure,
 #'   params = list(meanlog = 0, sdlog = 0.1))
 #' spec <- add_outcome(spec, "A_win", "A")
 #' structure <- finalize_model(spec)
-#' params_df <- build_params_df(
+#' params_df <- build_param_matrix(
 #'   spec,
 #'   c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0),
 #'   n_trials = 2
@@ -845,7 +872,12 @@ log_likelihood <- function(likelihood_context, parameters, ...) {
 
 #' @rdname log_likelihood
 #' @export
-log_likelihood.likelihood_context <- function(likelihood_context, parameters, ...) {
+log_likelihood.likelihood_context <- function(likelihood_context,
+                                              parameters,
+                                              ok = NULL,
+                                              expand = NULL,
+                                              min_ll = -Inf,
+                                              ...) {
   ctx <- .validate_likelihood_context(likelihood_context)
   native_ctx <- ctx$native_ctx
   if (is.null(native_ctx) || !inherits(native_ctx, "externalptr")) {
@@ -860,6 +892,22 @@ log_likelihood.likelihood_context <- function(likelihood_context, parameters, ..
     if (inherits(pm, "param_matrix") || is.matrix(pm)) return(pm)
     as.matrix(pm)
   })
+  data_df <- ctx$data_df
+  n_obs <- nrow(data_df)
+  if (is.null(expand) || length(expand) == 0L) {
+    expand <- seq_len(n_obs)
+  }
+  expand <- as.integer(expand)
+  if (any(is.na(expand)) || any(expand < 1L) || any(expand > n_obs)) {
+    stop("expand indices must reference rows in data_df", call. = FALSE)
+  }
+  if (is.null(ok) || length(ok) == 0L) {
+    ok <- rep_len(TRUE, n_obs)
+  } else if (length(ok) != n_obs) {
+    stop("Length of ok must equal nrow(data_df)", call. = FALSE)
+  }
+  ok <- as.logical(ok)
+  ok[is.na(ok)] <- FALSE
   rel_tol <- ctx$rel_tol %||% .integrate_rel_tol()
   abs_tol <- ctx$abs_tol %||% .integrate_abs_tol()
   max_depth <- ctx$max_depth %||% 12L
@@ -867,8 +915,11 @@ log_likelihood.likelihood_context <- function(likelihood_context, parameters, ..
     native_ctx,
     ctx$structure,
     params_list,
-    ctx$data_df,
+    data_df,
     ctx$param_layout %||% NULL,
+    ok,
+    expand,
+    min_ll,
     rel_tol,
     abs_tol,
     max_depth
@@ -879,4 +930,32 @@ log_likelihood.likelihood_context <- function(likelihood_context, parameters, ..
 #' @export
 log_likelihood.default <- function(likelihood_context, ...) {
   stop("log_likelihood() expects a likelihood_context", call. = FALSE)
+}
+
+#' Ensure native context pointer is valid
+#'
+#' Checks whether a stored `native_ctx` external pointer is still valid; if not,
+#' it rebuilds the native context from the cached `prep` (or `structure$prep`).
+#' Returns the context list with an updated `native_ctx`.
+#'
+#' @param context A list containing `native_ctx` and `prep` or `structure$prep`
+#' @return The same list, with `native_ctx` refreshed if needed
+#' @export
+ensure_native_ctx <- function(context) {
+  ctx <- context
+  ptr <- ctx$native_ctx
+  if (is.null(ptr) || !inherits(ptr, "externalptr") || native_ctx_invalid(ptr)) {
+    prep <- ctx$prep %||% ctx$structure$prep %||% NULL
+    if (is.null(prep) || is.null(prep[[".runtime"]]) || is.null(prep[[".id_index"]])) {
+      model_spec <- ctx$model_spec %||% ctx$structure$model_spec %||% NULL
+      if (is.null(model_spec)) {
+        stop("Cannot rebuild native_ctx: prep/model_spec missing")
+      }
+      prep <- .prepare_model_for_likelihood(model_spec)
+    }
+    ctx$prep <- prep
+    ctx$structure$prep <- ctx$structure$prep %||% prep
+    ctx$native_ctx <- native_context_build(prep)
+  }
+  ctx
 }

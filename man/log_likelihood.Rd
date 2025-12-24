@@ -6,14 +6,21 @@
 \alias{log_likelihood.default}
 \title{Native log-likelihood evaluation over multiple parameter sets}
 \usage{
-log_likelihood(likelihood_context, parameters, ...)
+log_likelihood(
+  likelihood_context,
+  parameters,
+  ok = NULL,
+  expand = NULL,
+  min_ll = log(1e-10),
+  ...
+)
 
 \method{log_likelihood}{likelihood_context}(
   likelihood_context,
   parameters,
   ok = NULL,
   expand = NULL,
-  min_ll = -Inf,
+  min_ll = log(1e-10),
   ...
 )
 
@@ -23,6 +30,12 @@ log_likelihood(likelihood_context, parameters, ...)
 \item{likelihood_context}{Context built by build_likelihood_context}
 
 \item{parameters}{Parameter data frame, or list of parameter data frames}
+
+\item{ok}{Boolean vector. Can be used to selectively set trial rows to min_ll}
+
+\item{expand}{If using data compression, can be used to expand likelihood results across duplicate trials}
+
+\item{min_ll}{The minimum log-likelihood assigned to a trial}
 
 \item{...}{Unused; for S3 compatibility}
 }

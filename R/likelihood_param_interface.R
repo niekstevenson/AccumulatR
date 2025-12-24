@@ -844,6 +844,9 @@ response_probabilities.model_structure <- function(structure,
 #'
 #' @param likelihood_context Context built by build_likelihood_context
 #' @param parameters Parameter data frame, or list of parameter data frames
+#' @param ok Boolean vector. Can be used to selectively set trial rows to min_ll
+#' @param expand If using data compression, can be used to expand likelihood results across duplicate trials
+#' @param min_ll The minimum log-likelihood assigned to a trial
 #' @param ... Unused; for S3 compatibility
 #' @return Numeric vector of log-likelihood values
 #' @examples
@@ -861,7 +864,7 @@ response_probabilities.model_structure <- function(structure,
 #' ctx <- build_likelihood_context(structure, data_df)
 #' log_likelihood(ctx, list(params_df))
 #' @export
-log_likelihood <- function(likelihood_context, parameters, ...) {
+log_likelihood <- function(likelihood_context, parameters, ok = NULL, expand = NULL, min_ll= log(1e-10), ...) {
   UseMethod("log_likelihood")
 }
 
@@ -871,7 +874,7 @@ log_likelihood.likelihood_context <- function(likelihood_context,
                                               parameters,
                                               ok = NULL,
                                               expand = NULL,
-                                              min_ll = -Inf,
+                                              min_ll = log(1e-10),
                                               ...) {
   ctx <- .validate_likelihood_context(likelihood_context)
   native_ctx <- ctx$native_ctx

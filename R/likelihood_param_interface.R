@@ -21,17 +21,6 @@
   if ("component" %in% names(data_df)) {
     data_df$component <- as.character(data_df$component)
   }
-  data_df <- nest_accumulators(structure, data_df)
-  if (!"onset" %in% names(data_df)) {
-    data_df$onset <- 0
-  }
-  data_df$trial <- as.integer(data_df$trial)
-  data_df$R <- as.character(data_df$R)
-  data_df$rt <- as.numeric(data_df$rt)
-  data_df$accumulator <- as.character(data_df$accumulator)
-  if ("component" %in% names(data_df)) {
-    data_df$component <- as.character(data_df$component)
-  }
   if (!is.null(native_bundle)) {
     prep <- native_bundle$prep %||% prep
   }
@@ -61,6 +50,23 @@
     prep_obj[[".runtime"]] <- runtime
     .refresh_compiled_prep_refs(prep_obj)
   })(prep_eval_base)
+  data_df <- nest_accumulators(structure, data_df)
+  if (!"onset" %in% names(data_df)) {
+    acc_defs <- prep_eval_base$accumulators %||% list()
+    acc_onset <- vapply(acc_defs, function(a) a$onset %||% 0, numeric(1))
+    acc_ids <- names(acc_defs)
+    onset_map <- setNames(acc_onset, acc_ids)
+    data_df$onset <- vapply(as.character(data_df$accumulator), function(acc) {
+      onset_map[[acc]] %||% 0
+    }, numeric(1))
+  }
+  data_df$trial <- as.integer(data_df$trial)
+  data_df$R <- as.character(data_df$R)
+  data_df$rt <- as.numeric(data_df$rt)
+  data_df$accumulator <- as.character(data_df$accumulator)
+  if ("component" %in% names(data_df)) {
+    data_df$component <- as.character(data_df$component)
+  }
   param_layout <- .param_layout_from_data(structure, data_df, prep_eval_base)
   native_ctx <- .prep_native_context(prep_eval_base)
   if (!inherits(native_ctx, "externalptr")) {

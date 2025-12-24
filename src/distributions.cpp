@@ -4158,64 +4158,7 @@ std::vector<double> component_weights_for_trial(const ComponentMap& map,
   return weights;
 }
 
-std::vector<TrialParamSet> params_from_matrix(const uuber::NativeContext& ctx,
-                                              const Rcpp::NumericMatrix& params_mat,
-                                              const ParamLayout& layout) {
-  int n_acc = static_cast<int>(ctx.accumulators.size());
-  if (layout.n_trials <= 0) {
-    Rcpp::stop("Parameter matrix must provide at least one trial");
-  }
-  Rcpp::RObject dimnames = params_mat.attr("dimnames");
-  Rcpp::CharacterVector cols;
-  if (!dimnames.isNULL()) {
-    Rcpp::List dn(dimnames);
-    if (dn.size() > 1) {
-      cols = Rcpp::as<Rcpp::CharacterVector>(dn[1]);
-    }
-  }
-  int q_col = col_index(cols, "q");
-  int t0_col = col_index(cols, "t0");
-  int p1_col = col_index(cols, "p1");
-  int p2_col = col_index(cols, "p2");
-  int p3_col = col_index(cols, "p3");
-  if (q_col < 0 || t0_col < 0 || p1_col < 0) {
-    Rcpp::stop("Parameter matrix must include columns q, t0, and p1");
-  }
-  TrialParamSet base_template = build_base_paramset(ctx);
-  std::vector<TrialParamSet> out(static_cast<std::size_t>(layout.n_trials), base_template);
-  for (auto& ps : out) {
-    if (static_cast<int>(ps.acc_params.size()) != n_acc) {
-      ps.acc_params = base_template.acc_params;
-    }
-  }
-  for (std::size_t r = 0; r < layout.rows.size(); ++r) {
-    const ParamRowMeta& meta = layout.rows[r];
-    if (meta.trial < 0 || meta.trial >= layout.n_trials) continue;
-    if (meta.acc < 0 || meta.acc >= n_acc) continue;
-    TrialAccumulatorParams tap = out[static_cast<std::size_t>(meta.trial)].acc_params[static_cast<std::size_t>(meta.acc)];
-    double q_val = clamp_probability(params_mat(r, q_col));
-    if (!tap.shared_trigger_id.empty()) {
-      tap.shared_q = q_val;
-      tap.q = 0.0;
-    } else {
-      tap.q = q_val;
-      tap.shared_q = q_val;
-    }
-    tap.dist_cfg.t0 = params_mat(r, t0_col);
-    tap.has_components = !ctx.accumulators[meta.acc].components.empty();
-    tap.components = ctx.accumulators[meta.acc].components;
-    tap.has_override = true;
-    if (tap.dist_cfg.code == uuber::ACC_DIST_LOGNORMAL ||
-        tap.dist_cfg.code == uuber::ACC_DIST_GAMMA ||
-        tap.dist_cfg.code == uuber::ACC_DIST_EXGAUSS) {
-      tap.dist_cfg.p1 = params_mat(r, p1_col);
-      if (p2_col >= 0) tap.dist_cfg.p2 = params_mat(r, p2_col);
-      if (p3_col >= 0) tap.dist_cfg.p3 = params_mat(r, p3_col);
-    }
-    out[static_cast<std::size_t>(meta.trial)].acc_params[static_cast<std::size_t>(meta.acc)] = std::move(tap);
-  }
-  return out;
-}
+// params_from_matrix is unused in the streamlined likelihood path and removed to reduce bloat.
 
 double mix_outcome_mass(SEXP ctxSEXP,
                         const uuber::OutcomeContextInfo& info,
@@ -4295,7 +4238,6 @@ double cpp_loglik(SEXP ctxSEXP,
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   ctx->na_map_cache.clear();
   ctx->na_cache_order.clear();
-  const int n_acc = static_cast<int>(ctx->accumulators.size());
   const int q_col = 0;
   const int w_col = 1;
   const int t0_col = 2;
@@ -4312,7 +4254,7 @@ double cpp_loglik(SEXP ctxSEXP,
   bool has_onset = data_df.containsElementNamed("onset");
   Rcpp::NumericVector onset_col = has_onset ? Rcpp::NumericVector(data_df["onset"]) : Rcpp::NumericVector();
 
-  TrialParamSet base_template = build_base_paramset(*ctx);
+  const std::vector<TrialAccumulatorParams> base_acc_params = build_base_paramset(*ctx).acc_params;
   const ComponentMap& comp_map = ctx->components;
 
   std::vector<TrialParamSet> param_sets;
@@ -4331,14 +4273,16 @@ double cpp_loglik(SEXP ctxSEXP,
     if (r == 0 || trial_label != current_trial_label) {
       current_trial_label = trial_label;
       ++trial_idx;
-      param_sets.push_back(base_template);
+      TrialParamSet ps;
+      ps.acc_params = base_acc_params;
+      param_sets.push_back(std::move(ps));
       outcome_by_trial.push_back(Rcpp::String(NA_STRING));
       rt_by_trial.push_back(std::numeric_limits<double>::quiet_NaN());
       component_by_trial.emplace_back();
       weight_override_by_trial.push_back(std::vector<double>(comp_count, std::numeric_limits<double>::quiet_NaN()));
     }
     int acc_idx = ctx->accumulator_index.at(Rcpp::as<std::string>(acc_col[r]));
-    TrialAccumulatorParams tap = param_sets[static_cast<std::size_t>(trial_idx)].acc_params[static_cast<std::size_t>(acc_idx)];
+    TrialAccumulatorParams& tap = param_sets[static_cast<std::size_t>(trial_idx)].acc_params[static_cast<std::size_t>(acc_idx)];
     double q_val = clamp_probability(params_mat(r, q_col));
     if (!tap.shared_trigger_id.empty()) {
       tap.shared_q = q_val;
@@ -4348,10 +4292,12 @@ double cpp_loglik(SEXP ctxSEXP,
       tap.shared_q = q_val;
     }
     tap.dist_cfg.t0 = params_mat(r, t0_col);
-    double onset_val = (has_onset && r < onset_col.size()) ? static_cast<double>(onset_col[r]) : 0.0;
-    tap.onset = std::isfinite(onset_val) ? onset_val : 0.0;
-    tap.has_components = !ctx->accumulators[acc_idx].components.empty();
-    tap.components = ctx->accumulators[acc_idx].components;
+    if (has_onset && r < onset_col.size()) {
+      double onset_val = static_cast<double>(onset_col[r]);
+      if (std::isfinite(onset_val)) {
+        tap.onset = onset_val;
+      }
+    }
     tap.has_override = true;
     if (tap.dist_cfg.code == uuber::ACC_DIST_LOGNORMAL ||
         tap.dist_cfg.code == uuber::ACC_DIST_GAMMA ||
@@ -4360,7 +4306,6 @@ double cpp_loglik(SEXP ctxSEXP,
       if (p2_col >= 0) tap.dist_cfg.p2 = params_mat(r, p2_col);
       if (p3_col >= 0) tap.dist_cfg.p3 = params_mat(r, p3_col);
     }
-    param_sets[static_cast<std::size_t>(trial_idx)].acc_params[static_cast<std::size_t>(acc_idx)] = std::move(tap);
 
     for (std::size_t c = 0; c < comp_map.leader_idx.size(); ++c) {
       if (comp_map.leader_idx[c] == acc_idx) {

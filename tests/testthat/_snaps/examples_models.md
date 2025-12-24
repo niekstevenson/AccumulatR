@@ -84,7 +84,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [129.772956]
+              "value": [417.906287]
             }
           ]
         },
@@ -123,7 +123,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [-1839.628282]
+              "value": [118.194501]
             }
           ]
         },
@@ -162,7 +162,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [-131.403459]
+              "value": [599.920838]
             }
           ]
         },

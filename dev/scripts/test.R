@@ -19,7 +19,7 @@ with_native_only <- function(expr) {
 }
 
 # 1. Which examples to run
-example_ids <- names(new_api_examples)[3]
+example_ids <- names(new_api_examples)[18]
 
 
 # Optional overrides via env vars
@@ -43,7 +43,7 @@ for (example_id in example_ids) {
   params_df <- build_param_matrix(model_spec, core_params, n_trials = n_trials)
 
   # 3. Simulate data and compute observed probabilities
-  sim <- simulate(model_spec, params_df, seed = seed)
+  sim <- simulate(model_spec, params_df, seed = seed, keep_component = TRUE)
   data_df <- data.frame(
     trial = sim$trial,
     R = sim$R,

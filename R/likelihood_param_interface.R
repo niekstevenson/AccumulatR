@@ -931,26 +931,26 @@ log_likelihood.default <- function(likelihood_context, ...) {
 #' Ensure native context pointer is valid
 #'
 #' Checks whether a stored `native_ctx` external pointer is still valid; if not,
-#' it rebuilds the native context from the cached `prep` (or `structure$prep`).
+#' it rebuilds the native context from the `model_spec`
 #' Returns the context list with an updated `native_ctx`.
 #'
 #' @param context A list containing `native_ctx` and `prep` or `structure$prep`
+#' @param model_spec Model specification from `finalize_model()`
 #' @return The same list, with `native_ctx` refreshed if needed
 #' @export
-ensure_native_ctx <- function(context) {
+ensure_native_ctx <- function(context, model_spec = NULL) {
   ctx <- context
   ptr <- ctx$native_ctx
   if (is.null(ptr) || !inherits(ptr, "externalptr") || native_ctx_invalid(ptr)) {
     prep <- ctx$prep %||% ctx$structure$prep %||% NULL
     if (is.null(prep) || is.null(prep[[".runtime"]]) || is.null(prep[[".id_index"]])) {
-      model_spec <- ctx$model_spec %||% ctx$structure$model_spec %||% NULL
+      model_spec <- model_spec %||% ctx$model_spec %||% ctx$structure$model_spec %||% NULL
       if (is.null(model_spec)) {
         stop("Cannot rebuild native_ctx: prep/model_spec missing")
       }
       prep <- .prepare_model_for_likelihood(model_spec)
     }
     ctx$prep <- prep
-    ctx$structure$prep <- ctx$structure$prep %||% prep
     ctx$native_ctx <- native_context_build(prep)
   }
   ctx

@@ -9,6 +9,7 @@
 simulate(
   structure,
   params_df,
+  trial_df = NULL,
   seed = NULL,
   keep_detail = FALSE,
   keep_component = NULL,
@@ -18,6 +19,7 @@ simulate(
 \method{simulate}{model_structure}(
   structure,
   params_df,
+  trial_df = NULL,
   seed = NULL,
   keep_detail = FALSE,
   keep_component = NULL,
@@ -30,6 +32,11 @@ simulate(
 \item{structure}{Model structure}
 
 \item{params_df}{Parameter data frame}
+
+\item{trial_df}{Optional trial-level or expanded data frame used to condition
+simulation. When `trial_df` includes an `accumulator` column, `onset` and
+`component` values are matched by trial and accumulator. Otherwise, values
+apply to all accumulators for a trial.}
 
 \item{seed}{Optional RNG seed}
 

@@ -4,16 +4,18 @@
 \alias{ensure_native_ctx}
 \title{Ensure native context pointer is valid}
 \usage{
-ensure_native_ctx(context)
+ensure_native_ctx(context, model_spec = NULL)
 }
 \arguments{
 \item{context}{A list containing `native_ctx` and `prep` or `structure$prep`}
+
+\item{model_spec}{Model specification from `finalize_model()`}
 }
 \value{
 The same list, with `native_ctx` refreshed if needed
 }
 \description{
 Checks whether a stored `native_ctx` external pointer is still valid; if not,
-it rebuilds the native context from the cached `prep` (or `structure$prep`).
+it rebuilds the native context from the `model_spec`
 Returns the context list with an updated `native_ctx`.
 }

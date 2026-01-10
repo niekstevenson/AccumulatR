@@ -566,6 +566,34 @@ inline std::vector<SharedTriggerInfo> collect_shared_triggers(
 }
 
 inline double shared_trigger_mask_weight(const std::vector<SharedTriggerInfo>& triggers,
+                                        std::uint64_t mask);
+
+struct SharedTriggerPlan {
+  std::vector<SharedTriggerInfo> triggers;
+  std::vector<double> mask_weights;
+};
+
+inline SharedTriggerPlan build_shared_trigger_plan(const uuber::NativeContext& ctx,
+                                                   const TrialParamSet* params_ptr) {
+  SharedTriggerPlan plan;
+  if (!params_ptr) return plan;
+  plan.triggers = collect_shared_triggers(ctx, *params_ptr);
+  if (plan.triggers.empty()) return plan;
+  if (plan.triggers.size() >= 63) {
+    Rcpp::stop("Too many shared triggers for density evaluation");
+  }
+  const std::uint64_t n_states = 1ULL << plan.triggers.size();
+  constexpr std::uint64_t kMaxPrecomputedWeights = 1ULL << 20;
+  if (n_states <= kMaxPrecomputedWeights) {
+    plan.mask_weights.resize(n_states);
+    for (std::uint64_t mask = 0; mask < n_states; ++mask) {
+      plan.mask_weights[mask] = shared_trigger_mask_weight(plan.triggers, mask);
+    }
+  }
+  return plan;
+}
+
+inline double shared_trigger_mask_weight(const std::vector<SharedTriggerInfo>& triggers,
                                         std::uint64_t mask) {
   double w = 1.0;
   for (std::size_t i = 0; i < triggers.size(); ++i) {
@@ -594,6 +622,18 @@ inline TrialParamSet apply_trigger_state(const TrialParamSet& base,
     }
   }
   return modified;
+}
+
+inline void apply_trigger_state_inplace(TrialParamSet& params,
+                                        const SharedTriggerInfo& trigger,
+                                        bool fail) {
+  double q_val = fail ? 1.0 : 0.0;
+  for (int acc_idx : trigger.acc_indices) {
+    if (acc_idx < 0 || acc_idx >= static_cast<int>(params.acc_params.size())) continue;
+    TrialAccumulatorParams& p = params.acc_params[static_cast<std::size_t>(acc_idx)];
+    p.q = q_val;
+    p.has_override = true;
+  }
 }
 
 struct EvalCache;
@@ -3113,18 +3153,20 @@ double node_density_with_competitors_internal(
   return density;
 }
 
-inline double node_density_with_shared_triggers(const uuber::NativeContext& ctx,
-                                                int node_id,
-                                                double t,
-                                                const std::string& component_label,
-                                                const std::unordered_set<int>& forced_complete,
-                                                const std::unordered_set<int>& forced_survive,
-                                                const std::vector<int>& competitor_ids,
-                                                const TrialParamSet* trial_params,
-                                                const std::string& trial_type_key,
-                                                EvalCache* eval_cache_override,
-                                                bool include_na_donors,
-                                                const std::string& outcome_label_context) {
+inline double node_density_with_shared_triggers_plan(const uuber::NativeContext& ctx,
+                                                     int node_id,
+                                                     double t,
+                                                     const std::string& component_label,
+                                                     const std::unordered_set<int>& forced_complete,
+                                                     const std::unordered_set<int>& forced_survive,
+                                                     const std::vector<int>& competitor_ids,
+                                                     const TrialParamSet* trial_params,
+                                                     const std::string& trial_type_key,
+                                                     EvalCache* eval_cache_override,
+                                                     bool include_na_donors,
+                                                     const std::string& outcome_label_context,
+                                                     const SharedTriggerPlan* trigger_plan,
+                                                     TrialParamSet* scratch_params) {
   if (!trial_params) {
     return node_density_with_competitors_internal(ctx,
                                                  node_id,
@@ -3139,8 +3181,13 @@ inline double node_density_with_shared_triggers(const uuber::NativeContext& ctx,
                                                  include_na_donors,
                                                  outcome_label_context);
   }
-  std::vector<SharedTriggerInfo> triggers = collect_shared_triggers(ctx, *trial_params);
-  if (triggers.empty()) {
+  SharedTriggerPlan local_plan;
+  const SharedTriggerPlan* plan_ptr = trigger_plan;
+  if (!plan_ptr) {
+    local_plan = build_shared_trigger_plan(ctx, trial_params);
+    plan_ptr = &local_plan;
+  }
+  if (plan_ptr->triggers.empty()) {
     return node_density_with_competitors_internal(ctx,
                                                  node_id,
                                                  t,
@@ -3154,30 +3201,50 @@ inline double node_density_with_shared_triggers(const uuber::NativeContext& ctx,
                                                  include_na_donors,
                                                  outcome_label_context);
   }
+  const std::vector<SharedTriggerInfo>& triggers = plan_ptr->triggers;
   if (triggers.size() >= 63) {
     Rcpp::stop("Too many shared triggers for density evaluation");
   }
+  TrialParamSet local_scratch;
+  TrialParamSet& scratch = scratch_params ? *scratch_params : local_scratch;
+  scratch = *trial_params;
+  for (const auto& trigger : triggers) {
+    apply_trigger_state_inplace(scratch, trigger, false);
+  }
   const std::uint64_t n_states = 1ULL << triggers.size();
   double total = 0.0;
-  for (std::uint64_t mask = 0; mask < n_states; ++mask) {
-    double w = shared_trigger_mask_weight(triggers, mask);
-    if (w <= 0.0) continue;
-    TrialParamSet conditioned = apply_trigger_state(*trial_params, triggers, mask);
-    double d = node_density_with_competitors_internal(ctx,
-                                                      node_id,
-                                                      t,
-                                                      component_label,
-                                                      forced_complete,
-                                                      forced_survive,
-                                                      competitor_ids,
-                                                      &conditioned,
-                                                      trial_type_key,
-                                                      eval_cache_override,
-                                                      include_na_donors,
-                                                      outcome_label_context);
-    if (std::isfinite(d) && d > 0.0) {
-      total += w * d;
+  std::uint64_t mask = 0;
+  for (std::uint64_t idx = 0; idx < n_states; ++idx) {
+    double w = plan_ptr->mask_weights.empty()
+      ? shared_trigger_mask_weight(triggers, mask)
+      : plan_ptr->mask_weights[mask];
+    if (w > 0.0) {
+      double d = node_density_with_competitors_internal(ctx,
+                                                        node_id,
+                                                        t,
+                                                        component_label,
+                                                        forced_complete,
+                                                        forced_survive,
+                                                        competitor_ids,
+                                                        &scratch,
+                                                        trial_type_key,
+                                                        eval_cache_override,
+                                                        include_na_donors,
+                                                        outcome_label_context);
+      if (std::isfinite(d) && d > 0.0) {
+        total += w * d;
+      }
     }
+    if (idx + 1 == n_states) break;
+    std::uint64_t next = idx + 1;
+    std::uint64_t next_gray = next ^ (next >> 1);
+    std::uint64_t diff = next_gray ^ mask;
+    if (diff != 0) {
+      int bit = static_cast<int>(__builtin_ctzll(diff));
+      bool fail = ((next_gray >> bit) & 1ULL) != 0ULL;
+      apply_trigger_state_inplace(scratch, triggers[static_cast<std::size_t>(bit)], fail);
+    }
+    mask = next_gray;
   }
   if (!std::isfinite(total) || total <= 0.0) return 0.0;
   return total;
@@ -3851,6 +3918,8 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
   double total = 0.0;
   const bool has_keep = !keep_label.empty();
   const std::string keep_norm = has_keep ? normalize_label_string(keep_label) : std::string();
+  SharedTriggerPlan trigger_plan = build_shared_trigger_plan(ctx, params_ptr);
+  TrialParamSet trigger_scratch;
   for (std::size_t i = 0; i < component_ids.size(); ++i) {
     const ComponentCacheEntry* cache_entry_ptr = nullptr;
     ComponentCacheEntry fallback;
@@ -3881,18 +3950,20 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
       }
     }
     if (!used_guess_shortcut) {
-      contrib = node_density_with_shared_triggers(ctx,
-                                                 node_id,
-                                                 t,
-                                                 component_ids[i],
-                                                 kEmptyForced,
-                                                 kEmptyForced,
-                                                 competitor_ids,
-                                                 params_ptr,
-                                                 cache_entry_ptr->trial_type_key,
-                                                 &shared_cache,
-                                                 false,
-                                                 keep_label);
+      contrib = node_density_with_shared_triggers_plan(ctx,
+                                                       node_id,
+                                                       t,
+                                                       component_ids[i],
+                                                       kEmptyForced,
+                                                       kEmptyForced,
+                                                       competitor_ids,
+                                                       params_ptr,
+                                                       cache_entry_ptr->trial_type_key,
+                                                       &shared_cache,
+                                                       false,
+                                                       keep_label,
+                                                       &trigger_plan,
+                                                       &trigger_scratch);
       if (!std::isfinite(contrib) || contrib < 0.0) contrib = 0.0;
       if (has_keep) {
         double keep_w = component_keep_weight(ctx, component_ids[i], keep_label);
@@ -4165,6 +4236,11 @@ double cpp_loglik(SEXP ctxSEXP,
   }
 
   int n_trials = static_cast<int>(param_sets.size());
+  std::vector<SharedTriggerPlan> trigger_plans;
+  trigger_plans.reserve(static_cast<std::size_t>(n_trials));
+  for (int t = 0; t < n_trials; ++t) {
+    trigger_plans.push_back(build_shared_trigger_plan(*ctx, &param_sets[static_cast<std::size_t>(t)]));
+  }
 
   const std::vector<std::string>& default_components = comp_map.ids;
   const std::size_t n_components = default_components.size();
@@ -4243,6 +4319,12 @@ double cpp_loglik(SEXP ctxSEXP,
       cache_entries_ptr = &forced_cache_entries;
     }
 
+    TrialParamSet trigger_scratch;
+    const SharedTriggerPlan* trigger_plan_ptr =
+      (t < static_cast<int>(trigger_plans.size()))
+        ? &trigger_plans[static_cast<std::size_t>(t)]
+        : nullptr;
+
     double prob = 0.0;
     if (outcome_is_na) {
       double non_na_total = 0.0;
@@ -4297,18 +4379,20 @@ double cpp_loglik(SEXP ctxSEXP,
           for (std::size_t c = 0; c < comp_labels_ptr->size(); ++c) {
             double w = (c < comp_weights_ptr->size()) ? (*comp_weights_ptr)[c] : 0.0;
             if (!std::isfinite(w) || w <= 0.0) continue;
-            double contrib = node_density_with_shared_triggers(*ctx,
-                                                               info.node_id,
-                                                               rt,
-                                                               (*comp_labels_ptr)[c],
-                                                               kEmptyForced,
-                                                               kEmptyForced,
-                                                               info.competitor_ids,
-                                                               params_ptr,
-                                                               std::string(),
-                                                               &eval_cache,
-                                                               false,
-                                                               std::string());
+            double contrib = node_density_with_shared_triggers_plan(*ctx,
+                                                                    info.node_id,
+                                                                    rt,
+                                                                    (*comp_labels_ptr)[c],
+                                                                    kEmptyForced,
+                                                                    kEmptyForced,
+                                                                    info.competitor_ids,
+                                                                    params_ptr,
+                                                                    std::string(),
+                                                                    &eval_cache,
+                                                                    false,
+                                                                    std::string(),
+                                                                    trigger_plan_ptr,
+                                                                    &trigger_scratch);
             if (std::isfinite(contrib) && contrib > 0.0) {
               total += w * contrib;
             }

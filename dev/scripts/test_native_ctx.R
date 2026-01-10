@@ -33,18 +33,17 @@ cat("Initial log-likelihood:", ll1, "\n")
 # Create a transportable context list (as described)
 context <- list(
   native_ctx = ctx$native_ctx,
-  structure = ctx$structure,
-  param_layout = ctx$param_layout,
   data_df = ctx$data_df,
   rel_tol = ctx$rel_tol,
   abs_tol = ctx$abs_tol,
-  max_depth = ctx$max_depth
+  max_depth = ctx$max_depth,
+  model_spec = spec
 )
 class(context) <- "likelihood_context"
 
 # Simulate a mangled pointer and rebuild
 context$native_ctx <- new("externalptr") # intentionally invalid
-context <- ensure_native_ctx(context)
+context <- ensure_native_ctx(context, model_spec = context$model_spec)
 ll2 <- log_likelihood(context, param_mat)
 cat("Rebuilt log-likelihood:", ll2, "\n")
 

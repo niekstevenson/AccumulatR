@@ -488,8 +488,8 @@ example_18_univalent_stop_change <- race_spec() |>
             attrs = list(component = "go_stop")) |>
   set_metadata(mixture = list(
     mode = "fixed",
-    components = list(component("go_only", weight = 0.5),
-                      component("go_stop", weight = 0.5))
+    components = list(component("go_only", weight = 0.75),
+                      component("go_stop", weight = 0.25))
   )) |>
   finalize_model()
 params_example_18_univalent_stop_change <- c(

@@ -108,6 +108,11 @@ double acc_survival_cpp(double, double, double, const std::string&, const Rcpp::
 double acc_cdf_success_cpp(double, double, double, const std::string&, const Rcpp::List&);
 double pool_density_fast_cpp(const Rcpp::NumericVector&, const Rcpp::NumericVector&, int);
 double pool_survival_fast_cpp(const Rcpp::NumericVector&, int);
+double pool_density_fast(const std::vector<double>& density,
+                         const std::vector<double>& survival,
+                         int k);
+double pool_survival_fast(const std::vector<double>& survival,
+                          int k);
 Rcpp::List pool_density_combine_native(const Rcpp::NumericVector& dens_vec,
                                        const Rcpp::NumericVector& cdf_vec,
                                        const Rcpp::NumericVector& surv_vec,
@@ -322,19 +327,61 @@ inline double acc_cdf_success_from_cfg(double t,
   return clamp(cdf, 0.0, 1.0);
 }
 
-struct NodeEvalResult {
-  double density{0.0};
-  double survival{1.0};
-  double cdf{0.0};
+enum class EvalNeed : std::uint8_t {
+  kDensity = 1 << 0,
+  kSurvival = 1 << 1,
+  kCDF = 1 << 2
 };
 
-inline NodeEvalResult make_node_result(double density,
+constexpr EvalNeed kEvalAll =
+  static_cast<EvalNeed>(static_cast<std::uint8_t>(EvalNeed::kDensity) |
+                        static_cast<std::uint8_t>(EvalNeed::kSurvival) |
+                        static_cast<std::uint8_t>(EvalNeed::kCDF));
+
+inline EvalNeed operator|(EvalNeed lhs, EvalNeed rhs) {
+  return static_cast<EvalNeed>(
+    static_cast<std::uint8_t>(lhs) | static_cast<std::uint8_t>(rhs)
+  );
+}
+
+inline EvalNeed operator&(EvalNeed lhs, EvalNeed rhs) {
+  return static_cast<EvalNeed>(
+    static_cast<std::uint8_t>(lhs) & static_cast<std::uint8_t>(rhs)
+  );
+}
+
+inline bool needs_density(EvalNeed need) {
+  return static_cast<std::uint8_t>(need & EvalNeed::kDensity) != 0;
+}
+
+inline bool needs_survival(EvalNeed need) {
+  return static_cast<std::uint8_t>(need & EvalNeed::kSurvival) != 0;
+}
+
+inline bool needs_cdf(EvalNeed need) {
+  return static_cast<std::uint8_t>(need & EvalNeed::kCDF) != 0;
+}
+
+struct NodeEvalResult {
+  double density{std::numeric_limits<double>::quiet_NaN()};
+  double survival{std::numeric_limits<double>::quiet_NaN()};
+  double cdf{std::numeric_limits<double>::quiet_NaN()};
+};
+
+inline NodeEvalResult make_node_result(EvalNeed need,
+                                       double density,
                                        double survival,
                                        double cdf) {
   NodeEvalResult out;
-  out.density = safe_density(density);
-  out.survival = clamp_probability(survival);
-  out.cdf = clamp_probability(cdf);
+  out.density = needs_density(need)
+    ? safe_density(density)
+    : std::numeric_limits<double>::quiet_NaN();
+  out.survival = needs_survival(need)
+    ? clamp_probability(survival)
+    : std::numeric_limits<double>::quiet_NaN();
+  out.cdf = needs_cdf(need)
+    ? clamp_probability(cdf)
+    : std::numeric_limits<double>::quiet_NaN();
   return out;
 }
 
@@ -636,7 +683,6 @@ inline void apply_trigger_state_inplace(TrialParamSet& params,
   }
 }
 
-struct EvalCache;
 struct ComponentCacheEntry;
 const std::unordered_set<int> kEmptyForcedSet{};
 
@@ -671,7 +717,6 @@ double node_density_with_competitors_internal(
   const std::vector<int>& competitor_ids,
   const TrialParamSet* trial_params,
   const std::string& trial_type_key,
-  EvalCache* eval_cache_override,
   bool include_na_donors = false,
   const std::string& outcome_label_context = std::string());
 
@@ -681,7 +726,6 @@ double evaluate_outcome_density_label(const uuber::NativeContext& ctx,
                                       const std::string& component,
                                       const TrialParamSet* trial_params,
                                       const std::string& trial_type_key,
-                                      EvalCache* eval_cache_override,
                                       bool include_na_donors,
                                       const std::string& outcome_label_context = std::string()) {
   auto meta_it = ctx.outcome_info.find(donor_label);
@@ -698,7 +742,6 @@ double evaluate_outcome_density_label(const uuber::NativeContext& ctx,
     info.competitor_ids,
     trial_params,
     trial_type_key,
-    eval_cache_override,
     include_na_donors,
     outcome_label_context);
 }
@@ -708,8 +751,7 @@ double accumulate_component_guess_density(const uuber::NativeContext& ctx,
                                           double t,
                                           const std::string& component,
                                           const TrialParamSet* trial_params,
-                                          const std::string& trial_type_key,
-                                          EvalCache* eval_cache_override) {
+                                          const std::string& trial_type_key) {
   auto comp_it = ctx.component_info.find(component);
   if (comp_it == ctx.component_info.end()) return 0.0;
   const uuber::ComponentGuessPolicy& guess = comp_it->second.guess;
@@ -729,7 +771,6 @@ double accumulate_component_guess_density(const uuber::NativeContext& ctx,
         component,
         trial_params,
         trial_type_key,
-        eval_cache_override,
         false,
         entry.first);
   }
@@ -742,7 +783,6 @@ double accumulate_outcome_alias_density(const uuber::NativeContext& ctx,
                                         const std::string& component,
                                         const TrialParamSet* trial_params,
                                         const std::string& trial_type_key,
-                                        EvalCache* eval_cache_override,
                                         bool include_na_donors) {
   double total = 0.0;
   auto alias_it = ctx.alias_sources.find(target_label);
@@ -755,7 +795,6 @@ double accumulate_outcome_alias_density(const uuber::NativeContext& ctx,
         component,
         trial_params,
         trial_type_key,
-        eval_cache_override,
         include_na_donors,
         source_label);
     }
@@ -771,7 +810,6 @@ double accumulate_outcome_alias_density(const uuber::NativeContext& ctx,
         component,
         trial_params,
         trial_type_key,
-        eval_cache_override,
         include_na_donors,
         donor.label);
     }
@@ -805,62 +843,106 @@ bool component_active(const uuber::NativeAccumulator& acc,
   return std::find(comps->begin(), comps->end(), component) != comps->end();
 }
 
+struct PoolEvalScratch {
+  std::vector<std::size_t> active_indices;
+  std::vector<double> density;
+  std::vector<double> survival;
+};
+
+struct PoolEvalScratchStack {
+  std::vector<PoolEvalScratch> stack;
+  std::size_t depth{0};
+};
+
+inline PoolEvalScratchStack& pool_eval_scratch_stack() {
+  thread_local PoolEvalScratchStack scratch;
+  return scratch;
+}
+
+class PoolEvalScratchGuard {
+ public:
+  PoolEvalScratchGuard()
+    : stack(pool_eval_scratch_stack()),
+      index(stack.depth++) {
+    if (index >= stack.stack.size()) {
+      stack.stack.emplace_back();
+    }
+  }
+
+  ~PoolEvalScratchGuard() {
+    if (stack.depth > 0) {
+      --stack.depth;
+    }
+  }
+
+  PoolEvalScratch& scratch() {
+    return stack.stack[index];
+  }
+
+ private:
+  PoolEvalScratchStack& stack;
+  std::size_t index;
+};
+
 NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
                                 const std::string& label,
                                 double t,
                                 const std::string& component,
                                 const std::unordered_set<int>& forced_complete,
                                 const std::unordered_set<int>& forced_survive,
+                                EvalNeed need,
                                 const TrialParamSet* trial_params = nullptr,
                                 const std::string& trial_type_key = std::string(),
-                                EvalCache* eval_cache_override = nullptr,
                                 bool include_na_donors = false,
                                 const std::string& outcome_label_context = std::string()) {
   if (label.empty()) {
-    return make_node_result(0.0, 1.0, 0.0);
+    return make_node_result(need, 0.0, 1.0, 0.0);
   }
   if (label == "__DEADLINE__") {
-    double survival = 0.0;
-    double cdf = 1.0;
-    if (std::isfinite(t)) {
-      if (t < 0.0) {
-        survival = 1.0;
-        cdf = 0.0;
-      } else {
-        survival = 0.0;
-        cdf = 1.0;
+    double survival = std::numeric_limits<double>::quiet_NaN();
+    double cdf = std::numeric_limits<double>::quiet_NaN();
+    if (needs_survival(need) || needs_cdf(need)) {
+      survival = 0.0;
+      cdf = 1.0;
+      if (std::isfinite(t)) {
+        if (t < 0.0) {
+          survival = 1.0;
+          cdf = 0.0;
+        } else {
+          survival = 0.0;
+          cdf = 1.0;
+        }
       }
     }
-    return make_node_result(0.0, survival, cdf);
+    return make_node_result(need, 0.0, survival, cdf);
   }
   double donor_density = 0.0;
-  donor_density += accumulate_component_guess_density(ctx,
-                                                      label,
+  if (needs_density(need)) {
+    donor_density += accumulate_component_guess_density(ctx,
+                                                        label,
+                                                        t,
+                                                        component,
+                                                        trial_params,
+                                                        trial_type_key);
+    const std::string& target_label = outcome_label_context.empty() ? label : outcome_label_context;
+    donor_density += accumulate_outcome_alias_density(ctx,
+                                                      target_label,
                                                       t,
                                                       component,
                                                       trial_params,
                                                       trial_type_key,
-                                                      eval_cache_override);
-  const std::string& target_label = outcome_label_context.empty() ? label : outcome_label_context;
-  donor_density += accumulate_outcome_alias_density(ctx,
-                                                    target_label,
-                                                    t,
-                                                    component,
-                                                    trial_params,
-                                                    trial_type_key,
-                                                    eval_cache_override,
-                                                    include_na_donors);
+                                                      include_na_donors);
+  }
   if (label == "__GUESS__") {
-    NodeEvalResult guess_res = make_node_result(donor_density, 0.0, 1.0);
-    return guess_res;
+    return make_node_result(need, donor_density, 0.0, 1.0);
   }
   int label_idx = label_id(ctx, label);
   if (label_idx != NA_INTEGER) {
     if (forced_complete.count(label_idx)) {
-      return make_node_result(0.0, 0.0, 1.0);
+      return make_node_result(need, 0.0, 0.0, 1.0);
     }
     if (forced_survive.count(label_idx)) {
-      return make_node_result(0.0, 1.0, 0.0);
+      return make_node_result(need, 0.0, 1.0, 0.0);
     }
   }
 
@@ -870,16 +952,27 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
     const uuber::NativeAccumulator& acc = ctx.accumulators[acc_idx];
     const TrialAccumulatorParams* override = get_trial_param_entry(trial_params, acc_idx);
     if (!component_active(acc, component, override)) {
-      return make_node_result(0.0, 1.0, 0.0);
+      return make_node_result(need, 0.0, 1.0, 0.0);
     }
     double onset = override ? override->onset : acc.onset;
     double q = override ? override->q : acc.q;
     const AccDistParams& cfg = override ? override->dist_cfg : acc.dist_cfg;
-    double density = acc_density_from_cfg(t, onset, q, cfg);
-    double survival = acc_survival_from_cfg(t, onset, q, cfg);
-    double cdf = acc_cdf_success_from_cfg(t, onset, cfg);
-    NodeEvalResult res = make_node_result(density, survival, cdf);
-    if (donor_density > 0.0) res.density += donor_density;
+    double density = std::numeric_limits<double>::quiet_NaN();
+    double survival = std::numeric_limits<double>::quiet_NaN();
+    double cdf = std::numeric_limits<double>::quiet_NaN();
+    if (needs_density(need)) {
+      density = acc_density_from_cfg(t, onset, q, cfg);
+    }
+    if (needs_survival(need)) {
+      survival = acc_survival_from_cfg(t, onset, q, cfg);
+    }
+    if (needs_cdf(need)) {
+      cdf = acc_cdf_success_from_cfg(t, onset, cfg);
+    }
+    NodeEvalResult res = make_node_result(need, density, survival, cdf);
+    if (needs_density(need) && donor_density > 0.0) {
+      res.density = safe_density(res.density + donor_density);
+    }
     return res;
   }
 
@@ -887,56 +980,86 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
   if (pool_it != ctx.pool_index.end()) {
     const uuber::NativePool& pool = ctx.pools[pool_it->second];
     if (pool.members.empty()) {
-      NodeEvalResult res = make_node_result(0.0, 1.0, 0.0);
-      if (donor_density > 0.0) {
-        res.density += donor_density;
+      NodeEvalResult res = make_node_result(need, 0.0, 1.0, 0.0);
+      if (needs_density(need) && donor_density > 0.0) {
+        res.density = safe_density(res.density + donor_density);
       }
       return res;
     }
-    std::vector<std::string> active_members;
-    active_members.reserve(pool.members.size());
-    for (const auto& member : pool.members) {
+    PoolEvalScratchGuard scratch_guard;
+    PoolEvalScratch& scratch = scratch_guard.scratch();
+    scratch.active_indices.clear();
+    scratch.active_indices.reserve(pool.members.size());
+    for (std::size_t member_idx = 0; member_idx < pool.members.size(); ++member_idx) {
+      const std::string& member = pool.members[member_idx];
       auto member_acc = ctx.accumulator_index.find(member);
       if (member_acc != ctx.accumulator_index.end()) {
         const uuber::NativeAccumulator& acc = ctx.accumulators[member_acc->second];
         const TrialAccumulatorParams* override = get_trial_param_entry(trial_params, member_acc->second);
         if (!component_active(acc, component, override)) continue;
       }
-      active_members.push_back(member);
+      scratch.active_indices.push_back(member_idx);
     }
-    if (active_members.empty()) {
-      NodeEvalResult res = make_node_result(0.0, 1.0, 0.0);
-      if (donor_density > 0.0) res.density += donor_density;
+    if (scratch.active_indices.empty()) {
+      NodeEvalResult res = make_node_result(need, 0.0, 1.0, 0.0);
+      if (needs_density(need) && donor_density > 0.0) {
+        res.density = safe_density(res.density + donor_density);
+      }
       return res;
     }
-    Rcpp::NumericVector density_vec(active_members.size());
-    Rcpp::NumericVector survival_vec(active_members.size());
-    for (std::size_t i = 0; i < active_members.size(); ++i) {
+    const bool need_density = needs_density(need);
+    const bool need_survival = needs_survival(need) || needs_cdf(need) || need_density;
+    EvalNeed child_need = need_density
+      ? (EvalNeed::kDensity | EvalNeed::kSurvival)
+      : EvalNeed::kSurvival;
+    if (need_density) {
+      scratch.density.resize(scratch.active_indices.size());
+    }
+    if (need_survival) {
+      scratch.survival.resize(scratch.active_indices.size());
+    }
+    for (std::size_t i = 0; i < scratch.active_indices.size(); ++i) {
+      const std::string& member = pool.members[scratch.active_indices[i]];
       NodeEvalResult child = eval_event_label(
         ctx,
-        active_members[i],
+        member,
         t,
         component,
         forced_complete,
         forced_survive,
+        child_need,
         trial_params,
-        std::string(),
-        nullptr
+        std::string()
       );
-      density_vec[i] = child.density;
-      survival_vec[i] = child.survival;
+      if (need_density) {
+        scratch.density[i] = child.density;
+      }
+      if (need_survival) {
+        scratch.survival[i] = child.survival;
+      }
     }
-    double density = pool_density_fast_cpp(density_vec, survival_vec, pool.k);
-    double survival = pool_survival_fast_cpp(survival_vec, pool.k);
-    double cdf = clamp_probability(1.0 - survival);
-    if (!std::isfinite(density) || density < 0.0) density = 0.0;
-    if (!std::isfinite(survival)) survival = 0.0;
-    NodeEvalResult res = make_node_result(density, survival, cdf);
-    if (donor_density > 0.0) res.density += donor_density;
+    double density = std::numeric_limits<double>::quiet_NaN();
+    double survival = std::numeric_limits<double>::quiet_NaN();
+    double cdf = std::numeric_limits<double>::quiet_NaN();
+    if (need_density) {
+      density = pool_density_fast(scratch.density, scratch.survival, pool.k);
+      if (!std::isfinite(density) || density < 0.0) density = 0.0;
+    }
+    if (needs_survival(need) || needs_cdf(need)) {
+      survival = pool_survival_fast(scratch.survival, pool.k);
+      if (!std::isfinite(survival)) survival = 0.0;
+    }
+    if (needs_cdf(need)) {
+      cdf = clamp_probability(1.0 - survival);
+    }
+    NodeEvalResult res = make_node_result(need, density, survival, cdf);
+    if (needs_density(need) && donor_density > 0.0) {
+      res.density = safe_density(res.density + donor_density);
+    }
     return res;
   }
 
-  return make_node_result(0.0, 1.0, 0.0);
+  return make_node_result(need, 0.0, 1.0, 0.0);
 }
 
 struct ForcedKey {
@@ -947,8 +1070,6 @@ struct ForcedKey {
 struct TimeKey {
   double value{0.0};
 };
-
-struct EvalCache {};
 
 std::string component_cache_key(const std::string& component,
                                 const std::string& trial_key);
@@ -973,7 +1094,6 @@ double accumulate_plan_guess_density(const uuber::NativeContext& ctx,
                                      double t,
                                      const std::string& component,
                                      const std::string& trial_type_key,
-                                     EvalCache& eval_cache,
                                      const TrialParamSet* trial_params,
                                      bool include_na_donors) {
   double total = 0.0;
@@ -1013,7 +1133,6 @@ double accumulate_plan_guess_density(const uuber::NativeContext& ctx,
       comp_vec,
       trial_params,
       trial_type_key,
-      &eval_cache,
       include_na_donors,
       donor_label
     );
@@ -1078,41 +1197,8 @@ inline std::uint64_t double_to_bits(double value) {
   return bits;
 }
 
-inline std::vector<std::uint64_t> build_forced_bits(const uuber::NativeContext& ctx,
-                                                    const std::unordered_set<int>& forced) {
-  std::size_t node_count = ctx.nodes.size();
-  std::size_t word_count = (node_count + 63) / 64;
-  std::vector<std::uint64_t> bits(word_count, 0);
-  if (forced.empty() || word_count == 0) return bits;
-  for (int id : forced) {
-    auto it = ctx.node_index.find(id);
-    if (it == ctx.node_index.end()) continue;
-    std::size_t idx = static_cast<std::size_t>(it->second);
-    std::size_t word = idx >> 6;
-    std::size_t offset = idx & 63;
-    if (word < bits.size()) {
-      bits[word] |= (std::uint64_t{1} << offset);
-    }
-  }
-  return bits;
-}
-
-inline std::uint64_t hash_combine_u64(std::uint64_t seed, std::uint64_t value) {
-  seed ^= value + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
-  return seed;
-}
-
-inline std::uint64_t hash_forced_bits(const std::vector<std::uint64_t>& bits) {
-  std::uint64_t h = 0x9e3779b185ebca87ULL;
-  for (std::uint64_t v : bits) {
-    h = hash_combine_u64(h, v);
-  }
-  return h;
-}
-
 struct NodeEvalState {
   NodeEvalState(const uuber::NativeContext& ctx_,
-                EvalCache& cache_,
                 double time,
                 const std::string& component_label,
                 const std::unordered_set<int>& forced_complete_ref,
@@ -1122,7 +1208,6 @@ struct NodeEvalState {
                 bool include_na = false,
                 const std::string& outcome_label_ctx = std::string())
     : ctx(ctx_),
-      cache(cache_),
       t(time),
       component(component_label),
       forced_complete(forced_complete_ref),
@@ -1130,15 +1215,9 @@ struct NodeEvalState {
       trial_params(params_ptr),
       trial_type_key(component_cache_key(component_label, trial_key)),
       include_na_donors(include_na),
-      outcome_label(outcome_label_ctx),
-      forced_complete_bits(build_forced_bits(ctx_, forced_complete_ref)),
-      forced_survive_bits(build_forced_bits(ctx_, forced_survive_ref)),
-      forced_complete_hash(hash_forced_bits(forced_complete_bits)),
-      forced_survive_hash(hash_forced_bits(forced_survive_bits)),
-      time_bits(double_to_bits(time)) {}
+      outcome_label(outcome_label_ctx) {}
 
   const uuber::NativeContext& ctx;
-  EvalCache& cache;
   double t;
   std::string component;
   const std::unordered_set<int>& forced_complete;
@@ -1147,11 +1226,6 @@ struct NodeEvalState {
   std::string trial_type_key;
   bool include_na_donors;
   std::string outcome_label;
-  std::vector<std::uint64_t> forced_complete_bits;
-  std::vector<std::uint64_t> forced_survive_bits;
-  std::uint64_t forced_complete_hash;
-  std::uint64_t forced_survive_hash;
-  std::uint64_t time_bits;
 };
 
 inline const TrialAccumulatorParams* get_state_params(const NodeEvalState& state,
@@ -1222,7 +1296,6 @@ struct IntegrationSettings {
 struct GuardEvalInput {
   const uuber::NativeContext& ctx;
   const uuber::NativeNode& node;
-  EvalCache& cache;
   std::string component;
   std::string trial_type_key;
   std::unordered_set<int> forced_complete;
@@ -1232,34 +1305,33 @@ struct GuardEvalInput {
 
 const uuber::NativeNode& fetch_node(const uuber::NativeContext& ctx, int node_id);
 NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
-                                     EvalCache& cache,
                                      int node_id,
                                      double time,
                                      const std::string& component,
                                      const std::unordered_set<int>& forced_complete,
                                      const std::unordered_set<int>& forced_survive,
+                                     EvalNeed need,
                                      const TrialParamSet* trial_params,
                                      const std::string& trial_key);
 inline NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
-                                            EvalCache& cache,
                                             int node_id,
                                             double time,
                                             const std::string& component,
                                             const std::unordered_set<int>& forced_complete,
-                                            const std::unordered_set<int>& forced_survive) {
+                                            const std::unordered_set<int>& forced_survive,
+                                            EvalNeed need) {
   return eval_node_with_forced(ctx,
-                               cache,
                                node_id,
                                time,
                                component,
                                forced_complete,
                                forced_survive,
+                               need,
                                nullptr,
                                std::string());
 }
 GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
                                 const uuber::NativeNode& node,
-                                EvalCache& cache,
                                 const std::string& component,
                                 const std::unordered_set<int>& forced_complete,
                                 const std::unordered_set<int>& forced_survive,
@@ -1337,9 +1409,9 @@ std::vector<ScenarioRecord> compute_pool_event_scenarios(const uuber::NativeNode
       state.component,
       state.forced_complete,
       state.forced_survive,
+      kEvalAll,
       state.trial_params,
-      state.trial_type_key,
-      &state.cache
+      state.trial_type_key
     );
     double density = eval.density;
     double cdf = clamp_probability(eval.cdf);
@@ -1445,9 +1517,9 @@ std::vector<ScenarioRecord> compute_event_scenarios(const uuber::NativeNode& nod
     state.component,
     state.forced_complete,
     state.forced_survive,
+    EvalNeed::kDensity,
     state.trial_params,
-    state.trial_type_key,
-    &state.cache
+    state.trial_type_key
   );
   double weight = eval.density;
   if (!std::isfinite(weight) || weight <= 0.0) {
@@ -1492,12 +1564,12 @@ std::vector<ScenarioRecord> compute_and_scenarios(const uuber::NativeNode& node,
         std::unordered_set<int> fc_set = make_forced_set(forced_complete);
         std::unordered_set<int> fs_set = make_forced_set(forced_survive);
         NodeEvalResult sibling = eval_node_with_forced(state.ctx,
-                                                       state.cache,
                                                        child_ids[other_idx],
                                                        state.t,
                                                        state.component,
                                                        fc_set,
-                                                       fs_set);
+                                                       fs_set,
+                                                       EvalNeed::kCDF);
         double Fj = clamp_probability(sibling.cdf);
         if (!std::isfinite(Fj) || Fj <= 0.0) {
           ok = false;
@@ -1579,8 +1651,11 @@ std::vector<ScenarioRecord> compute_or_scenarios(const uuber::NativeNode& node,
 struct GuardMemoKey {
   int node_id;
   std::uint64_t t_bits;
+  std::uint8_t need_bits;
   bool operator==(const GuardMemoKey& other) const noexcept {
-    return node_id == other.node_id && t_bits == other.t_bits;
+    return node_id == other.node_id &&
+      t_bits == other.t_bits &&
+      need_bits == other.need_bits;
   }
 };
 
@@ -1588,6 +1663,7 @@ struct GuardMemoKeyHash {
   std::size_t operator()(const GuardMemoKey& key) const noexcept {
     std::size_t h = static_cast<std::size_t>(key.node_id);
     h ^= static_cast<std::size_t>(key.t_bits + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
+    h ^= static_cast<std::size_t>(key.need_bits + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2));
     return h;
   }
 };
@@ -1597,33 +1673,34 @@ using GuardMemo = std::unordered_map<GuardMemoKey, NodeEvalResult, GuardMemoKeyH
 inline NodeEvalResult eval_node_guard_cached(const GuardEvalInput& input,
                                              int node_id,
                                              double t,
+                                             EvalNeed need,
                                              GuardMemo* memo) {
   if (!memo) {
     return eval_node_with_forced(
       input.ctx,
-      input.cache,
       node_id,
       t,
       input.component,
       input.forced_complete,
       input.forced_survive,
+      need,
       input.trial_params,
       input.trial_type_key
     );
   }
-  GuardMemoKey key{node_id, double_to_bits(t)};
+  GuardMemoKey key{node_id, double_to_bits(t), static_cast<std::uint8_t>(need)};
   auto it = memo->find(key);
   if (it != memo->end()) {
     return it->second;
   }
   NodeEvalResult res = eval_node_with_forced(
     input.ctx,
-    input.cache,
     node_id,
     t,
     input.component,
     input.forced_complete,
     input.forced_survive,
+    need,
     input.trial_params,
     input.trial_type_key
   );
@@ -1662,7 +1739,6 @@ std::vector<ScenarioRecord> compute_guard_scenarios(const uuber::NativeNode& nod
     std::unordered_set<int> fs_set = make_forced_set(sc.forced_survive);
     GuardEvalInput guard_input = make_guard_input(state.ctx,
                                                   node,
-                                                  state.cache,
                                                   state.component,
                                                   fc_set,
                                                   fs_set,
@@ -1696,7 +1772,7 @@ std::vector<ScenarioRecord> compute_node_scenarios(int node_id, NodeEvalState& s
   return result;
 }
 
-NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state);
+NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state, EvalNeed need);
 
 const uuber::NativeNode& fetch_node(const uuber::NativeContext& ctx, int node_id) {
   return ctx.nodes.at(ctx.node_index.at(node_id));
@@ -1951,9 +2027,9 @@ NodeEvalResult eval_event_unforced(const uuber::NativeContext& ctx,
                                    const std::string& label,
                                    double t,
                                    const std::string& component,
+                                   EvalNeed need,
                                    const TrialParamSet* trial_params,
                                    const std::string& trial_type_key,
-                                   EvalCache* eval_cache_override,
                                    bool include_na_donors,
                                    const std::string& outcome_label_context) {
   static const std::unordered_set<int> kEmptyForced;
@@ -1963,9 +2039,9 @@ NodeEvalResult eval_event_unforced(const uuber::NativeContext& ctx,
                           component,
                           kEmptyForced,
                           kEmptyForced,
+                          need,
                           trial_params,
                           trial_type_key,
-                          eval_cache_override,
                           include_na_donors,
                           outcome_label_context);
 }
@@ -1976,36 +2052,36 @@ double shared_gate_pair_density(const uuber::NativeContext& ctx,
                                 const std::string& component,
                                 const TrialParamSet* trial_params,
                                 const std::string& trial_type_key,
-                                EvalCache* eval_cache_override,
                                 bool include_na_donors,
                                 const std::string& outcome_label_context) {
   if (!std::isfinite(t) || t < 0.0) return 0.0;
 
+  const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
   NodeEvalResult ex = eval_event_unforced(ctx,
                                          pair.x,
                                          t,
                                          component,
+                                         need,
                                          trial_params,
                                          trial_type_key,
-                                         eval_cache_override,
                                          include_na_donors,
                                          outcome_label_context);
   NodeEvalResult ey = eval_event_unforced(ctx,
                                          pair.y,
                                          t,
                                          component,
+                                         need,
                                          trial_params,
                                          trial_type_key,
-                                         eval_cache_override,
                                          include_na_donors,
                                          outcome_label_context);
   NodeEvalResult ec = eval_event_unforced(ctx,
                                          pair.c,
                                          t,
                                          component,
+                                         need,
                                          trial_params,
                                          trial_type_key,
-                                         eval_cache_override,
                                          include_na_donors,
                                          outcome_label_context);
 
@@ -2030,18 +2106,18 @@ double shared_gate_pair_density(const uuber::NativeContext& ctx,
                                                pair.x,
                                                u,
                                                component,
+                                               need,
                                                trial_params,
                                                trial_type_key,
-                                               eval_cache_override,
                                                include_na_donors,
                                                outcome_label_context);
       NodeEvalResult ey_u = eval_event_unforced(ctx,
                                                pair.y,
                                                u,
                                                component,
+                                               need,
                                                trial_params,
                                                trial_type_key,
-                                               eval_cache_override,
                                                include_na_donors,
                                                outcome_label_context);
       double fx_u = ex_u.density;
@@ -2074,28 +2150,28 @@ double shared_gate_nway_density(const uuber::NativeContext& ctx,
                                 const std::string& component,
                                 const TrialParamSet* trial_params,
                                 const std::string& trial_type_key,
-                                EvalCache* eval_cache_override,
                                 bool include_na_donors,
                                 const std::string& outcome_label_context) {
   if (!std::isfinite(t) || t < 0.0) return 0.0;
   if (gate.target_x.empty() || gate.gate.empty() || gate.competitor_xs.empty()) return 0.0;
 
+  const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
   NodeEvalResult ex = eval_event_unforced(ctx,
                                          gate.target_x,
                                          t,
                                          component,
+                                         need,
                                          trial_params,
                                          trial_type_key,
-                                         eval_cache_override,
                                          include_na_donors,
                                          outcome_label_context);
   NodeEvalResult ec = eval_event_unforced(ctx,
                                          gate.gate,
                                          t,
                                          component,
+                                         need,
                                          trial_params,
                                          trial_type_key,
-                                         eval_cache_override,
                                          include_na_donors,
                                          outcome_label_context);
 
@@ -2105,9 +2181,9 @@ double shared_gate_nway_density(const uuber::NativeContext& ctx,
                                            lbl,
                                            t,
                                            component,
+                                           need,
                                            trial_params,
                                            trial_type_key,
-                                           eval_cache_override,
                                            include_na_donors,
                                            outcome_label_context);
     double sj = clamp_probability(ej.survival);
@@ -2134,9 +2210,9 @@ double shared_gate_nway_density(const uuber::NativeContext& ctx,
                                                gate.target_x,
                                                u,
                                                component,
+                                               need,
                                                trial_params,
                                                trial_type_key,
-                                               eval_cache_override,
                                                include_na_donors,
                                                outcome_label_context);
       double fx_u = ex_u.density;
@@ -2147,9 +2223,9 @@ double shared_gate_nway_density(const uuber::NativeContext& ctx,
                                                  lbl,
                                                  u,
                                                  component,
+                                                 need,
                                                  trial_params,
                                                  trial_type_key,
-                                                 eval_cache_override,
                                                  include_na_donors,
                                                  outcome_label_context);
         prod *= clamp_probability(ej_u.survival);
@@ -2190,14 +2266,15 @@ double shared_gate_nway_probability(const uuber::NativeContext& ctx,
   }
   if (upper <= 0.0) return 0.0;
 
+  const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
   auto eval_unforced = [&](const std::string& lbl, double t) -> NodeEvalResult {
     return eval_event_unforced(ctx,
                                lbl,
                                t,
                                component,
+                               need,
                                trial_params,
                                trial_type_key,
-                               nullptr,
                                include_na_donors,
                                outcome_label_context);
   };
@@ -2301,14 +2378,15 @@ double shared_gate_pair_probability(const uuber::NativeContext& ctx,
     return uuber::integrate_boost_fn(transformed, 0.0, 1.0, rel_tol, abs_tol, max_depth);
   };
 
+  const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
   auto eval_unforced = [&](const std::string& lbl, double t) -> NodeEvalResult {
     return eval_event_unforced(ctx,
                                lbl,
                                t,
                                component,
+                               need,
                                trial_params,
                                trial_type_key,
-                               nullptr,
                                include_na_donors,
                                outcome_label_context);
   };
@@ -2398,35 +2476,41 @@ double shared_gate_pair_probability(const uuber::NativeContext& ctx,
 }
 
 NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
-                                     EvalCache& cache,
                                      int node_id,
                                      double time,
                                      const std::string& component,
                                      const std::unordered_set<int>& forced_complete,
                                      const std::unordered_set<int>& forced_survive,
+                                     EvalNeed need,
                                      const TrialParamSet* trial_params,
                                      const std::string& trial_key) {
   NodeEvalState local(ctx,
-                      cache,
                       time,
                       component,
                       forced_complete,
                       forced_survive,
                       trial_params,
                       trial_key);
-  return eval_node_recursive(node_id, local);
+  return eval_node_recursive(node_id, local, need);
 }
 
-NodeEvalResult eval_and_node(const uuber::NativeNode& node, NodeEvalState& state) {
+NodeEvalResult eval_and_node(const uuber::NativeNode& node,
+                             NodeEvalState& state,
+                             EvalNeed need) {
   const std::vector<int>& child_ids = node.args;
   if (child_ids.empty()) {
-    return make_node_result(0.0, 1.0, 0.0);
+    return make_node_result(need, 0.0, 1.0, 0.0);
   }
   std::size_t n = child_ids.size();
+  const bool want_density = needs_density(need);
+  EvalNeed child_need = EvalNeed::kCDF;
+  if (want_density) {
+    child_need = child_need | EvalNeed::kDensity;
+  }
   std::vector<NodeEvalResult> children;
   children.reserve(n);
   for (int child_id : child_ids) {
-    children.push_back(eval_node_recursive(child_id, state));
+    children.push_back(eval_node_recursive(child_id, state, child_need));
   }
   std::vector<double> child_cdf(n);
   for (std::size_t i = 0; i < n; ++i) {
@@ -2443,29 +2527,44 @@ NodeEvalResult eval_and_node(const uuber::NativeNode& node, NodeEvalState& state
     if (!std::isfinite(suffix[i])) suffix[i] = 0.0;
   }
   double total_cdf = clamp_probability(prefix[n]);
-  double survival = clamp_probability(1.0 - total_cdf);
-  double density = 0.0;
-  for (std::size_t i = 0; i < n; ++i) {
-    double child_density = children[i].density;
-    if (!std::isfinite(child_density) || child_density <= 0.0) continue;
-    double others = prefix[i] * suffix[i + 1];
-    if (!std::isfinite(others) || others <= 0.0) continue;
-    density += child_density * clamp_probability(others);
+  double density = std::numeric_limits<double>::quiet_NaN();
+  if (want_density) {
+    double accum = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+      double child_density = children[i].density;
+      if (!std::isfinite(child_density) || child_density <= 0.0) continue;
+      double others = prefix[i] * suffix[i + 1];
+      if (!std::isfinite(others) || others <= 0.0) continue;
+      accum += child_density * clamp_probability(others);
+    }
+    density = (std::isfinite(accum) && accum >= 0.0) ? accum : 0.0;
   }
-  if (!std::isfinite(density) || density < 0.0) density = 0.0;
-  return make_node_result(density, survival, total_cdf);
+  double survival = needs_survival(need)
+    ? clamp_probability(1.0 - total_cdf)
+    : std::numeric_limits<double>::quiet_NaN();
+  double cdf = needs_cdf(need)
+    ? total_cdf
+    : std::numeric_limits<double>::quiet_NaN();
+  return make_node_result(need, density, survival, cdf);
 }
 
-NodeEvalResult eval_or_node(const uuber::NativeNode& node, NodeEvalState& state) {
+NodeEvalResult eval_or_node(const uuber::NativeNode& node,
+                            NodeEvalState& state,
+                            EvalNeed need) {
   const std::vector<int>& child_ids = node.args;
   if (child_ids.empty()) {
-    return make_node_result(0.0, 1.0, 0.0);
+    return make_node_result(need, 0.0, 1.0, 0.0);
   }
   std::size_t n = child_ids.size();
+  const bool want_density = needs_density(need);
+  EvalNeed child_need = EvalNeed::kSurvival;
+  if (want_density) {
+    child_need = child_need | EvalNeed::kDensity;
+  }
   std::vector<NodeEvalResult> children;
   children.reserve(n);
   for (int child_id : child_ids) {
-    children.push_back(eval_node_recursive(child_id, state));
+    children.push_back(eval_node_recursive(child_id, state, child_need));
   }
   std::vector<double> child_surv(n);
   for (std::size_t i = 0; i < n; ++i) {
@@ -2482,34 +2581,48 @@ NodeEvalResult eval_or_node(const uuber::NativeNode& node, NodeEvalState& state)
     if (!std::isfinite(suffix[i])) suffix[i] = 0.0;
   }
   double total_surv = clamp_probability(prefix[n]);
-  double cdf = clamp_probability(1.0 - total_surv);
-  double density = 0.0;
-  for (std::size_t i = 0; i < n; ++i) {
-    double child_density = children[i].density;
-    if (!std::isfinite(child_density) || child_density <= 0.0) continue;
-    double others = prefix[i] * suffix[i + 1];
-    if (!std::isfinite(others) || others <= 0.0) continue;
-    density += child_density * clamp_probability(others);
+  double density = std::numeric_limits<double>::quiet_NaN();
+  if (want_density) {
+    double accum = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+      double child_density = children[i].density;
+      if (!std::isfinite(child_density) || child_density <= 0.0) continue;
+      double others = prefix[i] * suffix[i + 1];
+      if (!std::isfinite(others) || others <= 0.0) continue;
+      accum += child_density * clamp_probability(others);
+    }
+    density = (std::isfinite(accum) && accum >= 0.0) ? accum : 0.0;
   }
-  if (!std::isfinite(density) || density < 0.0) density = 0.0;
-  return make_node_result(density, total_surv, cdf);
+  double survival = needs_survival(need)
+    ? total_surv
+    : std::numeric_limits<double>::quiet_NaN();
+  double cdf = needs_cdf(need)
+    ? clamp_probability(1.0 - total_surv)
+    : std::numeric_limits<double>::quiet_NaN();
+  return make_node_result(need, density, survival, cdf);
 }
 
-NodeEvalResult eval_not_node(const uuber::NativeNode& node, NodeEvalState& state) {
+NodeEvalResult eval_not_node(const uuber::NativeNode& node,
+                             NodeEvalState& state,
+                             EvalNeed need) {
   int child_id = node.arg_id;
   if (child_id < 0) {
-    return make_node_result(0.0, 1.0, 0.0);
+    return make_node_result(need, 0.0, 1.0, 0.0);
   }
-  NodeEvalResult child = eval_node_recursive(child_id, state);
+  NodeEvalResult child = eval_node_recursive(child_id, state, EvalNeed::kCDF);
   double child_cdf = clamp_probability(child.cdf);
   double self_cdf = clamp_probability(1.0 - child_cdf);
-  double survival = clamp_probability(1.0 - self_cdf);
-  return make_node_result(0.0, survival, self_cdf);
+  double survival = needs_survival(need)
+    ? child_cdf
+    : std::numeric_limits<double>::quiet_NaN();
+  double cdf = needs_cdf(need)
+    ? self_cdf
+    : std::numeric_limits<double>::quiet_NaN();
+  return make_node_result(need, 0.0, survival, cdf);
 }
 
 GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
                                 const uuber::NativeNode& node,
-                                EvalCache& cache,
                                 const std::string& component,
                                 const std::unordered_set<int>& forced_complete,
                                 const std::unordered_set<int>& forced_survive,
@@ -2518,7 +2631,6 @@ GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
   GuardEvalInput input{
     ctx,
     node,
-    cache,
     component,
     component_cache_key(component, trial_key),
     {},
@@ -2530,7 +2642,7 @@ GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
   return input;
 }
 
-NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state) {
+NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state, EvalNeed need) {
   const uuber::NativeNode& node = fetch_node(state.ctx, node_id);
   NodeEvalResult result;
   if (node.kind == "event") {
@@ -2541,34 +2653,42 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state) {
       state.component,
       state.forced_complete,
       state.forced_survive,
+      need,
       state.trial_params,
       state.trial_type_key,
-      &state.cache,
       state.include_na_donors,
       state.outcome_label
     );
   } else if (node.kind == "and") {
-    result = eval_and_node(node, state);
+    result = eval_and_node(node, state, need);
   } else if (node.kind == "or") {
-    result = eval_or_node(node, state);
+    result = eval_or_node(node, state, need);
   } else if (node.kind == "not") {
-    result = eval_not_node(node, state);
+    result = eval_not_node(node, state, need);
   } else if (node.kind == "guard") {
     GuardEvalInput guard_input = make_guard_input(state.ctx,
                                                   node,
-                                                  state.cache,
                                                   state.component,
                                                   state.forced_complete,
                                                   state.forced_survive,
                                                   state.trial_type_key,
                                                   state.trial_params);
     IntegrationSettings settings;
-    double density = guard_density_internal(guard_input, state.t, settings);
-    double cdf = guard_cdf_internal(guard_input, state.t, settings);
-    double survival = clamp_probability(1.0 - cdf);
-    result = make_node_result(density, survival, cdf);
+    double density = std::numeric_limits<double>::quiet_NaN();
+    double survival = std::numeric_limits<double>::quiet_NaN();
+    double cdf = std::numeric_limits<double>::quiet_NaN();
+    if (needs_density(need)) {
+      density = guard_density_internal(guard_input, state.t, settings);
+    }
+    if (needs_survival(need) || needs_cdf(need)) {
+      cdf = guard_cdf_internal(guard_input, state.t, settings);
+      if (needs_survival(need)) {
+        survival = clamp_probability(1.0 - cdf);
+      }
+    }
+    result = make_node_result(need, density, survival, cdf);
   } else {
-    result = make_node_result(0.0, 1.0, 0.0);
+    result = make_node_result(need, 0.0, 1.0, 0.0);
   }
   return result;
 }
@@ -2592,6 +2712,7 @@ double guard_effective_survival_internal(const GuardEvalInput& input,
       input,
       blocker_id,
       t,
+      EvalNeed::kSurvival,
       memo
     );
     return clamp_probability(block.survival);
@@ -2602,6 +2723,7 @@ double guard_effective_survival_internal(const GuardEvalInput& input,
       input,
       blocker_id,
       u,
+      EvalNeed::kDensity,
       memo
     );
     double density = block.density;
@@ -2613,6 +2735,7 @@ double guard_effective_survival_internal(const GuardEvalInput& input,
         input,
         unl_id,
         u,
+        EvalNeed::kSurvival,
         memo
       );
       prod *= clamp_probability(protector.survival);
@@ -2645,6 +2768,7 @@ double guard_reference_density(const GuardEvalInput& input,
     input,
     reference_id,
     t,
+    EvalNeed::kDensity,
     memo
   );
   double dens_ref = ref.density;
@@ -2946,20 +3070,16 @@ double evaluate_survival_with_forced(int node_id,
                                      double t,
                                      const uuber::NativeContext& ctx,
                                      const std::string& trial_key = std::string(),
-                                     const TrialParamSet* trial_params = nullptr,
-                                     EvalCache* eval_cache_override = nullptr) {
+                                     const TrialParamSet* trial_params = nullptr) {
   static const std::unordered_set<int> empty_forced_complete;
-  EvalCache local_cache;
-  EvalCache& cache = eval_cache_override ? *eval_cache_override : local_cache;
   NodeEvalState state(ctx,
-                      cache,
                       t,
                       component,
                       empty_forced_complete,
                       forced_survive,
                       trial_params,
                       trial_key);
-  NodeEvalResult res = eval_node_recursive(node_id, state);
+  NodeEvalResult res = eval_node_recursive(node_id, state, EvalNeed::kSurvival);
   return clamp_probability(res.survival);
 }
 
@@ -2969,8 +3089,7 @@ double compute_guard_free_cluster_value(const std::vector<int>& cluster_indices,
                                         double t,
                                         const std::string& component,
                                         const std::string& trial_key = std::string(),
-                                        const TrialParamSet* trial_params = nullptr,
-                                        EvalCache* eval_cache_override = nullptr) {
+                                        const TrialParamSet* trial_params = nullptr) {
   std::unordered_set<int> empty_forced;
   double prod = 1.0;
   for (int idx : cluster_indices) {
@@ -2980,8 +3099,7 @@ double compute_guard_free_cluster_value(const std::vector<int>& cluster_indices,
                                                 t,
                                                 ctx,
                                                 trial_key,
-                                                trial_params,
-                                                eval_cache_override);
+                                                trial_params);
     if (!std::isfinite(surv) || surv <= 0.0) return 0.0;
     prod *= surv;
     if (!std::isfinite(prod) || prod <= 0.0) return 0.0;
@@ -2996,7 +3114,6 @@ double compute_guard_cluster_value(const std::vector<int>& cluster_indices,
                                    const std::string& component,
                                    const std::string& trial_key = std::string(),
                                    const TrialParamSet* trial_params = nullptr,
-                                   EvalCache* eval_cache_override = nullptr,
                                    const std::vector<int>* guard_order = nullptr,
                                    std::unordered_set<int>* forced_survive_scratch = nullptr) {
   const std::vector<int>& order = guard_order ? *guard_order : cluster_indices;
@@ -3012,8 +3129,7 @@ double compute_guard_cluster_value(const std::vector<int>& cluster_indices,
                                                 t,
                                                 ctx,
                                                 trial_key,
-                                                trial_params,
-                                                eval_cache_override);
+                                                trial_params);
     if (!std::isfinite(surv) || surv <= 0.0) return 0.0;
     prod *= surv;
     if (!std::isfinite(prod) || prod <= 0.0) return 0.0;
@@ -3029,8 +3145,7 @@ double competitor_survival_internal(const uuber::NativeContext& ctx,
                                     double t,
                                     const std::string& component_label,
                                     const std::string& trial_type_key = std::string(),
-                                    const TrialParamSet* trial_params = nullptr,
-                                    EvalCache* eval_cache_override = nullptr) {
+                                    const TrialParamSet* trial_params = nullptr) {
   if (competitor_ids.empty()) return 1.0;
   const CompetitorClusterCacheEntry& cache = fetch_competitor_cluster_cache(ctx, competitor_ids);
   if (cache.clusters.empty()) return 1.0;
@@ -3048,7 +3163,6 @@ double competitor_survival_internal(const uuber::NativeContext& ctx,
                                     component_label,
                                     trial_type_key,
                                     trial_params,
-                                    eval_cache_override,
                                     (i < cache.guard_orders.size() ? &cache.guard_orders[i] : nullptr),
                                     &forced_survive_scratch)
       : compute_guard_free_cluster_value(cluster,
@@ -3057,8 +3171,7 @@ double competitor_survival_internal(const uuber::NativeContext& ctx,
                                          t,
                                          component_label,
                                          trial_type_key,
-                                         trial_params,
-                                         eval_cache_override);
+                                         trial_params);
     if (!std::isfinite(cluster_val) || cluster_val <= 0.0) {
       return 0.0;
     }
@@ -3080,15 +3193,11 @@ double node_density_with_competitors_internal(
   const std::vector<int>& competitor_ids,
   const TrialParamSet* trial_params,
   const std::string& trial_type_key = std::string(),
-  EvalCache* eval_cache_override = nullptr,
   bool include_na_donors,
   const std::string& outcome_label_context) {
   if (!std::isfinite(t) || t < 0.0) {
     return 0.0;
   }
-  EvalCache local_cache;
-  EvalCache& eval_cache = eval_cache_override ? *eval_cache_override : local_cache;
-  EvalCache* cache_ptr = eval_cache_override ? eval_cache_override : &eval_cache;
   if (competitor_ids.size() >= 2 &&
       forced_complete.empty() &&
       forced_survive.empty()) {
@@ -3100,7 +3209,6 @@ double node_density_with_competitors_internal(
                                       component_label,
                                       trial_params,
                                       trial_type_key,
-                                      cache_ptr,
                                       include_na_donors,
                                       outcome_label_context);
     }
@@ -3117,13 +3225,11 @@ double node_density_with_competitors_internal(
                                       component_label,
                                       trial_params,
                                       trial_type_key,
-                                      cache_ptr,
                                       include_na_donors,
                                       outcome_label_context);
     }
   }
   NodeEvalState state(ctx,
-                      eval_cache,
                       t,
                       component_label,
                       forced_complete,
@@ -3132,7 +3238,7 @@ double node_density_with_competitors_internal(
                       trial_type_key,
                       include_na_donors,
                       outcome_label_context);
-  NodeEvalResult base = eval_node_recursive(node_id, state);
+  NodeEvalResult base = eval_node_recursive(node_id, state, EvalNeed::kDensity);
   double density = base.density;
   if (!std::isfinite(density) || density <= 0.0) {
     return 0.0;
@@ -3143,8 +3249,7 @@ double node_density_with_competitors_internal(
                                                t,
                                                component_label,
                                                state.trial_type_key,
-                                               trial_params,
-                                               cache_ptr);
+                                               trial_params);
     if (!std::isfinite(surv) || surv <= 0.0) {
       return 0.0;
     }
@@ -3162,7 +3267,6 @@ inline double node_density_with_shared_triggers_plan(const uuber::NativeContext&
                                                      const std::vector<int>& competitor_ids,
                                                      const TrialParamSet* trial_params,
                                                      const std::string& trial_type_key,
-                                                     EvalCache* eval_cache_override,
                                                      bool include_na_donors,
                                                      const std::string& outcome_label_context,
                                                      const SharedTriggerPlan* trigger_plan,
@@ -3177,7 +3281,6 @@ inline double node_density_with_shared_triggers_plan(const uuber::NativeContext&
                                                  competitor_ids,
                                                  trial_params,
                                                  trial_type_key,
-                                                 eval_cache_override,
                                                  include_na_donors,
                                                  outcome_label_context);
   }
@@ -3197,7 +3300,6 @@ inline double node_density_with_shared_triggers_plan(const uuber::NativeContext&
                                                  competitor_ids,
                                                  trial_params,
                                                  trial_type_key,
-                                                 eval_cache_override,
                                                  include_na_donors,
                                                  outcome_label_context);
   }
@@ -3228,7 +3330,6 @@ inline double node_density_with_shared_triggers_plan(const uuber::NativeContext&
                                                         competitor_ids,
                                                         &scratch,
                                                         trial_type_key,
-                                                        eval_cache_override,
                                                         include_na_donors,
                                                         outcome_label_context);
       if (std::isfinite(d) && d > 0.0) {
@@ -3302,7 +3403,6 @@ double native_outcome_probability_impl(SEXP ctxSEXP,
       comp_vec,
       params_ptr,
       trial_type_key,
-      nullptr,
       include_na_donors,
       outcome_label_context
     );
@@ -3906,15 +4006,12 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
                                      const std::vector<int>& competitor_ids,
                                      const TrialParamSet* params_ptr,
                                      const std::vector<ComponentCacheEntry>& cache_entries,
-                                     EvalCache* eval_cache_override = nullptr,
                                      const std::string& keep_label = std::string(),
                                      const Rcpp::List& guess_donors = Rcpp::List()) {
   if (!std::isfinite(t) || t < 0.0) {
     return std::numeric_limits<double>::quiet_NaN();
   }
   static const std::unordered_set<int> kEmptyForced;
-  EvalCache local_eval_cache;
-  EvalCache& shared_cache = eval_cache_override ? *eval_cache_override : local_eval_cache;
   double total = 0.0;
   const bool has_keep = !keep_label.empty();
   const std::string keep_norm = has_keep ? normalize_label_string(keep_label) : std::string();
@@ -3942,8 +4039,7 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
             t,
             component_ids[i],
             params_ptr,
-            cache_entry_ptr->trial_type_key,
-            &shared_cache
+            cache_entry_ptr->trial_type_key
           );
           used_guess_shortcut = true;
         }
@@ -3959,7 +4055,6 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
                                                        competitor_ids,
                                                        params_ptr,
                                                        cache_entry_ptr->trial_type_key,
-                                                       &shared_cache,
                                                        false,
                                                        keep_label,
                                                        &trigger_plan,
@@ -3976,7 +4071,6 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
           t,
           component_ids[i],
           cache_entry_ptr->trial_type_key,
-          shared_cache,
           params_ptr,
           false
         );
@@ -4015,7 +4109,6 @@ double native_trial_mixture_driver(SEXP ctxSEXP,
     params_ptr = param_holder.get();
   }
   std::vector<ComponentCacheEntry> cache_entries = build_component_cache_entries(components);
-  EvalCache trial_eval_cache;
   return native_trial_mixture_internal(*ctx,
                                        node_id,
                                        t,
@@ -4025,7 +4118,6 @@ double native_trial_mixture_driver(SEXP ctxSEXP,
                                        comp_ids,
                                        params_ptr,
                                        cache_entries,
-                                       &trial_eval_cache,
                                        std::string(),
                                        guess_donors.isNotNull() ? Rcpp::List(guess_donors.get()) : Rcpp::List());
 }
@@ -4353,7 +4445,6 @@ double cpp_loglik(SEXP ctxSEXP,
         prob = 0.0;
       } else {
         const uuber::OutcomeContextInfo& info = it->second;
-        EvalCache eval_cache;
         bool can_fast = true;
         if (ctx->alias_sources.find(outcome_label) != ctx->alias_sources.end()) {
           can_fast = false;
@@ -4388,7 +4479,6 @@ double cpp_loglik(SEXP ctxSEXP,
                                                                     info.competitor_ids,
                                                                     params_ptr,
                                                                     std::string(),
-                                                                    &eval_cache,
                                                                     false,
                                                                     std::string(),
                                                                     trigger_plan_ptr,
@@ -4408,7 +4498,6 @@ double cpp_loglik(SEXP ctxSEXP,
                                                info.competitor_ids,
                                                params_ptr,
                                                *cache_entries_ptr,
-                                               &eval_cache,
                                                outcome_label,
                                                Rcpp::List());
         }
@@ -4579,6 +4668,8 @@ inline std::vector<double> expand_poly(const std::vector<double>& coeff,
 struct PoolPolyScratch {
   std::vector<std::vector<double>> prefix;
   std::vector<std::vector<double>> suffix;
+  std::vector<double> surv;
+  std::vector<double> fail;
 };
 
 inline void ensure_prefix_shape(std::vector<std::vector<double>>& prefix,
@@ -4615,6 +4706,15 @@ inline PoolPolyScratch& fetch_pool_poly_scratch(std::size_t n,
     ensure_suffix_shape(scratch.suffix, n);
   }
   return scratch;
+}
+
+inline void ensure_prob_buffers(PoolPolyScratch& scratch, std::size_t n) {
+  if (scratch.surv.size() != n) {
+    scratch.surv.resize(n);
+  }
+  if (scratch.fail.size() != n) {
+    scratch.fail.resize(n);
+  }
 }
 
 inline void fill_prefix_buffers(std::vector<std::vector<double>>& prefix,
@@ -5023,17 +5123,17 @@ Rcpp::NumericVector dist_exgauss_rng(int n,
 // ------------------------------------------------------------------
 
 struct PoolDensityWorker : public RcppParallel::Worker {
-  const RcppParallel::RVector<double> density;
+  const double* density;
   const std::vector<std::vector<double>>* prefix;
   const std::vector<std::vector<double>>* suffix;
   const int order;
   double total;
 
-  PoolDensityWorker(const Rcpp::NumericVector& densityVec,
+  PoolDensityWorker(const double* densityPtr,
                     const std::vector<std::vector<double>>& prefixRef,
                     const std::vector<std::vector<double>>& suffixRef,
                     int order_)
-    : density(densityVec),
+    : density(densityPtr),
       prefix(&prefixRef),
       suffix(&suffixRef),
       order(order_),
@@ -5084,25 +5184,31 @@ Rcpp::NumericVector pool_coeffs_cpp(const Rcpp::NumericVector& Svec,
   return out;
 }
 
-double pool_density_fast_cpp(const Rcpp::NumericVector& density,
-                             const Rcpp::NumericVector& survival,
-                             int k) {
-  const std::size_t n = density.size();
-  if (n == 0) return 0.0;
-  if (k < 1) return 0.0;
-  if (k > static_cast<int>(n)) return 0.0;
-
-  std::vector<double> surv(n);
-  std::vector<double> fail(n);
+static inline void fill_surv_fail_buffers(PoolPolyScratch& scratch,
+                                          const double* survival,
+                                          std::size_t n) {
+  ensure_prob_buffers(scratch, n);
+  std::vector<double>& surv = scratch.surv;
+  std::vector<double>& fail = scratch.fail;
   for (std::size_t i = 0; i < n; ++i) {
     double s = clamp_unit(survival[i]);
     surv[i] = s;
     fail[i] = clamp_unit(1.0 - s);
   }
+}
+
+static double pool_density_fast_impl(const double* density,
+                                     const double* survival,
+                                     std::size_t n,
+                                     int k) {
+  if (n == 0) return 0.0;
+  if (k < 1) return 0.0;
+  if (k > static_cast<int>(n)) return 0.0;
 
   PoolPolyScratch& scratch = fetch_pool_poly_scratch(n, true);
-  fill_prefix_buffers(scratch.prefix, surv, fail);
-  fill_suffix_buffers(scratch.suffix, surv, fail);
+  fill_surv_fail_buffers(scratch, survival, n);
+  fill_prefix_buffers(scratch.prefix, scratch.surv, scratch.fail);
+  fill_suffix_buffers(scratch.suffix, scratch.surv, scratch.fail);
 
   PoolDensityWorker worker(density, scratch.prefix, scratch.suffix, k - 1);
 #if defined(RCPP_PARALLEL_USE_TBB) && RCPP_PARALLEL_USE_TBB
@@ -5123,22 +5229,15 @@ double pool_density_fast_cpp(const Rcpp::NumericVector& density,
   return total;
 }
 
-double pool_survival_fast_cpp(const Rcpp::NumericVector& survival,
-                              int k) {
-  const std::size_t n = survival.size();
+static double pool_survival_fast_impl(const double* survival,
+                                      std::size_t n,
+                                      int k) {
   if (n == 0) return 1.0;
   if (k < 1) return 0.0;
 
-  std::vector<double> surv(n);
-  std::vector<double> fail(n);
-  for (std::size_t i = 0; i < n; ++i) {
-    double s = clamp_unit(survival[i]);
-    surv[i] = s;
-    fail[i] = clamp_unit(1.0 - s);
-  }
-
   PoolPolyScratch& scratch = fetch_pool_poly_scratch(n, false);
-  fill_prefix_buffers(scratch.prefix, surv, fail);
+  fill_surv_fail_buffers(scratch, survival, n);
+  fill_prefix_buffers(scratch.prefix, scratch.surv, scratch.fail);
   const std::vector<double>& poly = scratch.prefix.back();
   int upto = std::min<int>(k, static_cast<int>(poly.size()));
   if (upto <= 0) return 0.0;
@@ -5147,6 +5246,30 @@ double pool_survival_fast_cpp(const Rcpp::NumericVector& survival,
     total += poly[static_cast<std::size_t>(i)];
   }
   return clamp(total, 0.0, 1.0);
+}
+
+double pool_density_fast(const std::vector<double>& density,
+                         const std::vector<double>& survival,
+                         int k) {
+  if (density.size() != survival.size()) return 0.0;
+  return pool_density_fast_impl(density.data(), survival.data(), density.size(), k);
+}
+
+double pool_survival_fast(const std::vector<double>& survival,
+                          int k) {
+  return pool_survival_fast_impl(survival.data(), survival.size(), k);
+}
+
+double pool_density_fast_cpp(const Rcpp::NumericVector& density,
+                             const Rcpp::NumericVector& survival,
+                             int k) {
+  if (density.size() != survival.size()) return 0.0;
+  return pool_density_fast_impl(density.begin(), survival.begin(), density.size(), k);
+}
+
+double pool_survival_fast_cpp(const Rcpp::NumericVector& survival,
+                              int k) {
+  return pool_survival_fast_impl(survival.begin(), survival.size(), k);
 }
 
 Rcpp::List pool_build_templates_cpp(int n,

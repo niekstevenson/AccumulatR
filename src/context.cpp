@@ -11,6 +11,8 @@ using namespace uuber;
 
 void populate_component_metadata(const Rcpp::List& prep, NativeContext& ctx) {
   Rcpp::List components = prep["components"];
+  ctx.component_index.clear();
+  ctx.component_info.clear();
   if (components.isNULL()) return;
   Rcpp::CharacterVector comp_ids = components["ids"];
   Rcpp::List comp_attrs = components["attrs"];
@@ -31,6 +33,12 @@ void populate_component_metadata(const Rcpp::List& prep, NativeContext& ctx) {
           if (meta.guess.target.empty()) {
             meta.guess.target = "__GUESS__";
           }
+          if (!meta.guess.target.empty() && meta.guess.target != "__GUESS__") {
+            auto it = ctx.outcome_index.find(meta.guess.target);
+            if (it != ctx.outcome_index.end()) {
+              meta.guess.target_outcome_idx = it->second;
+            }
+          }
           if (guess_list.containsElementNamed("weights")) {
             Rcpp::NumericVector weights(guess_list["weights"]);
             Rcpp::CharacterVector weight_names = weights.names();
@@ -39,28 +47,55 @@ void populate_component_metadata(const Rcpp::List& prep, NativeContext& ctx) {
                 if (weight_names[j] == NA_STRING) continue;
                 std::string source_label = Rcpp::as<std::string>(weight_names[j]);
                 double keep_prob = weights[j];
-                meta.guess.keep_weights[source_label] = keep_prob;
+                if (source_label == "<NA>" || source_label == "NA") {
+                  meta.guess.keep_weight_na = keep_prob;
+                  meta.guess.has_keep_weight_na = true;
+                  continue;
+                }
+                auto it = ctx.outcome_index.find(source_label);
+                if (it == ctx.outcome_index.end()) continue;
+                meta.guess.keep_weights.emplace_back(it->second, keep_prob);
               }
             }
           }
-          meta.guess.valid = !meta.guess.keep_weights.empty();
+          meta.guess.valid = !meta.guess.keep_weights.empty() || meta.guess.has_keep_weight_na;
         }
       }
     }
-    ctx.component_info[comp_label] = meta;
+    int idx = static_cast<int>(ctx.component_info.size());
+    ctx.component_index[comp_label] = idx;
+    ctx.component_info.push_back(std::move(meta));
   }
 }
 
 void populate_outcome_metadata(const Rcpp::List& prep, NativeContext& ctx) {
   Rcpp::List outcomes = prep["outcomes"];
+  ctx.outcome_index.clear();
+  ctx.outcome_labels.clear();
+  ctx.outcome_info.clear();
+  auto ensure_outcome_idx = [&](const std::string& label) -> int {
+    auto it = ctx.outcome_index.find(label);
+    if (it != ctx.outcome_index.end()) return it->second;
+    int idx = static_cast<int>(ctx.outcome_info.size());
+    ctx.outcome_index[label] = idx;
+    ctx.outcome_labels.push_back(label);
+    ctx.outcome_info.push_back(OutcomeContextInfo());
+    return idx;
+  };
   if (!outcomes.isNULL()) {
     Rcpp::CharacterVector outcome_names = outcomes.names();
+    for (R_xlen_t i = 0; i < outcomes.size(); ++i) {
+      if (outcome_names[i] == NA_STRING) continue;
+      std::string outcome_label = Rcpp::as<std::string>(outcome_names[i]);
+      ensure_outcome_idx(outcome_label);
+    }
     for (R_xlen_t i = 0; i < outcomes.size(); ++i) {
       if (outcome_names[i] == NA_STRING) continue;
       Rcpp::RObject def_obj = outcomes[i];
       if (def_obj.isNULL()) continue;
       std::string outcome_label = Rcpp::as<std::string>(outcome_names[i]);
-      OutcomeContextInfo info;
+      int idx = ensure_outcome_idx(outcome_label);
+      OutcomeContextInfo& info = ctx.outcome_info[static_cast<std::size_t>(idx)];
       info.node_id = -1;
       Rcpp::List def(def_obj);
       if (def.containsElementNamed("expr")) {
@@ -81,11 +116,11 @@ void populate_outcome_metadata(const Rcpp::List& prep, NativeContext& ctx) {
             if (map_cv.size() > 0) {
               Rcpp::String map_val = map_cv[0];
               if (map_val == NA_STRING) {
-                ctx.alias_sources["__NA__"].push_back(outcome_label);
                 info.maps_to_na = true;
               } else {
                 std::string target = Rcpp::as<std::string>(Rcpp::CharacterVector::create(map_val)[0]);
-                ctx.alias_sources[target].push_back(outcome_label);
+                int target_idx = ensure_outcome_idx(target);
+                ctx.outcome_info[static_cast<std::size_t>(target_idx)].alias_sources.push_back(idx);
               }
             }
           }
@@ -110,18 +145,18 @@ void populate_outcome_metadata(const Rcpp::List& prep, NativeContext& ctx) {
             if (labels.size() == weights.size() && labels.size() > 0) {
               for (R_xlen_t j = 0; j < labels.size(); ++j) {
                 if (labels[j] == NA_STRING) continue;
+                std::string target = Rcpp::as<std::string>(labels[j]);
+                int target_idx = ensure_outcome_idx(target);
                 OutcomeGuessDonor donor;
-                donor.label = outcome_label;
+                donor.outcome_idx = idx;
                 donor.weight = weights[j];
                 donor.rt_policy = rt_policy;
-                std::string target = Rcpp::as<std::string>(labels[j]);
-                ctx.guess_target_map[target].push_back(std::move(donor));
+                ctx.outcome_info[static_cast<std::size_t>(target_idx)].guess_donors.push_back(std::move(donor));
               }
             }
           }
         }
       }
-      ctx.outcome_info[outcome_label] = info;
     }
   }
 
@@ -133,6 +168,7 @@ void populate_outcome_metadata(const Rcpp::List& prep, NativeContext& ctx) {
       Rcpp::RObject comp_obj = competitors[i];
       if (comp_obj.isNULL()) continue;
       std::string outcome_label = Rcpp::as<std::string>(comp_names[i]);
+      int idx = ensure_outcome_idx(outcome_label);
       Rcpp::List comp_list(comp_obj);
       std::vector<int> comp_ids;
       comp_ids.reserve(comp_list.size());
@@ -143,13 +179,42 @@ void populate_outcome_metadata(const Rcpp::List& prep, NativeContext& ctx) {
         if (lik_id.isNULL()) continue;
         comp_ids.push_back(Rcpp::as<int>(lik_id));
       }
-      auto it = ctx.outcome_info.find(outcome_label);
-      if (it == ctx.outcome_info.end()) {
-        OutcomeContextInfo info;
-        info.competitor_ids = comp_ids;
-        ctx.outcome_info[outcome_label] = info;
-      } else {
-        it->second.competitor_ids = comp_ids;
+      ctx.outcome_info[static_cast<std::size_t>(idx)].competitor_ids = std::move(comp_ids);
+    }
+  }
+}
+
+void assign_component_indices(NativeContext& ctx) {
+  for (auto& acc : ctx.accumulators) {
+    acc.component_indices.clear();
+    acc.component_indices.reserve(acc.components.size());
+    for (const auto& comp : acc.components) {
+      auto it = ctx.component_index.find(comp);
+      if (it != ctx.component_index.end()) {
+        acc.component_indices.push_back(it->second);
+      }
+    }
+  }
+}
+
+void assign_label_outcome_indices(NativeContext& ctx) {
+  for (auto& node : ctx.nodes) {
+    if (node.source.empty()) continue;
+    auto it = ctx.outcome_index.find(node.source);
+    if (it != ctx.outcome_index.end()) {
+      node.source_ref.outcome_idx = it->second;
+    }
+  }
+  for (auto& pool : ctx.pools) {
+    if (pool.members.empty() || pool.member_refs.empty()) continue;
+    std::size_t n = pool.members.size();
+    if (pool.member_refs.size() != n) {
+      pool.member_refs.resize(n);
+    }
+    for (std::size_t i = 0; i < n; ++i) {
+      auto it = ctx.outcome_index.find(pool.members[i]);
+      if (it != ctx.outcome_index.end()) {
+        pool.member_refs[i].outcome_idx = it->second;
       }
     }
   }
@@ -217,9 +282,11 @@ namespace uuber {
 Rcpp::XPtr<NativeContext> build_native_context(Rcpp::List prep) {
   NativePrepProto proto = build_prep_proto(prep);
   std::unique_ptr<NativeContext> ctx = build_context_from_proto(proto);
-  populate_component_metadata(prep, *ctx);
   populate_outcome_metadata(prep, *ctx);
+  populate_component_metadata(prep, *ctx);
   ctx->components = build_component_map(prep, *ctx);
+  assign_component_indices(*ctx);
+  assign_label_outcome_indices(*ctx);
   ctx->na_cache_limit = resolve_na_cache_limit();
   return Rcpp::XPtr<NativeContext>(ctx.release(), true);
 }

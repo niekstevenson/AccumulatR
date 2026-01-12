@@ -195,6 +195,12 @@ NativePrepProto build_prep_proto(const Rcpp::List& prep) {
 std::unique_ptr<NativeContext> build_context_from_proto(const NativePrepProto& proto) {
   auto ctx = std::make_unique<NativeContext>();
 
+  for (const auto& label : proto.label_index) {
+    if (!label.label.empty()) {
+      ctx->label_to_id[label.label] = label.id;
+    }
+  }
+
   ctx->accumulators.reserve(proto.accumulators.size());
   for (const auto& acc_proto : proto.accumulators) {
     NativeAccumulator acc;
@@ -237,12 +243,39 @@ std::unique_ptr<NativeContext> build_context_from_proto(const NativePrepProto& p
     }
   }
 
+  auto resolve_label_ref = [&](const std::string& label) -> LabelRef {
+    LabelRef ref;
+    if (label.empty()) return ref;
+    auto it_label = ctx->label_to_id.find(label);
+    if (it_label != ctx->label_to_id.end()) {
+      ref.label_id = it_label->second;
+    }
+    auto it_acc = ctx->accumulator_index.find(label);
+    if (it_acc != ctx->accumulator_index.end()) {
+      ref.acc_idx = it_acc->second;
+    }
+    auto it_pool = ctx->pool_index.find(label);
+    if (it_pool != ctx->pool_index.end()) {
+      ref.pool_idx = it_pool->second;
+    }
+    return ref;
+  };
+
+  for (auto& pool : ctx->pools) {
+    pool.member_refs.clear();
+    pool.member_refs.reserve(pool.members.size());
+    for (const auto& member : pool.members) {
+      pool.member_refs.push_back(resolve_label_ref(member));
+    }
+  }
+
   ctx->nodes.reserve(proto.nodes.size());
   for (const auto& node_proto : proto.nodes) {
     NativeNode node;
     node.id = node_proto.id;
     node.kind = node_proto.kind;
     node.source = node_proto.source;
+    node.source_ref = resolve_label_ref(node.source);
     node.args = node_proto.args;
     node.source_ids = node_proto.source_ids;
     node.reference_id = node_proto.reference_id;
@@ -253,12 +286,6 @@ std::unique_ptr<NativeContext> build_context_from_proto(const NativePrepProto& p
     node.scenario_sensitive = node_proto.scenario_sensitive;
     ctx->node_index[node.id] = static_cast<int>(ctx->nodes.size());
     ctx->nodes.push_back(std::move(node));
-  }
-
-  for (const auto& label : proto.label_index) {
-    if (!label.label.empty()) {
-      ctx->label_to_id[label.label] = label.id;
-    }
   }
 
   return ctx;

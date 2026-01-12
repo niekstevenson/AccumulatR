@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <deque>
 #include <deque>
+#include <utility>
 
 #include "accumulator.h"
 
@@ -19,14 +20,23 @@ struct NativeAccumulator {
   double onset{};
   double q{};
   std::vector<std::string> components;
+  std::vector<int> component_indices;
   std::string shared_trigger_id;
   AccDistParams dist_cfg;
+};
+
+struct LabelRef {
+  int label_id{-1};
+  int acc_idx{-1};
+  int pool_idx{-1};
+  int outcome_idx{-1};
 };
 
 struct NativePool {
   std::string id;
   int k{};
   std::vector<std::string> members;
+  std::vector<LabelRef> member_refs;
 };
 
 struct PoolTemplateEntry {
@@ -47,6 +57,7 @@ struct NativeNode {
   int id{};
   std::string kind;
   std::string source;
+  LabelRef source_ref;
   std::vector<int> args;
   std::vector<int> source_ids;
   int reference_id{-1};
@@ -59,7 +70,10 @@ struct NativeNode {
 
 struct ComponentGuessPolicy {
   std::string target;
-  std::unordered_map<std::string, double> keep_weights;
+  int target_outcome_idx{-1};
+  std::vector<std::pair<int, double>> keep_weights;
+  double keep_weight_na{1.0};
+  bool has_keep_weight_na{false};
   bool valid{false};
 };
 
@@ -68,7 +82,7 @@ struct ComponentContextInfo {
 };
 
 struct OutcomeGuessDonor {
-  std::string label;
+  int outcome_idx{-1};
   double weight{0.0};
   std::string rt_policy;
 };
@@ -77,7 +91,7 @@ struct OutcomeContextInfo {
   int node_id{-1};
   std::vector<int> competitor_ids;
   std::vector<OutcomeGuessDonor> guess_donors;
-  std::vector<std::string> map_sources;
+  std::vector<int> alias_sources;
   bool maps_to_na{false};
 };
 
@@ -100,10 +114,11 @@ struct NativeContext {
   mutable std::unordered_map<std::string, std::deque<std::string>> na_cache_order;
   int na_cache_limit{128};
   std::unordered_map<std::string, std::vector<int>> shared_trigger_map;
-  std::unordered_map<std::string, ComponentContextInfo> component_info;
-  std::unordered_map<std::string, OutcomeContextInfo> outcome_info;
-  std::unordered_map<std::string, std::vector<std::string>> alias_sources;
-  std::unordered_map<std::string, std::vector<OutcomeGuessDonor>> guess_target_map;
+  std::unordered_map<std::string, int> component_index;
+  std::vector<ComponentContextInfo> component_info;
+  std::unordered_map<std::string, int> outcome_index;
+  std::vector<std::string> outcome_labels;
+  std::vector<OutcomeContextInfo> outcome_info;
   ComponentMap components;
 };
 

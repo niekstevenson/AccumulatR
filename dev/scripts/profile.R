@@ -1,7 +1,7 @@
 rm(list = ls())
 library(EMC2)
-load("~/Documents/2025/EMC2/profile.RData")
-load("~/Documents/2025/EMC2/stop_change_3B.RData")
+load("~/Documents/2026/StopData/profile.RData")
+load("~/Documents/2026/StopData/stop_change_3B.RData")
 emc <- EMC2:::AccumulatR_check_context(emc)
 dadm <- emc[[1]]$data[[1]]
 constants <- attr(dadm, "constants")

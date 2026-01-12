@@ -2749,7 +2749,12 @@ double guard_effective_survival_internal(const GuardEvalInput& input,
     if (!std::isfinite(val) || val <= 0.0) return 0.0;
     return val;
   };
-  double integral = uuber::integrate_fixed_gauss15(integrand, 0.0, t);
+  double integral = uuber::integrate_boost_fn(integrand,
+                                              0.0,
+                                              t,
+                                              settings.rel_tol,
+                                              settings.abs_tol,
+                                              settings.max_depth);
   double surv = 1.0 - integral;
   return clamp_probability(surv);
 }
@@ -2801,7 +2806,12 @@ double guard_cdf_internal(const GuardEvalInput& input,
   auto integrand = [&](double u) -> double {
     return guard_density_internal(input, u, settings, &memo);
   };
-  double val = uuber::integrate_fixed_gauss15(integrand, 0.0, t);
+  double val = uuber::integrate_boost_fn(integrand,
+                                         0.0,
+                                         t,
+                                         settings.rel_tol,
+                                         settings.abs_tol,
+                                         settings.max_depth);
   if (!std::isfinite(val) || val < 0.0) val = 0.0;
   return clamp_probability(val);
 }

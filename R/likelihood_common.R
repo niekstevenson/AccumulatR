@@ -2,6 +2,12 @@
 
 .integrate_rel_tol <- function() getOption("uuber.integrate.rel.tol", 1e-5)
 .integrate_abs_tol <- function() getOption("uuber.integrate.abs.tol", 1e-6)
+.integrate_response_rel_tol <- function() {
+  getOption("uuber.integrate.rel.tol.response", .integrate_rel_tol() * 5)
+}
+.integrate_response_abs_tol <- function() {
+  getOption("uuber.integrate.abs.tol.response", .integrate_abs_tol() * 5)
+}
 
 .eval_state_create <- function(parent = emptyenv()) {
   new.env(parent = parent, hash = FALSE)

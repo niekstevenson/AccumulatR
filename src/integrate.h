@@ -122,8 +122,6 @@ inline double integrate_boost_fn(Fn&& integrand,
   if (max_depth <= 0) max_depth = 10;
   if (rel_tol <= 0.0) rel_tol = 1e-5;
   if (abs_tol <= 0.0) abs_tol = 1e-6;
-  double tol = std::max(abs_tol, rel_tol);
-  if (!(tol > 0.0)) tol = 1e-6;
   double a = lower;
   double b = upper;
   double sign = 1.0;
@@ -137,16 +135,28 @@ inline double integrate_boost_fn(Fn&& integrand,
     if (!std::isfinite(val)) return 0.0;
     return val;
   };
+  double tol = std::max(abs_tol, rel_tol);
+  if (!(tol > 0.0)) tol = 1e-6;
   double integral = 0.0;
   #if UUBER_HAVE_BOOST_GK
   try {
-    integral = boost::math::quadrature::gauss_kronrod<double, 61>::integrate(
-      wrapper,
-      a,
-      b,
-      tol,
-      max_depth
-    );
+    if (tol >= 1e-4) {
+      integral = boost::math::quadrature::gauss_kronrod<double, 21>::integrate(
+        wrapper,
+        a,
+        b,
+        tol,
+        max_depth
+      );
+    } else {
+      integral = boost::math::quadrature::gauss_kronrod<double, 61>::integrate(
+        wrapper,
+        a,
+        b,
+        tol,
+        max_depth
+      );
+    }
   } catch (...) {
     integral = 0.0;
   }

@@ -187,6 +187,7 @@ uuber::PoolTemplateCacheEntry build_pool_template_cache(int n,
 void sort_unique(std::vector<int>& vec);
 std::vector<int> integer_vector_to_std(const Rcpp::IntegerVector& src,
                                        bool subtract_one = false);
+inline bool is_invalid_positive(double value);
 
 constexpr double kDefaultRelTol = 1e-5;
 constexpr double kDefaultAbsTol = 1e-6;
@@ -249,14 +250,107 @@ inline double lognormal_cdf_fast(double x, double meanlog, double sdlog) {
   return val;
 }
 
+inline double normal_cdf_fast(double z) {
+  const double arg = -z * 0.7071067811865475;
+  double val = 0.5 * std::erfc(arg);
+  return clamp(val, 0.0, 1.0);
+}
+
+inline double gamma_pdf_fast(double x, double shape, double rate) {
+  if (is_invalid_positive(shape) || is_invalid_positive(rate)) {
+    return NA_REAL;
+  }
+  if (Rcpp::NumericVector::is_na(x)) {
+    return NA_REAL;
+  }
+  if (!std::isfinite(x)) {
+    return 0.0;
+  }
+  const double scale = 1.0 / rate;
+  double val = R::dgamma(x, shape, scale, /*give_log =*/0);
+  if (!std::isfinite(val) || val < 0.0) {
+    return 0.0;
+  }
+  return val;
+}
+
+inline double gamma_cdf_fast(double x, double shape, double rate) {
+  if (is_invalid_positive(shape) || is_invalid_positive(rate)) {
+    return NA_REAL;
+  }
+  if (Rcpp::NumericVector::is_na(x)) {
+    return NA_REAL;
+  }
+  if (!std::isfinite(x)) {
+    return x < 0.0 ? 0.0 : 1.0;
+  }
+  const double scale = 1.0 / rate;
+  double val = R::pgamma(x, shape, scale, /*lower_tail =*/1, /*log_p =*/0);
+  if (!std::isfinite(val)) {
+    return NA_REAL;
+  }
+  return clamp(val, 0.0, 1.0);
+}
+
+inline double exgauss_pdf_fast(double x, double mu, double sigma, double tau) {
+  if (!std::isfinite(sigma) || sigma <= 0.0 || !std::isfinite(tau) || tau <= 0.0) {
+    return NA_REAL;
+  }
+  if (Rcpp::NumericVector::is_na(x)) {
+    return NA_REAL;
+  }
+  if (!std::isfinite(x)) {
+    return 0.0;
+  }
+  const double inv_tau = 1.0 / tau;
+  const double sigma_sq = sigma * sigma;
+  const double tau_sq = tau * tau;
+  const double half_sigma_sq_over_tau_sq = sigma_sq / (2.0 * tau_sq);
+  const double sigma_over_tau = sigma * inv_tau;
+  const double z = (x - mu) / sigma;
+  const double exponent = half_sigma_sq_over_tau_sq - (x - mu) * inv_tau;
+  const double gaussian_tail = normal_cdf_fast(z - sigma_over_tau);
+  double val = inv_tau * std::exp(exponent) * gaussian_tail;
+  if (!std::isfinite(val) || val < 0.0) {
+    return 0.0;
+  }
+  return val;
+}
+
+inline double exgauss_cdf_fast(double x, double mu, double sigma, double tau) {
+  if (!std::isfinite(sigma) || sigma <= 0.0 || !std::isfinite(tau) || tau <= 0.0) {
+    return NA_REAL;
+  }
+  if (Rcpp::NumericVector::is_na(x)) {
+    return NA_REAL;
+  }
+  if (!std::isfinite(x)) {
+    return x < 0.0 ? 0.0 : 1.0;
+  }
+  const double inv_tau = 1.0 / tau;
+  const double sigma_sq = sigma * sigma;
+  const double tau_sq = tau * tau;
+  const double half_sigma_sq_over_tau_sq = sigma_sq / (2.0 * tau_sq);
+  const double sigma_over_tau = sigma * inv_tau;
+  const double z = (x - mu) / sigma;
+  const double base_cdf = normal_cdf_fast(z);
+  const double tail = normal_cdf_fast(z - sigma_over_tau);
+  const double exp_term = std::exp(half_sigma_sq_over_tau_sq - (x - mu) * inv_tau);
+  double val = base_cdf - exp_term * tail;
+  if (!std::isfinite(val)) {
+    return NA_REAL;
+  }
+  return clamp(val, 0.0, 1.0);
+}
+
 inline double eval_pdf_single(const AccDistParams& cfg, double x) {
   switch (cfg.code) {
   case uuber::ACC_DIST_LOGNORMAL:
     return lognormal_pdf_fast(x, cfg.p1, cfg.p2);
   case uuber::ACC_DIST_GAMMA:
-    return dist_gamma_pdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2)[0];
+    return gamma_pdf_fast(x, cfg.p1, cfg.p2);
   case uuber::ACC_DIST_EXGAUSS:
-    return dist_exgauss_pdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2, cfg.p3)[0];
+    return exgauss_pdf_fast(x, cfg.p1, cfg.p2, cfg.p3);
   default:
     return 0.0;
   }
@@ -267,9 +361,9 @@ inline double eval_cdf_single(const AccDistParams& cfg, double x) {
   case uuber::ACC_DIST_LOGNORMAL:
     return lognormal_cdf_fast(x, cfg.p1, cfg.p2);
   case uuber::ACC_DIST_GAMMA:
-    return dist_gamma_cdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2)[0];
+    return gamma_cdf_fast(x, cfg.p1, cfg.p2);
   case uuber::ACC_DIST_EXGAUSS:
-    return dist_exgauss_cdf(Rcpp::NumericVector::create(x), cfg.p1, cfg.p2, cfg.p3)[0];
+    return exgauss_cdf_fast(x, cfg.p1, cfg.p2, cfg.p3);
   default:
     return 0.0;
   }
@@ -5209,18 +5303,8 @@ Rcpp::NumericVector dist_gamma_pdf(const Rcpp::NumericVector& x,
     std::fill(out.begin(), out.end(), NA_REAL);
     return out;
   }
-  const double scale = 1.0 / rate;
   for (R_xlen_t i = 0; i < n; ++i) {
-    double xi = x[i];
-    if (Rcpp::NumericVector::is_na(xi)) {
-      out[i] = NA_REAL;
-      continue;
-    }
-    if (!R_FINITE(xi)) {
-      out[i] = 0.0;
-      continue;
-    }
-    out[i] = R::dgamma(xi, shape, scale, /*give_log =*/0);
+    out[i] = gamma_pdf_fast(x[i], shape, rate);
   }
   return out;
 }
@@ -5236,19 +5320,8 @@ Rcpp::NumericVector dist_gamma_cdf(const Rcpp::NumericVector& x,
     std::fill(out.begin(), out.end(), NA_REAL);
     return out;
   }
-  const double scale = 1.0 / rate;
   for (R_xlen_t i = 0; i < n; ++i) {
-    double xi = x[i];
-    if (Rcpp::NumericVector::is_na(xi)) {
-      out[i] = NA_REAL;
-      continue;
-    }
-    if (!R_FINITE(xi)) {
-      out[i] = xi < 0.0 ? 0.0 : 1.0;
-      continue;
-    }
-    out[i] = R::pgamma(xi, shape, scale, /*lower_tail =*/1, /*log_p =*/0);
-    out[i] = clamp(out[i], 0.0, 1.0);
+    out[i] = gamma_cdf_fast(x[i], shape, rate);
   }
   return out;
 }
@@ -5281,31 +5354,8 @@ Rcpp::NumericVector dist_exgauss_pdf(const Rcpp::NumericVector& x,
     std::fill(out.begin(), out.end(), NA_REAL);
     return out;
   }
-
-  const double inv_tau = 1.0 / tau;
-  const double sigma_sq = sigma * sigma;
-  const double tau_sq = tau * tau;
-  const double half_sigma_sq_over_tau_sq = sigma_sq / (2.0 * tau_sq);
-  const double sigma_over_tau = sigma * inv_tau;
-
   for (R_xlen_t i = 0; i < n; ++i) {
-    double xi = x[i];
-    if (Rcpp::NumericVector::is_na(xi)) {
-      out[i] = NA_REAL;
-      continue;
-    }
-    if (!R_FINITE(xi)) {
-      out[i] = 0.0;
-      continue;
-    }
-    const double z = (xi - mu) / sigma;
-    const double exponent = half_sigma_sq_over_tau_sq - (xi - mu) * inv_tau;
-    const double gaussian_tail = R::pnorm(z - sigma_over_tau, 0.0, 1.0, 1, 0);
-    double val = inv_tau * std::exp(exponent) * gaussian_tail;
-    if (!std::isfinite(val) || val < 0.0) {
-      val = 0.0;
-    }
-    out[i] = val;
+    out[i] = exgauss_pdf_fast(x[i], mu, sigma, tau);
   }
   return out;
 }
@@ -5322,34 +5372,8 @@ Rcpp::NumericVector dist_exgauss_cdf(const Rcpp::NumericVector& x,
     std::fill(out.begin(), out.end(), NA_REAL);
     return out;
   }
-
-  const double inv_tau = 1.0 / tau;
-  const double sigma_sq = sigma * sigma;
-  const double tau_sq = tau * tau;
-  const double half_sigma_sq_over_tau_sq = sigma_sq / (2.0 * tau_sq);
-  const double sigma_over_tau = sigma * inv_tau;
-
   for (R_xlen_t i = 0; i < n; ++i) {
-    double xi = x[i];
-    if (Rcpp::NumericVector::is_na(xi)) {
-      out[i] = NA_REAL;
-      continue;
-    }
-    if (!R_FINITE(xi)) {
-      out[i] = xi < 0.0 ? 0.0 : 1.0;
-      continue;
-    }
-    const double z = (xi - mu) / sigma;
-    const double base_cdf = R::pnorm(z, 0.0, 1.0, 1, 0);
-    const double tail = R::pnorm(z - sigma_over_tau, 0.0, 1.0, 1, 0);
-    const double exp_term = std::exp(half_sigma_sq_over_tau_sq - (xi - mu) * inv_tau);
-    double val = base_cdf - exp_term * tail;
-    if (!std::isfinite(val)) {
-      val = NA_REAL;
-    } else {
-      val = clamp(val, 0.0, 1.0);
-    }
-    out[i] = val;
+    out[i] = exgauss_cdf_fast(x[i], mu, sigma, tau);
   }
   return out;
 }

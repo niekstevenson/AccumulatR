@@ -1,5 +1,5 @@
 rm(list = ls())
-library(EMC2)
+devtools::load_all()
 library(AccumulatR)
 set.seed(123)
 
@@ -22,30 +22,28 @@ data$SSD[data$SS == "GoTask"] <- 0
 
 
 model <- race_spec() |>
-  add_accumulator("go_left", "exgauss") |>
-  add_accumulator("go_right", "exgauss") |>
-  add_accumulator("stop", "exgauss") |>
-  add_accumulator("change", "exgauss") |>
-  add_pool("GO_LEFT", "go_left") |>
-  add_pool("GO_RIGHT", "go_right") |>
-  add_pool("STOP", "stop") |>
-  add_pool("CHANGE", "change") |>
-  add_outcome("A", inhibit("GO_LEFT", by = "STOP"),
+  add_accumulator("go_left", "lognormal") |>
+  add_accumulator("go_right", "lognormal") |>
+  add_accumulator("stop", "lognormal") |>
+  add_accumulator("change", "lognormal") |>
+  add_outcome("A", inhibit("go_left", by = "stop"),
               options = list(component = c("go_only", "go_stop"))) |>
-  add_outcome("B", inhibit("GO_RIGHT", by = "STOP"),
+  add_outcome("B", inhibit("go_right", by = "stop"),
               options = list(component = c("go_only", "go_stop"))) |>
-  add_outcome("X", all_of("CHANGE", "STOP"),
+  add_outcome("X", all_of("change", "stop"),
               options = list(component = "go_stop")) |>
-  add_group("component:go_only", members = c("go_left", "go_right"),
-            attrs = list(component = "go_only")) |>
-  add_group("component:go_stop",
-            members = c("go_left", "go_right", "stop", "change"),
-            attrs = list(component = "go_stop")) |>
-  set_metadata(mixture = list(mode = "fixed", # component weights are only relevant for data simulation
-                              components = list(component("go_only", weight = 0.75),
-                                                component("go_stop", weight = 0.25))
-  )) |>
+  add_component("go_only", members = c("go_left", "go_right"), weight = .75) |>
+  add_component("go_stop", members = c("go_left", "go_right", "stop", "change"), weight = .25) |>
+  set_mixture_options(mode = "fixed") |>
+  add_trigger(
+    "shared_trigger",
+    members = c("stop", "change"),
+    q = 0.10,
+    param = "stop_q",
+    draw = "shared"
+  ) |>
   finalize_model()
+
 
 to_EMC2 <- EMC2:::AccumulatR_model(model)
 
@@ -60,7 +58,7 @@ data$component[data$SS == "ChangeTask"] <- "go_stop"
 data$component <- factor(data$component)
 
 des <- design(data = data,
-              formula = list(p1 ~ 1, p2 ~ 1, t0 ~ 1, p3 ~ 1),
+              formula = list(p1 ~ 1, p2 ~ 1, t0 ~ 1, q ~ 1),
               functions = list(onset = onset_fun),
               model = to_EMC2)
 
@@ -77,7 +75,7 @@ constants <- attr(dadm, "constants")
 context <- attr(dadm, "AccumulatR_context")
 
 library(mvtnorm)
-proposals <- rmvnorm(n_particles, mean = c(-.5, log(.5), log(.2), log(.2)), sigma = diag(.1, 4))
+proposals <- rmvnorm(n_particles, mean = c(-.5, log(.5), log(.2), qnorm(.1)), sigma = diag(.1, 4))
 colnames(proposals) <- names(EMC2::sampled_pars(emc))
 
 system.time(

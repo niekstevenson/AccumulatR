@@ -2890,6 +2890,166 @@ double guard_density_internal(const GuardEvalInput &input, double t,
   return val;
 }
 
+// --- Nested Guard Optimization ---
+
+struct LinearGuardChain {
+  std::vector<int> reference_ids; // [Ref0, Ref1, ...]
+  int leaf_blocker_id{-1};
+  bool valid{false};
+};
+
+// Detects A -> B -> C ... chain.
+// Depth is number of GUARD nodes visited.
+// A chain of depth 2 means: Guard0(A, Guard1(B, C)).
+LinearGuardChain detect_linear_guard_chain(const uuber::NativeContext &ctx,
+                                           const uuber::NativeNode &start_node,
+                                           int max_depth_check) {
+  LinearGuardChain chain;
+  const uuber::NativeNode *curr = &start_node;
+  int depth = 0;
+
+  while (curr->kind == "guard" && depth < max_depth_check) {
+    if (curr->reference_id < 0 || curr->blocker_id < 0) {
+      return {}; // Invalid/Partial
+    }
+    chain.reference_ids.push_back(curr->reference_id);
+    int next_id = curr->blocker_id;
+    const uuber::NativeNode &next_node = fetch_node(ctx, next_id);
+
+    // Move to next
+    if (next_node.kind == "guard") {
+      curr = &next_node;
+      depth++;
+    } else {
+      // Leaf found
+      chain.leaf_blocker_id = next_id;
+      chain.valid = true;
+      return chain;
+    }
+  }
+  // If we exited because depth limit hit or kind mismatch (shouldn't happen
+  // with leaf check) If curr is still guard, we exceeded depth or stopped? We
+  // return invalid if we didn't find a non-guard leaf.
+  return {};
+}
+
+// Helpers to evaluate components without creating full result structs
+double quick_eval_density(const GuardEvalInput &input, int node_id, double t) {
+  if (t < 0)
+    return 0.0;
+  NodeEvalResult res = eval_node_with_forced(
+      input.ctx, node_id, t, input.component, input.component_idx,
+      input.forced_complete, input.forced_survive, EvalNeed::kDensity,
+      input.trial_params, input.trial_type_key);
+  return res.density > 0 ? res.density : 0.0;
+}
+
+double quick_eval_cdf(const GuardEvalInput &input, int node_id, double t) {
+  if (t <= 0)
+    return 0.0;
+  NodeEvalResult res = eval_node_with_forced(
+      input.ctx, node_id, t, input.component, input.component_idx,
+      input.forced_complete, input.forced_survive, EvalNeed::kCDF,
+      input.trial_params, input.trial_type_key);
+  return res.cdf; // clamp done in eval? usually yes
+}
+
+double quick_eval_surv(const GuardEvalInput &input, int node_id, double t) {
+  if (t <= 0)
+    return 1.0;
+  NodeEvalResult res = eval_node_with_forced(
+      input.ctx, node_id, t, input.component, input.component_idx,
+      input.forced_complete, input.forced_survive, EvalNeed::kSurvival,
+      input.trial_params, input.trial_type_key);
+  return res.survival;
+}
+
+// Depth 2 Optimization: Guard0(A, Guard1(B, C))
+// P(t) = F_A(t) - Integral_0^t [ f_B(v) * S_C(v) * (F_A(t) - F_A(v)) ] dv
+double eval_optimized_depth2(const GuardEvalInput &input, int id_A, int id_B,
+                             int id_C, double t,
+                             const IntegrationSettings &settings) {
+  double FA_t = quick_eval_cdf(input, id_A, t);
+  if (FA_t <= 0.0)
+    return 0.0;
+
+  auto integrand = [&](double v) -> double {
+    double fB = quick_eval_density(input, id_B, v);
+    if (fB <= 0)
+      return 0.0;
+    double SC = quick_eval_surv(input, id_C, v);
+    if (SC <= 0)
+      return 0.0;
+    double FA_v = quick_eval_cdf(input, id_A, v);
+    double term = FA_t - FA_v;
+    if (term <= 0)
+      return 0.0;
+    return fB * SC * term;
+  };
+
+  double subtrahend =
+      uuber::integrate_boost_fn(integrand, 0.0, t, settings.rel_tol,
+                                settings.abs_tol, settings.max_depth);
+  if (!std::isfinite(subtrahend))
+    subtrahend = 0.0;
+
+  return clamp_probability(FA_t - subtrahend);
+}
+
+// Depth 3 Optimization: Guard0(A, Guard1(B, Guard2(C, D)))
+// P(t) = F_A(t) - T1 + T2
+// T1 = Integral_0^t f_B(v) * (F_A(t) - F_A(v)) dv
+// T2 = Integral_0^t f_C(w) * S_D(w) * K(w, t) dw
+// K(w, t) = Integral_w^t f_B(v) * (F_A(t) - F_A(v)) dv
+double eval_optimized_depth3(const GuardEvalInput &input, int id_A, int id_B,
+                             int id_C, int id_D, double t,
+                             const IntegrationSettings &settings) {
+  double FA_t = quick_eval_cdf(input, id_A, t);
+  if (FA_t <= 0.0)
+    return 0.0;
+
+  // T1: Effect of B if C were absent
+  // T1 = Int_0^t f_B(v) * (FA(t) - FA(v))
+  auto integrand_T1 = [&](double v) -> double {
+    double fB = quick_eval_density(input, id_B, v);
+    if (fB <= 0)
+      return 0.0;
+    double FA_v = quick_eval_cdf(input, id_A, v);
+    double term = FA_t - FA_v;
+    return (term > 0) ? fB * term : 0.0;
+  };
+  double T1 = uuber::integrate_boost_fn(integrand_T1, 0.0, t, settings.rel_tol,
+                                        settings.abs_tol, settings.max_depth);
+
+  // T2: Restoration by C (blocked by D)
+  // T2 = Int_0^t f_C(w) * S_D(w) * K(w, t) dw
+  auto integrand_T2 = [&](double w) -> double {
+    double fC = quick_eval_density(input, id_C, w);
+    if (fC <= 0)
+      return 0.0;
+    double SD = quick_eval_surv(input, id_D, w);
+    if (SD <= 0)
+      return 0.0;
+
+    // Inner Integral K(w, t)
+    // Same integrand as T1, but from w to t
+    double K_val =
+        uuber::integrate_boost_fn(integrand_T1, w, t, settings.rel_tol,
+                                  settings.abs_tol, settings.max_depth);
+    return fC * SD * K_val;
+  };
+
+  double T2 = uuber::integrate_boost_fn(integrand_T2, 0.0, t, settings.rel_tol,
+                                        settings.abs_tol, settings.max_depth);
+
+  if (!std::isfinite(T1))
+    T1 = 0.0;
+  if (!std::isfinite(T2))
+    T2 = 0.0;
+
+  return clamp_probability(FA_t - T1 + T2);
+}
+
 double guard_cdf_internal(const GuardEvalInput &input, double t,
                           const IntegrationSettings &settings) {
   if (!std::isfinite(t)) {
@@ -2898,6 +3058,46 @@ double guard_cdf_internal(const GuardEvalInput &input, double t,
   if (t <= 0.0) {
     return 0.0;
   }
+
+  // Attempt optimization for Depth 2 and 3
+  // Check depth up to 4 to warn
+  LinearGuardChain chain = detect_linear_guard_chain(input.ctx, input.node, 10);
+
+  // Chain.reference_ids has [RefA, RefB, RefC...]
+  // Chain.leaf_blocker_id is Leaf
+  // Depth is size of reference_ids.
+  // Depth 2: size 2. (A, B). Leaf C.
+  // Depth 3: size 3. (A, B, C). Leaf D.
+
+  size_t depth = chain.reference_ids.size();
+
+  if (chain.valid) {
+    if (depth == 2) {
+      // A blocked by B blocked by C
+      int id_A = chain.reference_ids[0];
+      int id_B = chain.reference_ids[1];
+      int id_C = chain.leaf_blocker_id;
+      return eval_optimized_depth2(input, id_A, id_B, id_C, t, settings);
+    } else if (depth == 3) {
+      // A->B->C->D
+      int id_A = chain.reference_ids[0];
+      int id_B = chain.reference_ids[1];
+      int id_C = chain.reference_ids[2];
+      int id_D = chain.leaf_blocker_id;
+      return eval_optimized_depth3(input, id_A, id_B, id_C, id_D, t, settings);
+    } else if (depth > 3) {
+      // Fallback with warning
+      // TODO: Implement ODE solver for O(N) scaling at depth > 3.
+      // Current naive recursion is O(N^k).
+      Rcpp::warning("Nested inhibition depth %d detected. Optimization "
+                    "available only up to depth 3. Using slow recursive "
+                    "integration. Implement ODE solver for O(N) scalability.",
+                    depth);
+    }
+  }
+
+  // Fallback to naive recursive integration
+
   auto integrand = [&](double u) -> double {
     return guard_density_internal(input, u, settings);
   };

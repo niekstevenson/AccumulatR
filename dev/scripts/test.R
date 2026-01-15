@@ -2,7 +2,7 @@ rm(list = ls())
 
 devtools::load_all()
 # Bring in example definitions and profiling helpers
-source("dev/examples/stim_selective_versions.R")
+source("dev/examples/new_API.R")
 source("dev/R_extra/profile_plot_new.R")
 source("dev/R_extra/processing_tree.R")
 
@@ -19,7 +19,7 @@ with_native_only <- function(expr) {
 }
 
 # 1. Which examples to run
-example_ids <- names(new_api_examples)[3]
+example_ids <- names(new_api_examples)[12]
 
 
 # Optional overrides via env vars
@@ -46,7 +46,7 @@ for (example_id in example_ids) {
   sim <- simulate(model_spec, params_df, seed = seed, keep_component = TRUE)
   data_df <- data.frame(
     trial = sim$trial,
-    R = sim$R,
+    R = factor(sim$R),
     rt = sim$rt,
     stringsAsFactors = FALSE
   )

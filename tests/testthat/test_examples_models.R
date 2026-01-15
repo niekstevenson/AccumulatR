@@ -15,10 +15,8 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     race_spec() |>
       add_accumulator("go1", "lognormal") |>
       add_accumulator("go2", "lognormal") |>
-      add_pool("R1", "go1") |>
-      add_pool("R2", "go2") |>
-      add_outcome("R1", "R1") |>
-      add_outcome("R2", "R2") |>
+      add_outcome("R1", "go1") |>
+      add_outcome("R2", "go2") |>
       finalize_model()
   }
   params_example_1_simple <- c(
@@ -33,20 +31,11 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       add_accumulator("go1", "lognormal") |>
       add_accumulator("stop", "exgauss", onset = 0.20) |>
       add_accumulator("go2", "lognormal", onset = 0.20) |>
-      add_pool("GO1", "go1") |>
-      add_pool("STOP", "stop") |>
-      add_pool("GO2", "go2") |>
-      add_outcome("R1", inhibit("GO1", by = "STOP"),
-                  options = list(component = c("go_only", "go_stop"))) |>
-      add_outcome("R2", all_of("GO2", "STOP"), options = list(component = "go_stop")) |>
-      add_group("component:go_only", members = c("go1"),
-                attrs = list(component = "go_only")) |>
-      add_group("component:go_stop", members = c("go1", "stop", "go2"),
-                attrs = list(component = "go_stop")) |>
-      set_metadata(mixture = list(
-        components = list(component("go_only", weight = 0.5),
-                          component("go_stop", weight = 0.5))
-      )) |>
+      add_outcome("R1", inhibit("go1", by = "stop")) |>
+      add_outcome("R2", all_of("go2", "stop")) |>
+      add_component("go_only", members = c("go1"), attrs = list(component = "go_only"), weight = 0.5) |>
+      add_component("go_stop", members = c("go1", "stop", "go2"), attrs = list(component = "go_stop"), weight = 0.5) |>
+      set_mixture_options(mode = "fixed") |>
       finalize_model()
   }
   params_example_2_stop_mixture <- c(
@@ -64,12 +53,9 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       add_accumulator("go_left", "lognormal") |>
       add_accumulator("go_right", "lognormal") |>
       add_accumulator("stop", "lognormal", onset = 0.15) |>
-      add_pool("L", "go_left") |>
-      add_pool("R", "go_right") |>
-      add_pool("STOP", "stop") |>
-      add_outcome("Left", "L") |>
-      add_outcome("Right", "R") |>
-      add_outcome("STOP", "STOP", options = list(map_outcome_to = NA_character_)) |>
+      add_outcome("Left", "go_left") |>
+      add_outcome("Right", "go_right") |>
+      add_outcome("STOP", "stop", options = list(map_outcome_to = NA_character_)) |>
       finalize_model()
   }
   params_example_3_stop_na <- c(
@@ -86,12 +72,9 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       add_accumulator("go_left", "lognormal") |>
       add_accumulator("go_right", "lognormal") |>
       add_accumulator("timeout", "lognormal", onset = 0.05) |>
-      add_pool("L", "go_left") |>
-      add_pool("R", "go_right") |>
-      add_pool("TO", "timeout") |>
-      add_outcome("Left", "L") |>
-      add_outcome("Right", "R") |>
-      add_outcome("TIMEOUT", "TO", options = list(
+      add_outcome("Left", "go_left") |>
+      add_outcome("Right", "go_right") |>
+      add_outcome("TIMEOUT", "timeout", options = list(
         guess = list(labels = c("Left", "Right"), weights = c(0.2, 0.8), rt_policy = "keep")
       )) |>
       finalize_model()
@@ -110,11 +93,8 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       add_accumulator("acc_taskA", "lognormal") |>
       add_accumulator("acc_taskB", "lognormal") |>
       add_accumulator("acc_gateC", "lognormal") |>
-      add_pool("TaskA", "acc_taskA") |>
-      add_pool("TaskB", "acc_taskB") |>
-      add_pool("GateC", "acc_gateC") |>
-      add_outcome("Outcome_via_A", all_of("TaskA", "GateC")) |>
-      add_outcome("Outcome_via_B", all_of("TaskB", "GateC")) |>
+      add_outcome("Outcome_via_A", all_of("acc_taskA", "acc_gateC")) |>
+      add_outcome("Outcome_via_B", all_of("acc_taskB", "acc_gateC")) |>
       finalize_model()
   }
   params_example_6_dual_path <- c(
@@ -132,21 +112,11 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       add_accumulator("target_slow", "lognormal") |>
       add_accumulator("competitor", "lognormal") |>
       add_pool("TARGET", c("target_fast", "target_slow")) |>
-      add_pool("COMP", "competitor") |>
       add_outcome("R1", "TARGET") |>
-      add_outcome("R2", "COMP") |>
-      add_group("component:fast", members = c("target_fast", "competitor"),
-                attrs = list(component = "fast")) |>
-      add_group("component:slow", members = c("target_slow", "competitor"),
-                attrs = list(component = "slow")) |>
-      set_metadata(mixture = list(
-        mode = "sample",
-        reference = "slow",
-        components = list(
-          component("fast", attrs = list(weight_param = "p_fast")),
-          component("slow")
-        )
-      )) |>
+      add_outcome("R2", "competitor") |>
+      add_component("fast", members = c("target_fast", "competitor"), weight_param = "p_fast") |>
+      add_component("slow", members = c("target_slow", "competitor")) |>
+      set_mixture_options(mode = "sample", reference = "slow") |>
       finalize_model()
   }
   params_example_7_mixture <- c(
@@ -164,11 +134,8 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       add_accumulator("R1_acc", "lognormal") |>
       add_accumulator("R2_acc", "lognormal") |>
       add_accumulator("X_acc", "lognormal") |>
-      add_pool("R1", "R1_acc") |>
-      add_pool("R2", "R2_acc") |>
-      add_pool("X", "X_acc") |>
-      add_outcome("R1", inhibit("R1", by = "X")) |>
-      add_outcome("R2", "R2") |>
+      add_outcome("R1", inhibit("R1_acc", by = "X_acc")) |>
+      add_outcome("R2", "R2_acc") |>
       finalize_model()
   }
   params_example_10_exclusion <- c(
@@ -186,12 +153,8 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       add_accumulator("go_slow", "lognormal") |>
       add_accumulator("gate_shared", "lognormal") |>
       add_accumulator("stop_control", "lognormal") |>
-      add_pool("FAST", "go_fast") |>
-      add_pool("SLOW", "go_slow") |>
-      add_pool("GATE", "gate_shared") |>
-      add_pool("STOP", "stop_control") |>
-      add_outcome("Fast", inhibit(all_of("FAST", "GATE"), by = "STOP")) |>
-      add_outcome("Slow", all_of("SLOW", "GATE")) |>
+      add_outcome("Fast", inhibit(all_of("go_fast", "gate_shared"), by = "stop_control")) |>
+      add_outcome("Slow", all_of("go_slow", "gate_shared")) |>
       finalize_model()
   }
   params_example_16_guard_tie_simple <- c(
@@ -209,25 +172,19 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     race_spec() |>
       add_accumulator("go1", "lognormal") |>
       add_accumulator("go2", "lognormal") |>
-      add_pool("R1", "go1") |>
-      add_pool("R2", "go2") |>
-      add_outcome("R1", "R1") |>
-      add_outcome("R2", "R2") |>
-    add_group(
-      "shared_trigger",
-      members = c("go1", "go2"),
-      attrs = trigger(id = "go_trigger",
-                      q = 0.10,
-                      param = "go_trigger_q",
-                      draw = "shared")
-    ) |>
-    finalize_model()
+      add_outcome("R1", "go1") |>
+      add_outcome("R2", "go2") |>
+      add_trigger("shared_trigger",
+        members = c("go1", "go2"),
+        q = 0.10, param = "go_trigger_q", draw = "shared"
+      ) |>
+      finalize_model()
   }
   params_example_21_simple_q <- c(
     go1.meanlog = log(0.30),
-    go1.sdlog   = 0.18,
+    go1.sdlog = 0.18,
     go2.meanlog = log(0.32),
-    go2.sdlog   = 0.18,
+    go2.sdlog = 0.18,
     go_trigger_q = 0.10
   )
 
@@ -235,12 +192,12 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     race_spec() |>
       add_accumulator("go_left", "lognormal") |>
       add_accumulator("go_right", "lognormal") |>
-      add_pool("L", "go_left") |>
-      add_pool("R", "go_right") |>
-      add_outcome("Left", "L") |>
-      add_outcome("Right", "R") |>
-      add_group("par:q_shared", members = c("go_left", "go_right"),
-                attrs = trigger(q = 0.10, param = "q_shared", draw = "independent")) |>
+      add_outcome("Left", "go_left") |>
+      add_outcome("Right", "go_right") |>
+      add_trigger("q_shared",
+        members = c("go_left", "go_right"),
+        q = 0.10, param = "q_shared", draw = "independent"
+      ) |>
       finalize_model()
   }
   params_example_22_shared_q <- c(

@@ -4,14 +4,12 @@
 \alias{inhibit}
 \title{Define an inhibitory relationship}
 \usage{
-inhibit(reference, by, unless = NULL)
+inhibit(reference, by)
 }
 \arguments{
 \item{reference}{Outcome expression or label to inhibit}
 
 \item{by}{Blocking expression or label}
-
-\item{unless}{Optional list of unless expressions}
 }
 \value{
 Guard expression list

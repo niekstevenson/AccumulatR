@@ -32,7 +32,8 @@ Build a parameter data frame for likelihood/simulation
 \examples{
 spec <- race_spec()
 spec <- add_accumulator(spec, "A", "lognormal",
-  params = list(meanlog = 0, sdlog = 0.1))
+  params = list(meanlog = 0, sdlog = 0.1)
+)
 spec <- add_outcome(spec, "A_win", "A")
 vals <- c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0)
 build_param_matrix(spec, vals, n_trials = 2)

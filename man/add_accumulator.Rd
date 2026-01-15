@@ -41,5 +41,6 @@ Add an accumulator definition
 \examples{
 spec <- race_spec()
 spec <- add_accumulator(spec, "A", "lognormal",
-  params = list(meanlog = 0, sdlog = 0.1))
+  params = list(meanlog = 0, sdlog = 0.1)
+)
 }

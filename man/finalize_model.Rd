@@ -18,7 +18,8 @@ Finalize a model for simulation/likelihood
 \examples{
 spec <- race_spec()
 spec <- add_accumulator(spec, "A", "lognormal",
-  params = list(meanlog = 0, sdlog = 0.1))
+  params = list(meanlog = 0, sdlog = 0.1)
+)
 spec <- add_outcome(spec, "A_win", "A")
 finalize_model(spec)
 }

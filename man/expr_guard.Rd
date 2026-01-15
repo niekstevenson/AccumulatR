@@ -4,14 +4,12 @@
 \alias{expr_guard}
 \title{Build an expression guard node}
 \usage{
-expr_guard(blocker, reference, unless = list())
+expr_guard(blocker, reference)
 }
 \arguments{
 \item{blocker}{Blocker expression or id}
 
 \item{reference}{Reference expression or id}
-
-\item{unless}{Optional list of unless expressions}
 }
 \value{
 Guard expression list

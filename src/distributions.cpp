@@ -3,23 +3,22 @@
 
 #include <Rcpp.h>
 #include <RcppParallel.h>
-#include <cmath>
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
-#include <string>
-#include <vector>
-#include <limits>
-#include <unordered_set>
-#include <unordered_map>
-#include <functional>
-#include <memory>
-#include <queue>
 #include <deque>
-#include <sstream>
+#include <functional>
+#include <iomanip>
+#include <limits>
+#include <memory>
 #include <numeric>
-#include <iomanip>
-#include <iomanip>
+#include <queue>
+#include <sstream>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 #if __has_include(<boost/math/quadrature/gauss_kronrod.hpp>)
 #define UUBER_HAVE_BOOST_GK 1
 #include <boost/math/quadrature/gauss_kronrod.hpp>
@@ -27,37 +26,29 @@
 #define UUBER_HAVE_BOOST_GK 0
 #endif
 
-#include "context.h"
 #include "accumulator.h"
+#include "context.h"
+#include "integrate.h"
 #include "prep_builder.h"
 #include "proto.h"
-#include "integrate.h"
 
 using uuber::AccDistParams;
-using uuber::resolve_acc_params_entries;
 using uuber::ComponentMap;
 using uuber::LabelRef;
+using uuber::resolve_acc_params_entries;
 
-Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector& x,
-                                       double meanlog,
-                                       double sdlog);
-Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector& x,
-                                       double meanlog,
-                                       double sdlog);
-Rcpp::NumericVector dist_gamma_pdf(const Rcpp::NumericVector& x,
-                                   double shape,
+Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector &x,
+                                       double meanlog, double sdlog);
+Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector &x,
+                                       double meanlog, double sdlog);
+Rcpp::NumericVector dist_gamma_pdf(const Rcpp::NumericVector &x, double shape,
                                    double rate);
-Rcpp::NumericVector dist_gamma_cdf(const Rcpp::NumericVector& x,
-                                   double shape,
+Rcpp::NumericVector dist_gamma_cdf(const Rcpp::NumericVector &x, double shape,
                                    double rate);
-Rcpp::NumericVector dist_exgauss_pdf(const Rcpp::NumericVector& x,
-                                     double mu,
-                                     double sigma,
-                                     double tau);
-Rcpp::NumericVector dist_exgauss_cdf(const Rcpp::NumericVector& x,
-                                     double mu,
-                                     double sigma,
-                                     double tau);
+Rcpp::NumericVector dist_exgauss_pdf(const Rcpp::NumericVector &x, double mu,
+                                     double sigma, double tau);
+Rcpp::NumericVector dist_exgauss_cdf(const Rcpp::NumericVector &x, double mu,
+                                     double sigma, double tau);
 
 // [[Rcpp::export]]
 SEXP native_context_build(SEXP prepSEXP) {
@@ -80,55 +71,56 @@ Rcpp::RawVector native_prep_serialize_cpp(SEXP prepSEXP) {
 // [[Rcpp::export]]
 SEXP native_context_from_proto_cpp(Rcpp::RawVector blob) {
   uuber::NativePrepProto proto = uuber::deserialize_native_prep(
-    reinterpret_cast<const std::uint8_t*>(blob.begin()),
-    static_cast<std::size_t>(blob.size())
-  );
-  std::unique_ptr<uuber::NativeContext> ctx = uuber::build_context_from_proto(proto);
+      reinterpret_cast<const std::uint8_t *>(blob.begin()),
+      static_cast<std::size_t>(blob.size()));
+  std::unique_ptr<uuber::NativeContext> ctx =
+      uuber::build_context_from_proto(proto);
   return Rcpp::XPtr<uuber::NativeContext>(ctx.release(), true);
 }
 
 // [[Rcpp::export]]
 bool native_ctx_invalid(SEXP ptr) {
-  if (TYPEOF(ptr) != EXTPTRSXP) return true;
+  if (TYPEOF(ptr) != EXTPTRSXP)
+    return true;
   return R_ExternalPtrAddr(ptr) == nullptr;
 }
 
 // [[Rcpp::export]]
-double boost_integrate_cpp(Rcpp::Function integrand,
-                           double lower,
-                           double upper,
-                           double rel_tol,
-                           double abs_tol,
-                           int max_depth) {
-  return uuber::integrate_boost(integrand, lower, upper, rel_tol, abs_tol, max_depth);
+double boost_integrate_cpp(Rcpp::Function integrand, double lower, double upper,
+                           double rel_tol, double abs_tol, int max_depth) {
+  return uuber::integrate_boost(integrand, lower, upper, rel_tol, abs_tol,
+                                max_depth);
 }
 
-double acc_density_cpp(double, double, double, const std::string&, const Rcpp::List&);
-double acc_survival_cpp(double, double, double, const std::string&, const Rcpp::List&);
-double acc_cdf_success_cpp(double, double, double, const std::string&, const Rcpp::List&);
-double pool_density_fast_cpp(const Rcpp::NumericVector&, const Rcpp::NumericVector&, int);
-double pool_survival_fast_cpp(const Rcpp::NumericVector&, int);
-double pool_density_fast(const std::vector<double>& density,
-                         const std::vector<double>& survival,
-                         int k);
-double pool_survival_fast(const std::vector<double>& survival,
-                          int k);
-Rcpp::List pool_density_combine_native(const Rcpp::NumericVector& dens_vec,
-                                       const Rcpp::NumericVector& cdf_vec,
-                                       const Rcpp::NumericVector& surv_vec,
-                                       const Rcpp::NumericVector& cdf_success_vec,
-                                       const Rcpp::NumericVector& surv_success_vec,
-                                       const std::vector<int>& shared_index,
-                                       const std::vector<uuber::PoolTemplateEntry>& templates,
-                                       const std::vector<int>& base_forced_complete,
-                                       const std::vector<int>& base_forced_survive);
-std::vector<uuber::ProtoParamEntry> params_from_rcpp(const Rcpp::List& params,
-                                                     const std::string& dist) {
+double acc_density_cpp(double, double, double, const std::string &,
+                       const Rcpp::List &);
+double acc_survival_cpp(double, double, double, const std::string &,
+                        const Rcpp::List &);
+double acc_cdf_success_cpp(double, double, double, const std::string &,
+                           const Rcpp::List &);
+double pool_density_fast_cpp(const Rcpp::NumericVector &,
+                             const Rcpp::NumericVector &, int);
+double pool_survival_fast_cpp(const Rcpp::NumericVector &, int);
+double pool_density_fast(const std::vector<double> &density,
+                         const std::vector<double> &survival, int k);
+double pool_survival_fast(const std::vector<double> &survival, int k);
+Rcpp::List pool_density_combine_native(
+    const Rcpp::NumericVector &dens_vec, const Rcpp::NumericVector &cdf_vec,
+    const Rcpp::NumericVector &surv_vec,
+    const Rcpp::NumericVector &cdf_success_vec,
+    const Rcpp::NumericVector &surv_success_vec,
+    const std::vector<int> &shared_index,
+    const std::vector<uuber::PoolTemplateEntry> &templates,
+    const std::vector<int> &base_forced_complete,
+    const std::vector<int> &base_forced_survive);
+std::vector<uuber::ProtoParamEntry> params_from_rcpp(const Rcpp::List &params,
+                                                     const std::string &dist) {
   Rcpp::CharacterVector names = params.names();
   std::vector<uuber::ProtoParamEntry> out;
   out.reserve(params.size());
   for (R_xlen_t i = 0; i < params.size(); ++i) {
-    if (params[i] == R_NilValue) continue;
+    if (params[i] == R_NilValue)
+      continue;
     uuber::ProtoParamEntry entry;
     entry.name = Rcpp::as<std::string>(names[i]);
     SEXP val = params[i];
@@ -156,36 +148,34 @@ std::vector<uuber::ProtoParamEntry> params_from_rcpp(const Rcpp::List& params,
   return out;
 }
 Rcpp::List pool_build_templates_cpp(int n,
-                                    const Rcpp::IntegerVector& member_ids,
-                                    int pool_idx,
-                                    int k);
-Rcpp::List native_component_plan_impl(const Rcpp::List& structure,
-                                      const Rcpp::DataFrame* trial_rows,
+                                    const Rcpp::IntegerVector &member_ids,
+                                    int pool_idx, int k);
+Rcpp::List native_component_plan_impl(const Rcpp::List &structure,
+                                      const Rcpp::DataFrame *trial_rows,
                                       double trial_id,
-                                      const std::string* forced_component);
-Rcpp::List pool_density_combine_cpp(const Rcpp::NumericVector& dens_vec,
-                                    const Rcpp::NumericVector& cdf_vec,
-                                    const Rcpp::NumericVector& surv_vec,
-                                    const Rcpp::NumericVector& cdf_success_vec,
-                                    const Rcpp::NumericVector& surv_success_vec,
-                                    const Rcpp::IntegerVector& shared_index,
-                                    const Rcpp::List& templates,
-                                    const Rcpp::IntegerVector& forced_complete,
-                                    const Rcpp::IntegerVector& forced_survive);
+                                      const std::string *forced_component);
+Rcpp::List pool_density_combine_cpp(const Rcpp::NumericVector &dens_vec,
+                                    const Rcpp::NumericVector &cdf_vec,
+                                    const Rcpp::NumericVector &surv_vec,
+                                    const Rcpp::NumericVector &cdf_success_vec,
+                                    const Rcpp::NumericVector &surv_success_vec,
+                                    const Rcpp::IntegerVector &shared_index,
+                                    const Rcpp::List &templates,
+                                    const Rcpp::IntegerVector &forced_complete,
+                                    const Rcpp::IntegerVector &forced_survive);
 
 namespace {
 
-std::vector<std::vector<int>> generate_combinations(const std::vector<int>& elements,
-                                                    int choose);
-std::vector<int> survivors_from_combo(const std::vector<int>& others,
-                                      const std::vector<int>& combo);
-uuber::PoolTemplateCacheEntry build_pool_template_cache(int n,
-                                                       const std::vector<int>& member_ids,
-                                                       int pool_idx,
-                                                       int k);
+std::vector<std::vector<int>>
+generate_combinations(const std::vector<int> &elements, int choose);
+std::vector<int> survivors_from_combo(const std::vector<int> &others,
+                                      const std::vector<int> &combo);
+uuber::PoolTemplateCacheEntry
+build_pool_template_cache(int n, const std::vector<int> &member_ids,
+                          int pool_idx, int k);
 
-void sort_unique(std::vector<int>& vec);
-std::vector<int> integer_vector_to_std(const Rcpp::IntegerVector& src,
+void sort_unique(std::vector<int> &vec);
+std::vector<int> integer_vector_to_std(const Rcpp::IntegerVector &src,
                                        bool subtract_one = false);
 inline bool is_invalid_positive(double value);
 
@@ -193,37 +183,46 @@ constexpr double kDefaultRelTol = 1e-5;
 constexpr double kDefaultAbsTol = 1e-6;
 constexpr int kDefaultMaxDepth = 12;
 constexpr int kOutcomeIdxNA = -2;
-template <typename T>
-inline T clamp(T val, T lo, T hi) {
+template <typename T> inline T clamp(T val, T lo, T hi) {
   if (!std::isfinite(val)) {
     return val;
   }
-  if (val < lo) return lo;
-  if (val > hi) return hi;
+  if (val < lo)
+    return lo;
+  if (val > hi)
+    return hi;
   return val;
 }
 
 inline double clamp_unit(double val) {
-  if (!std::isfinite(val)) return 0.0;
-  if (val < 0.0) return 0.0;
-  if (val > 1.0) return 1.0;
+  if (!std::isfinite(val))
+    return 0.0;
+  if (val < 0.0)
+    return 0.0;
+  if (val > 1.0)
+    return 1.0;
   return val;
 }
 
 inline double clamp_probability(double value) {
-  if (!std::isfinite(value)) return 0.0;
-  if (value < 0.0) return 0.0;
-  if (value > 1.0) return 1.0;
+  if (!std::isfinite(value))
+    return 0.0;
+  if (value < 0.0)
+    return 0.0;
+  if (value > 1.0)
+    return 1.0;
   return value;
 }
 
 inline double safe_density(double value) {
-  if (!std::isfinite(value) || value <= 0.0) return 0.0;
+  if (!std::isfinite(value) || value <= 0.0)
+    return 0.0;
   return value;
 }
 
 inline double lognormal_pdf_fast(double x, double meanlog, double sdlog) {
-  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(meanlog) || !std::isfinite(sdlog) || sdlog <= 0.0) {
+  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(meanlog) ||
+      !std::isfinite(sdlog) || sdlog <= 0.0) {
     return 0.0;
   }
   const double inv_sigma = 1.0 / sdlog;
@@ -235,7 +234,8 @@ inline double lognormal_pdf_fast(double x, double meanlog, double sdlog) {
 }
 
 inline double lognormal_cdf_fast(double x, double meanlog, double sdlog) {
-  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(meanlog) || !std::isfinite(sdlog) || sdlog <= 0.0) {
+  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(meanlog) ||
+      !std::isfinite(sdlog) || sdlog <= 0.0) {
     return 0.0;
   }
   const double inv_sigma = 1.0 / sdlog;
@@ -244,9 +244,12 @@ inline double lognormal_cdf_fast(double x, double meanlog, double sdlog) {
   // 0.5 * erfc(-z / sqrt(2))
   const double arg = -z * 0.7071067811865475;
   double val = 0.5 * std::erfc(arg);
-  if (!std::isfinite(val)) return 0.0;
-  if (val < 0.0) return 0.0;
-  if (val > 1.0) return 1.0;
+  if (!std::isfinite(val))
+    return 0.0;
+  if (val < 0.0)
+    return 0.0;
+  if (val > 1.0)
+    return 1.0;
   return val;
 }
 
@@ -293,7 +296,8 @@ inline double gamma_cdf_fast(double x, double shape, double rate) {
 }
 
 inline double exgauss_pdf_fast(double x, double mu, double sigma, double tau) {
-  if (!std::isfinite(sigma) || sigma <= 0.0 || !std::isfinite(tau) || tau <= 0.0) {
+  if (!std::isfinite(sigma) || sigma <= 0.0 || !std::isfinite(tau) ||
+      tau <= 0.0) {
     return NA_REAL;
   }
   if (Rcpp::NumericVector::is_na(x)) {
@@ -318,7 +322,8 @@ inline double exgauss_pdf_fast(double x, double mu, double sigma, double tau) {
 }
 
 inline double exgauss_cdf_fast(double x, double mu, double sigma, double tau) {
-  if (!std::isfinite(sigma) || sigma <= 0.0 || !std::isfinite(tau) || tau <= 0.0) {
+  if (!std::isfinite(sigma) || sigma <= 0.0 || !std::isfinite(tau) ||
+      tau <= 0.0) {
     return NA_REAL;
   }
   if (Rcpp::NumericVector::is_na(x)) {
@@ -335,7 +340,8 @@ inline double exgauss_cdf_fast(double x, double mu, double sigma, double tau) {
   const double z = (x - mu) / sigma;
   const double base_cdf = normal_cdf_fast(z);
   const double tail = normal_cdf_fast(z - sigma_over_tau);
-  const double exp_term = std::exp(half_sigma_sq_over_tau_sq - (x - mu) * inv_tau);
+  const double exp_term =
+      std::exp(half_sigma_sq_over_tau_sq - (x - mu) * inv_tau);
   double val = base_cdf - exp_term * tail;
   if (!std::isfinite(val)) {
     return NA_REAL;
@@ -343,7 +349,7 @@ inline double exgauss_cdf_fast(double x, double mu, double sigma, double tau) {
   return clamp(val, 0.0, 1.0);
 }
 
-inline double eval_pdf_single(const AccDistParams& cfg, double x) {
+inline double eval_pdf_single(const AccDistParams &cfg, double x) {
   switch (cfg.code) {
   case uuber::ACC_DIST_LOGNORMAL:
     return lognormal_pdf_fast(x, cfg.p1, cfg.p2);
@@ -356,7 +362,7 @@ inline double eval_pdf_single(const AccDistParams& cfg, double x) {
   }
 }
 
-inline double eval_cdf_single(const AccDistParams& cfg, double x) {
+inline double eval_cdf_single(const AccDistParams &cfg, double x) {
   switch (cfg.code) {
   case uuber::ACC_DIST_LOGNORMAL:
     return lognormal_cdf_fast(x, cfg.p1, cfg.p2);
@@ -369,20 +375,20 @@ inline double eval_cdf_single(const AccDistParams& cfg, double x) {
   }
 }
 
-inline double total_onset_with_t0(double onset,
-                                  const AccDistParams& cfg) {
+inline double total_onset_with_t0(double onset, const AccDistParams &cfg) {
   return onset + cfg.t0;
 }
 
-inline double acc_density_from_cfg(double t,
-                                   double onset,
-                                   double q,
-                                   const AccDistParams& cfg) {
+inline double acc_density_from_cfg(double t, double onset, double q,
+                                   const AccDistParams &cfg) {
   double effective_onset = total_onset_with_t0(onset, cfg);
-  if (!std::isfinite(t) || t < 0.0) return 0.0;
-  if (t < effective_onset) return 0.0;
+  if (!std::isfinite(t) || t < 0.0)
+    return 0.0;
+  if (t < effective_onset)
+    return 0.0;
   double success_prob = 1.0 - q;
-  if (success_prob <= 0.0) return 0.0;
+  if (success_prob <= 0.0)
+    return 0.0;
   double dens = eval_pdf_single(cfg, t - effective_onset);
   if (Rcpp::NumericVector::is_na(dens) || !std::isfinite(dens)) {
     return NA_REAL;
@@ -390,14 +396,15 @@ inline double acc_density_from_cfg(double t,
   return success_prob * dens;
 }
 
-inline double acc_survival_from_cfg(double t,
-                                    double onset,
-                                    double q,
-                                    const AccDistParams& cfg) {
+inline double acc_survival_from_cfg(double t, double onset, double q,
+                                    const AccDistParams &cfg) {
   double effective_onset = total_onset_with_t0(onset, cfg);
-  if (!std::isfinite(t)) return 0.0;
-  if (t < 0.0) return 1.0;
-  if (t < effective_onset) return 1.0;
+  if (!std::isfinite(t))
+    return 0.0;
+  if (t < 0.0)
+    return 1.0;
+  if (t < effective_onset)
+    return 1.0;
   double cdf = eval_cdf_single(cfg, t - effective_onset);
   if (Rcpp::NumericVector::is_na(cdf) || !std::isfinite(cdf)) {
     return NA_REAL;
@@ -408,13 +415,15 @@ inline double acc_survival_from_cfg(double t,
   return clamp(result, 0.0, 1.0);
 }
 
-inline double acc_cdf_success_from_cfg(double t,
-                                       double onset,
-                                       const AccDistParams& cfg) {
+inline double acc_cdf_success_from_cfg(double t, double onset,
+                                       const AccDistParams &cfg) {
   double effective_onset = total_onset_with_t0(onset, cfg);
-  if (!std::isfinite(t)) return 1.0;
-  if (t < 0.0) return 0.0;
-  if (t < effective_onset) return 0.0;
+  if (!std::isfinite(t))
+    return 1.0;
+  if (t < 0.0)
+    return 0.0;
+  if (t < effective_onset)
+    return 0.0;
   double cdf = eval_cdf_single(cfg, t - effective_onset);
   if (Rcpp::NumericVector::is_na(cdf) || !std::isfinite(cdf)) {
     return NA_REAL;
@@ -429,20 +438,18 @@ enum class EvalNeed : std::uint8_t {
 };
 
 constexpr EvalNeed kEvalAll =
-  static_cast<EvalNeed>(static_cast<std::uint8_t>(EvalNeed::kDensity) |
-                        static_cast<std::uint8_t>(EvalNeed::kSurvival) |
-                        static_cast<std::uint8_t>(EvalNeed::kCDF));
+    static_cast<EvalNeed>(static_cast<std::uint8_t>(EvalNeed::kDensity) |
+                          static_cast<std::uint8_t>(EvalNeed::kSurvival) |
+                          static_cast<std::uint8_t>(EvalNeed::kCDF));
 
 inline EvalNeed operator|(EvalNeed lhs, EvalNeed rhs) {
-  return static_cast<EvalNeed>(
-    static_cast<std::uint8_t>(lhs) | static_cast<std::uint8_t>(rhs)
-  );
+  return static_cast<EvalNeed>(static_cast<std::uint8_t>(lhs) |
+                               static_cast<std::uint8_t>(rhs));
 }
 
 inline EvalNeed operator&(EvalNeed lhs, EvalNeed rhs) {
-  return static_cast<EvalNeed>(
-    static_cast<std::uint8_t>(lhs) & static_cast<std::uint8_t>(rhs)
-  );
+  return static_cast<EvalNeed>(static_cast<std::uint8_t>(lhs) &
+                               static_cast<std::uint8_t>(rhs));
 }
 
 inline bool needs_density(EvalNeed need) {
@@ -463,42 +470,41 @@ struct NodeEvalResult {
   double cdf{std::numeric_limits<double>::quiet_NaN()};
 };
 
-inline NodeEvalResult make_node_result(EvalNeed need,
-                                       double density,
-                                       double survival,
-                                       double cdf) {
+inline NodeEvalResult make_node_result(EvalNeed need, double density,
+                                       double survival, double cdf) {
   NodeEvalResult out;
-  out.density = needs_density(need)
-    ? safe_density(density)
-    : std::numeric_limits<double>::quiet_NaN();
+  out.density = needs_density(need) ? safe_density(density)
+                                    : std::numeric_limits<double>::quiet_NaN();
   out.survival = needs_survival(need)
-    ? clamp_probability(survival)
-    : std::numeric_limits<double>::quiet_NaN();
-  out.cdf = needs_cdf(need)
-    ? clamp_probability(cdf)
-    : std::numeric_limits<double>::quiet_NaN();
+                     ? clamp_probability(survival)
+                     : std::numeric_limits<double>::quiet_NaN();
+  out.cdf = needs_cdf(need) ? clamp_probability(cdf)
+                            : std::numeric_limits<double>::quiet_NaN();
   return out;
 }
 
-inline std::unordered_set<int> make_scope_set(const std::vector<int>& ids) {
+inline std::unordered_set<int> make_scope_set(const std::vector<int> &ids) {
   std::unordered_set<int> scope;
   scope.reserve(ids.size());
   for (int id : ids) {
-    if (id == NA_INTEGER) continue;
+    if (id == NA_INTEGER)
+      continue;
     scope.insert(id);
   }
   return scope;
 }
 
-inline std::vector<int> set_to_sorted_vector(const std::unordered_set<int>& items) {
-  if (items.empty()) return {};
+inline std::vector<int>
+set_to_sorted_vector(const std::unordered_set<int> &items) {
+  if (items.empty())
+    return {};
   std::vector<int> out(items.begin(), items.end());
   sort_unique(out);
   return out;
 }
 
-inline std::vector<int> union_vectors(const std::vector<int>& a,
-                                      const std::vector<int>& b) {
+inline std::vector<int> union_vectors(const std::vector<int> &a,
+                                      const std::vector<int> &b) {
   if (a.empty()) {
     std::vector<int> out = b;
     sort_unique(out);
@@ -510,8 +516,9 @@ inline std::vector<int> union_vectors(const std::vector<int>& a,
   return out;
 }
 
-inline bool vector_contains(const std::vector<int>& values, int target) {
-  if (values.empty()) return false;
+inline bool vector_contains(const std::vector<int> &values, int target) {
+  if (values.empty())
+    return false;
   return std::find(values.begin(), values.end(), target) != values.end();
 }
 
@@ -521,9 +528,9 @@ struct ScenarioRecord {
   std::vector<int> forced_survive;
 };
 
-inline ScenarioRecord make_scenario_record(double weight,
-                                           const std::vector<int>& forced_complete,
-                                           const std::vector<int>& forced_survive) {
+inline ScenarioRecord
+make_scenario_record(double weight, const std::vector<int> &forced_complete,
+                     const std::vector<int> &forced_survive) {
   ScenarioRecord rec;
   rec.weight = weight;
   rec.forced_complete = forced_complete;
@@ -531,14 +538,17 @@ inline ScenarioRecord make_scenario_record(double weight,
   return rec;
 }
 
-std::vector<ScenarioRecord> rcpp_scenarios_to_records(const Rcpp::List& scenarios) {
+std::vector<ScenarioRecord>
+rcpp_scenarios_to_records(const Rcpp::List &scenarios) {
   std::vector<ScenarioRecord> out;
   out.reserve(scenarios.size());
   for (R_xlen_t i = 0; i < scenarios.size(); ++i) {
-    if (scenarios[i] == R_NilValue) continue;
+    if (scenarios[i] == R_NilValue)
+      continue;
     Rcpp::List sc(scenarios[i]);
     double weight = Rcpp::as<double>(sc["weight"]);
-    if (!std::isfinite(weight) || weight <= 0.0) continue;
+    if (!std::isfinite(weight) || weight <= 0.0)
+      continue;
     std::vector<int> fc = integer_vector_to_std(sc["forced_complete"], false);
     std::vector<int> fs = integer_vector_to_std(sc["forced_survive"], false);
     out.push_back(make_scenario_record(weight, fc, fs));
@@ -546,8 +556,9 @@ std::vector<ScenarioRecord> rcpp_scenarios_to_records(const Rcpp::List& scenario
   return out;
 }
 
-std::unordered_set<int> filter_forced_scope(const std::unordered_set<int>& forced,
-                                            const std::vector<int>& scope_ids) {
+std::unordered_set<int>
+filter_forced_scope(const std::unordered_set<int> &forced,
+                    const std::vector<int> &scope_ids) {
   if (forced.empty() || scope_ids.empty()) {
     return std::unordered_set<int>();
   }
@@ -567,48 +578,56 @@ std::unordered_set<int> filter_forced_scope(const std::unordered_set<int>& force
 
 std::vector<int> forced_vec_from_sexp(SEXP vec) {
   std::vector<int> out;
-  if (Rf_isNull(vec)) return out;
+  if (Rf_isNull(vec))
+    return out;
   Rcpp::IntegerVector iv(vec);
   out.reserve(iv.size());
   for (int val : iv) {
-    if (val == NA_INTEGER) continue;
+    if (val == NA_INTEGER)
+      continue;
     out.push_back(val);
   }
   return out;
 }
 
-std::unordered_set<int> make_forced_set(const std::vector<int>& ids) {
+std::unordered_set<int> make_forced_set(const std::vector<int> &ids) {
   return std::unordered_set<int>(ids.begin(), ids.end());
 }
 
 struct TrialParamSet;
 
-inline int label_id(const uuber::NativeContext& ctx, const std::string& label) {
+inline int label_id(const uuber::NativeContext &ctx, const std::string &label) {
   auto it = ctx.label_to_id.find(label);
-  if (it == ctx.label_to_id.end()) return NA_INTEGER;
+  if (it == ctx.label_to_id.end())
+    return NA_INTEGER;
   return it->second;
 }
 
-inline int component_index_of(const uuber::NativeContext& ctx,
-                              const std::string& component) {
-  if (component.empty() || component == "__default__") return -1;
+inline int component_index_of(const uuber::NativeContext &ctx,
+                              const std::string &component) {
+  if (component.empty() || component == "__default__")
+    return -1;
   auto it = ctx.component_index.find(component);
-  if (it == ctx.component_index.end()) return -1;
+  if (it == ctx.component_index.end())
+    return -1;
   return it->second;
 }
 
-inline int outcome_index_of(const uuber::NativeContext& ctx,
-                            const std::string& label) {
-  if (label.empty()) return -1;
+inline int outcome_index_of(const uuber::NativeContext &ctx,
+                            const std::string &label) {
+  if (label.empty())
+    return -1;
   auto it = ctx.outcome_index.find(label);
-  if (it == ctx.outcome_index.end()) return -1;
+  if (it == ctx.outcome_index.end())
+    return -1;
   return it->second;
 }
 
-inline LabelRef resolve_label_ref_runtime(const uuber::NativeContext& ctx,
-                                          const std::string& label) {
+inline LabelRef resolve_label_ref_runtime(const uuber::NativeContext &ctx,
+                                          const std::string &label) {
   LabelRef ref;
-  if (label.empty()) return ref;
+  if (label.empty())
+    return ref;
   ref.label_id = label_id(ctx, label);
   auto acc_it = ctx.accumulator_index.find(label);
   if (acc_it != ctx.accumulator_index.end()) {
@@ -622,8 +641,8 @@ inline LabelRef resolve_label_ref_runtime(const uuber::NativeContext& ctx,
   return ref;
 }
 
-inline std::vector<int> ensure_source_ids(const uuber::NativeContext& ctx,
-                                          const uuber::NativeNode& node) {
+inline std::vector<int> ensure_source_ids(const uuber::NativeContext &ctx,
+                                          const uuber::NativeNode &node) {
   std::vector<int> ids = node.source_ids;
   if (ids.empty() && !node.source.empty()) {
     int label_idx = node.source_ref.label_id;
@@ -640,7 +659,8 @@ struct TrialAccumulatorParams {
   double q{0.0};
   double shared_q{std::numeric_limits<double>::quiet_NaN()};
   AccDistParams dist_cfg{};
-  // Flags/components unused in flat fast path but kept for compatibility with component checks.
+  // Flags/components unused in flat fast path but kept for compatibility with
+  // component checks.
   bool has_components{false};
   std::vector<std::string> components;
   std::vector<int> component_indices;
@@ -652,19 +672,21 @@ struct TrialParamSet {
   std::vector<TrialAccumulatorParams> acc_params;
 };
 
-std::string param_signature(const TrialParamSet* params_ptr) {
-  if (!params_ptr) return std::string();
+std::string param_signature(const TrialParamSet *params_ptr) {
+  if (!params_ptr)
+    return std::string();
   std::ostringstream oss;
   oss << std::setprecision(12);
-  for (const auto& acc : params_ptr->acc_params) {
+  for (const auto &acc : params_ptr->acc_params) {
     oss << acc.q << '|' << acc.shared_q << '|' << acc.onset << '|'
-        << acc.dist_cfg.t0 << '|' << acc.dist_cfg.p1 << '|'
-        << acc.dist_cfg.p2 << '|' << acc.dist_cfg.p3 << ';';
+        << acc.dist_cfg.t0 << '|' << acc.dist_cfg.p1 << '|' << acc.dist_cfg.p2
+        << '|' << acc.dist_cfg.p3 << ';';
   }
   return oss.str();
 }
 
-inline TrialAccumulatorParams base_params(const uuber::NativeAccumulator& base) {
+inline TrialAccumulatorParams
+base_params(const uuber::NativeAccumulator &base) {
   TrialAccumulatorParams p;
   p.onset = base.onset;
   p.q = base.q;
@@ -678,11 +700,12 @@ inline TrialAccumulatorParams base_params(const uuber::NativeAccumulator& base) 
   return p;
 }
 
-// Build a full parameter set from base context when no trial-level overrides are supplied.
-inline TrialParamSet build_base_paramset(const uuber::NativeContext& ctx) {
+// Build a full parameter set from base context when no trial-level overrides
+// are supplied.
+inline TrialParamSet build_base_paramset(const uuber::NativeContext &ctx) {
   TrialParamSet ps;
   ps.acc_params.reserve(ctx.accumulators.size());
-  for (const auto& acc : ctx.accumulators) {
+  for (const auto &acc : ctx.accumulators) {
     ps.acc_params.push_back(base_params(acc));
   }
   return ps;
@@ -695,19 +718,20 @@ struct SharedTriggerInfo {
 };
 
 // Collect shared trigger definitions for the current trial parameters.
-inline std::vector<SharedTriggerInfo> collect_shared_triggers(
-  const uuber::NativeContext& ctx,
-  const TrialParamSet& params) {
+inline std::vector<SharedTriggerInfo>
+collect_shared_triggers(const uuber::NativeContext &ctx,
+                        const TrialParamSet &params) {
   std::vector<SharedTriggerInfo> out;
   if (!ctx.shared_trigger_map.empty()) {
-    for (const auto& kv : ctx.shared_trigger_map) {
+    for (const auto &kv : ctx.shared_trigger_map) {
       SharedTriggerInfo info;
       info.id = kv.first;
       info.acc_indices = kv.second;
       double q_val = 0.0;
       bool q_set = false;
       for (int idx : info.acc_indices) {
-        if (idx < 0 || idx >= static_cast<int>(params.acc_params.size())) continue;
+        if (idx < 0 || idx >= static_cast<int>(params.acc_params.size()))
+          continue;
         q_val = params.acc_params[static_cast<std::size_t>(idx)].shared_q;
         q_set = true;
         break;
@@ -719,7 +743,8 @@ inline std::vector<SharedTriggerInfo> collect_shared_triggers(
           q_set = true;
         }
       }
-      if (!q_set) continue;
+      if (!q_set)
+        continue;
       q_val = clamp_probability(q_val);
       info.q = q_val;
       out.push_back(info);
@@ -728,34 +753,39 @@ inline std::vector<SharedTriggerInfo> collect_shared_triggers(
     // Fallback: derive shared triggers directly from the trial parameters.
     std::unordered_map<std::string, SharedTriggerInfo> derived;
     for (std::size_t i = 0; i < params.acc_params.size(); ++i) {
-      const auto& acc = params.acc_params[i];
-      if (acc.shared_trigger_id.empty()) continue;
-      SharedTriggerInfo& info = derived[acc.shared_trigger_id];
+      const auto &acc = params.acc_params[i];
+      if (acc.shared_trigger_id.empty())
+        continue;
+      SharedTriggerInfo &info = derived[acc.shared_trigger_id];
       info.id = acc.shared_trigger_id;
       info.acc_indices.push_back(static_cast<int>(i));
       info.q = acc.shared_q;
     }
-    for (auto& kv : derived) {
+    for (auto &kv : derived) {
       out.push_back(std::move(kv.second));
     }
   }
   return out;
 }
 
-inline double shared_trigger_mask_weight(const std::vector<SharedTriggerInfo>& triggers,
-                                        std::uint64_t mask);
+inline double
+shared_trigger_mask_weight(const std::vector<SharedTriggerInfo> &triggers,
+                           std::uint64_t mask);
 
 struct SharedTriggerPlan {
   std::vector<SharedTriggerInfo> triggers;
   std::vector<double> mask_weights;
 };
 
-inline SharedTriggerPlan build_shared_trigger_plan(const uuber::NativeContext& ctx,
-                                                   const TrialParamSet* params_ptr) {
+inline SharedTriggerPlan
+build_shared_trigger_plan(const uuber::NativeContext &ctx,
+                          const TrialParamSet *params_ptr) {
   SharedTriggerPlan plan;
-  if (!params_ptr) return plan;
+  if (!params_ptr)
+    return plan;
   plan.triggers = collect_shared_triggers(ctx, *params_ptr);
-  if (plan.triggers.empty()) return plan;
+  if (plan.triggers.empty())
+    return plan;
   if (plan.triggers.size() >= 63) {
     Rcpp::stop("Too many shared triggers for density evaluation");
   }
@@ -770,30 +800,37 @@ inline SharedTriggerPlan build_shared_trigger_plan(const uuber::NativeContext& c
   return plan;
 }
 
-inline double shared_trigger_mask_weight(const std::vector<SharedTriggerInfo>& triggers,
-                                        std::uint64_t mask) {
+inline double
+shared_trigger_mask_weight(const std::vector<SharedTriggerInfo> &triggers,
+                           std::uint64_t mask) {
   double w = 1.0;
   for (std::size_t i = 0; i < triggers.size(); ++i) {
     double q = clamp_probability(triggers[i].q);
     bool fail = ((mask >> i) & 1ULL) != 0ULL;
     w *= fail ? q : (1.0 - q);
-    if (!std::isfinite(w) || w <= 0.0) return 0.0;
+    if (!std::isfinite(w) || w <= 0.0)
+      return 0.0;
   }
   return w;
 }
 
 // Apply a trigger success/fail mask to a base parameter set.
-inline TrialParamSet apply_trigger_state(const TrialParamSet& base,
-                                         const std::vector<SharedTriggerInfo>& triggers,
-                                         std::uint64_t mask) {
+inline TrialParamSet
+apply_trigger_state(const TrialParamSet &base,
+                    const std::vector<SharedTriggerInfo> &triggers,
+                    std::uint64_t mask) {
   TrialParamSet modified = base;
   for (std::size_t i = 0; i < triggers.size(); ++i) {
     bool fail = (mask >> i) & 1ULL;
-    double succeed_q = 0.0;  // when gate succeeds, drop the shared q to avoid double-counting
-    double fail_q = 1.0;     // when gate fails, accumulator never finishes
+    double succeed_q =
+        0.0; // when gate succeeds, drop the shared q to avoid double-counting
+    double fail_q = 1.0; // when gate fails, accumulator never finishes
     for (int acc_idx : triggers[i].acc_indices) {
-      if (acc_idx < 0 || acc_idx >= static_cast<int>(modified.acc_params.size())) continue;
-      TrialAccumulatorParams& p = modified.acc_params[static_cast<std::size_t>(acc_idx)];
+      if (acc_idx < 0 ||
+          acc_idx >= static_cast<int>(modified.acc_params.size()))
+        continue;
+      TrialAccumulatorParams &p =
+          modified.acc_params[static_cast<std::size_t>(acc_idx)];
       p.q = fail ? fail_q : succeed_q;
       p.has_override = true;
     }
@@ -801,13 +838,15 @@ inline TrialParamSet apply_trigger_state(const TrialParamSet& base,
   return modified;
 }
 
-inline void apply_trigger_state_inplace(TrialParamSet& params,
-                                        const SharedTriggerInfo& trigger,
+inline void apply_trigger_state_inplace(TrialParamSet &params,
+                                        const SharedTriggerInfo &trigger,
                                         bool fail) {
   double q_val = fail ? 1.0 : 0.0;
   for (int acc_idx : trigger.acc_indices) {
-    if (acc_idx < 0 || acc_idx >= static_cast<int>(params.acc_params.size())) continue;
-    TrialAccumulatorParams& p = params.acc_params[static_cast<std::size_t>(acc_idx)];
+    if (acc_idx < 0 || acc_idx >= static_cast<int>(params.acc_params.size()))
+      continue;
+    TrialAccumulatorParams &p =
+        params.acc_params[static_cast<std::size_t>(acc_idx)];
     p.q = q_val;
     p.has_override = true;
   }
@@ -816,203 +855,170 @@ inline void apply_trigger_state_inplace(TrialParamSet& params,
 struct ComponentCacheEntry;
 const std::unordered_set<int> kEmptyForcedSet{};
 
-double component_keep_weight(const uuber::NativeContext& ctx,
-                             int component_idx,
+double component_keep_weight(const uuber::NativeContext &ctx, int component_idx,
                              int outcome_idx);
 
-double native_outcome_probability_impl(SEXP ctxSEXP,
-                                       int node_id,
-                                       double upper,
-                                       Rcpp::Nullable<Rcpp::String> component,
-                                       SEXP forced_complete,
-                                       SEXP forced_survive,
-                                       const Rcpp::IntegerVector& competitor_ids,
-                                       double rel_tol,
-                                       double abs_tol,
-                                       int max_depth,
-                                       const TrialParamSet* trial_params,
-                                       const std::string& trial_type_key,
-                                       bool include_na_donors,
-                                       const std::string& outcome_label_context);
+double native_outcome_probability_impl(
+    SEXP ctxSEXP, int node_id, double upper,
+    Rcpp::Nullable<Rcpp::String> component, SEXP forced_complete,
+    SEXP forced_survive, const Rcpp::IntegerVector &competitor_ids,
+    double rel_tol, double abs_tol, int max_depth,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    bool include_na_donors, const std::string &outcome_label_context);
 
-std::string normalize_label_string(const std::string& label);
+std::string normalize_label_string(const std::string &label);
 
 double node_density_with_competitors_internal(
-  const uuber::NativeContext& ctx,
-  int node_id,
-  double t,
-  const std::string& component_label,
-  int component_idx,
-  const std::unordered_set<int>& forced_complete,
-  const std::unordered_set<int>& forced_survive,
-  const std::vector<int>& competitor_ids,
-  const TrialParamSet* trial_params,
-  const std::string& trial_type_key,
-  bool include_na_donors,
-  const std::string& outcome_label_context,
-  int outcome_idx_context);
+    const uuber::NativeContext &ctx, int node_id, double t,
+    const std::string &component_label, int component_idx,
+    const std::unordered_set<int> &forced_complete,
+    const std::unordered_set<int> &forced_survive,
+    const std::vector<int> &competitor_ids, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, bool include_na_donors,
+    const std::string &outcome_label_context, int outcome_idx_context);
 
-double evaluate_outcome_density_idx(const uuber::NativeContext& ctx,
-                                    int outcome_idx,
-                                    double t,
-                                    const std::string& component,
-                                    int component_idx,
-                                    const TrialParamSet* trial_params,
-                                    const std::string& trial_type_key,
-                                    bool include_na_donors,
-                                    int outcome_label_context_idx = -1) {
-  if (outcome_idx < 0 || outcome_idx >= static_cast<int>(ctx.outcome_info.size())) {
+double evaluate_outcome_density_idx(
+    const uuber::NativeContext &ctx, int outcome_idx, double t,
+    const std::string &component, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    bool include_na_donors, int outcome_label_context_idx = -1) {
+  if (outcome_idx < 0 ||
+      outcome_idx >= static_cast<int>(ctx.outcome_info.size())) {
     return 0.0;
   }
-  const uuber::OutcomeContextInfo& info = ctx.outcome_info[static_cast<std::size_t>(outcome_idx)];
-  if (info.node_id < 0) return 0.0;
-  const std::string& outcome_label_context =
-    (outcome_label_context_idx >= 0 &&
-     outcome_label_context_idx < static_cast<int>(ctx.outcome_labels.size()))
-      ? ctx.outcome_labels[static_cast<std::size_t>(outcome_label_context_idx)]
-      : std::string();
+  const uuber::OutcomeContextInfo &info =
+      ctx.outcome_info[static_cast<std::size_t>(outcome_idx)];
+  if (info.node_id < 0)
+    return 0.0;
+  const std::string &outcome_label_context =
+      (outcome_label_context_idx >= 0 &&
+       outcome_label_context_idx < static_cast<int>(ctx.outcome_labels.size()))
+          ? ctx.outcome_labels[static_cast<std::size_t>(
+                outcome_label_context_idx)]
+          : std::string();
   return node_density_with_competitors_internal(
-    ctx,
-    info.node_id,
-    t,
-    component,
-    component_idx,
-    kEmptyForcedSet,
-    kEmptyForcedSet,
-    info.competitor_ids,
-    trial_params,
-    trial_type_key,
-    include_na_donors,
-    outcome_label_context,
-    outcome_label_context_idx);
+      ctx, info.node_id, t, component, component_idx, kEmptyForcedSet,
+      kEmptyForcedSet, info.competitor_ids, trial_params, trial_type_key,
+      include_na_donors, outcome_label_context, outcome_label_context_idx);
 }
 
-double accumulate_component_guess_density(const uuber::NativeContext& ctx,
-                                          const std::string& target_label,
-                                          int target_outcome_idx,
-                                          double t,
-                                          const std::string& component,
+double accumulate_component_guess_density(const uuber::NativeContext &ctx,
+                                          const std::string &target_label,
+                                          int target_outcome_idx, double t,
+                                          const std::string &component,
                                           int component_idx,
-                                          const TrialParamSet* trial_params,
-                                          const std::string& trial_type_key) {
+                                          const TrialParamSet *trial_params,
+                                          const std::string &trial_type_key) {
   if (component_idx < 0 ||
       component_idx >= static_cast<int>(ctx.component_info.size())) {
     return 0.0;
   }
-  const uuber::ComponentGuessPolicy& guess =
-    ctx.component_info[static_cast<std::size_t>(component_idx)].guess;
-  if (!guess.valid) return 0.0;
+  const uuber::ComponentGuessPolicy &guess =
+      ctx.component_info[static_cast<std::size_t>(component_idx)].guess;
+  if (!guess.valid)
+    return 0.0;
   if (!guess.target.empty()) {
     if (guess.target == "__GUESS__") {
-      if (target_label != "__GUESS__") return 0.0;
+      if (target_label != "__GUESS__")
+        return 0.0;
     } else if (guess.target_outcome_idx >= 0) {
-      if (target_outcome_idx != guess.target_outcome_idx) return 0.0;
+      if (target_outcome_idx != guess.target_outcome_idx)
+        return 0.0;
     } else {
       std::string guess_target = normalize_label_string(guess.target);
       std::string target_key = normalize_label_string(target_label);
-      if (guess_target != target_key) return 0.0;
+      if (guess_target != target_key)
+        return 0.0;
     }
   }
   double total = 0.0;
-  for (const auto& entry : guess.keep_weights) {
+  for (const auto &entry : guess.keep_weights) {
     int donor_outcome_idx = entry.first;
-    if (donor_outcome_idx < 0) continue;
+    if (donor_outcome_idx < 0)
+      continue;
     double keep_prob = entry.second;
     double release = 1.0 - keep_prob;
-    if (release <= 0.0) continue;
-    total += release * evaluate_outcome_density_idx(
-      ctx,
-      donor_outcome_idx,
-      t,
-      component,
-      component_idx,
-      trial_params,
-      trial_type_key,
-      false,
-      donor_outcome_idx);
+    if (release <= 0.0)
+      continue;
+    total +=
+        release * evaluate_outcome_density_idx(
+                      ctx, donor_outcome_idx, t, component, component_idx,
+                      trial_params, trial_type_key, false, donor_outcome_idx);
   }
   return total;
 }
 
-double accumulate_outcome_alias_density(const uuber::NativeContext& ctx,
-                                        int target_outcome_idx,
-                                        double t,
-                                        const std::string& component,
+double accumulate_outcome_alias_density(const uuber::NativeContext &ctx,
+                                        int target_outcome_idx, double t,
+                                        const std::string &component,
                                         int component_idx,
-                                        const TrialParamSet* trial_params,
-                                        const std::string& trial_type_key,
+                                        const TrialParamSet *trial_params,
+                                        const std::string &trial_type_key,
                                         bool include_na_donors) {
   if (target_outcome_idx < 0 ||
       target_outcome_idx >= static_cast<int>(ctx.outcome_info.size())) {
     return 0.0;
   }
-  const uuber::OutcomeContextInfo& info =
-    ctx.outcome_info[static_cast<std::size_t>(target_outcome_idx)];
+  const uuber::OutcomeContextInfo &info =
+      ctx.outcome_info[static_cast<std::size_t>(target_outcome_idx)];
   double total = 0.0;
   for (int source_idx : info.alias_sources) {
     total += evaluate_outcome_density_idx(
-      ctx,
-      source_idx,
-      t,
-      component,
-      component_idx,
-      trial_params,
-      trial_type_key,
-      include_na_donors,
-      source_idx);
+        ctx, source_idx, t, component, component_idx, trial_params,
+        trial_type_key, include_na_donors, source_idx);
   }
-  for (const auto& donor : info.guess_donors) {
-    if (donor.rt_policy == "na" && !include_na_donors) continue;
-    if (donor.outcome_idx < 0) continue;
+  for (const auto &donor : info.guess_donors) {
+    if (donor.rt_policy == "na" && !include_na_donors)
+      continue;
+    if (donor.outcome_idx < 0)
+      continue;
     total += donor.weight * evaluate_outcome_density_idx(
-      ctx,
-      donor.outcome_idx,
-      t,
-      component,
-      component_idx,
-      trial_params,
-      trial_type_key,
-      include_na_donors,
-      donor.outcome_idx);
+                                ctx, donor.outcome_idx, t, component,
+                                component_idx, trial_params, trial_type_key,
+                                include_na_donors, donor.outcome_idx);
   }
   return total;
 }
 
-
-inline const TrialAccumulatorParams* get_trial_param_entry(const TrialParamSet* trial_params,
-                                                          int acc_index) {
-  if (!trial_params) return nullptr;
-  if (acc_index < 0 || acc_index >= static_cast<int>(trial_params->acc_params.size())) {
+inline const TrialAccumulatorParams *
+get_trial_param_entry(const TrialParamSet *trial_params, int acc_index) {
+  if (!trial_params)
+    return nullptr;
+  if (acc_index < 0 ||
+      acc_index >= static_cast<int>(trial_params->acc_params.size())) {
     return nullptr;
   }
-  const TrialAccumulatorParams& entry = trial_params->acc_params[acc_index];
-  if (!entry.has_override) return nullptr;
+  const TrialAccumulatorParams &entry = trial_params->acc_params[acc_index];
+  if (!entry.has_override)
+    return nullptr;
   return &entry;
 }
 
-bool component_active(const uuber::NativeAccumulator& acc,
-                      const std::string& component,
-                      int component_idx,
-                      const TrialAccumulatorParams* override = nullptr) {
+bool component_active(const uuber::NativeAccumulator &acc,
+                      const std::string &component, int component_idx,
+                      const TrialAccumulatorParams *override = nullptr) {
   if (component_idx < 0 && (component.empty() || component == "__default__")) {
     return true;
   }
-  const std::vector<int>* comps_idx = nullptr;
-  if (override && override->has_components && !override->component_indices.empty()) {
+  const std::vector<int> *comps_idx = nullptr;
+  if (override && override->has_components &&
+      !override->component_indices.empty()) {
     comps_idx = &override->component_indices;
   } else if (!acc.component_indices.empty()) {
     comps_idx = &acc.component_indices;
   }
   if (comps_idx && component_idx >= 0) {
-    return std::find(comps_idx->begin(), comps_idx->end(), component_idx) != comps_idx->end();
+    return std::find(comps_idx->begin(), comps_idx->end(), component_idx) !=
+           comps_idx->end();
   }
-  const std::vector<std::string>* comps = nullptr;
+  const std::vector<std::string> *comps = nullptr;
   if (override && override->has_components) {
     comps = &override->components;
   } else if (!acc.components.empty()) {
     comps = &acc.components;
   }
-  if (!comps || comps->empty()) return true;
+  if (!comps || comps->empty())
+    return true;
   return std::find(comps->begin(), comps->end(), component) != comps->end();
 }
 
@@ -1027,16 +1033,15 @@ struct PoolEvalScratchStack {
   std::size_t depth{0};
 };
 
-inline PoolEvalScratchStack& pool_eval_scratch_stack() {
+inline PoolEvalScratchStack &pool_eval_scratch_stack() {
   thread_local PoolEvalScratchStack scratch;
   return scratch;
 }
 
 class PoolEvalScratchGuard {
- public:
+public:
   PoolEvalScratchGuard()
-    : stack(pool_eval_scratch_stack()),
-      index(stack.depth++) {
+      : stack(pool_eval_scratch_stack()), index(stack.depth++) {
     if (index >= stack.stack.size()) {
       stack.stack.emplace_back();
     }
@@ -1048,29 +1053,24 @@ class PoolEvalScratchGuard {
     }
   }
 
-  PoolEvalScratch& scratch() {
-    return stack.stack[index];
-  }
+  PoolEvalScratch &scratch() { return stack.stack[index]; }
 
- private:
-  PoolEvalScratchStack& stack;
+private:
+  PoolEvalScratchStack &stack;
   std::size_t index;
 };
 
-NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
-                                const std::string& label,
-                                double t,
-                                const std::string& component,
-                                const std::unordered_set<int>& forced_complete,
-                                const std::unordered_set<int>& forced_survive,
-                                EvalNeed need,
-                                const TrialParamSet* trial_params = nullptr,
-                                const std::string& trial_type_key = std::string(),
-                                bool include_na_donors = false,
-                                const std::string& outcome_label_context = std::string(),
-                                const LabelRef* label_ref = nullptr,
-                                int component_idx = -1,
-                                int outcome_idx_context = -1) {
+NodeEvalResult
+eval_event_label(const uuber::NativeContext &ctx, const std::string &label,
+                 double t, const std::string &component,
+                 const std::unordered_set<int> &forced_complete,
+                 const std::unordered_set<int> &forced_survive, EvalNeed need,
+                 const TrialParamSet *trial_params = nullptr,
+                 const std::string &trial_type_key = std::string(),
+                 bool include_na_donors = false,
+                 const std::string &outcome_label_context = std::string(),
+                 const LabelRef *label_ref = nullptr, int component_idx = -1,
+                 int outcome_idx_context = -1) {
   LabelRef resolved_ref;
   if (!label_ref) {
     resolved_ref = resolve_label_ref_runtime(ctx, label);
@@ -1111,25 +1111,14 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
     } else if (outcome_label_context.empty()) {
       target_outcome_idx = label_ref->outcome_idx;
     }
-    const std::string& target_label = outcome_label_context.empty()
-      ? label
-      : outcome_label_context;
-    donor_density += accumulate_component_guess_density(ctx,
-                                                        target_label,
-                                                        target_outcome_idx,
-                                                        t,
-                                                        component,
-                                                        component_idx,
-                                                        trial_params,
-                                                        trial_type_key);
-    donor_density += accumulate_outcome_alias_density(ctx,
-                                                      target_outcome_idx,
-                                                      t,
-                                                      component,
-                                                      component_idx,
-                                                      trial_params,
-                                                      trial_type_key,
-                                                      include_na_donors);
+    const std::string &target_label =
+        outcome_label_context.empty() ? label : outcome_label_context;
+    donor_density += accumulate_component_guess_density(
+        ctx, target_label, target_outcome_idx, t, component, component_idx,
+        trial_params, trial_type_key);
+    donor_density += accumulate_outcome_alias_density(
+        ctx, target_outcome_idx, t, component, component_idx, trial_params,
+        trial_type_key, include_na_donors);
   }
   if (label == "__GUESS__") {
     return make_node_result(need, donor_density, 0.0, 1.0);
@@ -1146,14 +1135,15 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
 
   int acc_idx = label_ref->acc_idx;
   if (acc_idx >= 0 && acc_idx < static_cast<int>(ctx.accumulators.size())) {
-    const uuber::NativeAccumulator& acc = ctx.accumulators[acc_idx];
-    const TrialAccumulatorParams* override = get_trial_param_entry(trial_params, acc_idx);
+    const uuber::NativeAccumulator &acc = ctx.accumulators[acc_idx];
+    const TrialAccumulatorParams *override =
+        get_trial_param_entry(trial_params, acc_idx);
     if (!component_active(acc, component, component_idx, override)) {
       return make_node_result(need, 0.0, 1.0, 0.0);
     }
     double onset = override ? override->onset : acc.onset;
     double q = override ? override->q : acc.q;
-    const AccDistParams& cfg = override ? override->dist_cfg : acc.dist_cfg;
+    const AccDistParams &cfg = override ? override->dist_cfg : acc.dist_cfg;
     double density = std::numeric_limits<double>::quiet_NaN();
     double survival = std::numeric_limits<double>::quiet_NaN();
     double cdf = std::numeric_limits<double>::quiet_NaN();
@@ -1175,7 +1165,7 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
 
   int pool_idx = label_ref->pool_idx;
   if (pool_idx >= 0 && pool_idx < static_cast<int>(ctx.pools.size())) {
-    const uuber::NativePool& pool = ctx.pools[pool_idx];
+    const uuber::NativePool &pool = ctx.pools[pool_idx];
     if (pool.members.empty()) {
       NodeEvalResult res = make_node_result(need, 0.0, 1.0, 0.0);
       if (needs_density(need) && donor_density > 0.0) {
@@ -1184,16 +1174,20 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
       return res;
     }
     PoolEvalScratchGuard scratch_guard;
-    PoolEvalScratch& scratch = scratch_guard.scratch();
+    PoolEvalScratch &scratch = scratch_guard.scratch();
     scratch.active_indices.clear();
     scratch.active_indices.reserve(pool.members.size());
-    for (std::size_t member_idx = 0; member_idx < pool.members.size(); ++member_idx) {
-      const LabelRef& member_ref = pool.member_refs[member_idx];
+    for (std::size_t member_idx = 0; member_idx < pool.members.size();
+         ++member_idx) {
+      const LabelRef &member_ref = pool.member_refs[member_idx];
       int member_acc_idx = member_ref.acc_idx;
-      if (member_acc_idx >= 0 && member_acc_idx < static_cast<int>(ctx.accumulators.size())) {
-        const uuber::NativeAccumulator& acc = ctx.accumulators[member_acc_idx];
-        const TrialAccumulatorParams* override = get_trial_param_entry(trial_params, member_acc_idx);
-        if (!component_active(acc, component, component_idx, override)) continue;
+      if (member_acc_idx >= 0 &&
+          member_acc_idx < static_cast<int>(ctx.accumulators.size())) {
+        const uuber::NativeAccumulator &acc = ctx.accumulators[member_acc_idx];
+        const TrialAccumulatorParams *override =
+            get_trial_param_entry(trial_params, member_acc_idx);
+        if (!component_active(acc, component, component_idx, override))
+          continue;
       }
       scratch.active_indices.push_back(member_idx);
     }
@@ -1205,10 +1199,11 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
       return res;
     }
     const bool need_density = needs_density(need);
-    const bool need_survival = needs_survival(need) || needs_cdf(need) || need_density;
+    const bool need_survival =
+        needs_survival(need) || needs_cdf(need) || need_density;
     EvalNeed child_need = need_density
-      ? (EvalNeed::kDensity | EvalNeed::kSurvival)
-      : EvalNeed::kSurvival;
+                              ? (EvalNeed::kDensity | EvalNeed::kSurvival)
+                              : EvalNeed::kSurvival;
     if (need_density) {
       scratch.density.resize(scratch.active_indices.size());
     }
@@ -1217,24 +1212,12 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
     }
     for (std::size_t i = 0; i < scratch.active_indices.size(); ++i) {
       std::size_t member_idx = scratch.active_indices[i];
-      const std::string& member = pool.members[member_idx];
-      const LabelRef& member_ref = pool.member_refs[member_idx];
+      const std::string &member = pool.members[member_idx];
+      const LabelRef &member_ref = pool.member_refs[member_idx];
       NodeEvalResult child = eval_event_label(
-        ctx,
-        member,
-        t,
-        component,
-        forced_complete,
-        forced_survive,
-        child_need,
-        trial_params,
-        std::string(),
-        false,
-        std::string(),
-        &member_ref,
-        component_idx,
-        -1
-      );
+          ctx, member, t, component, forced_complete, forced_survive,
+          child_need, trial_params, std::string(), false, std::string(),
+          &member_ref, component_idx, -1);
       if (need_density) {
         scratch.density[i] = child.density;
       }
@@ -1247,11 +1230,13 @@ NodeEvalResult eval_event_label(const uuber::NativeContext& ctx,
     double cdf = std::numeric_limits<double>::quiet_NaN();
     if (need_density) {
       density = pool_density_fast(scratch.density, scratch.survival, pool.k);
-      if (!std::isfinite(density) || density < 0.0) density = 0.0;
+      if (!std::isfinite(density) || density < 0.0)
+        density = 0.0;
     }
     if (needs_survival(need) || needs_cdf(need)) {
       survival = pool_survival_fast(scratch.survival, pool.k);
-      if (!std::isfinite(survival)) survival = 0.0;
+      if (!std::isfinite(survival))
+        survival = 0.0;
     }
     if (needs_cdf(need)) {
       cdf = clamp_probability(1.0 - survival);
@@ -1275,165 +1260,161 @@ struct TimeKey {
   double value{0.0};
 };
 
-std::string component_cache_key(const std::string& component,
-                                const std::string& trial_key);
+std::string component_cache_key(const std::string &component,
+                                const std::string &trial_key);
 
 struct ComponentCacheEntry {
   std::string trial_type_key;
 };
 
-ComponentCacheEntry make_component_cache_entry(const std::string& component,
-                                               const std::string& trial_key) {
+ComponentCacheEntry make_component_cache_entry(const std::string &component,
+                                               const std::string &trial_key) {
   ComponentCacheEntry entry;
   entry.trial_type_key = component_cache_key(component, trial_key);
   return entry;
 }
 
-ComponentCacheEntry default_component_cache_entry(const std::string& component) {
+ComponentCacheEntry
+default_component_cache_entry(const std::string &component) {
   return make_component_cache_entry(component, std::string());
 }
 
-double accumulate_plan_guess_density(const uuber::NativeContext& ctx,
-                                     const Rcpp::List& donors,
-                                     double t,
-                                     const std::string& component,
-                                     const std::string& trial_type_key,
-                                     const TrialParamSet* trial_params,
+double accumulate_plan_guess_density(const uuber::NativeContext &ctx,
+                                     const Rcpp::List &donors, double t,
+                                     const std::string &component,
+                                     const std::string &trial_type_key,
+                                     const TrialParamSet *trial_params,
                                      bool include_na_donors) {
   int component_idx = component_index_of(ctx, component);
   double total = 0.0;
   for (R_xlen_t i = 0; i < donors.size(); ++i) {
     Rcpp::RObject donor_obj = donors[i];
-    if (donor_obj.isNULL()) continue;
+    if (donor_obj.isNULL())
+      continue;
     Rcpp::List donor(donor_obj);
     std::string rt_policy = donor.containsElementNamed("rt_policy")
-      ? Rcpp::as<std::string>(donor["rt_policy"])
-      : std::string("keep");
+                                ? Rcpp::as<std::string>(donor["rt_policy"])
+                                : std::string("keep");
     bool donor_na = rt_policy == "na";
-    if (donor_na != include_na_donors) continue;
+    if (donor_na != include_na_donors)
+      continue;
     double release = donor.containsElementNamed("release")
-      ? Rcpp::as<double>(donor["release"])
-      : 0.0;
-    if (!std::isfinite(release)) release = 0.0;
-    if (release <= 0.0) continue;
+                         ? Rcpp::as<double>(donor["release"])
+                         : 0.0;
+    if (!std::isfinite(release))
+      release = 0.0;
+    if (release <= 0.0)
+      continue;
     int donor_node = donor.containsElementNamed("node_id")
-      ? Rcpp::as<int>(donor["node_id"])
-      : NA_INTEGER;
-    if (donor_node == NA_INTEGER) continue;
-    Rcpp::IntegerVector comp_ids = donor.containsElementNamed("competitor_ids")
-      ? Rcpp::IntegerVector(donor["competitor_ids"])
-      : Rcpp::IntegerVector();
+                         ? Rcpp::as<int>(donor["node_id"])
+                         : NA_INTEGER;
+    if (donor_node == NA_INTEGER)
+      continue;
+    Rcpp::IntegerVector comp_ids =
+        donor.containsElementNamed("competitor_ids")
+            ? Rcpp::IntegerVector(donor["competitor_ids"])
+            : Rcpp::IntegerVector();
     std::vector<int> comp_vec = integer_vector_to_std(comp_ids, false);
     std::string donor_label;
-    if (donor.containsElementNamed("source_label") && !Rf_isNull(donor["source_label"])) {
+    if (donor.containsElementNamed("source_label") &&
+        !Rf_isNull(donor["source_label"])) {
       donor_label = Rcpp::as<std::string>(donor["source_label"]);
     }
-    int outcome_idx_context = donor_label.empty()
-      ? -1
-      : outcome_index_of(ctx, donor_label);
+    int outcome_idx_context =
+        donor_label.empty() ? -1 : outcome_index_of(ctx, donor_label);
     double density = node_density_with_competitors_internal(
-      ctx,
-      donor_node,
-      t,
-      component,
-      component_idx,
-      kEmptyForcedSet,
-      kEmptyForcedSet,
-      comp_vec,
-      trial_params,
-      trial_type_key,
-      include_na_donors,
-      donor_label,
-      outcome_idx_context
-    );
-    if (!std::isfinite(density) || density <= 0.0) continue;
+        ctx, donor_node, t, component, component_idx, kEmptyForcedSet,
+        kEmptyForcedSet, comp_vec, trial_params, trial_type_key,
+        include_na_donors, donor_label, outcome_idx_context);
+    if (!std::isfinite(density) || density <= 0.0)
+      continue;
     total += release * density;
   }
   return total;
 }
 
-std::vector<ComponentCacheEntry> build_component_cache_entries(
-  const std::vector<std::string>& components) {
+std::vector<ComponentCacheEntry>
+build_component_cache_entries(const std::vector<std::string> &components) {
   std::vector<ComponentCacheEntry> entries;
   entries.reserve(components.size());
-  for (const auto& comp : components) {
+  for (const auto &comp : components) {
     entries.push_back(default_component_cache_entry(comp));
   }
   return entries;
 }
 
-std::string component_cache_key(const std::string& component,
-                                const std::string& trial_key = std::string()) {
-  if (!trial_key.empty()) return trial_key;
-  if (component.empty()) return "__default__";
+std::string component_cache_key(const std::string &component,
+                                const std::string &trial_key = std::string()) {
+  if (!trial_key.empty())
+    return trial_key;
+  if (component.empty())
+    return "__default__";
   return component;
 }
 
-std::string normalize_label_string(const std::string& label) {
-  if (label.empty()) return std::string();
+std::string normalize_label_string(const std::string &label) {
+  if (label.empty())
+    return std::string();
   return label;
 }
 
-double component_keep_weight(const uuber::NativeContext& ctx,
-                             int component_idx,
+double component_keep_weight(const uuber::NativeContext &ctx, int component_idx,
                              int outcome_idx) {
   if (component_idx < 0 ||
       component_idx >= static_cast<int>(ctx.component_info.size())) {
     return 1.0;
   }
-  const uuber::ComponentGuessPolicy& guess =
-    ctx.component_info[static_cast<std::size_t>(component_idx)].guess;
-  if (!guess.valid) return 1.0;
+  const uuber::ComponentGuessPolicy &guess =
+      ctx.component_info[static_cast<std::size_t>(component_idx)].guess;
+  if (!guess.valid)
+    return 1.0;
   if (outcome_idx == kOutcomeIdxNA) {
     return guess.has_keep_weight_na ? guess.keep_weight_na : 1.0;
   }
-  for (const auto& entry : guess.keep_weights) {
-    if (entry.first == outcome_idx) return entry.second;
+  for (const auto &entry : guess.keep_weights) {
+    if (entry.first == outcome_idx)
+      return entry.second;
   }
   return 1.0;
 }
 
-inline double extract_trial_id(const Rcpp::DataFrame* trial_rows) {
-  if (!trial_rows) return std::numeric_limits<double>::quiet_NaN();
-  if (!trial_rows->containsElementNamed("trial")) return std::numeric_limits<double>::quiet_NaN();
+inline double extract_trial_id(const Rcpp::DataFrame *trial_rows) {
+  if (!trial_rows)
+    return std::numeric_limits<double>::quiet_NaN();
+  if (!trial_rows->containsElementNamed("trial"))
+    return std::numeric_limits<double>::quiet_NaN();
   Rcpp::NumericVector trial_col((*trial_rows)["trial"]);
-  if (trial_col.size() == 0) return std::numeric_limits<double>::quiet_NaN();
+  if (trial_col.size() == 0)
+    return std::numeric_limits<double>::quiet_NaN();
   double val = trial_col[0];
-  if (Rcpp::NumericVector::is_na(val)) return std::numeric_limits<double>::quiet_NaN();
+  if (Rcpp::NumericVector::is_na(val))
+    return std::numeric_limits<double>::quiet_NaN();
   return static_cast<double>(val);
 }
 
-
 struct NodeEvalState {
-  NodeEvalState(const uuber::NativeContext& ctx_,
-                double time,
-                const std::string& component_label,
-                const std::unordered_set<int>& forced_complete_ref,
-                const std::unordered_set<int>& forced_survive_ref,
-                const TrialParamSet* params_ptr = nullptr,
-                const std::string& trial_key = std::string(),
+  NodeEvalState(const uuber::NativeContext &ctx_, double time,
+                const std::string &component_label,
+                const std::unordered_set<int> &forced_complete_ref,
+                const std::unordered_set<int> &forced_survive_ref,
+                const TrialParamSet *params_ptr = nullptr,
+                const std::string &trial_key = std::string(),
                 bool include_na = false,
-                const std::string& outcome_label_ctx = std::string(),
-                int component_idx_val = -1,
-                int outcome_idx_val = -1)
-    : ctx(ctx_),
-      t(time),
-      component(component_label),
-      forced_complete(forced_complete_ref),
-      forced_survive(forced_survive_ref),
-      trial_params(params_ptr),
-      trial_type_key(component_cache_key(component_label, trial_key)),
-      include_na_donors(include_na),
-      outcome_label(outcome_label_ctx),
-      component_idx(component_idx_val),
-      outcome_idx(outcome_idx_val) {}
+                const std::string &outcome_label_ctx = std::string(),
+                int component_idx_val = -1, int outcome_idx_val = -1)
+      : ctx(ctx_), t(time), component(component_label),
+        forced_complete(forced_complete_ref),
+        forced_survive(forced_survive_ref), trial_params(params_ptr),
+        trial_type_key(component_cache_key(component_label, trial_key)),
+        include_na_donors(include_na), outcome_label(outcome_label_ctx),
+        component_idx(component_idx_val), outcome_idx(outcome_idx_val) {}
 
-  const uuber::NativeContext& ctx;
+  const uuber::NativeContext &ctx;
   double t;
   std::string component;
-  const std::unordered_set<int>& forced_complete;
-  const std::unordered_set<int>& forced_survive;
-  const TrialParamSet* trial_params;
+  const std::unordered_set<int> &forced_complete;
+  const std::unordered_set<int> &forced_survive;
+  const TrialParamSet *trial_params;
   std::string trial_type_key;
   bool include_na_donors;
   std::string outcome_label;
@@ -1441,26 +1422,30 @@ struct NodeEvalState {
   int outcome_idx;
 };
 
-inline const TrialAccumulatorParams* get_state_params(const NodeEvalState& state,
-                                                          int acc_index) {
+inline const TrialAccumulatorParams *
+get_state_params(const NodeEvalState &state, int acc_index) {
   return get_trial_param_entry(state.trial_params, acc_index);
 }
 
-std::string member_ids_signature(const std::vector<int>& ids) {
-  if (ids.empty()) return ".";
+std::string member_ids_signature(const std::vector<int> &ids) {
+  if (ids.empty())
+    return ".";
   std::ostringstream oss;
   for (std::size_t i = 0; i < ids.size(); ++i) {
-    if (i > 0) oss << ",";
+    if (i > 0)
+      oss << ",";
     oss << ids[i];
   }
   return oss.str();
 }
 
-std::string shared_ids_signature(const std::vector<std::string>& shared_ids) {
-  if (shared_ids.empty()) return ".";
+std::string shared_ids_signature(const std::vector<std::string> &shared_ids) {
+  if (shared_ids.empty())
+    return ".";
   std::ostringstream oss;
   for (std::size_t i = 0; i < shared_ids.size(); ++i) {
-    if (i > 0) oss << ",";
+    if (i > 0)
+      oss << ",";
     if (shared_ids[i].empty()) {
       oss << ".";
     } else {
@@ -1470,13 +1455,15 @@ std::string shared_ids_signature(const std::vector<std::string>& shared_ids) {
   return oss.str();
 }
 
-std::vector<int> build_shared_index(const std::vector<std::string>& shared_ids) {
+std::vector<int>
+build_shared_index(const std::vector<std::string> &shared_ids) {
   std::vector<int> shared_index(shared_ids.size(), -1);
   std::unordered_map<std::string, int> group_map;
   int next_group = 1;
   for (std::size_t i = 0; i < shared_ids.size(); ++i) {
-    const std::string& sid = shared_ids[i];
-    if (sid.empty()) continue;
+    const std::string &sid = shared_ids[i];
+    if (sid.empty())
+      continue;
     auto it = group_map.find(sid);
     if (it == group_map.end()) {
       group_map[sid] = next_group;
@@ -1489,11 +1476,10 @@ std::vector<int> build_shared_index(const std::vector<std::string>& shared_ids) 
   return shared_index;
 }
 
-std::string pool_template_cache_key(const std::string& pool_label,
-                                    const std::string& component,
-                                    int k,
-                                    const std::vector<int>& member_ids,
-                                    const std::string& shared_signature) {
+std::string pool_template_cache_key(const std::string &pool_label,
+                                    const std::string &component, int k,
+                                    const std::vector<int> &member_ids,
+                                    const std::string &shared_signature) {
   std::ostringstream oss;
   oss << pool_label << "|" << component_cache_key(component) << "|" << k << "|"
       << member_ids_signature(member_ids) << "|" << shared_signature;
@@ -1507,62 +1493,52 @@ struct IntegrationSettings {
 };
 
 struct GuardEvalInput {
-  const uuber::NativeContext& ctx;
-  const uuber::NativeNode& node;
+  const uuber::NativeContext &ctx;
+  const uuber::NativeNode &node;
   std::string component;
   int component_idx{-1};
   std::string trial_type_key;
   std::unordered_set<int> forced_complete;
   std::unordered_set<int> forced_survive;
-  const TrialParamSet* trial_params;
+  const TrialParamSet *trial_params;
 };
 
-const uuber::NativeNode& fetch_node(const uuber::NativeContext& ctx, int node_id);
-NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
-                                     int node_id,
-                                     double time,
-                                     const std::string& component,
-                                     int component_idx,
-                                     const std::unordered_set<int>& forced_complete,
-                                     const std::unordered_set<int>& forced_survive,
-                                     EvalNeed need,
-                                     const TrialParamSet* trial_params,
-                                     const std::string& trial_key);
-inline NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
-                                            int node_id,
-                                            double time,
-                                            const std::string& component,
-                                            int component_idx,
-                                            const std::unordered_set<int>& forced_complete,
-                                            const std::unordered_set<int>& forced_survive,
-                                            EvalNeed need) {
-  return eval_node_with_forced(ctx,
-                               node_id,
-                               time,
-                               component,
-                               component_idx,
-                               forced_complete,
-                               forced_survive,
-                               need,
-                               nullptr,
+const uuber::NativeNode &fetch_node(const uuber::NativeContext &ctx,
+                                    int node_id);
+NodeEvalResult
+eval_node_with_forced(const uuber::NativeContext &ctx, int node_id, double time,
+                      const std::string &component, int component_idx,
+                      const std::unordered_set<int> &forced_complete,
+                      const std::unordered_set<int> &forced_survive,
+                      EvalNeed need, const TrialParamSet *trial_params,
+                      const std::string &trial_key);
+inline NodeEvalResult
+eval_node_with_forced(const uuber::NativeContext &ctx, int node_id, double time,
+                      const std::string &component, int component_idx,
+                      const std::unordered_set<int> &forced_complete,
+                      const std::unordered_set<int> &forced_survive,
+                      EvalNeed need) {
+  return eval_node_with_forced(ctx, node_id, time, component, component_idx,
+                               forced_complete, forced_survive, need, nullptr,
                                std::string());
 }
-GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
-                                const uuber::NativeNode& node,
-                                const std::string& component,
-                                int component_idx,
-                                const std::unordered_set<int>& forced_complete,
-                                const std::unordered_set<int>& forced_survive,
-                                const std::string& trial_key,
-                                const TrialParamSet* trial_params);
-std::vector<int> gather_blocker_sources(const uuber::NativeContext& ctx,
-                                        const uuber::NativeNode& guard_node);
+GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
+                                const uuber::NativeNode &node,
+                                const std::string &component, int component_idx,
+                                const std::unordered_set<int> &forced_complete,
+                                const std::unordered_set<int> &forced_survive,
+                                const std::string &trial_key,
+                                const TrialParamSet *trial_params);
+std::vector<int> gather_blocker_sources(const uuber::NativeContext &ctx,
+                                        const uuber::NativeNode &guard_node);
 
-std::vector<ScenarioRecord> compute_node_scenarios(int node_id, NodeEvalState& state);
+std::vector<ScenarioRecord> compute_node_scenarios(int node_id,
+                                                   NodeEvalState &state);
 
-int first_missing_id(const std::vector<int>& forced_complete,
-                     const std::vector<int>& required) {
-  if (required.empty()) return NA_INTEGER;
+int first_missing_id(const std::vector<int> &forced_complete,
+                     const std::vector<int> &required) {
+  if (required.empty())
+    return NA_INTEGER;
   for (int id : required) {
     if (!vector_contains(forced_complete, id)) {
       return id;
@@ -1571,31 +1547,41 @@ int first_missing_id(const std::vector<int>& forced_complete,
   return NA_INTEGER;
 }
 
-std::vector<ScenarioRecord> compute_pool_event_scenarios(const uuber::NativeNode& node,
-                                                         NodeEvalState& state) {
-  const std::string& pool_label = node.source;
-  if (pool_label.empty()) return {};
+std::vector<ScenarioRecord>
+compute_pool_event_scenarios(const uuber::NativeNode &node,
+                             NodeEvalState &state) {
+  const std::string &pool_label = node.source;
+  if (pool_label.empty())
+    return {};
   int pool_idx = node.source_ref.pool_idx;
-  if (pool_idx < 0 || pool_idx >= static_cast<int>(state.ctx.pools.size())) return {};
-  const uuber::NativePool& pool = state.ctx.pools[pool_idx];
-  if (pool.members.empty()) return {};
+  if (pool_idx < 0 || pool_idx >= static_cast<int>(state.ctx.pools.size()))
+    return {};
+  const uuber::NativePool &pool = state.ctx.pools[pool_idx];
+  if (pool.members.empty())
+    return {};
   int k = pool.k;
-  if (k < 1) return {};
+  if (k < 1)
+    return {};
 
   std::vector<std::size_t> active_indices;
   active_indices.reserve(pool.members.size());
-  for (std::size_t member_idx = 0; member_idx < pool.members.size(); ++member_idx) {
-    const LabelRef& member_ref = pool.member_refs[member_idx];
+  for (std::size_t member_idx = 0; member_idx < pool.members.size();
+       ++member_idx) {
+    const LabelRef &member_ref = pool.member_refs[member_idx];
     int acc_idx = member_ref.acc_idx;
-    if (acc_idx >= 0 && acc_idx < static_cast<int>(state.ctx.accumulators.size())) {
-      const uuber::NativeAccumulator& acc = state.ctx.accumulators[acc_idx];
-      const TrialAccumulatorParams* override = get_state_params(state, acc_idx);
-      if (!component_active(acc, state.component, state.component_idx, override)) continue;
+    if (acc_idx >= 0 &&
+        acc_idx < static_cast<int>(state.ctx.accumulators.size())) {
+      const uuber::NativeAccumulator &acc = state.ctx.accumulators[acc_idx];
+      const TrialAccumulatorParams *override = get_state_params(state, acc_idx);
+      if (!component_active(acc, state.component, state.component_idx,
+                            override))
+        continue;
     }
     active_indices.push_back(member_idx);
   }
   std::size_t n = active_indices.size();
-  if (n == 0 || k > static_cast<int>(n)) return {};
+  if (n == 0 || k > static_cast<int>(n))
+    return {};
 
   Rcpp::NumericVector dens_vec(static_cast<R_xlen_t>(n));
   Rcpp::NumericVector cdf_vec(static_cast<R_xlen_t>(n));
@@ -1606,60 +1592,49 @@ std::vector<ScenarioRecord> compute_pool_event_scenarios(const uuber::NativeNode
   std::vector<std::string> shared_ids(n);
   for (std::size_t i = 0; i < n; ++i) {
     std::size_t member_idx = active_indices[i];
-    const LabelRef& member_ref = pool.member_refs[member_idx];
+    const LabelRef &member_ref = pool.member_refs[member_idx];
     if (member_ref.label_id >= 0 && member_ref.label_id != NA_INTEGER) {
       member_ids_std[i] = member_ref.label_id;
     }
     int acc_idx = member_ref.acc_idx;
-    if (acc_idx >= 0 && acc_idx < static_cast<int>(state.ctx.accumulators.size())) {
-      const uuber::NativeAccumulator& acc = state.ctx.accumulators[acc_idx];
-      const TrialAccumulatorParams* override = get_state_params(state, acc_idx);
-      const std::string& shared_id = override ? override->shared_trigger_id : acc.shared_trigger_id;
+    if (acc_idx >= 0 &&
+        acc_idx < static_cast<int>(state.ctx.accumulators.size())) {
+      const uuber::NativeAccumulator &acc = state.ctx.accumulators[acc_idx];
+      const TrialAccumulatorParams *override = get_state_params(state, acc_idx);
+      const std::string &shared_id =
+          override ? override->shared_trigger_id : acc.shared_trigger_id;
       if (!shared_id.empty()) {
         shared_ids[i] = shared_id;
       }
     }
   }
 
-
   for (std::size_t i = 0; i < n; ++i) {
     std::size_t member_idx = active_indices[i];
-    const std::string& member_label = pool.members[member_idx];
-    const LabelRef& member_ref = pool.member_refs[member_idx];
-    NodeEvalResult eval = eval_event_label(
-      state.ctx,
-      member_label,
-      state.t,
-      state.component,
-      state.forced_complete,
-      state.forced_survive,
-      kEvalAll,
-      state.trial_params,
-      state.trial_type_key,
-      false,
-      std::string(),
-      &member_ref,
-      state.component_idx,
-      -1
-    );
+    const std::string &member_label = pool.members[member_idx];
+    const LabelRef &member_ref = pool.member_refs[member_idx];
+    NodeEvalResult eval =
+        eval_event_label(state.ctx, member_label, state.t, state.component,
+                         state.forced_complete, state.forced_survive, kEvalAll,
+                         state.trial_params, state.trial_type_key, false,
+                         std::string(), &member_ref, state.component_idx, -1);
     double density = eval.density;
     double cdf = clamp_probability(eval.cdf);
     double survival = clamp_probability(eval.survival);
     double cdf_success = cdf;
     double surv_success = survival;
     int acc_idx = member_ref.acc_idx;
-    if (acc_idx >= 0 && acc_idx < static_cast<int>(state.ctx.accumulators.size())) {
-      const uuber::NativeAccumulator& acc = state.ctx.accumulators[acc_idx];
-      const TrialAccumulatorParams* override = get_state_params(state, acc_idx);
-      const std::string& shared_id = override ? override->shared_trigger_id : acc.shared_trigger_id;
+    if (acc_idx >= 0 &&
+        acc_idx < static_cast<int>(state.ctx.accumulators.size())) {
+      const uuber::NativeAccumulator &acc = state.ctx.accumulators[acc_idx];
+      const TrialAccumulatorParams *override = get_state_params(state, acc_idx);
+      const std::string &shared_id =
+          override ? override->shared_trigger_id : acc.shared_trigger_id;
       if (!shared_id.empty()) {
         double onset = override ? override->onset : acc.onset;
-        const AccDistParams& cfg = override ? override->dist_cfg : acc.dist_cfg;
-        cdf_success = clamp_probability(acc_cdf_success_from_cfg(
-          state.t,
-          onset,
-          cfg
-        ));
+        const AccDistParams &cfg = override ? override->dist_cfg : acc.dist_cfg;
+        cdf_success =
+            clamp_probability(acc_cdf_success_from_cfg(state.t, onset, cfg));
         surv_success = clamp_probability(1.0 - cdf_success);
         cdf = cdf_success;
         survival = surv_success;
@@ -1677,29 +1652,20 @@ std::vector<ScenarioRecord> compute_pool_event_scenarios(const uuber::NativeNode
     pool_label_id = NA_INTEGER;
   }
   std::string shared_signature = shared_ids_signature(shared_ids);
-  std::string template_key = pool_template_cache_key(
-    pool_label,
-    component_cache_key(state.component),
-    k,
-    member_ids_std,
-    shared_signature
-  );
-  uuber::PoolTemplateCacheEntry* template_entry = nullptr;
+  std::string template_key =
+      pool_template_cache_key(pool_label, component_cache_key(state.component),
+                              k, member_ids_std, shared_signature);
+  uuber::PoolTemplateCacheEntry *template_entry = nullptr;
   auto tmpl_it = state.ctx.pool_template_cache.find(template_key);
   if (tmpl_it != state.ctx.pool_template_cache.end()) {
     template_entry = &tmpl_it->second;
   } else {
     uuber::PoolTemplateCacheEntry cache_entry = build_pool_template_cache(
-      static_cast<int>(n),
-      member_ids_std,
-      pool_label_id,
-      k
-    );
+        static_cast<int>(n), member_ids_std, pool_label_id, k);
     cache_entry.shared_index = build_shared_index(shared_ids);
-    template_entry = &state.ctx.pool_template_cache.emplace(
-      template_key,
-      std::move(cache_entry)
-    ).first->second;
+    template_entry = &state.ctx.pool_template_cache
+                          .emplace(template_key, std::move(cache_entry))
+                          .first->second;
   }
   if (!template_entry) {
     return {};
@@ -1711,53 +1677,38 @@ std::vector<ScenarioRecord> compute_pool_event_scenarios(const uuber::NativeNode
     return {};
   }
 
-  std::vector<int> base_forced_complete = set_to_sorted_vector(state.forced_complete);
-  std::vector<int> base_forced_survive = set_to_sorted_vector(state.forced_survive);
+  std::vector<int> base_forced_complete =
+      set_to_sorted_vector(state.forced_complete);
+  std::vector<int> base_forced_survive =
+      set_to_sorted_vector(state.forced_survive);
 
   Rcpp::List combine_res = pool_density_combine_native(
-    dens_vec,
-    cdf_vec,
-    surv_vec,
-    cdf_success_vec,
-    surv_success_vec,
-    template_entry->shared_index,
-    template_entry->templates,
-    base_forced_complete,
-    base_forced_survive
-  );
+      dens_vec, cdf_vec, surv_vec, cdf_success_vec, surv_success_vec,
+      template_entry->shared_index, template_entry->templates,
+      base_forced_complete, base_forced_survive);
   Rcpp::List scenario_list = combine_res["scenarios"];
   return rcpp_scenarios_to_records(scenario_list);
 }
 
-std::vector<ScenarioRecord> compute_event_scenarios(const uuber::NativeNode& node,
-                                                    NodeEvalState& state) {
+std::vector<ScenarioRecord>
+compute_event_scenarios(const uuber::NativeNode &node, NodeEvalState &state) {
   std::vector<ScenarioRecord> out;
   if (node.source.empty()) {
     return out;
   }
   if (node.source_ref.pool_idx >= 0 &&
       node.source_ref.pool_idx < static_cast<int>(state.ctx.pools.size())) {
-    std::vector<ScenarioRecord> pool_records = compute_pool_event_scenarios(node, state);
+    std::vector<ScenarioRecord> pool_records =
+        compute_pool_event_scenarios(node, state);
     if (!pool_records.empty()) {
       return pool_records;
     }
   }
   NodeEvalResult eval = eval_event_label(
-    state.ctx,
-    node.source,
-    state.t,
-    state.component,
-    state.forced_complete,
-    state.forced_survive,
-    EvalNeed::kDensity,
-    state.trial_params,
-    state.trial_type_key,
-    false,
-    std::string(),
-    &node.source_ref,
-    state.component_idx,
-    -1
-  );
+      state.ctx, node.source, state.t, state.component, state.forced_complete,
+      state.forced_survive, EvalNeed::kDensity, state.trial_params,
+      state.trial_type_key, false, std::string(), &node.source_ref,
+      state.component_idx, -1);
   double weight = eval.density;
   if (!std::isfinite(weight) || weight <= 0.0) {
     return out;
@@ -1773,41 +1724,42 @@ std::vector<ScenarioRecord> compute_event_scenarios(const uuber::NativeNode& nod
   return out;
 }
 
-std::vector<ScenarioRecord> compute_and_scenarios(const uuber::NativeNode& node,
-                                                  NodeEvalState& state) {
+std::vector<ScenarioRecord> compute_and_scenarios(const uuber::NativeNode &node,
+                                                  NodeEvalState &state) {
   std::vector<ScenarioRecord> out;
-  const std::vector<int>& child_ids = node.args;
-  if (child_ids.empty()) return out;
-  std::vector<const uuber::NativeNode*> child_nodes;
+  const std::vector<int> &child_ids = node.args;
+  if (child_ids.empty())
+    return out;
+  std::vector<const uuber::NativeNode *> child_nodes;
   std::vector<std::vector<int>> child_sources;
   child_nodes.reserve(child_ids.size());
   child_sources.reserve(child_ids.size());
   for (int child_id : child_ids) {
-    const uuber::NativeNode& child = fetch_node(state.ctx, child_id);
+    const uuber::NativeNode &child = fetch_node(state.ctx, child_id);
     child_nodes.push_back(&child);
     child_sources.push_back(ensure_source_ids(state.ctx, child));
   }
   for (std::size_t idx = 0; idx < child_ids.size(); ++idx) {
-    std::vector<ScenarioRecord> child_scen = compute_node_scenarios(child_ids[idx], state);
-    if (child_scen.empty()) continue;
-    for (const auto& sc : child_scen) {
-      if (!std::isfinite(sc.weight) || sc.weight <= 0.0) continue;
+    std::vector<ScenarioRecord> child_scen =
+        compute_node_scenarios(child_ids[idx], state);
+    if (child_scen.empty())
+      continue;
+    for (const auto &sc : child_scen) {
+      if (!std::isfinite(sc.weight) || sc.weight <= 0.0)
+        continue;
       double weight = sc.weight;
       std::vector<int> forced_complete = sc.forced_complete;
       std::vector<int> forced_survive = sc.forced_survive;
       bool ok = true;
-      for (std::size_t other_idx = 0; other_idx < child_ids.size(); ++other_idx) {
-        if (other_idx == idx) continue;
+      for (std::size_t other_idx = 0; other_idx < child_ids.size();
+           ++other_idx) {
+        if (other_idx == idx)
+          continue;
         std::unordered_set<int> fc_set = make_forced_set(forced_complete);
         std::unordered_set<int> fs_set = make_forced_set(forced_survive);
-        NodeEvalResult sibling = eval_node_with_forced(state.ctx,
-                                                       child_ids[other_idx],
-                                                       state.t,
-                                                       state.component,
-                                                       state.component_idx,
-                                                       fc_set,
-                                                       fs_set,
-                                                       EvalNeed::kCDF);
+        NodeEvalResult sibling = eval_node_with_forced(
+            state.ctx, child_ids[other_idx], state.t, state.component,
+            state.component_idx, fc_set, fs_set, EvalNeed::kCDF);
         double Fj = clamp_probability(sibling.cdf);
         if (!std::isfinite(Fj) || Fj <= 0.0) {
           ok = false;
@@ -1818,10 +1770,13 @@ std::vector<ScenarioRecord> compute_and_scenarios(const uuber::NativeNode& node,
           ok = false;
           break;
         }
-        forced_complete = union_vectors(forced_complete, child_sources[other_idx]);
+        forced_complete =
+            union_vectors(forced_complete, child_sources[other_idx]);
       }
-      if (!ok) continue;
-      ScenarioRecord merged = make_scenario_record(weight, forced_complete, forced_survive);
+      if (!ok)
+        continue;
+      ScenarioRecord merged =
+          make_scenario_record(weight, forced_complete, forced_survive);
       if (merged.weight > 0.0) {
         out.push_back(std::move(merged));
       }
@@ -1830,33 +1785,40 @@ std::vector<ScenarioRecord> compute_and_scenarios(const uuber::NativeNode& node,
   return out;
 }
 
-std::vector<ScenarioRecord> compute_or_scenarios(const uuber::NativeNode& node,
-                                                 NodeEvalState& state) {
+std::vector<ScenarioRecord> compute_or_scenarios(const uuber::NativeNode &node,
+                                                 NodeEvalState &state) {
   std::vector<ScenarioRecord> out;
-  const std::vector<int>& child_ids = node.args;
-  if (child_ids.empty()) return out;
-  std::vector<const uuber::NativeNode*> child_nodes;
+  const std::vector<int> &child_ids = node.args;
+  if (child_ids.empty())
+    return out;
+  std::vector<const uuber::NativeNode *> child_nodes;
   std::vector<std::vector<int>> child_sources;
   child_nodes.reserve(child_ids.size());
   child_sources.reserve(child_ids.size());
   for (int child_id : child_ids) {
-    const uuber::NativeNode& child = fetch_node(state.ctx, child_id);
+    const uuber::NativeNode &child = fetch_node(state.ctx, child_id);
     child_nodes.push_back(&child);
     child_sources.push_back(ensure_source_ids(state.ctx, child));
   }
   for (std::size_t idx = 0; idx < child_ids.size(); ++idx) {
-    std::vector<ScenarioRecord> child_scen = compute_node_scenarios(child_ids[idx], state);
-    if (child_scen.empty()) continue;
-    for (const auto& sc : child_scen) {
-      if (!std::isfinite(sc.weight) || sc.weight <= 0.0) continue;
+    std::vector<ScenarioRecord> child_scen =
+        compute_node_scenarios(child_ids[idx], state);
+    if (child_scen.empty())
+      continue;
+    for (const auto &sc : child_scen) {
+      if (!std::isfinite(sc.weight) || sc.weight <= 0.0)
+        continue;
       double weight = sc.weight;
       std::vector<int> forced_complete = sc.forced_complete;
       std::vector<int> forced_survive = sc.forced_survive;
       bool valid = true;
-      for (std::size_t other_idx = 0; other_idx < child_ids.size(); ++other_idx) {
-        if (other_idx == idx) continue;
-        const std::vector<int>& required = child_sources[other_idx];
-        if (required.empty()) continue;
+      for (std::size_t other_idx = 0; other_idx < child_ids.size();
+           ++other_idx) {
+        if (other_idx == idx)
+          continue;
+        const std::vector<int> &required = child_sources[other_idx];
+        if (required.empty())
+          continue;
         bool all_forced = true;
         for (int req : required) {
           if (!vector_contains(forced_complete, req)) {
@@ -1876,8 +1838,10 @@ std::vector<ScenarioRecord> compute_or_scenarios(const uuber::NativeNode& node,
         std::vector<int> witness_vec{witness};
         forced_survive = union_vectors(forced_survive, witness_vec);
       }
-      if (!valid) continue;
-      ScenarioRecord merged = make_scenario_record(weight, forced_complete, forced_survive);
+      if (!valid)
+        continue;
+      ScenarioRecord merged =
+          make_scenario_record(weight, forced_complete, forced_survive);
       if (merged.weight > 0.0) {
         out.push_back(std::move(merged));
       }
@@ -1886,45 +1850,43 @@ std::vector<ScenarioRecord> compute_or_scenarios(const uuber::NativeNode& node,
   return out;
 }
 
-double guard_effective_survival_internal(const GuardEvalInput& input,
-                                         double t,
-                                         const IntegrationSettings& settings);
+double guard_effective_survival_internal(const GuardEvalInput &input, double t,
+                                         const IntegrationSettings &settings);
 
-double guard_density_internal(const GuardEvalInput& input,
-                              double t,
-                              const IntegrationSettings& settings);
+double guard_density_internal(const GuardEvalInput &input, double t,
+                              const IntegrationSettings &settings);
 
-double guard_cdf_internal(const GuardEvalInput& input,
-                          double t,
-                          const IntegrationSettings& settings);
+double guard_cdf_internal(const GuardEvalInput &input, double t,
+                          const IntegrationSettings &settings);
 
-std::vector<ScenarioRecord> compute_guard_scenarios(const uuber::NativeNode& node,
-                                                    NodeEvalState& state) {
+std::vector<ScenarioRecord>
+compute_guard_scenarios(const uuber::NativeNode &node, NodeEvalState &state) {
   std::vector<ScenarioRecord> out;
   if (node.reference_id < 0) {
     return out;
   }
-  std::vector<ScenarioRecord> ref_scen = compute_node_scenarios(node.reference_id, state);
-  if (ref_scen.empty()) return out;
+  std::vector<ScenarioRecord> ref_scen =
+      compute_node_scenarios(node.reference_id, state);
+  if (ref_scen.empty())
+    return out;
   std::vector<int> blocker_sources = gather_blocker_sources(state.ctx, node);
   IntegrationSettings settings;
   out.reserve(ref_scen.size());
-  for (const auto& sc : ref_scen) {
-    if (!std::isfinite(sc.weight) || sc.weight <= 0.0) continue;
+  for (const auto &sc : ref_scen) {
+    if (!std::isfinite(sc.weight) || sc.weight <= 0.0)
+      continue;
     std::unordered_set<int> fc_set = make_forced_set(sc.forced_complete);
     std::unordered_set<int> fs_set = make_forced_set(sc.forced_survive);
-    GuardEvalInput guard_input = make_guard_input(state.ctx,
-                                                  node,
-                                                  state.component,
-                                                  state.component_idx,
-                                                  fc_set,
-                                                  fs_set,
-                                                  state.trial_type_key,
-                                                  state.trial_params);
-    double eff = guard_effective_survival_internal(guard_input, state.t, settings);
-    if (!std::isfinite(eff) || eff <= 0.0) continue;
+    GuardEvalInput guard_input = make_guard_input(
+        state.ctx, node, state.component, state.component_idx, fc_set, fs_set,
+        state.trial_type_key, state.trial_params);
+    double eff =
+        guard_effective_survival_internal(guard_input, state.t, settings);
+    if (!std::isfinite(eff) || eff <= 0.0)
+      continue;
     double weight = sc.weight * eff;
-    if (!std::isfinite(weight) || weight <= 0.0) continue;
+    if (!std::isfinite(weight) || weight <= 0.0)
+      continue;
     ScenarioRecord rec;
     rec.weight = weight;
     rec.forced_complete = sc.forced_complete;
@@ -1934,8 +1896,9 @@ std::vector<ScenarioRecord> compute_guard_scenarios(const uuber::NativeNode& nod
   return out;
 }
 
-std::vector<ScenarioRecord> compute_node_scenarios(int node_id, NodeEvalState& state) {
-  const uuber::NativeNode& node = fetch_node(state.ctx, node_id);
+std::vector<ScenarioRecord> compute_node_scenarios(int node_id,
+                                                   NodeEvalState &state) {
+  const uuber::NativeNode &node = fetch_node(state.ctx, node_id);
   std::vector<ScenarioRecord> result;
   if (node.kind == "event") {
     result = compute_event_scenarios(node, state);
@@ -1949,13 +1912,15 @@ std::vector<ScenarioRecord> compute_node_scenarios(int node_id, NodeEvalState& s
   return result;
 }
 
-NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state, EvalNeed need);
+NodeEvalResult eval_node_recursive(int node_id, NodeEvalState &state,
+                                   EvalNeed need);
 
-const uuber::NativeNode& fetch_node(const uuber::NativeContext& ctx, int node_id) {
+const uuber::NativeNode &fetch_node(const uuber::NativeContext &ctx,
+                                    int node_id) {
   return ctx.nodes.at(ctx.node_index.at(node_id));
 }
 
-bool share_sources(const std::vector<int>& a, const std::vector<int>& b);
+bool share_sources(const std::vector<int> &a, const std::vector<int> &b);
 
 struct SharedGatePair {
   std::string x;
@@ -1987,35 +1952,38 @@ struct SharedGateNWayCacheEntry {
   SharedGateNWay spec;
 };
 
-bool detect_shared_gate_pair(const uuber::NativeContext& ctx,
-                             int node_id,
-                             int competitor_node_id,
-                             SharedGatePair& out) {
-  if (node_id < 0 || competitor_node_id < 0) return false;
-  const uuber::NativeNode& target = fetch_node(ctx, node_id);
-  const uuber::NativeNode& competitor = fetch_node(ctx, competitor_node_id);
-  if (target.kind != "and" || competitor.kind != "and") return false;
-  if (target.args.size() != 2 || competitor.args.size() != 2) return false;
+bool detect_shared_gate_pair(const uuber::NativeContext &ctx, int node_id,
+                             int competitor_node_id, SharedGatePair &out) {
+  if (node_id < 0 || competitor_node_id < 0)
+    return false;
+  const uuber::NativeNode &target = fetch_node(ctx, node_id);
+  const uuber::NativeNode &competitor = fetch_node(ctx, competitor_node_id);
+  if (target.kind != "and" || competitor.kind != "and")
+    return false;
+  if (target.args.size() != 2 || competitor.args.size() != 2)
+    return false;
 
-  const uuber::NativeNode& t0 = fetch_node(ctx, target.args[0]);
-  const uuber::NativeNode& t1 = fetch_node(ctx, target.args[1]);
-  const uuber::NativeNode& c0 = fetch_node(ctx, competitor.args[0]);
-  const uuber::NativeNode& c1 = fetch_node(ctx, competitor.args[1]);
-  if (t0.kind != "event" || t1.kind != "event" || c0.kind != "event" || c1.kind != "event") {
+  const uuber::NativeNode &t0 = fetch_node(ctx, target.args[0]);
+  const uuber::NativeNode &t1 = fetch_node(ctx, target.args[1]);
+  const uuber::NativeNode &c0 = fetch_node(ctx, competitor.args[0]);
+  const uuber::NativeNode &c1 = fetch_node(ctx, competitor.args[1]);
+  if (t0.kind != "event" || t1.kind != "event" || c0.kind != "event" ||
+      c1.kind != "event") {
     return false;
   }
-  if (t0.source.empty() || t1.source.empty() || c0.source.empty() || c1.source.empty()) {
+  if (t0.source.empty() || t1.source.empty() || c0.source.empty() ||
+      c1.source.empty()) {
     return false;
   }
 
-  const std::string& target_a = t0.source;
-  const std::string& target_b = t1.source;
-  const std::string& comp_a = c0.source;
-  const std::string& comp_b = c1.source;
+  const std::string &target_a = t0.source;
+  const std::string &target_b = t1.source;
+  const std::string &comp_a = c0.source;
+  const std::string &comp_b = c1.source;
 
-  const uuber::NativeNode* shared_node = nullptr;
-  const uuber::NativeNode* x_node = nullptr;
-  const uuber::NativeNode* y_node = nullptr;
+  const uuber::NativeNode *shared_node = nullptr;
+  const uuber::NativeNode *x_node = nullptr;
+  const uuber::NativeNode *y_node = nullptr;
   if (target_a == comp_a) {
     shared_node = &t0;
     x_node = &t1;
@@ -2036,13 +2004,17 @@ bool detect_shared_gate_pair(const uuber::NativeContext& ctx,
     return false;
   }
 
-  if (!shared_node || !x_node || !y_node) return false;
-  const std::string& shared = shared_node->source;
-  const std::string& x = x_node->source;
-  const std::string& y = y_node->source;
-  if (shared.empty() || x.empty() || y.empty()) return false;
-  if (x == y) return false;
-  if (x == shared || y == shared) return false;
+  if (!shared_node || !x_node || !y_node)
+    return false;
+  const std::string &shared = shared_node->source;
+  const std::string &x = x_node->source;
+  const std::string &y = y_node->source;
+  if (shared.empty() || x.empty() || y.empty())
+    return false;
+  if (x == y)
+    return false;
+  if (x == shared || y == shared)
+    return false;
 
   out.x = x;
   out.y = y;
@@ -2053,21 +2025,24 @@ bool detect_shared_gate_pair(const uuber::NativeContext& ctx,
   return true;
 }
 
-bool detect_shared_gate_nway(const uuber::NativeContext& ctx,
-                             int node_id,
-                             const std::vector<int>& competitor_node_ids,
-                             SharedGateNWay& out) {
-  if (node_id < 0) return false;
-  if (competitor_node_ids.empty()) return false;
+bool detect_shared_gate_nway(const uuber::NativeContext &ctx, int node_id,
+                             const std::vector<int> &competitor_node_ids,
+                             SharedGateNWay &out) {
+  if (node_id < 0)
+    return false;
+  if (competitor_node_ids.empty())
+    return false;
 
   std::vector<int> node_ids;
   node_ids.reserve(1 + competitor_node_ids.size());
   node_ids.push_back(node_id);
   for (int cid : competitor_node_ids) {
-    if (cid == NA_INTEGER || cid < 0) return false;
+    if (cid == NA_INTEGER || cid < 0)
+      return false;
     node_ids.push_back(cid);
   }
-  if (node_ids.size() < 3) return false;  // N-way means >= 3 outcomes
+  if (node_ids.size() < 3)
+    return false; // N-way means >= 3 outcomes
 
   struct AndPair {
     std::string a;
@@ -2080,15 +2055,19 @@ bool detect_shared_gate_nway(const uuber::NativeContext& ctx,
   std::unordered_map<std::string, LabelRef> label_ref_map;
   label_ref_map.reserve(node_ids.size() * 2);
   for (int id : node_ids) {
-    const uuber::NativeNode& node = fetch_node(ctx, id);
-    if (node.kind != "and") return false;
-    if (node.args.size() != 2) return false;
+    const uuber::NativeNode &node = fetch_node(ctx, id);
+    if (node.kind != "and")
+      return false;
+    if (node.args.size() != 2)
+      return false;
     int c0_id = node.args[0];
     int c1_id = node.args[1];
-    const uuber::NativeNode& c0 = fetch_node(ctx, c0_id);
-    const uuber::NativeNode& c1 = fetch_node(ctx, c1_id);
-    if (c0.kind != "event" || c1.kind != "event") return false;
-    if (c0.source.empty() || c1.source.empty()) return false;
+    const uuber::NativeNode &c0 = fetch_node(ctx, c0_id);
+    const uuber::NativeNode &c1 = fetch_node(ctx, c1_id);
+    if (c0.kind != "event" || c1.kind != "event")
+      return false;
+    if (c0.source.empty() || c1.source.empty())
+      return false;
     if (!c0.source.empty()) {
       label_ref_map.emplace(c0.source, c0.source_ref);
     }
@@ -2098,19 +2077,24 @@ bool detect_shared_gate_nway(const uuber::NativeContext& ctx,
     pairs.push_back(AndPair{c0.source, c1.source, c0_id, c1_id});
   }
 
-  const std::string& cand1 = pairs[0].a;
-  const std::string& cand2 = pairs[0].b;
-  if (cand1.empty() || cand2.empty()) return false;
-  if (cand1 == cand2) return false;
+  const std::string &cand1 = pairs[0].a;
+  const std::string &cand2 = pairs[0].b;
+  if (cand1.empty() || cand2.empty())
+    return false;
+  if (cand1 == cand2)
+    return false;
 
   bool cand1_all = true;
   bool cand2_all = true;
   for (std::size_t i = 1; i < pairs.size(); ++i) {
-    const AndPair& p = pairs[i];
-    if (!(p.a == cand1 || p.b == cand1)) cand1_all = false;
-    if (!(p.a == cand2 || p.b == cand2)) cand2_all = false;
+    const AndPair &p = pairs[i];
+    if (!(p.a == cand1 || p.b == cand1))
+      cand1_all = false;
+    if (!(p.a == cand2 || p.b == cand2))
+      cand2_all = false;
   }
-  if (cand1_all == cand2_all) return false;  // either none shared or both shared
+  if (cand1_all == cand2_all)
+    return false; // either none shared or both shared
   const std::string shared_gate = cand1_all ? cand1 : cand2;
 
   std::unordered_set<std::string> seen_x;
@@ -2124,18 +2108,21 @@ bool detect_shared_gate_nway(const uuber::NativeContext& ctx,
   x_source_ids.reserve(pairs.size());
 
   for (std::size_t i = 0; i < pairs.size(); ++i) {
-    const AndPair& p = pairs[i];
+    const AndPair &p = pairs[i];
     const bool a_is_gate = (p.a == shared_gate);
     const bool b_is_gate = (p.b == shared_gate);
-    if (a_is_gate == b_is_gate) return false;
-    const std::string& x_lbl = a_is_gate ? p.b : p.a;
-    if (x_lbl.empty() || x_lbl == shared_gate) return false;
-    if (!seen_x.insert(x_lbl).second) return false;
+    if (a_is_gate == b_is_gate)
+      return false;
+    const std::string &x_lbl = a_is_gate ? p.b : p.a;
+    if (x_lbl.empty() || x_lbl == shared_gate)
+      return false;
+    if (!seen_x.insert(x_lbl).second)
+      return false;
 
     int gate_child_id = a_is_gate ? p.child0_id : p.child1_id;
     int x_child_id = a_is_gate ? p.child1_id : p.child0_id;
-    const uuber::NativeNode& gate_child = fetch_node(ctx, gate_child_id);
-    const uuber::NativeNode& x_child = fetch_node(ctx, x_child_id);
+    const uuber::NativeNode &gate_child = fetch_node(ctx, gate_child_id);
+    const uuber::NativeNode &x_child = fetch_node(ctx, x_child_id);
     if (gate_source_ids.empty()) {
       gate_source_ids = ensure_source_ids(ctx, gate_child);
     }
@@ -2148,13 +2135,15 @@ bool detect_shared_gate_nway(const uuber::NativeContext& ctx,
     }
   }
 
-  if (shared_gate.empty() || target_x.empty() || competitor_xs.empty()) return false;
+  if (shared_gate.empty() || target_x.empty() || competitor_xs.empty())
+    return false;
 
-  // Ensure the shared gate and all X leaves are independent (disjoint underlying sources).
+  // Ensure the shared gate and all X leaves are independent (disjoint
+  // underlying sources).
   std::vector<std::vector<int>> sets;
   sets.reserve(1 + x_source_ids.size());
   sets.push_back(gate_source_ids);
-  for (const auto& kv : x_source_ids) {
+  for (const auto &kv : x_source_ids) {
     sets.push_back(kv.second);
   }
   for (std::size_t i = 0; i < sets.size(); ++i) {
@@ -2170,7 +2159,7 @@ bool detect_shared_gate_nway(const uuber::NativeContext& ctx,
   out.competitor_xs = std::move(competitor_xs);
   out.competitor_refs.clear();
   out.competitor_refs.reserve(out.competitor_xs.size());
-  auto ref_for_label = [&](const std::string& label) -> LabelRef {
+  auto ref_for_label = [&](const std::string &label) -> LabelRef {
     auto it = label_ref_map.find(label);
     if (it != label_ref_map.end()) {
       return it->second;
@@ -2179,22 +2168,24 @@ bool detect_shared_gate_nway(const uuber::NativeContext& ctx,
   };
   out.gate_ref = ref_for_label(out.gate);
   out.target_ref = ref_for_label(out.target_x);
-  for (const auto& lbl : out.competitor_xs) {
+  for (const auto &lbl : out.competitor_xs) {
     out.competitor_refs.push_back(ref_for_label(lbl));
   }
   return true;
 }
 
-bool shared_gate_pair_cached(const uuber::NativeContext& ctx,
-                             int node_id,
-                             int competitor_node_id,
-                             SharedGatePair& out) {
-  if (node_id < 0 || competitor_node_id < 0) return false;
-  static std::unordered_map<const uuber::NativeContext*, std::unordered_map<std::uint64_t, SharedGatePairCacheEntry>>
-    cache_by_ctx;
-  std::uint64_t key = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(node_id)) << 32) ^
-    static_cast<std::uint32_t>(competitor_node_id);
-  SharedGatePairCacheEntry& entry = cache_by_ctx[&ctx][key];
+bool shared_gate_pair_cached(const uuber::NativeContext &ctx, int node_id,
+                             int competitor_node_id, SharedGatePair &out) {
+  if (node_id < 0 || competitor_node_id < 0)
+    return false;
+  static std::unordered_map<
+      const uuber::NativeContext *,
+      std::unordered_map<std::uint64_t, SharedGatePairCacheEntry>>
+      cache_by_ctx;
+  std::uint64_t key =
+      (static_cast<std::uint64_t>(static_cast<std::uint32_t>(node_id)) << 32) ^
+      static_cast<std::uint32_t>(competitor_node_id);
+  SharedGatePairCacheEntry &entry = cache_by_ctx[&ctx][key];
   if (!entry.computed) {
     SharedGatePair spec;
     if (detect_shared_gate_pair(ctx, node_id, competitor_node_id, spec)) {
@@ -2203,25 +2194,29 @@ bool shared_gate_pair_cached(const uuber::NativeContext& ctx,
     }
     entry.computed = true;
   }
-  if (!entry.is_shared) return false;
+  if (!entry.is_shared)
+    return false;
   out = entry.spec;
   return true;
 }
 
-std::string competitor_cache_key(const std::vector<int>& ids);
+std::string competitor_cache_key(const std::vector<int> &ids);
 
-bool shared_gate_nway_cached(const uuber::NativeContext& ctx,
-                             int node_id,
-                             const std::vector<int>& competitor_node_ids,
-                             SharedGateNWay& out) {
-  if (node_id < 0) return false;
-  if (competitor_node_ids.empty()) return false;
-  static std::unordered_map<const uuber::NativeContext*, std::unordered_map<std::string, SharedGateNWayCacheEntry>>
-    cache_by_ctx;
+bool shared_gate_nway_cached(const uuber::NativeContext &ctx, int node_id,
+                             const std::vector<int> &competitor_node_ids,
+                             SharedGateNWay &out) {
+  if (node_id < 0)
+    return false;
+  if (competitor_node_ids.empty())
+    return false;
+  static std::unordered_map<
+      const uuber::NativeContext *,
+      std::unordered_map<std::string, SharedGateNWayCacheEntry>>
+      cache_by_ctx;
   std::string key = std::to_string(node_id);
   key.push_back('|');
   key.append(competitor_cache_key(competitor_node_ids));
-  SharedGateNWayCacheEntry& entry = cache_by_ctx[&ctx][key];
+  SharedGateNWayCacheEntry &entry = cache_by_ctx[&ctx][key];
   if (!entry.computed) {
     SharedGateNWay spec;
     if (detect_shared_gate_nway(ctx, node_id, competitor_node_ids, spec)) {
@@ -2230,66 +2225,42 @@ bool shared_gate_nway_cached(const uuber::NativeContext& ctx,
     }
     entry.computed = true;
   }
-  if (!entry.is_shared) return false;
+  if (!entry.is_shared)
+    return false;
   out = entry.spec;
   return true;
 }
 
-NodeEvalResult eval_event_unforced(const uuber::NativeContext& ctx,
-                                   const std::string& label,
-                                   const LabelRef& label_ref,
-                                   double t,
-                                   const std::string& component,
-                                   int component_idx,
-                                   EvalNeed need,
-                                   const TrialParamSet* trial_params,
-                                   const std::string& trial_type_key,
-                                   bool include_na_donors,
-                                   const std::string& outcome_label_context,
-                                   int outcome_idx_context) {
+NodeEvalResult eval_event_unforced(
+    const uuber::NativeContext &ctx, const std::string &label,
+    const LabelRef &label_ref, double t, const std::string &component,
+    int component_idx, EvalNeed need, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, bool include_na_donors,
+    const std::string &outcome_label_context, int outcome_idx_context) {
   static const std::unordered_set<int> kEmptyForced;
-  return eval_event_label(ctx,
-                          label,
-                          t,
-                          component,
-                          kEmptyForced,
-                          kEmptyForced,
-                          need,
-                          trial_params,
-                          trial_type_key,
-                          include_na_donors,
-                          outcome_label_context,
-                          &label_ref,
-                          component_idx,
+  return eval_event_label(ctx, label, t, component, kEmptyForced, kEmptyForced,
+                          need, trial_params, trial_type_key, include_na_donors,
+                          outcome_label_context, &label_ref, component_idx,
                           outcome_idx_context);
 }
 
-double shared_gate_pair_density(const uuber::NativeContext& ctx,
-                                const SharedGatePair& pair,
-                                double t,
-                                const std::string& component,
-                                int component_idx,
-                                const TrialParamSet* trial_params,
-                                const std::string& trial_type_key,
+double shared_gate_pair_density(const uuber::NativeContext &ctx,
+                                const SharedGatePair &pair, double t,
+                                const std::string &component, int component_idx,
+                                const TrialParamSet *trial_params,
+                                const std::string &trial_type_key,
                                 bool include_na_donors,
-                                const std::string& outcome_label_context,
+                                const std::string &outcome_label_context,
                                 int outcome_idx_context) {
-  if (!std::isfinite(t) || t < 0.0) return 0.0;
+  if (!std::isfinite(t) || t < 0.0)
+    return 0.0;
 
   const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
-  auto eval_unforced = [&](const std::string& lbl, const LabelRef& ref, double u) -> NodeEvalResult {
-    return eval_event_unforced(ctx,
-                               lbl,
-                               ref,
-                               u,
-                               component,
-                               component_idx,
-                               need,
-                               trial_params,
-                               trial_type_key,
-                               include_na_donors,
-                               outcome_label_context,
-                               outcome_idx_context);
+  auto eval_unforced = [&](const std::string &lbl, const LabelRef &ref,
+                           double u) -> NodeEvalResult {
+    return eval_event_unforced(ctx, lbl, ref, u, component, component_idx, need,
+                               trial_params, trial_type_key, include_na_donors,
+                               outcome_label_context, outcome_idx_context);
   };
   NodeEvalResult ex = eval_unforced(pair.x, pair.x_ref, t);
   NodeEvalResult ey = eval_unforced(pair.y, pair.y_ref, t);
@@ -2309,72 +2280,67 @@ double shared_gate_pair_density(const uuber::NativeContext& ctx,
   double term2 = 0.0;
 
   double denom = FX * FY;
-  if (std::isfinite(fC) && fC > 0.0 && std::isfinite(denom) && denom > 0.0 && t > 0.0) {
+  if (std::isfinite(fC) && fC > 0.0 && std::isfinite(denom) && denom > 0.0 &&
+      t > 0.0) {
     auto integrand = [&](double u) -> double {
-      if (!std::isfinite(u) || u < 0.0) return 0.0;
+      if (!std::isfinite(u) || u < 0.0)
+        return 0.0;
       NodeEvalResult ex_u = eval_unforced(pair.x, pair.x_ref, u);
       NodeEvalResult ey_u = eval_unforced(pair.y, pair.y_ref, u);
       double fx_u = ex_u.density;
-      if (!std::isfinite(fx_u) || fx_u <= 0.0) return 0.0;
+      if (!std::isfinite(fx_u) || fx_u <= 0.0)
+        return 0.0;
       double fy_u = clamp_probability(1.0 - clamp_probability(ey_u.survival));
       double val = fx_u * fy_u;
-      if (!std::isfinite(val) || val <= 0.0) return 0.0;
+      if (!std::isfinite(val) || val <= 0.0)
+        return 0.0;
       return val;
     };
-    double integral = uuber::integrate_boost_fn(integrand,
-                                                0.0,
-                                                t,
-                                                kDefaultRelTol,
-                                                kDefaultAbsTol,
-                                                kDefaultMaxDepth);
-    if (!std::isfinite(integral) || integral < 0.0) integral = 0.0;
+    double integral = uuber::integrate_boost_fn(
+        integrand, 0.0, t, kDefaultRelTol, kDefaultAbsTol, kDefaultMaxDepth);
+    if (!std::isfinite(integral) || integral < 0.0)
+      integral = 0.0;
     double term = denom - integral;
-    if (term < 0.0) term = 0.0;
+    if (term < 0.0)
+      term = 0.0;
     term2 = fC * term;
   }
 
   double out = term1 + termCother + term2;
-  if (!std::isfinite(out) || out < 0.0) return 0.0;
+  if (!std::isfinite(out) || out < 0.0)
+    return 0.0;
   return out;
 }
 
-double shared_gate_nway_density(const uuber::NativeContext& ctx,
-                                const SharedGateNWay& gate,
-                                double t,
-                                const std::string& component,
-                                int component_idx,
-                                const TrialParamSet* trial_params,
-                                const std::string& trial_type_key,
+double shared_gate_nway_density(const uuber::NativeContext &ctx,
+                                const SharedGateNWay &gate, double t,
+                                const std::string &component, int component_idx,
+                                const TrialParamSet *trial_params,
+                                const std::string &trial_type_key,
                                 bool include_na_donors,
-                                const std::string& outcome_label_context,
+                                const std::string &outcome_label_context,
                                 int outcome_idx_context) {
-  if (!std::isfinite(t) || t < 0.0) return 0.0;
-  if (gate.target_x.empty() || gate.gate.empty() || gate.competitor_xs.empty()) return 0.0;
+  if (!std::isfinite(t) || t < 0.0)
+    return 0.0;
+  if (gate.target_x.empty() || gate.gate.empty() || gate.competitor_xs.empty())
+    return 0.0;
 
   const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
-  auto eval_unforced = [&](const std::string& lbl, const LabelRef& ref, double u) -> NodeEvalResult {
-    return eval_event_unforced(ctx,
-                               lbl,
-                               ref,
-                               u,
-                               component,
-                               component_idx,
-                               need,
-                               trial_params,
-                               trial_type_key,
-                               include_na_donors,
-                               outcome_label_context,
-                               outcome_idx_context);
+  auto eval_unforced = [&](const std::string &lbl, const LabelRef &ref,
+                           double u) -> NodeEvalResult {
+    return eval_event_unforced(ctx, lbl, ref, u, component, component_idx, need,
+                               trial_params, trial_type_key, include_na_donors,
+                               outcome_label_context, outcome_idx_context);
   };
   NodeEvalResult ex = eval_unforced(gate.target_x, gate.target_ref, t);
   NodeEvalResult ec = eval_unforced(gate.gate, gate.gate_ref, t);
 
   double prod_surv = 1.0;
   for (std::size_t i = 0; i < gate.competitor_xs.size(); ++i) {
-    const std::string& lbl = gate.competitor_xs[i];
+    const std::string &lbl = gate.competitor_xs[i];
     LabelRef ref = (i < gate.competitor_refs.size())
-      ? gate.competitor_refs[i]
-      : resolve_label_ref_runtime(ctx, lbl);
+                       ? gate.competitor_refs[i]
+                       : resolve_label_ref_runtime(ctx, lbl);
     NodeEvalResult ej = eval_unforced(lbl, ref, t);
     double sj = clamp_probability(ej.survival);
     prod_surv *= sj;
@@ -2389,77 +2355,65 @@ double shared_gate_nway_density(const uuber::NativeContext& ctx,
   double FC = clamp_probability(1.0 - clamp_probability(ec.survival));
 
   double term1 = (std::isfinite(fX) && fX > 0.0 && prod_surv > 0.0 && FC > 0.0)
-    ? (fX * FC * prod_surv)
-    : 0.0;
+                     ? (fX * FC * prod_surv)
+                     : 0.0;
 
   double term2 = 0.0;
   if (std::isfinite(fC) && fC > 0.0 && t > 0.0) {
     auto integrand = [&](double u) -> double {
-      if (!std::isfinite(u) || u < 0.0) return 0.0;
+      if (!std::isfinite(u) || u < 0.0)
+        return 0.0;
       NodeEvalResult ex_u = eval_unforced(gate.target_x, gate.target_ref, u);
       double fx_u = ex_u.density;
-      if (!std::isfinite(fx_u) || fx_u <= 0.0) return 0.0;
+      if (!std::isfinite(fx_u) || fx_u <= 0.0)
+        return 0.0;
       double prod = 1.0;
       for (std::size_t i = 0; i < gate.competitor_xs.size(); ++i) {
-        const std::string& lbl = gate.competitor_xs[i];
+        const std::string &lbl = gate.competitor_xs[i];
         LabelRef ref = (i < gate.competitor_refs.size())
-          ? gate.competitor_refs[i]
-          : resolve_label_ref_runtime(ctx, lbl);
+                           ? gate.competitor_refs[i]
+                           : resolve_label_ref_runtime(ctx, lbl);
         NodeEvalResult ej_u = eval_unforced(lbl, ref, u);
         prod *= clamp_probability(ej_u.survival);
-        if (!std::isfinite(prod) || prod <= 0.0) return 0.0;
+        if (!std::isfinite(prod) || prod <= 0.0)
+          return 0.0;
       }
       double val = fx_u * prod;
       return (std::isfinite(val) && val > 0.0) ? val : 0.0;
     };
-    double integral = uuber::integrate_boost_fn(integrand,
-                                                0.0,
-                                                t,
-                                                kDefaultRelTol,
-                                                kDefaultAbsTol,
-                                                kDefaultMaxDepth);
-    if (!std::isfinite(integral) || integral < 0.0) integral = 0.0;
+    double integral = uuber::integrate_boost_fn(
+        integrand, 0.0, t, kDefaultRelTol, kDefaultAbsTol, kDefaultMaxDepth);
+    if (!std::isfinite(integral) || integral < 0.0)
+      integral = 0.0;
     term2 = fC * integral;
   }
 
   double out = term1 + term2;
-  if (!std::isfinite(out) || out < 0.0) return 0.0;
+  if (!std::isfinite(out) || out < 0.0)
+    return 0.0;
   return out;
 }
 
-double shared_gate_nway_probability(const uuber::NativeContext& ctx,
-                                    const SharedGateNWay& gate,
-                                    double upper,
-                                    const std::string& component,
-                                    int component_idx,
-                                    const TrialParamSet* trial_params,
-                                    const std::string& trial_type_key,
-                                    double rel_tol,
-                                    double abs_tol,
-                                    int max_depth,
-                                    bool include_na_donors,
-                                    const std::string& outcome_label_context,
-                                    int outcome_idx_context) {
-  if (gate.target_x.empty() || gate.gate.empty() || gate.competitor_xs.empty()) return 0.0;
+double shared_gate_nway_probability(
+    const uuber::NativeContext &ctx, const SharedGateNWay &gate, double upper,
+    const std::string &component, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    double rel_tol, double abs_tol, int max_depth, bool include_na_donors,
+    const std::string &outcome_label_context, int outcome_idx_context) {
+  if (gate.target_x.empty() || gate.gate.empty() || gate.competitor_xs.empty())
+    return 0.0;
   if (!std::isfinite(upper)) {
     upper = std::numeric_limits<double>::infinity();
   }
-  if (upper <= 0.0) return 0.0;
+  if (upper <= 0.0)
+    return 0.0;
 
   const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
-  auto eval_unforced = [&](const std::string& lbl, const LabelRef& ref, double t) -> NodeEvalResult {
-    return eval_event_unforced(ctx,
-                               lbl,
-                               ref,
-                               t,
-                               component,
-                               component_idx,
-                               need,
-                               trial_params,
-                               trial_type_key,
-                               include_na_donors,
-                               outcome_label_context,
-                               outcome_idx_context);
+  auto eval_unforced = [&](const std::string &lbl, const LabelRef &ref,
+                           double t) -> NodeEvalResult {
+    return eval_event_unforced(ctx, lbl, ref, t, component, component_idx, need,
+                               trial_params, trial_type_key, include_na_donors,
+                               outcome_label_context, outcome_idx_context);
   };
 
   // Gate must finish by `upper` for any outcome to be observed by `upper`.
@@ -2467,43 +2421,53 @@ double shared_gate_nway_probability(const uuber::NativeContext& ctx,
   if (std::isfinite(upper)) {
     NodeEvalResult ec_upper = eval_unforced(gate.gate, gate.gate_ref, upper);
     gate_cdf = clamp_probability(1.0 - clamp_probability(ec_upper.survival));
-    if (!std::isfinite(gate_cdf) || gate_cdf <= 0.0) return 0.0;
+    if (!std::isfinite(gate_cdf) || gate_cdf <= 0.0)
+      return 0.0;
   } else {
-    // For upper = Inf, compute probability of a finite gate time by integrating its density.
+    // For upper = Inf, compute probability of a finite gate time by integrating
+    // its density.
     auto gate_dens = [&](double t) -> double {
       NodeEvalResult ec = eval_unforced(gate.gate, gate.gate_ref, t);
       double fc = ec.density;
       return (std::isfinite(fc) && fc > 0.0) ? fc : 0.0;
     };
     auto transformed_gate = [&](double x) -> double {
-      if (x <= 0.0) return 0.0;
-      if (x >= 1.0) x = std::nextafter(1.0, 0.0);
+      if (x <= 0.0)
+        return 0.0;
+      if (x >= 1.0)
+        x = std::nextafter(1.0, 0.0);
       double t = x / (1.0 - x);
       double jac = 1.0 / ((1.0 - x) * (1.0 - x));
       double val = gate_dens(t);
-      if (!std::isfinite(val) || val <= 0.0) return 0.0;
+      if (!std::isfinite(val) || val <= 0.0)
+        return 0.0;
       double out = val * jac;
       return std::isfinite(out) ? out : 0.0;
     };
-    gate_cdf = uuber::integrate_boost_fn(transformed_gate, 0.0, 1.0, rel_tol, abs_tol, max_depth);
-    if (!std::isfinite(gate_cdf) || gate_cdf < 0.0) gate_cdf = 0.0;
+    gate_cdf = uuber::integrate_boost_fn(transformed_gate, 0.0, 1.0, rel_tol,
+                                         abs_tol, max_depth);
+    if (!std::isfinite(gate_cdf) || gate_cdf < 0.0)
+      gate_cdf = 0.0;
     gate_cdf = clamp_probability(gate_cdf);
-    if (gate_cdf <= 0.0) return 0.0;
+    if (gate_cdf <= 0.0)
+      return 0.0;
   }
 
   auto order_integrand = [&](double t) -> double {
     NodeEvalResult ex = eval_unforced(gate.target_x, gate.target_ref, t);
     double fx = ex.density;
-    if (!std::isfinite(fx) || fx <= 0.0) return 0.0;
+    if (!std::isfinite(fx) || fx <= 0.0)
+      return 0.0;
     double prod = 1.0;
     for (std::size_t i = 0; i < gate.competitor_xs.size(); ++i) {
-      const std::string& lbl = gate.competitor_xs[i];
+      const std::string &lbl = gate.competitor_xs[i];
       LabelRef ref = (i < gate.competitor_refs.size())
-        ? gate.competitor_refs[i]
-        : resolve_label_ref_runtime(ctx, lbl);
+                         ? gate.competitor_refs[i]
+                         : resolve_label_ref_runtime(ctx, lbl);
       NodeEvalResult ej = eval_unforced(lbl, ref, t);
       prod *= clamp_probability(ej.survival);
-      if (!std::isfinite(prod) || prod <= 0.0) return 0.0;
+      if (!std::isfinite(prod) || prod <= 0.0)
+        return 0.0;
     }
     double val = fx * prod;
     return (std::isfinite(val) && val > 0.0) ? val : 0.0;
@@ -2511,76 +2475,75 @@ double shared_gate_nway_probability(const uuber::NativeContext& ctx,
 
   double order_mass = 0.0;
   if (std::isfinite(upper)) {
-    order_mass = uuber::integrate_boost_fn(order_integrand, 0.0, upper, rel_tol, abs_tol, max_depth);
+    order_mass = uuber::integrate_boost_fn(order_integrand, 0.0, upper, rel_tol,
+                                           abs_tol, max_depth);
   } else {
     auto transformed = [&](double x) -> double {
-      if (x <= 0.0) return 0.0;
-      if (x >= 1.0) x = std::nextafter(1.0, 0.0);
+      if (x <= 0.0)
+        return 0.0;
+      if (x >= 1.0)
+        x = std::nextafter(1.0, 0.0);
       double t = x / (1.0 - x);
       double jac = 1.0 / ((1.0 - x) * (1.0 - x));
       double val = order_integrand(t);
-      if (!std::isfinite(val) || val <= 0.0) return 0.0;
+      if (!std::isfinite(val) || val <= 0.0)
+        return 0.0;
       double out = val * jac;
       return std::isfinite(out) ? out : 0.0;
     };
-    order_mass = uuber::integrate_boost_fn(transformed, 0.0, 1.0, rel_tol, abs_tol, max_depth);
+    order_mass = uuber::integrate_boost_fn(transformed, 0.0, 1.0, rel_tol,
+                                           abs_tol, max_depth);
   }
-  if (!std::isfinite(order_mass) || order_mass < 0.0) order_mass = 0.0;
+  if (!std::isfinite(order_mass) || order_mass < 0.0)
+    order_mass = 0.0;
 
   double total = gate_cdf * order_mass;
-  if (!std::isfinite(total) || total < 0.0) total = 0.0;
+  if (!std::isfinite(total) || total < 0.0)
+    total = 0.0;
   return clamp_probability(total);
 }
 
-double shared_gate_pair_probability(const uuber::NativeContext& ctx,
-                                    const SharedGatePair& pair,
-                                    double upper,
-                                    const std::string& component,
-                                    int component_idx,
-                                    const TrialParamSet* trial_params,
-                                    const std::string& trial_type_key,
-                                    double rel_tol,
-                                    double abs_tol,
-                                    int max_depth,
-                                    bool include_na_donors,
-                                    const std::string& outcome_label_context,
-                                    int outcome_idx_context) {
+double shared_gate_pair_probability(
+    const uuber::NativeContext &ctx, const SharedGatePair &pair, double upper,
+    const std::string &component, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    double rel_tol, double abs_tol, int max_depth, bool include_na_donors,
+    const std::string &outcome_label_context, int outcome_idx_context) {
   if (!std::isfinite(upper)) {
     upper = std::numeric_limits<double>::infinity();
   }
-  if (upper <= 0.0) return 0.0;
+  if (upper <= 0.0)
+    return 0.0;
 
-  auto integrate = [&](const std::function<double(double)>& integrand) -> double {
+  auto integrate =
+      [&](const std::function<double(double)> &integrand) -> double {
     if (std::isfinite(upper)) {
-      return uuber::integrate_boost_fn(integrand, 0.0, upper, rel_tol, abs_tol, max_depth);
+      return uuber::integrate_boost_fn(integrand, 0.0, upper, rel_tol, abs_tol,
+                                       max_depth);
     }
     auto transformed = [&](double x) -> double {
-      if (x <= 0.0) return 0.0;
-      if (x >= 1.0) x = std::nextafter(1.0, 0.0);
+      if (x <= 0.0)
+        return 0.0;
+      if (x >= 1.0)
+        x = std::nextafter(1.0, 0.0);
       double t = x / (1.0 - x);
       double jac = 1.0 / ((1.0 - x) * (1.0 - x));
       double val = integrand(t);
-      if (!std::isfinite(val) || val <= 0.0) return 0.0;
+      if (!std::isfinite(val) || val <= 0.0)
+        return 0.0;
       double out = val * jac;
       return std::isfinite(out) ? out : 0.0;
     };
-    return uuber::integrate_boost_fn(transformed, 0.0, 1.0, rel_tol, abs_tol, max_depth);
+    return uuber::integrate_boost_fn(transformed, 0.0, 1.0, rel_tol, abs_tol,
+                                     max_depth);
   };
 
   const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
-  auto eval_unforced = [&](const std::string& lbl, const LabelRef& ref, double t) -> NodeEvalResult {
-    return eval_event_unforced(ctx,
-                               lbl,
-                               ref,
-                               t,
-                               component,
-                               component_idx,
-                               need,
-                               trial_params,
-                               trial_type_key,
-                               include_na_donors,
-                               outcome_label_context,
-                               outcome_idx_context);
+  auto eval_unforced = [&](const std::string &lbl, const LabelRef &ref,
+                           double t) -> NodeEvalResult {
+    return eval_event_unforced(ctx, lbl, ref, t, component, component_idx, need,
+                               trial_params, trial_type_key, include_na_donors,
+                               outcome_label_context, outcome_idx_context);
   };
 
   auto I1 = integrate([&](double t) -> double {
@@ -2588,7 +2551,8 @@ double shared_gate_pair_probability(const uuber::NativeContext& ctx,
     NodeEvalResult ey = eval_unforced(pair.y, pair.y_ref, t);
     NodeEvalResult ec = eval_unforced(pair.c, pair.c_ref, t);
     double fx = ex.density;
-    if (!std::isfinite(fx) || fx <= 0.0) return 0.0;
+    if (!std::isfinite(fx) || fx <= 0.0)
+      return 0.0;
     double sc = clamp_probability(ec.survival);
     double fc = clamp_probability(1.0 - sc);
     double sy = clamp_probability(ey.survival);
@@ -2601,7 +2565,8 @@ double shared_gate_pair_probability(const uuber::NativeContext& ctx,
     NodeEvalResult ey = eval_unforced(pair.y, pair.y_ref, t);
     NodeEvalResult ec = eval_unforced(pair.c, pair.c_ref, t);
     double fc_dens = ec.density;
-    if (!std::isfinite(fc_dens) || fc_dens <= 0.0) return 0.0;
+    if (!std::isfinite(fc_dens) || fc_dens <= 0.0)
+      return 0.0;
     double fx = clamp_probability(1.0 - clamp_probability(ex.survival));
     double sy = clamp_probability(ey.survival);
     double val = fc_dens * fx * sy;
@@ -2613,7 +2578,8 @@ double shared_gate_pair_probability(const uuber::NativeContext& ctx,
     NodeEvalResult ey = eval_unforced(pair.y, pair.y_ref, t);
     NodeEvalResult ec = eval_unforced(pair.c, pair.c_ref, t);
     double fc_dens = ec.density;
-    if (!std::isfinite(fc_dens) || fc_dens <= 0.0) return 0.0;
+    if (!std::isfinite(fc_dens) || fc_dens <= 0.0)
+      return 0.0;
     double fx = clamp_probability(1.0 - clamp_probability(ex.survival));
     double fy = clamp_probability(1.0 - clamp_probability(ey.survival));
     double val = fc_dens * fx * fy;
@@ -2623,13 +2589,15 @@ double shared_gate_pair_probability(const uuber::NativeContext& ctx,
   double total = 0.0;
   if (std::isfinite(upper)) {
     NodeEvalResult ec_upper = eval_unforced(pair.c, pair.c_ref, upper);
-    double fc_upper = clamp_probability(1.0 - clamp_probability(ec_upper.survival));
+    double fc_upper =
+        clamp_probability(1.0 - clamp_probability(ec_upper.survival));
 
     auto J = integrate([&](double t) -> double {
       NodeEvalResult ex = eval_unforced(pair.x, pair.x_ref, t);
       NodeEvalResult ey = eval_unforced(pair.y, pair.y_ref, t);
       double fx_dens = ex.density;
-      if (!std::isfinite(fx_dens) || fx_dens <= 0.0) return 0.0;
+      if (!std::isfinite(fx_dens) || fx_dens <= 0.0)
+        return 0.0;
       double fy = clamp_probability(1.0 - clamp_probability(ey.survival));
       double val = fx_dens * fy;
       return (std::isfinite(val) && val > 0.0) ? val : 0.0;
@@ -2640,7 +2608,8 @@ double shared_gate_pair_probability(const uuber::NativeContext& ctx,
       NodeEvalResult ey = eval_unforced(pair.y, pair.y_ref, t);
       NodeEvalResult ec = eval_unforced(pair.c, pair.c_ref, t);
       double fx_dens = ex.density;
-      if (!std::isfinite(fx_dens) || fx_dens <= 0.0) return 0.0;
+      if (!std::isfinite(fx_dens) || fx_dens <= 0.0)
+        return 0.0;
       double fy = clamp_probability(1.0 - clamp_probability(ey.survival));
       double fc = clamp_probability(1.0 - clamp_probability(ec.survival));
       double val = fx_dens * fy * fc;
@@ -2654,7 +2623,8 @@ double shared_gate_pair_probability(const uuber::NativeContext& ctx,
       NodeEvalResult ey = eval_unforced(pair.y, pair.y_ref, t);
       NodeEvalResult ec = eval_unforced(pair.c, pair.c_ref, t);
       double fx_dens = ex.density;
-      if (!std::isfinite(fx_dens) || fx_dens <= 0.0) return 0.0;
+      if (!std::isfinite(fx_dens) || fx_dens <= 0.0)
+        return 0.0;
       double fy = clamp_probability(1.0 - clamp_probability(ey.survival));
       double sc = clamp_probability(ec.survival);
       double val = fx_dens * fy * sc;
@@ -2663,38 +2633,27 @@ double shared_gate_pair_probability(const uuber::NativeContext& ctx,
     total = I1 + I2 + I3 - I4;
   }
 
-  if (!std::isfinite(total) || total < 0.0) total = 0.0;
+  if (!std::isfinite(total) || total < 0.0)
+    total = 0.0;
   return clamp_probability(total);
 }
 
-NodeEvalResult eval_node_with_forced(const uuber::NativeContext& ctx,
-                                     int node_id,
-                                     double time,
-                                     const std::string& component,
-                                     int component_idx,
-                                     const std::unordered_set<int>& forced_complete,
-                                     const std::unordered_set<int>& forced_survive,
-                                     EvalNeed need,
-                                     const TrialParamSet* trial_params,
-                                     const std::string& trial_key) {
-  NodeEvalState local(ctx,
-                      time,
-                      component,
-                      forced_complete,
-                      forced_survive,
-                      trial_params,
-                      trial_key,
-                      false,
-                      std::string(),
-                      component_idx,
-                      -1);
+NodeEvalResult
+eval_node_with_forced(const uuber::NativeContext &ctx, int node_id, double time,
+                      const std::string &component, int component_idx,
+                      const std::unordered_set<int> &forced_complete,
+                      const std::unordered_set<int> &forced_survive,
+                      EvalNeed need, const TrialParamSet *trial_params,
+                      const std::string &trial_key) {
+  NodeEvalState local(ctx, time, component, forced_complete, forced_survive,
+                      trial_params, trial_key, false, std::string(),
+                      component_idx, -1);
   return eval_node_recursive(node_id, local, need);
 }
 
-NodeEvalResult eval_and_node(const uuber::NativeNode& node,
-                             NodeEvalState& state,
-                             EvalNeed need) {
-  const std::vector<int>& child_ids = node.args;
+NodeEvalResult eval_and_node(const uuber::NativeNode &node,
+                             NodeEvalState &state, EvalNeed need) {
+  const std::vector<int> &child_ids = node.args;
   if (child_ids.empty()) {
     return make_node_result(need, 0.0, 1.0, 0.0);
   }
@@ -2717,11 +2676,13 @@ NodeEvalResult eval_and_node(const uuber::NativeNode& node,
   std::vector<double> suffix(n + 1, 1.0);
   for (std::size_t i = 0; i < n; ++i) {
     prefix[i + 1] = prefix[i] * child_cdf[i];
-    if (!std::isfinite(prefix[i + 1])) prefix[i + 1] = 0.0;
+    if (!std::isfinite(prefix[i + 1]))
+      prefix[i + 1] = 0.0;
   }
   for (std::size_t i = n; i-- > 0;) {
     suffix[i] = suffix[i + 1] * child_cdf[i];
-    if (!std::isfinite(suffix[i])) suffix[i] = 0.0;
+    if (!std::isfinite(suffix[i]))
+      suffix[i] = 0.0;
   }
   double total_cdf = clamp_probability(prefix[n]);
   double density = std::numeric_limits<double>::quiet_NaN();
@@ -2729,26 +2690,26 @@ NodeEvalResult eval_and_node(const uuber::NativeNode& node,
     double accum = 0.0;
     for (std::size_t i = 0; i < n; ++i) {
       double child_density = children[i].density;
-      if (!std::isfinite(child_density) || child_density <= 0.0) continue;
+      if (!std::isfinite(child_density) || child_density <= 0.0)
+        continue;
       double others = prefix[i] * suffix[i + 1];
-      if (!std::isfinite(others) || others <= 0.0) continue;
+      if (!std::isfinite(others) || others <= 0.0)
+        continue;
       accum += child_density * clamp_probability(others);
     }
     density = (std::isfinite(accum) && accum >= 0.0) ? accum : 0.0;
   }
   double survival = needs_survival(need)
-    ? clamp_probability(1.0 - total_cdf)
-    : std::numeric_limits<double>::quiet_NaN();
-  double cdf = needs_cdf(need)
-    ? total_cdf
-    : std::numeric_limits<double>::quiet_NaN();
+                        ? clamp_probability(1.0 - total_cdf)
+                        : std::numeric_limits<double>::quiet_NaN();
+  double cdf =
+      needs_cdf(need) ? total_cdf : std::numeric_limits<double>::quiet_NaN();
   return make_node_result(need, density, survival, cdf);
 }
 
-NodeEvalResult eval_or_node(const uuber::NativeNode& node,
-                            NodeEvalState& state,
+NodeEvalResult eval_or_node(const uuber::NativeNode &node, NodeEvalState &state,
                             EvalNeed need) {
-  const std::vector<int>& child_ids = node.args;
+  const std::vector<int> &child_ids = node.args;
   if (child_ids.empty()) {
     return make_node_result(need, 0.0, 1.0, 0.0);
   }
@@ -2771,11 +2732,13 @@ NodeEvalResult eval_or_node(const uuber::NativeNode& node,
   std::vector<double> suffix(n + 1, 1.0);
   for (std::size_t i = 0; i < n; ++i) {
     prefix[i + 1] = prefix[i] * child_surv[i];
-    if (!std::isfinite(prefix[i + 1])) prefix[i + 1] = 0.0;
+    if (!std::isfinite(prefix[i + 1]))
+      prefix[i + 1] = 0.0;
   }
   for (std::size_t i = n; i-- > 0;) {
     suffix[i] = suffix[i + 1] * child_surv[i];
-    if (!std::isfinite(suffix[i])) suffix[i] = 0.0;
+    if (!std::isfinite(suffix[i]))
+      suffix[i] = 0.0;
   }
   double total_surv = clamp_probability(prefix[n]);
   double density = std::numeric_limits<double>::quiet_NaN();
@@ -2783,25 +2746,25 @@ NodeEvalResult eval_or_node(const uuber::NativeNode& node,
     double accum = 0.0;
     for (std::size_t i = 0; i < n; ++i) {
       double child_density = children[i].density;
-      if (!std::isfinite(child_density) || child_density <= 0.0) continue;
+      if (!std::isfinite(child_density) || child_density <= 0.0)
+        continue;
       double others = prefix[i] * suffix[i + 1];
-      if (!std::isfinite(others) || others <= 0.0) continue;
+      if (!std::isfinite(others) || others <= 0.0)
+        continue;
       accum += child_density * clamp_probability(others);
     }
     density = (std::isfinite(accum) && accum >= 0.0) ? accum : 0.0;
   }
   double survival = needs_survival(need)
-    ? total_surv
-    : std::numeric_limits<double>::quiet_NaN();
-  double cdf = needs_cdf(need)
-    ? clamp_probability(1.0 - total_surv)
-    : std::numeric_limits<double>::quiet_NaN();
+                        ? total_surv
+                        : std::numeric_limits<double>::quiet_NaN();
+  double cdf = needs_cdf(need) ? clamp_probability(1.0 - total_surv)
+                               : std::numeric_limits<double>::quiet_NaN();
   return make_node_result(need, density, survival, cdf);
 }
 
-NodeEvalResult eval_not_node(const uuber::NativeNode& node,
-                             NodeEvalState& state,
-                             EvalNeed need) {
+NodeEvalResult eval_not_node(const uuber::NativeNode &node,
+                             NodeEvalState &state, EvalNeed need) {
   int child_id = node.arg_id;
   if (child_id < 0) {
     return make_node_result(need, 0.0, 1.0, 0.0);
@@ -2810,57 +2773,43 @@ NodeEvalResult eval_not_node(const uuber::NativeNode& node,
   double child_cdf = clamp_probability(child.cdf);
   double self_cdf = clamp_probability(1.0 - child_cdf);
   double survival = needs_survival(need)
-    ? child_cdf
-    : std::numeric_limits<double>::quiet_NaN();
-  double cdf = needs_cdf(need)
-    ? self_cdf
-    : std::numeric_limits<double>::quiet_NaN();
+                        ? child_cdf
+                        : std::numeric_limits<double>::quiet_NaN();
+  double cdf =
+      needs_cdf(need) ? self_cdf : std::numeric_limits<double>::quiet_NaN();
   return make_node_result(need, 0.0, survival, cdf);
 }
 
-GuardEvalInput make_guard_input(const uuber::NativeContext& ctx,
-                                const uuber::NativeNode& node,
-                                const std::string& component,
-                                int component_idx,
-                                const std::unordered_set<int>& forced_complete,
-                                const std::unordered_set<int>& forced_survive,
-                                const std::string& trial_key,
-                                const TrialParamSet* trial_params) {
-  GuardEvalInput input{
-    ctx,
-    node,
-    component,
-    component_idx,
-    component_cache_key(component, trial_key),
-    {},
-    {},
-    trial_params
-  };
+GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
+                                const uuber::NativeNode &node,
+                                const std::string &component, int component_idx,
+                                const std::unordered_set<int> &forced_complete,
+                                const std::unordered_set<int> &forced_survive,
+                                const std::string &trial_key,
+                                const TrialParamSet *trial_params) {
+  GuardEvalInput input{ctx,
+                       node,
+                       component,
+                       component_idx,
+                       component_cache_key(component, trial_key),
+                       {},
+                       {},
+                       trial_params};
   input.forced_complete = filter_forced_scope(forced_complete, node.source_ids);
   input.forced_survive = filter_forced_scope(forced_survive, node.source_ids);
   return input;
 }
 
-NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state, EvalNeed need) {
-  const uuber::NativeNode& node = fetch_node(state.ctx, node_id);
+NodeEvalResult eval_node_recursive(int node_id, NodeEvalState &state,
+                                   EvalNeed need) {
+  const uuber::NativeNode &node = fetch_node(state.ctx, node_id);
   NodeEvalResult result;
   if (node.kind == "event") {
     result = eval_event_label(
-      state.ctx,
-      node.source,
-      state.t,
-      state.component,
-      state.forced_complete,
-      state.forced_survive,
-      need,
-      state.trial_params,
-      state.trial_type_key,
-      state.include_na_donors,
-      state.outcome_label,
-      &node.source_ref,
-      state.component_idx,
-      state.outcome_idx
-    );
+        state.ctx, node.source, state.t, state.component, state.forced_complete,
+        state.forced_survive, need, state.trial_params, state.trial_type_key,
+        state.include_na_donors, state.outcome_label, &node.source_ref,
+        state.component_idx, state.outcome_idx);
   } else if (node.kind == "and") {
     result = eval_and_node(node, state, need);
   } else if (node.kind == "or") {
@@ -2868,14 +2817,10 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state, EvalNeed n
   } else if (node.kind == "not") {
     result = eval_not_node(node, state, need);
   } else if (node.kind == "guard") {
-    GuardEvalInput guard_input = make_guard_input(state.ctx,
-                                                  node,
-                                                  state.component,
-                                                  state.component_idx,
-                                                  state.forced_complete,
-                                                  state.forced_survive,
-                                                  state.trial_type_key,
-                                                  state.trial_params);
+    GuardEvalInput guard_input =
+        make_guard_input(state.ctx, node, state.component, state.component_idx,
+                         state.forced_complete, state.forced_survive,
+                         state.trial_type_key, state.trial_params);
     IntegrationSettings settings;
     double density = std::numeric_limits<double>::quiet_NaN();
     double survival = std::numeric_limits<double>::quiet_NaN();
@@ -2896,9 +2841,8 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState& state, EvalNeed n
   return result;
 }
 
-double guard_effective_survival_internal(const GuardEvalInput& input,
-                                         double t,
-                                         const IntegrationSettings& settings) {
+double guard_effective_survival_internal(const GuardEvalInput &input, double t,
+                                         const IntegrationSettings &settings) {
   if (!std::isfinite(t)) {
     return 1.0;
   }
@@ -2909,75 +2853,14 @@ double guard_effective_survival_internal(const GuardEvalInput& input,
   if (blocker_id < 0) {
     return 1.0;
   }
-  if (input.node.unless_ids.empty()) {
-    NodeEvalResult block = eval_node_with_forced(
-      input.ctx,
-      blocker_id,
-      t,
-      input.component,
-      input.component_idx,
-      input.forced_complete,
-      input.forced_survive,
-      EvalNeed::kSurvival,
-      input.trial_params,
-      input.trial_type_key
-    );
-    return clamp_probability(block.survival);
-  }
-  auto integrand = [&](double u) -> double {
-    if (!std::isfinite(u) || u < 0.0) return 0.0;
-    NodeEvalResult block = eval_node_with_forced(
-      input.ctx,
-      blocker_id,
-      u,
-      input.component,
-      input.component_idx,
-      input.forced_complete,
-      input.forced_survive,
-      EvalNeed::kDensity,
-      input.trial_params,
-      input.trial_type_key
-    );
-    double density = block.density;
-    if (!std::isfinite(density) || density <= 0.0) return 0.0;
-    double prod = 1.0;
-    for (int unl_id : input.node.unless_ids) {
-      if (unl_id < 0) continue;
-      NodeEvalResult protector = eval_node_with_forced(
-        input.ctx,
-        unl_id,
-        u,
-        input.component,
-        input.component_idx,
-        input.forced_complete,
-        input.forced_survive,
-        EvalNeed::kSurvival,
-        input.trial_params,
-        input.trial_type_key
-      );
-      prod *= clamp_probability(protector.survival);
-      if (!std::isfinite(prod) || prod <= 0.0) {
-        prod = 0.0;
-        break;
-      }
-    }
-    if (prod <= 0.0) return 0.0;
-    double val = density * prod;
-    if (!std::isfinite(val) || val <= 0.0) return 0.0;
-    return val;
-  };
-  double integral = uuber::integrate_boost_fn(integrand,
-                                              0.0,
-                                              t,
-                                              settings.rel_tol,
-                                              settings.abs_tol,
-                                              settings.max_depth);
-  double surv = 1.0 - integral;
-  return clamp_probability(surv);
+  NodeEvalResult block = eval_node_with_forced(
+      input.ctx, blocker_id, t, input.component, input.component_idx,
+      input.forced_complete, input.forced_survive, EvalNeed::kSurvival,
+      input.trial_params, input.trial_type_key);
+  return clamp_probability(block.survival);
 }
 
-double guard_reference_density(const GuardEvalInput& input,
-                               double t) {
+double guard_reference_density(const GuardEvalInput &input, double t) {
   if (!std::isfinite(t) || t < 0.0) {
     return 0.0;
   }
@@ -2986,36 +2869,29 @@ double guard_reference_density(const GuardEvalInput& input,
     return 0.0;
   }
   NodeEvalResult ref = eval_node_with_forced(
-    input.ctx,
-    reference_id,
-    t,
-    input.component,
-    input.component_idx,
-    input.forced_complete,
-    input.forced_survive,
-    EvalNeed::kDensity,
-    input.trial_params,
-    input.trial_type_key
-  );
+      input.ctx, reference_id, t, input.component, input.component_idx,
+      input.forced_complete, input.forced_survive, EvalNeed::kDensity,
+      input.trial_params, input.trial_type_key);
   double dens_ref = ref.density;
-  if (!std::isfinite(dens_ref) || dens_ref <= 0.0) return 0.0;
+  if (!std::isfinite(dens_ref) || dens_ref <= 0.0)
+    return 0.0;
   return dens_ref;
 }
 
-double guard_density_internal(const GuardEvalInput& input,
-                              double t,
-                              const IntegrationSettings& settings) {
+double guard_density_internal(const GuardEvalInput &input, double t,
+                              const IntegrationSettings &settings) {
   double dens_ref = guard_reference_density(input, t);
-  if (dens_ref <= 0.0) return 0.0;
+  if (dens_ref <= 0.0)
+    return 0.0;
   double s_eff = guard_effective_survival_internal(input, t, settings);
   double val = dens_ref * s_eff;
-  if (!std::isfinite(val) || val <= 0.0) return 0.0;
+  if (!std::isfinite(val) || val <= 0.0)
+    return 0.0;
   return val;
 }
 
-double guard_cdf_internal(const GuardEvalInput& input,
-                          double t,
-                          const IntegrationSettings& settings) {
+double guard_cdf_internal(const GuardEvalInput &input, double t,
+                          const IntegrationSettings &settings) {
   if (!std::isfinite(t)) {
     return 1.0;
   }
@@ -3025,20 +2901,17 @@ double guard_cdf_internal(const GuardEvalInput& input,
   auto integrand = [&](double u) -> double {
     return guard_density_internal(input, u, settings);
   };
-  double val = uuber::integrate_boost_fn(integrand,
-                                         0.0,
-                                         t,
-                                         settings.rel_tol,
-                                         settings.abs_tol,
-                                         settings.max_depth);
-  if (!std::isfinite(val) || val < 0.0) val = 0.0;
+  double val = uuber::integrate_boost_fn(integrand, 0.0, t, settings.rel_tol,
+                                         settings.abs_tol, settings.max_depth);
+  if (!std::isfinite(val) || val < 0.0)
+    val = 0.0;
   return clamp_probability(val);
 }
 
-std::vector<int> gather_blocker_sources(const uuber::NativeContext& ctx,
-                                        const uuber::NativeNode& guard_node) {
+std::vector<int> gather_blocker_sources(const uuber::NativeContext &ctx,
+                                        const uuber::NativeNode &guard_node) {
   std::vector<int> sources;
-  const uuber::NativeNode& blocker = fetch_node(ctx, guard_node.blocker_id);
+  const uuber::NativeNode &blocker = fetch_node(ctx, guard_node.blocker_id);
   sources = blocker.source_ids;
   if (blocker.kind == "event" && !blocker.source.empty()) {
     int label_idx = blocker.source_ref.label_id;
@@ -3053,7 +2926,7 @@ std::vector<int> gather_blocker_sources(const uuber::NativeContext& ctx,
 
 struct CompetitorMeta {
   int node_id;
-  const uuber::NativeNode* node;
+  const uuber::NativeNode *node;
   std::vector<int> sources;
   bool has_guard{false};
   bool scenario_sensitive{false};
@@ -3066,28 +2939,32 @@ struct CompetitorClusterCacheEntry {
   std::vector<std::vector<int>> guard_orders;
 };
 
-using CompetitorCacheMap = std::unordered_map<std::string, CompetitorClusterCacheEntry>;
+using CompetitorCacheMap =
+    std::unordered_map<std::string, CompetitorClusterCacheEntry>;
 
-static std::unordered_map<const uuber::NativeContext*, CompetitorCacheMap> g_competitor_cache;
+static std::unordered_map<const uuber::NativeContext *, CompetitorCacheMap>
+    g_competitor_cache;
 
-std::string competitor_cache_key(const std::vector<int>& ids) {
+std::string competitor_cache_key(const std::vector<int> &ids) {
   std::ostringstream oss;
   for (std::size_t i = 0; i < ids.size(); ++i) {
-    if (i > 0) oss << ",";
+    if (i > 0)
+      oss << ",";
     oss << ids[i];
   }
   return oss.str();
 }
 
 // Forward declaration
-std::vector<std::vector<int>> build_competitor_clusters(const std::vector<CompetitorMeta>& metas);
+std::vector<std::vector<int>>
+build_competitor_clusters(const std::vector<CompetitorMeta> &metas);
 
-bool node_contains_guard(int node_id,
-                         const uuber::NativeContext& ctx,
-                         std::unordered_map<int, bool>& memo) {
+bool node_contains_guard(int node_id, const uuber::NativeContext &ctx,
+                         std::unordered_map<int, bool> &memo) {
   auto it = memo.find(node_id);
-  if (it != memo.end()) return it->second;
-  const uuber::NativeNode& node = fetch_node(ctx, node_id);
+  if (it != memo.end())
+    return it->second;
+  const uuber::NativeNode &node = fetch_node(ctx, node_id);
   bool result = (node.kind == "guard");
   if (!result) {
     if (node.kind == "and" || node.kind == "or") {
@@ -3105,10 +2982,10 @@ bool node_contains_guard(int node_id,
   return result;
 }
 
-const CompetitorClusterCacheEntry& fetch_competitor_cluster_cache(
-  const uuber::NativeContext& ctx,
-  const std::vector<int>& competitor_ids) {
-  CompetitorCacheMap& cache = g_competitor_cache[&ctx];
+const CompetitorClusterCacheEntry &
+fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
+                               const std::vector<int> &competitor_ids) {
+  CompetitorCacheMap &cache = g_competitor_cache[&ctx];
   const std::string key = competitor_cache_key(competitor_ids);
   auto it = cache.find(key);
   if (it != cache.end()) {
@@ -3119,7 +2996,7 @@ const CompetitorClusterCacheEntry& fetch_competitor_cluster_cache(
   entry.metas.reserve(competitor_ids.size());
   std::unordered_map<int, bool> guard_memo;
   for (int node_id : competitor_ids) {
-    const uuber::NativeNode& node = fetch_node(ctx, node_id);
+    const uuber::NativeNode &node = fetch_node(ctx, node_id);
     CompetitorMeta meta;
     meta.node_id = node_id;
     meta.node = &node;
@@ -3134,7 +3011,7 @@ const CompetitorClusterCacheEntry& fetch_competitor_cluster_cache(
   entry.cluster_has_guard.reserve(entry.clusters.size());
   entry.guard_orders.resize(entry.clusters.size());
   for (std::size_t i = 0; i < entry.clusters.size(); ++i) {
-    const auto& cluster = entry.clusters[i];
+    const auto &cluster = entry.clusters[i];
     bool has_guard = false;
     for (int idx : cluster) {
       if (entry.metas[static_cast<std::size_t>(idx)].has_guard) {
@@ -3152,21 +3029,22 @@ const CompetitorClusterCacheEntry& fetch_competitor_cluster_cache(
       std::vector<OrderingMeta> order;
       order.reserve(cluster.size());
       for (int idx : cluster) {
-        const CompetitorMeta& meta = entry.metas[static_cast<std::size_t>(idx)];
+        const CompetitorMeta &meta = entry.metas[static_cast<std::size_t>(idx)];
         order.push_back({idx, meta.sources.size(), meta.scenario_sensitive});
       }
-      std::sort(order.begin(), order.end(), [&](const OrderingMeta& a, const OrderingMeta& b) {
-        if (a.scenario_sensitive != b.scenario_sensitive) {
-          return !a.scenario_sensitive && b.scenario_sensitive;
-        }
-        if (a.source_count != b.source_count) {
-          return a.source_count < b.source_count;
-        }
-        return a.index < b.index;
-      });
+      std::sort(order.begin(), order.end(),
+                [&](const OrderingMeta &a, const OrderingMeta &b) {
+                  if (a.scenario_sensitive != b.scenario_sensitive) {
+                    return !a.scenario_sensitive && b.scenario_sensitive;
+                  }
+                  if (a.source_count != b.source_count) {
+                    return a.source_count < b.source_count;
+                  }
+                  return a.index < b.index;
+                });
       std::vector<int> guard_order;
       guard_order.reserve(order.size());
-      for (const auto& rec : order) {
+      for (const auto &rec : order) {
         guard_order.push_back(rec.index);
       }
       entry.guard_orders[i] = std::move(guard_order);
@@ -3177,11 +3055,13 @@ const CompetitorClusterCacheEntry& fetch_competitor_cluster_cache(
   return inserted.first->second;
 }
 
-bool share_sources(const std::vector<int>& a, const std::vector<int>& b) {
-  if (a.empty() || b.empty()) return false;
+bool share_sources(const std::vector<int> &a, const std::vector<int> &b) {
+  if (a.empty() || b.empty())
+    return false;
   std::size_t i = 0, j = 0;
   while (i < a.size() && j < b.size()) {
-    if (a[i] == b[j]) return true;
+    if (a[i] == b[j])
+      return true;
     if (a[i] < b[j]) {
       ++i;
     } else {
@@ -3191,13 +3071,16 @@ bool share_sources(const std::vector<int>& a, const std::vector<int>& b) {
   return false;
 }
 
-std::vector<std::vector<int>> build_competitor_clusters(const std::vector<CompetitorMeta>& metas) {
+std::vector<std::vector<int>>
+build_competitor_clusters(const std::vector<CompetitorMeta> &metas) {
   std::vector<std::vector<int>> clusters;
   const std::size_t n = metas.size();
-  if (n == 0) return clusters;
+  if (n == 0)
+    return clusters;
   std::vector<bool> visited(n, false);
   for (std::size_t i = 0; i < n; ++i) {
-    if (visited[i]) continue;
+    if (visited[i])
+      continue;
     std::vector<int> cluster;
     std::queue<std::size_t> q;
     q.push(i);
@@ -3207,7 +3090,8 @@ std::vector<std::vector<int>> build_competitor_clusters(const std::vector<Compet
       q.pop();
       cluster.push_back(static_cast<int>(idx));
       for (std::size_t j = 0; j < n; ++j) {
-        if (visited[j]) continue;
+        if (visited[j])
+          continue;
         if (share_sources(metas[idx].sources, metas[j].sources)) {
           visited[j] = true;
           q.push(j);
@@ -3219,10 +3103,9 @@ std::vector<std::vector<int>> build_competitor_clusters(const std::vector<Compet
   return clusters;
 }
 
-uuber::PoolTemplateCacheEntry build_pool_template_cache(int n,
-                                                       const std::vector<int>& member_ids,
-                                                       int pool_idx,
-                                                       int k) {
+uuber::PoolTemplateCacheEntry
+build_pool_template_cache(int n, const std::vector<int> &member_ids,
+                          int pool_idx, int k) {
   uuber::PoolTemplateCacheEntry cache;
   if (n <= 0 || k < 1 || k > n) {
     return cache;
@@ -3236,14 +3119,15 @@ uuber::PoolTemplateCacheEntry build_pool_template_cache(int n,
     std::vector<int> others;
     others.reserve(n - 1);
     for (int j = 0; j < n; ++j) {
-      if (j == idx) continue;
+      if (j == idx)
+        continue;
       others.push_back(j + 1);
     }
     if (need > static_cast<int>(others.size())) {
       continue;
     }
     std::vector<std::vector<int>> combos = generate_combinations(others, need);
-    for (const auto& combo : combos) {
+    for (const auto &combo : combos) {
       std::vector<int> survivors = survivors_from_combo(others, combo);
 
       std::vector<int> forced_complete_ids;
@@ -3290,91 +3174,74 @@ uuber::PoolTemplateCacheEntry build_pool_template_cache(int n,
       entry.forced_survive_ids = forced_survive_ids;
 
       cache.templates.push_back(std::move(entry));
-      cache.finisher_map[static_cast<std::size_t>(idx)].push_back(template_counter);
+      cache.finisher_map[static_cast<std::size_t>(idx)].push_back(
+          template_counter);
       ++template_counter;
     }
   }
   return cache;
 }
 
-double evaluate_survival_with_forced(int node_id,
-                                     const std::unordered_set<int>& forced_survive,
-                                     const std::string& component,
-                                     int component_idx,
-                                     double t,
-                                     const uuber::NativeContext& ctx,
-                                     const std::string& trial_key = std::string(),
-                                     const TrialParamSet* trial_params = nullptr) {
+double
+evaluate_survival_with_forced(int node_id,
+                              const std::unordered_set<int> &forced_survive,
+                              const std::string &component, int component_idx,
+                              double t, const uuber::NativeContext &ctx,
+                              const std::string &trial_key = std::string(),
+                              const TrialParamSet *trial_params = nullptr) {
   static const std::unordered_set<int> empty_forced_complete;
-  NodeEvalState state(ctx,
-                      t,
-                      component,
-                      empty_forced_complete,
-                      forced_survive,
-                      trial_params,
-                      trial_key,
-                      false,
-                      std::string(),
-                      component_idx,
-                      -1);
+  NodeEvalState state(ctx, t, component, empty_forced_complete, forced_survive,
+                      trial_params, trial_key, false, std::string(),
+                      component_idx, -1);
   NodeEvalResult res = eval_node_recursive(node_id, state, EvalNeed::kSurvival);
   return clamp_probability(res.survival);
 }
 
-double compute_guard_free_cluster_value(const std::vector<int>& cluster_indices,
-                                        const std::vector<CompetitorMeta>& metas,
-                                        const uuber::NativeContext& ctx,
-                                        double t,
-                                        const std::string& component,
-                                        int component_idx,
-                                        const std::string& trial_key = std::string(),
-                                        const TrialParamSet* trial_params = nullptr) {
+double compute_guard_free_cluster_value(
+    const std::vector<int> &cluster_indices,
+    const std::vector<CompetitorMeta> &metas, const uuber::NativeContext &ctx,
+    double t, const std::string &component, int component_idx,
+    const std::string &trial_key = std::string(),
+    const TrialParamSet *trial_params = nullptr) {
   std::unordered_set<int> empty_forced;
   double prod = 1.0;
   for (int idx : cluster_indices) {
-    double surv = evaluate_survival_with_forced(metas[static_cast<std::size_t>(idx)].node_id,
-                                                empty_forced,
-                                                component,
-                                                component_idx,
-                                                t,
-                                                ctx,
-                                                trial_key,
-                                                trial_params);
-    if (!std::isfinite(surv) || surv <= 0.0) return 0.0;
+    double surv = evaluate_survival_with_forced(
+        metas[static_cast<std::size_t>(idx)].node_id, empty_forced, component,
+        component_idx, t, ctx, trial_key, trial_params);
+    if (!std::isfinite(surv) || surv <= 0.0)
+      return 0.0;
     prod *= surv;
-    if (!std::isfinite(prod) || prod <= 0.0) return 0.0;
+    if (!std::isfinite(prod) || prod <= 0.0)
+      return 0.0;
   }
   return clamp_probability(prod);
 }
 
-double compute_guard_cluster_value(const std::vector<int>& cluster_indices,
-                                   const std::vector<CompetitorMeta>& metas,
-                                   const uuber::NativeContext& ctx,
-                                   double t,
-                                   const std::string& component,
-                                   int component_idx,
-                                   const std::string& trial_key = std::string(),
-                                   const TrialParamSet* trial_params = nullptr,
-                                   const std::vector<int>* guard_order = nullptr,
-                                   std::unordered_set<int>* forced_survive_scratch = nullptr) {
-  const std::vector<int>& order = guard_order ? *guard_order : cluster_indices;
+double compute_guard_cluster_value(
+    const std::vector<int> &cluster_indices,
+    const std::vector<CompetitorMeta> &metas, const uuber::NativeContext &ctx,
+    double t, const std::string &component, int component_idx,
+    const std::string &trial_key = std::string(),
+    const TrialParamSet *trial_params = nullptr,
+    const std::vector<int> *guard_order = nullptr,
+    std::unordered_set<int> *forced_survive_scratch = nullptr) {
+  const std::vector<int> &order = guard_order ? *guard_order : cluster_indices;
   std::unordered_set<int> local_forced;
-  std::unordered_set<int>& forced_survive = forced_survive_scratch ? *forced_survive_scratch : local_forced;
+  std::unordered_set<int> &forced_survive =
+      forced_survive_scratch ? *forced_survive_scratch : local_forced;
   forced_survive.clear();
   double prod = 1.0;
   for (int idx : order) {
-    const CompetitorMeta& node_meta = metas[static_cast<std::size_t>(idx)];
-    double surv = evaluate_survival_with_forced(node_meta.node_id,
-                                                forced_survive,
-                                                component,
-                                                component_idx,
-                                                t,
-                                                ctx,
-                                                trial_key,
-                                                trial_params);
-    if (!std::isfinite(surv) || surv <= 0.0) return 0.0;
+    const CompetitorMeta &node_meta = metas[static_cast<std::size_t>(idx)];
+    double surv = evaluate_survival_with_forced(
+        node_meta.node_id, forced_survive, component, component_idx, t, ctx,
+        trial_key, trial_params);
+    if (!std::isfinite(surv) || surv <= 0.0)
+      return 0.0;
     prod *= surv;
-    if (!std::isfinite(prod) || prod <= 0.0) return 0.0;
+    if (!std::isfinite(prod) || prod <= 0.0)
+      return 0.0;
     for (int src : node_meta.sources) {
       forced_survive.insert(src);
     }
@@ -3382,41 +3249,35 @@ double compute_guard_cluster_value(const std::vector<int>& cluster_indices,
   return clamp_probability(prod);
 }
 
-double competitor_survival_internal(const uuber::NativeContext& ctx,
-                                    const std::vector<int>& competitor_ids,
-                                    double t,
-                                    const std::string& component_label,
-                                    int component_idx,
-                                    const std::string& trial_type_key = std::string(),
-                                    const TrialParamSet* trial_params = nullptr) {
-  if (competitor_ids.empty()) return 1.0;
-  const CompetitorClusterCacheEntry& cache = fetch_competitor_cluster_cache(ctx, competitor_ids);
-  if (cache.clusters.empty()) return 1.0;
+double competitor_survival_internal(
+    const uuber::NativeContext &ctx, const std::vector<int> &competitor_ids,
+    double t, const std::string &component_label, int component_idx,
+    const std::string &trial_type_key = std::string(),
+    const TrialParamSet *trial_params = nullptr) {
+  if (competitor_ids.empty())
+    return 1.0;
+  const CompetitorClusterCacheEntry &cache =
+      fetch_competitor_cluster_cache(ctx, competitor_ids);
+  if (cache.clusters.empty())
+    return 1.0;
 
   double product = 1.0;
   std::unordered_set<int> forced_survive_scratch;
   for (std::size_t i = 0; i < cache.clusters.size(); ++i) {
-    const auto& cluster = cache.clusters[i];
-    const bool cluster_has_guard = (i < cache.cluster_has_guard.size()) && cache.cluster_has_guard[i];
-    double cluster_val = cluster_has_guard
-      ? compute_guard_cluster_value(cluster,
-                                    cache.metas,
-                                    ctx,
-                                    t,
-                                    component_label,
-                                    component_idx,
-                                    trial_type_key,
-                                    trial_params,
-                                    (i < cache.guard_orders.size() ? &cache.guard_orders[i] : nullptr),
-                                    &forced_survive_scratch)
-      : compute_guard_free_cluster_value(cluster,
-                                         cache.metas,
-                                         ctx,
-                                         t,
-                                         component_label,
-                                         component_idx,
-                                         trial_type_key,
-                                         trial_params);
+    const auto &cluster = cache.clusters[i];
+    const bool cluster_has_guard =
+        (i < cache.cluster_has_guard.size()) && cache.cluster_has_guard[i];
+    double cluster_val =
+        cluster_has_guard
+            ? compute_guard_cluster_value(
+                  cluster, cache.metas, ctx, t, component_label, component_idx,
+                  trial_type_key, trial_params,
+                  (i < cache.guard_orders.size() ? &cache.guard_orders[i]
+                                                 : nullptr),
+                  &forced_survive_scratch)
+            : compute_guard_free_cluster_value(cluster, cache.metas, ctx, t,
+                                               component_label, component_idx,
+                                               trial_type_key, trial_params);
     if (!std::isfinite(cluster_val) || cluster_val <= 0.0) {
       return 0.0;
     }
@@ -3429,67 +3290,39 @@ double competitor_survival_internal(const uuber::NativeContext& ctx,
 }
 
 double node_density_with_competitors_internal(
-  const uuber::NativeContext& ctx,
-  int node_id,
-  double t,
-  const std::string& component_label,
-  int component_idx,
-  const std::unordered_set<int>& forced_complete,
-  const std::unordered_set<int>& forced_survive,
-  const std::vector<int>& competitor_ids,
-  const TrialParamSet* trial_params,
-  const std::string& trial_type_key,
-  bool include_na_donors,
-  const std::string& outcome_label_context,
-  int outcome_idx_context) {
+    const uuber::NativeContext &ctx, int node_id, double t,
+    const std::string &component_label, int component_idx,
+    const std::unordered_set<int> &forced_complete,
+    const std::unordered_set<int> &forced_survive,
+    const std::vector<int> &competitor_ids, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, bool include_na_donors,
+    const std::string &outcome_label_context, int outcome_idx_context) {
   if (!std::isfinite(t) || t < 0.0) {
     return 0.0;
   }
-  if (competitor_ids.size() >= 2 &&
-      forced_complete.empty() &&
+  if (competitor_ids.size() >= 2 && forced_complete.empty() &&
       forced_survive.empty()) {
     SharedGateNWay shared_gate;
     if (shared_gate_nway_cached(ctx, node_id, competitor_ids, shared_gate)) {
-      return shared_gate_nway_density(ctx,
-                                      shared_gate,
-                                      t,
-                                      component_label,
-                                      component_idx,
-                                      trial_params,
-                                      trial_type_key,
-                                      include_na_donors,
-                                      outcome_label_context,
-                                      outcome_idx_context);
+      return shared_gate_nway_density(
+          ctx, shared_gate, t, component_label, component_idx, trial_params,
+          trial_type_key, include_na_donors, outcome_label_context,
+          outcome_idx_context);
     }
   }
-  if (competitor_ids.size() == 1 &&
-      forced_complete.empty() &&
-      forced_survive.empty() &&
-      competitor_ids[0] != NA_INTEGER) {
+  if (competitor_ids.size() == 1 && forced_complete.empty() &&
+      forced_survive.empty() && competitor_ids[0] != NA_INTEGER) {
     SharedGatePair shared_gate;
     if (shared_gate_pair_cached(ctx, node_id, competitor_ids[0], shared_gate)) {
-      return shared_gate_pair_density(ctx,
-                                      shared_gate,
-                                      t,
-                                      component_label,
-                                      component_idx,
-                                      trial_params,
-                                      trial_type_key,
-                                      include_na_donors,
-                                      outcome_label_context,
-                                      outcome_idx_context);
+      return shared_gate_pair_density(
+          ctx, shared_gate, t, component_label, component_idx, trial_params,
+          trial_type_key, include_na_donors, outcome_label_context,
+          outcome_idx_context);
     }
   }
-  NodeEvalState state(ctx,
-                      t,
-                      component_label,
-                      forced_complete,
-                      forced_survive,
-                      trial_params,
-                      trial_type_key,
-                      include_na_donors,
-                      outcome_label_context,
-                      component_idx,
+  NodeEvalState state(ctx, t, component_label, forced_complete, forced_survive,
+                      trial_params, trial_type_key, include_na_donors,
+                      outcome_label_context, component_idx,
                       outcome_idx_context);
   NodeEvalResult base = eval_node_recursive(node_id, state, EvalNeed::kDensity);
   double density = base.density;
@@ -3497,13 +3330,9 @@ double node_density_with_competitors_internal(
     return 0.0;
   }
   if (!competitor_ids.empty()) {
-    double surv = competitor_survival_internal(ctx,
-                                               competitor_ids,
-                                               t,
-                                               component_label,
-                                               component_idx,
-                                               state.trial_type_key,
-                                               trial_params);
+    double surv = competitor_survival_internal(
+        ctx, competitor_ids, t, component_label, component_idx,
+        state.trial_type_key, trial_params);
     if (!std::isfinite(surv) || surv <= 0.0) {
       return 0.0;
     }
@@ -3512,65 +3341,41 @@ double node_density_with_competitors_internal(
   return density;
 }
 
-inline double node_density_with_shared_triggers_plan(const uuber::NativeContext& ctx,
-                                                     int node_id,
-                                                     double t,
-                                                     const std::string& component_label,
-                                                     int component_idx,
-                                                     const std::unordered_set<int>& forced_complete,
-                                                     const std::unordered_set<int>& forced_survive,
-                                                     const std::vector<int>& competitor_ids,
-                                                     const TrialParamSet* trial_params,
-                                                     const std::string& trial_type_key,
-                                                     bool include_na_donors,
-                                                     const std::string& outcome_label_context,
-                                                     int outcome_idx_context,
-                                                     const SharedTriggerPlan* trigger_plan,
-                                                     TrialParamSet* scratch_params) {
+inline double node_density_with_shared_triggers_plan(
+    const uuber::NativeContext &ctx, int node_id, double t,
+    const std::string &component_label, int component_idx,
+    const std::unordered_set<int> &forced_complete,
+    const std::unordered_set<int> &forced_survive,
+    const std::vector<int> &competitor_ids, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, bool include_na_donors,
+    const std::string &outcome_label_context, int outcome_idx_context,
+    const SharedTriggerPlan *trigger_plan, TrialParamSet *scratch_params) {
   if (!trial_params) {
-    return node_density_with_competitors_internal(ctx,
-                                                 node_id,
-                                                 t,
-                                                 component_label,
-                                                 component_idx,
-                                                 forced_complete,
-                                                 forced_survive,
-                                                 competitor_ids,
-                                                 trial_params,
-                                                 trial_type_key,
-                                                 include_na_donors,
-                                                 outcome_label_context,
-                                                 outcome_idx_context);
+    return node_density_with_competitors_internal(
+        ctx, node_id, t, component_label, component_idx, forced_complete,
+        forced_survive, competitor_ids, trial_params, trial_type_key,
+        include_na_donors, outcome_label_context, outcome_idx_context);
   }
   SharedTriggerPlan local_plan;
-  const SharedTriggerPlan* plan_ptr = trigger_plan;
+  const SharedTriggerPlan *plan_ptr = trigger_plan;
   if (!plan_ptr) {
     local_plan = build_shared_trigger_plan(ctx, trial_params);
     plan_ptr = &local_plan;
   }
   if (plan_ptr->triggers.empty()) {
-    return node_density_with_competitors_internal(ctx,
-                                                 node_id,
-                                                 t,
-                                                 component_label,
-                                                 component_idx,
-                                                 forced_complete,
-                                                 forced_survive,
-                                                 competitor_ids,
-                                                 trial_params,
-                                                 trial_type_key,
-                                                 include_na_donors,
-                                                 outcome_label_context,
-                                                 outcome_idx_context);
+    return node_density_with_competitors_internal(
+        ctx, node_id, t, component_label, component_idx, forced_complete,
+        forced_survive, competitor_ids, trial_params, trial_type_key,
+        include_na_donors, outcome_label_context, outcome_idx_context);
   }
-  const std::vector<SharedTriggerInfo>& triggers = plan_ptr->triggers;
+  const std::vector<SharedTriggerInfo> &triggers = plan_ptr->triggers;
   if (triggers.size() >= 63) {
     Rcpp::stop("Too many shared triggers for density evaluation");
   }
   TrialParamSet local_scratch;
-  TrialParamSet& scratch = scratch_params ? *scratch_params : local_scratch;
+  TrialParamSet &scratch = scratch_params ? *scratch_params : local_scratch;
   scratch = *trial_params;
-  for (const auto& trigger : triggers) {
+  for (const auto &trigger : triggers) {
     apply_trigger_state_inplace(scratch, trigger, false);
   }
   const std::uint64_t n_states = 1ULL << triggers.size();
@@ -3578,66 +3383,54 @@ inline double node_density_with_shared_triggers_plan(const uuber::NativeContext&
   std::uint64_t mask = 0;
   for (std::uint64_t idx = 0; idx < n_states; ++idx) {
     double w = plan_ptr->mask_weights.empty()
-      ? shared_trigger_mask_weight(triggers, mask)
-      : plan_ptr->mask_weights[mask];
+                   ? shared_trigger_mask_weight(triggers, mask)
+                   : plan_ptr->mask_weights[mask];
     if (w > 0.0) {
-      double d = node_density_with_competitors_internal(ctx,
-                                                        node_id,
-                                                        t,
-                                                        component_label,
-                                                        component_idx,
-                                                        forced_complete,
-                                                        forced_survive,
-                                                        competitor_ids,
-                                                        &scratch,
-                                                        trial_type_key,
-                                                        include_na_donors,
-                                                        outcome_label_context,
-                                                        outcome_idx_context);
+      double d = node_density_with_competitors_internal(
+          ctx, node_id, t, component_label, component_idx, forced_complete,
+          forced_survive, competitor_ids, &scratch, trial_type_key,
+          include_na_donors, outcome_label_context, outcome_idx_context);
       if (std::isfinite(d) && d > 0.0) {
         total += w * d;
       }
     }
-    if (idx + 1 == n_states) break;
+    if (idx + 1 == n_states)
+      break;
     std::uint64_t next = idx + 1;
     std::uint64_t next_gray = next ^ (next >> 1);
     std::uint64_t diff = next_gray ^ mask;
     if (diff != 0) {
       int bit = static_cast<int>(__builtin_ctzll(diff));
       bool fail = ((next_gray >> bit) & 1ULL) != 0ULL;
-      apply_trigger_state_inplace(scratch, triggers[static_cast<std::size_t>(bit)], fail);
+      apply_trigger_state_inplace(
+          scratch, triggers[static_cast<std::size_t>(bit)], fail);
     }
     mask = next_gray;
   }
-  if (!std::isfinite(total) || total <= 0.0) return 0.0;
+  if (!std::isfinite(total) || total <= 0.0)
+    return 0.0;
   return total;
 }
 
-double native_outcome_probability_impl(SEXP ctxSEXP,
-                                       int node_id,
-                                       double upper,
-                                       Rcpp::Nullable<Rcpp::String> component,
-                                       SEXP forced_complete,
-                                       SEXP forced_survive,
-                                       const Rcpp::IntegerVector& competitor_ids,
-                                       double rel_tol,
-                                       double abs_tol,
-                                       int max_depth,
-                                       const TrialParamSet* trial_params,
-                                       const std::string& trial_type_key = std::string(),
-                                       bool include_na_donors = false,
-                                       const std::string& outcome_label_context = std::string()) {
+double native_outcome_probability_impl(
+    SEXP ctxSEXP, int node_id, double upper,
+    Rcpp::Nullable<Rcpp::String> component, SEXP forced_complete,
+    SEXP forced_survive, const Rcpp::IntegerVector &competitor_ids,
+    double rel_tol, double abs_tol, int max_depth,
+    const TrialParamSet *trial_params,
+    const std::string &trial_type_key = std::string(),
+    bool include_na_donors = false,
+    const std::string &outcome_label_context = std::string()) {
   if (upper <= 0.0) {
     return 0.0;
   }
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::string component_label = component.isNotNull()
-    ? Rcpp::as<std::string>(component)
-    : std::string();
+  std::string component_label =
+      component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
   int component_idx = component_index_of(*ctx, component_label);
   int outcome_idx_context = outcome_label_context.empty()
-    ? -1
-    : outcome_index_of(*ctx, outcome_label_context);
+                                ? -1
+                                : outcome_index_of(*ctx, outcome_label_context);
   std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
   std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
   std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
@@ -3647,111 +3440,78 @@ double native_outcome_probability_impl(SEXP ctxSEXP,
   SharedGateNWay shared_gate_nway;
   bool use_shared_gate = false;
   bool use_shared_gate_nway = false;
-  if (comp_vec.size() == 1 &&
-      comp_vec[0] != NA_INTEGER &&
-      forced_complete_set.empty() &&
-      forced_survive_set.empty()) {
-    use_shared_gate = detect_shared_gate_pair(*ctx, node_id, comp_vec[0], shared_gate);
-  } else if (comp_vec.size() >= 2 &&
-             forced_complete_set.empty() &&
+  if (comp_vec.size() == 1 && comp_vec[0] != NA_INTEGER &&
+      forced_complete_set.empty() && forced_survive_set.empty()) {
+    use_shared_gate =
+        detect_shared_gate_pair(*ctx, node_id, comp_vec[0], shared_gate);
+  } else if (comp_vec.size() >= 2 && forced_complete_set.empty() &&
              forced_survive_set.empty()) {
-    use_shared_gate_nway = detect_shared_gate_nway(*ctx, node_id, comp_vec, shared_gate_nway);
+    use_shared_gate_nway =
+        detect_shared_gate_nway(*ctx, node_id, comp_vec, shared_gate_nway);
   }
-  auto integrand = [&](double u, const TrialParamSet* params_ptr) -> double {
-    if (!std::isfinite(u) || u < 0.0) return 0.0;
+  auto integrand = [&](double u, const TrialParamSet *params_ptr) -> double {
+    if (!std::isfinite(u) || u < 0.0)
+      return 0.0;
     double val = node_density_with_competitors_internal(
-      *ctx,
-      node_id,
-      u,
-      component_label,
-      component_idx,
-      forced_complete_set,
-      forced_survive_set,
-      comp_vec,
-      params_ptr,
-      trial_type_key,
-      include_na_donors,
-      outcome_label_context,
-      outcome_idx_context
-    );
-    if (!std::isfinite(val) || val <= 0.0) return 0.0;
+        *ctx, node_id, u, component_label, component_idx, forced_complete_set,
+        forced_survive_set, comp_vec, params_ptr, trial_type_key,
+        include_na_donors, outcome_label_context, outcome_idx_context);
+    if (!std::isfinite(val) || val <= 0.0)
+      return 0.0;
     return val;
   };
-  auto integrate_with_params = [&](const TrialParamSet* params_ptr) -> double {
+  auto integrate_with_params = [&](const TrialParamSet *params_ptr) -> double {
     if (use_shared_gate) {
-      return shared_gate_pair_probability(*ctx,
-                                          shared_gate,
-                                          upper,
-                                          component_label,
-                                          component_idx,
-                                          params_ptr,
-                                          trial_type_key,
-                                          rel_tol,
-                                          abs_tol,
-                                          max_depth,
-                                          include_na_donors,
-                                          outcome_label_context,
-                                          outcome_idx_context);
+      return shared_gate_pair_probability(
+          *ctx, shared_gate, upper, component_label, component_idx, params_ptr,
+          trial_type_key, rel_tol, abs_tol, max_depth, include_na_donors,
+          outcome_label_context, outcome_idx_context);
     }
     if (use_shared_gate_nway) {
-      return shared_gate_nway_probability(*ctx,
-                                          shared_gate_nway,
-                                          upper,
-                                          component_label,
-                                          component_idx,
-                                          params_ptr,
-                                          trial_type_key,
-                                          rel_tol,
-                                          abs_tol,
-                                          max_depth,
-                                          include_na_donors,
-                                          outcome_label_context,
-                                          outcome_idx_context);
+      return shared_gate_nway_probability(
+          *ctx, shared_gate_nway, upper, component_label, component_idx,
+          params_ptr, trial_type_key, rel_tol, abs_tol, max_depth,
+          include_na_donors, outcome_label_context, outcome_idx_context);
     }
     double integral = 0.0;
     if (std::isfinite(upper)) {
       integral = uuber::integrate_boost_fn(
-        [&](double u) { return integrand(u, params_ptr); },
-        0.0,
-        upper,
-        rel_tol,
-        abs_tol,
-        max_depth
-      );
+          [&](double u) { return integrand(u, params_ptr); }, 0.0, upper,
+          rel_tol, abs_tol, max_depth);
     } else {
       auto transformed = [&](double x) -> double {
-        if (x <= 0.0) return 0.0;
-        if (x >= 1.0) x = std::nextafter(1.0, 0.0);
+        if (x <= 0.0)
+          return 0.0;
+        if (x >= 1.0)
+          x = std::nextafter(1.0, 0.0);
         double t = x / (1.0 - x);
         double jac = 1.0 / ((1.0 - x) * (1.0 - x));
         double val = integrand(t, params_ptr);
-        if (!std::isfinite(val) || val <= 0.0) return 0.0;
+        if (!std::isfinite(val) || val <= 0.0)
+          return 0.0;
         double out = val * jac;
         return std::isfinite(out) ? out : 0.0;
       };
-      integral = uuber::integrate_boost_fn(
-        transformed,
-        0.0,
-        1.0,
-        rel_tol,
-        abs_tol,
-        max_depth
-      );
+      integral = uuber::integrate_boost_fn(transformed, 0.0, 1.0, rel_tol,
+                                           abs_tol, max_depth);
     }
-    if (!std::isfinite(integral)) integral = 0.0;
+    if (!std::isfinite(integral))
+      integral = 0.0;
     return clamp_probability(integral);
   };
 
   // Ensure we have a concrete parameter set to modify for shared triggers.
   TrialParamSet base_params_holder;
-  const TrialParamSet* params_ptr = trial_params;
+  const TrialParamSet *params_ptr = trial_params;
   if (!params_ptr) {
     base_params_holder = build_base_paramset(*ctx);
     params_ptr = &base_params_holder;
   }
 
-  // Enumerate shared-trigger states to preserve correlation across linked accumulators.
-  std::vector<SharedTriggerInfo> triggers = collect_shared_triggers(*ctx, *params_ptr);
+  // Enumerate shared-trigger states to preserve correlation across linked
+  // accumulators.
+  std::vector<SharedTriggerInfo> triggers =
+      collect_shared_triggers(*ctx, *params_ptr);
   if (triggers.empty()) {
     return integrate_with_params(params_ptr);
   }
@@ -3763,8 +3523,10 @@ double native_outcome_probability_impl(SEXP ctxSEXP,
   double total = 0.0;
   for (std::uint64_t mask = 0; mask < n_states; ++mask) {
     double w = shared_trigger_mask_weight(triggers, mask);
-    if (w <= 0.0) continue;
-    TrialParamSet conditioned = apply_trigger_state(*params_ptr, triggers, mask);
+    if (w <= 0.0)
+      continue;
+    TrialParamSet conditioned =
+        apply_trigger_state(*params_ptr, triggers, mask);
     double p = integrate_with_params(&conditioned);
     if (std::isfinite(p) && p > 0.0) {
       total += w * p;
@@ -3774,22 +3536,25 @@ double native_outcome_probability_impl(SEXP ctxSEXP,
 }
 
 std::vector<std::string> string_vector_from_entry(SEXP entry) {
-  if (Rf_isNull(entry)) return {};
+  if (Rf_isNull(entry))
+    return {};
   Rcpp::CharacterVector vec(entry);
   std::vector<std::string> out;
   out.reserve(vec.size());
   for (R_xlen_t i = 0; i < vec.size(); ++i) {
-    if (vec[i] == NA_STRING) continue;
+    if (vec[i] == NA_STRING)
+      continue;
     out.push_back(Rcpp::as<std::string>(vec[i]));
   }
   return out;
 }
 
-std::vector<int> component_indices_from_labels(const uuber::NativeContext& ctx,
-                                               const std::vector<std::string>& labels) {
+std::vector<int>
+component_indices_from_labels(const uuber::NativeContext &ctx,
+                              const std::vector<std::string> &labels) {
   std::vector<int> out;
   out.reserve(labels.size());
-  for (const auto& label : labels) {
+  for (const auto &label : labels) {
     auto it = ctx.component_index.find(label);
     if (it != ctx.component_index.end()) {
       out.push_back(it->second);
@@ -3798,13 +3563,15 @@ std::vector<int> component_indices_from_labels(const uuber::NativeContext& ctx,
   return out;
 }
 
-std::unique_ptr<TrialParamSet> build_trial_params_from_df(
-  const uuber::NativeContext& ctx,
-  const Rcpp::Nullable<Rcpp::DataFrame>& rows_opt) {
-  if (rows_opt.isNull()) return nullptr;
+std::unique_ptr<TrialParamSet>
+build_trial_params_from_df(const uuber::NativeContext &ctx,
+                           const Rcpp::Nullable<Rcpp::DataFrame> &rows_opt) {
+  if (rows_opt.isNull())
+    return nullptr;
   Rcpp::DataFrame rows(rows_opt.get());
   R_xlen_t n = rows.nrows();
-  if (n == 0) return nullptr;
+  if (n == 0)
+    return nullptr;
 
   bool has_acc = rows.containsElementNamed("accumulator");
   Rcpp::RObject acc_col_obj;
@@ -3813,42 +3580,45 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
   }
 
   Rcpp::CharacterVector dist_col = rows.containsElementNamed("dist")
-    ? Rcpp::CharacterVector(rows["dist"])
-    : Rcpp::CharacterVector();
+                                       ? Rcpp::CharacterVector(rows["dist"])
+                                       : Rcpp::CharacterVector();
   Rcpp::NumericVector onset_col = rows.containsElementNamed("onset")
-    ? Rcpp::NumericVector(rows["onset"])
-    : Rcpp::NumericVector();
+                                      ? Rcpp::NumericVector(rows["onset"])
+                                      : Rcpp::NumericVector();
   Rcpp::NumericVector q_col = rows.containsElementNamed("q")
-    ? Rcpp::NumericVector(rows["q"])
-    : Rcpp::NumericVector();
-  Rcpp::NumericVector shared_q_col = rows.containsElementNamed("shared_trigger_q")
-    ? Rcpp::NumericVector(rows["shared_trigger_q"])
-    : Rcpp::NumericVector();
-  Rcpp::CharacterVector shared_col = rows.containsElementNamed("shared_trigger_id")
-    ? Rcpp::CharacterVector(rows["shared_trigger_id"])
-    : Rcpp::CharacterVector();
+                                  ? Rcpp::NumericVector(rows["q"])
+                                  : Rcpp::NumericVector();
+  Rcpp::NumericVector shared_q_col =
+      rows.containsElementNamed("shared_trigger_q")
+          ? Rcpp::NumericVector(rows["shared_trigger_q"])
+          : Rcpp::NumericVector();
+  Rcpp::CharacterVector shared_col =
+      rows.containsElementNamed("shared_trigger_id")
+          ? Rcpp::CharacterVector(rows["shared_trigger_id"])
+          : Rcpp::CharacterVector();
   Rcpp::List comps_col = rows.containsElementNamed("components")
-    ? Rcpp::List(rows["components"])
-    : Rcpp::List();
+                             ? Rcpp::List(rows["components"])
+                             : Rcpp::List();
   Rcpp::List params_list_col = rows.containsElementNamed("params")
-    ? Rcpp::List(rows["params"])
-    : Rcpp::List();
+                                   ? Rcpp::List(rows["params"])
+                                   : Rcpp::List();
 
   std::unordered_set<std::string> base_cols = {
-    "trial", "component", "accumulator",
-    "type", "outcome", "rt", "params", "onset", "q",
-    "condition", "component_weight", "shared_trigger_id",
-    "dist", "components"
-  };
+      "trial",   "component", "accumulator",      "type",
+      "outcome", "rt",        "params",           "onset",
+      "q",       "condition", "component_weight", "shared_trigger_id",
+      "dist",    "components"};
   std::vector<std::string> param_cols;
   std::vector<SEXP> param_col_data;
   std::vector<int> param_col_types;
   Rcpp::CharacterVector df_names = rows.names();
   if (!df_names.isNULL()) {
     for (R_xlen_t i = 0; i < df_names.size(); ++i) {
-      if (df_names[i] == NA_STRING) continue;
+      if (df_names[i] == NA_STRING)
+        continue;
       std::string col_name = Rcpp::as<std::string>(df_names[i]);
-      if (base_cols.find(col_name) != base_cols.end()) continue;
+      if (base_cols.find(col_name) != base_cols.end())
+        continue;
       SEXP column = rows[col_name];
       param_cols.push_back(col_name);
       param_col_data.push_back(column);
@@ -3857,11 +3627,12 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
   }
 
   auto params_set = std::make_unique<TrialParamSet>();
-    params_set->acc_params.assign(ctx.accumulators.size(), TrialAccumulatorParams{});
+  params_set->acc_params.assign(ctx.accumulators.size(),
+                                TrialAccumulatorParams{});
 
-  auto upsert_param_entry = [](std::vector<uuber::ProtoParamEntry>& entries,
+  auto upsert_param_entry = [](std::vector<uuber::ProtoParamEntry> &entries,
                                uuber::ProtoParamEntry entry) {
-    for (auto& existing : entries) {
+    for (auto &existing : entries) {
       if (existing.name == entry.name) {
         existing = std::move(entry);
         return;
@@ -3870,11 +3641,11 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
     entries.push_back(std::move(entry));
   };
 
-  auto append_scalar_entry = [&](std::vector<uuber::ProtoParamEntry>& entries,
-                                 const std::string& name,
-                                 double value,
+  auto append_scalar_entry = [&](std::vector<uuber::ProtoParamEntry> &entries,
+                                 const std::string &name, double value,
                                  bool logical_scalar = false) {
-    if (!std::isfinite(value)) return;
+    if (!std::isfinite(value))
+      return;
     uuber::ProtoParamEntry entry;
     entry.name = name;
     if (logical_scalar) {
@@ -3887,33 +3658,35 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
     upsert_param_entry(entries, std::move(entry));
   };
 
-  auto append_numeric_vector_entry = [&](std::vector<uuber::ProtoParamEntry>& entries,
-                                         const std::string& name,
-                                         const Rcpp::NumericVector& vec) {
-    if (vec.size() == 0) return;
-    uuber::ProtoParamEntry entry;
-    entry.name = name;
-    entry.tag = uuber::ParamValueTag::NumericVector;
-    entry.numeric_values.reserve(vec.size());
-    for (double val : vec) {
-      entry.numeric_values.push_back(val);
-    }
-    upsert_param_entry(entries, std::move(entry));
-  };
+  auto append_numeric_vector_entry =
+      [&](std::vector<uuber::ProtoParamEntry> &entries, const std::string &name,
+          const Rcpp::NumericVector &vec) {
+        if (vec.size() == 0)
+          return;
+        uuber::ProtoParamEntry entry;
+        entry.name = name;
+        entry.tag = uuber::ParamValueTag::NumericVector;
+        entry.numeric_values.reserve(vec.size());
+        for (double val : vec) {
+          entry.numeric_values.push_back(val);
+        }
+        upsert_param_entry(entries, std::move(entry));
+      };
 
-  auto append_logical_vector_entry = [&](std::vector<uuber::ProtoParamEntry>& entries,
-                                         const std::string& name,
-                                         const Rcpp::LogicalVector& vec) {
-    if (vec.size() == 0) return;
-    uuber::ProtoParamEntry entry;
-    entry.name = name;
-    entry.tag = uuber::ParamValueTag::LogicalVector;
-    entry.logical_values.reserve(vec.size());
-    for (int val : vec) {
-      entry.logical_values.push_back(val);
-    }
-    upsert_param_entry(entries, std::move(entry));
-  };
+  auto append_logical_vector_entry =
+      [&](std::vector<uuber::ProtoParamEntry> &entries, const std::string &name,
+          const Rcpp::LogicalVector &vec) {
+        if (vec.size() == 0)
+          return;
+        uuber::ProtoParamEntry entry;
+        entry.name = name;
+        entry.tag = uuber::ParamValueTag::LogicalVector;
+        entry.logical_values.reserve(vec.size());
+        for (int val : vec) {
+          entry.logical_values.push_back(val);
+        }
+        upsert_param_entry(entries, std::move(entry));
+      };
 
   for (R_xlen_t i = 0; i < n; ++i) {
     int acc_idx = -1;
@@ -3922,20 +3695,25 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
         Rcpp::stop("Column 'accumulator' must be numeric (1-based index)");
       }
       Rcpp::NumericVector acc_num(acc_col_obj);
-      if (i >= acc_num.size()) continue;
+      if (i >= acc_num.size())
+        continue;
       double raw_val = acc_num[i];
-      if (Rcpp::NumericVector::is_na(raw_val)) continue;
+      if (Rcpp::NumericVector::is_na(raw_val))
+        continue;
       int idx_val = static_cast<int>(std::llround(raw_val)) - 1;
-      if (idx_val < 0 || idx_val >= static_cast<int>(ctx.accumulators.size())) continue;
+      if (idx_val < 0 || idx_val >= static_cast<int>(ctx.accumulators.size()))
+        continue;
       acc_idx = idx_val;
     }
-    if (acc_idx < 0 || acc_idx >= static_cast<int>(ctx.accumulators.size())) continue;
-    const uuber::NativeAccumulator& base = ctx.accumulators[acc_idx];
+    if (acc_idx < 0 || acc_idx >= static_cast<int>(ctx.accumulators.size()))
+      continue;
+    const uuber::NativeAccumulator &base = ctx.accumulators[acc_idx];
 
     TrialAccumulatorParams override;
-    override.onset = (i < onset_col.size() && !Rcpp::NumericVector::is_na(onset_col[i]))
-      ? static_cast<double>(onset_col[i])
-      : base.onset;
+    override.onset =
+        (i < onset_col.size() && !Rcpp::NumericVector::is_na(onset_col[i]))
+            ? static_cast<double>(onset_col[i])
+            : base.onset;
     // Resolve shared trigger first
     bool has_shared = false;
     if (i < shared_col.size() && shared_col[i] != NA_STRING) {
@@ -3948,7 +3726,8 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
     // Shared gate probability from column or base; per-acc q=0 on success path.
     if (has_shared) {
       double gate_q = base.q;
-      if (i < shared_q_col.size() && !Rcpp::NumericVector::is_na(shared_q_col[i])) {
+      if (i < shared_q_col.size() &&
+          !Rcpp::NumericVector::is_na(shared_q_col[i])) {
         gate_q = static_cast<double>(shared_q_col[i]);
       }
       gate_q = clamp_probability(gate_q);
@@ -3967,7 +3746,8 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
       override.components = string_vector_from_entry(comp_entry);
       override.has_components = !override.components.empty();
       if (override.has_components) {
-        override.component_indices = component_indices_from_labels(ctx, override.components);
+        override.component_indices =
+            component_indices_from_labels(ctx, override.components);
       }
     } else {
       override.has_components = false;
@@ -3980,11 +3760,13 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
     override.dist_cfg = base.dist_cfg;
     std::vector<uuber::ProtoParamEntry> param_entries;
     if (params_list_col.size() > 0) {
-      SEXP param_entry = (i < params_list_col.size()) ? params_list_col[i] : R_NilValue;
+      SEXP param_entry =
+          (i < params_list_col.size()) ? params_list_col[i] : R_NilValue;
       if (param_entry != R_NilValue) {
         Rcpp::List param_list(param_entry);
-        std::vector<uuber::ProtoParamEntry> entries = params_from_rcpp(param_list, dist_name);
-        for (auto& entry : entries) {
+        std::vector<uuber::ProtoParamEntry> entries =
+            params_from_rcpp(param_list, dist_name);
+        for (auto &entry : entries) {
           upsert_param_entry(param_entries, entry);
         }
       }
@@ -3992,7 +3774,7 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
     for (std::size_t pc = 0; pc < param_cols.size(); ++pc) {
       SEXP column = param_col_data[pc];
       int type = param_col_types[pc];
-      const std::string& col_name = param_cols[pc];
+      const std::string &col_name = param_cols[pc];
       switch (type) {
       case REALSXP: {
         Rcpp::NumericVector vec(column);
@@ -4009,7 +3791,8 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
         if (i < vec.size()) {
           int val = vec[i];
           if (val != NA_INTEGER) {
-            append_scalar_entry(param_entries, col_name, static_cast<double>(val), false);
+            append_scalar_entry(param_entries, col_name,
+                                static_cast<double>(val), false);
           }
         }
         break;
@@ -4019,7 +3802,8 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
         if (i < vec.size()) {
           int val = vec[i];
           if (val != NA_LOGICAL) {
-            append_scalar_entry(param_entries, col_name, static_cast<double>(val), true);
+            append_scalar_entry(param_entries, col_name,
+                                static_cast<double>(val), true);
           }
         }
         break;
@@ -4029,9 +3813,11 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
         break;
       case VECSXP: {
         Rcpp::List vec(column);
-        if (i >= vec.size()) break;
+        if (i >= vec.size())
+          break;
         SEXP cell = vec[i];
-        if (cell == R_NilValue) break;
+        if (cell == R_NilValue)
+          break;
         if (Rf_isReal(cell)) {
           Rcpp::NumericVector nv(cell);
           if (nv.size() == 1) {
@@ -4047,7 +3833,8 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
           if (iv.size() == 1) {
             int val = iv[0];
             if (val != NA_INTEGER) {
-              append_scalar_entry(param_entries, col_name, static_cast<double>(val), false);
+              append_scalar_entry(param_entries, col_name,
+                                  static_cast<double>(val), false);
             }
           } else {
             Rcpp::NumericVector nv = Rcpp::as<Rcpp::NumericVector>(iv);
@@ -4058,7 +3845,8 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
           if (lv.size() == 1) {
             int val = lv[0];
             if (val != NA_LOGICAL) {
-              append_scalar_entry(param_entries, col_name, static_cast<double>(val), true);
+              append_scalar_entry(param_entries, col_name,
+                                  static_cast<double>(val), true);
             }
           } else {
             append_logical_vector_entry(param_entries, col_name, lv);
@@ -4084,13 +3872,12 @@ std::unique_ptr<TrialParamSet> build_trial_params_from_df(
   return params_set;
 }
 
-
 } // namespace
 
-Rcpp::List native_component_plan_impl(const Rcpp::List& structure,
-                                      const Rcpp::DataFrame* trial_rows,
+Rcpp::List native_component_plan_impl(const Rcpp::List &structure,
+                                      const Rcpp::DataFrame *trial_rows,
                                       double trial_id,
-                                      const std::string* forced_component) {
+                                      const std::string *forced_component) {
   Rcpp::DataFrame comp_tbl(structure["components"]);
   Rcpp::CharacterVector component_ids = comp_tbl["component_id"];
   Rcpp::NumericVector base_weights = comp_tbl["weight"];
@@ -4119,7 +3906,8 @@ Rcpp::List native_component_plan_impl(const Rcpp::List& structure,
   base_weight_map.reserve(component_ids.size());
   for (R_xlen_t i = 0; i < component_ids.size(); ++i) {
     std::string id = Rcpp::as<std::string>(component_ids[i]);
-    double weight = (i < base_weights.size()) ? static_cast<double>(base_weights[i]) : 0.0;
+    double weight =
+        (i < base_weights.size()) ? static_cast<double>(base_weights[i]) : 0.0;
     all_components.push_back(id);
     base_weight_map[id] = weight;
   }
@@ -4135,7 +3923,7 @@ Rcpp::List native_component_plan_impl(const Rcpp::List& structure,
       trial_filter.insert(Rcpp::as<std::string>(trial_comp[i]));
     }
     if (!trial_filter.empty()) {
-      for (const auto& comp : all_components) {
+      for (const auto &comp : all_components) {
         if (trial_filter.count(comp)) {
           selected_components.push_back(comp);
         }
@@ -4150,18 +3938,22 @@ Rcpp::List native_component_plan_impl(const Rcpp::List& structure,
 
   if (mode == "sample") {
     // Weight parameters come from trial_rows for non-reference components.
-    // Reference weight = 1 - sum(nonref), then normalize to guard against rounding.
+    // Reference weight = 1 - sum(nonref), then normalize to guard against
+    // rounding.
     std::unordered_map<std::string, int> comp_index;
     for (std::size_t i = 0; i < selected_components.size(); ++i) {
       comp_index[selected_components[i]] = static_cast<int>(i);
     }
-    std::string ref_id = reference.empty() ? selected_components.front() : reference;
+    std::string ref_id =
+        reference.empty() ? selected_components.front() : reference;
     double sum_nonref = 0.0;
     for (R_xlen_t i = 0; i < component_ids.size(); ++i) {
       std::string cid = Rcpp::as<std::string>(component_ids[i]);
-      if (cid == ref_id) continue;
+      if (cid == ref_id)
+        continue;
       auto it_idx = comp_index.find(cid);
-      if (it_idx == comp_index.end()) continue;
+      if (it_idx == comp_index.end())
+        continue;
       std::string wp;
       if (attrs_list.size() > 0 && i < attrs_list.size()) {
         Rcpp::List attr(attrs_list[i]);
@@ -4170,22 +3962,26 @@ Rcpp::List native_component_plan_impl(const Rcpp::List& structure,
         }
       }
       if (wp.empty()) {
-        Rcpp::stop("Component '%s' missing weight_param for sampled mixture", cid.c_str());
+        Rcpp::stop("Component '%s' missing weight_param for sampled mixture",
+                   cid.c_str());
       }
       double val = std::numeric_limits<double>::quiet_NaN();
       if (trial_rows && trial_rows->containsElementNamed(wp.c_str())) {
         Rcpp::NumericVector col((*trial_rows)[wp]);
         if (col.size() > 0) {
           double cand = col[0];
-          if (std::isfinite(cand)) val = cand;
+          if (std::isfinite(cand))
+            val = cand;
         }
       }
       if (!std::isfinite(val)) {
         auto it = base_weight_map.find(cid);
-        if (it != base_weight_map.end()) val = it->second;
+        if (it != base_weight_map.end())
+          val = it->second;
       }
       if (!std::isfinite(val) || val < 0.0 || val > 1.0) {
-        Rcpp::stop("Mixture weight '%s' must be a probability in [0,1]", wp.c_str());
+        Rcpp::stop("Mixture weight '%s' must be a probability in [0,1]",
+                   wp.c_str());
       }
       weights[static_cast<std::size_t>(it_idx->second)] = val;
       sum_nonref += val;
@@ -4194,39 +3990,45 @@ Rcpp::List native_component_plan_impl(const Rcpp::List& structure,
     if (ref_it != comp_index.end()) {
       double ref_weight = 1.0 - sum_nonref;
       if (ref_weight < -1e-8) {
-        Rcpp::stop("Mixture weights sum to >1; check non-reference weight params");
+        Rcpp::stop(
+            "Mixture weights sum to >1; check non-reference weight params");
       }
-      if (ref_weight < 0.0) ref_weight = 0.0;
+      if (ref_weight < 0.0)
+        ref_weight = 0.0;
       weights[static_cast<std::size_t>(ref_it->second)] = ref_weight;
     }
   } else {
     for (std::size_t i = 0; i < selected_components.size(); ++i) {
       auto it = base_weight_map.find(selected_components[i]);
       double w = (it != base_weight_map.end()) ? it->second : 0.0;
-      if (!std::isfinite(w) || w < 0.0) w = 0.0;
+      if (!std::isfinite(w) || w < 0.0)
+        w = 0.0;
       weights[i] = w;
     }
   }
 
   double total = 0.0;
-  for (double w : weights) total += w;
+  for (double w : weights)
+    total += w;
   if (total <= 0.0) {
     double uniform = 1.0 / static_cast<double>(weights.size());
     std::fill(weights.begin(), weights.end(), uniform);
   } else {
-    for (double& w : weights) {
+    for (double &w : weights) {
       w /= total;
     }
   }
 
   return Rcpp::List::create(
-    Rcpp::Named("components") = Rcpp::CharacterVector(selected_components.begin(), selected_components.end()),
-    Rcpp::Named("weights") = Rcpp::NumericVector(weights.begin(), weights.end())
-  );
+      Rcpp::Named("components") = Rcpp::CharacterVector(
+          selected_components.begin(), selected_components.end()),
+      Rcpp::Named("weights") =
+          Rcpp::NumericVector(weights.begin(), weights.end()));
 }
 
-double normalize_weights(std::vector<double>& weights) {
-  if (weights.empty()) return 0.0;
+double normalize_weights(std::vector<double> &weights) {
+  if (weights.empty())
+    return 0.0;
   bool need_uniform = false;
   double total = 0.0;
   for (double w : weights) {
@@ -4237,7 +4039,7 @@ double normalize_weights(std::vector<double>& weights) {
     total += w;
   }
   if (!need_uniform && total > 0.0) {
-    for (double& w : weights) {
+    for (double &w : weights) {
       w /= total;
     }
     return total;
@@ -4247,12 +4049,13 @@ double normalize_weights(std::vector<double>& weights) {
   return 1.0;
 }
 
-bool build_component_mix(const Rcpp::CharacterVector& component_ids,
-                         const Rcpp::NumericVector& weights_in,
+bool build_component_mix(const Rcpp::CharacterVector &component_ids,
+                         const Rcpp::NumericVector &weights_in,
                          Rcpp::Nullable<Rcpp::String> forced_component,
-                         std::vector<std::string>& components_out,
-                         std::vector<double>& weights_out) {
-  if (component_ids.size() == 0) return false;
+                         std::vector<std::string> &components_out,
+                         std::vector<double> &weights_out) {
+  if (component_ids.size() == 0)
+    return false;
   components_out.clear();
   components_out.reserve(component_ids.size());
   for (R_xlen_t i = 0; i < component_ids.size(); ++i) {
@@ -4263,7 +4066,8 @@ bool build_component_mix(const Rcpp::CharacterVector& component_ids,
       components_out.emplace_back(comp.get_cstring());
     }
   }
-  weights_out.assign(components_out.size(), std::numeric_limits<double>::quiet_NaN());
+  weights_out.assign(components_out.size(),
+                     std::numeric_limits<double>::quiet_NaN());
   if (weights_in.size() == component_ids.size()) {
     for (R_xlen_t i = 0; i < weights_in.size(); ++i) {
       weights_out[static_cast<std::size_t>(i)] = weights_in[i];
@@ -4285,24 +4089,23 @@ bool build_component_mix(const Rcpp::CharacterVector& component_ids,
   return !components_out.empty();
 }
 
-double native_trial_mixture_internal(uuber::NativeContext& ctx,
-                                     int node_id,
-                                     double t,
-                                     const std::vector<std::string>& component_ids,
-                                     const std::vector<double>& weights,
-                                     Rcpp::Nullable<Rcpp::String> forced_component,
-                                     const std::vector<int>& competitor_ids,
-                                     const TrialParamSet* params_ptr,
-                                     const std::vector<ComponentCacheEntry>& cache_entries,
-                                     const std::string& keep_label = std::string(),
-                                     const Rcpp::List& guess_donors = Rcpp::List()) {
+double native_trial_mixture_internal(
+    uuber::NativeContext &ctx, int node_id, double t,
+    const std::vector<std::string> &component_ids,
+    const std::vector<double> &weights,
+    Rcpp::Nullable<Rcpp::String> forced_component,
+    const std::vector<int> &competitor_ids, const TrialParamSet *params_ptr,
+    const std::vector<ComponentCacheEntry> &cache_entries,
+    const std::string &keep_label = std::string(),
+    const Rcpp::List &guess_donors = Rcpp::List()) {
   if (!std::isfinite(t) || t < 0.0) {
     return std::numeric_limits<double>::quiet_NaN();
   }
   static const std::unordered_set<int> kEmptyForced;
   double total = 0.0;
   const bool has_keep = !keep_label.empty();
-  const std::string keep_norm = has_keep ? normalize_label_string(keep_label) : std::string();
+  const std::string keep_norm =
+      has_keep ? normalize_label_string(keep_label) : std::string();
   int keep_outcome_idx = -1;
   int keep_outcome_idx_context = -1;
   if (has_keep) {
@@ -4317,12 +4120,12 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
   TrialParamSet trigger_scratch;
   std::vector<int> component_indices;
   component_indices.reserve(component_ids.size());
-  for (const auto& comp_id : component_ids) {
+  for (const auto &comp_id : component_ids) {
     component_indices.push_back(component_index_of(ctx, comp_id));
   }
   for (std::size_t i = 0; i < component_ids.size(); ++i) {
     int comp_idx = component_indices[i];
-    const ComponentCacheEntry* cache_entry_ptr = nullptr;
+    const ComponentCacheEntry *cache_entry_ptr = nullptr;
     ComponentCacheEntry fallback;
     if (i < cache_entries.size()) {
       cache_entry_ptr = &cache_entries[i];
@@ -4333,9 +4136,10 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
     double contrib = 0.0;
     bool used_guess_shortcut = false;
     if (has_keep) {
-      if (comp_idx >= 0 && comp_idx < static_cast<int>(ctx.component_info.size())) {
-        const uuber::ComponentGuessPolicy& guess =
-          ctx.component_info[static_cast<std::size_t>(comp_idx)].guess;
+      if (comp_idx >= 0 &&
+          comp_idx < static_cast<int>(ctx.component_info.size())) {
+        const uuber::ComponentGuessPolicy &guess =
+            ctx.component_info[static_cast<std::size_t>(comp_idx)].guess;
         bool guess_applies = false;
         if (guess.valid) {
           if (guess.target == "__GUESS__") {
@@ -4349,50 +4153,28 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
         }
         if (guess_applies) {
           contrib = accumulate_component_guess_density(
-            ctx,
-            keep_label,
-            keep_outcome_idx,
-            t,
-            component_ids[i],
-            comp_idx,
-            params_ptr,
-            cache_entry_ptr->trial_type_key
-          );
+              ctx, keep_label, keep_outcome_idx, t, component_ids[i], comp_idx,
+              params_ptr, cache_entry_ptr->trial_type_key);
           used_guess_shortcut = true;
         }
       }
     }
     if (!used_guess_shortcut) {
-      contrib = node_density_with_shared_triggers_plan(ctx,
-                                                       node_id,
-                                                       t,
-                                                       component_ids[i],
-                                                       comp_idx,
-                                                       kEmptyForced,
-                                                       kEmptyForced,
-                                                       competitor_ids,
-                                                       params_ptr,
-                                                       cache_entry_ptr->trial_type_key,
-                                                       false,
-                                                       keep_label,
-                                                       keep_outcome_idx_context,
-                                                       &trigger_plan,
-                                                       &trigger_scratch);
-      if (!std::isfinite(contrib) || contrib < 0.0) contrib = 0.0;
+      contrib = node_density_with_shared_triggers_plan(
+          ctx, node_id, t, component_ids[i], comp_idx, kEmptyForced,
+          kEmptyForced, competitor_ids, params_ptr,
+          cache_entry_ptr->trial_type_key, false, keep_label,
+          keep_outcome_idx_context, &trigger_plan, &trigger_scratch);
+      if (!std::isfinite(contrib) || contrib < 0.0)
+        contrib = 0.0;
       if (has_keep) {
         double keep_w = component_keep_weight(ctx, comp_idx, keep_outcome_idx);
         contrib *= keep_w;
       }
       if (guess_donors.size() > 0) {
         double donor_contrib = accumulate_plan_guess_density(
-          ctx,
-          guess_donors,
-          t,
-          component_ids[i],
-          cache_entry_ptr->trial_type_key,
-          params_ptr,
-          false
-        );
+            ctx, guess_donors, t, component_ids[i],
+            cache_entry_ptr->trial_type_key, params_ptr, false);
         contrib += donor_contrib;
       }
     }
@@ -4405,61 +4187,53 @@ double native_trial_mixture_internal(uuber::NativeContext& ctx,
 }
 
 // [[Rcpp::export(name = "native_trial_mixture_cpp")]]
-double native_trial_mixture_driver(SEXP ctxSEXP,
-                                   int node_id,
-                                   double t,
-                                   Rcpp::CharacterVector component_ids,
-                                   Rcpp::NumericVector weights,
-                                   Rcpp::Nullable<Rcpp::String> forced_component,
-                                   Rcpp::IntegerVector competitor_ids,
-                                   Rcpp::Nullable<Rcpp::DataFrame> trial_rows,
-                                   Rcpp::Nullable<Rcpp::List> guess_donors) {
+double native_trial_mixture_driver(
+    SEXP ctxSEXP, int node_id, double t, Rcpp::CharacterVector component_ids,
+    Rcpp::NumericVector weights, Rcpp::Nullable<Rcpp::String> forced_component,
+    Rcpp::IntegerVector competitor_ids,
+    Rcpp::Nullable<Rcpp::DataFrame> trial_rows,
+    Rcpp::Nullable<Rcpp::List> guess_donors) {
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   std::vector<std::string> components;
   std::vector<double> mix_weights;
-  if (!build_component_mix(component_ids, weights, forced_component, components, mix_weights)) {
+  if (!build_component_mix(component_ids, weights, forced_component, components,
+                           mix_weights)) {
     return std::numeric_limits<double>::quiet_NaN();
   }
   std::vector<int> comp_ids = integer_vector_to_std(competitor_ids, false);
   std::unique_ptr<TrialParamSet> param_holder;
-  const TrialParamSet* params_ptr = nullptr;
+  const TrialParamSet *params_ptr = nullptr;
   if (!trial_rows.isNull()) {
     param_holder = build_trial_params_from_df(*ctx, trial_rows);
     params_ptr = param_holder.get();
   }
-  std::vector<ComponentCacheEntry> cache_entries = build_component_cache_entries(components);
-  return native_trial_mixture_internal(*ctx,
-                                       node_id,
-                                       t,
-                                       components,
-                                       mix_weights,
-                                       forced_component,
-                                       comp_ids,
-                                       params_ptr,
-                                       cache_entries,
-                                       std::string(),
-                                       guess_donors.isNotNull() ? Rcpp::List(guess_donors.get()) : Rcpp::List());
+  std::vector<ComponentCacheEntry> cache_entries =
+      build_component_cache_entries(components);
+  return native_trial_mixture_internal(
+      *ctx, node_id, t, components, mix_weights, forced_component, comp_ids,
+      params_ptr, cache_entries, std::string(),
+      guess_donors.isNotNull() ? Rcpp::List(guess_donors.get()) : Rcpp::List());
 }
 
-double mix_outcome_mass(SEXP ctxSEXP,
-                        const uuber::OutcomeContextInfo& info,
-                        const std::vector<std::string>& comp_labels,
-                        const std::vector<double>& comp_weights,
-                        const TrialParamSet* params_ptr,
-                        double rel_tol,
-                        double abs_tol,
-                        int max_depth,
-                        const std::string& outcome_label_context) {
-  if (info.node_id < 0) return 0.0;
+double mix_outcome_mass(SEXP ctxSEXP, const uuber::OutcomeContextInfo &info,
+                        const std::vector<std::string> &comp_labels,
+                        const std::vector<double> &comp_weights,
+                        const TrialParamSet *params_ptr, double rel_tol,
+                        double abs_tol, int max_depth,
+                        const std::string &outcome_label_context) {
+  if (info.node_id < 0)
+    return 0.0;
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   // Cache NA-map integrals when no RT is provided (maps_to_na cases).
   std::string cache_key;
   bool use_cache = params_ptr != nullptr;
   if (use_cache) {
     std::ostringstream oss;
-    oss << outcome_label_context << "|node:" << info.node_id << "|sig:" << param_signature(params_ptr) << "|comp:";
+    oss << outcome_label_context << "|node:" << info.node_id
+        << "|sig:" << param_signature(params_ptr) << "|comp:";
     for (std::size_t i = 0; i < comp_labels.size(); ++i) {
-      oss << comp_labels[i] << "@" << (i < comp_weights.size() ? comp_weights[i] : 0.0) << ";";
+      oss << comp_labels[i] << "@"
+          << (i < comp_weights.size() ? comp_weights[i] : 0.0) << ";";
     }
     cache_key = oss.str();
     auto hit = ctx->na_map_cache.find(cache_key);
@@ -4467,43 +4241,35 @@ double mix_outcome_mass(SEXP ctxSEXP,
       return hit->second;
     }
   }
-  Rcpp::IntegerVector comp_ids(info.competitor_ids.begin(), info.competitor_ids.end());
+  Rcpp::IntegerVector comp_ids(info.competitor_ids.begin(),
+                               info.competitor_ids.end());
   int outcome_idx_context = -1;
   if (!outcome_label_context.empty()) {
     outcome_idx_context = (outcome_label_context == "NA")
-      ? kOutcomeIdxNA
-      : outcome_index_of(*ctx, outcome_label_context);
+                              ? kOutcomeIdxNA
+                              : outcome_index_of(*ctx, outcome_label_context);
   }
   std::vector<int> comp_indices;
   comp_indices.reserve(comp_labels.size());
-  for (const auto& comp : comp_labels) {
+  for (const auto &comp : comp_labels) {
     comp_indices.push_back(component_index_of(*ctx, comp));
   }
   double total = 0.0;
   for (std::size_t i = 0; i < comp_labels.size(); ++i) {
     double w = (i < comp_weights.size()) ? comp_weights[i] : 0.0;
-    if (w <= 0.0) continue;
-    const std::string& comp = comp_labels[i];
+    if (w <= 0.0)
+      continue;
+    const std::string &comp = comp_labels[i];
     int comp_idx = comp_indices[i];
-    Rcpp::Nullable<Rcpp::String> comp_val(comp.empty() ? R_NilValue : Rcpp::wrap(comp));
+    Rcpp::Nullable<Rcpp::String> comp_val(comp.empty() ? R_NilValue
+                                                       : Rcpp::wrap(comp));
     double p = native_outcome_probability_impl(
-      ctxSEXP,
-      info.node_id,
-      std::numeric_limits<double>::infinity(),
-      comp_val,
-      R_NilValue,
-      R_NilValue,
-      comp_ids,
-      rel_tol,
-      abs_tol,
-      max_depth,
-      params_ptr,
-      std::string(),
-      false,
-      std::string()
-    );
+        ctxSEXP, info.node_id, std::numeric_limits<double>::infinity(),
+        comp_val, R_NilValue, R_NilValue, comp_ids, rel_tol, abs_tol, max_depth,
+        params_ptr, std::string(), false, std::string());
     if (std::isfinite(p) && p > 0.0) {
-      double keep_w = component_keep_weight(*ctx, comp_idx, outcome_idx_context);
+      double keep_w =
+          component_keep_weight(*ctx, comp_idx, outcome_idx_context);
       total += w * p * keep_w;
     }
   }
@@ -4519,15 +4285,10 @@ double mix_outcome_mass(SEXP ctxSEXP,
 }
 
 // [[Rcpp::export]]
-double cpp_loglik(SEXP ctxSEXP,
-                  Rcpp::NumericMatrix params_mat,
-                  Rcpp::DataFrame data_df,
-                  Rcpp::LogicalVector ok,
-                  Rcpp::IntegerVector expand,
-                  double min_ll,
-                  double rel_tol,
-                  double abs_tol,
-                  int max_depth) {
+double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
+                  Rcpp::DataFrame data_df, Rcpp::LogicalVector ok,
+                  Rcpp::IntegerVector expand, double min_ll, double rel_tol,
+                  double abs_tol, int max_depth) {
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   ctx->na_map_cache.clear();
   ctx->na_cache_order.clear();
@@ -4542,22 +4303,28 @@ double cpp_loglik(SEXP ctxSEXP,
   Rcpp::CharacterVector outcome_col = data_df["R"];
   Rcpp::NumericVector rt_col = data_df["rt"];
   bool has_component = data_df.containsElementNamed("component");
-  Rcpp::CharacterVector comp_col = has_component ? Rcpp::CharacterVector(data_df["component"]) : Rcpp::CharacterVector();
+  Rcpp::CharacterVector comp_col =
+      has_component ? Rcpp::CharacterVector(data_df["component"])
+                    : Rcpp::CharacterVector();
   bool has_onset = data_df.containsElementNamed("onset");
-  Rcpp::NumericVector onset_col = has_onset ? Rcpp::NumericVector(data_df["onset"]) : Rcpp::NumericVector();
+  Rcpp::NumericVector onset_col =
+      has_onset ? Rcpp::NumericVector(data_df["onset"]) : Rcpp::NumericVector();
 
-  const std::vector<TrialAccumulatorParams> base_acc_params = build_base_paramset(*ctx).acc_params;
-  const ComponentMap& comp_map = ctx->components;
-  const std::vector<std::string>& comp_ids = comp_map.ids;
+  const std::vector<TrialAccumulatorParams> base_acc_params =
+      build_base_paramset(*ctx).acc_params;
+  const ComponentMap &comp_map = ctx->components;
+  const std::vector<std::string> &comp_ids = comp_map.ids;
   std::unordered_map<std::string, int> comp_index;
-  for (std::size_t i = 0; i < comp_ids.size(); ++i) comp_index[comp_ids[i]] = static_cast<int>(i);
+  for (std::size_t i = 0; i < comp_ids.size(); ++i)
+    comp_index[comp_ids[i]] = static_cast<int>(i);
   std::vector<int> all_acc_indices(ctx->accumulators.size());
-  for (std::size_t i = 0; i < all_acc_indices.size(); ++i) all_acc_indices[i] = static_cast<int>(i);
+  for (std::size_t i = 0; i < all_acc_indices.size(); ++i)
+    all_acc_indices[i] = static_cast<int>(i);
   std::vector<std::vector<int>> comp_acc_indices(comp_ids.size());
   for (std::size_t c = 0; c < comp_ids.size(); ++c) {
-    const std::string& cid = comp_ids[c];
+    const std::string &cid = comp_ids[c];
     for (std::size_t a = 0; a < ctx->accumulators.size(); ++a) {
-      const auto& comps = ctx->accumulators[a].components;
+      const auto &comps = ctx->accumulators[a].components;
       if (std::find(comps.begin(), comps.end(), cid) != comps.end()) {
         comp_acc_indices[c].push_back(static_cast<int>(a));
       }
@@ -4580,7 +4347,7 @@ double cpp_loglik(SEXP ctxSEXP,
   int current_trial_label = std::numeric_limits<int>::min();
   int trial_idx = -1;
   std::size_t acc_cursor = 0;
-  const std::vector<int>* current_acc_order = &all_acc_indices;
+  const std::vector<int> *current_acc_order = &all_acc_indices;
   for (R_xlen_t r = 0; r < n_rows; ++r) {
     int trial_label = static_cast<int>(trial_col[r]);
     if (r == 0 || trial_label != current_trial_label) {
@@ -4593,27 +4360,32 @@ double cpp_loglik(SEXP ctxSEXP,
       rt_by_trial.push_back(std::numeric_limits<double>::quiet_NaN());
       component_by_trial.emplace_back();
       comp_idx_by_trial.push_back(-1);
-      weight_override_by_trial.push_back(std::vector<double>(comp_count, std::numeric_limits<double>::quiet_NaN()));
+      weight_override_by_trial.push_back(std::vector<double>(
+          comp_count, std::numeric_limits<double>::quiet_NaN()));
       acc_cursor = 0;
       current_acc_order = &all_acc_indices;
     }
-    if (has_component && comp_idx_by_trial[trial_idx] < 0 && r < comp_col.size()) {
+    if (has_component && comp_idx_by_trial[trial_idx] < 0 &&
+        r < comp_col.size()) {
       Rcpp::String comp_val(comp_col[r]);
       if (comp_val != NA_STRING) {
         std::string comp_str(comp_val.get_cstring());
         auto it = comp_index.find(comp_str);
         if (it != comp_index.end()) {
           comp_idx_by_trial[trial_idx] = it->second;
-          current_acc_order = &comp_acc_indices[static_cast<std::size_t>(it->second)];
+          current_acc_order =
+              &comp_acc_indices[static_cast<std::size_t>(it->second)];
           component_by_trial[trial_idx] = comp_str;
         }
       }
     }
     int acc_idx = (acc_cursor < current_acc_order->size())
-      ? (*current_acc_order)[acc_cursor]
-      : all_acc_indices[acc_cursor % all_acc_indices.size()];
+                      ? (*current_acc_order)[acc_cursor]
+                      : all_acc_indices[acc_cursor % all_acc_indices.size()];
     ++acc_cursor;
-    TrialAccumulatorParams& tap = param_sets[static_cast<std::size_t>(trial_idx)].acc_params[static_cast<std::size_t>(acc_idx)];
+    TrialAccumulatorParams &tap =
+        param_sets[static_cast<std::size_t>(trial_idx)]
+            .acc_params[static_cast<std::size_t>(acc_idx)];
     double q_val = clamp_probability(params_mat(r, q_col));
     if (!tap.shared_trigger_id.empty()) {
       tap.shared_q = q_val;
@@ -4634,13 +4406,16 @@ double cpp_loglik(SEXP ctxSEXP,
         tap.dist_cfg.code == uuber::ACC_DIST_GAMMA ||
         tap.dist_cfg.code == uuber::ACC_DIST_EXGAUSS) {
       tap.dist_cfg.p1 = params_mat(r, p1_col);
-      if (p2_col >= 0) tap.dist_cfg.p2 = params_mat(r, p2_col);
-      if (p3_col >= 0) tap.dist_cfg.p3 = params_mat(r, p3_col);
+      if (p2_col >= 0)
+        tap.dist_cfg.p2 = params_mat(r, p2_col);
+      if (p3_col >= 0)
+        tap.dist_cfg.p3 = params_mat(r, p3_col);
     }
 
     for (std::size_t c = 0; c < comp_map.leader_idx.size(); ++c) {
       if (comp_map.leader_idx[c] == acc_idx) {
-        weight_override_by_trial[static_cast<std::size_t>(trial_idx)][c] = params_mat(r, w_col);
+        weight_override_by_trial[static_cast<std::size_t>(trial_idx)][c] =
+            params_mat(r, w_col);
       }
     }
 
@@ -4650,7 +4425,8 @@ double cpp_loglik(SEXP ctxSEXP,
     if (!std::isfinite(rt_by_trial[trial_idx]) && r < rt_col.size()) {
       rt_by_trial[trial_idx] = static_cast<double>(rt_col[r]);
     }
-    if (has_component && component_by_trial[trial_idx].empty() && r < comp_col.size()) {
+    if (has_component && component_by_trial[trial_idx].empty() &&
+        r < comp_col.size()) {
       Rcpp::String comp_val(comp_col[r]);
       if (comp_val != NA_STRING) {
         component_by_trial[trial_idx] = std::string(comp_val.get_cstring());
@@ -4662,30 +4438,36 @@ double cpp_loglik(SEXP ctxSEXP,
   std::vector<SharedTriggerPlan> trigger_plans;
   trigger_plans.reserve(static_cast<std::size_t>(n_trials));
   for (int t = 0; t < n_trials; ++t) {
-    trigger_plans.push_back(build_shared_trigger_plan(*ctx, &param_sets[static_cast<std::size_t>(t)]));
+    trigger_plans.push_back(build_shared_trigger_plan(
+        *ctx, &param_sets[static_cast<std::size_t>(t)]));
   }
 
-  const std::vector<std::string>& default_components = comp_map.ids;
+  const std::vector<std::string> &default_components = comp_map.ids;
   const std::size_t n_components = default_components.size();
   const std::vector<ComponentCacheEntry> default_cache_entries =
-    build_component_cache_entries(default_components);
+      build_component_cache_entries(default_components);
 
-  std::vector<std::vector<double>> weights_by_trial(static_cast<std::size_t>(n_trials),
-                                                    std::vector<double>(n_components, 0.0));
+  std::vector<std::vector<double>> weights_by_trial(
+      static_cast<std::size_t>(n_trials),
+      std::vector<double>(n_components, 0.0));
   for (int t = 0; t < n_trials; ++t) {
     std::vector<double> w = comp_map.base_weights;
-    const auto& overrides = weight_override_by_trial[static_cast<std::size_t>(t)];
+    const auto &overrides =
+        weight_override_by_trial[static_cast<std::size_t>(t)];
     for (std::size_t c = 0; c < w.size(); ++c) {
       double cand = overrides[c];
-      if (std::isfinite(cand)) w[c] = cand;
+      if (std::isfinite(cand))
+        w[c] = cand;
     }
     double total = 0.0;
-    for (double v : w) total += v;
+    for (double v : w)
+      total += v;
     if (!std::isfinite(total) || total <= 0.0) {
       double uni = 1.0 / static_cast<double>(w.size());
       std::fill(w.begin(), w.end(), uni);
     } else {
-      for (double& v : w) v /= total;
+      for (double &v : w)
+        v /= total;
     }
     weights_by_trial[static_cast<std::size_t>(t)] = std::move(w);
   }
@@ -4716,20 +4498,24 @@ double cpp_loglik(SEXP ctxSEXP,
       continue;
     }
 
-    TrialParamSet* params_ptr = &param_sets[static_cast<std::size_t>(t)];
+    TrialParamSet *params_ptr = &param_sets[static_cast<std::size_t>(t)];
     double rt = (t < static_cast<int>(rt_by_trial.size()))
-      ? rt_by_trial[static_cast<std::size_t>(t)]
-      : std::numeric_limits<double>::quiet_NaN();
+                    ? rt_by_trial[static_cast<std::size_t>(t)]
+                    : std::numeric_limits<double>::quiet_NaN();
     Rcpp::String out_str = outcome_by_trial[static_cast<std::size_t>(t)];
     bool outcome_is_na = (out_str == NA_STRING);
-    std::string outcome_label = outcome_is_na ? std::string() : std::string(out_str.get_cstring());
-    const std::vector<std::string>* comp_labels_ptr = &default_components;
-    const std::vector<ComponentCacheEntry>* cache_entries_ptr = &default_cache_entries;
-    const std::vector<double>* comp_weights_ptr = &weights_by_trial[static_cast<std::size_t>(t)];
+    std::string outcome_label =
+        outcome_is_na ? std::string() : std::string(out_str.get_cstring());
+    const std::vector<std::string> *comp_labels_ptr = &default_components;
+    const std::vector<ComponentCacheEntry> *cache_entries_ptr =
+        &default_cache_entries;
+    const std::vector<double> *comp_weights_ptr =
+        &weights_by_trial[static_cast<std::size_t>(t)];
 
-    std::string forced_component = (t < static_cast<int>(component_by_trial.size()))
-      ? component_by_trial[static_cast<std::size_t>(t)]
-      : std::string();
+    std::string forced_component =
+        (t < static_cast<int>(component_by_trial.size()))
+            ? component_by_trial[static_cast<std::size_t>(t)]
+            : std::string();
     std::vector<std::string> forced_components;
     std::vector<double> forced_weights;
     std::vector<ComponentCacheEntry> forced_cache_entries;
@@ -4743,49 +4529,47 @@ double cpp_loglik(SEXP ctxSEXP,
     }
     std::vector<int> comp_indices;
     comp_indices.reserve(comp_labels_ptr->size());
-    for (const auto& comp_id : *comp_labels_ptr) {
+    for (const auto &comp_id : *comp_labels_ptr) {
       comp_indices.push_back(component_index_of(*ctx, comp_id));
     }
 
     TrialParamSet trigger_scratch;
-    const SharedTriggerPlan* trigger_plan_ptr =
-      (t < static_cast<int>(trigger_plans.size()))
-        ? &trigger_plans[static_cast<std::size_t>(t)]
-        : nullptr;
+    const SharedTriggerPlan *trigger_plan_ptr =
+        (t < static_cast<int>(trigger_plans.size()))
+            ? &trigger_plans[static_cast<std::size_t>(t)]
+            : nullptr;
 
     double prob = 0.0;
     if (outcome_is_na) {
       double non_na_total = 0.0;
       for (std::size_t oi = 0; oi < ctx->outcome_info.size(); ++oi) {
-        const std::string& lbl = (oi < ctx->outcome_labels.size())
-          ? ctx->outcome_labels[oi]
-          : std::string();
-        if (lbl == "__DEADLINE__") continue;
-        const uuber::OutcomeContextInfo& info = ctx->outcome_info[oi];
-        double p = mix_outcome_mass(ctxSEXP,
-                                    info,
-                                    *comp_labels_ptr,
-                                    *comp_weights_ptr,
-                                    params_ptr,
-                                    rel_tol,
-                                    abs_tol,
-                                    max_depth,
-                                    lbl);
-        if (!std::isfinite(p) || p <= 0.0) continue;
-        if (!info.maps_to_na) non_na_total += p;
+        const std::string &lbl = (oi < ctx->outcome_labels.size())
+                                     ? ctx->outcome_labels[oi]
+                                     : std::string();
+        if (lbl == "__DEADLINE__")
+          continue;
+        const uuber::OutcomeContextInfo &info = ctx->outcome_info[oi];
+        double p =
+            mix_outcome_mass(ctxSEXP, info, *comp_labels_ptr, *comp_weights_ptr,
+                             params_ptr, rel_tol, abs_tol, max_depth, lbl);
+        if (!std::isfinite(p) || p <= 0.0)
+          continue;
+        if (!info.maps_to_na)
+          non_na_total += p;
       }
       prob = clamp_probability(1.0 - non_na_total);
     } else {
       int outcome_idx = outcome_index_of(*ctx, outcome_label);
       if (outcome_idx < 0 ||
           outcome_idx >= static_cast<int>(ctx->outcome_info.size()) ||
-          ctx->outcome_info[static_cast<std::size_t>(outcome_idx)].node_id < 0) {
+          ctx->outcome_info[static_cast<std::size_t>(outcome_idx)].node_id <
+              0) {
         prob = 0.0;
       } else if (!std::isfinite(rt) || rt < 0.0) {
         prob = 0.0;
       } else {
-        const uuber::OutcomeContextInfo& info =
-          ctx->outcome_info[static_cast<std::size_t>(outcome_idx)];
+        const uuber::OutcomeContextInfo &info =
+            ctx->outcome_info[static_cast<std::size_t>(outcome_idx)];
         bool can_fast = true;
         if (!info.alias_sources.empty()) {
           can_fast = false;
@@ -4796,7 +4580,8 @@ double cpp_loglik(SEXP ctxSEXP,
             int comp_idx = comp_indices[i];
             if (comp_idx >= 0 &&
                 comp_idx < static_cast<int>(ctx->component_info.size()) &&
-                ctx->component_info[static_cast<std::size_t>(comp_idx)].guess.valid) {
+                ctx->component_info[static_cast<std::size_t>(comp_idx)]
+                    .guess.valid) {
               can_fast = false;
               break;
             }
@@ -4811,41 +4596,26 @@ double cpp_loglik(SEXP ctxSEXP,
           static const std::unordered_set<int> kEmptyForced;
           double total = 0.0;
           for (std::size_t c = 0; c < comp_labels_ptr->size(); ++c) {
-            double w = (c < comp_weights_ptr->size()) ? (*comp_weights_ptr)[c] : 0.0;
-            if (!std::isfinite(w) || w <= 0.0) continue;
+            double w =
+                (c < comp_weights_ptr->size()) ? (*comp_weights_ptr)[c] : 0.0;
+            if (!std::isfinite(w) || w <= 0.0)
+              continue;
             int comp_idx = comp_indices[c];
-            double contrib = node_density_with_shared_triggers_plan(*ctx,
-                                                                    info.node_id,
-                                                                    rt,
-                                                                    (*comp_labels_ptr)[c],
-                                                                    comp_idx,
-                                                                    kEmptyForced,
-                                                                    kEmptyForced,
-                                                                    info.competitor_ids,
-                                                                    params_ptr,
-                                                                    std::string(),
-                                                                    false,
-                                                                    std::string(),
-                                                                    -1,
-                                                                    trigger_plan_ptr,
-                                                                    &trigger_scratch);
+            double contrib = node_density_with_shared_triggers_plan(
+                *ctx, info.node_id, rt, (*comp_labels_ptr)[c], comp_idx,
+                kEmptyForced, kEmptyForced, info.competitor_ids, params_ptr,
+                std::string(), false, std::string(), -1, trigger_plan_ptr,
+                &trigger_scratch);
             if (std::isfinite(contrib) && contrib > 0.0) {
               total += w * contrib;
             }
           }
           prob = total;
         } else {
-          prob = native_trial_mixture_internal(*ctx,
-                                               info.node_id,
-                                               rt,
-                                               *comp_labels_ptr,
-                                               *comp_weights_ptr,
-                                               R_NilValue,
-                                               info.competitor_ids,
-                                               params_ptr,
-                                               *cache_entries_ptr,
-                                               outcome_label,
-                                               Rcpp::List());
+          prob = native_trial_mixture_internal(
+              *ctx, info.node_id, rt, *comp_labels_ptr, *comp_weights_ptr,
+              R_NilValue, info.competitor_ids, params_ptr, *cache_entries_ptr,
+              outcome_label, Rcpp::List());
         }
       }
     }
@@ -4870,15 +4640,12 @@ double cpp_loglik(SEXP ctxSEXP,
 }
 
 // [[Rcpp::export]]
-Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP,
-                                        Rcpp::List params_list,
+Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP, Rcpp::List params_list,
                                         Rcpp::DataFrame data_df,
                                         Rcpp::LogicalVector ok,
                                         Rcpp::IntegerVector expand,
-                                        double min_ll,
-                                        double rel_tol,
-                                        double abs_tol,
-                                        int max_depth) {
+                                        double min_ll, double rel_tol,
+                                        double abs_tol, int max_depth) {
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   Rcpp::NumericVector out(params_list.size());
   for (R_xlen_t i = 0; i < params_list.size(); ++i) {
@@ -4887,7 +4654,8 @@ Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP,
       continue;
     }
     Rcpp::NumericMatrix pm(params_list[i]);
-    out[i] = cpp_loglik(ctxSEXP, pm, data_df, ok, expand, min_ll, rel_tol, abs_tol, max_depth);
+    out[i] = cpp_loglik(ctxSEXP, pm, data_df, ok, expand, min_ll, rel_tol,
+                        abs_tol, max_depth);
   }
   return out;
 }
@@ -4898,49 +4666,35 @@ Rcpp::List native_component_plan_exported(SEXP structureSEXP,
                                           SEXP forced_componentSEXP) {
   Rcpp::List structure = Rcpp::as<Rcpp::List>(structureSEXP);
   Rcpp::DataFrame trial_rows_df;
-  const Rcpp::DataFrame* trial_rows_ptr = nullptr;
+  const Rcpp::DataFrame *trial_rows_ptr = nullptr;
   if (!Rf_isNull(trial_rowsSEXP)) {
     trial_rows_df = Rcpp::DataFrame(trial_rowsSEXP);
     trial_rows_ptr = &trial_rows_df;
   }
   double trial_id = extract_trial_id(trial_rows_ptr);
   std::string forced_component_value;
-  const std::string* forced_component_ptr = nullptr;
+  const std::string *forced_component_ptr = nullptr;
   if (!Rf_isNull(forced_componentSEXP)) {
     forced_component_value = Rcpp::as<std::string>(forced_componentSEXP);
     forced_component_ptr = &forced_component_value;
   }
-  return native_component_plan_impl(structure,
-                                    trial_rows_ptr,
-                                    trial_id,
+  return native_component_plan_impl(structure, trial_rows_ptr, trial_id,
                                     forced_component_ptr);
 }
 
 // [[Rcpp::export]]
-double native_outcome_probability_params_cpp(SEXP ctxSEXP,
-                                             int node_id,
-                                             double upper,
-                                             Rcpp::Nullable<Rcpp::String> component,
-                                             SEXP forced_complete,
-                                             SEXP forced_survive,
-                                             Rcpp::IntegerVector competitor_ids,
-                                             double rel_tol,
-                                             double abs_tol,
-                                             int max_depth,
-                                             Rcpp::Nullable<Rcpp::DataFrame> trial_rows) {
+double native_outcome_probability_params_cpp(
+    SEXP ctxSEXP, int node_id, double upper,
+    Rcpp::Nullable<Rcpp::String> component, SEXP forced_complete,
+    SEXP forced_survive, Rcpp::IntegerVector competitor_ids, double rel_tol,
+    double abs_tol, int max_depth, Rcpp::Nullable<Rcpp::DataFrame> trial_rows) {
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  std::unique_ptr<TrialParamSet> params_holder = build_trial_params_from_df(*ctx, trial_rows);
-  return native_outcome_probability_impl(ctxSEXP,
-                                         node_id,
-                                         upper,
-                                         component,
-                                         forced_complete,
-                                         forced_survive,
-                                         competitor_ids,
-                                         rel_tol,
-                                         abs_tol,
-                                         max_depth,
-                                         params_holder ? params_holder.get() : nullptr);
+  std::unique_ptr<TrialParamSet> params_holder =
+      build_trial_params_from_df(*ctx, trial_rows);
+  return native_outcome_probability_impl(
+      ctxSEXP, node_id, upper, component, forced_complete, forced_survive,
+      competitor_ids, rel_tol, abs_tol, max_depth,
+      params_holder ? params_holder.get() : nullptr);
 }
 
 // [[Rcpp::export]]
@@ -4952,7 +4706,8 @@ Rcpp::DataFrame native_outcome_labels_cpp(SEXP ctxSEXP) {
   Rcpp::IntegerVector comp_counts(n);
   Rcpp::LogicalVector maps_na(n);
   for (R_xlen_t idx = 0; idx < n; ++idx) {
-    const uuber::OutcomeContextInfo& info = ctx->outcome_info[static_cast<std::size_t>(idx)];
+    const uuber::OutcomeContextInfo &info =
+        ctx->outcome_info[static_cast<std::size_t>(idx)];
     if (idx < static_cast<R_xlen_t>(ctx->outcome_labels.size())) {
       labels[idx] = ctx->outcome_labels[static_cast<std::size_t>(idx)];
     } else {
@@ -4962,36 +4717,26 @@ Rcpp::DataFrame native_outcome_labels_cpp(SEXP ctxSEXP) {
     comp_counts[idx] = static_cast<int>(info.competitor_ids.size());
     maps_na[idx] = info.maps_to_na;
   }
-  return Rcpp::DataFrame::create(
-    Rcpp::Named("label") = labels,
-    Rcpp::Named("node_id") = node_ids,
-    Rcpp::Named("competitors") = comp_counts,
-    Rcpp::Named("maps_to_na") = maps_na,
-    Rcpp::Named("stringsAsFactors") = false
-  );
+  return Rcpp::DataFrame::create(Rcpp::Named("label") = labels,
+                                 Rcpp::Named("node_id") = node_ids,
+                                 Rcpp::Named("competitors") = comp_counts,
+                                 Rcpp::Named("maps_to_na") = maps_na,
+                                 Rcpp::Named("stringsAsFactors") = false);
 }
 
 // Forward declarations for native distribution helpers
-Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector& x,
-                                       double meanlog,
-                                       double sdlog);
-Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector& x,
-                                       double meanlog,
-                                       double sdlog);
-Rcpp::NumericVector dist_gamma_pdf(const Rcpp::NumericVector& x,
-                                   double shape,
+Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector &x,
+                                       double meanlog, double sdlog);
+Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector &x,
+                                       double meanlog, double sdlog);
+Rcpp::NumericVector dist_gamma_pdf(const Rcpp::NumericVector &x, double shape,
                                    double rate);
-Rcpp::NumericVector dist_gamma_cdf(const Rcpp::NumericVector& x,
-                                   double shape,
+Rcpp::NumericVector dist_gamma_cdf(const Rcpp::NumericVector &x, double shape,
                                    double rate);
-Rcpp::NumericVector dist_exgauss_pdf(const Rcpp::NumericVector& x,
-                                     double mu,
-                                     double sigma,
-                                     double tau);
-Rcpp::NumericVector dist_exgauss_cdf(const Rcpp::NumericVector& x,
-                                     double mu,
-                                     double sigma,
-                                     double tau);
+Rcpp::NumericVector dist_exgauss_pdf(const Rcpp::NumericVector &x, double mu,
+                                     double sigma, double tau);
+Rcpp::NumericVector dist_exgauss_cdf(const Rcpp::NumericVector &x, double mu,
+                                     double sigma, double tau);
 
 namespace {
 
@@ -4999,14 +4744,14 @@ inline bool is_invalid_positive(double value) {
   return !std::isfinite(value) || value <= 0.0;
 }
 
-inline std::vector<double> expand_poly(const std::vector<double>& coeff,
-                                       double surv,
-                                       double fail) {
+inline std::vector<double> expand_poly(const std::vector<double> &coeff,
+                                       double surv, double fail) {
   std::size_t len = coeff.size();
   std::vector<double> out(len + 1, 0.0);
   for (std::size_t i = 0; i < len; ++i) {
     double base = coeff[i];
-    if (base == 0.0) continue;
+    if (base == 0.0)
+      continue;
     out[i] += base * surv;
     out[i + 1] += base * fail;
   }
@@ -5020,7 +4765,7 @@ struct PoolPolyScratch {
   std::vector<double> fail;
 };
 
-inline void ensure_prefix_shape(std::vector<std::vector<double>>& prefix,
+inline void ensure_prefix_shape(std::vector<std::vector<double>> &prefix,
                                 std::size_t n) {
   if (prefix.size() != n + 1) {
     prefix.resize(n + 1);
@@ -5032,7 +4777,7 @@ inline void ensure_prefix_shape(std::vector<std::vector<double>>& prefix,
   }
 }
 
-inline void ensure_suffix_shape(std::vector<std::vector<double>>& suffix,
+inline void ensure_suffix_shape(std::vector<std::vector<double>> &suffix,
                                 std::size_t n) {
   if (suffix.size() != n + 1) {
     suffix.resize(n + 1);
@@ -5045,10 +4790,10 @@ inline void ensure_suffix_shape(std::vector<std::vector<double>>& suffix,
   }
 }
 
-inline PoolPolyScratch& fetch_pool_poly_scratch(std::size_t n,
+inline PoolPolyScratch &fetch_pool_poly_scratch(std::size_t n,
                                                 bool need_suffix) {
   thread_local std::unordered_map<std::size_t, PoolPolyScratch> scratch_map;
-  PoolPolyScratch& scratch = scratch_map[n];
+  PoolPolyScratch &scratch = scratch_map[n];
   ensure_prefix_shape(scratch.prefix, n);
   if (need_suffix) {
     ensure_suffix_shape(scratch.suffix, n);
@@ -5056,7 +4801,7 @@ inline PoolPolyScratch& fetch_pool_poly_scratch(std::size_t n,
   return scratch;
 }
 
-inline void ensure_prob_buffers(PoolPolyScratch& scratch, std::size_t n) {
+inline void ensure_prob_buffers(PoolPolyScratch &scratch, std::size_t n) {
   if (scratch.surv.size() != n) {
     scratch.surv.resize(n);
   }
@@ -5065,59 +4810,64 @@ inline void ensure_prob_buffers(PoolPolyScratch& scratch, std::size_t n) {
   }
 }
 
-inline void fill_prefix_buffers(std::vector<std::vector<double>>& prefix,
-                                const std::vector<double>& surv,
-                                const std::vector<double>& fail) {
+inline void fill_prefix_buffers(std::vector<std::vector<double>> &prefix,
+                                const std::vector<double> &surv,
+                                const std::vector<double> &fail) {
   const std::size_t n = surv.size();
   std::fill(prefix[0].begin(), prefix[0].end(), 0.0);
   prefix[0][0] = 1.0;
   for (std::size_t i = 0; i < n; ++i) {
-    const std::vector<double>& prev = prefix[i];
-    std::vector<double>& out = prefix[i + 1];
+    const std::vector<double> &prev = prefix[i];
+    std::vector<double> &out = prefix[i + 1];
     std::fill(out.begin(), out.end(), 0.0);
     double surv_i = surv[i];
     double fail_i = fail[i];
     for (std::size_t j = 0; j < prev.size(); ++j) {
       double base = prev[j];
-      if (base == 0.0) continue;
+      if (base == 0.0)
+        continue;
       out[j] += base * surv_i;
       out[j + 1] += base * fail_i;
     }
   }
 }
 
-inline void fill_suffix_buffers(std::vector<std::vector<double>>& suffix,
-                                const std::vector<double>& surv,
-                                const std::vector<double>& fail) {
+inline void fill_suffix_buffers(std::vector<std::vector<double>> &suffix,
+                                const std::vector<double> &surv,
+                                const std::vector<double> &fail) {
   const std::size_t n = surv.size();
   std::fill(suffix[n].begin(), suffix[n].end(), 0.0);
   suffix[n][0] = 1.0;
   for (std::size_t idx = n; idx-- > 0;) {
-    const std::vector<double>& next = suffix[idx + 1];
-    std::vector<double>& out = suffix[idx];
+    const std::vector<double> &next = suffix[idx + 1];
+    std::vector<double> &out = suffix[idx];
     std::fill(out.begin(), out.end(), 0.0);
     double surv_i = surv[idx];
     double fail_i = fail[idx];
     for (std::size_t j = 0; j < next.size(); ++j) {
       double base = next[j];
-      if (base == 0.0) continue;
+      if (base == 0.0)
+        continue;
       out[j] += base * surv_i;
       out[j + 1] += base * fail_i;
     }
   }
 }
 
-inline double coefficient_for_order(const std::vector<double>& pref,
-                                    const std::vector<double>& suff,
+inline double coefficient_for_order(const std::vector<double> &pref,
+                                    const std::vector<double> &suff,
                                     int order) {
-  if (order < 0) return 0.0;
+  if (order < 0)
+    return 0.0;
   double total = 0.0;
   int max_pref = static_cast<int>(pref.size()) - 1;
   int max_index = std::min(order, max_pref);
   for (int i = 0; i <= max_index; ++i) {
     int s_idx = order - i;
-    if (s_idx < 0 || s_idx >= static_cast<int>(suff.size())) continue;
-    total += pref[static_cast<std::size_t>(i)] * suff[static_cast<std::size_t>(s_idx)];
+    if (s_idx < 0 || s_idx >= static_cast<int>(suff.size()))
+      continue;
+    total += pref[static_cast<std::size_t>(i)] *
+             suff[static_cast<std::size_t>(s_idx)];
   }
   return total;
 }
@@ -5130,40 +4880,41 @@ struct PoolTemplate {
   std::vector<int> forced_survive_ids;
 };
 
-inline void sort_unique(std::vector<int>& vec) {
-  if (vec.empty()) return;
+inline void sort_unique(std::vector<int> &vec) {
+  if (vec.empty())
+    return;
   std::sort(vec.begin(), vec.end());
   vec.erase(std::unique(vec.begin(), vec.end()), vec.end());
 }
 
-inline std::vector<int> integer_vector_to_std(const Rcpp::IntegerVector& src,
+inline std::vector<int> integer_vector_to_std(const Rcpp::IntegerVector &src,
                                               bool subtract_one) {
   std::vector<int> out;
   out.reserve(src.size());
   for (int val : src) {
-    if (val == NA_INTEGER) continue;
+    if (val == NA_INTEGER)
+      continue;
     out.push_back(subtract_one ? val - 1 : val);
   }
   sort_unique(out);
   return out;
 }
 
-inline std::vector<int> merge_forced_vectors(const std::vector<int>& base,
-                                             const std::vector<int>& addition) {
+inline std::vector<int> merge_forced_vectors(const std::vector<int> &base,
+                                             const std::vector<int> &addition) {
   std::vector<int> result = base;
   for (int val : addition) {
-    if (val == NA_INTEGER) continue;
+    if (val == NA_INTEGER)
+      continue;
     result.push_back(val);
   }
   sort_unique(result);
   return result;
 }
 
-void combinations_recursive(const std::vector<int>& elements,
-                            int choose,
-                            std::size_t start,
-                            std::vector<int>& current,
-                            std::vector<std::vector<int>>& output) {
+void combinations_recursive(const std::vector<int> &elements, int choose,
+                            std::size_t start, std::vector<int> &current,
+                            std::vector<std::vector<int>> &output) {
   if (static_cast<int>(current.size()) == choose) {
     output.push_back(current);
     return;
@@ -5175,8 +4926,8 @@ void combinations_recursive(const std::vector<int>& elements,
   }
 }
 
-inline std::vector<std::vector<int>> generate_combinations(const std::vector<int>& elements,
-                                                           int choose) {
+inline std::vector<std::vector<int>>
+generate_combinations(const std::vector<int> &elements, int choose) {
   std::vector<std::vector<int>> combos;
   if (choose <= 0) {
     combos.emplace_back();
@@ -5198,15 +4949,17 @@ inline std::vector<std::vector<int>> generate_combinations(const std::vector<int
   return combos;
 }
 
-inline std::vector<int> survivors_from_combo(const std::vector<int>& others,
-                                             const std::vector<int>& combo) {
-  if (combo.empty()) return others;
+inline std::vector<int> survivors_from_combo(const std::vector<int> &others,
+                                             const std::vector<int> &combo) {
+  if (combo.empty())
+    return others;
   std::vector<int> survivors;
   std::vector<int> combo_sorted = combo;
   std::sort(combo_sorted.begin(), combo_sorted.end());
   survivors.reserve(others.size());
   for (int candidate : others) {
-    if (!std::binary_search(combo_sorted.begin(), combo_sorted.end(), candidate)) {
+    if (!std::binary_search(combo_sorted.begin(), combo_sorted.end(),
+                            candidate)) {
       survivors.push_back(candidate);
     }
   }
@@ -5221,9 +4974,8 @@ inline std::vector<int> survivors_from_combo(const std::vector<int>& others,
 
 //' @noRd
 // [[Rcpp::export]]
-Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector& x,
-                                       double meanlog,
-                                       double sdlog) {
+Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector &x,
+                                       double meanlog, double sdlog) {
   R_xlen_t n = x.size();
   Rcpp::NumericVector out(n);
   if (is_invalid_positive(sdlog)) {
@@ -5247,9 +4999,8 @@ Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector& x,
 
 //' @noRd
 // [[Rcpp::export]]
-Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector& x,
-                                       double meanlog,
-                                       double sdlog) {
+Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector &x,
+                                       double meanlog, double sdlog) {
   R_xlen_t n = x.size();
   Rcpp::NumericVector out(n);
   if (is_invalid_positive(sdlog)) {
@@ -5274,9 +5025,7 @@ Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector& x,
 
 //' @noRd
 // [[Rcpp::export]]
-Rcpp::NumericVector dist_lognormal_rng(int n,
-                                       double meanlog,
-                                       double sdlog) {
+Rcpp::NumericVector dist_lognormal_rng(int n, double meanlog, double sdlog) {
   if (n <= 0 || is_invalid_positive(sdlog)) {
     return Rcpp::NumericVector();
   }
@@ -5294,8 +5043,7 @@ Rcpp::NumericVector dist_lognormal_rng(int n,
 
 //' @noRd
 // [[Rcpp::export]]
-Rcpp::NumericVector dist_gamma_pdf(const Rcpp::NumericVector& x,
-                                   double shape,
+Rcpp::NumericVector dist_gamma_pdf(const Rcpp::NumericVector &x, double shape,
                                    double rate) {
   R_xlen_t n = x.size();
   Rcpp::NumericVector out(n);
@@ -5311,8 +5059,7 @@ Rcpp::NumericVector dist_gamma_pdf(const Rcpp::NumericVector& x,
 
 //' @noRd
 // [[Rcpp::export]]
-Rcpp::NumericVector dist_gamma_cdf(const Rcpp::NumericVector& x,
-                                   double shape,
+Rcpp::NumericVector dist_gamma_cdf(const Rcpp::NumericVector &x, double shape,
                                    double rate) {
   R_xlen_t n = x.size();
   Rcpp::NumericVector out(n);
@@ -5328,9 +5075,7 @@ Rcpp::NumericVector dist_gamma_cdf(const Rcpp::NumericVector& x,
 
 //' @noRd
 // [[Rcpp::export]]
-Rcpp::NumericVector dist_gamma_rng(int n,
-                                   double shape,
-                                   double rate) {
+Rcpp::NumericVector dist_gamma_rng(int n, double shape, double rate) {
   if (n <= 0 || is_invalid_positive(shape) || is_invalid_positive(rate)) {
     return Rcpp::NumericVector();
   }
@@ -5344,10 +5089,8 @@ Rcpp::NumericVector dist_gamma_rng(int n,
 
 //' @noRd
 // [[Rcpp::export]]
-Rcpp::NumericVector dist_exgauss_pdf(const Rcpp::NumericVector& x,
-                                     double mu,
-                                     double sigma,
-                                     double tau) {
+Rcpp::NumericVector dist_exgauss_pdf(const Rcpp::NumericVector &x, double mu,
+                                     double sigma, double tau) {
   R_xlen_t n = x.size();
   Rcpp::NumericVector out(n);
   if (is_invalid_positive(sigma) || is_invalid_positive(tau)) {
@@ -5362,10 +5105,8 @@ Rcpp::NumericVector dist_exgauss_pdf(const Rcpp::NumericVector& x,
 
 //' @noRd
 // [[Rcpp::export]]
-Rcpp::NumericVector dist_exgauss_cdf(const Rcpp::NumericVector& x,
-                                     double mu,
-                                     double sigma,
-                                     double tau) {
+Rcpp::NumericVector dist_exgauss_cdf(const Rcpp::NumericVector &x, double mu,
+                                     double sigma, double tau) {
   R_xlen_t n = x.size();
   Rcpp::NumericVector out(n);
   if (is_invalid_positive(sigma) || is_invalid_positive(tau)) {
@@ -5380,9 +5121,7 @@ Rcpp::NumericVector dist_exgauss_cdf(const Rcpp::NumericVector& x,
 
 //' @noRd
 // [[Rcpp::export]]
-Rcpp::NumericVector dist_exgauss_rng(int n,
-                                     double mu,
-                                     double sigma,
+Rcpp::NumericVector dist_exgauss_rng(int n, double mu, double sigma,
                                      double tau) {
   if (n <= 0 || is_invalid_positive(sigma) || is_invalid_positive(tau)) {
     return Rcpp::NumericVector();
@@ -5401,52 +5140,46 @@ Rcpp::NumericVector dist_exgauss_rng(int n,
 // ------------------------------------------------------------------
 
 struct PoolDensityWorker : public RcppParallel::Worker {
-  const double* density;
-  const std::vector<std::vector<double>>* prefix;
-  const std::vector<std::vector<double>>* suffix;
+  const double *density;
+  const std::vector<std::vector<double>> *prefix;
+  const std::vector<std::vector<double>> *suffix;
   const int order;
   double total;
 
-  PoolDensityWorker(const double* densityPtr,
-                    const std::vector<std::vector<double>>& prefixRef,
-                    const std::vector<std::vector<double>>& suffixRef,
+  PoolDensityWorker(const double *densityPtr,
+                    const std::vector<std::vector<double>> &prefixRef,
+                    const std::vector<std::vector<double>> &suffixRef,
                     int order_)
-    : density(densityPtr),
-      prefix(&prefixRef),
-      suffix(&suffixRef),
-      order(order_),
-      total(0.0) {}
+      : density(densityPtr), prefix(&prefixRef), suffix(&suffixRef),
+        order(order_), total(0.0) {}
 
-  PoolDensityWorker(const PoolDensityWorker& other, RcppParallel::Split)
-    : density(other.density),
-      prefix(other.prefix),
-      suffix(other.suffix),
-      order(other.order),
-      total(0.0) {}
+  PoolDensityWorker(const PoolDensityWorker &other, RcppParallel::Split)
+      : density(other.density), prefix(other.prefix), suffix(other.suffix),
+        order(other.order), total(0.0) {}
 
   void operator()(std::size_t begin, std::size_t end) {
     double local = 0.0;
-    const auto& pref = *prefix;
-    const auto& suff = *suffix;
+    const auto &pref = *prefix;
+    const auto &suff = *suffix;
     for (std::size_t idx = begin; idx < end; ++idx) {
       double dens_val = density[idx];
-      if (!std::isfinite(dens_val) || dens_val <= 0.0) continue;
+      if (!std::isfinite(dens_val) || dens_val <= 0.0)
+        continue;
       double coeff = coefficient_for_order(pref[idx], suff[idx + 1], order);
-      if (!std::isfinite(coeff) || coeff <= 0.0) continue;
+      if (!std::isfinite(coeff) || coeff <= 0.0)
+        continue;
       local += dens_val * coeff;
     }
     total += local;
   }
 
-  void join(const PoolDensityWorker& rhs) {
-    total += rhs.total;
-  }
+  void join(const PoolDensityWorker &rhs) { total += rhs.total; }
 };
 
 //' @noRd
 // [[Rcpp::export]]
-Rcpp::NumericVector pool_coeffs_cpp(const Rcpp::NumericVector& Svec,
-                                    const Rcpp::NumericVector& Fvec) {
+Rcpp::NumericVector pool_coeffs_cpp(const Rcpp::NumericVector &Svec,
+                                    const Rcpp::NumericVector &Fvec) {
   std::size_t n = Svec.size();
   std::vector<double> coeff{1.0};
   coeff.reserve(n + 1);
@@ -5462,12 +5195,12 @@ Rcpp::NumericVector pool_coeffs_cpp(const Rcpp::NumericVector& Svec,
   return out;
 }
 
-static inline void fill_surv_fail_buffers(PoolPolyScratch& scratch,
-                                          const double* survival,
+static inline void fill_surv_fail_buffers(PoolPolyScratch &scratch,
+                                          const double *survival,
                                           std::size_t n) {
   ensure_prob_buffers(scratch, n);
-  std::vector<double>& surv = scratch.surv;
-  std::vector<double>& fail = scratch.fail;
+  std::vector<double> &surv = scratch.surv;
+  std::vector<double> &fail = scratch.fail;
   for (std::size_t i = 0; i < n; ++i) {
     double s = clamp_unit(survival[i]);
     surv[i] = s;
@@ -5475,23 +5208,25 @@ static inline void fill_surv_fail_buffers(PoolPolyScratch& scratch,
   }
 }
 
-static double pool_density_fast_impl(const double* density,
-                                     const double* survival,
-                                     std::size_t n,
+static double pool_density_fast_impl(const double *density,
+                                     const double *survival, std::size_t n,
                                      int k) {
-  if (n == 0) return 0.0;
-  if (k < 1) return 0.0;
-  if (k > static_cast<int>(n)) return 0.0;
+  if (n == 0)
+    return 0.0;
+  if (k < 1)
+    return 0.0;
+  if (k > static_cast<int>(n))
+    return 0.0;
 
-  PoolPolyScratch& scratch = fetch_pool_poly_scratch(n, true);
+  PoolPolyScratch &scratch = fetch_pool_poly_scratch(n, true);
   fill_surv_fail_buffers(scratch, survival, n);
   fill_prefix_buffers(scratch.prefix, scratch.surv, scratch.fail);
   fill_suffix_buffers(scratch.suffix, scratch.surv, scratch.fail);
 
   PoolDensityWorker worker(density, scratch.prefix, scratch.suffix, k - 1);
 #if defined(RCPP_PARALLEL_USE_TBB) && RCPP_PARALLEL_USE_TBB
-  // TBB parallel overhead dwarfs work for typical pool sizes (n is usually small),
-  // so only parallelize once the pool is large enough to benefit.
+  // TBB parallel overhead dwarfs work for typical pool sizes (n is usually
+  // small), so only parallelize once the pool is large enough to benefit.
   constexpr std::size_t kParallelThreshold = 512;
   if (n >= kParallelThreshold) {
     RcppParallel::parallelReduce(0, n, worker);
@@ -5503,22 +5238,25 @@ static double pool_density_fast_impl(const double* density,
 #endif
 
   double total = worker.total;
-  if (!std::isfinite(total) || total < 0.0) return 0.0;
+  if (!std::isfinite(total) || total < 0.0)
+    return 0.0;
   return total;
 }
 
-static double pool_survival_fast_impl(const double* survival,
-                                      std::size_t n,
+static double pool_survival_fast_impl(const double *survival, std::size_t n,
                                       int k) {
-  if (n == 0) return 1.0;
-  if (k < 1) return 0.0;
+  if (n == 0)
+    return 1.0;
+  if (k < 1)
+    return 0.0;
 
-  PoolPolyScratch& scratch = fetch_pool_poly_scratch(n, false);
+  PoolPolyScratch &scratch = fetch_pool_poly_scratch(n, false);
   fill_surv_fail_buffers(scratch, survival, n);
   fill_prefix_buffers(scratch.prefix, scratch.surv, scratch.fail);
-  const std::vector<double>& poly = scratch.prefix.back();
+  const std::vector<double> &poly = scratch.prefix.back();
   int upto = std::min<int>(k, static_cast<int>(poly.size()));
-  if (upto <= 0) return 0.0;
+  if (upto <= 0)
+    return 0.0;
   double total = 0.0;
   for (int i = 0; i < upto; ++i) {
     total += poly[static_cast<std::size_t>(i)];
@@ -5526,44 +5264,45 @@ static double pool_survival_fast_impl(const double* survival,
   return clamp(total, 0.0, 1.0);
 }
 
-double pool_density_fast(const std::vector<double>& density,
-                         const std::vector<double>& survival,
-                         int k) {
-  if (density.size() != survival.size()) return 0.0;
-  return pool_density_fast_impl(density.data(), survival.data(), density.size(), k);
+double pool_density_fast(const std::vector<double> &density,
+                         const std::vector<double> &survival, int k) {
+  if (density.size() != survival.size())
+    return 0.0;
+  return pool_density_fast_impl(density.data(), survival.data(), density.size(),
+                                k);
 }
 
-double pool_survival_fast(const std::vector<double>& survival,
-                          int k) {
+double pool_survival_fast(const std::vector<double> &survival, int k) {
   return pool_survival_fast_impl(survival.data(), survival.size(), k);
 }
 
-double pool_density_fast_cpp(const Rcpp::NumericVector& density,
-                             const Rcpp::NumericVector& survival,
-                             int k) {
-  if (density.size() != survival.size()) return 0.0;
-  return pool_density_fast_impl(density.begin(), survival.begin(), density.size(), k);
+double pool_density_fast_cpp(const Rcpp::NumericVector &density,
+                             const Rcpp::NumericVector &survival, int k) {
+  if (density.size() != survival.size())
+    return 0.0;
+  return pool_density_fast_impl(density.begin(), survival.begin(),
+                                density.size(), k);
 }
 
-double pool_survival_fast_cpp(const Rcpp::NumericVector& survival,
-                              int k) {
+double pool_survival_fast_cpp(const Rcpp::NumericVector &survival, int k) {
   return pool_survival_fast_impl(survival.begin(), survival.size(), k);
 }
 
 Rcpp::List pool_build_templates_cpp(int n,
-                                    const Rcpp::IntegerVector& member_ids,
-                                    int pool_idx,
-                                    int k) {
+                                    const Rcpp::IntegerVector &member_ids,
+                                    int pool_idx, int k) {
   std::vector<int> member_std(member_ids.begin(), member_ids.end());
-  uuber::PoolTemplateCacheEntry cache = build_pool_template_cache(n, member_std, pool_idx, k);
+  uuber::PoolTemplateCacheEntry cache =
+      build_pool_template_cache(n, member_std, pool_idx, k);
   Rcpp::List finisher_map(n);
   Rcpp::List templates_out(cache.templates.size());
   for (std::size_t i = 0; i < cache.templates.size(); ++i) {
-    const uuber::PoolTemplateEntry& tpl = cache.templates[i];
+    const uuber::PoolTemplateEntry &tpl = cache.templates[i];
     Rcpp::IntegerVector complete_idx;
     if (!tpl.complete_idx.empty()) {
-      complete_idx = Rcpp::IntegerVector(tpl.complete_idx.begin(), tpl.complete_idx.end());
-      for (auto& val : complete_idx) {
+      complete_idx =
+          Rcpp::IntegerVector(tpl.complete_idx.begin(), tpl.complete_idx.end());
+      for (auto &val : complete_idx) {
         val += 1;
       }
     } else {
@@ -5571,8 +5310,9 @@ Rcpp::List pool_build_templates_cpp(int n,
     }
     Rcpp::IntegerVector survivor_idx;
     if (!tpl.survivor_idx.empty()) {
-      survivor_idx = Rcpp::IntegerVector(tpl.survivor_idx.begin(), tpl.survivor_idx.end());
-      for (auto& val : survivor_idx) {
+      survivor_idx =
+          Rcpp::IntegerVector(tpl.survivor_idx.begin(), tpl.survivor_idx.end());
+      for (auto &val : survivor_idx) {
         val += 1;
       }
     } else {
@@ -5580,26 +5320,28 @@ Rcpp::List pool_build_templates_cpp(int n,
     }
     Rcpp::IntegerVector forced_complete_vec;
     if (!tpl.forced_complete_ids.empty()) {
-      forced_complete_vec = Rcpp::IntegerVector(tpl.forced_complete_ids.begin(), tpl.forced_complete_ids.end());
+      forced_complete_vec = Rcpp::IntegerVector(tpl.forced_complete_ids.begin(),
+                                                tpl.forced_complete_ids.end());
     } else {
       forced_complete_vec = Rcpp::IntegerVector(0);
     }
     Rcpp::IntegerVector forced_survive_vec;
     if (!tpl.forced_survive_ids.empty()) {
-      forced_survive_vec = Rcpp::IntegerVector(tpl.forced_survive_ids.begin(), tpl.forced_survive_ids.end());
+      forced_survive_vec = Rcpp::IntegerVector(tpl.forced_survive_ids.begin(),
+                                               tpl.forced_survive_ids.end());
     } else {
       forced_survive_vec = Rcpp::IntegerVector(0);
     }
     templates_out[i] = Rcpp::List::create(
-      Rcpp::Named("finisher_idx") = tpl.finisher_idx + 1,
-      Rcpp::Named("complete_idx") = complete_idx,
-      Rcpp::Named("survivor_idx") = survivor_idx,
-      Rcpp::Named("forced_complete_ids") = forced_complete_vec,
-      Rcpp::Named("forced_survive_ids") = forced_survive_vec
-    );
+        Rcpp::Named("finisher_idx") = tpl.finisher_idx + 1,
+        Rcpp::Named("complete_idx") = complete_idx,
+        Rcpp::Named("survivor_idx") = survivor_idx,
+        Rcpp::Named("forced_complete_ids") = forced_complete_vec,
+        Rcpp::Named("forced_survive_ids") = forced_survive_vec);
   }
   for (int idx = 0; idx < n; ++idx) {
-    const std::vector<int>& entries = cache.finisher_map[static_cast<std::size_t>(idx)];
+    const std::vector<int> &entries =
+        cache.finisher_map[static_cast<std::size_t>(idx)];
     if (entries.empty()) {
       finisher_map[idx] = Rcpp::IntegerVector(0);
       continue;
@@ -5610,21 +5352,19 @@ Rcpp::List pool_build_templates_cpp(int n,
     }
     finisher_map[idx] = fm;
   }
-  return Rcpp::List::create(
-    Rcpp::Named("templates") = templates_out,
-    Rcpp::Named("finisher_map") = finisher_map
-  );
+  return Rcpp::List::create(Rcpp::Named("templates") = templates_out,
+                            Rcpp::Named("finisher_map") = finisher_map);
 }
 
-Rcpp::List pool_density_combine_native(const Rcpp::NumericVector& dens_vec,
-                                       const Rcpp::NumericVector& cdf_vec,
-                                       const Rcpp::NumericVector& surv_vec,
-                                       const Rcpp::NumericVector& cdf_success_vec,
-                                       const Rcpp::NumericVector& surv_success_vec,
-                                       const std::vector<int>& shared_index,
-                                       const std::vector<uuber::PoolTemplateEntry>& templates,
-                                       const std::vector<int>& base_forced_complete,
-                                       const std::vector<int>& base_forced_survive) {
+Rcpp::List pool_density_combine_native(
+    const Rcpp::NumericVector &dens_vec, const Rcpp::NumericVector &cdf_vec,
+    const Rcpp::NumericVector &surv_vec,
+    const Rcpp::NumericVector &cdf_success_vec,
+    const Rcpp::NumericVector &surv_success_vec,
+    const std::vector<int> &shared_index,
+    const std::vector<uuber::PoolTemplateEntry> &templates,
+    const std::vector<int> &base_forced_complete,
+    const std::vector<int> &base_forced_survive) {
   const double eps = std::numeric_limits<double>::epsilon();
   std::vector<Rcpp::List> scenario_vec;
   scenario_vec.reserve(templates.size());
@@ -5640,41 +5380,53 @@ Rcpp::List pool_density_combine_native(const Rcpp::NumericVector& dens_vec,
     return si > 0 && sj > 0 && si == sj;
   };
 
-  for (const auto& tpl : templates) {
+  for (const auto &tpl : templates) {
     int finisher_idx = tpl.finisher_idx;
-    if (finisher_idx < 0 || finisher_idx >= dens_vec.size()) continue;
+    if (finisher_idx < 0 || finisher_idx >= dens_vec.size())
+      continue;
     double dens_mid = dens_vec[finisher_idx];
-    if (!std::isfinite(dens_mid) || dens_mid <= 0.0) continue;
+    if (!std::isfinite(dens_mid) || dens_mid <= 0.0)
+      continue;
     double weight = dens_mid;
 
     for (int j : tpl.complete_idx) {
-      if (j < 0 || j >= cdf_vec.size()) continue;
+      if (j < 0 || j >= cdf_vec.size())
+        continue;
       weight *= cdf_vec[j];
     }
     for (int j : tpl.survivor_idx) {
-      if (j < 0 || j >= surv_vec.size()) continue;
+      if (j < 0 || j >= surv_vec.size())
+        continue;
       weight *= surv_vec[j];
     }
-    if (!std::isfinite(weight) || weight <= 0.0) continue;
+    if (!std::isfinite(weight) || weight <= 0.0)
+      continue;
 
     for (int j : tpl.complete_idx) {
-      if (j < 0 || j >= cdf_vec.size()) continue;
-      if (!same_shared(finisher_idx, j)) continue;
+      if (j < 0 || j >= cdf_vec.size())
+        continue;
+      if (!same_shared(finisher_idx, j))
+        continue;
       double denom = std::max(cdf_vec[j], eps);
       double ratio = cdf_success_vec[j] / denom;
       weight *= ratio;
     }
     for (int j : tpl.survivor_idx) {
-      if (j < 0 || j >= surv_vec.size()) continue;
-      if (!same_shared(finisher_idx, j)) continue;
+      if (j < 0 || j >= surv_vec.size())
+        continue;
+      if (!same_shared(finisher_idx, j))
+        continue;
       double denom = std::max(surv_vec[j], eps);
       double ratio = surv_success_vec[j] / denom;
       weight *= ratio;
     }
-    if (!std::isfinite(weight) || weight <= 0.0) continue;
+    if (!std::isfinite(weight) || weight <= 0.0)
+      continue;
 
-    std::vector<int> merged_fc = merge_forced_vectors(base_forced_complete, tpl.forced_complete_ids);
-    std::vector<int> merged_fs = merge_forced_vectors(base_forced_survive, tpl.forced_survive_ids);
+    std::vector<int> merged_fc =
+        merge_forced_vectors(base_forced_complete, tpl.forced_complete_ids);
+    std::vector<int> merged_fs =
+        merge_forced_vectors(base_forced_survive, tpl.forced_survive_ids);
 
     total += weight;
 
@@ -5691,13 +5443,9 @@ Rcpp::List pool_density_combine_native(const Rcpp::NumericVector& dens_vec,
       fs_vec = Rcpp::IntegerVector(0);
     }
 
-    scenario_vec.emplace_back(
-      Rcpp::List::create(
-        Rcpp::Named("weight") = weight,
-        Rcpp::Named("forced_complete") = fc_vec,
-        Rcpp::Named("forced_survive") = fs_vec
-      )
-    );
+    scenario_vec.emplace_back(Rcpp::List::create(
+        Rcpp::Named("weight") = weight, Rcpp::Named("forced_complete") = fc_vec,
+        Rcpp::Named("forced_survive") = fs_vec));
   }
 
   Rcpp::List scenarios_out(scenario_vec.size());
@@ -5705,21 +5453,19 @@ Rcpp::List pool_density_combine_native(const Rcpp::NumericVector& dens_vec,
     scenarios_out[i] = scenario_vec[i];
   }
 
-  return Rcpp::List::create(
-    Rcpp::Named("value") = total,
-    Rcpp::Named("scenarios") = scenarios_out
-  );
+  return Rcpp::List::create(Rcpp::Named("value") = total,
+                            Rcpp::Named("scenarios") = scenarios_out);
 }
 
-Rcpp::List pool_density_combine_cpp(const Rcpp::NumericVector& dens_vec,
-                                    const Rcpp::NumericVector& cdf_vec,
-                                    const Rcpp::NumericVector& surv_vec,
-                                    const Rcpp::NumericVector& cdf_success_vec,
-                                    const Rcpp::NumericVector& surv_success_vec,
-                                    const Rcpp::IntegerVector& shared_index,
-                                    const Rcpp::List& templates,
-                                    const Rcpp::IntegerVector& forced_complete,
-                                    const Rcpp::IntegerVector& forced_survive) {
+Rcpp::List pool_density_combine_cpp(const Rcpp::NumericVector &dens_vec,
+                                    const Rcpp::NumericVector &cdf_vec,
+                                    const Rcpp::NumericVector &surv_vec,
+                                    const Rcpp::NumericVector &cdf_success_vec,
+                                    const Rcpp::NumericVector &surv_success_vec,
+                                    const Rcpp::IntegerVector &shared_index,
+                                    const Rcpp::List &templates,
+                                    const Rcpp::IntegerVector &forced_complete,
+                                    const Rcpp::IntegerVector &forced_survive) {
   std::vector<int> shared_group(shared_index.begin(), shared_index.end());
   std::vector<int> base_fc = integer_vector_to_std(forced_complete, false);
   std::vector<int> base_fs = integer_vector_to_std(forced_survive, false);
@@ -5732,32 +5478,30 @@ Rcpp::List pool_density_combine_cpp(const Rcpp::NumericVector& dens_vec,
     entry.finisher_idx -= 1;
     entry.complete_idx = integer_vector_to_std(tpl["complete_idx"], true);
     entry.survivor_idx = integer_vector_to_std(tpl["survivor_idx"], true);
-    entry.forced_complete_ids = integer_vector_to_std(tpl["forced_complete_ids"], false);
-    entry.forced_survive_ids = integer_vector_to_std(tpl["forced_survive_ids"], false);
+    entry.forced_complete_ids =
+        integer_vector_to_std(tpl["forced_complete_ids"], false);
+    entry.forced_survive_ids =
+        integer_vector_to_std(tpl["forced_survive_ids"], false);
     native_templates.push_back(std::move(entry));
   }
-  return pool_density_combine_native(dens_vec,
-                                     cdf_vec,
-                                     surv_vec,
-                                     cdf_success_vec,
-                                     surv_success_vec,
-                                     shared_group,
-                                     native_templates,
-                                     base_fc,
-                                     base_fs);
+  return pool_density_combine_native(
+      dens_vec, cdf_vec, surv_vec, cdf_success_vec, surv_success_vec,
+      shared_group, native_templates, base_fc, base_fs);
 }
 
-double pool_survival_general_cpp(const Rcpp::NumericVector& Fvec,
-                                 int k) {
+double pool_survival_general_cpp(const Rcpp::NumericVector &Fvec, int k) {
   const std::size_t n = Fvec.size();
-  if (n == 0) return 1.0;
-  if (k < 1) return 0.0;
+  if (n == 0)
+    return 1.0;
+  if (k < 1)
+    return 0.0;
 
   Rcpp::NumericVector Fclamp(n);
   Rcpp::NumericVector Svec(n);
   for (std::size_t i = 0; i < n; ++i) {
     double val = Fvec[i];
-    if (!std::isfinite(val)) val = 0.0;
+    if (!std::isfinite(val))
+      val = 0.0;
     val = clamp(val, 0.0, 1.0);
     Fclamp[i] = val;
     Svec[i] = 1.0 - val;
@@ -5765,7 +5509,8 @@ double pool_survival_general_cpp(const Rcpp::NumericVector& Fvec,
 
   Rcpp::NumericVector coeffs = pool_coeffs_cpp(Svec, Fclamp);
   int upto = std::min<int>(coeffs.size(), k);
-  if (upto <= 0) return 0.0;
+  if (upto <= 0)
+    return 0.0;
   double total = 0.0;
   for (int i = 0; i < upto; ++i) {
     total += coeffs[i];
@@ -5773,25 +5518,32 @@ double pool_survival_general_cpp(const Rcpp::NumericVector& Fvec,
   return clamp(total, 0.0, 1.0);
 }
 
-double guard_effective_survival_cpp(Rcpp::Function integrand,
-                                    double upper,
-                                    double rel_tol,
-                                    double abs_tol,
+double guard_effective_survival_cpp(Rcpp::Function integrand, double upper,
+                                    double rel_tol, double abs_tol,
                                     int max_depth) {
-  if (!std::isfinite(upper)) return 0.0;
-  if (upper <= 0.0) return 1.0;
-  if (rel_tol <= 0.0) rel_tol = 1e-5;
-  if (abs_tol <= 0.0) abs_tol = 1e-6;
+  if (!std::isfinite(upper))
+    return 0.0;
+  if (upper <= 0.0)
+    return 1.0;
+  if (rel_tol <= 0.0)
+    rel_tol = 1e-5;
+  if (abs_tol <= 0.0)
+    abs_tol = 1e-6;
   double integral = 0.0;
   try {
-    integral = uuber::integrate_boost(integrand, 0.0, upper, rel_tol, abs_tol, max_depth);
+    integral = uuber::integrate_boost(integrand, 0.0, upper, rel_tol, abs_tol,
+                                      max_depth);
   } catch (...) {
     integral = 0.0;
   }
-  if (!std::isfinite(integral) || integral < 0.0) integral = 0.0;
+  if (!std::isfinite(integral) || integral < 0.0)
+    integral = 0.0;
   double surv = 1.0 - integral;
-  if (!std::isfinite(surv)) surv = 0.0;
-  if (surv < 0.0) surv = 0.0;
-  if (surv > 1.0) surv = 1.0;
+  if (!std::isfinite(surv))
+    surv = 0.0;
+  if (surv < 0.0)
+    surv = 0.0;
+  if (surv > 1.0)
+    surv = 1.0;
   return surv;
 }

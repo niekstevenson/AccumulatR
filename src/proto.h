@@ -47,7 +47,7 @@ struct ProtoNode {
   std::vector<int> source_ids;
   int reference_id{-1};
   int blocker_id{-1};
-  std::vector<int> unless_ids;
+
   int arg_id{-1};
   bool needs_forced{false};
   bool scenario_sensitive{false};

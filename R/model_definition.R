@@ -11,14 +11,22 @@
 }
 
 .expr_label <- function(node) {
-  if (is.symbol(node)) return(as.character(node))
-  if (is.character(node) && length(node) == 1L) return(node)
-  stop("Unable to convert expression label of type '", typeof(node),"'")
+  if (is.symbol(node)) {
+    return(as.character(node))
+  }
+  if (is.character(node) && length(node) == 1L) {
+    return(node)
+  }
+  stop("Unable to convert expression label of type '", typeof(node), "'")
 }
 
 .expr_from_value <- function(val) {
-  if (.is_expr_node(val)) return(val)
-  if (inherits(val, "formula")) return(.build_expr(val[[length(val)]]))
+  if (.is_expr_node(val)) {
+    return(val)
+  }
+  if (inherits(val, "formula")) {
+    return(.build_expr(val[[length(val)]]))
+  }
   if (is.character(val) && length(val) == 1L) {
     token <- trimws(val)
     has_logic <- grepl("[&|!()]", token)
@@ -32,8 +40,12 @@
     }
     return(.build_expr(parsed))
   }
-  if (is.symbol(val)) return(.expr_from_symbol(val))
-  if (is.call(val)) return(.parse_expr_call(val))
+  if (is.symbol(val)) {
+    return(.expr_from_symbol(val))
+  }
+  if (is.call(val)) {
+    return(.parse_expr_call(val))
+  }
   stop("Cannot interpret expression component of type '", typeof(val), "'")
 }
 
@@ -70,41 +82,32 @@
   list(kind = "event", source = source, k = k)
 }
 
-.coerce_unless_list <- function(x) {
-  if (is.null(x)) return(list())
-  if (.is_expr_node(x)) return(list(x))
-  if (is.symbol(x)) return(list(.expr_from_symbol(x)))
-  if (inherits(x, "formula")) return(list(.expr_from_value(x)))
-  if (is.atomic(x)) return(lapply(as.list(x), .expr_from_value))
-  if (is.list(x) && length(x) > 0L) return(lapply(x, .expr_from_value))
-  if (is.call(x)) return(list(.expr_from_value(x)))
-  stop("Cannot interpret guard 'unless' expression")
-}
+
 
 .parse_guard_call <- function(call) {
   args <- as.list(call)[-1]
   nm <- names(call)[-1]
 
-  blocker <- reference <- unless <- NULL
+  blocker <- reference <- NULL
   if (length(args) >= 1L && (is.null(nm[[1L]]) || nm[[1L]] == "")) blocker <- args[[1L]]
   if (length(args) >= 2L && (is.null(nm[[2L]]) || nm[[2L]] == "")) reference <- args[[2L]]
   if ("blocker" %in% nm) blocker <- args[[which(nm == "blocker")[1L]]]
   if ("reference" %in% nm) reference <- args[[which(nm == "reference")[1L]]]
-  if ("unless" %in% nm) unless <- args[[which(nm == "unless")[1L]]]
   if (is.null(blocker) || is.null(reference)) {
     stop("guard() requires both blocker and reference arguments")
   }
   list(
     kind = "guard",
     blocker = .expr_from_value(blocker),
-    reference = .expr_from_value(reference),
-    unless = .coerce_unless_list(unless)
+    reference = .expr_from_value(reference)
   )
 }
 
 .parse_expr_call <- function(call) {
   op <- as.character(call[[1]])
-  if (op == "(") return(.expr_from_value(call[[2]]))
+  if (op == "(") {
+    return(.expr_from_value(call[[2]]))
+  }
   if (op %in% c("&", "&&")) {
     parts <- lapply(as.list(call)[-1], .expr_from_value)
     return(list(kind = "and", args = parts))
@@ -116,13 +119,19 @@
   if (op %in% c("!", "~")) {
     return(list(kind = "not", arg = .expr_from_value(call[[2]])))
   }
-  if (identical(op, "event")) return(.parse_event_call(call))
-  if (identical(op, "guard")) return(.parse_guard_call(call))
+  if (identical(op, "event")) {
+    return(.parse_event_call(call))
+  }
+  if (identical(op, "guard")) {
+    return(.parse_guard_call(call))
+  }
   stop(sprintf("Unsupported token '%s' in expression", op))
 }
 
 .build_expr <- function(expr) {
-  if (.is_expr_node(expr)) return(expr)
+  if (.is_expr_node(expr)) {
+    return(expr)
+  }
   .expr_from_value(expr)
 }
 
@@ -145,12 +154,11 @@ build_outcome_expr <- function(expr) {
 #'
 #' @param reference Outcome expression or label to inhibit
 #' @param by Blocking expression or label
-#' @param unless Optional list of unless expressions
 #' @return Guard expression list
 #' @examples
 #' inhibit("A", "B")
 #' @export
-inhibit <- function(reference, by, unless = NULL) {
+inhibit <- function(reference, by) {
   ref_expr <- if (is.character(reference) && length(reference) == 1L) {
     list(kind = "event", source = reference, k = NULL)
   } else {
@@ -161,8 +169,7 @@ inhibit <- function(reference, by, unless = NULL) {
   } else {
     .build_expr(by)
   }
-  unless_list <- if (is.null(unless)) list() else .coerce_unless_list(unless)
-  list(kind = "guard", blocker = blocker_expr, reference = ref_expr, unless = unless_list)
+  list(kind = "guard", blocker = blocker_expr, reference = ref_expr)
 }
 
 #' First-of expression helper
@@ -273,7 +280,8 @@ race_spec <- function() {
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1))
+#'   params = list(meanlog = 0, sdlog = 0.1)
+#' )
 #' @export
 add_accumulator <- function(spec, id, dist, onset = 0, q = 0,
                             tags = list(), params = NULL, ...) {
@@ -348,8 +356,10 @@ add_outcome <- function(spec, label, expr, options = list()) {
 #' @return Updated race_spec
 #' @examples
 #' spec <- race_spec()
-#' spec <- add_group(spec, "G1", members = c("A", "B"),
-#'   attrs = list(shared_params = list(q = 0.2)))
+#' spec <- add_group(spec, "G1",
+#'   members = c("A", "B"),
+#'   attrs = list(shared_params = list(q = 0.2))
+#' )
 #' @export
 add_group <- function(spec, id, members, attrs = list()) {
   stopifnot(inherits(spec, "race_spec"))
@@ -385,7 +395,7 @@ set_metadata <- function(spec, ...) {
 # Trigger/helpers for clearer API ---------------------------------------------------
 
 #' Define a joint trigger gate shared across members
-#' 
+#'
 #' @param id Trigger id (optional; defaults to group id)
 #' @param q Probability (0-1) for trigger failure
 #' @param param Optional parameter name supplying q
@@ -403,13 +413,12 @@ trigger <- function(id = NULL, q = NULL, param = NULL, draw = c("shared", "indep
 #'
 #' @param blocker Blocker expression or id
 #' @param reference Reference expression or id
-#' @param unless Optional list of unless expressions
 #' @return Guard expression list
 #' @examples
 #' expr_guard("B", "A")
 #' @export
-expr_guard <- function(blocker, reference, unless = list()) {
-  list(kind = "guard", blocker = blocker, reference = reference, unless = unless)
+expr_guard <- function(blocker, reference) {
+  list(kind = "guard", blocker = blocker, reference = reference)
 }
 
 clone_obj <- function(x) {
@@ -457,7 +466,9 @@ race_model <- function(accumulators, pools = list(), outcomes, groups = list(), 
     if (is.null(spec)) stop("model_structure is missing model_spec")
     return(spec)
   }
-  if (inherits(accumulators, "race_model_spec")) return(accumulators)
+  if (inherits(accumulators, "race_model_spec")) {
+    return(accumulators)
+  }
   if (missing(accumulators) || missing(outcomes)) {
     stop("accumulators and outcomes must be supplied")
   }
@@ -488,7 +499,9 @@ race_model <- function(accumulators, pools = list(), outcomes, groups = list(), 
       metadata = model$metadata %||% list()
     ), class = "race_model_spec"))
   }
-  if (inherits(model, "race_model_spec")) return(model)
+  if (inherits(model, "race_model_spec")) {
+    return(model)
+  }
   model
 }
 
@@ -527,7 +540,9 @@ race_model <- function(accumulators, pools = list(), outcomes, groups = list(), 
         if (is.na(default_q)) {
           q_vals <- vapply(members, function(m) {
             acc_def <- defs[[m]]
-            if (is.null(acc_def)) return(NA_real_)
+            if (is.null(acc_def)) {
+              return(NA_real_)
+            }
             acc_def$q %||% NA_real_
           }, numeric(1))
           q_vals <- q_vals[!is.na(q_vals)]
@@ -756,7 +771,8 @@ prepare_model <- function(model) {
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1))
+#'   params = list(meanlog = 0, sdlog = 0.1)
+#' )
 #' spec <- add_outcome(spec, "A_win", "A")
 #' finalize_model(spec)
 #' @export
@@ -799,8 +815,12 @@ finalize_model <- function(model) {
 }
 
 .as_model_structure <- function(x) {
-  if (inherits(x, "generator_structure")) return(x)
-  if (inherits(x, "model_structure")) return(x)
+  if (inherits(x, "generator_structure")) {
+    return(x)
+  }
+  if (inherits(x, "model_structure")) {
+    return(x)
+  }
   if (is.list(x) && !is.null(x$prep) && !is.null(x$accumulators) && !is.null(x$components)) {
     class(x) <- unique(c("model_structure", "generator_structure", class(x)))
     return(x)
@@ -814,9 +834,15 @@ finalize_model <- function(model) {
 
 dist_param_names <- function(dist) {
   dist <- tolower(dist)
-  if (dist == "lognormal") return(c("meanlog", "sdlog"))
-  if (dist == "gamma") return(c("shape", "rate"))
-  if (dist == "exgauss") return(c("mu", "sigma", "tau"))
+  if (dist == "lognormal") {
+    return(c("meanlog", "sdlog"))
+  }
+  if (dist == "gamma") {
+    return(c("shape", "rate"))
+  }
+  if (dist == "exgauss") {
+    return(c("mu", "sigma", "tau"))
+  }
   character(0)
 }
 
@@ -827,7 +853,8 @@ dist_param_names <- function(dist) {
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1))
+#'   params = list(meanlog = 0, sdlog = 0.1)
+#' )
 #' spec <- add_outcome(spec, "A_win", "A")
 #' sampled_pars(spec)
 #' @export
@@ -886,7 +913,8 @@ param_table <- function(model, ...) {
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1))
+#'   params = list(meanlog = 0, sdlog = 0.1)
+#' )
 #' spec <- add_outcome(spec, "A_win", "A")
 #' vals <- c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0)
 #' build_param_matrix(spec, vals, n_trials = 2)
@@ -943,7 +971,7 @@ build_param_matrix <- function(model,
         leaf_nm <- paste0(m, ".", par_name)
         if (leaf_nm %in% names(param_values)) next
         if (!is.null(shared_param_values[[leaf_nm]]) &&
-            !isTRUE(all.equal(shared_param_values[[leaf_nm]], value))) {
+          !isTRUE(all.equal(shared_param_values[[leaf_nm]], value))) {
           stop(sprintf("Conflicting shared parameter values for '%s'", leaf_nm))
         }
         shared_param_values[[leaf_nm]] <- value
@@ -1218,9 +1246,9 @@ nest_accumulators <- function(model_spec, data) {
     for (t in seq_len(n_trials)) {
       comp_val <- comp_col[t]
       if (is.na(comp_val) || !nzchar(as.character(comp_val))) {
-        accs_per_trial[[t]] = acc_ids
+        accs_per_trial[[t]] <- acc_ids
       } else {
-        accs_per_trial[[t]] = acc_by_comp[[as.character(comp_val)]] %||% acc_ids
+        accs_per_trial[[t]] <- acc_by_comp[[as.character(comp_val)]] %||% acc_ids
       }
     }
   } else {

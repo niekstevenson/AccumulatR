@@ -11,9 +11,7 @@ constexpr std::uint32_t kPrepVersion = 1;
 
 class Serializer {
 public:
-  void write_u8(std::uint8_t value) {
-    buffer.push_back(value);
-  }
+  void write_u8(std::uint8_t value) { buffer.push_back(value); }
 
   void write_u32(std::uint32_t value) {
     std::uint8_t bytes[4];
@@ -37,19 +35,19 @@ public:
     buffer.push_back(static_cast<std::uint8_t>(value ? 1 : 0));
   }
 
-  void write_string(const std::string& str) {
+  void write_string(const std::string &str) {
     write_u32(static_cast<std::uint32_t>(str.size()));
     buffer.insert(buffer.end(), str.begin(), str.end());
   }
 
-  void write_string_vec(const std::vector<std::string>& vec) {
+  void write_string_vec(const std::vector<std::string> &vec) {
     write_u32(static_cast<std::uint32_t>(vec.size()));
-    for (const auto& entry : vec) {
+    for (const auto &entry : vec) {
       write_string(entry);
     }
   }
 
-  void write_int_vec(const std::vector<int>& vec) {
+  void write_int_vec(const std::vector<int> &vec) {
     write_u32(static_cast<std::uint32_t>(vec.size()));
     for (int value : vec) {
       write_i32(static_cast<std::int32_t>(value));
@@ -61,8 +59,8 @@ public:
 
 class Deserializer {
 public:
-  Deserializer(const std::uint8_t* data, std::size_t size)
-    : ptr(data), end(data + size) {}
+  Deserializer(const std::uint8_t *data, std::size_t size)
+      : ptr(data), end(data + size) {}
 
   std::uint8_t read_u8() {
     ensure(1);
@@ -103,7 +101,7 @@ public:
   std::string read_string() {
     std::uint32_t size = read_u32();
     ensure(size);
-    std::string out(reinterpret_cast<const char*>(ptr), size);
+    std::string out(reinterpret_cast<const char *>(ptr), size);
     ptr += size;
     return out;
   }
@@ -131,23 +129,24 @@ public:
 private:
   void ensure(std::size_t bytes) {
     if (static_cast<std::size_t>(end - ptr) < bytes) {
-      throw std::runtime_error("native prep deserialization: unexpected end of buffer");
+      throw std::runtime_error(
+          "native prep deserialization: unexpected end of buffer");
     }
   }
 
-  const std::uint8_t* ptr;
-  const std::uint8_t* end;
+  const std::uint8_t *ptr;
+  const std::uint8_t *end;
 };
 
 } // namespace
 
-std::vector<std::uint8_t> serialize_native_prep(const NativePrepProto& proto) {
+std::vector<std::uint8_t> serialize_native_prep(const NativePrepProto &proto) {
   Serializer writer;
   writer.write_u32(kPrepMagic);
   writer.write_u32(kPrepVersion);
 
   writer.write_u32(static_cast<std::uint32_t>(proto.accumulators.size()));
-  for (const auto& acc : proto.accumulators) {
+  for (const auto &acc : proto.accumulators) {
     writer.write_string(acc.id);
     writer.write_string(acc.dist);
     writer.write_double(acc.onset);
@@ -155,7 +154,7 @@ std::vector<std::uint8_t> serialize_native_prep(const NativePrepProto& proto) {
     writer.write_string(acc.shared_trigger_id);
     writer.write_string_vec(acc.components);
     writer.write_u32(static_cast<std::uint32_t>(acc.params.size()));
-    for (const auto& param : acc.params) {
+    for (const auto &param : acc.params) {
       writer.write_string(param.name);
       writer.write_u8(static_cast<std::uint8_t>(param.tag));
       switch (param.tag) {
@@ -163,7 +162,8 @@ std::vector<std::uint8_t> serialize_native_prep(const NativePrepProto& proto) {
         writer.write_double(param.numeric_scalar);
         break;
       case ParamValueTag::NumericVector:
-        writer.write_u32(static_cast<std::uint32_t>(param.numeric_values.size()));
+        writer.write_u32(
+            static_cast<std::uint32_t>(param.numeric_values.size()));
         for (double val : param.numeric_values) {
           writer.write_double(val);
         }
@@ -172,26 +172,28 @@ std::vector<std::uint8_t> serialize_native_prep(const NativePrepProto& proto) {
         writer.write_i32(param.logical_scalar);
         break;
       case ParamValueTag::LogicalVector:
-        writer.write_u32(static_cast<std::uint32_t>(param.logical_values.size()));
+        writer.write_u32(
+            static_cast<std::uint32_t>(param.logical_values.size()));
         for (int val : param.logical_values) {
           writer.write_i32(val);
         }
         break;
       default:
-        throw std::runtime_error("native prep serialization: unknown param tag");
+        throw std::runtime_error(
+            "native prep serialization: unknown param tag");
       }
     }
   }
 
   writer.write_u32(static_cast<std::uint32_t>(proto.pools.size()));
-  for (const auto& pool : proto.pools) {
+  for (const auto &pool : proto.pools) {
     writer.write_string(pool.id);
     writer.write_i32(pool.k);
     writer.write_string_vec(pool.members);
   }
 
   writer.write_u32(static_cast<std::uint32_t>(proto.nodes.size()));
-  for (const auto& node : proto.nodes) {
+  for (const auto &node : proto.nodes) {
     writer.write_i32(node.id);
     writer.write_string(node.kind);
     writer.write_string(node.source);
@@ -199,14 +201,14 @@ std::vector<std::uint8_t> serialize_native_prep(const NativePrepProto& proto) {
     writer.write_int_vec(node.source_ids);
     writer.write_i32(node.reference_id);
     writer.write_i32(node.blocker_id);
-    writer.write_int_vec(node.unless_ids);
+
     writer.write_i32(node.arg_id);
     writer.write_bool(node.needs_forced);
     writer.write_bool(node.scenario_sensitive);
   }
 
   writer.write_u32(static_cast<std::uint32_t>(proto.label_index.size()));
-  for (const auto& label : proto.label_index) {
+  for (const auto &label : proto.label_index) {
     writer.write_string(label.label);
     writer.write_i32(label.id);
   }
@@ -214,7 +216,8 @@ std::vector<std::uint8_t> serialize_native_prep(const NativePrepProto& proto) {
   return std::move(writer.buffer);
 }
 
-NativePrepProto deserialize_native_prep(const std::uint8_t* data, std::size_t size) {
+NativePrepProto deserialize_native_prep(const std::uint8_t *data,
+                                        std::size_t size) {
   Deserializer reader(data, size);
   std::uint32_t magic = reader.read_u32();
   if (magic != kPrepMagic) {
@@ -222,7 +225,8 @@ NativePrepProto deserialize_native_prep(const std::uint8_t* data, std::size_t si
   }
   std::uint32_t version = reader.read_u32();
   if (version != kPrepVersion) {
-    throw std::runtime_error("native prep deserialization: unsupported version");
+    throw std::runtime_error(
+        "native prep deserialization: unsupported version");
   }
 
   NativePrepProto proto;
@@ -267,7 +271,8 @@ NativePrepProto deserialize_native_prep(const std::uint8_t* data, std::size_t si
         break;
       }
       default:
-        throw std::runtime_error("native prep deserialization: unknown param tag");
+        throw std::runtime_error(
+            "native prep deserialization: unknown param tag");
       }
       acc.params.push_back(std::move(param));
     }
@@ -295,7 +300,7 @@ NativePrepProto deserialize_native_prep(const std::uint8_t* data, std::size_t si
     node.source_ids = reader.read_int_vec();
     node.reference_id = reader.read_i32();
     node.blocker_id = reader.read_i32();
-    node.unless_ids = reader.read_int_vec();
+
     node.arg_id = reader.read_i32();
     node.needs_forced = reader.read_bool();
     node.scenario_sensitive = reader.read_bool();

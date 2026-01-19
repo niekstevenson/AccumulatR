@@ -17,6 +17,14 @@
   attrs[[name]]
 }
 
+.outcome_allowed_in_component <- function(options, component) {
+  comps <- options$component %||% NULL
+  if (is.null(comps) || length(comps) == 0L) return(TRUE)
+  comp_label <- component %||% "__default__"
+  if (is.na(comp_label) || !nzchar(comp_label)) return(FALSE)
+  comp_label %in% as.character(comps)
+}
+
 # ---- Sampling primitives ------------------------------------------------------
 
 .shared_trigger_fail <- function(ctx, trigger_id) {
@@ -219,13 +227,19 @@
   res <- vector("list", length(outs))
   labels <- names(outs)
   names(res) <- labels
-  for (label in labels) {
-    expr <- outs[[label]][["expr"]]
+  for (i in seq_along(outs)) {
+    def <- outs[[i]] %||% list()
+    options <- def[["options"]] %||% list()
+    if (!.outcome_allowed_in_component(options, ctx$component)) {
+      res[[i]] <- list(time = Inf, core = numeric(0), options = options)
+      next
+    }
+    expr <- def[["expr"]]
     eval <- .eval_expr(expr, ctx)
-    res[[label]] <- list(
+    res[[i]] <- list(
       time = eval$time,
       core = eval$core,
-      options = outs[[label]][["options"]] %||% list()
+      options = options
     )
   }
   res
@@ -477,18 +491,21 @@
   )
 
   outcomes <- .evaluate_outcomes(ctx)
+  outcome_labels <- names(outcomes)
   cand_labels <- character(0)
   cand_times <- numeric(0)
   cand_core <- list()
   cand_options <- list()
 
-  for (lbl in names(outcomes)) {
-    time <- outcomes[[lbl]]$time
+  for (i in seq_along(outcomes)) {
+    entry <- outcomes[[i]]
+    if (is.null(entry)) next
+    time <- entry$time
     if (!is.finite(time)) next
-    cand_labels <- c(cand_labels, lbl)
+    cand_labels <- c(cand_labels, outcome_labels[[i]])
     cand_times <- c(cand_times, time)
-    cand_core[[lbl]] <- outcomes[[lbl]]$core
-    cand_options[[lbl]] <- outcomes[[lbl]]$options
+    cand_core[[length(cand_core) + 1L]] <- entry$core
+    cand_options[[length(cand_options) + 1L]] <- entry$options
   }
 
   if (length(cand_times) == 0) {
@@ -501,7 +518,7 @@
   chosen_idx <- tied[[1]]
   if (length(tied) > 1) {
     tie_scores <- vapply(tied, function(i) {
-      core <- cand_core[[cand_labels[[i]]]]
+      core <- cand_core[[i]]
       if (length(core) == 0) cand_times[[i]] else min(core)
     }, numeric(1))
     chosen_idx <- tied[which.min(tie_scores)]
@@ -509,7 +526,7 @@
 
   chosen_label <- cand_labels[[chosen_idx]]
   chosen_time <- cand_times[[chosen_idx]]
-  options <- cand_options[[chosen_label]]
+  options <- cand_options[[chosen_idx]]
 
   # Outcome-level guess policies
   if (!is.null(options$guess)) {

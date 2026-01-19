@@ -92,6 +92,7 @@ struct OutcomeContextInfo {
   std::vector<OutcomeGuessDonor> guess_donors;
   std::vector<int> alias_sources;
   bool maps_to_na{false};
+  std::vector<std::string> allowed_components;
 };
 
 struct ComponentMap {
@@ -117,7 +118,7 @@ struct NativeContext {
   std::unordered_map<std::string, std::vector<int>> shared_trigger_map;
   std::unordered_map<std::string, int> component_index;
   std::vector<ComponentContextInfo> component_info;
-  std::unordered_map<std::string, int> outcome_index;
+  std::unordered_map<std::string, std::vector<int>> outcome_index;
   std::vector<std::string> outcome_labels;
   std::vector<OutcomeContextInfo> outcome_info;
   ComponentMap components;

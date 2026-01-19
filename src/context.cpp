@@ -2,22 +2,38 @@
 
 #include "prep_builder.h"
 
-#include <limits>
 #include <cmath>
+#include <limits>
 
 namespace {
 
 using namespace uuber;
 
-void populate_component_metadata(const Rcpp::List& prep, NativeContext& ctx) {
+std::vector<std::string> extract_string_vector(SEXP obj) {
+  if (Rf_isNull(obj))
+    return {};
+  Rcpp::CharacterVector chr(obj);
+  std::vector<std::string> out;
+  out.reserve(chr.size());
+  for (R_xlen_t i = 0; i < chr.size(); ++i) {
+    if (chr[i] == NA_STRING)
+      continue;
+    out.push_back(Rcpp::as<std::string>(chr[i]));
+  }
+  return out;
+}
+
+void populate_component_metadata(const Rcpp::List &prep, NativeContext &ctx) {
   Rcpp::List components = prep["components"];
   ctx.component_index.clear();
   ctx.component_info.clear();
-  if (components.isNULL()) return;
+  if (components.isNULL())
+    return;
   Rcpp::CharacterVector comp_ids = components["ids"];
   Rcpp::List comp_attrs = components["attrs"];
   for (R_xlen_t i = 0; i < comp_ids.size(); ++i) {
-    if (comp_ids[i] == NA_STRING) continue;
+    if (comp_ids[i] == NA_STRING)
+      continue;
     std::string comp_label = Rcpp::as<std::string>(comp_ids[i]);
     ComponentContextInfo meta;
     Rcpp::RObject attrs_obj = comp_attrs[i];
@@ -35,8 +51,11 @@ void populate_component_metadata(const Rcpp::List& prep, NativeContext& ctx) {
           }
           if (!meta.guess.target.empty() && meta.guess.target != "__GUESS__") {
             auto it = ctx.outcome_index.find(meta.guess.target);
-            if (it != ctx.outcome_index.end()) {
-              meta.guess.target_outcome_idx = it->second;
+            if (it != ctx.outcome_index.end() && !it->second.empty()) {
+              // For guess targets, if ambiguous, pick the first one?
+              // Or should guesses follow component logic?
+              // For now, default to first defined outcome.
+              meta.guess.target_outcome_idx = it->second[0];
             }
           }
           if (guess_list.containsElementNamed("weights")) {
@@ -44,8 +63,10 @@ void populate_component_metadata(const Rcpp::List& prep, NativeContext& ctx) {
             Rcpp::CharacterVector weight_names = weights.names();
             if (!weight_names.isNULL()) {
               for (R_xlen_t j = 0; j < weights.size(); ++j) {
-                if (weight_names[j] == NA_STRING) continue;
-                std::string source_label = Rcpp::as<std::string>(weight_names[j]);
+                if (weight_names[j] == NA_STRING)
+                  continue;
+                std::string source_label =
+                    Rcpp::as<std::string>(weight_names[j]);
                 double keep_prob = weights[j];
                 if (source_label == "<NA>" || source_label == "NA") {
                   meta.guess.keep_weight_na = keep_prob;
@@ -53,12 +74,19 @@ void populate_component_metadata(const Rcpp::List& prep, NativeContext& ctx) {
                   continue;
                 }
                 auto it = ctx.outcome_index.find(source_label);
-                if (it == ctx.outcome_index.end()) continue;
-                meta.guess.keep_weights.emplace_back(it->second, keep_prob);
+                if (it == ctx.outcome_index.end() || it->second.empty())
+                  continue;
+                // Add weighted entry for potentially multiple outcomes of same
+                // label? Probably yes. If "Left" is split, we guess "Left"
+                // (either one).
+                for (int idx : it->second) {
+                  meta.guess.keep_weights.emplace_back(idx, keep_prob);
+                }
               }
             }
           }
-          meta.guess.valid = !meta.guess.keep_weights.empty() || meta.guess.has_keep_weight_na;
+          meta.guess.valid =
+              !meta.guess.keep_weights.empty() || meta.guess.has_keep_weight_na;
         }
       }
     }
@@ -68,35 +96,39 @@ void populate_component_metadata(const Rcpp::List& prep, NativeContext& ctx) {
   }
 }
 
-void populate_outcome_metadata(const Rcpp::List& prep, NativeContext& ctx) {
+void populate_outcome_metadata(const Rcpp::List &prep, NativeContext &ctx) {
   Rcpp::List outcomes = prep["outcomes"];
   ctx.outcome_index.clear();
   ctx.outcome_labels.clear();
   ctx.outcome_info.clear();
-  auto ensure_outcome_idx = [&](const std::string& label) -> int {
-    auto it = ctx.outcome_index.find(label);
-    if (it != ctx.outcome_index.end()) return it->second;
+
+  auto add_outcome_entry = [&](const std::string &label) -> int {
     int idx = static_cast<int>(ctx.outcome_info.size());
-    ctx.outcome_index[label] = idx;
+    ctx.outcome_index[label].push_back(idx);
     ctx.outcome_labels.push_back(label);
     ctx.outcome_info.push_back(OutcomeContextInfo());
     return idx;
   };
+
   if (!outcomes.isNULL()) {
     Rcpp::CharacterVector outcome_names = outcomes.names();
+    // Use loop to add all outcomes sequentially, allowing duplicates
     for (R_xlen_t i = 0; i < outcomes.size(); ++i) {
-      if (outcome_names[i] == NA_STRING) continue;
+      if (outcome_names[i] == NA_STRING)
+        continue;
       std::string outcome_label = Rcpp::as<std::string>(outcome_names[i]);
-      ensure_outcome_idx(outcome_label);
-    }
-    for (R_xlen_t i = 0; i < outcomes.size(); ++i) {
-      if (outcome_names[i] == NA_STRING) continue;
+
+      // Always create a NEW outcome entry for each definition
+      // We process definitions in order.
       Rcpp::RObject def_obj = outcomes[i];
-      if (def_obj.isNULL()) continue;
-      std::string outcome_label = Rcpp::as<std::string>(outcome_names[i]);
-      int idx = ensure_outcome_idx(outcome_label);
-      OutcomeContextInfo& info = ctx.outcome_info[static_cast<std::size_t>(idx)];
+      if (def_obj.isNULL())
+        continue; // Skip NULLs but maybe shouldn't happen?
+
+      int idx = add_outcome_entry(outcome_label);
+      OutcomeContextInfo &info =
+          ctx.outcome_info[static_cast<std::size_t>(idx)];
       info.node_id = -1;
+
       Rcpp::List def(def_obj);
       if (def.containsElementNamed("expr")) {
         Rcpp::RObject expr = def["expr"];
@@ -107,8 +139,16 @@ void populate_outcome_metadata(const Rcpp::List& prep, NativeContext& ctx) {
           }
         }
       }
-      Rcpp::List options = def.containsElementNamed("options") ? Rcpp::List(def["options"]) : Rcpp::List();
+      Rcpp::List options = def.containsElementNamed("options")
+                               ? Rcpp::List(def["options"])
+                               : Rcpp::List();
       if (!options.isNULL()) {
+        if (options.containsElementNamed("component")) {
+          Rcpp::RObject comp_obj = options["component"];
+          if (!comp_obj.isNULL()) {
+            info.allowed_components = extract_string_vector(comp_obj);
+          }
+        }
         if (options.containsElementNamed("map_outcome_to")) {
           Rcpp::RObject map_obj = options["map_outcome_to"];
           if (!map_obj.isNULL()) {
@@ -118,9 +158,16 @@ void populate_outcome_metadata(const Rcpp::List& prep, NativeContext& ctx) {
               if (map_val == NA_STRING) {
                 info.maps_to_na = true;
               } else {
-                std::string target = Rcpp::as<std::string>(Rcpp::CharacterVector::create(map_val)[0]);
-                int target_idx = ensure_outcome_idx(target);
-                ctx.outcome_info[static_cast<std::size_t>(target_idx)].alias_sources.push_back(idx);
+                std::string target = Rcpp::as<std::string>(
+                    Rcpp::CharacterVector::create(map_val)[0]);
+
+                auto it = ctx.outcome_index.find(target);
+                if (it != ctx.outcome_index.end()) {
+                  for (int t_idx : it->second) {
+                    ctx.outcome_info[static_cast<std::size_t>(t_idx)]
+                        .alias_sources.push_back(idx);
+                  }
+                }
               }
             }
           }
@@ -129,12 +176,14 @@ void populate_outcome_metadata(const Rcpp::List& prep, NativeContext& ctx) {
           Rcpp::RObject guess_obj = options["guess"];
           if (!guess_obj.isNULL()) {
             Rcpp::List guess_list(guess_obj);
-            Rcpp::CharacterVector labels = guess_list.containsElementNamed("labels")
-              ? Rcpp::CharacterVector(guess_list["labels"])
-              : Rcpp::CharacterVector();
-            Rcpp::NumericVector weights = guess_list.containsElementNamed("weights")
-              ? Rcpp::NumericVector(guess_list["weights"])
-              : Rcpp::NumericVector();
+            Rcpp::CharacterVector labels =
+                guess_list.containsElementNamed("labels")
+                    ? Rcpp::CharacterVector(guess_list["labels"])
+                    : Rcpp::CharacterVector();
+            Rcpp::NumericVector weights =
+                guess_list.containsElementNamed("weights")
+                    ? Rcpp::NumericVector(guess_list["weights"])
+                    : Rcpp::NumericVector();
             std::string rt_policy = "keep";
             if (guess_list.containsElementNamed("rt_policy")) {
               Rcpp::RObject pol = guess_list["rt_policy"];
@@ -144,14 +193,20 @@ void populate_outcome_metadata(const Rcpp::List& prep, NativeContext& ctx) {
             }
             if (labels.size() == weights.size() && labels.size() > 0) {
               for (R_xlen_t j = 0; j < labels.size(); ++j) {
-                if (labels[j] == NA_STRING) continue;
+                if (labels[j] == NA_STRING)
+                  continue;
                 std::string target = Rcpp::as<std::string>(labels[j]);
-                int target_idx = ensure_outcome_idx(target);
-                OutcomeGuessDonor donor;
-                donor.outcome_idx = idx;
-                donor.weight = weights[j];
-                donor.rt_policy = rt_policy;
-                ctx.outcome_info[static_cast<std::size_t>(target_idx)].guess_donors.push_back(std::move(donor));
+                auto it = ctx.outcome_index.find(target);
+                if (it != ctx.outcome_index.end()) {
+                  for (int target_idx : it->second) {
+                    OutcomeGuessDonor donor;
+                    donor.outcome_idx = idx;
+                    donor.weight = weights[j];
+                    donor.rt_policy = rt_policy;
+                    ctx.outcome_info[static_cast<std::size_t>(target_idx)]
+                        .guess_donors.push_back(std::move(donor));
+                  }
+                }
               }
             }
           }
@@ -162,33 +217,72 @@ void populate_outcome_metadata(const Rcpp::List& prep, NativeContext& ctx) {
 
   Rcpp::List competitors = prep[".competitors"];
   if (!competitors.isNULL()) {
-    Rcpp::CharacterVector comp_names = competitors.names();
-    for (R_xlen_t i = 0; i < competitors.size(); ++i) {
-      if (comp_names[i] == NA_STRING) continue;
-      Rcpp::RObject comp_obj = competitors[i];
-      if (comp_obj.isNULL()) continue;
-      std::string outcome_label = Rcpp::as<std::string>(comp_names[i]);
-      int idx = ensure_outcome_idx(outcome_label);
-      Rcpp::List comp_list(comp_obj);
-      std::vector<int> comp_ids;
-      comp_ids.reserve(comp_list.size());
-      for (R_xlen_t j = 0; j < comp_list.size(); ++j) {
-        Rcpp::RObject entry = comp_list[j];
-        if (entry.isNULL()) continue;
-        Rcpp::RObject lik_id = entry.attr(".lik_id");
-        if (lik_id.isNULL()) continue;
-        comp_ids.push_back(Rcpp::as<int>(lik_id));
+    bool by_index = false;
+    Rcpp::RObject by_index_attr = competitors.attr("by_index");
+    if (!by_index_attr.isNULL()) {
+      by_index = Rcpp::as<bool>(by_index_attr);
+    }
+    if (by_index && competitors.size() == outcomes.size()) {
+      for (R_xlen_t i = 0; i < competitors.size(); ++i) {
+        Rcpp::RObject comp_obj = competitors[i];
+        if (comp_obj.isNULL())
+          continue;
+        Rcpp::List comp_list(comp_obj);
+        std::vector<int> comp_ids;
+        comp_ids.reserve(comp_list.size());
+        for (R_xlen_t j = 0; j < comp_list.size(); ++j) {
+          Rcpp::RObject entry = comp_list[j];
+          if (entry.isNULL())
+            continue;
+          Rcpp::RObject lik_id = entry.attr(".lik_id");
+          if (lik_id.isNULL())
+            continue;
+          comp_ids.push_back(Rcpp::as<int>(lik_id));
+        }
+        if (i < static_cast<R_xlen_t>(ctx.outcome_info.size())) {
+          ctx.outcome_info[static_cast<std::size_t>(i)].competitor_ids =
+              comp_ids;
+        }
       }
-      ctx.outcome_info[static_cast<std::size_t>(idx)].competitor_ids = std::move(comp_ids);
+    } else {
+      Rcpp::CharacterVector comp_names = competitors.names();
+      for (R_xlen_t i = 0; i < competitors.size(); ++i) {
+        if (comp_names[i] == NA_STRING)
+          continue;
+        Rcpp::RObject comp_obj = competitors[i];
+        if (comp_obj.isNULL())
+          continue;
+        std::string outcome_label = Rcpp::as<std::string>(comp_names[i]);
+        auto it = ctx.outcome_index.find(outcome_label);
+        if (it == ctx.outcome_index.end())
+          continue;
+
+        Rcpp::List comp_list(comp_obj);
+        std::vector<int> comp_ids;
+        comp_ids.reserve(comp_list.size());
+        for (R_xlen_t j = 0; j < comp_list.size(); ++j) {
+          Rcpp::RObject entry = comp_list[j];
+          if (entry.isNULL())
+            continue;
+          Rcpp::RObject lik_id = entry.attr(".lik_id");
+          if (lik_id.isNULL())
+            continue;
+          comp_ids.push_back(Rcpp::as<int>(lik_id));
+        }
+        for (int idx : it->second) {
+          ctx.outcome_info[static_cast<std::size_t>(idx)].competitor_ids =
+              comp_ids;
+        }
+      }
     }
   }
 }
 
-void assign_component_indices(NativeContext& ctx) {
-  for (auto& acc : ctx.accumulators) {
+void assign_component_indices(NativeContext &ctx) {
+  for (auto &acc : ctx.accumulators) {
     acc.component_indices.clear();
     acc.component_indices.reserve(acc.components.size());
-    for (const auto& comp : acc.components) {
+    for (const auto &comp : acc.components) {
       auto it = ctx.component_index.find(comp);
       if (it != ctx.component_index.end()) {
         acc.component_indices.push_back(it->second);
@@ -197,46 +291,53 @@ void assign_component_indices(NativeContext& ctx) {
   }
 }
 
-void assign_label_outcome_indices(NativeContext& ctx) {
-  for (auto& node : ctx.nodes) {
-    if (node.source.empty()) continue;
+void assign_label_outcome_indices(NativeContext &ctx) {
+  for (auto &node : ctx.nodes) {
+    if (node.source.empty())
+      continue;
     auto it = ctx.outcome_index.find(node.source);
-    if (it != ctx.outcome_index.end()) {
-      node.source_ref.outcome_idx = it->second;
+    if (it != ctx.outcome_index.end() && !it->second.empty()) {
+      node.source_ref.outcome_idx = it->second[0];
     }
   }
-  for (auto& pool : ctx.pools) {
-    if (pool.members.empty() || pool.member_refs.empty()) continue;
+  for (auto &pool : ctx.pools) {
+    if (pool.members.empty() || pool.member_refs.empty())
+      continue;
     std::size_t n = pool.members.size();
     if (pool.member_refs.size() != n) {
       pool.member_refs.resize(n);
     }
     for (std::size_t i = 0; i < n; ++i) {
       auto it = ctx.outcome_index.find(pool.members[i]);
-      if (it != ctx.outcome_index.end()) {
-        pool.member_refs[i].outcome_idx = it->second;
+      if (it != ctx.outcome_index.end() && !it->second.empty()) {
+        pool.member_refs[i].outcome_idx = it->second[0];
       }
     }
   }
 }
 
-ComponentMap build_component_map(const Rcpp::List& prep, const NativeContext& ctx) {
+ComponentMap build_component_map(const Rcpp::List &prep,
+                                 const NativeContext &ctx) {
   ComponentMap map;
   Rcpp::List components = prep["components"];
   if (!components.isNULL()) {
-    Rcpp::CharacterVector comp_ids = components.containsElementNamed("ids")
-      ? Rcpp::CharacterVector(components["ids"])
-      : Rcpp::CharacterVector();
-    Rcpp::NumericVector weights = components.containsElementNamed("weights")
-      ? Rcpp::NumericVector(components["weights"])
-      : Rcpp::NumericVector();
+    Rcpp::CharacterVector comp_ids =
+        components.containsElementNamed("ids")
+            ? Rcpp::CharacterVector(components["ids"])
+            : Rcpp::CharacterVector();
+    Rcpp::NumericVector weights =
+        components.containsElementNamed("weights")
+            ? Rcpp::NumericVector(components["weights"])
+            : Rcpp::NumericVector();
     map.ids.reserve(comp_ids.size());
     map.base_weights.reserve(comp_ids.size());
     for (R_xlen_t i = 0; i < comp_ids.size(); ++i) {
-      if (comp_ids[i] == NA_STRING) continue;
+      if (comp_ids[i] == NA_STRING)
+        continue;
       map.ids.push_back(Rcpp::as<std::string>(comp_ids[i]));
       double w = (i < weights.size()) ? static_cast<double>(weights[i]) : 1.0;
-      if (!std::isfinite(w) || w < 0.0) w = 1.0;
+      if (!std::isfinite(w) || w < 0.0)
+        w = 1.0;
       map.base_weights.push_back(w);
     }
   }
@@ -246,9 +347,9 @@ ComponentMap build_component_map(const Rcpp::List& prep, const NativeContext& ct
   }
   map.leader_idx.assign(map.ids.size(), -1);
   for (std::size_t c = 0; c < map.ids.size(); ++c) {
-    const std::string& cid = map.ids[c];
+    const std::string &cid = map.ids[c];
     for (std::size_t a = 0; a < ctx.accumulators.size(); ++a) {
-      const auto& comps = ctx.accumulators[a].components;
+      const auto &comps = ctx.accumulators[a].components;
       if (std::find(comps.begin(), comps.end(), cid) != comps.end()) {
         map.leader_idx[c] = static_cast<int>(a);
         break;
@@ -264,11 +365,14 @@ ComponentMap build_component_map(const Rcpp::List& prep, const NativeContext& ct
 int resolve_na_cache_limit() {
   int default_limit = 128;
   Rcpp::Function getOption("getOption");
-  Rcpp::RObject opt = getOption("uuber.cache.na.max_per_trial", Rcpp::wrap(default_limit));
-  if (opt.isNULL()) return default_limit;
+  Rcpp::RObject opt =
+      getOption("uuber.cache.na.max_per_trial", Rcpp::wrap(default_limit));
+  if (opt.isNULL())
+    return default_limit;
   try {
     double val = Rcpp::as<double>(opt);
-    if (!std::isfinite(val) || val < 0.0) return 0;
+    if (!std::isfinite(val) || val < 0.0)
+      return 0;
     return static_cast<int>(std::floor(val));
   } catch (...) {
     return default_limit;

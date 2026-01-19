@@ -618,9 +618,94 @@ inline int outcome_index_of(const uuber::NativeContext &ctx,
   if (label.empty())
     return -1;
   auto it = ctx.outcome_index.find(label);
-  if (it == ctx.outcome_index.end())
+  if (it == ctx.outcome_index.end() || it->second.empty())
     return -1;
-  return it->second;
+  return it->second[0];
+}
+
+inline bool outcome_allows_component(const uuber::OutcomeContextInfo &info,
+                                     const std::string &component) {
+  if (info.allowed_components.empty())
+    return true;
+  if (component.empty())
+    return false;
+  return std::find(info.allowed_components.begin(),
+                   info.allowed_components.end(),
+                   component) != info.allowed_components.end();
+}
+
+inline bool competitor_node_allowed(const uuber::NativeContext &ctx,
+                                    int node_id,
+                                    const std::string &component) {
+  if (component.empty())
+    return true;
+  bool matched = false;
+  for (const auto &info : ctx.outcome_info) {
+    if (info.node_id != node_id)
+      continue;
+    matched = true;
+    if (outcome_allows_component(info, component))
+      return true;
+  }
+  return !matched;
+}
+
+inline const std::vector<int> &
+filter_competitor_ids(const uuber::NativeContext &ctx,
+                      const std::vector<int> &competitor_ids,
+                      const std::string &component,
+                      std::vector<int> &scratch) {
+  if (competitor_ids.empty() || component.empty())
+    return competitor_ids;
+  bool all_allowed = true;
+  for (int node_id : competitor_ids) {
+    if (!competitor_node_allowed(ctx, node_id, component)) {
+      all_allowed = false;
+      break;
+    }
+  }
+  if (all_allowed)
+    return competitor_ids;
+  scratch.clear();
+  scratch.reserve(competitor_ids.size());
+  for (int node_id : competitor_ids) {
+    if (competitor_node_allowed(ctx, node_id, component)) {
+      scratch.push_back(node_id);
+    }
+  }
+  return scratch;
+}
+
+inline int resolve_outcome_index(const uuber::NativeContext &ctx,
+                                 const std::string &label,
+                                 const std::string &component) {
+  if (label.empty())
+    return -1;
+  auto it = ctx.outcome_index.find(label);
+  if (it == ctx.outcome_index.end() || it->second.empty())
+    return -1;
+
+  const std::vector<int> &indices = it->second;
+  if (indices.size() == 1)
+    return indices[0];
+
+  // Try to find exact match
+  if (!component.empty()) {
+    int fallback_idx = -1;
+    for (int idx : indices) {
+      const auto &info = ctx.outcome_info[static_cast<std::size_t>(idx)];
+      if (outcome_allows_component(info, component)) {
+        if (!info.allowed_components.empty())
+          return idx;
+        if (fallback_idx < 0)
+          fallback_idx = idx;
+      }
+    }
+    return fallback_idx;
+  }
+
+  // Fallback: return first
+  return indices[0];
 }
 
 inline LabelRef resolve_label_ref_runtime(const uuber::NativeContext &ctx,
@@ -896,9 +981,13 @@ double evaluate_outcome_density_idx(
           ? ctx.outcome_labels[static_cast<std::size_t>(
                 outcome_label_context_idx)]
           : std::string();
+  std::vector<int> comp_filtered;
+  const std::vector<int> &comp_use =
+      filter_competitor_ids(ctx, info.competitor_ids, component,
+                            comp_filtered);
   return node_density_with_competitors_internal(
       ctx, info.node_id, t, component, component_idx, kEmptyForcedSet,
-      kEmptyForcedSet, info.competitor_ids, trial_params, trial_type_key,
+      kEmptyForcedSet, comp_use, trial_params, trial_type_key,
       include_na_donors, outcome_label_context, outcome_label_context_idx);
 }
 
@@ -1315,6 +1404,9 @@ double accumulate_plan_guess_density(const uuber::NativeContext &ctx,
             ? Rcpp::IntegerVector(donor["competitor_ids"])
             : Rcpp::IntegerVector();
     std::vector<int> comp_vec = integer_vector_to_std(comp_ids, false);
+    std::vector<int> comp_filtered;
+    const std::vector<int> &comp_use =
+        filter_competitor_ids(ctx, comp_vec, component, comp_filtered);
     std::string donor_label;
     if (donor.containsElementNamed("source_label") &&
         !Rf_isNull(donor["source_label"])) {
@@ -1324,7 +1416,7 @@ double accumulate_plan_guess_density(const uuber::NativeContext &ctx,
         donor_label.empty() ? -1 : outcome_index_of(ctx, donor_label);
     double density = node_density_with_competitors_internal(
         ctx, donor_node, t, component, component_idx, kEmptyForcedSet,
-        kEmptyForcedSet, comp_vec, trial_params, trial_type_key,
+        kEmptyForcedSet, comp_use, trial_params, trial_type_key,
         include_na_donors, donor_label, outcome_idx_context);
     if (!std::isfinite(density) || density <= 0.0)
       continue;
@@ -2898,6 +2990,101 @@ struct LinearGuardChain {
   bool valid{false};
 };
 
+struct FastEventInfo {
+  const uuber::NativeAccumulator *acc{nullptr};
+  const TrialAccumulatorParams *override{nullptr};
+  int outcome_idx{-1};
+  bool component_ok{false};
+};
+
+bool fast_event_info(const GuardEvalInput &input, int node_id,
+                     FastEventInfo &info) {
+  if (!input.forced_complete.empty() || !input.forced_survive.empty()) {
+    return false;
+  }
+  const uuber::NativeNode &node = fetch_node(input.ctx, node_id);
+  if (node.kind != "event") {
+    return false;
+  }
+  if (node.source.empty() || node.source == "__DEADLINE__" ||
+      node.source == "__GUESS__") {
+    return false;
+  }
+  int acc_idx = node.source_ref.acc_idx;
+  if (acc_idx < 0 ||
+      acc_idx >= static_cast<int>(input.ctx.accumulators.size())) {
+    return false;
+  }
+  info.acc = &input.ctx.accumulators[acc_idx];
+  info.override = get_trial_param_entry(input.trial_params, acc_idx);
+  info.outcome_idx = node.source_ref.outcome_idx;
+  info.component_ok =
+      component_active(*info.acc, input.component, input.component_idx,
+                       info.override);
+  return true;
+}
+
+bool fast_event_density(const GuardEvalInput &input, int node_id, double t,
+                        double &out) {
+  FastEventInfo info;
+  if (!fast_event_info(input, node_id, info)) {
+    return false;
+  }
+  if (!info.component_ok) {
+    out = 0.0;
+    return true;
+  }
+  if (info.outcome_idx >= 0 &&
+      info.outcome_idx < static_cast<int>(input.ctx.outcome_info.size())) {
+    const uuber::OutcomeContextInfo &outcome =
+        input.ctx.outcome_info[static_cast<std::size_t>(info.outcome_idx)];
+    if (!outcome.alias_sources.empty() || !outcome.guess_donors.empty()) {
+      return false;
+    }
+  }
+  double onset = info.override ? info.override->onset : info.acc->onset;
+  double q = info.override ? info.override->q : info.acc->q;
+  const AccDistParams &cfg =
+      info.override ? info.override->dist_cfg : info.acc->dist_cfg;
+  out = safe_density(acc_density_from_cfg(t, onset, q, cfg));
+  return true;
+}
+
+bool fast_event_cdf(const GuardEvalInput &input, int node_id, double t,
+                    double &out) {
+  FastEventInfo info;
+  if (!fast_event_info(input, node_id, info)) {
+    return false;
+  }
+  if (!info.component_ok) {
+    out = 0.0;
+    return true;
+  }
+  double onset = info.override ? info.override->onset : info.acc->onset;
+  const AccDistParams &cfg =
+      info.override ? info.override->dist_cfg : info.acc->dist_cfg;
+  out = clamp_probability(acc_cdf_success_from_cfg(t, onset, cfg));
+  return true;
+}
+
+bool fast_event_surv(const GuardEvalInput &input, int node_id, double t,
+                     double &out) {
+  FastEventInfo info;
+  if (!fast_event_info(input, node_id, info)) {
+    return false;
+  }
+  if (!info.component_ok) {
+    out = 1.0;
+    return true;
+  }
+  double onset = info.override ? info.override->onset : info.acc->onset;
+  double q = info.override ? info.override->q : info.acc->q;
+  const AccDistParams &cfg =
+      info.override ? info.override->dist_cfg : info.acc->dist_cfg;
+  out = clamp_probability(acc_survival_from_cfg(t, onset, q, cfg));
+  return true;
+}
+
 // Detects A -> B -> C ... chain.
 // Depth is number of GUARD nodes visited.
 // A chain of depth 2 means: Guard0(A, Guard1(B, C)).
@@ -2937,6 +3124,10 @@ LinearGuardChain detect_linear_guard_chain(const uuber::NativeContext &ctx,
 double quick_eval_density(const GuardEvalInput &input, int node_id, double t) {
   if (t < 0)
     return 0.0;
+  double fast_val = 0.0;
+  if (fast_event_density(input, node_id, t, fast_val)) {
+    return fast_val;
+  }
   NodeEvalResult res = eval_node_with_forced(
       input.ctx, node_id, t, input.component, input.component_idx,
       input.forced_complete, input.forced_survive, EvalNeed::kDensity,
@@ -2947,6 +3138,10 @@ double quick_eval_density(const GuardEvalInput &input, int node_id, double t) {
 double quick_eval_cdf(const GuardEvalInput &input, int node_id, double t) {
   if (t <= 0)
     return 0.0;
+  double fast_val = 0.0;
+  if (fast_event_cdf(input, node_id, t, fast_val)) {
+    return fast_val;
+  }
   NodeEvalResult res = eval_node_with_forced(
       input.ctx, node_id, t, input.component, input.component_idx,
       input.forced_complete, input.forced_survive, EvalNeed::kCDF,
@@ -2957,6 +3152,10 @@ double quick_eval_cdf(const GuardEvalInput &input, int node_id, double t) {
 double quick_eval_surv(const GuardEvalInput &input, int node_id, double t) {
   if (t <= 0)
     return 1.0;
+  double fast_val = 1.0;
+  if (fast_event_surv(input, node_id, t, fast_val)) {
+    return fast_val;
+  }
   NodeEvalResult res = eval_node_with_forced(
       input.ctx, node_id, t, input.component, input.component_idx,
       input.forced_complete, input.forced_survive, EvalNeed::kSurvival,
@@ -3628,14 +3827,19 @@ double native_outcome_probability_impl(
   std::string component_label =
       component.isNotNull() ? Rcpp::as<std::string>(component) : std::string();
   int component_idx = component_index_of(*ctx, component_label);
-  int outcome_idx_context = outcome_label_context.empty()
-                                ? -1
-                                : outcome_index_of(*ctx, outcome_label_context);
+  int outcome_idx_context =
+      outcome_label_context.empty()
+          ? -1
+          : resolve_outcome_index(*ctx, outcome_label_context, component_label);
   std::vector<int> fc_vec = forced_vec_from_sexp(forced_complete);
   std::vector<int> fs_vec = forced_vec_from_sexp(forced_survive);
   std::unordered_set<int> forced_complete_set = make_forced_set(fc_vec);
   std::unordered_set<int> forced_survive_set = make_forced_set(fs_vec);
-  std::vector<int> comp_vec = integer_vector_to_std(competitor_ids, false);
+  std::vector<int> comp_vec_raw = integer_vector_to_std(competitor_ids, false);
+  std::vector<int> comp_vec_filtered;
+  const std::vector<int> &comp_vec =
+      filter_competitor_ids(*ctx, comp_vec_raw, component_label,
+                            comp_vec_filtered);
   SharedGatePair shared_gate;
   SharedGateNWay shared_gate_nway;
   bool use_shared_gate = false;
@@ -4360,9 +4564,12 @@ double native_trial_mixture_internal(
       }
     }
     if (!used_guess_shortcut) {
+      std::vector<int> comp_competitors;
+      const std::vector<int> &comp_use = filter_competitor_ids(
+          ctx, competitor_ids, component_ids[i], comp_competitors);
       contrib = node_density_with_shared_triggers_plan(
           ctx, node_id, t, component_ids[i], comp_idx, kEmptyForced,
-          kEmptyForced, competitor_ids, params_ptr,
+          kEmptyForced, comp_use, params_ptr,
           cache_entry_ptr->trial_type_key, false, keep_label,
           keep_outcome_idx_context, &trigger_plan, &trigger_scratch);
       if (!std::isfinite(contrib) || contrib < 0.0)
@@ -4460,6 +4667,8 @@ double mix_outcome_mass(SEXP ctxSEXP, const uuber::OutcomeContextInfo &info,
     if (w <= 0.0)
       continue;
     const std::string &comp = comp_labels[i];
+    if (!outcome_allows_component(info, comp))
+      continue;
     int comp_idx = comp_indices[i];
     Rcpp::Nullable<Rcpp::String> comp_val(comp.empty() ? R_NilValue
                                                        : Rcpp::wrap(comp));
@@ -4759,63 +4968,144 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       }
       prob = clamp_probability(1.0 - non_na_total);
     } else {
-      int outcome_idx = outcome_index_of(*ctx, outcome_label);
-      if (outcome_idx < 0 ||
-          outcome_idx >= static_cast<int>(ctx->outcome_info.size()) ||
-          ctx->outcome_info[static_cast<std::size_t>(outcome_idx)].node_id <
-              0) {
+      bool has_forced_component = !forced_component.empty();
+      auto out_it = ctx->outcome_index.find(outcome_label);
+      bool has_multi_defs =
+          (out_it != ctx->outcome_index.end() && out_it->second.size() > 1);
+      if (!std::isfinite(rt) || rt < 0.0) {
         prob = 0.0;
-      } else if (!std::isfinite(rt) || rt < 0.0) {
-        prob = 0.0;
-      } else {
-        const uuber::OutcomeContextInfo &info =
-            ctx->outcome_info[static_cast<std::size_t>(outcome_idx)];
-        bool can_fast = true;
-        if (!info.alias_sources.empty()) {
-          can_fast = false;
-        } else if (!info.guess_donors.empty()) {
-          can_fast = false;
-        } else {
-          for (std::size_t i = 0; i < comp_labels_ptr->size(); ++i) {
-            int comp_idx = comp_indices[i];
-            if (comp_idx >= 0 &&
-                comp_idx < static_cast<int>(ctx->component_info.size()) &&
-                ctx->component_info[static_cast<std::size_t>(comp_idx)]
-                    .guess.valid) {
-              can_fast = false;
-              break;
-            }
-            double kw = component_keep_weight(*ctx, comp_idx, outcome_idx);
-            if (std::fabs(kw - 1.0) > 1e-12) {
-              can_fast = false;
-              break;
-            }
+      } else if (has_multi_defs && !has_forced_component) {
+        double total = 0.0;
+        for (std::size_t c = 0; c < comp_labels_ptr->size(); ++c) {
+          double w =
+              (c < comp_weights_ptr->size()) ? (*comp_weights_ptr)[c] : 0.0;
+          if (!std::isfinite(w) || w <= 0.0)
+            continue;
+          const std::string &comp_label = (*comp_labels_ptr)[c];
+          int comp_outcome_idx =
+              resolve_outcome_index(*ctx, outcome_label, comp_label);
+          if (comp_outcome_idx < 0 ||
+              comp_outcome_idx >=
+                  static_cast<int>(ctx->outcome_info.size())) {
+            continue;
+          }
+          const uuber::OutcomeContextInfo &info =
+              ctx->outcome_info[static_cast<std::size_t>(comp_outcome_idx)];
+          if (info.node_id < 0)
+            continue;
+          std::vector<std::string> comp_only = {comp_label};
+          std::vector<double> weight_only = {1.0};
+          std::vector<ComponentCacheEntry> cache_only;
+          cache_only.reserve(1);
+          if (c < cache_entries_ptr->size()) {
+            cache_only.push_back((*cache_entries_ptr)[c]);
+          } else {
+            cache_only.push_back(default_component_cache_entry(comp_label));
+          }
+          double contrib = native_trial_mixture_internal(
+              *ctx, info.node_id, rt, comp_only, weight_only, R_NilValue,
+              info.competitor_ids, params_ptr, cache_only, outcome_label,
+              Rcpp::List());
+          if (std::isfinite(contrib) && contrib > 0.0) {
+            total += w * contrib;
           }
         }
-        if (can_fast) {
-          static const std::unordered_set<int> kEmptyForced;
-          double total = 0.0;
-          for (std::size_t c = 0; c < comp_labels_ptr->size(); ++c) {
-            double w =
-                (c < comp_weights_ptr->size()) ? (*comp_weights_ptr)[c] : 0.0;
-            if (!std::isfinite(w) || w <= 0.0)
-              continue;
-            int comp_idx = comp_indices[c];
-            double contrib = node_density_with_shared_triggers_plan(
-                *ctx, info.node_id, rt, (*comp_labels_ptr)[c], comp_idx,
-                kEmptyForced, kEmptyForced, info.competitor_ids, params_ptr,
-                std::string(), false, std::string(), -1, trigger_plan_ptr,
-                &trigger_scratch);
-            if (std::isfinite(contrib) && contrib > 0.0) {
-              total += w * contrib;
+        prob = total;
+      } else {
+        int outcome_idx = resolve_outcome_index(*ctx, outcome_label,
+                                                component_by_trial[trial_idx]);
+        if (outcome_idx < 0 ||
+            outcome_idx >= static_cast<int>(ctx->outcome_info.size()) ||
+            ctx->outcome_info[static_cast<std::size_t>(outcome_idx)].node_id <
+                0) {
+          prob = 0.0;
+        } else {
+          const uuber::OutcomeContextInfo &info =
+              ctx->outcome_info[static_cast<std::size_t>(outcome_idx)];
+          bool can_fast = true;
+          if (!info.alias_sources.empty()) {
+            can_fast = false;
+          } else if (!info.guess_donors.empty()) {
+            can_fast = false;
+          } else {
+            for (std::size_t i = 0; i < comp_labels_ptr->size(); ++i) {
+              const std::string &comp_label = (*comp_labels_ptr)[i];
+              if (!outcome_allows_component(info, comp_label))
+                continue;
+              int comp_idx = comp_indices[i];
+              if (comp_idx >= 0 &&
+                  comp_idx < static_cast<int>(ctx->component_info.size()) &&
+                  ctx->component_info[static_cast<std::size_t>(comp_idx)]
+                      .guess.valid) {
+                can_fast = false;
+                break;
+              }
+              double kw = component_keep_weight(*ctx, comp_idx, outcome_idx);
+              if (std::fabs(kw - 1.0) > 1e-12) {
+                can_fast = false;
+                break;
+              }
             }
           }
-          prob = total;
-        } else {
-          prob = native_trial_mixture_internal(
-              *ctx, info.node_id, rt, *comp_labels_ptr, *comp_weights_ptr,
-              R_NilValue, info.competitor_ids, params_ptr, *cache_entries_ptr,
-              outcome_label, Rcpp::List());
+          if (can_fast) {
+            static const std::unordered_set<int> kEmptyForced;
+            double total = 0.0;
+            for (std::size_t c = 0; c < comp_labels_ptr->size(); ++c) {
+              double w =
+                  (c < comp_weights_ptr->size()) ? (*comp_weights_ptr)[c] : 0.0;
+              if (!std::isfinite(w) || w <= 0.0)
+                continue;
+              const std::string &comp_label = (*comp_labels_ptr)[c];
+              if (!outcome_allows_component(info, comp_label))
+                continue;
+              int comp_idx = comp_indices[c];
+              std::vector<int> comp_competitors;
+              const std::vector<int> &comp_use = filter_competitor_ids(
+                  *ctx, info.competitor_ids, comp_label, comp_competitors);
+              double contrib = node_density_with_shared_triggers_plan(
+                  *ctx, info.node_id, rt, comp_label, comp_idx,
+                  kEmptyForced, kEmptyForced, comp_use, params_ptr,
+                  std::string(), false, std::string(), -1, trigger_plan_ptr,
+                  &trigger_scratch);
+              if (std::isfinite(contrib) && contrib > 0.0) {
+                total += w * contrib;
+              }
+            }
+            prob = total;
+          } else {
+            std::vector<std::string> allowed_components;
+            std::vector<double> allowed_weights;
+            std::vector<ComponentCacheEntry> allowed_cache_entries;
+            allowed_components.reserve(comp_labels_ptr->size());
+            allowed_weights.reserve(comp_labels_ptr->size());
+            allowed_cache_entries.reserve(comp_labels_ptr->size());
+            for (std::size_t c = 0; c < comp_labels_ptr->size(); ++c) {
+              const std::string &comp_label = (*comp_labels_ptr)[c];
+              if (!outcome_allows_component(info, comp_label))
+                continue;
+              double w = (c < comp_weights_ptr->size())
+                             ? (*comp_weights_ptr)[c]
+                             : 0.0;
+              if (!std::isfinite(w) || w <= 0.0)
+                continue;
+              allowed_components.push_back(comp_label);
+              allowed_weights.push_back(w);
+              if (c < cache_entries_ptr->size()) {
+                allowed_cache_entries.push_back((*cache_entries_ptr)[c]);
+              } else {
+                allowed_cache_entries.push_back(
+                    default_component_cache_entry(comp_label));
+              }
+            }
+            if (allowed_components.empty()) {
+              prob = 0.0;
+            } else {
+              prob = native_trial_mixture_internal(
+                  *ctx, info.node_id, rt, allowed_components, allowed_weights,
+                  R_NilValue, info.competitor_ids, params_ptr,
+                  allowed_cache_entries, outcome_label, Rcpp::List());
+            }
+          }
         }
       }
     }

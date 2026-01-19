@@ -8,14 +8,18 @@
 
 .expr_sources <- function(expr, prep) {
   gather_labels <- function(ex) {
-    if (is.null(ex) || is.null(ex[["kind"]])) return(character(0))
+    if (is.null(ex) || is.null(ex[["kind"]])) {
+      return(character(0))
+    }
     kind <- ex[["kind"]]
     if (identical(kind, "event")) {
       source_id <- ex[["source"]]
       if (!is.null(prep[["pools"]][[source_id]])) {
         members <- prep[["pools"]][[source_id]][["members"]] %||% character(0)
         unique(unlist(lapply(members, function(mid) {
-          if (!is.null(prep[["accumulators"]][[mid]])) return(mid)
+          if (!is.null(prep[["accumulators"]][[mid]])) {
+            return(mid)
+          }
           if (!is.null(prep[["pools"]][[mid]])) {
             return(gather_labels(list(kind = "event", source = mid)))
           }
@@ -45,9 +49,13 @@
 }
 
 .collect_guards <- function(expr) {
-  if (is.null(expr) || is.null(expr[["kind"]])) return(list())
+  if (is.null(expr) || is.null(expr[["kind"]])) {
+    return(list())
+  }
   kind <- expr[["kind"]]
-  if (identical(kind, "guard")) return(list(expr))
+  if (identical(kind, "guard")) {
+    return(list(expr))
+  }
   if (kind %in% c("and", "or")) {
     return(unlist(lapply(expr[["args"]], .collect_guards), recursive = FALSE))
   }
@@ -60,10 +68,16 @@
 .guards_conflict <- function(primary_guard, other_expr) {
   primary_blocker <- primary_guard[["blocker"]]
   primary_reference <- primary_guard[["reference"]]
-  if (!.expr_is_event(primary_blocker) || !.expr_is_event(primary_reference)) return(FALSE)
-  if (length(primary_guard[["unless"]] %||% list()) > 0) return(FALSE)
+  if (!.expr_is_event(primary_blocker) || !.expr_is_event(primary_reference)) {
+    return(FALSE)
+  }
+  if (length(primary_guard[["unless"]] %||% list()) > 0) {
+    return(FALSE)
+  }
   guards <- .collect_guards(other_expr)
-  if (length(guards) == 0) return(FALSE)
+  if (length(guards) == 0) {
+    return(FALSE)
+  }
   blk_src <- primary_blocker[["source"]]
   ref_src <- primary_reference[["source"]]
   for (g in guards) {
@@ -72,7 +86,7 @@
     g_reference <- g[["reference"]]
     if (!.expr_is_event(g_blocker) || !.expr_is_event(g_reference)) next
     if (identical(blk_src, g_reference[["source"]]) &&
-        identical(ref_src, g_blocker[["source"]])) {
+      identical(ref_src, g_blocker[["source"]])) {
       return(TRUE)
     }
   }
@@ -81,8 +95,12 @@
 
 .expr_signature <- function(expr) {
   cached <- attr(expr, ".lik_signature", exact = TRUE)
-  if (!is.null(cached)) return(cached)
-  if (is.null(expr) || is.null(expr[["kind"]])) return("null")
+  if (!is.null(cached)) {
+    return(cached)
+  }
+  if (is.null(expr) || is.null(expr[["kind"]])) {
+    return("null")
+  }
   kind <- expr[["kind"]]
   if (identical(kind, "event")) {
     src <- expr[["source"]] %||% ""
@@ -156,9 +174,13 @@
 }
 
 .trim_expr_compiled <- function(expr_compiled) {
-  if (is.null(expr_compiled)) return(NULL)
+  if (is.null(expr_compiled)) {
+    return(NULL)
+  }
   nodes <- expr_compiled[["nodes"]] %||% list()
-  if (length(nodes) == 0) return(expr_compiled)
+  if (length(nodes) == 0) {
+    return(expr_compiled)
+  }
   drop_fields <- c(
     "density_fn", "surv_fn", "cdf_fn", "scenario_fn",
     "density_fast_fn", "surv_fast_fn", "cdf_fast_fn",
@@ -166,18 +188,24 @@
   )
   expr_copy <- unserialize(serialize(expr_compiled, NULL))
   expr_copy$nodes <- lapply(expr_copy$nodes, function(node) {
-    if (is.null(node)) return(node)
+    if (is.null(node)) {
+      return(node)
+    }
     node[setdiff(names(node), drop_fields)]
   })
   expr_copy
 }
 
 .strip_functions <- function(x) {
-  if (is.function(x) || is.environment(x)) return(NULL)
+  if (is.function(x) || is.environment(x)) {
+    return(NULL)
+  }
   if (is.pairlist(x)) x <- as.list(x)
   if (is.list(x)) {
     atts <- attributes(x)
-    if (length(x) == 0L) return(x)
+    if (length(x) == 0L) {
+      return(x)
+    }
     x <- lapply(x, .strip_functions)
     keep <- !vapply(x, is.null, logical(1))
     x <- x[keep]
@@ -200,7 +228,9 @@
   next_id <- 1L
 
   compile_expr <- function(expr) {
-    if (is.null(expr) || is.null(expr[["kind"]])) return(expr)
+    if (is.null(expr) || is.null(expr[["kind"]])) {
+      return(expr)
+    }
     sig <- .expr_signature(expr)
     existing_id <- sig_env[[sig]]
     if (!is.null(existing_id)) {
@@ -262,10 +292,14 @@
       child_nodes <- if (length(child_args) > 0L) nodes[as.integer(child_args)] else list()
       child_needs <- if (length(child_nodes) > 0L) {
         vapply(child_nodes, function(n) isTRUE(n$needs_forced), logical(1))
-      } else logical(0)
+      } else {
+        logical(0)
+      }
       child_scen <- if (length(child_nodes) > 0L) {
         vapply(child_nodes, function(n) isTRUE(n$scenario_sensitive), logical(1))
-      } else logical(0)
+      } else {
+        logical(0)
+      }
       node$needs_forced <- any(child_needs)
       node$scenario_sensitive <- any(child_scen)
     }
@@ -277,9 +311,9 @@
     expr
   }
 
-  for (lbl in names(outcome_defs)) {
-    out_expr <- outcome_defs[[lbl]][["expr"]]
-    outcome_defs[[lbl]][["expr"]] <- compile_expr(out_expr)
+  for (i in seq_along(outcome_defs)) {
+    out_expr <- outcome_defs[[i]][["expr"]]
+    outcome_defs[[i]][["expr"]] <- compile_expr(out_expr)
   }
 
   prep[["outcomes"]] <- outcome_defs
@@ -289,21 +323,29 @@
 
 .expr_lookup_compiled <- function(expr, prep) {
   comp <- .prep_expr_compiled(prep)
-  if (is.null(comp)) return(NULL)
+  if (is.null(comp)) {
+    return(NULL)
+  }
   node_id <- attr(expr, ".lik_id", exact = TRUE)
   if (is.null(node_id) || is.na(node_id)) {
     sig <- .expr_signature(expr)
     node_id <- comp[["signatures"]][[sig]]
   }
-  if (is.null(node_id) || is.na(node_id)) return(NULL)
+  if (is.null(node_id) || is.na(node_id)) {
+    return(NULL)
+  }
   node_idx <- as.integer(node_id)
   nodes <- comp[["nodes"]] %||% list()
-  if (length(nodes) < node_idx || node_idx < 1L) return(NULL)
+  if (length(nodes) < node_idx || node_idx < 1L) {
+    return(NULL)
+  }
   nodes[[node_idx]]
 }
 
 .cache_bundle_native_stub <- function(bundle) {
-  if (is.null(bundle)) return(NULL)
+  if (is.null(bundle)) {
+    return(NULL)
+  }
   stub <- list()
   native_ctx <- bundle$native_ctx
   if (!is.environment(native_ctx)) {
@@ -322,7 +364,9 @@
 
 .prep_runtime_get <- function(prep, key, default = NULL) {
   runtime <- prep[[".runtime"]]
-  if (is.null(runtime)) return(default)
+  if (is.null(runtime)) {
+    return(default)
+  }
   val <- runtime[[key]]
   if (is.null(val)) default else val
 }
@@ -376,9 +420,13 @@
 }
 
 .canonical_named_list <- function(x) {
-  if (!is.list(x)) return(x)
+  if (!is.list(x)) {
+    return(x)
+  }
   nm <- names(x)
-  if (is.null(nm)) return(lapply(x, .canonical_named_list))
+  if (is.null(nm)) {
+    return(lapply(x, .canonical_named_list))
+  }
   ord <- order(nm)
   res <- lapply(x[ord], .canonical_named_list)
   names(res) <- nm[ord]
@@ -450,9 +498,13 @@
 
 .na_cache_limit_value <- function() {
   opt <- getOption("uuber.cache.na.max_per_trial", 128L)
-  if (!is.numeric(opt) || length(opt) == 0L || is.na(opt[[1]])) return(128L)
+  if (!is.numeric(opt) || length(opt) == 0L || is.na(opt[[1]])) {
+    return(128L)
+  }
   val <- as.integer(opt[[1]])
-  if (!is.finite(val) || val < 0L) return(0L)
+  if (!is.finite(val) || val < 0L) {
+    return(0L)
+  }
   val
 }
 
@@ -479,7 +531,9 @@
 
 .prep_set_cache_bundle <- function(prep, bundle) {
   runtime <- prep[[".runtime"]]
-  if (is.null(runtime)) return(prep)
+  if (is.null(runtime)) {
+    return(prep)
+  }
   runtime$cache_bundle <- bundle
   prep[[".runtime"]] <- runtime
   prep
@@ -487,34 +541,61 @@
 
 .prepare_competitor_map <- function(prep) {
   outcomes <- prep[["outcomes"]] %||% list()
-  if (length(outcomes) == 0L) return(list())
-  comps <- lapply(names(outcomes), function(lbl) {
-    .build_competitor_exprs(prep, lbl, outcomes[[lbl]][["expr"]])
+  if (length(outcomes) == 0L) {
+    return(list())
+  }
+  comps <- lapply(seq_along(outcomes), function(idx) {
+    .build_competitor_exprs_at_index(prep, idx)
   })
   names(comps) <- names(outcomes)
+  attr(comps, "by_index") <- TRUE
   comps
 }
 
-.build_competitor_exprs <- function(prep, target_label, target_expr) {
+.build_competitor_exprs_at_index <- function(prep, target_idx) {
   outcome_defs <- prep[["outcomes"]]
-  comp_labels <- setdiff(names(outcome_defs), target_label)
-  if (length(comp_labels) == 0) return(list())
-  target_opts <- outcome_defs[[target_label]][["options"]] %||% list()
+  if (is.null(outcome_defs) || length(outcome_defs) == 0L) {
+    return(list())
+  }
+  if (is.na(target_idx) || target_idx < 1 || target_idx > length(outcome_defs)) {
+    return(list())
+  }
+  target_def <- outcome_defs[[target_idx]]
+  target_expr <- target_def[["expr"]]
+  if (is.null(target_expr)) {
+    return(list())
+  }
+  target_label <- names(outcome_defs)[target_idx]
+  target_opts <- target_def[["options"]] %||% list()
   target_map <- target_opts[["map_outcome_to"]] %||% target_label
-  comp_labels <- Filter(function(lbl) {
-    comp_opts <- outcome_defs[[lbl]][["options"]] %||% list()
-    if (!is.null(comp_opts[["alias_of"]])) return(FALSE)
-    expr_lbl <- outcome_defs[[lbl]][["expr"]]
+  comp_indices <- setdiff(seq_along(outcome_defs), target_idx)
+  if (length(comp_indices) == 0) {
+    return(list())
+  }
+  comp_indices <- Filter(function(idx) {
+    comp_def <- outcome_defs[[idx]]
+    comp_opts <- comp_def[["options"]] %||% list()
+    if (!is.null(comp_opts[["alias_of"]])) {
+      return(FALSE)
+    }
+    expr_lbl <- comp_def[["expr"]]
     if (!is.null(expr_lbl[["kind"]]) && identical(expr_lbl[["kind"]], "event")) {
       src <- expr_lbl[["source"]]
-      if (identical(src, "__GUESS__") || identical(src, "__DEADLINE__")) return(FALSE)
+      if (identical(src, "__GUESS__") || identical(src, "__DEADLINE__")) {
+        return(FALSE)
+      }
     }
-    comp_target <- comp_opts[["map_outcome_to"]] %||% lbl
-    if (identical(as.character(comp_target), as.character(target_map))) return(FALSE)
+    comp_label <- names(outcome_defs)[idx]
+    comp_target <- comp_opts[["map_outcome_to"]] %||% comp_label
+    if (identical(as.character(comp_target), as.character(target_map))) {
+      return(FALSE)
+    }
     TRUE
-  }, comp_labels)
-  if (length(comp_labels) == 0) return(list())
-  comps <- lapply(comp_labels, function(lbl) outcome_defs[[lbl]][["expr"]])
+  }, comp_indices)
+  if (length(comp_indices) == 0) {
+    return(list())
+  }
+  comps <- lapply(comp_indices, function(idx) outcome_defs[[idx]][["expr"]])
   target_sources <- .expr_sources(target_expr, prep)
   if (length(comps) > 0) {
     comps <- lapply(comps, function(comp_expr) {
@@ -534,7 +615,6 @@
       length(comp_sources) == 0 || any(!comp_sources %in% blocker_sources)
     }, logical(1))
     comps <- comps[keep_idx]
-    comp_labels <- comp_labels[keep_idx]
   }
   if (length(comps) > 0 && isTRUE(getOption("uuber.filter_guard_competitors", TRUE))) {
     primary_guards <- .collect_guards(target_expr)
@@ -544,8 +624,16 @@
         !any(vapply(primary_guards, function(pg) .guards_conflict(pg, comp_expr), logical(1)))
       }, logical(1))
       comps <- comps[guard_keep]
-      comp_labels <- comp_labels[guard_keep]
     }
   }
   comps
+}
+
+.build_competitor_exprs <- function(prep, target_label, target_expr) {
+  outcome_defs <- prep[["outcomes"]] %||% list()
+  target_idx <- match(target_label, names(outcome_defs))
+  if (is.na(target_idx)) {
+    return(list())
+  }
+  .build_competitor_exprs_at_index(prep, target_idx)
 }

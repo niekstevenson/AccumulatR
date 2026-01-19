@@ -84,6 +84,86 @@ system.time(
                              model$trend, context)
 )
 
-
-
-
+# 
+# 
+# rm(list = ls())
+# library(EMC2)
+# library(AccumulatR)
+# set.seed(123)
+# n_particles <- 100
+# 
+# # Supplies data
+# load("~/Documents/2026/StopData/stim_selective/clean_data_selective_stop_pilot.Rdata")
+# 
+# data <- d
+# data <- data[,c("s", "SS", "S", "R", "RT", "SSD")]
+# data$R <- factor(data$R)
+# levels(data$R) <- c("A", "B", NA_character_)
+# colnames(data)[c(1,2, 5)] <- c("subjects", "cond", "rt")
+# data$cond <- factor(data$cond)
+# levels(data$cond) <- c("go", "ignore", "stop")
+# 
+# data <- data[data$s == 8777,]
+# 
+# 
+# model <- race_spec() |>
+#   add_accumulator("A", "lognormal") |>
+#   add_accumulator("B", "lognormal") |>
+#   add_accumulator("ignore", "lognormal") |>
+#   add_accumulator("stop", "lognormal") |>
+#   # # 1. Logic for 'go_only' (ignore/stop are absent, so we just check A/B)
+#   add_outcome("A", "A", options = list(component = "go_only")) |>
+#   add_outcome("B", "B", options = list(component = "go_only")) |>
+#   # 2. Logic for 'go_stop' (ignore/stop are present, so we enforce the gate)
+#   add_outcome("A", inhibit("A", inhibit("stop", "ignore")), options = list(component = "go_stop")) |>
+#   add_outcome("B", inhibit("B", inhibit("stop", "ignore")), options = list(component = "go_stop")) |>
+#   add_outcome("stop", inhibit("stop", "ignore"), options = list(component = "go_stop", map_outcome_to = NA_character_)) |>
+#   add_component("go_only", members = c("A", "B"), weight = .75) |>
+#   add_component("go_stop", members = c("A", "B", "stop", "ignore"), weight = .25) |>
+#   set_mixture_options(mode = "fixed") |>
+#   finalize_model()
+# 
+# 
+# to_EMC2 <- EMC2:::AccumulatR_model(model)
+# 
+# onset_fun <- function(data){
+#   onset <- data$SSD
+#   onset[data$accumulator %in% c("go_left", "go_right")] <- 0
+#   return(onset)
+# }
+# 
+# data$component <- "go_only"
+# data$component[data$cond != "go"] <- "go_stop"
+# data$component <- factor(data$component)
+# 
+# des <- design(data = data,
+#               formula = list(p1 ~ 1, p2 ~ 1, t0 ~ 1, q ~ 1),
+#               functions = list(onset = onset_fun),
+#               model = to_EMC2)
+# 
+# emc <- make_emc(data, des, type = "single")
+# model <- emc[[1]]$model()
+# dadm <- emc[[1]]$data[[1]]
+# 
+# p_types <- names(model$p_types)
+# designs <- list()
+# for(p in p_types){
+#   designs[[p]] <- attr(dadm,"designs")[[p]][attr(attr(dadm,"designs")[[p]],"expand"),,drop=FALSE]
+# }
+# constants <- attr(dadm, "constants")
+# context <- attr(dadm, "AccumulatR_context")
+# 
+# library(mvtnorm)
+# proposals <- rmvnorm(n_particles, mean = c(-.5, log(.5), log(.2), qnorm(.1)), sigma = diag(.1, 4))
+# colnames(proposals) <- names(EMC2::sampled_pars(emc))
+# 
+# system.time(
+#   lls <- EMC2:::calc_ll_AccR(proposals, dadm, constants = constants, designs = designs,
+#                              model$bound, model$transform, model$pre_transform, p_types = p_types, min_ll = log(1e-10),
+#                              model$trend, context)
+# )
+# 
+# 
+# 
+# 
+# 

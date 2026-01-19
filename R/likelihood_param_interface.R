@@ -31,7 +31,9 @@
   }
   # attach runtime/id_index if missing
   prep_eval_base <- (function(prep_obj) {
-    if (!is.null(prep_obj[[".runtime"]]) && !is.null(prep_obj[[".id_index"]])) return(prep_obj)
+    if (!is.null(prep_obj[[".runtime"]]) && !is.null(prep_obj[[".id_index"]])) {
+      return(prep_obj)
+    }
     acc_ids <- names(prep_obj[["accumulators"]] %||% list())
     pool_ids <- names(prep_obj[["pools"]] %||% list())
     all_ids <- unique(c(acc_ids, pool_ids))
@@ -98,7 +100,8 @@
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1))
+#'   params = list(meanlog = 0, sdlog = 0.1)
+#' )
 #' spec <- add_outcome(spec, "A_win", "A")
 #' structure <- finalize_model(spec)
 #' params_df <- build_param_matrix(
@@ -122,7 +125,9 @@ build_likelihood_context <- function(structure,
 }
 
 .validate_likelihood_context <- function(context) {
-  if (inherits(context, "likelihood_context")) return(context)
+  if (inherits(context, "likelihood_context")) {
+    return(context)
+  }
   stop("likelihood context must be created via build_likelihood_context()", call. = FALSE)
 }
 
@@ -258,8 +263,12 @@ build_likelihood_context <- function(structure,
 }
 
 .likelihood_component_rows <- function(trial_rows, component) {
-  if (is.null(trial_rows) || nrow(trial_rows) == 0L) return(trial_rows)
-  if (!"component" %in% names(trial_rows)) return(trial_rows)
+  if (is.null(trial_rows) || nrow(trial_rows) == 0L) {
+    return(trial_rows)
+  }
+  if (!"component" %in% names(trial_rows)) {
+    return(trial_rows)
+  }
   comp_label <- component %||% "__default__"
   mask <- is.na(trial_rows$component)
   if (!identical(comp_label, "__default__")) {
@@ -269,7 +278,9 @@ build_likelihood_context <- function(structure,
 }
 
 .model_spec_with_params <- function(model_spec, params_df) {
-  if (is.null(params_df) || nrow(params_df) == 0L) return(model_spec)
+  if (is.null(params_df) || nrow(params_df) == 0L) {
+    return(model_spec)
+  }
   spec_copy <- unserialize(serialize(model_spec, NULL))
   prep_tmp <- .prepare_model_for_likelihood(model_spec)
   param_state <- .generator_param_state_from_rows(prep_tmp, params_df)
@@ -356,57 +367,78 @@ build_likelihood_context <- function(structure,
   structure_hash <- .structure_hash_value(prep)
   outcome_defs <- prep[["outcomes"]] %||% list()
   competitor_map <- .prep_competitors(prep) %||% list()
+  outcome_labels <- names(outcome_defs)
+  use_indexed_competitors <- isTRUE(attr(competitor_map, "by_index")) &&
+    length(competitor_map) == length(outcome_defs)
   compiled_nodes <- lapply(outcome_defs, function(def) {
     expr <- def[["expr"]]
-    if (is.null(expr)) return(NULL)
+    if (is.null(expr)) {
+      return(NULL)
+    }
     .expr_lookup_compiled(expr, prep)
   })
-  names(compiled_nodes) <- names(outcome_defs)
-  compiled_competitors <- lapply(names(outcome_defs), function(lbl) {
-    comp_exprs <- competitor_map[[lbl]] %||% list()
-    if (length(comp_exprs) == 0) return(integer(0))
+  names(compiled_nodes) <- outcome_labels
+  compiled_competitors <- lapply(seq_along(outcome_defs), function(idx) {
+    comp_exprs <- if (use_indexed_competitors) {
+      competitor_map[[idx]] %||% list()
+    } else {
+      competitor_map[[outcome_labels[[idx]]]] %||% list()
+    }
+    if (length(comp_exprs) == 0) {
+      return(integer(0))
+    }
     comp_nodes <- lapply(comp_exprs, function(ex) .expr_lookup_compiled(ex, prep))
-    if (any(vapply(comp_nodes, is.null, logical(1)))) return(NULL)
+    if (any(vapply(comp_nodes, is.null, logical(1)))) {
+      return(NULL)
+    }
     ids <- vapply(comp_nodes, function(node) as.integer(node$id %||% NA_integer_), integer(1))
-    if (any(is.na(ids))) return(NULL)
+    if (any(is.na(ids))) {
+      return(NULL)
+    }
     ids
   })
-  names(compiled_competitors) <- names(outcome_defs)
-  na_source_labels <- Filter(function(lbl) {
-    def <- outcome_defs[[lbl]]
-    map_to <- def[['options']][['map_outcome_to']]
-    if (is.null(map_to)) return(FALSE)
-    if (is.na(map_to)) return(TRUE)
+  names(compiled_competitors) <- outcome_labels
+  na_source_idx <- Filter(function(idx) {
+    def <- outcome_defs[[idx]]
+    map_to <- def[["options"]][["map_outcome_to"]]
+    if (is.null(map_to)) {
+      return(FALSE)
+    }
+    if (is.na(map_to)) {
+      return(TRUE)
+    }
     identical(map_to, "NA")
-  }, names(outcome_defs))
+  }, seq_along(outcome_defs))
   na_source_specs <- NULL
-  if (length(na_source_labels) > 0L) {
-    na_source_specs <- lapply(na_source_labels, function(lbl) {
-      node <- compiled_nodes[[lbl]]
-      def <- outcome_defs[[lbl]] %||% list()
-      comp_ids <- compiled_competitors[[lbl]]
-      if (is.null(node) || is.null(comp_ids)) return(NULL)
+  if (length(na_source_idx) > 0L) {
+    na_source_specs <- lapply(na_source_idx, function(idx) {
+      node <- compiled_nodes[[idx]]
+      def <- outcome_defs[[idx]] %||% list()
+      comp_ids <- compiled_competitors[[idx]]
+      if (is.null(node) || is.null(comp_ids)) {
+        return(NULL)
+      }
       list(
         node_id = as.integer(node$id),
         competitor_ids = comp_ids %||% integer(0),
-        source_label = lbl
+        source_label = outcome_labels[[idx]]
       )
     })
     if (any(vapply(na_source_specs, is.null, logical(1)))) na_source_specs <- NULL
   }
   guess_target_specs <- list()
-  for (lbl in names(outcome_defs)) {
-    def <- outcome_defs[[lbl]]
-    opts <- def[['options']] %||% list()
-    guess_opts <- opts[['guess']]
+  for (idx in seq_along(outcome_defs)) {
+    def <- outcome_defs[[idx]]
+    opts <- def[["options"]] %||% list()
+    guess_opts <- opts[["guess"]]
     if (is.null(guess_opts)) next
-    donor_node <- compiled_nodes[[lbl]]
+    donor_node <- compiled_nodes[[idx]]
     if (is.null(donor_node)) next
-    donor_comp <- compiled_competitors[[lbl]] %||% integer(0)
-    labels <- guess_opts[['labels']] %||% character(0)
-    weights <- guess_opts[['weights']] %||% numeric(0)
+    donor_comp <- compiled_competitors[[idx]] %||% integer(0)
+    labels <- guess_opts[["labels"]] %||% character(0)
+    weights <- guess_opts[["weights"]] %||% numeric(0)
     if (!length(labels) || length(labels) != length(weights)) next
-    rt_policy <- guess_opts[['rt_policy']] %||% "keep"
+    rt_policy <- guess_opts[["rt_policy"]] %||% "keep"
     for (j in seq_along(labels)) {
       tgt <- labels[[j]]
       tgt_key <- if (is.na(tgt)) "NA" else as.character(tgt)
@@ -417,32 +449,46 @@ build_likelihood_context <- function(structure,
       donor_rec <- list(
         node_id = as.integer(donor_node$id),
         competitor_ids = donor_comp %||% integer(0),
-        source_label = lbl,
+        source_label = outcome_labels[[idx]],
         release = release_val,
         rt_policy = rt_policy
       )
       guess_target_specs[[tgt_key]] <- c(guess_target_specs[[tgt_key]] %||% list(), list(donor_rec))
     }
   }
-  alias_specs <- lapply(names(outcome_defs), function(lbl) {
-    def <- outcome_defs[[lbl]]
-    alias_refs <- def[['options']][['alias_of']]
-    if (is.null(alias_refs)) return(NULL)
+  alias_specs <- lapply(seq_along(outcome_defs), function(idx) {
+    def <- outcome_defs[[idx]]
+    alias_refs <- def[["options"]][["alias_of"]]
+    if (is.null(alias_refs)) {
+      return(NULL)
+    }
     refs <- as.character(alias_refs)
     alias_sources <- lapply(refs, function(ref_lbl) {
-      node <- compiled_nodes[[ref_lbl]]
-      comp_ids <- compiled_competitors[[ref_lbl]]
-      if (is.null(node) || is.null(comp_ids)) return(NULL)
-      list(
-        node_id = as.integer(node$id),
-        competitor_ids = comp_ids %||% integer(0),
-        source_label = ref_lbl
-      )
+      ref_idx <- which(outcome_labels == ref_lbl)
+      if (length(ref_idx) == 0) {
+        return(NULL)
+      }
+      refs_out <- lapply(ref_idx, function(j) {
+        node <- compiled_nodes[[j]]
+        comp_ids <- compiled_competitors[[j]]
+        if (is.null(node) || is.null(comp_ids)) {
+          return(NULL)
+        }
+        list(
+          node_id = as.integer(node$id),
+          competitor_ids = comp_ids %||% integer(0),
+          source_label = ref_lbl
+        )
+      })
+      refs_out
     })
-    if (any(vapply(alias_sources, is.null, logical(1)))) return(NULL)
+    alias_sources <- unlist(alias_sources, recursive = FALSE)
+    if (any(vapply(alias_sources, is.null, logical(1)))) {
+      return(NULL)
+    }
     alias_sources
   })
-  names(alias_specs) <- names(outcome_defs)
+  names(alias_specs) <- outcome_labels
   rel_tol <- .integrate_rel_tol()
   abs_tol <- .integrate_abs_tol()
   max_depth <- 12L
@@ -529,7 +575,9 @@ build_likelihood_context <- function(structure,
 }
 
 .likelihood_params_by_trial <- function(params_df) {
-  if (is.null(params_df) || nrow(params_df) == 0L) return(list())
+  if (is.null(params_df) || nrow(params_df) == 0L) {
+    return(list())
+  }
   trials <- params_df$trial %||% seq_len(nrow(params_df))
   if (is.factor(trials)) trials <- as.character(trials)
   split(params_df, as.character(trials))
@@ -601,12 +649,45 @@ build_likelihood_context <- function(structure,
   weights
 }
 
+.resolve_outcome_def_index <- function(prep, outcome_label, component) {
+  all_names <- names(prep[["outcomes"]])
+  idxs <- which(all_names == outcome_label)
+  if (length(idxs) == 0) {
+    return(NA_integer_)
+  }
+  comp_label <- component
+  if (is.factor(comp_label)) comp_label <- as.character(comp_label)
+  if (length(comp_label) == 0L || is.null(comp_label) || is.na(comp_label) || !nzchar(comp_label)) {
+    return(idxs[[1]])
+  }
+  # First pass: explicit component match
+  for (i in idxs) {
+    opts <- prep[["outcomes"]][[i]][["options"]] %||% list()
+    comps <- opts[["component"]]
+    if (!is.null(comps) && comp_label %in% comps) {
+      return(i)
+    }
+  }
+  # Second pass: unrestricted outcome
+  for (i in idxs) {
+    opts <- prep[["outcomes"]][[i]][["options"]] %||% list()
+    if (is.null(opts[["component"]]) || length(opts[["component"]]) == 0L) {
+      return(i)
+    }
+  }
+  NA_integer_
+}
+
 .likelihood_response_prob_component <- function(prep, outcome_label, component,
                                                 trial_rows = NULL,
                                                 trial_state = NULL) {
-  out_def <- prep[["outcomes"]][[outcome_label]]
-  if (!is.null(out_def[['options']][['alias_of']])) {
-    refs <- as.character(out_def[['options']][['alias_of']])
+  selected_idx <- .resolve_outcome_def_index(prep, outcome_label, component)
+  if (is.na(selected_idx)) {
+    return(0.0)
+  }
+  out_def <- prep[["outcomes"]][[selected_idx]]
+  if (!is.null(out_def[["options"]][["alias_of"]])) {
+    refs <- as.character(out_def[["options"]][["alias_of"]])
     vals <- vapply(refs, function(lbl) {
       .likelihood_response_prob_component(
         prep = prep,
@@ -626,12 +707,19 @@ build_likelihood_context <- function(structure,
     stop("Native context required for response probabilities; R fallback removed", call. = FALSE)
   }
 
-  compiled <- .expr_lookup_compiled(out_def[['expr']], prep)
+  compiled <- .expr_lookup_compiled(out_def[["expr"]], prep)
   if (is.null(compiled)) {
     stop(sprintf("No compiled node for outcome '%s'", outcome_label), call. = FALSE)
   }
 
-  comp_exprs <- (.prep_competitors(prep) %||% list())[[outcome_label]] %||% list()
+  competitor_map <- .prep_competitors(prep) %||% list()
+  use_indexed_competitors <- isTRUE(attr(competitor_map, "by_index")) &&
+    length(competitor_map) == length(prep[["outcomes"]])
+  comp_exprs <- if (use_indexed_competitors) {
+    competitor_map[[selected_idx]] %||% list()
+  } else {
+    competitor_map[[outcome_label]] %||% list()
+  }
   comp_ids <- integer(0)
   if (length(comp_exprs) > 0L) {
     comp_nodes <- lapply(comp_exprs, function(ex) .expr_lookup_compiled(ex, prep))
@@ -664,24 +752,28 @@ build_likelihood_context <- function(structure,
 
   if (!identical(outcome_label, "GUESS")) {
     gp <- .get_component_attr(prep, component, "guess")
-    if (!is.null(gp) && !is.null(gp[['weights']])) {
-      keep <- gp[['weights']][[outcome_label]] %||% gp[['weights']][[normalize_label(outcome_label)]] %||% 1.0
+    if (!is.null(gp) && !is.null(gp[["weights"]])) {
+      keep <- gp[["weights"]][[outcome_label]] %||% gp[["weights"]][[normalize_label(outcome_label)]] %||% 1.0
       base <- base * as.numeric(keep)
     }
   }
   base
 }
 
-.aggregate_observed_probs <- function(prep, probs, include_na = TRUE) {
-  labels <- names(prep[["outcomes"]])
+.aggregate_observed_probs <- function(prep, probs, include_na = TRUE, component = NULL) {
+  labels <- unique(names(prep[["outcomes"]]))
   labels <- Filter(function(lbl) {
-    is.null(prep[["outcomes"]][[lbl]][['options']][['alias_of']])
+    idx <- .resolve_outcome_def_index(prep, lbl, component)
+    if (is.na(idx)) return(FALSE)
+    is.null(prep[["outcomes"]][[idx]][["options"]][["alias_of"]])
   }, labels)
   obs <- numeric(0)
   na_sum <- 0.0
   for (lbl in labels) {
-    out_def <- prep[["outcomes"]][[lbl]]
-    map_to <- out_def[['options']][['map_outcome_to']] %||% NULL
+    idx <- .resolve_outcome_def_index(prep, lbl, component)
+    if (is.na(idx)) next
+    out_def <- prep[["outcomes"]][[idx]]
+    map_to <- out_def[["options"]][["map_outcome_to"]] %||% NULL
     prob <- probs[[lbl]] %||% 0.0
     if (is.null(map_to)) {
       current <- obs[lbl]
@@ -732,7 +824,8 @@ response_probabilities.default <- function(structure, ...) {
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1))
+#'   params = list(meanlog = 0, sdlog = 0.1)
+#' )
 #' spec <- add_outcome(spec, "A_win", "A")
 #' structure <- finalize_model(spec)
 #' params_df <- build_param_matrix(
@@ -801,7 +894,7 @@ response_probabilities.model_structure <- function(structure,
     for (idx in seq_along(comps)) {
       comp_id <- comps[[idx]]
       comp_rows <- .likelihood_component_rows(trial_rows, comp_id)
-      labels <- names(prep_eval_base$outcomes)
+      labels <- unique(names(prep_eval_base$outcomes))
       base_probs <- setNames(vapply(labels, function(lbl) {
         .likelihood_response_prob_component(
           prep_eval_base,
@@ -811,19 +904,35 @@ response_probabilities.model_structure <- function(structure,
           trial_state = trial_state
         )
       }, numeric(1)), labels)
-      weighted <- weights[[idx]] * base_probs
+      comp_probs <- .aggregate_observed_probs(
+        prep_eval_base,
+        base_probs,
+        include_na = include_na,
+        component = comp_id
+      )
+      factor <- weights[[idx]]
+      weighted <- factor * comp_probs
       if (length(trial_probs) == 0L) {
         trial_probs <- weighted
       } else {
         for (lbl in names(weighted)) {
-          current <- trial_probs[[lbl]]
-          if (is.null(current) || is.na(current)) current <- 0
-          trial_probs[[lbl]] <- current + weighted[[lbl]]
+          current <- trial_probs[lbl]
+          if (length(current) == 0L || is.na(current)) current <- 0
+          trial_probs[lbl] <- current + weighted[[lbl]]
         }
       }
     }
-    agg <- .aggregate_observed_probs(prep_eval_base, trial_probs, include_na = include_na)
-    accum[[i]] <- agg
+    if (include_na) {
+      total <- sum(trial_probs)
+      resid <- 1.0 - total
+      if (!is.finite(resid)) resid <- 0.0
+      if (resid > .Machine$double.eps) {
+        current <- trial_probs[["NA"]]
+        if (is.null(current) || is.na(current)) current <- 0.0
+        trial_probs[["NA"]] <- current + resid
+      }
+    }
+    accum[[i]] <- trial_probs
     weights_per_trial[[i]] <- 1.0
   }
   total_weight <- sum(weights_per_trial)
@@ -833,7 +942,9 @@ response_probabilities.model_structure <- function(structure,
     vec <- accum[[i]]
     w <- weights_per_trial[[i]] / total_weight
     for (lbl in names(vec)) {
-      result[[lbl]] <- result[[lbl]] + w * vec[[lbl]]
+      current <- result[lbl]
+      if (length(current) == 0L || is.na(current)) current <- 0
+      result[lbl] <- current + vec[[lbl]] * w
     }
   }
   result
@@ -852,7 +963,8 @@ response_probabilities.model_structure <- function(structure,
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1))
+#'   params = list(meanlog = 0, sdlog = 0.1)
+#' )
 #' spec <- add_outcome(spec, "A_win", "A")
 #' structure <- finalize_model(spec)
 #' params_df <- build_param_matrix(
@@ -864,7 +976,7 @@ response_probabilities.model_structure <- function(structure,
 #' ctx <- build_likelihood_context(structure, data_df)
 #' log_likelihood(ctx, list(params_df))
 #' @export
-log_likelihood <- function(likelihood_context, parameters, ok = NULL, expand = NULL, min_ll= log(1e-10), ...) {
+log_likelihood <- function(likelihood_context, parameters, ok = NULL, expand = NULL, min_ll = log(1e-10), ...) {
   UseMethod("log_likelihood")
 }
 
@@ -887,7 +999,9 @@ log_likelihood.likelihood_context <- function(likelihood_context,
     parameters
   }
   params_list <- lapply(params_list, function(pm) {
-    if (inherits(pm, "param_matrix") || is.matrix(pm)) return(pm)
+    if (inherits(pm, "param_matrix") || is.matrix(pm)) {
+      return(pm)
+    }
     as.matrix(pm)
   })
   data_df <- ctx$data_df

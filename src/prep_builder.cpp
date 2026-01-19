@@ -287,6 +287,13 @@ build_context_from_proto(const NativePrepProto &proto) {
     if (it_pool != ctx->pool_index.end()) {
       ref.pool_idx = it_pool->second;
     }
+    // Outcome index? Not usually populated in Proto flow but handled for
+    // completeness if it were? Actually proto doesn't have outcomes. But
+    // assuming usage consistency:
+    auto it_out = ctx->outcome_index.find(label);
+    if (it_out != ctx->outcome_index.end() && !it_out->second.empty()) {
+      ref.outcome_idx = it_out->second[0];
+    }
     return ref;
   };
 

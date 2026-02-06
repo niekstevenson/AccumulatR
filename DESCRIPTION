@@ -12,11 +12,10 @@ Depends: R (>= 4.0)
 Imports: 
     Rcpp,
     stats,
-    utils,
-    RcppParallel
+    utils
 Suggests:
     testthat (>= 3.0.0)
-LinkingTo: Rcpp, RcppParallel, BH
+LinkingTo: Rcpp, BH
 SystemRequirements: C++17
 NeedsCompilation: yes
 LazyData: false

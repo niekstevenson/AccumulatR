@@ -1,8 +1,7 @@
-// [[Rcpp::depends(Rcpp, RcppParallel, BH)]]
+// [[Rcpp::depends(Rcpp, BH)]]
 // [[Rcpp::plugins(cpp17)]]
 
 #include <Rcpp.h>
-#include <RcppParallel.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -5629,43 +5628,6 @@ Rcpp::NumericVector dist_exgauss_rng(int n, double mu, double sigma,
 // Pool helpers
 // ------------------------------------------------------------------
 
-struct PoolDensityWorker : public RcppParallel::Worker {
-  const double *density;
-  const std::vector<std::vector<double>> *prefix;
-  const std::vector<std::vector<double>> *suffix;
-  const int order;
-  double total;
-
-  PoolDensityWorker(const double *densityPtr,
-                    const std::vector<std::vector<double>> &prefixRef,
-                    const std::vector<std::vector<double>> &suffixRef,
-                    int order_)
-      : density(densityPtr), prefix(&prefixRef), suffix(&suffixRef),
-        order(order_), total(0.0) {}
-
-  PoolDensityWorker(const PoolDensityWorker &other, RcppParallel::Split)
-      : density(other.density), prefix(other.prefix), suffix(other.suffix),
-        order(other.order), total(0.0) {}
-
-  void operator()(std::size_t begin, std::size_t end) {
-    double local = 0.0;
-    const auto &pref = *prefix;
-    const auto &suff = *suffix;
-    for (std::size_t idx = begin; idx < end; ++idx) {
-      double dens_val = density[idx];
-      if (!std::isfinite(dens_val) || dens_val <= 0.0)
-        continue;
-      double coeff = coefficient_for_order(pref[idx], suff[idx + 1], order);
-      if (!std::isfinite(coeff) || coeff <= 0.0)
-        continue;
-      local += dens_val * coeff;
-    }
-    total += local;
-  }
-
-  void join(const PoolDensityWorker &rhs) { total += rhs.total; }
-};
-
 //' @noRd
 // [[Rcpp::export]]
 Rcpp::NumericVector pool_coeffs_cpp(const Rcpp::NumericVector &Svec,
@@ -5713,21 +5675,18 @@ static double pool_density_fast_impl(const double *density,
   fill_prefix_buffers(scratch.prefix, scratch.surv, scratch.fail);
   fill_suffix_buffers(scratch.suffix, scratch.surv, scratch.fail);
 
-  PoolDensityWorker worker(density, scratch.prefix, scratch.suffix, k - 1);
-#if defined(RCPP_PARALLEL_USE_TBB) && RCPP_PARALLEL_USE_TBB
-  // TBB parallel overhead dwarfs work for typical pool sizes (n is usually
-  // small), so only parallelize once the pool is large enough to benefit.
-  constexpr std::size_t kParallelThreshold = 512;
-  if (n >= kParallelThreshold) {
-    RcppParallel::parallelReduce(0, n, worker);
-  } else {
-    worker(0, n);
+  double total = 0.0;
+  for (std::size_t idx = 0; idx < n; ++idx) {
+    double dens_val = density[idx];
+    if (!std::isfinite(dens_val) || dens_val <= 0.0)
+      continue;
+    double coeff =
+        coefficient_for_order(scratch.prefix[idx], scratch.suffix[idx + 1],
+                               k - 1);
+    if (!std::isfinite(coeff) || coeff <= 0.0)
+      continue;
+    total += dens_val * coeff;
   }
-#else
-  worker(0, n);
-#endif
-
-  double total = worker.total;
   if (!std::isfinite(total) || total < 0.0)
     return 0.0;
   return total;

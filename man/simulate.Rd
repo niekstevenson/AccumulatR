@@ -13,6 +13,7 @@ simulate(
   seed = NULL,
   keep_detail = FALSE,
   keep_component = NULL,
+  layout = c("auto", "rectangular", "long"),
   ...
 )
 
@@ -23,6 +24,7 @@ simulate(
   seed = NULL,
   keep_detail = FALSE,
   keep_component = NULL,
+  layout = c("auto", "rectangular", "long"),
   ...
 )
 
@@ -35,8 +37,10 @@ simulate(
 
 \item{trial_df}{Optional trial-level or expanded data frame used to condition
 simulation. When `trial_df` includes an `accumulator` column, `onset` and
-`component` values are matched by trial and accumulator. Otherwise, values
-apply to all accumulators for a trial.}
+`component` values are matched by trial and accumulator. If `layout = "long"`
+and `trial_df` rows align to `params_df`, those rows are treated as the
+accumulator mapping for each trial. Otherwise, values apply to all accumulators
+for a trial.}
 
 \item{seed}{Optional RNG seed}
 
@@ -44,6 +48,11 @@ apply to all accumulators for a trial.}
 
 \item{keep_component}{Whether to include the chosen component in the output (if multiple components exist).
 If `NULL` (default), fixed mixtures keep the component; sampled mixtures drop it.}
+
+\item{layout}{Parameter layout. `"rectangular"` expects `n_trials * n_acc` rows ordered
+by trial then accumulator; `"long"` expects either a `trial_df` with `accumulator`
+rows aligned to `params_df`, or a `trial_df` with `component` to infer active
+accumulators. `"auto"` chooses based on row counts and component structure.}
 
 \item{...}{Unused; for S3 compatibility}
 }

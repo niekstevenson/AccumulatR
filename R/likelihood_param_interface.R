@@ -139,6 +139,7 @@ build_likelihood_context <- function(structure,
     stop("No accumulators in model", call. = FALSE)
   }
   data_df <- as.data.frame(data_df)
+  orig_has_acc <- "accumulator" %in% names(data_df)
   if (!"accumulator" %in% names(data_df)) {
     data_df <- nest_accumulators(structure, data_df)
   }
@@ -160,7 +161,15 @@ build_likelihood_context <- function(structure,
   } else {
     match(comp_col, comp_ids)
   }
-  rectangular <- (length(row_trial) == length(trial_ids) * n_acc)
+  rectangular <- FALSE
+  if (!any(is.na(row_trial)) && length(row_trial) == length(trial_ids) * n_acc) {
+    if (!orig_has_acc && is.null(comp_col)) {
+      rectangular <- TRUE
+    } else {
+      idx <- (row_trial - 1L) * n_acc + row_acc
+      rectangular <- all(tabulate(idx, nbins = length(trial_ids) * n_acc) == 1L)
+    }
+  }
   list(
     row_trial = as.integer(row_trial),
     row_acc = as.integer(row_acc),

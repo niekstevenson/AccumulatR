@@ -27,6 +27,10 @@ struct ProtoAccumulator {
   std::string id;
   std::string dist;
   double onset{};
+  int onset_kind{};
+  std::string onset_source;
+  std::string onset_source_kind;
+  double onset_lag{};
   double q{};
   std::vector<std::string> components;
   std::string shared_trigger_id;

@@ -1,3 +1,57 @@
+.validate_ranked_observation_columns <- function(data_df) {
+  nm <- names(data_df)
+  max_rank <- 1L
+  rank <- 2L
+  repeat {
+    r_col <- paste0("R", rank)
+    rt_col <- paste0("rt", rank)
+    has_r <- r_col %in% nm
+    has_rt <- rt_col %in% nm
+    if (!has_r && !has_rt) {
+      break
+    }
+    if (xor(has_r, has_rt)) {
+      stop(sprintf("Ranked observations must provide paired columns '%s' and '%s'", r_col, rt_col), call. = FALSE)
+    }
+    max_rank <- rank
+    rank <- rank + 1L
+  }
+
+  rank_r <- grep("^R[0-9]+$", nm, value = TRUE)
+  if (length(rank_r) > 0L) {
+    idx_r <- suppressWarnings(as.integer(sub("^R", "", rank_r)))
+    idx_r <- idx_r[is.finite(idx_r)]
+    if (length(idx_r) > 0L) {
+      bad <- sort(unique(idx_r[idx_r > max_rank]))
+      if (length(bad) > 0L) {
+        stop(
+          "Ranked observation columns must be contiguous from R2/rt2 with no gaps. Unexpected columns detected at ranks: ",
+          paste(bad, collapse = ", "),
+          call. = FALSE
+        )
+      }
+    }
+  }
+
+  rank_rt <- grep("^rt[0-9]+$", nm, value = TRUE)
+  if (length(rank_rt) > 0L) {
+    idx_rt <- suppressWarnings(as.integer(sub("^rt", "", rank_rt)))
+    idx_rt <- idx_rt[is.finite(idx_rt)]
+    if (length(idx_rt) > 0L) {
+      bad <- sort(unique(idx_rt[idx_rt > max_rank]))
+      if (length(bad) > 0L) {
+        stop(
+          "Ranked observation columns must be contiguous from R2/rt2 with no gaps. Unexpected rt columns detected at ranks: ",
+          paste(bad, collapse = ", "),
+          call. = FALSE
+        )
+      }
+    }
+  }
+
+  list(max_rank = max_rank)
+}
+
 .likelihood_context_structure <- function(structure,
                                           data_df,
                                           prep = NULL,
@@ -15,9 +69,16 @@
   if (length(missing_cols) > 0L) {
     stop(sprintf("Data frame must include columns: %s", paste(missing_cols, collapse = ", ")), call. = FALSE)
   }
+  rank_info <- .validate_ranked_observation_columns(data_df)
   data_df$trial <- as.integer(data_df$trial)
   data_df$R <- as.character(data_df$R)
   data_df$rt <- as.numeric(data_df$rt)
+  if (rank_info$max_rank > 1L) {
+    for (rank in 2:rank_info$max_rank) {
+      data_df[[paste0("R", rank)]] <- as.character(data_df[[paste0("R", rank)]])
+      data_df[[paste0("rt", rank)]] <- as.numeric(data_df[[paste0("rt", rank)]])
+    }
+  }
   if ("component" %in% names(data_df)) {
     data_df$component <- as.character(data_df$component)
   }
@@ -65,6 +126,12 @@
   data_df$trial <- as.integer(data_df$trial)
   data_df$R <- as.character(data_df$R)
   data_df$rt <- as.numeric(data_df$rt)
+  if (rank_info$max_rank > 1L) {
+    for (rank in 2:rank_info$max_rank) {
+      data_df[[paste0("R", rank)]] <- as.character(data_df[[paste0("R", rank)]])
+      data_df[[paste0("rt", rank)]] <- as.numeric(data_df[[paste0("rt", rank)]])
+    }
+  }
   data_df$accumulator <- as.character(data_df$accumulator)
   if ("component" %in% names(data_df)) {
     data_df$component <- as.character(data_df$component)
@@ -84,6 +151,7 @@
     param_layout = param_layout,
     n_trials = n_trials,
     trial_ids = trial_ids,
+    rank_width = rank_info$max_rank,
     rel_tol = .integrate_rel_tol(),
     abs_tol = .integrate_abs_tol(),
     max_depth = getOption("uuber.integrate.max.depth", 12L)
@@ -178,6 +246,46 @@ build_likelihood_context <- function(structure,
     trial_ids = as.integer(trial_ids),
     rectangular = rectangular
   )
+}
+
+.align_param_matrix_to_layout <- function(params_mat, param_layout) {
+  if (is.null(param_layout)) {
+    return(params_mat)
+  }
+  row_trial <- param_layout$row_trial %||% param_layout$trial
+  row_acc <- param_layout$row_acc %||% param_layout$acc
+  if (is.null(row_trial) || is.null(row_acc)) {
+    return(params_mat)
+  }
+  row_trial <- as.integer(row_trial)
+  row_acc <- as.integer(row_acc)
+  if (length(row_trial) == 0L || length(row_trial) != length(row_acc)) {
+    return(params_mat)
+  }
+  target_rows <- length(row_trial)
+  if (nrow(params_mat) == target_rows) {
+    return(params_mat)
+  }
+  n_trials <- as.integer(param_layout$n_trials %||% suppressWarnings(max(row_trial, na.rm = TRUE)))
+  if (!is.finite(n_trials) || n_trials < 1L) {
+    stop("Invalid likelihood context layout: n_trials must be >= 1", call. = FALSE)
+  }
+  if (nrow(params_mat) %% n_trials != 0L) {
+    stop(
+      sprintf(
+        "Parameter matrix has %d rows, but likelihood context expects %d nested rows; cannot align rows to context layout",
+        nrow(params_mat),
+        target_rows
+      ),
+      call. = FALSE
+    )
+  }
+  n_acc <- nrow(params_mat) %/% n_trials
+  row_index <- (row_trial - 1L) * n_acc + row_acc
+  if (anyNA(row_index) || any(row_index < 1L) || any(row_index > nrow(params_mat))) {
+    stop("Parameter matrix rows cannot be aligned to likelihood context accumulator layout", call. = FALSE)
+  }
+  params_mat[row_index, , drop = FALSE]
 }
 
 .param_matrix_to_rows <- function(structure, params_mat) {
@@ -1007,11 +1115,14 @@ log_likelihood.likelihood_context <- function(likelihood_context,
   } else {
     parameters
   }
+  param_layout <- ctx$param_layout %||% NULL
   params_list <- lapply(params_list, function(pm) {
-    if (inherits(pm, "param_matrix") || is.matrix(pm)) {
-      return(pm)
+    pm_mat <- if (inherits(pm, "param_matrix") || is.matrix(pm)) {
+      pm
+    } else {
+      as.matrix(pm)
     }
-    as.matrix(pm)
+    .align_param_matrix_to_layout(pm_mat, param_layout)
   })
   data_df <- ctx$data_df
   n_trials <- ctx$n_trials %||% length(unique(data_df$trial))

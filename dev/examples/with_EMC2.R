@@ -1,7 +1,7 @@
 rm(list = ls())
 library(EMC2)
 library(AccumulatR)
-load("~/Documents/2025/AccumulatR/dev/examples/test_AccumulatR.RData")
+load("~/Documents/2025/EMC2/test_accr_3B.RData")
 
 AccumulatR_add_ctx <- function(dadm, model_list){
   nacc <- unique
@@ -26,6 +26,12 @@ names(finalize_model(model$spec)$prep$accumulators)
 
 dadm <- AccumulatR_add_ctx(dadm, model)
 context <- attr(dadm, "AccumulatR_context")
+
+values <- c(.25, .15, .35, -2.5, -2.5, -2.5, -3.5, -3.5, -3.5, -1.5)
+for(i in 1:ncol(proposals)){
+  proposals[,i] <- values[i]
+}
+
 lls <- EMC2:::calc_ll_AccR(proposals, dadm, constants = constants, designs = designs,
                     model$bound, model$transform, model$pre_transform, p_types = p_types, min_ll = log(1e-10),
                     model$trend, context)

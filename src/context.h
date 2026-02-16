@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Rcpp.h>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -13,10 +14,20 @@
 
 namespace uuber {
 
+enum OnsetKind : int {
+  ONSET_ABSOLUTE = 0,
+  ONSET_AFTER_ACCUMULATOR = 1,
+  ONSET_AFTER_POOL = 2
+};
+
 struct NativeAccumulator {
   std::string id;
   std::string dist;
   double onset{};
+  int onset_kind{ONSET_ABSOLUTE};
+  int onset_source_acc_idx{-1};
+  int onset_source_pool_idx{-1};
+  double onset_lag{0.0};
   double q{};
   std::vector<std::string> components;
   std::vector<int> component_indices;
@@ -101,6 +112,26 @@ struct ComponentMap {
   std::vector<double> base_weights;
 };
 
+struct SharedTriggerGroup {
+  std::vector<int> acc_indices;
+  int q_acc_idx{-1};
+};
+
+struct NAMapCacheKey {
+  std::string payload;
+  std::size_t hash{0};
+
+  bool operator==(const NAMapCacheKey &other) const noexcept {
+    return payload == other.payload;
+  }
+};
+
+struct NAMapCacheKeyHash {
+  std::size_t operator()(const NAMapCacheKey &key) const noexcept {
+    return key.hash;
+  }
+};
+
 struct NativeContext {
   std::vector<NativeAccumulator> accumulators;
   std::vector<NativePool> pools;
@@ -111,17 +142,20 @@ struct NativeContext {
   std::unordered_map<std::string, int> label_to_id;
   mutable std::unordered_map<std::string, PoolTemplateCacheEntry>
       pool_template_cache;
-  mutable std::unordered_map<std::string, double> na_map_cache;
+  mutable std::unordered_map<NAMapCacheKey, double, NAMapCacheKeyHash>
+      na_map_cache;
   mutable std::unordered_map<std::string, std::deque<std::string>>
       na_cache_order;
   int na_cache_limit{128};
   std::unordered_map<std::string, std::vector<int>> shared_trigger_map;
+  std::vector<SharedTriggerGroup> shared_trigger_groups;
   std::unordered_map<std::string, int> component_index;
   std::vector<ComponentContextInfo> component_info;
   std::unordered_map<std::string, std::vector<int>> outcome_index;
   std::vector<std::string> outcome_labels;
   std::vector<OutcomeContextInfo> outcome_info;
   ComponentMap components;
+  bool has_chained_onsets{false};
 };
 
 Rcpp::XPtr<NativeContext> build_native_context(Rcpp::List prep);

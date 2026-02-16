@@ -15,7 +15,7 @@ fi
 SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd -P)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)
 
-PROFILE_R_SCRIPT="${REPO_ROOT}/dev/scripts/profile.R"
+PROFILE_R_SCRIPT=${ACCUMULATR_PROFILE_R_SCRIPT:-"${REPO_ROOT}/dev/scripts/profile_workload_nested.R"}
 if [[ ! -f "$PROFILE_R_SCRIPT" ]]; then
   echo "Error: profiling workload script not found at $PROFILE_R_SCRIPT" >&2
   exit 1
@@ -47,27 +47,19 @@ target_script <- Sys.getenv("ACCUMULATR_PROFILE_R_SCRIPT", "")
 if (!nzchar(target_script)) {
   stop("ACCUMULATR_PROFILE_R_SCRIPT not set")
 }
-
-if (nzchar(start_file) && nzchar(end_file)) {
-  if (requireNamespace("EMC2", quietly = TRUE)) {
-    try(
-      trace(
-        "calc_ll_AccR",
-        where = asNamespace("EMC2"),
-        tracer = substitute({ writeLines("start", FILE) }, list(FILE = start_file)),
-        exit = substitute({ writeLines("end", FILE) }, list(FILE = end_file)),
-        print = FALSE
-      ),
-      silent = TRUE
-    )
-  }
+if (nzchar(start_file)) {
+  writeLines("start", start_file)
 }
 
 source(target_script)
+
+if (nzchar(end_file)) {
+  writeLines("end", end_file)
+}
 EOF
 
 SAMPLE_PID=""
-echo "Launching R profiling workload (profile.R)..."
+echo "Launching R profiling workload (${PROFILE_R_SCRIPT})..."
 ACCUMULATR_PROFILE_START_FILE="$PROFILE_START_FILE" \
 ACCUMULATR_PROFILE_END_FILE="$PROFILE_END_FILE" \
 ACCUMULATR_PROFILE_R_SCRIPT="$PROFILE_R_SCRIPT" \

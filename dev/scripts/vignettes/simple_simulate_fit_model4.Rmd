@@ -1,0 +1,125 @@
+---
+title: "Simulate and Fit a Simple Race Model"
+output: html_document
+---
+
+This short vignette shows how to simulate data and compute likelihoods for a simple race model, then estimate parameters with `optim()`. The example is model 4 from `dev/examples/new_API.R`: two accumulators feed response `R1`, and one accumulator feeds response `R2`.
+
+```{r}
+library(AccumulatR)
+```
+
+**Define the model**
+We use three lognormal accumulators. `R1_A` and `R1_B` are pooled into response `R1`. `R2` is its own response.
+
+```{r}
+model_spec <- race_spec() |>
+  add_accumulator("R1_A", "lognormal") |>
+  add_accumulator("R1_B", "lognormal") |>
+  add_accumulator("R2", "lognormal") |>
+  add_pool("R1", c("R1_A", "R1_B")) |>
+  add_outcome("R1", "R1") |>
+  add_outcome("R2", "R2")
+
+structure <- finalize_model(model_spec)
+
+true_params <- c(
+  R1_A.meanlog = log(0.35),
+  R1_A.sdlog = 0.15,
+  R1_B.meanlog = log(0.35),
+  R1_B.sdlog = 0.20,
+  R2.meanlog = log(0.30),
+  R2.sdlog = 0.18
+)
+```
+
+**Simulate data**
+We generate a small dataset of response times and choices.
+
+```{r}
+set.seed(123456)
+
+n_trials <- 500
+params_df <- build_param_matrix(model_spec, true_params, n_trials = n_trials)
+
+sim <- simulate(structure, params_df)
+
+data_df <- data.frame(
+  trial = sim$trial,
+  R = factor(sim$R),
+  rt = sim$rt,
+  stringsAsFactors = FALSE
+)
+
+table(data_df$R)
+```
+
+**Evaluate the likelihood**
+We build a likelihood context and evaluate the log-likelihood for the true parameters.
+
+```{r}
+ctx <- build_likelihood_context(structure, data_df)
+
+params_df_true <- build_param_matrix(
+  model_spec,
+  true_params,
+  n_trials = max(data_df$trial),
+  layout = ctx$param_layout
+)
+
+ll_true <- as.numeric(log_likelihood(ctx, params_df_true))
+ll_true
+```
+
+We can compare it to a clearly wrong parameter set.
+
+```{r}
+wrong_params <- true_params
+wrong_params["R2.meanlog"] <- log(0.45)
+
+params_df_wrong <- build_param_matrix(
+  model_spec,
+  wrong_params,
+  n_trials = max(data_df$trial),
+  layout = ctx$param_layout
+)
+
+ll_wrong <- as.numeric(log_likelihood(ctx, params_df_wrong))
+ll_wrong
+```
+
+**Estimate parameters with `optim()`**
+We will estimate six parameters: meanlog and sdlog for each accumulator. To keep `sdlog` positive, we optimize its log.
+
+```{r}
+neg_loglik <- function(theta) {
+  # Could also bound in optim, but here we exp to ensure positive support for sd parameters
+  theta[c("R1_A.sdlog", "R1_B.sdlog", "R2.sdlog")] <- exp(theta[c("R1_A.sdlog", "R1_B.sdlog", "R2.sdlog")])
+  params_df <- build_param_matrix(
+    model_spec,
+    theta,
+    n_trials = max(data_df$trial),
+    layout = ctx$param_layout
+  )
+  ll <- log_likelihood(ctx, params_df)
+  -as.numeric(ll)
+}
+
+start <- c(
+  R1_A.meanlog = log(0.25),
+  R1_A.sdlog = log(0.12),
+  R1_B.meanlog = log(0.25),
+  R1_B.sdlog = log(0.12),
+  R2.meanlog = log(0.35),
+  R2.sdlog = log(0.12)
+)
+
+fit <- optim(start, neg_loglik, method = "Nelder-Mead")
+fit_params <- fit$par
+fit_params[c("R1_A.sdlog", "R1_B.sdlog", "R2.sdlog")] <- exp(fit_params[c("R1_A.sdlog", "R1_B.sdlog", "R2.sdlog")])
+
+data.frame(true = true_params, recovered = fit_params, miss = abs(true_params - fit_params))
+
+```
+
+That is the most basic pipeline: define a model, simulate data, evaluate the likelihood, and fit parameters with `optim()`.

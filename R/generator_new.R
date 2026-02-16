@@ -25,6 +25,30 @@
   comp_label %in% as.character(comps)
 }
 
+.component_readout_count <- function(prep, component) {
+  obs <- prep$observation %||% list()
+  max_readout <- obs$n_outcomes %||% 1L
+  max_readout <- as.integer(max_readout)
+  if (is.na(max_readout) || max_readout < 1L) {
+    max_readout <- 1L
+  }
+  base_readout <- obs$global_n_outcomes %||% max_readout
+  base_readout <- as.integer(base_readout)
+  if (is.na(base_readout) || base_readout < 1L) {
+    base_readout <- 1L
+  }
+  comp_label <- component %||% "__default__"
+  overrides <- obs$component_n_outcomes %||% list()
+  comp_override <- overrides[[comp_label]] %||% NULL
+  if (!is.null(comp_override)) {
+    base_readout <- as.integer(comp_override[[1]])
+    if (is.na(base_readout) || base_readout < 1L) {
+      base_readout <- 1L
+    }
+  }
+  min(base_readout, max_readout)
+}
+
 # ---- Sampling primitives ------------------------------------------------------
 
 .shared_trigger_fail <- function(ctx, trigger_id) {
@@ -45,7 +69,66 @@
   fail
 }
 
-.sample_accumulator <- function(acc_def, ctx) {
+.resolve_effective_onset <- function(ctx, acc_id, acc_def) {
+  cached <- ctx$onset_cache[[acc_id]]
+  if (!is.null(cached)) {
+    return(as.numeric(cached[[1]]))
+  }
+  if (isTRUE(ctx$onset_inflight[[acc_id]])) {
+    stop(sprintf("Chained onset cycle encountered while resolving '%s'", acc_id))
+  }
+  ctx$onset_inflight[[acc_id]] <- TRUE
+  on.exit(rm(list = acc_id, envir = ctx$onset_inflight), add = TRUE)
+
+  spec <- acc_def$onset_spec %||% list(kind = "absolute", value = acc_def$onset %||% 0)
+  kind <- spec$kind %||% "absolute"
+  onset <- NA_real_
+
+  if (identical(kind, "absolute")) {
+    onset <- as.numeric(spec$value %||% acc_def$onset %||% 0)[1]
+  } else if (identical(kind, "after")) {
+    source <- spec$source %||% NULL
+    source_kind <- spec$source_kind %||% NULL
+    lag <- as.numeric(spec$lag %||% 0)[1]
+    if (!is.character(source) || length(source) != 1L || !nzchar(source)) {
+      stop(sprintf("Accumulator '%s' has invalid chained onset source", acc_id))
+    }
+    if (!is.finite(lag) || lag < 0) {
+      stop(sprintf("Accumulator '%s' has invalid chained onset lag", acc_id))
+    }
+
+    source_time <- if (identical(source_kind, "pool")) {
+      .resolve_pool(ctx, source)$time
+    } else if (identical(source_kind, "accumulator")) {
+      .get_acc_time(ctx, source)
+    } else if (!is.null(ctx$model[["pools"]][[source]])) {
+      .resolve_pool(ctx, source)$time
+    } else if (!is.null(ctx$model[["accumulators"]][[source]])) {
+      .get_acc_time(ctx, source)
+    } else {
+      stop(sprintf("Accumulator '%s' references unknown chained onset source '%s'", acc_id, source))
+    }
+
+    onset <- if (is.finite(source_time)) source_time + lag else Inf
+  } else {
+    stop(sprintf("Accumulator '%s' has unsupported onset kind '%s'", acc_id, kind))
+  }
+
+  if (is.na(onset)) {
+    stop(sprintf("Accumulator '%s' produced NA onset", acc_id))
+  }
+  if (!is.finite(onset) && !is.infinite(onset)) {
+    stop(sprintf("Accumulator '%s' produced non-finite onset", acc_id))
+  }
+  ctx$onset_cache[[acc_id]] <- onset
+  onset
+}
+
+.sample_accumulator <- function(acc_id, acc_def, ctx) {
+  onset <- .resolve_effective_onset(ctx, acc_id, acc_def)
+  if (!is.finite(onset)) {
+    return(Inf)
+  }
   shared_id <- acc_def$shared_trigger_id %||% NULL
   if (!is.null(shared_id) && !is.na(shared_id) && shared_id != "") {
     if (.shared_trigger_fail(ctx, shared_id)) {
@@ -58,7 +141,7 @@
   reg <- dist_registry(acc_def$dist)
   if (is.null(reg) || is.null(reg$r)) stop(sprintf("No sampler registered for distribution '%s'", acc_def$dist))
   draw <- reg$r(1L, acc_def$params)
-  acc_def$onset + as.numeric(draw[[1]])
+  onset + as.numeric(draw[[1]])
 }
 
 # ---- Expression evaluation ----------------------------------------------------
@@ -66,10 +149,14 @@
 .get_acc_time <- function(ctx, acc_id) {
   acc_defs <- ctx$model[["accumulators"]]
   if (!acc_id %in% names(acc_defs)) stop(sprintf("Unknown accumulator '%s'", acc_id))
+  if (!.acc_active_in_component(acc_defs[[acc_id]], ctx$component)) {
+    ctx$acc_times[[acc_id]] <- Inf
+    return(Inf)
+  }
   acc_def <- ctx$trial_accs[[acc_id]] %||% acc_defs[[acc_id]]
   if (is.null(acc_def)) stop(sprintf("Accumulator '%s' is not available in this trial context", acc_id))
   if (is.null(ctx$acc_times[[acc_id]])) {
-    ctx$acc_times[[acc_id]] <- .sample_accumulator(acc_def, ctx)
+    ctx$acc_times[[acc_id]] <- .sample_accumulator(acc_id, acc_def, ctx)
   }
   ctx$acc_times[[acc_id]]
 }
@@ -475,7 +562,8 @@
 
 .simulate_trial <- function(prep, component, keep_detail = FALSE,
                             trial_accs = NULL,
-                            trial_shared_triggers = NULL) {
+                            trial_shared_triggers = NULL,
+                            n_outcomes = NULL) {
   comp_info <- prep[["components"]]
   component_attr <- comp_info$attrs[[component]]
   if (is.null(component_attr)) component_attr <- list()
@@ -483,6 +571,8 @@
     model = prep,
     component = component,
     acc_times = new.env(parent = emptyenv()),
+    onset_cache = new.env(parent = emptyenv()),
+    onset_inflight = new.env(parent = emptyenv()),
     pool_cache = new.env(parent = emptyenv()),
     event_cache = new.env(parent = emptyenv()),
     trial_accs = trial_accs %||% list(),
@@ -491,6 +581,14 @@
   )
 
   outcomes <- .evaluate_outcomes(ctx)
+  if (is.null(n_outcomes)) {
+    n_outcomes <- .component_readout_count(prep, component)
+  } else {
+    n_outcomes <- as.integer(n_outcomes)
+    if (is.na(n_outcomes) || n_outcomes < 1L) {
+      n_outcomes <- 1L
+    }
+  }
   outcome_labels <- names(outcomes)
   cand_labels <- character(0)
   cand_times <- numeric(0)
@@ -508,9 +606,49 @@
     cand_options[[length(cand_options) + 1L]] <- entry$options
   }
 
-  if (length(cand_times) == 0) {
-    result <- list(outcome = NA_character_, rt = NA_real_, detail = NULL)
+  if (length(cand_times) == 0L) {
+    result <- list(
+      outcome = NA_character_,
+      rt = NA_real_,
+      outcomes = rep(NA_character_, n_outcomes),
+      rts = rep(NA_real_, n_outcomes),
+      detail = NULL
+    )
     return(result)
+  }
+
+  if (n_outcomes > 1L) {
+    order_idx <- order(cand_times, seq_along(cand_times))
+    keep <- min(length(order_idx), n_outcomes)
+    ranked_labels <- rep(NA_character_, n_outcomes)
+    ranked_times <- rep(NA_real_, n_outcomes)
+    ranked_labels[seq_len(keep)] <- cand_labels[order_idx[seq_len(keep)]]
+    ranked_times[seq_len(keep)] <- cand_times[order_idx[seq_len(keep)]]
+
+    detail <- NULL
+    if (isTRUE(keep_detail)) {
+      detail <- list(
+        component = component,
+        acc_times = as.list(ctx$acc_times),
+        pool_times = as.list(ctx$pool_cache),
+        event_times = as.list(ctx$event_cache),
+        outcome_candidates = data.frame(label = cand_labels, time = cand_times, stringsAsFactors = FALSE),
+        ranked_outcomes = data.frame(
+          rank = seq_len(n_outcomes),
+          label = ranked_labels,
+          time = ranked_times,
+          stringsAsFactors = FALSE
+        )
+      )
+    }
+
+    return(list(
+      outcome = ranked_labels[[1]],
+      rt = ranked_times[[1]],
+      outcomes = ranked_labels,
+      rts = ranked_times,
+      detail = detail
+    ))
   }
 
   tmin <- min(cand_times)
@@ -572,7 +710,13 @@
     )
   }
 
-  list(outcome = chosen_label, rt = chosen_time, detail = detail)
+  list(
+    outcome = chosen_label,
+    rt = chosen_time,
+    outcomes = chosen_label,
+    rts = chosen_time,
+    detail = detail
+  )
 }
 
 # ---- Simulation helpers ------------------------------------------------------
@@ -677,7 +821,9 @@
 #'   rows aligned to `params_df`, or a `trial_df` with `component` to infer active
 #'   accumulators. `"auto"` chooses based on row counts and component structure.
 #' @param ... Unused; for S3 compatibility
-#' @return Data frame of simulated outcomes/RTs (with optional detail)
+#' @return Data frame of simulated outcomes/RTs (with optional detail). When
+#'   `race_spec(n_outcomes = k)` has `k > 1`, additional ordered readout columns
+#'   are appended as `R2`/`rt2`, `R3`/`rt3`, ..., `Rk`/`rtk`.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal",
@@ -881,8 +1027,13 @@ simulate.model_structure <- function(structure,
 
   if (!is.null(seed)) set.seed(seed)
   trial_ids <- seq_len(n_trials)
-  outcomes <- character(length(trial_ids))
-  rts <- numeric(length(trial_ids))
+  n_readout <- prep$observation$n_outcomes %||% 1L
+  n_readout <- as.integer(n_readout)
+  if (is.na(n_readout) || n_readout < 1L) {
+    n_readout <- 1L
+  }
+  outcomes <- matrix(NA_character_, nrow = length(trial_ids), ncol = n_readout)
+  rts <- matrix(NA_real_, nrow = length(trial_ids), ncol = n_readout)
   comp_record <- rep(NA_character_, length(trial_ids))
   details <- if (keep_detail) vector("list", length(trial_ids)) else NULL
 
@@ -930,15 +1081,42 @@ simulate.model_structure <- function(structure,
       dist_params <- dist_param_names(acc_defs[[acc_id]]$dist)
       dist_list <- setNames(as.list(row_vals[p_cols][seq_along(dist_params)]), dist_params)
       dist_list$t0 <- row_vals[["t0"]]
-      onset_val <- acc_defs[[acc_id]]$onset %||% 0
+      onset_override <- NA_real_
       if (!is.null(onset_mat)) {
-        onset_override <- onset_mat[i, acc_idx_map[[acc_id]]]
-        if (is.finite(onset_override)) onset_val <- onset_override
+        onset_override <- as.numeric(onset_mat[i, acc_idx_map[[acc_id]]])
+      }
+      onset_spec <- acc_defs[[acc_id]]$onset_spec %||% list(
+        kind = "absolute",
+        value = acc_defs[[acc_id]]$onset %||% 0
+      )
+      onset_kind <- onset_spec$kind %||% "absolute"
+      onset_val <- acc_defs[[acc_id]]$onset %||% 0
+      if (identical(onset_kind, "absolute")) {
+        onset_val <- as.numeric(onset_spec$value %||% onset_val)[1]
+        if (is.finite(onset_override)) {
+          onset_val <- onset_override
+        }
+        onset_spec <- list(kind = "absolute", value = onset_val)
+      } else if (identical(onset_kind, "after")) {
+        lag_val <- as.numeric(onset_spec$lag %||% 0)[1]
+        if (is.finite(onset_override)) {
+          lag_val <- lag_val + onset_override
+        }
+        onset_spec <- list(
+          kind = "after",
+          source = onset_spec$source,
+          source_kind = onset_spec$source_kind,
+          lag = lag_val
+        )
+        onset_val <- 0
+      } else {
+        stop(sprintf("Unsupported onset kind '%s' for accumulator '%s'", onset_kind, acc_id))
       }
       acc_entry <- list(
         dist = acc_defs[[acc_id]]$dist,
         params = dist_list,
         onset = onset_val,
+        onset_spec = onset_spec,
         q = row_vals[["q"]] %||% 0,
         shared_trigger_id = acc_defs[[acc_id]]$shared_trigger_id %||% NA_character_,
         components = acc_defs[[acc_id]]$components %||% character(0)
@@ -957,19 +1135,30 @@ simulate.model_structure <- function(structure,
       chosen_component,
       keep_detail = keep_detail,
       trial_accs = trial_accs,
-      trial_shared_triggers = shared_map
+      trial_shared_triggers = shared_map,
+      n_outcomes = .component_readout_count(prep, chosen_component)
     )
-    outcomes[[i]] <- result$outcome
-    rts[[i]] <- result$rt
+    out_vals <- result$outcomes %||% result$outcome
+    rt_vals <- result$rts %||% result$rt
+    if (length(out_vals) > n_readout) out_vals <- out_vals[seq_len(n_readout)]
+    if (length(rt_vals) > n_readout) rt_vals <- rt_vals[seq_len(n_readout)]
+    if (length(out_vals) > 0L) outcomes[i, seq_along(out_vals)] <- as.character(out_vals)
+    if (length(rt_vals) > 0L) rts[i, seq_along(rt_vals)] <- as.numeric(rt_vals)
     if (keep_detail) details[[i]] <- result$detail
   }
 
   out_df <- data.frame(
     trial = trial_ids,
-    R = outcomes,
-    rt = rts,
+    R = outcomes[, 1L],
+    rt = rts[, 1L],
     stringsAsFactors = FALSE
   )
+  if (n_readout > 1L) {
+    for (rank_idx in 2:n_readout) {
+      out_df[[paste0("R", rank_idx)]] <- outcomes[, rank_idx]
+      out_df[[paste0("rt", rank_idx)]] <- rts[, rank_idx]
+    }
+  }
   keep_component <- keep_component %||% if (identical(mix_mode, "sample")) FALSE else TRUE
   if (keep_component && (length(comp_ids) > 1L)) out_df$component <- comp_record
   if (keep_detail) attr(out_df, "details") <- details

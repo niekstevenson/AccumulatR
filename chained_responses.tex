@@ -1,0 +1,200 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage[hidelinks]{hyperref}
+
+\title{Mathematical Overview: Multiple Outcomes and Chained Races}
+\author{AccumulatR notes}
+\date{\today}
+
+\newcommand{\Prob}{\mathbb{P}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\1}{\mathbf{1}}
+
+\begin{document}
+\maketitle
+
+\section{Goal}
+This note summarizes what must be added mathematically to extend the current race framework to:
+\begin{enumerate}
+  \item multiple outcomes per trial (generation and likelihood), and
+  \item chained races where later races start when earlier races finish, with possibly unobserved intermediate outcomes.
+\end{enumerate}
+
+\section{Current single-response race model}
+\subsection{Accumulator-level timing}
+For accumulator $i$, define a defective finishing time
+\[
+T_i=
+\begin{cases}
+o_i+t0_i+X_i, & \text{with probability } 1-q_i,\\
+\infty, & \text{with probability } q_i,
+\end{cases}
+\]
+where $X_i$ has base density/CDF $(g_i,G_i)$ on $(0,\infty)$.
+
+Hence
+\[
+f_i(t)=(1-q_i)\,g_i\!\left(t-o_i-t0_i\right)\1\{t\ge o_i+t0_i\},
+\]
+\[
+S_i(t)=q_i+(1-q_i)\left[1-G_i\!\left(t-o_i-t0_i\right)\right].
+\]
+
+\subsection{Expression-level events}
+Let $E_j$ denote expression events built from accumulators/pools/guards.
+
+\paragraph{OR / first-of}
+If $E=\bigvee_{j=1}^m E_j$ (first completion among independent branches),
+\[
+f_E(t)=\sum_{j=1}^m f_{E_j}(t)\prod_{k\ne j}S_{E_k}(t),\qquad
+S_E(t)=\prod_{j=1}^m S_{E_j}(t).
+\]
+
+\paragraph{AND / all-of}
+If $E=\bigwedge_{j=1}^m E_j$ (all finished by $t$),
+\[
+F_E(t)=\prod_{j=1}^m F_{E_j}(t),\qquad
+f_E(t)=\sum_{j=1}^m f_{E_j}(t)\prod_{k\ne j}F_{E_k}(t).
+\]
+
+\paragraph{Guard}
+For $E=\text{guard}(\text{blocker}=B,\text{reference}=R)$,
+\[
+f_E(t)=f_R(t)\,S_B^{\mathrm{eff}}(t),\qquad
+F_E(t)=\int_0^t f_R(u)\,S_B^{\mathrm{eff}}(u)\,du.
+\]
+
+\paragraph{$k$-of-$n$ pool}
+If $N(t)=\sum_{i=1}^n \1\{T_i\le t\}$, then for the $k$-th order event:
+\[
+S_{k:n}(t)=\Prob\!\left(N(t)<k\right),\qquad
+f_{k:n}(t)=\frac{d}{dt}\left[1-S_{k:n}(t)\right].
+\]
+
+\subsection{Current single observed outcome}
+With observed $(R=r,\ rt=t)$ and competitor set $C(r)$:
+\[
+p(r,t)=d_r(t),
+\quad
+d_r(t)=f_{\nu(r)}(t)\prod_{c\in C(r)}S_{\nu(c)}(t).
+\]
+With component mixture $m$ and weights $w_m$:
+\[
+p(r,t)=\sum_m w_m\,d_{r,m}(t).
+\]
+This is the current one-event-per-trial target.
+
+\section{A. Multiple outcomes}
+\subsection{A1. Multiple labels for one latent event}
+If one latent event $e$ is mapped to a vector label $y$ via map $h$:
+\[
+p(Y=y,\ t)=\sum_{e:\ h(e)=y} d_e(t).
+\]
+This is a latent-label summation only (no extra time convolution).
+
+\subsection{A2. Multiple observed event outcomes within trial}
+Suppose trial observation is an ordered sequence
+\[
+(r_1,t_1),\ldots,(r_K,t_K),\qquad 0<t_1<\cdots<t_K.
+\]
+Let $\mathcal H_{k-1}$ be the history/forced-state after the first $k-1$ events.
+Define conditional event hazard term:
+\[
+\lambda_{r_k}(t_k\mid \mathcal H_{k-1})
+=
+f_{r_k}(t_k\mid \mathcal H_{k-1})
+\prod_{c\in C_{r_k}(\mathcal H_{k-1})}S_c(t_k\mid \mathcal H_{k-1}).
+\]
+Then
+\[
+p(r_{1:K},t_{1:K})
+=
+\1\{t_1<\cdots<t_K\}
+\prod_{k=1}^K \lambda_{r_k}(t_k\mid \mathcal H_{k-1}).
+\]
+
+If times are missing/latent:
+\[
+p(r_{1:K})
+=
+\int_{0<t_1<\cdots<t_K<\infty}
+\prod_{k=1}^K \lambda_{r_k}(t_k\mid \mathcal H_{k-1})\,dt_{1:K}.
+\]
+If intermediate outcomes are latent too, also sum over latent labels.
+
+\paragraph{Key new object}
+The core new integral for multi-outcome likelihood is an ordered-simplex integral over latent event times.
+
+\section{B. Chained races}
+\subsection{Two-stage chain}
+Let stage 1 output $(Z_1,T_1)$. Stage 2 starts at
+\[
+B_2=T_1+\delta(Z_1),
+\]
+and has relative finish $U_2$, absolute finish $T_2=B_2+U_2$.
+
+If both stages observed:
+\[
+p(z_1,t_1,z_2,t_2)
+=
+d^{(1)}_{z_1}(t_1)\,
+d^{(2)}_{z_2\mid z_1}\!\left(t_2-t_1-\delta(z_1)\right)
+\1\{t_2>t_1+\delta(z_1)\}.
+\]
+
+If stage 1 is unobserved:
+\[
+p(z_2,t_2)
+=
+\sum_{z_1}\int_0^{t_2-\delta(z_1)}
+d^{(1)}_{z_1}(u)\,
+d^{(2)}_{z_2\mid z_1}\!\left(t_2-u-\delta(z_1)\right)\,du.
+\]
+This is a sum of convolutions over hidden stage-1 time.
+
+\subsection{Many chained stages}
+Use forward recursion (semi-Markov style):
+\[
+\alpha_s(z,t)
+=
+\sum_{z'}\int_0^t
+\alpha_{s-1}(z',u)\,k_s(z,t\mid z',u)\,du,
+\]
+where $k_s$ is the stage-$s$ conditional race kernel.
+
+\section{Likelihood framework placement}
+Your low-level event mathematics can remain mostly unchanged. The main extension is at trial likelihood composition:
+\begin{itemize}
+  \item current: one $(R,rt)$ contribution per trial;
+  \item extended: event-sequence contribution, with product form when fully observed, and forward integral/sum recursion when partially observed.
+\end{itemize}
+
+\section{Computational implications}
+\begin{center}
+\begin{tabularx}{\textwidth}{@{}lXX@{}}
+\toprule
+Case & New math cost & Efficient strategy \\
+\midrule
+All event times observed & Mostly repeated densities/survivals & cache node evals by state/time \\
+Hidden event times & ordered simplex integrals & forward recursion + 1D quadrature \\
+Hidden chained stage(s) & convolutions & adaptive 1D quadrature or FFT on grid \\
+Many latent branches & large sums of tiny terms & log-sum-exp accumulation \\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\paragraph{Practical recommendation}
+For small/moderate latent dimension, adaptive Gauss-Kronrod recursion is natural. For repeated convolutions on fixed grids, FFT methods can reduce cost from $O(N^2)$ to $O(N\log N)$ per convolution.
+
+\section{Takeaway}
+Mathematically, both requested extensions require replacing the single-event trial target with a \emph{path probability} over event histories:
+\[
+\text{(products of conditional hazards)} \times \text{(integrals over latent times)} \times \text{(sums over latent outcomes)}.
+\]
+Your current event/pool/guard primitives are already close to what this requires; the major change is trial-level composition and inference recursion.
+
+\end{document}

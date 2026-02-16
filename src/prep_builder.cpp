@@ -120,6 +120,42 @@ NativePrepProto build_prep_proto(const Rcpp::List &prep) {
       if (acc.containsElementNamed("onset") && !Rf_isNull(acc["onset"])) {
         acc_proto.onset = Rcpp::as<double>(acc["onset"]);
       }
+      acc_proto.onset_kind = ONSET_ABSOLUTE;
+      acc_proto.onset_lag = 0.0;
+      if (acc.containsElementNamed("onset_spec") && !Rf_isNull(acc["onset_spec"])) {
+        Rcpp::List onset_spec(acc["onset_spec"]);
+        std::string onset_kind = onset_spec.containsElementNamed("kind")
+                                     ? extract_string(onset_spec["kind"])
+                                     : std::string("absolute");
+        if (onset_kind == "after") {
+          std::string source = onset_spec.containsElementNamed("source")
+                                   ? extract_string(onset_spec["source"])
+                                   : std::string();
+          std::string source_kind =
+              onset_spec.containsElementNamed("source_kind")
+                  ? extract_string(onset_spec["source_kind"])
+                  : std::string();
+          double lag = onset_spec.containsElementNamed("lag") &&
+                               !Rf_isNull(onset_spec["lag"])
+                           ? Rcpp::as<double>(onset_spec["lag"])
+                           : 0.0;
+          if (source_kind == "accumulator") {
+            acc_proto.onset_kind = ONSET_AFTER_ACCUMULATOR;
+          } else if (source_kind == "pool") {
+            acc_proto.onset_kind = ONSET_AFTER_POOL;
+          } else {
+            acc_proto.onset_kind = ONSET_ABSOLUTE;
+          }
+          acc_proto.onset_source = source;
+          acc_proto.onset_source_kind = source_kind;
+          acc_proto.onset_lag = lag;
+        } else {
+          acc_proto.onset_kind = ONSET_ABSOLUTE;
+          acc_proto.onset_source.clear();
+          acc_proto.onset_source_kind.clear();
+          acc_proto.onset_lag = 0.0;
+        }
+      }
       if (acc.containsElementNamed("q") && !Rf_isNull(acc["q"])) {
         acc_proto.q = Rcpp::as<double>(acc["q"]);
       }
@@ -234,6 +270,10 @@ build_context_from_proto(const NativePrepProto &proto) {
     acc.id = acc_proto.id;
     acc.dist = acc_proto.dist;
     acc.onset = acc_proto.onset;
+    acc.onset_kind = acc_proto.onset_kind;
+    acc.onset_lag = acc_proto.onset_lag;
+    acc.onset_source_acc_idx = -1;
+    acc.onset_source_pool_idx = -1;
     acc.q = clamp_probability(acc_proto.q);
     acc.components = acc_proto.components;
     acc.shared_trigger_id = acc_proto.shared_trigger_id;
@@ -256,6 +296,16 @@ build_context_from_proto(const NativePrepProto &proto) {
           static_cast<int>(i));
     }
   }
+  ctx->shared_trigger_groups.clear();
+  ctx->shared_trigger_groups.reserve(ctx->shared_trigger_map.size());
+  for (const auto &entry : ctx->shared_trigger_map) {
+    SharedTriggerGroup group;
+    group.acc_indices = entry.second;
+    if (!group.acc_indices.empty()) {
+      group.q_acc_idx = group.acc_indices.front();
+    }
+    ctx->shared_trigger_groups.push_back(std::move(group));
+  }
 
   ctx->pools.reserve(proto.pools.size());
   for (const auto &pool_proto : proto.pools) {
@@ -269,6 +319,43 @@ build_context_from_proto(const NativePrepProto &proto) {
     if (!ctx->pools[i].id.empty()) {
       ctx->pool_index[ctx->pools[i].id] = static_cast<int>(i);
     }
+  }
+
+  for (std::size_t i = 0; i < ctx->accumulators.size(); ++i) {
+    NativeAccumulator &acc = ctx->accumulators[i];
+    if (i >= proto.accumulators.size()) {
+      continue;
+    }
+    const ProtoAccumulator &acc_proto = proto.accumulators[i];
+    if (acc.onset_kind == ONSET_ABSOLUTE) {
+      continue;
+    }
+    if (acc_proto.onset_source.empty()) {
+      Rcpp::stop("native_context_build: accumulator '%s' has chained onset with empty source",
+                 acc.id.c_str());
+    }
+    if (acc.onset_kind == ONSET_AFTER_ACCUMULATOR) {
+      auto it = ctx->accumulator_index.find(acc_proto.onset_source);
+      if (it == ctx->accumulator_index.end()) {
+        Rcpp::stop("native_context_build: accumulator '%s' references unknown onset accumulator '%s'",
+                   acc.id.c_str(), acc_proto.onset_source.c_str());
+      }
+      acc.onset_source_acc_idx = it->second;
+      ctx->has_chained_onsets = true;
+      continue;
+    }
+    if (acc.onset_kind == ONSET_AFTER_POOL) {
+      auto it = ctx->pool_index.find(acc_proto.onset_source);
+      if (it == ctx->pool_index.end()) {
+        Rcpp::stop("native_context_build: accumulator '%s' references unknown onset pool '%s'",
+                   acc.id.c_str(), acc_proto.onset_source.c_str());
+      }
+      acc.onset_source_pool_idx = it->second;
+      ctx->has_chained_onsets = true;
+      continue;
+    }
+    Rcpp::stop("native_context_build: accumulator '%s' has unsupported onset kind",
+               acc.id.c_str());
   }
 
   auto resolve_label_ref = [&](const std::string &label) -> LabelRef {
@@ -314,6 +401,12 @@ build_context_from_proto(const NativePrepProto &proto) {
     node.source_ref = resolve_label_ref(node.source);
     node.args = node_proto.args;
     node.source_ids = node_proto.source_ids;
+    if (!node.source_ids.empty()) {
+      std::sort(node.source_ids.begin(), node.source_ids.end());
+      node.source_ids.erase(
+          std::unique(node.source_ids.begin(), node.source_ids.end()),
+          node.source_ids.end());
+    }
     node.reference_id = node_proto.reference_id;
     node.blocker_id = node_proto.blocker_id;
 

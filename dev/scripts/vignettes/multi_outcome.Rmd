@@ -1,0 +1,127 @@
+---
+title: "Simulate and Fit a Multi-Outcome Race Model"
+output: html_document
+---
+
+This short vignette mirrors the simple fitting walkthrough, but uses ranked multi-outcome observations (`R/rt`, `R2/rt2`). The model is a two-accumulator race with `race_spec(n_outcomes = 2)`, and the fit uses `optim()` for direct parameter recovery.
+
+```{r}
+library(AccumulatR)
+```
+
+**Define the model**
+We use two lognormal accumulators with direct outcomes `A` and `B`. With `n_outcomes = 2`, each trial records the first finisher and the second finisher.
+
+```{r}
+model_spec <- race_spec(n_outcomes = 2L) |>
+  add_accumulator("A", "lognormal") |>
+  add_accumulator("B", "lognormal") |>
+  add_outcome("A", "A") |>
+  add_outcome("B", "B")
+
+structure <- finalize_model(model_spec)
+
+true_params <- c(
+  A.meanlog = log(0.30),
+  A.sdlog = 0.18,
+  B.meanlog = log(0.38),
+  B.sdlog = 0.22
+)
+```
+
+**Simulate data**
+We generate ranked observations and keep `R/rt` plus `R2/rt2`.
+
+```{r}
+set.seed(123456)
+
+n_trials <- 500
+params_df <- build_param_matrix(model_spec, true_params, n_trials = n_trials)
+
+sim <- simulate(structure, params_df)
+
+data_df <- data.frame(
+  trial = sim$trial,
+  R = factor(sim$R),
+  rt = sim$rt,
+  R2 = factor(sim$R2),
+  rt2 = sim$rt2,
+  stringsAsFactors = FALSE
+)
+
+table(data_df$R, data_df$R2)
+summary(data_df$rt2 - data_df$rt)
+```
+
+**Evaluate the likelihood**
+Build a likelihood context and evaluate the ranked log-likelihood at the true parameters.
+
+```{r}
+ctx <- build_likelihood_context(structure, data_df)
+
+params_df_true <- build_param_matrix(
+  model_spec,
+  true_params,
+  n_trials = max(data_df$trial),
+  layout = ctx$param_layout
+)
+
+ll_true <- as.numeric(log_likelihood(ctx, params_df_true))
+ll_true
+```
+
+Compare with an intentionally wrong parameter set.
+
+```{r}
+wrong_params <- true_params
+wrong_params["B.meanlog"] <- log(0.55)
+
+params_df_wrong <- build_param_matrix(
+  model_spec,
+  wrong_params,
+  n_trials = max(data_df$trial),
+  layout = ctx$param_layout
+)
+
+ll_wrong <- as.numeric(log_likelihood(ctx, params_df_wrong))
+ll_wrong
+```
+
+**Estimate parameters with `optim()`**
+We estimate `A.meanlog`, `A.sdlog`, `B.meanlog`, and `B.sdlog`. As in the simple vignette, we optimize log-`sdlog` and exponentiate inside the objective.
+
+```{r}
+neg_loglik <- function(theta) {
+  # optimize on unconstrained scale for sdlog
+  theta[c("A.sdlog", "B.sdlog")] <- exp(theta[c("A.sdlog", "B.sdlog")])
+  params_df <- build_param_matrix(
+    model_spec,
+    theta,
+    n_trials = max(data_df$trial),
+    layout = ctx$param_layout
+  )
+  ll <- log_likelihood(ctx, params_df)
+  -as.numeric(ll)
+}
+
+start <- c(
+  A.meanlog = log(0.24),
+  A.sdlog = log(0.12),
+  B.meanlog = log(0.48),
+  B.sdlog = log(0.12)
+)
+
+fit <- optim(start, neg_loglik, method = "Nelder-Mead")
+
+fit_params <- fit$par
+fit_params[c("A.sdlog", "B.sdlog")] <- exp(fit_params[c("A.sdlog", "B.sdlog")])
+
+data.frame(
+  true = true_params,
+  recovered = fit_params,
+  miss = abs(true_params - fit_params)
+)
+```
+
+This is the same basic pipeline as the single-outcome example, but now fitting the ranked multi-outcome likelihood directly.
+

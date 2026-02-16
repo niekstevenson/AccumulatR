@@ -7,7 +7,7 @@ namespace uuber {
 namespace {
 
 constexpr std::uint32_t kPrepMagic = 0x55425052; // 'UBPR'
-constexpr std::uint32_t kPrepVersion = 1;
+constexpr std::uint32_t kPrepVersion = 2;
 
 class Serializer {
 public:
@@ -150,6 +150,10 @@ std::vector<std::uint8_t> serialize_native_prep(const NativePrepProto &proto) {
     writer.write_string(acc.id);
     writer.write_string(acc.dist);
     writer.write_double(acc.onset);
+    writer.write_i32(acc.onset_kind);
+    writer.write_string(acc.onset_source);
+    writer.write_string(acc.onset_source_kind);
+    writer.write_double(acc.onset_lag);
     writer.write_double(acc.q);
     writer.write_string(acc.shared_trigger_id);
     writer.write_string_vec(acc.components);
@@ -224,7 +228,7 @@ NativePrepProto deserialize_native_prep(const std::uint8_t *data,
     throw std::runtime_error("native prep deserialization: invalid header");
   }
   std::uint32_t version = reader.read_u32();
-  if (version != kPrepVersion) {
+  if (version != kPrepVersion && version != 1) {
     throw std::runtime_error(
         "native prep deserialization: unsupported version");
   }
@@ -238,6 +242,17 @@ NativePrepProto deserialize_native_prep(const std::uint8_t *data,
     acc.id = reader.read_string();
     acc.dist = reader.read_string();
     acc.onset = reader.read_double();
+    if (version >= 2) {
+      acc.onset_kind = reader.read_i32();
+      acc.onset_source = reader.read_string();
+      acc.onset_source_kind = reader.read_string();
+      acc.onset_lag = reader.read_double();
+    } else {
+      acc.onset_kind = 0;
+      acc.onset_source.clear();
+      acc.onset_source_kind.clear();
+      acc.onset_lag = 0.0;
+    }
     acc.q = reader.read_double();
     acc.shared_trigger_id = reader.read_string();
     acc.components = reader.read_string_vec();

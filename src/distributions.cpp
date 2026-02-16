@@ -6,6 +6,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <iomanip>
@@ -182,6 +183,7 @@ constexpr double kDefaultRelTol = 1e-5;
 constexpr double kDefaultAbsTol = 1e-6;
 constexpr int kDefaultMaxDepth = 12;
 constexpr int kOutcomeIdxNA = -2;
+
 template <typename T> inline T clamp(T val, T lo, T hi) {
   if (!std::isfinite(val)) {
     return val;
@@ -482,17 +484,6 @@ inline NodeEvalResult make_node_result(EvalNeed need, double density,
   return out;
 }
 
-inline std::unordered_set<int> make_scope_set(const std::vector<int> &ids) {
-  std::unordered_set<int> scope;
-  scope.reserve(ids.size());
-  for (int id : ids) {
-    if (id == NA_INTEGER)
-      continue;
-    scope.insert(id);
-  }
-  return scope;
-}
-
 inline std::vector<int>
 set_to_sorted_vector(const std::unordered_set<int> &items) {
   if (items.empty())
@@ -555,26 +546,6 @@ rcpp_scenarios_to_records(const Rcpp::List &scenarios) {
   return out;
 }
 
-std::unordered_set<int>
-filter_forced_scope(const std::unordered_set<int> &forced,
-                    const std::vector<int> &scope_ids) {
-  if (forced.empty() || scope_ids.empty()) {
-    return std::unordered_set<int>();
-  }
-  std::unordered_set<int> scope = make_scope_set(scope_ids);
-  if (scope.empty()) {
-    return std::unordered_set<int>();
-  }
-  std::unordered_set<int> out;
-  out.reserve(scope.size());
-  for (int id : forced) {
-    if (scope.count(id)) {
-      out.insert(id);
-    }
-  }
-  return out;
-}
-
 std::vector<int> forced_vec_from_sexp(SEXP vec) {
   std::vector<int> out;
   if (Rf_isNull(vec))
@@ -591,6 +562,51 @@ std::vector<int> forced_vec_from_sexp(SEXP vec) {
 
 std::unordered_set<int> make_forced_set(const std::vector<int> &ids) {
   return std::unordered_set<int>(ids.begin(), ids.end());
+}
+
+struct ForcedScopeFilter {
+  const std::vector<int> *source_ids{nullptr};
+  const ForcedScopeFilter *parent{nullptr};
+};
+
+inline bool scope_filter_allows_id(const ForcedScopeFilter *scope_filter,
+                                   int id) {
+  if (id == NA_INTEGER)
+    return false;
+  for (const ForcedScopeFilter *it = scope_filter; it != nullptr;
+       it = it->parent) {
+    if (!it->source_ids)
+      continue;
+    if (!std::binary_search(it->source_ids->begin(), it->source_ids->end(),
+                            id)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline bool forced_contains_scoped(const std::unordered_set<int> &forced, int id,
+                                   const ForcedScopeFilter *scope_filter) {
+  if (id == NA_INTEGER || forced.empty())
+    return false;
+  if (!scope_filter_allows_id(scope_filter, id))
+    return false;
+  return forced.count(id) > 0;
+}
+
+inline bool
+forced_set_intersects_scope(const std::unordered_set<int> &forced,
+                            const ForcedScopeFilter *scope_filter) {
+  if (forced.empty())
+    return false;
+  if (!scope_filter)
+    return true;
+  for (int id : forced) {
+    if (id != NA_INTEGER && scope_filter_allows_id(scope_filter, id)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 struct TrialParamSet;
@@ -740,6 +756,10 @@ inline std::vector<int> ensure_source_ids(const uuber::NativeContext &ctx,
 
 struct TrialAccumulatorParams {
   double onset{0.0};
+  int onset_kind{uuber::ONSET_ABSOLUTE};
+  int onset_source_acc_idx{-1};
+  int onset_source_pool_idx{-1};
+  double onset_lag{0.0};
   double q{0.0};
   double shared_q{std::numeric_limits<double>::quiet_NaN()};
   AccDistParams dist_cfg{};
@@ -754,25 +774,134 @@ struct TrialAccumulatorParams {
 
 struct TrialParamSet {
   std::vector<TrialAccumulatorParams> acc_params;
+  bool shared_trigger_layout_matches_context{true};
 };
 
-std::string param_signature(const TrialParamSet *params_ptr) {
-  if (!params_ptr)
-    return std::string();
-  std::ostringstream oss;
-  oss << std::setprecision(12);
-  for (const auto &acc : params_ptr->acc_params) {
-    oss << acc.q << '|' << acc.shared_q << '|' << acc.onset << '|'
-        << acc.dist_cfg.t0 << '|' << acc.dist_cfg.p1 << '|' << acc.dist_cfg.p2
-        << '|' << acc.dist_cfg.p3 << ';';
+constexpr std::uint64_t kFNV64Offset = 1469598103934665603ULL;
+constexpr std::uint64_t kFNV64Prime = 1099511628211ULL;
+constexpr std::uint64_t kCanonicalQuietNaNBits = 0x7ff8000000000000ULL;
+
+inline std::uint64_t canonical_double_bits(double value) {
+  if (value == 0.0) {
+    // Normalize -0.0 and +0.0.
+    return 0ULL;
   }
-  return oss.str();
+  if (std::isnan(value)) {
+    return kCanonicalQuietNaNBits;
+  }
+  std::uint64_t bits = 0ULL;
+  std::memcpy(&bits, &value, sizeof(bits));
+  return bits;
+}
+
+inline void hash_append_bytes(std::uint64_t &hash, const void *data,
+                              std::size_t n_bytes) {
+  const auto *bytes = static_cast<const unsigned char *>(data);
+  for (std::size_t i = 0; i < n_bytes; ++i) {
+    hash ^= static_cast<std::uint64_t>(bytes[i]);
+    hash *= kFNV64Prime;
+  }
+}
+
+inline void append_i32(std::string &payload, std::uint64_t &hash, int value) {
+  const std::int32_t v = static_cast<std::int32_t>(value);
+  const std::size_t start = payload.size();
+  payload.resize(start + sizeof(v));
+  std::memcpy(&payload[start], &v, sizeof(v));
+  hash_append_bytes(hash, &payload[start], sizeof(v));
+}
+
+inline void append_u32(std::string &payload, std::uint64_t &hash,
+                       std::uint32_t value) {
+  const std::size_t start = payload.size();
+  payload.resize(start + sizeof(value));
+  std::memcpy(&payload[start], &value, sizeof(value));
+  hash_append_bytes(hash, &payload[start], sizeof(value));
+}
+
+inline void append_u64(std::string &payload, std::uint64_t &hash,
+                       std::uint64_t value) {
+  const std::size_t start = payload.size();
+  payload.resize(start + sizeof(value));
+  std::memcpy(&payload[start], &value, sizeof(value));
+  hash_append_bytes(hash, &payload[start], sizeof(value));
+}
+
+inline void append_string_payload(std::string &payload, std::uint64_t &hash,
+                                  const std::string &value) {
+  append_u32(payload, hash, static_cast<std::uint32_t>(value.size()));
+  if (value.empty()) {
+    return;
+  }
+  const std::size_t start = payload.size();
+  payload.resize(start + value.size());
+  std::memcpy(&payload[start], value.data(), value.size());
+  hash_append_bytes(hash, value.data(), value.size());
+}
+
+inline void append_double_payload(std::string &payload, std::uint64_t &hash,
+                                  double value) {
+  append_u64(payload, hash, canonical_double_bits(value));
+}
+
+uuber::NAMapCacheKey
+build_na_map_cache_key(const uuber::OutcomeContextInfo &info,
+                       const TrialParamSet *params_ptr,
+                       const std::vector<std::string> &comp_labels,
+                       const std::vector<double> &comp_weights,
+                       const std::string &outcome_label_context) {
+  uuber::NAMapCacheKey key;
+  if (!params_ptr) {
+    return key;
+  }
+
+  std::size_t payload_bytes =
+      64 + outcome_label_context.size() + (params_ptr->acc_params.size() * 96) +
+      (comp_labels.size() * 24);
+  for (const auto &label : comp_labels) {
+    payload_bytes += label.size();
+  }
+  key.payload.reserve(payload_bytes);
+
+  std::uint64_t hash = kFNV64Offset;
+  append_i32(key.payload, hash, info.node_id);
+  append_string_payload(key.payload, hash, outcome_label_context);
+
+  append_u32(key.payload, hash,
+             static_cast<std::uint32_t>(params_ptr->acc_params.size()));
+  for (const auto &acc : params_ptr->acc_params) {
+    append_double_payload(key.payload, hash, acc.q);
+    append_double_payload(key.payload, hash, acc.shared_q);
+    append_double_payload(key.payload, hash, acc.onset);
+    append_i32(key.payload, hash, acc.onset_kind);
+    append_i32(key.payload, hash, acc.onset_source_acc_idx);
+    append_i32(key.payload, hash, acc.onset_source_pool_idx);
+    append_double_payload(key.payload, hash, acc.onset_lag);
+    append_double_payload(key.payload, hash, acc.dist_cfg.t0);
+    append_double_payload(key.payload, hash, acc.dist_cfg.p1);
+    append_double_payload(key.payload, hash, acc.dist_cfg.p2);
+    append_double_payload(key.payload, hash, acc.dist_cfg.p3);
+  }
+
+  append_u32(key.payload, hash, static_cast<std::uint32_t>(comp_labels.size()));
+  for (std::size_t i = 0; i < comp_labels.size(); ++i) {
+    append_string_payload(key.payload, hash, comp_labels[i]);
+    const double w = (i < comp_weights.size()) ? comp_weights[i] : 0.0;
+    append_double_payload(key.payload, hash, w);
+  }
+
+  key.hash = static_cast<std::size_t>(hash);
+  return key;
 }
 
 inline TrialAccumulatorParams
 base_params(const uuber::NativeAccumulator &base) {
   TrialAccumulatorParams p;
   p.onset = base.onset;
+  p.onset_kind = base.onset_kind;
+  p.onset_source_acc_idx = base.onset_source_acc_idx;
+  p.onset_source_pool_idx = base.onset_source_pool_idx;
+  p.onset_lag = base.onset_lag;
   p.q = base.q;
   p.dist_cfg = base.dist_cfg;
   p.shared_q = base.q;
@@ -796,58 +925,76 @@ inline TrialParamSet build_base_paramset(const uuber::NativeContext &ctx) {
 }
 
 struct SharedTriggerInfo {
-  std::string id;
-  std::vector<int> acc_indices;
+  const std::vector<int> *acc_indices{nullptr};
+  std::vector<int> owned_acc_indices;
   double q{0.0};
+
+  const std::vector<int> &indices() const {
+    return acc_indices ? *acc_indices : owned_acc_indices;
+  }
 };
+
+inline bool shared_trigger_layout_uses_context_groups(
+    const uuber::NativeContext &ctx, const TrialParamSet &params) {
+  if (ctx.shared_trigger_groups.empty())
+    return false;
+  if (!params.shared_trigger_layout_matches_context)
+    return false;
+  return params.acc_params.size() == ctx.accumulators.size();
+}
 
 // Collect shared trigger definitions for the current trial parameters.
 inline std::vector<SharedTriggerInfo>
 collect_shared_triggers(const uuber::NativeContext &ctx,
                         const TrialParamSet &params) {
   std::vector<SharedTriggerInfo> out;
-  if (!ctx.shared_trigger_map.empty()) {
-    for (const auto &kv : ctx.shared_trigger_map) {
-      SharedTriggerInfo info;
-      info.id = kv.first;
-      info.acc_indices = kv.second;
+  if (shared_trigger_layout_uses_context_groups(ctx, params)) {
+    out.reserve(ctx.shared_trigger_groups.size());
+    for (const auto &group : ctx.shared_trigger_groups) {
+      int q_idx = group.q_acc_idx;
       double q_val = 0.0;
       bool q_set = false;
-      for (int idx : info.acc_indices) {
-        if (idx < 0 || idx >= static_cast<int>(params.acc_params.size()))
-          continue;
-        q_val = params.acc_params[static_cast<std::size_t>(idx)].shared_q;
+      if (q_idx >= 0 && q_idx < static_cast<int>(params.acc_params.size())) {
+        q_val = params.acc_params[static_cast<std::size_t>(q_idx)].shared_q;
         q_set = true;
-        break;
-      }
-      if (!q_set && !info.acc_indices.empty()) {
-        int idx = info.acc_indices.front();
-        if (idx >= 0 && idx < static_cast<int>(ctx.accumulators.size())) {
-          q_val = ctx.accumulators[static_cast<std::size_t>(idx)].q;
+      } else if (!group.acc_indices.empty()) {
+        q_idx = group.acc_indices.front();
+        if (q_idx >= 0 && q_idx < static_cast<int>(params.acc_params.size())) {
+          q_val = params.acc_params[static_cast<std::size_t>(q_idx)].shared_q;
           q_set = true;
         }
       }
+      if (!q_set && q_idx >= 0 &&
+          q_idx < static_cast<int>(ctx.accumulators.size())) {
+        q_val = ctx.accumulators[static_cast<std::size_t>(q_idx)].q;
+        q_set = true;
+      }
       if (!q_set)
         continue;
-      q_val = clamp_probability(q_val);
-      info.q = q_val;
-      out.push_back(info);
+      SharedTriggerInfo info;
+      info.acc_indices = &group.acc_indices;
+      info.q = clamp_probability(q_val);
+      out.push_back(std::move(info));
     }
-  } else {
-    // Fallback: derive shared triggers directly from the trial parameters.
-    std::unordered_map<std::string, SharedTriggerInfo> derived;
-    for (std::size_t i = 0; i < params.acc_params.size(); ++i) {
-      const auto &acc = params.acc_params[i];
-      if (acc.shared_trigger_id.empty())
-        continue;
-      SharedTriggerInfo &info = derived[acc.shared_trigger_id];
-      info.id = acc.shared_trigger_id;
-      info.acc_indices.push_back(static_cast<int>(i));
-      info.q = acc.shared_q;
-    }
-    for (auto &kv : derived) {
-      out.push_back(std::move(kv.second));
-    }
+    return out;
+  }
+
+  // Fallback: derive shared triggers directly from trial parameters when
+  // shared_trigger_id overrides alter trigger membership.
+  std::unordered_map<std::string, SharedTriggerInfo> derived;
+  for (std::size_t i = 0; i < params.acc_params.size(); ++i) {
+    const auto &acc = params.acc_params[i];
+    if (acc.shared_trigger_id.empty())
+      continue;
+    SharedTriggerInfo &info = derived[acc.shared_trigger_id];
+    info.owned_acc_indices.push_back(static_cast<int>(i));
+    info.q = acc.shared_q;
+  }
+  out.reserve(derived.size());
+  for (auto &kv : derived) {
+    kv.second.acc_indices = &kv.second.owned_acc_indices;
+    kv.second.q = clamp_probability(kv.second.q);
+    out.push_back(std::move(kv.second));
   }
   return out;
 }
@@ -898,35 +1045,12 @@ shared_trigger_mask_weight(const std::vector<SharedTriggerInfo> &triggers,
   return w;
 }
 
-// Apply a trigger success/fail mask to a base parameter set.
-inline TrialParamSet
-apply_trigger_state(const TrialParamSet &base,
-                    const std::vector<SharedTriggerInfo> &triggers,
-                    std::uint64_t mask) {
-  TrialParamSet modified = base;
-  for (std::size_t i = 0; i < triggers.size(); ++i) {
-    bool fail = (mask >> i) & 1ULL;
-    double succeed_q =
-        0.0; // when gate succeeds, drop the shared q to avoid double-counting
-    double fail_q = 1.0; // when gate fails, accumulator never finishes
-    for (int acc_idx : triggers[i].acc_indices) {
-      if (acc_idx < 0 ||
-          acc_idx >= static_cast<int>(modified.acc_params.size()))
-        continue;
-      TrialAccumulatorParams &p =
-          modified.acc_params[static_cast<std::size_t>(acc_idx)];
-      p.q = fail ? fail_q : succeed_q;
-      p.has_override = true;
-    }
-  }
-  return modified;
-}
-
 inline void apply_trigger_state_inplace(TrialParamSet &params,
                                         const SharedTriggerInfo &trigger,
                                         bool fail) {
   double q_val = fail ? 1.0 : 0.0;
-  for (int acc_idx : trigger.acc_indices) {
+  const std::vector<int> &indices = trigger.indices();
+  for (int acc_idx : indices) {
     if (acc_idx < 0 || acc_idx >= static_cast<int>(params.acc_params.size()))
       continue;
     TrialAccumulatorParams &p =
@@ -959,7 +1083,10 @@ double node_density_with_competitors_internal(
     const std::unordered_set<int> &forced_survive,
     const std::vector<int> &competitor_ids, const TrialParamSet *trial_params,
     const std::string &trial_type_key, bool include_na_donors,
-    const std::string &outcome_label_context, int outcome_idx_context);
+    const std::string &outcome_label_context, int outcome_idx_context,
+    const std::unordered_map<int, double> *exact_source_times = nullptr,
+    const std::unordered_map<int, std::pair<double, double>> *source_time_bounds =
+        nullptr);
 
 double evaluate_outcome_density_idx(
     const uuber::NativeContext &ctx, int outcome_idx, double t,
@@ -1110,6 +1237,9 @@ bool component_active(const uuber::NativeAccumulator &acc,
   return std::find(comps->begin(), comps->end(), component) != comps->end();
 }
 
+using ExactSourceTimeMap = std::unordered_map<int, double>;
+using SourceTimeBoundsMap = std::unordered_map<int, std::pair<double, double>>;
+
 struct PoolEvalScratch {
   std::vector<std::size_t> active_indices;
   std::vector<double> density;
@@ -1158,7 +1288,10 @@ eval_event_label(const uuber::NativeContext &ctx, const std::string &label,
                  bool include_na_donors = false,
                  const std::string &outcome_label_context = std::string(),
                  const LabelRef *label_ref = nullptr, int component_idx = -1,
-                 int outcome_idx_context = -1) {
+                 int outcome_idx_context = -1,
+                 const ExactSourceTimeMap *exact_source_times = nullptr,
+                 const SourceTimeBoundsMap *source_time_bounds = nullptr,
+                 const ForcedScopeFilter *forced_scope_filter = nullptr) {
   LabelRef resolved_ref;
   if (!label_ref) {
     resolved_ref = resolve_label_ref_runtime(ctx, label);
@@ -1213,10 +1346,12 @@ eval_event_label(const uuber::NativeContext &ctx, const std::string &label,
   }
   int label_idx = label_ref->label_id;
   if (label_idx >= 0 && label_idx != NA_INTEGER) {
-    if (forced_complete.count(label_idx)) {
+    if (forced_contains_scoped(forced_complete, label_idx,
+                               forced_scope_filter)) {
       return make_node_result(need, 0.0, 0.0, 1.0);
     }
-    if (forced_survive.count(label_idx)) {
+    if (forced_contains_scoped(forced_survive, label_idx,
+                               forced_scope_filter)) {
       return make_node_result(need, 0.0, 1.0, 0.0);
     }
   }
@@ -1229,20 +1364,249 @@ eval_event_label(const uuber::NativeContext &ctx, const std::string &label,
     if (!component_active(acc, component, component_idx, override)) {
       return make_node_result(need, 0.0, 1.0, 0.0);
     }
+    int onset_kind = override ? override->onset_kind : acc.onset_kind;
+    int onset_source_acc_idx =
+        override ? override->onset_source_acc_idx : acc.onset_source_acc_idx;
+    int onset_source_pool_idx =
+        override ? override->onset_source_pool_idx : acc.onset_source_pool_idx;
+    double onset_lag = override ? override->onset_lag : acc.onset_lag;
     double onset = override ? override->onset : acc.onset;
     double q = override ? override->q : acc.q;
     const AccDistParams &cfg = override ? override->dist_cfg : acc.dist_cfg;
     double density = std::numeric_limits<double>::quiet_NaN();
     double survival = std::numeric_limits<double>::quiet_NaN();
     double cdf = std::numeric_limits<double>::quiet_NaN();
-    if (needs_density(need)) {
-      density = acc_density_from_cfg(t, onset, q, cfg);
-    }
-    if (needs_survival(need)) {
-      survival = acc_survival_from_cfg(t, onset, q, cfg);
-    }
-    if (needs_cdf(need)) {
-      cdf = acc_cdf_success_from_cfg(t, onset, cfg);
+    if (!ctx.has_chained_onsets || onset_kind == uuber::ONSET_ABSOLUTE) {
+      if (needs_density(need)) {
+        density = acc_density_from_cfg(t, onset, q, cfg);
+      }
+      if (needs_survival(need)) {
+        survival = acc_survival_from_cfg(t, onset, q, cfg);
+      }
+      if (needs_cdf(need)) {
+        cdf = acc_cdf_success_from_cfg(t, onset, cfg);
+      }
+    } else {
+      LabelRef source_ref;
+      std::string source_label;
+      if (onset_kind == uuber::ONSET_AFTER_ACCUMULATOR) {
+        if (onset_source_acc_idx >= 0 &&
+            onset_source_acc_idx < static_cast<int>(ctx.accumulators.size())) {
+          const auto &src_acc =
+              ctx.accumulators[static_cast<std::size_t>(onset_source_acc_idx)];
+          source_label = src_acc.id;
+          source_ref.acc_idx = onset_source_acc_idx;
+          source_ref.label_id = label_id(ctx, source_label);
+        }
+      } else if (onset_kind == uuber::ONSET_AFTER_POOL) {
+        if (onset_source_pool_idx >= 0 &&
+            onset_source_pool_idx < static_cast<int>(ctx.pools.size())) {
+          const auto &src_pool =
+              ctx.pools[static_cast<std::size_t>(onset_source_pool_idx)];
+          source_label = src_pool.id;
+          source_ref.pool_idx = onset_source_pool_idx;
+          source_ref.label_id = label_id(ctx, source_label);
+        }
+      }
+      if (source_label.empty()) {
+        return make_node_result(need, 0.0, 1.0, 0.0);
+      }
+
+      const double lag_total = onset_lag + onset;
+      const double x_shift = lag_total + cfg.t0;
+      const int source_label_id = source_ref.label_id;
+
+      // If source is forced to survive at time t, dependent accumulator cannot
+      // have completed by t.
+      if (source_label_id >= 0 && source_label_id != NA_INTEGER &&
+          forced_contains_scoped(forced_survive, source_label_id,
+                                 forced_scope_filter)) {
+        return make_node_result(need, 0.0, 1.0, 0.0);
+      }
+
+      double bound_lower = 0.0;
+      double bound_upper = std::numeric_limits<double>::infinity();
+      bool has_conditioning_bounds = false;
+      bool has_exact = false;
+      double exact_time = std::numeric_limits<double>::quiet_NaN();
+
+      if (source_label_id >= 0 && source_label_id != NA_INTEGER) {
+        if (forced_contains_scoped(forced_complete, source_label_id,
+                                   forced_scope_filter)) {
+          bound_upper = std::min(bound_upper, t);
+          has_conditioning_bounds = true;
+        }
+        if (exact_source_times) {
+          auto it = exact_source_times->find(source_label_id);
+          if (it != exact_source_times->end() && std::isfinite(it->second)) {
+            has_exact = true;
+            exact_time = it->second;
+          }
+        }
+        if (source_time_bounds) {
+          auto it = source_time_bounds->find(source_label_id);
+          if (it != source_time_bounds->end()) {
+            if (std::isfinite(it->second.first)) {
+              bound_lower = std::max(bound_lower, it->second.first);
+            }
+            if (std::isfinite(it->second.second)) {
+              bound_upper = std::min(bound_upper, it->second.second);
+            }
+            has_conditioning_bounds = true;
+          }
+        }
+      }
+
+      if (has_exact) {
+        double x = t - exact_time - x_shift;
+        double cdf_success = clamp_probability(eval_cdf_single(cfg, x));
+        if (needs_density(need)) {
+          density = (1.0 - q) * eval_pdf_single(cfg, x);
+          density = safe_density(density);
+        }
+        if (needs_cdf(need)) {
+          cdf = clamp_probability((1.0 - q) * cdf_success);
+        }
+        if (needs_survival(need)) {
+          survival = clamp_probability(q + (1.0 - q) * (1.0 - cdf_success));
+        }
+      } else {
+        if (bound_upper <= bound_lower) {
+          return make_node_result(need, 0.0, 1.0, 0.0);
+        }
+        if (std::isfinite(t) && (t - x_shift <= bound_lower)) {
+          return make_node_result(need, 0.0, 1.0, 0.0);
+        }
+
+        auto source_eval = [&](double u, EvalNeed source_need) -> NodeEvalResult {
+          return eval_event_label(
+              ctx, "__CHAIN_SOURCE__", u, component, forced_complete,
+              forced_survive, source_need, trial_params, trial_type_key, false,
+              std::string(), &source_ref, component_idx, -1,
+              exact_source_times, source_time_bounds, forced_scope_filter);
+        };
+        auto source_cdf_at = [&](double u) -> double {
+          if (u <= 0.0) {
+            return 0.0;
+          }
+          NodeEvalResult source =
+              source_eval(u, EvalNeed::kCDF);
+          return clamp_probability(source.cdf);
+        };
+
+        double source_mass = 1.0;
+        if (has_conditioning_bounds) {
+          double lower_cdf =
+              std::isfinite(bound_lower) ? source_cdf_at(bound_lower) : 0.0;
+          double upper_cdf = std::isfinite(bound_upper)
+                                 ? source_cdf_at(bound_upper)
+                                 : source_cdf_at(
+                                       std::numeric_limits<double>::infinity());
+          source_mass = upper_cdf - lower_cdf;
+          if (!std::isfinite(source_mass) || source_mass <= 0.0) {
+            return make_node_result(need, 0.0, 1.0, 0.0);
+          }
+        }
+
+        double upper_int =
+            std::min(bound_upper, std::max(bound_lower, t - x_shift));
+        if (upper_int <= bound_lower) {
+          return make_node_result(need, 0.0, 1.0, 0.0);
+        }
+
+        auto source_pdf = [&](double u) -> double {
+          NodeEvalResult source =
+              source_eval(u, EvalNeed::kDensity);
+          return safe_density(source.density);
+        };
+
+        if (!std::isfinite(t)) {
+          double cdf_total = 0.0;
+          if (has_conditioning_bounds) {
+            cdf_total = clamp_probability(1.0 - q);
+          } else {
+            NodeEvalResult source_inf =
+                source_eval(std::numeric_limits<double>::infinity(),
+                            EvalNeed::kCDF);
+            double source_finish = clamp_probability(source_inf.cdf);
+            cdf_total = clamp_probability((1.0 - q) * source_finish);
+          }
+          if (needs_density(need)) {
+            density = 0.0;
+          }
+          if (needs_cdf(need)) {
+            cdf = cdf_total;
+          }
+          if (needs_survival(need)) {
+            survival = clamp_probability(1.0 - cdf_total);
+          }
+          NodeEvalResult res = make_node_result(need, density, survival, cdf);
+          if (needs_density(need) && donor_density > 0.0) {
+            res.density = safe_density(res.density + donor_density);
+          }
+          return res;
+        }
+
+        auto cond_source_pdf = [&](double u) -> double {
+          if (!std::isfinite(u) || u <= bound_lower || u > bound_upper) {
+            return 0.0;
+          }
+          double dens = source_pdf(u);
+          if (dens <= 0.0) {
+            return 0.0;
+          }
+          if (!has_conditioning_bounds) {
+            return dens;
+          }
+          return dens / source_mass;
+        };
+
+        if (needs_density(need)) {
+          auto integrand_density = [&](double u) -> double {
+            double fs = cond_source_pdf(u);
+            if (fs <= 0.0) {
+              return 0.0;
+            }
+            double x = t - u - x_shift;
+            double fx = eval_pdf_single(cfg, x);
+            if (!std::isfinite(fx) || fx <= 0.0) {
+              return 0.0;
+            }
+            return fs * fx;
+          };
+          density = (1.0 - q) * uuber::integrate_boost_fn(
+                                    integrand_density, bound_lower, upper_int,
+                                    kDefaultRelTol, kDefaultAbsTol,
+                                    kDefaultMaxDepth);
+          density = safe_density(density);
+        }
+
+        if (needs_cdf(need) || needs_survival(need)) {
+          auto integrand_cdf = [&](double u) -> double {
+            double fs = cond_source_pdf(u);
+            if (fs <= 0.0) {
+              return 0.0;
+            }
+            double x = t - u - x_shift;
+            double Fx = eval_cdf_single(cfg, x);
+            if (!std::isfinite(Fx) || Fx <= 0.0) {
+              return 0.0;
+            }
+            return fs * clamp_probability(Fx);
+          };
+          double cdf_cond = uuber::integrate_boost_fn(
+              integrand_cdf, bound_lower, upper_int, kDefaultRelTol,
+              kDefaultAbsTol, kDefaultMaxDepth);
+          cdf_cond = clamp_probability(cdf_cond);
+          double cdf_total = clamp_probability((1.0 - q) * cdf_cond);
+          if (needs_cdf(need)) {
+            cdf = cdf_total;
+          }
+          if (needs_survival(need)) {
+            survival = clamp_probability(1.0 - cdf_total);
+          }
+        }
+      }
     }
     NodeEvalResult res = make_node_result(need, density, survival, cdf);
     if (needs_density(need) && donor_density > 0.0) {
@@ -1305,7 +1669,8 @@ eval_event_label(const uuber::NativeContext &ctx, const std::string &label,
       NodeEvalResult child = eval_event_label(
           ctx, member, t, component, forced_complete, forced_survive,
           child_need, trial_params, std::string(), false, std::string(),
-          &member_ref, component_idx, -1);
+          &member_ref, component_idx, -1, exact_source_times,
+          source_time_bounds, forced_scope_filter);
       if (need_density) {
         scratch.density[i] = child.density;
       }
@@ -1492,13 +1857,19 @@ struct NodeEvalState {
                 const std::string &trial_key = std::string(),
                 bool include_na = false,
                 const std::string &outcome_label_ctx = std::string(),
-                int component_idx_val = -1, int outcome_idx_val = -1)
+                int component_idx_val = -1, int outcome_idx_val = -1,
+                const ExactSourceTimeMap *exact_source_times_ptr = nullptr,
+                const SourceTimeBoundsMap *source_time_bounds_ptr = nullptr,
+                const ForcedScopeFilter *forced_scope_filter_ptr = nullptr)
       : ctx(ctx_), t(time), component(component_label),
         forced_complete(forced_complete_ref),
         forced_survive(forced_survive_ref), trial_params(params_ptr),
         trial_type_key(component_cache_key(component_label, trial_key)),
         include_na_donors(include_na), outcome_label(outcome_label_ctx),
-        component_idx(component_idx_val), outcome_idx(outcome_idx_val) {}
+        component_idx(component_idx_val), outcome_idx(outcome_idx_val),
+        exact_source_times(exact_source_times_ptr),
+        source_time_bounds(source_time_bounds_ptr),
+        forced_scope_filter(forced_scope_filter_ptr) {}
 
   const uuber::NativeContext &ctx;
   double t;
@@ -1511,6 +1882,9 @@ struct NodeEvalState {
   std::string outcome_label;
   int component_idx;
   int outcome_idx;
+  const ExactSourceTimeMap *exact_source_times;
+  const SourceTimeBoundsMap *source_time_bounds;
+  const ForcedScopeFilter *forced_scope_filter;
 };
 
 inline const TrialAccumulatorParams *
@@ -1589,9 +1963,14 @@ struct GuardEvalInput {
   std::string component;
   int component_idx{-1};
   std::string trial_type_key;
-  std::unordered_set<int> forced_complete;
-  std::unordered_set<int> forced_survive;
+  const std::unordered_set<int> *forced_complete{nullptr};
+  const std::unordered_set<int> *forced_survive{nullptr};
+  const ForcedScopeFilter *forced_scope_filter{nullptr};
+  ForcedScopeFilter local_scope_filter{};
+  bool has_scoped_forced{false};
   const TrialParamSet *trial_params;
+  const ExactSourceTimeMap *exact_source_times{nullptr};
+  const SourceTimeBoundsMap *source_time_bounds{nullptr};
 };
 
 const uuber::NativeNode &fetch_node(const uuber::NativeContext &ctx,
@@ -1602,24 +1981,20 @@ eval_node_with_forced(const uuber::NativeContext &ctx, int node_id, double time,
                       const std::unordered_set<int> &forced_complete,
                       const std::unordered_set<int> &forced_survive,
                       EvalNeed need, const TrialParamSet *trial_params,
-                      const std::string &trial_key);
-inline NodeEvalResult
-eval_node_with_forced(const uuber::NativeContext &ctx, int node_id, double time,
-                      const std::string &component, int component_idx,
-                      const std::unordered_set<int> &forced_complete,
-                      const std::unordered_set<int> &forced_survive,
-                      EvalNeed need) {
-  return eval_node_with_forced(ctx, node_id, time, component, component_idx,
-                               forced_complete, forced_survive, need, nullptr,
-                               std::string());
-}
+                      const std::string &trial_key,
+                      const ExactSourceTimeMap *exact_source_times = nullptr,
+                      const SourceTimeBoundsMap *source_time_bounds = nullptr,
+                      const ForcedScopeFilter *forced_scope_filter = nullptr);
 GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
                                 const uuber::NativeNode &node,
                                 const std::string &component, int component_idx,
                                 const std::unordered_set<int> &forced_complete,
                                 const std::unordered_set<int> &forced_survive,
                                 const std::string &trial_key,
-                                const TrialParamSet *trial_params);
+                                const TrialParamSet *trial_params,
+                                const ExactSourceTimeMap *exact_source_times,
+                                const SourceTimeBoundsMap *source_time_bounds,
+                                const ForcedScopeFilter *forced_scope_filter);
 std::vector<int> gather_blocker_sources(const uuber::NativeContext &ctx,
                                         const uuber::NativeNode &guard_node);
 
@@ -1708,7 +2083,9 @@ compute_pool_event_scenarios(const uuber::NativeNode &node,
         eval_event_label(state.ctx, member_label, state.t, state.component,
                          state.forced_complete, state.forced_survive, kEvalAll,
                          state.trial_params, state.trial_type_key, false,
-                         std::string(), &member_ref, state.component_idx, -1);
+                         std::string(), &member_ref, state.component_idx, -1,
+                         state.exact_source_times, state.source_time_bounds,
+                         state.forced_scope_filter);
     double density = eval.density;
     double cdf = clamp_probability(eval.cdf);
     double survival = clamp_probability(eval.survival);
@@ -1799,7 +2176,8 @@ compute_event_scenarios(const uuber::NativeNode &node, NodeEvalState &state) {
       state.ctx, node.source, state.t, state.component, state.forced_complete,
       state.forced_survive, EvalNeed::kDensity, state.trial_params,
       state.trial_type_key, false, std::string(), &node.source_ref,
-      state.component_idx, -1);
+      state.component_idx, -1, state.exact_source_times,
+      state.source_time_bounds, state.forced_scope_filter);
   double weight = eval.density;
   if (!std::isfinite(weight) || weight <= 0.0) {
     return out;
@@ -1850,7 +2228,10 @@ std::vector<ScenarioRecord> compute_and_scenarios(const uuber::NativeNode &node,
         std::unordered_set<int> fs_set = make_forced_set(forced_survive);
         NodeEvalResult sibling = eval_node_with_forced(
             state.ctx, child_ids[other_idx], state.t, state.component,
-            state.component_idx, fc_set, fs_set, EvalNeed::kCDF);
+            state.component_idx, fc_set, fs_set, EvalNeed::kCDF,
+            state.trial_params, state.trial_type_key,
+            state.exact_source_times, state.source_time_bounds,
+            state.forced_scope_filter);
         double Fj = clamp_probability(sibling.cdf);
         if (!std::isfinite(Fj) || Fj <= 0.0) {
           ok = false;
@@ -1970,7 +2351,8 @@ compute_guard_scenarios(const uuber::NativeNode &node, NodeEvalState &state) {
     std::unordered_set<int> fs_set = make_forced_set(sc.forced_survive);
     GuardEvalInput guard_input = make_guard_input(
         state.ctx, node, state.component, state.component_idx, fc_set, fs_set,
-        state.trial_type_key, state.trial_params);
+        state.trial_type_key, state.trial_params, state.exact_source_times,
+        state.source_time_bounds, state.forced_scope_filter);
     double eff =
         guard_effective_survival_internal(guard_input, state.t, settings);
     if (!std::isfinite(eff) || eff <= 0.0)
@@ -2415,6 +2797,16 @@ double shared_gate_nway_density(const uuber::NativeContext &ctx,
     return 0.0;
   if (gate.target_x.empty() || gate.gate.empty() || gate.competitor_xs.empty())
     return 0.0;
+  const std::vector<LabelRef> *competitor_refs = &gate.competitor_refs;
+  std::vector<LabelRef> resolved_competitor_refs;
+  if (competitor_refs->size() != gate.competitor_xs.size()) {
+    resolved_competitor_refs.resize(gate.competitor_xs.size());
+    for (std::size_t i = 0; i < gate.competitor_xs.size(); ++i) {
+      resolved_competitor_refs[i] =
+          resolve_label_ref_runtime(ctx, gate.competitor_xs[i]);
+    }
+    competitor_refs = &resolved_competitor_refs;
+  }
 
   const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
   auto eval_unforced = [&](const std::string &lbl, const LabelRef &ref,
@@ -2429,10 +2821,7 @@ double shared_gate_nway_density(const uuber::NativeContext &ctx,
   double prod_surv = 1.0;
   for (std::size_t i = 0; i < gate.competitor_xs.size(); ++i) {
     const std::string &lbl = gate.competitor_xs[i];
-    LabelRef ref = (i < gate.competitor_refs.size())
-                       ? gate.competitor_refs[i]
-                       : resolve_label_ref_runtime(ctx, lbl);
-    NodeEvalResult ej = eval_unforced(lbl, ref, t);
+    NodeEvalResult ej = eval_unforced(lbl, (*competitor_refs)[i], t);
     double sj = clamp_probability(ej.survival);
     prod_surv *= sj;
     if (!std::isfinite(prod_surv) || prod_surv <= 0.0) {
@@ -2461,10 +2850,7 @@ double shared_gate_nway_density(const uuber::NativeContext &ctx,
       double prod = 1.0;
       for (std::size_t i = 0; i < gate.competitor_xs.size(); ++i) {
         const std::string &lbl = gate.competitor_xs[i];
-        LabelRef ref = (i < gate.competitor_refs.size())
-                           ? gate.competitor_refs[i]
-                           : resolve_label_ref_runtime(ctx, lbl);
-        NodeEvalResult ej_u = eval_unforced(lbl, ref, u);
+        NodeEvalResult ej_u = eval_unforced(lbl, (*competitor_refs)[i], u);
         prod *= clamp_probability(ej_u.survival);
         if (!std::isfinite(prod) || prod <= 0.0)
           return 0.0;
@@ -2493,6 +2879,16 @@ double shared_gate_nway_probability(
     const std::string &outcome_label_context, int outcome_idx_context) {
   if (gate.target_x.empty() || gate.gate.empty() || gate.competitor_xs.empty())
     return 0.0;
+  const std::vector<LabelRef> *competitor_refs = &gate.competitor_refs;
+  std::vector<LabelRef> resolved_competitor_refs;
+  if (competitor_refs->size() != gate.competitor_xs.size()) {
+    resolved_competitor_refs.resize(gate.competitor_xs.size());
+    for (std::size_t i = 0; i < gate.competitor_xs.size(); ++i) {
+      resolved_competitor_refs[i] =
+          resolve_label_ref_runtime(ctx, gate.competitor_xs[i]);
+    }
+    competitor_refs = &resolved_competitor_refs;
+  }
   if (!std::isfinite(upper)) {
     upper = std::numeric_limits<double>::infinity();
   }
@@ -2515,31 +2911,10 @@ double shared_gate_nway_probability(
     if (!std::isfinite(gate_cdf) || gate_cdf <= 0.0)
       return 0.0;
   } else {
-    // For upper = Inf, compute probability of a finite gate time by integrating
-    // its density.
-    auto gate_dens = [&](double t) -> double {
-      NodeEvalResult ec = eval_unforced(gate.gate, gate.gate_ref, t);
-      double fc = ec.density;
-      return (std::isfinite(fc) && fc > 0.0) ? fc : 0.0;
-    };
-    auto transformed_gate = [&](double x) -> double {
-      if (x <= 0.0)
-        return 0.0;
-      if (x >= 1.0)
-        x = std::nextafter(1.0, 0.0);
-      double t = x / (1.0 - x);
-      double jac = 1.0 / ((1.0 - x) * (1.0 - x));
-      double val = gate_dens(t);
-      if (!std::isfinite(val) || val <= 0.0)
-        return 0.0;
-      double out = val * jac;
-      return std::isfinite(out) ? out : 0.0;
-    };
-    gate_cdf = uuber::integrate_boost_fn(transformed_gate, 0.0, 1.0, rel_tol,
-                                         abs_tol, max_depth);
-    if (!std::isfinite(gate_cdf) || gate_cdf < 0.0)
-      gate_cdf = 0.0;
-    gate_cdf = clamp_probability(gate_cdf);
+    // For upper = Inf, probability of finite gate time is 1 - S_gate(Inf).
+    NodeEvalResult ec_inf = eval_unforced(
+        gate.gate, gate.gate_ref, std::numeric_limits<double>::infinity());
+    gate_cdf = clamp_probability(1.0 - clamp_probability(ec_inf.survival));
     if (gate_cdf <= 0.0)
       return 0.0;
   }
@@ -2552,10 +2927,7 @@ double shared_gate_nway_probability(
     double prod = 1.0;
     for (std::size_t i = 0; i < gate.competitor_xs.size(); ++i) {
       const std::string &lbl = gate.competitor_xs[i];
-      LabelRef ref = (i < gate.competitor_refs.size())
-                         ? gate.competitor_refs[i]
-                         : resolve_label_ref_runtime(ctx, lbl);
-      NodeEvalResult ej = eval_unforced(lbl, ref, t);
+      NodeEvalResult ej = eval_unforced(lbl, (*competitor_refs)[i], t);
       prod *= clamp_probability(ej.survival);
       if (!std::isfinite(prod) || prod <= 0.0)
         return 0.0;
@@ -2606,8 +2978,7 @@ double shared_gate_pair_probability(
   if (upper <= 0.0)
     return 0.0;
 
-  auto integrate =
-      [&](const std::function<double(double)> &integrand) -> double {
+  auto integrate_signed = [&](auto &&integrand) -> double {
     if (std::isfinite(upper)) {
       return uuber::integrate_boost_fn(integrand, 0.0, upper, rel_tol, abs_tol,
                                        max_depth);
@@ -2620,7 +2991,7 @@ double shared_gate_pair_probability(
       double t = x / (1.0 - x);
       double jac = 1.0 / ((1.0 - x) * (1.0 - x));
       double val = integrand(t);
-      if (!std::isfinite(val) || val <= 0.0)
+      if (!std::isfinite(val))
         return 0.0;
       double out = val * jac;
       return std::isfinite(out) ? out : 0.0;
@@ -2637,92 +3008,39 @@ double shared_gate_pair_probability(
                                outcome_label_context, outcome_idx_context);
   };
 
-  auto I1 = integrate([&](double t) -> double {
-    NodeEvalResult ex = eval_unforced(pair.x, pair.x_ref, t);
-    NodeEvalResult ey = eval_unforced(pair.y, pair.y_ref, t);
-    NodeEvalResult ec = eval_unforced(pair.c, pair.c_ref, t);
-    double fx = ex.density;
-    if (!std::isfinite(fx) || fx <= 0.0)
-      return 0.0;
-    double sc = clamp_probability(ec.survival);
-    double fc = clamp_probability(1.0 - sc);
-    double sy = clamp_probability(ey.survival);
-    double val = fx * fc * sy;
-    return (std::isfinite(val) && val > 0.0) ? val : 0.0;
-  });
-
-  auto I2 = integrate([&](double t) -> double {
-    NodeEvalResult ex = eval_unforced(pair.x, pair.x_ref, t);
-    NodeEvalResult ey = eval_unforced(pair.y, pair.y_ref, t);
-    NodeEvalResult ec = eval_unforced(pair.c, pair.c_ref, t);
-    double fc_dens = ec.density;
-    if (!std::isfinite(fc_dens) || fc_dens <= 0.0)
-      return 0.0;
-    double fx = clamp_probability(1.0 - clamp_probability(ex.survival));
-    double sy = clamp_probability(ey.survival);
-    double val = fc_dens * fx * sy;
-    return (std::isfinite(val) && val > 0.0) ? val : 0.0;
-  });
-
-  auto I3 = integrate([&](double t) -> double {
-    NodeEvalResult ex = eval_unforced(pair.x, pair.x_ref, t);
-    NodeEvalResult ey = eval_unforced(pair.y, pair.y_ref, t);
-    NodeEvalResult ec = eval_unforced(pair.c, pair.c_ref, t);
-    double fc_dens = ec.density;
-    if (!std::isfinite(fc_dens) || fc_dens <= 0.0)
-      return 0.0;
-    double fx = clamp_probability(1.0 - clamp_probability(ex.survival));
-    double fy = clamp_probability(1.0 - clamp_probability(ey.survival));
-    double val = fc_dens * fx * fy;
-    return (std::isfinite(val) && val > 0.0) ? val : 0.0;
-  });
-
-  double total = 0.0;
+  // Algebraic simplification of the previous 4-5 integral formulation:
+  // total = ∫ [ fC(t)*FX(t) + fX(t)*(FC(t) - coeff*FY(t)) ] dt,
+  // where coeff = FC(upper) for finite bounds and 1 for upper = Inf.
+  double coeff = 1.0;
   if (std::isfinite(upper)) {
     NodeEvalResult ec_upper = eval_unforced(pair.c, pair.c_ref, upper);
-    double fc_upper =
-        clamp_probability(1.0 - clamp_probability(ec_upper.survival));
-
-    auto J = integrate([&](double t) -> double {
-      NodeEvalResult ex = eval_unforced(pair.x, pair.x_ref, t);
-      NodeEvalResult ey = eval_unforced(pair.y, pair.y_ref, t);
-      double fx_dens = ex.density;
-      if (!std::isfinite(fx_dens) || fx_dens <= 0.0)
-        return 0.0;
-      double fy = clamp_probability(1.0 - clamp_probability(ey.survival));
-      double val = fx_dens * fy;
-      return (std::isfinite(val) && val > 0.0) ? val : 0.0;
-    });
-
-    auto K = integrate([&](double t) -> double {
-      NodeEvalResult ex = eval_unforced(pair.x, pair.x_ref, t);
-      NodeEvalResult ey = eval_unforced(pair.y, pair.y_ref, t);
-      NodeEvalResult ec = eval_unforced(pair.c, pair.c_ref, t);
-      double fx_dens = ex.density;
-      if (!std::isfinite(fx_dens) || fx_dens <= 0.0)
-        return 0.0;
-      double fy = clamp_probability(1.0 - clamp_probability(ey.survival));
-      double fc = clamp_probability(1.0 - clamp_probability(ec.survival));
-      double val = fx_dens * fy * fc;
-      return (std::isfinite(val) && val > 0.0) ? val : 0.0;
-    });
-
-    total = I1 + I2 + I3 - fc_upper * J + K;
-  } else {
-    auto I4 = integrate([&](double t) -> double {
-      NodeEvalResult ex = eval_unforced(pair.x, pair.x_ref, t);
-      NodeEvalResult ey = eval_unforced(pair.y, pair.y_ref, t);
-      NodeEvalResult ec = eval_unforced(pair.c, pair.c_ref, t);
-      double fx_dens = ex.density;
-      if (!std::isfinite(fx_dens) || fx_dens <= 0.0)
-        return 0.0;
-      double fy = clamp_probability(1.0 - clamp_probability(ey.survival));
-      double sc = clamp_probability(ec.survival);
-      double val = fx_dens * fy * sc;
-      return (std::isfinite(val) && val > 0.0) ? val : 0.0;
-    });
-    total = I1 + I2 + I3 - I4;
+    coeff = clamp_probability(1.0 - clamp_probability(ec_upper.survival));
   }
+
+  auto total_integrand = [&](double t) -> double {
+    NodeEvalResult ex = eval_unforced(pair.x, pair.x_ref, t);
+    NodeEvalResult ec = eval_unforced(pair.c, pair.c_ref, t);
+
+    double sx = clamp_probability(ex.survival);
+    double Fx = clamp_probability(1.0 - sx);
+    double fc_dens = ec.density;
+
+    double val = 0.0;
+    if (std::isfinite(fc_dens) && fc_dens > 0.0 && Fx > 0.0) {
+      val += fc_dens * Fx;
+    }
+
+    double fx_dens = ex.density;
+    if (std::isfinite(fx_dens) && fx_dens > 0.0) {
+      NodeEvalResult ey = eval_unforced(pair.y, pair.y_ref, t);
+      double Fy = clamp_probability(1.0 - clamp_probability(ey.survival));
+      double Fc = clamp_probability(1.0 - clamp_probability(ec.survival));
+      val += fx_dens * (Fc - coeff * Fy);
+    }
+    return std::isfinite(val) ? val : 0.0;
+  };
+
+  double total = integrate_signed(total_integrand);
 
   if (!std::isfinite(total) || total < 0.0)
     total = 0.0;
@@ -2735,10 +3053,14 @@ eval_node_with_forced(const uuber::NativeContext &ctx, int node_id, double time,
                       const std::unordered_set<int> &forced_complete,
                       const std::unordered_set<int> &forced_survive,
                       EvalNeed need, const TrialParamSet *trial_params,
-                      const std::string &trial_key) {
+                      const std::string &trial_key,
+                      const ExactSourceTimeMap *exact_source_times,
+                      const SourceTimeBoundsMap *source_time_bounds,
+                      const ForcedScopeFilter *forced_scope_filter) {
   NodeEvalState local(ctx, time, component, forced_complete, forced_survive,
                       trial_params, trial_key, false, std::string(),
-                      component_idx, -1);
+                      component_idx, -1, exact_source_times,
+                      source_time_bounds, forced_scope_filter);
   return eval_node_recursive(node_id, local, need);
 }
 
@@ -2877,17 +3199,29 @@ GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
                                 const std::unordered_set<int> &forced_complete,
                                 const std::unordered_set<int> &forced_survive,
                                 const std::string &trial_key,
-                                const TrialParamSet *trial_params) {
+                                const TrialParamSet *trial_params,
+                                const ExactSourceTimeMap *exact_source_times,
+                                const SourceTimeBoundsMap *source_time_bounds,
+                                const ForcedScopeFilter *forced_scope_filter) {
   GuardEvalInput input{ctx,
                        node,
                        component,
                        component_idx,
                        component_cache_key(component, trial_key),
+                       &forced_complete,
+                       &forced_survive,
+                       nullptr,
                        {},
-                       {},
-                       trial_params};
-  input.forced_complete = filter_forced_scope(forced_complete, node.source_ids);
-  input.forced_survive = filter_forced_scope(forced_survive, node.source_ids);
+                       false,
+                       trial_params,
+                       exact_source_times,
+                       source_time_bounds};
+  input.local_scope_filter.source_ids = &node.source_ids;
+  input.local_scope_filter.parent = forced_scope_filter;
+  input.forced_scope_filter = &input.local_scope_filter;
+  input.has_scoped_forced =
+      forced_set_intersects_scope(forced_complete, input.forced_scope_filter) ||
+      forced_set_intersects_scope(forced_survive, input.forced_scope_filter);
   return input;
 }
 
@@ -2900,7 +3234,8 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState &state,
         state.ctx, node.source, state.t, state.component, state.forced_complete,
         state.forced_survive, need, state.trial_params, state.trial_type_key,
         state.include_na_donors, state.outcome_label, &node.source_ref,
-        state.component_idx, state.outcome_idx);
+        state.component_idx, state.outcome_idx, state.exact_source_times,
+        state.source_time_bounds, state.forced_scope_filter);
   } else if (node.kind == "and") {
     result = eval_and_node(node, state, need);
   } else if (node.kind == "or") {
@@ -2911,7 +3246,9 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState &state,
     GuardEvalInput guard_input =
         make_guard_input(state.ctx, node, state.component, state.component_idx,
                          state.forced_complete, state.forced_survive,
-                         state.trial_type_key, state.trial_params);
+                         state.trial_type_key, state.trial_params,
+                         state.exact_source_times, state.source_time_bounds,
+                         state.forced_scope_filter);
     IntegrationSettings settings;
     double density = std::numeric_limits<double>::quiet_NaN();
     double survival = std::numeric_limits<double>::quiet_NaN();
@@ -2946,8 +3283,9 @@ double guard_effective_survival_internal(const GuardEvalInput &input, double t,
   }
   NodeEvalResult block = eval_node_with_forced(
       input.ctx, blocker_id, t, input.component, input.component_idx,
-      input.forced_complete, input.forced_survive, EvalNeed::kSurvival,
-      input.trial_params, input.trial_type_key);
+      *input.forced_complete, *input.forced_survive, EvalNeed::kSurvival,
+      input.trial_params, input.trial_type_key, input.exact_source_times,
+      input.source_time_bounds, input.forced_scope_filter);
   return clamp_probability(block.survival);
 }
 
@@ -2961,8 +3299,9 @@ double guard_reference_density(const GuardEvalInput &input, double t) {
   }
   NodeEvalResult ref = eval_node_with_forced(
       input.ctx, reference_id, t, input.component, input.component_idx,
-      input.forced_complete, input.forced_survive, EvalNeed::kDensity,
-      input.trial_params, input.trial_type_key);
+      *input.forced_complete, *input.forced_survive, EvalNeed::kDensity,
+      input.trial_params, input.trial_type_key, input.exact_source_times,
+      input.source_time_bounds, input.forced_scope_filter);
   double dens_ref = ref.density;
   if (!std::isfinite(dens_ref) || dens_ref <= 0.0)
     return 0.0;
@@ -2998,7 +3337,7 @@ struct FastEventInfo {
 
 bool fast_event_info(const GuardEvalInput &input, int node_id,
                      FastEventInfo &info) {
-  if (!input.forced_complete.empty() || !input.forced_survive.empty()) {
+  if (input.has_scoped_forced) {
     return false;
   }
   const uuber::NativeNode &node = fetch_node(input.ctx, node_id);
@@ -3129,8 +3468,9 @@ double quick_eval_density(const GuardEvalInput &input, int node_id, double t) {
   }
   NodeEvalResult res = eval_node_with_forced(
       input.ctx, node_id, t, input.component, input.component_idx,
-      input.forced_complete, input.forced_survive, EvalNeed::kDensity,
-      input.trial_params, input.trial_type_key);
+      *input.forced_complete, *input.forced_survive, EvalNeed::kDensity,
+      input.trial_params, input.trial_type_key, input.exact_source_times,
+      input.source_time_bounds, input.forced_scope_filter);
   return res.density > 0 ? res.density : 0.0;
 }
 
@@ -3143,8 +3483,9 @@ double quick_eval_cdf(const GuardEvalInput &input, int node_id, double t) {
   }
   NodeEvalResult res = eval_node_with_forced(
       input.ctx, node_id, t, input.component, input.component_idx,
-      input.forced_complete, input.forced_survive, EvalNeed::kCDF,
-      input.trial_params, input.trial_type_key);
+      *input.forced_complete, *input.forced_survive, EvalNeed::kCDF,
+      input.trial_params, input.trial_type_key, input.exact_source_times,
+      input.source_time_bounds, input.forced_scope_filter);
   return res.cdf; // clamp done in eval? usually yes
 }
 
@@ -3157,8 +3498,9 @@ double quick_eval_surv(const GuardEvalInput &input, int node_id, double t) {
   }
   NodeEvalResult res = eval_node_with_forced(
       input.ctx, node_id, t, input.component, input.component_idx,
-      input.forced_complete, input.forced_survive, EvalNeed::kSurvival,
-      input.trial_params, input.trial_type_key);
+      *input.forced_complete, *input.forced_survive, EvalNeed::kSurvival,
+      input.trial_params, input.trial_type_key, input.exact_source_times,
+      input.source_time_bounds, input.forced_scope_filter);
   return res.survival;
 }
 
@@ -3229,11 +3571,11 @@ double eval_optimized_depth3(const GuardEvalInput &input, int id_A, int id_B,
     if (SD <= 0)
       return 0.0;
 
-    // Inner Integral K(w, t)
-    // Same integrand as T1, but from w to t
-    double K_val =
-        uuber::integrate_boost_fn(integrand_T1, w, t, settings.rel_tol,
-                                  settings.abs_tol, settings.max_depth);
+    // Inner Integral K(w, t): same integrand as T1, but from w to t
+    double K_val = uuber::integrate_boost_fn(integrand_T1, w, t,
+                                             settings.rel_tol,
+                                             settings.abs_tol,
+                                             settings.max_depth);
     return fC * SD * K_val;
   };
 
@@ -3582,15 +3924,20 @@ build_pool_template_cache(int n, const std::vector<int> &member_ids,
 
 double
 evaluate_survival_with_forced(int node_id,
+                              const std::unordered_set<int> &forced_complete,
                               const std::unordered_set<int> &forced_survive,
                               const std::string &component, int component_idx,
                               double t, const uuber::NativeContext &ctx,
                               const std::string &trial_key = std::string(),
-                              const TrialParamSet *trial_params = nullptr) {
-  static const std::unordered_set<int> empty_forced_complete;
-  NodeEvalState state(ctx, t, component, empty_forced_complete, forced_survive,
+                              const TrialParamSet *trial_params = nullptr,
+                              const ExactSourceTimeMap *exact_source_times =
+                                  nullptr,
+                              const SourceTimeBoundsMap *source_time_bounds =
+                                  nullptr) {
+  NodeEvalState state(ctx, t, component, forced_complete, forced_survive,
                       trial_params, trial_key, false, std::string(),
-                      component_idx, -1);
+                      component_idx, -1, exact_source_times,
+                      source_time_bounds);
   NodeEvalResult res = eval_node_recursive(node_id, state, EvalNeed::kSurvival);
   return clamp_probability(res.survival);
 }
@@ -3599,14 +3946,18 @@ double compute_guard_free_cluster_value(
     const std::vector<int> &cluster_indices,
     const std::vector<CompetitorMeta> &metas, const uuber::NativeContext &ctx,
     double t, const std::string &component, int component_idx,
+    const std::unordered_set<int> &forced_complete,
+    const std::unordered_set<int> &forced_survive,
     const std::string &trial_key = std::string(),
-    const TrialParamSet *trial_params = nullptr) {
-  std::unordered_set<int> empty_forced;
+    const TrialParamSet *trial_params = nullptr,
+    const ExactSourceTimeMap *exact_source_times = nullptr,
+    const SourceTimeBoundsMap *source_time_bounds = nullptr) {
   double prod = 1.0;
   for (int idx : cluster_indices) {
     double surv = evaluate_survival_with_forced(
-        metas[static_cast<std::size_t>(idx)].node_id, empty_forced, component,
-        component_idx, t, ctx, trial_key, trial_params);
+        metas[static_cast<std::size_t>(idx)].node_id, forced_complete,
+        forced_survive, component, component_idx, t, ctx, trial_key,
+        trial_params, exact_source_times, source_time_bounds);
     if (!std::isfinite(surv) || surv <= 0.0)
       return 0.0;
     prod *= surv;
@@ -3620,21 +3971,26 @@ double compute_guard_cluster_value(
     const std::vector<int> &cluster_indices,
     const std::vector<CompetitorMeta> &metas, const uuber::NativeContext &ctx,
     double t, const std::string &component, int component_idx,
+    const std::unordered_set<int> &base_forced_complete,
+    const std::unordered_set<int> &base_forced_survive,
     const std::string &trial_key = std::string(),
     const TrialParamSet *trial_params = nullptr,
     const std::vector<int> *guard_order = nullptr,
-    std::unordered_set<int> *forced_survive_scratch = nullptr) {
+    std::unordered_set<int> *forced_survive_scratch = nullptr,
+    const ExactSourceTimeMap *exact_source_times = nullptr,
+    const SourceTimeBoundsMap *source_time_bounds = nullptr) {
   const std::vector<int> &order = guard_order ? *guard_order : cluster_indices;
   std::unordered_set<int> local_forced;
   std::unordered_set<int> &forced_survive =
       forced_survive_scratch ? *forced_survive_scratch : local_forced;
-  forced_survive.clear();
+  forced_survive = base_forced_survive;
   double prod = 1.0;
   for (int idx : order) {
     const CompetitorMeta &node_meta = metas[static_cast<std::size_t>(idx)];
     double surv = evaluate_survival_with_forced(
-        node_meta.node_id, forced_survive, component, component_idx, t, ctx,
-        trial_key, trial_params);
+        node_meta.node_id, base_forced_complete, forced_survive, component,
+        component_idx, t, ctx, trial_key, trial_params, exact_source_times,
+        source_time_bounds);
     if (!std::isfinite(surv) || surv <= 0.0)
       return 0.0;
     prod *= surv;
@@ -3650,8 +4006,12 @@ double compute_guard_cluster_value(
 double competitor_survival_internal(
     const uuber::NativeContext &ctx, const std::vector<int> &competitor_ids,
     double t, const std::string &component_label, int component_idx,
+    const std::unordered_set<int> &forced_complete,
+    const std::unordered_set<int> &forced_survive,
     const std::string &trial_type_key = std::string(),
-    const TrialParamSet *trial_params = nullptr) {
+    const TrialParamSet *trial_params = nullptr,
+    const ExactSourceTimeMap *exact_source_times = nullptr,
+    const SourceTimeBoundsMap *source_time_bounds = nullptr) {
   if (competitor_ids.empty())
     return 1.0;
   const CompetitorClusterCacheEntry &cache =
@@ -3669,13 +4029,17 @@ double competitor_survival_internal(
         cluster_has_guard
             ? compute_guard_cluster_value(
                   cluster, cache.metas, ctx, t, component_label, component_idx,
-                  trial_type_key, trial_params,
+                  forced_complete, forced_survive, trial_type_key, trial_params,
                   (i < cache.guard_orders.size() ? &cache.guard_orders[i]
                                                  : nullptr),
-                  &forced_survive_scratch)
+                  &forced_survive_scratch, exact_source_times,
+                  source_time_bounds)
             : compute_guard_free_cluster_value(cluster, cache.metas, ctx, t,
                                                component_label, component_idx,
-                                               trial_type_key, trial_params);
+                                               forced_complete, forced_survive,
+                                               trial_type_key, trial_params,
+                                               exact_source_times,
+                                               source_time_bounds);
     if (!std::isfinite(cluster_val) || cluster_val <= 0.0) {
       return 0.0;
     }
@@ -3694,7 +4058,9 @@ double node_density_with_competitors_internal(
     const std::unordered_set<int> &forced_survive,
     const std::vector<int> &competitor_ids, const TrialParamSet *trial_params,
     const std::string &trial_type_key, bool include_na_donors,
-    const std::string &outcome_label_context, int outcome_idx_context) {
+    const std::string &outcome_label_context, int outcome_idx_context,
+    const ExactSourceTimeMap *exact_source_times,
+    const SourceTimeBoundsMap *source_time_bounds) {
   if (!std::isfinite(t) || t < 0.0) {
     return 0.0;
   }
@@ -3721,7 +4087,8 @@ double node_density_with_competitors_internal(
   NodeEvalState state(ctx, t, component_label, forced_complete, forced_survive,
                       trial_params, trial_type_key, include_na_donors,
                       outcome_label_context, component_idx,
-                      outcome_idx_context);
+                      outcome_idx_context, exact_source_times,
+                      source_time_bounds);
   NodeEvalResult base = eval_node_recursive(node_id, state, EvalNeed::kDensity);
   double density = base.density;
   if (!std::isfinite(density) || density <= 0.0) {
@@ -3730,7 +4097,9 @@ double node_density_with_competitors_internal(
   if (!competitor_ids.empty()) {
     double surv = competitor_survival_internal(
         ctx, competitor_ids, t, component_label, component_idx,
-        state.trial_type_key, trial_params);
+        forced_complete, forced_survive,
+        state.trial_type_key, trial_params, exact_source_times,
+        source_time_bounds);
     if (!std::isfinite(surv) || surv <= 0.0) {
       return 0.0;
     }
@@ -3923,17 +4292,44 @@ double native_outcome_probability_impl(
     Rcpp::stop("Too many shared triggers for outcome probability evaluation");
   }
   const std::uint64_t n_states = 1ULL << triggers.size();
-  double total = 0.0;
-  for (std::uint64_t mask = 0; mask < n_states; ++mask) {
-    double w = shared_trigger_mask_weight(triggers, mask);
-    if (w <= 0.0)
-      continue;
-    TrialParamSet conditioned =
-        apply_trigger_state(*params_ptr, triggers, mask);
-    double p = integrate_with_params(&conditioned);
-    if (std::isfinite(p) && p > 0.0) {
-      total += w * p;
+  std::vector<double> mask_weights;
+  constexpr std::uint64_t kMaxPrecomputedWeights = 1ULL << 20;
+  if (n_states <= kMaxPrecomputedWeights) {
+    mask_weights.resize(static_cast<std::size_t>(n_states));
+    for (std::uint64_t m = 0; m < n_states; ++m) {
+      mask_weights[static_cast<std::size_t>(m)] =
+          shared_trigger_mask_weight(triggers, m);
     }
+  }
+  TrialParamSet scratch = *params_ptr;
+  for (const auto &trigger : triggers) {
+    apply_trigger_state_inplace(scratch, trigger, false);
+  }
+  double total = 0.0;
+  std::uint64_t mask = 0;
+  for (std::uint64_t idx = 0; idx < n_states; ++idx) {
+    double w = mask_weights.empty()
+                   ? shared_trigger_mask_weight(triggers, mask)
+                   : mask_weights[static_cast<std::size_t>(mask)];
+    if (w > 0.0) {
+      double p = integrate_with_params(&scratch);
+      if (std::isfinite(p) && p > 0.0) {
+        total += w * p;
+      }
+    }
+    if (idx + 1 == n_states) {
+      break;
+    }
+    std::uint64_t next = idx + 1;
+    std::uint64_t next_gray = next ^ (next >> 1);
+    std::uint64_t diff = next_gray ^ mask;
+    if (diff != 0) {
+      int bit = static_cast<int>(__builtin_ctzll(diff));
+      bool fail = ((next_gray >> bit) & 1ULL) != 0ULL;
+      apply_trigger_state_inplace(
+          scratch, triggers[static_cast<std::size_t>(bit)], fail);
+    }
+    mask = next_gray;
   }
   return clamp_probability(total);
 }
@@ -4113,6 +4509,10 @@ build_trial_params_from_df(const uuber::NativeContext &ctx,
     const uuber::NativeAccumulator &base = ctx.accumulators[acc_idx];
 
     TrialAccumulatorParams override;
+    override.onset_kind = base.onset_kind;
+    override.onset_source_acc_idx = base.onset_source_acc_idx;
+    override.onset_source_pool_idx = base.onset_source_pool_idx;
+    override.onset_lag = base.onset_lag;
     override.onset =
         (i < onset_col.size() && !Rcpp::NumericVector::is_na(onset_col[i]))
             ? static_cast<double>(onset_col[i])
@@ -4125,6 +4525,9 @@ build_trial_params_from_df(const uuber::NativeContext &ctx,
     } else {
       override.shared_trigger_id = base.shared_trigger_id;
       has_shared = !override.shared_trigger_id.empty();
+    }
+    if (override.shared_trigger_id != base.shared_trigger_id) {
+      params_set->shared_trigger_layout_matches_context = false;
     }
     // Shared gate probability from column or base; per-acc q=0 on success path.
     if (has_shared) {
@@ -4631,17 +5034,11 @@ double mix_outcome_mass(SEXP ctxSEXP, const uuber::OutcomeContextInfo &info,
     return 0.0;
   Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
   // Cache NA-map integrals when no RT is provided (maps_to_na cases).
-  std::string cache_key;
+  uuber::NAMapCacheKey cache_key;
   bool use_cache = params_ptr != nullptr;
   if (use_cache) {
-    std::ostringstream oss;
-    oss << outcome_label_context << "|node:" << info.node_id
-        << "|sig:" << param_signature(params_ptr) << "|comp:";
-    for (std::size_t i = 0; i < comp_labels.size(); ++i) {
-      oss << comp_labels[i] << "@"
-          << (i < comp_weights.size() ? comp_weights[i] : 0.0) << ";";
-    }
-    cache_key = oss.str();
+    cache_key = build_na_map_cache_key(info, params_ptr, comp_labels,
+                                       comp_weights, outcome_label_context);
     auto hit = ctx->na_map_cache.find(cache_key);
     if (hit != ctx->na_map_cache.end()) {
       return hit->second;
@@ -4687,9 +5084,496 @@ double mix_outcome_mass(SEXP ctxSEXP, const uuber::OutcomeContextInfo &info,
       ctx->na_map_cache.clear();
       ctx->na_cache_order.clear();
     }
-    ctx->na_map_cache[cache_key] = out;
+    ctx->na_map_cache.emplace(std::move(cache_key), out);
   }
   return out;
+}
+
+struct RankedState {
+  double weight{0.0};
+  std::vector<int> forced_complete;
+  std::vector<int> forced_survive;
+  ExactSourceTimeMap exact_source_times;
+  SourceTimeBoundsMap source_time_bounds;
+};
+
+inline std::string ranked_state_key(const std::vector<int> &forced_complete,
+                                    const std::vector<int> &forced_survive,
+                                    const ExactSourceTimeMap &exact_source_times,
+                                    const SourceTimeBoundsMap &source_time_bounds) {
+  std::ostringstream oss;
+  oss << "c:";
+  for (std::size_t i = 0; i < forced_complete.size(); ++i) {
+    if (i > 0)
+      oss << ",";
+    oss << forced_complete[i];
+  }
+  oss << "|s:";
+  for (std::size_t i = 0; i < forced_survive.size(); ++i) {
+    if (i > 0)
+      oss << ",";
+    oss << forced_survive[i];
+  }
+  if (!exact_source_times.empty()) {
+    std::vector<std::pair<int, double>> exact_pairs;
+    exact_pairs.reserve(exact_source_times.size());
+    for (const auto &kv : exact_source_times) {
+      exact_pairs.push_back(kv);
+    }
+    std::sort(exact_pairs.begin(), exact_pairs.end(),
+              [](const auto &lhs, const auto &rhs) {
+                return lhs.first < rhs.first;
+              });
+    oss << "|x:";
+    for (std::size_t i = 0; i < exact_pairs.size(); ++i) {
+      if (i > 0)
+        oss << ",";
+      oss << exact_pairs[i].first << "@" << std::setprecision(17)
+          << exact_pairs[i].second;
+    }
+  }
+  if (!source_time_bounds.empty()) {
+    std::vector<std::pair<int, std::pair<double, double>>> bound_pairs;
+    bound_pairs.reserve(source_time_bounds.size());
+    for (const auto &kv : source_time_bounds) {
+      bound_pairs.push_back(kv);
+    }
+    std::sort(bound_pairs.begin(), bound_pairs.end(),
+              [](const auto &lhs, const auto &rhs) {
+                return lhs.first < rhs.first;
+              });
+    oss << "|b:";
+    for (std::size_t i = 0; i < bound_pairs.size(); ++i) {
+      if (i > 0)
+        oss << ",";
+      oss << bound_pairs[i].first << "@" << std::setprecision(17)
+          << bound_pairs[i].second.first << ":" << bound_pairs[i].second.second;
+    }
+  }
+  return oss.str();
+}
+
+std::vector<RankedState>
+collapse_ranked_states(const std::vector<RankedState> &states, double eps) {
+  if (states.empty()) {
+    return {};
+  }
+  std::unordered_map<std::string, std::size_t> key_index;
+  std::vector<RankedState> collapsed;
+  collapsed.reserve(states.size());
+  for (const RankedState &state : states) {
+    if (!std::isfinite(state.weight) || state.weight <= eps) {
+      continue;
+    }
+    std::string key =
+        ranked_state_key(state.forced_complete, state.forced_survive,
+                         state.exact_source_times, state.source_time_bounds);
+    auto it = key_index.find(key);
+    if (it == key_index.end()) {
+      key_index.emplace(key, collapsed.size());
+      collapsed.push_back(state);
+    } else {
+      collapsed[it->second].weight += state.weight;
+    }
+  }
+  std::vector<RankedState> out;
+  out.reserve(collapsed.size());
+  for (RankedState &state : collapsed) {
+    if (std::isfinite(state.weight) && state.weight > eps) {
+      out.push_back(std::move(state));
+    }
+  }
+  return out;
+}
+
+std::vector<int>
+collect_competitor_sources(const uuber::NativeContext &ctx,
+                           const std::vector<int> &competitor_ids) {
+  if (competitor_ids.empty()) {
+    return {};
+  }
+  std::vector<int> out;
+  for (int node_id : competitor_ids) {
+    if (node_id == NA_INTEGER) {
+      continue;
+    }
+    const uuber::NativeNode &node = fetch_node(ctx, node_id);
+    std::vector<int> source_ids = ensure_source_ids(ctx, node);
+    out.insert(out.end(), source_ids.begin(), source_ids.end());
+  }
+  sort_unique(out);
+  return out;
+}
+
+double ranked_prefix_density_single_params(
+    const uuber::NativeContext &ctx, const std::vector<std::string> &labels,
+    const std::vector<double> &times, const std::string &component_label,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key) {
+  if (labels.empty() || labels.size() != times.size()) {
+    return 0.0;
+  }
+
+  constexpr double kBranchEps = 1e-18;
+  std::vector<int> outcome_indices;
+  std::vector<int> node_sequence;
+  outcome_indices.reserve(labels.size());
+  node_sequence.reserve(labels.size());
+  std::unordered_set<int> seen_node_ids;
+  seen_node_ids.reserve(labels.size());
+  for (std::size_t i = 0; i < labels.size(); ++i) {
+    const std::string &label = labels[i];
+    double t = times[i];
+    if (label.empty() || !std::isfinite(t) || t < 0.0) {
+      return 0.0;
+    }
+    int outcome_idx = resolve_outcome_index(ctx, label, component_label);
+    if (outcome_idx < 0 ||
+        outcome_idx >= static_cast<int>(ctx.outcome_info.size())) {
+      return 0.0;
+    }
+    const uuber::OutcomeContextInfo &info =
+        ctx.outcome_info[static_cast<std::size_t>(outcome_idx)];
+    if (info.node_id < 0) {
+      return 0.0;
+    }
+    if (!seen_node_ids.insert(info.node_id).second) {
+      return 0.0;
+    }
+    outcome_indices.push_back(outcome_idx);
+    node_sequence.push_back(info.node_id);
+  }
+
+  std::unordered_set<int> onset_source_ids;
+  onset_source_ids.reserve(ctx.accumulators.size());
+  const std::vector<TrialAccumulatorParams> *acc_params =
+      trial_params ? &trial_params->acc_params : nullptr;
+  for (std::size_t acc_i = 0; acc_i < ctx.accumulators.size(); ++acc_i) {
+    const uuber::NativeAccumulator &acc = ctx.accumulators[acc_i];
+    const TrialAccumulatorParams *override =
+        (acc_params && acc_i < acc_params->size())
+            ? &((*acc_params)[acc_i])
+            : nullptr;
+    int onset_kind = override ? override->onset_kind : acc.onset_kind;
+    if (onset_kind == uuber::ONSET_AFTER_ACCUMULATOR) {
+      int src_idx =
+          override ? override->onset_source_acc_idx : acc.onset_source_acc_idx;
+      if (src_idx >= 0 && src_idx < static_cast<int>(ctx.accumulators.size())) {
+        int src_id = label_id(ctx, ctx.accumulators[src_idx].id);
+        if (src_id >= 0 && src_id != NA_INTEGER) {
+          onset_source_ids.insert(src_id);
+        }
+      }
+    } else if (onset_kind == uuber::ONSET_AFTER_POOL) {
+      int src_idx =
+          override ? override->onset_source_pool_idx : acc.onset_source_pool_idx;
+      if (src_idx >= 0 && src_idx < static_cast<int>(ctx.pools.size())) {
+        int src_id = label_id(ctx, ctx.pools[src_idx].id);
+        if (src_id >= 0 && src_id != NA_INTEGER) {
+          onset_source_ids.insert(src_id);
+        }
+      }
+    }
+  }
+
+  std::vector<ExactSourceTimeMap> observed_prefix_exact(labels.size() + 1);
+  for (std::size_t rank_idx = 0; rank_idx < labels.size(); ++rank_idx) {
+    observed_prefix_exact[rank_idx + 1] = observed_prefix_exact[rank_idx];
+    const uuber::NativeNode &node =
+        fetch_node(ctx, node_sequence[rank_idx]);
+    std::vector<int> src_ids = ensure_source_ids(ctx, node);
+    for (int src_id : src_ids) {
+      if (onset_source_ids.count(src_id) == 0) {
+        continue;
+      }
+      observed_prefix_exact[rank_idx + 1][src_id] = times[rank_idx];
+    }
+  }
+
+  std::vector<RankedState> states;
+  RankedState init_state;
+  init_state.weight = 1.0;
+  states.push_back(std::move(init_state));
+  std::unordered_set<int> observed_nodes;
+  std::unordered_set<int> future_nodes(node_sequence.begin(),
+                                       node_sequence.end());
+  observed_nodes.reserve(labels.size());
+
+  for (std::size_t rank_idx = 0; rank_idx < labels.size(); ++rank_idx) {
+    double t = times[rank_idx];
+    if (!std::isfinite(t) || t < 0.0) {
+      return 0.0;
+    }
+    const ExactSourceTimeMap &prefix_exact = observed_prefix_exact[rank_idx];
+
+    int outcome_idx = outcome_indices[rank_idx];
+    const uuber::OutcomeContextInfo &info =
+        ctx.outcome_info[static_cast<std::size_t>(outcome_idx)];
+    observed_nodes.insert(info.node_id);
+    future_nodes.erase(info.node_id);
+
+    std::vector<int> filtered_competitors;
+    const std::vector<int> &base_competitors =
+        filter_competitor_ids(ctx, info.competitor_ids, component_label,
+                              filtered_competitors);
+    std::vector<int> competitors;
+    competitors.reserve(base_competitors.size());
+    for (int node_id : base_competitors) {
+      if (node_id == NA_INTEGER || node_id == info.node_id) {
+        continue;
+      }
+      if (observed_nodes.count(node_id) > 0) {
+        continue;
+      }
+      competitors.push_back(node_id);
+    }
+    sort_unique(competitors);
+    std::vector<int> persistent_competitors;
+    persistent_competitors.reserve(competitors.size());
+    for (int node_id : competitors) {
+      if (future_nodes.count(node_id) == 0) {
+        persistent_competitors.push_back(node_id);
+      }
+    }
+    std::vector<int> persistent_sources =
+        collect_competitor_sources(ctx, persistent_competitors);
+
+    std::vector<RankedState> next_states;
+    next_states.reserve(states.size() * 2);
+
+    for (const RankedState &state : states) {
+      if (!std::isfinite(state.weight) || state.weight <= kBranchEps) {
+        continue;
+      }
+      ExactSourceTimeMap merged_exact = state.exact_source_times;
+      if (!prefix_exact.empty()) {
+        for (const auto &kv : prefix_exact) {
+          if (std::isfinite(kv.second)) {
+            merged_exact[kv.first] = kv.second;
+          }
+        }
+      }
+      SourceTimeBoundsMap merged_bounds = state.source_time_bounds;
+      if (!merged_exact.empty() && !merged_bounds.empty()) {
+        for (const auto &kv : merged_exact) {
+          merged_bounds.erase(kv.first);
+        }
+      }
+      std::unordered_set<int> forced_complete =
+          make_forced_set(state.forced_complete);
+      std::unordered_set<int> forced_survive =
+          make_forced_set(state.forced_survive);
+      double denom = 1.0;
+      if (rank_idx > 0) {
+        double lower_t = times[rank_idx - 1];
+        denom = evaluate_survival_with_forced(
+            info.node_id, forced_complete, forced_survive, component_label,
+            component_idx, lower_t, ctx, trial_type_key, trial_params,
+            &merged_exact, &merged_bounds);
+        if (!std::isfinite(denom) || denom <= kBranchEps) {
+          continue;
+        }
+      }
+      NodeEvalState eval_state(
+          ctx, t, component_label, forced_complete, forced_survive,
+          trial_params, trial_type_key, false, std::string(), component_idx,
+          outcome_idx, &merged_exact, &merged_bounds);
+      std::vector<ScenarioRecord> scenarios =
+          compute_node_scenarios(info.node_id, eval_state);
+      if (scenarios.empty()) {
+        continue;
+      }
+      for (const ScenarioRecord &scenario : scenarios) {
+        if (!std::isfinite(scenario.weight) ||
+            scenario.weight <= kBranchEps) {
+          continue;
+        }
+        double weight = state.weight * (scenario.weight / denom);
+        if (!std::isfinite(weight) || weight <= kBranchEps) {
+          continue;
+        }
+        std::vector<int> next_complete = scenario.forced_complete;
+        std::vector<int> next_survive = scenario.forced_survive;
+        sort_unique(next_complete);
+        sort_unique(next_survive);
+        if (!competitors.empty()) {
+          std::unordered_set<int> next_complete_set =
+              make_forced_set(next_complete);
+          std::unordered_set<int> next_survive_set =
+              make_forced_set(next_survive);
+          double surv = competitor_survival_internal(
+              ctx, competitors, t, component_label, component_idx,
+              next_complete_set, next_survive_set, trial_type_key,
+              trial_params, &merged_exact, &merged_bounds);
+          if (!std::isfinite(surv) || surv <= kBranchEps) {
+            continue;
+          }
+          weight *= surv;
+          if (!std::isfinite(weight) || weight <= kBranchEps) {
+            continue;
+          }
+          if (!persistent_sources.empty()) {
+            next_survive = union_vectors(next_survive, persistent_sources);
+          }
+        }
+        RankedState next_state;
+        next_state.weight = weight;
+        next_state.forced_complete = std::move(next_complete);
+        next_state.forced_survive = std::move(next_survive);
+        next_state.exact_source_times = state.exact_source_times;
+        next_state.source_time_bounds = state.source_time_bounds;
+        if (!onset_source_ids.empty()) {
+          bool bounds_ok = true;
+          for (int src_id : next_state.forced_survive) {
+            if (onset_source_ids.count(src_id) == 0) {
+              continue;
+            }
+            if (next_state.exact_source_times.find(src_id) !=
+                next_state.exact_source_times.end()) {
+              continue;
+            }
+            if (prefix_exact.find(src_id) != prefix_exact.end()) {
+              continue;
+            }
+            auto bound_it = next_state.source_time_bounds.find(src_id);
+            if (bound_it == next_state.source_time_bounds.end()) {
+              bound_it = next_state.source_time_bounds
+                             .emplace(src_id, std::make_pair(
+                                                  0.0,
+                                                  std::numeric_limits<double>::infinity()))
+                             .first;
+            }
+            auto &bound = bound_it->second;
+            bound.first = std::max(bound.first, t);
+            if (!(bound.second > bound.first)) {
+              bounds_ok = false;
+              break;
+            }
+          }
+          if (!bounds_ok) {
+            continue;
+          }
+          for (int src_id : next_state.forced_complete) {
+            if (onset_source_ids.count(src_id) == 0) {
+              continue;
+            }
+            if (next_state.exact_source_times.find(src_id) !=
+                next_state.exact_source_times.end()) {
+              continue;
+            }
+            if (prefix_exact.find(src_id) != prefix_exact.end()) {
+              continue;
+            }
+            auto bound_it = next_state.source_time_bounds.find(src_id);
+            if (bound_it == next_state.source_time_bounds.end()) {
+              bound_it = next_state.source_time_bounds
+                             .emplace(src_id, std::make_pair(
+                                                  0.0,
+                                                  std::numeric_limits<double>::infinity()))
+                             .first;
+            }
+            auto &bound = bound_it->second;
+            bound.second = std::min(bound.second, t);
+            if (!(bound.second > bound.first)) {
+              bounds_ok = false;
+              break;
+            }
+          }
+          if (!bounds_ok) {
+            continue;
+          }
+        }
+        next_states.push_back(std::move(next_state));
+      }
+    }
+
+    states = collapse_ranked_states(next_states, kBranchEps);
+    if (states.empty()) {
+      return 0.0;
+    }
+  }
+
+  double total = 0.0;
+  for (const RankedState &state : states) {
+    if (std::isfinite(state.weight) && state.weight > 0.0) {
+      total += state.weight;
+    }
+  }
+  if (!std::isfinite(total) || total <= 0.0) {
+    return 0.0;
+  }
+  return total;
+}
+
+double ranked_prefix_density(
+    const uuber::NativeContext &ctx, const std::vector<std::string> &labels,
+    const std::vector<double> &times, const std::string &component_label,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, const SharedTriggerPlan *trigger_plan,
+    TrialParamSet *scratch_params) {
+  if (!trial_params) {
+    return ranked_prefix_density_single_params(
+        ctx, labels, times, component_label, component_idx, trial_params,
+        trial_type_key);
+  }
+
+  SharedTriggerPlan local_plan;
+  const SharedTriggerPlan *plan_ptr = trigger_plan;
+  if (!plan_ptr) {
+    local_plan = build_shared_trigger_plan(ctx, trial_params);
+    plan_ptr = &local_plan;
+  }
+  if (plan_ptr->triggers.empty()) {
+    return ranked_prefix_density_single_params(
+        ctx, labels, times, component_label, component_idx, trial_params,
+        trial_type_key);
+  }
+
+  const std::vector<SharedTriggerInfo> &triggers = plan_ptr->triggers;
+  if (triggers.size() >= 63) {
+    Rcpp::stop("Too many shared triggers for ranked likelihood evaluation");
+  }
+
+  TrialParamSet local_scratch;
+  TrialParamSet &scratch = scratch_params ? *scratch_params : local_scratch;
+  scratch = *trial_params;
+  for (const auto &trigger : triggers) {
+    apply_trigger_state_inplace(scratch, trigger, false);
+  }
+
+  const std::uint64_t n_states = 1ULL << triggers.size();
+  double total = 0.0;
+  std::uint64_t mask = 0;
+  for (std::uint64_t idx = 0; idx < n_states; ++idx) {
+    double w = plan_ptr->mask_weights.empty()
+                   ? shared_trigger_mask_weight(triggers, mask)
+                   : plan_ptr->mask_weights[mask];
+    if (w > 0.0) {
+      double contrib = ranked_prefix_density_single_params(
+          ctx, labels, times, component_label, component_idx, &scratch,
+          trial_type_key);
+      if (std::isfinite(contrib) && contrib > 0.0) {
+        total += w * contrib;
+      }
+    }
+    if (idx + 1 == n_states) {
+      break;
+    }
+    std::uint64_t next = idx + 1;
+    std::uint64_t next_gray = next ^ (next >> 1);
+    std::uint64_t diff = next_gray ^ mask;
+    if (diff != 0) {
+      int bit = static_cast<int>(__builtin_ctzll(diff));
+      bool fail = ((next_gray >> bit) & 1ULL) != 0ULL;
+      apply_trigger_state_inplace(
+          scratch, triggers[static_cast<std::size_t>(bit)], fail);
+    }
+    mask = next_gray;
+  }
+  if (!std::isfinite(total) || total <= 0.0) {
+    return 0.0;
+  }
+  return total;
 }
 
 // [[Rcpp::export]]
@@ -4710,6 +5594,27 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
   Rcpp::NumericVector trial_col = data_df["trial"];
   Rcpp::CharacterVector outcome_col = data_df["R"];
   Rcpp::NumericVector rt_col = data_df["rt"];
+  std::vector<Rcpp::CharacterVector> rank_outcome_cols;
+  std::vector<Rcpp::NumericVector> rank_rt_cols;
+  rank_outcome_cols.push_back(outcome_col);
+  rank_rt_cols.push_back(rt_col);
+  for (int rank = 2;; ++rank) {
+    std::string r_name = "R" + std::to_string(rank);
+    std::string rt_name = "rt" + std::to_string(rank);
+    bool has_r = data_df.containsElementNamed(r_name.c_str());
+    bool has_rt = data_df.containsElementNamed(rt_name.c_str());
+    if (!has_r && !has_rt) {
+      break;
+    }
+    if (has_r != has_rt) {
+      Rcpp::stop("Ranked observations require paired columns '%s' and '%s'",
+                 r_name.c_str(), rt_name.c_str());
+    }
+    rank_outcome_cols.push_back(Rcpp::CharacterVector(data_df[r_name]));
+    rank_rt_cols.push_back(Rcpp::NumericVector(data_df[rt_name]));
+  }
+  const int rank_width = static_cast<int>(rank_outcome_cols.size());
+  const bool ranked_mode = rank_width > 1;
   bool has_component = data_df.containsElementNamed("component");
   Rcpp::CharacterVector comp_col =
       has_component ? Rcpp::CharacterVector(data_df["component"])
@@ -4748,10 +5653,18 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
   std::vector<std::string> component_by_trial;
   std::vector<int> comp_idx_by_trial;
   std::vector<std::vector<double>> weight_override_by_trial;
+  std::vector<std::vector<Rcpp::String>> ranked_outcome_by_trial;
+  std::vector<std::vector<double>> ranked_rt_by_trial;
 
   const std::size_t comp_count = comp_map.ids.size();
 
   const R_xlen_t n_rows = params_mat.nrow();
+  if (trial_col.size() != n_rows) {
+    Rcpp::stop(
+        "Parameter matrix rows (%lld) must match nested likelihood rows (%lld)",
+        static_cast<long long>(n_rows),
+        static_cast<long long>(trial_col.size()));
+  }
   int current_trial_label = std::numeric_limits<int>::min();
   int trial_idx = -1;
   std::size_t acc_cursor = 0;
@@ -4770,6 +5683,14 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       comp_idx_by_trial.push_back(-1);
       weight_override_by_trial.push_back(std::vector<double>(
           comp_count, std::numeric_limits<double>::quiet_NaN()));
+      if (ranked_mode) {
+        ranked_outcome_by_trial.push_back(
+            std::vector<Rcpp::String>(static_cast<std::size_t>(rank_width),
+                                      Rcpp::String(NA_STRING)));
+        ranked_rt_by_trial.push_back(std::vector<double>(
+            static_cast<std::size_t>(rank_width),
+            std::numeric_limits<double>::quiet_NaN()));
+      }
       acc_cursor = 0;
       current_acc_order = &all_acc_indices;
     }
@@ -4838,6 +5759,30 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       Rcpp::String comp_val(comp_col[r]);
       if (comp_val != NA_STRING) {
         component_by_trial[trial_idx] = std::string(comp_val.get_cstring());
+      }
+    }
+    if (ranked_mode) {
+      std::vector<Rcpp::String> &trial_ranked_out =
+          ranked_outcome_by_trial[trial_idx];
+      std::vector<double> &trial_ranked_rt = ranked_rt_by_trial[trial_idx];
+      for (int rank_idx = 0; rank_idx < rank_width; ++rank_idx) {
+        if (trial_ranked_out[static_cast<std::size_t>(rank_idx)] == NA_STRING &&
+            r < rank_outcome_cols[static_cast<std::size_t>(rank_idx)].size()) {
+          Rcpp::String cand(
+              rank_outcome_cols[static_cast<std::size_t>(rank_idx)][r]);
+          if (cand != NA_STRING) {
+            trial_ranked_out[static_cast<std::size_t>(rank_idx)] = cand;
+          }
+        }
+        if (!std::isfinite(
+                trial_ranked_rt[static_cast<std::size_t>(rank_idx)]) &&
+            r < rank_rt_cols[static_cast<std::size_t>(rank_idx)].size()) {
+          double cand_rt =
+              rank_rt_cols[static_cast<std::size_t>(rank_idx)][r];
+          if (std::isfinite(cand_rt)) {
+            trial_ranked_rt[static_cast<std::size_t>(rank_idx)] = cand_rt;
+          }
+        }
       }
     }
   }
@@ -4947,8 +5892,7 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
             ? &trigger_plans[static_cast<std::size_t>(t)]
             : nullptr;
 
-    double prob = 0.0;
-    if (outcome_is_na) {
+    auto compute_nonresponse_prob = [&]() -> double {
       double non_na_total = 0.0;
       for (std::size_t oi = 0; oi < ctx->outcome_info.size(); ++oi) {
         const std::string &lbl = (oi < ctx->outcome_labels.size())
@@ -4965,7 +5909,116 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
         if (!info.maps_to_na)
           non_na_total += p;
       }
-      prob = clamp_probability(1.0 - non_na_total);
+      return clamp_probability(1.0 - non_na_total);
+    };
+
+    double prob = 0.0;
+    if (ranked_mode) {
+      std::vector<std::string> ranked_labels;
+      std::vector<double> ranked_times;
+      ranked_labels.reserve(static_cast<std::size_t>(rank_width));
+      ranked_times.reserve(static_cast<std::size_t>(rank_width));
+      bool ranked_valid = true;
+      bool seen_truncation = false;
+      std::unordered_set<std::string> seen_labels;
+      if (t >= static_cast<int>(ranked_outcome_by_trial.size()) ||
+          t >= static_cast<int>(ranked_rt_by_trial.size())) {
+        ranked_valid = false;
+      } else {
+        const std::vector<Rcpp::String> &trial_ranked_out =
+            ranked_outcome_by_trial[static_cast<std::size_t>(t)];
+        const std::vector<double> &trial_ranked_rt =
+            ranked_rt_by_trial[static_cast<std::size_t>(t)];
+        for (int rank_i = 0; rank_i < rank_width; ++rank_i) {
+          Rcpp::String label = trial_ranked_out[static_cast<std::size_t>(rank_i)];
+          double rank_rt = trial_ranked_rt[static_cast<std::size_t>(rank_i)];
+          bool has_label = (label != NA_STRING);
+          bool has_rt = std::isfinite(rank_rt);
+          if (!has_label && !has_rt) {
+            seen_truncation = true;
+            continue;
+          }
+          if (seen_truncation || (has_label != has_rt)) {
+            ranked_valid = false;
+            break;
+          }
+          std::string label_str(label.get_cstring());
+          if (label_str.empty() || rank_rt < 0.0) {
+            ranked_valid = false;
+            break;
+          }
+          if (!ranked_times.empty() && !(rank_rt > ranked_times.back())) {
+            ranked_valid = false;
+            break;
+          }
+          if (!seen_labels.insert(label_str).second) {
+            ranked_valid = false;
+            break;
+          }
+          ranked_labels.push_back(label_str);
+          ranked_times.push_back(rank_rt);
+        }
+      }
+
+      if (!ranked_valid) {
+        prob = 0.0;
+      } else if (ranked_labels.empty()) {
+        prob = compute_nonresponse_prob();
+      } else {
+        double total = 0.0;
+        for (std::size_t c = 0; c < comp_labels_ptr->size(); ++c) {
+          double w =
+              (c < comp_weights_ptr->size()) ? (*comp_weights_ptr)[c] : 0.0;
+          if (!std::isfinite(w) || w <= 0.0) {
+            continue;
+          }
+          const std::string &comp_label = (*comp_labels_ptr)[c];
+          int comp_idx = comp_indices[c];
+          std::string trial_type_key =
+              (c < cache_entries_ptr->size())
+                  ? (*cache_entries_ptr)[c].trial_type_key
+                  : std::string();
+
+          double keep_mult = 1.0;
+          bool component_ok = true;
+          for (const std::string &label : ranked_labels) {
+            int rank_outcome_idx =
+                resolve_outcome_index(*ctx, label, comp_label);
+            if (rank_outcome_idx < 0 ||
+                rank_outcome_idx >=
+                    static_cast<int>(ctx->outcome_info.size())) {
+              component_ok = false;
+              break;
+            }
+            double keep_w =
+                component_keep_weight(*ctx, comp_idx, rank_outcome_idx);
+            if (!std::isfinite(keep_w) || keep_w <= 0.0) {
+              component_ok = false;
+              break;
+            }
+            keep_mult *= keep_w;
+            if (!std::isfinite(keep_mult) || keep_mult <= 0.0) {
+              component_ok = false;
+              break;
+            }
+          }
+          if (!component_ok) {
+            continue;
+          }
+
+          TrialParamSet ranked_trigger_scratch;
+          double contrib = ranked_prefix_density(
+              *ctx, ranked_labels, ranked_times, comp_label, comp_idx,
+              params_ptr, trial_type_key, trigger_plan_ptr,
+              &ranked_trigger_scratch);
+          if (std::isfinite(contrib) && contrib > 0.0) {
+            total += w * keep_mult * contrib;
+          }
+        }
+        prob = total;
+      }
+    } else if (outcome_is_na) {
+      prob = compute_nonresponse_prob();
     } else {
       bool has_forced_component = !forced_component.empty();
       auto out_it = ctx->outcome_index.find(outcome_label);
@@ -5011,8 +6064,8 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
         }
         prob = total;
       } else {
-        int outcome_idx = resolve_outcome_index(*ctx, outcome_label,
-                                                component_by_trial[trial_idx]);
+        int outcome_idx = resolve_outcome_index(
+            *ctx, outcome_label, component_by_trial[static_cast<std::size_t>(t)]);
         if (outcome_idx < 0 ||
             outcome_idx >= static_cast<int>(ctx->outcome_info.size()) ||
             ctx->outcome_info[static_cast<std::size_t>(outcome_idx)].node_id <

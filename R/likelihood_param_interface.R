@@ -141,6 +141,8 @@
   if (!inherits(native_ctx, "externalptr")) {
     native_ctx <- NULL
   }
+  outcome_label_id_map <- .build_outcome_label_id_map(native_ctx)
+  component_label_idx_map <- .build_component_label_idx_map(structure)
   trial_ids <- unique(data_df$trial)
   n_trials <- length(trial_ids)
   structure(list(
@@ -152,6 +154,8 @@
     n_trials = n_trials,
     trial_ids = trial_ids,
     rank_width = rank_info$max_rank,
+    outcome_label_id_map = outcome_label_id_map,
+    component_label_idx_map = component_label_idx_map,
     rel_tol = .integrate_rel_tol(),
     abs_tol = .integrate_abs_tol(),
     max_depth = getOption("uuber.integrate.max.depth", 12L)
@@ -197,6 +201,101 @@ build_likelihood_context <- function(structure,
     return(context)
   }
   stop("likelihood context must be created via build_likelihood_context()", call. = FALSE)
+}
+
+.build_outcome_label_id_map <- function(native_ctx) {
+  if (is.null(native_ctx) || !inherits(native_ctx, "externalptr")) {
+    return(NULL)
+  }
+  lbl_df <- tryCatch(
+    native_outcome_labels_cpp(native_ctx),
+    error = function(...) NULL
+  )
+  if (is.null(lbl_df) || !"label" %in% names(lbl_df) ||
+      !"label_id" %in% names(lbl_df)) {
+    return(NULL)
+  }
+  lbl <- as.character(lbl_df$label)
+  lbl_id <- as.integer(lbl_df$label_id)
+  keep <- !is.na(lbl) & nzchar(lbl) & !is.na(lbl_id)
+  if (!any(keep)) {
+    return(NULL)
+  }
+  out <- lbl_id[keep]
+  names(out) <- lbl[keep]
+  out[!duplicated(names(out))]
+}
+
+.build_component_label_idx_map <- function(structure) {
+  comp_ids <- as.character(structure$components$component_id %||% character(0))
+  if (length(comp_ids) == 0L) {
+    comp_ids <- "__default__"
+  }
+  idx <- seq_along(comp_ids) - 1L
+  names(idx) <- comp_ids
+  idx[!duplicated(names(idx))]
+}
+
+.attach_outcome_id_columns <- function(data_df, outcome_label_id_map, rank_width) {
+  if (is.null(outcome_label_id_map) || length(outcome_label_id_map) == 0L) {
+    stop("IR likelihood requires a non-empty outcome label-id map", call. = FALSE)
+  }
+  out <- as.data.frame(data_df)
+  rank_width <- as.integer(rank_width %||% 1L)
+  if (rank_width < 1L) {
+    rank_width <- 1L
+  }
+  for (rank in seq_len(rank_width)) {
+    r_col <- if (rank == 1L) "R" else paste0("R", rank)
+    id_col <- if (rank == 1L) "R_id" else paste0("R", rank, "_id")
+    if (!r_col %in% names(out)) {
+      next
+    }
+    labels <- as.character(out[[r_col]])
+    ids <- unname(outcome_label_id_map[labels])
+    missing_label_ids <- !is.na(labels) & nzchar(labels) & is.na(ids)
+    if (any(missing_label_ids)) {
+      bad <- unique(labels[missing_label_ids])
+      bad <- bad[!is.na(bad) & nzchar(bad)]
+      stop(
+        sprintf(
+          "IR likelihood encountered unknown outcome labels in '%s': %s",
+          r_col, paste(utils::head(bad, 5L), collapse = ", ")
+        ),
+        call. = FALSE
+      )
+    }
+    ids[is.na(labels)] <- NA_integer_
+    out[[id_col]] <- as.integer(ids)
+  }
+  out
+}
+
+.attach_component_idx_column <- function(data_df, component_label_idx_map) {
+  out <- as.data.frame(data_df)
+  if (!"component" %in% names(out)) {
+    return(out)
+  }
+  if (is.null(component_label_idx_map) || length(component_label_idx_map) == 0L) {
+    stop("IR likelihood requires a non-empty component label-index map", call. = FALSE)
+  }
+  comp <- as.character(out$component)
+  idx <- unname(component_label_idx_map[comp])
+  missing_component_idx <- !is.na(comp) & nzchar(comp) & is.na(idx)
+  if (any(missing_component_idx)) {
+    bad <- unique(comp[missing_component_idx])
+    bad <- bad[!is.na(bad) & nzchar(bad)]
+    stop(
+      sprintf(
+        "IR likelihood encountered unknown component labels: %s",
+        paste(utils::head(bad, 5L), collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+  idx[is.na(comp)] <- NA_integer_
+  out$component_idx <- as.integer(idx)
+  out
 }
 
 .param_layout_from_data <- function(structure, data_df, prep) {
@@ -1143,10 +1242,19 @@ log_likelihood.likelihood_context <- function(likelihood_context,
   rel_tol <- ctx$rel_tol %||% .integrate_rel_tol()
   abs_tol <- ctx$abs_tol %||% .integrate_abs_tol()
   max_depth <- ctx$max_depth %||% 12L
+  data_df_eval <- .attach_outcome_id_columns(
+    data_df,
+    ctx$outcome_label_id_map %||% NULL,
+    ctx$rank_width %||% 1L
+  )
+  data_df_eval <- .attach_component_idx_column(
+    data_df_eval,
+    ctx$component_label_idx_map %||% NULL
+  )
   cpp_loglik_multiple(
     native_ctx,
     params_list,
-    data_df,
+    data_df_eval,
     ok,
     expand,
     min_ll,

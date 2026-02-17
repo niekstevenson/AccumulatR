@@ -20,6 +20,38 @@ enum OnsetKind : int {
   ONSET_AFTER_POOL = 2
 };
 
+enum NodeKind : int {
+  NODE_UNKNOWN = 0,
+  NODE_EVENT = 1,
+  NODE_AND = 2,
+  NODE_OR = 3,
+  NODE_NOT = 4,
+  NODE_GUARD = 5
+};
+
+enum class IrNodeOp : std::uint8_t {
+  EventAcc = 0,
+  EventPool = 1,
+  And = 2,
+  Or = 3,
+  Not = 4,
+  Guard = 5
+};
+
+enum class IrSharedGateKind : std::uint8_t {
+  None = 0,
+  Pair = 1,
+  NWay = 2
+};
+
+enum IrNodeFlags : std::uint32_t {
+  IR_NODE_FLAG_NONE = 0u,
+  IR_NODE_FLAG_NEEDS_FORCED = 1u << 0,
+  IR_NODE_FLAG_SCENARIO_SENSITIVE = 1u << 1,
+  IR_NODE_FLAG_SPECIAL_DEADLINE = 1u << 2,
+  IR_NODE_FLAG_SPECIAL_GUESS = 1u << 3
+};
+
 struct NativeAccumulator {
   std::string id;
   std::string dist;
@@ -66,6 +98,7 @@ struct PoolTemplateCacheEntry {
 struct NativeNode {
   int id{};
   std::string kind;
+  NodeKind kind_id{NODE_UNKNOWN};
   std::string source;
   LabelRef source_ref;
   std::vector<int> args;
@@ -76,6 +109,88 @@ struct NativeNode {
   int arg_id{-1};
   bool needs_forced{false};
   bool scenario_sensitive{false};
+};
+
+struct IrNode {
+  IrNodeOp op{IrNodeOp::And};
+  int child_begin{-1};
+  int child_count{0};
+  int source_mask_begin{-1};
+  int source_mask_count{0};
+  int reference_idx{-1};
+  int blocker_idx{-1};
+  std::uint32_t flags{IR_NODE_FLAG_NONE};
+  int event_idx{-1};
+  int node_id{-1};
+};
+
+struct IrEvent {
+  int node_idx{-1};
+  int acc_idx{-1};
+  int pool_idx{-1};
+  int label_id{-1};
+  int outcome_idx{-1};
+  int component_mask_offset{-1};
+};
+
+struct IrOutcomeGuessDonor {
+  int outcome_idx{-1};
+  double weight{0.0};
+  int rt_policy_code{0}; // 0=keep, 1=na, 2=drop, 3=unknown
+};
+
+struct IrSharedGateSpec {
+  IrSharedGateKind kind{IrSharedGateKind::None};
+  int node_idx{-1};
+  int competitor_begin{-1};
+  int competitor_count{0};
+
+  // Pair spec
+  int pair_x_event_idx{-1};
+  int pair_y_event_idx{-1};
+  int pair_c_event_idx{-1};
+
+  // N-way spec
+  int nway_gate_event_idx{-1};
+  int nway_target_event_idx{-1};
+  int nway_competitor_event_begin{-1};
+  int nway_competitor_event_count{0};
+};
+
+struct IrOutcome {
+  int label_id{-1};
+  int node_idx{-1};
+  int competitor_begin{-1};
+  int competitor_count{0};
+  int allowed_component_mask_offset{-1};
+  bool maps_to_na{false};
+  int alias_begin{-1};
+  int alias_count{0};
+  int guess_begin{-1};
+  int guess_count{0};
+  int shared_gate_spec_idx{-1};
+};
+
+struct IrContext {
+  std::vector<IrNode> nodes;
+  std::vector<IrEvent> events;
+  std::vector<IrOutcome> outcomes;
+  std::vector<int> node_children;
+  std::vector<std::uint64_t> node_source_masks;
+  std::vector<int> outcome_competitors;
+  std::vector<std::uint64_t> component_masks;
+  std::vector<int> outcome_alias_sources;
+  std::vector<IrOutcomeGuessDonor> outcome_guess_donors;
+  std::vector<IrSharedGateSpec> shared_gate_specs;
+  std::vector<int> nway_competitor_event_indices;
+  std::unordered_map<std::uint64_t, int> shared_gate_lookup;
+  std::unordered_map<int, std::vector<int>> label_id_to_outcomes;
+  std::unordered_map<int, std::vector<int>> node_idx_to_outcomes;
+  std::unordered_map<int, int> id_to_node_idx;
+  std::unordered_map<int, int> label_id_to_bit_idx;
+  int source_mask_words{0};
+  int component_mask_words{0};
+  bool valid{false};
 };
 
 struct ComponentGuessPolicy {
@@ -153,11 +268,16 @@ struct NativeContext {
   std::vector<ComponentContextInfo> component_info;
   std::unordered_map<std::string, std::vector<int>> outcome_index;
   std::vector<std::string> outcome_labels;
+  std::vector<int> outcome_label_ids;
   std::vector<OutcomeContextInfo> outcome_info;
+  std::vector<int> accumulator_label_ids;
+  std::vector<int> pool_label_ids;
   ComponentMap components;
+  IrContext ir;
   bool has_chained_onsets{false};
 };
 
 Rcpp::XPtr<NativeContext> build_native_context(Rcpp::List prep);
+void build_ir_context(NativeContext &ctx);
 
 } // namespace uuber

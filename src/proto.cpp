@@ -7,7 +7,7 @@ namespace uuber {
 namespace {
 
 constexpr std::uint32_t kPrepMagic = 0x55425052; // 'UBPR'
-constexpr std::uint32_t kPrepVersion = 2;
+constexpr std::uint32_t kPrepVersion = 3;
 
 class Serializer {
 public:
@@ -51,6 +51,13 @@ public:
     write_u32(static_cast<std::uint32_t>(vec.size()));
     for (int value : vec) {
       write_i32(static_cast<std::int32_t>(value));
+    }
+  }
+
+  void write_double_vec(const std::vector<double> &vec) {
+    write_u32(static_cast<std::uint32_t>(vec.size()));
+    for (double value : vec) {
+      write_double(value);
     }
   }
 
@@ -122,6 +129,16 @@ public:
     out.reserve(size);
     for (std::uint32_t i = 0; i < size; ++i) {
       out.push_back(static_cast<int>(read_i32()));
+    }
+    return out;
+  }
+
+  std::vector<double> read_double_vec() {
+    std::uint32_t size = read_u32();
+    std::vector<double> out;
+    out.reserve(size);
+    for (std::uint32_t i = 0; i < size; ++i) {
+      out.push_back(read_double());
     }
     return out;
   }
@@ -217,6 +234,34 @@ std::vector<std::uint8_t> serialize_native_prep(const NativePrepProto &proto) {
     writer.write_i32(label.id);
   }
 
+  writer.write_u32(static_cast<std::uint32_t>(proto.outcomes.size()));
+  for (const auto &outcome : proto.outcomes) {
+    writer.write_string(outcome.label);
+    writer.write_i32(outcome.node_id);
+    writer.write_int_vec(outcome.competitor_ids);
+    writer.write_string_vec(outcome.allowed_components);
+    writer.write_bool(outcome.maps_to_na);
+    writer.write_string(outcome.map_target);
+    writer.write_u32(static_cast<std::uint32_t>(outcome.guess_donors.size()));
+    for (const auto &donor : outcome.guess_donors) {
+      writer.write_string(donor.label);
+      writer.write_double(donor.weight);
+      writer.write_string(donor.rt_policy);
+    }
+  }
+
+  writer.write_u32(static_cast<std::uint32_t>(proto.components.size()));
+  for (const auto &component : proto.components) {
+    writer.write_string(component.id);
+    writer.write_double(component.weight);
+    writer.write_bool(component.has_guess);
+    if (component.has_guess) {
+      writer.write_string(component.guess.target);
+      writer.write_string_vec(component.guess.weight_labels);
+      writer.write_double_vec(component.guess.weights);
+    }
+  }
+
   return std::move(writer.buffer);
 }
 
@@ -228,7 +273,7 @@ NativePrepProto deserialize_native_prep(const std::uint8_t *data,
     throw std::runtime_error("native prep deserialization: invalid header");
   }
   std::uint32_t version = reader.read_u32();
-  if (version != kPrepVersion && version != 1) {
+  if (version != kPrepVersion) {
     throw std::runtime_error(
         "native prep deserialization: unsupported version");
   }
@@ -242,17 +287,10 @@ NativePrepProto deserialize_native_prep(const std::uint8_t *data,
     acc.id = reader.read_string();
     acc.dist = reader.read_string();
     acc.onset = reader.read_double();
-    if (version >= 2) {
-      acc.onset_kind = reader.read_i32();
-      acc.onset_source = reader.read_string();
-      acc.onset_source_kind = reader.read_string();
-      acc.onset_lag = reader.read_double();
-    } else {
-      acc.onset_kind = 0;
-      acc.onset_source.clear();
-      acc.onset_source_kind.clear();
-      acc.onset_lag = 0.0;
-    }
+    acc.onset_kind = reader.read_i32();
+    acc.onset_source = reader.read_string();
+    acc.onset_source_kind = reader.read_string();
+    acc.onset_lag = reader.read_double();
     acc.q = reader.read_double();
     acc.shared_trigger_id = reader.read_string();
     acc.components = reader.read_string_vec();
@@ -329,6 +367,43 @@ NativePrepProto deserialize_native_prep(const std::uint8_t *data,
     label.label = reader.read_string();
     label.id = reader.read_i32();
     proto.label_index.push_back(std::move(label));
+  }
+
+  std::uint32_t outcome_count = reader.read_u32();
+  proto.outcomes.reserve(outcome_count);
+  for (std::uint32_t i = 0; i < outcome_count; ++i) {
+    ProtoOutcome outcome;
+    outcome.label = reader.read_string();
+    outcome.node_id = reader.read_i32();
+    outcome.competitor_ids = reader.read_int_vec();
+    outcome.allowed_components = reader.read_string_vec();
+    outcome.maps_to_na = reader.read_bool();
+    outcome.map_target = reader.read_string();
+    std::uint32_t donor_count = reader.read_u32();
+    outcome.guess_donors.reserve(donor_count);
+    for (std::uint32_t j = 0; j < donor_count; ++j) {
+      ProtoOutcomeGuessDonor donor;
+      donor.label = reader.read_string();
+      donor.weight = reader.read_double();
+      donor.rt_policy = reader.read_string();
+      outcome.guess_donors.push_back(std::move(donor));
+    }
+    proto.outcomes.push_back(std::move(outcome));
+  }
+
+  std::uint32_t component_count = reader.read_u32();
+  proto.components.reserve(component_count);
+  for (std::uint32_t i = 0; i < component_count; ++i) {
+    ProtoComponent component;
+    component.id = reader.read_string();
+    component.weight = reader.read_double();
+    component.has_guess = reader.read_bool();
+    if (component.has_guess) {
+      component.guess.target = reader.read_string();
+      component.guess.weight_labels = reader.read_string_vec();
+      component.guess.weights = reader.read_double_vec();
+    }
+    proto.components.push_back(std::move(component));
   }
 
   return proto;

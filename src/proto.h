@@ -62,11 +62,42 @@ struct ProtoLabelEntry {
   int id{};
 };
 
+struct ProtoOutcomeGuessDonor {
+  std::string label;
+  double weight{0.0};
+  std::string rt_policy;
+};
+
+struct ProtoOutcome {
+  std::string label;
+  int node_id{-1};
+  std::vector<int> competitor_ids;
+  std::vector<std::string> allowed_components;
+  bool maps_to_na{false};
+  std::string map_target;
+  std::vector<ProtoOutcomeGuessDonor> guess_donors;
+};
+
+struct ProtoComponentGuess {
+  std::string target;
+  std::vector<std::string> weight_labels;
+  std::vector<double> weights;
+};
+
+struct ProtoComponent {
+  std::string id;
+  double weight{1.0};
+  bool has_guess{false};
+  ProtoComponentGuess guess;
+};
+
 struct NativePrepProto {
   std::vector<ProtoAccumulator> accumulators;
   std::vector<ProtoPool> pools;
   std::vector<ProtoNode> nodes;
   std::vector<ProtoLabelEntry> label_index;
+  std::vector<ProtoOutcome> outcomes;
+  std::vector<ProtoComponent> components;
 };
 
 std::vector<std::uint8_t> serialize_native_prep(const NativePrepProto& proto);

@@ -55,9 +55,6 @@ run_bench <- function(label, fn, n_rep = 6L, inner_reps = 8L) {
   )
 }
 
-engine_modes <- c("legacy", "ir_v2")
-shadow_tol <- 1e-4
-
 build_depth3_guard_spec <- function() {
   race_spec() |>
     add_accumulator("plain", "lognormal") |>
@@ -151,7 +148,7 @@ make_case <- function(spec_builder, params, observed_label, rt_mean, n_trials = 
     stringsAsFactors = FALSE
   )
   ctx <- build_likelihood_context(spec, data_df)
-  ll <- as.numeric(log_likelihood(ctx, params_df, engine_mode = "legacy", shadow_tol = shadow_tol))
+  ll <- as.numeric(log_likelihood(ctx, params_df))
   if (!is.finite(ll)) {
     stop("Non-finite log-likelihood for case: ", observed_label)
   }
@@ -191,60 +188,22 @@ cases <- list(
 
 bench <- do.call(
   rbind,
-  unlist(
-    lapply(engine_modes, function(mode) {
-      lapply(names(cases), function(case_name) {
-        case <- cases[[case_name]]
-        # Warmup run.
-        invisible(log_likelihood(case$ctx, case$params_df, engine_mode = mode, shadow_tol = shadow_tol))
-        row <- run_bench(
-          case_name,
-          function() log_likelihood(case$ctx, case$params_df, engine_mode = mode, shadow_tol = shadow_tol),
-          n_rep = 6L,
-          inner_reps = case$inner_reps
-        )
-        row$mode <- mode
-        row
-      })
-    }),
-    recursive = FALSE
-  )
-)
-
-parity <- do.call(
-  rbind,
   lapply(names(cases), function(case_name) {
     case <- cases[[case_name]]
-    legacy_val <- as.numeric(log_likelihood(case$ctx, case$params_df, engine_mode = "legacy", shadow_tol = shadow_tol))
-    ir_v2_val <- as.numeric(log_likelihood(case$ctx, case$params_df, engine_mode = "ir_v2", shadow_tol = shadow_tol))
-    data.frame(
-      label = case_name,
-      legacy = legacy_val,
-      ir_v2 = ir_v2_val,
-      abs_diff = abs(ir_v2_val - legacy_val),
-      stringsAsFactors = FALSE
+    # Warmup run.
+    invisible(log_likelihood(case$ctx, case$params_df))
+    row <- run_bench(
+      case_name,
+      function() log_likelihood(case$ctx, case$params_df),
+      n_rep = 6L,
+      inner_reps = case$inner_reps
     )
+    row$mode <- "ir"
+    row
   })
 )
 
-speedup <- merge(
-  bench[bench$mode == "legacy", c("label", "median_per_eval_sec")],
-  bench[bench$mode == "ir_v2", c("label", "median_per_eval_sec")],
-  by = "label",
-  suffixes = c("_legacy", "_ir_v2"),
-  all = FALSE
-)
-speedup$speedup_x <- speedup$median_per_eval_sec_legacy / speedup$median_per_eval_sec_ir_v2
-speedup$delta_ms <- (speedup$median_per_eval_sec_legacy - speedup$median_per_eval_sec_ir_v2) * 1000.0
-
 print(bench, row.names = FALSE)
-cat("\nParity (legacy vs ir_v2)\n")
-print(parity, row.names = FALSE)
-cat("\nSpeedup summary (legacy / ir_v2)\n")
-print(speedup, row.names = FALSE)
-if (any(parity$abs_diff > shadow_tol)) {
-  warning(sprintf("Parity exceeded tolerance %.3g in at least one case", shadow_tol), call. = FALSE)
-}
 
 out_dir <- "dev/scripts/scratch_outputs"
 if (!dir.exists(out_dir)) {
@@ -252,6 +211,4 @@ if (!dir.exists(out_dir)) {
 }
 out_file <- file.path(out_dir, "bench_nested_integral_baseline.csv")
 utils::write.csv(bench, out_file, row.names = FALSE)
-utils::write.csv(parity, file.path(out_dir, "bench_nested_integral_parity.csv"), row.names = FALSE)
-utils::write.csv(speedup, file.path(out_dir, "bench_nested_integral_speedup.csv"), row.names = FALSE)
 cat("\nWrote baseline benchmark to", out_file, "\n")

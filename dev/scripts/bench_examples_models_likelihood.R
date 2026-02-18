@@ -8,10 +8,6 @@ set.seed(as.integer(Sys.getenv("ACCUMULATR_BENCH_SEED", "20260217")))
 
 library(AccumulatR)
 
-shadow_tol <- as.numeric(Sys.getenv("ACCUMULATR_BENCH_SHADOW_TOL", "1e-4"))
-if (!is.finite(shadow_tol) || shadow_tol < 0) {
-  shadow_tol <- 1e-4
-}
 n_trials <- as.integer(Sys.getenv("ACCUMULATR_BENCH_TRIALS", "250"))
 if (!is.finite(n_trials) || n_trials < 50L) {
   n_trials <- 250L
@@ -323,9 +319,9 @@ make_case <- function(mod, n_trials) {
     layout = ctx$param_layout
   )
 
-  ll <- as.numeric(log_likelihood(ctx, params_df_slim, engine_mode = "legacy", shadow_tol = shadow_tol))
+  ll <- as.numeric(log_likelihood(ctx, params_df_slim))
   if (length(ll) != 1L || !is.finite(ll)) {
-    stop("Non-finite legacy log-likelihood during setup")
+    stop("Non-finite log-likelihood during setup")
   }
 
   list(ctx = ctx, params_df = params_df_slim)
@@ -335,11 +331,11 @@ cases <- lapply(models, make_case, n_trials = n_trials)
 case_inner_reps <- setNames(integer(length(cases)), names(cases))
 for (case_name in names(cases)) {
   case <- cases[[case_name]]
-  legacy_eval_fn <- function() {
-    log_likelihood(case$ctx, case$params_df, engine_mode = "legacy", shadow_tol = shadow_tol)
+  eval_fn <- function() {
+    log_likelihood(case$ctx, case$params_df)
   }
   case_inner_reps[[case_name]] <- choose_inner_reps(
-    fn = legacy_eval_fn,
+    fn = eval_fn,
     target_sec = target_sample_sec,
     min_reps = min_inner_reps,
     max_reps = max_inner_reps,
@@ -347,69 +343,31 @@ for (case_name in names(cases)) {
   )
 }
 
-engine_modes <- c("legacy", "ir_v2")
 bench <- do.call(
-  rbind,
-  unlist(
-    lapply(engine_modes, function(mode) {
-      lapply(names(cases), function(case_name) {
-        case <- cases[[case_name]]
-        eval_fn <- function() {
-          log_likelihood(case$ctx, case$params_df, engine_mode = mode, shadow_tol = shadow_tol)
-        }
-        invisible(eval_fn())
-        local_inner_reps <- case_inner_reps[[case_name]]
-        row <- run_bench(
-          label = case_name,
-          fn = eval_fn,
-          n_rep = n_rep,
-          inner_reps = local_inner_reps
-        )
-        row$mode <- mode
-        row
-      })
-    }),
-    recursive = FALSE
-  )
-)
-
-parity <- do.call(
   rbind,
   lapply(names(cases), function(case_name) {
     case <- cases[[case_name]]
-    legacy_val <- as.numeric(log_likelihood(case$ctx, case$params_df, engine_mode = "legacy", shadow_tol = shadow_tol))
-    ir_v2_val <- as.numeric(log_likelihood(case$ctx, case$params_df, engine_mode = "ir_v2", shadow_tol = shadow_tol))
-    data.frame(
+    eval_fn <- function() {
+      log_likelihood(case$ctx, case$params_df)
+    }
+    invisible(eval_fn())
+    local_inner_reps <- case_inner_reps[[case_name]]
+    row <- run_bench(
       label = case_name,
-      legacy = legacy_val,
-      ir_v2 = ir_v2_val,
-      abs_diff = abs(ir_v2_val - legacy_val),
-      stringsAsFactors = FALSE
+      fn = eval_fn,
+      n_rep = n_rep,
+      inner_reps = local_inner_reps
     )
+    row$mode <- "ir"
+    row
   })
 )
 
-speedup <- merge(
-  bench[bench$mode == "legacy", c("label", "median_per_eval_sec")],
-  bench[bench$mode == "ir_v2", c("label", "median_per_eval_sec")],
-  by = "label",
-  suffixes = c("_legacy", "_ir_v2"),
-  all = FALSE
-)
-speedup$speedup_x <- speedup$median_per_eval_sec_legacy / speedup$median_per_eval_sec_ir_v2
-speedup$delta_ms <- (speedup$median_per_eval_sec_legacy - speedup$median_per_eval_sec_ir_v2) * 1000.0
-
 print(bench, row.names = FALSE)
-cat("\nParity (legacy vs ir_v2)\n")
-print(parity, row.names = FALSE)
-cat("\nSpeedup summary (legacy / ir_v2)\n")
-print(speedup, row.names = FALSE)
 
 out_dir <- "dev/scripts/scratch_outputs"
 if (!dir.exists(out_dir)) {
   dir.create(out_dir, recursive = TRUE)
 }
 utils::write.csv(bench, file.path(out_dir, "bench_examples_models_likelihood.csv"), row.names = FALSE)
-utils::write.csv(parity, file.path(out_dir, "bench_examples_models_likelihood_parity.csv"), row.names = FALSE)
-utils::write.csv(speedup, file.path(out_dir, "bench_examples_models_likelihood_speedup.csv"), row.names = FALSE)
 cat("\nWrote benchmark outputs to", out_dir, "\n")

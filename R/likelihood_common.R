@@ -378,6 +378,13 @@
 .prep_cache_bundle <- function(prep) .prep_runtime_get(prep, "cache_bundle")
 
 .prep_native_context <- function(prep) {
+  ptr_is_valid <- function(ptr) {
+    if (!inherits(ptr, "externalptr")) {
+      return(FALSE)
+    }
+    isTRUE(tryCatch(!native_ctx_invalid(ptr), error = function(e) FALSE))
+  }
+
   bundle <- .prep_cache_bundle(prep)
   native_env <- NULL
   if (!is.null(bundle) && !is.null(bundle$native_ctx) && is.environment(bundle$native_ctx)) {
@@ -391,12 +398,15 @@
   }
   proto_blob <- if (!is.null(native_env)) native_env$proto %||% raw(0) else raw(0)
   native_ptr <- if (!is.null(native_env)) native_env$ptr %||% NULL else NULL
-  if (inherits(native_ptr, "externalptr")) {
+  if (ptr_is_valid(native_ptr)) {
     return(native_ptr)
+  }
+  if (!is.null(native_env)) {
+    native_env$ptr <- NULL
   }
   if (length(proto_blob) > 0L) {
     native_ptr <- tryCatch(native_context_from_proto_cpp(proto_blob), error = function(e) NULL)
-    if (inherits(native_ptr, "externalptr")) {
+    if (ptr_is_valid(native_ptr)) {
       if (!is.null(native_env)) {
         native_env$ptr <- native_ptr
       } else {
@@ -407,7 +417,7 @@
   }
   payload <- .prep_native_payload(prep)
   native_ptr <- native_context_build(payload)
-  if (inherits(native_ptr, "externalptr")) {
+  if (ptr_is_valid(native_ptr)) {
     proto_blob <- tryCatch(native_prep_serialize_cpp(payload), error = function(e) raw(0))
     if (!is.null(native_env)) {
       native_env$ptr <- native_ptr
@@ -415,6 +425,8 @@
     } else {
       attr(native_ptr, "native_proto") <- proto_blob
     }
+  } else if (!is.null(native_env)) {
+    native_env$ptr <- NULL
   }
   native_ptr
 }

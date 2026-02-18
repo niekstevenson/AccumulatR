@@ -7,14 +7,6 @@ run_sec <- as.numeric(Sys.getenv("ACCUMULATR_PROFILE_RUN_SEC", "45"))
 if (!is.finite(run_sec) || run_sec <= 0) {
   run_sec <- 45
 }
-engine_mode <- tolower(trimws(Sys.getenv("ACCUMULATR_PROFILE_ENGINE_MODE", "ir_v2")))
-if (!engine_mode %in% c("legacy", "ir_v2", "shadow")) {
-  engine_mode <- "ir_v2"
-}
-shadow_tol <- as.numeric(Sys.getenv("ACCUMULATR_PROFILE_SHADOW_TOL", "1e-4"))
-if (!is.finite(shadow_tol) || shadow_tol < 0) {
-  shadow_tol <- 1e-4
-}
 n_trials <- as.integer(Sys.getenv("ACCUMULATR_PROFILE_TRIALS", "6000"))
 if (!is.finite(n_trials) || n_trials < 100) {
   n_trials <- 6000L
@@ -133,7 +125,7 @@ if (nzchar(case_filter)) {
 
 # Warmup JIT/lookup paths before sampling window.
 invisible(lapply(cases, function(x) {
-  log_likelihood(x$ctx, x$params_df, engine_mode = engine_mode, shadow_tol = shadow_tol)
+  log_likelihood(x$ctx, x$params_df)
 }))
 
 start <- Sys.time()
@@ -143,18 +135,12 @@ names(iters) <- names(cases)
 
 while (as.numeric(difftime(Sys.time(), start, units = "secs")) < run_sec) {
   for (nm in names(cases)) {
-    val <- log_likelihood(
-      cases[[nm]]$ctx,
-      cases[[nm]]$params_df,
-      engine_mode = engine_mode,
-      shadow_tol = shadow_tol
-    )
+    val <- log_likelihood(cases[[nm]]$ctx, cases[[nm]]$params_df)
     checksum <- checksum + sum(val)
     iters[[nm]] <- iters[[nm]] + 1L
   }
 }
 
 cat("profile_workload_nested complete\n")
-cat("engine_mode:", engine_mode, " shadow_tol:", format(shadow_tol, digits = 6), "\n")
 print(iters)
 cat("checksum:", format(checksum, digits = 16), "\n")

@@ -41,8 +41,8 @@ native_component_plan_exported <- function(structureSEXP, trial_rowsSEXP, forced
     .Call(`_AccumulatR_native_component_plan_exported`, structureSEXP, trial_rowsSEXP, forced_componentSEXP)
 }
 
-native_outcome_probability_params_cpp <- function(ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows) {
-    .Call(`_AccumulatR_native_outcome_probability_params_cpp`, ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows)
+native_outcome_probability_params_cpp_idx <- function(ctxSEXP, node_id, upper, component_idx, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows) {
+    .Call(`_AccumulatR_native_outcome_probability_params_cpp_idx`, ctxSEXP, node_id, upper, component_idx, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows)
 }
 
 native_outcome_labels_cpp <- function(ctxSEXP) {

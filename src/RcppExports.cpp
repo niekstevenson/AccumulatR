@@ -150,16 +150,16 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// native_outcome_probability_params_cpp
-double native_outcome_probability_params_cpp(SEXP ctxSEXP, int node_id, double upper, Rcpp::Nullable<Rcpp::String> component, SEXP forced_complete, SEXP forced_survive, Rcpp::IntegerVector competitor_ids, double rel_tol, double abs_tol, int max_depth, Rcpp::Nullable<Rcpp::DataFrame> trial_rows);
-RcppExport SEXP _AccumulatR_native_outcome_probability_params_cpp(SEXP ctxSEXPSEXP, SEXP node_idSEXP, SEXP upperSEXP, SEXP componentSEXP, SEXP forced_completeSEXP, SEXP forced_surviveSEXP, SEXP competitor_idsSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP, SEXP trial_rowsSEXP) {
+// native_outcome_probability_params_cpp_idx
+double native_outcome_probability_params_cpp_idx(SEXP ctxSEXP, int node_id, double upper, int component_idx, SEXP forced_complete, SEXP forced_survive, Rcpp::IntegerVector competitor_ids, double rel_tol, double abs_tol, int max_depth, Rcpp::Nullable<Rcpp::DataFrame> trial_rows);
+RcppExport SEXP _AccumulatR_native_outcome_probability_params_cpp_idx(SEXP ctxSEXPSEXP, SEXP node_idSEXP, SEXP upperSEXP, SEXP component_idxSEXP, SEXP forced_completeSEXP, SEXP forced_surviveSEXP, SEXP competitor_idsSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP, SEXP trial_rowsSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< SEXP >::type ctxSEXP(ctxSEXPSEXP);
     Rcpp::traits::input_parameter< int >::type node_id(node_idSEXP);
     Rcpp::traits::input_parameter< double >::type upper(upperSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::String> >::type component(componentSEXP);
+    Rcpp::traits::input_parameter< int >::type component_idx(component_idxSEXP);
     Rcpp::traits::input_parameter< SEXP >::type forced_complete(forced_completeSEXP);
     Rcpp::traits::input_parameter< SEXP >::type forced_survive(forced_surviveSEXP);
     Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type competitor_ids(competitor_idsSEXP);
@@ -167,7 +167,7 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type abs_tol(abs_tolSEXP);
     Rcpp::traits::input_parameter< int >::type max_depth(max_depthSEXP);
     Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::DataFrame> >::type trial_rows(trial_rowsSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_outcome_probability_params_cpp(ctxSEXP, node_id, upper, component, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows));
+    rcpp_result_gen = Rcpp::wrap(native_outcome_probability_params_cpp_idx(ctxSEXP, node_id, upper, component_idx, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -326,7 +326,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_cpp_loglik", (DL_FUNC) &_AccumulatR_cpp_loglik, 9},
     {"_AccumulatR_cpp_loglik_multiple", (DL_FUNC) &_AccumulatR_cpp_loglik_multiple, 9},
     {"_AccumulatR_native_component_plan_exported", (DL_FUNC) &_AccumulatR_native_component_plan_exported, 3},
-    {"_AccumulatR_native_outcome_probability_params_cpp", (DL_FUNC) &_AccumulatR_native_outcome_probability_params_cpp, 11},
+    {"_AccumulatR_native_outcome_probability_params_cpp_idx", (DL_FUNC) &_AccumulatR_native_outcome_probability_params_cpp_idx, 11},
     {"_AccumulatR_native_outcome_labels_cpp", (DL_FUNC) &_AccumulatR_native_outcome_labels_cpp, 1},
     {"_AccumulatR_dist_lognormal_pdf", (DL_FUNC) &_AccumulatR_dist_lognormal_pdf, 3},
     {"_AccumulatR_dist_lognormal_cdf", (DL_FUNC) &_AccumulatR_dist_lognormal_cdf, 3},

@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <stdexcept>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "accumulator.h"
 
@@ -95,18 +98,19 @@ std::string extract_string(SEXP obj) {
   }
 }
 
-NodeKind parse_node_kind(const std::string &kind) {
-  if (kind == "event")
-    return NODE_EVENT;
+IrNodeOp parse_node_op(const std::string &kind, int pool_idx) {
+  if (kind == "event") {
+    return (pool_idx >= 0) ? IrNodeOp::EventPool : IrNodeOp::EventAcc;
+  }
   if (kind == "and")
-    return NODE_AND;
+    return IrNodeOp::And;
   if (kind == "or")
-    return NODE_OR;
+    return IrNodeOp::Or;
   if (kind == "not")
-    return NODE_NOT;
+    return IrNodeOp::Not;
   if (kind == "guard")
-    return NODE_GUARD;
-  return NODE_UNKNOWN;
+    return IrNodeOp::Guard;
+  return IrNodeOp::And;
 }
 
 int extract_int(SEXP obj, int default_value = -1) {
@@ -276,6 +280,26 @@ NativePrepProto build_prep_proto(const Rcpp::List &prep) {
     }
   }
 
+  std::unordered_map<std::string, int> label_id_by_name;
+  label_id_by_name.reserve(proto.label_index.size());
+  for (const auto &entry : proto.label_index) {
+    label_id_by_name[entry.label] = entry.id;
+  }
+  std::unordered_map<std::string, int> acc_idx_by_name;
+  acc_idx_by_name.reserve(proto.accumulators.size());
+  for (std::size_t i = 0; i < proto.accumulators.size(); ++i) {
+    if (!proto.accumulators[i].id.empty()) {
+      acc_idx_by_name[proto.accumulators[i].id] = static_cast<int>(i);
+    }
+  }
+  std::unordered_map<std::string, int> pool_idx_by_name;
+  pool_idx_by_name.reserve(proto.pools.size());
+  for (std::size_t i = 0; i < proto.pools.size(); ++i) {
+    if (!proto.pools[i].id.empty()) {
+      pool_idx_by_name[proto.pools[i].id] = static_cast<int>(i);
+    }
+  }
+
   Rcpp::List expr_compiled = prep[".expr_compiled"];
   if (!expr_compiled.isNULL()) {
     Rcpp::List node_list = expr_compiled["nodes"];
@@ -286,34 +310,82 @@ NativePrepProto build_prep_proto(const Rcpp::List &prep) {
       Rcpp::List node(node_list[i]);
       ProtoNode proto_node;
       proto_node.id = extract_int(node["id"], static_cast<int>(i + 1));
-      if (node.containsElementNamed("kind"))
-        proto_node.kind = extract_string(node["kind"]);
-      if (node.containsElementNamed("source"))
-        proto_node.source = extract_string(node["source"]);
-      if (node.containsElementNamed("args"))
-        proto_node.args = extract_int_vector(node["args"]);
-      if (node.containsElementNamed("sources"))
-        proto_node.source_ids = extract_int_vector(node["sources"]);
+      std::string kind =
+          node.containsElementNamed("kind") ? extract_string(node["kind"])
+                                            : std::string();
+      std::string source =
+          node.containsElementNamed("source") ? extract_string(node["source"])
+                                              : std::string();
+      if (source.empty() && node.containsElementNamed("expr")) {
+        Rcpp::List expr = node["expr"];
+        if (!expr.isNULL() && expr.containsElementNamed("source")) {
+          source = extract_string(expr["source"]);
+        }
+      }
+      std::vector<int> child_ids;
+      if (kind == "not") {
+        if (node.containsElementNamed("arg")) {
+          int arg_id = extract_int(node["arg"]);
+          if (arg_id >= 0) {
+            child_ids.push_back(arg_id);
+          }
+        }
+      } else if (node.containsElementNamed("args")) {
+        child_ids = extract_int_vector(node["args"]);
+      }
+      if (!child_ids.empty()) {
+        std::sort(child_ids.begin(), child_ids.end());
+        child_ids.erase(std::unique(child_ids.begin(), child_ids.end()),
+                        child_ids.end());
+      }
+      proto_node.children = std::move(child_ids);
+      if (node.containsElementNamed("sources")) {
+        proto_node.source_label_ids = extract_int_vector(node["sources"]);
+        std::sort(proto_node.source_label_ids.begin(),
+                  proto_node.source_label_ids.end());
+        proto_node.source_label_ids.erase(
+            std::unique(proto_node.source_label_ids.begin(),
+                        proto_node.source_label_ids.end()),
+            proto_node.source_label_ids.end());
+      }
       if (node.containsElementNamed("reference_id"))
         proto_node.reference_id = extract_int(node["reference_id"]);
       if (node.containsElementNamed("blocker_id"))
         proto_node.blocker_id = extract_int(node["blocker_id"]);
 
-      if (node.containsElementNamed("arg"))
-        proto_node.arg_id = extract_int(node["arg"]);
+      std::uint32_t flags = IR_NODE_FLAG_NONE;
       if (node.containsElementNamed("needs_forced")) {
-        proto_node.needs_forced = Rcpp::as<bool>(node["needs_forced"]);
-      }
-      if (node.containsElementNamed("scenario_sensitive")) {
-        proto_node.scenario_sensitive =
-            Rcpp::as<bool>(node["scenario_sensitive"]);
-      }
-      if (proto_node.source.empty() && node.containsElementNamed("expr")) {
-        Rcpp::List expr = node["expr"];
-        if (!expr.isNULL() && expr.containsElementNamed("source")) {
-          proto_node.source = extract_string(expr["source"]);
+        if (Rcpp::as<bool>(node["needs_forced"])) {
+          flags |= IR_NODE_FLAG_NEEDS_FORCED;
         }
       }
+      if (node.containsElementNamed("scenario_sensitive")) {
+        if (Rcpp::as<bool>(node["scenario_sensitive"])) {
+          flags |= IR_NODE_FLAG_SCENARIO_SENSITIVE;
+        }
+      }
+      if (source == "__DEADLINE__") {
+        flags |= IR_NODE_FLAG_SPECIAL_DEADLINE;
+      } else if (source == "__GUESS__") {
+        flags |= IR_NODE_FLAG_SPECIAL_GUESS;
+      }
+      proto_node.flags = flags;
+
+      auto it_acc = acc_idx_by_name.find(source);
+      if (it_acc != acc_idx_by_name.end()) {
+        proto_node.event_acc_idx = it_acc->second;
+      }
+      auto it_pool = pool_idx_by_name.find(source);
+      if (it_pool != pool_idx_by_name.end()) {
+        proto_node.event_pool_idx = it_pool->second;
+      }
+      auto it_label = label_id_by_name.find(source);
+      if (it_label != label_id_by_name.end()) {
+        proto_node.event_label_id = it_label->second;
+      }
+      proto_node.op =
+          static_cast<std::uint8_t>(parse_node_op(kind, proto_node.event_pool_idx));
+
       proto.nodes.push_back(std::move(proto_node));
     }
   }
@@ -396,6 +468,30 @@ NativePrepProto build_prep_proto(const Rcpp::List &prep) {
         }
       }
       proto.outcomes.push_back(std::move(outcome_proto));
+    }
+  }
+
+  if (!proto.outcomes.empty()) {
+    std::unordered_map<int, int> label_id_to_outcome_idx;
+    label_id_to_outcome_idx.reserve(proto.outcomes.size());
+    for (std::size_t oi = 0; oi < proto.outcomes.size(); ++oi) {
+      auto it = label_id_by_name.find(proto.outcomes[oi].label);
+      if (it == label_id_by_name.end()) {
+        continue;
+      }
+      if (label_id_to_outcome_idx.find(it->second) ==
+          label_id_to_outcome_idx.end()) {
+        label_id_to_outcome_idx[it->second] = static_cast<int>(oi);
+      }
+    }
+    for (auto &node : proto.nodes) {
+      if (node.event_label_id < 0) {
+        continue;
+      }
+      auto it = label_id_to_outcome_idx.find(node.event_label_id);
+      if (it != label_id_to_outcome_idx.end()) {
+        node.event_outcome_idx = it->second;
+      }
     }
   }
 
@@ -517,6 +613,41 @@ NativePrepProto build_prep_proto(const Rcpp::List &prep) {
 
 std::unique_ptr<NativeContext>
 build_context_from_proto(const NativePrepProto &proto) {
+  auto sort_unique_ids = [](std::vector<int> &ids) {
+    if (ids.empty()) {
+      return;
+    }
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  };
+
+  auto mask_word_count = [](int bit_count) -> int {
+    if (bit_count <= 0)
+      return 0;
+    return (bit_count + 63) / 64;
+  };
+
+  auto set_mask_bit = [](std::vector<std::uint64_t> &mask, int bit_idx) {
+    if (bit_idx < 0)
+      return;
+    int word = bit_idx / 64;
+    int bit = bit_idx % 64;
+    if (word < 0 || word >= static_cast<int>(mask.size()))
+      return;
+    mask[static_cast<std::size_t>(word)] |= (1ULL << bit);
+  };
+
+  auto append_mask_words =
+      [](std::vector<std::uint64_t> &flat,
+         const std::vector<std::uint64_t> &mask) -> int {
+    if (mask.empty()) {
+      return -1;
+    }
+    int begin = static_cast<int>(flat.size());
+    flat.insert(flat.end(), mask.begin(), mask.end());
+    return begin;
+  };
+
   auto ctx = std::make_unique<NativeContext>();
 
   for (const auto &label : proto.label_index) {
@@ -544,7 +675,7 @@ build_context_from_proto(const NativePrepProto &proto) {
       Rcpp::stop("native_context_build: accumulator '%s' %s", acc.id.c_str(),
                  e.what());
     }
-    ctx->accumulators.push_back(acc);
+    ctx->accumulators.push_back(std::move(acc));
   }
 
   for (std::size_t i = 0; i < ctx->accumulators.size(); ++i) {
@@ -559,8 +690,7 @@ build_context_from_proto(const NativePrepProto &proto) {
   }
   ctx->accumulator_label_ids.assign(ctx->accumulators.size(), NA_INTEGER);
   for (std::size_t i = 0; i < ctx->accumulators.size(); ++i) {
-    const std::string &label = ctx->accumulators[i].id;
-    auto it = ctx->label_to_id.find(label);
+    auto it = ctx->label_to_id.find(ctx->accumulators[i].id);
     if (it != ctx->label_to_id.end()) {
       ctx->accumulator_label_ids[i] = it->second;
     }
@@ -582,7 +712,7 @@ build_context_from_proto(const NativePrepProto &proto) {
     pool.id = pool_proto.id;
     pool.k = pool_proto.k;
     pool.members = pool_proto.members;
-    ctx->pools.push_back(pool);
+    ctx->pools.push_back(std::move(pool));
   }
   for (std::size_t i = 0; i < ctx->pools.size(); ++i) {
     if (!ctx->pools[i].id.empty()) {
@@ -591,8 +721,7 @@ build_context_from_proto(const NativePrepProto &proto) {
   }
   ctx->pool_label_ids.assign(ctx->pools.size(), NA_INTEGER);
   for (std::size_t i = 0; i < ctx->pools.size(); ++i) {
-    const std::string &label = ctx->pools[i].id;
-    auto it = ctx->label_to_id.find(label);
+    auto it = ctx->label_to_id.find(ctx->pools[i].id);
     if (it != ctx->label_to_id.end()) {
       ctx->pool_label_ids[i] = it->second;
     }
@@ -608,13 +737,15 @@ build_context_from_proto(const NativePrepProto &proto) {
       continue;
     }
     if (acc_proto.onset_source.empty()) {
-      Rcpp::stop("native_context_build: accumulator '%s' has chained onset with empty source",
+      Rcpp::stop("native_context_build: accumulator '%s' has chained onset with "
+                 "empty source",
                  acc.id.c_str());
     }
     if (acc.onset_kind == ONSET_AFTER_ACCUMULATOR) {
       auto it = ctx->accumulator_index.find(acc_proto.onset_source);
       if (it == ctx->accumulator_index.end()) {
-        Rcpp::stop("native_context_build: accumulator '%s' references unknown onset accumulator '%s'",
+        Rcpp::stop("native_context_build: accumulator '%s' references unknown "
+                   "onset accumulator '%s'",
                    acc.id.c_str(), acc_proto.onset_source.c_str());
       }
       acc.onset_source_acc_idx = it->second;
@@ -624,75 +755,18 @@ build_context_from_proto(const NativePrepProto &proto) {
     if (acc.onset_kind == ONSET_AFTER_POOL) {
       auto it = ctx->pool_index.find(acc_proto.onset_source);
       if (it == ctx->pool_index.end()) {
-        Rcpp::stop("native_context_build: accumulator '%s' references unknown onset pool '%s'",
-                   acc.id.c_str(), acc_proto.onset_source.c_str());
+        Rcpp::stop(
+            "native_context_build: accumulator '%s' references unknown onset "
+            "pool '%s'",
+            acc.id.c_str(), acc_proto.onset_source.c_str());
       }
       acc.onset_source_pool_idx = it->second;
       ctx->has_chained_onsets = true;
       continue;
     }
-    Rcpp::stop("native_context_build: accumulator '%s' has unsupported onset kind",
+    Rcpp::stop("native_context_build: accumulator '%s' has unsupported onset "
+               "kind",
                acc.id.c_str());
-  }
-
-  auto resolve_label_ref = [&](const std::string &label) -> LabelRef {
-    LabelRef ref;
-    if (label.empty())
-      return ref;
-    auto it_label = ctx->label_to_id.find(label);
-    if (it_label != ctx->label_to_id.end()) {
-      ref.label_id = it_label->second;
-    }
-    auto it_acc = ctx->accumulator_index.find(label);
-    if (it_acc != ctx->accumulator_index.end()) {
-      ref.acc_idx = it_acc->second;
-    }
-    auto it_pool = ctx->pool_index.find(label);
-    if (it_pool != ctx->pool_index.end()) {
-      ref.pool_idx = it_pool->second;
-    }
-    // Outcome index? Not usually populated in Proto flow but handled for
-    // completeness if it were? Actually proto doesn't have outcomes. But
-    // assuming usage consistency:
-    auto it_out = ctx->outcome_index.find(label);
-    if (it_out != ctx->outcome_index.end() && !it_out->second.empty()) {
-      ref.outcome_idx = it_out->second[0];
-    }
-    return ref;
-  };
-
-  for (auto &pool : ctx->pools) {
-    pool.member_refs.clear();
-    pool.member_refs.reserve(pool.members.size());
-    for (const auto &member : pool.members) {
-      pool.member_refs.push_back(resolve_label_ref(member));
-    }
-  }
-
-  ctx->nodes.reserve(proto.nodes.size());
-  for (const auto &node_proto : proto.nodes) {
-    NativeNode node;
-    node.id = node_proto.id;
-    node.kind = node_proto.kind;
-    node.kind_id = parse_node_kind(node_proto.kind);
-    node.source = node_proto.source;
-    node.source_ref = resolve_label_ref(node.source);
-    node.args = node_proto.args;
-    node.source_ids = node_proto.source_ids;
-    if (!node.source_ids.empty()) {
-      std::sort(node.source_ids.begin(), node.source_ids.end());
-      node.source_ids.erase(
-          std::unique(node.source_ids.begin(), node.source_ids.end()),
-          node.source_ids.end());
-    }
-    node.reference_id = node_proto.reference_id;
-    node.blocker_id = node_proto.blocker_id;
-
-    node.arg_id = node_proto.arg_id;
-    node.needs_forced = node_proto.needs_forced;
-    node.scenario_sensitive = node_proto.scenario_sensitive;
-    ctx->node_index[node.id] = static_cast<int>(ctx->nodes.size());
-    ctx->nodes.push_back(std::move(node));
   }
 
   ctx->outcome_index.clear();
@@ -719,8 +793,9 @@ build_context_from_proto(const NativePrepProto &proto) {
   for (std::size_t i = 0; i < proto.outcomes.size(); ++i) {
     const ProtoOutcome &outcome_proto = proto.outcomes[i];
     int source_idx = static_cast<int>(i);
-    if (source_idx >= static_cast<int>(ctx->outcome_info.size()))
+    if (source_idx >= static_cast<int>(ctx->outcome_info.size())) {
       break;
+    }
     if (!outcome_proto.map_target.empty()) {
       auto it = ctx->outcome_index.find(outcome_proto.map_target);
       if (it != ctx->outcome_index.end()) {
@@ -735,8 +810,9 @@ build_context_from_proto(const NativePrepProto &proto) {
     }
     for (const auto &guess_proto : outcome_proto.guess_donors) {
       auto it = ctx->outcome_index.find(guess_proto.label);
-      if (it == ctx->outcome_index.end())
+      if (it == ctx->outcome_index.end()) {
         continue;
+      }
       for (int target_idx : it->second) {
         if (target_idx < 0 ||
             target_idx >= static_cast<int>(ctx->outcome_info.size())) {
@@ -768,10 +844,15 @@ build_context_from_proto(const NativePrepProto &proto) {
       meta.guess.target =
           component_proto.guess.target.empty() ? "__GUESS__"
                                                : component_proto.guess.target;
-      if (!meta.guess.target.empty() && meta.guess.target != "__GUESS__") {
+      meta.guess.target_is_guess = (meta.guess.target == "__GUESS__");
+      if (!meta.guess.target.empty() && !meta.guess.target_is_guess) {
         auto it = ctx->outcome_index.find(meta.guess.target);
         if (it != ctx->outcome_index.end() && !it->second.empty()) {
           meta.guess.target_outcome_idx = it->second[0];
+        }
+        auto it_label = ctx->label_to_id.find(meta.guess.target);
+        if (it_label != ctx->label_to_id.end()) {
+          meta.guess.target_label_id = it_label->second;
         }
       }
       std::size_t n =
@@ -786,8 +867,9 @@ build_context_from_proto(const NativePrepProto &proto) {
           continue;
         }
         auto it = ctx->outcome_index.find(label);
-        if (it == ctx->outcome_index.end())
+        if (it == ctx->outcome_index.end()) {
           continue;
+        }
         for (int out_idx : it->second) {
           meta.guess.keep_weights.emplace_back(out_idx, keep_prob);
         }
@@ -798,8 +880,9 @@ build_context_from_proto(const NativePrepProto &proto) {
     ctx->component_info.push_back(std::move(meta));
     ctx->components.ids.push_back(component_proto.id);
     double weight = component_proto.weight;
-    if (!std::isfinite(weight) || weight < 0.0)
+    if (!std::isfinite(weight) || weight < 0.0) {
       weight = 1.0;
+    }
     ctx->components.base_weights.push_back(weight);
   }
   if (ctx->components.ids.empty()) {
@@ -831,31 +914,596 @@ build_context_from_proto(const NativePrepProto &proto) {
       }
     }
   }
-  for (auto &node : ctx->nodes) {
-    if (node.source.empty())
-      continue;
-    auto it = ctx->outcome_index.find(node.source);
-    if (it != ctx->outcome_index.end() && !it->second.empty()) {
-      node.source_ref.outcome_idx = it->second[0];
+
+  auto resolve_label_ref = [&](const std::string &label) -> LabelRef {
+    LabelRef ref;
+    if (label.empty()) {
+      return ref;
+    }
+    auto it_label = ctx->label_to_id.find(label);
+    if (it_label != ctx->label_to_id.end()) {
+      ref.label_id = it_label->second;
+    }
+    auto it_acc = ctx->accumulator_index.find(label);
+    if (it_acc != ctx->accumulator_index.end()) {
+      ref.acc_idx = it_acc->second;
+    }
+    auto it_pool = ctx->pool_index.find(label);
+    if (it_pool != ctx->pool_index.end()) {
+      ref.pool_idx = it_pool->second;
+    }
+    auto it_out = ctx->outcome_index.find(label);
+    if (it_out != ctx->outcome_index.end() && !it_out->second.empty()) {
+      ref.outcome_idx = it_out->second[0];
+    }
+    return ref;
+  };
+
+  for (auto &pool : ctx->pools) {
+    pool.member_refs.clear();
+    pool.member_refs.reserve(pool.members.size());
+    for (const auto &member : pool.members) {
+      pool.member_refs.push_back(resolve_label_ref(member));
     }
   }
-  for (auto &pool : ctx->pools) {
-    if (pool.members.empty() || pool.member_refs.empty())
-      continue;
-    std::size_t n = pool.members.size();
-    if (pool.member_refs.size() != n) {
-      pool.member_refs.resize(n);
+
+  IrContext ir;
+  ir.valid = false;
+  ir.id_to_node_idx.reserve(proto.nodes.size());
+  for (std::size_t i = 0; i < proto.nodes.size(); ++i) {
+    ir.id_to_node_idx[proto.nodes[i].id] = static_cast<int>(i);
+  }
+
+  std::unordered_set<int> label_ids_set;
+  label_ids_set.reserve(ctx->label_to_id.size() + proto.nodes.size() * 2);
+  for (const auto &kv : ctx->label_to_id) {
+    if (kv.second >= 0) {
+      label_ids_set.insert(kv.second);
     }
-    for (std::size_t i = 0; i < n; ++i) {
-      auto it = ctx->outcome_index.find(pool.members[i]);
-      if (it != ctx->outcome_index.end() && !it->second.empty()) {
-        pool.member_refs[i].outcome_idx = it->second[0];
+  }
+  for (const auto &node : proto.nodes) {
+    if (node.event_label_id >= 0) {
+      label_ids_set.insert(node.event_label_id);
+    }
+    for (int source_id : node.source_label_ids) {
+      if (source_id >= 0) {
+        label_ids_set.insert(source_id);
       }
     }
   }
+  std::vector<int> label_ids(label_ids_set.begin(), label_ids_set.end());
+  std::sort(label_ids.begin(), label_ids.end());
+  ir.label_id_to_bit_idx.reserve(label_ids.size());
+  for (std::size_t i = 0; i < label_ids.size(); ++i) {
+    ir.label_id_to_bit_idx[label_ids[i]] = static_cast<int>(i);
+  }
+  ir.source_mask_words = mask_word_count(static_cast<int>(label_ids.size()));
 
-  build_ir_context(*ctx);
+  const int n_components = static_cast<int>(ctx->components.ids.size());
+  ir.component_mask_words = mask_word_count(n_components);
+  std::vector<std::uint64_t> all_component_mask(
+      static_cast<std::size_t>(ir.component_mask_words), 0ULL);
+  for (int i = 0; i < n_components; ++i) {
+    set_mask_bit(all_component_mask, i);
+  }
 
+  std::unordered_map<int, int> label_id_to_first_outcome;
+  for (std::size_t oi = 0; oi < ctx->outcome_label_ids.size(); ++oi) {
+    int label_id = ctx->outcome_label_ids[oi];
+    if (label_id < 0 || label_id == NA_INTEGER) {
+      continue;
+    }
+    if (label_id_to_first_outcome.find(label_id) ==
+        label_id_to_first_outcome.end()) {
+      label_id_to_first_outcome[label_id] = static_cast<int>(oi);
+    }
+  }
+
+  ir.nodes.reserve(proto.nodes.size());
+  for (std::size_t i = 0; i < proto.nodes.size(); ++i) {
+    const ProtoNode &node = proto.nodes[i];
+    IrNode ir_node;
+    ir_node.op = static_cast<IrNodeOp>(node.op);
+    ir_node.reference_idx = -1;
+    ir_node.blocker_idx = -1;
+    ir_node.flags = node.flags;
+    ir_node.event_idx = -1;
+    ir_node.node_id = node.id;
+
+    if (node.reference_id >= 0) {
+      auto it = ir.id_to_node_idx.find(node.reference_id);
+      if (it != ir.id_to_node_idx.end()) {
+        ir_node.reference_idx = it->second;
+      }
+    }
+    if (node.blocker_id >= 0) {
+      auto it = ir.id_to_node_idx.find(node.blocker_id);
+      if (it != ir.id_to_node_idx.end()) {
+        ir_node.blocker_idx = it->second;
+      }
+    }
+
+    std::vector<int> dense_children;
+    dense_children.reserve(node.children.size());
+    for (int child_id : node.children) {
+      auto it = ir.id_to_node_idx.find(child_id);
+      if (it != ir.id_to_node_idx.end()) {
+        dense_children.push_back(it->second);
+      }
+    }
+    ir_node.child_begin =
+        dense_children.empty() ? -1 : static_cast<int>(ir.node_children.size());
+    ir_node.child_count = static_cast<int>(dense_children.size());
+    ir.node_children.insert(ir.node_children.end(), dense_children.begin(),
+                            dense_children.end());
+
+    std::vector<int> source_ids = node.source_label_ids;
+    if (node.event_label_id >= 0) {
+      source_ids.push_back(node.event_label_id);
+    }
+    sort_unique_ids(source_ids);
+    ir_node.source_id_begin = source_ids.empty()
+                                  ? -1
+                                  : static_cast<int>(ir.node_source_label_ids.size());
+    ir_node.source_id_count = static_cast<int>(source_ids.size());
+    ir.node_source_label_ids.insert(ir.node_source_label_ids.end(),
+                                    source_ids.begin(), source_ids.end());
+
+    std::vector<std::uint64_t> source_mask(
+        static_cast<std::size_t>(ir.source_mask_words), 0ULL);
+    if (ir.source_mask_words > 0) {
+      for (int source_id : source_ids) {
+        auto it = ir.label_id_to_bit_idx.find(source_id);
+        if (it != ir.label_id_to_bit_idx.end()) {
+          set_mask_bit(source_mask, it->second);
+        }
+      }
+    }
+    ir_node.source_mask_begin =
+        append_mask_words(ir.node_source_masks, source_mask);
+    ir_node.source_mask_count = ir.source_mask_words;
+
+    if (node.op == static_cast<std::uint8_t>(IrNodeOp::EventAcc) ||
+        node.op == static_cast<std::uint8_t>(IrNodeOp::EventPool)) {
+      IrEvent event;
+      event.node_idx = static_cast<int>(i);
+      event.acc_idx = node.event_acc_idx;
+      event.pool_idx = node.event_pool_idx;
+      event.label_id = node.event_label_id;
+      event.outcome_idx = node.event_outcome_idx;
+      if (event.outcome_idx < 0 && event.label_id >= 0) {
+        auto it = label_id_to_first_outcome.find(event.label_id);
+        if (it != label_id_to_first_outcome.end()) {
+          event.outcome_idx = it->second;
+        }
+      }
+      std::vector<std::uint64_t> component_mask(
+          static_cast<std::size_t>(ir.component_mask_words), 0ULL);
+      if (ir.component_mask_words > 0) {
+        if (event.acc_idx >= 0 &&
+            event.acc_idx < static_cast<int>(ctx->accumulators.size()) &&
+            !ctx->accumulators[static_cast<std::size_t>(event.acc_idx)]
+                 .component_indices.empty()) {
+          const auto &indices =
+              ctx->accumulators[static_cast<std::size_t>(event.acc_idx)]
+                  .component_indices;
+          for (int comp_idx : indices) {
+            set_mask_bit(component_mask, comp_idx);
+          }
+        } else {
+          component_mask = all_component_mask;
+        }
+      }
+      event.component_mask_offset =
+          append_mask_words(ir.component_masks, component_mask);
+      ir_node.event_idx = static_cast<int>(ir.events.size());
+      ir.events.push_back(std::move(event));
+    }
+
+    ir.nodes.push_back(std::move(ir_node));
+  }
+
+  ir.outcomes.reserve(ctx->outcome_info.size());
+  for (std::size_t i = 0; i < ctx->outcome_info.size(); ++i) {
+    const OutcomeContextInfo &info = ctx->outcome_info[i];
+    IrOutcome ir_out;
+    ir_out.label_id =
+        (i < ctx->outcome_label_ids.size()) ? ctx->outcome_label_ids[i] : -1;
+    if (ir_out.label_id == NA_INTEGER) {
+      ir_out.label_id = -1;
+    }
+    auto node_it = ir.id_to_node_idx.find(info.node_id);
+    ir_out.node_idx = (node_it == ir.id_to_node_idx.end()) ? -1 : node_it->second;
+
+    ir_out.competitor_begin =
+        info.competitor_ids.empty() ? -1 : static_cast<int>(ir.outcome_competitors.size());
+    for (int comp_id : info.competitor_ids) {
+      auto it = ir.id_to_node_idx.find(comp_id);
+      if (it != ir.id_to_node_idx.end()) {
+        ir.outcome_competitors.push_back(it->second);
+      }
+    }
+    ir_out.competitor_count =
+        (ir_out.competitor_begin < 0)
+            ? 0
+            : static_cast<int>(ir.outcome_competitors.size()) -
+                  ir_out.competitor_begin;
+
+    std::vector<std::uint64_t> allowed_mask(
+        static_cast<std::size_t>(ir.component_mask_words), 0ULL);
+    if (ir.component_mask_words > 0) {
+      if (info.allowed_components.empty()) {
+        allowed_mask = all_component_mask;
+      } else {
+        for (const auto &component : info.allowed_components) {
+          auto it = ctx->component_index.find(component);
+          if (it != ctx->component_index.end()) {
+            set_mask_bit(allowed_mask, it->second);
+          }
+        }
+      }
+    }
+    ir_out.allowed_component_mask_offset =
+        append_mask_words(ir.component_masks, allowed_mask);
+    ir_out.maps_to_na = info.maps_to_na;
+
+    ir_out.alias_begin = info.alias_sources.empty()
+                             ? -1
+                             : static_cast<int>(ir.outcome_alias_sources.size());
+    ir.outcome_alias_sources.insert(ir.outcome_alias_sources.end(),
+                                    info.alias_sources.begin(),
+                                    info.alias_sources.end());
+    ir_out.alias_count =
+        (ir_out.alias_begin < 0)
+            ? 0
+            : static_cast<int>(ir.outcome_alias_sources.size()) -
+                  ir_out.alias_begin;
+
+    ir_out.guess_begin = info.guess_donors.empty()
+                             ? -1
+                             : static_cast<int>(ir.outcome_guess_donors.size());
+    for (const auto &donor : info.guess_donors) {
+      IrOutcomeGuessDonor ir_donor;
+      ir_donor.outcome_idx = donor.outcome_idx;
+      ir_donor.weight = donor.weight;
+      if (donor.rt_policy == "keep") {
+        ir_donor.rt_policy_code = 0;
+      } else if (donor.rt_policy == "na") {
+        ir_donor.rt_policy_code = 1;
+      } else if (donor.rt_policy == "drop") {
+        ir_donor.rt_policy_code = 2;
+      } else {
+        ir_donor.rt_policy_code = 3;
+      }
+      ir.outcome_guess_donors.push_back(std::move(ir_donor));
+    }
+    ir_out.guess_count =
+        (ir_out.guess_begin < 0)
+            ? 0
+            : static_cast<int>(ir.outcome_guess_donors.size()) -
+                  ir_out.guess_begin;
+
+    ir.outcomes.push_back(std::move(ir_out));
+    if (ir.outcomes.back().label_id >= 0) {
+      ir.label_id_to_outcomes[ir.outcomes.back().label_id].push_back(
+          static_cast<int>(i));
+    }
+    if (ir.outcomes.back().node_idx >= 0) {
+      ir.node_idx_to_outcomes[ir.outcomes.back().node_idx].push_back(
+          static_cast<int>(i));
+    }
+  }
+
+  auto mix_lookup_hash = [](std::uint64_t hash, int value) -> std::uint64_t {
+    std::uint32_t v = static_cast<std::uint32_t>(value);
+    for (int i = 0; i < 4; ++i) {
+      std::uint8_t b = static_cast<std::uint8_t>((v >> (8 * i)) & 0xFFU);
+      hash ^= static_cast<std::uint64_t>(b);
+      hash *= 1099511628211ULL;
+    }
+    return hash;
+  };
+
+  auto shared_gate_lookup_key = [&](int node_idx,
+                                    const std::vector<int> &competitors)
+      -> std::uint64_t {
+    std::uint64_t hash = 1469598103934665603ULL;
+    hash = mix_lookup_hash(hash, node_idx);
+    hash = mix_lookup_hash(hash, static_cast<int>(competitors.size()));
+    for (int comp : competitors) {
+      hash = mix_lookup_hash(hash, comp);
+    }
+    return hash;
+  };
+
+  auto mask_overlap = [&](const IrNode &a, const IrNode &b) -> bool {
+    if (a.source_mask_count <= 0 || b.source_mask_count <= 0) {
+      return false;
+    }
+    if (a.source_mask_count != b.source_mask_count) {
+      return false;
+    }
+    for (int i = 0; i < a.source_mask_count; ++i) {
+      std::uint64_t wa = ir.node_source_masks[static_cast<std::size_t>(
+          a.source_mask_begin + i)];
+      std::uint64_t wb = ir.node_source_masks[static_cast<std::size_t>(
+          b.source_mask_begin + i)];
+      if ((wa & wb) != 0ULL) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  auto and_event_pair = [&](int node_idx, int &event_a, int &event_b) -> bool {
+    if (node_idx < 0 || node_idx >= static_cast<int>(ir.nodes.size())) {
+      return false;
+    }
+    const IrNode &node = ir.nodes[static_cast<std::size_t>(node_idx)];
+    if (node.op != IrNodeOp::And || node.child_count != 2) {
+      return false;
+    }
+    if (node.child_begin < 0 ||
+        node.child_begin + 1 >= static_cast<int>(ir.node_children.size())) {
+      return false;
+    }
+    int c0 = ir.node_children[static_cast<std::size_t>(node.child_begin)];
+    int c1 = ir.node_children[static_cast<std::size_t>(node.child_begin + 1)];
+    if (c0 < 0 || c1 < 0 || c0 >= static_cast<int>(ir.nodes.size()) ||
+        c1 >= static_cast<int>(ir.nodes.size())) {
+      return false;
+    }
+    const IrNode &n0 = ir.nodes[static_cast<std::size_t>(c0)];
+    const IrNode &n1 = ir.nodes[static_cast<std::size_t>(c1)];
+    if (n0.event_idx < 0 || n1.event_idx < 0) {
+      return false;
+    }
+    event_a = n0.event_idx;
+    event_b = n1.event_idx;
+    return true;
+  };
+
+  auto detect_shared_gate_pair_ir = [&](int node_idx, int competitor_idx,
+                                        IrSharedGateSpec &spec_out) -> bool {
+    int ta = -1, tb = -1, ca = -1, cb = -1;
+    if (!and_event_pair(node_idx, ta, tb) ||
+        !and_event_pair(competitor_idx, ca, cb)) {
+      return false;
+    }
+    if (ta < 0 || tb < 0 || ca < 0 || cb < 0) {
+      return false;
+    }
+    if (ta >= static_cast<int>(ir.events.size()) ||
+        tb >= static_cast<int>(ir.events.size()) ||
+        ca >= static_cast<int>(ir.events.size()) ||
+        cb >= static_cast<int>(ir.events.size())) {
+      return false;
+    }
+
+    const int tl0 = ir.events[static_cast<std::size_t>(ta)].label_id;
+    const int tl1 = ir.events[static_cast<std::size_t>(tb)].label_id;
+    const int cl0 = ir.events[static_cast<std::size_t>(ca)].label_id;
+    const int cl1 = ir.events[static_cast<std::size_t>(cb)].label_id;
+    if (tl0 < 0 || tl1 < 0 || cl0 < 0 || cl1 < 0) {
+      return false;
+    }
+
+    int pair_x = -1, pair_y = -1, pair_c = -1;
+    if (tl0 == cl0) {
+      pair_c = ta;
+      pair_x = tb;
+      pair_y = cb;
+    } else if (tl0 == cl1) {
+      pair_c = ta;
+      pair_x = tb;
+      pair_y = ca;
+    } else if (tl1 == cl0) {
+      pair_c = tb;
+      pair_x = ta;
+      pair_y = cb;
+    } else if (tl1 == cl1) {
+      pair_c = tb;
+      pair_x = ta;
+      pair_y = ca;
+    } else {
+      return false;
+    }
+    if (pair_x < 0 || pair_y < 0 || pair_c < 0) {
+      return false;
+    }
+    const int x_label = ir.events[static_cast<std::size_t>(pair_x)].label_id;
+    const int y_label = ir.events[static_cast<std::size_t>(pair_y)].label_id;
+    const int c_label = ir.events[static_cast<std::size_t>(pair_c)].label_id;
+    if (x_label < 0 || y_label < 0 || c_label < 0) {
+      return false;
+    }
+    if (x_label == y_label || x_label == c_label || y_label == c_label) {
+      return false;
+    }
+
+    spec_out = IrSharedGateSpec();
+    spec_out.kind = IrSharedGateKind::Pair;
+    spec_out.node_idx = node_idx;
+    spec_out.pair_x_event_idx = pair_x;
+    spec_out.pair_y_event_idx = pair_y;
+    spec_out.pair_c_event_idx = pair_c;
+    return true;
+  };
+
+  auto detect_shared_gate_nway_ir = [&](int node_idx,
+                                        const std::vector<int> &competitor_nodes,
+                                        std::vector<int> &nway_events,
+                                        IrSharedGateSpec &spec_out) -> bool {
+    if (competitor_nodes.size() < 2) {
+      return false;
+    }
+    std::vector<int> nodes;
+    nodes.reserve(1 + competitor_nodes.size());
+    nodes.push_back(node_idx);
+    nodes.insert(nodes.end(), competitor_nodes.begin(), competitor_nodes.end());
+
+    struct Pair {
+      int e0{-1};
+      int e1{-1};
+      int l0{-1};
+      int l1{-1};
+    };
+    std::vector<Pair> pairs(nodes.size());
+    for (std::size_t i = 0; i < nodes.size(); ++i) {
+      int e0 = -1, e1 = -1;
+      if (!and_event_pair(nodes[i], e0, e1)) {
+        return false;
+      }
+      if (e0 < 0 || e1 < 0 || e0 >= static_cast<int>(ir.events.size()) ||
+          e1 >= static_cast<int>(ir.events.size())) {
+        return false;
+      }
+      pairs[i] =
+          Pair{e0, e1, ir.events[static_cast<std::size_t>(e0)].label_id,
+               ir.events[static_cast<std::size_t>(e1)].label_id};
+      if (pairs[i].l0 < 0 || pairs[i].l1 < 0 || pairs[i].l0 == pairs[i].l1) {
+        return false;
+      }
+    }
+
+    const int cand1 = pairs[0].l0;
+    const int cand2 = pairs[0].l1;
+    bool cand1_all = true;
+    bool cand2_all = true;
+    for (std::size_t i = 1; i < pairs.size(); ++i) {
+      const Pair &p = pairs[i];
+      if (!(p.l0 == cand1 || p.l1 == cand1)) {
+        cand1_all = false;
+      }
+      if (!(p.l0 == cand2 || p.l1 == cand2)) {
+        cand2_all = false;
+      }
+    }
+    if (cand1_all == cand2_all) {
+      return false;
+    }
+    const int gate_label = cand1_all ? cand1 : cand2;
+
+    int gate_event_idx = -1;
+    int target_event_idx = -1;
+    std::unordered_set<int> seen_x;
+    seen_x.reserve(pairs.size());
+    nway_events.clear();
+    nway_events.reserve(competitor_nodes.size());
+
+    for (std::size_t i = 0; i < pairs.size(); ++i) {
+      const Pair &p = pairs[i];
+      bool l0_is_gate = (p.l0 == gate_label);
+      bool l1_is_gate = (p.l1 == gate_label);
+      if (l0_is_gate == l1_is_gate) {
+        return false;
+      }
+      int gate_e = l0_is_gate ? p.e0 : p.e1;
+      int x_e = l0_is_gate ? p.e1 : p.e0;
+      int x_label = l0_is_gate ? p.l1 : p.l0;
+      if (x_label == gate_label || x_label < 0) {
+        return false;
+      }
+      if (!seen_x.insert(x_label).second) {
+        return false;
+      }
+      if (i == 0) {
+        gate_event_idx = gate_e;
+        target_event_idx = x_e;
+      } else {
+        nway_events.push_back(x_e);
+      }
+    }
+    if (gate_event_idx < 0 || target_event_idx < 0 || nway_events.empty()) {
+      return false;
+    }
+
+    std::vector<int> event_node_indices;
+    event_node_indices.reserve(2 + nway_events.size());
+    event_node_indices.push_back(
+        ir.events[static_cast<std::size_t>(gate_event_idx)].node_idx);
+    event_node_indices.push_back(
+        ir.events[static_cast<std::size_t>(target_event_idx)].node_idx);
+    for (int ce : nway_events) {
+      if (ce < 0 || ce >= static_cast<int>(ir.events.size())) {
+        return false;
+      }
+      event_node_indices.push_back(
+          ir.events[static_cast<std::size_t>(ce)].node_idx);
+    }
+    for (std::size_t i = 0; i < event_node_indices.size(); ++i) {
+      int ni = event_node_indices[i];
+      if (ni < 0 || ni >= static_cast<int>(ir.nodes.size())) {
+        continue;
+      }
+      for (std::size_t j = i + 1; j < event_node_indices.size(); ++j) {
+        int nj = event_node_indices[j];
+        if (nj < 0 || nj >= static_cast<int>(ir.nodes.size())) {
+          continue;
+        }
+        if (mask_overlap(ir.nodes[static_cast<std::size_t>(ni)],
+                         ir.nodes[static_cast<std::size_t>(nj)])) {
+          return false;
+        }
+      }
+    }
+
+    spec_out = IrSharedGateSpec();
+    spec_out.kind = IrSharedGateKind::NWay;
+    spec_out.node_idx = node_idx;
+    spec_out.nway_gate_event_idx = gate_event_idx;
+    spec_out.nway_target_event_idx = target_event_idx;
+    spec_out.nway_competitor_event_count = static_cast<int>(nway_events.size());
+    return true;
+  };
+
+  for (std::size_t oi = 0; oi < ir.outcomes.size(); ++oi) {
+    IrOutcome &out = ir.outcomes[oi];
+    if (out.node_idx < 0 || out.competitor_count <= 0) {
+      continue;
+    }
+    std::vector<int> competitor_nodes;
+    competitor_nodes.reserve(static_cast<std::size_t>(out.competitor_count));
+    for (int k = 0; k < out.competitor_count; ++k) {
+      competitor_nodes.push_back(ir.outcome_competitors[static_cast<std::size_t>(
+          out.competitor_begin + k)]);
+    }
+    IrSharedGateSpec spec;
+    bool ok = false;
+    if (competitor_nodes.size() == 1) {
+      ok = detect_shared_gate_pair_ir(out.node_idx, competitor_nodes[0], spec);
+    } else if (competitor_nodes.size() >= 2) {
+      std::vector<int> nway_events;
+      ok = detect_shared_gate_nway_ir(out.node_idx, competitor_nodes, nway_events,
+                                      spec);
+      if (ok && !nway_events.empty()) {
+        spec.nway_competitor_event_begin =
+            static_cast<int>(ir.nway_competitor_event_indices.size());
+        ir.nway_competitor_event_indices.insert(
+            ir.nway_competitor_event_indices.end(), nway_events.begin(),
+            nway_events.end());
+      }
+    }
+    if (!ok) {
+      continue;
+    }
+    spec.competitor_begin = out.competitor_begin;
+    spec.competitor_count = out.competitor_count;
+    int spec_idx = static_cast<int>(ir.shared_gate_specs.size());
+    ir.shared_gate_specs.push_back(std::move(spec));
+    out.shared_gate_spec_idx = spec_idx;
+    std::vector<int> competitors;
+    competitors.reserve(static_cast<std::size_t>(out.competitor_count));
+    for (int k = 0; k < out.competitor_count; ++k) {
+      competitors.push_back(ir.outcome_competitors[static_cast<std::size_t>(
+          out.competitor_begin + k)]);
+    }
+    ir.shared_gate_lookup.emplace(shared_gate_lookup_key(out.node_idx, competitors),
+                                  spec_idx);
+  }
+
+  ir.valid = true;
+  ctx->ir = std::move(ir);
   return ctx;
 }
 

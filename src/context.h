@@ -95,26 +95,12 @@ struct PoolTemplateCacheEntry {
   std::vector<int> shared_index;
 };
 
-struct NativeNode {
-  int id{};
-  std::string kind;
-  NodeKind kind_id{NODE_UNKNOWN};
-  std::string source;
-  LabelRef source_ref;
-  std::vector<int> args;
-  std::vector<int> source_ids;
-  int reference_id{-1};
-  int blocker_id{-1};
-
-  int arg_id{-1};
-  bool needs_forced{false};
-  bool scenario_sensitive{false};
-};
-
 struct IrNode {
   IrNodeOp op{IrNodeOp::And};
   int child_begin{-1};
   int child_count{0};
+  int source_id_begin{-1};
+  int source_id_count{0};
   int source_mask_begin{-1};
   int source_mask_count{0};
   int reference_idx{-1};
@@ -176,6 +162,7 @@ struct IrContext {
   std::vector<IrEvent> events;
   std::vector<IrOutcome> outcomes;
   std::vector<int> node_children;
+  std::vector<int> node_source_label_ids;
   std::vector<std::uint64_t> node_source_masks;
   std::vector<int> outcome_competitors;
   std::vector<std::uint64_t> component_masks;
@@ -196,6 +183,8 @@ struct IrContext {
 struct ComponentGuessPolicy {
   std::string target;
   int target_outcome_idx{-1};
+  int target_label_id{NA_INTEGER};
+  bool target_is_guess{false};
   std::vector<std::pair<int, double>> keep_weights;
   double keep_weight_na{1.0};
   bool has_keep_weight_na{false};
@@ -250,10 +239,8 @@ struct NAMapCacheKeyHash {
 struct NativeContext {
   std::vector<NativeAccumulator> accumulators;
   std::vector<NativePool> pools;
-  std::vector<NativeNode> nodes;
   std::unordered_map<std::string, int> accumulator_index;
   std::unordered_map<std::string, int> pool_index;
-  std::unordered_map<int, int> node_index;
   std::unordered_map<std::string, int> label_to_id;
   mutable std::unordered_map<std::string, PoolTemplateCacheEntry>
       pool_template_cache;
@@ -278,6 +265,5 @@ struct NativeContext {
 };
 
 Rcpp::XPtr<NativeContext> build_native_context(Rcpp::List prep);
-void build_ir_context(NativeContext &ctx);
 
 } // namespace uuber

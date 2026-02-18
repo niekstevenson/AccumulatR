@@ -1638,7 +1638,7 @@ build_param_matrix <- function(model,
     param_values <- c(param_values, expanded[setdiff(names(expanded), names(param_values))])
   }
 
-  # Map accumulators to components (new and legacy)
+  # Map accumulators to components from group/component declarations.
   comp_attr <- list()
   for (grp in spec$groups %||% list()) {
     attrs <- grp$attrs %||% list()

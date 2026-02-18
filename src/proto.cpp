@@ -216,16 +216,16 @@ std::vector<std::uint8_t> serialize_native_prep(const NativePrepProto &proto) {
   writer.write_u32(static_cast<std::uint32_t>(proto.nodes.size()));
   for (const auto &node : proto.nodes) {
     writer.write_i32(node.id);
-    writer.write_string(node.kind);
-    writer.write_string(node.source);
-    writer.write_int_vec(node.args);
-    writer.write_int_vec(node.source_ids);
+    writer.write_u8(node.op);
+    writer.write_int_vec(node.children);
+    writer.write_int_vec(node.source_label_ids);
     writer.write_i32(node.reference_id);
     writer.write_i32(node.blocker_id);
-
-    writer.write_i32(node.arg_id);
-    writer.write_bool(node.needs_forced);
-    writer.write_bool(node.scenario_sensitive);
+    writer.write_i32(node.event_acc_idx);
+    writer.write_i32(node.event_pool_idx);
+    writer.write_i32(node.event_label_id);
+    writer.write_i32(node.event_outcome_idx);
+    writer.write_u32(node.flags);
   }
 
   writer.write_u32(static_cast<std::uint32_t>(proto.label_index.size()));
@@ -347,16 +347,16 @@ NativePrepProto deserialize_native_prep(const std::uint8_t *data,
   for (std::uint32_t i = 0; i < node_count; ++i) {
     ProtoNode node;
     node.id = reader.read_i32();
-    node.kind = reader.read_string();
-    node.source = reader.read_string();
-    node.args = reader.read_int_vec();
-    node.source_ids = reader.read_int_vec();
+    node.op = reader.read_u8();
+    node.children = reader.read_int_vec();
+    node.source_label_ids = reader.read_int_vec();
     node.reference_id = reader.read_i32();
     node.blocker_id = reader.read_i32();
-
-    node.arg_id = reader.read_i32();
-    node.needs_forced = reader.read_bool();
-    node.scenario_sensitive = reader.read_bool();
+    node.event_acc_idx = reader.read_i32();
+    node.event_pool_idx = reader.read_i32();
+    node.event_label_id = reader.read_i32();
+    node.event_outcome_idx = reader.read_i32();
+    node.flags = reader.read_u32();
     proto.nodes.push_back(std::move(node));
   }
 

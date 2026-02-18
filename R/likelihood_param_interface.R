@@ -97,7 +97,8 @@
     }
     acc_ids <- names(prep_obj[["accumulators"]] %||% list())
     pool_ids <- names(prep_obj[["pools"]] %||% list())
-    all_ids <- unique(c(acc_ids, pool_ids))
+    outcome_ids <- names(prep_obj[["outcomes"]] %||% list())
+    all_ids <- unique(c(acc_ids, pool_ids, outcome_ids))
     prep_obj[[".id_index"]] <- setNames(seq_along(all_ids), all_ids)
     prep_obj[[".label_cache"]] <- new.env(parent = emptyenv(), hash = TRUE)
     prep_obj <- .precompile_likelihood_expressions(prep_obj)
@@ -143,6 +144,17 @@
   }
   outcome_label_id_map <- .build_outcome_label_id_map(native_ctx)
   component_label_idx_map <- .build_component_label_idx_map(structure)
+  data_df_cpp <- .compact_cpp_likelihood_data(
+    .attach_component_idx_column(
+      .attach_outcome_id_columns(
+        data_df,
+        outcome_label_id_map,
+        rank_info$max_rank
+      ),
+      component_label_idx_map
+    ),
+    rank_info$max_rank
+  )
   trial_ids <- unique(data_df$trial)
   n_trials <- length(trial_ids)
   structure(list(
@@ -150,6 +162,7 @@
     prep = prep_eval_base,
     native_ctx = native_ctx,
     data_df = data_df,
+    data_df_cpp = data_df_cpp,
     param_layout = param_layout,
     n_trials = n_trials,
     trial_ids = trial_ids,
@@ -236,6 +249,53 @@ build_likelihood_context <- function(structure,
   idx[!duplicated(names(idx))]
 }
 
+.component_index_from_prep <- function(prep, component) {
+  comp_label <- as.character(component %||% "__default__")
+  comp_label <- if (length(comp_label) > 0L) comp_label[[1L]] else "__default__"
+  if (is.na(comp_label) || !nzchar(comp_label) || identical(comp_label, "__default__")) {
+    return(-1L)
+  }
+  comp_ids <- as.character((prep[["components"]] %||% list())[["ids"]] %||% "__default__")
+  idx <- match(comp_label, comp_ids)
+  if (is.na(idx)) {
+    stop(sprintf("Unknown component '%s' for IR outcome probability", comp_label), call. = FALSE)
+  }
+  as.integer(idx - 1L)
+}
+
+.encode_label_ids <- function(values, id_map, error_prefix, column_name = NULL) {
+  if (is.null(id_map) || length(id_map) == 0L) {
+    stop(sprintf("%s requires a non-empty id map", error_prefix), call. = FALSE)
+  }
+  lbl <- as.character(values)
+  levels <- names(id_map)
+  # Convert to factor once, then map factor codes to ids.
+  f <- factor(lbl, levels = levels)
+  level_ids <- as.integer(unname(id_map[levels]))
+  ids <- level_ids[as.integer(f)]
+  ids[is.na(lbl)] <- NA_integer_
+  bad <- !is.na(lbl) & nzchar(lbl) & is.na(ids)
+  if (any(bad)) {
+    bad_vals <- unique(lbl[bad])
+    bad_vals <- bad_vals[!is.na(bad_vals) & nzchar(bad_vals)]
+    where <- if (!is.null(column_name) && nzchar(column_name)) {
+      sprintf(" in '%s'", column_name)
+    } else {
+      ""
+    }
+    stop(
+      sprintf(
+        "%s encountered unknown labels%s: %s",
+        error_prefix,
+        where,
+        paste(utils::head(bad_vals, 5L), collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+  as.integer(ids)
+}
+
 .attach_outcome_id_columns <- function(data_df, outcome_label_id_map, rank_width) {
   if (is.null(outcome_label_id_map) || length(outcome_label_id_map) == 0L) {
     stop("IR likelihood requires a non-empty outcome label-id map", call. = FALSE)
@@ -251,22 +311,12 @@ build_likelihood_context <- function(structure,
     if (!r_col %in% names(out)) {
       next
     }
-    labels <- as.character(out[[r_col]])
-    ids <- unname(outcome_label_id_map[labels])
-    missing_label_ids <- !is.na(labels) & nzchar(labels) & is.na(ids)
-    if (any(missing_label_ids)) {
-      bad <- unique(labels[missing_label_ids])
-      bad <- bad[!is.na(bad) & nzchar(bad)]
-      stop(
-        sprintf(
-          "IR likelihood encountered unknown outcome labels in '%s': %s",
-          r_col, paste(utils::head(bad, 5L), collapse = ", ")
-        ),
-        call. = FALSE
-      )
-    }
-    ids[is.na(labels)] <- NA_integer_
-    out[[id_col]] <- as.integer(ids)
+    out[[id_col]] <- .encode_label_ids(
+      out[[r_col]],
+      outcome_label_id_map,
+      "IR likelihood",
+      r_col
+    )
   }
   out
 }
@@ -279,22 +329,58 @@ build_likelihood_context <- function(structure,
   if (is.null(component_label_idx_map) || length(component_label_idx_map) == 0L) {
     stop("IR likelihood requires a non-empty component label-index map", call. = FALSE)
   }
-  comp <- as.character(out$component)
-  idx <- unname(component_label_idx_map[comp])
-  missing_component_idx <- !is.na(comp) & nzchar(comp) & is.na(idx)
-  if (any(missing_component_idx)) {
-    bad <- unique(comp[missing_component_idx])
-    bad <- bad[!is.na(bad) & nzchar(bad)]
+  out$component_idx <- .encode_label_ids(
+    out$component,
+    component_label_idx_map,
+    "IR likelihood",
+    "component"
+  )
+  out
+}
+
+.compact_cpp_likelihood_data <- function(data_df, rank_width) {
+  rank_width <- as.integer(rank_width %||% 1L)
+  if (rank_width < 1L) {
+    rank_width <- 1L
+  }
+  keep <- c("trial", "R_id", "rt")
+  if ("onset" %in% names(data_df)) {
+    keep <- c(keep, "onset")
+  }
+  if ("component_idx" %in% names(data_df)) {
+    keep <- c(keep, "component_idx")
+  }
+  if (rank_width > 1L) {
+    for (rank in 2:rank_width) {
+      keep <- c(keep, paste0("R", rank, "_id"), paste0("rt", rank))
+    }
+  }
+  missing <- setdiff(keep, names(data_df))
+  if (length(missing) > 0L) {
     stop(
       sprintf(
-        "IR likelihood encountered unknown component labels: %s",
-        paste(utils::head(bad, 5L), collapse = ", ")
+        "IR likelihood missing required encoded columns: %s",
+        paste(missing, collapse = ", ")
       ),
       call. = FALSE
     )
   }
-  idx[is.na(comp)] <- NA_integer_
-  out$component_idx <- as.integer(idx)
+  out <- data_df[, keep, drop = FALSE]
+  out$trial <- as.integer(out$trial)
+  out$R_id <- as.integer(out$R_id)
+  out$rt <- as.numeric(out$rt)
+  if ("onset" %in% names(out)) {
+    out$onset <- as.numeric(out$onset)
+  }
+  if ("component_idx" %in% names(out)) {
+    out$component_idx <- as.integer(out$component_idx)
+  }
+  if (rank_width > 1L) {
+    for (rank in 2:rank_width) {
+      out[[paste0("R", rank, "_id")]] <- as.integer(out[[paste0("R", rank, "_id")]])
+      out[[paste0("rt", rank)]] <- as.numeric(out[[paste0("rt", rank)]])
+    }
+  }
   out
 }
 
@@ -945,12 +1031,13 @@ build_likelihood_context <- function(structure,
   }
 
   trial_rows_df <- if (is.null(trial_rows)) data.frame() else as.data.frame(trial_rows)
+  component_idx <- .component_index_from_prep(prep, component)
   prob_native <- tryCatch(
-    native_outcome_probability_params_cpp(
+    native_outcome_probability_params_cpp_idx(
       native_ctx,
       as.integer(compiled$id),
       Inf,
-      component,
+      as.integer(component_idx),
       integer(0),
       integer(0),
       as.integer(comp_ids),
@@ -1242,15 +1329,13 @@ log_likelihood.likelihood_context <- function(likelihood_context,
   rel_tol <- ctx$rel_tol %||% .integrate_rel_tol()
   abs_tol <- ctx$abs_tol %||% .integrate_abs_tol()
   max_depth <- ctx$max_depth %||% 12L
-  data_df_eval <- .attach_outcome_id_columns(
-    data_df,
-    ctx$outcome_label_id_map %||% NULL,
-    ctx$rank_width %||% 1L
-  )
-  data_df_eval <- .attach_component_idx_column(
-    data_df_eval,
-    ctx$component_label_idx_map %||% NULL
-  )
+  data_df_eval <- ctx$data_df_cpp
+  if (is.null(data_df_eval)) {
+    stop(
+      "likelihood_context is missing precomputed IR data columns; rebuild with build_likelihood_context()",
+      call. = FALSE
+    )
+  }
   cpp_loglik_multiple(
     native_ctx,
     params_list,

@@ -45,16 +45,16 @@ struct ProtoPool {
 
 struct ProtoNode {
   int id{};
-  std::string kind;
-  std::string source;
-  std::vector<int> args;
-  std::vector<int> source_ids;
+  std::uint8_t op{2}; // IrNodeOp::And
+  std::vector<int> children;
+  std::vector<int> source_label_ids;
   int reference_id{-1};
   int blocker_id{-1};
-
-  int arg_id{-1};
-  bool needs_forced{false};
-  bool scenario_sensitive{false};
+  int event_acc_idx{-1};
+  int event_pool_idx{-1};
+  int event_label_id{-1};
+  int event_outcome_idx{-1};
+  std::uint32_t flags{0};
 };
 
 struct ProtoLabelEntry {

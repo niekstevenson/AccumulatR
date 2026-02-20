@@ -69,6 +69,18 @@ public:
     return (words_[static_cast<std::size_t>(word)] & (1ULL << off)) != 0ULL;
   }
 
+  bool any() const {
+    if (words_.empty()) {
+      return small_word_ != 0ULL;
+    }
+    for (std::uint64_t word : words_) {
+      if (word != 0ULL) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   bool intersects_words(const std::uint64_t *mask_words, int mask_word_count) const {
     if (!mask_words || mask_word_count <= 0 || bit_count_ <= 0) {
       return false;
@@ -99,6 +111,20 @@ public:
     }
   }
 
+  void or_words(const std::uint64_t *mask_words, int mask_word_count) {
+    if (!mask_words || mask_word_count <= 0 || bit_count_ <= 0) {
+      return;
+    }
+    if (words_.empty()) {
+      small_word_ |= mask_words[0];
+      return;
+    }
+    const int n = std::min<int>(mask_word_count, static_cast<int>(words_.size()));
+    for (int i = 0; i < n; ++i) {
+      words_[static_cast<std::size_t>(i)] |= mask_words[i];
+    }
+  }
+
   const std::vector<std::uint64_t> &words() const { return words_; }
   std::uint64_t small_word() const { return small_word_; }
 
@@ -111,4 +137,3 @@ private:
 };
 
 } // namespace uuber
-

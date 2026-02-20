@@ -1529,11 +1529,42 @@ build_context_from_proto(const NativePrepProto &proto) {
   ctx->kernel_state_graph = KernelStateGraph{};
   ctx->kernel_state_graph.forced_bit_count =
       static_cast<int>(ctx->ir.label_id_to_bit_idx.size());
+  ctx->kernel_state_graph.bit_idx_to_label_id.assign(
+      ctx->kernel_state_graph.forced_bit_count, NA_INTEGER);
+  for (const auto &entry : ctx->ir.label_id_to_bit_idx) {
+    const int label_id = entry.first;
+    const int bit_idx = entry.second;
+    if (bit_idx >= 0 &&
+        bit_idx < static_cast<int>(ctx->kernel_state_graph.bit_idx_to_label_id.size())) {
+      ctx->kernel_state_graph
+          .bit_idx_to_label_id[static_cast<std::size_t>(bit_idx)] = label_id;
+    }
+  }
   ctx->kernel_state_graph.trigger_op_indices.clear();
   ctx->kernel_state_graph.trigger_transition_begin.assign(
       ctx->shared_trigger_groups.size(), -1);
   ctx->kernel_state_graph.trigger_transition_count.assign(
       ctx->shared_trigger_groups.size(), 0);
+  ctx->kernel_state_graph.node_guard_transition_idx.assign(
+      ctx->ir.nodes.size(), -1);
+  ctx->kernel_state_graph.guard_transitions.clear();
+  ctx->kernel_state_graph.guard_transitions.reserve(ctx->ir.nodes.size());
+  for (int node_idx = 0; node_idx < static_cast<int>(ctx->ir.nodes.size());
+       ++node_idx) {
+    const IrNode &node = ctx->ir.nodes[static_cast<std::size_t>(node_idx)];
+    if (node.source_mask_begin < 0 || node.source_mask_count <= 0) {
+      continue;
+    }
+    KernelGuardTransition tr;
+    tr.node_idx = node_idx;
+    tr.source_mask_begin = node.source_mask_begin;
+    tr.source_mask_count = node.source_mask_count;
+    const int tr_idx =
+        static_cast<int>(ctx->kernel_state_graph.guard_transitions.size());
+    ctx->kernel_state_graph.guard_transitions.push_back(tr);
+    ctx->kernel_state_graph.node_guard_transition_idx[static_cast<std::size_t>(
+        node_idx)] = tr_idx;
+  }
   std::size_t total_trigger_transitions = 0;
   for (const SharedTriggerGroup &group : ctx->shared_trigger_groups) {
     total_trigger_transitions += group.acc_indices.size();

@@ -222,12 +222,21 @@ struct KernelStateTransition {
   int op_count{0};
 };
 
+struct KernelGuardTransition {
+  int node_idx{-1};
+  int source_mask_begin{-1};
+  int source_mask_count{0};
+};
+
 struct KernelStateGraph {
   int forced_bit_count{0};
+  std::vector<int> bit_idx_to_label_id;
   std::vector<KernelStateTransition> trigger_transitions;
   std::vector<int> trigger_transition_begin;
   std::vector<int> trigger_transition_count;
   std::vector<int> trigger_op_indices;
+  std::vector<KernelGuardTransition> guard_transitions;
+  std::vector<int> node_guard_transition_idx;
   bool valid{false};
 };
 

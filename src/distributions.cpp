@@ -585,32 +585,12 @@ inline NodeEvalResult make_node_result(EvalNeed need, double density,
   return out;
 }
 
-inline std::vector<int>
-set_to_sorted_vector(const std::unordered_set<int> &items) {
-  if (items.empty())
-    return {};
-  std::vector<int> out(items.begin(), items.end());
-  sort_unique(out);
-  return out;
-}
-
-inline std::vector<int> union_vectors(const std::vector<int> &a,
-                                      const std::vector<int> &b) {
-  if (a.empty()) {
-    std::vector<int> out = b;
-    sort_unique(out);
-    return out;
-  }
-  std::vector<int> out = a;
-  out.insert(out.end(), b.begin(), b.end());
-  sort_unique(out);
-  return out;
-}
-
 struct ScenarioRecord {
   double weight{0.0};
-  std::vector<int> forced_complete;
-  std::vector<int> forced_survive;
+  uuber::BitsetState forced_complete_bits;
+  uuber::BitsetState forced_survive_bits;
+  bool forced_complete_bits_valid{false};
+  bool forced_survive_bits_valid{false};
 };
 
 std::vector<int> forced_vec_from_sexp(SEXP vec) {
@@ -638,26 +618,117 @@ inline int forced_bit_capacity(const uuber::NativeContext &ctx) {
   return static_cast<int>(ctx.ir.label_id_to_bit_idx.size());
 }
 
-inline void build_forced_bitset(
+inline void build_forced_bitset_strict(
     const uuber::NativeContext &ctx, const std::unordered_set<int> &forced_ids,
     uuber::BitsetState &out_bits, bool &out_valid) {
   out_valid = false;
-  if (forced_ids.empty() || ctx.ir.label_id_to_bit_idx.empty()) {
+  if (forced_ids.empty()) {
     return;
   }
   const int bit_capacity = forced_bit_capacity(ctx);
   if (bit_capacity <= 0) {
-    return;
+    Rcpp::stop("IR forced-state bitset unavailable for non-empty forced ids");
   }
   out_bits.reset_size(bit_capacity);
+  out_valid = true;
   for (int id : forced_ids) {
-    auto it = ctx.ir.label_id_to_bit_idx.find(id);
-    if (it == ctx.ir.label_id_to_bit_idx.end()) {
+    if (id == NA_INTEGER || id < 0) {
       continue;
     }
+    auto it = ctx.ir.label_id_to_bit_idx.find(id);
+    if (it == ctx.ir.label_id_to_bit_idx.end()) {
+      Rcpp::stop("IR forced-state id %d not found in bit index map", id);
+    }
     out_bits.set(it->second);
-    out_valid = true;
   }
+}
+
+inline bool ensure_forced_bitset_capacity(const uuber::NativeContext &ctx,
+                                          uuber::BitsetState &bits_out,
+                                          bool &bits_valid) {
+  if (bits_valid) {
+    return true;
+  }
+  const int bit_capacity = forced_bit_capacity(ctx);
+  if (bit_capacity <= 0) {
+    return false;
+  }
+  bits_out.reset_size(bit_capacity);
+  bits_valid = true;
+  return true;
+}
+
+inline void set_forced_id_bit_strict(const uuber::NativeContext &ctx, int id,
+                                     uuber::BitsetState &bits_out,
+                                     bool &bits_valid) {
+  if (id == NA_INTEGER || id < 0) {
+    return;
+  }
+  auto bit_it = ctx.ir.label_id_to_bit_idx.find(id);
+  if (bit_it == ctx.ir.label_id_to_bit_idx.end()) {
+    Rcpp::stop("IR forced-state id %d not found in bit index map", id);
+  }
+  if (!ensure_forced_bitset_capacity(ctx, bits_out, bits_valid)) {
+    Rcpp::stop("IR forced-state bitset unavailable for id %d", id);
+  }
+  bits_out.set(bit_it->second);
+}
+
+inline bool
+forced_bits_contains_label_id_strict(const uuber::NativeContext &ctx, int label_id,
+                                     const uuber::BitsetState &bits,
+                                     bool bits_valid) {
+  if (!bits_valid || label_id == NA_INTEGER || label_id < 0) {
+    return false;
+  }
+  auto bit_it = ctx.ir.label_id_to_bit_idx.find(label_id);
+  if (bit_it == ctx.ir.label_id_to_bit_idx.end()) {
+    Rcpp::stop("IR forced-state id %d not found in bit index map", label_id);
+  }
+  return bits.test(bit_it->second);
+}
+
+inline bool apply_guard_transition_mask_dense(
+    const uuber::NativeContext &ctx, int node_idx_or_id,
+    uuber::BitsetState &survive_bits, bool &survive_bits_valid) {
+  if (ctx.kernel_state_graph.node_guard_transition_idx.empty()) {
+    return false;
+  }
+  int node_idx = -1;
+  auto idx_it = ctx.ir.id_to_node_idx.find(node_idx_or_id);
+  if (idx_it != ctx.ir.id_to_node_idx.end()) {
+    node_idx = idx_it->second;
+  } else if (node_idx_or_id >= 0 &&
+             node_idx_or_id <
+                 static_cast<int>(ctx.kernel_state_graph
+                                      .node_guard_transition_idx.size())) {
+    node_idx = node_idx_or_id;
+  }
+  if (node_idx < 0 || node_idx >= static_cast<int>(ctx.kernel_state_graph
+                                                       .node_guard_transition_idx
+                                                       .size())) {
+    return false;
+  }
+  const int tr_idx = ctx.kernel_state_graph.node_guard_transition_idx
+      [static_cast<std::size_t>(node_idx)];
+  if (tr_idx < 0 ||
+      tr_idx >= static_cast<int>(ctx.kernel_state_graph.guard_transitions.size())) {
+    return false;
+  }
+  const uuber::KernelGuardTransition &tr = ctx.kernel_state_graph
+      .guard_transitions[static_cast<std::size_t>(tr_idx)];
+  if (tr.source_mask_begin < 0 || tr.source_mask_count <= 0 ||
+      tr.source_mask_begin + tr.source_mask_count >
+          static_cast<int>(ctx.ir.node_source_masks.size())) {
+    return false;
+  }
+  if (!ensure_forced_bitset_capacity(ctx, survive_bits, survive_bits_valid)) {
+    return false;
+  }
+  const std::uint64_t *mask_words = &ctx.ir.node_source_masks[static_cast<std::size_t>(
+      tr.source_mask_begin)];
+  survive_bits.or_words(mask_words, tr.source_mask_count);
+  return true;
 }
 
 struct ForcedScopeFilter {
@@ -704,44 +775,59 @@ inline bool scope_filter_allows_id(const ForcedScopeFilter *scope_filter,
   return true;
 }
 
-inline bool forced_contains_scoped(const std::unordered_set<int> &forced, int id,
-                                   const ForcedScopeFilter *scope_filter,
-                                   const uuber::BitsetState *forced_bits = nullptr,
-                                   const std::unordered_map<int, int>
-                                       *label_id_to_bit_idx = nullptr) {
-  if (id == NA_INTEGER || forced.empty())
+inline bool
+forced_bits_contains_scoped(int id, const ForcedScopeFilter *scope_filter,
+                            const uuber::BitsetState *forced_bits,
+                            bool forced_bits_valid,
+                            const std::unordered_map<int, int>
+                                *label_id_to_bit_idx) {
+  if (id == NA_INTEGER || !forced_bits || !forced_bits_valid ||
+      !label_id_to_bit_idx) {
     return false;
-  if (!scope_filter_allows_id(scope_filter, id))
-    return false;
-  if (forced_bits && label_id_to_bit_idx) {
-    auto bit_it = label_id_to_bit_idx->find(id);
-    if (bit_it != label_id_to_bit_idx->end()) {
-      return forced_bits->test(bit_it->second);
-    }
   }
-  return forced.count(id) > 0;
+  if (!scope_filter_allows_id(scope_filter, id)) {
+    return false;
+  }
+  auto bit_it = label_id_to_bit_idx->find(id);
+  if (bit_it == label_id_to_bit_idx->end()) {
+    return false;
+  }
+  return forced_bits->test(bit_it->second);
 }
 
 inline bool
-forced_set_intersects_scope(const std::unordered_set<int> &forced,
-                            const ForcedScopeFilter *scope_filter,
-                            const uuber::BitsetState *forced_bits = nullptr,
-                            const std::unordered_map<int, int>
-                                *label_id_to_bit_idx = nullptr) {
-  if (forced.empty())
+forced_bits_intersects_scope(const ForcedScopeFilter *scope_filter,
+                             const uuber::BitsetState *forced_bits,
+                             bool forced_bits_valid,
+                             const std::unordered_map<int, int>
+                                 *label_id_to_bit_idx) {
+  if (!forced_bits || !forced_bits_valid || !forced_bits->any()) {
     return false;
-  if (!scope_filter)
+  }
+  if (!scope_filter) {
     return true;
+  }
   if (scope_filter->parent == nullptr && scope_filter->source_mask_words &&
-      scope_filter->source_mask_count > 0 && forced_bits &&
-      scope_filter->label_id_to_bit_idx && label_id_to_bit_idx &&
+      scope_filter->source_mask_count > 0 && scope_filter->label_id_to_bit_idx &&
+      label_id_to_bit_idx &&
       scope_filter->label_id_to_bit_idx == label_id_to_bit_idx) {
     return forced_bits->intersects_words(scope_filter->source_mask_words,
                                          scope_filter->source_mask_count);
   }
-  for (int id : forced) {
-    if (id != NA_INTEGER && scope_filter_allows_id(scope_filter, id)) {
-      return true;
+  if (!label_id_to_bit_idx) {
+    return false;
+  }
+  for (const ForcedScopeFilter *it = scope_filter; it != nullptr; it = it->parent) {
+    if (!it->source_ids_data || it->source_ids_count <= 0) {
+      continue;
+    }
+    for (int i = 0; i < it->source_ids_count; ++i) {
+      int id = it->source_ids_data[i];
+      auto bit_it = label_id_to_bit_idx->find(id);
+      if (bit_it != label_id_to_bit_idx->end() &&
+          forced_bits->test(bit_it->second)) {
+        return true;
+      }
     }
   }
   return false;
@@ -1892,9 +1978,7 @@ private:
 NodeEvalResult
 eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
                    std::uint32_t node_flags, double t,
-                   const std::string &component,
-                   const std::unordered_set<int> &forced_complete,
-                   const std::unordered_set<int> &forced_survive, EvalNeed need,
+                   const std::string &component, EvalNeed need,
                    const TrialParamSet *trial_params = nullptr,
                    const std::string &trial_type_key = std::string(),
                    bool include_na_donors = false, int component_idx = -1,
@@ -1954,14 +2038,16 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
   }
   int label_idx = label_ref.label_id;
   if (label_idx >= 0 && label_idx != NA_INTEGER) {
-    if (forced_contains_scoped(forced_complete, label_idx, forced_scope_filter,
-                               forced_complete_bits,
-                               forced_label_id_to_bit_idx)) {
+    if (forced_bits_contains_scoped(label_idx, forced_scope_filter,
+                                    forced_complete_bits,
+                                    forced_complete_bits != nullptr,
+                                    forced_label_id_to_bit_idx)) {
       return make_node_result(need, 0.0, 0.0, 1.0);
     }
-    if (forced_contains_scoped(forced_survive, label_idx, forced_scope_filter,
-                               forced_survive_bits,
-                               forced_label_id_to_bit_idx)) {
+    if (forced_bits_contains_scoped(label_idx, forced_scope_filter,
+                                    forced_survive_bits,
+                                    forced_survive_bits != nullptr,
+                                    forced_label_id_to_bit_idx)) {
       return make_node_result(need, 0.0, 1.0, 0.0);
     }
   }
@@ -2025,9 +2111,10 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
       // If source is forced to survive at time t, dependent accumulator cannot
       // have completed by t.
       if (source_label_id >= 0 && source_label_id != NA_INTEGER &&
-          forced_contains_scoped(forced_survive, source_label_id,
-                                 forced_scope_filter, forced_survive_bits,
-                                 forced_label_id_to_bit_idx)) {
+          forced_bits_contains_scoped(source_label_id, forced_scope_filter,
+                                      forced_survive_bits,
+                                      forced_survive_bits != nullptr,
+                                      forced_label_id_to_bit_idx)) {
         return make_node_result(need, 0.0, 1.0, 0.0);
       }
 
@@ -2038,9 +2125,10 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
       double exact_time = std::numeric_limits<double>::quiet_NaN();
 
       if (source_label_id >= 0 && source_label_id != NA_INTEGER) {
-        if (forced_contains_scoped(forced_complete, source_label_id,
-                                   forced_scope_filter, forced_complete_bits,
-                                   forced_label_id_to_bit_idx)) {
+        if (forced_bits_contains_scoped(source_label_id, forced_scope_filter,
+                                        forced_complete_bits,
+                                        forced_complete_bits != nullptr,
+                                        forced_label_id_to_bit_idx)) {
           bound_upper = std::min(bound_upper, t);
           has_conditioning_bounds = true;
         }
@@ -2088,8 +2176,8 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
 
         auto source_eval = [&](double u, EvalNeed source_need) -> NodeEvalResult {
           return eval_event_ref_idx(
-              ctx, source_ref, 0u, u, component, forced_complete, forced_survive,
-              source_need, trial_params, trial_type_key, false, component_idx, -1,
+              ctx, source_ref, 0u, u, component, source_need, trial_params,
+              trial_type_key, false, component_idx, -1,
               exact_source_times, source_time_bounds, forced_scope_filter,
               forced_complete_bits, forced_survive_bits,
               forced_label_id_to_bit_idx, trial_params_soa);
@@ -2290,8 +2378,8 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
       std::size_t member_idx = scratch.active_indices[i];
       const LabelRef &member_ref = pool.member_refs[member_idx];
       NodeEvalResult child = eval_event_ref_idx(
-          ctx, member_ref, 0u, t, component, forced_complete, forced_survive,
-          child_need, trial_params, std::string(), false, component_idx, -1,
+          ctx, member_ref, 0u, t, component, child_need, trial_params,
+          std::string(), false, component_idx, -1,
           exact_source_times, source_time_bounds, forced_scope_filter,
           forced_complete_bits, forced_survive_bits,
           forced_label_id_to_bit_idx, trial_params_soa);
@@ -2476,8 +2564,6 @@ inline double extract_trial_id(const Rcpp::DataFrame *trial_rows) {
 struct NodeEvalState {
   NodeEvalState(const uuber::NativeContext &ctx_, double time,
                 const std::string &component_label,
-                const std::unordered_set<int> &forced_complete_ref,
-                const std::unordered_set<int> &forced_survive_ref,
                 const TrialParamSet *params_ptr = nullptr,
                 const std::string &trial_key = std::string(),
                 bool include_na = false,
@@ -2491,8 +2577,7 @@ struct NodeEvalState {
                 bool forced_survive_bits_ptr_valid = false,
                 uuber::KernelRuntimeState *external_kernel_runtime = nullptr)
       : ctx(ctx_), t(time), component(component_label),
-        forced_complete(forced_complete_ref),
-        forced_survive(forced_survive_ref), trial_params(params_ptr),
+        trial_params(params_ptr),
         trial_type_key(component_cache_key(component_label, trial_key)),
         include_na_donors(include_na), component_idx(component_idx_val),
         outcome_idx(outcome_idx_val),
@@ -2519,15 +2604,15 @@ struct NodeEvalState {
       forced_complete_bits = *forced_complete_bits_ptr;
       forced_complete_bits_valid = true;
     } else {
-      build_forced_bitset(ctx, forced_complete, forced_complete_bits,
-                          forced_complete_bits_valid);
+      (void)ensure_forced_bitset_capacity(ctx, forced_complete_bits,
+                                          forced_complete_bits_valid);
     }
     if (forced_survive_bits_ptr && forced_survive_bits_ptr_valid) {
       forced_survive_bits = *forced_survive_bits_ptr;
       forced_survive_bits_valid = true;
     } else {
-      build_forced_bitset(ctx, forced_survive, forced_survive_bits,
-                          forced_survive_bits_valid);
+      (void)ensure_forced_bitset_capacity(ctx, forced_survive_bits,
+                                          forced_survive_bits_valid);
     }
     if (ctx.kernel_program.valid) {
       if (external_kernel_runtime) {
@@ -2548,8 +2633,6 @@ struct NodeEvalState {
   const uuber::NativeContext &ctx;
   double t;
   std::string component;
-  const std::unordered_set<int> &forced_complete;
-  const std::unordered_set<int> &forced_survive;
   const TrialParamSet *trial_params;
   std::string trial_type_key;
   bool include_na_donors;
@@ -2581,8 +2664,6 @@ struct GuardEvalInput {
   std::string component;
   int component_idx{-1};
   std::string trial_type_key;
-  const std::unordered_set<int> *forced_complete{nullptr};
-  const std::unordered_set<int> *forced_survive{nullptr};
   const uuber::BitsetState *forced_complete_bits{nullptr};
   const uuber::BitsetState *forced_survive_bits{nullptr};
   const std::unordered_map<int, int> *forced_label_id_to_bit_idx{nullptr};
@@ -2595,21 +2676,21 @@ struct GuardEvalInput {
   const SourceTimeBoundsMap *source_time_bounds{nullptr};
 };
 
-NodeEvalResult
-eval_node_with_forced_dense(
+NodeEvalResult eval_node_with_forced_dense_bits(
     const uuber::NativeContext &ctx, int node_idx, double time,
-    const std::string &component, int component_idx,
-    const std::unordered_set<int> &forced_complete,
-    const std::unordered_set<int> &forced_survive, EvalNeed need,
+    const std::string &component, int component_idx, EvalNeed need,
     const TrialParamSet *trial_params, const std::string &trial_key,
     const ExactSourceTimeMap *exact_source_times = nullptr,
     const SourceTimeBoundsMap *source_time_bounds = nullptr,
-    const ForcedScopeFilter *forced_scope_filter = nullptr);
+    const ForcedScopeFilter *forced_scope_filter = nullptr,
+    const uuber::BitsetState *forced_complete_bits = nullptr,
+    bool forced_complete_bits_valid = false,
+    const uuber::BitsetState *forced_survive_bits = nullptr,
+    bool forced_survive_bits_valid = false,
+    uuber::KernelRuntimeState *kernel_runtime = nullptr);
 GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
                                 int node_idx,
                                 const std::string &component, int component_idx,
-                                const std::unordered_set<int> &forced_complete,
-                                const std::unordered_set<int> &forced_survive,
                                 const std::string &trial_key,
                                 const TrialParamSet *trial_params,
                                 const uuber::TrialParamsSoA *trial_params_soa,
@@ -2852,16 +2933,15 @@ NodeEvalResult eval_event_unforced(
     int component_idx, EvalNeed need, const TrialParamSet *trial_params,
     const std::string &trial_type_key, bool include_na_donors,
     int outcome_idx_context) {
-  static const std::unordered_set<int> kEmptyForced;
   const uuber::TrialParamsSoA *trial_params_soa =
       (trial_params && trial_params->soa_cache_valid &&
        trial_params->soa_cache.valid)
           ? &trial_params->soa_cache
           : nullptr;
   return eval_event_ref_idx(
-      ctx, label_ref, 0u, t, component, kEmptyForced, kEmptyForced, need,
-      trial_params, trial_type_key, include_na_donors, component_idx,
-      outcome_idx_context, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+      ctx, label_ref, 0u, t, component, need, trial_params, trial_type_key,
+      include_na_donors, component_idx, outcome_idx_context, nullptr, nullptr,
+      nullptr, nullptr, nullptr, nullptr,
       trial_params_soa);
 }
 
@@ -3166,28 +3246,11 @@ double shared_gate_pair_probability(
   return clamp_probability(total);
 }
 
-NodeEvalResult eval_node_with_forced_dense(
-    const uuber::NativeContext &ctx, int node_idx, double time,
-    const std::string &component, int component_idx,
-    const std::unordered_set<int> &forced_complete,
-    const std::unordered_set<int> &forced_survive, EvalNeed need,
-    const TrialParamSet *trial_params, const std::string &trial_key,
-    const ExactSourceTimeMap *exact_source_times,
-    const SourceTimeBoundsMap *source_time_bounds,
-    const ForcedScopeFilter *forced_scope_filter) {
-  NodeEvalState local(ctx, time, component, forced_complete, forced_survive,
-                      trial_params, trial_key, false, component_idx, -1,
-                      exact_source_times,
-                      source_time_bounds, forced_scope_filter);
-  return eval_node_recursive_dense(node_idx, local, need);
-}
-
 NodeEvalResult eval_node_with_forced_dense_bits(
     const uuber::NativeContext &ctx, int node_idx, double time,
     const std::string &component, int component_idx,
-    const std::unordered_set<int> &forced_complete,
-    const std::unordered_set<int> &forced_survive, EvalNeed need,
-    const TrialParamSet *trial_params, const std::string &trial_key,
+    EvalNeed need, const TrialParamSet *trial_params,
+    const std::string &trial_key,
     const ExactSourceTimeMap *exact_source_times,
     const SourceTimeBoundsMap *source_time_bounds,
     const ForcedScopeFilter *forced_scope_filter,
@@ -3195,12 +3258,16 @@ NodeEvalResult eval_node_with_forced_dense_bits(
     bool forced_complete_bits_valid,
     const uuber::BitsetState *forced_survive_bits,
     bool forced_survive_bits_valid,
-    uuber::KernelRuntimeState *kernel_runtime = nullptr) {
+    uuber::KernelRuntimeState *kernel_runtime) {
   const bool kernel_runtime_usable =
-      kernel_runtime && forced_complete.empty() && forced_survive.empty() &&
+      kernel_runtime &&
+      (!forced_complete_bits_valid ||
+       !forced_complete_bits || !forced_complete_bits->any()) &&
+      (!forced_survive_bits_valid || !forced_survive_bits ||
+       !forced_survive_bits->any()) &&
       exact_source_times == nullptr && source_time_bounds == nullptr;
-  NodeEvalState local(ctx, time, component, forced_complete, forced_survive,
-                      trial_params, trial_key, false, component_idx, -1,
+  NodeEvalState local(ctx, time, component, trial_params, trial_key, false,
+                      component_idx, -1,
                       exact_source_times, source_time_bounds,
                       forced_scope_filter, forced_complete_bits,
                       forced_complete_bits_valid, forced_survive_bits,
@@ -3212,8 +3279,6 @@ NodeEvalResult eval_node_with_forced_dense_bits(
 GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
                                 int node_idx,
                                 const std::string &component, int component_idx,
-                                const std::unordered_set<int> &forced_complete,
-                                const std::unordered_set<int> &forced_survive,
                                 const std::string &trial_key,
                                 const TrialParamSet *trial_params,
                                 const uuber::TrialParamsSoA *trial_params_soa,
@@ -3230,8 +3295,6 @@ GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
                        component,
                        component_idx,
                        component_cache_key(component, trial_key),
-                       &forced_complete,
-                       &forced_survive,
                        forced_complete_bits,
                        forced_survive_bits,
                        forced_label_id_to_bit_idx,
@@ -3262,12 +3325,14 @@ GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
   input.local_scope_filter.parent = forced_scope_filter;
   input.forced_scope_filter = &input.local_scope_filter;
   input.has_scoped_forced =
-      forced_set_intersects_scope(forced_complete, input.forced_scope_filter,
-                                  forced_complete_bits,
-                                  forced_label_id_to_bit_idx) ||
-      forced_set_intersects_scope(forced_survive, input.forced_scope_filter,
-                                  forced_survive_bits,
-                                  forced_label_id_to_bit_idx);
+      forced_bits_intersects_scope(input.forced_scope_filter,
+                                   forced_complete_bits,
+                                   forced_complete_bits != nullptr,
+                                   forced_label_id_to_bit_idx) ||
+      forced_bits_intersects_scope(input.forced_scope_filter,
+                                   forced_survive_bits,
+                                   forced_survive_bits != nullptr,
+                                   forced_label_id_to_bit_idx);
   return input;
 }
 
@@ -3290,8 +3355,8 @@ uuber::KernelEventEvalFn make_kernel_event_eval(NodeEvalState &state) {
       node_flags = state.ctx.ir.nodes[static_cast<std::size_t>(event.node_idx)].flags;
     }
     NodeEvalResult event_eval = eval_event_ref_idx(
-        state.ctx, ref, node_flags, state.t, state.component,
-        state.forced_complete, state.forced_survive, kEvalAll, state.trial_params,
+        state.ctx, ref, node_flags, state.t, state.component, kEvalAll,
+        state.trial_params,
         state.trial_type_key, state.include_na_donors, state.component_idx,
         state.outcome_idx, state.exact_source_times, state.source_time_bounds,
         state.forced_scope_filter,
@@ -3313,9 +3378,9 @@ uuber::KernelGuardEvalFn make_kernel_guard_eval(NodeEvalState &state) {
     uuber::KernelNodeValues out{};
     GuardEvalInput guard_input = make_guard_input(
         state.ctx, op.node_idx, state.component, state.component_idx,
-        state.forced_complete, state.forced_survive, state.trial_type_key,
-        state.trial_params, state.trial_params_soa, state.exact_source_times,
-        state.source_time_bounds, state.forced_scope_filter,
+        state.trial_type_key, state.trial_params, state.trial_params_soa,
+        state.exact_source_times, state.source_time_bounds,
+        state.forced_scope_filter,
         state.forced_complete_bits_valid ? &state.forced_complete_bits : nullptr,
         state.forced_survive_bits_valid ? &state.forced_survive_bits : nullptr,
         state.forced_label_id_to_bit_idx);
@@ -3334,8 +3399,10 @@ uuber::KernelGuardEvalFn make_kernel_guard_eval(NodeEvalState &state) {
 }
 
 inline bool kernel_runtime_cache_safe(const NodeEvalState &state) {
-  return state.forced_scope_filter == nullptr && state.forced_complete.empty() &&
-         state.forced_survive.empty() && state.exact_source_times == nullptr &&
+  return state.forced_scope_filter == nullptr &&
+         !(state.forced_complete_bits_valid && state.forced_complete_bits.any()) &&
+         !(state.forced_survive_bits_valid && state.forced_survive_bits.any()) &&
+         state.exact_source_times == nullptr &&
          state.source_time_bounds == nullptr;
 }
 
@@ -3391,11 +3458,13 @@ double guard_effective_survival_internal(const GuardEvalInput &input, double t,
   if (blocker_idx < 0) {
     return 1.0;
   }
-  NodeEvalResult block = eval_node_with_forced_dense(
+  NodeEvalResult block = eval_node_with_forced_dense_bits(
       input.ctx, blocker_idx, t, input.component, input.component_idx,
-      *input.forced_complete, *input.forced_survive, EvalNeed::kSurvival,
-      input.trial_params, input.trial_type_key, input.exact_source_times,
-      input.source_time_bounds, input.forced_scope_filter);
+      EvalNeed::kSurvival, input.trial_params, input.trial_type_key,
+      input.exact_source_times, input.source_time_bounds,
+      input.forced_scope_filter, input.forced_complete_bits,
+      input.forced_complete_bits != nullptr, input.forced_survive_bits,
+      input.forced_survive_bits != nullptr);
   return clamp_probability(block.survival);
 }
 
@@ -3408,11 +3477,13 @@ double guard_reference_density(const GuardEvalInput &input, double t) {
   if (reference_idx < 0) {
     return 0.0;
   }
-  NodeEvalResult ref = eval_node_with_forced_dense(
+  NodeEvalResult ref = eval_node_with_forced_dense_bits(
       input.ctx, reference_idx, t, input.component, input.component_idx,
-      *input.forced_complete, *input.forced_survive, EvalNeed::kDensity,
-      input.trial_params, input.trial_type_key, input.exact_source_times,
-      input.source_time_bounds, input.forced_scope_filter);
+      EvalNeed::kDensity, input.trial_params, input.trial_type_key,
+      input.exact_source_times, input.source_time_bounds,
+      input.forced_scope_filter, input.forced_complete_bits,
+      input.forced_complete_bits != nullptr, input.forced_survive_bits,
+      input.forced_survive_bits != nullptr);
   double dens_ref = ref.density;
   if (!std::isfinite(dens_ref) || dens_ref <= 0.0)
     return 0.0;
@@ -3599,11 +3670,13 @@ double quick_eval_density(const GuardEvalInput &input, int node_id, double t,
       return fast_val;
     }
   }
-  NodeEvalResult res = eval_node_with_forced_dense(
+  NodeEvalResult res = eval_node_with_forced_dense_bits(
       input.ctx, node_id, t, input.component, input.component_idx,
-      *input.forced_complete, *input.forced_survive, EvalNeed::kDensity,
-      input.trial_params, input.trial_type_key, input.exact_source_times,
-      input.source_time_bounds, input.forced_scope_filter);
+      EvalNeed::kDensity, input.trial_params, input.trial_type_key,
+      input.exact_source_times, input.source_time_bounds,
+      input.forced_scope_filter, input.forced_complete_bits,
+      input.forced_complete_bits != nullptr, input.forced_survive_bits,
+      input.forced_survive_bits != nullptr);
   return res.density > 0 ? res.density : 0.0;
 }
 
@@ -3623,11 +3696,13 @@ double quick_eval_cdf(const GuardEvalInput &input, int node_id, double t,
       return fast_val;
     }
   }
-  NodeEvalResult res = eval_node_with_forced_dense(
+  NodeEvalResult res = eval_node_with_forced_dense_bits(
       input.ctx, node_id, t, input.component, input.component_idx,
-      *input.forced_complete, *input.forced_survive, EvalNeed::kCDF,
-      input.trial_params, input.trial_type_key, input.exact_source_times,
-      input.source_time_bounds, input.forced_scope_filter);
+      EvalNeed::kCDF, input.trial_params, input.trial_type_key,
+      input.exact_source_times, input.source_time_bounds,
+      input.forced_scope_filter, input.forced_complete_bits,
+      input.forced_complete_bits != nullptr, input.forced_survive_bits,
+      input.forced_survive_bits != nullptr);
   return res.cdf; // clamp done in eval? usually yes
 }
 
@@ -3647,11 +3722,13 @@ double quick_eval_surv(const GuardEvalInput &input, int node_id, double t,
       return fast_val;
     }
   }
-  NodeEvalResult res = eval_node_with_forced_dense(
+  NodeEvalResult res = eval_node_with_forced_dense_bits(
       input.ctx, node_id, t, input.component, input.component_idx,
-      *input.forced_complete, *input.forced_survive, EvalNeed::kSurvival,
-      input.trial_params, input.trial_type_key, input.exact_source_times,
-      input.source_time_bounds, input.forced_scope_filter);
+      EvalNeed::kSurvival, input.trial_params, input.trial_type_key,
+      input.exact_source_times, input.source_time_bounds,
+      input.forced_scope_filter, input.forced_complete_bits,
+      input.forced_complete_bits != nullptr, input.forced_survive_bits,
+      input.forced_survive_bits != nullptr);
   return res.survival;
 }
 
@@ -4207,8 +4284,6 @@ double guard_cdf_internal(const GuardEvalInput &input, double t,
     }
   }
 
-  // Fallback to naive recursive integration
-
   auto integrand = [&](double u) -> double {
     return guard_density_internal(input, u, settings);
   };
@@ -4244,6 +4319,7 @@ std::vector<int> gather_blocker_sources(const uuber::NativeContext &ctx,
 struct CompetitorMeta {
   int node_id;
   std::vector<int> sources;
+  std::vector<int> source_bits;
   bool has_guard{false};
   bool scenario_sensitive{false};
 };
@@ -4324,6 +4400,15 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
     meta.node_id = node_id;
     meta.sources = ensure_source_ids(ctx, node);
     sort_unique(meta.sources);
+    meta.source_bits.reserve(meta.sources.size());
+    for (int src_id : meta.sources) {
+      int bit_idx = -1;
+      auto bit_it = ctx.ir.label_id_to_bit_idx.find(src_id);
+      if (bit_it != ctx.ir.label_id_to_bit_idx.end()) {
+        bit_idx = bit_it->second;
+      }
+      meta.source_bits.push_back(bit_idx);
+    }
     meta.has_guard = node_contains_guard(node_id, ctx, guard_memo);
     meta.scenario_sensitive =
         (node.flags & uuber::IR_NODE_FLAG_SCENARIO_SENSITIVE) != 0u;
@@ -4524,11 +4609,31 @@ evaluate_survival_with_forced(int node_id,
                                   nullptr,
                               bool forced_survive_bits_valid = false,
                               uuber::KernelRuntimeState *kernel_runtime = nullptr) {
+  uuber::BitsetState forced_complete_bits_local;
+  uuber::BitsetState forced_survive_bits_local;
+  if (!forced_complete_bits_valid) {
+    build_forced_bitset_strict(ctx, forced_complete, forced_complete_bits_local,
+                               forced_complete_bits_valid);
+    if (forced_complete_bits_valid) {
+      forced_complete_bits = &forced_complete_bits_local;
+    }
+  }
+  if (!forced_survive_bits_valid) {
+    build_forced_bitset_strict(ctx, forced_survive, forced_survive_bits_local,
+                               forced_survive_bits_valid);
+    if (forced_survive_bits_valid) {
+      forced_survive_bits = &forced_survive_bits_local;
+    }
+  }
   const bool kernel_runtime_usable =
-      kernel_runtime && forced_complete.empty() && forced_survive.empty() &&
+      kernel_runtime &&
+      (!forced_complete_bits_valid || !forced_complete_bits ||
+       !forced_complete_bits->any()) &&
+      (!forced_survive_bits_valid || !forced_survive_bits ||
+       !forced_survive_bits->any()) &&
       exact_source_times == nullptr && source_time_bounds == nullptr;
-  NodeEvalState state(ctx, t, component, forced_complete, forced_survive,
-                      trial_params, trial_key, false, component_idx, -1,
+  NodeEvalState state(ctx, t, component, trial_params, trial_key, false,
+                      component_idx, -1,
                       exact_source_times,
                       source_time_bounds, nullptr, forced_complete_bits,
                       forced_complete_bits_valid, forced_survive_bits,
@@ -4553,11 +4658,31 @@ double compute_guard_free_cluster_value(
     const uuber::BitsetState *forced_survive_bits = nullptr,
     bool forced_survive_bits_valid = false,
     uuber::KernelRuntimeState *kernel_runtime = nullptr) {
+  uuber::BitsetState forced_complete_bits_local;
+  uuber::BitsetState forced_survive_bits_local;
+  if (!forced_complete_bits_valid) {
+    build_forced_bitset_strict(ctx, forced_complete, forced_complete_bits_local,
+                               forced_complete_bits_valid);
+    if (forced_complete_bits_valid) {
+      forced_complete_bits = &forced_complete_bits_local;
+    }
+  }
+  if (!forced_survive_bits_valid) {
+    build_forced_bitset_strict(ctx, forced_survive, forced_survive_bits_local,
+                               forced_survive_bits_valid);
+    if (forced_survive_bits_valid) {
+      forced_survive_bits = &forced_survive_bits_local;
+    }
+  }
   const bool kernel_runtime_usable =
-      kernel_runtime && forced_complete.empty() && forced_survive.empty() &&
+      kernel_runtime &&
+      (!forced_complete_bits_valid || !forced_complete_bits ||
+       !forced_complete_bits->any()) &&
+      (!forced_survive_bits_valid || !forced_survive_bits ||
+       !forced_survive_bits->any()) &&
       exact_source_times == nullptr && source_time_bounds == nullptr;
-  NodeEvalState state(ctx, t, component, forced_complete, forced_survive,
-                      trial_params, trial_key, false, component_idx, -1,
+  NodeEvalState state(ctx, t, component, trial_params, trial_key, false,
+                      component_idx, -1,
                       exact_source_times, source_time_bounds, nullptr,
                       forced_complete_bits, forced_complete_bits_valid,
                       forced_survive_bits, forced_survive_bits_valid,
@@ -4621,7 +4746,6 @@ double compute_guard_cluster_value(
     const std::string &trial_key = std::string(),
     const TrialParamSet *trial_params = nullptr,
     const std::vector<int> *guard_order = nullptr,
-    std::unordered_set<int> *forced_survive_scratch = nullptr,
     const ExactSourceTimeMap *exact_source_times = nullptr,
     const SourceTimeBoundsMap *source_time_bounds = nullptr,
     const uuber::BitsetState *base_forced_complete_bits = nullptr,
@@ -4629,30 +4753,30 @@ double compute_guard_cluster_value(
     const uuber::BitsetState *base_forced_survive_bits = nullptr,
     bool base_forced_survive_bits_valid = false) {
   const std::vector<int> &order = guard_order ? *guard_order : cluster_indices;
-  std::unordered_set<int> local_forced;
-  std::unordered_set<int> &forced_survive =
-      forced_survive_scratch ? *forced_survive_scratch : local_forced;
-  forced_survive = base_forced_survive;
+  uuber::BitsetState forced_complete_bits_seed;
+  bool forced_complete_bits_seed_valid = false;
+  if (base_forced_complete_bits && base_forced_complete_bits_valid) {
+    forced_complete_bits_seed = *base_forced_complete_bits;
+    forced_complete_bits_seed_valid = true;
+  } else {
+    build_forced_bitset_strict(ctx, base_forced_complete,
+                               forced_complete_bits_seed,
+                               forced_complete_bits_seed_valid);
+  }
   uuber::BitsetState forced_survive_bits_seed;
   bool forced_survive_bits_seed_valid = false;
   if (base_forced_survive_bits && base_forced_survive_bits_valid) {
     forced_survive_bits_seed = *base_forced_survive_bits;
     forced_survive_bits_seed_valid = true;
   } else {
-    build_forced_bitset(ctx, forced_survive, forced_survive_bits_seed,
-                        forced_survive_bits_seed_valid);
-  }
-  if (!forced_survive_bits_seed_valid && !ctx.ir.label_id_to_bit_idx.empty()) {
-    const int bit_capacity = forced_bit_capacity(ctx);
-    if (bit_capacity > 0) {
-      forced_survive_bits_seed.reset_size(bit_capacity);
-      forced_survive_bits_seed_valid = true;
-    }
+    build_forced_bitset_strict(ctx, base_forced_survive, forced_survive_bits_seed,
+                               forced_survive_bits_seed_valid);
   }
   NodeEvalState state(
-      ctx, t, component, base_forced_complete, forced_survive, trial_params,
-      trial_key, false, component_idx, -1, exact_source_times, source_time_bounds,
-      nullptr, base_forced_complete_bits, base_forced_complete_bits_valid,
+      ctx, t, component, trial_params, trial_key, false, component_idx, -1,
+      exact_source_times, source_time_bounds, nullptr,
+      forced_complete_bits_seed_valid ? &forced_complete_bits_seed : nullptr,
+      forced_complete_bits_seed_valid,
       forced_survive_bits_seed_valid ? &forced_survive_bits_seed : nullptr,
       forced_survive_bits_seed_valid, nullptr);
   double prod = 1.0;
@@ -4666,13 +4790,17 @@ double compute_guard_cluster_value(
     prod *= surv;
     if (!std::isfinite(prod) || prod <= 0.0)
       return 0.0;
-    for (int src : node_meta.sources) {
-      forced_survive.insert(src);
-      if (state.forced_survive_bits_valid && src != NA_INTEGER) {
-        auto bit_it = ctx.ir.label_id_to_bit_idx.find(src);
-        if (bit_it != ctx.ir.label_id_to_bit_idx.end()) {
-          state.forced_survive_bits.set(bit_it->second);
-        }
+    const bool transitioned = apply_guard_transition_mask_dense(
+        ctx, node_meta.node_id, state.forced_survive_bits,
+        state.forced_survive_bits_valid);
+    if (!transitioned && !node_meta.sources.empty()) {
+      Rcpp::stop("IR guard transition missing for node %d with non-empty sources",
+                 node_meta.node_id);
+    }
+    if (!transitioned) {
+      for (int src_id : node_meta.sources) {
+        set_forced_id_bit_strict(ctx, src_id, state.forced_survive_bits,
+                                 state.forced_survive_bits_valid);
       }
     }
   }
@@ -4708,19 +4836,18 @@ double competitor_survival_internal(
     forced_complete_bits = *forced_complete_bits_in;
     forced_complete_bits_valid = true;
   } else {
-    build_forced_bitset(ctx, forced_complete, forced_complete_bits,
-                        forced_complete_bits_valid);
+    build_forced_bitset_strict(ctx, forced_complete, forced_complete_bits,
+                               forced_complete_bits_valid);
   }
   if (forced_survive_bits_in && forced_survive_bits_in_valid) {
     forced_survive_bits = *forced_survive_bits_in;
     forced_survive_bits_valid = true;
   } else {
-    build_forced_bitset(ctx, forced_survive, forced_survive_bits,
-                        forced_survive_bits_valid);
+    build_forced_bitset_strict(ctx, forced_survive, forced_survive_bits,
+                               forced_survive_bits_valid);
   }
 
   double product = 1.0;
-  std::unordered_set<int> forced_survive_scratch;
   for (std::size_t i = 0; i < cache.clusters.size(); ++i) {
     const auto &cluster = cache.clusters[i];
     const bool cluster_has_guard =
@@ -4732,8 +4859,7 @@ double competitor_survival_internal(
                   forced_complete, forced_survive, trial_type_key, trial_params,
                   (i < cache.guard_orders.size() ? &cache.guard_orders[i]
                                                  : nullptr),
-                  &forced_survive_scratch, exact_source_times,
-                  source_time_bounds,
+                  exact_source_times, source_time_bounds,
                   forced_complete_bits_valid ? &forced_complete_bits : nullptr,
                   forced_complete_bits_valid,
                   forced_survive_bits_valid ? &forced_survive_bits : nullptr,
@@ -4808,8 +4934,10 @@ inline double node_density_with_competitors_from_state(
     bool use_fused_competitor_survival, uuber::KernelRuntimeState *kernel_runtime) {
   if (use_fused_competitor_survival && !competitor_ids.empty() &&
       state.kernel_runtime_ready && state.kernel_runtime_ptr &&
-      state.forced_scope_filter == nullptr && state.forced_complete.empty() &&
-      state.forced_survive.empty() && state.exact_source_times == nullptr &&
+      state.forced_scope_filter == nullptr &&
+      !(state.forced_complete_bits_valid && state.forced_complete_bits.any()) &&
+      !(state.forced_survive_bits_valid && state.forced_survive_bits.any()) &&
+      state.exact_source_times == nullptr &&
       state.source_time_bounds == nullptr) {
     int target_node_idx = resolve_dense_node_idx_required(ctx, node_id);
     std::vector<int> eval_node_indices;
@@ -4868,10 +4996,9 @@ inline double node_density_with_competitors_from_state(
                       ? competitor_survival_from_state(state, competitor_ids)
                       : competitor_survival_internal(
                             ctx, competitor_ids, state.t, state.component,
-                            state.component_idx, state.forced_complete,
-                            state.forced_survive, state.trial_type_key,
-                            state.trial_params, state.exact_source_times,
-                            state.source_time_bounds,
+                            state.component_idx, kEmptyForcedSet, kEmptyForcedSet,
+                            state.trial_type_key, state.trial_params,
+                            state.exact_source_times, state.source_time_bounds,
                             state.forced_complete_bits_valid
                                 ? &state.forced_complete_bits
                                 : nullptr,
@@ -4921,12 +5048,21 @@ double node_density_with_competitors_internal(
           trial_type_key, include_na_donors, outcome_idx_context);
     }
   }
-  NodeEvalState state(ctx, t, component_label, forced_complete, forced_survive,
-                      trial_params, trial_type_key, include_na_donors,
-                      component_idx,
-                      outcome_idx_context, exact_source_times,
-                      source_time_bounds, nullptr, nullptr, false, nullptr,
-                      false, kernel_runtime);
+  uuber::BitsetState forced_complete_bits;
+  uuber::BitsetState forced_survive_bits;
+  bool forced_complete_bits_valid = false;
+  bool forced_survive_bits_valid = false;
+  build_forced_bitset_strict(ctx, forced_complete, forced_complete_bits,
+                             forced_complete_bits_valid);
+  build_forced_bitset_strict(ctx, forced_survive, forced_survive_bits,
+                             forced_survive_bits_valid);
+  NodeEvalState state(
+      ctx, t, component_label, trial_params, trial_type_key, include_na_donors,
+      component_idx, outcome_idx_context, exact_source_times, source_time_bounds,
+      nullptr, forced_complete_bits_valid ? &forced_complete_bits : nullptr,
+      forced_complete_bits_valid,
+      forced_survive_bits_valid ? &forced_survive_bits : nullptr,
+      forced_survive_bits_valid, kernel_runtime);
   const bool use_fused_competitor_survival =
       !competitor_ids.empty() && forced_complete.empty() &&
       forced_survive.empty() && exact_source_times == nullptr &&
@@ -4989,11 +5125,21 @@ inline double node_density_with_shared_triggers_plan(
   std::unique_ptr<NodeEvalState> prebuilt_state;
   bool prebuilt_fused_competitor_survival = false;
   if (!use_shared_gate_pair && !use_shared_gate_nway) {
+    uuber::BitsetState forced_complete_bits;
+    uuber::BitsetState forced_survive_bits;
+    bool forced_complete_bits_valid = false;
+    bool forced_survive_bits_valid = false;
+    build_forced_bitset_strict(ctx, forced_complete, forced_complete_bits,
+                               forced_complete_bits_valid);
+    build_forced_bitset_strict(ctx, forced_survive, forced_survive_bits,
+                               forced_survive_bits_valid);
     prebuilt_state = std::make_unique<NodeEvalState>(
-        ctx, t, component_label, forced_complete, forced_survive, &scratch,
-        trial_type_key, include_na_donors, component_idx, outcome_idx_context,
-        nullptr, nullptr, nullptr, nullptr, false, nullptr, false,
-        shared_kernel_runtime_ptr);
+        ctx, t, component_label, &scratch, trial_type_key, include_na_donors,
+        component_idx, outcome_idx_context, nullptr, nullptr, nullptr,
+        forced_complete_bits_valid ? &forced_complete_bits : nullptr,
+        forced_complete_bits_valid,
+        forced_survive_bits_valid ? &forced_survive_bits : nullptr,
+        forced_survive_bits_valid, shared_kernel_runtime_ptr);
     prebuilt_fused_competitor_survival =
         !competitor_ids.empty() && forced_complete.empty() &&
         forced_survive.empty() && competitors_guard_free_dense(ctx, competitor_ids);
@@ -5125,8 +5271,8 @@ inline double node_density_mixture_with_shared_triggers_plan(
         use_component_runtimes ? &component_runtimes[i] : nullptr;
     component_states.emplace_back(
         ctx, t, component_label_by_index_or_empty(ctx, specs[i].component_idx),
-        kEmptyForced, kEmptyForced, &scratch, specs[i].trial_type_key, false,
-        specs[i].component_idx, -1, nullptr, nullptr, nullptr,
+        &scratch, specs[i].trial_type_key, false, specs[i].component_idx, -1,
+        nullptr, nullptr, nullptr,
         nullptr, false, nullptr, false, external_runtime);
     if (component_states.back().kernel_runtime_ptr) {
       runtime_ptrs.push_back(component_states.back().kernel_runtime_ptr);
@@ -6248,66 +6394,143 @@ double observed_outcome_probability_mixture_general_idx(
 
 struct RankedState {
   double weight{0.0};
-  std::vector<int> forced_complete;
-  std::vector<int> forced_survive;
+  uuber::BitsetState forced_complete_bits;
+  uuber::BitsetState forced_survive_bits;
+  bool forced_complete_bits_valid{false};
+  bool forced_survive_bits_valid{false};
   ExactSourceTimeMap exact_source_times;
   SourceTimeBoundsMap source_time_bounds;
 };
 
-inline std::string ranked_state_key(const std::vector<int> &forced_complete,
-                                    const std::vector<int> &forced_survive,
-                                    const ExactSourceTimeMap &exact_source_times,
-                                    const SourceTimeBoundsMap &source_time_bounds) {
-  std::ostringstream oss;
-  oss << "c:";
-  for (std::size_t i = 0; i < forced_complete.size(); ++i) {
-    if (i > 0)
-      oss << ",";
-    oss << forced_complete[i];
+struct RankedStateKey {
+  bool forced_complete_bits_valid{false};
+  bool forced_survive_bits_valid{false};
+  int forced_complete_bit_count{0};
+  int forced_survive_bit_count{0};
+  std::uint64_t forced_complete_hash{0};
+  std::uint64_t forced_survive_hash{0};
+  std::uint64_t exact_hash{0};
+  std::uint64_t bounds_hash{0};
+  std::size_t exact_size{0};
+  std::size_t bounds_size{0};
+
+  bool operator==(const RankedStateKey &other) const noexcept {
+    return forced_complete_bits_valid == other.forced_complete_bits_valid &&
+           forced_survive_bits_valid == other.forced_survive_bits_valid &&
+           forced_complete_bit_count == other.forced_complete_bit_count &&
+           forced_survive_bit_count == other.forced_survive_bit_count &&
+           forced_complete_hash == other.forced_complete_hash &&
+           forced_survive_hash == other.forced_survive_hash &&
+           exact_hash == other.exact_hash && bounds_hash == other.bounds_hash &&
+           exact_size == other.exact_size && bounds_size == other.bounds_size;
   }
-  oss << "|s:";
-  for (std::size_t i = 0; i < forced_survive.size(); ++i) {
-    if (i > 0)
-      oss << ",";
-    oss << forced_survive[i];
+};
+
+struct RankedStateKeyHash {
+  std::size_t operator()(const RankedStateKey &key) const noexcept {
+    std::size_t seed = static_cast<std::size_t>(key.forced_complete_hash);
+    auto combine = [](std::size_t &seed_ref, std::size_t value) {
+      seed_ref ^= value + 0x9e3779b97f4a7c15ULL + (seed_ref << 6) +
+                  (seed_ref >> 2);
+    };
+    combine(seed, static_cast<std::size_t>(key.forced_survive_hash));
+    combine(seed, static_cast<std::size_t>(key.exact_hash));
+    combine(seed, static_cast<std::size_t>(key.bounds_hash));
+    combine(seed, static_cast<std::size_t>(key.forced_complete_bits_valid));
+    combine(seed, static_cast<std::size_t>(key.forced_survive_bits_valid));
+    combine(seed, static_cast<std::size_t>(key.forced_complete_bit_count));
+    combine(seed, static_cast<std::size_t>(key.forced_survive_bit_count));
+    combine(seed, key.exact_size);
+    combine(seed, key.bounds_size);
+    return seed;
   }
-  if (!exact_source_times.empty()) {
-    std::vector<std::pair<int, double>> exact_pairs;
-    exact_pairs.reserve(exact_source_times.size());
-    for (const auto &kv : exact_source_times) {
-      exact_pairs.push_back(kv);
-    }
-    std::sort(exact_pairs.begin(), exact_pairs.end(),
-              [](const auto &lhs, const auto &rhs) {
-                return lhs.first < rhs.first;
-              });
-    oss << "|x:";
-    for (std::size_t i = 0; i < exact_pairs.size(); ++i) {
-      if (i > 0)
-        oss << ",";
-      oss << exact_pairs[i].first << "@" << std::setprecision(17)
-          << exact_pairs[i].second;
-    }
+};
+
+inline std::uint64_t ranked_hash_bitset(const uuber::BitsetState &bits,
+                                        bool bits_valid) {
+  if (!bits_valid) {
+    return 0ULL;
   }
-  if (!source_time_bounds.empty()) {
-    std::vector<std::pair<int, std::pair<double, double>>> bound_pairs;
-    bound_pairs.reserve(source_time_bounds.size());
-    for (const auto &kv : source_time_bounds) {
-      bound_pairs.push_back(kv);
-    }
-    std::sort(bound_pairs.begin(), bound_pairs.end(),
-              [](const auto &lhs, const auto &rhs) {
-                return lhs.first < rhs.first;
-              });
-    oss << "|b:";
-    for (std::size_t i = 0; i < bound_pairs.size(); ++i) {
-      if (i > 0)
-        oss << ",";
-      oss << bound_pairs[i].first << "@" << std::setprecision(17)
-          << bound_pairs[i].second.first << ":" << bound_pairs[i].second.second;
+  std::uint64_t hash = kFNV64Offset;
+  const std::int32_t bit_count = static_cast<std::int32_t>(bits.bit_count());
+  hash_append_bytes(hash, &bit_count, sizeof(bit_count));
+  if (bits.words().empty()) {
+    const std::uint64_t word = bits.small_word();
+    hash_append_bytes(hash, &word, sizeof(word));
+  } else {
+    for (std::uint64_t word : bits.words()) {
+      hash_append_bytes(hash, &word, sizeof(word));
     }
   }
-  return oss.str();
+  return hash;
+}
+
+inline std::uint64_t ranked_hash_exact_times(const ExactSourceTimeMap &exact_source_times) {
+  std::uint64_t hash = kFNV64Offset;
+  std::vector<std::pair<int, double>> exact_pairs;
+  exact_pairs.reserve(exact_source_times.size());
+  for (const auto &kv : exact_source_times) {
+    exact_pairs.push_back(kv);
+  }
+  std::sort(exact_pairs.begin(), exact_pairs.end(),
+            [](const auto &lhs, const auto &rhs) {
+              return lhs.first < rhs.first;
+            });
+  for (const auto &kv : exact_pairs) {
+    const std::int32_t id = static_cast<std::int32_t>(kv.first);
+    hash_append_bytes(hash, &id, sizeof(id));
+    const std::uint64_t bits = canonical_double_bits(kv.second);
+    hash_append_bytes(hash, &bits, sizeof(bits));
+  }
+  return hash;
+}
+
+inline std::uint64_t
+ranked_hash_bounds(const SourceTimeBoundsMap &source_time_bounds) {
+  std::uint64_t hash = kFNV64Offset;
+  std::vector<std::pair<int, std::pair<double, double>>> bound_pairs;
+  bound_pairs.reserve(source_time_bounds.size());
+  for (const auto &kv : source_time_bounds) {
+    bound_pairs.push_back(kv);
+  }
+  std::sort(bound_pairs.begin(), bound_pairs.end(),
+            [](const auto &lhs, const auto &rhs) {
+              return lhs.first < rhs.first;
+            });
+  for (const auto &kv : bound_pairs) {
+    const std::int32_t id = static_cast<std::int32_t>(kv.first);
+    hash_append_bytes(hash, &id, sizeof(id));
+    const std::uint64_t lower_bits = canonical_double_bits(kv.second.first);
+    const std::uint64_t upper_bits = canonical_double_bits(kv.second.second);
+    hash_append_bytes(hash, &lower_bits, sizeof(lower_bits));
+    hash_append_bytes(hash, &upper_bits, sizeof(upper_bits));
+  }
+  return hash;
+}
+
+inline RankedStateKey ranked_state_key(
+    const uuber::BitsetState &forced_complete_bits,
+    bool forced_complete_bits_valid,
+    const uuber::BitsetState &forced_survive_bits,
+    bool forced_survive_bits_valid,
+    const ExactSourceTimeMap &exact_source_times,
+    const SourceTimeBoundsMap &source_time_bounds) {
+  RankedStateKey key;
+  key.forced_complete_bits_valid = forced_complete_bits_valid;
+  key.forced_survive_bits_valid = forced_survive_bits_valid;
+  key.forced_complete_bit_count =
+      forced_complete_bits_valid ? forced_complete_bits.bit_count() : 0;
+  key.forced_survive_bit_count =
+      forced_survive_bits_valid ? forced_survive_bits.bit_count() : 0;
+  key.forced_complete_hash =
+      ranked_hash_bitset(forced_complete_bits, forced_complete_bits_valid);
+  key.forced_survive_hash =
+      ranked_hash_bitset(forced_survive_bits, forced_survive_bits_valid);
+  key.exact_hash = ranked_hash_exact_times(exact_source_times);
+  key.bounds_hash = ranked_hash_bounds(source_time_bounds);
+  key.exact_size = exact_source_times.size();
+  key.bounds_size = source_time_bounds.size();
+  return key;
 }
 
 std::vector<RankedState>
@@ -6315,16 +6538,17 @@ collapse_ranked_states(const std::vector<RankedState> &states, double eps) {
   if (states.empty()) {
     return {};
   }
-  std::unordered_map<std::string, std::size_t> key_index;
+  std::unordered_map<RankedStateKey, std::size_t, RankedStateKeyHash> key_index;
   std::vector<RankedState> collapsed;
   collapsed.reserve(states.size());
   for (const RankedState &state : states) {
     if (!std::isfinite(state.weight) || state.weight <= eps) {
       continue;
     }
-    std::string key =
-        ranked_state_key(state.forced_complete, state.forced_survive,
-                         state.exact_source_times, state.source_time_bounds);
+    RankedStateKey key = ranked_state_key(
+        state.forced_complete_bits, state.forced_complete_bits_valid,
+        state.forced_survive_bits, state.forced_survive_bits_valid,
+        state.exact_source_times, state.source_time_bounds);
     auto it = key_index.find(key);
     if (it == key_index.end()) {
       key_index.emplace(key, collapsed.size());
@@ -6374,6 +6598,7 @@ struct RankedTransitionStep {
   RankedTransitionStepKind kind{RankedTransitionStepKind::EvalDensityNode};
   int node_idx{-1};
   std::vector<int> source_ids;
+  std::vector<int> source_bits;
 };
 
 struct RankedTransitionTemplate {
@@ -6395,6 +6620,22 @@ ranked_plan_child_ids(const uuber::NativeContext &ctx, const uuber::IrNode &node
           static_cast<int>(ctx.ir.node_children.size())) {
     out.assign(ctx.ir.node_children.begin() + node.child_begin,
                ctx.ir.node_children.begin() + node.child_begin + node.child_count);
+  }
+  return out;
+}
+
+inline std::vector<int>
+ranked_source_bits_for_ids(const uuber::NativeContext &ctx,
+                           const std::vector<int> &source_ids) {
+  std::vector<int> out;
+  out.reserve(source_ids.size());
+  for (int id : source_ids) {
+    int bit_idx = -1;
+    auto bit_it = ctx.ir.label_id_to_bit_idx.find(id);
+    if (bit_it != ctx.ir.label_id_to_bit_idx.end()) {
+      bit_idx = bit_it->second;
+    }
+    out.push_back(bit_idx);
   }
   return out;
 }
@@ -6446,6 +6687,7 @@ private:
         RankedTransitionStep add_step;
         add_step.kind = RankedTransitionStepKind::AddCompleteSources;
         add_step.source_ids = std::move(source_ids);
+        add_step.source_bits = ranked_source_bits_for_ids(ctx, add_step.source_ids);
         tr.steps.push_back(std::move(add_step));
       }
       plan.transitions.push_back(std::move(tr));
@@ -6481,6 +6723,8 @@ private:
                 RankedTransitionStep add_step;
                 add_step.kind = RankedTransitionStepKind::AddCompleteSources;
                 add_step.source_ids = child_sources[other_idx];
+                add_step.source_bits =
+                    ranked_source_bits_for_ids(ctx, add_step.source_ids);
                 tr.steps.push_back(std::move(add_step));
               }
             }
@@ -6516,6 +6760,8 @@ private:
               witness_step.kind =
                   RankedTransitionStepKind::AddOrWitnessFromSources;
               witness_step.source_ids = child_sources[other_idx];
+              witness_step.source_bits =
+                  ranked_source_bits_for_ids(ctx, witness_step.source_ids);
               tr.steps.push_back(std::move(witness_step));
             }
             plan.transitions.push_back(std::move(tr));
@@ -6542,6 +6788,8 @@ private:
               RankedTransitionStep add_step;
               add_step.kind = RankedTransitionStepKind::AddSurviveSources;
               add_step.source_ids = blocker_sources;
+              add_step.source_bits =
+                  ranked_source_bits_for_ids(ctx, add_step.source_ids);
               tr.steps.push_back(std::move(add_step));
             }
             plan.transitions.push_back(std::move(tr));
@@ -6584,37 +6832,36 @@ resolve_trial_params_soa_for_ranked(const uuber::NativeContext &ctx,
 }
 
 inline void ranked_add_source_id(const uuber::NativeContext &ctx, int source_id,
-                                 std::unordered_set<int> &set_out,
+                                 int source_bit_idx,
                                  uuber::BitsetState &bits_out,
                                  bool &bits_valid) {
   if (source_id == NA_INTEGER || source_id < 0) {
     return;
   }
-  set_out.insert(source_id);
-  auto bit_it = ctx.ir.label_id_to_bit_idx.find(source_id);
-  if (bit_it == ctx.ir.label_id_to_bit_idx.end()) {
+  if (source_bit_idx < 0) {
+    set_forced_id_bit_strict(ctx, source_id, bits_out, bits_valid);
     return;
   }
+  ensure_forced_bitset_capacity(ctx, bits_out, bits_valid);
   if (!bits_valid) {
-    const int bit_capacity = forced_bit_capacity(ctx);
-    if (bit_capacity <= 0) {
-      return;
-    }
-    bits_out.reset_size(bit_capacity);
-    bits_valid = true;
+    Rcpp::stop("IR forced-state bitset unavailable for ranked source id %d",
+               source_id);
   }
-  bits_out.set(bit_it->second);
+  bits_out.set(source_bit_idx);
 }
 
 std::vector<ScenarioRecord> evaluate_ranked_node_transitions(
     RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
     int node_idx, double t, const std::string &component_label,
-    int component_idx, const std::unordered_set<int> &base_forced_complete,
-    const std::unordered_set<int> &base_forced_survive,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key,
     const ExactSourceTimeMap *exact_source_times,
     const SourceTimeBoundsMap *source_time_bounds,
-    uuber::KernelRuntimeState *kernel_runtime = nullptr) {
+    uuber::KernelRuntimeState *kernel_runtime = nullptr,
+    const uuber::BitsetState *base_forced_complete_bits_in = nullptr,
+    bool base_forced_complete_bits_in_valid = false,
+    const uuber::BitsetState *base_forced_survive_bits_in = nullptr,
+    bool base_forced_survive_bits_in_valid = false) {
   const RankedNodeTransitionPlan &plan = compiler.plan_for_node(node_idx);
   if (!plan.valid || plan.transitions.empty()) {
     return {};
@@ -6625,27 +6872,39 @@ std::vector<ScenarioRecord> evaluate_ranked_node_transitions(
   IntegrationSettings settings;
   std::vector<ScenarioRecord> out;
   out.reserve(plan.transitions.size());
+  uuber::BitsetState base_forced_complete_bits;
+  uuber::BitsetState base_forced_survive_bits;
+  bool base_forced_complete_bits_valid = false;
+  bool base_forced_survive_bits_valid = false;
+  if (base_forced_complete_bits_in && base_forced_complete_bits_in_valid) {
+    base_forced_complete_bits = *base_forced_complete_bits_in;
+    base_forced_complete_bits_valid = true;
+  } else {
+    (void)ensure_forced_bitset_capacity(ctx, base_forced_complete_bits,
+                                        base_forced_complete_bits_valid);
+  }
+  if (base_forced_survive_bits_in && base_forced_survive_bits_in_valid) {
+    base_forced_survive_bits = *base_forced_survive_bits_in;
+    base_forced_survive_bits_valid = true;
+  } else {
+    (void)ensure_forced_bitset_capacity(ctx, base_forced_survive_bits,
+                                        base_forced_survive_bits_valid);
+  }
 
   for (const RankedTransitionTemplate &transition : plan.transitions) {
     double weight = 1.0;
-    std::unordered_set<int> forced_complete = base_forced_complete;
-    std::unordered_set<int> forced_survive = base_forced_survive;
-    uuber::BitsetState forced_complete_bits;
-    uuber::BitsetState forced_survive_bits;
-    bool forced_complete_bits_valid = false;
-    bool forced_survive_bits_valid = false;
-    build_forced_bitset(ctx, forced_complete, forced_complete_bits,
-                        forced_complete_bits_valid);
-    build_forced_bitset(ctx, forced_survive, forced_survive_bits,
-                        forced_survive_bits_valid);
+    uuber::BitsetState forced_complete_bits = base_forced_complete_bits;
+    uuber::BitsetState forced_survive_bits = base_forced_survive_bits;
+    bool forced_complete_bits_valid = base_forced_complete_bits_valid;
+    bool forced_survive_bits_valid = base_forced_survive_bits_valid;
 
     bool valid = true;
     for (const RankedTransitionStep &step : transition.steps) {
       if (step.kind == RankedTransitionStepKind::EvalDensityNode) {
         NodeEvalResult eval = eval_node_with_forced_dense_bits(
             ctx, step.node_idx, t, component_label, component_idx,
-            forced_complete, forced_survive, EvalNeed::kDensity, trial_params,
-            trial_type_key, exact_source_times, source_time_bounds, nullptr,
+            EvalNeed::kDensity, trial_params, trial_type_key,
+            exact_source_times, source_time_bounds, nullptr,
             forced_complete_bits_valid ? &forced_complete_bits : nullptr,
             forced_complete_bits_valid,
             forced_survive_bits_valid ? &forced_survive_bits : nullptr,
@@ -6658,9 +6917,9 @@ std::vector<ScenarioRecord> evaluate_ranked_node_transitions(
         weight *= d;
       } else if (step.kind == RankedTransitionStepKind::EvalCDFNode) {
         NodeEvalResult eval = eval_node_with_forced_dense_bits(
-            ctx, step.node_idx, t, component_label, component_idx,
-            forced_complete, forced_survive, EvalNeed::kCDF, trial_params,
-            trial_type_key, exact_source_times, source_time_bounds, nullptr,
+            ctx, step.node_idx, t, component_label, component_idx, EvalNeed::kCDF,
+            trial_params, trial_type_key, exact_source_times, source_time_bounds,
+            nullptr,
             forced_complete_bits_valid ? &forced_complete_bits : nullptr,
             forced_complete_bits_valid,
             forced_survive_bits_valid ? &forced_survive_bits : nullptr,
@@ -6673,9 +6932,9 @@ std::vector<ScenarioRecord> evaluate_ranked_node_transitions(
         weight *= Fj;
       } else if (step.kind == RankedTransitionStepKind::EvalGuardEffective) {
         GuardEvalInput guard_input = make_guard_input(
-            ctx, step.node_idx, component_label, component_idx, forced_complete,
-            forced_survive, trial_type_key, trial_params, trial_params_soa,
-            exact_source_times, source_time_bounds, nullptr,
+            ctx, step.node_idx, component_label, component_idx, trial_type_key,
+            trial_params, trial_params_soa, exact_source_times,
+            source_time_bounds, nullptr,
             forced_complete_bits_valid ? &forced_complete_bits : nullptr,
             forced_survive_bits_valid ? &forced_survive_bits : nullptr,
             ctx.ir.label_id_to_bit_idx.empty() ? nullptr
@@ -6688,24 +6947,45 @@ std::vector<ScenarioRecord> evaluate_ranked_node_transitions(
         }
         weight *= eff;
       } else if (step.kind == RankedTransitionStepKind::AddCompleteSources) {
-        for (int id : step.source_ids) {
-          ranked_add_source_id(ctx, id, forced_complete, forced_complete_bits,
+        for (std::size_t i = 0; i < step.source_ids.size(); ++i) {
+          const int id = step.source_ids[i];
+          const int bit_idx =
+              (i < step.source_bits.size()) ? step.source_bits[i] : -1;
+          ranked_add_source_id(ctx, id, bit_idx, forced_complete_bits,
                                forced_complete_bits_valid);
         }
       } else if (step.kind == RankedTransitionStepKind::AddSurviveSources) {
-        for (int id : step.source_ids) {
-          ranked_add_source_id(ctx, id, forced_survive, forced_survive_bits,
+        for (std::size_t i = 0; i < step.source_ids.size(); ++i) {
+          const int id = step.source_ids[i];
+          const int bit_idx =
+              (i < step.source_bits.size()) ? step.source_bits[i] : -1;
+          ranked_add_source_id(ctx, id, bit_idx, forced_survive_bits,
                                forced_survive_bits_valid);
         }
       } else if (step.kind == RankedTransitionStepKind::AddOrWitnessFromSources) {
         int witness = NA_INTEGER;
+        int witness_bit = -1;
         bool all_forced = true;
-        for (int id : step.source_ids) {
+        for (std::size_t i = 0; i < step.source_ids.size(); ++i) {
+          const int id = step.source_ids[i];
           if (id == NA_INTEGER || id < 0) {
             continue;
           }
-          if (forced_complete.count(id) == 0) {
+          const int bit_idx =
+              (i < step.source_bits.size()) ? step.source_bits[i] : -1;
+          int bit_to_check = bit_idx;
+          if (bit_to_check < 0) {
+            auto bit_it = ctx.ir.label_id_to_bit_idx.find(id);
+            if (bit_it == ctx.ir.label_id_to_bit_idx.end()) {
+              Rcpp::stop("IR ranked source id %d missing bit index", id);
+            }
+            bit_to_check = bit_it->second;
+          }
+          const bool is_forced = forced_complete_bits_valid &&
+                                 forced_complete_bits.test(bit_to_check);
+          if (!is_forced) {
             witness = id;
+            witness_bit = bit_to_check;
             all_forced = false;
             break;
           }
@@ -6714,7 +6994,7 @@ std::vector<ScenarioRecord> evaluate_ranked_node_transitions(
           valid = false;
           break;
         }
-        ranked_add_source_id(ctx, witness, forced_survive, forced_survive_bits,
+        ranked_add_source_id(ctx, witness, witness_bit, forced_survive_bits,
                              forced_survive_bits_valid);
       }
       if (!std::isfinite(weight) || weight <= 0.0) {
@@ -6727,8 +7007,10 @@ std::vector<ScenarioRecord> evaluate_ranked_node_transitions(
     }
     ScenarioRecord rec;
     rec.weight = weight;
-    rec.forced_complete = set_to_sorted_vector(forced_complete);
-    rec.forced_survive = set_to_sorted_vector(forced_survive);
+    rec.forced_complete_bits = std::move(forced_complete_bits);
+    rec.forced_survive_bits = std::move(forced_survive_bits);
+    rec.forced_complete_bits_valid = forced_complete_bits_valid;
+    rec.forced_survive_bits_valid = forced_survive_bits_valid;
     out.push_back(std::move(rec));
   }
   return out;
@@ -6798,6 +7080,10 @@ double ranked_prefix_density_resolved(
   std::vector<RankedState> states;
   RankedState init_state;
   init_state.weight = 1.0;
+  (void)ensure_forced_bitset_capacity(ctx, init_state.forced_complete_bits,
+                                      init_state.forced_complete_bits_valid);
+  (void)ensure_forced_bitset_capacity(ctx, init_state.forced_survive_bits,
+                                      init_state.forced_survive_bits_valid);
   states.push_back(std::move(init_state));
   std::unordered_set<int> observed_nodes;
   std::unordered_set<int> future_nodes(node_sequence.begin(),
@@ -6867,23 +7153,15 @@ double ranked_prefix_density_resolved(
           merged_bounds.erase(kv.first);
         }
       }
-      std::unordered_set<int> forced_complete =
-          make_forced_set(state.forced_complete);
-      std::unordered_set<int> forced_survive =
-          make_forced_set(state.forced_survive);
-      uuber::BitsetState forced_complete_bits;
-      uuber::BitsetState forced_survive_bits;
-      bool forced_complete_bits_valid = false;
-      bool forced_survive_bits_valid = false;
-      build_forced_bitset(ctx, forced_complete, forced_complete_bits,
-                          forced_complete_bits_valid);
-      build_forced_bitset(ctx, forced_survive, forced_survive_bits,
-                          forced_survive_bits_valid);
+      uuber::BitsetState forced_complete_bits = state.forced_complete_bits;
+      uuber::BitsetState forced_survive_bits = state.forced_survive_bits;
+      bool forced_complete_bits_valid = state.forced_complete_bits_valid;
+      bool forced_survive_bits_valid = state.forced_survive_bits_valid;
       double denom = 1.0;
       if (rank_idx > 0) {
         double lower_t = times[rank_idx - 1];
         denom = evaluate_survival_with_forced(
-            info.node_id, forced_complete, forced_survive, component_label,
+            info.node_id, kEmptyForcedSet, kEmptyForcedSet, component_label,
             component_idx, lower_t, ctx, trial_type_key, trial_params,
             &merged_exact, &merged_bounds,
             forced_complete_bits_valid ? &forced_complete_bits : nullptr,
@@ -6897,8 +7175,12 @@ double ranked_prefix_density_resolved(
       int outcome_node_idx = resolve_dense_node_idx_required(ctx, info.node_id);
       std::vector<ScenarioRecord> scenarios = evaluate_ranked_node_transitions(
           *compiler, ctx, outcome_node_idx, t, component_label, component_idx,
-          forced_complete, forced_survive, trial_params, trial_type_key,
-          &merged_exact, &merged_bounds, kernel_runtime);
+          trial_params, trial_type_key, &merged_exact, &merged_bounds,
+          kernel_runtime,
+          forced_complete_bits_valid ? &forced_complete_bits : nullptr,
+          forced_complete_bits_valid,
+          forced_survive_bits_valid ? &forced_survive_bits : nullptr,
+          forced_survive_bits_valid);
       if (scenarios.empty()) {
         continue;
       }
@@ -6911,26 +7193,14 @@ double ranked_prefix_density_resolved(
         if (!std::isfinite(weight) || weight <= kBranchEps) {
           continue;
         }
-        std::vector<int> next_complete = scenario.forced_complete;
-        std::vector<int> next_survive = scenario.forced_survive;
-        sort_unique(next_complete);
-        sort_unique(next_survive);
+        uuber::BitsetState next_complete_bits = scenario.forced_complete_bits;
+        uuber::BitsetState next_survive_bits = scenario.forced_survive_bits;
+        bool next_complete_bits_valid = scenario.forced_complete_bits_valid;
+        bool next_survive_bits_valid = scenario.forced_survive_bits_valid;
         if (!competitors.empty()) {
-          std::unordered_set<int> next_complete_set =
-              make_forced_set(next_complete);
-          std::unordered_set<int> next_survive_set =
-              make_forced_set(next_survive);
-          uuber::BitsetState next_complete_bits;
-          uuber::BitsetState next_survive_bits;
-          bool next_complete_bits_valid = false;
-          bool next_survive_bits_valid = false;
-          build_forced_bitset(ctx, next_complete_set, next_complete_bits,
-                              next_complete_bits_valid);
-          build_forced_bitset(ctx, next_survive_set, next_survive_bits,
-                              next_survive_bits_valid);
           double surv = competitor_survival_internal(
               ctx, competitors, t, component_label, component_idx,
-              next_complete_set, next_survive_set, trial_type_key,
+              kEmptyForcedSet, kEmptyForcedSet, trial_type_key,
               trial_params, &merged_exact, &merged_bounds,
               next_complete_bits_valid ? &next_complete_bits : nullptr,
               next_complete_bits_valid,
@@ -6944,19 +7214,26 @@ double ranked_prefix_density_resolved(
             continue;
           }
           if (!persistent_sources.empty()) {
-            next_survive = union_vectors(next_survive, persistent_sources);
+            for (int src_id : persistent_sources) {
+              set_forced_id_bit_strict(ctx, src_id, next_survive_bits,
+                                       next_survive_bits_valid);
+            }
           }
         }
         RankedState next_state;
         next_state.weight = weight;
-        next_state.forced_complete = std::move(next_complete);
-        next_state.forced_survive = std::move(next_survive);
+        next_state.forced_complete_bits = std::move(next_complete_bits);
+        next_state.forced_survive_bits = std::move(next_survive_bits);
+        next_state.forced_complete_bits_valid = next_complete_bits_valid;
+        next_state.forced_survive_bits_valid = next_survive_bits_valid;
         next_state.exact_source_times = state.exact_source_times;
         next_state.source_time_bounds = state.source_time_bounds;
         if (!onset_source_ids.empty()) {
           bool bounds_ok = true;
-          for (int src_id : next_state.forced_survive) {
-            if (onset_source_ids.count(src_id) == 0) {
+          for (int src_id : onset_source_ids) {
+            if (!forced_bits_contains_label_id_strict(
+                    ctx, src_id, next_state.forced_survive_bits,
+                    next_state.forced_survive_bits_valid)) {
               continue;
             }
             if (next_state.exact_source_times.find(src_id) !=
@@ -6984,8 +7261,10 @@ double ranked_prefix_density_resolved(
           if (!bounds_ok) {
             continue;
           }
-          for (int src_id : next_state.forced_complete) {
-            if (onset_source_ids.count(src_id) == 0) {
+          for (int src_id : onset_source_ids) {
+            if (!forced_bits_contains_label_id_strict(
+                    ctx, src_id, next_state.forced_complete_bits,
+                    next_state.forced_complete_bits_valid)) {
               continue;
             }
             if (next_state.exact_source_times.find(src_id) !=
@@ -7030,94 +7309,6 @@ double ranked_prefix_density_resolved(
       total += state.weight;
     }
   }
-  if (!std::isfinite(total) || total <= 0.0) {
-    return 0.0;
-  }
-  return total;
-}
-
-double ranked_prefix_density_single_params_ir(
-    const uuber::NativeContext &ctx, const std::vector<int> &label_ids,
-    const std::vector<double> &times, int component_idx,
-    const TrialParamSet *trial_params,
-    const std::string &trial_type_key) {
-  if (label_ids.empty() || label_ids.size() != times.size()) {
-    return 0.0;
-  }
-
-  const std::string &component_label =
-      component_label_by_index_or_empty(ctx, component_idx);
-  std::vector<int> outcome_indices;
-  std::vector<int> node_sequence;
-  outcome_indices.reserve(label_ids.size());
-  node_sequence.reserve(label_ids.size());
-  std::unordered_set<int> seen_node_ids;
-  seen_node_ids.reserve(label_ids.size());
-  for (std::size_t i = 0; i < label_ids.size(); ++i) {
-    double t = times[i];
-    int observed_label_id = label_ids[i];
-    if (observed_label_id < 0 || !std::isfinite(t) || t < 0.0) {
-      return 0.0;
-    }
-    int outcome_idx =
-        resolve_outcome_index_ir(ctx, observed_label_id, component_idx);
-    if (outcome_idx < 0 ||
-        outcome_idx >= static_cast<int>(ctx.outcome_info.size())) {
-      return 0.0;
-    }
-    const uuber::OutcomeContextInfo &info =
-        ctx.outcome_info[static_cast<std::size_t>(outcome_idx)];
-    if (info.node_id < 0) {
-      return 0.0;
-    }
-    if (!seen_node_ids.insert(info.node_id).second) {
-      return 0.0;
-    }
-    outcome_indices.push_back(outcome_idx);
-    node_sequence.push_back(info.node_id);
-  }
-  return ranked_prefix_density_resolved(
-      ctx, outcome_indices, node_sequence, times, component_label,
-      component_idx, trial_params, trial_type_key);
-}
-
-double ranked_prefix_density_ir(
-    const uuber::NativeContext &ctx, const std::vector<int> &label_ids,
-    const std::vector<double> &times, int component_idx,
-    const TrialParamSet *trial_params,
-    const std::string &trial_type_key, const SharedTriggerPlan *trigger_plan,
-    TrialParamSet *scratch_params) {
-  if (!trial_params) {
-    return ranked_prefix_density_single_params_ir(
-        ctx, label_ids, times, component_idx, trial_params, trial_type_key);
-  }
-
-  SharedTriggerPlan local_plan;
-  const SharedTriggerPlan *plan_ptr = trigger_plan;
-  if (!plan_ptr) {
-    local_plan = build_shared_trigger_plan(ctx, trial_params);
-    plan_ptr = &local_plan;
-  }
-  const std::size_t trigger_count = shared_trigger_count(*plan_ptr);
-  if (trigger_count == 0) {
-    return ranked_prefix_density_single_params_ir(
-        ctx, label_ids, times, component_idx, trial_params, trial_type_key);
-  }
-
-  if (trigger_count >= 63) {
-    Rcpp::stop("Too many shared triggers for ranked likelihood evaluation");
-  }
-
-  TrialParamSet local_scratch;
-  TrialParamSet &scratch = scratch_params ? *scratch_params : local_scratch;
-  prepare_trigger_scratch(ctx, trial_params, *plan_ptr, scratch);
-  double total = evaluate_shared_trigger_states(
-      ctx, *plan_ptr, scratch,
-      "Too many shared triggers for ranked likelihood evaluation",
-      [&]() -> double {
-        return ranked_prefix_density_single_params_ir(
-            ctx, label_ids, times, component_idx, &scratch, trial_type_key);
-      });
   if (!std::isfinite(total) || total <= 0.0) {
     return 0.0;
   }

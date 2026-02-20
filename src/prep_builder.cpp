@@ -8,6 +8,7 @@
 #include <unordered_set>
 
 #include "accumulator.h"
+#include "kernel_program.h"
 
 namespace uuber {
 namespace {
@@ -1504,6 +1505,95 @@ build_context_from_proto(const NativePrepProto &proto) {
 
   ir.valid = true;
   ctx->ir = std::move(ir);
+  ctx->kernel_program = compile_kernel_program(ctx->ir);
+  ctx->base_params_soa = TrialParamsSoA{};
+  ctx->base_params_soa.n_acc = static_cast<int>(ctx->accumulators.size());
+  ctx->base_params_soa.dist_code.resize(ctx->accumulators.size(), 0);
+  ctx->base_params_soa.onset.resize(ctx->accumulators.size(), 0.0);
+  ctx->base_params_soa.q.resize(ctx->accumulators.size(), 0.0);
+  ctx->base_params_soa.t0.resize(ctx->accumulators.size(), 0.0);
+  ctx->base_params_soa.p1.resize(ctx->accumulators.size(), 0.0);
+  ctx->base_params_soa.p2.resize(ctx->accumulators.size(), 0.0);
+  ctx->base_params_soa.p3.resize(ctx->accumulators.size(), 0.0);
+  for (std::size_t acc_i = 0; acc_i < ctx->accumulators.size(); ++acc_i) {
+    const NativeAccumulator &acc = ctx->accumulators[acc_i];
+    ctx->base_params_soa.dist_code[acc_i] = acc.dist_cfg.code;
+    ctx->base_params_soa.onset[acc_i] = acc.onset;
+    ctx->base_params_soa.q[acc_i] = acc.q;
+    ctx->base_params_soa.t0[acc_i] = acc.dist_cfg.t0;
+    ctx->base_params_soa.p1[acc_i] = acc.dist_cfg.p1;
+    ctx->base_params_soa.p2[acc_i] = acc.dist_cfg.p2;
+    ctx->base_params_soa.p3[acc_i] = acc.dist_cfg.p3;
+  }
+  ctx->base_params_soa.valid = true;
+  ctx->kernel_state_graph = KernelStateGraph{};
+  ctx->kernel_state_graph.forced_bit_count =
+      static_cast<int>(ctx->ir.label_id_to_bit_idx.size());
+  ctx->kernel_state_graph.trigger_op_indices.clear();
+  ctx->kernel_state_graph.trigger_transition_begin.assign(
+      ctx->shared_trigger_groups.size(), -1);
+  ctx->kernel_state_graph.trigger_transition_count.assign(
+      ctx->shared_trigger_groups.size(), 0);
+  std::size_t total_trigger_transitions = 0;
+  for (const SharedTriggerGroup &group : ctx->shared_trigger_groups) {
+    total_trigger_transitions += group.acc_indices.size();
+  }
+  ctx->kernel_state_graph.trigger_transitions.reserve(
+      total_trigger_transitions);
+  for (std::size_t tg = 0; tg < ctx->shared_trigger_groups.size(); ++tg) {
+    const SharedTriggerGroup &group = ctx->shared_trigger_groups[tg];
+    std::unordered_set<int> group_acc_indices(group.acc_indices.begin(),
+                                              group.acc_indices.end());
+    std::vector<int> affected_op_indices;
+    affected_op_indices.reserve(ctx->kernel_program.ops.size());
+    for (int op_idx = 0; op_idx < static_cast<int>(ctx->kernel_program.ops.size());
+         ++op_idx) {
+      const KernelOp &op = ctx->kernel_program.ops[static_cast<std::size_t>(op_idx)];
+      if (op.code != KernelOpCode::Event) {
+        continue;
+      }
+      if (op.event_idx < 0 ||
+          op.event_idx >= static_cast<int>(ctx->ir.events.size())) {
+        continue;
+      }
+      const IrEvent &event = ctx->ir.events[static_cast<std::size_t>(op.event_idx)];
+      if (event.acc_idx < 0) {
+        continue;
+      }
+      if (group_acc_indices.find(event.acc_idx) != group_acc_indices.end()) {
+        affected_op_indices.push_back(op_idx);
+      }
+    }
+    std::sort(affected_op_indices.begin(), affected_op_indices.end());
+    affected_op_indices.erase(
+        std::unique(affected_op_indices.begin(), affected_op_indices.end()),
+        affected_op_indices.end());
+    const int op_begin =
+        static_cast<int>(ctx->kernel_state_graph.trigger_op_indices.size());
+    ctx->kernel_state_graph.trigger_op_indices.insert(
+        ctx->kernel_state_graph.trigger_op_indices.end(),
+        affected_op_indices.begin(), affected_op_indices.end());
+    const int op_count = static_cast<int>(affected_op_indices.size());
+    const int transition_begin =
+        static_cast<int>(ctx->kernel_state_graph.trigger_transitions.size());
+    int transition_count = 0;
+    for (int acc_idx : group.acc_indices) {
+      KernelStateTransition tr;
+      tr.trigger_bit = static_cast<int>(tg);
+      tr.acc_idx = acc_idx;
+      tr.op_begin = op_begin;
+      tr.op_count = op_count;
+      ctx->kernel_state_graph.trigger_transitions.push_back(tr);
+      ++transition_count;
+    }
+    ctx->kernel_state_graph
+        .trigger_transition_begin[static_cast<std::size_t>(tg)] =
+        transition_begin;
+    ctx->kernel_state_graph
+        .trigger_transition_count[static_cast<std::size_t>(tg)] =
+        transition_count;
+  }
+  ctx->kernel_state_graph.valid = ctx->kernel_program.valid;
   return ctx;
 }
 

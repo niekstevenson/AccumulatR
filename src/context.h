@@ -180,6 +180,69 @@ struct IrContext {
   bool valid{false};
 };
 
+enum class KernelOpCode : std::uint8_t {
+  Event = 0,
+  And = 1,
+  Or = 2,
+  Not = 3,
+  Guard = 4
+};
+
+struct KernelOp {
+  KernelOpCode code{KernelOpCode::Event};
+  int node_idx{-1};
+  int out_slot{-1};
+  int event_idx{-1};
+  int child_begin{-1};
+  int child_count{0};
+  int ref_slot{-1};
+  int blocker_slot{-1};
+  std::uint32_t flags{IR_NODE_FLAG_NONE};
+};
+
+struct KernelOutputMap {
+  std::vector<int> node_idx_to_slot;
+  std::vector<int> slot_to_node_idx;
+  std::vector<int> outcome_idx_to_slot;
+};
+
+struct KernelProgram {
+  std::vector<KernelOp> ops;
+  std::vector<int> children;
+  KernelOutputMap outputs;
+  int max_child_count{0};
+  bool has_guard{false};
+  bool valid{false};
+};
+
+struct KernelStateTransition {
+  int trigger_bit{-1};
+  int acc_idx{-1};
+  int op_begin{-1};
+  int op_count{0};
+};
+
+struct KernelStateGraph {
+  int forced_bit_count{0};
+  std::vector<KernelStateTransition> trigger_transitions;
+  std::vector<int> trigger_transition_begin;
+  std::vector<int> trigger_transition_count;
+  std::vector<int> trigger_op_indices;
+  bool valid{false};
+};
+
+struct TrialParamsSoA {
+  int n_acc{0};
+  std::vector<int> dist_code;
+  std::vector<double> onset;
+  std::vector<double> q;
+  std::vector<double> t0;
+  std::vector<double> p1;
+  std::vector<double> p2;
+  std::vector<double> p3;
+  bool valid{false};
+};
+
 struct ComponentGuessPolicy {
   std::string target;
   int target_outcome_idx{-1};
@@ -261,6 +324,9 @@ struct NativeContext {
   std::vector<int> pool_label_ids;
   ComponentMap components;
   IrContext ir;
+  KernelProgram kernel_program;
+  KernelStateGraph kernel_state_graph;
+  TrialParamsSoA base_params_soa;
   bool has_chained_onsets{false};
 };
 

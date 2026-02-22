@@ -7,7 +7,6 @@
 ## Installation
 
 ``` r
-# from a local checkout
 remotes::install_github("niekstevenson/AccumulatR")
 ```
 

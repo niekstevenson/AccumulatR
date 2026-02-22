@@ -4,7 +4,7 @@
 \alias{add_pool}
 \title{Add a pool definition}
 \usage{
-add_pool(spec, id, members, k = 1L, weights = NULL, tags = list())
+add_pool(spec, id, members, k = 1L)
 }
 \arguments{
 \item{spec}{race_spec object}
@@ -14,10 +14,6 @@ add_pool(spec, id, members, k = 1L, weights = NULL, tags = list())
 \item{members}{Member ids}
 
 \item{k}{Threshold parameter}
-
-\item{weights}{Optional weights}
-
-\item{tags}{Optional tags}
 }
 \value{
 Updated race_spec

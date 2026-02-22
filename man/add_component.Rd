@@ -10,6 +10,7 @@ add_component(
   members,
   weight = NULL,
   weight_param = NULL,
+  n_outcomes = NULL,
   attrs = list()
 )
 }
@@ -23,6 +24,8 @@ add_component(
 \item{weight}{Optional fixed weight (0-1).}
 
 \item{weight_param}{Optional parameter name for weight.}
+
+\item{n_outcomes}{Optional component-level override for observed outcomes.}
 
 \item{attrs}{Additional attributes.}
 }

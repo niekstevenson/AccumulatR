@@ -57,15 +57,16 @@ accumulators. `"auto"` chooses based on row counts and component structure.}
 \item{...}{Unused; for S3 compatibility}
 }
 \value{
-Data frame of simulated outcomes/RTs (with optional detail)
+Data frame of simulated outcomes/RTs (with optional detail). When
+  `race_spec(n_outcomes = k)` has `k > 1`, additional ordered readout columns
+  are appended as `R2`/`rt2`, `R3`/`rt3`, ..., `Rk`/`rtk`.
 }
 \description{
 Simulate trials from parameter rows
 }
 \examples{
 spec <- race_spec()
-spec <- add_accumulator(spec, "A", "lognormal",
-  params = list(meanlog = 0, sdlog = 0.1))
+spec <- add_accumulator(spec, "A", "lognormal")
 spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
 params <- c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0)

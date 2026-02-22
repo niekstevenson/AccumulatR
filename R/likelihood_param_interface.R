@@ -184,9 +184,7 @@
 #' @return likelihood_context object
 #' @examples
 #' spec <- race_spec()
-#' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1)
-#' )
+#' spec <- add_accumulator(spec, "A", "lognormal")
 #' spec <- add_outcome(spec, "A_win", "A")
 #' structure <- finalize_model(spec)
 #' params_df <- build_param_matrix(
@@ -1126,9 +1124,7 @@ response_probabilities.default <- function(structure, ...) {
 #' @return Named numeric vector of probabilities
 #' @examples
 #' spec <- race_spec()
-#' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1)
-#' )
+#' spec <- add_accumulator(spec, "A", "lognormal")
 #' spec <- add_outcome(spec, "A_win", "A")
 #' structure <- finalize_model(spec)
 #' params_df <- build_param_matrix(
@@ -1265,9 +1261,7 @@ response_probabilities.model_structure <- function(structure,
 #' @return Numeric vector of log-likelihood values
 #' @examples
 #' spec <- race_spec()
-#' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1)
-#' )
+#' spec <- add_accumulator(spec, "A", "lognormal")
 #' spec <- add_outcome(spec, "A_win", "A")
 #' structure <- finalize_model(spec)
 #' params_df <- build_param_matrix(

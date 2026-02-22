@@ -4,7 +4,10 @@
 \alias{race_spec}
 \title{Create an empty race specification}
 \usage{
-race_spec()
+race_spec(n_outcomes = 1L)
+}
+\arguments{
+\item{n_outcomes}{Number of observed outcomes to retain per trial.}
 }
 \value{
 A race_spec object

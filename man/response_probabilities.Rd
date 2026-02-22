@@ -29,8 +29,7 @@ Analytic outcome probabilities for a parameter set
 }
 \examples{
 spec <- race_spec()
-spec <- add_accumulator(spec, "A", "lognormal",
-  params = list(meanlog = 0, sdlog = 0.1))
+spec <- add_accumulator(spec, "A", "lognormal")
 spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
 params_df <- build_param_matrix(

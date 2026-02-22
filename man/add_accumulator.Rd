@@ -4,16 +4,7 @@
 \alias{add_accumulator}
 \title{Add an accumulator definition}
 \usage{
-add_accumulator(
-  spec,
-  id,
-  dist,
-  onset = 0,
-  q = 0,
-  tags = list(),
-  params = NULL,
-  ...
-)
+add_accumulator(spec, id, dist, onset = 0)
 }
 \arguments{
 \item{spec}{race_spec object}
@@ -22,15 +13,7 @@ add_accumulator(
 
 \item{dist}{Distribution name}
 
-\item{onset}{Onset shift}
-
-\item{q}{Guess probability (0-1)}
-
-\item{tags}{Optional tags list}
-
-\item{params}{Optional parameter list}
-
-\item{...}{Additional named parameters}
+\item{onset}{Onset shift; either numeric or `after(source, lag = ...)`.}
 }
 \value{
 Updated race_spec
@@ -40,7 +23,5 @@ Add an accumulator definition
 }
 \examples{
 spec <- race_spec()
-spec <- add_accumulator(spec, "A", "lognormal",
-  params = list(meanlog = 0, sdlog = 0.1)
-)
+spec <- add_accumulator(spec, "A", "lognormal")
 }

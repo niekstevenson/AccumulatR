@@ -6,6 +6,8 @@
 \alias{AccumulatR-package}
 \title{AccumulatR: Native Likelihood Kernels for Race Models}
 \description{
+\if{html}{\figure{logo.png}{options: style='float: right' alt='logo' width='120'}}
+
 AccumulatR is a R/C++ toolkit for building simulators and likelihood for generalized race models. The package keeps the R surface intentionally tiny: you prepare a model once in R, obtain the serialized native context plus per-trial metadata, and then execute all likelihood evaluations on the C++ side.
 }
 \author{

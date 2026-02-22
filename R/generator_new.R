@@ -826,8 +826,7 @@
 #'   are appended as `R2`/`rt2`, `R3`/`rt3`, ..., `Rk`/`rtk`.
 #' @examples
 #' spec <- race_spec()
-#' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1))
+#' spec <- add_accumulator(spec, "A", "lognormal")
 #' spec <- add_outcome(spec, "A_win", "A")
 #' structure <- finalize_model(spec)
 #' params <- c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0)

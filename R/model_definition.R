@@ -1355,9 +1355,7 @@ prepare_model <- function(model) {
 #' @return A model_structure list
 #' @examples
 #' spec <- race_spec()
-#' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1)
-#' )
+#' spec <- add_accumulator(spec, "A", "lognormal")
 #' spec <- add_outcome(spec, "A_win", "A")
 #' finalize_model(spec)
 #' @export
@@ -1438,9 +1436,7 @@ dist_param_names <- function(dist) {
 #' @return Character vector of parameter names
 #' @examples
 #' spec <- race_spec()
-#' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1)
-#' )
+#' spec <- add_accumulator(spec, "A", "lognormal")
 #' spec <- add_outcome(spec, "A_win", "A")
 #' sampled_pars(spec)
 #' @export
@@ -1498,9 +1494,7 @@ param_table <- function(model, ...) {
 #' @return Data frame of parameters per trial
 #' @examples
 #' spec <- race_spec()
-#' spec <- add_accumulator(spec, "A", "lognormal",
-#'   params = list(meanlog = 0, sdlog = 0.1)
-#' )
+#' spec <- add_accumulator(spec, "A", "lognormal")
 #' spec <- add_outcome(spec, "A_win", "A")
 #' vals <- c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0)
 #' build_param_matrix(spec, vals, n_trials = 2)

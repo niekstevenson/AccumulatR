@@ -4426,18 +4426,15 @@ bool eval_optimized_linear_guard_chain_ode(const GuardEvalInput &input,
 #endif
   };
 
-  const ChainOdeBackend backend = chain_ode_backend_from_env();
-
-  if (depth <= 2u && backend != ChainOdeBackend::kOdeint) {
+  // Fast fixed RK4 is best for very shallow chains.
+  if (depth <= 2u) {
     if (solve_fixed_rk4(96, out_cdf)) {
       return true;
     }
   }
 
-  const bool try_odeint =
-      backend == ChainOdeBackend::kOdeint ||
-      (backend == ChainOdeBackend::kAuto && depth > 3u);
-  if (try_odeint && solve_with_odeint(out_cdf)) {
+  // For generalized linear chains, ODEInt was consistently faster in profiling.
+  if (depth >= 3u && solve_with_odeint(out_cdf)) {
     return true;
   }
 

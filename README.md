@@ -1,20 +1,19 @@
 # AccumulatR
 
-<img src="man/figures/logo.png" align="right" alt="AccumulatR logo" width="180" />
+<img src="man/figures/logo.png" alt="AccumulatR logo" align="right" width="180"/>
 
 `AccumulatR` is an R/C++ toolkit for race-model simulation and likelihood evaluation.
-Define a model in R, then run simulation and native likelihood kernels with minimal overhead.
 
 ## Installation
 
-```r
+``` r
 # from a local checkout
-install.packages(".", repos = NULL, type = "source")
+remotes::install_github("niekstevenson/AccumulatR")
 ```
 
-## Tiny Example
+## Small Example
 
-```r
+``` r
 library(AccumulatR)
 
 spec <- race_spec() |>
@@ -38,8 +37,4 @@ ctx <- build_likelihood_context(model, sim[c("trial", "R", "rt")])
 log_likelihood(ctx, param_df)
 ```
 
-`simulate()` returns trial-level choice/RT data; `log_likelihood()` scores those data under a parameter set.
-
-## More Examples
-
-For larger simulation + fitting walkthroughs, see `dev/scripts/vignettes/`.
+`simulate()` returns trial-level choice/RT data; `log_likelihood()` evaluates the log-likelihood for data under a parameter dataframe.

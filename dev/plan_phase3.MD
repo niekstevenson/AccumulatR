@@ -14,17 +14,7 @@
 4. Step 4 (ranked cutover):  ranked state keys are hash-based (non-string hot key path), but residual ranked-special flow still exists.
 5. Step 5 (distribution vectorization rollout):  vectorized pdf/cdf is used in the linear-chain ODE fast path but not fully generalized.
 6. Step 6 (legacy/fallback deletion): structural fallbacks still exist for non-linear guard graphs and specialized paths.
-=======
-1. Step 1 (bitset-only forced state): **Mostly complete** in hot evaluator paths; set-based forced state is no longer used in `src/distributions.cpp` hot loops.
-2. Step 2 (unified kernel entry): **Partially complete**; observed/ranked/nonresponse share large internal machinery, but some path-specific wrappers and branching remain.
-3. Step 3 (guard/competitor transition compilation): **Partially complete**; dense guard transition masks are used, but competitor/guard special cases still branch by structure.
-4. Step 4 (ranked cutover): **Mostly complete**; ranked state keys are hash-based (non-string hot key path), but residual ranked-special flow still exists.
-5. Step 5 (distribution vectorization rollout): **Partially complete**; vectorized pdf/cdf is used in the linear-chain ODE fast path but not fully generalized.
-6. Step 6 (legacy/fallback deletion): **Not complete**; structural fallbacks still exist for non-linear guard graphs and specialized paths.
->>>>>>> theirs
 
-=======
->>>>>>> theirs
 ## Invariants (Must Hold)
 1. No `std::unordered_set<int>` forced-state operations in hot evaluator paths.
 2. No recursive/scenario fallback in hot loops for observed/ranked likelihood.

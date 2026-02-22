@@ -2,8 +2,11 @@
 
 #include <Rcpp.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <functional>
+#include <string>
 #include <type_traits>
 #include <utility>
 
@@ -20,7 +23,251 @@
 #include <boost/math/quadrature/gauss_kronrod.hpp>
 #endif
 
+#if !defined(UUBER_HAVE_BOOST_TANH_SINH)
+# if __has_include(<boost/math/quadrature/tanh_sinh.hpp>)
+#  define UUBER_HAVE_BOOST_TANH_SINH 1
+# else
+#  define UUBER_HAVE_BOOST_TANH_SINH 0
+# endif
+#endif
+
+#if UUBER_HAVE_BOOST_TANH_SINH
+#include <boost/math/quadrature/tanh_sinh.hpp>
+#endif
+
+#if !defined(UUBER_HAVE_BOOST_TRAPEZOIDAL)
+# if __has_include(<boost/math/quadrature/trapezoidal.hpp>)
+#  define UUBER_HAVE_BOOST_TRAPEZOIDAL 1
+# else
+#  define UUBER_HAVE_BOOST_TRAPEZOIDAL 0
+# endif
+#endif
+
+#if UUBER_HAVE_BOOST_TRAPEZOIDAL
+#include <boost/math/quadrature/trapezoidal.hpp>
+#endif
+
 namespace uuber {
+
+enum class BoostQuadratureStrategy {
+  kAuto,
+  kGk21,
+  kGk61,
+  kTanhSinh,
+  kTrapezoidal,
+  kRobust
+};
+
+inline std::string ascii_lower(std::string text) {
+  for (char &ch : text) {
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  }
+  return text;
+}
+
+inline BoostQuadratureStrategy quadrature_strategy_from_env() {
+  static BoostQuadratureStrategy cached = []() {
+    const char *raw = std::getenv("ACCUMULATR_QUADRATURE_STRATEGY");
+    if (!raw || *raw == '\0') {
+      return BoostQuadratureStrategy::kAuto;
+    }
+    const std::string val = ascii_lower(std::string(raw));
+    if (val == "auto") return BoostQuadratureStrategy::kAuto;
+    if (val == "gk21") return BoostQuadratureStrategy::kGk21;
+    if (val == "gk61") return BoostQuadratureStrategy::kGk61;
+    if (val == "tanh_sinh" || val == "tanhsinh")
+      return BoostQuadratureStrategy::kTanhSinh;
+    if (val == "trapezoidal" || val == "trap")
+      return BoostQuadratureStrategy::kTrapezoidal;
+    if (val == "robust")
+      return BoostQuadratureStrategy::kRobust;
+    return BoostQuadratureStrategy::kAuto;
+  }();
+  return cached;
+}
+
+template <typename Fn>
+inline bool try_integrate_gk21(Fn&& integrand, double a, double b, double tol,
+                               int max_depth, double &out) {
+#if UUBER_HAVE_BOOST_GK
+  try {
+    out = boost::math::quadrature::gauss_kronrod<double, 21>::integrate(
+        integrand, a, b, tol, max_depth);
+    return std::isfinite(out);
+  } catch (...) {
+    out = 0.0;
+    return false;
+  }
+#else
+  (void)integrand;
+  (void)a;
+  (void)b;
+  (void)tol;
+  (void)max_depth;
+  out = 0.0;
+  return false;
+#endif
+}
+
+template <typename Fn>
+inline bool try_integrate_gk61(Fn&& integrand, double a, double b, double tol,
+                               int max_depth, double &out) {
+#if UUBER_HAVE_BOOST_GK
+  try {
+    out = boost::math::quadrature::gauss_kronrod<double, 61>::integrate(
+        integrand, a, b, tol, max_depth);
+    return std::isfinite(out);
+  } catch (...) {
+    out = 0.0;
+    return false;
+  }
+#else
+  (void)integrand;
+  (void)a;
+  (void)b;
+  (void)tol;
+  (void)max_depth;
+  out = 0.0;
+  return false;
+#endif
+}
+
+template <typename Fn>
+inline bool try_integrate_tanh_sinh(Fn&& integrand, double a, double b,
+                                    double tol, int max_depth, double &out) {
+#if UUBER_HAVE_BOOST_TANH_SINH
+  try {
+    boost::math::quadrature::tanh_sinh<double> q(
+        static_cast<std::size_t>(std::max(8, max_depth + 3)));
+    double error_est = 0.0;
+    double l1 = 0.0;
+    std::size_t levels = 0;
+    out = q.integrate(integrand, a, b, tol, &error_est, &l1, &levels);
+    return std::isfinite(out);
+  } catch (...) {
+    out = 0.0;
+    return false;
+  }
+#else
+  (void)integrand;
+  (void)a;
+  (void)b;
+  (void)tol;
+  (void)max_depth;
+  out = 0.0;
+  return false;
+#endif
+}
+
+template <typename Fn>
+inline bool try_integrate_trapezoidal(Fn&& integrand, double a, double b,
+                                      double tol, int max_depth, double &out) {
+#if UUBER_HAVE_BOOST_TRAPEZOIDAL
+  try {
+    double error_est = 0.0;
+    double l1 = 0.0;
+    const std::size_t refinements =
+        static_cast<std::size_t>(std::max(8, std::min(20, max_depth + 4)));
+    out = boost::math::quadrature::trapezoidal(
+        integrand, a, b, tol, refinements, &error_est, &l1);
+    return std::isfinite(out);
+  } catch (...) {
+    out = 0.0;
+    return false;
+  }
+#else
+  (void)integrand;
+  (void)a;
+  (void)b;
+  (void)tol;
+  (void)max_depth;
+  out = 0.0;
+  return false;
+#endif
+}
+
+template <typename Fn>
+inline double integrate_boost_core(Fn&& integrand, double lower, double upper,
+                                   double rel_tol, double abs_tol,
+                                   int max_depth) {
+  if (!std::isfinite(lower) || !std::isfinite(upper)) {
+    Rcpp::stop("integrate_boost_fn requires finite bounds");
+  }
+  if (max_depth <= 0) max_depth = 10;
+  if (rel_tol <= 0.0) rel_tol = 1e-5;
+  if (abs_tol <= 0.0) abs_tol = 1e-6;
+
+  double a = lower;
+  double b = upper;
+  double sign = 1.0;
+  if (b < a) {
+    std::swap(a, b);
+    sign = -1.0;
+  }
+
+  const double tol = std::max(std::max(abs_tol, rel_tol), 1e-10);
+  const BoostQuadratureStrategy strategy = quadrature_strategy_from_env();
+  double integral = 0.0;
+
+  auto robust_auto = [&]() -> bool {
+    if (tol >= 1e-4 &&
+        try_integrate_gk21(integrand, a, b, tol, max_depth, integral)) {
+      return true;
+    }
+    if (try_integrate_gk61(integrand, a, b, tol, max_depth, integral)) {
+      return true;
+    }
+    if (try_integrate_tanh_sinh(integrand, a, b, tol, max_depth, integral)) {
+      return true;
+    }
+    if (try_integrate_trapezoidal(integrand, a, b, tol, max_depth, integral)) {
+      return true;
+    }
+    return false;
+  };
+
+  bool ok = false;
+  switch (strategy) {
+  case BoostQuadratureStrategy::kGk21:
+    ok = try_integrate_gk21(integrand, a, b, tol, max_depth, integral);
+    if (!ok) ok = robust_auto();
+    break;
+  case BoostQuadratureStrategy::kGk61:
+    ok = try_integrate_gk61(integrand, a, b, tol, max_depth, integral);
+    if (!ok) ok = robust_auto();
+    break;
+  case BoostQuadratureStrategy::kTanhSinh:
+    ok = try_integrate_tanh_sinh(integrand, a, b, tol, max_depth, integral);
+    if (!ok) ok = robust_auto();
+    break;
+  case BoostQuadratureStrategy::kTrapezoidal:
+    ok = try_integrate_trapezoidal(integrand, a, b, tol, max_depth, integral);
+    if (!ok) ok = robust_auto();
+    break;
+  case BoostQuadratureStrategy::kRobust:
+    ok = robust_auto();
+    break;
+  case BoostQuadratureStrategy::kAuto:
+  default:
+    if (tol >= 1e-4) {
+      ok = try_integrate_gk21(integrand, a, b, tol, max_depth, integral);
+      if (!ok) {
+        ok = try_integrate_gk61(integrand, a, b, tol, max_depth, integral);
+      }
+    } else {
+      ok = try_integrate_gk61(integrand, a, b, tol, max_depth, integral);
+    }
+    if (!ok) {
+      ok = robust_auto();
+    }
+    break;
+  }
+
+  if (!ok || !std::isfinite(integral)) {
+    integral = 0.0;
+  }
+  return sign * integral;
+}
 
 // Fixed 15-point Gauss-Legendre rule on [lower, upper]; no adaptivity.
 template <typename Fn>
@@ -63,23 +310,6 @@ inline double integrate_boost(Rcpp::Function integrand,
                               double rel_tol,
                               double abs_tol,
                               int max_depth) {
-  if (!std::isfinite(lower) || !std::isfinite(upper)) {
-    Rcpp::stop("boost_integrate_cpp requires finite bounds");
-  }
-  if (max_depth <= 0) max_depth = 10;
-  if (rel_tol <= 0.0) rel_tol = 1e-4;
-  if (abs_tol <= 0.0) abs_tol = 1e-5;
-  double tol = std::max(abs_tol, rel_tol);
-  if (!(tol > 0.0)) tol = 1e-6;
-
-  double a = lower;
-  double b = upper;
-  double sign = 1.0;
-  if (b < a) {
-    std::swap(a, b);
-    sign = -1.0;
-  }
-
   auto wrapper = [&](double x) -> double {
     if (!std::isfinite(x)) return 0.0;
     Rcpp::NumericVector res = integrand(Rcpp::NumericVector::create(x));
@@ -88,25 +318,8 @@ inline double integrate_boost(Rcpp::Function integrand,
     if (!std::isfinite(val)) return 0.0;
     return val;
   };
-
-  double integral = 0.0;
-  #if UUBER_HAVE_BOOST_GK
-  try {
-    integral = boost::math::quadrature::gauss_kronrod<double, 61>::integrate(
-      wrapper,
-      a,
-      b,
-      tol,
-      max_depth
-    );
-  } catch (...) {
-    integral = 0.0;
-  }
-  #else
-  Rcpp::stop("Boost Gauss-Kronrod header not available; install BH or set include path to Boost");
-  #endif
-  if (!std::isfinite(integral)) integral = 0.0;
-  return sign * integral;
+  return integrate_boost_core(wrapper, lower, upper, rel_tol, abs_tol,
+                              max_depth);
 }
 
 template <typename Fn>
@@ -116,55 +329,14 @@ inline double integrate_boost_fn(Fn&& integrand,
                                  double rel_tol,
                                  double abs_tol,
                                  int max_depth) {
-  if (!std::isfinite(lower) || !std::isfinite(upper)) {
-    Rcpp::stop("integrate_boost_fn requires finite bounds");
-  }
-  if (max_depth <= 0) max_depth = 10;
-  if (rel_tol <= 0.0) rel_tol = 1e-5;
-  if (abs_tol <= 0.0) abs_tol = 1e-6;
-  double a = lower;
-  double b = upper;
-  double sign = 1.0;
-  if (b < a) {
-    std::swap(a, b);
-    sign = -1.0;
-  }
   auto wrapper = [&](double x) -> double {
     if (!std::isfinite(x)) return 0.0;
     double val = integrand(x);
     if (!std::isfinite(val)) return 0.0;
     return val;
   };
-  double tol = std::max(abs_tol, rel_tol);
-  if (!(tol > 0.0)) tol = 1e-6;
-  double integral = 0.0;
-  #if UUBER_HAVE_BOOST_GK
-  try {
-    if (tol >= 1e-4) {
-      integral = boost::math::quadrature::gauss_kronrod<double, 21>::integrate(
-        wrapper,
-        a,
-        b,
-        tol,
-        max_depth
-      );
-    } else {
-      integral = boost::math::quadrature::gauss_kronrod<double, 61>::integrate(
-        wrapper,
-        a,
-        b,
-        tol,
-        max_depth
-      );
-    }
-  } catch (...) {
-    integral = 0.0;
-  }
-  #else
-  Rcpp::stop("Boost Gauss-Kronrod header not available; install BH or set include path to Boost");
-  #endif
-  if (!std::isfinite(integral)) integral = 0.0;
-  return sign * integral;
+  return integrate_boost_core(wrapper, lower, upper, rel_tol, abs_tol,
+                              max_depth);
 }
 
 // Variant using a lower-order Gauss-Kronrod rule (21-point) to reduce per-interval evaluations.

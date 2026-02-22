@@ -2,6 +2,8 @@
 ^AccumulatR\.Rproj$
 ^\.Rproj\.user$
 ^\.gitignore$
+^\.github$
 ^\.vscode/
+^AccumulatR_logo\.png$
 ^src/.*\\.o$
 ^src/.*\\.(so|dll|dylib)$

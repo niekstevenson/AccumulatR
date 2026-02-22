@@ -5,14 +5,26 @@
 2. Complete Phase 6 (`single fused kernel execution framework`).
 3. Preserve correctness (`max |delta loglik| <= 1e-4`) while improving speed.
 
+<<<<<<< ours
 ## Status Snapshot (2026-02-22)
+<<<<<<< ours
+1. Step 1 (bitset-only forced state): in hot evaluator paths; set-based forced state is no longer used in `src/distributions.cpp` hot loops.
+2. Step 2 (unified kernel entry): observed/ranked/nonresponse now execute through the shared sequence/mass kernel contribution surface, and duplicated sequence-density entry wrappers were consolidated.
+3. Step 3 (guard/competitor transition compilation):  dense guard transition masks are used, but competitor/guard special cases still branch by structure.
+4. Step 4 (ranked cutover):  ranked state keys are hash-based (non-string hot key path), but residual ranked-special flow still exists.
+5. Step 5 (distribution vectorization rollout):  vectorized pdf/cdf is used in the linear-chain ODE fast path but not fully generalized.
+6. Step 6 (legacy/fallback deletion): structural fallbacks still exist for non-linear guard graphs and specialized paths.
+=======
 1. Step 1 (bitset-only forced state): **Mostly complete** in hot evaluator paths; set-based forced state is no longer used in `src/distributions.cpp` hot loops.
-2. Step 2 (unified kernel entry): **Complete**; observed/ranked/nonresponse now execute through the shared sequence/mass kernel contribution surface, and duplicated sequence-density entry wrappers were consolidated.
+2. Step 2 (unified kernel entry): **Partially complete**; observed/ranked/nonresponse share large internal machinery, but some path-specific wrappers and branching remain.
 3. Step 3 (guard/competitor transition compilation): **Partially complete**; dense guard transition masks are used, but competitor/guard special cases still branch by structure.
 4. Step 4 (ranked cutover): **Mostly complete**; ranked state keys are hash-based (non-string hot key path), but residual ranked-special flow still exists.
 5. Step 5 (distribution vectorization rollout): **Partially complete**; vectorized pdf/cdf is used in the linear-chain ODE fast path but not fully generalized.
 6. Step 6 (legacy/fallback deletion): **Not complete**; structural fallbacks still exist for non-linear guard graphs and specialized paths.
+>>>>>>> theirs
 
+=======
+>>>>>>> theirs
 ## Invariants (Must Hold)
 1. No `std::unordered_set<int>` forced-state operations in hot evaluator paths.
 2. No recursive/scenario fallback in hot loops for observed/ranked likelihood.
@@ -20,10 +32,10 @@
 4. One runtime kernel entrypoint across observed/ranked/nonresponse internals.
 
 ## Current Gaps
-1. Non-linear guard graphs still fall back to recursive quadrature paths.
-2. Kernel execution is shared broadly; remaining divergence is primarily structural fallback logic for non-linear guard topologies (Step 7/Step 6 scope).
-3. Competitor/ranked flows still retain structural fallback logic in inner execution routes.
-4. Vectorized distribution primitives are deployed in selected fast paths but not fully rolled out across all integration hotspots.
+1. Mixed forced-state plumbing still present in evaluator signatures (`unordered_set + bitset`).
+2. Guard execution still re-enters general recursive integration paths.
+3. Competitor and ranked flows still keep partial fallback branching.
+4. Vectorized distribution API exists but is only used in a narrow onset branch.
 
 ## Execution Steps
 
@@ -95,17 +107,6 @@ Acceptance:
    - no set-based forced-state in integrands
    - no string-map lookup in kernel loops
 
-### Step 7: Generalized Guard-DAG ODE Consolidation (New)
-1. Extend guard solver from linear chains to general acyclic guard DAGs (branched guard compositions).
-2. Compile guard DAG dependencies into dense solver state indices and transition operators.
-3. Route non-linear guard CDF/survival through the guard-DAG solver instead of quadrature recursion.
-4. Keep quadrature only as rollout safety during validation; remove once parity and stability targets pass.
-
-Acceptance:
-1. Non-linear guard graphs (branching blocker/reference structure) use the guard-DAG solver path.
-2. Equivalence on guard-heavy suite meets `max |delta loglik| <= 1e-4` vs quadrature baseline.
-3. After cutover, guard CDF evaluation no longer depends on general recursive quadrature for supported DAG classes.
-
 ## Verification Loop (Run After Each Major Step)
 1. Build:
    - `R CMD INSTALL .`
@@ -117,6 +118,5 @@ Acceptance:
    - `ACCUMULATR_PROFILE_RUN_SEC=18 ACCUMULATR_PROFILE_DURATION=18 ACCUMULATR_PROFILE_INTERVAL=1 ACCUMULATR_PROFILE_FILE=dev/scratch_profile_current.txt bash dev/scripts/profile_cpp_simple.sh`
 
 ## Immediate Next Execution Slice
-1. Execute Step 7 design + implementation for guard-DAG solver on branching guard topologies.
-2. Validate Step 7 parity/perf against existing guard-heavy examples and golden checks.
-3. Use Step 7 outcomes to drive Step 6 fallback deletion decisions.
+1. Implement Step 1 end-to-end in evaluator internals (bitset-only forced state).
+2. Then perform first Step 2 cutover by adding a single internal kernel execution entrypoint and routing observed path through it.

@@ -26,6 +26,13 @@
 #define UUBER_HAVE_BOOST_GK 0
 #endif
 
+#if __has_include(<boost/numeric/odeint.hpp>)
+#define UUBER_HAVE_BOOST_ODEINT 1
+#include <boost/numeric/odeint.hpp>
+#else
+#define UUBER_HAVE_BOOST_ODEINT 0
+#endif
+
 #include "accumulator.h"
 #include "bitset_state.h"
 #include "context.h"
@@ -1812,14 +1819,7 @@ double kernel_node_density_entry_idx(
         nullptr,
     uuber::KernelRuntimeState *kernel_runtime = nullptr);
 
-double accumulate_component_guess_density_idx_shared(
-    const uuber::NativeContext &ctx, int target_label_id,
-    int target_outcome_idx, bool target_is_guess, double t, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    const SharedTriggerPlan *trigger_plan,
-    TrialParamSet *trigger_scratch);
-
-inline double sequence_density_kernel_entry_idx(
+double node_density_with_shared_triggers_plan(
     const uuber::NativeContext &ctx, int node_id, double t, int component_idx,
     const uuber::BitsetState *forced_complete_bits,
     bool forced_complete_bits_valid,
@@ -1827,12 +1827,8 @@ inline double sequence_density_kernel_entry_idx(
     bool forced_survive_bits_valid,
     const std::vector<int> &competitor_ids, const TrialParamSet *trial_params,
     const std::string &trial_type_key, bool include_na_donors,
-    int outcome_idx_context, bool guess_shortcut, int guess_target_label_id,
-    const SharedTriggerPlan *trigger_plan, TrialParamSet *trigger_scratch,
-    const std::unordered_map<int, double> *exact_source_times = nullptr,
-    const std::unordered_map<int, std::pair<double, double>> *source_time_bounds =
-        nullptr,
-    uuber::KernelRuntimeState *kernel_runtime = nullptr);
+    int outcome_idx_context, const SharedTriggerPlan *trigger_plan,
+    TrialParamSet *scratch_params);
 
 double evaluate_outcome_density_idx(
     const uuber::NativeContext &ctx, int outcome_idx, double t, int component_idx,
@@ -1850,10 +1846,10 @@ double evaluate_outcome_density_idx(
   const std::vector<int> &comp_use =
       filter_competitor_ids(ctx, info.competitor_ids, component_idx,
                             comp_filtered);
-  return sequence_density_kernel_entry_idx(
+  return kernel_node_density_entry_idx(
       ctx, info.node_id, t, component_idx, nullptr, false, nullptr, false,
-      comp_use, trial_params, trial_type_key, include_na_donors,
-      outcome_label_context_idx, false, NA_INTEGER, nullptr, nullptr);
+      comp_use, trial_params, trial_type_key,
+      include_na_donors, outcome_label_context_idx);
 }
 
 double evaluate_outcome_density_idx_shared(
@@ -1874,11 +1870,10 @@ double evaluate_outcome_density_idx_shared(
   const std::vector<int> &comp_use =
       filter_competitor_ids(ctx, info.competitor_ids, component_idx,
                             comp_filtered);
-  return sequence_density_kernel_entry_idx(
+  return node_density_with_shared_triggers_plan(
       ctx, info.node_id, t, component_idx, nullptr, false, nullptr, false,
       comp_use, trial_params, trial_type_key, include_na_donors,
-      outcome_label_context_idx, false, NA_INTEGER, trigger_plan,
-      trigger_scratch);
+      outcome_label_context_idx, trigger_plan, trigger_scratch);
 }
 
 double accumulate_component_guess_density_idx(
@@ -2607,10 +2602,10 @@ double accumulate_plan_guess_density(const uuber::NativeContext &ctx,
     }
     int outcome_idx_context =
         donor_label.empty() ? -1 : outcome_index_of(ctx, donor_label);
-    double density = sequence_density_kernel_entry_idx(
+    double density = kernel_node_density_entry_idx(
         ctx, donor_node, t, component_idx, nullptr, false, nullptr, false,
-        comp_use, trial_params, trial_type_key, include_na_donors,
-        outcome_idx_context, false, NA_INTEGER, nullptr, nullptr);
+        comp_use, trial_params, trial_type_key,
+        include_na_donors, outcome_idx_context);
     if (!std::isfinite(density) || density <= 0.0)
       continue;
     total += release * density;
@@ -3661,12 +3656,6 @@ bool fast_event_info_dense_idx(const GuardEvalInput &input, int node_idx,
   return true;
 }
 
-bool fast_event_info(const GuardEvalInput &input, int node_id,
-                     FastEventInfo &info) {
-  int node_idx = resolve_dense_node_idx_required(input.ctx, node_id);
-  return fast_event_info_dense_idx(input, node_idx, info);
-}
-
 inline bool fast_event_density_supported(const GuardEvalInput &input,
                                          const FastEventInfo &info) {
   if (info.outcome_idx < 0 ||
@@ -3678,10 +3667,10 @@ inline bool fast_event_density_supported(const GuardEvalInput &input,
   return outcome.alias_sources.empty() && outcome.guess_donors.empty();
 }
 
-bool fast_event_density(const GuardEvalInput &input, int node_id, double t,
-                        double &out) {
+bool fast_event_density_dense_idx(const GuardEvalInput &input, int node_idx,
+                                  double t, double &out) {
   FastEventInfo info;
-  if (!fast_event_info(input, node_id, info)) {
+  if (!fast_event_info_dense_idx(input, node_idx, info)) {
     return false;
   }
   if (!info.component_ok) {
@@ -3695,10 +3684,10 @@ bool fast_event_density(const GuardEvalInput &input, int node_id, double t,
   return true;
 }
 
-bool fast_event_surv(const GuardEvalInput &input, int node_id, double t,
-                     double &out) {
+bool fast_event_surv_dense_idx(const GuardEvalInput &input, int node_idx,
+                               double t, double &out) {
   FastEventInfo info;
-  if (!fast_event_info(input, node_id, info)) {
+  if (!fast_event_info_dense_idx(input, node_idx, info)) {
     return false;
   }
   if (!info.component_ok) {
@@ -3749,7 +3738,7 @@ LinearGuardChain detect_linear_guard_chain(const uuber::NativeContext &ctx,
 }
 
 // Helpers to evaluate components without creating full result structs
-double quick_eval_density(const GuardEvalInput &input, int node_id, double t,
+double quick_eval_density(const GuardEvalInput &input, int node_idx, double t,
                           const FastEventInfo *cached_info = nullptr,
                           bool cached_density_ok = true) {
   if (t < 0)
@@ -3765,12 +3754,12 @@ double quick_eval_density(const GuardEvalInput &input, int node_id, double t,
     }
   } else {
     double fast_val = 0.0;
-    if (fast_event_density(input, node_id, t, fast_val)) {
+    if (fast_event_density_dense_idx(input, node_idx, t, fast_val)) {
       return fast_val;
     }
   }
   NodeEvalResult res = eval_node_with_forced_dense_bits(
-      input.ctx, node_id, t, input.component_idx,
+      input.ctx, node_idx, t, input.component_idx,
       EvalNeed::kDensity, input.trial_params, input.trial_type_key,
       input.exact_source_times, input.source_time_bounds,
       input.forced_scope_filter, input.forced_complete_bits,
@@ -3779,7 +3768,7 @@ double quick_eval_density(const GuardEvalInput &input, int node_id, double t,
   return res.density > 0 ? res.density : 0.0;
 }
 
-double quick_eval_cdf(const GuardEvalInput &input, int node_id, double t,
+double quick_eval_cdf(const GuardEvalInput &input, int node_idx, double t,
                       const FastEventInfo *cached_info = nullptr) {
   if (t <= 0.0) {
     return 0.0;
@@ -3792,7 +3781,7 @@ double quick_eval_cdf(const GuardEvalInput &input, int node_id, double t,
         acc_cdf_success_from_cfg(t, cached_info->onset, cached_info->cfg));
   }
   NodeEvalResult res = eval_node_with_forced_dense_bits(
-      input.ctx, node_id, t, input.component_idx,
+      input.ctx, node_idx, t, input.component_idx,
       EvalNeed::kCDF, input.trial_params, input.trial_type_key,
       input.exact_source_times, input.source_time_bounds,
       input.forced_scope_filter, input.forced_complete_bits,
@@ -3801,7 +3790,7 @@ double quick_eval_cdf(const GuardEvalInput &input, int node_id, double t,
   return clamp_probability(res.cdf);
 }
 
-double quick_eval_surv(const GuardEvalInput &input, int node_id, double t,
+double quick_eval_surv(const GuardEvalInput &input, int node_idx, double t,
                        const FastEventInfo *cached_info = nullptr) {
   if (t <= 0)
     return 1.0;
@@ -3813,12 +3802,12 @@ double quick_eval_surv(const GuardEvalInput &input, int node_id, double t,
         t, cached_info->onset, cached_info->q, cached_info->cfg));
   } else {
     double fast_val = 1.0;
-    if (fast_event_surv(input, node_id, t, fast_val)) {
+    if (fast_event_surv_dense_idx(input, node_idx, t, fast_val)) {
       return fast_val;
     }
   }
   NodeEvalResult res = eval_node_with_forced_dense_bits(
-      input.ctx, node_id, t, input.component_idx,
+      input.ctx, node_idx, t, input.component_idx,
       EvalNeed::kSurvival, input.trial_params, input.trial_type_key,
       input.exact_source_times, input.source_time_bounds,
       input.forced_scope_filter, input.forced_complete_bits,
@@ -3830,44 +3819,46 @@ double quick_eval_surv(const GuardEvalInput &input, int node_id, double t,
 // Depth-3 linear guard fast path:
 // Guard0(A, Guard1(B, Guard2(C, D)))
 // Uses fused ODE over (I, H, J), avoiding nested quadrature.
-[[maybe_unused]] double eval_optimized_depth3(
-    const GuardEvalInput &input, int id_A, int id_B, int id_C, int id_D,
-    double t, const IntegrationSettings &settings) {
+double eval_optimized_depth3(const GuardEvalInput &input, int node_idx_A,
+                             int node_idx_B, int node_idx_C, int node_idx_D,
+                             double t, const IntegrationSettings &settings) {
   FastEventInfo infoA;
   FastEventInfo infoB;
   FastEventInfo infoC;
   FastEventInfo infoD;
   const FastEventInfo *infoA_ptr =
-      fast_event_info(input, id_A, infoA) ? &infoA : nullptr;
+      fast_event_info_dense_idx(input, node_idx_A, infoA) ? &infoA : nullptr;
   const FastEventInfo *infoB_ptr =
-      fast_event_info(input, id_B, infoB) ? &infoB : nullptr;
+      fast_event_info_dense_idx(input, node_idx_B, infoB) ? &infoB : nullptr;
   const FastEventInfo *infoC_ptr =
-      fast_event_info(input, id_C, infoC) ? &infoC : nullptr;
+      fast_event_info_dense_idx(input, node_idx_C, infoC) ? &infoC : nullptr;
   const FastEventInfo *infoD_ptr =
-      fast_event_info(input, id_D, infoD) ? &infoD : nullptr;
+      fast_event_info_dense_idx(input, node_idx_D, infoD) ? &infoD : nullptr;
   const bool infoB_density_ok =
       infoB_ptr && fast_event_density_supported(input, *infoB_ptr);
   const bool infoC_density_ok =
       infoC_ptr && fast_event_density_supported(input, *infoC_ptr);
 
-  double FA_t = quick_eval_cdf(input, id_A, t, infoA_ptr);
+  double FA_t = quick_eval_cdf(input, node_idx_A, t, infoA_ptr);
   if (FA_t <= 0.0)
     return 0.0;
 
   auto eval_g = [&](double v) -> double {
-    double fB = quick_eval_density(input, id_B, v, infoB_ptr, infoB_density_ok);
+    double fB =
+        quick_eval_density(input, node_idx_B, v, infoB_ptr, infoB_density_ok);
     if (fB <= 0)
       return 0.0;
-    double FA_v = quick_eval_cdf(input, id_A, v, infoA_ptr);
+    double FA_v = quick_eval_cdf(input, node_idx_A, v, infoA_ptr);
     double term = FA_t - FA_v;
     return (term > 0) ? fB * term : 0.0;
   };
   auto eval_h = [&](double w) -> double {
-    double fC = quick_eval_density(input, id_C, w, infoC_ptr, infoC_density_ok);
+    double fC =
+        quick_eval_density(input, node_idx_C, w, infoC_ptr, infoC_density_ok);
     if (!std::isfinite(fC) || fC <= 0.0) {
       return 0.0;
     }
-    double SD = quick_eval_surv(input, id_D, w, infoD_ptr);
+    double SD = quick_eval_surv(input, node_idx_D, w, infoD_ptr);
     if (!std::isfinite(SD) || SD <= 0.0) {
       return 0.0;
     }
@@ -4098,6 +4089,18 @@ bool eval_optimized_linear_guard_chain_ode(const GuardEvalInput &input,
   if (!chain.valid || depth < 1 || chain.leaf_blocker_idx < 0 ||
       !std::isfinite(t) || t <= 0.0) {
     return false;
+  }
+
+  if (depth == 3u) {
+    out_cdf = eval_optimized_depth3(input, chain.reference_indices[0],
+                                    chain.reference_indices[1],
+                                    chain.reference_indices[2],
+                                    chain.leaf_blocker_idx, t, settings);
+    if (std::isfinite(out_cdf)) {
+      out_cdf = clamp_probability(out_cdf);
+      return true;
+    }
+    out_cdf = 0.0;
   }
 
   std::vector<FastEventInfo> ref_infos(depth);
@@ -4346,6 +4349,9 @@ bool eval_optimized_linear_guard_chain_ode(const GuardEvalInput &input,
     return std::isfinite(out_val);
   };
 
+  const double tol_abs = std::max(1e-8, settings.abs_tol);
+  const double tol_rel = std::max(1e-6, settings.rel_tol);
+
   auto solve_fixed_rk4 = [&](int n_steps, double &out_val) -> bool {
     if (n_steps < 1 || !std::isfinite(t) || t <= 0.0) {
       return false;
@@ -4374,18 +4380,69 @@ bool eval_optimized_linear_guard_chain_ode(const GuardEvalInput &input,
     return finalize_state(fixed_state, out_val);
   };
 
-  // Depth-3 chains are a dominant production workload; fixed-step RK4 with a
-  // calibrated step budget is materially faster than adaptive error control.
-  if (depth == 3) {
+  auto solve_with_odeint = [&](double &out_val) -> bool {
+#if UUBER_HAVE_BOOST_ODEINT
+    using state_type = std::vector<double>;
+    using stepper_type = boost::numeric::odeint::runge_kutta_dopri5<state_type>;
+    state_type ode_state(depth, 0.0);
+    auto system = [&](const state_type &state_in, state_type &dst,
+                      const double x_now) {
+      if (dst.size() != depth) {
+        dst.assign(depth, 0.0);
+      } else {
+        std::fill(dst.begin(), dst.end(), 0.0);
+      }
+      const double *vals = eval_chain_values(x_now);
+      for (std::size_t i = depth; i-- > 0;) {
+        const double f_ref = vals[i];
+        if (!std::isfinite(f_ref) || f_ref <= 0.0) {
+          continue;
+        }
+        double s_down =
+            (i + 1 < depth) ? clamp_probability(1.0 - state_in[i + 1]) : vals[depth];
+        if (!std::isfinite(s_down) || s_down <= 0.0) {
+          continue;
+        }
+        const double val = f_ref * s_down;
+        if (std::isfinite(val) && val > 0.0) {
+          dst[i] = val;
+        }
+      }
+    };
+    try {
+      const double dt_init = t / std::max(16.0, 2.0 * static_cast<double>(depth));
+      auto controlled =
+          boost::numeric::odeint::make_controlled(tol_abs, tol_rel, stepper_type{});
+      boost::numeric::odeint::integrate_adaptive(
+          controlled, system, ode_state, 0.0, t,
+          (std::isfinite(dt_init) && dt_init > 0.0) ? dt_init : t);
+    } catch (...) {
+      return false;
+    }
+    return finalize_state(ode_state, out_val);
+#else
+    (void)out_val;
+    return false;
+#endif
+  };
+
+  const ChainOdeBackend backend = chain_ode_backend_from_env();
+
+  if (depth <= 2u && backend != ChainOdeBackend::kOdeint) {
     if (solve_fixed_rk4(96, out_cdf)) {
       return true;
     }
   }
 
+  const bool try_odeint =
+      backend == ChainOdeBackend::kOdeint ||
+      (backend == ChainOdeBackend::kAuto && depth > 3u);
+  if (try_odeint && solve_with_odeint(out_cdf)) {
+    return true;
+  }
+
   bool solver_ok = true;
   const int max_steps = std::max(2048, static_cast<int>(depth * 768));
-  const double tol_abs = std::max(1e-8, settings.abs_tol);
-  const double tol_rel = std::max(1e-6, settings.rel_tol);
   int steps = 0;
   double x = 0.0;
   double h_step = t / std::max(12.0, 2.0 * static_cast<double>(depth));
@@ -4536,8 +4593,9 @@ double guard_cdf_internal(const GuardEvalInput &input, double t,
     return 0.0;
   }
 
+  const int chain_depth_limit = static_cast<int>(input.ctx.ir.nodes.size());
   LinearGuardChain chain =
-      detect_linear_guard_chain(input.ctx, input.node_idx, 32);
+      detect_linear_guard_chain(input.ctx, input.node_idx, chain_depth_limit);
   if (chain.valid) {
     double cdf_chain = 0.0;
     if (eval_optimized_linear_guard_chain_ode(input, chain, t, settings,
@@ -5293,7 +5351,7 @@ double kernel_node_density_entry_idx(
       source_time_bounds, kernel_runtime);
 }
 
-inline double sequence_density_kernel_entry_idx(
+inline double node_density_with_shared_triggers_plan(
     const uuber::NativeContext &ctx, int node_id, double t, int component_idx,
     const uuber::BitsetState *forced_complete_bits,
     bool forced_complete_bits_valid,
@@ -5301,33 +5359,15 @@ inline double sequence_density_kernel_entry_idx(
     bool forced_survive_bits_valid,
     const std::vector<int> &competitor_ids, const TrialParamSet *trial_params,
     const std::string &trial_type_key, bool include_na_donors,
-    int outcome_idx_context, bool guess_shortcut, int guess_target_label_id,
-    const SharedTriggerPlan *trigger_plan, TrialParamSet *trigger_scratch,
-    const ExactSourceTimeMap *exact_source_times,
-    const SourceTimeBoundsMap *source_time_bounds,
-    uuber::KernelRuntimeState *kernel_runtime) {
-  if (!std::isfinite(t) || t < 0.0) {
-    return 0.0;
-  }
-  if (guess_shortcut) {
-    return accumulate_component_guess_density_idx_shared(
-        ctx, guess_target_label_id, outcome_idx_context, false, t,
-        component_idx, trial_params, trial_type_key, trigger_plan,
-        trigger_scratch);
-  }
-
-  const bool can_enumerate_trigger_states =
-      trial_params != nullptr && kernel_runtime == nullptr &&
-      exact_source_times == nullptr && source_time_bounds == nullptr;
-  if (!can_enumerate_trigger_states) {
+    int outcome_idx_context,
+    const SharedTriggerPlan *trigger_plan, TrialParamSet *scratch_params) {
+  if (!trial_params) {
     return kernel_node_density_entry_idx(
         ctx, node_id, t, component_idx, forced_complete_bits,
         forced_complete_bits_valid, forced_survive_bits,
         forced_survive_bits_valid, competitor_ids, trial_params, trial_type_key,
-        include_na_donors, outcome_idx_context, exact_source_times,
-        source_time_bounds, kernel_runtime);
+        include_na_donors, outcome_idx_context);
   }
-
   SharedTriggerPlan local_plan;
   const SharedTriggerPlan *plan_ptr = trigger_plan;
   if (!plan_ptr) {
@@ -5339,13 +5379,11 @@ inline double sequence_density_kernel_entry_idx(
         ctx, node_id, t, component_idx, forced_complete_bits,
         forced_complete_bits_valid, forced_survive_bits,
         forced_survive_bits_valid, competitor_ids, trial_params, trial_type_key,
-        include_na_donors, outcome_idx_context, nullptr, nullptr, nullptr);
+        include_na_donors, outcome_idx_context);
   }
-
   TrialParamSet local_scratch;
-  TrialParamSet &scratch = trigger_scratch ? *trigger_scratch : local_scratch;
+  TrialParamSet &scratch = scratch_params ? *scratch_params : local_scratch;
   prepare_trigger_scratch(ctx, trial_params, *plan_ptr, scratch);
-
   const bool forced_empty =
       !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
       !forced_bits_any(forced_survive_bits, forced_survive_bits_valid);
@@ -5355,10 +5393,10 @@ inline double sequence_density_kernel_entry_idx(
       competitor_ids.size() >= 2 && forced_empty &&
       shared_gate_nway_cached(ctx, node_id, competitor_ids, shared_gate_nway);
   const bool use_shared_gate_pair =
-      !use_shared_gate_nway && competitor_ids.size() == 1 && forced_empty &&
+      !use_shared_gate_nway && competitor_ids.size() == 1 &&
+      forced_empty &&
       competitor_ids[0] != NA_INTEGER &&
       shared_gate_pair_cached(ctx, node_id, competitor_ids[0], shared_gate_pair);
-
   uuber::KernelRuntimeState shared_kernel_runtime;
   uuber::KernelRuntimeState *shared_kernel_runtime_ptr = nullptr;
   if (ctx.kernel_program.valid && shared_trigger_count(*plan_ptr) > 0 &&
@@ -5366,7 +5404,6 @@ inline double sequence_density_kernel_entry_idx(
     uuber::reset_kernel_runtime(ctx.kernel_program, shared_kernel_runtime);
     shared_kernel_runtime_ptr = &shared_kernel_runtime;
   }
-
   std::unique_ptr<NodeEvalState> prebuilt_state;
   bool prebuilt_fused_competitor_survival = false;
   if (!use_shared_gate_pair && !use_shared_gate_nway) {
@@ -5381,7 +5418,6 @@ inline double sequence_density_kernel_entry_idx(
         !competitor_ids.empty() && forced_empty &&
         competitors_guard_free_dense(ctx, competitor_ids);
   }
-
   double total = evaluate_shared_trigger_states(
       ctx, *plan_ptr, scratch, "Too many shared triggers for density evaluation",
       [&]() -> double {
@@ -5408,9 +5444,8 @@ inline double sequence_density_kernel_entry_idx(
             shared_kernel_runtime_ptr);
       },
       shared_kernel_runtime_ptr);
-  if (!std::isfinite(total) || total <= 0.0) {
+  if (!std::isfinite(total) || total <= 0.0)
     return 0.0;
-  }
   return total;
 }
 
@@ -5467,8 +5502,10 @@ double native_outcome_probability_bits_impl_idx(
       uuber::invalidate_kernel_runtime_from_slot(*integrand_kernel_runtime_ptr, 0);
     }
     double val = kernel_node_density_entry_idx(
-        ctx, node_id, u, component_idx, forced_complete_bits,
-        forced_complete_bits_valid, forced_survive_bits,
+        ctx, node_id, u, component_idx,
+        forced_complete_bits,
+        forced_complete_bits_valid,
+        forced_survive_bits,
         forced_survive_bits_valid, comp_vec, params_ptr, trial_type_key,
         include_na_donors, outcome_idx_context, nullptr, nullptr,
         integrand_kernel_runtime_ptr);
@@ -6208,6 +6245,7 @@ double native_trial_mixture_internal_idx(
       fallback = default_component_cache_entry_idx(ctx, comp_idx);
       cache_entry_ptr = &fallback;
     }
+    double contrib = 0.0;
     bool used_guess_shortcut = false;
     if (has_keep) {
       if (comp_idx >= 0 &&
@@ -6226,18 +6264,23 @@ double native_trial_mixture_internal_idx(
                  keep_label_id == guess.target_label_id);
           }
         }
-        used_guess_shortcut = guess_applies;
+        if (guess_applies) {
+          contrib = accumulate_component_guess_density_idx(
+              ctx, keep_label_id, keep_outcome_idx, keep_is_guess, t, comp_idx, params_ptr,
+              cache_entry_ptr->trial_type_key);
+          used_guess_shortcut = true;
+        }
       }
     }
-    std::vector<int> comp_competitors;
-    const std::vector<int> &comp_use =
-        filter_competitor_ids(ctx, competitor_ids, comp_idx, comp_competitors);
-    double contrib = sequence_density_kernel_entry_idx(
-        ctx, node_id, t, comp_idx, nullptr, false, nullptr, false, comp_use,
-        params_ptr, cache_entry_ptr->trial_type_key, false,
-        keep_outcome_idx_context, used_guess_shortcut, keep_label_id,
-        trigger_plan_ptr, trigger_scratch_ptr);
     if (!used_guess_shortcut) {
+      std::vector<int> comp_competitors;
+      const std::vector<int> &comp_use = filter_competitor_ids(
+          ctx, competitor_ids, comp_idx, comp_competitors);
+      contrib = node_density_with_shared_triggers_plan(
+          ctx, node_id, t, comp_idx, nullptr, false, nullptr, false, comp_use,
+          params_ptr,
+          cache_entry_ptr->trial_type_key, false,
+          keep_outcome_idx_context, trigger_plan_ptr, trigger_scratch_ptr);
       if (!std::isfinite(contrib) || contrib < 0.0)
         contrib = 0.0;
       if (has_keep) {
@@ -7332,21 +7375,20 @@ double evaluate_sequence_density_kernel_idx(
         !std::isfinite(spec.single_time) || spec.single_time < 0.0) {
       return 0.0;
     }
+    if (spec.guess_shortcut) {
+      return accumulate_component_guess_density_idx_shared(
+          ctx, spec.keep_label_id, spec.single_outcome_idx, false,
+          spec.single_time, spec.component_idx, active_params,
+          spec.trial_type_key, single_state_plan, prob_scratch_ptr);
+    }
     const int node_id =
         ctx.outcome_info[static_cast<std::size_t>(spec.single_outcome_idx)]
             .node_id;
-    if (!spec.guess_shortcut && runtime_ptr != nullptr) {
-      return kernel_node_density_entry_idx(
-          ctx, node_id, spec.single_time, spec.component_idx, nullptr, false,
-          nullptr, false, spec.competitors, active_params, spec.trial_type_key,
-          false, spec.single_outcome_idx, nullptr, nullptr, runtime_ptr);
-    }
-    return sequence_density_kernel_entry_idx(
-        ctx, node_id, spec.single_time, spec.component_idx, nullptr, false,
-        nullptr, false, spec.competitors, active_params, spec.trial_type_key,
-        false, spec.single_outcome_idx, spec.guess_shortcut,
-        spec.keep_label_id, single_state_plan, prob_scratch_ptr, nullptr,
-        nullptr, runtime_ptr);
+    return kernel_node_density_entry_idx(
+        ctx, node_id, spec.single_time, spec.component_idx, nullptr,
+        false, nullptr, false, spec.competitors, active_params,
+        spec.trial_type_key, false, spec.single_outcome_idx, nullptr, nullptr,
+        runtime_ptr);
   }
   if (spec.ranked_times_ptr == nullptr || spec.ranked_outcome_indices.empty() ||
       spec.ranked_node_indices.empty()) {

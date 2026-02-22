@@ -4333,9 +4333,6 @@ bool eval_optimized_linear_guard_chain_ode(const GuardEvalInput &input,
     }
   };
 
-  std::vector<double> state(depth, 0.0), full(depth, 0.0), half1(depth, 0.0),
-      half2(depth, 0.0);
-
   auto finalize_state = [&](const std::vector<double> &state_in,
                             double &out_val) -> bool {
     if (state_in.empty()) {
@@ -4435,74 +4432,6 @@ bool eval_optimized_linear_guard_chain_ode(const GuardEvalInput &input,
 
   // For generalized linear chains, ODEInt was consistently faster in profiling.
   if (depth >= 3u && solve_with_odeint(out_cdf)) {
-    return true;
-  }
-
-  bool solver_ok = true;
-  const int max_steps = std::max(2048, static_cast<int>(depth * 768));
-  int steps = 0;
-  double x = 0.0;
-  double h_step = t / std::max(12.0, 2.0 * static_cast<double>(depth));
-  if (!std::isfinite(h_step) || h_step <= 0.0) {
-    h_step = t;
-  }
-
-  while (x < t) {
-    if (++steps > max_steps) {
-      solver_ok = false;
-      break;
-    }
-    if (x + h_step > t) {
-      h_step = t - x;
-    }
-    if (!std::isfinite(h_step) || h_step <= 0.0) {
-      solver_ok = false;
-      break;
-    }
-
-    rk4_step(x, state, h_step, full);
-    rk4_step(x, state, 0.5 * h_step, half1);
-    rk4_step(x + 0.5 * h_step, half1, 0.5 * h_step, half2);
-
-    double err_ratio = 0.0;
-    for (std::size_t i = 0; i < depth; ++i) {
-      const double err = std::abs(half2[i] - full[i]);
-      const double scale =
-          tol_abs + tol_rel * std::max(std::abs(half2[i]), std::abs(full[i]));
-      const double ratio = (scale > 0.0) ? (err / scale) : 0.0;
-      if (ratio > err_ratio) {
-        err_ratio = ratio;
-      }
-    }
-    if (!std::isfinite(err_ratio)) {
-      solver_ok = false;
-      break;
-    }
-
-    if (err_ratio <= 1.0) {
-      state = half2;
-      x += h_step;
-      double grow =
-          (err_ratio <= 1e-12)
-              ? 2.0
-              : std::min(2.0, std::max(1.1, 0.9 * std::pow(err_ratio, -0.2)));
-      h_step *= grow;
-    } else {
-      double shrink = std::max(0.1, 0.9 * std::pow(err_ratio, -0.25));
-      h_step *= shrink;
-      if (h_step < t * 1e-12) {
-        solver_ok = false;
-        break;
-      }
-    }
-  }
-
-  if (solver_ok && finalize_state(state, out_cdf)) {
-    return true;
-  }
-
-  const int safe_steps = (depth <= 1) ? 256 : 128;
-  if (solve_fixed_rk4(safe_steps, out_cdf)) {
     return true;
   }
   return false;

@@ -281,6 +281,21 @@ params_example_22_shared_q <- c(
   q_shared = 0.10
 )
 
+example_23_ranked_chain <- function() {
+  race_spec(n_outcomes = 2L) |>
+    add_accumulator("a", "lognormal") |>
+    add_accumulator("b", "lognormal", onset = after("a")) |>
+    add_outcome("A", "a") |>
+    add_outcome("B", "b") |>
+    finalize_model()
+}
+params_example_23_ranked_chain <- c(
+  a.meanlog = log(0.30),
+  a.sdlog = 0.16,
+  b.meanlog = log(0.22),
+  b.sdlog = 0.16
+)
+
 models <- list(
   example_1_simple = list(spec = example_1_simple, params = params_example_1_simple),
   example_2_stop_mixture = list(spec = example_2_stop_mixture, params = params_example_2_stop_mixture),
@@ -291,7 +306,8 @@ models <- list(
   example_10_exclusion = list(spec = example_10_exclusion, params = params_example_10_exclusion),
   example_16_guard_tie_simple = list(spec = example_16_guard_tie_simple, params = params_example_16_guard_tie_simple),
   example_21_simple_q = list(spec = example_21_simple_q, params = params_example_21_simple_q),
-  example_22_shared_q = list(spec = example_22_shared_q, params = params_example_22_shared_q)
+  example_22_shared_q = list(spec = example_22_shared_q, params = params_example_22_shared_q),
+  example_23_ranked_chain = list(spec = example_23_ranked_chain, params = params_example_23_ranked_chain)
 )
 
 model_filter <- trimws(Sys.getenv("ACCUMULATR_BENCH_MODELS", ""))

@@ -354,8 +354,8 @@ example_17_k_of_n_inhibitors <- race_spec() |>
   add_accumulator("c3", "lognormal") |>
   # Define C as a k-of-n pool with 2 members
   add_pool("C", c("c1", "c2", "c3"), k = 2L) |>
-  add_pool("C_k1_c2c3", c("c2", "c3"), k = 1L) |>
-  add_pool("C_k1_c1c3", c("c1", "c3"), k = 1L) |>
+  add_pool("C23", c("c2", "c3"), k = 1L) |>
+  add_pool("C13", c("c1", "c3"), k = 1L) |>
   add_accumulator("d1", "lognormal") |>
   add_accumulator("d2", "lognormal") |>
   add_accumulator("d3", "lognormal") |>
@@ -367,8 +367,8 @@ example_17_k_of_n_inhibitors <- race_spec() |>
     "B_no_b1"
   )) |>
   add_outcome("C", first_of(
-    inhibit(all_of("c1", "C_k1_c2c3"), by = "b2"),
-    inhibit(all_of("c2", "C_k1_c1c3"), by = "b2")
+    inhibit(all_of("c1", "C23"), by = "b2"),
+    inhibit(all_of("c2", "C13"), by = "b2")
   )) |>
   add_outcome("D", inhibit("D", by = "c3")) |>
   add_shared_params(members = c("a1", "a2", "a3"), meanlog = "par:shared_A.meanlog", sdlog = "par:shared_A.sdlog") |>

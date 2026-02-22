@@ -25,6 +25,8 @@ if (!dir.exists(out_dir)) {
   dir.create(out_dir, recursive = TRUE)
 }
 out_file <- file.path(out_dir, "benchmark_centralized.csv")
+baseline_file <- file.path(out_dir, "benchmark_centralized_baseline.csv")
+diff_file <- file.path(out_dir, "benchmark_centralized_diff.csv")
 nested_file <- file.path(out_dir, "bench_nested_integral_baseline.csv")
 examples_file <- file.path(out_dir, "bench_examples_models_likelihood.csv")
 
@@ -135,6 +137,33 @@ flatten_speed <- function(df, suite_name) {
   out
 }
 
+build_baseline_diff <- function(current_df, baseline_df) {
+  key_cols <- c("section", "suite", "label", "metric", "mode")
+  merged <- merge(
+    baseline_df,
+    current_df,
+    by = key_cols,
+    all = FALSE,
+    suffixes = c("_baseline", "_current")
+  )
+  speed_rows <- subset(merged, section == "speed")
+  if (nrow(speed_rows) == 0L) {
+    return(data.frame())
+  }
+  speed_rows$ratio_current_over_baseline <-
+    speed_rows$value_current / speed_rows$value_baseline
+  speed_rows$delta_pct <- 100 * (
+    speed_rows$value_current - speed_rows$value_baseline
+  ) / speed_rows$value_baseline
+  speed_rows[, c(
+    key_cols,
+    "value_baseline",
+    "value_current",
+    "ratio_current_over_baseline",
+    "delta_pct"
+  )]
+}
+
 nested_script <- file.path("dev", "scripts", "bench_nested_integral_baseline.R")
 examples_script <- file.path("dev", "scripts", "bench_examples_models_likelihood.R")
 golden_script <- file.path("dev", "scripts", "check_loglik_golden.R")
@@ -198,6 +227,23 @@ combined <- combined[, c(
 )]
 
 utils::write.csv(combined, out_file, row.names = FALSE)
+
+if (file.exists(baseline_file)) {
+  baseline_df <- utils::read.csv(baseline_file, stringsAsFactors = FALSE)
+  diff_df <- build_baseline_diff(combined, baseline_df)
+  if (nrow(diff_df) > 0L) {
+    utils::write.csv(diff_df, diff_file, row.names = FALSE)
+    cat("Wrote baseline diff output to", diff_file, "\n")
+  } else if (file.exists(diff_file)) {
+    file.remove(diff_file)
+  }
+}
+
+update_baseline <- identical(trimws(Sys.getenv("ACCUMULATR_UPDATE_BASELINE")), "1")
+if (update_baseline) {
+  file.copy(out_file, baseline_file, overwrite = TRUE)
+  cat("Updated baseline output at", baseline_file, "\n")
+}
 
 cat("\nWrote centralized benchmark output to", out_file, "\n")
 cat("Rows:", nrow(combined), "\n")

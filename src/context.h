@@ -294,17 +294,19 @@ struct SharedTriggerGroup {
 };
 
 struct NAMapCacheKey {
-  std::string payload;
-  std::size_t hash{0};
+  std::uint64_t hash1{0ULL};
+  std::uint64_t hash2{0ULL};
 
   bool operator==(const NAMapCacheKey &other) const noexcept {
-    return payload == other.payload;
+    return hash1 == other.hash1 && hash2 == other.hash2;
   }
 };
 
 struct NAMapCacheKeyHash {
   std::size_t operator()(const NAMapCacheKey &key) const noexcept {
-    return key.hash;
+    std::uint64_t x = key.hash1 ^ (key.hash2 + 0x9e3779b97f4a7c15ULL +
+                                   (key.hash1 << 6) + (key.hash1 >> 2));
+    return static_cast<std::size_t>(x);
   }
 };
 

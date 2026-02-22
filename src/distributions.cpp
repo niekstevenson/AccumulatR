@@ -3,6 +3,7 @@
 
 #include <Rcpp.h>
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -18,19 +19,13 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 #if __has_include(<boost/math/quadrature/gauss_kronrod.hpp>)
 #define UUBER_HAVE_BOOST_GK 1
 #include <boost/math/quadrature/gauss_kronrod.hpp>
 #else
 #define UUBER_HAVE_BOOST_GK 0
-#endif
-
-#if __has_include(<boost/numeric/odeint.hpp>)
-#define UUBER_HAVE_BOOST_ODEINT 1
-#include <boost/numeric/odeint.hpp>
-#else
-#define UUBER_HAVE_BOOST_ODEINT 0
 #endif
 
 #include "accumulator.h"
@@ -2762,6 +2757,31 @@ struct IntegrationSettings {
   int max_depth{kDefaultMaxDepth};
 };
 
+struct CanonicalIntegrationSettings {
+  double rel_tol{kDefaultRelTol};
+  double abs_tol{kDefaultAbsTol};
+  int max_depth{kDefaultMaxDepth};
+  double effective_tol{std::max(kDefaultRelTol, kDefaultAbsTol)};
+};
+
+inline CanonicalIntegrationSettings
+canonicalize_integration_settings(const IntegrationSettings &settings) {
+  CanonicalIntegrationSettings canonical;
+  canonical.rel_tol =
+      (settings.rel_tol > 0.0 && std::isfinite(settings.rel_tol))
+          ? settings.rel_tol
+          : kDefaultRelTol;
+  canonical.abs_tol =
+      (settings.abs_tol > 0.0 && std::isfinite(settings.abs_tol))
+          ? settings.abs_tol
+          : kDefaultAbsTol;
+  canonical.max_depth = (settings.max_depth > 0) ? settings.max_depth
+                                                  : kDefaultMaxDepth;
+  canonical.effective_tol =
+      std::max(std::max(canonical.rel_tol, canonical.abs_tol), 1e-10);
+  return canonical;
+}
+
 struct GuardEvalInput {
   const uuber::NativeContext &ctx;
   int node_idx{-1};
@@ -3238,27 +3258,8 @@ double shared_gate_nway_probability(
     return (std::isfinite(val) && val > 0.0) ? val : 0.0;
   };
 
-  double order_mass = 0.0;
-  if (std::isfinite(upper)) {
-    order_mass = uuber::integrate_boost_fn(order_integrand, 0.0, upper, rel_tol,
-                                           abs_tol, max_depth);
-  } else {
-    auto transformed = [&](double x) -> double {
-      if (x <= 0.0)
-        return 0.0;
-      if (x >= 1.0)
-        x = std::nextafter(1.0, 0.0);
-      double t = x / (1.0 - x);
-      double jac = 1.0 / ((1.0 - x) * (1.0 - x));
-      double val = order_integrand(t);
-      if (!std::isfinite(val) || val <= 0.0)
-        return 0.0;
-      double out = val * jac;
-      return std::isfinite(out) ? out : 0.0;
-    };
-    order_mass = uuber::integrate_boost_fn(transformed, 0.0, 1.0, rel_tol,
-                                           abs_tol, max_depth);
-  }
+  double order_mass = uuber::integrate_boost_fn_0_to_upper(
+      order_integrand, upper, rel_tol, abs_tol, max_depth, true);
   if (!std::isfinite(order_mass) || order_mass < 0.0)
     order_mass = 0.0;
 
@@ -3281,25 +3282,9 @@ double shared_gate_pair_probability(
     return 0.0;
 
   auto integrate_signed = [&](auto &&integrand) -> double {
-    if (std::isfinite(upper)) {
-      return uuber::integrate_boost_fn(integrand, 0.0, upper, rel_tol, abs_tol,
-                                       max_depth);
-    }
-    auto transformed = [&](double x) -> double {
-      if (x <= 0.0)
-        return 0.0;
-      if (x >= 1.0)
-        x = std::nextafter(1.0, 0.0);
-      double t = x / (1.0 - x);
-      double jac = 1.0 / ((1.0 - x) * (1.0 - x));
-      double val = integrand(t);
-      if (!std::isfinite(val))
-        return 0.0;
-      double out = val * jac;
-      return std::isfinite(out) ? out : 0.0;
-    };
-    return uuber::integrate_boost_fn(transformed, 0.0, 1.0, rel_tol, abs_tol,
-                                     max_depth);
+    return uuber::integrate_boost_fn_0_to_upper(
+        std::forward<decltype(integrand)>(integrand), upper, rel_tol, abs_tol,
+        max_depth, false);
   };
 
   const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
@@ -3667,37 +3652,6 @@ inline bool fast_event_density_supported(const GuardEvalInput &input,
   return outcome.alias_sources.empty() && outcome.guess_donors.empty();
 }
 
-bool fast_event_density_dense_idx(const GuardEvalInput &input, int node_idx,
-                                  double t, double &out) {
-  FastEventInfo info;
-  if (!fast_event_info_dense_idx(input, node_idx, info)) {
-    return false;
-  }
-  if (!info.component_ok) {
-    out = 0.0;
-    return true;
-  }
-  if (!fast_event_density_supported(input, info)) {
-    return false;
-  }
-  out = safe_density(acc_density_from_cfg(t, info.onset, info.q, info.cfg));
-  return true;
-}
-
-bool fast_event_surv_dense_idx(const GuardEvalInput &input, int node_idx,
-                               double t, double &out) {
-  FastEventInfo info;
-  if (!fast_event_info_dense_idx(input, node_idx, info)) {
-    return false;
-  }
-  if (!info.component_ok) {
-    out = 1.0;
-    return true;
-  }
-  out = clamp_probability(acc_survival_from_cfg(t, info.onset, info.q, info.cfg));
-  return true;
-}
-
 // Detects A -> B -> C ... chain.
 // Depth is number of GUARD nodes visited.
 // A chain of depth 2 means: Guard0(A, Guard1(B, C)).
@@ -3737,567 +3691,180 @@ LinearGuardChain detect_linear_guard_chain(const uuber::NativeContext &ctx,
   return {};
 }
 
-// Helpers to evaluate components without creating full result structs
-double quick_eval_density(const GuardEvalInput &input, int node_idx, double t,
-                          const FastEventInfo *cached_info = nullptr,
-                          bool cached_density_ok = true) {
-  if (t < 0)
-    return 0.0;
-  if (cached_info) {
-    if (cached_density_ok) {
-      if (!cached_info->component_ok) {
-        return 0.0;
-      }
-      return safe_density(acc_density_from_cfg(t, cached_info->onset,
-                                               cached_info->q,
-                                               cached_info->cfg));
-    }
-  } else {
-    double fast_val = 0.0;
-    if (fast_event_density_dense_idx(input, node_idx, t, fast_val)) {
-      return fast_val;
-    }
+constexpr std::size_t kLinearGuardChainMaxDepth = 8u;
+constexpr int kLinearChainBaseSteps = 96;
+constexpr int kLinearChainDepthStep = 24;
+constexpr int kLinearChainTolBonus = 16;
+constexpr int kLinearChainMaxSteps = 240;
+
+inline int linear_chain_step_budget(std::size_t depth,
+                                    const CanonicalIntegrationSettings &canonical) {
+  int steps = kLinearChainBaseSteps;
+  if (depth > 3u) {
+    steps += static_cast<int>(depth - 3u) * kLinearChainDepthStep;
   }
-  NodeEvalResult res = eval_node_with_forced_dense_bits(
-      input.ctx, node_idx, t, input.component_idx,
-      EvalNeed::kDensity, input.trial_params, input.trial_type_key,
-      input.exact_source_times, input.source_time_bounds,
-      input.forced_scope_filter, input.forced_complete_bits,
-      input.forced_complete_bits != nullptr, input.forced_survive_bits,
-      input.forced_survive_bits != nullptr);
-  return res.density > 0 ? res.density : 0.0;
+  if (canonical.effective_tol <= 1e-7) {
+    steps += kLinearChainTolBonus;
+  }
+  if (canonical.effective_tol <= 1e-8) {
+    steps += kLinearChainTolBonus;
+  }
+  return std::min(steps, kLinearChainMaxSteps);
 }
 
-double quick_eval_cdf(const GuardEvalInput &input, int node_idx, double t,
-                      const FastEventInfo *cached_info = nullptr) {
-  if (t <= 0.0) {
-    return 0.0;
-  }
-  if (cached_info) {
-    if (!cached_info->component_ok) {
-      return 0.0;
-    }
-    return clamp_probability(
-        acc_cdf_success_from_cfg(t, cached_info->onset, cached_info->cfg));
-  }
-  NodeEvalResult res = eval_node_with_forced_dense_bits(
-      input.ctx, node_idx, t, input.component_idx,
-      EvalNeed::kCDF, input.trial_params, input.trial_type_key,
-      input.exact_source_times, input.source_time_bounds,
-      input.forced_scope_filter, input.forced_complete_bits,
-      input.forced_complete_bits != nullptr, input.forced_survive_bits,
-      input.forced_survive_bits != nullptr);
-  return clamp_probability(res.cdf);
-}
+template <std::size_t MaxDepth>
+class LinearChainIntegrator final {
+public:
+  using ChainState = std::array<double, MaxDepth>;
 
-double quick_eval_surv(const GuardEvalInput &input, int node_idx, double t,
-                       const FastEventInfo *cached_info = nullptr) {
-  if (t <= 0)
-    return 1.0;
-  if (cached_info) {
-    if (!cached_info->component_ok) {
-      return 1.0;
-    }
-    return clamp_probability(acc_survival_from_cfg(
-        t, cached_info->onset, cached_info->q, cached_info->cfg));
-  } else {
-    double fast_val = 1.0;
-    if (fast_event_surv_dense_idx(input, node_idx, t, fast_val)) {
-      return fast_val;
-    }
-  }
-  NodeEvalResult res = eval_node_with_forced_dense_bits(
-      input.ctx, node_idx, t, input.component_idx,
-      EvalNeed::kSurvival, input.trial_params, input.trial_type_key,
-      input.exact_source_times, input.source_time_bounds,
-      input.forced_scope_filter, input.forced_complete_bits,
-      input.forced_complete_bits != nullptr, input.forced_survive_bits,
-      input.forced_survive_bits != nullptr);
-  return clamp_probability(res.survival);
-}
-
-// Depth-3 linear guard fast path:
-// Guard0(A, Guard1(B, Guard2(C, D)))
-// Uses fused ODE over (I, H, J), avoiding nested quadrature.
-double eval_optimized_depth3(const GuardEvalInput &input, int node_idx_A,
-                             int node_idx_B, int node_idx_C, int node_idx_D,
-                             double t, const IntegrationSettings &settings) {
-  FastEventInfo infoA;
-  FastEventInfo infoB;
-  FastEventInfo infoC;
-  FastEventInfo infoD;
-  const FastEventInfo *infoA_ptr =
-      fast_event_info_dense_idx(input, node_idx_A, infoA) ? &infoA : nullptr;
-  const FastEventInfo *infoB_ptr =
-      fast_event_info_dense_idx(input, node_idx_B, infoB) ? &infoB : nullptr;
-  const FastEventInfo *infoC_ptr =
-      fast_event_info_dense_idx(input, node_idx_C, infoC) ? &infoC : nullptr;
-  const FastEventInfo *infoD_ptr =
-      fast_event_info_dense_idx(input, node_idx_D, infoD) ? &infoD : nullptr;
-  const bool infoB_density_ok =
-      infoB_ptr && fast_event_density_supported(input, *infoB_ptr);
-  const bool infoC_density_ok =
-      infoC_ptr && fast_event_density_supported(input, *infoC_ptr);
-
-  double FA_t = quick_eval_cdf(input, node_idx_A, t, infoA_ptr);
-  if (FA_t <= 0.0)
-    return 0.0;
-
-  auto eval_g = [&](double v) -> double {
-    double fB =
-        quick_eval_density(input, node_idx_B, v, infoB_ptr, infoB_density_ok);
-    if (fB <= 0)
-      return 0.0;
-    double FA_v = quick_eval_cdf(input, node_idx_A, v, infoA_ptr);
-    double term = FA_t - FA_v;
-    return (term > 0) ? fB * term : 0.0;
-  };
-  auto eval_h = [&](double w) -> double {
-    double fC =
-        quick_eval_density(input, node_idx_C, w, infoC_ptr, infoC_density_ok);
-    if (!std::isfinite(fC) || fC <= 0.0) {
-      return 0.0;
-    }
-    double SD = quick_eval_surv(input, node_idx_D, w, infoD_ptr);
-    if (!std::isfinite(SD) || SD <= 0.0) {
-      return 0.0;
-    }
-    double val = fC * SD;
-    return (std::isfinite(val) && val > 0.0) ? val : 0.0;
-  };
-
-  struct Depth3State {
-    double i{0.0};
-    double h_int{0.0};
-    double j{0.0};
-  };
-
-  constexpr int kDepth3GhCacheCapacity = 24;
-  struct Depth3GhCache {
-    double xs[kDepth3GhCacheCapacity]{};
-    double gs[kDepth3GhCacheCapacity]{};
-    double hs[kDepth3GhCacheCapacity]{};
-    int used{0};
-    int next{0};
-
-    bool lookup(double x, double &g, double &h) const {
-      for (int i = 0; i < used; ++i) {
-        if (xs[i] == x) {
-          g = gs[i];
-          h = hs[i];
-          return true;
-        }
+  LinearChainIntegrator(const GuardEvalInput &input,
+                        const LinearGuardChain &chain,
+                        double t,
+                        const CanonicalIntegrationSettings &canonical)
+      : input_(input), chain_(chain), t_(t), canonical_(canonical),
+        depth_(chain.reference_indices.size()), value_width_(depth_ + 1u),
+        ref_infos_(depth_) {
+    ref_info_ptrs_.fill(nullptr);
+    ref_density_ok_.fill(false);
+    for (std::size_t i = 0; i < depth_; ++i) {
+      if (fast_event_info_dense_idx(input_, chain_.reference_indices[i],
+                                    ref_infos_[i])) {
+        ref_info_ptrs_[i] = &ref_infos_[i];
+        ref_density_ok_[i] = fast_event_density_supported(input_, ref_infos_[i]);
       }
+    }
+    leaf_info_ptr_ =
+        fast_event_info_dense_idx(input_, chain_.leaf_blocker_idx, leaf_info_)
+            ? &leaf_info_
+            : nullptr;
+  }
+
+  bool solve(double &out_cdf) {
+    if (!is_valid()) {
       return false;
     }
+    const int n_steps = linear_chain_step_budget(depth_, canonical_);
+    return solve_fixed_rk4(n_steps, out_cdf);
+  }
 
-    void store(double x, double g, double h) {
-      if (used < kDepth3GhCacheCapacity) {
-        xs[used] = x;
-        gs[used] = g;
-        hs[used] = h;
-        ++used;
-      } else {
-        xs[next] = x;
-        gs[next] = g;
-        hs[next] = h;
-        next = (next + 1) % kDepth3GhCacheCapacity;
-      }
-    }
-  };
+private:
+  bool is_valid() const {
+    return chain_.valid && depth_ >= 1u && depth_ <= MaxDepth &&
+           chain_.leaf_blocker_idx >= 0 && std::isfinite(t_) && t_ > 0.0;
+  }
 
-  Depth3GhCache gh_cache;
-  auto eval_gh = [&](double x, double &g, double &h) {
-    if (gh_cache.lookup(x, g, h)) {
-      return;
-    }
-    g = eval_g(x);
-    if (!std::isfinite(g) || g <= 0.0) {
-      g = 0.0;
-    }
-    h = eval_h(x);
-    if (!std::isfinite(h) || h <= 0.0) {
-      h = 0.0;
-    }
-    gh_cache.store(x, g, h);
-  };
+  inline double grid_x_value(std::size_t grid_idx, double h) const {
+    return 0.5 * h * static_cast<double>(grid_idx);
+  }
 
-  auto deriv = [&](double x, const Depth3State &state) -> Depth3State {
-    double g = 0.0;
-    double h = 0.0;
-    eval_gh(x, g, h);
-    double i_now = state.i;
-    if (!std::isfinite(i_now) || i_now <= 0.0) {
-      i_now = 0.0;
-    }
-    double jdot = h * i_now;
-    if (!std::isfinite(jdot) || jdot <= 0.0) {
-      jdot = 0.0;
-    }
-    return Depth3State{g, h, jdot};
-  };
+  inline double *grid_slot(std::size_t grid_idx) {
+    return grid_vals_.data() + (grid_idx * value_width_);
+  }
 
-  auto rk4_step = [&](double x, const Depth3State &state,
-                      double h) -> Depth3State {
-    const Depth3State k1 = deriv(x, state);
-    const Depth3State s2{state.i + 0.5 * h * k1.i,
-                         state.h_int + 0.5 * h * k1.h_int,
-                         state.j + 0.5 * h * k1.j};
-    const Depth3State k2 = deriv(x + 0.5 * h, s2);
-    const Depth3State s3{state.i + 0.5 * h * k2.i,
-                         state.h_int + 0.5 * h * k2.h_int,
-                         state.j + 0.5 * h * k2.j};
-    const Depth3State k3 = deriv(x + 0.5 * h, s3);
-    const Depth3State s4{state.i + h * k3.i, state.h_int + h * k3.h_int,
-                         state.j + h * k3.j};
-    const Depth3State k4 = deriv(x + h, s4);
-
-    const double i_next =
-        state.i + (h / 6.0) * (k1.i + 2.0 * k2.i + 2.0 * k3.i + k4.i);
-    const double h_int_next =
-        state.h_int + (h / 6.0) *
-                          (k1.h_int + 2.0 * k2.h_int + 2.0 * k3.h_int + k4.h_int);
-    const double j_next =
-        state.j + (h / 6.0) * (k1.j + 2.0 * k2.j + 2.0 * k3.j + k4.j);
-    return Depth3State{i_next, h_int_next, j_next};
-  };
-
-  auto finalize_state = [&](const Depth3State &state, double &out) -> bool {
-    if (!std::isfinite(state.i) || !std::isfinite(state.h_int) ||
-        !std::isfinite(state.j)) {
+  bool precompute_uniform_grid_values(int n_steps, double h) {
+    if (n_steps < 1 || !std::isfinite(h) || h <= 0.0) {
       return false;
     }
-    const double T1 = std::max(0.0, state.i);
-    const double H = clamp_probability(state.h_int);
-    const double J = std::max(0.0, state.j);
-    double T2 = H * T1 - J;
-    if (!std::isfinite(T2) || T2 < 0.0) {
-      T2 = 0.0;
-    } else if (T2 > T1) {
-      T2 = T1;
-    }
-    out = clamp_probability(FA_t - T1 + T2);
-    return std::isfinite(out);
-  };
-
-  auto solve_depth3_fixed_rk4 = [&](int n_steps, double &out_val) -> bool {
-    if (n_steps < 1 || !std::isfinite(t) || t <= 0.0) {
+    const std::size_t grid_points = static_cast<std::size_t>(2 * n_steps + 1);
+    if (grid_points < 3u) {
       return false;
     }
-    const double h = t / static_cast<double>(n_steps);
-    if (!std::isfinite(h) || h <= 0.0) {
-      return false;
-    }
-    double x = 0.0;
-    Depth3State state{};
-    for (int i = 0; i < n_steps; ++i) {
-      state = rk4_step(x, state, h);
-      x += h;
-      if (!std::isfinite(state.i) || !std::isfinite(state.h_int) ||
-          !std::isfinite(state.j)) {
-        return false;
-      }
-    }
-    return finalize_state(state, out_val);
-  };
+    grid_vals_.assign(grid_points * value_width_, 0.0);
+    batch_shifted_.assign(grid_points, 0.0);
+    batch_values_.assign(grid_points, 0.0);
 
-  bool solver_ok = true;
-  const int max_steps = 2048;
-  const double tol_abs = std::max(1e-8, settings.abs_tol);
-  const double tol_rel = std::max(1e-6, settings.rel_tol);
-  int steps = 0;
-  double x = 0.0;
-  double h_step = t / 12.0;
-  if (!std::isfinite(h_step) || h_step <= 0.0) {
-    h_step = t;
-  }
-  Depth3State state{};
-
-  while (x < t) {
-    if (++steps > max_steps) {
-      solver_ok = false;
-      break;
-    }
-    if (x + h_step > t) {
-      h_step = t - x;
-    }
-    if (!std::isfinite(h_step) || h_step <= 0.0) {
-      solver_ok = false;
-      break;
-    }
-
-    const Depth3State full = rk4_step(x, state, h_step);
-    const Depth3State half_1 = rk4_step(x, state, 0.5 * h_step);
-    const Depth3State half_2 = rk4_step(x + 0.5 * h_step, half_1, 0.5 * h_step);
-
-    const double err_i = std::abs(half_2.i - full.i);
-    const double err_h = std::abs(half_2.h_int - full.h_int);
-    const double err_j = std::abs(half_2.j - full.j);
-    const double scale_i =
-        tol_abs + tol_rel * std::max(std::abs(half_2.i), std::abs(full.i));
-    const double scale_h = tol_abs +
-                           tol_rel * std::max(std::abs(half_2.h_int),
-                                              std::abs(full.h_int));
-    const double scale_j =
-        tol_abs + tol_rel * std::max(std::abs(half_2.j), std::abs(full.j));
-    const double ratio_i = (scale_i > 0.0) ? (err_i / scale_i) : 0.0;
-    const double ratio_h = (scale_h > 0.0) ? (err_h / scale_h) : 0.0;
-    const double ratio_j = (scale_j > 0.0) ? (err_j / scale_j) : 0.0;
-    const double err_ratio = std::max(ratio_h, std::max(ratio_i, ratio_j));
-
-    if (!std::isfinite(err_ratio)) {
-      solver_ok = false;
-      break;
-    }
-
-    if (err_ratio <= 1.0) {
-      state = half_2;
-      x += h_step;
-      double grow =
-          (err_ratio <= 1e-12)
-              ? 2.0
-              : std::min(2.0, std::max(1.1, 0.9 * std::pow(err_ratio, -0.2)));
-      h_step *= grow;
-    } else {
-      double shrink = std::max(0.1, 0.9 * std::pow(err_ratio, -0.25));
-      h_step *= shrink;
-      if (h_step < t * 1e-12) {
-        solver_ok = false;
-        break;
-      }
-    }
-  }
-
-  double adaptive_val = 0.0;
-  if (solver_ok && finalize_state(state, adaptive_val)) {
-    return adaptive_val;
-  }
-
-  double safe_val = 0.0;
-  if (solve_depth3_fixed_rk4(96, safe_val)) {
-    return safe_val;
-  }
-  return clamp_probability(FA_t);
-}
-
-bool eval_optimized_linear_guard_chain_ode(const GuardEvalInput &input,
-                                           const LinearGuardChain &chain,
-                                           double t,
-                                           const IntegrationSettings &settings,
-                                           double &out_cdf) {
-  const std::size_t depth = chain.reference_indices.size();
-  if (!chain.valid || depth < 1 || chain.leaf_blocker_idx < 0 ||
-      !std::isfinite(t) || t <= 0.0) {
-    return false;
-  }
-
-  if (depth == 3u) {
-    out_cdf = eval_optimized_depth3(input, chain.reference_indices[0],
-                                    chain.reference_indices[1],
-                                    chain.reference_indices[2],
-                                    chain.leaf_blocker_idx, t, settings);
-    if (std::isfinite(out_cdf)) {
-      out_cdf = clamp_probability(out_cdf);
-      return true;
-    }
-    out_cdf = 0.0;
-  }
-
-  std::vector<FastEventInfo> ref_infos(depth);
-  std::vector<const FastEventInfo *> ref_info_ptrs(depth, nullptr);
-  std::vector<bool> ref_density_ok(depth, false);
-  for (std::size_t i = 0; i < depth; ++i) {
-    if (fast_event_info_dense_idx(input, chain.reference_indices[i], ref_infos[i])) {
-      ref_info_ptrs[i] = &ref_infos[i];
-      ref_density_ok[i] = fast_event_density_supported(input, ref_infos[i]);
-    }
-  }
-  FastEventInfo leaf_info;
-  const FastEventInfo *leaf_info_ptr =
-      fast_event_info_dense_idx(input, chain.leaf_blocker_idx, leaf_info)
-          ? &leaf_info
-          : nullptr;
-
-  const std::size_t value_width = depth + 1; // refs + leaf survival
-  constexpr int kCacheCapacity = 48;
-  std::vector<double> cache_x(static_cast<std::size_t>(kCacheCapacity), 0.0);
-  std::vector<double> cache_vals(
-      static_cast<std::size_t>(kCacheCapacity) * value_width, 0.0);
-  int cache_used = 0;
-  int cache_next = 0;
-  std::vector<double> eval_vals(value_width, 0.0);
-  std::vector<double> batch_shifted;
-  std::vector<double> batch_values;
-
-  auto cache_find_slot = [&](double x) -> int {
-    for (int i = 0; i < cache_used; ++i) {
-      if (cache_x[static_cast<std::size_t>(i)] == x) {
-        return i;
-      }
-    }
-    return -1;
-  };
-
-  auto cache_acquire_slot = [&]() -> int {
-    if (cache_used < kCacheCapacity) {
-      return cache_used++;
-    }
-    int slot = cache_next;
-    cache_next = (cache_next + 1) % kCacheCapacity;
-    return slot;
-  };
-
-  auto prefill_chain_values = [&](const double *xs_in, std::size_t xs_count) {
-    constexpr std::size_t kPendingCapacity = 4;
-    double pending_x[kPendingCapacity];
-    int pending_slot[kPendingCapacity];
-    std::size_t pending_count = 0;
-    for (std::size_t xi = 0; xi < xs_count; ++xi) {
-      const double x = xs_in[xi];
-      if (!std::isfinite(x) || x < 0.0) {
-        continue;
-      }
-      if (cache_find_slot(x) >= 0) {
-        continue;
-      }
-      bool seen_pending = false;
-      for (std::size_t pi = 0; pi < pending_count; ++pi) {
-        if (pending_x[pi] == x) {
-          seen_pending = true;
-          break;
-        }
-      }
-      if (seen_pending) {
-        continue;
-      }
-      if (pending_count >= kPendingCapacity) {
-        break;
-      }
-      const int slot = cache_acquire_slot();
-      cache_x[static_cast<std::size_t>(slot)] = x;
-      pending_x[pending_count] = x;
-      pending_slot[pending_count] = slot;
-      ++pending_count;
-    }
-    if (pending_count == 0) {
-      return;
-    }
-
-    const std::size_t m = pending_count;
-    if (batch_shifted.size() != m) {
-      batch_shifted.resize(m);
-      batch_values.resize(m);
-    }
-    for (std::size_t i = 0; i < depth; ++i) {
-      const FastEventInfo *info_ptr = ref_info_ptrs[i];
-      if (info_ptr && ref_density_ok[i]) {
+    for (std::size_t i = 0; i < depth_; ++i) {
+      const FastEventInfo *info_ptr = ref_info_ptrs_[i];
+      if (info_ptr && ref_density_ok_[i]) {
         const FastEventInfo &info = *info_ptr;
         const double onset_eff = total_onset_with_t0(info.onset, info.cfg);
         const double success_prob = clamp(1.0 - info.q, 0.0, 1.0);
-        for (std::size_t j = 0; j < m; ++j) {
-          batch_shifted[j] = pending_x[j] - onset_eff;
+        for (std::size_t g = 0; g < grid_points; ++g) {
+          batch_shifted_[g] = grid_x_value(g, h) - onset_eff;
         }
         uuber::eval_pdf_vec(info.cfg.code, info.cfg.p1, info.cfg.p2, info.cfg.p3,
-                            batch_shifted.data(), batch_shifted.size(),
-                            batch_values.data());
-        for (std::size_t j = 0; j < m; ++j) {
+                            batch_shifted_.data(), grid_points,
+                            batch_values_.data());
+        for (std::size_t g = 0; g < grid_points; ++g) {
           double dens = 0.0;
-          if (info.component_ok && success_prob > 0.0 &&
-              pending_x[j] >= onset_eff) {
-            dens = success_prob * safe_density(batch_values[j]);
+          const double x = grid_x_value(g, h);
+          if (info.component_ok && success_prob > 0.0 && x >= onset_eff) {
+            dens = success_prob * safe_density(batch_values_[g]);
           }
-          const std::size_t base =
-              static_cast<std::size_t>(pending_slot[j]) * value_width;
-          cache_vals[base + i] = dens;
+          double *vals = grid_slot(g);
+          vals[i] = dens;
         }
       } else {
-        for (std::size_t j = 0; j < m; ++j) {
+        for (std::size_t g = 0; g < grid_points; ++g) {
+          const double x = grid_x_value(g, h);
           NodeEvalResult ref_eval = eval_node_with_forced_dense_bits(
-              input.ctx, chain.reference_indices[i], pending_x[j],
-              input.component_idx, EvalNeed::kDensity, input.trial_params,
-              input.trial_type_key, input.exact_source_times,
-              input.source_time_bounds, input.forced_scope_filter,
-              input.forced_complete_bits, input.forced_complete_bits != nullptr,
-              input.forced_survive_bits, input.forced_survive_bits != nullptr);
+              input_.ctx, chain_.reference_indices[i], x,
+              input_.component_idx, EvalNeed::kDensity, input_.trial_params,
+              input_.trial_type_key, input_.exact_source_times,
+              input_.source_time_bounds, input_.forced_scope_filter,
+              input_.forced_complete_bits,
+              input_.forced_complete_bits != nullptr, input_.forced_survive_bits,
+              input_.forced_survive_bits != nullptr);
           double dens = safe_density(ref_eval.density);
           if (!std::isfinite(dens) || dens <= 0.0) {
             dens = 0.0;
           }
-          const std::size_t base =
-              static_cast<std::size_t>(pending_slot[j]) * value_width;
-          cache_vals[base + i] = dens;
+          double *vals = grid_slot(g);
+          vals[i] = dens;
         }
       }
     }
 
-    if (leaf_info_ptr) {
-      const FastEventInfo &info = *leaf_info_ptr;
+    if (leaf_info_ptr_) {
+      const FastEventInfo &info = *leaf_info_ptr_;
       const double onset_eff = total_onset_with_t0(info.onset, info.cfg);
       const double success_prob = clamp(1.0 - info.q, 0.0, 1.0);
-      for (std::size_t j = 0; j < m; ++j) {
-        batch_shifted[j] = pending_x[j] - onset_eff;
+      for (std::size_t g = 0; g < grid_points; ++g) {
+        batch_shifted_[g] = grid_x_value(g, h) - onset_eff;
       }
       uuber::eval_cdf_vec(info.cfg.code, info.cfg.p1, info.cfg.p2, info.cfg.p3,
-                          batch_shifted.data(), batch_shifted.size(),
-                          batch_values.data());
-      for (std::size_t j = 0; j < m; ++j) {
+                          batch_shifted_.data(), grid_points,
+                          batch_values_.data());
+      for (std::size_t g = 0; g < grid_points; ++g) {
         double surv = 1.0;
+        const double x = grid_x_value(g, h);
         if (!info.component_ok) {
           surv = 1.0;
-        } else if (pending_x[j] >= onset_eff) {
-          double cdf = clamp_probability(batch_values[j]);
+        } else if (x >= onset_eff) {
+          const double cdf = clamp_probability(batch_values_[g]);
           surv = info.q + success_prob * (1.0 - cdf);
         }
-        const std::size_t base =
-            static_cast<std::size_t>(pending_slot[j]) * value_width;
-        cache_vals[base + depth] = clamp_probability(surv);
+        double *vals = grid_slot(g);
+        vals[depth_] = clamp_probability(surv);
       }
     } else {
-      for (std::size_t j = 0; j < m; ++j) {
+      for (std::size_t g = 0; g < grid_points; ++g) {
+        const double x = grid_x_value(g, h);
         NodeEvalResult leaf_eval = eval_node_with_forced_dense_bits(
-            input.ctx, chain.leaf_blocker_idx, pending_x[j],
-            input.component_idx, EvalNeed::kSurvival, input.trial_params,
-            input.trial_type_key, input.exact_source_times,
-            input.source_time_bounds, input.forced_scope_filter,
-            input.forced_complete_bits, input.forced_complete_bits != nullptr,
-            input.forced_survive_bits, input.forced_survive_bits != nullptr);
-        double leaf_surv = clamp_probability(leaf_eval.survival);
-        const std::size_t base =
-            static_cast<std::size_t>(pending_slot[j]) * value_width;
-        cache_vals[base + depth] = clamp_probability(leaf_surv);
+            input_.ctx, chain_.leaf_blocker_idx, x,
+            input_.component_idx, EvalNeed::kSurvival, input_.trial_params,
+            input_.trial_type_key, input_.exact_source_times,
+            input_.source_time_bounds, input_.forced_scope_filter,
+            input_.forced_complete_bits, input_.forced_complete_bits != nullptr,
+            input_.forced_survive_bits, input_.forced_survive_bits != nullptr);
+        const double leaf_surv = clamp_probability(leaf_eval.survival);
+        double *vals = grid_slot(g);
+        vals[depth_] = clamp_probability(leaf_surv);
       }
     }
-  };
+    return true;
+  }
 
-  auto eval_chain_values = [&](double x) -> const double * {
-    int slot = cache_find_slot(x);
-    if (slot < 0) {
-      prefill_chain_values(&x, 1);
-      slot = cache_find_slot(x);
-    }
-    if (slot < 0) {
-      std::fill(eval_vals.begin(), eval_vals.end(), 0.0);
-      eval_vals[depth] = 1.0;
-      return eval_vals.data();
-    }
-    const std::size_t base = static_cast<std::size_t>(slot) * value_width;
-    return cache_vals.data() + base;
-  };
-
-  std::vector<double> k1(depth, 0.0), k2(depth, 0.0), k3(depth, 0.0),
-      k4(depth, 0.0), tmp(depth, 0.0);
-
-  auto deriv = [&](double x, const std::vector<double> &state,
-                   std::vector<double> &dst) {
-    std::fill(dst.begin(), dst.end(), 0.0);
-    const double *vals = eval_chain_values(x);
-    for (std::size_t i = depth; i-- > 0;) {
+  void deriv_from_vals(const double *vals, const ChainState &state, ChainState &dst) {
+    dst.fill(0.0);
+    for (std::size_t i = depth_; i-- > 0;) {
       const double f_ref = vals[i];
       if (!std::isfinite(f_ref) || f_ref <= 0.0) {
         continue;
       }
-      double s_down = (i + 1 < depth) ? clamp_probability(1.0 - state[i + 1])
-                                      : vals[depth];
+      const double s_down = (i + 1 < depth_)
+                                ? clamp_probability(1.0 - state[i + 1])
+                                : vals[depth_];
       if (!std::isfinite(s_down) || s_down <= 0.0) {
         continue;
       }
@@ -4306,208 +3873,109 @@ bool eval_optimized_linear_guard_chain_ode(const GuardEvalInput &input,
         dst[i] = val;
       }
     }
-  };
+  }
 
-  auto rk4_step = [&](double x, const std::vector<double> &state, double h,
-                      std::vector<double> &out) {
-    double stage_x[3] = {x, x + 0.5 * h, x + h};
-    prefill_chain_values(stage_x, 3);
-    deriv(x, state, k1);
-    for (std::size_t i = 0; i < depth; ++i) {
-      tmp[i] = state[i] + 0.5 * h * k1[i];
+  void rk4_step(const ChainState &state, double h, const double *vals_x,
+                const double *vals_half, const double *vals_next,
+                ChainState &out) {
+    out.fill(0.0);
+    deriv_from_vals(vals_x, state, k1_);
+    for (std::size_t i = 0; i < depth_; ++i) {
+      tmp_[i] = state[i] + 0.5 * h * k1_[i];
     }
-    deriv(x + 0.5 * h, tmp, k2);
-    for (std::size_t i = 0; i < depth; ++i) {
-      tmp[i] = state[i] + 0.5 * h * k2[i];
+    deriv_from_vals(vals_half, tmp_, k2_);
+    for (std::size_t i = 0; i < depth_; ++i) {
+      tmp_[i] = state[i] + 0.5 * h * k2_[i];
     }
-    deriv(x + 0.5 * h, tmp, k3);
-    for (std::size_t i = 0; i < depth; ++i) {
-      tmp[i] = state[i] + h * k3[i];
+    deriv_from_vals(vals_half, tmp_, k3_);
+    for (std::size_t i = 0; i < depth_; ++i) {
+      tmp_[i] = state[i] + h * k3_[i];
     }
-    deriv(x + h, tmp, k4);
-    for (std::size_t i = 0; i < depth; ++i) {
-      const double y_next = state[i] + (h / 6.0) *
-                                           (k1[i] + 2.0 * k2[i] +
-                                            2.0 * k3[i] + k4[i]);
-      out[i] = y_next;
+    deriv_from_vals(vals_next, tmp_, k4_);
+    for (std::size_t i = 0; i < depth_; ++i) {
+      out[i] = state[i] + (h / 6.0) *
+                            (k1_[i] + 2.0 * k2_[i] + 2.0 * k3_[i] + k4_[i]);
     }
-  };
+  }
 
-  auto finalize_state = [&](const std::vector<double> &state_in,
-                            double &out_val) -> bool {
-    if (state_in.empty()) {
-      return false;
-    }
-    const double cdf = state_in.front();
+  bool finalize_state(const ChainState &state, double &out_val) const {
+    const double cdf = state.front();
     if (!std::isfinite(cdf)) {
       return false;
     }
     out_val = clamp_probability(cdf);
     return std::isfinite(out_val);
-  };
+  }
 
-  const double tol_abs = std::max(1e-8, settings.abs_tol);
-  const double tol_rel = std::max(1e-6, settings.rel_tol);
-
-  auto solve_fixed_rk4 = [&](int n_steps, double &out_val) -> bool {
-    if (n_steps < 1 || !std::isfinite(t) || t <= 0.0) {
+  bool solve_fixed_rk4(int n_steps, double &out_val) {
+    if (n_steps < 1 || !std::isfinite(t_) || t_ <= 0.0) {
       return false;
     }
-    const double h = t / static_cast<double>(n_steps);
+    const double h = t_ / static_cast<double>(n_steps);
     if (!std::isfinite(h) || h <= 0.0) {
       return false;
     }
-    std::vector<double> fixed_state(depth, 0.0), fixed_next(depth, 0.0);
-    double x_fixed = 0.0;
-    for (int i = 0; i < n_steps; ++i) {
-      rk4_step(x_fixed, fixed_state, h, fixed_next);
-      fixed_state.swap(fixed_next);
-      x_fixed += h;
-      bool all_finite = true;
-      for (double v : fixed_state) {
-        if (!std::isfinite(v)) {
-          all_finite = false;
-          break;
-        }
-      }
-      if (!all_finite) {
-        return false;
-      }
-    }
-    return finalize_state(fixed_state, out_val);
-  };
-
-  auto solve_with_odeint = [&](double &out_val) -> bool {
-#if UUBER_HAVE_BOOST_ODEINT
-    using state_type = std::vector<double>;
-    using stepper_type = boost::numeric::odeint::runge_kutta_dopri5<state_type>;
-    state_type ode_state(depth, 0.0);
-    auto system = [&](const state_type &state_in, state_type &dst,
-                      const double x_now) {
-      if (dst.size() != depth) {
-        dst.assign(depth, 0.0);
-      } else {
-        std::fill(dst.begin(), dst.end(), 0.0);
-      }
-      const double *vals = eval_chain_values(x_now);
-      for (std::size_t i = depth; i-- > 0;) {
-        const double f_ref = vals[i];
-        if (!std::isfinite(f_ref) || f_ref <= 0.0) {
-          continue;
-        }
-        double s_down =
-            (i + 1 < depth) ? clamp_probability(1.0 - state_in[i + 1]) : vals[depth];
-        if (!std::isfinite(s_down) || s_down <= 0.0) {
-          continue;
-        }
-        const double val = f_ref * s_down;
-        if (std::isfinite(val) && val > 0.0) {
-          dst[i] = val;
-        }
-      }
-    };
-    try {
-      const double dt_init = t / std::max(16.0, 2.0 * static_cast<double>(depth));
-      auto controlled =
-          boost::numeric::odeint::make_controlled(tol_abs, tol_rel, stepper_type{});
-      boost::numeric::odeint::integrate_adaptive(
-          controlled, system, ode_state, 0.0, t,
-          (std::isfinite(dt_init) && dt_init > 0.0) ? dt_init : t);
-    } catch (...) {
+    if (!precompute_uniform_grid_values(n_steps, h)) {
       return false;
     }
-    return finalize_state(ode_state, out_val);
-#else
-    (void)out_val;
-    return false;
-#endif
-  };
-
-  // Fast fixed RK4 is best for very shallow chains.
-  if (depth <= 2u) {
-    if (solve_fixed_rk4(96, out_cdf)) {
-      return true;
-    }
-  }
-
-  // For generalized linear chains, ODEInt was consistently faster in profiling.
-  if (depth >= 3u && solve_with_odeint(out_cdf)) {
-    return true;
-  }
-  return false;
-}
-
-[[maybe_unused]] double eval_guard_cdf_kernel_ode(
-    const GuardEvalInput &input, double t,
-    const IntegrationSettings &settings) {
-  if (!std::isfinite(t)) {
-    return 1.0;
-  }
-  if (t <= 0.0) {
-    return 0.0;
-  }
-
-  auto deriv = [&](double x, double y) -> double {
-    (void)y;
-    double d = guard_density_internal(input, x, settings);
-    return (std::isfinite(d) && d > 0.0) ? d : 0.0;
-  };
-
-  auto rk4_step = [&](double x, double y, double h) -> double {
-    const double k1 = deriv(x, y);
-    const double k2 = deriv(x + 0.5 * h, y + 0.5 * h * k1);
-    const double k3 = deriv(x + 0.5 * h, y + 0.5 * h * k2);
-    const double k4 = deriv(x + h, y + h * k3);
-    const double y_next = y + (h / 6.0) * (k1 + 2.0 * k2 + 2.0 * k3 + k4);
-    return clamp_probability(y_next);
-  };
-
-  const double tol_abs = std::max(1e-10, settings.abs_tol * 1e-2);
-  const double tol_rel = std::max(1e-8, settings.rel_tol * 1e-2);
-  const int max_steps = std::max(4096, settings.max_depth * 512);
-  int steps = 0;
-  double x = 0.0;
-  double y = 0.0;
-  double h_step = t / 24.0;
-  if (!std::isfinite(h_step) || h_step <= 0.0) {
-    h_step = t;
-  }
-
-  while (x < t && steps < max_steps) {
-    ++steps;
-    if (x + h_step > t) {
-      h_step = t - x;
-    }
-    if (!std::isfinite(h_step) || h_step <= 0.0) {
-      break;
-    }
-    const double full = rk4_step(x, y, h_step);
-    const double half1 = rk4_step(x, y, 0.5 * h_step);
-    const double half2 = rk4_step(x + 0.5 * h_step, half1, 0.5 * h_step);
-    const double err = std::abs(half2 - full);
-    const double scale =
-        tol_abs + tol_rel * std::max(std::abs(half2), std::abs(full));
-    const double err_ratio = (scale > 0.0) ? (err / scale) : 0.0;
-    if (!std::isfinite(err_ratio)) {
-      break;
-    }
-    if (err_ratio <= 1.0) {
-      y = clamp_probability(half2);
-      x += h_step;
-      double grow =
-          (err_ratio <= 1e-12)
-              ? 2.0
-              : std::min(2.0, std::max(1.1, 0.9 * std::pow(err_ratio, -0.2)));
-      h_step *= grow;
-    } else {
-      double shrink = std::max(0.1, 0.9 * std::pow(err_ratio, -0.25));
-      h_step *= shrink;
-      if (h_step < t * 1e-12) {
-        break;
+    ChainState state{};
+    ChainState next{};
+    for (int i = 0; i < n_steps; ++i) {
+      const std::size_t g0 = static_cast<std::size_t>(2 * i);
+      const double *vals_x = grid_slot(g0);
+      const double *vals_half = grid_slot(g0 + 1u);
+      const double *vals_next = grid_slot(g0 + 2u);
+      rk4_step(state, h, vals_x, vals_half, vals_next, next);
+      state = next;
+      for (std::size_t j = 0; j < depth_; ++j) {
+        if (!std::isfinite(state[j])) {
+          return false;
+        }
       }
     }
+    return finalize_state(state, out_val);
   }
-  return clamp_probability(y);
+
+  const GuardEvalInput &input_;
+  const LinearGuardChain &chain_;
+  double t_{0.0};
+  CanonicalIntegrationSettings canonical_;
+  std::size_t depth_{0u};
+  std::size_t value_width_{0u};
+
+  std::vector<FastEventInfo> ref_infos_;
+  std::array<const FastEventInfo *, MaxDepth> ref_info_ptrs_{};
+  std::array<bool, MaxDepth> ref_density_ok_{};
+  FastEventInfo leaf_info_{};
+  const FastEventInfo *leaf_info_ptr_{nullptr};
+
+  std::vector<double> grid_vals_;
+  std::vector<double> batch_shifted_;
+  std::vector<double> batch_values_;
+
+  ChainState k1_{};
+  ChainState k2_{};
+  ChainState k3_{};
+  ChainState k4_{};
+  ChainState tmp_{};
+};
+
+bool eval_optimized_linear_guard_chain_ode(
+    const GuardEvalInput &input, const LinearGuardChain &chain, double t,
+    const CanonicalIntegrationSettings &canonical, double &out_cdf) {
+  const std::size_t depth = chain.reference_indices.size();
+  if (!chain.valid || depth < 1u || chain.leaf_blocker_idx < 0 ||
+      !std::isfinite(t) || t <= 0.0) {
+    return false;
+  }
+  if (depth > kLinearGuardChainMaxDepth) {
+    Rcpp::stop("Linear guard chain depth %d exceeds maximum supported depth %d",
+               static_cast<int>(depth),
+               static_cast<int>(kLinearGuardChainMaxDepth));
+  }
+  LinearChainIntegrator<kLinearGuardChainMaxDepth> integrator(input, chain, t,
+                                                              canonical);
+  return integrator.solve(out_cdf);
 }
 
 double guard_cdf_internal(const GuardEvalInput &input, double t,
@@ -4518,13 +3986,15 @@ double guard_cdf_internal(const GuardEvalInput &input, double t,
   if (t <= 0.0) {
     return 0.0;
   }
+  const CanonicalIntegrationSettings canonical =
+      canonicalize_integration_settings(settings);
 
   const int chain_depth_limit = static_cast<int>(input.ctx.ir.nodes.size());
   LinearGuardChain chain =
       detect_linear_guard_chain(input.ctx, input.node_idx, chain_depth_limit);
   if (chain.valid) {
     double cdf_chain = 0.0;
-    if (eval_optimized_linear_guard_chain_ode(input, chain, t, settings,
+    if (eval_optimized_linear_guard_chain_ode(input, chain, t, canonical,
                                               cdf_chain)) {
       return cdf_chain;
     }
@@ -4532,8 +4002,8 @@ double guard_cdf_internal(const GuardEvalInput &input, double t,
   auto integrand = [&](double u) -> double {
     return guard_density_internal(input, u, settings);
   };
-  double val = uuber::integrate_boost_fn(integrand, 0.0, t, settings.rel_tol,
-                                         settings.abs_tol, settings.max_depth);
+  double val = uuber::integrate_boost_fn(integrand, 0.0, t, canonical.rel_tol,
+                                         canonical.abs_tol, canonical.max_depth);
   if (!std::isfinite(val) || val < 0.0) {
     val = 0.0;
   }
@@ -5452,28 +4922,9 @@ double native_outcome_probability_bits_impl_idx(
           rel_tol, abs_tol, max_depth,
           include_na_donors, outcome_idx_context);
     }
-    double integral = 0.0;
-    if (std::isfinite(upper)) {
-      integral = uuber::integrate_boost_fn(
-          [&](double u) { return integrand(u, params_ptr); }, 0.0, upper,
-          rel_tol, abs_tol, max_depth);
-    } else {
-      auto transformed = [&](double x) -> double {
-        if (x <= 0.0)
-          return 0.0;
-        if (x >= 1.0)
-          x = std::nextafter(1.0, 0.0);
-        double t = x / (1.0 - x);
-        double jac = 1.0 / ((1.0 - x) * (1.0 - x));
-        double val = integrand(t, params_ptr);
-        if (!std::isfinite(val) || val <= 0.0)
-          return 0.0;
-        double out = val * jac;
-        return std::isfinite(out) ? out : 0.0;
-      };
-      integral = uuber::integrate_boost_fn(transformed, 0.0, 1.0, rel_tol,
-                                           abs_tol, max_depth);
-    }
+    double integral = uuber::integrate_boost_fn_0_to_upper(
+        [&](double u) { return integrand(u, params_ptr); }, upper, rel_tol,
+        abs_tol, max_depth, true);
     if (!std::isfinite(integral))
       integral = 0.0;
     return clamp_probability(integral);

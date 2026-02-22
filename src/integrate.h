@@ -339,6 +339,44 @@ inline double integrate_boost_fn(Fn&& integrand,
                               max_depth);
 }
 
+// Integrate on [0, upper], handling upper = +Inf by x = t / (1 + t) transform.
+// If nonnegative_integrand is true, negative values are clamped to 0.
+template <typename Fn>
+inline double integrate_boost_fn_0_to_upper(Fn&& integrand,
+                                            double upper,
+                                            double rel_tol,
+                                            double abs_tol,
+                                            int max_depth,
+                                            bool nonnegative_integrand = false) {
+  if (!std::isfinite(upper)) {
+    auto transformed = [&](double x) -> double {
+      if (x <= 0.0) return 0.0;
+      if (x >= 1.0) x = std::nextafter(1.0, 0.0);
+      const double one_minus_x = 1.0 - x;
+      const double t = x / one_minus_x;
+      const double jac = 1.0 / (one_minus_x * one_minus_x);
+      double val = integrand(t);
+      if (!std::isfinite(val)) return 0.0;
+      if (nonnegative_integrand && val <= 0.0) return 0.0;
+      double out = val * jac;
+      if (!std::isfinite(out)) return 0.0;
+      if (nonnegative_integrand && out <= 0.0) return 0.0;
+      return out;
+    };
+    double res =
+        integrate_boost_fn(transformed, 0.0, 1.0, rel_tol, abs_tol, max_depth);
+    if (!std::isfinite(res)) return 0.0;
+    if (nonnegative_integrand && res < 0.0) return 0.0;
+    return res;
+  }
+  if (upper <= 0.0) return 0.0;
+  double res = integrate_boost_fn(
+      std::forward<Fn>(integrand), 0.0, upper, rel_tol, abs_tol, max_depth);
+  if (!std::isfinite(res)) return 0.0;
+  if (nonnegative_integrand && res < 0.0) return 0.0;
+  return res;
+}
+
 // Variant using a lower-order Gauss-Kronrod rule (21-point) to reduce per-interval evaluations.
 
 } // namespace uuber

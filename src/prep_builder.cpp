@@ -99,6 +99,43 @@ std::string extract_string(SEXP obj) {
   }
 }
 
+void validate_guard_transition_completeness(const NativeContext &ctx) {
+  const IrContext &ir = ctx.ir;
+  const KernelStateGraph &graph = ctx.kernel_state_graph;
+  if (graph.node_guard_transition_idx.size() != ir.nodes.size()) {
+    Rcpp::stop("IR guard transition index map size mismatch");
+  }
+  for (int node_idx = 0; node_idx < static_cast<int>(ir.nodes.size());
+       ++node_idx) {
+    const IrNode &node = ir.nodes[static_cast<std::size_t>(node_idx)];
+    if (node.source_id_count <= 0) {
+      continue;
+    }
+    const int tr_idx =
+        graph.node_guard_transition_idx[static_cast<std::size_t>(node_idx)];
+    if (tr_idx < 0 ||
+        tr_idx >= static_cast<int>(graph.guard_transitions.size())) {
+      Rcpp::stop(
+          "IR guard transition missing for node_id=%d node_idx=%d source_count=%d",
+          node.node_id, node_idx, node.source_id_count);
+    }
+    const KernelGuardTransition &tr =
+        graph.guard_transitions[static_cast<std::size_t>(tr_idx)];
+    if (tr.node_idx != node_idx) {
+      Rcpp::stop(
+          "IR guard transition node mismatch for node_id=%d node_idx=%d source_count=%d",
+          node.node_id, node_idx, node.source_id_count);
+    }
+    if (tr.source_mask_begin < 0 || tr.source_mask_count <= 0 ||
+        tr.source_mask_begin + tr.source_mask_count >
+            static_cast<int>(ir.node_source_masks.size())) {
+      Rcpp::stop(
+          "IR guard transition mask invalid for node_id=%d node_idx=%d source_count=%d",
+          node.node_id, node_idx, node.source_id_count);
+    }
+  }
+}
+
 IrNodeOp parse_node_op(const std::string &kind, int pool_idx) {
   if (kind == "event") {
     return (pool_idx >= 0) ? IrNodeOp::EventPool : IrNodeOp::EventAcc;
@@ -1624,6 +1661,7 @@ build_context_from_proto(const NativePrepProto &proto) {
         .trigger_transition_count[static_cast<std::size_t>(tg)] =
         transition_count;
   }
+  validate_guard_transition_completeness(*ctx);
   ctx->kernel_state_graph.valid = ctx->kernel_program.valid;
   return ctx;
 }

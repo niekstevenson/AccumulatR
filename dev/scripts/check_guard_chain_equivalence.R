@@ -82,14 +82,14 @@ build_chain_case <- function(depth, rep_idx) {
 }
 
 depth_min <- as.integer(Sys.getenv("ACCUMULATR_EQ_DEPTH_MIN", "2"))
-depth_max <- as.integer(Sys.getenv("ACCUMULATR_EQ_DEPTH_MAX", "10"))
+depth_max <- as.integer(Sys.getenv("ACCUMULATR_EQ_DEPTH_MAX", "8"))
 reps_per_depth <- as.integer(Sys.getenv("ACCUMULATR_EQ_REPS", "4"))
 n_trials <- as.integer(Sys.getenv("ACCUMULATR_EQ_TRIALS", "500"))
 run_ll <- Sys.getenv("ACCUMULATR_EQ_RUN_LL", "1") != "0"
 run_prob <- Sys.getenv("ACCUMULATR_EQ_RUN_PROB", "1") != "0"
 
 depth_min <- if (is.na(depth_min)) 2L else depth_min
-depth_max <- if (is.na(depth_max)) 10L else depth_max
+depth_max <- if (is.na(depth_max)) 8L else depth_max
 if (depth_max < depth_min) {
   stop("depth_max must be >= depth_min")
 }

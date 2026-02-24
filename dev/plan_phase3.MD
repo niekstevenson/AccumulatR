@@ -5,9 +5,6 @@
 2. Complete Phase 6 (`single fused kernel execution framework`).
 3. Preserve correctness (`max |delta loglik| <= 1e-4`) while improving speed.
 
-<<<<<<< ours
-## Status Snapshot (2026-02-22)
-<<<<<<< ours
 1. Step 1 (bitset-only forced state): in hot evaluator paths; set-based forced state is no longer used in `src/distributions.cpp` hot loops.
 2. Step 2 (unified kernel entry): observed/ranked/nonresponse now execute through the shared sequence/mass kernel contribution surface, and duplicated sequence-density entry wrappers were consolidated.
 3. Step 3 (guard/competitor transition compilation):  dense guard transition masks are used, but competitor/guard special cases still branch by structure.

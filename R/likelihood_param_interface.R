@@ -485,6 +485,8 @@ build_likelihood_context <- function(structure,
   n_trials <- nrow(params_mat) / n_acc
   p_cols <- grep("^p[0-9]+$", colnames(params_mat), value = TRUE)
   if (length(p_cols) == 0L) stop("Parameter matrix must include p1.. columns")
+  p_cols <- p_cols[order(suppressWarnings(as.integer(sub("^p", "", p_cols))))]
+  p_cols <- p_cols[seq_len(min(length(p_cols), 8L))]
   dist_param_list <- lapply(acc_defs, function(acc) dist_param_names(acc$dist))
 
   # Component leaders for weight params
@@ -529,6 +531,17 @@ build_likelihood_context <- function(structure,
     for (i in seq_len(n_acc)) {
       acc <- acc_defs[[acc_ids[[i]]]] %||% list()
       dist_params <- dist_param_list[[i]] %||% character(0)
+      if (length(dist_params) > length(p_cols)) {
+        stop(
+          sprintf(
+            "Accumulator '%s' requires %d distribution params, but matrix has only %d p-slots",
+            acc_ids[[i]],
+            length(dist_params),
+            length(p_cols)
+          ),
+          call. = FALSE
+        )
+      }
       p_vals <- params_mat[row_idx, p_cols][seq_along(dist_params)]
       row <- list(
         trial = t,
@@ -827,33 +840,59 @@ build_likelihood_context <- function(structure,
   onset <- as.numeric(df$onset %||% 0)
   q <- as.numeric(df$q %||% 0)
   t0 <- as.numeric(df$t0 %||% 0)
-  shared_id <- if ("shared_trigger_id" %in% names(df)) as.character(df$shared_trigger_id) else rep(NA_character_, n)
   shared_q <- if ("shared_trigger_q" %in% names(df)) as.numeric(df$shared_trigger_q) else rep(NA_real_, n)
+  p_mat <- matrix(NA_real_, nrow = n, ncol = 8L)
 
-  # Helper: per-row first-non-NA across candidate columns
-  pick_slot <- function(candidates) {
-    out <- rep(NA_real_, n)
-    for (nm in candidates) {
-      if (is.null(nm) || !nm %in% names(df)) next
-      col <- as.numeric(df[[nm]])
-      update_mask <- is.na(out) & !is.na(col)
-      if (any(update_mask)) {
-        out[update_mask] <- col[update_mask]
-      }
-      if (all(!is.na(out))) break
-    }
-    out
+  # Prefer explicit p-slot columns first.
+  for (slot in seq_len(8L)) {
+    nm <- paste0("p", slot)
+    if (!nm %in% names(df)) next
+    p_mat[, slot] <- as.numeric(df[[nm]])
   }
 
-  # Slot priorities (t0 is always the first parameter column)
-  p1 <- pick_slot(c("p1", "meanlog", "shape", "mu"))
-  p2 <- pick_slot(c("p2", "sdlog", "rate", "sigma"))
-  p3 <- pick_slot(c("p3", "tau"))
+  # If dist is available, map named params to canonical p-slot order per row.
+  if ("dist" %in% names(df)) {
+    dvals <- tolower(as.character(df$dist))
+    dvals[is.na(dvals)] <- ""
+    for (i in seq_len(n)) {
+      d <- dvals[[i]]
+      if (!nzchar(d)) next
+      d_params <- dist_param_names(d)
+      if (length(d_params) == 0L) next
+      d_params <- d_params[seq_len(min(length(d_params), 8L))]
+      for (slot in seq_along(d_params)) {
+        if (!is.na(p_mat[i, slot])) next
+        nm <- d_params[[slot]]
+        if (!nm %in% names(df)) next
+        val <- suppressWarnings(as.numeric(df[[nm]][[i]]))
+        if (!is.na(val)) {
+          p_mat[i, slot] <- val
+        }
+      }
+    }
+  }
 
-  max_params <- 0L
-  if (!all(is.na(p1))) max_params <- max(max_params, 1L)
-  if (!all(is.na(p2))) max_params <- max(max_params, 2L)
-  if (!all(is.na(p3))) max_params <- max(max_params, 3L)
+  # Backward-compatible alias fill for rows lacking dist metadata.
+  fill_slot <- function(slot, candidates) {
+    if (slot < 1L || slot > ncol(p_mat)) return(invisible(NULL))
+    for (nm in candidates) {
+      if (!nm %in% names(df)) next
+      col <- as.numeric(df[[nm]])
+      mask <- is.na(p_mat[, slot]) & !is.na(col)
+      if (any(mask)) {
+        p_mat[mask, slot] <<- col[mask]
+      }
+    }
+    invisible(NULL)
+  }
+  fill_slot(1L, c("meanlog", "shape", "mu", "v"))
+  fill_slot(2L, c("sdlog", "rate", "sigma", "sv", "B"))
+  fill_slot(3L, c("tau", "A"))
+  fill_slot(4L, c("s"))
+
+  has_slot <- vapply(seq_len(8L), function(slot) any(!is.na(p_mat[, slot])), logical(1))
+  max_params <- if (any(has_slot)) max(which(has_slot)) else 0L
+  max_params <- as.integer(min(max_params, 8L))
 
   cols <- list(
     trial = trial,
@@ -863,9 +902,11 @@ build_likelihood_context <- function(structure,
     t0 = t0,
     shared_trigger_q = shared_q
   )
-  if (max_params >= 1L) cols$p1 <- p1
-  if (max_params >= 2L) cols$p2 <- p2
-  if (max_params >= 3L) cols$p3 <- p3
+  if (max_params >= 1L) {
+    for (slot in seq_len(max_params)) {
+      cols[[paste0("p", slot)]] <- p_mat[, slot]
+    }
+  }
 
   mat <- do.call(cbind, cols)
   storage.mode(mat) <- "double"

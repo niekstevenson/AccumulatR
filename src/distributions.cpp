@@ -56,6 +56,14 @@ Rcpp::NumericVector dist_exgauss_pdf(const Rcpp::NumericVector &x, double mu,
                                      double sigma, double tau);
 Rcpp::NumericVector dist_exgauss_cdf(const Rcpp::NumericVector &x, double mu,
                                      double sigma, double tau);
+Rcpp::NumericVector dist_lba_pdf(const Rcpp::NumericVector &x, double v,
+                                 double sv, double B, double A);
+Rcpp::NumericVector dist_lba_cdf(const Rcpp::NumericVector &x, double v,
+                                 double sv, double B, double A);
+Rcpp::NumericVector dist_rdm_pdf(const Rcpp::NumericVector &x, double v,
+                                 double B, double A, double s);
+Rcpp::NumericVector dist_rdm_cdf(const Rcpp::NumericVector &x, double v,
+                                 double B, double A, double s);
 
 // [[Rcpp::export]]
 SEXP native_context_build(SEXP prepSEXP) {
@@ -190,6 +198,7 @@ constexpr double kDefaultRelTol = 1e-5;
 constexpr double kDefaultAbsTol = 1e-6;
 constexpr int kDefaultMaxDepth = 12;
 constexpr int kOutcomeIdxNA = -2;
+constexpr double kLogPi = 1.1447298858494001741434; // log(pi)
 
 template <typename T> inline T clamp(T val, T lo, T hi) {
   if (!std::isfinite(val)) {
@@ -357,6 +366,204 @@ inline double exgauss_cdf_fast(double x, double mu, double sigma, double tau) {
   return clamp(val, 0.0, 1.0);
 }
 
+inline double lba_denom(double v, double sv) {
+  if (!std::isfinite(sv) || sv <= 0.0) {
+    return 0.0;
+  }
+  double denom = R::pnorm(v / sv, 0.0, 1.0, 1, 0);
+  if (!std::isfinite(denom) || denom < 1e-10) {
+    denom = 1e-10;
+  }
+  return denom;
+}
+
+inline double lba_pdf_fast(double x, double v, double sv, double B, double A) {
+  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(v) || !std::isfinite(sv) ||
+      sv <= 0.0 || !std::isfinite(B) || !std::isfinite(A)) {
+    return 0.0;
+  }
+  const double denom = lba_denom(v, sv);
+  if (!(denom > 0.0)) {
+    return 0.0;
+  }
+  double pdf = 0.0;
+  if (A > 1e-10) {
+    const double zs = x * sv;
+    if (!(zs > 0.0) || !std::isfinite(zs)) {
+      return 0.0;
+    }
+    const double cmz = B - x * v;
+    const double cz = cmz / zs;
+    const double cz_max = (cmz - A) / zs;
+    pdf = (v * (R::pnorm(cz, 0.0, 1.0, 1, 0) - R::pnorm(cz_max, 0.0, 1.0, 1, 0)) +
+           sv * (R::dnorm(cz_max, 0.0, 1.0, 0) - R::dnorm(cz, 0.0, 1.0, 0))) /
+          (A * denom);
+  } else {
+    pdf = R::dnorm(B / x, v, sv, 0) * B / (x * x * denom);
+  }
+  return safe_density(pdf);
+}
+
+inline double lba_cdf_fast(double x, double v, double sv, double B, double A) {
+  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(v) || !std::isfinite(sv) ||
+      sv <= 0.0 || !std::isfinite(B) || !std::isfinite(A)) {
+    return 0.0;
+  }
+  const double denom = lba_denom(v, sv);
+  if (!(denom > 0.0)) {
+    return 0.0;
+  }
+  double cdf = 0.0;
+  if (A > 1e-10) {
+    const double zs = x * sv;
+    if (!(zs > 0.0) || !std::isfinite(zs)) {
+      return 0.0;
+    }
+    const double cmz = B - x * v;
+    const double xx = cmz - A;
+    const double cz = cmz / zs;
+    const double cz_max = xx / zs;
+    cdf = (1.0 + (zs * (R::dnorm(cz_max, 0.0, 1.0, 0) - R::dnorm(cz, 0.0, 1.0, 0)) +
+                  xx * R::pnorm(cz_max, 0.0, 1.0, 1, 0) -
+                  cmz * R::pnorm(cz, 0.0, 1.0, 1, 0)) /
+                     A) /
+          denom;
+  } else {
+    cdf = R::pnorm(B / x, v, sv, 0, 0) / denom;
+  }
+  return clamp_probability(cdf);
+}
+
+inline double rdm_pigt0(double x, double k, double l) {
+  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(k) || !std::isfinite(l)) {
+    return 0.0;
+  }
+  if (std::fabs(l) < 1e-12) {
+    const double z = k / std::sqrt(x);
+    return clamp_probability(2.0 * (1.0 - R::pnorm(z, 0.0, 1.0, 1, 0)));
+  }
+  const double mu = k / l;
+  const double lambda = k * k;
+  const double p1 = 1.0 - R::pnorm(std::sqrt(lambda / x) * (1.0 + x / mu), 0.0,
+                                    1.0, 1, 0);
+  const double p2 = 1.0 - R::pnorm(std::sqrt(lambda / x) * (1.0 - x / mu), 0.0,
+                                    1.0, 1, 0);
+  const double part = std::exp(std::exp(std::log(2.0 * lambda) - std::log(mu)) +
+                               std::log(std::max(1e-300, p1)));
+  return clamp_probability(part + p2);
+}
+
+inline double rdm_digt0(double x, double k, double l) {
+  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(k) || !std::isfinite(l)) {
+    return 0.0;
+  }
+  const double lambda = k * k;
+  double e = 0.0;
+  if (l == 0.0) {
+    e = -0.5 * lambda / x;
+  } else {
+    const double mu = k / l;
+    e = -(lambda / (2.0 * x)) * ((x * x) / (mu * mu) - 2.0 * x / mu + 1.0);
+  }
+  return std::exp(e + 0.5 * std::log(lambda) -
+                  0.5 * std::log(2.0 * x * x * x * M_PI));
+}
+
+inline double rdm_pigt(double x, double k, double l, double a,
+                       double threshold = 1e-10) {
+  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(k) || !std::isfinite(l) ||
+      !std::isfinite(a)) {
+    return 0.0;
+  }
+  if (a < threshold) {
+    return rdm_pigt0(x, k, l);
+  }
+  const double sqt = std::sqrt(x);
+  const double lgt = std::log(x);
+  double cdf = 0.0;
+  if (l < threshold) {
+    const double t5a = 2.0 * R::pnorm((k + a) / sqt, 0.0, 1.0, 1, 0) - 1.0;
+    const double t5b = 2.0 * R::pnorm((-k - a) / sqt, 0.0, 1.0, 1, 0) - 1.0;
+    const double t6a =
+        -0.5 * ((k + a) * (k + a) / x - M_LN2 - kLogPi + lgt) - std::log(a);
+    const double t6b =
+        -0.5 * ((k - a) * (k - a) / x - M_LN2 - kLogPi + lgt) - std::log(a);
+    cdf = 1.0 + std::exp(t6a) - std::exp(t6b) +
+          ((-k + a) * t5a - (k - a) * t5b) / (2.0 * a);
+  } else {
+    const double t1a = std::exp(-0.5 * std::pow(k - a - x * l, 2.0) / x);
+    const double t1b = std::exp(-0.5 * std::pow(a + k - x * l, 2.0) / x);
+    const double t1 = std::exp(0.5 * (lgt - M_LN2 - kLogPi)) * (t1a - t1b);
+    const double t2a = std::exp(2.0 * l * (k - a) +
+                                R::pnorm(-(k - a + x * l) / sqt, 0.0, 1.0, 1, 1));
+    const double t2b = std::exp(2.0 * l * (k + a) +
+                                R::pnorm(-(k + a + x * l) / sqt, 0.0, 1.0, 1, 1));
+    const double t2 = a + (t2b - t2a) / (2.0 * l);
+    const double t4a =
+        2.0 * R::pnorm((k + a) / sqt - sqt * l, 0.0, 1.0, 1, 0) - 1.0;
+    const double t4b =
+        2.0 * R::pnorm((k - a) / sqt - sqt * l, 0.0, 1.0, 1, 0) - 1.0;
+    const double t4 = 0.5 * (x * l - a - k + 0.5 / l) * t4a +
+                      0.5 * (k - a - x * l - 0.5 / l) * t4b;
+    cdf = 0.5 * (t4 + t2 + t1) / a;
+  }
+  if (!std::isfinite(cdf) || cdf < 0.0) {
+    return 0.0;
+  }
+  return clamp_probability(cdf);
+}
+
+inline double rdm_digt(double x, double k, double l, double a,
+                       double threshold = 1e-10) {
+  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(k) || !std::isfinite(l) ||
+      !std::isfinite(a)) {
+    return 0.0;
+  }
+  if (a < threshold) {
+    return safe_density(rdm_digt0(x, k, l));
+  }
+  double pdf = 0.0;
+  if (l < threshold) {
+    const double term = std::exp(-(k - a) * (k - a) / (2.0 * x)) -
+                        std::exp(-(k + a) * (k + a) / (2.0 * x));
+    pdf = std::exp(-0.5 * (M_LN2 + kLogPi + std::log(x)) +
+                   std::log(std::max(1e-300, term)) - M_LN2 - std::log(a));
+  } else {
+    const double sqt = std::sqrt(x);
+    const double t1a = -std::pow(a - k + x * l, 2.0) / (2.0 * x);
+    const double t1b = -std::pow(a + k - x * l, 2.0) / (2.0 * x);
+    const double t1 =
+        M_SQRT1_2 * (std::exp(t1a) - std::exp(t1b)) / (std::sqrt(M_PI) * sqt);
+    const double t2a =
+        2.0 * R::pnorm((-k + a) / sqt + sqt * l, 0.0, 1.0, 1, 0) - 1.0;
+    const double t2b =
+        2.0 * R::pnorm((k + a) / sqt - sqt * l, 0.0, 1.0, 1, 0) - 1.0;
+    const double t2 = std::exp(std::log(0.5) + std::log(l)) * (t2a + t2b);
+    pdf = std::exp(std::log(std::max(1e-300, t1 + t2)) - M_LN2 - std::log(a));
+  }
+  return safe_density(pdf);
+}
+
+inline double rdm_pdf_fast(double x, double v, double B, double A, double s) {
+  if (!std::isfinite(s) || s <= 0.0) {
+    return 0.0;
+  }
+  const double v_sc = v / s;
+  const double B_sc = B / s;
+  const double A_sc = A / s;
+  return rdm_digt(x, B_sc + 0.5 * A_sc, v_sc, 0.5 * A_sc);
+}
+
+inline double rdm_cdf_fast(double x, double v, double B, double A, double s) {
+  if (!std::isfinite(s) || s <= 0.0) {
+    return 0.0;
+  }
+  const double v_sc = v / s;
+  const double B_sc = B / s;
+  const double A_sc = A / s;
+  return rdm_pigt(x, B_sc + 0.5 * A_sc, v_sc, 0.5 * A_sc);
+}
+
 inline double eval_pdf_single(const AccDistParams &cfg, double x) {
   switch (cfg.code) {
   case uuber::ACC_DIST_LOGNORMAL:
@@ -365,6 +572,10 @@ inline double eval_pdf_single(const AccDistParams &cfg, double x) {
     return gamma_pdf_fast(x, cfg.p1, cfg.p2);
   case uuber::ACC_DIST_EXGAUSS:
     return exgauss_pdf_fast(x, cfg.p1, cfg.p2, cfg.p3);
+  case uuber::ACC_DIST_LBA:
+    return lba_pdf_fast(x, cfg.p1, cfg.p2, cfg.p3, cfg.p4);
+  case uuber::ACC_DIST_RDM:
+    return rdm_pdf_fast(x, cfg.p1, cfg.p2, cfg.p3, cfg.p4);
   default:
     return 0.0;
   }
@@ -378,6 +589,10 @@ inline double eval_cdf_single(const AccDistParams &cfg, double x) {
     return gamma_cdf_fast(x, cfg.p1, cfg.p2);
   case uuber::ACC_DIST_EXGAUSS:
     return exgauss_cdf_fast(x, cfg.p1, cfg.p2, cfg.p3);
+  case uuber::ACC_DIST_LBA:
+    return lba_cdf_fast(x, cfg.p1, cfg.p2, cfg.p3, cfg.p4);
+  case uuber::ACC_DIST_RDM:
+    return rdm_cdf_fast(x, cfg.p1, cfg.p2, cfg.p3, cfg.p4);
   default:
     return 0.0;
   }
@@ -439,12 +654,14 @@ inline FusedIntegralResult integrate_fused_onset_terms(
   std::vector<double> cdf_values;
   if (need_density) {
     pdf_values.resize(n, 0.0);
-    uuber::eval_pdf_vec(cfg.code, cfg.p1, cfg.p2, cfg.p3, shifted_times.data(),
+    uuber::eval_pdf_vec(cfg.code, cfg.p1, cfg.p2, cfg.p3, cfg.p4, cfg.p5,
+                        cfg.p6, cfg.p7, cfg.p8, shifted_times.data(),
                         shifted_times.size(), pdf_values.data());
   }
   if (need_cdf) {
     cdf_values.resize(n, 0.0);
-    uuber::eval_cdf_vec(cfg.code, cfg.p1, cfg.p2, cfg.p3, shifted_times.data(),
+    uuber::eval_cdf_vec(cfg.code, cfg.p1, cfg.p2, cfg.p3, cfg.p4, cfg.p5,
+                        cfg.p6, cfg.p7, cfg.p8, shifted_times.data(),
                         shifted_times.size(), cdf_values.data());
   }
 
@@ -1134,6 +1351,11 @@ compute_trial_param_fingerprint(const TrialParamSet &params) {
     hash_append_double(hash, acc.dist_cfg.p1);
     hash_append_double(hash, acc.dist_cfg.p2);
     hash_append_double(hash, acc.dist_cfg.p3);
+    hash_append_double(hash, acc.dist_cfg.p4);
+    hash_append_double(hash, acc.dist_cfg.p5);
+    hash_append_double(hash, acc.dist_cfg.p6);
+    hash_append_double(hash, acc.dist_cfg.p7);
+    hash_append_double(hash, acc.dist_cfg.p8);
     hash_append_bool(hash, acc.has_components);
     hash_append_bool(hash, acc.has_override);
     hash_append_u64(hash,
@@ -1167,7 +1389,9 @@ inline bool trial_paramsets_equivalent(const TrialParamSet &a,
         x.onset_lag != y.onset_lag || x.q != y.q || x.shared_q != y.shared_q ||
         x.dist_cfg.code != y.dist_cfg.code || x.dist_cfg.t0 != y.dist_cfg.t0 ||
         x.dist_cfg.p1 != y.dist_cfg.p1 || x.dist_cfg.p2 != y.dist_cfg.p2 ||
-        x.dist_cfg.p3 != y.dist_cfg.p3 ||
+        x.dist_cfg.p3 != y.dist_cfg.p3 || x.dist_cfg.p4 != y.dist_cfg.p4 ||
+        x.dist_cfg.p5 != y.dist_cfg.p5 || x.dist_cfg.p6 != y.dist_cfg.p6 ||
+        x.dist_cfg.p7 != y.dist_cfg.p7 || x.dist_cfg.p8 != y.dist_cfg.p8 ||
         x.has_components != y.has_components ||
         x.has_override != y.has_override ||
         x.component_indices.size() != y.component_indices.size()) {
@@ -1241,6 +1465,11 @@ build_na_map_cache_key_idx(const uuber::OutcomeContextInfo &info,
     na_key_mix_double(h1, h2, acc.dist_cfg.p1);
     na_key_mix_double(h1, h2, acc.dist_cfg.p2);
     na_key_mix_double(h1, h2, acc.dist_cfg.p3);
+    na_key_mix_double(h1, h2, acc.dist_cfg.p4);
+    na_key_mix_double(h1, h2, acc.dist_cfg.p5);
+    na_key_mix_double(h1, h2, acc.dist_cfg.p6);
+    na_key_mix_double(h1, h2, acc.dist_cfg.p7);
+    na_key_mix_double(h1, h2, acc.dist_cfg.p8);
   }
   na_key_mix_u32(h1, h2, static_cast<std::uint32_t>(component_indices.size()));
   for (std::size_t i = 0; i < component_indices.size(); ++i) {
@@ -1295,6 +1524,11 @@ inline void build_base_trial_params_soa_from_context(
   out.p1.resize(ctx.accumulators.size(), 0.0);
   out.p2.resize(ctx.accumulators.size(), 0.0);
   out.p3.resize(ctx.accumulators.size(), 0.0);
+  out.p4.resize(ctx.accumulators.size(), 0.0);
+  out.p5.resize(ctx.accumulators.size(), 0.0);
+  out.p6.resize(ctx.accumulators.size(), 0.0);
+  out.p7.resize(ctx.accumulators.size(), 0.0);
+  out.p8.resize(ctx.accumulators.size(), 0.0);
   for (std::size_t i = 0; i < ctx.accumulators.size(); ++i) {
     const uuber::NativeAccumulator &acc = ctx.accumulators[i];
     out.dist_code[i] = acc.dist_cfg.code;
@@ -1304,6 +1538,11 @@ inline void build_base_trial_params_soa_from_context(
     out.p1[i] = acc.dist_cfg.p1;
     out.p2[i] = acc.dist_cfg.p2;
     out.p3[i] = acc.dist_cfg.p3;
+    out.p4[i] = acc.dist_cfg.p4;
+    out.p5[i] = acc.dist_cfg.p5;
+    out.p6[i] = acc.dist_cfg.p6;
+    out.p7[i] = acc.dist_cfg.p7;
+    out.p8[i] = acc.dist_cfg.p8;
   }
   out.valid = true;
 }
@@ -1335,6 +1574,11 @@ inline void materialize_trial_params_soa(const uuber::NativeContext &ctx,
     out.p1[static_cast<std::size_t>(acc_idx)] = entry.dist_cfg.p1;
     out.p2[static_cast<std::size_t>(acc_idx)] = entry.dist_cfg.p2;
     out.p3[static_cast<std::size_t>(acc_idx)] = entry.dist_cfg.p3;
+    out.p4[static_cast<std::size_t>(acc_idx)] = entry.dist_cfg.p4;
+    out.p5[static_cast<std::size_t>(acc_idx)] = entry.dist_cfg.p5;
+    out.p6[static_cast<std::size_t>(acc_idx)] = entry.dist_cfg.p6;
+    out.p7[static_cast<std::size_t>(acc_idx)] = entry.dist_cfg.p7;
+    out.p8[static_cast<std::size_t>(acc_idx)] = entry.dist_cfg.p8;
   }
   out.valid = true;
 }
@@ -1971,7 +2215,12 @@ inline void resolve_event_numeric_params(
       static_cast<std::size_t>(acc_index) < trial_params_soa->t0.size() &&
       static_cast<std::size_t>(acc_index) < trial_params_soa->p1.size() &&
       static_cast<std::size_t>(acc_index) < trial_params_soa->p2.size() &&
-      static_cast<std::size_t>(acc_index) < trial_params_soa->p3.size()) {
+      static_cast<std::size_t>(acc_index) < trial_params_soa->p3.size() &&
+      static_cast<std::size_t>(acc_index) < trial_params_soa->p4.size() &&
+      static_cast<std::size_t>(acc_index) < trial_params_soa->p5.size() &&
+      static_cast<std::size_t>(acc_index) < trial_params_soa->p6.size() &&
+      static_cast<std::size_t>(acc_index) < trial_params_soa->p7.size() &&
+      static_cast<std::size_t>(acc_index) < trial_params_soa->p8.size()) {
     const std::size_t idx = static_cast<std::size_t>(acc_index);
     onset_out = trial_params_soa->onset[idx];
     q_out = trial_params_soa->q[idx];
@@ -1980,6 +2229,11 @@ inline void resolve_event_numeric_params(
     cfg_out.p1 = trial_params_soa->p1[idx];
     cfg_out.p2 = trial_params_soa->p2[idx];
     cfg_out.p3 = trial_params_soa->p3[idx];
+    cfg_out.p4 = trial_params_soa->p4[idx];
+    cfg_out.p5 = trial_params_soa->p5[idx];
+    cfg_out.p6 = trial_params_soa->p6[idx];
+    cfg_out.p7 = trial_params_soa->p7[idx];
+    cfg_out.p8 = trial_params_soa->p8[idx];
     return;
   }
   onset_out = override ? override->onset : acc.onset;
@@ -3775,9 +4029,10 @@ private:
         for (std::size_t g = 0; g < grid_points; ++g) {
           batch_shifted_[g] = grid_x_value(g, h) - onset_eff;
         }
-        uuber::eval_pdf_vec(info.cfg.code, info.cfg.p1, info.cfg.p2, info.cfg.p3,
-                            batch_shifted_.data(), grid_points,
-                            batch_values_.data());
+        uuber::eval_pdf_vec(
+            info.cfg.code, info.cfg.p1, info.cfg.p2, info.cfg.p3, info.cfg.p4,
+            info.cfg.p5, info.cfg.p6, info.cfg.p7, info.cfg.p8,
+            batch_shifted_.data(), grid_points, batch_values_.data());
         for (std::size_t g = 0; g < grid_points; ++g) {
           double dens = 0.0;
           const double x = grid_x_value(g, h);
@@ -3815,9 +4070,10 @@ private:
       for (std::size_t g = 0; g < grid_points; ++g) {
         batch_shifted_[g] = grid_x_value(g, h) - onset_eff;
       }
-      uuber::eval_cdf_vec(info.cfg.code, info.cfg.p1, info.cfg.p2, info.cfg.p3,
-                          batch_shifted_.data(), grid_points,
-                          batch_values_.data());
+      uuber::eval_cdf_vec(
+          info.cfg.code, info.cfg.p1, info.cfg.p2, info.cfg.p3, info.cfg.p4,
+          info.cfg.p5, info.cfg.p6, info.cfg.p7, info.cfg.p8,
+          batch_shifted_.data(), grid_points, batch_values_.data());
       for (std::size_t g = 0; g < grid_points; ++g) {
         double surv = 1.0;
         const double x = grid_x_value(g, h);
@@ -7111,9 +7367,13 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
   const int q_col = 0;
   const int w_col = 1;
   const int t0_col = 2;
-  const int p1_col = 3;
-  const int p2_col = params_mat.ncol() > 4 ? 4 : -1;
-  const int p3_col = params_mat.ncol() > 5 ? 5 : -1;
+  std::array<int, 8> p_cols{};
+  p_cols.fill(-1);
+  const int n_param_cols = std::max(0, params_mat.ncol() - 3);
+  const int n_slot_cols = std::min(8, n_param_cols);
+  for (int i = 0; i < n_slot_cols; ++i) {
+    p_cols[static_cast<std::size_t>(i)] = 3 + i;
+  }
 
   Rcpp::NumericVector trial_col = data_df["trial"];
   Rcpp::IntegerVector outcome_id_col =
@@ -7263,15 +7523,30 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
     tap.has_override = true;
     param_sets[static_cast<std::size_t>(trial_idx)].has_any_override = true;
     param_sets[static_cast<std::size_t>(trial_idx)].soa_cache_valid = false;
-    if (tap.dist_cfg.code == uuber::ACC_DIST_LOGNORMAL ||
-        tap.dist_cfg.code == uuber::ACC_DIST_GAMMA ||
-        tap.dist_cfg.code == uuber::ACC_DIST_EXGAUSS) {
+    const int p1_col = p_cols[0];
+    const int p2_col = p_cols[1];
+    const int p3_col = p_cols[2];
+    const int p4_col = p_cols[3];
+    const int p5_col = p_cols[4];
+    const int p6_col = p_cols[5];
+    const int p7_col = p_cols[6];
+    const int p8_col = p_cols[7];
+    if (p1_col >= 0)
       tap.dist_cfg.p1 = params_mat(r, p1_col);
-      if (p2_col >= 0)
-        tap.dist_cfg.p2 = params_mat(r, p2_col);
-      if (p3_col >= 0)
-        tap.dist_cfg.p3 = params_mat(r, p3_col);
-    }
+    if (p2_col >= 0)
+      tap.dist_cfg.p2 = params_mat(r, p2_col);
+    if (p3_col >= 0)
+      tap.dist_cfg.p3 = params_mat(r, p3_col);
+    if (p4_col >= 0)
+      tap.dist_cfg.p4 = params_mat(r, p4_col);
+    if (p5_col >= 0)
+      tap.dist_cfg.p5 = params_mat(r, p5_col);
+    if (p6_col >= 0)
+      tap.dist_cfg.p6 = params_mat(r, p6_col);
+    if (p7_col >= 0)
+      tap.dist_cfg.p7 = params_mat(r, p7_col);
+    if (p8_col >= 0)
+      tap.dist_cfg.p8 = params_mat(r, p8_col);
 
     for (std::size_t c = 0; c < comp_map.leader_idx.size(); ++c) {
       if (comp_map.leader_idx[c] == acc_idx) {
@@ -8083,6 +8358,203 @@ Rcpp::NumericVector dist_exgauss_rng(int n, double mu, double sigma,
     normals[i] += expo[i];
   }
   return normals;
+}
+
+// ------------------------------------------------------------------
+// LBA
+// ------------------------------------------------------------------
+
+//' @noRd
+// [[Rcpp::export]]
+Rcpp::NumericVector dist_lba_pdf(const Rcpp::NumericVector &x, double v,
+                                 double sv, double B, double A) {
+  R_xlen_t n = x.size();
+  Rcpp::NumericVector out(n);
+  if (!std::isfinite(v) || is_invalid_positive(sv) || !std::isfinite(B) ||
+      !std::isfinite(A)) {
+    std::fill(out.begin(), out.end(), NA_REAL);
+    return out;
+  }
+  for (R_xlen_t i = 0; i < n; ++i) {
+    double xi = x[i];
+    if (Rcpp::NumericVector::is_na(xi)) {
+      out[i] = NA_REAL;
+      continue;
+    }
+    if (!std::isfinite(xi)) {
+      out[i] = 0.0;
+      continue;
+    }
+    out[i] = lba_pdf_fast(xi, v, sv, B, A);
+  }
+  return out;
+}
+
+//' @noRd
+// [[Rcpp::export]]
+Rcpp::NumericVector dist_lba_cdf(const Rcpp::NumericVector &x, double v,
+                                 double sv, double B, double A) {
+  R_xlen_t n = x.size();
+  Rcpp::NumericVector out(n);
+  if (!std::isfinite(v) || is_invalid_positive(sv) || !std::isfinite(B) ||
+      !std::isfinite(A)) {
+    std::fill(out.begin(), out.end(), NA_REAL);
+    return out;
+  }
+  for (R_xlen_t i = 0; i < n; ++i) {
+    double xi = x[i];
+    if (Rcpp::NumericVector::is_na(xi)) {
+      out[i] = NA_REAL;
+      continue;
+    }
+    if (!std::isfinite(xi)) {
+      out[i] = (xi < 0.0) ? 0.0 : 1.0;
+      continue;
+    }
+    out[i] = lba_cdf_fast(xi, v, sv, B, A);
+  }
+  return out;
+}
+
+//' @noRd
+// [[Rcpp::export]]
+Rcpp::NumericVector dist_lba_rng(int n, double v, double sv, double B,
+                                 double A) {
+  if (n <= 0 || !std::isfinite(v) || is_invalid_positive(sv) || !std::isfinite(B) ||
+      !std::isfinite(A)) {
+    return Rcpp::NumericVector();
+  }
+  Rcpp::RNGScope scope;
+  Rcpp::NumericVector out(n);
+  const double lower_mass = R::pnorm(0.0, v, sv, 1, 0);
+  const double upper_mass = 1.0 - lower_mass;
+  if (!std::isfinite(upper_mass) || upper_mass <= 0.0) {
+    std::fill(out.begin(), out.end(), R_PosInf);
+    return out;
+  }
+  for (R_xlen_t i = 0; i < n; ++i) {
+    const double start = B - (A * R::runif(0.0, 1.0));
+    const double u = R::runif(0.0, 1.0);
+    const double q = std::min(1.0 - 1e-15, lower_mass + u * upper_mass);
+    const double drift = R::qnorm(q, v, sv, 1, 0);
+    const double dt = start / drift;
+    out[i] = (std::isfinite(dt) && dt > 0.0) ? dt : R_PosInf;
+  }
+  return out;
+}
+
+namespace {
+
+inline double rdm_rng_single(double k, double l, double tiny = 1e-6) {
+  if (!std::isfinite(k) || !std::isfinite(l)) {
+    return R_PosInf;
+  }
+  if (l < 0.0) {
+    return R_PosInf;
+  }
+  if (l <= tiny) {
+    const double q = std::max(1e-15, 1.0 - R::runif(0.0, 1.0) / 2.0);
+    const double z = R::qnorm(q, 0.0, 1.0, 1, 0);
+    if (!std::isfinite(z) || std::fabs(z) < 1e-15) {
+      return R_PosInf;
+    }
+    return (k * k) / (z * z);
+  }
+  const double mu = k / l;
+  const double lambda = k * k;
+  if (!std::isfinite(mu) || !std::isfinite(lambda) || mu <= 0.0 || lambda <= 0.0) {
+    return R_PosInf;
+  }
+  const double y = std::pow(R::rnorm(0.0, 1.0), 2.0);
+  const double root = std::sqrt(4.0 * mu * lambda * y + mu * mu * y * y);
+  double x = mu + (mu * mu * y) / (2.0 * lambda) - (mu * root) / (2.0 * lambda);
+  const double u = R::runif(0.0, 1.0);
+  const double accept = mu / (mu + x);
+  if (u > accept) {
+    x = (mu * mu) / x;
+  }
+  if (!std::isfinite(x) || x <= 0.0) {
+    return R_PosInf;
+  }
+  return x;
+}
+
+} // namespace
+
+// ------------------------------------------------------------------
+// RDM
+// ------------------------------------------------------------------
+
+//' @noRd
+// [[Rcpp::export]]
+Rcpp::NumericVector dist_rdm_pdf(const Rcpp::NumericVector &x, double v,
+                                 double B, double A, double s) {
+  R_xlen_t n = x.size();
+  Rcpp::NumericVector out(n);
+  if (!std::isfinite(v) || !std::isfinite(B) || !std::isfinite(A) ||
+      is_invalid_positive(s)) {
+    std::fill(out.begin(), out.end(), NA_REAL);
+    return out;
+  }
+  for (R_xlen_t i = 0; i < n; ++i) {
+    double xi = x[i];
+    if (Rcpp::NumericVector::is_na(xi)) {
+      out[i] = NA_REAL;
+      continue;
+    }
+    if (!std::isfinite(xi)) {
+      out[i] = 0.0;
+      continue;
+    }
+    out[i] = rdm_pdf_fast(xi, v, B, A, s);
+  }
+  return out;
+}
+
+//' @noRd
+// [[Rcpp::export]]
+Rcpp::NumericVector dist_rdm_cdf(const Rcpp::NumericVector &x, double v,
+                                 double B, double A, double s) {
+  R_xlen_t n = x.size();
+  Rcpp::NumericVector out(n);
+  if (!std::isfinite(v) || !std::isfinite(B) || !std::isfinite(A) ||
+      is_invalid_positive(s)) {
+    std::fill(out.begin(), out.end(), NA_REAL);
+    return out;
+  }
+  for (R_xlen_t i = 0; i < n; ++i) {
+    double xi = x[i];
+    if (Rcpp::NumericVector::is_na(xi)) {
+      out[i] = NA_REAL;
+      continue;
+    }
+    if (!std::isfinite(xi)) {
+      out[i] = (xi < 0.0) ? 0.0 : 1.0;
+      continue;
+    }
+    out[i] = rdm_cdf_fast(xi, v, B, A, s);
+  }
+  return out;
+}
+
+//' @noRd
+// [[Rcpp::export]]
+Rcpp::NumericVector dist_rdm_rng(int n, double v, double B, double A,
+                                 double s) {
+  if (n <= 0 || !std::isfinite(v) || !std::isfinite(B) || !std::isfinite(A) ||
+      is_invalid_positive(s)) {
+    return Rcpp::NumericVector();
+  }
+  Rcpp::RNGScope scope;
+  Rcpp::NumericVector out(n);
+  const double v_sc = v / s;
+  const double B_sc = std::max(0.0, B / s);
+  const double A_sc = std::max(0.0, A / s);
+  for (R_xlen_t i = 0; i < n; ++i) {
+    const double bs = B_sc + R::runif(0.0, A_sc);
+    out[i] = rdm_rng_single(bs, v_sc);
+  }
+  return out;
 }
 
 // ------------------------------------------------------------------

@@ -336,6 +336,11 @@ TrialParamsSoA build_base_trial_params_soa(const NativeContext &ctx) {
   out.p1.resize(ctx.accumulators.size(), 0.0);
   out.p2.resize(ctx.accumulators.size(), 0.0);
   out.p3.resize(ctx.accumulators.size(), 0.0);
+  out.p4.resize(ctx.accumulators.size(), 0.0);
+  out.p5.resize(ctx.accumulators.size(), 0.0);
+  out.p6.resize(ctx.accumulators.size(), 0.0);
+  out.p7.resize(ctx.accumulators.size(), 0.0);
+  out.p8.resize(ctx.accumulators.size(), 0.0);
   for (std::size_t i = 0; i < ctx.accumulators.size(); ++i) {
     const auto &acc = ctx.accumulators[i];
     out.dist_code[i] = acc.dist_cfg.code;
@@ -345,6 +350,11 @@ TrialParamsSoA build_base_trial_params_soa(const NativeContext &ctx) {
     out.p1[i] = acc.dist_cfg.p1;
     out.p2[i] = acc.dist_cfg.p2;
     out.p3[i] = acc.dist_cfg.p3;
+    out.p4[i] = acc.dist_cfg.p4;
+    out.p5[i] = acc.dist_cfg.p5;
+    out.p6[i] = acc.dist_cfg.p6;
+    out.p7[i] = acc.dist_cfg.p7;
+    out.p8[i] = acc.dist_cfg.p8;
   }
   out.valid = true;
   return out;

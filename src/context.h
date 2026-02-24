@@ -249,6 +249,11 @@ struct TrialParamsSoA {
   std::vector<double> p1;
   std::vector<double> p2;
   std::vector<double> p3;
+  std::vector<double> p4;
+  std::vector<double> p5;
+  std::vector<double> p6;
+  std::vector<double> p7;
+  std::vector<double> p8;
   bool valid{false};
 };
 

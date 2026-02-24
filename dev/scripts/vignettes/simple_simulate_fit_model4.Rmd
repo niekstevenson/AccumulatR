@@ -3,19 +3,19 @@ title: "Simulate and Fit a Simple Race Model"
 output: html_document
 ---
 
-This short vignette shows how to simulate data and compute likelihoods for a simple race model, then estimate parameters with `optim()`. The example is model 4 from `dev/examples/new_API.R`: two accumulators feed response `R1`, and one accumulator feeds response `R2`.
+This short vignette shows how to simulate data and compute likelihoods for a simple race model, then estimate parameters with `optim()`. The example has two accumulators that feed response `R1`, and one accumulator feeds response `R2`.
 
 ```{r}
 library(AccumulatR)
 ```
 
 **Define the model**
-We use three lognormal accumulators. `R1_A` and `R1_B` are pooled into response `R1`. `R2` is its own response.
+We use three accumulators. `R1_A` and `R1_B` are pooled into response `R1`. `R2` is its own response.
 
 ```{r}
 model_spec <- race_spec() |>
-  add_accumulator("R1_A", "lognormal") |>
-  add_accumulator("R1_B", "lognormal") |>
+  add_accumulator("R1_A", "LBA") |>
+  add_accumulator("R1_B", "RDM") |>
   add_accumulator("R2", "lognormal") |>
   add_pool("R1", c("R1_A", "R1_B")) |>
   add_outcome("R1", "R1") |>
@@ -24,11 +24,15 @@ model_spec <- race_spec() |>
 structure <- finalize_model(model_spec)
 
 true_params <- c(
-  R1_A.meanlog = log(0.35),
-  R1_A.sdlog = 0.15,
-  R1_B.meanlog = log(0.35),
-  R1_B.sdlog = 0.20,
-  R2.meanlog = log(0.30),
+  R1_A.v = 2,
+  R1_A.B = 1,
+  R1_A.A = .3,
+  R1_A.sv = 1,
+  R1_B.v = 3,
+  R1_B.B = 1,
+  R1_B.A = .3,
+  R1_B.s = 1,
+  R2.meanlog = log(0.4),
   R2.sdlog = 0.18
 )
 ```
@@ -39,7 +43,7 @@ We generate a small dataset of response times and choices.
 ```{r}
 set.seed(123456)
 
-n_trials <- 500
+n_trials <- 2000
 params_df <- build_param_matrix(model_spec, true_params, n_trials = n_trials)
 
 sim <- simulate(structure, params_df)
@@ -89,15 +93,20 @@ ll_wrong
 ```
 
 **Estimate parameters with `optim()`**
-We will estimate six parameters: meanlog and sdlog for each accumulator. To keep `sdlog` positive, we optimize its log.
+We estimate five parameters: `R1_A.v`, `R1_B.v`, a shared `B` value used for both `R1_A.B` and `R1_B.B`, plus `R2.meanlog` and `R2.sdlog`.
 
 ```{r}
 neg_loglik <- function(theta) {
-  # Could also bound in optim, but here we exp to ensure positive support for sd parameters
-  theta[c("R1_A.sdlog", "R1_B.sdlog", "R2.sdlog")] <- exp(theta[c("R1_A.sdlog", "R1_B.sdlog", "R2.sdlog")])
+  est <- true_params
+  est["R1_A.v"] <- theta[["R1_A.v"]]
+  est["R1_B.v"] <- theta[["R1_B.v"]]
+  est["R1_A.B"] <- exp(theta[["log_B_shared"]])
+  est["R1_B.B"] <- exp(theta[["log_B_shared"]])
+  est["R2.meanlog"] <- theta[["R2.meanlog"]]
+  est["R2.sdlog"] <- exp(theta[["log_R2.sdlog"]])
   params_df <- build_param_matrix(
     model_spec,
-    theta,
+    est,
     n_trials = max(data_df$trial),
     layout = ctx$param_layout
   )
@@ -106,19 +115,29 @@ neg_loglik <- function(theta) {
 }
 
 start <- c(
-  R1_A.meanlog = log(0.25),
-  R1_A.sdlog = log(0.12),
-  R1_B.meanlog = log(0.25),
-  R1_B.sdlog = log(0.12),
-  R2.meanlog = log(0.35),
-  R2.sdlog = log(0.12)
+  R1_A.v = 1.5,
+  R1_B.v = 1.5,
+  log_B_shared = log(1.0),
+  R2.meanlog = log(0.32),
+  log_R2.sdlog = log(0.15)
 )
 
-fit <- optim(start, neg_loglik, method = "Nelder-Mead")
-fit_params <- fit$par
-fit_params[c("R1_A.sdlog", "R1_B.sdlog", "R2.sdlog")] <- exp(fit_params[c("R1_A.sdlog", "R1_B.sdlog", "R2.sdlog")])
-
-data.frame(true = true_params, recovered = fit_params, miss = abs(true_params - fit_params))
+fit <- optim(start, neg_loglik, method = "Nelder-Mead", control = list(maxit = 4000, reltol = 1e-9))
+fit_params <- c(
+  R1_A.v = fit$par[["R1_A.v"]],
+  R1_B.v = fit$par[["R1_B.v"]],
+  B_shared = exp(fit$par[["log_B_shared"]]),
+  R2.meanlog = fit$par[["R2.meanlog"]],
+  R2.sdlog = exp(fit$par[["log_R2.sdlog"]])
+)
+target <- c(
+  R1_A.v = true_params[["R1_A.v"]],
+  R1_B.v = true_params[["R1_B.v"]],
+  B_shared = true_params[["R1_A.B"]],
+  R2.meanlog = true_params[["R2.meanlog"]],
+  R2.sdlog = true_params[["R2.sdlog"]]
+)
+data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params))
 
 ```
 

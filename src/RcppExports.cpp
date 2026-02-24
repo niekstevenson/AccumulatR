@@ -302,6 +302,96 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// dist_lba_pdf
+Rcpp::NumericVector dist_lba_pdf(const Rcpp::NumericVector& x, double v, double sv, double B, double A);
+RcppExport SEXP _AccumulatR_dist_lba_pdf(SEXP xSEXP, SEXP vSEXP, SEXP svSEXP, SEXP BSEXP, SEXP ASEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type x(xSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
+    Rcpp::traits::input_parameter< double >::type B(BSEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    rcpp_result_gen = Rcpp::wrap(dist_lba_pdf(x, v, sv, B, A));
+    return rcpp_result_gen;
+END_RCPP
+}
+// dist_lba_cdf
+Rcpp::NumericVector dist_lba_cdf(const Rcpp::NumericVector& x, double v, double sv, double B, double A);
+RcppExport SEXP _AccumulatR_dist_lba_cdf(SEXP xSEXP, SEXP vSEXP, SEXP svSEXP, SEXP BSEXP, SEXP ASEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type x(xSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
+    Rcpp::traits::input_parameter< double >::type B(BSEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    rcpp_result_gen = Rcpp::wrap(dist_lba_cdf(x, v, sv, B, A));
+    return rcpp_result_gen;
+END_RCPP
+}
+// dist_lba_rng
+Rcpp::NumericVector dist_lba_rng(int n, double v, double sv, double B, double A);
+RcppExport SEXP _AccumulatR_dist_lba_rng(SEXP nSEXP, SEXP vSEXP, SEXP svSEXP, SEXP BSEXP, SEXP ASEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
+    Rcpp::traits::input_parameter< double >::type B(BSEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    rcpp_result_gen = Rcpp::wrap(dist_lba_rng(n, v, sv, B, A));
+    return rcpp_result_gen;
+END_RCPP
+}
+// dist_rdm_pdf
+Rcpp::NumericVector dist_rdm_pdf(const Rcpp::NumericVector& x, double v, double B, double A, double s);
+RcppExport SEXP _AccumulatR_dist_rdm_pdf(SEXP xSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP sSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type x(xSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< double >::type B(BSEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    Rcpp::traits::input_parameter< double >::type s(sSEXP);
+    rcpp_result_gen = Rcpp::wrap(dist_rdm_pdf(x, v, B, A, s));
+    return rcpp_result_gen;
+END_RCPP
+}
+// dist_rdm_cdf
+Rcpp::NumericVector dist_rdm_cdf(const Rcpp::NumericVector& x, double v, double B, double A, double s);
+RcppExport SEXP _AccumulatR_dist_rdm_cdf(SEXP xSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP sSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type x(xSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< double >::type B(BSEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    Rcpp::traits::input_parameter< double >::type s(sSEXP);
+    rcpp_result_gen = Rcpp::wrap(dist_rdm_cdf(x, v, B, A, s));
+    return rcpp_result_gen;
+END_RCPP
+}
+// dist_rdm_rng
+Rcpp::NumericVector dist_rdm_rng(int n, double v, double B, double A, double s);
+RcppExport SEXP _AccumulatR_dist_rdm_rng(SEXP nSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP sSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type n(nSEXP);
+    Rcpp::traits::input_parameter< double >::type v(vSEXP);
+    Rcpp::traits::input_parameter< double >::type B(BSEXP);
+    Rcpp::traits::input_parameter< double >::type A(ASEXP);
+    Rcpp::traits::input_parameter< double >::type s(sSEXP);
+    rcpp_result_gen = Rcpp::wrap(dist_rdm_rng(n, v, B, A, s));
+    return rcpp_result_gen;
+END_RCPP
+}
 // pool_coeffs_cpp
 Rcpp::NumericVector pool_coeffs_cpp(const Rcpp::NumericVector& Svec, const Rcpp::NumericVector& Fvec);
 RcppExport SEXP _AccumulatR_pool_coeffs_cpp(SEXP SvecSEXP, SEXP FvecSEXP) {
@@ -337,6 +427,12 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_dist_exgauss_pdf", (DL_FUNC) &_AccumulatR_dist_exgauss_pdf, 4},
     {"_AccumulatR_dist_exgauss_cdf", (DL_FUNC) &_AccumulatR_dist_exgauss_cdf, 4},
     {"_AccumulatR_dist_exgauss_rng", (DL_FUNC) &_AccumulatR_dist_exgauss_rng, 4},
+    {"_AccumulatR_dist_lba_pdf", (DL_FUNC) &_AccumulatR_dist_lba_pdf, 5},
+    {"_AccumulatR_dist_lba_cdf", (DL_FUNC) &_AccumulatR_dist_lba_cdf, 5},
+    {"_AccumulatR_dist_lba_rng", (DL_FUNC) &_AccumulatR_dist_lba_rng, 5},
+    {"_AccumulatR_dist_rdm_pdf", (DL_FUNC) &_AccumulatR_dist_rdm_pdf, 5},
+    {"_AccumulatR_dist_rdm_cdf", (DL_FUNC) &_AccumulatR_dist_rdm_cdf, 5},
+    {"_AccumulatR_dist_rdm_rng", (DL_FUNC) &_AccumulatR_dist_rdm_rng, 5},
     {"_AccumulatR_pool_coeffs_cpp", (DL_FUNC) &_AccumulatR_pool_coeffs_cpp, 2},
     {NULL, NULL, 0}
 };

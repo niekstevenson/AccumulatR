@@ -13,7 +13,9 @@ namespace uuber {
 enum AccDistKind {
   ACC_DIST_LOGNORMAL = 1,
   ACC_DIST_GAMMA = 2,
-  ACC_DIST_EXGAUSS = 3
+  ACC_DIST_EXGAUSS = 3,
+  ACC_DIST_LBA = 4,
+  ACC_DIST_RDM = 5
 };
 
 struct AccDistParams {
@@ -21,6 +23,11 @@ struct AccDistParams {
   double p1{};
   double p2{};
   double p3{};
+  double p4{};
+  double p5{};
+  double p6{};
+  double p7{};
+  double p8{};
   double t0{0.0};
 };
 
@@ -65,6 +72,20 @@ inline AccDistParams resolve_acc_params_entries(const std::string& dist,
     cfg.p1 = numeric_param(entries, "mu");
     cfg.p2 = numeric_param(entries, "sigma");
     cfg.p3 = numeric_param(entries, "tau");
+  } else if (dist_name == "lba") {
+    cfg.code = ACC_DIST_LBA;
+    cfg.p1 = numeric_param(entries, "v");
+    cfg.p2 = numeric_param(entries, "sv");
+    cfg.p3 = numeric_param(entries, "B");
+    cfg.p4 = numeric_param(entries, "A");
+  } else if (dist_name == "rdm") {
+    cfg.code = ACC_DIST_RDM;
+    cfg.p1 = numeric_param(entries, "v");
+    cfg.p2 = numeric_param(entries, "B");
+    cfg.p3 = numeric_param(entries, "A");
+    cfg.p4 = numeric_param(entries, "s");
+  } else {
+    throw std::invalid_argument("Unknown distribution '" + dist + "'");
   }
   cfg.t0 = numeric_param(entries, "t0");
   return cfg;

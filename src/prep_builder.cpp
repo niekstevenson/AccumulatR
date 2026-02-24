@@ -1552,6 +1552,11 @@ build_context_from_proto(const NativePrepProto &proto) {
   ctx->base_params_soa.p1.resize(ctx->accumulators.size(), 0.0);
   ctx->base_params_soa.p2.resize(ctx->accumulators.size(), 0.0);
   ctx->base_params_soa.p3.resize(ctx->accumulators.size(), 0.0);
+  ctx->base_params_soa.p4.resize(ctx->accumulators.size(), 0.0);
+  ctx->base_params_soa.p5.resize(ctx->accumulators.size(), 0.0);
+  ctx->base_params_soa.p6.resize(ctx->accumulators.size(), 0.0);
+  ctx->base_params_soa.p7.resize(ctx->accumulators.size(), 0.0);
+  ctx->base_params_soa.p8.resize(ctx->accumulators.size(), 0.0);
   for (std::size_t acc_i = 0; acc_i < ctx->accumulators.size(); ++acc_i) {
     const NativeAccumulator &acc = ctx->accumulators[acc_i];
     ctx->base_params_soa.dist_code[acc_i] = acc.dist_cfg.code;
@@ -1561,6 +1566,11 @@ build_context_from_proto(const NativePrepProto &proto) {
     ctx->base_params_soa.p1[acc_i] = acc.dist_cfg.p1;
     ctx->base_params_soa.p2[acc_i] = acc.dist_cfg.p2;
     ctx->base_params_soa.p3[acc_i] = acc.dist_cfg.p3;
+    ctx->base_params_soa.p4[acc_i] = acc.dist_cfg.p4;
+    ctx->base_params_soa.p5[acc_i] = acc.dist_cfg.p5;
+    ctx->base_params_soa.p6[acc_i] = acc.dist_cfg.p6;
+    ctx->base_params_soa.p7[acc_i] = acc.dist_cfg.p7;
+    ctx->base_params_soa.p8[acc_i] = acc.dist_cfg.p8;
   }
   ctx->base_params_soa.valid = true;
   ctx->kernel_state_graph = KernelStateGraph{};

@@ -873,6 +873,8 @@ simulate.model_structure <- function(structure,
   if (length(missing_cols) > 0L) stop("Parameter matrix missing columns: ", paste(missing_cols, collapse = ", "))
   p_cols <- grep("^p[0-9]+$", colnames(params_mat), value = TRUE)
   if (length(p_cols) == 0L) stop("Parameter matrix must include at least p1")
+  p_cols <- p_cols[order(suppressWarnings(as.integer(sub("^p", "", p_cols))))]
+  p_cols <- p_cols[seq_len(min(length(p_cols), 8L))]
 
   comp_table <- structure$components
   comp_ids <- comp_table$component_id %||% "__default__"
@@ -1078,6 +1080,16 @@ simulate.model_structure <- function(structure,
       row_idx <- trial_rows[[acc_id]]
       row_vals <- params_mat[row_idx, ]
       dist_params <- dist_param_names(acc_defs[[acc_id]]$dist)
+      if (length(dist_params) > length(p_cols)) {
+        stop(
+          sprintf(
+            "Accumulator '%s' requires %d distribution params, but matrix has only %d p-slots",
+            acc_id,
+            length(dist_params),
+            length(p_cols)
+          )
+        )
+      }
       dist_list <- setNames(as.list(row_vals[p_cols][seq_along(dist_params)]), dist_params)
       dist_list$t0 <- row_vals[["t0"]]
       onset_override <- NA_real_

@@ -1427,6 +1427,12 @@ dist_param_names <- function(dist) {
   if (dist == "exgauss") {
     return(c("mu", "sigma", "tau"))
   }
+  if (dist == "lba") {
+    return(c("v", "sv", "B", "A"))
+  }
+  if (dist == "rdm") {
+    return(c("v", "B", "A", "s"))
+  }
   character(0)
 }
 
@@ -1527,7 +1533,11 @@ build_param_matrix <- function(model,
   acc_ids <- vapply(accs, `[[`, character(1), "id")
   acc_dists <- vapply(accs, `[[`, character(1), "dist")
   dist_param_list <- lapply(acc_dists, dist_param_names)
-  max_p <- max(vapply(dist_param_list, length, integer(1)), 0L)
+  max_needed <- max(vapply(dist_param_list, length, integer(1)), 0L)
+  if (max_needed > 8L) {
+    stop(sprintf("Distribution parameter slots currently support up to p8 (requested %d)", max_needed))
+  }
+  max_p <- max_needed
   max_p <- max(3L, max_p)
   col_names <- c("q", "w", "t0", paste0("p", seq_len(max_p)))
 

@@ -110,10 +110,73 @@ dist_registry <- local({
     }
   )
 
+  reg$lba <- list(
+    r = function(n, par) {
+      v <- .dist_param_scalar(par, "v")
+      sv <- .dist_param_scalar(par, "sv")
+      B <- .dist_param_scalar(par, "B")
+      A <- .dist_param_scalar(par, "A")
+      t0 <- .dist_param_t0(par)
+      dist_lba_rng(.dist_as_count(n), v, sv, B, A) + t0
+    },
+    d = function(x, par) {
+      v <- .dist_param_scalar(par, "v")
+      sv <- .dist_param_scalar(par, "sv")
+      B <- .dist_param_scalar(par, "B")
+      A <- .dist_param_scalar(par, "A")
+      t0 <- .dist_param_t0(par)
+      shifted <- x - t0
+      out <- dist_lba_pdf(shifted, v, sv, B, A)
+      .dist_zero_before_t0(out, shifted)
+    },
+    p = function(x, par) {
+      v <- .dist_param_scalar(par, "v")
+      sv <- .dist_param_scalar(par, "sv")
+      B <- .dist_param_scalar(par, "B")
+      A <- .dist_param_scalar(par, "A")
+      t0 <- .dist_param_t0(par)
+      shifted <- x - t0
+      out <- dist_lba_cdf(shifted, v, sv, B, A)
+      .dist_zero_before_t0(out, shifted)
+    }
+  )
+
+  reg$rdm <- list(
+    r = function(n, par) {
+      v <- .dist_param_scalar(par, "v")
+      B <- .dist_param_scalar(par, "B")
+      A <- .dist_param_scalar(par, "A")
+      s <- .dist_param_scalar(par, "s")
+      t0 <- .dist_param_t0(par)
+      dist_rdm_rng(.dist_as_count(n), v, B, A, s) + t0
+    },
+    d = function(x, par) {
+      v <- .dist_param_scalar(par, "v")
+      B <- .dist_param_scalar(par, "B")
+      A <- .dist_param_scalar(par, "A")
+      s <- .dist_param_scalar(par, "s")
+      t0 <- .dist_param_t0(par)
+      shifted <- x - t0
+      out <- dist_rdm_pdf(shifted, v, B, A, s)
+      .dist_zero_before_t0(out, shifted)
+    },
+    p = function(x, par) {
+      v <- .dist_param_scalar(par, "v")
+      B <- .dist_param_scalar(par, "B")
+      A <- .dist_param_scalar(par, "A")
+      s <- .dist_param_scalar(par, "s")
+      t0 <- .dist_param_t0(par)
+      shifted <- x - t0
+      out <- dist_rdm_cdf(shifted, v, B, A, s)
+      .dist_zero_before_t0(out, shifted)
+    }
+  )
+
   function(name) {
-    if (!exists(name, envir = reg, inherits = FALSE)) {
+    key <- if (is.null(name) || length(name) == 0L) "" else tolower(as.character(name)[1])
+    if (!nzchar(key) || !exists(key, envir = reg, inherits = FALSE)) {
       stop(sprintf("Unknown distribution '%s'", name))
     }
-    get(name, envir = reg, inherits = FALSE)
+    get(key, envir = reg, inherits = FALSE)
   }
 })

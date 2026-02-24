@@ -95,6 +95,36 @@ dist_exgauss_rng <- function(n, mu, sigma, tau) {
 }
 
 #' @noRd
+dist_lba_pdf <- function(x, v, sv, B, A) {
+    .Call(`_AccumulatR_dist_lba_pdf`, x, v, sv, B, A)
+}
+
+#' @noRd
+dist_lba_cdf <- function(x, v, sv, B, A) {
+    .Call(`_AccumulatR_dist_lba_cdf`, x, v, sv, B, A)
+}
+
+#' @noRd
+dist_lba_rng <- function(n, v, sv, B, A) {
+    .Call(`_AccumulatR_dist_lba_rng`, n, v, sv, B, A)
+}
+
+#' @noRd
+dist_rdm_pdf <- function(x, v, B, A, s) {
+    .Call(`_AccumulatR_dist_rdm_pdf`, x, v, B, A, s)
+}
+
+#' @noRd
+dist_rdm_cdf <- function(x, v, B, A, s) {
+    .Call(`_AccumulatR_dist_rdm_cdf`, x, v, B, A, s)
+}
+
+#' @noRd
+dist_rdm_rng <- function(n, v, B, A, s) {
+    .Call(`_AccumulatR_dist_rdm_rng`, n, v, B, A, s)
+}
+
+#' @noRd
 pool_coeffs_cpp <- function(Svec, Fvec) {
     .Call(`_AccumulatR_pool_coeffs_cpp`, Svec, Fvec)
 }

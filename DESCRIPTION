@@ -5,10 +5,10 @@ Version: 0.1.0
 Authors@R: c(
     person("Niek", "Stevenson", email = "niek.stevenson@gmail.com", role = c("aut", "cre"))
   )
-Description: AccumulatR is a R/C++ toolkit for building simulators and likelihood for generalized race models. The package keeps the R surface intentionally tiny: you prepare a model once in R, obtain the serialized native context plus per-trial metadata, and then execute all likelihood evaluations on the C++ side.
+Description: R/C++ toolkit for building simulators and likelihood kernels for generalized race models. The package keeps the R surface intentionally tiny: you prepare a model once in R, obtain the serialized native context plus per-trial metadata, and then execute all likelihood evaluations on the C++ side.
 License: GPL-3
 Encoding: UTF-8
-Depends: R (>= 4.0)
+Depends: R (>= 4.1)
 Imports: 
     Rcpp,
     stats,

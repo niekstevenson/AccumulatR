@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <memory>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>

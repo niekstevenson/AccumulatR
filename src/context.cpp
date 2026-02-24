@@ -3,6 +3,7 @@
 #include "prep_builder.h"
 
 #include <cmath>
+#include <memory>
 
 namespace {
 

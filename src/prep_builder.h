@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Rcpp.h>
+#include <memory>
 
 #include "context.h"
 #include "proto.h"

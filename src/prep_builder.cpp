@@ -133,6 +133,13 @@ void validate_guard_transition_completeness(const NativeContext &ctx) {
           "IR guard transition mask invalid for node_id=%d node_idx=%d source_count=%d",
           node.node_id, node_idx, node.source_id_count);
     }
+    if (ctx.kernel_program.valid &&
+        (tr.invalidate_slot < 0 ||
+         tr.invalidate_slot >= static_cast<int>(ctx.kernel_program.ops.size()))) {
+      Rcpp::stop(
+          "IR guard transition invalidate slot invalid for node_id=%d node_idx=%d slot=%d",
+          node.node_id, node_idx, tr.invalidate_slot);
+    }
   }
 }
 
@@ -1242,7 +1249,7 @@ build_context_from_proto(const NativePrepProto &proto) {
     return hash;
   };
 
-  auto shared_gate_lookup_key = [&](int node_idx,
+  auto outcome_coupling_lookup_key = [&](int node_idx,
                                     const std::vector<int> &competitors)
       -> std::uint64_t {
     std::uint64_t hash = 1469598103934665603ULL;
@@ -1301,8 +1308,9 @@ build_context_from_proto(const NativePrepProto &proto) {
     return true;
   };
 
-  auto detect_shared_gate_pair_ir = [&](int node_idx, int competitor_idx,
-                                        IrSharedGateSpec &spec_out) -> bool {
+  auto detect_outcome_coupling_pair_ir =
+      [&](int node_idx, int competitor_idx, std::vector<int> &aux_events,
+          IrOutcomeCouplingOp &spec_out) -> bool {
     int ta = -1, tb = -1, ca = -1, cb = -1;
     if (!and_event_pair(node_idx, ta, tb) ||
         !and_event_pair(competitor_idx, ca, cb)) {
@@ -1359,19 +1367,19 @@ build_context_from_proto(const NativePrepProto &proto) {
       return false;
     }
 
-    spec_out = IrSharedGateSpec();
-    spec_out.kind = IrSharedGateKind::Pair;
+    aux_events.clear();
+    aux_events.push_back(pair_y);
+    spec_out = IrOutcomeCouplingOp();
+    spec_out.kind = IrOutcomeCouplingKind::Pair;
     spec_out.node_idx = node_idx;
-    spec_out.pair_x_event_idx = pair_x;
-    spec_out.pair_y_event_idx = pair_y;
-    spec_out.pair_c_event_idx = pair_c;
+    spec_out.gate_event_idx = pair_c;
+    spec_out.target_event_idx = pair_x;
     return true;
   };
 
-  auto detect_shared_gate_nway_ir = [&](int node_idx,
-                                        const std::vector<int> &competitor_nodes,
-                                        std::vector<int> &nway_events,
-                                        IrSharedGateSpec &spec_out) -> bool {
+  auto detect_outcome_coupling_nway_ir =
+      [&](int node_idx, const std::vector<int> &competitor_nodes,
+          std::vector<int> &aux_events, IrOutcomeCouplingOp &spec_out) -> bool {
     if (competitor_nodes.size() < 2) {
       return false;
     }
@@ -1426,8 +1434,8 @@ build_context_from_proto(const NativePrepProto &proto) {
     int target_event_idx = -1;
     std::unordered_set<int> seen_x;
     seen_x.reserve(pairs.size());
-    nway_events.clear();
-    nway_events.reserve(competitor_nodes.size());
+    aux_events.clear();
+    aux_events.reserve(competitor_nodes.size());
 
     for (std::size_t i = 0; i < pairs.size(); ++i) {
       const Pair &p = pairs[i];
@@ -1449,20 +1457,20 @@ build_context_from_proto(const NativePrepProto &proto) {
         gate_event_idx = gate_e;
         target_event_idx = x_e;
       } else {
-        nway_events.push_back(x_e);
+        aux_events.push_back(x_e);
       }
     }
-    if (gate_event_idx < 0 || target_event_idx < 0 || nway_events.empty()) {
+    if (gate_event_idx < 0 || target_event_idx < 0 || aux_events.empty()) {
       return false;
     }
 
     std::vector<int> event_node_indices;
-    event_node_indices.reserve(2 + nway_events.size());
+    event_node_indices.reserve(2 + aux_events.size());
     event_node_indices.push_back(
         ir.events[static_cast<std::size_t>(gate_event_idx)].node_idx);
     event_node_indices.push_back(
         ir.events[static_cast<std::size_t>(target_event_idx)].node_idx);
-    for (int ce : nway_events) {
+    for (int ce : aux_events) {
       if (ce < 0 || ce >= static_cast<int>(ir.events.size())) {
         return false;
       }
@@ -1486,12 +1494,11 @@ build_context_from_proto(const NativePrepProto &proto) {
       }
     }
 
-    spec_out = IrSharedGateSpec();
-    spec_out.kind = IrSharedGateKind::NWay;
+    spec_out = IrOutcomeCouplingOp();
+    spec_out.kind = IrOutcomeCouplingKind::NWay;
     spec_out.node_idx = node_idx;
-    spec_out.nway_gate_event_idx = gate_event_idx;
-    spec_out.nway_target_event_idx = target_event_idx;
-    spec_out.nway_competitor_event_count = static_cast<int>(nway_events.size());
+    spec_out.gate_event_idx = gate_event_idx;
+    spec_out.target_event_idx = target_event_idx;
     return true;
   };
 
@@ -1506,37 +1513,39 @@ build_context_from_proto(const NativePrepProto &proto) {
       competitor_nodes.push_back(ir.outcome_competitors[static_cast<std::size_t>(
           out.competitor_begin + k)]);
     }
-    IrSharedGateSpec spec;
+    IrOutcomeCouplingOp spec;
+    std::vector<int> aux_events;
     bool ok = false;
     if (competitor_nodes.size() == 1) {
-      ok = detect_shared_gate_pair_ir(out.node_idx, competitor_nodes[0], spec);
+      ok = detect_outcome_coupling_pair_ir(
+          out.node_idx, competitor_nodes[0], aux_events, spec);
     } else if (competitor_nodes.size() >= 2) {
-      std::vector<int> nway_events;
-      ok = detect_shared_gate_nway_ir(out.node_idx, competitor_nodes, nway_events,
-                                      spec);
-      if (ok && !nway_events.empty()) {
-        spec.nway_competitor_event_begin =
-            static_cast<int>(ir.nway_competitor_event_indices.size());
-        ir.nway_competitor_event_indices.insert(
-            ir.nway_competitor_event_indices.end(), nway_events.begin(),
-            nway_events.end());
-      }
+      ok = detect_outcome_coupling_nway_ir(
+          out.node_idx, competitor_nodes, aux_events, spec);
+    }
+    if (ok && !aux_events.empty()) {
+      spec.aux_event_begin =
+            static_cast<int>(ir.outcome_coupling_event_indices.size());
+      spec.aux_event_count = static_cast<int>(aux_events.size());
+      ir.outcome_coupling_event_indices.insert(
+          ir.outcome_coupling_event_indices.end(), aux_events.begin(),
+          aux_events.end());
     }
     if (!ok) {
       continue;
     }
     spec.competitor_begin = out.competitor_begin;
     spec.competitor_count = out.competitor_count;
-    int spec_idx = static_cast<int>(ir.shared_gate_specs.size());
-    ir.shared_gate_specs.push_back(std::move(spec));
-    out.shared_gate_spec_idx = spec_idx;
+    int spec_idx = static_cast<int>(ir.outcome_coupling_ops.size());
+    ir.outcome_coupling_ops.push_back(std::move(spec));
+    out.coupling_op_idx = spec_idx;
     std::vector<int> competitors;
     competitors.reserve(static_cast<std::size_t>(out.competitor_count));
     for (int k = 0; k < out.competitor_count; ++k) {
       competitors.push_back(ir.outcome_competitors[static_cast<std::size_t>(
           out.competitor_begin + k)]);
     }
-    ir.shared_gate_lookup.emplace(shared_gate_lookup_key(out.node_idx, competitors),
+    ir.outcome_coupling_lookup.emplace(outcome_coupling_lookup_key(out.node_idx, competitors),
                                   spec_idx);
   }
 
@@ -1606,6 +1615,17 @@ build_context_from_proto(const NativePrepProto &proto) {
     tr.node_idx = node_idx;
     tr.source_mask_begin = node.source_mask_begin;
     tr.source_mask_count = node.source_mask_count;
+    tr.invalidate_slot = 0;
+    if (node_idx >= 0 &&
+        node_idx <
+            static_cast<int>(ctx->kernel_program.outputs.node_idx_to_slot.size())) {
+      const int out_slot = ctx->kernel_program.outputs.node_idx_to_slot
+          [static_cast<std::size_t>(node_idx)];
+      if (out_slot >= 0 &&
+          out_slot < static_cast<int>(ctx->kernel_program.ops.size())) {
+        tr.invalidate_slot = out_slot;
+      }
+    }
     const int tr_idx =
         static_cast<int>(ctx->kernel_state_graph.guard_transitions.size());
     ctx->kernel_state_graph.guard_transitions.push_back(tr);

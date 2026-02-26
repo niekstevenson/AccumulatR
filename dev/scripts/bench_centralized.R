@@ -27,6 +27,7 @@ if (!dir.exists(out_dir)) {
 out_file <- file.path(out_dir, "benchmark_centralized.csv")
 baseline_file <- file.path(out_dir, "benchmark_centralized_baseline.csv")
 diff_file <- file.path(out_dir, "benchmark_centralized_diff.csv")
+comparison_file <- file.path(out_dir, "benchmark_step3_comparison.csv")
 nested_file <- file.path(out_dir, "bench_nested_integral_baseline.csv")
 examples_file <- file.path(out_dir, "bench_examples_models_likelihood.csv")
 
@@ -164,6 +165,35 @@ build_baseline_diff <- function(current_df, baseline_df) {
   )]
 }
 
+build_step3_comparison <- function(current_df, baseline_df) {
+  key_cols <- c("section", "suite", "label", "metric", "mode")
+  merged <- merge(
+    baseline_df,
+    current_df,
+    by = key_cols,
+    all = FALSE,
+    suffixes = c("_baseline", "_current")
+  )
+  speed_rows <- subset(merged, section == "speed")
+  if (nrow(speed_rows) == 0L) {
+    return(data.frame())
+  }
+  out <- data.frame(
+    suite = speed_rows$suite,
+    label = speed_rows$label,
+    metric = speed_rows$metric,
+    mode = speed_rows$mode,
+    baseline_value = speed_rows$value_baseline,
+    current_value = speed_rows$value_current,
+    ratio = speed_rows$value_current / speed_rows$value_baseline,
+    delta_pct = 100 * (
+      speed_rows$value_current - speed_rows$value_baseline
+    ) / speed_rows$value_baseline,
+    stringsAsFactors = FALSE
+  )
+  out
+}
+
 nested_script <- file.path("dev", "scripts", "bench_nested_integral_baseline.R")
 examples_script <- file.path("dev", "scripts", "bench_examples_models_likelihood.R")
 golden_script <- file.path("dev", "scripts", "check_loglik_golden.R")
@@ -237,12 +267,25 @@ if (file.exists(baseline_file)) {
   } else if (file.exists(diff_file)) {
     file.remove(diff_file)
   }
+  comparison_df <- build_step3_comparison(combined, baseline_df)
+  if (nrow(comparison_df) > 0L) {
+    utils::write.csv(comparison_df, comparison_file, row.names = FALSE)
+    cat("Wrote Step 3 comparison output to", comparison_file, "\n")
+  } else if (file.exists(comparison_file)) {
+    file.remove(comparison_file)
+  }
 }
 
 update_baseline <- identical(trimws(Sys.getenv("ACCUMULATR_UPDATE_BASELINE")), "1")
 if (update_baseline) {
   file.copy(out_file, baseline_file, overwrite = TRUE)
   cat("Updated baseline output at", baseline_file, "\n")
+  snapshot_ts <- format(Sys.time(), "%Y%m%dT%H%M%SZ", tz = "UTC")
+  snapshot_file <- file.path(
+    out_dir, paste0("benchmark_centralized_baseline_", snapshot_ts, ".csv")
+  )
+  file.copy(out_file, snapshot_file, overwrite = FALSE)
+  cat("Wrote immutable baseline snapshot to", snapshot_file, "\n")
 }
 
 cat("\nWrote centralized benchmark output to", out_file, "\n")

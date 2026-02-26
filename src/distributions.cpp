@@ -4,7 +4,6 @@
 #include <Rcpp.h>
 #include <algorithm>
 #include <array>
-#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -1962,6 +1961,7 @@ inline double evaluate_shared_trigger_states(
 }
 
 struct ComponentCacheEntry;
+struct OutcomeCouplingProgram;
 
 double component_keep_weight(const uuber::NativeContext &ctx, int component_idx,
                              int outcome_idx);
@@ -1981,11 +1981,25 @@ double native_outcome_probability_bits_impl_idx(
     bool forced_complete_bits_valid,
     const uuber::BitsetState *forced_survive_bits,
     bool forced_survive_bits_valid,
+    const std::vector<int> &competitor_ids_raw, double rel_tol, double abs_tol,
+    int max_depth, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, bool include_na_donors,
+    int outcome_idx_context,
+    const SharedTriggerPlan *trigger_plan, TrialParamSet *trigger_scratch,
+    const OutcomeCouplingProgram *precompiled_coupling_program = nullptr);
+
+double native_outcome_probability_bits_impl_idx(
+    const uuber::NativeContext &ctx, int node_id, double upper, int component_idx,
+    const uuber::BitsetState *forced_complete_bits,
+    bool forced_complete_bits_valid,
+    const uuber::BitsetState *forced_survive_bits,
+    bool forced_survive_bits_valid,
     const Rcpp::IntegerVector &competitor_ids, double rel_tol, double abs_tol,
     int max_depth, const TrialParamSet *trial_params,
     const std::string &trial_type_key, bool include_na_donors,
     int outcome_idx_context,
-    const SharedTriggerPlan *trigger_plan, TrialParamSet *trigger_scratch);
+    const SharedTriggerPlan *trigger_plan, TrialParamSet *trigger_scratch,
+    const OutcomeCouplingProgram *precompiled_coupling_program = nullptr);
 
 double node_density_with_competitors_internal(
     const uuber::NativeContext &ctx, int node_id, double t, int component_idx,
@@ -3054,28 +3068,16 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState &state,
 
 bool share_sources(const std::vector<int> &a, const std::vector<int> &b);
 
-struct SharedGatePair {
+struct OutcomeCouplingPairPayload {
   LabelRef x_ref;
   LabelRef y_ref;
   LabelRef c_ref;
 };
 
-struct SharedGateNWay {
+struct OutcomeCouplingNWayPayload {
   LabelRef gate_ref;
   LabelRef target_ref;
   std::vector<LabelRef> competitor_refs;
-};
-
-struct SharedGatePairCacheEntry {
-  bool computed{false};
-  bool is_shared{false};
-  SharedGatePair spec;
-};
-
-struct SharedGateNWayCacheEntry {
-  bool computed{false};
-  bool is_shared{false};
-  SharedGateNWay spec;
 };
 
 inline std::uint64_t ir_mix_lookup_hash(std::uint64_t hash, int value) {
@@ -3088,7 +3090,7 @@ inline std::uint64_t ir_mix_lookup_hash(std::uint64_t hash, int value) {
   return hash;
 }
 
-inline std::uint64_t ir_shared_gate_lookup_key(int node_idx,
+inline std::uint64_t ir_outcome_coupling_lookup_key(int node_idx,
                                                const std::vector<int> &competitors) {
   std::uint64_t hash = 1469598103934665603ULL;
   hash = ir_mix_lookup_hash(hash, node_idx);
@@ -3112,8 +3114,8 @@ inline int ir_resolve_node_idx(const uuber::NativeContext &ctx, int node_id) {
   return -1;
 }
 
-bool ir_shared_gate_pair_lookup(const uuber::NativeContext &ctx, int node_id,
-                                int competitor_node_id, SharedGatePair &out) {
+bool ir_outcome_coupling_pair_lookup(const uuber::NativeContext &ctx, int node_id,
+                                int competitor_node_id, OutcomeCouplingPairPayload &out) {
   if (!ctx.ir.valid)
     return false;
   int node_idx = ir_resolve_node_idx(ctx, node_id);
@@ -3121,16 +3123,16 @@ bool ir_shared_gate_pair_lookup(const uuber::NativeContext &ctx, int node_id,
   if (node_idx < 0 || comp_idx < 0)
     return false;
   std::vector<int> competitor_dense{comp_idx};
-  std::uint64_t key = ir_shared_gate_lookup_key(node_idx, competitor_dense);
-  auto it = ctx.ir.shared_gate_lookup.find(key);
-  if (it == ctx.ir.shared_gate_lookup.end())
+  std::uint64_t key = ir_outcome_coupling_lookup_key(node_idx, competitor_dense);
+  auto it = ctx.ir.outcome_coupling_lookup.find(key);
+  if (it == ctx.ir.outcome_coupling_lookup.end())
     return false;
   int spec_idx = it->second;
-  if (spec_idx < 0 || spec_idx >= static_cast<int>(ctx.ir.shared_gate_specs.size()))
+  if (spec_idx < 0 || spec_idx >= static_cast<int>(ctx.ir.outcome_coupling_ops.size()))
     return false;
-  const uuber::IrSharedGateSpec &spec =
-      ctx.ir.shared_gate_specs[static_cast<std::size_t>(spec_idx)];
-  if (spec.kind != uuber::IrSharedGateKind::Pair)
+  const uuber::IrOutcomeCouplingOp &spec =
+      ctx.ir.outcome_coupling_ops[static_cast<std::size_t>(spec_idx)];
+  if (spec.kind != uuber::IrOutcomeCouplingKind::Pair)
     return false;
   if (spec.node_idx != node_idx || spec.competitor_count != 1)
     return false;
@@ -3153,18 +3155,27 @@ bool ir_shared_gate_pair_lookup(const uuber::NativeContext &ctx, int node_id,
     ref.outcome_idx = event.outcome_idx;
     return true;
   };
-  if (!fill_from_event(spec.pair_x_event_idx, out.x_ref))
+  if (!fill_from_event(spec.target_event_idx, out.x_ref))
     return false;
-  if (!fill_from_event(spec.pair_y_event_idx, out.y_ref))
+  if (!fill_from_event(spec.gate_event_idx, out.c_ref))
     return false;
-  if (!fill_from_event(spec.pair_c_event_idx, out.c_ref))
+  if (spec.aux_event_count != 1 || spec.aux_event_begin < 0) {
+    return false;
+  }
+  if (spec.aux_event_begin >=
+      static_cast<int>(ctx.ir.outcome_coupling_event_indices.size())) {
+    return false;
+  }
+  int y_event_idx = ctx.ir.outcome_coupling_event_indices[static_cast<std::size_t>(
+      spec.aux_event_begin)];
+  if (!fill_from_event(y_event_idx, out.y_ref))
     return false;
   return true;
 }
 
-bool ir_shared_gate_nway_lookup(const uuber::NativeContext &ctx, int node_id,
+bool ir_outcome_coupling_nway_lookup(const uuber::NativeContext &ctx, int node_id,
                                 const std::vector<int> &competitor_node_ids,
-                                SharedGateNWay &out) {
+                                OutcomeCouplingNWayPayload &out) {
   if (!ctx.ir.valid || competitor_node_ids.empty())
     return false;
   int node_idx = ir_resolve_node_idx(ctx, node_id);
@@ -3178,16 +3189,16 @@ bool ir_shared_gate_nway_lookup(const uuber::NativeContext &ctx, int node_id,
       return false;
     competitor_dense.push_back(comp_idx);
   }
-  std::uint64_t key = ir_shared_gate_lookup_key(node_idx, competitor_dense);
-  auto it = ctx.ir.shared_gate_lookup.find(key);
-  if (it == ctx.ir.shared_gate_lookup.end())
+  std::uint64_t key = ir_outcome_coupling_lookup_key(node_idx, competitor_dense);
+  auto it = ctx.ir.outcome_coupling_lookup.find(key);
+  if (it == ctx.ir.outcome_coupling_lookup.end())
     return false;
   int spec_idx = it->second;
-  if (spec_idx < 0 || spec_idx >= static_cast<int>(ctx.ir.shared_gate_specs.size()))
+  if (spec_idx < 0 || spec_idx >= static_cast<int>(ctx.ir.outcome_coupling_ops.size()))
     return false;
-  const uuber::IrSharedGateSpec &spec =
-      ctx.ir.shared_gate_specs[static_cast<std::size_t>(spec_idx)];
-  if (spec.kind != uuber::IrSharedGateKind::NWay)
+  const uuber::IrOutcomeCouplingOp &spec =
+      ctx.ir.outcome_coupling_ops[static_cast<std::size_t>(spec_idx)];
+  if (spec.kind != uuber::IrOutcomeCouplingKind::NWay)
     return false;
   if (spec.node_idx != node_idx ||
       spec.competitor_count != static_cast<int>(competitor_dense.size())) {
@@ -3215,25 +3226,25 @@ bool ir_shared_gate_nway_lookup(const uuber::NativeContext &ctx, int node_id,
     return true;
   };
 
-  if (!ref_from_event(spec.nway_gate_event_idx, out.gate_ref))
+  if (!ref_from_event(spec.gate_event_idx, out.gate_ref))
     return false;
-  if (!ref_from_event(spec.nway_target_event_idx, out.target_ref))
+  if (!ref_from_event(spec.target_event_idx, out.target_ref))
     return false;
   out.competitor_refs.clear();
 
-  if (spec.nway_competitor_event_count <= 0)
+  if (spec.aux_event_count <= 0)
     return false;
-  if (spec.nway_competitor_event_begin < 0)
+  if (spec.aux_event_begin < 0)
     return false;
-  out.competitor_refs.reserve(static_cast<std::size_t>(spec.nway_competitor_event_count));
-  for (int i = 0; i < spec.nway_competitor_event_count; ++i) {
-    int idx = spec.nway_competitor_event_begin + i;
+  out.competitor_refs.reserve(static_cast<std::size_t>(spec.aux_event_count));
+  for (int i = 0; i < spec.aux_event_count; ++i) {
+    int idx = spec.aux_event_begin + i;
     if (idx < 0 ||
-        idx >= static_cast<int>(ctx.ir.nway_competitor_event_indices.size())) {
+        idx >= static_cast<int>(ctx.ir.outcome_coupling_event_indices.size())) {
       return false;
     }
     int event_idx =
-        ctx.ir.nway_competitor_event_indices[static_cast<std::size_t>(idx)];
+        ctx.ir.outcome_coupling_event_indices[static_cast<std::size_t>(idx)];
     LabelRef comp_ref;
     if (!ref_from_event(event_idx, comp_ref))
       return false;
@@ -3242,71 +3253,63 @@ bool ir_shared_gate_nway_lookup(const uuber::NativeContext &ctx, int node_id,
   return true;
 }
 
-bool shared_gate_pair_cached(const uuber::NativeContext &ctx, int node_id,
-                             int competitor_node_id, SharedGatePair &out) {
-  if (node_id < 0 || competitor_node_id < 0)
-    return false;
-  return ir_shared_gate_pair_lookup(ctx, node_id, competitor_node_id, out);
-}
-
-std::string competitor_cache_key(const std::vector<int> &ids);
-
-bool shared_gate_nway_cached(const uuber::NativeContext &ctx, int node_id,
-                             const std::vector<int> &competitor_node_ids,
-                             SharedGateNWay &out) {
-  if (node_id < 0)
-    return false;
-  if (competitor_node_ids.empty())
-    return false;
-  return ir_shared_gate_nway_lookup(ctx, node_id, competitor_node_ids, out);
-}
-
-enum class CompetitorRouteKind : std::uint8_t {
-  GeneralCompiled = 0,
-  SharedGatePair = 1,
-  SharedGateNWay = 2
+enum class OutcomeCouplingOpKind : std::uint8_t {
+  None = 0,
+  Pair = 1,
+  NWay = 2
 };
 
-struct CompetitorRouteDecision {
-  CompetitorRouteKind kind{CompetitorRouteKind::GeneralCompiled};
-  SharedGatePair pair{};
-  SharedGateNWay nway{};
+struct OutcomeCouplingProgram {
+  OutcomeCouplingOpKind kind{OutcomeCouplingOpKind::None};
+  OutcomeCouplingPairPayload pair{};
+  OutcomeCouplingNWayPayload nway{};
+  bool valid{false};
 };
 
-inline CompetitorRouteDecision
-resolve_competitor_route(const uuber::NativeContext &ctx, int node_id,
-                         const std::vector<int> &competitor_node_ids,
-                         bool forced_empty) {
-  CompetitorRouteDecision decision;
+inline OutcomeCouplingProgram
+resolve_outcome_coupling_program(const uuber::NativeContext &ctx, int node_id,
+                                 const std::vector<int> &competitor_node_ids,
+                                 bool forced_empty) {
+  OutcomeCouplingProgram program;
   if (!forced_empty || node_id < 0 || competitor_node_ids.empty()) {
-    return decision;
+    return program;
   }
   if (competitor_node_ids.size() == 1 &&
       competitor_node_ids[0] != NA_INTEGER &&
-      shared_gate_pair_cached(ctx, node_id, competitor_node_ids[0],
-                              decision.pair)) {
-    decision.kind = CompetitorRouteKind::SharedGatePair;
-    return decision;
+      ir_outcome_coupling_pair_lookup(ctx, node_id, competitor_node_ids[0],
+                                      program.pair)) {
+    program.kind = OutcomeCouplingOpKind::Pair;
+    program.valid = true;
+    return program;
   }
   if (competitor_node_ids.size() >= 2 &&
-      shared_gate_nway_cached(ctx, node_id, competitor_node_ids,
-                              decision.nway)) {
-    decision.kind = CompetitorRouteKind::SharedGateNWay;
-    return decision;
+      ir_outcome_coupling_nway_lookup(ctx, node_id, competitor_node_ids,
+                                      program.nway)) {
+    program.kind = OutcomeCouplingOpKind::NWay;
+    program.valid = true;
+    return program;
   }
-  return decision;
+  return program;
+}
+
+inline const uuber::TrialParamsSoA *
+resolve_trial_params_soa(const TrialParamSet *trial_params) {
+  if (!trial_params || !trial_params->soa_cache_valid ||
+      !trial_params->soa_cache.valid) {
+    return nullptr;
+  }
+  return &trial_params->soa_cache;
 }
 
 NodeEvalResult eval_event_unforced(
     const uuber::NativeContext &ctx, const LabelRef &label_ref, double t,
     int component_idx, EvalNeed need, const TrialParamSet *trial_params,
     const std::string &trial_type_key, bool include_na_donors,
-    int outcome_idx_context) {
-  const uuber::TrialParamsSoA *trial_params_soa =
-      (trial_params && trial_params->soa_cache_valid &&
-       trial_params->soa_cache.valid)
-          ? &trial_params->soa_cache
-          : nullptr;
+    int outcome_idx_context,
+    const uuber::TrialParamsSoA *trial_params_soa = nullptr) {
+  if (!trial_params_soa) {
+    trial_params_soa = resolve_trial_params_soa(trial_params);
+  }
   return eval_event_ref_idx(
       ctx, label_ref, 0u, t, component_idx, need, trial_params, trial_type_key,
       include_na_donors, outcome_idx_context, nullptr, nullptr,
@@ -3314,146 +3317,64 @@ NodeEvalResult eval_event_unforced(
       trial_params_soa);
 }
 
-double shared_gate_pair_density(const uuber::NativeContext &ctx,
-                                const SharedGatePair &pair, double t,
-                                int component_idx,
-                                const TrialParamSet *trial_params,
-                                const std::string &trial_type_key,
-                                bool include_na_donors,
-                                int outcome_idx_context) {
-  if (!std::isfinite(t) || t < 0.0)
-    return 0.0;
-
-  const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
-  auto eval_unforced = [&](const LabelRef &ref, double u) -> NodeEvalResult {
-    return eval_event_unforced(ctx, ref, u, component_idx, need,
-                               trial_params, trial_type_key, include_na_donors,
-                               outcome_idx_context);
-  };
-  NodeEvalResult ex = eval_unforced(pair.x_ref, t);
-  NodeEvalResult ey = eval_unforced(pair.y_ref, t);
-  NodeEvalResult ec = eval_unforced(pair.c_ref, t);
-
-  double fX = ex.density;
-  double fC = ec.density;
-  double SY = clamp_probability(ey.survival);
-  double FY = clamp_probability(1.0 - SY);
-  double SC = clamp_probability(ec.survival);
-  double FC = clamp_probability(1.0 - SC);
-  double SX = clamp_probability(ex.survival);
-  double FX = clamp_probability(1.0 - SX);
-
-  double term1 = (std::isfinite(fX) && fX > 0.0) ? (fX * FC * SY) : 0.0;
-  double termCother = (std::isfinite(fC) && fC > 0.0) ? (fC * FX * SY) : 0.0;
-  double term2 = 0.0;
-
-  double denom = FX * FY;
-  if (std::isfinite(fC) && fC > 0.0 && std::isfinite(denom) && denom > 0.0 &&
-      t > 0.0) {
-    auto integrand = [&](double u) -> double {
-      if (!std::isfinite(u) || u < 0.0)
-        return 0.0;
-      NodeEvalResult ex_u = eval_unforced(pair.x_ref, u);
-      NodeEvalResult ey_u = eval_unforced(pair.y_ref, u);
-      double fx_u = ex_u.density;
-      if (!std::isfinite(fx_u) || fx_u <= 0.0)
-        return 0.0;
-      double fy_u = clamp_probability(1.0 - clamp_probability(ey_u.survival));
-      double val = fx_u * fy_u;
-      if (!std::isfinite(val) || val <= 0.0)
-        return 0.0;
-      return val;
-    };
-    double integral = uuber::integrate_boost_fn(
-        integrand, 0.0, t, kDefaultRelTol, kDefaultAbsTol, kDefaultMaxDepth);
-    if (!std::isfinite(integral) || integral < 0.0)
-      integral = 0.0;
-    double term = denom - integral;
-    if (term < 0.0)
-      term = 0.0;
-    term2 = fC * term;
+inline bool coupling_acc_specialization_allowed(const uuber::NativeContext &ctx,
+                                                bool include_na_donors,
+                                                int outcome_idx_context) {
+  if (include_na_donors) {
+    return false;
   }
-
-  double out = term1 + termCother + term2;
-  if (!std::isfinite(out) || out < 0.0)
-    return 0.0;
-  return out;
+  if (outcome_idx_context < 0) {
+    return true;
+  }
+  if (!ctx.ir.valid ||
+      outcome_idx_context >= static_cast<int>(ctx.ir.outcomes.size())) {
+    return false;
+  }
+  const uuber::IrOutcome &outcome =
+      ctx.ir.outcomes[static_cast<std::size_t>(outcome_idx_context)];
+  return outcome.alias_count == 0 && outcome.guess_count == 0;
 }
 
-double shared_gate_nway_density(const uuber::NativeContext &ctx,
-                                const SharedGateNWay &gate, double t,
-                                int component_idx,
-                                const TrialParamSet *trial_params,
-                                const std::string &trial_type_key,
-                                bool include_na_donors,
-                                int outcome_idx_context) {
-  if (!std::isfinite(t) || t < 0.0)
-    return 0.0;
-  if (gate.competitor_refs.empty())
-    return 0.0;
+struct CouplingAccRef {
+  double onset{0.0};
+  double q{0.0};
+  AccDistParams cfg{};
+};
 
-  const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
-  auto eval_unforced = [&](const LabelRef &ref, double u) -> NodeEvalResult {
-    return eval_event_unforced(ctx, ref, u, component_idx, need,
-                               trial_params, trial_type_key, include_na_donors,
-                               outcome_idx_context);
-  };
-  NodeEvalResult ex = eval_unforced(gate.target_ref, t);
-  NodeEvalResult ec = eval_unforced(gate.gate_ref, t);
-
-  double prod_surv = 1.0;
-  for (const LabelRef &competitor_ref : gate.competitor_refs) {
-    NodeEvalResult ej = eval_unforced(competitor_ref, t);
-    double sj = clamp_probability(ej.survival);
-    prod_surv *= sj;
-    if (!std::isfinite(prod_surv) || prod_surv <= 0.0) {
-      prod_surv = 0.0;
-      break;
-    }
+inline bool build_coupling_acc_ref(
+    const uuber::NativeContext &ctx, const LabelRef &ref, int component_idx,
+    const TrialParamSet *trial_params,
+    const uuber::TrialParamsSoA *trial_params_soa, CouplingAccRef &out) {
+  if (ref.acc_idx < 0 ||
+      ref.acc_idx >= static_cast<int>(ctx.accumulators.size())) {
+    return false;
   }
-
-  double fX = ex.density;
-  double fC = ec.density;
-  double FC = clamp_probability(1.0 - clamp_probability(ec.survival));
-
-  double term1 = (std::isfinite(fX) && fX > 0.0 && prod_surv > 0.0 && FC > 0.0)
-                     ? (fX * FC * prod_surv)
-                     : 0.0;
-
-  double term2 = 0.0;
-  if (std::isfinite(fC) && fC > 0.0 && t > 0.0) {
-    auto integrand = [&](double u) -> double {
-      if (!std::isfinite(u) || u < 0.0)
-        return 0.0;
-      NodeEvalResult ex_u = eval_unforced(gate.target_ref, u);
-      double fx_u = ex_u.density;
-      if (!std::isfinite(fx_u) || fx_u <= 0.0)
-        return 0.0;
-      double prod = 1.0;
-      for (const LabelRef &competitor_ref : gate.competitor_refs) {
-        NodeEvalResult ej_u = eval_unforced(competitor_ref, u);
-        prod *= clamp_probability(ej_u.survival);
-        if (!std::isfinite(prod) || prod <= 0.0)
-          return 0.0;
-      }
-      double val = fx_u * prod;
-      return (std::isfinite(val) && val > 0.0) ? val : 0.0;
-    };
-    double integral = uuber::integrate_boost_fn(
-        integrand, 0.0, t, kDefaultRelTol, kDefaultAbsTol, kDefaultMaxDepth);
-    if (!std::isfinite(integral) || integral < 0.0)
-      integral = 0.0;
-    term2 = fC * integral;
+  const uuber::NativeAccumulator &acc =
+      ctx.accumulators[static_cast<std::size_t>(ref.acc_idx)];
+  const TrialAccumulatorParams *override =
+      get_trial_param_entry(trial_params, ref.acc_idx);
+  if (!component_active_idx(acc, component_idx, override)) {
+    return false;
   }
-
-  double out = term1 + term2;
-  if (!std::isfinite(out) || out < 0.0)
-    return 0.0;
-  return out;
+  const int onset_kind = override ? override->onset_kind : acc.onset_kind;
+  if (ctx.has_chained_onsets && onset_kind != uuber::ONSET_ABSOLUTE) {
+    return false;
+  }
+  resolve_event_numeric_params(acc, ref.acc_idx, override, trial_params_soa,
+                               out.onset, out.q, out.cfg);
+  return true;
 }
 
-double shared_gate_nway_probability(
-    const uuber::NativeContext &ctx, const SharedGateNWay &gate, double upper,
+inline double coupling_acc_density(const CouplingAccRef &ref, double t) {
+  return safe_density(acc_density_from_cfg(t, ref.onset, ref.q, ref.cfg));
+}
+
+inline double coupling_acc_survival(const CouplingAccRef &ref, double t) {
+  return clamp_probability(acc_survival_from_cfg(t, ref.onset, ref.q, ref.cfg));
+}
+
+double evaluate_coupling_mass_nway(
+    const uuber::NativeContext &ctx, const OutcomeCouplingNWayPayload &gate, double upper,
     int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     double rel_tol, double abs_tol, int max_depth, bool include_na_donors,
@@ -3467,10 +3388,74 @@ double shared_gate_nway_probability(
     return 0.0;
 
   const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
+  const uuber::TrialParamsSoA *trial_params_soa =
+      resolve_trial_params_soa(trial_params);
+  const bool use_acc_specialization =
+      coupling_acc_specialization_allowed(ctx, include_na_donors, outcome_idx_context);
+  CouplingAccRef gate_acc;
+  CouplingAccRef target_acc;
+  std::vector<CouplingAccRef> competitor_acc;
+  bool acc_specialized = false;
+  if (use_acc_specialization &&
+      build_coupling_acc_ref(ctx, gate.gate_ref, component_idx, trial_params,
+                             trial_params_soa, gate_acc) &&
+      build_coupling_acc_ref(ctx, gate.target_ref, component_idx, trial_params,
+                             trial_params_soa, target_acc)) {
+    competitor_acc.reserve(gate.competitor_refs.size());
+    acc_specialized = true;
+    for (const LabelRef &competitor_ref : gate.competitor_refs) {
+      CouplingAccRef comp_acc;
+      if (!build_coupling_acc_ref(ctx, competitor_ref, component_idx,
+                                  trial_params, trial_params_soa,
+                                  comp_acc)) {
+        acc_specialized = false;
+        competitor_acc.clear();
+        break;
+      }
+      competitor_acc.push_back(comp_acc);
+    }
+  }
+
+  if (acc_specialized) {
+    double gate_cdf = 0.0;
+    if (std::isfinite(upper)) {
+      gate_cdf = clamp_probability(1.0 - coupling_acc_survival(gate_acc, upper));
+      if (!std::isfinite(gate_cdf) || gate_cdf <= 0.0)
+        return 0.0;
+    } else {
+      gate_cdf = clamp_probability(
+          1.0 -
+          coupling_acc_survival(gate_acc, std::numeric_limits<double>::infinity()));
+      if (gate_cdf <= 0.0)
+        return 0.0;
+    }
+    auto order_integrand = [&](double t) -> double {
+      double fx = coupling_acc_density(target_acc, t);
+      if (!std::isfinite(fx) || fx <= 0.0)
+        return 0.0;
+      double prod = 1.0;
+      for (const CouplingAccRef &comp_acc : competitor_acc) {
+        prod *= coupling_acc_survival(comp_acc, t);
+        if (!std::isfinite(prod) || prod <= 0.0)
+          return 0.0;
+      }
+      double val = fx * prod;
+      return (std::isfinite(val) && val > 0.0) ? val : 0.0;
+    };
+    double order_mass = uuber::integrate_boost_fn_0_to_upper(
+        order_integrand, upper, rel_tol, abs_tol, max_depth, true);
+    if (!std::isfinite(order_mass) || order_mass < 0.0)
+      order_mass = 0.0;
+    double total = gate_cdf * order_mass;
+    if (!std::isfinite(total) || total < 0.0)
+      total = 0.0;
+    return clamp_probability(total);
+  }
+
   auto eval_unforced = [&](const LabelRef &ref, double t) -> NodeEvalResult {
     return eval_event_unforced(ctx, ref, t, component_idx, need,
                                trial_params, trial_type_key, include_na_donors,
-                               outcome_idx_context);
+                               outcome_idx_context, trial_params_soa);
   };
 
   // Gate must finish by `upper` for any outcome to be observed by `upper`.
@@ -3516,8 +3501,8 @@ double shared_gate_nway_probability(
   return clamp_probability(total);
 }
 
-double shared_gate_pair_probability(
-    const uuber::NativeContext &ctx, const SharedGatePair &pair, double upper,
+double evaluate_coupling_mass_pair(
+    const uuber::NativeContext &ctx, const OutcomeCouplingPairPayload &pair, double upper,
     int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     double rel_tol, double abs_tol, int max_depth, bool include_na_donors,
@@ -3535,10 +3520,56 @@ double shared_gate_pair_probability(
   };
 
   const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
+  const uuber::TrialParamsSoA *trial_params_soa =
+      resolve_trial_params_soa(trial_params);
+  const bool use_acc_specialization =
+      coupling_acc_specialization_allowed(ctx, include_na_donors, outcome_idx_context);
+  CouplingAccRef x_acc;
+  CouplingAccRef y_acc;
+  CouplingAccRef c_acc;
+  const bool acc_specialized =
+      use_acc_specialization &&
+      build_coupling_acc_ref(ctx, pair.x_ref, component_idx, trial_params,
+                             trial_params_soa, x_acc) &&
+      build_coupling_acc_ref(ctx, pair.y_ref, component_idx, trial_params,
+                             trial_params_soa, y_acc) &&
+      build_coupling_acc_ref(ctx, pair.c_ref, component_idx, trial_params,
+                             trial_params_soa, c_acc);
+
+  if (acc_specialized) {
+    double coeff = 1.0;
+    if (std::isfinite(upper)) {
+      coeff = clamp_probability(1.0 - coupling_acc_survival(c_acc, upper));
+    }
+    auto total_integrand = [&](double t) -> double {
+      double fx_dens = coupling_acc_density(x_acc, t);
+      double sx = coupling_acc_survival(x_acc, t);
+      double Fx = clamp_probability(1.0 - sx);
+      double fc_dens = coupling_acc_density(c_acc, t);
+      double Fc = coupling_acc_survival(c_acc, t);
+      Fc = clamp_probability(1.0 - Fc);
+
+      double val = 0.0;
+      if (std::isfinite(fc_dens) && fc_dens > 0.0 && Fx > 0.0) {
+        val += fc_dens * Fx;
+      }
+
+      if (std::isfinite(fx_dens) && fx_dens > 0.0) {
+        double Fy = clamp_probability(1.0 - coupling_acc_survival(y_acc, t));
+        val += fx_dens * (Fc - coeff * Fy);
+      }
+      return std::isfinite(val) ? val : 0.0;
+    };
+    double total = integrate_signed(total_integrand);
+    if (!std::isfinite(total) || total < 0.0)
+      total = 0.0;
+    return clamp_probability(total);
+  }
+
   auto eval_unforced = [&](const LabelRef &ref, double t) -> NodeEvalResult {
     return eval_event_unforced(ctx, ref, t, component_idx, need,
                                trial_params, trial_type_key, include_na_donors,
-                               outcome_idx_context);
+                               outcome_idx_context, trial_params_soa);
   };
 
   // Algebraic simplification of the previous 4-5 integral formulation:
@@ -3578,6 +3609,63 @@ double shared_gate_pair_probability(
   if (!std::isfinite(total) || total < 0.0)
     total = 0.0;
   return clamp_probability(total);
+}
+
+using OutcomeCouplingMassEvaluator = double (*)(
+    const uuber::NativeContext &, const OutcomeCouplingProgram &, double, int,
+    const TrialParamSet *, const std::string &, double, double, int, bool, int);
+
+double evaluate_coupling_mass_pair_program(
+    const uuber::NativeContext &ctx, const OutcomeCouplingProgram &program,
+    double upper, int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, double rel_tol, double abs_tol,
+    int max_depth, bool include_na_donors, int outcome_idx_context) {
+  return evaluate_coupling_mass_pair(
+      ctx, program.pair, upper, component_idx, trial_params, trial_type_key,
+      rel_tol, abs_tol, max_depth, include_na_donors, outcome_idx_context);
+}
+
+double evaluate_coupling_mass_nway_program(
+    const uuber::NativeContext &ctx, const OutcomeCouplingProgram &program,
+    double upper, int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, double rel_tol, double abs_tol,
+    int max_depth, bool include_na_donors, int outcome_idx_context) {
+  return evaluate_coupling_mass_nway(
+      ctx, program.nway, upper, component_idx, trial_params, trial_type_key,
+      rel_tol, abs_tol, max_depth, include_na_donors, outcome_idx_context);
+}
+
+inline OutcomeCouplingMassEvaluator
+resolve_outcome_coupling_mass_evaluator(OutcomeCouplingOpKind kind) {
+  static constexpr std::array<OutcomeCouplingMassEvaluator, 3> kEvaluators{
+      nullptr,
+      &evaluate_coupling_mass_pair_program,
+      &evaluate_coupling_mass_nway_program};
+  const std::size_t idx = static_cast<std::size_t>(kind);
+  if (idx >= kEvaluators.size()) {
+    return nullptr;
+  }
+  return kEvaluators[idx];
+}
+
+double evaluate_outcome_coupling_mass(
+    const uuber::NativeContext &ctx,
+    const OutcomeCouplingProgram &program,
+    double upper, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    double rel_tol, double abs_tol, int max_depth, bool include_na_donors,
+    int outcome_idx_context) {
+  if (!program.valid || program.kind == OutcomeCouplingOpKind::None) {
+    return 0.0;
+  }
+  OutcomeCouplingMassEvaluator evaluator =
+      resolve_outcome_coupling_mass_evaluator(program.kind);
+  if (!evaluator) {
+    return 0.0;
+  }
+  return evaluator(ctx, program, upper, component_idx, trial_params,
+                   trial_type_key, rel_tol, abs_tol, max_depth,
+                   include_na_donors, outcome_idx_context);
 }
 
 NodeEvalResult eval_node_with_forced_dense_bits(
@@ -4287,41 +4375,49 @@ struct CompetitorMeta {
   int guard_transition_idx{-1};
   int transition_mask_begin{-1};
   int transition_mask_count{0};
+  int invalidate_slot{0};
   bool transition_required{false};
   std::vector<int> sources;
   bool scenario_sensitive{false};
 };
 
-enum class CompetitorClusterExecMode : std::uint8_t {
-  BatchKernel = 0,
-  SequentialTransition = 1
+enum class CompetitorCompiledOpKind : std::uint8_t {
+  EvalBatchSurvival = 0,
+  EvalSingleApplyMask = 1
 };
 
-struct CompetitorClusterPlan {
-  std::vector<int> member_indices;
-  std::vector<int> eval_order;
-  CompetitorClusterExecMode mode{CompetitorClusterExecMode::BatchKernel};
+struct CompetitorCompiledOp {
+  CompetitorCompiledOpKind kind{CompetitorCompiledOpKind::EvalBatchSurvival};
+  std::vector<int> target_node_indices;
+  int target_node_idx{-1};
+  int transition_mask_begin{-1};
+  int transition_mask_count{0};
+  int invalidate_slot{0};
 };
 
 struct CompetitorClusterCacheEntry {
   std::vector<CompetitorMeta> metas;
-  std::vector<CompetitorClusterPlan> cluster_plans;
+  std::vector<CompetitorCompiledOp> compiled_ops;
 };
 
-using CompetitorCacheMap =
-    std::unordered_map<std::string, CompetitorClusterCacheEntry>;
+struct CompetitorCacheRecord {
+  std::vector<int> competitor_ids;
+  CompetitorClusterCacheEntry entry;
+};
+
+using CompetitorCacheMap = std::unordered_map<std::uint64_t,
+                                              std::vector<CompetitorCacheRecord>>;
 
 static std::unordered_map<const uuber::NativeContext *, CompetitorCacheMap>
     g_competitor_cache;
 
-std::string competitor_cache_key(const std::vector<int> &ids) {
-  std::ostringstream oss;
-  for (std::size_t i = 0; i < ids.size(); ++i) {
-    if (i > 0)
-      oss << ",";
-    oss << ids[i];
+std::uint64_t competitor_cache_key_hash(const std::vector<int> &ids) {
+  std::uint64_t hash = 1469598103934665603ULL;
+  hash = ir_mix_lookup_hash(hash, static_cast<int>(ids.size()));
+  for (int id : ids) {
+    hash = ir_mix_lookup_hash(hash, id);
   }
-  return oss.str();
+  return hash;
 }
 
 // Forward declaration
@@ -4359,6 +4455,9 @@ bool node_contains_guard(int node_id, const uuber::NativeContext &ctx,
 
 inline void validate_competitor_transition_meta(const uuber::NativeContext &ctx,
                                                 const CompetitorMeta &meta) {
+  if (meta.node_idx < 0) {
+    Rcpp::stop("IR competitor node index missing for node %d", meta.node_id);
+  }
   if (!meta.transition_required) {
     return;
   }
@@ -4373,16 +4472,26 @@ inline void validate_competitor_transition_meta(const uuber::NativeContext &ctx,
           static_cast<int>(ctx.ir.node_source_masks.size())) {
     Rcpp::stop("IR guard transition mask invalid for node %d", meta.node_id);
   }
+  if (ctx.kernel_program.valid &&
+      (meta.invalidate_slot < 0 ||
+       meta.invalidate_slot >= static_cast<int>(ctx.kernel_program.ops.size()))) {
+    Rcpp::stop("IR guard transition invalidate slot invalid for node %d",
+               meta.node_id);
+  }
 }
 
 const CompetitorClusterCacheEntry &
 fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
                                const std::vector<int> &competitor_ids) {
   CompetitorCacheMap &cache = g_competitor_cache[&ctx];
-  const std::string key = competitor_cache_key(competitor_ids);
-  auto it = cache.find(key);
+  const std::uint64_t key_hash = competitor_cache_key_hash(competitor_ids);
+  auto it = cache.find(key_hash);
   if (it != cache.end()) {
-    return it->second;
+    for (const CompetitorCacheRecord &record : it->second) {
+      if (record.competitor_ids == competitor_ids) {
+        return record.entry;
+      }
+    }
   }
 
   CompetitorClusterCacheEntry entry;
@@ -4412,6 +4521,7 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
                 meta.guard_transition_idx)];
         meta.transition_mask_begin = tr.source_mask_begin;
         meta.transition_mask_count = tr.source_mask_count;
+        meta.invalidate_slot = tr.invalidate_slot;
       }
     }
     meta.transition_required = contains_guard && !meta.sources.empty();
@@ -4419,12 +4529,15 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
     entry.metas.push_back(std::move(meta));
   }
 
-  const std::vector<std::vector<int>> clusters = build_competitor_clusters(entry.metas);
-  entry.cluster_plans.reserve(clusters.size());
+  const std::vector<std::vector<int>> clusters =
+      build_competitor_clusters(entry.metas);
+  std::size_t op_estimate = 0;
   for (const std::vector<int> &cluster : clusters) {
-    CompetitorClusterPlan plan;
-    plan.member_indices = cluster;
-
+    op_estimate += cluster.size();
+  }
+  entry.compiled_ops.reserve(op_estimate == 0 ? clusters.size() : op_estimate);
+  for (std::size_t cluster_i = 0; cluster_i < clusters.size(); ++cluster_i) {
+    const std::vector<int> &cluster = clusters[cluster_i];
     bool requires_transition = false;
     for (int idx : cluster) {
       if (entry.metas[static_cast<std::size_t>(idx)].transition_required) {
@@ -4432,8 +4545,25 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
         break;
       }
     }
-    if (requires_transition) {
-      plan.mode = CompetitorClusterExecMode::SequentialTransition;
+    if (!requires_transition) {
+      CompetitorCompiledOp op;
+      op.kind = CompetitorCompiledOpKind::EvalBatchSurvival;
+      op.target_node_indices.reserve(cluster.size());
+      for (int idx : cluster) {
+        if (idx < 0 || idx >= static_cast<int>(entry.metas.size())) {
+          Rcpp::stop("IR competitor batch index out of range: %d", idx);
+        }
+        const CompetitorMeta &meta = entry.metas[static_cast<std::size_t>(idx)];
+        if (meta.node_idx < 0) {
+          Rcpp::stop("IR competitor node index missing for node %d", meta.node_id);
+        }
+        op.target_node_indices.push_back(meta.node_idx);
+      }
+      entry.compiled_ops.push_back(std::move(op));
+      continue;
+    }
+
+    {
       struct OrderingMeta {
         int index;
         std::size_t source_count;
@@ -4455,16 +4585,26 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
                   }
                   return a.index < b.index;
                 });
-      plan.eval_order.reserve(order.size());
       for (const OrderingMeta &rec : order) {
-        plan.eval_order.push_back(rec.index);
+        CompetitorCompiledOp op;
+        op.kind = CompetitorCompiledOpKind::EvalSingleApplyMask;
+        const CompetitorMeta &meta =
+            entry.metas[static_cast<std::size_t>(rec.index)];
+        op.target_node_idx = meta.node_idx;
+        op.transition_mask_begin = meta.transition_mask_begin;
+        op.transition_mask_count = meta.transition_mask_count;
+        op.invalidate_slot = meta.invalidate_slot;
+        entry.compiled_ops.push_back(std::move(op));
       }
     }
-    entry.cluster_plans.push_back(std::move(plan));
   }
 
-  auto inserted = cache.emplace(key, std::move(entry));
-  return inserted.first->second;
+  CompetitorCacheRecord record;
+  record.competitor_ids = competitor_ids;
+  record.entry = std::move(entry);
+  std::vector<CompetitorCacheRecord> &bucket = cache[key_hash];
+  bucket.push_back(std::move(record));
+  return bucket.back().entry;
 }
 
 bool share_sources(const std::vector<int> &a, const std::vector<int> &b) {
@@ -4625,137 +4765,110 @@ evaluate_survival_with_forced(int node_id,
   return clamp_probability(res.survival);
 }
 
-double compute_competitor_cluster_value(
-    const CompetitorClusterPlan &plan, const std::vector<CompetitorMeta> &metas,
-    const uuber::NativeContext &ctx, double t, int component_idx,
-    const uuber::BitsetState *forced_complete_bits,
-    bool forced_complete_bits_valid,
-    const uuber::BitsetState *forced_survive_bits,
-    bool forced_survive_bits_valid,
-    const std::string &trial_key = std::string(),
-    const TrialParamSet *trial_params = nullptr,
-    const ExactSourceTimeMap *exact_source_times = nullptr,
-    const SourceTimeBoundsMap *source_time_bounds = nullptr,
-    uuber::KernelRuntimeState *kernel_runtime = nullptr) {
-  if (plan.member_indices.empty()) {
+inline bool competitor_kernel_runtime_usable(const NodeEvalState &state) {
+  return state.kernel_runtime_ready && state.kernel_runtime_ptr &&
+         kernel_runtime_cache_safe(state);
+}
+
+double run_competitor_batch_survival_op(
+    const CompetitorCompiledOp &op, NodeEvalState &state,
+    const uuber::KernelEventEvalFn &event_eval_cb,
+    const uuber::KernelGuardEvalFn &guard_eval_cb) {
+  if (op.target_node_indices.empty()) {
     return 1.0;
   }
 
-  if (plan.mode == CompetitorClusterExecMode::BatchKernel) {
-    const bool kernel_runtime_usable =
-        kernel_runtime &&
-        !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
-        !forced_bits_any(forced_survive_bits, forced_survive_bits_valid) &&
-        exact_source_times == nullptr && source_time_bounds == nullptr;
-    NodeEvalState state(ctx, t, component_idx, trial_params, trial_key, false, -1,
-                        exact_source_times, source_time_bounds, nullptr,
-                        forced_complete_bits, forced_complete_bits_valid,
-                        forced_survive_bits, forced_survive_bits_valid,
-                        kernel_runtime_usable ? kernel_runtime : nullptr);
-    std::vector<int> target_node_indices;
-    target_node_indices.reserve(plan.member_indices.size());
-    for (int idx : plan.member_indices) {
-      const CompetitorMeta &meta = metas[static_cast<std::size_t>(idx)];
-      if (meta.node_idx < 0) {
-        Rcpp::stop("IR competitor node index missing for node %d", meta.node_id);
-      }
-      target_node_indices.push_back(meta.node_idx);
+  uuber::KernelEvalNeed kernel_need;
+  kernel_need.density = false;
+  kernel_need.survival = true;
+  kernel_need.cdf = true;
+  std::vector<uuber::KernelNodeValues> kernel_values;
+  if (competitor_kernel_runtime_usable(state)) {
+    if (!uuber::eval_kernel_nodes_incremental(
+            state.ctx.kernel_program, *state.kernel_runtime_ptr,
+            op.target_node_indices,
+            kernel_need, event_eval_cb, guard_eval_cb, kernel_values) ||
+        kernel_values.size() != op.target_node_indices.size()) {
+      Rcpp::stop("IR kernel execution failed for competitor batch op");
     }
-    if (target_node_indices.empty()) {
-      return 1.0;
-    }
-
-    uuber::KernelEvalNeed kernel_need;
-    kernel_need.density = false;
-    kernel_need.survival = true;
-    kernel_need.cdf = true;
-    uuber::KernelEventEvalFn event_eval_cb = make_kernel_event_eval(state);
-    uuber::KernelGuardEvalFn guard_eval_cb = make_kernel_guard_eval(state);
-    std::vector<uuber::KernelNodeValues> kernel_values;
-    if (kernel_runtime_usable && state.kernel_runtime_ready &&
-        state.kernel_runtime_ptr) {
-      if (!uuber::eval_kernel_nodes_incremental(
-              ctx.kernel_program, *state.kernel_runtime_ptr, target_node_indices,
-              kernel_need, event_eval_cb, guard_eval_cb, kernel_values) ||
-          kernel_values.size() != target_node_indices.size()) {
-        Rcpp::stop("IR kernel execution failed for competitor cluster");
-      }
-    } else {
-      kernel_values.resize(target_node_indices.size());
-      for (std::size_t i = 0; i < target_node_indices.size(); ++i) {
-        if (!uuber::eval_kernel_node(ctx.kernel_program, target_node_indices[i],
-                                     kernel_need, event_eval_cb, guard_eval_cb,
-                                     kernel_values[i])) {
-          Rcpp::stop("IR kernel execution failed for competitor cluster");
-        }
+  } else {
+    kernel_values.resize(op.target_node_indices.size());
+    for (std::size_t i = 0; i < op.target_node_indices.size(); ++i) {
+      const int node_idx = op.target_node_indices[i];
+      if (!uuber::eval_kernel_node(state.ctx.kernel_program, node_idx, kernel_need,
+                                   event_eval_cb, guard_eval_cb,
+                                   kernel_values[i])) {
+        Rcpp::stop("IR kernel execution failed for competitor batch op");
       }
     }
-    double batch_prod = 1.0;
-    for (const auto &vals : kernel_values) {
-      double surv = clamp_probability(vals.survival);
-      if (!std::isfinite(surv) || surv <= 0.0) {
-        return 0.0;
-      }
-      batch_prod *= surv;
-      if (!std::isfinite(batch_prod) || batch_prod <= 0.0) {
-        return 0.0;
-      }
-    }
-    return clamp_probability(batch_prod);
   }
-
-  uuber::BitsetState forced_complete_bits_seed;
-  bool forced_complete_bits_seed_valid = false;
-  if (forced_complete_bits && forced_complete_bits_valid) {
-    forced_complete_bits_seed = *forced_complete_bits;
-    forced_complete_bits_seed_valid = true;
-  }
-  uuber::BitsetState forced_survive_bits_seed;
-  bool forced_survive_bits_seed_valid = false;
-  if (forced_survive_bits && forced_survive_bits_valid) {
-    forced_survive_bits_seed = *forced_survive_bits;
-    forced_survive_bits_seed_valid = true;
-  }
-  NodeEvalState state(
-      ctx, t, component_idx, trial_params, trial_key, false, -1,
-      exact_source_times, source_time_bounds, nullptr,
-      forced_complete_bits_seed_valid ? &forced_complete_bits_seed : nullptr,
-      forced_complete_bits_seed_valid,
-      forced_survive_bits_seed_valid ? &forced_survive_bits_seed : nullptr,
-      forced_survive_bits_seed_valid, nullptr);
-  const std::vector<int> &order =
-      plan.eval_order.empty() ? plan.member_indices : plan.eval_order;
-  if (!ensure_forced_bitset_capacity(ctx, state.forced_survive_bits,
-                                     state.forced_survive_bits_valid)) {
-    Rcpp::stop(
-        "IR guard transition bitset unavailable for competitor cluster");
-  }
-  double product = 1.0;
-  for (int idx : order) {
-    const CompetitorMeta &meta = metas[static_cast<std::size_t>(idx)];
-    NodeEvalResult res = eval_node_recursive(meta.node_id, state, EvalNeed::kSurvival);
-    double surv = clamp_probability(res.survival);
+  double batch_prod = 1.0;
+  for (const auto &vals : kernel_values) {
+    double surv = clamp_probability(vals.survival);
     if (!std::isfinite(surv) || surv <= 0.0) {
       return 0.0;
     }
-    product *= surv;
-    if (!std::isfinite(product) || product <= 0.0) {
+    batch_prod *= surv;
+    if (!std::isfinite(batch_prod) || batch_prod <= 0.0) {
       return 0.0;
     }
-    if (!meta.transition_required) {
-      continue;
-    }
-    if (meta.transition_mask_begin < 0 || meta.transition_mask_count <= 0 ||
-        meta.transition_mask_begin + meta.transition_mask_count >
-            static_cast<int>(ctx.ir.node_source_masks.size())) {
-      Rcpp::stop("IR guard transition missing for node %d with non-empty sources",
-                 meta.node_id);
-    }
-    const std::uint64_t *mask_words = &ctx.ir.node_source_masks[static_cast<std::size_t>(
-        meta.transition_mask_begin)];
-    state.forced_survive_bits.or_words(mask_words, meta.transition_mask_count);
   }
-  return clamp_probability(product);
+  return clamp_probability(batch_prod);
+}
+
+double run_competitor_single_survival_op(
+    const CompetitorCompiledOp &op, NodeEvalState &state,
+    const uuber::KernelEventEvalFn &event_eval_cb,
+    const uuber::KernelGuardEvalFn &guard_eval_cb) {
+  if (op.target_node_idx < 0) {
+    Rcpp::stop("IR competitor single-op node index missing");
+  }
+  uuber::KernelEvalNeed kernel_need;
+  kernel_need.density = false;
+  kernel_need.survival = true;
+  kernel_need.cdf = true;
+  uuber::KernelNodeValues kernel_value{};
+  if (competitor_kernel_runtime_usable(state)) {
+    if (!uuber::eval_kernel_node_incremental(
+            state.ctx.kernel_program, *state.kernel_runtime_ptr, op.target_node_idx,
+            kernel_need, event_eval_cb, guard_eval_cb, kernel_value)) {
+      Rcpp::stop("IR kernel execution failed for competitor single op");
+    }
+  } else {
+    if (!uuber::eval_kernel_node(state.ctx.kernel_program, op.target_node_idx,
+                                 kernel_need, event_eval_cb, guard_eval_cb,
+                                 kernel_value)) {
+      Rcpp::stop("IR kernel execution failed for competitor single op");
+    }
+  }
+  const double surv = clamp_probability(kernel_value.survival);
+  if (!std::isfinite(surv) || surv <= 0.0) {
+    return 0.0;
+  }
+
+  if (op.transition_mask_begin >= 0 && op.transition_mask_count > 0) {
+    if (op.transition_mask_begin + op.transition_mask_count >
+        static_cast<int>(state.ctx.ir.node_source_masks.size())) {
+      Rcpp::stop("IR guard transition mask invalid for competitor op node_idx=%d",
+                 op.target_node_idx);
+    }
+    if (!ensure_forced_bitset_capacity(state.ctx, state.forced_survive_bits,
+                                       state.forced_survive_bits_valid)) {
+      Rcpp::stop(
+          "IR guard transition bitset unavailable for competitor execution");
+    }
+    const std::uint64_t *mask_words =
+        &state.ctx.ir.node_source_masks[static_cast<std::size_t>(
+            op.transition_mask_begin)];
+    state.forced_survive_bits.or_words(mask_words, op.transition_mask_count);
+    if (state.kernel_runtime_ready && state.kernel_runtime_ptr) {
+      const int invalidate_slot = (op.invalidate_slot >= 0) ? op.invalidate_slot
+                                                             : 0;
+      uuber::invalidate_kernel_runtime_from_slot(*state.kernel_runtime_ptr,
+                                                 invalidate_slot);
+    }
+  }
+  return surv;
 }
 
 double competitor_survival_internal(
@@ -4774,69 +4887,46 @@ double competitor_survival_internal(
     return 1.0;
   const CompetitorClusterCacheEntry &cache =
       fetch_competitor_cluster_cache(ctx, competitor_ids);
-  if (cache.cluster_plans.empty())
+  if (cache.compiled_ops.empty())
     return 1.0;
 
-  uuber::BitsetState forced_complete_bits;
-  uuber::BitsetState forced_survive_bits;
-  bool forced_complete_bits_valid = false;
-  bool forced_survive_bits_valid = false;
+  uuber::BitsetState forced_complete_bits_seed;
+  uuber::BitsetState forced_survive_bits_seed;
+  bool forced_complete_bits_seed_valid = false;
+  bool forced_survive_bits_seed_valid = false;
   if (forced_complete_bits_in && forced_complete_bits_in_valid) {
-    forced_complete_bits = *forced_complete_bits_in;
-    forced_complete_bits_valid = true;
+    forced_complete_bits_seed = *forced_complete_bits_in;
+    forced_complete_bits_seed_valid = true;
   }
   if (forced_survive_bits_in && forced_survive_bits_in_valid) {
-    forced_survive_bits = *forced_survive_bits_in;
-    forced_survive_bits_valid = true;
+    forced_survive_bits_seed = *forced_survive_bits_in;
+    forced_survive_bits_seed_valid = true;
   }
+
+  const bool kernel_runtime_usable =
+      kernel_runtime &&
+      !forced_bits_any(forced_complete_bits_in, forced_complete_bits_in_valid) &&
+      !forced_bits_any(forced_survive_bits_in, forced_survive_bits_in_valid) &&
+      exact_source_times == nullptr && source_time_bounds == nullptr;
+  NodeEvalState state(
+      ctx, t, component_idx, trial_params, trial_type_key, false, -1,
+      exact_source_times, source_time_bounds, nullptr,
+      forced_complete_bits_seed_valid ? &forced_complete_bits_seed : nullptr,
+      forced_complete_bits_seed_valid,
+      forced_survive_bits_seed_valid ? &forced_survive_bits_seed : nullptr,
+      forced_survive_bits_seed_valid,
+      kernel_runtime_usable ? kernel_runtime : nullptr);
+  uuber::KernelEventEvalFn event_eval_cb = make_kernel_event_eval(state);
+  uuber::KernelGuardEvalFn guard_eval_cb = make_kernel_guard_eval(state);
 
   double product = 1.0;
-  for (const CompetitorClusterPlan &plan : cache.cluster_plans) {
-    double cluster_val = compute_competitor_cluster_value(
-        plan, cache.metas, ctx, t, component_idx,
-        forced_complete_bits_valid ? &forced_complete_bits : nullptr,
-        forced_complete_bits_valid,
-        forced_survive_bits_valid ? &forced_survive_bits : nullptr,
-        forced_survive_bits_valid, trial_type_key, trial_params,
-        exact_source_times, source_time_bounds, kernel_runtime);
-    if (!std::isfinite(cluster_val) || cluster_val <= 0.0) {
-      return 0.0;
-    }
-    product *= cluster_val;
-    if (!std::isfinite(product) || product <= 0.0) {
-      return 0.0;
-    }
-  }
-  return clamp_probability(product);
-}
-
-inline bool competitors_guard_free_dense(const uuber::NativeContext &ctx,
-                                         const std::vector<int> &competitor_ids) {
-  for (int node_id : competitor_ids) {
-    if (node_id == NA_INTEGER) {
-      continue;
-    }
-    int node_idx = resolve_dense_node_idx_required(ctx, node_id);
-    const uuber::IrNode &node = ir_node_required(ctx, node_idx);
-    if (node.op == uuber::IrNodeOp::Guard) {
-      return false;
-    }
-  }
-  return true;
-}
-
-inline double competitor_survival_from_state(
-    NodeEvalState &state, const std::vector<int> &competitor_ids) {
-  if (competitor_ids.empty()) {
-    return 1.0;
-  }
-  double product = 1.0;
-  for (int node_id : competitor_ids) {
-    if (node_id == NA_INTEGER) {
-      continue;
-    }
-    NodeEvalResult res = eval_node_recursive(node_id, state, EvalNeed::kSurvival);
-    double surv = clamp_probability(res.survival);
+  for (const CompetitorCompiledOp &op : cache.compiled_ops) {
+    const double surv =
+        (op.kind == CompetitorCompiledOpKind::EvalBatchSurvival)
+            ? run_competitor_batch_survival_op(op, state, event_eval_cb,
+                                               guard_eval_cb)
+            : run_competitor_single_survival_op(op, state, event_eval_cb,
+                                                guard_eval_cb);
     if (!std::isfinite(surv) || surv <= 0.0) {
       return 0.0;
     }
@@ -4851,83 +4941,20 @@ inline double competitor_survival_from_state(
 inline double node_density_with_competitors_from_state(
     const uuber::NativeContext &ctx, int node_id,
     const std::vector<int> &competitor_ids, NodeEvalState &state,
-    bool use_fused_competitor_survival, uuber::KernelRuntimeState *kernel_runtime) {
-  if (use_fused_competitor_survival && !competitor_ids.empty() &&
-      state.kernel_runtime_ready && state.kernel_runtime_ptr &&
-      state.forced_scope_filter == nullptr &&
-      !(state.forced_complete_bits_valid && state.forced_complete_bits.any()) &&
-      !(state.forced_survive_bits_valid && state.forced_survive_bits.any()) &&
-      state.exact_source_times == nullptr &&
-      state.source_time_bounds == nullptr) {
-    int target_node_idx = resolve_dense_node_idx_required(ctx, node_id);
-    std::vector<int> eval_node_indices;
-    eval_node_indices.reserve(1 + competitor_ids.size());
-    eval_node_indices.push_back(target_node_idx);
-    for (int comp_node_id : competitor_ids) {
-      if (comp_node_id == NA_INTEGER) {
-        continue;
-      }
-      int comp_idx = resolve_dense_node_idx_required(ctx, comp_node_id);
-      eval_node_indices.push_back(comp_idx);
-    }
-    if (!eval_node_indices.empty()) {
-      uuber::KernelEvalNeed kernel_need;
-      kernel_need.density = true;
-      kernel_need.survival = true;
-      kernel_need.cdf = true;
-      std::vector<uuber::KernelNodeValues> kernel_values;
-      uuber::KernelEventEvalFn event_eval_cb = make_kernel_event_eval(state);
-      uuber::KernelGuardEvalFn guard_eval_cb = make_kernel_guard_eval(state);
-      if (!uuber::eval_kernel_nodes_incremental(
-              ctx.kernel_program, *state.kernel_runtime_ptr, eval_node_indices,
-              kernel_need, event_eval_cb, guard_eval_cb, kernel_values) ||
-          kernel_values.empty()) {
-        Rcpp::stop(
-            "IR kernel execution failed for fused node/competitor evaluation");
-      }
-      double density = safe_density(kernel_values[0].density);
-      if (density <= 0.0) {
-        return 0.0;
-      }
-      double competitor_survival = 1.0;
-      for (std::size_t i = 1; i < kernel_values.size(); ++i) {
-        double surv = clamp_probability(kernel_values[i].survival);
-        if (!std::isfinite(surv) || surv <= 0.0) {
-          return 0.0;
-        }
-        competitor_survival *= surv;
-        if (!std::isfinite(competitor_survival) || competitor_survival <= 0.0) {
-          return 0.0;
-        }
-      }
-      double out = density * competitor_survival;
-      if (!std::isfinite(out) || out <= 0.0) {
-        return 0.0;
-      }
-      return out;
-    }
-  }
+    uuber::KernelRuntimeState *kernel_runtime) {
   NodeEvalResult base = eval_node_recursive(node_id, state, EvalNeed::kDensity);
   double density = base.density;
   if (!std::isfinite(density) || density <= 0.0) {
     return 0.0;
   }
   if (!competitor_ids.empty()) {
-    double surv = use_fused_competitor_survival
-                      ? competitor_survival_from_state(state, competitor_ids)
-                      : competitor_survival_internal(
-                            ctx, competitor_ids, state.t, state.component_idx,
-                            state.forced_complete_bits_valid
-                                ? &state.forced_complete_bits
-                                : nullptr,
-                            state.forced_complete_bits_valid,
-                            state.forced_survive_bits_valid
-                                ? &state.forced_survive_bits
-                                : nullptr,
-                            state.forced_survive_bits_valid,
-                            state.trial_type_key, state.trial_params,
-                            state.exact_source_times, state.source_time_bounds,
-                            kernel_runtime);
+    const double surv = competitor_survival_internal(
+        ctx, competitor_ids, state.t, state.component_idx,
+        state.forced_complete_bits_valid ? &state.forced_complete_bits : nullptr,
+        state.forced_complete_bits_valid,
+        state.forced_survive_bits_valid ? &state.forced_survive_bits : nullptr,
+        state.forced_survive_bits_valid, state.trial_type_key, state.trial_params,
+        state.exact_source_times, state.source_time_bounds, kernel_runtime);
     if (!std::isfinite(surv) || surv <= 0.0) {
       return 0.0;
     }
@@ -4951,21 +4978,6 @@ double node_density_with_competitors_internal(
   if (!std::isfinite(t) || t < 0.0) {
     return 0.0;
   }
-  const bool forced_empty =
-      !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
-      !forced_bits_any(forced_survive_bits, forced_survive_bits_valid);
-  const CompetitorRouteDecision route =
-      resolve_competitor_route(ctx, node_id, competitor_ids, forced_empty);
-  if (route.kind == CompetitorRouteKind::SharedGateNWay) {
-    return shared_gate_nway_density(ctx, route.nway, t, component_idx,
-                                    trial_params, trial_type_key,
-                                    include_na_donors, outcome_idx_context);
-  }
-  if (route.kind == CompetitorRouteKind::SharedGatePair) {
-    return shared_gate_pair_density(ctx, route.pair, t, component_idx,
-                                    trial_params, trial_type_key,
-                                    include_na_donors, outcome_idx_context);
-  }
   NodeEvalState state(
       ctx, t, component_idx, trial_params, trial_type_key, include_na_donors,
       outcome_idx_context, exact_source_times, source_time_bounds, nullptr,
@@ -4973,13 +4985,8 @@ double node_density_with_competitors_internal(
       forced_complete_bits_valid,
       forced_survive_bits_valid ? forced_survive_bits : nullptr,
       forced_survive_bits_valid, kernel_runtime);
-  const bool use_fused_competitor_survival =
-      !competitor_ids.empty() && forced_empty && exact_source_times == nullptr &&
-      source_time_bounds == nullptr &&
-      competitors_guard_free_dense(ctx, competitor_ids);
   return node_density_with_competitors_from_state(
-      ctx, node_id, competitor_ids, state, use_fused_competitor_survival,
-      kernel_runtime);
+      ctx, node_id, competitor_ids, state, kernel_runtime);
 }
 
 double kernel_node_density_entry_idx(
@@ -5038,10 +5045,6 @@ inline double node_density_with_shared_triggers_plan(
   const bool forced_empty =
       !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
       !forced_bits_any(forced_survive_bits, forced_survive_bits_valid);
-  const CompetitorRouteDecision route =
-      resolve_competitor_route(ctx, node_id, competitor_ids, forced_empty);
-  const bool use_general_route =
-      route.kind == CompetitorRouteKind::GeneralCompiled;
   uuber::KernelRuntimeState shared_kernel_runtime;
   uuber::KernelRuntimeState *shared_kernel_runtime_ptr = nullptr;
   if (ctx.kernel_program.valid && shared_trigger_count(*plan_ptr) > 0 &&
@@ -5049,40 +5052,19 @@ inline double node_density_with_shared_triggers_plan(
     uuber::reset_kernel_runtime(ctx.kernel_program, shared_kernel_runtime);
     shared_kernel_runtime_ptr = &shared_kernel_runtime;
   }
-  std::unique_ptr<NodeEvalState> prebuilt_state;
-  bool prebuilt_fused_competitor_survival = false;
-  if (use_general_route) {
-    prebuilt_state = std::make_unique<NodeEvalState>(
-        ctx, t, component_idx, &scratch, trial_type_key, include_na_donors,
-        outcome_idx_context, nullptr, nullptr, nullptr,
-        forced_complete_bits_valid ? forced_complete_bits : nullptr,
-        forced_complete_bits_valid,
-        forced_survive_bits_valid ? forced_survive_bits : nullptr,
-        forced_survive_bits_valid, shared_kernel_runtime_ptr);
-    prebuilt_fused_competitor_survival =
-        !competitor_ids.empty() && forced_empty &&
-        competitors_guard_free_dense(ctx, competitor_ids);
-  }
+  NodeEvalState prebuilt_state(
+      ctx, t, component_idx, &scratch, trial_type_key, include_na_donors,
+      outcome_idx_context, nullptr, nullptr, nullptr,
+      forced_complete_bits_valid ? forced_complete_bits : nullptr,
+      forced_complete_bits_valid,
+      forced_survive_bits_valid ? forced_survive_bits : nullptr,
+      forced_survive_bits_valid, shared_kernel_runtime_ptr);
   double total = evaluate_shared_trigger_states(
       ctx, *plan_ptr, scratch, "Too many shared triggers for density evaluation",
       [&]() -> double {
-        if (route.kind == CompetitorRouteKind::SharedGateNWay) {
-          return shared_gate_nway_density(
-              ctx, route.nway, t, component_idx, &scratch,
-              trial_type_key, include_na_donors, outcome_idx_context);
-        }
-        if (route.kind == CompetitorRouteKind::SharedGatePair) {
-          return shared_gate_pair_density(
-              ctx, route.pair, t, component_idx, &scratch,
-              trial_type_key, include_na_donors, outcome_idx_context);
-        }
-        if (!prebuilt_state) {
-          Rcpp::stop(
-              "IR general competitor route missing prebuilt state for shared triggers");
-        }
         return node_density_with_competitors_from_state(
-            ctx, node_id, competitor_ids, *prebuilt_state,
-            prebuilt_fused_competitor_survival, shared_kernel_runtime_ptr);
+            ctx, node_id, competitor_ids, prebuilt_state,
+            shared_kernel_runtime_ptr);
       },
       shared_kernel_runtime_ptr);
   if (!std::isfinite(total) || total <= 0.0)
@@ -5096,13 +5078,14 @@ double native_outcome_probability_bits_impl_idx(
     bool forced_complete_bits_valid,
     const uuber::BitsetState *forced_survive_bits,
     bool forced_survive_bits_valid,
-    const Rcpp::IntegerVector &competitor_ids, double rel_tol, double abs_tol,
+    const std::vector<int> &competitor_ids_raw, double rel_tol, double abs_tol,
     int max_depth, const TrialParamSet *trial_params,
     const std::string &trial_type_key,
     bool include_na_donors,
     int outcome_idx_context,
     const SharedTriggerPlan *trigger_plan,
-    TrialParamSet *trigger_scratch) {
+    TrialParamSet *trigger_scratch,
+    const OutcomeCouplingProgram *precompiled_coupling_program) {
   if (upper <= 0.0) {
     return 0.0;
   }
@@ -5113,17 +5096,35 @@ double native_outcome_probability_bits_impl_idx(
   const bool forced_empty =
       !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
       !forced_bits_any(forced_survive_bits, forced_survive_bits_valid);
-  std::vector<int> comp_vec_raw = integer_vector_to_std(competitor_ids, false);
   std::vector<int> comp_vec_filtered;
-  const std::vector<int> &comp_vec =
-      filter_competitor_ids(ctx, comp_vec_raw, component_idx,
-                            comp_vec_filtered);
-  const CompetitorRouteDecision route =
-      resolve_competitor_route(ctx, node_id, comp_vec, forced_empty);
+  const std::vector<int> *comp_vec_ptr = nullptr;
+  const OutcomeCouplingProgram *coupling_program_ptr = nullptr;
+  OutcomeCouplingProgram resolved_coupling_program;
+  if (forced_empty && precompiled_coupling_program &&
+      precompiled_coupling_program->valid) {
+    coupling_program_ptr = precompiled_coupling_program;
+  } else {
+    const std::vector<int> &comp_vec = filter_competitor_ids(
+        ctx, competitor_ids_raw, component_idx, comp_vec_filtered);
+    comp_vec_ptr = &comp_vec;
+    if (forced_empty) {
+      resolved_coupling_program =
+          resolve_outcome_coupling_program(ctx, node_id, comp_vec, true);
+      if (resolved_coupling_program.valid) {
+        coupling_program_ptr = &resolved_coupling_program;
+      }
+    }
+  }
+  if (!comp_vec_ptr && !coupling_program_ptr) {
+    const std::vector<int> &comp_vec = filter_competitor_ids(
+        ctx, competitor_ids_raw, component_idx, comp_vec_filtered);
+    comp_vec_ptr = &comp_vec;
+  }
+  const bool uses_coupling_program =
+      (coupling_program_ptr != nullptr && coupling_program_ptr->valid);
   uuber::KernelRuntimeState integrand_kernel_runtime;
   uuber::KernelRuntimeState *integrand_kernel_runtime_ptr = nullptr;
-  if (ctx.kernel_program.valid &&
-      route.kind == CompetitorRouteKind::GeneralCompiled) {
+  if (ctx.kernel_program.valid && !uses_coupling_program) {
     uuber::reset_kernel_runtime(ctx.kernel_program, integrand_kernel_runtime);
     integrand_kernel_runtime_ptr = &integrand_kernel_runtime;
   }
@@ -5139,7 +5140,7 @@ double native_outcome_probability_bits_impl_idx(
         forced_complete_bits,
         forced_complete_bits_valid,
         forced_survive_bits,
-        forced_survive_bits_valid, comp_vec, params_ptr, trial_type_key,
+        forced_survive_bits_valid, *comp_vec_ptr, params_ptr, trial_type_key,
         include_na_donors, outcome_idx_context, nullptr, nullptr,
         integrand_kernel_runtime_ptr);
     if (!std::isfinite(val) || val <= 0.0)
@@ -5147,16 +5148,10 @@ double native_outcome_probability_bits_impl_idx(
     return val;
   };
   auto integrate_with_params = [&](const TrialParamSet *params_ptr) -> double {
-    if (route.kind == CompetitorRouteKind::SharedGatePair) {
-      return shared_gate_pair_probability(
-          ctx, route.pair, upper, component_idx, params_ptr,
-          trial_type_key, rel_tol, abs_tol, max_depth, include_na_donors,
-          outcome_idx_context);
-    }
-    if (route.kind == CompetitorRouteKind::SharedGateNWay) {
-      return shared_gate_nway_probability(
-          ctx, route.nway, upper, component_idx, params_ptr, trial_type_key,
-          rel_tol, abs_tol, max_depth,
+    if (uses_coupling_program) {
+      return evaluate_outcome_coupling_mass(
+          ctx, *coupling_program_ptr, upper, component_idx,
+          params_ptr, trial_type_key, rel_tol, abs_tol, max_depth,
           include_na_donors, outcome_idx_context);
     }
     double integral = uuber::integrate_boost_fn_0_to_upper(
@@ -5199,6 +5194,30 @@ double native_outcome_probability_bits_impl_idx(
       "Too many shared triggers for outcome probability evaluation",
       [&]() -> double { return integrate_with_params(&scratch); });
   return clamp_probability(total);
+}
+
+double native_outcome_probability_bits_impl_idx(
+    const uuber::NativeContext &ctx, int node_id, double upper, int component_idx,
+    const uuber::BitsetState *forced_complete_bits,
+    bool forced_complete_bits_valid,
+    const uuber::BitsetState *forced_survive_bits,
+    bool forced_survive_bits_valid,
+    const Rcpp::IntegerVector &competitor_ids, double rel_tol, double abs_tol,
+    int max_depth, const TrialParamSet *trial_params,
+    const std::string &trial_type_key,
+    bool include_na_donors,
+    int outcome_idx_context,
+    const SharedTriggerPlan *trigger_plan,
+    TrialParamSet *trigger_scratch,
+    const OutcomeCouplingProgram *precompiled_coupling_program) {
+  std::vector<int> competitor_ids_raw = integer_vector_to_std(competitor_ids, false);
+  return native_outcome_probability_bits_impl_idx(
+      ctx, node_id, upper, component_idx,
+      forced_complete_bits, forced_complete_bits_valid,
+      forced_survive_bits, forced_survive_bits_valid,
+      competitor_ids_raw, rel_tol, abs_tol, max_depth, trial_params,
+      trial_type_key, include_na_donors, outcome_idx_context,
+      trigger_plan, trigger_scratch, precompiled_coupling_program);
 }
 
 double native_outcome_probability_impl_idx(
@@ -5961,7 +5980,9 @@ double mix_outcome_mass_idx(uuber::NativeContext &ctx,
                             int outcome_idx_context,
                             const SharedTriggerPlan *trigger_plan = nullptr,
                             TrialParamSet *trigger_scratch = nullptr,
-                            bool use_na_cache = true) {
+                            bool use_na_cache = true,
+                            const std::vector<OutcomeCouplingProgram>
+                                *precompiled_coupling_programs = nullptr) {
   if (info.node_id < 0)
     return 0.0;
   // Cache NA-map integrals when no RT is provided (maps_to_na cases).
@@ -5975,8 +5996,6 @@ double mix_outcome_mass_idx(uuber::NativeContext &ctx,
       return hit->second;
     }
   }
-  Rcpp::IntegerVector comp_ids(info.competitor_ids.begin(),
-                               info.competitor_ids.end());
   uuber::BitsetState empty_forced_complete_bits;
   uuber::BitsetState empty_forced_survive_bits;
   bool empty_forced_complete_bits_valid = false;
@@ -5993,14 +6012,23 @@ double mix_outcome_mass_idx(uuber::NativeContext &ctx,
     const int comp_idx = component_indices[i];
     if (!outcome_allows_component_idx(ctx, info, outcome_idx_context, comp_idx))
       continue;
+    const OutcomeCouplingProgram *coupling_program_ptr = nullptr;
+    if (precompiled_coupling_programs &&
+        i < precompiled_coupling_programs->size()) {
+      const OutcomeCouplingProgram &candidate =
+          (*precompiled_coupling_programs)[i];
+      if (candidate.valid) {
+        coupling_program_ptr = &candidate;
+      }
+    }
     double p = native_outcome_probability_bits_impl_idx(
         ctx, info.node_id, std::numeric_limits<double>::infinity(), comp_idx,
         empty_forced_complete_bits_valid ? &empty_forced_complete_bits : nullptr,
         empty_forced_complete_bits_valid,
         empty_forced_survive_bits_valid ? &empty_forced_survive_bits : nullptr,
-        empty_forced_survive_bits_valid, comp_ids, rel_tol, abs_tol, max_depth,
-        params_ptr, std::string(), false, outcome_idx_context, trigger_plan,
-        trigger_scratch);
+        empty_forced_survive_bits_valid, info.competitor_ids, rel_tol, abs_tol,
+        max_depth, params_ptr, std::string(), false, outcome_idx_context,
+        trigger_plan, trigger_scratch, coupling_program_ptr);
     if (std::isfinite(p) && p > 0.0) {
       double keep_w = component_keep_weight(ctx, comp_idx, outcome_idx_context);
       total += w * p * keep_w;
@@ -6188,6 +6216,8 @@ enum class RankedTransitionStepKind : std::uint8_t {
 struct RankedTransitionStep {
   RankedTransitionStepKind kind{RankedTransitionStepKind::EvalDensityNode};
   int node_idx{-1};
+  int source_mask_begin{-1};
+  int source_mask_count{0};
   std::vector<int> source_ids;
   std::vector<int> source_bits;
 };
@@ -6229,6 +6259,24 @@ ranked_source_bits_for_ids(const uuber::NativeContext &ctx,
     out.push_back(bit_idx);
   }
   return out;
+}
+
+inline void ranked_attach_source_mask_for_node(const uuber::NativeContext &ctx,
+                                               int node_idx,
+                                               RankedTransitionStep &step) {
+  if (node_idx < 0 || node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+    return;
+  }
+  const uuber::IrNode &node = ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
+  if (node.source_mask_begin < 0 || node.source_mask_count <= 0) {
+    return;
+  }
+  if (node.source_mask_begin + node.source_mask_count >
+      static_cast<int>(ctx.ir.node_source_masks.size())) {
+    return;
+  }
+  step.source_mask_begin = node.source_mask_begin;
+  step.source_mask_count = node.source_mask_count;
 }
 
 class RankedTransitionCompiler {
@@ -6279,6 +6327,7 @@ private:
         add_step.kind = RankedTransitionStepKind::AddCompleteSources;
         add_step.source_ids = std::move(source_ids);
         add_step.source_bits = ranked_source_bits_for_ids(ctx, add_step.source_ids);
+        ranked_attach_source_mask_for_node(ctx, node_idx, add_step);
         tr.steps.push_back(std::move(add_step));
       }
       plan.transitions.push_back(std::move(tr));
@@ -6316,6 +6365,8 @@ private:
                 add_step.source_ids = child_sources[other_idx];
                 add_step.source_bits =
                     ranked_source_bits_for_ids(ctx, add_step.source_ids);
+                ranked_attach_source_mask_for_node(
+                    ctx, child_ids[other_idx], add_step);
                 tr.steps.push_back(std::move(add_step));
               }
             }
@@ -6381,6 +6432,7 @@ private:
               add_step.source_ids = blocker_sources;
               add_step.source_bits =
                   ranked_source_bits_for_ids(ctx, add_step.source_ids);
+              ranked_attach_source_mask_for_node(ctx, node.blocker_idx, add_step);
               tr.steps.push_back(std::move(add_step));
             }
             plan.transitions.push_back(std::move(tr));
@@ -6462,6 +6514,24 @@ bool for_each_ranked_node_transition(
   const uuber::TrialParamsSoA *trial_params_soa =
       resolve_trial_params_soa_for_ranked(ctx, trial_params);
   IntegrationSettings settings;
+  auto apply_ranked_transition_mask =
+      [&](const RankedTransitionStep &step, uuber::BitsetState &bits,
+          bool &bits_valid) -> bool {
+    if (step.source_mask_begin < 0 || step.source_mask_count <= 0) {
+      return false;
+    }
+    if (step.source_mask_begin + step.source_mask_count >
+        static_cast<int>(ctx.ir.node_source_masks.size())) {
+      return false;
+    }
+    if (!ensure_forced_bitset_capacity(ctx, bits, bits_valid)) {
+      Rcpp::stop("IR ranked transition bitset unavailable for mask update");
+    }
+    const std::uint64_t *mask_words = &ctx.ir.node_source_masks[static_cast<std::size_t>(
+        step.source_mask_begin)];
+    bits.or_words(mask_words, step.source_mask_count);
+    return true;
+  };
   bool emitted_any = false;
   uuber::BitsetState base_forced_complete_bits;
   uuber::BitsetState base_forced_survive_bits;
@@ -6538,6 +6608,8 @@ bool for_each_ranked_node_transition(
         }
         weight *= eff;
       } else if (step.kind == RankedTransitionStepKind::AddCompleteSources) {
+        (void)apply_ranked_transition_mask(
+            step, forced_complete_bits, forced_complete_bits_valid);
         for (std::size_t i = 0; i < step.source_ids.size(); ++i) {
           const int id = step.source_ids[i];
           const int bit_idx =
@@ -6546,6 +6618,8 @@ bool for_each_ranked_node_transition(
                                forced_complete_bits_valid);
         }
       } else if (step.kind == RankedTransitionStepKind::AddSurviveSources) {
+        (void)apply_ranked_transition_mask(
+            step, forced_survive_bits, forced_survive_bits_valid);
         for (std::size_t i = 0; i < step.source_ids.size(); ++i) {
           const int id = step.source_ids[i];
           const int bit_idx =
@@ -6975,6 +7049,7 @@ struct TrialContributionSpec {
   bool guess_shortcut{false};
   bool enforce_ranked_sequence{false};
   int mass_outcome_idx{-1};
+  std::vector<OutcomeCouplingProgram> mass_coupling_programs;
   int runtime_slot{-1};
 };
 
@@ -7033,9 +7108,12 @@ double evaluate_trial_contribution_kernel_idx(
   }
   const uuber::OutcomeContextInfo &info =
       ctx.outcome_info[static_cast<std::size_t>(oi)];
+  const std::vector<OutcomeCouplingProgram> *coupling_programs_ptr =
+      spec.mass_coupling_programs.empty() ? nullptr : &spec.mass_coupling_programs;
   return mix_outcome_mass_idx(
       ctx, info, component_indices, component_weights, active_params, rel_tol,
-      abs_tol, max_depth, oi, single_state_plan, prob_scratch_ptr, true);
+      abs_tol, max_depth, oi, single_state_plan, prob_scratch_ptr, true,
+      coupling_programs_ptr);
 }
 
 double evaluate_trial_probability_kernel_idx(
@@ -7243,9 +7321,25 @@ double evaluate_trial_probability_kernel_idx(
       if (oi < 0 || oi >= static_cast<int>(ctx.outcome_info.size())) {
         continue;
       }
+      const uuber::OutcomeContextInfo &info =
+          ctx.outcome_info[static_cast<std::size_t>(oi)];
       TrialContributionSpec spec;
       spec.metric = KernelContributionMetric::OutcomeMass;
       spec.mass_outcome_idx = oi;
+      if (info.node_id >= 0 && !component_indices.empty()) {
+        spec.mass_coupling_programs.reserve(component_indices.size());
+        for (int comp_idx : component_indices) {
+          OutcomeCouplingProgram coupling_program;
+          if (outcome_allows_component_idx(ctx, info, oi, comp_idx)) {
+            std::vector<int> filtered_competitors;
+            const std::vector<int> &competitors = filter_competitor_ids(
+                ctx, info.competitor_ids, comp_idx, filtered_competitors);
+            coupling_program = resolve_outcome_coupling_program(
+                ctx, info.node_id, competitors, true);
+          }
+          spec.mass_coupling_programs.push_back(std::move(coupling_program));
+        }
+      }
       contributions.push_back(std::move(spec));
     }
   }

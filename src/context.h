@@ -38,7 +38,7 @@ enum class IrNodeOp : std::uint8_t {
   Guard = 5
 };
 
-enum class IrSharedGateKind : std::uint8_t {
+enum class IrOutcomeCouplingKind : std::uint8_t {
   None = 0,
   Pair = 1,
   NWay = 2
@@ -125,22 +125,15 @@ struct IrOutcomeGuessDonor {
   int rt_policy_code{0}; // 0=keep, 1=na, 2=drop, 3=unknown
 };
 
-struct IrSharedGateSpec {
-  IrSharedGateKind kind{IrSharedGateKind::None};
+struct IrOutcomeCouplingOp {
+  IrOutcomeCouplingKind kind{IrOutcomeCouplingKind::None};
   int node_idx{-1};
   int competitor_begin{-1};
   int competitor_count{0};
-
-  // Pair spec
-  int pair_x_event_idx{-1};
-  int pair_y_event_idx{-1};
-  int pair_c_event_idx{-1};
-
-  // N-way spec
-  int nway_gate_event_idx{-1};
-  int nway_target_event_idx{-1};
-  int nway_competitor_event_begin{-1};
-  int nway_competitor_event_count{0};
+  int gate_event_idx{-1};
+  int target_event_idx{-1};
+  int aux_event_begin{-1};
+  int aux_event_count{0};
 };
 
 struct IrOutcome {
@@ -154,7 +147,7 @@ struct IrOutcome {
   int alias_count{0};
   int guess_begin{-1};
   int guess_count{0};
-  int shared_gate_spec_idx{-1};
+  int coupling_op_idx{-1};
 };
 
 struct IrContext {
@@ -168,9 +161,9 @@ struct IrContext {
   std::vector<std::uint64_t> component_masks;
   std::vector<int> outcome_alias_sources;
   std::vector<IrOutcomeGuessDonor> outcome_guess_donors;
-  std::vector<IrSharedGateSpec> shared_gate_specs;
-  std::vector<int> nway_competitor_event_indices;
-  std::unordered_map<std::uint64_t, int> shared_gate_lookup;
+  std::vector<IrOutcomeCouplingOp> outcome_coupling_ops;
+  std::vector<int> outcome_coupling_event_indices;
+  std::unordered_map<std::uint64_t, int> outcome_coupling_lookup;
   std::unordered_map<int, std::vector<int>> label_id_to_outcomes;
   std::unordered_map<int, std::vector<int>> node_idx_to_outcomes;
   std::unordered_map<int, int> id_to_node_idx;
@@ -226,6 +219,7 @@ struct KernelGuardTransition {
   int node_idx{-1};
   int source_mask_begin{-1};
   int source_mask_count{0};
+  int invalidate_slot{0};
 };
 
 struct KernelStateGraph {

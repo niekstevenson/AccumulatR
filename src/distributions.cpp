@@ -2976,6 +2976,11 @@ struct NodeEvalState {
   bool kernel_runtime_ready{false};
 };
 
+enum class GuardTransitionTarget : std::uint8_t {
+  SurviveBits = 0,
+  CompleteBits = 1
+};
+
 struct IntegrationSettings {
   double rel_tol{kDefaultRelTol};
   double abs_tol{kDefaultAbsTol};
@@ -3871,18 +3876,48 @@ double guard_effective_survival_internal(const GuardEvalInput &input, double t,
   if (t <= 0.0) {
     return 1.0;
   }
-  const uuber::IrNode &node = ir_node_required(input.ctx, input.node_idx);
-  int blocker_idx = node.blocker_idx;
-  if (blocker_idx < 0) {
-    return 1.0;
-  }
-  NodeEvalResult block = eval_node_with_forced_dense_bits(
-      input.ctx, blocker_idx, t, input.component_idx,
-      EvalNeed::kSurvival, input.trial_params, input.trial_type_key,
-      input.exact_source_times, input.source_time_bounds,
-      input.forced_scope_filter, input.forced_complete_bits,
-      input.forced_complete_bits != nullptr, input.forced_survive_bits,
-      input.forced_survive_bits != nullptr);
+  (void)settings;
+  auto guard_transition_required =
+      [&](int node_idx) -> const uuber::KernelGuardTransition & {
+    if (!input.ctx.kernel_state_graph.valid ||
+        node_idx < 0 ||
+        node_idx >=
+            static_cast<int>(
+                input.ctx.kernel_state_graph.node_guard_transition_idx.size())) {
+      Rcpp::stop("IR guard transition metadata missing for guard node_idx=%d",
+                 node_idx);
+    }
+    const int tr_idx =
+        input.ctx.kernel_state_graph.node_guard_transition_idx[static_cast<std::size_t>(
+            node_idx)];
+    if (tr_idx < 0 ||
+        tr_idx >=
+            static_cast<int>(input.ctx.kernel_state_graph.guard_transitions.size())) {
+      Rcpp::stop("IR guard transition mapping missing for guard node_idx=%d",
+                 node_idx);
+    }
+    const uuber::KernelGuardTransition &tr =
+        input.ctx.kernel_state_graph.guard_transitions[static_cast<std::size_t>(
+            tr_idx)];
+    if (tr.node_idx != node_idx || tr.blocker_node_idx < 0) {
+      Rcpp::stop(
+          "IR guard transition blocker metadata invalid for guard node_idx=%d",
+          node_idx);
+    }
+    return tr;
+  };
+  const uuber::KernelGuardTransition &tr =
+      guard_transition_required(input.node_idx);
+
+  NodeEvalState local(input.ctx, t, input.component_idx, input.trial_params,
+                      input.trial_type_key, false, -1,
+                      input.exact_source_times, input.source_time_bounds,
+                      input.forced_scope_filter, input.forced_complete_bits,
+                      input.forced_complete_bits != nullptr,
+                      input.forced_survive_bits,
+                      input.forced_survive_bits != nullptr);
+  NodeEvalResult block =
+      eval_node_recursive_dense(tr.blocker_node_idx, local, EvalNeed::kSurvival);
   return clamp_probability(block.survival);
 }
 
@@ -3890,18 +3925,40 @@ double guard_reference_density(const GuardEvalInput &input, double t) {
   if (!std::isfinite(t) || t < 0.0) {
     return 0.0;
   }
-  const uuber::IrNode &node = ir_node_required(input.ctx, input.node_idx);
-  int reference_idx = node.reference_idx;
-  if (reference_idx < 0) {
-    return 0.0;
+  if (!input.ctx.kernel_state_graph.valid ||
+      input.node_idx < 0 ||
+      input.node_idx >=
+          static_cast<int>(
+              input.ctx.kernel_state_graph.node_guard_transition_idx.size())) {
+    Rcpp::stop("IR guard transition metadata missing for guard node_idx=%d",
+               input.node_idx);
   }
-  NodeEvalResult ref = eval_node_with_forced_dense_bits(
-      input.ctx, reference_idx, t, input.component_idx,
-      EvalNeed::kDensity, input.trial_params, input.trial_type_key,
-      input.exact_source_times, input.source_time_bounds,
-      input.forced_scope_filter, input.forced_complete_bits,
-      input.forced_complete_bits != nullptr, input.forced_survive_bits,
-      input.forced_survive_bits != nullptr);
+  const int tr_idx =
+      input.ctx.kernel_state_graph.node_guard_transition_idx[static_cast<std::size_t>(
+          input.node_idx)];
+  if (tr_idx < 0 ||
+      tr_idx >=
+          static_cast<int>(input.ctx.kernel_state_graph.guard_transitions.size())) {
+    Rcpp::stop("IR guard transition mapping missing for guard node_idx=%d",
+               input.node_idx);
+  }
+  const uuber::KernelGuardTransition &tr =
+      input.ctx.kernel_state_graph.guard_transitions[static_cast<std::size_t>(
+          tr_idx)];
+  if (tr.node_idx != input.node_idx || tr.reference_node_idx < 0) {
+    Rcpp::stop(
+        "IR guard transition reference metadata invalid for guard node_idx=%d",
+        input.node_idx);
+  }
+  NodeEvalState local(input.ctx, t, input.component_idx, input.trial_params,
+                      input.trial_type_key, false, -1,
+                      input.exact_source_times, input.source_time_bounds,
+                      input.forced_scope_filter, input.forced_complete_bits,
+                      input.forced_complete_bits != nullptr,
+                      input.forced_survive_bits,
+                      input.forced_survive_bits != nullptr);
+  NodeEvalResult ref =
+      eval_node_recursive_dense(tr.reference_node_idx, local, EvalNeed::kDensity);
   double dens_ref = ref.density;
   if (!std::isfinite(dens_ref) || dens_ref <= 0.0)
     return 0.0;
@@ -3987,43 +4044,43 @@ inline bool fast_event_density_supported(const GuardEvalInput &input,
   return outcome.alias_sources.empty() && outcome.guess_donors.empty();
 }
 
-// Detects A -> B -> C ... chain.
-// Depth is number of GUARD nodes visited.
-// A chain of depth 2 means: Guard0(A, Guard1(B, C)).
-LinearGuardChain detect_linear_guard_chain(const uuber::NativeContext &ctx,
-                                           int start_node_idx,
-                                           int max_depth_check) {
+inline NodeEvalResult eval_node_from_guard_input(const GuardEvalInput &input,
+                                                 int node_idx, double t,
+                                                 EvalNeed need) {
+  NodeEvalState local(input.ctx, t, input.component_idx, input.trial_params,
+                      input.trial_type_key, false, -1,
+                      input.exact_source_times, input.source_time_bounds,
+                      input.forced_scope_filter, input.forced_complete_bits,
+                      input.forced_complete_bits != nullptr,
+                      input.forced_survive_bits,
+                      input.forced_survive_bits != nullptr);
+  return eval_node_recursive_dense(node_idx, local, need);
+}
+
+LinearGuardChain linear_guard_chain_from_transition(
+    const uuber::NativeContext &ctx, const uuber::KernelGuardTransition &tr) {
   LinearGuardChain chain;
-  int curr_idx = start_node_idx;
-  int depth = 0;
-
-  while (depth < max_depth_check) {
-    const uuber::IrNode &curr = ir_node_required(ctx, curr_idx);
-    if (curr.op != uuber::IrNodeOp::Guard) {
-      break;
-    }
-    if (curr.reference_idx < 0 || curr.blocker_idx < 0) {
-      return {}; // Invalid/Partial
-    }
-    chain.reference_indices.push_back(curr.reference_idx);
-    int next_idx = curr.blocker_idx;
-    const uuber::IrNode &next_node = ir_node_required(ctx, next_idx);
-
-    // Move to next
-    if (next_node.op == uuber::IrNodeOp::Guard) {
-      curr_idx = next_idx;
-      depth++;
-    } else {
-      // Leaf found
-      chain.leaf_blocker_idx = next_idx;
-      chain.valid = true;
-      return chain;
-    }
+  if (tr.eval_mode != uuber::KernelGuardEvalMode::LinearChainODE) {
+    return chain;
   }
-  // If we exited because depth limit hit or kind mismatch (shouldn't happen
-  // with leaf check) If curr is still guard, we exceeded depth or stopped? We
-  // return invalid if we didn't find a non-guard leaf.
-  return {};
+  if (tr.linear_chain_begin < 0 || tr.linear_chain_count <= 0 ||
+      tr.linear_chain_begin + tr.linear_chain_count >
+          static_cast<int>(ctx.kernel_state_graph.guard_linear_chain_nodes.size()) ||
+      tr.linear_chain_leaf_idx < 0 ||
+      tr.linear_chain_leaf_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+    return {};
+  }
+  const int begin = tr.linear_chain_begin;
+  const int end = begin + tr.linear_chain_count;
+  chain.reference_indices.assign(
+      ctx.kernel_state_graph.guard_linear_chain_nodes.begin() + begin,
+      ctx.kernel_state_graph.guard_linear_chain_nodes.begin() + end);
+  chain.leaf_blocker_idx = tr.linear_chain_leaf_idx;
+  if (chain.reference_indices.empty()) {
+    return {};
+  }
+  chain.valid = true;
+  return chain;
 }
 
 constexpr std::size_t kLinearGuardChainMaxDepth = 8u;
@@ -4133,14 +4190,9 @@ private:
       } else {
         for (std::size_t g = 0; g < grid_points; ++g) {
           const double x = grid_x_value(g, h);
-          NodeEvalResult ref_eval = eval_node_with_forced_dense_bits(
-              input_.ctx, chain_.reference_indices[i], x,
-              input_.component_idx, EvalNeed::kDensity, input_.trial_params,
-              input_.trial_type_key, input_.exact_source_times,
-              input_.source_time_bounds, input_.forced_scope_filter,
-              input_.forced_complete_bits,
-              input_.forced_complete_bits != nullptr, input_.forced_survive_bits,
-              input_.forced_survive_bits != nullptr);
+          NodeEvalResult ref_eval =
+              eval_node_from_guard_input(input_, chain_.reference_indices[i], x,
+                                         EvalNeed::kDensity);
           double dens = safe_density(ref_eval.density);
           if (!std::isfinite(dens) || dens <= 0.0) {
             dens = 0.0;
@@ -4177,13 +4229,9 @@ private:
     } else {
       for (std::size_t g = 0; g < grid_points; ++g) {
         const double x = grid_x_value(g, h);
-        NodeEvalResult leaf_eval = eval_node_with_forced_dense_bits(
-            input_.ctx, chain_.leaf_blocker_idx, x,
-            input_.component_idx, EvalNeed::kSurvival, input_.trial_params,
-            input_.trial_type_key, input_.exact_source_times,
-            input_.source_time_bounds, input_.forced_scope_filter,
-            input_.forced_complete_bits, input_.forced_complete_bits != nullptr,
-            input_.forced_survive_bits, input_.forced_survive_bits != nullptr);
+        NodeEvalResult leaf_eval =
+            eval_node_from_guard_input(input_, chain_.leaf_blocker_idx, x,
+                                       EvalNeed::kSurvival);
         const double leaf_surv = clamp_probability(leaf_eval.survival);
         double *vals = grid_slot(g);
         vals[depth_] = clamp_probability(leaf_surv);
@@ -4326,15 +4374,45 @@ double guard_cdf_internal(const GuardEvalInput &input, double t,
   const CanonicalIntegrationSettings canonical =
       canonicalize_integration_settings(settings);
 
-  const int chain_depth_limit = static_cast<int>(input.ctx.ir.nodes.size());
-  LinearGuardChain chain =
-      detect_linear_guard_chain(input.ctx, input.node_idx, chain_depth_limit);
-  if (chain.valid) {
+  if (!input.ctx.kernel_state_graph.valid ||
+      input.node_idx < 0 ||
+      input.node_idx >=
+          static_cast<int>(
+              input.ctx.kernel_state_graph.node_guard_transition_idx.size())) {
+    Rcpp::stop("IR guard transition metadata missing for guard node_idx=%d",
+               input.node_idx);
+  }
+  const int tr_idx =
+      input.ctx.kernel_state_graph.node_guard_transition_idx[static_cast<std::size_t>(
+          input.node_idx)];
+  if (tr_idx < 0 ||
+      tr_idx >=
+          static_cast<int>(input.ctx.kernel_state_graph.guard_transitions.size())) {
+    Rcpp::stop("IR guard transition mapping missing for guard node_idx=%d",
+               input.node_idx);
+  }
+  const uuber::KernelGuardTransition &tr =
+      input.ctx.kernel_state_graph.guard_transitions[static_cast<std::size_t>(
+          tr_idx)];
+  if (tr.node_idx != input.node_idx) {
+    Rcpp::stop("IR guard transition node mismatch for guard node_idx=%d",
+               input.node_idx);
+  }
+
+  if (tr.eval_mode == uuber::KernelGuardEvalMode::LinearChainODE) {
+    LinearGuardChain chain = linear_guard_chain_from_transition(input.ctx, tr);
+    if (!chain.valid) {
+      Rcpp::stop(
+          "IR guard linear-chain metadata invalid for guard node_idx=%d",
+          input.node_idx);
+    }
     double cdf_chain = 0.0;
     if (eval_optimized_linear_guard_chain_ode(input, chain, t, canonical,
                                               cdf_chain)) {
       return cdf_chain;
     }
+    Rcpp::stop("IR guard linear-chain ODE evaluation failed for node_idx=%d",
+               input.node_idx);
   }
   auto integrand = [&](double u) -> double {
     return guard_density_internal(input, u, settings);
@@ -4369,6 +4447,48 @@ std::vector<int> gather_blocker_sources(const uuber::NativeContext &ctx,
   return sources;
 }
 
+inline void apply_transition_mask_words(
+    const uuber::NativeContext &ctx, int source_mask_begin,
+    int source_mask_count, int invalidate_slot, uuber::BitsetState &bits_out,
+    bool &bits_valid, uuber::KernelRuntimeState *kernel_runtime) {
+  if (source_mask_begin < 0 || source_mask_count <= 0 ||
+      source_mask_begin + source_mask_count >
+          static_cast<int>(ctx.ir.node_source_masks.size())) {
+    Rcpp::stop("IR guard transition mask invalid begin=%d count=%d",
+               source_mask_begin, source_mask_count);
+  }
+  if (!ensure_forced_bitset_capacity(ctx, bits_out, bits_valid)) {
+    Rcpp::stop("IR guard transition bitset unavailable for mask update");
+  }
+  const std::uint64_t *mask_words =
+      &ctx.ir.node_source_masks[static_cast<std::size_t>(source_mask_begin)];
+  bits_out.or_words(mask_words, source_mask_count);
+  if (kernel_runtime) {
+    const int slot = (invalidate_slot >= 0) ? invalidate_slot : 0;
+    uuber::invalidate_kernel_runtime_from_slot(*kernel_runtime, slot);
+  }
+}
+
+[[maybe_unused]] void apply_guard_transition_mask(
+    NodeEvalState &state, const uuber::KernelGuardTransition &transition,
+    GuardTransitionTarget target = GuardTransitionTarget::SurviveBits) {
+  uuber::BitsetState *bits_ptr =
+      (target == GuardTransitionTarget::CompleteBits)
+          ? &state.forced_complete_bits
+          : &state.forced_survive_bits;
+  bool *valid_ptr = (target == GuardTransitionTarget::CompleteBits)
+                        ? &state.forced_complete_bits_valid
+                        : &state.forced_survive_bits_valid;
+  uuber::KernelRuntimeState *runtime_ptr =
+      (state.kernel_runtime_ready && state.kernel_runtime_ptr)
+          ? state.kernel_runtime_ptr
+          : nullptr;
+  apply_transition_mask_words(state.ctx, transition.source_mask_begin,
+                              transition.source_mask_count,
+                              transition.invalidate_slot, *bits_ptr, *valid_ptr,
+                              runtime_ptr);
+}
+
 struct CompetitorMeta {
   int node_id{-1};
   int node_idx{-1};
@@ -4380,36 +4500,6 @@ struct CompetitorMeta {
   std::vector<int> sources;
   bool scenario_sensitive{false};
 };
-
-enum class CompetitorCompiledOpKind : std::uint8_t {
-  EvalBatchSurvival = 0,
-  EvalSingleApplyMask = 1
-};
-
-struct CompetitorCompiledOp {
-  CompetitorCompiledOpKind kind{CompetitorCompiledOpKind::EvalBatchSurvival};
-  std::vector<int> target_node_indices;
-  int target_node_idx{-1};
-  int transition_mask_begin{-1};
-  int transition_mask_count{0};
-  int invalidate_slot{0};
-};
-
-struct CompetitorClusterCacheEntry {
-  std::vector<CompetitorMeta> metas;
-  std::vector<CompetitorCompiledOp> compiled_ops;
-};
-
-struct CompetitorCacheRecord {
-  std::vector<int> competitor_ids;
-  CompetitorClusterCacheEntry entry;
-};
-
-using CompetitorCacheMap = std::unordered_map<std::uint64_t,
-                                              std::vector<CompetitorCacheRecord>>;
-
-static std::unordered_map<const uuber::NativeContext *, CompetitorCacheMap>
-    g_competitor_cache;
 
 std::uint64_t competitor_cache_key_hash(const std::vector<int> &ids) {
   std::uint64_t hash = 1469598103934665603ULL;
@@ -4461,41 +4551,43 @@ inline void validate_competitor_transition_meta(const uuber::NativeContext &ctx,
   if (!meta.transition_required) {
     return;
   }
-  if (meta.guard_transition_idx < 0 ||
-      meta.guard_transition_idx >=
-          static_cast<int>(ctx.kernel_state_graph.guard_transitions.size())) {
-    Rcpp::stop("IR guard transition missing for node %d with non-empty sources",
-               meta.node_id);
-  }
   if (meta.transition_mask_begin < 0 || meta.transition_mask_count <= 0 ||
       meta.transition_mask_begin + meta.transition_mask_count >
           static_cast<int>(ctx.ir.node_source_masks.size())) {
-    Rcpp::stop("IR guard transition mask invalid for node %d", meta.node_id);
+    Rcpp::stop("IR competitor transition mask invalid for node %d", meta.node_id);
   }
   if (ctx.kernel_program.valid &&
       (meta.invalidate_slot < 0 ||
        meta.invalidate_slot >= static_cast<int>(ctx.kernel_program.ops.size()))) {
-    Rcpp::stop("IR guard transition invalidate slot invalid for node %d",
-               meta.node_id);
+    Rcpp::stop(
+        "IR competitor transition invalidate slot invalid for node %d",
+        meta.node_id);
+  }
+  if (meta.guard_transition_idx >= 0 &&
+      meta.guard_transition_idx >=
+          static_cast<int>(ctx.kernel_state_graph.guard_transitions.size())) {
+    Rcpp::stop(
+        "IR competitor guard-transition index invalid for node %d", meta.node_id);
   }
 }
 
-const CompetitorClusterCacheEntry &
+const uuber::CompetitorClusterCacheEntry &
 fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
                                const std::vector<int> &competitor_ids) {
-  CompetitorCacheMap &cache = g_competitor_cache[&ctx];
+  uuber::CompetitorCacheMap &cache = ctx.competitor_cache;
   const std::uint64_t key_hash = competitor_cache_key_hash(competitor_ids);
   auto it = cache.find(key_hash);
   if (it != cache.end()) {
-    for (const CompetitorCacheRecord &record : it->second) {
+    for (const uuber::CompetitorCacheRecord &record : it->second) {
       if (record.competitor_ids == competitor_ids) {
         return record.entry;
       }
     }
   }
 
-  CompetitorClusterCacheEntry entry;
-  entry.metas.reserve(competitor_ids.size());
+  uuber::CompetitorClusterCacheEntry entry;
+  std::vector<CompetitorMeta> metas;
+  metas.reserve(competitor_ids.size());
   std::unordered_map<int, bool> guard_memo;
   for (int node_id : competitor_ids) {
     int node_idx = resolve_dense_node_idx_required(ctx, node_id);
@@ -4508,7 +4600,25 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
     const bool contains_guard = node_contains_guard(node_id, ctx, guard_memo);
     meta.scenario_sensitive =
         (node.flags & uuber::IR_NODE_FLAG_SCENARIO_SENSITIVE) != 0u;
-    if (node_idx >= 0 &&
+    meta.transition_required = contains_guard && !meta.sources.empty();
+    if (meta.transition_required) {
+      meta.transition_mask_begin = node.source_mask_begin;
+      meta.transition_mask_count = node.source_mask_count;
+      meta.invalidate_slot = 0;
+      if (node_idx >= 0 &&
+          node_idx <
+              static_cast<int>(
+                  ctx.kernel_program.outputs.node_idx_to_slot.size())) {
+        const int out_slot = ctx.kernel_program.outputs.node_idx_to_slot
+            [static_cast<std::size_t>(node_idx)];
+        if (out_slot >= 0 &&
+            out_slot < static_cast<int>(ctx.kernel_program.ops.size())) {
+          meta.invalidate_slot = out_slot;
+        }
+      }
+    }
+    if (node.op == uuber::IrNodeOp::Guard && meta.transition_required &&
+        node_idx >= 0 &&
         node_idx <
             static_cast<int>(ctx.kernel_state_graph.node_guard_transition_idx.size())) {
       meta.guard_transition_idx = ctx.kernel_state_graph.node_guard_transition_idx
@@ -4524,13 +4634,12 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
         meta.invalidate_slot = tr.invalidate_slot;
       }
     }
-    meta.transition_required = contains_guard && !meta.sources.empty();
     validate_competitor_transition_meta(ctx, meta);
-    entry.metas.push_back(std::move(meta));
+    metas.push_back(std::move(meta));
   }
 
   const std::vector<std::vector<int>> clusters =
-      build_competitor_clusters(entry.metas);
+      build_competitor_clusters(metas);
   std::size_t op_estimate = 0;
   for (const std::vector<int> &cluster : clusters) {
     op_estimate += cluster.size();
@@ -4540,20 +4649,23 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
     const std::vector<int> &cluster = clusters[cluster_i];
     bool requires_transition = false;
     for (int idx : cluster) {
-      if (entry.metas[static_cast<std::size_t>(idx)].transition_required) {
+      if (metas[static_cast<std::size_t>(idx)].transition_required) {
         requires_transition = true;
         break;
       }
     }
     if (!requires_transition) {
-      CompetitorCompiledOp op;
-      op.kind = CompetitorCompiledOpKind::EvalBatchSurvival;
+      uuber::CompetitorCompiledOp op;
+      op.transition_guard_idx = -1;
+      op.transition_mask_begin = -1;
+      op.transition_mask_count = 0;
+      op.transition_invalidate_slot = 0;
       op.target_node_indices.reserve(cluster.size());
       for (int idx : cluster) {
-        if (idx < 0 || idx >= static_cast<int>(entry.metas.size())) {
+        if (idx < 0 || idx >= static_cast<int>(metas.size())) {
           Rcpp::stop("IR competitor batch index out of range: %d", idx);
         }
-        const CompetitorMeta &meta = entry.metas[static_cast<std::size_t>(idx)];
+        const CompetitorMeta &meta = metas[static_cast<std::size_t>(idx)];
         if (meta.node_idx < 0) {
           Rcpp::stop("IR competitor node index missing for node %d", meta.node_id);
         }
@@ -4572,7 +4684,7 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
       std::vector<OrderingMeta> order;
       order.reserve(cluster.size());
       for (int idx : cluster) {
-        const CompetitorMeta &meta = entry.metas[static_cast<std::size_t>(idx)];
+        const CompetitorMeta &meta = metas[static_cast<std::size_t>(idx)];
         order.push_back({idx, meta.sources.size(), meta.scenario_sensitive});
       }
       std::sort(order.begin(), order.end(),
@@ -4586,23 +4698,27 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
                   return a.index < b.index;
                 });
       for (const OrderingMeta &rec : order) {
-        CompetitorCompiledOp op;
-        op.kind = CompetitorCompiledOpKind::EvalSingleApplyMask;
+        uuber::CompetitorCompiledOp op;
         const CompetitorMeta &meta =
-            entry.metas[static_cast<std::size_t>(rec.index)];
-        op.target_node_idx = meta.node_idx;
-        op.transition_mask_begin = meta.transition_mask_begin;
-        op.transition_mask_count = meta.transition_mask_count;
-        op.invalidate_slot = meta.invalidate_slot;
+            metas[static_cast<std::size_t>(rec.index)];
+        op.target_node_indices.push_back(meta.node_idx);
+        op.transition_guard_idx =
+            meta.transition_required ? meta.guard_transition_idx : -1;
+        op.transition_mask_begin =
+            meta.transition_required ? meta.transition_mask_begin : -1;
+        op.transition_mask_count =
+            meta.transition_required ? meta.transition_mask_count : 0;
+        op.transition_invalidate_slot =
+            meta.transition_required ? meta.invalidate_slot : 0;
         entry.compiled_ops.push_back(std::move(op));
       }
     }
   }
 
-  CompetitorCacheRecord record;
+  uuber::CompetitorCacheRecord record;
   record.competitor_ids = competitor_ids;
   record.entry = std::move(entry);
-  std::vector<CompetitorCacheRecord> &bucket = cache[key_hash];
+  std::vector<uuber::CompetitorCacheRecord> &bucket = cache[key_hash];
   bucket.push_back(std::move(record));
   return bucket.back().entry;
 }
@@ -4771,12 +4887,11 @@ inline bool competitor_kernel_runtime_usable(const NodeEvalState &state) {
 }
 
 double run_competitor_batch_survival_op(
-    const CompetitorCompiledOp &op, NodeEvalState &state,
+    const uuber::CompetitorCompiledOp &op, NodeEvalState &state,
     const uuber::KernelEventEvalFn &event_eval_cb,
     const uuber::KernelGuardEvalFn &guard_eval_cb) {
-  if (op.target_node_indices.empty()) {
+  if (op.target_node_indices.empty())
     return 1.0;
-  }
 
   uuber::KernelEvalNeed kernel_need;
   kernel_need.density = false;
@@ -4786,10 +4901,10 @@ double run_competitor_batch_survival_op(
   if (competitor_kernel_runtime_usable(state)) {
     if (!uuber::eval_kernel_nodes_incremental(
             state.ctx.kernel_program, *state.kernel_runtime_ptr,
-            op.target_node_indices,
-            kernel_need, event_eval_cb, guard_eval_cb, kernel_values) ||
+            op.target_node_indices, kernel_need, event_eval_cb, guard_eval_cb,
+            kernel_values) ||
         kernel_values.size() != op.target_node_indices.size()) {
-      Rcpp::stop("IR kernel execution failed for competitor batch op");
+      Rcpp::stop("IR kernel execution failed for competitor op");
     }
   } else {
     kernel_values.resize(op.target_node_indices.size());
@@ -4798,77 +4913,32 @@ double run_competitor_batch_survival_op(
       if (!uuber::eval_kernel_node(state.ctx.kernel_program, node_idx, kernel_need,
                                    event_eval_cb, guard_eval_cb,
                                    kernel_values[i])) {
-        Rcpp::stop("IR kernel execution failed for competitor batch op");
+        Rcpp::stop("IR kernel execution failed for competitor op");
       }
     }
   }
-  double batch_prod = 1.0;
+
+  double product = 1.0;
   for (const auto &vals : kernel_values) {
-    double surv = clamp_probability(vals.survival);
+    const double surv = clamp_probability(vals.survival);
     if (!std::isfinite(surv) || surv <= 0.0) {
       return 0.0;
     }
-    batch_prod *= surv;
-    if (!std::isfinite(batch_prod) || batch_prod <= 0.0) {
+    product *= surv;
+    if (!std::isfinite(product) || product <= 0.0) {
       return 0.0;
     }
   }
-  return clamp_probability(batch_prod);
-}
-
-double run_competitor_single_survival_op(
-    const CompetitorCompiledOp &op, NodeEvalState &state,
-    const uuber::KernelEventEvalFn &event_eval_cb,
-    const uuber::KernelGuardEvalFn &guard_eval_cb) {
-  if (op.target_node_idx < 0) {
-    Rcpp::stop("IR competitor single-op node index missing");
-  }
-  uuber::KernelEvalNeed kernel_need;
-  kernel_need.density = false;
-  kernel_need.survival = true;
-  kernel_need.cdf = true;
-  uuber::KernelNodeValues kernel_value{};
-  if (competitor_kernel_runtime_usable(state)) {
-    if (!uuber::eval_kernel_node_incremental(
-            state.ctx.kernel_program, *state.kernel_runtime_ptr, op.target_node_idx,
-            kernel_need, event_eval_cb, guard_eval_cb, kernel_value)) {
-      Rcpp::stop("IR kernel execution failed for competitor single op");
-    }
-  } else {
-    if (!uuber::eval_kernel_node(state.ctx.kernel_program, op.target_node_idx,
-                                 kernel_need, event_eval_cb, guard_eval_cb,
-                                 kernel_value)) {
-      Rcpp::stop("IR kernel execution failed for competitor single op");
-    }
-  }
-  const double surv = clamp_probability(kernel_value.survival);
-  if (!std::isfinite(surv) || surv <= 0.0) {
-    return 0.0;
-  }
-
   if (op.transition_mask_begin >= 0 && op.transition_mask_count > 0) {
-    if (op.transition_mask_begin + op.transition_mask_count >
-        static_cast<int>(state.ctx.ir.node_source_masks.size())) {
-      Rcpp::stop("IR guard transition mask invalid for competitor op node_idx=%d",
-                 op.target_node_idx);
-    }
-    if (!ensure_forced_bitset_capacity(state.ctx, state.forced_survive_bits,
-                                       state.forced_survive_bits_valid)) {
-      Rcpp::stop(
-          "IR guard transition bitset unavailable for competitor execution");
-    }
-    const std::uint64_t *mask_words =
-        &state.ctx.ir.node_source_masks[static_cast<std::size_t>(
-            op.transition_mask_begin)];
-    state.forced_survive_bits.or_words(mask_words, op.transition_mask_count);
-    if (state.kernel_runtime_ready && state.kernel_runtime_ptr) {
-      const int invalidate_slot = (op.invalidate_slot >= 0) ? op.invalidate_slot
-                                                             : 0;
-      uuber::invalidate_kernel_runtime_from_slot(*state.kernel_runtime_ptr,
-                                                 invalidate_slot);
-    }
+    apply_transition_mask_words(
+        state.ctx, op.transition_mask_begin, op.transition_mask_count,
+        op.transition_invalidate_slot, state.forced_survive_bits,
+        state.forced_survive_bits_valid,
+        (state.kernel_runtime_ready && state.kernel_runtime_ptr)
+            ? state.kernel_runtime_ptr
+            : nullptr);
   }
-  return surv;
+  return clamp_probability(product);
 }
 
 double competitor_survival_internal(
@@ -4885,7 +4955,7 @@ double competitor_survival_internal(
     uuber::KernelRuntimeState *kernel_runtime = nullptr) {
   if (competitor_ids.empty())
     return 1.0;
-  const CompetitorClusterCacheEntry &cache =
+  const uuber::CompetitorClusterCacheEntry &cache =
       fetch_competitor_cluster_cache(ctx, competitor_ids);
   if (cache.compiled_ops.empty())
     return 1.0;
@@ -4920,13 +4990,9 @@ double competitor_survival_internal(
   uuber::KernelGuardEvalFn guard_eval_cb = make_kernel_guard_eval(state);
 
   double product = 1.0;
-  for (const CompetitorCompiledOp &op : cache.compiled_ops) {
+  for (const uuber::CompetitorCompiledOp &op : cache.compiled_ops) {
     const double surv =
-        (op.kind == CompetitorCompiledOpKind::EvalBatchSurvival)
-            ? run_competitor_batch_survival_op(op, state, event_eval_cb,
-                                               guard_eval_cb)
-            : run_competitor_single_survival_op(op, state, event_eval_cb,
-                                                guard_eval_cb);
+        run_competitor_batch_survival_op(op, state, event_eval_cb, guard_eval_cb);
     if (!std::isfinite(surv) || surv <= 0.0) {
       return 0.0;
     }
@@ -6520,16 +6586,9 @@ bool for_each_ranked_node_transition(
     if (step.source_mask_begin < 0 || step.source_mask_count <= 0) {
       return false;
     }
-    if (step.source_mask_begin + step.source_mask_count >
-        static_cast<int>(ctx.ir.node_source_masks.size())) {
-      return false;
-    }
-    if (!ensure_forced_bitset_capacity(ctx, bits, bits_valid)) {
-      Rcpp::stop("IR ranked transition bitset unavailable for mask update");
-    }
-    const std::uint64_t *mask_words = &ctx.ir.node_source_masks[static_cast<std::size_t>(
-        step.source_mask_begin)];
-    bits.or_words(mask_words, step.source_mask_count);
+    apply_transition_mask_words(ctx, step.source_mask_begin,
+                                step.source_mask_count, 0, bits, bits_valid,
+                                kernel_runtime);
     return true;
   };
   bool emitted_any = false;

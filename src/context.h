@@ -215,11 +215,24 @@ struct KernelStateTransition {
   int op_count{0};
 };
 
+enum class KernelGuardEvalMode : std::uint8_t {
+  GeneralCompiled = 0,
+  LinearChainODE = 1
+};
+
 struct KernelGuardTransition {
   int node_idx{-1};
   int source_mask_begin{-1};
   int source_mask_count{0};
   int invalidate_slot{0};
+  int reference_node_idx{-1};
+  int blocker_node_idx{-1};
+  int reference_slot{-1};
+  int blocker_slot{-1};
+  KernelGuardEvalMode eval_mode{KernelGuardEvalMode::GeneralCompiled};
+  int linear_chain_begin{-1};
+  int linear_chain_count{0};
+  int linear_chain_leaf_idx{-1};
 };
 
 struct KernelStateGraph {
@@ -230,9 +243,30 @@ struct KernelStateGraph {
   std::vector<int> trigger_transition_count;
   std::vector<int> trigger_op_indices;
   std::vector<KernelGuardTransition> guard_transitions;
+  std::vector<int> guard_linear_chain_nodes;
   std::vector<int> node_guard_transition_idx;
   bool valid{false};
 };
+
+struct CompetitorCompiledOp {
+  std::vector<int> target_node_indices;
+  int transition_guard_idx{-1};
+  int transition_mask_begin{-1};
+  int transition_mask_count{0};
+  int transition_invalidate_slot{0};
+};
+
+struct CompetitorClusterCacheEntry {
+  std::vector<CompetitorCompiledOp> compiled_ops;
+};
+
+struct CompetitorCacheRecord {
+  std::vector<int> competitor_ids;
+  CompetitorClusterCacheEntry entry;
+};
+
+using CompetitorCacheMap =
+    std::unordered_map<std::uint64_t, std::vector<CompetitorCacheRecord>>;
 
 struct TrialParamsSoA {
   int n_acc{0};
@@ -321,6 +355,7 @@ struct NativeContext {
       na_map_cache;
   mutable std::unordered_map<std::string, std::deque<std::string>>
       na_cache_order;
+  mutable CompetitorCacheMap competitor_cache;
   int na_cache_limit{128};
   std::unordered_map<std::string, std::vector<int>> shared_trigger_map;
   std::vector<SharedTriggerGroup> shared_trigger_groups;

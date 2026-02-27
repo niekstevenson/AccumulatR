@@ -99,6 +99,52 @@ std::string extract_string(SEXP obj) {
   }
 }
 
+constexpr std::size_t kPrecompiledLinearGuardChainMaxDepth = 8u;
+
+struct PrecompiledLinearGuardChain {
+  std::vector<int> reference_indices;
+  int leaf_blocker_idx{-1};
+  bool valid{false};
+};
+
+PrecompiledLinearGuardChain
+detect_precompiled_linear_guard_chain(const IrContext &ir, int start_node_idx) {
+  PrecompiledLinearGuardChain chain;
+  if (start_node_idx < 0 || start_node_idx >= static_cast<int>(ir.nodes.size())) {
+    return chain;
+  }
+  int curr_idx = start_node_idx;
+  int depth = 0;
+  while (depth < static_cast<int>(ir.nodes.size())) {
+    if (curr_idx < 0 || curr_idx >= static_cast<int>(ir.nodes.size())) {
+      return {};
+    }
+    const IrNode &curr = ir.nodes[static_cast<std::size_t>(curr_idx)];
+    if (curr.op != IrNodeOp::Guard || curr.reference_idx < 0 ||
+        curr.blocker_idx < 0) {
+      return {};
+    }
+    chain.reference_indices.push_back(curr.reference_idx);
+    if (chain.reference_indices.size() > kPrecompiledLinearGuardChainMaxDepth) {
+      return {};
+    }
+    const int next_idx = curr.blocker_idx;
+    if (next_idx < 0 || next_idx >= static_cast<int>(ir.nodes.size())) {
+      return {};
+    }
+    const IrNode &next_node = ir.nodes[static_cast<std::size_t>(next_idx)];
+    if (next_node.op == IrNodeOp::Guard) {
+      curr_idx = next_idx;
+      ++depth;
+      continue;
+    }
+    chain.leaf_blocker_idx = next_idx;
+    chain.valid = !chain.reference_indices.empty();
+    return chain;
+  }
+  return {};
+}
+
 void validate_guard_transition_completeness(const NativeContext &ctx) {
   const IrContext &ir = ctx.ir;
   const KernelStateGraph &graph = ctx.kernel_state_graph;
@@ -108,7 +154,7 @@ void validate_guard_transition_completeness(const NativeContext &ctx) {
   for (int node_idx = 0; node_idx < static_cast<int>(ir.nodes.size());
        ++node_idx) {
     const IrNode &node = ir.nodes[static_cast<std::size_t>(node_idx)];
-    if (node.source_id_count <= 0) {
+    if (node.op != IrNodeOp::Guard || node.source_id_count <= 0) {
       continue;
     }
     const int tr_idx =
@@ -126,6 +172,12 @@ void validate_guard_transition_completeness(const NativeContext &ctx) {
           "IR guard transition node mismatch for node_id=%d node_idx=%d source_count=%d",
           node.node_id, node_idx, node.source_id_count);
     }
+    if (tr.reference_node_idx != node.reference_idx ||
+        tr.blocker_node_idx != node.blocker_idx) {
+      Rcpp::stop(
+          "IR guard transition reference/blocker mismatch for node_id=%d node_idx=%d",
+          node.node_id, node_idx);
+    }
     if (tr.source_mask_begin < 0 || tr.source_mask_count <= 0 ||
         tr.source_mask_begin + tr.source_mask_count >
             static_cast<int>(ir.node_source_masks.size())) {
@@ -139,6 +191,37 @@ void validate_guard_transition_completeness(const NativeContext &ctx) {
       Rcpp::stop(
           "IR guard transition invalidate slot invalid for node_id=%d node_idx=%d slot=%d",
           node.node_id, node_idx, tr.invalidate_slot);
+    }
+    if (ctx.kernel_program.valid &&
+        (tr.reference_slot < 0 ||
+         tr.reference_slot >= static_cast<int>(ctx.kernel_program.ops.size()) ||
+         tr.blocker_slot < 0 ||
+         tr.blocker_slot >= static_cast<int>(ctx.kernel_program.ops.size()))) {
+      Rcpp::stop(
+          "IR guard transition reference/blocker slot invalid for node_id=%d node_idx=%d",
+          node.node_id, node_idx);
+    }
+    if (tr.eval_mode == KernelGuardEvalMode::LinearChainODE) {
+      if (tr.linear_chain_begin < 0 || tr.linear_chain_count <= 0 ||
+          tr.linear_chain_begin + tr.linear_chain_count >
+              static_cast<int>(graph.guard_linear_chain_nodes.size())) {
+        Rcpp::stop(
+            "IR guard linear-chain metadata invalid for node_id=%d node_idx=%d",
+            node.node_id, node_idx);
+      }
+      if (tr.linear_chain_leaf_idx < 0 ||
+          tr.linear_chain_leaf_idx >= static_cast<int>(ir.nodes.size())) {
+        Rcpp::stop(
+            "IR guard linear-chain leaf invalid for node_id=%d node_idx=%d",
+            node.node_id, node_idx);
+      }
+    } else {
+      if (tr.linear_chain_begin != -1 || tr.linear_chain_count != 0 ||
+          tr.linear_chain_leaf_idx != -1) {
+        Rcpp::stop(
+            "IR guard linear-chain metadata must be empty for general guard node_id=%d node_idx=%d",
+            node.node_id, node_idx);
+      }
     }
   }
 }
@@ -1604,18 +1687,34 @@ build_context_from_proto(const NativePrepProto &proto) {
   ctx->kernel_state_graph.node_guard_transition_idx.assign(
       ctx->ir.nodes.size(), -1);
   ctx->kernel_state_graph.guard_transitions.clear();
+  ctx->kernel_state_graph.guard_linear_chain_nodes.clear();
   ctx->kernel_state_graph.guard_transitions.reserve(ctx->ir.nodes.size());
   for (int node_idx = 0; node_idx < static_cast<int>(ctx->ir.nodes.size());
        ++node_idx) {
     const IrNode &node = ctx->ir.nodes[static_cast<std::size_t>(node_idx)];
+    if (node.op != IrNodeOp::Guard) {
+      continue;
+    }
     if (node.source_mask_begin < 0 || node.source_mask_count <= 0) {
       continue;
+    }
+    if (node.reference_idx < 0 || node.blocker_idx < 0) {
+      Rcpp::stop("IR guard node_id=%d node_idx=%d missing reference/blocker",
+                 node.node_id, node_idx);
     }
     KernelGuardTransition tr;
     tr.node_idx = node_idx;
     tr.source_mask_begin = node.source_mask_begin;
     tr.source_mask_count = node.source_mask_count;
     tr.invalidate_slot = 0;
+    tr.reference_node_idx = node.reference_idx;
+    tr.blocker_node_idx = node.blocker_idx;
+    tr.reference_slot = -1;
+    tr.blocker_slot = -1;
+    tr.eval_mode = KernelGuardEvalMode::GeneralCompiled;
+    tr.linear_chain_begin = -1;
+    tr.linear_chain_count = 0;
+    tr.linear_chain_leaf_idx = -1;
     if (node_idx >= 0 &&
         node_idx <
             static_cast<int>(ctx->kernel_program.outputs.node_idx_to_slot.size())) {
@@ -1625,6 +1724,35 @@ build_context_from_proto(const NativePrepProto &proto) {
           out_slot < static_cast<int>(ctx->kernel_program.ops.size())) {
         tr.invalidate_slot = out_slot;
       }
+    }
+    if (node.reference_idx >= 0 &&
+        node.reference_idx <
+            static_cast<int>(ctx->kernel_program.outputs.node_idx_to_slot.size())) {
+      tr.reference_slot = ctx->kernel_program.outputs.node_idx_to_slot
+          [static_cast<std::size_t>(node.reference_idx)];
+    }
+    if (node.blocker_idx >= 0 &&
+        node.blocker_idx <
+            static_cast<int>(ctx->kernel_program.outputs.node_idx_to_slot.size())) {
+      tr.blocker_slot = ctx->kernel_program.outputs.node_idx_to_slot
+          [static_cast<std::size_t>(node.blocker_idx)];
+    }
+    if (tr.reference_slot < 0 || tr.blocker_slot < 0) {
+      Rcpp::stop(
+          "IR guard node_id=%d node_idx=%d missing kernel slot mapping",
+          node.node_id, node_idx);
+    }
+    const PrecompiledLinearGuardChain chain =
+        detect_precompiled_linear_guard_chain(ctx->ir, node_idx);
+    if (chain.valid) {
+      tr.eval_mode = KernelGuardEvalMode::LinearChainODE;
+      tr.linear_chain_begin =
+          static_cast<int>(ctx->kernel_state_graph.guard_linear_chain_nodes.size());
+      tr.linear_chain_count = static_cast<int>(chain.reference_indices.size());
+      tr.linear_chain_leaf_idx = chain.leaf_blocker_idx;
+      ctx->kernel_state_graph.guard_linear_chain_nodes.insert(
+          ctx->kernel_state_graph.guard_linear_chain_nodes.end(),
+          chain.reference_indices.begin(), chain.reference_indices.end());
     }
     const int tr_idx =
         static_cast<int>(ctx->kernel_state_graph.guard_transitions.size());

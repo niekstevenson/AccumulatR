@@ -288,5 +288,16 @@ if (update_baseline) {
   cat("Wrote immutable baseline snapshot to", snapshot_file, "\n")
 }
 
+enforce_step5_gate <- identical(trimws(Sys.getenv("ACCUMULATR_ENFORCE_STEP5_GATE")), "1")
+if (enforce_step5_gate) {
+  gate_script <- file.path("dev", "scripts", "check_step5_perf_gate.R")
+  gate_run <- run_script(gate_script)
+  if (gate_run$status != 0L) {
+    cat(paste(gate_run$output, collapse = "\n"), "\n")
+    stop("Step 5 performance gate failed")
+  }
+  cat("Step 5 performance gate passed\n")
+}
+
 cat("\nWrote centralized benchmark output to", out_file, "\n")
 cat("Rows:", nrow(combined), "\n")

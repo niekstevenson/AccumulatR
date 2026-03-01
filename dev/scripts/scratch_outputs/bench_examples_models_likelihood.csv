@@ -1,2 +1,2 @@
 "label","median_sec","min_sec","max_sec","inner_reps","median_per_eval_sec","mode"
-"example_6_dual_path",0.09,0.088,0.0930000000000001,120,0.00075,"ir"
+"example_6_dual_path",0.41,0.405,0.43,160,0.0025625,"ir"

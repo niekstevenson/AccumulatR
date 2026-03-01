@@ -3060,9 +3060,6 @@ std::vector<int> gather_blocker_sources(const uuber::NativeContext &ctx,
 double guard_effective_survival_internal(const GuardEvalInput &input, double t,
                                          const IntegrationSettings &settings);
 
-double guard_density_internal(const GuardEvalInput &input, double t,
-                              const IntegrationSettings &settings);
-
 double guard_cdf_internal(const GuardEvalInput &input, double t,
                           const IntegrationSettings &settings);
 
@@ -3673,6 +3670,230 @@ double evaluate_outcome_coupling_mass(
                    include_na_donors, outcome_idx_context);
 }
 
+double evaluate_coupling_density_nway(
+    const uuber::NativeContext &ctx, const OutcomeCouplingNWayPayload &gate,
+    double time, int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, double rel_tol, double abs_tol,
+    int max_depth, bool include_na_donors, int outcome_idx_context) {
+  if (gate.competitor_refs.empty() || !std::isfinite(time) || time <= 0.0) {
+    return 0.0;
+  }
+  const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
+  const uuber::TrialParamsSoA *trial_params_soa =
+      resolve_trial_params_soa(trial_params);
+  const bool use_acc_specialization = coupling_acc_specialization_allowed(
+      ctx, include_na_donors, outcome_idx_context);
+  CouplingAccRef gate_acc;
+  CouplingAccRef target_acc;
+  std::vector<CouplingAccRef> competitor_acc;
+  bool acc_specialized = false;
+  if (use_acc_specialization &&
+      build_coupling_acc_ref(ctx, gate.gate_ref, component_idx, trial_params,
+                             trial_params_soa, gate_acc) &&
+      build_coupling_acc_ref(ctx, gate.target_ref, component_idx, trial_params,
+                             trial_params_soa, target_acc)) {
+    competitor_acc.reserve(gate.competitor_refs.size());
+    acc_specialized = true;
+    for (const LabelRef &competitor_ref : gate.competitor_refs) {
+      CouplingAccRef comp_acc;
+      if (!build_coupling_acc_ref(ctx, competitor_ref, component_idx,
+                                  trial_params, trial_params_soa, comp_acc)) {
+        acc_specialized = false;
+        competitor_acc.clear();
+        break;
+      }
+      competitor_acc.push_back(comp_acc);
+    }
+  }
+
+  if (acc_specialized) {
+    const double gate_cdf =
+        clamp_probability(1.0 - coupling_acc_survival(gate_acc, time));
+    const double gate_dens = coupling_acc_density(gate_acc, time);
+    auto order_integrand = [&](double s) -> double {
+      const double fx = coupling_acc_density(target_acc, s);
+      if (!std::isfinite(fx) || fx <= 0.0) {
+        return 0.0;
+      }
+      double prod = 1.0;
+      for (const CouplingAccRef &comp_acc : competitor_acc) {
+        prod *= coupling_acc_survival(comp_acc, s);
+        if (!std::isfinite(prod) || prod <= 0.0) {
+          return 0.0;
+        }
+      }
+      const double val = fx * prod;
+      return (std::isfinite(val) && val > 0.0) ? val : 0.0;
+    };
+    const double order_mass = clamp_probability(uuber::integrate_boost_fn_0_to_upper(
+        order_integrand, time, rel_tol, abs_tol, max_depth, true));
+    const double order_dens = order_integrand(time);
+    const double dens = gate_dens * order_mass + gate_cdf * order_dens;
+    return safe_density(dens);
+  }
+
+  auto eval_unforced = [&](const LabelRef &ref, double s) -> NodeEvalResult {
+    return eval_event_unforced(ctx, ref, s, component_idx, need, trial_params,
+                               trial_type_key, include_na_donors,
+                               outcome_idx_context, trial_params_soa);
+  };
+  const NodeEvalResult gate_eval = eval_unforced(gate.gate_ref, time);
+  const double gate_cdf =
+      clamp_probability(1.0 - clamp_probability(gate_eval.survival));
+  const double gate_dens = safe_density(gate_eval.density);
+  auto order_integrand = [&](double s) -> double {
+    const NodeEvalResult ex = eval_unforced(gate.target_ref, s);
+    const double fx = safe_density(ex.density);
+    if (fx <= 0.0) {
+      return 0.0;
+    }
+    double prod = 1.0;
+    for (const LabelRef &competitor_ref : gate.competitor_refs) {
+      const NodeEvalResult ej = eval_unforced(competitor_ref, s);
+      prod *= clamp_probability(ej.survival);
+      if (!std::isfinite(prod) || prod <= 0.0) {
+        return 0.0;
+      }
+    }
+    const double val = fx * prod;
+    return (std::isfinite(val) && val > 0.0) ? val : 0.0;
+  };
+  const double order_mass = clamp_probability(uuber::integrate_boost_fn_0_to_upper(
+      order_integrand, time, rel_tol, abs_tol, max_depth, true));
+  const double order_dens = order_integrand(time);
+  const double dens = gate_dens * order_mass + gate_cdf * order_dens;
+  return safe_density(dens);
+}
+
+double evaluate_coupling_density_pair(
+    const uuber::NativeContext &ctx, const OutcomeCouplingPairPayload &pair,
+    double time, int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, double rel_tol, double abs_tol,
+    int max_depth, bool include_na_donors, int outcome_idx_context) {
+  if (!std::isfinite(time) || time <= 0.0) {
+    return 0.0;
+  }
+  const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
+  const uuber::TrialParamsSoA *trial_params_soa =
+      resolve_trial_params_soa(trial_params);
+  const bool use_acc_specialization = coupling_acc_specialization_allowed(
+      ctx, include_na_donors, outcome_idx_context);
+  CouplingAccRef x_acc;
+  CouplingAccRef y_acc;
+  CouplingAccRef c_acc;
+  const bool acc_specialized =
+      use_acc_specialization &&
+      build_coupling_acc_ref(ctx, pair.x_ref, component_idx, trial_params,
+                             trial_params_soa, x_acc) &&
+      build_coupling_acc_ref(ctx, pair.y_ref, component_idx, trial_params,
+                             trial_params_soa, y_acc) &&
+      build_coupling_acc_ref(ctx, pair.c_ref, component_idx, trial_params,
+                             trial_params_soa, c_acc);
+
+  if (acc_specialized) {
+    const double fx = coupling_acc_density(x_acc, time);
+    const double fc = coupling_acc_density(c_acc, time);
+    const double sx = coupling_acc_survival(x_acc, time);
+    const double sy = coupling_acc_survival(y_acc, time);
+    const double sc = coupling_acc_survival(c_acc, time);
+    const double Fx = clamp_probability(1.0 - sx);
+    const double Fy = clamp_probability(1.0 - sy);
+    const double Fc = clamp_probability(1.0 - sc);
+    auto i_integrand = [&](double s) -> double {
+      const double fxs = coupling_acc_density(x_acc, s);
+      const double Fys = clamp_probability(1.0 - coupling_acc_survival(y_acc, s));
+      const double val = fxs * Fys;
+      return (std::isfinite(val) && val > 0.0) ? val : 0.0;
+    };
+    const double I = clamp_probability(uuber::integrate_boost_fn_0_to_upper(
+        i_integrand, time, rel_tol, abs_tol, max_depth, true));
+    const double dens = fc * (Fx - I) + fx * Fc * (1.0 - Fy);
+    return safe_density(dens);
+  }
+
+  auto eval_unforced = [&](const LabelRef &ref, double s) -> NodeEvalResult {
+    return eval_event_unforced(ctx, ref, s, component_idx, need, trial_params,
+                               trial_type_key, include_na_donors,
+                               outcome_idx_context, trial_params_soa);
+  };
+  const NodeEvalResult ex_t = eval_unforced(pair.x_ref, time);
+  const NodeEvalResult ey_t = eval_unforced(pair.y_ref, time);
+  const NodeEvalResult ec_t = eval_unforced(pair.c_ref, time);
+  const double fx = safe_density(ex_t.density);
+  const double fc = safe_density(ec_t.density);
+  const double Fx = clamp_probability(1.0 - clamp_probability(ex_t.survival));
+  const double Fy = clamp_probability(1.0 - clamp_probability(ey_t.survival));
+  const double Fc = clamp_probability(1.0 - clamp_probability(ec_t.survival));
+  auto i_integrand = [&](double s) -> double {
+    const NodeEvalResult ex = eval_unforced(pair.x_ref, s);
+    const NodeEvalResult ey = eval_unforced(pair.y_ref, s);
+    const double val =
+        safe_density(ex.density) *
+        clamp_probability(1.0 - clamp_probability(ey.survival));
+    return (std::isfinite(val) && val > 0.0) ? val : 0.0;
+  };
+  const double I = clamp_probability(uuber::integrate_boost_fn_0_to_upper(
+      i_integrand, time, rel_tol, abs_tol, max_depth, true));
+  const double dens = fc * (Fx - I) + fx * Fc * (1.0 - Fy);
+  return safe_density(dens);
+}
+
+using OutcomeCouplingDensityEvaluator = double (*)(
+    const uuber::NativeContext &, const OutcomeCouplingProgram &, double, int,
+    const TrialParamSet *, const std::string &, double, double, int, bool, int);
+
+double evaluate_coupling_density_pair_program(
+    const uuber::NativeContext &ctx, const OutcomeCouplingProgram &program,
+    double time, int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, double rel_tol, double abs_tol,
+    int max_depth, bool include_na_donors, int outcome_idx_context) {
+  return evaluate_coupling_density_pair(
+      ctx, program.pair, time, component_idx, trial_params, trial_type_key,
+      rel_tol, abs_tol, max_depth, include_na_donors, outcome_idx_context);
+}
+
+double evaluate_coupling_density_nway_program(
+    const uuber::NativeContext &ctx, const OutcomeCouplingProgram &program,
+    double time, int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, double rel_tol, double abs_tol,
+    int max_depth, bool include_na_donors, int outcome_idx_context) {
+  return evaluate_coupling_density_nway(
+      ctx, program.nway, time, component_idx, trial_params, trial_type_key,
+      rel_tol, abs_tol, max_depth, include_na_donors, outcome_idx_context);
+}
+
+inline OutcomeCouplingDensityEvaluator
+resolve_outcome_coupling_density_evaluator(OutcomeCouplingOpKind kind) {
+  static constexpr std::array<OutcomeCouplingDensityEvaluator, 3>
+      kEvaluators{nullptr, &evaluate_coupling_density_pair_program,
+                  &evaluate_coupling_density_nway_program};
+  const std::size_t idx = static_cast<std::size_t>(kind);
+  if (idx >= kEvaluators.size()) {
+    return nullptr;
+  }
+  return kEvaluators[idx];
+}
+
+double evaluate_outcome_coupling_density_impl(
+    const uuber::NativeContext &ctx,
+    const OutcomeCouplingProgram &program, double time, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    double rel_tol, double abs_tol, int max_depth, bool include_na_donors,
+    int outcome_idx_context) {
+  if (!program.valid || program.kind == OutcomeCouplingOpKind::None ||
+      !std::isfinite(time) || time < 0.0) {
+    return 0.0;
+  }
+  OutcomeCouplingDensityEvaluator evaluator =
+      resolve_outcome_coupling_density_evaluator(program.kind);
+  if (!evaluator) {
+    return 0.0;
+  }
+  return evaluator(ctx, program, time, component_idx, trial_params,
+                   trial_type_key, rel_tol, abs_tol, max_depth,
+                   include_na_donors, outcome_idx_context);
+}
+
 NodeEvalResult eval_node_with_forced_dense_bits(
     const uuber::NativeContext &ctx, int node_idx, double time,
     int component_idx, EvalNeed need, const TrialParamSet *trial_params,
@@ -3919,62 +4140,6 @@ double guard_effective_survival_internal(const GuardEvalInput &input, double t,
   NodeEvalResult block =
       eval_node_recursive_dense(tr.blocker_node_idx, local, EvalNeed::kSurvival);
   return clamp_probability(block.survival);
-}
-
-double guard_reference_density(const GuardEvalInput &input, double t) {
-  if (!std::isfinite(t) || t < 0.0) {
-    return 0.0;
-  }
-  if (!input.ctx.kernel_state_graph.valid ||
-      input.node_idx < 0 ||
-      input.node_idx >=
-          static_cast<int>(
-              input.ctx.kernel_state_graph.node_guard_transition_idx.size())) {
-    Rcpp::stop("IR guard transition metadata missing for guard node_idx=%d",
-               input.node_idx);
-  }
-  const int tr_idx =
-      input.ctx.kernel_state_graph.node_guard_transition_idx[static_cast<std::size_t>(
-          input.node_idx)];
-  if (tr_idx < 0 ||
-      tr_idx >=
-          static_cast<int>(input.ctx.kernel_state_graph.guard_transitions.size())) {
-    Rcpp::stop("IR guard transition mapping missing for guard node_idx=%d",
-               input.node_idx);
-  }
-  const uuber::KernelGuardTransition &tr =
-      input.ctx.kernel_state_graph.guard_transitions[static_cast<std::size_t>(
-          tr_idx)];
-  if (tr.node_idx != input.node_idx || tr.reference_node_idx < 0) {
-    Rcpp::stop(
-        "IR guard transition reference metadata invalid for guard node_idx=%d",
-        input.node_idx);
-  }
-  NodeEvalState local(input.ctx, t, input.component_idx, input.trial_params,
-                      input.trial_type_key, false, -1,
-                      input.exact_source_times, input.source_time_bounds,
-                      input.forced_scope_filter, input.forced_complete_bits,
-                      input.forced_complete_bits != nullptr,
-                      input.forced_survive_bits,
-                      input.forced_survive_bits != nullptr);
-  NodeEvalResult ref =
-      eval_node_recursive_dense(tr.reference_node_idx, local, EvalNeed::kDensity);
-  double dens_ref = ref.density;
-  if (!std::isfinite(dens_ref) || dens_ref <= 0.0)
-    return 0.0;
-  return dens_ref;
-}
-
-double guard_density_internal(const GuardEvalInput &input, double t,
-                              const IntegrationSettings &settings) {
-  double dens_ref = guard_reference_density(input, t);
-  if (dens_ref <= 0.0)
-    return 0.0;
-  double s_eff = guard_effective_survival_internal(input, t, settings);
-  double val = dens_ref * s_eff;
-  if (!std::isfinite(val) || val <= 0.0)
-    return 0.0;
-  return val;
 }
 
 // --- Nested Guard Optimization ---
@@ -4353,13 +4518,250 @@ bool eval_optimized_linear_guard_chain_ode(
       !std::isfinite(t) || t <= 0.0) {
     return false;
   }
-  if (depth > kLinearGuardChainMaxDepth) {
-    Rcpp::stop("Linear guard chain depth %d exceeds maximum supported depth %d",
-               static_cast<int>(depth),
-               static_cast<int>(kLinearGuardChainMaxDepth));
+
+  if (depth <= kLinearGuardChainMaxDepth) {
+    LinearChainIntegrator<kLinearGuardChainMaxDepth> integrator(input, chain, t,
+                                                                canonical);
+    return integrator.solve(out_cdf);
   }
-  LinearChainIntegrator<kLinearGuardChainMaxDepth> integrator(input, chain, t,
-                                                              canonical);
+
+  class DynamicLinearChainIntegrator final {
+  public:
+    DynamicLinearChainIntegrator(const GuardEvalInput &input,
+                                 const LinearGuardChain &chain, double t,
+                                 const CanonicalIntegrationSettings &canonical)
+        : input_(input), chain_(chain), t_(t), canonical_(canonical),
+          depth_(chain.reference_indices.size()), value_width_(depth_ + 1u),
+          ref_infos_(depth_), ref_info_ptrs_(depth_, nullptr),
+          ref_density_ok_(depth_, false), state_(depth_, 0.0),
+          next_(depth_, 0.0), k1_(depth_, 0.0), k2_(depth_, 0.0),
+          k3_(depth_, 0.0), k4_(depth_, 0.0), tmp_(depth_, 0.0) {
+      for (std::size_t i = 0; i < depth_; ++i) {
+        if (fast_event_info_dense_idx(input_, chain_.reference_indices[i],
+                                      ref_infos_[i])) {
+          ref_info_ptrs_[i] = &ref_infos_[i];
+          ref_density_ok_[i] =
+              fast_event_density_supported(input_, ref_infos_[i]);
+        }
+      }
+      leaf_info_ptr_ =
+          fast_event_info_dense_idx(input_, chain_.leaf_blocker_idx, leaf_info_)
+              ? &leaf_info_
+              : nullptr;
+    }
+
+    bool solve(double &out_cdf) {
+      if (!is_valid()) {
+        return false;
+      }
+      const int n_steps = linear_chain_step_budget(depth_, canonical_);
+      return solve_fixed_rk4(n_steps, out_cdf);
+    }
+
+  private:
+    bool is_valid() const {
+      return chain_.valid && depth_ >= 1u && chain_.leaf_blocker_idx >= 0 &&
+             std::isfinite(t_) && t_ > 0.0;
+    }
+
+    inline double grid_x_value(std::size_t grid_idx, double h) const {
+      return 0.5 * h * static_cast<double>(grid_idx);
+    }
+
+    inline double *grid_slot(std::size_t grid_idx) {
+      return grid_vals_.data() + (grid_idx * value_width_);
+    }
+
+    bool precompute_uniform_grid_values(int n_steps, double h) {
+      if (n_steps < 1 || !std::isfinite(h) || h <= 0.0) {
+        return false;
+      }
+      const std::size_t grid_points = static_cast<std::size_t>(2 * n_steps + 1);
+      if (grid_points < 3u) {
+        return false;
+      }
+      grid_vals_.assign(grid_points * value_width_, 0.0);
+      batch_shifted_.assign(grid_points, 0.0);
+      batch_values_.assign(grid_points, 0.0);
+
+      for (std::size_t i = 0; i < depth_; ++i) {
+        const FastEventInfo *info_ptr = ref_info_ptrs_[i];
+        if (info_ptr && ref_density_ok_[i]) {
+          const FastEventInfo &info = *info_ptr;
+          const double onset_eff = total_onset_with_t0(info.onset, info.cfg);
+          const double success_prob = clamp(1.0 - info.q, 0.0, 1.0);
+          for (std::size_t g = 0; g < grid_points; ++g) {
+            batch_shifted_[g] = grid_x_value(g, h) - onset_eff;
+          }
+          uuber::eval_pdf_vec(
+              info.cfg.code, info.cfg.p1, info.cfg.p2, info.cfg.p3, info.cfg.p4,
+              info.cfg.p5, info.cfg.p6, info.cfg.p7, info.cfg.p8,
+              batch_shifted_.data(), grid_points, batch_values_.data());
+          for (std::size_t g = 0; g < grid_points; ++g) {
+            double dens = 0.0;
+            const double x = grid_x_value(g, h);
+            if (info.component_ok && success_prob > 0.0 && x >= onset_eff) {
+              dens = success_prob * safe_density(batch_values_[g]);
+            }
+            double *vals = grid_slot(g);
+            vals[i] = dens;
+          }
+        } else {
+          for (std::size_t g = 0; g < grid_points; ++g) {
+            const double x = grid_x_value(g, h);
+            NodeEvalResult ref_eval = eval_node_from_guard_input(
+                input_, chain_.reference_indices[i], x, EvalNeed::kDensity);
+            double dens = safe_density(ref_eval.density);
+            if (!std::isfinite(dens) || dens <= 0.0) {
+              dens = 0.0;
+            }
+            double *vals = grid_slot(g);
+            vals[i] = dens;
+          }
+        }
+      }
+
+      if (leaf_info_ptr_) {
+        const FastEventInfo &info = *leaf_info_ptr_;
+        const double onset_eff = total_onset_with_t0(info.onset, info.cfg);
+        const double success_prob = clamp(1.0 - info.q, 0.0, 1.0);
+        for (std::size_t g = 0; g < grid_points; ++g) {
+          batch_shifted_[g] = grid_x_value(g, h) - onset_eff;
+        }
+        uuber::eval_cdf_vec(
+            info.cfg.code, info.cfg.p1, info.cfg.p2, info.cfg.p3, info.cfg.p4,
+            info.cfg.p5, info.cfg.p6, info.cfg.p7, info.cfg.p8,
+            batch_shifted_.data(), grid_points, batch_values_.data());
+        for (std::size_t g = 0; g < grid_points; ++g) {
+          double surv = 1.0;
+          const double x = grid_x_value(g, h);
+          if (!info.component_ok) {
+            surv = 1.0;
+          } else if (x >= onset_eff) {
+            const double cdf = clamp_probability(batch_values_[g]);
+            surv = info.q + success_prob * (1.0 - cdf);
+          }
+          double *vals = grid_slot(g);
+          vals[depth_] = clamp_probability(surv);
+        }
+      } else {
+        for (std::size_t g = 0; g < grid_points; ++g) {
+          const double x = grid_x_value(g, h);
+          NodeEvalResult leaf_eval = eval_node_from_guard_input(
+              input_, chain_.leaf_blocker_idx, x, EvalNeed::kSurvival);
+          const double leaf_surv = clamp_probability(leaf_eval.survival);
+          double *vals = grid_slot(g);
+          vals[depth_] = clamp_probability(leaf_surv);
+        }
+      }
+      return true;
+    }
+
+    void deriv_from_vals(const double *vals, const std::vector<double> &state,
+                         std::vector<double> &dst) {
+      std::fill(dst.begin(), dst.end(), 0.0);
+      for (std::size_t i = depth_; i-- > 0;) {
+        const double f_ref = vals[i];
+        if (!std::isfinite(f_ref) || f_ref <= 0.0) {
+          continue;
+        }
+        const double s_down = (i + 1 < depth_)
+                                  ? clamp_probability(1.0 - state[i + 1])
+                                  : vals[depth_];
+        if (!std::isfinite(s_down) || s_down <= 0.0) {
+          continue;
+        }
+        const double val = f_ref * s_down;
+        if (std::isfinite(val) && val > 0.0) {
+          dst[i] = val;
+        }
+      }
+    }
+
+    void rk4_step(const std::vector<double> &state, double h,
+                  const double *vals_x, const double *vals_half,
+                  const double *vals_next, std::vector<double> &out) {
+      std::fill(out.begin(), out.end(), 0.0);
+      deriv_from_vals(vals_x, state, k1_);
+      for (std::size_t i = 0; i < depth_; ++i) {
+        tmp_[i] = state[i] + 0.5 * h * k1_[i];
+      }
+      deriv_from_vals(vals_half, tmp_, k2_);
+      for (std::size_t i = 0; i < depth_; ++i) {
+        tmp_[i] = state[i] + 0.5 * h * k2_[i];
+      }
+      deriv_from_vals(vals_half, tmp_, k3_);
+      for (std::size_t i = 0; i < depth_; ++i) {
+        tmp_[i] = state[i] + h * k3_[i];
+      }
+      deriv_from_vals(vals_next, tmp_, k4_);
+      for (std::size_t i = 0; i < depth_; ++i) {
+        out[i] = state[i] + (h / 6.0) *
+                              (k1_[i] + 2.0 * k2_[i] + 2.0 * k3_[i] + k4_[i]);
+      }
+    }
+
+    bool solve_fixed_rk4(int n_steps, double &out_val) {
+      if (n_steps < 1 || !std::isfinite(t_) || t_ <= 0.0) {
+        return false;
+      }
+      const double h = t_ / static_cast<double>(n_steps);
+      if (!std::isfinite(h) || h <= 0.0) {
+        return false;
+      }
+      if (!precompute_uniform_grid_values(n_steps, h)) {
+        return false;
+      }
+      std::fill(state_.begin(), state_.end(), 0.0);
+      std::fill(next_.begin(), next_.end(), 0.0);
+      for (int i = 0; i < n_steps; ++i) {
+        const std::size_t g0 = static_cast<std::size_t>(2 * i);
+        const double *vals_x = grid_slot(g0);
+        const double *vals_half = grid_slot(g0 + 1u);
+        const double *vals_next = grid_slot(g0 + 2u);
+        rk4_step(state_, h, vals_x, vals_half, vals_next, next_);
+        state_.swap(next_);
+        for (std::size_t j = 0; j < depth_; ++j) {
+          if (!std::isfinite(state_[j])) {
+            return false;
+          }
+        }
+      }
+      const double cdf = state_.front();
+      if (!std::isfinite(cdf)) {
+        return false;
+      }
+      out_val = clamp_probability(cdf);
+      return std::isfinite(out_val);
+    }
+
+    const GuardEvalInput &input_;
+    const LinearGuardChain &chain_;
+    double t_{0.0};
+    CanonicalIntegrationSettings canonical_;
+    std::size_t depth_{0u};
+    std::size_t value_width_{0u};
+
+    std::vector<FastEventInfo> ref_infos_;
+    std::vector<const FastEventInfo *> ref_info_ptrs_;
+    std::vector<bool> ref_density_ok_;
+    FastEventInfo leaf_info_{};
+    const FastEventInfo *leaf_info_ptr_{nullptr};
+
+    std::vector<double> grid_vals_;
+    std::vector<double> batch_shifted_;
+    std::vector<double> batch_values_;
+
+    std::vector<double> state_;
+    std::vector<double> next_;
+    std::vector<double> k1_;
+    std::vector<double> k2_;
+    std::vector<double> k3_;
+    std::vector<double> k4_;
+    std::vector<double> tmp_;
+  };
+
+  DynamicLinearChainIntegrator integrator(input, chain, t, canonical);
   return integrator.solve(out_cdf);
 }
 
@@ -4398,31 +4800,22 @@ double guard_cdf_internal(const GuardEvalInput &input, double t,
     Rcpp::stop("IR guard transition node mismatch for guard node_idx=%d",
                input.node_idx);
   }
-
-  if (tr.eval_mode == uuber::KernelGuardEvalMode::LinearChainODE) {
-    LinearGuardChain chain = linear_guard_chain_from_transition(input.ctx, tr);
-    if (!chain.valid) {
-      Rcpp::stop(
-          "IR guard linear-chain metadata invalid for guard node_idx=%d",
-          input.node_idx);
-    }
-    double cdf_chain = 0.0;
-    if (eval_optimized_linear_guard_chain_ode(input, chain, t, canonical,
-                                              cdf_chain)) {
-      return cdf_chain;
-    }
+  if (tr.eval_mode != uuber::KernelGuardEvalMode::LinearChainODE) {
+    Rcpp::stop("IR guard transition mode must be LinearChainODE for node_idx=%d",
+               input.node_idx);
+  }
+  LinearGuardChain chain = linear_guard_chain_from_transition(input.ctx, tr);
+  if (!chain.valid) {
+    Rcpp::stop("IR guard linear-chain metadata invalid for guard node_idx=%d",
+               input.node_idx);
+  }
+  double cdf_chain = 0.0;
+  if (!eval_optimized_linear_guard_chain_ode(input, chain, t, canonical,
+                                             cdf_chain)) {
     Rcpp::stop("IR guard linear-chain ODE evaluation failed for node_idx=%d",
                input.node_idx);
   }
-  auto integrand = [&](double u) -> double {
-    return guard_density_internal(input, u, settings);
-  };
-  double val = uuber::integrate_boost_fn(integrand, 0.0, t, canonical.rel_tol,
-                                         canonical.abs_tol, canonical.max_depth);
-  if (!std::isfinite(val) || val < 0.0) {
-    val = 0.0;
-  }
-  return clamp_probability(val);
+  return cdf_chain;
 }
 
 std::vector<int> gather_blocker_sources(const uuber::NativeContext &ctx,
@@ -4463,9 +4856,8 @@ inline void apply_transition_mask_words(
   const std::uint64_t *mask_words =
       &ctx.ir.node_source_masks[static_cast<std::size_t>(source_mask_begin)];
   bits_out.or_words(mask_words, source_mask_count);
-  if (kernel_runtime) {
-    const int slot = (invalidate_slot >= 0) ? invalidate_slot : 0;
-    uuber::invalidate_kernel_runtime_from_slot(*kernel_runtime, slot);
+  if (kernel_runtime && invalidate_slot >= 0) {
+    uuber::invalidate_kernel_runtime_from_slot(*kernel_runtime, invalidate_slot);
   }
 }
 
@@ -4514,35 +4906,6 @@ std::uint64_t competitor_cache_key_hash(const std::vector<int> &ids) {
 std::vector<std::vector<int>>
 build_competitor_clusters(const std::vector<CompetitorMeta> &metas);
 
-bool node_contains_guard(int node_id, const uuber::NativeContext &ctx,
-                         std::unordered_map<int, bool> &memo) {
-  int node_idx = resolve_dense_node_idx_required(ctx, node_id);
-  auto it = memo.find(node_idx);
-  if (it != memo.end())
-    return it->second;
-  const uuber::IrNode &node = ir_node_required(ctx, node_idx);
-  bool result = (node.op == uuber::IrNodeOp::Guard);
-  if (!result) {
-    if (node.op == uuber::IrNodeOp::And || node.op == uuber::IrNodeOp::Or) {
-      for (int i = 0; i < node.child_count; ++i) {
-        int child_idx = ctx.ir.node_children[static_cast<std::size_t>(
-            node.child_begin + i)];
-        if (node_contains_guard(child_idx, ctx, memo)) {
-          result = true;
-          break;
-        }
-      }
-    } else if (node.op == uuber::IrNodeOp::Not && node.child_count > 0 &&
-               node.child_begin >= 0) {
-      int child_idx =
-          ctx.ir.node_children[static_cast<std::size_t>(node.child_begin)];
-      result = node_contains_guard(child_idx, ctx, memo);
-    }
-  }
-  memo[node_idx] = result;
-  return result;
-}
-
 inline void validate_competitor_transition_meta(const uuber::NativeContext &ctx,
                                                 const CompetitorMeta &meta) {
   if (meta.node_idx < 0) {
@@ -4588,7 +4951,17 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
   uuber::CompetitorClusterCacheEntry entry;
   std::vector<CompetitorMeta> metas;
   metas.reserve(competitor_ids.size());
-  std::unordered_map<int, bool> guard_memo;
+  if (ctx.kernel_state_graph.node_contains_guard.size() != ctx.ir.nodes.size() ||
+      ctx.kernel_state_graph.node_competitor_guard_transition_idx.size() !=
+          ctx.ir.nodes.size() ||
+      ctx.kernel_state_graph.node_competitor_transition_mask_begin.size() !=
+          ctx.ir.nodes.size() ||
+      ctx.kernel_state_graph.node_competitor_transition_mask_count.size() !=
+          ctx.ir.nodes.size() ||
+      ctx.kernel_state_graph.node_competitor_transition_invalidate_slot.size() !=
+          ctx.ir.nodes.size()) {
+    Rcpp::stop("IR competitor transition metadata unavailable");
+  }
   for (int node_id : competitor_ids) {
     int node_idx = resolve_dense_node_idx_required(ctx, node_id);
     const uuber::IrNode &node = ir_node_required(ctx, node_idx);
@@ -4597,42 +4970,25 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
     meta.node_idx = node_idx;
     meta.sources = ensure_source_ids(ctx, node);
     sort_unique(meta.sources);
-    const bool contains_guard = node_contains_guard(node_id, ctx, guard_memo);
+    const bool contains_guard =
+        ctx.kernel_state_graph
+            .node_contains_guard[static_cast<std::size_t>(node_idx)] != 0u;
     meta.scenario_sensitive =
         (node.flags & uuber::IR_NODE_FLAG_SCENARIO_SENSITIVE) != 0u;
     meta.transition_required = contains_guard && !meta.sources.empty();
     if (meta.transition_required) {
-      meta.transition_mask_begin = node.source_mask_begin;
-      meta.transition_mask_count = node.source_mask_count;
-      meta.invalidate_slot = 0;
-      if (node_idx >= 0 &&
-          node_idx <
-              static_cast<int>(
-                  ctx.kernel_program.outputs.node_idx_to_slot.size())) {
-        const int out_slot = ctx.kernel_program.outputs.node_idx_to_slot
-            [static_cast<std::size_t>(node_idx)];
-        if (out_slot >= 0 &&
-            out_slot < static_cast<int>(ctx.kernel_program.ops.size())) {
-          meta.invalidate_slot = out_slot;
-        }
-      }
-    }
-    if (node.op == uuber::IrNodeOp::Guard && meta.transition_required &&
-        node_idx >= 0 &&
-        node_idx <
-            static_cast<int>(ctx.kernel_state_graph.node_guard_transition_idx.size())) {
-      meta.guard_transition_idx = ctx.kernel_state_graph.node_guard_transition_idx
-          [static_cast<std::size_t>(node_idx)];
-      if (meta.guard_transition_idx >= 0 &&
-          meta.guard_transition_idx <
-              static_cast<int>(ctx.kernel_state_graph.guard_transitions.size())) {
-        const uuber::KernelGuardTransition &tr =
-            ctx.kernel_state_graph.guard_transitions[static_cast<std::size_t>(
-                meta.guard_transition_idx)];
-        meta.transition_mask_begin = tr.source_mask_begin;
-        meta.transition_mask_count = tr.source_mask_count;
-        meta.invalidate_slot = tr.invalidate_slot;
-      }
+      meta.guard_transition_idx = ctx.kernel_state_graph
+          .node_competitor_guard_transition_idx[static_cast<std::size_t>(
+              node_idx)];
+      meta.transition_mask_begin = ctx.kernel_state_graph
+          .node_competitor_transition_mask_begin[static_cast<std::size_t>(
+              node_idx)];
+      meta.transition_mask_count = ctx.kernel_state_graph
+          .node_competitor_transition_mask_count[static_cast<std::size_t>(
+              node_idx)];
+      meta.invalidate_slot = ctx.kernel_state_graph
+          .node_competitor_transition_invalidate_slot[static_cast<std::size_t>(
+              node_idx)];
     }
     validate_competitor_transition_meta(ctx, meta);
     metas.push_back(std::move(meta));
@@ -4718,7 +5074,7 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
   uuber::CompetitorCacheRecord record;
   record.competitor_ids = competitor_ids;
   record.entry = std::move(entry);
-  std::vector<uuber::CompetitorCacheRecord> &bucket = cache[key_hash];
+  auto &bucket = cache[key_hash];
   bucket.push_back(std::move(record));
   return bucket.back().entry;
 }
@@ -7108,13 +7464,26 @@ struct TrialContributionSpec {
   bool guess_shortcut{false};
   bool enforce_ranked_sequence{false};
   int mass_outcome_idx{-1};
+  OutcomeCouplingProgram sequence_coupling_program;
   std::vector<OutcomeCouplingProgram> mass_coupling_programs;
   int runtime_slot{-1};
 };
 
+double evaluate_outcome_coupling_density(
+    const uuber::NativeContext &ctx,
+    const OutcomeCouplingProgram &program, double time, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    double rel_tol, double abs_tol, int max_depth, bool include_na_donors,
+    int outcome_idx_context) {
+  return evaluate_outcome_coupling_density_impl(
+      ctx, program, time, component_idx, trial_params, trial_type_key, rel_tol,
+      abs_tol, max_depth, include_na_donors, outcome_idx_context);
+}
+
 double evaluate_sequence_density_kernel_idx(
     uuber::NativeContext &ctx, const TrialContributionSpec &spec,
-    const TrialParamSet *active_params,
+    const TrialParamSet *active_params, double rel_tol, double abs_tol,
+    int max_depth,
     RankedTransitionCompiler *ranked_transition_compiler,
     SharedTriggerPlan *single_state_plan, TrialParamSet *prob_scratch_ptr,
     uuber::KernelRuntimeState *runtime_ptr) {
@@ -7128,6 +7497,12 @@ double evaluate_sequence_density_kernel_idx(
           ctx, spec.keep_label_id, spec.single_outcome_idx, false,
           spec.single_time, spec.component_idx, active_params,
           spec.trial_type_key, single_state_plan, prob_scratch_ptr);
+    }
+    if (spec.sequence_coupling_program.valid && !spec.competitors.empty()) {
+      return evaluate_outcome_coupling_density(
+          ctx, spec.sequence_coupling_program, spec.single_time,
+          spec.component_idx, active_params, spec.trial_type_key, rel_tol,
+          abs_tol, max_depth, false, spec.single_outcome_idx);
     }
     const int node_id =
         ctx.outcome_info[static_cast<std::size_t>(spec.single_outcome_idx)]
@@ -7158,8 +7533,9 @@ double evaluate_trial_contribution_kernel_idx(
     uuber::KernelRuntimeState *runtime_ptr) {
   if (spec.metric == KernelContributionMetric::SequenceDensity) {
     return evaluate_sequence_density_kernel_idx(
-        ctx, spec, active_params, ranked_transition_compiler, single_state_plan,
-        prob_scratch_ptr, runtime_ptr);
+        ctx, spec, active_params, rel_tol, abs_tol, max_depth,
+        ranked_transition_compiler, single_state_plan, prob_scratch_ptr,
+        runtime_ptr);
   }
   const int oi = spec.mass_outcome_idx;
   if (oi < 0 || oi >= static_cast<int>(ctx.outcome_info.size())) {
@@ -7278,6 +7654,10 @@ double evaluate_trial_probability_kernel_idx(
       const std::vector<int> &comp_use =
           filter_competitor_ids(ctx, info.competitor_ids, comp_idx, comp_filtered);
       spec.competitors = comp_use;
+      if (!spec.competitors.empty()) {
+        spec.sequence_coupling_program = resolve_outcome_coupling_program(
+            ctx, info.node_id, spec.competitors, true);
+      }
       spec.single_time = rt;
       spec.keep_label_id =
           (comp_outcome_idx >= 0 &&

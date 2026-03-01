@@ -216,8 +216,7 @@ struct KernelStateTransition {
 };
 
 enum class KernelGuardEvalMode : std::uint8_t {
-  GeneralCompiled = 0,
-  LinearChainODE = 1
+  LinearChainODE = 0
 };
 
 struct KernelGuardTransition {
@@ -229,7 +228,7 @@ struct KernelGuardTransition {
   int blocker_node_idx{-1};
   int reference_slot{-1};
   int blocker_slot{-1};
-  KernelGuardEvalMode eval_mode{KernelGuardEvalMode::GeneralCompiled};
+  KernelGuardEvalMode eval_mode{KernelGuardEvalMode::LinearChainODE};
   int linear_chain_begin{-1};
   int linear_chain_count{0};
   int linear_chain_leaf_idx{-1};
@@ -245,6 +244,11 @@ struct KernelStateGraph {
   std::vector<KernelGuardTransition> guard_transitions;
   std::vector<int> guard_linear_chain_nodes;
   std::vector<int> node_guard_transition_idx;
+  std::vector<std::uint8_t> node_contains_guard;
+  std::vector<int> node_competitor_guard_transition_idx;
+  std::vector<int> node_competitor_transition_mask_begin;
+  std::vector<int> node_competitor_transition_mask_count;
+  std::vector<int> node_competitor_transition_invalidate_slot;
   bool valid{false};
 };
 
@@ -266,7 +270,7 @@ struct CompetitorCacheRecord {
 };
 
 using CompetitorCacheMap =
-    std::unordered_map<std::uint64_t, std::vector<CompetitorCacheRecord>>;
+    std::unordered_map<std::uint64_t, std::deque<CompetitorCacheRecord>>;
 
 struct TrialParamsSoA {
   int n_acc{0};

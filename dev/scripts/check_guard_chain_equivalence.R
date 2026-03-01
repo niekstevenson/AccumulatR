@@ -4,23 +4,6 @@ suppressPackageStartupMessages(library(AccumulatR))
 
 `%||%` <- function(x, y) if (is.null(x)) y else x
 
-run_with_guard_mode <- function(mode, fn) {
-  old <- Sys.getenv("ACCUMULATR_GUARD_CDF_MODE", unset = NA_character_)
-  on.exit({
-    if (is.na(old)) {
-      Sys.unsetenv("ACCUMULATR_GUARD_CDF_MODE")
-    } else {
-      Sys.setenv(ACCUMULATR_GUARD_CDF_MODE = old)
-    }
-  }, add = TRUE)
-  if (identical(mode, "auto")) {
-    Sys.unsetenv("ACCUMULATR_GUARD_CDF_MODE")
-  } else {
-    Sys.setenv(ACCUMULATR_GUARD_CDF_MODE = mode)
-  }
-  fn()
-}
-
 normalize_probs <- function(p) {
   vals <- as.numeric(p)
   nms <- names(p)
@@ -98,7 +81,7 @@ n_trials <- if (is.na(n_trials) || n_trials < 1L) 1L else n_trials
 depths <- depth_min:depth_max
 
 cat(sprintf(
-  "Running guard equivalence audit depths=%d..%d reps=%d n_trials=%d run_prob=%s run_ll=%s\n",
+  "Running single-path guard stress audit depths=%d..%d reps=%d n_trials=%d run_prob=%s run_ll=%s\n",
   depth_min, depth_max, reps_per_depth, n_trials,
   if (run_prob) "yes" else "no",
   if (run_ll) "yes" else "no"
@@ -115,17 +98,17 @@ for (depth in depths) {
     prob_diff <- NA_real_
     if (run_prob) {
       prob_params <- build_param_matrix(cs$spec_obj, cs$params, n_trials = 1L)
-      p_auto <- run_with_guard_mode("auto", function() {
-        normalize_probs(response_probabilities(cs$structure, prob_params, include_na = TRUE))
-      })
-      p_quad <- run_with_guard_mode("quadrature", function() {
-        normalize_probs(response_probabilities(cs$structure, prob_params, include_na = TRUE))
-      })
-      prob_diff <- max_named_abs_diff(p_auto, p_quad)
+      p_run1 <- normalize_probs(
+        response_probabilities(cs$structure, prob_params, include_na = TRUE)
+      )
+      p_run2 <- normalize_probs(
+        response_probabilities(cs$structure, prob_params, include_na = TRUE)
+      )
+      prob_diff <- max_named_abs_diff(p_run1, p_run2)
     }
 
-    ll_auto <- NA_real_
-    ll_quad <- NA_real_
+    ll_run1 <- NA_real_
+    ll_run2 <- NA_real_
     ll_diff <- NA_real_
     if (run_ll) {
       sim_params <- build_param_matrix(cs$spec_obj, cs$params, n_trials = n_trials)
@@ -139,13 +122,9 @@ for (depth in depths) {
         layout = ctx$param_layout
       )
 
-      ll_auto <- run_with_guard_mode("auto", function() {
-        as.numeric(log_likelihood(ctx, slim_params))
-      })
-      ll_quad <- run_with_guard_mode("quadrature", function() {
-        as.numeric(log_likelihood(ctx, slim_params))
-      })
-      ll_diff <- abs(ll_auto - ll_quad)
+      ll_run1 <- as.numeric(log_likelihood(ctx, slim_params))
+      ll_run2 <- as.numeric(log_likelihood(ctx, slim_params))
+      ll_diff <- abs(ll_run1 - ll_run2)
     }
 
     rows[[row_i]] <- data.frame(
@@ -153,8 +132,8 @@ for (depth in depths) {
       rep = rep_idx,
       prob_diff = prob_diff,
       ll_diff = ll_diff,
-      ll_auto = ll_auto,
-      ll_quad = ll_quad,
+      ll_run1 = ll_run1,
+      ll_run2 = ll_run2,
       stringsAsFactors = FALSE
     )
     cat(sprintf(

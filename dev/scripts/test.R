@@ -19,7 +19,7 @@ with_native_only <- function(expr) {
 }
 
 # 1. Which examples to run
-example_ids <- names(new_api_examples)[19]
+example_ids <- names(new_api_examples)[6]
 
 unwrap_model_spec <- function(model) {
   if (is.list(model) && !is.null(model$model_spec) && is.list(model$model_spec)) {
@@ -63,44 +63,44 @@ for (example_id in example_ids) {
 
   # 2. Parameter table for this example
   params_df <- build_param_matrix(model_spec, core_params, n_trials = n_trials)
-  # 
-  # # 3. Simulate data and compute observed probabilities
-  # sim <- simulate(model_spec, params_df, seed = seed, keep_component = TRUE)
-  # data_df <- data.frame(
-  #   trial = sim$trial,
-  #   R = factor(sim$R),
-  #   rt = sim$rt,
-  #   stringsAsFactors = FALSE
-  # )
-  # data_df$component <- sim$component
-  # obs_counts <- table(data_df$R, useNA = "ifany")
-  # obs_probs <- prop.table(obs_counts)
-  # cat("Observed outcome probabilities (simulated data):\n")
-  # print(round(obs_probs, 6))
-  # 
-  # # 4. Analytic response probabilities (native)
-  # single_params <- build_param_matrix(model_spec, core_params, n_trials = 1L)
-  # analytic_probs <- with_native_only({
-  #   response_probabilities(model_spec, single_params, include_na = TRUE)
-  # })
-  # cat("Analytic outcome probabilities (native):\n")
-  # print(round(analytic_probs, 6))
-  # cat(sprintf("Sum: %.6f\n", sum(analytic_probs)))
-  # 
-  # # 5. Native profiling over parameter grids and repeat log-likelihoods
-  # ctx <- build_likelihood_context(
-  #   structure = model_spec,
-  #   data_df = data_df
-  # )
-  # profile_res <- profile_likelihood(
-  #   structure = model_spec,
-  #   model_spec = model_spec,
-  #   base_params = core_params,
-  #   data = data_df,
-  #   percent = profile_percent,
-  #   n_points = profile_points,
-  #   n_cores = 10
-  # )
-  # print(utils::head(profile_res))
-  # print(plot_profile(profile_res))
+
+  # 3. Simulate data and compute observed probabilities
+  sim <- simulate(model_spec, params_df, seed = seed, keep_component = TRUE)
+  data_df <- data.frame(
+    trial = sim$trial,
+    R = factor(sim$R),
+    rt = sim$rt,
+    stringsAsFactors = FALSE
+  )
+  data_df$component <- sim$component
+  obs_counts <- table(data_df$R, useNA = "ifany")
+  obs_probs <- prop.table(obs_counts)
+  cat("Observed outcome probabilities (simulated data):\n")
+  print(round(obs_probs, 6))
+
+  # 4. Analytic response probabilities (native)
+  single_params <- build_param_matrix(model_spec, core_params, n_trials = 1L)
+  analytic_probs <- with_native_only({
+    response_probabilities(model_spec, single_params, include_na = TRUE)
+  })
+  cat("Analytic outcome probabilities (native):\n")
+  print(round(analytic_probs, 6))
+  cat(sprintf("Sum: %.6f\n", sum(analytic_probs)))
+
+  # 5. Native profiling over parameter grids and repeat log-likelihoods
+  ctx <- build_likelihood_context(
+    structure = model_spec,
+    data_df = data_df
+  )
+  profile_res <- profile_likelihood(
+    structure = model_spec,
+    model_spec = model_spec,
+    base_params = core_params,
+    data = data_df,
+    percent = profile_percent,
+    n_points = profile_points,
+    n_cores = 10
+  )
+  print(utils::head(profile_res))
+  print(plot_profile(profile_res))
 }

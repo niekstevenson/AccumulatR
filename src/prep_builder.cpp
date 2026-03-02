@@ -1689,15 +1689,15 @@ build_context_from_proto(const NativePrepProto &proto) {
     }
     IrOutcomeCouplingOp spec;
     std::vector<int> aux_events;
-    bool ok = false;
+    bool recognized = false;
     if (competitor_nodes.size() == 1) {
-      ok = detect_outcome_coupling_pair_ir(
+      recognized = detect_outcome_coupling_pair_ir(
           out.node_idx, competitor_nodes[0], aux_events, spec);
     } else if (competitor_nodes.size() >= 2) {
-      ok = detect_outcome_coupling_nway_ir(
+      recognized = detect_outcome_coupling_nway_ir(
           out.node_idx, competitor_nodes, aux_events, spec);
     }
-    if (ok && !aux_events.empty()) {
+    if (recognized && !aux_events.empty()) {
       spec.aux_event_begin =
             static_cast<int>(ir.outcome_coupling_event_indices.size());
       spec.aux_event_count = static_cast<int>(aux_events.size());
@@ -1705,8 +1705,10 @@ build_context_from_proto(const NativePrepProto &proto) {
           ir.outcome_coupling_event_indices.end(), aux_events.begin(),
           aux_events.end());
     }
-    if (!ok) {
-      continue;
+    if (!recognized) {
+      spec = IrOutcomeCouplingOp();
+      spec.kind = IrOutcomeCouplingKind::GenericNodeIntegral;
+      spec.node_idx = out.node_idx;
     }
     spec.competitor_begin = out.competitor_begin;
     spec.competitor_count = out.competitor_count;

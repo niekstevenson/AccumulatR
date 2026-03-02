@@ -41,7 +41,8 @@ enum class IrNodeOp : std::uint8_t {
 enum class IrOutcomeCouplingKind : std::uint8_t {
   None = 0,
   Pair = 1,
-  NWay = 2
+  NWay = 2,
+  GenericNodeIntegral = 3
 };
 
 enum IrNodeFlags : std::uint32_t {

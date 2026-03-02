@@ -3343,6 +3343,15 @@ struct CouplingAccRef {
   AccDistParams cfg{};
 };
 
+constexpr int kCouplingFiniteSegmentsDensity = 8;
+
+struct CouplingBatchScratch {
+  std::vector<double> shifted;
+  std::vector<double> pdf_values;
+  std::vector<double> cdf_values;
+  std::vector<double> temp_survival;
+};
+
 inline bool build_coupling_acc_ref(
     const uuber::NativeContext &ctx, const LabelRef &ref, int component_idx,
     const TrialParamSet *trial_params,
@@ -3375,7 +3384,21 @@ inline double coupling_acc_survival(const CouplingAccRef &ref, double t) {
   return clamp_probability(acc_survival_from_cfg(t, ref.onset, ref.q, ref.cfg));
 }
 
-inline bool build_coupling_time_batch(double upper, uuber::TimeBatch &out) {
+inline bool build_coupling_time_batch_density(double upper,
+                                              uuber::TimeBatch &out) {
+  if (upper <= 0.0) {
+    return false;
+  }
+  if (std::isfinite(upper)) {
+    out = uuber::build_time_batch_0_to_upper_finite_segments(
+        upper, kCouplingFiniteSegmentsDensity);
+  } else {
+    out = uuber::build_time_batch_0_to_upper(upper);
+  }
+  return !out.nodes.empty() && out.nodes.size() == out.weights.size();
+}
+
+inline bool build_coupling_time_batch_mass(double upper, uuber::TimeBatch &out) {
   if (upper <= 0.0) {
     return false;
   }
@@ -3387,7 +3410,7 @@ inline bool evaluate_coupling_acc_batch(
     const CouplingAccRef &ref, const std::vector<double> &times,
     bool need_density, bool need_survival, bool need_cdf,
     std::vector<double> *density_out, std::vector<double> *survival_out,
-    std::vector<double> *cdf_out) {
+    std::vector<double> *cdf_out, CouplingBatchScratch *scratch = nullptr) {
   const std::size_t n = times.size();
   if (n == 0) {
     if (need_density && density_out) {
@@ -3407,35 +3430,46 @@ inline bool evaluate_coupling_acc_batch(
   }
 
   if (need_density) {
-    density_out->assign(n, 0.0);
+    density_out->resize(n);
   }
   if (need_survival) {
-    survival_out->assign(n, 0.0);
+    survival_out->resize(n);
   }
   if (need_cdf) {
-    cdf_out->assign(n, 0.0);
+    cdf_out->resize(n);
   }
+
+  std::vector<double> shifted_local;
+  std::vector<double> pdf_values_local;
+  std::vector<double> cdf_values_local;
+  std::vector<double> &shifted = scratch ? scratch->shifted : shifted_local;
+  shifted.resize(n);
 
   const double onset_eff = total_onset_with_t0(ref.onset, ref.cfg);
   const double success_prob = 1.0 - ref.q;
-  std::vector<double> shifted(n, 0.0);
   for (std::size_t i = 0; i < n; ++i) {
     shifted[i] = times[i] - onset_eff;
   }
 
-  std::vector<double> pdf_values;
-  std::vector<double> cdf_values;
+  const double *pdf_values_data = nullptr;
+  const double *cdf_values_data = nullptr;
   if (need_density) {
-    pdf_values.resize(n, 0.0);
+    std::vector<double> &pdf_values =
+        scratch ? scratch->pdf_values : pdf_values_local;
+    pdf_values.resize(n);
     uuber::eval_pdf_vec(ref.cfg.code, ref.cfg.p1, ref.cfg.p2, ref.cfg.p3,
                         ref.cfg.p4, ref.cfg.p5, ref.cfg.p6, ref.cfg.p7,
                         ref.cfg.p8, shifted.data(), n, pdf_values.data());
+    pdf_values_data = pdf_values.data();
   }
   if (need_survival || need_cdf) {
-    cdf_values.resize(n, 0.0);
+    std::vector<double> &cdf_values =
+        scratch ? scratch->cdf_values : cdf_values_local;
+    cdf_values.resize(n);
     uuber::eval_cdf_vec(ref.cfg.code, ref.cfg.p1, ref.cfg.p2, ref.cfg.p3,
                         ref.cfg.p4, ref.cfg.p5, ref.cfg.p6, ref.cfg.p7,
                         ref.cfg.p8, shifted.data(), n, cdf_values.data());
+    cdf_values_data = cdf_values.data();
   }
 
   for (std::size_t i = 0; i < n; ++i) {
@@ -3445,7 +3479,7 @@ inline bool evaluate_coupling_acc_batch(
       double dens = 0.0;
       if (std::isfinite(t) && t >= 0.0 && t >= onset_eff &&
           success_prob > 0.0) {
-        dens = success_prob * safe_density(pdf_values[i]);
+        dens = success_prob * safe_density(pdf_values_data[i]);
       }
       (*density_out)[i] = safe_density(dens);
     }
@@ -3456,7 +3490,7 @@ inline bool evaluate_coupling_acc_batch(
         if (t < 0.0 || t < onset_eff) {
           surv = 1.0;
         } else {
-          const double cdf = clamp_probability(cdf_values[i]);
+          const double cdf = clamp_probability(cdf_values_data[i]);
           const double surv_underlying = clamp(1.0 - cdf, 0.0, 1.0);
           surv = ref.q + success_prob * surv_underlying;
         }
@@ -3471,7 +3505,7 @@ inline bool evaluate_coupling_acc_batch(
       } else if (t < 0.0 || t < onset_eff) {
         cdf_success = 0.0;
       } else {
-        cdf_success = clamp_probability(cdf_values[i]);
+        cdf_success = clamp_probability(cdf_values_data[i]);
       }
       (*cdf_out)[i] = clamp_probability(cdf_success);
     }
@@ -3523,6 +3557,7 @@ double evaluate_coupling_mass_nway(
   }
 
   if (acc_specialized) {
+    CouplingBatchScratch eval_scratch;
     double gate_cdf = 0.0;
     if (std::isfinite(upper)) {
       gate_cdf = clamp_probability(1.0 - coupling_acc_survival(gate_acc, upper));
@@ -3536,48 +3571,46 @@ double evaluate_coupling_mass_nway(
         return 0.0;
     }
     uuber::TimeBatch order_batch;
-    if (!build_coupling_time_batch(upper, order_batch)) {
+    if (!build_coupling_time_batch_mass(upper, order_batch)) {
       return 0.0;
     }
 
     std::vector<double> target_density;
     if (!evaluate_coupling_acc_batch(target_acc, order_batch.nodes, true, false,
                                      false, &target_density, nullptr,
-                                     nullptr)) {
+                                     nullptr, &eval_scratch)) {
       return 0.0;
     }
-    std::vector<std::vector<double>> competitor_survival(
-        competitor_acc.size(),
-        std::vector<double>(order_batch.nodes.size(), 0.0));
+    std::vector<double> survival_prod(order_batch.nodes.size(), 1.0);
     for (std::size_t j = 0; j < competitor_acc.size(); ++j) {
       if (!evaluate_coupling_acc_batch(competitor_acc[j], order_batch.nodes,
                                        false, true, false, nullptr,
-                                       &competitor_survival[j], nullptr)) {
+                                       &eval_scratch.temp_survival, nullptr,
+                                       &eval_scratch)) {
         return 0.0;
+      }
+      for (std::size_t i = 0; i < survival_prod.size(); ++i) {
+        survival_prod[i] *= clamp_probability(eval_scratch.temp_survival[i]);
       }
     }
 
-    std::vector<double> order_values(order_batch.nodes.size(), 0.0);
-    for (std::size_t i = 0; i < order_values.size(); ++i) {
+    double order_mass = 0.0;
+    for (std::size_t i = 0; i < survival_prod.size(); ++i) {
+      const double w = order_batch.weights[i];
+      if (!std::isfinite(w) || w <= 0.0) {
+        continue;
+      }
       const double fx = safe_density(target_density[i]);
       if (fx <= 0.0) {
         continue;
       }
-      double prod = 1.0;
-      for (std::size_t j = 0; j < competitor_survival.size(); ++j) {
-        prod *= clamp_probability(competitor_survival[j][i]);
-        if (!std::isfinite(prod) || prod <= 0.0) {
-          prod = 0.0;
-          break;
-        }
-      }
+      const double prod = clamp_probability(survival_prod[i]);
       const double val = fx * prod;
       if (std::isfinite(val) && val > 0.0) {
-        order_values[i] = val;
+        order_mass += w * val;
       }
     }
-    const double order_mass =
-        clamp_probability(uuber::integrate_time_batch(order_batch, order_values));
+    order_mass = clamp_probability(order_mass);
     double total = gate_cdf * order_mass;
     if (!std::isfinite(total) || total < 0.0)
       total = 0.0;
@@ -3669,8 +3702,9 @@ double evaluate_coupling_mass_pair(
                              trial_params_soa, c_acc);
 
   if (acc_specialized) {
+    CouplingBatchScratch eval_scratch;
     uuber::TimeBatch batch;
-    if (!build_coupling_time_batch(upper, batch)) {
+    if (!build_coupling_time_batch_mass(upper, batch)) {
       return 0.0;
     }
 
@@ -3680,11 +3714,14 @@ double evaluate_coupling_mass_pair(
     std::vector<double> c_density;
     std::vector<double> c_survival;
     if (!evaluate_coupling_acc_batch(x_acc, batch.nodes, true, true, false,
-                                     &x_density, &x_survival, nullptr) ||
+                                     &x_density, &x_survival, nullptr,
+                                     &eval_scratch) ||
         !evaluate_coupling_acc_batch(y_acc, batch.nodes, false, true, false,
-                                     nullptr, &y_survival, nullptr) ||
+                                     nullptr, &y_survival, nullptr,
+                                     &eval_scratch) ||
         !evaluate_coupling_acc_batch(c_acc, batch.nodes, true, true, false,
-                                     &c_density, &c_survival, nullptr)) {
+                                     &c_density, &c_survival, nullptr,
+                                     &eval_scratch)) {
       return 0.0;
     }
 
@@ -3693,29 +3730,29 @@ double evaluate_coupling_mass_pair(
       coeff = clamp_probability(1.0 - coupling_acc_survival(c_acc, upper));
     }
 
-    std::vector<double> term_fc_fx(batch.nodes.size(), 0.0);
-    std::vector<double> term_fx_fc(batch.nodes.size(), 0.0);
-    std::vector<double> term_fx_fy(batch.nodes.size(), 0.0);
+    double i_fc_fx = 0.0;
+    double i_fx_fc = 0.0;
+    double i_fx_fy = 0.0;
     for (std::size_t i = 0; i < batch.nodes.size(); ++i) {
+      const double w = batch.weights[i];
+      if (!std::isfinite(w) || w <= 0.0) {
+        continue;
+      }
       const double fx = safe_density(x_density[i]);
       const double fc = safe_density(c_density[i]);
       const double Fx = clamp_probability(1.0 - clamp_probability(x_survival[i]));
       const double Fy = clamp_probability(1.0 - clamp_probability(y_survival[i]));
       const double Fc = clamp_probability(1.0 - clamp_probability(c_survival[i]));
       if (fc > 0.0 && Fx > 0.0) {
-        term_fc_fx[i] = fc * Fx;
+        i_fc_fx += w * fc * Fx;
       }
       if (fx > 0.0 && Fc > 0.0) {
-        term_fx_fc[i] = fx * Fc;
+        i_fx_fc += w * fx * Fc;
       }
       if (fx > 0.0 && Fy > 0.0) {
-        term_fx_fy[i] = fx * Fy;
+        i_fx_fy += w * fx * Fy;
       }
     }
-
-    const double i_fc_fx = uuber::integrate_time_batch(batch, term_fc_fx);
-    const double i_fx_fc = uuber::integrate_time_batch(batch, term_fx_fc);
-    const double i_fx_fy = uuber::integrate_time_batch(batch, term_fx_fy);
     double total = i_fc_fx + i_fx_fc - coeff * i_fx_fy;
     if (!std::isfinite(total) || total < 0.0)
       total = 0.0;
@@ -3861,51 +3898,50 @@ double evaluate_coupling_density_nway(
   }
 
   if (acc_specialized) {
+    CouplingBatchScratch eval_scratch;
     const double gate_cdf =
         clamp_probability(1.0 - coupling_acc_survival(gate_acc, time));
     const double gate_dens = coupling_acc_density(gate_acc, time);
     uuber::TimeBatch order_batch;
-    if (!build_coupling_time_batch(time, order_batch)) {
+    if (!build_coupling_time_batch_density(time, order_batch)) {
       return 0.0;
     }
     std::vector<double> target_density;
     if (!evaluate_coupling_acc_batch(target_acc, order_batch.nodes, true, false,
                                      false, &target_density, nullptr,
-                                     nullptr)) {
+                                     nullptr, &eval_scratch)) {
       return 0.0;
     }
-    std::vector<std::vector<double>> competitor_survival(
-        competitor_acc.size(),
-        std::vector<double>(order_batch.nodes.size(), 0.0));
+    std::vector<double> survival_prod(order_batch.nodes.size(), 1.0);
     for (std::size_t j = 0; j < competitor_acc.size(); ++j) {
       if (!evaluate_coupling_acc_batch(competitor_acc[j], order_batch.nodes,
                                        false, true, false, nullptr,
-                                       &competitor_survival[j], nullptr)) {
+                                       &eval_scratch.temp_survival, nullptr,
+                                       &eval_scratch)) {
         return 0.0;
+      }
+      for (std::size_t i = 0; i < survival_prod.size(); ++i) {
+        survival_prod[i] *= clamp_probability(eval_scratch.temp_survival[i]);
       }
     }
 
-    std::vector<double> order_values(order_batch.nodes.size(), 0.0);
-    for (std::size_t i = 0; i < order_values.size(); ++i) {
+    double order_mass = 0.0;
+    for (std::size_t i = 0; i < survival_prod.size(); ++i) {
+      const double w = order_batch.weights[i];
+      if (!std::isfinite(w) || w <= 0.0) {
+        continue;
+      }
       const double fx = safe_density(target_density[i]);
       if (fx <= 0.0) {
         continue;
       }
-      double prod = 1.0;
-      for (std::size_t j = 0; j < competitor_survival.size(); ++j) {
-        prod *= clamp_probability(competitor_survival[j][i]);
-        if (!std::isfinite(prod) || prod <= 0.0) {
-          prod = 0.0;
-          break;
-        }
-      }
+      const double prod = clamp_probability(survival_prod[i]);
       const double val = fx * prod;
       if (std::isfinite(val) && val > 0.0) {
-        order_values[i] = val;
+        order_mass += w * val;
       }
     }
-    const double order_mass =
-        clamp_probability(uuber::integrate_time_batch(order_batch, order_values));
+    order_mass = clamp_probability(order_mass);
     const double order_dens = safe_density(coupling_acc_density(target_acc, time));
     double order_surv_prod = 1.0;
     for (const CouplingAccRef &comp_acc : competitor_acc) {
@@ -3978,29 +4014,36 @@ double evaluate_coupling_density_pair(
                              trial_params_soa, c_acc);
 
   if (acc_specialized) {
+    CouplingBatchScratch eval_scratch;
     uuber::TimeBatch batch;
-    if (!build_coupling_time_batch(time, batch)) {
+    if (!build_coupling_time_batch_density(time, batch)) {
       return 0.0;
     }
     std::vector<double> x_density_nodes;
     std::vector<double> y_survival_nodes;
     if (!evaluate_coupling_acc_batch(x_acc, batch.nodes, true, false, false,
-                                     &x_density_nodes, nullptr, nullptr) ||
+                                     &x_density_nodes, nullptr, nullptr,
+                                     &eval_scratch) ||
         !evaluate_coupling_acc_batch(y_acc, batch.nodes, false, true, false,
-                                     nullptr, &y_survival_nodes, nullptr)) {
+                                     nullptr, &y_survival_nodes, nullptr,
+                                     &eval_scratch)) {
       return 0.0;
     }
-    std::vector<double> i_values(batch.nodes.size(), 0.0);
+    double I = 0.0;
     for (std::size_t i = 0; i < batch.nodes.size(); ++i) {
+      const double w = batch.weights[i];
+      if (!std::isfinite(w) || w <= 0.0) {
+        continue;
+      }
       const double fxs = safe_density(x_density_nodes[i]);
       const double Fys =
           clamp_probability(1.0 - clamp_probability(y_survival_nodes[i]));
       const double val = fxs * Fys;
       if (std::isfinite(val) && val > 0.0) {
-        i_values[i] = val;
+        I += w * val;
       }
     }
-    const double I = clamp_probability(uuber::integrate_time_batch(batch, i_values));
+    I = clamp_probability(I);
 
     const double fx = coupling_acc_density(x_acc, time);
     const double fc = coupling_acc_density(c_acc, time);

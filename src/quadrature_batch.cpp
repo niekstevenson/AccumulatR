@@ -25,6 +25,36 @@ constexpr int kInfiniteUniformSegments = 24;
 constexpr int kInfiniteTailSegments = 20;
 constexpr double kInfiniteUniformUpper = 0.9;
 
+TimeBatch build_time_batch_0_to_upper_finite_impl(double upper,
+                                                  int finite_segments) {
+  TimeBatch batch;
+  if (!(upper > 0.0) || !std::isfinite(upper) || finite_segments <= 0) {
+    return batch;
+  }
+
+  batch.lower = 0.0;
+  batch.upper = upper;
+  const std::size_t total_nodes =
+      static_cast<std::size_t>(finite_segments * kGauss15N);
+  batch.nodes.resize(total_nodes);
+  batch.weights.resize(total_nodes);
+
+  const double segment_width = upper / static_cast<double>(finite_segments);
+  std::size_t idx = 0;
+  for (int seg = 0; seg < finite_segments; ++seg) {
+    const double seg_lo = segment_width * static_cast<double>(seg);
+    const double seg_hi = segment_width * static_cast<double>(seg + 1);
+    const double a = 0.5 * (seg_hi - seg_lo);
+    const double b = 0.5 * (seg_hi + seg_lo);
+    for (int i = 0; i < kGauss15N; ++i) {
+      batch.nodes[idx] = b + a * kGauss15X[i];
+      batch.weights[idx] = a * kGauss15W[i];
+      ++idx;
+    }
+  }
+  return batch;
+}
+
 } // namespace
 
 TimeBatch build_time_batch(double lower, double upper) {
@@ -52,15 +82,14 @@ TimeBatch build_time_batch(double lower, double upper) {
 }
 
 TimeBatch build_time_batch_0_to_upper(double upper) {
-  TimeBatch batch;
-  if (upper <= 0.0) {
-    return batch;
-  }
-
-  batch.lower = 0.0;
-  batch.upper = upper;
-
   if (std::isfinite(upper)) {
+    TimeBatch batch;
+    if (upper <= 0.0) {
+      return batch;
+    }
+
+    batch.lower = 0.0;
+    batch.upper = upper;
     const double width = upper;
     if (!std::isfinite(width) || width <= 0.0) {
       return {};
@@ -85,6 +114,11 @@ TimeBatch build_time_batch_0_to_upper(double upper) {
     return batch;
   }
 
+  TimeBatch batch;
+  if (!(upper > 0.0)) {
+    return batch;
+  }
+  batch.lower = 0.0;
   batch.upper = std::numeric_limits<double>::infinity();
   std::vector<double> x_edges;
   x_edges.reserve(static_cast<std::size_t>(kInfiniteUniformSegments +
@@ -141,6 +175,14 @@ TimeBatch build_time_batch_0_to_upper(double upper) {
     }
   }
   return batch;
+}
+
+TimeBatch build_time_batch_0_to_upper_finite_segments(double upper,
+                                                       int finite_segments) {
+  if (!std::isfinite(upper)) {
+    return build_time_batch_0_to_upper(upper);
+  }
+  return build_time_batch_0_to_upper_finite_impl(upper, finite_segments);
 }
 
 TimeBatch build_time_batch_with_observed(double lower, double upper,

@@ -3343,8 +3343,6 @@ struct CouplingAccRef {
   AccDistParams cfg{};
 };
 
-constexpr int kCouplingFiniteSegmentsDensity = 8;
-
 struct CouplingBatchScratch {
   std::vector<double> shifted;
   std::vector<double> pdf_values;
@@ -3376,26 +3374,8 @@ inline bool build_coupling_acc_ref(
   return true;
 }
 
-inline double coupling_acc_density(const CouplingAccRef &ref, double t) {
-  return safe_density(acc_density_from_cfg(t, ref.onset, ref.q, ref.cfg));
-}
-
 inline double coupling_acc_survival(const CouplingAccRef &ref, double t) {
   return clamp_probability(acc_survival_from_cfg(t, ref.onset, ref.q, ref.cfg));
-}
-
-inline bool build_coupling_time_batch_density(double upper,
-                                              uuber::TimeBatch &out) {
-  if (upper <= 0.0) {
-    return false;
-  }
-  if (std::isfinite(upper)) {
-    out = uuber::build_time_batch_0_to_upper_finite_segments(
-        upper, kCouplingFiniteSegmentsDensity);
-  } else {
-    out = uuber::build_time_batch_0_to_upper(upper);
-  }
-  return !out.nodes.empty() && out.nodes.size() == out.weights.size();
 }
 
 inline bool build_coupling_time_batch_mass(double upper, uuber::TimeBatch &out) {
@@ -3857,285 +3837,6 @@ double evaluate_outcome_coupling_mass(
     return 0.0;
   }
   return evaluator(ctx, program, upper, component_idx, trial_params,
-                   trial_type_key, rel_tol, abs_tol, max_depth,
-                   include_na_donors, outcome_idx_context);
-}
-
-double evaluate_coupling_density_nway(
-    const uuber::NativeContext &ctx, const OutcomeCouplingNWayPayload &gate,
-    double time, int component_idx, const TrialParamSet *trial_params,
-    const std::string &trial_type_key, double rel_tol, double abs_tol,
-    int max_depth, bool include_na_donors, int outcome_idx_context) {
-  if (gate.competitor_refs.empty() || !std::isfinite(time) || time <= 0.0) {
-    return 0.0;
-  }
-  const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
-  const uuber::TrialParamsSoA *trial_params_soa =
-      resolve_trial_params_soa(trial_params);
-  const bool use_acc_specialization = coupling_acc_specialization_allowed(
-      ctx, include_na_donors, outcome_idx_context);
-  CouplingAccRef gate_acc;
-  CouplingAccRef target_acc;
-  std::vector<CouplingAccRef> competitor_acc;
-  bool acc_specialized = false;
-  if (use_acc_specialization &&
-      build_coupling_acc_ref(ctx, gate.gate_ref, component_idx, trial_params,
-                             trial_params_soa, gate_acc) &&
-      build_coupling_acc_ref(ctx, gate.target_ref, component_idx, trial_params,
-                             trial_params_soa, target_acc)) {
-    competitor_acc.reserve(gate.competitor_refs.size());
-    acc_specialized = true;
-    for (const LabelRef &competitor_ref : gate.competitor_refs) {
-      CouplingAccRef comp_acc;
-      if (!build_coupling_acc_ref(ctx, competitor_ref, component_idx,
-                                  trial_params, trial_params_soa, comp_acc)) {
-        acc_specialized = false;
-        competitor_acc.clear();
-        break;
-      }
-      competitor_acc.push_back(comp_acc);
-    }
-  }
-
-  if (acc_specialized) {
-    CouplingBatchScratch eval_scratch;
-    const double gate_cdf =
-        clamp_probability(1.0 - coupling_acc_survival(gate_acc, time));
-    const double gate_dens = coupling_acc_density(gate_acc, time);
-    uuber::TimeBatch order_batch;
-    if (!build_coupling_time_batch_density(time, order_batch)) {
-      return 0.0;
-    }
-    std::vector<double> target_density;
-    if (!evaluate_coupling_acc_batch(target_acc, order_batch.nodes, true, false,
-                                     false, &target_density, nullptr,
-                                     nullptr, &eval_scratch)) {
-      return 0.0;
-    }
-    std::vector<double> survival_prod(order_batch.nodes.size(), 1.0);
-    for (std::size_t j = 0; j < competitor_acc.size(); ++j) {
-      if (!evaluate_coupling_acc_batch(competitor_acc[j], order_batch.nodes,
-                                       false, true, false, nullptr,
-                                       &eval_scratch.temp_survival, nullptr,
-                                       &eval_scratch)) {
-        return 0.0;
-      }
-      for (std::size_t i = 0; i < survival_prod.size(); ++i) {
-        survival_prod[i] *= clamp_probability(eval_scratch.temp_survival[i]);
-      }
-    }
-
-    double order_mass = 0.0;
-    for (std::size_t i = 0; i < survival_prod.size(); ++i) {
-      const double w = order_batch.weights[i];
-      if (!std::isfinite(w) || w <= 0.0) {
-        continue;
-      }
-      const double fx = safe_density(target_density[i]);
-      if (fx <= 0.0) {
-        continue;
-      }
-      const double prod = clamp_probability(survival_prod[i]);
-      const double val = fx * prod;
-      if (std::isfinite(val) && val > 0.0) {
-        order_mass += w * val;
-      }
-    }
-    order_mass = clamp_probability(order_mass);
-    const double order_dens = safe_density(coupling_acc_density(target_acc, time));
-    double order_surv_prod = 1.0;
-    for (const CouplingAccRef &comp_acc : competitor_acc) {
-      order_surv_prod *= coupling_acc_survival(comp_acc, time);
-      if (!std::isfinite(order_surv_prod) || order_surv_prod <= 0.0) {
-        order_surv_prod = 0.0;
-        break;
-      }
-    }
-    const double order_dens_total = order_dens * order_surv_prod;
-    return safe_density(gate_dens * order_mass + gate_cdf * order_dens_total);
-  }
-
-  auto eval_unforced = [&](const LabelRef &ref, double s) -> NodeEvalResult {
-    return eval_event_unforced(ctx, ref, s, component_idx, need, trial_params,
-                               trial_type_key, include_na_donors,
-                               outcome_idx_context, trial_params_soa);
-  };
-  const NodeEvalResult gate_eval = eval_unforced(gate.gate_ref, time);
-  const double gate_cdf =
-      clamp_probability(1.0 - clamp_probability(gate_eval.survival));
-  const double gate_dens = safe_density(gate_eval.density);
-  auto order_integrand = [&](double s) -> double {
-    const NodeEvalResult ex = eval_unforced(gate.target_ref, s);
-    const double fx = safe_density(ex.density);
-    if (fx <= 0.0) {
-      return 0.0;
-    }
-    double prod = 1.0;
-    for (const LabelRef &competitor_ref : gate.competitor_refs) {
-      const NodeEvalResult ej = eval_unforced(competitor_ref, s);
-      prod *= clamp_probability(ej.survival);
-      if (!std::isfinite(prod) || prod <= 0.0) {
-        return 0.0;
-      }
-    }
-    const double val = fx * prod;
-    return (std::isfinite(val) && val > 0.0) ? val : 0.0;
-  };
-  const double order_mass = clamp_probability(uuber::integrate_boost_fn_0_to_upper(
-      order_integrand, time, rel_tol, abs_tol, max_depth, true));
-  const double order_dens = order_integrand(time);
-  const double dens = gate_dens * order_mass + gate_cdf * order_dens;
-  return safe_density(dens);
-}
-
-double evaluate_coupling_density_pair(
-    const uuber::NativeContext &ctx, const OutcomeCouplingPairPayload &pair,
-    double time, int component_idx, const TrialParamSet *trial_params,
-    const std::string &trial_type_key, double rel_tol, double abs_tol,
-    int max_depth, bool include_na_donors, int outcome_idx_context) {
-  if (!std::isfinite(time) || time <= 0.0) {
-    return 0.0;
-  }
-  const EvalNeed need = EvalNeed::kDensity | EvalNeed::kSurvival;
-  const uuber::TrialParamsSoA *trial_params_soa =
-      resolve_trial_params_soa(trial_params);
-  const bool use_acc_specialization = coupling_acc_specialization_allowed(
-      ctx, include_na_donors, outcome_idx_context);
-  CouplingAccRef x_acc;
-  CouplingAccRef y_acc;
-  CouplingAccRef c_acc;
-  const bool acc_specialized =
-      use_acc_specialization &&
-      build_coupling_acc_ref(ctx, pair.x_ref, component_idx, trial_params,
-                             trial_params_soa, x_acc) &&
-      build_coupling_acc_ref(ctx, pair.y_ref, component_idx, trial_params,
-                             trial_params_soa, y_acc) &&
-      build_coupling_acc_ref(ctx, pair.c_ref, component_idx, trial_params,
-                             trial_params_soa, c_acc);
-
-  if (acc_specialized) {
-    CouplingBatchScratch eval_scratch;
-    uuber::TimeBatch batch;
-    if (!build_coupling_time_batch_density(time, batch)) {
-      return 0.0;
-    }
-    std::vector<double> x_density_nodes;
-    std::vector<double> y_survival_nodes;
-    if (!evaluate_coupling_acc_batch(x_acc, batch.nodes, true, false, false,
-                                     &x_density_nodes, nullptr, nullptr,
-                                     &eval_scratch) ||
-        !evaluate_coupling_acc_batch(y_acc, batch.nodes, false, true, false,
-                                     nullptr, &y_survival_nodes, nullptr,
-                                     &eval_scratch)) {
-      return 0.0;
-    }
-    double I = 0.0;
-    for (std::size_t i = 0; i < batch.nodes.size(); ++i) {
-      const double w = batch.weights[i];
-      if (!std::isfinite(w) || w <= 0.0) {
-        continue;
-      }
-      const double fxs = safe_density(x_density_nodes[i]);
-      const double Fys =
-          clamp_probability(1.0 - clamp_probability(y_survival_nodes[i]));
-      const double val = fxs * Fys;
-      if (std::isfinite(val) && val > 0.0) {
-        I += w * val;
-      }
-    }
-    I = clamp_probability(I);
-
-    const double fx = coupling_acc_density(x_acc, time);
-    const double fc = coupling_acc_density(c_acc, time);
-    const double sx = coupling_acc_survival(x_acc, time);
-    const double sy = coupling_acc_survival(y_acc, time);
-    const double sc = coupling_acc_survival(c_acc, time);
-    const double Fx = clamp_probability(1.0 - sx);
-    const double Fy = clamp_probability(1.0 - sy);
-    const double Fc = clamp_probability(1.0 - sc);
-    const double dens = fc * (Fx - I) + fx * Fc * (1.0 - Fy);
-    return safe_density(dens);
-  }
-
-  auto eval_unforced = [&](const LabelRef &ref, double s) -> NodeEvalResult {
-    return eval_event_unforced(ctx, ref, s, component_idx, need, trial_params,
-                               trial_type_key, include_na_donors,
-                               outcome_idx_context, trial_params_soa);
-  };
-  const NodeEvalResult ex_t = eval_unforced(pair.x_ref, time);
-  const NodeEvalResult ey_t = eval_unforced(pair.y_ref, time);
-  const NodeEvalResult ec_t = eval_unforced(pair.c_ref, time);
-  const double fx = safe_density(ex_t.density);
-  const double fc = safe_density(ec_t.density);
-  const double Fx = clamp_probability(1.0 - clamp_probability(ex_t.survival));
-  const double Fy = clamp_probability(1.0 - clamp_probability(ey_t.survival));
-  const double Fc = clamp_probability(1.0 - clamp_probability(ec_t.survival));
-  auto i_integrand = [&](double s) -> double {
-    const NodeEvalResult ex = eval_unforced(pair.x_ref, s);
-    const NodeEvalResult ey = eval_unforced(pair.y_ref, s);
-    const double val =
-        safe_density(ex.density) *
-        clamp_probability(1.0 - clamp_probability(ey.survival));
-    return (std::isfinite(val) && val > 0.0) ? val : 0.0;
-  };
-  const double I = clamp_probability(uuber::integrate_boost_fn_0_to_upper(
-      i_integrand, time, rel_tol, abs_tol, max_depth, true));
-  const double dens = fc * (Fx - I) + fx * Fc * (1.0 - Fy);
-  return safe_density(dens);
-}
-
-using OutcomeCouplingDensityEvaluator = double (*)(
-    const uuber::NativeContext &, const OutcomeCouplingProgram &, double, int,
-    const TrialParamSet *, const std::string &, double, double, int, bool, int);
-
-double evaluate_coupling_density_pair_program(
-    const uuber::NativeContext &ctx, const OutcomeCouplingProgram &program,
-    double time, int component_idx, const TrialParamSet *trial_params,
-    const std::string &trial_type_key, double rel_tol, double abs_tol,
-    int max_depth, bool include_na_donors, int outcome_idx_context) {
-  return evaluate_coupling_density_pair(
-      ctx, program.pair, time, component_idx, trial_params, trial_type_key,
-      rel_tol, abs_tol, max_depth, include_na_donors, outcome_idx_context);
-}
-
-double evaluate_coupling_density_nway_program(
-    const uuber::NativeContext &ctx, const OutcomeCouplingProgram &program,
-    double time, int component_idx, const TrialParamSet *trial_params,
-    const std::string &trial_type_key, double rel_tol, double abs_tol,
-    int max_depth, bool include_na_donors, int outcome_idx_context) {
-  return evaluate_coupling_density_nway(
-      ctx, program.nway, time, component_idx, trial_params, trial_type_key,
-      rel_tol, abs_tol, max_depth, include_na_donors, outcome_idx_context);
-}
-
-inline OutcomeCouplingDensityEvaluator
-resolve_outcome_coupling_density_evaluator(OutcomeCouplingOpKind kind) {
-  static constexpr std::array<OutcomeCouplingDensityEvaluator, 3>
-      kEvaluators{nullptr, &evaluate_coupling_density_pair_program,
-                  &evaluate_coupling_density_nway_program};
-  const std::size_t idx = static_cast<std::size_t>(kind);
-  if (idx >= kEvaluators.size()) {
-    return nullptr;
-  }
-  return kEvaluators[idx];
-}
-
-double evaluate_outcome_coupling_density_impl(
-    const uuber::NativeContext &ctx,
-    const OutcomeCouplingProgram &program, double time, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    double rel_tol, double abs_tol, int max_depth, bool include_na_donors,
-    int outcome_idx_context) {
-  if (!program.valid || program.kind == OutcomeCouplingOpKind::None ||
-      !std::isfinite(time) || time < 0.0) {
-    return 0.0;
-  }
-  OutcomeCouplingDensityEvaluator evaluator =
-      resolve_outcome_coupling_density_evaluator(program.kind);
-  if (!evaluator) {
-    return 0.0;
-  }
-  return evaluator(ctx, program, time, component_idx, trial_params,
                    trial_type_key, rel_tol, abs_tol, max_depth,
                    include_na_donors, outcome_idx_context);
 }
@@ -7708,21 +7409,9 @@ struct TrialContributionSpec {
   int keep_label_id{NA_INTEGER};
   bool guess_shortcut{false};
   int mass_outcome_idx{-1};
-  OutcomeCouplingProgram sequence_coupling_program;
   std::vector<OutcomeCouplingProgram> mass_coupling_programs;
   int runtime_slot{-1};
 };
-
-double evaluate_outcome_coupling_density(
-    const uuber::NativeContext &ctx,
-    const OutcomeCouplingProgram &program, double time, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    double rel_tol, double abs_tol, int max_depth, bool include_na_donors,
-    int outcome_idx_context) {
-  return evaluate_outcome_coupling_density_impl(
-      ctx, program, time, component_idx, trial_params, trial_type_key, rel_tol,
-      abs_tol, max_depth, include_na_donors, outcome_idx_context);
-}
 
 double evaluate_sequence_density_kernel_idx(
     uuber::NativeContext &ctx, const TrialContributionSpec &spec,
@@ -7761,12 +7450,6 @@ double evaluate_sequence_density_kernel_idx(
           ctx, spec.keep_label_id, sequence_outcome_idx, false, sequence_time,
           spec.component_idx, active_params, spec.trial_type_key,
           single_state_plan, prob_scratch_ptr);
-    }
-    if (spec.sequence_coupling_program.valid && !spec.competitors.empty()) {
-      return evaluate_outcome_coupling_density(
-          ctx, spec.sequence_coupling_program, sequence_time, spec.component_idx,
-          active_params, spec.trial_type_key, rel_tol, abs_tol, max_depth,
-          false, sequence_outcome_idx);
     }
     const int node_id =
         ctx.outcome_info[static_cast<std::size_t>(sequence_outcome_idx)].node_id;
@@ -7915,10 +7598,6 @@ double evaluate_trial_probability_kernel_idx(
       const std::vector<int> &comp_use =
           filter_competitor_ids(ctx, info.competitor_ids, comp_idx, comp_filtered);
       spec.competitors = comp_use;
-      if (!spec.competitors.empty()) {
-        spec.sequence_coupling_program = resolve_outcome_coupling_program(
-            ctx, info.node_id, spec.competitors, true);
-      }
       spec.keep_label_id =
           (comp_outcome_idx >= 0 &&
            comp_outcome_idx < static_cast<int>(ctx.outcome_label_ids.size()))

@@ -11,9 +11,13 @@ testthat::test_that("single-outcome chained onset matches numeric convolution", 
   )
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   rt_obs <- 0.85
-  data_df <- data.frame(trial = 1L, R = "B", rt = rt_obs, stringsAsFactors = FALSE)
+  data_df <- data.frame(
+    trial = 1L,
+    R = factor("B", levels = "B"),
+    rt = rt_obs
+  )
 
-  ll <- as.numeric(log_likelihood(build_likelihood_context(structure, data_df), params_df))
+  ll <- as.numeric(log_likelihood(build_likelihood_context(structure, data_df), data_df, params_df))
   expected <- stats::integrate(
     function(u) {
       stats::dlnorm(u, meanlog = params[["a.meanlog"]], sdlog = params[["a.sdlog"]]) *
@@ -41,12 +45,11 @@ testthat::test_that("ranked chained onset uses observed source time (A then B)",
   t2 <- 0.62
   data_df <- data.frame(
     trial = 1L,
-    R = "A", rt = t1,
-    R2 = "B", rt2 = t2,
-    stringsAsFactors = FALSE
+    R = factor("A", levels = c("A", "B")), rt = t1,
+    R2 = factor("B", levels = c("A", "B")), rt2 = t2
   )
 
-  ll <- as.numeric(log_likelihood(build_likelihood_context(structure, data_df), params_df))
+  ll <- as.numeric(log_likelihood(build_likelihood_context(structure, data_df), data_df, params_df))
   expected <- stats::dlnorm(t1, meanlog = params[["a.meanlog"]], sdlog = params[["a.sdlog"]]) *
     stats::dlnorm(t2 - t1, meanlog = params[["b.meanlog"]], sdlog = params[["b.sdlog"]])
   testthat::expect_equal(ll, log(expected), tolerance = 2e-3)
@@ -67,8 +70,8 @@ testthat::test_that("pool-source chained onset likelihood is finite", {
     c.meanlog = log(0.18), c.sdlog = 0.11, c.q = 0.00, c.t0 = 0.00
   )
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
-  data_df <- data.frame(trial = 1L, R = "C", rt = 0.65, stringsAsFactors = FALSE)
-  ll <- as.numeric(log_likelihood(build_likelihood_context(structure, data_df), params_df))
+  data_df <- data.frame(trial = 1L, R = factor("C", levels = "C"), rt = 0.65)
+  ll <- as.numeric(log_likelihood(build_likelihood_context(structure, data_df), data_df, params_df))
   testthat::expect_true(is.finite(ll))
 })
 
@@ -86,9 +89,10 @@ testthat::test_that("missing trigger implies non-start in chained likelihood", {
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   min_ll <- -1e6
 
-  observed_df <- data.frame(trial = 1L, R = "B", rt = 0.8, stringsAsFactors = FALSE)
+  observed_df <- data.frame(trial = 1L, R = factor("B", levels = "B"), rt = 0.8)
   ll_obs <- as.numeric(log_likelihood(
     build_likelihood_context(structure, observed_df),
+    observed_df,
     params_df,
     min_ll = min_ll
   ))
@@ -96,12 +100,12 @@ testthat::test_that("missing trigger implies non-start in chained likelihood", {
 
   nonresponse_df <- data.frame(
     trial = 1L,
-    R = NA_character_,
-    rt = NA_real_,
-    stringsAsFactors = FALSE
+    R = factor(NA_character_, levels = "B"),
+    rt = NA_real_
   )
   ll_nr <- as.numeric(log_likelihood(
     build_likelihood_context(structure, nonresponse_df),
+    nonresponse_df,
     params_df,
     min_ll = min_ll
   ))
@@ -126,13 +130,13 @@ testthat::test_that("component with inactive onset source yields non-start", {
   min_ll <- -1e6
   observed_df <- data.frame(
     trial = 1L,
-    component = "without_source",
-    R = "B",
-    rt = 0.70,
-    stringsAsFactors = FALSE
+    component = factor("without_source", levels = c("with_source", "without_source")),
+    R = factor("B", levels = "B"),
+    rt = 0.70
   )
   ll <- as.numeric(log_likelihood(
     build_likelihood_context(structure, observed_df),
+    observed_df,
     params_df,
     min_ll = min_ll
   ))

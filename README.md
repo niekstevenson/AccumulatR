@@ -32,8 +32,8 @@ param_df <- build_param_matrix(spec, pars, n_trials = 8)
 sim <- simulate(model, param_df, seed = 123)
 head(sim[c("trial", "R", "rt")])
 
-ctx <- build_likelihood_context(model, sim[c("trial", "R", "rt")])
-log_likelihood(ctx, param_df)
+ctx <- build_likelihood_context(model, sim)
+log_likelihood(ctx, sim[c("trial", "R", "rt")], param_df)
 ```
 
 `simulate()` returns trial-level choice/RT data; `log_likelihood()` evaluates the log-likelihood for data under a parameter dataframe.

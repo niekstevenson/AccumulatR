@@ -7,12 +7,12 @@
 ensure_native_ctx(context, model_spec = NULL)
 }
 \arguments{
-\item{context}{A list containing `native_ctx` and `prep` or `structure$prep`}
+\item{context}{A list containing `native_ctx`}
 
 \item{model_spec}{Model specification from `finalize_model()`}
 }
 \value{
-The same list, with `native_ctx` refreshed if needed
+The same list, with `native_ctx` refreshed if needed.
 }
 \description{
 Checks whether a stored `native_ctx` external pointer is still valid; if not,

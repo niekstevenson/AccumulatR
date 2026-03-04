@@ -41,7 +41,7 @@ testthat::test_that("LBA model supports simulate + likelihood end-to-end", {
   params_df <- build_param_matrix(spec, vals, n_trials = 12L)
   data_df <- simulate(structure, params_df, seed = 1)
   ctx <- build_likelihood_context(structure, data_df)
-  ll <- as.numeric(log_likelihood(ctx, params_df))
+  ll <- as.numeric(log_likelihood(ctx, data_df, params_df))
 
   testthat::expect_true(length(ll) == 1L)
   testthat::expect_true(is.finite(ll))
@@ -59,7 +59,7 @@ testthat::test_that("RDM model supports simulate + likelihood end-to-end", {
   params_df <- build_param_matrix(spec, vals, n_trials = 12L)
   data_df <- simulate(structure, params_df, seed = 2)
   ctx <- build_likelihood_context(structure, data_df)
-  ll <- as.numeric(log_likelihood(ctx, params_df))
+  ll <- as.numeric(log_likelihood(ctx, data_df, params_df))
 
   testthat::expect_true(length(ll) == 1L)
   testthat::expect_true(is.finite(ll))

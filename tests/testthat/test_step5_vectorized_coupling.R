@@ -78,14 +78,13 @@ testthat::test_that("shared-gate pair nonresponse log-likelihood is stable", {
   params_df <- build_param_matrix(spec, params_shared_gate_pair, n_trials = 1L)
   nonresp_df <- data.frame(
     trial = 1L,
-    R = NA_character_,
-    rt = NA_real_,
-    stringsAsFactors = FALSE
+    R = factor(NA_character_, levels = c("RESP", "NR_RAW")),
+    rt = NA_real_
   )
   ctx <- build_likelihood_context(structure, nonresp_df)
 
-  ll1 <- as.numeric(log_likelihood(ctx, params_df))
-  ll2 <- as.numeric(log_likelihood(ctx, params_df))
+  ll1 <- as.numeric(log_likelihood(ctx, nonresp_df, params_df))
+  ll2 <- as.numeric(log_likelihood(ctx, nonresp_df, params_df))
 
   testthat::expect_true(is.finite(ll1))
   testthat::expect_equal(ll1, ll2, tolerance = 1e-12)

@@ -240,11 +240,13 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       build_param_matrix(spec_obj, params_vec, n_trials = 1L),
       include_na = TRUE
     )
+    analytic <- analytic[analytic > 1e-12]
 
     # Observed response probabilities from simulation
-    emp <- prop.table(table(data_df$R, useNA = "ifany"))
+    response_labels <- as.character(data_df$R)
+    response_labels[is.na(response_labels)] <- "NA"
+    emp <- prop.table(table(response_labels))
     emp_names <- names(emp)
-    emp_names[is.na(emp_names)] <- "NA"
     emp <- as.numeric(emp)
     names(emp) <- emp_names
 
@@ -253,10 +255,9 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     params_df_slim <- build_param_matrix(
       spec_obj,
       params_vec,
-      n_trials = max(data_df$trial),
-      layout = ctx$param_layout
+      n_trials = max(data_df$trial)
     )
-    ll <- as.numeric(log_likelihood(ctx, params_df_slim))
+    ll <- as.numeric(log_likelihood(ctx, data_df, params_df_slim))
 
     # Order and round for stable snapshots
     analytic <- round(analytic[order(names(analytic))], 6)

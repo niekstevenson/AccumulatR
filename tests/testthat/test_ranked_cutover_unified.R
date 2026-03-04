@@ -25,16 +25,15 @@ testthat::test_that("ranked single-step truncated path is deterministic", {
 
   ranked_single_df <- data.frame(
     trial = 1L,
-    R = "GO",
+    R = factor("GO", levels = c("GO", "ALT")),
     rt = 0.46,
-    R2 = NA_character_,
-    rt2 = NA_real_,
-    stringsAsFactors = FALSE
+    R2 = factor(NA_character_, levels = c("GO", "ALT")),
+    rt2 = NA_real_
   )
 
   ctx <- build_likelihood_context(structure, ranked_single_df)
-  ll1 <- as.numeric(log_likelihood(ctx, params_df))
-  ll2 <- as.numeric(log_likelihood(ctx, params_df))
+  ll1 <- as.numeric(log_likelihood(ctx, ranked_single_df, params_df))
+  ll2 <- as.numeric(log_likelihood(ctx, ranked_single_df, params_df))
 
   testthat::expect_true(is.finite(ll1))
   testthat::expect_equal(ll1, ll2, tolerance = 1e-12)
@@ -57,16 +56,15 @@ testthat::test_that("ranked stopper two-outcome path is finite and deterministic
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   ranked_single_df <- data.frame(
     trial = 1L,
-    R = "GO",
+    R = factor("GO", levels = c("GO", "ALT")),
     rt = 0.46,
-    R2 = NA_character_,
-    rt2 = NA_real_,
-    stringsAsFactors = FALSE
+    R2 = factor(NA_character_, levels = c("GO", "ALT")),
+    rt2 = NA_real_
   )
 
   ctx <- build_likelihood_context(structure, ranked_single_df)
-  ll1 <- as.numeric(log_likelihood(ctx, params_df))
-  ll2 <- as.numeric(log_likelihood(ctx, params_df))
+  ll1 <- as.numeric(log_likelihood(ctx, ranked_single_df, params_df))
+  ll2 <- as.numeric(log_likelihood(ctx, ranked_single_df, params_df))
 
   testthat::expect_true(is.finite(ll1))
   testthat::expect_equal(ll1, ll2, tolerance = 1e-12)
@@ -91,16 +89,15 @@ testthat::test_that("ranked shared-trigger multi-rank path is deterministic", {
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   ranked_df <- data.frame(
     trial = 1L,
-    R = "A",
+    R = factor("A", levels = c("A", "B")),
     rt = 0.36,
-    R2 = "B",
-    rt2 = 0.61,
-    stringsAsFactors = FALSE
+    R2 = factor("B", levels = c("A", "B")),
+    rt2 = 0.61
   )
 
   ctx <- build_likelihood_context(structure, ranked_df)
-  ll1 <- as.numeric(log_likelihood(ctx, params_df))
-  ll2 <- as.numeric(log_likelihood(ctx, params_df))
+  ll1 <- as.numeric(log_likelihood(ctx, ranked_df, params_df))
+  ll2 <- as.numeric(log_likelihood(ctx, ranked_df, params_df))
 
   testthat::expect_true(is.finite(ll1))
   testthat::expect_equal(ll1, ll2, tolerance = 1e-12)
@@ -122,16 +119,16 @@ testthat::test_that("invalid ranked ordering returns min_ll", {
 
   invalid_ranked_df <- data.frame(
     trial = 1L,
-    R = "A",
+    R = factor("A", levels = c("A", "B")),
     rt = 0.50,
-    R2 = "B",
-    rt2 = 0.40,
-    stringsAsFactors = FALSE
+    R2 = factor("B", levels = c("A", "B")),
+    rt2 = 0.40
   )
 
   min_ll <- log(1e-9)
   ll <- as.numeric(log_likelihood(
     build_likelihood_context(structure, invalid_ranked_df),
+    invalid_ranked_df,
     params_df,
     min_ll = min_ll
   ))
@@ -155,25 +152,25 @@ testthat::test_that("nonresponse is stable with ranked columns present", {
 
   plain_nonresp_df <- data.frame(
     trial = 1L,
-    R = NA_character_,
-    rt = NA_real_,
-    stringsAsFactors = FALSE
+    R = factor(NA_character_, levels = c("A", "B")),
+    rt = NA_real_
   )
   ranked_nonresp_df <- data.frame(
     trial = 1L,
-    R = NA_character_,
+    R = factor(NA_character_, levels = c("A", "B")),
     rt = NA_real_,
-    R2 = NA_character_,
-    rt2 = NA_real_,
-    stringsAsFactors = FALSE
+    R2 = factor(NA_character_, levels = c("A", "B")),
+    rt2 = NA_real_
   )
 
   ll_plain <- as.numeric(log_likelihood(
     build_likelihood_context(structure, plain_nonresp_df),
+    plain_nonresp_df,
     params_df
   ))
   ll_ranked <- as.numeric(log_likelihood(
     build_likelihood_context(structure, ranked_nonresp_df),
+    ranked_nonresp_df,
     params_df
   ))
 

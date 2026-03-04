@@ -1161,17 +1161,33 @@ simulate.model_structure <- function(structure,
   out_df <- data.frame(
     trial = trial_ids,
     R = outcomes[, 1L],
-    rt = rts[, 1L],
-    stringsAsFactors = FALSE
+    rt = rts[, 1L]
   )
+  outcome_levels <- unique(as.character(names(prep$outcomes %||% list())))
+  outcome_levels <- outcome_levels[!is.na(outcome_levels) & nzchar(outcome_levels)]
+  if (length(outcome_levels) == 0L) {
+    outcome_levels <- unique(as.character(outcomes[, 1L]))
+    outcome_levels <- outcome_levels[!is.na(outcome_levels) & nzchar(outcome_levels)]
+  }
+  if (length(outcome_levels) > 0L) {
+    out_df$R <- factor(out_df$R, levels = outcome_levels)
+  }
   if (n_readout > 1L) {
     for (rank_idx in 2:n_readout) {
       out_df[[paste0("R", rank_idx)]] <- outcomes[, rank_idx]
+      if (length(outcome_levels) > 0L) {
+        out_df[[paste0("R", rank_idx)]] <- factor(
+          out_df[[paste0("R", rank_idx)]],
+          levels = outcome_levels
+        )
+      }
       out_df[[paste0("rt", rank_idx)]] <- rts[, rank_idx]
     }
   }
   keep_component <- keep_component %||% if (identical(mix_mode, "sample")) FALSE else TRUE
-  if (keep_component && (length(comp_ids) > 1L)) out_df$component <- comp_record
+  if (keep_component && (length(comp_ids) > 1L)) {
+    out_df$component <- factor(comp_record, levels = comp_ids)
+  }
   if (keep_detail) attr(out_df, "details") <- details
   out_df
 }

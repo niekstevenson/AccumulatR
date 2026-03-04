@@ -153,14 +153,13 @@ testthat::test_that("ranked coupling path remains deterministic after unified cu
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   ranked_df <- data.frame(
     trial = 1L,
-    R = "RESP2", rt = 0.35,
-    R2 = "RESP3", rt2 = 0.62,
-    stringsAsFactors = FALSE
+    R = factor("RESP2", levels = c("RESP2", "RESP3")), rt = 0.35,
+    R2 = factor("RESP3", levels = c("RESP2", "RESP3")), rt2 = 0.62
   )
 
   ctx <- build_likelihood_context(structure, ranked_df)
-  ll1 <- as.numeric(log_likelihood(ctx, params_df))
-  ll2 <- as.numeric(log_likelihood(ctx, params_df))
+  ll1 <- as.numeric(log_likelihood(ctx, ranked_df, params_df))
+  ll2 <- as.numeric(log_likelihood(ctx, ranked_df, params_df))
 
   testthat::expect_true(is.finite(ll1))
   testthat::expect_equal(ll1, ll2, tolerance = 1e-12)

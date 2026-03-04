@@ -8,6 +8,7 @@
 \usage{
 log_likelihood(
   likelihood_context,
+  data,
   parameters,
   ok = NULL,
   expand = NULL,
@@ -17,6 +18,7 @@ log_likelihood(
 
 \method{log_likelihood}{likelihood_context}(
   likelihood_context,
+  data,
   parameters,
   ok = NULL,
   expand = NULL,
@@ -28,6 +30,8 @@ log_likelihood(
 }
 \arguments{
 \item{likelihood_context}{Context built by build_likelihood_context}
+
+\item{data}{Data frame with observed outcomes/RTs}
 
 \item{parameters}{Parameter data frame, or list of parameter data frames}
 
@@ -57,5 +61,5 @@ params_df <- build_param_matrix(
 )
 data_df <- simulate(structure, params_df, seed = 1)
 ctx <- build_likelihood_context(structure, data_df)
-log_likelihood(ctx, list(params_df))
+log_likelihood(ctx, data_df, list(params_df))
 }

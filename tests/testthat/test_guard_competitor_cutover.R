@@ -42,12 +42,11 @@ testthat::test_that("guard-heavy competitor likelihood remains finite", {
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   data_df <- data.frame(
     trial = 1L,
-    R = "PLAIN",
-    rt = 0.55,
-    stringsAsFactors = FALSE
+    R = factor("PLAIN", levels = c("PLAIN", "GUARD")),
+    rt = 0.55
   )
 
-  ll <- as.numeric(log_likelihood(build_likelihood_context(structure, data_df), params_df))
+  ll <- as.numeric(log_likelihood(build_likelihood_context(structure, data_df), data_df, params_df))
   testthat::expect_true(is.finite(ll))
 })
 
@@ -74,13 +73,12 @@ testthat::test_that("deep nested guard chain (>8) builds and evaluates", {
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   data_df <- data.frame(
     trial = 1L,
-    R = "PLAIN",
-    rt = 0.72,
-    stringsAsFactors = FALSE
+    R = factor("PLAIN", levels = c("CHAIN", "PLAIN")),
+    rt = 0.72
   )
 
   ctx <- testthat::expect_no_error(build_likelihood_context(structure, data_df))
-  ll <- as.numeric(log_likelihood(ctx, params_df))
+  ll <- as.numeric(log_likelihood(ctx, data_df, params_df))
   testthat::expect_true(is.finite(ll))
 })
 
@@ -103,12 +101,11 @@ testthat::test_that("competitor with non-guard wrapper around guard is supported
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   data_df <- data.frame(
     trial = 1L,
-    R = "R1",
-    rt = 0.52,
-    stringsAsFactors = FALSE
+    R = factor("R1", levels = c("R1", "R2")),
+    rt = 0.52
   )
 
-  ll <- as.numeric(log_likelihood(build_likelihood_context(structure, data_df), params_df))
+  ll <- as.numeric(log_likelihood(build_likelihood_context(structure, data_df), data_df, params_df))
   testthat::expect_true(is.finite(ll))
 })
 
@@ -131,14 +128,13 @@ testthat::test_that("guard competitor wrapper path is deterministic", {
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   data_df <- data.frame(
     trial = 1L,
-    R = "R1",
-    rt = 0.54,
-    stringsAsFactors = FALSE
+    R = factor("R1", levels = c("R1", "R2")),
+    rt = 0.54
   )
 
   ctx <- build_likelihood_context(structure, data_df)
-  ll1 <- as.numeric(log_likelihood(ctx, params_df))
-  ll2 <- as.numeric(log_likelihood(ctx, params_df))
+  ll1 <- as.numeric(log_likelihood(ctx, data_df, params_df))
+  ll2 <- as.numeric(log_likelihood(ctx, data_df, params_df))
   testthat::expect_true(is.finite(ll1))
   testthat::expect_equal(ll1, ll2, tolerance = 1e-12)
 })
@@ -162,12 +158,11 @@ testthat::test_that("ranked shared-trigger path remains finite after cutover", {
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   data_df <- data.frame(
     trial = 1L,
-    R = "A", rt = 0.35,
-    R2 = "B", rt2 = 0.60,
-    stringsAsFactors = FALSE
+    R = factor("A", levels = c("A", "B")), rt = 0.35,
+    R2 = factor("B", levels = c("A", "B")), rt2 = 0.60
   )
 
-  ll <- as.numeric(log_likelihood(build_likelihood_context(structure, data_df), params_df))
+  ll <- as.numeric(log_likelihood(build_likelihood_context(structure, data_df), data_df, params_df))
   testthat::expect_true(is.finite(ll))
 })
 
@@ -189,14 +184,13 @@ testthat::test_that("guard+competitor shared-trigger path remains finite", {
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   data_df <- data.frame(
     trial = 1L,
-    R = "R1",
-    rt = 0.34,
-    stringsAsFactors = FALSE
+    R = factor("R1", levels = c("R1", "R2")),
+    rt = 0.34
   )
 
   ctx <- build_likelihood_context(structure, data_df)
-  ll1 <- as.numeric(log_likelihood(ctx, params_df))
-  ll2 <- as.numeric(log_likelihood(ctx, params_df))
+  ll1 <- as.numeric(log_likelihood(ctx, data_df, params_df))
+  ll2 <- as.numeric(log_likelihood(ctx, data_df, params_df))
   testthat::expect_true(is.finite(ll1))
   testthat::expect_equal(ll1, ll2, tolerance = 1e-12)
 })

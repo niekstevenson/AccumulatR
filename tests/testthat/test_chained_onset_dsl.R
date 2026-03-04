@@ -232,11 +232,10 @@ testthat::test_that("chained onset likelihood context and evaluation are availab
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   data_df <- data.frame(
     trial = 1L,
-    R = "B",
-    rt = 0.75,
-    stringsAsFactors = FALSE
+    R = factor("B", levels = c("A", "B")),
+    rt = 0.75
   )
   ctx <- build_likelihood_context(finalized, data_df)
-  ll <- as.numeric(log_likelihood(ctx, params_df))
+  ll <- as.numeric(log_likelihood(ctx, data_df, params_df))
   testthat::expect_true(is.finite(ll))
 })

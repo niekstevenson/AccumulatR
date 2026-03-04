@@ -7846,54 +7846,78 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
     p_cols[static_cast<std::size_t>(i)] = 3 + i;
   }
 
+  const ComponentMap &comp_map = ctx->components;
+  const std::vector<std::string> &comp_ids = comp_map.ids;
+  const std::vector<int> &outcome_label_ids = ctx->outcome_label_ids;
+  if (outcome_label_ids.empty()) {
+    Rcpp::stop("IR loglik requires native outcome labels in context");
+  }
+
+  auto decode_outcome_factor = [&](SEXP col_sexp) -> Rcpp::IntegerVector {
+    const R_xlen_t n = Rf_xlength(col_sexp);
+    Rcpp::IntegerVector out(n, NA_INTEGER);
+    Rcpp::IntegerVector codes(col_sexp);
+    for (R_xlen_t i = 0; i < n; ++i) {
+      const int code = codes[i];
+      if (code == NA_INTEGER) {
+        continue;
+      }
+      out[i] = outcome_label_ids[static_cast<std::size_t>(code - 1)];
+    }
+    return out;
+  };
+
+  auto decode_component_factor = [&](SEXP col_sexp) -> Rcpp::IntegerVector {
+    const R_xlen_t n = Rf_xlength(col_sexp);
+    Rcpp::IntegerVector out(n, NA_INTEGER);
+    Rcpp::IntegerVector codes(col_sexp);
+    for (R_xlen_t i = 0; i < n; ++i) {
+      const int code = codes[i];
+      if (code == NA_INTEGER) {
+        continue;
+      }
+      out[i] = code - 1;
+    }
+    return out;
+  };
+
   Rcpp::NumericVector trial_col = data_df["trial"];
+  const bool has_r = data_df.containsElementNamed("R");
   Rcpp::IntegerVector outcome_id_col =
-      data_df.containsElementNamed("R_id")
-          ? Rcpp::IntegerVector(data_df["R_id"])
-          : Rcpp::IntegerVector();
+      has_r ? decode_outcome_factor(data_df["R"]) : Rcpp::IntegerVector();
   Rcpp::NumericVector rt_col = data_df["rt"];
   std::vector<Rcpp::IntegerVector> rank_outcome_id_cols;
   std::vector<Rcpp::NumericVector> rank_rt_cols;
   rank_outcome_id_cols.push_back(outcome_id_col);
   rank_rt_cols.push_back(rt_col);
   for (int rank = 2;; ++rank) {
-    std::string r_id_name = "R" + std::to_string(rank) + "_id";
+    std::string r_name = "R" + std::to_string(rank);
     std::string rt_name = "rt" + std::to_string(rank);
-    bool has_r_id = data_df.containsElementNamed(r_id_name.c_str());
+    bool has_r = data_df.containsElementNamed(r_name.c_str());
     bool has_rt = data_df.containsElementNamed(rt_name.c_str());
-    if (!has_r_id && !has_rt) {
+    if (!(has_r && has_rt)) {
       break;
     }
-    if (has_r_id != has_rt) {
-      Rcpp::stop("Ranked observations require paired columns '%s' and '%s'",
-                 r_id_name.c_str(), rt_name.c_str());
-    }
-    rank_outcome_id_cols.push_back(Rcpp::IntegerVector(data_df[r_id_name]));
+    rank_outcome_id_cols.push_back(decode_outcome_factor(data_df[r_name]));
     rank_rt_cols.push_back(Rcpp::NumericVector(data_df[rt_name]));
   }
   const int rank_width = static_cast<int>(rank_outcome_id_cols.size());
   const bool ranked_mode = rank_width > 1;
   if (outcome_id_col.size() == 0) {
-    Rcpp::stop("IR loglik requires integer outcome-id column 'R_id'");
+    Rcpp::stop("IR loglik requires factor column 'R'");
   }
-  for (int rank_idx = 1; rank_idx < rank_width; ++rank_idx) {
-    if (rank_outcome_id_cols[static_cast<std::size_t>(rank_idx)].size() == 0) {
-      Rcpp::stop("IR loglik requires integer outcome-id column 'R%d_id'",
-                 rank_idx + 1);
-    }
-  }
-  bool has_component = data_df.containsElementNamed("component_idx");
+  const bool has_component_label = data_df.containsElementNamed("component");
+  bool has_component = has_component_label;
   Rcpp::IntegerVector component_idx_col =
-      has_component ? Rcpp::IntegerVector(data_df["component_idx"])
-                    : Rcpp::IntegerVector();
+      has_component_label
+          ? decode_component_factor(data_df["component"])
+          : Rcpp::IntegerVector();
   bool has_onset = data_df.containsElementNamed("onset");
   Rcpp::NumericVector onset_col =
       has_onset ? Rcpp::NumericVector(data_df["onset"]) : Rcpp::NumericVector();
 
   const std::vector<TrialAccumulatorParams> base_acc_params =
       build_base_paramset(*ctx).acc_params;
-  const ComponentMap &comp_map = ctx->components;
-  const std::vector<std::string> &comp_ids = comp_map.ids;
   std::vector<int> all_acc_indices(ctx->accumulators.size());
   for (std::size_t i = 0; i < all_acc_indices.size(); ++i)
     all_acc_indices[i] = static_cast<int>(i);
@@ -7959,11 +7983,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
         r < component_idx_col.size()) {
       int comp_idx_val = component_idx_col[r];
       if (comp_idx_val != NA_INTEGER) {
-        if (comp_idx_val < 0 ||
-            comp_idx_val >= static_cast<int>(comp_acc_indices.size())) {
-          Rcpp::stop("component_idx value %d out of range [0, %d)",
-                     comp_idx_val, static_cast<int>(comp_acc_indices.size()));
-        }
         comp_idx_by_trial[trial_idx] = comp_idx_val;
         current_acc_order =
             &comp_acc_indices[static_cast<std::size_t>(comp_idx_val)];

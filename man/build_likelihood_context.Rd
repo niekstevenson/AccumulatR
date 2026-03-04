@@ -4,16 +4,14 @@
 \alias{build_likelihood_context}
 \title{Build a likelihood context. Needed for efficient C++ evaluation}
 \usage{
-build_likelihood_context(structure, data_df, prep = NULL, native_bundle = NULL)
+build_likelihood_context(structure, data, ...)
 }
 \arguments{
 \item{structure}{Generator structure}
 
-\item{data_df}{Data frame with observed outcome/rt}
+\item{data}{Data used for one-time validation of required factor columns and level order}
 
-\item{prep}{Optional prep bundle}
-
-\item{native_bundle}{Optional native bundle}
+\item{...}{Unused; accepted for forward compatibility}
 }
 \value{
 likelihood_context object

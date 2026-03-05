@@ -11,19 +11,22 @@ if (requireNamespace("devtools", quietly = TRUE)) {
   if (is.null(x)) y else x
 }
 
-trial_loglik_vector <- function(ctx, params_df, min_ll = log(1e-10)) {
-  n_trials <- ctx$n_trials %||% length(unique(ctx$data_df$trial))
+trial_loglik_vector <- function(ctx, eval_inputs, params_df, min_ll = log(1e-10)) {
+  n_trials <- eval_inputs$n_trials
   ok <- rep(TRUE, n_trials)
   rel_tol <- ctx$rel_tol %||% 1e-5
   abs_tol <- ctx$abs_tol %||% 1e-6
   max_depth <- ctx$max_depth %||% 12L
-  pm <- as.matrix(params_df)
+  pm <- AccumulatR:::.align_param_matrix_to_layout(
+    as.matrix(params_df),
+    eval_inputs$param_layout
+  )
   out <- numeric(n_trials)
   for (i in seq_len(n_trials)) {
     out[i] <- AccumulatR:::cpp_loglik(
       ctx$native_ctx,
       pm,
-      ctx$data_df_cpp,
+      eval_inputs$data,
       ok,
       as.integer(i),
       min_ll,
@@ -36,7 +39,7 @@ trial_loglik_vector <- function(ctx, params_df, min_ll = log(1e-10)) {
 }
 
 build_depth3_case <- function(n_trials = 40L) {
-  spec <- race_spec() |>
+  structure <- race_spec() |>
     add_accumulator("plain", "lognormal") |>
     add_accumulator("a", "lognormal") |>
     add_accumulator("b", "lognormal") |>
@@ -45,8 +48,9 @@ build_depth3_case <- function(n_trials = 40L) {
     add_outcome("PLAIN", "plain") |>
     add_outcome("GUARD", inhibit("a", by = inhibit("b", by = inhibit("c", by = "d")))) |>
     finalize_model()
+  outcome_levels <- names(structure$prep$outcomes)
   params_df <- build_param_matrix(
-    spec,
+    structure,
     c(
       plain.meanlog = log(0.42), plain.sdlog = 0.18,
       a.meanlog = log(0.34), a.sdlog = 0.20,
@@ -58,16 +62,22 @@ build_depth3_case <- function(n_trials = 40L) {
   )
   data_df <- data.frame(
     trial = seq_len(n_trials),
-    R = rep("PLAIN", n_trials),
-    rt = stats::rlnorm(n_trials, meanlog = log(0.48), sdlog = 0.12),
-    stringsAsFactors = FALSE
+    R = factor(rep("PLAIN", n_trials), levels = outcome_levels),
+    rt = stats::rlnorm(n_trials, meanlog = log(0.48), sdlog = 0.12)
   )
-  ctx <- build_likelihood_context(spec, data_df)
-  list(label = "depth3_guard_competitor", ctx = ctx, params_df = params_df)
+  ctx <- build_likelihood_context(structure, data_df)
+  data_prepped <- prepare_likelihood_data(ctx, data_df)
+  list(
+    label = "depth3_guard_competitor",
+    ctx = ctx,
+    data_df = data_df,
+    data_prepped = data_prepped,
+    params_df = params_df
+  )
 }
 
 build_shared_nway_trigger_case <- function(n_trials = 40L) {
-  spec <- race_spec() |>
+  structure <- race_spec() |>
     add_accumulator("x1", "lognormal") |>
     add_accumulator("x2", "lognormal") |>
     add_accumulator("x3", "lognormal") |>
@@ -81,8 +91,9 @@ build_shared_nway_trigger_case <- function(n_trials = 40L) {
     add_trigger("tg_x3g", members = c("x3", "gate"), q = 0.16, param = "q_x3g",
                 draw = "shared") |>
     finalize_model()
+  outcome_levels <- names(structure$prep$outcomes)
   params_df <- build_param_matrix(
-    spec,
+    structure,
     c(
       x1.meanlog = log(0.31), x1.sdlog = 0.18,
       x2.meanlog = log(0.34), x2.sdlog = 0.18,
@@ -95,12 +106,18 @@ build_shared_nway_trigger_case <- function(n_trials = 40L) {
   )
   data_df <- data.frame(
     trial = seq_len(n_trials),
-    R = rep(NA_character_, n_trials),
-    rt = rep(NA_real_, n_trials),
-    stringsAsFactors = FALSE
+    R = factor(rep(NA_character_, n_trials), levels = outcome_levels),
+    rt = rep(NA_real_, n_trials)
   )
-  ctx <- build_likelihood_context(spec, data_df)
-  list(label = "shared_gate_nway_shared_triggers", ctx = ctx, params_df = params_df)
+  ctx <- build_likelihood_context(structure, data_df)
+  data_prepped <- prepare_likelihood_data(ctx, data_df)
+  list(
+    label = "shared_gate_nway_shared_triggers",
+    ctx = ctx,
+    data_df = data_df,
+    data_prepped = data_prepped,
+    params_df = params_df
+  )
 }
 
 cases <- list(
@@ -109,8 +126,8 @@ cases <- list(
 )
 
 golden <- lapply(cases, function(cs) {
-  total <- as.numeric(log_likelihood(cs$ctx, cs$params_df))
-  per_trial <- trial_loglik_vector(cs$ctx, cs$params_df)
+  total <- as.numeric(log_likelihood(cs$ctx, cs$data_prepped, cs$params_df))
+  per_trial <- trial_loglik_vector(cs$ctx, cs$data_prepped, cs$params_df)
   list(
     label = cs$label,
     n_trials = length(per_trial),

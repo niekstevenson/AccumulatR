@@ -135,6 +135,13 @@ params_shared_gate_nway_trigger <- c(
 
 make_case <- function(spec_builder, params, observed_label, rt_mean, n_trials = 6000L, inner_reps = 8L) {
   spec <- spec_builder()
+  outcome_levels <- names((spec$prep %||% list())$outcomes %||% list())
+  outcome_levels <- as.character(outcome_levels)
+  outcome_levels <- outcome_levels[!is.na(outcome_levels) & nzchar(outcome_levels)]
+  outcome_levels <- unique(outcome_levels)
+  if (length(outcome_levels) == 0L) {
+    stop("Could not determine outcome level order from model structure")
+  }
   params_df <- build_param_matrix(spec, params, n_trials = n_trials)
   rt_col <- if (is.na(rt_mean)) {
     rep(NA_real_, n_trials)
@@ -143,16 +150,23 @@ make_case <- function(spec_builder, params, observed_label, rt_mean, n_trials = 
   }
   data_df <- data.frame(
     trial = seq_len(n_trials),
-    R = rep(observed_label, n_trials),
+    R = factor(rep(observed_label, n_trials), levels = outcome_levels),
     rt = rt_col,
     stringsAsFactors = FALSE
   )
   ctx <- build_likelihood_context(spec, data_df)
-  ll <- as.numeric(log_likelihood(ctx, params_df))
+  data_prepped <- prepare_likelihood_data(ctx, data_df)
+  ll <- as.numeric(log_likelihood(ctx, data_prepped, params_df))
   if (!is.finite(ll)) {
     stop("Non-finite log-likelihood for case: ", observed_label)
   }
-  list(ctx = ctx, params_df = params_df, inner_reps = inner_reps)
+  list(
+    ctx = ctx,
+    data_df = data_df,
+    data_prepped = data_prepped,
+    params_df = params_df,
+    inner_reps = inner_reps
+  )
 }
 
 cases <- list(
@@ -191,10 +205,10 @@ bench <- do.call(
   lapply(names(cases), function(case_name) {
     case <- cases[[case_name]]
     # Warmup run.
-    invisible(log_likelihood(case$ctx, case$params_df))
+    invisible(log_likelihood(case$ctx, case$data_prepped, case$params_df))
     row <- run_bench(
       case_name,
-      function() log_likelihood(case$ctx, case$params_df),
+      function() log_likelihood(case$ctx, case$data_prepped, case$params_df),
       n_rep = 6L,
       inner_reps = case$inner_reps
     )

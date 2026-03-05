@@ -35,6 +35,7 @@ params_base <- c(
 params_df_base <- build_param_matrix(spec_base, params_base, n_trials = n_trials)
 sim_base <- simulate(structure_base, params_df_base, seed = 11)
 ctx_base <- build_likelihood_context(structure_base, sim_base)
+prep_base <- prepare_likelihood_data(ctx_base, sim_base)
 
 # Chained single-outcome path.
 spec_chain <- race_spec() |>
@@ -49,6 +50,7 @@ params_chain <- c(
 params_df_chain <- build_param_matrix(spec_chain, params_chain, n_trials = n_trials)
 sim_chain <- simulate(structure_chain, params_df_chain, seed = 22)
 ctx_chain <- build_likelihood_context(structure_chain, sim_chain)
+prep_chain <- prepare_likelihood_data(ctx_chain, sim_chain)
 
 # Chained ranked path (k = 2).
 spec_chain_ranked <- race_spec(n_outcomes = 2L) |>
@@ -68,19 +70,20 @@ params_df_chain_ranked <- build_param_matrix(
 )
 sim_chain_ranked <- simulate(structure_chain_ranked, params_df_chain_ranked, seed = 33)
 ctx_chain_ranked <- build_likelihood_context(structure_chain_ranked, sim_chain_ranked)
+prep_chain_ranked <- prepare_likelihood_data(ctx_chain_ranked, sim_chain_ranked)
 
 bench <- rbind(
   run_bench(
     "single_outcome_baseline",
-    log_likelihood(ctx_base, params_df_base)
+    log_likelihood(ctx_base, prep_base, params_df_base)
   ),
   run_bench(
     "single_outcome_chained",
-    log_likelihood(ctx_chain, params_df_chain)
+    log_likelihood(ctx_chain, prep_chain, params_df_chain)
   ),
   run_bench(
     "ranked_chained_k2",
-    log_likelihood(ctx_chain_ranked, params_df_chain_ranked)
+    log_likelihood(ctx_chain_ranked, prep_chain_ranked, params_df_chain_ranked)
   )
 )
 

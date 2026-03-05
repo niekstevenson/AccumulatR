@@ -6,7 +6,33 @@ set.seed(as.integer(Sys.getenv("ACCUMULATR_BENCH_SEED", "20260217")))
   if (is.null(lhs)) rhs else lhs
 }
 
-library(AccumulatR)
+script_file <- {
+  args <- commandArgs(trailingOnly = FALSE)
+  file_arg <- args[grepl("^--file=", args)]
+  if (length(file_arg) == 0L) {
+    stop("This benchmark script must be run with Rscript --file")
+  }
+  sub("^--file=", "", file_arg[[1]])
+}
+repo_root <- normalizePath(file.path(dirname(script_file), "..", ".."))
+bench_lib <- tempfile("accumulatr_bench_lib_")
+dir.create(bench_lib, recursive = TRUE, showWarnings = FALSE)
+on.exit(unlink(bench_lib, recursive = TRUE, force = TRUE), add = TRUE)
+install_out <- system2(
+  "R",
+  args = c(
+    "CMD", "INSTALL", "--preclean", "--no-multiarch",
+    paste0("--library=", bench_lib), repo_root
+  ),
+  stdout = TRUE,
+  stderr = TRUE
+)
+install_status <- attr(install_out, "status") %||% 0L
+if (!identical(install_status, 0L)) {
+  cat(paste(install_out, collapse = "\n"), "\n")
+  stop("Failed to install local AccumulatR into temporary library")
+}
+library(AccumulatR, lib.loc = bench_lib)
 
 n_trials <- as.integer(Sys.getenv("ACCUMULATR_BENCH_TRIALS", "250"))
 if (!is.finite(n_trials) || n_trials < 50L) {
@@ -328,6 +354,7 @@ make_case <- function(mod, n_trials) {
   params_df <- build_param_matrix(spec_obj, params_vec, n_trials = n_trials)
   data_df <- simulate(structure, params_df, seed = 123, keep_component = TRUE)
   ctx <- build_likelihood_context(structure, data_df)
+  data_prepped <- prepare_likelihood_data(ctx, data_df)
   params_df_slim <- build_param_matrix(
     spec_obj,
     params_vec,
@@ -335,12 +362,17 @@ make_case <- function(mod, n_trials) {
     layout = ctx$param_layout
   )
 
-  ll <- as.numeric(log_likelihood(ctx, params_df_slim))
+  ll <- as.numeric(log_likelihood(ctx, data_prepped, params_df_slim))
   if (length(ll) != 1L || !is.finite(ll)) {
     stop("Non-finite log-likelihood during setup")
   }
 
-  list(ctx = ctx, params_df = params_df_slim)
+  list(
+    ctx = ctx,
+    data_df = data_df,
+    data_prepped = data_prepped,
+    params_df = params_df_slim
+  )
 }
 
 cases <- lapply(models, make_case, n_trials = n_trials)
@@ -348,7 +380,7 @@ case_inner_reps <- setNames(integer(length(cases)), names(cases))
 for (case_name in names(cases)) {
   case <- cases[[case_name]]
   eval_fn <- function() {
-    log_likelihood(case$ctx, case$params_df)
+    log_likelihood(case$ctx, case$data_prepped, case$params_df)
   }
   case_inner_reps[[case_name]] <- choose_inner_reps(
     fn = eval_fn,
@@ -364,7 +396,7 @@ bench <- do.call(
   lapply(names(cases), function(case_name) {
     case <- cases[[case_name]]
     eval_fn <- function() {
-      log_likelihood(case$ctx, case$params_df)
+      log_likelihood(case$ctx, case$data_prepped, case$params_df)
     }
     invisible(eval_fn())
     local_inner_reps <- case_inner_reps[[case_name]]

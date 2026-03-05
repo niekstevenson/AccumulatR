@@ -31,7 +31,7 @@ log_likelihood(
 \arguments{
 \item{likelihood_context}{Context built by build_likelihood_context}
 
-\item{data}{Data frame with observed outcomes/RTs}
+\item{data}{Data frame with observed outcomes/RTs, or prepared inputs returned by \code{prepare_likelihood_data}}
 
 \item{parameters}{Parameter data frame, or list of parameter data frames}
 
@@ -62,4 +62,6 @@ params_df <- build_param_matrix(
 data_df <- simulate(structure, params_df, seed = 1)
 ctx <- build_likelihood_context(structure, data_df)
 log_likelihood(ctx, data_df, list(params_df))
+prep_data <- prepare_likelihood_data(ctx, data_df)
+log_likelihood(ctx, prep_data, list(params_df))
 }

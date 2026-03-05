@@ -349,11 +349,67 @@ build_likelihood_context <- function(structure, data, ...) {
 
   param_layout <- .param_layout_from_data_context(context, data_df_nested)
   data_cpp <- .compact_cpp_likelihood_data(data_df_nested, rank_width)
-  list(
+  trial_ids <- as.integer(unique(data_df_nested$trial))
+  out <- list(
     data = data_cpp,
     param_layout = param_layout,
-    n_trials = as.integer(length(unique(data_df_nested$trial)))
+    n_trials = as.integer(length(trial_ids)),
+    trial_ids = trial_ids,
+    accumulator_ids = as.character(context$accumulator_ids %||% character(0)),
+    component_ids = as.character(context$component_ids %||% character(0))
   )
+  class(out) <- c("AccumulatR.data", "likelihood_eval_inputs", class(out))
+  out
+}
+
+.validate_prepared_likelihood_eval_inputs <- function(context, eval_inputs) {
+  required <- c("data", "param_layout", "n_trials")
+  missing <- setdiff(required, names(eval_inputs))
+  if (length(missing) > 0L) {
+    stop(
+      sprintf(
+        "Prepared likelihood data is missing required fields: %s",
+        paste(missing, collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+  n_trials <- as.integer(eval_inputs$n_trials)
+  if (!is.finite(n_trials) || n_trials < 1L) {
+    stop("Prepared likelihood data has invalid n_trials", call. = FALSE)
+  }
+  prep_acc_ids <- as.character(eval_inputs$accumulator_ids %||% character(0))
+  prep_comp_ids <- as.character(eval_inputs$component_ids %||% character(0))
+  if (length(prep_acc_ids) > 0L &&
+      !identical(prep_acc_ids, as.character(context$accumulator_ids %||% character(0)))) {
+    stop("Prepared likelihood data accumulator layout does not match context", call. = FALSE)
+  }
+  if (length(prep_comp_ids) > 0L &&
+      !identical(prep_comp_ids, as.character(context$component_ids %||% character(0)))) {
+    stop("Prepared likelihood data component layout does not match context", call. = FALSE)
+  }
+  eval_inputs
+}
+
+.coerce_likelihood_eval_inputs <- function(context, data) {
+  if (inherits(data, "AccumulatR.data")) {
+    return(data)
+  }
+  .prepare_likelihood_eval_inputs(context, data)
+}
+
+#' Precompute compact likelihood inputs for repeated evaluations
+#'
+#' @param likelihood_context Context built by build_likelihood_context
+#' @param data Data frame with observed outcomes/RTs
+#' @return Prepared likelihood inputs suitable for reuse in log_likelihood
+#' @export
+prepare_likelihood_data <- function(likelihood_context, data) {
+  if (missing(data) || is.null(data)) {
+    stop("prepare_likelihood_data() requires `data`", call. = FALSE)
+  }
+  ctx <- .validate_likelihood_context(likelihood_context)
+  .prepare_likelihood_eval_inputs(ctx, data)
 }
 
 .compact_cpp_likelihood_data <- function(data_df, rank_width) {
@@ -1326,7 +1382,8 @@ response_probabilities.model_structure <- function(structure,
 #' Native log-likelihood evaluation over multiple parameter sets
 #'
 #' @param likelihood_context Context built by build_likelihood_context
-#' @param data Data frame with observed outcomes/RTs
+#' @param data Data frame with observed outcomes/RTs, or prepared inputs
+#'   returned by prepare_likelihood_data
 #' @param parameters Parameter data frame, or list of parameter data frames
 #' @param ok Boolean vector. Can be used to selectively set trial rows to min_ll
 #' @param expand If using data compression, can be used to expand likelihood results across duplicate trials
@@ -1346,6 +1403,8 @@ response_probabilities.model_structure <- function(structure,
 #' data_df <- simulate(structure, params_df, seed = 1)
 #' ctx <- build_likelihood_context(structure, data_df)
 #' log_likelihood(ctx, data_df, list(params_df))
+#' prep_data <- prepare_likelihood_data(ctx, data_df)
+#' log_likelihood(ctx, prep_data, list(params_df))
 #' @export
 log_likelihood <- function(likelihood_context, data, parameters = NULL, ok = NULL, expand = NULL, min_ll = log(1e-10), ...) {
   UseMethod("log_likelihood")
@@ -1364,7 +1423,7 @@ log_likelihood.likelihood_context <- function(likelihood_context,
     stop("log_likelihood now requires both `data` and `parameters`", call. = FALSE)
   }
   ctx <- .validate_likelihood_context(likelihood_context)
-  eval_inputs <- .prepare_likelihood_eval_inputs(ctx, data)
+  eval_inputs <- .coerce_likelihood_eval_inputs(ctx, data)
   native_ctx <- ctx$native_ctx
   if (is.null(native_ctx) || !inherits(native_ctx, "externalptr")) {
     stop("Native context required for log_likelihood", call. = FALSE)

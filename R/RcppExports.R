@@ -25,6 +25,14 @@ boost_integrate_cpp <- function(integrand, lower, upper, rel_tol, abs_tol, max_d
     .Call(`_AccumulatR_boost_integrate_cpp`, integrand, lower, upper, rel_tol, abs_tol, max_depth)
 }
 
+unified_outcome_stats_reset_cpp <- function() {
+    invisible(.Call(`_AccumulatR_unified_outcome_stats_reset_cpp`))
+}
+
+unified_outcome_stats_cpp <- function() {
+    .Call(`_AccumulatR_unified_outcome_stats_cpp`)
+}
+
 native_trial_mixture_cpp <- function(ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows, guess_donors) {
     .Call(`_AccumulatR_native_trial_mixture_driver`, ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows, guess_donors)
 }

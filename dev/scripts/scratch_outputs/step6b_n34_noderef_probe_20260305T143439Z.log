@@ -1,0 +1,53 @@
+
+Attaching package: ‘AccumulatR’
+
+The following object is masked from ‘package:stats’:
+
+    simulate
+
+$forced_complete
+$forced_complete$evaluate_outcome_coupling_unified_calls
+[1] 400
+
+$forced_complete$kernel_node_density_entry_idx_calls
+[1] 0
+
+$forced_complete$adaptive_segments_accepted
+[1] 1800
+
+$forced_complete$adaptive_segments_split
+[1] 600
+
+$forced_complete$generic_labelref_batch_fastpath_calls
+[1] 0
+
+$forced_complete$generic_noderef_batch_calls
+[1] 400
+
+$forced_complete$generic_scalar_fallback_calls
+[1] 0
+
+
+$forced_survive
+$forced_survive$evaluate_outcome_coupling_unified_calls
+[1] 400
+
+$forced_survive$kernel_node_density_entry_idx_calls
+[1] 0
+
+$forced_survive$adaptive_segments_accepted
+[1] 1800
+
+$forced_survive$adaptive_segments_split
+[1] 600
+
+$forced_survive$generic_labelref_batch_fastpath_calls
+[1] 0
+
+$forced_survive$generic_noderef_batch_calls
+[1] 400
+
+$forced_survive$generic_scalar_fallback_calls
+[1] 0
+
+

@@ -1,0 +1,4 @@
+"label","mode","eval_calls","evaluate_outcome_coupling_unified_calls","kernel_node_density_entry_idx_calls","adaptive_segments_accepted","adaptive_segments_split","generic_labelref_batch_fastpath_calls","coupling_calls_per_eval","kernel_density_calls_per_eval","adaptive_accept_per_eval","adaptive_split_per_eval","generic_fastpath_per_eval"
+"example_3_stop_na","ir",480,960,81120,0,0,960,2,169,0,0,2
+"example_21_simple_q","ir",480,1920,217920,0,0,1920,4,454,0,0,4
+"example_22_shared_q","ir",480,960,119520,0,0,960,2,249,0,0,2

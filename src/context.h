@@ -263,6 +263,7 @@ struct CompetitorCompiledOp {
 
 struct CompetitorClusterCacheEntry {
   std::vector<CompetitorCompiledOp> compiled_ops;
+  bool mutates_forced_survive{false};
 };
 
 struct CompetitorCacheRecord {

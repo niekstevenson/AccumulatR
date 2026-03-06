@@ -1,0 +1,21 @@
+
+Attaching package: ‘AccumulatR’
+
+The following object is masked from ‘package:stats’:
+
+    simulate
+
+Unified outcome stats capture enabled
+                  label median_sec min_sec max_sec inner_reps
+ example_2_stop_mixture      0.058   0.057   0.058         31
+   example_10_exclusion      0.039   0.039   0.039         20
+    example_6_dual_path      0.027   0.026   0.027         60
+    example_22_shared_q      0.020   0.020   0.020         61
+ median_per_eval_sec mode
+        0.0018709677   ir
+        0.0019500000   ir
+        0.0004500000   ir
+        0.0003278689   ir
+Wrote unified outcome stats to dev/scripts/scratch_outputs/step6_next_stats_20260305T152649Z.csv 
+
+Wrote benchmark outputs to dev/scripts/scratch_outputs 

@@ -1,0 +1,4 @@
+"label","median_per_eval_sec","inner_reps","evaluate_outcome_coupling_unified_calls","generic_labelref_batch_fastpath_calls","generic_noderef_batch_calls","generic_scalar_fallback_calls","coupling_calls_per_eval","generic_fastpath_per_eval","generic_noderef_batch_per_eval","generic_scalar_fallback_per_eval"
+"example_21_simple_q",0.00036999999999999,100,2400,2400,0,0,4,4,0,0
+"example_22_shared_q",0.000369999999999999,200,2400,2400,0,0,2,2,0,0
+"example_3_stop_na",0.000455000000000005,100,1200,1200,0,0,2,2,0,0

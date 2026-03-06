@@ -34,6 +34,42 @@ if (!identical(install_status, 0L)) {
 }
 library(AccumulatR, lib.loc = bench_lib)
 
+capture_unified_stats <- identical(
+  trimws(Sys.getenv("ACCUMULATR_BENCH_CAPTURE_UNIFIED_STATS", "0")),
+  "1"
+)
+stats_out_file <- Sys.getenv(
+  "ACCUMULATR_BENCH_UNIFIED_STATS_FILE",
+  file.path("dev", "scripts", "scratch_outputs", "bench_examples_unified_stats.csv")
+)
+if (capture_unified_stats) {
+  cat("Unified outcome stats capture enabled\n")
+}
+
+reset_unified_stats <- function() {
+  if (!capture_unified_stats) {
+    return(invisible(FALSE))
+  }
+  ok <- tryCatch({
+    AccumulatR:::unified_outcome_stats_reset_cpp()
+    TRUE
+  }, error = function(e) {
+    warning("Failed to reset unified stats: ", conditionMessage(e))
+    FALSE
+  })
+  invisible(ok)
+}
+
+read_unified_stats <- function() {
+  if (!capture_unified_stats) {
+    return(NULL)
+  }
+  tryCatch(AccumulatR:::unified_outcome_stats_cpp(), error = function(e) {
+    warning("Failed to read unified stats: ", conditionMessage(e))
+    NULL
+  })
+}
+
 n_trials <- as.integer(Sys.getenv("ACCUMULATR_BENCH_TRIALS", "250"))
 if (!is.finite(n_trials) || n_trials < 50L) {
   n_trials <- 250L
@@ -391,25 +427,54 @@ for (case_name in names(cases)) {
   )
 }
 
-bench <- do.call(
-  rbind,
-  lapply(names(cases), function(case_name) {
-    case <- cases[[case_name]]
-    eval_fn <- function() {
-      log_likelihood(case$ctx, case$data_prepped, case$params_df)
+stats_rows <- list()
+bench_rows <- vector("list", length(cases))
+case_names <- names(cases)
+for (i in seq_along(case_names)) {
+  case_name <- case_names[[i]]
+  case <- cases[[case_name]]
+  eval_fn <- function() {
+    log_likelihood(case$ctx, case$data_prepped, case$params_df)
+  }
+  invisible(eval_fn())
+  reset_unified_stats()
+  local_inner_reps <- case_inner_reps[[case_name]]
+  row <- run_bench(
+    label = case_name,
+    fn = eval_fn,
+    n_rep = n_rep,
+    inner_reps = local_inner_reps
+  )
+  row$mode <- "ir"
+  bench_rows[[i]] <- row
+  if (capture_unified_stats) {
+    stats <- read_unified_stats()
+    if (!is.null(stats)) {
+      eval_calls <- as.numeric(n_rep) * as.numeric(local_inner_reps)
+      stats_rows[[length(stats_rows) + 1L]] <- data.frame(
+        label = case_name,
+        mode = "ir",
+        eval_calls = eval_calls,
+        evaluate_outcome_coupling_unified_calls =
+          as.numeric(stats$evaluate_outcome_coupling_unified_calls %||% NA_real_),
+        kernel_node_density_entry_idx_calls =
+          as.numeric(stats$kernel_node_density_entry_idx_calls %||% NA_real_),
+        adaptive_segments_accepted =
+          as.numeric(stats$adaptive_segments_accepted %||% NA_real_),
+        adaptive_segments_split =
+          as.numeric(stats$adaptive_segments_split %||% NA_real_),
+        generic_labelref_batch_fastpath_calls =
+          as.numeric(stats$generic_labelref_batch_fastpath_calls %||% NA_real_),
+        generic_noderef_batch_calls =
+          as.numeric(stats$generic_noderef_batch_calls %||% NA_real_),
+        generic_scalar_fallback_calls =
+          as.numeric(stats$generic_scalar_fallback_calls %||% NA_real_),
+        stringsAsFactors = FALSE
+      )
     }
-    invisible(eval_fn())
-    local_inner_reps <- case_inner_reps[[case_name]]
-    row <- run_bench(
-      label = case_name,
-      fn = eval_fn,
-      n_rep = n_rep,
-      inner_reps = local_inner_reps
-    )
-    row$mode <- "ir"
-    row
-  })
-)
+  }
+}
+bench <- do.call(rbind, bench_rows)
 
 print(bench, row.names = FALSE)
 
@@ -418,4 +483,25 @@ if (!dir.exists(out_dir)) {
   dir.create(out_dir, recursive = TRUE)
 }
 utils::write.csv(bench, file.path(out_dir, "bench_examples_models_likelihood.csv"), row.names = FALSE)
+if (capture_unified_stats && length(stats_rows) > 0L) {
+  stats_df <- do.call(rbind, stats_rows)
+  stats_df$coupling_calls_per_eval <-
+    stats_df$evaluate_outcome_coupling_unified_calls / pmax(1, stats_df$eval_calls)
+  stats_df$kernel_density_calls_per_eval <-
+    stats_df$kernel_node_density_entry_idx_calls / pmax(1, stats_df$eval_calls)
+  stats_df$adaptive_accept_per_eval <-
+    stats_df$adaptive_segments_accepted / pmax(1, stats_df$eval_calls)
+  stats_df$adaptive_split_per_eval <-
+    stats_df$adaptive_segments_split / pmax(1, stats_df$eval_calls)
+  stats_df$generic_fastpath_per_eval <-
+    stats_df$generic_labelref_batch_fastpath_calls / pmax(1, stats_df$eval_calls)
+  stats_df$generic_noderef_batch_per_eval <-
+    stats_df$generic_noderef_batch_calls / pmax(1, stats_df$eval_calls)
+  stats_df$generic_scalar_fallback_per_eval <-
+    stats_df$generic_scalar_fallback_calls / pmax(1, stats_df$eval_calls)
+  utils::write.csv(stats_df, stats_out_file, row.names = FALSE)
+  cat("Wrote unified outcome stats to", stats_out_file, "\n")
+} else if (capture_unified_stats) {
+  cat("Unified outcome stats capture enabled but no stats rows were collected\n")
+}
 cat("\nWrote benchmark outputs to", out_dir, "\n")

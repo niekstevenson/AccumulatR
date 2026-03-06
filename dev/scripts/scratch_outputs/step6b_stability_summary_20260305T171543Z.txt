@@ -1,0 +1,70 @@
+Step6B Stability Bundle: 20260305T171543Z
+Settings: ACCUMULATR_BENCH_N_REP=6 ACCUMULATR_BENCH_TARGET_SEC=0.10 ACCUMULATR_BENCH_MIN_INNER_REPS=40
+[RUN 1] starting at 20260305T171543Z
+[RUN 1] completed at 20260305T171543Z
+[RUN 1] worst ratio: 1.181506849315 (nested/shared_gate_pair)
+[RUN 1] workloads >1.02: 3
+[RUN 1] P1 >1.00: 1
+[RUN 1] top5:
+  - nested/shared_gate_pair = 1.181506849315
+  - nested/shared_gate_nway = 1.148567621586
+  - nested/shared_gate_nway_shared_triggers = 1.112440191388
+  - examples_models/example_16_guard_tie_simple = 1.019886363636
+  - examples_models/example_10_exclusion = 1.018049603948
+[RUN 1] P1 ratios:
+  - nested/depth3_guard_competitor = 0.997446536866
+  - examples_models/example_21_simple_q = 0.909424275761
+  - examples_models/example_22_shared_q = 0.932173913043
+  - examples_models/example_3_stop_na = 0.947058823529
+  - examples_models/example_6_dual_path = 0.950724637681
+  - nested/shared_gate_nway_shared_triggers = 1.112440191388
+[RUN 1] STATUS=FAIL
+[RUN 1] artifacts: dev/scripts/scratch_outputs/step6b_stability_run1_20260305T171543Z.log ; dev/scripts/scratch_outputs/benchmark_centralized_diff_run1_20260305T171543Z.csv
+
+[RUN 2] starting at 20260305T171658Z
+[RUN 2] completed at 20260305T171658Z
+[RUN 2] worst ratio: 1.026054257319 (examples_models/example_2_stop_mixture)
+[RUN 2] workloads >1.02: 2
+[RUN 2] P1 >1.00: 1
+[RUN 2] top5:
+  - examples_models/example_2_stop_mixture = 1.026054257319
+  - examples_models/example_10_exclusion = 1.023243734580
+  - nested/depth3_guard_competitor = 1.007660389403
+  - examples_models/example_16_guard_tie_simple = 0.997159090909
+  - nested/shared_gate_nway_shared_triggers = 0.988038277512
+[RUN 2] P1 ratios:
+  - nested/depth3_guard_competitor = 1.007660389403
+  - examples_models/example_21_simple_q = 0.903703703704
+  - examples_models/example_22_shared_q = 0.890434782609
+  - examples_models/example_3_stop_na = 0.929411764706
+  - examples_models/example_6_dual_path = 0.939130434783
+  - nested/shared_gate_nway_shared_triggers = 0.988038277512
+[RUN 2] STATUS=FAIL
+[RUN 2] artifacts: dev/scripts/scratch_outputs/step6b_stability_run2_20260305T171658Z.log ; dev/scripts/scratch_outputs/benchmark_centralized_diff_run2_20260305T171658Z.csv
+
+[RUN 3] starting at 20260305T171810Z
+[RUN 3] completed at 20260305T171810Z
+[RUN 3] worst ratio: 1.020682245501 (examples_models/example_2_stop_mixture)
+[RUN 3] workloads >1.02: 1
+[RUN 3] P1 >1.00: 1
+[RUN 3] top5:
+  - examples_models/example_2_stop_mixture = 1.020682245501
+  - examples_models/example_10_exclusion = 1.012855473315
+  - nested/depth3_guard_competitor = 1.007660389403
+  - examples_models/example_16_guard_tie_simple = 0.992187500000
+  - nested/shared_gate_nway_shared_triggers = 0.984620642515
+[RUN 3] P1 ratios:
+  - nested/depth3_guard_competitor = 1.007660389403
+  - examples_models/example_21_simple_q = 0.903703703704
+  - examples_models/example_22_shared_q = 0.890434782609
+  - examples_models/example_3_stop_na = 0.931857891672
+  - examples_models/example_6_dual_path = 0.927536231884
+  - nested/shared_gate_nway_shared_triggers = 0.984620642515
+[RUN 3] STATUS=FAIL
+[RUN 3] artifacts: dev/scripts/scratch_outputs/step6b_stability_run3_20260305T171810Z.log ; dev/scripts/scratch_outputs/benchmark_centralized_diff_run3_20260305T171810Z.csv
+
+FINAL SUMMARY
+RUN 1 (20260305T171543Z): FAIL | worst=1.181506849315 nested/shared_gate_pair | >1.02=3 | P1>1.00=1
+RUN 2 (20260305T171658Z): FAIL | worst=1.026054257319 examples_models/example_2_stop_mixture | >1.02=2 | P1>1.00=1
+RUN 3 (20260305T171810Z): FAIL | worst=1.020682245501 examples_models/example_2_stop_mixture | >1.02=1 | P1>1.00=1
+STEP6B_STABILITY_STATUS=FAIL

@@ -1,0 +1,12 @@
+"label","mode","eval_calls","evaluate_outcome_coupling_unified_calls","kernel_node_density_entry_idx_calls","adaptive_segments_accepted","adaptive_segments_split","generic_labelref_batch_fastpath_calls","generic_noderef_batch_calls","generic_scalar_fallback_calls","coupling_calls_per_eval","kernel_density_calls_per_eval","adaptive_accept_per_eval","adaptive_split_per_eval","generic_fastpath_per_eval","generic_noderef_batch_per_eval","generic_scalar_fallback_per_eval"
+"example_1_simple","ir",640,0,160000,0,0,0,0,0,0,250,0,0,0,0,0
+"example_2_stop_mixture","ir",164,0,41000,0,0,0,0,0,0,250,0,0,0,0,0
+"example_3_stop_na","ir",320,640,54080,3840,1280,640,0,0,2,169,12,4,2,0,0
+"example_5_timeout_guess","ir",320,0,197440,0,0,0,0,0,0,617,0,0,0,0,0
+"example_6_dual_path","ir",640,0,160000,0,0,0,0,0,0,250,0,0,0,0,0
+"example_7_mixture","ir",324,0,81000,0,0,0,0,0,0,250,0,0,0,0,0
+"example_10_exclusion","ir",160,0,40000,0,0,0,0,0,0,250,0,0,0,0,0
+"example_16_guard_tie_simple","ir",20,0,5000,0,0,0,0,0,0,250,0,0,0,0,0
+"example_21_simple_q","ir",640,2560,290560,12800,2560,2560,0,0,4,454,20,4,4,0,0
+"example_22_shared_q","ir",640,1280,159360,8960,3840,1280,0,0,2,249,14,6,2,0,0
+"example_23_ranked_chain","ir",324,0,0,0,0,0,0,0,0,0,0,0,0,0,0

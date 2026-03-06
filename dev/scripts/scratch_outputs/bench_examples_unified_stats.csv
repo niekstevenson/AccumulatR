@@ -1,0 +1,2 @@
+"label","mode","eval_calls","evaluate_outcome_coupling_unified_calls","kernel_node_density_entry_idx_calls","adaptive_segments_accepted","adaptive_segments_split","coupling_calls_per_eval","kernel_density_calls_per_eval","adaptive_accept_per_eval","adaptive_split_per_eval"
+"example_21_simple_q","ir",480,1920,1513920,0,0,4,3154,0,0

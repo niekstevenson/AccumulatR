@@ -1,0 +1,3 @@
+examples_models,example_21_simple_q,2.121627800640,0.000337500000,0.000716049383 
+examples_models,example_22_shared_q,1.780178233864,0.000359375000,0.000639751553 
+examples_models,example_21_simple_q,2.121627800640

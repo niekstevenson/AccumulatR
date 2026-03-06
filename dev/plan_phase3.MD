@@ -137,26 +137,43 @@ Last updated: 2026-03-04
 
 ## Current Status Board
 
-1.  Step 6A (Structural Consolidation): **Blocked**
-2.  Step 6B (Optimization On Unified Engine): **Not started by definition** until 6A is complete
-3.  Last known correctness status: passing
-4.  Last known architecture status: partial consolidation with remaining mode-specific internals
+1.  Step 6A (Structural Consolidation): **Achieved on working tree (pending commit)** (single-root call-graph proof + deletion proof + structural/golden gates recorded)
+2.  Step 6B (Optimization On Unified Engine): **Achieved on working tree (pending commit)** (NC7 3-run fixed-setting stability gate passed; no workloads above `1.02`; no P1 above `1.00`)
+3.  Last known correctness status: passing (`max_abs_diff = 1.23378e-05`)
+4.  Last known architecture status: unified generic runtime with provider modes (`EventRef`/`NodeRef`), scalar generic fallback removed from dispatch, trial hot path no longer branches on `TrialKernelMode`
 
 ## Active 6A Execution Artifacts
 
 1.  Checklist: `dev/step6a_execution_checklist.md`
 2.  Audit + deletion map: `dev/step6a_audit_2026-03-04.md`
+3.  GenericNodeIntegral unified cutover: `dev/step6a_generic_nodeintegral_cutover_2026-03-05.md`
+
+## Active 6B Execution Artifacts
+
+1.  Unified speed recovery (no re-splitting): `dev/step6b_unified_speed_recovery_2026-03-05.md`
+2.  GenericNodeIntegral NodeRef batch cutover (no scalar fallback): `dev/step6b_generic_noderef_batch_cutover_2026-03-05.md`
+3.  Non-coupling residual optimization (unified engine only): `dev/step6b_noncoupling_residual_optimization_2026-03-05.md`
 
 ## Completion Record (Fill Only When Truly Done)
 
-1.  6A Commit SHA: `TBD`
-2.  6A Achieved at UTC: `TBD`
-3.  6A Golden max_abs_diff: `TBD`
-4.  6A Deleted path summary: `TBD`
-5.  6B Commit SHA: `TBD`
-6.  6B Achieved at UTC: `TBD`
-7.  6B Worst ratio (median_per_eval_sec): `TBD`
+1.  6A Commit SHA: `8a7c6d1 (working tree dirty; closure not yet committed)`
+2.  6A Achieved at UTC: `2026-03-05T17:10:07Z`
+3.  6A Golden max_abs_diff: `1.2372e-05` (`dev/scripts/scratch_outputs/step6ac_final2_golden_20260305T170956Z.log`)
+4.  6A Deleted path summary:
+    1.  `TrialKernelMode`
+    2.  `make_trial_eval_input(...)`
+    3.  `OutcomeCouplingMassEvaluator`
+    4.  `evaluate_coupling_mass_pair_program(...)`
+    5.  `evaluate_coupling_mass_nway_program(...)`
+    6.  `resolve_outcome_coupling_mass_evaluator(...)`
+    7.  `evaluate_outcome_coupling_mass(...)`
+5.  6B Commit SHA: `8a7c6d1 (working tree dirty; closure not yet committed)`
+6.  6B Achieved at UTC: `2026-03-06T10:05:01Z`
+7.  6B Worst ratio (median_per_eval_sec): `0.9609375` (`examples_models/example_16_guard_tie_simple`, run3)
 8.  Artifacts:
     1.  `dev/scripts/scratch_outputs/benchmark_centralized.csv`
     2.  `dev/scripts/scratch_outputs/benchmark_centralized_diff.csv`
     3.  `dev/scripts/scratch_outputs/benchmark_step3_comparison.csv`
+    4.  `dev/scripts/scratch_outputs/step6b_nc7_stability_summary_20260306T100501Z.txt`
+    5.  `dev/scripts/scratch_outputs/step6b_nc7_stability_summary_20260306T100501Z.csv`
+    6.  `dev/scripts/scratch_outputs/step6b_nc7_targeted_stats_20260306T100501Z.csv`

@@ -1,0 +1,11 @@
+TOP,1,examples_models,example_21_simple_q,2.267946959305
+TOP,2,examples_models,example_3_stop_na,1.867647058824
+TOP,3,examples_models,example_22_shared_q,1.808695652174
+TOP,4,nested,shared_gate_pair,1.110730593607
+TOP,5,nested,shared_gate_nway_shared_triggers,1.104579630895
+P1,examples_models,example_3_stop_na,1.867647058824
+P1,examples_models,example_21_simple_q,2.267946959305
+P1,examples_models,example_22_shared_q,1.808695652174
+P1,examples_models,example_6_dual_path,1.028985507246
+P1,nested,depth3_guard_competitor,1.036386849665
+P1,nested,shared_gate_nway_shared_triggers,1.104579630895

@@ -80,6 +80,25 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// unified_outcome_stats_reset_cpp
+void unified_outcome_stats_reset_cpp();
+RcppExport SEXP _AccumulatR_unified_outcome_stats_reset_cpp() {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    unified_outcome_stats_reset_cpp();
+    return R_NilValue;
+END_RCPP
+}
+// unified_outcome_stats_cpp
+Rcpp::List unified_outcome_stats_cpp();
+RcppExport SEXP _AccumulatR_unified_outcome_stats_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(unified_outcome_stats_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
 // native_trial_mixture_driver
 double native_trial_mixture_driver(SEXP ctxSEXP, int node_id, double t, Rcpp::CharacterVector component_ids, Rcpp::NumericVector weights, Rcpp::Nullable<Rcpp::String> forced_component, Rcpp::IntegerVector competitor_ids, Rcpp::Nullable<Rcpp::DataFrame> trial_rows, Rcpp::Nullable<Rcpp::List> guess_donors);
 RcppExport SEXP _AccumulatR_native_trial_mixture_driver(SEXP ctxSEXPSEXP, SEXP node_idSEXP, SEXP tSEXP, SEXP component_idsSEXP, SEXP weightsSEXP, SEXP forced_componentSEXP, SEXP competitor_idsSEXP, SEXP trial_rowsSEXP, SEXP guess_donorsSEXP) {
@@ -412,6 +431,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_native_context_from_proto_cpp", (DL_FUNC) &_AccumulatR_native_context_from_proto_cpp, 1},
     {"_AccumulatR_native_ctx_invalid", (DL_FUNC) &_AccumulatR_native_ctx_invalid, 1},
     {"_AccumulatR_boost_integrate_cpp", (DL_FUNC) &_AccumulatR_boost_integrate_cpp, 6},
+    {"_AccumulatR_unified_outcome_stats_reset_cpp", (DL_FUNC) &_AccumulatR_unified_outcome_stats_reset_cpp, 0},
+    {"_AccumulatR_unified_outcome_stats_cpp", (DL_FUNC) &_AccumulatR_unified_outcome_stats_cpp, 0},
     {"_AccumulatR_native_trial_mixture_driver", (DL_FUNC) &_AccumulatR_native_trial_mixture_driver, 9},
     {"_AccumulatR_cpp_loglik", (DL_FUNC) &_AccumulatR_cpp_loglik, 9},
     {"_AccumulatR_cpp_loglik_multiple", (DL_FUNC) &_AccumulatR_cpp_loglik_multiple, 9},

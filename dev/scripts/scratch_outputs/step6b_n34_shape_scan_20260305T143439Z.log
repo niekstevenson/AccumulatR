@@ -1,0 +1,35 @@
+
+Attaching package: ‘AccumulatR’
+
+The following object is masked from ‘package:stats’:
+
+    simulate
+
+Unified outcome stats capture enabled
+                       label median_sec min_sec max_sec inner_reps
+            example_1_simple     0.0570   0.054   0.060        161
+      example_2_stop_mixture     0.0770   0.075   0.078         40
+           example_3_stop_na     0.0740   0.073   0.075        160
+     example_5_timeout_guess     0.0565   0.053   0.059         80
+         example_6_dual_path     0.0665   0.065   0.070        160
+           example_7_mixture     0.0710   0.071   0.072        160
+        example_10_exclusion     0.1575   0.157   0.165         81
+ example_16_guard_tie_simple     0.0880   0.087   0.101          5
+         example_21_simple_q     0.0295   0.029   0.030         80
+         example_22_shared_q     0.0300   0.029   0.030         80
+     example_23_ranked_chain     0.0555   0.055   0.059         40
+ median_per_eval_sec mode
+        0.0003540373   ir
+        0.0019250000   ir
+        0.0004625000   ir
+        0.0007062500   ir
+        0.0004156250   ir
+        0.0004437500   ir
+        0.0019444444   ir
+        0.0176000000   ir
+        0.0003687500   ir
+        0.0003750000   ir
+        0.0013875000   ir
+Wrote unified outcome stats to dev/scripts/scratch_outputs/step6b_n34_shape_scan_20260305T143439Z.csv 
+
+Wrote benchmark outputs to dev/scripts/scratch_outputs 

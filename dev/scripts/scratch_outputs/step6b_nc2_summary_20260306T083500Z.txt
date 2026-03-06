@@ -1,0 +1,10 @@
+worst=examples_models/example_16_guard_tie_simple 1.037642045454550
+count_gt_1p02=2
+p1_gt_1p00=1
+"suite","label","ratio_current_over_baseline"
+"examples_models","example_21_simple_q",0.77037037037036
+"examples_models","example_22_shared_q",0.813913043478264
+"examples_models","example_3_stop_na",0.723529411764692
+"examples_models","example_6_dual_path",0.799999999999988
+"nested","depth3_guard_competitor",1.02266198531759
+"nested","shared_gate_nway_shared_triggers",0.89336978810663

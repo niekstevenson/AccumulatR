@@ -1,0 +1,11 @@
+FP4L.2/FP4L.3 lower-layer split inventory after keepable convergence cut
+1. Converged lower layer now shared by observed single-step and ranked transition execution:
+   - NodeEvalState-backed dense node evaluation
+   - compiled competitor survival ops via node_density_with_competitors_from_state_dense / competitor_survival_from_state_compiled_ops
+   - shared kernel-runtime carrier on sequence-density contributions
+2. Rejected boundary still avoided:
+   - observed single-step does not enter sequence_state_key / for_each_sequence_node_transition
+3. Remaining Step 4 split points:
+   - sequence-state scheduling and state collapse remain ranked-only
+   - single-step guess shortcut remains a special observed optimization
+   - eval_node_with_forced_state_view wrapper still exists outside the converged Step 4 hot path and is not yet deleted globally

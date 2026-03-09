@@ -1,0 +1,11 @@
+batch=FP1
+subbatch=FP1.4
+timestamp_utc=20260306T133234Z
+commit_sha=54437eb
+decision=ACHIEVED
+criteria_1_unordered_set_hotpath=pass
+criteria_2_unified_carrier_hotchain=pass
+criteria_3_kernel_callbacks_bitset_only=pass
+criteria_4_golden=pass
+criteria_5_perf_gate=pass
+notes=legacy wrapper symbols remain for boundary compatibility; active hot callsites use carrier helpers

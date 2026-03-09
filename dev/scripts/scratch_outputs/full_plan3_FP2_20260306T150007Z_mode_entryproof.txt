@@ -1,0 +1,37 @@
+batch=FP2
+subbatch=FP2.2
+timestamp_utc=20260306T150007Z
+commit_sha=54437eb
+
+[single runtime trial entrypoint]
+8815:double evaluate_trial_probability_kernel_idx(
+9533:    const double prob = evaluate_trial_probability_kernel_idx(
+
+[single observed contribution executor path]
+7961:double sequence_prefix_density_resolved(
+8730:double evaluate_sequence_density_kernel_idx(
+8740:  if (spec.intent != TrialKernelIntent::SequenceDensity || sequence_length == 0u ||
+8746:  if (sequence_length == 1u) {
+8779:  return sequence_prefix_density_resolved(
+
+[normalization before entry]
+8353:  TrialEvalMode mode{TrialEvalMode::Sequence};
+8355:      TrialProbabilityTransform::Identity};
+8378:inline TrialEvalInput normalize_trial_eval_input_for_trial(
+8395:      eval_input.mode = TrialEvalMode::Nonresponse;
+8396:      eval_input.probability_transform = TrialProbabilityTransform::Complement;
+8400:    eval_input.mode = TrialEvalMode::Sequence;
+8401:    eval_input.probability_transform = TrialProbabilityTransform::Identity;
+8412:    eval_input.mode = TrialEvalMode::Nonresponse;
+8413:    eval_input.probability_transform = TrialProbabilityTransform::Complement;
+8420:  eval_input.mode = TrialEvalMode::Sequence;
+8421:  eval_input.probability_transform = TrialProbabilityTransform::Identity;
+8505:  if (eval_input.mode == TrialEvalMode::Nonresponse) {
+8825:                   TrialProbabilityTransform::Complement
+8846:        TrialProbabilityTransform::Complement) {
+8856:                   TrialProbabilityTransform::Complement
+8863:                   TrialProbabilityTransform::Complement
+9448:        normalize_trial_eval_input_for_trial(
+9518:    if (eval_input.mode == TrialEvalMode::Nonresponse) {
+
+[deleted observed-path split predicates check]

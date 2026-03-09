@@ -1,0 +1,7 @@
+install	0	dev/scripts/scratch_outputs/full_plan3_FP2_20260306T145624Z_install.log
+step3_structure	0	dev/scripts/scratch_outputs/full_plan3_FP2_20260306T145624Z_step3_structure.log
+step4_structure	0	dev/scripts/scratch_outputs/full_plan3_FP2_20260306T145624Z_step4_structure.log
+step5_structure	0	dev/scripts/scratch_outputs/full_plan3_FP2_20260306T145624Z_step5_structure.log
+step6_structure	0	dev/scripts/scratch_outputs/full_plan3_FP2_20260306T145624Z_step6_structure.log
+golden	1	dev/scripts/scratch_outputs/full_plan3_FP2_20260306T145624Z_golden.log
+bench	1	dev/scripts/scratch_outputs/full_plan3_FP2_20260306T145624Z_bench.log

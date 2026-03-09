@@ -1,0 +1,49 @@
+batch=FP2
+subbatch=FP2.4
+timestamp_utc=20260306T151939Z
+commit_sha=54437eb
+
+[definitions]
+8306:enum class TrialKernelIntent : std::uint8_t {
+8311:enum class TrialProbabilityTransform : std::uint8_t {
+8316:struct TrialContributionSpec {
+8346:struct TrialEvalInput {
+8723:double evaluate_sequence_density_kernel_idx(
+8778:double evaluate_trial_contribution_kernel_idx(
+8808:double evaluate_trial_probability_kernel_idx(
+
+[nonresponse cutover checks]
+8348:  TrialProbabilityTransform probability_transform{
+8359:  const std::vector<int> *nonresponse_outcome_indices{nullptr};
+8371:inline TrialEvalInput normalize_trial_eval_input_for_trial(
+8375:    const std::vector<int> *nonresponse_outcome_indices) {
+8377:  eval_input.nonresponse_outcome_indices = nonresponse_outcome_indices;
+8387:      eval_input.probability_transform = TrialProbabilityTransform::Complement;
+8391:    eval_input.probability_transform = TrialProbabilityTransform::Identity;
+8402:    eval_input.probability_transform = TrialProbabilityTransform::Complement;
+8409:  eval_input.probability_transform = TrialProbabilityTransform::Identity;
+8450:    const std::vector<int> &nonresponse_outcome_indices,
+8454:  out.resize(nonresponse_outcome_indices.size());
+8458:  for (std::size_t i = 0; i < nonresponse_outcome_indices.size(); ++i) {
+8459:    const int oi = nonresponse_outcome_indices[i];
+8493:  const bool nonresponse_mode = (eval_input.sequence_length == 0u ||
+8497:  if (nonresponse_mode) {
+8498:    const bool use_precomputed = eval_input.nonresponse_outcome_indices &&
+8499:                                 !eval_input.nonresponse_outcome_indices->empty();
+8501:                              ? eval_input.nonresponse_outcome_indices->size()
+8505:      const int oi = use_precomputed ? (*eval_input.nonresponse_outcome_indices)[i]
+8559:  if (sequence_length == 0u || !eval_input.sequence_label_data ||
+8733:  if (spec.intent != TrialKernelIntent::SequenceDensity || sequence_length == 0u ||
+8817:    return eval_input.probability_transform ==
+8838:    if (eval_input.probability_transform ==
+8848:    return eval_input.probability_transform ==
+8855:    return eval_input.probability_transform ==
+9282:  std::vector<int> nonresponse_outcome_indices;
+9283:  nonresponse_outcome_indices.reserve(ctx->outcome_info.size());
+9296:      nonresponse_outcome_indices.push_back(static_cast<int>(oi));
+9302:      *ctx, nonresponse_outcome_indices, default_component_indices,
+9441:        normalize_trial_eval_input_for_trial(
+9443:            ranked_valid, &nonresponse_outcome_indices);
+9469:        *ctx, nonresponse_outcome_indices, bundle.component_indices,
+
+[removed nonresponse mode-flag checks]

@@ -1,0 +1,7 @@
+FP4L.1 transient failed-path profiling split inventory
+1. Shared lower-layer target: node/guard/competitor primitives.
+2. Ranked-only layer: sequence-state hashing, state collapse, transition-template enumeration.
+3. Rejected boundary: routing single-step observed through sequence-state machinery.
+4. Profile evidence files:
+   - dev/scripts/scratch_outputs/full_plan3_FP4L_20260308T164252Z_depth3_guard_competitor_profile.txt
+   - dev/scripts/scratch_outputs/full_plan3_FP4L_20260308T164252Z_example_2_stop_mixture_profile.txt

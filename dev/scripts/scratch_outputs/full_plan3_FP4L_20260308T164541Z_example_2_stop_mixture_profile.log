@@ -1,0 +1,82 @@
+* installing *source* package ‘AccumulatR’ ...
+** this is package ‘AccumulatR’ version ‘0.1.0’
+** using staged installation
+** libs
+using C++ compiler: ‘Apple clang version 17.0.0 (clang-1700.0.13.5)’
+using C++17
+using SDK: ‘MacOSX15.5.sdk’
+clang++ -arch arm64 -std=gnu++17 -I"/Library/Frameworks/R.framework/Resources/include" -DNDEBUG -g -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/Rcpp/include' -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/BH/include' -I/opt/R/arm64/include   -O2 -g -fno-omit-frame-pointer -fPIC  -falign-functions=64 -Wall -g -O2   -c AccumulatR-package.cpp -o AccumulatR-package.o
+clang++ -arch arm64 -std=gnu++17 -I"/Library/Frameworks/R.framework/Resources/include" -DNDEBUG -g -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/Rcpp/include' -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/BH/include' -I/opt/R/arm64/include   -O2 -g -fno-omit-frame-pointer -fPIC  -falign-functions=64 -Wall -g -O2   -c RcppExports.cpp -o RcppExports.o
+clang++ -arch arm64 -std=gnu++17 -I"/Library/Frameworks/R.framework/Resources/include" -DNDEBUG -g -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/Rcpp/include' -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/BH/include' -I/opt/R/arm64/include   -O2 -g -fno-omit-frame-pointer -fPIC  -falign-functions=64 -Wall -g -O2   -c ccallables.cpp -o ccallables.o
+clang++ -arch arm64 -std=gnu++17 -I"/Library/Frameworks/R.framework/Resources/include" -DNDEBUG -g -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/Rcpp/include' -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/BH/include' -I/opt/R/arm64/include   -O2 -g -fno-omit-frame-pointer -fPIC  -falign-functions=64 -Wall -g -O2   -c context.cpp -o context.o
+clang++ -arch arm64 -std=gnu++17 -I"/Library/Frameworks/R.framework/Resources/include" -DNDEBUG -g -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/Rcpp/include' -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/BH/include' -I/opt/R/arm64/include   -O2 -g -fno-omit-frame-pointer -fPIC  -falign-functions=64 -Wall -g -O2   -c dist_vector.cpp -o dist_vector.o
+clang++ -arch arm64 -std=gnu++17 -I"/Library/Frameworks/R.framework/Resources/include" -DNDEBUG -g -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/Rcpp/include' -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/BH/include' -I/opt/R/arm64/include   -O2 -g -fno-omit-frame-pointer -fPIC  -falign-functions=64 -Wall -g -O2   -c distributions.cpp -o distributions.o
+distributions.cpp:4598:16: warning: unused function 'eval_node_with_forced_dense_bits' [-Wunused-function]
+ 4598 | NodeEvalResult eval_node_with_forced_dense_bits(
+      |                ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+distributions.cpp:3608:1: warning: unused function 'resolve_outcome_coupling_program' [-Wunused-function]
+ 3608 | resolve_outcome_coupling_program(const uuber::NativeContext &ctx, int node_id,
+      | ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+distributions.cpp:3702:15: warning: unused function 'coupling_acc_survival' [-Wunused-function]
+ 3702 | inline double coupling_acc_survival(const CouplingAccRef &ref, double t) {
+      |               ^~~~~~~~~~~~~~~~~~~~~
+distributions.cpp:3706:13: warning: unused function 'build_coupling_time_batch_mass' [-Wunused-function]
+ 3706 | inline bool build_coupling_time_batch_mass(double upper, uuber::TimeBatch &out) {
+      |             ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+4 warnings generated.
+clang++ -arch arm64 -std=gnu++17 -I"/Library/Frameworks/R.framework/Resources/include" -DNDEBUG -g -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/Rcpp/include' -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/BH/include' -I/opt/R/arm64/include   -O2 -g -fno-omit-frame-pointer -fPIC  -falign-functions=64 -Wall -g -O2   -c kernel_executor.cpp -o kernel_executor.o
+clang++ -arch arm64 -std=gnu++17 -I"/Library/Frameworks/R.framework/Resources/include" -DNDEBUG -g -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/Rcpp/include' -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/BH/include' -I/opt/R/arm64/include   -O2 -g -fno-omit-frame-pointer -fPIC  -falign-functions=64 -Wall -g -O2   -c kernel_jit.cpp -o kernel_jit.o
+clang++ -arch arm64 -std=gnu++17 -I"/Library/Frameworks/R.framework/Resources/include" -DNDEBUG -g -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/Rcpp/include' -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/BH/include' -I/opt/R/arm64/include   -O2 -g -fno-omit-frame-pointer -fPIC  -falign-functions=64 -Wall -g -O2   -c kernel_program.cpp -o kernel_program.o
+clang++ -arch arm64 -std=gnu++17 -I"/Library/Frameworks/R.framework/Resources/include" -DNDEBUG -g -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/Rcpp/include' -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/BH/include' -I/opt/R/arm64/include   -O2 -g -fno-omit-frame-pointer -fPIC  -falign-functions=64 -Wall -g -O2   -c prep_builder.cpp -o prep_builder.o
+clang++ -arch arm64 -std=gnu++17 -I"/Library/Frameworks/R.framework/Resources/include" -DNDEBUG -g -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/Rcpp/include' -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/BH/include' -I/opt/R/arm64/include   -O2 -g -fno-omit-frame-pointer -fPIC  -falign-functions=64 -Wall -g -O2   -c proto.cpp -o proto.o
+clang++ -arch arm64 -std=gnu++17 -I"/Library/Frameworks/R.framework/Resources/include" -DNDEBUG -g -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/Rcpp/include' -I'/Library/Frameworks/R.framework/Versions/4.5-arm64/Resources/library/BH/include' -I/opt/R/arm64/include   -O2 -g -fno-omit-frame-pointer -fPIC  -falign-functions=64 -Wall -g -O2   -c quadrature_batch.cpp -o quadrature_batch.o
+clang++ -arch arm64 -std=gnu++17 -dynamiclib -Wl,-headerpad_max_install_names -undefined dynamic_lookup -L/Library/Frameworks/R.framework/Resources/lib -L/opt/R/arm64/lib -o AccumulatR.so AccumulatR-package.o RcppExports.o ccallables.o context.o dist_vector.o distributions.o kernel_executor.o kernel_jit.o kernel_program.o prep_builder.o proto.o quadrature_batch.o -F/Library/Frameworks/R.framework/.. -framework R
+installing to /private/tmp/accumulatr_profile_lib.KsxmYH/00LOCK-AccumulatR/00new/AccumulatR/libs
+** R
+** inst
+** byte-compile and prepare package for lazy loading
+** help
+*** installing help indices
+*** copying figures
+** building package indices
+** testing if installed package can be loaded from temporary location
+** checking absolute paths in shared objects and dynamic libraries
+** testing if installed package can be loaded from final location
+** testing if installed package keeps a record of temporary installation path
+* DONE (AccumulatR)
+Launching R profiling workload (/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/profile_workload_examples.R)...
+Waiting for calc_ll to start (timeout 60s)...
+> start_file <- Sys.getenv("ACCUMULATR_PROFILE_START_FILE", "")
+> end_file <- Sys.getenv("ACCUMULATR_PROFILE_END_FILE", "")
+> target_script <- Sys.getenv("ACCUMULATR_PROFILE_R_SCRIPT", "")
+> 
+> if (!nzchar(target_script)) {
++   stop("ACCUMULATR_PROFILE_R_SCRIPT not set")
++ }
+> if (nzchar(start_file)) {
++   writeLines("start", start_file)
++ }
+> 
+> source(target_script)
+Sampling PID 37602 during calc_ll (max 20s, interval 1ms) -> dev/scripts/scratch_outputs/full_plan3_FP4L_20260308T164541Z_example_2_stop_mixture_profile.txt
+
+Attaching package: ‘AccumulatR’
+
+The following object is masked from ‘package:stats’:
+
+    simulate
+
+Sampling process 37602 for 20 seconds with 1 millisecond of run time between samples
+Sampling completed, processing symbols...
+Sample analysis of process 37602 written to file dev/scripts/scratch_outputs/full_plan3_FP4L_20260308T164541Z_example_2_stop_mixture_profile.txt
+Warning: calc_ll end marker not observed; sample may be truncated (increase ACCUMULATR_PROFILE_DURATION)
+profile_workload_examples complete
+example_2_stop_mixture 
+                   565 
+checksum: 146040.3311848222 
+> 
+> if (nzchar(end_file)) {
++   writeLines("end", end_file)
++ }
+> 
+Profiling complete. Output saved to dev/scripts/scratch_outputs/full_plan3_FP4L_20260308T164541Z_example_2_stop_mixture_profile.txt

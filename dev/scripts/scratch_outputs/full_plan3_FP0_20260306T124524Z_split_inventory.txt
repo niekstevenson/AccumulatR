@@ -1,0 +1,44 @@
+timestamp_utc=20260306T124524Z
+commit_sha=54437eb
+--- patterns ---
+2048:bool node_density_with_competitors_batch_internal(
+3061:NodeEvalResult eval_node_recursive_dense(int node_idx, NodeEvalState &state,
+3119:enum class GenericCouplingProviderKind : std::uint8_t {
+3125:  GenericCouplingProviderKind kind{GenericCouplingProviderKind::NodeRef};
+3146:  plan.kind = GenericCouplingProviderKind::NodeRef;
+3159:  plan.kind = GenericCouplingProviderKind::EventRef;
+3798:  if (provider.kind == GenericCouplingProviderKind::EventRef) {
+3884:  if (provider.kind == GenericCouplingProviderKind::NodeRef) {
+3885:    return node_density_with_competitors_batch_internal(
+4089:double evaluate_coupling_mass_nway(
+4095:double evaluate_coupling_mass_pair(
+4120:    if (provider.kind == GenericCouplingProviderKind::EventRef &&
+4136:    if (provider.kind == GenericCouplingProviderKind::NodeRef &&
+4146:    if (provider.kind == GenericCouplingProviderKind::EventRef) {
+4148:    } else if (provider.kind == GenericCouplingProviderKind::NodeRef) {
+4154:    if (provider.kind == GenericCouplingProviderKind::NodeRef &&
+4238:    return evaluate_coupling_mass_nway(
+4243:    return evaluate_coupling_mass_pair(
+4250:double evaluate_coupling_mass_nway(
+4323:double evaluate_coupling_mass_pair(
+4442:  return eval_node_recursive_dense(node_idx, local, need);
+4575:NodeEvalResult eval_node_recursive_dense(int node_idx, NodeEvalState &state,
+4597:    kernel_ok = uuber::eval_kernel_node(state.ctx.kernel_program, node_idx,
+4611:  return eval_node_recursive_dense(node_idx, state, need);
+4663:      eval_node_recursive_dense(tr.blocker_node_idx, local, EvalNeed::kSurvival);
+4761:  return eval_node_recursive_dense(node_idx, local, need);
+5808:    if (!uuber::eval_kernel_nodes_incremental(
+5819:      if (!uuber::eval_kernel_node(state.ctx.kernel_program, node_idx, kernel_need,
+5986:bool node_density_with_competitors_batch_internal(
+7585:bool for_each_sequence_node_transition(
+7955:    const bool has_transition = for_each_sequence_node_transition(
+8170:    bool ranked_mode, int outcome_label_id, double rt,
+8176:  if (ranked_mode) {
+8833:  const bool ranked_mode = rank_width > 1;
+8900:      if (ranked_mode) {
+8985:    if (ranked_mode) {
+9143:  if (ranked_mode) {
+9219:        !ranked_mode ||
+9223:        (ranked_mode && ranked_valid &&
+9228:        (ranked_mode && ranked_valid &&
+9234:            ranked_mode, outcome_label_id, rt, ranked_ids_ptr, ranked_times_ptr,

@@ -1,0 +1,38 @@
+batch=FP2
+subbatch=FP2.3
+timestamp_utc=20260306T151253Z
+commit_sha=54437eb
+
+[definitions]
+8306:enum class TrialKernelIntent : std::uint8_t {
+8311:enum class TrialEvalMode : std::uint8_t {
+8316:enum class TrialProbabilityTransform : std::uint8_t {
+8321:struct TrialContributionSpec {
+8351:struct TrialEvalInput {
+8729:double evaluate_sequence_density_kernel_idx(
+8784:double evaluate_trial_contribution_kernel_idx(
+8814:double evaluate_trial_probability_kernel_idx(
+
+[ranked cutover checks]
+7577:class RankedTransitionCompiler {
+7579:  explicit RankedTransitionCompiler(const uuber::NativeContext &ctx_)
+7792:bool for_each_sequence_node_transition(
+7793:    RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
+7967:    RankedTransitionCompiler *transition_compiler = nullptr) {
+7972:  RankedTransitionCompiler local_transition_compiler(ctx);
+7973:  RankedTransitionCompiler *compiler =
+8155:    const bool has_transition = for_each_sequence_node_transition(
+8372:  std::unique_ptr<RankedTransitionCompiler> sequence_transition_compiler;
+8377:inline TrialEvalInput normalize_trial_eval_input_for_trial(
+8500:    std::unique_ptr<RankedTransitionCompiler> &sequence_transition_compiler) {
+8569:  if (sequence_length > 1u && !eval_input.sequence_times_vec) {
+8586:    const bool enforce_unique_sequence_nodes = (sequence_length > 1u);
+8721:  if (sequence_length > 1u && !contributions.empty() &&
+8724:        std::make_unique<RankedTransitionCompiler>(ctx);
+8732:    RankedTransitionCompiler *sequence_transition_compiler,
+8789:    int max_depth, RankedTransitionCompiler *sequence_transition_compiler,
+8834:  std::unique_ptr<RankedTransitionCompiler> &sequence_transition_compiler =
+8893:          std::make_unique<RankedTransitionCompiler>(ctx);
+9447:        normalize_trial_eval_input_for_trial(
+
+[removed ranked execution toggle checks]

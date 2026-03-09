@@ -1,0 +1,71 @@
+batch=FP2
+subbatch=FP2.1
+timestamp_utc=20260306T140306Z
+commit_sha=54437eb
+
+[definitions]
+8306:enum class TrialKernelIntent : std::uint8_t {
+8313:enum class TrialEvalMode : std::uint8_t {
+8318:enum class TrialProbabilityTransform : std::uint8_t {
+8323:struct TrialContributionSpec {
+8354:struct TrialEvalInput {
+8721:double evaluate_trial_kernel_entry_unified(
+8791:double evaluate_trial_probability_kernel_idx(
+8943:double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
+9533:Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP, Rcpp::List params_list,
+
+[primary callsites]
+2127:double kernel_node_density_entry_idx(
+2141:double node_density_entry_idx(
+2176:  return node_density_entry_idx(
+2183:double accumulate_component_guess_density_idx(
+2456:    donor_density += accumulate_component_guess_density_idx(
+2901:    double density = kernel_node_density_entry_idx(
+6316:double kernel_node_density_entry_idx(
+6337:inline double node_density_entry_idx(
+6352:    return kernel_node_density_entry_idx(
+6366:    return kernel_node_density_entry_idx(
+7196:          contrib = accumulate_component_guess_density_idx(
+7207:      contrib = node_density_entry_idx(
+7269:double mix_outcome_mass_idx(uuber::NativeContext &ctx,
+7961:double sequence_prefix_density_resolved(
+8499:bool build_trial_contributions_unified(
+8721:double evaluate_trial_kernel_entry_unified(
+8738:    return accumulate_component_guess_density_idx(
+8751:    return node_density_entry_idx(
+8765:    return sequence_prefix_density_resolved(
+8782:    return mix_outcome_mass_idx(
+8791:double evaluate_trial_probability_kernel_idx(
+8828:  if (!build_trial_contributions_unified(
+8882:    return evaluate_trial_kernel_entry_unified(
+9508:    const double prob = evaluate_trial_probability_kernel_idx(
+
+[remaining mode/intent dispatch points]
+8324:  TrialKernelIntent intent{TrialKernelIntent::NodeDensity};
+8356:  TrialEvalMode mode{TrialEvalMode::Sequence};
+8358:      TrialProbabilityTransform::Identity};
+8398:      eval_input.mode = TrialEvalMode::Nonresponse;
+8399:      eval_input.probability_transform = TrialProbabilityTransform::Complement;
+8403:    eval_input.mode = TrialEvalMode::Sequence;
+8404:    eval_input.probability_transform = TrialProbabilityTransform::Identity;
+8415:    eval_input.mode = TrialEvalMode::Nonresponse;
+8416:    eval_input.probability_transform = TrialProbabilityTransform::Complement;
+8423:  eval_input.mode = TrialEvalMode::Sequence;
+8424:  eval_input.probability_transform = TrialProbabilityTransform::Identity;
+8508:  if (eval_input.mode == TrialEvalMode::Nonresponse) {
+8524:      spec.intent = TrialKernelIntent::OutcomeMass;
+8690:      spec.intent = TrialKernelIntent::SequencePrefixDensity;
+8698:      spec.intent = TrialKernelIntent::NodeDensity;
+8707:        spec.intent = TrialKernelIntent::GuessDensity;
+8732:  switch (spec.intent) {
+8733:  case TrialKernelIntent::GuessDensity: {
+8743:  case TrialKernelIntent::NodeDensity: {
+8757:  case TrialKernelIntent::SequencePrefixDensity: {
+8770:  case TrialKernelIntent::OutcomeMass: {
+8801:                   TrialProbabilityTransform::Complement
+8822:        TrialProbabilityTransform::Complement) {
+8832:                   TrialProbabilityTransform::Complement
+8839:                   TrialProbabilityTransform::Complement
+8847:        spec.intent != TrialKernelIntent::SequencePrefixDensity) {
+8862:      if (spec.intent == TrialKernelIntent::SequencePrefixDensity) {
+9493:    if (eval_input.mode == TrialEvalMode::Nonresponse) {

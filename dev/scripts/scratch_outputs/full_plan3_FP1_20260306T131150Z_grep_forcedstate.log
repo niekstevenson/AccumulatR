@@ -1,0 +1,432 @@
+# required_pattern_1
+# required_pattern_2
+1094:  const uuber::BitsetState *forced_complete_bits{nullptr};
+1095:  const bool *forced_complete_bits_valid{nullptr};
+1096:  const uuber::BitsetState *forced_survive_bits{nullptr};
+1097:  const bool *forced_survive_bits_valid{nullptr};
+1103:    const uuber::BitsetState *forced_complete_bits,
+1104:    const bool *forced_complete_bits_valid,
+1105:    const uuber::BitsetState *forced_survive_bits,
+1106:    const bool *forced_survive_bits_valid,
+1110:  view.forced_complete_bits = forced_complete_bits;
+1111:  view.forced_complete_bits_valid = forced_complete_bits_valid;
+1112:  view.forced_survive_bits = forced_survive_bits;
+1113:  view.forced_survive_bits_valid = forced_survive_bits_valid;
+1119:  return view.forced_complete_bits != nullptr &&
+1120:         view.forced_complete_bits_valid != nullptr &&
+1121:         *view.forced_complete_bits_valid;
+1125:  return view.forced_survive_bits != nullptr &&
+1126:         view.forced_survive_bits_valid != nullptr &&
+1127:         *view.forced_survive_bits_valid;
+1132:                                     view.forced_complete_bits,
+1139:                                     view.forced_survive_bits,
+1145:  return forced_bits_intersects_scope(view.scope_filter, view.forced_complete_bits,
+1151:  return forced_bits_intersects_scope(view.scope_filter, view.forced_survive_bits,
+2100:    const uuber::BitsetState *forced_complete_bits,
+2101:    bool forced_complete_bits_valid,
+2102:    const uuber::BitsetState *forced_survive_bits,
+2103:    bool forced_survive_bits_valid,
+2115:    const uuber::BitsetState *forced_complete_bits,
+2116:    bool forced_complete_bits_valid,
+2117:    const uuber::BitsetState *forced_survive_bits,
+2118:    bool forced_survive_bits_valid,
+2129:    const uuber::BitsetState *forced_complete_bits,
+2130:    bool forced_complete_bits_valid,
+2131:    const uuber::BitsetState *forced_survive_bits,
+2132:    bool forced_survive_bits_valid,
+2143:    const uuber::BitsetState *forced_complete_bits,
+2144:    bool forced_complete_bits_valid,
+2145:    const uuber::BitsetState *forced_survive_bits,
+2146:    bool forced_survive_bits_valid,
+2382:                   const uuber::BitsetState *forced_complete_bits = nullptr,
+2383:                   const uuber::BitsetState *forced_survive_bits = nullptr,
+2388:  bool forced_complete_bits_valid_fallback = (forced_complete_bits != nullptr);
+2389:  bool forced_survive_bits_valid_fallback = (forced_survive_bits != nullptr);
+2391:  const uuber::BitsetState *resolved_complete_bits = forced_complete_bits;
+2392:  const uuber::BitsetState *resolved_survive_bits = forced_survive_bits;
+2396:      &forced_complete_bits_valid_fallback;
+2397:  const bool *resolved_survive_bits_valid = &forced_survive_bits_valid_fallback;
+2402:    if (forced_state_view->forced_complete_bits) {
+2403:      resolved_complete_bits = forced_state_view->forced_complete_bits;
+2405:    if (forced_state_view->forced_survive_bits) {
+2406:      resolved_survive_bits = forced_state_view->forced_survive_bits;
+2411:    if (forced_state_view->forced_complete_bits_valid) {
+2413:          forced_state_view->forced_complete_bits_valid;
+2415:    if (forced_state_view->forced_survive_bits_valid) {
+2416:      resolved_survive_bits_valid = forced_state_view->forced_survive_bits_valid;
+2798:          forced_complete_bits, forced_survive_bits,
+2967:struct NodeEvalState {
+2968:  NodeEvalState(const uuber::NativeContext &ctx_, double time,
+2977:                const uuber::BitsetState *forced_complete_bits_ptr = nullptr,
+2978:                bool forced_complete_bits_ptr_valid = false,
+2979:                const uuber::BitsetState *forced_survive_bits_ptr = nullptr,
+2980:                bool forced_survive_bits_ptr_valid = false,
+3004:    bool forced_complete_valid_resolved = forced_complete_bits_ptr_valid;
+3005:    bool forced_survive_valid_resolved = forced_survive_bits_ptr_valid;
+3006:    const uuber::BitsetState *forced_complete_bits_resolved =
+3007:        forced_complete_bits_ptr;
+3008:    const uuber::BitsetState *forced_survive_bits_resolved =
+3009:        forced_survive_bits_ptr;
+3021:      if (forced_state_view->forced_complete_bits) {
+3022:        forced_complete_bits_resolved = forced_state_view->forced_complete_bits;
+3024:      if (forced_state_view->forced_survive_bits) {
+3025:        forced_survive_bits_resolved = forced_state_view->forced_survive_bits;
+3027:      if (forced_state_view->forced_complete_bits_valid) {
+3029:            *forced_state_view->forced_complete_bits_valid;
+3031:      if (forced_state_view->forced_survive_bits_valid) {
+3033:            *forced_state_view->forced_survive_bits_valid;
+3037:    if (forced_complete_bits_resolved && forced_complete_valid_resolved) {
+3038:      forced_complete_bits = *forced_complete_bits_resolved;
+3039:      forced_complete_bits_valid = true;
+3041:      (void)ensure_forced_bitset_capacity(ctx, forced_complete_bits,
+3042:                                          forced_complete_bits_valid);
+3044:    if (forced_survive_bits_resolved && forced_survive_valid_resolved) {
+3045:      forced_survive_bits = *forced_survive_bits_resolved;
+3046:      forced_survive_bits_valid = true;
+3048:      (void)ensure_forced_bitset_capacity(ctx, forced_survive_bits,
+3049:                                          forced_survive_bits_valid);
+3052:        forced_scope_filter, &forced_complete_bits, &forced_complete_bits_valid,
+3053:        &forced_survive_bits, &forced_survive_bits_valid,
+3084:  uuber::BitsetState forced_complete_bits;
+3085:  uuber::BitsetState forced_survive_bits;
+3086:  bool forced_complete_bits_valid{false};
+3087:  bool forced_survive_bits_valid{false};
+3129:struct GuardEvalInput {
+3135:  const uuber::BitsetState *forced_complete_bits{nullptr};
+3136:  bool forced_complete_bits_valid{false};
+3137:  const uuber::BitsetState *forced_survive_bits{nullptr};
+3138:  bool forced_survive_bits_valid{false};
+3156:    const uuber::BitsetState *forced_complete_bits = nullptr,
+3157:    bool forced_complete_bits_valid = false,
+3158:    const uuber::BitsetState *forced_survive_bits = nullptr,
+3159:    bool forced_survive_bits_valid = false,
+3161:GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
+3170:                                const uuber::BitsetState *forced_complete_bits = nullptr,
+3171:                                const uuber::BitsetState *forced_survive_bits = nullptr,
+3177:guard_trial_type_key(const GuardEvalInput &input) {
+3184:double guard_effective_survival_internal(const GuardEvalInput &input, double t,
+3187:double guard_cdf_internal(const GuardEvalInput &input, double t,
+3190:NodeEvalResult eval_node_recursive_dense(int node_idx, NodeEvalState &state,
+3192:NodeEvalResult eval_node_recursive(int node_id, NodeEvalState &state,
+3262:    const uuber::BitsetState *forced_complete_bits,
+3263:    bool forced_complete_bits_valid,
+3264:    const uuber::BitsetState *forced_survive_bits,
+3265:    bool forced_survive_bits_valid) {
+3277:      !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
+3278:      !forced_bits_any(forced_survive_bits, forced_survive_bits_valid);
+3922:    const uuber::BitsetState *forced_complete_bits,
+3923:    bool forced_complete_bits_valid,
+3924:    const uuber::BitsetState *forced_survive_bits,
+3925:    bool forced_survive_bits_valid, const std::vector<double> &nodes,
+4015:        ctx, generic.node_id, nodes, component_idx, forced_complete_bits,
+4016:        forced_complete_bits_valid, forced_survive_bits,
+4017:        forced_survive_bits_valid, generic.competitor_node_ids, trial_params,
+4235:    const uuber::BitsetState *forced_complete_bits,
+4236:    bool forced_complete_bits_valid,
+4237:    const uuber::BitsetState *forced_survive_bits,
+4238:    bool forced_survive_bits_valid) {
+4247:            ctx, generic, forced_complete_bits, forced_complete_bits_valid,
+4248:            forced_survive_bits, forced_survive_bits_valid);
+4270:          trial_type_key, nullptr, nullptr, nullptr, forced_complete_bits,
+4271:          forced_complete_bits_valid, forced_survive_bits,
+4272:          forced_survive_bits_valid, nullptr);
+4295:          forced_complete_bits, forced_complete_bits_valid, forced_survive_bits,
+4296:          forced_survive_bits_valid, nodes, terms);
+4552:    const uuber::BitsetState *forced_complete_bits,
+4553:    bool forced_complete_bits_valid,
+4554:    const uuber::BitsetState *forced_survive_bits,
+4555:    bool forced_survive_bits_valid,
+4557:  const bool forced_complete_bits_valid_local = forced_complete_bits_valid;
+4558:  const bool forced_survive_bits_valid_local = forced_survive_bits_valid;
+4560:      forced_scope_filter, forced_complete_bits, &forced_complete_bits_valid_local,
+4561:      forced_survive_bits, &forced_survive_bits_valid_local,
+4566:       !forced_state.forced_complete_bits ||
+4567:       !forced_state.forced_complete_bits->any()) &&
+4569:       !forced_state.forced_survive_bits ||
+4570:       !forced_state.forced_survive_bits->any()) &&
+4572:  NodeEvalState local(ctx, time, component_idx, trial_params, trial_key, false,
+4581:GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
+4590:                                const uuber::BitsetState *forced_complete_bits,
+4591:                                const uuber::BitsetState *forced_survive_bits,
+4599:  bool forced_complete_bits_valid_fallback = (forced_complete_bits != nullptr);
+4600:  bool forced_survive_bits_valid_fallback = (forced_survive_bits != nullptr);
+4602:  const uuber::BitsetState *resolved_forced_complete_bits =
+4603:      forced_complete_bits;
+4604:  const uuber::BitsetState *resolved_forced_survive_bits =
+4605:      forced_survive_bits;
+4608:  const bool *resolved_forced_complete_bits_valid =
+4609:      &forced_complete_bits_valid_fallback;
+4610:  const bool *resolved_forced_survive_bits_valid =
+4611:      &forced_survive_bits_valid_fallback;
+4616:    if (forced_state_view->forced_complete_bits) {
+4617:      resolved_forced_complete_bits = forced_state_view->forced_complete_bits;
+4619:    if (forced_state_view->forced_survive_bits) {
+4620:      resolved_forced_survive_bits = forced_state_view->forced_survive_bits;
+4625:    if (forced_state_view->forced_complete_bits_valid) {
+4626:      resolved_forced_complete_bits_valid =
+4627:          forced_state_view->forced_complete_bits_valid;
+4629:    if (forced_state_view->forced_survive_bits_valid) {
+4630:      resolved_forced_survive_bits_valid =
+4631:          forced_state_view->forced_survive_bits_valid;
+4634:  GuardEvalInput input{ctx,
+4639:                       resolved_forced_complete_bits,
+4641:                       resolved_forced_survive_bits,
+4671:  input.forced_complete_bits_valid =
+4672:      resolved_forced_complete_bits_valid &&
+4673:      *resolved_forced_complete_bits_valid;
+4674:  input.forced_survive_bits_valid =
+4675:      resolved_forced_survive_bits_valid &&
+4676:      *resolved_forced_survive_bits_valid;
+4678:      input.forced_scope_filter, input.forced_complete_bits,
+4679:      &input.forced_complete_bits_valid, input.forced_survive_bits,
+4680:      &input.forced_survive_bits_valid, input.forced_label_id_to_bit_idx);
+4687:uuber::KernelEventEvalFn make_kernel_event_eval(NodeEvalState &state) {
+4718:uuber::KernelGuardEvalFn make_kernel_guard_eval(NodeEvalState &state) {
+4724:    GuardEvalInput guard_input = make_guard_input(
+4743:inline bool kernel_runtime_cache_safe(const NodeEvalState &state) {
+4745:         !(state.forced_complete_bits_valid && state.forced_complete_bits.any()) &&
+4746:         !(state.forced_survive_bits_valid && state.forced_survive_bits.any()) &&
+4751:NodeEvalResult eval_node_recursive_dense(int node_idx, NodeEvalState &state,
+4784:NodeEvalResult eval_node_recursive(int node_id, NodeEvalState &state,
+4790:double guard_effective_survival_internal(const GuardEvalInput &input, double t,
+4831:  NodeEvalState local(input.ctx, t, input.component_idx, input.trial_params,
+4861:bool fast_event_info_dense_idx(const GuardEvalInput &input, int node_idx,
+4878:                                   input.forced_state.forced_complete_bits->any();
+4880:                                  input.forced_state.forced_survive_bits->any();
+4912:inline bool fast_event_density_supported(const GuardEvalInput &input,
+4923:inline NodeEvalResult eval_node_from_guard_input(const GuardEvalInput &input,
+4926:  NodeEvalState local(input.ctx, t, input.component_idx, input.trial_params,
+4989:  LinearChainIntegrator(const GuardEvalInput &input,
+5205:  const GuardEvalInput &input_;
+5231:    const GuardEvalInput &input, const LinearGuardChain &chain, double t,
+5247:    DynamicLinearChainIntegrator(const GuardEvalInput &input,
+5455:    const GuardEvalInput &input_;
+5485:double guard_cdf_internal(const GuardEvalInput &input, double t,
+5582:    NodeEvalState &state, const uuber::KernelGuardTransition &transition,
+5586:          ? &state.forced_complete_bits
+5587:          : &state.forced_survive_bits;
+5589:                        ? &state.forced_complete_bits_valid
+5590:                        : &state.forced_survive_bits_valid;
+5931:                              const uuber::BitsetState *forced_complete_bits,
+5932:                              bool forced_complete_bits_valid,
+5933:                              const uuber::BitsetState *forced_survive_bits,
+5934:                              bool forced_survive_bits_valid,
+5946:      !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
+5947:      !forced_bits_any(forced_survive_bits, forced_survive_bits_valid) &&
+5949:  NodeEvalState state(ctx, t, component_idx, trial_params, trial_key, false,
+5952:                      source_time_bounds, nullptr, forced_complete_bits,
+5953:                      forced_complete_bits_valid, forced_survive_bits,
+5954:                      forced_survive_bits_valid,
+5960:inline bool competitor_kernel_runtime_usable(const NodeEvalState &state) {
+5966:    const uuber::CompetitorCompiledOp &op, NodeEvalState &state,
+6011:        op.transition_invalidate_slot, state.forced_survive_bits,
+6012:        state.forced_survive_bits_valid,
+6022:    NodeEvalState &state, const uuber::KernelEventEvalFn &event_eval_cb,
+6044:    NodeEvalState &state,
+6062:    forced_survive_seed = state.forced_survive_bits;
+6063:    forced_survive_seed_valid = state.forced_survive_bits_valid;
+6076:    state.forced_survive_bits = forced_survive_seed;
+6077:    state.forced_survive_bits_valid = forced_survive_seed_valid;
+6085:    const uuber::BitsetState *forced_complete_bits_in,
+6086:    bool forced_complete_bits_in_valid,
+6087:    const uuber::BitsetState *forced_survive_bits_in,
+6088:    bool forced_survive_bits_in_valid,
+6101:  uuber::BitsetState forced_complete_bits_seed;
+6102:  uuber::BitsetState forced_survive_bits_seed;
+6103:  bool forced_complete_bits_seed_valid = false;
+6104:  bool forced_survive_bits_seed_valid = false;
+6105:  if (forced_complete_bits_in && forced_complete_bits_in_valid) {
+6106:    forced_complete_bits_seed = *forced_complete_bits_in;
+6107:    forced_complete_bits_seed_valid = true;
+6109:  if (forced_survive_bits_in && forced_survive_bits_in_valid) {
+6110:    forced_survive_bits_seed = *forced_survive_bits_in;
+6111:    forced_survive_bits_seed_valid = true;
+6116:      !forced_bits_any(forced_complete_bits_in, forced_complete_bits_in_valid) &&
+6117:      !forced_bits_any(forced_survive_bits_in, forced_survive_bits_in_valid) &&
+6119:  NodeEvalState state(
+6122:      forced_complete_bits_seed_valid ? &forced_complete_bits_seed : nullptr,
+6123:      forced_complete_bits_seed_valid,
+6124:      forced_survive_bits_seed_valid ? &forced_survive_bits_seed : nullptr,
+6125:      forced_survive_bits_seed_valid,
+6135:    const std::vector<int> &competitor_ids, NodeEvalState &state,
+6159:    const uuber::BitsetState *forced_complete_bits,
+6160:    bool forced_complete_bits_valid,
+6161:    const uuber::BitsetState *forced_survive_bits,
+6162:    bool forced_survive_bits_valid,
+6176:      !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
+6177:      !forced_bits_any(forced_survive_bits, forced_survive_bits_valid) &&
+6179:  NodeEvalState state(
+6182:      forced_complete_bits_valid ? forced_complete_bits : nullptr,
+6183:      forced_complete_bits_valid,
+6184:      forced_survive_bits_valid ? forced_survive_bits : nullptr,
+6185:      forced_survive_bits_valid, kernel_runtime_usable ? kernel_runtime : nullptr);
+6187:  const uuber::BitsetState forced_complete_seed = state.forced_complete_bits;
+6188:  const uuber::BitsetState forced_survive_seed = state.forced_survive_bits;
+6189:  const bool forced_complete_seed_valid = state.forced_complete_bits_valid;
+6190:  const bool forced_survive_seed_valid = state.forced_survive_bits_valid;
+6216:    state.forced_complete_bits = forced_complete_seed;
+6217:    state.forced_survive_bits = forced_survive_seed;
+6218:    state.forced_complete_bits_valid = forced_complete_seed_valid;
+6219:    state.forced_survive_bits_valid = forced_survive_seed_valid;
+6251:    const uuber::BitsetState *forced_complete_bits,
+6252:    bool forced_complete_bits_valid,
+6253:    const uuber::BitsetState *forced_survive_bits,
+6254:    bool forced_survive_bits_valid,
+6264:  NodeEvalState state(
+6267:      forced_complete_bits_valid ? forced_complete_bits : nullptr,
+6268:      forced_complete_bits_valid,
+6269:      forced_survive_bits_valid ? forced_survive_bits : nullptr,
+6270:      forced_survive_bits_valid, kernel_runtime);
+6281:    const uuber::BitsetState *forced_complete_bits,
+6282:    bool forced_complete_bits_valid,
+6283:    const uuber::BitsetState *forced_survive_bits,
+6284:    bool forced_survive_bits_valid,
+6293:      ctx, node_id, t, component_idx, forced_complete_bits,
+6294:      forced_complete_bits_valid, forced_survive_bits,
+6295:      forced_survive_bits_valid, competitor_ids, trial_params, trial_type_key,
+6302:    const uuber::BitsetState *forced_complete_bits,
+6303:    bool forced_complete_bits_valid,
+6304:    const uuber::BitsetState *forced_survive_bits,
+6305:    bool forced_survive_bits_valid,
+6316:        ctx, node_id, t, component_idx, forced_complete_bits,
+6317:        forced_complete_bits_valid, forced_survive_bits,
+6318:        forced_survive_bits_valid, competitor_ids, trial_params, trial_type_key,
+6330:        ctx, node_id, t, component_idx, forced_complete_bits,
+6331:        forced_complete_bits_valid, forced_survive_bits,
+6332:        forced_survive_bits_valid, competitor_ids, trial_params, trial_type_key,
+6340:      !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
+6341:      !forced_bits_any(forced_survive_bits, forced_survive_bits_valid);
+6349:  NodeEvalState prebuilt_state(
+6352:      forced_complete_bits_valid ? forced_complete_bits : nullptr,
+6353:      forced_complete_bits_valid,
+6354:      forced_survive_bits_valid ? forced_survive_bits : nullptr,
+6355:      forced_survive_bits_valid, shared_kernel_runtime_ptr);
+6375:    const uuber::BitsetState *forced_complete_bits,
+6376:    bool forced_complete_bits_valid,
+6377:    const uuber::BitsetState *forced_survive_bits,
+6378:    bool forced_survive_bits_valid,
+6395:      !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
+6396:      !forced_bits_any(forced_survive_bits, forced_survive_bits_valid);
+6419:        outcome_idx_context, forced_complete_bits, forced_complete_bits_valid,
+6420:        forced_survive_bits, forced_survive_bits_valid);
+6459:    const uuber::BitsetState *forced_complete_bits,
+6460:    bool forced_complete_bits_valid,
+6461:    const uuber::BitsetState *forced_survive_bits,
+6462:    bool forced_survive_bits_valid,
+6474:      forced_complete_bits, forced_complete_bits_valid,
+6475:      forced_survive_bits, forced_survive_bits_valid,
+6493:  uuber::BitsetState forced_complete_bits;
+6494:  uuber::BitsetState forced_survive_bits;
+6495:  bool forced_complete_bits_valid = false;
+6496:  bool forced_survive_bits_valid = false;
+6497:  build_forced_bitset_strict(ctx, fc_vec, forced_complete_bits,
+6498:                             forced_complete_bits_valid);
+6499:  build_forced_bitset_strict(ctx, fs_vec, forced_survive_bits,
+6500:                             forced_survive_bits_valid);
+6503:      forced_complete_bits_valid ? &forced_complete_bits : nullptr,
+6504:      forced_complete_bits_valid,
+6505:      forced_survive_bits_valid ? &forced_survive_bits : nullptr,
+6506:      forced_survive_bits_valid, competitor_ids, rel_tol, abs_tol, max_depth,
+7257:  uuber::BitsetState empty_forced_complete_bits;
+7258:  uuber::BitsetState empty_forced_survive_bits;
+7259:  bool empty_forced_complete_bits_valid = false;
+7260:  bool empty_forced_survive_bits_valid = false;
+7261:  (void)ensure_forced_bitset_capacity(ctx, empty_forced_complete_bits,
+7262:                                      empty_forced_complete_bits_valid);
+7263:  (void)ensure_forced_bitset_capacity(ctx, empty_forced_survive_bits,
+7264:                                      empty_forced_survive_bits_valid);
+7284:        empty_forced_complete_bits_valid ? &empty_forced_complete_bits : nullptr,
+7285:        empty_forced_complete_bits_valid,
+7286:        empty_forced_survive_bits_valid ? &empty_forced_survive_bits : nullptr,
+7287:        empty_forced_survive_bits_valid, info.competitor_ids, rel_tol, abs_tol,
+7308:  uuber::BitsetState forced_complete_bits;
+7309:  uuber::BitsetState forced_survive_bits;
+7310:  bool forced_complete_bits_valid{false};
+7311:  bool forced_survive_bits_valid{false};
+7317:  bool forced_complete_bits_valid{false};
+7318:  bool forced_survive_bits_valid{false};
+7329:    return forced_complete_bits_valid == other.forced_complete_bits_valid &&
+7330:           forced_survive_bits_valid == other.forced_survive_bits_valid &&
+7350:    combine(seed, static_cast<std::size_t>(key.forced_complete_bits_valid));
+7351:    combine(seed, static_cast<std::size_t>(key.forced_survive_bits_valid));
+7423:    const uuber::BitsetState &forced_complete_bits,
+7424:    bool forced_complete_bits_valid,
+7425:    const uuber::BitsetState &forced_survive_bits,
+7426:    bool forced_survive_bits_valid,
+7430:  key.forced_complete_bits_valid = forced_complete_bits_valid;
+7431:  key.forced_survive_bits_valid = forced_survive_bits_valid;
+7433:      forced_complete_bits_valid ? forced_complete_bits.bit_count() : 0;
+7435:      forced_survive_bits_valid ? forced_survive_bits.bit_count() : 0;
+7437:      ranked_hash_bitset(forced_complete_bits, forced_complete_bits_valid);
+7439:      ranked_hash_bitset(forced_survive_bits, forced_survive_bits_valid);
+7763:    const uuber::BitsetState *base_forced_complete_bits_in,
+7764:    bool base_forced_complete_bits_in_valid,
+7765:    const uuber::BitsetState *base_forced_survive_bits_in,
+7766:    bool base_forced_survive_bits_in_valid, EmitFn &&emit) {
+7787:  uuber::BitsetState base_forced_complete_bits;
+7788:  uuber::BitsetState base_forced_survive_bits;
+7789:  bool base_forced_complete_bits_valid = false;
+7790:  bool base_forced_survive_bits_valid = false;
+7791:  if (base_forced_complete_bits_in && base_forced_complete_bits_in_valid) {
+7792:    base_forced_complete_bits = *base_forced_complete_bits_in;
+7793:    base_forced_complete_bits_valid = true;
+7795:    (void)ensure_forced_bitset_capacity(ctx, base_forced_complete_bits,
+7796:                                        base_forced_complete_bits_valid);
+7798:  if (base_forced_survive_bits_in && base_forced_survive_bits_in_valid) {
+7799:    base_forced_survive_bits = *base_forced_survive_bits_in;
+7800:    base_forced_survive_bits_valid = true;
+7802:    (void)ensure_forced_bitset_capacity(ctx, base_forced_survive_bits,
+7803:                                        base_forced_survive_bits_valid);
+7808:    uuber::BitsetState forced_complete_bits = base_forced_complete_bits;
+7809:    uuber::BitsetState forced_survive_bits = base_forced_survive_bits;
+7810:    bool forced_complete_bits_valid = base_forced_complete_bits_valid;
+7811:    bool forced_survive_bits_valid = base_forced_survive_bits_valid;
+7820:            forced_complete_bits_valid ? &forced_complete_bits : nullptr,
+7821:            forced_complete_bits_valid,
+7822:            forced_survive_bits_valid ? &forced_survive_bits : nullptr,
+7823:            forced_survive_bits_valid, kernel_runtime);
+7835:            forced_complete_bits_valid ? &forced_complete_bits : nullptr,
+7836:            forced_complete_bits_valid,
+7837:            forced_survive_bits_valid ? &forced_survive_bits : nullptr,
+7838:            forced_survive_bits_valid, kernel_runtime);
+7846:        GuardEvalInput guard_input = make_guard_input(
+7850:            forced_complete_bits_valid ? &forced_complete_bits : nullptr,
+7851:            forced_survive_bits_valid ? &forced_survive_bits : nullptr,
+7863:            step, forced_complete_bits, forced_complete_bits_valid);
+7868:          ranked_add_source_id(ctx, id, bit_idx, forced_complete_bits,
+7869:                               forced_complete_bits_valid);
+7873:            step, forced_survive_bits, forced_survive_bits_valid);
+7878:          ranked_add_source_id(ctx, id, bit_idx, forced_survive_bits,
+7879:                               forced_survive_bits_valid);
+7900:          const bool is_forced = forced_complete_bits_valid &&
+7901:                                 forced_complete_bits.test(bit_to_check);
+7913:        ranked_add_source_id(ctx, witness, witness_bit, forced_survive_bits,
+7914:                             forced_survive_bits_valid);
+7924:    emit(weight, std::move(forced_complete_bits), forced_complete_bits_valid,
+7925:         std::move(forced_survive_bits), forced_survive_bits_valid);
+7999:  (void)ensure_forced_bitset_capacity(ctx, init_state.forced_complete_bits,
+8000:                                      init_state.forced_complete_bits_valid);
+8001:  (void)ensure_forced_bitset_capacity(ctx, init_state.forced_survive_bits,
+8002:                                      init_state.forced_survive_bits_valid);
+8074:          candidate.forced_complete_bits, candidate.forced_complete_bits_valid,
+8075:          candidate.forced_survive_bits, candidate.forced_survive_bits_valid,
+8105:      uuber::BitsetState forced_complete_bits = state.forced_complete_bits;
+8106:      uuber::BitsetState forced_survive_bits = state.forced_survive_bits;
+8107:      bool forced_complete_bits_valid = state.forced_complete_bits_valid;
+8108:      bool forced_survive_bits_valid = state.forced_survive_bits_valid;
+8114:            forced_complete_bits_valid ? &forced_complete_bits : nullptr,
+8115:            forced_complete_bits_valid,
+8116:            forced_survive_bits_valid ? &forced_survive_bits : nullptr,
+8117:            forced_survive_bits_valid, component_idx, lower_t,
+8129:          forced_complete_bits_valid ? &forced_complete_bits : nullptr,
+8130:          forced_complete_bits_valid,
+8131:          forced_survive_bits_valid ? &forced_survive_bits : nullptr,
+8132:          forced_survive_bits_valid,
+8174:            next_state.forced_complete_bits = std::move(next_complete_bits);
+8175:            next_state.forced_survive_bits = std::move(next_survive_bits);
+8176:            next_state.forced_complete_bits_valid = next_complete_bits_valid;
+8177:            next_state.forced_survive_bits_valid = next_survive_bits_valid;
+8184:                        ctx, src_id, next_state.forced_survive_bits,
+8185:                        next_state.forced_survive_bits_valid)) {
+8215:                        ctx, src_id, next_state.forced_complete_bits,
+8216:                        next_state.forced_complete_bits_valid)) {

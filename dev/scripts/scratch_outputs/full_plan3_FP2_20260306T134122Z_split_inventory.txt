@@ -1,0 +1,23 @@
+batch=FP2
+subbatch=FP2.0
+timestamp_utc=20260306T134122Z
+commit_sha=54437eb
+scope=step2_unified_kernel_entry
+
+[active split points inventory]
+8370:    bool ranked_mode, int outcome_label_id, double rt,
+8376:  if (ranked_mode) {
+8490:  if (eval_input.nonresponse_mode) {
+8720:  if (spec.sequence_length == 1) {
+8743:    if (spec.guess_shortcut) {
+8786:  if (spec.metric == KernelContributionMetric::SequenceDensity) {
+8836:    if (eval_input.nonresponse_mode) {
+9033:  const bool ranked_mode = rank_width > 1;
+9100:      if (ranked_mode) {
+9185:    if (ranked_mode) {
+9343:  if (ranked_mode) {
+9419:        !ranked_mode ||
+9423:        (ranked_mode && ranked_valid &&
+9428:        (ranked_mode && ranked_valid &&
+9434:            ranked_mode, outcome_label_id, rt, ranked_ids_ptr, ranked_times_ptr,
+9503:    if (eval_input.nonresponse_mode) {

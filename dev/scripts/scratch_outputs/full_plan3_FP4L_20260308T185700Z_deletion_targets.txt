@@ -1,0 +1,5 @@
+FP4L.2/FP4L.3 deletion targets after this cut
+1. Delete or hard-isolate remaining Step 4 hot-path use of wrapper-style node eval once lower-layer state carrier is used everywhere it should be.
+2. Converge planner payloads so observed and ranked emit the same lower-layer step descriptors where semantics match.
+3. Do not delete ranked sequence-state helpers; they are ranked-only semantics, not duplicate lower-layer engines.
+4. Do not claim Step 4 closure until duplicate reachable lower-layer helper paths are either deleted or proven cold/out-of-scope.

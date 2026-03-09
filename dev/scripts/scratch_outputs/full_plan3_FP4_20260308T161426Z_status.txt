@@ -1,0 +1,11 @@
+batch=FP4
+subbatch=FP4.1
+timestamp_utc=20260308T161426Z
+commit_sha=54437eb
+install	0
+step3_structure	0
+step4_structure	0
+step5_structure	0
+step6_structure	0
+golden	0
+bench	0

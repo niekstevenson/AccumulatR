@@ -1,0 +1,9 @@
+batch=FP4L
+subbatch=FP4L.1
+timestamp_utc=20260308T164541Z
+commit_sha=54437eb
+mode=transient_failed_fp4.1_profile_only
+target_workloads=depth3_guard_competitor,example_2_stop_mixture
+negative_evidence_refs=
+  dev/scripts/scratch_outputs/full_plan3_FP4_20260308T160703Z_summary.txt
+  dev/scripts/scratch_outputs/full_plan3_FP4_20260308T161426Z_summary.txt

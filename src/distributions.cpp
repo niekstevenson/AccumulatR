@@ -1089,6 +1089,70 @@ forced_bits_intersects_scope(const ForcedScopeFilter *scope_filter,
   return false;
 }
 
+struct ForcedStateView {
+  const ForcedScopeFilter *scope_filter{nullptr};
+  const uuber::BitsetState *forced_complete_bits{nullptr};
+  const bool *forced_complete_bits_valid{nullptr};
+  const uuber::BitsetState *forced_survive_bits{nullptr};
+  const bool *forced_survive_bits_valid{nullptr};
+  const std::unordered_map<int, int> *label_id_to_bit_idx{nullptr};
+};
+
+inline ForcedStateView make_forced_state_view(
+    const ForcedScopeFilter *scope_filter,
+    const uuber::BitsetState *forced_complete_bits,
+    const bool *forced_complete_bits_valid,
+    const uuber::BitsetState *forced_survive_bits,
+    const bool *forced_survive_bits_valid,
+    const std::unordered_map<int, int> *label_id_to_bit_idx) {
+  ForcedStateView view;
+  view.scope_filter = scope_filter;
+  view.forced_complete_bits = forced_complete_bits;
+  view.forced_complete_bits_valid = forced_complete_bits_valid;
+  view.forced_survive_bits = forced_survive_bits;
+  view.forced_survive_bits_valid = forced_survive_bits_valid;
+  view.label_id_to_bit_idx = label_id_to_bit_idx;
+  return view;
+}
+
+inline bool forced_state_complete_valid(const ForcedStateView &view) {
+  return view.forced_complete_bits != nullptr &&
+         view.forced_complete_bits_valid != nullptr &&
+         *view.forced_complete_bits_valid;
+}
+
+inline bool forced_state_survive_valid(const ForcedStateView &view) {
+  return view.forced_survive_bits != nullptr &&
+         view.forced_survive_bits_valid != nullptr &&
+         *view.forced_survive_bits_valid;
+}
+
+inline bool forced_state_contains_complete(const ForcedStateView &view, int id) {
+  return forced_bits_contains_scoped(id, view.scope_filter,
+                                     view.forced_complete_bits,
+                                     forced_state_complete_valid(view),
+                                     view.label_id_to_bit_idx);
+}
+
+inline bool forced_state_contains_survive(const ForcedStateView &view, int id) {
+  return forced_bits_contains_scoped(id, view.scope_filter,
+                                     view.forced_survive_bits,
+                                     forced_state_survive_valid(view),
+                                     view.label_id_to_bit_idx);
+}
+
+inline bool forced_state_intersects_scope_complete(const ForcedStateView &view) {
+  return forced_bits_intersects_scope(view.scope_filter, view.forced_complete_bits,
+                                      forced_state_complete_valid(view),
+                                      view.label_id_to_bit_idx);
+}
+
+inline bool forced_state_intersects_scope_survive(const ForcedStateView &view) {
+  return forced_bits_intersects_scope(view.scope_filter, view.forced_survive_bits,
+                                      forced_state_survive_valid(view),
+                                      view.label_id_to_bit_idx);
+}
+
 struct TrialParamSet;
 
 inline int resolve_observed_label_id(const uuber::NativeContext &ctx,
@@ -2319,7 +2383,44 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
                    const uuber::BitsetState *forced_survive_bits = nullptr,
                    const std::unordered_map<int, int>
                        *forced_label_id_to_bit_idx = nullptr,
-                   const uuber::TrialParamsSoA *trial_params_soa = nullptr) {
+                   const uuber::TrialParamsSoA *trial_params_soa = nullptr,
+                   const ForcedStateView *forced_state_view = nullptr) {
+  bool forced_complete_bits_valid_fallback = (forced_complete_bits != nullptr);
+  bool forced_survive_bits_valid_fallback = (forced_survive_bits != nullptr);
+  const ForcedScopeFilter *resolved_scope_filter = forced_scope_filter;
+  const uuber::BitsetState *resolved_complete_bits = forced_complete_bits;
+  const uuber::BitsetState *resolved_survive_bits = forced_survive_bits;
+  const std::unordered_map<int, int> *resolved_label_id_to_bit_idx =
+      forced_label_id_to_bit_idx;
+  const bool *resolved_complete_bits_valid =
+      &forced_complete_bits_valid_fallback;
+  const bool *resolved_survive_bits_valid = &forced_survive_bits_valid_fallback;
+  if (forced_state_view) {
+    if (forced_state_view->scope_filter) {
+      resolved_scope_filter = forced_state_view->scope_filter;
+    }
+    if (forced_state_view->forced_complete_bits) {
+      resolved_complete_bits = forced_state_view->forced_complete_bits;
+    }
+    if (forced_state_view->forced_survive_bits) {
+      resolved_survive_bits = forced_state_view->forced_survive_bits;
+    }
+    if (forced_state_view->label_id_to_bit_idx) {
+      resolved_label_id_to_bit_idx = forced_state_view->label_id_to_bit_idx;
+    }
+    if (forced_state_view->forced_complete_bits_valid) {
+      resolved_complete_bits_valid =
+          forced_state_view->forced_complete_bits_valid;
+    }
+    if (forced_state_view->forced_survive_bits_valid) {
+      resolved_survive_bits_valid = forced_state_view->forced_survive_bits_valid;
+    }
+  }
+  const ForcedStateView forced_state =
+      make_forced_state_view(resolved_scope_filter, resolved_complete_bits,
+                             resolved_complete_bits_valid,
+                             resolved_survive_bits, resolved_survive_bits_valid,
+                             resolved_label_id_to_bit_idx);
   const bool is_special_deadline =
       (node_flags & uuber::IR_NODE_FLAG_SPECIAL_DEADLINE) != 0u;
   const bool is_special_guess =
@@ -2364,16 +2465,10 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
   }
   int label_idx = label_ref.label_id;
   if (label_idx >= 0 && label_idx != NA_INTEGER) {
-    if (forced_bits_contains_scoped(label_idx, forced_scope_filter,
-                                    forced_complete_bits,
-                                    forced_complete_bits != nullptr,
-                                    forced_label_id_to_bit_idx)) {
+    if (forced_state_contains_complete(forced_state, label_idx)) {
       return make_node_result(need, 0.0, 0.0, 1.0);
     }
-    if (forced_bits_contains_scoped(label_idx, forced_scope_filter,
-                                    forced_survive_bits,
-                                    forced_survive_bits != nullptr,
-                                    forced_label_id_to_bit_idx)) {
+    if (forced_state_contains_survive(forced_state, label_idx)) {
       return make_node_result(need, 0.0, 1.0, 0.0);
     }
   }
@@ -2437,10 +2532,7 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
       // If source is forced to survive at time t, dependent accumulator cannot
       // have completed by t.
       if (source_label_id >= 0 && source_label_id != NA_INTEGER &&
-          forced_bits_contains_scoped(source_label_id, forced_scope_filter,
-                                      forced_survive_bits,
-                                      forced_survive_bits != nullptr,
-                                      forced_label_id_to_bit_idx)) {
+          forced_state_contains_survive(forced_state, source_label_id)) {
         return make_node_result(need, 0.0, 1.0, 0.0);
       }
 
@@ -2451,10 +2543,7 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
       double exact_time = std::numeric_limits<double>::quiet_NaN();
 
       if (source_label_id >= 0 && source_label_id != NA_INTEGER) {
-        if (forced_bits_contains_scoped(source_label_id, forced_scope_filter,
-                                        forced_complete_bits,
-                                        forced_complete_bits != nullptr,
-                                        forced_label_id_to_bit_idx)) {
+        if (forced_state_contains_complete(forced_state, source_label_id)) {
           bound_upper = std::min(bound_upper, t);
           has_conditioning_bounds = true;
         }
@@ -2504,9 +2593,8 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
           return eval_event_ref_idx(
               ctx, source_ref, 0u, u, component_idx, source_need, trial_params,
               trial_type_key, false, -1,
-              exact_source_times, source_time_bounds, forced_scope_filter,
-              forced_complete_bits, forced_survive_bits,
-              forced_label_id_to_bit_idx, trial_params_soa);
+              exact_source_times, source_time_bounds, nullptr, nullptr,
+              nullptr, nullptr, trial_params_soa, &forced_state);
         };
         auto source_cdf_at = [&](double u) -> double {
           if (u <= 0.0) {
@@ -2706,9 +2794,8 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
       NodeEvalResult child = eval_event_ref_idx(
           ctx, member_ref, 0u, t, component_idx, child_need, trial_params,
           std::string(), false, -1,
-          exact_source_times, source_time_bounds, forced_scope_filter,
-          forced_complete_bits, forced_survive_bits,
-          forced_label_id_to_bit_idx, trial_params_soa);
+          exact_source_times, source_time_bounds, nullptr, nullptr, nullptr,
+          nullptr, trial_params_soa, &forced_state);
       if (need_density) {
         scratch.density[i] = child.density;
       }
@@ -2890,18 +2977,17 @@ struct NodeEvalState {
                 bool forced_complete_bits_ptr_valid = false,
                 const uuber::BitsetState *forced_survive_bits_ptr = nullptr,
                 bool forced_survive_bits_ptr_valid = false,
-                uuber::KernelRuntimeState *external_kernel_runtime = nullptr)
+                uuber::KernelRuntimeState *external_kernel_runtime = nullptr,
+                const ForcedStateView *forced_state_view = nullptr)
       : ctx(ctx_), t(time), trial_params(params_ptr),
         trial_type_key(component_cache_key(ctx_, component_idx_val, trial_key)),
         include_na_donors(include_na), component_idx(component_idx_val),
         outcome_idx(outcome_idx_val),
         exact_source_times(exact_source_times_ptr),
         source_time_bounds(source_time_bounds_ptr),
-        forced_scope_filter(forced_scope_filter_ptr),
+        forced_scope_filter(nullptr),
         trial_params_soa(nullptr),
-        forced_label_id_to_bit_idx(ctx.ir.label_id_to_bit_idx.empty()
-                                       ? nullptr
-                                       : &ctx.ir.label_id_to_bit_idx) {
+        forced_label_id_to_bit_idx(nullptr) {
     if (trial_params && trial_params->soa_cache_valid &&
         trial_params->soa_cache.valid) {
       trial_params_soa = &trial_params->soa_cache;
@@ -2914,20 +3000,57 @@ struct NodeEvalState {
     } else if (ctx.base_params_soa.valid) {
       trial_params_soa = &ctx.base_params_soa;
     }
-    if (forced_complete_bits_ptr && forced_complete_bits_ptr_valid) {
-      forced_complete_bits = *forced_complete_bits_ptr;
+    bool forced_complete_valid_resolved = forced_complete_bits_ptr_valid;
+    bool forced_survive_valid_resolved = forced_survive_bits_ptr_valid;
+    const uuber::BitsetState *forced_complete_bits_resolved =
+        forced_complete_bits_ptr;
+    const uuber::BitsetState *forced_survive_bits_resolved =
+        forced_survive_bits_ptr;
+    forced_scope_filter = forced_scope_filter_ptr;
+    forced_label_id_to_bit_idx = ctx.ir.label_id_to_bit_idx.empty()
+                                     ? nullptr
+                                     : &ctx.ir.label_id_to_bit_idx;
+    if (forced_state_view) {
+      if (forced_state_view->scope_filter) {
+        forced_scope_filter = forced_state_view->scope_filter;
+      }
+      if (forced_state_view->label_id_to_bit_idx) {
+        forced_label_id_to_bit_idx = forced_state_view->label_id_to_bit_idx;
+      }
+      if (forced_state_view->forced_complete_bits) {
+        forced_complete_bits_resolved = forced_state_view->forced_complete_bits;
+      }
+      if (forced_state_view->forced_survive_bits) {
+        forced_survive_bits_resolved = forced_state_view->forced_survive_bits;
+      }
+      if (forced_state_view->forced_complete_bits_valid) {
+        forced_complete_valid_resolved =
+            *forced_state_view->forced_complete_bits_valid;
+      }
+      if (forced_state_view->forced_survive_bits_valid) {
+        forced_survive_valid_resolved =
+            *forced_state_view->forced_survive_bits_valid;
+      }
+    }
+
+    if (forced_complete_bits_resolved && forced_complete_valid_resolved) {
+      forced_complete_bits = *forced_complete_bits_resolved;
       forced_complete_bits_valid = true;
     } else {
       (void)ensure_forced_bitset_capacity(ctx, forced_complete_bits,
                                           forced_complete_bits_valid);
     }
-    if (forced_survive_bits_ptr && forced_survive_bits_ptr_valid) {
-      forced_survive_bits = *forced_survive_bits_ptr;
+    if (forced_survive_bits_resolved && forced_survive_valid_resolved) {
+      forced_survive_bits = *forced_survive_bits_resolved;
       forced_survive_bits_valid = true;
     } else {
       (void)ensure_forced_bitset_capacity(ctx, forced_survive_bits,
                                           forced_survive_bits_valid);
     }
+    forced_state = make_forced_state_view(
+        forced_scope_filter, &forced_complete_bits, &forced_complete_bits_valid,
+        &forced_survive_bits, &forced_survive_bits_valid,
+        forced_label_id_to_bit_idx);
     if (ctx.kernel_program.valid) {
       if (external_kernel_runtime) {
         kernel_runtime_ptr = external_kernel_runtime;
@@ -2956,6 +3079,7 @@ struct NodeEvalState {
   const ForcedScopeFilter *forced_scope_filter;
   const uuber::TrialParamsSoA *trial_params_soa;
   const std::unordered_map<int, int> *forced_label_id_to_bit_idx;
+  ForcedStateView forced_state{};
   uuber::BitsetState forced_complete_bits;
   uuber::BitsetState forced_survive_bits;
   bool forced_complete_bits_valid{false};
@@ -3004,10 +3128,15 @@ canonicalize_integration_settings(const IntegrationSettings &settings) {
 struct GuardEvalInput {
   const uuber::NativeContext &ctx;
   int node_idx{-1};
+  int guard_transition_idx{-1};
+  const uuber::KernelGuardTransition *guard_transition{nullptr};
   int component_idx{-1};
   const std::string *trial_type_key{nullptr};
+  ForcedStateView forced_state{};
   const uuber::BitsetState *forced_complete_bits{nullptr};
+  bool forced_complete_bits_valid{false};
   const uuber::BitsetState *forced_survive_bits{nullptr};
+  bool forced_survive_bits_valid{false};
   const std::unordered_map<int, int> *forced_label_id_to_bit_idx{nullptr};
   const ForcedScopeFilter *forced_scope_filter{nullptr};
   ForcedScopeFilter local_scope_filter{};
@@ -3017,6 +3146,15 @@ struct GuardEvalInput {
   const ExactSourceTimeMap *exact_source_times{nullptr};
   const SourceTimeBoundsMap *source_time_bounds{nullptr};
 };
+
+NodeEvalResult eval_node_with_forced_state_view(
+    const uuber::NativeContext &ctx, int node_idx, double time,
+    int component_idx, EvalNeed need, const TrialParamSet *trial_params,
+    const std::string &trial_key,
+    const ExactSourceTimeMap *exact_source_times,
+    const SourceTimeBoundsMap *source_time_bounds,
+    uuber::KernelRuntimeState *kernel_runtime,
+    const ForcedStateView &forced_state);
 
 NodeEvalResult eval_node_with_forced_dense_bits(
     const uuber::NativeContext &ctx, int node_idx, double time,
@@ -3042,7 +3180,21 @@ GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
                                 const uuber::BitsetState *forced_complete_bits = nullptr,
                                 const uuber::BitsetState *forced_survive_bits = nullptr,
                                 const std::unordered_map<int, int>
-                                    *forced_label_id_to_bit_idx = nullptr);
+                                    *forced_label_id_to_bit_idx = nullptr,
+                                const ForcedStateView *forced_state_view = nullptr);
+
+inline GuardEvalInput make_guard_input_forced_state(
+    const uuber::NativeContext &ctx, int node_idx, int component_idx,
+    const std::string *trial_type_key, const TrialParamSet *trial_params,
+    const uuber::TrialParamsSoA *trial_params_soa,
+    const ExactSourceTimeMap *exact_source_times,
+    const SourceTimeBoundsMap *source_time_bounds,
+    const ForcedStateView &forced_state_view) {
+  return make_guard_input(ctx, node_idx, component_idx, trial_type_key,
+                          trial_params, trial_params_soa, exact_source_times,
+                          source_time_bounds, nullptr, nullptr, nullptr,
+                          nullptr, &forced_state_view);
+}
 
 inline const std::string &
 guard_trial_type_key(const GuardEvalInput &input) {
@@ -4136,11 +4288,15 @@ double evaluate_outcome_coupling_unified(
     if (provider.kind == GenericCouplingProviderKind::NodeRef &&
         generic.competitor_node_ids.empty()) {
       record_unified_outcome_generic_noderef_batch_call();
-      NodeEvalResult ev = eval_node_with_forced_dense_bits(
-          ctx, generic.node_id, upper, component_idx, EvalNeed::kCDF, trial_params,
-          trial_type_key, nullptr, nullptr, nullptr, forced_complete_bits,
-          forced_complete_bits_valid, forced_survive_bits,
-          forced_survive_bits_valid, nullptr);
+      const ForcedStateView forced_state = make_forced_state_view(
+          nullptr, forced_complete_bits, &forced_complete_bits_valid,
+          forced_survive_bits, &forced_survive_bits_valid,
+          ctx.ir.label_id_to_bit_idx.empty() ? nullptr
+                                             : &ctx.ir.label_id_to_bit_idx);
+      NodeEvalResult ev = eval_node_with_forced_state_view(
+          ctx, generic.node_id, upper, component_idx, EvalNeed::kCDF,
+          trial_params, trial_type_key, nullptr, nullptr, nullptr,
+          forced_state);
       return clamp_probability(ev.cdf);
     }
     if (provider.kind == GenericCouplingProviderKind::EventRef) {
@@ -4413,6 +4569,32 @@ double evaluate_coupling_mass_pair(
   return clamp_probability(total);
 }
 
+NodeEvalResult eval_node_with_forced_state_view(
+    const uuber::NativeContext &ctx, int node_idx, double time,
+    int component_idx, EvalNeed need, const TrialParamSet *trial_params,
+    const std::string &trial_key,
+    const ExactSourceTimeMap *exact_source_times,
+    const SourceTimeBoundsMap *source_time_bounds,
+    uuber::KernelRuntimeState *kernel_runtime,
+    const ForcedStateView &forced_state) {
+  const bool kernel_runtime_usable =
+      kernel_runtime &&
+      (!forced_state_complete_valid(forced_state) ||
+       !forced_state.forced_complete_bits ||
+       !forced_state.forced_complete_bits->any()) &&
+      (!forced_state_survive_valid(forced_state) ||
+       !forced_state.forced_survive_bits ||
+       !forced_state.forced_survive_bits->any()) &&
+      exact_source_times == nullptr && source_time_bounds == nullptr;
+  NodeEvalState local(ctx, time, component_idx, trial_params, trial_key, false,
+                      -1,
+                      exact_source_times, source_time_bounds, nullptr, nullptr,
+                      false, nullptr, false,
+                      kernel_runtime_usable ? kernel_runtime : nullptr,
+                      &forced_state);
+  return eval_node_recursive_dense(node_idx, local, need);
+}
+
 NodeEvalResult eval_node_with_forced_dense_bits(
     const uuber::NativeContext &ctx, int node_idx, double time,
     int component_idx, EvalNeed need, const TrialParamSet *trial_params,
@@ -4425,21 +4607,15 @@ NodeEvalResult eval_node_with_forced_dense_bits(
     const uuber::BitsetState *forced_survive_bits,
     bool forced_survive_bits_valid,
     uuber::KernelRuntimeState *kernel_runtime) {
-  const bool kernel_runtime_usable =
-      kernel_runtime &&
-      (!forced_complete_bits_valid ||
-       !forced_complete_bits || !forced_complete_bits->any()) &&
-      (!forced_survive_bits_valid || !forced_survive_bits ||
-       !forced_survive_bits->any()) &&
-      exact_source_times == nullptr && source_time_bounds == nullptr;
-  NodeEvalState local(ctx, time, component_idx, trial_params, trial_key, false,
-                      -1,
-                      exact_source_times, source_time_bounds,
-                      forced_scope_filter, forced_complete_bits,
-                      forced_complete_bits_valid, forced_survive_bits,
-                      forced_survive_bits_valid,
-                      kernel_runtime_usable ? kernel_runtime : nullptr);
-  return eval_node_recursive_dense(node_idx, local, need);
+  const bool forced_complete_bits_valid_local = forced_complete_bits_valid;
+  const bool forced_survive_bits_valid_local = forced_survive_bits_valid;
+  const ForcedStateView forced_state = make_forced_state_view(
+      forced_scope_filter, forced_complete_bits, &forced_complete_bits_valid_local,
+      forced_survive_bits, &forced_survive_bits_valid_local,
+      ctx.ir.label_id_to_bit_idx.empty() ? nullptr : &ctx.ir.label_id_to_bit_idx);
+  return eval_node_with_forced_state_view(
+      ctx, node_idx, time, component_idx, need, trial_params, trial_key,
+      exact_source_times, source_time_bounds, kernel_runtime, forced_state);
 }
 
 GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
@@ -4454,18 +4630,59 @@ GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
                                 const uuber::BitsetState *forced_complete_bits,
                                 const uuber::BitsetState *forced_survive_bits,
                                 const std::unordered_map<int, int>
-                                    *forced_label_id_to_bit_idx) {
+                                    *forced_label_id_to_bit_idx,
+                                const ForcedStateView *forced_state_view) {
   const uuber::IrNode &node = ir_node_required(ctx, node_idx);
   static const std::string kEmptyTrialTypeKey;
   const std::string *resolved_trial_type_key =
       trial_type_key ? trial_type_key : &kEmptyTrialTypeKey;
+  bool forced_complete_bits_valid_fallback = (forced_complete_bits != nullptr);
+  bool forced_survive_bits_valid_fallback = (forced_survive_bits != nullptr);
+  const ForcedScopeFilter *resolved_scope_filter = forced_scope_filter;
+  const uuber::BitsetState *resolved_forced_complete_bits =
+      forced_complete_bits;
+  const uuber::BitsetState *resolved_forced_survive_bits =
+      forced_survive_bits;
+  const std::unordered_map<int, int> *resolved_label_id_to_bit_idx =
+      forced_label_id_to_bit_idx;
+  const bool *resolved_forced_complete_bits_valid =
+      &forced_complete_bits_valid_fallback;
+  const bool *resolved_forced_survive_bits_valid =
+      &forced_survive_bits_valid_fallback;
+  if (forced_state_view) {
+    if (forced_state_view->scope_filter) {
+      resolved_scope_filter = forced_state_view->scope_filter;
+    }
+    if (forced_state_view->forced_complete_bits) {
+      resolved_forced_complete_bits = forced_state_view->forced_complete_bits;
+    }
+    if (forced_state_view->forced_survive_bits) {
+      resolved_forced_survive_bits = forced_state_view->forced_survive_bits;
+    }
+    if (forced_state_view->label_id_to_bit_idx) {
+      resolved_label_id_to_bit_idx = forced_state_view->label_id_to_bit_idx;
+    }
+    if (forced_state_view->forced_complete_bits_valid) {
+      resolved_forced_complete_bits_valid =
+          forced_state_view->forced_complete_bits_valid;
+    }
+    if (forced_state_view->forced_survive_bits_valid) {
+      resolved_forced_survive_bits_valid =
+          forced_state_view->forced_survive_bits_valid;
+    }
+  }
   GuardEvalInput input{ctx,
                        node_idx,
+                       -1,
+                       nullptr,
                        component_idx,
                        resolved_trial_type_key,
-                       forced_complete_bits,
-                       forced_survive_bits,
-                       forced_label_id_to_bit_idx,
+                       {},
+                       resolved_forced_complete_bits,
+                       false,
+                       resolved_forced_survive_bits,
+                       false,
+                       resolved_label_id_to_bit_idx,
                        nullptr,
                        {},
                        false,
@@ -4488,19 +4705,50 @@ GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
         &ctx.ir.node_source_masks[static_cast<std::size_t>(
             node.source_mask_begin)];
     input.local_scope_filter.source_mask_count = node.source_mask_count;
-    input.local_scope_filter.label_id_to_bit_idx = &ctx.ir.label_id_to_bit_idx;
+    input.local_scope_filter.label_id_to_bit_idx =
+        resolved_label_id_to_bit_idx;
   }
-  input.local_scope_filter.parent = forced_scope_filter;
+  input.local_scope_filter.parent = resolved_scope_filter;
   input.forced_scope_filter = &input.local_scope_filter;
+  input.forced_complete_bits_valid =
+      resolved_forced_complete_bits_valid &&
+      *resolved_forced_complete_bits_valid;
+  input.forced_survive_bits_valid =
+      resolved_forced_survive_bits_valid &&
+      *resolved_forced_survive_bits_valid;
+  input.forced_state = make_forced_state_view(
+      input.forced_scope_filter, input.forced_complete_bits,
+      &input.forced_complete_bits_valid, input.forced_survive_bits,
+      &input.forced_survive_bits_valid, input.forced_label_id_to_bit_idx);
   input.has_scoped_forced =
-      forced_bits_intersects_scope(input.forced_scope_filter,
-                                   forced_complete_bits,
-                                   forced_complete_bits != nullptr,
-                                   forced_label_id_to_bit_idx) ||
-      forced_bits_intersects_scope(input.forced_scope_filter,
-                                   forced_survive_bits,
-                                   forced_survive_bits != nullptr,
-                                   forced_label_id_to_bit_idx);
+      forced_state_intersects_scope_complete(input.forced_state) ||
+      forced_state_intersects_scope_survive(input.forced_state);
+  if (node.op == uuber::IrNodeOp::Guard) {
+    if (!ctx.kernel_state_graph.valid ||
+        node_idx < 0 ||
+        node_idx >= static_cast<int>(
+                        ctx.kernel_state_graph.node_guard_transition_idx.size())) {
+      Rcpp::stop("IR guard transition metadata missing for guard node_idx=%d",
+                 node_idx);
+    }
+    const int tr_idx = ctx.kernel_state_graph.node_guard_transition_idx
+        [static_cast<std::size_t>(node_idx)];
+    if (tr_idx < 0 ||
+        tr_idx >=
+            static_cast<int>(ctx.kernel_state_graph.guard_transitions.size())) {
+      Rcpp::stop("IR guard transition mapping missing for guard node_idx=%d",
+                 node_idx);
+    }
+    const uuber::KernelGuardTransition &tr =
+        ctx.kernel_state_graph.guard_transitions[static_cast<std::size_t>(
+            tr_idx)];
+    if (tr.node_idx != node_idx) {
+      Rcpp::stop("IR guard transition node mismatch for guard node_idx=%d",
+                 node_idx);
+    }
+    input.guard_transition_idx = tr_idx;
+    input.guard_transition = &tr;
+  }
   return input;
 }
 
@@ -4526,10 +4774,8 @@ uuber::KernelEventEvalFn make_kernel_event_eval(NodeEvalState &state) {
         state.ctx, ref, node_flags, state.t, state.component_idx, kEvalAll,
         state.trial_params, state.trial_type_key, state.include_na_donors,
         state.outcome_idx, state.exact_source_times, state.source_time_bounds,
-        state.forced_scope_filter,
-        state.forced_complete_bits_valid ? &state.forced_complete_bits : nullptr,
-        state.forced_survive_bits_valid ? &state.forced_survive_bits : nullptr,
-        state.forced_label_id_to_bit_idx, state.trial_params_soa);
+        nullptr, nullptr, nullptr, nullptr, state.trial_params_soa,
+        &state.forced_state);
     out.density = event_eval.density;
     out.survival = event_eval.survival;
     out.cdf = event_eval.cdf;
@@ -4543,13 +4789,10 @@ uuber::KernelGuardEvalFn make_kernel_guard_eval(NodeEvalState &state) {
              const uuber::KernelNodeValues &blocker_value,
              const uuber::KernelEvalNeed &kneed) -> uuber::KernelNodeValues {
     uuber::KernelNodeValues out{};
-    GuardEvalInput guard_input = make_guard_input(
+    GuardEvalInput guard_input = make_guard_input_forced_state(
         state.ctx, op.node_idx, state.component_idx, &state.trial_type_key,
         state.trial_params, state.trial_params_soa, state.exact_source_times,
-        state.source_time_bounds, state.forced_scope_filter,
-        state.forced_complete_bits_valid ? &state.forced_complete_bits : nullptr,
-        state.forced_survive_bits_valid ? &state.forced_survive_bits : nullptr,
-        state.forced_label_id_to_bit_idx);
+        state.source_time_bounds, state.forced_state);
     IntegrationSettings settings;
     if (kneed.density) {
       const double ref_density = safe_density(reference_value.density);
@@ -4611,6 +4854,51 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState &state,
   return eval_node_recursive_dense(node_idx, state, need);
 }
 
+inline const uuber::KernelGuardTransition &
+guard_transition_required(const GuardEvalInput &input,
+                          bool require_blocker_idx = false) {
+  if (input.guard_transition != nullptr) {
+    if (input.guard_transition->node_idx != input.node_idx) {
+      Rcpp::stop("IR guard transition node mismatch for guard node_idx=%d",
+                 input.node_idx);
+    }
+    if (require_blocker_idx && input.guard_transition->blocker_node_idx < 0) {
+      Rcpp::stop(
+          "IR guard transition blocker metadata invalid for guard node_idx=%d",
+          input.node_idx);
+    }
+    return *input.guard_transition;
+  }
+  if (!input.ctx.kernel_state_graph.valid ||
+      input.node_idx < 0 ||
+      input.node_idx >= static_cast<int>(
+                            input.ctx.kernel_state_graph.node_guard_transition_idx
+                                .size())) {
+    Rcpp::stop("IR guard transition metadata missing for guard node_idx=%d",
+               input.node_idx);
+  }
+  const int tr_idx = input.ctx.kernel_state_graph.node_guard_transition_idx
+      [static_cast<std::size_t>(input.node_idx)];
+  if (tr_idx < 0 ||
+      tr_idx >=
+          static_cast<int>(input.ctx.kernel_state_graph.guard_transitions.size())) {
+    Rcpp::stop("IR guard transition mapping missing for guard node_idx=%d",
+               input.node_idx);
+  }
+  const uuber::KernelGuardTransition &tr =
+      input.ctx.kernel_state_graph.guard_transitions[static_cast<std::size_t>(
+          tr_idx)];
+  if (tr.node_idx != input.node_idx) {
+    Rcpp::stop("IR guard transition node mismatch for guard node_idx=%d",
+               input.node_idx);
+  }
+  if (require_blocker_idx && tr.blocker_node_idx < 0) {
+    Rcpp::stop("IR guard transition blocker metadata invalid for guard node_idx=%d",
+               input.node_idx);
+  }
+  return tr;
+}
+
 double guard_effective_survival_internal(const GuardEvalInput &input, double t,
                                          const IntegrationSettings &settings) {
   if (!std::isfinite(t)) {
@@ -4620,45 +4908,14 @@ double guard_effective_survival_internal(const GuardEvalInput &input, double t,
     return 1.0;
   }
   (void)settings;
-  auto guard_transition_required =
-      [&](int node_idx) -> const uuber::KernelGuardTransition & {
-    if (!input.ctx.kernel_state_graph.valid ||
-        node_idx < 0 ||
-        node_idx >=
-            static_cast<int>(
-                input.ctx.kernel_state_graph.node_guard_transition_idx.size())) {
-      Rcpp::stop("IR guard transition metadata missing for guard node_idx=%d",
-                 node_idx);
-    }
-    const int tr_idx =
-        input.ctx.kernel_state_graph.node_guard_transition_idx[static_cast<std::size_t>(
-            node_idx)];
-    if (tr_idx < 0 ||
-        tr_idx >=
-            static_cast<int>(input.ctx.kernel_state_graph.guard_transitions.size())) {
-      Rcpp::stop("IR guard transition mapping missing for guard node_idx=%d",
-                 node_idx);
-    }
-    const uuber::KernelGuardTransition &tr =
-        input.ctx.kernel_state_graph.guard_transitions[static_cast<std::size_t>(
-            tr_idx)];
-    if (tr.node_idx != node_idx || tr.blocker_node_idx < 0) {
-      Rcpp::stop(
-          "IR guard transition blocker metadata invalid for guard node_idx=%d",
-          node_idx);
-    }
-    return tr;
-  };
   const uuber::KernelGuardTransition &tr =
-      guard_transition_required(input.node_idx);
+      guard_transition_required(input, true);
 
   NodeEvalState local(input.ctx, t, input.component_idx, input.trial_params,
                       guard_trial_type_key(input), false, -1,
                       input.exact_source_times, input.source_time_bounds,
-                      input.forced_scope_filter, input.forced_complete_bits,
-                      input.forced_complete_bits != nullptr,
-                      input.forced_survive_bits,
-                      input.forced_survive_bits != nullptr);
+                      nullptr, nullptr, false, nullptr, false, nullptr,
+                      &input.forced_state);
   NodeEvalResult block =
       eval_node_recursive_dense(tr.blocker_node_idx, local, EvalNeed::kSurvival);
   return clamp_probability(block.survival);
@@ -4700,21 +4957,19 @@ bool fast_event_info_dense_idx(const GuardEvalInput &input, int node_idx,
   }
   LabelRef ref = node_label_ref(input.ctx, node);
 
-  const bool has_forced_complete =
-      input.forced_complete_bits != nullptr && input.forced_complete_bits->any();
-  const bool has_forced_survive =
-      input.forced_survive_bits != nullptr && input.forced_survive_bits->any();
+  const bool has_forced_complete = forced_state_complete_valid(input.forced_state) &&
+                                   input.forced_state.forced_complete_bits->any();
+  const bool has_forced_survive = forced_state_survive_valid(input.forced_state) &&
+                                  input.forced_state.forced_survive_bits->any();
   if (has_forced_complete || has_forced_survive) {
-    if (!input.forced_label_id_to_bit_idx || ref.label_id == NA_INTEGER ||
+    if (!input.forced_state.label_id_to_bit_idx || ref.label_id == NA_INTEGER ||
         ref.label_id < 0) {
       return false;
     }
-    const bool forced_complete_label = forced_bits_contains_scoped(
-        ref.label_id, input.forced_scope_filter, input.forced_complete_bits,
-        has_forced_complete, input.forced_label_id_to_bit_idx);
-    const bool forced_survive_label = forced_bits_contains_scoped(
-        ref.label_id, input.forced_scope_filter, input.forced_survive_bits,
-        has_forced_survive, input.forced_label_id_to_bit_idx);
+    const bool forced_complete_label =
+        forced_state_contains_complete(input.forced_state, ref.label_id);
+    const bool forced_survive_label =
+        forced_state_contains_survive(input.forced_state, ref.label_id);
     if (forced_complete_label || forced_survive_label) {
       return false;
     }
@@ -4754,10 +5009,8 @@ inline NodeEvalResult eval_node_from_guard_input(const GuardEvalInput &input,
   NodeEvalState local(input.ctx, t, input.component_idx, input.trial_params,
                       guard_trial_type_key(input), false, -1,
                       input.exact_source_times, input.source_time_bounds,
-                      input.forced_scope_filter, input.forced_complete_bits,
-                      input.forced_complete_bits != nullptr,
-                      input.forced_survive_bits,
-                      input.forced_survive_bits != nullptr);
+                      nullptr, nullptr, false, nullptr, false, nullptr,
+                      &input.forced_state);
   return eval_node_recursive_dense(node_idx, local, need);
 }
 
@@ -5323,30 +5576,7 @@ double guard_cdf_internal(const GuardEvalInput &input, double t,
   const CanonicalIntegrationSettings canonical =
       canonicalize_integration_settings(settings);
 
-  if (!input.ctx.kernel_state_graph.valid ||
-      input.node_idx < 0 ||
-      input.node_idx >=
-          static_cast<int>(
-              input.ctx.kernel_state_graph.node_guard_transition_idx.size())) {
-    Rcpp::stop("IR guard transition metadata missing for guard node_idx=%d",
-               input.node_idx);
-  }
-  const int tr_idx =
-      input.ctx.kernel_state_graph.node_guard_transition_idx[static_cast<std::size_t>(
-          input.node_idx)];
-  if (tr_idx < 0 ||
-      tr_idx >=
-          static_cast<int>(input.ctx.kernel_state_graph.guard_transitions.size())) {
-    Rcpp::stop("IR guard transition mapping missing for guard node_idx=%d",
-               input.node_idx);
-  }
-  const uuber::KernelGuardTransition &tr =
-      input.ctx.kernel_state_graph.guard_transitions[static_cast<std::size_t>(
-          tr_idx)];
-  if (tr.node_idx != input.node_idx) {
-    Rcpp::stop("IR guard transition node mismatch for guard node_idx=%d",
-               input.node_idx);
-  }
+  const uuber::KernelGuardTransition &tr = guard_transition_required(input);
   if (tr.eval_mode != uuber::KernelGuardEvalMode::LinearChainODE) {
     Rcpp::stop("IR guard transition mode must be LinearChainODE for node_idx=%d",
                input.node_idx);
@@ -5804,24 +6034,22 @@ double run_competitor_batch_survival_op(
   kernel_need.survival = true;
   kernel_need.cdf = true;
   std::vector<uuber::KernelNodeValues> kernel_values;
-  if (competitor_kernel_runtime_usable(state)) {
-    if (!uuber::eval_kernel_nodes_incremental(
-            state.ctx.kernel_program, *state.kernel_runtime_ptr,
-            op.target_node_indices, kernel_need, event_eval_cb, guard_eval_cb,
-            kernel_values) ||
-        kernel_values.size() != op.target_node_indices.size()) {
-      Rcpp::stop("IR kernel execution failed for competitor op");
-    }
-  } else {
-    kernel_values.resize(op.target_node_indices.size());
-    for (std::size_t i = 0; i < op.target_node_indices.size(); ++i) {
-      const int node_idx = op.target_node_indices[i];
-      if (!uuber::eval_kernel_node(state.ctx.kernel_program, node_idx, kernel_need,
-                                   event_eval_cb, guard_eval_cb,
-                                   kernel_values[i])) {
-        Rcpp::stop("IR kernel execution failed for competitor op");
-      }
-    }
+  const bool use_state_runtime = competitor_kernel_runtime_usable(state);
+  thread_local uuber::KernelRuntimeState fallback_runtime;
+  uuber::KernelRuntimeState *runtime_ptr =
+      use_state_runtime ? state.kernel_runtime_ptr : &fallback_runtime;
+  if (!use_state_runtime) {
+    uuber::invalidate_kernel_runtime_from_slot(*runtime_ptr, 0);
+  }
+  if (!uuber::eval_kernel_nodes_incremental(
+          state.ctx.kernel_program, *runtime_ptr, op.target_node_indices,
+          kernel_need, event_eval_cb, guard_eval_cb, kernel_values) ||
+      kernel_values.size() != op.target_node_indices.size()) {
+    Rcpp::stop("IR kernel execution failed for competitor op");
+  }
+  if (!use_state_runtime) {
+    // Fallback runtime is intentionally non-incremental across calls.
+    uuber::invalidate_kernel_runtime_from_slot(*runtime_ptr, 0);
   }
 
   double product = 1.0;
@@ -5960,13 +6188,18 @@ double competitor_survival_internal(
                                              event_eval_cb, guard_eval_cb);
 }
 
-inline double node_density_with_competitors_from_state(
-    const uuber::NativeContext &ctx, int node_id,
+inline void invalidate_kernel_runtime_root(NodeEvalState &state) {
+  if (state.kernel_runtime_ready && state.kernel_runtime_ptr) {
+    uuber::invalidate_kernel_runtime_from_slot(*state.kernel_runtime_ptr, 0);
+  }
+}
+
+inline double node_density_with_competitors_from_state_dense(
+    const uuber::NativeContext &ctx, int node_idx,
     const std::vector<int> &competitor_ids, NodeEvalState &state,
-    uuber::KernelRuntimeState *kernel_runtime,
     const uuber::CompetitorClusterCacheEntry *competitor_cache = nullptr) {
-  (void)kernel_runtime;
-  NodeEvalResult base = eval_node_recursive(node_id, state, EvalNeed::kDensity);
+  NodeEvalResult base =
+      eval_node_recursive_dense(node_idx, state, EvalNeed::kDensity);
   double density = base.density;
   if (!std::isfinite(density) || density <= 0.0) {
     return 0.0;
@@ -5981,6 +6214,17 @@ inline double node_density_with_competitors_from_state(
     density *= surv;
   }
   return density;
+}
+
+inline double node_density_with_competitors_from_state(
+    const uuber::NativeContext &ctx, int node_id,
+    const std::vector<int> &competitor_ids, NodeEvalState &state,
+    uuber::KernelRuntimeState *kernel_runtime,
+    const uuber::CompetitorClusterCacheEntry *competitor_cache = nullptr) {
+  (void)kernel_runtime;
+  const int node_idx = resolve_dense_node_idx_required(ctx, node_id);
+  return node_density_with_competitors_from_state_dense(
+      ctx, node_idx, competitor_ids, state, competitor_cache);
 }
 
 bool node_density_with_competitors_batch_internal(
@@ -7306,6 +7550,8 @@ struct RankedTransitionStep {
   int node_idx{-1};
   int source_mask_begin{-1};
   int source_mask_count{0};
+  int invalidate_slot{0};
+  bool source_mask_covers_ids{false};
   std::vector<int> source_ids;
   std::vector<int> source_bits;
 };
@@ -7349,6 +7595,68 @@ ranked_source_bits_for_ids(const uuber::NativeContext &ctx,
   return out;
 }
 
+inline bool ranked_mask_covers_source_ids(const uuber::NativeContext &ctx,
+                                          const RankedTransitionStep &step) {
+  if (step.source_mask_begin < 0 || step.source_mask_count <= 0 ||
+      step.source_ids.empty()) {
+    return false;
+  }
+  if (step.source_mask_begin + step.source_mask_count >
+      static_cast<int>(ctx.ir.node_source_masks.size())) {
+    return false;
+  }
+  const std::uint64_t *mask_words =
+      &ctx.ir.node_source_masks[static_cast<std::size_t>(step.source_mask_begin)];
+  for (std::size_t i = 0; i < step.source_ids.size(); ++i) {
+    const int source_id = step.source_ids[i];
+    if (source_id == NA_INTEGER || source_id < 0) {
+      continue;
+    }
+    int source_bit_idx = (i < step.source_bits.size()) ? step.source_bits[i] : -1;
+    if (source_bit_idx < 0) {
+      auto bit_it = ctx.ir.label_id_to_bit_idx.find(source_id);
+      if (bit_it == ctx.ir.label_id_to_bit_idx.end()) {
+        return false;
+      }
+      source_bit_idx = bit_it->second;
+    }
+    if (source_bit_idx < 0) {
+      return false;
+    }
+    const int mask_word_idx = source_bit_idx / 64;
+    const int mask_bit_offset = source_bit_idx % 64;
+    if (mask_word_idx < 0 || mask_word_idx >= step.source_mask_count) {
+      return false;
+    }
+    const std::uint64_t word =
+        mask_words[static_cast<std::size_t>(mask_word_idx)];
+    const std::uint64_t bit = (std::uint64_t{1} << mask_bit_offset);
+    if ((word & bit) == 0u) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline int ranked_invalidate_slot_for_node(const uuber::NativeContext &ctx,
+                                           int node_idx) {
+  if (!ctx.kernel_program.valid) {
+    return 0;
+  }
+  if (node_idx < 0 || node_idx >=
+                          static_cast<int>(
+                              ctx.kernel_program.outputs.node_idx_to_slot.size())) {
+    return 0;
+  }
+  const int out_slot = ctx.kernel_program.outputs.node_idx_to_slot
+      [static_cast<std::size_t>(node_idx)];
+  if (out_slot < 0 ||
+      out_slot >= static_cast<int>(ctx.kernel_program.ops.size())) {
+    return 0;
+  }
+  return out_slot;
+}
+
 inline void ranked_attach_source_mask_for_node(const uuber::NativeContext &ctx,
                                                int node_idx,
                                                RankedTransitionStep &step) {
@@ -7365,6 +7673,8 @@ inline void ranked_attach_source_mask_for_node(const uuber::NativeContext &ctx,
   }
   step.source_mask_begin = node.source_mask_begin;
   step.source_mask_count = node.source_mask_count;
+  step.invalidate_slot = ranked_invalidate_slot_for_node(ctx, node_idx);
+  step.source_mask_covers_ids = ranked_mask_covers_source_ids(ctx, step);
 }
 
 class RankedTransitionCompiler {
@@ -7609,7 +7919,8 @@ bool for_each_sequence_node_transition(
       return false;
     }
     apply_transition_mask_words(ctx, step.source_mask_begin,
-                                step.source_mask_count, 0, bits, bits_valid,
+                                step.source_mask_count, step.invalidate_slot,
+                                bits, bits_valid,
                                 kernel_runtime);
     return true;
   };
@@ -7635,22 +7946,21 @@ bool for_each_sequence_node_transition(
 
   for (const RankedTransitionTemplate &transition : plan.transitions) {
     double weight = 1.0;
-    uuber::BitsetState forced_complete_bits = base_forced_complete_bits;
-    uuber::BitsetState forced_survive_bits = base_forced_survive_bits;
-    bool forced_complete_bits_valid = base_forced_complete_bits_valid;
-    bool forced_survive_bits_valid = base_forced_survive_bits_valid;
+    NodeEvalState transition_state(
+        ctx, t, component_idx, trial_params, trial_type_key, false, -1,
+        exact_source_times, source_time_bounds, nullptr,
+        base_forced_complete_bits_valid ? &base_forced_complete_bits : nullptr,
+        base_forced_complete_bits_valid,
+        base_forced_survive_bits_valid ? &base_forced_survive_bits : nullptr,
+        base_forced_survive_bits_valid, kernel_runtime);
+    invalidate_kernel_runtime_root(transition_state);
 
     bool valid = true;
     for (const RankedTransitionStep &step : transition.steps) {
       if (step.kind == RankedTransitionStepKind::EvalDensityNode) {
-        NodeEvalResult eval = eval_node_with_forced_dense_bits(
-            ctx, step.node_idx, t, component_idx,
-            EvalNeed::kDensity, trial_params, trial_type_key,
-            exact_source_times, source_time_bounds, nullptr,
-            forced_complete_bits_valid ? &forced_complete_bits : nullptr,
-            forced_complete_bits_valid,
-            forced_survive_bits_valid ? &forced_survive_bits : nullptr,
-            forced_survive_bits_valid, kernel_runtime);
+        NodeEvalResult eval =
+            eval_node_recursive_dense(step.node_idx, transition_state,
+                                      EvalNeed::kDensity);
         const double d = eval.density;
         if (!std::isfinite(d) || d <= 0.0) {
           valid = false;
@@ -7658,14 +7968,8 @@ bool for_each_sequence_node_transition(
         }
         weight *= d;
       } else if (step.kind == RankedTransitionStepKind::EvalCDFNode) {
-        NodeEvalResult eval = eval_node_with_forced_dense_bits(
-            ctx, step.node_idx, t, component_idx, EvalNeed::kCDF,
-            trial_params, trial_type_key, exact_source_times, source_time_bounds,
-            nullptr,
-            forced_complete_bits_valid ? &forced_complete_bits : nullptr,
-            forced_complete_bits_valid,
-            forced_survive_bits_valid ? &forced_survive_bits : nullptr,
-            forced_survive_bits_valid, kernel_runtime);
+        NodeEvalResult eval = eval_node_recursive_dense(
+            step.node_idx, transition_state, EvalNeed::kCDF);
         const double Fj = clamp_probability(eval.cdf);
         if (!std::isfinite(Fj) || Fj <= 0.0) {
           valid = false;
@@ -7673,14 +7977,10 @@ bool for_each_sequence_node_transition(
         }
         weight *= Fj;
       } else if (step.kind == RankedTransitionStepKind::EvalGuardEffective) {
-        GuardEvalInput guard_input = make_guard_input(
+        GuardEvalInput guard_input = make_guard_input_forced_state(
             ctx, step.node_idx, component_idx, &trial_type_key, trial_params,
-            trial_params_soa, exact_source_times,
-            source_time_bounds, nullptr,
-            forced_complete_bits_valid ? &forced_complete_bits : nullptr,
-            forced_survive_bits_valid ? &forced_survive_bits : nullptr,
-            ctx.ir.label_id_to_bit_idx.empty() ? nullptr
-                                               : &ctx.ir.label_id_to_bit_idx);
+            trial_params_soa, exact_source_times, source_time_bounds,
+            transition_state.forced_state);
         const double eff =
             guard_effective_survival_internal(guard_input, t, settings);
         if (!std::isfinite(eff) || eff <= 0.0) {
@@ -7689,24 +7989,44 @@ bool for_each_sequence_node_transition(
         }
         weight *= eff;
       } else if (step.kind == RankedTransitionStepKind::AddCompleteSources) {
-        (void)apply_ranked_transition_mask(
-            step, forced_complete_bits, forced_complete_bits_valid);
+        const bool applied_mask = apply_ranked_transition_mask(
+            step, transition_state.forced_complete_bits,
+            transition_state.forced_complete_bits_valid);
+        if (applied_mask && step.source_mask_covers_ids) {
+          continue;
+        }
+        bool mutated_bits = false;
         for (std::size_t i = 0; i < step.source_ids.size(); ++i) {
           const int id = step.source_ids[i];
           const int bit_idx =
               (i < step.source_bits.size()) ? step.source_bits[i] : -1;
-          ranked_add_source_id(ctx, id, bit_idx, forced_complete_bits,
-                               forced_complete_bits_valid);
+          ranked_add_source_id(ctx, id, bit_idx,
+                               transition_state.forced_complete_bits,
+                               transition_state.forced_complete_bits_valid);
+          mutated_bits = true;
+        }
+        if (mutated_bits) {
+          invalidate_kernel_runtime_root(transition_state);
         }
       } else if (step.kind == RankedTransitionStepKind::AddSurviveSources) {
-        (void)apply_ranked_transition_mask(
-            step, forced_survive_bits, forced_survive_bits_valid);
+        const bool applied_mask = apply_ranked_transition_mask(
+            step, transition_state.forced_survive_bits,
+            transition_state.forced_survive_bits_valid);
+        if (applied_mask && step.source_mask_covers_ids) {
+          continue;
+        }
+        bool mutated_bits = false;
         for (std::size_t i = 0; i < step.source_ids.size(); ++i) {
           const int id = step.source_ids[i];
           const int bit_idx =
               (i < step.source_bits.size()) ? step.source_bits[i] : -1;
-          ranked_add_source_id(ctx, id, bit_idx, forced_survive_bits,
-                               forced_survive_bits_valid);
+          ranked_add_source_id(ctx, id, bit_idx,
+                               transition_state.forced_survive_bits,
+                               transition_state.forced_survive_bits_valid);
+          mutated_bits = true;
+        }
+        if (mutated_bits) {
+          invalidate_kernel_runtime_root(transition_state);
         }
       } else if (step.kind == RankedTransitionStepKind::AddOrWitnessFromSources) {
         int witness = NA_INTEGER;
@@ -7727,8 +8047,9 @@ bool for_each_sequence_node_transition(
             }
             bit_to_check = bit_it->second;
           }
-          const bool is_forced = forced_complete_bits_valid &&
-                                 forced_complete_bits.test(bit_to_check);
+          const bool is_forced =
+              transition_state.forced_complete_bits_valid &&
+              transition_state.forced_complete_bits.test(bit_to_check);
           if (!is_forced) {
             witness = id;
             witness_bit = bit_to_check;
@@ -7740,8 +8061,10 @@ bool for_each_sequence_node_transition(
           valid = false;
           break;
         }
-        ranked_add_source_id(ctx, witness, witness_bit, forced_survive_bits,
-                             forced_survive_bits_valid);
+        ranked_add_source_id(ctx, witness, witness_bit,
+                             transition_state.forced_survive_bits,
+                             transition_state.forced_survive_bits_valid);
+        invalidate_kernel_runtime_root(transition_state);
       }
       if (!std::isfinite(weight) || weight <= 0.0) {
         valid = false;
@@ -7751,8 +8074,10 @@ bool for_each_sequence_node_transition(
     if (!valid || !std::isfinite(weight) || weight <= 0.0) {
       continue;
     }
-    emit(weight, std::move(forced_complete_bits), forced_complete_bits_valid,
-         std::move(forced_survive_bits), forced_survive_bits_valid);
+    emit(weight, std::move(transition_state.forced_complete_bits),
+         transition_state.forced_complete_bits_valid,
+         std::move(transition_state.forced_survive_bits),
+         transition_state.forced_survive_bits_valid);
     emitted_any = true;
   }
   return emitted_any;
@@ -7764,9 +8089,15 @@ double sequence_prefix_density_resolved(
     int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     uuber::KernelRuntimeState *kernel_runtime = nullptr,
-    RankedTransitionCompiler *transition_compiler = nullptr) {
+    RankedTransitionCompiler *transition_compiler = nullptr,
+    const std::vector<const std::vector<int> *> *step_competitor_ids_ptrs = nullptr,
+    const std::vector<std::vector<int>> *step_persistent_sources = nullptr) {
   if (outcome_indices.empty() || outcome_indices.size() != times.size() ||
-      node_indices.size() != times.size()) {
+      node_indices.size() != times.size() ||
+      step_competitor_ids_ptrs == nullptr ||
+      step_persistent_sources == nullptr ||
+      step_competitor_ids_ptrs->size() != times.size() ||
+      step_persistent_sources->size() != times.size()) {
     return 0.0;
   }
   RankedTransitionCompiler local_transition_compiler(ctx);
@@ -7831,14 +8162,6 @@ double sequence_prefix_density_resolved(
   (void)ensure_forced_bitset_capacity(ctx, init_state.forced_survive_bits,
                                       init_state.forced_survive_bits_valid);
   states.push_back(std::move(init_state));
-  const std::size_t n_ir_nodes = ctx.ir.nodes.size();
-  std::vector<std::uint8_t> observed_node_bits(n_ir_nodes, 0);
-  std::vector<std::uint8_t> future_node_bits(n_ir_nodes, 0);
-  for (int node_idx : node_indices) {
-    if (node_idx >= 0 && static_cast<std::size_t>(node_idx) < n_ir_nodes) {
-      future_node_bits[static_cast<std::size_t>(node_idx)] = 1;
-    }
-  }
 
   for (std::size_t rank_idx = 0; rank_idx < times.size(); ++rank_idx) {
     if (kernel_runtime) {
@@ -7853,43 +8176,13 @@ double sequence_prefix_density_resolved(
     int outcome_idx = outcome_indices[rank_idx];
     const uuber::OutcomeContextInfo &info =
         ctx.outcome_info[static_cast<std::size_t>(outcome_idx)];
-    const int info_node_idx = resolve_dense_node_idx_required(ctx, info.node_id);
-    if (info_node_idx >= 0 &&
-        static_cast<std::size_t>(info_node_idx) < n_ir_nodes) {
-      observed_node_bits[static_cast<std::size_t>(info_node_idx)] = 1;
-      future_node_bits[static_cast<std::size_t>(info_node_idx)] = 0;
-    }
-
-    std::vector<int> filtered_competitors;
-    const std::vector<int> &base_competitors =
-        filter_competitor_ids(ctx, info.competitor_ids, component_idx,
-                              filtered_competitors);
-    std::vector<int> competitors;
-    competitors.reserve(base_competitors.size());
-    for (int node_id : base_competitors) {
-      if (node_id == NA_INTEGER || node_id == info.node_id) {
-        continue;
-      }
-      const int node_idx = resolve_dense_node_idx_required(ctx, node_id);
-      if (node_idx >= 0 &&
-          static_cast<std::size_t>(node_idx) < n_ir_nodes &&
-          observed_node_bits[static_cast<std::size_t>(node_idx)] != 0) {
-        continue;
-      }
-      competitors.push_back(node_id);
-    }
-    sort_unique(competitors);
-    std::vector<int> persistent_competitors;
-    persistent_competitors.reserve(competitors.size());
-    for (int node_id : competitors) {
-      const int node_idx = resolve_dense_node_idx_required(ctx, node_id);
-      if (node_idx < 0 || static_cast<std::size_t>(node_idx) >= n_ir_nodes ||
-          future_node_bits[static_cast<std::size_t>(node_idx)] == 0) {
-        persistent_competitors.push_back(node_id);
-      }
-    }
-    std::vector<int> persistent_sources =
-        collect_competitor_sources(ctx, persistent_competitors);
+    static const std::vector<int> kEmptyCompetitorIds;
+    const std::vector<int> &competitors =
+        ((*step_competitor_ids_ptrs)[rank_idx] != nullptr)
+            ? *(*step_competitor_ids_ptrs)[rank_idx]
+            : kEmptyCompetitorIds;
+    const std::vector<int> &persistent_sources =
+        (*step_persistent_sources)[rank_idx];
 
     std::unordered_map<SequenceStateKey, std::size_t, SequenceStateKeyHash>
         next_state_index;
@@ -8103,28 +8396,31 @@ double sequence_prefix_density_resolved(
   return total;
 }
 
-enum class KernelContributionMetric : std::uint8_t {
+enum class TrialKernelIntent : std::uint8_t {
   SequenceDensity = 0,
   OutcomeMass = 1
 };
 
+enum class TrialProbabilityTransform : std::uint8_t {
+  Identity = 0,
+  Complement = 1
+};
+
 struct TrialContributionSpec {
-  KernelContributionMetric metric{KernelContributionMetric::SequenceDensity};
+  TrialKernelIntent intent{TrialKernelIntent::SequenceDensity};
   double scaled_weight{1.0};
   int component_idx{-1};
   const std::string *trial_type_key_ptr{nullptr};
   std::string trial_type_key_storage;
-  int sequence_head_outcome_idx{-1};
-  int sequence_head_node_idx{-1};
   std::vector<int> sequence_outcome_indices;
   std::vector<int> sequence_node_indices;
   const std::vector<double> *sequence_times_ptr{nullptr};
-  double sequence_time{0.0};
-  int sequence_length{0};
-  const std::vector<int> *competitors_ptr{nullptr};
-  std::vector<int> competitors_storage;
-  int keep_label_id{NA_INTEGER};
-  bool guess_shortcut{false};
+  std::vector<double> sequence_times_storage;
+  std::vector<const std::vector<int> *> step_competitor_ids_ptrs;
+  std::vector<std::vector<int>> step_competitor_ids_storage;
+  std::vector<std::vector<int>> step_persistent_sources;
+  std::vector<int> step_keep_label_ids;
+  std::vector<std::uint8_t> step_guess_shortcut;
   int mass_outcome_idx{-1};
   const std::vector<OutcomeCouplingProgram> *mass_coupling_programs_ptr{nullptr};
   std::vector<OutcomeCouplingProgram> mass_coupling_programs;
@@ -8143,8 +8439,8 @@ inline const std::vector<int> &empty_competitor_ids_ref() {
 
 struct TrialEvalInput {
   bool valid{false};
-  bool nonresponse_mode{false};
-  bool enforce_unique_sequence_nodes{false};
+  TrialProbabilityTransform probability_transform{
+      TrialProbabilityTransform::Identity};
   bool enforce_component_outcome_gate{false};
   bool allow_guess_shortcut{false};
   bool inline_single_sequence{false};
@@ -8174,7 +8470,6 @@ inline TrialEvalInput normalize_trial_eval_input_for_trial(
   TrialEvalInput eval_input{};
   eval_input.nonresponse_outcome_indices = nonresponse_outcome_indices;
   if (ranked_mode) {
-    eval_input.enforce_unique_sequence_nodes = true;
     if (!ranked_valid) {
       return eval_input;
     }
@@ -8183,10 +8478,11 @@ inline TrialEvalInput normalize_trial_eval_input_for_trial(
         ranked_label_ids->size() == ranked_times->size();
     if (!has_ranked_sequence) {
       eval_input.valid = true;
-      eval_input.nonresponse_mode = true;
+      eval_input.probability_transform = TrialProbabilityTransform::Complement;
       return eval_input;
     }
     eval_input.valid = true;
+    eval_input.probability_transform = TrialProbabilityTransform::Identity;
     eval_input.sequence_label_data = ranked_label_ids->data();
     eval_input.sequence_time_data = ranked_times->data();
     eval_input.sequence_length = ranked_label_ids->size();
@@ -8197,13 +8493,14 @@ inline TrialEvalInput normalize_trial_eval_input_for_trial(
   eval_input.allow_guess_shortcut = true;
   if (outcome_label_id < 0) {
     eval_input.valid = true;
-    eval_input.nonresponse_mode = true;
+    eval_input.probability_transform = TrialProbabilityTransform::Complement;
     return eval_input;
   }
   if (!std::isfinite(rt) || rt < 0.0) {
     return eval_input;
   }
   eval_input.valid = true;
+  eval_input.probability_transform = TrialProbabilityTransform::Identity;
   eval_input.single_label_storage = outcome_label_id;
   eval_input.single_time_storage = rt;
   eval_input.inline_single_sequence = true;
@@ -8287,7 +8584,11 @@ bool build_trial_contributions_unified(
     std::unique_ptr<RankedTransitionCompiler> &sequence_transition_compiler) {
   contributions.clear();
 
-  if (eval_input.nonresponse_mode) {
+  const bool nonresponse_mode = (eval_input.sequence_length == 0u ||
+                                 eval_input.sequence_label_data == nullptr ||
+                                 eval_input.sequence_time_data == nullptr);
+
+  if (nonresponse_mode) {
     const bool use_precomputed = eval_input.nonresponse_outcome_indices &&
                                  !eval_input.nonresponse_outcome_indices->empty();
     const std::size_t n = use_precomputed
@@ -8303,7 +8604,7 @@ bool build_trial_contributions_unified(
       const uuber::OutcomeContextInfo &info =
           ctx.outcome_info[static_cast<std::size_t>(oi)];
       TrialContributionSpec spec;
-      spec.metric = KernelContributionMetric::OutcomeMass;
+      spec.intent = TrialKernelIntent::OutcomeMass;
       spec.mass_outcome_idx = oi;
       if (info.node_id >= 0 && !component_indices.empty()) {
         const std::vector<OutcomeCouplingProgram> *precomputed_programs = nullptr;
@@ -8333,7 +8634,13 @@ bool build_trial_contributions_unified(
           spec.mass_coupling_programs_ptr = &spec.mass_coupling_programs;
         }
       }
+      const bool internal_program_storage =
+          (spec.mass_coupling_programs_ptr == &spec.mass_coupling_programs);
       contributions.push_back(std::move(spec));
+      if (internal_program_storage) {
+        TrialContributionSpec &stored = contributions.back();
+        stored.mass_coupling_programs_ptr = &stored.mass_coupling_programs;
+      }
     }
     return true;
   }
@@ -8361,21 +8668,15 @@ bool build_trial_contributions_unified(
     const int comp_idx = component_indices[c];
     std::vector<int> outcome_indices;
     std::vector<int> node_indices;
-    if (sequence_length > 1u) {
-      outcome_indices.reserve(sequence_length);
-      node_indices.reserve(sequence_length);
-    }
-    int single_outcome_idx = -1;
-    int single_node_idx = -1;
+    outcome_indices.reserve(sequence_length);
+    node_indices.reserve(sequence_length);
+    const bool single_step_mode = (sequence_length == 1u);
+    const bool enforce_unique_sequence_nodes = (sequence_length > 1u);
     std::vector<std::uint8_t> seen_node_bits(
-        eval_input.enforce_unique_sequence_nodes ? ctx.ir.nodes.size() : 0u, 0u);
+        enforce_unique_sequence_nodes ? ctx.ir.nodes.size() : 0u, 0u);
 
     bool component_ok = true;
     double keep_mult = 1.0;
-    const std::vector<int> *single_step_competitors_ptr = nullptr;
-    std::vector<int> single_step_competitors_storage;
-    int single_step_keep_label_id = NA_INTEGER;
-    bool single_step_guess_shortcut = false;
 
     for (std::size_t rank_i = 0; rank_i < sequence_length; ++rank_i) {
       const int label_id = eval_input.sequence_label_data[rank_i];
@@ -8393,7 +8694,7 @@ bool build_trial_contributions_unified(
         component_ok = false;
         break;
       }
-      if (eval_input.enforce_unique_sequence_nodes) {
+      if (enforce_unique_sequence_nodes) {
         if (static_cast<std::size_t>(node_idx) >= seen_node_bits.size() ||
             seen_node_bits[static_cast<std::size_t>(node_idx)] != 0u) {
           component_ok = false;
@@ -8418,33 +8719,8 @@ bool build_trial_contributions_unified(
         break;
       }
 
-      if (sequence_length > 1u) {
-        outcome_indices.push_back(comp_outcome_idx);
-        node_indices.push_back(node_idx);
-      } else {
-        single_outcome_idx = comp_outcome_idx;
-        single_node_idx = node_idx;
-      }
-
-      if (eval_input.allow_guess_shortcut && sequence_length == 1u) {
-        std::vector<int> comp_filtered;
-        const std::vector<int> &comp_use = filter_competitor_ids(
-            ctx, info.competitor_ids, comp_idx, comp_filtered);
-        if (&comp_use == &info.competitor_ids) {
-          single_step_competitors_ptr = &info.competitor_ids;
-          single_step_competitors_storage.clear();
-        } else {
-          single_step_competitors_storage = std::move(comp_filtered);
-          single_step_competitors_ptr = &single_step_competitors_storage;
-        }
-        single_step_keep_label_id =
-            (comp_outcome_idx >= 0 &&
-             comp_outcome_idx < static_cast<int>(ctx.outcome_label_ids.size()))
-                ? ctx.outcome_label_ids[static_cast<std::size_t>(comp_outcome_idx)]
-                : NA_INTEGER;
-        single_step_guess_shortcut = component_guess_shortcut_applies(
-            ctx, comp_idx, comp_outcome_idx, label_id);
-      }
+      outcome_indices.push_back(comp_outcome_idx);
+      node_indices.push_back(node_idx);
     }
 
     if (!component_ok) {
@@ -8457,7 +8733,7 @@ bool build_trial_contributions_unified(
     }
 
     TrialContributionSpec spec;
-    spec.metric = KernelContributionMetric::SequenceDensity;
+    bool internal_times_storage = false;
     spec.scaled_weight = scaled_weight;
     spec.component_idx = comp_idx;
     if (c < cache_entries.size()) {
@@ -8469,110 +8745,192 @@ bool build_trial_contributions_unified(
     } else {
       spec.trial_type_key_ptr = &empty_trial_type_key_ref();
     }
-    spec.sequence_head_outcome_idx = single_outcome_idx;
-    spec.sequence_head_node_idx = single_node_idx;
-    if (sequence_length > 1u) {
-      spec.sequence_outcome_indices = std::move(outcome_indices);
-      spec.sequence_node_indices = std::move(node_indices);
-    }
-    spec.sequence_length = static_cast<int>(sequence_length);
-    if (eval_input.allow_guess_shortcut && sequence_length == 1u) {
-      spec.sequence_time = eval_input.sequence_time_data[0];
-      if (single_step_competitors_ptr == &single_step_competitors_storage) {
-        spec.competitors_storage = std::move(single_step_competitors_storage);
-        spec.competitors_ptr = &spec.competitors_storage;
-      } else {
-        spec.competitors_ptr = single_step_competitors_ptr;
-      }
-      spec.keep_label_id = single_step_keep_label_id;
-      spec.guess_shortcut = single_step_guess_shortcut;
-    } else {
+    spec.intent = TrialKernelIntent::SequenceDensity;
+    spec.sequence_outcome_indices = std::move(outcome_indices);
+    spec.sequence_node_indices = std::move(node_indices);
+    spec.step_competitor_ids_ptrs.assign(sequence_length, nullptr);
+    spec.step_competitor_ids_storage.resize(sequence_length);
+    spec.step_persistent_sources.resize(sequence_length);
+    spec.step_keep_label_ids.assign(sequence_length, NA_INTEGER);
+    spec.step_guess_shortcut.assign(sequence_length, 0u);
+    if (eval_input.sequence_times_vec &&
+        eval_input.sequence_times_vec->size() == sequence_length) {
       spec.sequence_times_ptr = eval_input.sequence_times_vec;
-      if (sequence_length == 1u) {
-        spec.sequence_time = eval_input.sequence_time_data[0];
+    } else {
+      spec.sequence_times_storage.assign(eval_input.sequence_time_data,
+                                         eval_input.sequence_time_data +
+                                             static_cast<std::ptrdiff_t>(
+                                                 sequence_length));
+      spec.sequence_times_ptr = &spec.sequence_times_storage;
+      internal_times_storage = true;
+    }
+    std::vector<std::uint8_t> observed_node_bits;
+    std::vector<std::uint8_t> future_node_bits;
+    if (!single_step_mode) {
+      observed_node_bits.assign(ctx.ir.nodes.size(), 0u);
+      future_node_bits.assign(ctx.ir.nodes.size(), 0u);
+      for (int node_idx : spec.sequence_node_indices) {
+        if (node_idx >= 0 &&
+            static_cast<std::size_t>(node_idx) < future_node_bits.size()) {
+          future_node_bits[static_cast<std::size_t>(node_idx)] = 1u;
+        }
+      }
+    }
+    for (std::size_t rank_i = 0; rank_i < sequence_length; ++rank_i) {
+      const int comp_outcome_idx = spec.sequence_outcome_indices[rank_i];
+      const int node_idx = spec.sequence_node_indices[rank_i];
+      if (comp_outcome_idx < 0 ||
+          comp_outcome_idx >= static_cast<int>(ctx.outcome_info.size())) {
+        continue;
+      }
+      const uuber::OutcomeContextInfo &info =
+          ctx.outcome_info[static_cast<std::size_t>(comp_outcome_idx)];
+      std::vector<int> filtered_competitors;
+      const std::vector<int> &base_competitors = filter_competitor_ids(
+          ctx, info.competitor_ids, comp_idx, filtered_competitors);
+      if (single_step_mode) {
+        if (&base_competitors == &info.competitor_ids) {
+          spec.step_competitor_ids_ptrs[rank_i] = &info.competitor_ids;
+        } else {
+          spec.step_competitor_ids_storage[rank_i] =
+              std::move(filtered_competitors);
+          spec.step_competitor_ids_ptrs[rank_i] =
+              &spec.step_competitor_ids_storage[rank_i];
+        }
+      } else {
+        std::vector<int> &step_competitors =
+            spec.step_competitor_ids_storage[rank_i];
+        step_competitors.reserve(base_competitors.size());
+        for (int node_id : base_competitors) {
+          if (node_id == NA_INTEGER || node_id == info.node_id) {
+            continue;
+          }
+          const int competitor_node_idx =
+              resolve_dense_node_idx_required(ctx, node_id);
+          if (competitor_node_idx >= 0 &&
+              static_cast<std::size_t>(competitor_node_idx) < observed_node_bits.size() &&
+              observed_node_bits[static_cast<std::size_t>(competitor_node_idx)] != 0u) {
+            continue;
+          }
+          step_competitors.push_back(node_id);
+        }
+        sort_unique(step_competitors);
+        spec.step_competitor_ids_ptrs[rank_i] = &step_competitors;
+        std::vector<int> persistent_competitors;
+        persistent_competitors.reserve(step_competitors.size());
+        for (int node_id : step_competitors) {
+          const int competitor_node_idx =
+              resolve_dense_node_idx_required(ctx, node_id);
+          if (competitor_node_idx < 0 ||
+              static_cast<std::size_t>(competitor_node_idx) >= future_node_bits.size() ||
+              future_node_bits[static_cast<std::size_t>(competitor_node_idx)] == 0u) {
+            persistent_competitors.push_back(node_id);
+          }
+        }
+        spec.step_persistent_sources[rank_i] =
+            collect_competitor_sources(ctx, persistent_competitors);
+        if (node_idx >= 0 &&
+            static_cast<std::size_t>(node_idx) < observed_node_bits.size()) {
+          observed_node_bits[static_cast<std::size_t>(node_idx)] = 1u;
+          future_node_bits[static_cast<std::size_t>(node_idx)] = 0u;
+        }
+      }
+      if (single_step_mode) {
+        const int label_id = eval_input.sequence_label_data[rank_i];
+        spec.step_keep_label_ids[rank_i] =
+            (comp_outcome_idx >= 0 &&
+             comp_outcome_idx < static_cast<int>(ctx.outcome_label_ids.size()))
+                ? ctx.outcome_label_ids[static_cast<std::size_t>(comp_outcome_idx)]
+                : NA_INTEGER;
+        spec.step_guess_shortcut[rank_i] = static_cast<std::uint8_t>(
+            eval_input.allow_guess_shortcut &&
+            component_guess_shortcut_applies(ctx, comp_idx, comp_outcome_idx,
+                                             label_id));
       }
     }
     contributions.push_back(std::move(spec));
+    TrialContributionSpec &stored = contributions.back();
+    if (internal_times_storage) {
+      stored.sequence_times_ptr = &stored.sequence_times_storage;
+    }
   }
 
-  if (eval_input.enforce_unique_sequence_nodes && sequence_length > 1u &&
-      !contributions.empty() && !sequence_transition_compiler) {
+  if (sequence_length > 1u && !contributions.empty() &&
+      !sequence_transition_compiler) {
     sequence_transition_compiler =
         std::make_unique<RankedTransitionCompiler>(ctx);
   }
   return true;
 }
 
+inline double evaluate_sequence_density_single_step_lower_layer(
+    const uuber::NativeContext &ctx, int node_idx,
+    const std::vector<int> &competitor_ids, double t, int component_idx,
+    int outcome_idx_context, const TrialParamSet *trial_params,
+    const std::string &trial_type_key,
+    uuber::KernelRuntimeState *kernel_runtime) {
+  if (node_idx < 0 || !std::isfinite(t) || t < 0.0) {
+    return 0.0;
+  }
+  const uuber::CompetitorClusterCacheEntry *competitor_cache = nullptr;
+  if (!competitor_ids.empty()) {
+    competitor_cache = &fetch_competitor_cluster_cache(ctx, competitor_ids);
+  }
+  NodeEvalState state(ctx, t, component_idx, trial_params, trial_type_key, false,
+                      outcome_idx_context, nullptr, nullptr, nullptr, nullptr,
+                      false, nullptr, false, kernel_runtime);
+  return node_density_with_competitors_from_state_dense(
+      ctx, node_idx, competitor_ids, state, competitor_cache);
+}
+
 double evaluate_sequence_density_kernel_idx(
     uuber::NativeContext &ctx, const TrialContributionSpec &spec,
-    const TrialParamSet *active_params, double rel_tol, double abs_tol,
-    int max_depth,
+    const TrialParamSet *active_params,
     RankedTransitionCompiler *sequence_transition_compiler,
     SharedTriggerPlan *single_state_plan, TrialParamSet *prob_scratch_ptr,
     uuber::KernelRuntimeState *runtime_ptr) {
-  if (spec.sequence_length <= 0) {
-    return 0.0;
-  }
   const std::string &trial_type_key =
       spec.trial_type_key_ptr ? *spec.trial_type_key_ptr
                               : empty_trial_type_key_ref();
-
-  if (spec.sequence_length == 1) {
-    const int sequence_outcome_idx =
-        (spec.sequence_head_outcome_idx >= 0)
-            ? spec.sequence_head_outcome_idx
-            : (spec.sequence_outcome_indices.empty()
-                   ? -1
-                   : spec.sequence_outcome_indices[0]);
-    const int sequence_node_idx =
-        (spec.sequence_head_node_idx >= 0)
-            ? spec.sequence_head_node_idx
-            : (spec.sequence_node_indices.empty() ? -1
-                                                  : spec.sequence_node_indices[0]);
-    double sequence_time = spec.sequence_time;
-    if (spec.sequence_times_ptr != nullptr) {
-      if (spec.sequence_times_ptr->size() != 1u) {
-        return 0.0;
-      }
-      sequence_time = (*spec.sequence_times_ptr)[0];
-    }
+  const std::size_t sequence_length = spec.sequence_outcome_indices.size();
+  if (spec.intent != TrialKernelIntent::SequenceDensity || sequence_length == 0u ||
+      spec.sequence_node_indices.size() != sequence_length ||
+      spec.sequence_times_ptr == nullptr ||
+      spec.sequence_times_ptr->size() != sequence_length) {
+    return 0.0;
+  }
+  if (sequence_length == 1u) {
+    const int sequence_outcome_idx = spec.sequence_outcome_indices[0];
+    const int sequence_node_idx = spec.sequence_node_indices[0];
+    const double sequence_time = (*spec.sequence_times_ptr)[0];
     if (sequence_outcome_idx < 0 || sequence_node_idx < 0 ||
         !std::isfinite(sequence_time) || sequence_time < 0.0) {
       return 0.0;
     }
-    if (spec.guess_shortcut) {
+    const bool use_guess_shortcut =
+        !spec.step_guess_shortcut.empty() && spec.step_guess_shortcut[0] != 0u;
+    if (use_guess_shortcut) {
       return accumulate_component_guess_density_idx(
-          ctx, spec.keep_label_id, sequence_outcome_idx, false, sequence_time,
-          spec.component_idx, active_params, trial_type_key,
-          single_state_plan, prob_scratch_ptr);
+          ctx, spec.step_keep_label_ids.empty() ? NA_INTEGER
+                                                : spec.step_keep_label_ids[0],
+          sequence_outcome_idx, false, sequence_time,
+          spec.component_idx, active_params, trial_type_key, single_state_plan,
+          prob_scratch_ptr);
     }
-    const int node_id =
-        ctx.outcome_info[static_cast<std::size_t>(sequence_outcome_idx)].node_id;
     const std::vector<int> &competitors =
-        spec.competitors_ptr ? *spec.competitors_ptr
-                             : empty_competitor_ids_ref();
-    return node_density_entry_idx(
-        ctx, node_id, sequence_time, spec.component_idx, nullptr, false, nullptr,
-        false, competitors, active_params, trial_type_key, false,
-        sequence_outcome_idx, nullptr, nullptr, false, nullptr, nullptr,
-        runtime_ptr);
-  }
-
-  if (spec.sequence_outcome_indices.size() !=
-          static_cast<std::size_t>(spec.sequence_length) ||
-      spec.sequence_node_indices.size() !=
-          static_cast<std::size_t>(spec.sequence_length)) {
-    return 0.0;
-  }
-  if (spec.sequence_times_ptr == nullptr ||
-      spec.sequence_times_ptr->size() !=
-          static_cast<std::size_t>(spec.sequence_length)) {
-    return 0.0;
+        (!spec.step_competitor_ids_ptrs.empty() &&
+         spec.step_competitor_ids_ptrs[0] != nullptr)
+            ? *spec.step_competitor_ids_ptrs[0]
+            : empty_competitor_ids_ref();
+    return evaluate_sequence_density_single_step_lower_layer(
+        ctx, sequence_node_idx, competitors, sequence_time, spec.component_idx,
+        sequence_outcome_idx, active_params, trial_type_key, runtime_ptr);
   }
   return sequence_prefix_density_resolved(
       ctx, spec.sequence_outcome_indices, spec.sequence_node_indices,
       *spec.sequence_times_ptr, spec.component_idx, active_params,
-      trial_type_key, runtime_ptr, sequence_transition_compiler);
+      trial_type_key, runtime_ptr, sequence_transition_compiler,
+      &spec.step_competitor_ids_ptrs, &spec.step_persistent_sources);
 }
 
 double evaluate_trial_contribution_kernel_idx(
@@ -8583,27 +8941,26 @@ double evaluate_trial_contribution_kernel_idx(
     int max_depth, RankedTransitionCompiler *sequence_transition_compiler,
     SharedTriggerPlan *single_state_plan, TrialParamSet *prob_scratch_ptr,
     uuber::KernelRuntimeState *runtime_ptr) {
-  if (spec.metric == KernelContributionMetric::SequenceDensity) {
-    return evaluate_sequence_density_kernel_idx(
-        ctx, spec, active_params, rel_tol, abs_tol, max_depth,
-        sequence_transition_compiler, single_state_plan, prob_scratch_ptr,
-        runtime_ptr);
+  if (spec.intent == TrialKernelIntent::OutcomeMass) {
+    const int oi = spec.mass_outcome_idx;
+    if (oi < 0 || oi >= static_cast<int>(ctx.outcome_info.size())) {
+      return 0.0;
+    }
+    const uuber::OutcomeContextInfo &info =
+        ctx.outcome_info[static_cast<std::size_t>(oi)];
+    const std::vector<OutcomeCouplingProgram> *coupling_programs_ptr =
+        spec.mass_coupling_programs_ptr;
+    if (!coupling_programs_ptr && !spec.mass_coupling_programs.empty()) {
+      coupling_programs_ptr = &spec.mass_coupling_programs;
+    }
+    return mix_outcome_mass_idx(
+        ctx, info, component_indices, component_weights, active_params, rel_tol,
+        abs_tol, max_depth, oi, single_state_plan, prob_scratch_ptr, true,
+        coupling_programs_ptr);
   }
-  const int oi = spec.mass_outcome_idx;
-  if (oi < 0 || oi >= static_cast<int>(ctx.outcome_info.size())) {
-    return 0.0;
-  }
-  const uuber::OutcomeContextInfo &info =
-      ctx.outcome_info[static_cast<std::size_t>(oi)];
-  const std::vector<OutcomeCouplingProgram> *coupling_programs_ptr =
-      spec.mass_coupling_programs_ptr;
-  if (!coupling_programs_ptr && !spec.mass_coupling_programs.empty()) {
-    coupling_programs_ptr = &spec.mass_coupling_programs;
-  }
-  return mix_outcome_mass_idx(
-      ctx, info, component_indices, component_weights, active_params, rel_tol,
-      abs_tol, max_depth, oi, single_state_plan, prob_scratch_ptr, true,
-      coupling_programs_ptr);
+  return evaluate_sequence_density_kernel_idx(
+      ctx, spec, active_params, sequence_transition_compiler, single_state_plan,
+      prob_scratch_ptr, runtime_ptr);
 }
 
 double evaluate_trial_probability_kernel_idx(
@@ -8615,7 +8972,10 @@ double evaluate_trial_probability_kernel_idx(
     int max_depth, const SharedTriggerPlan *trigger_plan,
     TrialParamSet *prob_trigger_scratch, TrialEvalScratch *eval_scratch) {
   if (!eval_input.valid) {
-    return eval_input.nonresponse_mode ? 1.0 : 0.0;
+    return eval_input.probability_transform ==
+                   TrialProbabilityTransform::Complement
+               ? 1.0
+               : 0.0;
   }
 
   TrialEvalScratch local_eval_scratch;
@@ -8633,7 +8993,8 @@ double evaluate_trial_probability_kernel_idx(
     if (!std::isfinite(total)) {
       return 0.0;
     }
-    if (eval_input.nonresponse_mode) {
+    if (eval_input.probability_transform ==
+        TrialProbabilityTransform::Complement) {
       return clamp_probability(1.0 - total);
     }
     return (total > 0.0) ? total : 0.0;
@@ -8642,18 +9003,27 @@ double evaluate_trial_probability_kernel_idx(
   if (!build_trial_contributions_unified(
           ctx, eval_input, component_indices, component_weights, cache_entries,
           contributions, sequence_transition_compiler)) {
-    return eval_input.nonresponse_mode ? 1.0 : 0.0;
+    return eval_input.probability_transform ==
+                   TrialProbabilityTransform::Complement
+               ? 1.0
+               : 0.0;
   }
 
   if (contributions.empty()) {
-    return eval_input.nonresponse_mode ? 1.0 : 0.0;
+    return eval_input.probability_transform ==
+                   TrialProbabilityTransform::Complement
+               ? 1.0
+               : 0.0;
   }
 
   int runtime_count = 0;
   for (TrialContributionSpec &spec : contributions) {
+    spec.runtime_slot = -1;
     if (!ctx.kernel_program.valid ||
-        spec.metric != KernelContributionMetric::SequenceDensity ||
-        spec.guess_shortcut || spec.sequence_length <= 1) {
+        spec.intent != TrialKernelIntent::SequenceDensity ||
+        (spec.sequence_outcome_indices.size() == 1u &&
+         !spec.step_guess_shortcut.empty() &&
+         spec.step_guess_shortcut[0] != 0u)) {
       continue;
     }
     spec.runtime_slot = runtime_count;
@@ -8668,8 +9038,8 @@ double evaluate_trial_probability_kernel_idx(
   if (!sequence_transition_compiler) {
     bool needs_sequence_compiler = false;
     for (const TrialContributionSpec &spec : contributions) {
-      if (spec.metric == KernelContributionMetric::SequenceDensity &&
-          !spec.guess_shortcut && spec.sequence_length > 1) {
+      if (spec.intent == TrialKernelIntent::SequenceDensity &&
+          spec.sequence_outcome_indices.size() > 1u) {
         needs_sequence_compiler = true;
         break;
       }
@@ -9300,10 +9670,7 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
           &forced_bundle.nonresponse_coupling_programs;
     }
 
-    if (eval_input.nonresponse_mode) {
-      eval_input.nonresponse_coupling_programs =
-          nonresponse_coupling_programs_ptr;
-    }
+    eval_input.nonresponse_coupling_programs = nonresponse_coupling_programs_ptr;
 
     const int trigger_plan_idx =
         (t >= 0 && t < static_cast<int>(trigger_plan_index_by_trial.size()))

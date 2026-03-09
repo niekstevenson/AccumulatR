@@ -1,0 +1,45 @@
+batch=FP2
+subbatch=FP2.1
+timestamp_utc=20260306T140306Z
+commit_sha=54437eb
+
+[single runtime trial entrypoint]
+8791:double evaluate_trial_probability_kernel_idx(
+9508:    const double prob = evaluate_trial_probability_kernel_idx(
+
+[single contribution executor contract]
+8324:  TrialKernelIntent intent{TrialKernelIntent::NodeDensity};
+8524:      spec.intent = TrialKernelIntent::OutcomeMass;
+8690:      spec.intent = TrialKernelIntent::SequencePrefixDensity;
+8698:      spec.intent = TrialKernelIntent::NodeDensity;
+8707:        spec.intent = TrialKernelIntent::GuessDensity;
+8721:double evaluate_trial_kernel_entry_unified(
+8732:  switch (spec.intent) {
+8733:  case TrialKernelIntent::GuessDensity: {
+8743:  case TrialKernelIntent::NodeDensity: {
+8757:  case TrialKernelIntent::SequencePrefixDensity: {
+8770:  case TrialKernelIntent::OutcomeMass: {
+8847:        spec.intent != TrialKernelIntent::SequencePrefixDensity) {
+8862:      if (spec.intent == TrialKernelIntent::SequencePrefixDensity) {
+
+[normalization before entry]
+8356:  TrialEvalMode mode{TrialEvalMode::Sequence};
+8358:      TrialProbabilityTransform::Identity};
+8381:inline TrialEvalInput normalize_trial_eval_input_for_trial(
+8398:      eval_input.mode = TrialEvalMode::Nonresponse;
+8399:      eval_input.probability_transform = TrialProbabilityTransform::Complement;
+8403:    eval_input.mode = TrialEvalMode::Sequence;
+8404:    eval_input.probability_transform = TrialProbabilityTransform::Identity;
+8415:    eval_input.mode = TrialEvalMode::Nonresponse;
+8416:    eval_input.probability_transform = TrialProbabilityTransform::Complement;
+8423:  eval_input.mode = TrialEvalMode::Sequence;
+8424:  eval_input.probability_transform = TrialProbabilityTransform::Identity;
+8508:  if (eval_input.mode == TrialEvalMode::Nonresponse) {
+8801:                   TrialProbabilityTransform::Complement
+8822:        TrialProbabilityTransform::Complement) {
+8832:                   TrialProbabilityTransform::Complement
+8839:                   TrialProbabilityTransform::Complement
+9423:        normalize_trial_eval_input_for_trial(
+9493:    if (eval_input.mode == TrialEvalMode::Nonresponse) {
+
+[deleted FP2.0 split predicates check]

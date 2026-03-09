@@ -1,0 +1,43 @@
+timestamp_utc=20260306T132542Z
+commit_sha=54437eb
+2112:bool node_density_with_competitors_batch_internal(
+3212:NodeEvalResult eval_node_recursive_dense(int node_idx, NodeEvalState &state,
+3270:enum class GenericCouplingProviderKind : std::uint8_t {
+3276:  GenericCouplingProviderKind kind{GenericCouplingProviderKind::NodeRef};
+3297:  plan.kind = GenericCouplingProviderKind::NodeRef;
+3310:  plan.kind = GenericCouplingProviderKind::EventRef;
+3949:  if (provider.kind == GenericCouplingProviderKind::EventRef) {
+4035:  if (provider.kind == GenericCouplingProviderKind::NodeRef) {
+4036:    return node_density_with_competitors_batch_internal(
+4240:double evaluate_coupling_mass_nway(
+4246:double evaluate_coupling_mass_pair(
+4271:    if (provider.kind == GenericCouplingProviderKind::EventRef &&
+4287:    if (provider.kind == GenericCouplingProviderKind::NodeRef &&
+4301:    if (provider.kind == GenericCouplingProviderKind::EventRef) {
+4303:    } else if (provider.kind == GenericCouplingProviderKind::NodeRef) {
+4309:    if (provider.kind == GenericCouplingProviderKind::NodeRef &&
+4393:    return evaluate_coupling_mass_nway(
+4398:    return evaluate_coupling_mass_pair(
+4405:double evaluate_coupling_mass_nway(
+4478:double evaluate_coupling_mass_pair(
+4594:  return eval_node_recursive_dense(node_idx, local, need);
+4789:NodeEvalResult eval_node_recursive_dense(int node_idx, NodeEvalState &state,
+4811:    kernel_ok = uuber::eval_kernel_node(state.ctx.kernel_program, node_idx,
+4825:  return eval_node_recursive_dense(node_idx, state, need);
+4875:      eval_node_recursive_dense(tr.blocker_node_idx, local, EvalNeed::kSurvival);
+4969:  return eval_node_recursive_dense(node_idx, local, need);
+6016:    if (!uuber::eval_kernel_nodes_incremental(
+6027:      if (!uuber::eval_kernel_node(state.ctx.kernel_program, node_idx, kernel_need,
+6194:bool node_density_with_competitors_batch_internal(
+7793:bool for_each_sequence_node_transition(
+8156:    const bool has_transition = for_each_sequence_node_transition(
+8371:    bool ranked_mode, int outcome_label_id, double rt,
+8377:  if (ranked_mode) {
+9034:  const bool ranked_mode = rank_width > 1;
+9101:      if (ranked_mode) {
+9186:    if (ranked_mode) {
+9344:  if (ranked_mode) {
+9420:        !ranked_mode ||
+9424:        (ranked_mode && ranked_valid &&
+9429:        (ranked_mode && ranked_valid &&
+9435:            ranked_mode, outcome_label_id, rt, ranked_ids_ptr, ranked_times_ptr,

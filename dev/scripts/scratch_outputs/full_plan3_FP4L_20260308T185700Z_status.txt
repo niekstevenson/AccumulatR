@@ -1,0 +1,12 @@
+install=0
+step3_structure=0
+step4_structure=0
+step5_structure=0
+step6_structure=0
+golden=0
+bench=0
+max_abs_diff=1.23378e-05
+worst_label=example_16_guard_tie_simple
+worst_ratio=0.9829545
+count_ratio_gt_1.02=0
+count_p1_ratio_gt_1.00=0

@@ -1,0 +1,8 @@
+batch=FP1
+subbatch=FP1.0
+timestamp_utc=20260306T130204Z
+commit_sha=54437eb
+branch=optimize
+cwd=/Users/nstevenson/Documents/2025/AccumulatR
+no_wrapper_only_consolidation_introduced=yes
+purpose=step1_baseline_probe_freeze

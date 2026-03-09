@@ -92,16 +92,25 @@ params_shared_gate_nway_trigger <- c(
 
 make_case <- function(spec_builder, params, observed_label, rt_mean) {
   spec <- spec_builder()
+  structure <- finalize_model(spec)
   params_df <- build_param_matrix(spec, params, n_trials = n_trials)
   rt_col <- if (is.na(rt_mean)) rep(NA_real_, n_trials) else stats::rlnorm(n_trials, meanlog = log(rt_mean), sdlog = 0.12)
+  outcome_levels <- names(structure$prep$outcomes)
   data_df <- data.frame(
     trial = seq_len(n_trials),
-    R = rep(observed_label, n_trials),
+    R = factor(rep(observed_label, n_trials), levels = outcome_levels),
     rt = rt_col,
     stringsAsFactors = FALSE
   )
-  ctx <- build_likelihood_context(spec, data_df)
-  list(ctx = ctx, params_df = params_df)
+  ctx <- build_likelihood_context(structure, data_df)
+  data_prepped <- prepare_likelihood_data(ctx, data_df)
+  params_df_slim <- build_param_matrix(
+    spec,
+    params,
+    n_trials = max(data_df$trial),
+    layout = ctx$param_layout
+  )
+  list(ctx = ctx, data_prepped = data_prepped, params_df = params_df_slim)
 }
 
 cases <- list(
@@ -125,7 +134,7 @@ if (nzchar(case_filter)) {
 
 # Warmup JIT/lookup paths before sampling window.
 invisible(lapply(cases, function(x) {
-  log_likelihood(x$ctx, x$params_df)
+  log_likelihood(x$ctx, x$data_prepped, x$params_df)
 }))
 
 start <- Sys.time()
@@ -135,7 +144,8 @@ names(iters) <- names(cases)
 
 while (as.numeric(difftime(Sys.time(), start, units = "secs")) < run_sec) {
   for (nm in names(cases)) {
-    val <- log_likelihood(cases[[nm]]$ctx, cases[[nm]]$params_df)
+    val <- log_likelihood(cases[[nm]]$ctx, cases[[nm]]$data_prepped,
+                          cases[[nm]]$params_df)
     checksum <- checksum + sum(val)
     iters[[nm]] <- iters[[nm]] + 1L
   }

@@ -1,0 +1,22 @@
+batch=FP2
+subbatch=FP2.5
+timestamp_utc=20260306T152414Z
+commit_sha=54437eb
+
+[mode normalization only]
+8348:  TrialProbabilityTransform probability_transform{
+8371:inline TrialEvalInput normalize_trial_eval_input_for_trial(
+8387:      eval_input.probability_transform = TrialProbabilityTransform::Complement;
+8391:    eval_input.probability_transform = TrialProbabilityTransform::Identity;
+8402:    eval_input.probability_transform = TrialProbabilityTransform::Complement;
+8409:  eval_input.probability_transform = TrialProbabilityTransform::Identity;
+8493:  const bool nonresponse_mode = (eval_input.sequence_length == 0u ||
+8559:  if (sequence_length == 0u || !eval_input.sequence_label_data ||
+8733:  if (spec.intent != TrialKernelIntent::SequenceDensity || sequence_length == 0u ||
+8817:    return eval_input.probability_transform ==
+8838:    if (eval_input.probability_transform ==
+8848:    return eval_input.probability_transform ==
+8855:    return eval_input.probability_transform ==
+9441:        normalize_trial_eval_input_for_trial(
+
+[deleted legacy predicates]

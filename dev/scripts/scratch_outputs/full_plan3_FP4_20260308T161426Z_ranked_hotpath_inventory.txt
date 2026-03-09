@@ -1,0 +1,26 @@
+FP4.1 ranked fused-kernel convergence inventory
+1. Single-step non-guess sequence density no longer calls node_density_entry_idx from evaluate_sequence_density_kernel_idx.
+2. Shared sequence transition path now serves both observed single-step and ranked multi-step sequence density.
+3. Deleted single-step competitor payload from TrialContributionSpec; residual single-step branch is guess-shortcut policy only.
+4. Unified single-step fast path now lives inside sequence_prefix_density_resolved instead of a separate node-density engine.
+--- anchors ---
+2127:double kernel_node_density_entry_idx(
+2141:double node_density_entry_idx(
+2176:  return node_density_entry_idx(
+2901:    double density = kernel_node_density_entry_idx(
+6337:double kernel_node_density_entry_idx(
+6358:inline double node_density_entry_idx(
+6373:    return kernel_node_density_entry_idx(
+6387:    return kernel_node_density_entry_idx(
+7228:      contrib = node_density_entry_idx(
+8055:double sequence_prefix_density_resolved(
+8555:struct TrialContributionSpec {
+8566:  bool use_guess_shortcut{false};
+8915:      spec.use_guess_shortcut =
+8918:    if (!spec.use_guess_shortcut) {
+8935:double evaluate_sequence_density_kernel_idx(
+8958:    if (spec.use_guess_shortcut) {
+8965:  return sequence_prefix_density_resolved(
+8996:  return evaluate_sequence_density_kernel_idx(
+9058:        spec.use_guess_shortcut) {
+9074:          !spec.use_guess_shortcut) {

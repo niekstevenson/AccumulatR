@@ -1,0 +1,70 @@
+batch=FP3
+subbatch=FP3.3
+timestamp_utc=20260308T154144Z
+commit_sha=54437eb
+
+[acceptance_1_guard_compiled_default]
+3210:double guard_cdf_internal(const GuardEvalInput &input, double t,
+4803:      out.cdf = guard_cdf_internal(guard_input, state.t, settings);
+4858:guard_transition_required(const GuardEvalInput &input,
+4912:      guard_transition_required(input, true);
+5020:  if (tr.eval_mode != uuber::KernelGuardEvalMode::LinearChainODE) {
+5568:double guard_cdf_internal(const GuardEvalInput &input, double t,
+5579:  const uuber::KernelGuardTransition &tr = guard_transition_required(input);
+5580:  if (tr.eval_mode != uuber::KernelGuardEvalMode::LinearChainODE) {
+5581:    Rcpp::stop("IR guard transition mode must be LinearChainODE for node_idx=%d",
+5620:inline void apply_transition_mask_words(
+5655:  apply_transition_mask_words(state.ctx, transition.source_mask_begin,
+6067:    apply_transition_mask_words(
+7905:    apply_transition_mask_words(ctx, step.source_mask_begin,
+
+[acceptance_2_competitor_split_removed]
+6025:double run_competitor_batch_survival_op(
+6037:  const bool use_state_runtime = competitor_kernel_runtime_usable(state);
+6038:  thread_local uuber::KernelRuntimeState fallback_runtime;
+6040:      use_state_runtime ? state.kernel_runtime_ptr : &fallback_runtime;
+6041:  if (!use_state_runtime) {
+6044:  if (!uuber::eval_kernel_nodes_incremental(
+6050:  if (!use_state_runtime) {
+6088:        run_competitor_batch_survival_op(op, state, event_eval_cb, guard_eval_cb);
+-- removed patterns (must be empty) --
+
+[acceptance_3_dirty_slot_updates_only]
+1745:  std::vector<int> kernel_invalidate_slot;
+1830:    int invalidate_slot = 0;
+1831:    bool invalidate_slot_found = false;
+1846:      if (!invalidate_slot_found || slot < invalidate_slot) {
+1847:        invalidate_slot = slot;
+1848:        invalidate_slot_found = true;
+1851:    if (!invalidate_slot_found) {
+1852:      invalidate_slot = 0;
+1856:    plan.kernel_invalidate_slot.push_back(invalidate_slot);
+2055:      int invalidate_slot = 0;
+2057:          bit < static_cast<int>(plan.kernel_invalidate_slot.size())) {
+2058:        invalidate_slot =
+2059:            plan.kernel_invalidate_slot[static_cast<std::size_t>(bit)];
+2063:                                                   invalidate_slot);
+2071:                                                     invalidate_slot);
+5620:inline void apply_transition_mask_words(
+5622:    int source_mask_count, int invalidate_slot, uuber::BitsetState &bits_out,
+5636:  if (kernel_runtime && invalidate_slot >= 0) {
+5637:    uuber::invalidate_kernel_runtime_from_slot(*kernel_runtime, invalidate_slot);
+5655:  apply_transition_mask_words(state.ctx, transition.source_mask_begin,
+5657:                              transition.invalidate_slot, *bits_ptr, *valid_ptr,
+5667:  int invalidate_slot{0};
+5700:      (meta.invalidate_slot < 0 ||
+5701:       meta.invalidate_slot >= static_cast<int>(ctx.kernel_program.ops.size()))) {
+5738:      ctx.kernel_state_graph.node_competitor_transition_invalidate_slot.size() !=
+5766:      meta.invalidate_slot = ctx.kernel_state_graph
+5767:          .node_competitor_transition_invalidate_slot[static_cast<std::size_t>(
+5795:      op.transition_invalidate_slot = 0;
+5844:        op.transition_invalidate_slot =
+5845:            meta.transition_required ? meta.invalidate_slot : 0;
+6067:    apply_transition_mask_words(
+6069:        op.transition_invalidate_slot, state.forced_survive_bits,
+7537:  int invalidate_slot{0};
+7625:inline int ranked_invalidate_slot_for_node(const uuber::NativeContext &ctx,
+7660:  step.invalidate_slot = ranked_invalidate_slot_for_node(ctx, node_idx);
+7905:    apply_transition_mask_words(ctx, step.source_mask_begin,
+7906:                                step.source_mask_count, step.invalidate_slot,
+-- full forced-state rebuild patterns in competitor op block (must be empty) --

@@ -1,0 +1,34 @@
+batch=FP4L
+subbatch=FP4L.1
+timestamp_utc=20260308T164541Z
+commit_sha=54437eb
+mode=transient_failed_fp4.1_profile_only
+branch_restored=yes
+no_wrapper_only_consolidation_introduced=yes
+primary_findings=
+  1. Both failing workloads spend sampled time inside sequence_prefix_density_resolved -> for_each_sequence_node_transition.
+  2. The dominant repeated lower-layer costs are not sequence-state hashing.
+  3. The strongest repeated hotspots are eval_kernel_node_incremental, NodeEvalState::NodeEvalState, reset_kernel_runtime, and std::vector<double>::assign.
+  4. This points to per-scenario kernel runtime reset/allocation and per-scenario state setup inside competitor execution.
+  5. sequence_state_key / ranked_hash_* did not appear as sampled hotspots in these single-step failed-path runs.
+workload_findings=
+  depth3_guard_competitor:
+    sequence_prefix_density_resolved=18
+    for_each_sequence_node_transition=4
+    competitor_survival_internal=5
+    eval_kernel_node_incremental=54
+    NodeEvalState::NodeEvalState=21
+    reset_kernel_runtime=23
+    std::vector<double>::assign=43
+  example_2_stop_mixture:
+    sequence_prefix_density_resolved=56
+    for_each_sequence_node_transition=20
+    competitor_survival_internal=7
+    eval_kernel_node_incremental=133
+    NodeEvalState::NodeEvalState=57
+    reset_kernel_runtime=73
+    std::vector<double>::assign=138
+conclusion=
+  The failed FP4.1 boundary is wrong. The observable explosion comes from pushing single-step observed work into transition-scenario execution that repeatedly rebuilds runtime state and re-enters competitor kernel evaluation.
+next_keepable_cut=
+  Converge lower-layer node/guard/competitor ops and runtime reuse, but keep single-step observed out of sequence-state scheduling.

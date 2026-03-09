@@ -1,0 +1,7 @@
+batch=FP4L
+subbatch=FP4L.1
+timestamp_utc=20260308T164252Z
+commit_sha=54437eb
+profile_depth3=0
+profile_example2=0
+no_wrapper_only_consolidation_introduced=yes

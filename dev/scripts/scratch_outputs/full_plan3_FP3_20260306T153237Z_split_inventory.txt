@@ -1,0 +1,49 @@
+batch=FP3
+subbatch=FP3.0
+timestamp_utc=20260306T153237Z
+commit_sha=54437eb
+
+[step3 anchor definitions]
+2112:bool node_density_with_competitors_batch_internal(
+3205:double guard_effective_survival_internal(const GuardEvalInput &input, double t,
+3208:double guard_cdf_internal(const GuardEvalInput &input, double t,
+4827:double guard_effective_survival_internal(const GuardEvalInput &input, double t,
+5522:double guard_cdf_internal(const GuardEvalInput &input, double t,
+5692:fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
+6002:double run_competitor_batch_survival_op(
+6088:                       : fetch_competitor_cluster_cache(ctx, competitor_ids);
+6134:      fetch_competitor_cluster_cache(ctx, competitor_ids);
+6193:bool node_density_with_competitors_batch_internal(
+6231:    competitor_cache = &fetch_competitor_cluster_cache(ctx, competitor_ids);
+6310:    competitor_cache = &fetch_competitor_cluster_cache(ctx, competitor_ids);
+6395:    competitor_cache = &fetch_competitor_cluster_cache(ctx, competitor_ids);
+
+[runtime split points to collapse in FP3.1/FP3.2]
+4810:    kernel_ok = uuber::eval_kernel_node(state.ctx.kernel_program, node_idx,
+6014:  if (competitor_kernel_runtime_usable(state)) {
+6015:    if (!uuber::eval_kernel_nodes_incremental(
+6024:    for (std::size_t i = 0; i < op.target_node_indices.size(); ++i) {
+6026:      if (!uuber::eval_kernel_node(state.ctx.kernel_program, node_idx, kernel_need,
+
+[compiled transition application evidence]
+5597:inline void apply_transition_mask_words(
+5632:  apply_transition_mask_words(state.ctx, transition.source_mask_begin,
+5642:  int transition_mask_begin{-1};
+5671:  if (meta.transition_mask_begin < 0 || meta.transition_mask_count <= 0 ||
+5672:      meta.transition_mask_begin + meta.transition_mask_count >
+5711:      ctx.kernel_state_graph.node_competitor_transition_mask_begin.size() !=
+5715:      ctx.kernel_state_graph.node_competitor_transition_invalidate_slot.size() !=
+5737:      meta.transition_mask_begin = ctx.kernel_state_graph
+5738:          .node_competitor_transition_mask_begin[static_cast<std::size_t>(
+5744:          .node_competitor_transition_invalidate_slot[static_cast<std::size_t>(
+5770:      op.transition_mask_begin = -1;
+5772:      op.transition_invalidate_slot = 0;
+5817:        op.transition_mask_begin =
+5818:            meta.transition_required ? meta.transition_mask_begin : -1;
+5821:        op.transition_invalidate_slot =
+5823:        if (op.transition_mask_count > 0 && op.transition_mask_begin >= 0) {
+6045:  if (op.transition_mask_begin >= 0 && op.transition_mask_count > 0) {
+6046:    apply_transition_mask_words(
+6047:        state.ctx, op.transition_mask_begin, op.transition_mask_count,
+6048:        op.transition_invalidate_slot, state.forced_survive_bits,
+7818:    apply_transition_mask_words(ctx, step.source_mask_begin,

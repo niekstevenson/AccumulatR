@@ -1,0 +1,46 @@
+batch=FP3
+subbatch=FP3.1
+timestamp_utc=20260306T154212Z
+commit_sha=54437eb
+
+[guard transition pre-resolution path]
+3131:  int guard_transition_idx{-1};
+3132:  const uuber::KernelGuardTransition *guard_transition{nullptr};
+4730:                        ctx.kernel_state_graph.node_guard_transition_idx.size())) {
+4734:    const int tr_idx = ctx.kernel_state_graph.node_guard_transition_idx
+4749:    input.guard_transition_idx = tr_idx;
+4750:    input.guard_transition = &tr;
+4858:guard_transition_required(const GuardEvalInput &input,
+4860:  if (input.guard_transition != nullptr) {
+4861:    if (input.guard_transition->node_idx != input.node_idx) {
+4865:    if (require_blocker_idx && input.guard_transition->blocker_node_idx < 0) {
+4870:    return *input.guard_transition;
+4875:                            input.ctx.kernel_state_graph.node_guard_transition_idx
+4880:  const int tr_idx = input.ctx.kernel_state_graph.node_guard_transition_idx
+4912:      guard_transition_required(input, true);
+5579:  const uuber::KernelGuardTransition &tr = guard_transition_required(input);
+5664:  int guard_transition_idx{-1};
+5706:  if (meta.guard_transition_idx >= 0 &&
+5707:      meta.guard_transition_idx >=
+5732:      ctx.kernel_state_graph.node_competitor_guard_transition_idx.size() !=
+5757:      meta.guard_transition_idx = ctx.kernel_state_graph
+5758:          .node_competitor_guard_transition_idx[static_cast<std::size_t>(
+5839:            meta.transition_required ? meta.guard_transition_idx : -1;
+
+[ranked mask coverage + invalidate-slot tightening]
+7540:  bool source_mask_covers_ids{false};
+7584:inline bool ranked_mask_covers_source_ids(const uuber::NativeContext &ctx,
+7627:inline int ranked_invalidate_slot_for_node(const uuber::NativeContext &ctx,
+7662:  step.invalidate_slot = ranked_invalidate_slot_for_node(ctx, node_idx);
+7663:  step.source_mask_covers_ids = ranked_mask_covers_source_ids(ctx, step);
+7908:                                step.source_mask_count, step.invalidate_slot,
+7982:        const bool applied_mask = apply_ranked_transition_mask(
+7984:        if (applied_mask && step.source_mask_covers_ids) {
+7995:        const bool applied_mask = apply_ranked_transition_mask(
+7997:        if (applied_mask && step.source_mask_covers_ids) {
+
+[remaining competitor split points]
+4840:    kernel_ok = uuber::eval_kernel_node(state.ctx.kernel_program, node_idx,
+6037:  if (competitor_kernel_runtime_usable(state)) {
+6038:    if (!uuber::eval_kernel_nodes_incremental(
+6049:      if (!uuber::eval_kernel_node(state.ctx.kernel_program, node_idx, kernel_need,

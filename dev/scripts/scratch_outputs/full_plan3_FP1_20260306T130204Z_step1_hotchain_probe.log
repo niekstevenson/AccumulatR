@@ -1,0 +1,45 @@
+941:inline bool ensure_forced_bitset_capacity(const uuber::NativeContext &ctx,
+966:  if (!ensure_forced_bitset_capacity(ctx, bits_out, bits_valid)) {
+972:inline bool forced_bits_any(const uuber::BitsetState *bits, bool bits_valid) {
+2308:eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
+2504:          return eval_event_ref_idx(
+2706:      NodeEvalResult child = eval_event_ref_idx(
+2921:      (void)ensure_forced_bitset_capacity(ctx, forced_complete_bits,
+2928:      (void)ensure_forced_bitset_capacity(ctx, forced_survive_bits,
+3021:NodeEvalResult eval_node_with_forced_dense_bits(
+3148:      !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
+3149:      !forced_bits_any(forced_survive_bits, forced_survive_bits_valid);
+3488:  return eval_event_ref_idx(
+4139:      NodeEvalResult ev = eval_node_with_forced_dense_bits(
+4416:NodeEvalResult eval_node_with_forced_dense_bits(
+4525:    NodeEvalResult event_eval = eval_event_ref_idx(
+4540:uuber::KernelGuardEvalFn make_kernel_guard_eval(NodeEvalState &state) {
+4587:  uuber::KernelGuardEvalFn guard_eval_cb = make_kernel_guard_eval(state);
+5400:  if (!ensure_forced_bitset_capacity(ctx, bits_out, bits_valid)) {
+5776:      !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
+5777:      !forced_bits_any(forced_survive_bits, forced_survive_bits_valid) &&
+5899:  uuber::KernelGuardEvalFn guard_eval_cb = make_kernel_guard_eval(state);
+5946:      !forced_bits_any(forced_complete_bits_in, forced_complete_bits_in_valid) &&
+5947:      !forced_bits_any(forced_survive_bits_in, forced_survive_bits_in_valid) &&
+5958:  uuber::KernelGuardEvalFn guard_eval_cb = make_kernel_guard_eval(state);
+6006:      !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
+6007:      !forced_bits_any(forced_survive_bits, forced_survive_bits_valid) &&
+6032:    competitor_guard_eval_cb = make_kernel_guard_eval(state);
+6170:      !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
+6171:      !forced_bits_any(forced_survive_bits, forced_survive_bits_valid);
+6203:double native_outcome_probability_bits_impl_idx(
+6225:      !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
+6226:      !forced_bits_any(forced_survive_bits, forced_survive_bits_valid);
+6287:double native_outcome_probability_bits_impl_idx(
+6302:  return native_outcome_probability_bits_impl_idx(
+6331:  return native_outcome_probability_bits_impl_idx(
+7091:  (void)ensure_forced_bitset_capacity(ctx, empty_forced_complete_bits,
+7093:  (void)ensure_forced_bitset_capacity(ctx, empty_forced_survive_bits,
+7112:    double p = native_outcome_probability_bits_impl_idx(
+7576:  ensure_forced_bitset_capacity(ctx, bits_out, bits_valid);
+7625:    (void)ensure_forced_bitset_capacity(ctx, base_forced_complete_bits,
+7632:    (void)ensure_forced_bitset_capacity(ctx, base_forced_survive_bits,
+7646:        NodeEvalResult eval = eval_node_with_forced_dense_bits(
+7661:        NodeEvalResult eval = eval_node_with_forced_dense_bits(
+7829:  (void)ensure_forced_bitset_capacity(ctx, init_state.forced_complete_bits,
+7831:  (void)ensure_forced_bitset_capacity(ctx, init_state.forced_survive_bits,

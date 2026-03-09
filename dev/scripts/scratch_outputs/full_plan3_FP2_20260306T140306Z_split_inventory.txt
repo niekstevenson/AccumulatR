@@ -1,0 +1,21 @@
+batch=FP2
+subbatch=FP2.1
+timestamp_utc=20260306T140306Z
+commit_sha=54437eb
+scope=step2_unified_kernel_entry
+
+[active split points inventory after FP2.1]
+8324:  TrialKernelIntent intent{TrialKernelIntent::NodeDensity};
+8508:  if (eval_input.mode == TrialEvalMode::Nonresponse) {
+8524:      spec.intent = TrialKernelIntent::OutcomeMass;
+8690:      spec.intent = TrialKernelIntent::SequencePrefixDensity;
+8698:      spec.intent = TrialKernelIntent::NodeDensity;
+8707:        spec.intent = TrialKernelIntent::GuessDensity;
+8732:  switch (spec.intent) {
+8733:  case TrialKernelIntent::GuessDensity: {
+8743:  case TrialKernelIntent::NodeDensity: {
+8757:  case TrialKernelIntent::SequencePrefixDensity: {
+8770:  case TrialKernelIntent::OutcomeMass: {
+8847:        spec.intent != TrialKernelIntent::SequencePrefixDensity) {
+8862:      if (spec.intent == TrialKernelIntent::SequencePrefixDensity) {
+9493:    if (eval_input.mode == TrialEvalMode::Nonresponse) {

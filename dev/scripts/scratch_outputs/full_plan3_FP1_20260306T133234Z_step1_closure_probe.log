@@ -1,0 +1,18 @@
+# carrier types/helpers
+1092:struct ForcedStateView {
+3148:NodeEvalResult eval_node_with_forced_state_view(
+3184:inline GuardEvalInput make_guard_input_forced_state(
+4294:      NodeEvalResult ev = eval_node_with_forced_state_view(
+4570:NodeEvalResult eval_node_with_forced_state_view(
+4614:  return eval_node_with_forced_state_view(
+4762:    GuardEvalInput guard_input = make_guard_input_forced_state(
+7858:        NodeEvalResult eval = eval_node_with_forced_state_view(
+7869:        NodeEvalResult eval = eval_node_with_forced_state_view(
+7880:        GuardEvalInput guard_input = make_guard_input_forced_state(
+# eval_event_ref_idx callsites
+2372:eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
+2593:          return eval_event_ref_idx(
+2794:      NodeEvalResult child = eval_event_ref_idx(
+3638:  return eval_event_ref_idx(
+4743:    NodeEvalResult event_eval = eval_event_ref_idx(
+# check set fallback symbols in hot file

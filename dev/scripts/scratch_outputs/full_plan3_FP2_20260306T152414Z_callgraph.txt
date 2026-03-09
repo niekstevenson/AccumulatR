@@ -1,0 +1,19 @@
+batch=FP2
+subbatch=FP2.5
+timestamp_utc=20260306T152414Z
+commit_sha=54437eb
+
+[definitions]
+8723:double evaluate_sequence_density_kernel_idx(
+8778:double evaluate_trial_contribution_kernel_idx(
+8808:double evaluate_trial_probability_kernel_idx(
+8961:double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
+9548:Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP, Rcpp::List params_list,
+
+[calls]
+8723:double evaluate_sequence_density_kernel_idx(
+8778:double evaluate_trial_contribution_kernel_idx(
+8803:  return evaluate_sequence_density_kernel_idx(
+8808:double evaluate_trial_probability_kernel_idx(
+8900:    return evaluate_trial_contribution_kernel_idx(
+9523:    const double prob = evaluate_trial_probability_kernel_idx(

@@ -1,0 +1,12 @@
+batch=FP2
+subbatch=FP2.2
+timestamp_utc=20260306T145624Z
+commit_sha=54437eb
+scope=step2_unified_kernel_entry
+
+[active split points inventory after FP2.2]
+8505:  if (eval_input.mode == TrialEvalMode::Nonresponse) {
+8729:  if (sequence_length == 1u) {
+8737:    if (spec.use_guess_shortcut) {
+8767:  if (spec.intent == TrialKernelIntent::OutcomeMass) {
+9492:    if (eval_input.mode == TrialEvalMode::Nonresponse) {

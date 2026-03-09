@@ -1,0 +1,16 @@
+batch=FP2
+subbatch=FP2.3
+timestamp_utc=20260306T151253Z
+commit_sha=54437eb
+
+[single runtime trial entrypoint]
+8814:double evaluate_trial_probability_kernel_idx(
+9532:    const double prob = evaluate_trial_probability_kernel_idx(
+
+[ranked and observed on same sequence evaluator]
+7961:double sequence_prefix_density_resolved(
+8729:double evaluate_sequence_density_kernel_idx(
+8745:  if (sequence_length == 1u) {
+8778:  return sequence_prefix_density_resolved(
+
+[deleted ranked split predicate check]

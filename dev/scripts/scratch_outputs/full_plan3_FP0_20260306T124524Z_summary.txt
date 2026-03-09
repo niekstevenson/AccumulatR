@@ -1,0 +1,19 @@
+batch=FP0
+timestamp_utc=20260306T124524Z
+commit_sha=54437eb
+status_table=/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP0_20260306T124524Z_status.txt
+manifest=/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP0_20260306T124524Z_manifest.txt
+split_inventory=/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP0_20260306T124524Z_split_inventory.txt
+forced_grep=/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP0_20260306T124524Z_grep_forcedstate.log
+--- command_rc ---
+install	0	/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP0_20260306T124524Z_install.log
+step3_structure	0	/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP0_20260306T124524Z_step3_structure.log
+step4_structure	0	/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP0_20260306T124524Z_step4_structure.log
+step5_structure	0	/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP0_20260306T124524Z_step5_structure.log
+step6_structure	0	/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP0_20260306T124524Z_step6_structure.log
+golden	0	/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP0_20260306T124524Z_golden.log
+bench	0	/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP0_20260306T124524Z_bench.log
+--- benchmark artifacts ---
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP0_20260306T124524Z_benchmark_centralized.csv
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP0_20260306T124524Z_benchmark_centralized_diff.csv
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP0_20260306T124524Z_benchmark_step3_comparison.csv

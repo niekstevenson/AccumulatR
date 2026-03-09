@@ -1,0 +1,6 @@
+batch=FP0
+timestamp_utc=20260306T124439Z
+commit_sha=54437eb
+branch=optimize
+cwd=/Users/nstevenson/Documents/2025/AccumulatR
+no_wrapper_only_consolidation_introduced=yes

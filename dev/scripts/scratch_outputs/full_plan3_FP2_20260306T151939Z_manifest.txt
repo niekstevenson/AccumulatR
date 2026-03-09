@@ -1,0 +1,20 @@
+batch=FP2
+subbatch=FP2.4
+timestamp_utc=20260306T151939Z
+commit_sha=54437eb
+status_table=dev/scripts/scratch_outputs/full_plan3_FP2_20260306T151939Z_status.txt
+callgraph=dev/scripts/scratch_outputs/full_plan3_FP2_20260306T151939Z_callgraph.txt
+mode_entryproof=dev/scripts/scratch_outputs/full_plan3_FP2_20260306T151939Z_mode_entryproof.txt
+split_inventory=dev/scripts/scratch_outputs/full_plan3_FP2_20260306T151939Z_split_inventory.txt
+--- command_rc ---
+install	0	dev/scripts/scratch_outputs/full_plan3_FP2_20260306T151939Z_install.log
+step3_structure	0	dev/scripts/scratch_outputs/full_plan3_FP2_20260306T151939Z_step3_structure.log
+step4_structure	0	dev/scripts/scratch_outputs/full_plan3_FP2_20260306T151939Z_step4_structure.log
+step5_structure	0	dev/scripts/scratch_outputs/full_plan3_FP2_20260306T151939Z_step5_structure.log
+step6_structure	0	dev/scripts/scratch_outputs/full_plan3_FP2_20260306T151939Z_step6_structure.log
+golden	0	dev/scripts/scratch_outputs/full_plan3_FP2_20260306T151939Z_golden.log
+bench	0	dev/scripts/scratch_outputs/full_plan3_FP2_20260306T151939Z_bench.log
+--- benchmark artifacts ---
+dev/scripts/scratch_outputs/full_plan3_FP2_20260306T151939Z_benchmark_centralized.csv
+dev/scripts/scratch_outputs/full_plan3_FP2_20260306T151939Z_benchmark_centralized_diff.csv
+dev/scripts/scratch_outputs/full_plan3_FP2_20260306T151939Z_benchmark_step3_comparison.csv

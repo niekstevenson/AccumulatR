@@ -1,0 +1,44 @@
+batch=FP4
+subbatch=FP4.0
+timestamp_utc=20260308T154626Z
+commit_sha=54437eb
+
+[SequenceStateKey block]
+struct SequenceStateKey {
+  bool forced_complete_bits_valid{false};
+  bool forced_survive_bits_valid{false};
+  int forced_complete_bit_count{0};
+  int forced_survive_bit_count{0};
+  std::uint64_t forced_complete_hash{0};
+  std::uint64_t forced_survive_hash{0};
+  std::uint64_t exact_hash{0};
+  std::uint64_t bounds_hash{0};
+  std::size_t exact_size{0};
+  std::size_t bounds_size{0};
+
+  bool operator==(const SequenceStateKey &other) const noexcept {
+    return forced_complete_bits_valid == other.forced_complete_bits_valid &&
+           forced_survive_bits_valid == other.forced_survive_bits_valid &&
+           forced_complete_bit_count == other.forced_complete_bit_count &&
+           forced_survive_bit_count == other.forced_survive_bit_count &&
+           forced_complete_hash == other.forced_complete_hash &&
+           forced_survive_hash == other.forced_survive_hash &&
+           exact_hash == other.exact_hash && bounds_hash == other.bounds_hash &&
+           exact_size == other.exact_size && bounds_size == other.bounds_size;
+  }
+};
+
+[string grep in key block; must be empty]
+
+[ranked hash helpers]
+7418:inline std::uint64_t ranked_hash_bitset(const uuber::BitsetState &bits,
+7437:inline std::uint64_t ranked_hash_exact_times(const ExactSourceTimeMap &exact_source_times) {
+7458:ranked_hash_bounds(const SourceTimeBoundsMap &source_time_bounds) {
+7480:inline SequenceStateKey sequence_state_key(
+7495:      ranked_hash_bitset(forced_complete_bits, forced_complete_bits_valid);
+7497:      ranked_hash_bitset(forced_survive_bits, forced_survive_bits_valid);
+7498:  key.exact_hash = ranked_hash_exact_times(exact_source_times);
+7499:  key.bounds_hash = ranked_hash_bounds(source_time_bounds);
+8197:      SequenceStateKey key = sequence_state_key(
+
+[legacy ranked-split field grep in sequence evaluator body; must be empty]

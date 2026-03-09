@@ -1,0 +1,4 @@
+FP4L.1 preliminary deletion target policy
+1. Do not delete current single-step node-density path until lower-layer shared ops exist.
+2. Delete duplicated lower-layer helpers only after shared IR-kernel ops replace them.
+3. Ranked sequence-state helpers are not deletion targets unless their lower-layer work is duplicated.

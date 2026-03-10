@@ -82,20 +82,6 @@ struct NativePool {
   std::vector<LabelRef> member_refs;
 };
 
-struct PoolTemplateEntry {
-  int finisher_idx{0};
-  std::vector<int> complete_idx;
-  std::vector<int> survivor_idx;
-  std::vector<int> forced_complete_ids;
-  std::vector<int> forced_survive_ids;
-};
-
-struct PoolTemplateCacheEntry {
-  std::vector<PoolTemplateEntry> templates;
-  std::vector<std::vector<int>> finisher_map;
-  std::vector<int> shared_index;
-};
-
 struct IrNode {
   IrNodeOp op{IrNodeOp::And};
   int child_begin{-1};
@@ -355,8 +341,6 @@ struct NativeContext {
   std::unordered_map<std::string, int> accumulator_index;
   std::unordered_map<std::string, int> pool_index;
   std::unordered_map<std::string, int> label_to_id;
-  mutable std::unordered_map<std::string, PoolTemplateCacheEntry>
-      pool_template_cache;
   mutable std::unordered_map<NAMapCacheKey, double, NAMapCacheKeyHash>
       na_map_cache;
   mutable std::unordered_map<std::string, std::deque<std::string>>

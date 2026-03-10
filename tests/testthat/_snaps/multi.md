@@ -37,10 +37,10 @@
                 "names": {
                   "type": "character",
                   "attributes": {},
-                  "value": ["A", "B", "NA"]
+                  "value": ["A", "B"]
                 }
               },
-              "value": [0.797186, 0.202814, 0]
+              "value": [0.797186, 0.202814]
             },
             {
               "type": "double",
@@ -76,10 +76,10 @@
                 "names": {
                   "type": "character",
                   "attributes": {},
-                  "value": ["A", "C", "NA"]
+                  "value": ["A", "C"]
                 }
               },
-              "value": [0.000143, 0.999581, 0.000276]
+              "value": [0.000143, 1]
             },
             {
               "type": "double",

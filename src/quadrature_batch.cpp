@@ -25,36 +25,6 @@ constexpr int kInfiniteUniformSegments = 24;
 constexpr int kInfiniteTailSegments = 20;
 constexpr double kInfiniteUniformUpper = 0.9;
 
-TimeBatch build_time_batch_0_to_upper_finite_impl(double upper,
-                                                  int finite_segments) {
-  TimeBatch batch;
-  if (!(upper > 0.0) || !std::isfinite(upper) || finite_segments <= 0) {
-    return batch;
-  }
-
-  batch.lower = 0.0;
-  batch.upper = upper;
-  const std::size_t total_nodes =
-      static_cast<std::size_t>(finite_segments * kGauss15N);
-  batch.nodes.resize(total_nodes);
-  batch.weights.resize(total_nodes);
-
-  const double segment_width = upper / static_cast<double>(finite_segments);
-  std::size_t idx = 0;
-  for (int seg = 0; seg < finite_segments; ++seg) {
-    const double seg_lo = segment_width * static_cast<double>(seg);
-    const double seg_hi = segment_width * static_cast<double>(seg + 1);
-    const double a = 0.5 * (seg_hi - seg_lo);
-    const double b = 0.5 * (seg_hi + seg_lo);
-    for (int i = 0; i < kGauss15N; ++i) {
-      batch.nodes[idx] = b + a * kGauss15X[i];
-      batch.weights[idx] = a * kGauss15W[i];
-      ++idx;
-    }
-  }
-  return batch;
-}
-
 } // namespace
 
 TimeBatch build_time_batch(double lower, double upper) {
@@ -175,71 +145,6 @@ TimeBatch build_time_batch_0_to_upper(double upper) {
     }
   }
   return batch;
-}
-
-TimeBatch build_time_batch_0_to_upper_finite_segments(double upper,
-                                                       int finite_segments) {
-  if (!std::isfinite(upper)) {
-    return build_time_batch_0_to_upper(upper);
-  }
-  return build_time_batch_0_to_upper_finite_impl(upper, finite_segments);
-}
-
-TimeBatch build_time_batch_with_observed(double lower, double upper,
-                                         const std::vector<double> &observed_times) {
-  TimeBatch batch = build_time_batch(lower, upper);
-  if (batch.nodes.empty()) {
-    return batch;
-  }
-  for (double t : observed_times) {
-    if (!std::isfinite(t) || t < lower || t > upper) {
-      continue;
-    }
-    batch.nodes.push_back(t);
-    batch.weights.push_back(0.0);
-  }
-  std::vector<std::size_t> order(batch.nodes.size());
-  for (std::size_t i = 0; i < order.size(); ++i) {
-    order[i] = i;
-  }
-  std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
-    return batch.nodes[a] < batch.nodes[b];
-  });
-  std::vector<double> nodes_sorted;
-  std::vector<double> weights_sorted;
-  nodes_sorted.reserve(order.size());
-  weights_sorted.reserve(order.size());
-  for (std::size_t idx : order) {
-    nodes_sorted.push_back(batch.nodes[idx]);
-    weights_sorted.push_back(batch.weights[idx]);
-  }
-  batch.nodes.swap(nodes_sorted);
-  batch.weights.swap(weights_sorted);
-  return batch;
-}
-
-double integrate_time_batch(const TimeBatch &batch,
-                            const std::vector<double> &values) {
-  if (batch.nodes.empty() || batch.weights.empty() ||
-      values.size() != batch.nodes.size()) {
-    return 0.0;
-  }
-  double sum = 0.0;
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    double v = values[i];
-    if (!std::isfinite(v) || v <= 0.0) {
-      continue;
-    }
-    double w = batch.weights[i];
-    if (!std::isfinite(w) || w <= 0.0) {
-      continue;
-    }
-    sum += w * v;
-  }
-  if (!std::isfinite(sum)) {
-    return 0.0;
-  }
-  return sum;
 }
 
 } // namespace uuber

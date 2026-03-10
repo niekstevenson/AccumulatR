@@ -318,13 +318,6 @@ void eval_pdf_vec(int dist_code, double p1, double p2, double p3, double p4,
   }
 }
 
-double eval_pdf_scalar(int dist_code, double p1, double p2, double p3,
-                       double p4, double p5, double p6, double p7, double p8,
-                       double x) {
-  return safe_density(
-      eval_pdf_single(dist_code, p1, p2, p3, p4, p5, p6, p7, p8, x));
-}
-
 void eval_cdf_vec(int dist_code, double p1, double p2, double p3, double p4,
                   double p5, double p6, double p7, double p8,
                   const double *x, std::size_t n, double *out) {
@@ -335,13 +328,6 @@ void eval_cdf_vec(int dist_code, double p1, double p2, double p3, double p4,
     out[i] = clamp_probability(
         eval_cdf_single(dist_code, p1, p2, p3, p4, p5, p6, p7, p8, x[i]));
   }
-}
-
-double eval_cdf_scalar(int dist_code, double p1, double p2, double p3,
-                       double p4, double p5, double p6, double p7, double p8,
-                       double x) {
-  return clamp_probability(
-      eval_cdf_single(dist_code, p1, p2, p3, p4, p5, p6, p7, p8, x));
 }
 
 } // namespace uuber

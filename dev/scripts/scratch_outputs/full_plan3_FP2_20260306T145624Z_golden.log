@@ -1,7 +1,0 @@
-Warning message:
-package ‘testthat’ was built under R version 4.5.2 
-depth3_guard_competitor: total_diff=942.609 trial_max_diff=24.1154
-shared_gate_nway_shared_triggers: total_diff=6.46792e-07 trial_max_diff=1.61698e-08
-max_abs_diff=942.609 tolerance=0.0001
-Error: Golden check failed
-Execution halted

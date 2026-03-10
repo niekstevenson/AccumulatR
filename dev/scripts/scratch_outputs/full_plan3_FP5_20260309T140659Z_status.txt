@@ -1,7 +1,0 @@
-install=0
-step3_structure=0
-step4_structure=0
-step5_structure=0
-step6_structure=0
-golden=0
-bench=0

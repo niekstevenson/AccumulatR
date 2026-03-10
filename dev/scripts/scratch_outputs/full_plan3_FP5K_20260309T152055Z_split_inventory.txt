@@ -1,6 +1,0 @@
-src/distributions.cpp:4045 provider.kind=NodeRef still delegates generic term evaluation to node_density_with_competitors_batch_internal.
-src/distributions.cpp:4280 direct EventRef no-competitor fastpath remains separate from NodeRef direct path.
-src/distributions.cpp:4296 direct NodeRef no-competitor path still uses eval_node_with_forced_state_view outside a batch-native kernel executor.
-src/distributions.cpp:4310 provider dispatch still branches EventRef vs NodeRef inside evaluate_outcome_coupling_unified.
-src/distributions.cpp:6238 node_density_with_competitors_batch_internal still owns non-coupling batch orchestration in distributions.cpp.
-src/kernel_executor.cpp:73 eval_kernel_node_incremental remains the scalar kernel execution primitive.

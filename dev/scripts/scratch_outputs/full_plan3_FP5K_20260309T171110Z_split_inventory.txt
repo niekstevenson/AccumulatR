@@ -1,6 +1,0 @@
-src/distributions.cpp:4054 provider.kind=NodeRef still delegates generic term evaluation through node_density_with_competitors_batch_internal, but that helper is thin state/callback wiring over executor calls and no longer a second batch engine.
-src/distributions.cpp:4289 direct EventRef no-competitor fastpath remains separate from NodeRef direct path; this is carried forward as Step 6 structural debt, not a Step 5 block.
-src/distributions.cpp:4324 provider dispatch still branches EventRef vs NodeRef inside evaluate_outcome_coupling_unified; this is carried forward as Step 6 structural debt.
-src/distributions.cpp:4995 direct NodeRef batch adapter still lives in distributions.cpp rather than the executor layer, but it is thin wiring and not a separate engine.
-src/distributions.cpp:6497 competitor transition-mask application still lives in distributions.cpp as a state-mutation callback around executor calls; this is thin orchestration, not a helper-local engine.
-src/kernel_executor.cpp:630 eval_kernel_competitor_product_batch_incremental owns the compiled competitor-op batch loop.

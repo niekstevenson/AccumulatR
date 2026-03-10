@@ -1,6 +1,0 @@
-FP6.0 deleted symbols
-- none
-
-Reason:
-- FP6.0 is an inventory/proof batch only.
-- Any deletion claim before this freeze would be dishonest.

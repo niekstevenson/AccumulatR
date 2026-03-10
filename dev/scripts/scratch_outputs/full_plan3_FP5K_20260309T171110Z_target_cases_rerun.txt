@@ -1,4 +1,0 @@
-"label","surface","forced_mode","forced_label","competitor_count","upper","probability","single_generic_noderef_batch_calls","single_generic_scalar_fallback_calls","single_evaluate_outcome_coupling_unified_calls","single_kernel_node_density_entry_idx_calls","median_per_eval_sec","mean_per_eval_sec","generic_noderef_batch_per_eval","generic_scalar_fallback_per_eval","coupling_calls_per_eval","kernel_density_calls_per_eval","inner_reps","n_rep"
-"pair_guard_generic_noderef","direct_guarded_generic_noderef","complete","NR_RAW",0,0.6,0.999582737802266,1,0,1,0,8.33333333333334e-06,8.61111111111112e-06,1,0,1,0,600,12
-"nested_guard_generic_noderef","direct_guarded_nested_noderef","complete","NR_RAW",0,0.62,0.332653189928595,1,0,1,0,1.5e-05,1.52777777777778e-05,1,0,1,0,600,12
-"competitor_guard_generic_noderef","competitor_bearing_generic_noderef","complete","NR_RAW",2,0.56,0.0105555139919877,1,0,1,0,0.00132333333333333,0.00132333333333333,1,0,1,0,600,12

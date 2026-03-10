@@ -1,8 +1,0 @@
-commit=1f7f158
-timestamp_utc=20260309T171110Z
-repo_owned_target_harness=dev/scripts/bench_step5_kernel_target_cases.R
-required_surfaces=direct_guarded_generic_noderef,direct_guarded_nested_noderef,competitor_bearing_generic_noderef
-coverage_rule=Step 5 closure counts only because these direct target surfaces all show generic_noderef_batch_calls >= 1 and generic_scalar_fallback_calls = 0 on the frozen closure bundle.
-fp5k6_runtime_note=Direct and competitor-bearing generic NodeRef surfaces remain on the executor-side batch-native stack, with helper-local orchestration reduced to thin wiring.
-step5_closure=yes
-remaining_gap=Remaining split surface is Step 6 debt: specialized coupling dispatch and provider-mode structural branches still exist and must be inventoried under FP6.0.

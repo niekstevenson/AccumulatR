@@ -1,3 +1,0 @@
-Error: Could not find tools necessary to compile a package
-Call `pkgbuild::check_build_tools(debug = TRUE)` to diagnose the problem.
-Execution halted

@@ -1,5 +1,0 @@
-"label","median_per_eval_sec","eval_calls","coupling_calls_per_eval","kernel_density_calls_per_eval","generic_fastpath_per_eval","generic_noderef_per_eval"
-"shared_gate_pair",0.005925,320,1,0,0,0
-"shared_gate_nway",0.0092,320,2,0,0,0
-"depth3_guard_competitor",0.196,32,0,6000,0,0
-"example_2_stop_mixture",0.00183999999999999,200,0,250,0,0

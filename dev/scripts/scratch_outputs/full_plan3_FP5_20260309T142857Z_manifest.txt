@@ -1,7 +1,0 @@
-/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T142857Z_summary.txt
-/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T142857Z_manifest.txt
-/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T142857Z_step5_structure.log
-/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T142857Z_golden.log
-/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T142857Z_attempt_pair_guard_current_regressed.txt
-/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T142857Z_attempt_pair_guard_baseline_1f7f158.txt
-/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T142857Z_pair_guard_current_reverted.txt

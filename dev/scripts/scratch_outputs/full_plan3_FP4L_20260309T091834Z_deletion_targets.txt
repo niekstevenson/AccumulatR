@@ -1,4 +1,0 @@
-FP4L next deletion/closure targets after planner convergence
-1. Decide whether remaining single-step guess shortcut is acceptable optimization or must be absorbed into a more general lower-layer plan surface.
-2. Produce explicit deletion/hard-unreachable proof for duplicate lower-layer helper paths that are still reachable in Step 4 scope.
-3. Do not introduce new alternate payload shapes; TrialContributionSpec per-step payload is now the canonical planner shape.

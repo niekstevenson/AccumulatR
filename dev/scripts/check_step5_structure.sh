@@ -64,13 +64,13 @@ if printf "%s" "$unified_block" | rg -n "eval_node_with_forced_state_view\\(" >/
   fail "Unified coupling evaluator still uses scalar direct NodeRef helper."
 fi
 
-if ! printf "%s" "$unified_block" | rg -n "eval_node_with_forced_state_view_batch\\(|provider_runtime\\.eval_direct_cdf\\(" >/dev/null; then
+if ! printf "%s" "$unified_block" | rg -n "eval_node_with_forced_state_view_batch\\(|evaluate_generic_direct_cdf_resolved_provider\\(|provider_runtime\\.eval_direct_cdf\\(" >/dev/null; then
   fail "Unified coupling evaluator is not routing direct NodeRef through the batch executor adapter."
 fi
 
-if printf "%s" "$unified_block" | rg -n "provider_runtime\\.eval_direct_cdf\\(" >/dev/null; then
+if printf "%s" "$unified_block" | rg -n "evaluate_generic_direct_cdf_resolved_provider\\(|provider_runtime\\.eval_direct_cdf\\(" >/dev/null; then
   noderef_cdf_block="$(awk '
-/^inline double evaluate_generic_direct_cdf_noderef\(/ { in_fn=1 }
+/^inline double evaluate_generic_direct_cdf_resolved_provider\(/ { in_fn=1 }
 in_fn {
   print
   open_count += gsub(/\{/, "{")

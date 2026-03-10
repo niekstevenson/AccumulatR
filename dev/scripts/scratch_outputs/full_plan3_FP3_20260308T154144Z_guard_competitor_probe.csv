@@ -1,7 +1,0 @@
-"section","suite","label","metric","value_baseline","value_current","ratio_current_over_baseline","delta_pct"
-"speed","examples_models","example_16_guard_tie_simple","median_per_eval_sec",0.0176,0.0161999999999999,0.92045454545454,-7.95454545454604
-"speed","nested","depth3_guard_competitor","median_per_eval_sec",0.1958125,0.174625,0.891796999680817,-10.8203000319183
-"speed","nested","shared_gate_nway_shared_triggers","median_per_eval_sec",0.0182875,0.015275,0.83526999316473,-16.473000683527
-"structure","fp3_3_closure","guard_compiled_default_path","pass",,,,
-"structure","fp3_3_closure","competitor_runtime_split_removed","pass",,,,
-"structure","fp3_3_closure","dirty_slot_invalidation_only","pass",,,,

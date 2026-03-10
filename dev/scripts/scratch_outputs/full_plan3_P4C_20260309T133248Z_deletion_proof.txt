@@ -1,4 +1,0 @@
-artifact=P4C
-achieved_batches=P4C.1,P4C.2,P4C.3,P4C.4
-material_deletions=ranked caller staging buffers,sequence time ptr-or-owned split,ranked hash temp-vector materialization,copied prefix-map staging
-non_blocking_residuals=competitor payload ptr-or-storage duality,mass coupling-program ptr-or-storage duality,per-state merged_exact/merged_bounds copies,per-next-state exact/bounds copies

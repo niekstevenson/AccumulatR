@@ -1,4 +1,0 @@
-timestamp_utc=20260310T090205Z
-commit=1f7f158
-batch=FP6.2
-working_tree_dirty=yes

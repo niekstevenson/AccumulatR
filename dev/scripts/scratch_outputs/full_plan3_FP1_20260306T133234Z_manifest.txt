@@ -1,8 +1,0 @@
-batch=FP1
-subbatch=FP1.4
-timestamp_utc=20260306T133234Z
-commit_sha=54437eb
-branch=optimize
-cwd=/Users/nstevenson/Documents/2025/AccumulatR
-no_wrapper_only_consolidation_introduced=yes
-purpose=step1_closure_decision_and_rollup

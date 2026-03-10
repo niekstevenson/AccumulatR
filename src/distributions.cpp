@@ -3871,30 +3871,50 @@ struct GenericCouplingProviderRuntime {
   std::vector<LabelRef> competitor_refs;
   CouplingBatchScratch labelref_scratch;
   uuber::KernelBatchRuntimeState noderef_kernel_batch_runtime;
-  uuber::KernelBatchRuntimeState *noderef_kernel_batch_runtime_ptr{nullptr};
-  void (*record_usage)(){nullptr};
-  double (*eval_direct_cdf)(
-      const uuber::NativeContext &ctx,
-      const OutcomeCouplingGenericNodeIntegralPayload &generic,
-      GenericCouplingProviderRuntime &runtime, int component_idx,
-      const TrialParamSet *trial_params, const std::string &trial_type_key,
-      bool include_na_donors, int outcome_idx_context,
-      const uuber::BitsetState *forced_complete_bits,
-      bool forced_complete_bits_valid,
-      const uuber::BitsetState *forced_survive_bits,
-      bool forced_survive_bits_valid, double upper){nullptr};
-  bool (*eval_terms)(
-      const uuber::NativeContext &ctx,
-      const OutcomeCouplingGenericNodeIntegralPayload &generic,
-      GenericCouplingProviderRuntime &runtime, int component_idx,
-      const TrialParamSet *trial_params, const std::string &trial_type_key,
-      bool include_na_donors, int outcome_idx_context,
-      const uuber::BitsetState *forced_complete_bits,
-      bool forced_complete_bits_valid,
-      const uuber::BitsetState *forced_survive_bits,
-      bool forced_survive_bits_valid, const std::vector<double> &nodes,
-      std::vector<double> &terms){nullptr};
 };
+
+inline bool generic_coupling_runtime_has_labelref_fastpath(
+    const GenericCouplingProviderRuntime &runtime) {
+  const LabelRef &ref = runtime.target_ref;
+  return ref.acc_idx >= 0 || ref.pool_idx >= 0 || ref.outcome_idx >= 0;
+}
+
+inline void record_generic_coupling_provider_usage(
+    const GenericCouplingProviderRuntime &runtime) {
+  if (generic_coupling_runtime_has_labelref_fastpath(runtime)) {
+    record_unified_outcome_generic_labelref_batch_fastpath_call();
+  } else {
+    record_unified_outcome_generic_noderef_batch_call();
+  }
+}
+
+inline bool multiply_generic_survival_product(
+    std::vector<double> &terms, const std::vector<double> &survival) {
+  if (terms.size() != survival.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < terms.size(); ++i) {
+    terms[i] *= clamp_probability(survival[i]);
+  }
+  return true;
+}
+
+inline bool finalize_generic_terms_from_density(
+    const std::vector<double> &density, std::vector<double> &terms) {
+  if (terms.size() != density.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < terms.size(); ++i) {
+    const double fx = safe_density(density[i]);
+    const double surv_prod = clamp_probability(terms[i]);
+    if (!std::isfinite(fx) || fx <= 0.0 || surv_prod <= 0.0) {
+      terms[i] = 0.0;
+    } else {
+      terms[i] = fx * surv_prod;
+    }
+  }
+  return true;
+}
 
 inline bool generic_coupling_event_refs_resolve(
     const uuber::NativeContext &ctx,
@@ -3939,35 +3959,68 @@ inline bool generic_coupling_event_refs_resolve(
   return true;
 }
 
-inline double evaluate_generic_direct_cdf_labelref(
+inline double evaluate_generic_direct_cdf_resolved_provider(
     const uuber::NativeContext &ctx,
-    const OutcomeCouplingGenericNodeIntegralPayload &,
+    const OutcomeCouplingGenericNodeIntegralPayload &generic,
     GenericCouplingProviderRuntime &runtime, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     bool include_na_donors, int outcome_idx_context,
-    const uuber::BitsetState *, bool, const uuber::BitsetState *, bool,
-    double upper) {
-  std::vector<double> target_cdf;
+    const uuber::BitsetState *forced_complete_bits,
+    bool forced_complete_bits_valid,
+    const uuber::BitsetState *forced_survive_bits,
+    bool forced_survive_bits_valid, double upper) {
   std::vector<double> upper_vec{upper};
-  if (!evaluate_labelref_batch(ctx, runtime.target_ref, component_idx,
-                               trial_params, trial_type_key,
-                               include_na_donors, outcome_idx_context,
-                               upper_vec, false, false, true, nullptr, nullptr,
-                               &target_cdf, &runtime.labelref_scratch) ||
-      target_cdf.empty()) {
+  if (generic_coupling_runtime_has_labelref_fastpath(runtime)) {
+    if (!evaluate_labelref_batch(
+            ctx, runtime.target_ref, component_idx, trial_params,
+            trial_type_key, include_na_donors, outcome_idx_context, upper_vec,
+            false, false, true, nullptr, nullptr,
+            &runtime.labelref_scratch.cdf_values, &runtime.labelref_scratch) ||
+        runtime.labelref_scratch.cdf_values.empty()) {
+      return 0.0;
+    }
+    return clamp_probability(runtime.labelref_scratch.cdf_values[0]);
+  }
+
+  const ForcedStateView forced_state = make_forced_state_view(
+      nullptr, forced_complete_bits, &forced_complete_bits_valid,
+      forced_survive_bits, &forced_survive_bits_valid,
+      ctx.ir.label_id_to_bit_idx.empty() ? nullptr
+                                         : &ctx.ir.label_id_to_bit_idx);
+  uuber::KernelNodeBatchValues batch_values;
+  if (!eval_node_with_forced_state_view_batch(
+          ctx, generic.node_id, upper_vec, component_idx, EvalNeed::kCDF,
+          trial_params, trial_type_key, nullptr, nullptr, forced_state,
+          batch_values) ||
+      batch_values.cdf.empty()) {
     return 0.0;
   }
-  return clamp_probability(target_cdf[0]);
+  return clamp_probability(batch_values.cdf[0]);
 }
 
-inline bool evaluate_generic_terms_labelref(
+inline bool evaluate_generic_terms_resolved_provider(
     const uuber::NativeContext &ctx,
-    const OutcomeCouplingGenericNodeIntegralPayload &,
+    const OutcomeCouplingGenericNodeIntegralPayload &generic,
     GenericCouplingProviderRuntime &runtime, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     bool include_na_donors, int outcome_idx_context,
-    const uuber::BitsetState *, bool, const uuber::BitsetState *, bool,
-    const std::vector<double> &nodes, std::vector<double> &terms) {
+    const uuber::BitsetState *forced_complete_bits,
+    bool forced_complete_bits_valid,
+    const uuber::BitsetState *forced_survive_bits,
+    bool forced_survive_bits_valid, const std::vector<double> &nodes,
+    std::vector<double> &terms) {
+  if (!generic_coupling_runtime_has_labelref_fastpath(runtime)) {
+    uuber::KernelBatchRuntimeState *kernel_batch_runtime =
+        ctx.kernel_program.valid ? &runtime.noderef_kernel_batch_runtime
+                                 : nullptr;
+    return node_density_with_competitors_batch_internal(
+        ctx, generic.node_id, nodes, component_idx, forced_complete_bits,
+        forced_complete_bits_valid, forced_survive_bits,
+        forced_survive_bits_valid, generic.competitor_node_ids, trial_params,
+        trial_type_key, include_na_donors, outcome_idx_context, terms, nullptr,
+        nullptr, kernel_batch_runtime);
+  }
+
   const uuber::TrialParamsSoA *trial_params_soa =
       resolve_trial_params_soa(ctx, trial_params);
   const bool can_specialize = coupling_acc_specialization_allowed(
@@ -3989,10 +4042,10 @@ inline bool evaluate_generic_terms_labelref(
         competitor_accs.push_back(comp_acc);
       }
       if (all_competitors_specialized) {
-        std::vector<double> target_density;
         if (!evaluate_coupling_acc_batch(
-                target_acc, nodes, true, false, false, &target_density, nullptr,
-                nullptr, &runtime.labelref_scratch)) {
+                target_acc, nodes, true, false, false,
+                &runtime.labelref_scratch.pdf_values, nullptr, nullptr,
+                &runtime.labelref_scratch)) {
           return false;
         }
         terms.assign(nodes.size(), 1.0);
@@ -4000,33 +4053,23 @@ inline bool evaluate_generic_terms_labelref(
           if (!evaluate_coupling_acc_batch(
                   comp_acc, nodes, false, true, false, nullptr,
                   &runtime.labelref_scratch.temp_survival, nullptr,
-                  &runtime.labelref_scratch)) {
+                  &runtime.labelref_scratch) ||
+              !multiply_generic_survival_product(
+                  terms, runtime.labelref_scratch.temp_survival)) {
             return false;
           }
-          for (std::size_t i = 0; i < terms.size(); ++i) {
-            terms[i] *= clamp_probability(
-                runtime.labelref_scratch.temp_survival[i]);
-          }
         }
-        for (std::size_t i = 0; i < terms.size(); ++i) {
-          const double fx = safe_density(target_density[i]);
-          const double surv_prod = clamp_probability(terms[i]);
-          if (!std::isfinite(fx) || fx <= 0.0 || surv_prod <= 0.0) {
-            terms[i] = 0.0;
-          } else {
-            terms[i] = fx * surv_prod;
-          }
-        }
-        return true;
+        return finalize_generic_terms_from_density(
+            runtime.labelref_scratch.pdf_values, terms);
       }
     }
   }
 
-  std::vector<double> target_density;
   if (!evaluate_labelref_batch(
           ctx, runtime.target_ref, component_idx, trial_params, trial_type_key,
           include_na_donors, outcome_idx_context, nodes, true, false, false,
-          &target_density, nullptr, nullptr, &runtime.labelref_scratch)) {
+          &runtime.labelref_scratch.pdf_values, nullptr, nullptr,
+          &runtime.labelref_scratch)) {
     return false;
   }
   terms.assign(nodes.size(), 1.0);
@@ -4035,67 +4078,14 @@ inline bool evaluate_generic_terms_labelref(
             ctx, comp_ref, component_idx, trial_params, trial_type_key,
             include_na_donors, outcome_idx_context, nodes, false, true, false,
             nullptr, &runtime.labelref_scratch.temp_survival, nullptr,
-            &runtime.labelref_scratch)) {
+            &runtime.labelref_scratch) ||
+        !multiply_generic_survival_product(
+            terms, runtime.labelref_scratch.temp_survival)) {
       return false;
     }
-    for (std::size_t i = 0; i < terms.size(); ++i) {
-      terms[i] *= clamp_probability(runtime.labelref_scratch.temp_survival[i]);
-    }
   }
-  for (std::size_t i = 0; i < terms.size(); ++i) {
-    const double fx = safe_density(target_density[i]);
-    const double surv_prod = clamp_probability(terms[i]);
-    if (!std::isfinite(fx) || fx <= 0.0 || surv_prod <= 0.0) {
-      terms[i] = 0.0;
-    } else {
-      terms[i] = fx * surv_prod;
-    }
-  }
-  return true;
-}
-
-inline double evaluate_generic_direct_cdf_noderef(
-    const uuber::NativeContext &ctx,
-    const OutcomeCouplingGenericNodeIntegralPayload &generic,
-    GenericCouplingProviderRuntime &, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    bool, int, const uuber::BitsetState *forced_complete_bits,
-    bool forced_complete_bits_valid,
-    const uuber::BitsetState *forced_survive_bits,
-    bool forced_survive_bits_valid, double upper) {
-  const ForcedStateView forced_state = make_forced_state_view(
-      nullptr, forced_complete_bits, &forced_complete_bits_valid,
-      forced_survive_bits, &forced_survive_bits_valid,
-      ctx.ir.label_id_to_bit_idx.empty() ? nullptr : &ctx.ir.label_id_to_bit_idx);
-  std::vector<double> upper_vec{upper};
-  uuber::KernelNodeBatchValues batch_values;
-  if (!eval_node_with_forced_state_view_batch(
-          ctx, generic.node_id, upper_vec, component_idx, EvalNeed::kCDF,
-          trial_params, trial_type_key, nullptr, nullptr, forced_state,
-          batch_values) ||
-      batch_values.cdf.empty()) {
-    return 0.0;
-  }
-  return clamp_probability(batch_values.cdf[0]);
-}
-
-inline bool evaluate_generic_terms_noderef(
-    const uuber::NativeContext &ctx,
-    const OutcomeCouplingGenericNodeIntegralPayload &generic,
-    GenericCouplingProviderRuntime &runtime, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    bool include_na_donors, int outcome_idx_context,
-    const uuber::BitsetState *forced_complete_bits,
-    bool forced_complete_bits_valid,
-    const uuber::BitsetState *forced_survive_bits,
-    bool forced_survive_bits_valid, const std::vector<double> &nodes,
-    std::vector<double> &terms) {
-  return node_density_with_competitors_batch_internal(
-      ctx, generic.node_id, nodes, component_idx, forced_complete_bits,
-      forced_complete_bits_valid, forced_survive_bits,
-      forced_survive_bits_valid, generic.competitor_node_ids, trial_params,
-      trial_type_key, include_na_donors, outcome_idx_context, terms, nullptr,
-      nullptr, runtime.noderef_kernel_batch_runtime_ptr);
+  return finalize_generic_terms_from_density(runtime.labelref_scratch.pdf_values,
+                                             terms);
 }
 
 inline GenericCouplingProviderRuntime build_generic_coupling_provider_runtime(
@@ -4115,15 +4105,6 @@ inline GenericCouplingProviderRuntime build_generic_coupling_provider_runtime(
   }
 
   GenericCouplingProviderRuntime runtime;
-  runtime.record_usage = &record_unified_outcome_generic_noderef_batch_call;
-  runtime.eval_direct_cdf = &evaluate_generic_direct_cdf_noderef;
-  runtime.eval_terms = &evaluate_generic_terms_noderef;
-  if (ctx.kernel_program.valid) {
-    runtime.noderef_kernel_batch_runtime.initialized = false;
-    runtime.noderef_kernel_batch_runtime_ptr =
-        &runtime.noderef_kernel_batch_runtime;
-  }
-
   const bool forced_empty =
       !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
       !forced_bits_any(forced_survive_bits, forced_survive_bits_valid);
@@ -4135,11 +4116,6 @@ inline GenericCouplingProviderRuntime build_generic_coupling_provider_runtime(
                                            runtime.competitor_refs)) {
     return runtime;
   }
-
-  runtime.record_usage = &record_unified_outcome_generic_labelref_batch_fastpath_call;
-  runtime.eval_direct_cdf = &evaluate_generic_direct_cdf_labelref;
-  runtime.eval_terms = &evaluate_generic_terms_labelref;
-  runtime.noderef_kernel_batch_runtime_ptr = nullptr;
   return runtime;
 }
 
@@ -4355,23 +4331,18 @@ double evaluate_outcome_coupling_unified(
         build_generic_coupling_provider_runtime(
             ctx, generic, forced_complete_bits, forced_complete_bits_valid,
             forced_survive_bits, forced_survive_bits_valid);
-    if (provider_runtime.record_usage == nullptr ||
-        provider_runtime.eval_direct_cdf == nullptr ||
-        provider_runtime.eval_terms == nullptr) {
-      Rcpp::stop("IR generic coupling provider runtime setup failed");
-    }
     if (generic.competitor_node_ids.empty()) {
-      provider_runtime.record_usage();
-      return provider_runtime.eval_direct_cdf(
+      record_generic_coupling_provider_usage(provider_runtime);
+      return evaluate_generic_direct_cdf_resolved_provider(
           ctx, generic, provider_runtime, component_idx, trial_params,
           trial_type_key, include_na_donors, outcome_idx_context,
           forced_complete_bits, forced_complete_bits_valid, forced_survive_bits,
           forced_survive_bits_valid, upper);
     }
-    provider_runtime.record_usage();
+    record_generic_coupling_provider_usage(provider_runtime);
     auto eval_generic_terms =
         [&](const std::vector<double> &nodes, std::vector<double> &terms) -> bool {
-      return provider_runtime.eval_terms(
+      return evaluate_generic_terms_resolved_provider(
           ctx, generic, provider_runtime, component_idx, trial_params,
           trial_type_key, include_na_donors, outcome_idx_context,
           forced_complete_bits, forced_complete_bits_valid, forced_survive_bits,

@@ -1,6 +1,0 @@
-commit=1f7f158
-timestamp_utc=20260309T152055Z
-standard_suite_note=Current standard centralized/example coverage is not sufficient proof for direct NodeRef Step 5 work; see full_plan3_FP5_20260309T135122Z_vector_coverage.txt and full_plan3_FP5_20260309T135122Z_hotloop_probe.csv.
-repo_owned_target_harness=dev/scripts/bench_step5_kernel_target_cases.R
-required_surfaces=direct_guarded_generic_noderef,direct_guarded_nested_noderef,competitor_bearing_generic_noderef
-coverage_rule=Step 5 progress does not count unless these direct target surfaces continue to show generic_noderef_batch_calls >= 1 and generic_scalar_fallback_calls = 0.

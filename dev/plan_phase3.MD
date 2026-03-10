@@ -63,7 +63,7 @@ Last updated: 2026-03-04
     2.  No reintroduction of separate mode engines for performance.
 2.  6B exit gates:
     1.  `Rscript dev/scripts/bench_centralized.R`
-    2.  Metric: `median_per_eval_sec` ratio in `dev/scripts/scratch_outputs/benchmark_centralized_diff.csv`
+    2.  Metric: canonical `median_per_eval_sec` values in `dev/scripts/scratch_outputs/benchmark_centralized.csv`
     3.  Required:
         1.  No workload above `1.02`
         2.  No P1 workload above `1.00`
@@ -142,17 +142,10 @@ Last updated: 2026-03-04
 3.  Last known correctness status: passing (`max_abs_diff = 1.23378e-05`)
 4.  Last known architecture status: unified generic runtime with provider modes (`EventRef`/`NodeRef`), scalar generic fallback removed from dispatch, trial hot path no longer branches on `TrialKernelMode`
 
-## Active 6A Execution Artifacts
+## Retained Canonical Artifact
 
-1.  Checklist: `dev/step6a_execution_checklist.md`
-2.  Audit + deletion map: `dev/step6a_audit_2026-03-04.md`
-3.  GenericNodeIntegral unified cutover: `dev/step6a_generic_nodeintegral_cutover_2026-03-05.md`
-
-## Active 6B Execution Artifacts
-
-1.  Unified speed recovery (no re-splitting): `dev/step6b_unified_speed_recovery_2026-03-05.md`
-2.  GenericNodeIntegral NodeRef batch cutover (no scalar fallback): `dev/step6b_generic_noderef_batch_cutover_2026-03-05.md`
-3.  Non-coupling residual optimization (unified engine only): `dev/step6b_noncoupling_residual_optimization_2026-03-05.md`
+1.  Historical execution artifacts were removed during cleanup.
+2.  The retained benchmark artifact is `dev/scripts/scratch_outputs/benchmark_centralized.csv`.
 
 ## Completion Record (Fill Only When Truly Done)
 
@@ -172,8 +165,3 @@ Last updated: 2026-03-04
 7.  6B Worst ratio (median_per_eval_sec): `0.9609375` (`examples_models/example_16_guard_tie_simple`, run3)
 8.  Artifacts:
     1.  `dev/scripts/scratch_outputs/benchmark_centralized.csv`
-    2.  `dev/scripts/scratch_outputs/benchmark_centralized_diff.csv`
-    3.  `dev/scripts/scratch_outputs/benchmark_step3_comparison.csv`
-    4.  `dev/scripts/scratch_outputs/step6b_nc7_stability_summary_20260306T100501Z.txt`
-    5.  `dev/scripts/scratch_outputs/step6b_nc7_stability_summary_20260306T100501Z.csv`
-    6.  `dev/scripts/scratch_outputs/step6b_nc7_targeted_stats_20260306T100501Z.csv`

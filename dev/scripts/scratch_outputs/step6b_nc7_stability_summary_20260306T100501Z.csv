@@ -1,4 +1,0 @@
-"run_idx","run_ts","worst_suite","worst_label","worst_ratio","workloads_over_1.02","p1_over_1.00"
-1,"20260306T100501Z","examples_models","example_16_guard_tie_simple",0.958806818181818,0,0
-2,"20260306T100616Z","examples_models","example_16_guard_tie_simple",0.955255681818182,0,0
-3,"20260306T100730Z","examples_models","example_16_guard_tie_simple",0.9609375,0,0

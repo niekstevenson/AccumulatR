@@ -1,7 +1,0 @@
-install	0	/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP1_20260306T133234Z_install.log
-step3_structure	0	/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP1_20260306T133234Z_step3_structure.log
-step4_structure	0	/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP1_20260306T133234Z_step4_structure.log
-step5_structure	0	/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP1_20260306T133234Z_step5_structure.log
-step6_structure	0	/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP1_20260306T133234Z_step6_structure.log
-golden	0	/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP1_20260306T133234Z_golden.log
-bench	0	/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP1_20260306T133234Z_bench.log

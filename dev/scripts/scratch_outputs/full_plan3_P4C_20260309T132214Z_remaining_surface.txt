@@ -1,4 +1,0 @@
-remaining_targets=C4,residual_C2
-remaining_payload_pairs=step_competitor_ids_ptrs/step_competitor_ids_storage,mass_coupling_programs_ptr/mass_coupling_programs
-remaining_ranked_merge_surface=observed_prefix_exact,merged_exact,merged_bounds
-next_strict_optional_step=P4C.4

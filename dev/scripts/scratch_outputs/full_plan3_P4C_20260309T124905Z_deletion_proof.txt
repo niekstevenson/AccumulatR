@@ -1,8 +1,0 @@
-timestamp=20260309T124905Z
-commit=1f7f158
-target=C1
-removed_ranked_label_ids_by_trial=yes
-removed_ranked_rt_by_trial=yes
-remaining_cpp_loglik_observed_staging_buffers=outcome_label_id_by_trial,rt_by_trial
-step4_closure_boundary_preserved=yes
-no_wrapper_only_consolidation_introduced=yes

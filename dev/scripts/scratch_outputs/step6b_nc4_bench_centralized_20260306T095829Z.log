@@ -1,9 +1,0 @@
-[2026-03-06T09:58:30Z] running bench_centralized.R
-Running nested benchmark...
-Running examples benchmark...
-Running golden correctness check...
-Wrote baseline diff output to dev/scripts/scratch_outputs/benchmark_centralized_diff.csv 
-Wrote Step 3 comparison output to dev/scripts/scratch_outputs/benchmark_step3_comparison.csv 
-
-Wrote centralized benchmark output to dev/scripts/scratch_outputs/benchmark_centralized.csv 
-Rows: 82 

@@ -1,9 +1,0 @@
-decision=ACHIEVED
-criteria_1_batch_native_executor=pass
-criteria_2_direct_targets_batch_no_fallback=pass
-criteria_3_helper_orchestration_thin_or_deleted=pass
-criteria_4_correctness_gate=pass
-criteria_5_centralized_perf_gate=pass
-criteria_6_target_case_regression_gate=pass
-residual_split_surface_is_step6_debt=yes
-next_strict_step=FP6.0

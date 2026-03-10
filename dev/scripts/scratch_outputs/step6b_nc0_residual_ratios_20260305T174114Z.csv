@@ -1,5 +1,0 @@
-"suite","label","value_baseline","value_current","ratio_current_over_baseline","delta_pct"
-"examples_models","example_2_stop_mixture",0.001825,0.00190000000000001,1.04109589041096,4.10958904109644
-"nested","depth3_guard_competitor",0.1958125,0.2075625,1.06000638365784,6.0006383657836
-"nested","shared_gate_nway",0.00938124999999999,0.01049375,1.11858760826116,11.858760826116
-"nested","shared_gate_pair",0.00547500000000001,0.0062125,1.13470319634703,13.470319634703

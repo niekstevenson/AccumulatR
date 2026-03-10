@@ -1,6 +1,0 @@
-target=C3
-removed_ranked_hash_exact_times_vector_materialization=yes
-removed_ranked_hash_bounds_vector_materialization=yes
-removed_ranked_hash_exact_times_sort=yes
-removed_ranked_hash_bounds_sort=yes
-ranked_source_time_state_storage=ordered_map

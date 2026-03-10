@@ -33,6 +33,10 @@ if rg -n "GenericCouplingProviderKind|GenericCouplingProviderPlan|resolve_generi
   fail "Provider-kind alternate execution machinery is still present in unified coupling."
 fi
 
+if rg -n "evaluate_generic_direct_cdf_labelref|evaluate_generic_direct_cdf_noderef|evaluate_generic_terms_labelref|evaluate_generic_terms_noderef|noderef_kernel_batch_runtime_ptr|record_usage = &record_unified_outcome_generic_|eval_direct_cdf = &evaluate_generic_direct_cdf_|eval_terms = &evaluate_generic_terms_" src/distributions.cpp >/dev/null; then
+  fail "Old duplicate provider-body or function-pointer runtime machinery is still present."
+fi
+
 prob_block="$(awk '
 /double native_outcome_probability_bits_impl_idx\(/ { ++n }
 n >= 1 { print }

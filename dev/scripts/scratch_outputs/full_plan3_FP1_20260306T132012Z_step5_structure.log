@@ -1,5 +1,0 @@
-[START] 2026-03-06T13:20:39Z
-[CMD] bash dev/scripts/check_step5_structure.sh
-[OK] Step 5 structural checks passed.
-[END] 2026-03-06T13:20:39Z
-[RC] 0

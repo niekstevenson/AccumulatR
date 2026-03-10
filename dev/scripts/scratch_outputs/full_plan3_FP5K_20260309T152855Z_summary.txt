@@ -1,0 +1,15 @@
+timestamp_utc=20260309T152855Z
+commit=1f7f158
+batch=FP5K.1
+working_tree_dirty=yes
+target_cases=3
+worst_bench_ratio=0.979066023
+p1_ratio_gt_1=0
+golden_max_abs_diff=1.23378e-05 tolerance=0.0001
+fp5k1_decision=ACHIEVED
+fp5k1_honest_status=Kernel-level batch executor contract exists, but runtime is not yet ported to it.
+fp5k2_next=Port direct generic NodeRef cases to eval_kernel_node_batch_incremental before changing helper-layer orchestration.
+target_surface_rows:
+label=pair_guard_generic_noderef probability=0.5746957 median_per_eval_sec=0.000008333 ratio_current_over_fp5k0=1.000000000 generic_noderef_batch_per_eval=1.000000 generic_scalar_fallback_per_eval=0.000000
+label=nested_guard_generic_noderef probability=0.679796 median_per_eval_sec=0.000015000 ratio_current_over_fp5k0=1.000000000 generic_noderef_batch_per_eval=1.000000 generic_scalar_fallback_per_eval=0.000000
+label=competitor_guard_generic_noderef probability=0.01055551 median_per_eval_sec=0.001338333 ratio_current_over_fp5k0=0.987699900 generic_noderef_batch_per_eval=1.000000 generic_scalar_fallback_per_eval=0.000000

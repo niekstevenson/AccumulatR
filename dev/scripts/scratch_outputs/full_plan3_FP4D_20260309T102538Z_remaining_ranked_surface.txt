@@ -1,0 +1,17 @@
+KEEP_BUCKET_SURFACE
+7397:struct SequenceStateKey {
+7421:struct SequenceStateKeyHash {
+7503:inline SequenceStateKey sequence_state_key(
+7687:class RankedTransitionCompiler {
+7689:  explicit RankedTransitionCompiler(const uuber::NativeContext &ctx_)
+7882:bool for_each_sequence_node_transition(
+8073:double sequence_prefix_density_resolved(
+8183:      SequenceStateKey key = sequence_state_key(
+8235:    const bool has_transition = for_each_sequence_node_transition(
+8922:    return sequence_prefix_density_resolved(
+
+DELETION_PROOF
+OK no guess shortcut payload flags remain
+18:  case TrialSequenceExecutionKind::LowerLayerDirect: {
+38:  case TrialSequenceExecutionKind::SequenceState:
+42:    return sequence_prefix_density_resolved(

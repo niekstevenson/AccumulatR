@@ -1,0 +1,9 @@
+FP5K_DEBUG_DIRECT node_id=3 node_idx=2 scalar_cdf=0.999583 batch_cdf=0.999583
+FP5K_DEBUG_DIRECT node_id=3 node_idx=2 scalar_cdf=0.999583 batch_cdf=0.999583
+FP5K_DEBUG_DIRECT node_id=5 node_idx=4 scalar_cdf=0.332653 batch_cdf=0.332653
+FP5K_DEBUG_DIRECT node_id=5 node_idx=4 scalar_cdf=0.332653 batch_cdf=0.332653
+"label","surface","forced_mode","forced_label","competitor_count","upper","probability","single_generic_noderef_batch_calls","single_generic_scalar_fallback_calls","single_evaluate_outcome_coupling_unified_calls","single_kernel_node_density_entry_idx_calls","median_per_eval_sec","mean_per_eval_sec","generic_noderef_batch_per_eval","generic_scalar_fallback_per_eval","coupling_calls_per_eval","kernel_density_calls_per_eval","inner_reps","n_rep"
+"pair_guard_generic_noderef","direct_guarded_generic_noderef","complete","NR_RAW",0,0.6,0.999582737802266,1,0,1,0,0.001,0.001,1,0,1,0,1,1
+"nested_guard_generic_noderef","direct_guarded_nested_noderef","complete","NR_RAW",0,0.62,0.332653189928595,1,0,1,0,0,0,1,0,1,0,1,1
+"competitor_guard_generic_noderef","competitor_bearing_generic_noderef","complete","NR_RAW",2,0.56,0.0105555139919877,1,0,1,0,0.002,0.002,1,0,1,0,1,1
+bench_step5_kernel_target_cases complete

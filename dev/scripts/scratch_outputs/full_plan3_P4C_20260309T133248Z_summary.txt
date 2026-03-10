@@ -1,0 +1,20 @@
+Full Plan 3 P4C.5 post-cleanup closure bundle 20260309T133248Z
+commit=1f7f158
+target=P4C.5
+decision=ACHIEVED_WITH_RECORDED_RESIDUALS
+what_changed=No new runtime changes; this bundle closes the optional Step 4 cleanup artifact after verified removals in P4C.1 through P4C.4 and records the remaining residual C2/C4 surface as non-blocking debt.
+max_abs_diff=1.23378e-05
+tolerance=0.0001
+worst_ratio=0.994195078080297 (example_10_exclusion)
+count_ratio_gt_1.02=0
+count_p1_ratio_gt_1.00=0
+no_wrapper_only_consolidation_introduced=yes
+step4_boundary_preserved=yes
+key_ratios:
+  depth3_guard_competitor=0.968400893712097
+  example_21_simple_q=0.833333333333328
+  example_22_shared_q=0.959222252227926
+  example_23_ranked_chain=0.91666666666668
+  example_2_stop_mixture=0.962245238890756
+  example_5_timeout_guess=0.819451183352162
+  example_6_dual_path=0.900171032496174

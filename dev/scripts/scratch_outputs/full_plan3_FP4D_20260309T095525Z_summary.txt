@@ -1,0 +1,11 @@
+max_abs_diff=1.23378e-05
+worst_ratio_median_per_eval_sec=1.0086957
+worst_ratio_label=example_22_shared_q
+count_ratio_gt_1.02=0
+count_p1_ratio_gt_1.00=1
+example_21_simple_q=0.9259259
+example_22_shared_q=1.0086957
+example_6_dual_path=0.9637681
+depth3_guard_competitor=0.9546760
+example_23_ranked_chain=0.9916667
+example_2_stop_mixture=0.9863014

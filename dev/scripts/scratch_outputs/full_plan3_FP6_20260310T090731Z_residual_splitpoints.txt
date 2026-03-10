@@ -1,0 +1,15 @@
+FP6.2 residual Step 6 split inventory
+
+Status:
+- active Step 6 residual split surface: empty under the current structural contract
+- FP6.3 is still required to freeze the final deletion audit and closure decision
+
+No current Step 6 structural blockers detected:
+- no pair/nway helper-engine dispatch
+- no pair/nway helper-engine symbols
+- no provider-kind enum/plan/runtime branching in src/distributions.cpp
+- no scalar generic fallback
+
+Non-blocking shape differences that remain and do not count as Step 6 debt:
+- generic no-competitor direct CDF fast path inside the unified engine
+- inline program-kind handling (GenericNodeIntegral / NWay / Pair) inside the same unified evaluator body

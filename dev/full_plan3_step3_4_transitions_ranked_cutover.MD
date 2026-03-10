@@ -1,10 +1,8 @@
 # Full Plan 3 Sub-Plan: Step 3-4 Guard/Competitor Compilation + Ranked Cutover
 
-Date: 2026-03-06
-Status: IN PROGRESS (Step 3 COMPLETE via `FP3.3`; Step 4 `FP4.0` complete;
-top-level `FP4.1` cut rejected; `FP4L.2` + `FP4L.3` keepable lower-layer cut
-complete; `FP4L.4` planner convergence landed but Step 4 still not closed;
-lower-layer Step 4 work continues in
+Date: 2026-03-09
+Status: COMPLETE (Step 3 COMPLETE via `FP3.3`; Step 4 COMPLETE via lower-layer
+closure bundle `FP4D.5` + `FP4L.5` / `FP4D.6` in
 `dev/full_plan3_step4_lower_layer_convergence.MD`)
 Parent: `dev/full_plan3.MD`
 Batch ID range: `FP3.*`, `FP4.*`

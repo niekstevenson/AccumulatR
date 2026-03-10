@@ -1,0 +1,7 @@
+commit=1f7f158
+timestamp_utc=20260309T153954Z
+repo_owned_target_harness=dev/scripts/bench_step5_kernel_target_cases.R
+required_surfaces=direct_guarded_generic_noderef,direct_guarded_nested_noderef,competitor_bearing_generic_noderef
+coverage_rule=Step 5 progress does not count unless these direct target surfaces continue to show generic_noderef_batch_calls >= 1 and generic_scalar_fallback_calls = 0.
+fp5k2_runtime_note=Direct generic NodeRef no-competitor cases now route through eval_node_with_forced_state_view_batch, which calls eval_kernel_node_batch_incremental in src/kernel_executor.cpp.
+remaining_gap=Competitor-bearing NodeRef terms still route through node_density_with_competitors_batch_internal in src/distributions.cpp and remain FP5K.3 work.

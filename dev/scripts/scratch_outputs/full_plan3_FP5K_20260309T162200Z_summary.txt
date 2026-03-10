@@ -1,0 +1,24 @@
+timestamp_utc=20260309T162200Z
+commit=1f7f158
+batch=FP5K.4
+working_tree_dirty=yes
+worst_bench_ratio=0.980113636363642
+worst_suite=examples_models
+worst_label=example_16_guard_tie_simple
+count_ratio_gt_1.02=0
+count_p1_ratio_gt_1.00=0
+golden_max_abs_diff=1.23378e-05 tolerance=0.0001
+fp5k4_decision=ACHIEVED
+fp5k4_honest_status=Deleted the batch-only competitor helper engine from src/distributions.cpp and moved compiled competitor-op batch orchestration into src/kernel_executor.cpp; node_density_with_competitors_batch_internal is now thin wiring over batched base-node execution plus one executor-side compiled-op batch call. Step 5 is still not closed.
+fp5k5_next=Recover any residual cost only inside the same kernel executor boundary and finish Step 5 closure proof.
+target_surface_rows:
+label=competitor_guard_generic_noderef probability=0.0105555139919877 median_per_eval_sec=0.00132666666666667 ratio_current_over_fp5k3=1.0025189 generic_noderef_batch_per_eval=1 generic_scalar_fallback_per_eval=0
+label=nested_guard_generic_noderef probability=0.332653189928595 median_per_eval_sec=1.5e-05 ratio_current_over_fp5k3=1.0000000 generic_noderef_batch_per_eval=1 generic_scalar_fallback_per_eval=0
+label=pair_guard_generic_noderef probability=0.999582737802266 median_per_eval_sec=8.33333333333334e-06 ratio_current_over_fp5k3=1.0000000 generic_noderef_batch_per_eval=1 generic_scalar_fallback_per_eval=0
+key_ratios_begin
+nested,depth3_guard_competitor,0.962017235876157,0.1958125,0.188375
+examples_models,example_2_stop_mixture,0.955562980287342,0.001825,0.0017439024390244
+examples_models,example_21_simple_q,0.829629629629613,0.000337500000000002,0.000279999999999996
+examples_models,example_22_shared_q,0.930434782608687,0.000359375000000001,0.000334374999999998
+examples_models,example_6_dual_path,0.944712828770734,0.00043125,0.000407407407407379
+key_ratios_end

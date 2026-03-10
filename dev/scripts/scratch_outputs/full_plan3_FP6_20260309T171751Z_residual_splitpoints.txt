@@ -1,0 +1,39 @@
+FP6.0 residual Step 6 split inventory
+
+Status:
+- active residual split surface is non-empty
+- Step 6 cannot be claimed from this batch
+
+R1. Unified coupling still dispatches into specialized pair/nway helper engines.
+- src/distributions.cpp:4415 -> evaluate_coupling_mass_nway(...)
+- src/distributions.cpp:4420 -> evaluate_coupling_mass_pair(...)
+Why it counts:
+- One public unified entrypoint still branches to alternate helper engines by program kind.
+- This is exactly the Step 6 deletion target.
+
+R2. Specialized helper engines still exist as live runtime implementations.
+- src/distributions.cpp:4427 -> evaluate_coupling_mass_nway(...)
+- src/distributions.cpp:4500 -> evaluate_coupling_mass_pair(...)
+Why it counts:
+- They are not dead code; R1 still reaches them.
+
+R3. Generic provider kind still changes runtime behavior inside the unified engine.
+- src/distributions.cpp:4289 -> EventRef no-competitor direct fast path
+- src/distributions.cpp:4305 -> NodeRef no-competitor direct fast path
+- src/distributions.cpp:4324 -> provider dispatch inside evaluate_outcome_coupling_unified(...)
+- src/distributions.cpp:3967 -> EventRef provider execution in evaluate_generic_terms_from_provider(...)
+- src/distributions.cpp:4053 -> NodeRef provider execution in evaluate_generic_terms_from_provider(...)
+Why it counts:
+- Step 5 proved these paths are batch-native and scalar fallback is gone.
+- Step 6 is still not closed because the unified engine still contains provider-specific runtime branches and fast paths rather than one fully data-driven execution stack.
+
+R4. Public outcome probability entry still reaches the residual Step 6 split surface.
+- src/distributions.cpp:6655 -> native_outcome_probability_bits_impl_idx(...)
+- src/distributions.cpp:6698 -> evaluate_outcome_coupling_unified(...)
+Why it counts:
+- Step 6 debt remains on the public hot path, not in dead or test-only code.
+
+What is no longer Step 6 debt:
+- scalar generic fallback is already removed
+- direct generic NodeRef target cases remain batch-native
+- helper-local competitor batch engine is deleted; Step 5 closure stands

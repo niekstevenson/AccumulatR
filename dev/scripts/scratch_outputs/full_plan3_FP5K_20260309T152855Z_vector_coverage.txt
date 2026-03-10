@@ -1,0 +1,5 @@
+commit=1f7f158
+timestamp_utc=20260309T152855Z
+fp5k1_status=kernel-level batch executor contract exists in src/kernel_executor.h and src/kernel_executor.cpp.
+direct_target_harness=dev/scripts/bench_step5_kernel_target_cases.R
+coverage_rule=Direct NodeRef target cases remain mandatory; this contract batch does not count as Step 5 closure by itself.

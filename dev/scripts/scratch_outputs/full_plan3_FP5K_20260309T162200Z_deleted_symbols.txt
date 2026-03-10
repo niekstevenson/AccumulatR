@@ -1,0 +1,3 @@
+src/distributions.cpp: deleted bool eval_nodes_batch_with_state_dense(...)
+src/distributions.cpp: deleted bool run_competitor_batch_survival_op_batch(...)
+src/distributions.cpp: deleted bool run_competitor_compiled_ops_product_batch(...)

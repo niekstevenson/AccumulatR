@@ -1,0 +1,20 @@
+Full Plan 3 P4C.4 ranked-merge tightening bundle 20260309T132846Z
+commit=1f7f158
+target=C4
+decision=KEEP
+what_changed=Deleted copied observed_prefix_exact map staging in sequence_prefix_density_resolved and replaced it with one incremental prefix_exact map per rank; ranked prefix exact-time merge no longer pays a full-map copy per rank.
+max_abs_diff=1.23378e-05
+tolerance=0.0001
+worst_ratio=0.975609756097567 (example_2_stop_mixture)
+count_ratio_gt_1.02=0
+count_p1_ratio_gt_1.00=0
+no_wrapper_only_consolidation_introduced=yes
+step4_boundary_preserved=yes
+key_ratios:
+  depth3_guard_competitor=0.932014044047239
+  example_21_simple_q=0.844444444444445
+  example_22_shared_q=0.947826086956536
+  example_23_ranked_chain=0.920833333333333
+  example_2_stop_mixture=0.975609756097567
+  example_5_timeout_guess=0.803493449781648
+  example_6_dual_path=0.898550724637646

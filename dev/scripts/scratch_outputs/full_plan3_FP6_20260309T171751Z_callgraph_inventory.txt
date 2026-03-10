@@ -1,0 +1,26 @@
+FP6.0 call graph proving live Step 6 reachability
+
+Public entry to live residual split surface:
+1. native_outcome_probability_bits_impl_idx(...)
+   - src/distributions.cpp:6655
+2. evaluate_outcome_coupling_unified(...)
+   - called from src/distributions.cpp:6698
+3. residual runtime branches from unified coupling entry:
+   - Generic provider fast paths
+     - EventRef no-competitor: src/distributions.cpp:4289
+     - NodeRef no-competitor: src/distributions.cpp:4305
+   - Generic provider dispatch
+     - src/distributions.cpp:4324
+       - EventRef provider runtime: src/distributions.cpp:3967
+       - NodeRef provider runtime: src/distributions.cpp:4053
+   - Specialized program dispatch
+     - NWay helper call: src/distributions.cpp:4415
+     - Pair helper call: src/distributions.cpp:4420
+4. specialized helper implementations still reachable from the public entry:
+   - evaluate_coupling_mass_nway(...): src/distributions.cpp:4427
+   - evaluate_coupling_mass_pair(...): src/distributions.cpp:4500
+
+Interpretation:
+- Step 5 removed scalar generic fallback and moved direct NodeRef work onto the batch executor.
+- Step 6 is still open because unified coupling still selects among multiple runtime implementations.
+- Deletion must start at the program-kind dispatch in evaluate_outcome_coupling_unified(...), not with another wrapper around the helpers.

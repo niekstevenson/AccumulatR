@@ -1,0 +1,11 @@
+timestamp=20260309T102538Z
+commit=1f7f158
+decision=ACHIEVED
+criteria_keep_bucket_only=pass
+criteria_delete_bucket_removed=pass
+criteria_guess_specialization_deleted=pass
+criteria_observed_stays_out_of_sequence_state=pass
+criteria_max_abs_diff_le_1e4=pass
+criteria_count_ratio_gt_1.02_eq_0=pass
+criteria_count_p1_ratio_gt_1.00_eq_0=pass
+no_wrapper_only_consolidation_introduced=yes

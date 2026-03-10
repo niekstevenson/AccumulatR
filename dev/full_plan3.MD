@@ -6,7 +6,7 @@ editor_options:
 
 # Phase 3 + 6 Hard-Cutover Execution Contract (No Legacy Fallback)
 
-Last updated: 2026-03-08T16:45:41Z (UTC)
+Last updated: 2026-03-10T09:07:31Z (UTC)
 Status: OPEN (RESET UNDER THIS CONTRACT)
 
 ## 1) Brutal Current State
@@ -14,19 +14,16 @@ Status: OPEN (RESET UNDER THIS CONTRACT)
 1. This contract is not complete.
 2. Prior Step 6 evidence exists, but it does not close the full hard-cutover
    criteria defined here.
-3. Active structural split points still exist in runtime execution:
-   1. Unified coupling dispatcher still routes into pair/nway helper engines:
-      `src/distributions.cpp:4238`, `src/distributions.cpp:4243`
-   2. Provider-kind branch still controls runtime coupling behavior:
-      `src/distributions.cpp:4120`, `src/distributions.cpp:4136`,
-      `src/distributions.cpp:4146`
-   3. Non-coupling path still evaluates base node density through per-time
-      recursive node calls:
-      `src/distributions.cpp:5986`, `src/distributions.cpp:6051`
-   4. Competitor path still has incremental-batch vs per-node runtime split:
-      `src/distributions.cpp:5808`, `src/distributions.cpp:5819`
-4. Honest summary: this is partial consolidation, not full single-engine
-   closure.
+3. Step 6 structural blockers have now been removed on the current commit
+   lineage:
+   1. no pair/nway helper-engine dispatch remains
+   2. no pair/nway helper-engine symbols remain
+   3. no provider-kind enum/plan/runtime branching remains in
+      `src/distributions.cpp`
+4. Honest summary: Step 5 is closed; Step 6 code cut is now structurally in
+   place, but closure is not claimed until `FP6.3` audit and `FP7` stability
+   are frozen.
+5. Honest summary: this is not final closure yet.
 
 ## 2) Scope (Exact)
 
@@ -101,7 +98,12 @@ No skipping. No out-of-order completion claims.
 2. Step 2: `dev/full_plan3_step2_unified_kernel_entry.MD`
 3. Step 3-4: `dev/full_plan3_step3_4_transitions_ranked_cutover.MD`
 4. Step 4 lower-layer: `dev/full_plan3_step4_lower_layer_convergence.MD`
-5. Step 5-6: `dev/full_plan3_step5_6_vectorization_legacy_deletion.MD`
+5. Step 4 deletion map: `dev/full_plan3_step4_deletion_map.MD`
+6. Step 4 post-closure cleanup:
+   `dev/full_plan3_step4_post_closure_cleanup.MD`
+7. Step 5-6: `dev/full_plan3_step5_6_vectorization_legacy_deletion.MD`
+8. Step 5 kernel-level cutover:
+   `dev/full_plan3_step5_kernel_level_batch_cutover.MD`
 
 These sub-plans are normative; this master file is the contract spine.
 
@@ -179,31 +181,266 @@ These are allowed only if they do not re-split architecture:
    `FP2.5`, closure decision `ACHIEVED`, commit `54437eb`)
 4. FP3 Step 3: COMPLETE (`FP3.0` + `FP3.1` + `FP3.2` + `FP3.3`, closure
    decision `ACHIEVED`, commit `54437eb`)
-5. FP4 Step 4: IN PROGRESS (`FP4.0` baseline/probe freeze complete; top-level
+5. FP4 Step 4: COMPLETE (`FP4.0` baseline/probe freeze complete; top-level
    `FP4.1` cut rejected; `FP4L.1` profiling complete; `FP4L.2` + `FP4L.3`
    keepable lower-layer convergence cut complete; `FP4L.4` planner
-   convergence landed but Step 4 closure still blocked by residual
-   `example_22_shared_q` P1 overhead, commit `54437eb`)
-6. FP5 Step 5: NOT STARTED
-7. FP6 Step 6: NOT STARTED
+   convergence landed; `FP4D.1` + `FP4D.2` removed the internal prep split,
+   binder glue, and ranked staging buffers; `FP4D.3` removed the ranked-named
+   SoA resolver and unified SoA resolution; `FP4D.4` removed raw
+   sequence-length dispatch in favor of a planner-assigned execution contract;
+   `FP4D.5` deleted the remaining guess specialization and `FP4L.5` / `FP4D.6`
+   closure bundle `20260309T102538Z` passed with `count_ratio_gt_1.02 = 0`
+   and `count_p1_ratio_gt_1.00 = 0`,
+   commit `1f7f158`)
+6. FP5 Step 5: ACHIEVED (`FP5.0` baseline/probe freeze
+   `20260309T135122Z` complete; first `FP5.1` runtime attempt
+   `20260309T142857Z` rejected and reverted because a direct guarded generic
+   `NodeRef` target case regressed by `1.925x` versus `1f7f158`; standard
+   suite remained green but does not exercise `generic_noderef_batch_calls`;
+   `FP5K.0` target freeze + harness lock `20260309T152055Z` is complete;
+   `FP5K.1` kernel-level batch executor contract `20260309T152855Z` is
+   complete; `FP5K.2` direct generic `NodeRef` runtime port
+   `20260309T153954Z` is complete; `FP5K.3` competitor-bearing `NodeRef`
+   batch cutover `20260309T160625Z` is complete; `FP5K.4`
+   helper-orchestration deletion cut `20260309T162200Z` is complete; `FP5K.5`
+   executor-only stabilization `20260309T165456Z` is complete; `FP5K.6`
+   closure bundle `20260309T171110Z` passed and closes Step 5;
+   controlling Step 5 execution artifact is now
+   `dev/full_plan3_step5_kernel_level_batch_cutover.MD`,
+   commit `1f7f158`)
+7. FP6 Step 6: IN PROGRESS (`FP6.0` inventory freeze complete; `FP6.1`
+   deleted pair/nway helper engines and removed active helper dispatch;
+   `FP6.2` removed provider-kind runtime branching; `FP6.3` audit pending,
+   commit `1f7f158`)
 8. FP7 final closure: NOT STARTED
 
 Global completion claim: NO
 
 ## 14) Immediate Next Action
 
-1. Trim the residual `example_22_shared_q` single-step planner overhead so the
-   strict P1 gate returns to `<= 1.00`.
-2. Then execute `FP4L.5` closure/deletion-proof decision in
-   `dev/full_plan3_step4_lower_layer_convergence.MD`.
-3. Keep the failed `FP4.1` artifacts, the `FP4L.1` profile bundle, the
-   keepable `FP4L.2`/`FP4L.3` bundle, and the `FP4L.4` planner-convergence
-   bundle frozen as proof:
-   `full_plan3_FP4_20260308T160703Z_*`,
-   `full_plan3_FP4_20260308T161426Z_*`,
-   `full_plan3_FP4L_20260308T164541Z_*`,
-   `full_plan3_FP4L_20260308T185700Z_*`,
-   `full_plan3_FP4L_20260309T091834Z_*`.
+1. Keep the failed `FP4.1` artifacts as negative proof of the wrong
+   unification boundary.
+2. Keep the keepable Step 4 evidence frozen:
+   `full_plan3_FP4L_20260309T091834Z_*`,
+   `full_plan3_FP4D_20260309T094513Z_*`,
+   `full_plan3_FP4D_20260309T095525Z_*`,
+   `full_plan3_FP4D_20260309T100610Z_*`,
+   `full_plan3_FP4D_20260309T101011Z_*`,
+   `full_plan3_FP4D_20260309T102538Z_*`.
+3. Optional follow-on cleanup artifact now exists at
+   `dev/full_plan3_step4_post_closure_cleanup.MD`; `P4C.0` / `P4C.1` are
+   frozen in `full_plan3_P4C_20260309T124905Z_*`, `P4C.2` is frozen in
+   `full_plan3_P4C_20260309T130450Z_*`, `P4C.3` is frozen in
+   `full_plan3_P4C_20260309T132214Z_*`, `P4C.4` is frozen in
+   `full_plan3_P4C_20260309T132846Z_*`, `P4C.5` closure is frozen in
+   `full_plan3_P4C_20260309T133248Z_*`, and the artifact is closed with
+   recorded non-blocking residuals.
+4. Keep the frozen `FP5.0` evidence bundle:
+   `full_plan3_FP5_20260309T135122Z_*`.
+5. Keep the rejected `FP5.1` evidence bundle:
+   `full_plan3_FP5_20260309T142857Z_*`.
+6. Step 5 execution is now governed by
+   `dev/full_plan3_step5_kernel_level_batch_cutover.MD`.
+7. Keep the frozen `FP5K.0` evidence bundle:
+   `full_plan3_FP5K_20260309T152055Z_*`.
+8. Keep the frozen `FP5K.1` evidence bundle:
+   `full_plan3_FP5K_20260309T152855Z_*`.
+9. Keep the frozen `FP5K.2` evidence bundle:
+   `full_plan3_FP5K_20260309T153954Z_*`.
+10. Keep the frozen `FP5K.3` evidence bundle:
+   `full_plan3_FP5K_20260309T160625Z_*`.
+11. Keep the frozen `FP5K.4` evidence bundle:
+   `full_plan3_FP5K_20260309T162200Z_*`.
+12. Keep the frozen `FP5K.5` evidence bundle:
+   `full_plan3_FP5K_20260309T165456Z_*`.
+13. Keep the frozen `FP5K.6` evidence bundle:
+   `full_plan3_FP5K_20260309T171110Z_*`.
+14. Keep the frozen `FP6.0` evidence bundle:
+   `full_plan3_FP6_20260309T171751Z_*`.
+15. Keep the frozen `FP6.1` evidence bundle:
+   `full_plan3_FP6_20260310T085328Z_*`.
+16. Keep the frozen `FP6.2` evidence bundle:
+   `full_plan3_FP6_20260310T090731Z_*`.
+17. Next strict action is `FP6.3`:
+   freeze the final Step 6 deletion audit, residual split report, and closure
+   decision on this commit lineage before moving to `FP7.0`.
+
+## 41) Evidence Block: FP6.0 Legacy Branch Inventory Freeze
+
+1. Timestamp (UTC): `20260309T171751Z`
+2. Commit SHA: `1f7f158`
+3. Runtime code changed:
+   1. no
+4. What landed:
+   1. first post-Step-5 full gate freeze for Step 6
+   2. explicit residual Step 6 split inventory
+   3. explicit call graph from public outcome-probability entry to the live
+      specialized/helper surface
+   4. explicit deleted-symbol list proving this batch did not claim deletion
+5. Gate results:
+   1. `install`: pass
+   2. `step3_structure`: pass
+   3. `step4_structure`: pass
+   4. `step5_structure`: pass
+   5. `step6_structure`: pass
+   6. `golden`: pass
+   7. `bench`: pass
+6. Correctness:
+   1. `max_abs_diff = 1.23378e-05`
+7. Centralized benchmark:
+   1. worst ratio: `0.988636363636364`
+   2. worst workload: `example_16_guard_tie_simple`
+   3. P1 above `1.00`: `0`
+8. Brutal inventory result:
+   1. Step 5 remains closed
+   2. Step 6 is now started, but active split surface is still non-empty
+   3. live Step 6 debt explicitly frozen:
+      1. unified coupling still dispatches to specialized pair/nway helpers
+      2. specialized pair/nway helper engines are still present and reachable
+      3. provider-kind runtime branching and direct fast paths are still live
+   4. this does not count as deletion
+   5. `FP6.1` is the next strict batch
+9. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP6_20260309T171751Z_manifest.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP6_20260309T171751Z_status.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP6_20260309T171751Z_summary.txt`
+   4. `dev/scripts/scratch_outputs/full_plan3_FP6_20260309T171751Z_deleted_symbols.txt`
+   5. `dev/scripts/scratch_outputs/full_plan3_FP6_20260309T171751Z_residual_splitpoints.txt`
+   6. `dev/scripts/scratch_outputs/full_plan3_FP6_20260309T171751Z_callgraph_inventory.txt`
+   7. `dev/scripts/scratch_outputs/full_plan3_FP6_20260309T171751Z_step3_structure.log`
+   8. `dev/scripts/scratch_outputs/full_plan3_FP6_20260309T171751Z_step4_structure.log`
+   9. `dev/scripts/scratch_outputs/full_plan3_FP6_20260309T171751Z_step5_structure.log`
+   10. `dev/scripts/scratch_outputs/full_plan3_FP6_20260309T171751Z_step6_structure.log`
+   11. `dev/scripts/scratch_outputs/full_plan3_FP6_20260309T171751Z_golden.log`
+   12. `dev/scripts/scratch_outputs/full_plan3_FP6_20260309T171751Z_bench.log`
+   13. `dev/scripts/scratch_outputs/full_plan3_FP6_20260309T171751Z_diff.csv`
+
+## 42) Evidence Block: FP6.1 Remove Specialized Coupling Dispatch
+
+1. Timestamp (UTC): `20260310T085328Z`
+2. Commit SHA: `1f7f158`
+3. Runtime code changed:
+   1. yes
+4. What landed:
+   1. deleted `evaluate_coupling_mass_nway`
+   2. deleted `evaluate_coupling_mass_pair`
+   3. pair/nway program kinds now execute inline inside
+      `evaluate_outcome_coupling_unified(...)`
+   4. `check_step6_structure.sh` now rejects reintroduction of the deleted
+      helper symbols
+   5. `check_step5_structure.sh` now uses a real function-boundary extraction
+      for `evaluate_outcome_coupling_unified(...)` so Step 5 gating remains
+      valid after real deletion
+5. Gate results:
+   1. `install`: pass
+   2. `step3_structure`: pass
+   3. `step4_structure`: pass
+   4. `step5_structure`: pass
+   5. `step6_structure`: pass
+   6. `golden`: pass
+   7. `bench`: pass
+6. Correctness:
+   1. `max_abs_diff = 1.23378e-05`
+7. Centralized benchmark:
+   1. worst ratio: `0.971590909090903`
+   2. worst workload: `example_16_guard_tie_simple`
+   3. P1 above `1.00`: `0`
+8. Brutal result:
+   1. `FP6.1` is achieved
+   2. pair/nway helper-engine dispatch is gone
+   3. pair/nway helper symbols are deleted
+   4. Step 6 is still not achieved because provider-kind fast paths and
+      provider execution branching remain live
+   5. `FP6.2` is the next strict batch
+9. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T085328Z_manifest.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T085328Z_status.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T085328Z_summary.txt`
+   4. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T085328Z_deleted_symbols.txt`
+   5. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T085328Z_residual_splitpoints.txt`
+   6. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T085328Z_callgraph_inventory.txt`
+   7. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T085328Z_step3_structure.log`
+   8. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T085328Z_step4_structure.log`
+   9. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T085328Z_step5_structure.log`
+   10. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T085328Z_step6_structure.log`
+   11. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T085328Z_golden.log`
+   12. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T085328Z_bench.log`
+   13. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T085328Z_diff.csv`
+
+## 43) Evidence Block: FP6.2 Remove Provider-Kind Alternate Execution Behavior
+
+1. Timestamp (UTC): `20260310T090731Z`
+2. Commit SHA: `1f7f158`
+3. Runtime code changed:
+   1. yes
+4. What landed:
+   1. deleted provider-kind enum/plan/runtime-branch machinery
+   2. replaced provider-kind branching with once-per-call provider runtime
+      resolution using function pointers/data
+   3. retained EventRef-backed specialization only as resolved provider data,
+      not as live runtime branching in `src/distributions.cpp`
+   4. tightened `check_step6_structure.sh` to reject provider-kind alternate
+      execution machinery
+   5. updated `check_step5_structure.sh` so Step 5 still proves direct NodeRef
+      CDF routing through the batch executor adapter under the new resolved
+      provider shape
+5. Gate results:
+   1. `install`: pass
+   2. `step3_structure`: pass
+   3. `step4_structure`: pass
+   4. `step5_structure`: pass
+   5. `step6_structure`: pass
+   6. `golden`: pass
+   7. `bench`: pass
+   8. targeted provider probe: pass
+6. Correctness:
+   1. `max_abs_diff = 1.23378e-05`
+7. Centralized benchmark:
+   1. worst ratio: `0.960227272727273`
+   2. worst workload: `example_16_guard_tie_simple`
+   3. P1 above `1.00`: `0`
+8. Targeted provider probe result:
+   1. `example_21_simple_q`:
+      1. `generic_labelref_batch_fastpath_calls = 1296`
+      2. `generic_noderef_batch_calls = 0`
+      3. `generic_scalar_fallback_calls = 0`
+   2. `example_22_shared_q`:
+      1. `generic_labelref_batch_fastpath_calls = 1280`
+      2. `generic_noderef_batch_calls = 0`
+      3. `generic_scalar_fallback_calls = 0`
+   3. `example_3_stop_na`:
+      1. `generic_labelref_batch_fastpath_calls = 1600`
+      2. `generic_noderef_batch_calls = 0`
+      3. `generic_scalar_fallback_calls = 0`
+   4. interpretation:
+      1. old EventRef-heavy workloads recover
+      2. provider specialization remains as resolved data only
+      3. runtime provider branching in `src/distributions.cpp` is gone
+9. Brutal result:
+   1. `FP6.2` is achieved
+   2. active Step 6 structural split surface is empty under the current
+      contract
+   3. Step 6 is still not claimed in this batch because `FP6.3` audit and
+      closure proof are still required
+   4. `FP6.3` is the next strict batch
+10. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_manifest.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_status.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_summary.txt`
+   4. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_deleted_symbols.txt`
+   5. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_residual_splitpoints.txt`
+   6. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_callgraph_inventory.txt`
+   7. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_targeted_unified_stats.csv`
+   8. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_targeted_probe.log`
+   9. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_step3_structure.log`
+   10. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_step4_structure.log`
+   11. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_step5_structure.log`
+   12. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_step6_structure.log`
+   13. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_golden.log`
+   14. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_bench.log`
+   15. `dev/scripts/scratch_outputs/full_plan3_FP6_20260310T090731Z_diff.csv`
+15. Do not reopen Step 4 unless a later step proves this closure false under
+   the same gates.
 
 ## 15) Evidence Block: FP0 Baseline Freeze
 
@@ -944,3 +1181,448 @@ Global completion claim: NO
    12. `dev/scripts/scratch_outputs/full_plan3_FP4_20260308T154626Z_benchmark_centralized_diff.csv`
    13. `dev/scripts/scratch_outputs/full_plan3_FP4_20260308T154626Z_benchmark_step3_comparison.csv`
    14. `dev/scripts/scratch_outputs/full_plan3_FP4_20260308T154626Z_summary.txt`
+
+## 32) Evidence Block: FP5.0 Vectorization Baseline + Probe Freeze
+
+1. Timestamp (UTC): `20260309T135122Z`
+2. Commit SHA: `1f7f158`
+3. Runtime code changed:
+   1. `no`
+4. Gate command status:
+   1. `install`: pass
+   2. `step3_structure`: pass
+   3. `step4_structure`: pass
+   4. `step5_structure`: pass
+   5. `step6_structure`: pass
+   6. `golden`: pass
+   7. `bench`: pass
+5. Golden result:
+   1. `max_abs_diff = 1.23378e-05` (tolerance `1e-04`)
+6. Performance snapshot (`median_per_eval_sec` ratio current/baseline):
+   1. Worst ratio: `0.975609756097567` (`example_2_stop_mixture`)
+   2. Count above `1.02`: `0`
+   3. P1 above `1.00`: `0`
+7. FP5.0 probe findings:
+   1. The sampled coupling workload stays on the unified batch-native stack:
+      `evaluate_outcome_coupling_unified ->
+      integrate_coupling_mass_batch_adaptive ->
+      evaluate_labelref_batch/evaluate_coupling_acc_batch -> eval_*_vec`.
+   2. The sampled non-coupling workload is still dominated by the direct
+      competitor/kernel path:
+      `node_density_with_competitors_from_state_dense ->
+      eval_node_recursive_dense -> eval_kernel_node_incremental`.
+   3. Specialized pair/nway helper engines remain structurally reachable from
+      unified coupling and therefore still count as Step 6 debt even though
+      they were not sampled in the chosen coupling probe.
+   4. Brutal status: Step 5 is not achieved; Step 6 has not started.
+8. Wrapper-only consolidation check:
+   1. `No wrapper-only consolidation introduced = yes`
+9. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_manifest.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_status.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_vector_coverage.txt`
+   4. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_hotloop_probe.csv`
+   5. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_shared_gate_nway_shared_triggers_profile.txt`
+   6. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_example_2_stop_mixture_profile.txt`
+   7. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_step3_structure.log`
+   8. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_step4_structure.log`
+   9. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_step5_structure.log`
+   10. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_step6_structure.log`
+   11. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_golden.log`
+   12. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_bench.log`
+   13. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_benchmark_centralized.csv`
+   14. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_diff.csv`
+   15. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_summary.txt`
+
+## 33) Evidence Block: FP5.1 First Attempt Rejected + Reverted
+
+1. Timestamp (UTC): `20260309T142857Z`
+2. Commit SHA: `1f7f158`
+3. Runtime status:
+   1. attempted
+   2. rejected
+   3. reverted
+4. Why this does not count:
+   1. the standard example and nested suites do not exercise
+      `generic_noderef_batch_calls`
+   2. a direct guarded generic `NodeRef` target case was required and was
+      explicitly measured
+5. Direct target-case result (`pair_guard_generic_noderef`):
+   1. attempted current:
+      `generic_noderef_batch_calls = 1`,
+      `generic_scalar_fallback_calls = 0`,
+      `median_per_eval_sec = 0.0018625`
+   2. detached worktree baseline at `1f7f158`:
+      `generic_noderef_batch_calls = 1`,
+      `generic_scalar_fallback_calls = 0`,
+      `median_per_eval_sec = 0.0009675`
+   3. regression ratio:
+      `1.925064599483204`
+6. Revert verification:
+   1. reverted current:
+      `generic_noderef_batch_calls = 1`,
+      `generic_scalar_fallback_calls = 0`,
+      `median_per_eval_sec = 0.0009475`
+   2. reverted/current over baseline ratio:
+      `0.9793281653746769`
+7. Lightweight gates after revert:
+   1. `step5_structure`: pass
+   2. `golden`: pass
+   3. `max_abs_diff = 1.23378e-05`
+8. Closure decision:
+   1. `FP5.1` is not achieved
+   2. first implementation is rejected as non-keepable
+9. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T142857Z_summary.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T142857Z_manifest.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T142857Z_step5_structure.log`
+   4. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T142857Z_golden.log`
+   5. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T142857Z_attempt_pair_guard_current_regressed.txt`
+   6. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T142857Z_attempt_pair_guard_baseline_1f7f158.txt`
+   7. `dev/scripts/scratch_outputs/full_plan3_FP5_20260309T142857Z_pair_guard_current_reverted.txt`
+
+## 34) Evidence Block: FP5K.0 Target Freeze + Harness Lock
+
+1. Timestamp (UTC): `20260309T152055Z`
+2. Commit SHA: `1f7f158`
+3. Runtime code changed:
+   1. no
+4. What landed:
+   1. repo-owned target harness:
+      `dev/scripts/bench_step5_kernel_target_cases.R`
+   2. frozen direct target surfaces:
+      1. `pair_guard_generic_noderef`
+      2. `nested_guard_generic_noderef`
+      3. `competitor_guard_generic_noderef`
+5. Gate results:
+   1. `install`: pass
+   2. `step5_structure`: pass
+   3. `golden`: pass
+   4. `bench`: pass
+6. Correctness:
+   1. `max_abs_diff = 1.23378e-05`
+7. Centralized benchmark:
+   1. worst ratio: `1.007948588`
+   2. P1 above `1.00`: `0`
+8. Target-case freeze:
+   1. `pair_guard_generic_noderef`:
+      `competitor_count = 0`,
+      `median_per_eval_sec = 8.33333333333334e-06`,
+      `generic_noderef_batch_per_eval = 1`,
+      `generic_scalar_fallback_per_eval = 0`
+   2. `nested_guard_generic_noderef`:
+      `competitor_count = 0`,
+      `median_per_eval_sec = 1.5e-05`,
+      `generic_noderef_batch_per_eval = 1`,
+      `generic_scalar_fallback_per_eval = 0`
+   3. `competitor_guard_generic_noderef`:
+      `competitor_count = 2`,
+      `median_per_eval_sec = 0.001355`,
+      `generic_noderef_batch_per_eval = 1`,
+      `generic_scalar_fallback_per_eval = 0`
+9. Closure decision:
+   1. `FP5K.0` is achieved
+   2. Step 5 is still not achieved
+10. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T152055Z_manifest.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T152055Z_summary.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T152055Z_target_cases.txt`
+   4. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T152055Z_vector_coverage.txt`
+   5. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T152055Z_split_inventory.txt`
+
+## 35) Evidence Block: FP5K.1 Kernel-Level Batch Executor Contract
+
+1. Timestamp (UTC): `20260309T152855Z`
+2. Commit SHA: `1f7f158`
+3. Runtime code changed:
+   1. yes
+4. What landed:
+   1. `KernelBatchRuntimeState`
+   2. `KernelEventBatchEvalFn`
+   3. `KernelGuardBatchEvalFn`
+   4. `eval_kernel_node_batch_incremental`
+   5. `eval_kernel_nodes_batch_incremental`
+5. Gate results:
+   1. `install`: pass
+   2. `step3_structure`: pass
+   3. `step4_structure`: pass
+   4. `step5_structure`: pass
+   5. `step6_structure`: pass
+   6. `golden`: pass
+   7. `bench`: pass
+6. Correctness:
+   1. `max_abs_diff = 1.23378e-05`
+7. Centralized benchmark:
+   1. worst ratio: `0.979066023`
+   2. P1 above `1.00`: `0`
+8. Direct target-case comparison versus `FP5K.0`:
+   1. `pair_guard_generic_noderef`: ratio `1.0`
+   2. `nested_guard_generic_noderef`: ratio `1.0`
+   3. `competitor_guard_generic_noderef`: ratio `0.9876999`
+   4. all remain `generic_noderef_batch_per_eval = 1`
+   5. all remain `generic_scalar_fallback_per_eval = 0`
+9. Honest status:
+   1. `FP5K.1` is achieved
+   2. this is contract consolidation, not runtime cutover
+   3. direct `NodeRef` runtime is not yet ported to the new executor contract
+10. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T152855Z_manifest.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T152855Z_summary.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T152855Z_target_cases.txt`
+   4. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T152855Z_vector_coverage.txt`
+   5. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T152855Z_split_inventory.txt`
+
+## 36) Evidence Block: FP5K.2 Direct Generic `NodeRef` Runtime Port
+
+1. Timestamp (UTC): `20260309T153954Z`
+2. Commit SHA: `1f7f158`
+3. Runtime code changed:
+   1. yes
+4. What landed:
+   1. direct generic `NodeRef` no-competitor runtime in
+      `evaluate_outcome_coupling_unified` now routes to
+      `eval_node_with_forced_state_view_batch`
+   2. that helper now calls `eval_kernel_node_batch_incremental`
+   3. Step 5 structure gate now rejects reintroduction of the old direct
+      scalar helper call at that site
+5. Gate results:
+   1. `install`: pass
+   2. `step3_structure`: pass
+   3. `step4_structure`: pass
+   4. `step5_structure`: pass
+   5. `step6_structure`: pass
+   6. `golden`: pass
+   7. `bench`: pass
+6. Correctness:
+   1. `max_abs_diff = 1.23378e-05`
+7. Centralized benchmark:
+   1. worst ratio: `1`
+   2. worst workload: `example_16_guard_tie_simple`
+   3. P1 above `1.00`: `0`
+8. Direct target-case comparison versus `FP5K.0`:
+   1. `pair_guard_generic_noderef`: ratio `1`
+   2. `nested_guard_generic_noderef`: ratio `1`
+   3. `competitor_guard_generic_noderef`: ratio `0.9852399`
+   4. all remain `generic_noderef_batch_per_eval = 1`
+   5. all remain `generic_scalar_fallback_per_eval = 0`
+9. Honest status:
+   1. `FP5K.2` is achieved
+   2. this is the first real runtime cutover onto the kernel executor contract
+   3. this does not close Step 5
+   4. `FP5K.0` / `FP5K.1` direct target probability values for the two
+      no-competitor surfaces were wrong because the old direct branch treated
+      `generic.node_id` as a dense node index
+   5. `full_plan3_FP5K_20260309T153954Z_direct_port_probe.log` proves the
+      corrected resolved-node scalar value matches the new batch value
+   6. competitor-bearing `NodeRef` orchestration still remains in
+      `node_density_with_competitors_batch_internal`
+10. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T153954Z_manifest.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T153954Z_summary.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T153954Z_target_cases.txt`
+   4. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T153954Z_vector_coverage.txt`
+   5. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T153954Z_split_inventory.txt`
+   6. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T153954Z_deleted_symbols.txt`
+   7. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T153954Z_direct_port_probe.log`
+
+## 37) Evidence Block: FP5K.3 Competitor-Bearing `NodeRef` Batch Cutover
+
+1. Timestamp (UTC): `20260309T160625Z`
+2. Commit SHA: `1f7f158`
+3. Runtime code changed:
+   1. yes
+4. What landed:
+   1. `node_density_with_competitors_batch_internal` now does batched
+      base-node density plus batched compiled competitor ops
+   2. `eval_kernel_nodes_batch_incremental` is now exercised on the
+      competitor-bearing target surface
+   3. Step 5 structure gate now rejects reintroduction of scalar base-node or
+      scalar competitor-op execution inside that helper
+5. Gate results:
+   1. `install`: pass
+   2. `step3_structure`: pass
+   3. `step4_structure`: pass
+   4. `step5_structure`: pass
+   5. `step6_structure`: pass
+   6. `golden`: pass
+   7. `bench`: pass
+6. Correctness:
+   1. `max_abs_diff = 1.23378e-05`
+7. Centralized benchmark:
+   1. worst ratio: `0.963576159`
+   2. worst workload: `example_10_exclusion`
+   3. P1 above `1.00`: `0`
+8. Direct target-case comparison versus `FP5K.2`:
+   1. `pair_guard_generic_noderef`: ratio `1`
+   2. `nested_guard_generic_noderef`: ratio `1`
+   3. `competitor_guard_generic_noderef`: ratio `0.9912609`
+   4. all remain `generic_noderef_batch_per_eval = 1`
+   5. all remain `generic_scalar_fallback_per_eval = 0`
+9. Honest status:
+   1. `FP5K.3` is achieved
+   2. direct and competitor-bearing generic `NodeRef` surfaces now share the
+      same batch executor boundary
+   3. this does not close Step 5
+   4. helper-layer orchestration still remains in
+      `node_density_with_competitors_batch_internal`
+10. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T160625Z_manifest.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T160625Z_summary.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T160625Z_target_cases.txt`
+   4. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T160625Z_vector_coverage.txt`
+   5. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T160625Z_split_inventory.txt`
+   6. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T160625Z_deleted_symbols.txt`
+
+## 38) Evidence Block: FP5K.4 Helper-Orchestration Deletion Cut
+
+1. Timestamp (UTC): `20260309T162200Z`
+2. Commit SHA: `1f7f158`
+3. Runtime code changed:
+   1. yes
+4. What landed:
+   1. deleted `eval_nodes_batch_with_state_dense`
+   2. deleted `run_competitor_batch_survival_op_batch`
+   3. deleted `run_competitor_compiled_ops_product_batch`
+   4. added executor-side
+      `eval_kernel_competitor_product_batch_incremental`
+   5. `node_density_with_competitors_batch_internal` now binds state/callbacks,
+      runs one batched base-node density call, and delegates the compiled
+      competitor-op batch loop to the executor
+5. Gate results:
+   1. `install`: pass
+   2. `step3_structure`: pass
+   3. `step4_structure`: pass
+   4. `step5_structure`: pass
+   5. `step6_structure`: pass
+   6. `golden`: pass
+   7. `bench`: pass
+   8. `target_cases`: pass
+6. Correctness:
+   1. `max_abs_diff = 1.23378e-05`
+7. Centralized benchmark:
+   1. worst ratio: `0.980113636363642`
+   2. worst workload: `example_16_guard_tie_simple`
+   3. P1 above `1.00`: `0`
+8. Direct target-case comparison versus `FP5K.3`:
+   1. `pair_guard_generic_noderef`: ratio `1`
+   2. `nested_guard_generic_noderef`: ratio `1`
+   3. `competitor_guard_generic_noderef`: ratio `1.0025189`
+   4. all remain `generic_noderef_batch_per_eval = 1`
+   5. all remain `generic_scalar_fallback_per_eval = 0`
+9. Honest status:
+   1. `FP5K.4` is achieved
+   2. the helper-local compiled competitor batch engine is deleted
+   3. this does not close Step 5
+   4. `FP5K.5` is the next strict batch
+10. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T162200Z_manifest.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T162200Z_summary.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T162200Z_target_cases.txt`
+   4. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T162200Z_vector_coverage.txt`
+   5. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T162200Z_split_inventory.txt`
+   6. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T162200Z_deleted_symbols.txt`
+
+## 39) Evidence Block: FP5K.5 Executor-Only Stabilization
+
+1. Timestamp (UTC): `20260309T165456Z`
+2. Commit SHA: `1f7f158`
+3. Runtime code changed:
+   1. yes
+4. What landed:
+   1. executor-side compiled competitor-op batching now resolves target slots
+      once and reads runtime slots directly instead of materializing copied
+      batch-value vectors
+   2. no helper-layer engine or wrapper was added
+   3. no runtime split was added
+5. Gate results:
+   1. `install`: pass
+   2. `step3_structure`: pass
+   3. `step4_structure`: pass
+   4. `step5_structure`: pass
+   5. `step6_structure`: pass
+   6. `golden`: pass
+   7. `bench`: pass
+   8. `target_cases`: pass
+6. Correctness:
+   1. `max_abs_diff = 1.23378e-05`
+7. Centralized benchmark:
+   1. worst ratio: `0.977272727272733`
+   2. worst workload: `example_16_guard_tie_simple`
+   3. P1 above `1.00`: `0`
+8. Direct target-case comparison versus `FP5K.4`:
+   1. frozen run:
+      1. `pair_guard_generic_noderef`: ratio `1`
+      2. `nested_guard_generic_noderef`: ratio `1.1111111`
+      3. `competitor_guard_generic_noderef`: ratio `1.0018832`
+   2. supplemental rerun:
+      1. `pair_guard_generic_noderef`: ratio `1`
+      2. `nested_guard_generic_noderef`: ratio `1`
+      3. `competitor_guard_generic_noderef`: ratio `0.9987437`
+   3. all remain `generic_noderef_batch_per_eval = 1`
+   4. all remain `generic_scalar_fallback_per_eval = 0`
+9. Honest status:
+   1. `FP5K.5` is achieved
+   2. the only apparent slowdown signal was timer-quantum noise on a tiny
+      target surface and disappeared on the supplemental rerun
+   3. this does not close Step 5
+   4. `FP5K.6` is the next strict batch
+10. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T165456Z_manifest.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T165456Z_summary.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T165456Z_target_cases.txt`
+   4. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T165456Z_target_cases_rerun.txt`
+   5. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T165456Z_vector_coverage.txt`
+   6. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T165456Z_split_inventory.txt`
+
+## 40) Evidence Block: FP5K.6 Step 5 Closure
+
+1. Timestamp (UTC): `20260309T171110Z`
+2. Commit SHA: `1f7f158`
+3. Runtime code changed:
+   1. no
+4. What landed:
+   1. formal Step 5 closure bundle on the stabilized executor boundary
+   2. current direct-target hot-loop probe
+   3. current deletion proof and closure decision
+5. Gate results:
+   1. `install`: pass
+   2. `step3_structure`: pass
+   3. `step4_structure`: pass
+   4. `step5_structure`: pass
+   5. `step6_structure`: pass
+   6. `golden`: pass
+   7. `bench`: pass
+   8. `target_cases`: pass
+6. Correctness:
+   1. `max_abs_diff = 1.23378e-05`
+7. Centralized benchmark:
+   1. worst ratio: `0.97727272727275`
+   2. worst workload: `example_16_guard_tie_simple`
+   3. P1 above `1.00`: `0`
+8. Direct target-case status:
+   1. closure run:
+      1. `pair_guard_generic_noderef`: ratio vs `FP5K.5` = `1`
+      2. `nested_guard_generic_noderef`: ratio vs `FP5K.5` = `0.9`
+      3. `competitor_guard_generic_noderef`: ratio vs `FP5K.5` = `0.9931034`
+   2. closure rerun:
+      1. `pair_guard_generic_noderef`: ratio vs `FP5K.5` = `1`
+      2. `nested_guard_generic_noderef`: ratio vs `FP5K.5` = `0.9`
+      3. `competitor_guard_generic_noderef`: ratio vs `FP5K.5` = `0.9956113`
+   3. all remain `generic_noderef_batch_per_eval = 1`
+   4. all remain `generic_scalar_fallback_per_eval = 0`
+9. Closure decision:
+   1. `FP5K.6` is achieved
+   2. Step 5 is achieved
+   3. residual split surface is explicit Step 6 debt
+   4. `FP6.0` is the next strict batch
+10. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T171110Z_manifest.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T171110Z_summary.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T171110Z_target_cases.txt`
+   4. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T171110Z_target_cases_rerun.txt`
+   5. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T171110Z_hotloop_probe.csv`
+   6. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T171110Z_vector_coverage.txt`
+   7. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T171110Z_split_inventory.txt`
+   8. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T171110Z_deleted_symbols.txt`
+   9. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T171110Z_deletion_proof.txt`
+   10. `dev/scripts/scratch_outputs/full_plan3_FP5K_20260309T171110Z_step5_closure_decision.txt`

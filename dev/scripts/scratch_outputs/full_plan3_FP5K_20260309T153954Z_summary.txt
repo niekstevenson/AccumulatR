@@ -1,0 +1,25 @@
+timestamp_utc=20260309T153954Z
+commit=1f7f158
+batch=FP5K.2
+working_tree_dirty=yes
+worst_bench_ratio=1
+worst_suite=examples_models
+worst_label=example_16_guard_tie_simple
+count_ratio_gt_1.02=0
+count_p1_ratio_gt_1.00=0
+golden_max_abs_diff=1.23378e-05 tolerance=1e-04
+fp5k2_decision=ACHIEVED
+fp5k2_honest_status=Direct generic NodeRef no-competitor runtime is now ported to the kernel executor contract; competitor-bearing NodeRef orchestration still remains in distributions.cpp.
+fp5k2_probability_note=The pre-port direct no-competitor path treated generic.node_id as a dense node index; see full_plan3_FP5K_20260309T153954Z_direct_port_probe.log for resolved-node scalar=batch proof.
+fp5k3_next=Port competitor-bearing NodeRef guard/event reuse into the same executor and thin node_density_with_competitors_batch_internal.
+target_surface_rows:
+label=competitor_guard_generic_noderef probability=0.01055551 median_per_eval_sec=0.001335 ratio_current_over_fp5k0=0.9852399 generic_noderef_batch_per_eval=1 generic_scalar_fallback_per_eval=0
+label=nested_guard_generic_noderef probability=0.33265319 median_per_eval_sec=0.000015 ratio_current_over_fp5k0=1 generic_noderef_batch_per_eval=1 generic_scalar_fallback_per_eval=0
+label=pair_guard_generic_noderef probability=0.99958274 median_per_eval_sec=0.000008333333 ratio_current_over_fp5k0=1 generic_noderef_batch_per_eval=1 generic_scalar_fallback_per_eval=0
+key_ratios_begin
+nested,depth3_guard_competitor,0.9677625,0.195812500,0.1895000000
+examples_models,example_2_stop_mixture,0.9889743,0.001825000,0.0018048780
+examples_models,example_21_simple_q,0.8833678,0.000337500,0.0002981366
+examples_models,example_22_shared_q,0.9765055,0.000359375,0.0003509317
+examples_models,example_6_dual_path,0.8985507,0.000431250,0.0003875000
+key_ratios_end

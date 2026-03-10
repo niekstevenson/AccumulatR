@@ -6,11 +6,13 @@ editor_options:
 
 # Full Plan 3 Sub-Plan: Step 4 Lower-Layer Convergence
 
-Date: 2026-03-08
-Status: IN PROGRESS
+Date: 2026-03-09
+Status: COMPLETE (`FP4D.5` specialization deletion + `FP4L.5` closure bundle
+`20260309T102538Z` achieved)
 Parent: `dev/full_plan3.MD`
 Related Step: Step 4
 Batch ID range: `FP4L.*`
+Strict deletion map: `dev/full_plan3_step4_deletion_map.MD`
 
 ## 1) Brutal Current State
 
@@ -58,6 +60,8 @@ The incorrect unification target is:
 3. Shared runtime/caching/invalidations move down to the lower layer.
 4. Deletions or hard-unreachable proof exist for duplicated lower-layer
    helpers once convergence is complete.
+5. `dev/full_plan3_step4_deletion_map.MD` shrinks materially: `DELETE OR
+   MERGE` items are actually removed, not wrapped.
 
 ## 4) What Does Not Count
 
@@ -144,6 +148,7 @@ Step 4 under this artifact is achieved only when all are true:
 6. Centralized benchmark gates pass:
    1. no workload ratio above `1.02`
    2. no P1 workload ratio above `1.00`
+7. `dev/full_plan3_step4_deletion_map.MD` closure criteria are satisfied.
 
 ## 8) Required Evidence Bundle (`FP4L.*`)
 
@@ -161,11 +166,128 @@ Step 4 under this artifact is achieved only when all are true:
 
 ## 9) Immediate Next Action
 
-1. Trim the residual `example_22_shared_q` single-step planner overhead so the
-   strict P1 gate returns to `<= 1.00`.
-2. Then execute `FP4L.5`.
+1. Keep the rejected top-level `FP4.1` artifacts frozen as negative proof of
+   the wrong boundary.
+2. Keep the successful Step 4 evidence frozen in
+   `full_plan3_FP4L_20260309T091834Z_*`,
+   `full_plan3_FP4D_20260309T094513Z_*`,
+   `full_plan3_FP4D_20260309T095525Z_*`,
+   `full_plan3_FP4D_20260309T100610Z_*`,
+   `full_plan3_FP4D_20260309T101011Z_*`, and
+   `full_plan3_FP4D_20260309T102538Z_*`.
 3. Do not widen the sequence-state boundary again; observed single-step must
    stay out of `sequence_state_key` / `for_each_sequence_node_transition`.
+4. Non-blocking follow-on cleanup is captured in
+   `dev/full_plan3_step4_post_closure_cleanup.MD`.
+5. Step 4 work is closed under this artifact. Next work belongs to Step 5.
+
+## 12) Evidence Block: FP4D.1 + FP4D.2 Canonical Input Prep Cutover
+
+1. Timestamp (UTC): `20260309T094513Z`
+2. Commit SHA: `1f7f158`
+3. What landed:
+   1. internal `ranked_mode` normalization helper deleted
+   2. inline single-sequence binder helper deleted
+   3. separate ranked staging buffers deleted
+   4. `cpp_loglik` now builds prepared `TrialEvalInput` objects directly
+4. Gate command status:
+   1. `install`: pass
+   2. `step3_structure`: pass
+   3. `step4_structure`: pass
+   4. `step5_structure`: pass
+   5. `step6_structure`: pass
+   6. `golden`: pass
+   7. `bench`: pass
+5. Golden result:
+   1. `max_abs_diff = 1.23378e-05`
+6. Performance snapshot (`median_per_eval_sec` ratio current/baseline):
+   1. worst ratio: `1.0086957` (`example_22_shared_q`)
+   2. `example_21_simple_q`: `0.9259259`
+   3. `example_22_shared_q`: `1.0086957`
+   4. `example_6_dual_path`: `0.9275362`
+   5. `depth3_guard_competitor`: `0.9368018`
+   6. `example_23_ranked_chain`: `0.9918699`
+   7. `example_2_stop_mixture`: `0.9673601`
+   8. count above `1.02`: `0`
+   9. P1 above `1.00`: `1`
+7. What this proves:
+   1. the prep split was reduced by deletion, not by adding a wrapper layer
+   2. ranked validation can emit prepared trial inputs directly
+   3. Step 4 is still not closed because strict P1 is still slightly red and
+      the deletion map still has live items
+8. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T094513Z_manifest.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T094513Z_status.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T094513Z_summary.txt`
+
+## 13) Evidence Block: FP4D.3 Generic SoA Resolver Cutover
+
+1. Timestamp (UTC): `20260309T095525Z`
+2. Commit SHA: `1f7f158`
+3. What landed:
+   1. ranked-named SoA resolver deleted
+   2. one generic context-aware SoA resolver added
+   3. NodeEvalState and ranked transition execution now share that resolver
+4. Gate command status:
+   1. `install`: pass
+   2. `step3_structure`: pass
+   3. `step4_structure`: pass
+   4. `step5_structure`: pass
+   5. `step6_structure`: pass
+   6. `golden`: pass
+   7. `bench`: pass
+5. Golden result:
+   1. `max_abs_diff = 1.23378e-05`
+6. Performance snapshot (`median_per_eval_sec` ratio current/baseline):
+   1. worst ratio: `1.0086957` (`example_22_shared_q`)
+   2. `example_21_simple_q`: `0.9259259`
+   3. `example_22_shared_q`: `1.0086957`
+   4. `example_6_dual_path`: `0.9637681`
+   5. `depth3_guard_competitor`: `0.9546760`
+   6. `example_23_ranked_chain`: `0.9916667`
+   7. `example_2_stop_mixture`: `0.9863014`
+   8. count above `1.02`: `0`
+   9. P1 above `1.00`: `1`
+7. What this proves:
+   1. `D3` is now removed by real consolidation, not wrapper renaming
+   2. this cut does not clear the residual Step 4 performance blocker
+8. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T095525Z_manifest.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T095525Z_status.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T095525Z_summary.txt`
+
+## 14) Evidence Block: FP4D.4 Execution-Contract Cleanup
+
+1. Timestamp (UTC): `20260309T100610Z` and `20260309T101011Z`
+2. Commit SHA: `1f7f158`
+3. What landed:
+   1. raw sequence-length dispatch removed from unified sequence evaluator
+   2. planner now stamps each contribution with `TrialSequenceExecutionKind`
+   3. runtime-slot and sequence-compiler selection use that same contract
+4. Gate command status:
+   1. `install`: pass
+   2. `step3_structure`: pass
+   3. `step4_structure`: pass
+   4. `step5_structure`: pass
+   5. `step6_structure`: pass
+   6. `golden`: pass
+   7. `bench`: pass at command level
+5. Golden result:
+   1. `max_abs_diff = 1.23378e-05`
+6. Performance evidence:
+   1. frozen bundle `20260309T100610Z`: `example_22_shared_q = 1.0260870`
+   2. frozen bundle `20260309T101011Z`: `example_22_shared_q = 1.1304348`
+   3. non-frozen probe rerun: `example_22_shared_q = 1.0197137`
+7. What this proves:
+   1. `D5` is structurally removed
+   2. Step 4 still cannot be closed because the remaining P1 blocker is unstable/red
+8. Artifacts:
+   1. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T100610Z_manifest.txt`
+   2. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T100610Z_status.txt`
+   3. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T100610Z_summary.txt`
+   4. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T101011Z_manifest.txt`
+   5. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T101011Z_status.txt`
+   6. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T101011Z_summary.txt`
 
 ## 10) Evidence Block: FP4L.1 Transient Failed-Path Profiling
 
@@ -339,7 +461,62 @@ Step 4 under this artifact is achieved only when all are true:
    9. `dev/scripts/scratch_outputs/full_plan3_FP4L_20260309T091834Z_step5_structure.log`
    10. `dev/scripts/scratch_outputs/full_plan3_FP4L_20260309T091834Z_step6_structure.log`
    11. `dev/scripts/scratch_outputs/full_plan3_FP4L_20260309T091834Z_golden.log`
-   12. `dev/scripts/scratch_outputs/full_plan3_FP4L_20260309T091834Z_bench.log`
-   13. `dev/scripts/scratch_outputs/full_plan3_FP4L_20260309T091834Z_benchmark_centralized.csv`
-   14. `dev/scripts/scratch_outputs/full_plan3_FP4L_20260309T091834Z_benchmark_centralized_diff.csv`
-   15. `dev/scripts/scratch_outputs/full_plan3_FP4L_20260309T091834Z_benchmark_step3_comparison.csv`
+12. `dev/scripts/scratch_outputs/full_plan3_FP4L_20260309T091834Z_bench.log`
+13. `dev/scripts/scratch_outputs/full_plan3_FP4L_20260309T091834Z_benchmark_centralized.csv`
+14. `dev/scripts/scratch_outputs/full_plan3_FP4L_20260309T091834Z_benchmark_centralized_diff.csv`
+15. `dev/scripts/scratch_outputs/full_plan3_FP4L_20260309T091834Z_benchmark_step3_comparison.csv`
+
+## 15) Evidence Block: FP4D.5 + FP4L.5 Step 4 Closure Decision
+
+1. Timestamp (UTC): `20260309T102538Z`
+2. Commit SHA: `1f7f158`
+3. Scope:
+   1. deleted the remaining single-step guess specialization from
+      `evaluate_sequence_density_kernel_idx`
+   2. deleted internal guess-shortcut payload flags from `TrialEvalInput` and
+      `TrialContributionSpec`
+   3. tightened `check_step4_structure.sh` so the unified sequence evaluator
+      now fails if guess-specialization logic reappears
+4. Code evidence:
+   1. single-step lower-layer direct path now goes straight to
+      `evaluate_sequence_density_single_step_lower_layer`
+   2. no `step_guess_shortcut` or `allow_guess_shortcut` fields remain in
+      [src/distributions.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/distributions.cpp)
+   3. remaining ranked-only surface is frozen in
+      `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_remaining_ranked_surface.txt`
+5. Gate command status:
+   1. `install`: pass
+   2. `step3_structure`: pass
+   3. `step4_structure`: pass
+   4. `step5_structure`: pass
+   5. `step6_structure`: pass
+   6. `golden`: pass
+   7. `bench`: pass
+6. Golden result:
+   1. `max_abs_diff = 1.23378e-05`
+7. Performance snapshot (`median_per_eval_sec` ratio current/baseline):
+   1. worst ratio: `0.9917695` (`example_23_ranked_chain`)
+   2. `example_5_timeout_guess`: `0.8021996`
+   3. `example_22_shared_q`: `0.9826087`
+   4. `example_21_simple_q`: `0.8741661`
+   5. `example_6_dual_path`: `0.8874575`
+   6. `depth3_guard_competitor`: `0.9508458`
+   7. `example_2_stop_mixture`: `0.9756098`
+   8. count above `1.02`: `0`
+   9. P1 above `1.00`: `0`
+8. Closure decision:
+   1. `FP4D.5`: achieved
+   2. `FP4L.5`: achieved
+   3. Step 4 overall: achieved
+9. What this proves:
+   1. Step 4 closure is now real lower-layer convergence, not wrapper cleanup
+   2. observed single-step still stays out of ranked sequence-state machinery
+   3. the last live specialization was deleted rather than justified away
+10. Wrapper-only consolidation check:
+    1. `No wrapper-only consolidation introduced = yes`
+11. Artifacts:
+    1. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_manifest.txt`
+    2. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_status.txt`
+    3. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_summary.txt`
+    4. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_step4_closure_decision.txt`
+    5. `dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_remaining_ranked_surface.txt`

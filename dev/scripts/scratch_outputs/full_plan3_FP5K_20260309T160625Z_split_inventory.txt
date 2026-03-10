@@ -1,0 +1,8 @@
+src/distributions.cpp:4053 provider.kind=NodeRef still delegates generic term evaluation through node_density_with_competitors_batch_internal, but that helper is now batch-native instead of per-time scalar.
+src/distributions.cpp:4289 direct EventRef no-competitor fastpath remains separate from NodeRef direct path.
+src/distributions.cpp:4324 provider dispatch still branches EventRef vs NodeRef inside evaluate_outcome_coupling_unified.
+src/distributions.cpp:4970 direct NodeRef batch adapter still lives in distributions.cpp rather than the executor layer.
+src/distributions.cpp:6221 competitor transition-mask application still lives in distributions.cpp orchestration around executor calls.
+src/distributions.cpp:6429 node_density_with_competitors_batch_internal still owns caller-side orchestration and remains the FP5K.4 thinning/deletion target.
+src/kernel_executor.cpp:363 eval_kernel_node_batch_incremental is exercised by direct generic NodeRef runtime.
+src/kernel_executor.cpp:580 eval_kernel_nodes_batch_incremental is exercised by competitor-bearing generic NodeRef runtime.

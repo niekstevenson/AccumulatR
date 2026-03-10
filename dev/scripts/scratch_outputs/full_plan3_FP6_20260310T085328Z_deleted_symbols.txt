@@ -1,0 +1,8 @@
+FP6.1 deleted symbols
+- evaluate_coupling_mass_nway
+- evaluate_coupling_mass_pair
+
+Deletion proof:
+- rg -n "evaluate_coupling_mass_nway|evaluate_coupling_mass_pair" src/distributions.cpp
+  returns no matches.
+- check_step6_structure.sh now fails if either symbol reappears in src/distributions.cpp.

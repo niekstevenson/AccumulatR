@@ -1,0 +1,4 @@
+"label","mode","eval_calls","evaluate_outcome_coupling_unified_calls","kernel_node_density_entry_idx_calls","adaptive_segments_accepted","adaptive_segments_split","generic_labelref_batch_fastpath_calls","generic_noderef_batch_calls","generic_scalar_fallback_calls","coupling_calls_per_eval","kernel_density_calls_per_eval","adaptive_accept_per_eval","adaptive_split_per_eval","generic_fastpath_per_eval","generic_noderef_batch_per_eval","generic_scalar_fallback_per_eval"
+"example_21_simple_q","ir",320,1280,0,6400,1280,0,1280,0,4,0,20,4,0,4,0
+"example_22_shared_q","ir",640,1280,0,8960,3840,0,1280,0,2,0,14,6,0,2,0
+"example_3_stop_na","ir",640,1280,0,7680,2560,0,1280,0,2,0,12,4,0,2,0

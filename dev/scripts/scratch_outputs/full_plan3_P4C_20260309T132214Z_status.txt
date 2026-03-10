@@ -1,0 +1,17 @@
+timestamp_utc=20260309T132214Z
+commit=1f7f158
+install=pass
+step3_structure=pass
+step4_structure=pass
+step5_structure=pass
+step6_structure=pass
+golden=pass
+bench=pass
+max_abs_diff=1.23378e-05
+tolerance=0.0001
+worst_label=example_2_stop_mixture
+worst_ratio=0.968927497494148
+count_ratio_gt_1.02=0
+count_p1_ratio_gt_1.00=0
+step4_closure_boundary_preserved=yes
+no_wrapper_only_consolidation_introduced=yes

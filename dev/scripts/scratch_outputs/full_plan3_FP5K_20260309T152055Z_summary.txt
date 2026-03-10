@@ -1,0 +1,14 @@
+timestamp_utc=20260309T152055Z
+commit=1f7f158
+batch=FP5K.0
+working_tree_dirty=yes
+target_cases=3
+worst_bench_ratio=1.007948588
+p1_ratio_gt_1=0
+golden_max_abs_diff=1.23378e-05 tolerance=0.0001
+fp5k0_decision=ACHIEVED
+fp5k1_next=Define one batch-native kernel executor contract in src/kernel_executor.cpp/.h before any more helper-layer work.
+target_surface_rows:
+label=pair_guard_generic_noderef surface=direct_guarded_generic_noderef probability=0.5746957 median_per_eval_sec=0.000008333 generic_noderef_batch_per_eval=1.000000 generic_scalar_fallback_per_eval=0.000000
+label=nested_guard_generic_noderef surface=direct_guarded_nested_noderef probability=0.679796 median_per_eval_sec=0.000015000 generic_noderef_batch_per_eval=1.000000 generic_scalar_fallback_per_eval=0.000000
+label=competitor_guard_generic_noderef surface=competitor_bearing_generic_noderef probability=0.01055551 median_per_eval_sec=0.001355000 generic_noderef_batch_per_eval=1.000000 generic_scalar_fallback_per_eval=0.000000

@@ -1,0 +1,24 @@
+timestamp_utc=20260309T165456Z
+commit=1f7f158
+batch=FP5K.5
+working_tree_dirty=yes
+worst_bench_ratio=0.977272727272733
+worst_suite=examples_models
+worst_label=example_16_guard_tie_simple
+count_ratio_gt_1.02=0
+count_p1_ratio_gt_1.00=0
+golden_max_abs_diff=1.23378e-05 tolerance=0.0001
+fp5k5_decision=ACHIEVED
+fp5k5_honest_status=Executor-only stabilization landed in src/kernel_executor.cpp by removing one copied batch-values path in the compiled competitor-op loop. Centralized gates stayed green and direct NodeRef target surfaces remained effectively flat; one frozen nested-case run hit a single timing quantum slower, and a supplemental rerun returned it to baseline.
+fp5k6_next=Run Step 5 closure bundle with vector coverage, split inventory, and deletion proof, then decide whether Step 5 is actually closed.
+target_surface_rows:
+label=competitor_guard_generic_noderef probability=0.0105555139919877 median_per_eval_sec=0.00132916666666667 ratio_current_over_fp5k4=1.0018844 rerun_ratio_over_fp5k4=0.9987437 generic_noderef_batch_per_eval=1 generic_scalar_fallback_per_eval=0
+label=nested_guard_generic_noderef probability=0.332653189928595 median_per_eval_sec=1.66666666666666e-05 ratio_current_over_fp5k4=1.1111111 rerun_ratio_over_fp5k4=1.0000000 generic_noderef_batch_per_eval=1 generic_scalar_fallback_per_eval=0
+label=pair_guard_generic_noderef probability=0.999582737802266 median_per_eval_sec=8.33333333333334e-06 ratio_current_over_fp5k4=1.0000000 rerun_ratio_over_fp5k4=1.0000000 generic_noderef_batch_per_eval=1 generic_scalar_fallback_per_eval=0
+key_ratios_begin
+nested,depth3_guard_competitor,0.962017235876157,0.1958125,0.188375
+examples_models,example_2_stop_mixture,0.95556298028732,0.001825,0.00174390243902436
+examples_models,example_21_simple_q,0.851851851851835,0.000337500000000002,0.000287499999999996
+examples_models,example_22_shared_q,0.956521739130457,0.000359375000000001,0.000343750000000009
+examples_models,example_6_dual_path,0.869565217391286,0.00043125,0.000374999999999992
+key_ratios_end

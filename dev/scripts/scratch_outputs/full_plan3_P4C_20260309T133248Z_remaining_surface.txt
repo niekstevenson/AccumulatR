@@ -1,0 +1,6 @@
+residual_status=RECORDED_NON_BLOCKING
+remaining_payload_pairs=step_competitor_ids_ptrs/step_competitor_ids_storage,mass_coupling_programs_ptr/mass_coupling_programs
+remaining_ranked_merge_surface=merged_exact,state.exact_source_times->next_state.exact_source_times,state.source_time_bounds->next_state.source_time_bounds
+why_not_blocking=Step 4 closure remains intact, all cleanup acceptance gates pass, and this artifact already delivered real deletion/canonicalization work without reopening architecture.
+recommended_next_step=FP5.0
+optional_follow_on_if_desired=target competitor payload duality or per-state/next-state map-copy overlays under a new cleanup contract

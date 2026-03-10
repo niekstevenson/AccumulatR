@@ -1,0 +1,21 @@
+FP6.2 call graph after provider-kind convergence
+
+Public hot path:
+1. native_outcome_probability_bits_impl_idx(...)
+   - src/distributions.cpp:6559
+2. evaluate_outcome_coupling_unified(...)
+   - called from src/distributions.cpp:6602
+
+Unified generic provider flow after FP6.2:
+1. build_generic_coupling_provider_runtime(...)
+   - resolves provider specialization once before evaluation
+2. evaluate_outcome_coupling_unified(...)
+   - calls provider_runtime.record_usage()
+   - calls provider_runtime.eval_direct_cdf(...) for no-competitor direct CDF
+   - calls provider_runtime.eval_terms(...) inside the adaptive batch loop for competitor-bearing generic integrals
+3. no provider-kind enum or provider.kind runtime branch remains in src/distributions.cpp
+4. no alternate helper engine is reintroduced
+
+Interpretation:
+- Provider specialization still exists, but it is now resolved data, not a live runtime branch in the unified coupling engine.
+- That is the intended Step 6 boundary: one active engine, provider differences as data inputs only.

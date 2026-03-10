@@ -1,0 +1,7 @@
+commit=1f7f158
+timestamp_utc=20260309T162200Z
+repo_owned_target_harness=dev/scripts/bench_step5_kernel_target_cases.R
+required_surfaces=direct_guarded_generic_noderef,direct_guarded_nested_noderef,competitor_bearing_generic_noderef
+coverage_rule=Step 5 progress does not count unless these direct target surfaces continue to show generic_noderef_batch_calls >= 1 and generic_scalar_fallback_calls = 0.
+fp5k4_runtime_note=Compiled competitor-op batch execution now lives in src/kernel_executor.cpp; the distributions helper only binds state/callbacks and delegates to the executor.
+remaining_gap=node_density_with_competitors_batch_internal still exists as a thin wrapper in src/distributions.cpp, and provider dispatch still branches EventRef vs NodeRef. Step 5 is not closed until FP5K.5/FP5K.6 complete.

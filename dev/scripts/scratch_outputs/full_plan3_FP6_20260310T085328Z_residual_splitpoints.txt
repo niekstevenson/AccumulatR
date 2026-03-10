@@ -1,0 +1,32 @@
+FP6.1 residual Step 6 split inventory
+
+Status:
+- active residual split surface is still non-empty
+- Step 6 cannot be claimed from this batch
+- pair/nway specialized helper-engine debt is removed in this batch
+
+R1. Provider-kind fast paths are still live inside the unified coupling evaluator.
+- src/distributions.cpp:4277 -> EventRef no-competitor direct fast path
+- src/distributions.cpp:4293 -> NodeRef no-competitor direct fast path
+Why it counts:
+- These are still runtime shape-specific branches inside the unified engine.
+- They are not separate helper engines anymore, but they are still alternate execution policies.
+
+R2. Provider-kind runtime dispatch is still live for generic provider execution.
+- src/distributions.cpp:4312 -> EventRef / NodeRef dispatch inside evaluate_outcome_coupling_unified(...)
+- src/distributions.cpp:3967 -> EventRef provider execution in evaluate_generic_terms_from_provider(...)
+- src/distributions.cpp:4053 -> NodeRef provider execution in evaluate_generic_terms_from_provider(...)
+Why it counts:
+- Step 6 is not closed until provider differences are data-driven inside one runtime stack rather than branching to alternate execution logic.
+
+R3. Public outcome-probability entry still reaches the residual Step 6 split surface.
+- src/distributions.cpp:6559 -> native_outcome_probability_bits_impl_idx(...)
+- src/distributions.cpp:6602 -> evaluate_outcome_coupling_unified(...)
+Why it counts:
+- Remaining Step 6 debt stays on the public hot path.
+
+What is no longer Step 6 debt:
+- no active dispatch to evaluate_coupling_mass_nway(...)
+- no active dispatch to evaluate_coupling_mass_pair(...)
+- no specialized pair/nway helper engine symbols remain in src/distributions.cpp
+- scalar generic fallback remains deleted

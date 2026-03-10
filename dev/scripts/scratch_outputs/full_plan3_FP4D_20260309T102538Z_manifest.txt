@@ -1,0 +1,15 @@
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_bench.log
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_benchmark_centralized.csv
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_benchmark_centralized_diff.csv
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_benchmark_step3_comparison.csv
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_golden.log
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_install.log
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_manifest.txt
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_remaining_ranked_surface.txt
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_status.txt
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_step3_structure.log
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_step4_closure_decision.txt
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_step4_structure.log
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_step5_structure.log
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_step6_structure.log
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP4D_20260309T102538Z_summary.txt

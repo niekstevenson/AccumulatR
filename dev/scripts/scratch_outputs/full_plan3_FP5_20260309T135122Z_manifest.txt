@@ -1,0 +1,15 @@
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_summary.txt
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_status.txt
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_vector_coverage.txt
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_hotloop_probe.csv
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_shared_gate_nway_shared_triggers_profile.txt
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_example_2_stop_mixture_profile.txt
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_install.log
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_step3_structure.log
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_step4_structure.log
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_step5_structure.log
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_step6_structure.log
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_golden.log
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_bench.log
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_benchmark_centralized.csv
+/Users/nstevenson/Documents/2025/AccumulatR/dev/scripts/scratch_outputs/full_plan3_FP5_20260309T135122Z_diff.csv

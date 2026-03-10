@@ -1,0 +1,13 @@
+case,symbol,count,group,note
+pair_guard_generic_noderef,evaluate_outcome_coupling_unified,1,direct_target_harness,Unified coupling entry exercised by repo-owned direct target harness
+pair_guard_generic_noderef,generic_noderef_batch_calls,1,direct_target_harness,Direct NodeRef batch executor call counter
+pair_guard_generic_noderef,generic_scalar_fallback_calls,0,direct_target_harness,Scalar fallback counter must stay at zero
+pair_guard_generic_noderef,kernel_node_density_entry_idx_calls,0,direct_target_harness,Legacy scalar kernel density entry should stay unused on direct target harnesses
+nested_guard_generic_noderef,evaluate_outcome_coupling_unified,1,direct_target_harness,Unified coupling entry exercised by repo-owned direct target harness
+nested_guard_generic_noderef,generic_noderef_batch_calls,1,direct_target_harness,Direct NodeRef batch executor call counter
+nested_guard_generic_noderef,generic_scalar_fallback_calls,0,direct_target_harness,Scalar fallback counter must stay at zero
+nested_guard_generic_noderef,kernel_node_density_entry_idx_calls,0,direct_target_harness,Legacy scalar kernel density entry should stay unused on direct target harnesses
+competitor_guard_generic_noderef,evaluate_outcome_coupling_unified,1,direct_target_harness,Unified coupling entry exercised by repo-owned direct target harness
+competitor_guard_generic_noderef,generic_noderef_batch_calls,1,direct_target_harness,Direct NodeRef batch executor call counter
+competitor_guard_generic_noderef,generic_scalar_fallback_calls,0,direct_target_harness,Scalar fallback counter must stay at zero
+competitor_guard_generic_noderef,kernel_node_density_entry_idx_calls,0,direct_target_harness,Legacy scalar kernel density entry should stay unused on direct target harnesses

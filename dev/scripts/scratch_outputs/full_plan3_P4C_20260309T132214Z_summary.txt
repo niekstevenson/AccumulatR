@@ -1,0 +1,20 @@
+Full Plan 3 P4C.3 ranked-state canonicalization bundle 20260309T132214Z
+commit=1f7f158
+target=C3
+decision=KEEP
+what_changed=Replaced ranked ExactSourceTimeMap/SourceTimeBoundsMap storage with ordered maps and removed copy-sort-hash materialization from ranked_hash_exact_times and ranked_hash_bounds; collapse identity now hashes canonical ordered state directly.
+max_abs_diff=1.23378e-05
+tolerance=0.0001
+worst_ratio=0.968927497494148 (example_2_stop_mixture)
+count_ratio_gt_1.02=0
+count_p1_ratio_gt_1.00=0
+no_wrapper_only_consolidation_introduced=yes
+step4_boundary_preserved=yes
+key_ratios:
+  depth3_guard_competitor=0.946696457069901
+  example_21_simple_q=0.844444444444445
+  example_22_shared_q=0.933297326492035
+  example_23_ranked_chain=0.91666666666666
+  example_2_stop_mixture=0.968927497494148
+  example_5_timeout_guess=0.793573777562123
+  example_6_dual_path=0.901771336553929

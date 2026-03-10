@@ -25,6 +25,14 @@ if ! rg -n "GenericNodeIntegral" src/context.h src/prep_builder.cpp src/distribu
   fail "GenericNodeIntegral coupling kind is not wired through context/prep/runtime."
 fi
 
+if rg -n "evaluate_coupling_mass_nway|evaluate_coupling_mass_pair" src/distributions.cpp >/dev/null; then
+  fail "Specialized pair/nway coupling helper engines are still present."
+fi
+
+if rg -n "GenericCouplingProviderKind|GenericCouplingProviderPlan|resolve_generic_coupling_provider_plan|evaluate_generic_terms_from_provider|provider\\.kind" src/distributions.cpp >/dev/null; then
+  fail "Provider-kind alternate execution machinery is still present in unified coupling."
+fi
+
 prob_block="$(awk '
 /double native_outcome_probability_bits_impl_idx\(/ { ++n }
 n >= 1 { print }

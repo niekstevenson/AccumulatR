@@ -195,6 +195,48 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// dist_pdf_lower_bound
+Rcpp::NumericVector dist_pdf_lower_bound(const Rcpp::NumericVector& x, int dist_code, double lower_bound, double p1, double p2, double p3, double p4, double p5, double p6, double p7, double p8);
+RcppExport SEXP _AccumulatR_dist_pdf_lower_bound(SEXP xSEXP, SEXP dist_codeSEXP, SEXP lower_boundSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP p3SEXP, SEXP p4SEXP, SEXP p5SEXP, SEXP p6SEXP, SEXP p7SEXP, SEXP p8SEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type x(xSEXP);
+    Rcpp::traits::input_parameter< int >::type dist_code(dist_codeSEXP);
+    Rcpp::traits::input_parameter< double >::type lower_bound(lower_boundSEXP);
+    Rcpp::traits::input_parameter< double >::type p1(p1SEXP);
+    Rcpp::traits::input_parameter< double >::type p2(p2SEXP);
+    Rcpp::traits::input_parameter< double >::type p3(p3SEXP);
+    Rcpp::traits::input_parameter< double >::type p4(p4SEXP);
+    Rcpp::traits::input_parameter< double >::type p5(p5SEXP);
+    Rcpp::traits::input_parameter< double >::type p6(p6SEXP);
+    Rcpp::traits::input_parameter< double >::type p7(p7SEXP);
+    Rcpp::traits::input_parameter< double >::type p8(p8SEXP);
+    rcpp_result_gen = Rcpp::wrap(dist_pdf_lower_bound(x, dist_code, lower_bound, p1, p2, p3, p4, p5, p6, p7, p8));
+    return rcpp_result_gen;
+END_RCPP
+}
+// dist_cdf_lower_bound
+Rcpp::NumericVector dist_cdf_lower_bound(const Rcpp::NumericVector& x, int dist_code, double lower_bound, double p1, double p2, double p3, double p4, double p5, double p6, double p7, double p8);
+RcppExport SEXP _AccumulatR_dist_cdf_lower_bound(SEXP xSEXP, SEXP dist_codeSEXP, SEXP lower_boundSEXP, SEXP p1SEXP, SEXP p2SEXP, SEXP p3SEXP, SEXP p4SEXP, SEXP p5SEXP, SEXP p6SEXP, SEXP p7SEXP, SEXP p8SEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type x(xSEXP);
+    Rcpp::traits::input_parameter< int >::type dist_code(dist_codeSEXP);
+    Rcpp::traits::input_parameter< double >::type lower_bound(lower_boundSEXP);
+    Rcpp::traits::input_parameter< double >::type p1(p1SEXP);
+    Rcpp::traits::input_parameter< double >::type p2(p2SEXP);
+    Rcpp::traits::input_parameter< double >::type p3(p3SEXP);
+    Rcpp::traits::input_parameter< double >::type p4(p4SEXP);
+    Rcpp::traits::input_parameter< double >::type p5(p5SEXP);
+    Rcpp::traits::input_parameter< double >::type p6(p6SEXP);
+    Rcpp::traits::input_parameter< double >::type p7(p7SEXP);
+    Rcpp::traits::input_parameter< double >::type p8(p8SEXP);
+    rcpp_result_gen = Rcpp::wrap(dist_cdf_lower_bound(x, dist_code, lower_bound, p1, p2, p3, p4, p5, p6, p7, p8));
+    return rcpp_result_gen;
+END_RCPP
+}
 // dist_lba_pdf
 Rcpp::NumericVector dist_lba_pdf(const Rcpp::NumericVector& x, double v, double sv, double B, double A);
 RcppExport SEXP _AccumulatR_dist_lba_pdf(SEXP xSEXP, SEXP vSEXP, SEXP svSEXP, SEXP BSEXP, SEXP ASEXP) {
@@ -282,25 +324,6 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< double >::type A(ASEXP);
     Rcpp::traits::input_parameter< double >::type s(sSEXP);
     rcpp_result_gen = Rcpp::wrap(dist_rdm_rng(n, v, B, A, s));
-    return rcpp_result_gen;
-END_RCPP
-}
-// unified_outcome_stats_reset_cpp
-void unified_outcome_stats_reset_cpp();
-RcppExport SEXP _AccumulatR_unified_outcome_stats_reset_cpp() {
-BEGIN_RCPP
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    unified_outcome_stats_reset_cpp();
-    return R_NilValue;
-END_RCPP
-}
-// unified_outcome_stats_cpp
-Rcpp::List unified_outcome_stats_cpp();
-RcppExport SEXP _AccumulatR_unified_outcome_stats_cpp() {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    rcpp_result_gen = Rcpp::wrap(unified_outcome_stats_cpp());
     return rcpp_result_gen;
 END_RCPP
 }
@@ -395,6 +418,25 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// unified_outcome_stats_reset_cpp
+void unified_outcome_stats_reset_cpp();
+RcppExport SEXP _AccumulatR_unified_outcome_stats_reset_cpp() {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    unified_outcome_stats_reset_cpp();
+    return R_NilValue;
+END_RCPP
+}
+// unified_outcome_stats_cpp
+Rcpp::List unified_outcome_stats_cpp();
+RcppExport SEXP _AccumulatR_unified_outcome_stats_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(unified_outcome_stats_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_register_ccallables_cpp", (DL_FUNC) &_AccumulatR_register_ccallables_cpp, 0},
@@ -412,19 +454,21 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_dist_exgauss_pdf", (DL_FUNC) &_AccumulatR_dist_exgauss_pdf, 4},
     {"_AccumulatR_dist_exgauss_cdf", (DL_FUNC) &_AccumulatR_dist_exgauss_cdf, 4},
     {"_AccumulatR_dist_exgauss_rng", (DL_FUNC) &_AccumulatR_dist_exgauss_rng, 4},
+    {"_AccumulatR_dist_pdf_lower_bound", (DL_FUNC) &_AccumulatR_dist_pdf_lower_bound, 11},
+    {"_AccumulatR_dist_cdf_lower_bound", (DL_FUNC) &_AccumulatR_dist_cdf_lower_bound, 11},
     {"_AccumulatR_dist_lba_pdf", (DL_FUNC) &_AccumulatR_dist_lba_pdf, 5},
     {"_AccumulatR_dist_lba_cdf", (DL_FUNC) &_AccumulatR_dist_lba_cdf, 5},
     {"_AccumulatR_dist_lba_rng", (DL_FUNC) &_AccumulatR_dist_lba_rng, 5},
     {"_AccumulatR_dist_rdm_pdf", (DL_FUNC) &_AccumulatR_dist_rdm_pdf, 5},
     {"_AccumulatR_dist_rdm_cdf", (DL_FUNC) &_AccumulatR_dist_rdm_cdf, 5},
     {"_AccumulatR_dist_rdm_rng", (DL_FUNC) &_AccumulatR_dist_rdm_rng, 5},
-    {"_AccumulatR_unified_outcome_stats_reset_cpp", (DL_FUNC) &_AccumulatR_unified_outcome_stats_reset_cpp, 0},
-    {"_AccumulatR_unified_outcome_stats_cpp", (DL_FUNC) &_AccumulatR_unified_outcome_stats_cpp, 0},
     {"_AccumulatR_native_trial_mixture_driver", (DL_FUNC) &_AccumulatR_native_trial_mixture_driver, 9},
     {"_AccumulatR_cpp_loglik", (DL_FUNC) &_AccumulatR_cpp_loglik, 9},
     {"_AccumulatR_cpp_loglik_multiple", (DL_FUNC) &_AccumulatR_cpp_loglik_multiple, 9},
     {"_AccumulatR_native_component_plan_exported", (DL_FUNC) &_AccumulatR_native_component_plan_exported, 3},
     {"_AccumulatR_native_outcome_probability_params_cpp_idx", (DL_FUNC) &_AccumulatR_native_outcome_probability_params_cpp_idx, 11},
+    {"_AccumulatR_unified_outcome_stats_reset_cpp", (DL_FUNC) &_AccumulatR_unified_outcome_stats_reset_cpp, 0},
+    {"_AccumulatR_unified_outcome_stats_cpp", (DL_FUNC) &_AccumulatR_unified_outcome_stats_cpp, 0},
     {NULL, NULL, 0}
 };
 

@@ -72,8 +72,9 @@ SEXP accumulatr_cpp_loglik_multiple_ccallable(SEXP ctxSEXP,
 
 } // extern "C"
 
-// [[Rcpp::export]]
-SEXP register_ccallables_cpp() {
+namespace {
+
+SEXP ensure_ccallables_registered() {
   static bool registered = false;
   if (registered) return R_NilValue;
 
@@ -86,4 +87,19 @@ SEXP register_ccallables_cpp() {
 
   registered = true;
   return R_NilValue;
+}
+
+struct CcallableRegistrar {
+  CcallableRegistrar() {
+    ensure_ccallables_registered();
+  }
+};
+
+static CcallableRegistrar ccallable_registrar{};
+
+} // namespace
+
+// [[Rcpp::export]]
+SEXP register_ccallables_cpp() {
+  return ensure_ccallables_registered();
 }

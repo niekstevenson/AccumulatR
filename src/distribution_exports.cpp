@@ -4,12 +4,26 @@
 #include <vector>
 
 #include "accumulator.h"
+#include "distribution_core.h"
 #include "dist_vector.h"
 
 namespace {
 
-inline bool is_invalid_positive(double value) {
-  return !std::isfinite(value) || value <= 0.0;
+inline uuber::AccDistParams make_cfg(int dist_code, double p1, double p2,
+                                     double p3, double p4, double p5 = 0.0,
+                                     double p6 = 0.0, double p7 = 0.0,
+                                     double p8 = 0.0) {
+  uuber::AccDistParams cfg{};
+  cfg.code = dist_code;
+  cfg.p1 = p1;
+  cfg.p2 = p2;
+  cfg.p3 = p3;
+  cfg.p4 = p4;
+  cfg.p5 = p5;
+  cfg.p6 = p6;
+  cfg.p7 = p7;
+  cfg.p8 = p8;
+  return cfg;
 }
 
 Rcpp::NumericVector evaluate_pdf_vector(const Rcpp::NumericVector &x,
@@ -80,6 +94,78 @@ Rcpp::NumericVector evaluate_cdf_vector(const Rcpp::NumericVector &x,
     uuber::eval_cdf_vec(dist_code, p1, p2, p3, p4, p5, p6, p7, p8,
                         finite_values.data(), finite_values.size(),
                         finite_out.data());
+    for (std::size_t i = 0; i < finite_indices.size(); ++i) {
+      out[finite_indices[i]] = finite_out[i];
+    }
+  }
+
+  return out;
+}
+
+Rcpp::NumericVector evaluate_pdf_vector_with_lower_bound(
+    const Rcpp::NumericVector &x, int dist_code, double lower_bound, double p1,
+    double p2, double p3, double p4, double p5 = 0.0, double p6 = 0.0,
+    double p7 = 0.0, double p8 = 0.0) {
+  Rcpp::NumericVector out(x.size());
+  std::vector<double> finite_values;
+  std::vector<R_xlen_t> finite_indices;
+  finite_values.reserve(static_cast<std::size_t>(x.size()));
+  finite_indices.reserve(static_cast<std::size_t>(x.size()));
+
+  for (R_xlen_t i = 0; i < x.size(); ++i) {
+    const double value = x[i];
+    if (Rcpp::NumericVector::is_na(value)) {
+      out[i] = NA_REAL;
+      continue;
+    }
+    finite_indices.push_back(i);
+    finite_values.push_back(value);
+  }
+
+  if (!finite_values.empty()) {
+    const uuber::AccDistParams cfg =
+        make_cfg(dist_code, p1, p2, p3, p4, p5, p6, p7, p8);
+    const LowerBoundTransform transform =
+        make_lower_bound_transform(cfg, lower_bound);
+    std::vector<double> finite_out(finite_values.size(), 0.0);
+    eval_pdf_vec_with_lower_bound(cfg, transform, finite_values.data(),
+                                  finite_values.size(), finite_out.data());
+    for (std::size_t i = 0; i < finite_indices.size(); ++i) {
+      out[finite_indices[i]] = finite_out[i];
+    }
+  }
+
+  return out;
+}
+
+Rcpp::NumericVector evaluate_cdf_vector_with_lower_bound(
+    const Rcpp::NumericVector &x, int dist_code, double lower_bound, double p1,
+    double p2, double p3, double p4, double p5 = 0.0, double p6 = 0.0,
+    double p7 = 0.0, double p8 = 0.0) {
+  Rcpp::NumericVector out(x.size());
+  std::vector<double> finite_values;
+  std::vector<R_xlen_t> finite_indices;
+  finite_values.reserve(static_cast<std::size_t>(x.size()));
+  finite_indices.reserve(static_cast<std::size_t>(x.size()));
+
+  for (R_xlen_t i = 0; i < x.size(); ++i) {
+    const double value = x[i];
+    if (Rcpp::NumericVector::is_na(value)) {
+      out[i] = NA_REAL;
+      continue;
+    }
+    finite_indices.push_back(i);
+    finite_values.push_back(value);
+  }
+
+  if (!finite_values.empty()) {
+    const uuber::AccDistParams cfg =
+        make_cfg(dist_code, p1, p2, p3, p4, p5, p6, p7, p8);
+    const LowerBoundTransform transform =
+        make_lower_bound_transform(cfg, lower_bound);
+    std::vector<double> finite_out(finite_values.size(), 0.0);
+    eval_cdf_vec_with_lower_bound(cfg, transform, finite_values.data(),
+                                  finite_values.size(), finite_out.data());
     for (std::size_t i = 0; i < finite_indices.size(); ++i) {
       out[finite_indices[i]] = finite_out[i];
     }
@@ -231,6 +317,30 @@ Rcpp::NumericVector dist_exgauss_rng(int n, double mu, double sigma,
     normals[i] += expo[i];
   }
   return normals;
+}
+
+//' @noRd
+// [[Rcpp::export]]
+Rcpp::NumericVector dist_pdf_lower_bound(const Rcpp::NumericVector &x,
+                                         int dist_code, double lower_bound,
+                                         double p1, double p2, double p3,
+                                         double p4, double p5 = 0.0,
+                                         double p6 = 0.0, double p7 = 0.0,
+                                         double p8 = 0.0) {
+  return evaluate_pdf_vector_with_lower_bound(x, dist_code, lower_bound, p1, p2,
+                                              p3, p4, p5, p6, p7, p8);
+}
+
+//' @noRd
+// [[Rcpp::export]]
+Rcpp::NumericVector dist_cdf_lower_bound(const Rcpp::NumericVector &x,
+                                         int dist_code, double lower_bound,
+                                         double p1, double p2, double p3,
+                                         double p4, double p5 = 0.0,
+                                         double p6 = 0.0, double p7 = 0.0,
+                                         double p8 = 0.0) {
+  return evaluate_cdf_vector_with_lower_bound(x, dist_code, lower_bound, p1, p2,
+                                              p3, p4, p5, p6, p7, p8);
 }
 
 //' @noRd

@@ -71,6 +71,16 @@ dist_exgauss_rng <- function(n, mu, sigma, tau) {
 }
 
 #' @noRd
+dist_pdf_lower_bound <- function(x, dist_code, lower_bound, p1, p2, p3, p4, p5 = 0.0, p6 = 0.0, p7 = 0.0, p8 = 0.0) {
+    .Call(`_AccumulatR_dist_pdf_lower_bound`, x, dist_code, lower_bound, p1, p2, p3, p4, p5, p6, p7, p8)
+}
+
+#' @noRd
+dist_cdf_lower_bound <- function(x, dist_code, lower_bound, p1, p2, p3, p4, p5 = 0.0, p6 = 0.0, p7 = 0.0, p8 = 0.0) {
+    .Call(`_AccumulatR_dist_cdf_lower_bound`, x, dist_code, lower_bound, p1, p2, p3, p4, p5, p6, p7, p8)
+}
+
+#' @noRd
 dist_lba_pdf <- function(x, v, sv, B, A) {
     .Call(`_AccumulatR_dist_lba_pdf`, x, v, sv, B, A)
 }
@@ -100,14 +110,6 @@ dist_rdm_rng <- function(n, v, B, A, s) {
     .Call(`_AccumulatR_dist_rdm_rng`, n, v, B, A, s)
 }
 
-unified_outcome_stats_reset_cpp <- function() {
-    invisible(.Call(`_AccumulatR_unified_outcome_stats_reset_cpp`))
-}
-
-unified_outcome_stats_cpp <- function() {
-    .Call(`_AccumulatR_unified_outcome_stats_cpp`)
-}
-
 native_trial_mixture_cpp <- function(ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows, guess_donors) {
     .Call(`_AccumulatR_native_trial_mixture_driver`, ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows, guess_donors)
 }
@@ -126,5 +128,13 @@ native_component_plan_exported <- function(structureSEXP, trial_rowsSEXP, forced
 
 native_outcome_probability_params_cpp_idx <- function(ctxSEXP, node_id, upper, component_idx, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows) {
     .Call(`_AccumulatR_native_outcome_probability_params_cpp_idx`, ctxSEXP, node_id, upper, component_idx, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows)
+}
+
+unified_outcome_stats_reset_cpp <- function() {
+    invisible(.Call(`_AccumulatR_unified_outcome_stats_reset_cpp`))
+}
+
+unified_outcome_stats_cpp <- function() {
+    .Call(`_AccumulatR_unified_outcome_stats_cpp`)
 }
 

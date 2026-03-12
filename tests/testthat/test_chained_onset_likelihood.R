@@ -113,6 +113,22 @@ testthat::test_that("missing trigger implies non-start in chained likelihood", {
   testthat::expect_gt(ll_nr, min_ll)
 })
 
+testthat::test_that("response probabilities respect q for direct outcome mass", {
+  spec <- race_spec() |>
+    add_accumulator("a", "lognormal") |>
+    add_outcome("A", "a")
+
+  structure <- finalize_model(spec)
+  params <- c(
+    a.meanlog = log(0.25), a.sdlog = 0.10, a.q = 1.00, a.t0 = 0.00
+  )
+  params_df <- build_param_matrix(spec, params, n_trials = 1L)
+
+  probs <- response_probabilities(structure, params_df)
+  testthat::expect_equal(unname(probs[["A"]]), 0.0)
+  testthat::expect_equal(unname(probs[["NA"]]), 1.0)
+})
+
 testthat::test_that("component with inactive onset source yields non-start", {
   spec <- race_spec() |>
     add_accumulator("a", "lognormal") |>

@@ -1561,7 +1561,7 @@ build_param_matrix <- function(model,
     shared <- unique(as.character(unlist(shared)))
     shared <- shared[nzchar(shared)]
     if (length(shared) == 0L) next
-    members <- grp$members %||% character(0)
+    members <- trig$members %||% character(0)
     if (length(members) == 0L) next
     for (par_name in shared) {
       group_nm <- paste0(grp$id, ".", par_name)
@@ -1648,7 +1648,7 @@ build_param_matrix <- function(model,
     attrs <- grp$attrs %||% list()
     comp_val <- attrs$component %||% NULL
     if (is.null(comp_val)) next
-    members <- grp$members %||% character(0)
+    members <- trig$members %||% character(0)
     for (m in members) {
       comp_attr[[m]] <- comp_val
     }
@@ -1741,7 +1741,7 @@ build_param_matrix <- function(model,
     }
     if (!is.finite(q_val) || is.na(q_val)) q_val <- 0
 
-    members <- grp$members %||% character(0)
+    members <- trig$members %||% character(0)
     if (length(members) == 0L) next
     for (m in members) {
       if (!m %in% acc_ids) next

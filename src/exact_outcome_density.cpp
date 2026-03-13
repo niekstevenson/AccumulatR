@@ -383,6 +383,343 @@ inline std::vector<int> ensure_source_ids_dense_idx(
   return ensure_source_ids(ctx, ir_node_required(ctx, node_idx));
 }
 
+struct ExactSharedStateStorage {
+  TimeConstraintMap time_constraints;
+  uuber::BitsetState forced_complete_bits;
+  uuber::BitsetState forced_survive_bits;
+  bool forced_complete_bits_valid{false};
+  bool forced_survive_bits_valid{false};
+};
+
+bool exact_points_share_relevant_state(
+    const std::vector<ExactScenarioPoint> &points,
+    const std::vector<std::uint8_t> *active_mask,
+    const std::vector<int> &relevant_source_ids, const uuber::NativeContext &ctx,
+    std::size_t &anchor_idx);
+
+inline bool exact_prepare_shared_state_storage(
+    const uuber::NativeContext &ctx,
+    const std::vector<ExactScenarioPoint> &points,
+    const std::vector<std::uint8_t> *active_mask,
+    const std::vector<int> &relevant_source_ids, std::size_t &anchor_idx,
+    ExactSharedStateStorage &storage) {
+  anchor_idx = points.size();
+  if (!exact_points_share_relevant_state(points, active_mask,
+                                         relevant_source_ids, ctx,
+                                         anchor_idx)) {
+    return false;
+  }
+  const ExactScenarioPoint &anchor = points[anchor_idx];
+  build_filtered_time_constraints(anchor.time_constraints, relevant_source_ids,
+                                  storage.time_constraints);
+  build_filtered_forced_bits(
+      ctx, anchor.forced_complete_bits, anchor.forced_complete_bits_valid,
+      relevant_source_ids, storage.forced_complete_bits,
+      storage.forced_complete_bits_valid);
+  build_filtered_forced_bits(
+      ctx, anchor.forced_survive_bits, anchor.forced_survive_bits_valid,
+      relevant_source_ids, storage.forced_survive_bits,
+      storage.forced_survive_bits_valid);
+  return true;
+}
+
+template <typename SharedFn, typename FallbackFn>
+bool exact_eval_with_shared_relevant_state(
+    const uuber::NativeContext &ctx,
+    const std::vector<ExactScenarioPoint> &points,
+    const std::vector<std::uint8_t> *active_mask,
+    const std::vector<int> &relevant_source_ids, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    SharedFn &&shared_eval, FallbackFn &&fallback_eval) {
+  std::size_t anchor_idx = points.size();
+  ExactSharedStateStorage storage;
+  if (!exact_prepare_shared_state_storage(ctx, points, active_mask,
+                                          relevant_source_ids, anchor_idx,
+                                          storage)) {
+    return fallback_eval();
+  }
+
+  const ExactScenarioPoint &anchor = points[anchor_idx];
+  NodeEvalState shared_state(
+      ctx, anchor.t, component_idx, trial_params, trial_type_key, false, -1,
+      &storage.time_constraints, nullptr,
+      storage.forced_complete_bits_valid ? &storage.forced_complete_bits
+                                         : nullptr,
+      storage.forced_complete_bits_valid,
+      storage.forced_survive_bits_valid ? &storage.forced_survive_bits
+                                        : nullptr,
+      storage.forced_survive_bits_valid, nullptr);
+  return shared_eval(shared_state);
+}
+
+inline bool exact_point_active(const std::vector<std::uint8_t> *active_mask,
+                               std::size_t idx) {
+  return !active_mask ||
+         (idx < active_mask->size() && (*active_mask)[idx] != 0u);
+}
+
+inline void exact_init_batch_values(std::size_t point_count,
+                                    uuber::KernelNodeBatchValues &out_values) {
+  out_values.density.assign(point_count, 0.0);
+  out_values.survival.assign(point_count, 1.0);
+  out_values.cdf.assign(point_count, 0.0);
+}
+
+inline EvalNeed exact_eval_need_from_kernel_need(
+    const uuber::KernelEvalNeed &kneed) {
+  EvalNeed need = static_cast<EvalNeed>(0u);
+  if (kneed.density) {
+    need = need | EvalNeed::kDensity;
+  }
+  if (kneed.survival) {
+    need = need | EvalNeed::kSurvival;
+  }
+  if (kneed.cdf) {
+    need = need | EvalNeed::kCDF;
+  }
+  return need;
+}
+
+inline uuber::LabelRef exact_event_label_ref(const uuber::IrEvent &event) {
+  uuber::LabelRef ref;
+  ref.label_id = event.label_id;
+  ref.acc_idx = event.acc_idx;
+  ref.pool_idx = event.pool_idx;
+  ref.outcome_idx = event.outcome_idx;
+  return ref;
+}
+
+inline std::uint32_t exact_event_node_flags(const uuber::NativeContext &ctx,
+                                            const uuber::IrEvent &event) {
+  if (event.node_idx >= 0 &&
+      event.node_idx < static_cast<int>(ctx.ir.nodes.size())) {
+    return ctx.ir.nodes[static_cast<std::size_t>(event.node_idx)].flags;
+  }
+  return 0u;
+}
+
+inline ForcedStateView exact_make_point_forced_state(
+    const uuber::NativeContext &ctx, const ExactScenarioPoint &point) {
+  return make_forced_state_view(
+      nullptr,
+      point.forced_complete_bits_valid ? &point.forced_complete_bits : nullptr,
+      &point.forced_complete_bits_valid,
+      point.forced_survive_bits_valid ? &point.forced_survive_bits : nullptr,
+      &point.forced_survive_bits_valid,
+      ctx.ir.label_id_to_bit_idx.empty() ? nullptr : &ctx.ir.label_id_to_bit_idx);
+}
+
+inline NodeEvalState exact_make_local_state(
+    const uuber::NativeContext &ctx, double t, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const ExactScenarioPoint &point) {
+  return NodeEvalState(
+      ctx, t, component_idx, trial_params, trial_type_key, false, -1,
+      &point.time_constraints, nullptr,
+      point.forced_complete_bits_valid ? &point.forced_complete_bits : nullptr,
+      point.forced_complete_bits_valid,
+      point.forced_survive_bits_valid ? &point.forced_survive_bits : nullptr,
+      point.forced_survive_bits_valid, nullptr);
+}
+
+template <typename PointVec>
+bool exact_eval_event_pointwise_batch(
+    const uuber::NativeContext &ctx, const PointVec &points,
+    const std::vector<double> &batch_times, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const uuber::IrEvent &event, EvalNeed event_need,
+    const uuber::TrialParamsSoA *trial_params_soa,
+    uuber::KernelNodeBatchValues &event_out,
+    const std::vector<std::uint8_t> *active_mask) {
+  const std::size_t point_count = points.size();
+  if (batch_times.size() != point_count) {
+    return false;
+  }
+  const uuber::LabelRef ref = exact_event_label_ref(event);
+  const std::uint32_t node_flags = exact_event_node_flags(ctx, event);
+  for (std::size_t i = 0; i < point_count; ++i) {
+    if (!exact_point_active(active_mask, i)) {
+      continue;
+    }
+    const ExactScenarioPoint &point = points[i];
+    const ForcedStateView forced_state = exact_make_point_forced_state(ctx, point);
+    const NodeEvalResult event_eval = evaluator_eval_event_ref_idx(
+        ctx, ref, node_flags, batch_times[i], component_idx, event_need,
+        trial_params, trial_type_key, false, -1, &point.time_constraints, nullptr,
+        point.forced_complete_bits_valid ? &point.forced_complete_bits : nullptr,
+        point.forced_survive_bits_valid ? &point.forced_survive_bits : nullptr,
+        ctx.ir.label_id_to_bit_idx.empty() ? nullptr : &ctx.ir.label_id_to_bit_idx,
+        trial_params_soa, &forced_state);
+    event_out.density[i] = safe_density(event_eval.density);
+    event_out.survival[i] = clamp_probability(event_eval.survival);
+    event_out.cdf[i] = clamp_probability(event_eval.cdf);
+  }
+  return true;
+}
+
+inline bool exact_guard_batch_inputs_valid(
+    const std::vector<double> &batch_times, std::size_t point_count,
+    const uuber::KernelNodeBatchValues &reference_values,
+    const uuber::KernelNodeBatchValues &blocker_values) {
+  return batch_times.size() == point_count &&
+         reference_values.density.size() == point_count &&
+         reference_values.survival.size() == point_count &&
+         reference_values.cdf.size() == point_count &&
+         blocker_values.density.size() == point_count &&
+         blocker_values.survival.size() == point_count &&
+         blocker_values.cdf.size() == point_count;
+}
+
+inline void exact_seed_guard_density(
+    const uuber::KernelNodeBatchValues &reference_values,
+    const uuber::KernelNodeBatchValues &blocker_values,
+    uuber::KernelNodeBatchValues &guard_out,
+    const std::vector<std::uint8_t> *active_mask) {
+  const std::size_t point_count = guard_out.density.size();
+  for (std::size_t i = 0; i < point_count; ++i) {
+    if (!exact_point_active(active_mask, i)) {
+      continue;
+    }
+    const double ref_density = safe_density(reference_values.density[i]);
+    const double blocker_survival =
+        clamp_probability(blocker_values.survival[i]);
+    guard_out.density[i] = safe_density(ref_density * blocker_survival);
+  }
+}
+
+template <typename PointVec>
+bool exact_eval_guard_pointwise_batch(
+    const uuber::NativeContext &ctx, const PointVec &points,
+    const std::vector<double> &batch_times, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const uuber::KernelOp &op,
+    const uuber::KernelNodeBatchValues &reference_values,
+    const uuber::KernelNodeBatchValues &blocker_values,
+    const uuber::KernelEvalNeed &kneed,
+    uuber::KernelNodeBatchValues &out_values,
+    const std::vector<std::uint8_t> *active_mask) {
+  const std::size_t point_count = points.size();
+  if (!exact_guard_batch_inputs_valid(batch_times, point_count, reference_values,
+                                      blocker_values)) {
+    return false;
+  }
+  for (std::size_t i = 0; i < point_count; ++i) {
+    if (!exact_point_active(active_mask, i)) {
+      continue;
+    }
+    const ExactScenarioPoint &point = points[i];
+    NodeEvalState local_state = exact_make_local_state(
+        ctx, batch_times[i], component_idx, trial_params, trial_type_key, point);
+    uuber::KernelGuardEvalFn guard_eval =
+        evaluator_make_kernel_guard_eval(local_state);
+    const uuber::KernelNodeValues values = guard_eval(
+        op, kernel_batch_values_at(reference_values, i),
+        kernel_batch_values_at(blocker_values, i), kneed);
+    if (kneed.density) {
+      out_values.density[i] = safe_density(values.density);
+    }
+    out_values.survival[i] = clamp_probability(values.survival);
+    out_values.cdf[i] = clamp_probability(values.cdf);
+  }
+  return true;
+}
+
+template <typename PointVec, typename DirectEvalFn>
+bool exact_eval_event_batch_common(
+    const uuber::NativeContext &ctx, const PointVec &points,
+    const std::vector<double> &batch_times, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const uuber::TrialParamsSoA *trial_params_soa, int event_idx,
+    const uuber::KernelEvalNeed &kneed,
+    uuber::KernelNodeBatchValues &event_out,
+    const std::vector<std::uint8_t> *active_mask, DirectEvalFn &&direct_eval) {
+  const std::size_t point_count = points.size();
+  if (batch_times.size() != point_count ||
+      event_idx < 0 ||
+      event_idx >= static_cast<int>(ctx.ir.events.size())) {
+    return false;
+  }
+  exact_init_batch_values(point_count, event_out);
+
+  const uuber::IrEvent &event =
+      ctx.ir.events[static_cast<std::size_t>(event_idx)];
+  const EvalNeed event_need = exact_eval_need_from_kernel_need(kneed);
+
+  if (direct_eval(event, event_need, event_out)) {
+    return true;
+  }
+  if (event.node_idx >= 0) {
+    const std::vector<int> event_source_ids =
+        ensure_source_ids_dense_idx(ctx, event.node_idx);
+    return exact_eval_with_shared_relevant_state(
+        ctx, points, active_mask, event_source_ids, component_idx,
+        trial_params, trial_type_key,
+        [&](NodeEvalState &shared_state) -> bool {
+          uuber::KernelEventBatchEvalFn shared_event_eval =
+              evaluator_make_kernel_event_eval_batch(shared_state);
+          return shared_event_eval(event_idx, batch_times, kneed, event_out);
+        },
+        [&]() -> bool {
+          return exact_eval_event_pointwise_batch(
+              ctx, points, batch_times, component_idx, trial_params,
+              trial_type_key, event, event_need, trial_params_soa, event_out,
+              active_mask);
+        });
+  }
+  return exact_eval_event_pointwise_batch(
+      ctx, points, batch_times, component_idx, trial_params, trial_type_key,
+      event, event_need, trial_params_soa, event_out, active_mask);
+}
+
+template <typename PointVec>
+bool exact_eval_guard_batch_common(
+    const uuber::NativeContext &ctx, const PointVec &points,
+    const std::vector<double> &batch_times, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const uuber::KernelOp &op,
+    const uuber::KernelNodeBatchValues &reference_values,
+    const uuber::KernelNodeBatchValues &blocker_values,
+    const uuber::KernelEvalNeed &kneed,
+    uuber::KernelNodeBatchValues &guard_out,
+    const std::vector<std::uint8_t> *active_mask,
+    bool allow_pointwise_without_node_idx) {
+  const std::size_t point_count = points.size();
+  if (!exact_guard_batch_inputs_valid(batch_times, point_count, reference_values,
+                                      blocker_values)) {
+    return false;
+  }
+  exact_init_batch_values(point_count, guard_out);
+  if (kneed.density) {
+    exact_seed_guard_density(reference_values, blocker_values, guard_out,
+                             active_mask);
+  }
+  if (op.node_idx >= 0) {
+    const std::vector<int> guard_source_ids =
+        ensure_source_ids_dense_idx(ctx, op.node_idx);
+    return exact_eval_with_shared_relevant_state(
+        ctx, points, active_mask, guard_source_ids, component_idx,
+        trial_params, trial_type_key,
+        [&](NodeEvalState &shared_state) -> bool {
+          uuber::KernelGuardBatchEvalFn shared_guard_eval =
+              evaluator_make_kernel_guard_eval_batch(shared_state);
+          return shared_guard_eval(op, batch_times, reference_values,
+                                   blocker_values, kneed, guard_out);
+        },
+        [&]() -> bool {
+          return exact_eval_guard_pointwise_batch(
+              ctx, points, batch_times, component_idx, trial_params,
+              trial_type_key, op, reference_values, blocker_values, kneed,
+              guard_out, active_mask);
+        });
+  }
+  if (!allow_pointwise_without_node_idx) {
+    return true;
+  }
+  return exact_eval_guard_pointwise_batch(
+      ctx, points, batch_times, component_idx, trial_params, trial_type_key,
+      op, reference_values, blocker_values, kneed, guard_out, active_mask);
+}
+
 bool exact_eval_node_batch_with_points(
     const uuber::NativeContext &ctx, int node_idx,
     const std::vector<ExactScenarioPoint> &points, int component_idx,
@@ -475,263 +812,61 @@ bool exact_eval_node_batch_with_points(
 
   const std::vector<int> relevant_source_ids =
       ensure_source_ids_dense_idx(ctx, node_idx);
-  std::size_t anchor_idx = points.size();
-  if (exact_points_share_relevant_state(points, active_mask, relevant_source_ids,
-                                        ctx, anchor_idx)) {
-    const ExactScenarioPoint &anchor = points[anchor_idx];
-    TimeConstraintMap filtered_time_constraints;
-    build_filtered_time_constraints(anchor.time_constraints, relevant_source_ids,
-                                    filtered_time_constraints);
-    uuber::BitsetState filtered_complete_bits;
-    uuber::BitsetState filtered_survive_bits;
-    bool filtered_complete_bits_valid = false;
-    bool filtered_survive_bits_valid = false;
-    build_filtered_forced_bits(
-        ctx, anchor.forced_complete_bits, anchor.forced_complete_bits_valid,
-        relevant_source_ids, filtered_complete_bits, filtered_complete_bits_valid);
-    build_filtered_forced_bits(
-        ctx, anchor.forced_survive_bits, anchor.forced_survive_bits_valid,
-        relevant_source_ids, filtered_survive_bits, filtered_survive_bits_valid);
-    NodeEvalState shared_state(
-        ctx, anchor.t, component_idx, trial_params, trial_type_key, false, -1,
-        &filtered_time_constraints, nullptr,
-        filtered_complete_bits_valid ? &filtered_complete_bits : nullptr,
-        filtered_complete_bits_valid,
-        filtered_survive_bits_valid ? &filtered_survive_bits : nullptr,
-        filtered_survive_bits_valid, nullptr);
+  auto pointwise_fallback = [&]() -> bool {
+    const uuber::TrialParamsSoA *trial_params_soa =
+        resolve_trial_params_soa(ctx, trial_params);
     uuber::KernelBatchRuntimeState batch_runtime;
-    return evaluator_eval_node_batch_with_state_dense(
-        node_idx, times, shared_state, need, batch_runtime, out_values);
-  }
+    uuber::KernelEventBatchEvalFn event_eval_batch =
+        [&](int event_idx, const std::vector<double> &batch_times,
+            const uuber::KernelEvalNeed &kneed,
+            uuber::KernelNodeBatchValues &event_out) -> bool {
+      return exact_eval_event_batch_common(
+          ctx, points, batch_times, component_idx, trial_params,
+          trial_type_key, trial_params_soa, event_idx, kneed, event_out,
+          active_mask,
+          [&](const uuber::IrEvent &event, EvalNeed event_need,
+              uuber::KernelNodeBatchValues &out) -> bool {
+            return exact_eval_simple_acc_event_batch(
+                ctx, event, points, component_idx, trial_params, event_need,
+                out, active_mask);
+          });
+    };
 
-  const uuber::TrialParamsSoA *trial_params_soa =
-      resolve_trial_params_soa(ctx, trial_params);
-  uuber::KernelBatchRuntimeState batch_runtime;
-  uuber::KernelEventBatchEvalFn event_eval_batch =
-      [&](int event_idx, const std::vector<double> &batch_times,
-          const uuber::KernelEvalNeed &kneed,
-          uuber::KernelNodeBatchValues &event_out) -> bool {
-    const std::size_t point_count = points.size();
-    if (batch_times.size() != point_count ||
-        event_idx < 0 ||
-        event_idx >= static_cast<int>(ctx.ir.events.size())) {
-      return false;
-    }
-    event_out.density.assign(point_count, 0.0);
-    event_out.survival.assign(point_count, 1.0);
-    event_out.cdf.assign(point_count, 0.0);
+    uuber::KernelGuardBatchEvalFn guard_eval_batch =
+        [&](const uuber::KernelOp &op, const std::vector<double> &batch_times,
+            const uuber::KernelNodeBatchValues &reference_values,
+            const uuber::KernelNodeBatchValues &blocker_values,
+            const uuber::KernelEvalNeed &kneed,
+            uuber::KernelNodeBatchValues &guard_out) -> bool {
+      return exact_eval_guard_batch_common(
+          ctx, points, batch_times, component_idx, trial_params,
+          trial_type_key, op, reference_values, blocker_values, kneed,
+          guard_out, active_mask, true);
+    };
 
-    const uuber::IrEvent &event =
-        ctx.ir.events[static_cast<std::size_t>(event_idx)];
-    uuber::LabelRef ref;
-    ref.label_id = event.label_id;
-    ref.acc_idx = event.acc_idx;
-    ref.pool_idx = event.pool_idx;
-    ref.outcome_idx = event.outcome_idx;
-    std::uint32_t node_flags = 0u;
-    if (event.node_idx >= 0 &&
-        event.node_idx < static_cast<int>(ctx.ir.nodes.size())) {
-      node_flags =
-          ctx.ir.nodes[static_cast<std::size_t>(event.node_idx)].flags;
+    uuber::KernelEvalNeed kernel_need;
+    kernel_need.density = needs_density(need);
+    kernel_need.survival = needs_survival(need);
+    kernel_need.cdf = needs_cdf(need);
+    if (!kernel_need.density && !kernel_need.survival && !kernel_need.cdf) {
+      kernel_need.density = true;
+      kernel_need.survival = true;
+      kernel_need.cdf = true;
     }
-
-    EvalNeed event_need = static_cast<EvalNeed>(0u);
-    if (kneed.density) {
-      event_need = event_need | EvalNeed::kDensity;
-    }
-    if (kneed.survival) {
-      event_need = event_need | EvalNeed::kSurvival;
-    }
-    if (kneed.cdf) {
-      event_need = event_need | EvalNeed::kCDF;
-    }
-
-    if (exact_eval_simple_acc_event_batch(
-            ctx, event, points, component_idx, trial_params, event_need,
-            event_out, active_mask)) {
-      return true;
-    }
-
-    if (event.node_idx >= 0) {
-      const std::vector<int> event_source_ids =
-          ensure_source_ids_dense_idx(ctx, event.node_idx);
-      std::size_t event_anchor_idx = points.size();
-      if (exact_points_share_relevant_state(points, active_mask,
-                                            event_source_ids, ctx,
-                                            event_anchor_idx)) {
-        const ExactScenarioPoint &anchor = points[event_anchor_idx];
-        TimeConstraintMap filtered_time_constraints;
-        build_filtered_time_constraints(anchor.time_constraints, event_source_ids,
-                                        filtered_time_constraints);
-        uuber::BitsetState filtered_complete_bits;
-        uuber::BitsetState filtered_survive_bits;
-        bool filtered_complete_bits_valid = false;
-        bool filtered_survive_bits_valid = false;
-        build_filtered_forced_bits(
-            ctx, anchor.forced_complete_bits, anchor.forced_complete_bits_valid,
-            event_source_ids, filtered_complete_bits,
-            filtered_complete_bits_valid);
-        build_filtered_forced_bits(
-            ctx, anchor.forced_survive_bits, anchor.forced_survive_bits_valid,
-            event_source_ids, filtered_survive_bits,
-            filtered_survive_bits_valid);
-        NodeEvalState shared_state(
-            ctx, anchor.t, component_idx, trial_params, trial_type_key, false,
-            -1, &filtered_time_constraints, nullptr,
-            filtered_complete_bits_valid ? &filtered_complete_bits : nullptr,
-            filtered_complete_bits_valid,
-            filtered_survive_bits_valid ? &filtered_survive_bits : nullptr,
-            filtered_survive_bits_valid, nullptr);
-        uuber::KernelEventBatchEvalFn shared_event_eval =
-            evaluator_make_kernel_event_eval_batch(shared_state);
-        return shared_event_eval(event_idx, batch_times, kneed, event_out);
-      }
-    }
-
-    for (std::size_t i = 0; i < point_count; ++i) {
-      if (active_mask &&
-          (i >= active_mask->size() || (*active_mask)[i] == 0u)) {
-        continue;
-      }
-      const ExactScenarioPoint &point = points[i];
-      ForcedStateView forced_state = make_forced_state_view(
-          nullptr,
-          point.forced_complete_bits_valid ? &point.forced_complete_bits
-                                           : nullptr,
-          &point.forced_complete_bits_valid,
-          point.forced_survive_bits_valid ? &point.forced_survive_bits
-                                          : nullptr,
-          &point.forced_survive_bits_valid,
-          ctx.ir.label_id_to_bit_idx.empty() ? nullptr
-                                             : &ctx.ir.label_id_to_bit_idx);
-      NodeEvalResult event_eval = evaluator_eval_event_ref_idx(
-          ctx, ref, node_flags, batch_times[i], component_idx, event_need,
-          trial_params, trial_type_key, false, -1, &point.time_constraints,
-          nullptr,
-          point.forced_complete_bits_valid ? &point.forced_complete_bits
-                                           : nullptr,
-          point.forced_survive_bits_valid ? &point.forced_survive_bits
-                                          : nullptr,
-          ctx.ir.label_id_to_bit_idx.empty() ? nullptr
-                                             : &ctx.ir.label_id_to_bit_idx,
-          trial_params_soa, &forced_state);
-      event_out.density[i] = safe_density(event_eval.density);
-      event_out.survival[i] = clamp_probability(event_eval.survival);
-      event_out.cdf[i] = clamp_probability(event_eval.cdf);
-    }
-    return true;
+    return uuber::eval_kernel_node_batch_incremental(
+        ctx.kernel_program, batch_runtime, node_idx, times, kernel_need,
+        event_eval_batch, guard_eval_batch, out_values);
   };
 
-  uuber::KernelGuardBatchEvalFn guard_eval_batch =
-      [&](const uuber::KernelOp &op, const std::vector<double> &batch_times,
-          const uuber::KernelNodeBatchValues &reference_values,
-          const uuber::KernelNodeBatchValues &blocker_values,
-          const uuber::KernelEvalNeed &kneed,
-          uuber::KernelNodeBatchValues &guard_out) -> bool {
-    const std::size_t point_count = points.size();
-    if (batch_times.size() != point_count ||
-        reference_values.density.size() != point_count ||
-        reference_values.survival.size() != point_count ||
-        reference_values.cdf.size() != point_count ||
-        blocker_values.density.size() != point_count ||
-        blocker_values.survival.size() != point_count ||
-        blocker_values.cdf.size() != point_count) {
-      return false;
-    }
-    guard_out.density.assign(point_count, 0.0);
-    guard_out.survival.assign(point_count, 1.0);
-    guard_out.cdf.assign(point_count, 0.0);
-
-    if (kneed.density) {
-      for (std::size_t i = 0; i < point_count; ++i) {
-        if (active_mask &&
-            (i >= active_mask->size() || (*active_mask)[i] == 0u)) {
-          continue;
-        }
-        const double ref_density = safe_density(reference_values.density[i]);
-        const double blocker_survival =
-            clamp_probability(blocker_values.survival[i]);
-        guard_out.density[i] = safe_density(ref_density * blocker_survival);
-      }
-    }
-    if (op.node_idx >= 0) {
-      const std::vector<int> guard_source_ids =
-          ensure_source_ids_dense_idx(ctx, op.node_idx);
-      std::size_t guard_anchor_idx = points.size();
-      if (exact_points_share_relevant_state(points, active_mask,
-                                            guard_source_ids, ctx,
-                                            guard_anchor_idx)) {
-        const ExactScenarioPoint &anchor = points[guard_anchor_idx];
-        TimeConstraintMap filtered_time_constraints;
-        build_filtered_time_constraints(anchor.time_constraints, guard_source_ids,
-                                        filtered_time_constraints);
-        uuber::BitsetState filtered_complete_bits;
-        uuber::BitsetState filtered_survive_bits;
-        bool filtered_complete_bits_valid = false;
-        bool filtered_survive_bits_valid = false;
-        build_filtered_forced_bits(
-            ctx, anchor.forced_complete_bits, anchor.forced_complete_bits_valid,
-            guard_source_ids, filtered_complete_bits,
-            filtered_complete_bits_valid);
-        build_filtered_forced_bits(
-            ctx, anchor.forced_survive_bits, anchor.forced_survive_bits_valid,
-            guard_source_ids, filtered_survive_bits,
-            filtered_survive_bits_valid);
-        NodeEvalState shared_state(
-            ctx, anchor.t, component_idx, trial_params, trial_type_key, false,
-            -1, &filtered_time_constraints, nullptr,
-            filtered_complete_bits_valid ? &filtered_complete_bits : nullptr,
-            filtered_complete_bits_valid,
-            filtered_survive_bits_valid ? &filtered_survive_bits : nullptr,
-            filtered_survive_bits_valid, nullptr);
-        uuber::KernelGuardBatchEvalFn shared_guard_eval =
-            evaluator_make_kernel_guard_eval_batch(shared_state);
-        return shared_guard_eval(op, batch_times, reference_values,
-                                 blocker_values, kneed, guard_out);
-      }
-    }
-
-    for (std::size_t i = 0; i < point_count; ++i) {
-      if (active_mask &&
-          (i >= active_mask->size() || (*active_mask)[i] == 0u)) {
-        continue;
-      }
-      const ExactScenarioPoint &point = points[i];
-      NodeEvalState local_state(
-          ctx, batch_times[i], component_idx, trial_params, trial_type_key,
-          false, -1, &point.time_constraints, nullptr,
-          point.forced_complete_bits_valid ? &point.forced_complete_bits
-                                           : nullptr,
-          point.forced_complete_bits_valid,
-          point.forced_survive_bits_valid ? &point.forced_survive_bits
-                                          : nullptr,
-          point.forced_survive_bits_valid, nullptr);
-      uuber::KernelGuardEvalFn guard_eval =
-          evaluator_make_kernel_guard_eval(local_state);
-      const uuber::KernelNodeValues values = guard_eval(
-          op, kernel_batch_values_at(reference_values, i),
-          kernel_batch_values_at(blocker_values, i), kneed);
-      if (kneed.density) {
-        guard_out.density[i] = safe_density(values.density);
-      }
-      guard_out.survival[i] = clamp_probability(values.survival);
-      guard_out.cdf[i] = clamp_probability(values.cdf);
-    }
-    return true;
-  };
-
-  uuber::KernelEvalNeed kernel_need;
-  kernel_need.density = needs_density(need);
-  kernel_need.survival = needs_survival(need);
-  kernel_need.cdf = needs_cdf(need);
-  if (!kernel_need.density && !kernel_need.survival && !kernel_need.cdf) {
-    kernel_need.density = true;
-    kernel_need.survival = true;
-    kernel_need.cdf = true;
-  }
-  return uuber::eval_kernel_node_batch_incremental(
-      ctx.kernel_program, batch_runtime, node_idx, times, kernel_need,
-      event_eval_batch, guard_eval_batch, out_values);
+  return exact_eval_with_shared_relevant_state(
+      ctx, points, active_mask, relevant_source_ids, component_idx,
+      trial_params, trial_type_key,
+      [&](NodeEvalState &shared_state) -> bool {
+        uuber::KernelBatchRuntimeState batch_runtime;
+        return evaluator_eval_node_batch_with_state_dense(
+            node_idx, times, shared_state, need, batch_runtime, out_values);
+      },
+      pointwise_fallback);
 }
 
 bool exact_collect_scenarios_batch(
@@ -1065,74 +1200,16 @@ bool exact_competitor_survival_batch(
       [&](int event_idx, const std::vector<double> &batch_times,
           const uuber::KernelEvalNeed &kneed,
           uuber::KernelNodeBatchValues &out_values) -> bool {
-    const std::size_t point_count = mutable_points.size();
-    if (batch_times.size() != point_count ||
-        event_idx < 0 ||
-        event_idx >= static_cast<int>(ctx.ir.events.size())) {
-      return false;
-    }
-    out_values.density.assign(point_count, 0.0);
-    out_values.survival.assign(point_count, 1.0);
-    out_values.cdf.assign(point_count, 0.0);
-
-    const uuber::IrEvent &event =
-        ctx.ir.events[static_cast<std::size_t>(event_idx)];
-    uuber::LabelRef ref;
-    ref.label_id = event.label_id;
-    ref.acc_idx = event.acc_idx;
-    ref.pool_idx = event.pool_idx;
-    ref.outcome_idx = event.outcome_idx;
-    std::uint32_t node_flags = 0u;
-    if (event.node_idx >= 0 &&
-        event.node_idx < static_cast<int>(ctx.ir.nodes.size())) {
-      node_flags =
-          ctx.ir.nodes[static_cast<std::size_t>(event.node_idx)].flags;
-    }
-
-    EvalNeed need = static_cast<EvalNeed>(0u);
-    if (kneed.density) {
-      need = need | EvalNeed::kDensity;
-    }
-    if (kneed.survival) {
-      need = need | EvalNeed::kSurvival;
-    }
-    if (kneed.cdf) {
-      need = need | EvalNeed::kCDF;
-    }
-
-    if (event.node_idx >= 0 &&
-        exact_eval_node_batch_with_points(
-            ctx, event.node_idx, mutable_points, component_idx, trial_params,
-            trial_type_key, need, out_values, nullptr)) {
-      return true;
-    }
-
-    for (std::size_t i = 0; i < point_count; ++i) {
-      ExactScenarioPoint &point = mutable_points[i];
-      const bool point_complete_valid = point.forced_complete_bits_valid;
-      const bool point_survive_valid = point.forced_survive_bits_valid;
-      ForcedStateView forced_state = make_forced_state_view(
-          nullptr,
-          point_complete_valid ? &point.forced_complete_bits : nullptr,
-          &point.forced_complete_bits_valid,
-          point_survive_valid ? &point.forced_survive_bits : nullptr,
-          &point.forced_survive_bits_valid,
-          ctx.ir.label_id_to_bit_idx.empty() ? nullptr
-                                             : &ctx.ir.label_id_to_bit_idx);
-      NodeEvalResult event_eval = evaluator_eval_event_ref_idx(
-          ctx, ref, node_flags, batch_times[i], component_idx, need,
-          trial_params, trial_type_key, false, -1, &point.time_constraints,
-          nullptr,
-          point_complete_valid ? &point.forced_complete_bits : nullptr,
-          point_survive_valid ? &point.forced_survive_bits : nullptr,
-          ctx.ir.label_id_to_bit_idx.empty() ? nullptr
-                                             : &ctx.ir.label_id_to_bit_idx,
-          trial_params_soa, &forced_state);
-      out_values.density[i] = safe_density(event_eval.density);
-      out_values.survival[i] = clamp_probability(event_eval.survival);
-      out_values.cdf[i] = clamp_probability(event_eval.cdf);
-    }
-    return true;
+    return exact_eval_event_batch_common(
+        ctx, mutable_points, batch_times, component_idx, trial_params,
+        trial_type_key, trial_params_soa, event_idx, kneed, out_values, nullptr,
+        [&](const uuber::IrEvent &event, EvalNeed need,
+            uuber::KernelNodeBatchValues &out) -> bool {
+          return event.node_idx >= 0 &&
+                 exact_eval_node_batch_with_points(
+                     ctx, event.node_idx, mutable_points, component_idx,
+                     trial_params, trial_type_key, need, out, nullptr);
+        });
   };
 
   uuber::KernelGuardBatchEvalFn guard_eval_batch =
@@ -1141,88 +1218,10 @@ bool exact_competitor_survival_batch(
           const uuber::KernelNodeBatchValues &blocker_values,
           const uuber::KernelEvalNeed &kneed,
           uuber::KernelNodeBatchValues &out_values) -> bool {
-    const std::size_t point_count = mutable_points.size();
-    if (batch_times.size() != point_count ||
-        reference_values.density.size() != point_count ||
-        reference_values.survival.size() != point_count ||
-        reference_values.cdf.size() != point_count ||
-        blocker_values.density.size() != point_count ||
-        blocker_values.survival.size() != point_count ||
-        blocker_values.cdf.size() != point_count) {
-      return false;
-    }
-    out_values.density.assign(point_count, 0.0);
-    out_values.survival.assign(point_count, 1.0);
-    out_values.cdf.assign(point_count, 0.0);
-
-    if (kneed.density) {
-      for (std::size_t i = 0; i < point_count; ++i) {
-        const double ref_density = safe_density(reference_values.density[i]);
-        const double blocker_survival =
-            clamp_probability(blocker_values.survival[i]);
-        out_values.density[i] = safe_density(ref_density * blocker_survival);
-      }
-    }
-    if (op.node_idx >= 0) {
-      const std::vector<int> guard_source_ids =
-          ensure_source_ids_dense_idx(ctx, op.node_idx);
-      std::size_t guard_anchor_idx = mutable_points.size();
-      if (exact_points_share_relevant_state(mutable_points, nullptr,
-                                            guard_source_ids, ctx,
-                                            guard_anchor_idx)) {
-        const ExactScenarioPoint &anchor = mutable_points[guard_anchor_idx];
-        TimeConstraintMap filtered_time_constraints;
-        build_filtered_time_constraints(anchor.time_constraints, guard_source_ids,
-                                        filtered_time_constraints);
-        uuber::BitsetState filtered_complete_bits;
-        uuber::BitsetState filtered_survive_bits;
-        bool filtered_complete_bits_valid = false;
-        bool filtered_survive_bits_valid = false;
-        build_filtered_forced_bits(
-            ctx, anchor.forced_complete_bits, anchor.forced_complete_bits_valid,
-            guard_source_ids, filtered_complete_bits,
-            filtered_complete_bits_valid);
-        build_filtered_forced_bits(
-            ctx, anchor.forced_survive_bits, anchor.forced_survive_bits_valid,
-            guard_source_ids, filtered_survive_bits,
-            filtered_survive_bits_valid);
-        NodeEvalState shared_state(
-            ctx, anchor.t, component_idx, trial_params, trial_type_key, false,
-            -1, &filtered_time_constraints, nullptr,
-            filtered_complete_bits_valid ? &filtered_complete_bits : nullptr,
-            filtered_complete_bits_valid,
-            filtered_survive_bits_valid ? &filtered_survive_bits : nullptr,
-            filtered_survive_bits_valid, nullptr);
-        uuber::KernelGuardBatchEvalFn shared_guard_eval =
-            evaluator_make_kernel_guard_eval_batch(shared_state);
-        return shared_guard_eval(op, batch_times, reference_values,
-                                 blocker_values, kneed, out_values);
-      }
-    }
-
-    for (std::size_t i = 0; i < point_count; ++i) {
-      ExactScenarioPoint &point = mutable_points[i];
-      NodeEvalState local_state(
-          ctx, batch_times[i], component_idx, trial_params, trial_type_key,
-          false, -1, &point.time_constraints, nullptr,
-          point.forced_complete_bits_valid ? &point.forced_complete_bits
-                                           : nullptr,
-          point.forced_complete_bits_valid,
-          point.forced_survive_bits_valid ? &point.forced_survive_bits
-                                          : nullptr,
-          point.forced_survive_bits_valid, nullptr);
-      uuber::KernelGuardEvalFn guard_eval =
-          evaluator_make_kernel_guard_eval(local_state);
-      const uuber::KernelNodeValues values = guard_eval(
-          op, kernel_batch_values_at(reference_values, i),
-          kernel_batch_values_at(blocker_values, i), kneed);
-      if (kneed.density) {
-        out_values.density[i] = safe_density(values.density);
-      }
-      out_values.survival[i] = clamp_probability(values.survival);
-      out_values.cdf[i] = clamp_probability(values.cdf);
-    }
-    return true;
+    return exact_eval_guard_batch_common(
+        ctx, mutable_points, batch_times, component_idx, trial_params,
+        trial_type_key, op, reference_values, blocker_values, kneed,
+        out_values, nullptr, false);
   };
 
   uuber::KernelBatchTransitionApplyFn apply_transition_batch =

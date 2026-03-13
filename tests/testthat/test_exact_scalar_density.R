@@ -410,13 +410,16 @@ testthat::test_that("guard-heavy exact batches match one-trial scalar evaluation
   stats_batch <- AccumulatR:::unified_outcome_stats_cpp()
 
   ll_scalar_sum <- 0.0
-  for (i in seq_len(nrow(data_df))) {
-    trial_df <- data_df[i, , drop = FALSE]
-    trial_df$trial <- 1L
-    trial_ctx <- build_likelihood_context(spec, trial_df)
-    trial_params_df <- build_param_matrix(spec, params, n_trials = 1L)
+  for (trial_id in data_df$trial) {
+    ok <- data_df$trial == trial_id
     ll_scalar_sum <- ll_scalar_sum +
-      as.numeric(log_likelihood(trial_ctx, trial_df, trial_params_df))
+      as.numeric(log_likelihood(
+        ctx,
+        data_df,
+        params_df,
+        ok = ok,
+        expand = trial_id
+      ))
   }
 
   testthat::expect_gt(stats_batch$exact_batch_density_calls, 0)

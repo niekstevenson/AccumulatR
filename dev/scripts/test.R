@@ -19,7 +19,7 @@ with_native_only <- function(expr) {
 }
 
 # 1. Which examples to run
-example_ids <- names(new_api_examples)[6]
+example_ids <- names(new_api_examples)[2]
 
 unwrap_model_spec <- function(model) {
   if (is.list(model) && !is.null(model$model_spec) && is.list(model$model_spec)) {
@@ -90,7 +90,7 @@ for (example_id in example_ids) {
   # 5. Native profiling over parameter grids and repeat log-likelihoods
   ctx <- build_likelihood_context(
     structure = model_spec,
-    data_df = data_df
+    data = data_df
   )
   profile_res <- profile_likelihood(
     structure = model_spec,

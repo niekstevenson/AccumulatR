@@ -29,7 +29,7 @@
                   "value": ["R1", "R2"]
                 }
               },
-              "value": [0.6, 0.4]
+              "value": [0.59, 0.41]
             },
             {
               "type": "double",
@@ -45,7 +45,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [526.118947]
+              "value": [46.581905]
             }
           ]
         },
@@ -68,7 +68,7 @@
                   "value": ["R1", "R2"]
                 }
               },
-              "value": [0.776, 0.224]
+              "value": [0.785, 0.215]
             },
             {
               "type": "double",
@@ -76,15 +76,15 @@
                 "names": {
                   "type": "character",
                   "attributes": {},
-                  "value": ["NA", "R1", "R2"]
+                  "value": ["R1", "R2"]
                 }
               },
-              "value": [0, 0.806222, 0.193778]
+              "value": [0.806444, 0.193556]
             },
             {
               "type": "double",
               "attributes": {},
-              "value": [417.891021]
+              "value": [39.254674]
             }
           ]
         },
@@ -107,7 +107,7 @@
                   "value": ["Left", "NA", "Right"]
                 }
               },
-              "value": [0.436, 0.332, 0.232]
+              "value": [0.46, 0.33, 0.21]
             },
             {
               "type": "double",
@@ -123,7 +123,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [118.20022]
+              "value": [14.714584]
             }
           ]
         },
@@ -146,7 +146,7 @@
                   "value": ["Left", "Right"]
                 }
               },
-              "value": [0.518, 0.482]
+              "value": [0.525, 0.475]
             },
             {
               "type": "double",
@@ -162,7 +162,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [599.920838]
+              "value": [62.011132]
             }
           ]
         },
@@ -185,7 +185,7 @@
                   "value": ["Outcome_via_A", "Outcome_via_B"]
                 }
               },
-              "value": [0.7, 0.3]
+              "value": [0.71, 0.29]
             },
             {
               "type": "double",
@@ -201,7 +201,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [479.106905]
+              "value": [17.33595]
             }
           ]
         },
@@ -224,7 +224,7 @@
                   "value": ["R1", "R2"]
                 }
               },
-              "value": [0.314, 0.686]
+              "value": [0.325, 0.675]
             },
             {
               "type": "double",
@@ -240,7 +240,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [557.066298]
+              "value": [53.793952]
             }
           ]
         },
@@ -263,7 +263,7 @@
                   "value": ["R1", "R2"]
                 }
               },
-              "value": [0.48, 0.52]
+              "value": [0.495, 0.505]
             },
             {
               "type": "double",
@@ -279,7 +279,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [329.966662]
+              "value": [31.873794]
             }
           ]
         },
@@ -302,7 +302,7 @@
                   "value": ["Fast", "Slow"]
                 }
               },
-              "value": [0.178, 0.822]
+              "value": [0.195, 0.805]
             },
             {
               "type": "double",
@@ -313,12 +313,12 @@
                   "value": ["Fast", "NA", "Slow"]
                 }
               },
-              "value": [0.182494, 0, 0.817506]
+              "value": [0.16508, 0.000134, 0.834786]
             },
             {
               "type": "double",
               "attributes": {},
-              "value": [588.275692]
+              "value": [51.592396]
             }
           ]
         },
@@ -341,7 +341,7 @@
                   "value": ["NA", "R1", "R2"]
                 }
               },
-              "value": [0.1, 0.566, 0.334]
+              "value": [0.085, 0.61, 0.305]
             },
             {
               "type": "double",
@@ -357,7 +357,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [351.685101]
+              "value": [37.641103]
             }
           ]
         },
@@ -380,7 +380,7 @@
                   "value": ["Left", "NA", "Right"]
                 }
               },
-              "value": [0.576, 0.006, 0.418]
+              "value": [0.62, 0.005, 0.375]
             },
             {
               "type": "double",
@@ -396,7 +396,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [486.41655]
+              "value": [45.794072]
             }
           ]
         }

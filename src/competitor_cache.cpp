@@ -393,8 +393,7 @@ double competitor_survival_internal(
     const uuber::BitsetState *forced_survive_bits_in,
     bool forced_survive_bits_in_valid, const std::string &trial_type_key,
     const TrialParamSet *trial_params,
-    const ExactSourceTimeMap *exact_source_times,
-    const SourceTimeBoundsMap *source_time_bounds,
+    const TimeConstraintMap *time_constraints,
     uuber::KernelRuntimeState *kernel_runtime) {
   if (competitor_ids.empty()) {
     return 1.0;
@@ -422,10 +421,10 @@ double competitor_survival_internal(
       kernel_runtime &&
       !forced_bits_any(forced_complete_bits_in, forced_complete_bits_in_valid) &&
       !forced_bits_any(forced_survive_bits_in, forced_survive_bits_in_valid) &&
-      exact_source_times == nullptr && source_time_bounds == nullptr;
+      !time_constraints_any(time_constraints);
   NodeEvalState state(
       ctx, t, component_idx, trial_params, trial_type_key, false, -1,
-      exact_source_times, source_time_bounds, nullptr,
+      time_constraints, nullptr,
       forced_complete_bits_seed_valid ? &forced_complete_bits_seed : nullptr,
       forced_complete_bits_seed_valid,
       forced_survive_bits_seed_valid ? &forced_survive_bits_seed : nullptr,

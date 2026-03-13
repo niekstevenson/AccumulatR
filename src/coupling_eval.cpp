@@ -26,7 +26,7 @@ NodeEvalResult eval_event_unforced(
   return evaluator_eval_event_ref_idx(
       ctx, label_ref, 0u, t, component_idx, need, trial_params, trial_type_key,
       include_na_donors, outcome_idx_context, nullptr, nullptr, nullptr,
-      nullptr, nullptr, nullptr, trial_params_soa, nullptr);
+      nullptr, nullptr, trial_params_soa, nullptr);
 }
 
 inline bool coupling_acc_specialization_allowed(const uuber::NativeContext &ctx,
@@ -424,7 +424,7 @@ inline double evaluate_generic_direct_cdf_resolved_provider(
   uuber::KernelNodeBatchValues batch_values;
   if (!evaluator_eval_node_with_forced_state_view_batch(
           ctx, generic.node_id, upper_vec, component_idx, EvalNeed::kCDF,
-          trial_params, trial_type_key, nullptr, nullptr, forced_state,
+          trial_params, trial_type_key, nullptr, forced_state,
           batch_values) ||
       batch_values.cdf.empty()) {
     return 0.0;
@@ -452,7 +452,7 @@ inline bool evaluate_generic_terms_resolved_provider(
         forced_complete_bits_valid, forced_survive_bits,
         forced_survive_bits_valid, generic.competitor_node_ids, trial_params,
         trial_type_key, include_na_donors, outcome_idx_context, terms, nullptr,
-        nullptr, kernel_batch_runtime);
+        kernel_batch_runtime);
   }
 
   const uuber::TrialParamsSoA *trial_params_soa =

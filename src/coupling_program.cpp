@@ -52,6 +52,55 @@ inline int ir_dense_idx_to_node_id(const uuber::NativeContext &ctx,
   return node_id >= 0 ? node_id : node_idx;
 }
 
+inline bool ir_node_source_masks_overlap(const uuber::NativeContext &ctx,
+                                         const uuber::IrNode &a,
+                                         const uuber::IrNode &b) {
+  if (!ctx.ir.valid || a.source_mask_begin < 0 || a.source_mask_count <= 0 ||
+      b.source_mask_begin < 0 || b.source_mask_count <= 0 ||
+      a.source_mask_count != b.source_mask_count) {
+    return false;
+  }
+  for (int i = 0; i < a.source_mask_count; ++i) {
+    const std::uint64_t wa = ctx.ir.node_source_masks[static_cast<std::size_t>(
+        a.source_mask_begin + i)];
+    const std::uint64_t wb = ctx.ir.node_source_masks[static_cast<std::size_t>(
+        b.source_mask_begin + i)];
+    if ((wa & wb) != 0u) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool ir_generic_requires_exact_scenario_eval(
+    const uuber::NativeContext &ctx, int node_id,
+    const std::vector<int> &competitor_node_ids) {
+  if (!ctx.ir.valid) {
+    return false;
+  }
+  const int node_idx = ir_resolve_node_idx(ctx, node_id);
+  if (node_idx < 0) {
+    return false;
+  }
+  const uuber::IrNode &target = ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
+  for (int comp_node_id : competitor_node_ids) {
+    const int comp_idx = ir_resolve_node_idx(ctx, comp_node_id);
+    if (comp_idx < 0 ||
+        comp_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+      continue;
+    }
+    const uuber::IrNode &competitor =
+        ctx.ir.nodes[static_cast<std::size_t>(comp_idx)];
+    // Exact scenario evaluation is only needed when the target scenario can
+    // change a competitor through shared sources. Disjoint guard/composite
+    // competitors already evaluate correctly on the dense path.
+    if (ir_node_source_masks_overlap(ctx, target, competitor)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool ir_outcome_coupling_pair_lookup(const uuber::NativeContext &ctx,
                                      int node_id, int competitor_node_id,
                                      OutcomeCouplingPairPayload &out) {
@@ -269,6 +318,7 @@ bool ir_outcome_coupling_generic_lookup(
   }
   out = OutcomeCouplingGenericNodeIntegralPayload{};
   out.node_id = ir_dense_idx_to_node_id(ctx, node_idx);
+  out.requires_exact_scenario_eval = spec.requires_exact_scenario_eval;
   out.competitor_node_ids.reserve(competitor_dense.size());
   for (int comp_idx : competitor_dense) {
     out.competitor_node_ids.push_back(ir_dense_idx_to_node_id(ctx, comp_idx));
@@ -311,6 +361,9 @@ OutcomeCouplingProgram resolve_outcome_coupling_program_impl(
     program.valid = true;
     program.generic.node_id = node_id;
     program.generic.competitor_node_ids = competitor_node_ids;
+    program.generic.requires_exact_scenario_eval =
+        ir_generic_requires_exact_scenario_eval(ctx, node_id,
+                                                competitor_node_ids);
     return program;
   }
   return program;

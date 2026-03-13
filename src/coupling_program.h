@@ -20,6 +20,7 @@ struct OutcomeCouplingNWayPayload {
 struct OutcomeCouplingGenericNodeIntegralPayload {
   int node_id{-1};
   std::vector<int> competitor_node_ids;
+  bool requires_exact_scenario_eval{false};
 };
 
 enum class OutcomeCouplingOpKind : std::uint8_t {

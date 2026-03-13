@@ -25,6 +25,20 @@ void record_unified_outcome_kernel_density_call() {
   ++g_unified_outcome_runtime_stats.kernel_node_density_entry_idx_calls;
 }
 
+void record_unified_outcome_exact_scalar_density_call() {
+  if (!g_unified_outcome_runtime_stats_enabled) {
+    return;
+  }
+  ++g_unified_outcome_runtime_stats.exact_scalar_density_calls;
+}
+
+void record_unified_outcome_exact_batch_density_call() {
+  if (!g_unified_outcome_runtime_stats_enabled) {
+    return;
+  }
+  ++g_unified_outcome_runtime_stats.exact_batch_density_calls;
+}
+
 void record_unified_outcome_adaptive_segment_accept() {
   if (!g_unified_outcome_runtime_stats_enabled) {
     return;
@@ -70,6 +84,10 @@ Rcpp::List unified_outcome_stats_cpp() {
           static_cast<double>(
               g_unified_outcome_runtime_stats
                   .kernel_node_density_entry_idx_calls),
+      Rcpp::Named("exact_scalar_density_calls") = static_cast<double>(
+          g_unified_outcome_runtime_stats.exact_scalar_density_calls),
+      Rcpp::Named("exact_batch_density_calls") = static_cast<double>(
+          g_unified_outcome_runtime_stats.exact_batch_density_calls),
       Rcpp::Named("adaptive_segments_accepted") = static_cast<double>(
           g_unified_outcome_runtime_stats.adaptive_segments_accepted),
       Rcpp::Named("adaptive_segments_split") = static_cast<double>(

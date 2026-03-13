@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "context.h"
+#include "evaluator_internal.h"
 #include "trial_params.h"
 
 enum class RankedTransitionStepKind : std::uint8_t {
@@ -24,6 +25,7 @@ struct RankedTransitionStep {
   int source_mask_count{0};
   int invalidate_slot{0};
   bool source_mask_covers_ids{false};
+  bool bind_exact_current_time{false};
   std::vector<int> source_ids;
   std::vector<int> source_bits;
 };
@@ -37,6 +39,15 @@ struct RankedNodeTransitionPlan {
   bool compiling{false};
   bool valid{false};
   std::vector<RankedTransitionTemplate> transitions;
+};
+
+struct ExactNodeScenario {
+  double weight{0.0};
+  uuber::BitsetState forced_complete_bits;
+  uuber::BitsetState forced_survive_bits;
+  bool forced_complete_bits_valid{false};
+  bool forced_survive_bits_valid{false};
+  TimeConstraintMap time_constraints;
 };
 
 class RankedTransitionCompiler {
@@ -66,3 +77,16 @@ double sequence_prefix_density_resolved(
     const std::vector<const std::vector<int> *> *step_competitor_ids_ptrs =
         nullptr,
     const std::vector<std::vector<int>> *step_persistent_sources = nullptr);
+
+bool collect_exact_node_scenarios(
+    RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
+    int node_idx, double t, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const TimeConstraintMap *time_constraints,
+    uuber::KernelRuntimeState *kernel_runtime,
+    const uuber::BitsetState *base_forced_complete_bits_in,
+    bool base_forced_complete_bits_in_valid,
+    const uuber::BitsetState *base_forced_survive_bits_in,
+    bool base_forced_survive_bits_in_valid,
+    std::vector<ExactNodeScenario> &out,
+    bool evaluate_step_weights = true);

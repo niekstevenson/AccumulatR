@@ -158,6 +158,78 @@ bool trial_paramsets_equivalent(const TrialParamSet &a,
   return true;
 }
 
+std::uint64_t compute_trial_param_value_fingerprint(const TrialParamSet &params) {
+  std::uint64_t hash = kFNV64Offset;
+  hash_append_bool(hash, params.shared_trigger_layout_matches_context);
+  hash_append_u64(hash, static_cast<std::uint64_t>(params.acc_params.size()));
+  for (const TrialAccumulatorParams &acc : params.acc_params) {
+    hash_append_double(hash, acc.onset);
+    hash_append_bytes(hash, &acc.onset_kind, sizeof(acc.onset_kind));
+    hash_append_bytes(hash, &acc.onset_source_acc_idx,
+                      sizeof(acc.onset_source_acc_idx));
+    hash_append_bytes(hash, &acc.onset_source_pool_idx,
+                      sizeof(acc.onset_source_pool_idx));
+    hash_append_double(hash, acc.onset_lag);
+    hash_append_double(hash, acc.q);
+    hash_append_double(hash, acc.shared_q);
+    hash_append_bytes(hash, &acc.dist_cfg.code, sizeof(acc.dist_cfg.code));
+    hash_append_double(hash, acc.dist_cfg.t0);
+    hash_append_double(hash, acc.dist_cfg.p1);
+    hash_append_double(hash, acc.dist_cfg.p2);
+    hash_append_double(hash, acc.dist_cfg.p3);
+    hash_append_double(hash, acc.dist_cfg.p4);
+    hash_append_double(hash, acc.dist_cfg.p5);
+    hash_append_double(hash, acc.dist_cfg.p6);
+    hash_append_double(hash, acc.dist_cfg.p7);
+    hash_append_double(hash, acc.dist_cfg.p8);
+    hash_append_u64(hash, static_cast<std::uint64_t>(acc.shared_trigger_id.size()));
+    if (!acc.shared_trigger_id.empty()) {
+      hash_append_bytes(hash, acc.shared_trigger_id.data(),
+                        acc.shared_trigger_id.size());
+    }
+    hash_append_u64(hash, static_cast<std::uint64_t>(acc.component_indices.size()));
+    for (int comp_idx : acc.component_indices) {
+      hash_append_bytes(hash, &comp_idx, sizeof(comp_idx));
+    }
+  }
+  return hash;
+}
+
+bool trial_paramsets_value_equivalent(const TrialParamSet &a,
+                                      const TrialParamSet &b) {
+  if (a.shared_trigger_layout_matches_context !=
+          b.shared_trigger_layout_matches_context ||
+      a.acc_params.size() != b.acc_params.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < a.acc_params.size(); ++i) {
+    const TrialAccumulatorParams &x = a.acc_params[i];
+    const TrialAccumulatorParams &y = b.acc_params[i];
+    if (canonical_double_bits(x.onset) != canonical_double_bits(y.onset) ||
+        x.onset_kind != y.onset_kind ||
+        x.onset_source_acc_idx != y.onset_source_acc_idx ||
+        x.onset_source_pool_idx != y.onset_source_pool_idx ||
+        canonical_double_bits(x.onset_lag) != canonical_double_bits(y.onset_lag) ||
+        canonical_double_bits(x.q) != canonical_double_bits(y.q) ||
+        canonical_double_bits(x.shared_q) != canonical_double_bits(y.shared_q) ||
+        x.dist_cfg.code != y.dist_cfg.code ||
+        canonical_double_bits(x.dist_cfg.t0) != canonical_double_bits(y.dist_cfg.t0) ||
+        canonical_double_bits(x.dist_cfg.p1) != canonical_double_bits(y.dist_cfg.p1) ||
+        canonical_double_bits(x.dist_cfg.p2) != canonical_double_bits(y.dist_cfg.p2) ||
+        canonical_double_bits(x.dist_cfg.p3) != canonical_double_bits(y.dist_cfg.p3) ||
+        canonical_double_bits(x.dist_cfg.p4) != canonical_double_bits(y.dist_cfg.p4) ||
+        canonical_double_bits(x.dist_cfg.p5) != canonical_double_bits(y.dist_cfg.p5) ||
+        canonical_double_bits(x.dist_cfg.p6) != canonical_double_bits(y.dist_cfg.p6) ||
+        canonical_double_bits(x.dist_cfg.p7) != canonical_double_bits(y.dist_cfg.p7) ||
+        canonical_double_bits(x.dist_cfg.p8) != canonical_double_bits(y.dist_cfg.p8) ||
+        x.shared_trigger_id != y.shared_trigger_id ||
+        x.component_indices != y.component_indices) {
+      return false;
+    }
+  }
+  return true;
+}
+
 uuber::NAMapCacheKey
 build_na_map_cache_key_idx(const uuber::OutcomeContextInfo &info,
                            const TrialParamSet *params_ptr,

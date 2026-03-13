@@ -18,8 +18,7 @@ struct SequenceState {
   uuber::BitsetState forced_survive_bits;
   bool forced_complete_bits_valid{false};
   bool forced_survive_bits_valid{false};
-  ExactSourceTimeMap exact_source_times;
-  SourceTimeBoundsMap source_time_bounds;
+  TimeConstraintMap time_constraints;
 };
 
 struct SequenceStateKey {
@@ -29,10 +28,8 @@ struct SequenceStateKey {
   int forced_survive_bit_count{0};
   std::uint64_t forced_complete_hash{0};
   std::uint64_t forced_survive_hash{0};
-  std::uint64_t exact_hash{0};
-  std::uint64_t bounds_hash{0};
-  std::size_t exact_size{0};
-  std::size_t bounds_size{0};
+  std::uint64_t time_constraint_hash{0};
+  std::size_t time_constraint_size{0};
 
   bool operator==(const SequenceStateKey &other) const noexcept {
     return forced_complete_bits_valid == other.forced_complete_bits_valid &&
@@ -41,8 +38,8 @@ struct SequenceStateKey {
            forced_survive_bit_count == other.forced_survive_bit_count &&
            forced_complete_hash == other.forced_complete_hash &&
            forced_survive_hash == other.forced_survive_hash &&
-           exact_hash == other.exact_hash && bounds_hash == other.bounds_hash &&
-           exact_size == other.exact_size && bounds_size == other.bounds_size;
+           time_constraint_hash == other.time_constraint_hash &&
+           time_constraint_size == other.time_constraint_size;
   }
 };
 
@@ -54,14 +51,12 @@ struct SequenceStateKeyHash {
                   (seed_ref >> 2);
     };
     combine(seed, static_cast<std::size_t>(key.forced_survive_hash));
-    combine(seed, static_cast<std::size_t>(key.exact_hash));
-    combine(seed, static_cast<std::size_t>(key.bounds_hash));
+    combine(seed, static_cast<std::size_t>(key.time_constraint_hash));
     combine(seed, static_cast<std::size_t>(key.forced_complete_bits_valid));
     combine(seed, static_cast<std::size_t>(key.forced_survive_bits_valid));
     combine(seed, static_cast<std::size_t>(key.forced_complete_bit_count));
     combine(seed, static_cast<std::size_t>(key.forced_survive_bit_count));
-    combine(seed, key.exact_size);
-    combine(seed, key.bounds_size);
+    combine(seed, key.time_constraint_size);
     return seed;
   }
 };
@@ -85,28 +80,30 @@ inline std::uint64_t ranked_hash_bitset(const uuber::BitsetState &bits,
   return hash;
 }
 
-inline std::uint64_t ranked_hash_exact_times(
-    const ExactSourceTimeMap &exact_source_times) {
+inline std::uint64_t ranked_hash_time_constraints(
+    const TimeConstraintMap &time_constraints) {
   std::uint64_t hash = kFNV64Offset;
-  for (const auto &kv : exact_source_times) {
+  for (const auto &kv : time_constraints) {
     const std::int32_t id = static_cast<std::int32_t>(kv.first);
     hash_append_bytes(hash, &id, sizeof(id));
-    const std::uint64_t bits = canonical_double_bits(kv.second);
-    hash_append_bytes(hash, &bits, sizeof(bits));
-  }
-  return hash;
-}
-
-inline std::uint64_t ranked_hash_bounds(
-    const SourceTimeBoundsMap &source_time_bounds) {
-  std::uint64_t hash = kFNV64Offset;
-  for (const auto &kv : source_time_bounds) {
-    const std::int32_t id = static_cast<std::int32_t>(kv.first);
-    hash_append_bytes(hash, &id, sizeof(id));
-    const std::uint64_t lower_bits = canonical_double_bits(kv.second.first);
-    const std::uint64_t upper_bits = canonical_double_bits(kv.second.second);
-    hash_append_bytes(hash, &lower_bits, sizeof(lower_bits));
-    hash_append_bytes(hash, &upper_bits, sizeof(upper_bits));
+    const std::uint8_t has_exact = kv.second.has_exact ? 1u : 0u;
+    const std::uint8_t has_lower = kv.second.has_lower ? 1u : 0u;
+    const std::uint8_t has_upper = kv.second.has_upper ? 1u : 0u;
+    hash_append_bytes(hash, &has_exact, sizeof(has_exact));
+    hash_append_bytes(hash, &has_lower, sizeof(has_lower));
+    hash_append_bytes(hash, &has_upper, sizeof(has_upper));
+    if (kv.second.has_exact) {
+      const std::uint64_t exact_bits = canonical_double_bits(kv.second.exact_time);
+      hash_append_bytes(hash, &exact_bits, sizeof(exact_bits));
+    }
+    if (kv.second.has_lower) {
+      const std::uint64_t lower_bits = canonical_double_bits(kv.second.lower);
+      hash_append_bytes(hash, &lower_bits, sizeof(lower_bits));
+    }
+    if (kv.second.has_upper) {
+      const std::uint64_t upper_bits = canonical_double_bits(kv.second.upper);
+      hash_append_bytes(hash, &upper_bits, sizeof(upper_bits));
+    }
   }
   return hash;
 }
@@ -116,8 +113,7 @@ inline SequenceStateKey sequence_state_key(
     bool forced_complete_bits_valid,
     const uuber::BitsetState &forced_survive_bits,
     bool forced_survive_bits_valid,
-    const ExactSourceTimeMap &exact_source_times,
-    const SourceTimeBoundsMap &source_time_bounds) {
+    const TimeConstraintMap &time_constraints) {
   SequenceStateKey key;
   key.forced_complete_bits_valid = forced_complete_bits_valid;
   key.forced_survive_bits_valid = forced_survive_bits_valid;
@@ -129,10 +125,8 @@ inline SequenceStateKey sequence_state_key(
       ranked_hash_bitset(forced_complete_bits, forced_complete_bits_valid);
   key.forced_survive_hash =
       ranked_hash_bitset(forced_survive_bits, forced_survive_bits_valid);
-  key.exact_hash = ranked_hash_exact_times(exact_source_times);
-  key.bounds_hash = ranked_hash_bounds(source_time_bounds);
-  key.exact_size = exact_source_times.size();
-  key.bounds_size = source_time_bounds.size();
+  key.time_constraint_hash = ranked_hash_time_constraints(time_constraints);
+  key.time_constraint_size = time_constraints.size();
   return key;
 }
 
@@ -248,37 +242,18 @@ inline void ranked_attach_source_mask_for_node(const uuber::NativeContext &ctx,
   step.source_mask_covers_ids = ranked_mask_covers_source_ids(ctx, step);
 }
 
-inline void ranked_add_source_id(const uuber::NativeContext &ctx, int source_id,
-                                 int source_bit_idx,
-                                 uuber::BitsetState &bits_out,
-                                 bool &bits_valid) {
-  if (source_id == NA_INTEGER || source_id < 0) {
-    return;
-  }
-  if (source_bit_idx < 0) {
-    set_forced_id_bit_strict(ctx, source_id, bits_out, bits_valid);
-    return;
-  }
-  ensure_forced_bitset_capacity(ctx, bits_out, bits_valid);
-  if (!bits_valid) {
-    Rcpp::stop("IR forced-state bitset unavailable for ranked source id %d",
-               source_id);
-  }
-  bits_out.set(source_bit_idx);
-}
-
 template <typename EmitFn>
 bool for_each_sequence_node_transition(
     RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
     int node_idx, double t, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    const ExactSourceTimeMap *exact_source_times,
-    const SourceTimeBoundsMap *source_time_bounds,
+    const TimeConstraintMap *time_constraints,
     uuber::KernelRuntimeState *kernel_runtime,
     const uuber::BitsetState *base_forced_complete_bits_in,
     bool base_forced_complete_bits_in_valid,
     const uuber::BitsetState *base_forced_survive_bits_in,
-    bool base_forced_survive_bits_in_valid, EmitFn &&emit) {
+    bool base_forced_survive_bits_in_valid, EmitFn &&emit,
+    bool evaluate_step_weights = true) {
   const RankedNodeTransitionPlan &plan = compiler.plan_for_node(node_idx);
   if (!plan.valid || plan.transitions.empty()) {
     return false;
@@ -287,17 +262,6 @@ bool for_each_sequence_node_transition(
   const uuber::TrialParamsSoA *trial_params_soa =
       resolve_trial_params_soa(ctx, trial_params);
   IntegrationSettings settings;
-  auto apply_ranked_transition_mask =
-      [&](const RankedTransitionStep &step, uuber::BitsetState &bits,
-          bool &bits_valid) -> bool {
-    if (step.source_mask_begin < 0 || step.source_mask_count <= 0) {
-      return false;
-    }
-    apply_transition_mask_words(ctx, step.source_mask_begin,
-                                step.source_mask_count, step.invalidate_slot,
-                                bits, bits_valid, kernel_runtime);
-    return true;
-  };
   bool emitted_any = false;
   uuber::BitsetState base_forced_complete_bits;
   uuber::BitsetState base_forced_survive_bits;
@@ -320,9 +284,11 @@ bool for_each_sequence_node_transition(
 
   for (const RankedTransitionTemplate &transition : plan.transitions) {
     double weight = 1.0;
+    TimeConstraintMap transition_time_constraints =
+        time_constraints ? *time_constraints : TimeConstraintMap{};
     NodeEvalState transition_state(
         ctx, t, component_idx, trial_params, trial_type_key, false, -1,
-        exact_source_times, source_time_bounds, nullptr,
+        &transition_time_constraints, nullptr,
         base_forced_complete_bits_valid ? &base_forced_complete_bits : nullptr,
         base_forced_complete_bits_valid,
         base_forced_survive_bits_valid ? &base_forced_survive_bits : nullptr,
@@ -332,6 +298,9 @@ bool for_each_sequence_node_transition(
     bool valid = true;
     for (const RankedTransitionStep &step : transition.steps) {
       if (step.kind == RankedTransitionStepKind::EvalDensityNode) {
+        if (!evaluate_step_weights) {
+          continue;
+        }
         NodeEvalResult eval =
             evaluator_eval_node_recursive_dense(step.node_idx, transition_state,
                                                 EvalNeed::kDensity);
@@ -342,6 +311,9 @@ bool for_each_sequence_node_transition(
         }
         weight *= d;
       } else if (step.kind == RankedTransitionStepKind::EvalCDFNode) {
+        if (!evaluate_step_weights) {
+          continue;
+        }
         NodeEvalResult eval = evaluator_eval_node_recursive_dense(
             step.node_idx, transition_state, EvalNeed::kCDF);
         const double Fj = clamp_probability(eval.cdf);
@@ -351,9 +323,12 @@ bool for_each_sequence_node_transition(
         }
         weight *= Fj;
       } else if (step.kind == RankedTransitionStepKind::EvalGuardEffective) {
+        if (!evaluate_step_weights) {
+          continue;
+        }
         GuardEvalInput guard_input = make_guard_input_forced_state(
             ctx, step.node_idx, component_idx, &trial_type_key, trial_params,
-            trial_params_soa, exact_source_times, source_time_bounds,
+            trial_params_soa, &transition_state.time_constraints,
             transition_state.forced_state);
         const double eff = evaluator_guard_effective_survival_internal(
             guard_input, t, settings);
@@ -363,43 +338,38 @@ bool for_each_sequence_node_transition(
         }
         weight *= eff;
       } else if (step.kind == RankedTransitionStepKind::AddCompleteSources) {
-        const bool applied_mask = apply_ranked_transition_mask(
-            step, transition_state.forced_complete_bits,
-            transition_state.forced_complete_bits_valid);
-        if (applied_mask && step.source_mask_covers_ids) {
-          continue;
-        }
-        bool mutated_bits = false;
+        bool mutated_state = false;
         for (std::size_t i = 0; i < step.source_ids.size(); ++i) {
           const int id = step.source_ids[i];
-          const int bit_idx =
-              (i < step.source_bits.size()) ? step.source_bits[i] : -1;
-          ranked_add_source_id(ctx, id, bit_idx,
-                               transition_state.forced_complete_bits,
-                               transition_state.forced_complete_bits_valid);
-          mutated_bits = true;
+          if (!time_constraints_mark_complete(
+                  id, t, step.bind_exact_current_time,
+                  transition_state.time_constraints)) {
+            valid = false;
+            break;
+          }
+          mutated_state = true;
         }
-        if (mutated_bits) {
+        if (!valid) {
+          break;
+        }
+        if (mutated_state) {
           invalidate_kernel_runtime_root(transition_state);
         }
       } else if (step.kind == RankedTransitionStepKind::AddSurviveSources) {
-        const bool applied_mask = apply_ranked_transition_mask(
-            step, transition_state.forced_survive_bits,
-            transition_state.forced_survive_bits_valid);
-        if (applied_mask && step.source_mask_covers_ids) {
-          continue;
-        }
-        bool mutated_bits = false;
+        bool mutated_state = false;
         for (std::size_t i = 0; i < step.source_ids.size(); ++i) {
           const int id = step.source_ids[i];
-          const int bit_idx =
-              (i < step.source_bits.size()) ? step.source_bits[i] : -1;
-          ranked_add_source_id(ctx, id, bit_idx,
-                               transition_state.forced_survive_bits,
-                               transition_state.forced_survive_bits_valid);
-          mutated_bits = true;
+          if (!time_constraints_mark_survive(id, t,
+                                             transition_state.time_constraints)) {
+            valid = false;
+            break;
+          }
+          mutated_state = true;
         }
-        if (mutated_bits) {
+        if (!valid) {
+          break;
+        }
+        if (mutated_state) {
           invalidate_kernel_runtime_root(transition_state);
         }
       } else if (step.kind == RankedTransitionStepKind::AddOrWitnessFromSources) {
@@ -422,8 +392,10 @@ bool for_each_sequence_node_transition(
             bit_to_check = bit_it->second;
           }
           const bool is_forced =
-              transition_state.forced_complete_bits_valid &&
-              transition_state.forced_complete_bits.test(bit_to_check);
+              (transition_state.forced_complete_bits_valid &&
+               transition_state.forced_complete_bits.test(bit_to_check)) ||
+              time_constraints_contains_complete_at(
+                  &transition_state.time_constraints, id, t);
           if (!is_forced) {
             witness = id;
             witness_bit = bit_to_check;
@@ -435,9 +407,12 @@ bool for_each_sequence_node_transition(
           valid = false;
           break;
         }
-        ranked_add_source_id(ctx, witness, witness_bit,
-                             transition_state.forced_survive_bits,
-                             transition_state.forced_survive_bits_valid);
+        (void)witness_bit;
+        if (!time_constraints_mark_survive(witness, t,
+                                           transition_state.time_constraints)) {
+          valid = false;
+          break;
+        }
         invalidate_kernel_runtime_root(transition_state);
       }
       if (!std::isfinite(weight) || weight <= 0.0) {
@@ -451,13 +426,50 @@ bool for_each_sequence_node_transition(
     emit(weight, std::move(transition_state.forced_complete_bits),
          transition_state.forced_complete_bits_valid,
          std::move(transition_state.forced_survive_bits),
-         transition_state.forced_survive_bits_valid);
+         transition_state.forced_survive_bits_valid,
+         std::move(transition_state.time_constraints));
     emitted_any = true;
   }
   return emitted_any;
 }
 
 } // namespace
+
+bool collect_exact_node_scenarios(
+    RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
+    int node_idx, double t, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const TimeConstraintMap *time_constraints,
+    uuber::KernelRuntimeState *kernel_runtime,
+    const uuber::BitsetState *base_forced_complete_bits_in,
+    bool base_forced_complete_bits_in_valid,
+    const uuber::BitsetState *base_forced_survive_bits_in,
+    bool base_forced_survive_bits_in_valid,
+    std::vector<ExactNodeScenario> &out,
+    bool evaluate_step_weights) {
+  out.clear();
+  const bool emitted = for_each_sequence_node_transition(
+      compiler, ctx, node_idx, t, component_idx, trial_params, trial_type_key,
+      time_constraints, kernel_runtime,
+      base_forced_complete_bits_in, base_forced_complete_bits_in_valid,
+      base_forced_survive_bits_in, base_forced_survive_bits_in_valid,
+      [&](double weight, uuber::BitsetState &&forced_complete_bits,
+          bool forced_complete_bits_valid,
+          uuber::BitsetState &&forced_survive_bits,
+          bool forced_survive_bits_valid,
+          TimeConstraintMap &&scenario_time_constraints) {
+        ExactNodeScenario scenario;
+        scenario.weight = weight;
+        scenario.forced_complete_bits = std::move(forced_complete_bits);
+        scenario.forced_survive_bits = std::move(forced_survive_bits);
+        scenario.forced_complete_bits_valid = forced_complete_bits_valid;
+        scenario.forced_survive_bits_valid = forced_survive_bits_valid;
+        scenario.time_constraints = std::move(scenario_time_constraints);
+        out.push_back(std::move(scenario));
+      },
+      evaluate_step_weights);
+  return emitted;
+}
 
 RankedTransitionCompiler::RankedTransitionCompiler(
     const uuber::NativeContext &ctx_)
@@ -504,6 +516,8 @@ void RankedTransitionCompiler::compile_node(int node_idx) {
     if (!source_ids.empty()) {
       RankedTransitionStep add_step;
       add_step.kind = RankedTransitionStepKind::AddCompleteSources;
+      add_step.bind_exact_current_time =
+          (node.op == uuber::IrNodeOp::EventAcc);
       add_step.source_ids = std::move(source_ids);
       add_step.source_bits = ranked_source_bits_for_ids(ctx, add_step.source_ids);
       ranked_attach_source_mask_for_node(ctx, node_idx, add_step);
@@ -518,7 +532,8 @@ void RankedTransitionCompiler::compile_node(int node_idx) {
       std::vector<std::vector<int>> child_sources;
       child_sources.reserve(child_ids.size());
       for (int child_idx : child_ids) {
-        child_sources.push_back(ensure_source_ids(ctx, child_idx));
+        child_sources.push_back(
+            ensure_source_ids(ctx, ir_node_required(ctx, child_idx)));
       }
       for (std::size_t idx = 0; idx < child_ids.size(); ++idx) {
         const RankedNodeTransitionPlan &child_plan =
@@ -560,7 +575,8 @@ void RankedTransitionCompiler::compile_node(int node_idx) {
       std::vector<std::vector<int>> child_sources;
       child_sources.reserve(child_ids.size());
       for (int child_idx : child_ids) {
-        child_sources.push_back(ensure_source_ids(ctx, child_idx));
+        child_sources.push_back(
+            ensure_source_ids(ctx, ir_node_required(ctx, child_idx)));
       }
       for (std::size_t idx = 0; idx < child_ids.size(); ++idx) {
         const RankedNodeTransitionPlan &child_plan =
@@ -665,42 +681,6 @@ double sequence_prefix_density_resolved(
       transition_compiler ? transition_compiler : &local_transition_compiler;
 
   constexpr double kBranchEps = 1e-18;
-  std::vector<int> onset_source_ids;
-  onset_source_ids.reserve(ctx.accumulators.size());
-  const std::vector<TrialAccumulatorParams> *acc_params =
-      trial_params ? &trial_params->acc_params : nullptr;
-  for (std::size_t acc_i = 0; acc_i < ctx.accumulators.size(); ++acc_i) {
-    const uuber::NativeAccumulator &acc = ctx.accumulators[acc_i];
-    const TrialAccumulatorParams *override =
-        (acc_params && acc_i < acc_params->size()) ? &((*acc_params)[acc_i])
-                                                   : nullptr;
-    int onset_kind = override ? override->onset_kind : acc.onset_kind;
-    if (onset_kind == uuber::ONSET_AFTER_ACCUMULATOR) {
-      int src_idx =
-          override ? override->onset_source_acc_idx : acc.onset_source_acc_idx;
-      if (src_idx >= 0 && src_idx < static_cast<int>(ctx.accumulators.size())) {
-        int src_id = accumulator_label_id_of(ctx, src_idx);
-        if (src_id >= 0 && src_id != NA_INTEGER) {
-          onset_source_ids.push_back(src_id);
-        }
-      }
-    } else if (onset_kind == uuber::ONSET_AFTER_POOL) {
-      int src_idx = override ? override->onset_source_pool_idx
-                             : acc.onset_source_pool_idx;
-      if (src_idx >= 0 && src_idx < static_cast<int>(ctx.pools.size())) {
-        int src_id = pool_label_id_of(ctx, src_idx);
-        if (src_id >= 0 && src_id != NA_INTEGER) {
-          onset_source_ids.push_back(src_id);
-        }
-      }
-    }
-  }
-  sort_unique(onset_source_ids);
-  auto onset_source_contains = [&](int src_id) -> bool {
-    return std::binary_search(onset_source_ids.begin(), onset_source_ids.end(),
-                              src_id);
-  };
-
   std::vector<SequenceState> states;
   SequenceState init_state;
   init_state.weight = 1.0;
@@ -709,7 +689,6 @@ double sequence_prefix_density_resolved(
   (void)ensure_forced_bitset_capacity(ctx, init_state.forced_survive_bits,
                                       init_state.forced_survive_bits_valid);
   states.push_back(std::move(init_state));
-  ExactSourceTimeMap prefix_exact;
 
   for (std::size_t rank_idx = 0; rank_idx < rank_count; ++rank_idx) {
     if (kernel_runtime) {
@@ -721,17 +700,6 @@ double sequence_prefix_density_resolved(
     }
 
     int outcome_idx = outcome_indices[rank_idx];
-    std::vector<int> rank_onset_sources;
-    if (!onset_source_ids.empty()) {
-      std::vector<int> src_ids = ensure_source_ids(ctx, node_indices[rank_idx]);
-      rank_onset_sources.reserve(src_ids.size());
-      for (int src_id : src_ids) {
-        if (onset_source_contains(src_id)) {
-          rank_onset_sources.push_back(src_id);
-        }
-      }
-      sort_unique(rank_onset_sources);
-    }
     const uuber::OutcomeContextInfo &info =
         ctx.outcome_info[static_cast<std::size_t>(outcome_idx)];
     static const std::vector<int> kEmptyCompetitorIds;
@@ -754,7 +722,7 @@ double sequence_prefix_density_resolved(
       SequenceStateKey key = sequence_state_key(
           candidate.forced_complete_bits, candidate.forced_complete_bits_valid,
           candidate.forced_survive_bits, candidate.forced_survive_bits_valid,
-          candidate.exact_source_times, candidate.source_time_bounds);
+          candidate.time_constraints);
       auto it = next_state_index.find(key);
       if (it == next_state_index.end()) {
         std::size_t idx = next_states_collapsed.size();
@@ -769,20 +737,7 @@ double sequence_prefix_density_resolved(
       if (!std::isfinite(state.weight) || state.weight <= kBranchEps) {
         continue;
       }
-      ExactSourceTimeMap merged_exact = state.exact_source_times;
-      if (!prefix_exact.empty()) {
-        for (const auto &kv : prefix_exact) {
-          if (std::isfinite(kv.second)) {
-            merged_exact[kv.first] = kv.second;
-          }
-        }
-      }
-      SourceTimeBoundsMap merged_bounds = state.source_time_bounds;
-      if (!merged_exact.empty() && !merged_bounds.empty()) {
-        for (const auto &kv : merged_exact) {
-          merged_bounds.erase(kv.first);
-        }
-      }
+      TimeConstraintMap merged_time_constraints = state.time_constraints;
       uuber::BitsetState forced_complete_bits = state.forced_complete_bits;
       uuber::BitsetState forced_survive_bits = state.forced_survive_bits;
       bool forced_complete_bits_valid = state.forced_complete_bits_valid;
@@ -796,7 +751,7 @@ double sequence_prefix_density_resolved(
             forced_complete_bits_valid,
             forced_survive_bits_valid ? &forced_survive_bits : nullptr,
             forced_survive_bits_valid, component_idx, lower_t, ctx,
-            trial_type_key, trial_params, &merged_exact, &merged_bounds,
+            trial_type_key, trial_params, &merged_time_constraints,
             kernel_runtime);
         if (!std::isfinite(denom) || denom <= kBranchEps) {
           continue;
@@ -805,7 +760,7 @@ double sequence_prefix_density_resolved(
       int outcome_node_idx = node_indices[rank_idx];
       const bool has_transition = for_each_sequence_node_transition(
           *compiler, ctx, outcome_node_idx, t, component_idx, trial_params,
-          trial_type_key, &merged_exact, &merged_bounds, kernel_runtime,
+          trial_type_key, &merged_time_constraints, kernel_runtime,
           forced_complete_bits_valid ? &forced_complete_bits : nullptr,
           forced_complete_bits_valid,
           forced_survive_bits_valid ? &forced_survive_bits : nullptr,
@@ -814,7 +769,8 @@ double sequence_prefix_density_resolved(
               uuber::BitsetState &&scenario_complete_bits,
               bool scenario_complete_bits_valid,
               uuber::BitsetState &&scenario_survive_bits,
-              bool scenario_survive_bits_valid) {
+              bool scenario_survive_bits_valid,
+              TimeConstraintMap &&scenario_time_constraints) {
             if (!std::isfinite(scenario_weight) ||
                 scenario_weight <= kBranchEps) {
               return;
@@ -836,7 +792,8 @@ double sequence_prefix_density_resolved(
                   next_complete_bits_valid,
                   next_survive_bits_valid ? &next_survive_bits : nullptr,
                   next_survive_bits_valid, trial_type_key, trial_params,
-                  &merged_exact, &merged_bounds, kernel_runtime);
+                  &scenario_time_constraints,
+                  kernel_runtime);
               if (!std::isfinite(surv) || surv <= kBranchEps) {
                 return;
               }
@@ -848,6 +805,10 @@ double sequence_prefix_density_resolved(
                 for (int src_id : persistent_sources) {
                   set_forced_id_bit_strict(ctx, src_id, next_survive_bits,
                                            next_survive_bits_valid);
+                  if (!time_constraints_mark_survive(
+                          src_id, t, scenario_time_constraints)) {
+                    return;
+                  }
                 }
               }
             }
@@ -857,75 +818,7 @@ double sequence_prefix_density_resolved(
             next_state.forced_survive_bits = std::move(next_survive_bits);
             next_state.forced_complete_bits_valid = next_complete_bits_valid;
             next_state.forced_survive_bits_valid = next_survive_bits_valid;
-            next_state.exact_source_times = state.exact_source_times;
-            next_state.source_time_bounds = state.source_time_bounds;
-            if (!onset_source_ids.empty()) {
-              bool bounds_ok = true;
-              for (int src_id : onset_source_ids) {
-                if (!forced_bits_contains_label_id_strict(
-                        ctx, src_id, next_state.forced_survive_bits,
-                        next_state.forced_survive_bits_valid)) {
-                  continue;
-                }
-                if (next_state.exact_source_times.find(src_id) !=
-                    next_state.exact_source_times.end()) {
-                  continue;
-                }
-                if (prefix_exact.find(src_id) != prefix_exact.end()) {
-                  continue;
-                }
-                auto bound_it = next_state.source_time_bounds.find(src_id);
-                if (bound_it == next_state.source_time_bounds.end()) {
-                  bound_it = next_state.source_time_bounds
-                                 .emplace(src_id,
-                                          std::make_pair(
-                                              0.0,
-                                              std::numeric_limits<double>::infinity()))
-                                 .first;
-                }
-                auto &bound = bound_it->second;
-                bound.first = std::max(bound.first, t);
-                if (!(bound.second > bound.first)) {
-                  bounds_ok = false;
-                  break;
-                }
-              }
-              if (!bounds_ok) {
-                return;
-              }
-              for (int src_id : onset_source_ids) {
-                if (!forced_bits_contains_label_id_strict(
-                        ctx, src_id, next_state.forced_complete_bits,
-                        next_state.forced_complete_bits_valid)) {
-                  continue;
-                }
-                if (next_state.exact_source_times.find(src_id) !=
-                    next_state.exact_source_times.end()) {
-                  continue;
-                }
-                if (prefix_exact.find(src_id) != prefix_exact.end()) {
-                  continue;
-                }
-                auto bound_it = next_state.source_time_bounds.find(src_id);
-                if (bound_it == next_state.source_time_bounds.end()) {
-                  bound_it = next_state.source_time_bounds
-                                 .emplace(src_id,
-                                          std::make_pair(
-                                              0.0,
-                                              std::numeric_limits<double>::infinity()))
-                                 .first;
-                }
-                auto &bound = bound_it->second;
-                bound.second = std::min(bound.second, t);
-                if (!(bound.second > bound.first)) {
-                  bounds_ok = false;
-                  break;
-                }
-              }
-              if (!bounds_ok) {
-                return;
-              }
-            }
+            next_state.time_constraints = std::move(scenario_time_constraints);
             accumulate_next_state(std::move(next_state));
           });
       if (!has_transition) {
@@ -942,12 +835,6 @@ double sequence_prefix_density_resolved(
     }
     if (states.empty()) {
       return 0.0;
-    }
-
-    if (!rank_onset_sources.empty()) {
-      for (int src_id : rank_onset_sources) {
-        prefix_exact[src_id] = t;
-      }
     }
   }
 

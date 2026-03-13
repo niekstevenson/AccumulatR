@@ -1206,6 +1206,29 @@ build_context_from_proto(const NativePrepProto &proto) {
     set_mask_bit(all_component_mask, i);
   }
 
+  auto component_mask_from_offset =
+      [&](int mask_offset) -> std::vector<std::uint64_t> {
+    std::vector<std::uint64_t> mask(
+        static_cast<std::size_t>(ir.component_mask_words), 0ULL);
+    if (ir.component_mask_words <= 0 || mask_offset < 0) {
+      return mask;
+    }
+    const std::size_t begin = static_cast<std::size_t>(mask_offset);
+    const std::size_t end = begin + static_cast<std::size_t>(ir.component_mask_words);
+    if (end > ir.component_masks.size()) {
+      return mask;
+    }
+    std::copy(ir.component_masks.begin() + static_cast<std::ptrdiff_t>(begin),
+              ir.component_masks.begin() + static_cast<std::ptrdiff_t>(end),
+              mask.begin());
+    return mask;
+  };
+
+  auto append_node_component_mask =
+      [&](IrNode &ir_node, const std::vector<std::uint64_t> &mask) {
+        ir_node.component_mask_offset = append_mask_words(ir.component_masks, mask);
+      };
+
   std::unordered_map<int, int> label_id_to_first_outcome;
   for (std::size_t oi = 0; oi < ctx->outcome_label_ids.size(); ++oi) {
     int label_id = ctx->outcome_label_ids[oi];
@@ -1317,6 +1340,57 @@ build_context_from_proto(const NativePrepProto &proto) {
           append_mask_words(ir.component_masks, component_mask);
       ir_node.event_idx = static_cast<int>(ir.events.size());
       ir.events.push_back(std::move(event));
+      append_node_component_mask(ir_node, component_mask);
+    } else {
+      std::vector<std::uint64_t> component_mask = all_component_mask;
+      if (ir.component_mask_words > 0) {
+        if (ir_node.op == IrNodeOp::And && ir_node.child_count > 0 &&
+            ir_node.child_begin >= 0) {
+          component_mask = all_component_mask;
+          for (int child_i = 0; child_i < ir_node.child_count; ++child_i) {
+            const int child_idx = ir.node_children[static_cast<std::size_t>(
+                ir_node.child_begin + child_i)];
+            if (child_idx < 0 ||
+                child_idx >= static_cast<int>(ir.nodes.size())) {
+              continue;
+            }
+            const std::vector<std::uint64_t> child_mask =
+                component_mask_from_offset(
+                    ir.nodes[static_cast<std::size_t>(child_idx)]
+                        .component_mask_offset);
+            for (int word = 0; word < ir.component_mask_words; ++word) {
+              component_mask[static_cast<std::size_t>(word)] &=
+                  child_mask[static_cast<std::size_t>(word)];
+            }
+          }
+        } else if (ir_node.op == IrNodeOp::Or && ir_node.child_count > 0 &&
+                   ir_node.child_begin >= 0) {
+          component_mask.assign(
+              static_cast<std::size_t>(ir.component_mask_words), 0ULL);
+          for (int child_i = 0; child_i < ir_node.child_count; ++child_i) {
+            const int child_idx = ir.node_children[static_cast<std::size_t>(
+                ir_node.child_begin + child_i)];
+            if (child_idx < 0 ||
+                child_idx >= static_cast<int>(ir.nodes.size())) {
+              continue;
+            }
+            const std::vector<std::uint64_t> child_mask =
+                component_mask_from_offset(
+                    ir.nodes[static_cast<std::size_t>(child_idx)]
+                        .component_mask_offset);
+            for (int word = 0; word < ir.component_mask_words; ++word) {
+              component_mask[static_cast<std::size_t>(word)] |=
+                  child_mask[static_cast<std::size_t>(word)];
+            }
+          }
+        } else if (ir_node.op == IrNodeOp::Guard && ir_node.reference_idx >= 0 &&
+                   ir_node.reference_idx < static_cast<int>(ir.nodes.size())) {
+          component_mask = component_mask_from_offset(
+              ir.nodes[static_cast<std::size_t>(ir_node.reference_idx)]
+                  .component_mask_offset);
+        }
+      }
+      append_node_component_mask(ir_node, component_mask);
     }
 
     ir.nodes.push_back(std::move(ir_node));
@@ -1480,6 +1554,30 @@ build_context_from_proto(const NativePrepProto &proto) {
     event_a = n0.event_idx;
     event_b = n1.event_idx;
     return true;
+  };
+
+  auto generic_coupling_requires_exact =
+      [&](int node_idx, const std::vector<int> &competitor_nodes) -> bool {
+    if (node_idx < 0 || node_idx >= static_cast<int>(ir.nodes.size())) {
+      return false;
+    }
+    const IrNode &target = ir.nodes[static_cast<std::size_t>(node_idx)];
+    for (int competitor_idx : competitor_nodes) {
+      if (competitor_idx < 0 ||
+          competitor_idx >= static_cast<int>(ir.nodes.size())) {
+        continue;
+      }
+      const IrNode &competitor =
+          ir.nodes[static_cast<std::size_t>(competitor_idx)];
+      // Exact scenario evaluation is only required when the target branch
+      // changes competitor viability through shared sources. Disjoint guard
+      // or composite competitors already have exact dense/survival evaluators
+      // and should stay on the fast path.
+      if (mask_overlap(target, competitor)) {
+        return true;
+      }
+    }
+    return false;
   };
 
   auto detect_outcome_coupling_pair_ir =
@@ -1709,6 +1807,8 @@ build_context_from_proto(const NativePrepProto &proto) {
       spec = IrOutcomeCouplingOp();
       spec.kind = IrOutcomeCouplingKind::GenericNodeIntegral;
       spec.node_idx = out.node_idx;
+      spec.requires_exact_scenario_eval =
+          generic_coupling_requires_exact(out.node_idx, competitor_nodes);
     }
     spec.competitor_begin = out.competitor_begin;
     spec.competitor_count = out.competitor_count;

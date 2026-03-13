@@ -12,10 +12,8 @@
 #include "distribution_core.h"
 #include "forced_state.h"
 #include "native_utils.h"
+#include "time_constraints.h"
 #include "trial_params.h"
-
-using ExactSourceTimeMap = std::map<int, double>;
-using SourceTimeBoundsMap = std::map<int, std::pair<double, double>>;
 
 inline int accumulator_label_id_of(const uuber::NativeContext &ctx,
                                    int acc_idx) {
@@ -119,8 +117,7 @@ NodeEvalResult evaluator_eval_event_ref_idx(
     std::uint32_t node_flags, double t, int component_idx, EvalNeed need,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     bool include_na_donors, int outcome_idx_context,
-    const ExactSourceTimeMap *exact_source_times,
-    const SourceTimeBoundsMap *source_time_bounds,
+    const TimeConstraintMap *time_constraints,
     const ForcedScopeFilter *forced_scope_filter,
     const uuber::BitsetState *forced_complete_bits,
     const uuber::BitsetState *forced_survive_bits,
@@ -134,8 +131,7 @@ struct NodeEvalState {
                 const TrialParamSet *params_ptr = nullptr,
                 const std::string &trial_key = std::string(),
                 bool include_na = false, int outcome_idx_val = -1,
-                const ExactSourceTimeMap *exact_source_times_ptr = nullptr,
-                const SourceTimeBoundsMap *source_time_bounds_ptr = nullptr,
+                const TimeConstraintMap *time_constraints_ptr = nullptr,
                 const ForcedScopeFilter *forced_scope_filter_ptr = nullptr,
                 const uuber::BitsetState *forced_complete_bits_ptr = nullptr,
                 bool forced_complete_bits_ptr_valid = false,
@@ -148,11 +144,12 @@ struct NodeEvalState {
             evaluator_component_cache_key(ctx_, component_idx_val, trial_key)),
         include_na_donors(include_na), component_idx(component_idx_val),
         outcome_idx(outcome_idx_val),
-        exact_source_times(exact_source_times_ptr),
-        source_time_bounds(source_time_bounds_ptr),
         forced_scope_filter(nullptr),
         trial_params_soa(nullptr),
         forced_label_id_to_bit_idx(nullptr) {
+    if (time_constraints_ptr != nullptr && !time_constraints_ptr->empty()) {
+      time_constraints = *time_constraints_ptr;
+    }
     trial_params_soa = resolve_trial_params_soa(ctx, trial_params);
     bool forced_complete_valid_resolved = forced_complete_bits_ptr_valid;
     bool forced_survive_valid_resolved = forced_survive_bits_ptr_valid;
@@ -228,8 +225,7 @@ struct NodeEvalState {
   bool include_na_donors;
   int component_idx;
   int outcome_idx;
-  const ExactSourceTimeMap *exact_source_times;
-  const SourceTimeBoundsMap *source_time_bounds;
+  TimeConstraintMap time_constraints;
   const ForcedScopeFilter *forced_scope_filter;
   const uuber::TrialParamsSoA *trial_params_soa;
   const std::unordered_map<int, int> *forced_label_id_to_bit_idx;
@@ -247,8 +243,7 @@ inline bool kernel_runtime_cache_safe(const NodeEvalState &state) {
   return state.forced_scope_filter == nullptr &&
          !(state.forced_complete_bits_valid && state.forced_complete_bits.any()) &&
          !(state.forced_survive_bits_valid && state.forced_survive_bits.any()) &&
-         state.exact_source_times == nullptr &&
-         state.source_time_bounds == nullptr;
+         state.time_constraints.empty();
 }
 
 inline void apply_transition_mask_words(
@@ -325,24 +320,21 @@ struct GuardEvalInput {
   bool has_scoped_forced{false};
   const TrialParamSet *trial_params;
   const uuber::TrialParamsSoA *trial_params_soa{nullptr};
-  const ExactSourceTimeMap *exact_source_times{nullptr};
-  const SourceTimeBoundsMap *source_time_bounds{nullptr};
+  const TimeConstraintMap *time_constraints{nullptr};
 };
 
 bool evaluator_eval_node_with_forced_state_view_batch(
     const uuber::NativeContext &ctx, int node_id_or_idx,
     const std::vector<double> &times, int component_idx, EvalNeed need,
     const TrialParamSet *trial_params, const std::string &trial_key,
-    const ExactSourceTimeMap *exact_source_times,
-    const SourceTimeBoundsMap *source_time_bounds,
+    const TimeConstraintMap *time_constraints,
     const ForcedStateView &forced_state,
     uuber::KernelNodeBatchValues &out_values);
 GuardEvalInput evaluator_make_guard_input(
     const uuber::NativeContext &ctx, int node_idx, int component_idx,
     const std::string *trial_type_key, const TrialParamSet *trial_params,
     const uuber::TrialParamsSoA *trial_params_soa,
-    const ExactSourceTimeMap *exact_source_times,
-    const SourceTimeBoundsMap *source_time_bounds,
+    const TimeConstraintMap *time_constraints,
     const ForcedScopeFilter *forced_scope_filter,
     const uuber::BitsetState *forced_complete_bits,
     const uuber::BitsetState *forced_survive_bits,
@@ -353,12 +345,11 @@ inline GuardEvalInput make_guard_input_forced_state(
     const uuber::NativeContext &ctx, int node_idx, int component_idx,
     const std::string *trial_type_key, const TrialParamSet *trial_params,
     const uuber::TrialParamsSoA *trial_params_soa,
-    const ExactSourceTimeMap *exact_source_times,
-    const SourceTimeBoundsMap *source_time_bounds,
+    const TimeConstraintMap *time_constraints,
     const ForcedStateView &forced_state_view) {
   return evaluator_make_guard_input(
       ctx, node_idx, component_idx, trial_type_key, trial_params,
-      trial_params_soa, exact_source_times, source_time_bounds, nullptr,
+      trial_params_soa, time_constraints, nullptr,
       nullptr, nullptr, nullptr, &forced_state_view);
 }
 
@@ -387,8 +378,7 @@ double evaluator_evaluate_survival_with_forced(
     bool forced_survive_bits_valid, int component_idx, double t,
     const uuber::NativeContext &ctx, const std::string &trial_key,
     const TrialParamSet *trial_params,
-    const ExactSourceTimeMap *exact_source_times,
-    const SourceTimeBoundsMap *source_time_bounds,
+    const TimeConstraintMap *time_constraints,
     uuber::KernelRuntimeState *kernel_runtime);
 double competitor_survival_internal(
     const uuber::NativeContext &ctx, const std::vector<int> &competitor_ids,
@@ -398,8 +388,7 @@ double competitor_survival_internal(
     const uuber::BitsetState *forced_survive_bits_in,
     bool forced_survive_bits_in_valid, const std::string &trial_type_key,
     const TrialParamSet *trial_params,
-    const ExactSourceTimeMap *exact_source_times,
-    const SourceTimeBoundsMap *source_time_bounds,
+    const TimeConstraintMap *time_constraints,
     uuber::KernelRuntimeState *kernel_runtime);
 double competitor_survival_from_state_compiled_ops(
     const uuber::NativeContext &ctx, const std::vector<int> &competitor_ids,
@@ -415,7 +404,6 @@ bool evaluator_node_density_with_competitors_batch_internal(
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     bool include_na_donors, int outcome_idx_context,
     std::vector<double> &density_out,
-    const ExactSourceTimeMap *exact_source_times,
-    const SourceTimeBoundsMap *source_time_bounds,
+    const TimeConstraintMap *time_constraints,
     uuber::KernelBatchRuntimeState *kernel_batch_runtime);
 void invalidate_kernel_runtime_root(NodeEvalState &state);

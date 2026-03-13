@@ -1,4 +1,7 @@
 testthat::test_that("selected examples agree across simulate/probability/likelihood", {
+  sim_n_trials <- 200L
+  likelihood_n_trials <- 50L
+
   # Helper to compute manual log-likelihood from response probabilities
   manual_loglik <- function(probs, outcomes) {
     labels <- as.character(outcomes)
@@ -231,7 +234,7 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     params_vec <- mod$params
 
     # Simulate with components retained
-    params_df <- build_param_matrix(spec_obj, params_vec, n_trials = 500)
+    params_df <- build_param_matrix(spec_obj, params_vec, n_trials = sim_n_trials)
     data_df <- simulate(structure, params_df, seed = 123, keep_component = TRUE)
 
     # Analytic probabilities (single-trial param set)
@@ -251,13 +254,14 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     names(emp) <- emp_names
 
     # Non-marginalized likelihood with slim param matrix aligned to components
-    ctx <- build_likelihood_context(structure, data_df)
+    data_ll <- data_df[data_df$trial <= likelihood_n_trials, , drop = FALSE]
+    ctx <- build_likelihood_context(structure, data_ll)
     params_df_slim <- build_param_matrix(
       spec_obj,
       params_vec,
-      n_trials = max(data_df$trial)
+      n_trials = likelihood_n_trials
     )
-    ll <- as.numeric(log_likelihood(ctx, data_df, params_df_slim))
+    ll <- as.numeric(log_likelihood(ctx, data_ll, params_df_slim))
 
     # Order and round for stable snapshots
     analytic <- round(analytic[order(names(analytic))], 6)

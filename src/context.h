@@ -90,6 +90,7 @@ struct IrNode {
   int source_id_count{0};
   int source_mask_begin{-1};
   int source_mask_count{0};
+  int component_mask_offset{-1};
   int reference_idx{-1};
   int blocker_idx{-1};
   std::uint32_t flags{IR_NODE_FLAG_NONE};
@@ -117,6 +118,7 @@ struct IrOutcomeCouplingOp {
   int node_idx{-1};
   int competitor_begin{-1};
   int competitor_count{0};
+  bool requires_exact_scenario_eval{false};
   int gate_event_idx{-1};
   int target_event_idx{-1};
   int aux_event_begin{-1};

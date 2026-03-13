@@ -56,6 +56,9 @@ std::uint64_t compute_trial_param_fingerprint(const TrialParamSet &params);
 void refresh_trial_param_fingerprint(TrialParamSet &params);
 bool trial_paramsets_equivalent(const TrialParamSet &a,
                                 const TrialParamSet &b);
+std::uint64_t compute_trial_param_value_fingerprint(const TrialParamSet &params);
+bool trial_paramsets_value_equivalent(const TrialParamSet &a,
+                                      const TrialParamSet &b);
 uuber::NAMapCacheKey
 build_na_map_cache_key_idx(const uuber::OutcomeContextInfo &info,
                            const TrialParamSet *params_ptr,

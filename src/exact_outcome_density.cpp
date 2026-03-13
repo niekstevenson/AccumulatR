@@ -15,17 +15,6 @@
 
 namespace {
 
-struct ExactScenarioPoint {
-  double t{0.0};
-  std::size_t density_index{0u};
-  double weight{0.0};
-  uuber::BitsetState forced_complete_bits;
-  uuber::BitsetState forced_survive_bits;
-  bool forced_complete_bits_valid{false};
-  bool forced_survive_bits_valid{false};
-  TimeConstraintMap time_constraints;
-};
-
 enum class RelativeSelfConstraintKind : std::uint8_t {
   kNone = 0u,
   kForcedComplete,
@@ -378,9 +367,41 @@ inline void build_filtered_forced_bits(
   }
 }
 
-inline std::vector<int> ensure_source_ids_dense_idx(
+inline std::vector<int> exact_relevant_source_ids_for_node(
     const uuber::NativeContext &ctx, int node_idx) {
-  return ensure_source_ids(ctx, ir_node_required(ctx, node_idx));
+  const uuber::IrNode &node = ir_node_required(ctx, node_idx);
+  std::vector<int> ids = ensure_source_ids(ctx, node);
+
+  if ((node.op == uuber::IrNodeOp::EventAcc ||
+       node.op == uuber::IrNodeOp::EventPool) &&
+      node.event_idx >= 0 &&
+      node.event_idx < static_cast<int>(ctx.ir.events.size())) {
+    const uuber::IrEvent &event =
+        ctx.ir.events[static_cast<std::size_t>(node.event_idx)];
+    if (event.acc_idx >= 0 &&
+        event.acc_idx < static_cast<int>(ctx.accumulators.size())) {
+      const uuber::NativeAccumulator &acc =
+          ctx.accumulators[static_cast<std::size_t>(event.acc_idx)];
+      if (acc.onset_kind == uuber::ONSET_AFTER_ACCUMULATOR &&
+          acc.onset_source_acc_idx >= 0 &&
+          acc.onset_source_acc_idx < static_cast<int>(ctx.accumulators.size())) {
+        ids.push_back(accumulator_label_id_of(ctx, acc.onset_source_acc_idx));
+      } else if (acc.onset_kind == uuber::ONSET_AFTER_POOL &&
+                 acc.onset_source_pool_idx >= 0 &&
+                 acc.onset_source_pool_idx < static_cast<int>(ctx.pools.size())) {
+        ids.push_back(pool_label_id_of(ctx, acc.onset_source_pool_idx));
+      }
+    }
+  }
+
+  if (node.op == uuber::IrNodeOp::Guard && node.blocker_idx >= 0) {
+    std::vector<int> blocker_sources =
+        evaluator_gather_blocker_sources(ctx, node_idx);
+    ids.insert(ids.end(), blocker_sources.begin(), blocker_sources.end());
+  }
+
+  sort_unique(ids);
+  return ids;
 }
 
 struct ExactSharedStateStorage {
@@ -650,7 +671,7 @@ bool exact_eval_event_batch_common(
   }
   if (event.node_idx >= 0) {
     const std::vector<int> event_source_ids =
-        ensure_source_ids_dense_idx(ctx, event.node_idx);
+        exact_relevant_source_ids_for_node(ctx, event.node_idx);
     return exact_eval_with_shared_relevant_state(
         ctx, points, active_mask, event_source_ids, component_idx,
         trial_params, trial_type_key,
@@ -695,7 +716,7 @@ bool exact_eval_guard_batch_common(
   }
   if (op.node_idx >= 0) {
     const std::vector<int> guard_source_ids =
-        ensure_source_ids_dense_idx(ctx, op.node_idx);
+        exact_relevant_source_ids_for_node(ctx, op.node_idx);
     return exact_eval_with_shared_relevant_state(
         ctx, points, active_mask, guard_source_ids, component_idx,
         trial_params, trial_type_key,
@@ -811,7 +832,7 @@ bool exact_eval_node_batch_with_points(
   }
 
   const std::vector<int> relevant_source_ids =
-      ensure_source_ids_dense_idx(ctx, node_idx);
+      exact_relevant_source_ids_for_node(ctx, node_idx);
   auto pointwise_fallback = [&]() -> bool {
     const uuber::TrialParamsSoA *trial_params_soa =
         resolve_trial_params_soa(ctx, trial_params);
@@ -869,9 +890,11 @@ bool exact_eval_node_batch_with_points(
       pointwise_fallback);
 }
 
-bool exact_collect_scenarios_batch(
+bool exact_collect_scenarios_batch_from_points_impl(
     RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
-    int node_idx, const std::vector<double> &times, NodeEvalState &state,
+    int node_idx, const std::vector<ExactScenarioPoint> &seed_points,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key,
     std::vector<ExactScenarioPoint> &scenario_points) {
   scenario_points.clear();
   const RankedNodeTransitionPlan &plan = compiler.plan_for_node(node_idx);
@@ -879,28 +902,17 @@ bool exact_collect_scenarios_batch(
     return false;
   }
 
-  std::vector<std::uint8_t> valid_times(times.size(), 0u);
-  for (std::size_t i = 0; i < times.size(); ++i) {
-    if (std::isfinite(times[i]) && times[i] >= 0.0) {
-      valid_times[i] = 1u;
-    }
-  }
-
+  scenario_points.reserve(seed_points.size() * plan.transitions.size());
   for (const RankedTransitionTemplate &transition : plan.transitions) {
-    std::vector<ExactScenarioPoint> transition_points(times.size());
-    std::vector<std::uint8_t> active = valid_times;
+    std::vector<ExactScenarioPoint> transition_points = seed_points;
+    std::vector<std::uint8_t> active(transition_points.size(), 0u);
     bool any_active = false;
-    for (std::size_t i = 0; i < times.size(); ++i) {
-      ExactScenarioPoint &point = transition_points[i];
-      point.t = times[i];
-      point.density_index = i;
-      point.weight = (active[i] != 0u) ? 1.0 : 0.0;
-      point.forced_complete_bits = state.forced_complete_bits;
-      point.forced_survive_bits = state.forced_survive_bits;
-      point.forced_complete_bits_valid = state.forced_complete_bits_valid;
-      point.forced_survive_bits_valid = state.forced_survive_bits_valid;
-      point.time_constraints = state.time_constraints;
-      any_active = any_active || (active[i] != 0u);
+    for (std::size_t i = 0; i < transition_points.size(); ++i) {
+      const ExactScenarioPoint &point = transition_points[i];
+      const bool is_active = std::isfinite(point.t) && point.t >= 0.0 &&
+                             std::isfinite(point.weight) && point.weight > 0.0;
+      active[i] = is_active ? 1u : 0u;
+      any_active = any_active || is_active;
     }
     if (!any_active) {
       continue;
@@ -916,9 +928,8 @@ bool exact_collect_scenarios_batch(
                 ? EvalNeed::kDensity
                 : EvalNeed::kCDF;
         if (!exact_eval_node_batch_with_points(
-                ctx, step.node_idx, transition_points, state.component_idx,
-                state.trial_params, state.trial_type_key, step_need, values,
-                &active)) {
+                ctx, step.node_idx, transition_points, component_idx,
+                trial_params, trial_type_key, step_need, values, &active)) {
           transition_valid = false;
           break;
         }
@@ -950,9 +961,9 @@ bool exact_collect_scenarios_batch(
         }
         uuber::KernelNodeBatchValues blocker_values;
         if (!exact_eval_node_batch_with_points(
-                ctx, guard_node.blocker_idx, transition_points,
-                state.component_idx, state.trial_params, state.trial_type_key,
-                EvalNeed::kSurvival, blocker_values, &active)) {
+                ctx, guard_node.blocker_idx, transition_points, component_idx,
+                trial_params, trial_type_key, EvalNeed::kSurvival,
+                blocker_values, &active)) {
           transition_valid = false;
           break;
         }
@@ -1076,6 +1087,28 @@ bool exact_collect_scenarios_batch(
   return !scenario_points.empty();
 }
 
+bool exact_collect_scenarios_batch_impl(
+    RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
+    int node_idx, const std::vector<double> &times, NodeEvalState &state,
+    std::vector<ExactScenarioPoint> &scenario_points) {
+  std::vector<ExactScenarioPoint> seed_points(times.size());
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    ExactScenarioPoint &point = seed_points[i];
+    point.t = times[i];
+    point.density_index = i;
+    point.weight =
+        (std::isfinite(times[i]) && times[i] >= 0.0) ? 1.0 : 0.0;
+    point.forced_complete_bits = state.forced_complete_bits;
+    point.forced_survive_bits = state.forced_survive_bits;
+    point.forced_complete_bits_valid = state.forced_complete_bits_valid;
+    point.forced_survive_bits_valid = state.forced_survive_bits_valid;
+    point.time_constraints = state.time_constraints;
+  }
+  return exact_collect_scenarios_batch_from_points_impl(
+      compiler, ctx, node_idx, seed_points, state.component_idx,
+      state.trial_params, state.trial_type_key, scenario_points);
+}
+
 std::vector<int> bitset_to_label_ids(const uuber::NativeContext &ctx,
                                      const uuber::BitsetState &bits,
                                      bool bits_valid) {
@@ -1174,7 +1207,7 @@ Rcpp::List scenario_to_debug_list(const uuber::NativeContext &ctx,
           bounds_to_list(scenario.time_constraints));
 }
 
-bool exact_competitor_survival_batch(
+bool exact_competitor_survival_batch_impl(
     const uuber::NativeContext &ctx,
     const uuber::CompetitorClusterCacheEntry &competitor_cache,
     int component_idx, const TrialParamSet *trial_params,
@@ -1302,6 +1335,47 @@ double exact_outcome_density_at_time(
 }
 
 } // namespace
+
+bool exact_eval_node_batch_from_points(
+    const uuber::NativeContext &ctx, int node_idx,
+    const std::vector<ExactScenarioPoint> &points, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    EvalNeed need, uuber::KernelNodeBatchValues &out_values) {
+  return exact_eval_node_batch_with_points(ctx, node_idx, points, component_idx,
+                                           trial_params, trial_type_key, need,
+                                           out_values, nullptr);
+}
+
+bool exact_collect_scenarios_batch(
+    RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
+    int node_idx, const std::vector<double> &times, NodeEvalState &state,
+    std::vector<ExactScenarioPoint> &scenario_points) {
+  return exact_collect_scenarios_batch_impl(compiler, ctx, node_idx, times,
+                                            state, scenario_points);
+}
+
+bool exact_collect_scenarios_batch_from_points(
+    RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
+    int node_idx, const std::vector<ExactScenarioPoint> &seed_points,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key,
+    std::vector<ExactScenarioPoint> &scenario_points) {
+  return exact_collect_scenarios_batch_from_points_impl(
+      compiler, ctx, node_idx, seed_points, component_idx, trial_params,
+      trial_type_key, scenario_points);
+}
+
+bool exact_competitor_survival_batch(
+    const uuber::NativeContext &ctx,
+    const uuber::CompetitorClusterCacheEntry &competitor_cache,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key,
+    const std::vector<ExactScenarioPoint> &points,
+    std::vector<double> &survival_out) {
+  return exact_competitor_survival_batch_impl(
+      ctx, competitor_cache, component_idx, trial_params, trial_type_key,
+      points, survival_out);
+}
 
 double exact_outcome_density_from_state(
     const uuber::NativeContext &ctx, int node_idx,

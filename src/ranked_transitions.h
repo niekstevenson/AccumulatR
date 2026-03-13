@@ -78,6 +78,17 @@ double sequence_prefix_density_resolved(
         nullptr,
     const std::vector<std::vector<int>> *step_persistent_sources = nullptr);
 
+bool sequence_prefix_density_batch_resolved(
+    const uuber::NativeContext &ctx, const std::vector<int> &outcome_indices,
+    const std::vector<int> &node_indices,
+    const std::vector<const double *> &times_by_trial, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    std::vector<double> &density_out,
+    RankedTransitionCompiler *transition_compiler = nullptr,
+    const std::vector<const std::vector<int> *> *step_competitor_ids_ptrs =
+        nullptr,
+    const std::vector<std::vector<int>> *step_persistent_sources = nullptr);
+
 bool collect_exact_node_scenarios(
     RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
     int node_idx, double t, int component_idx,

@@ -157,3 +157,41 @@ testthat::test_that("ranked likelihood handles pool + shared trigger models", {
   ll <- as.numeric(log_likelihood(build_likelihood_context(structure, data_df), data_df, params_df))
   testthat::expect_true(is.finite(ll))
 })
+
+testthat::test_that("ranked chained-onset trials match per-trial evaluation", {
+  spec <- race_spec(n_outcomes = 2L) |>
+    add_accumulator("a", "lognormal") |>
+    add_accumulator("b", "lognormal", onset = after("a")) |>
+    add_outcome("A", "a") |>
+    add_outcome("B", "b")
+
+  structure <- finalize_model(spec)
+  params <- c(
+    a.meanlog = log(0.30), a.sdlog = 0.16, a.q = 0, a.t0 = 0,
+    b.meanlog = log(0.22), b.sdlog = 0.16, b.q = 0, b.t0 = 0
+  )
+  data_df <- data.frame(
+    trial = 1:4,
+    R = factor(rep("A", 4), levels = c("A", "B")),
+    rt = c(0.29, 0.31, 0.34, 0.37),
+    R2 = factor(rep("B", 4), levels = c("A", "B")),
+    rt2 = c(0.51, 0.56, 0.60, 0.65)
+  )
+  params_df <- build_param_matrix(spec, params, n_trials = nrow(data_df))
+
+  ctx <- build_likelihood_context(structure, data_df)
+  ll_batched <- as.numeric(log_likelihood(ctx, data_df, params_df))
+
+  ll_split <- 0.0
+  for (i in seq_len(nrow(data_df))) {
+    row_df <- data_df[i, , drop = FALSE]
+    row_params <- build_param_matrix(spec, params, n_trials = 1L)
+    ll_split <- ll_split + as.numeric(log_likelihood(
+      build_likelihood_context(structure, row_df),
+      row_df,
+      row_params
+    ))
+  }
+
+  testthat::expect_equal(ll_batched, ll_split, tolerance = 1e-10)
+})

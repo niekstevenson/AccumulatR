@@ -1,14 +1,19 @@
 #include "ranked_transitions.h"
 
+#include <Rcpp.h>
+
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <queue>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
+#include "competitor_cache.h"
 #include "evaluator_internal.h"
+#include "exact_outcome_density.h"
 
 namespace {
 
@@ -60,6 +65,42 @@ struct SequenceStateKeyHash {
     return seed;
   }
 };
+
+struct TrialSequenceState {
+  int trial_slot{-1};
+  double weight{0.0};
+  uuber::BitsetState forced_complete_bits;
+  uuber::BitsetState forced_survive_bits;
+  bool forced_complete_bits_valid{false};
+  bool forced_survive_bits_valid{false};
+  TimeConstraintMap time_constraints;
+};
+
+struct TrialSequenceStateKey {
+  int trial_slot{-1};
+  SequenceStateKey state_key;
+
+  bool operator==(const TrialSequenceStateKey &other) const noexcept {
+    return trial_slot == other.trial_slot && state_key == other.state_key;
+  }
+};
+
+struct TrialSequenceStateKeyHash {
+  std::size_t operator()(const TrialSequenceStateKey &key) const noexcept {
+    std::size_t seed =
+        SequenceStateKeyHash{}(key.state_key) ^ static_cast<std::size_t>(key.trial_slot);
+    seed ^= 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
+    return seed;
+  }
+};
+
+inline bool ranked_batch_debug_enabled() {
+  static const bool enabled = []() {
+    const char *raw = std::getenv("ACCUMULATR_DEBUG_RANKED_BATCH");
+    return raw != nullptr && raw[0] != '\0' && raw[0] != '0';
+  }();
+  return enabled;
+}
 
 inline std::uint64_t ranked_hash_bitset(const uuber::BitsetState &bits,
                                         bool bits_valid) {
@@ -848,4 +889,378 @@ double sequence_prefix_density_resolved(
     return 0.0;
   }
   return total;
+}
+
+bool sequence_prefix_density_batch_resolved(
+    const uuber::NativeContext &ctx, const std::vector<int> &outcome_indices,
+    const std::vector<int> &node_indices,
+    const std::vector<const double *> &times_by_trial, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    std::vector<double> &density_out,
+    RankedTransitionCompiler *transition_compiler,
+    const std::vector<const std::vector<int> *> *step_competitor_ids_ptrs,
+    const std::vector<std::vector<int>> *step_persistent_sources) {
+  density_out.assign(times_by_trial.size(), 0.0);
+  const std::size_t trial_count = times_by_trial.size();
+  const std::size_t rank_count = outcome_indices.size();
+  if (trial_count == 0u) {
+    return true;
+  }
+  if (outcome_indices.empty() || node_indices.size() != rank_count ||
+      step_competitor_ids_ptrs == nullptr ||
+      step_persistent_sources == nullptr ||
+      step_competitor_ids_ptrs->size() != rank_count ||
+      step_persistent_sources->size() != rank_count) {
+    return false;
+  }
+  for (const double *times_ptr : times_by_trial) {
+    if (times_ptr == nullptr) {
+      return false;
+    }
+  }
+
+  RankedTransitionCompiler local_transition_compiler(ctx);
+  RankedTransitionCompiler *compiler =
+      transition_compiler ? transition_compiler : &local_transition_compiler;
+
+  constexpr double kBranchEps = 1e-18;
+  std::vector<TrialSequenceState> states;
+  states.reserve(trial_count);
+  for (std::size_t trial_slot = 0; trial_slot < trial_count; ++trial_slot) {
+    TrialSequenceState init_state;
+    init_state.trial_slot = static_cast<int>(trial_slot);
+    init_state.weight = 1.0;
+    (void)ensure_forced_bitset_capacity(ctx, init_state.forced_complete_bits,
+                                        init_state.forced_complete_bits_valid);
+    (void)ensure_forced_bitset_capacity(ctx, init_state.forced_survive_bits,
+                                        init_state.forced_survive_bits_valid);
+    states.push_back(std::move(init_state));
+  }
+
+  for (std::size_t rank_idx = 0; rank_idx < rank_count; ++rank_idx) {
+    const int outcome_idx = outcome_indices[rank_idx];
+    if (outcome_idx < 0 ||
+        outcome_idx >= static_cast<int>(ctx.outcome_info.size())) {
+      return false;
+    }
+    const int outcome_node_idx = node_indices[rank_idx];
+    if (outcome_node_idx < 0 ||
+        outcome_node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+      return false;
+    }
+    const uuber::OutcomeContextInfo &info =
+        ctx.outcome_info[static_cast<std::size_t>(outcome_idx)];
+    const int info_node_idx = resolve_dense_node_idx_required(ctx, info.node_id);
+    static const std::vector<int> kEmptyCompetitorIds;
+    const std::vector<int> &competitors =
+        ((*step_competitor_ids_ptrs)[rank_idx] != nullptr)
+            ? *(*step_competitor_ids_ptrs)[rank_idx]
+            : kEmptyCompetitorIds;
+    const std::vector<int> &persistent_sources =
+        (*step_persistent_sources)[rank_idx];
+
+    std::unordered_map<TrialSequenceStateKey, std::size_t,
+                       TrialSequenceStateKeyHash>
+        next_state_index;
+    std::vector<TrialSequenceState> next_states_collapsed;
+    next_states_collapsed.reserve(states.size() * 2u);
+
+    auto accumulate_next_state = [&](TrialSequenceState &&candidate) {
+      if (!std::isfinite(candidate.weight) || candidate.weight <= kBranchEps) {
+        return;
+      }
+      TrialSequenceStateKey key;
+      key.trial_slot = candidate.trial_slot;
+      key.state_key = sequence_state_key(
+          candidate.forced_complete_bits, candidate.forced_complete_bits_valid,
+          candidate.forced_survive_bits, candidate.forced_survive_bits_valid,
+          candidate.time_constraints);
+      auto it = next_state_index.find(key);
+      if (it == next_state_index.end()) {
+        const std::size_t idx = next_states_collapsed.size();
+        next_state_index.emplace(std::move(key), idx);
+        next_states_collapsed.push_back(std::move(candidate));
+      } else {
+        next_states_collapsed[it->second].weight += candidate.weight;
+      }
+    };
+
+    std::vector<std::size_t> active_state_indices;
+    active_state_indices.reserve(states.size());
+    std::vector<ExactScenarioPoint> rank_seed_points;
+    rank_seed_points.reserve(states.size());
+    std::vector<ExactScenarioPoint> denom_points;
+    if (rank_idx > 0u) {
+      denom_points.reserve(states.size());
+    }
+
+    bool valid_rank = true;
+    for (std::size_t state_idx = 0; state_idx < states.size(); ++state_idx) {
+      const TrialSequenceState &state = states[state_idx];
+      if (!std::isfinite(state.weight) || state.weight <= kBranchEps) {
+        continue;
+      }
+      const int trial_slot = state.trial_slot;
+      if (trial_slot < 0 ||
+          static_cast<std::size_t>(trial_slot) >= times_by_trial.size()) {
+        valid_rank = false;
+        break;
+      }
+
+      const double t =
+          times_by_trial[static_cast<std::size_t>(trial_slot)][rank_idx];
+      if (!std::isfinite(t) || t < 0.0) {
+        valid_rank = false;
+        break;
+      }
+
+      ExactScenarioPoint rank_point;
+      rank_point.t = t;
+      rank_point.density_index = active_state_indices.size();
+      rank_point.weight = 1.0;
+      rank_point.forced_complete_bits = state.forced_complete_bits;
+      rank_point.forced_survive_bits = state.forced_survive_bits;
+      rank_point.forced_complete_bits_valid = state.forced_complete_bits_valid;
+      rank_point.forced_survive_bits_valid = state.forced_survive_bits_valid;
+      rank_point.time_constraints = state.time_constraints;
+
+      if (rank_idx > 0u) {
+        const double lower_t =
+            times_by_trial[static_cast<std::size_t>(trial_slot)][rank_idx - 1u];
+        if (!std::isfinite(lower_t) || lower_t < 0.0) {
+          valid_rank = false;
+          break;
+        }
+        ExactScenarioPoint denom_point = rank_point;
+        denom_point.t = lower_t;
+        denom_points.push_back(std::move(denom_point));
+      }
+
+      active_state_indices.push_back(state_idx);
+      rank_seed_points.push_back(std::move(rank_point));
+    }
+    if (!valid_rank) {
+      return false;
+    }
+    if (active_state_indices.empty()) {
+      return true;
+    }
+
+    std::vector<double> denom(active_state_indices.size(), 1.0);
+    if (rank_idx > 0u) {
+      uuber::KernelNodeBatchValues denom_values;
+      if (!exact_eval_node_batch_from_points(
+              ctx, info_node_idx, denom_points, component_idx, trial_params,
+              trial_type_key, EvalNeed::kSurvival, denom_values) ||
+          denom_values.survival.size() != denom.size()) {
+        return false;
+      }
+      for (std::size_t i = 0; i < denom.size(); ++i) {
+        denom[i] = denom_values.survival[i];
+      }
+    }
+
+    if (ranked_batch_debug_enabled() && rank_idx > 0u) {
+      static int denom_mismatch_budget = 10;
+      constexpr double kDebugTol = 1e-10;
+      for (std::size_t i = 0; i < active_state_indices.size(); ++i) {
+        const TrialSequenceState &source_state = states[active_state_indices[i]];
+        const double lower_t =
+            times_by_trial[static_cast<std::size_t>(source_state.trial_slot)][rank_idx - 1u];
+        const double scalar_denom = evaluator_evaluate_survival_with_forced(
+            info.node_id,
+            source_state.forced_complete_bits_valid
+                ? &source_state.forced_complete_bits
+                : nullptr,
+            source_state.forced_complete_bits_valid,
+            source_state.forced_survive_bits_valid
+                ? &source_state.forced_survive_bits
+                : nullptr,
+            source_state.forced_survive_bits_valid, component_idx, lower_t, ctx,
+            trial_type_key, trial_params, &source_state.time_constraints,
+            nullptr);
+        if (std::fabs(scalar_denom - denom[i]) > kDebugTol &&
+            denom_mismatch_budget > 0) {
+          --denom_mismatch_budget;
+          Rcpp::Rcout << "ranked_batch_denom_mismatch rank=" << rank_idx
+                      << " trial_slot=" << source_state.trial_slot
+                      << " batch=" << denom[i]
+                      << " scalar=" << scalar_denom << "\n";
+        }
+      }
+    }
+
+    std::vector<ExactScenarioPoint> scenario_points;
+    if (!exact_collect_scenarios_batch_from_points(
+            *compiler, ctx, outcome_node_idx, rank_seed_points, component_idx,
+            trial_params, trial_type_key, scenario_points)) {
+      return true;
+    }
+
+    if (ranked_batch_debug_enabled()) {
+      static int scenario_mismatch_budget = 10;
+      constexpr double kDebugTol = 1e-10;
+      std::vector<double> batch_transition_weight(active_state_indices.size(),
+                                                  0.0);
+      for (const ExactScenarioPoint &point : scenario_points) {
+        if (point.density_index < batch_transition_weight.size()) {
+          batch_transition_weight[point.density_index] += point.weight;
+        }
+      }
+      for (std::size_t i = 0; i < active_state_indices.size(); ++i) {
+        const TrialSequenceState &source_state = states[active_state_indices[i]];
+        const double t =
+            times_by_trial[static_cast<std::size_t>(source_state.trial_slot)][rank_idx];
+        double scalar_transition_weight = 0.0;
+        (void)for_each_sequence_node_transition(
+            *compiler, ctx, outcome_node_idx, t, component_idx, trial_params,
+            trial_type_key, &source_state.time_constraints, nullptr,
+            source_state.forced_complete_bits_valid
+                ? &source_state.forced_complete_bits
+                : nullptr,
+            source_state.forced_complete_bits_valid,
+            source_state.forced_survive_bits_valid
+                ? &source_state.forced_survive_bits
+                : nullptr,
+            source_state.forced_survive_bits_valid,
+            [&](double scenario_weight, uuber::BitsetState &&,
+                bool, uuber::BitsetState &&, bool, TimeConstraintMap &&) {
+              if (std::isfinite(scenario_weight) && scenario_weight > 0.0) {
+                scalar_transition_weight += scenario_weight;
+              }
+            });
+        if (std::fabs(scalar_transition_weight - batch_transition_weight[i]) >
+                kDebugTol &&
+            scenario_mismatch_budget > 0) {
+          --scenario_mismatch_budget;
+          Rcpp::Rcout << "ranked_batch_transition_mismatch rank=" << rank_idx
+                      << " trial_slot=" << source_state.trial_slot
+                      << " batch=" << batch_transition_weight[i]
+                      << " scalar=" << scalar_transition_weight << "\n";
+        }
+      }
+    }
+
+    std::vector<double> scenario_survival(scenario_points.size(), 1.0);
+    if (!competitors.empty()) {
+      const uuber::CompetitorClusterCacheEntry &competitor_cache =
+          fetch_competitor_cluster_cache(ctx, competitors);
+      if (!exact_competitor_survival_batch(
+              ctx, competitor_cache, component_idx, trial_params,
+              trial_type_key, scenario_points, scenario_survival) ||
+          scenario_survival.size() != scenario_points.size()) {
+        return false;
+      }
+    }
+
+    for (std::size_t point_idx = 0; point_idx < scenario_points.size();
+         ++point_idx) {
+      const ExactScenarioPoint &point = scenario_points[point_idx];
+      if (point.density_index >= active_state_indices.size()) {
+        return false;
+      }
+      const TrialSequenceState &source_state =
+          states[active_state_indices[point.density_index]];
+      const double denom_val =
+          (point.density_index < denom.size()) ? denom[point.density_index]
+                                              : 0.0;
+      if (!std::isfinite(denom_val) || denom_val <= kBranchEps) {
+        continue;
+      }
+      double weight = source_state.weight * (point.weight / denom_val);
+      if (!std::isfinite(weight) || weight <= kBranchEps) {
+        continue;
+      }
+
+      if (!competitors.empty()) {
+        const double surv = clamp_probability(scenario_survival[point_idx]);
+        if (!std::isfinite(surv) || surv <= kBranchEps) {
+          continue;
+        }
+        weight *= surv;
+        if (!std::isfinite(weight) || weight <= kBranchEps) {
+          continue;
+        }
+      }
+
+      TrialSequenceState next_state;
+      next_state.trial_slot = source_state.trial_slot;
+      next_state.weight = weight;
+      next_state.forced_complete_bits = point.forced_complete_bits;
+      next_state.forced_survive_bits = point.forced_survive_bits;
+      next_state.forced_complete_bits_valid = point.forced_complete_bits_valid;
+      next_state.forced_survive_bits_valid = point.forced_survive_bits_valid;
+      next_state.time_constraints = point.time_constraints;
+
+      if (!competitors.empty() && !persistent_sources.empty()) {
+        bool keep = true;
+        for (int src_id : persistent_sources) {
+          set_forced_id_bit_strict(ctx, src_id, next_state.forced_survive_bits,
+                                   next_state.forced_survive_bits_valid);
+          if (!time_constraints_mark_survive(src_id, point.t,
+                                             next_state.time_constraints)) {
+            keep = false;
+            break;
+          }
+        }
+        if (!keep) {
+          continue;
+        }
+      }
+
+      accumulate_next_state(std::move(next_state));
+    }
+
+    states.clear();
+    states.reserve(next_states_collapsed.size());
+    for (TrialSequenceState &next_state : next_states_collapsed) {
+      if (std::isfinite(next_state.weight) && next_state.weight > kBranchEps) {
+        states.push_back(std::move(next_state));
+      }
+    }
+    if (states.empty()) {
+      return true;
+    }
+  }
+
+  for (const TrialSequenceState &state : states) {
+    if (!std::isfinite(state.weight) || state.weight <= 0.0 ||
+        state.trial_slot < 0 ||
+        static_cast<std::size_t>(state.trial_slot) >= density_out.size()) {
+      continue;
+    }
+    density_out[static_cast<std::size_t>(state.trial_slot)] += state.weight;
+  }
+  for (double &value : density_out) {
+    if (!std::isfinite(value) || value <= 0.0) {
+      value = 0.0;
+    }
+  }
+
+  if (ranked_batch_debug_enabled()) {
+    static int mismatch_budget = 10;
+    constexpr double kTol = 1e-10;
+    for (std::size_t trial_slot = 0; trial_slot < trial_count; ++trial_slot) {
+      const double scalar = sequence_prefix_density_resolved(
+          ctx, outcome_indices, node_indices, times_by_trial[trial_slot],
+          component_idx, trial_params, trial_type_key, nullptr, compiler,
+          step_competitor_ids_ptrs, step_persistent_sources);
+      if (std::fabs(scalar - density_out[trial_slot]) > kTol &&
+          mismatch_budget > 0) {
+        --mismatch_budget;
+        Rcpp::Rcout << "ranked_batch_mismatch trial_slot=" << trial_slot
+                    << " batch=" << density_out[trial_slot]
+                    << " scalar=" << scalar << " times=[";
+        for (std::size_t rank_i = 0; rank_i < rank_count; ++rank_i) {
+          if (rank_i > 0u) {
+            Rcpp::Rcout << ",";
+          }
+          Rcpp::Rcout << times_by_trial[trial_slot][rank_i];
+        }
+        Rcpp::Rcout << "]\n";
+      }
+    }
+  }
+
+  return true;
 }

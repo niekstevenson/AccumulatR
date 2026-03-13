@@ -3434,6 +3434,70 @@ struct SingleStepDirectBatchKeyHash {
   }
 };
 
+struct RankedSequenceBatchSpec {
+  int component_idx{-1};
+  int param_group_idx{-1};
+  double scaled_weight{0.0};
+  const double *time_data{nullptr};
+  std::string trial_type_key;
+  std::vector<int> sequence_outcome_indices;
+  std::vector<int> sequence_node_indices;
+  std::vector<std::vector<int>> step_competitor_ids;
+  std::vector<const std::vector<int> *> step_competitor_ids_ptrs;
+  std::vector<std::vector<int>> step_persistent_sources;
+};
+
+struct RankedSequenceBatchKey {
+  int component_idx{-1};
+  int param_group_idx{-1};
+  std::string trial_type_key;
+  std::vector<int> sequence_outcome_indices;
+  std::vector<int> sequence_node_indices;
+  std::vector<std::vector<int>> step_competitor_ids;
+  std::vector<std::vector<int>> step_persistent_sources;
+
+  bool operator==(const RankedSequenceBatchKey &other) const {
+    return component_idx == other.component_idx &&
+           param_group_idx == other.param_group_idx &&
+           trial_type_key == other.trial_type_key &&
+           sequence_outcome_indices == other.sequence_outcome_indices &&
+           sequence_node_indices == other.sequence_node_indices &&
+           step_competitor_ids == other.step_competitor_ids &&
+           step_persistent_sources == other.step_persistent_sources;
+  }
+};
+
+struct RankedSequenceBatchKeyHash {
+  std::size_t operator()(const RankedSequenceBatchKey &key) const {
+    std::uint64_t hash = kFNV64Offset;
+    hash_append_bytes(hash, &key.component_idx, sizeof(key.component_idx));
+    hash_append_bytes(hash, &key.param_group_idx, sizeof(key.param_group_idx));
+    hash_append_u64(hash,
+                    static_cast<std::uint64_t>(key.trial_type_key.size()));
+    if (!key.trial_type_key.empty()) {
+      hash_append_bytes(hash, key.trial_type_key.data(),
+                        key.trial_type_key.size());
+    }
+    auto append_int_vec = [&](const std::vector<int> &values) {
+      hash_append_u64(hash, static_cast<std::uint64_t>(values.size()));
+      for (int value : values) {
+        hash_append_bytes(hash, &value, sizeof(value));
+      }
+    };
+    auto append_nested_int_vec = [&](const std::vector<std::vector<int>> &values) {
+      hash_append_u64(hash, static_cast<std::uint64_t>(values.size()));
+      for (const std::vector<int> &row : values) {
+        append_int_vec(row);
+      }
+    };
+    append_int_vec(key.sequence_outcome_indices);
+    append_int_vec(key.sequence_node_indices);
+    append_nested_int_vec(key.step_competitor_ids);
+    append_nested_int_vec(key.step_persistent_sources);
+    return static_cast<std::size_t>(mix_hash64(hash));
+  }
+};
+
 inline bool build_single_step_direct_batch_spec(
     uuber::NativeContext &ctx, const TrialEvalInput &eval_input,
     const std::vector<int> &component_indices,
@@ -3484,6 +3548,60 @@ inline bool build_single_step_direct_batch_spec(
   if (!spec.step_competitor_ids_ptrs.empty() &&
       spec.step_competitor_ids_ptrs[0] != nullptr) {
     out.competitor_ids = *spec.step_competitor_ids_ptrs[0];
+  }
+  return true;
+}
+
+inline bool build_ranked_sequence_batch_spec(
+    uuber::NativeContext &ctx, const TrialEvalInput &eval_input,
+    const std::vector<int> &component_indices,
+    const std::vector<double> &component_weights,
+    const std::vector<ComponentCacheEntry> &cache_entries,
+    RankedSequenceBatchSpec &out) {
+  out = RankedSequenceBatchSpec{};
+  if (!eval_input.valid ||
+      eval_input.probability_transform != TrialProbabilityTransform::Identity ||
+      eval_input.sequence_length <= 1u || eval_input.sequence_time_data == nullptr) {
+    return false;
+  }
+
+  std::vector<TrialContributionSpec> contributions;
+  std::unique_ptr<RankedTransitionCompiler> sequence_transition_compiler;
+  if (!build_trial_contributions_unified(
+          ctx, eval_input, component_indices, component_weights, cache_entries,
+          contributions, sequence_transition_compiler) ||
+      contributions.size() != 1u) {
+    return false;
+  }
+
+  const TrialContributionSpec &spec = contributions.front();
+  if (spec.intent != TrialKernelIntent::SequenceDensity ||
+      spec.sequence_execution != TrialSequenceExecutionKind::SequenceState ||
+      !std::isfinite(spec.scaled_weight) || spec.scaled_weight <= 0.0 ||
+      spec.sequence_outcome_indices.empty() ||
+      spec.sequence_outcome_indices.size() != spec.sequence_node_indices.size() ||
+      spec.sequence_outcome_indices.size() != spec.step_persistent_sources.size() ||
+      spec.sequence_outcome_indices.size() != spec.step_competitor_ids_ptrs.size() ||
+      spec.sequence_time_data == nullptr) {
+    return false;
+  }
+
+  out.component_idx = spec.component_idx;
+  out.scaled_weight = spec.scaled_weight;
+  out.time_data = spec.sequence_time_data;
+  out.trial_type_key =
+      spec.trial_type_key_ptr ? *spec.trial_type_key_ptr : std::string();
+  out.sequence_outcome_indices = spec.sequence_outcome_indices;
+  out.sequence_node_indices = spec.sequence_node_indices;
+  out.step_persistent_sources = spec.step_persistent_sources;
+  out.step_competitor_ids.resize(spec.step_competitor_ids_ptrs.size());
+  out.step_competitor_ids_ptrs.resize(spec.step_competitor_ids_ptrs.size(),
+                                      nullptr);
+  for (std::size_t i = 0; i < spec.step_competitor_ids_ptrs.size(); ++i) {
+    if (spec.step_competitor_ids_ptrs[i] != nullptr) {
+      out.step_competitor_ids[i] = *spec.step_competitor_ids_ptrs[i];
+    }
+    out.step_competitor_ids_ptrs[i] = &out.step_competitor_ids[i];
   }
   return true;
 }
@@ -4639,12 +4757,37 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
   std::vector<std::uint8_t> trial_loglik_batched(
       static_cast<std::size_t>(n_trials), 0u);
 
+  bool enable_ranked_sequence_batch = false;
+  for (int t = 0; t < n_trials; ++t) {
+    if (t >= static_cast<int>(ok.size()) || !ok[static_cast<std::size_t>(t)]) {
+      continue;
+    }
+    const TrialEvalInput &eval_input =
+        trial_eval_inputs[static_cast<std::size_t>(t)];
+    if (eval_input.valid &&
+        eval_input.probability_transform ==
+            TrialProbabilityTransform::Identity &&
+        eval_input.sequence_length > 1u &&
+        eval_input.sequence_time_data != nullptr) {
+      enable_ranked_sequence_batch = true;
+      break;
+    }
+  }
+
   std::vector<SingleStepDirectBatchSpec> single_step_batch_specs(
       static_cast<std::size_t>(n_trials));
   std::unordered_map<SingleStepDirectBatchKey, std::vector<int>,
                      SingleStepDirectBatchKeyHash>
       single_step_batch_groups;
   single_step_batch_groups.reserve(static_cast<std::size_t>(n_trials));
+  std::vector<RankedSequenceBatchSpec> ranked_sequence_batch_specs(
+      enable_ranked_sequence_batch ? static_cast<std::size_t>(n_trials) : 0u);
+  std::unordered_map<RankedSequenceBatchKey, std::vector<int>,
+                     RankedSequenceBatchKeyHash>
+      ranked_sequence_batch_groups;
+  if (enable_ranked_sequence_batch) {
+    ranked_sequence_batch_groups.reserve(static_cast<std::size_t>(n_trials));
+  }
 
   for (int t = 0; t < n_trials; ++t) {
     if (t >= ok.size() || !ok[t]) {
@@ -4685,13 +4828,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       continue;
     }
 
-    SingleStepDirectBatchSpec batch_spec;
-    if (!build_single_step_direct_batch_spec(
-            *ctx, eval_input, *comp_indices_ptr, *comp_weights_ptr,
-            *cache_entries_ptr, batch_spec)) {
-      continue;
-    }
-
     const int param_group_idx =
         (t < static_cast<int>(param_value_group_by_trial.size()))
             ? param_value_group_by_trial[static_cast<std::size_t>(t)]
@@ -4699,17 +4835,52 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
     if (param_group_idx < 0) {
       continue;
     }
-    batch_spec.param_group_idx = param_group_idx;
-    single_step_batch_specs[static_cast<std::size_t>(t)] = batch_spec;
 
-    SingleStepDirectBatchKey key;
-    key.node_id = batch_spec.node_id;
-    key.component_idx = batch_spec.component_idx;
-    key.outcome_idx_context = batch_spec.outcome_idx_context;
-    key.param_group_idx = batch_spec.param_group_idx;
-    key.trial_type_key = batch_spec.trial_type_key;
-    key.competitor_ids = batch_spec.competitor_ids;
-    single_step_batch_groups[std::move(key)].push_back(t);
+    SingleStepDirectBatchSpec single_step_spec;
+    if (build_single_step_direct_batch_spec(
+            *ctx, eval_input, *comp_indices_ptr, *comp_weights_ptr,
+            *cache_entries_ptr, single_step_spec)) {
+      single_step_spec.param_group_idx = param_group_idx;
+      single_step_batch_specs[static_cast<std::size_t>(t)] = single_step_spec;
+
+      SingleStepDirectBatchKey key;
+      key.node_id = single_step_spec.node_id;
+      key.component_idx = single_step_spec.component_idx;
+      key.outcome_idx_context = single_step_spec.outcome_idx_context;
+      key.param_group_idx = single_step_spec.param_group_idx;
+      key.trial_type_key = single_step_spec.trial_type_key;
+      key.competitor_ids = single_step_spec.competitor_ids;
+      single_step_batch_groups[std::move(key)].push_back(t);
+      continue;
+    }
+
+    if (!enable_ranked_sequence_batch) {
+      continue;
+    }
+
+    RankedSequenceBatchSpec ranked_spec;
+    if (!build_ranked_sequence_batch_spec(
+            *ctx, eval_input, *comp_indices_ptr, *comp_weights_ptr,
+            *cache_entries_ptr, ranked_spec)) {
+      continue;
+    }
+    ranked_spec.param_group_idx = param_group_idx;
+    ranked_sequence_batch_specs[static_cast<std::size_t>(t)] =
+        std::move(ranked_spec);
+    const RankedSequenceBatchSpec &stored_ranked_spec =
+        ranked_sequence_batch_specs[static_cast<std::size_t>(t)];
+
+    RankedSequenceBatchKey ranked_key;
+    ranked_key.component_idx = stored_ranked_spec.component_idx;
+    ranked_key.param_group_idx = stored_ranked_spec.param_group_idx;
+    ranked_key.trial_type_key = stored_ranked_spec.trial_type_key;
+    ranked_key.sequence_outcome_indices =
+        stored_ranked_spec.sequence_outcome_indices;
+    ranked_key.sequence_node_indices = stored_ranked_spec.sequence_node_indices;
+    ranked_key.step_competitor_ids = stored_ranked_spec.step_competitor_ids;
+    ranked_key.step_persistent_sources =
+        stored_ranked_spec.step_persistent_sources;
+    ranked_sequence_batch_groups[std::move(ranked_key)].push_back(t);
   }
 
   for (auto &kv : single_step_batch_groups) {
@@ -4769,6 +4940,71 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       }
       trial_loglik[static_cast<std::size_t>(trial_idx)] = ll_val;
       trial_loglik_batched[static_cast<std::size_t>(trial_idx)] = 1u;
+    }
+  }
+
+  if (enable_ranked_sequence_batch) {
+    for (auto &kv : ranked_sequence_batch_groups) {
+      const std::vector<int> &trial_indices = kv.second;
+      if (trial_indices.size() < 2u) {
+        continue;
+      }
+      const int first_trial = trial_indices.front();
+      if (first_trial < 0 || first_trial >= n_trials) {
+        continue;
+      }
+      const RankedSequenceBatchSpec &group_spec =
+          ranked_sequence_batch_specs[static_cast<std::size_t>(first_trial)];
+      if (group_spec.param_group_idx < 0 ||
+          group_spec.param_group_idx >=
+              static_cast<int>(param_value_group_representative_trial.size())) {
+        continue;
+      }
+      const int rep_trial_idx =
+          param_value_group_representative_trial[static_cast<std::size_t>(
+              group_spec.param_group_idx)];
+      if (rep_trial_idx < 0 || rep_trial_idx >= n_trials) {
+        continue;
+      }
+
+      std::vector<const double *> times_by_trial;
+      times_by_trial.reserve(trial_indices.size());
+      for (int trial_idx : trial_indices) {
+        const RankedSequenceBatchSpec &trial_spec =
+            ranked_sequence_batch_specs[static_cast<std::size_t>(trial_idx)];
+        times_by_trial.push_back(trial_spec.time_data);
+      }
+
+      std::vector<double> density_out;
+      RankedTransitionCompiler ranked_batch_transition_compiler(*ctx);
+      const bool batched = sequence_prefix_density_batch_resolved(
+          *ctx, group_spec.sequence_outcome_indices,
+          group_spec.sequence_node_indices, times_by_trial,
+          group_spec.component_idx,
+          &param_sets[static_cast<std::size_t>(rep_trial_idx)],
+          group_spec.trial_type_key, density_out,
+          &ranked_batch_transition_compiler,
+          &group_spec.step_competitor_ids_ptrs,
+          &group_spec.step_persistent_sources);
+      if (!batched || density_out.size() != trial_indices.size()) {
+        continue;
+      }
+
+      for (std::size_t i = 0; i < trial_indices.size(); ++i) {
+        const int trial_idx = trial_indices[i];
+        const RankedSequenceBatchSpec &trial_spec =
+            ranked_sequence_batch_specs[static_cast<std::size_t>(trial_idx)];
+        const double prob = trial_spec.scaled_weight * density_out[i];
+        double ll_val = min_ll;
+        if (std::isfinite(prob) && prob > 0.0) {
+          const double lp = std::log(prob);
+          if (std::isfinite(lp) && lp > min_ll) {
+            ll_val = lp;
+          }
+        }
+        trial_loglik[static_cast<std::size_t>(trial_idx)] = ll_val;
+        trial_loglik_batched[static_cast<std::size_t>(trial_idx)] = 1u;
+      }
     }
   }
 

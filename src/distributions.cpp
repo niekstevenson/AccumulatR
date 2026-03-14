@@ -547,45 +547,6 @@ private:
   std::size_t index;
 };
 
-inline bool resolve_label_time_constraint(const TimeConstraintMap *time_constraints,
-                                          int label_id,
-                                          bool &has_exact,
-                                          double &exact_time,
-                                          bool &has_bounds,
-                                          double &bound_lower,
-                                          double &bound_upper) {
-  has_exact = false;
-  exact_time = std::numeric_limits<double>::quiet_NaN();
-  has_bounds = false;
-  bound_lower = 0.0;
-  bound_upper = std::numeric_limits<double>::infinity();
-  const SourceTimeConstraint *constraint =
-      time_constraints_find(time_constraints, label_id);
-  if (constraint == nullptr) {
-    return false;
-  }
-  if (constraint->has_exact) {
-    has_exact = true;
-    exact_time = constraint->exact_time;
-  }
-  if (constraint->has_lower) {
-    bound_lower = std::max(bound_lower, constraint->lower);
-    has_bounds = true;
-  }
-  if (constraint->has_upper) {
-    bound_upper = std::min(bound_upper, constraint->upper);
-    has_bounds = true;
-  }
-  return true;
-}
-
-inline bool state_contains_survive_at(const ForcedStateView &forced_state,
-                                      const TimeConstraintMap *time_constraints,
-                                      int label_id, double t) {
-  return forced_state_contains_survive(forced_state, label_id) ||
-         time_constraints_contains_survive_at(time_constraints, label_id, t);
-}
-
 NodeEvalResult
 eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
                    std::uint32_t node_flags, double t,
@@ -687,7 +648,7 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
   double self_bound_lower = 0.0;
   double self_bound_upper = std::numeric_limits<double>::infinity();
   if (label_idx >= 0 && label_idx != NA_INTEGER) {
-    (void)resolve_label_time_constraint(
+    (void)evaluator_resolve_label_time_constraint(
         time_constraints, label_idx, self_has_exact_source_time,
         self_exact_source_time, self_has_source_bounds, self_bound_lower,
         self_bound_upper);
@@ -750,21 +711,8 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
                                 inner_cdf);
       }
 
-      LabelRef source_ref;
-      if (onset_kind == uuber::ONSET_AFTER_ACCUMULATOR) {
-        if (onset_source_acc_idx >= 0 &&
-            onset_source_acc_idx < static_cast<int>(ctx.accumulators.size())) {
-          source_ref.acc_idx = onset_source_acc_idx;
-          source_ref.label_id =
-              accumulator_label_id_of(ctx, onset_source_acc_idx);
-        }
-      } else if (onset_kind == uuber::ONSET_AFTER_POOL) {
-        if (onset_source_pool_idx >= 0 &&
-            onset_source_pool_idx < static_cast<int>(ctx.pools.size())) {
-          source_ref.pool_idx = onset_source_pool_idx;
-          source_ref.label_id = pool_label_id_of(ctx, onset_source_pool_idx);
-        }
-      }
+      LabelRef source_ref = evaluator_make_onset_source_ref(
+          ctx, onset_kind, onset_source_acc_idx, onset_source_pool_idx);
       if (source_ref.acc_idx < 0 && source_ref.pool_idx < 0) {
         return make_node_result(inner_need, 0.0, 1.0, 0.0);
       }
@@ -774,8 +722,8 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
       const int source_label_id = source_ref.label_id;
 
       if (source_label_id >= 0 && source_label_id != NA_INTEGER &&
-          state_contains_survive_at(forced_state, time_constraints,
-                                    source_label_id, eval_t)) {
+          evaluator_state_contains_survive_at(
+              forced_state, time_constraints, source_label_id, eval_t)) {
         return make_node_result(inner_need, 0.0, 1.0, 0.0);
       }
 
@@ -793,7 +741,7 @@ eval_event_ref_idx(const uuber::NativeContext &ctx, const LabelRef &label_ref,
         bool source_has_bounds = false;
         double source_bound_lower = 0.0;
         double source_bound_upper = std::numeric_limits<double>::infinity();
-        (void)resolve_label_time_constraint(
+        (void)evaluator_resolve_label_time_constraint(
             time_constraints, source_label_id, has_exact, exact_time,
             source_has_bounds, source_bound_lower, source_bound_upper);
         if (source_has_bounds) {

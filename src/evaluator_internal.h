@@ -31,6 +31,26 @@ inline int pool_label_id_of(const uuber::NativeContext &ctx, int pool_idx) {
   return ctx.pool_label_ids[static_cast<std::size_t>(pool_idx)];
 }
 
+inline uuber::LabelRef evaluator_make_onset_source_ref(
+    const uuber::NativeContext &ctx, int onset_kind, int onset_source_acc_idx,
+    int onset_source_pool_idx) {
+  uuber::LabelRef ref;
+  if (onset_kind == uuber::ONSET_AFTER_ACCUMULATOR) {
+    if (onset_source_acc_idx >= 0 &&
+        onset_source_acc_idx < static_cast<int>(ctx.accumulators.size())) {
+      ref.acc_idx = onset_source_acc_idx;
+      ref.label_id = accumulator_label_id_of(ctx, onset_source_acc_idx);
+    }
+  } else if (onset_kind == uuber::ONSET_AFTER_POOL) {
+    if (onset_source_pool_idx >= 0 &&
+        onset_source_pool_idx < static_cast<int>(ctx.pools.size())) {
+      ref.pool_idx = onset_source_pool_idx;
+      ref.label_id = pool_label_id_of(ctx, onset_source_pool_idx);
+    }
+  }
+  return ref;
+}
+
 inline int resolve_dense_node_idx(const uuber::NativeContext &ctx, int node_id) {
   auto it = ctx.ir.id_to_node_idx.find(node_id);
   if (it != ctx.ir.id_to_node_idx.end()) {
@@ -95,6 +115,42 @@ inline std::vector<int> ensure_source_ids(const uuber::NativeContext &ctx,
   const int node_idx = resolve_dense_node_idx_required(ctx, node_id_or_idx);
   const uuber::IrNode &node = ir_node_required(ctx, node_idx);
   return ensure_source_ids(ctx, node);
+}
+
+inline bool evaluator_resolve_label_time_constraint(
+    const TimeConstraintMap *time_constraints, int label_id, bool &has_exact,
+    double &exact_time, bool &has_bounds, double &bound_lower,
+    double &bound_upper) {
+  has_exact = false;
+  exact_time = std::numeric_limits<double>::quiet_NaN();
+  has_bounds = false;
+  bound_lower = 0.0;
+  bound_upper = std::numeric_limits<double>::infinity();
+  const SourceTimeConstraint *constraint =
+      time_constraints_find(time_constraints, label_id);
+  if (constraint == nullptr) {
+    return false;
+  }
+  if (constraint->has_exact) {
+    has_exact = true;
+    exact_time = constraint->exact_time;
+  }
+  if (constraint->has_lower) {
+    bound_lower = std::max(bound_lower, constraint->lower);
+    has_bounds = true;
+  }
+  if (constraint->has_upper) {
+    bound_upper = std::min(bound_upper, constraint->upper);
+    has_bounds = true;
+  }
+  return true;
+}
+
+inline bool evaluator_state_contains_survive_at(
+    const ForcedStateView &forced_state,
+    const TimeConstraintMap *time_constraints, int label_id, double t) {
+  return forced_state_contains_survive(forced_state, label_id) ||
+         time_constraints_contains_survive_at(time_constraints, label_id, t);
 }
 
 std::string evaluator_component_cache_key(const uuber::NativeContext &ctx,

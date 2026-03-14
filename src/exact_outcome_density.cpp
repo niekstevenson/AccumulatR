@@ -3,6 +3,7 @@
 #include <Rcpp.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <unordered_map>
@@ -10,18 +11,31 @@
 #include <vector>
 
 #include "competitor_cache.h"
+#include "integrate.h"
 #include "ranked_transitions.h"
 #include "runtime_stats.h"
 
 namespace {
+
+constexpr double kDefaultRelTol = 1e-5;
+constexpr double kDefaultAbsTol = 1e-6;
+constexpr int kDefaultMaxDepth = 12;
+
+inline bool exact_batch_debug_enabled() {
+  static const bool enabled = []() {
+    const char *raw = std::getenv("ACCUMULATR_DEBUG_EXACT_BATCH");
+    return raw != nullptr && raw[0] != '\0' && raw[0] != '0';
+  }();
+  return enabled;
+}
 
 enum class RelativeSelfConstraintKind : std::uint8_t {
   kNone = 0u,
   kForcedComplete,
   kForcedSurvive,
   kExactAtEval,
-  kUpperAtEval,
-  kLowerAtEval
+  kBounded,
+  kImpossible
 };
 
 inline bool exact_density_supported_for_outcome(
@@ -48,56 +62,68 @@ inline bool exact_forced_contains_id(const uuber::NativeContext &ctx,
   return bits.test(bit_it->second);
 }
 
+inline ForcedStateView exact_make_point_forced_state(
+    const uuber::NativeContext &ctx, const ExactScenarioPoint &point);
+
+bool exact_eval_relative_onset_base_point(
+    const uuber::NativeContext &ctx, const ExactScenarioPoint &point,
+    const uuber::LabelRef &source_ref, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const uuber::TrialParamsSoA *trial_params_soa,
+    const uuber::AccDistParams &cfg,
+    const LowerBoundTransform &lower_bound, double success_prob,
+    double eval_t, double x_shift, bool need_density, bool need_cdf,
+    double &base_density_out, double &base_cdf_out);
+
 bool classify_relative_self_constraint(const SourceTimeConstraint *constraint,
                                        double t, bool forced_complete,
                                        bool forced_survive,
-                                       RelativeSelfConstraintKind &kind) {
+                                       RelativeSelfConstraintKind &kind,
+                                       bool &has_bounds, double &bound_lower,
+                                       double &bound_upper) {
   kind = RelativeSelfConstraintKind::kNone;
-  if (forced_complete && forced_survive) {
-    return false;
-  }
-  if (forced_complete) {
-    if (constraint != nullptr && !time_constraint_empty(*constraint)) {
-      return false;
-    }
+  has_bounds = false;
+  bound_lower = 0.0;
+  bound_upper = std::numeric_limits<double>::infinity();
+  const bool self_is_time_conditioned =
+      constraint != nullptr && !time_constraint_empty(*constraint);
+  if (!self_is_time_conditioned && forced_complete) {
     kind = RelativeSelfConstraintKind::kForcedComplete;
     return true;
   }
   if (forced_survive) {
-    if (constraint != nullptr && !time_constraint_empty(*constraint)) {
-      return false;
-    }
-    kind = RelativeSelfConstraintKind::kForcedSurvive;
+    kind = self_is_time_conditioned ? RelativeSelfConstraintKind::kImpossible
+                                    : RelativeSelfConstraintKind::kForcedSurvive;
     return true;
   }
-  if (constraint == nullptr || time_constraint_empty(*constraint)) {
+  if (!self_is_time_conditioned) {
     return true;
   }
   if (constraint->has_exact) {
-    if (constraint->has_lower || constraint->has_upper ||
-        !time_constraint_same_time(constraint->exact_time, t)) {
+    if (!time_constraint_same_time(constraint->exact_time, t)) {
       return false;
+    }
+    if (constraint->has_lower) {
+      bound_lower = constraint->lower;
+      has_bounds = true;
+    }
+    if (constraint->has_upper) {
+      bound_upper = constraint->upper;
+      has_bounds = true;
     }
     kind = RelativeSelfConstraintKind::kExactAtEval;
     return true;
   }
-  if (constraint->has_lower && constraint->has_upper) {
-    return false;
-  }
-  if (constraint->has_upper) {
-    if (constraint->has_lower ||
-        !time_constraint_same_time(constraint->upper, t)) {
-      return false;
+  if (constraint->has_lower || constraint->has_upper) {
+    if (constraint->has_lower) {
+      bound_lower = constraint->lower;
+      has_bounds = true;
     }
-    kind = RelativeSelfConstraintKind::kUpperAtEval;
-    return true;
-  }
-  if (constraint->has_lower) {
-    if (constraint->has_upper ||
-        !time_constraint_same_time(constraint->lower, t)) {
-      return false;
+    if (constraint->has_upper) {
+      bound_upper = constraint->upper;
+      has_bounds = true;
     }
-    kind = RelativeSelfConstraintKind::kLowerAtEval;
+    kind = RelativeSelfConstraintKind::kBounded;
     return true;
   }
   return true;
@@ -106,7 +132,8 @@ bool classify_relative_self_constraint(const SourceTimeConstraint *constraint,
 bool exact_eval_simple_acc_event_batch(
     const uuber::NativeContext &ctx, const uuber::IrEvent &event,
     const std::vector<ExactScenarioPoint> &points, int component_idx,
-    const TrialParamSet *trial_params, EvalNeed need,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    EvalNeed need,
     uuber::KernelNodeBatchValues &out_values,
     const std::vector<std::uint8_t> *active_mask = nullptr) {
   out_values = uuber::KernelNodeBatchValues{};
@@ -130,18 +157,21 @@ bool exact_eval_simple_acc_event_batch(
   if (!evaluator_component_active_idx(acc, component_idx, override)) {
     return true;
   }
+  const uuber::TrialParamsSoA *trial_params_soa =
+      resolve_trial_params_soa(ctx, trial_params);
 
   const int onset_kind = override ? override->onset_kind : acc.onset_kind;
-  if (ctx.has_chained_onsets && onset_kind != uuber::ONSET_ABSOLUTE) {
-    return false;
-  }
+  const int onset_source_acc_idx =
+      override ? override->onset_source_acc_idx : acc.onset_source_acc_idx;
+  const int onset_source_pool_idx =
+      override ? override->onset_source_pool_idx : acc.onset_source_pool_idx;
+  const double onset_lag = override ? override->onset_lag : acc.onset_lag;
 
   double onset = 0.0;
   double q = 0.0;
   uuber::AccDistParams cfg;
   evaluator_resolve_event_numeric_params(
-      acc, event.acc_idx, override, resolve_trial_params_soa(ctx, trial_params),
-      onset, q, cfg);
+      acc, event.acc_idx, override, trial_params_soa, onset, q, cfg);
   const LowerBoundTransform lower_bound = default_lower_bound_transform(cfg);
   const double onset_eff = total_onset_with_t0(onset, cfg);
   const double success_prob = clamp_probability(1.0 - q);
@@ -149,10 +179,20 @@ bool exact_eval_simple_acc_event_batch(
   if (label_id == NA_INTEGER || label_id < 0) {
     return false;
   }
+  const bool needs_relative_onset =
+      ctx.has_chained_onsets && onset_kind != uuber::ONSET_ABSOLUTE;
+  const uuber::LabelRef onset_source_ref = evaluator_make_onset_source_ref(
+      ctx, onset_kind, onset_source_acc_idx, onset_source_pool_idx);
+  const int onset_source_label_id = onset_source_ref.label_id;
 
   std::vector<RelativeSelfConstraintKind> kinds(
       point_count, RelativeSelfConstraintKind::kNone);
+  std::vector<std::uint8_t> self_has_bounds(point_count, 0u);
+  std::vector<double> self_bound_lower(point_count, 0.0);
+  std::vector<double> self_bound_upper(
+      point_count, std::numeric_limits<double>::infinity());
   std::vector<double> shifted_times(point_count, 0.0);
+  std::vector<std::uint8_t> direct_shifted_eval(point_count, 0u);
   bool need_pdf_vec = false;
   bool need_cdf_vec = false;
 
@@ -170,22 +210,43 @@ bool exact_eval_simple_acc_event_batch(
         label_id);
     const SourceTimeConstraint *constraint =
         time_constraints_find(&point.time_constraints, label_id);
+    bool has_bounds = false;
+    double bound_lower = 0.0;
+    double bound_upper = std::numeric_limits<double>::infinity();
     if (!classify_relative_self_constraint(constraint, point.t, forced_complete,
-                                          forced_survive, kinds[i])) {
+                                          forced_survive, kinds[i], has_bounds,
+                                          bound_lower, bound_upper)) {
       return false;
     }
-    shifted_times[i] = point.t - onset_eff;
-    if (needs_density(need) &&
+    self_has_bounds[i] = has_bounds ? 1u : 0u;
+    self_bound_lower[i] = bound_lower;
+    self_bound_upper[i] = bound_upper;
+    if (!needs_relative_onset) {
+      direct_shifted_eval[i] = 1u;
+      shifted_times[i] = point.t - onset_eff;
+    } else {
+      const SourceTimeConstraint *source_constraint =
+          time_constraints_find(&point.time_constraints, onset_source_label_id);
+      if (source_constraint != nullptr && source_constraint->has_exact &&
+          std::isfinite(source_constraint->exact_time) &&
+          !exact_forced_contains_id(ctx, point.forced_survive_bits,
+                                    point.forced_survive_bits_valid,
+                                    onset_source_label_id)) {
+        direct_shifted_eval[i] = 1u;
+        shifted_times[i] =
+            point.t - source_constraint->exact_time - onset_lag - onset_eff;
+      }
+    }
+    if (direct_shifted_eval[i] != 0u && needs_density(need) &&
         (kinds[i] == RelativeSelfConstraintKind::kNone ||
-         kinds[i] == RelativeSelfConstraintKind::kUpperAtEval)) {
+         kinds[i] == RelativeSelfConstraintKind::kBounded)) {
       need_pdf_vec = true;
     }
-    if ((needs_cdf(need) || needs_survival(need)) &&
-        kinds[i] == RelativeSelfConstraintKind::kNone) {
-      need_cdf_vec = true;
-    }
-    if (needs_density(need) &&
-        kinds[i] == RelativeSelfConstraintKind::kUpperAtEval) {
+    if (direct_shifted_eval[i] != 0u &&
+        ((needs_cdf(need) || needs_survival(need)) ||
+         kinds[i] == RelativeSelfConstraintKind::kBounded) &&
+        (kinds[i] == RelativeSelfConstraintKind::kNone ||
+         kinds[i] == RelativeSelfConstraintKind::kBounded)) {
       need_cdf_vec = true;
     }
   }
@@ -208,24 +269,53 @@ bool exact_eval_simple_acc_event_batch(
         (i >= active_mask->size() || (*active_mask)[i] == 0u)) {
       continue;
     }
+    const bool need_base_density =
+        needs_density(need) &&
+        (kinds[i] == RelativeSelfConstraintKind::kNone ||
+         kinds[i] == RelativeSelfConstraintKind::kBounded);
+    const bool need_base_cdf =
+        (needs_cdf(need) || needs_survival(need) ||
+         kinds[i] == RelativeSelfConstraintKind::kBounded) &&
+        (kinds[i] == RelativeSelfConstraintKind::kNone ||
+         kinds[i] == RelativeSelfConstraintKind::kBounded);
+    double base_density = 0.0;
+    double base_cdf = 0.0;
+    if (direct_shifted_eval[i] != 0u) {
+      if (need_base_density) {
+        base_density = safe_density(success_prob * pdf_values[i]);
+      }
+      if (need_base_cdf) {
+        base_cdf = clamp_probability(success_prob * cdf_values[i]);
+      }
+    } else if (needs_relative_onset &&
+               !exact_eval_relative_onset_base_point(
+                   ctx, points[i], onset_source_ref, component_idx,
+                   trial_params, trial_type_key, trial_params_soa, cfg,
+                   lower_bound, success_prob, points[i].t,
+                   onset_lag + onset_eff,
+                   need_base_density, need_base_cdf, base_density, base_cdf)) {
+      return false;
+    }
     switch (kinds[i]) {
     case RelativeSelfConstraintKind::kNone: {
-      const double cdf_base =
-          need_cdf_vec ? clamp_probability(cdf_values[i]) : 0.0;
       if (needs_density(need)) {
-        out_values.density[i] = safe_density(success_prob * pdf_values[i]);
+        out_values.density[i] = safe_density(base_density);
       }
       if (needs_cdf(need)) {
-        out_values.cdf[i] = clamp_probability(success_prob * cdf_base);
+        out_values.cdf[i] = clamp_probability(base_cdf);
       }
       if (needs_survival(need)) {
-        out_values.survival[i] =
-            clamp_probability(q + success_prob * (1.0 - cdf_base));
+        out_values.survival[i] = clamp_probability(1.0 - base_cdf);
       }
       break;
     }
     case RelativeSelfConstraintKind::kForcedComplete:
     case RelativeSelfConstraintKind::kExactAtEval:
+      if (self_has_bounds[i] != 0u &&
+          (!(points[i].t > self_bound_lower[i]) ||
+           points[i].t > self_bound_upper[i])) {
+        break;
+      }
       if (needs_survival(need)) {
         out_values.survival[i] = 0.0;
       }
@@ -234,7 +324,6 @@ bool exact_eval_simple_acc_event_batch(
       }
       break;
     case RelativeSelfConstraintKind::kForcedSurvive:
-    case RelativeSelfConstraintKind::kLowerAtEval:
       if (needs_survival(need)) {
         out_values.survival[i] = 1.0;
       }
@@ -242,29 +331,86 @@ bool exact_eval_simple_acc_event_batch(
         out_values.cdf[i] = 0.0;
       }
       break;
-    case RelativeSelfConstraintKind::kUpperAtEval: {
+    case RelativeSelfConstraintKind::kImpossible:
       if (needs_density(need)) {
-        const double cdf_base =
-            need_cdf_vec ? clamp_probability(cdf_values[i]) : 0.0;
-        const double condition_mass =
-            clamp_probability(success_prob * cdf_base);
-        if (!(condition_mass > 0.0)) {
-          if (needs_survival(need)) {
-            out_values.survival[i] = 0.0;
-          }
-          if (needs_cdf(need)) {
-            out_values.cdf[i] = 0.0;
-          }
-          break;
-        }
-        out_values.density[i] =
-            safe_density((success_prob * pdf_values[i]) / condition_mass);
+        out_values.density[i] = 0.0;
       }
       if (needs_survival(need)) {
         out_values.survival[i] = 0.0;
       }
       if (needs_cdf(need)) {
-        out_values.cdf[i] = 1.0;
+        out_values.cdf[i] = 0.0;
+      }
+      break;
+    case RelativeSelfConstraintKind::kBounded: {
+      const double lower = self_bound_lower[i];
+      const double upper = self_bound_upper[i];
+      const double lower_cdf =
+          std::isfinite(lower)
+              ? (direct_shifted_eval[i] != 0u
+                     ? clamp_probability(success_prob * eval_cdf_single_with_lower_bound(
+                                               cfg, lower - (points[i].t - shifted_times[i]),
+                                               lower_bound))
+                     : [&]() {
+                         double cdf_at_lower = 0.0;
+                         double density_unused = 0.0;
+                         const bool ok = exact_eval_relative_onset_base_point(
+                             ctx, points[i], onset_source_ref, component_idx,
+                             trial_params, trial_type_key, trial_params_soa, cfg,
+                             lower_bound, success_prob, lower,
+                             onset_lag + onset_eff, false, true,
+                             density_unused, cdf_at_lower);
+                         return ok ? clamp_probability(cdf_at_lower) : 0.0;
+                       }())
+              : 0.0;
+      const double upper_cdf =
+          std::isfinite(upper)
+              ? (direct_shifted_eval[i] != 0u
+                     ? clamp_probability(success_prob * eval_cdf_single_with_lower_bound(
+                                               cfg, upper - (points[i].t - shifted_times[i]),
+                                               lower_bound))
+                     : [&]() {
+                         double cdf_at_upper = 0.0;
+                         double density_unused = 0.0;
+                         const bool ok = exact_eval_relative_onset_base_point(
+                             ctx, points[i], onset_source_ref, component_idx,
+                             trial_params, trial_type_key, trial_params_soa, cfg,
+                             lower_bound, success_prob, upper,
+                             onset_lag + onset_eff, false, true,
+                             density_unused, cdf_at_upper);
+                         return ok ? clamp_probability(cdf_at_upper)
+                                   : clamp_probability(success_prob);
+                       }())
+              : clamp_probability(success_prob);
+      const double condition_mass = clamp_probability(upper_cdf - lower_cdf);
+      if (!(upper > lower) || !(condition_mass > 0.0)) {
+        break;
+      }
+      if (needs_density(need)) {
+        if (std::isfinite(points[i].t) && points[i].t > lower &&
+            points[i].t <= upper) {
+          out_values.density[i] =
+              safe_density(base_density / condition_mass);
+        } else {
+          out_values.density[i] = 0.0;
+        }
+      }
+      if (needs_cdf(need) || needs_survival(need)) {
+        double cdf_cond = 0.0;
+        if (!std::isfinite(points[i].t) || points[i].t >= upper) {
+          cdf_cond = 1.0;
+        } else if (!(points[i].t > lower)) {
+          cdf_cond = 0.0;
+        } else {
+          cdf_cond =
+              clamp_probability((base_cdf - lower_cdf) / condition_mass);
+        }
+        if (needs_cdf(need)) {
+          out_values.cdf[i] = cdf_cond;
+        }
+        if (needs_survival(need)) {
+          out_values.survival[i] = 1.0 - cdf_cond;
+        }
       }
       break;
     }
@@ -479,6 +625,28 @@ inline bool exact_point_active(const std::vector<std::uint8_t> *active_mask,
          (idx < active_mask->size() && (*active_mask)[idx] != 0u);
 }
 
+inline std::size_t exact_count_active_points(
+    const std::vector<std::uint8_t> *active_mask, std::size_t point_count) {
+  if (active_mask == nullptr) {
+    return point_count;
+  }
+  std::size_t active_count = 0u;
+  const std::size_t limit = std::min(point_count, active_mask->size());
+  for (std::size_t i = 0; i < limit; ++i) {
+    active_count += ((*active_mask)[i] != 0u) ? 1u : 0u;
+  }
+  return active_count;
+}
+
+thread_local int g_exact_node_batch_depth = 0;
+
+struct ExactNodeBatchDepthGuard {
+  ExactNodeBatchDepthGuard() { ++g_exact_node_batch_depth; }
+  ~ExactNodeBatchDepthGuard() { --g_exact_node_batch_depth; }
+
+  bool recursive_call() const noexcept { return g_exact_node_batch_depth > 1; }
+};
+
 inline void exact_init_batch_values(std::size_t point_count,
                                     uuber::KernelNodeBatchValues &out_values) {
   out_values.density.assign(point_count, 0.0);
@@ -541,6 +709,200 @@ inline NodeEvalState exact_make_local_state(
       point.forced_complete_bits_valid,
       point.forced_survive_bits_valid ? &point.forced_survive_bits : nullptr,
       point.forced_survive_bits_valid, nullptr);
+}
+
+bool exact_eval_relative_onset_base_point(
+    const uuber::NativeContext &ctx, const ExactScenarioPoint &point,
+    const uuber::LabelRef &source_ref, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const uuber::TrialParamsSoA *trial_params_soa,
+    const uuber::AccDistParams &cfg,
+    const LowerBoundTransform &lower_bound, double success_prob,
+    double eval_t, double x_shift, bool need_density, bool need_cdf,
+    double &base_density_out, double &base_cdf_out) {
+  base_density_out = 0.0;
+  base_cdf_out = 0.0;
+  if (!need_density && !need_cdf) {
+    return true;
+  }
+  if (source_ref.acc_idx < 0 && source_ref.pool_idx < 0) {
+    return true;
+  }
+
+  const int source_label_id = source_ref.label_id;
+  const ForcedStateView forced_state = exact_make_point_forced_state(ctx, point);
+  if (source_label_id >= 0 && source_label_id != NA_INTEGER &&
+      evaluator_state_contains_survive_at(
+          forced_state, &point.time_constraints, source_label_id, eval_t)) {
+    return true;
+  }
+
+  double bound_lower = 0.0;
+  double bound_upper = std::numeric_limits<double>::infinity();
+  bool has_conditioning_bounds = false;
+  bool has_exact = false;
+  double exact_time = std::numeric_limits<double>::quiet_NaN();
+
+  if (source_label_id >= 0 && source_label_id != NA_INTEGER) {
+    if (forced_state_contains_complete(forced_state, source_label_id)) {
+      bound_upper = std::min(bound_upper, eval_t);
+      has_conditioning_bounds = true;
+    }
+    bool source_has_bounds = false;
+    double source_bound_lower = 0.0;
+    double source_bound_upper = std::numeric_limits<double>::infinity();
+    (void)evaluator_resolve_label_time_constraint(
+        &point.time_constraints, source_label_id, has_exact, exact_time,
+        source_has_bounds, source_bound_lower, source_bound_upper);
+    if (source_has_bounds) {
+      bound_lower = std::max(bound_lower, source_bound_lower);
+      bound_upper = std::min(bound_upper, source_bound_upper);
+      has_conditioning_bounds = true;
+    }
+  }
+
+  if (has_exact) {
+    const double shifted_time = point.t - exact_time - x_shift;
+    if (need_density) {
+      base_density_out = safe_density(
+          success_prob *
+          eval_pdf_single_with_lower_bound(cfg, shifted_time, lower_bound));
+    }
+    if (need_cdf) {
+      base_cdf_out = clamp_probability(
+          success_prob *
+          eval_cdf_single_with_lower_bound(cfg, shifted_time, lower_bound));
+    }
+    return true;
+  }
+
+  if (!(bound_upper > bound_lower)) {
+    return true;
+  }
+  if (std::isfinite(eval_t) && (eval_t - x_shift <= bound_lower)) {
+    return true;
+  }
+
+  auto source_eval = [&](double u, EvalNeed source_need) -> NodeEvalResult {
+    return evaluator_eval_event_ref_idx(
+        ctx, source_ref, 0u, u, component_idx, source_need, trial_params,
+        trial_type_key, false, -1, &point.time_constraints, nullptr, nullptr,
+        nullptr, nullptr, trial_params_soa, &forced_state);
+  };
+  auto source_cdf_at = [&](double u) -> double {
+    if (u <= 0.0) {
+      return 0.0;
+    }
+    const NodeEvalResult source = source_eval(u, EvalNeed::kCDF);
+    return clamp_probability(source.cdf);
+  };
+
+  double source_mass = 1.0;
+  if (has_conditioning_bounds) {
+    const double lower_cdf =
+        std::isfinite(bound_lower) ? source_cdf_at(bound_lower) : 0.0;
+    const double upper_cdf =
+        std::isfinite(bound_upper)
+            ? source_cdf_at(bound_upper)
+            : source_cdf_at(std::numeric_limits<double>::infinity());
+    source_mass = upper_cdf - lower_cdf;
+    if (!std::isfinite(source_mass) || source_mass <= 0.0) {
+      return true;
+    }
+  }
+
+  const double upper_int =
+      std::min(bound_upper, std::max(bound_lower, eval_t - x_shift));
+  if (!(upper_int > bound_lower)) {
+    return true;
+  }
+
+  if (!std::isfinite(eval_t)) {
+    if (need_cdf) {
+      const double cdf_total =
+          has_conditioning_bounds
+              ? clamp_probability(success_prob)
+              : clamp_probability(
+                    success_prob *
+                    source_cdf_at(std::numeric_limits<double>::infinity()));
+      base_cdf_out = cdf_total;
+    }
+    return true;
+  }
+
+  auto source_pdf = [&](double u) -> double {
+    const NodeEvalResult source = source_eval(u, EvalNeed::kDensity);
+    return safe_density(source.density);
+  };
+  auto cond_source_pdf = [&](double u) -> double {
+    if (!std::isfinite(u) || u <= bound_lower || u > bound_upper) {
+      return 0.0;
+    }
+    const double dens = source_pdf(u);
+    if (dens <= 0.0) {
+      return 0.0;
+    }
+    if (!has_conditioning_bounds) {
+      return dens;
+    }
+    return dens / source_mass;
+  };
+
+  const FusedIntegralResult fused = integrate_fused_onset_terms(
+      cfg, point.t, x_shift, bound_lower, upper_int, need_density, need_cdf,
+      &lower_bound, cond_source_pdf);
+
+  if (need_density) {
+    if (fused.ok) {
+      base_density_out = safe_density(success_prob * fused.density);
+    } else {
+      auto integrand_density = [&](double u) -> double {
+        const double fs = cond_source_pdf(u);
+        if (fs <= 0.0) {
+          return 0.0;
+        }
+        const double shifted_time = eval_t - u - x_shift;
+        const double fx =
+            eval_pdf_single_with_lower_bound(cfg, shifted_time, lower_bound);
+        if (!std::isfinite(fx) || fx <= 0.0) {
+          return 0.0;
+        }
+        return fs * fx;
+      };
+      base_density_out = safe_density(
+          success_prob *
+          uuber::integrate_boost_fn(integrand_density, bound_lower, upper_int,
+                                    kDefaultRelTol, kDefaultAbsTol,
+                                    kDefaultMaxDepth));
+    }
+  }
+
+  if (need_cdf) {
+    double cdf_cond = 0.0;
+    if (fused.ok) {
+      cdf_cond = fused.cdf;
+    } else {
+      auto integrand_cdf = [&](double u) -> double {
+        const double fs = cond_source_pdf(u);
+        if (fs <= 0.0) {
+          return 0.0;
+        }
+        const double shifted_time = eval_t - u - x_shift;
+        const double Fx =
+            eval_cdf_single_with_lower_bound(cfg, shifted_time, lower_bound);
+        if (!std::isfinite(Fx) || Fx <= 0.0) {
+          return 0.0;
+        }
+        return fs * clamp_probability(Fx);
+      };
+      cdf_cond = uuber::integrate_boost_fn(integrand_cdf, bound_lower,
+                                           upper_int, kDefaultRelTol,
+                                           kDefaultAbsTol, kDefaultMaxDepth);
+    }
+    base_cdf_out = clamp_probability(success_prob * clamp_probability(cdf_cond));
+  }
+
+  return true;
 }
 
 template <typename PointVec>
@@ -809,6 +1171,12 @@ bool exact_eval_node_batch_with_points(
   if (points.empty()) {
     return true;
   }
+  ExactNodeBatchDepthGuard depth_guard;
+  const std::size_t active_point_count =
+      exact_count_active_points(active_mask, points.size());
+  record_unified_outcome_exact_node_batch_call(
+      static_cast<std::uint64_t>(active_point_count),
+      depth_guard.recursive_call());
 
   if (node_idx >= 0 && node_idx < static_cast<int>(ctx.ir.nodes.size())) {
     const uuber::IrNode &node = ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
@@ -819,8 +1187,8 @@ bool exact_eval_node_batch_with_points(
       const uuber::IrEvent &event =
           ctx.ir.events[static_cast<std::size_t>(node.event_idx)];
       if (exact_eval_simple_acc_event_batch(
-              ctx, event, points, component_idx, trial_params, need, out_values,
-              active_mask)) {
+              ctx, event, points, component_idx, trial_params, trial_type_key,
+              need, out_values, active_mask)) {
         return true;
       }
     }
@@ -834,6 +1202,15 @@ bool exact_eval_node_batch_with_points(
   const std::vector<int> relevant_source_ids =
       exact_relevant_source_ids_for_node(ctx, node_idx);
   auto pointwise_fallback = [&]() -> bool {
+    record_unified_outcome_exact_node_batch_pointwise_fallback(
+        static_cast<std::uint64_t>(active_point_count));
+    if (exact_batch_debug_enabled()) {
+      const uuber::IrNode &node = ir_node_required(ctx, node_idx);
+      Rcpp::Rcout << "exact_batch_fallback node_idx=" << node_idx
+                  << " op=" << static_cast<int>(node.op)
+                  << " event_idx=" << node.event_idx
+                  << " active_points=" << active_point_count << "\n";
+    }
     const uuber::TrialParamsSoA *trial_params_soa =
         resolve_trial_params_soa(ctx, trial_params);
     uuber::KernelBatchRuntimeState batch_runtime;
@@ -848,8 +1225,8 @@ bool exact_eval_node_batch_with_points(
           [&](const uuber::IrEvent &event, EvalNeed event_need,
               uuber::KernelNodeBatchValues &out) -> bool {
             return exact_eval_simple_acc_event_batch(
-                ctx, event, points, component_idx, trial_params, event_need,
-                out, active_mask);
+                ctx, event, points, component_idx, trial_params, trial_type_key,
+                event_need, out, active_mask);
           });
     };
 
@@ -1218,6 +1595,9 @@ bool exact_competitor_survival_batch_impl(
   if (points.empty() || competitor_cache.compiled_ops.empty()) {
     return true;
   }
+  record_unified_outcome_exact_competitor_batch_call(
+      static_cast<std::uint64_t>(points.size()),
+      static_cast<std::uint64_t>(competitor_cache.compiled_ops.size()));
 
   std::vector<ExactScenarioPoint> mutable_points = points;
   std::vector<double> times(points.size(), 0.0);

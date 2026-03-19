@@ -3,7 +3,6 @@
 #include <Rcpp.h>
 
 #include <algorithm>
-#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <unordered_map>
@@ -20,22 +19,6 @@ namespace {
 constexpr double kDefaultRelTol = 1e-5;
 constexpr double kDefaultAbsTol = 1e-6;
 constexpr int kDefaultMaxDepth = 12;
-
-inline bool exact_batch_debug_enabled() {
-  static const bool enabled = []() {
-    const char *raw = std::getenv("ACCUMULATR_DEBUG_EXACT_BATCH");
-    return raw != nullptr && raw[0] != '\0' && raw[0] != '0';
-  }();
-  return enabled;
-}
-
-inline bool exact_batch_strict_enabled() {
-  static const bool enabled = []() {
-    const char *raw = std::getenv("ACCUMULATR_STRICT_EXACT_BATCH");
-    return raw != nullptr && raw[0] != '\0' && raw[0] != '0';
-  }();
-  return enabled;
-}
 
 enum class RelativeSelfConstraintKind : std::uint8_t {
   kNone = 0u,
@@ -467,21 +450,6 @@ bool exact_eval_simple_acc_event_batch(
   return true;
 }
 
-inline uuber::KernelNodeValues kernel_batch_values_at(
-    const uuber::KernelNodeBatchValues &values, std::size_t idx) {
-  uuber::KernelNodeValues out;
-  if (idx < values.density.size()) {
-    out.density = values.density[idx];
-  }
-  if (idx < values.survival.size()) {
-    out.survival = values.survival[idx];
-  }
-  if (idx < values.cdf.size()) {
-    out.cdf = values.cdf[idx];
-  }
-  return out;
-}
-
 inline bool time_constraint_equal(const SourceTimeConstraint &lhs,
                                   const SourceTimeConstraint &rhs) {
   return lhs.has_exact == rhs.has_exact &&
@@ -775,6 +743,9 @@ bool exact_eval_with_shared_relevant_state(
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     SharedFn &&shared_eval, FallbackFn &&fallback_eval,
     bool fallback_on_singleton_partition = false) {
+  if (exact_count_active_points(active_mask, points.size()) == 0u) {
+    return true;
+  }
   std::size_t anchor_idx = points.size();
   ExactSharedStateStorage storage;
   if (!exact_prepare_shared_state_storage(ctx, points, active_mask,
@@ -935,89 +906,6 @@ inline const uuber::TrialParamsSoA *exact_trial_params_soa_for_point(
     return fallback_trial_params_soa;
   }
   return resolve_trial_params_soa(ctx, trial_params);
-}
-
-inline NodeEvalState exact_make_local_state(
-    const uuber::NativeContext &ctx, double t, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    const ExactScenarioPoint &point) {
-  NodeEvalState local(
-      ctx, t, component_idx, trial_params, trial_type_key, false, -1,
-      &point.time_constraints, nullptr,
-      point.forced_complete_bits_valid ? &point.forced_complete_bits : nullptr,
-      point.forced_complete_bits_valid,
-      point.forced_survive_bits_valid ? &point.forced_survive_bits : nullptr,
-      point.forced_survive_bits_valid, nullptr);
-  local.trial_params_soa =
-      exact_trial_params_soa_for_point(ctx, point, trial_params,
-                                       local.trial_params_soa);
-  return local;
-}
-
-inline bool exact_eval_event_pointwise_batch(
-    const uuber::NativeContext &ctx,
-    const std::vector<ExactScenarioPoint> &points,
-    int component_idx,
-    const TrialParamSet *trial_params,
-    const std::string &trial_type_key,
-    int event_idx,
-    uuber::KernelNodeBatchValues &event_out,
-    const std::vector<std::uint8_t> *active_mask) {
-  const std::size_t point_count = points.size();
-  exact_init_batch_values(point_count, event_out);
-  if (event_idx < 0 || event_idx >= static_cast<int>(ctx.ir.events.size())) {
-    return false;
-  }
-  for (std::size_t i = 0; i < point_count; ++i) {
-    if (!exact_point_active(active_mask, i)) {
-      continue;
-    }
-    NodeEvalState local_state =
-        exact_make_local_state(ctx, points[i].t, component_idx,
-                               trial_params, trial_type_key, points[i]);
-    uuber::KernelEventEvalFn event_eval =
-        evaluator_make_kernel_event_eval(local_state);
-    const uuber::KernelNodeValues values = event_eval(event_idx);
-    event_out.density[i] = values.density;
-    event_out.survival[i] = values.survival;
-    event_out.cdf[i] = values.cdf;
-  }
-  return true;
-}
-
-inline bool exact_eval_guard_pointwise_batch(
-    const uuber::NativeContext &ctx,
-    const std::vector<ExactScenarioPoint> &points,
-    int component_idx,
-    const TrialParamSet *trial_params,
-    const std::string &trial_type_key,
-    const uuber::KernelOp &op,
-    const uuber::KernelNodeBatchValues &reference_values,
-    const uuber::KernelNodeBatchValues &blocker_values,
-    const uuber::KernelEvalNeed &kneed,
-    uuber::KernelNodeBatchValues &guard_out,
-    const std::vector<std::uint8_t> *active_mask) {
-  const std::size_t point_count = points.size();
-  exact_init_batch_values(point_count, guard_out);
-  for (std::size_t i = 0; i < point_count; ++i) {
-    if (!exact_point_active(active_mask, i)) {
-      continue;
-    }
-    NodeEvalState local_state =
-        exact_make_local_state(ctx, points[i].t, component_idx,
-                               trial_params, trial_type_key, points[i]);
-    uuber::KernelGuardEvalFn guard_eval =
-        evaluator_make_kernel_guard_eval(local_state);
-    const uuber::KernelNodeValues guard_values =
-        guard_eval(op,
-                   kernel_batch_values_at(reference_values, i),
-                   kernel_batch_values_at(blocker_values, i),
-                   kneed);
-    guard_out.density[i] = guard_values.density;
-    guard_out.survival[i] = guard_values.survival;
-    guard_out.cdf[i] = guard_values.cdf;
-  }
-  return true;
 }
 
 bool exact_eval_relative_onset_base_point(
@@ -1382,17 +1270,13 @@ bool exact_eval_event_batch_common(
           return true;
         },
         [&]() -> bool {
-          if (exact_batch_strict_enabled()) {
-            Rcpp::stop(
-                "Exact batch strict mode hit EventPool pointwise fallback: "
-                "event_idx=%d node_idx=%d active_points=%d",
-                event_idx, event.node_idx,
-                static_cast<int>(exact_count_active_points(active_mask,
-                                                           point_count)));
-          }
-          return exact_eval_event_pointwise_batch(
-              ctx, points, component_idx, trial_params, trial_type_key,
-              event_idx, event_out, active_mask);
+          Rcpp::stop(
+              "Exact batch invariant failed for EventPool node: "
+              "event_idx=%d node_idx=%d active_points=%d",
+              event_idx, event.node_idx,
+              static_cast<int>(exact_count_active_points(active_mask,
+                                                         point_count)));
+          return false;
         },
         false);
   }
@@ -1438,18 +1322,13 @@ bool exact_eval_guard_batch_common(
             group_mask, guard_out);
       },
       [&]() -> bool {
-        if (exact_batch_strict_enabled()) {
-          Rcpp::stop(
-              "Exact batch strict mode hit Guard pointwise fallback: "
-              "node_idx=%d active_points=%d",
-              op.node_idx,
-              static_cast<int>(exact_count_active_points(active_mask,
-                                                         point_count)));
-        }
-        return exact_eval_guard_pointwise_batch(
-            ctx, points, component_idx, trial_params, trial_type_key,
-            op, reference_values, blocker_values, kneed, guard_out,
-            active_mask);
+        Rcpp::stop(
+            "Exact batch invariant failed for Guard node: "
+            "node_idx=%d active_points=%d",
+            op.node_idx,
+            static_cast<int>(exact_count_active_points(active_mask,
+                                                       point_count)));
+        return false;
       },
       false);
 }
@@ -1585,24 +1464,12 @@ bool exact_eval_node_batch_with_points(
             return true;
           },
           [&]() -> bool {
-            record_unified_outcome_exact_node_batch_pointwise_fallback(
-                static_cast<std::uint64_t>(active_point_count));
-            if (exact_batch_strict_enabled()) {
-              Rcpp::stop(
-                  "Exact batch strict mode hit Event node fallback: "
-                  "node_idx=%d event_idx=%d active_points=%d",
-                  node_idx, node.event_idx,
-                  static_cast<int>(active_point_count));
-            }
-            if (exact_batch_debug_enabled()) {
-              Rcpp::Rcout << "exact_batch_fallback node_idx=" << node_idx
-                          << " op=" << static_cast<int>(node.op)
-                          << " event_idx=" << node.event_idx
-                          << " active_points=" << active_point_count << "\n";
-            }
-            return exact_eval_node_batch_incremental_common(
-                ctx, node_idx, points, times, component_idx, trial_params,
-                trial_type_key, need, out_values, active_mask);
+            Rcpp::stop(
+                "Exact batch invariant failed for event node: "
+                "node_idx=%d event_idx=%d active_points=%d",
+                node_idx, node.event_idx,
+                static_cast<int>(active_point_count));
+            return false;
           },
           false);
     }
@@ -1662,24 +1529,13 @@ bool exact_eval_node_batch_with_points(
     }
   }
   auto pointwise_fallback = [&]() -> bool {
-    record_unified_outcome_exact_node_batch_pointwise_fallback(
-        static_cast<std::uint64_t>(active_point_count));
-    if (exact_batch_strict_enabled()) {
-      Rcpp::stop(
-          "Exact batch strict mode hit generic node fallback: "
-          "node_idx=%d active_points=%d",
-          node_idx, static_cast<int>(active_point_count));
-    }
-    if (exact_batch_debug_enabled()) {
-      const uuber::IrNode &node = ir_node_required(ctx, node_idx);
-      Rcpp::Rcout << "exact_batch_fallback node_idx=" << node_idx
-                  << " op=" << static_cast<int>(node.op)
-                  << " event_idx=" << node.event_idx
-                  << " active_points=" << active_point_count << "\n";
-    }
-    return exact_eval_node_batch_incremental_common(
-        ctx, node_idx, points, times, component_idx, trial_params,
-        trial_type_key, need, out_values, active_mask);
+    const uuber::IrNode &node = ir_node_required(ctx, node_idx);
+    Rcpp::stop(
+        "Exact batch invariant failed for generic node: "
+        "node_idx=%d op=%d event_idx=%d active_points=%d",
+        node_idx, static_cast<int>(node.op), node.event_idx,
+        static_cast<int>(active_point_count));
+    return false;
   };
 
   exact_init_batch_values(points.size(), out_values);

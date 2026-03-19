@@ -52,16 +52,6 @@ void record_unified_outcome_exact_node_batch_call(std::uint64_t active_points,
   }
 }
 
-void record_unified_outcome_exact_node_batch_pointwise_fallback(
-    std::uint64_t active_points) {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats.exact_node_batch_pointwise_fallback_calls;
-  g_unified_outcome_runtime_stats
-      .exact_node_batch_pointwise_fallback_active_points_total += active_points;
-}
-
 void record_unified_outcome_exact_shared_state_partition(
     std::uint64_t active_points, std::uint64_t group_count) {
   if (!g_unified_outcome_runtime_stats_enabled) {
@@ -398,12 +388,6 @@ Rcpp::List unified_outcome_stats_cpp() {
       Rcpp::Named("exact_node_batch_recursive_active_points_total") =
           static_cast<double>(g_unified_outcome_runtime_stats
                                   .exact_node_batch_recursive_active_points_total),
-      Rcpp::Named("exact_node_batch_pointwise_fallback_calls") =
-          static_cast<double>(g_unified_outcome_runtime_stats
-                                  .exact_node_batch_pointwise_fallback_calls),
-      Rcpp::Named("exact_node_batch_pointwise_fallback_active_points_total") =
-          static_cast<double>(g_unified_outcome_runtime_stats
-                                  .exact_node_batch_pointwise_fallback_active_points_total),
       Rcpp::Named("exact_shared_state_partition_calls") = static_cast<double>(
           g_unified_outcome_runtime_stats.exact_shared_state_partition_calls),
       Rcpp::Named("exact_shared_state_partition_groups_total") =

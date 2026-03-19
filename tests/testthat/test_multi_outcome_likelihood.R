@@ -196,7 +196,6 @@ testthat::test_that("ranked chained-onset trials match per-trial evaluation", {
   }
 
   testthat::expect_gt(stats_batched$exact_node_batch_calls, 0)
-  testthat::expect_equal(stats_batched$exact_node_batch_pointwise_fallback_calls, 0)
   testthat::expect_equal(ll_batched, ll_split, tolerance = 1e-10)
 })
 
@@ -240,7 +239,6 @@ testthat::test_that("ranked bounded-source chained-onset batches avoid scalar fa
   }
 
   testthat::expect_gt(stats_batched$exact_node_batch_calls, 0)
-  testthat::expect_equal(stats_batched$exact_node_batch_pointwise_fallback_calls, 0)
   testthat::expect_equal(ll_batched, ll_split, tolerance = 1e-10)
 })
 
@@ -279,7 +277,6 @@ testthat::test_that("ranked interval-conditioned self constraints batch without 
     }
 
     testthat::expect_gt(stats_batched$exact_node_batch_calls, 0)
-    testthat::expect_equal(stats_batched$exact_node_batch_pointwise_fallback_calls, 0)
     testthat::expect_equal(ll_batched, ll_split, tolerance = 1e-10)
   }
 

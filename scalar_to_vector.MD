@@ -166,25 +166,21 @@ Status:
 
 - `Scalar orchestration with batched node evaluation inside`
 
-### 4.3 Old Scalar Transition Enumeration Still Exists
+### 4.3 Old Scalar Ranked Oracle Has Been Removed
 
-The old ranked transition enumerator still exists and is still scalar:
+The separate scalar ranked prefix-density engine has been deleted.
+
+Remaining scalar-shaped ranked work is now inside the batched executor itself:
 
 - `for_each_sequence_node_transition()`
-  - `src/ranked_transitions.cpp:287-492`
-- uses scalar recursive node evaluation internally
-  - `src/ranked_transitions.cpp:346-358`
-
-It is still used by:
-
-- the scalar ranked engine kept as an oracle:
-  - `src/ranked_transitions.cpp:703-892`
-- batched debug-oracle checks:
-  - `src/ranked_transitions.cpp:1114-1131`
+  - `src/ranked_transitions.cpp`
+- scenario/state scheduling and collapse inside:
+  - `sequence_prefix_density_batch_resolved()`
+  - `src/ranked_transitions.cpp`
 
 Status:
 
-- `Scalar-only`, but no longer the primary production path if ranked batching covers the case
+- `No separate scalar ranked engine remains; ranked still has scalar orchestration internally`
 
 ## 5. Exact Density: Pointwise And Scalar-Shaped Paths Still Exist
 
@@ -238,26 +234,24 @@ Status:
 
 - `Scalar-only fallback inside batched exact density`
 
-### 5.4 Exact Node Batch Has An Explicit Pointwise Fallback
+### 5.4 Exact Node Batch No Longer Has A Scalar Pointwise Escape Hatch
 
 Main batch node evaluator:
 
 - `exact_eval_node_batch_with_points()`
-- `src/exact_outcome_density.cpp:1164-1267`
+- `src/exact_outcome_density.cpp`
 
-Direct event fastpath is tried first:
+Current behavior:
 
-- `src/exact_outcome_density.cpp:1181-1193`
+- direct event nodes are handled either by `exact_eval_simple_acc_event_batch()`
+  or by grouped shared-state node evaluation
+- guard nodes are handled explicitly through `exact_eval_guard_batch_common()`
+- heterogeneous composite nodes (`And` / `Or` / `Not`) are hoisted directly to
+  the exact incremental kernel path instead of re-entering a pointwise fallback
+- if grouped shared-state evaluation fails now, that is treated as an invariant
+  violation, not a scalar recovery path
 
-If that cannot handle the node, the code now tries shared-state subgroup
-partitioning before it gives up to pointwise execution:
-
-- `pointwise_fallback`: `src/exact_outcome_density.cpp:1204-1257`
-
-Status:
-
-- `Pointwise batch fallback still exists, but only after subgroup partitioning
-  fails`
+- There is no longer a generic exact pointwise fallback execution path.
 
 ### 5.5 Shared-State Check Is All-Or-Nothing
 
@@ -270,54 +264,46 @@ and evaluates those subgroups through the shared-state kernel path first:
 - shared-state gating:
   - `src/exact_outcome_density.cpp:567-620`
 
-Fallback still happens if relevant-state partitioning cannot build valid
-subgroups or if subgroup shared evaluation fails:
-
-- the batch drops to pointwise fallback
-- event / guard shared-state batching also now bails out when partitioning would
-  create one subgroup per active point, because that pattern caused severe exact
-  benchmark regressions while providing no real batching benefit
+If relevant-state partitioning cannot build valid subgroups or grouped shared
+evaluation fails, the code now treats that as an invariant failure instead of
+silently dropping into scalar exact evaluation.
 
 Status:
 
 - `Improved: heterogeneity can stay batched when it partitions cleanly`
 
-### 5.6 Event Batch Has A Targeted Per-Point Fallback Again
+### 5.6 Event Batch No Longer Falls Back To Per-Point Exact Evaluation
 
 Event batch common path:
 
-- `src/exact_outcome_density.cpp:1010-1055`
+- `src/exact_outcome_density.cpp`
 
 Current behavior:
 
 - accumulator-backed event refs recurse into `exact_eval_node_batch_with_points()`
 - pooled event refs stay in the grouped shared-state batch path
 - missing event-node metadata is still treated as invalid IR
-- but if relevant-state partitioning would degenerate into singleton groups, the
-  pooled-event path now falls back to per-point exact event evaluation instead
-  of doing one-point "batched" work repeatedly
+- there is no remaining per-point exact event fallback path
 
 Status:
 
-- `Targeted pointwise batch fallback`
+- `Grouped batch only; failures are invariant violations`
 
-### 5.7 Guard Batch Has A Targeted Per-Point Fallback Again
+### 5.7 Guard Batch No Longer Falls Back To Per-Point Exact Evaluation
 
 Guard batch common path:
 
-- `src/exact_outcome_density.cpp:1058-1104`
+- `src/exact_outcome_density.cpp`
 
 Current behavior:
 
 - grouped shared-state guard evaluation is still used
 - missing `op.node_idx` metadata is still treated as invalid IR
-- but if relevant-state partitioning would degenerate into singleton groups, the
-  guard path now falls back to per-point exact guard evaluation instead of doing
-  one-point shared-state batches repeatedly
+- there is no remaining per-point exact guard fallback path
 
 Status:
 
-- `Targeted pointwise batch fallback`
+- `Grouped batch only; failures are invariant violations`
 
 ### 5.8 Some "Batched" Exact Event Work Is Still Per-Point Inside The Batch Loop
 
@@ -504,10 +490,8 @@ What is currently observable:
 
 - exact batch calls
   - `src/runtime_stats.cpp:34-40`
-- exact node pointwise fallback calls
-  - `src/runtime_stats.cpp:48-56`
 - exact competitor batch calls
-  - `src/runtime_stats.cpp:58-76`
+  - `src/runtime_stats.cpp`
 - generic label-ref batch fastpath calls
   - `src/runtime_stats.cpp:92-96`
 - generic node-ref batch calls
@@ -516,7 +500,7 @@ What is currently observable:
   - `src/runtime_stats.cpp`
   - increments in the repeated-leftover grouping step inside `cpp_loglik()`
 - direct batch-spec attempts and rejection counts by reason
-  - `src/runtime_stats.cpp:131-169`
+  - `src/runtime_stats.cpp`
   - increments in `build_single_step_direct_batch_spec()`
     - `src/distributions.cpp:3829-3873`
 - ranked batch-spec attempts and rejection counts by reason

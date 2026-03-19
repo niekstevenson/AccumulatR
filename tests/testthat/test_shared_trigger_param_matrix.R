@@ -248,5 +248,4 @@ testthat::test_that("shared-trigger exact multi-trial onset changes partition ex
 
   testthat::expect_equal(ll_batch, ll_split, tolerance = 1e-10)
   testthat::expect_gt(stats$exact_batch_density_calls, 0)
-  testthat::expect_equal(stats$exact_node_batch_pointwise_fallback_calls, 0)
 })

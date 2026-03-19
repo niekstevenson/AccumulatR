@@ -11,8 +11,6 @@ struct UnifiedOutcomeRuntimeStats {
   std::uint64_t exact_node_batch_active_points_max{0};
   std::uint64_t exact_node_batch_recursive_calls{0};
   std::uint64_t exact_node_batch_recursive_active_points_total{0};
-  std::uint64_t exact_node_batch_pointwise_fallback_calls{0};
-  std::uint64_t exact_node_batch_pointwise_fallback_active_points_total{0};
   std::uint64_t exact_shared_state_partition_calls{0};
   std::uint64_t exact_shared_state_partition_groups_total{0};
   std::uint64_t exact_shared_state_partition_active_points_total{0};
@@ -79,8 +77,6 @@ void record_unified_outcome_kernel_density_call();
 void record_unified_outcome_exact_batch_density_call();
 void record_unified_outcome_exact_node_batch_call(std::uint64_t active_points,
                                                   bool recursive_call);
-void record_unified_outcome_exact_node_batch_pointwise_fallback(
-    std::uint64_t active_points);
 void record_unified_outcome_exact_shared_state_partition(
     std::uint64_t active_points, std::uint64_t group_count);
 void record_unified_outcome_exact_competitor_batch_call(

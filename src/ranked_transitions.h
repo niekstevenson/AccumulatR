@@ -67,17 +67,6 @@ std::vector<int>
 collect_competitor_sources(const uuber::NativeContext &ctx,
                            const std::vector<int> &competitor_ids);
 
-double sequence_prefix_density_resolved(
-    const uuber::NativeContext &ctx, const std::vector<int> &outcome_indices,
-    const std::vector<int> &node_indices, const double *times,
-    int component_idx, const TrialParamSet *trial_params,
-    const std::string &trial_type_key,
-    uuber::KernelRuntimeState *kernel_runtime = nullptr,
-    RankedTransitionCompiler *transition_compiler = nullptr,
-    const std::vector<const std::vector<int> *> *step_competitor_ids_ptrs =
-        nullptr,
-    const std::vector<std::vector<int>> *step_persistent_sources = nullptr);
-
 bool sequence_prefix_density_batch_resolved(
     const uuber::NativeContext &ctx, const std::vector<int> &outcome_indices,
     const std::vector<int> &node_indices,

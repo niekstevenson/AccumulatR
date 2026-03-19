@@ -52,6 +52,12 @@ struct SharedTriggerPlan {
   std::vector<double> mask_weights;
 };
 
+struct SharedTriggerMaskSoABatch {
+  std::vector<uuber::TrialParamsSoA> mask_params;
+  std::vector<const uuber::TrialParamsSoA *> mask_param_ptrs;
+  std::vector<double> mask_weights;
+};
+
 std::uint64_t compute_trial_param_fingerprint(const TrialParamSet &params);
 void refresh_trial_param_fingerprint(TrialParamSet &params);
 bool trial_paramsets_equivalent(const TrialParamSet &a,
@@ -75,6 +81,10 @@ double shared_trigger_mask_weight(const SharedTriggerPlan &plan,
                                   std::uint64_t mask);
 SharedTriggerPlan build_shared_trigger_plan(const uuber::NativeContext &ctx,
                                             const TrialParamSet *params_ptr);
+bool build_shared_trigger_mask_soa_batch(const uuber::NativeContext &ctx,
+                                         const TrialParamSet *base_params,
+                                         const SharedTriggerPlan &plan,
+                                         SharedTriggerMaskSoABatch &out);
 void apply_trigger_state_inplace(TrialParamSet &params, int acc_idx, bool fail);
 void ensure_trial_params_soa(const uuber::NativeContext &ctx,
                              TrialParamSet &params);

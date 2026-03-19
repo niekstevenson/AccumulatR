@@ -897,6 +897,7 @@ bool sequence_prefix_density_batch_resolved(
     const std::vector<const double *> &times_by_trial, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     std::vector<double> &density_out,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_by_trial,
     RankedTransitionCompiler *transition_compiler,
     const std::vector<const std::vector<int> *> *step_competitor_ids_ptrs,
     const std::vector<std::vector<int>> *step_persistent_sources) {
@@ -1018,6 +1019,11 @@ bool sequence_prefix_density_batch_resolved(
       rank_point.t = t;
       rank_point.density_index = active_state_indices.size();
       rank_point.weight = 1.0;
+      if (trial_params_soa_by_trial != nullptr &&
+          static_cast<std::size_t>(trial_slot) < trial_params_soa_by_trial->size()) {
+        rank_point.trial_params_soa =
+            (*trial_params_soa_by_trial)[static_cast<std::size_t>(trial_slot)];
+      }
       rank_point.forced_complete_bits = state.forced_complete_bits;
       rank_point.forced_survive_bits = state.forced_survive_bits;
       rank_point.forced_complete_bits_valid = state.forced_complete_bits_valid;
@@ -1060,7 +1066,8 @@ bool sequence_prefix_density_batch_resolved(
       }
     }
 
-    if (ranked_batch_debug_enabled() && rank_idx > 0u) {
+    if (ranked_batch_debug_enabled() && rank_idx > 0u &&
+        trial_params_soa_by_trial == nullptr) {
       static int denom_mismatch_budget = 10;
       constexpr double kDebugTol = 1e-10;
       for (std::size_t i = 0; i < active_state_indices.size(); ++i) {
@@ -1097,7 +1104,7 @@ bool sequence_prefix_density_batch_resolved(
       return true;
     }
 
-    if (ranked_batch_debug_enabled()) {
+    if (ranked_batch_debug_enabled() && trial_params_soa_by_trial == nullptr) {
       static int scenario_mismatch_budget = 10;
       constexpr double kDebugTol = 1e-10;
       std::vector<double> batch_transition_weight(active_state_indices.size(),
@@ -1237,7 +1244,7 @@ bool sequence_prefix_density_batch_resolved(
     }
   }
 
-  if (ranked_batch_debug_enabled()) {
+  if (ranked_batch_debug_enabled() && trial_params_soa_by_trial == nullptr) {
     static int mismatch_budget = 10;
     constexpr double kTol = 1e-10;
     for (std::size_t trial_slot = 0; trial_slot < trial_count; ++trial_slot) {

@@ -262,6 +262,51 @@ void validate_guard_transition_completeness(const NativeContext &ctx) {
   }
 }
 
+void validate_event_batch_metadata(const NativeContext &ctx) {
+  const IrContext &ir = ctx.ir;
+  for (int event_idx = 0; event_idx < static_cast<int>(ir.events.size());
+       ++event_idx) {
+    const IrEvent &event = ir.events[static_cast<std::size_t>(event_idx)];
+    if (event.node_idx < 0 ||
+        event.node_idx >= static_cast<int>(ir.nodes.size())) {
+      Rcpp::stop("IR event_idx=%d missing backing node_idx=%d", event_idx,
+                 event.node_idx);
+    }
+    const IrNode &node = ir.nodes[static_cast<std::size_t>(event.node_idx)];
+    if (!(node.op == IrNodeOp::EventAcc || node.op == IrNodeOp::EventPool)) {
+      Rcpp::stop(
+          "IR event_idx=%d backing node_idx=%d is not an event node", event_idx,
+          event.node_idx);
+    }
+    if (node.event_idx != event_idx) {
+      Rcpp::stop(
+          "IR event_idx=%d node_idx=%d reverse mapping mismatch (node.event_idx=%d)",
+          event_idx, event.node_idx, node.event_idx);
+    }
+  }
+  if (!ctx.kernel_program.valid) {
+    return;
+  }
+  for (std::size_t op_idx = 0; op_idx < ctx.kernel_program.ops.size(); ++op_idx) {
+    const KernelOp &op = ctx.kernel_program.ops[op_idx];
+    if (op.code != KernelOpCode::Event) {
+      continue;
+    }
+    if (op.event_idx < 0 ||
+        op.event_idx >= static_cast<int>(ir.events.size())) {
+      Rcpp::stop("Kernel event op_idx=%d has invalid event_idx=%d",
+                 static_cast<int>(op_idx), op.event_idx);
+    }
+    const IrEvent &event =
+        ir.events[static_cast<std::size_t>(op.event_idx)];
+    if (event.node_idx != op.node_idx) {
+      Rcpp::stop(
+          "Kernel event op_idx=%d node/event mapping mismatch (op.node_idx=%d event.node_idx=%d)",
+          static_cast<int>(op_idx), op.node_idx, event.node_idx);
+    }
+  }
+}
+
 void validate_competitor_transition_metadata(const NativeContext &ctx) {
   const IrContext &ir = ctx.ir;
   const KernelStateGraph &graph = ctx.kernel_state_graph;
@@ -868,6 +913,7 @@ build_context_from_proto(const NativePrepProto &proto) {
   };
 
   auto ctx = std::make_unique<NativeContext>();
+  ctx->runtime_cache_instance_id = next_native_context_runtime_cache_instance_id();
 
   for (const auto &label : proto.label_index) {
     if (!label.label.empty()) {
@@ -2088,6 +2134,7 @@ build_context_from_proto(const NativePrepProto &proto) {
         transition_count;
   }
   validate_guard_transition_completeness(*ctx);
+  validate_event_batch_metadata(*ctx);
   validate_competitor_transition_metadata(*ctx);
   ctx->kernel_state_graph.valid = ctx->kernel_program.valid;
   return ctx;

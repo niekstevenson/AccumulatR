@@ -5,16 +5,22 @@
 
 #include "context.h"
 
+struct OutcomeCouplingEventRefPayload {
+  uuber::LabelRef ref;
+  int node_id{-1};
+  std::uint32_t node_flags{0u};
+};
+
 struct OutcomeCouplingPairPayload {
-  uuber::LabelRef x_ref;
-  uuber::LabelRef y_ref;
-  uuber::LabelRef c_ref;
+  OutcomeCouplingEventRefPayload x_ref;
+  OutcomeCouplingEventRefPayload y_ref;
+  OutcomeCouplingEventRefPayload c_ref;
 };
 
 struct OutcomeCouplingNWayPayload {
-  uuber::LabelRef gate_ref;
-  uuber::LabelRef target_ref;
-  std::vector<uuber::LabelRef> competitor_refs;
+  OutcomeCouplingEventRefPayload gate_ref;
+  OutcomeCouplingEventRefPayload target_ref;
+  std::vector<OutcomeCouplingEventRefPayload> competitor_refs;
 };
 
 struct OutcomeCouplingGenericNodeIntegralPayload {

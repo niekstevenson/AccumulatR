@@ -84,6 +84,8 @@ bool sequence_prefix_density_batch_resolved(
     const std::vector<const double *> &times_by_trial, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     std::vector<double> &density_out,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_by_trial =
+        nullptr,
     RankedTransitionCompiler *transition_compiler = nullptr,
     const std::vector<const std::vector<int> *> *step_competitor_ids_ptrs =
         nullptr,

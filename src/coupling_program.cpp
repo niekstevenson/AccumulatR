@@ -141,16 +141,25 @@ bool ir_outcome_coupling_pair_lookup(const uuber::NativeContext &ctx,
       comp_idx) {
     return false;
   }
-  auto fill_from_event = [&](int event_idx, uuber::LabelRef &ref) -> bool {
+  auto fill_from_event = [&](int event_idx,
+                             OutcomeCouplingEventRefPayload &payload) -> bool {
     if (event_idx < 0 || event_idx >= static_cast<int>(ctx.ir.events.size())) {
       return false;
     }
     const uuber::IrEvent &event =
         ctx.ir.events[static_cast<std::size_t>(event_idx)];
-    ref.label_id = event.label_id;
-    ref.acc_idx = event.acc_idx;
-    ref.pool_idx = event.pool_idx;
-    ref.outcome_idx = event.outcome_idx;
+    if (event.node_idx < 0 ||
+        event.node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+      return false;
+    }
+    payload.ref.label_id = event.label_id;
+    payload.ref.acc_idx = event.acc_idx;
+    payload.ref.pool_idx = event.pool_idx;
+    payload.ref.outcome_idx = event.outcome_idx;
+    const uuber::IrNode &node =
+        ctx.ir.nodes[static_cast<std::size_t>(event.node_idx)];
+    payload.node_id = ir_dense_idx_to_node_id(ctx, event.node_idx);
+    payload.node_flags = node.flags;
     return true;
   };
   if (!fill_from_event(spec.target_event_idx, out.x_ref)) {
@@ -225,16 +234,25 @@ bool ir_outcome_coupling_nway_lookup(const uuber::NativeContext &ctx,
     }
   }
 
-  auto ref_from_event = [&](int event_idx, uuber::LabelRef &ref) -> bool {
+  auto ref_from_event = [&](int event_idx,
+                            OutcomeCouplingEventRefPayload &payload) -> bool {
     if (event_idx < 0 || event_idx >= static_cast<int>(ctx.ir.events.size())) {
       return false;
     }
     const uuber::IrEvent &event =
         ctx.ir.events[static_cast<std::size_t>(event_idx)];
-    ref.label_id = event.label_id;
-    ref.acc_idx = event.acc_idx;
-    ref.pool_idx = event.pool_idx;
-    ref.outcome_idx = event.outcome_idx;
+    if (event.node_idx < 0 ||
+        event.node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+      return false;
+    }
+    payload.ref.label_id = event.label_id;
+    payload.ref.acc_idx = event.acc_idx;
+    payload.ref.pool_idx = event.pool_idx;
+    payload.ref.outcome_idx = event.outcome_idx;
+    const uuber::IrNode &node =
+        ctx.ir.nodes[static_cast<std::size_t>(event.node_idx)];
+    payload.node_id = ir_dense_idx_to_node_id(ctx, event.node_idx);
+    payload.node_flags = node.flags;
     return true;
   };
 
@@ -257,7 +275,7 @@ bool ir_outcome_coupling_nway_lookup(const uuber::NativeContext &ctx,
     }
     const int event_idx =
         ctx.ir.outcome_coupling_event_indices[static_cast<std::size_t>(idx)];
-    uuber::LabelRef comp_ref;
+    OutcomeCouplingEventRefPayload comp_ref;
     if (!ref_from_event(event_idx, comp_ref)) {
       return false;
     }

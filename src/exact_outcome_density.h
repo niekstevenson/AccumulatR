@@ -11,6 +11,7 @@ struct ExactScenarioPoint {
   double t{0.0};
   std::size_t density_index{0u};
   double weight{0.0};
+  const uuber::TrialParamsSoA *trial_params_soa{nullptr};
   uuber::BitsetState forced_complete_bits;
   uuber::BitsetState forced_survive_bits;
   bool forced_complete_bits_valid{false};

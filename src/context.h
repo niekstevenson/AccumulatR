@@ -365,8 +365,12 @@ struct NativeContext {
   KernelStateGraph kernel_state_graph;
   TrialParamsSoA base_params_soa;
   bool has_chained_onsets{false};
+  std::uint64_t runtime_cache_instance_id{0};
+
+  ~NativeContext();
 };
 
+std::uint64_t next_native_context_runtime_cache_instance_id() noexcept;
 Rcpp::XPtr<NativeContext> build_native_context(Rcpp::List prep);
 
 } // namespace uuber

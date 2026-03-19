@@ -566,6 +566,41 @@ void apply_trigger_q_soa_inplace_kernel(const uuber::NativeContext &ctx,
   }
 }
 
+namespace {
+
+inline void apply_trigger_q_soa_inplace_kernel(
+    const uuber::NativeContext &ctx, uuber::TrialParamsSoA &params_soa,
+    const SharedTriggerPlan &plan, int trigger_bit_idx, bool fail) {
+  if (trigger_bit_idx < 0 ||
+      trigger_bit_idx >= static_cast<int>(plan.kernel_transition_begin.size()) ||
+      trigger_bit_idx >= static_cast<int>(plan.kernel_transition_count.size())) {
+    return;
+  }
+  const int begin =
+      plan.kernel_transition_begin[static_cast<std::size_t>(trigger_bit_idx)];
+  const int count =
+      plan.kernel_transition_count[static_cast<std::size_t>(trigger_bit_idx)];
+  if (begin < 0 || count <= 0) {
+    return;
+  }
+  const int end = std::min(
+      begin + count,
+      static_cast<int>(ctx.kernel_state_graph.trigger_transitions.size()));
+  const double q_value = fail ? 1.0 : 0.0;
+  for (int i = begin; i < end; ++i) {
+    const uuber::KernelStateTransition &tr =
+        ctx.kernel_state_graph
+            .trigger_transitions[static_cast<std::size_t>(i)];
+    if (tr.acc_idx < 0 || tr.acc_idx >= params_soa.n_acc ||
+        static_cast<std::size_t>(tr.acc_idx) >= params_soa.q.size()) {
+      continue;
+    }
+    params_soa.q[static_cast<std::size_t>(tr.acc_idx)] = q_value;
+  }
+}
+
+} // namespace
+
 void prepare_trigger_scratch(const uuber::NativeContext &ctx,
                              const TrialParamSet *base_params,
                              const SharedTriggerPlan &plan,
@@ -614,6 +649,60 @@ void prepare_trigger_scratch(const uuber::NativeContext &ctx,
   }
   scratch.shared_trigger_current_mask = 0ULL;
   scratch.shared_trigger_mask_valid = true;
+}
+
+bool build_shared_trigger_mask_soa_batch(const uuber::NativeContext &ctx,
+                                         const TrialParamSet *base_params,
+                                         const SharedTriggerPlan &plan,
+                                         SharedTriggerMaskSoABatch &out) {
+  out.mask_params.clear();
+  out.mask_param_ptrs.clear();
+  out.mask_weights.clear();
+  if (!base_params) {
+    return false;
+  }
+
+  const uuber::TrialParamsSoA *base_soa = resolve_trial_params_soa(ctx, base_params);
+  if (!base_soa || !base_soa->valid) {
+    return false;
+  }
+
+  const std::size_t trigger_count = shared_trigger_count(plan);
+  if (trigger_count == 0u) {
+    out.mask_params.push_back(*base_soa);
+    out.mask_weights.push_back(1.0);
+  } else {
+    if (trigger_count >= 63u) {
+      Rcpp::stop("Too many shared triggers for density evaluation");
+    }
+    const std::uint64_t n_states = 1ULL << trigger_count;
+    for (std::uint64_t mask = 0ULL; mask < n_states; ++mask) {
+      const double weight = plan.mask_weights.empty()
+                                ? shared_trigger_mask_weight(plan, mask)
+                                : plan.mask_weights[static_cast<std::size_t>(mask)];
+      if (!(std::isfinite(weight) && weight > 0.0)) {
+        continue;
+      }
+      out.mask_params.push_back(*base_soa);
+      uuber::TrialParamsSoA &mask_soa = out.mask_params.back();
+      for (std::size_t bit_idx = 0; bit_idx < trigger_count; ++bit_idx) {
+        if (((mask >> bit_idx) & 1ULL) == 0ULL) {
+          continue;
+        }
+        apply_trigger_q_soa_inplace_kernel(
+            ctx, mask_soa, plan, static_cast<int>(bit_idx), true);
+      }
+      mask_soa.valid = true;
+      out.mask_weights.push_back(weight);
+    }
+  }
+
+  out.mask_param_ptrs.reserve(out.mask_params.size());
+  for (const uuber::TrialParamsSoA &mask_params : out.mask_params) {
+    out.mask_param_ptrs.push_back(&mask_params);
+  }
+  return !out.mask_param_ptrs.empty() &&
+         out.mask_param_ptrs.size() == out.mask_weights.size();
 }
 
 namespace {

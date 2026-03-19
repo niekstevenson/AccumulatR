@@ -51,6 +51,48 @@ inline uuber::LabelRef evaluator_make_onset_source_ref(
   return ref;
 }
 
+inline bool same_acc_batch_params_except_q(const uuber::TrialParamsSoA &lhs,
+                                           const uuber::TrialParamsSoA &rhs,
+                                           int acc_idx) {
+  if (acc_idx < 0 || acc_idx >= lhs.n_acc || acc_idx >= rhs.n_acc) {
+    return false;
+  }
+  const std::size_t idx = static_cast<std::size_t>(acc_idx);
+  return lhs.valid && rhs.valid &&
+         idx < lhs.dist_code.size() && idx < rhs.dist_code.size() &&
+         idx < lhs.onset.size() && idx < rhs.onset.size() &&
+         idx < lhs.t0.size() && idx < rhs.t0.size() &&
+         idx < lhs.p1.size() && idx < rhs.p1.size() &&
+         idx < lhs.p2.size() && idx < rhs.p2.size() &&
+         idx < lhs.p3.size() && idx < rhs.p3.size() &&
+         idx < lhs.p4.size() && idx < rhs.p4.size() &&
+         idx < lhs.p5.size() && idx < rhs.p5.size() &&
+         idx < lhs.p6.size() && idx < rhs.p6.size() &&
+         idx < lhs.p7.size() && idx < rhs.p7.size() &&
+         idx < lhs.p8.size() && idx < rhs.p8.size() &&
+         lhs.dist_code[idx] == rhs.dist_code[idx] &&
+         canonical_double_bits(lhs.onset[idx]) ==
+             canonical_double_bits(rhs.onset[idx]) &&
+         canonical_double_bits(lhs.t0[idx]) ==
+             canonical_double_bits(rhs.t0[idx]) &&
+         canonical_double_bits(lhs.p1[idx]) ==
+             canonical_double_bits(rhs.p1[idx]) &&
+         canonical_double_bits(lhs.p2[idx]) ==
+             canonical_double_bits(rhs.p2[idx]) &&
+         canonical_double_bits(lhs.p3[idx]) ==
+             canonical_double_bits(rhs.p3[idx]) &&
+         canonical_double_bits(lhs.p4[idx]) ==
+             canonical_double_bits(rhs.p4[idx]) &&
+         canonical_double_bits(lhs.p5[idx]) ==
+             canonical_double_bits(rhs.p5[idx]) &&
+         canonical_double_bits(lhs.p6[idx]) ==
+             canonical_double_bits(rhs.p6[idx]) &&
+         canonical_double_bits(lhs.p7[idx]) ==
+             canonical_double_bits(rhs.p7[idx]) &&
+         canonical_double_bits(lhs.p8[idx]) ==
+             canonical_double_bits(rhs.p8[idx]);
+}
+
 inline int resolve_dense_node_idx(const uuber::NativeContext &ctx, int node_id) {
   auto it = ctx.ir.id_to_node_idx.find(node_id);
   if (it != ctx.ir.id_to_node_idx.end()) {
@@ -77,6 +119,39 @@ inline const uuber::IrNode &ir_node_required(const uuber::NativeContext &ctx,
     Rcpp::stop("IR node index %d out of bounds", node_idx);
   }
   return ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
+}
+
+inline bool ir_mask_has_component(const uuber::NativeContext &ctx,
+                                  int mask_offset, int component_idx) {
+  if (component_idx < 0) {
+    return true;
+  }
+  if (!ctx.ir.valid || ctx.ir.component_mask_words <= 0 || mask_offset < 0) {
+    return true;
+  }
+  const int word_idx = component_idx / 64;
+  const int bit = component_idx % 64;
+  if (word_idx < 0 || word_idx >= ctx.ir.component_mask_words) {
+    return false;
+  }
+  const std::size_t idx = static_cast<std::size_t>(mask_offset + word_idx);
+  if (idx >= ctx.ir.component_masks.size()) {
+    return false;
+  }
+  const std::uint64_t word = ctx.ir.component_masks[idx];
+  return (word & (1ULL << bit)) != 0ULL;
+}
+
+inline bool ir_outcome_allows_component(const uuber::NativeContext &ctx,
+                                        int outcome_idx, int component_idx) {
+  if (!ctx.ir.valid || outcome_idx < 0 ||
+      outcome_idx >= static_cast<int>(ctx.ir.outcomes.size())) {
+    return true;
+  }
+  const uuber::IrOutcome &out =
+      ctx.ir.outcomes[static_cast<std::size_t>(outcome_idx)];
+  return ir_mask_has_component(ctx, out.allowed_component_mask_offset,
+                               component_idx);
 }
 
 inline uuber::LabelRef node_label_ref(const uuber::NativeContext &ctx,
@@ -144,6 +219,47 @@ inline bool evaluator_resolve_label_time_constraint(
     has_bounds = true;
   }
   return true;
+}
+
+struct CompactTimeConstraintLookup {
+  std::vector<int> source_ids;
+  std::vector<SourceTimeConstraint> constraints;
+};
+
+inline const SourceTimeConstraint *compact_time_constraint_find(
+    const CompactTimeConstraintLookup *lookup, int source_id) {
+  if (lookup == nullptr || lookup->source_ids.empty() ||
+      lookup->source_ids.size() != lookup->constraints.size()) {
+    return nullptr;
+  }
+  auto it = std::lower_bound(lookup->source_ids.begin(),
+                             lookup->source_ids.end(), source_id);
+  if (it == lookup->source_ids.end() || *it != source_id) {
+    return nullptr;
+  }
+  const std::size_t idx = static_cast<std::size_t>(
+      std::distance(lookup->source_ids.begin(), it));
+  return &lookup->constraints[idx];
+}
+
+inline void build_compact_time_constraint_lookup(
+    const TimeConstraintMap *time_constraints,
+    const std::vector<int> &relevant_source_ids,
+    CompactTimeConstraintLookup &out) {
+  out.source_ids = relevant_source_ids;
+  sort_unique(out.source_ids);
+  out.constraints.assign(out.source_ids.size(), SourceTimeConstraint{});
+  if (time_constraints == nullptr || time_constraints->empty() ||
+      out.source_ids.empty()) {
+    return;
+  }
+  for (std::size_t i = 0; i < out.source_ids.size(); ++i) {
+    const SourceTimeConstraint *constraint =
+        time_constraints_find(time_constraints, out.source_ids[i]);
+    if (constraint != nullptr) {
+      out.constraints[i] = *constraint;
+    }
+  }
 }
 
 inline bool evaluator_state_contains_survive_at(
@@ -284,6 +400,8 @@ struct NodeEvalState {
   TimeConstraintMap time_constraints;
   const ForcedScopeFilter *forced_scope_filter;
   const uuber::TrialParamsSoA *trial_params_soa;
+  const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch{
+      nullptr};
   const std::unordered_map<int, int> *forced_label_id_to_bit_idx;
   ForcedStateView forced_state{};
   uuber::BitsetState forced_complete_bits;
@@ -377,6 +495,8 @@ struct GuardEvalInput {
   const TrialParamSet *trial_params;
   const uuber::TrialParamsSoA *trial_params_soa{nullptr};
   const TimeConstraintMap *time_constraints{nullptr};
+  const CompactTimeConstraintLookup *time_constraint_lookup{nullptr};
+  CompactTimeConstraintLookup local_time_constraint_lookup{};
 };
 
 bool evaluator_eval_node_with_forced_state_view_batch(
@@ -414,6 +534,9 @@ std::vector<int> evaluator_gather_blocker_sources(
 double evaluator_guard_effective_survival_internal(
     const GuardEvalInput &input, double t,
     const IntegrationSettings &settings);
+bool evaluator_guard_cdf_batch_prepared(const GuardEvalInput &input,
+                                        const std::vector<double> &times,
+                                        std::vector<double> &cdf_out);
 NodeEvalResult evaluator_eval_node_recursive_dense(int node_idx,
                                                    NodeEvalState &state,
                                                    EvalNeed need);
@@ -461,5 +584,7 @@ bool evaluator_node_density_with_competitors_batch_internal(
     bool include_na_donors, int outcome_idx_context,
     std::vector<double> &density_out,
     const TimeConstraintMap *time_constraints,
-    uuber::KernelBatchRuntimeState *kernel_batch_runtime);
+    uuber::KernelBatchRuntimeState *kernel_batch_runtime,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch =
+        nullptr);
 void invalidate_kernel_runtime_root(NodeEvalState &state);

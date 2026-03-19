@@ -103,6 +103,85 @@ testthat::test_that("ranked shared-trigger multi-rank path is deterministic", {
   testthat::expect_equal(ll1, ll2, tolerance = 1e-12)
 })
 
+testthat::test_that("ranked shared-trigger multi-trial path batches masks", {
+  spec <- race_spec(n_outcomes = 2L) |>
+    add_accumulator("a1", "lognormal") |>
+    add_accumulator("a2", "lognormal") |>
+    add_accumulator("b", "lognormal") |>
+    add_pool("A", c("a1", "a2"), k = 1L) |>
+    add_outcome("A", "A") |>
+    add_outcome("B", "b") |>
+    add_trigger("tg", members = c("a1", "a2"), q = 0.10, draw = "shared")
+
+  structure <- finalize_model(spec)
+  params <- c(
+    a1.meanlog = log(0.30), a1.sdlog = 0.20, a1.q = 0.10, a1.t0 = 0,
+    a2.meanlog = log(0.33), a2.sdlog = 0.20, a2.q = 0.10, a2.t0 = 0,
+    b.meanlog = log(0.52), b.sdlog = 0.18, b.q = 0.00, b.t0 = 0
+  )
+  params_df <- build_param_matrix(spec, params, n_trials = 4L)
+  ranked_df <- data.frame(
+    trial = 1:4,
+    R = factor(rep("A", 4), levels = c("A", "B")),
+    rt = c(0.36, 0.37, 0.38, 0.39),
+    R2 = factor(rep("B", 4), levels = c("A", "B")),
+    rt2 = c(0.61, 0.62, 0.63, 0.64)
+  )
+
+  ctx <- build_likelihood_context(structure, ranked_df)
+  AccumulatR:::unified_outcome_stats_reset_cpp()
+  ll_batch <- as.numeric(log_likelihood(ctx, ranked_df, params_df))
+  stats_batch <- AccumulatR:::unified_outcome_stats_cpp()
+
+  ll_split <- 0.0
+  for (i in seq_len(nrow(ranked_df))) {
+    trial_df <- ranked_df[i, , drop = FALSE]
+    trial_params <- build_param_matrix(spec, params, n_trials = 1L)
+    ll_split <- ll_split + as.numeric(log_likelihood(
+      build_likelihood_context(structure, trial_df),
+      trial_df,
+      trial_params
+    ))
+  }
+
+  testthat::expect_equal(ll_batch, ll_split, tolerance = 1e-10)
+  testthat::expect_gt(stats_batch$shared_trigger_mask_batch_calls, 0)
+  testthat::expect_gt(stats_batch$shared_trigger_mask_batch_points_total, nrow(ranked_df))
+})
+
+testthat::test_that("ranked batch templates are reused across repeated loglik calls", {
+  spec <- race_spec(n_outcomes = 2L) |>
+    add_accumulator("a", "lognormal") |>
+    add_accumulator("b", "lognormal") |>
+    add_outcome("A", "a") |>
+    add_outcome("B", "b")
+
+  structure <- finalize_model(spec)
+  params <- c(
+    a.meanlog = log(0.30), a.sdlog = 0.20,
+    b.meanlog = log(0.52), b.sdlog = 0.18
+  )
+  params_df <- build_param_matrix(spec, params, n_trials = 4L)
+  ranked_df <- data.frame(
+    trial = 1:4,
+    R = factor(rep("A", 4), levels = c("A", "B")),
+    rt = c(0.36, 0.37, 0.38, 0.39),
+    R2 = factor(rep("B", 4), levels = c("A", "B")),
+    rt2 = c(0.61, 0.62, 0.63, 0.64)
+  )
+
+  ctx <- build_likelihood_context(structure, ranked_df)
+  invisible(log_likelihood(ctx, ranked_df, params_df))
+
+  AccumulatR:::unified_outcome_stats_reset_cpp()
+  invisible(log_likelihood(ctx, ranked_df, params_df))
+  stats_batch <- AccumulatR:::unified_outcome_stats_cpp()
+
+  testthat::expect_gt(stats_batch$ranked_batch_spec_attempts, 0)
+  testthat::expect_gt(stats_batch$ranked_batch_template_cache_hits, 0)
+  testthat::expect_equal(stats_batch$ranked_batch_template_cache_misses, 0)
+})
+
 testthat::test_that("invalid ranked ordering returns min_ll", {
   spec <- race_spec(n_outcomes = 2L) |>
     add_accumulator("a", "lognormal") |>

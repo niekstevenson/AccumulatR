@@ -153,7 +153,7 @@ testthat::test_that("BEEST single-step likelihood matches the exact oracle and h
 
   testthat::expect_true(is.finite(ll_cpp))
   testthat::expect_equal(ll_cpp, ll_oracle, tolerance = 1e-3)
-  testthat::expect_gt(stats$exact_scalar_density_calls, 0)
+  testthat::expect_gt(stats$exact_batch_density_calls, 0)
 })
 
 testthat::test_that("generic coupling integration uses the exact batch path for shared-source composites", {
@@ -215,7 +215,11 @@ testthat::test_that("plain independent races stay off the exact scalar path", {
   stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   testthat::expect_true(is.finite(ll))
-  testthat::expect_equal(stats$exact_scalar_density_calls, 0)
+  testthat::expect_equal(stats$exact_batch_density_calls, 0)
+  testthat::expect_gt(
+    stats$direct_node_density_batch_simple_competing_fastpath_calls,
+    0
+  )
 })
 
 testthat::test_that("disjoint guard competitors stay on the dense path", {
@@ -245,7 +249,7 @@ testthat::test_that("disjoint guard competitors stay on the dense path", {
   stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   testthat::expect_true(is.finite(ll))
-  testthat::expect_equal(stats$exact_scalar_density_calls, 0)
+  testthat::expect_equal(stats$exact_batch_density_calls, 0)
 })
 
 testthat::test_that("component filtering drops impossible exact competitors", {
@@ -292,8 +296,8 @@ testthat::test_that("component filtering drops impossible exact competitors", {
 
   testthat::expect_true(is.finite(ll_go_only))
   testthat::expect_true(is.finite(ll_go_stop))
-  testthat::expect_equal(stats_go_only$exact_scalar_density_calls, 0)
-  testthat::expect_gt(stats_go_stop$exact_scalar_density_calls, 0)
+  testthat::expect_equal(stats_go_only$exact_batch_density_calls, 0)
+  testthat::expect_gt(stats_go_stop$exact_batch_density_calls, 0)
 })
 
 testthat::test_that("repeated exact single-step trials use the exact batch density path", {

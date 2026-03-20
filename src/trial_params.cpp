@@ -111,26 +111,72 @@ inline void initialize_trigger_q_states_inplace(TrialParamSet &params,
   }
 }
 
-} // namespace
-
-std::uint64_t compute_trial_param_fingerprint(const TrialParamSet &params) {
-  std::uint64_t hash = kFNV64Offset;
-  hash_append_bool(hash, params.shared_trigger_layout_matches_context);
-  hash_append_u64(hash, static_cast<std::uint64_t>(params.acc_params.size()));
+inline void compute_trial_param_fingerprints(
+    const TrialParamSet &params, std::uint64_t &source_fingerprint_out,
+    std::uint64_t &value_fingerprint_out) {
+  std::uint64_t source_hash = kFNV64Offset;
+  std::uint64_t value_hash = kFNV64Offset;
+  hash_append_bool(source_hash, params.shared_trigger_layout_matches_context);
+  hash_append_bool(value_hash, params.shared_trigger_layout_matches_context);
+  const std::uint64_t acc_count =
+      static_cast<std::uint64_t>(params.acc_params.size());
+  hash_append_u64(source_hash, acc_count);
+  hash_append_u64(value_hash, acc_count);
   std::uint64_t shared_gate_count = 0ULL;
   for (const TrialAccumulatorParams &acc : params.acc_params) {
     if (!acc.shared_trigger_id.empty()) {
       ++shared_gate_count;
-      hash_append_double(hash, acc.shared_q);
+      hash_append_double(source_hash, acc.shared_q);
+    }
+    hash_append_double(value_hash, acc.onset);
+    hash_append_bytes(value_hash, &acc.onset_kind, sizeof(acc.onset_kind));
+    hash_append_bytes(value_hash, &acc.onset_source_acc_idx,
+                      sizeof(acc.onset_source_acc_idx));
+    hash_append_bytes(value_hash, &acc.onset_source_pool_idx,
+                      sizeof(acc.onset_source_pool_idx));
+    hash_append_double(value_hash, acc.onset_lag);
+    hash_append_double(value_hash, acc.q);
+    hash_append_double(value_hash, acc.shared_q);
+    hash_append_bytes(value_hash, &acc.dist_cfg.code, sizeof(acc.dist_cfg.code));
+    hash_append_double(value_hash, acc.dist_cfg.t0);
+    hash_append_double(value_hash, acc.dist_cfg.p1);
+    hash_append_double(value_hash, acc.dist_cfg.p2);
+    hash_append_double(value_hash, acc.dist_cfg.p3);
+    hash_append_double(value_hash, acc.dist_cfg.p4);
+    hash_append_double(value_hash, acc.dist_cfg.p5);
+    hash_append_double(value_hash, acc.dist_cfg.p6);
+    hash_append_double(value_hash, acc.dist_cfg.p7);
+    hash_append_double(value_hash, acc.dist_cfg.p8);
+    hash_append_u64(value_hash,
+                    static_cast<std::uint64_t>(acc.shared_trigger_id.size()));
+    if (!acc.shared_trigger_id.empty()) {
+      hash_append_bytes(value_hash, acc.shared_trigger_id.data(),
+                        acc.shared_trigger_id.size());
+    }
+    hash_append_u64(value_hash,
+                    static_cast<std::uint64_t>(acc.component_indices.size()));
+    for (int comp_idx : acc.component_indices) {
+      hash_append_bytes(value_hash, &comp_idx, sizeof(comp_idx));
     }
   }
-  hash_append_u64(hash, shared_gate_count);
-  return hash;
+  hash_append_u64(source_hash, shared_gate_count);
+  source_fingerprint_out = source_hash;
+  value_fingerprint_out = value_hash;
+}
+
+} // namespace
+
+std::uint64_t compute_trial_param_fingerprint(const TrialParamSet &params) {
+  std::uint64_t source_hash = 0ULL;
+  std::uint64_t value_hash = 0ULL;
+  compute_trial_param_fingerprints(params, source_hash, value_hash);
+  return source_hash;
 }
 
 void refresh_trial_param_fingerprint(TrialParamSet &params) {
-  params.shared_trigger_source_fingerprint =
-      compute_trial_param_fingerprint(params);
+  compute_trial_param_fingerprints(params, params.shared_trigger_source_fingerprint,
+                                   params.value_fingerprint);
+  params.value_fingerprint_valid = true;
 }
 
 bool trial_paramsets_equivalent(const TrialParamSet &a,
@@ -159,40 +205,13 @@ bool trial_paramsets_equivalent(const TrialParamSet &a,
 }
 
 std::uint64_t compute_trial_param_value_fingerprint(const TrialParamSet &params) {
-  std::uint64_t hash = kFNV64Offset;
-  hash_append_bool(hash, params.shared_trigger_layout_matches_context);
-  hash_append_u64(hash, static_cast<std::uint64_t>(params.acc_params.size()));
-  for (const TrialAccumulatorParams &acc : params.acc_params) {
-    hash_append_double(hash, acc.onset);
-    hash_append_bytes(hash, &acc.onset_kind, sizeof(acc.onset_kind));
-    hash_append_bytes(hash, &acc.onset_source_acc_idx,
-                      sizeof(acc.onset_source_acc_idx));
-    hash_append_bytes(hash, &acc.onset_source_pool_idx,
-                      sizeof(acc.onset_source_pool_idx));
-    hash_append_double(hash, acc.onset_lag);
-    hash_append_double(hash, acc.q);
-    hash_append_double(hash, acc.shared_q);
-    hash_append_bytes(hash, &acc.dist_cfg.code, sizeof(acc.dist_cfg.code));
-    hash_append_double(hash, acc.dist_cfg.t0);
-    hash_append_double(hash, acc.dist_cfg.p1);
-    hash_append_double(hash, acc.dist_cfg.p2);
-    hash_append_double(hash, acc.dist_cfg.p3);
-    hash_append_double(hash, acc.dist_cfg.p4);
-    hash_append_double(hash, acc.dist_cfg.p5);
-    hash_append_double(hash, acc.dist_cfg.p6);
-    hash_append_double(hash, acc.dist_cfg.p7);
-    hash_append_double(hash, acc.dist_cfg.p8);
-    hash_append_u64(hash, static_cast<std::uint64_t>(acc.shared_trigger_id.size()));
-    if (!acc.shared_trigger_id.empty()) {
-      hash_append_bytes(hash, acc.shared_trigger_id.data(),
-                        acc.shared_trigger_id.size());
-    }
-    hash_append_u64(hash, static_cast<std::uint64_t>(acc.component_indices.size()));
-    for (int comp_idx : acc.component_indices) {
-      hash_append_bytes(hash, &comp_idx, sizeof(comp_idx));
-    }
+  if (params.value_fingerprint_valid) {
+    return params.value_fingerprint;
   }
-  return hash;
+  std::uint64_t source_hash = 0ULL;
+  std::uint64_t value_hash = 0ULL;
+  compute_trial_param_fingerprints(params, source_hash, value_hash);
+  return value_hash;
 }
 
 bool trial_paramsets_value_equivalent(const TrialParamSet &a,
@@ -479,6 +498,7 @@ void apply_trigger_state_inplace(TrialParamSet &params, int acc_idx, bool fail) 
   param.q = q_val;
   param.has_override = true;
   params.has_any_override = true;
+  params.value_fingerprint_valid = false;
   if (params.soa_cache_valid && params.soa_cache.valid &&
       acc_idx < params.soa_cache.n_acc &&
       static_cast<std::size_t>(acc_idx) < params.soa_cache.q.size()) {

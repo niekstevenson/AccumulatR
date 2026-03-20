@@ -4,9 +4,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <queue>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -66,22 +66,22 @@ struct TrialSequenceState {
   TimeConstraintMap time_constraints;
 };
 
-struct TrialSequenceStateKey {
-  int trial_slot{-1};
+struct RankedFrontierStateRef {
+  std::size_t state_index{0};
+  const uuber::TrialParamsSoA *trial_params_soa{nullptr};
   SequenceStateKey state_key;
-
-  bool operator==(const TrialSequenceStateKey &other) const noexcept {
-    return trial_slot == other.trial_slot && state_key == other.state_key;
-  }
 };
 
-struct TrialSequenceStateKeyHash {
-  std::size_t operator()(const TrialSequenceStateKey &key) const noexcept {
-    std::size_t seed =
-        SequenceStateKeyHash{}(key.state_key) ^ static_cast<std::size_t>(key.trial_slot);
-    seed ^= 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2);
-    return seed;
-  }
+struct RankedStateCollapseIndex {
+  std::size_t candidate_index{0};
+  int trial_slot{-1};
+  SequenceStateKey state_key;
+};
+
+struct RankedFrontierGroup {
+  const uuber::TrialParamsSoA *trial_params_soa{nullptr};
+  std::size_t begin{0};
+  std::size_t end{0};
 };
 
 inline std::uint64_t ranked_hash_bitset(const uuber::BitsetState &bits,
@@ -151,6 +151,108 @@ inline SequenceStateKey sequence_state_key(
   key.time_constraint_hash = ranked_hash_time_constraints(time_constraints);
   key.time_constraint_size = time_constraints.size();
   return key;
+}
+
+inline bool sequence_state_key_less(const SequenceStateKey &lhs,
+                                    const SequenceStateKey &rhs) noexcept {
+  if (lhs.forced_complete_bits_valid != rhs.forced_complete_bits_valid) {
+    return lhs.forced_complete_bits_valid < rhs.forced_complete_bits_valid;
+  }
+  if (lhs.forced_survive_bits_valid != rhs.forced_survive_bits_valid) {
+    return lhs.forced_survive_bits_valid < rhs.forced_survive_bits_valid;
+  }
+  if (lhs.forced_complete_bit_count != rhs.forced_complete_bit_count) {
+    return lhs.forced_complete_bit_count < rhs.forced_complete_bit_count;
+  }
+  if (lhs.forced_survive_bit_count != rhs.forced_survive_bit_count) {
+    return lhs.forced_survive_bit_count < rhs.forced_survive_bit_count;
+  }
+  if (lhs.forced_complete_hash != rhs.forced_complete_hash) {
+    return lhs.forced_complete_hash < rhs.forced_complete_hash;
+  }
+  if (lhs.forced_survive_hash != rhs.forced_survive_hash) {
+    return lhs.forced_survive_hash < rhs.forced_survive_hash;
+  }
+  if (lhs.time_constraint_hash != rhs.time_constraint_hash) {
+    return lhs.time_constraint_hash < rhs.time_constraint_hash;
+  }
+  return lhs.time_constraint_size < rhs.time_constraint_size;
+}
+
+inline bool ranked_frontier_state_ref_less(const RankedFrontierStateRef &lhs,
+                                           const RankedFrontierStateRef &rhs) noexcept {
+  if (lhs.trial_params_soa != rhs.trial_params_soa) {
+    return std::less<const uuber::TrialParamsSoA *>{}(lhs.trial_params_soa,
+                                                      rhs.trial_params_soa);
+  }
+  return sequence_state_key_less(lhs.state_key, rhs.state_key);
+}
+
+inline bool ranked_frontier_state_ref_same_group(
+    const RankedFrontierStateRef &lhs,
+    const RankedFrontierStateRef &rhs) noexcept {
+  return lhs.trial_params_soa == rhs.trial_params_soa &&
+         lhs.state_key == rhs.state_key;
+}
+
+inline bool ranked_state_collapse_index_less(
+    const RankedStateCollapseIndex &lhs,
+    const RankedStateCollapseIndex &rhs) noexcept {
+  if (lhs.trial_slot != rhs.trial_slot) {
+    return lhs.trial_slot < rhs.trial_slot;
+  }
+  return sequence_state_key_less(lhs.state_key, rhs.state_key);
+}
+
+inline bool ranked_state_collapse_index_same_key(
+    const RankedStateCollapseIndex &lhs,
+    const RankedStateCollapseIndex &rhs) noexcept {
+  return lhs.trial_slot == rhs.trial_slot && lhs.state_key == rhs.state_key;
+}
+
+inline void collapse_ranked_state_candidates(
+    std::vector<TrialSequenceState> &states,
+    std::vector<RankedStateCollapseIndex> &collapse_order,
+    double branch_eps) {
+  if (states.empty() || collapse_order.empty()) {
+    states.clear();
+    collapse_order.clear();
+    return;
+  }
+
+  std::sort(collapse_order.begin(), collapse_order.end(),
+            ranked_state_collapse_index_less);
+
+  std::vector<TrialSequenceState> collapsed_states;
+  std::vector<RankedStateCollapseIndex> collapsed_order;
+  collapsed_states.reserve(collapse_order.size());
+  collapsed_order.reserve(collapse_order.size());
+
+  bool have_prev = false;
+  RankedStateCollapseIndex prev_key;
+  for (const RankedStateCollapseIndex &entry : collapse_order) {
+    if (entry.candidate_index >= states.size()) {
+      continue;
+    }
+    TrialSequenceState &candidate = states[entry.candidate_index];
+    if (!std::isfinite(candidate.weight) || candidate.weight <= branch_eps) {
+      continue;
+    }
+    if (have_prev && ranked_state_collapse_index_same_key(prev_key, entry)) {
+      collapsed_states.back().weight += candidate.weight;
+      continue;
+    }
+    const std::size_t collapsed_idx = collapsed_states.size();
+    collapsed_states.push_back(std::move(candidate));
+    RankedStateCollapseIndex collapsed_entry = entry;
+    collapsed_entry.candidate_index = collapsed_idx;
+    collapsed_order.push_back(std::move(collapsed_entry));
+    prev_key = entry;
+    have_prev = true;
+  }
+
+  states.swap(collapsed_states);
+  collapse_order.swap(collapsed_order);
 }
 
 inline std::vector<int>
@@ -265,234 +367,7 @@ inline void ranked_attach_source_mask_for_node(const uuber::NativeContext &ctx,
   step.source_mask_covers_ids = ranked_mask_covers_source_ids(ctx, step);
 }
 
-template <typename EmitFn>
-bool for_each_sequence_node_transition(
-    RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
-    int node_idx, double t, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    const TimeConstraintMap *time_constraints,
-    uuber::KernelRuntimeState *kernel_runtime,
-    const uuber::BitsetState *base_forced_complete_bits_in,
-    bool base_forced_complete_bits_in_valid,
-    const uuber::BitsetState *base_forced_survive_bits_in,
-    bool base_forced_survive_bits_in_valid, EmitFn &&emit,
-    bool evaluate_step_weights = true) {
-  const RankedNodeTransitionPlan &plan = compiler.plan_for_node(node_idx);
-  if (!plan.valid || plan.transitions.empty()) {
-    return false;
-  }
-
-  const uuber::TrialParamsSoA *trial_params_soa =
-      resolve_trial_params_soa(ctx, trial_params);
-  IntegrationSettings settings;
-  bool emitted_any = false;
-  uuber::BitsetState base_forced_complete_bits;
-  uuber::BitsetState base_forced_survive_bits;
-  bool base_forced_complete_bits_valid = false;
-  bool base_forced_survive_bits_valid = false;
-  if (base_forced_complete_bits_in && base_forced_complete_bits_in_valid) {
-    base_forced_complete_bits = *base_forced_complete_bits_in;
-    base_forced_complete_bits_valid = true;
-  } else {
-    (void)ensure_forced_bitset_capacity(ctx, base_forced_complete_bits,
-                                        base_forced_complete_bits_valid);
-  }
-  if (base_forced_survive_bits_in && base_forced_survive_bits_in_valid) {
-    base_forced_survive_bits = *base_forced_survive_bits_in;
-    base_forced_survive_bits_valid = true;
-  } else {
-    (void)ensure_forced_bitset_capacity(ctx, base_forced_survive_bits,
-                                        base_forced_survive_bits_valid);
-  }
-
-  for (const RankedTransitionTemplate &transition : plan.transitions) {
-    double weight = 1.0;
-    TimeConstraintMap transition_time_constraints =
-        time_constraints ? *time_constraints : TimeConstraintMap{};
-    NodeEvalState transition_state(
-        ctx, t, component_idx, trial_params, trial_type_key, false, -1,
-        &transition_time_constraints, nullptr,
-        base_forced_complete_bits_valid ? &base_forced_complete_bits : nullptr,
-        base_forced_complete_bits_valid,
-        base_forced_survive_bits_valid ? &base_forced_survive_bits : nullptr,
-        base_forced_survive_bits_valid, kernel_runtime);
-    invalidate_kernel_runtime_root(transition_state);
-
-    bool valid = true;
-    for (const RankedTransitionStep &step : transition.steps) {
-      if (step.kind == RankedTransitionStepKind::EvalDensityNode) {
-        if (!evaluate_step_weights) {
-          continue;
-        }
-        NodeEvalResult eval =
-            evaluator_eval_node_recursive_dense(step.node_idx, transition_state,
-                                                EvalNeed::kDensity);
-        const double d = eval.density;
-        if (!std::isfinite(d) || d <= 0.0) {
-          valid = false;
-          break;
-        }
-        weight *= d;
-      } else if (step.kind == RankedTransitionStepKind::EvalCDFNode) {
-        if (!evaluate_step_weights) {
-          continue;
-        }
-        NodeEvalResult eval = evaluator_eval_node_recursive_dense(
-            step.node_idx, transition_state, EvalNeed::kCDF);
-        const double Fj = clamp_probability(eval.cdf);
-        if (!std::isfinite(Fj) || Fj <= 0.0) {
-          valid = false;
-          break;
-        }
-        weight *= Fj;
-      } else if (step.kind == RankedTransitionStepKind::EvalGuardEffective) {
-        if (!evaluate_step_weights) {
-          continue;
-        }
-        GuardEvalInput guard_input = make_guard_input_forced_state(
-            ctx, step.node_idx, component_idx, &trial_type_key, trial_params,
-            trial_params_soa, &transition_state.time_constraints,
-            transition_state.forced_state);
-        const double eff = evaluator_guard_effective_survival_internal(
-            guard_input, t, settings);
-        if (!std::isfinite(eff) || eff <= 0.0) {
-          valid = false;
-          break;
-        }
-        weight *= eff;
-      } else if (step.kind == RankedTransitionStepKind::AddCompleteSources) {
-        bool mutated_state = false;
-        for (std::size_t i = 0; i < step.source_ids.size(); ++i) {
-          const int id = step.source_ids[i];
-          if (!time_constraints_mark_complete(
-                  id, t, step.bind_exact_current_time,
-                  transition_state.time_constraints)) {
-            valid = false;
-            break;
-          }
-          mutated_state = true;
-        }
-        if (!valid) {
-          break;
-        }
-        if (mutated_state) {
-          invalidate_kernel_runtime_root(transition_state);
-        }
-      } else if (step.kind == RankedTransitionStepKind::AddSurviveSources) {
-        bool mutated_state = false;
-        for (std::size_t i = 0; i < step.source_ids.size(); ++i) {
-          const int id = step.source_ids[i];
-          if (!time_constraints_mark_survive(id, t,
-                                             transition_state.time_constraints)) {
-            valid = false;
-            break;
-          }
-          mutated_state = true;
-        }
-        if (!valid) {
-          break;
-        }
-        if (mutated_state) {
-          invalidate_kernel_runtime_root(transition_state);
-        }
-      } else if (step.kind == RankedTransitionStepKind::AddOrWitnessFromSources) {
-        int witness = NA_INTEGER;
-        int witness_bit = -1;
-        bool all_forced = true;
-        for (std::size_t i = 0; i < step.source_ids.size(); ++i) {
-          const int id = step.source_ids[i];
-          if (id == NA_INTEGER || id < 0) {
-            continue;
-          }
-          const int bit_idx =
-              (i < step.source_bits.size()) ? step.source_bits[i] : -1;
-          int bit_to_check = bit_idx;
-          if (bit_to_check < 0) {
-            auto bit_it = ctx.ir.label_id_to_bit_idx.find(id);
-            if (bit_it == ctx.ir.label_id_to_bit_idx.end()) {
-              Rcpp::stop("IR ranked source id %d missing bit index", id);
-            }
-            bit_to_check = bit_it->second;
-          }
-          const bool is_forced =
-              (transition_state.forced_complete_bits_valid &&
-               transition_state.forced_complete_bits.test(bit_to_check)) ||
-              time_constraints_contains_complete_at(
-                  &transition_state.time_constraints, id, t);
-          if (!is_forced) {
-            witness = id;
-            witness_bit = bit_to_check;
-            all_forced = false;
-            break;
-          }
-        }
-        if (all_forced || witness == NA_INTEGER) {
-          valid = false;
-          break;
-        }
-        (void)witness_bit;
-        if (!time_constraints_mark_survive(witness, t,
-                                           transition_state.time_constraints)) {
-          valid = false;
-          break;
-        }
-        invalidate_kernel_runtime_root(transition_state);
-      }
-      if (!std::isfinite(weight) || weight <= 0.0) {
-        valid = false;
-        break;
-      }
-    }
-    if (!valid || !std::isfinite(weight) || weight <= 0.0) {
-      continue;
-    }
-    emit(weight, std::move(transition_state.forced_complete_bits),
-         transition_state.forced_complete_bits_valid,
-         std::move(transition_state.forced_survive_bits),
-         transition_state.forced_survive_bits_valid,
-         std::move(transition_state.time_constraints));
-    emitted_any = true;
-  }
-  return emitted_any;
-}
-
 } // namespace
-
-bool collect_exact_node_scenarios(
-    RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
-    int node_idx, double t, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    const TimeConstraintMap *time_constraints,
-    uuber::KernelRuntimeState *kernel_runtime,
-    const uuber::BitsetState *base_forced_complete_bits_in,
-    bool base_forced_complete_bits_in_valid,
-    const uuber::BitsetState *base_forced_survive_bits_in,
-    bool base_forced_survive_bits_in_valid,
-    std::vector<ExactNodeScenario> &out,
-    bool evaluate_step_weights) {
-  out.clear();
-  const bool emitted = for_each_sequence_node_transition(
-      compiler, ctx, node_idx, t, component_idx, trial_params, trial_type_key,
-      time_constraints, kernel_runtime,
-      base_forced_complete_bits_in, base_forced_complete_bits_in_valid,
-      base_forced_survive_bits_in, base_forced_survive_bits_in_valid,
-      [&](double weight, uuber::BitsetState &&forced_complete_bits,
-          bool forced_complete_bits_valid,
-          uuber::BitsetState &&forced_survive_bits,
-          bool forced_survive_bits_valid,
-          TimeConstraintMap &&scenario_time_constraints) {
-        ExactNodeScenario scenario;
-        scenario.weight = weight;
-        scenario.forced_complete_bits = std::move(forced_complete_bits);
-        scenario.forced_survive_bits = std::move(forced_survive_bits);
-        scenario.forced_complete_bits_valid = forced_complete_bits_valid;
-        scenario.forced_survive_bits_valid = forced_survive_bits_valid;
-        scenario.time_constraints = std::move(scenario_time_constraints);
-        out.push_back(std::move(scenario));
-      },
-      evaluate_step_weights);
-  return emitted;
-}
 
 RankedTransitionCompiler::RankedTransitionCompiler(
     const uuber::NativeContext &ctx_)
@@ -714,6 +589,8 @@ bool sequence_prefix_density_batch_resolved(
   RankedTransitionCompiler local_transition_compiler(ctx);
   RankedTransitionCompiler *compiler =
       transition_compiler ? transition_compiler : &local_transition_compiler;
+  const uuber::TrialParamsSoA *default_trial_params_soa =
+      resolve_trial_params_soa(ctx, trial_params);
 
   constexpr double kBranchEps = 1e-18;
   std::vector<TrialSequenceState> states;
@@ -751,42 +628,23 @@ bool sequence_prefix_density_batch_resolved(
     const std::vector<int> &persistent_sources =
         (*step_persistent_sources)[rank_idx];
 
-    std::unordered_map<TrialSequenceStateKey, std::size_t,
-                       TrialSequenceStateKeyHash>
-        next_state_index;
     std::vector<TrialSequenceState> next_states_collapsed;
     next_states_collapsed.reserve(states.size() * 2u);
+    std::vector<RankedStateCollapseIndex> next_state_collapse_order;
+    next_state_collapse_order.reserve(states.size() * 2u);
 
-    auto accumulate_next_state = [&](TrialSequenceState &&candidate) {
-      if (!std::isfinite(candidate.weight) || candidate.weight <= kBranchEps) {
-        return;
-      }
-      TrialSequenceStateKey key;
-      key.trial_slot = candidate.trial_slot;
-      key.state_key = sequence_state_key(
-          candidate.forced_complete_bits, candidate.forced_complete_bits_valid,
-          candidate.forced_survive_bits, candidate.forced_survive_bits_valid,
-          candidate.time_constraints);
-      auto it = next_state_index.find(key);
-      if (it == next_state_index.end()) {
-        const std::size_t idx = next_states_collapsed.size();
-        next_state_index.emplace(std::move(key), idx);
-        next_states_collapsed.push_back(std::move(candidate));
-      } else {
-        next_states_collapsed[it->second].weight += candidate.weight;
-      }
-    };
-
-    std::vector<std::size_t> active_state_indices;
-    active_state_indices.reserve(states.size());
-    std::vector<ExactScenarioPoint> rank_seed_points;
-    rank_seed_points.reserve(states.size());
-    std::vector<ExactScenarioPoint> denom_points;
-    if (rank_idx > 0u) {
-      denom_points.reserve(states.size());
+    const bool use_frontier_groups = (trial_params_soa_by_trial != nullptr);
+    std::vector<RankedFrontierStateRef> active_state_refs;
+    active_state_refs.reserve(states.size());
+    std::vector<RankedFrontierGroup> frontier_groups;
+    if (use_frontier_groups) {
+      frontier_groups.reserve(states.size());
     }
 
     bool valid_rank = true;
+    const uuber::TrialParamsSoA *frontier_uniform_trial_params_soa =
+        default_trial_params_soa;
+    bool frontier_uniform_trial_params_known = false;
     for (std::size_t state_idx = 0; state_idx < states.size(); ++state_idx) {
       const TrialSequenceState &state = states[state_idx];
       if (!std::isfinite(state.weight) || state.weight <= kBranchEps) {
@@ -798,29 +656,12 @@ bool sequence_prefix_density_batch_resolved(
         valid_rank = false;
         break;
       }
-
       const double t =
           times_by_trial[static_cast<std::size_t>(trial_slot)][rank_idx];
       if (!std::isfinite(t) || t < 0.0) {
         valid_rank = false;
         break;
       }
-
-      ExactScenarioPoint rank_point;
-      rank_point.t = t;
-      rank_point.density_index = active_state_indices.size();
-      rank_point.weight = 1.0;
-      if (trial_params_soa_by_trial != nullptr &&
-          static_cast<std::size_t>(trial_slot) < trial_params_soa_by_trial->size()) {
-        rank_point.trial_params_soa =
-            (*trial_params_soa_by_trial)[static_cast<std::size_t>(trial_slot)];
-      }
-      rank_point.forced_complete_bits = state.forced_complete_bits;
-      rank_point.forced_survive_bits = state.forced_survive_bits;
-      rank_point.forced_complete_bits_valid = state.forced_complete_bits_valid;
-      rank_point.forced_survive_bits_valid = state.forced_survive_bits_valid;
-      rank_point.time_constraints = state.time_constraints;
-
       if (rank_idx > 0u) {
         const double lower_t =
             times_by_trial[static_cast<std::size_t>(trial_slot)][rank_idx - 1u];
@@ -828,119 +669,367 @@ bool sequence_prefix_density_batch_resolved(
           valid_rank = false;
           break;
         }
-        ExactScenarioPoint denom_point = rank_point;
-        denom_point.t = lower_t;
-        denom_points.push_back(std::move(denom_point));
       }
 
-      active_state_indices.push_back(state_idx);
-      rank_seed_points.push_back(std::move(rank_point));
+      RankedFrontierStateRef state_ref;
+      state_ref.state_index = state_idx;
+      state_ref.trial_params_soa = default_trial_params_soa;
+      if (trial_params_soa_by_trial != nullptr &&
+          static_cast<std::size_t>(trial_slot) < trial_params_soa_by_trial->size()) {
+        state_ref.trial_params_soa =
+            (*trial_params_soa_by_trial)[static_cast<std::size_t>(trial_slot)];
+      }
+      state_ref.state_key = sequence_state_key(
+          state.forced_complete_bits, state.forced_complete_bits_valid,
+          state.forced_survive_bits, state.forced_survive_bits_valid,
+          state.time_constraints);
+      active_state_refs.push_back(std::move(state_ref));
+
+      const uuber::TrialParamsSoA *state_trial_params_soa =
+          active_state_refs.back().trial_params_soa;
+      if (!frontier_uniform_trial_params_known) {
+        frontier_uniform_trial_params_soa = state_trial_params_soa;
+        frontier_uniform_trial_params_known = true;
+      } else if (frontier_uniform_trial_params_soa != state_trial_params_soa) {
+        frontier_uniform_trial_params_soa = nullptr;
+      }
     }
     if (!valid_rank) {
       return false;
     }
-    if (active_state_indices.empty()) {
+    if (active_state_refs.empty()) {
       return true;
     }
-
-    std::vector<double> denom(active_state_indices.size(), 1.0);
-    if (rank_idx > 0u) {
-      uuber::KernelNodeBatchValues denom_values;
-      if (!exact_eval_node_batch_from_points(
-              ctx, info_node_idx, denom_points, component_idx, trial_params,
-              trial_type_key, EvalNeed::kSurvival, denom_values) ||
-          denom_values.survival.size() != denom.size()) {
-        return false;
-      }
-      for (std::size_t i = 0; i < denom.size(); ++i) {
-        denom[i] = denom_values.survival[i];
+    if (use_frontier_groups && active_state_refs.size() > 1u) {
+      std::sort(active_state_refs.begin(), active_state_refs.end(),
+                ranked_frontier_state_ref_less);
+      std::size_t group_begin = 0u;
+      while (group_begin < active_state_refs.size()) {
+        std::size_t group_end = group_begin + 1u;
+        while (group_end < active_state_refs.size() &&
+               ranked_frontier_state_ref_same_group(
+                   active_state_refs[group_begin],
+                   active_state_refs[group_end])) {
+          ++group_end;
+        }
+        RankedFrontierGroup group;
+        group.trial_params_soa = active_state_refs[group_begin].trial_params_soa;
+        group.begin = group_begin;
+        group.end = group_end;
+        frontier_groups.push_back(group);
+        group_begin = group_end;
       }
     }
 
+    std::vector<ExactScenarioPoint> rank_seed_points;
+    rank_seed_points.reserve(active_state_refs.size());
+    std::vector<ExactScenarioPoint> denom_points;
+    denom_points.reserve(active_state_refs.size());
+    std::vector<double> denom;
+    denom.reserve(active_state_refs.size());
     std::vector<ExactScenarioPoint> scenario_points;
-    if (!exact_collect_scenarios_batch_from_points(
-            *compiler, ctx, outcome_node_idx, rank_seed_points, component_idx,
-            trial_params, trial_type_key, scenario_points)) {
-      return true;
-    }
-
-    std::vector<double> scenario_survival(scenario_points.size(), 1.0);
+    scenario_points.reserve(active_state_refs.size() * 2u);
+    std::vector<double> scenario_survival;
+    scenario_survival.reserve(active_state_refs.size() * 2u);
+    std::vector<ExactScenarioPoint> deterministic_scenario_points;
+    deterministic_scenario_points.reserve(active_state_refs.size());
+    std::vector<std::uint8_t> deterministic_scenario_active;
+    deterministic_scenario_active.reserve(active_state_refs.size());
+    std::vector<ExactScenarioPoint> deterministic_competitor_points;
+    deterministic_competitor_points.reserve(active_state_refs.size());
+    std::vector<double> deterministic_competitor_survival;
+    deterministic_competitor_survival.reserve(active_state_refs.size());
+    const uuber::CompetitorClusterCacheEntry *competitor_cache_ptr = nullptr;
     if (!competitors.empty()) {
-      const uuber::CompetitorClusterCacheEntry &competitor_cache =
-          fetch_competitor_cluster_cache(ctx, competitors);
-      if (!exact_competitor_survival_batch(
-              ctx, competitor_cache, component_idx, trial_params,
-              trial_type_key, scenario_points, scenario_survival) ||
-          scenario_survival.size() != scenario_points.size()) {
-        return false;
-      }
+      competitor_cache_ptr = &fetch_competitor_cluster_cache(ctx, competitors);
     }
 
-    for (std::size_t point_idx = 0; point_idx < scenario_points.size();
-         ++point_idx) {
-      const ExactScenarioPoint &point = scenario_points[point_idx];
-      if (point.density_index >= active_state_indices.size()) {
-        return false;
-      }
-      const TrialSequenceState &source_state =
-          states[active_state_indices[point.density_index]];
-      const double denom_val =
-          (point.density_index < denom.size()) ? denom[point.density_index]
-                                              : 0.0;
-      if (!std::isfinite(denom_val) || denom_val <= kBranchEps) {
-        continue;
-      }
-      double weight = source_state.weight * (point.weight / denom_val);
-      if (!std::isfinite(weight) || weight <= kBranchEps) {
-        continue;
+    const bool split_frontier_groups =
+        use_frontier_groups && frontier_groups.size() > 1u &&
+        frontier_groups.size() * 2u < active_state_refs.size();
+    const std::size_t frontier_begin = 0u;
+    const std::size_t frontier_end = active_state_refs.size();
+
+    auto process_state_group =
+        [&](std::size_t group_begin, std::size_t group_end,
+            const uuber::TrialParamsSoA *uniform_trial_params_soa) -> bool {
+      rank_seed_points.clear();
+      denom_points.clear();
+      denom.clear();
+
+      std::size_t local_idx = 0u;
+      for (std::size_t ref_idx = group_begin; ref_idx < group_end;
+           ++ref_idx, ++local_idx) {
+        const RankedFrontierStateRef &state_ref = active_state_refs[ref_idx];
+        const TrialSequenceState &state = states[state_ref.state_index];
+        const std::size_t trial_slot = static_cast<std::size_t>(state.trial_slot);
+        ExactScenarioPoint rank_point;
+        rank_point.t = times_by_trial[trial_slot][rank_idx];
+        rank_point.density_index = local_idx;
+        rank_point.weight = 1.0;
+        rank_point.trial_params_soa = uniform_trial_params_soa;
+        if (rank_point.trial_params_soa == nullptr) {
+          rank_point.trial_params_soa = state_ref.trial_params_soa;
+        }
+        rank_point.forced_complete_bits = state.forced_complete_bits;
+        rank_point.forced_survive_bits = state.forced_survive_bits;
+        rank_point.forced_complete_bits_valid = state.forced_complete_bits_valid;
+        rank_point.forced_survive_bits_valid = state.forced_survive_bits_valid;
+        rank_point.time_constraints = state.time_constraints;
+        rank_seed_points.push_back(rank_point);
+
+        if (rank_idx > 0u) {
+          ExactScenarioPoint denom_point = rank_point;
+          denom_point.t = times_by_trial[trial_slot][rank_idx - 1u];
+          denom_points.push_back(std::move(denom_point));
+        }
       }
 
-      if (!competitors.empty()) {
-        const double surv = clamp_probability(scenario_survival[point_idx]);
-        if (!std::isfinite(surv) || surv <= kBranchEps) {
+      const std::size_t group_size = group_end - group_begin;
+      denom.assign(group_size, 1.0);
+      if (rank_idx > 0u) {
+        uuber::KernelNodeBatchValues denom_values;
+        if (!exact_eval_node_batch_from_points(
+                ctx, info_node_idx, denom_points, component_idx, trial_params,
+                trial_type_key, EvalNeed::kSurvival, denom_values,
+                uniform_trial_params_soa) ||
+            denom_values.survival.size() != denom.size()) {
+          return false;
+        }
+        for (std::size_t i = 0; i < denom.size(); ++i) {
+          denom[i] = denom_values.survival[i];
+        }
+      }
+
+      scenario_points.clear();
+      std::vector<TrialSequenceState> group_next_states;
+      std::vector<RankedStateCollapseIndex> group_next_state_order;
+
+      deterministic_scenario_points.clear();
+      deterministic_scenario_active.clear();
+      if (exact_collect_deterministic_scenarios_batch_from_points(
+              *compiler, ctx, outcome_node_idx, rank_seed_points, component_idx,
+              trial_params, trial_type_key, deterministic_scenario_points,
+              deterministic_scenario_active, uniform_trial_params_soa)) {
+        group_next_states.reserve(group_size);
+        group_next_state_order.reserve(group_size);
+
+        deterministic_competitor_points.clear();
+        deterministic_competitor_survival.clear();
+        if (competitor_cache_ptr != nullptr) {
+          deterministic_competitor_points.reserve(group_size);
+          for (std::size_t i = 0; i < deterministic_scenario_points.size(); ++i) {
+            if (i < deterministic_scenario_active.size() &&
+                deterministic_scenario_active[i] != 0u) {
+              deterministic_competitor_points.push_back(
+                  deterministic_scenario_points[i]);
+            }
+          }
+          deterministic_competitor_survival.assign(
+              deterministic_competitor_points.size(), 1.0);
+          if (!deterministic_competitor_points.empty()) {
+            exact_competitor_survival_batch(
+                ctx, *competitor_cache_ptr, component_idx, trial_params,
+                trial_type_key, deterministic_competitor_points,
+                deterministic_competitor_survival, uniform_trial_params_soa);
+          }
+        }
+
+        std::size_t competitor_survival_idx = 0u;
+        for (std::size_t local_idx = 0; local_idx < group_size; ++local_idx) {
+          if (local_idx >= deterministic_scenario_active.size() ||
+              deterministic_scenario_active[local_idx] == 0u) {
+            continue;
+          }
+          const ExactScenarioPoint &point = deterministic_scenario_points[local_idx];
+          const RankedFrontierStateRef &source_state_ref =
+              active_state_refs[group_begin + local_idx];
+          const TrialSequenceState &source_state =
+              states[source_state_ref.state_index];
+          const double denom_val =
+              (local_idx < denom.size()) ? denom[local_idx] : 0.0;
+          if (!std::isfinite(denom_val) || denom_val <= kBranchEps) {
+            continue;
+          }
+          double weight = source_state.weight * (point.weight / denom_val);
+          if (!std::isfinite(weight) || weight <= kBranchEps) {
+            continue;
+          }
+          if (competitor_cache_ptr != nullptr) {
+            if (competitor_survival_idx >= deterministic_competitor_survival.size()) {
+              return false;
+            }
+            const double surv =
+                clamp_probability(deterministic_competitor_survival[
+                    competitor_survival_idx++]);
+            if (!std::isfinite(surv) || surv <= kBranchEps) {
+              continue;
+            }
+            weight *= surv;
+            if (!std::isfinite(weight) || weight <= kBranchEps) {
+              continue;
+            }
+          }
+
+          TrialSequenceState next_state;
+          next_state.trial_slot = source_state.trial_slot;
+          next_state.weight = weight;
+          next_state.forced_complete_bits = point.forced_complete_bits;
+          next_state.forced_survive_bits = point.forced_survive_bits;
+          next_state.forced_complete_bits_valid = point.forced_complete_bits_valid;
+          next_state.forced_survive_bits_valid = point.forced_survive_bits_valid;
+          next_state.time_constraints = point.time_constraints;
+
+          if (competitor_cache_ptr != nullptr && !persistent_sources.empty()) {
+            bool keep = true;
+            for (int src_id : persistent_sources) {
+              set_forced_id_bit_strict(ctx, src_id, next_state.forced_survive_bits,
+                                       next_state.forced_survive_bits_valid);
+              if (!time_constraints_mark_survive(src_id, point.t,
+                                                 next_state.time_constraints)) {
+                keep = false;
+                break;
+              }
+            }
+            if (!keep) {
+              continue;
+            }
+          }
+
+          const std::size_t candidate_index = next_states_collapsed.size();
+          next_states_collapsed.push_back(std::move(next_state));
+          RankedStateCollapseIndex collapse_index;
+          collapse_index.candidate_index = candidate_index;
+          collapse_index.trial_slot = next_states_collapsed.back().trial_slot;
+          collapse_index.state_key = sequence_state_key(
+              next_states_collapsed.back().forced_complete_bits,
+              next_states_collapsed.back().forced_complete_bits_valid,
+              next_states_collapsed.back().forced_survive_bits,
+              next_states_collapsed.back().forced_survive_bits_valid,
+              next_states_collapsed.back().time_constraints);
+          next_state_collapse_order.push_back(std::move(collapse_index));
+        }
+        return true;
+      }
+
+      if (!exact_collect_scenarios_batch_from_points(
+              *compiler, ctx, outcome_node_idx, rank_seed_points, component_idx,
+              trial_params, trial_type_key, scenario_points,
+              uniform_trial_params_soa)) {
+        return true;
+      }
+
+      scenario_survival.assign(scenario_points.size(), 1.0);
+      if (competitor_cache_ptr != nullptr) {
+        exact_competitor_survival_batch(
+            ctx, *competitor_cache_ptr, component_idx, trial_params,
+            trial_type_key, scenario_points, scenario_survival,
+            uniform_trial_params_soa);
+      }
+
+      group_next_states.reserve(scenario_points.size());
+      group_next_state_order.reserve(scenario_points.size());
+
+      for (std::size_t point_idx = 0; point_idx < scenario_points.size();
+           ++point_idx) {
+        const ExactScenarioPoint &point = scenario_points[point_idx];
+        if (point.density_index >= group_size) {
+          return false;
+        }
+        const RankedFrontierStateRef &source_state_ref =
+            active_state_refs[group_begin + point.density_index];
+        const TrialSequenceState &source_state =
+            states[source_state_ref.state_index];
+        const double denom_val =
+            (point.density_index < denom.size()) ? denom[point.density_index]
+                                                : 0.0;
+        if (!std::isfinite(denom_val) || denom_val <= kBranchEps) {
           continue;
         }
-        weight *= surv;
+        double weight = source_state.weight * (point.weight / denom_val);
         if (!std::isfinite(weight) || weight <= kBranchEps) {
           continue;
         }
-      }
 
-      TrialSequenceState next_state;
-      next_state.trial_slot = source_state.trial_slot;
-      next_state.weight = weight;
-      next_state.forced_complete_bits = point.forced_complete_bits;
-      next_state.forced_survive_bits = point.forced_survive_bits;
-      next_state.forced_complete_bits_valid = point.forced_complete_bits_valid;
-      next_state.forced_survive_bits_valid = point.forced_survive_bits_valid;
-      next_state.time_constraints = point.time_constraints;
-
-      if (!competitors.empty() && !persistent_sources.empty()) {
-        bool keep = true;
-        for (int src_id : persistent_sources) {
-          set_forced_id_bit_strict(ctx, src_id, next_state.forced_survive_bits,
-                                   next_state.forced_survive_bits_valid);
-          if (!time_constraints_mark_survive(src_id, point.t,
-                                             next_state.time_constraints)) {
-            keep = false;
-            break;
+        if (competitor_cache_ptr != nullptr) {
+          const double surv = clamp_probability(scenario_survival[point_idx]);
+          if (!std::isfinite(surv) || surv <= kBranchEps) {
+            continue;
+          }
+          weight *= surv;
+          if (!std::isfinite(weight) || weight <= kBranchEps) {
+            continue;
           }
         }
-        if (!keep) {
-          continue;
+
+        TrialSequenceState next_state;
+        next_state.trial_slot = source_state.trial_slot;
+        next_state.weight = weight;
+        next_state.forced_complete_bits = point.forced_complete_bits;
+        next_state.forced_survive_bits = point.forced_survive_bits;
+        next_state.forced_complete_bits_valid = point.forced_complete_bits_valid;
+        next_state.forced_survive_bits_valid = point.forced_survive_bits_valid;
+        next_state.time_constraints = point.time_constraints;
+
+        if (competitor_cache_ptr != nullptr && !persistent_sources.empty()) {
+          bool keep = true;
+          for (int src_id : persistent_sources) {
+            set_forced_id_bit_strict(ctx, src_id, next_state.forced_survive_bits,
+                                     next_state.forced_survive_bits_valid);
+            if (!time_constraints_mark_survive(src_id, point.t,
+                                               next_state.time_constraints)) {
+              keep = false;
+              break;
+            }
+          }
+          if (!keep) {
+            continue;
+          }
+        }
+
+        const std::size_t candidate_index = group_next_states.size();
+        group_next_states.push_back(std::move(next_state));
+        RankedStateCollapseIndex collapse_index;
+        collapse_index.candidate_index = candidate_index;
+        collapse_index.trial_slot = group_next_states.back().trial_slot;
+        collapse_index.state_key = sequence_state_key(
+            group_next_states.back().forced_complete_bits,
+            group_next_states.back().forced_complete_bits_valid,
+            group_next_states.back().forced_survive_bits,
+            group_next_states.back().forced_survive_bits_valid,
+            group_next_states.back().time_constraints);
+        group_next_state_order.push_back(std::move(collapse_index));
+      }
+
+      collapse_ranked_state_candidates(group_next_states, group_next_state_order,
+                                       kBranchEps);
+      const std::size_t global_base = next_states_collapsed.size();
+      next_states_collapsed.reserve(global_base + group_next_states.size());
+      next_state_collapse_order.reserve(global_base + group_next_state_order.size());
+      for (std::size_t i = 0; i < group_next_states.size(); ++i) {
+        next_states_collapsed.push_back(std::move(group_next_states[i]));
+      }
+      for (RankedStateCollapseIndex &entry : group_next_state_order) {
+        entry.candidate_index += global_base;
+        next_state_collapse_order.push_back(std::move(entry));
+      }
+      return true;
+    };
+
+    if (split_frontier_groups) {
+      for (const RankedFrontierGroup &group : frontier_groups) {
+        if (!process_state_group(group.begin, group.end, group.trial_params_soa)) {
+          return false;
         }
       }
-
-      accumulate_next_state(std::move(next_state));
+    } else if (!process_state_group(frontier_begin, frontier_end,
+                                    frontier_uniform_trial_params_soa)) {
+      return false;
     }
 
-    states.clear();
-    states.reserve(next_states_collapsed.size());
-    for (TrialSequenceState &next_state : next_states_collapsed) {
-      if (std::isfinite(next_state.weight) && next_state.weight > kBranchEps) {
-        states.push_back(std::move(next_state));
-      }
-    }
+    collapse_ranked_state_candidates(next_states_collapsed, next_state_collapse_order,
+                                     kBranchEps);
+    states.swap(next_states_collapsed);
     if (states.empty()) {
       return true;
     }

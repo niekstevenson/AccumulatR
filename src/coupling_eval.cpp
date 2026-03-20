@@ -91,16 +91,6 @@ inline bool build_coupling_acc_ref(
   return true;
 }
 
-inline const uuber::TrialParamsSoA *coupling_trial_params_soa_for_point(
-    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
-    std::size_t point_idx, const uuber::TrialParamsSoA *fallback) {
-  if (trial_params_soa_batch != nullptr &&
-      point_idx < trial_params_soa_batch->size()) {
-    return (*trial_params_soa_batch)[point_idx];
-  }
-  return fallback;
-}
-
 inline bool evaluate_labelref_pool_batch(
     const uuber::NativeContext &ctx, const OutcomeCouplingEventRefPayload &ref,
     int component_idx, const TrialParamSet *trial_params,

@@ -11,86 +11,6 @@ inhibit <- AccumulatR::inhibit
 log_likelihood <- AccumulatR::log_likelihood
 set_mixture_options <- AccumulatR::set_mixture_options
 
-scenario_exact_ids <- function(scenario) {
-  as.integer(names(scenario$exact_source_times))
-}
-
-scenario_bound_ids <- function(scenario) {
-  as.integer(names(scenario$source_time_bounds$upper))
-}
-
-testthat::test_that("exact scenario emission binds only the density branch source for and()", {
-  spec <- race_spec() |>
-    add_accumulator("a", "exgauss") |>
-    add_accumulator("b", "exgauss") |>
-    add_outcome("AB", all_of("a", "b"))
-
-  structure <- finalize_model(spec)
-  prep <- AccumulatR:::.prepare_model_for_likelihood(structure$model_spec)
-  ctx <- AccumulatR:::native_context_build(prep)
-  compiled <- AccumulatR:::.expr_lookup_compiled(prep$outcomes[[1]]$expr, prep)
-
-  scenarios <- AccumulatR:::native_debug_exact_scenarios_cpp(
-    ctx,
-    as.integer(compiled$id),
-    0.35
-  )
-
-  testthat::expect_length(scenarios, 2L)
-
-  exact_ids <- sort(vapply(scenarios, function(x) scenario_exact_ids(x)[[1]], integer(1)))
-  bound_ids <- sort(vapply(scenarios, function(x) scenario_bound_ids(x)[[1]], integer(1)))
-  expected_ids <- sort(as.integer(compiled$sources))
-
-  testthat::expect_equal(exact_ids, expected_ids)
-  testthat::expect_equal(bound_ids, expected_ids)
-
-  for (scenario in scenarios) {
-    testthat::expect_equal(unname(scenario$exact_source_times), 0.35, tolerance = 1e-12)
-    testthat::expect_equal(unname(scenario$source_time_bounds$upper), 0.35, tolerance = 1e-12)
-    testthat::expect_length(scenario$forced_complete_ids, 0L)
-  }
-})
-
-testthat::test_that("guard scenario emission pins the reference and bounds the blocker", {
-  spec <- race_spec() |>
-    add_accumulator("S", "exgauss") |>
-    add_accumulator("stop", "exgauss") |>
-    add_outcome("Resp", inhibit("S", by = "stop"))
-
-  structure <- finalize_model(spec)
-  prep <- AccumulatR:::.prepare_model_for_likelihood(structure$model_spec)
-  ctx <- AccumulatR:::native_context_build(prep)
-  compiled <- AccumulatR:::.expr_lookup_compiled(prep$outcomes[[1]]$expr, prep)
-  ref_compiled <- AccumulatR:::.expr_lookup_compiled(compiled$expr$reference, prep)
-  blocker_compiled <- AccumulatR:::.expr_lookup_compiled(compiled$expr$blocker, prep)
-
-  scenarios <- AccumulatR:::native_debug_exact_scenarios_cpp(
-    ctx,
-    as.integer(compiled$id),
-    0.40
-  )
-
-  testthat::expect_length(scenarios, 1L)
-  scenario <- scenarios[[1]]
-
-  testthat::expect_equal(
-    scenario_exact_ids(scenario),
-    as.integer(ref_compiled$sources),
-    tolerance = 0
-  )
-  testthat::expect_equal(
-    scenario$forced_survive_ids,
-    integer(),
-    tolerance = 0
-  )
-  testthat::expect_equal(
-    unname(scenario$source_time_bounds$lower),
-    0.40,
-    tolerance = 1e-12
-  )
-})
-
 testthat::test_that("BEEST single-step likelihood matches the exact oracle and hits the exact path", {
   source(testthat::test_path("../../dev/test_beest.R"), local = TRUE)
 
@@ -216,10 +136,51 @@ testthat::test_that("plain independent races stay off the exact scalar path", {
 
   testthat::expect_true(is.finite(ll))
   testthat::expect_equal(stats$exact_batch_density_calls, 0)
+testthat::expect_gt(
+    stats$direct_node_density_batch_simple_competing_fastpath_calls,
+    0
+  )
+})
+
+testthat::test_that("timeout guess races use the simple competing fast path", {
+  spec <- race_spec() |>
+    add_accumulator("go_left", "lognormal") |>
+    add_accumulator("go_right", "lognormal") |>
+    add_accumulator("timeout", "lognormal", onset = 0.05) |>
+    add_outcome("Left", "go_left") |>
+    add_outcome("Right", "go_right") |>
+    add_outcome("TIMEOUT", "timeout", options = list(
+      guess = list(labels = c("Left", "Right"), weights = c(0.2, 0.8), rt_policy = "keep")
+    ))
+
+  data_df <- data.frame(
+    trial = 1L,
+    R = factor("Left", levels = c("Left", "Right", "TIMEOUT")),
+    rt = 0.31
+  )
+  params <- c(
+    go_left.meanlog = log(0.30),
+    go_left.sdlog = 0.18,
+    go_right.meanlog = log(0.325),
+    go_right.sdlog = 0.18,
+    timeout.meanlog = log(0.25),
+    timeout.sdlog = 0.10
+  )
+
+  ctx <- build_likelihood_context(spec, data_df)
+  params_df <- build_param_matrix(spec, params, n_trials = 1L)
+
+  AccumulatR:::unified_outcome_stats_reset_cpp()
+  ll <- as.numeric(log_likelihood(ctx, data_df, params_df))
+  stats <- AccumulatR:::unified_outcome_stats_cpp()
+
+  testthat::expect_true(is.finite(ll))
   testthat::expect_gt(
     stats$direct_node_density_batch_simple_competing_fastpath_calls,
     0
   )
+  testthat::expect_equal(stats$direct_node_density_batch_kernel_eval_calls, 0)
+  testthat::expect_equal(stats$kernel_event_batch_calls, 0)
 })
 
 testthat::test_that("disjoint guard competitors stay on the dense path", {

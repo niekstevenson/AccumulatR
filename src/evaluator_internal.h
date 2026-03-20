@@ -559,20 +559,6 @@ double evaluator_evaluate_survival_with_forced(
     const TrialParamSet *trial_params,
     const TimeConstraintMap *time_constraints,
     uuber::KernelRuntimeState *kernel_runtime);
-double competitor_survival_internal(
-    const uuber::NativeContext &ctx, const std::vector<int> &competitor_ids,
-    double t, int component_idx,
-    const uuber::BitsetState *forced_complete_bits_in,
-    bool forced_complete_bits_in_valid,
-    const uuber::BitsetState *forced_survive_bits_in,
-    bool forced_survive_bits_in_valid, const std::string &trial_type_key,
-    const TrialParamSet *trial_params,
-    const TimeConstraintMap *time_constraints,
-    uuber::KernelRuntimeState *kernel_runtime);
-double competitor_survival_from_state_compiled_ops(
-    const uuber::NativeContext &ctx, const std::vector<int> &competitor_ids,
-    NodeEvalState &state,
-    const uuber::CompetitorClusterCacheEntry *competitor_cache = nullptr);
 bool evaluator_node_density_with_competitors_batch_internal(
     const uuber::NativeContext &ctx, int node_id,
     const std::vector<double> &times, int component_idx,

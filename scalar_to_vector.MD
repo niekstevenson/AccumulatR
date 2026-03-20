@@ -35,12 +35,14 @@ The top-level multi-trial batching in `cpp_loglik()` is currently narrow. It onl
   - `src/distributions.cpp:4731-4831`
   - executed at `src/distributions.cpp:4894-4957`
 
-Everything not caught by those two groupers falls through the per-trial loop:
+Everything not caught by those two groupers now goes through the grouped
+fallback executor:
 
-- per-trial fallback loop: `src/distributions.cpp:4962-5021`
 - repeated leftover trials with identical eval shape, params, trigger plan, and
-  component weights are now grouped and evaluated once before that loop
-- status: `Scalar orchestration at the trial-group level; unique leftovers still scalar`
+  component weights are grouped and evaluated once
+- unique leftovers still execute as singleton groups through the same fallback
+  evaluator
+- status: `Scalar orchestration at the trial-group level; no separate per-trial fallback loop remains`
 
 The current top-level non-batched cases are:
 
@@ -137,34 +139,42 @@ Production ranked dispatch now routes single-trial `SequenceState` work through 
   - `src/distributions.cpp:4903-4954`
 - status: `No longer scalar-only in production`
 
-The old scalar ranked engine still exists, but it is no longer the intended production path for single-trial ranked work.
+The old scalar ranked engine has been removed from production.
 
 ### 4.2 Batched Ranked Evaluation Is Still Scalar-Shaped Internally
 
 The batched ranked engine exists:
 
 - `sequence_prefix_density_batch_resolved()`
-- `src/ranked_transitions.cpp:894-1185`
+  - `src/ranked_transitions.cpp`
 
-But it is not a fully vectorized ranked runtime. It still:
+It is no longer a pure per-state frontier loop. Active ranked states are now
+partitioned into reusable frontier groups and exact denom/scenario/competitor
+work runs per group instead of per individual state. Homogeneous frontier
+groups also now carry an explicit uniform `TrialParamsSoA*` down into exact
+batch evaluation, so the ranked exact path does not need to rediscover
+per-point param identity when a group is known-uniform.
 
-- loops `TrialSequenceState`s sequentially
-- builds `ExactScenarioPoint`s one state at a time
-- collapses states through hash maps
-- updates next states one scenario at a time
+But it is still not a fully vectorized ranked runtime. It still:
+
+- sorts/group-slices frontier states and then processes those groups sequentially
+- builds `ExactScenarioPoint`s for each group one state at a time
+- collapses next states with key-index sort/reduce, but still one scenario
+  candidate at a time
+- updates next states one scenario at a time after batched exact evaluation
 
 Relevant code:
 
-- state assembly and denom preparation:
-  - `src/ranked_transitions.cpp:988-1061`
+- frontier grouping and group scheduling:
+  - `src/ranked_transitions.cpp`
 - scenario collection:
-  - `src/ranked_transitions.cpp:1093-1098`
+  - `src/ranked_transitions.cpp`
 - scenario application / next-state collapse:
-  - `src/ranked_transitions.cpp:1144-1185`
+  - `src/ranked_transitions.cpp`
 
 Status:
 
-- `Scalar orchestration with batched node evaluation inside`
+- `Grouped scalar orchestration with sorted frontier slices and batched exact/node evaluation inside`
 
 ### 4.3 Old Scalar Ranked Oracle Has Been Removed
 
@@ -172,8 +182,6 @@ The separate scalar ranked prefix-density engine has been deleted.
 
 Remaining scalar-shaped ranked work is now inside the batched executor itself:
 
-- `for_each_sequence_node_transition()`
-  - `src/ranked_transitions.cpp`
 - scenario/state scheduling and collapse inside:
   - `sequence_prefix_density_batch_resolved()`
   - `src/ranked_transitions.cpp`
@@ -186,15 +194,9 @@ Status:
 
 ### 5.1 Singleton Exact Density Now Routes Through The Batch Engine
 
-`exact_outcome_density_from_state()` still exists as a helper entry point:
-
-- `src/exact_outcome_density.cpp`
-- called from `node_density_with_competitors_from_state_dense()`
-  - `src/distributions.cpp:2387-2412`
-
-But it no longer owns a separate scalar exact implementation. Singleton exact
-density now delegates to `exact_outcome_density_batch_from_state()` with a
-one-point batch.
+Singleton exact density no longer has a separate helper engine. Production
+callers now go straight through `exact_outcome_density_batch_from_state()`
+with one-point batches where needed.
 
 Status:
 
@@ -219,20 +221,15 @@ Status:
 
 - `Scalar orchestration with batched node evaluation inside`
 
-### 5.3 Batched Exact Density Still Has Scalar Competitor Fallback
+### 5.3 Batched Exact Density No Longer Has Scalar Competitor Recovery
 
-If `exact_competitor_survival_batch()` fails or returns a mismatched size:
-
-- `src/exact_outcome_density.cpp:1805-1845`
-
-the code falls back to:
-
-- constructing `NodeEvalState` per scenario
-- calling `competitor_survival_from_state_compiled_ops()` per scenario
+If `exact_competitor_survival_batch()` fails or returns a mismatched size now,
+that is treated as an invariant violation in production exact density rather
+than a scalar recovery path.
 
 Status:
 
-- `Scalar-only fallback inside batched exact density`
+- `No scalar competitor fallback remains inside batched exact density`
 
 ### 5.4 Exact Node Batch No Longer Has A Scalar Pointwise Escape Hatch
 
@@ -320,6 +317,10 @@ It still does per-point scalar work in these cases:
 - bounded self-conditioning on a relative-onset node
   - lower / upper bound calls back into the same per-point helper
   - `src/exact_outcome_density.cpp:345-383`
+
+It no longer does per-point `TrialParamsSoA` rediscovery on the homogeneous
+ranked frontier path, because ranked batching now passes an explicit uniform
+param contract into exact event / scenario / competitor evaluation.
 
 Status:
 
@@ -530,17 +531,17 @@ Today the framework is best described as:
 - `Fully batched` for some direct single-step and grouped ranked `cpp_loglik()` cases
 - `Pointwise batch` for several inner exact and coupling paths
 - `Scalar orchestration` for contribution accumulation, component accumulation, adaptive coupling integration, ranked state scheduling, exact scenario expansion, and the remaining unsupported shared-trigger direct/ranked paths
-- `Scalar-only` for unique top-level fallback trials, `cpp_loglik_multiple()`, and the standalone scalar helper APIs
+- `Scalar-only` for `cpp_loglik_multiple()` and the standalone scalar helper APIs
 
 In short:
 
 - Ranked is not the only remaining scalar area.
 - Non-ranked is not fully vectorized.
 - The biggest remaining scalar islands are:
-  - unique top-level fallback trials in `cpp_loglik()`
+  - singleton leftover trial groups in `cpp_loglik()` still use scalar trial-probability evaluation inside the grouped fallback executor
   - shared-trigger enumeration for unsupported direct / ranked paths
-  - scalar ranked internals still retained as an oracle / fallback implementation
-  - pointwise exact fallback paths, especially singleton-partition escape hatches
+  - scalar-shaped ranked frontier scheduling / scenario collapse
+  - pointwise work inside batched exact relative-onset evaluation
 
 ## 11. Recommended Next Cuts
 
@@ -620,10 +621,9 @@ real scalar-shaped internals:
 
 - scenario expansion / collapse
 - shared-state subgroup orchestration still exists inside the batch path
-- singleton-partition escape hatches now drop event / guard evaluation to
-  targeted per-point exact fallback to avoid catastrophic fake-batch behavior
 - pooled-event shared batch evaluation is still scalar-shaped internally
-- scalar competitor fallback inside the batch path
+- relative-onset / bounded-source evaluation still includes per-point work in
+  the batch engine for some shapes
 
 Target area:
 

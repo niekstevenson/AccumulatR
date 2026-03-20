@@ -116,84 +116,11 @@ build_competitor_clusters(const std::vector<CompetitorMeta> &metas) {
   return clusters;
 }
 
-inline bool competitor_kernel_runtime_usable(const NodeEvalState &state) {
-  return state.kernel_runtime_ready && state.kernel_runtime_ptr &&
-         kernel_runtime_cache_safe(state);
-}
-
-double run_competitor_batch_survival_op(
-    const uuber::CompetitorCompiledOp &op, NodeEvalState &state,
-    const uuber::KernelEventEvalFn &event_eval_cb,
-    const uuber::KernelGuardEvalFn &guard_eval_cb) {
-  if (op.target_node_indices.empty()) {
-    return 1.0;
-  }
-
-  uuber::KernelEvalNeed kernel_need;
-  kernel_need.density = false;
-  kernel_need.survival = true;
-  kernel_need.cdf = true;
-  std::vector<uuber::KernelNodeValues> kernel_values;
-  const bool use_state_runtime = competitor_kernel_runtime_usable(state);
-  thread_local uuber::KernelRuntimeState fallback_runtime;
-  uuber::KernelRuntimeState *runtime_ptr =
-      use_state_runtime ? state.kernel_runtime_ptr : &fallback_runtime;
-  if (!use_state_runtime) {
-    uuber::invalidate_kernel_runtime_from_slot(*runtime_ptr, 0);
-  }
-  if (!uuber::eval_kernel_nodes_incremental(
-          state.ctx.kernel_program, *runtime_ptr, op.target_node_indices,
-          kernel_need, event_eval_cb, guard_eval_cb, kernel_values) ||
-      kernel_values.size() != op.target_node_indices.size()) {
-    Rcpp::stop("IR kernel execution failed for competitor op");
-  }
-  if (!use_state_runtime) {
-    uuber::invalidate_kernel_runtime_from_slot(*runtime_ptr, 0);
-  }
-
-  double product = 1.0;
-  for (const auto &vals : kernel_values) {
-    const double surv = clamp_probability(vals.survival);
-    if (!std::isfinite(surv) || surv <= 0.0) {
-      return 0.0;
-    }
-    product *= surv;
-    if (!std::isfinite(product) || product <= 0.0) {
-      return 0.0;
-    }
-  }
-  if (op.transition_mask_begin >= 0 && op.transition_mask_count > 0) {
-    apply_transition_mask_words(
-        state.ctx, op.transition_mask_begin, op.transition_mask_count,
-        op.transition_invalidate_slot, state.forced_survive_bits,
-        state.forced_survive_bits_valid,
-        (state.kernel_runtime_ready && state.kernel_runtime_ptr)
-            ? state.kernel_runtime_ptr
-            : nullptr);
-  }
-  return clamp_probability(product);
-}
-
-double run_competitor_compiled_ops_product(
-    const std::vector<uuber::CompetitorCompiledOp> &compiled_ops,
-    NodeEvalState &state, const uuber::KernelEventEvalFn &event_eval_cb,
-    const uuber::KernelGuardEvalFn &guard_eval_cb) {
-  if (compiled_ops.empty()) {
-    return 1.0;
-  }
-  double product = 1.0;
-  for (const uuber::CompetitorCompiledOp &op : compiled_ops) {
-    const double surv =
-        run_competitor_batch_survival_op(op, state, event_eval_cb, guard_eval_cb);
-    if (!std::isfinite(surv) || surv <= 0.0) {
-      return 0.0;
-    }
-    product *= surv;
-    if (!std::isfinite(product) || product <= 0.0) {
-      return 0.0;
-    }
-  }
-  return clamp_probability(product);
+[[noreturn]] inline void competitor_batch_invariant_failure(
+    const char *reason, std::size_t point_count, std::size_t compiled_op_count) {
+  Rcpp::stop("Competitor batch invariant failed: %s (points=%d compiled_ops=%d)",
+             reason, static_cast<int>(point_count),
+             static_cast<int>(compiled_op_count));
 }
 
 } // namespace
@@ -343,99 +270,93 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
   return bucket.back().entry;
 }
 
-double competitor_survival_from_state_compiled_ops(
+void competitor_survival_batch_from_state_compiled_ops(
     const uuber::NativeContext &ctx, const std::vector<int> &competitor_ids,
     NodeEvalState &state,
+    const std::vector<double> &times, std::vector<double> &survival_out,
+    uuber::KernelBatchRuntimeState *kernel_batch_runtime,
     const uuber::CompetitorClusterCacheEntry *competitor_cache) {
+  survival_out.assign(times.size(), 1.0);
   if (competitor_ids.empty()) {
-    return 1.0;
+    return;
   }
   const uuber::CompetitorClusterCacheEntry &cache =
       competitor_cache ? *competitor_cache
                        : fetch_competitor_cluster_cache(ctx, competitor_ids);
   if (cache.compiled_ops.empty()) {
-    return 1.0;
+    return;
+  }
+  if (state.trial_params_soa_batch != nullptr &&
+      state.trial_params_soa_batch->size() != times.size()) {
+    competitor_batch_invariant_failure(
+        "trial_params_soa_batch size mismatch", times.size(),
+        cache.compiled_ops.size());
   }
 
-  const bool include_na_seed = state.include_na_donors;
-  const int outcome_idx_seed = state.outcome_idx;
-  const bool mutates_forced_survive = cache.mutates_forced_survive;
-  uuber::BitsetState forced_survive_seed;
-  bool forced_survive_seed_valid = false;
-  if (mutates_forced_survive) {
-    forced_survive_seed = state.forced_survive_bits;
-    forced_survive_seed_valid = state.forced_survive_bits_valid;
-  }
+  struct StateRestoreGuard {
+    NodeEvalState &state;
+    bool include_na_seed;
+    int outcome_idx_seed;
+    bool mutates_forced_survive;
+    uuber::BitsetState forced_survive_seed;
+    bool forced_survive_seed_valid;
+
+    ~StateRestoreGuard() {
+      state.include_na_donors = include_na_seed;
+      state.outcome_idx = outcome_idx_seed;
+      if (mutates_forced_survive) {
+        state.forced_survive_bits = forced_survive_seed;
+        state.forced_survive_bits_valid = forced_survive_seed_valid;
+      }
+    }
+  };
+
+  StateRestoreGuard restore{state,
+                            state.include_na_donors,
+                            state.outcome_idx,
+                            cache.mutates_forced_survive,
+                            state.forced_survive_bits,
+                            state.forced_survive_bits_valid};
 
   state.include_na_donors = false;
   state.outcome_idx = -1;
-  uuber::KernelEventEvalFn event_eval_cb =
-      evaluator_make_kernel_event_eval(state);
-  uuber::KernelGuardEvalFn guard_eval_cb =
-      evaluator_make_kernel_guard_eval(state);
-  const double out = run_competitor_compiled_ops_product(
-      cache.compiled_ops, state, event_eval_cb, guard_eval_cb);
 
-  state.include_na_donors = include_na_seed;
-  state.outcome_idx = outcome_idx_seed;
-  if (mutates_forced_survive) {
-    state.forced_survive_bits = forced_survive_seed;
-    state.forced_survive_bits_valid = forced_survive_seed_valid;
-  }
-  return out;
-}
+  thread_local uuber::KernelBatchRuntimeState fallback_batch_runtime;
+  uuber::KernelBatchRuntimeState *batch_runtime_ptr =
+      kernel_batch_runtime ? kernel_batch_runtime : &fallback_batch_runtime;
+  uuber::invalidate_kernel_batch_runtime_from_slot(*batch_runtime_ptr, 0);
 
-double competitor_survival_internal(
-    const uuber::NativeContext &ctx, const std::vector<int> &competitor_ids,
-    double t, int component_idx,
-    const uuber::BitsetState *forced_complete_bits_in,
-    bool forced_complete_bits_in_valid,
-    const uuber::BitsetState *forced_survive_bits_in,
-    bool forced_survive_bits_in_valid, const std::string &trial_type_key,
-    const TrialParamSet *trial_params,
-    const TimeConstraintMap *time_constraints,
-    uuber::KernelRuntimeState *kernel_runtime) {
-  if (competitor_ids.empty()) {
-    return 1.0;
+  uuber::KernelEventBatchEvalFn event_eval_batch_cb =
+      evaluator_make_kernel_event_eval_batch(state);
+  uuber::KernelGuardBatchEvalFn guard_eval_batch_cb =
+      evaluator_make_kernel_guard_eval_batch(state);
+  uuber::KernelBatchTransitionApplyFn apply_transition_batch =
+      [&](const uuber::CompetitorCompiledOp &op,
+          uuber::KernelBatchRuntimeState &runtime) {
+        if (op.transition_mask_begin < 0 || op.transition_mask_count <= 0) {
+          return;
+        }
+        apply_transition_mask_words(
+            state.ctx, op.transition_mask_begin, op.transition_mask_count,
+            op.transition_invalidate_slot, state.forced_survive_bits,
+            state.forced_survive_bits_valid,
+            (state.kernel_runtime_ready && state.kernel_runtime_ptr)
+                ? state.kernel_runtime_ptr
+                : nullptr,
+            &runtime);
+      };
+  if (!uuber::eval_kernel_competitor_product_batch_incremental(
+          state.ctx.kernel_program, *batch_runtime_ptr, cache.compiled_ops, times,
+          event_eval_batch_cb, guard_eval_batch_cb, apply_transition_batch,
+          survival_out)) {
+    competitor_batch_invariant_failure(
+        "kernel competitor product batch execution failed", times.size(),
+        cache.compiled_ops.size());
   }
-  const uuber::CompetitorClusterCacheEntry &cache =
-      fetch_competitor_cluster_cache(ctx, competitor_ids);
-  if (cache.compiled_ops.empty()) {
-    return 1.0;
+  if (survival_out.size() != times.size()) {
+    competitor_batch_invariant_failure("competitor batch output size mismatch",
+                                       times.size(), cache.compiled_ops.size());
   }
-
-  uuber::BitsetState forced_complete_bits_seed;
-  uuber::BitsetState forced_survive_bits_seed;
-  bool forced_complete_bits_seed_valid = false;
-  bool forced_survive_bits_seed_valid = false;
-  if (forced_complete_bits_in && forced_complete_bits_in_valid) {
-    forced_complete_bits_seed = *forced_complete_bits_in;
-    forced_complete_bits_seed_valid = true;
-  }
-  if (forced_survive_bits_in && forced_survive_bits_in_valid) {
-    forced_survive_bits_seed = *forced_survive_bits_in;
-    forced_survive_bits_seed_valid = true;
-  }
-
-  const bool kernel_runtime_usable =
-      kernel_runtime &&
-      !forced_bits_any(forced_complete_bits_in, forced_complete_bits_in_valid) &&
-      !forced_bits_any(forced_survive_bits_in, forced_survive_bits_in_valid) &&
-      !time_constraints_any(time_constraints);
-  NodeEvalState state(
-      ctx, t, component_idx, trial_params, trial_type_key, false, -1,
-      time_constraints, nullptr,
-      forced_complete_bits_seed_valid ? &forced_complete_bits_seed : nullptr,
-      forced_complete_bits_seed_valid,
-      forced_survive_bits_seed_valid ? &forced_survive_bits_seed : nullptr,
-      forced_survive_bits_seed_valid,
-      kernel_runtime_usable ? kernel_runtime : nullptr);
-  uuber::KernelEventEvalFn event_eval_cb =
-      evaluator_make_kernel_event_eval(state);
-  uuber::KernelGuardEvalFn guard_eval_cb =
-      evaluator_make_kernel_guard_eval(state);
-  return run_competitor_compiled_ops_product(cache.compiled_ops, state,
-                                             event_eval_cb, guard_eval_cb);
 }
 
 void invalidate_kernel_runtime_root(NodeEvalState &state) {

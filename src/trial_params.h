@@ -35,6 +35,8 @@ struct TrialParamSet {
   bool shared_trigger_layout_matches_context{true};
   bool has_any_override{false};
   std::uint64_t shared_trigger_source_fingerprint{0ULL};
+  std::uint64_t value_fingerprint{0ULL};
+  bool value_fingerprint_valid{false};
   mutable uuber::TrialParamsSoA soa_cache;
   mutable bool soa_cache_valid{false};
   const TrialParamSet *shared_trigger_source_params{nullptr};

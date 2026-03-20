@@ -418,37 +418,6 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// native_debug_exact_scenarios_cpp
-Rcpp::List native_debug_exact_scenarios_cpp(SEXP ctxSEXP, int node_id, double t, int component_idx, Rcpp::Nullable<Rcpp::DataFrame> trial_rows);
-RcppExport SEXP _AccumulatR_native_debug_exact_scenarios_cpp(SEXP ctxSEXPSEXP, SEXP node_idSEXP, SEXP tSEXP, SEXP component_idxSEXP, SEXP trial_rowsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type ctxSEXP(ctxSEXPSEXP);
-    Rcpp::traits::input_parameter< int >::type node_id(node_idSEXP);
-    Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< int >::type component_idx(component_idxSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::DataFrame> >::type trial_rows(trial_rowsSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_debug_exact_scenarios_cpp(ctxSEXP, node_id, t, component_idx, trial_rows));
-    return rcpp_result_gen;
-END_RCPP
-}
-// native_debug_exact_outcome_contributions_cpp
-Rcpp::List native_debug_exact_outcome_contributions_cpp(SEXP ctxSEXP, int node_id, double t, Rcpp::IntegerVector competitor_ids, int component_idx, Rcpp::Nullable<Rcpp::DataFrame> trial_rows);
-RcppExport SEXP _AccumulatR_native_debug_exact_outcome_contributions_cpp(SEXP ctxSEXPSEXP, SEXP node_idSEXP, SEXP tSEXP, SEXP competitor_idsSEXP, SEXP component_idxSEXP, SEXP trial_rowsSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< SEXP >::type ctxSEXP(ctxSEXPSEXP);
-    Rcpp::traits::input_parameter< int >::type node_id(node_idSEXP);
-    Rcpp::traits::input_parameter< double >::type t(tSEXP);
-    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type competitor_ids(competitor_idsSEXP);
-    Rcpp::traits::input_parameter< int >::type component_idx(component_idxSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::DataFrame> >::type trial_rows(trial_rowsSEXP);
-    rcpp_result_gen = Rcpp::wrap(native_debug_exact_outcome_contributions_cpp(ctxSEXP, node_id, t, competitor_ids, component_idx, trial_rows));
-    return rcpp_result_gen;
-END_RCPP
-}
 // unified_outcome_stats_reset_cpp
 void unified_outcome_stats_reset_cpp();
 RcppExport SEXP _AccumulatR_unified_outcome_stats_reset_cpp() {
@@ -498,8 +467,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_cpp_loglik_multiple", (DL_FUNC) &_AccumulatR_cpp_loglik_multiple, 9},
     {"_AccumulatR_native_component_plan_exported", (DL_FUNC) &_AccumulatR_native_component_plan_exported, 3},
     {"_AccumulatR_native_outcome_probability_params_cpp_idx", (DL_FUNC) &_AccumulatR_native_outcome_probability_params_cpp_idx, 11},
-    {"_AccumulatR_native_debug_exact_scenarios_cpp", (DL_FUNC) &_AccumulatR_native_debug_exact_scenarios_cpp, 5},
-    {"_AccumulatR_native_debug_exact_outcome_contributions_cpp", (DL_FUNC) &_AccumulatR_native_debug_exact_outcome_contributions_cpp, 6},
     {"_AccumulatR_unified_outcome_stats_reset_cpp", (DL_FUNC) &_AccumulatR_unified_outcome_stats_reset_cpp, 0},
     {"_AccumulatR_unified_outcome_stats_cpp", (DL_FUNC) &_AccumulatR_unified_outcome_stats_cpp, 0},
     {NULL, NULL, 0}

@@ -4,7 +4,6 @@
 
 struct UnifiedOutcomeRuntimeStats {
   std::uint64_t evaluate_outcome_coupling_unified_calls{0};
-  std::uint64_t kernel_node_density_entry_idx_calls{0};
   std::uint64_t exact_batch_density_calls{0};
   std::uint64_t exact_node_batch_calls{0};
   std::uint64_t exact_node_batch_active_points_total{0};
@@ -43,8 +42,6 @@ struct UnifiedOutcomeRuntimeStats {
   std::uint64_t ranked_batch_spec_reject_shape{0};
   std::uint64_t ranked_batch_template_cache_hits{0};
   std::uint64_t ranked_batch_template_cache_misses{0};
-  std::uint64_t cpp_loglik_fallback_group_calls{0};
-  std::uint64_t cpp_loglik_fallback_group_trials_total{0};
   std::uint64_t cpp_loglik_outcome_mass_group_batch_calls{0};
   std::uint64_t cpp_loglik_outcome_mass_group_batch_trials_total{0};
   std::uint64_t cpp_loglik_outcome_mass_group_batch_exec_failures{0};
@@ -73,7 +70,6 @@ extern bool g_unified_outcome_runtime_stats_enabled;
 
 void reset_unified_outcome_runtime_stats();
 void record_unified_outcome_coupling_eval_call();
-void record_unified_outcome_kernel_density_call();
 void record_unified_outcome_exact_batch_density_call();
 void record_unified_outcome_exact_node_batch_call(std::uint64_t active_points,
                                                   bool recursive_call);
@@ -104,8 +100,6 @@ void record_unified_outcome_ranked_batch_spec_reject_contribution();
 void record_unified_outcome_ranked_batch_spec_reject_shape();
 void record_unified_outcome_ranked_batch_template_cache_hit();
 void record_unified_outcome_ranked_batch_template_cache_miss();
-void record_unified_outcome_cpp_loglik_fallback_group_call(
-    std::uint64_t trial_count);
 void record_unified_outcome_cpp_loglik_outcome_mass_group_batch_call(
     std::uint64_t trial_count);
 void record_unified_outcome_cpp_loglik_outcome_mass_group_batch_exec_failure();

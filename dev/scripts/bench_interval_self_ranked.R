@@ -146,7 +146,6 @@ bench_rows <- do.call(
       inner_reps = inner_reps
     )
     row$exact_node_batch_calls <- case$stats$exact_node_batch_calls
-    row$pointwise_fallback_calls <- case$stats$exact_node_batch_pointwise_fallback_calls
     row
   })
 )

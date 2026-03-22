@@ -176,7 +176,6 @@ testthat::test_that("repeated nonresponse trials use outcome-mass batch in cpp_l
     stats$cpp_loglik_outcome_mass_group_batch_trials_total,
     stats$cpp_loglik_outcome_mass_group_batch_calls
   )
-  testthat::expect_equal(stats$cpp_loglik_fallback_group_calls, 0)
   testthat::expect_equal(stats$cpp_loglik_outcome_mass_group_batch_exec_failures, 0)
 })
 
@@ -228,7 +227,6 @@ testthat::test_that("non-shared-trigger outcome mass batches trials with differe
     stats$cpp_loglik_outcome_mass_group_batch_calls
   )
   testthat::expect_equal(stats$cpp_loglik_outcome_mass_group_batch_exec_failures, 0)
-  testthat::expect_equal(stats$cpp_loglik_fallback_group_calls, 0)
 })
 
 testthat::test_that("shared-trigger nonresponse batches outcome mass without scalar labelref fallback", {
@@ -249,6 +247,27 @@ testthat::test_that("shared-trigger nonresponse batches outcome mass without sca
   testthat::expect_true(is.finite(ll))
   testthat::expect_gt(stats$evaluate_outcome_coupling_unified_calls, 0)
   testthat::expect_gt(stats$shared_trigger_mask_batch_calls, 0)
+})
+
+testthat::test_that("repeated shared-trigger nonresponse trials avoid cpp_loglik fallback", {
+  spec <- build_shared_gate_nway_trigger_spec()
+  structure <- finalize_model(spec)
+  params_df <- build_param_matrix(spec, params_shared_gate_nway_trigger, n_trials = 3L)
+  repeated_nonresp_df <- data.frame(
+    trial = 1:3,
+    R = factor(rep(NA_character_, 3L), levels = c("RESP2", "RESP3", "NR_RAW")),
+    rt = rep(NA_real_, 3L)
+  )
+  ctx <- build_likelihood_context(structure, repeated_nonresp_df)
+
+  AccumulatR:::unified_outcome_stats_reset_cpp()
+  ll <- as.numeric(log_likelihood(ctx, repeated_nonresp_df, params_df))
+  stats <- AccumulatR:::unified_outcome_stats_cpp()
+
+  testthat::expect_true(is.finite(ll))
+  testthat::expect_gt(stats$cpp_loglik_outcome_mass_group_batch_calls, 0)
+  testthat::expect_gt(stats$shared_trigger_mask_batch_calls, 0)
+  testthat::expect_equal(stats$cpp_loglik_outcome_mass_group_batch_exec_failures, 0)
 })
 
 testthat::test_that("shared-trigger guess-donor response probabilities batch masks without scalar fallback", {

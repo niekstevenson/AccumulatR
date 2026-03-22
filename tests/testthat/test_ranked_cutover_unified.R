@@ -4,6 +4,9 @@ add_outcome <- AccumulatR::add_outcome
 inhibit <- AccumulatR::inhibit
 add_pool <- AccumulatR::add_pool
 add_trigger <- AccumulatR::add_trigger
+add_component <- AccumulatR::add_component
+set_mixture_options <- AccumulatR::set_mixture_options
+after <- AccumulatR::after
 finalize_model <- AccumulatR::finalize_model
 build_param_matrix <- AccumulatR::build_param_matrix
 build_likelihood_context <- AccumulatR::build_likelihood_context
@@ -180,6 +183,62 @@ testthat::test_that("ranked batch templates are reused across repeated loglik ca
   testthat::expect_gt(stats_batch$ranked_batch_spec_attempts, 0)
   testthat::expect_gt(stats_batch$ranked_batch_template_cache_hits, 0)
   testthat::expect_equal(stats_batch$ranked_batch_template_cache_misses, 0)
+})
+
+testthat::test_that("ranked mixture trials batch without cpp_loglik fallback", {
+  spec <- race_spec(n_outcomes = 2L) |>
+    add_accumulator("a_fast", "lognormal") |>
+    add_accumulator("b_fast", "lognormal", onset = after("a_fast")) |>
+    add_accumulator("a_slow", "lognormal") |>
+    add_accumulator("b_slow", "lognormal", onset = after("a_slow")) |>
+    add_outcome("A", "a_fast", options = list(component = "fast")) |>
+    add_outcome("B", "b_fast", options = list(component = "fast")) |>
+    add_outcome("A", "a_slow", options = list(component = "slow")) |>
+    add_outcome("B", "b_slow", options = list(component = "slow")) |>
+    add_component("fast", members = c("a_fast", "b_fast"), weight = 0.5) |>
+    add_component("slow", members = c("a_slow", "b_slow"), weight = 0.5) |>
+    set_mixture_options(mode = "fixed")
+
+  structure <- finalize_model(spec)
+  params <- c(
+    a_fast.meanlog = log(0.29), a_fast.sdlog = 0.16,
+    b_fast.meanlog = log(0.21), b_fast.sdlog = 0.15,
+    a_slow.meanlog = log(0.34), a_slow.sdlog = 0.17,
+    b_slow.meanlog = log(0.24), b_slow.sdlog = 0.16
+  )
+  params_df <- build_param_matrix(spec, params, n_trials = 4L)
+  ranked_df <- data.frame(
+    trial = 1:4,
+    R = factor(rep("A", 4L), levels = c("A", "B")),
+    rt = c(0.34, 0.35, 0.36, 0.37),
+    R2 = factor(rep("B", 4L), levels = c("A", "B")),
+    rt2 = c(0.57, 0.58, 0.59, 0.60)
+  )
+
+  ctx <- build_likelihood_context(structure, ranked_df)
+  AccumulatR:::unified_outcome_stats_reset_cpp()
+  ll_batch <- as.numeric(log_likelihood(ctx, ranked_df, params_df))
+  stats_batch <- AccumulatR:::unified_outcome_stats_cpp()
+
+  ll_split <- 0.0
+  for (i in seq_len(nrow(ranked_df))) {
+    trial_df <- ranked_df[i, , drop = FALSE]
+    trial_params <- build_param_matrix(spec, params, n_trials = 1L)
+    ll_split <- ll_split + as.numeric(log_likelihood(
+      build_likelihood_context(structure, trial_df),
+      trial_df,
+      trial_params
+    ))
+  }
+
+  testthat::expect_equal(ll_batch, ll_split, tolerance = 1e-10)
+  testthat::expect_gt(stats_batch$ranked_batch_spec_attempts, 0)
+  testthat::expect_equal(stats_batch$ranked_batch_spec_reject_contribution, 0)
+  testthat::expect_gt(
+    stats_batch$ranked_batch_template_cache_hits +
+      stats_batch$ranked_batch_template_cache_misses,
+    0
+  )
 })
 
 testthat::test_that("invalid ranked ordering returns min_ll", {

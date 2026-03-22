@@ -134,6 +134,62 @@ testthat::test_that("shared-trigger direct trial uses mask batch in cpp_loglik",
   testthat::expect_gt(stats$shared_trigger_mask_batch_points_total, 0)
 })
 
+testthat::test_that("shared-trigger guess-donor direct trials avoid cpp_loglik fallback", {
+  spec <- race_spec() |>
+    add_accumulator("go_left", "lognormal") |>
+    add_accumulator("go_right", "lognormal") |>
+    add_accumulator("timeout", "lognormal", onset = 0.05) |>
+    add_outcome("Left", "go_left") |>
+    add_outcome("Right", "go_right") |>
+    add_outcome("TIMEOUT", "timeout", options = list(
+      guess = list(labels = c("Left", "Right"), weights = c(0.2, 0.8), rt_policy = "keep")
+    )) |>
+    add_trigger("tg",
+      members = c("go_left", "go_right", "timeout"),
+      q = 0.10, param = "tg_q", draw = "shared"
+    )
+
+  params <- c(
+    go_left.meanlog = log(0.30),
+    go_left.sdlog = 0.18,
+    go_right.meanlog = log(0.325),
+    go_right.sdlog = 0.18,
+    timeout.meanlog = log(0.25),
+    timeout.sdlog = 0.10,
+    tg_q = 0.21
+  )
+
+  trial_data <- data.frame(
+    trial = 1:4,
+    R = factor(rep("Left", 4L), levels = c("Left", "Right", "TIMEOUT")),
+    rt = c(0.34, 0.35, 0.36, 0.37)
+  )
+
+  ctx <- build_likelihood_context(spec, trial_data)
+  params_df <- build_param_matrix(spec, params, n_trials = 4L)
+
+  AccumulatR:::unified_outcome_stats_reset_cpp()
+  ll_batch <- as.numeric(log_likelihood(ctx, trial_data, params_df))
+  stats <- AccumulatR:::unified_outcome_stats_cpp()
+
+  ll_split <- 0.0
+  for (i in seq_len(nrow(trial_data))) {
+    trial_df <- trial_data[i, , drop = FALSE]
+    trial_params <- build_param_matrix(spec, params, n_trials = 1L)
+    ll_split <- ll_split + as.numeric(log_likelihood(
+      build_likelihood_context(spec, trial_df),
+      trial_df,
+      trial_params
+    ))
+  }
+
+  testthat::expect_equal(ll_batch, ll_split, tolerance = 1e-10)
+  testthat::expect_gt(stats$shared_trigger_mask_batch_calls, 0)
+  testthat::expect_gt(stats$cpp_loglik_direct_group_batch_calls, 0)
+  testthat::expect_gt(stats$cpp_loglik_direct_shared_trigger_group_batch_calls, 0)
+  testthat::expect_equal(stats$cpp_loglik_direct_group_batch_exec_failures, 0)
+})
+
 testthat::test_that("shared-trigger exact trial uses mask batch and exact batch density", {
   spec <- race_spec() |>
     add_accumulator("go1", "lognormal") |>

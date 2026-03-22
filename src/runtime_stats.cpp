@@ -20,13 +20,6 @@ void record_unified_outcome_coupling_eval_call() {
   ++g_unified_outcome_runtime_stats.evaluate_outcome_coupling_unified_calls;
 }
 
-void record_unified_outcome_kernel_density_call() {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats.kernel_node_density_entry_idx_calls;
-}
-
 void record_unified_outcome_exact_batch_density_call() {
   if (!g_unified_outcome_runtime_stats_enabled) {
     return;
@@ -239,16 +232,6 @@ void record_unified_outcome_ranked_batch_template_cache_miss() {
   ++g_unified_outcome_runtime_stats.ranked_batch_template_cache_misses;
 }
 
-void record_unified_outcome_cpp_loglik_fallback_group_call(
-    std::uint64_t trial_count) {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats.cpp_loglik_fallback_group_calls;
-  g_unified_outcome_runtime_stats.cpp_loglik_fallback_group_trials_total +=
-      trial_count;
-}
-
 void record_unified_outcome_cpp_loglik_outcome_mass_group_batch_call(
     std::uint64_t trial_count) {
   if (!g_unified_outcome_runtime_stats_enabled) {
@@ -371,10 +354,6 @@ Rcpp::List unified_outcome_stats_cpp() {
           static_cast<double>(
               g_unified_outcome_runtime_stats
                   .evaluate_outcome_coupling_unified_calls),
-      Rcpp::Named("kernel_node_density_entry_idx_calls") =
-          static_cast<double>(
-              g_unified_outcome_runtime_stats
-                  .kernel_node_density_entry_idx_calls),
       Rcpp::Named("exact_batch_density_calls") = static_cast<double>(
           g_unified_outcome_runtime_stats.exact_batch_density_calls),
       Rcpp::Named("exact_node_batch_calls") = static_cast<double>(
@@ -466,12 +445,6 @@ Rcpp::List unified_outcome_stats_cpp() {
           g_unified_outcome_runtime_stats.ranked_batch_template_cache_hits),
       Rcpp::Named("ranked_batch_template_cache_misses") = static_cast<double>(
           g_unified_outcome_runtime_stats.ranked_batch_template_cache_misses),
-      Rcpp::Named("cpp_loglik_fallback_group_calls") =
-          static_cast<double>(g_unified_outcome_runtime_stats
-                                  .cpp_loglik_fallback_group_calls),
-      Rcpp::Named("cpp_loglik_fallback_group_trials_total") =
-          static_cast<double>(g_unified_outcome_runtime_stats
-                                  .cpp_loglik_fallback_group_trials_total),
       Rcpp::Named("cpp_loglik_outcome_mass_group_batch_calls") =
           static_cast<double>(g_unified_outcome_runtime_stats
                                   .cpp_loglik_outcome_mass_group_batch_calls),

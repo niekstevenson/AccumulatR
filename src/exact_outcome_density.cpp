@@ -16,9 +16,7 @@
 
 namespace {
 
-constexpr double kDefaultRelTol = 1e-5;
-constexpr double kDefaultAbsTol = 1e-6;
-constexpr int kDefaultMaxDepth = 12;
+struct ExactScenarioPointRef;
 
 enum class RelativeSelfConstraintKind : std::uint8_t {
   kNone = 0u,
@@ -54,7 +52,7 @@ inline bool exact_forced_contains_id(const uuber::NativeContext &ctx,
 }
 
 inline ForcedStateView exact_make_point_forced_state(
-    const uuber::NativeContext &ctx, const ExactScenarioPoint &point);
+    const uuber::NativeContext &ctx, const ExactScenarioPointRef &point);
 
 inline bool exact_point_active(const std::vector<std::uint8_t> *active_mask,
                                std::size_t idx);
@@ -63,9 +61,26 @@ inline std::size_t exact_count_active_points(
     const std::vector<std::uint8_t> *active_mask, std::size_t point_count);
 
 inline const uuber::TrialParamsSoA *exact_trial_params_soa_for_point(
-    const uuber::NativeContext &ctx, const ExactScenarioPoint &point,
+    const uuber::NativeContext &ctx, const ExactScenarioPointRef &point,
     const TrialParamSet *trial_params,
     const uuber::TrialParamsSoA *fallback_trial_params_soa = nullptr);
+
+bool exact_eval_node_batch_with_points(
+    const uuber::NativeContext &ctx, int node_idx,
+    const ExactScenarioBatch &points, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    const std::vector<std::uint8_t> *active_mask = nullptr,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr);
+
+template <typename PointVec>
+bool exact_eval_simple_acc_event_batch(
+    const uuber::NativeContext &ctx, const uuber::IrEvent &event,
+    const PointVec &points, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    const std::vector<std::uint8_t> *active_mask = nullptr,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr);
 
 bool exact_collect_deterministic_scenarios_batch_from_points_internal(
     RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
@@ -76,15 +91,556 @@ bool exact_collect_deterministic_scenarios_batch_from_points_internal(
     std::vector<std::uint8_t> &active_mask,
     const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr);
 
-bool exact_eval_relative_onset_base_point(
-    const uuber::NativeContext &ctx, const ExactScenarioPoint &point,
+inline void exact_scenario_batch_append_point(ExactScenarioBatch &batch,
+                                              ExactScenarioPoint &&point) {
+  batch.t.push_back(point.t);
+  batch.density_index.push_back(point.density_index);
+  batch.weight.push_back(point.weight);
+  batch.trial_params_soa.push_back(point.trial_params_soa);
+  batch.forced_complete_bits.push_back(std::move(point.forced_complete_bits));
+  batch.forced_survive_bits.push_back(std::move(point.forced_survive_bits));
+  batch.forced_complete_bits_valid.push_back(point.forced_complete_bits_valid
+                                                 ? 1u
+                                                 : 0u);
+  batch.forced_survive_bits_valid.push_back(point.forced_survive_bits_valid
+                                                ? 1u
+                                                : 0u);
+  batch.time_constraints.push_back(std::move(point.time_constraints));
+}
+
+inline void exact_scenario_batch_append_point(ExactScenarioBatch &batch,
+                                              const ExactScenarioPoint &point,
+                                              double weight_override) {
+  batch.t.push_back(point.t);
+  batch.density_index.push_back(point.density_index);
+  batch.weight.push_back(weight_override);
+  batch.trial_params_soa.push_back(point.trial_params_soa);
+  batch.forced_complete_bits.push_back(point.forced_complete_bits);
+  batch.forced_survive_bits.push_back(point.forced_survive_bits);
+  batch.forced_complete_bits_valid.push_back(point.forced_complete_bits_valid
+                                                 ? 1u
+                                                 : 0u);
+  batch.forced_survive_bits_valid.push_back(point.forced_survive_bits_valid
+                                                ? 1u
+                                                : 0u);
+  batch.time_constraints.push_back(point.time_constraints);
+}
+
+inline void exact_scenario_batch_append_row(ExactScenarioBatch &dst,
+                                            ExactScenarioBatch &src,
+                                            std::size_t idx,
+                                            double weight_override) {
+  dst.t.push_back(src.t[idx]);
+  dst.density_index.push_back(src.density_index[idx]);
+  dst.weight.push_back(weight_override);
+  dst.trial_params_soa.push_back(src.trial_params_soa[idx]);
+  dst.forced_complete_bits.push_back(
+      std::move(src.forced_complete_bits[idx]));
+  dst.forced_survive_bits.push_back(std::move(src.forced_survive_bits[idx]));
+  dst.forced_complete_bits_valid.push_back(
+      idx < src.forced_complete_bits_valid.size()
+          ? src.forced_complete_bits_valid[idx]
+          : 0u);
+  dst.forced_survive_bits_valid.push_back(
+      idx < src.forced_survive_bits_valid.size()
+          ? src.forced_survive_bits_valid[idx]
+          : 0u);
+  dst.time_constraints.push_back(std::move(src.time_constraints[idx]));
+}
+
+inline ExactScenarioPoint exact_scenario_batch_point_at(
+    const ExactScenarioBatch &batch, std::size_t idx) {
+  ExactScenarioPoint point;
+  point.t = batch.t[idx];
+  point.density_index = batch.density_index[idx];
+  point.weight = batch.weight[idx];
+  point.trial_params_soa =
+      idx < batch.trial_params_soa.size() ? batch.trial_params_soa[idx]
+                                          : nullptr;
+  point.forced_complete_bits = batch.forced_complete_bits[idx];
+  point.forced_survive_bits = batch.forced_survive_bits[idx];
+  point.forced_complete_bits_valid =
+      idx < batch.forced_complete_bits_valid.size() &&
+      batch.forced_complete_bits_valid[idx] != 0u;
+  point.forced_survive_bits_valid =
+      idx < batch.forced_survive_bits_valid.size() &&
+      batch.forced_survive_bits_valid[idx] != 0u;
+  point.time_constraints = batch.time_constraints[idx];
+  return point;
+}
+
+inline void exact_scenario_batch_materialize_points(
+    const ExactScenarioBatch &batch, std::vector<ExactScenarioPoint> &points) {
+  points.resize(batch.size());
+  for (std::size_t i = 0; i < batch.size(); ++i) {
+    points[i] = exact_scenario_batch_point_at(batch, i);
+  }
+}
+
+struct ExactScenarioPointRef {
+  double t{0.0};
+  std::size_t density_index{0u};
+  double weight{0.0};
+  const uuber::TrialParamsSoA *trial_params_soa{nullptr};
+  const uuber::BitsetState *forced_complete_bits{nullptr};
+  const uuber::BitsetState *forced_survive_bits{nullptr};
+  bool forced_complete_bits_valid{false};
+  bool forced_survive_bits_valid{false};
+  const TimeConstraintMap *time_constraints{nullptr};
+};
+
+inline ExactScenarioPointRef exact_point_ref(
+    const std::vector<ExactScenarioPoint> &points, std::size_t idx) {
+  const ExactScenarioPoint &point = points[idx];
+  return ExactScenarioPointRef{point.t,
+                               point.density_index,
+                               point.weight,
+                               point.trial_params_soa,
+                               &point.forced_complete_bits,
+                               &point.forced_survive_bits,
+                               point.forced_complete_bits_valid,
+                               point.forced_survive_bits_valid,
+                               &point.time_constraints};
+}
+
+inline ExactScenarioPointRef exact_point_ref(const ExactScenarioBatch &points,
+                                             std::size_t idx) {
+  return ExactScenarioPointRef{
+      points.t[idx],
+      points.density_index[idx],
+      points.weight[idx],
+      idx < points.trial_params_soa.size() ? points.trial_params_soa[idx]
+                                           : nullptr,
+      &points.forced_complete_bits[idx],
+      &points.forced_survive_bits[idx],
+      idx < points.forced_complete_bits_valid.size() &&
+          points.forced_complete_bits_valid[idx] != 0u,
+      idx < points.forced_survive_bits_valid.size() &&
+          points.forced_survive_bits_valid[idx] != 0u,
+      &points.time_constraints[idx]};
+}
+
+inline void exact_apply_transition_mask_to_point(
+    const uuber::NativeContext &ctx, std::vector<ExactScenarioPoint> &points,
+    std::size_t idx, const uuber::CompetitorCompiledOp &op) {
+  if (idx >= points.size()) {
+    return;
+  }
+  ExactScenarioPoint &point = points[idx];
+  apply_transition_mask_words(ctx, op.transition_mask_begin,
+                              op.transition_mask_count,
+                              op.transition_invalidate_slot,
+                              point.forced_survive_bits,
+                              point.forced_survive_bits_valid, nullptr, nullptr);
+}
+
+inline void exact_apply_transition_mask_to_point(
+    const uuber::NativeContext &ctx, ExactScenarioBatch &points,
+    std::size_t idx, const uuber::CompetitorCompiledOp &op) {
+  if (idx >= points.size()) {
+    return;
+  }
+  bool forced_survive_bits_valid =
+      idx < points.forced_survive_bits_valid.size() &&
+      points.forced_survive_bits_valid[idx] != 0u;
+  apply_transition_mask_words(ctx, op.transition_mask_begin,
+                              op.transition_mask_count,
+                              op.transition_invalidate_slot,
+                              points.forced_survive_bits[idx],
+                              forced_survive_bits_valid, nullptr, nullptr);
+  if (idx < points.forced_survive_bits_valid.size()) {
+    points.forced_survive_bits_valid[idx] =
+        forced_survive_bits_valid ? 1u : 0u;
+  }
+}
+
+inline int exact_find_label_ref_node_idx(const uuber::NativeContext &ctx,
+                                         const uuber::LabelRef &ref) {
+  if (ref.acc_idx >= 0) {
+    for (const uuber::IrEvent &event : ctx.ir.events) {
+      if (event.acc_idx == ref.acc_idx && event.node_idx >= 0) {
+        return event.node_idx;
+      }
+    }
+  }
+  if (ref.pool_idx >= 0) {
+    for (const uuber::IrEvent &event : ctx.ir.events) {
+      if (event.pool_idx == ref.pool_idx && event.node_idx >= 0) {
+        return event.node_idx;
+      }
+    }
+  }
+  if (ref.label_id >= 0 && ref.label_id != NA_INTEGER) {
+    for (const uuber::IrEvent &event : ctx.ir.events) {
+      if (event.label_id == ref.label_id && event.node_idx >= 0) {
+        return event.node_idx;
+      }
+    }
+  }
+  return -1;
+}
+
+template <typename PointVec>
+inline void exact_scenario_batch_append_retimed_point(
+    ExactScenarioBatch &batch, const PointVec &points, std::size_t idx,
+    double t_new) {
+  const ExactScenarioPointRef point = exact_point_ref(points, idx);
+  batch.t.push_back(t_new);
+  batch.density_index.push_back(point.density_index);
+  batch.weight.push_back(point.weight);
+  batch.trial_params_soa.push_back(point.trial_params_soa);
+  batch.forced_complete_bits.push_back(*point.forced_complete_bits);
+  batch.forced_survive_bits.push_back(*point.forced_survive_bits);
+  batch.forced_complete_bits_valid.push_back(point.forced_complete_bits_valid
+                                                 ? 1u
+                                                 : 0u);
+  batch.forced_survive_bits_valid.push_back(point.forced_survive_bits_valid
+                                                ? 1u
+                                                : 0u);
+  batch.time_constraints.push_back(*point.time_constraints);
+}
+
+struct ExactRelativeOnsetBatchPlan {
+  bool has_conditioning_bounds{false};
+  bool need_density{false};
+  bool need_cdf{false};
+  bool has_exact{false};
+  double exact_time{std::numeric_limits<double>::quiet_NaN()};
+  double bound_lower{0.0};
+  double bound_upper{std::numeric_limits<double>::infinity()};
+  double upper_int{0.0};
+  double source_mass{1.0};
+  std::size_t lower_cdf_query_idx{std::numeric_limits<std::size_t>::max()};
+  std::size_t upper_cdf_query_idx{std::numeric_limits<std::size_t>::max()};
+  std::size_t quad_begin{0u};
+  std::size_t quad_count{0u};
+};
+
+[[noreturn]] inline void exact_relative_onset_batch_invariant(
+    const char *reason, const uuber::LabelRef &source_ref,
+    std::size_t point_count) {
+  Rcpp::stop(
+      "Exact relative-onset batch invariant failed: %s "
+      "(source_label_id=%d source_acc_idx=%d source_pool_idx=%d points=%d)",
+      reason, source_ref.label_id, source_ref.acc_idx, source_ref.pool_idx,
+      static_cast<int>(point_count));
+}
+
+template <typename PointVec>
+bool exact_eval_label_ref_batch(
+    const uuber::NativeContext &ctx, const uuber::LabelRef &source_ref,
+    const PointVec &points, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    EvalNeed need, const std::vector<std::uint8_t> *active_mask,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa,
+    uuber::KernelNodeBatchValues &out_values) {
+  const int source_node_idx = exact_find_label_ref_node_idx(ctx, source_ref);
+  if (source_node_idx >= 0) {
+    return exact_eval_node_batch_with_points(
+        ctx, source_node_idx, points, component_idx, trial_params,
+        trial_type_key, need, out_values, active_mask,
+        uniform_trial_params_soa);
+  }
+  if (source_ref.acc_idx >= 0) {
+    uuber::IrEvent source_event;
+    source_event.node_idx = -1;
+    source_event.acc_idx = source_ref.acc_idx;
+    source_event.pool_idx = -1;
+    source_event.label_id = source_ref.label_id;
+    source_event.outcome_idx = source_ref.outcome_idx;
+    return exact_eval_simple_acc_event_batch(
+        ctx, source_event, points, component_idx, trial_params, trial_type_key,
+        need, out_values, active_mask, uniform_trial_params_soa);
+  }
+  return false;
+}
+
+template <typename PointVec>
+bool exact_eval_relative_onset_base_batch(
+    const uuber::NativeContext &ctx, const PointVec &points,
     const uuber::LabelRef &source_ref, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    const uuber::TrialParamsSoA *trial_params_soa,
     const uuber::AccDistParams &cfg,
-    const LowerBoundTransform &lower_bound, double success_prob,
-    double eval_t, double x_shift, bool need_density, bool need_cdf,
-    double &base_density_out, double &base_cdf_out);
+    const LowerBoundTransform &lower_bound,
+    const std::vector<double> &success_probs,
+    const std::vector<double> &eval_times,
+    const std::vector<std::uint8_t> &need_density_mask,
+    const std::vector<std::uint8_t> &need_cdf_mask, double x_shift,
+    const std::vector<std::uint8_t> *active_mask,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa,
+    std::vector<double> &base_density_out, std::vector<double> &base_cdf_out) {
+  const std::size_t point_count = points.size();
+  base_density_out.assign(point_count, 0.0);
+  base_cdf_out.assign(point_count, 0.0);
+  if (success_probs.size() != point_count || eval_times.size() != point_count ||
+      need_density_mask.size() != point_count ||
+      need_cdf_mask.size() != point_count) {
+    return false;
+  }
+  if (source_ref.acc_idx < 0 && source_ref.pool_idx < 0) {
+    return true;
+  }
+
+  const int source_label_id = source_ref.label_id;
+  std::vector<ExactRelativeOnsetBatchPlan> plans(point_count);
+  ExactScenarioBatch cdf_query_points;
+  ExactScenarioBatch density_query_points;
+  std::vector<double> density_query_weights;
+  std::vector<double> density_query_shifted_times;
+  bool any_density_query = false;
+  bool any_cdf_query = false;
+  constexpr int kFusedSegments = 4;
+
+  for (std::size_t i = 0; i < point_count; ++i) {
+    if (!exact_point_active(active_mask, i) ||
+        (need_density_mask[i] == 0u && need_cdf_mask[i] == 0u)) {
+      continue;
+    }
+    ExactRelativeOnsetBatchPlan &plan = plans[i];
+    plan.need_density = need_density_mask[i] != 0u;
+    plan.need_cdf = need_cdf_mask[i] != 0u;
+
+    const ExactScenarioPointRef point = exact_point_ref(points, i);
+    const double eval_t = eval_times[i];
+    const ForcedStateView forced_state = exact_make_point_forced_state(ctx, point);
+    if (source_label_id >= 0 && source_label_id != NA_INTEGER &&
+        evaluator_state_contains_survive_at(
+            forced_state, point.time_constraints, source_label_id, eval_t)) {
+      continue;
+    }
+
+    if (source_label_id >= 0 && source_label_id != NA_INTEGER) {
+      if (forced_state_contains_complete(forced_state, source_label_id)) {
+        plan.bound_upper = std::min(plan.bound_upper, eval_t);
+        plan.has_conditioning_bounds = true;
+      }
+      bool source_has_bounds = false;
+      double source_bound_lower = 0.0;
+      double source_bound_upper = std::numeric_limits<double>::infinity();
+      (void)evaluator_resolve_label_time_constraint(
+          point.time_constraints, source_label_id, plan.has_exact,
+          plan.exact_time, source_has_bounds, source_bound_lower,
+          source_bound_upper);
+      if (source_has_bounds) {
+        plan.bound_lower = std::max(plan.bound_lower, source_bound_lower);
+        plan.bound_upper = std::min(plan.bound_upper, source_bound_upper);
+        plan.has_conditioning_bounds = true;
+      }
+    }
+
+    if (plan.has_exact) {
+      const double shifted_time = eval_t - plan.exact_time - x_shift;
+      if (plan.need_density) {
+        base_density_out[i] = safe_density(
+            success_probs[i] *
+            eval_pdf_single_with_lower_bound(cfg, shifted_time, lower_bound));
+      }
+      if (plan.need_cdf) {
+        base_cdf_out[i] = clamp_probability(
+            success_probs[i] *
+            eval_cdf_single_with_lower_bound(cfg, shifted_time, lower_bound));
+      }
+      continue;
+    }
+
+    if (!(plan.bound_upper > plan.bound_lower)) {
+      continue;
+    }
+    if (std::isfinite(eval_t) && (eval_t - x_shift <= plan.bound_lower)) {
+      continue;
+    }
+
+    if (plan.has_conditioning_bounds) {
+      if (std::isfinite(plan.bound_lower) && plan.bound_lower > 0.0) {
+        plan.lower_cdf_query_idx = cdf_query_points.size();
+        exact_scenario_batch_append_retimed_point(
+            cdf_query_points, points, i, plan.bound_lower);
+        any_cdf_query = true;
+      }
+      if (std::isfinite(plan.bound_upper)) {
+        if (plan.bound_upper > 0.0) {
+          plan.upper_cdf_query_idx = cdf_query_points.size();
+          exact_scenario_batch_append_retimed_point(
+              cdf_query_points, points, i, plan.bound_upper);
+          any_cdf_query = true;
+        }
+      } else {
+        plan.upper_cdf_query_idx = cdf_query_points.size();
+        exact_scenario_batch_append_retimed_point(
+            cdf_query_points, points, i, std::numeric_limits<double>::infinity());
+        any_cdf_query = true;
+      }
+    } else if (!std::isfinite(eval_t) && plan.need_cdf) {
+      plan.upper_cdf_query_idx = cdf_query_points.size();
+      exact_scenario_batch_append_retimed_point(
+          cdf_query_points, points, i, std::numeric_limits<double>::infinity());
+      any_cdf_query = true;
+    }
+
+    if (!std::isfinite(eval_t)) {
+      continue;
+    }
+
+    plan.upper_int =
+        std::min(plan.bound_upper, std::max(plan.bound_lower, eval_t - x_shift));
+    if (!(plan.upper_int > plan.bound_lower)) {
+      continue;
+    }
+
+    plan.quad_begin = density_query_points.size();
+    for (int seg = 0; seg < kFusedSegments; ++seg) {
+      const double seg_lo =
+          plan.bound_lower +
+          ((plan.upper_int - plan.bound_lower) * static_cast<double>(seg) /
+           static_cast<double>(kFusedSegments));
+      const double seg_hi =
+          plan.bound_lower +
+          ((plan.upper_int - plan.bound_lower) * static_cast<double>(seg + 1) /
+           static_cast<double>(kFusedSegments));
+      const uuber::TimeBatch batch = uuber::build_time_batch(seg_lo, seg_hi);
+      if (batch.nodes.empty() || batch.nodes.size() != batch.weights.size()) {
+        exact_relative_onset_batch_invariant(
+            "quadrature node construction failed", source_ref, point_count);
+      }
+      for (std::size_t node_idx = 0; node_idx < batch.nodes.size(); ++node_idx) {
+        const double u = batch.nodes[node_idx];
+        exact_scenario_batch_append_retimed_point(density_query_points, points, i,
+                                                  u);
+        density_query_weights.push_back(batch.weights[node_idx]);
+        density_query_shifted_times.push_back(eval_t - u - x_shift);
+      }
+    }
+    plan.quad_count = density_query_points.size() - plan.quad_begin;
+    any_density_query = true;
+  }
+
+  std::vector<double> cdf_query_values;
+  if (any_cdf_query) {
+    uuber::KernelNodeBatchValues cdf_values;
+    if (!exact_eval_label_ref_batch(
+            ctx, source_ref, cdf_query_points, component_idx, trial_params,
+            trial_type_key, EvalNeed::kCDF, nullptr, uniform_trial_params_soa,
+            cdf_values) ||
+        cdf_values.cdf.size() != cdf_query_points.size()) {
+      exact_relative_onset_batch_invariant(
+          "source CDF batch evaluation failed", source_ref, point_count);
+    }
+    cdf_query_values = std::move(cdf_values.cdf);
+  }
+
+  std::vector<double> density_query_values;
+  if (any_density_query) {
+    uuber::KernelNodeBatchValues source_density_values;
+    if (!exact_eval_label_ref_batch(
+            ctx, source_ref, density_query_points, component_idx, trial_params,
+            trial_type_key, EvalNeed::kDensity, nullptr,
+            uniform_trial_params_soa, source_density_values) ||
+        source_density_values.density.size() != density_query_points.size()) {
+      exact_relative_onset_batch_invariant(
+          "source density batch evaluation failed", source_ref, point_count);
+    }
+    density_query_values = std::move(source_density_values.density);
+  }
+
+  std::vector<double> pdf_values;
+  std::vector<double> cdf_values;
+  if (any_density_query) {
+    const bool need_any_density = std::any_of(
+        plans.begin(), plans.end(),
+        [](const ExactRelativeOnsetBatchPlan &plan) { return plan.need_density; });
+    const bool need_any_cdf = std::any_of(
+        plans.begin(), plans.end(),
+        [](const ExactRelativeOnsetBatchPlan &plan) { return plan.need_cdf; });
+    if (need_any_density) {
+      pdf_values.assign(density_query_shifted_times.size(), 0.0);
+      eval_pdf_vec_with_lower_bound(cfg, lower_bound,
+                                    density_query_shifted_times.data(),
+                                    density_query_shifted_times.size(),
+                                    pdf_values.data());
+    }
+    if (need_any_cdf) {
+      cdf_values.assign(density_query_shifted_times.size(), 0.0);
+      eval_cdf_vec_with_lower_bound(cfg, lower_bound,
+                                    density_query_shifted_times.data(),
+                                    density_query_shifted_times.size(),
+                                    cdf_values.data());
+    }
+  }
+
+  std::vector<double> density_sums(point_count, 0.0);
+  std::vector<double> cdf_sums(point_count, 0.0);
+  for (std::size_t i = 0; i < point_count; ++i) {
+    ExactRelativeOnsetBatchPlan &plan = plans[i];
+    if (!exact_point_active(active_mask, i) ||
+        (!plan.need_density && !plan.need_cdf) || plan.has_exact) {
+      continue;
+    }
+    if (plan.has_conditioning_bounds) {
+      const double lower_cdf =
+          plan.lower_cdf_query_idx == std::numeric_limits<std::size_t>::max()
+              ? 0.0
+              : clamp_probability(cdf_query_values[plan.lower_cdf_query_idx]);
+      const double upper_cdf =
+          plan.upper_cdf_query_idx == std::numeric_limits<std::size_t>::max()
+              ? 0.0
+              : clamp_probability(cdf_query_values[plan.upper_cdf_query_idx]);
+      plan.source_mass = upper_cdf - lower_cdf;
+      if (!std::isfinite(plan.source_mass) || plan.source_mass <= 0.0) {
+        continue;
+      }
+    }
+    if (!std::isfinite(eval_times[i])) {
+      if (plan.need_cdf) {
+        const double cdf_total =
+            plan.has_conditioning_bounds
+                ? clamp_probability(success_probs[i])
+                : clamp_probability(success_probs[i] *
+                                    clamp_probability(cdf_query_values[plan.upper_cdf_query_idx]));
+        base_cdf_out[i] = cdf_total;
+      }
+      continue;
+    }
+    if (plan.quad_count == 0u) {
+      continue;
+    }
+    for (std::size_t query_idx = plan.quad_begin;
+         query_idx < plan.quad_begin + plan.quad_count; ++query_idx) {
+      const double fs = safe_density(density_query_values[query_idx]);
+      if (!std::isfinite(fs) || fs <= 0.0) {
+        continue;
+      }
+      const double normalized_fs =
+          plan.has_conditioning_bounds ? (fs / plan.source_mass) : fs;
+      if (!std::isfinite(normalized_fs) || normalized_fs <= 0.0) {
+        continue;
+      }
+      if (plan.need_density && !pdf_values.empty()) {
+        const double fx = safe_density(pdf_values[query_idx]);
+        if (fx > 0.0) {
+          density_sums[i] += density_query_weights[query_idx] *
+                             normalized_fs * fx;
+        }
+      }
+      if (plan.need_cdf && !cdf_values.empty()) {
+        const double Fx = clamp_probability(cdf_values[query_idx]);
+        if (Fx > 0.0) {
+          cdf_sums[i] += density_query_weights[query_idx] *
+                         normalized_fs * Fx;
+        }
+      }
+    }
+    if (plan.need_density) {
+      base_density_out[i] =
+          safe_density(success_probs[i] * density_sums[i]);
+    }
+    if (plan.need_cdf) {
+      base_cdf_out[i] =
+          clamp_probability(success_probs[i] * clamp_probability(cdf_sums[i]));
+    }
+  }
+
+  return true;
+}
 
 bool classify_relative_self_constraint(const SourceTimeConstraint *constraint,
                                        double t, bool forced_complete,
@@ -140,14 +696,14 @@ bool classify_relative_self_constraint(const SourceTimeConstraint *constraint,
   return true;
 }
 
+template <typename PointVec>
 bool exact_eval_simple_acc_event_batch(
     const uuber::NativeContext &ctx, const uuber::IrEvent &event,
-    const std::vector<ExactScenarioPoint> &points, int component_idx,
+    const PointVec &points, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    EvalNeed need,
-    uuber::KernelNodeBatchValues &out_values,
-    const std::vector<std::uint8_t> *active_mask = nullptr,
-    const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr) {
+    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    const std::vector<std::uint8_t> *active_mask,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa) {
   out_values = uuber::KernelNodeBatchValues{};
   const std::size_t point_count = points.size();
   out_values.density.assign(point_count, 0.0);
@@ -182,7 +738,7 @@ bool exact_eval_simple_acc_event_batch(
   const uuber::TrialParamsSoA *trial_params_soa =
       uniform_trial_params_soa != nullptr
           ? uniform_trial_params_soa
-          : exact_trial_params_soa_for_point(ctx, points[anchor_idx],
+          : exact_trial_params_soa_for_point(ctx, exact_point_ref(points, anchor_idx),
                                              trial_params);
   if (!trial_params_soa) {
     return false;
@@ -220,8 +776,13 @@ bool exact_eval_simple_acc_event_batch(
   std::vector<double> self_bound_upper(
       point_count, std::numeric_limits<double>::infinity());
   std::vector<double> shifted_times(point_count, 0.0);
+  std::vector<double> eval_times(point_count, 0.0);
   std::vector<double> success_probs(point_count, success_prob);
   std::vector<std::uint8_t> direct_shifted_eval(point_count, 0u);
+  std::vector<std::uint8_t> need_base_density_mask(point_count, 0u);
+  std::vector<std::uint8_t> need_base_cdf_mask(point_count, 0u);
+  std::vector<std::uint8_t> bounded_lower_need_cdf(point_count, 0u);
+  std::vector<std::uint8_t> bounded_upper_need_cdf(point_count, 0u);
   bool need_pdf_vec = false;
   bool need_cdf_vec = false;
 
@@ -230,7 +791,7 @@ bool exact_eval_simple_acc_event_batch(
         (i >= active_mask->size() || (*active_mask)[i] == 0u)) {
       continue;
     }
-    const ExactScenarioPoint &point = points[i];
+    const ExactScenarioPointRef point = exact_point_ref(points, i);
     if (uniform_trial_params_soa == nullptr) {
       const uuber::TrialParamsSoA *point_trial_params_soa =
           exact_trial_params_soa_for_point(ctx, point, trial_params,
@@ -251,13 +812,13 @@ bool exact_eval_simple_acc_event_batch(
       }
     }
     const bool forced_complete = exact_forced_contains_id(
-        ctx, point.forced_complete_bits, point.forced_complete_bits_valid,
+        ctx, *point.forced_complete_bits, point.forced_complete_bits_valid,
         label_id);
     const bool forced_survive = exact_forced_contains_id(
-        ctx, point.forced_survive_bits, point.forced_survive_bits_valid,
+        ctx, *point.forced_survive_bits, point.forced_survive_bits_valid,
         label_id);
     const SourceTimeConstraint *constraint =
-        time_constraints_find(&point.time_constraints, label_id);
+        time_constraints_find(point.time_constraints, label_id);
     bool has_bounds = false;
     double bound_lower = 0.0;
     double bound_upper = std::numeric_limits<double>::infinity();
@@ -269,15 +830,27 @@ bool exact_eval_simple_acc_event_batch(
     self_has_bounds[i] = has_bounds ? 1u : 0u;
     self_bound_lower[i] = bound_lower;
     self_bound_upper[i] = bound_upper;
+    eval_times[i] = point.t;
+    const bool need_base_density =
+        needs_density(need) &&
+        (kinds[i] == RelativeSelfConstraintKind::kNone ||
+         kinds[i] == RelativeSelfConstraintKind::kBounded);
+    const bool need_base_cdf =
+        (needs_cdf(need) || needs_survival(need) ||
+         kinds[i] == RelativeSelfConstraintKind::kBounded) &&
+        (kinds[i] == RelativeSelfConstraintKind::kNone ||
+         kinds[i] == RelativeSelfConstraintKind::kBounded);
+    need_base_density_mask[i] = need_base_density ? 1u : 0u;
+    need_base_cdf_mask[i] = need_base_cdf ? 1u : 0u;
     if (!needs_relative_onset) {
       direct_shifted_eval[i] = 1u;
       shifted_times[i] = point.t - onset_eff;
     } else {
       const SourceTimeConstraint *source_constraint =
-          time_constraints_find(&point.time_constraints, onset_source_label_id);
+          time_constraints_find(point.time_constraints, onset_source_label_id);
       if (source_constraint != nullptr && source_constraint->has_exact &&
           std::isfinite(source_constraint->exact_time) &&
-          !exact_forced_contains_id(ctx, point.forced_survive_bits,
+          !exact_forced_contains_id(ctx, *point.forced_survive_bits,
                                     point.forced_survive_bits_valid,
                                     onset_source_label_id)) {
         direct_shifted_eval[i] = 1u;
@@ -285,16 +858,15 @@ bool exact_eval_simple_acc_event_batch(
             point.t - source_constraint->exact_time - onset_lag - onset_eff;
       }
     }
-    if (direct_shifted_eval[i] != 0u && needs_density(need) &&
-        (kinds[i] == RelativeSelfConstraintKind::kNone ||
-         kinds[i] == RelativeSelfConstraintKind::kBounded)) {
+    if (kinds[i] == RelativeSelfConstraintKind::kBounded &&
+        direct_shifted_eval[i] == 0u) {
+      bounded_lower_need_cdf[i] = std::isfinite(bound_lower) ? 1u : 0u;
+      bounded_upper_need_cdf[i] = std::isfinite(bound_upper) ? 1u : 0u;
+    }
+    if (direct_shifted_eval[i] != 0u && need_base_density) {
       need_pdf_vec = true;
     }
-    if (direct_shifted_eval[i] != 0u &&
-        ((needs_cdf(need) || needs_survival(need)) ||
-         kinds[i] == RelativeSelfConstraintKind::kBounded) &&
-        (kinds[i] == RelativeSelfConstraintKind::kNone ||
-         kinds[i] == RelativeSelfConstraintKind::kBounded)) {
+    if (direct_shifted_eval[i] != 0u && need_base_cdf) {
       need_cdf_vec = true;
     }
   }
@@ -312,20 +884,52 @@ bool exact_eval_simple_acc_event_batch(
                                   point_count, cdf_values.data());
   }
 
+  auto any_mask_set = [](const std::vector<std::uint8_t> &mask) -> bool {
+    return std::any_of(mask.begin(), mask.end(),
+                       [](std::uint8_t value) { return value != 0u; });
+  };
+  std::vector<double> relative_base_density;
+  std::vector<double> relative_base_cdf;
+  std::vector<double> relative_lower_cdf;
+  std::vector<double> relative_upper_cdf;
+  std::vector<double> relative_edge_density_unused;
+  if (needs_relative_onset) {
+    if (!exact_eval_relative_onset_base_batch(
+            ctx, points, onset_source_ref, component_idx, trial_params,
+            trial_type_key, cfg, lower_bound, success_probs,
+            eval_times, need_base_density_mask, need_base_cdf_mask,
+            onset_lag + onset_eff, active_mask, uniform_trial_params_soa,
+            relative_base_density, relative_base_cdf)) {
+      return false;
+    }
+    const std::vector<std::uint8_t> zero_need(point_count, 0u);
+    if (any_mask_set(bounded_lower_need_cdf) &&
+        !exact_eval_relative_onset_base_batch(
+            ctx, points, onset_source_ref, component_idx, trial_params,
+            trial_type_key, cfg, lower_bound, success_probs,
+            self_bound_lower, zero_need, bounded_lower_need_cdf,
+            onset_lag + onset_eff, active_mask, uniform_trial_params_soa,
+            relative_edge_density_unused, relative_lower_cdf)) {
+      return false;
+    }
+    if (any_mask_set(bounded_upper_need_cdf) &&
+        !exact_eval_relative_onset_base_batch(
+            ctx, points, onset_source_ref, component_idx, trial_params,
+            trial_type_key, cfg, lower_bound, success_probs,
+            self_bound_upper, zero_need, bounded_upper_need_cdf,
+            onset_lag + onset_eff, active_mask, uniform_trial_params_soa,
+            relative_edge_density_unused, relative_upper_cdf)) {
+      return false;
+    }
+  }
+
   for (std::size_t i = 0; i < point_count; ++i) {
     if (active_mask &&
         (i >= active_mask->size() || (*active_mask)[i] == 0u)) {
       continue;
     }
-    const bool need_base_density =
-        needs_density(need) &&
-        (kinds[i] == RelativeSelfConstraintKind::kNone ||
-         kinds[i] == RelativeSelfConstraintKind::kBounded);
-    const bool need_base_cdf =
-        (needs_cdf(need) || needs_survival(need) ||
-         kinds[i] == RelativeSelfConstraintKind::kBounded) &&
-        (kinds[i] == RelativeSelfConstraintKind::kNone ||
-         kinds[i] == RelativeSelfConstraintKind::kBounded);
+    const bool need_base_density = need_base_density_mask[i] != 0u;
+    const bool need_base_cdf = need_base_cdf_mask[i] != 0u;
     double base_density = 0.0;
     double base_cdf = 0.0;
     if (direct_shifted_eval[i] != 0u) {
@@ -335,14 +939,13 @@ bool exact_eval_simple_acc_event_batch(
       if (need_base_cdf) {
         base_cdf = clamp_probability(success_probs[i] * cdf_values[i]);
       }
-    } else if (needs_relative_onset &&
-               !exact_eval_relative_onset_base_point(
-                   ctx, points[i], onset_source_ref, component_idx,
-                   trial_params, trial_type_key, trial_params_soa, cfg,
-                   lower_bound, success_probs[i], points[i].t,
-                   onset_lag + onset_eff,
-                   need_base_density, need_base_cdf, base_density, base_cdf)) {
-      return false;
+    } else if (needs_relative_onset) {
+      if (need_base_density && i < relative_base_density.size()) {
+        base_density = relative_base_density[i];
+      }
+      if (need_base_cdf && i < relative_base_cdf.size()) {
+        base_cdf = relative_base_cdf[i];
+      }
     }
     switch (kinds[i]) {
     case RelativeSelfConstraintKind::kNone: {
@@ -360,8 +963,8 @@ bool exact_eval_simple_acc_event_batch(
     case RelativeSelfConstraintKind::kForcedComplete:
     case RelativeSelfConstraintKind::kExactAtEval:
       if (self_has_bounds[i] != 0u &&
-          (!(points[i].t > self_bound_lower[i]) ||
-           points[i].t > self_bound_upper[i])) {
+          (!(exact_point_ref(points, i).t > self_bound_lower[i]) ||
+           exact_point_ref(points, i).t > self_bound_upper[i])) {
         break;
       }
       if (needs_survival(need)) {
@@ -397,46 +1000,30 @@ bool exact_eval_simple_acc_event_batch(
           std::isfinite(lower)
               ? (direct_shifted_eval[i] != 0u
                      ? clamp_probability(success_probs[i] * eval_cdf_single_with_lower_bound(
-                                               cfg, lower - (points[i].t - shifted_times[i]),
+                                               cfg, lower - (exact_point_ref(points, i).t - shifted_times[i]),
                                                lower_bound))
-                     : [&]() {
-                         double cdf_at_lower = 0.0;
-                         double density_unused = 0.0;
-                         const bool ok = exact_eval_relative_onset_base_point(
-                             ctx, points[i], onset_source_ref, component_idx,
-                             trial_params, trial_type_key, trial_params_soa, cfg,
-                             lower_bound, success_probs[i], lower,
-                             onset_lag + onset_eff, false, true,
-                             density_unused, cdf_at_lower);
-                         return ok ? clamp_probability(cdf_at_lower) : 0.0;
-                       }())
+                     : (i < relative_lower_cdf.size()
+                            ? clamp_probability(relative_lower_cdf[i])
+                            : 0.0))
               : 0.0;
       const double upper_cdf =
           std::isfinite(upper)
               ? (direct_shifted_eval[i] != 0u
                      ? clamp_probability(success_probs[i] * eval_cdf_single_with_lower_bound(
-                                               cfg, upper - (points[i].t - shifted_times[i]),
+                                               cfg, upper - (exact_point_ref(points, i).t - shifted_times[i]),
                                                lower_bound))
-                     : [&]() {
-                         double cdf_at_upper = 0.0;
-                         double density_unused = 0.0;
-                         const bool ok = exact_eval_relative_onset_base_point(
-                             ctx, points[i], onset_source_ref, component_idx,
-                             trial_params, trial_type_key, trial_params_soa, cfg,
-                             lower_bound, success_probs[i], upper,
-                             onset_lag + onset_eff, false, true,
-                             density_unused, cdf_at_upper);
-                         return ok ? clamp_probability(cdf_at_upper)
-                                   : clamp_probability(success_probs[i]);
-                       }())
+                     : (i < relative_upper_cdf.size()
+                            ? clamp_probability(relative_upper_cdf[i])
+                            : clamp_probability(success_probs[i])))
               : clamp_probability(success_probs[i]);
       const double condition_mass = clamp_probability(upper_cdf - lower_cdf);
       if (!(upper > lower) || !(condition_mass > 0.0)) {
         break;
       }
       if (needs_density(need)) {
-        if (std::isfinite(points[i].t) && points[i].t > lower &&
-            points[i].t <= upper) {
+        if (std::isfinite(exact_point_ref(points, i).t) &&
+            exact_point_ref(points, i).t > lower &&
+            exact_point_ref(points, i).t <= upper) {
           out_values.density[i] =
               safe_density(base_density / condition_mass);
         } else {
@@ -445,9 +1032,10 @@ bool exact_eval_simple_acc_event_batch(
       }
       if (needs_cdf(need) || needs_survival(need)) {
         double cdf_cond = 0.0;
-        if (!std::isfinite(points[i].t) || points[i].t >= upper) {
+        if (!std::isfinite(exact_point_ref(points, i).t) ||
+            exact_point_ref(points, i).t >= upper) {
           cdf_cond = 1.0;
-        } else if (!(points[i].t > lower)) {
+        } else if (!(exact_point_ref(points, i).t > lower)) {
           cdf_cond = 0.0;
         } else {
           cdf_cond =
@@ -578,29 +1166,32 @@ struct ExactSharedStateStorage {
   bool forced_survive_bits_valid{false};
 };
 
+template <typename PointVec>
 inline bool exact_points_match_relevant_state(
-    const ExactScenarioPoint &lhs, const ExactScenarioPoint &rhs,
+    const PointVec &points, std::size_t lhs_idx, std::size_t rhs_idx,
     const std::vector<int> &relevant_source_ids,
     const uuber::NativeContext &ctx) {
+  const ExactScenarioPointRef lhs = exact_point_ref(points, lhs_idx);
+  const ExactScenarioPointRef rhs = exact_point_ref(points, rhs_idx);
   for (int source_id : relevant_source_ids) {
-    if (filtered_forced_contains_id(lhs.forced_complete_bits,
+    if (filtered_forced_contains_id(*lhs.forced_complete_bits,
                                     lhs.forced_complete_bits_valid, source_id,
                                     ctx) !=
-            filtered_forced_contains_id(rhs.forced_complete_bits,
+            filtered_forced_contains_id(*rhs.forced_complete_bits,
                                         rhs.forced_complete_bits_valid,
                                         source_id, ctx) ||
-        filtered_forced_contains_id(lhs.forced_survive_bits,
+        filtered_forced_contains_id(*lhs.forced_survive_bits,
                                     lhs.forced_survive_bits_valid, source_id,
                                     ctx) !=
-            filtered_forced_contains_id(rhs.forced_survive_bits,
+            filtered_forced_contains_id(*rhs.forced_survive_bits,
                                         rhs.forced_survive_bits_valid,
                                         source_id, ctx)) {
       return false;
     }
     const SourceTimeConstraint *lhs_constraint =
-        time_constraints_find(&lhs.time_constraints, source_id);
+        time_constraints_find(lhs.time_constraints, source_id);
     const SourceTimeConstraint *rhs_constraint =
-        time_constraints_find(&rhs.time_constraints, source_id);
+        time_constraints_find(rhs.time_constraints, source_id);
     const SourceTimeConstraint lhs_value =
         lhs_constraint ? *lhs_constraint : SourceTimeConstraint{};
     const SourceTimeConstraint rhs_value =
@@ -612,15 +1203,17 @@ inline bool exact_points_match_relevant_state(
   return true;
 }
 
+template <typename PointVec>
 bool exact_points_share_relevant_state(
-    const std::vector<ExactScenarioPoint> &points,
+    const PointVec &points,
     const std::vector<std::uint8_t> *active_mask,
     const std::vector<int> &relevant_source_ids, const uuber::NativeContext &ctx,
     std::size_t &anchor_idx);
 
+template <typename PointVec>
 inline bool exact_prepare_shared_state_storage(
     const uuber::NativeContext &ctx,
-    const std::vector<ExactScenarioPoint> &points,
+    const PointVec &points,
     const std::vector<std::uint8_t> *active_mask,
     const std::vector<int> &relevant_source_ids, std::size_t &anchor_idx,
     ExactSharedStateStorage &storage) {
@@ -630,24 +1223,24 @@ inline bool exact_prepare_shared_state_storage(
                                          anchor_idx)) {
     return false;
   }
-  const ExactScenarioPoint &anchor = points[anchor_idx];
-  build_filtered_time_constraints(anchor.time_constraints, relevant_source_ids,
+  const ExactScenarioPointRef anchor = exact_point_ref(points, anchor_idx);
+  build_filtered_time_constraints(*anchor.time_constraints, relevant_source_ids,
                                   storage.time_constraints);
   build_filtered_forced_bits(
-      ctx, anchor.forced_complete_bits, anchor.forced_complete_bits_valid,
+      ctx, *anchor.forced_complete_bits, anchor.forced_complete_bits_valid,
       relevant_source_ids, storage.forced_complete_bits,
       storage.forced_complete_bits_valid);
   build_filtered_forced_bits(
-      ctx, anchor.forced_survive_bits, anchor.forced_survive_bits_valid,
+      ctx, *anchor.forced_survive_bits, anchor.forced_survive_bits_valid,
       relevant_source_ids, storage.forced_survive_bits,
       storage.forced_survive_bits_valid);
   return true;
 }
 
-template <typename SharedFn>
+template <typename PointVec, typename SharedFn>
 bool exact_eval_shared_relevant_state_group(
     const uuber::NativeContext &ctx,
-    const std::vector<ExactScenarioPoint> &points,
+    const PointVec &points,
     const std::vector<std::uint8_t> *active_mask, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     std::size_t anchor_idx, const ExactSharedStateStorage &storage,
@@ -656,7 +1249,7 @@ bool exact_eval_shared_relevant_state_group(
   if (anchor_idx >= points.size()) {
     return false;
   }
-  const ExactScenarioPoint &anchor = points[anchor_idx];
+  const ExactScenarioPointRef anchor = exact_point_ref(points, anchor_idx);
   NodeEvalState shared_state(
       ctx, anchor.t, component_idx, trial_params, trial_type_key, false, -1,
       &storage.time_constraints, nullptr,
@@ -683,7 +1276,8 @@ bool exact_eval_shared_relevant_state_group(
         continue;
       }
       const uuber::TrialParamsSoA *point_soa =
-          exact_trial_params_soa_for_point(ctx, points[i], trial_params,
+          exact_trial_params_soa_for_point(ctx, exact_point_ref(points, i),
+                                           trial_params,
                                            shared_state.trial_params_soa);
       if (point_soa != shared_state.trial_params_soa) {
         first_trial_param_mismatch = i;
@@ -702,7 +1296,8 @@ bool exact_eval_shared_relevant_state_group(
           continue;
         }
         point_trial_params_soa[i] =
-            exact_trial_params_soa_for_point(ctx, points[i], trial_params,
+            exact_trial_params_soa_for_point(ctx, exact_point_ref(points, i),
+                                             trial_params,
                                              shared_state.trial_params_soa);
       }
       shared_state.trial_params_soa_batch = &point_trial_params_soa;
@@ -711,8 +1306,9 @@ bool exact_eval_shared_relevant_state_group(
   return shared_eval(shared_state, active_mask);
 }
 
+template <typename PointVec>
 inline bool exact_partition_points_by_relevant_state(
-    const std::vector<ExactScenarioPoint> &points,
+    const PointVec &points,
     const std::vector<std::uint8_t> *active_mask,
     const std::vector<int> &relevant_source_ids, const uuber::NativeContext &ctx,
     std::vector<std::vector<std::uint8_t>> &group_masks) {
@@ -725,9 +1321,8 @@ inline bool exact_partition_points_by_relevant_state(
     bool assigned = false;
     for (std::size_t group_idx = 0; group_idx < anchor_indices.size();
          ++group_idx) {
-      if (exact_points_match_relevant_state(
-              points[anchor_indices[group_idx]], points[i], relevant_source_ids,
-              ctx)) {
+      if (exact_points_match_relevant_state(points, anchor_indices[group_idx], i,
+                                            relevant_source_ids, ctx)) {
         group_masks[group_idx][i] = 1u;
         assigned = true;
         break;
@@ -743,10 +1338,10 @@ inline bool exact_partition_points_by_relevant_state(
   return !group_masks.empty();
 }
 
-template <typename SharedFn, typename FallbackFn>
+template <typename PointVec, typename SharedFn, typename FallbackFn>
 bool exact_eval_with_shared_relevant_state(
     const uuber::NativeContext &ctx,
-    const std::vector<ExactScenarioPoint> &points,
+    const PointVec &points,
     const std::vector<std::uint8_t> *active_mask,
     const std::vector<int> &relevant_source_ids, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
@@ -878,18 +1473,18 @@ inline EvalNeed exact_eval_need_from_kernel_need(
 }
 
 inline ForcedStateView exact_make_point_forced_state(
-    const uuber::NativeContext &ctx, const ExactScenarioPoint &point) {
+    const uuber::NativeContext &ctx, const ExactScenarioPointRef &point) {
   return make_forced_state_view(
-      nullptr,
-      point.forced_complete_bits_valid ? &point.forced_complete_bits : nullptr,
+      nullptr, point.forced_complete_bits_valid ? point.forced_complete_bits
+                                                : nullptr,
       &point.forced_complete_bits_valid,
-      point.forced_survive_bits_valid ? &point.forced_survive_bits : nullptr,
+      point.forced_survive_bits_valid ? point.forced_survive_bits : nullptr,
       &point.forced_survive_bits_valid,
       ctx.ir.label_id_to_bit_idx.empty() ? nullptr : &ctx.ir.label_id_to_bit_idx);
 }
 
 inline const uuber::TrialParamsSoA *exact_trial_params_soa_for_point(
-    const uuber::NativeContext &ctx, const ExactScenarioPoint &point,
+    const uuber::NativeContext &ctx, const ExactScenarioPointRef &point,
     const TrialParamSet *trial_params,
     const uuber::TrialParamsSoA *fallback_trial_params_soa) {
   if (point.trial_params_soa != nullptr) {
@@ -899,203 +1494,6 @@ inline const uuber::TrialParamsSoA *exact_trial_params_soa_for_point(
     return fallback_trial_params_soa;
   }
   return resolve_trial_params_soa(ctx, trial_params);
-}
-
-bool exact_eval_relative_onset_base_point(
-    const uuber::NativeContext &ctx, const ExactScenarioPoint &point,
-    const uuber::LabelRef &source_ref, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    const uuber::TrialParamsSoA *trial_params_soa,
-    const uuber::AccDistParams &cfg,
-    const LowerBoundTransform &lower_bound, double success_prob,
-    double eval_t, double x_shift, bool need_density, bool need_cdf,
-    double &base_density_out, double &base_cdf_out) {
-  base_density_out = 0.0;
-  base_cdf_out = 0.0;
-  if (!need_density && !need_cdf) {
-    return true;
-  }
-  if (source_ref.acc_idx < 0 && source_ref.pool_idx < 0) {
-    return true;
-  }
-
-  const int source_label_id = source_ref.label_id;
-  const ForcedStateView forced_state = exact_make_point_forced_state(ctx, point);
-  if (source_label_id >= 0 && source_label_id != NA_INTEGER &&
-      evaluator_state_contains_survive_at(
-          forced_state, &point.time_constraints, source_label_id, eval_t)) {
-    return true;
-  }
-
-  double bound_lower = 0.0;
-  double bound_upper = std::numeric_limits<double>::infinity();
-  bool has_conditioning_bounds = false;
-  bool has_exact = false;
-  double exact_time = std::numeric_limits<double>::quiet_NaN();
-
-  if (source_label_id >= 0 && source_label_id != NA_INTEGER) {
-    if (forced_state_contains_complete(forced_state, source_label_id)) {
-      bound_upper = std::min(bound_upper, eval_t);
-      has_conditioning_bounds = true;
-    }
-    bool source_has_bounds = false;
-    double source_bound_lower = 0.0;
-    double source_bound_upper = std::numeric_limits<double>::infinity();
-    (void)evaluator_resolve_label_time_constraint(
-        &point.time_constraints, source_label_id, has_exact, exact_time,
-        source_has_bounds, source_bound_lower, source_bound_upper);
-    if (source_has_bounds) {
-      bound_lower = std::max(bound_lower, source_bound_lower);
-      bound_upper = std::min(bound_upper, source_bound_upper);
-      has_conditioning_bounds = true;
-    }
-  }
-
-  if (has_exact) {
-    const double shifted_time = point.t - exact_time - x_shift;
-    if (need_density) {
-      base_density_out = safe_density(
-          success_prob *
-          eval_pdf_single_with_lower_bound(cfg, shifted_time, lower_bound));
-    }
-    if (need_cdf) {
-      base_cdf_out = clamp_probability(
-          success_prob *
-          eval_cdf_single_with_lower_bound(cfg, shifted_time, lower_bound));
-    }
-    return true;
-  }
-
-  if (!(bound_upper > bound_lower)) {
-    return true;
-  }
-  if (std::isfinite(eval_t) && (eval_t - x_shift <= bound_lower)) {
-    return true;
-  }
-
-  auto source_eval = [&](double u, EvalNeed source_need) -> NodeEvalResult {
-    const uuber::TrialParamsSoA *point_trial_params_soa =
-        exact_trial_params_soa_for_point(ctx, point, trial_params,
-                                         trial_params_soa);
-    return evaluator_eval_event_ref_idx(
-        ctx, source_ref, 0u, u, component_idx, source_need, trial_params,
-        trial_type_key, false, -1, &point.time_constraints, nullptr, nullptr,
-        nullptr, nullptr, point_trial_params_soa, &forced_state);
-  };
-  auto source_cdf_at = [&](double u) -> double {
-    if (u <= 0.0) {
-      return 0.0;
-    }
-    const NodeEvalResult source = source_eval(u, EvalNeed::kCDF);
-    return clamp_probability(source.cdf);
-  };
-
-  double source_mass = 1.0;
-  if (has_conditioning_bounds) {
-    const double lower_cdf =
-        std::isfinite(bound_lower) ? source_cdf_at(bound_lower) : 0.0;
-    const double upper_cdf =
-        std::isfinite(bound_upper)
-            ? source_cdf_at(bound_upper)
-            : source_cdf_at(std::numeric_limits<double>::infinity());
-    source_mass = upper_cdf - lower_cdf;
-    if (!std::isfinite(source_mass) || source_mass <= 0.0) {
-      return true;
-    }
-  }
-
-  const double upper_int =
-      std::min(bound_upper, std::max(bound_lower, eval_t - x_shift));
-  if (!(upper_int > bound_lower)) {
-    return true;
-  }
-
-  if (!std::isfinite(eval_t)) {
-    if (need_cdf) {
-      const double cdf_total =
-          has_conditioning_bounds
-              ? clamp_probability(success_prob)
-              : clamp_probability(
-                    success_prob *
-                    source_cdf_at(std::numeric_limits<double>::infinity()));
-      base_cdf_out = cdf_total;
-    }
-    return true;
-  }
-
-  auto source_pdf = [&](double u) -> double {
-    const NodeEvalResult source = source_eval(u, EvalNeed::kDensity);
-    return safe_density(source.density);
-  };
-  auto cond_source_pdf = [&](double u) -> double {
-    if (!std::isfinite(u) || u <= bound_lower || u > bound_upper) {
-      return 0.0;
-    }
-    const double dens = source_pdf(u);
-    if (dens <= 0.0) {
-      return 0.0;
-    }
-    if (!has_conditioning_bounds) {
-      return dens;
-    }
-    return dens / source_mass;
-  };
-
-  const FusedIntegralResult fused = integrate_fused_onset_terms(
-      cfg, point.t, x_shift, bound_lower, upper_int, need_density, need_cdf,
-      &lower_bound, cond_source_pdf);
-
-  if (need_density) {
-    if (fused.ok) {
-      base_density_out = safe_density(success_prob * fused.density);
-    } else {
-      auto integrand_density = [&](double u) -> double {
-        const double fs = cond_source_pdf(u);
-        if (fs <= 0.0) {
-          return 0.0;
-        }
-        const double shifted_time = eval_t - u - x_shift;
-        const double fx =
-            eval_pdf_single_with_lower_bound(cfg, shifted_time, lower_bound);
-        if (!std::isfinite(fx) || fx <= 0.0) {
-          return 0.0;
-        }
-        return fs * fx;
-      };
-      base_density_out = safe_density(
-          success_prob *
-          uuber::integrate_boost_fn(integrand_density, bound_lower, upper_int,
-                                    kDefaultRelTol, kDefaultAbsTol,
-                                    kDefaultMaxDepth));
-    }
-  }
-
-  if (need_cdf) {
-    double cdf_cond = 0.0;
-    if (fused.ok) {
-      cdf_cond = fused.cdf;
-    } else {
-      auto integrand_cdf = [&](double u) -> double {
-        const double fs = cond_source_pdf(u);
-        if (fs <= 0.0) {
-          return 0.0;
-        }
-        const double shifted_time = eval_t - u - x_shift;
-        const double Fx =
-            eval_cdf_single_with_lower_bound(cfg, shifted_time, lower_bound);
-        if (!std::isfinite(Fx) || Fx <= 0.0) {
-          return 0.0;
-        }
-        return fs * clamp_probability(Fx);
-      };
-      cdf_cond = uuber::integrate_boost_fn(integrand_cdf, bound_lower,
-                                           upper_int, kDefaultRelTol,
-                                           kDefaultAbsTol, kDefaultMaxDepth);
-    }
-    base_cdf_out = clamp_probability(success_prob * clamp_probability(cdf_cond));
-  }
-
-  return true;
 }
 
 inline bool exact_guard_batch_inputs_valid(
@@ -1206,6 +1604,22 @@ bool exact_eval_node_batch_with_points(
     const std::vector<ExactScenarioPoint> &points, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    const std::vector<std::uint8_t> *active_mask,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa);
+bool exact_eval_node_batch_with_points(
+    const uuber::NativeContext &ctx, int node_idx,
+    const ExactScenarioBatch &points, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    const std::vector<std::uint8_t> *active_mask,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa);
+
+template <typename PointVec>
+bool exact_eval_node_batch_common(
+    const uuber::NativeContext &ctx, int node_idx, const PointVec &points,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, EvalNeed need,
+    uuber::KernelNodeBatchValues &out_values,
     const std::vector<std::uint8_t> *active_mask,
     const uuber::TrialParamsSoA *uniform_trial_params_soa);
 
@@ -1381,8 +1795,9 @@ bool exact_eval_node_batch_incremental_common(
       event_eval_batch, guard_eval_batch, out_values);
 }
 
+template <typename PointVec>
 bool exact_points_share_relevant_state(
-    const std::vector<ExactScenarioPoint> &points,
+    const PointVec &points,
     const std::vector<std::uint8_t> *active_mask,
     const std::vector<int> &relevant_source_ids, const uuber::NativeContext &ctx,
     std::size_t &anchor_idx) {
@@ -1397,22 +1812,22 @@ bool exact_points_share_relevant_state(
   if (anchor_idx >= points.size()) {
     return false;
   }
-  const ExactScenarioPoint &anchor = points[anchor_idx];
   for (std::size_t i = anchor_idx + 1u; i < points.size(); ++i) {
     if (active_mask && (i >= active_mask->size() || (*active_mask)[i] == 0u)) {
       continue;
     }
-    if (!exact_points_match_relevant_state(anchor, points[i],
-                                          relevant_source_ids, ctx)) {
+    if (!exact_points_match_relevant_state(points, anchor_idx, i,
+                                           relevant_source_ids, ctx)) {
       return false;
     }
   }
   return true;
 }
 
-bool exact_eval_node_batch_with_points(
+template <typename PointVec>
+bool exact_eval_node_batch_common(
     const uuber::NativeContext &ctx, int node_idx,
-    const std::vector<ExactScenarioPoint> &points, int component_idx,
+    const PointVec &points, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     EvalNeed need, uuber::KernelNodeBatchValues &out_values,
     const std::vector<std::uint8_t> *active_mask,
@@ -1430,7 +1845,7 @@ bool exact_eval_node_batch_with_points(
 
   std::vector<double> times(points.size(), 0.0);
   for (std::size_t i = 0; i < points.size(); ++i) {
-    times[i] = points[i].t;
+    times[i] = exact_point_ref(points, i).t;
   }
 
   if (node_idx >= 0 && node_idx < static_cast<int>(ctx.ir.nodes.size())) {
@@ -1530,16 +1945,6 @@ bool exact_eval_node_batch_with_points(
       }
     }
   }
-  auto pointwise_fallback = [&]() -> bool {
-    const uuber::IrNode &node = ir_node_required(ctx, node_idx);
-    Rcpp::stop(
-        "Exact batch invariant failed for generic node: "
-        "node_idx=%d op=%d event_idx=%d active_points=%d",
-        node_idx, static_cast<int>(node.op), node.event_idx,
-        static_cast<int>(active_point_count));
-    return false;
-  };
-
   exact_init_batch_values(points.size(), out_values);
   return exact_eval_with_shared_relevant_state(
       ctx, points, active_mask, relevant_source_ids, component_idx,
@@ -1556,17 +1961,51 @@ bool exact_eval_node_batch_with_points(
         exact_merge_batch_values_subset(shared_out, group_mask, out_values);
         return true;
       },
-      pointwise_fallback, true, uniform_trial_params_soa);
+      [&]() -> bool {
+        const uuber::IrNode &node = ir_node_required(ctx, node_idx);
+        Rcpp::stop(
+            "Exact batch invariant failed for generic node: "
+            "node_idx=%d op=%d event_idx=%d active_points=%d",
+            node_idx, static_cast<int>(node.op), node.event_idx,
+            static_cast<int>(active_point_count));
+        return false;
+      },
+      true, uniform_trial_params_soa);
 }
 
-bool exact_collect_scenarios_batch_from_points_impl(
+bool exact_eval_node_batch_with_points(
+    const uuber::NativeContext &ctx, int node_idx,
+    const std::vector<ExactScenarioPoint> &points, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    const std::vector<std::uint8_t> *active_mask,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa) {
+  return exact_eval_node_batch_common(ctx, node_idx, points, component_idx,
+                                      trial_params, trial_type_key, need,
+                                      out_values, active_mask,
+                                      uniform_trial_params_soa);
+}
+
+bool exact_eval_node_batch_with_points(
+    const uuber::NativeContext &ctx, int node_idx,
+    const ExactScenarioBatch &points, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    const std::vector<std::uint8_t> *active_mask,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa) {
+  return exact_eval_node_batch_common(ctx, node_idx, points, component_idx,
+                                      trial_params, trial_type_key, need,
+                                      out_values, active_mask,
+                                      uniform_trial_params_soa);
+}
+
+bool exact_collect_scenarios_batch_aligned_from_points_impl(
     RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
     int node_idx, const std::vector<ExactScenarioPoint> &seed_points,
     int component_idx, const TrialParamSet *trial_params,
-    const std::string &trial_type_key,
-    std::vector<ExactScenarioPoint> &scenario_points,
+    const std::string &trial_type_key, ExactScenarioBatch &scenario_batch,
     const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr) {
-  scenario_points.clear();
+  scenario_batch.clear();
   const RankedNodeTransitionPlan &plan = compiler.plan_for_node(node_idx);
   if (!plan.valid || plan.transitions.empty()) {
     return false;
@@ -1578,20 +2017,21 @@ bool exact_collect_scenarios_batch_from_points_impl(
           compiler, ctx, node_idx, seed_points, component_idx, trial_params,
           trial_type_key, aligned_points, aligned_active_mask,
           uniform_trial_params_soa)) {
-    scenario_points.reserve(seed_points.size());
+    scenario_batch.reserve(seed_points.size());
     for (std::size_t i = 0; i < aligned_points.size(); ++i) {
       if (i < aligned_active_mask.size() && aligned_active_mask[i] != 0u &&
           std::isfinite(aligned_points[i].weight) &&
           aligned_points[i].weight > 0.0) {
-        scenario_points.push_back(std::move(aligned_points[i]));
+        exact_scenario_batch_append_point(scenario_batch,
+                                          std::move(aligned_points[i]));
       }
     }
-    return !scenario_points.empty();
+    return !scenario_batch.empty();
   }
 
-  scenario_points.reserve(seed_points.size() * plan.transitions.size());
-  std::vector<ExactScenarioPoint> transition_points;
-  transition_points.reserve(seed_points.size());
+  scenario_batch.reserve(seed_points.size() * plan.transitions.size());
+  ExactScenarioBatch transition_batch;
+  transition_batch.reserve(seed_points.size());
   std::vector<std::uint8_t> active;
   active.reserve(seed_points.size());
   std::vector<double> transition_weights;
@@ -1599,7 +2039,7 @@ bool exact_collect_scenarios_batch_from_points_impl(
   uuber::KernelNodeBatchValues step_values;
   uuber::KernelNodeBatchValues blocker_values;
   for (const RankedTransitionTemplate &transition : plan.transitions) {
-    transition_points.clear();
+    transition_batch.clear();
     active.assign(seed_points.size(), 0u);
     transition_weights.assign(seed_points.size(), 0.0);
     std::size_t active_count = 0u;
@@ -1616,13 +2056,14 @@ bool exact_collect_scenarios_batch_from_points_impl(
     }
 
     bool points_materialized = false;
-    auto materialize_transition_points = [&]() {
+    auto materialize_transition_batch = [&]() {
       if (points_materialized) {
         return;
       }
-      transition_points = seed_points;
-      for (std::size_t i = 0; i < transition_points.size(); ++i) {
-        transition_points[i].weight = transition_weights[i];
+      transition_batch.reserve(seed_points.size());
+      for (std::size_t i = 0; i < seed_points.size(); ++i) {
+        exact_scenario_batch_append_point(transition_batch, seed_points[i],
+                                          transition_weights[i]);
       }
       points_materialized = true;
     };
@@ -1638,8 +2079,8 @@ bool exact_collect_scenarios_batch_from_points_impl(
       if (idx < transition_weights.size()) {
         transition_weights[idx] = 0.0;
       }
-      if (points_materialized && idx < transition_points.size()) {
-        transition_points[idx].weight = 0.0;
+      if (points_materialized && idx < transition_batch.weight.size()) {
+        transition_batch.weight[idx] = 0.0;
       }
     };
     for (const RankedTransitionStep &step : transition.steps) {
@@ -1649,12 +2090,18 @@ bool exact_collect_scenarios_batch_from_points_impl(
             (step.kind == RankedTransitionStepKind::EvalDensityNode)
                 ? EvalNeed::kDensity
                 : EvalNeed::kCDF;
-        const std::vector<ExactScenarioPoint> &eval_points =
-            points_materialized ? transition_points : seed_points;
-        if (!exact_eval_node_batch_with_points(
-                ctx, step.node_idx, eval_points, component_idx,
-                trial_params, trial_type_key, step_need, step_values,
-                &active, uniform_trial_params_soa)) {
+        const bool step_ok =
+            points_materialized
+                ? exact_eval_node_batch_with_points(
+                      ctx, step.node_idx, transition_batch, component_idx,
+                      trial_params, trial_type_key, step_need, step_values,
+                      &active, uniform_trial_params_soa)
+                : exact_eval_node_batch_with_points(
+                      ctx, step.node_idx, seed_points, component_idx,
+                      trial_params, trial_type_key, step_need, step_values,
+                      &active, uniform_trial_params_soa);
+        if (!step_ok ||
+            !exact_batch_values_size_matches(step_values, seed_points.size())) {
           transition_valid = false;
           break;
         }
@@ -1671,8 +2118,8 @@ bool exact_collect_scenarios_batch_from_points_impl(
             continue;
           }
           transition_weights[i] *= factor;
-          if (points_materialized && i < transition_points.size()) {
-            transition_points[i].weight = transition_weights[i];
+          if (points_materialized && i < transition_batch.weight.size()) {
+            transition_batch.weight[i] = transition_weights[i];
           }
           if (!std::isfinite(transition_weights[i]) ||
               transition_weights[i] <= 0.0) {
@@ -1685,12 +2132,20 @@ bool exact_collect_scenarios_batch_from_points_impl(
           transition_valid = false;
           break;
         }
-        const std::vector<ExactScenarioPoint> &eval_points =
-            points_materialized ? transition_points : seed_points;
-        if (!exact_eval_node_batch_with_points(
-                ctx, guard_node.blocker_idx, eval_points, component_idx,
-                trial_params, trial_type_key, EvalNeed::kSurvival,
-                blocker_values, &active, uniform_trial_params_soa)) {
+        const bool blocker_ok =
+            points_materialized
+                ? exact_eval_node_batch_with_points(
+                      ctx, guard_node.blocker_idx, transition_batch,
+                      component_idx, trial_params, trial_type_key,
+                      EvalNeed::kSurvival, blocker_values, &active,
+                      uniform_trial_params_soa)
+                : exact_eval_node_batch_with_points(
+                      ctx, guard_node.blocker_idx, seed_points, component_idx,
+                      trial_params, trial_type_key, EvalNeed::kSurvival,
+                      blocker_values, &active, uniform_trial_params_soa);
+        if (!blocker_ok ||
+            !exact_batch_values_size_matches(blocker_values,
+                                             seed_points.size())) {
           transition_valid = false;
           break;
         }
@@ -1704,8 +2159,8 @@ bool exact_collect_scenarios_batch_from_points_impl(
             continue;
           }
           transition_weights[i] *= factor;
-          if (points_materialized && i < transition_points.size()) {
-            transition_points[i].weight = transition_weights[i];
+          if (points_materialized && i < transition_batch.weight.size()) {
+            transition_batch.weight[i] = transition_weights[i];
           }
           if (!std::isfinite(transition_weights[i]) ||
               transition_weights[i] <= 0.0) {
@@ -1713,17 +2168,16 @@ bool exact_collect_scenarios_batch_from_points_impl(
           }
         }
       } else if (step.kind == RankedTransitionStepKind::AddCompleteSources) {
-        materialize_transition_points();
-        for (std::size_t i = 0; i < transition_points.size(); ++i) {
+        materialize_transition_batch();
+        for (std::size_t i = 0; i < transition_batch.size(); ++i) {
           if (active[i] == 0u) {
             continue;
           }
-          ExactScenarioPoint &point = transition_points[i];
           bool ok = true;
           for (int id : step.source_ids) {
             if (!time_constraints_mark_complete(
-                    id, point.t, step.bind_exact_current_time,
-                    point.time_constraints)) {
+                    id, transition_batch.t[i], step.bind_exact_current_time,
+                    transition_batch.time_constraints[i])) {
               ok = false;
               break;
             }
@@ -1733,16 +2187,16 @@ bool exact_collect_scenarios_batch_from_points_impl(
           }
         }
       } else if (step.kind == RankedTransitionStepKind::AddSurviveSources) {
-        materialize_transition_points();
-        for (std::size_t i = 0; i < transition_points.size(); ++i) {
+        materialize_transition_batch();
+        for (std::size_t i = 0; i < transition_batch.size(); ++i) {
           if (active[i] == 0u) {
             continue;
           }
-          ExactScenarioPoint &point = transition_points[i];
           bool ok = true;
           for (int id : step.source_ids) {
-            if (!time_constraints_mark_survive(id, point.t,
-                                               point.time_constraints)) {
+            if (!time_constraints_mark_survive(
+                    id, transition_batch.t[i],
+                    transition_batch.time_constraints[i])) {
               ok = false;
               break;
             }
@@ -1752,12 +2206,11 @@ bool exact_collect_scenarios_batch_from_points_impl(
           }
         }
       } else if (step.kind == RankedTransitionStepKind::AddOrWitnessFromSources) {
-        materialize_transition_points();
-        for (std::size_t i = 0; i < transition_points.size(); ++i) {
+        materialize_transition_batch();
+        for (std::size_t i = 0; i < transition_batch.size(); ++i) {
           if (active[i] == 0u) {
             continue;
           }
-          ExactScenarioPoint &point = transition_points[i];
           int witness = NA_INTEGER;
           bool all_forced = true;
           for (std::size_t src_i = 0; src_i < step.source_ids.size(); ++src_i) {
@@ -1768,10 +2221,13 @@ bool exact_collect_scenarios_batch_from_points_impl(
             const int bit_idx =
                 (src_i < step.source_bits.size()) ? step.source_bits[src_i] : -1;
             const bool is_forced =
-                (point.forced_complete_bits_valid && bit_idx >= 0 &&
-                 point.forced_complete_bits.test(bit_idx)) ||
-                time_constraints_contains_complete_at(&point.time_constraints,
-                                                     id, point.t);
+                ((i < transition_batch.forced_complete_bits_valid.size()) &&
+                 transition_batch.forced_complete_bits_valid[i] != 0u &&
+                 bit_idx >= 0 &&
+                 transition_batch.forced_complete_bits[i].test(bit_idx)) ||
+                time_constraints_contains_complete_at(
+                    &transition_batch.time_constraints[i], id,
+                    transition_batch.t[i]);
             if (!is_forced) {
               witness = id;
               all_forced = false;
@@ -1780,7 +2236,8 @@ bool exact_collect_scenarios_batch_from_points_impl(
           }
           if (all_forced || witness == NA_INTEGER ||
               !time_constraints_mark_survive(
-                  witness, point.t, point.time_constraints)) {
+                  witness, transition_batch.t[i],
+                  transition_batch.time_constraints[i])) {
             deactivate_point(i);
           }
         }
@@ -1796,14 +2253,13 @@ bool exact_collect_scenarios_batch_from_points_impl(
       continue;
     }
     if (points_materialized) {
-      for (std::size_t i = 0; i < transition_points.size(); ++i) {
-        ExactScenarioPoint &point = transition_points[i];
+      for (std::size_t i = 0; i < transition_batch.size(); ++i) {
         if (active[i] == 0u || !std::isfinite(transition_weights[i]) ||
             transition_weights[i] <= 0.0) {
           continue;
         }
-        point.weight = transition_weights[i];
-        scenario_points.push_back(std::move(point));
+        exact_scenario_batch_append_row(scenario_batch, transition_batch, i,
+                                        transition_weights[i]);
       }
     } else {
       for (std::size_t i = 0; i < seed_points.size(); ++i) {
@@ -1811,14 +2267,13 @@ bool exact_collect_scenarios_batch_from_points_impl(
             transition_weights[i] <= 0.0) {
           continue;
         }
-        ExactScenarioPoint point = seed_points[i];
-        point.weight = transition_weights[i];
-        scenario_points.push_back(std::move(point));
+        exact_scenario_batch_append_point(scenario_batch, seed_points[i],
+                                          transition_weights[i]);
       }
     }
   }
 
-  return !scenario_points.empty();
+  return !scenario_batch.empty();
 }
 
 bool exact_collect_deterministic_scenarios_batch_from_points_internal(
@@ -1915,7 +2370,7 @@ bool exact_collect_deterministic_scenarios_batch_from_points_internal(
 bool exact_collect_scenarios_batch_impl(
     RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
     int node_idx, const std::vector<double> &times, NodeEvalState &state,
-    std::vector<ExactScenarioPoint> &scenario_points) {
+    ExactScenarioBatch &scenario_points) {
   std::vector<ExactScenarioPoint> seed_points(times.size());
   for (std::size_t i = 0; i < times.size(); ++i) {
     ExactScenarioPoint &point = seed_points[i];
@@ -1938,7 +2393,7 @@ bool exact_collect_scenarios_batch_impl(
   const uuber::TrialParamsSoA *uniform_trial_params_soa =
       state.trial_params_soa_batch == nullptr ? state.trial_params_soa
                                               : nullptr;
-  return exact_collect_scenarios_batch_from_points_impl(
+  return exact_collect_scenarios_batch_aligned_from_points(
       compiler, ctx, node_idx, seed_points, state.component_idx,
       state.trial_params, state.trial_type_key, scenario_points,
       uniform_trial_params_soa);
@@ -2014,12 +2469,13 @@ inline void exact_competitor_batch_require(bool condition, const char *reason,
   }
 }
 
+template <typename PointVec>
 void exact_competitor_survival_batch_impl(
     const uuber::NativeContext &ctx,
     const uuber::CompetitorClusterCacheEntry &competitor_cache,
     int component_idx, const TrialParamSet *trial_params,
     const std::string &trial_type_key,
-    const std::vector<ExactScenarioPoint> &points,
+    const PointVec &points,
     std::vector<double> &survival_out,
     const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr) {
   survival_out.assign(points.size(), 1.0);
@@ -2030,17 +2486,17 @@ void exact_competitor_survival_batch_impl(
       static_cast<std::uint64_t>(points.size()),
       static_cast<std::uint64_t>(competitor_cache.compiled_ops.size()));
 
-  std::vector<ExactScenarioPoint> mutable_points;
-  std::vector<ExactScenarioPoint> *eval_points_ptr = nullptr;
+  PointVec mutable_points;
+  PointVec *eval_points_ptr = nullptr;
   if (competitor_cache.mutates_forced_survive) {
     mutable_points = points;
     eval_points_ptr = &mutable_points;
   }
-  const std::vector<ExactScenarioPoint> &eval_points =
+  const PointVec &eval_points =
       eval_points_ptr ? *eval_points_ptr : points;
   std::vector<double> times(points.size(), 0.0);
   for (std::size_t i = 0; i < points.size(); ++i) {
-    times[i] = points[i].t;
+    times[i] = exact_point_ref(points, i).t;
   }
 
   if (exact_competitor_single_node_fastpath_eligible(competitor_cache)) {
@@ -2068,7 +2524,8 @@ void exact_competitor_survival_batch_impl(
     record_unified_outcome_exact_competitor_guard_fastpath_call();
     std::vector<std::uint8_t> active(eval_points.size(), 0u);
     for (std::size_t i = 0; i < eval_points.size(); ++i) {
-      active[i] = (std::isfinite(eval_points[i].t) && eval_points[i].t >= 0.0 &&
+      active[i] = (std::isfinite(exact_point_ref(eval_points, i).t) &&
+                   exact_point_ref(eval_points, i).t >= 0.0 &&
                    survival_out[i] > 0.0)
                       ? 1u
                       : 0u;
@@ -2104,11 +2561,7 @@ void exact_competitor_survival_batch_impl(
           if (active[i] == 0u) {
             continue;
           }
-          ExactScenarioPoint &point = (*eval_points_ptr)[i];
-          apply_transition_mask_words(
-              ctx, op.transition_mask_begin, op.transition_mask_count,
-              op.transition_invalidate_slot, point.forced_survive_bits,
-              point.forced_survive_bits_valid, nullptr, nullptr);
+          exact_apply_transition_mask_to_point(ctx, *eval_points_ptr, i, op);
         }
       }
     }
@@ -2154,11 +2607,8 @@ void exact_competitor_survival_batch_impl(
     if (eval_points_ptr == nullptr) {
       return;
     }
-    for (ExactScenarioPoint &point : *eval_points_ptr) {
-      apply_transition_mask_words(
-          ctx, op.transition_mask_begin, op.transition_mask_count,
-          op.transition_invalidate_slot, point.forced_survive_bits,
-          point.forced_survive_bits_valid, nullptr, nullptr);
+    for (std::size_t i = 0; i < eval_points_ptr->size(); ++i) {
+      exact_apply_transition_mask_to_point(ctx, *eval_points_ptr, i, op);
     }
     if (op.transition_invalidate_slot >= 0) {
       uuber::invalidate_kernel_batch_runtime_from_slot(
@@ -2208,9 +2658,26 @@ bool exact_collect_scenarios_batch_from_points(
     const std::string &trial_type_key,
     std::vector<ExactScenarioPoint> &scenario_points,
     const uuber::TrialParamsSoA *uniform_trial_params_soa) {
-  return exact_collect_scenarios_batch_from_points_impl(
+  ExactScenarioBatch scenario_batch;
+  if (!exact_collect_scenarios_batch_aligned_from_points_impl(
+          compiler, ctx, node_idx, seed_points, component_idx, trial_params,
+          trial_type_key, scenario_batch, uniform_trial_params_soa)) {
+    scenario_points.clear();
+    return false;
+  }
+  exact_scenario_batch_materialize_points(scenario_batch, scenario_points);
+  return !scenario_points.empty();
+}
+
+bool exact_collect_scenarios_batch_aligned_from_points(
+    RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
+    int node_idx, const std::vector<ExactScenarioPoint> &seed_points,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, ExactScenarioBatch &scenario_batch,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa) {
+  return exact_collect_scenarios_batch_aligned_from_points_impl(
       compiler, ctx, node_idx, seed_points, component_idx, trial_params,
-      trial_type_key, scenario_points, uniform_trial_params_soa);
+      trial_type_key, scenario_batch, uniform_trial_params_soa);
 }
 
 bool exact_collect_deterministic_scenarios_batch_from_points(
@@ -2227,12 +2694,121 @@ bool exact_collect_deterministic_scenarios_batch_from_points(
       uniform_trial_params_soa);
 }
 
+bool exact_collect_deterministic_scenarios_batch_aligned_from_points(
+    RankedTransitionCompiler &compiler, const uuber::NativeContext &ctx,
+    int node_idx, const std::vector<ExactScenarioPoint> &seed_points,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, ExactScenarioBatch &aligned_batch,
+    std::vector<std::uint8_t> &active_mask,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa) {
+  const RankedNodeTransitionPlan &plan = compiler.plan_for_node(node_idx);
+  if (!plan.valid || plan.transitions.size() != 1u) {
+    aligned_batch.clear();
+    return false;
+  }
+
+  const RankedTransitionTemplate &transition = plan.transitions.front();
+  if (transition.steps.empty() ||
+      transition.steps.front().kind != RankedTransitionStepKind::EvalDensityNode) {
+    aligned_batch.clear();
+    return false;
+  }
+  for (std::size_t step_idx = 1; step_idx < transition.steps.size(); ++step_idx) {
+    if (transition.steps[step_idx].kind !=
+            RankedTransitionStepKind::AddCompleteSources &&
+        transition.steps[step_idx].kind !=
+            RankedTransitionStepKind::AddSurviveSources) {
+      aligned_batch.clear();
+      return false;
+    }
+  }
+
+  uuber::KernelNodeBatchValues step_values;
+  if (!exact_eval_node_batch_with_points(
+          ctx, transition.steps.front().node_idx, seed_points, component_idx,
+          trial_params, trial_type_key, EvalNeed::kDensity, step_values, nullptr,
+          uniform_trial_params_soa) ||
+      step_values.density.size() != seed_points.size()) {
+    aligned_batch.clear();
+    return false;
+  }
+
+  aligned_batch.clear();
+  aligned_batch.reserve(seed_points.size());
+  active_mask.assign(seed_points.size(), 0u);
+  for (const ExactScenarioPoint &point : seed_points) {
+    exact_scenario_batch_append_point(aligned_batch, point, point.weight);
+  }
+  for (std::size_t i = 0; i < seed_points.size(); ++i) {
+    const ExactScenarioPoint &seed_point = seed_points[i];
+    if (!(std::isfinite(seed_point.t) && seed_point.t >= 0.0 &&
+          std::isfinite(seed_point.weight) && seed_point.weight > 0.0)) {
+      continue;
+    }
+    const double factor = safe_density(step_values.density[i]);
+    if (!std::isfinite(factor) || factor <= 0.0) {
+      aligned_batch.weight[i] = 0.0;
+      continue;
+    }
+    aligned_batch.weight[i] *= factor;
+    if (!std::isfinite(aligned_batch.weight[i]) ||
+        aligned_batch.weight[i] <= 0.0) {
+      aligned_batch.weight[i] = 0.0;
+      continue;
+    }
+    bool valid = true;
+    for (std::size_t step_idx = 1; step_idx < transition.steps.size();
+         ++step_idx) {
+      const RankedTransitionStep &step = transition.steps[step_idx];
+      if (step.kind == RankedTransitionStepKind::AddCompleteSources) {
+        for (int id : step.source_ids) {
+          if (!time_constraints_mark_complete(
+                  id, aligned_batch.t[i], step.bind_exact_current_time,
+                  aligned_batch.time_constraints[i])) {
+            valid = false;
+            break;
+          }
+        }
+      } else if (step.kind == RankedTransitionStepKind::AddSurviveSources) {
+        for (int id : step.source_ids) {
+          if (!time_constraints_mark_survive(id, aligned_batch.t[i],
+                                             aligned_batch.time_constraints[i])) {
+            valid = false;
+            break;
+          }
+        }
+      }
+      if (!valid) {
+        break;
+      }
+    }
+    if (valid) {
+      active_mask[i] = 1u;
+    } else {
+      aligned_batch.weight[i] = 0.0;
+    }
+  }
+  return true;
+}
+
 void exact_competitor_survival_batch(
     const uuber::NativeContext &ctx,
     const uuber::CompetitorClusterCacheEntry &competitor_cache,
     int component_idx, const TrialParamSet *trial_params,
     const std::string &trial_type_key,
     const std::vector<ExactScenarioPoint> &points,
+    std::vector<double> &survival_out,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa) {
+  exact_competitor_survival_batch_impl(
+      ctx, competitor_cache, component_idx, trial_params, trial_type_key,
+      points, survival_out, uniform_trial_params_soa);
+}
+
+void exact_competitor_survival_batch(
+    const uuber::NativeContext &ctx,
+    const uuber::CompetitorClusterCacheEntry &competitor_cache,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, const ExactScenarioBatch &points,
     std::vector<double> &survival_out,
     const uuber::TrialParamsSoA *uniform_trial_params_soa) {
   exact_competitor_survival_batch_impl(
@@ -2252,7 +2828,7 @@ bool exact_outcome_density_batch_from_state(
   }
   RankedTransitionCompiler &compiler = exact_scenario_compiler_for_ctx(ctx);
   const double saved_t = state.t;
-  std::vector<ExactScenarioPoint> scenario_points;
+  ExactScenarioBatch scenario_points;
   if (!exact_collect_scenarios_batch_impl(compiler, ctx, node_idx, times, state,
                                           scenario_points)) {
     state.t = saved_t;
@@ -2261,12 +2837,14 @@ bool exact_outcome_density_batch_from_state(
   }
 
   if (competitor_ids.empty()) {
-    for (const ExactScenarioPoint &point : scenario_points) {
-      if (!std::isfinite(point.weight) || point.weight <= 0.0 ||
-          point.density_index >= density_out.size()) {
+    for (std::size_t i = 0; i < scenario_points.size(); ++i) {
+      const double weight = scenario_points.weight[i];
+      const std::size_t density_index = scenario_points.density_index[i];
+      if (!std::isfinite(weight) || weight <= 0.0 ||
+          density_index >= density_out.size()) {
         continue;
       }
-      density_out[point.density_index] += point.weight;
+      density_out[density_index] += weight;
     }
     for (double &value : density_out) {
       value = safe_density(value);
@@ -2284,12 +2862,17 @@ bool exact_outcome_density_batch_from_state(
         state.trial_type_key, scenario_points, survival_out,
         uniform_trial_params_soa);
     for (std::size_t i = 0; i < scenario_points.size(); ++i) {
-      const ExactScenarioPoint &point = scenario_points[i];
       const double surv = clamp_probability(survival_out[i]);
       if (!std::isfinite(surv) || surv <= 0.0) {
         continue;
       }
-      density_out[point.density_index] += point.weight * surv;
+      const double weight = scenario_points.weight[i];
+      const std::size_t density_index = scenario_points.density_index[i];
+      if (!std::isfinite(weight) || weight <= 0.0 ||
+          density_index >= density_out.size()) {
+        continue;
+      }
+      density_out[density_index] += weight * surv;
     }
     for (double &value : density_out) {
       value = safe_density(value);

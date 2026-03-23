@@ -145,7 +145,7 @@ bench_rows <- do.call(
       n_rep = n_rep,
       inner_reps = inner_reps
     )
-    row$exact_node_batch_calls <- case$stats$exact_node_batch_calls
+    row$node_batch_calls <- case$stats$node_batch_calls
     row
   })
 )

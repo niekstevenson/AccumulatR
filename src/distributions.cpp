@@ -1504,7 +1504,7 @@ uuber::KernelEventBatchEvalFn make_kernel_event_eval_batch(NodeEvalState &state)
   return [&](int event_idx, const std::vector<double> &times,
              const uuber::KernelEvalNeed &kneed,
              uuber::KernelNodeBatchValues &out) -> bool {
-    record_unified_outcome_kernel_event_batch_call(
+    record_unified_outcome_leaf_batch_call(
         static_cast<std::uint64_t>(times.size()),
         state.trial_params_soa_batch != nullptr);
     out.density.assign(times.size(), 0.0);
@@ -2236,7 +2236,6 @@ bool resolve_prepared_linear_guard_chain_info(
   auto &cache = guard_prepared_cache_for_ctx(input.ctx);
   auto it = cache.find(cache_key);
   if (it != cache.end()) {
-    record_unified_outcome_exact_guard_prepared_cache_hit();
     prepared = &it->second;
     return true;
   }
@@ -2244,7 +2243,6 @@ bool resolve_prepared_linear_guard_chain_info(
                                                 scratch)) {
     return false;
   }
-  record_unified_outcome_exact_guard_prepared_cache_miss();
   auto inserted =
       cache.emplace(std::move(cache_key), std::move(scratch));
   prepared = &inserted.first->second;
@@ -3326,7 +3324,6 @@ inline bool eval_simple_acc_event_density_batch(
           trial_params_soa_batch, outcome_idx_context, density_out)) {
     return false;
   }
-  record_unified_outcome_generic_labelref_batch_fastpath_call();
   return true;
 }
 
@@ -3360,7 +3357,7 @@ bool node_density_with_competitors_batch_internal(
     const TimeConstraintMap *time_constraints,
     uuber::KernelBatchRuntimeState *kernel_batch_runtime,
     const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch) {
-  record_unified_outcome_direct_node_density_batch_call(
+  record_unified_outcome_leaf_batch_call(
       static_cast<std::uint64_t>(times.size()),
       trial_params_soa_batch != nullptr);
   density_out.assign(times.size(), 0.0);
@@ -3419,14 +3416,12 @@ bool node_density_with_competitors_batch_internal(
         eval_simple_acc_event_competing_density_batch(
             ctx, node_idx, competitor_ids, times, component_idx, trial_params,
             trial_params_soa_batch, outcome_idx_context, density_out)) {
-      record_unified_outcome_direct_node_density_simple_competing_fastpath_call();
       return true;
     }
     if (!has_competitors && plain_simple_outcome_supported &&
         eval_simple_acc_event_density_batch(
             ctx, node_idx, times, component_idx, trial_params,
             trial_params_soa_batch, outcome_idx_context, density_out)) {
-      record_unified_outcome_direct_node_density_simple_event_fastpath_call();
       return true;
     }
   }
@@ -3451,7 +3446,6 @@ bool node_density_with_competitors_batch_internal(
   state.forced_complete_bits_valid = forced_complete_seed_valid;
   state.forced_survive_bits_valid = forced_survive_seed_valid;
   uuber::invalidate_kernel_batch_runtime_from_slot(*batch_runtime_ptr, 0);
-  record_unified_outcome_direct_node_density_kernel_eval_call();
   uuber::KernelNodeBatchValues base_values;
   if (!eval_node_batch_with_state_dense(node_idx, eval_times, state,
                                         EvalNeed::kDensity, *batch_runtime_ptr,
@@ -3467,7 +3461,6 @@ bool node_density_with_competitors_batch_internal(
   }
 
   if (has_competitors) {
-    record_unified_outcome_direct_node_density_competitor_call();
     state.include_na_donors = false;
     state.outcome_idx = -1;
     state.forced_complete_bits = forced_complete_seed;
@@ -3548,10 +3541,6 @@ inline bool node_density_entry_batch_idx(
       mask_batch.mask_param_ptrs.empty()) {
     return false;
   }
-  record_unified_outcome_shared_trigger_mask_batch_call(
-      static_cast<std::uint64_t>(mask_batch.mask_param_ptrs.size()),
-      static_cast<std::uint64_t>(times.size() * mask_batch.mask_param_ptrs.size()));
-
   std::vector<double> expanded_times;
   std::vector<const uuber::TrialParamsSoA *> expanded_params_soa;
   expanded_times.reserve(times.size() * mask_batch.mask_param_ptrs.size());
@@ -3708,9 +3697,6 @@ double native_outcome_probability_bits_impl_idx(
     Rcpp::stop("Outcome probability shared-trigger batch evaluation failed");
   }
 
-  record_unified_outcome_shared_trigger_mask_batch_call(
-      static_cast<std::uint64_t>(mask_batch.mask_param_ptrs.size()),
-      static_cast<std::uint64_t>(mask_batch.mask_param_ptrs.size()));
   double total = 0.0;
   for (std::size_t i = 0; i < batch_probs.size(); ++i) {
     const double w = mask_batch.mask_weights[i];
@@ -4940,12 +4926,10 @@ inline bool build_single_step_direct_batch_spec(
     const std::vector<double> &component_weights,
     const std::vector<ComponentCacheEntry> &cache_entries,
     SingleStepDirectBatchSpec &out) {
-  record_unified_outcome_direct_batch_spec_attempt();
   out = SingleStepDirectBatchSpec{};
   if (!eval_input.valid ||
       eval_input.probability_transform != TrialProbabilityTransform::Identity ||
       eval_input.sequence_length != 1u || eval_input.sequence_time_data == nullptr) {
-    record_unified_outcome_direct_batch_spec_reject_input();
     return false;
   }
 
@@ -4954,7 +4938,6 @@ inline bool build_single_step_direct_batch_spec(
           ctx, eval_input, component_indices, component_weights, cache_entries,
           contributions) ||
       contributions.size() != 1u) {
-    record_unified_outcome_direct_batch_spec_reject_contribution();
     return false;
   }
 
@@ -4967,13 +4950,11 @@ inline bool build_single_step_direct_batch_spec(
       spec.sequence_time_data == nullptr ||
       !std::isfinite(spec.sequence_time_data[0]) ||
       spec.sequence_time_data[0] < 0.0) {
-    record_unified_outcome_direct_batch_spec_reject_shape();
     return false;
   }
 
   const int node_idx = spec.sequence_node_indices[0];
   if (node_idx < 0 || node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
-    record_unified_outcome_direct_batch_spec_reject_node();
     return false;
   }
   const int stable_node_id =
@@ -5697,10 +5678,6 @@ inline bool evaluate_unified_ranked_trial_batch_idx(
       return false;
     }
     mask_batch_ptr = &mask_batch;
-    record_unified_outcome_shared_trigger_mask_batch_call(
-        static_cast<std::uint64_t>(mask_batch_ptr->mask_param_ptrs.size()),
-        static_cast<std::uint64_t>(mask_batch_ptr->mask_param_ptrs.size() *
-                                   contributions.size()));
   }
 
   for (const TrialContributionSpec &spec : contributions) {
@@ -6757,10 +6734,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
               }
             }
 
-            record_unified_outcome_shared_trigger_mask_batch_call(
-                static_cast<std::uint64_t>(mask_batch.mask_param_ptrs.size()),
-                static_cast<std::uint64_t>(expanded_times_by_trial.size()));
-
             std::vector<double> total_probabilities(trial_indices.size(), 0.0);
             RankedBatchPlanner ranked_batch_transition_planner(*ctx);
             bool batch_ok = true;
@@ -6952,10 +6925,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
     if (!group_valid) {
       continue;
     }
-    record_unified_outcome_shared_trigger_mask_batch_call(
-        static_cast<std::uint64_t>(mask_batch.mask_param_ptrs.size()),
-        static_cast<std::uint64_t>(expanded_component_weights_batch.size()));
-
     std::vector<const TrialParamSet *> mask_params_batch(
         mask_batch.mask_param_ptrs.size(),
         &param_sets[static_cast<std::size_t>(rep_trial_idx)]);

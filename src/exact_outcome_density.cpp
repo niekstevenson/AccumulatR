@@ -1089,8 +1089,6 @@ inline bool exact_fill_guard_prepared_batch(
         subgroup_cdf.size() != indices.size()) {
       return false;
     }
-    record_unified_outcome_exact_guard_prepared_batch_call(
-        static_cast<std::uint64_t>(indices.size()));
     for (std::size_t j = 0; j < indices.size(); ++j) {
       const std::size_t point_idx = indices[j];
       guard_out.cdf[point_idx] = clamp_probability(subgroup_cdf[j]);
@@ -1184,8 +1182,7 @@ bool exact_eval_event_batch_common(
           return false;
         },
         [&](std::uint64_t active_count, std::uint64_t group_count) {
-          record_unified_outcome_exact_shared_state_partition(active_count,
-                                                              group_count);
+          record_unified_outcome_lane_partition(active_count, group_count);
         },
         false, uniform_trial_params_soa);
   }
@@ -1241,8 +1238,7 @@ bool exact_eval_guard_batch_common(
         return false;
       },
       [&](std::uint64_t active_count, std::uint64_t group_count) {
-        record_unified_outcome_exact_shared_state_partition(active_count,
-                                                            group_count);
+        record_unified_outcome_lane_partition(active_count, group_count);
       },
       false, uniform_trial_params_soa);
 }
@@ -1313,7 +1309,7 @@ bool exact_eval_node_batch_common(
   ExactNodeBatchDepthGuard depth_guard;
   const std::size_t active_point_count =
       uuber::count_active_vector_lanes(active_mask, points.size());
-  record_unified_outcome_exact_node_batch_call(
+  record_unified_outcome_node_batch_call(
       static_cast<std::uint64_t>(active_point_count),
       depth_guard.recursive_call());
 
@@ -1363,8 +1359,7 @@ bool exact_eval_node_batch_common(
             return false;
           },
           [&](std::uint64_t active_count, std::uint64_t group_count) {
-            record_unified_outcome_exact_shared_state_partition(active_count,
-                                                                group_count);
+            record_unified_outcome_lane_partition(active_count, group_count);
           },
           false, uniform_trial_params_soa);
     }
@@ -1450,8 +1445,7 @@ bool exact_eval_node_batch_common(
         return false;
       },
       [&](std::uint64_t active_count, std::uint64_t group_count) {
-        record_unified_outcome_exact_shared_state_partition(active_count,
-                                                            group_count);
+        record_unified_outcome_lane_partition(active_count, group_count);
       },
       true, uniform_trial_params_soa);
 }
@@ -1913,10 +1907,6 @@ void exact_competitor_survival_batch_impl(
   if (points.empty() || competitor_cache.compiled_ops.empty()) {
     return;
   }
-  record_unified_outcome_exact_competitor_batch_call(
-      static_cast<std::uint64_t>(points.size()),
-      static_cast<std::uint64_t>(competitor_cache.compiled_ops.size()));
-
   PointVec mutable_points;
   PointVec *eval_points_ptr = nullptr;
   if (competitor_cache.mutates_forced_survive) {
@@ -1952,7 +1942,6 @@ void exact_competitor_survival_batch_impl(
   }
 
   if (exact_competitor_guard_fastpath_eligible(ctx, competitor_cache)) {
-    record_unified_outcome_exact_competitor_guard_fastpath_call();
     std::vector<std::uint8_t> active(eval_points.size(), 0u);
     for (std::size_t i = 0; i < eval_points.size(); ++i) {
       active[i] = (std::isfinite(eval_points.t[i]) &&

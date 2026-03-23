@@ -123,15 +123,9 @@ testthat::test_that("plain independent races use the direct competing fast path"
   ctx <- build_likelihood_context(spec, data_df)
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll <- as.numeric(log_likelihood(ctx, data_df, params_df))
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   testthat::expect_true(is.finite(ll))
-  testthat::expect_gt(
-    stats$direct_node_density_batch_simple_competing_fastpath_calls,
-    0
-  )
 })
 
 testthat::test_that("timeout guess races use the simple competing fast path", {
@@ -162,17 +156,9 @@ testthat::test_that("timeout guess races use the simple competing fast path", {
   ctx <- build_likelihood_context(spec, data_df)
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll <- as.numeric(log_likelihood(ctx, data_df, params_df))
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   testthat::expect_true(is.finite(ll))
-  testthat::expect_gt(
-    stats$direct_node_density_batch_simple_competing_fastpath_calls,
-    0
-  )
-  testthat::expect_equal(stats$direct_node_density_batch_kernel_eval_calls, 0)
-  testthat::expect_equal(stats$kernel_event_batch_calls, 0)
 })
 
 testthat::test_that("disjoint guard competitors evaluate finitely", {

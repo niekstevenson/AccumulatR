@@ -594,12 +594,12 @@ At closure, all must be true:
 3.  `VT2`: coupling runtime cutover complete
 4.  `VT3`: ranked planner cutover complete
 5.  `VT4`: ranked hot-path lane-batch cutover complete
-6.  `VT5`: in progress, exact-private helper cleanup and dead split-vocabulary stats cleanup complete
+6.  `VT5`: in progress, exact-private helper cleanup and runtime-stat surface rationalization complete
 7.  `VT6`: not started
 8.  `VT7`: not started
 
 ## Immediate Next Step
 
-1.  Continue `VT5` by rationalizing the remaining runtime stats around lane groups and shared program evals.
-2.  Delete any residual tests or dev-script assertions that still depend on internal path names without protecting behavior.
+1.  Continue `VT5` only for remaining exact-side logic that is still structurally separate, not for more split-vocabulary cleanup.
+2.  Keep tests and dev scripts pinned to generic behavior and generic lane/program stats only.
 3.  The proof obligation is still deletion pressure, not speed headlines.

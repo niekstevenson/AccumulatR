@@ -230,9 +230,6 @@ inline bool evaluate_labelref_pool_batch(
       }
     }
   }
-
-  record_unified_outcome_generic_poolref_batch_fastpath_call();
-  record_unified_outcome_generic_labelref_batch_fastpath_call();
   return true;
 }
 
@@ -824,7 +821,6 @@ inline bool evaluate_labelref_node_batch(
       (*cdf_out)[i] = clamp_probability(values.cdf[i]);
     }
   }
-  record_unified_outcome_generic_labelref_batch_fastpath_call();
   return true;
 }
 
@@ -973,7 +969,6 @@ inline bool evaluate_labelref_batch(
               safe_density((*density_out)[i] + donor_density[i]);
         }
       }
-      record_unified_outcome_generic_labelref_batch_fastpath_call();
       return true;
     }
   }
@@ -1002,15 +997,6 @@ inline bool generic_coupling_runtime_has_labelref_fastpath(
     const GenericCouplingProviderRuntime &runtime) {
   const LabelRef &ref = runtime.target_ref.ref;
   return ref.acc_idx >= 0 || ref.pool_idx >= 0 || ref.outcome_idx >= 0;
-}
-
-inline void record_generic_coupling_provider_usage(
-    const GenericCouplingProviderRuntime &runtime) {
-  if (generic_coupling_runtime_has_labelref_fastpath(runtime)) {
-    record_unified_outcome_generic_labelref_batch_fastpath_call();
-  } else {
-    record_unified_outcome_generic_noderef_batch_call();
-  }
 }
 
 inline bool multiply_generic_survival_product(
@@ -1765,7 +1751,6 @@ private:
     }
     const CouplingGenericPayload &generic = program.generic_payloads[payload_idx];
     GenericCouplingProviderRuntime &runtime = generic_runtimes[payload_idx];
-    record_generic_coupling_provider_usage(runtime);
     if (generic_coupling_runtime_has_labelref_fastpath(runtime)) {
       return evaluate_labelref_batch(
                  ctx, runtime.target_ref, component_idx, trial_params,
@@ -1809,7 +1794,6 @@ private:
     }
     const CouplingGenericPayload &generic = program.generic_payloads[payload_idx];
     GenericCouplingProviderRuntime &runtime = generic_runtimes[payload_idx];
-    record_generic_coupling_provider_usage(runtime);
     return evaluate_generic_terms_resolved_provider_batch(
                ctx, generic, runtime, component_idx, trial_params,
                trial_type_key, include_na_donors, outcome_idx_context,

@@ -47,9 +47,9 @@ inline void validate_competitor_transition_meta(const uuber::NativeContext &ctx,
     Rcpp::stop("IR competitor transition mask invalid for node %d",
                meta.node_id);
   }
-  if (ctx.kernel_program.valid &&
+  if (ctx.tree_program && ctx.tree_program->valid &&
       (meta.invalidate_slot < 0 ||
-       meta.invalidate_slot >= static_cast<int>(ctx.kernel_program.ops.size()))) {
+       meta.invalidate_slot >= static_cast<int>(ctx.tree_program->ops.size()))) {
     Rcpp::stop(
         "IR competitor transition invalidate slot invalid for node %d",
         meta.node_id);
@@ -274,7 +274,6 @@ void competitor_survival_batch_from_state_compiled_ops(
     const uuber::NativeContext &ctx, const std::vector<int> &competitor_ids,
     NodeEvalState &state,
     const std::vector<double> &times, std::vector<double> &survival_out,
-    uuber::KernelBatchRuntimeState *kernel_batch_runtime,
     const uuber::CompetitorClusterCacheEntry *competitor_cache) {
   survival_out.assign(times.size(), 1.0);
   if (competitor_ids.empty()) {
@@ -321,46 +320,48 @@ void competitor_survival_batch_from_state_compiled_ops(
   state.include_na_donors = false;
   state.outcome_idx = -1;
 
-  thread_local uuber::KernelBatchRuntimeState fallback_batch_runtime;
-  uuber::KernelBatchRuntimeState *batch_runtime_ptr =
-      kernel_batch_runtime ? kernel_batch_runtime : &fallback_batch_runtime;
-  uuber::invalidate_kernel_batch_runtime_from_slot(*batch_runtime_ptr, 0);
+  std::vector<std::uint8_t> active(times.size(), 0u);
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    active[i] =
+        (std::isfinite(times[i]) && times[i] >= 0.0 && survival_out[i] > 0.0)
+            ? 1u
+            : 0u;
+  }
 
-  uuber::KernelEventBatchEvalFn event_eval_batch_cb =
-      evaluator_make_kernel_event_eval_batch(state);
-  uuber::KernelGuardBatchEvalFn guard_eval_batch_cb =
-      evaluator_make_kernel_guard_eval_batch(state);
-  uuber::KernelBatchTransitionApplyFn apply_transition_batch =
-      [&](const uuber::CompetitorCompiledOp &op,
-          uuber::KernelBatchRuntimeState &runtime) {
-        if (op.transition_mask_begin < 0 || op.transition_mask_count <= 0) {
-          return;
+  uuber::KernelNodeBatchValues node_values;
+  for (const uuber::CompetitorCompiledOp &op : cache.compiled_ops) {
+    for (int target_node_idx : op.target_node_indices) {
+      if (!evaluator_eval_node_batch_with_state_dense(
+              target_node_idx, times, state, EvalNeed::kSurvival, node_values) ||
+          node_values.survival.size() != survival_out.size()) {
+        competitor_batch_invariant_failure(
+            "tree vector competitor product batch execution failed",
+            times.size(), cache.compiled_ops.size());
+      }
+      for (std::size_t i = 0; i < survival_out.size(); ++i) {
+        if (active[i] == 0u) {
+          continue;
         }
-        apply_transition_mask_words(
-            state.ctx, op.transition_mask_begin, op.transition_mask_count,
-            op.transition_invalidate_slot, state.forced_survive_bits,
-            state.forced_survive_bits_valid,
-            (state.kernel_runtime_ready && state.kernel_runtime_ptr)
-                ? state.kernel_runtime_ptr
-                : nullptr,
-            &runtime);
-      };
-  if (!uuber::eval_kernel_competitor_product_batch_incremental(
-          state.ctx.kernel_program, *batch_runtime_ptr, cache.compiled_ops, times,
-          event_eval_batch_cb, guard_eval_batch_cb, apply_transition_batch,
-          survival_out)) {
-    competitor_batch_invariant_failure(
-        "kernel competitor product batch execution failed", times.size(),
-        cache.compiled_ops.size());
-  }
-  if (survival_out.size() != times.size()) {
-    competitor_batch_invariant_failure("competitor batch output size mismatch",
-                                       times.size(), cache.compiled_ops.size());
-  }
-}
-
-void invalidate_kernel_runtime_root(NodeEvalState &state) {
-  if (state.kernel_runtime_ready && state.kernel_runtime_ptr) {
-    uuber::invalidate_kernel_runtime_from_slot(*state.kernel_runtime_ptr, 0);
+        const double surv = clamp_probability(node_values.survival[i]);
+        if (!std::isfinite(surv) || surv <= 0.0) {
+          survival_out[i] = 0.0;
+          active[i] = 0u;
+          continue;
+        }
+        survival_out[i] *= surv;
+        if (!std::isfinite(survival_out[i]) || survival_out[i] <= 0.0) {
+          survival_out[i] = 0.0;
+          active[i] = 0u;
+        }
+      }
+    }
+    if (op.transition_mask_begin < 0 || op.transition_mask_count <= 0) {
+      continue;
+    }
+    apply_transition_mask_words(state.ctx, op.transition_mask_begin,
+                                op.transition_mask_count,
+                                op.transition_invalidate_slot,
+                                state.forced_survive_bits,
+                                state.forced_survive_bits_valid);
   }
 }

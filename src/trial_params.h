@@ -11,7 +11,6 @@
 
 #include "accumulator.h"
 #include "context.h"
-#include "kernel_executor.h"
 #include "native_utils.h"
 
 struct TrialAccumulatorParams {
@@ -47,10 +46,10 @@ struct TrialParamSet {
 };
 
 struct SharedTriggerPlan {
-  std::vector<int> kernel_transition_begin;
-  std::vector<int> kernel_transition_count;
-  std::vector<int> kernel_invalidate_slot;
-  std::vector<double> kernel_q;
+  std::vector<int> trigger_acc_begin;
+  std::vector<int> trigger_acc_count;
+  std::vector<int> trigger_acc_indices;
+  std::vector<double> trigger_q;
   std::vector<double> mask_weights;
 };
 
@@ -98,10 +97,10 @@ void prepare_trigger_scratch(const uuber::NativeContext &ctx,
                              const SharedTriggerPlan &plan,
                              TrialParamSet &scratch);
 void apply_trigger_q_soa_inplace(TrialParamSet &params, int acc_idx, bool fail);
-void apply_trigger_q_soa_inplace_kernel(const uuber::NativeContext &ctx,
-                                        TrialParamSet &params,
-                                        const SharedTriggerPlan &plan,
-                                        int trigger_bit_idx, bool fail);
+void apply_trigger_q_soa_inplace_plan(const uuber::NativeContext &ctx,
+                                      TrialParamSet &params,
+                                      const SharedTriggerPlan &plan,
+                                      int trigger_bit_idx, bool fail);
 std::unique_ptr<TrialParamSet>
 build_trial_params_from_df(const uuber::NativeContext &ctx,
                            const Rcpp::Nullable<Rcpp::DataFrame> &rows_opt);

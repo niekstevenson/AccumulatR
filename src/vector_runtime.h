@@ -11,17 +11,8 @@ namespace uuber {
 
 enum class VectorProgramDomain : std::uint8_t {
   None = 0,
-  OutcomeCoupling = 1
-};
-
-// Transitional metadata for VT1/VT2 while the runtime still has shape-specific
-// evaluator bodies. The end-state is one evaluator over these ops.
-enum class VectorProgramPattern : std::uint8_t {
-  None = 0,
-  CouplingPair = 1,
-  CouplingNWay = 2,
-  CouplingGenericDirectCdf = 3,
-  CouplingGenericIntegral = 4
+  Tree = 1,
+  OutcomeCoupling = 2
 };
 
 enum class VectorPayloadRole : std::uint8_t {
@@ -36,16 +27,21 @@ enum class VectorPayloadRole : std::uint8_t {
 };
 
 enum class VectorOpCode : std::uint8_t {
-  EventDensity = 0,
-  EventCDF = 1,
-  EventSurvival = 2,
-  GenericDirectCDF = 3,
-  GenericIntegrand = 4,
-  Complement = 5,
-  Multiply = 6,
-  Add = 7,
-  Subtract = 8,
-  Integral = 9
+  TreeEvent = 0,
+  TreeAnd = 1,
+  TreeOr = 2,
+  TreeNot = 3,
+  TreeGuard = 4,
+  EventDensity = 5,
+  EventCDF = 6,
+  EventSurvival = 7,
+  GenericDirectCDF = 8,
+  GenericIntegrand = 9,
+  Complement = 10,
+  Multiply = 11,
+  Add = 12,
+  Subtract = 13,
+  Integral = 14
 };
 
 struct VectorEventRefPayload {
@@ -63,16 +59,23 @@ struct VectorGenericNodePayload {
 };
 
 struct VectorOp {
-  VectorOpCode code{VectorOpCode::EventDensity};
+  VectorOpCode code{VectorOpCode::TreeEvent};
   int dst_slot{-1};
+  int node_idx{-1};
+  int event_idx{-1};
   int child_begin{-1};
   int child_count{0};
+  int ref_slot{-1};
+  int blocker_slot{-1};
   int payload_idx{-1};
   double scalar{1.0};
   std::uint32_t flags{0u};
 };
 
 struct VectorProgramOutputs {
+  std::vector<int> node_idx_to_slot;
+  std::vector<int> slot_to_node_idx;
+  std::vector<int> outcome_idx_to_slot;
   int result_slot{-1};
   int coeff_slot{-1};
   std::vector<int> aux_slots;
@@ -80,15 +83,18 @@ struct VectorProgramOutputs {
 
 struct VectorProgram {
   VectorProgramDomain domain{VectorProgramDomain::None};
-  VectorProgramPattern pattern{VectorProgramPattern::None};
   std::vector<VectorOp> ops;
   std::vector<int> children;
   std::vector<VectorEventRefPayload> event_payloads;
   std::vector<VectorGenericNodePayload> generic_payloads;
   VectorProgramOutputs outputs;
+  int max_child_count{0};
+  bool has_guard{false};
   bool requires_exact_scenario_eval{false};
   bool valid{false};
 };
+
+VectorProgram compile_tree_vector_program(const IrContext &ir);
 
 inline const VectorEventRefPayload *
 find_vector_event_payload(const VectorProgram &program, VectorPayloadRole role,

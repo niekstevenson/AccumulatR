@@ -1,15 +1,16 @@
 # Vectorized Tree Cutover Contract (No Spin)
 
-Last updated: 2026-03-22
+Last updated: 2026-03-23
 
 ## Brutal Status Right Now
 
-1.  The codebase does not have one vectorized runtime. It has several batch-capable engines with scalar schedulers wrapped around them.
-2.  Coupling execution is still structurally split by `OutcomeCouplingOpKind` in [src/coupling_program.h](/Users/nstevenson/Documents/2025/AccumulatR/src/coupling_program.h) and [src/coupling_eval.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/coupling_eval.cpp).
-3.  Ranked execution is still structurally split around `RankedTransitionCompiler`, `RankedTransitionTemplate`, and `sequence_prefix_density_batch_resolved(...)` in [src/ranked_transitions.h](/Users/nstevenson/Documents/2025/AccumulatR/src/ranked_transitions.h) and [src/ranked_transitions.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/ranked_transitions.cpp).
-4.  The lower-level exact and direct kernels are fairly batch-native already. The remaining cost is mostly repeated scheduler work, repeated tree walking, and repeated state materialization.
-5.  Several tests and runtime stats still encode the current split vocabulary. They are useful for transition visibility, but they must not be allowed to preserve dead architecture.
-6.  Honest summary: current code is a successful scalar-path cleanup, not a finished vectorized-tree runtime.
+1.  The codebase still does not have one vectorized runtime end-to-end. It has one shared lane container and one shared coupling evaluator, but ranked and exact still retain their own scheduler shells.
+2.  The old scalar fallback machinery is mostly gone from the `cpp_loglik()` path. The remaining cost is not obvious scalar fallback branches; it is scheduler/orchestration work that still re-groups, re-materializes state, and re-walks logic.
+3.  Coupling no longer dispatches by the old payload families, but it still carries transitional metadata in [src/vector_runtime.h](/Users/nstevenson/Documents/2025/AccumulatR/src/vector_runtime.h) and a scalar adaptive segment scheduler in [src/coupling_eval.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/coupling_eval.cpp).
+4.  Ranked no longer uses `RankedTransitionCompiler`, `RankedTransitionTemplate`, or `RankedTransitionStep`, but it still executes through `RankedBatchPlan`, `RankedProgramSliceRef`, and `sequence_prefix_density_batch_resolved(...)` in [src/ranked_transitions.h](/Users/nstevenson/Documents/2025/AccumulatR/src/ranked_transitions.h) and [src/ranked_transitions.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/ranked_transitions.cpp), not the canonical `VectorProgram`.
+5.  Exact now uses the shared lane container, but guard evaluation and scenario orchestration are still structurally exact-specific around [src/exact_outcome_density.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/exact_outcome_density.cpp), especially `exact_fill_guard_prepared_batch(...)` and `exact_eval_guard_batch_common(...)`.
+6.  Native mixture and parameter-set evaluation still retain scalar outer orchestration in [src/distributions.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/distributions.cpp).
+7.  Honest summary: current code is a successful scalar fallback deletion plus partial runtime unification. The remaining work is scheduler/runtime consolidation, not deleting more obvious scalar helper names.
 
 ## Primary Objective
 
@@ -36,8 +37,8 @@ Last updated: 2026-03-22
 
 ## What Does Not Count
 
-1.  Keeping `OutcomeCouplingProgram` alive at runtime and calling the result "one tree."
-2.  Keeping `RankedTransitionTemplate` as the hot execution contract and merely swapping its leaf helpers to batch helpers.
+1.  Keeping `OutcomeCouplingProgram` as a permanent runtime alias and calling the result "one tree."
+2.  Keeping `RankedBatchPlan` and `RankedProgramSliceRef` as a permanent alternate runtime instead of lowering ranked work into the canonical `VectorProgram`.
 3.  Adding a `Vectorized*` wrapper that still re-enters old scalar control flow per state, per segment, or per transition.
 4.  Preserving old runtime stats and tests by keeping dead code reachable.
 5.  Declaring victory because correctness is intact while the runtime still has multiple evaluator families.
@@ -46,31 +47,31 @@ Last updated: 2026-03-22
 
 ### Coupling Split
 
-1.  Runtime program family:
-    1.  `OutcomeCouplingPairPayload`
-    2.  `OutcomeCouplingNWayPayload`
-    3.  `OutcomeCouplingGenericNodeIntegralPayload`
-    4.  `OutcomeCouplingProgram`
-    5.  `OutcomeCouplingOpKind`
-2.  Runtime branch points:
-    1.  `evaluate_outcome_coupling_unified(...)`
-    2.  `evaluate_outcome_coupling_unified_batch(...)`
+1.  Runtime core that is already shared:
+    1.  `uuber::VectorProgram`
+    2.  `uuber::VectorLaneBatch`
+    3.  `CouplingProgramInterpreter`
+2.  Remaining coupling-specific residue:
+    1.  `OutcomeCouplingProgram` alias in [src/coupling_program.h](/Users/nstevenson/Documents/2025/AccumulatR/src/coupling_program.h)
+    2.  `VectorProgramPattern` transitional metadata in [src/vector_runtime.h](/Users/nstevenson/Documents/2025/AccumulatR/src/vector_runtime.h)
+    3.  adaptive segment scheduling in [src/coupling_eval.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/coupling_eval.cpp)
 3.  Honest read:
-    1.  the builder and the runtime are still fused together
-    2.  the current "unified" evaluator is still a dispatcher
+    1.  evaluator-family split is gone
+    2.  scheduler split and transitional naming are not
 
 ### Ranked Split
 
-1.  Runtime program family:
-    1.  `RankedTransitionStep`
-    2.  `RankedTransitionTemplate`
-    3.  `RankedNodeTransitionPlan`
-    4.  `RankedTransitionCompiler`
+1.  Ranked scheduler/runtime family that still remains:
+    1.  `RankedBatchPlan`
+    2.  `RankedProgramSliceRef`
+    3.  `RankedBatchPlanner`
 2.  Runtime hot path:
     1.  `sequence_prefix_density_batch_resolved(...)`
 3.  Honest read:
-    1.  lower-level exact pieces are batched
-    2.  the scheduler around them is still scalar-oriented
+    1.  the old ranked template/compiler runtime is gone
+    2.  lower-level exact pieces are batched
+    3.  ranked still does not execute the canonical `VectorProgram` directly
+    4.  frontier grouping, scenario collection, and collapse are still ranked-specific scheduler work
 
 ### Test And Tooling Split
 
@@ -264,7 +265,7 @@ The rule is simple: if a type exists mainly to preserve a separate coupling or r
 
 1.  Stop defining runtime payload families.
 2.  Become a builder header that exposes lowering into `VectorProgram`.
-3.  End state: no runtime `OutcomeCouplingProgram` struct.
+3.  End state: no runtime `OutcomeCouplingProgram` alias either.
 
 ### [src/coupling_program.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/coupling_program.cpp)
 
@@ -280,18 +281,18 @@ The rule is simple: if a type exists mainly to preserve a separate coupling or r
 
 ### [src/ranked_transitions.h](/Users/nstevenson/Documents/2025/AccumulatR/src/ranked_transitions.h)
 
-1.  Replace transition templates with state deltas and program slice refs.
-2.  Remove `RankedTransitionCompiler` as a runtime concept.
-3.  If a compiler remains, it must compile only scheduler metadata and slice refs.
+1.  The old ranked templates are already gone. The next step is to replace `RankedProgramSliceRef` with canonical `VectorProgram` slot refs or equivalent direct program references.
+2.  Keep ranked-specific metadata only for scheduler decisions and state deltas.
+3.  If a compiler remains, it must compile scheduler metadata only, not an alternate execution contract.
 
 ### [src/ranked_transitions.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/ranked_transitions.cpp)
 
 1.  Rewrite `sequence_prefix_density_batch_resolved(...)` so the hot loop becomes:
     1.  group compatible frontier states
     2.  build lane batch
-    3.  evaluate one program slice over those lanes
+    3.  evaluate the canonical `VectorProgram` over those lanes
     4.  reduce back into ranked state collapse
-2.  Remove per-state execution templates and per-transition scalar semantics.
+2.  Ranked may keep frontier/scenario logic, but it may not keep a separate runtime evaluation contract.
 3.  Accept that ranked state expansion remains ranked-specific. That is scheduler logic, not evaluator logic.
 
 ### [src/exact_outcome_density.h](/Users/nstevenson/Documents/2025/AccumulatR/src/exact_outcome_density.h)
@@ -304,13 +305,15 @@ The rule is simple: if a type exists mainly to preserve a separate coupling or r
 
 1.  Keep exact scenario construction only as data preparation.
 2.  Feed prepared scenarios into the shared vector executor.
-3.  Do not let exact retain a side runtime that coupling and ranked do not share.
+3.  Reduce exact-private orchestration around guards and shared-state partitioning. In particular, `exact_fill_guard_prepared_batch(...)` and `exact_eval_guard_batch_common(...)` must stop acting like a private execution shell.
+4.  Do not let exact retain a side runtime that coupling and ranked do not share.
 
 ### [src/distributions.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/distributions.cpp)
 
 1.  `cpp_loglik()` and native helpers should become scheduler/dispatcher code only.
 2.  No more private runtime families hidden behind "entry" helpers.
 3.  Entry points should route to the shared vector executor plus thin reducers.
+4.  `native_trial_mixture_internal_idx(...)` and `cpp_loglik_multiple(...)` are still valid cleanup targets after the ranked/exact scheduler work is done.
 
 ### [src/runtime_stats.h](/Users/nstevenson/Documents/2025/AccumulatR/src/runtime_stats.h) and [src/runtime_stats.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/runtime_stats.cpp)
 
@@ -352,6 +355,7 @@ Main code changes:
 2.  Lower coupling shapes into the canonical program.
 3.  Define ranked program-slice refs and state-delta outputs.
 4.  Make `ExactScenarioBatch` layout-compatible with the lane batch.
+5.  It is acceptable for transitional metadata to remain here, but only if it is explicitly scheduled for deletion later.
 
 Files:
 
@@ -369,6 +373,7 @@ Counts:
 
 1.  one canonical runtime contract exists
 2.  ranked and coupling can target it
+3.  this phase defines the contract; it does not prove that all hot paths truly execute it yet
 
 Does not count:
 
@@ -382,6 +387,7 @@ Main code changes:
 2.  Delete runtime branches over `OutcomeCouplingOpKind`.
 3.  Delete the old payload-specific evaluator bodies.
 4.  Keep adaptive segment grouping only as scheduler logic.
+5.  Transitional naming or metadata may remain temporarily, but only if the evaluator body split is actually gone.
 
 Files:
 
@@ -396,6 +402,11 @@ Deletion requirement:
 3.  `OutcomeCouplingPairPayload`
 4.  `OutcomeCouplingNWayPayload`
 5.  `OutcomeCouplingGenericNodeIntegralPayload`
+
+Honest note:
+
+1.  Deleting the payload families and `OutcomeCouplingOpKind` is VT2-complete.
+2.  Deleting the `OutcomeCouplingProgram` alias and `VectorProgramPattern` metadata is still VT5 work if they survive as transitional names only.
 
 Counts:
 
@@ -417,6 +428,7 @@ Main code changes:
     1.  admissible state metadata
     2.  state deltas
     3.  slice refs into `VectorProgram`
+4.  This phase is about deleting the old ranked runtime contract, not proving the ranked hot loop is fully unified yet.
 
 Files:
 
@@ -450,36 +462,52 @@ Main code changes:
     1.  build frontier
     2.  group compatible states
     3.  materialize a lane batch
-    4.  evaluate the shared program slice once per group
+    4.  evaluate the canonical `VectorProgram` directly once per group
     5.  reduce results back into next-state collapse
 3.  Scenario collection may remain ranked-specific, but evaluation cannot.
+4.  `RankedProgramSliceRef` is allowed only as temporary scheduler metadata. It does not count as the final runtime contract.
 
 Files:
 
 1.  [src/ranked_transitions.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/ranked_transitions.cpp)
 2.  [src/exact_outcome_density.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/exact_outcome_density.cpp)
 3.  [src/distributions.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/distributions.cpp)
+4.  [src/vector_runtime.h](/Users/nstevenson/Documents/2025/AccumulatR/src/vector_runtime.h)
 
 Deletion requirement:
 
 1.  no hot ranked path may execute per-transition scalar evaluation semantics
+2.  no hot ranked path may retain a separate execution vocabulary that the coupling evaluator does not understand
 
 Counts:
 
-1.  ranked hot execution shares the runtime with coupling
+1.  ranked hot execution shares the runtime with coupling at the evaluator level, not just at the container level
 2.  grouped state execution is visible and real
+3.  ranked scheduler metadata no longer acts like a private execution shell
 
 Does not count:
 
 1.  looping over states and calling the same old evaluator behind a batch API
+2.  lane-batching around `RankedProgramSliceRef` plus exact-private orchestration while still avoiding direct `VectorProgram` execution
 
 ### VT5: Delete The Old Architecture
 
 Main code changes:
 
-1.  Remove all dead split-specific runtime stats.
-2.  Remove all tests whose only purpose is to assert the old split vocabulary.
-3.  Remove stale dev-script references to old counters or old runtime families.
+1.  Remove all transitional runtime aliases and metadata that only preserve the old split vocabulary.
+2.  Collapse exact-private execution shells that still sit on top of the shared lane runtime.
+3.  Remove all dead split-specific runtime stats.
+4.  Remove all tests whose only purpose is to assert the old split vocabulary.
+5.  Remove stale dev-script references to old counters or old runtime families.
+
+Primary remaining targets:
+
+1.  `OutcomeCouplingProgram` alias in [src/coupling_program.h](/Users/nstevenson/Documents/2025/AccumulatR/src/coupling_program.h)
+2.  `VectorProgramPattern` in [src/vector_runtime.h](/Users/nstevenson/Documents/2025/AccumulatR/src/vector_runtime.h)
+3.  `RankedProgramSliceRef` as a runtime-visible execution concept in [src/ranked_transitions.h](/Users/nstevenson/Documents/2025/AccumulatR/src/ranked_transitions.h)
+4.  `exact_fill_guard_prepared_batch(...)` in [src/exact_outcome_density.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/exact_outcome_density.cpp)
+5.  `exact_eval_guard_batch_common(...)` in [src/exact_outcome_density.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/exact_outcome_density.cpp)
+6.  `guard_cdf_internal_prepared(...)` in [src/distributions.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/distributions.cpp)
 
 Required proof:
 
@@ -499,15 +527,19 @@ Does not count:
 
 Allowed work:
 
-1.  improve lane partitioning
-2.  improve scratch reuse
-3.  improve leaf kernels
-4.  add SIMD-friendly loops
+1.  improve ranked scheduler grouping after VT4 is structurally true
+2.  improve exact guard batching after VT5 removes the private execution shell
+3.  improve adaptive coupling segment scheduling
+4.  improve lane partitioning
+5.  improve scratch reuse
+6.  improve leaf kernels
+7.  add SIMD-friendly loops
 
 Forbidden work:
 
 1.  resurrecting shape-specific evaluators
 2.  reintroducing scalar ranked engines for speed
+3.  preserving transitional architecture because it benchmarks well on a microcase
 
 ### VT7: Closure
 
@@ -516,6 +548,7 @@ Required:
 1.  correctness stable
 2.  centralized benchmark stable
 3.  structural deletion proof still true
+4.  remaining scheduler-only code is honestly scheduler-only, not a hidden evaluator family
 
 ## Test And Script Policy
 
@@ -576,6 +609,14 @@ At closure, all must be true:
 4.  remaining ranked-specific logic is scheduler and collapse logic only
 5.  no tests or scripts require dead split code to remain
 
+## Remaining Real Work
+
+1.  Ranked still needs to execute the canonical `VectorProgram` directly from `sequence_prefix_density_batch_resolved(...)`, not through `RankedProgramSliceRef` plus exact-node orchestration.
+2.  Exact guard evaluation still behaves like a private execution shell around `exact_fill_guard_prepared_batch(...)`, `exact_eval_guard_batch_common(...)`, and `guard_cdf_internal_prepared(...)`.
+3.  Coupling still retains scalar adaptive segment scheduling in [src/coupling_eval.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/coupling_eval.cpp).
+4.  `native_trial_mixture_internal_idx(...)` in [src/distributions.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/distributions.cpp) still has serial outer orchestration.
+5.  `cpp_loglik_multiple(...)` in [src/distributions.cpp](/Users/nstevenson/Documents/2025/AccumulatR/src/distributions.cpp) is still scalar over parameter sets.
+
 ## Reporting Format For Every Meaningful Batch
 
 1.  commit SHA
@@ -589,17 +630,17 @@ At closure, all must be true:
 
 ## Current Honest Status Board
 
-1.  `VT0`: conceptually done, but should be rerun at the start of actual cutover work
-2.  `VT1`: canonical lane container cutover complete
-3.  `VT2`: coupling runtime cutover complete
-4.  `VT3`: ranked planner cutover complete
-5.  `VT4`: ranked hot-path lane-batch cutover complete
-6.  `VT5`: in progress, exact-private helper cleanup and runtime-stat surface rationalization complete
-7.  `VT6`: not started
+1.  `VT0`: done enough for lineage, rerun only when a new benchmark baseline is needed
+2.  `VT1`: mostly complete; canonical runtime types exist, but transitional metadata still remains
+3.  `VT2`: evaluator-body cutover complete for coupling; scheduler-level cleanup still remains
+4.  `VT3`: complete for deleting the old ranked template/compiler runtime
+5.  `VT4`: not complete; ranked still runs through `RankedBatchPlan` / `RankedProgramSliceRef` and exact-node orchestration rather than direct canonical `VectorProgram` execution
+6.  `VT5`: partially complete; stale helper/stat cleanup is largely done, but exact-private execution shells and transitional metadata still remain
+7.  `VT6`: not formally started; benchmark-proven speed work is allowed only when it does not preserve dead architecture
 8.  `VT7`: not started
 
 ## Immediate Next Step
 
-1.  Continue `VT5` only for remaining exact-side logic that is still structurally separate, not for more split-vocabulary cleanup.
-2.  Keep tests and dev scripts pinned to generic behavior and generic lane/program stats only.
-3.  The proof obligation is still deletion pressure, not speed headlines.
+1.  Replace `RankedProgramSliceRef`-driven hot execution inside `sequence_prefix_density_batch_resolved(...)` with direct canonical `VectorProgram` evaluation.
+2.  After ranked is truly on the canonical evaluator, collapse the exact guard shell around `exact_fill_guard_prepared_batch(...)`, `exact_eval_guard_batch_common(...)`, and `guard_cdf_internal_prepared(...)`.
+3.  Then flatten adaptive coupling scheduling and only after that spend time on `native_trial_mixture_internal_idx(...)` and `cpp_loglik_multiple(...)`.

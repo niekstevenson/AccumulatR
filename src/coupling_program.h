@@ -4,8 +4,6 @@
 
 #include "vector_runtime.h"
 
-using OutcomeCouplingProgram = uuber::VectorProgram;
-
-OutcomeCouplingProgram resolve_outcome_coupling_program_with_generic(
+uuber::VectorProgram resolve_outcome_coupling_program_with_generic(
     const uuber::NativeContext &ctx, int node_id,
     const std::vector<int> &competitor_node_ids, bool forced_empty);

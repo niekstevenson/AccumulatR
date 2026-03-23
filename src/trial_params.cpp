@@ -1,6 +1,7 @@
 #include "trial_params.h"
 
 #include <cstring>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "proto.h"
@@ -63,51 +64,75 @@ inline void build_base_trial_params_soa_from_context(
   out.valid = true;
 }
 
-inline bool shared_trigger_layout_uses_context_groups(
-    const uuber::NativeContext &ctx, const TrialParamSet &params) {
-  if (ctx.shared_trigger_groups.empty()) {
-    return false;
-  }
-  if (!params.shared_trigger_layout_matches_context) {
-    return false;
-  }
-  return params.acc_params.size() == ctx.accumulators.size();
-}
+struct TrialSharedTriggerGroup {
+  std::vector<int> acc_indices;
+  double q{0.0};
+};
 
-inline bool resolve_shared_trigger_q_value(
-    const uuber::NativeContext &ctx, const TrialParamSet &params,
-    const uuber::SharedTriggerGroup &group, double &q_out) {
-  int q_idx = group.q_acc_idx;
-  double q_val = 0.0;
-  bool q_set = false;
-  if (q_idx >= 0 && q_idx < static_cast<int>(params.acc_params.size())) {
-    q_val = params.acc_params[static_cast<std::size_t>(q_idx)].shared_q;
-    q_set = true;
-  } else if (!group.acc_indices.empty()) {
-    q_idx = group.acc_indices.front();
-    if (q_idx >= 0 && q_idx < static_cast<int>(params.acc_params.size())) {
-      q_val = params.acc_params[static_cast<std::size_t>(q_idx)].shared_q;
-      q_set = true;
+inline bool resolve_trial_shared_trigger_q_value(
+    const uuber::NativeContext &ctx, const TrialParamSet &params, int acc_idx,
+    double &q_out) {
+  if (acc_idx >= 0 && acc_idx < static_cast<int>(params.acc_params.size())) {
+    const double shared_q =
+        params.acc_params[static_cast<std::size_t>(acc_idx)].shared_q;
+    if (std::isfinite(shared_q)) {
+      q_out = clamp_probability(shared_q);
+      return true;
     }
   }
-  if (!q_set && q_idx >= 0 &&
-      q_idx < static_cast<int>(ctx.accumulators.size())) {
-    q_val = ctx.accumulators[static_cast<std::size_t>(q_idx)].q;
-    q_set = true;
+  if (acc_idx >= 0 && acc_idx < static_cast<int>(ctx.accumulators.size())) {
+    q_out = clamp_probability(
+        ctx.accumulators[static_cast<std::size_t>(acc_idx)].q);
+    return true;
   }
-  if (!q_set) {
-    return false;
+  return false;
+}
+
+inline std::vector<TrialSharedTriggerGroup> derive_shared_trigger_groups(
+    const uuber::NativeContext &ctx, const TrialParamSet &params) {
+  std::vector<TrialSharedTriggerGroup> groups;
+  std::unordered_map<std::string, int> group_index;
+  const int n_acc = std::min(static_cast<int>(params.acc_params.size()),
+                             static_cast<int>(ctx.accumulators.size()));
+  for (int acc_idx = 0; acc_idx < n_acc; ++acc_idx) {
+    const TrialAccumulatorParams &acc =
+        params.acc_params[static_cast<std::size_t>(acc_idx)];
+    if (acc.shared_trigger_id.empty()) {
+      continue;
+    }
+    auto it = group_index.find(acc.shared_trigger_id);
+    if (it == group_index.end()) {
+      double q_val = 0.0;
+      if (!resolve_trial_shared_trigger_q_value(ctx, params, acc_idx, q_val)) {
+        continue;
+      }
+      TrialSharedTriggerGroup group;
+      group.q = q_val;
+      groups.push_back(std::move(group));
+      const int group_idx = static_cast<int>(groups.size()) - 1;
+      group_index.emplace(acc.shared_trigger_id, group_idx);
+      it = group_index.find(acc.shared_trigger_id);
+    } else {
+      double q_val = 0.0;
+      if (resolve_trial_shared_trigger_q_value(ctx, params, acc_idx, q_val) &&
+          std::fabs(q_val - groups[static_cast<std::size_t>(it->second)].q) >
+              1e-12) {
+        Rcpp::stop(
+            "Inconsistent shared trigger q values for trigger '%s'",
+            acc.shared_trigger_id.c_str());
+      }
+    }
+    groups[static_cast<std::size_t>(it->second)].acc_indices.push_back(acc_idx);
   }
-  q_out = clamp_probability(q_val);
-  return true;
+  return groups;
 }
 
 inline void initialize_trigger_q_states_inplace(TrialParamSet &params,
                                                 const uuber::NativeContext &ctx,
                                                 const SharedTriggerPlan &plan,
                                                 bool fail) {
-  for (int i = 0; i < static_cast<int>(plan.kernel_q.size()); ++i) {
-    apply_trigger_q_soa_inplace_kernel(ctx, params, plan, i, fail);
+  for (int i = 0; i < static_cast<int>(plan.trigger_q.size()); ++i) {
+    apply_trigger_q_soa_inplace_plan(ctx, params, plan, i, fail);
   }
 }
 
@@ -352,7 +377,12 @@ void materialize_trial_params_soa(const uuber::NativeContext &ctx,
     }
     out.dist_code[static_cast<std::size_t>(acc_idx)] = entry.dist_cfg.code;
     out.onset[static_cast<std::size_t>(acc_idx)] = entry.onset;
-    out.q[static_cast<std::size_t>(acc_idx)] = entry.q;
+    const double effective_q =
+        (!entry.shared_trigger_id.empty() && std::isfinite(entry.shared_q))
+            ? entry.shared_q
+            : entry.q;
+    out.q[static_cast<std::size_t>(acc_idx)] =
+        clamp_probability(effective_q);
     out.t0[static_cast<std::size_t>(acc_idx)] = entry.dist_cfg.t0;
     out.p1[static_cast<std::size_t>(acc_idx)] = entry.dist_cfg.p1;
     out.p2[static_cast<std::size_t>(acc_idx)] = entry.dist_cfg.p2;
@@ -367,14 +397,14 @@ void materialize_trial_params_soa(const uuber::NativeContext &ctx,
 }
 
 std::size_t shared_trigger_count(const SharedTriggerPlan &plan) {
-  return plan.kernel_q.size();
+  return plan.trigger_q.size();
 }
 
 double shared_trigger_mask_weight(const SharedTriggerPlan &plan,
                                   std::uint64_t mask) {
   double weight = 1.0;
-  for (std::size_t i = 0; i < plan.kernel_q.size(); ++i) {
-    const double q = clamp_probability(plan.kernel_q[i]);
+  for (std::size_t i = 0; i < plan.trigger_q.size(); ++i) {
+    const double q = clamp_probability(plan.trigger_q[i]);
     const bool fail = ((mask >> i) & 1ULL) != 0ULL;
     weight *= fail ? q : (1.0 - q);
     if (!std::isfinite(weight) || weight <= 0.0) {
@@ -387,86 +417,23 @@ double shared_trigger_mask_weight(const SharedTriggerPlan &plan,
 SharedTriggerPlan build_shared_trigger_plan(const uuber::NativeContext &ctx,
                                             const TrialParamSet *params_ptr) {
   SharedTriggerPlan plan;
-  if (!params_ptr || ctx.shared_trigger_groups.empty()) {
+  if (!params_ptr) {
     return plan;
   }
-  if (!shared_trigger_layout_uses_context_groups(ctx, *params_ptr) ||
-      !ctx.kernel_state_graph.valid) {
-    Rcpp::stop("IR engine requires kernel-state shared-trigger layout");
-  }
-
-  const std::size_t group_count = ctx.shared_trigger_groups.size();
-  const bool has_precomputed_ranges =
-      ctx.kernel_state_graph.trigger_transition_begin.size() == group_count &&
-      ctx.kernel_state_graph.trigger_transition_count.size() == group_count;
-  if (!has_precomputed_ranges) {
-    Rcpp::stop("IR engine missing precomputed shared-trigger ranges");
-  }
-
-  for (std::size_t tg = 0; tg < group_count; ++tg) {
-    const uuber::SharedTriggerGroup &group = ctx.shared_trigger_groups[tg];
+  const std::vector<TrialSharedTriggerGroup> groups =
+      derive_shared_trigger_groups(ctx, *params_ptr);
+  for (const TrialSharedTriggerGroup &group : groups) {
     if (group.acc_indices.empty()) {
       continue;
     }
-    const int transition_begin =
-        ctx.kernel_state_graph.trigger_transition_begin[tg];
-    const int transition_count =
-        ctx.kernel_state_graph.trigger_transition_count[tg];
-    if (transition_count <= 0 || transition_begin < 0) {
-      continue;
-    }
-    const int transition_end = std::min(
-        transition_begin + transition_count,
-        static_cast<int>(ctx.kernel_state_graph.trigger_transitions.size()));
-    if (transition_end <= transition_begin) {
-      continue;
-    }
-    bool has_valid_acc = false;
-    for (int i = transition_begin; i < transition_end; ++i) {
-      const uuber::KernelStateTransition &tr =
-          ctx.kernel_state_graph
-              .trigger_transitions[static_cast<std::size_t>(i)];
-      if (tr.acc_idx >= 0 &&
-          tr.acc_idx < static_cast<int>(ctx.accumulators.size())) {
-        has_valid_acc = true;
-        break;
-      }
-    }
-    if (!has_valid_acc) {
-      continue;
-    }
-    double q_val = 0.0;
-    if (!resolve_shared_trigger_q_value(ctx, *params_ptr, group, q_val)) {
-      continue;
-    }
-    int invalidate_slot = 0;
-    bool invalidate_slot_found = false;
-    for (int i = transition_begin; i < transition_end; ++i) {
-      const uuber::KernelStateTransition &tr =
-          ctx.kernel_state_graph
-              .trigger_transitions[static_cast<std::size_t>(i)];
-      if (tr.op_count <= 0 || tr.op_begin < 0 ||
-          tr.op_begin >=
-              static_cast<int>(ctx.kernel_state_graph.trigger_op_indices.size())) {
-        continue;
-      }
-      const int slot = ctx.kernel_state_graph.trigger_op_indices
-          [static_cast<std::size_t>(tr.op_begin)];
-      if (slot < 0) {
-        continue;
-      }
-      if (!invalidate_slot_found || slot < invalidate_slot) {
-        invalidate_slot = slot;
-        invalidate_slot_found = true;
-      }
-    }
-    if (!invalidate_slot_found) {
-      invalidate_slot = 0;
-    }
-    plan.kernel_transition_begin.push_back(transition_begin);
-    plan.kernel_transition_count.push_back(transition_count);
-    plan.kernel_invalidate_slot.push_back(invalidate_slot);
-    plan.kernel_q.push_back(q_val);
+    plan.trigger_acc_begin.push_back(
+        static_cast<int>(plan.trigger_acc_indices.size()));
+    plan.trigger_acc_count.push_back(
+        static_cast<int>(group.acc_indices.size()));
+    plan.trigger_acc_indices.insert(plan.trigger_acc_indices.end(),
+                                    group.acc_indices.begin(),
+                                    group.acc_indices.end());
+    plan.trigger_q.push_back(group.q);
   }
 
   const std::size_t trigger_count = shared_trigger_count(plan);
@@ -559,63 +526,59 @@ void apply_trigger_q_soa_inplace(TrialParamSet &params, int acc_idx, bool fail) 
   params.soa_cache.q[static_cast<std::size_t>(acc_idx)] = fail ? 1.0 : 0.0;
 }
 
-void apply_trigger_q_soa_inplace_kernel(const uuber::NativeContext &ctx,
-                                        TrialParamSet &params,
-                                        const SharedTriggerPlan &plan,
-                                        int trigger_bit_idx, bool fail) {
+void apply_trigger_q_soa_inplace_plan(const uuber::NativeContext &ctx,
+                                      TrialParamSet &params,
+                                      const SharedTriggerPlan &plan,
+                                      int trigger_bit_idx, bool fail) {
+  (void)ctx;
   if (trigger_bit_idx < 0 ||
-      trigger_bit_idx >= static_cast<int>(plan.kernel_transition_begin.size()) ||
-      trigger_bit_idx >= static_cast<int>(plan.kernel_transition_count.size())) {
+      trigger_bit_idx >= static_cast<int>(plan.trigger_acc_begin.size()) ||
+      trigger_bit_idx >= static_cast<int>(plan.trigger_acc_count.size())) {
     return;
   }
   const int begin =
-      plan.kernel_transition_begin[static_cast<std::size_t>(trigger_bit_idx)];
+      plan.trigger_acc_begin[static_cast<std::size_t>(trigger_bit_idx)];
   const int count =
-      plan.kernel_transition_count[static_cast<std::size_t>(trigger_bit_idx)];
+      plan.trigger_acc_count[static_cast<std::size_t>(trigger_bit_idx)];
   if (begin < 0 || count <= 0) {
     return;
   }
-  const int end = std::min(
-      begin + count,
-      static_cast<int>(ctx.kernel_state_graph.trigger_transitions.size()));
+  const int end = std::min(begin + count,
+                           static_cast<int>(plan.trigger_acc_indices.size()));
   for (int i = begin; i < end; ++i) {
-    const uuber::KernelStateTransition &tr =
-        ctx.kernel_state_graph
-            .trigger_transitions[static_cast<std::size_t>(i)];
-    apply_trigger_q_soa_inplace(params, tr.acc_idx, fail);
+    apply_trigger_q_soa_inplace(
+        params, plan.trigger_acc_indices[static_cast<std::size_t>(i)], fail);
   }
 }
 
 namespace {
 
-inline void apply_trigger_q_soa_inplace_kernel(
+inline void apply_trigger_q_soa_inplace_plan(
     const uuber::NativeContext &ctx, uuber::TrialParamsSoA &params_soa,
     const SharedTriggerPlan &plan, int trigger_bit_idx, bool fail) {
+  (void)ctx;
   if (trigger_bit_idx < 0 ||
-      trigger_bit_idx >= static_cast<int>(plan.kernel_transition_begin.size()) ||
-      trigger_bit_idx >= static_cast<int>(plan.kernel_transition_count.size())) {
+      trigger_bit_idx >= static_cast<int>(plan.trigger_acc_begin.size()) ||
+      trigger_bit_idx >= static_cast<int>(plan.trigger_acc_count.size())) {
     return;
   }
   const int begin =
-      plan.kernel_transition_begin[static_cast<std::size_t>(trigger_bit_idx)];
+      plan.trigger_acc_begin[static_cast<std::size_t>(trigger_bit_idx)];
   const int count =
-      plan.kernel_transition_count[static_cast<std::size_t>(trigger_bit_idx)];
+      plan.trigger_acc_count[static_cast<std::size_t>(trigger_bit_idx)];
   if (begin < 0 || count <= 0) {
     return;
   }
-  const int end = std::min(
-      begin + count,
-      static_cast<int>(ctx.kernel_state_graph.trigger_transitions.size()));
+  const int end = std::min(begin + count,
+                           static_cast<int>(plan.trigger_acc_indices.size()));
   const double q_value = fail ? 1.0 : 0.0;
   for (int i = begin; i < end; ++i) {
-    const uuber::KernelStateTransition &tr =
-        ctx.kernel_state_graph
-            .trigger_transitions[static_cast<std::size_t>(i)];
-    if (tr.acc_idx < 0 || tr.acc_idx >= params_soa.n_acc ||
-        static_cast<std::size_t>(tr.acc_idx) >= params_soa.q.size()) {
+    const int acc_idx = plan.trigger_acc_indices[static_cast<std::size_t>(i)];
+    if (acc_idx < 0 || acc_idx >= params_soa.n_acc ||
+        static_cast<std::size_t>(acc_idx) >= params_soa.q.size()) {
       continue;
     }
-    params_soa.q[static_cast<std::size_t>(tr.acc_idx)] = q_value;
+    params_soa.q[static_cast<std::size_t>(acc_idx)] = q_value;
   }
 }
 
@@ -664,7 +627,7 @@ void prepare_trigger_scratch(const uuber::NativeContext &ctx,
   std::uint64_t diff = scratch.shared_trigger_current_mask;
   while (diff != 0ULL) {
     const int bit = static_cast<int>(__builtin_ctzll(diff));
-    apply_trigger_q_soa_inplace_kernel(ctx, scratch, plan, bit, false);
+    apply_trigger_q_soa_inplace_plan(ctx, scratch, plan, bit, false);
     diff &= (diff - 1ULL);
   }
   scratch.shared_trigger_current_mask = 0ULL;
@@ -687,9 +650,18 @@ bool build_shared_trigger_mask_soa_batch(const uuber::NativeContext &ctx,
     return false;
   }
 
+  uuber::TrialParamsSoA success_soa = *base_soa;
+  for (int acc_idx : plan.trigger_acc_indices) {
+    if (acc_idx < 0 || acc_idx >= success_soa.n_acc ||
+        static_cast<std::size_t>(acc_idx) >= success_soa.q.size()) {
+      continue;
+    }
+    success_soa.q[static_cast<std::size_t>(acc_idx)] = 0.0;
+  }
+
   const std::size_t trigger_count = shared_trigger_count(plan);
   if (trigger_count == 0u) {
-    out.mask_params.push_back(*base_soa);
+    out.mask_params.push_back(success_soa);
     out.mask_weights.push_back(1.0);
   } else {
     if (trigger_count >= 63u) {
@@ -703,13 +675,13 @@ bool build_shared_trigger_mask_soa_batch(const uuber::NativeContext &ctx,
       if (!(std::isfinite(weight) && weight > 0.0)) {
         continue;
       }
-      out.mask_params.push_back(*base_soa);
+      out.mask_params.push_back(success_soa);
       uuber::TrialParamsSoA &mask_soa = out.mask_params.back();
       for (std::size_t bit_idx = 0; bit_idx < trigger_count; ++bit_idx) {
         if (((mask >> bit_idx) & 1ULL) == 0ULL) {
           continue;
         }
-        apply_trigger_q_soa_inplace_kernel(
+        apply_trigger_q_soa_inplace_plan(
             ctx, mask_soa, plan, static_cast<int>(bit_idx), true);
       }
       mask_soa.valid = true;

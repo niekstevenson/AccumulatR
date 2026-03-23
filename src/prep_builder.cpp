@@ -8,7 +8,7 @@
 #include <unordered_set>
 
 #include "accumulator.h"
-#include "kernel_program.h"
+#include "vector_runtime.h"
 
 namespace uuber {
 namespace {
@@ -21,6 +21,30 @@ inline double clamp_probability(double value) {
   if (value > 1.0)
     return 1.0;
   return value;
+}
+
+inline const VectorProgram *compiled_tree_program_ptr(const NativeContext &ctx) {
+  return (ctx.tree_program && ctx.tree_program->valid &&
+          ctx.tree_program->domain == VectorProgramDomain::Tree)
+             ? ctx.tree_program.get()
+             : nullptr;
+}
+
+inline int compiled_tree_program_op_count(const NativeContext &ctx) {
+  const VectorProgram *program = compiled_tree_program_ptr(ctx);
+  return program ? static_cast<int>(program->ops.size()) : 0;
+}
+
+inline int compiled_tree_program_slot_for_node(const NativeContext &ctx,
+                                               int node_idx) {
+  const VectorProgram *program = compiled_tree_program_ptr(ctx);
+  if (program == nullptr || node_idx < 0 ||
+      node_idx >= static_cast<int>(program->outputs.node_idx_to_slot.size())) {
+    return -1;
+  }
+  const int slot =
+      program->outputs.node_idx_to_slot[static_cast<std::size_t>(node_idx)];
+  return (slot >= 0 && slot < static_cast<int>(program->ops.size())) ? slot : -1;
 }
 
 std::vector<std::string> extract_string_vector(SEXP obj) {
@@ -189,6 +213,7 @@ bool node_contains_guard_compiled(const IrContext &ir, int node_idx,
 void validate_guard_transition_completeness(const NativeContext &ctx) {
   const IrContext &ir = ctx.ir;
   const KernelStateGraph &graph = ctx.kernel_state_graph;
+  const int tree_op_count = compiled_tree_program_op_count(ctx);
   if (graph.node_guard_transition_idx.size() != ir.nodes.size()) {
     Rcpp::stop("IR guard transition index map size mismatch");
   }
@@ -226,18 +251,15 @@ void validate_guard_transition_completeness(const NativeContext &ctx) {
           "IR guard transition mask invalid for node_id=%d node_idx=%d source_count=%d",
           node.node_id, node_idx, node.source_id_count);
     }
-    if (ctx.kernel_program.valid &&
-        (tr.invalidate_slot < 0 ||
-         tr.invalidate_slot >= static_cast<int>(ctx.kernel_program.ops.size()))) {
+    if (tree_op_count > 0 &&
+        (tr.invalidate_slot < 0 || tr.invalidate_slot >= tree_op_count)) {
       Rcpp::stop(
           "IR guard transition invalidate slot invalid for node_id=%d node_idx=%d slot=%d",
           node.node_id, node_idx, tr.invalidate_slot);
     }
-    if (ctx.kernel_program.valid &&
-        (tr.reference_slot < 0 ||
-         tr.reference_slot >= static_cast<int>(ctx.kernel_program.ops.size()) ||
-         tr.blocker_slot < 0 ||
-         tr.blocker_slot >= static_cast<int>(ctx.kernel_program.ops.size()))) {
+    if (tree_op_count > 0 &&
+        (tr.reference_slot < 0 || tr.reference_slot >= tree_op_count ||
+         tr.blocker_slot < 0 || tr.blocker_slot >= tree_op_count)) {
       Rcpp::stop(
           "IR guard transition reference/blocker slot invalid for node_id=%d node_idx=%d",
           node.node_id, node_idx);
@@ -264,6 +286,7 @@ void validate_guard_transition_completeness(const NativeContext &ctx) {
 
 void validate_event_batch_metadata(const NativeContext &ctx) {
   const IrContext &ir = ctx.ir;
+  const VectorProgram *program = compiled_tree_program_ptr(ctx);
   for (int event_idx = 0; event_idx < static_cast<int>(ir.events.size());
        ++event_idx) {
     const IrEvent &event = ir.events[static_cast<std::size_t>(event_idx)];
@@ -284,24 +307,24 @@ void validate_event_batch_metadata(const NativeContext &ctx) {
           event_idx, event.node_idx, node.event_idx);
     }
   }
-  if (!ctx.kernel_program.valid) {
+  if (program == nullptr) {
     return;
   }
-  for (std::size_t op_idx = 0; op_idx < ctx.kernel_program.ops.size(); ++op_idx) {
-    const KernelOp &op = ctx.kernel_program.ops[op_idx];
-    if (op.code != KernelOpCode::Event) {
+  for (std::size_t op_idx = 0; op_idx < program->ops.size(); ++op_idx) {
+    const VectorOp &op = program->ops[op_idx];
+    if (op.code != VectorOpCode::TreeEvent) {
       continue;
     }
     if (op.event_idx < 0 ||
         op.event_idx >= static_cast<int>(ir.events.size())) {
-      Rcpp::stop("Kernel event op_idx=%d has invalid event_idx=%d",
+      Rcpp::stop("Tree event op_idx=%d has invalid event_idx=%d",
                  static_cast<int>(op_idx), op.event_idx);
     }
     const IrEvent &event =
         ir.events[static_cast<std::size_t>(op.event_idx)];
     if (event.node_idx != op.node_idx) {
       Rcpp::stop(
-          "Kernel event op_idx=%d node/event mapping mismatch (op.node_idx=%d event.node_idx=%d)",
+          "Tree event op_idx=%d node/event mapping mismatch (op.node_idx=%d event.node_idx=%d)",
           static_cast<int>(op_idx), op.node_idx, event.node_idx);
     }
   }
@@ -310,6 +333,7 @@ void validate_event_batch_metadata(const NativeContext &ctx) {
 void validate_competitor_transition_metadata(const NativeContext &ctx) {
   const IrContext &ir = ctx.ir;
   const KernelStateGraph &graph = ctx.kernel_state_graph;
+  const int tree_op_count = compiled_tree_program_op_count(ctx);
   const std::size_t n_nodes = ir.nodes.size();
   if (graph.node_contains_guard.size() != n_nodes ||
       graph.node_competitor_guard_transition_idx.size() != n_nodes ||
@@ -346,9 +370,8 @@ void validate_competitor_transition_metadata(const NativeContext &ctx) {
           "IR competitor transition mask invalid for node_idx=%d begin=%d count=%d",
           node_idx, mask_begin, mask_count);
     }
-    if (ctx.kernel_program.valid &&
-        (invalidate_slot < 0 ||
-         invalidate_slot >= static_cast<int>(ctx.kernel_program.ops.size()))) {
+    if (tree_op_count > 0 &&
+        (invalidate_slot < 0 || invalidate_slot >= tree_op_count)) {
       Rcpp::stop(
           "IR competitor transition invalidate slot invalid for node_idx=%d slot=%d",
           node_idx, invalidate_slot);
@@ -1873,7 +1896,8 @@ build_context_from_proto(const NativePrepProto &proto) {
 
   ir.valid = true;
   ctx->ir = std::move(ir);
-  ctx->kernel_program = compile_kernel_program(ctx->ir);
+  ctx->tree_program =
+      std::make_unique<VectorProgram>(compile_tree_vector_program(ctx->ir));
   ctx->base_params_soa = TrialParamsSoA{};
   ctx->base_params_soa.n_acc = static_cast<int>(ctx->accumulators.size());
   ctx->base_params_soa.dist_code.resize(ctx->accumulators.size(), 0);
@@ -1965,32 +1989,16 @@ build_context_from_proto(const NativePrepProto &proto) {
     tr.linear_chain_begin = -1;
     tr.linear_chain_count = 0;
     tr.linear_chain_leaf_idx = -1;
-    if (ctx->kernel_program.valid && node_idx >= 0 &&
-        node_idx <
-            static_cast<int>(ctx->kernel_program.outputs.node_idx_to_slot.size())) {
-      const int out_slot = ctx->kernel_program.outputs.node_idx_to_slot
-          [static_cast<std::size_t>(node_idx)];
-      if (out_slot >= 0 &&
-          out_slot < static_cast<int>(ctx->kernel_program.ops.size())) {
-        tr.invalidate_slot = out_slot;
-      }
-    }
-    if (ctx->kernel_program.valid && node.reference_idx >= 0 &&
-        node.reference_idx <
-            static_cast<int>(ctx->kernel_program.outputs.node_idx_to_slot.size())) {
-      tr.reference_slot = ctx->kernel_program.outputs.node_idx_to_slot
-          [static_cast<std::size_t>(node.reference_idx)];
-    }
-    if (ctx->kernel_program.valid && node.blocker_idx >= 0 &&
-        node.blocker_idx <
-            static_cast<int>(ctx->kernel_program.outputs.node_idx_to_slot.size())) {
-      tr.blocker_slot = ctx->kernel_program.outputs.node_idx_to_slot
-          [static_cast<std::size_t>(node.blocker_idx)];
-    }
-    if (ctx->kernel_program.valid &&
-        (tr.reference_slot < 0 || tr.blocker_slot < 0 || tr.invalidate_slot < 0)) {
+    tr.invalidate_slot = compiled_tree_program_slot_for_node(*ctx, node_idx);
+    tr.reference_slot =
+        compiled_tree_program_slot_for_node(*ctx, node.reference_idx);
+    tr.blocker_slot =
+        compiled_tree_program_slot_for_node(*ctx, node.blocker_idx);
+    if (compiled_tree_program_ptr(*ctx) != nullptr &&
+        (tr.reference_slot < 0 || tr.blocker_slot < 0 ||
+         tr.invalidate_slot < 0)) {
       Rcpp::stop(
-          "IR guard node_id=%d node_idx=%d missing kernel slot mapping (ref=%d blocker=%d invalidate=%d)",
+          "IR guard node_id=%d node_idx=%d missing tree slot mapping (ref=%d blocker=%d invalidate=%d)",
           node.node_id, node_idx, tr.reference_slot, tr.blocker_slot,
           tr.invalidate_slot);
     }
@@ -2045,20 +2053,11 @@ build_context_from_proto(const NativePrepProto &proto) {
       transition_mask_begin = tr.source_mask_begin;
       transition_mask_count = tr.source_mask_count;
       transition_invalidate_slot = tr.invalidate_slot;
-    } else if (ctx->kernel_program.valid) {
-      transition_invalidate_slot = -1;
-      if (node_idx >= 0 &&
-          node_idx <
-              static_cast<int>(ctx->kernel_program.outputs.node_idx_to_slot.size())) {
-        const int out_slot = ctx->kernel_program.outputs.node_idx_to_slot
-            [static_cast<std::size_t>(node_idx)];
-        if (out_slot >= 0 &&
-            out_slot < static_cast<int>(ctx->kernel_program.ops.size())) {
-          transition_invalidate_slot = out_slot;
-        }
-      }
+    } else if (compiled_tree_program_ptr(*ctx) != nullptr) {
+      transition_invalidate_slot =
+          compiled_tree_program_slot_for_node(*ctx, node_idx);
       if (transition_invalidate_slot < 0) {
-        Rcpp::stop("IR competitor node_idx=%d missing kernel invalidate slot",
+        Rcpp::stop("IR competitor node_idx=%d missing tree invalidate slot",
                    node_idx);
       }
     }
@@ -2085,11 +2084,16 @@ build_context_from_proto(const NativePrepProto &proto) {
     std::unordered_set<int> group_acc_indices(group.acc_indices.begin(),
                                               group.acc_indices.end());
     std::vector<int> affected_op_indices;
-    affected_op_indices.reserve(ctx->kernel_program.ops.size());
-    for (int op_idx = 0; op_idx < static_cast<int>(ctx->kernel_program.ops.size());
+    const VectorProgram *tree_program = compiled_tree_program_ptr(*ctx);
+    if (tree_program != nullptr) {
+      affected_op_indices.reserve(tree_program->ops.size());
+    }
+    for (int op_idx = 0;
+         tree_program != nullptr &&
+         op_idx < static_cast<int>(tree_program->ops.size());
          ++op_idx) {
-      const KernelOp &op = ctx->kernel_program.ops[static_cast<std::size_t>(op_idx)];
-      if (op.code != KernelOpCode::Event) {
+      const VectorOp &op = tree_program->ops[static_cast<std::size_t>(op_idx)];
+      if (op.code != VectorOpCode::TreeEvent) {
         continue;
       }
       if (op.event_idx < 0 ||
@@ -2136,7 +2140,7 @@ build_context_from_proto(const NativePrepProto &proto) {
   validate_guard_transition_completeness(*ctx);
   validate_event_batch_metadata(*ctx);
   validate_competitor_transition_metadata(*ctx);
-  ctx->kernel_state_graph.valid = ctx->kernel_program.valid;
+  ctx->kernel_state_graph.valid = compiled_tree_program_ptr(*ctx) != nullptr;
   return ctx;
 }
 

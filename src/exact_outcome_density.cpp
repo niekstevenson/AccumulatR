@@ -37,6 +37,29 @@ inline bool exact_density_supported_for_outcome(
   return outcome.alias_sources.empty() && outcome.guess_donors.empty();
 }
 
+inline bool exact_node_allowed_in_component(
+    const uuber::NativeContext &ctx, int node_idx, int component_idx) {
+  if (component_idx < 0 || node_idx < 0 ||
+      node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+    return true;
+  }
+  const uuber::IrNode &node = ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
+  if (node.component_mask_offset >= 0) {
+    return ir_mask_has_component(ctx, node.component_mask_offset,
+                                 component_idx);
+  }
+  auto out_it = ctx.ir.node_idx_to_outcomes.find(node_idx);
+  if (out_it == ctx.ir.node_idx_to_outcomes.end() || out_it->second.empty()) {
+    return true;
+  }
+  for (int outcome_idx : out_it->second) {
+    if (ir_outcome_allows_component(ctx, outcome_idx, component_idx)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 inline bool exact_forced_contains_id(const uuber::NativeContext &ctx,
                                      const uuber::BitsetState &bits,
                                      bool bits_valid, int source_id) {
@@ -131,7 +154,7 @@ inline void exact_apply_transition_mask_to_point(
                               op.transition_mask_count,
                               op.transition_invalidate_slot,
                               points.forced_survive_bits[idx],
-                              forced_survive_bits_valid, nullptr, nullptr);
+                              forced_survive_bits_valid);
   if (idx < points.forced_survive_bits_valid.size()) {
     points.forced_survive_bits_valid[idx] =
         forced_survive_bits_valid ? 1u : 0u;
@@ -986,119 +1009,6 @@ inline void exact_merge_batch_values_subset(
   }
 }
 
-inline EvalNeed exact_eval_need_from_kernel_need(
-    const uuber::KernelEvalNeed &kneed) {
-  EvalNeed need = static_cast<EvalNeed>(0u);
-  if (kneed.density) {
-    need = need | EvalNeed::kDensity;
-  }
-  if (kneed.survival) {
-    need = need | EvalNeed::kSurvival;
-  }
-  if (kneed.cdf) {
-    need = need | EvalNeed::kCDF;
-  }
-  return need;
-}
-
-inline bool exact_guard_batch_inputs_valid(
-    const std::vector<double> &batch_times, std::size_t point_count,
-    const uuber::KernelNodeBatchValues &reference_values,
-    const uuber::KernelNodeBatchValues &blocker_values) {
-  return batch_times.size() == point_count &&
-         reference_values.density.size() == point_count &&
-         reference_values.survival.size() == point_count &&
-         reference_values.cdf.size() == point_count &&
-         blocker_values.density.size() == point_count &&
-         blocker_values.survival.size() == point_count &&
-         blocker_values.cdf.size() == point_count;
-}
-inline bool exact_batch_values_size_matches(
-    const uuber::KernelNodeBatchValues &values, std::size_t point_count);
-
-inline void exact_seed_guard_density(
-    const uuber::KernelNodeBatchValues &reference_values,
-    const uuber::KernelNodeBatchValues &blocker_values,
-    uuber::KernelNodeBatchValues &guard_out,
-    const std::vector<std::uint8_t> *active_mask) {
-  const std::size_t point_count = guard_out.density.size();
-  for (std::size_t i = 0; i < point_count; ++i) {
-    if (!uuber::vector_lane_active(active_mask, i)) {
-      continue;
-    }
-    const double ref_density = safe_density(reference_values.density[i]);
-    const double blocker_survival =
-        clamp_probability(blocker_values.survival[i]);
-    guard_out.density[i] = safe_density(ref_density * blocker_survival);
-  }
-}
-
-inline bool exact_fill_guard_prepared_batch(
-    const uuber::NativeContext &ctx, const std::vector<double> &batch_times,
-    int component_idx, const TrialParamSet *trial_params,
-    NodeEvalState &shared_state, const uuber::KernelOp &op,
-    const std::vector<std::uint8_t> *group_mask,
-    uuber::KernelNodeBatchValues &guard_out) {
-  const std::size_t point_count = batch_times.size();
-  if (!exact_batch_values_size_matches(guard_out, point_count)) {
-    return false;
-  }
-  std::vector<const uuber::TrialParamsSoA *> subgroup_params;
-  std::vector<std::vector<std::size_t>> subgroup_indices;
-  subgroup_params.reserve(point_count);
-  subgroup_indices.reserve(point_count);
-  for (std::size_t i = 0; i < point_count; ++i) {
-    if (!uuber::vector_lane_active(group_mask, i)) {
-      continue;
-    }
-    const uuber::TrialParamsSoA *point_soa =
-        (shared_state.trial_params_soa_batch != nullptr &&
-         i < shared_state.trial_params_soa_batch->size())
-            ? (*shared_state.trial_params_soa_batch)[i]
-            : shared_state.trial_params_soa;
-    std::size_t subgroup_idx = subgroup_params.size();
-    for (std::size_t j = 0; j < subgroup_params.size(); ++j) {
-      if (subgroup_params[j] == point_soa) {
-        subgroup_idx = j;
-        break;
-      }
-    }
-    if (subgroup_idx == subgroup_params.size()) {
-      subgroup_params.push_back(point_soa);
-      subgroup_indices.emplace_back();
-    }
-    subgroup_indices[subgroup_idx].push_back(i);
-  }
-  for (std::size_t subgroup_idx = 0; subgroup_idx < subgroup_params.size();
-       ++subgroup_idx) {
-    const std::vector<std::size_t> &indices = subgroup_indices[subgroup_idx];
-    if (indices.empty()) {
-      continue;
-    }
-    std::vector<double> subgroup_times(indices.size(), 0.0);
-    for (std::size_t j = 0; j < indices.size(); ++j) {
-      subgroup_times[j] = batch_times[indices[j]];
-    }
-    GuardEvalInput guard_input = evaluator_make_guard_input(
-        ctx, op.node_idx, component_idx, &shared_state.trial_type_key,
-        trial_params, subgroup_params[subgroup_idx], &shared_state.time_constraints,
-        nullptr, nullptr, nullptr, nullptr, &shared_state.forced_state);
-    std::vector<double> subgroup_cdf;
-    if (!evaluator_guard_cdf_batch_prepared(guard_input, subgroup_times,
-                                            subgroup_cdf) ||
-        subgroup_cdf.size() != indices.size()) {
-      return false;
-    }
-    for (std::size_t j = 0; j < indices.size(); ++j) {
-      const std::size_t point_idx = indices[j];
-      guard_out.cdf[point_idx] = clamp_probability(subgroup_cdf[j]);
-      guard_out.survival[point_idx] =
-          clamp_probability(1.0 - guard_out.cdf[point_idx]);
-    }
-  }
-  return true;
-}
-
 bool exact_eval_node_batch_with_points(
     const uuber::NativeContext &ctx, int node_idx,
     const ExactScenarioBatch &points, int component_idx,
@@ -1115,184 +1025,6 @@ bool exact_eval_node_batch_common(
     uuber::KernelNodeBatchValues &out_values,
     const std::vector<std::uint8_t> *active_mask,
     const uuber::TrialParamsSoA *uniform_trial_params_soa);
-
-template <typename PointVec, typename DirectEvalFn>
-bool exact_eval_event_batch_common(
-    const uuber::NativeContext &ctx, const PointVec &points,
-    const std::vector<double> &batch_times, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    int event_idx,
-    const uuber::KernelEvalNeed &kneed,
-    uuber::KernelNodeBatchValues &event_out,
-    const std::vector<std::uint8_t> *active_mask, DirectEvalFn &&direct_eval,
-    const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr) {
-  const std::size_t point_count = points.size();
-  if (batch_times.size() != point_count ||
-      event_idx < 0 ||
-      event_idx >= static_cast<int>(ctx.ir.events.size())) {
-    return false;
-  }
-  const uuber::IrEvent &event =
-      ctx.ir.events[static_cast<std::size_t>(event_idx)];
-  exact_init_batch_values(point_count, event_out);
-  if (uuber::count_active_vector_lanes(active_mask, point_count) == 0u) {
-    return true;
-  }
-  const EvalNeed event_need = exact_eval_need_from_kernel_need(kneed);
-
-  if (direct_eval(event, event_need, event_out)) {
-    return true;
-  }
-  if (event.node_idx < 0) {
-    return false;
-  }
-  const uuber::IrNode &event_node = ir_node_required(ctx, event.node_idx);
-  if (event_node.op == uuber::IrNodeOp::EventAcc) {
-    return exact_eval_node_batch_with_points(
-        ctx, event.node_idx, points, component_idx, trial_params,
-        trial_type_key, event_need, event_out, active_mask,
-        uniform_trial_params_soa);
-  }
-  if (event_node.op == uuber::IrNodeOp::EventPool) {
-    const std::vector<int> event_source_ids =
-        relevant_source_ids_for_batch_node(ctx, event.node_idx);
-    return eval_vector_lanes_with_shared_node_state(
-        ctx, points, active_mask, event_source_ids, component_idx,
-        trial_params, trial_type_key,
-        [&](NodeEvalState &shared_state,
-            const std::vector<std::uint8_t> *shared_group_mask) -> bool {
-          uuber::KernelEventBatchEvalFn shared_event_eval =
-              evaluator_make_kernel_event_eval_batch(shared_state);
-          uuber::KernelNodeBatchValues shared_event_out;
-          if (!shared_event_eval(event_idx, batch_times, kneed,
-                                 shared_event_out)) {
-            return false;
-          }
-          exact_merge_batch_values_subset(shared_event_out,
-                                          shared_group_mask, event_out);
-          return true;
-        },
-        [&]() -> bool {
-          Rcpp::stop(
-              "Exact batch invariant failed for EventPool node: "
-              "event_idx=%d node_idx=%d active_points=%d",
-              event_idx, event.node_idx,
-              static_cast<int>(uuber::count_active_vector_lanes(active_mask,
-                                                                point_count)));
-          return false;
-        },
-        [&](std::uint64_t active_count, std::uint64_t group_count) {
-          record_unified_outcome_lane_partition(active_count, group_count);
-        },
-        false, uniform_trial_params_soa);
-  }
-  return false;
-}
-
-template <typename PointVec>
-bool exact_eval_guard_batch_common(
-    const uuber::NativeContext &ctx, const PointVec &points,
-    const std::vector<double> &batch_times, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    const uuber::KernelOp &op,
-    const uuber::KernelNodeBatchValues &reference_values,
-    const uuber::KernelNodeBatchValues &blocker_values,
-    const uuber::KernelEvalNeed &kneed,
-    uuber::KernelNodeBatchValues &guard_out,
-    const std::vector<std::uint8_t> *active_mask,
-    const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr) {
-  const std::size_t point_count = points.size();
-  if (!exact_guard_batch_inputs_valid(batch_times, point_count, reference_values,
-                                      blocker_values)) {
-    return false;
-  }
-  exact_init_batch_values(point_count, guard_out);
-  if (kneed.density) {
-    exact_seed_guard_density(reference_values, blocker_values, guard_out,
-                             active_mask);
-  }
-  if (uuber::count_active_vector_lanes(active_mask, point_count) == 0u) {
-    return true;
-  }
-  if (op.node_idx < 0) {
-    return false;
-  }
-  const std::vector<int> guard_source_ids =
-      relevant_source_ids_for_batch_node(ctx, op.node_idx);
-  return eval_vector_lanes_with_shared_node_state(
-      ctx, points, active_mask, guard_source_ids, component_idx, trial_params,
-      trial_type_key,
-      [&](NodeEvalState &shared_state,
-          const std::vector<std::uint8_t> *shared_group_mask) -> bool {
-        return exact_fill_guard_prepared_batch(
-            ctx, batch_times, component_idx, trial_params, shared_state, op,
-            shared_group_mask, guard_out);
-      },
-      [&]() -> bool {
-        Rcpp::stop(
-            "Exact batch invariant failed for Guard node: "
-            "node_idx=%d active_points=%d",
-            op.node_idx,
-            static_cast<int>(uuber::count_active_vector_lanes(active_mask,
-                                                              point_count)));
-        return false;
-      },
-      [&](std::uint64_t active_count, std::uint64_t group_count) {
-        record_unified_outcome_lane_partition(active_count, group_count);
-      },
-      false, uniform_trial_params_soa);
-}
-
-template <typename PointVec>
-bool exact_eval_node_batch_incremental_common(
-    const uuber::NativeContext &ctx, int node_idx, const PointVec &points,
-    const std::vector<double> &times, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
-    const std::vector<std::uint8_t> *active_mask,
-    const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr) {
-  uuber::KernelBatchRuntimeState batch_runtime;
-  uuber::KernelEventBatchEvalFn event_eval_batch =
-      [&](int event_idx, const std::vector<double> &batch_times,
-          const uuber::KernelEvalNeed &kneed,
-          uuber::KernelNodeBatchValues &event_out) -> bool {
-    return exact_eval_event_batch_common(
-        ctx, points, batch_times, component_idx, trial_params, trial_type_key,
-        event_idx, kneed, event_out, active_mask,
-        [&](const uuber::IrEvent &event, EvalNeed event_need,
-            uuber::KernelNodeBatchValues &out) -> bool {
-          return exact_eval_simple_acc_event_batch(
-              ctx, event, points, component_idx, trial_params, trial_type_key,
-              event_need, out, active_mask, uniform_trial_params_soa);
-        },
-        uniform_trial_params_soa);
-  };
-
-  uuber::KernelGuardBatchEvalFn guard_eval_batch =
-      [&](const uuber::KernelOp &op, const std::vector<double> &batch_times,
-          const uuber::KernelNodeBatchValues &reference_values,
-          const uuber::KernelNodeBatchValues &blocker_values,
-          const uuber::KernelEvalNeed &kneed,
-          uuber::KernelNodeBatchValues &guard_out) -> bool {
-    return exact_eval_guard_batch_common(
-        ctx, points, batch_times, component_idx, trial_params, trial_type_key,
-        op, reference_values, blocker_values, kneed, guard_out, active_mask,
-        uniform_trial_params_soa);
-  };
-
-  uuber::KernelEvalNeed kernel_need;
-  kernel_need.density = needs_density(need);
-  kernel_need.survival = needs_survival(need);
-  kernel_need.cdf = needs_cdf(need);
-  if (!kernel_need.density && !kernel_need.survival && !kernel_need.cdf) {
-    kernel_need.density = true;
-    kernel_need.survival = true;
-    kernel_need.cdf = true;
-  }
-  return uuber::eval_kernel_node_batch_incremental(
-      ctx.kernel_program, batch_runtime, node_idx, times, kernel_need,
-      event_eval_batch, guard_eval_batch, out_values);
-}
 
 template <typename PointVec>
 bool exact_eval_node_batch_common(
@@ -1339,11 +1071,9 @@ bool exact_eval_node_batch_common(
           trial_params, trial_type_key,
           [&](NodeEvalState &shared_state,
               const std::vector<std::uint8_t> *shared_group_mask) -> bool {
-            uuber::KernelBatchRuntimeState batch_runtime;
             uuber::KernelNodeBatchValues shared_out;
             if (!evaluator_eval_node_batch_with_state_dense(
-                    node_idx, times, shared_state, need, batch_runtime,
-                    shared_out)) {
+                    node_idx, times, shared_state, need, shared_out)) {
               return false;
             }
             exact_merge_batch_values_subset(shared_out, shared_group_mask,
@@ -1363,72 +1093,19 @@ bool exact_eval_node_batch_common(
           },
           false, uniform_trial_params_soa);
     }
-    if (node.op == uuber::IrNodeOp::Guard &&
-        node.reference_idx >= 0 &&
-        node.blocker_idx >= 0) {
-      uuber::KernelNodeBatchValues reference_values;
-      if (!exact_eval_node_batch_with_points(
-              ctx, node.reference_idx, points, component_idx, trial_params,
-              trial_type_key, EvalNeed::kDensity, reference_values,
-              active_mask, uniform_trial_params_soa)) {
-        return false;
-      }
-      uuber::KernelNodeBatchValues blocker_values;
-      if (!exact_eval_node_batch_with_points(
-              ctx, node.blocker_idx, points, component_idx, trial_params,
-              trial_type_key, EvalNeed::kSurvival, blocker_values,
-              active_mask, uniform_trial_params_soa)) {
-        return false;
-      }
-      uuber::KernelOp guard_op;
-      guard_op.code = uuber::KernelOpCode::Guard;
-      guard_op.node_idx = node_idx;
-      guard_op.flags = node.flags;
-      uuber::KernelEvalNeed kernel_need;
-      kernel_need.density = needs_density(need);
-      kernel_need.survival = needs_survival(need);
-      kernel_need.cdf = needs_cdf(need);
-      if (!kernel_need.density && !kernel_need.survival && !kernel_need.cdf) {
-        kernel_need.density = true;
-        kernel_need.survival = true;
-        kernel_need.cdf = true;
-      }
-      return exact_eval_guard_batch_common(
-          ctx, points, times, component_idx, trial_params, trial_type_key,
-          guard_op, reference_values, blocker_values, kernel_need,
-          out_values, active_mask, uniform_trial_params_soa);
-    }
   }
 
   const std::vector<int> relevant_source_ids =
       relevant_source_ids_for_batch_node(ctx, node_idx);
-  if (node_idx >= 0 && node_idx < static_cast<int>(ctx.ir.nodes.size())) {
-    const uuber::IrNode &node = ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
-    if (node.op == uuber::IrNodeOp::And ||
-        node.op == uuber::IrNodeOp::Or ||
-        node.op == uuber::IrNodeOp::Not) {
-      std::size_t anchor_idx = points.size();
-      if (!uuber::vector_lanes_share_relevant_state(
-              points, active_mask, relevant_source_ids, ctx, anchor_idx)) {
-        exact_init_batch_values(points.size(), out_values);
-        return exact_eval_node_batch_incremental_common(
-            ctx, node_idx, points, times, component_idx, trial_params,
-            trial_type_key, need, out_values, active_mask,
-            uniform_trial_params_soa);
-      }
-    }
-  }
   exact_init_batch_values(points.size(), out_values);
   return eval_vector_lanes_with_shared_node_state(
       ctx, points, active_mask, relevant_source_ids, component_idx,
       trial_params, trial_type_key,
       [&](NodeEvalState &shared_state,
           const std::vector<std::uint8_t> *shared_group_mask) -> bool {
-        uuber::KernelBatchRuntimeState batch_runtime;
         uuber::KernelNodeBatchValues shared_out;
         if (!evaluator_eval_node_batch_with_state_dense(
-                node_idx, times, shared_state, need, batch_runtime,
-                shared_out)) {
+                node_idx, times, shared_state, need, shared_out)) {
           return false;
         }
         exact_merge_batch_values_subset(shared_out, shared_group_mask,
@@ -1447,7 +1124,7 @@ bool exact_eval_node_batch_common(
       [&](std::uint64_t active_count, std::uint64_t group_count) {
         record_unified_outcome_lane_partition(active_count, group_count);
       },
-      true, uniform_trial_params_soa);
+      false, uniform_trial_params_soa);
 }
 
 bool exact_eval_node_batch_with_points(
@@ -1563,6 +1240,23 @@ bool exact_collect_scenarios_batch_aligned_impl(
     ExactScenarioBatch &scenario_batch,
     const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr) {
   scenario_batch.clear();
+  if (node_idx >= 0 && node_idx < static_cast<int>(ctx.ir.nodes.size())) {
+    const uuber::IrNode &node =
+        ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
+    if (node.op == uuber::IrNodeOp::Guard) {
+      if (!exact_node_allowed_in_component(ctx, node.reference_idx,
+                                           component_idx)) {
+        return false;
+      }
+      if (!exact_node_allowed_in_component(ctx, node.blocker_idx,
+                                           component_idx)) {
+        return exact_collect_scenarios_batch_aligned_impl(
+            planner, ctx, node.reference_idx, seed_batch, component_idx,
+            trial_params, trial_type_key, scenario_batch,
+            uniform_trial_params_soa);
+      }
+    }
+  }
   const RankedNodeBatchPlan &plan = planner.plan_for_node(node_idx);
   if (!plan.valid || plan.batch_plans.empty()) {
     return false;
@@ -1988,61 +1682,54 @@ void exact_competitor_survival_batch_impl(
     return;
   }
 
-  uuber::KernelBatchRuntimeState batch_runtime;
-
-  uuber::KernelEventBatchEvalFn event_eval_batch =
-      [&](int event_idx, const std::vector<double> &batch_times,
-          const uuber::KernelEvalNeed &kneed,
-          uuber::KernelNodeBatchValues &out_values) -> bool {
-    return exact_eval_event_batch_common(
-        ctx, eval_points, batch_times, component_idx, trial_params,
-        trial_type_key, event_idx, kneed, out_values, nullptr,
-        [&](const uuber::IrEvent &event, EvalNeed need,
-            uuber::KernelNodeBatchValues &out) -> bool {
-          return exact_eval_simple_acc_event_batch(
-              ctx, event, eval_points, component_idx, trial_params,
-              trial_type_key, need, out, nullptr, uniform_trial_params_soa);
-        },
-        uniform_trial_params_soa);
-  };
-
-  uuber::KernelGuardBatchEvalFn guard_eval_batch =
-      [&](const uuber::KernelOp &op, const std::vector<double> &batch_times,
-          const uuber::KernelNodeBatchValues &reference_values,
-          const uuber::KernelNodeBatchValues &blocker_values,
-          const uuber::KernelEvalNeed &kneed,
-          uuber::KernelNodeBatchValues &out_values) -> bool {
-    return exact_eval_guard_batch_common(
-        ctx, eval_points, batch_times, component_idx, trial_params,
-        trial_type_key, op, reference_values, blocker_values, kneed,
-        out_values, nullptr, uniform_trial_params_soa);
-  };
-
-  uuber::KernelBatchTransitionApplyFn apply_transition_batch =
-      [&](const uuber::CompetitorCompiledOp &op,
-          uuber::KernelBatchRuntimeState &runtime) {
-    if (op.transition_mask_begin < 0 || op.transition_mask_count <= 0) {
-      return;
+  std::vector<std::uint8_t> active(eval_points.size(), 0u);
+  for (std::size_t i = 0; i < eval_points.size(); ++i) {
+    active[i] = (std::isfinite(eval_points.t[i]) && eval_points.t[i] >= 0.0 &&
+                 survival_out[i] > 0.0)
+                    ? 1u
+                    : 0u;
+  }
+  uuber::KernelNodeBatchValues node_values;
+  for (const uuber::CompetitorCompiledOp &op : competitor_cache.compiled_ops) {
+    for (int target_node_idx : op.target_node_indices) {
+      exact_competitor_batch_require(
+          exact_eval_node_batch_with_points(
+              ctx, target_node_idx, eval_points, component_idx, trial_params,
+              trial_type_key, EvalNeed::kSurvival, node_values, &active,
+              uniform_trial_params_soa),
+          "generic tree vector competitor batch evaluation failed", points.size(),
+          competitor_cache.compiled_ops.size());
+      exact_competitor_batch_require(
+          node_values.survival.size() == survival_out.size(),
+          "generic tree vector competitor batch size mismatch", points.size(),
+          competitor_cache.compiled_ops.size());
+      for (std::size_t i = 0; i < survival_out.size(); ++i) {
+        if (active[i] == 0u) {
+          continue;
+        }
+        const double surv = clamp_probability(node_values.survival[i]);
+        if (!std::isfinite(surv) || surv <= 0.0) {
+          survival_out[i] = 0.0;
+          active[i] = 0u;
+          continue;
+        }
+        survival_out[i] *= surv;
+        if (!std::isfinite(survival_out[i]) || survival_out[i] <= 0.0) {
+          survival_out[i] = 0.0;
+          active[i] = 0u;
+        }
+      }
     }
-    if (eval_points_ptr == nullptr) {
-      return;
+    if (op.transition_mask_begin >= 0 && op.transition_mask_count > 0 &&
+        eval_points_ptr != nullptr) {
+      for (std::size_t i = 0; i < eval_points_ptr->size(); ++i) {
+        if (active[i] == 0u) {
+          continue;
+        }
+        exact_apply_transition_mask_to_point(ctx, *eval_points_ptr, i, op);
+      }
     }
-    for (std::size_t i = 0; i < eval_points_ptr->size(); ++i) {
-      exact_apply_transition_mask_to_point(ctx, *eval_points_ptr, i, op);
-    }
-    if (op.transition_invalidate_slot >= 0) {
-      uuber::invalidate_kernel_batch_runtime_from_slot(
-          runtime, op.transition_invalidate_slot);
-    }
-  };
-
-  exact_competitor_batch_require(
-      uuber::eval_kernel_competitor_product_batch_incremental(
-          ctx.kernel_program, batch_runtime, competitor_cache.compiled_ops,
-          times, event_eval_batch, guard_eval_batch, apply_transition_batch,
-          survival_out),
-      "generic kernel competitor batch evaluation failed", points.size(),
-      competitor_cache.compiled_ops.size());
+  }
 }
 
 } // namespace
@@ -2120,7 +1807,6 @@ bool exact_outcome_density_batch_from_state(
   if (!exact_collect_scenarios_batch_impl(planner, ctx, node_idx, times, state,
                                           scenario_points)) {
     state.t = saved_t;
-    invalidate_kernel_runtime_root(state);
     return true;
   }
 
@@ -2167,6 +1853,5 @@ bool exact_outcome_density_batch_from_state(
     }
   }
   state.t = saved_t;
-  invalidate_kernel_runtime_root(state);
   return true;
 }

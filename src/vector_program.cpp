@@ -1,27 +1,26 @@
-#include "kernel_program.h"
+#include "vector_runtime.h"
 
-#include <algorithm>
 #include <cstddef>
 #include <vector>
 
 namespace uuber {
 namespace {
 
-inline KernelOpCode kernel_code_from_ir(IrNodeOp op) {
+inline VectorOpCode tree_vector_code_from_ir(IrNodeOp op) {
   switch (op) {
   case IrNodeOp::EventAcc:
   case IrNodeOp::EventPool:
-    return KernelOpCode::Event;
+    return VectorOpCode::TreeEvent;
   case IrNodeOp::And:
-    return KernelOpCode::And;
+    return VectorOpCode::TreeAnd;
   case IrNodeOp::Or:
-    return KernelOpCode::Or;
+    return VectorOpCode::TreeOr;
   case IrNodeOp::Not:
-    return KernelOpCode::Not;
+    return VectorOpCode::TreeNot;
   case IrNodeOp::Guard:
-    return KernelOpCode::Guard;
+    return VectorOpCode::TreeGuard;
   default:
-    return KernelOpCode::Event;
+    return VectorOpCode::TreeEvent;
   }
 }
 
@@ -45,7 +44,8 @@ void dfs_topo(const IrContext &ir, int node_idx, std::vector<int> &marks,
       node.child_begin + node.child_count <=
           static_cast<int>(ir.node_children.size())) {
     for (int i = 0; i < node.child_count; ++i) {
-      int child = ir.node_children[static_cast<std::size_t>(node.child_begin + i)];
+      const int child =
+          ir.node_children[static_cast<std::size_t>(node.child_begin + i)];
       dfs_topo(ir, child, marks, topo, has_cycle);
     }
   }
@@ -62,8 +62,8 @@ void dfs_topo(const IrContext &ir, int node_idx, std::vector<int> &marks,
 
 } // namespace
 
-KernelProgram compile_kernel_program(const IrContext &ir) {
-  KernelProgram program;
+VectorProgram compile_tree_vector_program(const IrContext &ir) {
+  VectorProgram program;
   if (!ir.valid || ir.nodes.empty()) {
     return program;
   }
@@ -81,19 +81,20 @@ KernelProgram compile_kernel_program(const IrContext &ir) {
     return program;
   }
 
+  program.domain = VectorProgramDomain::Tree;
   program.outputs.node_idx_to_slot.assign(ir.nodes.size(), -1);
   program.outputs.slot_to_node_idx.reserve(topo.size());
   program.outputs.outcome_idx_to_slot.assign(ir.outcomes.size(), -1);
   program.ops.reserve(topo.size());
 
   for (std::size_t slot = 0; slot < topo.size(); ++slot) {
-    int node_idx = topo[slot];
+    const int node_idx = topo[slot];
     program.outputs.node_idx_to_slot[static_cast<std::size_t>(node_idx)] =
         static_cast<int>(slot);
     program.outputs.slot_to_node_idx.push_back(node_idx);
   }
   for (std::size_t oi = 0; oi < ir.outcomes.size(); ++oi) {
-    int node_idx = ir.outcomes[oi].node_idx;
+    const int node_idx = ir.outcomes[oi].node_idx;
     if (node_idx < 0 ||
         node_idx >= static_cast<int>(program.outputs.node_idx_to_slot.size())) {
       continue;
@@ -103,21 +104,22 @@ KernelProgram compile_kernel_program(const IrContext &ir) {
   }
 
   for (std::size_t slot = 0; slot < topo.size(); ++slot) {
-    int node_idx = topo[slot];
+    const int node_idx = topo[slot];
     const IrNode &node = ir.nodes[static_cast<std::size_t>(node_idx)];
 
-    KernelOp op;
-    op.code = kernel_code_from_ir(node.op);
+    VectorOp op;
+    op.code = tree_vector_code_from_ir(node.op);
+    op.dst_slot = static_cast<int>(slot);
     op.node_idx = node_idx;
-    op.out_slot = static_cast<int>(slot);
     op.event_idx = node.event_idx;
     op.flags = node.flags;
-    op.ref_slot = (node.reference_idx >= 0 &&
-                   node.reference_idx <
-                       static_cast<int>(program.outputs.node_idx_to_slot.size()))
-                      ? program.outputs.node_idx_to_slot[static_cast<std::size_t>(
-                            node.reference_idx)]
-                      : -1;
+    op.ref_slot =
+        (node.reference_idx >= 0 &&
+         node.reference_idx <
+             static_cast<int>(program.outputs.node_idx_to_slot.size()))
+            ? program.outputs.node_idx_to_slot[static_cast<std::size_t>(
+                  node.reference_idx)]
+            : -1;
     op.blocker_slot =
         (node.blocker_idx >= 0 &&
          node.blocker_idx <
@@ -134,20 +136,20 @@ KernelProgram compile_kernel_program(const IrContext &ir) {
         program.max_child_count = op.child_count;
       }
       for (int i = 0; i < node.child_count; ++i) {
-        int child_idx =
+        const int child_idx =
             ir.node_children[static_cast<std::size_t>(node.child_begin + i)];
         if (child_idx >= 0 &&
             child_idx <
                 static_cast<int>(program.outputs.node_idx_to_slot.size())) {
-          int child_slot = program.outputs.node_idx_to_slot[static_cast<std::size_t>(
-              child_idx)];
-          program.children.push_back(child_slot);
+          program.children.push_back(
+              program.outputs.node_idx_to_slot[static_cast<std::size_t>(
+                  child_idx)]);
         } else {
           program.children.push_back(-1);
         }
       }
     }
-    if (op.code == KernelOpCode::Guard) {
+    if (op.code == VectorOpCode::TreeGuard) {
       program.has_guard = true;
     }
     program.ops.push_back(op);

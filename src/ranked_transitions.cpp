@@ -615,18 +615,17 @@ ranked_source_bits_for_ids(const uuber::NativeContext &ctx,
 
 inline int ranked_program_slot_for_node(const uuber::NativeContext &ctx,
                                         int node_idx) {
-  if (!ctx.kernel_program.valid) {
+  if (!ctx.tree_program || !ctx.tree_program->valid) {
     return 0;
   }
   if (node_idx < 0 || node_idx >=
                           static_cast<int>(
-                              ctx.kernel_program.outputs.node_idx_to_slot.size())) {
+                              ctx.tree_program->outputs.node_idx_to_slot.size())) {
     return 0;
   }
-  const int out_slot = ctx.kernel_program.outputs.node_idx_to_slot
+  const int out_slot = ctx.tree_program->outputs.node_idx_to_slot
       [static_cast<std::size_t>(node_idx)];
-  if (out_slot < 0 ||
-      out_slot >= static_cast<int>(ctx.kernel_program.ops.size())) {
+  if (out_slot < 0 || out_slot >= static_cast<int>(ctx.tree_program->ops.size())) {
     return 0;
   }
   return out_slot;

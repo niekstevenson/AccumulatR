@@ -332,7 +332,7 @@ inline bool coupling_evaluate_outcome_density_batch(
   return evaluator_node_density_with_competitors_batch_internal(
       ctx, info.node_id, times, component_idx, nullptr, false, nullptr, false,
       comp_use, trial_params, trial_type_key, include_na_donors,
-      outcome_label_context_idx, density_out, nullptr, nullptr,
+      outcome_label_context_idx, density_out, nullptr,
       trial_params_soa_batch);
 }
 
@@ -766,7 +766,7 @@ inline bool evaluate_labelref_node_batch(
     bool need_cdf, std::vector<double> *density_out,
     std::vector<double> *survival_out, std::vector<double> *cdf_out,
     const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch) {
-  if (ref.node_id < 0 || !ctx.kernel_program.valid) {
+  if (ref.node_id < 0 || !ctx.tree_program || !ctx.tree_program->valid) {
     return false;
   }
   EvalNeed need = static_cast<EvalNeed>(0u);
@@ -787,10 +787,9 @@ inline bool evaluate_labelref_node_batch(
   NodeEvalState state(ctx, 0.0, component_idx, trial_params, trial_type_key,
                       include_na_donors, outcome_idx_context);
   state.trial_params_soa_batch = trial_params_soa_batch;
-  uuber::KernelBatchRuntimeState batch_runtime;
   uuber::KernelNodeBatchValues values;
   if (!evaluator_eval_node_batch_with_state_dense(node_idx, times, state, need,
-                                                  batch_runtime, values)) {
+                                                  values)) {
     return false;
   }
 
@@ -990,7 +989,6 @@ struct GenericCouplingProviderRuntime {
   CouplingEventPayload target_ref{};
   std::vector<CouplingEventPayload> competitor_refs;
   CouplingBatchScratch labelref_scratch;
-  uuber::KernelBatchRuntimeState noderef_kernel_batch_runtime;
 };
 
 inline bool generic_coupling_runtime_has_labelref_fastpath(
@@ -1103,16 +1101,12 @@ inline bool evaluate_generic_terms_resolved_provider_batch(
   }
 
   if (!generic_coupling_runtime_has_labelref_fastpath(runtime)) {
-    uuber::KernelBatchRuntimeState *kernel_batch_runtime =
-        ctx.kernel_program.valid ? &runtime.noderef_kernel_batch_runtime
-                                 : nullptr;
     return evaluator_node_density_with_competitors_batch_internal(
         ctx, generic.node_id, runtime.labelref_scratch.expanded_times,
         component_idx, forced_complete_bits, forced_complete_bits_valid,
         forced_survive_bits, forced_survive_bits_valid,
         generic.competitor_node_ids, trial_params, trial_type_key,
         include_na_donors, outcome_idx_context, terms, nullptr,
-        kernel_batch_runtime,
         &runtime.labelref_scratch.expanded_trial_params_soa);
   }
 
@@ -1318,9 +1312,9 @@ inline int coupling_adaptive_base_segments(double upper) {
 }
 
 inline int coupling_adaptive_max_segments(int base_segments, int depth_cap) {
-  const int shift = std::max(0, std::min(2, depth_cap));
+  const int shift = std::max(0, std::min(5, depth_cap));
   const int scaled = base_segments * (1 << shift);
-  return std::max(base_segments, std::min(24, scaled));
+  return std::max(base_segments, std::min(128, scaled));
 }
 
 template <typename EvalBatchTermsFn>
@@ -1333,7 +1327,7 @@ double integrate_coupling_mass_batch_adaptive(
 
   std::vector<double> terms;
   const bool finite_upper = std::isfinite(upper);
-  const int depth_cap = std::max(1, std::min(2, max_depth));
+  const int depth_cap = std::max(1, std::min(6, max_depth));
   const int base_segments =
       finite_upper ? std::max(1, coupling_adaptive_base_segments(upper)) : 4;
   const int max_segments =
@@ -1467,7 +1461,7 @@ bool integrate_coupling_mass_batch_adaptive(
   std::vector<double> terms;
   std::vector<double> segment_values;
   const bool finite_upper = std::isfinite(upper);
-  const int depth_cap = std::max(1, std::min(2, max_depth));
+  const int depth_cap = std::max(1, std::min(6, max_depth));
   const int base_segments =
       finite_upper ? std::max(1, coupling_adaptive_base_segments(upper)) : 4;
   const int max_segments =
@@ -1607,7 +1601,7 @@ namespace {
 
 struct CouplingProgramInterpreter {
   const uuber::NativeContext &ctx;
-  const OutcomeCouplingProgram &program;
+  const uuber::VectorProgram &program;
   double upper;
   int component_idx;
   const TrialParamSet *trial_params;
@@ -1626,7 +1620,7 @@ struct CouplingProgramInterpreter {
   CouplingBatchScratch scratch;
 
   explicit CouplingProgramInterpreter(
-      const uuber::NativeContext &ctx_, const OutcomeCouplingProgram &program_,
+      const uuber::NativeContext &ctx_, const uuber::VectorProgram &program_,
       double upper_, int component_idx_, const TrialParamSet *trial_params_,
       const std::string &trial_type_key_, double rel_tol_, double abs_tol_,
       int max_depth_, bool include_na_donors_, int outcome_idx_context_,
@@ -1746,41 +1740,50 @@ private:
                                          const std::vector<double> &nodes,
                                          std::vector<double> &out) {
     if (payload_idx >= program.generic_payloads.size() ||
-        payload_idx >= generic_runtimes.size() || !expand_nodes(nodes)) {
+        payload_idx >= generic_runtimes.size()) {
       return false;
     }
     const CouplingGenericPayload &generic = program.generic_payloads[payload_idx];
     GenericCouplingProviderRuntime &runtime = generic_runtimes[payload_idx];
-    if (generic_coupling_runtime_has_labelref_fastpath(runtime)) {
-      return evaluate_labelref_batch(
-                 ctx, runtime.target_ref, component_idx, trial_params,
-                 trial_type_key, include_na_donors, outcome_idx_context,
-                 scratch.expanded_times, false, false, true, nullptr, nullptr,
-                 &out, &runtime.labelref_scratch,
-                 &scratch.expanded_trial_params_soa) &&
-             out.size() == flattened_size(nodes.size());
+    out.assign(flattened_size(nodes.size()), 0.0);
+    if (nodes.empty()) {
+      return true;
     }
 
-    NodeEvalState state(ctx, 0.0, component_idx, trial_params, trial_type_key,
-                        false, -1, nullptr, nullptr,
-                        forced_complete_bits_valid ? forced_complete_bits
-                                                  : nullptr,
-                        forced_complete_bits_valid,
-                        forced_survive_bits_valid ? forced_survive_bits
-                                                  : nullptr,
-                        forced_survive_bits_valid);
-    state.trial_params_soa_batch = &scratch.expanded_trial_params_soa;
-    uuber::KernelNodeBatchValues batch_values;
-    const int node_idx = resolve_dense_node_idx_required(ctx, generic.node_id);
-    if (!evaluator_eval_node_batch_with_state_dense(
-            node_idx, scratch.expanded_times, state, EvalNeed::kCDF,
-            runtime.noderef_kernel_batch_runtime, batch_values) ||
-        batch_values.cdf.size() != scratch.expanded_times.size()) {
-      return false;
-    }
-    out.resize(batch_values.cdf.size());
-    for (std::size_t i = 0; i < out.size(); ++i) {
-      out[i] = clamp_probability(batch_values.cdf[i]);
+    std::vector<double> integral_values;
+    static const std::vector<int> kNoCompetitors;
+    for (std::size_t upper_idx = 0; upper_idx < nodes.size(); ++upper_idx) {
+      const double upper_value = nodes[upper_idx];
+      if (!(upper_value > 0.0)) {
+        continue;
+      }
+      if (!integrate_coupling_mass_batch_adaptive(
+              upper_value, rel_tol, abs_tol, max_depth, point_count(),
+              [&](const std::vector<double> &quad_nodes,
+                  std::vector<double> &terms) -> bool {
+                expand_time_batch_by_trial_params(
+                    quad_nodes, trial_params_soa_batch,
+                    runtime.labelref_scratch.expanded_times,
+                    runtime.labelref_scratch.expanded_trial_params_soa);
+                return evaluator_node_density_with_competitors_batch_internal(
+                           ctx, generic.node_id,
+                           runtime.labelref_scratch.expanded_times,
+                           component_idx, forced_complete_bits,
+                           forced_complete_bits_valid, forced_survive_bits,
+                           forced_survive_bits_valid, kNoCompetitors,
+                           trial_params, trial_type_key, include_na_donors,
+                           outcome_idx_context, terms, nullptr,
+                           &runtime.labelref_scratch.expanded_trial_params_soa) &&
+                       terms.size() == flattened_size(quad_nodes.size());
+              },
+              integral_values) ||
+          integral_values.size() != point_count()) {
+        return false;
+      }
+      for (std::size_t point_idx = 0; point_idx < point_count(); ++point_idx) {
+        out[point_idx * nodes.size() + upper_idx] =
+            clamp_probability(integral_values[point_idx]);
+      }
     }
     return true;
   }
@@ -1840,6 +1843,12 @@ public:
       return false;
     }
     switch (op->code) {
+    case uuber::VectorOpCode::TreeEvent:
+    case uuber::VectorOpCode::TreeAnd:
+    case uuber::VectorOpCode::TreeOr:
+    case uuber::VectorOpCode::TreeNot:
+    case uuber::VectorOpCode::TreeGuard:
+      return false;
     case uuber::VectorOpCode::EventDensity:
     case uuber::VectorOpCode::EventCDF:
     case uuber::VectorOpCode::EventSurvival:
@@ -1945,7 +1954,7 @@ public:
 };
 
 inline bool evaluate_outcome_coupling_vector_program_batch_internal(
-    const uuber::NativeContext &ctx, const OutcomeCouplingProgram &program,
+    const uuber::NativeContext &ctx, const uuber::VectorProgram &program,
     double upper, int component_idx, const TrialParamSet *trial_params,
     const std::string &trial_type_key, double rel_tol, double abs_tol,
     int max_depth, bool include_na_donors, int outcome_idx_context,
@@ -1973,7 +1982,7 @@ inline bool evaluate_outcome_coupling_vector_program_batch_internal(
 } // namespace
 
 double evaluate_outcome_coupling_unified(
-    const uuber::NativeContext &ctx, const OutcomeCouplingProgram &program,
+    const uuber::NativeContext &ctx, const uuber::VectorProgram &program,
     double upper, int component_idx, const TrialParamSet *trial_params,
     const std::string &trial_type_key, double rel_tol, double abs_tol,
     int max_depth, bool include_na_donors, int outcome_idx_context,
@@ -1997,7 +2006,7 @@ double evaluate_outcome_coupling_unified(
 }
 
 bool evaluate_outcome_coupling_unified_batch(
-    const uuber::NativeContext &ctx, const OutcomeCouplingProgram &program,
+    const uuber::NativeContext &ctx, const uuber::VectorProgram &program,
     double upper, int component_idx, const TrialParamSet *trial_params,
     const std::string &trial_type_key, double rel_tol, double abs_tol,
     int max_depth, bool include_na_donors, int outcome_idx_context,

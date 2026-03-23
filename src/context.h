@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <deque>
 #include <limits>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -13,6 +14,8 @@
 #include "accumulator.h"
 
 namespace uuber {
+
+struct VectorProgram;
 
 enum OnsetKind : int {
   ONSET_ABSOLUTE = 0,
@@ -182,21 +185,6 @@ struct KernelOp {
   std::uint32_t flags{IR_NODE_FLAG_NONE};
 };
 
-struct KernelOutputMap {
-  std::vector<int> node_idx_to_slot;
-  std::vector<int> slot_to_node_idx;
-  std::vector<int> outcome_idx_to_slot;
-};
-
-struct KernelProgram {
-  std::vector<KernelOp> ops;
-  std::vector<int> children;
-  KernelOutputMap outputs;
-  int max_child_count{0};
-  bool has_guard{false};
-  bool valid{false};
-};
-
 struct KernelStateTransition {
   int trigger_bit{-1};
   int acc_idx{-1};
@@ -361,7 +349,7 @@ struct NativeContext {
   std::vector<int> pool_label_ids;
   ComponentMap components;
   IrContext ir;
-  KernelProgram kernel_program;
+  std::unique_ptr<VectorProgram> tree_program;
   KernelStateGraph kernel_state_graph;
   TrialParamsSoA base_params_soa;
   bool has_chained_onsets{false};

@@ -12,6 +12,7 @@
 #include "distribution_core.h"
 #include "forced_state.h"
 #include "native_utils.h"
+#include "tree_eval.h"
 #include "time_constraints.h"
 #include "trial_params.h"
 #include "vector_lane_utils.h"
@@ -356,7 +357,6 @@ struct NodeEvalState {
                 bool forced_complete_bits_ptr_valid = false,
                 const uuber::BitsetState *forced_survive_bits_ptr = nullptr,
                 bool forced_survive_bits_ptr_valid = false,
-                uuber::KernelRuntimeState *external_kernel_runtime = nullptr,
                 const ForcedStateView *forced_state_view = nullptr)
       : ctx(ctx_), t(time), trial_params(params_ptr),
         trial_type_key(
@@ -421,20 +421,6 @@ struct NodeEvalState {
         forced_scope_filter, &forced_complete_bits, &forced_complete_bits_valid,
         &forced_survive_bits, &forced_survive_bits_valid,
         forced_label_id_to_bit_idx);
-    if (ctx.kernel_program.valid) {
-      if (external_kernel_runtime) {
-        kernel_runtime_ptr = external_kernel_runtime;
-        if (!kernel_runtime_ptr->initialized ||
-            kernel_runtime_ptr->program != &ctx.kernel_program ||
-            kernel_runtime_ptr->slots.size() != ctx.kernel_program.ops.size()) {
-          uuber::reset_kernel_runtime(ctx.kernel_program, *kernel_runtime_ptr);
-        }
-      } else {
-        uuber::reset_kernel_runtime(ctx.kernel_program, kernel_runtime_storage);
-        kernel_runtime_ptr = &kernel_runtime_storage;
-      }
-      kernel_runtime_ready = (kernel_runtime_ptr != nullptr);
-    }
   }
 
   const uuber::NativeContext &ctx;
@@ -455,17 +441,7 @@ struct NodeEvalState {
   uuber::BitsetState forced_survive_bits;
   bool forced_complete_bits_valid{false};
   bool forced_survive_bits_valid{false};
-  uuber::KernelRuntimeState kernel_runtime_storage;
-  uuber::KernelRuntimeState *kernel_runtime_ptr{nullptr};
-  bool kernel_runtime_ready{false};
 };
-
-inline bool kernel_runtime_cache_safe(const NodeEvalState &state) {
-  return state.forced_scope_filter == nullptr &&
-         !(state.forced_complete_bits_valid && state.forced_complete_bits.any()) &&
-         !(state.forced_survive_bits_valid && state.forced_survive_bits.any()) &&
-         state.time_constraints.empty();
-}
 
 template <typename PointVec, typename SharedFn>
 inline bool eval_vector_lanes_with_shared_node_state_group(
@@ -487,7 +463,7 @@ inline bool eval_vector_lanes_with_shared_node_state_group(
       storage.forced_complete_bits_valid,
       storage.forced_survive_bits_valid ? &storage.forced_survive_bits
                                         : nullptr,
-      storage.forced_survive_bits_valid, nullptr);
+      storage.forced_survive_bits_valid);
   shared_state.trial_params_soa =
       uniform_trial_params_soa != nullptr
           ? uniform_trial_params_soa
@@ -571,8 +547,8 @@ inline bool eval_vector_lanes_with_shared_node_state(
 inline void apply_transition_mask_words(
     const uuber::NativeContext &ctx, int source_mask_begin,
     int source_mask_count, int invalidate_slot, uuber::BitsetState &bits_out,
-    bool &bits_valid, uuber::KernelRuntimeState *kernel_runtime,
-    uuber::KernelBatchRuntimeState *kernel_batch_runtime = nullptr) {
+    bool &bits_valid) {
+  (void)invalidate_slot;
   if (source_mask_begin < 0 || source_mask_count <= 0 ||
       source_mask_begin + source_mask_count >
           static_cast<int>(ctx.ir.node_source_masks.size())) {
@@ -585,13 +561,6 @@ inline void apply_transition_mask_words(
   const std::uint64_t *mask_words =
       &ctx.ir.node_source_masks[static_cast<std::size_t>(source_mask_begin)];
   bits_out.or_words(mask_words, source_mask_count);
-  if (kernel_runtime && invalidate_slot >= 0) {
-    uuber::invalidate_kernel_runtime_from_slot(*kernel_runtime, invalidate_slot);
-  }
-  if (kernel_batch_runtime && invalidate_slot >= 0) {
-    uuber::invalidate_kernel_batch_runtime_from_slot(*kernel_batch_runtime,
-                                                     invalidate_slot);
-  }
 }
 
 struct IntegrationSettings {
@@ -688,16 +657,13 @@ bool evaluator_guard_cdf_batch_prepared(const GuardEvalInput &input,
 NodeEvalResult evaluator_eval_node_recursive_dense(int node_idx,
                                                    NodeEvalState &state,
                                                    EvalNeed need);
-uuber::KernelEventEvalFn evaluator_make_kernel_event_eval(NodeEvalState &state);
 uuber::KernelEventBatchEvalFn evaluator_make_kernel_event_eval_batch(
     NodeEvalState &state);
-uuber::KernelGuardEvalFn evaluator_make_kernel_guard_eval(NodeEvalState &state);
 uuber::KernelGuardBatchEvalFn evaluator_make_kernel_guard_eval_batch(
     NodeEvalState &state);
 bool evaluator_eval_node_batch_with_state_dense(
     int node_idx, const std::vector<double> &times, NodeEvalState &state,
-    EvalNeed need, uuber::KernelBatchRuntimeState &batch_runtime,
-    uuber::KernelNodeBatchValues &out_values);
+    EvalNeed need, uuber::KernelNodeBatchValues &out_values);
 double evaluator_evaluate_survival_with_forced(
     int node_id, const uuber::BitsetState *forced_complete_bits,
     bool forced_complete_bits_valid,
@@ -705,8 +671,7 @@ double evaluator_evaluate_survival_with_forced(
     bool forced_survive_bits_valid, int component_idx, double t,
     const uuber::NativeContext &ctx, const std::string &trial_key,
     const TrialParamSet *trial_params,
-    const TimeConstraintMap *time_constraints,
-    uuber::KernelRuntimeState *kernel_runtime);
+    const TimeConstraintMap *time_constraints);
 bool evaluator_node_density_with_competitors_batch_internal(
     const uuber::NativeContext &ctx, int node_id,
     const std::vector<double> &times, int component_idx,
@@ -718,7 +683,5 @@ bool evaluator_node_density_with_competitors_batch_internal(
     bool include_na_donors, int outcome_idx_context,
     std::vector<double> &density_out,
     const TimeConstraintMap *time_constraints,
-    uuber::KernelBatchRuntimeState *kernel_batch_runtime,
     const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch =
         nullptr);
-void invalidate_kernel_runtime_root(NodeEvalState &state);

@@ -122,13 +122,13 @@ inline bool fill_event_payload_from_event(
   return true;
 }
 
-inline int append_event_payload(OutcomeCouplingProgram &program,
+inline int append_event_payload(uuber::VectorProgram &program,
                                 const uuber::VectorEventRefPayload &payload) {
   program.event_payloads.push_back(payload);
   return static_cast<int>(program.event_payloads.size()) - 1;
 }
 
-inline int append_generic_payload(OutcomeCouplingProgram &program, int node_id,
+inline int append_generic_payload(uuber::VectorProgram &program, int node_id,
                                   const std::vector<int> &competitor_node_ids,
                                   bool requires_exact_scenario_eval) {
   uuber::VectorGenericNodePayload payload;
@@ -139,7 +139,7 @@ inline int append_generic_payload(OutcomeCouplingProgram &program, int node_id,
   return static_cast<int>(program.generic_payloads.size()) - 1;
 }
 
-inline int append_children(OutcomeCouplingProgram &program,
+inline int append_children(uuber::VectorProgram &program,
                            const std::vector<int> &child_slots) {
   const int begin = static_cast<int>(program.children.size());
   program.children.insert(program.children.end(), child_slots.begin(),
@@ -147,7 +147,7 @@ inline int append_children(OutcomeCouplingProgram &program,
   return begin;
 }
 
-inline int append_op(OutcomeCouplingProgram &program, uuber::VectorOpCode code,
+inline int append_op(uuber::VectorProgram &program, uuber::VectorOpCode code,
                      int payload_idx = -1,
                      const std::vector<int> &child_slots = {},
                      double scalar = 1.0,
@@ -167,14 +167,14 @@ inline int append_op(OutcomeCouplingProgram &program, uuber::VectorOpCode code,
   return dst_slot;
 }
 
-inline OutcomeCouplingProgram make_empty_coupling_program() {
-  OutcomeCouplingProgram program;
+inline uuber::VectorProgram make_empty_coupling_program() {
+  uuber::VectorProgram program;
   program.domain = uuber::VectorProgramDomain::OutcomeCoupling;
   return program;
 }
 
 bool lower_pair_program(const uuber::NativeContext &ctx, int node_id,
-                        int competitor_node_id, OutcomeCouplingProgram &out) {
+                        int competitor_node_id, uuber::VectorProgram &out) {
   if (!ctx.ir.valid) {
     return false;
   }
@@ -214,8 +214,6 @@ bool lower_pair_program(const uuber::NativeContext &ctx, int node_id,
   }
 
   out = make_empty_coupling_program();
-  out.pattern = uuber::VectorProgramPattern::CouplingPair;
-
   uuber::VectorEventRefPayload x_payload;
   uuber::VectorEventRefPayload y_payload;
   uuber::VectorEventRefPayload c_payload;
@@ -290,7 +288,7 @@ bool lower_pair_program(const uuber::NativeContext &ctx, int node_id,
 
 bool lower_nway_program(const uuber::NativeContext &ctx, int node_id,
                         const std::vector<int> &competitor_node_ids,
-                        OutcomeCouplingProgram &out) {
+                        uuber::VectorProgram &out) {
   if (!ctx.ir.valid || competitor_node_ids.empty()) {
     return false;
   }
@@ -339,8 +337,6 @@ bool lower_nway_program(const uuber::NativeContext &ctx, int node_id,
   }
 
   out = make_empty_coupling_program();
-  out.pattern = uuber::VectorProgramPattern::CouplingNWay;
-
   uuber::VectorEventRefPayload gate_payload;
   uuber::VectorEventRefPayload target_payload;
   if (!fill_event_payload_from_event(ctx, spec.gate_event_idx,
@@ -395,7 +391,7 @@ bool lower_nway_program(const uuber::NativeContext &ctx, int node_id,
 
 bool lower_generic_program(const uuber::NativeContext &ctx, int node_id,
                            const std::vector<int> &competitor_node_ids,
-                           OutcomeCouplingProgram &out) {
+                           uuber::VectorProgram &out) {
   out = make_empty_coupling_program();
   const bool requires_exact =
       ir_generic_requires_exact_scenario_eval(ctx, node_id, competitor_node_ids);
@@ -403,11 +399,9 @@ bool lower_generic_program(const uuber::NativeContext &ctx, int node_id,
       out, node_id, competitor_node_ids, requires_exact);
   out.requires_exact_scenario_eval = requires_exact;
   if (competitor_node_ids.empty()) {
-    out.pattern = uuber::VectorProgramPattern::CouplingGenericDirectCdf;
     out.outputs.result_slot =
         append_op(out, uuber::VectorOpCode::GenericDirectCDF, payload_idx);
   } else {
-    out.pattern = uuber::VectorProgramPattern::CouplingGenericIntegral;
     const int term =
         append_op(out, uuber::VectorOpCode::GenericIntegrand, payload_idx);
     out.outputs.aux_slots = {term};
@@ -418,11 +412,11 @@ bool lower_generic_program(const uuber::NativeContext &ctx, int node_id,
   return true;
 }
 
-OutcomeCouplingProgram resolve_outcome_coupling_program_impl(
+uuber::VectorProgram resolve_outcome_coupling_program_impl(
     const uuber::NativeContext &ctx, int node_id,
     const std::vector<int> &competitor_node_ids, bool forced_empty,
     bool include_generic_runtime) {
-  OutcomeCouplingProgram program = make_empty_coupling_program();
+  uuber::VectorProgram program = make_empty_coupling_program();
   if (node_id < 0) {
     return program;
   }
@@ -443,7 +437,7 @@ OutcomeCouplingProgram resolve_outcome_coupling_program_impl(
 
 } // namespace
 
-OutcomeCouplingProgram resolve_outcome_coupling_program_with_generic(
+uuber::VectorProgram resolve_outcome_coupling_program_with_generic(
     const uuber::NativeContext &ctx, int node_id,
     const std::vector<int> &competitor_node_ids, bool forced_empty) {
   return resolve_outcome_coupling_program_impl(

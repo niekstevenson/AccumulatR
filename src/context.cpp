@@ -1,6 +1,7 @@
 #include "context.h"
 
 #include "prep_builder.h"
+#include "vector_runtime.h"
 
 #include <atomic>
 #include <cmath>
@@ -42,17 +43,9 @@ std::uint64_t next_native_context_runtime_cache_instance_id() noexcept {
       1, std::memory_order_relaxed);
 }
 
-void clear_native_context_runtime_caches(
-    std::uint64_t runtime_cache_instance_id) noexcept {
-  if (runtime_cache_instance_id == 0) {
-    return;
-  }
+NativeContext::~NativeContext() {
   clear_ranked_distribution_runtime_caches(runtime_cache_instance_id);
   clear_exact_outcome_runtime_caches(runtime_cache_instance_id);
-}
-
-NativeContext::~NativeContext() {
-  clear_native_context_runtime_caches(runtime_cache_instance_id);
 }
 
 Rcpp::XPtr<NativeContext> build_native_context(Rcpp::List prep) {

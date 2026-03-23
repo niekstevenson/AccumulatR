@@ -123,7 +123,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [14.714584]
+              "value": [14.714586]
             }
           ]
         },
@@ -154,10 +154,10 @@
                 "names": {
                   "type": "character",
                   "attributes": {},
-                  "value": ["Left", "NA", "Right", "TIMEOUT"]
+                  "value": ["Left", "Right", "TIMEOUT"]
                 }
               },
-              "value": [0.416939, 6e-06, 0.229897, 0.353158]
+              "value": [0.416939, 0.229898, 0.353163]
             },
             {
               "type": "double",
@@ -232,10 +232,10 @@
                 "names": {
                   "type": "character",
                   "attributes": {},
-                  "value": ["NA", "R1", "R2"]
+                  "value": ["R1", "R2"]
                 }
               },
-              "value": [0, 0.325022, 0.674978]
+              "value": [0.325022, 0.674978]
             },
             {
               "type": "double",
@@ -313,7 +313,7 @@
                   "value": ["Fast", "NA", "Slow"]
                 }
               },
-              "value": [0.16508, 0.000134, 0.834786]
+              "value": [0.16508, 0.00013, 0.83479]
             },
             {
               "type": "double",

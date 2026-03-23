@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <vector>
 
@@ -9,49 +8,66 @@
 #include "evaluator_internal.h"
 #include "trial_params.h"
 
-enum class RankedTransitionStepKind : std::uint8_t {
-  EvalDensityNode = 0,
-  EvalCDFNode = 1,
-  EvalGuardEffective = 2,
-  AddCompleteSources = 3,
-  AddSurviveSources = 4,
-  AddOrWitnessFromSources = 5
+enum class RankedProgramEvalKind : std::uint8_t {
+  Density = 0,
+  CDF = 1,
+  Survival = 2
 };
 
-struct RankedTransitionStep {
-  RankedTransitionStepKind kind{RankedTransitionStepKind::EvalDensityNode};
+struct RankedProgramEvalRef {
+  RankedProgramEvalKind kind{RankedProgramEvalKind::Density};
   int node_idx{-1};
+  int slot{-1};
+};
+
+struct RankedProgramSliceRef {
+  std::vector<RankedProgramEvalRef> evals;
+
+  bool empty() const noexcept { return evals.empty(); }
+};
+
+enum class RankedStateDeltaKind : std::uint8_t {
+  CompleteSources = 0,
+  SurviveSources = 1,
+  OrWitnessSurvive = 2
+};
+
+struct RankedStateDelta {
+  RankedStateDeltaKind kind{RankedStateDeltaKind::CompleteSources};
+  int trigger_bit{-1};
   int source_mask_begin{-1};
   int source_mask_count{0};
   int invalidate_slot{0};
-  bool source_mask_covers_ids{false};
   bool bind_exact_current_time{false};
   std::vector<int> source_ids;
   std::vector<int> source_bits;
 };
 
-struct RankedTransitionTemplate {
-  std::vector<RankedTransitionStep> steps;
+struct RankedBatchPlan {
+  std::vector<RankedStateDelta> deltas;
+  RankedProgramSliceRef slice;
+  bool deterministic{false};
+  bool valid{false};
 };
 
-struct RankedNodeTransitionPlan {
+struct RankedNodeBatchPlan {
   bool compiled{false};
   bool compiling{false};
   bool valid{false};
-  std::vector<RankedTransitionTemplate> transitions;
+  std::vector<RankedBatchPlan> batch_plans;
 };
 
-class RankedTransitionCompiler {
+class RankedBatchPlanner {
 public:
-  explicit RankedTransitionCompiler(const uuber::NativeContext &ctx);
+  explicit RankedBatchPlanner(const uuber::NativeContext &ctx);
 
-  const RankedNodeTransitionPlan &plan_for_node(int node_idx);
+  const RankedNodeBatchPlan &plan_for_node(int node_idx);
 
 private:
   void compile_node(int node_idx);
 
   const uuber::NativeContext &ctx;
-  std::vector<RankedNodeTransitionPlan> plans;
+  std::vector<RankedNodeBatchPlan> plans;
 };
 
 std::vector<int>
@@ -66,7 +82,7 @@ bool sequence_prefix_density_batch_resolved(
     std::vector<double> &density_out,
     const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_by_trial =
         nullptr,
-    RankedTransitionCompiler *transition_compiler = nullptr,
+    RankedBatchPlanner *transition_planner = nullptr,
     const std::vector<const std::vector<int> *> *step_competitor_ids_ptrs =
         nullptr,
     const std::vector<std::vector<int>> *step_persistent_sources = nullptr);

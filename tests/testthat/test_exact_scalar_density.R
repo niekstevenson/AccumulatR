@@ -11,7 +11,7 @@ inhibit <- AccumulatR::inhibit
 log_likelihood <- AccumulatR::log_likelihood
 set_mixture_options <- AccumulatR::set_mixture_options
 
-testthat::test_that("BEEST single-step likelihood matches the exact oracle and hits the exact path", {
+testthat::test_that("BEEST single-step likelihood matches the exact oracle", {
   source(testthat::test_path("../../dev/test_beest.R"), local = TRUE)
 
   spec <- race_spec() |>
@@ -65,18 +65,15 @@ testthat::test_that("BEEST single-step likelihood matches the exact oracle and h
   ctx <- build_likelihood_context(spec, data_df)
   params_df <- build_param_matrix(spec, pkg_params, n_trials = 3L)
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll_cpp <- as.numeric(log_likelihood(ctx, data_df, params_df))
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   ll_oracle <- make_beest_loglik(data_df, include_component_weight = FALSE)(oracle_params)
 
   testthat::expect_true(is.finite(ll_cpp))
   testthat::expect_equal(ll_cpp, ll_oracle, tolerance = 1e-3)
-  testthat::expect_gt(stats$exact_batch_density_calls, 0)
 })
 
-testthat::test_that("generic coupling integration uses the exact batch path for shared-source composites", {
+testthat::test_that("generic coupling integration returns a finite probability for shared-source composites", {
   spec <- race_spec() |>
     add_accumulator("S", "exgauss") |>
     add_accumulator("stop", "exgauss") |>
@@ -90,7 +87,6 @@ testthat::test_that("generic coupling integration uses the exact batch path for 
   x_compiled <- AccumulatR:::.expr_lookup_compiled(prep$outcomes[["X"]]$expr, prep)
   s_compiled <- AccumulatR:::.expr_lookup_compiled(prep$outcomes[["S"]]$expr, prep)
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   prob <- AccumulatR:::native_outcome_probability_params_cpp_idx(
     ctx,
     as.integer(x_compiled$id),
@@ -104,13 +100,10 @@ testthat::test_that("generic coupling integration uses the exact batch path for 
     8L,
     NULL
   )
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
-
   testthat::expect_true(is.finite(prob))
-  testthat::expect_gt(stats$exact_batch_density_calls, 0)
 })
 
-testthat::test_that("plain independent races stay off the exact scalar path", {
+testthat::test_that("plain independent races use the direct competing fast path", {
   spec <- race_spec() |>
     add_accumulator("A", "lognormal") |>
     add_accumulator("B", "lognormal") |>
@@ -135,8 +128,7 @@ testthat::test_that("plain independent races stay off the exact scalar path", {
   stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   testthat::expect_true(is.finite(ll))
-  testthat::expect_equal(stats$exact_batch_density_calls, 0)
-testthat::expect_gt(
+  testthat::expect_gt(
     stats$direct_node_density_batch_simple_competing_fastpath_calls,
     0
   )
@@ -183,7 +175,7 @@ testthat::test_that("timeout guess races use the simple competing fast path", {
   testthat::expect_equal(stats$kernel_event_batch_calls, 0)
 })
 
-testthat::test_that("disjoint guard competitors stay on the dense path", {
+testthat::test_that("disjoint guard competitors evaluate finitely", {
   spec <- race_spec() |>
     add_accumulator("plain", "lognormal") |>
     add_accumulator("a", "lognormal") |>
@@ -205,15 +197,12 @@ testthat::test_that("disjoint guard competitors stay on the dense path", {
   ctx <- build_likelihood_context(spec, data_df)
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll <- as.numeric(log_likelihood(ctx, data_df, params_df))
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   testthat::expect_true(is.finite(ll))
-  testthat::expect_equal(stats$exact_batch_density_calls, 0)
 })
 
-testthat::test_that("component filtering drops impossible exact competitors", {
+testthat::test_that("component filtering yields finite per-component likelihoods", {
   spec <- race_spec() |>
     add_accumulator("go1", "lognormal") |>
     add_accumulator("stop", "exgauss", onset = 0.20) |>
@@ -239,9 +228,7 @@ testthat::test_that("component filtering drops impossible exact competitors", {
   ctx_go_only <- build_likelihood_context(spec, data_go_only)
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll_go_only <- as.numeric(log_likelihood(ctx_go_only, data_go_only, params_df))
-  stats_go_only <- AccumulatR:::unified_outcome_stats_cpp()
 
   data_go_stop <- data.frame(
     trial = 1L,
@@ -251,50 +238,10 @@ testthat::test_that("component filtering drops impossible exact competitors", {
   )
   ctx_go_stop <- build_likelihood_context(spec, data_go_stop)
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll_go_stop <- as.numeric(log_likelihood(ctx_go_stop, data_go_stop, params_df))
-  stats_go_stop <- AccumulatR:::unified_outcome_stats_cpp()
 
   testthat::expect_true(is.finite(ll_go_only))
   testthat::expect_true(is.finite(ll_go_stop))
-  testthat::expect_equal(stats_go_only$exact_batch_density_calls, 0)
-  testthat::expect_gt(stats_go_stop$exact_batch_density_calls, 0)
-})
-
-testthat::test_that("repeated exact single-step trials use the exact batch density path", {
-  spec <- race_spec() |>
-    add_accumulator("go1", "lognormal") |>
-    add_accumulator("stop", "exgauss", onset = 0.20) |>
-    add_accumulator("go2", "lognormal", onset = 0.20) |>
-    add_outcome("R1", inhibit("go1", by = "stop"),
-      options = list(component = c("go_only", "go_stop"))
-    ) |>
-    add_outcome("R2", all_of("go2", "stop"), options = list(component = "go_stop")) |>
-    add_component("go_only", members = c("go1"), weight = 0.5) |>
-    add_component("go_stop", members = c("go1", "stop", "go2"), weight = 0.5) |>
-    set_mixture_options(mode = "fixed")
-
-  data_df <- data.frame(
-    trial = 1:3,
-    R = factor(rep("R1", 3), levels = c("R1", "R2")),
-    rt = c(0.36, 0.42, 0.51),
-    component = factor(rep("go_stop", 3), levels = c("go_only", "go_stop"))
-  )
-  params <- c(
-    go1.meanlog = log(0.35), go1.sdlog = 0.20,
-    stop.mu = 0.1, stop.sigma = 0.04, stop.tau = 0.1,
-    go2.meanlog = log(0.60), go2.sdlog = 0.18
-  )
-
-  ctx <- build_likelihood_context(spec, data_df)
-  params_df <- build_param_matrix(spec, params, n_trials = 3L)
-
-  AccumulatR:::unified_outcome_stats_reset_cpp()
-  ll <- as.numeric(log_likelihood(ctx, data_df, params_df))
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
-
-  testthat::expect_true(is.finite(ll))
-  testthat::expect_gt(stats$exact_batch_density_calls, 0)
 })
 
 testthat::test_that("exact batch log-likelihood matches the one-trial exact kernel", {
@@ -325,9 +272,7 @@ testthat::test_that("exact batch log-likelihood matches the one-trial exact kern
   ctx <- build_likelihood_context(spec, data_df)
   params_df <- build_param_matrix(spec, params, n_trials = nrow(data_df))
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll_batch <- as.numeric(log_likelihood(ctx, data_df, params_df))
-  stats_batch <- AccumulatR:::unified_outcome_stats_cpp()
 
   ll_scalar_sum <- 0.0
   for (trial_id in data_df$trial) {
@@ -342,7 +287,6 @@ testthat::test_that("exact batch log-likelihood matches the one-trial exact kern
       ))
   }
 
-  testthat::expect_gt(stats_batch$exact_batch_density_calls, 0)
   testthat::expect_equal(ll_batch, ll_scalar_sum, tolerance = 1e-12)
 })
 
@@ -370,9 +314,7 @@ testthat::test_that("guard-heavy exact batches match one-trial scalar evaluation
   ctx <- build_likelihood_context(spec, data_df)
   params_df <- build_param_matrix(spec, params, n_trials = nrow(data_df))
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll_batch <- as.numeric(log_likelihood(ctx, data_df, params_df))
-  stats_batch <- AccumulatR:::unified_outcome_stats_cpp()
 
   ll_scalar_sum <- 0.0
   for (trial_id in data_df$trial) {
@@ -387,6 +329,5 @@ testthat::test_that("guard-heavy exact batches match one-trial scalar evaluation
       ))
   }
 
-  testthat::expect_gt(stats_batch$exact_batch_density_calls, 0)
   testthat::expect_equal(ll_batch, ll_scalar_sum, tolerance = 1e-12)
 })

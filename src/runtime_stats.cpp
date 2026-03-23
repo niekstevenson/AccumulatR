@@ -20,13 +20,6 @@ void record_unified_outcome_coupling_eval_call() {
   ++g_unified_outcome_runtime_stats.evaluate_outcome_coupling_unified_calls;
 }
 
-void record_unified_outcome_exact_batch_density_call() {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats.exact_batch_density_calls;
-}
-
 void record_unified_outcome_exact_node_batch_call(std::uint64_t active_points,
                                                   bool recursive_call) {
   if (!g_unified_outcome_runtime_stats_enabled) {
@@ -190,98 +183,6 @@ void record_unified_outcome_direct_batch_spec_reject_node() {
   ++g_unified_outcome_runtime_stats.direct_batch_spec_reject_node;
 }
 
-void record_unified_outcome_ranked_batch_spec_attempt() {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats.ranked_batch_spec_attempts;
-}
-
-void record_unified_outcome_ranked_batch_spec_reject_input() {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats.ranked_batch_spec_reject_input;
-}
-
-void record_unified_outcome_ranked_batch_spec_reject_contribution() {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats.ranked_batch_spec_reject_contribution;
-}
-
-void record_unified_outcome_ranked_batch_spec_reject_shape() {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats.ranked_batch_spec_reject_shape;
-}
-
-void record_unified_outcome_ranked_batch_template_cache_hit() {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats.ranked_batch_template_cache_hits;
-}
-
-void record_unified_outcome_ranked_batch_template_cache_miss() {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats.ranked_batch_template_cache_misses;
-}
-
-void record_unified_outcome_cpp_loglik_outcome_mass_group_batch_call(
-    std::uint64_t trial_count) {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats.cpp_loglik_outcome_mass_group_batch_calls;
-  g_unified_outcome_runtime_stats
-      .cpp_loglik_outcome_mass_group_batch_trials_total += trial_count;
-}
-
-void record_unified_outcome_cpp_loglik_outcome_mass_group_batch_exec_failure() {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats
-       .cpp_loglik_outcome_mass_group_batch_exec_failures;
-}
-
-void record_unified_outcome_cpp_loglik_direct_group_batch_call(
-    std::uint64_t trial_count) {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats.cpp_loglik_direct_group_batch_calls;
-  g_unified_outcome_runtime_stats.cpp_loglik_direct_group_batch_trials_total +=
-      trial_count;
-}
-
-void record_unified_outcome_cpp_loglik_direct_group_batch_exec_failure() {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats.cpp_loglik_direct_group_batch_exec_failures;
-}
-
-void record_unified_outcome_cpp_loglik_direct_shared_trigger_group_batch_call(
-    std::uint64_t expanded_point_count, std::uint64_t compressed_point_count) {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats
-       .cpp_loglik_direct_shared_trigger_group_batch_calls;
-  g_unified_outcome_runtime_stats
-      .cpp_loglik_direct_shared_trigger_expanded_points_total +=
-      expanded_point_count;
-  g_unified_outcome_runtime_stats
-      .cpp_loglik_direct_shared_trigger_compressed_points_total +=
-      compressed_point_count;
-}
-
 void record_unified_outcome_kernel_event_batch_call(
     std::uint64_t point_count, bool uses_param_matrix) {
   if (!g_unified_outcome_runtime_stats_enabled) {
@@ -354,8 +255,6 @@ Rcpp::List unified_outcome_stats_cpp() {
           static_cast<double>(
               g_unified_outcome_runtime_stats
                   .evaluate_outcome_coupling_unified_calls),
-      Rcpp::Named("exact_batch_density_calls") = static_cast<double>(
-          g_unified_outcome_runtime_stats.exact_batch_density_calls),
       Rcpp::Named("exact_node_batch_calls") = static_cast<double>(
           g_unified_outcome_runtime_stats.exact_node_batch_calls),
       Rcpp::Named("exact_node_batch_active_points_total") = static_cast<double>(
@@ -432,48 +331,6 @@ Rcpp::List unified_outcome_stats_cpp() {
           g_unified_outcome_runtime_stats.direct_batch_spec_reject_shape),
       Rcpp::Named("direct_batch_spec_reject_node") = static_cast<double>(
           g_unified_outcome_runtime_stats.direct_batch_spec_reject_node),
-      Rcpp::Named("ranked_batch_spec_attempts") = static_cast<double>(
-          g_unified_outcome_runtime_stats.ranked_batch_spec_attempts),
-      Rcpp::Named("ranked_batch_spec_reject_input") = static_cast<double>(
-          g_unified_outcome_runtime_stats.ranked_batch_spec_reject_input),
-      Rcpp::Named("ranked_batch_spec_reject_contribution") =
-          static_cast<double>(g_unified_outcome_runtime_stats
-                                  .ranked_batch_spec_reject_contribution),
-      Rcpp::Named("ranked_batch_spec_reject_shape") = static_cast<double>(
-          g_unified_outcome_runtime_stats.ranked_batch_spec_reject_shape),
-      Rcpp::Named("ranked_batch_template_cache_hits") = static_cast<double>(
-          g_unified_outcome_runtime_stats.ranked_batch_template_cache_hits),
-      Rcpp::Named("ranked_batch_template_cache_misses") = static_cast<double>(
-          g_unified_outcome_runtime_stats.ranked_batch_template_cache_misses),
-      Rcpp::Named("cpp_loglik_outcome_mass_group_batch_calls") =
-          static_cast<double>(g_unified_outcome_runtime_stats
-                                  .cpp_loglik_outcome_mass_group_batch_calls),
-      Rcpp::Named("cpp_loglik_outcome_mass_group_batch_trials_total") =
-          static_cast<double>(
-              g_unified_outcome_runtime_stats
-                  .cpp_loglik_outcome_mass_group_batch_trials_total),
-      Rcpp::Named("cpp_loglik_outcome_mass_group_batch_exec_failures") =
-          static_cast<double>(
-              g_unified_outcome_runtime_stats
-                  .cpp_loglik_outcome_mass_group_batch_exec_failures),
-      Rcpp::Named("cpp_loglik_direct_group_batch_calls") =
-          static_cast<double>(g_unified_outcome_runtime_stats
-                                  .cpp_loglik_direct_group_batch_calls),
-      Rcpp::Named("cpp_loglik_direct_group_batch_trials_total") =
-          static_cast<double>(g_unified_outcome_runtime_stats
-                                  .cpp_loglik_direct_group_batch_trials_total),
-      Rcpp::Named("cpp_loglik_direct_group_batch_exec_failures") =
-          static_cast<double>(g_unified_outcome_runtime_stats
-                                  .cpp_loglik_direct_group_batch_exec_failures),
-      Rcpp::Named("cpp_loglik_direct_shared_trigger_group_batch_calls") =
-          static_cast<double>(g_unified_outcome_runtime_stats
-                                  .cpp_loglik_direct_shared_trigger_group_batch_calls),
-      Rcpp::Named("cpp_loglik_direct_shared_trigger_expanded_points_total") =
-          static_cast<double>(g_unified_outcome_runtime_stats
-                                  .cpp_loglik_direct_shared_trigger_expanded_points_total),
-      Rcpp::Named("cpp_loglik_direct_shared_trigger_compressed_points_total") =
-          static_cast<double>(g_unified_outcome_runtime_stats
-                                  .cpp_loglik_direct_shared_trigger_compressed_points_total),
       Rcpp::Named("kernel_event_batch_calls") = static_cast<double>(
           g_unified_outcome_runtime_stats.kernel_event_batch_calls),
       Rcpp::Named("kernel_event_batch_points_total") = static_cast<double>(

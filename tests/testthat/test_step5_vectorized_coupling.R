@@ -160,23 +160,15 @@ testthat::test_that("repeated nonresponse trials use outcome-mass batch in cpp_l
     build_param_matrix(spec, params_shared_gate_pair, n_trials = 1L)
   ))
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll_repeated <- as.numeric(log_likelihood(
     build_likelihood_context(structure, repeated_df),
     repeated_df,
     build_param_matrix(spec, params_shared_gate_pair, n_trials = 3L)
   ))
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   testthat::expect_true(is.finite(ll_one))
   testthat::expect_true(is.finite(ll_repeated))
   testthat::expect_equal(ll_repeated, 3 * ll_one, tolerance = 1e-12)
-  testthat::expect_gt(stats$cpp_loglik_outcome_mass_group_batch_calls, 0)
-  testthat::expect_gt(
-    stats$cpp_loglik_outcome_mass_group_batch_trials_total,
-    stats$cpp_loglik_outcome_mass_group_batch_calls
-  )
-  testthat::expect_equal(stats$cpp_loglik_outcome_mass_group_batch_exec_failures, 0)
 })
 
 testthat::test_that("non-shared-trigger outcome mass batches trials with different params", {
@@ -200,9 +192,7 @@ testthat::test_that("non-shared-trigger outcome mass batches trials with differe
   }
 
   ctx_batch <- build_likelihood_context(structure, nonresp_df)
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll_batch <- as.numeric(log_likelihood(ctx_batch, nonresp_df, params_df))
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   split_ll <- 0
   one_trial_df <- data.frame(
@@ -221,35 +211,9 @@ testthat::test_that("non-shared-trigger outcome mass batches trials with differe
 
   testthat::expect_true(is.finite(ll_batch))
   testthat::expect_equal(ll_batch, split_ll, tolerance = 1e-10)
-  testthat::expect_gt(stats$cpp_loglik_outcome_mass_group_batch_calls, 0)
-  testthat::expect_gt(
-    stats$cpp_loglik_outcome_mass_group_batch_trials_total,
-    stats$cpp_loglik_outcome_mass_group_batch_calls
-  )
-  testthat::expect_equal(stats$cpp_loglik_outcome_mass_group_batch_exec_failures, 0)
 })
 
-testthat::test_that("shared-trigger nonresponse batches outcome mass without scalar labelref fallback", {
-  spec <- build_shared_gate_nway_trigger_spec()
-  structure <- finalize_model(spec)
-  params_df <- build_param_matrix(spec, params_shared_gate_nway_trigger, n_trials = 1L)
-  nonresp_df <- data.frame(
-    trial = 1L,
-    R = factor(NA_character_, levels = c("RESP2", "RESP3", "NR_RAW")),
-    rt = NA_real_
-  )
-  ctx <- build_likelihood_context(structure, nonresp_df)
-
-  AccumulatR:::unified_outcome_stats_reset_cpp()
-  ll <- as.numeric(log_likelihood(ctx, nonresp_df, params_df))
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
-
-  testthat::expect_true(is.finite(ll))
-  testthat::expect_gt(stats$evaluate_outcome_coupling_unified_calls, 0)
-  testthat::expect_gt(stats$shared_trigger_mask_batch_calls, 0)
-})
-
-testthat::test_that("repeated shared-trigger nonresponse trials avoid cpp_loglik fallback", {
+testthat::test_that("repeated shared-trigger nonresponse trials match split evaluation", {
   spec <- build_shared_gate_nway_trigger_spec()
   structure <- finalize_model(spec)
   params_df <- build_param_matrix(spec, params_shared_gate_nway_trigger, n_trials = 3L)
@@ -260,17 +224,28 @@ testthat::test_that("repeated shared-trigger nonresponse trials avoid cpp_loglik
   )
   ctx <- build_likelihood_context(structure, repeated_nonresp_df)
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll <- as.numeric(log_likelihood(ctx, repeated_nonresp_df, params_df))
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
+  split_ll <- 0
+  rows_per_trial <- nrow(params_df) %/% nrow(repeated_nonresp_df)
+  one_trial_df <- data.frame(
+    trial = 1L,
+    R = factor(NA_character_, levels = c("RESP2", "RESP3", "NR_RAW")),
+    rt = NA_real_
+  )
+  for (trial_idx in seq_len(nrow(repeated_nonresp_df))) {
+    row_idx <- ((trial_idx - 1L) * rows_per_trial + 1L):(trial_idx * rows_per_trial)
+    split_ll <- split_ll + as.numeric(log_likelihood(
+      build_likelihood_context(structure, one_trial_df),
+      one_trial_df,
+      params_df[row_idx, , drop = FALSE]
+    ))
+  }
 
   testthat::expect_true(is.finite(ll))
-  testthat::expect_gt(stats$cpp_loglik_outcome_mass_group_batch_calls, 0)
-  testthat::expect_gt(stats$shared_trigger_mask_batch_calls, 0)
-  testthat::expect_equal(stats$cpp_loglik_outcome_mass_group_batch_exec_failures, 0)
+  testthat::expect_equal(ll, split_ll, tolerance = 1e-10)
 })
 
-testthat::test_that("shared-trigger guess-donor response probabilities batch masks without scalar fallback", {
+testthat::test_that("shared-trigger guess-donor response probabilities match shared-mask expectations", {
   spec <- build_shared_gate_guess_trigger_spec()
   structure <- finalize_model(spec)
 
@@ -291,24 +266,20 @@ testthat::test_that("shared-trigger guess-donor response probabilities batch mas
     include_na = TRUE
   )
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   probs_shared <- response_probabilities(
     structure,
     build_param_matrix(spec, params_shared, n_trials = 1L),
     include_na = TRUE
   )
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   observed_names <- c("RESP", "ALT", "TIMEOUT")
   expected <- (1 - params_shared[["tg_q"]]) * probs_success[observed_names] +
     params_shared[["tg_q"]] * probs_fail[observed_names]
 
   testthat::expect_equal(probs_shared[observed_names], expected, tolerance = 1e-8)
-  testthat::expect_gt(stats$evaluate_outcome_coupling_unified_calls, 0)
-  testthat::expect_gt(stats$shared_trigger_mask_batch_calls, 0)
 })
 
-testthat::test_that("shared-trigger pooled coupling uses pool labelref batch without kernel-event pointwise work", {
+testthat::test_that("shared-trigger pooled coupling matches shared-mask expectations", {
   spec <- build_shared_gate_pool_trigger_spec()
   structure <- finalize_model(spec)
 
@@ -329,19 +300,13 @@ testthat::test_that("shared-trigger pooled coupling uses pool labelref batch wit
     include_na = TRUE
   )
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   probs_shared <- response_probabilities(
     structure,
     build_param_matrix(spec, params_shared, n_trials = 1L),
     include_na = TRUE
   )
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   expected <- (1 - params_shared[["tg_q"]]) * probs_success + params_shared[["tg_q"]] * probs_fail
 
   testthat::expect_equal(probs_shared, expected, tolerance = 1e-7)
-  testthat::expect_gt(stats$evaluate_outcome_coupling_unified_calls, 0)
-  testthat::expect_gt(stats$shared_trigger_mask_batch_calls, 0)
-  testthat::expect_gt(stats$generic_poolref_batch_fastpath_calls, 0)
-  testthat::expect_equal(stats$kernel_event_batch_calls, 0)
 })

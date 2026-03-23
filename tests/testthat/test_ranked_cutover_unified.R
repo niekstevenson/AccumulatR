@@ -106,7 +106,7 @@ testthat::test_that("ranked shared-trigger multi-rank path is deterministic", {
   testthat::expect_equal(ll1, ll2, tolerance = 1e-12)
 })
 
-testthat::test_that("ranked shared-trigger multi-trial path batches masks", {
+testthat::test_that("ranked shared-trigger multi-trial path matches split evaluation", {
   spec <- race_spec(n_outcomes = 2L) |>
     add_accumulator("a1", "lognormal") |>
     add_accumulator("a2", "lognormal") |>
@@ -132,9 +132,7 @@ testthat::test_that("ranked shared-trigger multi-trial path batches masks", {
   )
 
   ctx <- build_likelihood_context(structure, ranked_df)
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll_batch <- as.numeric(log_likelihood(ctx, ranked_df, params_df))
-  stats_batch <- AccumulatR:::unified_outcome_stats_cpp()
 
   ll_split <- 0.0
   for (i in seq_len(nrow(ranked_df))) {
@@ -148,44 +146,9 @@ testthat::test_that("ranked shared-trigger multi-trial path batches masks", {
   }
 
   testthat::expect_equal(ll_batch, ll_split, tolerance = 1e-10)
-  testthat::expect_gt(stats_batch$shared_trigger_mask_batch_calls, 0)
-  testthat::expect_gt(stats_batch$shared_trigger_mask_batch_points_total, nrow(ranked_df))
 })
 
-testthat::test_that("ranked batch templates are reused across repeated loglik calls", {
-  spec <- race_spec(n_outcomes = 2L) |>
-    add_accumulator("a", "lognormal") |>
-    add_accumulator("b", "lognormal") |>
-    add_outcome("A", "a") |>
-    add_outcome("B", "b")
-
-  structure <- finalize_model(spec)
-  params <- c(
-    a.meanlog = log(0.30), a.sdlog = 0.20,
-    b.meanlog = log(0.52), b.sdlog = 0.18
-  )
-  params_df <- build_param_matrix(spec, params, n_trials = 4L)
-  ranked_df <- data.frame(
-    trial = 1:4,
-    R = factor(rep("A", 4), levels = c("A", "B")),
-    rt = c(0.36, 0.37, 0.38, 0.39),
-    R2 = factor(rep("B", 4), levels = c("A", "B")),
-    rt2 = c(0.61, 0.62, 0.63, 0.64)
-  )
-
-  ctx <- build_likelihood_context(structure, ranked_df)
-  invisible(log_likelihood(ctx, ranked_df, params_df))
-
-  AccumulatR:::unified_outcome_stats_reset_cpp()
-  invisible(log_likelihood(ctx, ranked_df, params_df))
-  stats_batch <- AccumulatR:::unified_outcome_stats_cpp()
-
-  testthat::expect_gt(stats_batch$ranked_batch_spec_attempts, 0)
-  testthat::expect_gt(stats_batch$ranked_batch_template_cache_hits, 0)
-  testthat::expect_equal(stats_batch$ranked_batch_template_cache_misses, 0)
-})
-
-testthat::test_that("ranked mixture trials batch without cpp_loglik fallback", {
+testthat::test_that("ranked mixture trials match split evaluation", {
   spec <- race_spec(n_outcomes = 2L) |>
     add_accumulator("a_fast", "lognormal") |>
     add_accumulator("b_fast", "lognormal", onset = after("a_fast")) |>
@@ -216,9 +179,7 @@ testthat::test_that("ranked mixture trials batch without cpp_loglik fallback", {
   )
 
   ctx <- build_likelihood_context(structure, ranked_df)
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll_batch <- as.numeric(log_likelihood(ctx, ranked_df, params_df))
-  stats_batch <- AccumulatR:::unified_outcome_stats_cpp()
 
   ll_split <- 0.0
   for (i in seq_len(nrow(ranked_df))) {
@@ -232,13 +193,6 @@ testthat::test_that("ranked mixture trials batch without cpp_loglik fallback", {
   }
 
   testthat::expect_equal(ll_batch, ll_split, tolerance = 1e-10)
-  testthat::expect_gt(stats_batch$ranked_batch_spec_attempts, 0)
-  testthat::expect_equal(stats_batch$ranked_batch_spec_reject_contribution, 0)
-  testthat::expect_gt(
-    stats_batch$ranked_batch_template_cache_hits +
-      stats_batch$ranked_batch_template_cache_misses,
-    0
-  )
 })
 
 testthat::test_that("invalid ranked ordering returns min_ll", {

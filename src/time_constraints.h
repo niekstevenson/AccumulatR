@@ -57,6 +57,19 @@ inline bool time_constraint_valid(const SourceTimeConstraint &constraint) {
   return true;
 }
 
+inline bool time_constraint_equal(const SourceTimeConstraint &lhs,
+                                  const SourceTimeConstraint &rhs) {
+  return lhs.has_exact == rhs.has_exact &&
+         lhs.has_lower == rhs.has_lower &&
+         lhs.has_upper == rhs.has_upper &&
+         (!lhs.has_exact ||
+          time_constraint_same_time(lhs.exact_time, rhs.exact_time)) &&
+         (!lhs.has_lower ||
+          time_constraint_same_time(lhs.lower, rhs.lower)) &&
+         (!lhs.has_upper ||
+          time_constraint_same_time(lhs.upper, rhs.upper));
+}
+
 inline const SourceTimeConstraint *
 time_constraints_find(const TimeConstraintMap *time_constraints, int source_id) {
   if (time_constraints == nullptr) {

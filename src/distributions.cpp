@@ -257,8 +257,8 @@ inline bool simple_direct_outcome_fastpath_supported(
 inline bool coupling_program_requires_exact_scenario_eval(
     const OutcomeCouplingProgram *program) {
   return program != nullptr && program->valid &&
-         program->kind == OutcomeCouplingOpKind::GenericNodeIntegral &&
-         program->generic.requires_exact_scenario_eval;
+         program->domain == uuber::VectorProgramDomain::OutcomeCoupling &&
+         program->requires_exact_scenario_eval;
 }
 
 inline OutcomeCouplingProgram resolve_density_coupling_program(
@@ -4998,41 +4998,29 @@ inline bool build_ranked_sequence_batch_spec(
     const std::vector<double> &component_weights,
     const std::vector<ComponentCacheEntry> &cache_entries,
     RankedSequenceBatchSpec &out) {
-  record_unified_outcome_ranked_batch_spec_attempt();
   out = RankedSequenceBatchSpec{};
   if (!eval_input.valid ||
       eval_input.probability_transform != TrialProbabilityTransform::Identity ||
       eval_input.sequence_length <= 1u || eval_input.sequence_time_data == nullptr) {
-    record_unified_outcome_ranked_batch_spec_reject_input();
     return false;
   }
 
   RankedSequenceTemplateCacheKey cache_key;
   if (!build_ranked_sequence_template_cache_key(
           eval_input, component_indices, component_weights, cache_key)) {
-    record_unified_outcome_ranked_batch_spec_reject_input();
     return false;
   }
   auto &template_cache = ranked_sequence_template_cache_for_ctx(ctx);
   auto template_it = template_cache.find(cache_key);
   if (template_it != template_cache.end()) {
-    record_unified_outcome_ranked_batch_template_cache_hit();
     const RankedSequenceTemplateCacheEntry &entry = template_it->second;
     if (!entry.buildable) {
-      if (entry.reject_reason ==
-          RankedSequenceTemplateRejectReason::Contribution) {
-        record_unified_outcome_ranked_batch_spec_reject_contribution();
-      } else if (entry.reject_reason ==
-                 RankedSequenceTemplateRejectReason::Shape) {
-        record_unified_outcome_ranked_batch_spec_reject_shape();
-      }
       return false;
     }
     out.template_ptr = &entry.batch_template;
     out.time_data = eval_input.sequence_time_data;
     return true;
   }
-  record_unified_outcome_ranked_batch_template_cache_miss();
 
   std::vector<TrialContributionSpec> contributions;
   if (!build_trial_contributions_unified(
@@ -5043,7 +5031,6 @@ inline bool build_ranked_sequence_batch_spec(
     entry.buildable = false;
     entry.reject_reason = RankedSequenceTemplateRejectReason::Contribution;
     template_cache.emplace(std::move(cache_key), std::move(entry));
-    record_unified_outcome_ranked_batch_spec_reject_contribution();
     return false;
   }
 
@@ -5060,7 +5047,6 @@ inline bool build_ranked_sequence_batch_spec(
       entry.buildable = false;
       entry.reject_reason = RankedSequenceTemplateRejectReason::Shape;
       template_cache.emplace(std::move(cache_key), std::move(entry));
-      record_unified_outcome_ranked_batch_spec_reject_shape();
       return false;
     }
   }
@@ -5667,7 +5653,7 @@ inline bool evaluate_unified_ranked_trial_batch_idx(
     uuber::NativeContext &ctx,
     const std::vector<TrialContributionSpec> &contributions,
     const TrialParamSet *params_ptr, const SharedTriggerPlan *trigger_plan,
-    RankedTransitionCompiler *sequence_transition_compiler,
+    RankedBatchPlanner *sequence_transition_planner,
     double &total_out) {
   total_out = 0.0;
   if (contributions.empty()) {
@@ -5687,10 +5673,10 @@ inline bool evaluate_unified_ranked_trial_batch_idx(
     }
   }
 
-  RankedTransitionCompiler local_transition_compiler(ctx);
-  RankedTransitionCompiler *compiler =
-      sequence_transition_compiler ? sequence_transition_compiler
-                                   : &local_transition_compiler;
+  RankedBatchPlanner local_transition_planner(ctx);
+  RankedBatchPlanner *planner =
+      sequence_transition_planner ? sequence_transition_planner
+                                  : &local_transition_planner;
 
   SharedTriggerPlan local_plan;
   const SharedTriggerPlan *plan_ptr = trigger_plan;
@@ -5728,7 +5714,7 @@ inline bool evaluate_unified_ranked_trial_batch_idx(
       const bool batched = sequence_prefix_density_batch_resolved(
           ctx, spec.sequence_outcome_indices, spec.sequence_node_indices,
           times_by_point, spec.component_idx, params_ptr, trial_type_key,
-          density_out, &mask_batch_ptr->mask_param_ptrs, compiler,
+          density_out, &mask_batch_ptr->mask_param_ptrs, planner,
           &spec.step_competitor_ids_ptrs, &spec.step_persistent_sources);
       if (!batched || density_out.size() != mask_batch_ptr->mask_weights.size()) {
         return false;
@@ -5748,7 +5734,7 @@ inline bool evaluate_unified_ranked_trial_batch_idx(
     const bool batched = sequence_prefix_density_batch_resolved(
         ctx, spec.sequence_outcome_indices, spec.sequence_node_indices,
         times_by_point, spec.component_idx, params_ptr, trial_type_key,
-        density_out, nullptr, compiler, &spec.step_competitor_ids_ptrs,
+        density_out, nullptr, planner, &spec.step_competitor_ids_ptrs,
         &spec.step_persistent_sources);
     if (!batched || density_out.size() != 1u) {
       return false;
@@ -6495,8 +6481,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
 
   for (auto &kv : single_step_batch_groups) {
     const std::vector<int> &trial_indices = kv.second;
-    record_unified_outcome_cpp_loglik_direct_group_batch_call(
-        static_cast<std::uint64_t>(trial_indices.size()));
     const int first_trial = trial_indices.front();
     if (first_trial < 0 || first_trial >= n_trials) {
       continue;
@@ -6549,11 +6533,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
               *ctx, &param_sets[static_cast<std::size_t>(rep_trial_idx)],
               *group_trigger_plan_ptr, mask_batch) &&
           !mask_batch.mask_param_ptrs.empty()) {
-        record_unified_outcome_cpp_loglik_direct_shared_trigger_group_batch_call(
-            static_cast<std::uint64_t>(trial_indices.size() *
-                                       mask_batch.mask_param_ptrs.size()),
-            static_cast<std::uint64_t>(trial_indices.size() *
-                                       mask_batch.mask_param_ptrs.size()));
       }
     }
 
@@ -6567,7 +6546,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
         group_trigger_plan_ptr, use_shared_trigger_eval, density_out, nullptr,
         &batch_runtime);
     if (!batched || density_out.size() != trial_indices.size()) {
-      record_unified_outcome_cpp_loglik_direct_group_batch_exec_failure();
       Rcpp::stop("Direct group batch evaluation failed");
     }
 
@@ -6590,8 +6568,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
 
   for (auto &kv : direct_trial_batch_groups) {
     const std::vector<int> &trial_indices = kv.second;
-    record_unified_outcome_cpp_loglik_direct_group_batch_call(
-        static_cast<std::uint64_t>(trial_indices.size()));
     const int first_trial = trial_indices.front();
     if (first_trial < 0 || first_trial >= n_trials) {
       continue;
@@ -6672,7 +6648,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       }
     }
     if (!batch_ok) {
-      record_unified_outcome_cpp_loglik_direct_group_batch_exec_failure();
       Rcpp::stop("Direct group batch evaluation failed");
     }
 
@@ -6787,7 +6762,7 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
                 static_cast<std::uint64_t>(expanded_times_by_trial.size()));
 
             std::vector<double> total_probabilities(trial_indices.size(), 0.0);
-            RankedTransitionCompiler ranked_batch_transition_compiler(*ctx);
+            RankedBatchPlanner ranked_batch_transition_planner(*ctx);
             bool batch_ok = true;
             for (const RankedSequenceContributionTemplate &contribution :
                  group_template->contributions) {
@@ -6798,7 +6773,7 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
                   contribution.component_idx,
                   &param_sets[static_cast<std::size_t>(rep_trial_idx)],
                   contribution.trial_type_key, expanded_density_out,
-                  &expanded_params_soa, &ranked_batch_transition_compiler,
+                  &expanded_params_soa, &ranked_batch_transition_planner,
                   &contribution.step_competitor_ids_ptrs,
                   &contribution.step_persistent_sources);
               if (!batched ||
@@ -6847,7 +6822,7 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       }
 
       std::vector<double> total_probabilities(trial_indices.size(), 0.0);
-      RankedTransitionCompiler ranked_batch_transition_compiler(*ctx);
+      RankedBatchPlanner ranked_batch_transition_planner(*ctx);
       bool batch_ok = true;
       for (const RankedSequenceContributionTemplate &contribution :
            group_template->contributions) {
@@ -6858,7 +6833,7 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
             contribution.component_idx,
             &param_sets[static_cast<std::size_t>(rep_trial_idx)],
             contribution.trial_type_key, density_out, nullptr,
-            &ranked_batch_transition_compiler,
+            &ranked_batch_transition_planner,
             &contribution.step_competitor_ids_ptrs,
             &contribution.step_persistent_sources);
         if (!batched || density_out.size() != trial_indices.size()) {
@@ -6891,7 +6866,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
             static_cast<int>(param_value_group_representative_trial.size()) ||
         group_key.trigger_plan_idx < 0 ||
         group_key.trigger_plan_idx >= static_cast<int>(trigger_plans.size())) {
-      record_unified_outcome_cpp_loglik_outcome_mass_group_batch_exec_failure();
       continue;
     }
 
@@ -6899,7 +6873,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
         param_value_group_representative_trial[static_cast<std::size_t>(
             group_key.param_group_idx)];
     if (rep_trial_idx < 0 || rep_trial_idx >= n_trials) {
-      record_unified_outcome_cpp_loglik_outcome_mass_group_batch_exec_failure();
       continue;
     }
 
@@ -6918,7 +6891,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       group_coupling_programs = &forced_bundle.nonresponse_coupling_programs;
     }
     if (*group_component_indices != *group_key.component_indices) {
-      record_unified_outcome_cpp_loglik_outcome_mass_group_batch_exec_failure();
       continue;
     }
     if (group_key.nonresponse_outcome_indices != &nonresponse_outcome_indices) {
@@ -6935,7 +6907,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
             *ctx, &param_sets[static_cast<std::size_t>(rep_trial_idx)],
             group_trigger_plan, mask_batch) ||
         mask_batch.mask_param_ptrs.empty()) {
-      record_unified_outcome_cpp_loglik_outcome_mass_group_batch_exec_failure();
       continue;
     }
 
@@ -6979,12 +6950,8 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       }
     }
     if (!group_valid) {
-      record_unified_outcome_cpp_loglik_outcome_mass_group_batch_exec_failure();
       continue;
     }
-
-    record_unified_outcome_cpp_loglik_outcome_mass_group_batch_call(
-        static_cast<std::uint64_t>(trial_indices.size()));
     record_unified_outcome_shared_trigger_mask_batch_call(
         static_cast<std::uint64_t>(mask_batch.mask_param_ptrs.size()),
         static_cast<std::uint64_t>(expanded_component_weights_batch.size()));
@@ -7000,7 +6967,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
             expanded_probabilities, group_coupling_programs,
             &expanded_trial_to_point_index, &mask_batch.mask_param_ptrs) ||
         expanded_probabilities.size() != expanded_component_weights_batch.size()) {
-      record_unified_outcome_cpp_loglik_outcome_mass_group_batch_exec_failure();
       continue;
     }
 
@@ -7041,7 +7007,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
     const std::vector<int> &trial_indices = kv.second;
     const int first_trial = trial_indices.front();
     if (first_trial < 0 || first_trial >= n_trials) {
-      record_unified_outcome_cpp_loglik_outcome_mass_group_batch_exec_failure();
       continue;
     }
 
@@ -7133,7 +7098,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       trial_to_point_index.push_back(point_idx);
     }
     if (!group_valid) {
-      record_unified_outcome_cpp_loglik_outcome_mass_group_batch_exec_failure();
       continue;
     }
 
@@ -7169,8 +7133,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       }
     }
 
-    record_unified_outcome_cpp_loglik_outcome_mass_group_batch_call(
-        static_cast<std::uint64_t>(trial_indices.size()));
     const std::size_t unique_point_count = trial_params_batch.size();
     const std::size_t chunk_point_limit =
         (unique_point_count <= 64u ||
@@ -7236,7 +7198,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       }
     }
     if (!batch_ok || assigned_trial_count != trial_indices.size()) {
-      record_unified_outcome_cpp_loglik_outcome_mass_group_batch_exec_failure();
       continue;
     }
 

@@ -14,6 +14,7 @@
 #include "native_utils.h"
 #include "time_constraints.h"
 #include "trial_params.h"
+#include "vector_lane_utils.h"
 
 inline int accumulator_label_id_of(const uuber::NativeContext &ctx,
                                    int acc_idx) {
@@ -190,6 +191,52 @@ inline std::vector<int> ensure_source_ids(const uuber::NativeContext &ctx,
   const int node_idx = resolve_dense_node_idx_required(ctx, node_id_or_idx);
   const uuber::IrNode &node = ir_node_required(ctx, node_idx);
   return ensure_source_ids(ctx, node);
+}
+
+std::vector<int> evaluator_gather_blocker_sources(
+    const uuber::NativeContext &ctx, int guard_node_idx);
+
+inline std::vector<int>
+relevant_source_ids_for_batch_node(const uuber::NativeContext &ctx,
+                                   int node_idx) {
+  static const std::vector<int> kEmpty;
+  if (node_idx < 0 || static_cast<std::size_t>(node_idx) >= ctx.ir.nodes.size()) {
+    return kEmpty;
+  }
+  const uuber::IrNode &node = ir_node_required(ctx, node_idx);
+
+  std::vector<int> ids = ensure_source_ids(ctx, node);
+
+  if ((node.op == uuber::IrNodeOp::EventAcc ||
+       node.op == uuber::IrNodeOp::EventPool) &&
+      node.event_idx >= 0 &&
+      node.event_idx < static_cast<int>(ctx.ir.events.size())) {
+    const uuber::IrEvent &event =
+        ctx.ir.events[static_cast<std::size_t>(node.event_idx)];
+    if (event.acc_idx >= 0 &&
+        event.acc_idx < static_cast<int>(ctx.accumulators.size())) {
+      const uuber::NativeAccumulator &acc =
+          ctx.accumulators[static_cast<std::size_t>(event.acc_idx)];
+      if (acc.onset_kind == uuber::ONSET_AFTER_ACCUMULATOR &&
+          acc.onset_source_acc_idx >= 0 &&
+          acc.onset_source_acc_idx < static_cast<int>(ctx.accumulators.size())) {
+        ids.push_back(accumulator_label_id_of(ctx, acc.onset_source_acc_idx));
+      } else if (acc.onset_kind == uuber::ONSET_AFTER_POOL &&
+                 acc.onset_source_pool_idx >= 0 &&
+                 acc.onset_source_pool_idx < static_cast<int>(ctx.pools.size())) {
+        ids.push_back(pool_label_id_of(ctx, acc.onset_source_pool_idx));
+      }
+    }
+  }
+
+  if (node.op == uuber::IrNodeOp::Guard && node.blocker_idx >= 0) {
+    std::vector<int> blocker_sources =
+        evaluator_gather_blocker_sources(ctx, node_idx);
+    ids.insert(ids.end(), blocker_sources.begin(), blocker_sources.end());
+  }
+
+  sort_unique(ids);
+  return ids;
 }
 
 inline bool evaluator_resolve_label_time_constraint(
@@ -418,6 +465,107 @@ inline bool kernel_runtime_cache_safe(const NodeEvalState &state) {
          !(state.forced_complete_bits_valid && state.forced_complete_bits.any()) &&
          !(state.forced_survive_bits_valid && state.forced_survive_bits.any()) &&
          state.time_constraints.empty();
+}
+
+template <typename PointVec, typename SharedFn>
+inline bool eval_vector_lanes_with_shared_node_state_group(
+    const uuber::NativeContext &ctx, const PointVec &points,
+    const std::vector<std::uint8_t> *active_mask, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    std::size_t anchor_idx, const uuber::VectorRelevantStateStorage &storage,
+    SharedFn &&shared_eval,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr) {
+  if (anchor_idx >= points.size()) {
+    return false;
+  }
+  const uuber::VectorLaneRef anchor = uuber::vector_lane_ref(points, anchor_idx);
+  NodeEvalState shared_state(
+      ctx, anchor.t, component_idx, trial_params, trial_type_key, false, -1,
+      &storage.time_constraints, nullptr,
+      storage.forced_complete_bits_valid ? &storage.forced_complete_bits
+                                         : nullptr,
+      storage.forced_complete_bits_valid,
+      storage.forced_survive_bits_valid ? &storage.forced_survive_bits
+                                        : nullptr,
+      storage.forced_survive_bits_valid, nullptr);
+  shared_state.trial_params_soa =
+      uniform_trial_params_soa != nullptr
+          ? uniform_trial_params_soa
+          : uuber::resolve_vector_lane_trial_params_soa(
+                ctx, anchor, trial_params, shared_state.trial_params_soa);
+  if (!shared_state.trial_params_soa) {
+    return false;
+  }
+
+  std::vector<const uuber::TrialParamsSoA *> point_trial_params_soa;
+  if (uniform_trial_params_soa == nullptr) {
+    std::size_t first_trial_param_mismatch = points.size();
+    const uuber::TrialParamsSoA *mismatch_trial_params_soa = nullptr;
+    for (std::size_t i = 0; i < points.size(); ++i) {
+      if (!uuber::vector_lane_active(active_mask, i)) {
+        continue;
+      }
+      const uuber::TrialParamsSoA *point_soa =
+          uuber::resolve_vector_lane_trial_params_soa(
+              ctx, uuber::vector_lane_ref(points, i), trial_params,
+              shared_state.trial_params_soa);
+      if (point_soa != shared_state.trial_params_soa) {
+        first_trial_param_mismatch = i;
+        mismatch_trial_params_soa = point_soa;
+        break;
+      }
+    }
+    if (first_trial_param_mismatch < points.size()) {
+      point_trial_params_soa.assign(points.size(),
+                                    shared_state.trial_params_soa);
+      point_trial_params_soa[first_trial_param_mismatch] =
+          mismatch_trial_params_soa;
+      for (std::size_t i = first_trial_param_mismatch + 1; i < points.size();
+           ++i) {
+        if (!uuber::vector_lane_active(active_mask, i)) {
+          continue;
+        }
+        point_trial_params_soa[i] =
+            uuber::resolve_vector_lane_trial_params_soa(
+                ctx, uuber::vector_lane_ref(points, i), trial_params,
+                shared_state.trial_params_soa);
+      }
+      shared_state.trial_params_soa_batch = &point_trial_params_soa;
+    }
+  }
+
+  return shared_eval(shared_state, active_mask);
+}
+
+template <typename PointVec, typename SharedFn, typename FallbackFn,
+          typename RecordPartitionFn>
+inline bool eval_vector_lanes_with_shared_node_state(
+    const uuber::NativeContext &ctx, const PointVec &points,
+    const std::vector<std::uint8_t> *active_mask,
+    const std::vector<int> &relevant_source_ids, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    SharedFn &&shared_eval, FallbackFn &&fallback_eval,
+    RecordPartitionFn &&record_partition,
+    bool fallback_on_singleton_partition = false,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr) {
+  auto &shared_eval_ref = shared_eval;
+  auto &fallback_eval_ref = fallback_eval;
+  auto &record_partition_ref = record_partition;
+  return uuber::eval_vector_lanes_with_shared_state(
+      ctx, points, active_mask, relevant_source_ids,
+      [&](std::size_t group_anchor_idx,
+          const uuber::VectorRelevantStateStorage &group_storage,
+          const std::vector<std::uint8_t> *group_mask) -> bool {
+        return eval_vector_lanes_with_shared_node_state_group(
+            ctx, points, group_mask, component_idx, trial_params,
+            trial_type_key, group_anchor_idx, group_storage, shared_eval_ref,
+            uniform_trial_params_soa);
+      },
+      [&]() -> bool { return fallback_eval_ref(); },
+      [&](std::uint64_t active_count, std::uint64_t group_count) {
+        record_partition_ref(active_count, group_count);
+      },
+      fallback_on_singleton_partition);
 }
 
 inline void apply_transition_mask_words(

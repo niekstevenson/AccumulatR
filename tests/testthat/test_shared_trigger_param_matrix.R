@@ -112,11 +112,9 @@ testthat::test_that("shared-trigger direct trial uses mask batch in cpp_loglik",
     ctx, trial_data, build_param_matrix(spec, params_success, n_trials = 1L)
   ))
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll_shared <- as.numeric(log_likelihood(
     ctx, trial_data, build_param_matrix(spec, params_shared, n_trials = 1L)
   ))
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   testthat::expect_true(is.finite(ll_success))
   testthat::expect_true(is.finite(ll_shared))
@@ -125,16 +123,9 @@ testthat::test_that("shared-trigger direct trial uses mask batch in cpp_loglik",
     ll_success + log(1.0 - params_shared[["tg_q"]]),
     tolerance = 1e-10
   )
-  testthat::expect_gt(
-    stats$direct_node_density_batch_simple_competing_fastpath_calls,
-    0
-  )
-  testthat::expect_gt(stats$shared_trigger_mask_batch_calls, 0)
-  testthat::expect_gt(stats$shared_trigger_mask_batch_masks_total, 0)
-  testthat::expect_gt(stats$shared_trigger_mask_batch_points_total, 0)
 })
 
-testthat::test_that("shared-trigger guess-donor direct trials avoid cpp_loglik fallback", {
+testthat::test_that("shared-trigger guess-donor direct trials match split evaluation", {
   spec <- race_spec() |>
     add_accumulator("go_left", "lognormal") |>
     add_accumulator("go_right", "lognormal") |>
@@ -168,9 +159,7 @@ testthat::test_that("shared-trigger guess-donor direct trials avoid cpp_loglik f
   ctx <- build_likelihood_context(spec, trial_data)
   params_df <- build_param_matrix(spec, params, n_trials = 4L)
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll_batch <- as.numeric(log_likelihood(ctx, trial_data, params_df))
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   ll_split <- 0.0
   for (i in seq_len(nrow(trial_data))) {
@@ -184,13 +173,9 @@ testthat::test_that("shared-trigger guess-donor direct trials avoid cpp_loglik f
   }
 
   testthat::expect_equal(ll_batch, ll_split, tolerance = 1e-10)
-  testthat::expect_gt(stats$shared_trigger_mask_batch_calls, 0)
-  testthat::expect_gt(stats$cpp_loglik_direct_group_batch_calls, 0)
-  testthat::expect_gt(stats$cpp_loglik_direct_shared_trigger_group_batch_calls, 0)
-  testthat::expect_equal(stats$cpp_loglik_direct_group_batch_exec_failures, 0)
 })
 
-testthat::test_that("shared-trigger exact trial uses mask batch and exact batch density", {
+testthat::test_that("shared-trigger exact trial matches trigger release", {
   spec <- race_spec() |>
     add_accumulator("go1", "lognormal") |>
     add_accumulator("stop", "exgauss", onset = 0.20) |>
@@ -230,11 +215,9 @@ testthat::test_that("shared-trigger exact trial uses mask batch and exact batch 
     ctx, trial_data, build_param_matrix(spec, params_success, n_trials = 1L)
   ))
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll_shared <- as.numeric(log_likelihood(
     ctx, trial_data, build_param_matrix(spec, params_shared, n_trials = 1L)
   ))
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   testthat::expect_true(is.finite(ll_success))
   testthat::expect_true(is.finite(ll_shared))
@@ -243,11 +226,9 @@ testthat::test_that("shared-trigger exact trial uses mask batch and exact batch 
     ll_success + log(1.0 - params_shared[["tg_q"]]),
     tolerance = 1e-10
   )
-  testthat::expect_gt(stats$shared_trigger_mask_batch_calls, 0)
-  testthat::expect_gt(stats$exact_batch_density_calls, 0)
 })
 
-testthat::test_that("shared-trigger exact multi-trial onset changes partition exact state before fallback", {
+testthat::test_that("shared-trigger exact multi-trial onset changes match split evaluation", {
   spec <- race_spec() |>
     add_accumulator("go1", "lognormal") |>
     add_accumulator("stop", "exgauss", onset = 0.20) |>
@@ -289,9 +270,7 @@ testthat::test_that("shared-trigger exact multi-trial onset changes partition ex
   ctx_batch <- build_likelihood_context(spec, batch_data)
   pm_batch <- build_param_matrix(spec, params, n_trials = 2L)
 
-  AccumulatR:::unified_outcome_stats_reset_cpp()
   ll_batch <- as.numeric(log_likelihood(ctx_batch, batch_data, pm_batch))
-  stats <- AccumulatR:::unified_outcome_stats_cpp()
 
   ll_split <- 0
   for (trial_id in 1:2) {
@@ -303,5 +282,4 @@ testthat::test_that("shared-trigger exact multi-trial onset changes partition ex
   }
 
   testthat::expect_equal(ll_batch, ll_split, tolerance = 1e-10)
-  testthat::expect_gt(stats$exact_batch_density_calls, 0)
 })

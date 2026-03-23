@@ -117,6 +117,26 @@ struct RankedFrontierGroup {
   std::size_t end{0};
 };
 
+struct RankedLaneGroupBatch {
+  ExactScenarioBatch rank_batch;
+  ExactScenarioBatch denom_batch;
+  std::vector<std::size_t> source_state_indices;
+
+  void clear() {
+    rank_batch.clear();
+    denom_batch.clear();
+    source_state_indices.clear();
+  }
+
+  void reserve(std::size_t n, bool need_denom) {
+    rank_batch.reserve(n);
+    if (need_denom) {
+      denom_batch.reserve(n);
+    }
+    source_state_indices.reserve(n);
+  }
+};
+
 inline std::uint64_t ranked_hash_bitset(const uuber::BitsetState &bits,
                                         bool bits_valid) {
   if (!bits_valid) {
@@ -358,6 +378,146 @@ inline bool ranked_apply_persistent_survive_sources(
   return ok;
 }
 
+inline void ranked_lane_batch_append_frontier_state(
+    ExactScenarioBatch &batch, double t, std::size_t density_index,
+    const RankedFrontierStorage &states, std::size_t state_index,
+    const uuber::TrialParamsSoA *trial_params_soa) {
+  batch.t.push_back(t);
+  batch.density_index.push_back(density_index);
+  batch.weight.push_back(1.0);
+  batch.trial_params_soa.push_back(trial_params_soa);
+  batch.forced_complete_bits.push_back(states.forced_complete_bits[state_index]);
+  batch.forced_survive_bits.push_back(states.forced_survive_bits[state_index]);
+  batch.forced_complete_bits_valid.push_back(
+      states.forced_complete_bits_valid[state_index]);
+  batch.forced_survive_bits_valid.push_back(
+      states.forced_survive_bits_valid[state_index]);
+  batch.time_constraints.push_back(states.time_constraints[state_index]);
+}
+
+inline void ranked_materialize_lane_group_batch(
+    const RankedFrontierStorage &states,
+    const std::vector<RankedFrontierStateRef> &active_state_refs,
+    const std::vector<const double *> &times_by_trial, std::size_t rank_idx,
+    std::size_t group_begin, std::size_t group_end,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa,
+    RankedLaneGroupBatch &lane_batch) {
+  lane_batch.clear();
+  const bool need_denom = rank_idx > 0u;
+  lane_batch.reserve(group_end - group_begin, need_denom);
+
+  std::size_t local_idx = 0u;
+  for (std::size_t ref_idx = group_begin; ref_idx < group_end;
+       ++ref_idx, ++local_idx) {
+    const RankedFrontierStateRef &state_ref = active_state_refs[ref_idx];
+    const std::size_t state_index = state_ref.state_index;
+    const std::size_t trial_slot =
+        static_cast<std::size_t>(states.trial_slot[state_index]);
+    const uuber::TrialParamsSoA *trial_params_soa =
+        uniform_trial_params_soa ? uniform_trial_params_soa
+                                 : state_ref.trial_params_soa;
+    ranked_lane_batch_append_frontier_state(
+        lane_batch.rank_batch, times_by_trial[trial_slot][rank_idx], local_idx,
+        states, state_index, trial_params_soa);
+    if (need_denom) {
+      ranked_lane_batch_append_frontier_state(
+          lane_batch.denom_batch, times_by_trial[trial_slot][rank_idx - 1u],
+          local_idx, states, state_index, trial_params_soa);
+    }
+    lane_batch.source_state_indices.push_back(state_index);
+  }
+}
+
+inline SequenceStateKey ranked_scenario_state_key(const ExactScenarioBatch &points,
+                                                  std::size_t idx) {
+  return sequence_state_key(
+      points.forced_complete_bits[idx],
+      idx < points.forced_complete_bits_valid.size() &&
+          points.forced_complete_bits_valid[idx] != 0u,
+      points.forced_survive_bits[idx],
+      idx < points.forced_survive_bits_valid.size() &&
+          points.forced_survive_bits_valid[idx] != 0u,
+      points.time_constraints[idx]);
+}
+
+inline void collapse_ranked_scenario_candidates_into_frontier(
+    ExactScenarioBatch &points, std::vector<int> &trial_slots,
+    RankedFrontierStorage &next_states,
+    std::vector<RankedStateCollapseIndex> &next_state_collapse_order,
+    std::vector<RankedStateCollapseIndex> &collapse_order,
+    double branch_eps);
+
+inline bool ranked_reduce_scenario_batch_into_frontier(
+    const uuber::NativeContext &ctx, const RankedFrontierStorage &states,
+    const std::vector<std::size_t> &source_state_indices,
+    const std::vector<double> &denom,
+    const std::vector<int> &persistent_sources,
+    bool apply_persistent_sources,
+    const std::vector<std::uint8_t> *active_mask,
+    const std::vector<double> *scenario_survival, ExactScenarioBatch &points,
+    RankedFrontierStorage &next_states,
+    std::vector<RankedStateCollapseIndex> &next_state_collapse_order,
+    std::vector<int> &scenario_trial_slots,
+    std::vector<RankedStateCollapseIndex> &scenario_collapse_order,
+    double branch_eps) {
+  scenario_trial_slots.assign(points.size(), -1);
+  scenario_collapse_order.clear();
+  scenario_collapse_order.reserve(points.size());
+
+  for (std::size_t point_idx = 0; point_idx < points.size(); ++point_idx) {
+    if (active_mask != nullptr &&
+        (point_idx >= active_mask->size() || (*active_mask)[point_idx] == 0u)) {
+      continue;
+    }
+    if (points.density_index[point_idx] >= source_state_indices.size()) {
+      return false;
+    }
+    const std::size_t lane_idx = points.density_index[point_idx];
+    const std::size_t source_state_index = source_state_indices[lane_idx];
+    const double denom_val = (lane_idx < denom.size()) ? denom[lane_idx] : 0.0;
+    if (!std::isfinite(denom_val) || denom_val <= branch_eps) {
+      continue;
+    }
+    double weight =
+        states.weight[source_state_index] * (points.weight[point_idx] / denom_val);
+    if (!std::isfinite(weight) || weight <= branch_eps) {
+      continue;
+    }
+    if (scenario_survival != nullptr) {
+      if (point_idx >= scenario_survival->size()) {
+        return false;
+      }
+      const double surv = clamp_probability((*scenario_survival)[point_idx]);
+      if (!std::isfinite(surv) || surv <= branch_eps) {
+        continue;
+      }
+      weight *= surv;
+      if (!std::isfinite(weight) || weight <= branch_eps) {
+        continue;
+      }
+    }
+    if (apply_persistent_sources && !persistent_sources.empty()) {
+      if (!ranked_apply_persistent_survive_sources(ctx, persistent_sources,
+                                                   points, point_idx)) {
+        continue;
+      }
+    }
+
+    points.weight[point_idx] = weight;
+    scenario_trial_slots[point_idx] = states.trial_slot[source_state_index];
+    RankedStateCollapseIndex collapse_index;
+    collapse_index.candidate_index = point_idx;
+    collapse_index.trial_slot = states.trial_slot[source_state_index];
+    collapse_index.state_key = ranked_scenario_state_key(points, point_idx);
+    scenario_collapse_order.push_back(std::move(collapse_index));
+  }
+
+  collapse_ranked_scenario_candidates_into_frontier(
+      points, scenario_trial_slots, next_states, next_state_collapse_order,
+      scenario_collapse_order, branch_eps);
+  return true;
+}
+
 inline void collapse_ranked_scenario_candidates_into_frontier(
     ExactScenarioBatch &points, std::vector<int> &trial_slots,
     RankedFrontierStorage &next_states,
@@ -453,51 +613,8 @@ ranked_source_bits_for_ids(const uuber::NativeContext &ctx,
   return out;
 }
 
-inline bool ranked_mask_covers_source_ids(const uuber::NativeContext &ctx,
-                                          const RankedTransitionStep &step) {
-  if (step.source_mask_begin < 0 || step.source_mask_count <= 0 ||
-      step.source_ids.empty()) {
-    return false;
-  }
-  if (step.source_mask_begin + step.source_mask_count >
-      static_cast<int>(ctx.ir.node_source_masks.size())) {
-    return false;
-  }
-  const std::uint64_t *mask_words =
-      &ctx.ir.node_source_masks[static_cast<std::size_t>(step.source_mask_begin)];
-  for (std::size_t i = 0; i < step.source_ids.size(); ++i) {
-    const int source_id = step.source_ids[i];
-    if (source_id == NA_INTEGER || source_id < 0) {
-      continue;
-    }
-    int source_bit_idx = (i < step.source_bits.size()) ? step.source_bits[i] : -1;
-    if (source_bit_idx < 0) {
-      auto bit_it = ctx.ir.label_id_to_bit_idx.find(source_id);
-      if (bit_it == ctx.ir.label_id_to_bit_idx.end()) {
-        return false;
-      }
-      source_bit_idx = bit_it->second;
-    }
-    if (source_bit_idx < 0) {
-      return false;
-    }
-    const int mask_word_idx = source_bit_idx / 64;
-    const int mask_bit_offset = source_bit_idx % 64;
-    if (mask_word_idx < 0 || mask_word_idx >= step.source_mask_count) {
-      return false;
-    }
-    const std::uint64_t word =
-        mask_words[static_cast<std::size_t>(mask_word_idx)];
-    const std::uint64_t bit = (std::uint64_t{1} << mask_bit_offset);
-    if ((word & bit) == 0u) {
-      return false;
-    }
-  }
-  return true;
-}
-
-inline int ranked_invalidate_slot_for_node(const uuber::NativeContext &ctx,
-                                           int node_idx) {
+inline int ranked_program_slot_for_node(const uuber::NativeContext &ctx,
+                                        int node_idx) {
   if (!ctx.kernel_program.valid) {
     return 0;
   }
@@ -515,9 +632,18 @@ inline int ranked_invalidate_slot_for_node(const uuber::NativeContext &ctx,
   return out_slot;
 }
 
-inline void ranked_attach_source_mask_for_node(const uuber::NativeContext &ctx,
-                                               int node_idx,
-                                               RankedTransitionStep &step) {
+inline RankedProgramEvalRef ranked_make_eval_ref(
+    const uuber::NativeContext &ctx, RankedProgramEvalKind kind, int node_idx) {
+  RankedProgramEvalRef ref;
+  ref.kind = kind;
+  ref.node_idx = node_idx;
+  ref.slot = ranked_program_slot_for_node(ctx, node_idx);
+  return ref;
+}
+
+inline void ranked_attach_delta_for_node(const uuber::NativeContext &ctx,
+                                         int node_idx,
+                                         RankedStateDelta &delta) {
   if (node_idx < 0 || node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
     return;
   }
@@ -529,38 +655,53 @@ inline void ranked_attach_source_mask_for_node(const uuber::NativeContext &ctx,
       static_cast<int>(ctx.ir.node_source_masks.size())) {
     return;
   }
-  step.source_mask_begin = node.source_mask_begin;
-  step.source_mask_count = node.source_mask_count;
-  step.invalidate_slot = ranked_invalidate_slot_for_node(ctx, node_idx);
-  step.source_mask_covers_ids = ranked_mask_covers_source_ids(ctx, step);
+  delta.source_mask_begin = node.source_mask_begin;
+  delta.source_mask_count = node.source_mask_count;
+  delta.invalidate_slot = ranked_program_slot_for_node(ctx, node_idx);
+}
+
+inline bool ranked_batch_plan_is_deterministic(const RankedBatchPlan &plan) {
+  if (!plan.valid || plan.slice.evals.size() != 1u ||
+      plan.slice.evals.front().kind != RankedProgramEvalKind::Density) {
+    return false;
+  }
+  for (const RankedStateDelta &delta : plan.deltas) {
+    if (delta.kind == RankedStateDeltaKind::OrWitnessSurvive) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline void ranked_finalize_batch_plan(RankedBatchPlan &plan) {
+  plan.valid = !plan.slice.empty();
+  plan.deterministic = ranked_batch_plan_is_deterministic(plan);
 }
 
 } // namespace
 
-RankedTransitionCompiler::RankedTransitionCompiler(
-    const uuber::NativeContext &ctx_)
+RankedBatchPlanner::RankedBatchPlanner(const uuber::NativeContext &ctx_)
     : ctx(ctx_), plans(ctx_.ir.nodes.size()) {}
 
-const RankedNodeTransitionPlan &
-RankedTransitionCompiler::plan_for_node(int node_idx) {
-  static const RankedNodeTransitionPlan kInvalidPlan;
+const RankedNodeBatchPlan &RankedBatchPlanner::plan_for_node(int node_idx) {
+  static const RankedNodeBatchPlan kInvalidPlan;
   if (node_idx < 0 || node_idx >= static_cast<int>(plans.size())) {
     return kInvalidPlan;
   }
-  RankedNodeTransitionPlan &plan = plans[static_cast<std::size_t>(node_idx)];
+  RankedNodeBatchPlan &plan = plans[static_cast<std::size_t>(node_idx)];
   if (!plan.compiled) {
     compile_node(node_idx);
   }
   return plan;
 }
 
-void RankedTransitionCompiler::compile_node(int node_idx) {
-  RankedNodeTransitionPlan &plan = plans[static_cast<std::size_t>(node_idx)];
+void RankedBatchPlanner::compile_node(int node_idx) {
+  RankedNodeBatchPlan &plan = plans[static_cast<std::size_t>(node_idx)];
   if (plan.compiled || plan.compiling) {
     return;
   }
   plan.compiling = true;
-  plan.transitions.clear();
+  plan.batch_plans.clear();
   plan.valid = false;
 
   if (node_idx < 0 || node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
@@ -573,23 +714,22 @@ void RankedTransitionCompiler::compile_node(int node_idx) {
   switch (node.op) {
   case uuber::IrNodeOp::EventAcc:
   case uuber::IrNodeOp::EventPool: {
-    RankedTransitionTemplate tr;
-    RankedTransitionStep eval_step;
-    eval_step.kind = RankedTransitionStepKind::EvalDensityNode;
-    eval_step.node_idx = node_idx;
-    tr.steps.push_back(std::move(eval_step));
+    RankedBatchPlan batch_plan;
+    batch_plan.slice.evals.push_back(
+        ranked_make_eval_ref(ctx, RankedProgramEvalKind::Density, node_idx));
     std::vector<int> source_ids = ensure_source_ids(ctx, node);
     if (!source_ids.empty()) {
-      RankedTransitionStep add_step;
-      add_step.kind = RankedTransitionStepKind::AddCompleteSources;
-      add_step.bind_exact_current_time =
+      RankedStateDelta delta;
+      delta.kind = RankedStateDeltaKind::CompleteSources;
+      delta.bind_exact_current_time =
           (node.op == uuber::IrNodeOp::EventAcc);
-      add_step.source_ids = std::move(source_ids);
-      add_step.source_bits = ranked_source_bits_for_ids(ctx, add_step.source_ids);
-      ranked_attach_source_mask_for_node(ctx, node_idx, add_step);
-      tr.steps.push_back(std::move(add_step));
+      delta.source_ids = std::move(source_ids);
+      delta.source_bits = ranked_source_bits_for_ids(ctx, delta.source_ids);
+      ranked_attach_delta_for_node(ctx, node_idx, delta);
+      batch_plan.deltas.push_back(std::move(delta));
     }
-    plan.transitions.push_back(std::move(tr));
+    ranked_finalize_batch_plan(batch_plan);
+    plan.batch_plans.push_back(std::move(batch_plan));
     break;
   }
   case uuber::IrNodeOp::And: {
@@ -602,34 +742,32 @@ void RankedTransitionCompiler::compile_node(int node_idx) {
             ensure_source_ids(ctx, ir_node_required(ctx, child_idx)));
       }
       for (std::size_t idx = 0; idx < child_ids.size(); ++idx) {
-        const RankedNodeTransitionPlan &child_plan =
+        const RankedNodeBatchPlan &child_plan =
             plan_for_node(child_ids[idx]);
-        if (!child_plan.valid || child_plan.transitions.empty()) {
+        if (!child_plan.valid || child_plan.batch_plans.empty()) {
           continue;
         }
-        for (const RankedTransitionTemplate &child_tr : child_plan.transitions) {
-          RankedTransitionTemplate tr = child_tr;
+        for (const RankedBatchPlan &child_batch_plan : child_plan.batch_plans) {
+          RankedBatchPlan batch_plan = child_batch_plan;
           for (std::size_t other_idx = 0; other_idx < child_ids.size();
                ++other_idx) {
             if (other_idx == idx) {
               continue;
             }
-            RankedTransitionStep cdf_step;
-            cdf_step.kind = RankedTransitionStepKind::EvalCDFNode;
-            cdf_step.node_idx = child_ids[other_idx];
-            tr.steps.push_back(std::move(cdf_step));
+            batch_plan.slice.evals.push_back(ranked_make_eval_ref(
+                ctx, RankedProgramEvalKind::CDF, child_ids[other_idx]));
             if (!child_sources[other_idx].empty()) {
-              RankedTransitionStep add_step;
-              add_step.kind = RankedTransitionStepKind::AddCompleteSources;
-              add_step.source_ids = child_sources[other_idx];
-              add_step.source_bits =
-                  ranked_source_bits_for_ids(ctx, add_step.source_ids);
-              ranked_attach_source_mask_for_node(ctx, child_ids[other_idx],
-                                                 add_step);
-              tr.steps.push_back(std::move(add_step));
+              RankedStateDelta delta;
+              delta.kind = RankedStateDeltaKind::CompleteSources;
+              delta.source_ids = child_sources[other_idx];
+              delta.source_bits =
+                  ranked_source_bits_for_ids(ctx, delta.source_ids);
+              ranked_attach_delta_for_node(ctx, child_ids[other_idx], delta);
+              batch_plan.deltas.push_back(std::move(delta));
             }
           }
-          plan.transitions.push_back(std::move(tr));
+          ranked_finalize_batch_plan(batch_plan);
+          plan.batch_plans.push_back(std::move(batch_plan));
         }
       }
     }
@@ -645,54 +783,51 @@ void RankedTransitionCompiler::compile_node(int node_idx) {
             ensure_source_ids(ctx, ir_node_required(ctx, child_idx)));
       }
       for (std::size_t idx = 0; idx < child_ids.size(); ++idx) {
-        const RankedNodeTransitionPlan &child_plan =
+        const RankedNodeBatchPlan &child_plan =
             plan_for_node(child_ids[idx]);
-        if (!child_plan.valid || child_plan.transitions.empty()) {
+        if (!child_plan.valid || child_plan.batch_plans.empty()) {
           continue;
         }
-        for (const RankedTransitionTemplate &child_tr : child_plan.transitions) {
-          RankedTransitionTemplate tr = child_tr;
+        for (const RankedBatchPlan &child_batch_plan : child_plan.batch_plans) {
+          RankedBatchPlan batch_plan = child_batch_plan;
           for (std::size_t other_idx = 0; other_idx < child_ids.size();
                ++other_idx) {
             if (other_idx == idx || child_sources[other_idx].empty()) {
               continue;
             }
-            RankedTransitionStep witness_step;
-            witness_step.kind =
-                RankedTransitionStepKind::AddOrWitnessFromSources;
-            witness_step.source_ids = child_sources[other_idx];
-            witness_step.source_bits =
-                ranked_source_bits_for_ids(ctx, witness_step.source_ids);
-            tr.steps.push_back(std::move(witness_step));
+            RankedStateDelta delta;
+            delta.kind = RankedStateDeltaKind::OrWitnessSurvive;
+            delta.source_ids = child_sources[other_idx];
+            delta.source_bits = ranked_source_bits_for_ids(ctx, delta.source_ids);
+            batch_plan.deltas.push_back(std::move(delta));
           }
-          plan.transitions.push_back(std::move(tr));
+          ranked_finalize_batch_plan(batch_plan);
+          plan.batch_plans.push_back(std::move(batch_plan));
         }
       }
     }
     break;
   }
   case uuber::IrNodeOp::Guard: {
-    if (node.reference_idx >= 0) {
-      const RankedNodeTransitionPlan &ref_plan = plan_for_node(node.reference_idx);
-      if (ref_plan.valid && !ref_plan.transitions.empty()) {
+    if (node.reference_idx >= 0 && node.blocker_idx >= 0) {
+      const RankedNodeBatchPlan &ref_plan = plan_for_node(node.reference_idx);
+      if (ref_plan.valid && !ref_plan.batch_plans.empty()) {
         const std::vector<int> blocker_sources =
             evaluator_gather_blocker_sources(ctx, node_idx);
-        for (const RankedTransitionTemplate &ref_tr : ref_plan.transitions) {
-          RankedTransitionTemplate tr = ref_tr;
-          RankedTransitionStep eff_step;
-          eff_step.kind = RankedTransitionStepKind::EvalGuardEffective;
-          eff_step.node_idx = node_idx;
-          tr.steps.push_back(std::move(eff_step));
+        for (const RankedBatchPlan &ref_batch_plan : ref_plan.batch_plans) {
+          RankedBatchPlan batch_plan = ref_batch_plan;
+          batch_plan.slice.evals.push_back(ranked_make_eval_ref(
+              ctx, RankedProgramEvalKind::Survival, node.blocker_idx));
           if (!blocker_sources.empty()) {
-            RankedTransitionStep add_step;
-            add_step.kind = RankedTransitionStepKind::AddSurviveSources;
-            add_step.source_ids = blocker_sources;
-            add_step.source_bits =
-                ranked_source_bits_for_ids(ctx, add_step.source_ids);
-            ranked_attach_source_mask_for_node(ctx, node.blocker_idx, add_step);
-            tr.steps.push_back(std::move(add_step));
+            RankedStateDelta delta;
+            delta.kind = RankedStateDeltaKind::SurviveSources;
+            delta.source_ids = blocker_sources;
+            delta.source_bits = ranked_source_bits_for_ids(ctx, delta.source_ids);
+            ranked_attach_delta_for_node(ctx, node.blocker_idx, delta);
+            batch_plan.deltas.push_back(std::move(delta));
           }
-          plan.transitions.push_back(std::move(tr));
+          ranked_finalize_batch_plan(batch_plan);
+          plan.batch_plans.push_back(std::move(batch_plan));
         }
       }
     }
@@ -702,7 +837,7 @@ void RankedTransitionCompiler::compile_node(int node_idx) {
     break;
   }
 
-  plan.valid = !plan.transitions.empty();
+  plan.valid = !plan.batch_plans.empty();
   plan.compiled = true;
   plan.compiling = false;
 }
@@ -732,7 +867,7 @@ bool sequence_prefix_density_batch_resolved(
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     std::vector<double> &density_out,
     const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_by_trial,
-    RankedTransitionCompiler *transition_compiler,
+    RankedBatchPlanner *transition_planner,
     const std::vector<const std::vector<int> *> *step_competitor_ids_ptrs,
     const std::vector<std::vector<int>> *step_persistent_sources) {
   density_out.assign(times_by_trial.size(), 0.0);
@@ -754,9 +889,9 @@ bool sequence_prefix_density_batch_resolved(
     }
   }
 
-  RankedTransitionCompiler local_transition_compiler(ctx);
-  RankedTransitionCompiler *compiler =
-      transition_compiler ? transition_compiler : &local_transition_compiler;
+  RankedBatchPlanner local_transition_planner(ctx);
+  RankedBatchPlanner *planner =
+      transition_planner ? transition_planner : &local_transition_planner;
   const uuber::TrialParamsSoA *default_trial_params_soa =
       resolve_trial_params_soa(ctx, trial_params);
 
@@ -892,10 +1027,8 @@ bool sequence_prefix_density_batch_resolved(
       }
     }
 
-    std::vector<ExactScenarioPoint> rank_seed_points;
-    rank_seed_points.reserve(active_state_refs.size());
-    std::vector<ExactScenarioPoint> denom_points;
-    denom_points.reserve(active_state_refs.size());
+    RankedLaneGroupBatch lane_group_batch;
+    lane_group_batch.reserve(active_state_refs.size(), rank_idx > 0u);
     std::vector<double> denom;
     denom.reserve(active_state_refs.size());
     ExactScenarioBatch scenario_points;
@@ -926,49 +1059,20 @@ bool sequence_prefix_density_batch_resolved(
     auto process_state_group =
         [&](std::size_t group_begin, std::size_t group_end,
             const uuber::TrialParamsSoA *uniform_trial_params_soa) -> bool {
-      rank_seed_points.clear();
-      denom_points.clear();
+      lane_group_batch.clear();
       denom.clear();
-
-      std::size_t local_idx = 0u;
-      for (std::size_t ref_idx = group_begin; ref_idx < group_end;
-           ++ref_idx, ++local_idx) {
-        const RankedFrontierStateRef &state_ref = active_state_refs[ref_idx];
-        const std::size_t state_index = state_ref.state_index;
-        const std::size_t trial_slot =
-            static_cast<std::size_t>(states.trial_slot[state_index]);
-        ExactScenarioPoint rank_point;
-        rank_point.t = times_by_trial[trial_slot][rank_idx];
-        rank_point.density_index = local_idx;
-        rank_point.weight = 1.0;
-        rank_point.trial_params_soa = uniform_trial_params_soa;
-        if (rank_point.trial_params_soa == nullptr) {
-          rank_point.trial_params_soa = state_ref.trial_params_soa;
-        }
-        rank_point.forced_complete_bits = states.forced_complete_bits[state_index];
-        rank_point.forced_survive_bits = states.forced_survive_bits[state_index];
-        rank_point.forced_complete_bits_valid =
-            states.forced_complete_bits_valid[state_index] != 0u;
-        rank_point.forced_survive_bits_valid =
-            states.forced_survive_bits_valid[state_index] != 0u;
-        rank_point.time_constraints = states.time_constraints[state_index];
-        rank_seed_points.push_back(rank_point);
-
-        if (rank_idx > 0u) {
-          ExactScenarioPoint denom_point = rank_point;
-          denom_point.t = times_by_trial[trial_slot][rank_idx - 1u];
-          denom_points.push_back(std::move(denom_point));
-        }
-      }
+      ranked_materialize_lane_group_batch(
+          states, active_state_refs, times_by_trial, rank_idx, group_begin,
+          group_end, uniform_trial_params_soa, lane_group_batch);
 
       const std::size_t group_size = group_end - group_begin;
       denom.assign(group_size, 1.0);
       if (rank_idx > 0u) {
         uuber::KernelNodeBatchValues denom_values;
-        if (!exact_eval_node_batch_from_points(
-                ctx, info_node_idx, denom_points, component_idx, trial_params,
-                trial_type_key, EvalNeed::kSurvival, denom_values,
-                uniform_trial_params_soa) ||
+        if (!exact_eval_node_batch_from_batch(
+                ctx, info_node_idx, lane_group_batch.denom_batch,
+                component_idx, trial_params, trial_type_key,
+                EvalNeed::kSurvival, denom_values, uniform_trial_params_soa) ||
             denom_values.survival.size() != denom.size()) {
           return false;
         }
@@ -983,14 +1087,11 @@ bool sequence_prefix_density_batch_resolved(
 
       deterministic_scenario_points.clear();
       deterministic_scenario_active.clear();
-      if (exact_collect_deterministic_scenarios_batch_aligned_from_points(
-              *compiler, ctx, outcome_node_idx, rank_seed_points, component_idx,
-              trial_params, trial_type_key, deterministic_scenario_points,
-              deterministic_scenario_active, uniform_trial_params_soa)) {
-        scenario_trial_slots.assign(deterministic_scenario_points.size(), -1);
-        scenario_collapse_order.clear();
-        scenario_collapse_order.reserve(group_size);
-
+      if (exact_collect_deterministic_scenarios_batch_aligned_from_batch(
+              *planner, ctx, outcome_node_idx, lane_group_batch.rank_batch,
+              component_idx, trial_params, trial_type_key,
+              deterministic_scenario_points, deterministic_scenario_active,
+              uniform_trial_params_soa)) {
         deterministic_competitor_survival.clear();
         if (competitor_cache_ptr != nullptr) {
           deterministic_competitor_survival.assign(
@@ -1003,77 +1104,20 @@ bool sequence_prefix_density_batch_resolved(
           }
         }
 
-        for (std::size_t local_idx = 0; local_idx < group_size; ++local_idx) {
-          if (local_idx >= deterministic_scenario_active.size() ||
-              deterministic_scenario_active[local_idx] == 0u) {
-            continue;
-          }
-          const RankedFrontierStateRef &source_state_ref =
-              active_state_refs[group_begin + local_idx];
-          const std::size_t source_state_index = source_state_ref.state_index;
-          const double denom_val =
-              (local_idx < denom.size()) ? denom[local_idx] : 0.0;
-          if (!std::isfinite(denom_val) || denom_val <= kBranchEps) {
-            continue;
-          }
-          double weight =
-              states.weight[source_state_index] *
-              (deterministic_scenario_points.weight[local_idx] / denom_val);
-          if (!std::isfinite(weight) || weight <= kBranchEps) {
-            continue;
-          }
-          if (competitor_cache_ptr != nullptr) {
-            if (local_idx >= deterministic_competitor_survival.size()) {
-              return false;
-            }
-            const double surv =
-                clamp_probability(deterministic_competitor_survival[local_idx]);
-            if (!std::isfinite(surv) || surv <= kBranchEps) {
-              continue;
-            }
-            weight *= surv;
-            if (!std::isfinite(weight) || weight <= kBranchEps) {
-              continue;
-            }
-          }
-
-          if (competitor_cache_ptr != nullptr && !persistent_sources.empty()) {
-            if (!ranked_apply_persistent_survive_sources(
-                    ctx, persistent_sources, deterministic_scenario_points,
-                    local_idx)) {
-              continue;
-            }
-          }
-
-          deterministic_scenario_points.weight[local_idx] = weight;
-          scenario_trial_slots[local_idx] = states.trial_slot[source_state_index];
-          RankedStateCollapseIndex collapse_index;
-          collapse_index.candidate_index = local_idx;
-          collapse_index.trial_slot = states.trial_slot[source_state_index];
-          collapse_index.state_key = sequence_state_key(
-              deterministic_scenario_points.forced_complete_bits[local_idx],
-              local_idx <
-                      deterministic_scenario_points.forced_complete_bits_valid.size() &&
-                  deterministic_scenario_points
-                          .forced_complete_bits_valid[local_idx] != 0u,
-              deterministic_scenario_points.forced_survive_bits[local_idx],
-              local_idx <
-                      deterministic_scenario_points.forced_survive_bits_valid.size() &&
-                  deterministic_scenario_points
-                          .forced_survive_bits_valid[local_idx] != 0u,
-              deterministic_scenario_points.time_constraints[local_idx]);
-          scenario_collapse_order.push_back(std::move(collapse_index));
-        }
-        collapse_ranked_scenario_candidates_into_frontier(
-            deterministic_scenario_points, scenario_trial_slots,
-            next_states_collapsed, next_state_collapse_order,
+        return ranked_reduce_scenario_batch_into_frontier(
+            ctx, states, lane_group_batch.source_state_indices, denom,
+            persistent_sources, competitor_cache_ptr != nullptr,
+            &deterministic_scenario_active,
+            competitor_cache_ptr != nullptr ? &deterministic_competitor_survival
+                                            : nullptr,
+            deterministic_scenario_points, next_states_collapsed,
+            next_state_collapse_order, scenario_trial_slots,
             scenario_collapse_order, kBranchEps);
-        return true;
       }
 
-      if (!exact_collect_scenarios_batch_aligned_from_points(
-              *compiler, ctx, outcome_node_idx, rank_seed_points, component_idx,
-              trial_params, trial_type_key, scenario_points,
+      if (!exact_collect_scenarios_batch_aligned_from_batch(
+              *planner, ctx, outcome_node_idx, lane_group_batch.rank_batch,
+              component_idx, trial_params, trial_type_key, scenario_points,
               uniform_trial_params_soa)) {
         return true;
       }
@@ -1086,71 +1130,12 @@ bool sequence_prefix_density_batch_resolved(
             uniform_trial_params_soa);
       }
 
-      scenario_trial_slots.assign(scenario_points.size(), -1);
-      scenario_collapse_order.clear();
-      scenario_collapse_order.reserve(scenario_points.size());
-
-      for (std::size_t point_idx = 0; point_idx < scenario_points.size();
-           ++point_idx) {
-        if (scenario_points.density_index[point_idx] >= group_size) {
-          return false;
-        }
-        const RankedFrontierStateRef &source_state_ref =
-            active_state_refs[group_begin +
-                              scenario_points.density_index[point_idx]];
-        const std::size_t source_state_index = source_state_ref.state_index;
-        const double denom_val =
-            (scenario_points.density_index[point_idx] < denom.size())
-                ? denom[scenario_points.density_index[point_idx]]
-                : 0.0;
-        if (!std::isfinite(denom_val) || denom_val <= kBranchEps) {
-          continue;
-        }
-        double weight =
-            states.weight[source_state_index] *
-            (scenario_points.weight[point_idx] / denom_val);
-        if (!std::isfinite(weight) || weight <= kBranchEps) {
-          continue;
-        }
-
-        if (competitor_cache_ptr != nullptr) {
-          const double surv = clamp_probability(scenario_survival[point_idx]);
-          if (!std::isfinite(surv) || surv <= kBranchEps) {
-            continue;
-          }
-          weight *= surv;
-          if (!std::isfinite(weight) || weight <= kBranchEps) {
-            continue;
-          }
-        }
-
-        if (competitor_cache_ptr != nullptr && !persistent_sources.empty()) {
-          if (!ranked_apply_persistent_survive_sources(
-                  ctx, persistent_sources, scenario_points, point_idx)) {
-            continue;
-          }
-        }
-
-        scenario_points.weight[point_idx] = weight;
-        scenario_trial_slots[point_idx] = states.trial_slot[source_state_index];
-        RankedStateCollapseIndex collapse_index;
-        collapse_index.candidate_index = point_idx;
-        collapse_index.trial_slot = states.trial_slot[source_state_index];
-        collapse_index.state_key = sequence_state_key(
-            scenario_points.forced_complete_bits[point_idx],
-            point_idx < scenario_points.forced_complete_bits_valid.size() &&
-                scenario_points.forced_complete_bits_valid[point_idx] != 0u,
-            scenario_points.forced_survive_bits[point_idx],
-            point_idx < scenario_points.forced_survive_bits_valid.size() &&
-                scenario_points.forced_survive_bits_valid[point_idx] != 0u,
-            scenario_points.time_constraints[point_idx]);
-        scenario_collapse_order.push_back(std::move(collapse_index));
-      }
-
-      collapse_ranked_scenario_candidates_into_frontier(
-          scenario_points, scenario_trial_slots, next_states_collapsed,
-          next_state_collapse_order, scenario_collapse_order, kBranchEps);
-      return true;
+      return ranked_reduce_scenario_batch_into_frontier(
+          ctx, states, lane_group_batch.source_state_indices, denom,
+          persistent_sources, competitor_cache_ptr != nullptr, nullptr,
+          competitor_cache_ptr != nullptr ? &scenario_survival : nullptr,
+          scenario_points, next_states_collapsed, next_state_collapse_order,
+          scenario_trial_slots, scenario_collapse_order, kBranchEps);
     };
 
     if (split_frontier_groups) {

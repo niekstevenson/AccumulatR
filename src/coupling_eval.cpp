@@ -15,6 +15,9 @@ using uuber::LabelRef;
 
 namespace {
 
+using CouplingEventPayload = uuber::VectorEventRefPayload;
+using CouplingGenericPayload = uuber::VectorGenericNodePayload;
+
 inline bool coupling_acc_specialization_allowed(const uuber::NativeContext &ctx,
                                                 bool include_na_donors,
                                                 int outcome_idx_context) {
@@ -51,7 +54,7 @@ struct CouplingBatchScratch {
 };
 
 inline bool evaluate_labelref_batch(
-    const uuber::NativeContext &ctx, const OutcomeCouplingEventRefPayload &ref,
+    const uuber::NativeContext &ctx, const CouplingEventPayload &ref,
     int component_idx, const TrialParamSet *trial_params,
     const std::string &trial_type_key, bool include_na_donors,
     int outcome_idx_context, const std::vector<double> &times,
@@ -62,7 +65,7 @@ inline bool evaluate_labelref_batch(
         nullptr);
 
 inline bool build_coupling_acc_ref(
-    const uuber::NativeContext &ctx, const OutcomeCouplingEventRefPayload &ref,
+    const uuber::NativeContext &ctx, const CouplingEventPayload &ref,
     int component_idx, const TrialParamSet *trial_params,
     const uuber::TrialParamsSoA *trial_params_soa, CouplingAccRef &out) {
   if (ref.ref.acc_idx < 0 ||
@@ -92,7 +95,7 @@ inline bool build_coupling_acc_ref(
 }
 
 inline bool evaluate_labelref_pool_batch(
-    const uuber::NativeContext &ctx, const OutcomeCouplingEventRefPayload &ref,
+    const uuber::NativeContext &ctx, const CouplingEventPayload &ref,
     int component_idx, const TrialParamSet *trial_params,
     const std::string &trial_type_key, const std::vector<double> &times,
     bool need_density, bool need_survival, bool need_cdf,
@@ -174,7 +177,7 @@ inline bool evaluate_labelref_pool_batch(
 
   for (std::size_t member_pos = 0; member_pos < active_member_indices.size();
        ++member_pos) {
-    OutcomeCouplingEventRefPayload member_payload{};
+    CouplingEventPayload member_payload{};
     member_payload.ref =
         pool.member_refs[active_member_indices[member_pos]];
     temp_density.clear();
@@ -759,7 +762,7 @@ inline bool evaluate_coupling_acc_batch_param_matrix(
 
 inline bool evaluate_labelref_node_batch(
     const uuber::NativeContext &ctx,
-    const OutcomeCouplingEventRefPayload &ref, int component_idx,
+    const CouplingEventPayload &ref, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     bool include_na_donors, int outcome_idx_context,
     const std::vector<double> &times, bool need_density, bool need_survival,
@@ -826,7 +829,7 @@ inline bool evaluate_labelref_node_batch(
 }
 
 inline bool evaluate_labelref_batch(
-    const uuber::NativeContext &ctx, const OutcomeCouplingEventRefPayload &ref,
+    const uuber::NativeContext &ctx, const CouplingEventPayload &ref,
     int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     bool include_na_donors, int outcome_idx_context,
@@ -989,8 +992,8 @@ inline bool evaluate_labelref_batch(
 }
 
 struct GenericCouplingProviderRuntime {
-  OutcomeCouplingEventRefPayload target_ref{};
-  std::vector<OutcomeCouplingEventRefPayload> competitor_refs;
+  CouplingEventPayload target_ref{};
+  std::vector<CouplingEventPayload> competitor_refs;
   CouplingBatchScratch labelref_scratch;
   uuber::KernelBatchRuntimeState noderef_kernel_batch_runtime;
 };
@@ -1040,9 +1043,8 @@ inline bool finalize_generic_terms_from_density(
 
 inline bool generic_coupling_event_refs_resolve(
     const uuber::NativeContext &ctx,
-    const OutcomeCouplingGenericNodeIntegralPayload &generic,
-    OutcomeCouplingEventRefPayload &target_ref,
-    std::vector<OutcomeCouplingEventRefPayload> &competitor_refs) {
+    const CouplingGenericPayload &generic, CouplingEventPayload &target_ref,
+    std::vector<CouplingEventPayload> &competitor_refs) {
   const int node_idx = resolve_dense_node_idx(ctx, generic.node_id);
   if (node_idx < 0 || node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
     return false;
@@ -1052,7 +1054,7 @@ inline bool generic_coupling_event_refs_resolve(
   if (target_node.event_idx < 0) {
     return false;
   }
-  target_ref = OutcomeCouplingEventRefPayload{};
+  target_ref = CouplingEventPayload{};
   target_ref.ref = node_label_ref(ctx, target_node);
   target_ref.node_id = generic.node_id;
   target_ref.node_flags = target_node.flags;
@@ -1074,7 +1076,7 @@ inline bool generic_coupling_event_refs_resolve(
       competitor_refs.clear();
       return false;
     }
-    OutcomeCouplingEventRefPayload comp_ref;
+    CouplingEventPayload comp_ref;
     comp_ref.ref = node_label_ref(ctx, comp_node);
     comp_ref.node_id = comp_node_id;
     comp_ref.node_flags = comp_node.flags;
@@ -1088,140 +1090,9 @@ inline bool generic_coupling_event_refs_resolve(
   return true;
 }
 
-inline double evaluate_generic_direct_cdf_resolved_provider(
-    const uuber::NativeContext &ctx,
-    const OutcomeCouplingGenericNodeIntegralPayload &generic,
-    GenericCouplingProviderRuntime &runtime, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    bool include_na_donors, int outcome_idx_context,
-    const uuber::BitsetState *forced_complete_bits,
-    bool forced_complete_bits_valid,
-    const uuber::BitsetState *forced_survive_bits,
-    bool forced_survive_bits_valid, double upper) {
-  std::vector<double> upper_vec{upper};
-  if (generic_coupling_runtime_has_labelref_fastpath(runtime)) {
-    if (!evaluate_labelref_batch(
-            ctx, runtime.target_ref, component_idx, trial_params,
-            trial_type_key, include_na_donors, outcome_idx_context, upper_vec,
-            false, false, true, nullptr, nullptr,
-            &runtime.labelref_scratch.cdf_values, &runtime.labelref_scratch) ||
-        runtime.labelref_scratch.cdf_values.empty()) {
-      return 0.0;
-    }
-    return clamp_probability(runtime.labelref_scratch.cdf_values[0]);
-  }
-
-  const ForcedStateView forced_state = make_forced_state_view(
-      nullptr, forced_complete_bits, &forced_complete_bits_valid,
-      forced_survive_bits, &forced_survive_bits_valid,
-      ctx.ir.label_id_to_bit_idx.empty() ? nullptr
-                                         : &ctx.ir.label_id_to_bit_idx);
-  uuber::KernelNodeBatchValues batch_values;
-  if (!evaluator_eval_node_with_forced_state_view_batch(
-          ctx, generic.node_id, upper_vec, component_idx, EvalNeed::kCDF,
-          trial_params, trial_type_key, nullptr, forced_state,
-          batch_values) ||
-      batch_values.cdf.empty()) {
-    return 0.0;
-  }
-  return clamp_probability(batch_values.cdf[0]);
-}
-
-inline bool evaluate_generic_terms_resolved_provider(
-    const uuber::NativeContext &ctx,
-    const OutcomeCouplingGenericNodeIntegralPayload &generic,
-    GenericCouplingProviderRuntime &runtime, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    bool include_na_donors, int outcome_idx_context,
-    const uuber::BitsetState *forced_complete_bits,
-    bool forced_complete_bits_valid,
-    const uuber::BitsetState *forced_survive_bits,
-    bool forced_survive_bits_valid, const std::vector<double> &nodes,
-    std::vector<double> &terms) {
-  if (!generic_coupling_runtime_has_labelref_fastpath(runtime)) {
-    uuber::KernelBatchRuntimeState *kernel_batch_runtime =
-        ctx.kernel_program.valid ? &runtime.noderef_kernel_batch_runtime
-                                 : nullptr;
-    return evaluator_node_density_with_competitors_batch_internal(
-        ctx, generic.node_id, nodes, component_idx, forced_complete_bits,
-        forced_complete_bits_valid, forced_survive_bits,
-        forced_survive_bits_valid, generic.competitor_node_ids, trial_params,
-        trial_type_key, include_na_donors, outcome_idx_context, terms, nullptr,
-        kernel_batch_runtime);
-  }
-
-  const uuber::TrialParamsSoA *trial_params_soa =
-      resolve_trial_params_soa(ctx, trial_params);
-  const bool can_specialize = coupling_acc_specialization_allowed(
-      ctx, include_na_donors, outcome_idx_context);
-  if (can_specialize) {
-    CouplingAccRef target_acc;
-    if (build_coupling_acc_ref(ctx, runtime.target_ref, component_idx,
-                               trial_params, trial_params_soa, target_acc)) {
-      std::vector<CouplingAccRef> competitor_accs;
-      competitor_accs.reserve(runtime.competitor_refs.size());
-      bool all_competitors_specialized = true;
-      for (const OutcomeCouplingEventRefPayload &comp_ref :
-           runtime.competitor_refs) {
-        CouplingAccRef comp_acc;
-        if (!build_coupling_acc_ref(ctx, comp_ref, component_idx, trial_params,
-                                    trial_params_soa, comp_acc)) {
-          all_competitors_specialized = false;
-          break;
-        }
-        competitor_accs.push_back(comp_acc);
-      }
-      if (all_competitors_specialized) {
-        if (!evaluate_coupling_acc_batch(
-                target_acc, nodes, true, false, false,
-                &runtime.labelref_scratch.pdf_values, nullptr, nullptr,
-                &runtime.labelref_scratch)) {
-          return false;
-        }
-        terms.assign(nodes.size(), 1.0);
-        for (const CouplingAccRef &comp_acc : competitor_accs) {
-          if (!evaluate_coupling_acc_batch(
-                  comp_acc, nodes, false, true, false, nullptr,
-                  &runtime.labelref_scratch.temp_survival, nullptr,
-                  &runtime.labelref_scratch) ||
-              !multiply_generic_survival_product(
-                  terms, runtime.labelref_scratch.temp_survival)) {
-            return false;
-          }
-        }
-        return finalize_generic_terms_from_density(
-            runtime.labelref_scratch.pdf_values, terms);
-      }
-    }
-  }
-
-  if (!evaluate_labelref_batch(
-          ctx, runtime.target_ref, component_idx, trial_params, trial_type_key,
-          include_na_donors, outcome_idx_context, nodes, true, false, false,
-          &runtime.labelref_scratch.pdf_values, nullptr, nullptr,
-          &runtime.labelref_scratch)) {
-    return false;
-  }
-  terms.assign(nodes.size(), 1.0);
-  for (const OutcomeCouplingEventRefPayload &comp_ref :
-       runtime.competitor_refs) {
-    if (!evaluate_labelref_batch(
-            ctx, comp_ref, component_idx, trial_params, trial_type_key,
-            include_na_donors, outcome_idx_context, nodes, false, true, false,
-            nullptr, &runtime.labelref_scratch.temp_survival, nullptr,
-            &runtime.labelref_scratch) ||
-        !multiply_generic_survival_product(
-            terms, runtime.labelref_scratch.temp_survival)) {
-      return false;
-    }
-  }
-  return finalize_generic_terms_from_density(runtime.labelref_scratch.pdf_values,
-                                             terms);
-}
-
 inline bool evaluate_generic_terms_resolved_provider_batch(
     const uuber::NativeContext &ctx,
-    const OutcomeCouplingGenericNodeIntegralPayload &generic,
+    const CouplingGenericPayload &generic,
     GenericCouplingProviderRuntime &runtime, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     bool include_na_donors, int outcome_idx_context,
@@ -1270,7 +1141,7 @@ inline bool evaluate_generic_terms_resolved_provider_batch(
       std::vector<CouplingAccRef> competitor_accs;
       competitor_accs.reserve(runtime.competitor_refs.size());
       bool all_competitors_specialized = true;
-      for (const OutcomeCouplingEventRefPayload &comp_ref :
+      for (const CouplingEventPayload &comp_ref :
            runtime.competitor_refs) {
         CouplingAccRef comp_acc;
         if (!build_coupling_acc_ref(ctx, comp_ref, component_idx, trial_params,
@@ -1321,7 +1192,7 @@ inline bool evaluate_generic_terms_resolved_provider_batch(
     return false;
   }
   terms.assign(runtime.labelref_scratch.pdf_values.size(), 1.0);
-  for (const OutcomeCouplingEventRefPayload &comp_ref :
+  for (const CouplingEventPayload &comp_ref :
        runtime.competitor_refs) {
     if (!evaluate_labelref_batch(
             ctx, comp_ref, component_idx, trial_params, trial_type_key,
@@ -1341,7 +1212,7 @@ inline bool evaluate_generic_terms_resolved_provider_batch(
 
 inline GenericCouplingProviderRuntime build_generic_coupling_provider_runtime(
     const uuber::NativeContext &ctx,
-    const OutcomeCouplingGenericNodeIntegralPayload &generic,
+    const CouplingGenericPayload &generic,
     const uuber::BitsetState *forced_complete_bits,
     bool forced_complete_bits_valid,
     const uuber::BitsetState *forced_survive_bits,
@@ -1370,7 +1241,7 @@ inline GenericCouplingProviderRuntime build_generic_coupling_provider_runtime(
   return runtime;
 }
 
-inline double integrate_node_density_batch(
+[[maybe_unused]] inline double integrate_node_density_batch(
     const uuber::TimeBatch &batch, const std::vector<double> &density,
     const std::vector<double> *survival_product = nullptr) {
   if (batch.nodes.empty() || batch.nodes.size() != batch.weights.size() ||
@@ -1746,6 +1617,377 @@ bool integrate_coupling_mass_batch_adaptive(
 
 } // namespace
 
+namespace {
+
+struct CouplingProgramInterpreter {
+  const uuber::NativeContext &ctx;
+  const OutcomeCouplingProgram &program;
+  double upper;
+  int component_idx;
+  const TrialParamSet *trial_params;
+  const std::string &trial_type_key;
+  double rel_tol;
+  double abs_tol;
+  int max_depth;
+  bool include_na_donors;
+  int outcome_idx_context;
+  const uuber::BitsetState *forced_complete_bits;
+  bool forced_complete_bits_valid;
+  const uuber::BitsetState *forced_survive_bits;
+  bool forced_survive_bits_valid;
+  const std::vector<const uuber::TrialParamsSoA *> &trial_params_soa_batch;
+  std::vector<GenericCouplingProviderRuntime> generic_runtimes;
+  CouplingBatchScratch scratch;
+
+  explicit CouplingProgramInterpreter(
+      const uuber::NativeContext &ctx_, const OutcomeCouplingProgram &program_,
+      double upper_, int component_idx_, const TrialParamSet *trial_params_,
+      const std::string &trial_type_key_, double rel_tol_, double abs_tol_,
+      int max_depth_, bool include_na_donors_, int outcome_idx_context_,
+      const uuber::BitsetState *forced_complete_bits_,
+      bool forced_complete_bits_valid_,
+      const uuber::BitsetState *forced_survive_bits_,
+      bool forced_survive_bits_valid_,
+      const std::vector<const uuber::TrialParamsSoA *> &trial_params_soa_batch_)
+      : ctx(ctx_), program(program_), upper(upper_), component_idx(component_idx_),
+        trial_params(trial_params_), trial_type_key(trial_type_key_),
+        rel_tol(rel_tol_), abs_tol(abs_tol_), max_depth(max_depth_),
+        include_na_donors(include_na_donors_),
+        outcome_idx_context(outcome_idx_context_),
+        forced_complete_bits(forced_complete_bits_),
+        forced_complete_bits_valid(forced_complete_bits_valid_),
+        forced_survive_bits(forced_survive_bits_),
+        forced_survive_bits_valid(forced_survive_bits_valid_),
+        trial_params_soa_batch(trial_params_soa_batch_) {
+    generic_runtimes.reserve(program.generic_payloads.size());
+    for (const auto &payload : program.generic_payloads) {
+      generic_runtimes.push_back(build_generic_coupling_provider_runtime(
+          ctx, payload, forced_complete_bits, forced_complete_bits_valid,
+          forced_survive_bits, forced_survive_bits_valid));
+    }
+  }
+
+  std::size_t point_count() const noexcept { return trial_params_soa_batch.size(); }
+
+  bool valid_program() const noexcept {
+    return program.valid &&
+           program.domain == uuber::VectorProgramDomain::OutcomeCoupling &&
+           program.outputs.result_slot >= 0 &&
+           program.outputs.result_slot <
+               static_cast<int>(program.ops.size());
+  }
+
+  bool evaluate_result(std::vector<double> &out) {
+    out.assign(point_count(), 0.0);
+    if (point_count() == 0u) {
+      return true;
+    }
+    std::vector<double> upper_nodes{upper};
+    std::vector<double> raw;
+    if (!evaluate_slot_terms(program.outputs.result_slot, upper_nodes, raw) ||
+        raw.size() != point_count()) {
+      return false;
+    }
+    for (std::size_t i = 0; i < out.size(); ++i) {
+      out[i] = (std::isfinite(raw[i]) && raw[i] > 0.0)
+                   ? clamp_probability(raw[i])
+                   : 0.0;
+    }
+    return true;
+  }
+
+private:
+  const uuber::VectorOp *op_at(int slot) const noexcept {
+    if (slot < 0 || slot >= static_cast<int>(program.ops.size())) {
+      return nullptr;
+    }
+    return &program.ops[static_cast<std::size_t>(slot)];
+  }
+
+  std::size_t flattened_size(std::size_t node_count) const noexcept {
+    return point_count() * node_count;
+  }
+
+  bool child_slots(const uuber::VectorOp &op,
+                   std::vector<int> &child_slots_out) const {
+    child_slots_out.clear();
+    if (op.child_count <= 0) {
+      return true;
+    }
+    if (op.child_begin < 0 ||
+        op.child_begin + op.child_count >
+            static_cast<int>(program.children.size())) {
+      return false;
+    }
+    child_slots_out.insert(
+        child_slots_out.end(),
+        program.children.begin() + static_cast<std::ptrdiff_t>(op.child_begin),
+        program.children.begin() +
+            static_cast<std::ptrdiff_t>(op.child_begin + op.child_count));
+    return true;
+  }
+
+  bool expand_nodes(const std::vector<double> &nodes) {
+    expand_time_batch_by_trial_params(nodes, trial_params_soa_batch,
+                                      scratch.expanded_times,
+                                      scratch.expanded_trial_params_soa);
+    return scratch.expanded_times.size() == flattened_size(nodes.size()) &&
+           scratch.expanded_trial_params_soa.size() == flattened_size(nodes.size());
+  }
+
+  bool evaluate_event_terms(const CouplingEventPayload &payload,
+                            uuber::VectorOpCode code,
+                            const std::vector<double> &nodes,
+                            std::vector<double> &out) {
+    if (!expand_nodes(nodes)) {
+      return false;
+    }
+    const bool need_density = code == uuber::VectorOpCode::EventDensity;
+    const bool need_survival = code == uuber::VectorOpCode::EventSurvival;
+    const bool need_cdf = code == uuber::VectorOpCode::EventCDF;
+    std::vector<double> *density_out = need_density ? &out : nullptr;
+    std::vector<double> *survival_out = need_survival ? &out : nullptr;
+    std::vector<double> *cdf_out = need_cdf ? &out : nullptr;
+    return evaluate_labelref_batch(
+               ctx, payload, component_idx, trial_params, trial_type_key,
+               include_na_donors, outcome_idx_context, scratch.expanded_times,
+               need_density, need_survival, need_cdf, density_out, survival_out,
+               cdf_out, &scratch, &scratch.expanded_trial_params_soa) &&
+           out.size() == flattened_size(nodes.size());
+  }
+
+  bool evaluate_generic_direct_cdf_terms(std::size_t payload_idx,
+                                         const std::vector<double> &nodes,
+                                         std::vector<double> &out) {
+    if (payload_idx >= program.generic_payloads.size() ||
+        payload_idx >= generic_runtimes.size() || !expand_nodes(nodes)) {
+      return false;
+    }
+    const CouplingGenericPayload &generic = program.generic_payloads[payload_idx];
+    GenericCouplingProviderRuntime &runtime = generic_runtimes[payload_idx];
+    record_generic_coupling_provider_usage(runtime);
+    if (generic_coupling_runtime_has_labelref_fastpath(runtime)) {
+      return evaluate_labelref_batch(
+                 ctx, runtime.target_ref, component_idx, trial_params,
+                 trial_type_key, include_na_donors, outcome_idx_context,
+                 scratch.expanded_times, false, false, true, nullptr, nullptr,
+                 &out, &runtime.labelref_scratch,
+                 &scratch.expanded_trial_params_soa) &&
+             out.size() == flattened_size(nodes.size());
+    }
+
+    NodeEvalState state(ctx, 0.0, component_idx, trial_params, trial_type_key,
+                        false, -1, nullptr, nullptr,
+                        forced_complete_bits_valid ? forced_complete_bits
+                                                  : nullptr,
+                        forced_complete_bits_valid,
+                        forced_survive_bits_valid ? forced_survive_bits
+                                                  : nullptr,
+                        forced_survive_bits_valid);
+    state.trial_params_soa_batch = &scratch.expanded_trial_params_soa;
+    uuber::KernelNodeBatchValues batch_values;
+    const int node_idx = resolve_dense_node_idx_required(ctx, generic.node_id);
+    if (!evaluator_eval_node_batch_with_state_dense(
+            node_idx, scratch.expanded_times, state, EvalNeed::kCDF,
+            runtime.noderef_kernel_batch_runtime, batch_values) ||
+        batch_values.cdf.size() != scratch.expanded_times.size()) {
+      return false;
+    }
+    out.resize(batch_values.cdf.size());
+    for (std::size_t i = 0; i < out.size(); ++i) {
+      out[i] = clamp_probability(batch_values.cdf[i]);
+    }
+    return true;
+  }
+
+  bool evaluate_generic_integrand_terms(std::size_t payload_idx,
+                                        const std::vector<double> &nodes,
+                                        std::vector<double> &out) {
+    if (payload_idx >= program.generic_payloads.size() ||
+        payload_idx >= generic_runtimes.size()) {
+      return false;
+    }
+    const CouplingGenericPayload &generic = program.generic_payloads[payload_idx];
+    GenericCouplingProviderRuntime &runtime = generic_runtimes[payload_idx];
+    record_generic_coupling_provider_usage(runtime);
+    return evaluate_generic_terms_resolved_provider_batch(
+               ctx, generic, runtime, component_idx, trial_params,
+               trial_type_key, include_na_donors, outcome_idx_context,
+               forced_complete_bits, forced_complete_bits_valid,
+               forced_survive_bits, forced_survive_bits_valid, nodes,
+               trial_params_soa_batch, out) &&
+           out.size() == flattened_size(nodes.size());
+  }
+
+  bool evaluate_integral_terms(const uuber::VectorOp &op,
+                               const std::vector<double> &nodes,
+                               std::vector<double> &out) {
+    std::vector<int> children;
+    if (!child_slots(op, children) || children.size() != 1u) {
+      return false;
+    }
+    std::vector<double> integral_values;
+    if (!integrate_coupling_mass_batch_adaptive(
+            upper, rel_tol, abs_tol, max_depth, point_count(),
+            [&](const std::vector<double> &quad_nodes,
+                std::vector<double> &terms) -> bool {
+              return evaluate_slot_terms(children[0], quad_nodes, terms);
+            },
+            integral_values) ||
+        integral_values.size() != point_count()) {
+      return false;
+    }
+    out.assign(flattened_size(nodes.size()), 0.0);
+    for (std::size_t point_idx = 0; point_idx < point_count(); ++point_idx) {
+      const double value = integral_values[point_idx];
+      const std::size_t offset = point_idx * nodes.size();
+      for (std::size_t node_idx = 0; node_idx < nodes.size(); ++node_idx) {
+        out[offset + node_idx] = value;
+      }
+    }
+    return true;
+  }
+
+public:
+  bool evaluate_slot_terms(int slot, const std::vector<double> &nodes,
+                           std::vector<double> &out) {
+    const uuber::VectorOp *op = op_at(slot);
+    if (op == nullptr) {
+      return false;
+    }
+    switch (op->code) {
+    case uuber::VectorOpCode::EventDensity:
+    case uuber::VectorOpCode::EventCDF:
+    case uuber::VectorOpCode::EventSurvival:
+      if (op->payload_idx < 0 ||
+          op->payload_idx >= static_cast<int>(program.event_payloads.size())) {
+        return false;
+      }
+      return evaluate_event_terms(
+          program.event_payloads[static_cast<std::size_t>(op->payload_idx)],
+          op->code, nodes, out);
+    case uuber::VectorOpCode::GenericDirectCDF:
+      if (op->payload_idx < 0) {
+        return false;
+      }
+      return evaluate_generic_direct_cdf_terms(
+          static_cast<std::size_t>(op->payload_idx), nodes, out);
+    case uuber::VectorOpCode::GenericIntegrand:
+      if (op->payload_idx < 0) {
+        return false;
+      }
+      return evaluate_generic_integrand_terms(
+          static_cast<std::size_t>(op->payload_idx), nodes, out);
+    case uuber::VectorOpCode::Complement: {
+      std::vector<int> children;
+      if (!child_slots(*op, children) || children.size() != 1u ||
+          !evaluate_slot_terms(children[0], nodes, out)) {
+        return false;
+      }
+      for (double &value : out) {
+        value = clamp_probability(1.0 - clamp_probability(value));
+      }
+      return true;
+    }
+    case uuber::VectorOpCode::Multiply: {
+      std::vector<int> children;
+      if (!child_slots(*op, children) || children.empty() ||
+          !evaluate_slot_terms(children[0], nodes, out)) {
+        return false;
+      }
+      std::vector<double> child_values;
+      for (std::size_t i = 1; i < children.size(); ++i) {
+        if (!evaluate_slot_terms(children[i], nodes, child_values) ||
+            child_values.size() != out.size()) {
+          return false;
+        }
+        for (std::size_t j = 0; j < out.size(); ++j) {
+          const double lhs = out[j];
+          const double rhs = child_values[j];
+          const double product =
+              (std::isfinite(lhs) && std::isfinite(rhs)) ? lhs * rhs : 0.0;
+          out[j] = (std::isfinite(product) && product > 0.0) ? product : 0.0;
+        }
+      }
+      return true;
+    }
+    case uuber::VectorOpCode::Add: {
+      std::vector<int> children;
+      if (!child_slots(*op, children) || children.empty()) {
+        return false;
+      }
+      out.assign(flattened_size(nodes.size()), 0.0);
+      std::vector<double> child_values;
+      for (int child_slot : children) {
+        if (!evaluate_slot_terms(child_slot, nodes, child_values) ||
+            child_values.size() != out.size()) {
+          return false;
+        }
+        for (std::size_t j = 0; j < out.size(); ++j) {
+          const double lhs = out[j];
+          const double rhs = child_values[j];
+          out[j] = (std::isfinite(lhs) ? lhs : 0.0) +
+                   (std::isfinite(rhs) ? rhs : 0.0);
+        }
+      }
+      return true;
+    }
+    case uuber::VectorOpCode::Subtract: {
+      std::vector<int> children;
+      if (!child_slots(*op, children) || children.empty() ||
+          !evaluate_slot_terms(children[0], nodes, out)) {
+        return false;
+      }
+      std::vector<double> child_values;
+      for (std::size_t i = 1; i < children.size(); ++i) {
+        if (!evaluate_slot_terms(children[i], nodes, child_values) ||
+            child_values.size() != out.size()) {
+          return false;
+        }
+        for (std::size_t j = 0; j < out.size(); ++j) {
+          const double lhs = std::isfinite(out[j]) ? out[j] : 0.0;
+          const double rhs = std::isfinite(child_values[j]) ? child_values[j] : 0.0;
+          const double value = lhs - rhs;
+          out[j] = std::isfinite(value) ? value : 0.0;
+        }
+      }
+      return true;
+    }
+    case uuber::VectorOpCode::Integral:
+      return evaluate_integral_terms(*op, nodes, out);
+    }
+    return false;
+  }
+};
+
+inline bool evaluate_outcome_coupling_vector_program_batch_internal(
+    const uuber::NativeContext &ctx, const OutcomeCouplingProgram &program,
+    double upper, int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, double rel_tol, double abs_tol,
+    int max_depth, bool include_na_donors, int outcome_idx_context,
+    const uuber::BitsetState *forced_complete_bits,
+    bool forced_complete_bits_valid,
+    const uuber::BitsetState *forced_survive_bits,
+    bool forced_survive_bits_valid,
+    const std::vector<const uuber::TrialParamsSoA *> &trial_params_soa_batch,
+    std::vector<double> &out) {
+  out.assign(trial_params_soa_batch.size(), 0.0);
+  if (trial_params_soa_batch.empty()) {
+    return true;
+  }
+  CouplingProgramInterpreter interpreter(
+      ctx, program, upper, component_idx, trial_params, trial_type_key, rel_tol,
+      abs_tol, max_depth, include_na_donors, outcome_idx_context,
+      forced_complete_bits, forced_complete_bits_valid, forced_survive_bits,
+      forced_survive_bits_valid, trial_params_soa_batch);
+  if (!interpreter.valid_program()) {
+    return true;
+  }
+  return interpreter.evaluate_result(out);
+}
+
+} // namespace
+
 double evaluate_outcome_coupling_unified(
     const uuber::NativeContext &ctx, const OutcomeCouplingProgram &program,
     double upper, int component_idx, const TrialParamSet *trial_params,
@@ -1756,187 +1998,18 @@ double evaluate_outcome_coupling_unified(
     const uuber::BitsetState *forced_survive_bits,
     bool forced_survive_bits_valid) {
   record_unified_outcome_coupling_eval_call();
-  if (!program.valid || program.kind == OutcomeCouplingOpKind::None) {
+  std::vector<const uuber::TrialParamsSoA *> singleton_trial_params_soa{
+      resolve_trial_params_soa(ctx, trial_params)};
+  std::vector<double> out;
+  if (!evaluate_outcome_coupling_vector_program_batch_internal(
+          ctx, program, upper, component_idx, trial_params, trial_type_key,
+          rel_tol, abs_tol, max_depth, include_na_donors, outcome_idx_context,
+          forced_complete_bits, forced_complete_bits_valid, forced_survive_bits,
+          forced_survive_bits_valid, singleton_trial_params_soa, out) ||
+      out.empty()) {
     return 0.0;
   }
-  if (program.kind == OutcomeCouplingOpKind::GenericNodeIntegral) {
-    const OutcomeCouplingGenericNodeIntegralPayload &generic = program.generic;
-    GenericCouplingProviderRuntime provider_runtime =
-        build_generic_coupling_provider_runtime(
-            ctx, generic, forced_complete_bits, forced_complete_bits_valid,
-            forced_survive_bits, forced_survive_bits_valid);
-    if (generic.competitor_node_ids.empty()) {
-      record_generic_coupling_provider_usage(provider_runtime);
-      return evaluate_generic_direct_cdf_resolved_provider(
-          ctx, generic, provider_runtime, component_idx, trial_params,
-          trial_type_key, include_na_donors, outcome_idx_context,
-          forced_complete_bits, forced_complete_bits_valid, forced_survive_bits,
-          forced_survive_bits_valid, upper);
-    }
-    record_generic_coupling_provider_usage(provider_runtime);
-    auto eval_generic_terms =
-        [&](const std::vector<double> &nodes, std::vector<double> &terms)
-        -> bool {
-      return evaluate_generic_terms_resolved_provider(
-          ctx, generic, provider_runtime, component_idx, trial_params,
-          trial_type_key, include_na_donors, outcome_idx_context,
-          forced_complete_bits, forced_complete_bits_valid, forced_survive_bits,
-          forced_survive_bits_valid, nodes, terms);
-    };
-    return integrate_coupling_mass_batch_adaptive(
-        upper, rel_tol, abs_tol, max_depth, eval_generic_terms);
-  }
-  if (program.kind == OutcomeCouplingOpKind::NWay) {
-    const OutcomeCouplingNWayPayload &gate = program.nway;
-    if (gate.competitor_refs.empty() || !(upper > 0.0)) {
-      return 0.0;
-    }
-    CouplingBatchScratch eval_scratch;
-    std::vector<double> gate_cdf_vec;
-    std::vector<double> gate_upper_times{upper};
-    if (!evaluate_labelref_batch(
-            ctx, gate.gate_ref, component_idx, trial_params, trial_type_key,
-            include_na_donors, outcome_idx_context, gate_upper_times, false,
-            false, true, nullptr, nullptr, &gate_cdf_vec, &eval_scratch) ||
-        gate_cdf_vec.empty()) {
-      return 0.0;
-    }
-    const double gate_cdf = clamp_probability(gate_cdf_vec[0]);
-    if (!std::isfinite(gate_cdf) || gate_cdf <= 0.0) {
-      return 0.0;
-    }
-
-    auto eval_nway_terms =
-        [&](const std::vector<double> &nodes,
-            std::vector<double> &terms) -> bool {
-      std::vector<double> target_density;
-      if (!evaluate_labelref_batch(ctx, gate.target_ref, component_idx,
-                                   trial_params, trial_type_key,
-                                   include_na_donors, outcome_idx_context,
-                                   nodes, true, false, false, &target_density,
-                                   nullptr, nullptr, &eval_scratch)) {
-        return false;
-      }
-      terms.assign(nodes.size(), 1.0);
-      for (const OutcomeCouplingEventRefPayload &comp_ref :
-           gate.competitor_refs) {
-        std::vector<double> comp_survival;
-        if (!evaluate_labelref_batch(
-                ctx, comp_ref, component_idx, trial_params, trial_type_key,
-                include_na_donors, outcome_idx_context, nodes, false, true,
-                false, nullptr, &comp_survival, nullptr, &eval_scratch)) {
-          return false;
-        }
-        for (std::size_t i = 0; i < terms.size(); ++i) {
-          terms[i] *= clamp_probability(comp_survival[i]);
-        }
-      }
-      for (std::size_t i = 0; i < terms.size(); ++i) {
-        const double fx = safe_density(target_density[i]);
-        const double surv_prod = clamp_probability(terms[i]);
-        if (!std::isfinite(fx) || fx <= 0.0 || surv_prod <= 0.0) {
-          terms[i] = 0.0;
-        } else {
-          terms[i] = fx * surv_prod;
-        }
-      }
-      return true;
-    };
-
-    const double order_mass = integrate_coupling_mass_batch_adaptive(
-        upper, rel_tol, abs_tol, max_depth, eval_nway_terms);
-    const double total = gate_cdf * order_mass;
-    if (!std::isfinite(total) || total <= 0.0) {
-      return 0.0;
-    }
-    return clamp_probability(total);
-  }
-  if (program.kind == OutcomeCouplingOpKind::Pair) {
-    const OutcomeCouplingPairPayload &pair = program.pair;
-    if (!(upper > 0.0)) {
-      return 0.0;
-    }
-
-    CouplingBatchScratch eval_scratch;
-    double coeff = 1.0;
-    if (std::isfinite(upper)) {
-      std::vector<double> c_cdf_vec;
-      const std::vector<double> upper_vec{upper};
-      if (!evaluate_labelref_batch(
-              ctx, pair.c_ref, component_idx, trial_params, trial_type_key,
-              include_na_donors, outcome_idx_context, upper_vec, false, false,
-              true, nullptr, nullptr, &c_cdf_vec, &eval_scratch) ||
-          c_cdf_vec.empty()) {
-        return 0.0;
-      }
-      coeff = clamp_probability(c_cdf_vec[0]);
-    }
-
-    auto integrate_pair_term = [&](int term_kind) -> double {
-      auto eval_terms =
-          [&](const std::vector<double> &nodes,
-              std::vector<double> &terms) -> bool {
-        std::vector<double> x_density;
-        std::vector<double> x_survival;
-        std::vector<double> y_survival;
-        std::vector<double> c_density;
-        std::vector<double> c_survival;
-        if (!evaluate_labelref_batch(
-                ctx, pair.x_ref, component_idx, trial_params, trial_type_key,
-                include_na_donors, outcome_idx_context, nodes, true, true,
-                false, &x_density, &x_survival, nullptr, &eval_scratch) ||
-            !evaluate_labelref_batch(
-                ctx, pair.y_ref, component_idx, trial_params, trial_type_key,
-                include_na_donors, outcome_idx_context, nodes, false, true,
-                false, nullptr, &y_survival, nullptr, &eval_scratch) ||
-            !evaluate_labelref_batch(
-                ctx, pair.c_ref, component_idx, trial_params, trial_type_key,
-                include_na_donors, outcome_idx_context, nodes, true, true,
-                false, &c_density, &c_survival, nullptr, &eval_scratch)) {
-          return false;
-        }
-        terms.assign(nodes.size(), 0.0);
-        for (std::size_t i = 0; i < nodes.size(); ++i) {
-          const double fx = safe_density(x_density[i]);
-          const double fc = safe_density(c_density[i]);
-          const double Fx =
-              clamp_probability(1.0 - clamp_probability(x_survival[i]));
-          const double Fy =
-              clamp_probability(1.0 - clamp_probability(y_survival[i]));
-          const double Fc =
-              clamp_probability(1.0 - clamp_probability(c_survival[i]));
-          double val = 0.0;
-          if (term_kind == 0) {
-            if (fc > 0.0 && Fx > 0.0) {
-              val = fc * Fx;
-            }
-          } else if (term_kind == 1) {
-            if (fx > 0.0 && Fc > 0.0) {
-              val = fx * Fc;
-            }
-          } else {
-            if (fx > 0.0 && Fy > 0.0) {
-              val = fx * Fy;
-            }
-          }
-          terms[i] = (std::isfinite(val) && val > 0.0) ? val : 0.0;
-        }
-        return true;
-      };
-      return integrate_coupling_mass_batch_adaptive(upper, rel_tol, abs_tol,
-                                                    max_depth, eval_terms);
-    };
-
-    const double i_fc_fx = integrate_pair_term(0);
-    const double i_fx_fc = integrate_pair_term(1);
-    const double i_fx_fy = integrate_pair_term(2);
-    const double total = i_fc_fx + i_fx_fc - coeff * i_fx_fy;
-    if (!std::isfinite(total) || total <= 0.0) {
-      return 0.0;
-    }
-    return clamp_probability(total);
-  }
-  return 0.0;
+  return out[0];
 }
 
 bool evaluate_outcome_coupling_unified_batch(
@@ -1951,250 +2024,9 @@ bool evaluate_outcome_coupling_unified_batch(
     const std::vector<const uuber::TrialParamsSoA *> &trial_params_soa_batch,
     std::vector<double> &out) {
   record_unified_outcome_coupling_eval_call();
-  out.assign(trial_params_soa_batch.size(), 0.0);
-  if (trial_params_soa_batch.empty()) {
-    return true;
-  }
-  if (!program.valid || program.kind == OutcomeCouplingOpKind::None) {
-    return true;
-  }
-
-  if (program.kind == OutcomeCouplingOpKind::GenericNodeIntegral) {
-    const OutcomeCouplingGenericNodeIntegralPayload &generic = program.generic;
-    GenericCouplingProviderRuntime provider_runtime =
-        build_generic_coupling_provider_runtime(
-            ctx, generic, forced_complete_bits, forced_complete_bits_valid,
-            forced_survive_bits, forced_survive_bits_valid);
-    if (generic.competitor_node_ids.empty()) {
-      record_generic_coupling_provider_usage(provider_runtime);
-      std::vector<double> upper_vec(trial_params_soa_batch.size(), upper);
-      if (generic_coupling_runtime_has_labelref_fastpath(provider_runtime)) {
-        if (!evaluate_labelref_batch(
-                ctx, provider_runtime.target_ref, component_idx, trial_params,
-                trial_type_key, include_na_donors, outcome_idx_context,
-                upper_vec, false, false, true, nullptr, nullptr, &out,
-                &provider_runtime.labelref_scratch, &trial_params_soa_batch)) {
-          return false;
-        }
-        for (double &value : out) {
-          value = clamp_probability(value);
-        }
-        return true;
-      }
-
-      NodeEvalState state(ctx, 0.0, component_idx, trial_params, trial_type_key,
-                          false, -1, nullptr, nullptr,
-                          forced_complete_bits_valid ? forced_complete_bits
-                                                    : nullptr,
-                          forced_complete_bits_valid,
-                          forced_survive_bits_valid ? forced_survive_bits
-                                                    : nullptr,
-                          forced_survive_bits_valid);
-      state.trial_params_soa_batch = &trial_params_soa_batch;
-      uuber::KernelBatchRuntimeState batch_runtime;
-      uuber::KernelNodeBatchValues batch_values;
-      const int node_idx = resolve_dense_node_idx_required(ctx, generic.node_id);
-      if (!evaluator_eval_node_batch_with_state_dense(
-              node_idx, upper_vec, state, EvalNeed::kCDF, batch_runtime,
-              batch_values) ||
-          batch_values.cdf.size() != upper_vec.size()) {
-        return false;
-      }
-      for (std::size_t i = 0; i < out.size(); ++i) {
-        out[i] = clamp_probability(batch_values.cdf[i]);
-      }
-      return true;
-    }
-
-    record_generic_coupling_provider_usage(provider_runtime);
-    auto eval_generic_terms =
-        [&](const std::vector<double> &nodes, std::vector<double> &terms)
-        -> bool {
-      return evaluate_generic_terms_resolved_provider_batch(
-          ctx, generic, provider_runtime, component_idx, trial_params,
-          trial_type_key, include_na_donors, outcome_idx_context,
-          forced_complete_bits, forced_complete_bits_valid, forced_survive_bits,
-          forced_survive_bits_valid, nodes, trial_params_soa_batch, terms);
-    };
-    return integrate_coupling_mass_batch_adaptive(
-        upper, rel_tol, abs_tol, max_depth, trial_params_soa_batch.size(),
-        eval_generic_terms, out);
-  }
-
-  if (program.kind == OutcomeCouplingOpKind::NWay) {
-    const OutcomeCouplingNWayPayload &gate = program.nway;
-    if (gate.competitor_refs.empty() || !(upper > 0.0)) {
-      return true;
-    }
-
-    CouplingBatchScratch eval_scratch;
-    std::vector<double> gate_upper_times(trial_params_soa_batch.size(), upper);
-    std::vector<double> gate_cdf;
-    if (!evaluate_labelref_batch(
-            ctx, gate.gate_ref, component_idx, trial_params, trial_type_key,
-            include_na_donors, outcome_idx_context, gate_upper_times, false,
-            false, true, nullptr, nullptr, &gate_cdf, &eval_scratch,
-            &trial_params_soa_batch) ||
-        gate_cdf.size() != trial_params_soa_batch.size()) {
-      return false;
-    }
-
-    std::vector<double> order_mass;
-    auto eval_nway_terms =
-        [&](const std::vector<double> &nodes, std::vector<double> &terms)
-        -> bool {
-      expand_time_batch_by_trial_params(
-          nodes, trial_params_soa_batch, eval_scratch.expanded_times,
-          eval_scratch.expanded_trial_params_soa);
-      std::vector<double> target_density;
-      if (!evaluate_labelref_batch(
-              ctx, gate.target_ref, component_idx, trial_params, trial_type_key,
-              include_na_donors, outcome_idx_context,
-              eval_scratch.expanded_times, true, false, false, &target_density,
-              nullptr, nullptr, &eval_scratch,
-              &eval_scratch.expanded_trial_params_soa)) {
-        return false;
-      }
-      terms.assign(target_density.size(), 1.0);
-      for (const OutcomeCouplingEventRefPayload &comp_ref :
-           gate.competitor_refs) {
-        if (!evaluate_labelref_batch(
-                ctx, comp_ref, component_idx, trial_params, trial_type_key,
-                include_na_donors, outcome_idx_context,
-                eval_scratch.expanded_times, false, true, false, nullptr,
-                &eval_scratch.temp_survival, nullptr, &eval_scratch,
-                &eval_scratch.expanded_trial_params_soa) ||
-            !multiply_generic_survival_product(
-                terms, eval_scratch.temp_survival)) {
-          return false;
-        }
-      }
-      return finalize_generic_terms_from_density(target_density, terms);
-    };
-    if (!integrate_coupling_mass_batch_adaptive(
-            upper, rel_tol, abs_tol, max_depth, trial_params_soa_batch.size(),
-            eval_nway_terms, order_mass)) {
-      return false;
-    }
-
-    for (std::size_t i = 0; i < out.size(); ++i) {
-      const double coeff = clamp_probability(gate_cdf[i]);
-      const double total = coeff * order_mass[i];
-      out[i] = (std::isfinite(total) && total > 0.0) ? clamp_probability(total)
-                                                     : 0.0;
-    }
-    return true;
-  }
-
-  if (program.kind == OutcomeCouplingOpKind::Pair) {
-    const OutcomeCouplingPairPayload &pair = program.pair;
-    if (!(upper > 0.0)) {
-      return true;
-    }
-
-    CouplingBatchScratch eval_scratch;
-    std::vector<double> coeff(trial_params_soa_batch.size(), 1.0);
-    if (std::isfinite(upper)) {
-      std::vector<double> upper_vec(trial_params_soa_batch.size(), upper);
-      if (!evaluate_labelref_batch(
-              ctx, pair.c_ref, component_idx, trial_params, trial_type_key,
-              include_na_donors, outcome_idx_context, upper_vec, false, false,
-              true, nullptr, nullptr, &coeff, &eval_scratch,
-              &trial_params_soa_batch)) {
-        return false;
-      }
-      for (double &value : coeff) {
-        value = clamp_probability(value);
-      }
-    }
-
-    auto integrate_pair_term =
-        [&](int term_kind, std::vector<double> &term_out) -> bool {
-      auto eval_terms =
-          [&](const std::vector<double> &nodes,
-              std::vector<double> &terms) -> bool {
-        expand_time_batch_by_trial_params(
-            nodes, trial_params_soa_batch, eval_scratch.expanded_times,
-            eval_scratch.expanded_trial_params_soa);
-        std::vector<double> x_density;
-        std::vector<double> x_survival;
-        std::vector<double> y_survival;
-        std::vector<double> c_density;
-        std::vector<double> c_survival;
-        if (!evaluate_labelref_batch(
-                ctx, pair.x_ref, component_idx, trial_params, trial_type_key,
-                include_na_donors, outcome_idx_context,
-                eval_scratch.expanded_times, true, true, false, &x_density,
-                &x_survival, nullptr, &eval_scratch,
-                &eval_scratch.expanded_trial_params_soa) ||
-            !evaluate_labelref_batch(
-                ctx, pair.y_ref, component_idx, trial_params, trial_type_key,
-                include_na_donors, outcome_idx_context,
-                eval_scratch.expanded_times, false, true, false, nullptr,
-                &y_survival, nullptr, &eval_scratch,
-                &eval_scratch.expanded_trial_params_soa) ||
-            !evaluate_labelref_batch(
-                ctx, pair.c_ref, component_idx, trial_params, trial_type_key,
-                include_na_donors, outcome_idx_context,
-                eval_scratch.expanded_times, true, true, false, &c_density,
-                &c_survival, nullptr, &eval_scratch,
-                &eval_scratch.expanded_trial_params_soa)) {
-          return false;
-        }
-        terms.assign(x_density.size(), 0.0);
-        const std::size_t node_count = nodes.size();
-        for (std::size_t point_idx = 0; point_idx < trial_params_soa_batch.size();
-             ++point_idx) {
-          const std::size_t offset = point_idx * node_count;
-          for (std::size_t node_idx = 0; node_idx < node_count; ++node_idx) {
-            const std::size_t flat_idx = offset + node_idx;
-            const double fx = safe_density(x_density[flat_idx]);
-            const double fc = safe_density(c_density[flat_idx]);
-            const double Fx =
-                clamp_probability(1.0 - clamp_probability(x_survival[flat_idx]));
-            const double Fy =
-                clamp_probability(1.0 - clamp_probability(y_survival[flat_idx]));
-            const double Fc =
-                clamp_probability(1.0 - clamp_probability(c_survival[flat_idx]));
-            double value = 0.0;
-            if (term_kind == 0) {
-              if (fc > 0.0 && Fx > 0.0) {
-                value = fc * Fx;
-              }
-            } else if (term_kind == 1) {
-              if (fx > 0.0 && Fc > 0.0) {
-                value = fx * Fc;
-              }
-            } else if (fx > 0.0 && Fy > 0.0) {
-              value = fx * Fy;
-            }
-            terms[flat_idx] =
-                (std::isfinite(value) && value > 0.0) ? value : 0.0;
-          }
-        }
-        return true;
-      };
-      return integrate_coupling_mass_batch_adaptive(
-          upper, rel_tol, abs_tol, max_depth, trial_params_soa_batch.size(),
-          eval_terms, term_out);
-    };
-
-    std::vector<double> i_fc_fx;
-    std::vector<double> i_fx_fc;
-    std::vector<double> i_fx_fy;
-    if (!integrate_pair_term(0, i_fc_fx) ||
-        !integrate_pair_term(1, i_fx_fc) ||
-        !integrate_pair_term(2, i_fx_fy)) {
-      return false;
-    }
-
-    for (std::size_t i = 0; i < out.size(); ++i) {
-      const double total = i_fc_fx[i] + i_fx_fc[i] - coeff[i] * i_fx_fy[i];
-      out[i] = (std::isfinite(total) && total > 0.0) ? clamp_probability(total)
-                                                     : 0.0;
-    }
-    return true;
-  }
-
-  return false;
+  return evaluate_outcome_coupling_vector_program_batch_internal(
+      ctx, program, upper, component_idx, trial_params, trial_type_key,
+      rel_tol, abs_tol, max_depth, include_na_donors, outcome_idx_context,
+      forced_complete_bits, forced_complete_bits_valid, forced_survive_bits,
+      forced_survive_bits_valid, trial_params_soa_batch, out);
 }

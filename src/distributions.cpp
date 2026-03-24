@@ -373,6 +373,11 @@ trial_params_soa_for_batch_point(const NodeEvalState &state,
   return state.trial_params_soa;
 }
 
+inline bool try_eval_conditioned_simple_acc_event_batch(
+    const NodeEvalState &state, const uuber::IrEvent &event,
+    const std::vector<double> &times, EvalNeed need,
+    uuber::TreeNodeBatchValues &out_values);
+
 inline bool try_evaluate_simple_overlap_event_batch_values(
     const uuber::NativeContext &ctx, int node_idx,
     const std::vector<double> &times, int component_idx,
@@ -385,7 +390,9 @@ inline bool evaluate_overlap_event_batch_values(
     const std::vector<double> &times, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
-    uuber::TreeNodeBatchValues &out_values) {
+    uuber::TreeNodeBatchValues &out_values,
+    const TimeConstraintMap *time_constraints = nullptr,
+    const ForcedStateView *forced_state_view = nullptr) {
   if (event_idx < 0 || event_idx >= static_cast<int>(ctx.ir.events.size())) {
     return false;
   }
@@ -396,23 +403,50 @@ inline bool evaluate_overlap_event_batch_values(
     return false;
   }
 
-  if (try_evaluate_simple_overlap_event_batch_values(
-          ctx, event.node_idx, times, component_idx, trial_params,
-          trial_params_soa_batch, out_values)) {
-    return true;
-  }
+  const bool has_conditioning =
+      time_constraints_any(time_constraints) ||
+      (forced_state_view != nullptr &&
+       (forced_state_complete_valid(*forced_state_view) ||
+        forced_state_survive_valid(*forced_state_view)));
 
-  NodeEvalState state(ctx, 0.0, component_idx, trial_params, trial_type_key,
-                      false, -1);
-  state.trial_params_soa_batch = trial_params_soa_batch;
-  if (!evaluator_eval_node_batch_with_state_dense(
-          event.node_idx, times, state,
-          EvalNeed::kDensity | EvalNeed::kSurvival | EvalNeed::kCDF,
-          out_values) ||
-      out_values.density.size() != times.size() ||
-      out_values.survival.size() != times.size() ||
-      out_values.cdf.size() != times.size()) {
-    return false;
+  if (has_conditioning) {
+    NodeEvalState state(ctx, 0.0, component_idx, trial_params, trial_type_key,
+                        false, -1, time_constraints, nullptr, nullptr, false,
+                        nullptr, false, forced_state_view);
+    state.trial_params_soa_batch = trial_params_soa_batch;
+    if (try_eval_conditioned_simple_acc_event_batch(state, event, times,
+                                                    EvalNeed::kDensity |
+                                                        EvalNeed::kSurvival |
+                                                        EvalNeed::kCDF,
+                                                    out_values)) {
+      return true;
+    }
+    if (!evaluator_eval_node_batch_with_state_dense(
+            event.node_idx, times, state,
+            EvalNeed::kDensity | EvalNeed::kSurvival | EvalNeed::kCDF,
+            out_values) ||
+        out_values.density.size() != times.size() ||
+        out_values.survival.size() != times.size() ||
+        out_values.cdf.size() != times.size()) {
+      return false;
+    }
+  } else if (try_evaluate_simple_overlap_event_batch_values(
+                 ctx, event.node_idx, times, component_idx, trial_params,
+                 trial_params_soa_batch, out_values)) {
+    return true;
+  } else {
+    NodeEvalState state(ctx, 0.0, component_idx, trial_params, trial_type_key,
+                        false, -1);
+    state.trial_params_soa_batch = trial_params_soa_batch;
+    if (!evaluator_eval_node_batch_with_state_dense(
+            event.node_idx, times, state,
+            EvalNeed::kDensity | EvalNeed::kSurvival | EvalNeed::kCDF,
+            out_values) ||
+        out_values.density.size() != times.size() ||
+        out_values.survival.size() != times.size() ||
+        out_values.cdf.size() != times.size()) {
+      return false;
+    }
   }
   for (std::size_t i = 0; i < times.size(); ++i) {
     out_values.density[i] = safe_density(out_values.density[i]);
@@ -426,6 +460,8 @@ struct TimeIntegralPointPlan {
   std::size_t begin{0u};
   std::size_t count{0u};
 };
+
+struct DensityBatchWorkspace;
 
 inline double max_positive_finite_upper(const std::vector<double> &upper_bounds) {
   double max_upper = 0.0;
@@ -598,7 +634,9 @@ inline bool evaluate_specialized_pair_overlap_density_batch(
     const std::vector<double> &times, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
-    std::vector<double> &density_out) {
+    std::vector<double> &density_out,
+    const TimeConstraintMap *time_constraints = nullptr,
+    const ForcedStateView *forced_state_view = nullptr) {
   density_out.assign(times.size(), 0.0);
   if (spec.target_event_idx < 0 || spec.gate_event_idx < 0 ||
       spec.aux_event_count != 1 || spec.aux_event_begin < 0 ||
@@ -627,13 +665,16 @@ inline bool evaluate_specialized_pair_overlap_density_batch(
   uuber::TreeNodeBatchValues other_values;
   if (!evaluate_overlap_event_batch_values(
           ctx, spec.gate_event_idx, eval_times, component_idx, trial_params,
-          trial_type_key, trial_params_soa_batch, gate_values) ||
+          trial_type_key, trial_params_soa_batch,
+          gate_values, time_constraints, forced_state_view) ||
       !evaluate_overlap_event_batch_values(
           ctx, spec.target_event_idx, eval_times, component_idx, trial_params,
-          trial_type_key, trial_params_soa_batch, target_values) ||
+          trial_type_key, trial_params_soa_batch,
+          target_values, time_constraints, forced_state_view) ||
       !evaluate_overlap_event_batch_values(
           ctx, y_event_idx, eval_times, component_idx, trial_params,
-          trial_type_key, trial_params_soa_batch, other_values)) {
+          trial_type_key, trial_params_soa_batch,
+          other_values, time_constraints, forced_state_view)) {
     return false;
   }
 
@@ -653,7 +694,7 @@ inline bool evaluate_specialized_pair_overlap_density_batch(
   const double quadrature_upper = max_positive_finite_upper(eval_times);
   if (quadrature_upper > 0.0 &&
       !build_time_integral_query_plan(
-          eval_times, 0.0, quadrature_upper, 2, quadrature_plans,
+          eval_times, 0.0, quadrature_upper, 4, quadrature_plans,
           quadrature_times, quadrature_weights, point_trial_params_soa,
           &quadrature_trial_params_soa, &valid_points)) {
     return false;
@@ -665,11 +706,11 @@ inline bool evaluate_specialized_pair_overlap_density_batch(
       (!evaluate_overlap_event_batch_values(
            ctx, spec.target_event_idx, quadrature_times, component_idx,
            trial_params, trial_type_key, &quadrature_trial_params_soa,
-           quadrature_target_values) ||
+           quadrature_target_values, time_constraints, forced_state_view) ||
        !evaluate_overlap_event_batch_values(
            ctx, y_event_idx, quadrature_times, component_idx, trial_params,
            trial_type_key, &quadrature_trial_params_soa,
-           quadrature_other_values))) {
+           quadrature_other_values, time_constraints, forced_state_view))) {
     return false;
   }
 
@@ -708,7 +749,9 @@ inline bool evaluate_specialized_guarded_pair_overlap_density_batch(
     const std::vector<double> &times, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
-    std::vector<double> &density_out) {
+    std::vector<double> &density_out,
+    const TimeConstraintMap *time_constraints = nullptr,
+    const ForcedStateView *forced_state_view = nullptr) {
   density_out.assign(times.size(), 0.0);
   if (spec.target_event_idx < 0 || spec.gate_event_idx < 0 ||
       spec.blocker_event_idx < 0 || spec.aux_event_count != 1 ||
@@ -740,16 +783,20 @@ inline bool evaluate_specialized_guarded_pair_overlap_density_batch(
   uuber::TreeNodeBatchValues blocker_values;
   if (!evaluate_overlap_event_batch_values(
           ctx, spec.gate_event_idx, eval_times, component_idx, trial_params,
-          trial_type_key, trial_params_soa_batch, gate_values) ||
+          trial_type_key, trial_params_soa_batch,
+          gate_values, time_constraints, forced_state_view) ||
       !evaluate_overlap_event_batch_values(
           ctx, spec.target_event_idx, eval_times, component_idx, trial_params,
-          trial_type_key, trial_params_soa_batch, target_values) ||
+          trial_type_key, trial_params_soa_batch,
+          target_values, time_constraints, forced_state_view) ||
       !evaluate_overlap_event_batch_values(
           ctx, other_event_idx, eval_times, component_idx, trial_params,
-          trial_type_key, trial_params_soa_batch, other_values) ||
+          trial_type_key, trial_params_soa_batch,
+          other_values, time_constraints, forced_state_view) ||
       !evaluate_overlap_event_batch_values(
           ctx, spec.blocker_event_idx, eval_times, component_idx, trial_params,
-          trial_type_key, trial_params_soa_batch, blocker_values)) {
+          trial_type_key, trial_params_soa_batch,
+          blocker_values, time_constraints, forced_state_view)) {
     return false;
   }
 
@@ -783,19 +830,19 @@ inline bool evaluate_specialized_guarded_pair_overlap_density_batch(
       (!evaluate_overlap_event_batch_values(
            ctx, spec.gate_event_idx, quadrature_times, component_idx,
            trial_params, trial_type_key, &quadrature_trial_params_soa,
-           quadrature_gate_values) ||
+           quadrature_gate_values, time_constraints, forced_state_view) ||
        !evaluate_overlap_event_batch_values(
            ctx, spec.target_event_idx, quadrature_times, component_idx,
            trial_params, trial_type_key, &quadrature_trial_params_soa,
-           quadrature_target_values) ||
+           quadrature_target_values, time_constraints, forced_state_view) ||
        !evaluate_overlap_event_batch_values(
            ctx, other_event_idx, quadrature_times, component_idx, trial_params,
            trial_type_key, &quadrature_trial_params_soa,
-           quadrature_other_values) ||
+           quadrature_other_values, time_constraints, forced_state_view) ||
        !evaluate_overlap_event_batch_values(
            ctx, spec.blocker_event_idx, quadrature_times, component_idx,
            trial_params, trial_type_key, &quadrature_trial_params_soa,
-           quadrature_blocker_values))) {
+           quadrature_blocker_values, time_constraints, forced_state_view))) {
     return false;
   }
 
@@ -869,12 +916,141 @@ inline bool evaluate_specialized_guarded_pair_overlap_density_batch(
   return true;
 }
 
+inline bool evaluate_specialized_shared_blocker_pair_density_batch(
+    const uuber::NativeContext &ctx, const uuber::IrOutcomeCouplingOp &spec,
+    const std::vector<double> &times, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
+    std::vector<double> &density_out,
+    const TimeConstraintMap *time_constraints = nullptr,
+    const ForcedStateView *forced_state_view = nullptr) {
+  density_out.assign(times.size(), 0.0);
+  if (spec.target_event_idx < 0 || spec.blocker_event_idx < 0 ||
+      spec.aux_event_count != 1 || spec.aux_event_begin < 0 ||
+      spec.aux_event_begin >=
+          static_cast<int>(ctx.ir.outcome_coupling_event_indices.size())) {
+    return false;
+  }
+  const int other_event_idx = ctx.ir.outcome_coupling_event_indices
+      [static_cast<std::size_t>(spec.aux_event_begin)];
+  if (other_event_idx < 0 ||
+      other_event_idx >= static_cast<int>(ctx.ir.events.size())) {
+    return false;
+  }
+
+  std::vector<double> eval_times(times);
+  std::vector<std::uint8_t> valid_points(times.size(), 0u);
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    if (std::isfinite(times[i]) && times[i] >= 0.0) {
+      valid_points[i] = 1u;
+    } else {
+      eval_times[i] = 0.0;
+    }
+  }
+
+  uuber::TreeNodeBatchValues target_values;
+  uuber::TreeNodeBatchValues blocker_values;
+  if (!evaluate_overlap_event_batch_values(
+          ctx, spec.target_event_idx, eval_times, component_idx, trial_params,
+          trial_type_key, trial_params_soa_batch, target_values,
+          time_constraints, forced_state_view) ||
+      !evaluate_overlap_event_batch_values(
+          ctx, spec.blocker_event_idx, eval_times, component_idx, trial_params,
+          trial_type_key, trial_params_soa_batch, blocker_values,
+          time_constraints, forced_state_view)) {
+    return false;
+  }
+
+  if (spec.target_branch_guarded) {
+    for (std::size_t i = 0; i < times.size(); ++i) {
+      if (valid_points[i] == 0u) {
+        continue;
+      }
+      density_out[i] = safe_density(target_values.density[i] *
+                                    blocker_values.survival[i]);
+    }
+    return true;
+  }
+
+  uuber::TreeNodeBatchValues guard_values;
+  if (!evaluate_overlap_event_batch_values(
+          ctx, other_event_idx, eval_times, component_idx, trial_params,
+          trial_type_key, trial_params_soa_batch, guard_values,
+          time_constraints, forced_state_view)) {
+    return false;
+  }
+
+  std::vector<const uuber::TrialParamsSoA *> point_trial_params_soa_storage;
+  const std::vector<const uuber::TrialParamsSoA *> *point_trial_params_soa =
+      nullptr;
+  if (!resolve_point_trial_params_soa_batch(
+          ctx, times.size(), trial_params, trial_params_soa_batch,
+          point_trial_params_soa_storage, point_trial_params_soa)) {
+    return false;
+  }
+
+  std::vector<TimeIntegralPointPlan> quadrature_plans;
+  std::vector<double> quadrature_times;
+  std::vector<double> quadrature_weights;
+  std::vector<const uuber::TrialParamsSoA *> quadrature_trial_params_soa;
+  const double quadrature_upper = max_positive_finite_upper(eval_times);
+  if (quadrature_upper > 0.0 &&
+      !build_time_integral_query_plan(
+          eval_times, 0.0, quadrature_upper, 2, quadrature_plans,
+          quadrature_times, quadrature_weights, point_trial_params_soa,
+          &quadrature_trial_params_soa, &valid_points)) {
+    return false;
+  }
+
+  uuber::TreeNodeBatchValues quadrature_blocker_values;
+  uuber::TreeNodeBatchValues quadrature_guard_values;
+  if (!quadrature_times.empty() &&
+      (!evaluate_overlap_event_batch_values(
+           ctx, spec.blocker_event_idx, quadrature_times, component_idx,
+           trial_params, trial_type_key, &quadrature_trial_params_soa,
+           quadrature_blocker_values, time_constraints, forced_state_view) ||
+       !evaluate_overlap_event_batch_values(
+           ctx, other_event_idx, quadrature_times, component_idx, trial_params,
+           trial_type_key, &quadrature_trial_params_soa,
+           quadrature_guard_values, time_constraints, forced_state_view))) {
+    return false;
+  }
+
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    if (valid_points[i] == 0u) {
+      continue;
+    }
+    double blocked_mass = 0.0;
+    const TimeIntegralPointPlan &plan = quadrature_plans[i];
+    for (std::size_t query_idx = plan.begin;
+         query_idx < plan.begin + plan.count; ++query_idx) {
+      const double weight = quadrature_weights[query_idx];
+      if (!std::isfinite(weight) || weight <= 0.0) {
+        continue;
+      }
+      const double term = safe_density(
+          quadrature_blocker_values.density[query_idx] *
+          quadrature_guard_values.survival[query_idx]);
+      if (term > 0.0) {
+        blocked_mass += weight * term;
+      }
+    }
+    density_out[i] = safe_density(
+        blocker_values.density[i] * target_values.cdf[i] *
+            guard_values.survival[i] +
+        target_values.density[i] * blocked_mass);
+  }
+  return true;
+}
+
 inline bool evaluate_specialized_nway_overlap_density_batch(
     const uuber::NativeContext &ctx, const uuber::IrOutcomeCouplingOp &spec,
     const std::vector<double> &times, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
-    std::vector<double> &density_out) {
+    std::vector<double> &density_out,
+    const TimeConstraintMap *time_constraints = nullptr,
+    const ForcedStateView *forced_state_view = nullptr) {
   density_out.assign(times.size(), 0.0);
   if (spec.target_event_idx < 0 || spec.gate_event_idx < 0 ||
       spec.aux_event_count <= 0 || spec.aux_event_begin < 0 ||
@@ -908,10 +1084,12 @@ inline bool evaluate_specialized_nway_overlap_density_batch(
   uuber::TreeNodeBatchValues target_values;
   if (!evaluate_overlap_event_batch_values(
           ctx, spec.gate_event_idx, eval_times, component_idx, trial_params,
-          trial_type_key, trial_params_soa_batch, gate_values) ||
+          trial_type_key, trial_params_soa_batch,
+          gate_values, time_constraints, forced_state_view) ||
       !evaluate_overlap_event_batch_values(
           ctx, spec.target_event_idx, eval_times, component_idx, trial_params,
-          trial_type_key, trial_params_soa_batch, target_values)) {
+          trial_type_key, trial_params_soa_batch,
+          target_values, time_constraints, forced_state_view)) {
     return false;
   }
 
@@ -922,7 +1100,8 @@ inline bool evaluate_specialized_nway_overlap_density_batch(
     if (!evaluate_overlap_event_batch_values(
             ctx, competitor_event_indices[comp_idx], eval_times, component_idx,
             trial_params, trial_type_key, trial_params_soa_batch,
-            competitor_values[comp_idx])) {
+            competitor_values[comp_idx], time_constraints,
+            forced_state_view)) {
       return false;
     }
   }
@@ -956,7 +1135,7 @@ inline bool evaluate_specialized_nway_overlap_density_batch(
       !evaluate_overlap_event_batch_values(
           ctx, spec.target_event_idx, quadrature_times, component_idx,
           trial_params, trial_type_key, &quadrature_trial_params_soa,
-          quadrature_target_values)) {
+          quadrature_target_values, time_constraints, forced_state_view)) {
     return false;
   }
   for (std::size_t comp_idx = 0; comp_idx < competitor_event_indices.size();
@@ -966,7 +1145,8 @@ inline bool evaluate_specialized_nway_overlap_density_batch(
             ctx, competitor_event_indices[comp_idx], quadrature_times,
             component_idx, trial_params, trial_type_key,
             &quadrature_trial_params_soa,
-            quadrature_competitor_values[comp_idx])) {
+            quadrature_competitor_values[comp_idx], time_constraints,
+            forced_state_view)) {
       return false;
     }
   }
@@ -1012,7 +1192,9 @@ inline bool evaluate_specialized_overlap_density_batch(
     const std::vector<double> &times, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
-    std::vector<double> &density_out) {
+    std::vector<double> &density_out,
+    const TimeConstraintMap *time_constraints = nullptr,
+    const ForcedStateView *forced_state_view = nullptr) {
   if (coupling_spec == nullptr) {
     return false;
   }
@@ -1020,15 +1202,23 @@ inline bool evaluate_specialized_overlap_density_batch(
   case uuber::IrOutcomeCouplingKind::Pair:
     return evaluate_specialized_pair_overlap_density_batch(
         ctx, *coupling_spec, times, component_idx, trial_params, trial_type_key,
-        trial_params_soa_batch, density_out);
+        trial_params_soa_batch, density_out, time_constraints,
+        forced_state_view);
   case uuber::IrOutcomeCouplingKind::GuardedPair:
     return evaluate_specialized_guarded_pair_overlap_density_batch(
         ctx, *coupling_spec, times, component_idx, trial_params, trial_type_key,
-        trial_params_soa_batch, density_out);
+        trial_params_soa_batch, density_out, time_constraints,
+        forced_state_view);
+  case uuber::IrOutcomeCouplingKind::SharedBlockerPair:
+    return evaluate_specialized_shared_blocker_pair_density_batch(
+        ctx, *coupling_spec, times, component_idx, trial_params, trial_type_key,
+        trial_params_soa_batch, density_out, time_constraints,
+        forced_state_view);
   case uuber::IrOutcomeCouplingKind::NWay:
     return evaluate_specialized_nway_overlap_density_batch(
         ctx, *coupling_spec, times, component_idx, trial_params, trial_type_key,
-        trial_params_soa_batch, density_out);
+        trial_params_soa_batch, density_out, time_constraints,
+        forced_state_view);
   default:
     return false;
   }
@@ -1176,7 +1366,8 @@ bool node_density_with_competitors_batch_internal(
     int outcome_idx_context, std::vector<double> &density_out,
     const TimeConstraintMap *time_constraints = nullptr,
     const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch =
-        nullptr);
+        nullptr,
+    DensityBatchWorkspace *workspace = nullptr);
 
 bool node_density_entry_batch_idx(
     const uuber::NativeContext &ctx, int node_id,
@@ -4024,6 +4215,32 @@ inline bool guard_cdf_simple_pair_batch_prepared(
       !prepared.ref_info_valid.empty() && prepared.ref_info_valid[0] != 0u &&
       !prepared.ref_density_ok.empty() && prepared.ref_density_ok[0];
   const bool fast_leaf_ok = prepared.leaf_info_valid;
+  auto try_eval_conditioned_guard_event_batch =
+      [&](int node_idx, EvalNeed need,
+          uuber::TreeNodeBatchValues &values_out) -> bool {
+    if (node_idx < 0 ||
+        node_idx >= static_cast<int>(input.ctx.ir.nodes.size())) {
+      return false;
+    }
+    const uuber::IrNode &node =
+        input.ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
+    if ((node.op != uuber::IrNodeOp::EventAcc &&
+         node.op != uuber::IrNodeOp::EventPool) ||
+        node.event_idx < 0 ||
+        node.event_idx >= static_cast<int>(input.ctx.ir.events.size())) {
+      return false;
+    }
+    NodeEvalState local(input.ctx, quadrature_times.empty() ? 0.0
+                                                            : quadrature_times.front(),
+                        input.component_idx, input.trial_params,
+                        guard_trial_type_key(input), false, -1,
+                        input.time_constraints, nullptr, nullptr, false,
+                        nullptr, false, &input.forced_state);
+    local.trial_params_soa = input.trial_params_soa;
+    return try_eval_conditioned_simple_acc_event_batch(
+        local, input.ctx.ir.events[static_cast<std::size_t>(node.event_idx)],
+        quadrature_times, need, values_out);
+  };
 
   if (fast_ref_ok) {
     if (!eval_fast_event_density_batch_from_info(prepared.ref_infos[0],
@@ -4033,9 +4250,12 @@ inline bool guard_cdf_simple_pair_batch_prepared(
     }
   } else {
     uuber::TreeNodeBatchValues reference_values;
-    if (!eval_node_batch_from_guard_input(
-            input, prepared.chain.reference_indices[0], quadrature_times,
-            EvalNeed::kDensity, reference_values) ||
+    if ((!try_eval_conditioned_guard_event_batch(
+             prepared.chain.reference_indices[0], EvalNeed::kDensity,
+             reference_values) &&
+         !eval_node_batch_from_guard_input(
+             input, prepared.chain.reference_indices[0], quadrature_times,
+             EvalNeed::kDensity, reference_values)) ||
         reference_values.density.size() != quadrature_times.size()) {
       return false;
     }
@@ -4053,9 +4273,12 @@ inline bool guard_cdf_simple_pair_batch_prepared(
     }
   } else {
     uuber::TreeNodeBatchValues blocker_values;
-    if (!eval_node_batch_from_guard_input(
-            input, prepared.chain.leaf_blocker_idx, quadrature_times,
-            EvalNeed::kSurvival, blocker_values) ||
+    if ((!try_eval_conditioned_guard_event_batch(
+             prepared.chain.leaf_blocker_idx, EvalNeed::kSurvival,
+             blocker_values) &&
+         !eval_node_batch_from_guard_input(
+             input, prepared.chain.leaf_blocker_idx, quadrature_times,
+             EvalNeed::kSurvival, blocker_values)) ||
         blocker_values.survival.size() != quadrature_times.size()) {
       return false;
     }
@@ -4306,8 +4529,8 @@ inline bool eval_simple_acc_event_competing_density_batch_from_info(
     SimpleAccEventBatchNodeCacheEntry entry;
     entry.node_id = node_id;
     if (!resolve_simple_acc_event_batch_info(
-            ctx, node_idx, trial_params, trial_params_soa_batch, component_idx,
-            entry.info, false)) {
+            ctx, node_idx, trial_params, trial_params_soa_batch,
+            component_idx, entry.info, false)) {
       return std::numeric_limits<std::size_t>::max();
     }
     node_cache.push_back(std::move(entry));
@@ -4443,6 +4666,211 @@ inline double simple_acc_event_q_for_batch_point(
     return point_soa->q[static_cast<std::size_t>(info.acc_idx)];
   }
   return info.q0;
+}
+
+inline bool try_eval_conditioned_simple_acc_event_batch(
+    const NodeEvalState &state, const uuber::IrEvent &event,
+    const std::vector<double> &times, EvalNeed need,
+    uuber::TreeNodeBatchValues &out_values) {
+  out_values = uuber::TreeNodeBatchValues{};
+  const std::size_t point_count = times.size();
+  out_values.density.assign(point_count, 0.0);
+  out_values.survival.assign(point_count, 1.0);
+  out_values.cdf.assign(point_count, 0.0);
+  if (point_count == 0u || event.node_idx < 0) {
+    return true;
+  }
+
+  const int outcome_idx_context =
+      state.outcome_idx >= 0 ? state.outcome_idx : event.outcome_idx;
+  if (needs_density(need) &&
+      !simple_direct_outcome_fastpath_supported(
+          state.ctx, state.include_na_donors, outcome_idx_context)) {
+    return false;
+  }
+
+  SimpleAccEventBatchInfo info;
+  if (!resolve_simple_acc_event_batch_info(
+          state.ctx, event.node_idx, state.trial_params,
+          state.trial_params_soa_batch, state.component_idx, info, false)) {
+    return false;
+  }
+
+  const int label_id = event.label_id;
+  const SourceTimeConstraint *constraint =
+      time_constraints_find(&state.time_constraints, label_id);
+  const bool self_is_time_conditioned =
+      constraint != nullptr && !time_constraint_empty(*constraint);
+  const bool forced_complete =
+      forced_state_contains_complete(state.forced_state, label_id);
+  const bool forced_survive =
+      forced_state_contains_survive(state.forced_state, label_id);
+
+  if (!self_is_time_conditioned && forced_complete) {
+    if (needs_cdf(need)) {
+      std::fill(out_values.cdf.begin(), out_values.cdf.end(), 1.0);
+    }
+    if (needs_survival(need)) {
+      std::fill(out_values.survival.begin(), out_values.survival.end(), 0.0);
+    }
+    return true;
+  }
+
+  if (forced_survive) {
+    if (self_is_time_conditioned) {
+      if (needs_survival(need)) {
+        std::fill(out_values.survival.begin(), out_values.survival.end(), 0.0);
+      }
+      if (needs_cdf(need)) {
+        std::fill(out_values.cdf.begin(), out_values.cdf.end(), 0.0);
+      }
+    }
+    return true;
+  }
+
+  if (!info.component_ok) {
+    return true;
+  }
+
+  std::vector<double> shifted;
+  std::vector<double> values;
+  std::vector<double> base_density;
+  std::vector<double> base_survival;
+  if (needs_density(need) &&
+      !eval_simple_acc_event_density_batch_from_info(
+          info, times, state.trial_params_soa_batch, shifted, values,
+          base_density)) {
+    return false;
+  }
+  if ((needs_cdf(need) || needs_survival(need) || self_is_time_conditioned) &&
+      !eval_simple_acc_event_survival_batch_from_info(
+          info, times, state.trial_params_soa_batch, shifted, values,
+          base_survival)) {
+    return false;
+  }
+
+  if (!self_is_time_conditioned) {
+    if (needs_density(need)) {
+      out_values.density = std::move(base_density);
+      for (double &value : out_values.density) {
+        value = safe_density(value);
+      }
+    }
+    if (needs_survival(need) || needs_cdf(need)) {
+      for (std::size_t i = 0; i < point_count; ++i) {
+        const double survival = clamp_probability(base_survival[i]);
+        if (needs_survival(need)) {
+          out_values.survival[i] = survival;
+        }
+        if (needs_cdf(need)) {
+          out_values.cdf[i] = clamp_probability(1.0 - survival);
+        }
+      }
+    }
+    return true;
+  }
+
+  double bound_lower = 0.0;
+  double bound_upper = std::numeric_limits<double>::infinity();
+  bool has_exact = false;
+  double exact_time = std::numeric_limits<double>::quiet_NaN();
+  if (constraint->has_exact) {
+    has_exact = true;
+    exact_time = constraint->exact_time;
+  }
+  if (constraint->has_lower) {
+    bound_lower = constraint->lower;
+  }
+  if (constraint->has_upper) {
+    bound_upper = constraint->upper;
+  }
+
+  if (has_exact) {
+    if ((constraint->has_lower &&
+         (!(exact_time > bound_lower) &&
+          !time_constraint_same_time(exact_time, bound_lower))) ||
+        (constraint->has_upper && exact_time > bound_upper &&
+         !time_constraint_same_time(exact_time, bound_upper))) {
+      if (needs_survival(need)) {
+        std::fill(out_values.survival.begin(), out_values.survival.end(), 0.0);
+      }
+      if (needs_cdf(need)) {
+        std::fill(out_values.cdf.begin(), out_values.cdf.end(), 0.0);
+      }
+      return true;
+    }
+    for (std::size_t i = 0; i < point_count; ++i) {
+      const bool before_exact =
+          std::isfinite(times[i]) && times[i] < exact_time &&
+          !time_constraint_same_time(times[i], exact_time);
+      const double cdf_exact = before_exact ? 0.0 : 1.0;
+      if (needs_cdf(need)) {
+        out_values.cdf[i] = cdf_exact;
+      }
+      if (needs_survival(need)) {
+        out_values.survival[i] = 1.0 - cdf_exact;
+      }
+    }
+    return true;
+  }
+
+  const double lower_base_cdf =
+      std::isfinite(bound_lower)
+          ? clamp_probability(eval_cdf_single_with_lower_bound(
+                info.cfg, bound_lower - info.onset_eff, info.lower_bound))
+          : 0.0;
+  const double upper_base_cdf =
+      std::isfinite(bound_upper)
+          ? clamp_probability(eval_cdf_single_with_lower_bound(
+                info.cfg, bound_upper - info.onset_eff, info.lower_bound))
+          : 1.0;
+
+  for (std::size_t i = 0; i < point_count; ++i) {
+    const double q =
+        simple_acc_event_q_for_batch_point(info, state.trial_params_soa_batch, i);
+    const double success_prob = clamp_probability(1.0 - q);
+    const double lower_cdf = clamp_probability(success_prob * lower_base_cdf);
+    const double upper_cdf = clamp_probability(success_prob * upper_base_cdf);
+    const double condition_mass =
+        clamp_probability(upper_cdf - lower_cdf);
+    if (!(bound_upper > bound_lower) || !(condition_mass > 0.0)) {
+      if (needs_survival(need)) {
+        out_values.survival[i] = 0.0;
+      }
+      if (needs_cdf(need)) {
+        out_values.cdf[i] = 0.0;
+      }
+      continue;
+    }
+
+    const double base_cdf =
+        clamp_probability(1.0 - clamp_probability(base_survival[i]));
+    if (needs_density(need)) {
+      if (std::isfinite(times[i]) && times[i] > bound_lower &&
+          times[i] <= bound_upper) {
+        out_values.density[i] =
+            safe_density(safe_density(base_density[i]) / condition_mass);
+      } else {
+        out_values.density[i] = 0.0;
+      }
+    }
+    double cdf_cond = 0.0;
+    if (!std::isfinite(times[i]) || times[i] >= bound_upper) {
+      cdf_cond = 1.0;
+    } else if (!(times[i] > bound_lower)) {
+      cdf_cond = 0.0;
+    } else {
+      cdf_cond = clamp_probability((base_cdf - lower_cdf) / condition_mass);
+    }
+    if (needs_cdf(need)) {
+      out_values.cdf[i] = cdf_cond;
+    }
+    if (needs_survival(need)) {
+      out_values.survival[i] = clamp_probability(1.0 - cdf_cond);
+    }
+  }
+
+  return true;
 }
 
 inline bool eval_simple_acc_event_density_batch_from_info(
@@ -4589,7 +5017,8 @@ bool node_density_with_competitors_batch_internal(
     const std::string &trial_type_key, bool include_na_donors,
     int outcome_idx_context, std::vector<double> &density_out,
     const TimeConstraintMap *time_constraints,
-    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch) {
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
+    DensityBatchWorkspace *workspace) {
   record_unified_outcome_leaf_batch_call(
       static_cast<std::uint64_t>(times.size()),
       trial_params_soa_batch != nullptr);
@@ -4627,10 +5056,17 @@ bool node_density_with_competitors_batch_internal(
       !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
       !forced_bits_any(forced_survive_bits, forced_survive_bits_valid) &&
       !time_constraints_any(time_constraints);
-  if (coupling_forced_empty && !competitor_ids.empty() &&
+  const bool allow_conditioned_specialized_overlap =
+      coupling_spec != nullptr &&
+      coupling_spec->kind == uuber::IrOutcomeCouplingKind::SharedBlockerPair;
+  if (!competitor_ids.empty() &&
+      (coupling_forced_empty || allow_conditioned_specialized_overlap) &&
       evaluate_specialized_overlap_density_batch(
           ctx, coupling_spec, times, component_idx, trial_params,
-          trial_type_key, trial_params_soa_batch, density_out)) {
+          trial_type_key, trial_params_soa_batch, density_out,
+          allow_conditioned_specialized_overlap ? time_constraints : nullptr,
+          allow_conditioned_specialized_overlap ? &state.forced_state
+                                               : nullptr)) {
     return true;
   }
   if (should_use_exact_density_program(ctx, node_idx, competitor_ids, state,
@@ -4743,14 +5179,15 @@ inline bool node_density_entry_batch_idx(
         forced_complete_bits_valid, forced_survive_bits,
         forced_survive_bits_valid, competitor_ids, trial_params, trial_type_key,
         include_na_donors, outcome_idx_context, density_out, time_constraints,
-        trial_params_soa_batch_override);
+        trial_params_soa_batch_override, workspace);
   }
   if (!use_shared_trigger_eval || !trial_params) {
     return node_density_with_competitors_batch_internal(
         ctx, node_id, times, component_idx, forced_complete_bits,
         forced_complete_bits_valid, forced_survive_bits,
         forced_survive_bits_valid, competitor_ids, trial_params, trial_type_key,
-        include_na_donors, outcome_idx_context, density_out, time_constraints);
+        include_na_donors, outcome_idx_context, density_out, time_constraints,
+        nullptr, workspace);
   }
 
   SharedTriggerPlan local_plan;
@@ -4764,7 +5201,8 @@ inline bool node_density_entry_batch_idx(
         ctx, node_id, times, component_idx, forced_complete_bits,
         forced_complete_bits_valid, forced_survive_bits,
         forced_survive_bits_valid, competitor_ids, trial_params, trial_type_key,
-        include_na_donors, outcome_idx_context, density_out, time_constraints);
+        include_na_donors, outcome_idx_context, density_out, time_constraints,
+        nullptr, workspace);
   }
   if (!shared_trigger_density_batch_supported(ctx, include_na_donors,
                                               outcome_idx_context)) {
@@ -4835,7 +5273,7 @@ inline bool node_density_entry_batch_idx(
       forced_complete_bits_valid, forced_survive_bits,
       forced_survive_bits_valid, competitor_ids, trial_params, trial_type_key,
       include_na_donors, outcome_idx_context, batch_density,
-      time_constraints, batch_params_ptr);
+      time_constraints, batch_params_ptr, workspace);
   if (!batched || batch_density.size() != batch_times_ptr->size()) {
     return false;
   }

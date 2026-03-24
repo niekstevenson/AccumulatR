@@ -771,7 +771,9 @@ bool prepare_trial_params_runtime(const uuber::NativeContext &ctx,
   if (!params_ptr) {
     return false;
   }
-  refresh_trial_param_fingerprint(*params_ptr);
+  if (!params_ptr->value_fingerprint_valid) {
+    refresh_trial_param_fingerprint(*params_ptr);
+  }
   out.params = params_ptr;
   out.shared_trigger_source_key = params_ptr->shared_trigger_source_key;
   out.value_key = params_ptr->value_key;

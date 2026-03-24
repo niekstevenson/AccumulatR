@@ -46,7 +46,8 @@ enum class IrOutcomeCouplingKind : std::uint8_t {
   Pair = 1,
   NWay = 2,
   GuardedPair = 3,
-  GenericNodeIntegral = 4
+  SharedBlockerPair = 4,
+  GenericNodeIntegral = 5
 };
 
 enum IrNodeFlags : std::uint32_t {

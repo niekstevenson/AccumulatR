@@ -1652,6 +1652,65 @@ build_context_from_proto(const NativePrepProto &proto) {
     return true;
   };
 
+  auto guarded_single_event_pair =
+      [&](int node_idx, int &event_idx, int &blocker_event,
+          int &reference_idx, int &blocker_node_idx) -> bool {
+    if (node_idx < 0 || node_idx >= static_cast<int>(ir.nodes.size())) {
+      return false;
+    }
+    const IrNode &node = ir.nodes[static_cast<std::size_t>(node_idx)];
+    if (node.op != IrNodeOp::Guard || node.reference_idx < 0 ||
+        node.blocker_idx < 0 ||
+        node.reference_idx >= static_cast<int>(ir.nodes.size()) ||
+        node.blocker_idx >= static_cast<int>(ir.nodes.size())) {
+      return false;
+    }
+    const IrNode &reference =
+        ir.nodes[static_cast<std::size_t>(node.reference_idx)];
+    const IrNode &blocker =
+        ir.nodes[static_cast<std::size_t>(node.blocker_idx)];
+    if (reference.event_idx < 0 ||
+        reference.event_idx >= static_cast<int>(ir.events.size()) ||
+        blocker.event_idx < 0 ||
+        blocker.event_idx >= static_cast<int>(ir.events.size())) {
+      return false;
+    }
+    event_idx = reference.event_idx;
+    blocker_event = blocker.event_idx;
+    reference_idx = node.reference_idx;
+    blocker_node_idx = node.blocker_idx;
+    return true;
+  };
+
+  auto event_is_simple_accumulator =
+      [&](int event_idx) -> bool {
+    if (event_idx < 0 || event_idx >= static_cast<int>(ir.events.size())) {
+      return false;
+    }
+    const IrEvent &event = ir.events[static_cast<std::size_t>(event_idx)];
+    return event.acc_idx >= 0 &&
+           event.acc_idx < static_cast<int>(ctx->accumulators.size()) &&
+           event.pool_idx < 0;
+  };
+
+  auto shared_trigger_dependent_events =
+      [&](int lhs_event_idx, int rhs_event_idx) -> bool {
+    if (!event_is_simple_accumulator(lhs_event_idx) ||
+        !event_is_simple_accumulator(rhs_event_idx)) {
+      return true;
+    }
+    const IrEvent &lhs_event =
+        ir.events[static_cast<std::size_t>(lhs_event_idx)];
+    const IrEvent &rhs_event =
+        ir.events[static_cast<std::size_t>(rhs_event_idx)];
+    const NativeAccumulator &lhs_acc =
+        ctx->accumulators[static_cast<std::size_t>(lhs_event.acc_idx)];
+    const NativeAccumulator &rhs_acc =
+        ctx->accumulators[static_cast<std::size_t>(rhs_event.acc_idx)];
+    return !lhs_acc.shared_trigger_id.empty() &&
+           lhs_acc.shared_trigger_id == rhs_acc.shared_trigger_id;
+  };
+
   auto generic_coupling_requires_exact =
       [&](int node_idx, const std::vector<int> &competitor_nodes) -> bool {
     if (node_idx < 0 || node_idx >= static_cast<int>(ir.nodes.size())) {
@@ -1877,6 +1936,136 @@ build_context_from_proto(const NativePrepProto &proto) {
     return true;
   };
 
+  auto detect_outcome_coupling_shared_blocker_pair_ir =
+      [&](int node_idx, int competitor_idx, std::vector<int> &aux_events,
+          IrOutcomeCouplingOp &spec_out) -> bool {
+    int target_event = -1, target_blocker = -1;
+    int target_ref_idx = -1, target_blocker_node_idx = -1;
+    int comp_event = -1, comp_blocker = -1;
+    int comp_ref_idx = -1, comp_blocker_node_idx = -1;
+    const bool target_guarded = guarded_single_event_pair(
+        node_idx, target_event, target_blocker, target_ref_idx,
+        target_blocker_node_idx);
+    const bool competitor_guarded = guarded_single_event_pair(
+        competitor_idx, comp_event, comp_blocker, comp_ref_idx,
+        comp_blocker_node_idx);
+    if (target_guarded == competitor_guarded) {
+      return false;
+    }
+
+    int guarded_event = -1, guarded_blocker = -1;
+    int guarded_ref_idx = -1, guarded_blocker_node_idx = -1;
+    int plain_a = -1, plain_b = -1;
+    if (target_guarded) {
+      guarded_event = target_event;
+      guarded_blocker = target_blocker;
+      guarded_ref_idx = target_ref_idx;
+      guarded_blocker_node_idx = target_blocker_node_idx;
+      if (!and_event_pair(competitor_idx, plain_a, plain_b)) {
+        return false;
+      }
+    } else {
+      guarded_event = comp_event;
+      guarded_blocker = comp_blocker;
+      guarded_ref_idx = comp_ref_idx;
+      guarded_blocker_node_idx = comp_blocker_node_idx;
+      if (!and_event_pair(node_idx, plain_a, plain_b)) {
+        return false;
+      }
+    }
+    if (guarded_event < 0 || guarded_blocker < 0 || plain_a < 0 ||
+        plain_b < 0) {
+      return false;
+    }
+    if (guarded_event >= static_cast<int>(ir.events.size()) ||
+        guarded_blocker >= static_cast<int>(ir.events.size()) ||
+        plain_a >= static_cast<int>(ir.events.size()) ||
+        plain_b >= static_cast<int>(ir.events.size())) {
+      return false;
+    }
+
+    const int guarded_label =
+        ir.events[static_cast<std::size_t>(guarded_event)].label_id;
+    const int blocker_label =
+        ir.events[static_cast<std::size_t>(guarded_blocker)].label_id;
+    const int plain_l0 = ir.events[static_cast<std::size_t>(plain_a)].label_id;
+    const int plain_l1 = ir.events[static_cast<std::size_t>(plain_b)].label_id;
+    if (guarded_label < 0 || blocker_label < 0 || plain_l0 < 0 ||
+        plain_l1 < 0) {
+      return false;
+    }
+    if (guarded_label == blocker_label || plain_l0 == plain_l1) {
+      return false;
+    }
+
+    int plain_event = -1;
+    int shared_blocker_event = -1;
+    if (plain_l0 == blocker_label) {
+      shared_blocker_event = plain_a;
+      plain_event = plain_b;
+    } else if (plain_l1 == blocker_label) {
+      shared_blocker_event = plain_b;
+      plain_event = plain_a;
+    } else {
+      return false;
+    }
+    if (plain_event < 0 || shared_blocker_event < 0) {
+      return false;
+    }
+    if (!event_is_simple_accumulator(guarded_event) ||
+        !event_is_simple_accumulator(guarded_blocker) ||
+        !event_is_simple_accumulator(plain_event) ||
+        !event_is_simple_accumulator(shared_blocker_event)) {
+      return false;
+    }
+    const int plain_label =
+        ir.events[static_cast<std::size_t>(plain_event)].label_id;
+    if (plain_label < 0 || plain_label == guarded_label ||
+        plain_label == blocker_label) {
+      return false;
+    }
+    if (shared_trigger_dependent_events(guarded_event, guarded_blocker) ||
+        shared_trigger_dependent_events(guarded_event, plain_event) ||
+        shared_trigger_dependent_events(guarded_blocker, plain_event)) {
+      return false;
+    }
+    if (guarded_ref_idx < 0 || guarded_ref_idx >= static_cast<int>(ir.nodes.size()) ||
+        guarded_blocker_node_idx < 0 ||
+            guarded_blocker_node_idx >= static_cast<int>(ir.nodes.size())) {
+      return false;
+    }
+    const int plain_pair_node_idx = target_guarded ? competitor_idx : node_idx;
+    if (plain_pair_node_idx < 0 ||
+        plain_pair_node_idx >= static_cast<int>(ir.nodes.size())) {
+      return false;
+    }
+    if (mask_overlap(ir.nodes[static_cast<std::size_t>(guarded_ref_idx)],
+                     ir.nodes[static_cast<std::size_t>(guarded_blocker_node_idx)])) {
+      return false;
+    }
+    const int plain_event_node_idx =
+        ir.events[static_cast<std::size_t>(plain_event)].node_idx;
+    if (plain_event_node_idx >= 0 &&
+        plain_event_node_idx < static_cast<int>(ir.nodes.size()) &&
+        (mask_overlap(ir.nodes[static_cast<std::size_t>(guarded_ref_idx)],
+                      ir.nodes[static_cast<std::size_t>(plain_event_node_idx)]) ||
+         mask_overlap(ir.nodes[static_cast<std::size_t>(guarded_blocker_node_idx)],
+                      ir.nodes[static_cast<std::size_t>(plain_event_node_idx)]))) {
+      return false;
+    }
+
+    aux_events.clear();
+    aux_events.push_back(target_guarded ? plain_event : guarded_event);
+    spec_out = IrOutcomeCouplingOp();
+    spec_out.kind = IrOutcomeCouplingKind::SharedBlockerPair;
+    spec_out.node_idx = node_idx;
+    spec_out.target_event_idx = target_guarded ? guarded_event : plain_event;
+    spec_out.blocker_event_idx = guarded_blocker;
+    spec_out.gate_event_idx = shared_blocker_event;
+    spec_out.target_branch_guarded = target_guarded;
+    return true;
+  };
+
   auto detect_outcome_coupling_nway_ir =
       [&](int node_idx, const std::vector<int> &competitor_nodes,
           std::vector<int> &aux_events, IrOutcomeCouplingOp &spec_out) -> bool {
@@ -2021,6 +2210,10 @@ build_context_from_proto(const NativePrepProto &proto) {
           out.node_idx, competitor_nodes[0], aux_events, spec);
       if (!recognized) {
         recognized = detect_outcome_coupling_guarded_pair_ir(
+            out.node_idx, competitor_nodes[0], aux_events, spec);
+      }
+      if (!recognized) {
+        recognized = detect_outcome_coupling_shared_blocker_pair_ir(
             out.node_idx, competitor_nodes[0], aux_events, spec);
       }
     } else if (competitor_nodes.size() >= 2) {

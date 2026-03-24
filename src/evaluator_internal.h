@@ -597,7 +597,7 @@ struct GuardEvalInput {
   const uuber::NativeContext &ctx;
   int node_idx{-1};
   int guard_transition_idx{-1};
-  const uuber::KernelGuardTransition *guard_transition{nullptr};
+  const uuber::TreeGuardTransition *guard_transition{nullptr};
   int component_idx{-1};
   const std::string *trial_type_key{nullptr};
   ForcedStateView forced_state{};
@@ -622,7 +622,7 @@ bool evaluator_eval_node_with_forced_state_view_batch(
     const TrialParamSet *trial_params, const std::string &trial_key,
     const TimeConstraintMap *time_constraints,
     const ForcedStateView &forced_state,
-    uuber::KernelNodeBatchValues &out_values);
+    uuber::TreeNodeBatchValues &out_values);
 GuardEvalInput evaluator_make_guard_input(
     const uuber::NativeContext &ctx, int node_idx, int component_idx,
     const std::string *trial_type_key, const TrialParamSet *trial_params,
@@ -657,13 +657,13 @@ bool evaluator_guard_cdf_batch_prepared(const GuardEvalInput &input,
 NodeEvalResult evaluator_eval_node_recursive_dense(int node_idx,
                                                    NodeEvalState &state,
                                                    EvalNeed need);
-uuber::KernelEventBatchEvalFn evaluator_make_kernel_event_eval_batch(
+uuber::TreeEventBatchEvalFn evaluator_make_tree_event_eval_batch(
     NodeEvalState &state);
-uuber::KernelGuardBatchEvalFn evaluator_make_kernel_guard_eval_batch(
+uuber::TreeGuardBatchEvalFn evaluator_make_tree_guard_eval_batch(
     NodeEvalState &state);
 bool evaluator_eval_node_batch_with_state_dense(
     int node_idx, const std::vector<double> &times, NodeEvalState &state,
-    EvalNeed need, uuber::KernelNodeBatchValues &out_values);
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values);
 double evaluator_evaluate_survival_with_forced(
     int node_id, const uuber::BitsetState *forced_complete_bits,
     bool forced_complete_bits_valid,

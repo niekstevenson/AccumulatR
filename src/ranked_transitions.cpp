@@ -1067,7 +1067,7 @@ bool sequence_prefix_density_batch_resolved(
       const std::size_t group_size = group_end - group_begin;
       denom.assign(group_size, 1.0);
       if (rank_idx > 0u) {
-        uuber::KernelNodeBatchValues denom_values;
+        uuber::TreeNodeBatchValues denom_values;
         if (!exact_eval_node_batch_from_batch(
                 ctx, info_node_idx, lane_group_batch.denom_batch,
                 component_idx, trial_params, trial_type_key,

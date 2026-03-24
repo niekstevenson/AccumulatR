@@ -212,7 +212,7 @@ bool node_contains_guard_compiled(const IrContext &ir, int node_idx,
 
 void validate_guard_transition_completeness(const NativeContext &ctx) {
   const IrContext &ir = ctx.ir;
-  const KernelStateGraph &graph = ctx.kernel_state_graph;
+  const TreeRuntimeMetadata &graph = ctx.tree_runtime;
   const int tree_op_count = compiled_tree_program_op_count(ctx);
   if (graph.node_guard_transition_idx.size() != ir.nodes.size()) {
     Rcpp::stop("IR guard transition index map size mismatch");
@@ -231,7 +231,7 @@ void validate_guard_transition_completeness(const NativeContext &ctx) {
           "IR guard transition missing for node_id=%d node_idx=%d source_count=%d",
           node.node_id, node_idx, node.source_id_count);
     }
-    const KernelGuardTransition &tr =
+    const TreeGuardTransition &tr =
         graph.guard_transitions[static_cast<std::size_t>(tr_idx)];
     if (tr.node_idx != node_idx) {
       Rcpp::stop(
@@ -264,7 +264,7 @@ void validate_guard_transition_completeness(const NativeContext &ctx) {
           "IR guard transition reference/blocker slot invalid for node_id=%d node_idx=%d",
           node.node_id, node_idx);
     }
-    if (tr.eval_mode != KernelGuardEvalMode::LinearChainODE) {
+    if (tr.eval_mode != TreeGuardEvalMode::LinearChainODE) {
       Rcpp::stop("IR guard transition mode must be LinearChainODE for node_id=%d node_idx=%d",
                  node.node_id, node_idx);
     }
@@ -332,7 +332,7 @@ void validate_event_batch_metadata(const NativeContext &ctx) {
 
 void validate_competitor_transition_metadata(const NativeContext &ctx) {
   const IrContext &ir = ctx.ir;
-  const KernelStateGraph &graph = ctx.kernel_state_graph;
+  const TreeRuntimeMetadata &graph = ctx.tree_runtime;
   const int tree_op_count = compiled_tree_program_op_count(ctx);
   const std::size_t n_nodes = ir.nodes.size();
   if (graph.node_contains_guard.size() != n_nodes ||
@@ -1625,6 +1625,33 @@ build_context_from_proto(const NativePrepProto &proto) {
     return true;
   };
 
+  auto guarded_and_event_pair =
+      [&](int node_idx, int &event_a, int &event_b, int &blocker_event,
+          int &reference_idx, int &blocker_node_idx) -> bool {
+    if (node_idx < 0 || node_idx >= static_cast<int>(ir.nodes.size())) {
+      return false;
+    }
+    const IrNode &node = ir.nodes[static_cast<std::size_t>(node_idx)];
+    if (node.op != IrNodeOp::Guard || node.reference_idx < 0 ||
+        node.blocker_idx < 0 ||
+        node.reference_idx >= static_cast<int>(ir.nodes.size()) ||
+        node.blocker_idx >= static_cast<int>(ir.nodes.size())) {
+      return false;
+    }
+    if (!and_event_pair(node.reference_idx, event_a, event_b)) {
+      return false;
+    }
+    const IrNode &blocker = ir.nodes[static_cast<std::size_t>(node.blocker_idx)];
+    if (blocker.event_idx < 0 ||
+        blocker.event_idx >= static_cast<int>(ir.events.size())) {
+      return false;
+    }
+    blocker_event = blocker.event_idx;
+    reference_idx = node.reference_idx;
+    blocker_node_idx = node.blocker_idx;
+    return true;
+  };
+
   auto generic_coupling_requires_exact =
       [&](int node_idx, const std::vector<int> &competitor_nodes) -> bool {
     if (node_idx < 0 || node_idx >= static_cast<int>(ir.nodes.size())) {
@@ -1715,6 +1742,138 @@ build_context_from_proto(const NativePrepProto &proto) {
     spec_out.node_idx = node_idx;
     spec_out.gate_event_idx = pair_c;
     spec_out.target_event_idx = pair_x;
+    return true;
+  };
+
+  auto detect_outcome_coupling_guarded_pair_ir =
+      [&](int node_idx, int competitor_idx, std::vector<int> &aux_events,
+          IrOutcomeCouplingOp &spec_out) -> bool {
+    int target_a = -1, target_b = -1, target_blocker = -1;
+    int target_ref_idx = -1, target_blocker_node_idx = -1;
+    int comp_a = -1, comp_b = -1, comp_blocker = -1;
+    int comp_ref_idx = -1, comp_blocker_node_idx = -1;
+    const bool target_guarded = guarded_and_event_pair(
+        node_idx, target_a, target_b, target_blocker, target_ref_idx,
+        target_blocker_node_idx);
+    const bool competitor_guarded = guarded_and_event_pair(
+        competitor_idx, comp_a, comp_b, comp_blocker, comp_ref_idx,
+        comp_blocker_node_idx);
+    if (target_guarded == competitor_guarded) {
+      return false;
+    }
+
+    int guarded_a = -1, guarded_b = -1, guarded_blocker = -1;
+    int guarded_ref_idx = -1, guarded_blocker_node_idx = -1;
+    int plain_a = -1, plain_b = -1;
+    if (target_guarded) {
+      guarded_a = target_a;
+      guarded_b = target_b;
+      guarded_blocker = target_blocker;
+      guarded_ref_idx = target_ref_idx;
+      guarded_blocker_node_idx = target_blocker_node_idx;
+      if (!and_event_pair(competitor_idx, plain_a, plain_b)) {
+        return false;
+      }
+    } else {
+      guarded_a = comp_a;
+      guarded_b = comp_b;
+      guarded_blocker = comp_blocker;
+      guarded_ref_idx = comp_ref_idx;
+      guarded_blocker_node_idx = comp_blocker_node_idx;
+      if (!and_event_pair(node_idx, plain_a, plain_b)) {
+        return false;
+      }
+    }
+    if (guarded_a < 0 || guarded_b < 0 || plain_a < 0 || plain_b < 0 ||
+        guarded_blocker < 0) {
+      return false;
+    }
+    if (guarded_a >= static_cast<int>(ir.events.size()) ||
+        guarded_b >= static_cast<int>(ir.events.size()) ||
+        plain_a >= static_cast<int>(ir.events.size()) ||
+        plain_b >= static_cast<int>(ir.events.size()) ||
+        guarded_blocker >= static_cast<int>(ir.events.size())) {
+      return false;
+    }
+
+    const int guarded_l0 =
+        ir.events[static_cast<std::size_t>(guarded_a)].label_id;
+    const int guarded_l1 =
+        ir.events[static_cast<std::size_t>(guarded_b)].label_id;
+    const int plain_l0 = ir.events[static_cast<std::size_t>(plain_a)].label_id;
+    const int plain_l1 = ir.events[static_cast<std::size_t>(plain_b)].label_id;
+    const int blocker_label =
+        ir.events[static_cast<std::size_t>(guarded_blocker)].label_id;
+    if (guarded_l0 < 0 || guarded_l1 < 0 || plain_l0 < 0 || plain_l1 < 0 ||
+        blocker_label < 0) {
+      return false;
+    }
+
+    int gate_event = -1;
+    int guarded_event = -1;
+    int plain_event = -1;
+    if (guarded_l0 == plain_l0) {
+      gate_event = guarded_a;
+      guarded_event = guarded_b;
+      plain_event = plain_b;
+    } else if (guarded_l0 == plain_l1) {
+      gate_event = guarded_a;
+      guarded_event = guarded_b;
+      plain_event = plain_a;
+    } else if (guarded_l1 == plain_l0) {
+      gate_event = guarded_b;
+      guarded_event = guarded_a;
+      plain_event = plain_b;
+    } else if (guarded_l1 == plain_l1) {
+      gate_event = guarded_b;
+      guarded_event = guarded_a;
+      plain_event = plain_a;
+    } else {
+      return false;
+    }
+    if (gate_event < 0 || guarded_event < 0 || plain_event < 0) {
+      return false;
+    }
+
+    const int gate_label =
+        ir.events[static_cast<std::size_t>(gate_event)].label_id;
+    const int guarded_label =
+        ir.events[static_cast<std::size_t>(guarded_event)].label_id;
+    const int plain_label =
+        ir.events[static_cast<std::size_t>(plain_event)].label_id;
+    if (gate_label < 0 || guarded_label < 0 || plain_label < 0) {
+      return false;
+    }
+    if (guarded_label == plain_label || guarded_label == gate_label ||
+        plain_label == gate_label || blocker_label == guarded_label ||
+        blocker_label == plain_label || blocker_label == gate_label) {
+      return false;
+    }
+
+    const int plain_pair_node_idx = target_guarded ? competitor_idx : node_idx;
+    if (guarded_ref_idx < 0 || guarded_ref_idx >= static_cast<int>(ir.nodes.size()) ||
+        plain_pair_node_idx < 0 ||
+            plain_pair_node_idx >= static_cast<int>(ir.nodes.size()) ||
+        guarded_blocker_node_idx < 0 ||
+            guarded_blocker_node_idx >= static_cast<int>(ir.nodes.size())) {
+      return false;
+    }
+    if (mask_overlap(ir.nodes[static_cast<std::size_t>(guarded_blocker_node_idx)],
+                     ir.nodes[static_cast<std::size_t>(guarded_ref_idx)]) ||
+        mask_overlap(ir.nodes[static_cast<std::size_t>(guarded_blocker_node_idx)],
+                     ir.nodes[static_cast<std::size_t>(plain_pair_node_idx)])) {
+      return false;
+    }
+
+    aux_events.clear();
+    aux_events.push_back(target_guarded ? plain_event : guarded_event);
+    spec_out = IrOutcomeCouplingOp();
+    spec_out.kind = IrOutcomeCouplingKind::GuardedPair;
+    spec_out.node_idx = node_idx;
+    spec_out.gate_event_idx = gate_event;
+    spec_out.target_event_idx = target_guarded ? guarded_event : plain_event;
+    spec_out.blocker_event_idx = guarded_blocker;
+    spec_out.target_branch_guarded = target_guarded;
     return true;
   };
 
@@ -1860,6 +2019,10 @@ build_context_from_proto(const NativePrepProto &proto) {
     if (competitor_nodes.size() == 1) {
       recognized = detect_outcome_coupling_pair_ir(
           out.node_idx, competitor_nodes[0], aux_events, spec);
+      if (!recognized) {
+        recognized = detect_outcome_coupling_guarded_pair_ir(
+            out.node_idx, competitor_nodes[0], aux_events, spec);
+      }
     } else if (competitor_nodes.size() >= 2) {
       recognized = detect_outcome_coupling_nway_ir(
           out.node_idx, competitor_nodes, aux_events, spec);
@@ -1928,40 +2091,40 @@ build_context_from_proto(const NativePrepProto &proto) {
     ctx->base_params_soa.p8[acc_i] = acc.dist_cfg.p8;
   }
   ctx->base_params_soa.valid = true;
-  ctx->kernel_state_graph = KernelStateGraph{};
-  ctx->kernel_state_graph.forced_bit_count =
+  ctx->tree_runtime = TreeRuntimeMetadata{};
+  ctx->tree_runtime.forced_bit_count =
       static_cast<int>(ctx->ir.label_id_to_bit_idx.size());
-  ctx->kernel_state_graph.bit_idx_to_label_id.assign(
-      ctx->kernel_state_graph.forced_bit_count, NA_INTEGER);
+  ctx->tree_runtime.bit_idx_to_label_id.assign(
+      ctx->tree_runtime.forced_bit_count, NA_INTEGER);
   for (const auto &entry : ctx->ir.label_id_to_bit_idx) {
     const int label_id = entry.first;
     const int bit_idx = entry.second;
     if (bit_idx >= 0 &&
-        bit_idx < static_cast<int>(ctx->kernel_state_graph.bit_idx_to_label_id.size())) {
-      ctx->kernel_state_graph
+        bit_idx < static_cast<int>(ctx->tree_runtime.bit_idx_to_label_id.size())) {
+      ctx->tree_runtime
           .bit_idx_to_label_id[static_cast<std::size_t>(bit_idx)] = label_id;
     }
   }
-  ctx->kernel_state_graph.trigger_op_indices.clear();
-  ctx->kernel_state_graph.trigger_transition_begin.assign(
+  ctx->tree_runtime.trigger_op_indices.clear();
+  ctx->tree_runtime.trigger_transition_begin.assign(
       ctx->shared_trigger_groups.size(), -1);
-  ctx->kernel_state_graph.trigger_transition_count.assign(
+  ctx->tree_runtime.trigger_transition_count.assign(
       ctx->shared_trigger_groups.size(), 0);
-  ctx->kernel_state_graph.node_guard_transition_idx.assign(
+  ctx->tree_runtime.node_guard_transition_idx.assign(
       ctx->ir.nodes.size(), -1);
-  ctx->kernel_state_graph.node_contains_guard.assign(
+  ctx->tree_runtime.node_contains_guard.assign(
       ctx->ir.nodes.size(), static_cast<std::uint8_t>(0));
-  ctx->kernel_state_graph.node_competitor_guard_transition_idx.assign(
+  ctx->tree_runtime.node_competitor_guard_transition_idx.assign(
       ctx->ir.nodes.size(), -1);
-  ctx->kernel_state_graph.node_competitor_transition_mask_begin.assign(
+  ctx->tree_runtime.node_competitor_transition_mask_begin.assign(
       ctx->ir.nodes.size(), -1);
-  ctx->kernel_state_graph.node_competitor_transition_mask_count.assign(
+  ctx->tree_runtime.node_competitor_transition_mask_count.assign(
       ctx->ir.nodes.size(), 0);
-  ctx->kernel_state_graph.node_competitor_transition_invalidate_slot.assign(
+  ctx->tree_runtime.node_competitor_transition_invalidate_slot.assign(
       ctx->ir.nodes.size(), 0);
-  ctx->kernel_state_graph.guard_transitions.clear();
-  ctx->kernel_state_graph.guard_linear_chain_nodes.clear();
-  ctx->kernel_state_graph.guard_transitions.reserve(ctx->ir.nodes.size());
+  ctx->tree_runtime.guard_transitions.clear();
+  ctx->tree_runtime.guard_linear_chain_nodes.clear();
+  ctx->tree_runtime.guard_transitions.reserve(ctx->ir.nodes.size());
   for (int node_idx = 0; node_idx < static_cast<int>(ctx->ir.nodes.size());
        ++node_idx) {
     const IrNode &node = ctx->ir.nodes[static_cast<std::size_t>(node_idx)];
@@ -1976,7 +2139,7 @@ build_context_from_proto(const NativePrepProto &proto) {
       Rcpp::stop("IR guard node_id=%d node_idx=%d missing reference/blocker",
                  node.node_id, node_idx);
     }
-    KernelGuardTransition tr;
+    TreeGuardTransition tr;
     tr.node_idx = node_idx;
     tr.source_mask_begin = node.source_mask_begin;
     tr.source_mask_count = node.source_mask_count;
@@ -1985,7 +2148,7 @@ build_context_from_proto(const NativePrepProto &proto) {
     tr.blocker_node_idx = node.blocker_idx;
     tr.reference_slot = -1;
     tr.blocker_slot = -1;
-    tr.eval_mode = KernelGuardEvalMode::LinearChainODE;
+    tr.eval_mode = TreeGuardEvalMode::LinearChainODE;
     tr.linear_chain_begin = -1;
     tr.linear_chain_count = 0;
     tr.linear_chain_leaf_idx = -1;
@@ -2009,16 +2172,16 @@ build_context_from_proto(const NativePrepProto &proto) {
                  node.node_id, node_idx);
     }
     tr.linear_chain_begin =
-        static_cast<int>(ctx->kernel_state_graph.guard_linear_chain_nodes.size());
+        static_cast<int>(ctx->tree_runtime.guard_linear_chain_nodes.size());
     tr.linear_chain_count = static_cast<int>(chain.reference_indices.size());
     tr.linear_chain_leaf_idx = chain.leaf_blocker_idx;
-    ctx->kernel_state_graph.guard_linear_chain_nodes.insert(
-        ctx->kernel_state_graph.guard_linear_chain_nodes.end(),
+    ctx->tree_runtime.guard_linear_chain_nodes.insert(
+        ctx->tree_runtime.guard_linear_chain_nodes.end(),
         chain.reference_indices.begin(), chain.reference_indices.end());
     const int tr_idx =
-        static_cast<int>(ctx->kernel_state_graph.guard_transitions.size());
-    ctx->kernel_state_graph.guard_transitions.push_back(tr);
-    ctx->kernel_state_graph.node_guard_transition_idx[static_cast<std::size_t>(
+        static_cast<int>(ctx->tree_runtime.guard_transitions.size());
+    ctx->tree_runtime.guard_transitions.push_back(tr);
+    ctx->tree_runtime.node_guard_transition_idx[static_cast<std::size_t>(
         node_idx)] = tr_idx;
   }
   std::vector<int> contains_guard_memo(ctx->ir.nodes.size(), -1);
@@ -2026,7 +2189,7 @@ build_context_from_proto(const NativePrepProto &proto) {
        ++node_idx) {
     const bool contains_guard =
         node_contains_guard_compiled(ctx->ir, node_idx, contains_guard_memo);
-    ctx->kernel_state_graph
+    ctx->tree_runtime
         .node_contains_guard[static_cast<std::size_t>(node_idx)] =
         contains_guard ? static_cast<std::uint8_t>(1)
                        : static_cast<std::uint8_t>(0);
@@ -2039,16 +2202,16 @@ build_context_from_proto(const NativePrepProto &proto) {
     int transition_invalidate_slot = 0;
     int transition_guard_idx = -1;
     if (node.op == IrNodeOp::Guard) {
-      transition_guard_idx = ctx->kernel_state_graph.node_guard_transition_idx
+      transition_guard_idx = ctx->tree_runtime.node_guard_transition_idx
           [static_cast<std::size_t>(node_idx)];
       if (transition_guard_idx < 0 ||
           transition_guard_idx >=
-              static_cast<int>(ctx->kernel_state_graph.guard_transitions.size())) {
+              static_cast<int>(ctx->tree_runtime.guard_transitions.size())) {
         Rcpp::stop("IR competitor guard transition missing for node_idx=%d",
                    node_idx);
       }
-      const KernelGuardTransition &tr =
-          ctx->kernel_state_graph.guard_transitions[static_cast<std::size_t>(
+      const TreeGuardTransition &tr =
+          ctx->tree_runtime.guard_transitions[static_cast<std::size_t>(
               transition_guard_idx)];
       transition_mask_begin = tr.source_mask_begin;
       transition_mask_count = tr.source_mask_count;
@@ -2061,23 +2224,23 @@ build_context_from_proto(const NativePrepProto &proto) {
                    node_idx);
       }
     }
-    ctx->kernel_state_graph
+    ctx->tree_runtime
         .node_competitor_guard_transition_idx[static_cast<std::size_t>(node_idx)] =
         transition_guard_idx;
-    ctx->kernel_state_graph
+    ctx->tree_runtime
         .node_competitor_transition_mask_begin[static_cast<std::size_t>(node_idx)] =
         transition_mask_begin;
-    ctx->kernel_state_graph
+    ctx->tree_runtime
         .node_competitor_transition_mask_count[static_cast<std::size_t>(node_idx)] =
         transition_mask_count;
-    ctx->kernel_state_graph.node_competitor_transition_invalidate_slot
+    ctx->tree_runtime.node_competitor_transition_invalidate_slot
         [static_cast<std::size_t>(node_idx)] = transition_invalidate_slot;
   }
   std::size_t total_trigger_transitions = 0;
   for (const SharedTriggerGroup &group : ctx->shared_trigger_groups) {
     total_trigger_transitions += group.acc_indices.size();
   }
-  ctx->kernel_state_graph.trigger_transitions.reserve(
+  ctx->tree_runtime.trigger_transitions.reserve(
       total_trigger_transitions);
   for (std::size_t tg = 0; tg < ctx->shared_trigger_groups.size(); ++tg) {
     const SharedTriggerGroup &group = ctx->shared_trigger_groups[tg];
@@ -2113,34 +2276,34 @@ build_context_from_proto(const NativePrepProto &proto) {
         std::unique(affected_op_indices.begin(), affected_op_indices.end()),
         affected_op_indices.end());
     const int op_begin =
-        static_cast<int>(ctx->kernel_state_graph.trigger_op_indices.size());
-    ctx->kernel_state_graph.trigger_op_indices.insert(
-        ctx->kernel_state_graph.trigger_op_indices.end(),
+        static_cast<int>(ctx->tree_runtime.trigger_op_indices.size());
+    ctx->tree_runtime.trigger_op_indices.insert(
+        ctx->tree_runtime.trigger_op_indices.end(),
         affected_op_indices.begin(), affected_op_indices.end());
     const int op_count = static_cast<int>(affected_op_indices.size());
     const int transition_begin =
-        static_cast<int>(ctx->kernel_state_graph.trigger_transitions.size());
+        static_cast<int>(ctx->tree_runtime.trigger_transitions.size());
     int transition_count = 0;
     for (int acc_idx : group.acc_indices) {
-      KernelStateTransition tr;
+      TreeTriggerTransition tr;
       tr.trigger_bit = static_cast<int>(tg);
       tr.acc_idx = acc_idx;
       tr.op_begin = op_begin;
       tr.op_count = op_count;
-      ctx->kernel_state_graph.trigger_transitions.push_back(tr);
+      ctx->tree_runtime.trigger_transitions.push_back(tr);
       ++transition_count;
     }
-    ctx->kernel_state_graph
+    ctx->tree_runtime
         .trigger_transition_begin[static_cast<std::size_t>(tg)] =
         transition_begin;
-    ctx->kernel_state_graph
+    ctx->tree_runtime
         .trigger_transition_count[static_cast<std::size_t>(tg)] =
         transition_count;
   }
   validate_guard_transition_completeness(*ctx);
   validate_event_batch_metadata(*ctx);
   validate_competitor_transition_metadata(*ctx);
-  ctx->kernel_state_graph.valid = compiled_tree_program_ptr(*ctx) != nullptr;
+  ctx->tree_runtime.valid = compiled_tree_program_ptr(*ctx) != nullptr;
   return ctx;
 }
 

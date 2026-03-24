@@ -197,7 +197,8 @@ bool lower_pair_program(const uuber::NativeContext &ctx, int node_id,
   }
   const uuber::IrOutcomeCouplingOp &spec =
       ctx.ir.outcome_coupling_ops[static_cast<std::size_t>(spec_idx)];
-  if (spec.kind != uuber::IrOutcomeCouplingKind::Pair) {
+  if (spec.kind != uuber::IrOutcomeCouplingKind::Pair &&
+      spec.kind != uuber::IrOutcomeCouplingKind::GuardedPair) {
     return false;
   }
   if (spec.node_idx != node_idx || spec.competitor_count != 1) {
@@ -217,6 +218,7 @@ bool lower_pair_program(const uuber::NativeContext &ctx, int node_id,
   uuber::VectorEventRefPayload x_payload;
   uuber::VectorEventRefPayload y_payload;
   uuber::VectorEventRefPayload c_payload;
+  uuber::VectorEventRefPayload blocker_payload;
   if (!fill_event_payload_from_event(ctx, spec.target_event_idx,
                                      uuber::VectorPayloadRole::PairX,
                                      x_payload) ||
@@ -237,50 +239,155 @@ bool lower_pair_program(const uuber::NativeContext &ctx, int node_id,
                                      y_payload)) {
     return false;
   }
+  const bool guarded_pair =
+      spec.kind == uuber::IrOutcomeCouplingKind::GuardedPair;
+  if (guarded_pair &&
+      (!fill_event_payload_from_event(ctx, spec.blocker_event_idx,
+                                      uuber::VectorPayloadRole::PairBlocker,
+                                      blocker_payload) ||
+       spec.blocker_event_idx < 0)) {
+    return false;
+  }
 
   const int x_idx = append_event_payload(out, x_payload);
   const int y_idx = append_event_payload(out, y_payload);
   const int c_idx = append_event_payload(out, c_payload);
+  const int blocker_idx =
+      guarded_pair ? append_event_payload(out, blocker_payload) : -1;
 
   const int c_cdf = append_op(out, uuber::VectorOpCode::EventCDF, c_idx);
   const int c_density =
       append_op(out, uuber::VectorOpCode::EventDensity, c_idx);
-  const int x_survival =
-      append_op(out, uuber::VectorOpCode::EventSurvival, x_idx);
   const int x_density =
       append_op(out, uuber::VectorOpCode::EventDensity, x_idx);
+  const int x_survival =
+      append_op(out, uuber::VectorOpCode::EventSurvival, x_idx);
+  const int x_cdf = append_op(out, uuber::VectorOpCode::EventCDF, x_idx);
+  const int y_density =
+      append_op(out, uuber::VectorOpCode::EventDensity, y_idx);
   const int y_survival =
       append_op(out, uuber::VectorOpCode::EventSurvival, y_idx);
-  const int c_survival =
-      append_op(out, uuber::VectorOpCode::EventSurvival, c_idx);
-  const int fx =
-      append_op(out, uuber::VectorOpCode::Complement, -1, {x_survival});
-  const int fy =
-      append_op(out, uuber::VectorOpCode::Complement, -1, {y_survival});
-  const int fc =
-      append_op(out, uuber::VectorOpCode::Complement, -1, {c_survival});
-  const int term_fc_fx =
-      append_op(out, uuber::VectorOpCode::Multiply, -1, {c_density, fx});
-  const int term_fx_fc =
-      append_op(out, uuber::VectorOpCode::Multiply, -1, {x_density, fc});
-  const int term_fx_fy =
-      append_op(out, uuber::VectorOpCode::Multiply, -1, {x_density, fy});
-  const int int_fc_fx =
-      append_op(out, uuber::VectorOpCode::Integral, -1, {term_fc_fx});
-  const int int_fx_fc =
-      append_op(out, uuber::VectorOpCode::Integral, -1, {term_fx_fc});
-  const int int_fx_fy =
-      append_op(out, uuber::VectorOpCode::Integral, -1, {term_fx_fy});
-  const int coeff_term =
-      append_op(out, uuber::VectorOpCode::Multiply, -1, {c_cdf, int_fx_fy});
-  const int partial_sum =
-      append_op(out, uuber::VectorOpCode::Add, -1, {int_fc_fx, int_fx_fc});
-  const int result =
-      append_op(out, uuber::VectorOpCode::Subtract, -1,
-                {partial_sum, coeff_term});
+  const int y_cdf = append_op(out, uuber::VectorOpCode::EventCDF, y_idx);
 
+  int density_result = -1;
+  int result = -1;
+  std::vector<int> aux_slots;
+  if (!guarded_pair) {
+    const int c_survival =
+        append_op(out, uuber::VectorOpCode::EventSurvival, c_idx);
+    const int fx =
+        append_op(out, uuber::VectorOpCode::Complement, -1, {x_survival});
+    const int fy =
+        append_op(out, uuber::VectorOpCode::Complement, -1, {y_survival});
+    const int fc =
+        append_op(out, uuber::VectorOpCode::Complement, -1, {c_survival});
+    const int term_fc_fx =
+        append_op(out, uuber::VectorOpCode::Multiply, -1, {c_density, fx});
+    const int term_fx_fc =
+        append_op(out, uuber::VectorOpCode::Multiply, -1, {x_density, fc});
+    const int term_fx_fy =
+        append_op(out, uuber::VectorOpCode::Multiply, -1, {x_density, fy});
+    const int int_fc_fx =
+        append_op(out, uuber::VectorOpCode::Integral, -1, {term_fc_fx});
+    const int int_fx_fc =
+        append_op(out, uuber::VectorOpCode::Integral, -1, {term_fx_fc});
+    const int int_fx_fy =
+        append_op(out, uuber::VectorOpCode::Integral, -1, {term_fx_fy});
+    const int coeff_term =
+        append_op(out, uuber::VectorOpCode::Multiply, -1, {c_cdf, int_fx_fy});
+    const int partial_sum =
+        append_op(out, uuber::VectorOpCode::Add, -1, {int_fc_fx, int_fx_fc});
+    result = append_op(out, uuber::VectorOpCode::Subtract, -1,
+                       {partial_sum, coeff_term});
+    const int density_coeff_term = append_op(
+        out, uuber::VectorOpCode::Multiply, -1, {c_density, int_fx_fy});
+    const int density_gate_term =
+        append_op(out, uuber::VectorOpCode::Multiply, -1, {c_cdf, term_fx_fy});
+    const int density_partial =
+        append_op(out, uuber::VectorOpCode::Add, -1, {term_fc_fx, term_fx_fc});
+    const int density_minus_coeff = append_op(
+        out, uuber::VectorOpCode::Subtract, -1,
+        {density_partial, density_coeff_term});
+    density_result = append_op(out, uuber::VectorOpCode::Subtract, -1,
+                               {density_minus_coeff, density_gate_term});
+    aux_slots = {int_fc_fx, int_fx_fc, int_fx_fy};
+  } else {
+    const int blocker_survival =
+        append_op(out, uuber::VectorOpCode::EventSurvival, blocker_idx);
+    const int blocker_cdf =
+        append_op(out, uuber::VectorOpCode::EventCDF, blocker_idx);
+    if (spec.target_branch_guarded) {
+      const int target_order_term =
+          append_op(out, uuber::VectorOpCode::Multiply, -1,
+                    {x_density, y_survival});
+      const int target_order_mass =
+          append_op(out, uuber::VectorOpCode::Integral, -1, {target_order_term});
+      const int gate_term =
+          append_op(out, uuber::VectorOpCode::Multiply, -1,
+                    {c_density, blocker_survival, target_order_mass});
+      const int target_last_term =
+          append_op(out, uuber::VectorOpCode::Multiply, -1,
+                    {c_cdf, x_density, y_survival, blocker_survival});
+      density_result =
+          append_op(out, uuber::VectorOpCode::Add, -1,
+                    {gate_term, target_last_term});
+      result =
+          append_op(out, uuber::VectorOpCode::Integral, -1, {density_result});
+      aux_slots = {target_order_mass};
+    } else {
+      const int target_before_guarded_term =
+          append_op(out, uuber::VectorOpCode::Multiply, -1,
+                    {x_density, y_survival});
+      const int target_before_guarded_mass = append_op(
+          out, uuber::VectorOpCode::Integral, -1,
+          {target_before_guarded_term});
+      const int blocked_gate_order_term =
+          append_op(out, uuber::VectorOpCode::Multiply, -1,
+                    {x_density, y_cdf});
+      const int blocked_gate_order_mass = append_op(
+          out, uuber::VectorOpCode::Integral, -1,
+          {blocked_gate_order_term});
+      const int gate_plain_term =
+          append_op(out, uuber::VectorOpCode::Multiply, -1,
+                    {c_density, target_before_guarded_mass});
+      const int gate_blocked_term =
+          append_op(out, uuber::VectorOpCode::Multiply, -1,
+                    {c_density, blocker_cdf, blocked_gate_order_mass});
+      const int target_last_plain_term =
+          append_op(out, uuber::VectorOpCode::Multiply, -1,
+                    {x_density, c_cdf, y_survival});
+      const int blocked_gate_integrand =
+          append_op(out, uuber::VectorOpCode::Multiply, -1,
+                    {c_density, blocker_cdf, y_cdf});
+      const int blocked_gate_mass =
+          append_op(out, uuber::VectorOpCode::Integral, -1,
+                    {blocked_gate_integrand});
+      const int target_last_blocked_gate = append_op(
+          out, uuber::VectorOpCode::Multiply, -1,
+          {x_density, blocked_gate_mass});
+      const int blocked_branch_integrand =
+          append_op(out, uuber::VectorOpCode::Multiply, -1,
+                    {y_density, blocker_cdf, c_cdf});
+      const int blocked_branch_mass =
+          append_op(out, uuber::VectorOpCode::Integral, -1,
+                    {blocked_branch_integrand});
+      const int target_last_blocked_branch = append_op(
+          out, uuber::VectorOpCode::Multiply, -1,
+          {x_density, blocked_branch_mass});
+      density_result = append_op(
+          out, uuber::VectorOpCode::Add, -1,
+          {gate_plain_term, gate_blocked_term, target_last_plain_term,
+           target_last_blocked_gate, target_last_blocked_branch});
+      result =
+          append_op(out, uuber::VectorOpCode::Integral, -1, {density_result});
+      aux_slots = {target_before_guarded_mass, blocked_gate_order_mass,
+                   blocked_gate_mass, blocked_branch_mass};
+    }
+  }
+
+  out.outputs.density_slot = density_result;
   out.outputs.coeff_slot = c_cdf;
-  out.outputs.aux_slots = {int_fc_fx, int_fx_fc, int_fx_fy};
+  out.outputs.aux_slots = std::move(aux_slots);
   out.outputs.result_slot = result;
   out.valid = true;
   return true;
@@ -350,6 +457,8 @@ bool lower_nway_program(const uuber::NativeContext &ctx, int node_id,
   const int gate_idx = append_event_payload(out, gate_payload);
   const int target_idx = append_event_payload(out, target_payload);
   const int gate_cdf = append_op(out, uuber::VectorOpCode::EventCDF, gate_idx);
+  const int gate_density =
+      append_op(out, uuber::VectorOpCode::EventDensity, gate_idx);
   const int target_density =
       append_op(out, uuber::VectorOpCode::EventDensity, target_idx);
 
@@ -382,6 +491,16 @@ bool lower_nway_program(const uuber::NativeContext &ctx, int node_id,
       append_op(out, uuber::VectorOpCode::Integral, -1, {running_product});
   const int result =
       append_op(out, uuber::VectorOpCode::Multiply, -1, {gate_cdf, order_mass});
+  const int density_gate_term =
+      append_op(out, uuber::VectorOpCode::Multiply, -1,
+                {gate_density, order_mass});
+  const int density_target_term =
+      append_op(out, uuber::VectorOpCode::Multiply, -1,
+                {gate_cdf, running_product});
+  const int density_result =
+      append_op(out, uuber::VectorOpCode::Add, -1,
+                {density_gate_term, density_target_term});
+  out.outputs.density_slot = density_result;
   out.outputs.coeff_slot = gate_cdf;
   out.outputs.aux_slots = {order_mass};
   out.outputs.result_slot = result;

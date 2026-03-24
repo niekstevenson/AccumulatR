@@ -7,27 +7,27 @@
 
 namespace uuber {
 
-struct KernelEvalNeed {
+struct TreeEvalNeed {
   bool density{false};
   bool survival{false};
   bool cdf{false};
 };
 
-struct KernelNodeBatchValues {
+struct TreeNodeBatchValues {
   std::vector<double> density;
   std::vector<double> survival;
   std::vector<double> cdf;
 };
 
-using KernelEventBatchEvalFn =
+using TreeEventBatchEvalFn =
     std::function<bool(int event_idx, const std::vector<double> &times,
-                       const KernelEvalNeed &need,
-                       KernelNodeBatchValues &out_values)>;
+                       const TreeEvalNeed &need,
+                       TreeNodeBatchValues &out_values)>;
 
-using KernelGuardBatchEvalFn = std::function<bool(
-    const KernelOp &op, const std::vector<double> &times,
-    const KernelNodeBatchValues &reference_values,
-    const KernelNodeBatchValues &blocker_values, const KernelEvalNeed &need,
-    KernelNodeBatchValues &out_values)>;
+using TreeGuardBatchEvalFn = std::function<bool(
+    const TreeEvalOp &op, const std::vector<double> &times,
+    const TreeNodeBatchValues &reference_values,
+    const TreeNodeBatchValues &blocker_values, const TreeEvalNeed &need,
+    TreeNodeBatchValues &out_values)>;
 
 } // namespace uuber

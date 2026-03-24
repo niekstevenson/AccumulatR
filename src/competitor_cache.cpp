@@ -56,7 +56,7 @@ inline void validate_competitor_transition_meta(const uuber::NativeContext &ctx,
   }
   if (meta.guard_transition_idx >= 0 &&
       meta.guard_transition_idx >=
-          static_cast<int>(ctx.kernel_state_graph.guard_transitions.size())) {
+          static_cast<int>(ctx.tree_runtime.guard_transitions.size())) {
     Rcpp::stop("IR competitor guard-transition index invalid for node %d",
                meta.node_id);
   }
@@ -142,14 +142,14 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
   uuber::CompetitorClusterCacheEntry entry;
   std::vector<CompetitorMeta> metas;
   metas.reserve(competitor_ids.size());
-  if (ctx.kernel_state_graph.node_contains_guard.size() != ctx.ir.nodes.size() ||
-      ctx.kernel_state_graph.node_competitor_guard_transition_idx.size() !=
+  if (ctx.tree_runtime.node_contains_guard.size() != ctx.ir.nodes.size() ||
+      ctx.tree_runtime.node_competitor_guard_transition_idx.size() !=
           ctx.ir.nodes.size() ||
-      ctx.kernel_state_graph.node_competitor_transition_mask_begin.size() !=
+      ctx.tree_runtime.node_competitor_transition_mask_begin.size() !=
           ctx.ir.nodes.size() ||
-      ctx.kernel_state_graph.node_competitor_transition_mask_count.size() !=
+      ctx.tree_runtime.node_competitor_transition_mask_count.size() !=
           ctx.ir.nodes.size() ||
-      ctx.kernel_state_graph.node_competitor_transition_invalidate_slot.size() !=
+      ctx.tree_runtime.node_competitor_transition_invalidate_slot.size() !=
           ctx.ir.nodes.size()) {
     Rcpp::stop("IR competitor transition metadata unavailable");
   }
@@ -162,22 +162,22 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
     meta.sources = ensure_source_ids(ctx, node);
     sort_unique(meta.sources);
     const bool contains_guard =
-        ctx.kernel_state_graph
+        ctx.tree_runtime
             .node_contains_guard[static_cast<std::size_t>(node_idx)] != 0u;
     meta.scenario_sensitive =
         (node.flags & uuber::IR_NODE_FLAG_SCENARIO_SENSITIVE) != 0u;
     meta.transition_required = contains_guard && !meta.sources.empty();
     if (meta.transition_required) {
-      meta.guard_transition_idx = ctx.kernel_state_graph
+      meta.guard_transition_idx = ctx.tree_runtime
           .node_competitor_guard_transition_idx[static_cast<std::size_t>(
               node_idx)];
-      meta.transition_mask_begin = ctx.kernel_state_graph
+      meta.transition_mask_begin = ctx.tree_runtime
           .node_competitor_transition_mask_begin[static_cast<std::size_t>(
               node_idx)];
-      meta.transition_mask_count = ctx.kernel_state_graph
+      meta.transition_mask_count = ctx.tree_runtime
           .node_competitor_transition_mask_count[static_cast<std::size_t>(
               node_idx)];
-      meta.invalidate_slot = ctx.kernel_state_graph
+      meta.invalidate_slot = ctx.tree_runtime
           .node_competitor_transition_invalidate_slot[static_cast<std::size_t>(
               node_idx)];
     }
@@ -201,7 +201,7 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
       }
     }
     if (!requires_transition) {
-      uuber::CompetitorCompiledOp op;
+      uuber::TreeCompetitorOp op;
       op.transition_guard_idx = -1;
       op.transition_mask_begin = -1;
       op.transition_mask_count = 0;
@@ -244,7 +244,7 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
                 return a.index < b.index;
               });
     for (const OrderingMeta &rec : order) {
-      uuber::CompetitorCompiledOp op;
+      uuber::TreeCompetitorOp op;
       const CompetitorMeta &meta = metas[static_cast<std::size_t>(rec.index)];
       op.target_node_indices.push_back(meta.node_idx);
       op.transition_guard_idx =
@@ -328,8 +328,8 @@ void competitor_survival_batch_from_state_compiled_ops(
             : 0u;
   }
 
-  uuber::KernelNodeBatchValues node_values;
-  for (const uuber::CompetitorCompiledOp &op : cache.compiled_ops) {
+  uuber::TreeNodeBatchValues node_values;
+  for (const uuber::TreeCompetitorOp &op : cache.compiled_ops) {
     for (int target_node_idx : op.target_node_indices) {
       if (!evaluator_eval_node_batch_with_state_dense(
               target_node_idx, times, state, EvalNeed::kSurvival, node_values) ||

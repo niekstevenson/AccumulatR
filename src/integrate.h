@@ -349,25 +349,42 @@ inline double integrate_boost_fn_0_to_upper(Fn&& integrand,
                                             int max_depth,
                                             bool nonnegative_integrand = false) {
   if (!std::isfinite(upper)) {
-    auto transformed = [&](double x) -> double {
-      if (x <= 0.0) return 0.0;
-      if (x >= 1.0) x = std::nextafter(1.0, 0.0);
-      const double one_minus_x = 1.0 - x;
-      const double t = x / one_minus_x;
-      const double jac = 1.0 / (one_minus_x * one_minus_x);
-      double val = integrand(t);
-      if (!std::isfinite(val)) return 0.0;
-      if (nonnegative_integrand && val <= 0.0) return 0.0;
-      double out = val * jac;
-      if (!std::isfinite(out)) return 0.0;
-      if (nonnegative_integrand && out <= 0.0) return 0.0;
-      return out;
-    };
-    double res =
-        integrate_boost_fn(transformed, 0.0, 1.0, rel_tol, abs_tol, max_depth);
-    if (!std::isfinite(res)) return 0.0;
-    if (nonnegative_integrand && res < 0.0) return 0.0;
-    return res;
+    double total = 0.0;
+    double lo = 0.0;
+    double hi = 0.5;
+    bool saw_positive_segment = false;
+    int small_tail_segments = 0;
+    constexpr int kMaxSegments = 32;
+    for (int seg = 0; seg < kMaxSegments; ++seg) {
+      double piece = integrate_boost_fn(
+          std::forward<Fn>(integrand), lo, hi, rel_tol, abs_tol, max_depth);
+      if (!std::isfinite(piece)) {
+        piece = 0.0;
+      }
+      if (nonnegative_integrand && piece < 0.0) {
+        piece = 0.0;
+      }
+      if (piece > 0.0) {
+        saw_positive_segment = true;
+      }
+      total += piece;
+      const double tail_tol =
+          std::max(std::max(0.0, abs_tol),
+                   std::max(0.0, rel_tol) * std::max(1.0, std::fabs(total)));
+      if (piece <= tail_tol) {
+        ++small_tail_segments;
+      } else {
+        small_tail_segments = 0;
+      }
+      if (saw_positive_segment && hi >= 4.0 && small_tail_segments >= 3) {
+        break;
+      }
+      lo = hi;
+      hi *= 2.0;
+    }
+    if (!std::isfinite(total)) return 0.0;
+    if (nonnegative_integrand && total < 0.0) return 0.0;
+    return total;
   }
   if (upper <= 0.0) return 0.0;
   double res = integrate_boost_fn(

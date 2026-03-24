@@ -77,7 +77,7 @@ bool exact_eval_node_batch_with_points(
     const uuber::NativeContext &ctx, int node_idx,
     const ExactScenarioBatch &points, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values,
     const std::vector<std::uint8_t> *active_mask = nullptr,
     const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr);
 
@@ -86,7 +86,7 @@ bool exact_eval_simple_acc_event_batch(
     const uuber::NativeContext &ctx, const uuber::IrEvent &event,
     const PointVec &points, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values,
     const std::vector<std::uint8_t> *active_mask = nullptr,
     const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr);
 
@@ -143,7 +143,7 @@ inline void exact_scenario_batch_append_point(ExactScenarioBatch &batch,
 
 inline void exact_apply_transition_mask_to_point(
     const uuber::NativeContext &ctx, ExactScenarioBatch &points,
-    std::size_t idx, const uuber::CompetitorCompiledOp &op) {
+    std::size_t idx, const uuber::TreeCompetitorOp &op) {
   if (idx >= points.size()) {
     return;
   }
@@ -239,7 +239,7 @@ bool exact_eval_label_ref_batch(
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     EvalNeed need, const std::vector<std::uint8_t> *active_mask,
     const uuber::TrialParamsSoA *uniform_trial_params_soa,
-    uuber::KernelNodeBatchValues &out_values) {
+    uuber::TreeNodeBatchValues &out_values) {
   const int source_node_idx = exact_find_label_ref_node_idx(ctx, source_ref);
   if (source_node_idx >= 0) {
     return exact_eval_node_batch_with_points(
@@ -423,7 +423,7 @@ bool exact_eval_relative_onset_base_batch(
 
   std::vector<double> cdf_query_values;
   if (any_cdf_query) {
-    uuber::KernelNodeBatchValues cdf_values;
+    uuber::TreeNodeBatchValues cdf_values;
     if (!exact_eval_label_ref_batch(
             ctx, source_ref, cdf_query_points, component_idx, trial_params,
             trial_type_key, EvalNeed::kCDF, nullptr, uniform_trial_params_soa,
@@ -437,7 +437,7 @@ bool exact_eval_relative_onset_base_batch(
 
   std::vector<double> density_query_values;
   if (any_density_query) {
-    uuber::KernelNodeBatchValues source_density_values;
+    uuber::TreeNodeBatchValues source_density_values;
     if (!exact_eval_label_ref_batch(
             ctx, source_ref, density_query_points, component_idx, trial_params,
             trial_type_key, EvalNeed::kDensity, nullptr,
@@ -608,10 +608,10 @@ bool exact_eval_simple_acc_event_batch(
     const uuber::NativeContext &ctx, const uuber::IrEvent &event,
     const PointVec &points, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values,
     const std::vector<std::uint8_t> *active_mask,
     const uuber::TrialParamsSoA *uniform_trial_params_soa) {
-  out_values = uuber::KernelNodeBatchValues{};
+  out_values = uuber::TreeNodeBatchValues{};
   const std::size_t point_count = points.size();
   out_values.density.assign(point_count, 0.0);
   out_values.survival.assign(point_count, 1.0);
@@ -973,23 +973,23 @@ struct ExactNodeBatchDepthGuard {
 };
 
 inline void exact_init_batch_values(std::size_t point_count,
-                                    uuber::KernelNodeBatchValues &out_values) {
+                                    uuber::TreeNodeBatchValues &out_values) {
   out_values.density.assign(point_count, 0.0);
   out_values.survival.assign(point_count, 1.0);
   out_values.cdf.assign(point_count, 0.0);
 }
 
 inline bool exact_batch_values_size_matches(
-    const uuber::KernelNodeBatchValues &values, std::size_t point_count) {
+    const uuber::TreeNodeBatchValues &values, std::size_t point_count) {
   return values.density.size() == point_count &&
          values.survival.size() == point_count &&
          values.cdf.size() == point_count;
 }
 
 inline void exact_merge_batch_values_subset(
-    const uuber::KernelNodeBatchValues &src_values,
+    const uuber::TreeNodeBatchValues &src_values,
     const std::vector<std::uint8_t> *active_mask,
-    uuber::KernelNodeBatchValues &dst_values) {
+    uuber::TreeNodeBatchValues &dst_values) {
   const std::size_t point_count = dst_values.density.size();
   if (!exact_batch_values_size_matches(src_values, point_count) ||
       !exact_batch_values_size_matches(dst_values, point_count)) {
@@ -1013,7 +1013,7 @@ bool exact_eval_node_batch_with_points(
     const uuber::NativeContext &ctx, int node_idx,
     const ExactScenarioBatch &points, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values,
     const std::vector<std::uint8_t> *active_mask,
     const uuber::TrialParamsSoA *uniform_trial_params_soa);
 
@@ -1022,7 +1022,7 @@ bool exact_eval_node_batch_common(
     const uuber::NativeContext &ctx, int node_idx, const PointVec &points,
     int component_idx, const TrialParamSet *trial_params,
     const std::string &trial_type_key, EvalNeed need,
-    uuber::KernelNodeBatchValues &out_values,
+    uuber::TreeNodeBatchValues &out_values,
     const std::vector<std::uint8_t> *active_mask,
     const uuber::TrialParamsSoA *uniform_trial_params_soa);
 
@@ -1031,11 +1031,11 @@ bool exact_eval_node_batch_common(
     const uuber::NativeContext &ctx, int node_idx,
     const PointVec &points, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values,
     const std::vector<std::uint8_t> *active_mask,
     const uuber::TrialParamsSoA *uniform_trial_params_soa) {
   if (points.empty()) {
-    out_values = uuber::KernelNodeBatchValues{};
+    out_values = uuber::TreeNodeBatchValues{};
     return true;
   }
   ExactNodeBatchDepthGuard depth_guard;
@@ -1071,7 +1071,7 @@ bool exact_eval_node_batch_common(
           trial_params, trial_type_key,
           [&](NodeEvalState &shared_state,
               const std::vector<std::uint8_t> *shared_group_mask) -> bool {
-            uuber::KernelNodeBatchValues shared_out;
+            uuber::TreeNodeBatchValues shared_out;
             if (!evaluator_eval_node_batch_with_state_dense(
                     node_idx, times, shared_state, need, shared_out)) {
               return false;
@@ -1103,7 +1103,7 @@ bool exact_eval_node_batch_common(
       trial_params, trial_type_key,
       [&](NodeEvalState &shared_state,
           const std::vector<std::uint8_t> *shared_group_mask) -> bool {
-        uuber::KernelNodeBatchValues shared_out;
+        uuber::TreeNodeBatchValues shared_out;
         if (!evaluator_eval_node_batch_with_state_dense(
                 node_idx, times, shared_state, need, shared_out)) {
           return false;
@@ -1131,7 +1131,7 @@ bool exact_eval_node_batch_with_points(
     const uuber::NativeContext &ctx, int node_idx,
     const ExactScenarioBatch &points, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values,
     const std::vector<std::uint8_t> *active_mask,
     const uuber::TrialParamsSoA *uniform_trial_params_soa) {
   return exact_eval_node_batch_common(ctx, node_idx, points, component_idx,
@@ -1154,7 +1154,7 @@ inline EvalNeed exact_ranked_eval_need(RankedProgramEvalKind kind) {
 
 inline double
 exact_ranked_eval_factor(RankedProgramEvalKind kind,
-                         const uuber::KernelNodeBatchValues &values,
+                         const uuber::TreeNodeBatchValues &values,
                          std::size_t idx) {
   switch (kind) {
   case RankedProgramEvalKind::Density:
@@ -1287,7 +1287,7 @@ bool exact_collect_scenarios_batch_aligned_impl(
   active.reserve(seed_batch.size());
   std::vector<double> transition_weights;
   transition_weights.reserve(seed_batch.size());
-  uuber::KernelNodeBatchValues step_values;
+  uuber::TreeNodeBatchValues step_values;
   for (const RankedBatchPlan &batch_plan : plan.batch_plans) {
     transition_batch.clear();
     active.assign(seed_batch.size(), 0u);
@@ -1438,7 +1438,7 @@ bool exact_collect_deterministic_scenarios_batch_aligned_impl(
   }
   const RankedProgramEvalRef &density_eval = batch_plan.slice.evals.front();
 
-  uuber::KernelNodeBatchValues step_values;
+  uuber::TreeNodeBatchValues step_values;
   if (!exact_eval_node_batch_with_points(
           ctx, density_eval.node_idx, seed_batch, component_idx,
           trial_params, trial_type_key, EvalNeed::kDensity, step_values, nullptr,
@@ -1543,7 +1543,7 @@ inline bool exact_competitor_guard_fastpath_eligible(
   if (competitor_cache.compiled_ops.empty()) {
     return false;
   }
-  for (const uuber::CompetitorCompiledOp &op : competitor_cache.compiled_ops) {
+  for (const uuber::TreeCompetitorOp &op : competitor_cache.compiled_ops) {
     if (op.target_node_indices.size() != 1u) {
       return false;
     }
@@ -1565,7 +1565,7 @@ inline bool exact_competitor_single_node_fastpath_eligible(
       competitor_cache.compiled_ops.size() != 1u) {
     return false;
   }
-  const uuber::CompetitorCompiledOp &op = competitor_cache.compiled_ops.front();
+  const uuber::TreeCompetitorOp &op = competitor_cache.compiled_ops.front();
   return op.target_node_indices.size() == 1u &&
          op.transition_mask_begin < 0 &&
          op.transition_mask_count <= 0;
@@ -1615,7 +1615,7 @@ void exact_competitor_survival_batch_impl(
   }
 
   if (exact_competitor_single_node_fastpath_eligible(competitor_cache)) {
-    uuber::KernelNodeBatchValues node_values;
+    uuber::TreeNodeBatchValues node_values;
     const int node_idx =
         competitor_cache.compiled_ops.front().target_node_indices.front();
     exact_competitor_batch_require(
@@ -1644,8 +1644,8 @@ void exact_competitor_survival_batch_impl(
                       ? 1u
                       : 0u;
     }
-    uuber::KernelNodeBatchValues guard_values;
-    for (const uuber::CompetitorCompiledOp &op : competitor_cache.compiled_ops) {
+    uuber::TreeNodeBatchValues guard_values;
+    for (const uuber::TreeCompetitorOp &op : competitor_cache.compiled_ops) {
       exact_competitor_batch_require(
           exact_eval_node_batch_with_points(
               ctx, op.target_node_indices.front(), eval_points, component_idx,
@@ -1689,8 +1689,8 @@ void exact_competitor_survival_batch_impl(
                     ? 1u
                     : 0u;
   }
-  uuber::KernelNodeBatchValues node_values;
-  for (const uuber::CompetitorCompiledOp &op : competitor_cache.compiled_ops) {
+  uuber::TreeNodeBatchValues node_values;
+  for (const uuber::TreeCompetitorOp &op : competitor_cache.compiled_ops) {
     for (int target_node_idx : op.target_node_indices) {
       exact_competitor_batch_require(
           exact_eval_node_batch_with_points(
@@ -1750,7 +1750,7 @@ bool exact_eval_node_batch_from_batch(
     const uuber::NativeContext &ctx, int node_idx,
     const ExactScenarioBatch &points, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values,
     const uuber::TrialParamsSoA *uniform_trial_params_soa) {
   return exact_eval_node_batch_with_points(ctx, node_idx, points, component_idx,
                                            trial_params, trial_type_key, need,

@@ -201,7 +201,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [17.33595]
+              "value": [46.716695]
             }
           ]
         },
@@ -274,7 +274,7 @@
                   "value": ["R1", "R2"]
                 }
               },
-              "value": [0.467864, 1]
+              "value": [0.467864, 0.532136]
             },
             {
               "type": "double",
@@ -310,15 +310,15 @@
                 "names": {
                   "type": "character",
                   "attributes": {},
-                  "value": ["Fast", "NA", "Slow"]
+                  "value": ["Fast", "Slow"]
                 }
               },
-              "value": [0.16508, 0.00013, 0.83479]
+              "value": [0.18038, 0.81962]
             },
             {
               "type": "double",
               "attributes": {},
-              "value": [51.592396]
+              "value": [52.076891]
             }
           ]
         },

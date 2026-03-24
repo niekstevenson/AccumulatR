@@ -787,7 +787,7 @@ inline bool evaluate_labelref_node_batch(
   NodeEvalState state(ctx, 0.0, component_idx, trial_params, trial_type_key,
                       include_na_donors, outcome_idx_context);
   state.trial_params_soa_batch = trial_params_soa_batch;
-  uuber::KernelNodeBatchValues values;
+  uuber::TreeNodeBatchValues values;
   if (!evaluator_eval_node_batch_with_state_dense(node_idx, times, state, need,
                                                   values)) {
     return false;
@@ -1657,6 +1657,11 @@ struct CouplingProgramInterpreter {
                static_cast<int>(program.ops.size());
   }
 
+  bool valid_density_program() const noexcept {
+    return valid_program() && program.outputs.density_slot >= 0 &&
+           program.outputs.density_slot < static_cast<int>(program.ops.size());
+  }
+
   bool evaluate_result(std::vector<double> &out) {
     out.assign(point_count(), 0.0);
     if (point_count() == 0u) {
@@ -1672,6 +1677,27 @@ struct CouplingProgramInterpreter {
       out[i] = (std::isfinite(raw[i]) && raw[i] > 0.0)
                    ? clamp_probability(raw[i])
                    : 0.0;
+    }
+    return true;
+  }
+
+  bool evaluate_density_result(std::vector<double> &out) {
+    out.assign(point_count(), 0.0);
+    if (point_count() == 0u) {
+      return true;
+    }
+    if (!valid_density_program()) {
+      return false;
+    }
+    std::vector<double> upper_nodes{upper};
+    std::vector<double> raw;
+    if (!evaluate_slot_terms(program.outputs.density_slot, upper_nodes, raw) ||
+        raw.size() != point_count()) {
+      return false;
+    }
+    for (std::size_t i = 0; i < out.size(); ++i) {
+      out[i] = (std::isfinite(raw[i]) && raw[i] > 0.0) ? safe_density(raw[i])
+                                                       : 0.0;
     }
     return true;
   }
@@ -1813,23 +1839,26 @@ private:
     if (!child_slots(op, children) || children.size() != 1u) {
       return false;
     }
-    std::vector<double> integral_values;
-    if (!integrate_coupling_mass_batch_adaptive(
-            upper, rel_tol, abs_tol, max_depth, point_count(),
-            [&](const std::vector<double> &quad_nodes,
-                std::vector<double> &terms) -> bool {
-              return evaluate_slot_terms(children[0], quad_nodes, terms);
-            },
-            integral_values) ||
-        integral_values.size() != point_count()) {
-      return false;
-    }
     out.assign(flattened_size(nodes.size()), 0.0);
-    for (std::size_t point_idx = 0; point_idx < point_count(); ++point_idx) {
-      const double value = integral_values[point_idx];
-      const std::size_t offset = point_idx * nodes.size();
-      for (std::size_t node_idx = 0; node_idx < nodes.size(); ++node_idx) {
-        out[offset + node_idx] = value;
+    std::vector<double> integral_values;
+    for (std::size_t node_idx = 0; node_idx < nodes.size(); ++node_idx) {
+      const double node_upper = nodes[node_idx];
+      if (!(node_upper > 0.0)) {
+        continue;
+      }
+      if (!integrate_coupling_mass_batch_adaptive(
+              node_upper, rel_tol, abs_tol, max_depth, point_count(),
+              [&](const std::vector<double> &quad_nodes,
+                  std::vector<double> &terms) -> bool {
+                return evaluate_slot_terms(children[0], quad_nodes, terms);
+              },
+              integral_values) ||
+          integral_values.size() != point_count()) {
+        return false;
+      }
+      for (std::size_t point_idx = 0; point_idx < point_count(); ++point_idx) {
+        out[point_idx * nodes.size() + node_idx] =
+            clamp_probability(integral_values[point_idx]);
       }
     }
     return true;
@@ -2022,4 +2051,67 @@ bool evaluate_outcome_coupling_unified_batch(
       rel_tol, abs_tol, max_depth, include_na_donors, outcome_idx_context,
       forced_complete_bits, forced_complete_bits_valid, forced_survive_bits,
       forced_survive_bits_valid, trial_params_soa_batch, out);
+}
+
+bool evaluate_outcome_coupling_density_unified_batch(
+    const uuber::NativeContext &ctx, const uuber::VectorProgram &program,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, double rel_tol, double abs_tol,
+    int max_depth, bool include_na_donors, int outcome_idx_context,
+    const uuber::BitsetState *forced_complete_bits,
+    bool forced_complete_bits_valid,
+    const uuber::BitsetState *forced_survive_bits,
+    bool forced_survive_bits_valid, const std::vector<double> &times,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
+    std::vector<double> &out) {
+  out.assign(times.size(), 0.0);
+  if (times.empty()) {
+    return true;
+  }
+  if (!program.valid || program.domain != uuber::VectorProgramDomain::OutcomeCoupling ||
+      program.outputs.density_slot < 0 ||
+      program.outputs.density_slot >= static_cast<int>(program.ops.size())) {
+    return false;
+  }
+
+  std::vector<const uuber::TrialParamsSoA *> local_trial_params_soa_batch;
+  const std::vector<const uuber::TrialParamsSoA *> *trial_params_ptr =
+      trial_params_soa_batch;
+  if (trial_params_ptr == nullptr) {
+    const uuber::TrialParamsSoA *resolved_trial_params_soa =
+        resolve_trial_params_soa(ctx, trial_params);
+    if (resolved_trial_params_soa == nullptr) {
+      return false;
+    }
+    local_trial_params_soa_batch.assign(times.size(), resolved_trial_params_soa);
+    trial_params_ptr = &local_trial_params_soa_batch;
+  } else if (trial_params_ptr->size() != times.size()) {
+    return false;
+  }
+
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    const double upper = times[i];
+    if (!(std::isfinite(upper) && upper >= 0.0)) {
+      continue;
+    }
+    const uuber::TrialParamsSoA *point_trial_params_soa =
+        (*trial_params_ptr)[i];
+    if (point_trial_params_soa == nullptr) {
+      return false;
+    }
+    const std::vector<const uuber::TrialParamsSoA *> singleton_trial_params_soa{
+        point_trial_params_soa};
+    CouplingProgramInterpreter interpreter(
+        ctx, program, upper, component_idx, trial_params, trial_type_key,
+        rel_tol, abs_tol, max_depth, include_na_donors, outcome_idx_context,
+        forced_complete_bits, forced_complete_bits_valid, forced_survive_bits,
+        forced_survive_bits_valid, singleton_trial_params_soa);
+    std::vector<double> density_point;
+    if (!interpreter.evaluate_density_result(density_point) ||
+        density_point.size() != 1u) {
+      return false;
+    }
+    out[i] = safe_density(density_point[0]);
+  }
+  return true;
 }

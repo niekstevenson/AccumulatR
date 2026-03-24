@@ -14,7 +14,7 @@ bool exact_eval_node_batch_from_batch(
     const uuber::NativeContext &ctx, int node_idx,
     const ExactScenarioBatch &points, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    EvalNeed need, uuber::KernelNodeBatchValues &out_values,
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values,
     const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr);
 
 bool exact_outcome_density_batch_from_state(

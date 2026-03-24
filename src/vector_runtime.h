@@ -20,10 +20,11 @@ enum class VectorPayloadRole : std::uint8_t {
   PairX = 1,
   PairY = 2,
   PairC = 3,
-  NWayGate = 4,
-  NWayTarget = 5,
-  NWayCompetitor = 6,
-  GenericNode = 7
+  PairBlocker = 4,
+  NWayGate = 5,
+  NWayTarget = 6,
+  NWayCompetitor = 7,
+  GenericNode = 8
 };
 
 enum class VectorOpCode : std::uint8_t {
@@ -77,6 +78,7 @@ struct VectorProgramOutputs {
   std::vector<int> slot_to_node_idx;
   std::vector<int> outcome_idx_to_slot;
   int result_slot{-1};
+  int density_slot{-1};
   int coeff_slot{-1};
   std::vector<int> aux_slots;
 };

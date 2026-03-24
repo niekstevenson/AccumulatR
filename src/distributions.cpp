@@ -262,14 +262,14 @@ inline bool coupling_program_requires_exact_scenario_eval(
 
 inline uuber::VectorProgram resolve_density_coupling_program(
     const uuber::NativeContext &ctx, int node_idx,
-    const std::vector<int> &competitor_ids) {
+    const std::vector<int> &competitor_ids, bool forced_empty) {
   if (node_idx < 0 || node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
     return uuber::VectorProgram{};
   }
   const int node_id =
       ctx.ir.nodes[static_cast<std::size_t>(node_idx)].node_id;
   return resolve_outcome_coupling_program_with_generic(
-      ctx, node_id >= 0 ? node_id : node_idx, competitor_ids, false);
+      ctx, node_id >= 0 ? node_id : node_idx, competitor_ids, forced_empty);
 }
 
 inline bool should_use_exact_density_program(
@@ -283,7 +283,8 @@ inline bool should_use_exact_density_program(
   uuber::VectorProgram local_program;
   const uuber::VectorProgram *program_ptr = program;
   if (program_ptr == nullptr) {
-    local_program = resolve_density_coupling_program(ctx, node_idx, competitor_ids);
+    local_program =
+        resolve_density_coupling_program(ctx, node_idx, competitor_ids, false);
     program_ptr = local_program.valid ? &local_program : nullptr;
   }
   return coupling_program_requires_exact_scenario_eval(program_ptr);
@@ -434,7 +435,9 @@ bool node_density_entry_batch_idx(
     int outcome_idx_context,
     const SharedTriggerPlan *trigger_plan, bool use_shared_trigger_eval,
     std::vector<double> &density_out,
-    const TimeConstraintMap *time_constraints = nullptr);
+    const TimeConstraintMap *time_constraints = nullptr,
+    const std::vector<const uuber::TrialParamsSoA *>
+        *trial_params_soa_batch_override = nullptr);
 
 inline bool evaluate_outcome_density_batch_idx(
     const uuber::NativeContext &ctx, int outcome_idx,
@@ -1444,7 +1447,7 @@ NodeEvalResult eval_node_recursive(int node_id, NodeEvalState &state,
                                    EvalNeed need);
 bool eval_node_batch_with_state_dense(
     int node_idx, const std::vector<double> &times, NodeEvalState &state,
-    EvalNeed need, uuber::KernelNodeBatchValues &out_values);
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values);
 
 GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
                                 int node_idx,
@@ -1559,23 +1562,23 @@ GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
     build_compact_time_constraint_lookup(time_constraints, relevant_source_ids,
                                          input.local_time_constraint_lookup);
     input.time_constraint_lookup = &input.local_time_constraint_lookup;
-    if (!ctx.kernel_state_graph.valid ||
+    if (!ctx.tree_runtime.valid ||
         node_idx < 0 ||
         node_idx >= static_cast<int>(
-                        ctx.kernel_state_graph.node_guard_transition_idx.size())) {
+                        ctx.tree_runtime.node_guard_transition_idx.size())) {
       Rcpp::stop("IR guard transition metadata missing for guard node_idx=%d",
                  node_idx);
     }
-    const int tr_idx = ctx.kernel_state_graph.node_guard_transition_idx
+    const int tr_idx = ctx.tree_runtime.node_guard_transition_idx
         [static_cast<std::size_t>(node_idx)];
     if (tr_idx < 0 ||
         tr_idx >=
-            static_cast<int>(ctx.kernel_state_graph.guard_transitions.size())) {
+            static_cast<int>(ctx.tree_runtime.guard_transitions.size())) {
       Rcpp::stop("IR guard transition mapping missing for guard node_idx=%d",
                  node_idx);
     }
-    const uuber::KernelGuardTransition &tr =
-        ctx.kernel_state_graph.guard_transitions[static_cast<std::size_t>(
+    const uuber::TreeGuardTransition &tr =
+        ctx.tree_runtime.guard_transitions[static_cast<std::size_t>(
             tr_idx)];
     if (tr.node_idx != node_idx) {
       Rcpp::stop("IR guard transition node mismatch for guard node_idx=%d",
@@ -1591,10 +1594,10 @@ GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
   return input;
 }
 
-uuber::KernelEventBatchEvalFn make_kernel_event_eval_batch(NodeEvalState &state) {
+uuber::TreeEventBatchEvalFn make_tree_event_eval_batch(NodeEvalState &state) {
   return [&](int event_idx, const std::vector<double> &times,
-             const uuber::KernelEvalNeed &kneed,
-             uuber::KernelNodeBatchValues &out) -> bool {
+             const uuber::TreeEvalNeed &kneed,
+             uuber::TreeNodeBatchValues &out) -> bool {
     record_unified_outcome_leaf_batch_call(
         static_cast<std::uint64_t>(times.size()),
         state.trial_params_soa_batch != nullptr);
@@ -1663,12 +1666,12 @@ uuber::KernelEventBatchEvalFn make_kernel_event_eval_batch(NodeEvalState &state)
   };
 }
 
-uuber::KernelGuardBatchEvalFn make_kernel_guard_eval_batch(NodeEvalState &state) {
-  return [&](const uuber::KernelOp &op, const std::vector<double> &times,
-             const uuber::KernelNodeBatchValues &reference_values,
-             const uuber::KernelNodeBatchValues &blocker_values,
-             const uuber::KernelEvalNeed &kneed,
-             uuber::KernelNodeBatchValues &out) -> bool {
+uuber::TreeGuardBatchEvalFn make_tree_guard_eval_batch(NodeEvalState &state) {
+  return [&](const uuber::TreeEvalOp &op, const std::vector<double> &times,
+             const uuber::TreeNodeBatchValues &reference_values,
+             const uuber::TreeNodeBatchValues &blocker_values,
+             const uuber::TreeEvalNeed &kneed,
+             uuber::TreeNodeBatchValues &out) -> bool {
     const std::size_t point_count = times.size();
     if (reference_values.density.size() != point_count ||
         reference_values.survival.size() != point_count ||
@@ -1777,21 +1780,21 @@ tree_vector_program_required(const uuber::NativeContext &ctx) {
   return *ctx.tree_program;
 }
 
-inline void init_kernel_batch_values(std::size_t point_count,
-                                     uuber::KernelNodeBatchValues &values) {
+inline void init_tree_batch_values(std::size_t point_count,
+                                     uuber::TreeNodeBatchValues &values) {
   values.density.assign(point_count, 0.0);
   values.survival.assign(point_count, 1.0);
   values.cdf.assign(point_count, 0.0);
 }
 
-inline bool kernel_batch_values_size_matches(
-    const uuber::KernelNodeBatchValues &values, std::size_t point_count) {
+inline bool tree_batch_values_size_matches(
+    const uuber::TreeNodeBatchValues &values, std::size_t point_count) {
   return values.density.size() == point_count &&
          values.survival.size() == point_count &&
          values.cdf.size() == point_count;
 }
 
-inline void clamp_kernel_batch_values(uuber::KernelNodeBatchValues &values) {
+inline void clamp_tree_batch_values(uuber::TreeNodeBatchValues &values) {
   for (std::size_t i = 0; i < values.density.size(); ++i) {
     values.density[i] = safe_density(values.density[i]);
     values.survival[i] = clamp_probability(values.survival[i]);
@@ -1799,10 +1802,10 @@ inline void clamp_kernel_batch_values(uuber::KernelNodeBatchValues &values) {
   }
 }
 
-inline uuber::KernelOp
+inline uuber::TreeEvalOp
 vector_tree_guard_op(const uuber::VectorOp &op) {
-  uuber::KernelOp guard_op;
-  guard_op.code = uuber::KernelOpCode::Guard;
+  uuber::TreeEvalOp guard_op;
+  guard_op.code = uuber::TreeEvalOpCode::Guard;
   guard_op.node_idx = op.node_idx;
   guard_op.out_slot = op.dst_slot;
   guard_op.event_idx = op.event_idx;
@@ -1816,11 +1819,11 @@ vector_tree_guard_op(const uuber::VectorOp &op) {
 
 inline bool eval_tree_vector_node_batch(
     const uuber::VectorProgram &program, int target_node_idx,
-    const std::vector<double> &times, const uuber::KernelEvalNeed &need,
-    const uuber::KernelEventBatchEvalFn &event_eval_batch,
-    const uuber::KernelGuardBatchEvalFn &guard_eval_batch,
-    uuber::KernelNodeBatchValues &out_values) {
-  out_values = uuber::KernelNodeBatchValues{};
+    const std::vector<double> &times, const uuber::TreeEvalNeed &need,
+    const uuber::TreeEventBatchEvalFn &event_eval_batch,
+    const uuber::TreeGuardBatchEvalFn &guard_eval_batch,
+    uuber::TreeNodeBatchValues &out_values) {
+  out_values = uuber::TreeNodeBatchValues{};
   if (!program.valid || program.domain != uuber::VectorProgramDomain::Tree ||
       target_node_idx < 0 || !event_eval_batch) {
     return false;
@@ -1836,8 +1839,8 @@ inline bool eval_tree_vector_node_batch(
   }
 
   const std::size_t point_count = times.size();
-  const uuber::KernelEvalNeed full_need{true, true, true};
-  std::vector<uuber::KernelNodeBatchValues> slots(program.ops.size());
+  const uuber::TreeEvalNeed full_need{true, true, true};
+  std::vector<uuber::TreeNodeBatchValues> slots(program.ops.size());
   std::vector<double> child_primary(
       static_cast<std::size_t>(std::max(0, program.max_child_count)), 0.0);
   std::vector<double> child_density(
@@ -1849,15 +1852,15 @@ inline bool eval_tree_vector_node_batch(
 
   for (int op_idx = 0; op_idx <= target_slot; ++op_idx) {
     const uuber::VectorOp &op = program.ops[static_cast<std::size_t>(op_idx)];
-    uuber::KernelNodeBatchValues out;
-    init_kernel_batch_values(point_count, out);
+    uuber::TreeNodeBatchValues out;
+    init_tree_batch_values(point_count, out);
     switch (op.code) {
     case uuber::VectorOpCode::TreeEvent: {
       if (!event_eval_batch(op.event_idx, times, full_need, out) ||
-          !kernel_batch_values_size_matches(out, point_count)) {
+          !tree_batch_values_size_matches(out, point_count)) {
         return false;
       }
-      clamp_kernel_batch_values(out);
+      clamp_tree_batch_values(out);
       break;
     }
     case uuber::VectorOpCode::TreeAnd: {
@@ -1979,7 +1982,7 @@ inline bool eval_tree_vector_node_batch(
       if (child_slot < 0 || child_slot > target_slot) {
         return false;
       }
-      const uuber::KernelNodeBatchValues &child =
+      const uuber::TreeNodeBatchValues &child =
           slots[static_cast<std::size_t>(child_slot)];
       for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
         out.cdf[point_idx] = clamp_probability(1.0 - child.cdf[point_idx]);
@@ -1989,24 +1992,24 @@ inline bool eval_tree_vector_node_batch(
       break;
     }
     case uuber::VectorOpCode::TreeGuard: {
-      uuber::KernelNodeBatchValues ref_values;
-      uuber::KernelNodeBatchValues blocker_values;
-      init_kernel_batch_values(point_count, ref_values);
-      init_kernel_batch_values(point_count, blocker_values);
+      uuber::TreeNodeBatchValues ref_values;
+      uuber::TreeNodeBatchValues blocker_values;
+      init_tree_batch_values(point_count, ref_values);
+      init_tree_batch_values(point_count, blocker_values);
       if (op.ref_slot >= 0 && op.ref_slot <= target_slot) {
         ref_values = slots[static_cast<std::size_t>(op.ref_slot)];
       }
       if (op.blocker_slot >= 0 && op.blocker_slot <= target_slot) {
         blocker_values = slots[static_cast<std::size_t>(op.blocker_slot)];
       }
-      const uuber::KernelOp guard_op = vector_tree_guard_op(op);
+      const uuber::TreeEvalOp guard_op = vector_tree_guard_op(op);
       if (guard_eval_batch) {
         if (!guard_eval_batch(guard_op, times, ref_values, blocker_values,
                               full_need, out) ||
-            !kernel_batch_values_size_matches(out, point_count)) {
+            !tree_batch_values_size_matches(out, point_count)) {
           return false;
         }
-        clamp_kernel_batch_values(out);
+        clamp_tree_batch_values(out);
       } else {
         for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
           const double ref_density = safe_density(ref_values.density[point_idx]);
@@ -2028,31 +2031,31 @@ inline bool eval_tree_vector_node_batch(
   }
 
   out_values = slots[static_cast<std::size_t>(target_slot)];
-  return kernel_batch_values_size_matches(out_values, point_count);
+  return tree_batch_values_size_matches(out_values, point_count);
 }
 
 bool eval_node_batch_with_state_dense(
     int node_idx, const std::vector<double> &times, NodeEvalState &state,
-    EvalNeed need, uuber::KernelNodeBatchValues &out_values) {
-  out_values = uuber::KernelNodeBatchValues{};
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values) {
+  out_values = uuber::TreeNodeBatchValues{};
   if (times.empty()) {
     return true;
   }
-  uuber::KernelEvalNeed kernel_need;
-  kernel_need.density = needs_density(need);
-  kernel_need.survival = needs_survival(need);
-  kernel_need.cdf = needs_cdf(need);
-  if (!kernel_need.density && !kernel_need.survival && !kernel_need.cdf) {
-    kernel_need.density = true;
-    kernel_need.survival = true;
-    kernel_need.cdf = true;
+  uuber::TreeEvalNeed tree_need;
+  tree_need.density = needs_density(need);
+  tree_need.survival = needs_survival(need);
+  tree_need.cdf = needs_cdf(need);
+  if (!tree_need.density && !tree_need.survival && !tree_need.cdf) {
+    tree_need.density = true;
+    tree_need.survival = true;
+    tree_need.cdf = true;
   }
-  uuber::KernelEventBatchEvalFn event_eval_batch_cb =
-      make_kernel_event_eval_batch(state);
-  uuber::KernelGuardBatchEvalFn guard_eval_batch_cb =
-      make_kernel_guard_eval_batch(state);
+  uuber::TreeEventBatchEvalFn event_eval_batch_cb =
+      make_tree_event_eval_batch(state);
+  uuber::TreeGuardBatchEvalFn guard_eval_batch_cb =
+      make_tree_guard_eval_batch(state);
   return eval_tree_vector_node_batch(tree_vector_program_required(state.ctx),
-                                     node_idx, times, kernel_need,
+                                     node_idx, times, tree_need,
                                      event_eval_batch_cb,
                                      guard_eval_batch_cb, out_values);
 }
@@ -2060,7 +2063,7 @@ bool eval_node_batch_with_state_dense(
 NodeEvalResult eval_node_recursive_dense(int node_idx, NodeEvalState &state,
                                          EvalNeed need) {
   std::vector<double> single_time{state.t};
-  uuber::KernelNodeBatchValues batch_values;
+  uuber::TreeNodeBatchValues batch_values;
   if (!eval_node_batch_with_state_dense(node_idx, single_time, state, kEvalAll,
                                         batch_values) ||
       batch_values.density.size() != 1u ||
@@ -2083,8 +2086,8 @@ bool eval_node_with_forced_state_view_batch(
     const TrialParamSet *trial_params, const std::string &trial_key,
     const TimeConstraintMap *time_constraints,
     const ForcedStateView &forced_state,
-    uuber::KernelNodeBatchValues &out_values) {
-  out_values = uuber::KernelNodeBatchValues{};
+    uuber::TreeNodeBatchValues &out_values) {
+  out_values = uuber::TreeNodeBatchValues{};
   if (times.empty()) {
     return true;
   }
@@ -2103,7 +2106,7 @@ bool eval_node_with_forced_state_view_batch(
   return true;
 }
 
-inline const uuber::KernelGuardTransition &
+inline const uuber::TreeGuardTransition &
 guard_transition_required(const GuardEvalInput &input,
                           bool require_blocker_idx = false) {
   if (input.guard_transition != nullptr) {
@@ -2118,24 +2121,24 @@ guard_transition_required(const GuardEvalInput &input,
     }
     return *input.guard_transition;
   }
-  if (!input.ctx.kernel_state_graph.valid ||
+  if (!input.ctx.tree_runtime.valid ||
       input.node_idx < 0 ||
       input.node_idx >= static_cast<int>(
-                            input.ctx.kernel_state_graph.node_guard_transition_idx
+                            input.ctx.tree_runtime.node_guard_transition_idx
                                 .size())) {
     Rcpp::stop("IR guard transition metadata missing for guard node_idx=%d",
                input.node_idx);
   }
-  const int tr_idx = input.ctx.kernel_state_graph.node_guard_transition_idx
+  const int tr_idx = input.ctx.tree_runtime.node_guard_transition_idx
       [static_cast<std::size_t>(input.node_idx)];
   if (tr_idx < 0 ||
       tr_idx >=
-          static_cast<int>(input.ctx.kernel_state_graph.guard_transitions.size())) {
+          static_cast<int>(input.ctx.tree_runtime.guard_transitions.size())) {
     Rcpp::stop("IR guard transition mapping missing for guard node_idx=%d",
                input.node_idx);
   }
-  const uuber::KernelGuardTransition &tr =
-      input.ctx.kernel_state_graph.guard_transitions[static_cast<std::size_t>(
+  const uuber::TreeGuardTransition &tr =
+      input.ctx.tree_runtime.guard_transitions[static_cast<std::size_t>(
           tr_idx)];
   if (tr.node_idx != input.node_idx) {
     Rcpp::stop("IR guard transition node mismatch for guard node_idx=%d",
@@ -2157,7 +2160,7 @@ double guard_effective_survival_internal(const GuardEvalInput &input, double t,
     return 1.0;
   }
   (void)settings;
-  const uuber::KernelGuardTransition &tr =
+  const uuber::TreeGuardTransition &tr =
       guard_transition_required(input, true);
 
   NodeEvalState local(input.ctx, t, input.component_idx, input.trial_params,
@@ -2280,7 +2283,7 @@ inline bool guard_label_is_forced(const GuardEvalInput &input, int label_id) {
 inline bool fast_event_density_supported(const GuardEvalInput &input,
                                          const FastEventInfo &info);
 LinearGuardChain linear_guard_chain_from_transition(
-    const uuber::NativeContext &ctx, const uuber::KernelGuardTransition &tr);
+    const uuber::NativeContext &ctx, const uuber::TreeGuardTransition &tr);
 bool resolve_prepared_linear_guard_chain_info(
     const GuardEvalInput &input, PreparedLinearGuardChainInfo &scratch,
     const PreparedLinearGuardChainInfo *&prepared);
@@ -2339,9 +2342,9 @@ inline bool fast_event_density_supported(const GuardEvalInput &input,
 
 inline bool eval_node_batch_from_guard_input(
     const GuardEvalInput &input, int node_idx, const std::vector<double> &times,
-    EvalNeed need, uuber::KernelNodeBatchValues &out_values) {
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values) {
   if (times.empty()) {
-    out_values = uuber::KernelNodeBatchValues{};
+    out_values = uuber::TreeNodeBatchValues{};
     return true;
   }
   NodeEvalState local(input.ctx, times.front(), input.component_idx,
@@ -2355,21 +2358,21 @@ inline bool eval_node_batch_from_guard_input(
 }
 
 LinearGuardChain linear_guard_chain_from_transition(
-    const uuber::NativeContext &ctx, const uuber::KernelGuardTransition &tr) {
+    const uuber::NativeContext &ctx, const uuber::TreeGuardTransition &tr) {
   LinearGuardChain chain;
-  if (tr.eval_mode != uuber::KernelGuardEvalMode::LinearChainODE) {
+  if (tr.eval_mode != uuber::TreeGuardEvalMode::LinearChainODE) {
     return chain;
   }
   if (tr.linear_chain_begin < 0 || tr.linear_chain_count <= 0 ||
       tr.linear_chain_begin + tr.linear_chain_count >
-          static_cast<int>(ctx.kernel_state_graph.guard_linear_chain_nodes.size()) ||
+          static_cast<int>(ctx.tree_runtime.guard_linear_chain_nodes.size()) ||
       tr.linear_chain_leaf_idx < 0 ||
       tr.linear_chain_leaf_idx >= static_cast<int>(ctx.ir.nodes.size())) {
     return {};
   }
   const int begin = tr.linear_chain_begin;
   chain.reference_indices =
-      &ctx.kernel_state_graph
+      &ctx.tree_runtime
            .guard_linear_chain_nodes[static_cast<std::size_t>(begin)];
   chain.reference_count = static_cast<std::size_t>(tr.linear_chain_count);
   chain.leaf_blocker_idx = tr.linear_chain_leaf_idx;
@@ -2411,7 +2414,7 @@ inline void append_guard_conditioning_labels_for_node(
 inline bool build_guard_prepared_conditioning_template(
     const GuardEvalInput &input, GuardPreparedConditioningTemplate &out) {
   out = GuardPreparedConditioningTemplate{};
-  const uuber::KernelGuardTransition &tr = guard_transition_required(input);
+  const uuber::TreeGuardTransition &tr = guard_transition_required(input);
   out.chain = linear_guard_chain_from_transition(input.ctx, tr);
   if (!out.chain.valid) {
     return false;
@@ -2690,7 +2693,7 @@ private:
           vals[i] = dens;
         }
       } else {
-        uuber::KernelNodeBatchValues ref_batch;
+        uuber::TreeNodeBatchValues ref_batch;
         if (!eval_node_batch_from_guard_input(
                 input_, chain_.reference_indices[i], grid_times,
                 EvalNeed::kDensity, ref_batch) ||
@@ -2735,7 +2738,7 @@ private:
         vals[depth_] = clamp_probability(surv);
       }
     } else {
-      uuber::KernelNodeBatchValues leaf_batch;
+      uuber::TreeNodeBatchValues leaf_batch;
       if (!eval_node_batch_from_guard_input(input_, chain_.leaf_blocker_idx,
                                             grid_times, EvalNeed::kSurvival,
                                             leaf_batch) ||
@@ -2978,7 +2981,7 @@ bool eval_optimized_linear_guard_chain_ode(
             vals[i] = dens;
           }
         } else {
-          uuber::KernelNodeBatchValues ref_batch;
+          uuber::TreeNodeBatchValues ref_batch;
           if (!eval_node_batch_from_guard_input(
                   input_, chain_.reference_indices[i], grid_times,
                   EvalNeed::kDensity, ref_batch) ||
@@ -3024,7 +3027,7 @@ bool eval_optimized_linear_guard_chain_ode(
           vals[depth_] = clamp_probability(surv);
         }
       } else {
-        uuber::KernelNodeBatchValues leaf_batch;
+        uuber::TreeNodeBatchValues leaf_batch;
         if (!eval_node_batch_from_guard_input(input_, chain_.leaf_blocker_idx,
                                               grid_times, EvalNeed::kSurvival,
                                               leaf_batch) ||
@@ -3672,8 +3675,22 @@ bool node_density_with_competitors_batch_internal(
     competitor_cache = &fetch_competitor_cluster_cache(ctx, competitor_ids);
   }
   const int node_idx = resolve_dense_node_idx_required(ctx, node_id);
+  const bool coupling_forced_empty =
+      !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
+      !forced_bits_any(forced_survive_bits, forced_survive_bits_valid) &&
+      !time_constraints_any(time_constraints);
   uuber::VectorProgram coupling_program =
-      resolve_density_coupling_program(ctx, node_idx, competitor_ids);
+      resolve_density_coupling_program(ctx, node_idx, competitor_ids,
+                                       coupling_forced_empty);
+  if (coupling_forced_empty && !competitor_ids.empty() && coupling_program.valid &&
+      coupling_program.outputs.density_slot >= 0 &&
+      evaluate_outcome_coupling_density_unified_batch(
+          ctx, coupling_program, component_idx, trial_params, trial_type_key,
+          kDefaultRelTol, kDefaultAbsTol, kDefaultMaxDepth, include_na_donors,
+          outcome_idx_context, nullptr, false, nullptr, false, times,
+          trial_params_soa_batch, density_out)) {
+    return true;
+  }
   if (should_use_exact_density_program(ctx, node_idx, competitor_ids, state,
                                        &coupling_program)) {
     return exact_outcome_density_batch_from_state(
@@ -3682,10 +3699,7 @@ bool node_density_with_competitors_batch_internal(
   }
   const bool has_competitors =
       competitor_cache && !competitor_cache->compiled_ops.empty();
-  const bool simple_direct_fastpath_base_eligible =
-      !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
-      !forced_bits_any(forced_survive_bits, forced_survive_bits_valid) &&
-      !time_constraints_any(time_constraints);
+  const bool simple_direct_fastpath_base_eligible = coupling_forced_empty;
   if (simple_direct_fastpath_base_eligible) {
     const bool plain_simple_outcome_supported =
         simple_direct_outcome_fastpath_supported(ctx, include_na_donors,
@@ -3720,7 +3734,7 @@ bool node_density_with_competitors_batch_internal(
   state.forced_survive_bits = forced_survive_seed;
   state.forced_complete_bits_valid = forced_complete_seed_valid;
   state.forced_survive_bits_valid = forced_survive_seed_valid;
-  uuber::KernelNodeBatchValues base_values;
+  uuber::TreeNodeBatchValues base_values;
   if (!eval_node_batch_with_state_dense(node_idx, eval_times, state,
                                         EvalNeed::kDensity, base_values) ||
       base_values.density.size() != times.size()) {
@@ -3776,7 +3790,17 @@ inline bool node_density_entry_batch_idx(
     int outcome_idx_context,
     const SharedTriggerPlan *trigger_plan, bool use_shared_trigger_eval,
     std::vector<double> &density_out,
-    const TimeConstraintMap *time_constraints) {
+    const TimeConstraintMap *time_constraints,
+    const std::vector<const uuber::TrialParamsSoA *>
+        *trial_params_soa_batch_override) {
+  if (trial_params_soa_batch_override != nullptr) {
+    return node_density_with_competitors_batch_internal(
+        ctx, node_id, times, component_idx, forced_complete_bits,
+        forced_complete_bits_valid, forced_survive_bits,
+        forced_survive_bits_valid, competitor_ids, trial_params, trial_type_key,
+        include_na_donors, outcome_idx_context, density_out, time_constraints,
+        trial_params_soa_batch_override);
+  }
   if (!use_shared_trigger_eval || !trial_params) {
     return node_density_with_competitors_batch_internal(
         ctx, node_id, times, component_idx, forced_complete_bits,
@@ -3804,7 +3828,7 @@ inline bool node_density_entry_batch_idx(
   }
   const int node_idx = resolve_dense_node_idx_required(ctx, node_id);
   uuber::VectorProgram coupling_program =
-      resolve_density_coupling_program(ctx, node_idx, competitor_ids);
+      resolve_density_coupling_program(ctx, node_idx, competitor_ids, false);
   SharedTriggerMaskSoABatch mask_batch;
   if (!build_shared_trigger_mask_soa_batch(ctx, trial_params, *plan_ptr,
                                            mask_batch) ||
@@ -3877,6 +3901,271 @@ inline bool node_density_entry_batch_idx(
   return true;
 }
 
+inline double integrate_outcome_probability_from_density_idx(
+    const uuber::NativeContext &ctx, int node_id, double upper,
+    int component_idx,
+    const uuber::BitsetState *forced_complete_bits,
+    bool forced_complete_bits_valid,
+    const uuber::BitsetState *forced_survive_bits,
+    bool forced_survive_bits_valid,
+    const std::vector<int> &competitor_ids, double rel_tol, double abs_tol,
+    int max_depth, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, bool include_na_donors,
+    int outcome_idx_context, const SharedTriggerPlan *trigger_plan) {
+  if (!(upper > 0.0)) {
+    return 0.0;
+  }
+
+  TrialParamSet base_params_holder;
+  const TrialParamSet *params_ptr = trial_params;
+  if (!params_ptr) {
+    base_params_holder = build_base_paramset(ctx);
+    params_ptr = &base_params_holder;
+  }
+
+  SharedTriggerPlan local_trigger_plan;
+  const SharedTriggerPlan *plan_ptr = trigger_plan;
+  if (!plan_ptr) {
+    local_trigger_plan = build_shared_trigger_plan(ctx, params_ptr);
+    plan_ptr = &local_trigger_plan;
+  }
+  const bool use_shared_trigger_eval =
+      plan_ptr != nullptr && shared_trigger_count(*plan_ptr) > 0u;
+
+  std::vector<double> single_time(1u, 0.0);
+  std::vector<double> density_out;
+  auto density_at = [&](double t) -> double {
+    if (!(std::isfinite(t) && t >= 0.0)) {
+      return 0.0;
+    }
+    single_time[0] = t;
+    density_out.clear();
+    const bool ok = node_density_entry_batch_idx(
+        ctx, node_id, single_time, component_idx, forced_complete_bits,
+        forced_complete_bits_valid, forced_survive_bits,
+        forced_survive_bits_valid, competitor_ids, params_ptr, trial_type_key,
+        include_na_donors, outcome_idx_context, plan_ptr,
+        use_shared_trigger_eval, density_out, nullptr);
+    if (!ok || density_out.size() != 1u) {
+      return 0.0;
+    }
+    return safe_density(density_out[0]);
+  };
+
+  const double probability = uuber::integrate_boost_fn_0_to_upper(
+      density_at, upper, rel_tol, abs_tol, max_depth, true);
+  return clamp_probability(probability);
+}
+
+inline uuber::TimeBatch build_segmented_time_batch(double lower, double upper,
+                                                   int segments) {
+  uuber::TimeBatch batch;
+  if (!std::isfinite(lower) || !std::isfinite(upper) || !(upper > lower)) {
+    return batch;
+  }
+  const int segment_count = std::max(1, segments);
+  batch.lower = lower;
+  batch.upper = upper;
+  batch.nodes.reserve(static_cast<std::size_t>(segment_count * 15));
+  batch.weights.reserve(static_cast<std::size_t>(segment_count * 15));
+  for (int seg = 0; seg < segment_count; ++seg) {
+    const double seg_lo =
+        lower + (upper - lower) * static_cast<double>(seg) /
+                    static_cast<double>(segment_count);
+    const double seg_hi =
+        lower + (upper - lower) * static_cast<double>(seg + 1) /
+                    static_cast<double>(segment_count);
+    uuber::TimeBatch seg_batch = uuber::build_time_batch(seg_lo, seg_hi);
+    if (seg_batch.nodes.empty() ||
+        seg_batch.nodes.size() != seg_batch.weights.size()) {
+      return {};
+    }
+    batch.nodes.insert(batch.nodes.end(), seg_batch.nodes.begin(),
+                       seg_batch.nodes.end());
+    batch.weights.insert(batch.weights.end(), seg_batch.weights.begin(),
+                         seg_batch.weights.end());
+  }
+  return batch;
+}
+
+inline bool integrate_time_batch_density_per_point(
+    const uuber::TimeBatch &batch, const std::vector<double> &density,
+    std::size_t point_count, std::vector<double> &out) {
+  if (batch.nodes.empty() || batch.nodes.size() != batch.weights.size()) {
+    return false;
+  }
+  const std::size_t node_count = batch.nodes.size();
+  if (density.size() != point_count * node_count) {
+    return false;
+  }
+  out.assign(point_count, 0.0);
+  for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
+    const std::size_t offset = point_idx * node_count;
+    double total = 0.0;
+    for (std::size_t node_idx = 0; node_idx < node_count; ++node_idx) {
+      const double weight = batch.weights[node_idx];
+      if (!std::isfinite(weight) || weight <= 0.0) {
+        continue;
+      }
+      const double value = safe_density(density[offset + node_idx]);
+      if (!std::isfinite(value) || value <= 0.0) {
+        continue;
+      }
+      total += weight * value;
+    }
+    out[point_idx] = (std::isfinite(total) && total > 0.0) ? total : 0.0;
+  }
+  return true;
+}
+
+inline bool integrate_outcome_probability_from_density_batch_idx(
+    const uuber::NativeContext &ctx, int node_id, double upper,
+    int component_idx,
+    const uuber::BitsetState *forced_complete_bits,
+    bool forced_complete_bits_valid,
+    const uuber::BitsetState *forced_survive_bits,
+    bool forced_survive_bits_valid,
+    const std::vector<int> &competitor_ids, double rel_tol, double abs_tol,
+    int max_depth, const std::vector<const TrialParamSet *> &trial_params_batch,
+    const std::string &trial_type_key, bool include_na_donors,
+    int outcome_idx_context, std::vector<double> &out_probabilities,
+    const std::vector<const uuber::TrialParamsSoA *>
+        *trial_params_soa_batch_override = nullptr) {
+  const std::size_t point_count =
+      trial_params_soa_batch_override ? trial_params_soa_batch_override->size()
+                                      : trial_params_batch.size();
+  out_probabilities.assign(point_count, 0.0);
+  if (point_count == 0u || !(upper > 0.0)) {
+    return point_count == 0u || upper <= 0.0;
+  }
+
+  std::vector<const uuber::TrialParamsSoA *> trial_params_soa_storage;
+  const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch_ptr =
+      trial_params_soa_batch_override;
+  if (trial_params_soa_batch_ptr == nullptr) {
+    trial_params_soa_storage.reserve(point_count);
+    for (const TrialParamSet *params_ptr : trial_params_batch) {
+      const uuber::TrialParamsSoA *trial_params_soa =
+          resolve_trial_params_soa(ctx, params_ptr);
+      if (!trial_params_soa || !trial_params_soa->valid) {
+        return false;
+      }
+      trial_params_soa_storage.push_back(trial_params_soa);
+    }
+    trial_params_soa_batch_ptr = &trial_params_soa_storage;
+  } else if (trial_params_soa_batch_ptr->size() != point_count) {
+    return false;
+  }
+  for (const uuber::TrialParamsSoA *trial_params_soa :
+       *trial_params_soa_batch_ptr) {
+    if (!trial_params_soa || !trial_params_soa->valid) {
+      return false;
+    }
+  }
+
+  TrialParamSet base_params_holder;
+  const TrialParamSet *rep_params =
+      trial_params_batch.empty() ? nullptr : trial_params_batch.front();
+  if (!rep_params) {
+    base_params_holder = build_base_paramset(ctx);
+    rep_params = &base_params_holder;
+  }
+
+  constexpr int kFiniteSubsegments = 16;
+  constexpr int kInfiniteMaxSegments = 32;
+  const bool finite_upper = std::isfinite(upper);
+  std::vector<int> small_tail_segments(point_count, 0);
+  std::vector<std::uint8_t> saw_positive_segment(point_count, 0u);
+  std::vector<double> expanded_times;
+  std::vector<const uuber::TrialParamsSoA *> expanded_params_soa;
+  std::vector<double> density_out;
+  std::vector<double> segment_probabilities;
+
+  const auto eval_segment = [&](const uuber::TimeBatch &batch) -> bool {
+    if (batch.nodes.empty() || batch.nodes.size() != batch.weights.size()) {
+      return false;
+    }
+    const std::size_t node_count = batch.nodes.size();
+    expanded_times.clear();
+    expanded_params_soa.clear();
+    expanded_times.reserve(point_count * node_count);
+    expanded_params_soa.reserve(point_count * node_count);
+    for (const uuber::TrialParamsSoA *point_params_soa :
+         *trial_params_soa_batch_ptr) {
+      for (double t : batch.nodes) {
+        expanded_times.push_back(t);
+        expanded_params_soa.push_back(point_params_soa);
+      }
+    }
+    density_out.clear();
+    const bool ok = node_density_entry_batch_idx(
+        ctx, node_id, expanded_times, component_idx, forced_complete_bits,
+        forced_complete_bits_valid, forced_survive_bits,
+        forced_survive_bits_valid, competitor_ids, rep_params, trial_type_key,
+        include_na_donors, outcome_idx_context, nullptr, false, density_out,
+        nullptr, &expanded_params_soa);
+    if (!ok) {
+      return false;
+    }
+    return integrate_time_batch_density_per_point(batch, density_out,
+                                                  point_count,
+                                                  segment_probabilities);
+  };
+
+  if (finite_upper) {
+    const uuber::TimeBatch batch =
+        build_segmented_time_batch(0.0, upper, kFiniteSubsegments);
+    if (!eval_segment(batch)) {
+      return false;
+    }
+    for (std::size_t i = 0; i < point_count; ++i) {
+      out_probabilities[i] = clamp_probability(segment_probabilities[i]);
+    }
+    return true;
+  }
+
+  double lo = 0.0;
+  double hi = 0.5;
+  for (int seg = 0; seg < kInfiniteMaxSegments; ++seg) {
+    const uuber::TimeBatch batch =
+        build_segmented_time_batch(lo, hi, kFiniteSubsegments);
+    if (!eval_segment(batch)) {
+      return false;
+    }
+    bool all_points_done = true;
+    for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
+      const double piece = segment_probabilities[point_idx];
+      if (piece > 0.0) {
+        saw_positive_segment[point_idx] = 1u;
+      }
+      out_probabilities[point_idx] += piece;
+      const double tail_tol =
+          std::max(std::max(0.0, abs_tol),
+                   std::max(0.0, rel_tol) *
+                       std::max(1.0, std::fabs(out_probabilities[point_idx])));
+      if (piece <= tail_tol) {
+        ++small_tail_segments[point_idx];
+      } else {
+        small_tail_segments[point_idx] = 0;
+      }
+      if (!(saw_positive_segment[point_idx] && hi >= 4.0 &&
+            small_tail_segments[point_idx] >= 3)) {
+        all_points_done = false;
+      }
+    }
+    if (all_points_done) {
+      break;
+    }
+    lo = hi;
+    hi *= 2.0;
+  }
+
+  for (double &probability : out_probabilities) {
+    probability = clamp_probability(probability);
+  }
+  return true;
+}
+
 double native_outcome_probability_bits_impl_idx(
     const uuber::NativeContext &ctx, int node_id, double upper, int component_idx,
     const uuber::BitsetState *forced_complete_bits,
@@ -3892,6 +4181,7 @@ double native_outcome_probability_bits_impl_idx(
     TrialParamSet *trigger_scratch,
     const uuber::VectorProgram *precompiled_coupling_program) {
   (void)trigger_scratch;
+  (void)precompiled_coupling_program;
   if (upper <= 0.0) {
     return 0.0;
   }
@@ -3899,83 +4189,15 @@ double native_outcome_probability_bits_impl_idx(
       component_idx >= static_cast<int>(ctx.components.ids.size())) {
     component_idx = -1;
   }
-  const bool forced_empty =
-      !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
-      !forced_bits_any(forced_survive_bits, forced_survive_bits_valid);
   std::vector<int> comp_vec_filtered;
   const std::vector<int> &comp_vec = filter_competitor_ids(
       ctx, competitor_ids_raw, component_idx, comp_vec_filtered);
-  const uuber::VectorProgram *coupling_program_ptr = nullptr;
-  uuber::VectorProgram resolved_coupling_program;
-  if (forced_empty && precompiled_coupling_program &&
-      precompiled_coupling_program->valid) {
-    coupling_program_ptr = precompiled_coupling_program;
-  } else {
-    resolved_coupling_program = resolve_outcome_coupling_program_with_generic(
-        ctx, node_id, comp_vec, forced_empty);
-    if (resolved_coupling_program.valid) {
-      coupling_program_ptr = &resolved_coupling_program;
-    }
-  }
-  if (!coupling_program_ptr || !coupling_program_ptr->valid) {
-    return 0.0;
-  }
-  auto integrate_with_params = [&](const TrialParamSet *params_ptr) -> double {
-    return evaluate_outcome_coupling_unified(
-        ctx, *coupling_program_ptr, upper, component_idx, params_ptr,
-        trial_type_key, rel_tol, abs_tol, max_depth, include_na_donors,
-        outcome_idx_context, forced_complete_bits, forced_complete_bits_valid,
-        forced_survive_bits, forced_survive_bits_valid);
-  };
-
-  // Ensure we have a concrete parameter set to modify for shared triggers.
-  TrialParamSet base_params_holder;
-  const TrialParamSet *params_ptr = trial_params;
-  if (!params_ptr) {
-    base_params_holder = build_base_paramset(ctx);
-    params_ptr = &base_params_holder;
-  }
-
-  // Shared-trigger outcome probability now evaluates by enumerating trigger
-  // masks into a parameter batch and running the unified coupling batch path.
-  SharedTriggerPlan local_trigger_plan;
-  const SharedTriggerPlan *plan_ptr = trigger_plan;
-  if (!plan_ptr) {
-    local_trigger_plan = build_shared_trigger_plan(ctx, params_ptr);
-    plan_ptr = &local_trigger_plan;
-  }
-  const std::size_t trigger_count = shared_trigger_count(*plan_ptr);
-  if (trigger_count == 0) {
-    return integrate_with_params(params_ptr);
-  }
-
-  SharedTriggerMaskSoABatch mask_batch;
-  if (!build_shared_trigger_mask_soa_batch(ctx, params_ptr, *plan_ptr,
-                                           mask_batch) ||
-      mask_batch.mask_param_ptrs.empty()) {
-    Rcpp::stop("Outcome probability shared-trigger mask batch construction failed");
-  }
-
-  std::vector<double> batch_probs;
-  if (!evaluate_outcome_coupling_unified_batch(
-          ctx, *coupling_program_ptr, upper, component_idx, params_ptr,
-          trial_type_key, rel_tol, abs_tol, max_depth, include_na_donors,
-          outcome_idx_context, forced_complete_bits, forced_complete_bits_valid,
-          forced_survive_bits, forced_survive_bits_valid,
-          mask_batch.mask_param_ptrs, batch_probs) ||
-      batch_probs.size() != mask_batch.mask_weights.size()) {
-    Rcpp::stop("Outcome probability shared-trigger batch evaluation failed");
-  }
-
-  double total = 0.0;
-  for (std::size_t i = 0; i < batch_probs.size(); ++i) {
-    const double w = mask_batch.mask_weights[i];
-    const double p = batch_probs[i];
-    if (std::isfinite(w) && w > 0.0 && std::isfinite(p) && p > 0.0) {
-      total += w * p;
-    }
-  }
-  return clamp_probability(total);
+  return integrate_outcome_probability_from_density_idx(
+      ctx, node_id, upper, component_idx, forced_complete_bits,
+      forced_complete_bits_valid, forced_survive_bits,
+      forced_survive_bits_valid, comp_vec, rel_tol, abs_tol, max_depth,
+      trial_params, trial_type_key, include_na_donors, outcome_idx_context,
+      trigger_plan);
 }
 
 double native_outcome_probability_bits_impl_idx(
@@ -4102,7 +4324,7 @@ bool evaluator_eval_node_with_forced_state_view_batch(
     const TrialParamSet *trial_params, const std::string &trial_key,
     const TimeConstraintMap *time_constraints,
     const ForcedStateView &forced_state,
-    uuber::KernelNodeBatchValues &out_values) {
+    uuber::TreeNodeBatchValues &out_values) {
   return eval_node_with_forced_state_view_batch(
       ctx, node_id_or_idx, times, component_idx, need, trial_params, trial_key,
       time_constraints, forced_state, out_values);
@@ -4148,19 +4370,19 @@ NodeEvalResult evaluator_eval_node_recursive_dense(int node_idx,
   return eval_node_recursive_dense(node_idx, state, need);
 }
 
-uuber::KernelEventBatchEvalFn
-evaluator_make_kernel_event_eval_batch(NodeEvalState &state) {
-  return make_kernel_event_eval_batch(state);
+uuber::TreeEventBatchEvalFn
+evaluator_make_tree_event_eval_batch(NodeEvalState &state) {
+  return make_tree_event_eval_batch(state);
 }
 
-uuber::KernelGuardBatchEvalFn
-evaluator_make_kernel_guard_eval_batch(NodeEvalState &state) {
-  return make_kernel_guard_eval_batch(state);
+uuber::TreeGuardBatchEvalFn
+evaluator_make_tree_guard_eval_batch(NodeEvalState &state) {
+  return make_tree_guard_eval_batch(state);
 }
 
 bool evaluator_eval_node_batch_with_state_dense(
     int node_idx, const std::vector<double> &times, NodeEvalState &state,
-    EvalNeed need, uuber::KernelNodeBatchValues &out_values) {
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values) {
   return eval_node_batch_with_state_dense(node_idx, times, state, need,
                                           out_values);
 }
@@ -4496,8 +4718,6 @@ bool mix_outcome_mass_batch_idx(
     const std::vector<const TrialParamSet *> &trial_params_batch, double rel_tol,
     double abs_tol, int max_depth, bool complement_probability,
     std::vector<double> &out_probabilities,
-    const std::vector<std::vector<uuber::VectorProgram>>
-        *precompiled_coupling_programs = nullptr,
     const std::vector<std::size_t> *trial_to_point_index = nullptr,
     const std::vector<const uuber::TrialParamsSoA *>
         *trial_params_soa_batch_override = nullptr) {
@@ -4538,14 +4758,6 @@ bool mix_outcome_mass_batch_idx(
         return false;
       }
     }
-  }
-
-  const TrialParamSet *rep_params =
-      trial_params_batch.empty() ? nullptr : trial_params_batch.front();
-  TrialParamSet base_params_holder;
-  if (!rep_params) {
-    base_params_holder = build_base_paramset(ctx);
-    rep_params = &base_params_holder;
   }
 
   out_probabilities.assign(trial_count, 0.0);
@@ -4601,16 +4813,6 @@ bool mix_outcome_mass_batch_idx(
       continue;
     }
 
-    const std::vector<uuber::VectorProgram> *precompiled_row = nullptr;
-    if (!use_implicit_component && precompiled_coupling_programs &&
-        outcome_pos < precompiled_coupling_programs->size()) {
-      const std::vector<uuber::VectorProgram> &candidate =
-          (*precompiled_coupling_programs)[outcome_pos];
-      if (candidate.size() == component_count) {
-        precompiled_row = &candidate;
-      }
-    }
-
     for (std::size_t component_pos = 0; component_pos < component_count;
          ++component_pos) {
       const std::vector<OutcomeMassComponentUse> &uses =
@@ -4633,32 +4835,17 @@ bool mix_outcome_mass_batch_idx(
         continue;
       }
 
-      const uuber::VectorProgram *coupling_program_ptr = nullptr;
-      uuber::VectorProgram resolved_program;
-      if (precompiled_row && component_pos < precompiled_row->size() &&
-          (*precompiled_row)[component_pos].valid) {
-        coupling_program_ptr = &(*precompiled_row)[component_pos];
-      } else {
-        std::vector<int> filtered_competitors;
-        const std::vector<int> &competitors = filter_competitor_ids(
-            ctx, info.competitor_ids, component_idx, filtered_competitors);
-        resolved_program = resolve_outcome_coupling_program_with_generic(
-            ctx, info.node_id, competitors, true);
-        if (resolved_program.valid) {
-          coupling_program_ptr = &resolved_program;
-        }
-      }
-      if (!coupling_program_ptr || !coupling_program_ptr->valid) {
-        continue;
-      }
+      std::vector<int> filtered_competitors;
+      const std::vector<int> &competitors = filter_competitor_ids(
+          ctx, info.competitor_ids, component_idx, filtered_competitors);
 
       batch_probabilities.clear();
-      if (!evaluate_outcome_coupling_unified_batch(
-              ctx, *coupling_program_ptr,
-              std::numeric_limits<double>::infinity(), component_idx,
-              rep_params, std::string(), rel_tol, abs_tol, max_depth, false,
-              outcome_idx, nullptr, false, nullptr, false,
-              *trial_params_soa_batch_ptr, batch_probabilities) ||
+      if (!integrate_outcome_probability_from_density_batch_idx(
+              ctx, info.node_id, std::numeric_limits<double>::infinity(),
+              component_idx, nullptr, false, nullptr, false, competitors,
+              rel_tol, abs_tol, max_depth, trial_params_batch, std::string(),
+              false, outcome_idx, batch_probabilities,
+              trial_params_soa_batch_ptr) ||
           batch_probabilities.size() != point_count) {
         return false;
       }
@@ -4717,9 +4904,6 @@ struct TrialContributionSpec {
   std::vector<const std::vector<int> *> step_competitor_ids_ptrs;
   std::vector<std::vector<int>> step_competitor_ids_storage;
   std::vector<std::vector<int>> step_persistent_sources;
-  int mass_outcome_idx{-1};
-  const std::vector<uuber::VectorProgram> *mass_coupling_programs_ptr{nullptr};
-  std::vector<uuber::VectorProgram> mass_coupling_programs;
 };
 
 inline const std::string &empty_trial_type_key_ref() {
@@ -4745,8 +4929,6 @@ struct TrialEvalInput {
   const double *sequence_time_data{nullptr};
   std::size_t sequence_length{0u};
   const std::vector<int> *nonresponse_outcome_indices{nullptr};
-  const std::vector<std::vector<uuber::VectorProgram>>
-      *nonresponse_coupling_programs{nullptr};
 };
 
 struct OutcomeMassBatchKey {
@@ -5351,7 +5533,6 @@ inline void finalize_ranked_trial_eval_input_inline(
   eval_input.sequence_time_data = nullptr;
   eval_input.sequence_length = 0u;
   eval_input.nonresponse_outcome_indices = nonresponse_outcome_indices;
-  eval_input.nonresponse_coupling_programs = nullptr;
 
   if (eval_input.sequence_label_storage.size() !=
       eval_input.sequence_time_storage.size()) {
@@ -5449,42 +5630,6 @@ inline void prepare_ranked_trial_eval_input(
                                           nonresponse_outcome_indices);
 }
 
-inline void build_nonresponse_coupling_program_cache(
-    const uuber::NativeContext &ctx,
-    const std::vector<int> &nonresponse_outcome_indices,
-    const std::vector<int> &component_indices,
-    std::vector<std::vector<uuber::VectorProgram>> &out) {
-  out.clear();
-  out.resize(nonresponse_outcome_indices.size());
-  if (component_indices.empty()) {
-    return;
-  }
-  for (std::size_t i = 0; i < nonresponse_outcome_indices.size(); ++i) {
-    const int oi = nonresponse_outcome_indices[i];
-    if (oi < 0 || oi >= static_cast<int>(ctx.outcome_info.size())) {
-      continue;
-    }
-    const uuber::OutcomeContextInfo &info =
-        ctx.outcome_info[static_cast<std::size_t>(oi)];
-    if (info.node_id < 0) {
-      continue;
-    }
-    std::vector<uuber::VectorProgram> &row = out[i];
-    row.reserve(component_indices.size());
-    for (int comp_idx : component_indices) {
-      uuber::VectorProgram coupling_program;
-      if (outcome_allows_component_idx(ctx, info, oi, comp_idx)) {
-        std::vector<int> filtered_competitors;
-        const std::vector<int> &competitors = filter_competitor_ids(
-            ctx, info.competitor_ids, comp_idx, filtered_competitors);
-        coupling_program = resolve_outcome_coupling_program_with_generic(
-            ctx, info.node_id, competitors, true);
-      }
-      row.push_back(std::move(coupling_program));
-    }
-  }
-}
-
 bool build_trial_contributions_unified(
     uuber::NativeContext &ctx, const TrialEvalInput &eval_input,
     const std::vector<int> &component_indices,
@@ -5514,41 +5659,8 @@ bool build_trial_contributions_unified(
           ctx.outcome_info[static_cast<std::size_t>(oi)];
       TrialContributionSpec spec;
       spec.intent = TrialKernelIntent::OutcomeMass;
-      spec.mass_outcome_idx = oi;
-      if (info.node_id >= 0 && !component_indices.empty()) {
-        const std::vector<uuber::VectorProgram> *precomputed_programs = nullptr;
-        if (use_precomputed && eval_input.nonresponse_coupling_programs &&
-            i < eval_input.nonresponse_coupling_programs->size()) {
-          const std::vector<uuber::VectorProgram> &candidate =
-              (*eval_input.nonresponse_coupling_programs)[i];
-          if (candidate.size() == component_indices.size()) {
-            precomputed_programs = &candidate;
-          }
-        }
-        if (precomputed_programs) {
-          spec.mass_coupling_programs_ptr = precomputed_programs;
-        } else {
-          spec.mass_coupling_programs.reserve(component_indices.size());
-          for (int comp_idx : component_indices) {
-            uuber::VectorProgram coupling_program;
-            if (outcome_allows_component_idx(ctx, info, oi, comp_idx)) {
-              std::vector<int> filtered_competitors;
-              const std::vector<int> &competitors = filter_competitor_ids(
-                  ctx, info.competitor_ids, comp_idx, filtered_competitors);
-              coupling_program = resolve_outcome_coupling_program_with_generic(
-                  ctx, info.node_id, competitors, true);
-            }
-            spec.mass_coupling_programs.push_back(std::move(coupling_program));
-          }
-          spec.mass_coupling_programs_ptr = &spec.mass_coupling_programs;
-        }
-      }
-      const bool internal_program_storage =
-          (spec.mass_coupling_programs_ptr == &spec.mass_coupling_programs);
-      contributions.push_back(std::move(spec));
-      if (internal_program_storage) {
-        TrialContributionSpec &stored = contributions.back();
-        stored.mass_coupling_programs_ptr = &stored.mass_coupling_programs;
+      if (info.node_id >= 0) {
+        contributions.push_back(std::move(spec));
       }
     }
     return true;
@@ -5999,7 +6111,7 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
   if (!ctx->tree_program || !ctx->tree_program->valid) {
     Rcpp::stop("loglik requires a compiled tree vector program");
   }
-  if (!ctx->kernel_state_graph.valid) {
+  if (!ctx->tree_runtime.valid) {
     Rcpp::stop("loglik requires compiled tree guard metadata");
   }
   ctx->na_map_cache.clear();
@@ -6369,12 +6481,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       nonresponse_outcome_indices.push_back(static_cast<int>(oi));
     }
   }
-  std::vector<std::vector<uuber::VectorProgram>>
-      default_nonresponse_coupling_programs;
-  build_nonresponse_coupling_program_cache(
-      *ctx, nonresponse_outcome_indices, default_component_indices,
-      default_nonresponse_coupling_programs);
-
   std::vector<std::vector<double>> weights_by_trial(
       static_cast<std::size_t>(n_trials),
       std::vector<double>(n_components, 0.0));
@@ -6493,8 +6599,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
     std::vector<int> component_indices;
     std::vector<double> component_weights;
     std::vector<ComponentCacheEntry> cache_entries;
-    std::vector<std::vector<uuber::VectorProgram>>
-        nonresponse_coupling_programs;
   };
   std::unordered_map<int, ForcedComponentBundle> forced_component_bundle_cache;
   forced_component_bundle_cache.reserve(static_cast<std::size_t>(n_trials));
@@ -6509,9 +6613,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
     bundle.component_weights.push_back(1.0);
     bundle.cache_entries.push_back(
         default_component_cache_entry_idx(*ctx, forced_component_idx));
-    build_nonresponse_coupling_program_cache(
-        *ctx, nonresponse_outcome_indices, bundle.component_indices,
-        bundle.nonresponse_coupling_programs);
     auto inserted = forced_component_bundle_cache.emplace(forced_component_idx,
                                                           std::move(bundle));
     return inserted.first->second;
@@ -7115,23 +7216,13 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
             ? comp_idx_by_trial[static_cast<std::size_t>(first_trial)]
             : -1;
     const std::vector<int> *group_component_indices = &default_component_indices;
-    const std::vector<std::vector<uuber::VectorProgram>>
-        *group_coupling_programs = &default_nonresponse_coupling_programs;
-    std::vector<std::vector<uuber::VectorProgram>> local_coupling_programs;
     if (forced_component_idx >= 0) {
       const ForcedComponentBundle &forced_bundle =
           forced_bundle_for(forced_component_idx);
       group_component_indices = &forced_bundle.component_indices;
-      group_coupling_programs = &forced_bundle.nonresponse_coupling_programs;
     }
     if (*group_component_indices != *group_key.component_indices) {
       continue;
-    }
-    if (group_key.nonresponse_outcome_indices != &nonresponse_outcome_indices) {
-      build_nonresponse_coupling_program_cache(
-          *ctx, *group_key.nonresponse_outcome_indices, *group_component_indices,
-          local_coupling_programs);
-      group_coupling_programs = &local_coupling_programs;
     }
 
     const SharedTriggerPlan &group_trigger_plan =
@@ -7194,8 +7285,8 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
             *ctx, *group_key.nonresponse_outcome_indices,
             *group_component_indices, expanded_component_weights_batch,
             mask_params_batch, rel_tol, abs_tol, max_depth, false,
-            expanded_probabilities, group_coupling_programs,
-            &expanded_trial_to_point_index, &mask_batch.mask_param_ptrs) ||
+            expanded_probabilities, &expanded_trial_to_point_index,
+            &mask_batch.mask_param_ptrs) ||
         expanded_probabilities.size() != expanded_component_weights_batch.size()) {
       continue;
     }
@@ -7246,20 +7337,10 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
             ? comp_idx_by_trial[static_cast<std::size_t>(first_trial)]
             : -1;
     const std::vector<int> *group_component_indices = &default_component_indices;
-    const std::vector<std::vector<uuber::VectorProgram>>
-        *group_coupling_programs = &default_nonresponse_coupling_programs;
-    std::vector<std::vector<uuber::VectorProgram>> local_coupling_programs;
     if (forced_component_idx >= 0) {
       const ForcedComponentBundle &forced_bundle =
           forced_bundle_for(forced_component_idx);
       group_component_indices = &forced_bundle.component_indices;
-      group_coupling_programs = &forced_bundle.nonresponse_coupling_programs;
-    }
-    if (group_key.nonresponse_outcome_indices != &nonresponse_outcome_indices) {
-      build_nonresponse_coupling_program_cache(
-          *ctx, *group_key.nonresponse_outcome_indices, *group_component_indices,
-          local_coupling_programs);
-      group_coupling_programs = &local_coupling_programs;
     }
 
     std::vector<const TrialParamSet *> trial_params_batch;
@@ -7412,8 +7493,7 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
               chunk_trial_params, rel_tol, abs_tol, max_depth,
               group_key.probability_transform ==
                   TrialProbabilityTransform::Complement,
-              chunk_probabilities, group_coupling_programs,
-              &chunk_trial_to_point_index) ||
+              chunk_probabilities, &chunk_trial_to_point_index) ||
           chunk_probabilities.size() != chunk_compressed_indices.size()) {
         batch_ok = false;
         break;

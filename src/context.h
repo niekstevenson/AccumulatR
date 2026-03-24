@@ -45,7 +45,8 @@ enum class IrOutcomeCouplingKind : std::uint8_t {
   None = 0,
   Pair = 1,
   NWay = 2,
-  GenericNodeIntegral = 3
+  GuardedPair = 3,
+  GenericNodeIntegral = 4
 };
 
 enum IrNodeFlags : std::uint32_t {
@@ -124,6 +125,8 @@ struct IrOutcomeCouplingOp {
   bool requires_exact_scenario_eval{false};
   int gate_event_idx{-1};
   int target_event_idx{-1};
+  int blocker_event_idx{-1};
+  bool target_branch_guarded{false};
   int aux_event_begin{-1};
   int aux_event_count{0};
 };
@@ -165,7 +168,7 @@ struct IrContext {
   bool valid{false};
 };
 
-enum class KernelOpCode : std::uint8_t {
+enum class TreeEvalOpCode : std::uint8_t {
   Event = 0,
   And = 1,
   Or = 2,
@@ -173,8 +176,8 @@ enum class KernelOpCode : std::uint8_t {
   Guard = 4
 };
 
-struct KernelOp {
-  KernelOpCode code{KernelOpCode::Event};
+struct TreeEvalOp {
+  TreeEvalOpCode code{TreeEvalOpCode::Event};
   int node_idx{-1};
   int out_slot{-1};
   int event_idx{-1};
@@ -185,18 +188,18 @@ struct KernelOp {
   std::uint32_t flags{IR_NODE_FLAG_NONE};
 };
 
-struct KernelStateTransition {
+struct TreeTriggerTransition {
   int trigger_bit{-1};
   int acc_idx{-1};
   int op_begin{-1};
   int op_count{0};
 };
 
-enum class KernelGuardEvalMode : std::uint8_t {
+enum class TreeGuardEvalMode : std::uint8_t {
   LinearChainODE = 0
 };
 
-struct KernelGuardTransition {
+struct TreeGuardTransition {
   int node_idx{-1};
   int source_mask_begin{-1};
   int source_mask_count{0};
@@ -205,20 +208,20 @@ struct KernelGuardTransition {
   int blocker_node_idx{-1};
   int reference_slot{-1};
   int blocker_slot{-1};
-  KernelGuardEvalMode eval_mode{KernelGuardEvalMode::LinearChainODE};
+  TreeGuardEvalMode eval_mode{TreeGuardEvalMode::LinearChainODE};
   int linear_chain_begin{-1};
   int linear_chain_count{0};
   int linear_chain_leaf_idx{-1};
 };
 
-struct KernelStateGraph {
+struct TreeRuntimeMetadata {
   int forced_bit_count{0};
   std::vector<int> bit_idx_to_label_id;
-  std::vector<KernelStateTransition> trigger_transitions;
+  std::vector<TreeTriggerTransition> trigger_transitions;
   std::vector<int> trigger_transition_begin;
   std::vector<int> trigger_transition_count;
   std::vector<int> trigger_op_indices;
-  std::vector<KernelGuardTransition> guard_transitions;
+  std::vector<TreeGuardTransition> guard_transitions;
   std::vector<int> guard_linear_chain_nodes;
   std::vector<int> node_guard_transition_idx;
   std::vector<std::uint8_t> node_contains_guard;
@@ -229,7 +232,7 @@ struct KernelStateGraph {
   bool valid{false};
 };
 
-struct CompetitorCompiledOp {
+struct TreeCompetitorOp {
   std::vector<int> target_node_indices;
   int transition_guard_idx{-1};
   int transition_mask_begin{-1};
@@ -238,7 +241,7 @@ struct CompetitorCompiledOp {
 };
 
 struct CompetitorClusterCacheEntry {
-  std::vector<CompetitorCompiledOp> compiled_ops;
+  std::vector<TreeCompetitorOp> compiled_ops;
   bool mutates_forced_survive{false};
 };
 
@@ -350,7 +353,7 @@ struct NativeContext {
   ComponentMap components;
   IrContext ir;
   std::unique_ptr<VectorProgram> tree_program;
-  KernelStateGraph kernel_state_graph;
+  TreeRuntimeMetadata tree_runtime;
   TrialParamsSoA base_params_soa;
   bool has_chained_onsets{false};
   std::uint64_t runtime_cache_instance_id{0};

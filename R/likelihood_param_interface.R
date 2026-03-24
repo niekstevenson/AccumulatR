@@ -631,12 +631,16 @@ prepare_likelihood_data <- function(likelihood_context, data) {
         )
       }
       p_vals <- params_mat[row_idx, p_cols][seq_along(dist_params)]
+      onset_value <- acc$onset %||% 0
+      if (.is_after_onset(onset_value)) {
+        onset_value <- onset_value$lag %||% 0
+      }
       row <- list(
         trial = t,
         accumulator = i,
         q = params_mat[row_idx, "q"],
         t0 = params_mat[row_idx, "t0"],
-        onset = acc$onset %||% 0,
+        onset = onset_value,
         shared_trigger_id = acc$shared_trigger_id %||% NA_character_,
         shared_trigger_q = params_mat[row_idx, "q"]
       )
@@ -695,7 +699,11 @@ prepare_likelihood_data <- function(likelihood_context, data) {
       override <- acc_overrides[[acc_id]]
       acc <- acc_defs[[idx]]
       acc$params <- override$params
-      acc$onset <- override$onset
+      if (.is_after_onset(acc$onset)) {
+        acc$onset$lag <- override$onset
+      } else {
+        acc$onset <- override$onset
+      }
       acc$q <- override$q
       acc_defs[[idx]] <- acc
     }

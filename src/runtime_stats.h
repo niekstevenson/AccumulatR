@@ -3,7 +3,6 @@
 #include <cstdint>
 
 struct UnifiedOutcomeRuntimeStats {
-  std::uint64_t coupling_eval_calls{0};
   std::uint64_t node_batch_calls{0};
   std::uint64_t node_batch_active_lanes_total{0};
   std::uint64_t node_batch_active_lanes_max{0};
@@ -24,7 +23,6 @@ extern UnifiedOutcomeRuntimeStats g_unified_outcome_runtime_stats;
 extern bool g_unified_outcome_runtime_stats_enabled;
 
 void reset_unified_outcome_runtime_stats();
-void record_unified_outcome_coupling_eval_call();
 void record_unified_outcome_node_batch_call(std::uint64_t active_lanes,
                                             bool recursive_call);
 void record_unified_outcome_lane_partition(

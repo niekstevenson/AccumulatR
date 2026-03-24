@@ -35,6 +35,8 @@ struct TrialParamSet {
   bool has_any_override{false};
   std::uint64_t shared_trigger_source_fingerprint{0ULL};
   std::uint64_t value_fingerprint{0ULL};
+  uuber::NAMapCacheKey shared_trigger_source_key{};
+  uuber::NAMapCacheKey value_key{};
   bool value_fingerprint_valid{false};
   mutable uuber::TrialParamsSoA soa_cache;
   mutable bool soa_cache_valid{false};
@@ -57,6 +59,20 @@ struct SharedTriggerMaskSoABatch {
   std::vector<uuber::TrialParamsSoA> mask_params;
   std::vector<const uuber::TrialParamsSoA *> mask_param_ptrs;
   std::vector<double> mask_weights;
+};
+
+struct PreparedTrialParamsRuntime {
+  TrialParamSet *params{nullptr};
+  const uuber::TrialParamsSoA *soa{nullptr};
+  uuber::NAMapCacheKey shared_trigger_source_key{};
+  uuber::NAMapCacheKey value_key{};
+  std::uint64_t shared_trigger_source_fingerprint{0ULL};
+  std::uint64_t value_fingerprint{0ULL};
+  SharedTriggerPlan trigger_plan;
+  SharedTriggerMaskSoABatch mask_batch;
+  bool valid{false};
+  bool trigger_plan_ready{false};
+  bool mask_batch_ready{false};
 };
 
 std::uint64_t compute_trial_param_fingerprint(const TrialParamSet &params);
@@ -86,6 +102,15 @@ bool build_shared_trigger_mask_soa_batch(const uuber::NativeContext &ctx,
                                          const TrialParamSet *base_params,
                                          const SharedTriggerPlan &plan,
                                          SharedTriggerMaskSoABatch &out);
+bool prepare_trial_params_runtime(const uuber::NativeContext &ctx,
+                                  TrialParamSet *params_ptr,
+                                  PreparedTrialParamsRuntime &out);
+bool ensure_prepared_trial_params_soa(
+    const uuber::NativeContext &ctx, PreparedTrialParamsRuntime &runtime);
+bool ensure_prepared_trial_params_trigger_plan(
+    const uuber::NativeContext &ctx, PreparedTrialParamsRuntime &runtime);
+bool ensure_prepared_trial_params_mask_batch(
+    const uuber::NativeContext &ctx, PreparedTrialParamsRuntime &runtime);
 void apply_trigger_state_inplace(TrialParamSet &params, int acc_idx, bool fail);
 void ensure_trial_params_soa(const uuber::NativeContext &ctx,
                              TrialParamSet &params);

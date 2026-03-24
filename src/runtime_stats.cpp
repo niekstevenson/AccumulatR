@@ -13,13 +13,6 @@ void reset_unified_outcome_runtime_stats() {
   g_unified_outcome_runtime_stats = UnifiedOutcomeRuntimeStats{};
 }
 
-void record_unified_outcome_coupling_eval_call() {
-  if (!g_unified_outcome_runtime_stats_enabled) {
-    return;
-  }
-  ++g_unified_outcome_runtime_stats.coupling_eval_calls;
-}
-
 void record_unified_outcome_node_batch_call(std::uint64_t active_lanes,
                                             bool recursive_call) {
   if (!g_unified_outcome_runtime_stats_enabled) {
@@ -85,8 +78,6 @@ void unified_outcome_stats_reset_cpp() {
 // [[Rcpp::export]]
 Rcpp::List unified_outcome_stats_cpp() {
   return Rcpp::List::create(
-      Rcpp::Named("coupling_eval_calls") = static_cast<double>(
-          g_unified_outcome_runtime_stats.coupling_eval_calls),
       Rcpp::Named("node_batch_calls") = static_cast<double>(
           g_unified_outcome_runtime_stats.node_batch_calls),
       Rcpp::Named("node_batch_active_lanes_total") = static_cast<double>(

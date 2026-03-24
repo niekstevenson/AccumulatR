@@ -60,6 +60,10 @@ inline bool same_acc_batch_params_except_q(const uuber::TrialParamsSoA &lhs,
     return false;
   }
   const std::size_t idx = static_cast<std::size_t>(acc_idx);
+  if (lhs.valid && rhs.valid && idx < lhs.acc_signature_except_q.size() &&
+      idx < rhs.acc_signature_except_q.size()) {
+    return lhs.acc_signature_except_q[idx] == rhs.acc_signature_except_q[idx];
+  }
   return lhs.valid && rhs.valid &&
          idx < lhs.dist_code.size() && idx < rhs.dist_code.size() &&
          idx < lhs.onset.size() && idx < rhs.onset.size() &&

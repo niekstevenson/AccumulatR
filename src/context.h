@@ -267,6 +267,7 @@ struct TrialParamsSoA {
   std::vector<double> p6;
   std::vector<double> p7;
   std::vector<double> p8;
+  std::vector<std::uint64_t> acc_signature_except_q;
   bool valid{false};
 };
 

@@ -84,7 +84,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [39.254674]
+              "value": [39.254675]
             }
           ]
         },

@@ -27,8 +27,6 @@
 #include "component_plan.h"
 #include "competitor_cache.h"
 #include "context.h"
-#include "coupling_eval.h"
-#include "coupling_program.h"
 #include "distribution_core.h"
 #include "dist_vector.h"
 #include "exact_outcome_density.h"
@@ -253,41 +251,116 @@ inline bool simple_direct_outcome_fastpath_supported(
   return true;
 }
 
-inline bool coupling_program_requires_exact_scenario_eval(
-    const uuber::VectorProgram *program) {
-  return program != nullptr && program->valid &&
-         program->domain == uuber::VectorProgramDomain::OutcomeCoupling &&
-         program->requires_exact_scenario_eval;
+inline std::uint64_t outcome_coupling_mix_lookup_hash(std::uint64_t hash,
+                                                      int value) {
+  const std::uint32_t v = static_cast<std::uint32_t>(value);
+  for (int i = 0; i < 4; ++i) {
+    const std::uint8_t b =
+        static_cast<std::uint8_t>((v >> (8 * i)) & 0xFFU);
+    hash ^= static_cast<std::uint64_t>(b);
+    hash *= kFNV64Prime;
+  }
+  return hash;
 }
 
-inline uuber::VectorProgram resolve_density_coupling_program(
-    const uuber::NativeContext &ctx, int node_idx,
-    const std::vector<int> &competitor_ids, bool forced_empty) {
-  if (node_idx < 0 || node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
-    return uuber::VectorProgram{};
+inline std::uint64_t outcome_coupling_lookup_key(
+    int node_idx, const std::vector<int> &competitors) {
+  std::uint64_t hash = kFNV64Offset;
+  hash = outcome_coupling_mix_lookup_hash(hash, node_idx);
+  hash = outcome_coupling_mix_lookup_hash(hash,
+                                          static_cast<int>(competitors.size()));
+  for (int comp : competitors) {
+    hash = outcome_coupling_mix_lookup_hash(hash, comp);
   }
-  const int node_id =
-      ctx.ir.nodes[static_cast<std::size_t>(node_idx)].node_id;
-  return resolve_outcome_coupling_program_with_generic(
-      ctx, node_id >= 0 ? node_id : node_idx, competitor_ids, forced_empty);
+  return hash;
+}
+
+inline bool ir_node_source_masks_overlap(const uuber::NativeContext &ctx,
+                                         const uuber::IrNode &a,
+                                         const uuber::IrNode &b) {
+  if (!ctx.ir.valid || a.source_mask_begin < 0 || a.source_mask_count <= 0 ||
+      b.source_mask_begin < 0 || b.source_mask_count <= 0 ||
+      a.source_mask_count != b.source_mask_count) {
+    return false;
+  }
+  for (int i = 0; i < a.source_mask_count; ++i) {
+    const std::uint64_t wa = ctx.ir.node_source_masks[static_cast<std::size_t>(
+        a.source_mask_begin + i)];
+    const std::uint64_t wb = ctx.ir.node_source_masks[static_cast<std::size_t>(
+        b.source_mask_begin + i)];
+    if ((wa & wb) != 0u) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool generic_overlap_requires_exact_scenario_eval(
+    const uuber::NativeContext &ctx, int node_idx,
+    const std::vector<int> &competitor_ids) {
+  if (!ctx.ir.valid || node_idx < 0 ||
+      node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+    return false;
+  }
+  const uuber::IrNode &target = ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
+  for (int comp_node_id : competitor_ids) {
+    const int comp_idx = resolve_dense_node_idx(ctx, comp_node_id);
+    if (comp_idx < 0 || comp_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+      continue;
+    }
+    const uuber::IrNode &competitor =
+        ctx.ir.nodes[static_cast<std::size_t>(comp_idx)];
+    if (ir_node_source_masks_overlap(ctx, target, competitor)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline const uuber::IrOutcomeCouplingOp *find_outcome_coupling_spec(
+    const uuber::NativeContext &ctx, int node_idx,
+    const std::vector<int> &competitor_ids) {
+  if (!ctx.ir.valid || node_idx < 0 ||
+      node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+    return nullptr;
+  }
+  std::vector<int> competitor_dense;
+  competitor_dense.reserve(competitor_ids.size());
+  for (int comp_node_id : competitor_ids) {
+    const int comp_idx = resolve_dense_node_idx(ctx, comp_node_id);
+    if (comp_idx < 0) {
+      return nullptr;
+    }
+    competitor_dense.push_back(comp_idx);
+  }
+  const std::uint64_t key =
+      outcome_coupling_lookup_key(node_idx, competitor_dense);
+  auto it = ctx.ir.outcome_coupling_lookup.find(key);
+  if (it == ctx.ir.outcome_coupling_lookup.end()) {
+    return nullptr;
+  }
+  const int spec_idx = it->second;
+  if (spec_idx < 0 ||
+      spec_idx >= static_cast<int>(ctx.ir.outcome_coupling_ops.size())) {
+    return nullptr;
+  }
+  return &ctx.ir.outcome_coupling_ops[static_cast<std::size_t>(spec_idx)];
 }
 
 inline bool should_use_exact_density_program(
     const uuber::NativeContext &ctx, int node_idx,
     const std::vector<int> &competitor_ids, const NodeEvalState &state,
-    const uuber::VectorProgram *program) {
+    const uuber::IrOutcomeCouplingOp *coupling_spec) {
   if (node_idx < 0 || node_idx >= static_cast<int>(ctx.ir.nodes.size()) ||
       !state_allows_exact_scalar_dispatch(ctx, state)) {
     return false;
   }
-  uuber::VectorProgram local_program;
-  const uuber::VectorProgram *program_ptr = program;
-  if (program_ptr == nullptr) {
-    local_program =
-        resolve_density_coupling_program(ctx, node_idx, competitor_ids, false);
-    program_ptr = local_program.valid ? &local_program : nullptr;
+  if (coupling_spec != nullptr &&
+      coupling_spec->kind == uuber::IrOutcomeCouplingKind::GenericNodeIntegral) {
+    return coupling_spec->requires_exact_scenario_eval;
   }
-  return coupling_program_requires_exact_scenario_eval(program_ptr);
+  return generic_overlap_requires_exact_scenario_eval(ctx, node_idx,
+                                                      competitor_ids);
 }
 
 inline const uuber::TrialParamsSoA *
@@ -298,6 +371,667 @@ trial_params_soa_for_batch_point(const NodeEvalState &state,
     return (*state.trial_params_soa_batch)[point_idx];
   }
   return state.trial_params_soa;
+}
+
+inline bool try_evaluate_simple_overlap_event_batch_values(
+    const uuber::NativeContext &ctx, int node_idx,
+    const std::vector<double> &times, int component_idx,
+    const TrialParamSet *trial_params,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
+    uuber::TreeNodeBatchValues &out_values);
+
+inline bool evaluate_overlap_event_batch_values(
+    const uuber::NativeContext &ctx, int event_idx,
+    const std::vector<double> &times, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
+    uuber::TreeNodeBatchValues &out_values) {
+  if (event_idx < 0 || event_idx >= static_cast<int>(ctx.ir.events.size())) {
+    return false;
+  }
+  const uuber::IrEvent &event =
+      ctx.ir.events[static_cast<std::size_t>(event_idx)];
+  if (event.node_idx < 0 ||
+      event.node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+    return false;
+  }
+
+  if (try_evaluate_simple_overlap_event_batch_values(
+          ctx, event.node_idx, times, component_idx, trial_params,
+          trial_params_soa_batch, out_values)) {
+    return true;
+  }
+
+  NodeEvalState state(ctx, 0.0, component_idx, trial_params, trial_type_key,
+                      false, -1);
+  state.trial_params_soa_batch = trial_params_soa_batch;
+  if (!evaluator_eval_node_batch_with_state_dense(
+          event.node_idx, times, state,
+          EvalNeed::kDensity | EvalNeed::kSurvival | EvalNeed::kCDF,
+          out_values) ||
+      out_values.density.size() != times.size() ||
+      out_values.survival.size() != times.size() ||
+      out_values.cdf.size() != times.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    out_values.density[i] = safe_density(out_values.density[i]);
+    out_values.survival[i] = clamp_probability(out_values.survival[i]);
+    out_values.cdf[i] = clamp_probability(out_values.cdf[i]);
+  }
+  return true;
+}
+
+struct TimeIntegralPointPlan {
+  std::size_t begin{0u};
+  std::size_t count{0u};
+};
+
+inline double max_positive_finite_upper(const std::vector<double> &upper_bounds) {
+  double max_upper = 0.0;
+  for (double upper : upper_bounds) {
+    if (std::isfinite(upper) && upper > max_upper) {
+      max_upper = upper;
+    }
+  }
+  return max_upper;
+}
+
+inline bool build_time_integral_query_plan(
+    const std::vector<double> &upper_bounds, double lower, double upper,
+    int segments, std::vector<TimeIntegralPointPlan> &plans,
+    std::vector<double> &query_times, std::vector<double> &query_weights,
+    const std::vector<const uuber::TrialParamsSoA *> *point_trial_params_soa,
+    std::vector<const uuber::TrialParamsSoA *> *query_trial_params_soa,
+    const std::vector<std::uint8_t> *active_points = nullptr) {
+  if (!(std::isfinite(lower) && std::isfinite(upper)) || !(upper > lower) ||
+      segments < 1) {
+    return false;
+  }
+
+  plans.assign(upper_bounds.size(), TimeIntegralPointPlan{});
+  query_times.clear();
+  query_weights.clear();
+  if (query_trial_params_soa != nullptr) {
+    query_trial_params_soa->clear();
+  }
+  if (point_trial_params_soa != nullptr &&
+      point_trial_params_soa->size() != upper_bounds.size()) {
+    return false;
+  }
+
+  const double window_width = upper - lower;
+  std::size_t estimated_node_count = 0u;
+  for (std::size_t i = 0; i < upper_bounds.size(); ++i) {
+    if (active_points != nullptr &&
+        (i >= active_points->size() || (*active_points)[i] == 0u)) {
+      continue;
+    }
+    const double point_upper = upper_bounds[i];
+    const double interval_hi =
+        std::isfinite(point_upper) ? std::min(upper, point_upper) : upper;
+    if (interval_hi > lower) {
+      const double interval_width = interval_hi - lower;
+      const int local_segments =
+          std::max(1, static_cast<int>(std::ceil(
+                          static_cast<double>(segments) *
+                          interval_width / std::max(window_width, interval_width))));
+      estimated_node_count +=
+          static_cast<std::size_t>(local_segments * 15);
+    }
+  }
+  query_times.reserve(estimated_node_count);
+  query_weights.reserve(estimated_node_count);
+  if (query_trial_params_soa != nullptr) {
+    query_trial_params_soa->reserve(estimated_node_count);
+  }
+
+  for (std::size_t i = 0; i < upper_bounds.size(); ++i) {
+    TimeIntegralPointPlan &plan = plans[i];
+    plan.begin = query_times.size();
+    if (active_points != nullptr &&
+        (i >= active_points->size() || (*active_points)[i] == 0u)) {
+      continue;
+    }
+    const double point_upper = upper_bounds[i];
+    const double interval_hi =
+        std::isfinite(point_upper) ? std::min(upper, point_upper) : upper;
+    if (!(interval_hi > lower)) {
+      continue;
+    }
+    const double interval_width = interval_hi - lower;
+    const int local_segments =
+        std::max(1, static_cast<int>(std::ceil(
+                        static_cast<double>(segments) *
+                        interval_width / std::max(window_width, interval_width))));
+    const uuber::TrialParamsSoA *point_trial_params =
+        point_trial_params_soa != nullptr ? (*point_trial_params_soa)[i] : nullptr;
+    if (query_trial_params_soa != nullptr && point_trial_params == nullptr) {
+      return false;
+    }
+    for (int seg = 0; seg < local_segments; ++seg) {
+      const double seg_lo =
+          lower + interval_width * static_cast<double>(seg) /
+                      static_cast<double>(local_segments);
+      const double seg_hi =
+          lower + interval_width * static_cast<double>(seg + 1) /
+                      static_cast<double>(local_segments);
+      const uuber::TimeBatch batch = uuber::build_time_batch(seg_lo, seg_hi);
+      if (batch.nodes.empty() || batch.nodes.size() != batch.weights.size()) {
+        return false;
+      }
+      query_times.insert(query_times.end(), batch.nodes.begin(), batch.nodes.end());
+      query_weights.insert(query_weights.end(), batch.weights.begin(),
+                           batch.weights.end());
+      if (query_trial_params_soa != nullptr) {
+        query_trial_params_soa->insert(query_trial_params_soa->end(),
+                                       batch.nodes.size(), point_trial_params);
+      }
+    }
+    plan.count = query_times.size() - plan.begin;
+  }
+  return true;
+}
+
+inline bool integrate_query_plan_density_per_point(
+    const std::vector<TimeIntegralPointPlan> &plans,
+    const std::vector<double> &query_weights,
+    const std::vector<double> &density, std::vector<double> &out) {
+  if (query_weights.size() != density.size()) {
+    return false;
+  }
+  out.assign(plans.size(), 0.0);
+  for (std::size_t point_idx = 0; point_idx < plans.size(); ++point_idx) {
+    const TimeIntegralPointPlan &plan = plans[point_idx];
+    if (plan.begin + plan.count > density.size()) {
+      return false;
+    }
+    double total = 0.0;
+    for (std::size_t query_idx = plan.begin;
+         query_idx < plan.begin + plan.count; ++query_idx) {
+      const double weight = query_weights[query_idx];
+      if (!std::isfinite(weight) || weight <= 0.0) {
+        continue;
+      }
+      const double value = safe_density(density[query_idx]);
+      if (!std::isfinite(value) || value <= 0.0) {
+        continue;
+      }
+      total += weight * value;
+    }
+    out[point_idx] = safe_density(total);
+  }
+  return true;
+}
+
+inline bool resolve_point_trial_params_soa_batch(
+    const uuber::NativeContext &ctx, std::size_t point_count,
+    const TrialParamSet *trial_params,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
+    std::vector<const uuber::TrialParamsSoA *> &storage,
+    const std::vector<const uuber::TrialParamsSoA *> *&out_ptr) {
+  if (trial_params_soa_batch != nullptr) {
+    if (trial_params_soa_batch->size() != point_count) {
+      return false;
+    }
+    for (const uuber::TrialParamsSoA *point_soa : *trial_params_soa_batch) {
+      if (point_soa == nullptr || !point_soa->valid) {
+        return false;
+      }
+    }
+    out_ptr = trial_params_soa_batch;
+    return true;
+  }
+
+  const uuber::TrialParamsSoA *default_trial_params_soa =
+      resolve_trial_params_soa(ctx, trial_params);
+  if (default_trial_params_soa == nullptr || !default_trial_params_soa->valid) {
+    return false;
+  }
+  storage.assign(point_count, default_trial_params_soa);
+  out_ptr = &storage;
+  return true;
+}
+
+inline bool evaluate_specialized_pair_overlap_density_batch(
+    const uuber::NativeContext &ctx, const uuber::IrOutcomeCouplingOp &spec,
+    const std::vector<double> &times, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
+    std::vector<double> &density_out) {
+  density_out.assign(times.size(), 0.0);
+  if (spec.target_event_idx < 0 || spec.gate_event_idx < 0 ||
+      spec.aux_event_count != 1 || spec.aux_event_begin < 0 ||
+      spec.aux_event_begin >=
+          static_cast<int>(ctx.ir.outcome_coupling_event_indices.size())) {
+    return false;
+  }
+  const int y_event_idx = ctx.ir.outcome_coupling_event_indices
+      [static_cast<std::size_t>(spec.aux_event_begin)];
+  if (y_event_idx < 0 || y_event_idx >= static_cast<int>(ctx.ir.events.size())) {
+    return false;
+  }
+
+  std::vector<double> eval_times(times);
+  std::vector<std::uint8_t> valid_points(times.size(), 0u);
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    if (std::isfinite(times[i]) && times[i] >= 0.0) {
+      valid_points[i] = 1u;
+    } else {
+      eval_times[i] = 0.0;
+    }
+  }
+
+  uuber::TreeNodeBatchValues gate_values;
+  uuber::TreeNodeBatchValues target_values;
+  uuber::TreeNodeBatchValues other_values;
+  if (!evaluate_overlap_event_batch_values(
+          ctx, spec.gate_event_idx, eval_times, component_idx, trial_params,
+          trial_type_key, trial_params_soa_batch, gate_values) ||
+      !evaluate_overlap_event_batch_values(
+          ctx, spec.target_event_idx, eval_times, component_idx, trial_params,
+          trial_type_key, trial_params_soa_batch, target_values) ||
+      !evaluate_overlap_event_batch_values(
+          ctx, y_event_idx, eval_times, component_idx, trial_params,
+          trial_type_key, trial_params_soa_batch, other_values)) {
+    return false;
+  }
+
+  std::vector<const uuber::TrialParamsSoA *> point_trial_params_soa_storage;
+  const std::vector<const uuber::TrialParamsSoA *> *point_trial_params_soa =
+      nullptr;
+  if (!resolve_point_trial_params_soa_batch(
+          ctx, times.size(), trial_params, trial_params_soa_batch,
+          point_trial_params_soa_storage, point_trial_params_soa)) {
+    return false;
+  }
+
+  std::vector<TimeIntegralPointPlan> quadrature_plans;
+  std::vector<double> quadrature_times;
+  std::vector<double> quadrature_weights;
+  std::vector<const uuber::TrialParamsSoA *> quadrature_trial_params_soa;
+  const double quadrature_upper = max_positive_finite_upper(eval_times);
+  if (quadrature_upper > 0.0 &&
+      !build_time_integral_query_plan(
+          eval_times, 0.0, quadrature_upper, 2, quadrature_plans,
+          quadrature_times, quadrature_weights, point_trial_params_soa,
+          &quadrature_trial_params_soa, &valid_points)) {
+    return false;
+  }
+
+  uuber::TreeNodeBatchValues quadrature_target_values;
+  uuber::TreeNodeBatchValues quadrature_other_values;
+  if (!quadrature_times.empty() &&
+      (!evaluate_overlap_event_batch_values(
+           ctx, spec.target_event_idx, quadrature_times, component_idx,
+           trial_params, trial_type_key, &quadrature_trial_params_soa,
+           quadrature_target_values) ||
+       !evaluate_overlap_event_batch_values(
+           ctx, y_event_idx, quadrature_times, component_idx, trial_params,
+           trial_type_key, &quadrature_trial_params_soa,
+           quadrature_other_values))) {
+    return false;
+  }
+
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    if (valid_points[i] == 0u) {
+      continue;
+    }
+    double int_fx_fy = 0.0;
+    const TimeIntegralPointPlan &plan = quadrature_plans[i];
+    for (std::size_t query_idx = plan.begin;
+         query_idx < plan.begin + plan.count; ++query_idx) {
+      const double weight = quadrature_weights[query_idx];
+      if (!std::isfinite(weight) || weight <= 0.0) {
+        continue;
+      }
+      const double term = safe_density(
+          quadrature_target_values.density[query_idx] *
+          quadrature_other_values.cdf[query_idx]);
+      if (term > 0.0) {
+        int_fx_fy += weight * term;
+      }
+    }
+    const double density = safe_density(
+        gate_values.density[i] * target_values.cdf[i] +
+        target_values.density[i] * gate_values.cdf[i] -
+        gate_values.density[i] * int_fx_fy -
+        gate_values.cdf[i] * safe_density(target_values.density[i] *
+                                          other_values.cdf[i]));
+    density_out[i] = density;
+  }
+  return true;
+}
+
+inline bool evaluate_specialized_guarded_pair_overlap_density_batch(
+    const uuber::NativeContext &ctx, const uuber::IrOutcomeCouplingOp &spec,
+    const std::vector<double> &times, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
+    std::vector<double> &density_out) {
+  density_out.assign(times.size(), 0.0);
+  if (spec.target_event_idx < 0 || spec.gate_event_idx < 0 ||
+      spec.blocker_event_idx < 0 || spec.aux_event_count != 1 ||
+      spec.aux_event_begin < 0 ||
+      spec.aux_event_begin >=
+          static_cast<int>(ctx.ir.outcome_coupling_event_indices.size())) {
+    return false;
+  }
+  const int other_event_idx = ctx.ir.outcome_coupling_event_indices
+      [static_cast<std::size_t>(spec.aux_event_begin)];
+  if (other_event_idx < 0 ||
+      other_event_idx >= static_cast<int>(ctx.ir.events.size())) {
+    return false;
+  }
+
+  std::vector<double> eval_times(times);
+  std::vector<std::uint8_t> valid_points(times.size(), 0u);
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    if (std::isfinite(times[i]) && times[i] >= 0.0) {
+      valid_points[i] = 1u;
+    } else {
+      eval_times[i] = 0.0;
+    }
+  }
+
+  uuber::TreeNodeBatchValues gate_values;
+  uuber::TreeNodeBatchValues target_values;
+  uuber::TreeNodeBatchValues other_values;
+  uuber::TreeNodeBatchValues blocker_values;
+  if (!evaluate_overlap_event_batch_values(
+          ctx, spec.gate_event_idx, eval_times, component_idx, trial_params,
+          trial_type_key, trial_params_soa_batch, gate_values) ||
+      !evaluate_overlap_event_batch_values(
+          ctx, spec.target_event_idx, eval_times, component_idx, trial_params,
+          trial_type_key, trial_params_soa_batch, target_values) ||
+      !evaluate_overlap_event_batch_values(
+          ctx, other_event_idx, eval_times, component_idx, trial_params,
+          trial_type_key, trial_params_soa_batch, other_values) ||
+      !evaluate_overlap_event_batch_values(
+          ctx, spec.blocker_event_idx, eval_times, component_idx, trial_params,
+          trial_type_key, trial_params_soa_batch, blocker_values)) {
+    return false;
+  }
+
+  std::vector<const uuber::TrialParamsSoA *> point_trial_params_soa_storage;
+  const std::vector<const uuber::TrialParamsSoA *> *point_trial_params_soa =
+      nullptr;
+  if (!resolve_point_trial_params_soa_batch(
+          ctx, times.size(), trial_params, trial_params_soa_batch,
+          point_trial_params_soa_storage, point_trial_params_soa)) {
+    return false;
+  }
+
+  std::vector<TimeIntegralPointPlan> quadrature_plans;
+  std::vector<double> quadrature_times;
+  std::vector<double> quadrature_weights;
+  std::vector<const uuber::TrialParamsSoA *> quadrature_trial_params_soa;
+  const double quadrature_upper = max_positive_finite_upper(eval_times);
+  if (quadrature_upper > 0.0 &&
+      !build_time_integral_query_plan(
+          eval_times, 0.0, quadrature_upper, 2, quadrature_plans,
+          quadrature_times, quadrature_weights, point_trial_params_soa,
+          &quadrature_trial_params_soa, &valid_points)) {
+    return false;
+  }
+
+  uuber::TreeNodeBatchValues quadrature_gate_values;
+  uuber::TreeNodeBatchValues quadrature_target_values;
+  uuber::TreeNodeBatchValues quadrature_other_values;
+  uuber::TreeNodeBatchValues quadrature_blocker_values;
+  if (!quadrature_times.empty() &&
+      (!evaluate_overlap_event_batch_values(
+           ctx, spec.gate_event_idx, quadrature_times, component_idx,
+           trial_params, trial_type_key, &quadrature_trial_params_soa,
+           quadrature_gate_values) ||
+       !evaluate_overlap_event_batch_values(
+           ctx, spec.target_event_idx, quadrature_times, component_idx,
+           trial_params, trial_type_key, &quadrature_trial_params_soa,
+           quadrature_target_values) ||
+       !evaluate_overlap_event_batch_values(
+           ctx, other_event_idx, quadrature_times, component_idx, trial_params,
+           trial_type_key, &quadrature_trial_params_soa,
+           quadrature_other_values) ||
+       !evaluate_overlap_event_batch_values(
+           ctx, spec.blocker_event_idx, quadrature_times, component_idx,
+           trial_params, trial_type_key, &quadrature_trial_params_soa,
+           quadrature_blocker_values))) {
+    return false;
+  }
+
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    if (valid_points[i] == 0u) {
+      continue;
+    }
+    double target_before_guarded_mass = 0.0;
+    double blocked_gate_order_mass = 0.0;
+    double blocked_gate_mass = 0.0;
+    double blocked_branch_mass = 0.0;
+    const TimeIntegralPointPlan &plan = quadrature_plans[i];
+    for (std::size_t query_idx = plan.begin;
+         query_idx < plan.begin + plan.count; ++query_idx) {
+      const double weight = quadrature_weights[query_idx];
+      if (!std::isfinite(weight) || weight <= 0.0) {
+        continue;
+      }
+      const double target_density = quadrature_target_values.density[query_idx];
+      const double other_survival =
+          quadrature_other_values.survival[query_idx];
+      const double other_cdf = quadrature_other_values.cdf[query_idx];
+      const double gate_density = quadrature_gate_values.density[query_idx];
+      const double gate_cdf = quadrature_gate_values.cdf[query_idx];
+      const double blocker_cdf = quadrature_blocker_values.cdf[query_idx];
+
+      const double before_guarded =
+          safe_density(target_density * other_survival);
+      if (before_guarded > 0.0) {
+        target_before_guarded_mass += weight * before_guarded;
+      }
+      if (!spec.target_branch_guarded) {
+        const double gate_order = safe_density(target_density * other_cdf);
+        if (gate_order > 0.0) {
+          blocked_gate_order_mass += weight * gate_order;
+        }
+        const double gate_blocked =
+            safe_density(gate_density * blocker_cdf * other_cdf);
+        if (gate_blocked > 0.0) {
+          blocked_gate_mass += weight * gate_blocked;
+        }
+        const double branch_blocked =
+            safe_density(quadrature_other_values.density[query_idx] *
+                         blocker_cdf * gate_cdf);
+        if (branch_blocked > 0.0) {
+          blocked_branch_mass += weight * branch_blocked;
+        }
+      }
+    }
+
+    double density = 0.0;
+    if (spec.target_branch_guarded) {
+      density = safe_density(
+          gate_values.density[i] * blocker_values.survival[i] *
+              target_before_guarded_mass +
+          gate_values.cdf[i] *
+              safe_density(target_values.density[i] * other_values.survival[i] *
+                           blocker_values.survival[i]));
+    } else {
+      density = safe_density(
+          gate_values.density[i] * target_before_guarded_mass +
+          gate_values.density[i] * blocker_values.cdf[i] *
+              blocked_gate_order_mass +
+          target_values.density[i] * gate_values.cdf[i] *
+              other_values.survival[i] +
+          target_values.density[i] * blocked_gate_mass +
+          target_values.density[i] * blocked_branch_mass);
+    }
+    density_out[i] = density;
+  }
+  return true;
+}
+
+inline bool evaluate_specialized_nway_overlap_density_batch(
+    const uuber::NativeContext &ctx, const uuber::IrOutcomeCouplingOp &spec,
+    const std::vector<double> &times, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
+    std::vector<double> &density_out) {
+  density_out.assign(times.size(), 0.0);
+  if (spec.target_event_idx < 0 || spec.gate_event_idx < 0 ||
+      spec.aux_event_count <= 0 || spec.aux_event_begin < 0 ||
+      spec.aux_event_begin + spec.aux_event_count >
+          static_cast<int>(ctx.ir.outcome_coupling_event_indices.size())) {
+    return false;
+  }
+
+  std::vector<int> competitor_event_indices;
+  competitor_event_indices.reserve(static_cast<std::size_t>(spec.aux_event_count));
+  for (int i = 0; i < spec.aux_event_count; ++i) {
+    const int event_idx = ctx.ir.outcome_coupling_event_indices
+        [static_cast<std::size_t>(spec.aux_event_begin + i)];
+    if (event_idx < 0 || event_idx >= static_cast<int>(ctx.ir.events.size())) {
+      return false;
+    }
+    competitor_event_indices.push_back(event_idx);
+  }
+
+  std::vector<double> eval_times(times);
+  std::vector<std::uint8_t> valid_points(times.size(), 0u);
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    if (std::isfinite(times[i]) && times[i] >= 0.0) {
+      valid_points[i] = 1u;
+    } else {
+      eval_times[i] = 0.0;
+    }
+  }
+
+  uuber::TreeNodeBatchValues gate_values;
+  uuber::TreeNodeBatchValues target_values;
+  if (!evaluate_overlap_event_batch_values(
+          ctx, spec.gate_event_idx, eval_times, component_idx, trial_params,
+          trial_type_key, trial_params_soa_batch, gate_values) ||
+      !evaluate_overlap_event_batch_values(
+          ctx, spec.target_event_idx, eval_times, component_idx, trial_params,
+          trial_type_key, trial_params_soa_batch, target_values)) {
+    return false;
+  }
+
+  std::vector<uuber::TreeNodeBatchValues> competitor_values(
+      competitor_event_indices.size());
+  for (std::size_t comp_idx = 0; comp_idx < competitor_event_indices.size();
+       ++comp_idx) {
+    if (!evaluate_overlap_event_batch_values(
+            ctx, competitor_event_indices[comp_idx], eval_times, component_idx,
+            trial_params, trial_type_key, trial_params_soa_batch,
+            competitor_values[comp_idx])) {
+      return false;
+    }
+  }
+
+  std::vector<const uuber::TrialParamsSoA *> point_trial_params_soa_storage;
+  const std::vector<const uuber::TrialParamsSoA *> *point_trial_params_soa =
+      nullptr;
+  if (!resolve_point_trial_params_soa_batch(
+          ctx, times.size(), trial_params, trial_params_soa_batch,
+          point_trial_params_soa_storage, point_trial_params_soa)) {
+    return false;
+  }
+
+  std::vector<TimeIntegralPointPlan> quadrature_plans;
+  std::vector<double> quadrature_times;
+  std::vector<double> quadrature_weights;
+  std::vector<const uuber::TrialParamsSoA *> quadrature_trial_params_soa;
+  const double quadrature_upper = max_positive_finite_upper(eval_times);
+  if (quadrature_upper > 0.0 &&
+      !build_time_integral_query_plan(
+          eval_times, 0.0, quadrature_upper, 2, quadrature_plans,
+          quadrature_times, quadrature_weights, point_trial_params_soa,
+          &quadrature_trial_params_soa, &valid_points)) {
+    return false;
+  }
+
+  uuber::TreeNodeBatchValues quadrature_target_values;
+  std::vector<uuber::TreeNodeBatchValues> quadrature_competitor_values(
+      competitor_event_indices.size());
+  if (!quadrature_times.empty() &&
+      !evaluate_overlap_event_batch_values(
+          ctx, spec.target_event_idx, quadrature_times, component_idx,
+          trial_params, trial_type_key, &quadrature_trial_params_soa,
+          quadrature_target_values)) {
+    return false;
+  }
+  for (std::size_t comp_idx = 0; comp_idx < competitor_event_indices.size();
+       ++comp_idx) {
+    if (!quadrature_times.empty() &&
+        !evaluate_overlap_event_batch_values(
+            ctx, competitor_event_indices[comp_idx], quadrature_times,
+            component_idx, trial_params, trial_type_key,
+            &quadrature_trial_params_soa,
+            quadrature_competitor_values[comp_idx])) {
+      return false;
+    }
+  }
+
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    if (valid_points[i] == 0u) {
+      continue;
+    }
+    double current_order_density = target_values.density[i];
+    for (const uuber::TreeNodeBatchValues &comp_values : competitor_values) {
+      current_order_density = safe_density(current_order_density *
+                                           comp_values.survival[i]);
+    }
+    double order_mass = 0.0;
+    const TimeIntegralPointPlan &plan = quadrature_plans[i];
+    for (std::size_t query_idx = plan.begin;
+         query_idx < plan.begin + plan.count; ++query_idx) {
+      const double weight = quadrature_weights[query_idx];
+      if (!std::isfinite(weight) || weight <= 0.0) {
+        continue;
+      }
+      double term = quadrature_target_values.density[query_idx];
+      for (const uuber::TreeNodeBatchValues &comp_values :
+           quadrature_competitor_values) {
+        term = safe_density(term * comp_values.survival[query_idx]);
+        if (term <= 0.0) {
+          break;
+        }
+      }
+      if (term > 0.0) {
+        order_mass += weight * term;
+      }
+    }
+    density_out[i] = safe_density(gate_values.density[i] * order_mass +
+                                  gate_values.cdf[i] * current_order_density);
+  }
+  return true;
+}
+
+inline bool evaluate_specialized_overlap_density_batch(
+    const uuber::NativeContext &ctx,
+    const uuber::IrOutcomeCouplingOp *coupling_spec,
+    const std::vector<double> &times, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
+    std::vector<double> &density_out) {
+  if (coupling_spec == nullptr) {
+    return false;
+  }
+  switch (coupling_spec->kind) {
+  case uuber::IrOutcomeCouplingKind::Pair:
+    return evaluate_specialized_pair_overlap_density_batch(
+        ctx, *coupling_spec, times, component_idx, trial_params, trial_type_key,
+        trial_params_soa_batch, density_out);
+  case uuber::IrOutcomeCouplingKind::GuardedPair:
+    return evaluate_specialized_guarded_pair_overlap_density_batch(
+        ctx, *coupling_spec, times, component_idx, trial_params, trial_type_key,
+        trial_params_soa_batch, density_out);
+  case uuber::IrOutcomeCouplingKind::NWay:
+    return evaluate_specialized_nway_overlap_density_batch(
+        ctx, *coupling_spec, times, component_idx, trial_params, trial_type_key,
+        trial_params_soa_batch, density_out);
+  default:
+    return false;
+  }
 }
 
 struct TimeTrialParamsSoAKey {
@@ -409,6 +1143,27 @@ double native_outcome_probability_impl_idx(
     int outcome_idx_context,
     const SharedTriggerPlan *trigger_plan, TrialParamSet *trigger_scratch);
 
+struct DensityBatchWorkspace {
+  std::vector<TimeIntegralPointPlan> point_plans;
+  std::vector<double> query_times;
+  std::vector<double> query_weights;
+  std::vector<const uuber::TrialParamsSoA *> query_params_soa;
+  std::vector<std::uint8_t> active_points;
+  std::vector<std::uint8_t> tail_saw_positive;
+  std::vector<int> tail_small_segments;
+  std::vector<double> expanded_times;
+  std::vector<const uuber::TrialParamsSoA *> expanded_params_soa;
+  std::vector<double> compressed_times;
+  std::vector<const uuber::TrialParamsSoA *> compressed_params_soa;
+  std::vector<std::size_t> expanded_to_compressed;
+  std::vector<double> batch_density;
+  std::vector<double> segment_probabilities;
+  std::vector<double> point_probabilities;
+  std::vector<const uuber::TrialParamsSoA *> unique_params_soa;
+  std::vector<const TrialParamSet *> unique_trial_params;
+  std::vector<std::size_t> point_to_eval_index;
+};
+
 bool node_density_with_competitors_batch_internal(
     const uuber::NativeContext &ctx, int node_id,
     const std::vector<double> &times, int component_idx,
@@ -437,7 +1192,10 @@ bool node_density_entry_batch_idx(
     std::vector<double> &density_out,
     const TimeConstraintMap *time_constraints = nullptr,
     const std::vector<const uuber::TrialParamsSoA *>
-        *trial_params_soa_batch_override = nullptr);
+        *trial_params_soa_batch_override = nullptr,
+    const SharedTriggerMaskSoABatch *shared_trigger_mask_batch_override =
+        nullptr,
+    DensityBatchWorkspace *workspace = nullptr);
 
 inline bool evaluate_outcome_density_batch_idx(
     const uuber::NativeContext &ctx, int outcome_idx,
@@ -465,7 +1223,7 @@ inline bool evaluate_outcome_density_batch_idx(
       ctx, info.node_id, times, component_idx, nullptr, false, nullptr, false,
       comp_use, trial_params, trial_type_key, include_na_donors,
       outcome_label_context_idx, trigger_plan, use_shared_trigger_eval,
-      density_out, nullptr);
+      density_out, nullptr, nullptr, nullptr, nullptr);
 }
 
 inline bool component_guess_density_applicable(
@@ -3176,6 +3934,160 @@ inline double guard_cdf_internal_prepared(
   return cdf_chain;
 }
 
+inline bool eval_fast_event_density_batch_from_info(
+    const FastEventInfo &info, const std::vector<double> &times,
+    std::vector<double> &shifted, std::vector<double> &values,
+    std::vector<double> &density_out) {
+  density_out.assign(times.size(), 0.0);
+  if (!info.component_ok) {
+    return true;
+  }
+  const double onset_eff = total_onset_with_t0(info.onset, info.cfg);
+  const double success_prob = clamp(1.0 - info.q, 0.0, 1.0);
+  shifted.assign(times.size(), 0.0);
+  values.assign(times.size(), 0.0);
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    shifted[i] = times[i] - onset_eff;
+  }
+  eval_pdf_vec_with_lower_bound(info.cfg, info.lower_bound, shifted.data(),
+                                times.size(), values.data());
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    if (!std::isfinite(times[i]) || times[i] < onset_eff ||
+        !(success_prob > 0.0)) {
+      continue;
+    }
+    density_out[i] = safe_density(success_prob * safe_density(values[i]));
+  }
+  return true;
+}
+
+inline bool eval_fast_event_survival_batch_from_info(
+    const FastEventInfo &info, const std::vector<double> &times,
+    std::vector<double> &shifted, std::vector<double> &values,
+    std::vector<double> &survival_out) {
+  survival_out.assign(times.size(), 1.0);
+  if (!info.component_ok) {
+    return true;
+  }
+  const double onset_eff = total_onset_with_t0(info.onset, info.cfg);
+  const double success_prob = clamp(1.0 - info.q, 0.0, 1.0);
+  shifted.assign(times.size(), 0.0);
+  values.assign(times.size(), 0.0);
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    shifted[i] = times[i] - onset_eff;
+  }
+  eval_cdf_vec_with_lower_bound(info.cfg, info.lower_bound, shifted.data(),
+                                times.size(), values.data());
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    if (!std::isfinite(times[i]) || times[i] < onset_eff) {
+      continue;
+    }
+    survival_out[i] =
+        clamp_probability(info.q + success_prob * (1.0 - clamp_probability(values[i])));
+  }
+  return true;
+}
+
+inline bool guard_cdf_simple_pair_batch_prepared(
+    const GuardEvalInput &input, const PreparedLinearGuardChainInfo &prepared,
+    const std::vector<double> &times, std::vector<double> &cdf_out) {
+  cdf_out.assign(times.size(), 0.0);
+  if (times.empty() || !prepared.valid || !prepared.chain.valid ||
+      prepared.chain.reference_count != 1u) {
+    return false;
+  }
+
+  std::vector<std::uint8_t> valid_points(times.size(), 0u);
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    if (std::isfinite(times[i]) && times[i] > 0.0) {
+      valid_points[i] = 1u;
+    }
+  }
+  std::vector<TimeIntegralPointPlan> quadrature_plans;
+  std::vector<double> quadrature_times;
+  std::vector<double> quadrature_weights;
+  const double quadrature_upper = max_positive_finite_upper(times);
+  if (quadrature_upper > 0.0 &&
+      !build_time_integral_query_plan(
+          times, 0.0, quadrature_upper, 4, quadrature_plans,
+          quadrature_times, quadrature_weights, nullptr, nullptr,
+          &valid_points)) {
+    return false;
+  }
+
+  std::vector<double> shifted;
+  std::vector<double> values;
+  std::vector<double> reference_density;
+  std::vector<double> blocker_survival;
+  const bool fast_ref_ok =
+      !prepared.ref_infos.empty() &&
+      !prepared.ref_info_valid.empty() && prepared.ref_info_valid[0] != 0u &&
+      !prepared.ref_density_ok.empty() && prepared.ref_density_ok[0];
+  const bool fast_leaf_ok = prepared.leaf_info_valid;
+
+  if (fast_ref_ok) {
+    if (!eval_fast_event_density_batch_from_info(prepared.ref_infos[0],
+                                                 quadrature_times, shifted,
+                                                 values, reference_density)) {
+      return false;
+    }
+  } else {
+    uuber::TreeNodeBatchValues reference_values;
+    if (!eval_node_batch_from_guard_input(
+            input, prepared.chain.reference_indices[0], quadrature_times,
+            EvalNeed::kDensity, reference_values) ||
+        reference_values.density.size() != quadrature_times.size()) {
+      return false;
+    }
+    reference_density.resize(reference_values.density.size());
+    for (std::size_t i = 0; i < reference_values.density.size(); ++i) {
+      reference_density[i] = safe_density(reference_values.density[i]);
+    }
+  }
+
+  if (fast_leaf_ok) {
+    if (!eval_fast_event_survival_batch_from_info(prepared.leaf_info,
+                                                  quadrature_times, shifted,
+                                                  values, blocker_survival)) {
+      return false;
+    }
+  } else {
+    uuber::TreeNodeBatchValues blocker_values;
+    if (!eval_node_batch_from_guard_input(
+            input, prepared.chain.leaf_blocker_idx, quadrature_times,
+            EvalNeed::kSurvival, blocker_values) ||
+        blocker_values.survival.size() != quadrature_times.size()) {
+      return false;
+    }
+    blocker_survival.resize(blocker_values.survival.size());
+    for (std::size_t i = 0; i < blocker_values.survival.size(); ++i) {
+      blocker_survival[i] = clamp_probability(blocker_values.survival[i]);
+    }
+  }
+
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    if (valid_points[i] == 0u) {
+      continue;
+    }
+    const TimeIntegralPointPlan &plan = quadrature_plans[i];
+    double total = 0.0;
+    for (std::size_t query_idx = plan.begin;
+         query_idx < plan.begin + plan.count; ++query_idx) {
+      const double weight = quadrature_weights[query_idx];
+      if (!std::isfinite(weight) || weight <= 0.0) {
+        continue;
+      }
+      const double term = safe_density(reference_density[query_idx] *
+                                       blocker_survival[query_idx]);
+      if (term > 0.0) {
+        total += weight * term;
+      }
+    }
+    cdf_out[i] = clamp_probability(total);
+  }
+  return true;
+}
+
 bool guard_cdf_batch_prepared_internal(const GuardEvalInput &input,
                                        const std::vector<double> &times,
                                        std::vector<double> &cdf_out) {
@@ -3188,6 +4100,9 @@ bool guard_cdf_batch_prepared_internal(const GuardEvalInput &input,
   if (!resolve_prepared_linear_guard_chain_info(input, scratch, prepared) ||
       prepared == nullptr) {
     return false;
+  }
+  if (guard_cdf_simple_pair_batch_prepared(input, *prepared, times, cdf_out)) {
+    return true;
   }
   IntegrationSettings settings;
   for (std::size_t i = 0; i < times.size(); ++i) {
@@ -3594,6 +4509,37 @@ inline bool eval_simple_acc_event_survival_batch_from_info(
   return true;
 }
 
+inline bool try_evaluate_simple_overlap_event_batch_values(
+    const uuber::NativeContext &ctx, int node_idx,
+    const std::vector<double> &times, int component_idx,
+    const TrialParamSet *trial_params,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
+    uuber::TreeNodeBatchValues &out_values) {
+  SimpleAccEventBatchInfo info;
+  if (!resolve_simple_acc_event_batch_info(
+          ctx, node_idx, trial_params, trial_params_soa_batch, component_idx,
+          info, false)) {
+    return false;
+  }
+  std::vector<double> shifted;
+  std::vector<double> values;
+  if (!eval_simple_acc_event_density_batch_from_info(
+          info, times, trial_params_soa_batch, shifted, values,
+          out_values.density) ||
+      !eval_simple_acc_event_survival_batch_from_info(
+          info, times, trial_params_soa_batch, shifted, values,
+          out_values.survival)) {
+    return false;
+  }
+  out_values.cdf.assign(times.size(), 0.0);
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    out_values.density[i] = safe_density(out_values.density[i]);
+    out_values.survival[i] = clamp_probability(out_values.survival[i]);
+    out_values.cdf[i] = clamp_probability(1.0 - out_values.survival[i]);
+  }
+  return true;
+}
+
 inline bool eval_simple_acc_event_density_batch(
     const uuber::NativeContext &ctx, int node_idx,
     const std::vector<double> &times, int component_idx,
@@ -3675,24 +4621,20 @@ bool node_density_with_competitors_batch_internal(
     competitor_cache = &fetch_competitor_cluster_cache(ctx, competitor_ids);
   }
   const int node_idx = resolve_dense_node_idx_required(ctx, node_id);
+  const uuber::IrOutcomeCouplingOp *coupling_spec =
+      find_outcome_coupling_spec(ctx, node_idx, competitor_ids);
   const bool coupling_forced_empty =
       !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
       !forced_bits_any(forced_survive_bits, forced_survive_bits_valid) &&
       !time_constraints_any(time_constraints);
-  uuber::VectorProgram coupling_program =
-      resolve_density_coupling_program(ctx, node_idx, competitor_ids,
-                                       coupling_forced_empty);
-  if (coupling_forced_empty && !competitor_ids.empty() && coupling_program.valid &&
-      coupling_program.outputs.density_slot >= 0 &&
-      evaluate_outcome_coupling_density_unified_batch(
-          ctx, coupling_program, component_idx, trial_params, trial_type_key,
-          kDefaultRelTol, kDefaultAbsTol, kDefaultMaxDepth, include_na_donors,
-          outcome_idx_context, nullptr, false, nullptr, false, times,
-          trial_params_soa_batch, density_out)) {
+  if (coupling_forced_empty && !competitor_ids.empty() &&
+      evaluate_specialized_overlap_density_batch(
+          ctx, coupling_spec, times, component_idx, trial_params,
+          trial_type_key, trial_params_soa_batch, density_out)) {
     return true;
   }
   if (should_use_exact_density_program(ctx, node_idx, competitor_ids, state,
-                                       &coupling_program)) {
+                                       coupling_spec)) {
     return exact_outcome_density_batch_from_state(
         ctx, node_idx, competitor_ids, state, times, density_out,
         competitor_cache);
@@ -3792,7 +4734,9 @@ inline bool node_density_entry_batch_idx(
     std::vector<double> &density_out,
     const TimeConstraintMap *time_constraints,
     const std::vector<const uuber::TrialParamsSoA *>
-        *trial_params_soa_batch_override) {
+        *trial_params_soa_batch_override,
+    const SharedTriggerMaskSoABatch *shared_trigger_mask_batch_override,
+    DensityBatchWorkspace *workspace) {
   if (trial_params_soa_batch_override != nullptr) {
     return node_density_with_competitors_batch_internal(
         ctx, node_id, times, component_idx, forced_complete_bits,
@@ -3826,23 +4770,44 @@ inline bool node_density_entry_batch_idx(
                                               outcome_idx_context)) {
     return false;
   }
-  const int node_idx = resolve_dense_node_idx_required(ctx, node_id);
-  uuber::VectorProgram coupling_program =
-      resolve_density_coupling_program(ctx, node_idx, competitor_ids, false);
-  SharedTriggerMaskSoABatch mask_batch;
-  if (!build_shared_trigger_mask_soa_batch(ctx, trial_params, *plan_ptr,
-                                           mask_batch) ||
-      mask_batch.mask_param_ptrs.empty()) {
-    return false;
+  SharedTriggerMaskSoABatch local_mask_batch;
+  const SharedTriggerMaskSoABatch *mask_batch_ptr =
+      shared_trigger_mask_batch_override;
+  if (mask_batch_ptr == nullptr || mask_batch_ptr->mask_param_ptrs.empty()) {
+    if (!build_shared_trigger_mask_soa_batch(ctx, trial_params, *plan_ptr,
+                                             local_mask_batch) ||
+        local_mask_batch.mask_param_ptrs.empty()) {
+      return false;
+    }
+    mask_batch_ptr = &local_mask_batch;
   }
-  std::vector<double> expanded_times;
-  std::vector<const uuber::TrialParamsSoA *> expanded_params_soa;
-  expanded_times.reserve(times.size() * mask_batch.mask_param_ptrs.size());
-  expanded_params_soa.reserve(times.size() * mask_batch.mask_param_ptrs.size());
-  for (std::size_t mask_idx = 0; mask_idx < mask_batch.mask_param_ptrs.size();
+  std::vector<double> local_expanded_times;
+  std::vector<const uuber::TrialParamsSoA *> local_expanded_params_soa;
+  std::vector<double> local_compressed_times;
+  std::vector<const uuber::TrialParamsSoA *> local_compressed_params_soa;
+  std::vector<std::size_t> local_expanded_to_compressed;
+  std::vector<double> local_batch_density;
+  std::vector<double> &expanded_times =
+      workspace ? workspace->expanded_times : local_expanded_times;
+  std::vector<const uuber::TrialParamsSoA *> &expanded_params_soa =
+      workspace ? workspace->expanded_params_soa : local_expanded_params_soa;
+  std::vector<double> &compressed_times =
+      workspace ? workspace->compressed_times : local_compressed_times;
+  std::vector<const uuber::TrialParamsSoA *> &compressed_params_soa =
+      workspace ? workspace->compressed_params_soa : local_compressed_params_soa;
+  std::vector<std::size_t> &expanded_to_compressed =
+      workspace ? workspace->expanded_to_compressed : local_expanded_to_compressed;
+  std::vector<double> &batch_density =
+      workspace ? workspace->batch_density : local_batch_density;
+  expanded_times.clear();
+  expanded_params_soa.clear();
+  expanded_times.reserve(times.size() * mask_batch_ptr->mask_param_ptrs.size());
+  expanded_params_soa.reserve(times.size() *
+                              mask_batch_ptr->mask_param_ptrs.size());
+  for (std::size_t mask_idx = 0; mask_idx < mask_batch_ptr->mask_param_ptrs.size();
        ++mask_idx) {
     const uuber::TrialParamsSoA *mask_params_soa =
-        mask_batch.mask_param_ptrs[mask_idx];
+        mask_batch_ptr->mask_param_ptrs[mask_idx];
     for (double t : times) {
       expanded_times.push_back(t);
       expanded_params_soa.push_back(mask_params_soa);
@@ -3850,13 +4815,13 @@ inline bool node_density_entry_batch_idx(
   }
 
   const bool can_compress = times_have_duplicates(times);
-  std::vector<double> compressed_times;
-  std::vector<const uuber::TrialParamsSoA *> compressed_params_soa;
-  std::vector<std::size_t> expanded_to_compressed;
   const std::vector<double> *batch_times_ptr = &expanded_times;
   const std::vector<const uuber::TrialParamsSoA *> *batch_params_ptr =
       &expanded_params_soa;
   if (can_compress) {
+    compressed_times.clear();
+    compressed_params_soa.clear();
+    expanded_to_compressed.clear();
     compress_time_trial_params_soa_batch(
         expanded_times, expanded_params_soa, compressed_times,
         compressed_params_soa, expanded_to_compressed);
@@ -3864,7 +4829,7 @@ inline bool node_density_entry_batch_idx(
     batch_params_ptr = &compressed_params_soa;
   }
 
-  std::vector<double> batch_density;
+  batch_density.clear();
   const bool batched = node_density_with_competitors_batch_internal(
       ctx, node_id, *batch_times_ptr, component_idx, forced_complete_bits,
       forced_complete_bits_valid, forced_survive_bits,
@@ -3877,9 +4842,9 @@ inline bool node_density_entry_batch_idx(
 
   density_out.assign(times.size(), 0.0);
   std::size_t offset = 0u;
-  for (std::size_t mask_idx = 0; mask_idx < mask_batch.mask_weights.size();
+  for (std::size_t mask_idx = 0; mask_idx < mask_batch_ptr->mask_weights.size();
        ++mask_idx) {
-    const double weight = mask_batch.mask_weights[mask_idx];
+    const double weight = mask_batch_ptr->mask_weights[mask_idx];
     if (!(std::isfinite(weight) && weight > 0.0)) {
       offset += times.size();
       continue;
@@ -3900,6 +4865,8 @@ inline bool node_density_entry_batch_idx(
   }
   return true;
 }
+
+inline double normalize_outcome_probability(double value);
 
 inline double integrate_outcome_probability_from_density_idx(
     const uuber::NativeContext &ctx, int node_id, double upper,
@@ -3954,68 +4921,12 @@ inline double integrate_outcome_probability_from_density_idx(
 
   const double probability = uuber::integrate_boost_fn_0_to_upper(
       density_at, upper, rel_tol, abs_tol, max_depth, true);
-  return clamp_probability(probability);
+  return normalize_outcome_probability(probability);
 }
 
-inline uuber::TimeBatch build_segmented_time_batch(double lower, double upper,
-                                                   int segments) {
-  uuber::TimeBatch batch;
-  if (!std::isfinite(lower) || !std::isfinite(upper) || !(upper > lower)) {
-    return batch;
-  }
-  const int segment_count = std::max(1, segments);
-  batch.lower = lower;
-  batch.upper = upper;
-  batch.nodes.reserve(static_cast<std::size_t>(segment_count * 15));
-  batch.weights.reserve(static_cast<std::size_t>(segment_count * 15));
-  for (int seg = 0; seg < segment_count; ++seg) {
-    const double seg_lo =
-        lower + (upper - lower) * static_cast<double>(seg) /
-                    static_cast<double>(segment_count);
-    const double seg_hi =
-        lower + (upper - lower) * static_cast<double>(seg + 1) /
-                    static_cast<double>(segment_count);
-    uuber::TimeBatch seg_batch = uuber::build_time_batch(seg_lo, seg_hi);
-    if (seg_batch.nodes.empty() ||
-        seg_batch.nodes.size() != seg_batch.weights.size()) {
-      return {};
-    }
-    batch.nodes.insert(batch.nodes.end(), seg_batch.nodes.begin(),
-                       seg_batch.nodes.end());
-    batch.weights.insert(batch.weights.end(), seg_batch.weights.begin(),
-                         seg_batch.weights.end());
-  }
-  return batch;
-}
-
-inline bool integrate_time_batch_density_per_point(
-    const uuber::TimeBatch &batch, const std::vector<double> &density,
-    std::size_t point_count, std::vector<double> &out) {
-  if (batch.nodes.empty() || batch.nodes.size() != batch.weights.size()) {
-    return false;
-  }
-  const std::size_t node_count = batch.nodes.size();
-  if (density.size() != point_count * node_count) {
-    return false;
-  }
-  out.assign(point_count, 0.0);
-  for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
-    const std::size_t offset = point_idx * node_count;
-    double total = 0.0;
-    for (std::size_t node_idx = 0; node_idx < node_count; ++node_idx) {
-      const double weight = batch.weights[node_idx];
-      if (!std::isfinite(weight) || weight <= 0.0) {
-        continue;
-      }
-      const double value = safe_density(density[offset + node_idx]);
-      if (!std::isfinite(value) || value <= 0.0) {
-        continue;
-      }
-      total += weight * value;
-    }
-    out[point_idx] = (std::isfinite(total) && total > 0.0) ? total : 0.0;
-  }
-  return true;
+inline double normalize_outcome_probability(double value) {
+  const double clamped = clamp_probability(value);
+  return clamped <= 1e-11 ? 0.0 : clamped;
 }
 
 inline bool integrate_outcome_probability_from_density_batch_idx(
@@ -4030,19 +4941,64 @@ inline bool integrate_outcome_probability_from_density_batch_idx(
     const std::string &trial_type_key, bool include_na_donors,
     int outcome_idx_context, std::vector<double> &out_probabilities,
     const std::vector<const uuber::TrialParamsSoA *>
-        *trial_params_soa_batch_override = nullptr) {
+        *trial_params_soa_batch_override = nullptr,
+    const std::vector<const PreparedTrialParamsRuntime *>
+        *prepared_runtime_batch = nullptr,
+    DensityBatchWorkspace *workspace = nullptr) {
   const std::size_t point_count =
       trial_params_soa_batch_override ? trial_params_soa_batch_override->size()
-                                      : trial_params_batch.size();
+      : (prepared_runtime_batch ? prepared_runtime_batch->size()
+                                : trial_params_batch.size());
   out_probabilities.assign(point_count, 0.0);
   if (point_count == 0u || !(upper > 0.0)) {
     return point_count == 0u || upper <= 0.0;
   }
 
   std::vector<const uuber::TrialParamsSoA *> trial_params_soa_storage;
+  std::vector<const TrialParamSet *> local_unique_trial_params;
+  std::vector<const uuber::TrialParamsSoA *> local_unique_params_soa;
+  std::vector<std::size_t> local_point_to_eval_index;
+  std::vector<const TrialParamSet *> &unique_trial_params =
+      workspace ? workspace->unique_trial_params : local_unique_trial_params;
+  std::vector<const uuber::TrialParamsSoA *> &unique_params_soa =
+      workspace ? workspace->unique_params_soa : local_unique_params_soa;
+  std::vector<std::size_t> &point_to_eval_index =
+      workspace ? workspace->point_to_eval_index : local_point_to_eval_index;
+  point_to_eval_index.assign(point_count, 0u);
+
   const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch_ptr =
       trial_params_soa_batch_override;
-  if (trial_params_soa_batch_ptr == nullptr) {
+  const std::vector<const TrialParamSet *> *trial_params_eval_ptr =
+      &trial_params_batch;
+  if (trial_params_soa_batch_ptr == nullptr && prepared_runtime_batch != nullptr) {
+    if (prepared_runtime_batch->size() != point_count) {
+      return false;
+    }
+    unique_trial_params.clear();
+    unique_params_soa.clear();
+    unique_trial_params.reserve(point_count);
+    unique_params_soa.reserve(point_count);
+    std::unordered_map<uuber::NAMapCacheKey, std::size_t, uuber::NAMapCacheKeyHash>
+        runtime_index_by_key;
+    runtime_index_by_key.reserve(point_count);
+    for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
+      PreparedTrialParamsRuntime *runtime =
+          const_cast<PreparedTrialParamsRuntime *>(
+              (*prepared_runtime_batch)[point_idx]);
+      if (runtime == nullptr || !ensure_prepared_trial_params_soa(ctx, *runtime)) {
+        return false;
+      }
+      const auto insert_result = runtime_index_by_key.emplace(
+          runtime->value_key, unique_params_soa.size());
+      if (insert_result.second) {
+        unique_trial_params.push_back(runtime->params);
+        unique_params_soa.push_back(runtime->soa);
+      }
+      point_to_eval_index[point_idx] = insert_result.first->second;
+    }
+    trial_params_eval_ptr = &unique_trial_params;
+    trial_params_soa_batch_ptr = &unique_params_soa;
+  } else if (trial_params_soa_batch_ptr == nullptr) {
     trial_params_soa_storage.reserve(point_count);
     for (const TrialParamSet *params_ptr : trial_params_batch) {
       const uuber::TrialParamsSoA *trial_params_soa =
@@ -4053,9 +5009,17 @@ inline bool integrate_outcome_probability_from_density_batch_idx(
       trial_params_soa_storage.push_back(trial_params_soa);
     }
     trial_params_soa_batch_ptr = &trial_params_soa_storage;
+    for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
+      point_to_eval_index[point_idx] = point_idx;
+    }
   } else if (trial_params_soa_batch_ptr->size() != point_count) {
     return false;
+  } else {
+    for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
+      point_to_eval_index[point_idx] = point_idx;
+    }
   }
+
   for (const uuber::TrialParamsSoA *trial_params_soa :
        *trial_params_soa_batch_ptr) {
     if (!trial_params_soa || !trial_params_soa->valid) {
@@ -4065,103 +5029,142 @@ inline bool integrate_outcome_probability_from_density_batch_idx(
 
   TrialParamSet base_params_holder;
   const TrialParamSet *rep_params =
-      trial_params_batch.empty() ? nullptr : trial_params_batch.front();
+      trial_params_eval_ptr->empty() ? nullptr : trial_params_eval_ptr->front();
   if (!rep_params) {
     base_params_holder = build_base_paramset(ctx);
     rep_params = &base_params_holder;
   }
 
-  constexpr int kFiniteSubsegments = 16;
+  const std::size_t eval_point_count = trial_params_soa_batch_ptr->size();
+  constexpr int kIntegralSegments = 16;
   constexpr int kInfiniteMaxSegments = 32;
   const bool finite_upper = std::isfinite(upper);
-  std::vector<int> small_tail_segments(point_count, 0);
-  std::vector<std::uint8_t> saw_positive_segment(point_count, 0u);
-  std::vector<double> expanded_times;
-  std::vector<const uuber::TrialParamsSoA *> expanded_params_soa;
-  std::vector<double> density_out;
-  std::vector<double> segment_probabilities;
+  std::vector<double> upper_bounds(eval_point_count, upper);
+  std::vector<TimeIntegralPointPlan> local_point_plans;
+  std::vector<double> local_query_times;
+  std::vector<double> local_query_weights;
+  std::vector<const uuber::TrialParamsSoA *> local_query_params_soa;
+  std::vector<std::uint8_t> local_active_points;
+  std::vector<std::uint8_t> local_tail_saw_positive;
+  std::vector<int> local_tail_small_segments;
+  std::vector<double> local_density_out;
+  std::vector<double> local_segment_probabilities;
+  std::vector<double> local_point_probabilities;
+  std::vector<TimeIntegralPointPlan> &point_plans =
+      workspace ? workspace->point_plans : local_point_plans;
+  std::vector<double> &query_times =
+      workspace ? workspace->query_times : local_query_times;
+  std::vector<double> &query_weights =
+      workspace ? workspace->query_weights : local_query_weights;
+  std::vector<const uuber::TrialParamsSoA *> &query_params_soa =
+      workspace ? workspace->query_params_soa : local_query_params_soa;
+  std::vector<std::uint8_t> &active_points =
+      workspace ? workspace->active_points : local_active_points;
+  std::vector<std::uint8_t> &tail_saw_positive =
+      workspace ? workspace->tail_saw_positive : local_tail_saw_positive;
+  std::vector<int> &tail_small_segments =
+      workspace ? workspace->tail_small_segments : local_tail_small_segments;
+  std::vector<double> &density_out =
+      workspace ? workspace->batch_density : local_density_out;
+  std::vector<double> &segment_probabilities =
+      workspace ? workspace->segment_probabilities : local_segment_probabilities;
+  std::vector<double> &point_probabilities =
+      workspace ? workspace->point_probabilities : local_point_probabilities;
+  point_probabilities.assign(eval_point_count, 0.0);
+  active_points.assign(eval_point_count, 1u);
+  tail_saw_positive.assign(eval_point_count, 0u);
+  tail_small_segments.assign(eval_point_count, 0);
 
-  const auto eval_segment = [&](const uuber::TimeBatch &batch) -> bool {
-    if (batch.nodes.empty() || batch.nodes.size() != batch.weights.size()) {
+  const auto eval_segment = [&](double lower, double upper_window) -> bool {
+    if (!(std::isfinite(lower) && std::isfinite(upper_window)) ||
+        !(upper_window > lower)) {
+      segment_probabilities.assign(eval_point_count, 0.0);
+      return true;
+    }
+    if (!build_time_integral_query_plan(
+            upper_bounds, lower, upper_window, kIntegralSegments, point_plans,
+            query_times, query_weights, trial_params_soa_batch_ptr,
+            &query_params_soa, &active_points)) {
       return false;
     }
-    const std::size_t node_count = batch.nodes.size();
-    expanded_times.clear();
-    expanded_params_soa.clear();
-    expanded_times.reserve(point_count * node_count);
-    expanded_params_soa.reserve(point_count * node_count);
-    for (const uuber::TrialParamsSoA *point_params_soa :
-         *trial_params_soa_batch_ptr) {
-      for (double t : batch.nodes) {
-        expanded_times.push_back(t);
-        expanded_params_soa.push_back(point_params_soa);
-      }
+    if (query_times.empty()) {
+      segment_probabilities.assign(eval_point_count, 0.0);
+      return true;
     }
     density_out.clear();
     const bool ok = node_density_entry_batch_idx(
-        ctx, node_id, expanded_times, component_idx, forced_complete_bits,
+        ctx, node_id, query_times, component_idx, forced_complete_bits,
         forced_complete_bits_valid, forced_survive_bits,
         forced_survive_bits_valid, competitor_ids, rep_params, trial_type_key,
         include_na_donors, outcome_idx_context, nullptr, false, density_out,
-        nullptr, &expanded_params_soa);
+        nullptr, &query_params_soa, nullptr, workspace);
     if (!ok) {
       return false;
     }
-    return integrate_time_batch_density_per_point(batch, density_out,
-                                                  point_count,
+    return integrate_query_plan_density_per_point(point_plans, query_weights,
+                                                  density_out,
                                                   segment_probabilities);
   };
 
   if (finite_upper) {
-    const uuber::TimeBatch batch =
-        build_segmented_time_batch(0.0, upper, kFiniteSubsegments);
-    if (!eval_segment(batch)) {
+    if (!eval_segment(0.0, upper)) {
       return false;
     }
-    for (std::size_t i = 0; i < point_count; ++i) {
-      out_probabilities[i] = clamp_probability(segment_probabilities[i]);
+    for (std::size_t i = 0; i < eval_point_count; ++i) {
+      point_probabilities[i] =
+          normalize_outcome_probability(segment_probabilities[i]);
     }
-    return true;
+  } else {
+    double lo = 0.0;
+    double hi = 0.5;
+    for (int seg = 0; seg < kInfiniteMaxSegments; ++seg) {
+      if (!eval_segment(lo, hi)) {
+        return false;
+      }
+      bool any_active = false;
+      for (std::size_t point_idx = 0; point_idx < eval_point_count; ++point_idx) {
+        if (point_plans[point_idx].count == 0u) {
+          active_points[point_idx] = 0u;
+          continue;
+        }
+        const double piece = segment_probabilities[point_idx];
+        if (piece > 0.0) {
+          tail_saw_positive[point_idx] = 1u;
+        }
+        point_probabilities[point_idx] += piece;
+        const double tail_tol =
+            std::max(std::max(0.0, abs_tol),
+                     std::max(0.0, rel_tol) *
+                         std::max(1.0, std::fabs(point_probabilities[point_idx])));
+        if (piece <= tail_tol) {
+          ++tail_small_segments[point_idx];
+        } else {
+          tail_small_segments[point_idx] = 0;
+        }
+        const bool done =
+            tail_saw_positive[point_idx] != 0u && hi >= 4.0 &&
+            tail_small_segments[point_idx] >= 3;
+        active_points[point_idx] = done ? 0u : 1u;
+        any_active = any_active || active_points[point_idx] != 0u;
+      }
+      if (!any_active) {
+        break;
+      }
+      lo = hi;
+      hi *= 2.0;
+    }
+
+    for (double &probability : point_probabilities) {
+      probability = normalize_outcome_probability(probability);
+    }
   }
 
-  double lo = 0.0;
-  double hi = 0.5;
-  for (int seg = 0; seg < kInfiniteMaxSegments; ++seg) {
-    const uuber::TimeBatch batch =
-        build_segmented_time_batch(lo, hi, kFiniteSubsegments);
-    if (!eval_segment(batch)) {
+  for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
+    const std::size_t eval_idx = point_to_eval_index[point_idx];
+    if (eval_idx >= point_probabilities.size()) {
       return false;
     }
-    bool all_points_done = true;
-    for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
-      const double piece = segment_probabilities[point_idx];
-      if (piece > 0.0) {
-        saw_positive_segment[point_idx] = 1u;
-      }
-      out_probabilities[point_idx] += piece;
-      const double tail_tol =
-          std::max(std::max(0.0, abs_tol),
-                   std::max(0.0, rel_tol) *
-                       std::max(1.0, std::fabs(out_probabilities[point_idx])));
-      if (piece <= tail_tol) {
-        ++small_tail_segments[point_idx];
-      } else {
-        small_tail_segments[point_idx] = 0;
-      }
-      if (!(saw_positive_segment[point_idx] && hi >= 4.0 &&
-            small_tail_segments[point_idx] >= 3)) {
-        all_points_done = false;
-      }
-    }
-    if (all_points_done) {
-      break;
-    }
-    lo = hi;
-    hi *= 2.0;
-  }
-
-  for (double &probability : out_probabilities) {
-    probability = clamp_probability(probability);
+    out_probabilities[point_idx] = point_probabilities[eval_idx];
   }
   return true;
 }
@@ -4178,10 +5181,8 @@ double native_outcome_probability_bits_impl_idx(
     bool include_na_donors,
     int outcome_idx_context,
     const SharedTriggerPlan *trigger_plan,
-    TrialParamSet *trigger_scratch,
-    const uuber::VectorProgram *precompiled_coupling_program) {
+    TrialParamSet *trigger_scratch) {
   (void)trigger_scratch;
-  (void)precompiled_coupling_program;
   if (upper <= 0.0) {
     return 0.0;
   }
@@ -4212,8 +5213,7 @@ double native_outcome_probability_bits_impl_idx(
     bool include_na_donors,
     int outcome_idx_context,
     const SharedTriggerPlan *trigger_plan,
-    TrialParamSet *trigger_scratch,
-    const uuber::VectorProgram *precompiled_coupling_program) {
+    TrialParamSet *trigger_scratch) {
   std::vector<int> competitor_ids_raw = integer_vector_to_std(competitor_ids, false);
   return native_outcome_probability_bits_impl_idx(
       ctx, node_id, upper, component_idx,
@@ -4221,7 +5221,7 @@ double native_outcome_probability_bits_impl_idx(
       forced_survive_bits, forced_survive_bits_valid,
       competitor_ids_raw, rel_tol, abs_tol, max_depth, trial_params,
       trial_type_key, include_na_donors, outcome_idx_context,
-      trigger_plan, trigger_scratch, precompiled_coupling_program);
+      trigger_plan, trigger_scratch);
 }
 
 double native_outcome_probability_impl_idx(
@@ -4251,7 +5251,7 @@ double native_outcome_probability_impl_idx(
       forced_survive_bits_valid ? &forced_survive_bits : nullptr,
       forced_survive_bits_valid, competitor_ids, rel_tol, abs_tol, max_depth,
       trial_params, trial_type_key, include_na_donors, outcome_idx_context,
-      trigger_plan, trigger_scratch, nullptr);
+      trigger_plan, trigger_scratch);
 }
 
 double native_outcome_probability_impl_idx(
@@ -4720,11 +5720,14 @@ bool mix_outcome_mass_batch_idx(
     std::vector<double> &out_probabilities,
     const std::vector<std::size_t> *trial_to_point_index = nullptr,
     const std::vector<const uuber::TrialParamsSoA *>
-        *trial_params_soa_batch_override = nullptr) {
+        *trial_params_soa_batch_override = nullptr,
+    const std::vector<const PreparedTrialParamsRuntime *>
+        *prepared_runtime_batch = nullptr) {
   out_probabilities.clear();
   const std::size_t point_count =
       trial_params_soa_batch_override ? trial_params_soa_batch_override->size()
-                                      : trial_params_batch.size();
+      : (prepared_runtime_batch ? prepared_runtime_batch->size()
+                                : trial_params_batch.size());
   const std::size_t trial_count = component_weights_batch.size();
   if (trial_count == 0u) {
     return true;
@@ -4740,7 +5743,18 @@ bool mix_outcome_mass_batch_idx(
   std::vector<const uuber::TrialParamsSoA *> trial_params_soa_batch_storage;
   const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch_ptr =
       trial_params_soa_batch_override;
-  if (trial_params_soa_batch_ptr == nullptr) {
+  if (trial_params_soa_batch_ptr == nullptr && prepared_runtime_batch != nullptr) {
+    if (prepared_runtime_batch->size() != point_count) {
+      return false;
+    }
+    for (const PreparedTrialParamsRuntime *runtime_const : *prepared_runtime_batch) {
+      PreparedTrialParamsRuntime *runtime =
+          const_cast<PreparedTrialParamsRuntime *>(runtime_const);
+      if (runtime == nullptr || !ensure_prepared_trial_params_soa(ctx, *runtime)) {
+        return false;
+      }
+    }
+  } else if (trial_params_soa_batch_ptr == nullptr) {
     trial_params_soa_batch_storage.reserve(point_count);
     for (const TrialParamSet *params_ptr : trial_params_batch) {
       const uuber::TrialParamsSoA *trial_params_soa =
@@ -4763,6 +5777,7 @@ bool mix_outcome_mass_batch_idx(
   out_probabilities.assign(trial_count, 0.0);
   std::vector<double> batch_probabilities;
   batch_probabilities.reserve(point_count);
+  DensityBatchWorkspace integration_workspace;
   const bool use_implicit_component = component_indices.empty();
   const std::size_t component_count =
       use_implicit_component ? 1u : component_indices.size();
@@ -4845,7 +5860,8 @@ bool mix_outcome_mass_batch_idx(
               component_idx, nullptr, false, nullptr, false, competitors,
               rel_tol, abs_tol, max_depth, trial_params_batch, std::string(),
               false, outcome_idx, batch_probabilities,
-              trial_params_soa_batch_ptr) ||
+              trial_params_soa_batch_ptr, prepared_runtime_batch,
+              &integration_workspace) ||
           batch_probabilities.size() != point_count) {
         return false;
       }
@@ -6360,59 +7376,43 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
   }
 
   int n_trials = static_cast<int>(param_sets.size());
+  std::vector<PreparedTrialParamsRuntime> prepared_trial_runtimes(
+      static_cast<std::size_t>(n_trials));
+  std::vector<const PreparedTrialParamsRuntime *> prepared_trial_runtime_ptrs(
+      static_cast<std::size_t>(n_trials), nullptr);
+  for (int t = 0; t < n_trials; ++t) {
+    PreparedTrialParamsRuntime &runtime =
+        prepared_trial_runtimes[static_cast<std::size_t>(t)];
+    if (!prepare_trial_params_runtime(*ctx,
+                                      &param_sets[static_cast<std::size_t>(t)],
+                                      runtime)) {
+      Rcpp::stop("Failed to prepare trial runtime metadata");
+    }
+    prepared_trial_runtime_ptrs[static_cast<std::size_t>(t)] = &runtime;
+  }
+
   std::vector<SharedTriggerPlan> trigger_plans;
   trigger_plans.reserve(static_cast<std::size_t>(n_trials));
   std::vector<int> trigger_plan_index_by_trial(static_cast<std::size_t>(n_trials),
                                                -1);
-  if (ctx->shared_trigger_groups.empty()) {
-    for (TrialParamSet &ps : param_sets) {
-      ps.shared_trigger_source_fingerprint = 1ULL;
-    }
-    if (n_trials > 0) {
-      trigger_plans.emplace_back();
-      std::fill(trigger_plan_index_by_trial.begin(),
-                trigger_plan_index_by_trial.end(), 0);
-    }
-  } else {
-    for (TrialParamSet &ps : param_sets) {
-      refresh_trial_param_fingerprint(ps);
-    }
-    std::vector<int> trigger_plan_representative_trial;
-    trigger_plan_representative_trial.reserve(static_cast<std::size_t>(n_trials));
-    std::unordered_map<std::uint64_t, std::vector<int>> trigger_plan_candidates;
-    trigger_plan_candidates.reserve(static_cast<std::size_t>(n_trials));
+  if (n_trials > 0) {
+    std::unordered_map<uuber::NAMapCacheKey, int, uuber::NAMapCacheKeyHash>
+        trigger_plan_index_by_key;
+    trigger_plan_index_by_key.reserve(static_cast<std::size_t>(n_trials));
     for (int t = 0; t < n_trials; ++t) {
-      const TrialParamSet &params = param_sets[static_cast<std::size_t>(t)];
-      const std::uint64_t fp = params.shared_trigger_source_fingerprint;
-      std::vector<int> &candidates = trigger_plan_candidates[fp];
-      int plan_idx = -1;
-      for (int candidate_idx : candidates) {
-        if (candidate_idx < 0 ||
-            candidate_idx >=
-                static_cast<int>(trigger_plan_representative_trial.size())) {
-          continue;
+      PreparedTrialParamsRuntime &runtime =
+          prepared_trial_runtimes[static_cast<std::size_t>(t)];
+      auto insert_result = trigger_plan_index_by_key.emplace(
+          runtime.shared_trigger_source_key,
+          static_cast<int>(trigger_plans.size()));
+      if (insert_result.second) {
+        if (!ensure_prepared_trial_params_trigger_plan(*ctx, runtime)) {
+          Rcpp::stop("Failed to prepare shared-trigger plan");
         }
-        const int rep_trial_idx =
-            trigger_plan_representative_trial[static_cast<std::size_t>(
-                candidate_idx)];
-        if (rep_trial_idx < 0 || rep_trial_idx >= n_trials) {
-          continue;
-        }
-        if (trial_paramsets_equivalent(
-                params, param_sets[static_cast<std::size_t>(rep_trial_idx)])) {
-          plan_idx = candidate_idx;
-          break;
-        }
+        trigger_plans.push_back(runtime.trigger_plan);
       }
-      if (plan_idx < 0) {
-        plan_idx = static_cast<int>(trigger_plans.size());
-        trigger_plans.push_back(
-            build_shared_trigger_plan(*ctx,
-                                      &param_sets[static_cast<std::size_t>(t)]));
-        trigger_plan_representative_trial.push_back(t);
-        candidates.push_back(plan_idx);
-      }
-      trigger_plan_index_by_trial[static_cast<std::size_t>(t)] = plan_idx;
+      trigger_plan_index_by_trial[static_cast<std::size_t>(t)] =
+          insert_result.first->second;
     }
   }
 
@@ -6421,39 +7421,20 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
   std::vector<int> param_value_group_representative_trial;
   param_value_group_representative_trial.reserve(
       static_cast<std::size_t>(n_trials));
-  std::unordered_map<std::uint64_t, std::vector<int>> param_value_group_candidates;
-  param_value_group_candidates.reserve(static_cast<std::size_t>(n_trials));
+  std::unordered_map<uuber::NAMapCacheKey, int, uuber::NAMapCacheKeyHash>
+      param_value_group_by_key;
+  param_value_group_by_key.reserve(static_cast<std::size_t>(n_trials));
   for (int t = 0; t < n_trials; ++t) {
-    const TrialParamSet &params = param_sets[static_cast<std::size_t>(t)];
-    const std::uint64_t fp = params.value_fingerprint_valid
-                                 ? params.value_fingerprint
-                                 : compute_trial_param_value_fingerprint(params);
-    std::vector<int> &candidates = param_value_group_candidates[fp];
-    int group_idx = -1;
-    for (int candidate_idx : candidates) {
-      if (candidate_idx < 0 ||
-          candidate_idx >=
-              static_cast<int>(param_value_group_representative_trial.size())) {
-        continue;
-      }
-      const int rep_trial_idx =
-          param_value_group_representative_trial[static_cast<std::size_t>(
-              candidate_idx)];
-      if (rep_trial_idx < 0 || rep_trial_idx >= n_trials) {
-        continue;
-      }
-      if (trial_paramsets_value_equivalent(
-              params, param_sets[static_cast<std::size_t>(rep_trial_idx)])) {
-        group_idx = candidate_idx;
-        break;
-      }
-    }
-    if (group_idx < 0) {
-      group_idx = static_cast<int>(param_value_group_representative_trial.size());
+    const PreparedTrialParamsRuntime &runtime =
+        prepared_trial_runtimes[static_cast<std::size_t>(t)];
+    auto insert_result = param_value_group_by_key.emplace(
+        runtime.value_key,
+        static_cast<int>(param_value_group_representative_trial.size()));
+    if (insert_result.second) {
       param_value_group_representative_trial.push_back(t);
-      candidates.push_back(group_idx);
     }
-    param_value_group_by_trial[static_cast<std::size_t>(t)] = group_idx;
+    param_value_group_by_trial[static_cast<std::size_t>(t)] =
+        insert_result.first->second;
   }
 
   std::vector<int> default_component_indices;
@@ -6841,21 +7822,12 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
     if (rep_trial_idx < 0 || rep_trial_idx >= n_trials) {
       continue;
     }
-
-    SharedTriggerPlan local_group_trigger_plan;
-    const SharedTriggerPlan *group_trigger_plan_ptr =
-        (group_spec.trigger_plan_idx >= 0 &&
-         group_spec.trigger_plan_idx < static_cast<int>(trigger_plans.size()))
-            ? &trigger_plans[static_cast<std::size_t>(
-                  group_spec.trigger_plan_idx)]
-            : nullptr;
-    if (!group_trigger_plan_ptr ||
-        shared_trigger_count(*group_trigger_plan_ptr) == 0u) {
-      local_group_trigger_plan =
-          build_shared_trigger_plan(*ctx, &param_sets[static_cast<std::size_t>(
-                                            rep_trial_idx)]);
-      group_trigger_plan_ptr = &local_group_trigger_plan;
+    PreparedTrialParamsRuntime &rep_runtime =
+        prepared_trial_runtimes[static_cast<std::size_t>(rep_trial_idx)];
+    if (!ensure_prepared_trial_params_trigger_plan(*ctx, rep_runtime)) {
+      Rcpp::stop("Failed to prepare shared-trigger plan");
     }
+    const SharedTriggerPlan *group_trigger_plan_ptr = &rep_runtime.trigger_plan;
     const bool has_shared_triggers =
         group_trigger_plan_ptr != nullptr &&
         shared_trigger_count(*group_trigger_plan_ptr) > 0u;
@@ -6870,22 +7842,21 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
         has_shared_triggers &&
         shared_trigger_density_batch_supported(*ctx, false,
                                                group_spec.outcome_idx_context);
-    if (use_shared_trigger_eval) {
-      SharedTriggerMaskSoABatch mask_batch;
-      if (build_shared_trigger_mask_soa_batch(
-              *ctx, &param_sets[static_cast<std::size_t>(rep_trial_idx)],
-              *group_trigger_plan_ptr, mask_batch) &&
-          !mask_batch.mask_param_ptrs.empty()) {
-      }
+    const SharedTriggerMaskSoABatch *group_trigger_mask_batch_ptr = nullptr;
+    if (use_shared_trigger_eval &&
+        ensure_prepared_trial_params_mask_batch(*ctx, rep_runtime)) {
+      group_trigger_mask_batch_ptr = &rep_runtime.mask_batch;
     }
 
     std::vector<double> density_out;
+    DensityBatchWorkspace density_workspace;
     const bool batched = node_density_entry_batch_idx(
         *ctx, group_spec.node_id, times, group_spec.component_idx, nullptr,
         false, nullptr, false, group_spec.competitor_ids,
         &param_sets[static_cast<std::size_t>(rep_trial_idx)],
         group_spec.trial_type_key, false, group_spec.outcome_idx_context,
-        group_trigger_plan_ptr, use_shared_trigger_eval, density_out, nullptr);
+        group_trigger_plan_ptr, use_shared_trigger_eval, density_out, nullptr,
+        nullptr, group_trigger_mask_batch_ptr, &density_workspace);
     if (!batched || density_out.size() != trial_indices.size()) {
       Rcpp::stop("Direct group batch evaluation failed");
     }
@@ -6926,21 +7897,12 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
     if (rep_trial_idx < 0 || rep_trial_idx >= n_trials) {
       continue;
     }
-
-    SharedTriggerPlan local_group_trigger_plan;
-    const SharedTriggerPlan *group_trigger_plan_ptr =
-        (group_spec.trigger_plan_idx >= 0 &&
-         group_spec.trigger_plan_idx < static_cast<int>(trigger_plans.size()))
-            ? &trigger_plans[static_cast<std::size_t>(
-                  group_spec.trigger_plan_idx)]
-            : nullptr;
-    if (!group_trigger_plan_ptr ||
-        shared_trigger_count(*group_trigger_plan_ptr) == 0u) {
-      local_group_trigger_plan =
-          build_shared_trigger_plan(*ctx, &param_sets[static_cast<std::size_t>(
-                                            rep_trial_idx)]);
-      group_trigger_plan_ptr = &local_group_trigger_plan;
+    PreparedTrialParamsRuntime &rep_runtime =
+        prepared_trial_runtimes[static_cast<std::size_t>(rep_trial_idx)];
+    if (!ensure_prepared_trial_params_trigger_plan(*ctx, rep_runtime)) {
+      Rcpp::stop("Failed to prepare shared-trigger plan");
     }
+    const SharedTriggerPlan *group_trigger_plan_ptr = &rep_runtime.trigger_plan;
     const bool has_shared_triggers =
         group_trigger_plan_ptr != nullptr &&
         shared_trigger_count(*group_trigger_plan_ptr) > 0u;
@@ -6955,6 +7917,12 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
 
     std::vector<double> total_probabilities(trial_indices.size(), 0.0);
     bool batch_ok = true;
+    const SharedTriggerMaskSoABatch *group_trigger_mask_batch_ptr = nullptr;
+    if (has_shared_triggers &&
+        ensure_prepared_trial_params_mask_batch(*ctx, rep_runtime)) {
+      group_trigger_mask_batch_ptr = &rep_runtime.mask_batch;
+    }
+    DensityBatchWorkspace density_workspace;
     for (const DirectContributionTemplate &contribution :
          group_spec.contributions) {
       const bool use_shared_trigger_eval =
@@ -6972,7 +7940,8 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
           nullptr, false, nullptr, false, contribution.competitor_ids,
           &param_sets[static_cast<std::size_t>(rep_trial_idx)],
           contribution.trial_type_key, false, contribution.outcome_idx_context,
-          group_trigger_plan_ptr, use_shared_trigger_eval, density_out, nullptr);
+          group_trigger_plan_ptr, use_shared_trigger_eval, density_out, nullptr,
+          nullptr, group_trigger_mask_batch_ptr, &density_workspace);
       if (!batched || density_out.size() != trial_indices.size()) {
         batch_ok = false;
         break;
@@ -7344,9 +8313,11 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
     }
 
     std::vector<const TrialParamSet *> trial_params_batch;
+    std::vector<const PreparedTrialParamsRuntime *> prepared_runtime_batch;
     std::vector<const std::vector<double> *> component_weights_batch;
     std::vector<std::size_t> trial_to_point_index;
     trial_params_batch.reserve(trial_indices.size());
+    prepared_runtime_batch.reserve(trial_indices.size());
     component_weights_batch.reserve(trial_indices.size());
     trial_to_point_index.reserve(trial_indices.size());
     std::unordered_map<int, std::size_t> param_group_to_point_index;
@@ -7400,11 +8371,16 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
           point_idx = trial_params_batch.size();
           trial_params_batch.push_back(
               &param_sets[static_cast<std::size_t>(rep_trial_idx)]);
+          prepared_runtime_batch.push_back(
+              prepared_trial_runtime_ptrs[static_cast<std::size_t>(
+                  rep_trial_idx)]);
           param_group_to_point_index.emplace(param_group_idx, point_idx);
         }
       } else {
         trial_params_batch.push_back(
             &param_sets[static_cast<std::size_t>(trial_idx)]);
+        prepared_runtime_batch.push_back(
+            prepared_trial_runtime_ptrs[static_cast<std::size_t>(trial_idx)]);
       }
       trial_to_point_index.push_back(point_idx);
     }
@@ -7458,10 +8434,13 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       const std::size_t point_end = std::min(
           trial_params_batch.size(), point_begin + chunk_point_limit);
       std::vector<const TrialParamSet *> chunk_trial_params;
+      std::vector<const PreparedTrialParamsRuntime *> chunk_prepared_runtimes;
       chunk_trial_params.reserve(point_end - point_begin);
+      chunk_prepared_runtimes.reserve(point_end - point_begin);
       for (std::size_t point_idx = point_begin; point_idx < point_end;
            ++point_idx) {
         chunk_trial_params.push_back(trial_params_batch[point_idx]);
+        chunk_prepared_runtimes.push_back(prepared_runtime_batch[point_idx]);
       }
 
       std::vector<const std::vector<double> *> chunk_component_weights;
@@ -7493,7 +8472,8 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
               chunk_trial_params, rel_tol, abs_tol, max_depth,
               group_key.probability_transform ==
                   TrialProbabilityTransform::Complement,
-              chunk_probabilities, &chunk_trial_to_point_index) ||
+              chunk_probabilities, &chunk_trial_to_point_index, nullptr,
+              &chunk_prepared_runtimes) ||
           chunk_probabilities.size() != chunk_compressed_indices.size()) {
         batch_ok = false;
         break;

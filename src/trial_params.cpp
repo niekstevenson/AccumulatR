@@ -30,6 +30,69 @@ inline void na_key_mix_double(std::uint64_t &h1, std::uint64_t &h2,
   na_key_mix_u64(h1, h2, canonical_double_bits(value));
 }
 
+inline void key_mix_bool(uuber::NAMapCacheKey &key, bool value) {
+  na_key_mix_u64(key.hash1, key.hash2, value ? 1ULL : 0ULL);
+}
+
+inline void key_mix_i32(uuber::NAMapCacheKey &key, int value) {
+  na_key_mix_i32(key.hash1, key.hash2, value);
+}
+
+inline void key_mix_u64(uuber::NAMapCacheKey &key, std::uint64_t value) {
+  na_key_mix_u64(key.hash1, key.hash2, value);
+}
+
+inline void key_mix_double(uuber::NAMapCacheKey &key, double value) {
+  na_key_mix_double(key.hash1, key.hash2, value);
+}
+
+inline void key_mix_string(uuber::NAMapCacheKey &key, const std::string &value) {
+  key_mix_u64(key, static_cast<std::uint64_t>(value.size()));
+  for (unsigned char ch : value) {
+    key_mix_u64(key, static_cast<std::uint64_t>(ch));
+  }
+}
+
+inline std::uint64_t acc_signature_except_q(const uuber::TrialParamsSoA &soa,
+                                            std::size_t idx) {
+  uuber::NAMapCacheKey key{0x243f6a8885a308d3ULL, 0x13198a2e03707344ULL};
+  key_mix_i32(key, idx < soa.dist_code.size() ? soa.dist_code[idx] : -1);
+  key_mix_double(key, idx < soa.onset.size() ? soa.onset[idx]
+                                             : std::numeric_limits<double>::quiet_NaN());
+  key_mix_double(key, idx < soa.t0.size() ? soa.t0[idx]
+                                          : std::numeric_limits<double>::quiet_NaN());
+  key_mix_double(key, idx < soa.p1.size() ? soa.p1[idx]
+                                          : std::numeric_limits<double>::quiet_NaN());
+  key_mix_double(key, idx < soa.p2.size() ? soa.p2[idx]
+                                          : std::numeric_limits<double>::quiet_NaN());
+  key_mix_double(key, idx < soa.p3.size() ? soa.p3[idx]
+                                          : std::numeric_limits<double>::quiet_NaN());
+  key_mix_double(key, idx < soa.p4.size() ? soa.p4[idx]
+                                          : std::numeric_limits<double>::quiet_NaN());
+  key_mix_double(key, idx < soa.p5.size() ? soa.p5[idx]
+                                          : std::numeric_limits<double>::quiet_NaN());
+  key_mix_double(key, idx < soa.p6.size() ? soa.p6[idx]
+                                          : std::numeric_limits<double>::quiet_NaN());
+  key_mix_double(key, idx < soa.p7.size() ? soa.p7[idx]
+                                          : std::numeric_limits<double>::quiet_NaN());
+  key_mix_double(key, idx < soa.p8.size() ? soa.p8[idx]
+                                          : std::numeric_limits<double>::quiet_NaN());
+  return key.hash1 ^ (key.hash2 + 0x9e3779b97f4a7c15ULL + (key.hash1 << 6) +
+                      (key.hash1 >> 2));
+}
+
+inline void refresh_trial_params_soa_signatures(uuber::TrialParamsSoA &soa) {
+  if (!soa.valid || soa.n_acc <= 0) {
+    soa.acc_signature_except_q.clear();
+    return;
+  }
+  const std::size_t n_acc = static_cast<std::size_t>(soa.n_acc);
+  soa.acc_signature_except_q.resize(n_acc);
+  for (std::size_t acc_idx = 0; acc_idx < n_acc; ++acc_idx) {
+    soa.acc_signature_except_q[acc_idx] = acc_signature_except_q(soa, acc_idx);
+  }
+}
+
 inline void build_base_trial_params_soa_from_context(
     const uuber::NativeContext &ctx, uuber::TrialParamsSoA &out) {
   out = uuber::TrialParamsSoA{};
@@ -62,6 +125,7 @@ inline void build_base_trial_params_soa_from_context(
     out.p8[i] = acc.dist_cfg.p8;
   }
   out.valid = true;
+  refresh_trial_params_soa_signatures(out);
 }
 
 struct TrialSharedTriggerGroup {
@@ -137,70 +201,71 @@ inline void initialize_trigger_q_states_inplace(TrialParamSet &params,
 }
 
 inline void compute_trial_param_fingerprints(
-    const TrialParamSet &params, std::uint64_t &source_fingerprint_out,
-    std::uint64_t &value_fingerprint_out) {
-  std::uint64_t source_hash = kFNV64Offset;
-  std::uint64_t value_hash = kFNV64Offset;
-  hash_append_bool(source_hash, params.shared_trigger_layout_matches_context);
-  hash_append_bool(value_hash, params.shared_trigger_layout_matches_context);
+    const TrialParamSet &params, uuber::NAMapCacheKey &source_key_out,
+    uuber::NAMapCacheKey &value_key_out) {
+  uuber::NAMapCacheKey source_key{0x243f6a8885a308d3ULL,
+                                  0x13198a2e03707344ULL};
+  uuber::NAMapCacheKey value_key{0xa4093822299f31d0ULL,
+                                 0x082efa98ec4e6c89ULL};
+  key_mix_bool(source_key, params.shared_trigger_layout_matches_context);
+  key_mix_bool(value_key, params.shared_trigger_layout_matches_context);
   const std::uint64_t acc_count =
       static_cast<std::uint64_t>(params.acc_params.size());
-  hash_append_u64(source_hash, acc_count);
-  hash_append_u64(value_hash, acc_count);
+  key_mix_u64(source_key, acc_count);
+  key_mix_u64(value_key, acc_count);
   std::uint64_t shared_gate_count = 0ULL;
   for (const TrialAccumulatorParams &acc : params.acc_params) {
-    if (!acc.shared_trigger_id.empty()) {
+    const bool has_shared = !acc.shared_trigger_id.empty();
+    key_mix_bool(source_key, has_shared);
+    if (has_shared) {
       ++shared_gate_count;
-      hash_append_double(source_hash, acc.shared_q);
+      key_mix_double(source_key, acc.shared_q);
+      key_mix_string(source_key, acc.shared_trigger_id);
     }
-    hash_append_double(value_hash, acc.onset);
-    hash_append_bytes(value_hash, &acc.onset_kind, sizeof(acc.onset_kind));
-    hash_append_bytes(value_hash, &acc.onset_source_acc_idx,
-                      sizeof(acc.onset_source_acc_idx));
-    hash_append_bytes(value_hash, &acc.onset_source_pool_idx,
-                      sizeof(acc.onset_source_pool_idx));
-    hash_append_double(value_hash, acc.onset_lag);
-    hash_append_double(value_hash, acc.q);
-    hash_append_double(value_hash, acc.shared_q);
-    hash_append_bytes(value_hash, &acc.dist_cfg.code, sizeof(acc.dist_cfg.code));
-    hash_append_double(value_hash, acc.dist_cfg.t0);
-    hash_append_double(value_hash, acc.dist_cfg.p1);
-    hash_append_double(value_hash, acc.dist_cfg.p2);
-    hash_append_double(value_hash, acc.dist_cfg.p3);
-    hash_append_double(value_hash, acc.dist_cfg.p4);
-    hash_append_double(value_hash, acc.dist_cfg.p5);
-    hash_append_double(value_hash, acc.dist_cfg.p6);
-    hash_append_double(value_hash, acc.dist_cfg.p7);
-    hash_append_double(value_hash, acc.dist_cfg.p8);
-    hash_append_u64(value_hash,
-                    static_cast<std::uint64_t>(acc.shared_trigger_id.size()));
-    if (!acc.shared_trigger_id.empty()) {
-      hash_append_bytes(value_hash, acc.shared_trigger_id.data(),
-                        acc.shared_trigger_id.size());
-    }
-    hash_append_u64(value_hash,
-                    static_cast<std::uint64_t>(acc.component_indices.size()));
+    key_mix_double(value_key, acc.onset);
+    key_mix_i32(value_key, acc.onset_kind);
+    key_mix_i32(value_key, acc.onset_source_acc_idx);
+    key_mix_i32(value_key, acc.onset_source_pool_idx);
+    key_mix_double(value_key, acc.onset_lag);
+    key_mix_double(value_key, acc.q);
+    key_mix_double(value_key, acc.shared_q);
+    key_mix_i32(value_key, acc.dist_cfg.code);
+    key_mix_double(value_key, acc.dist_cfg.t0);
+    key_mix_double(value_key, acc.dist_cfg.p1);
+    key_mix_double(value_key, acc.dist_cfg.p2);
+    key_mix_double(value_key, acc.dist_cfg.p3);
+    key_mix_double(value_key, acc.dist_cfg.p4);
+    key_mix_double(value_key, acc.dist_cfg.p5);
+    key_mix_double(value_key, acc.dist_cfg.p6);
+    key_mix_double(value_key, acc.dist_cfg.p7);
+    key_mix_double(value_key, acc.dist_cfg.p8);
+    key_mix_string(value_key, acc.shared_trigger_id);
+    key_mix_u64(value_key,
+                static_cast<std::uint64_t>(acc.component_indices.size()));
     for (int comp_idx : acc.component_indices) {
-      hash_append_bytes(value_hash, &comp_idx, sizeof(comp_idx));
+      key_mix_i32(value_key, comp_idx);
     }
   }
-  hash_append_u64(source_hash, shared_gate_count);
-  source_fingerprint_out = source_hash;
-  value_fingerprint_out = value_hash;
+  key_mix_u64(source_key, shared_gate_count);
+  source_key_out = source_key;
+  value_key_out = value_key;
 }
 
 } // namespace
 
 std::uint64_t compute_trial_param_fingerprint(const TrialParamSet &params) {
-  std::uint64_t source_hash = 0ULL;
-  std::uint64_t value_hash = 0ULL;
-  compute_trial_param_fingerprints(params, source_hash, value_hash);
-  return source_hash;
+  uuber::NAMapCacheKey source_key;
+  uuber::NAMapCacheKey value_key;
+  compute_trial_param_fingerprints(params, source_key, value_key);
+  return source_key.hash1;
 }
 
 void refresh_trial_param_fingerprint(TrialParamSet &params) {
-  compute_trial_param_fingerprints(params, params.shared_trigger_source_fingerprint,
-                                   params.value_fingerprint);
+  compute_trial_param_fingerprints(params, params.shared_trigger_source_key,
+                                   params.value_key);
+  params.shared_trigger_source_fingerprint =
+      params.shared_trigger_source_key.hash1;
+  params.value_fingerprint = params.value_key.hash1;
   params.value_fingerprint_valid = true;
 }
 
@@ -233,10 +298,10 @@ std::uint64_t compute_trial_param_value_fingerprint(const TrialParamSet &params)
   if (params.value_fingerprint_valid) {
     return params.value_fingerprint;
   }
-  std::uint64_t source_hash = 0ULL;
-  std::uint64_t value_hash = 0ULL;
-  compute_trial_param_fingerprints(params, source_hash, value_hash);
-  return value_hash;
+  uuber::NAMapCacheKey source_key;
+  uuber::NAMapCacheKey value_key;
+  compute_trial_param_fingerprints(params, source_key, value_key);
+  return value_key.hash1;
 }
 
 bool trial_paramsets_value_equivalent(const TrialParamSet &a,
@@ -394,6 +459,7 @@ void materialize_trial_params_soa(const uuber::NativeContext &ctx,
     out.p8[static_cast<std::size_t>(acc_idx)] = entry.dist_cfg.p8;
   }
   out.valid = true;
+  refresh_trial_params_soa_signatures(out);
 }
 
 std::size_t shared_trigger_count(const SharedTriggerPlan &plan) {
@@ -695,6 +761,71 @@ bool build_shared_trigger_mask_soa_batch(const uuber::NativeContext &ctx,
   }
   return !out.mask_param_ptrs.empty() &&
          out.mask_param_ptrs.size() == out.mask_weights.size();
+}
+
+bool prepare_trial_params_runtime(const uuber::NativeContext &ctx,
+                                  TrialParamSet *params_ptr,
+                                  PreparedTrialParamsRuntime &out) {
+  static_cast<void>(ctx);
+  out = PreparedTrialParamsRuntime{};
+  if (!params_ptr) {
+    return false;
+  }
+  refresh_trial_param_fingerprint(*params_ptr);
+  out.params = params_ptr;
+  out.shared_trigger_source_key = params_ptr->shared_trigger_source_key;
+  out.value_key = params_ptr->value_key;
+  out.shared_trigger_source_fingerprint =
+      params_ptr->shared_trigger_source_fingerprint;
+  out.value_fingerprint = params_ptr->value_fingerprint;
+  out.valid = true;
+  return true;
+}
+
+bool ensure_prepared_trial_params_soa(const uuber::NativeContext &ctx,
+                                      PreparedTrialParamsRuntime &runtime) {
+  if (!runtime.valid || runtime.params == nullptr) {
+    return false;
+  }
+  if (runtime.soa != nullptr && runtime.soa->valid) {
+    return true;
+  }
+  runtime.soa = resolve_trial_params_soa(ctx, runtime.params);
+  return runtime.soa != nullptr && runtime.soa->valid;
+}
+
+bool ensure_prepared_trial_params_trigger_plan(
+    const uuber::NativeContext &ctx, PreparedTrialParamsRuntime &runtime) {
+  if (!runtime.valid || runtime.params == nullptr) {
+    return false;
+  }
+  if (runtime.trigger_plan_ready) {
+    return true;
+  }
+  runtime.trigger_plan = build_shared_trigger_plan(ctx, runtime.params);
+  runtime.trigger_plan_ready = true;
+  return true;
+}
+
+bool ensure_prepared_trial_params_mask_batch(
+    const uuber::NativeContext &ctx, PreparedTrialParamsRuntime &runtime) {
+  if (!runtime.valid || runtime.params == nullptr) {
+    return false;
+  }
+  if (!ensure_prepared_trial_params_trigger_plan(ctx, runtime)) {
+    return false;
+  }
+  if (runtime.mask_batch_ready) {
+    return !runtime.mask_batch.mask_param_ptrs.empty();
+  }
+  runtime.mask_batch_ready = true;
+  if (shared_trigger_count(runtime.trigger_plan) == 0u) {
+    runtime.mask_batch = SharedTriggerMaskSoABatch{};
+    return false;
+  }
+  return build_shared_trigger_mask_soa_batch(ctx, runtime.params,
+                                             runtime.trigger_plan,
+                                             runtime.mask_batch);
 }
 
 namespace {

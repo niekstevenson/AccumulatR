@@ -11,9 +11,7 @@ inhibit <- AccumulatR::inhibit
 log_likelihood <- AccumulatR::log_likelihood
 set_mixture_options <- AccumulatR::set_mixture_options
 
-testthat::test_that("BEEST single-step likelihood matches the exact oracle", {
-  source(testthat::test_path("../../dev/test_beest.R"), local = TRUE)
-
+build_beest_spec <- function(with_trigger = TRUE) {
   spec <- race_spec() |>
     add_accumulator("S", "exgauss") |>
     add_accumulator("stop", "exgauss") |>
@@ -21,9 +19,33 @@ testthat::test_that("BEEST single-step likelihood matches the exact oracle", {
     add_outcome("S", inhibit("S", by = "stop")) |>
     add_outcome("X", all_of("change", "stop")) |>
     add_component("go_only", members = "S", weight = 0.75) |>
-    add_component("go_stop", members = c("S", "stop", "change"), weight = 0.25) |>
-    add_trigger("tg", members = c("stop", "change"), q = 0.10, param = "tg_q", draw = "shared") |>
+    add_component("go_stop", members = c("S", "stop", "change"), weight = 0.25)
+  if (isTRUE(with_trigger)) {
+    spec <- spec |>
+      add_trigger("tg", members = c("stop", "change"), q = 0.10, param = "tg_q", draw = "shared")
+  }
+  spec |>
     set_mixture_options(mode = "fixed")
+}
+
+build_beest_fixture_data <- function() {
+  data.frame(
+    trial = c(1L, 2L, 2L, 2L, 3L, 3L, 3L),
+    R = factor(c("S", "S", "S", "S", "X", "X", "X"), levels = c("S", "X")),
+    rt = c(0.43, 0.47, 0.47, 0.47, 0.39, 0.39, 0.39),
+    component = factor(
+      c("go_only", "go_stop", "go_stop", "go_stop", "go_stop", "go_stop", "go_stop"),
+      levels = c("go_only", "go_stop")
+    ),
+    accumulator = c("S", "S", "stop", "change", "S", "stop", "change"),
+    onset = c(0.00, 0.00, 0.12, 0.12, 0.00, 0.10, 0.10)
+  )
+}
+
+testthat::test_that("BEEST shared-trigger likelihood matches the exact oracle", {
+  source(testthat::test_path("../../dev/test_beest.R"), local = TRUE)
+
+  spec <- build_beest_spec(with_trigger = TRUE)
 
   pkg_params <- c(
     S.mu = 0.38,
@@ -50,17 +72,7 @@ testthat::test_that("BEEST single-step likelihood matches the exact oracle", {
     stop_trigger = 0.22
   )
 
-  data_df <- data.frame(
-    trial = c(1L, 2L, 2L, 2L, 3L, 3L, 3L),
-    R = factor(c("S", "S", "S", "S", "X", "X", "X"), levels = c("S", "X")),
-    rt = c(0.43, 0.47, 0.47, 0.47, 0.39, 0.39, 0.39),
-    component = factor(
-      c("go_only", "go_stop", "go_stop", "go_stop", "go_stop", "go_stop", "go_stop"),
-      levels = c("go_only", "go_stop")
-    ),
-    accumulator = c("S", "S", "stop", "change", "S", "stop", "change"),
-    onset = c(0.00, 0.00, 0.12, 0.12, 0.00, 0.10, 0.10)
-  )
+  data_df <- build_beest_fixture_data()
 
   ctx <- build_likelihood_context(spec, data_df)
   params_df <- build_param_matrix(spec, pkg_params, n_trials = 3L)
@@ -70,7 +82,107 @@ testthat::test_that("BEEST single-step likelihood matches the exact oracle", {
   ll_oracle <- make_beest_loglik(data_df, include_component_weight = FALSE)(oracle_params)
 
   testthat::expect_true(is.finite(ll_cpp))
-  testthat::expect_equal(ll_cpp, ll_oracle, tolerance = 1e-3)
+  testthat::expect_equal(ll_cpp, ll_oracle, tolerance = 1e-6)
+})
+
+testthat::test_that("BEEST no-trigger likelihood matches the exact oracle", {
+  source(testthat::test_path("../../dev/test_beest.R"), local = TRUE)
+
+  spec <- build_beest_spec(with_trigger = FALSE)
+
+  pkg_params <- c(
+    S.mu = 0.38,
+    S.sigma = 0.05,
+    S.tau = 0.06,
+    stop.mu = 0.08,
+    stop.sigma = 0.16,
+    stop.tau = 0.09,
+    change.mu = 0.33,
+    change.sigma = 0.09,
+    change.tau = 0.05
+  )
+  oracle_params <- c(
+    S.mu = 0.38,
+    S.sigma = 0.05,
+    S.tau = 0.06,
+    stop.mu = 0.08,
+    stop.sigma = 0.16,
+    stop.tau = 0.09,
+    change.mu = 0.33,
+    change.sigma = 0.09,
+    change.tau = 0.05,
+    stop_trigger = 0.00
+  )
+
+  data_df <- build_beest_fixture_data()
+
+  ctx <- build_likelihood_context(spec, data_df)
+  params_df <- build_param_matrix(spec, pkg_params, n_trials = 3L)
+
+  ll_cpp <- as.numeric(log_likelihood(ctx, data_df, params_df))
+  ll_oracle <- make_beest_loglik(data_df, include_component_weight = FALSE)(oracle_params)
+
+  testthat::expect_true(is.finite(ll_cpp))
+  testthat::expect_equal(ll_cpp, ll_oracle, tolerance = 1e-6)
+})
+
+testthat::test_that("BEEST shared-trigger likelihood matches the exact oracle with t0", {
+  source(testthat::test_path("../../dev/test_beest.R"), local = TRUE)
+
+  spec <- build_beest_spec(with_trigger = TRUE)
+
+  pkg_params <- c(
+    S.mu = 0.38,
+    S.sigma = 0.05,
+    S.tau = 0.06,
+    S.t0 = 0.03,
+    stop.mu = 0.08,
+    stop.sigma = 0.16,
+    stop.tau = 0.09,
+    stop.t0 = 0.06,
+    change.mu = 0.33,
+    change.sigma = 0.09,
+    change.tau = 0.05,
+    change.t0 = 0.02,
+    tg_q = 0.22
+  )
+  oracle_params <- c(
+    S.mu = 0.38,
+    S.sigma = 0.05,
+    S.tau = 0.06,
+    stop.mu = 0.08,
+    stop.sigma = 0.16,
+    stop.tau = 0.09,
+    change.mu = 0.33,
+    change.sigma = 0.09,
+    change.tau = 0.05,
+    stop_trigger = 0.22
+  )
+
+  data_df <- data.frame(
+    trial = c(1L, 1L, 1L),
+    R = factor(c("X", "X", "X"), levels = c("S", "X")),
+    rt = c(0.48, 0.48, 0.48),
+    component = factor(c("go_stop", "go_stop", "go_stop"), levels = c("go_only", "go_stop")),
+    accumulator = c("S", "stop", "change"),
+    onset = c(0.00, 0.10, 0.10)
+  )
+  oracle_data_df <- data_df
+  oracle_data_df$onset[oracle_data_df$accumulator == "S"] <-
+    oracle_data_df$onset[oracle_data_df$accumulator == "S"] + pkg_params[["S.t0"]]
+  oracle_data_df$onset[oracle_data_df$accumulator == "stop"] <-
+    oracle_data_df$onset[oracle_data_df$accumulator == "stop"] + pkg_params[["stop.t0"]]
+  oracle_data_df$onset[oracle_data_df$accumulator == "change"] <-
+    oracle_data_df$onset[oracle_data_df$accumulator == "change"] + pkg_params[["change.t0"]]
+
+  ctx <- build_likelihood_context(spec, data_df)
+  params_df <- build_param_matrix(spec, pkg_params, n_trials = 1L)
+
+  ll_cpp <- as.numeric(log_likelihood(ctx, data_df, params_df))
+  ll_oracle <- make_beest_loglik(oracle_data_df, include_component_weight = FALSE)(oracle_params)
+
+  testthat::expect_true(is.finite(ll_cpp))
+  testthat::expect_equal(ll_cpp, ll_oracle, tolerance = 1e-6)
 })
 
 testthat::test_that("generic coupling integration returns a finite probability for shared-source composites", {

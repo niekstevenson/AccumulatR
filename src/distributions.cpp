@@ -385,6 +385,24 @@ inline bool try_evaluate_simple_overlap_event_batch_values(
     const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
     uuber::TreeNodeBatchValues &out_values);
 
+// Shared-blocker specialization only needs simple accumulator metadata.
+struct SimpleAccEventBatchInfo {
+  const uuber::TrialParamsSoA *base_soa{nullptr};
+  int acc_idx{-1};
+  double onset_eff{0.0};
+  double q0{0.0};
+  AccDistParams cfg{};
+  LowerBoundTransform lower_bound{};
+  bool component_ok{false};
+};
+
+inline bool resolve_simple_acc_event_batch_info(
+    const uuber::NativeContext &ctx, int node_idx,
+    const TrialParamSet *trial_params,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
+    int component_idx, SimpleAccEventBatchInfo &out,
+    bool require_simple_outcome_support = true);
+
 inline bool evaluate_overlap_event_batch_values(
     const uuber::NativeContext &ctx, int event_idx,
     const std::vector<double> &times, int component_idx,
@@ -989,14 +1007,25 @@ inline bool evaluate_specialized_shared_blocker_pair_density_batch(
     return false;
   }
 
+  SimpleAccEventBatchInfo blocker_info;
+  const uuber::IrEvent &blocker_event =
+      ctx.ir.events[static_cast<std::size_t>(spec.blocker_event_idx)];
+  if (!resolve_simple_acc_event_batch_info(
+          ctx, blocker_event.node_idx, trial_params, point_trial_params_soa,
+          component_idx, blocker_info, false)) {
+    return false;
+  }
+  const double quadrature_lower =
+      blocker_info.component_ok ? std::max(0.0, blocker_info.onset_eff) : 0.0;
+
   std::vector<TimeIntegralPointPlan> quadrature_plans;
   std::vector<double> quadrature_times;
   std::vector<double> quadrature_weights;
   std::vector<const uuber::TrialParamsSoA *> quadrature_trial_params_soa;
   const double quadrature_upper = max_positive_finite_upper(eval_times);
-  if (quadrature_upper > 0.0 &&
+  if (quadrature_upper > quadrature_lower &&
       !build_time_integral_query_plan(
-          eval_times, 0.0, quadrature_upper, 2, quadrature_plans,
+          eval_times, quadrature_lower, quadrature_upper, 2, quadrature_plans,
           quadrature_times, quadrature_weights, point_trial_params_soa,
           &quadrature_trial_params_soa, &valid_points)) {
     return false;
@@ -4378,22 +4407,12 @@ evaluate_survival_with_forced(int node_id,
   return clamp_probability(res.survival);
 }
 
-struct SimpleAccEventBatchInfo {
-  const uuber::TrialParamsSoA *base_soa{nullptr};
-  int acc_idx{-1};
-  double onset_eff{0.0};
-  double q0{0.0};
-  AccDistParams cfg{};
-  LowerBoundTransform lower_bound{};
-  bool component_ok{false};
-};
-
 inline bool resolve_simple_acc_event_batch_info(
     const uuber::NativeContext &ctx, int node_idx,
     const TrialParamSet *trial_params,
     const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch,
     int component_idx, SimpleAccEventBatchInfo &out,
-    bool require_simple_outcome_support = true) {
+    bool require_simple_outcome_support) {
   out = SimpleAccEventBatchInfo{};
   if (node_idx < 0 || node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
     return false;

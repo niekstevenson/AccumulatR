@@ -1693,24 +1693,6 @@ build_context_from_proto(const NativePrepProto &proto) {
            event.pool_idx < 0;
   };
 
-  auto shared_trigger_dependent_events =
-      [&](int lhs_event_idx, int rhs_event_idx) -> bool {
-    if (!event_is_simple_accumulator(lhs_event_idx) ||
-        !event_is_simple_accumulator(rhs_event_idx)) {
-      return true;
-    }
-    const IrEvent &lhs_event =
-        ir.events[static_cast<std::size_t>(lhs_event_idx)];
-    const IrEvent &rhs_event =
-        ir.events[static_cast<std::size_t>(rhs_event_idx)];
-    const NativeAccumulator &lhs_acc =
-        ctx->accumulators[static_cast<std::size_t>(lhs_event.acc_idx)];
-    const NativeAccumulator &rhs_acc =
-        ctx->accumulators[static_cast<std::size_t>(rhs_event.acc_idx)];
-    return !lhs_acc.shared_trigger_id.empty() &&
-           lhs_acc.shared_trigger_id == rhs_acc.shared_trigger_id;
-  };
-
   auto generic_coupling_requires_exact =
       [&](int node_idx, const std::vector<int> &competitor_nodes) -> bool {
     if (node_idx < 0 || node_idx >= static_cast<int>(ir.nodes.size())) {
@@ -2024,11 +2006,10 @@ build_context_from_proto(const NativePrepProto &proto) {
         plain_label == blocker_label) {
       return false;
     }
-    if (shared_trigger_dependent_events(guarded_event, guarded_blocker) ||
-        shared_trigger_dependent_events(guarded_event, plain_event) ||
-        shared_trigger_dependent_events(guarded_blocker, plain_event)) {
-      return false;
-    }
+    // Both branches stay structurally valid under shared-trigger masking.
+    // The guarded target is pointwise f(target) * S(blocker); the plain
+    // target uses a blocker prefix quadrature aligned to the effective
+    // blocker onset in the fast path.
     if (guarded_ref_idx < 0 || guarded_ref_idx >= static_cast<int>(ir.nodes.size()) ||
         guarded_blocker_node_idx < 0 ||
             guarded_blocker_node_idx >= static_cast<int>(ir.nodes.size())) {

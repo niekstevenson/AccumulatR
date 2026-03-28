@@ -1,643 +1,425 @@
 # Scalar To Vector Inventory
 
-This document inventories every current scalar or scalar-shaped execution path I could find in the likelihood evaluation framework reachable from `cpp_loglik()` and the closely related native probability / mixture helpers.
+Last updated: 2026-03-26
 
-Scope:
+This note inventories the remaining scalar or scalar-shaped execution in the
+likelihood framework reachable from `cpp_loglik()` and the closely related
+native helpers.
 
-- Included:
-  - `src/distributions.cpp`
-  - `src/exact_outcome_density.cpp`
-  - `src/coupling_eval.cpp`
-  - `src/ranked_transitions.cpp`
-  - `src/trial_params.h`
-  - helper entry points that call the same machinery, such as `cpp_loglik_multiple()`, `native_outcome_probability_*()`, and `native_trial_mixture_*()`
-- Not included:
-  - unrelated scalar utilities outside likelihood evaluation
-  - debug-only exporters except where they mirror production execution
+It replaces older inventory notes that referenced deleted files such as
+`src/coupling_eval.cpp`. The current production call graph lives mainly in:
 
-Terminology:
+- `src/vector_runtime.h`
+- `src/vector_program.cpp`
+- `src/distributions.cpp`
+- `src/exact_outcome_density.cpp`
+- `src/ranked_transitions.cpp`
+- `src/prep_builder.cpp`
 
-- `Fully batched`: one vectorized execution over many trials / times without dropping to per-point scalar evaluators
-- `Pointwise batch`: accepts vector inputs, but loops over points and calls scalar evaluation per point
-- `Scalar orchestration`: outer control flow is scalar even if inner kernels evaluate vectors
-- `Scalar-only`: no vector/batch entry point is used for that case
+## Bottom Line
 
-This file is intentionally blunt: if a path still loops trials, components, trigger masks, sequence states, or points in C++ rather than grouping them into a batch kernel, it is listed here.
+- The hot path is no longer predominantly scalar.
+- The canonical vector foundation is real:
+  - `uuber::VectorProgram`
+  - `uuber::VectorLaneBatch`
+  - compiled tree vector programs required by `cpp_loglik()`
+- `cpp_loglik()` now assigns every eligible trial through grouped batch
+  evaluation. It no longer keeps a separate per-trial fallback loop for
+  eligible work.
+- The remaining non-vector work is mostly scheduler/orchestration:
+  - ranked still uses a ranked-specific frontier scheduler
+  - exact still uses an exact-specific scenario scheduler
+  - outcome-mass, mixture, donor/alias accumulation, and parameter-set helpers
+    still keep scalar outer loops
+- Honest status:
+  - scalar fallback deletion is largely done
+  - runtime consolidation is not done
 
-## 1. Top-Level `cpp_loglik()` Coverage Gaps
+## Scope
 
-The top-level multi-trial batching in `cpp_loglik()` is currently narrow. It only batches:
+Included:
 
-- grouped direct single-step sequence-density trials via `single_step_batch_groups`
-  - `src/distributions.cpp:4725-4803`
-  - executed at `src/distributions.cpp:4834-4892`
-- grouped ranked sequence trials via `ranked_sequence_batch_groups`
-  - `src/distributions.cpp:4731-4831`
-  - executed at `src/distributions.cpp:4894-4957`
+- `src/vector_runtime.h`
+- `src/vector_program.cpp`
+- `src/distributions.cpp`
+- `src/exact_outcome_density.cpp`
+- `src/ranked_transitions.cpp`
+- `src/prep_builder.cpp`
+- helper entry points such as:
+  - `cpp_loglik_multiple()`
+  - `native_outcome_probability_*()`
+  - `native_trial_mixture_*()`
 
-Everything not caught by those two groupers now goes through the grouped
-fallback executor:
+Excluded:
 
-- repeated leftover trials with identical eval shape, params, trigger plan, and
-  component weights are grouped and evaluated once
-- unique leftovers still execute as singleton groups through the same fallback
-  evaluator
-- status: `Scalar orchestration at the trial-group level; no separate per-trial fallback loop remains`
+- unrelated scalar utilities outside likelihood evaluation
+- deleted historical files mentioned in older plans
+- debug/export-only paths unless they mirror production execution
 
-The current top-level non-batched cases are:
+## Terms
 
-- Shared-trigger trials that are not direct single-step sequence-density groups
-  - direct single-step shared-trigger trials can now enter grouped `(trial, mask)` batching in `cpp_loglik()`
-  - ranked shared-trigger trials can now also batch `(mask x trial)` sequences in `cpp_loglik()`
-  - shared-trigger `OutcomeMass` trials can now bypass the outer Gray-code loop when every contribution is batchable
-- Non-shared-trigger `OutcomeMass` trials that do not form a usable batch group
-  - grouped nonresponse `OutcomeMass` trials can now batch through coupling in `cpp_loglik()`
-  - repeated parameter-value groups inside those batches are compressed before evaluation
-  - grouped batches now run through the same `mix_outcome_mass_batch_idx()` helper on compressed point sets and bounded chunks
-  - singleton no-trigger `OutcomeMass` evaluation also routes through that same batch helper
-  - shared-trigger `OutcomeMass` now expands masks and routes through that same batch helper too
-  - there is no longer a separate scalar `OutcomeMass` implementation; the remaining fallback is one-point batching, not a different engine
-- Any sequence trial rejected by the direct batch-spec builder
-  - `build_single_step_direct_batch_spec()`: `src/distributions.cpp:3449-3501`
-  - rejection conditions include:
-    - `probability_transform != Identity`
-    - `sequence_length != 1`
-    - multiple contributions
-    - contribution not lowered as `LowerLayerDirect`
-    - non-finite weight / time
-- Any ranked trial rejected by the ranked batch-spec builder
-  - `build_ranked_sequence_batch_spec()`: `src/distributions.cpp:3503-3555`
-  - rejection conditions include:
-    - `probability_transform != Identity`
-    - `sequence_length <= 1`
-    - multiple contributions
-    - contribution not lowered as `SequenceState`
-    - inconsistent ranked metadata sizes
+- `Fully batched`
+  - one execution over many lanes/points without dropping to a separate
+    per-point engine
+- `Batched inner / scalar outer`
+  - leaf math is batched, but outer control flow still loops states, outcomes,
+    components, masks, terms, donors, or parameter sets
+- `Scalar API surface`
+  - helper accepts one upper bound / one trial / one time / one param set even
+    if it calls batch kernels internally
+- `Scheduler shell`
+  - mode-specific frontier/scenario orchestration that sits on top of shared
+    vector leaves
 
-`cpp_loglik_multiple()` is also scalar over parameter sets:
+## 1. Canonical Vector Foundation Is Real
 
-- loops `params_list` and calls `cpp_loglik()` one-by-one
-- `src/distributions.cpp:5033-5050`
-- status: `Scalar-only at the parameter-set level`
+The framework now has a real vector runtime substrate:
 
-## 2. Shared-Trigger Enumeration Is Only Partially Batched Now
+- `uuber::VectorProgram` in `src/vector_runtime.h`
+- `uuber::VectorLaneBatch` in `src/vector_runtime.h`
+- `compile_tree_vector_program(...)` in `src/vector_program.cpp`
+- `cpp_loglik()` requires a compiled tree vector program and compiled tree
+  guard metadata
+- exact has already adopted the shared lane container:
+  - `using ExactScenarioBatch = uuber::VectorLaneBatch`
 
-There is now a real shared-trigger mask batch path for direct node density:
+Status:
 
-- `build_shared_trigger_mask_soa_batch()` materializes per-mask `TrialParamsSoA`
-- `node_density_entry_batch_idx()` expands `(mask x point)` batches for shared-trigger direct density
-- `cpp_loglik()` can group direct single-step shared-trigger trials and batch `(trial, mask)` points together
-- `cpp_loglik()` can also group ranked shared-trigger trials and batch `(mask x trial)` ranked sequences together
-- exact-scenario-required direct density can also stay on the batched path now
-- status: `Batched for direct density and ranked sequence density; not universal`
+- `Implemented`
+- This is no longer a scalar framework with a few batch helpers bolted on
 
-Scalar shared-trigger enumeration is still used in these places:
+## 2. Top-Level cpp_loglik Batching Is Broader Than The Old Note Claimed
 
-- trial likelihood evaluation
-  - fallback path in `evaluate_trial_probability_kernel_idx()` for shared-trigger trials that are not covered by the direct / ranked / outcome-mass batch paths
-- single-time density evaluation
-  - fallback in `node_density_entry_idx()` when shared-trigger batching is unsupported
-- outcome-mass probability evaluation
-  - non-batchable coupling cases still fall back to scalar shared-trigger enumeration inside `native_outcome_probability_bits_impl_idx()`
+`cpp_loglik()` now builds and executes grouped batch plans for:
+
+- direct single-step trials
+- grouped direct multi-contribution trials
+- ranked sequence trials
+- nonresponse / outcome-mass trials
+- shared-trigger outcome-mass trials
+
+Important current behavior:
+
+- every eligible trial is expected to be assigned by those grouped batch passes
+- if an eligible trial is still unassigned afterwards, `cpp_loglik()` stops
+  rather than running a separate per-trial fallback loop
 
 Implication:
 
-- Shared-trigger direct single-step density is no longer scalar by default.
-- Shared-trigger ranked likelihood is no longer scalar by default in `cpp_loglik()`.
-- Shared-trigger `OutcomeMass` is no longer scalar by default when the underlying coupling program is batchable.
-- Alias-source and guess-donor `OutcomeMass` paths are now batchable through coupling.
-- Shared-trigger enumeration still remains for direct-density and ranked cases rejected by `shared_trigger_mask_batch_supported()`, plus any coupling case that still misses both batch paths.
-
-## 3. Contribution And Component Loops Are Still Scalar
-
-These are not trial-vectorized today:
-
-- Per-trial contribution accumulation inside `evaluate_trial_probability_kernel_idx()`
-  - `eval_single_state()`: `src/distributions.cpp:4175-4183`
-  - loops contributions sequentially
-  - status: `Scalar orchestration`
-- Outcome-mass mixture over components
-  - `mix_outcome_mass_batch_idx()` / `mix_outcome_mass_idx()` in `src/distributions.cpp`
-  - still loops outcomes and components sequentially inside the batch helper
-  - status: scalar-shaped orchestration still present, but the separate scalar `OutcomeMass` engine is gone
-- Native trial mixture over components
-  - `native_trial_mixture_internal_idx()`: `src/distributions.cpp:3042-3145`
-  - loops components sequentially
-  - status: `Scalar orchestration`
-
-These loops matter because even if an inner density call is batched over quadrature nodes or times, the framework still serializes across contributions / mixture components.
-
-## 4. Ranked Likelihood Still Carries Scalar Internals
-
-### 4.1 Single-Trial Or Ungrouped Ranked Work
-
-Production ranked dispatch now routes single-trial `SequenceState` work through the batched ranked engine:
-
-- dispatch site:
-  - `src/distributions.cpp:4012-4049`
-- top-level grouped ranked batching no longer skips size-1 groups:
-  - `src/distributions.cpp:4903-4954`
-- status: `No longer scalar-only in production`
-
-The old scalar ranked engine has been removed from production.
-
-### 4.2 Batched Ranked Evaluation Is Still Scalar-Shaped Internally
-
-The batched ranked engine exists:
-
-- `sequence_prefix_density_batch_resolved()`
-  - `src/ranked_transitions.cpp`
-
-It is no longer a pure per-state frontier loop. Active ranked states are now
-partitioned into reusable frontier groups and exact denom/scenario/competitor
-work runs per group instead of per individual state. Homogeneous frontier
-groups also now carry an explicit uniform `TrialParamsSoA*` down into exact
-batch evaluation, so the ranked exact path does not need to rediscover
-per-point param identity when a group is known-uniform.
-
-But it is still not a fully vectorized ranked runtime. It still:
-
-- sorts/group-slices frontier states and then processes those groups sequentially
-- builds `ExactScenarioPoint`s for each group one state at a time
-- collapses next states with key-index sort/reduce, but still one scenario
-  candidate at a time
-- updates next states one scenario at a time after batched exact evaluation
-
-Relevant code:
-
-- frontier grouping and group scheduling:
-  - `src/ranked_transitions.cpp`
-- scenario collection:
-  - `src/ranked_transitions.cpp`
-- scenario application / next-state collapse:
-  - `src/ranked_transitions.cpp`
+- there is no longer a separate "leftover per-trial executor" inside
+  `cpp_loglik()`
+- singleton work still exists, but it is routed through the same grouped batch
+  machinery, usually as one-point batching rather than through a different
+  scalar engine
 
 Status:
 
-- `Grouped scalar orchestration with sorted frontier slices and batched exact/node evaluation inside`
+- `Grouped batch orchestration at the trial level`
+- `Not scalar-only at the top level anymore`
 
-### 4.3 Old Scalar Ranked Oracle Has Been Removed
+## 3. Direct Node Density Is Genuinely Batched Now
 
-The separate scalar ranked prefix-density engine has been deleted.
-
-Remaining scalar-shaped ranked work is now inside the batched executor itself:
-
-- scenario/state scheduling and collapse inside:
-  - `sequence_prefix_density_batch_resolved()`
-  - `src/ranked_transitions.cpp`
-
-Status:
-
-- `No separate scalar ranked engine remains; ranked still has scalar orchestration internally`
-
-## 5. Exact Density: Pointwise And Scalar-Shaped Paths Still Exist
-
-### 5.1 Singleton Exact Density Now Routes Through The Batch Engine
-
-Singleton exact density no longer has a separate helper engine. Production
-callers now go straight through `exact_outcome_density_batch_from_state()`
-with one-point batches where needed.
-
-Status:
-
-- `No separate scalar exact engine in production`
-
-### 5.2 Batched Exact Density Still Has Scalar-Shaped Scenario Expansion
-
-The batched exact density path exists:
-
-- `exact_outcome_density_batch_from_state()`
-  - `src/exact_outcome_density.cpp:1773-1850`
-
-But it is still scalar-shaped in these places:
-
-- scenario expansion is step-by-step and point-by-point
-  - `exact_collect_scenarios_batch_from_points_impl()`
-  - `src/exact_outcome_density.cpp:1270-1465`
-- density accumulation loops scenario points one-by-one
-  - `src/exact_outcome_density.cpp:1793-1845`
-
-Status:
-
-- `Scalar orchestration with batched node evaluation inside`
-
-### 5.3 Batched Exact Density No Longer Has Scalar Competitor Recovery
-
-If `exact_competitor_survival_batch()` fails or returns a mismatched size now,
-that is treated as an invariant violation in production exact density rather
-than a scalar recovery path.
-
-Status:
-
-- `No scalar competitor fallback remains inside batched exact density`
-
-### 5.4 Exact Node Batch No Longer Has A Scalar Pointwise Escape Hatch
-
-Main batch node evaluator:
-
-- `exact_eval_node_batch_with_points()`
-- `src/exact_outcome_density.cpp`
+The production density entry is `node_density_entry_batch_idx()` in
+`src/distributions.cpp`.
 
 Current behavior:
 
-- direct event nodes are handled either by `exact_eval_simple_acc_event_batch()`
-  or by grouped shared-state node evaluation
-- guard nodes are handled explicitly through `exact_eval_guard_batch_common()`
-- heterogeneous composite nodes (`And` / `Or` / `Not`) are hoisted directly to
-  the exact incremental kernel path instead of re-entering a pointwise fallback
-- if grouped shared-state evaluation fails now, that is treated as an invariant
-  violation, not a scalar recovery path
+- if per-point `TrialParamsSoA` is already available, it evaluates directly
+  through the batch path
+- shared-trigger density expands `(mask x point)` batches, optionally
+  compresses duplicate `(time, TrialParamsSoA*)` points, evaluates once, then
+  reduces by mask weights
+- competitor-bearing density first tries specialized overlap batch kernels when
+  possible
+- if overlap requires exact scenario handling, it routes through
+  `exact_outcome_density_batch_from_state(...)`
+- otherwise it uses batched tree-node evaluation plus compiled competitor
+  survival products
+- unsupported shared-trigger density cases return `false`; they do not silently
+  re-enter an older scalar density engine
 
-- There is no longer a generic exact pointwise fallback execution path.
+Direct fastpaths that are now batched:
 
-### 5.5 Shared-State Check Is All-Or-Nothing
-
-Exact batching no longer requires the full active set to share one filtered
-state. It now partitions active points into relevant-state-compatible subgroups
-and evaluates those subgroups through the shared-state kernel path first:
-
-- relevant-state comparison:
-  - `src/exact_outcome_density.cpp:1113-1161`
-- shared-state gating:
-  - `src/exact_outcome_density.cpp:567-620`
-
-If relevant-state partitioning cannot build valid subgroups or grouped shared
-evaluation fails, the code now treats that as an invariant failure instead of
-silently dropping into scalar exact evaluation.
+- simple accumulator-event density
+- simple competing-event density
+- shared-trigger density across mask-expanded SoA points
 
 Status:
 
-- `Improved: heterogeneity can stay batched when it partitions cleanly`
+- `Batched hot path with multiple vectorized specializations`
+- `No separate scalar node-density engine remains in production`
 
-### 5.6 Event Batch No Longer Falls Back To Per-Point Exact Evaluation
+## 4. Outcome Probability Integration Is Mixed
 
-Event batch common path:
+There are now two distinct shapes.
 
-- `src/exact_outcome_density.cpp`
+### 4.1 Scalar Helper Still Exists
+
+`integrate_outcome_probability_from_density_idx()`:
+
+- takes one upper bound
+- builds a one-point batch callback around `node_density_entry_batch_idx()`
+- integrates with `integrate_boost_fn_0_to_upper(...)`
+
+Status:
+
+- `Scalar API surface with batched leaf calls`
+
+### 4.2 Batch Helper Exists And Is Useful
+
+`integrate_outcome_probability_from_density_batch_idx()`:
+
+- accepts many trial-param points
+- canonicalizes / deduplicates per-point `TrialParamsSoA`
+- builds batched time-query plans
+- evaluates density for all active query points in one batch call per
+  segment/window
+- reuses workspace buffers when supplied
+
+Finite upper bounds:
+
+- one batched interval plan over `[0, upper]`
+
+Infinite upper bounds:
+
+- sequential window growth (`[0, 0.5]`, `[0.5, 1]`, ...)
+- each window is batched internally, but the window scheduler itself is scalar
+
+Status:
+
+- `Batched inner evaluation`
+- `Scalar outer scheduling still exists for infinite-tail probability integration`
+
+## 5. Ranked Is Batched, But Still Has A Ranked-Specific Scheduler Shell
+
+Production ranked work now routes through
+`sequence_prefix_density_batch_resolved(...)` in `src/ranked_transitions.cpp`.
+The old scalar ranked oracle is gone from the hot path.
+
+What the current ranked executor does:
+
+- builds a frontier of ranked states
+- scans active states
+- optionally sorts/group-slices frontier states by reusable keys
+- materializes lane groups
+- evaluates denom/scenario/competitor work in batch for each group
+- collapses next-state candidates and repeats by rank
+
+What is improved:
+
+- ranked no longer falls back to a separate scalar engine
+- homogeneous groups can carry a uniform `TrialParamsSoA*` down into exact
+  evaluation
+- shared-trigger ranked groups can batch `(mask x trial)` work in `cpp_loglik()`
+
+What is still scalar-shaped:
+
+- frontier scanning
+- frontier sorting/group scheduling
+- scenario collection and state-delta application
+- next-state collapse / reduce between ranks
+
+Key ranked-specific runtime types that still exist:
+
+- `RankedProgramSliceRef`
+- `RankedBatchPlan`
+- `RankedBatchPlanner`
+
+Status:
+
+- `Batched leaves under a ranked scheduler shell`
+- `Not yet the canonical vector runtime end-to-end`
+
+## 6. Exact Uses The Shared Lane Batch, But Still Has An Exact-Specific Scheduler Shell
+
+The exact path now shares the lane container and no longer has a separate
+scalar exact engine in production.
+
+Current exact behavior:
+
+- `exact_collect_scenarios_batch_impl(...)` seeds scenario points from the
+  input times into an `ExactScenarioBatch`
+- exact scenario collection is then handled through exact-specific
+  aligned/deterministic scenario builders
+- `exact_outcome_density_batch_from_state(...)` accumulates scenario weights
+  back into output density
+- exact competitor survival is batched and invariant-checked; failures are not
+  recovered by a scalar fallback path
+
+What is already good:
+
+- exact scenario batches use the shared lane container
+- exact competitor survival is batched
+- there is no scalar competitor recovery path in production
+- singleton exact work is routed through the batched engine
+
+What is still scalar-shaped:
+
+- seeding scenario points one input time at a time
+- exact scenario scheduling itself
+- accumulation back into output density one scenario point at a time
+- exact currently reuses `RankedBatchPlanner` for its scenario planning cache,
+  which is a strong sign the scheduler layer is still not canonicalized
+
+Status:
+
+- `Batched leaf math inside an exact scheduler shell`
+- `No longer a separate scalar exact runtime`
+
+## 7. Outcome-Mass And Mixture Helpers Still Keep Scalar Outer Loops
+
+### 7.1 Outcome-Mass Batching Is Real, But Outer Loops Remain
+
+`mix_outcome_mass_batch_idx()` is now the common nonresponse/outcome-mass batch
+helper.
 
 Current behavior:
 
-- accumulator-backed event refs recurse into `exact_eval_node_batch_with_points()`
-- pooled event refs stay in the grouped shared-state batch path
-- missing event-node metadata is still treated as invalid IR
-- there is no remaining per-point exact event fallback path
+- shared-trigger outcome-mass uses mask-expanded SoA batches
+- non-shared-trigger outcome-mass batches repeated param points and can chunk
+  unique points
+- repeated parameter-value groups are compressed before evaluation
+- inner probability work uses
+  `integrate_outcome_probability_from_density_batch_idx()`
+
+What remains scalar-shaped:
+
+- loops over outcomes
+- loops over components
+- reduces component-use contributions sequentially
 
 Status:
 
-- `Grouped batch only; failures are invariant violations`
+- `Batched probability integration under scalar outcome/component orchestration`
 
-### 5.7 Guard Batch No Longer Falls Back To Per-Point Exact Evaluation
+### 7.2 Native Trial Mixture Is Still Scalar Outside The Batch Leaf
 
-Guard batch common path:
+`native_trial_mixture_internal_idx()`:
 
-- `src/exact_outcome_density.cpp`
-
-Current behavior:
-
-- grouped shared-state guard evaluation is still used
-- missing `op.node_idx` metadata is still treated as invalid IR
-- there is no remaining per-point exact guard fallback path
+- assembles mixture terms sequentially
+- evaluates each term by calling the batch density entry on a one-time vector
+  `{t}`
+- accumulates the result term-by-term
 
 Status:
 
-- `Grouped batch only; failures are invariant violations`
+- `Scalar outer orchestration with one-point batching inside`
 
-### 5.8 Some "Batched" Exact Event Work Is Still Per-Point Inside The Batch Loop
+### 7.3 Parameter-Set Batching Is Still Scalar-Only
 
-`exact_eval_simple_acc_event_batch()` is only fully vector-kernel fast for direct shifted-time cases:
-
-- `src/exact_outcome_density.cpp:132-420`
-
-It still does per-point scalar work in these cases:
-
-- non-direct relative-onset base evaluation
-  - inside the batch loop at `src/exact_outcome_density.cpp:267-298`
-  - helper does per-point source integration / scalar source eval:
-    - `src/exact_outcome_density.cpp:714-905`
-- bounded self-conditioning on a relative-onset node
-  - lower / upper bound calls back into the same per-point helper
-  - `src/exact_outcome_density.cpp:345-383`
-
-It no longer does per-point `TrialParamsSoA` rediscovery on the homogeneous
-ranked frontier path, because ranked batching now passes an explicit uniform
-param contract into exact event / scenario / competitor evaluation.
+`cpp_loglik_multiple()` still loops `params_list` and calls `cpp_loglik()`
+one-by-one.
 
 Status:
 
-- `Pointwise work inside a batched API`
+- `Scalar-only at the parameter-set level`
 
-### 5.9 Exact Event Fastpath Still Rejects Some Scalar-Capable Cases
+## 8. Shared-Trigger Handling Is Materially Improved, But Not Universal
 
-Current direct event fastpath rejections include:
+What now stays on a batched path:
 
-- density for outcomes with alias sources or guess donors
-  - `src/exact_outcome_density.cpp:41-49`
-  - rejection at `src/exact_outcome_density.cpp:148-150`
-- self exact-time conditioning at a different evaluation time
-  - classifier rejects at `src/exact_outcome_density.cpp:102-105`
+- direct density via `(mask x point)` expansion in `node_density_entry_batch_idx()`
+- ranked grouped shared-trigger sequences in `cpp_loglik()`
+- shared-trigger outcome-mass through mask-expanded batch probabilities
 
-When these happen, the code does not stay in the direct vector event path.
+What still gates shared-trigger batching:
 
-Status:
-
-- `Pointwise batch fallback or scalar fallback depending on caller`
-
-## 6. Coupling / Non-Ranked Paths Are Not Fully Vectorized
-
-### 6.1 `evaluate_labelref_batch()` No Longer Has A Scalar Execution Loop
-
-Label-ref batch entry:
-
-- `src/coupling_eval.cpp:237-300`
-
-It now has three real batch paths:
-
-- accumulator-ref specialization through `build_coupling_acc_ref()`
-- pooled label-ref batching through recursive member batches
-- node-batch fallback when coupling metadata can resolve a real event node
-
-The accumulator specialization is rejected for:
-
-- non-accumulator refs
-- inactive components
-- any chained onset
-  - rejection: `ctx.has_chained_onsets && onset_kind != ONSET_ABSOLUTE`
-  - `src/coupling_eval.cpp:79-82`
-
-Pooled refs no longer need to fall through the node-batch path just to recurse member-by-member through scalar event evaluation.
-
-In normal coupling execution with valid kernel metadata:
-
-- accumulator refs use the accumulator batch specialization
-- pooled refs use pooled label-ref batching
-- remaining event refs go through node-batch, including donor-density cases
-
-If a coupling ref now misses all three routes, `evaluate_labelref_batch()` returns failure instead of silently re-entering scalar event evaluation. Pair and n-way coupling payload construction was tightened so valid IR must resolve every coupling event ref back to a concrete event node.
+- cases rejected by `shared_trigger_mask_batch_supported(...)`
+- outcome contexts that depend on alias-source or guess-donor machinery
+- any caller that only exposes a scalar API and therefore uses one-point
+  batching around the shared-trigger batch machinery
 
 Status:
 
-- `Batched for accumulator-backed refs, pooled refs, donor-aware node-backed refs, and shared-trigger per-point params; no scalar loop remains inside coupling label-ref batch evaluation`
+- `Shared-trigger batching is real`
+- `Still partial, not universal`
 
-This affects Generic, Pair, and NWay coupling programs, because they all call `evaluate_labelref_batch()`.
+## 9. Alias And Guess-Donor Work Is Vector In Time, But Still Serial Over Donors
 
-### 6.2 Outcome Coupling Is Now Batched Across Per-Point Trial Params, But Not Fully Trial-Vectorized
+The current donor/alias accumulation helpers in `src/distributions.cpp` do
+batch over `times`, but they still loop donors or source outcomes sequentially:
 
-`evaluate_outcome_coupling_unified()`:
+- `accumulate_component_guess_density_batch_idx(...)`
+- `accumulate_outcome_alias_density_batch_idx(...)`
 
-- `src/coupling_eval.cpp:751-940`
+That means:
 
-There is now a per-point-param batch companion for the same coupling programs:
-
-- shared-trigger mask-state batches can evaluate one coupling integral across many `TrialParamsSoA` points
-- `cpp_loglik()` can use that for shared-trigger `OutcomeMass`
-- direct `native_outcome_probability_bits_impl_idx()` calls can also use it
-
-Status:
-
-- `Batched across shared-trigger mask points; still scalar across outcomes / components / trials at the top level`
-
-### 6.3 Adaptive Coupling Integration Is Scalar Over Segments
-
-Adaptive integration driver:
-
-- `integrate_coupling_mass_batch_adaptive()`
-- `src/coupling_eval.cpp:621-747`
-
-This function:
-
-- maintains a scalar frontier of segments
-- accepts / splits segments sequentially
-- evaluates batched quadrature nodes within each segment
+- no separate scalar time loop
+- but still scalar orchestration across donor/source branches
 
 Status:
 
-- `Scalar orchestration with batched quadrature-node evaluation inside`
+- `Vector across time`
+- `Scalar across donor/source structure`
 
-### 6.4 Generic Coupling Still Depends On Scalar-Shaped Adaptive Integration
+## 10. Transitional Runtime Residue Still Exists
 
-Generic coupling provider:
+The runtime foundation is real, but some transitional architecture remains
+visible:
 
-- `evaluate_generic_terms_resolved_provider()`
-- `src/coupling_eval.cpp:435-523`
+- `VectorProgramDomain` still carries `OutcomeCoupling`
+- `VectorPayloadRole` still carries pair / n-way / generic-node role families
+- ranked hot execution still depends on ranked-specific planner/slice types
+  instead of evaluating the canonical `VectorProgram` directly
 
-If it takes the label-ref provider path it now stays inside accumulator, pool,
-or node-batch evaluation. The remaining scalar shape here is the adaptive
-segment driver around those batched inner calls, not a scalar label-ref loop.
-
-Status:
-
-- `Scalar orchestration with batched inner evaluation`
-
-### 6.5 Pair And N-Way Coupling Still Orchestrate Adaptive Segments Scalar-Style
-
-N-way program:
-
-- `src/coupling_eval.cpp:791-854`
-
-Pair program:
-
-- `src/coupling_eval.cpp:855-939`
-
-Both:
-
-- still split / accept adaptive segments sequentially
-- now batch quadrature-node work across shared-trigger mask points
-- are therefore no longer scalar by default on shared-trigger mask batches, but still have scalar segment orchestration
+These are not proof of scalar execution by themselves, but they are proof that
+runtime consolidation is not finished.
 
 Status:
 
-- `Scalar orchestration with batched inner evaluation`
+- `Architecture still transitional even where batching is already good`
 
-## 7. Direct Node-Density Batch Has Hard Stops
+## 11. Validation And Tooling
 
-Top-level node-density batch entry:
+Current correctness signal:
 
-- `node_density_entry_batch_idx()`
-- `src/distributions.cpp:2564-2603`
+- `Rscript dev/scripts/check_loglik_golden.R` passes on the current tree
 
-It no longer refuses shared-trigger batch evaluation outright:
+Current tooling caveat:
 
-- direct shared-trigger density now batches over `(mask x point)` using per-point `TrialParamsSoA`
-- duplicate `(time, TrialParamsSoA*)` points are compressed before batched evaluation, so repeated trials can share exact work
-- unsupported shared-trigger cases still return `false` and fall back at the caller
-- current hard stops include:
-  - alias / guess-donor outcomes
-  - cases that cannot use the simple direct shared-trigger batch path
+- older Step 3-6 structure scripts grep for historical symbols that no longer
+  exist
+- they are not a reliable source of truth for the current runtime shape without
+  being updated
 
-Status:
+Current instrumentation:
 
-- `Mixed: batched fast path with scalar fallback`
+- `src/runtime_stats.cpp` tracks batch / lane / adaptive-segment counters
+- it does not provide a complete, authoritative scalar-vs-vector census of
+  every remaining orchestration path
 
-## 8. Standalone Probability / Mixture Helpers Still Expose Scalar APIs
+## 12. Updated Inventory Summary
 
-These helpers are scalar by interface even if they use batched kernels internally:
+Fully or mostly vectorized now:
 
-- `native_outcome_probability_bits_impl_idx()`
-  - `src/distributions.cpp:2730-2811`
-  - one upper bound at a time
-- `native_trial_mixture_internal_idx()`
-  - `src/distributions.cpp:3042-3145`
-  - one trial / one time at a time
+- canonical tree vector program and shared lane batch
+- top-level grouped trial execution in `cpp_loglik()`
+- direct node density batch execution
+- shared-trigger direct density via mask-expanded SoA batching
+- batched exact leaf evaluation
+- batched exact competitor survival
+- ranked leaf evaluation under grouped frontier slices
+- batched outcome-mass inner probability integration
 
-Status:
+Still scalar-shaped today:
 
-- `Scalar-only API surface`
+- ranked frontier scheduling / collapse
+- exact scenario scheduling / accumulation
+- infinite-tail probability window scheduling
+- outcome-mass outcome/component loops
+- native mixture term loops
+- alias / guess donor/source loops
+- parameter-set loop in `cpp_loglik_multiple()`
 
-## 9. Instrumentation Gaps
+## 13. Honest Status
 
-The current runtime stats do not yet prove scalar usage exhaustively.
+This codebase is no longer in the "scalar with a few vector helpers" phase.
 
-What is currently observable:
+It is now in the "vectorized core with remaining scheduler shells and scalar
+outer orchestration" phase.
 
-- exact batch calls
-  - `src/runtime_stats.cpp:34-40`
-- exact competitor batch calls
-  - `src/runtime_stats.cpp`
-- generic label-ref batch fastpath calls
-  - `src/runtime_stats.cpp:92-96`
-- generic node-ref batch calls
-  - `src/runtime_stats.cpp:99-103`
-- grouped fallback trial executions in `cpp_loglik()`
-  - `src/runtime_stats.cpp`
-  - increments in the repeated-leftover grouping step inside `cpp_loglik()`
-- direct batch-spec attempts and rejection counts by reason
-  - `src/runtime_stats.cpp`
-  - increments in `build_single_step_direct_batch_spec()`
-    - `src/distributions.cpp:3829-3873`
-- ranked batch-spec attempts and rejection counts by reason
-  - `src/runtime_stats.cpp:171-191`
-  - increments in `build_ranked_sequence_batch_spec()`
-    - `src/distributions.cpp:3875-3928`
-- accepted direct batch execution counts
-  - `cpp_loglik()` direct grouped batch calls / trials / exec failures
-    - `src/runtime_stats.cpp`
-    - increments in `src/distributions.cpp:5264-5428`
-  - direct node-density batch calls / points / param-matrix usage / simple-fastpath hits / kernel-eval hits / competitor-product hits
-    - `src/runtime_stats.cpp`
-    - increments in `src/distributions.cpp:2652-2763`
-  - kernel event-batch calls / points / param-matrix usage
-    - `src/runtime_stats.cpp`
-    - increments in `src/distributions.cpp:1494-1549`
+If the standard is:
 
-What is not currently counted:
-
-- the later top-level reasons a built spec still does not batch
-  - e.g. unsupported shared-trigger support-gate checks after spec construction
-
-## 10. Practical Reading Of The Current State
-
-Today the framework is best described as:
-
-- `Fully batched` for some direct single-step and grouped ranked `cpp_loglik()` cases
-- `Pointwise batch` for several inner exact and coupling paths
-- `Scalar orchestration` for contribution accumulation, component accumulation, adaptive coupling integration, ranked state scheduling, exact scenario expansion, and the remaining unsupported shared-trigger direct/ranked paths
-- `Scalar-only` for `cpp_loglik_multiple()` and the standalone scalar helper APIs
-
-In short:
-
-- Ranked is not the only remaining scalar area.
-- Non-ranked is not fully vectorized.
-- The biggest remaining scalar islands are:
-  - singleton leftover trial groups in `cpp_loglik()` still use scalar trial-probability evaluation inside the grouped fallback executor
-  - shared-trigger enumeration for unsupported direct / ranked paths
-  - scalar-shaped ranked frontier scheduling / scenario collapse
-  - pointwise work inside batched exact relative-onset evaluation
-
-## 11. Recommended Next Cuts
-
-Based on the current benchmark behavior, the next work should be prioritized like this:
-
-### 11.2 Top-Level Per-Trial Fallback In `cpp_loglik()`
-
-Even after the ranked, direct, and shared-trigger `OutcomeMass` cuts, anything rejected by the batch-spec builders still falls through the scalar trial loop.
-
-Repeated identical leftover trials are now grouped and evaluated once, so the
-remaining problem here is mostly unique leftovers rather than blindly repeated
-work.
-
-Current instrumentation changed the picture slightly:
-
-- `example_1_simple` enters the direct batch-spec builder cleanly on every trial in a 10-trial probe
-- `example_23_ranked_chain` enters the ranked batch-spec builder cleanly on every trial in a 10-trial probe
-- `shared_gate_pair` is pure `OutcomeMass`, so these builders are not the relevant bottleneck there
-- `example_22_shared_q` showed only occasional direct-spec input rejection in the same probe
-
-Implication:
-
-- this remains a real scalar island structurally
-- but it is smaller now because repeated leftovers no longer each pay a full
-  trial evaluation
-- the remaining work here is either:
-  - making more trials batchable up front
-  - or shrinking the singleton / failed-batch leftovers that still miss the
-    new non-shared-trigger `OutcomeMass` group path
-
-Current execution-path probes sharpen that further:
-
-- `example_1_simple` batches cleanly through `cpp_loglik()`
-- `example_22_shared_q` also mostly batches cleanly at the direct spec level
-- both now hit a dedicated simple-competing-race fast path in `node_density_with_competitors_batch_internal()`
-  - direct batch calls observed
-  - simple-competing fastpath calls observed
-  - zero kernel-event batch calls in the updated probe
-  - zero competitor-product calls in the updated probe
-- on the tracked centralized rows this cut improved:
-  - `example_1_simple`
-  - `example_21_simple_q`
-  - `example_22_shared_q`
-
-That means the already-batched simple competing-race path is no longer the main direct-path regression target.
-The remaining direct-path work is now mostly about cases that are still too complex for that specialization.
-
-Target areas:
-
-- unique leftover trials that still never enter the new non-shared-trigger
-  `OutcomeMass` group path
-- `node_density_with_competitors_batch_internal()` for non-simple competitor shapes
-- `build_single_step_direct_batch_spec()`
-- `evaluate_trial_contribution_kernel_idx()`
-
-### 11.3 Unsupported Shared-Trigger Direct / Ranked Paths
-
-The shared-trigger outcome-mass alias / guess cut landed, but direct-density and ranked shared-trigger batching still use the narrower support gate.
-
-What remains:
-
-- alias-source outcomes in shared-trigger direct density
-- guess-donor outcomes in shared-trigger direct density
-- any ranked shared-trigger case rejected because one step fails `shared_trigger_mask_batch_supported()`
-
-Target areas:
-
-- `shared_trigger_mask_batch_supported()`
-- `node_density_entry_batch_idx()`
-- `build_ranked_sequence_batch_spec()`
-- `sequence_prefix_density_batch_resolved()`
-
-### 11.4 Batched Exact Still Needs Deeper Inner Cuts
-
-The separate scalar exact engine is gone, but the exact batch engine still has
-real scalar-shaped internals:
-
-- scenario expansion / collapse
-- shared-state subgroup orchestration still exists inside the batch path
-- pooled-event shared batch evaluation is still scalar-shaped internally
-- relative-onset / bounded-source evaluation still includes per-point work in
-  the batch engine for some shapes
-
-Target area:
-
-- `src/exact_outcome_density.cpp`
-
-### 11.5 Instrumentation Before More Broad Refactors
-
-The runtime stats are still not complete enough to prove where all scalar work remains.
-
-Before another large pass, the next useful instrumentation would be:
-
-- label-ref pointwise fallback counts
-- batch-spec rejection counts by reason
-- exact scenario count / average scenarios per point
-- exact competitor compiled-op counts on the remaining composite exact cases
-
-This matters because the recent duplicate-point compression work already showed that the right optimization depends heavily on whether repeated times actually exist.
+- "Did we remove the old obvious scalar fallback engines from production hot
+  paths?": mostly yes.
+- "Do we have one canonical vector runtime end-to-end?": not yet.

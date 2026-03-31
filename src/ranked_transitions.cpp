@@ -7,6 +7,7 @@
 #include <functional>
 #include <limits>
 #include <queue>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -16,42 +17,20 @@
 
 namespace {
 
-struct SequenceStateKey {
-  bool forced_complete_bits_valid{false};
-  bool forced_survive_bits_valid{false};
-  int forced_complete_bit_count{0};
-  int forced_survive_bit_count{0};
-  std::uint64_t forced_complete_hash{0};
-  std::uint64_t forced_survive_hash{0};
-  std::uint64_t time_constraint_hash{0};
-  std::size_t time_constraint_size{0};
+struct RankedFrontierCollapseKey {
+  int trial_slot{-1};
+  SequenceStateKey state_key;
 
-  bool operator==(const SequenceStateKey &other) const noexcept {
-    return forced_complete_bits_valid == other.forced_complete_bits_valid &&
-           forced_survive_bits_valid == other.forced_survive_bits_valid &&
-           forced_complete_bit_count == other.forced_complete_bit_count &&
-           forced_survive_bit_count == other.forced_survive_bit_count &&
-           forced_complete_hash == other.forced_complete_hash &&
-           forced_survive_hash == other.forced_survive_hash &&
-           time_constraint_hash == other.time_constraint_hash &&
-           time_constraint_size == other.time_constraint_size;
+  bool operator==(const RankedFrontierCollapseKey &other) const noexcept {
+    return trial_slot == other.trial_slot && state_key == other.state_key;
   }
 };
 
-struct SequenceStateKeyHash {
-  std::size_t operator()(const SequenceStateKey &key) const noexcept {
-    std::size_t seed = static_cast<std::size_t>(key.forced_complete_hash);
-    auto combine = [](std::size_t &seed_ref, std::size_t value) {
-      seed_ref ^= value + 0x9e3779b97f4a7c15ULL + (seed_ref << 6) +
-                  (seed_ref >> 2);
-    };
-    combine(seed, static_cast<std::size_t>(key.forced_survive_hash));
-    combine(seed, static_cast<std::size_t>(key.time_constraint_hash));
-    combine(seed, static_cast<std::size_t>(key.forced_complete_bits_valid));
-    combine(seed, static_cast<std::size_t>(key.forced_survive_bits_valid));
-    combine(seed, static_cast<std::size_t>(key.forced_complete_bit_count));
-    combine(seed, static_cast<std::size_t>(key.forced_survive_bit_count));
-    combine(seed, key.time_constraint_size);
+struct RankedFrontierCollapseKeyHash {
+  std::size_t operator()(const RankedFrontierCollapseKey &key) const noexcept {
+    std::size_t seed = std::hash<int>{}(key.trial_slot);
+    seed ^= SequenceStateKeyHash{}(key.state_key) + 0x9e3779b97f4a7c15ULL +
+            (seed << 6) + (seed >> 2);
     return seed;
   }
 };
@@ -99,15 +78,15 @@ struct RankedFrontierStorage {
   }
 };
 
-struct RankedFrontierStateRef {
-  std::size_t state_index{0};
-  const uuber::TrialParamsSoA *trial_params_soa{nullptr};
-  SequenceStateKey state_key;
-};
-
 struct RankedStateCollapseIndex {
   std::size_t candidate_index{0};
   int trial_slot{-1};
+  SequenceStateKey state_key;
+};
+
+struct RankedFrontierStateRef {
+  std::size_t state_index{0};
+  const uuber::TrialParamsSoA *trial_params_soa{nullptr};
   SequenceStateKey state_key;
 };
 
@@ -137,103 +116,47 @@ struct RankedLaneGroupBatch {
   }
 };
 
-inline std::uint64_t ranked_hash_bitset(const uuber::BitsetState &bits,
-                                        bool bits_valid) {
-  if (!bits_valid) {
-    return 0ULL;
+struct RankedFrontierExecutionScratch {
+  RankedLaneGroupBatch lane_group_batch;
+  std::vector<double> denom;
+  std::vector<double> scenario_survival;
+
+  void reserve(std::size_t n) {
+    lane_group_batch.reserve(n, true);
+    denom.reserve(n);
+    scenario_survival.reserve(n * 2u);
   }
-  std::uint64_t hash = kFNV64Offset;
-  const std::int32_t bit_count = static_cast<std::int32_t>(bits.bit_count());
-  hash_append_bytes(hash, &bit_count, sizeof(bit_count));
-  if (bits.words().empty()) {
-    const std::uint64_t word = bits.small_word();
-    hash_append_bytes(hash, &word, sizeof(word));
-  } else {
-    for (std::uint64_t word : bits.words()) {
-      hash_append_bytes(hash, &word, sizeof(word));
-    }
+
+  void clear_materialized() {
+    lane_group_batch.clear();
+    denom.clear();
+    scenario_survival.clear();
   }
-  return hash;
+};
+
+struct RankedActiveFrontier {
+  bool valid{true};
+  const uuber::TrialParamsSoA *uniform_trial_params_soa{nullptr};
+  std::vector<RankedFrontierStateRef> refs;
+  std::vector<RankedFrontierGroup> groups;
+  bool split_groups{false};
+};
+
+inline SequenceStateKey ranked_frontier_state_key(
+    const RankedFrontierStorage &states, std::size_t state_index) {
+  return sequence_state_key(
+      states.forced_complete_bits[state_index],
+      state_index < states.forced_complete_bits_valid.size() &&
+          states.forced_complete_bits_valid[state_index] != 0u,
+      states.forced_survive_bits[state_index],
+      state_index < states.forced_survive_bits_valid.size() &&
+          states.forced_survive_bits_valid[state_index] != 0u,
+      states.time_constraints[state_index]);
 }
 
-inline std::uint64_t ranked_hash_time_constraints(
-    const TimeConstraintMap &time_constraints) {
-  std::uint64_t hash = kFNV64Offset;
-  for (const auto &kv : time_constraints) {
-    const std::int32_t id = static_cast<std::int32_t>(kv.first);
-    hash_append_bytes(hash, &id, sizeof(id));
-    const std::uint8_t has_exact = kv.second.has_exact ? 1u : 0u;
-    const std::uint8_t has_lower = kv.second.has_lower ? 1u : 0u;
-    const std::uint8_t has_upper = kv.second.has_upper ? 1u : 0u;
-    hash_append_bytes(hash, &has_exact, sizeof(has_exact));
-    hash_append_bytes(hash, &has_lower, sizeof(has_lower));
-    hash_append_bytes(hash, &has_upper, sizeof(has_upper));
-    if (kv.second.has_exact) {
-      const std::uint64_t exact_bits = canonical_double_bits(kv.second.exact_time);
-      hash_append_bytes(hash, &exact_bits, sizeof(exact_bits));
-    }
-    if (kv.second.has_lower) {
-      const std::uint64_t lower_bits = canonical_double_bits(kv.second.lower);
-      hash_append_bytes(hash, &lower_bits, sizeof(lower_bits));
-    }
-    if (kv.second.has_upper) {
-      const std::uint64_t upper_bits = canonical_double_bits(kv.second.upper);
-      hash_append_bytes(hash, &upper_bits, sizeof(upper_bits));
-    }
-  }
-  return hash;
-}
-
-inline SequenceStateKey sequence_state_key(
-    const uuber::BitsetState &forced_complete_bits,
-    bool forced_complete_bits_valid,
-    const uuber::BitsetState &forced_survive_bits,
-    bool forced_survive_bits_valid,
-    const TimeConstraintMap &time_constraints) {
-  SequenceStateKey key;
-  key.forced_complete_bits_valid = forced_complete_bits_valid;
-  key.forced_survive_bits_valid = forced_survive_bits_valid;
-  key.forced_complete_bit_count =
-      forced_complete_bits_valid ? forced_complete_bits.bit_count() : 0;
-  key.forced_survive_bit_count =
-      forced_survive_bits_valid ? forced_survive_bits.bit_count() : 0;
-  key.forced_complete_hash =
-      ranked_hash_bitset(forced_complete_bits, forced_complete_bits_valid);
-  key.forced_survive_hash =
-      ranked_hash_bitset(forced_survive_bits, forced_survive_bits_valid);
-  key.time_constraint_hash = ranked_hash_time_constraints(time_constraints);
-  key.time_constraint_size = time_constraints.size();
-  return key;
-}
-
-inline bool sequence_state_key_less(const SequenceStateKey &lhs,
-                                    const SequenceStateKey &rhs) noexcept {
-  if (lhs.forced_complete_bits_valid != rhs.forced_complete_bits_valid) {
-    return lhs.forced_complete_bits_valid < rhs.forced_complete_bits_valid;
-  }
-  if (lhs.forced_survive_bits_valid != rhs.forced_survive_bits_valid) {
-    return lhs.forced_survive_bits_valid < rhs.forced_survive_bits_valid;
-  }
-  if (lhs.forced_complete_bit_count != rhs.forced_complete_bit_count) {
-    return lhs.forced_complete_bit_count < rhs.forced_complete_bit_count;
-  }
-  if (lhs.forced_survive_bit_count != rhs.forced_survive_bit_count) {
-    return lhs.forced_survive_bit_count < rhs.forced_survive_bit_count;
-  }
-  if (lhs.forced_complete_hash != rhs.forced_complete_hash) {
-    return lhs.forced_complete_hash < rhs.forced_complete_hash;
-  }
-  if (lhs.forced_survive_hash != rhs.forced_survive_hash) {
-    return lhs.forced_survive_hash < rhs.forced_survive_hash;
-  }
-  if (lhs.time_constraint_hash != rhs.time_constraint_hash) {
-    return lhs.time_constraint_hash < rhs.time_constraint_hash;
-  }
-  return lhs.time_constraint_size < rhs.time_constraint_size;
-}
-
-inline bool ranked_frontier_state_ref_less(const RankedFrontierStateRef &lhs,
-                                           const RankedFrontierStateRef &rhs) noexcept {
+inline bool ranked_frontier_state_ref_less(
+    const RankedFrontierStateRef &lhs,
+    const RankedFrontierStateRef &rhs) noexcept {
   if (lhs.trial_params_soa != rhs.trial_params_soa) {
     return std::less<const uuber::TrialParamsSoA *>{}(lhs.trial_params_soa,
                                                       rhs.trial_params_soa);
@@ -261,18 +184,6 @@ inline bool ranked_state_collapse_index_same_key(
     const RankedStateCollapseIndex &lhs,
     const RankedStateCollapseIndex &rhs) noexcept {
   return lhs.trial_slot == rhs.trial_slot && lhs.state_key == rhs.state_key;
-}
-
-inline SequenceStateKey ranked_frontier_state_key(
-    const RankedFrontierStorage &states, std::size_t state_index) {
-  return sequence_state_key(
-      states.forced_complete_bits[state_index],
-      state_index < states.forced_complete_bits_valid.size() &&
-          states.forced_complete_bits_valid[state_index] != 0u,
-      states.forced_survive_bits[state_index],
-      state_index < states.forced_survive_bits_valid.size() &&
-          states.forced_survive_bits_valid[state_index] != 0u,
-      states.time_constraints[state_index]);
 }
 
 inline void ranked_frontier_append_state(
@@ -358,26 +269,6 @@ inline bool ranked_apply_persistent_survive_sources(
   return true;
 }
 
-inline bool ranked_apply_persistent_survive_sources(
-    const uuber::NativeContext &ctx,
-    const std::vector<int> &persistent_sources, ExactScenarioBatch &points,
-    std::size_t idx) {
-  if (idx >= points.size()) {
-    return false;
-  }
-  const bool valid =
-      idx < points.forced_survive_bits_valid.size() &&
-      points.forced_survive_bits_valid[idx] != 0u;
-  bool mutable_valid = valid;
-  const bool ok = ranked_apply_persistent_survive_sources(
-      ctx, persistent_sources, points.t[idx], points.forced_survive_bits[idx],
-      mutable_valid, points.time_constraints[idx]);
-  if (idx < points.forced_survive_bits_valid.size()) {
-    points.forced_survive_bits_valid[idx] = mutable_valid ? 1u : 0u;
-  }
-  return ok;
-}
-
 inline void ranked_lane_batch_append_frontier_state(
     ExactScenarioBatch &batch, double t, std::size_t density_index,
     const RankedFrontierStorage &states, std::size_t state_index,
@@ -428,58 +319,144 @@ inline void ranked_materialize_lane_group_batch(
   }
 }
 
-inline SequenceStateKey ranked_scenario_state_key(const ExactScenarioBatch &points,
-                                                  std::size_t idx) {
-  return sequence_state_key(
-      points.forced_complete_bits[idx],
-      idx < points.forced_complete_bits_valid.size() &&
-          points.forced_complete_bits_valid[idx] != 0u,
-      points.forced_survive_bits[idx],
-      idx < points.forced_survive_bits_valid.size() &&
-          points.forced_survive_bits_valid[idx] != 0u,
-      points.time_constraints[idx]);
+inline bool ranked_append_frontier_candidate(
+    int trial_slot, double weight, uuber::BitsetState &&forced_complete_bits,
+    bool forced_complete_bits_valid, uuber::BitsetState &&forced_survive_bits,
+    bool forced_survive_bits_valid, TimeConstraintMap &&time_constraints,
+    RankedFrontierStorage &next_states,
+    std::unordered_map<RankedFrontierCollapseKey, std::size_t,
+                       RankedFrontierCollapseKeyHash> *next_state_lookup,
+    std::vector<RankedStateCollapseIndex> *next_state_collapse_order) {
+  if (next_state_lookup != nullptr) {
+    RankedFrontierCollapseKey collapse_key;
+    collapse_key.trial_slot = trial_slot;
+    collapse_key.state_key =
+        sequence_state_key(forced_complete_bits, forced_complete_bits_valid,
+                           forced_survive_bits, forced_survive_bits_valid,
+                           time_constraints);
+    const auto existing_it = next_state_lookup->find(collapse_key);
+    if (existing_it != next_state_lookup->end()) {
+      next_states.weight[existing_it->second] += weight;
+      return true;
+    }
+    const std::size_t next_state_index = next_states.size();
+    ranked_frontier_append_state(
+        next_states, trial_slot, weight, std::move(forced_complete_bits),
+        forced_complete_bits_valid, std::move(forced_survive_bits),
+        forced_survive_bits_valid, std::move(time_constraints));
+    next_state_lookup->emplace(std::move(collapse_key), next_state_index);
+    return true;
+  }
+
+  if (next_state_collapse_order == nullptr) {
+    return false;
+  }
+  const std::size_t next_state_index = next_states.size();
+  RankedStateCollapseIndex collapse_index;
+  collapse_index.candidate_index = next_state_index;
+  collapse_index.trial_slot = trial_slot;
+  collapse_index.state_key =
+      sequence_state_key(forced_complete_bits, forced_complete_bits_valid,
+                         forced_survive_bits, forced_survive_bits_valid,
+                         time_constraints);
+  ranked_frontier_append_state(
+      next_states, trial_slot, weight, std::move(forced_complete_bits),
+      forced_complete_bits_valid, std::move(forced_survive_bits),
+      forced_survive_bits_valid, std::move(time_constraints));
+  next_state_collapse_order->push_back(std::move(collapse_index));
+  return true;
 }
 
-inline void collapse_ranked_scenario_candidates_into_frontier(
-    ExactScenarioBatch &points, std::vector<int> &trial_slots,
+template <typename PointVec>
+inline bool ranked_reduce_scenario_weight_view_into_frontier(
+    const uuber::NativeContext &ctx, const PointVec &points,
+    const RankedFrontierStorage &states,
+    const std::vector<std::size_t> &source_state_indices,
+    const std::vector<double> &scenario_weights,
+    const std::vector<int> &persistent_sources,
+    const std::vector<std::uint8_t> *active_mask,
+    const std::vector<double> *scenario_survival,
     RankedFrontierStorage &next_states,
-    std::vector<RankedStateCollapseIndex> &next_state_collapse_order,
-    std::vector<RankedStateCollapseIndex> &collapse_order,
+    std::unordered_map<RankedFrontierCollapseKey, std::size_t,
+                       RankedFrontierCollapseKeyHash> *next_state_lookup,
+    std::vector<RankedStateCollapseIndex> *next_state_collapse_order,
     double branch_eps);
 
-inline bool ranked_reduce_scenario_batch_into_frontier(
-    const uuber::NativeContext &ctx, const RankedFrontierStorage &states,
+template <typename PointVec>
+inline bool ranked_reduce_exact_batch_into_frontier(
+    const uuber::NativeContext &ctx, const PointVec &points,
+    const RankedFrontierStorage &states,
     const std::vector<std::size_t> &source_state_indices,
-    const std::vector<double> &denom,
+    const std::vector<double> &scenario_weights, const std::vector<double> &denom,
     const std::vector<int> &persistent_sources,
-    bool apply_persistent_sources,
     const std::vector<std::uint8_t> *active_mask,
-    const std::vector<double> *scenario_survival, ExactScenarioBatch &points,
+    const std::vector<double> *scenario_survival,
     RankedFrontierStorage &next_states,
-    std::vector<RankedStateCollapseIndex> &next_state_collapse_order,
-    std::vector<int> &scenario_trial_slots,
-    std::vector<RankedStateCollapseIndex> &scenario_collapse_order,
+    std::unordered_map<RankedFrontierCollapseKey, std::size_t,
+                       RankedFrontierCollapseKeyHash> *next_state_lookup,
+    std::vector<RankedStateCollapseIndex> *next_state_collapse_order,
     double branch_eps) {
-  scenario_trial_slots.assign(points.size(), -1);
-  scenario_collapse_order.clear();
-  scenario_collapse_order.reserve(points.size());
+  if (points.size() != scenario_weights.size()) {
+    return false;
+  }
 
+  std::vector<double> normalized_weights(points.size(), 0.0);
   for (std::size_t point_idx = 0; point_idx < points.size(); ++point_idx) {
-    if (active_mask != nullptr &&
-        (point_idx >= active_mask->size() || (*active_mask)[point_idx] == 0u)) {
+    if (!uuber::vector_lane_active(active_mask, point_idx) ||
+        point_idx >= points.density_index.size()) {
       continue;
     }
-    if (points.density_index[point_idx] >= source_state_indices.size()) {
-      return false;
-    }
     const std::size_t lane_idx = points.density_index[point_idx];
-    const std::size_t source_state_index = source_state_indices[lane_idx];
     const double denom_val = (lane_idx < denom.size()) ? denom[lane_idx] : 0.0;
     if (!std::isfinite(denom_val) || denom_val <= branch_eps) {
       continue;
     }
-    double weight =
-        states.weight[source_state_index] * (points.weight[point_idx] / denom_val);
+    const double normalized_weight = scenario_weights[point_idx] / denom_val;
+    if (!std::isfinite(normalized_weight) || normalized_weight <= branch_eps) {
+      continue;
+    }
+    normalized_weights[point_idx] = normalized_weight;
+  }
+
+  return ranked_reduce_scenario_weight_view_into_frontier(
+      ctx, points, states, source_state_indices, normalized_weights,
+      persistent_sources, active_mask, scenario_survival, next_states,
+      next_state_lookup, next_state_collapse_order, branch_eps);
+}
+
+template <typename PointVec>
+inline bool ranked_reduce_scenario_weight_view_into_frontier(
+    const uuber::NativeContext &ctx, const PointVec &points,
+    const RankedFrontierStorage &states,
+    const std::vector<std::size_t> &source_state_indices,
+    const std::vector<double> &scenario_weights,
+    const std::vector<int> &persistent_sources,
+    const std::vector<std::uint8_t> *active_mask,
+    const std::vector<double> *scenario_survival,
+    RankedFrontierStorage &next_states,
+    std::unordered_map<RankedFrontierCollapseKey, std::size_t,
+                       RankedFrontierCollapseKeyHash> *next_state_lookup,
+    std::vector<RankedStateCollapseIndex> *next_state_collapse_order,
+    double branch_eps) {
+  if (points.size() != scenario_weights.size()) {
+    return false;
+  }
+
+  for (std::size_t point_idx = 0; point_idx < points.size(); ++point_idx) {
+    if (!uuber::vector_lane_active(active_mask, point_idx)) {
+      continue;
+    }
+    const uuber::VectorLaneRef point = uuber::vector_lane_ref(points, point_idx);
+    if (point.density_index >= source_state_indices.size()) {
+      return false;
+    }
+    const std::size_t lane_idx = point.density_index;
+    const std::size_t source_state_index = source_state_indices[lane_idx];
+    const double source_weight = scenario_weights[point_idx];
+    if (!std::isfinite(source_weight) || source_weight <= branch_eps) {
+      continue;
+    }
+    double weight = states.weight[source_state_index] * source_weight;
     if (!std::isfinite(weight) || weight <= branch_eps) {
       continue;
     }
@@ -496,91 +473,44 @@ inline bool ranked_reduce_scenario_batch_into_frontier(
         continue;
       }
     }
-    if (apply_persistent_sources && !persistent_sources.empty()) {
-      if (!ranked_apply_persistent_survive_sources(ctx, persistent_sources,
-                                                   points, point_idx)) {
-        continue;
-      }
+
+    uuber::BitsetState forced_complete_bits;
+    if (point.forced_complete_bits != nullptr) {
+      forced_complete_bits = *point.forced_complete_bits;
+    }
+    const bool forced_complete_bits_valid = point.forced_complete_bits_valid;
+    uuber::BitsetState forced_survive_bits;
+    if (point.forced_survive_bits != nullptr) {
+      forced_survive_bits = *point.forced_survive_bits;
+    }
+    bool forced_survive_bits_valid = point.forced_survive_bits_valid;
+    TimeConstraintMap time_constraints;
+    if (point.time_constraints != nullptr) {
+      time_constraints = *point.time_constraints;
+    }
+    const double t = point.t;
+
+    if (!persistent_sources.empty() &&
+        !ranked_apply_persistent_survive_sources(
+            ctx, persistent_sources, t, forced_survive_bits,
+            forced_survive_bits_valid, time_constraints)) {
+      continue;
     }
 
-    points.weight[point_idx] = weight;
-    scenario_trial_slots[point_idx] = states.trial_slot[source_state_index];
-    RankedStateCollapseIndex collapse_index;
-    collapse_index.candidate_index = point_idx;
-    collapse_index.trial_slot = states.trial_slot[source_state_index];
-    collapse_index.state_key = ranked_scenario_state_key(points, point_idx);
-    scenario_collapse_order.push_back(std::move(collapse_index));
+    const int trial_slot = states.trial_slot[source_state_index];
+    if (trial_slot < 0) {
+      return false;
+    }
+    if (!ranked_append_frontier_candidate(
+            trial_slot, weight, std::move(forced_complete_bits),
+            forced_complete_bits_valid, std::move(forced_survive_bits),
+            forced_survive_bits_valid, std::move(time_constraints), next_states,
+            next_state_lookup, next_state_collapse_order)) {
+      return false;
+    }
   }
 
-  collapse_ranked_scenario_candidates_into_frontier(
-      points, scenario_trial_slots, next_states, next_state_collapse_order,
-      scenario_collapse_order, branch_eps);
   return true;
-}
-
-inline void collapse_ranked_scenario_candidates_into_frontier(
-    ExactScenarioBatch &points, std::vector<int> &trial_slots,
-    RankedFrontierStorage &next_states,
-    std::vector<RankedStateCollapseIndex> &next_state_collapse_order,
-    std::vector<RankedStateCollapseIndex> &collapse_order,
-    double branch_eps) {
-  if (points.empty() || trial_slots.size() != points.size() ||
-      collapse_order.empty()) {
-    points.clear();
-    trial_slots.clear();
-    collapse_order.clear();
-    return;
-  }
-
-  std::sort(collapse_order.begin(), collapse_order.end(),
-            ranked_state_collapse_index_less);
-
-  next_states.reserve(next_states.size() + collapse_order.size());
-  next_state_collapse_order.reserve(next_state_collapse_order.size() +
-                                    collapse_order.size());
-
-  bool have_prev = false;
-  RankedStateCollapseIndex prev_key;
-  std::size_t appended_index = 0u;
-  for (const RankedStateCollapseIndex &entry : collapse_order) {
-    if (entry.candidate_index >= points.size() ||
-        entry.candidate_index >= trial_slots.size()) {
-      continue;
-    }
-    const std::size_t point_idx = entry.candidate_index;
-    const int trial_slot = trial_slots[point_idx];
-    const double point_weight = points.weight[point_idx];
-    if (trial_slot < 0 || !std::isfinite(point_weight) ||
-        point_weight <= branch_eps) {
-      continue;
-    }
-    if (have_prev && ranked_state_collapse_index_same_key(prev_key, entry)) {
-      next_states.weight[appended_index] += point_weight;
-      continue;
-    }
-
-    appended_index = next_states.size();
-    ranked_frontier_append_state(
-        next_states, trial_slot, point_weight,
-        std::move(points.forced_complete_bits[point_idx]),
-        point_idx < points.forced_complete_bits_valid.size() &&
-            points.forced_complete_bits_valid[point_idx] != 0u,
-        std::move(points.forced_survive_bits[point_idx]),
-        point_idx < points.forced_survive_bits_valid.size() &&
-            points.forced_survive_bits_valid[point_idx] != 0u,
-        std::move(points.time_constraints[point_idx]));
-    RankedStateCollapseIndex collapse_index;
-    collapse_index.candidate_index = appended_index;
-    collapse_index.trial_slot = trial_slot;
-    collapse_index.state_key = entry.state_key;
-    next_state_collapse_order.push_back(std::move(collapse_index));
-    prev_key = entry;
-    have_prev = true;
-  }
-
-  points.clear();
-  trial_slots.clear();
-  collapse_order.clear();
 }
 
 inline std::vector<int>
@@ -659,7 +589,8 @@ inline void ranked_attach_delta_for_node(const uuber::NativeContext &ctx,
   delta.invalidate_slot = ranked_program_slot_for_node(ctx, node_idx);
 }
 
-inline bool ranked_batch_plan_is_deterministic(const RankedBatchPlan &plan) {
+inline bool ranked_batch_plan_supports_deterministic_fastpath_impl(
+    const RankedBatchPlan &plan) {
   if (!plan.valid || plan.slice.evals.size() != 1u ||
       plan.slice.evals.front().kind != RankedProgramEvalKind::Density) {
     return false;
@@ -672,12 +603,74 @@ inline bool ranked_batch_plan_is_deterministic(const RankedBatchPlan &plan) {
   return true;
 }
 
-inline void ranked_finalize_batch_plan(RankedBatchPlan &plan) {
+inline void ranked_finalize_batch_plan(const uuber::NativeContext &ctx,
+                                       RankedBatchPlan &plan) {
+  plan.slice.relevant_source_ids.clear();
+  for (const RankedProgramEvalRef &eval_ref : plan.slice.evals) {
+    std::vector<int> eval_sources =
+        relevant_source_ids_for_batch_node(ctx, eval_ref.node_idx);
+    plan.slice.relevant_source_ids.insert(plan.slice.relevant_source_ids.end(),
+                                          eval_sources.begin(),
+                                          eval_sources.end());
+  }
+  sort_unique(plan.slice.relevant_source_ids);
   plan.valid = !plan.slice.empty();
-  plan.deterministic = ranked_batch_plan_is_deterministic(plan);
+  plan.deterministic =
+      ranked_batch_plan_supports_deterministic_fastpath_impl(plan);
+}
+
+inline bool ranked_state_delta_same(const RankedStateDelta &lhs,
+                                    const RankedStateDelta &rhs) noexcept {
+  return lhs.kind == rhs.kind && lhs.trigger_bit == rhs.trigger_bit &&
+         lhs.source_mask_begin == rhs.source_mask_begin &&
+         lhs.source_mask_count == rhs.source_mask_count &&
+         lhs.invalidate_slot == rhs.invalidate_slot &&
+         lhs.bind_exact_current_time == rhs.bind_exact_current_time &&
+         lhs.source_ids == rhs.source_ids && lhs.source_bits == rhs.source_bits;
+}
+
+inline bool ranked_batch_plan_same(const RankedBatchPlan &lhs,
+                                   const RankedBatchPlan &rhs) noexcept {
+  if (lhs.valid != rhs.valid || lhs.deterministic != rhs.deterministic ||
+      !ranked_program_slice_same(lhs.slice, rhs.slice) ||
+      lhs.deltas.size() != rhs.deltas.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < lhs.deltas.size(); ++i) {
+    if (!ranked_state_delta_same(lhs.deltas[i], rhs.deltas[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline void ranked_dedupe_batch_plans(std::vector<RankedBatchPlan> &batch_plans) {
+  if (batch_plans.size() < 2u) {
+    return;
+  }
+  std::vector<RankedBatchPlan> unique_plans;
+  unique_plans.reserve(batch_plans.size());
+  for (RankedBatchPlan &plan : batch_plans) {
+    bool duplicate = false;
+    for (const RankedBatchPlan &existing : unique_plans) {
+      if (ranked_batch_plan_same(existing, plan)) {
+        duplicate = true;
+        break;
+      }
+    }
+    if (!duplicate) {
+      unique_plans.push_back(std::move(plan));
+    }
+  }
+  batch_plans.swap(unique_plans);
 }
 
 } // namespace
+
+bool ranked_batch_plan_supports_deterministic_fastpath(
+    const RankedBatchPlan &plan) {
+  return ranked_batch_plan_supports_deterministic_fastpath_impl(plan);
+}
 
 RankedBatchPlanner::RankedBatchPlanner(const uuber::NativeContext &ctx_)
     : ctx(ctx_), plans(ctx_.ir.nodes.size()) {}
@@ -700,12 +693,24 @@ void RankedBatchPlanner::compile_node(int node_idx) {
     return;
   }
   plan.compiling = true;
+  compile_ranked_node_batch_plan(
+      ctx, node_idx,
+      [this](int child_node_idx) -> const RankedNodeBatchPlan & {
+        return plan_for_node(child_node_idx);
+      },
+      plan);
+  plan.compiled = true;
+  plan.compiling = false;
+}
+
+void compile_ranked_node_batch_plan(
+    const uuber::NativeContext &ctx, int node_idx,
+    const std::function<const RankedNodeBatchPlan &(int)> &plan_lookup,
+    RankedNodeBatchPlan &plan) {
   plan.batch_plans.clear();
   plan.valid = false;
 
   if (node_idx < 0 || node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
-    plan.compiled = true;
-    plan.compiling = false;
     return;
   }
 
@@ -727,7 +732,7 @@ void RankedBatchPlanner::compile_node(int node_idx) {
       ranked_attach_delta_for_node(ctx, node_idx, delta);
       batch_plan.deltas.push_back(std::move(delta));
     }
-    ranked_finalize_batch_plan(batch_plan);
+    ranked_finalize_batch_plan(ctx, batch_plan);
     plan.batch_plans.push_back(std::move(batch_plan));
     break;
   }
@@ -741,8 +746,7 @@ void RankedBatchPlanner::compile_node(int node_idx) {
             ensure_source_ids(ctx, ir_node_required(ctx, child_idx)));
       }
       for (std::size_t idx = 0; idx < child_ids.size(); ++idx) {
-        const RankedNodeBatchPlan &child_plan =
-            plan_for_node(child_ids[idx]);
+        const RankedNodeBatchPlan &child_plan = plan_lookup(child_ids[idx]);
         if (!child_plan.valid || child_plan.batch_plans.empty()) {
           continue;
         }
@@ -765,7 +769,7 @@ void RankedBatchPlanner::compile_node(int node_idx) {
               batch_plan.deltas.push_back(std::move(delta));
             }
           }
-          ranked_finalize_batch_plan(batch_plan);
+          ranked_finalize_batch_plan(ctx, batch_plan);
           plan.batch_plans.push_back(std::move(batch_plan));
         }
       }
@@ -782,8 +786,7 @@ void RankedBatchPlanner::compile_node(int node_idx) {
             ensure_source_ids(ctx, ir_node_required(ctx, child_idx)));
       }
       for (std::size_t idx = 0; idx < child_ids.size(); ++idx) {
-        const RankedNodeBatchPlan &child_plan =
-            plan_for_node(child_ids[idx]);
+        const RankedNodeBatchPlan &child_plan = plan_lookup(child_ids[idx]);
         if (!child_plan.valid || child_plan.batch_plans.empty()) {
           continue;
         }
@@ -797,10 +800,11 @@ void RankedBatchPlanner::compile_node(int node_idx) {
             RankedStateDelta delta;
             delta.kind = RankedStateDeltaKind::OrWitnessSurvive;
             delta.source_ids = child_sources[other_idx];
-            delta.source_bits = ranked_source_bits_for_ids(ctx, delta.source_ids);
+            delta.source_bits =
+                ranked_source_bits_for_ids(ctx, delta.source_ids);
             batch_plan.deltas.push_back(std::move(delta));
           }
-          ranked_finalize_batch_plan(batch_plan);
+          ranked_finalize_batch_plan(ctx, batch_plan);
           plan.batch_plans.push_back(std::move(batch_plan));
         }
       }
@@ -809,7 +813,7 @@ void RankedBatchPlanner::compile_node(int node_idx) {
   }
   case uuber::IrNodeOp::Guard: {
     if (node.reference_idx >= 0 && node.blocker_idx >= 0) {
-      const RankedNodeBatchPlan &ref_plan = plan_for_node(node.reference_idx);
+      const RankedNodeBatchPlan &ref_plan = plan_lookup(node.reference_idx);
       if (ref_plan.valid && !ref_plan.batch_plans.empty()) {
         const std::vector<int> blocker_sources =
             evaluator_gather_blocker_sources(ctx, node_idx);
@@ -821,11 +825,12 @@ void RankedBatchPlanner::compile_node(int node_idx) {
             RankedStateDelta delta;
             delta.kind = RankedStateDeltaKind::SurviveSources;
             delta.source_ids = blocker_sources;
-            delta.source_bits = ranked_source_bits_for_ids(ctx, delta.source_ids);
+            delta.source_bits =
+                ranked_source_bits_for_ids(ctx, delta.source_ids);
             ranked_attach_delta_for_node(ctx, node.blocker_idx, delta);
             batch_plan.deltas.push_back(std::move(delta));
           }
-          ranked_finalize_batch_plan(batch_plan);
+          ranked_finalize_batch_plan(ctx, batch_plan);
           plan.batch_plans.push_back(std::move(batch_plan));
         }
       }
@@ -836,9 +841,8 @@ void RankedBatchPlanner::compile_node(int node_idx) {
     break;
   }
 
+  ranked_dedupe_batch_plans(plan.batch_plans);
   plan.valid = !plan.batch_plans.empty();
-  plan.compiled = true;
-  plan.compiling = false;
 }
 
 std::vector<int>
@@ -857,6 +861,200 @@ collect_competitor_sources(const uuber::NativeContext &ctx,
   }
   sort_unique(out);
   return out;
+}
+
+inline bool ranked_build_active_frontier(
+    const RankedFrontierStorage &states,
+    const std::vector<const double *> &times_by_trial, std::size_t rank_idx,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_by_trial,
+    const uuber::TrialParamsSoA *default_trial_params_soa, double branch_eps,
+    RankedActiveFrontier &out) {
+  out = RankedActiveFrontier{};
+  const bool use_frontier_groups = (trial_params_soa_by_trial != nullptr);
+  out.refs.reserve(states.size());
+
+  bool frontier_uniform_trial_params_known = false;
+  out.uniform_trial_params_soa = default_trial_params_soa;
+  for (std::size_t state_idx = 0; state_idx < states.size(); ++state_idx) {
+    if (!std::isfinite(states.weight[state_idx]) ||
+        states.weight[state_idx] <= branch_eps) {
+      continue;
+    }
+    const int trial_slot = states.trial_slot[state_idx];
+    if (trial_slot < 0 ||
+        static_cast<std::size_t>(trial_slot) >= times_by_trial.size()) {
+      return false;
+    }
+    const double t = times_by_trial[static_cast<std::size_t>(trial_slot)][rank_idx];
+    if (!std::isfinite(t) || t < 0.0) {
+      return false;
+    }
+    if (rank_idx > 0u) {
+      const double lower_t =
+          times_by_trial[static_cast<std::size_t>(trial_slot)][rank_idx - 1u];
+      if (!std::isfinite(lower_t) || lower_t < 0.0) {
+        return false;
+      }
+    }
+
+    const uuber::TrialParamsSoA *state_trial_params_soa =
+        default_trial_params_soa;
+    if (trial_params_soa_by_trial != nullptr &&
+        static_cast<std::size_t>(trial_slot) < trial_params_soa_by_trial->size()) {
+      state_trial_params_soa =
+          (*trial_params_soa_by_trial)[static_cast<std::size_t>(trial_slot)];
+    }
+    RankedFrontierStateRef state_ref;
+    state_ref.state_index = state_idx;
+    state_ref.trial_params_soa = state_trial_params_soa;
+    state_ref.state_key = ranked_frontier_state_key(states, state_idx);
+    out.refs.push_back(std::move(state_ref));
+
+    if (!frontier_uniform_trial_params_known) {
+      out.uniform_trial_params_soa = state_trial_params_soa;
+      frontier_uniform_trial_params_known = true;
+    } else if (out.uniform_trial_params_soa != state_trial_params_soa) {
+      out.uniform_trial_params_soa = nullptr;
+    }
+  }
+
+  if (use_frontier_groups && out.refs.size() > 1u) {
+    std::sort(out.refs.begin(), out.refs.end(), ranked_frontier_state_ref_less);
+    out.groups.reserve(out.refs.size());
+    std::size_t group_begin = 0u;
+    while (group_begin < out.refs.size()) {
+      std::size_t group_end = group_begin + 1u;
+      while (group_end < out.refs.size() &&
+             ranked_frontier_state_ref_same_group(out.refs[group_begin],
+                                                  out.refs[group_end])) {
+        ++group_end;
+      }
+      RankedFrontierGroup group;
+      group.trial_params_soa = out.refs[group_begin].trial_params_soa;
+      group.begin = group_begin;
+      group.end = group_end;
+      out.groups.push_back(std::move(group));
+      group_begin = group_end;
+    }
+  }
+
+  out.split_groups = use_frontier_groups && out.groups.size() > 1u &&
+                     out.groups.size() * 2u < out.refs.size();
+  return true;
+}
+
+inline bool ranked_process_materialized_lane_group(
+    const uuber::NativeContext &ctx, RankedBatchPlanner &planner,
+    int outcome_node_idx, int info_node_idx, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    std::size_t rank_idx, const RankedFrontierStorage &states,
+    const std::vector<int> &persistent_sources,
+    const uuber::CompetitorClusterCacheEntry *competitor_cache_ptr,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa,
+    RankedFrontierExecutionScratch &scratch,
+    RankedFrontierStorage &next_states_collapsed,
+    std::unordered_map<RankedFrontierCollapseKey, std::size_t,
+                       RankedFrontierCollapseKeyHash> *next_state_lookup,
+    std::vector<RankedStateCollapseIndex> *next_state_collapse_order,
+    double branch_eps) {
+  RankedLaneGroupBatch &lane_group_batch = scratch.lane_group_batch;
+  std::vector<double> &denom = scratch.denom;
+  std::vector<double> &scenario_survival = scratch.scenario_survival;
+
+  const std::size_t group_size = lane_group_batch.rank_batch.size();
+  denom.assign(group_size, 1.0);
+  if (rank_idx > 0u) {
+    uuber::TreeNodeBatchValues denom_values;
+    if (!exact_eval_node_batch_from_batch(
+            ctx, info_node_idx, lane_group_batch.denom_batch, component_idx,
+            trial_params, trial_type_key, EvalNeed::kSurvival, denom_values,
+            uniform_trial_params_soa) ||
+        denom_values.survival.size() != denom.size()) {
+      return false;
+    }
+    for (std::size_t i = 0; i < denom.size(); ++i) {
+      denom[i] = denom_values.survival[i];
+    }
+  }
+
+  bool saw_scenario_batch = false;
+  const bool processed = exact_collect_scenarios_batch_process_from_batch(
+      planner, ctx, outcome_node_idx, lane_group_batch.rank_batch, component_idx,
+      trial_params, trial_type_key,
+      [&](const ExactScenarioBatch &points,
+          const std::vector<std::uint8_t> *active_mask,
+          const std::vector<double> &weights) -> bool {
+        saw_scenario_batch = true;
+        scenario_survival.clear();
+        if (competitor_cache_ptr != nullptr) {
+          scenario_survival.assign(points.size(), 1.0);
+          exact_competitor_survival_batch(
+              ctx, *competitor_cache_ptr, component_idx, trial_params,
+              trial_type_key, points, scenario_survival,
+              uniform_trial_params_soa);
+        }
+        return ranked_reduce_exact_batch_into_frontier(
+            ctx, points, states, lane_group_batch.source_state_indices, weights,
+            denom, persistent_sources, active_mask,
+            competitor_cache_ptr != nullptr ? &scenario_survival : nullptr,
+            next_states_collapsed, next_state_lookup, next_state_collapse_order,
+            branch_eps);
+      },
+      [&](const uuber::ExactScenarioLaneViewBatch &points,
+          const std::vector<std::uint8_t> *active_mask,
+          const std::vector<double> &weights) -> bool {
+        saw_scenario_batch = true;
+        scenario_survival.clear();
+        if (competitor_cache_ptr != nullptr) {
+          scenario_survival.assign(points.size(), 1.0);
+          exact_competitor_survival_batch(
+              ctx, *competitor_cache_ptr, component_idx, trial_params,
+              trial_type_key, points, scenario_survival,
+              uniform_trial_params_soa);
+        }
+        return ranked_reduce_exact_batch_into_frontier(
+            ctx, points, states, lane_group_batch.source_state_indices, weights,
+            denom, persistent_sources, active_mask,
+            competitor_cache_ptr != nullptr ? &scenario_survival : nullptr,
+            next_states_collapsed, next_state_lookup, next_state_collapse_order,
+            branch_eps);
+      },
+      uniform_trial_params_soa);
+  if (!processed && saw_scenario_batch) {
+    return false;
+  }
+  return true;
+}
+
+inline bool ranked_process_frontier_group(
+    const uuber::NativeContext &ctx, RankedBatchPlanner &planner,
+    int outcome_node_idx, int info_node_idx,
+    const RankedFrontierStorage &states,
+    const std::vector<RankedFrontierStateRef> &active_state_refs,
+    const std::vector<const double *> &times_by_trial, std::size_t rank_idx,
+    std::size_t group_begin, std::size_t group_end, int component_idx,
+    const TrialParamSet *trial_params,
+    const std::string &trial_type_key,
+    const std::vector<int> &persistent_sources,
+    const uuber::CompetitorClusterCacheEntry *competitor_cache_ptr,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa,
+    RankedFrontierExecutionScratch &scratch,
+    RankedFrontierStorage &next_states_collapsed,
+    std::unordered_map<RankedFrontierCollapseKey, std::size_t,
+                       RankedFrontierCollapseKeyHash> *next_state_lookup,
+    std::vector<RankedStateCollapseIndex> *next_state_collapse_order,
+    double branch_eps) {
+  scratch.clear_materialized();
+  ranked_materialize_lane_group_batch(states, active_state_refs,
+                                      times_by_trial, rank_idx, group_begin,
+                                      group_end, uniform_trial_params_soa,
+                                      scratch.lane_group_batch);
+  return ranked_process_materialized_lane_group(
+      ctx, planner, outcome_node_idx, info_node_idx, component_idx, trial_params,
+      trial_type_key, rank_idx, states, persistent_sources,
+      competitor_cache_ptr, uniform_trial_params_soa, scratch,
+      next_states_collapsed, next_state_lookup, next_state_collapse_order,
+      branch_eps);
 }
 
 bool sequence_prefix_density_batch_resolved(
@@ -938,218 +1136,71 @@ bool sequence_prefix_density_batch_resolved(
 
     RankedFrontierStorage next_states_collapsed;
     next_states_collapsed.reserve(states.size() * 2u);
+    std::unordered_map<RankedFrontierCollapseKey, std::size_t,
+                       RankedFrontierCollapseKeyHash>
+        next_state_lookup;
     std::vector<RankedStateCollapseIndex> next_state_collapse_order;
     next_state_collapse_order.reserve(states.size() * 2u);
 
-    const bool use_frontier_groups = (trial_params_soa_by_trial != nullptr);
-    std::vector<RankedFrontierStateRef> active_state_refs;
-    active_state_refs.reserve(states.size());
-    std::vector<RankedFrontierGroup> frontier_groups;
-    if (use_frontier_groups) {
-      frontier_groups.reserve(states.size());
-    }
-
-    bool valid_rank = true;
-    const uuber::TrialParamsSoA *frontier_uniform_trial_params_soa =
-        default_trial_params_soa;
-    bool frontier_uniform_trial_params_known = false;
-    for (std::size_t state_idx = 0; state_idx < states.size(); ++state_idx) {
-      if (!std::isfinite(states.weight[state_idx]) ||
-          states.weight[state_idx] <= kBranchEps) {
-        continue;
-      }
-      const int trial_slot = states.trial_slot[state_idx];
-      if (trial_slot < 0 ||
-          static_cast<std::size_t>(trial_slot) >= times_by_trial.size()) {
-        valid_rank = false;
-        break;
-      }
-      const double t =
-          times_by_trial[static_cast<std::size_t>(trial_slot)][rank_idx];
-      if (!std::isfinite(t) || t < 0.0) {
-        valid_rank = false;
-        break;
-      }
-      if (rank_idx > 0u) {
-        const double lower_t =
-            times_by_trial[static_cast<std::size_t>(trial_slot)][rank_idx - 1u];
-        if (!std::isfinite(lower_t) || lower_t < 0.0) {
-          valid_rank = false;
-          break;
-        }
-      }
-
-      RankedFrontierStateRef state_ref;
-      state_ref.state_index = state_idx;
-      state_ref.trial_params_soa = default_trial_params_soa;
-      if (trial_params_soa_by_trial != nullptr &&
-          static_cast<std::size_t>(trial_slot) < trial_params_soa_by_trial->size()) {
-        state_ref.trial_params_soa =
-            (*trial_params_soa_by_trial)[static_cast<std::size_t>(trial_slot)];
-      }
-      state_ref.state_key = ranked_frontier_state_key(states, state_idx);
-      active_state_refs.push_back(std::move(state_ref));
-
-      const uuber::TrialParamsSoA *state_trial_params_soa =
-          active_state_refs.back().trial_params_soa;
-      if (!frontier_uniform_trial_params_known) {
-        frontier_uniform_trial_params_soa = state_trial_params_soa;
-        frontier_uniform_trial_params_known = true;
-      } else if (frontier_uniform_trial_params_soa != state_trial_params_soa) {
-        frontier_uniform_trial_params_soa = nullptr;
-      }
-    }
-    if (!valid_rank) {
+    RankedActiveFrontier active_frontier;
+    if (!ranked_build_active_frontier(states, times_by_trial, rank_idx,
+                                      trial_params_soa_by_trial,
+                                      default_trial_params_soa, kBranchEps,
+                                      active_frontier)) {
       return false;
     }
-    if (active_state_refs.empty()) {
+    if (active_frontier.refs.empty()) {
       return true;
     }
-    if (use_frontier_groups && active_state_refs.size() > 1u) {
-      std::sort(active_state_refs.begin(), active_state_refs.end(),
-                ranked_frontier_state_ref_less);
-      std::size_t group_begin = 0u;
-      while (group_begin < active_state_refs.size()) {
-        std::size_t group_end = group_begin + 1u;
-        while (group_end < active_state_refs.size() &&
-               ranked_frontier_state_ref_same_group(
-                   active_state_refs[group_begin],
-                   active_state_refs[group_end])) {
-          ++group_end;
-        }
-        RankedFrontierGroup group;
-        group.trial_params_soa = active_state_refs[group_begin].trial_params_soa;
-        group.begin = group_begin;
-        group.end = group_end;
-        frontier_groups.push_back(group);
-        group_begin = group_end;
-      }
-    }
-
-    RankedLaneGroupBatch lane_group_batch;
-    lane_group_batch.reserve(active_state_refs.size(), rank_idx > 0u);
-    std::vector<double> denom;
-    denom.reserve(active_state_refs.size());
-    ExactScenarioBatch scenario_points;
-    scenario_points.reserve(active_state_refs.size() * 2u);
-    std::vector<double> scenario_survival;
-    scenario_survival.reserve(active_state_refs.size() * 2u);
-    std::vector<int> scenario_trial_slots;
-    scenario_trial_slots.reserve(active_state_refs.size() * 2u);
-    std::vector<RankedStateCollapseIndex> scenario_collapse_order;
-    scenario_collapse_order.reserve(active_state_refs.size() * 2u);
-    ExactScenarioBatch deterministic_scenario_points;
-    deterministic_scenario_points.reserve(active_state_refs.size());
-    std::vector<std::uint8_t> deterministic_scenario_active;
-    deterministic_scenario_active.reserve(active_state_refs.size());
-    std::vector<double> deterministic_competitor_survival;
-    deterministic_competitor_survival.reserve(active_state_refs.size());
+    RankedFrontierExecutionScratch scratch;
+    scratch.reserve(active_frontier.refs.size());
     const uuber::CompetitorClusterCacheEntry *competitor_cache_ptr = nullptr;
     if (!competitors.empty()) {
       competitor_cache_ptr = &fetch_competitor_cluster_cache(ctx, competitors);
     }
 
-    const bool split_frontier_groups =
-        use_frontier_groups && frontier_groups.size() > 1u &&
-        frontier_groups.size() * 2u < active_state_refs.size();
-    const std::size_t frontier_begin = 0u;
-    const std::size_t frontier_end = active_state_refs.size();
-
-    auto process_state_group =
-        [&](std::size_t group_begin, std::size_t group_end,
-            const uuber::TrialParamsSoA *uniform_trial_params_soa) -> bool {
-      lane_group_batch.clear();
-      denom.clear();
-      ranked_materialize_lane_group_batch(
-          states, active_state_refs, times_by_trial, rank_idx, group_begin,
-          group_end, uniform_trial_params_soa, lane_group_batch);
-
-      const std::size_t group_size = group_end - group_begin;
-      denom.assign(group_size, 1.0);
-      if (rank_idx > 0u) {
-        uuber::TreeNodeBatchValues denom_values;
-        if (!exact_eval_node_batch_from_batch(
-                ctx, info_node_idx, lane_group_batch.denom_batch,
+    const bool use_hash_frontier_collapse = active_frontier.split_groups;
+    if (use_hash_frontier_collapse) {
+      next_state_lookup.reserve(states.size() * 2u);
+    }
+    if (active_frontier.split_groups) {
+      for (const RankedFrontierGroup &group : active_frontier.groups) {
+        if (group.begin >= group.end) {
+          continue;
+        }
+        if (!ranked_process_frontier_group(
+                ctx, *planner, outcome_node_idx, info_node_idx, states,
+                active_frontier.refs, times_by_trial, rank_idx, group.begin,
+                group.end,
                 component_idx, trial_params, trial_type_key,
-                EvalNeed::kSurvival, denom_values, uniform_trial_params_soa) ||
-            denom_values.survival.size() != denom.size()) {
-          return false;
-        }
-        for (std::size_t i = 0; i < denom.size(); ++i) {
-          denom[i] = denom_values.survival[i];
-        }
-      }
-
-      scenario_points.clear();
-      scenario_trial_slots.clear();
-      scenario_collapse_order.clear();
-
-      deterministic_scenario_points.clear();
-      deterministic_scenario_active.clear();
-      if (exact_collect_deterministic_scenarios_batch_aligned_from_batch(
-              *planner, ctx, outcome_node_idx, lane_group_batch.rank_batch,
-              component_idx, trial_params, trial_type_key,
-              deterministic_scenario_points, deterministic_scenario_active,
-              uniform_trial_params_soa)) {
-        deterministic_competitor_survival.clear();
-        if (competitor_cache_ptr != nullptr) {
-          deterministic_competitor_survival.assign(
-              deterministic_scenario_points.size(), 1.0);
-          if (!deterministic_scenario_points.empty()) {
-            exact_competitor_survival_batch(
-                ctx, *competitor_cache_ptr, component_idx, trial_params,
-                trial_type_key, deterministic_scenario_points,
-                deterministic_competitor_survival, uniform_trial_params_soa);
-          }
-        }
-
-        return ranked_reduce_scenario_batch_into_frontier(
-            ctx, states, lane_group_batch.source_state_indices, denom,
-            persistent_sources, competitor_cache_ptr != nullptr,
-            &deterministic_scenario_active,
-            competitor_cache_ptr != nullptr ? &deterministic_competitor_survival
-                                            : nullptr,
-            deterministic_scenario_points, next_states_collapsed,
-            next_state_collapse_order, scenario_trial_slots,
-            scenario_collapse_order, kBranchEps);
-      }
-
-      if (!exact_collect_scenarios_batch_aligned_from_batch(
-              *planner, ctx, outcome_node_idx, lane_group_batch.rank_batch,
-              component_idx, trial_params, trial_type_key, scenario_points,
-              uniform_trial_params_soa)) {
-        return true;
-      }
-
-      scenario_survival.assign(scenario_points.size(), 1.0);
-      if (competitor_cache_ptr != nullptr) {
-        exact_competitor_survival_batch(
-            ctx, *competitor_cache_ptr, component_idx, trial_params,
-            trial_type_key, scenario_points, scenario_survival,
-            uniform_trial_params_soa);
-      }
-
-      return ranked_reduce_scenario_batch_into_frontier(
-          ctx, states, lane_group_batch.source_state_indices, denom,
-          persistent_sources, competitor_cache_ptr != nullptr, nullptr,
-          competitor_cache_ptr != nullptr ? &scenario_survival : nullptr,
-          scenario_points, next_states_collapsed, next_state_collapse_order,
-          scenario_trial_slots, scenario_collapse_order, kBranchEps);
-    };
-
-    if (split_frontier_groups) {
-      for (const RankedFrontierGroup &group : frontier_groups) {
-        if (!process_state_group(group.begin, group.end, group.trial_params_soa)) {
+                persistent_sources, competitor_cache_ptr, group.trial_params_soa,
+                scratch, next_states_collapsed,
+                use_hash_frontier_collapse ? &next_state_lookup : nullptr,
+                use_hash_frontier_collapse ? nullptr
+                                           : &next_state_collapse_order,
+                kBranchEps)) {
           return false;
         }
       }
-    } else if (!process_state_group(frontier_begin, frontier_end,
-                                    frontier_uniform_trial_params_soa)) {
+    } else if (!ranked_process_frontier_group(
+                   ctx, *planner, outcome_node_idx, info_node_idx, states,
+                   active_frontier.refs, times_by_trial, rank_idx, 0u,
+                   active_frontier.refs.size(), component_idx,
+                   trial_params,
+                   trial_type_key, persistent_sources, competitor_cache_ptr,
+                   active_frontier.uniform_trial_params_soa, scratch,
+                   next_states_collapsed,
+                   use_hash_frontier_collapse ? &next_state_lookup : nullptr,
+                   use_hash_frontier_collapse ? nullptr
+                                              : &next_state_collapse_order,
+                   kBranchEps)) {
       return false;
     }
 
-    collapse_ranked_state_candidates(next_states_collapsed, next_state_collapse_order,
-                                     kBranchEps);
+    if (!use_hash_frontier_collapse) {
+      collapse_ranked_state_candidates(next_states_collapsed,
+                                       next_state_collapse_order, kBranchEps);
+    }
     states.swap(next_states_collapsed);
     if (states.empty()) {
       return true;

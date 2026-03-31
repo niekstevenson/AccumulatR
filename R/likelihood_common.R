@@ -377,6 +377,33 @@
 .prep_id_index <- function(prep) .prep_runtime_get(prep, "id_index", prep[[".id_index"]])
 .prep_cache_bundle <- function(prep) .prep_runtime_get(prep, "cache_bundle")
 
+.likelihood_structure_prep_cache <- local({
+  env <- new.env(parent = emptyenv(), hash = TRUE)
+  function() env
+})
+
+.likelihood_structure_prep <- function(structure) {
+  structure <- .as_model_structure(structure)
+  prep <- structure$prep %||% NULL
+  if (!is.null(prep) && !is.null(prep[[".runtime"]])) {
+    return(prep)
+  }
+  cache_env <- .likelihood_structure_prep_cache()
+  cache_key <- NULL
+  if (!is.null(prep)) {
+    cache_key <- .structure_hash_value(prep)
+    cached <- cache_env[[cache_key]]
+    if (!is.null(cached)) {
+      return(cached)
+    }
+  }
+  prepared <- .prepare_model_for_likelihood(structure$model_spec)
+  if (!is.null(cache_key) && nzchar(cache_key)) {
+    cache_env[[cache_key]] <- prepared
+  }
+  prepared
+}
+
 .prep_native_context <- function(prep) {
   ptr_is_valid <- function(ptr) {
     if (!inherits(ptr, "externalptr")) {

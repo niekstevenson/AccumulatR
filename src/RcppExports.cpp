@@ -418,6 +418,25 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// native_outcome_probability_params_batch_cpp_idx
+Rcpp::NumericVector native_outcome_probability_params_batch_cpp_idx(SEXP ctxSEXP, Rcpp::IntegerVector node_ids, double upper, int component_idx, Rcpp::List competitor_ids_list, double rel_tol, double abs_tol, int max_depth, Rcpp::Nullable<Rcpp::DataFrame> trial_rows);
+RcppExport SEXP _AccumulatR_native_outcome_probability_params_batch_cpp_idx(SEXP ctxSEXPSEXP, SEXP node_idsSEXP, SEXP upperSEXP, SEXP component_idxSEXP, SEXP competitor_ids_listSEXP, SEXP rel_tolSEXP, SEXP abs_tolSEXP, SEXP max_depthSEXP, SEXP trial_rowsSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type ctxSEXP(ctxSEXPSEXP);
+    Rcpp::traits::input_parameter< Rcpp::IntegerVector >::type node_ids(node_idsSEXP);
+    Rcpp::traits::input_parameter< double >::type upper(upperSEXP);
+    Rcpp::traits::input_parameter< int >::type component_idx(component_idxSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type competitor_ids_list(competitor_ids_listSEXP);
+    Rcpp::traits::input_parameter< double >::type rel_tol(rel_tolSEXP);
+    Rcpp::traits::input_parameter< double >::type abs_tol(abs_tolSEXP);
+    Rcpp::traits::input_parameter< int >::type max_depth(max_depthSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::DataFrame> >::type trial_rows(trial_rowsSEXP);
+    rcpp_result_gen = Rcpp::wrap(native_outcome_probability_params_batch_cpp_idx(ctxSEXP, node_ids, upper, component_idx, competitor_ids_list, rel_tol, abs_tol, max_depth, trial_rows));
+    return rcpp_result_gen;
+END_RCPP
+}
 // unified_outcome_stats_reset_cpp
 void unified_outcome_stats_reset_cpp();
 RcppExport SEXP _AccumulatR_unified_outcome_stats_reset_cpp() {
@@ -467,6 +486,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_cpp_loglik_multiple", (DL_FUNC) &_AccumulatR_cpp_loglik_multiple, 9},
     {"_AccumulatR_native_component_plan_exported", (DL_FUNC) &_AccumulatR_native_component_plan_exported, 3},
     {"_AccumulatR_native_outcome_probability_params_cpp_idx", (DL_FUNC) &_AccumulatR_native_outcome_probability_params_cpp_idx, 11},
+    {"_AccumulatR_native_outcome_probability_params_batch_cpp_idx", (DL_FUNC) &_AccumulatR_native_outcome_probability_params_batch_cpp_idx, 9},
     {"_AccumulatR_unified_outcome_stats_reset_cpp", (DL_FUNC) &_AccumulatR_unified_outcome_stats_reset_cpp, 0},
     {"_AccumulatR_unified_outcome_stats_cpp", (DL_FUNC) &_AccumulatR_unified_outcome_stats_cpp, 0},
     {NULL, NULL, 0}

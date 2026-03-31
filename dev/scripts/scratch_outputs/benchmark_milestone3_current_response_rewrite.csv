@@ -1,0 +1,6 @@
+"source_label","case","median_sec","min_sec","max_sec","inner_reps","median_per_eval_sec","throughput_eval_per_sec","value"
+"current_response_rewrite","mixture_native_helper",0.0399999999999991,0.0389999999999979,0.0410000000000004,4000,9.99999999999979e-06,100000.000000002,"[1] 1.096542"
+"current_response_rewrite","mixture_response_probabilities",0.32,0.309999999999999,0.355,120,0.00266666666666667,375,"       R1        R2  0.3250216 0.6749784 "
+"current_response_rewrite","guess_response_probabilities",0.177,0.175999999999998,0.179000000000002,120,0.001475,677.966101694917,"        Left        Right      TIMEOUT           NA  4.169394e-01 2.298980e-01 3.531627e-01 5.107026e-15 "
+"current_response_rewrite","nonresponse_loglik",0.188000000000002,0.18,0.190999999999999,40,0.00470000000000006,212.765957446806,"[1] -69.89405"
+"current_response_rewrite","shared_trigger_guess_loglik",0.0169999999999959,0.0159999999999982,0.0189999999999984,40,0.000424999999999898,2352.94117647115,"[1] -687.4615"

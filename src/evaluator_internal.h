@@ -668,6 +668,9 @@ uuber::TreeGuardBatchEvalFn evaluator_make_tree_guard_eval_batch(
 bool evaluator_eval_node_batch_with_state_dense(
     int node_idx, const std::vector<double> &times, NodeEvalState &state,
     EvalNeed need, uuber::TreeNodeBatchValues &out_values);
+bool evaluator_eval_nodes_batch_with_state_dense(
+    const std::vector<int> &node_indices, const std::vector<double> &times,
+    NodeEvalState &state, std::vector<uuber::TreeNodeBatchValues> &out_values);
 double evaluator_evaluate_survival_with_forced(
     int node_id, const uuber::BitsetState *forced_complete_bits,
     bool forced_complete_bits_valid,

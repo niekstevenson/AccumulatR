@@ -1,0 +1,5 @@
+"source_label","case","median_sec","min_sec","max_sec","inner_reps","median_per_eval_sec","throughput_eval_per_sec","value"
+"ranked_frontier_delegate_generic","ranked_duplicate_loglik",0.0130000000000017,0.0129999999999981,0.0160000000000018,30,0.000433333333333389,2307.69230769201,"[1] 278.2031"
+"ranked_frontier_delegate_generic","ranked_unique_loglik",0.0240000000000009,0.0229999999999997,0.0279999999999987,30,0.00080000000000003,1249.99999999995,"[1] -747.1297"
+"ranked_frontier_delegate_generic","exact_guarded_duplicate_loglik",0.0180000000000007,0.017000000000003,0.0199999999999996,20,0.000900000000000034,1111.11111111107,"[1] 47.86599"
+"ranked_frontier_delegate_generic","exact_guarded_shifted_loglik",0.0189999999999984,0.0180000000000007,0.0199999999999996,20,0.000949999999999918,1052.63157894746,"[1] 59.94212"

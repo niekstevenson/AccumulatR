@@ -130,6 +130,10 @@ native_outcome_probability_params_cpp_idx <- function(ctxSEXP, node_id, upper, c
     .Call(`_AccumulatR_native_outcome_probability_params_cpp_idx`, ctxSEXP, node_id, upper, component_idx, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows)
 }
 
+native_outcome_probability_params_batch_cpp_idx <- function(ctxSEXP, node_ids, upper, component_idx, competitor_ids_list, rel_tol, abs_tol, max_depth, trial_rows) {
+    .Call(`_AccumulatR_native_outcome_probability_params_batch_cpp_idx`, ctxSEXP, node_ids, upper, component_idx, competitor_ids_list, rel_tol, abs_tol, max_depth, trial_rows)
+}
+
 unified_outcome_stats_reset_cpp <- function() {
     invisible(.Call(`_AccumulatR_unified_outcome_stats_reset_cpp`))
 }

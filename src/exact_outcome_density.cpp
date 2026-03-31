@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <limits>
 #include <memory>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -81,6 +82,14 @@ bool exact_eval_node_batch_with_points(
     const std::vector<std::uint8_t> *active_mask = nullptr,
     const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr);
 
+bool exact_eval_node_batch_with_points(
+    const uuber::NativeContext &ctx, int node_idx,
+    const uuber::ExactScenarioLaneViewBatch &points, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values,
+    const std::vector<std::uint8_t> *active_mask = nullptr,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr);
+
 template <typename PointVec>
 bool exact_eval_simple_acc_event_batch(
     const uuber::NativeContext &ctx, const uuber::IrEvent &event,
@@ -90,45 +99,47 @@ bool exact_eval_simple_acc_event_batch(
     const std::vector<std::uint8_t> *active_mask = nullptr,
     const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr);
 
-bool exact_collect_deterministic_scenarios_batch_aligned_impl(
-    RankedBatchPlanner &planner, const uuber::NativeContext &ctx,
-    int node_idx, const ExactScenarioBatch &seed_batch,
-    int component_idx, const TrialParamSet *trial_params,
-    const std::string &trial_type_key,
-    ExactScenarioBatch &aligned_batch,
-    std::vector<std::uint8_t> &active_mask,
+inline void exact_build_seed_batch_from_state(
+    const std::vector<double> &times, const NodeEvalState &state,
+    ExactScenarioBatch &seed_batch,
+    const uuber::TrialParamsSoA *&uniform_trial_params_soa);
+
+template <typename Planner, typename ProcessBatchFn>
+bool exact_collect_scenarios_batch_process_impl(
+    Planner &planner, const uuber::NativeContext &ctx, int node_idx,
+    const ExactScenarioBatch &seed_batch, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    ProcessBatchFn &&process_batch,
     const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr);
 
-inline void exact_scenario_batch_append_row(ExactScenarioBatch &dst,
-                                            ExactScenarioBatch &src,
-                                            std::size_t idx,
-                                            double weight_override) {
-  dst.t.push_back(src.t[idx]);
-  dst.density_index.push_back(src.density_index[idx]);
-  dst.weight.push_back(weight_override);
-  dst.trial_params_soa.push_back(src.trial_params_soa[idx]);
-  dst.forced_complete_bits.push_back(
-      std::move(src.forced_complete_bits[idx]));
-  dst.forced_survive_bits.push_back(std::move(src.forced_survive_bits[idx]));
-  dst.forced_complete_bits_valid.push_back(
-      idx < src.forced_complete_bits_valid.size()
-          ? src.forced_complete_bits_valid[idx]
-          : 0u);
-  dst.forced_survive_bits_valid.push_back(
-      idx < src.forced_survive_bits_valid.size()
-          ? src.forced_survive_bits_valid[idx]
-          : 0u);
-  dst.time_constraints.push_back(std::move(src.time_constraints[idx]));
-}
+template <typename PointVec>
+void exact_competitor_survival_batch_impl(
+    const uuber::NativeContext &ctx,
+    const uuber::CompetitorClusterCacheEntry &competitor_cache,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, const PointVec &points,
+    std::vector<double> &survival_out,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr);
 
-inline void exact_scenario_batch_append_point(ExactScenarioBatch &batch,
-                                              const ExactScenarioBatch &points,
-                                              std::size_t idx,
-                                              double weight_override) {
-  const uuber::VectorLaneRef point = uuber::vector_lane_ref(points, idx);
-  batch.t.push_back(point.t);
+class ExactBatchPlanner {
+public:
+  explicit ExactBatchPlanner(const uuber::NativeContext &ctx_);
+
+  const RankedNodeBatchPlan &plan_for_node(int node_idx);
+
+private:
+  void compile_node(int node_idx);
+
+  const uuber::NativeContext &ctx;
+  std::vector<RankedNodeBatchPlan> plans;
+};
+
+inline void exact_scenario_batch_append_lane_copy(
+    ExactScenarioBatch &batch, const uuber::VectorLaneRef &point, double t,
+    double weight) {
+  batch.t.push_back(t);
   batch.density_index.push_back(point.density_index);
-  batch.weight.push_back(weight_override);
+  batch.weight.push_back(weight);
   batch.trial_params_soa.push_back(point.trial_params_soa);
   batch.forced_complete_bits.push_back(*point.forced_complete_bits);
   batch.forced_survive_bits.push_back(*point.forced_survive_bits);
@@ -139,6 +150,27 @@ inline void exact_scenario_batch_append_point(ExactScenarioBatch &batch,
                                                 ? 1u
                                                 : 0u);
   batch.time_constraints.push_back(*point.time_constraints);
+}
+
+inline void exact_scenario_view_batch_append_lane(
+    uuber::ExactScenarioLaneViewBatch &batch,
+    const uuber::VectorLaneRef &point, double weight,
+    const uuber::TrialParamsSoA *resolved_trial_params_soa = nullptr) {
+  batch.t.push_back(point.t);
+  batch.density_index.push_back(point.density_index);
+  batch.weight.push_back(weight);
+  batch.trial_params_soa.push_back(resolved_trial_params_soa != nullptr
+                                       ? resolved_trial_params_soa
+                                       : point.trial_params_soa);
+  batch.forced_complete_bits.push_back(point.forced_complete_bits);
+  batch.forced_survive_bits.push_back(point.forced_survive_bits);
+  batch.forced_complete_bits_valid.push_back(point.forced_complete_bits_valid
+                                                 ? 1u
+                                                 : 0u);
+  batch.forced_survive_bits_valid.push_back(point.forced_survive_bits_valid
+                                                ? 1u
+                                                : 0u);
+  batch.time_constraints.push_back(point.time_constraints);
 }
 
 inline void exact_apply_transition_mask_to_point(
@@ -155,6 +187,30 @@ inline void exact_apply_transition_mask_to_point(
                               op.transition_invalidate_slot,
                               points.forced_survive_bits[idx],
                               forced_survive_bits_valid);
+  if (idx < points.forced_survive_bits_valid.size()) {
+    points.forced_survive_bits_valid[idx] =
+        forced_survive_bits_valid ? 1u : 0u;
+  }
+}
+
+inline void exact_apply_transition_mask_to_point(
+    const uuber::NativeContext &ctx, uuber::ExactScenarioLaneViewBatch &points,
+    std::size_t idx, const uuber::TreeCompetitorOp &op) {
+  if (idx >= points.size() || idx >= points.mutable_forced_survive_bits.size()) {
+    Rcpp::stop(
+        "Exact competitor lane-view invariant failed: missing mutable "
+        "forced-survive storage");
+  }
+  bool forced_survive_bits_valid =
+      idx < points.forced_survive_bits_valid.size() &&
+      points.forced_survive_bits_valid[idx] != 0u;
+  apply_transition_mask_words(
+      ctx, op.transition_mask_begin, op.transition_mask_count,
+      op.transition_invalidate_slot, points.mutable_forced_survive_bits[idx],
+      forced_survive_bits_valid);
+  if (idx < points.forced_survive_bits.size()) {
+    points.forced_survive_bits[idx] = &points.mutable_forced_survive_bits[idx];
+  }
   if (idx < points.forced_survive_bits_valid.size()) {
     points.forced_survive_bits_valid[idx] =
         forced_survive_bits_valid ? 1u : 0u;
@@ -187,23 +243,12 @@ inline int exact_find_label_ref_node_idx(const uuber::NativeContext &ctx,
   return -1;
 }
 
+template <typename PointVec>
 inline void exact_scenario_batch_append_retimed_point(
-    ExactScenarioBatch &batch, const ExactScenarioBatch &points,
-    std::size_t idx, double t_new) {
+    ExactScenarioBatch &batch, const PointVec &points, std::size_t idx,
+    double t_new) {
   const uuber::VectorLaneRef point = uuber::vector_lane_ref(points, idx);
-  batch.t.push_back(t_new);
-  batch.density_index.push_back(point.density_index);
-  batch.weight.push_back(point.weight);
-  batch.trial_params_soa.push_back(point.trial_params_soa);
-  batch.forced_complete_bits.push_back(*point.forced_complete_bits);
-  batch.forced_survive_bits.push_back(*point.forced_survive_bits);
-  batch.forced_complete_bits_valid.push_back(point.forced_complete_bits_valid
-                                                 ? 1u
-                                                 : 0u);
-  batch.forced_survive_bits_valid.push_back(point.forced_survive_bits_valid
-                                                ? 1u
-                                                : 0u);
-  batch.time_constraints.push_back(*point.time_constraints);
+  exact_scenario_batch_append_lane_copy(batch, point, t_new, point.weight);
 }
 
 struct ExactRelativeOnsetBatchPlan {
@@ -986,27 +1031,101 @@ inline bool exact_batch_values_size_matches(
          values.cdf.size() == point_count;
 }
 
-inline void exact_merge_batch_values_subset(
-    const uuber::TreeNodeBatchValues &src_values,
-    const std::vector<std::uint8_t> *active_mask,
-    uuber::TreeNodeBatchValues &dst_values) {
-  const std::size_t point_count = dst_values.density.size();
-  if (!exact_batch_values_size_matches(src_values, point_count) ||
-      !exact_batch_values_size_matches(dst_values, point_count)) {
-    return;
-  }
-  if (active_mask == nullptr) {
-    dst_values = src_values;
-    return;
-  }
-  for (std::size_t i = 0; i < point_count; ++i) {
+template <typename PointVec>
+inline void exact_collect_active_subset(
+    const PointVec &points, const std::vector<std::uint8_t> *active_mask,
+    std::vector<std::size_t> &subset_indices,
+    std::vector<double> &subset_times) {
+  subset_indices.clear();
+  subset_times.clear();
+  subset_indices.reserve(points.size());
+  subset_times.reserve(points.size());
+  for (std::size_t i = 0; i < points.size(); ++i) {
     if (!uuber::vector_lane_active(active_mask, i)) {
       continue;
     }
-    dst_values.density[i] = src_values.density[i];
-    dst_values.survival[i] = src_values.survival[i];
-    dst_values.cdf[i] = src_values.cdf[i];
+    subset_indices.push_back(i);
+    subset_times.push_back(points.t[i]);
   }
+}
+
+inline bool exact_merge_batch_values_indices(
+    const uuber::TreeNodeBatchValues &src_values,
+    const std::vector<std::size_t> &dst_indices,
+    uuber::TreeNodeBatchValues &dst_values) {
+  const std::size_t point_count = dst_indices.size();
+  if (!exact_batch_values_size_matches(src_values, point_count) ||
+      !exact_batch_values_size_matches(dst_values, dst_values.density.size())) {
+    return false;
+  }
+  for (std::size_t i = 0; i < point_count; ++i) {
+    const std::size_t dst_idx = dst_indices[i];
+    if (dst_idx >= dst_values.density.size()) {
+      return false;
+    }
+    dst_values.density[dst_idx] = src_values.density[i];
+    dst_values.survival[dst_idx] = src_values.survival[i];
+    dst_values.cdf[dst_idx] = src_values.cdf[i];
+  }
+  return true;
+}
+
+template <typename PointVec, typename EvalFn>
+inline bool exact_with_shared_state_compact_subset(
+    NodeEvalState &shared_state, const PointVec &points,
+    const std::vector<std::uint8_t> *shared_group_mask,
+    std::vector<std::size_t> &subset_indices,
+    std::vector<double> &subset_times,
+    std::vector<const uuber::TrialParamsSoA *> &subset_trial_params_soa,
+    EvalFn &&eval_fn) {
+  exact_collect_active_subset(points, shared_group_mask, subset_indices,
+                              subset_times);
+  if (subset_indices.empty()) {
+    return true;
+  }
+
+  const auto *saved_trial_params_soa_batch = shared_state.trial_params_soa_batch;
+  const std::vector<double> *group_times = &subset_times;
+  if (subset_indices.size() == points.size()) {
+    group_times = &points.t;
+  } else if (saved_trial_params_soa_batch != nullptr) {
+    subset_trial_params_soa.resize(subset_indices.size());
+    for (std::size_t i = 0; i < subset_indices.size(); ++i) {
+      const std::size_t src_idx = subset_indices[i];
+      subset_trial_params_soa[i] =
+          src_idx < saved_trial_params_soa_batch->size()
+              ? (*saved_trial_params_soa_batch)[src_idx]
+              : shared_state.trial_params_soa;
+    }
+    shared_state.trial_params_soa_batch = &subset_trial_params_soa;
+  }
+
+  const bool ok = eval_fn(*group_times);
+  shared_state.trial_params_soa_batch = saved_trial_params_soa_batch;
+  return ok;
+}
+
+template <typename PointVec, typename EvalFn>
+inline bool exact_eval_shared_state_compact_subset(
+    NodeEvalState &shared_state, const PointVec &points,
+    const std::vector<std::uint8_t> *shared_group_mask, EvalFn &&eval_fn,
+    uuber::TreeNodeBatchValues &shared_out,
+    std::vector<std::size_t> &subset_indices,
+    std::vector<double> &subset_times,
+    std::vector<const uuber::TrialParamsSoA *> &subset_trial_params_soa) {
+  const bool ok = exact_with_shared_state_compact_subset(
+      shared_state, points, shared_group_mask, subset_indices, subset_times,
+      subset_trial_params_soa,
+      [&](const std::vector<double> &group_times) -> bool {
+        if (group_times.empty()) {
+          shared_out = uuber::TreeNodeBatchValues{};
+          return true;
+        }
+        return eval_fn(group_times, shared_state, shared_out);
+      });
+  return ok && (subset_indices.empty() ||
+                exact_batch_values_size_matches(shared_out,
+                                                subset_indices.size()));
 }
 
 bool exact_eval_node_batch_with_points(
@@ -1045,10 +1164,47 @@ bool exact_eval_node_batch_common(
       static_cast<std::uint64_t>(active_point_count),
       depth_guard.recursive_call());
 
-  std::vector<double> times(points.size(), 0.0);
-  for (std::size_t i = 0; i < points.size(); ++i) {
-    times[i] = points.t[i];
-  }
+  std::vector<std::size_t> subset_indices;
+  std::vector<double> subset_times;
+  std::vector<const uuber::TrialParamsSoA *> subset_trial_params_soa;
+  auto eval_partitioned_node_batch =
+      [&](const std::vector<int> &relevant_source_ids) -> bool {
+    exact_init_batch_values(points.size(), out_values);
+    return eval_vector_lanes_with_shared_node_state(
+        ctx, points, active_mask, relevant_source_ids, component_idx,
+        trial_params, trial_type_key,
+        [&](NodeEvalState &shared_state,
+            const std::vector<std::uint8_t> *shared_group_mask) -> bool {
+          uuber::TreeNodeBatchValues shared_out;
+          if (!exact_eval_shared_state_compact_subset(
+                  shared_state, points, shared_group_mask,
+                  [&](const std::vector<double> &group_times,
+                      NodeEvalState &group_state,
+                      uuber::TreeNodeBatchValues &group_out) -> bool {
+                    return evaluator_eval_node_batch_with_state_dense(
+                        node_idx, group_times, group_state, need, group_out);
+                  },
+                  shared_out, subset_indices, subset_times,
+                  subset_trial_params_soa)) {
+            return false;
+          }
+          return exact_merge_batch_values_indices(shared_out, subset_indices,
+                                                 out_values);
+        },
+        [&]() -> bool {
+          const uuber::IrNode &node = ir_node_required(ctx, node_idx);
+          Rcpp::stop(
+              "Exact batch invariant failed for node: "
+              "node_idx=%d op=%d event_idx=%d active_points=%d",
+              node_idx, static_cast<int>(node.op), node.event_idx,
+              static_cast<int>(active_point_count));
+          return false;
+        },
+        [&](std::uint64_t active_count, std::uint64_t group_count) {
+          record_unified_outcome_lane_partition(active_count, group_count);
+        },
+        false, uniform_trial_params_soa);
+  };
 
   if (node_idx >= 0 && node_idx < static_cast<int>(ctx.ir.nodes.size())) {
     const uuber::IrNode &node = ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
@@ -1063,68 +1219,13 @@ bool exact_eval_node_batch_common(
               need, out_values, active_mask, uniform_trial_params_soa)) {
         return true;
       }
-      const std::vector<int> event_source_ids =
-          relevant_source_ids_for_batch_node(ctx, node_idx);
-      exact_init_batch_values(points.size(), out_values);
-      return eval_vector_lanes_with_shared_node_state(
-          ctx, points, active_mask, event_source_ids, component_idx,
-          trial_params, trial_type_key,
-          [&](NodeEvalState &shared_state,
-              const std::vector<std::uint8_t> *shared_group_mask) -> bool {
-            uuber::TreeNodeBatchValues shared_out;
-            if (!evaluator_eval_node_batch_with_state_dense(
-                    node_idx, times, shared_state, need, shared_out)) {
-              return false;
-            }
-            exact_merge_batch_values_subset(shared_out, shared_group_mask,
-                                            out_values);
-            return true;
-          },
-          [&]() -> bool {
-            Rcpp::stop(
-                "Exact batch invariant failed for event node: "
-                "node_idx=%d event_idx=%d active_points=%d",
-                node_idx, node.event_idx,
-                static_cast<int>(active_point_count));
-            return false;
-          },
-          [&](std::uint64_t active_count, std::uint64_t group_count) {
-            record_unified_outcome_lane_partition(active_count, group_count);
-          },
-          false, uniform_trial_params_soa);
+      return eval_partitioned_node_batch(
+          relevant_source_ids_for_batch_node(ctx, node_idx));
     }
   }
 
-  const std::vector<int> relevant_source_ids =
-      relevant_source_ids_for_batch_node(ctx, node_idx);
-  exact_init_batch_values(points.size(), out_values);
-  return eval_vector_lanes_with_shared_node_state(
-      ctx, points, active_mask, relevant_source_ids, component_idx,
-      trial_params, trial_type_key,
-      [&](NodeEvalState &shared_state,
-          const std::vector<std::uint8_t> *shared_group_mask) -> bool {
-        uuber::TreeNodeBatchValues shared_out;
-        if (!evaluator_eval_node_batch_with_state_dense(
-                node_idx, times, shared_state, need, shared_out)) {
-          return false;
-        }
-        exact_merge_batch_values_subset(shared_out, shared_group_mask,
-                                        out_values);
-        return true;
-      },
-      [&]() -> bool {
-        const uuber::IrNode &node = ir_node_required(ctx, node_idx);
-        Rcpp::stop(
-            "Exact batch invariant failed for generic node: "
-            "node_idx=%d op=%d event_idx=%d active_points=%d",
-            node_idx, static_cast<int>(node.op), node.event_idx,
-            static_cast<int>(active_point_count));
-        return false;
-      },
-      [&](std::uint64_t active_count, std::uint64_t group_count) {
-        record_unified_outcome_lane_partition(active_count, group_count);
-      },
-      false, uniform_trial_params_soa);
+  return eval_partitioned_node_batch(
+      relevant_source_ids_for_batch_node(ctx, node_idx));
 }
 
 bool exact_eval_node_batch_with_points(
@@ -1138,6 +1239,50 @@ bool exact_eval_node_batch_with_points(
                                       trial_params, trial_type_key, need,
                                       out_values, active_mask,
                                       uniform_trial_params_soa);
+}
+
+bool exact_eval_node_batch_with_points(
+    const uuber::NativeContext &ctx, int node_idx,
+    const uuber::ExactScenarioLaneViewBatch &points, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    EvalNeed need, uuber::TreeNodeBatchValues &out_values,
+    const std::vector<std::uint8_t> *active_mask,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa) {
+  return exact_eval_node_batch_common(ctx, node_idx, points, component_idx,
+                                      trial_params, trial_type_key, need,
+                                      out_values, active_mask,
+                                      uniform_trial_params_soa);
+}
+
+ExactBatchPlanner::ExactBatchPlanner(const uuber::NativeContext &ctx_)
+    : ctx(ctx_), plans(ctx_.ir.nodes.size()) {}
+
+const RankedNodeBatchPlan &ExactBatchPlanner::plan_for_node(int node_idx) {
+  static const RankedNodeBatchPlan kInvalidPlan;
+  if (node_idx < 0 || node_idx >= static_cast<int>(plans.size())) {
+    return kInvalidPlan;
+  }
+  RankedNodeBatchPlan &plan = plans[static_cast<std::size_t>(node_idx)];
+  if (!plan.compiled) {
+    compile_node(node_idx);
+  }
+  return plan;
+}
+
+void ExactBatchPlanner::compile_node(int node_idx) {
+  RankedNodeBatchPlan &plan = plans[static_cast<std::size_t>(node_idx)];
+  if (plan.compiled || plan.compiling) {
+    return;
+  }
+  plan.compiling = true;
+  compile_ranked_node_batch_plan(
+      ctx, node_idx,
+      [this](int child_node_idx) -> const RankedNodeBatchPlan & {
+        return plan_for_node(child_node_idx);
+      },
+      plan);
+  plan.compiled = true;
+  plan.compiling = false;
 }
 
 inline EvalNeed exact_ranked_eval_need(RankedProgramEvalKind kind) {
@@ -1167,327 +1312,158 @@ exact_ranked_eval_factor(RankedProgramEvalKind kind,
   return 0.0;
 }
 
-inline bool
-exact_ranked_batch_plan_supports_deterministic_fastpath(
-    const RankedBatchPlan &plan) {
-  if (!plan.valid || !plan.deterministic || plan.slice.evals.size() != 1u ||
-      plan.slice.evals.front().kind != RankedProgramEvalKind::Density) {
-    return false;
+inline uuber::BitsetState *exact_mutable_forced_survive_bits_for_lane(
+    uuber::ExactScenarioLaneViewBatch &batch, std::size_t idx) {
+  if (idx >= batch.size()) {
+    return nullptr;
   }
-  for (const RankedStateDelta &delta : plan.deltas) {
-    if (delta.kind == RankedStateDeltaKind::OrWitnessSurvive) {
-      return false;
-    }
+  if (batch.mutable_forced_survive_bits.size() < batch.size()) {
+    batch.mutable_forced_survive_bits.resize(batch.size());
   }
-  return true;
-}
-
-inline bool exact_apply_ranked_state_delta_row(ExactScenarioBatch &batch,
-                                               std::size_t idx,
-                                               const RankedStateDelta &delta) {
-  switch (delta.kind) {
-  case RankedStateDeltaKind::CompleteSources:
-    for (int id : delta.source_ids) {
-      if (!time_constraints_mark_complete(id, batch.t[idx],
-                                          delta.bind_exact_current_time,
-                                          batch.time_constraints[idx])) {
-        return false;
-      }
-    }
-    return true;
-  case RankedStateDeltaKind::SurviveSources:
-    for (int id : delta.source_ids) {
-      if (!time_constraints_mark_survive(id, batch.t[idx],
-                                         batch.time_constraints[idx])) {
-        return false;
-      }
-    }
-    return true;
-  case RankedStateDeltaKind::OrWitnessSurvive: {
-    int witness = NA_INTEGER;
-    bool all_forced = true;
-    for (std::size_t src_i = 0; src_i < delta.source_ids.size(); ++src_i) {
-      const int id = delta.source_ids[src_i];
-      if (id == NA_INTEGER || id < 0) {
-        continue;
-      }
-      const int bit_idx =
-          (src_i < delta.source_bits.size()) ? delta.source_bits[src_i] : -1;
-      const bool is_forced =
-          ((idx < batch.forced_complete_bits_valid.size()) &&
-           batch.forced_complete_bits_valid[idx] != 0u && bit_idx >= 0 &&
-           batch.forced_complete_bits[idx].test(bit_idx)) ||
-          time_constraints_contains_complete_at(&batch.time_constraints[idx], id,
-                                               batch.t[idx]);
-      if (!is_forced) {
-        witness = id;
-        all_forced = false;
-        break;
-      }
-    }
-    return !all_forced && witness != NA_INTEGER &&
-           time_constraints_mark_survive(witness, batch.t[idx],
-                                         batch.time_constraints[idx]);
-  }
-  }
-  return false;
-}
-
-bool exact_collect_scenarios_batch_aligned_impl(
-    RankedBatchPlanner &planner, const uuber::NativeContext &ctx, int node_idx,
-    const ExactScenarioBatch &seed_batch, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    ExactScenarioBatch &scenario_batch,
-    const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr) {
-  scenario_batch.clear();
-  if (node_idx >= 0 && node_idx < static_cast<int>(ctx.ir.nodes.size())) {
-    const uuber::IrNode &node =
-        ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
-    if (node.op == uuber::IrNodeOp::Guard) {
-      if (!exact_node_allowed_in_component(ctx, node.reference_idx,
-                                           component_idx)) {
-        return false;
-      }
-      if (!exact_node_allowed_in_component(ctx, node.blocker_idx,
-                                           component_idx)) {
-        return exact_collect_scenarios_batch_aligned_impl(
-            planner, ctx, node.reference_idx, seed_batch, component_idx,
-            trial_params, trial_type_key, scenario_batch,
-            uniform_trial_params_soa);
-      }
-    }
-  }
-  const RankedNodeBatchPlan &plan = planner.plan_for_node(node_idx);
-  if (!plan.valid || plan.batch_plans.empty()) {
-    return false;
-  }
-
-  ExactScenarioBatch aligned_batch;
-  std::vector<std::uint8_t> aligned_active_mask;
-  if (exact_collect_deterministic_scenarios_batch_aligned_impl(
-          planner, ctx, node_idx, seed_batch, component_idx, trial_params,
-          trial_type_key, aligned_batch, aligned_active_mask,
-          uniform_trial_params_soa)) {
-    scenario_batch.reserve(seed_batch.size());
-    for (std::size_t i = 0; i < aligned_batch.size(); ++i) {
-      if (i < aligned_active_mask.size() && aligned_active_mask[i] != 0u &&
-          std::isfinite(aligned_batch.weight[i]) &&
-          aligned_batch.weight[i] > 0.0) {
-        exact_scenario_batch_append_row(scenario_batch, aligned_batch, i,
-                                        aligned_batch.weight[i]);
-      }
-    }
-    return !scenario_batch.empty();
-  }
-
-  scenario_batch.reserve(seed_batch.size() * plan.batch_plans.size());
-  ExactScenarioBatch transition_batch;
-  transition_batch.reserve(seed_batch.size());
-  std::vector<std::uint8_t> active;
-  active.reserve(seed_batch.size());
-  std::vector<double> transition_weights;
-  transition_weights.reserve(seed_batch.size());
-  uuber::TreeNodeBatchValues step_values;
-  for (const RankedBatchPlan &batch_plan : plan.batch_plans) {
-    transition_batch.clear();
-    active.assign(seed_batch.size(), 0u);
-    transition_weights.assign(seed_batch.size(), 0.0);
-    std::size_t active_count = 0u;
-    for (std::size_t i = 0; i < seed_batch.size(); ++i) {
-      const uuber::VectorLaneRef point = uuber::vector_lane_ref(seed_batch, i);
-      const bool is_active = std::isfinite(point.t) && point.t >= 0.0 &&
-                             std::isfinite(point.weight) && point.weight > 0.0;
-      active[i] = is_active ? 1u : 0u;
-      transition_weights[i] = is_active ? point.weight : 0.0;
-      active_count += is_active ? 1u : 0u;
-    }
-    if (active_count == 0u) {
-      continue;
-    }
-
-    bool points_materialized = false;
-    auto materialize_transition_batch = [&]() {
-      if (points_materialized) {
-        return;
-      }
-      transition_batch.reserve(seed_batch.size());
-      for (std::size_t i = 0; i < seed_batch.size(); ++i) {
-        exact_scenario_batch_append_point(transition_batch, seed_batch, i,
-                                          transition_weights[i]);
-      }
-      points_materialized = true;
-    };
-
-    bool transition_valid = true;
-    auto deactivate_point = [&](std::size_t idx) {
-      if (idx < active.size() && active[idx] != 0u) {
-        active[idx] = 0u;
-        if (active_count > 0u) {
-          --active_count;
-        }
-      }
-      if (idx < transition_weights.size()) {
-        transition_weights[idx] = 0.0;
-      }
-      if (points_materialized && idx < transition_batch.weight.size()) {
-        transition_batch.weight[idx] = 0.0;
-      }
-    };
-    for (const RankedProgramEvalRef &eval_ref : batch_plan.slice.evals) {
-      const bool step_ok =
-          points_materialized
-              ? exact_eval_node_batch_with_points(
-                    ctx, eval_ref.node_idx, transition_batch, component_idx,
-                    trial_params, trial_type_key,
-                    exact_ranked_eval_need(eval_ref.kind), step_values, &active,
-                    uniform_trial_params_soa)
-              : exact_eval_node_batch_with_points(
-                    ctx, eval_ref.node_idx, seed_batch, component_idx,
-                    trial_params, trial_type_key,
-                    exact_ranked_eval_need(eval_ref.kind), step_values, &active,
-                    uniform_trial_params_soa);
-      if (!step_ok ||
-          !exact_batch_values_size_matches(step_values, seed_batch.size())) {
-        transition_valid = false;
-        break;
-      }
-      for (std::size_t i = 0; i < seed_batch.size(); ++i) {
-        if (active[i] == 0u) {
-          continue;
-        }
-        const double factor =
-            exact_ranked_eval_factor(eval_ref.kind, step_values, i);
-        if (!std::isfinite(factor) || factor <= 0.0) {
-          deactivate_point(i);
-          continue;
-        }
-        transition_weights[i] *= factor;
-        if (points_materialized && i < transition_batch.weight.size()) {
-          transition_batch.weight[i] = transition_weights[i];
-        }
-        if (!std::isfinite(transition_weights[i]) ||
-            transition_weights[i] <= 0.0) {
-          deactivate_point(i);
-        }
-      }
-    }
-    if (!transition_valid || active_count == 0u) {
-      continue;
-    }
-    for (const RankedStateDelta &delta : batch_plan.deltas) {
-      materialize_transition_batch();
-      for (std::size_t i = 0; i < transition_batch.size(); ++i) {
-        if (active[i] == 0u) {
-          continue;
-        }
-        if (!exact_apply_ranked_state_delta_row(transition_batch, i, delta)) {
-          deactivate_point(i);
-        }
-      }
-      if (active_count == 0u) {
-        transition_valid = false;
-        break;
-      }
-    }
-
-    if (!transition_valid) {
-      continue;
-    }
-    if (points_materialized) {
-      for (std::size_t i = 0; i < transition_batch.size(); ++i) {
-        if (active[i] == 0u || !std::isfinite(transition_weights[i]) ||
-            transition_weights[i] <= 0.0) {
-          continue;
-        }
-        exact_scenario_batch_append_row(scenario_batch, transition_batch, i,
-                                        transition_weights[i]);
-      }
+  uuber::BitsetState *mutable_bits = &batch.mutable_forced_survive_bits[idx];
+  if (idx < batch.forced_survive_bits.size() &&
+      batch.forced_survive_bits[idx] != mutable_bits) {
+    if (batch.forced_survive_bits[idx] != nullptr) {
+      *mutable_bits = *batch.forced_survive_bits[idx];
     } else {
-      for (std::size_t i = 0; i < seed_batch.size(); ++i) {
-        if (active[i] == 0u || !std::isfinite(transition_weights[i]) ||
-            transition_weights[i] <= 0.0) {
-          continue;
-        }
-        exact_scenario_batch_append_point(scenario_batch, seed_batch, i,
-                                          transition_weights[i]);
-      }
+      mutable_bits->clear_all();
     }
+    batch.forced_survive_bits[idx] = mutable_bits;
   }
-
-  return !scenario_batch.empty();
+  return mutable_bits;
 }
 
-bool exact_collect_deterministic_scenarios_batch_aligned_impl(
-    RankedBatchPlanner &planner, const uuber::NativeContext &ctx,
-    int node_idx, const ExactScenarioBatch &seed_batch,
-    int component_idx, const TrialParamSet *trial_params,
-    const std::string &trial_type_key,
-    ExactScenarioBatch &aligned_batch,
-    std::vector<std::uint8_t> &active_mask,
-    const uuber::TrialParamsSoA *uniform_trial_params_soa) {
-  aligned_batch.clear();
-  active_mask.clear();
-  const RankedNodeBatchPlan &plan = planner.plan_for_node(node_idx);
-  if (!plan.valid || plan.batch_plans.size() != 1u) {
-    return false;
+inline TimeConstraintMap *
+exact_mutable_time_constraints_for_lane(uuber::ExactScenarioLaneViewBatch &batch,
+                                        std::size_t idx) {
+  if (idx >= batch.size()) {
+    return nullptr;
   }
-
-  const RankedBatchPlan &batch_plan = plan.batch_plans.front();
-  if (!exact_ranked_batch_plan_supports_deterministic_fastpath(batch_plan)) {
-    return false;
+  if (batch.mutable_time_constraints.size() < batch.size()) {
+    batch.mutable_time_constraints.resize(batch.size());
   }
-  const RankedProgramEvalRef &density_eval = batch_plan.slice.evals.front();
-
-  uuber::TreeNodeBatchValues step_values;
-  if (!exact_eval_node_batch_with_points(
-          ctx, density_eval.node_idx, seed_batch, component_idx,
-          trial_params, trial_type_key, EvalNeed::kDensity, step_values, nullptr,
-          uniform_trial_params_soa) ||
-      step_values.density.size() != seed_batch.size()) {
-    return false;
-  }
-
-  aligned_batch = seed_batch;
-  active_mask.assign(seed_batch.size(), 0u);
-  for (std::size_t i = 0; i < seed_batch.size(); ++i) {
-    const uuber::VectorLaneRef seed_point =
-        uuber::vector_lane_ref(seed_batch, i);
-    if (!(std::isfinite(seed_point.t) && seed_point.t >= 0.0 &&
-          std::isfinite(seed_point.weight) && seed_point.weight > 0.0)) {
-      continue;
-    }
-    const double factor = safe_density(step_values.density[i]);
-    if (!std::isfinite(factor) || factor <= 0.0) {
-      aligned_batch.weight[i] = 0.0;
-      continue;
-    }
-    aligned_batch.weight[i] *= factor;
-    if (!std::isfinite(aligned_batch.weight[i]) ||
-        aligned_batch.weight[i] <= 0.0) {
-      aligned_batch.weight[i] = 0.0;
-      continue;
-    }
-    bool valid = true;
-    for (const RankedStateDelta &delta : batch_plan.deltas) {
-      if (!exact_apply_ranked_state_delta_row(aligned_batch, i, delta)) {
-        valid = false;
-        break;
-      }
-    }
-    if (valid) {
-      active_mask[i] = 1u;
+  TimeConstraintMap *mutable_constraints =
+      &batch.mutable_time_constraints[idx];
+  if (idx < batch.time_constraints.size() &&
+      batch.time_constraints[idx] != mutable_constraints) {
+    if (batch.time_constraints[idx] != nullptr) {
+      *mutable_constraints = *batch.time_constraints[idx];
     } else {
-      aligned_batch.weight[i] = 0.0;
+      mutable_constraints->clear();
     }
+    batch.time_constraints[idx] = mutable_constraints;
   }
-  return true;
+  return mutable_constraints;
 }
 
-bool exact_collect_scenarios_batch_impl(
-    RankedBatchPlanner &planner, const uuber::NativeContext &ctx,
-    int node_idx, const std::vector<double> &times, NodeEvalState &state,
-    ExactScenarioBatch &scenario_points) {
-  ExactScenarioBatch seed_batch;
+inline bool exact_apply_ranked_state_delta_row(
+    uuber::ExactScenarioLaneViewBatch &batch, std::size_t idx,
+    const RankedStateDelta &delta) {
+  uuber::BitsetState *forced_survive_bits =
+      exact_mutable_forced_survive_bits_for_lane(batch, idx);
+  TimeConstraintMap *time_constraints =
+      exact_mutable_time_constraints_for_lane(batch, idx);
+  if (forced_survive_bits == nullptr || time_constraints == nullptr) {
+    return false;
+  }
+  bool forced_survive_bits_valid =
+      idx < batch.forced_survive_bits_valid.size() &&
+      batch.forced_survive_bits_valid[idx] != 0u;
+  const bool applied = apply_ranked_state_delta_raw(
+      batch.t[idx], delta, *batch.forced_complete_bits[idx],
+      idx < batch.forced_complete_bits_valid.size() &&
+          batch.forced_complete_bits_valid[idx] != 0u,
+      *forced_survive_bits, forced_survive_bits_valid,
+      *time_constraints);
+  if (idx < batch.forced_survive_bits_valid.size()) {
+    batch.forced_survive_bits_valid[idx] =
+        forced_survive_bits_valid ? 1u : 0u;
+  }
+  return applied;
+}
+
+struct ExactScenarioCollapseKey {
+  std::size_t density_index{0u};
+  std::uint64_t time_bits{0u};
+  const uuber::TrialParamsSoA *trial_params_soa{nullptr};
+  SequenceStateKey state_key{};
+
+  bool operator==(const ExactScenarioCollapseKey &other) const noexcept {
+    return density_index == other.density_index &&
+           time_bits == other.time_bits &&
+           trial_params_soa == other.trial_params_soa &&
+           state_key == other.state_key;
+  }
+};
+
+struct ExactScenarioCollapseKeyHash {
+  std::size_t operator()(const ExactScenarioCollapseKey &key) const noexcept {
+    std::size_t seed = std::hash<std::size_t>{}(key.density_index);
+    auto combine = [](std::size_t &seed_ref, std::size_t value) {
+      seed_ref ^= value + 0x9e3779b97f4a7c15ULL + (seed_ref << 6) +
+                  (seed_ref >> 2);
+    };
+    combine(seed, static_cast<std::size_t>(key.time_bits));
+    combine(seed, std::hash<const uuber::TrialParamsSoA *>{}(key.trial_params_soa));
+    combine(seed, SequenceStateKeyHash{}(key.state_key));
+    return seed;
+  }
+};
+
+inline ExactScenarioCollapseKey
+exact_make_scenario_collapse_key(const uuber::VectorLaneRef &point) {
+  ExactScenarioCollapseKey key;
+  key.density_index = point.density_index;
+  key.time_bits = canonical_double_bits(point.t);
+  key.trial_params_soa = point.trial_params_soa;
+  key.state_key = sequence_state_key(point.forced_complete_bits,
+                                     point.forced_complete_bits_valid,
+                                     point.forced_survive_bits,
+                                     point.forced_survive_bits_valid,
+                                     point.time_constraints);
+  return key;
+}
+
+inline void exact_collapse_active_scenario_lane_view(
+    uuber::ExactScenarioLaneViewBatch &points, std::vector<std::uint8_t> &active,
+    std::vector<double> &weights) {
+  if (points.size() < 2u || active.size() != points.size() ||
+      weights.size() != points.size()) {
+    return;
+  }
+  std::unordered_map<ExactScenarioCollapseKey, std::size_t,
+                     ExactScenarioCollapseKeyHash>
+      first_index_by_key;
+  first_index_by_key.reserve(points.size());
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    if (active[i] == 0u || !std::isfinite(weights[i]) || weights[i] <= 0.0) {
+      continue;
+    }
+    const ExactScenarioCollapseKey key =
+        exact_make_scenario_collapse_key(uuber::vector_lane_ref(points, i));
+    const auto it = first_index_by_key.find(key);
+    if (it == first_index_by_key.end()) {
+      first_index_by_key.emplace(key, i);
+      continue;
+    }
+    const std::size_t dst_idx = it->second;
+    weights[dst_idx] += weights[i];
+    if (dst_idx < points.weight.size()) {
+      points.weight[dst_idx] = weights[dst_idx];
+    }
+    weights[i] = 0.0;
+    if (i < points.weight.size()) {
+      points.weight[i] = 0.0;
+    }
+    active[i] = 0u;
+  }
+}
+
+inline void exact_build_seed_batch_from_state(
+    const std::vector<double> &times, const NodeEvalState &state,
+    ExactScenarioBatch &seed_batch,
+    const uuber::TrialParamsSoA *&uniform_trial_params_soa) {
+  seed_batch.clear();
   seed_batch.reserve(times.size());
   for (std::size_t i = 0; i < times.size(); ++i) {
     seed_batch.t.push_back(times[i]);
@@ -1509,30 +1485,287 @@ bool exact_collect_scenarios_batch_impl(
         state.forced_survive_bits_valid ? 1u : 0u);
     seed_batch.time_constraints.push_back(state.time_constraints);
   }
-  const uuber::TrialParamsSoA *uniform_trial_params_soa =
-      state.trial_params_soa_batch == nullptr ? state.trial_params_soa
-                                              : nullptr;
-  return exact_collect_scenarios_batch_aligned_impl(
-      planner, ctx, node_idx, seed_batch, state.component_idx,
-      state.trial_params, state.trial_type_key, scenario_points,
-      uniform_trial_params_soa);
+  uniform_trial_params_soa =
+      state.trial_params_soa_batch == nullptr ? state.trial_params_soa : nullptr;
+}
+
+inline std::size_t exact_initialize_seed_transition_state(
+    const ExactScenarioBatch &seed_batch, std::vector<std::uint8_t> &active,
+    std::vector<double> &transition_weights) {
+  active.assign(seed_batch.size(), 0u);
+  transition_weights.assign(seed_batch.size(), 0.0);
+  std::size_t active_count = 0u;
+  for (std::size_t i = 0; i < seed_batch.size(); ++i) {
+    const uuber::VectorLaneRef point = uuber::vector_lane_ref(seed_batch, i);
+    const bool is_active = std::isfinite(point.t) && point.t >= 0.0 &&
+                           std::isfinite(point.weight) && point.weight > 0.0;
+    active[i] = is_active ? 1u : 0u;
+    transition_weights[i] = is_active ? point.weight : 0.0;
+    active_count += is_active ? 1u : 0u;
+  }
+  return active_count;
+}
+
+template <typename PointVec>
+bool exact_eval_ranked_batch_plan_slice_fused(
+    const uuber::NativeContext &ctx, const RankedProgramSliceRef &slice,
+    const PointVec &points, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    const std::vector<std::uint8_t> &active,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa,
+    std::vector<uuber::TreeNodeBatchValues> &step_values_out) {
+  step_values_out.clear();
+  if (slice.evals.empty()) {
+    return true;
+  }
+
+  if (slice.evals.size() == 1u) {
+    step_values_out.resize(1u);
+    return exact_eval_node_batch_with_points(
+               ctx, slice.evals.front().node_idx, points, component_idx,
+               trial_params, trial_type_key,
+               exact_ranked_eval_need(slice.evals.front().kind),
+               step_values_out.front(), &active, uniform_trial_params_soa) &&
+           exact_batch_values_size_matches(step_values_out.front(), points.size());
+  }
+
+  std::vector<int> slice_node_indices;
+  slice_node_indices.reserve(slice.evals.size());
+  for (const RankedProgramEvalRef &eval_ref : slice.evals) {
+    slice_node_indices.push_back(eval_ref.node_idx);
+  }
+
+  step_values_out.resize(slice.evals.size());
+  for (uuber::TreeNodeBatchValues &values : step_values_out) {
+    exact_init_batch_values(points.size(), values);
+  }
+
+  std::vector<std::size_t> subset_indices;
+  std::vector<double> subset_times;
+  std::vector<const uuber::TrialParamsSoA *> subset_trial_params_soa;
+
+  return eval_vector_lanes_with_shared_node_state(
+      ctx, points, &active, slice.relevant_source_ids, component_idx,
+      trial_params, trial_type_key,
+      [&](NodeEvalState &shared_state,
+          const std::vector<std::uint8_t> *shared_group_mask) -> bool {
+        return exact_with_shared_state_compact_subset(
+            shared_state, points, shared_group_mask, subset_indices,
+            subset_times, subset_trial_params_soa,
+            [&](const std::vector<double> &group_times) -> bool {
+              if (group_times.empty()) {
+                return true;
+              }
+              std::vector<uuber::TreeNodeBatchValues> shared_values;
+              if (!evaluator_eval_nodes_batch_with_state_dense(
+                      slice_node_indices, group_times, shared_state,
+                      shared_values) ||
+                  shared_values.size() != slice.evals.size()) {
+                return false;
+              }
+              for (std::size_t eval_idx = 0; eval_idx < shared_values.size();
+                   ++eval_idx) {
+                if (!exact_merge_batch_values_indices(
+                        shared_values[eval_idx], subset_indices,
+                        step_values_out[eval_idx])) {
+                  return false;
+                }
+              }
+              return true;
+            });
+      },
+      [&]() -> bool {
+        step_values_out.clear();
+        step_values_out.reserve(slice.evals.size());
+        for (const RankedProgramEvalRef &eval_ref : slice.evals) {
+          uuber::TreeNodeBatchValues step_values;
+          if (!exact_eval_node_batch_with_points(
+                  ctx, eval_ref.node_idx, points, component_idx, trial_params,
+                  trial_type_key, exact_ranked_eval_need(eval_ref.kind),
+                  step_values, &active, uniform_trial_params_soa) ||
+              !exact_batch_values_size_matches(step_values, points.size())) {
+            return false;
+          }
+          step_values_out.push_back(std::move(step_values));
+        }
+        return true;
+      },
+      [&](std::uint64_t active_count, std::uint64_t group_count) {
+        record_unified_outcome_lane_partition(active_count, group_count);
+      },
+      false, uniform_trial_params_soa);
+}
+
+template <typename Planner, typename ProcessBatchFn>
+bool exact_collect_scenarios_batch_process_impl(
+    Planner &planner, const uuber::NativeContext &ctx, int node_idx,
+    const ExactScenarioBatch &seed_batch, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    ProcessBatchFn &&process_batch,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa) {
+  if (node_idx >= 0 && node_idx < static_cast<int>(ctx.ir.nodes.size())) {
+    const uuber::IrNode &node =
+        ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
+    if (node.op == uuber::IrNodeOp::Guard) {
+      if (!exact_node_allowed_in_component(ctx, node.reference_idx,
+                                           component_idx)) {
+        return false;
+      }
+      if (!exact_node_allowed_in_component(ctx, node.blocker_idx,
+                                           component_idx)) {
+        return exact_collect_scenarios_batch_process_impl(
+            planner, ctx, node.reference_idx, seed_batch, component_idx,
+            trial_params, trial_type_key, process_batch,
+            uniform_trial_params_soa);
+      }
+    }
+  }
+  const RankedNodeBatchPlan &plan = planner.plan_for_node(node_idx);
+  if (!plan.valid || plan.batch_plans.empty()) {
+    return false;
+  }
+
+  uuber::ExactScenarioLaneViewBatch transition_batch;
+  transition_batch.reserve(seed_batch.size());
+  std::vector<std::uint8_t> seed_active;
+  seed_active.reserve(seed_batch.size());
+  std::vector<double> seed_transition_weights;
+  seed_transition_weights.reserve(seed_batch.size());
+  const std::size_t seed_active_count = exact_initialize_seed_transition_state(
+      seed_batch, seed_active, seed_transition_weights);
+  if (seed_active_count == 0u) {
+    return false;
+  }
+  std::vector<std::uint8_t> active;
+  std::vector<double> transition_weights;
+  std::vector<uuber::TreeNodeBatchValues> step_values_by_eval;
+  bool emitted_any = false;
+  for (std::size_t plan_idx = 0; plan_idx < plan.batch_plans.size(); ++plan_idx) {
+    const RankedBatchPlan &batch_plan = plan.batch_plans[plan_idx];
+    transition_batch.clear();
+    active = seed_active;
+    transition_weights = seed_transition_weights;
+    std::size_t active_count = seed_active_count;
+
+    bool points_materialized = false;
+    auto materialize_transition_batch = [&]() {
+      if (points_materialized) {
+        return;
+      }
+      transition_batch.reserve(seed_batch.size());
+      for (std::size_t i = 0; i < seed_batch.size(); ++i) {
+        exact_scenario_view_batch_append_lane(
+            transition_batch, uuber::vector_lane_ref(seed_batch, i),
+            transition_weights[i]);
+      }
+      points_materialized = true;
+    };
+
+    bool transition_valid = true;
+    auto deactivate_point = [&](std::size_t idx) {
+      if (idx < active.size() && active[idx] != 0u) {
+        active[idx] = 0u;
+        if (active_count > 0u) {
+          --active_count;
+        }
+      }
+      if (idx < transition_weights.size()) {
+        transition_weights[idx] = 0.0;
+      }
+      if (points_materialized && idx < transition_batch.weight.size()) {
+        transition_batch.weight[idx] = 0.0;
+      }
+    };
+    const bool eval_ok = exact_eval_ranked_batch_plan_slice_fused(
+        ctx, batch_plan.slice, seed_batch, component_idx, trial_params,
+        trial_type_key, active, uniform_trial_params_soa, step_values_by_eval);
+    if (!eval_ok || step_values_by_eval.size() != batch_plan.slice.evals.size()) {
+      continue;
+    }
+    for (std::size_t eval_idx = 0; eval_idx < batch_plan.slice.evals.size();
+         ++eval_idx) {
+      const RankedProgramEvalRef &eval_ref = batch_plan.slice.evals[eval_idx];
+      const uuber::TreeNodeBatchValues &step_values =
+          step_values_by_eval[eval_idx];
+      if (!exact_batch_values_size_matches(step_values, seed_batch.size())) {
+        transition_valid = false;
+        break;
+      }
+      for (std::size_t i = 0; i < seed_batch.size(); ++i) {
+        if (active[i] == 0u) {
+          continue;
+        }
+        const double factor =
+            exact_ranked_eval_factor(eval_ref.kind, step_values, i);
+        if (!std::isfinite(factor) || factor <= 0.0) {
+          deactivate_point(i);
+          continue;
+        }
+        transition_weights[i] *= factor;
+        if (!std::isfinite(transition_weights[i]) ||
+            transition_weights[i] <= 0.0) {
+          deactivate_point(i);
+        }
+      }
+    }
+    if (!transition_valid || active_count == 0u) {
+      continue;
+    }
+    if (!batch_plan.deltas.empty()) {
+      materialize_transition_batch();
+      for (const RankedStateDelta &delta : batch_plan.deltas) {
+        for (std::size_t i = 0; i < transition_batch.size(); ++i) {
+          if (active[i] == 0u) {
+            continue;
+          }
+          if (!exact_apply_ranked_state_delta_row(transition_batch, i, delta)) {
+            deactivate_point(i);
+          }
+        }
+        if (active_count == 0u) {
+          transition_valid = false;
+          break;
+        }
+      }
+      if (!transition_valid) {
+        continue;
+      }
+      exact_collapse_active_scenario_lane_view(transition_batch, active,
+                                               transition_weights);
+    }
+    if (points_materialized) {
+      if (!std::forward<ProcessBatchFn>(process_batch)(transition_batch, &active,
+                                                       transition_weights)) {
+        return false;
+      }
+      emitted_any = true;
+    } else {
+      if (!std::forward<ProcessBatchFn>(process_batch)(seed_batch, &active,
+                                                       transition_weights)) {
+        return false;
+      }
+      emitted_any = true;
+    }
+  }
+
+  return emitted_any;
 }
 
 inline std::unordered_map<std::uint64_t,
-                          std::unique_ptr<RankedBatchPlanner>> &
+                          std::unique_ptr<ExactBatchPlanner>> &
 exact_scenario_planner_cache_registry() {
   thread_local std::unordered_map<std::uint64_t,
-                                  std::unique_ptr<RankedBatchPlanner>>
+                                  std::unique_ptr<ExactBatchPlanner>>
       cache;
   return cache;
 }
 
-RankedBatchPlanner &exact_scenario_planner_for_ctx(
+ExactBatchPlanner &exact_scenario_planner_for_ctx(
     const uuber::NativeContext &ctx) {
-  std::unique_ptr<RankedBatchPlanner> &entry =
+  std::unique_ptr<ExactBatchPlanner> &entry =
       exact_scenario_planner_cache_registry()[ctx.runtime_cache_instance_id];
   if (!entry) {
-    entry = std::make_unique<RankedBatchPlanner>(ctx);
+    entry = std::make_unique<ExactBatchPlanner>(ctx);
   }
   return *entry;
 }
@@ -1589,6 +1822,400 @@ inline void exact_competitor_batch_require(bool condition, const char *reason,
 }
 
 template <typename PointVec>
+inline void exact_competitor_init_active_mask(const PointVec &points,
+                                              std::vector<std::uint8_t> &active) {
+  active.assign(points.size(), 0u);
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    active[i] = (std::isfinite(points.t[i]) && points.t[i] >= 0.0) ? 1u : 0u;
+  }
+}
+
+inline void exact_prepare_mutable_competitor_points(
+    const ExactScenarioBatch &points, ExactScenarioBatch &mutable_points) {
+  mutable_points = points;
+}
+
+inline void exact_prepare_mutable_competitor_points(
+    const uuber::ExactScenarioLaneViewBatch &points,
+    uuber::ExactScenarioLaneViewBatch &mutable_points) {
+  mutable_points = points;
+  mutable_points.mutable_forced_survive_bits.clear();
+  mutable_points.mutable_forced_survive_bits.reserve(points.size());
+  mutable_points.forced_survive_bits.clear();
+  mutable_points.forced_survive_bits.reserve(points.size());
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    if (i < points.forced_survive_bits.size() &&
+        points.forced_survive_bits[i] != nullptr) {
+      mutable_points.mutable_forced_survive_bits.push_back(
+          *points.forced_survive_bits[i]);
+    } else {
+      mutable_points.mutable_forced_survive_bits.emplace_back();
+    }
+    mutable_points.forced_survive_bits.push_back(
+        &mutable_points.mutable_forced_survive_bits.back());
+  }
+}
+
+template <typename PointVec>
+inline const uuber::TrialParamsSoA *exact_resolve_competitor_point_soa(
+    const uuber::NativeContext &ctx, const PointVec &points, std::size_t idx,
+    const TrialParamSet *trial_params,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa) {
+  return uuber::resolve_vector_lane_trial_params_soa(
+      ctx, uuber::vector_lane_ref(points, idx), trial_params,
+      uniform_trial_params_soa);
+}
+
+struct ExactTimeTrialParamsSoAKey {
+  std::uint64_t time_bits{0u};
+  const uuber::TrialParamsSoA *trial_params_soa{nullptr};
+
+  bool operator==(const ExactTimeTrialParamsSoAKey &other) const noexcept {
+    return time_bits == other.time_bits &&
+           trial_params_soa == other.trial_params_soa;
+  }
+};
+
+struct ExactTimeTrialParamsSoAKeyHash {
+  std::size_t operator()(const ExactTimeTrialParamsSoAKey &key) const noexcept {
+    std::uint64_t hash = kFNV64Offset;
+    hash_append_u64(hash, key.time_bits);
+    hash_append_u64(
+        hash, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
+                  key.trial_params_soa)));
+    return static_cast<std::size_t>(mix_hash64(hash));
+  }
+};
+
+template <typename PointVec>
+bool exact_eval_node_survival_batch_compressed(
+    const uuber::NativeContext &ctx, int node_idx, const PointVec &points,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, const std::vector<std::uint8_t> &active,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa,
+    uuber::TreeNodeBatchValues &node_values) {
+  const std::size_t point_count = points.size();
+  const std::size_t active_count =
+      uuber::count_active_vector_lanes(&active, point_count);
+  if (active_count == 0u || active_count < 8u) {
+    return exact_eval_node_batch_with_points(
+        ctx, node_idx, points, component_idx, trial_params, trial_type_key,
+        EvalNeed::kSurvival, node_values, &active, uniform_trial_params_soa);
+  }
+
+  const std::vector<int> relevant_source_ids =
+      relevant_source_ids_for_batch_node(ctx, node_idx);
+  std::size_t anchor_idx = point_count;
+  if (!uuber::vector_lanes_share_relevant_state(points, &active,
+                                                relevant_source_ids, ctx,
+                                                anchor_idx)) {
+    return exact_eval_node_batch_with_points(
+        ctx, node_idx, points, component_idx, trial_params, trial_type_key,
+        EvalNeed::kSurvival, node_values, &active, uniform_trial_params_soa);
+  }
+
+  std::unordered_map<ExactTimeTrialParamsSoAKey, std::size_t,
+                     ExactTimeTrialParamsSoAKeyHash>
+      index_by_key;
+  index_by_key.reserve(active_count);
+  std::vector<std::size_t> inverse_indices(point_count,
+                                           std::numeric_limits<std::size_t>::max());
+  uuber::ExactScenarioLaneViewBatch unique_points;
+  unique_points.reserve(active_count);
+  bool any_duplicate = false;
+
+  for (std::size_t i = 0; i < point_count; ++i) {
+    if (!uuber::vector_lane_active(&active, i)) {
+      continue;
+    }
+    const uuber::TrialParamsSoA *point_soa =
+        exact_resolve_competitor_point_soa(ctx, points, i, trial_params,
+                                           uniform_trial_params_soa);
+    if (point_soa == nullptr) {
+      return false;
+    }
+    const ExactTimeTrialParamsSoAKey key{canonical_double_bits(points.t[i]),
+                                         point_soa};
+    auto it = index_by_key.find(key);
+    if (it != index_by_key.end()) {
+      inverse_indices[i] = it->second;
+      any_duplicate = true;
+      continue;
+    }
+    const std::size_t unique_idx = unique_points.size();
+    inverse_indices[i] = unique_idx;
+    index_by_key.emplace(key, unique_idx);
+    exact_scenario_view_batch_append_lane(unique_points,
+                                          uuber::vector_lane_ref(points, i),
+                                          uuber::vector_lane_ref(points, i).weight,
+                                          point_soa);
+  }
+
+  if (!any_duplicate || unique_points.size() >= active_count) {
+    return exact_eval_node_batch_with_points(
+        ctx, node_idx, points, component_idx, trial_params, trial_type_key,
+        EvalNeed::kSurvival, node_values, &active, uniform_trial_params_soa);
+  }
+
+  uuber::TreeNodeBatchValues unique_values;
+  if (!exact_eval_node_batch_with_points(ctx, node_idx, unique_points,
+                                         component_idx, trial_params,
+                                         trial_type_key, EvalNeed::kSurvival,
+                                         unique_values, nullptr, nullptr) ||
+      unique_values.survival.size() != unique_points.size()) {
+    return false;
+  }
+
+  node_values = uuber::TreeNodeBatchValues{};
+  node_values.density.assign(point_count, 0.0);
+  node_values.survival.assign(point_count, 1.0);
+  node_values.cdf.assign(point_count, 0.0);
+  for (std::size_t i = 0; i < point_count; ++i) {
+    if (!uuber::vector_lane_active(&active, i)) {
+      continue;
+    }
+    const std::size_t unique_idx = inverse_indices[i];
+    if (unique_idx >= unique_values.survival.size()) {
+      return false;
+    }
+    node_values.survival[i] = unique_values.survival[unique_idx];
+  }
+  return true;
+}
+
+template <typename PointVec>
+bool exact_eval_guard_survival_batch_direct(
+    const uuber::NativeContext &ctx, int node_idx, const PointVec &points,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, const std::vector<std::uint8_t> &active,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa,
+    uuber::TreeNodeBatchValues &node_values) {
+  if (node_idx < 0 || node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+    return false;
+  }
+  const uuber::IrNode &node = ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
+  if (node.op != uuber::IrNodeOp::Guard) {
+    return false;
+  }
+
+  ExactNodeBatchDepthGuard depth_guard;
+  const std::size_t active_point_count =
+      uuber::count_active_vector_lanes(&active, points.size());
+  record_unified_outcome_node_batch_call(
+      static_cast<std::uint64_t>(active_point_count),
+      depth_guard.recursive_call());
+
+  exact_init_batch_values(points.size(), node_values);
+  if (active_point_count == 0u) {
+    return true;
+  }
+
+  const std::vector<int> relevant_source_ids =
+      relevant_source_ids_for_batch_node(ctx, node_idx);
+  return uuber::eval_vector_lanes_with_shared_state(
+      ctx, points, &active, relevant_source_ids,
+      [&](std::size_t /*group_anchor_idx*/,
+          const uuber::VectorRelevantStateStorage &group_storage,
+          const std::vector<std::uint8_t> *group_mask) -> bool {
+        std::vector<const uuber::TrialParamsSoA *> subgroup_params;
+        std::vector<std::vector<std::size_t>> subgroup_indices;
+        subgroup_params.reserve(active_point_count);
+        subgroup_indices.reserve(active_point_count);
+
+        for (std::size_t i = 0; i < points.size(); ++i) {
+          if (!uuber::vector_lane_active(group_mask, i)) {
+            continue;
+          }
+          const uuber::TrialParamsSoA *point_soa =
+              uniform_trial_params_soa != nullptr
+                  ? uniform_trial_params_soa
+                  : exact_resolve_competitor_point_soa(
+                        ctx, points, i, trial_params, uniform_trial_params_soa);
+          if (point_soa == nullptr) {
+            return false;
+          }
+          std::size_t subgroup_idx = subgroup_params.size();
+          for (std::size_t j = 0; j < subgroup_params.size(); ++j) {
+            if (subgroup_params[j] == point_soa) {
+              subgroup_idx = j;
+              break;
+            }
+          }
+          if (subgroup_idx == subgroup_params.size()) {
+            subgroup_params.push_back(point_soa);
+            subgroup_indices.emplace_back();
+          }
+          subgroup_indices[subgroup_idx].push_back(i);
+        }
+
+        const bool forced_complete_bits_valid =
+            group_storage.forced_complete_bits_valid;
+        const bool forced_survive_bits_valid =
+            group_storage.forced_survive_bits_valid;
+        const ForcedStateView forced_state = make_forced_state_view(
+            nullptr,
+            forced_complete_bits_valid ? &group_storage.forced_complete_bits
+                                       : nullptr,
+            &forced_complete_bits_valid,
+            forced_survive_bits_valid ? &group_storage.forced_survive_bits
+                                      : nullptr,
+            &forced_survive_bits_valid,
+            ctx.ir.label_id_to_bit_idx.empty() ? nullptr
+                                               : &ctx.ir.label_id_to_bit_idx);
+
+        for (std::size_t subgroup_idx = 0; subgroup_idx < subgroup_params.size();
+             ++subgroup_idx) {
+          const std::vector<std::size_t> &indices =
+              subgroup_indices[subgroup_idx];
+          if (indices.empty()) {
+            continue;
+          }
+          std::vector<double> subgroup_times(indices.size(), 0.0);
+          for (std::size_t j = 0; j < indices.size(); ++j) {
+            subgroup_times[j] = points.t[indices[j]];
+          }
+          const GuardEvalInput guard_input = make_guard_input_forced_state(
+              ctx, node_idx, component_idx, &trial_type_key, trial_params,
+              subgroup_params[subgroup_idx], &group_storage.time_constraints,
+              forced_state);
+          std::vector<double> subgroup_cdf;
+          if (!evaluator_guard_cdf_batch_prepared(guard_input, subgroup_times,
+                                                  subgroup_cdf) ||
+              subgroup_cdf.size() != indices.size()) {
+            return false;
+          }
+          for (std::size_t j = 0; j < indices.size(); ++j) {
+            const std::size_t point_idx = indices[j];
+            node_values.cdf[point_idx] = clamp_probability(subgroup_cdf[j]);
+            node_values.survival[point_idx] =
+                clamp_probability(1.0 - node_values.cdf[point_idx]);
+          }
+        }
+        return true;
+      },
+      [&]() -> bool {
+        return exact_eval_node_batch_with_points(
+            ctx, node_idx, points, component_idx, trial_params, trial_type_key,
+            EvalNeed::kSurvival, node_values, &active,
+            uniform_trial_params_soa);
+      },
+      [&](std::uint64_t active_count, std::uint64_t group_count) {
+        record_unified_outcome_lane_partition(active_count, group_count);
+      },
+      false);
+}
+
+inline void exact_competitor_copy_survival_values(
+    const std::vector<double> &node_survival, std::vector<double> &survival_out,
+    std::size_t point_count, std::size_t compiled_op_count,
+    const char *reason) {
+  exact_competitor_batch_require(node_survival.size() == survival_out.size(),
+                                 reason, point_count, compiled_op_count);
+  for (std::size_t i = 0; i < survival_out.size(); ++i) {
+    survival_out[i] = clamp_probability(node_survival[i]);
+  }
+}
+
+inline void exact_competitor_apply_survival_values(
+    const std::vector<double> &node_survival, std::vector<std::uint8_t> &active,
+    std::vector<double> &survival_out, std::size_t point_count,
+    std::size_t compiled_op_count, const char *reason) {
+  exact_competitor_batch_require(node_survival.size() == survival_out.size(),
+                                 reason, point_count, compiled_op_count);
+  for (std::size_t i = 0; i < survival_out.size(); ++i) {
+    if (active[i] == 0u) {
+      continue;
+    }
+    const double surv = clamp_probability(node_survival[i]);
+    if (!std::isfinite(surv) || surv <= 0.0) {
+      survival_out[i] = 0.0;
+      active[i] = 0u;
+      continue;
+    }
+    survival_out[i] *= surv;
+    if (!std::isfinite(survival_out[i]) || survival_out[i] <= 0.0) {
+      survival_out[i] = 0.0;
+      active[i] = 0u;
+    }
+  }
+}
+
+template <typename PointVec>
+inline void exact_competitor_apply_transition_masks(
+    const uuber::NativeContext &ctx, PointVec *eval_points_ptr,
+    const std::vector<std::uint8_t> &active,
+    const uuber::TreeCompetitorOp &op) {
+  if (eval_points_ptr == nullptr || op.transition_mask_begin < 0 ||
+      op.transition_mask_count <= 0) {
+    return;
+  }
+  for (std::size_t i = 0; i < eval_points_ptr->size(); ++i) {
+    if (active[i] == 0u) {
+      continue;
+    }
+    exact_apply_transition_mask_to_point(ctx, *eval_points_ptr, i, op);
+  }
+}
+
+inline void exact_finalize_density_output(std::vector<double> &density_out) {
+  for (double &value : density_out) {
+    value = safe_density(value);
+  }
+}
+
+template <typename PointVec>
+inline void exact_accumulate_scenario_density_raw(
+    const PointVec &scenario_points, std::vector<double> &density_out,
+    const std::vector<double> *survival_out = nullptr) {
+  for (std::size_t i = 0; i < scenario_points.size(); ++i) {
+    const uuber::VectorLaneRef point = uuber::vector_lane_ref(scenario_points, i);
+    double weight = point.weight;
+    if (survival_out != nullptr) {
+      const double surv = clamp_probability((*survival_out)[i]);
+      if (!std::isfinite(surv) || surv <= 0.0) {
+        continue;
+      }
+      weight *= surv;
+    }
+    if (!std::isfinite(weight) || weight <= 0.0 ||
+        point.density_index >= density_out.size()) {
+      continue;
+    }
+    density_out[point.density_index] += weight;
+  }
+}
+
+template <typename PointVec>
+inline void exact_accumulate_scenario_density(
+    const PointVec &scenario_points, std::vector<double> &density_out,
+    const std::vector<double> *survival_out = nullptr) {
+  exact_accumulate_scenario_density_raw(scenario_points, density_out,
+                                        survival_out);
+  exact_finalize_density_output(density_out);
+}
+
+template <typename PointVec>
+inline void exact_flush_competitor_scenario_chunk(
+    const uuber::NativeContext &ctx,
+    const uuber::CompetitorClusterCacheEntry &competitor_cache,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, PointVec &scenario_chunk,
+    std::vector<double> &density_out,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr) {
+  if (scenario_chunk.empty()) {
+    return;
+  }
+  std::vector<double> survival_out;
+  exact_competitor_survival_batch_impl(ctx, competitor_cache, component_idx,
+                                       trial_params, trial_type_key,
+                                       scenario_chunk, survival_out,
+                                       uniform_trial_params_soa);
+  exact_accumulate_scenario_density_raw(scenario_chunk, density_out,
+                                        &survival_out);
+  scenario_chunk.clear();
+}
+
+template <typename PointVec>
 void exact_competitor_survival_batch_impl(
     const uuber::NativeContext &ctx,
     const uuber::CompetitorClusterCacheEntry &competitor_cache,
@@ -1596,7 +2223,7 @@ void exact_competitor_survival_batch_impl(
     const std::string &trial_type_key,
     const PointVec &points,
     std::vector<double> &survival_out,
-    const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr) {
+    const uuber::TrialParamsSoA *uniform_trial_params_soa) {
   survival_out.assign(points.size(), 1.0);
   if (points.empty() || competitor_cache.compiled_ops.empty()) {
     return;
@@ -1604,131 +2231,73 @@ void exact_competitor_survival_batch_impl(
   PointVec mutable_points;
   PointVec *eval_points_ptr = nullptr;
   if (competitor_cache.mutates_forced_survive) {
-    mutable_points = points;
+    exact_prepare_mutable_competitor_points(points, mutable_points);
     eval_points_ptr = &mutable_points;
   }
-  const PointVec &eval_points =
-      eval_points_ptr ? *eval_points_ptr : points;
-  std::vector<double> times(points.size(), 0.0);
-  for (std::size_t i = 0; i < points.size(); ++i) {
-    times[i] = points.t[i];
-  }
+  const PointVec &eval_points = eval_points_ptr ? *eval_points_ptr : points;
+  std::vector<std::uint8_t> active;
+  exact_competitor_init_active_mask(eval_points, active);
 
   if (exact_competitor_single_node_fastpath_eligible(competitor_cache)) {
     uuber::TreeNodeBatchValues node_values;
     const int node_idx =
         competitor_cache.compiled_ops.front().target_node_indices.front();
     exact_competitor_batch_require(
-        exact_eval_node_batch_with_points(
-            ctx, node_idx, points, component_idx, trial_params, trial_type_key,
-            EvalNeed::kSurvival, node_values, nullptr,
-            uniform_trial_params_soa),
+        ((node_idx >= 0 &&
+          node_idx < static_cast<int>(ctx.ir.nodes.size()) &&
+          ctx.ir.nodes[static_cast<std::size_t>(node_idx)].op ==
+              uuber::IrNodeOp::Guard)
+             ? exact_eval_guard_survival_batch_direct(
+                   ctx, node_idx, eval_points, component_idx, trial_params,
+                   trial_type_key, active, uniform_trial_params_soa,
+                   node_values)
+             : exact_eval_node_survival_batch_compressed(
+                   ctx, node_idx, eval_points, component_idx, trial_params,
+                   trial_type_key, active, uniform_trial_params_soa,
+                   node_values)),
         "single-node exact batch evaluation failed", points.size(),
         competitor_cache.compiled_ops.size());
-    exact_competitor_batch_require(
-        node_values.survival.size() == survival_out.size(),
-        "single-node exact batch size mismatch", points.size(),
-        competitor_cache.compiled_ops.size());
-    for (std::size_t i = 0; i < survival_out.size(); ++i) {
-      survival_out[i] = clamp_probability(node_values.survival[i]);
-    }
+    exact_competitor_copy_survival_values(
+        node_values.survival, survival_out, points.size(),
+        competitor_cache.compiled_ops.size(),
+        "single-node exact batch size mismatch");
     return;
   }
 
   if (exact_competitor_guard_fastpath_eligible(ctx, competitor_cache)) {
-    std::vector<std::uint8_t> active(eval_points.size(), 0u);
-    for (std::size_t i = 0; i < eval_points.size(); ++i) {
-      active[i] = (std::isfinite(eval_points.t[i]) &&
-                   eval_points.t[i] >= 0.0 &&
-                   survival_out[i] > 0.0)
-                      ? 1u
-                      : 0u;
-    }
     uuber::TreeNodeBatchValues guard_values;
     for (const uuber::TreeCompetitorOp &op : competitor_cache.compiled_ops) {
       exact_competitor_batch_require(
-          exact_eval_node_batch_with_points(
+          exact_eval_guard_survival_batch_direct(
               ctx, op.target_node_indices.front(), eval_points, component_idx,
-              trial_params, trial_type_key, EvalNeed::kSurvival, guard_values,
-              &active, uniform_trial_params_soa),
+              trial_params, trial_type_key, active, uniform_trial_params_soa,
+              guard_values),
           "guard competitor exact batch evaluation failed", points.size(),
           competitor_cache.compiled_ops.size());
-      for (std::size_t i = 0; i < survival_out.size(); ++i) {
-        if (active[i] == 0u) {
-          continue;
-        }
-        const double surv = clamp_probability(guard_values.survival[i]);
-        if (!std::isfinite(surv) || surv <= 0.0) {
-          survival_out[i] = 0.0;
-          active[i] = 0u;
-          continue;
-        }
-        survival_out[i] *= surv;
-        if (!std::isfinite(survival_out[i]) || survival_out[i] <= 0.0) {
-          survival_out[i] = 0.0;
-          active[i] = 0u;
-        }
-      }
-      if (op.transition_mask_begin >= 0 && op.transition_mask_count > 0 &&
-          eval_points_ptr != nullptr) {
-        for (std::size_t i = 0; i < eval_points_ptr->size(); ++i) {
-          if (active[i] == 0u) {
-            continue;
-          }
-          exact_apply_transition_mask_to_point(ctx, *eval_points_ptr, i, op);
-        }
-      }
+      exact_competitor_apply_survival_values(
+          guard_values.survival, active, survival_out, points.size(),
+          competitor_cache.compiled_ops.size(),
+          "guard competitor exact batch size mismatch");
+      exact_competitor_apply_transition_masks(ctx, eval_points_ptr, active, op);
     }
     return;
   }
 
-  std::vector<std::uint8_t> active(eval_points.size(), 0u);
-  for (std::size_t i = 0; i < eval_points.size(); ++i) {
-    active[i] = (std::isfinite(eval_points.t[i]) && eval_points.t[i] >= 0.0 &&
-                 survival_out[i] > 0.0)
-                    ? 1u
-                    : 0u;
-  }
   uuber::TreeNodeBatchValues node_values;
   for (const uuber::TreeCompetitorOp &op : competitor_cache.compiled_ops) {
     for (int target_node_idx : op.target_node_indices) {
       exact_competitor_batch_require(
-          exact_eval_node_batch_with_points(
+          exact_eval_node_survival_batch_compressed(
               ctx, target_node_idx, eval_points, component_idx, trial_params,
-              trial_type_key, EvalNeed::kSurvival, node_values, &active,
-              uniform_trial_params_soa),
+              trial_type_key, active, uniform_trial_params_soa, node_values),
           "generic tree vector competitor batch evaluation failed", points.size(),
           competitor_cache.compiled_ops.size());
-      exact_competitor_batch_require(
-          node_values.survival.size() == survival_out.size(),
-          "generic tree vector competitor batch size mismatch", points.size(),
-          competitor_cache.compiled_ops.size());
-      for (std::size_t i = 0; i < survival_out.size(); ++i) {
-        if (active[i] == 0u) {
-          continue;
-        }
-        const double surv = clamp_probability(node_values.survival[i]);
-        if (!std::isfinite(surv) || surv <= 0.0) {
-          survival_out[i] = 0.0;
-          active[i] = 0u;
-          continue;
-        }
-        survival_out[i] *= surv;
-        if (!std::isfinite(survival_out[i]) || survival_out[i] <= 0.0) {
-          survival_out[i] = 0.0;
-          active[i] = 0u;
-        }
-      }
+      exact_competitor_apply_survival_values(
+          node_values.survival, active, survival_out, points.size(),
+          competitor_cache.compiled_ops.size(),
+          "generic tree vector competitor batch size mismatch");
     }
-    if (op.transition_mask_begin >= 0 && op.transition_mask_count > 0 &&
-        eval_points_ptr != nullptr) {
-      for (std::size_t i = 0; i < eval_points_ptr->size(); ++i) {
-        if (active[i] == 0u) {
-          continue;
-        }
-        exact_apply_transition_mask_to_point(ctx, *eval_points_ptr, i, op);
-      }
-    }
+    exact_competitor_apply_transition_masks(ctx, eval_points_ptr, active, op);
   }
 }
 
@@ -1758,26 +2327,30 @@ bool exact_eval_node_batch_from_batch(
                                            uniform_trial_params_soa);
 }
 
-bool exact_collect_scenarios_batch_aligned_from_batch(
-    RankedBatchPlanner &planner, const uuber::NativeContext &ctx,
-    int node_idx, const ExactScenarioBatch &seed_batch, int component_idx,
+bool exact_collect_scenarios_batch_process_from_batch(
+    RankedBatchPlanner &planner, const uuber::NativeContext &ctx, int node_idx,
+    const ExactScenarioBatch &seed_batch, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    ExactScenarioBatch &scenario_batch,
+    const ExactScenarioBatchProcessFn &process_exact_batch,
+    const ExactScenarioProcessFn &process_batch,
     const uuber::TrialParamsSoA *uniform_trial_params_soa) {
-  return exact_collect_scenarios_batch_aligned_impl(
+  if (!process_exact_batch || !process_batch) {
+    return false;
+  }
+  return exact_collect_scenarios_batch_process_impl(
       planner, ctx, node_idx, seed_batch, component_idx, trial_params,
-      trial_type_key, scenario_batch, uniform_trial_params_soa);
-}
-
-bool exact_collect_deterministic_scenarios_batch_aligned_from_batch(
-    RankedBatchPlanner &planner, const uuber::NativeContext &ctx,
-    int node_idx, const ExactScenarioBatch &seed_batch, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    ExactScenarioBatch &aligned_batch, std::vector<std::uint8_t> &active_mask,
-    const uuber::TrialParamsSoA *uniform_trial_params_soa) {
-  return exact_collect_deterministic_scenarios_batch_aligned_impl(
-      planner, ctx, node_idx, seed_batch, component_idx, trial_params,
-      trial_type_key, aligned_batch, active_mask, uniform_trial_params_soa);
+      trial_type_key,
+      [&](const auto &points,
+          const std::vector<std::uint8_t> *active_mask,
+          const std::vector<double> &weights) -> bool {
+        using PointBatch = std::decay_t<decltype(points)>;
+        if constexpr (std::is_same_v<PointBatch, ExactScenarioBatch>) {
+          return process_exact_batch(points, active_mask, weights);
+        } else {
+          return process_batch(points, active_mask, weights);
+        }
+      },
+      uniform_trial_params_soa);
 }
 
 void exact_competitor_survival_batch(
@@ -1785,6 +2358,19 @@ void exact_competitor_survival_batch(
     const uuber::CompetitorClusterCacheEntry &competitor_cache,
     int component_idx, const TrialParamSet *trial_params,
     const std::string &trial_type_key, const ExactScenarioBatch &points,
+    std::vector<double> &survival_out,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa) {
+  exact_competitor_survival_batch_impl(
+      ctx, competitor_cache, component_idx, trial_params, trial_type_key,
+      points, survival_out, uniform_trial_params_soa);
+}
+
+void exact_competitor_survival_batch(
+    const uuber::NativeContext &ctx,
+    const uuber::CompetitorClusterCacheEntry &competitor_cache,
+    int component_idx, const TrialParamSet *trial_params,
+    const std::string &trial_type_key,
+    const uuber::ExactScenarioLaneViewBatch &points,
     std::vector<double> &survival_out,
     const uuber::TrialParamsSoA *uniform_trial_params_soa) {
   exact_competitor_survival_batch_impl(
@@ -1801,56 +2387,82 @@ bool exact_outcome_density_batch_from_state(
   if (times.empty()) {
     return true;
   }
-  RankedBatchPlanner &planner = exact_scenario_planner_for_ctx(ctx);
+  ExactBatchPlanner &planner = exact_scenario_planner_for_ctx(ctx);
   const double saved_t = state.t;
-  ExactScenarioBatch scenario_points;
-  if (!exact_collect_scenarios_batch_impl(planner, ctx, node_idx, times, state,
-                                          scenario_points)) {
+  ExactScenarioBatch seed_batch;
+  const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr;
+  exact_build_seed_batch_from_state(times, state, seed_batch,
+                                    uniform_trial_params_soa);
+
+  if (!competitor_ids.empty()) {
+    const uuber::CompetitorClusterCacheEntry &cache =
+        competitor_cache ? *competitor_cache
+                         : fetch_competitor_cluster_cache(ctx, competitor_ids);
+    constexpr std::size_t kExactCompetitorChunkSize = 512u;
+    uuber::ExactScenarioLaneViewBatch scenario_chunk;
+    scenario_chunk.reserve(std::min<std::size_t>(
+        std::max<std::size_t>(seed_batch.size(), 1u),
+        kExactCompetitorChunkSize));
+    const bool emitted = exact_collect_scenarios_batch_process_impl(
+        planner, ctx, node_idx, seed_batch, state.component_idx,
+        state.trial_params, state.trial_type_key,
+        [&](const auto &points,
+            const std::vector<std::uint8_t> *active_mask,
+            const std::vector<double> &weights) -> bool {
+          scenario_chunk.clear();
+          for (std::size_t i = 0; i < points.size(); ++i) {
+            if (!uuber::vector_lane_active(active_mask, i) ||
+                i >= weights.size() || !std::isfinite(weights[i]) ||
+                weights[i] <= 0.0) {
+              continue;
+            }
+            exact_scenario_view_batch_append_lane(
+                scenario_chunk, uuber::vector_lane_ref(points, i), weights[i]);
+            if (scenario_chunk.size() >= kExactCompetitorChunkSize) {
+              exact_flush_competitor_scenario_chunk(
+                  ctx, cache, state.component_idx, state.trial_params,
+                  state.trial_type_key, scenario_chunk, density_out,
+                  uniform_trial_params_soa);
+            }
+          }
+          exact_flush_competitor_scenario_chunk(
+              ctx, cache, state.component_idx, state.trial_params,
+              state.trial_type_key, scenario_chunk, density_out,
+              uniform_trial_params_soa);
+          return true;
+        },
+        uniform_trial_params_soa);
+    if (!emitted) {
+      state.t = saved_t;
+      return true;
+    }
+    exact_finalize_density_output(density_out);
     state.t = saved_t;
     return true;
   }
 
-  if (competitor_ids.empty()) {
-    for (std::size_t i = 0; i < scenario_points.size(); ++i) {
-      const double weight = scenario_points.weight[i];
-      const std::size_t density_index = scenario_points.density_index[i];
-      if (!std::isfinite(weight) || weight <= 0.0 ||
-          density_index >= density_out.size()) {
-        continue;
-      }
-      density_out[density_index] += weight;
-    }
-    for (double &value : density_out) {
-      value = safe_density(value);
-    }
-  } else if (!scenario_points.empty()) {
-    const uuber::CompetitorClusterCacheEntry &cache =
-        competitor_cache ? *competitor_cache
-                         : fetch_competitor_cluster_cache(ctx, competitor_ids);
-    const uuber::TrialParamsSoA *uniform_trial_params_soa =
-        state.trial_params_soa_batch == nullptr ? state.trial_params_soa
-                                                : nullptr;
-    std::vector<double> survival_out;
-    exact_competitor_survival_batch(
-        ctx, cache, state.component_idx, state.trial_params,
-        state.trial_type_key, scenario_points, survival_out,
-        uniform_trial_params_soa);
-    for (std::size_t i = 0; i < scenario_points.size(); ++i) {
-      const double surv = clamp_probability(survival_out[i]);
-      if (!std::isfinite(surv) || surv <= 0.0) {
-        continue;
-      }
-      const double weight = scenario_points.weight[i];
-      const std::size_t density_index = scenario_points.density_index[i];
-      if (!std::isfinite(weight) || weight <= 0.0 ||
-          density_index >= density_out.size()) {
-        continue;
-      }
-      density_out[density_index] += weight * surv;
-    }
-    for (double &value : density_out) {
-      value = safe_density(value);
-    }
+  const bool emitted = exact_collect_scenarios_batch_process_impl(
+      planner, ctx, node_idx, seed_batch, state.component_idx,
+      state.trial_params, state.trial_type_key,
+      [&](const auto &points, const std::vector<std::uint8_t> *active_mask,
+          const std::vector<double> &weights) -> bool {
+        for (std::size_t i = 0; i < points.size(); ++i) {
+          if (!uuber::vector_lane_active(active_mask, i) ||
+              i >= weights.size() || !std::isfinite(weights[i]) ||
+              weights[i] <= 0.0) {
+            continue;
+          }
+          const uuber::VectorLaneRef point = uuber::vector_lane_ref(points, i);
+          if (point.density_index >= density_out.size()) {
+            continue;
+          }
+          density_out[point.density_index] += weights[i];
+        }
+        return true;
+      },
+      uniform_trial_params_soa);
+  if (emitted) {
+    exact_finalize_density_output(density_out);
   }
   state.t = saved_t;
   return true;

@@ -618,6 +618,37 @@ inline bool integrate_query_plan_density_per_point(
   return true;
 }
 
+inline bool integrate_query_plan_density_per_point_slice(
+    const std::vector<TimeIntegralPointPlan> &plans,
+    const std::vector<double> &query_weights, const double *density_begin,
+    std::size_t density_count, std::vector<double> &out) {
+  if (density_begin == nullptr || query_weights.size() != density_count) {
+    return false;
+  }
+  out.assign(plans.size(), 0.0);
+  for (std::size_t point_idx = 0; point_idx < plans.size(); ++point_idx) {
+    const TimeIntegralPointPlan &plan = plans[point_idx];
+    if (plan.begin + plan.count > density_count) {
+      return false;
+    }
+    double total = 0.0;
+    for (std::size_t query_idx = plan.begin;
+         query_idx < plan.begin + plan.count; ++query_idx) {
+      const double weight = query_weights[query_idx];
+      if (!std::isfinite(weight) || weight <= 0.0) {
+        continue;
+      }
+      const double value = safe_density(density_begin[query_idx]);
+      if (!std::isfinite(value) || value <= 0.0) {
+        continue;
+      }
+      total += weight * value;
+    }
+    out[point_idx] = safe_density(total);
+  }
+  return true;
+}
+
 inline bool resolve_point_trial_params_soa_batch(
     const uuber::NativeContext &ctx, std::size_t point_count,
     const TrialParamSet *trial_params,
@@ -709,6 +740,7 @@ inline bool evaluate_specialized_pair_overlap_density_batch(
   std::vector<double> quadrature_times;
   std::vector<double> quadrature_weights;
   std::vector<const uuber::TrialParamsSoA *> quadrature_trial_params_soa;
+  quadrature_plans.assign(times.size(), TimeIntegralPointPlan{});
   const double quadrature_upper = max_positive_finite_upper(eval_times);
   if (quadrature_upper > 0.0 &&
       !build_time_integral_query_plan(
@@ -831,6 +863,7 @@ inline bool evaluate_specialized_guarded_pair_overlap_density_batch(
   std::vector<double> quadrature_times;
   std::vector<double> quadrature_weights;
   std::vector<const uuber::TrialParamsSoA *> quadrature_trial_params_soa;
+  quadrature_plans.assign(times.size(), TimeIntegralPointPlan{});
   const double quadrature_upper = max_positive_finite_upper(eval_times);
   if (quadrature_upper > 0.0 &&
       !build_time_integral_query_plan(
@@ -1022,6 +1055,7 @@ inline bool evaluate_specialized_shared_blocker_pair_density_batch(
   std::vector<double> quadrature_times;
   std::vector<double> quadrature_weights;
   std::vector<const uuber::TrialParamsSoA *> quadrature_trial_params_soa;
+  quadrature_plans.assign(times.size(), TimeIntegralPointPlan{});
   const double quadrature_upper = max_positive_finite_upper(eval_times);
   if (quadrature_upper > quadrature_lower &&
       !build_time_integral_query_plan(
@@ -1320,6 +1354,77 @@ inline bool times_have_duplicates(const std::vector<double> &times) {
   return false;
 }
 
+struct RankedSequenceQueryKey {
+  const uuber::TrialParamsSoA *trial_params_soa{nullptr};
+  const double *time_data{nullptr};
+  std::size_t time_count{0u};
+
+  bool operator==(const RankedSequenceQueryKey &other) const noexcept {
+    if (trial_params_soa != other.trial_params_soa ||
+        time_count != other.time_count) {
+      return false;
+    }
+    if (time_data == other.time_data) {
+      return true;
+    }
+    for (std::size_t i = 0; i < time_count; ++i) {
+      if (canonical_double_bits(time_data[i]) !=
+          canonical_double_bits(other.time_data[i])) {
+        return false;
+      }
+    }
+    return true;
+  }
+};
+
+struct RankedSequenceQueryKeyHash {
+  std::size_t operator()(const RankedSequenceQueryKey &key) const noexcept {
+    std::uint64_t hash = kFNV64Offset;
+    hash_append_u64(hash, static_cast<std::uint64_t>(key.time_count));
+    hash_append_u64(
+        hash, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
+                  key.trial_params_soa)));
+    for (std::size_t i = 0; i < key.time_count; ++i) {
+      hash_append_u64(hash, canonical_double_bits(key.time_data[i]));
+    }
+    return static_cast<std::size_t>(mix_hash64(hash));
+  }
+};
+
+inline void compress_ranked_sequence_query_batch(
+    const std::vector<const double *> &times_by_query,
+    const std::vector<const uuber::TrialParamsSoA *> &trial_params_soa_by_query,
+    std::size_t time_count, std::vector<const double *> &compressed_times_by_query,
+    std::vector<const uuber::TrialParamsSoA *> &compressed_trial_params_soa,
+    std::vector<std::size_t> &inverse_indices) {
+  compressed_times_by_query.clear();
+  compressed_trial_params_soa.clear();
+  inverse_indices.assign(times_by_query.size(), 0u);
+  if (times_by_query.empty()) {
+    return;
+  }
+  std::unordered_map<RankedSequenceQueryKey, std::size_t,
+                     RankedSequenceQueryKeyHash>
+      index_by_key;
+  index_by_key.reserve(times_by_query.size());
+  for (std::size_t i = 0; i < times_by_query.size(); ++i) {
+    const RankedSequenceQueryKey key{
+        (i < trial_params_soa_by_query.size()) ? trial_params_soa_by_query[i]
+                                               : nullptr,
+        times_by_query[i], time_count};
+    auto it = index_by_key.find(key);
+    if (it == index_by_key.end()) {
+      const std::size_t next_idx = compressed_times_by_query.size();
+      compressed_times_by_query.push_back(times_by_query[i]);
+      compressed_trial_params_soa.push_back(key.trial_params_soa);
+      inverse_indices[i] = next_idx;
+      index_by_key.emplace(key, next_idx);
+    } else {
+      inverse_indices[i] = it->second;
+    }
+  }
+}
+
 inline int resolve_outcome_index_ir(const uuber::NativeContext &ctx,
                                     int label_id, int component_idx);
 
@@ -1417,33 +1522,255 @@ bool node_density_entry_batch_idx(
         nullptr,
     DensityBatchWorkspace *workspace = nullptr);
 
-inline bool evaluate_outcome_density_batch_idx(
-    const uuber::NativeContext &ctx, int outcome_idx,
+struct WeightedNodeDensityTerm {
+  int node_id{-1};
+  int component_idx{-1};
+  int outcome_idx_context{-1};
+  std::string trial_type_key;
+  std::vector<int> competitor_ids;
+  bool include_na_donors{false};
+  double scaled_weight{0.0};
+
+  bool same_key(const WeightedNodeDensityTerm &other) const {
+    return node_id == other.node_id &&
+           component_idx == other.component_idx &&
+           outcome_idx_context == other.outcome_idx_context &&
+           trial_type_key == other.trial_type_key &&
+           competitor_ids == other.competitor_ids &&
+           include_na_donors == other.include_na_donors;
+  }
+
+  bool same_eval_signature(const WeightedNodeDensityTerm &other) const {
+    return component_idx == other.component_idx &&
+           outcome_idx_context == other.outcome_idx_context &&
+           trial_type_key == other.trial_type_key &&
+           competitor_ids == other.competitor_ids &&
+           include_na_donors == other.include_na_donors;
+  }
+};
+
+inline void append_weighted_node_density_term(
+    std::vector<WeightedNodeDensityTerm> &terms,
+    int node_id, int component_idx, int outcome_idx_context,
+    const std::string &trial_type_key, const std::vector<int> &competitor_ids,
+    bool include_na_donors, double scaled_weight) {
+  if (node_id < 0 || !std::isfinite(scaled_weight) || scaled_weight <= 0.0) {
+    return;
+  }
+  WeightedNodeDensityTerm candidate;
+  candidate.node_id = node_id;
+  candidate.component_idx = component_idx;
+  candidate.outcome_idx_context = outcome_idx_context;
+  candidate.trial_type_key = trial_type_key;
+  candidate.competitor_ids = competitor_ids;
+  candidate.include_na_donors = include_na_donors;
+  for (WeightedNodeDensityTerm &term : terms) {
+    if (term.same_key(candidate)) {
+      term.scaled_weight += scaled_weight;
+      return;
+    }
+  }
+  candidate.scaled_weight = scaled_weight;
+  terms.push_back(std::move(candidate));
+}
+
+inline bool evaluate_node_density_multi_generic_batch_idx(
+    const uuber::NativeContext &ctx, const std::vector<int> &node_ids,
     const std::vector<double> &times, int component_idx,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    bool include_na_donors, int outcome_label_context_idx,
+    const std::vector<int> &competitor_ids, const TrialParamSet *trial_params,
+    const std::string &trial_type_key, bool include_na_donors,
+    int outcome_idx_context, std::vector<double> &density_matrix_out,
+    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch =
+        nullptr) {
+  density_matrix_out.assign(node_ids.size() * times.size(), 0.0);
+  if (node_ids.empty() || times.empty()) {
+    return true;
+  }
+  if (trial_params_soa_batch != nullptr &&
+      trial_params_soa_batch->size() != times.size()) {
+    return false;
+  }
+
+  std::vector<double> eval_times(times);
+  std::vector<std::uint8_t> valid_points(times.size(), 0u);
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    const double t = times[i];
+    if (std::isfinite(t) && t >= 0.0) {
+      valid_points[i] = 1u;
+    } else {
+      eval_times[i] = 0.0;
+    }
+  }
+
+  NodeEvalState state(ctx, 0.0, component_idx, trial_params, trial_type_key,
+                      include_na_donors, outcome_idx_context, nullptr, nullptr,
+                      nullptr, false, nullptr, false);
+  state.trial_params_soa_batch = trial_params_soa_batch;
+
+  std::vector<int> node_indices;
+  node_indices.reserve(node_ids.size());
+  for (int node_id : node_ids) {
+    const int node_idx = resolve_dense_node_idx_required(ctx, node_id);
+    if (node_idx < 0) {
+      return false;
+    }
+    const uuber::IrOutcomeCouplingOp *coupling_spec =
+        find_outcome_coupling_spec(ctx, node_idx, competitor_ids);
+    if (should_use_exact_density_program(ctx, node_idx, competitor_ids, state,
+                                         coupling_spec)) {
+      return false;
+    }
+    node_indices.push_back(node_idx);
+  }
+
+  std::vector<uuber::TreeNodeBatchValues> node_values;
+  if (!evaluator_eval_nodes_batch_with_state_dense(node_indices, eval_times, state,
+                                                   node_values) ||
+      node_values.size() != node_ids.size()) {
+    return false;
+  }
+
+  std::vector<double> survival_product(times.size(), 1.0);
+  const uuber::CompetitorClusterCacheEntry *competitor_cache = nullptr;
+  if (!competitor_ids.empty()) {
+    competitor_cache = &fetch_competitor_cluster_cache(ctx, competitor_ids);
+  }
+  const bool has_competitors =
+      competitor_cache != nullptr && !competitor_cache->compiled_ops.empty();
+  if (has_competitors) {
+    state.include_na_donors = false;
+    state.outcome_idx = -1;
+    competitor_survival_batch_from_state_compiled_ops(
+        ctx, competitor_ids, state, eval_times, survival_product,
+        competitor_cache);
+    if (survival_product.size() != times.size()) {
+      return false;
+    }
+  }
+
+  for (std::size_t node_pos = 0; node_pos < node_values.size(); ++node_pos) {
+    const uuber::TreeNodeBatchValues &values = node_values[node_pos];
+    if (values.density.size() != times.size()) {
+      return false;
+    }
+    double *density_row = density_matrix_out.data() +
+                          node_pos * static_cast<std::ptrdiff_t>(times.size());
+    for (std::size_t point_idx = 0; point_idx < times.size(); ++point_idx) {
+      if (!valid_points[point_idx]) {
+        density_row[point_idx] = 0.0;
+        continue;
+      }
+      double density = safe_density(values.density[point_idx]);
+      if (!(std::isfinite(density) && density > 0.0)) {
+        density_row[point_idx] = 0.0;
+        continue;
+      }
+      if (has_competitors) {
+        const double surv = clamp_probability(survival_product[point_idx]);
+        if (!(std::isfinite(surv) && surv > 0.0)) {
+          density_row[point_idx] = 0.0;
+          continue;
+        }
+        density *= surv;
+      }
+      density_row[point_idx] = safe_density(density);
+    }
+  }
+  return true;
+}
+
+inline bool accumulate_weighted_node_density_terms_batch_idx(
+    const uuber::NativeContext &ctx,
+    const std::vector<WeightedNodeDensityTerm> &terms,
+    const std::vector<double> &times, const TrialParamSet *trial_params,
+    const SharedTriggerPlan *trigger_plan, bool use_shared_trigger_eval,
     std::vector<double> &density_out,
-    const SharedTriggerPlan *trigger_plan = nullptr,
-    bool use_shared_trigger_eval = false) {
+    std::vector<double> *density_scratch = nullptr) {
   density_out.assign(times.size(), 0.0);
-  if (outcome_idx < 0 ||
-      outcome_idx >= static_cast<int>(ctx.outcome_info.size())) {
+  if (terms.empty()) {
     return true;
   }
-  const uuber::OutcomeContextInfo &info =
-      ctx.outcome_info[static_cast<std::size_t>(outcome_idx)];
-  if (info.node_id < 0) {
-    return true;
+
+  const bool allow_multi_node =
+      !(use_shared_trigger_eval && trigger_plan != nullptr &&
+        shared_trigger_count(*trigger_plan) > 0u);
+  std::vector<double> density_local;
+  std::vector<double> &density =
+      density_scratch ? *density_scratch : density_local;
+  std::vector<double> density_matrix;
+  std::vector<std::uint8_t> consumed(terms.size(), 0u);
+
+  for (std::size_t term_idx = 0; term_idx < terms.size(); ++term_idx) {
+    if (consumed[term_idx] != 0u) {
+      continue;
+    }
+    const WeightedNodeDensityTerm &term = terms[term_idx];
+    if (!(std::isfinite(term.scaled_weight) && term.scaled_weight > 0.0)) {
+      consumed[term_idx] = 1u;
+      continue;
+    }
+
+    std::vector<std::size_t> group_indices;
+    group_indices.reserve(terms.size() - term_idx);
+    std::vector<int> group_node_ids;
+    group_node_ids.reserve(terms.size() - term_idx);
+    for (std::size_t other_idx = term_idx; other_idx < terms.size(); ++other_idx) {
+      if (consumed[other_idx] != 0u ||
+          !terms[other_idx].same_eval_signature(term)) {
+        continue;
+      }
+      group_indices.push_back(other_idx);
+      group_node_ids.push_back(terms[other_idx].node_id);
+      consumed[other_idx] = 1u;
+    }
+
+    bool grouped = false;
+    if (allow_multi_node && group_node_ids.size() > 1u) {
+      grouped = evaluate_node_density_multi_generic_batch_idx(
+          ctx, group_node_ids, times, term.component_idx, term.competitor_ids,
+          trial_params, term.trial_type_key, term.include_na_donors,
+          term.outcome_idx_context, density_matrix, nullptr);
+    }
+
+    if (grouped) {
+      for (std::size_t group_pos = 0; group_pos < group_indices.size(); ++group_pos) {
+        const WeightedNodeDensityTerm &group_term = terms[group_indices[group_pos]];
+        const double *density_row = density_matrix.data() +
+                                    group_pos *
+                                        static_cast<std::ptrdiff_t>(times.size());
+        for (std::size_t i = 0; i < density_out.size(); ++i) {
+          const double value = density_row[i];
+          if (std::isfinite(value) && value > 0.0) {
+            density_out[i] = safe_density(
+                density_out[i] + group_term.scaled_weight * value);
+          }
+        }
+      }
+      continue;
+    }
+
+    for (std::size_t group_pos = 0; group_pos < group_indices.size(); ++group_pos) {
+      const WeightedNodeDensityTerm &group_term = terms[group_indices[group_pos]];
+      density.clear();
+      if (!node_density_entry_batch_idx(
+              ctx, group_term.node_id, times, group_term.component_idx, nullptr,
+              false, nullptr, false, group_term.competitor_ids, trial_params,
+              group_term.trial_type_key, group_term.include_na_donors,
+              group_term.outcome_idx_context, trigger_plan,
+              use_shared_trigger_eval, density, nullptr) ||
+          density.size() != density_out.size()) {
+        return false;
+      }
+      for (std::size_t i = 0; i < density_out.size(); ++i) {
+        const double value = density[i];
+        if (std::isfinite(value) && value > 0.0) {
+          density_out[i] = safe_density(
+              density_out[i] + group_term.scaled_weight * value);
+        }
+      }
+    }
   }
-  std::vector<int> comp_filtered;
-  const std::vector<int> &comp_use =
-      filter_competitor_ids(ctx, info.competitor_ids, component_idx,
-                            comp_filtered);
-  return node_density_entry_batch_idx(
-      ctx, info.node_id, times, component_idx, nullptr, false, nullptr, false,
-      comp_use, trial_params, trial_type_key, include_na_donors,
-      outcome_label_context_idx, trigger_plan, use_shared_trigger_eval,
-      density_out, nullptr, nullptr, nullptr, nullptr);
+  return true;
 }
 
 inline bool component_guess_density_applicable(
@@ -1538,28 +1865,32 @@ inline bool accumulate_component_guess_density_batch_idx(
   } else if (!guess.target.empty()) {
     return true;
   }
-  std::vector<double> donor_density_local;
-  std::vector<double> &donor_density =
-      donor_density_scratch ? *donor_density_scratch : donor_density_local;
+  std::vector<WeightedNodeDensityTerm> terms;
+  terms.reserve(guess.keep_weights.size());
   for (const auto &entry : guess.keep_weights) {
     const int donor_outcome_idx = entry.first;
     const double release = 1.0 - entry.second;
     if (donor_outcome_idx < 0 || !(release > 0.0)) {
       continue;
     }
-    if (!evaluate_outcome_density_batch_idx(
-            ctx, donor_outcome_idx, times, component_idx, trial_params,
-            trial_type_key, false, donor_outcome_idx, donor_density,
-            trigger_plan, use_shared_trigger_eval) ||
-        donor_density.size() != density_out.size()) {
-      return false;
+    if (donor_outcome_idx >= static_cast<int>(ctx.outcome_info.size())) {
+      continue;
     }
-    for (std::size_t i = 0; i < density_out.size(); ++i) {
-      density_out[i] = safe_density(density_out[i] +
-                                    release * safe_density(donor_density[i]));
+    const uuber::OutcomeContextInfo &info =
+        ctx.outcome_info[static_cast<std::size_t>(donor_outcome_idx)];
+    if (info.node_id < 0) {
+      continue;
     }
+    std::vector<int> filtered_competitors;
+    const std::vector<int> &competitors = filter_competitor_ids(
+        ctx, info.competitor_ids, component_idx, filtered_competitors);
+    append_weighted_node_density_term(terms, info.node_id, component_idx,
+                                      donor_outcome_idx, trial_type_key,
+                                      competitors, false, release);
   }
-  return true;
+  return accumulate_weighted_node_density_terms_batch_idx(
+      ctx, terms, times, trial_params, trigger_plan, use_shared_trigger_eval,
+      density_out, donor_density_scratch);
 }
 
 inline bool accumulate_outcome_alias_density_batch_idx(
@@ -1577,20 +1908,24 @@ inline bool accumulate_outcome_alias_density_batch_idx(
   }
   const uuber::OutcomeContextInfo &info =
       ctx.outcome_info[static_cast<std::size_t>(target_outcome_idx)];
-  std::vector<double> donor_density_local;
-  std::vector<double> &donor_density =
-      donor_density_scratch ? *donor_density_scratch : donor_density_local;
+  std::vector<WeightedNodeDensityTerm> terms;
+  terms.reserve(info.alias_sources.size() + info.guess_donors.size());
   for (int source_idx : info.alias_sources) {
-    if (!evaluate_outcome_density_batch_idx(
-            ctx, source_idx, times, component_idx, trial_params,
-            trial_type_key, include_na_donors, source_idx, donor_density,
-            trigger_plan, use_shared_trigger_eval) ||
-        donor_density.size() != density_out.size()) {
-      return false;
+    if (source_idx < 0 ||
+        source_idx >= static_cast<int>(ctx.outcome_info.size())) {
+      continue;
     }
-    for (std::size_t i = 0; i < density_out.size(); ++i) {
-      density_out[i] = safe_density(density_out[i] + safe_density(donor_density[i]));
+    const uuber::OutcomeContextInfo &source_info =
+        ctx.outcome_info[static_cast<std::size_t>(source_idx)];
+    if (source_info.node_id < 0) {
+      continue;
     }
+    std::vector<int> filtered_competitors;
+    const std::vector<int> &competitors = filter_competitor_ids(
+        ctx, source_info.competitor_ids, component_idx, filtered_competitors);
+    append_weighted_node_density_term(terms, source_info.node_id, component_idx,
+                                      source_idx, trial_type_key, competitors,
+                                      include_na_donors, 1.0);
   }
   for (const auto &donor : info.guess_donors) {
     if (donor.rt_policy == "na" && !include_na_donors) {
@@ -1599,19 +1934,25 @@ inline bool accumulate_outcome_alias_density_batch_idx(
     if (donor.outcome_idx < 0 || !(donor.weight > 0.0)) {
       continue;
     }
-    if (!evaluate_outcome_density_batch_idx(
-            ctx, donor.outcome_idx, times, component_idx, trial_params,
-            trial_type_key, include_na_donors, donor.outcome_idx,
-            donor_density, trigger_plan, use_shared_trigger_eval) ||
-        donor_density.size() != density_out.size()) {
-      return false;
+    if (donor.outcome_idx >= static_cast<int>(ctx.outcome_info.size())) {
+      continue;
     }
-    for (std::size_t i = 0; i < density_out.size(); ++i) {
-      density_out[i] = safe_density(density_out[i] +
-                                    donor.weight * safe_density(donor_density[i]));
+    const uuber::OutcomeContextInfo &donor_info =
+        ctx.outcome_info[static_cast<std::size_t>(donor.outcome_idx)];
+    if (donor_info.node_id < 0) {
+      continue;
     }
+    std::vector<int> filtered_competitors;
+    const std::vector<int> &competitors = filter_competitor_ids(
+        ctx, donor_info.competitor_ids, component_idx, filtered_competitors);
+    append_weighted_node_density_term(terms, donor_info.node_id, component_idx,
+                                      donor.outcome_idx, trial_type_key,
+                                      competitors, include_na_donors,
+                                      donor.weight);
   }
-  return true;
+  return accumulate_weighted_node_density_terms_batch_idx(
+      ctx, terms, times, trial_params, trigger_plan, use_shared_trigger_eval,
+      density_out, donor_density_scratch);
 }
 
 inline const TrialAccumulatorParams *
@@ -2795,30 +3136,23 @@ vector_tree_guard_op(const uuber::VectorOp &op) {
   return guard_op;
 }
 
-inline bool eval_tree_vector_node_batch(
-    const uuber::VectorProgram &program, int target_node_idx,
+inline bool eval_tree_vector_slots_batch(
+    const uuber::VectorProgram &program, int target_slot,
     const std::vector<double> &times, const uuber::TreeEvalNeed &need,
     const uuber::TreeEventBatchEvalFn &event_eval_batch,
     const uuber::TreeGuardBatchEvalFn &guard_eval_batch,
-    uuber::TreeNodeBatchValues &out_values) {
-  out_values = uuber::TreeNodeBatchValues{};
+    std::vector<uuber::TreeNodeBatchValues> &slots_out) {
   if (!program.valid || program.domain != uuber::VectorProgramDomain::Tree ||
-      target_node_idx < 0 || !event_eval_batch) {
+      target_slot < 0 || !event_eval_batch) {
     return false;
   }
-  if (target_node_idx >=
-      static_cast<int>(program.outputs.node_idx_to_slot.size())) {
-    return false;
-  }
-  const int target_slot =
-      program.outputs.node_idx_to_slot[static_cast<std::size_t>(target_node_idx)];
-  if (target_slot < 0 || target_slot >= static_cast<int>(program.ops.size())) {
+  if (target_slot >= static_cast<int>(program.ops.size())) {
     return false;
   }
 
   const std::size_t point_count = times.size();
   const uuber::TreeEvalNeed full_need{true, true, true};
-  std::vector<uuber::TreeNodeBatchValues> slots(program.ops.size());
+  slots_out.assign(program.ops.size(), uuber::TreeNodeBatchValues{});
   std::vector<double> child_primary(
       static_cast<std::size_t>(std::max(0, program.max_child_count)), 0.0);
   std::vector<double> child_density(
@@ -2857,7 +3191,7 @@ inline bool eval_tree_vector_node_batch(
           continue;
         }
         child_primary[static_cast<std::size_t>(i)] =
-            clamp_probability(slots[static_cast<std::size_t>(slot)].cdf[0]);
+            clamp_probability(slots_out[static_cast<std::size_t>(slot)].cdf[0]);
       }
       for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
         for (int i = 0; i < n; ++i) {
@@ -2869,9 +3203,9 @@ inline bool eval_tree_vector_node_batch(
             continue;
           }
           child_primary[static_cast<std::size_t>(i)] = clamp_probability(
-              slots[static_cast<std::size_t>(slot)].cdf[point_idx]);
+              slots_out[static_cast<std::size_t>(slot)].cdf[point_idx]);
           child_density[static_cast<std::size_t>(i)] = safe_density(
-              slots[static_cast<std::size_t>(slot)].density[point_idx]);
+              slots_out[static_cast<std::size_t>(slot)].density[point_idx]);
         }
         prefix[0] = 1.0;
         suffix[static_cast<std::size_t>(n)] = 1.0;
@@ -2918,9 +3252,9 @@ inline bool eval_tree_vector_node_batch(
             continue;
           }
           child_primary[static_cast<std::size_t>(i)] = clamp_probability(
-              slots[static_cast<std::size_t>(slot)].survival[point_idx]);
+              slots_out[static_cast<std::size_t>(slot)].survival[point_idx]);
           child_density[static_cast<std::size_t>(i)] = safe_density(
-              slots[static_cast<std::size_t>(slot)].density[point_idx]);
+              slots_out[static_cast<std::size_t>(slot)].density[point_idx]);
         }
         prefix[0] = 1.0;
         suffix[static_cast<std::size_t>(n)] = 1.0;
@@ -2961,7 +3295,7 @@ inline bool eval_tree_vector_node_batch(
         return false;
       }
       const uuber::TreeNodeBatchValues &child =
-          slots[static_cast<std::size_t>(child_slot)];
+          slots_out[static_cast<std::size_t>(child_slot)];
       for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
         out.cdf[point_idx] = clamp_probability(1.0 - child.cdf[point_idx]);
         out.survival[point_idx] = clamp_probability(child.cdf[point_idx]);
@@ -2975,10 +3309,10 @@ inline bool eval_tree_vector_node_batch(
       init_tree_batch_values(point_count, ref_values);
       init_tree_batch_values(point_count, blocker_values);
       if (op.ref_slot >= 0 && op.ref_slot <= target_slot) {
-        ref_values = slots[static_cast<std::size_t>(op.ref_slot)];
+        ref_values = slots_out[static_cast<std::size_t>(op.ref_slot)];
       }
       if (op.blocker_slot >= 0 && op.blocker_slot <= target_slot) {
-        blocker_values = slots[static_cast<std::size_t>(op.blocker_slot)];
+        blocker_values = slots_out[static_cast<std::size_t>(op.blocker_slot)];
       }
       const uuber::TreeEvalOp guard_op = vector_tree_guard_op(op);
       if (guard_eval_batch) {
@@ -3005,11 +3339,79 @@ inline bool eval_tree_vector_node_batch(
     default:
       return false;
     }
-    slots[static_cast<std::size_t>(op_idx)] = std::move(out);
+    slots_out[static_cast<std::size_t>(op_idx)] = std::move(out);
   }
 
+  return true;
+}
+
+inline bool eval_tree_vector_target_slot(const uuber::VectorProgram &program,
+                                         int target_node_idx,
+                                         int &target_slot) {
+  if (target_node_idx < 0 ||
+      target_node_idx >=
+          static_cast<int>(program.outputs.node_idx_to_slot.size())) {
+    return false;
+  }
+  target_slot =
+      program.outputs.node_idx_to_slot[static_cast<std::size_t>(target_node_idx)];
+  return target_slot >= 0 && target_slot < static_cast<int>(program.ops.size());
+}
+
+inline bool eval_tree_vector_node_batch(
+    const uuber::VectorProgram &program, int target_node_idx,
+    const std::vector<double> &times, const uuber::TreeEvalNeed &need,
+    const uuber::TreeEventBatchEvalFn &event_eval_batch,
+    const uuber::TreeGuardBatchEvalFn &guard_eval_batch,
+    uuber::TreeNodeBatchValues &out_values) {
+  out_values = uuber::TreeNodeBatchValues{};
+  int target_slot = -1;
+  if (!eval_tree_vector_target_slot(program, target_node_idx, target_slot)) {
+    return false;
+  }
+  std::vector<uuber::TreeNodeBatchValues> slots;
+  if (!eval_tree_vector_slots_batch(program, target_slot, times, need,
+                                    event_eval_batch, guard_eval_batch, slots)) {
+    return false;
+  }
   out_values = slots[static_cast<std::size_t>(target_slot)];
-  return tree_batch_values_size_matches(out_values, point_count);
+  return tree_batch_values_size_matches(out_values, times.size());
+}
+
+inline bool eval_tree_vector_nodes_batch(
+    const uuber::VectorProgram &program, const std::vector<int> &target_node_indices,
+    const std::vector<double> &times, const uuber::TreeEvalNeed &need,
+    const uuber::TreeEventBatchEvalFn &event_eval_batch,
+    const uuber::TreeGuardBatchEvalFn &guard_eval_batch,
+    std::vector<uuber::TreeNodeBatchValues> &out_values) {
+  out_values.clear();
+  if (target_node_indices.empty()) {
+    return true;
+  }
+  int max_target_slot = -1;
+  std::vector<int> target_slots;
+  target_slots.reserve(target_node_indices.size());
+  for (int target_node_idx : target_node_indices) {
+    int target_slot = -1;
+    if (!eval_tree_vector_target_slot(program, target_node_idx, target_slot)) {
+      return false;
+    }
+    target_slots.push_back(target_slot);
+    max_target_slot = std::max(max_target_slot, target_slot);
+  }
+  std::vector<uuber::TreeNodeBatchValues> slots;
+  if (!eval_tree_vector_slots_batch(program, max_target_slot, times, need,
+                                    event_eval_batch, guard_eval_batch, slots)) {
+    return false;
+  }
+  out_values.reserve(target_slots.size());
+  for (int target_slot : target_slots) {
+    out_values.push_back(slots[static_cast<std::size_t>(target_slot)]);
+    if (!tree_batch_values_size_matches(out_values.back(), times.size())) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool eval_node_batch_with_state_dense(
@@ -5626,6 +6028,304 @@ inline bool integrate_outcome_probability_from_density_batch_idx(
   return true;
 }
 
+inline bool integrate_outcome_probabilities_from_density_multi_idx(
+    const uuber::NativeContext &ctx, const std::vector<int> &node_ids,
+    double upper, int component_idx, const std::vector<int> &competitor_ids,
+    double rel_tol, double abs_tol, int max_depth,
+    const std::vector<const TrialParamSet *> &trial_params_batch,
+    const std::string &trial_type_key, bool include_na_donors,
+    int outcome_idx_context, std::vector<double> &out_probabilities_matrix,
+    const std::vector<const uuber::TrialParamsSoA *>
+        *trial_params_soa_batch_override = nullptr,
+    const std::vector<const PreparedTrialParamsRuntime *>
+        *prepared_runtime_batch = nullptr,
+    DensityBatchWorkspace *workspace = nullptr) {
+  (void)max_depth;
+  const std::size_t node_count = node_ids.size();
+  const std::size_t point_count =
+      trial_params_soa_batch_override ? trial_params_soa_batch_override->size()
+      : (prepared_runtime_batch ? prepared_runtime_batch->size()
+                                : trial_params_batch.size());
+  out_probabilities_matrix.assign(node_count * point_count, 0.0);
+  if (node_count == 0u) {
+    return true;
+  }
+  if (point_count == 0u || !(upper > 0.0)) {
+    return point_count == 0u || upper <= 0.0;
+  }
+
+  std::vector<const uuber::TrialParamsSoA *> trial_params_soa_storage;
+  std::vector<const TrialParamSet *> local_unique_trial_params;
+  std::vector<const uuber::TrialParamsSoA *> local_unique_params_soa;
+  std::vector<std::size_t> local_point_to_eval_index;
+  std::vector<const TrialParamSet *> &unique_trial_params =
+      workspace ? workspace->unique_trial_params : local_unique_trial_params;
+  std::vector<const uuber::TrialParamsSoA *> &unique_params_soa =
+      workspace ? workspace->unique_params_soa : local_unique_params_soa;
+  std::vector<std::size_t> &point_to_eval_index =
+      workspace ? workspace->point_to_eval_index : local_point_to_eval_index;
+  point_to_eval_index.assign(point_count, 0u);
+
+  const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch_ptr =
+      trial_params_soa_batch_override;
+  const std::vector<const TrialParamSet *> *trial_params_eval_ptr =
+      &trial_params_batch;
+  if (trial_params_soa_batch_ptr == nullptr && prepared_runtime_batch != nullptr) {
+    if (prepared_runtime_batch->size() != point_count) {
+      return false;
+    }
+    unique_trial_params.clear();
+    unique_params_soa.clear();
+    unique_trial_params.reserve(point_count);
+    unique_params_soa.reserve(point_count);
+    std::unordered_map<uuber::NAMapCacheKey, std::size_t, uuber::NAMapCacheKeyHash>
+        runtime_index_by_key;
+    runtime_index_by_key.reserve(point_count);
+    for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
+      PreparedTrialParamsRuntime *runtime =
+          const_cast<PreparedTrialParamsRuntime *>(
+              (*prepared_runtime_batch)[point_idx]);
+      if (runtime == nullptr || !ensure_prepared_trial_params_soa(ctx, *runtime)) {
+        return false;
+      }
+      const auto insert_result = runtime_index_by_key.emplace(
+          runtime->value_key, unique_params_soa.size());
+      if (insert_result.second) {
+        unique_trial_params.push_back(runtime->params);
+        unique_params_soa.push_back(runtime->soa);
+      }
+      point_to_eval_index[point_idx] = insert_result.first->second;
+    }
+    trial_params_eval_ptr = &unique_trial_params;
+    trial_params_soa_batch_ptr = &unique_params_soa;
+  } else if (trial_params_soa_batch_ptr == nullptr) {
+    trial_params_soa_storage.reserve(point_count);
+    for (const TrialParamSet *params_ptr : trial_params_batch) {
+      const uuber::TrialParamsSoA *trial_params_soa =
+          resolve_trial_params_soa(ctx, params_ptr);
+      if (!trial_params_soa || !trial_params_soa->valid) {
+        return false;
+      }
+      trial_params_soa_storage.push_back(trial_params_soa);
+    }
+    trial_params_soa_batch_ptr = &trial_params_soa_storage;
+    for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
+      point_to_eval_index[point_idx] = point_idx;
+    }
+  } else if (trial_params_soa_batch_ptr->size() != point_count) {
+    return false;
+  } else {
+    for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
+      point_to_eval_index[point_idx] = point_idx;
+    }
+  }
+
+  for (const uuber::TrialParamsSoA *trial_params_soa :
+       *trial_params_soa_batch_ptr) {
+    if (!trial_params_soa || !trial_params_soa->valid) {
+      return false;
+    }
+  }
+
+  TrialParamSet base_params_holder;
+  const TrialParamSet *rep_params =
+      trial_params_eval_ptr->empty() ? nullptr : trial_params_eval_ptr->front();
+  if (!rep_params) {
+    base_params_holder = build_base_paramset(ctx);
+    rep_params = &base_params_holder;
+  }
+
+  const std::size_t eval_point_count = trial_params_soa_batch_ptr->size();
+  constexpr int kIntegralSegments = 16;
+  constexpr int kInfiniteMaxSegments = 32;
+  const bool finite_upper = std::isfinite(upper);
+  std::vector<double> upper_bounds(eval_point_count, upper);
+  std::vector<TimeIntegralPointPlan> local_point_plans;
+  std::vector<double> local_query_times;
+  std::vector<double> local_query_weights;
+  std::vector<const uuber::TrialParamsSoA *> local_query_params_soa;
+  std::vector<std::uint8_t> local_active_points;
+  std::vector<std::uint8_t> local_tail_saw_positive;
+  std::vector<int> local_tail_small_segments;
+  std::vector<double> local_density_out;
+  std::vector<double> local_point_probabilities_matrix;
+  std::vector<double> local_segment_probabilities_matrix;
+  std::vector<TimeIntegralPointPlan> &point_plans =
+      workspace ? workspace->point_plans : local_point_plans;
+  std::vector<double> &query_times =
+      workspace ? workspace->query_times : local_query_times;
+  std::vector<double> &query_weights =
+      workspace ? workspace->query_weights : local_query_weights;
+  std::vector<const uuber::TrialParamsSoA *> &query_params_soa =
+      workspace ? workspace->query_params_soa : local_query_params_soa;
+  std::vector<std::uint8_t> &active_points =
+      workspace ? workspace->active_points : local_active_points;
+  std::vector<std::uint8_t> &tail_saw_positive =
+      workspace ? workspace->tail_saw_positive : local_tail_saw_positive;
+  std::vector<int> &tail_small_segments =
+      workspace ? workspace->tail_small_segments : local_tail_small_segments;
+  std::vector<double> &density_out =
+      workspace ? workspace->batch_density : local_density_out;
+  std::vector<double> &segment_probabilities_matrix =
+      workspace ? workspace->segment_probabilities
+                : local_segment_probabilities_matrix;
+  std::vector<double> &point_probabilities_matrix =
+      workspace ? workspace->point_probabilities : local_point_probabilities_matrix;
+  point_probabilities_matrix.assign(node_count * eval_point_count, 0.0);
+  segment_probabilities_matrix.assign(node_count * eval_point_count, 0.0);
+  active_points.assign(eval_point_count, 1u);
+  tail_saw_positive.assign(eval_point_count, 0u);
+  tail_small_segments.assign(eval_point_count, 0);
+
+  const auto eval_segment = [&](double lower, double upper_window) -> bool {
+    if (!(std::isfinite(lower) && std::isfinite(upper_window)) ||
+        !(upper_window > lower)) {
+      segment_probabilities_matrix.assign(node_count * eval_point_count, 0.0);
+      return true;
+    }
+    if (!build_time_integral_query_plan(
+            upper_bounds, lower, upper_window, kIntegralSegments, point_plans,
+            query_times, query_weights, trial_params_soa_batch_ptr,
+            &query_params_soa, &active_points)) {
+      return false;
+    }
+    if (query_times.empty()) {
+      segment_probabilities_matrix.assign(node_count * eval_point_count, 0.0);
+      return true;
+    }
+
+    const bool grouped = evaluate_node_density_multi_generic_batch_idx(
+        ctx, node_ids, query_times, component_idx, competitor_ids, rep_params,
+        trial_type_key, include_na_donors, outcome_idx_context, density_out,
+        &query_params_soa);
+    if (!grouped) {
+      density_out.assign(node_count * query_times.size(), 0.0);
+      for (std::size_t node_pos = 0; node_pos < node_count; ++node_pos) {
+        std::vector<double> node_density;
+        if (!node_density_entry_batch_idx(
+                ctx, node_ids[node_pos], query_times, component_idx, nullptr,
+                false, nullptr, false, competitor_ids, rep_params,
+                trial_type_key, include_na_donors, outcome_idx_context, nullptr,
+                false, node_density, nullptr, &query_params_soa, nullptr,
+                workspace) ||
+            node_density.size() != query_times.size()) {
+          return false;
+        }
+        std::copy(node_density.begin(), node_density.end(),
+                  density_out.begin() +
+                      static_cast<std::ptrdiff_t>(node_pos * query_times.size()));
+      }
+    } else if (density_out.size() != node_count * query_times.size()) {
+      return false;
+    }
+
+    for (std::size_t node_pos = 0; node_pos < node_count; ++node_pos) {
+      std::vector<double> node_segment_probabilities;
+      if (!integrate_query_plan_density_per_point_slice(
+              point_plans, query_weights,
+              density_out.data() +
+                  static_cast<std::ptrdiff_t>(node_pos * query_times.size()),
+              query_times.size(), node_segment_probabilities) ||
+          node_segment_probabilities.size() != eval_point_count) {
+        return false;
+      }
+      std::copy(node_segment_probabilities.begin(),
+                node_segment_probabilities.end(),
+                segment_probabilities_matrix.begin() +
+                    static_cast<std::ptrdiff_t>(node_pos * eval_point_count));
+    }
+    return true;
+  };
+
+  if (finite_upper) {
+    if (!eval_segment(0.0, upper)) {
+      return false;
+    }
+    for (std::size_t node_pos = 0; node_pos < node_count; ++node_pos) {
+      double *prob_row = point_probabilities_matrix.data() +
+                         node_pos * static_cast<std::ptrdiff_t>(eval_point_count);
+      const double *seg_row = segment_probabilities_matrix.data() +
+                              node_pos * static_cast<std::ptrdiff_t>(eval_point_count);
+      for (std::size_t i = 0; i < eval_point_count; ++i) {
+        prob_row[i] = normalize_outcome_probability(seg_row[i]);
+      }
+    }
+  } else {
+    double lo = 0.0;
+    double hi = 0.5;
+    for (int seg = 0; seg < kInfiniteMaxSegments; ++seg) {
+      if (!eval_segment(lo, hi)) {
+        return false;
+      }
+      bool any_active = false;
+      for (std::size_t point_idx = 0; point_idx < eval_point_count; ++point_idx) {
+        if (point_plans[point_idx].count == 0u) {
+          active_points[point_idx] = 0u;
+          continue;
+        }
+        double max_piece = 0.0;
+        double max_total = 0.0;
+        for (std::size_t node_pos = 0; node_pos < node_count; ++node_pos) {
+          double *prob_row = point_probabilities_matrix.data() +
+                             node_pos * static_cast<std::ptrdiff_t>(eval_point_count);
+          const double *seg_row =
+              segment_probabilities_matrix.data() +
+              node_pos * static_cast<std::ptrdiff_t>(eval_point_count);
+          const double piece = seg_row[point_idx];
+          prob_row[point_idx] += piece;
+          max_piece = std::max(max_piece, piece);
+          max_total = std::max(max_total, std::fabs(prob_row[point_idx]));
+        }
+        if (max_piece > 0.0) {
+          tail_saw_positive[point_idx] = 1u;
+        }
+        const double tail_tol =
+            std::max(std::max(0.0, abs_tol),
+                     std::max(0.0, rel_tol) * std::max(1.0, max_total));
+        if (max_piece <= tail_tol) {
+          ++tail_small_segments[point_idx];
+        } else {
+          tail_small_segments[point_idx] = 0;
+        }
+        const bool done =
+            tail_saw_positive[point_idx] != 0u && hi >= 4.0 &&
+            tail_small_segments[point_idx] >= 3;
+        active_points[point_idx] = done ? 0u : 1u;
+        any_active = any_active || active_points[point_idx] != 0u;
+      }
+      if (!any_active) {
+        break;
+      }
+      lo = hi;
+      hi *= 2.0;
+    }
+
+    for (std::size_t node_pos = 0; node_pos < node_count; ++node_pos) {
+      double *prob_row = point_probabilities_matrix.data() +
+                         node_pos * static_cast<std::ptrdiff_t>(eval_point_count);
+      for (std::size_t i = 0; i < eval_point_count; ++i) {
+        prob_row[i] = normalize_outcome_probability(prob_row[i]);
+      }
+    }
+  }
+
+  for (std::size_t node_pos = 0; node_pos < node_count; ++node_pos) {
+    double *out_row = out_probabilities_matrix.data() +
+                      node_pos * static_cast<std::ptrdiff_t>(point_count);
+    const double *prob_row =
+        point_probabilities_matrix.data() +
+        node_pos * static_cast<std::ptrdiff_t>(eval_point_count);
+    for (std::size_t point_idx = 0; point_idx < point_count; ++point_idx) {
+      const std::size_t eval_idx = point_to_eval_index[point_idx];
+      if (eval_idx >= eval_point_count) {
+        return false;
+      }
+      out_row[point_idx] = prob_row[eval_idx];
+    }
+  }
+  return true;
+}
+
 double native_outcome_probability_bits_impl_idx(
     const uuber::NativeContext &ctx, int node_id, double upper, int component_idx,
     const uuber::BitsetState *forced_complete_bits,
@@ -5844,6 +6544,24 @@ bool evaluator_eval_node_batch_with_state_dense(
                                           out_values);
 }
 
+bool evaluator_eval_nodes_batch_with_state_dense(
+    const std::vector<int> &node_indices, const std::vector<double> &times,
+    NodeEvalState &state, std::vector<uuber::TreeNodeBatchValues> &out_values) {
+  out_values.clear();
+  if (times.empty()) {
+    return true;
+  }
+  uuber::TreeEventBatchEvalFn event_eval_batch_cb =
+      make_tree_event_eval_batch(state);
+  uuber::TreeGuardBatchEvalFn guard_eval_batch_cb =
+      make_tree_guard_eval_batch(state);
+  const uuber::TreeEvalNeed full_need{true, true, true};
+  return eval_tree_vector_nodes_batch(tree_vector_program_required(state.ctx),
+                                      node_indices, times, full_need,
+                                      event_eval_batch_cb,
+                                      guard_eval_batch_cb, out_values);
+}
+
 double evaluator_evaluate_survival_with_forced(
     int node_id, const uuber::BitsetState *forced_complete_bits,
     bool forced_complete_bits_valid,
@@ -5878,47 +6596,6 @@ bool evaluator_node_density_with_competitors_batch_internal(
       trial_params_soa_batch);
 }
 
-struct NativeMixtureDensityTerm {
-  int node_id{-1};
-  int component_idx{-1};
-  int outcome_idx_context{-1};
-  std::string trial_type_key;
-  std::vector<int> competitor_ids;
-  double scaled_weight{0.0};
-
-  bool same_key(const NativeMixtureDensityTerm &other) const {
-    return node_id == other.node_id &&
-           component_idx == other.component_idx &&
-           outcome_idx_context == other.outcome_idx_context &&
-           trial_type_key == other.trial_type_key &&
-           competitor_ids == other.competitor_ids;
-  }
-};
-
-inline void append_native_mixture_density_term(
-    std::vector<NativeMixtureDensityTerm> &terms,
-    int node_id, int component_idx, int outcome_idx_context,
-    const std::string &trial_type_key, const std::vector<int> &competitor_ids,
-    double scaled_weight) {
-  if (node_id < 0 || !std::isfinite(scaled_weight) || scaled_weight <= 0.0) {
-    return;
-  }
-  NativeMixtureDensityTerm candidate;
-  candidate.node_id = node_id;
-  candidate.component_idx = component_idx;
-  candidate.outcome_idx_context = outcome_idx_context;
-  candidate.trial_type_key = trial_type_key;
-  candidate.competitor_ids = competitor_ids;
-  for (NativeMixtureDensityTerm &term : terms) {
-    if (term.same_key(candidate)) {
-      term.scaled_weight += scaled_weight;
-      return;
-    }
-  }
-  candidate.scaled_weight = scaled_weight;
-  terms.push_back(std::move(candidate));
-}
-
 double native_trial_mixture_internal_idx(
     uuber::NativeContext &ctx, int node_id, double t,
     const std::vector<int> &component_indices, const std::vector<double> &weights,
@@ -5947,7 +6624,7 @@ double native_trial_mixture_internal_idx(
         ctx.outcome_label_ids[static_cast<std::size_t>(keep_outcome_idx)];
   }
 
-  std::vector<NativeMixtureDensityTerm> terms;
+  std::vector<WeightedNodeDensityTerm> terms;
   terms.reserve(component_indices.size() * 2u);
 
   auto component_guess_shortcut_applies = [&](int component_idx) -> bool {
@@ -5997,9 +6674,9 @@ double native_trial_mixture_internal_idx(
       std::vector<int> filtered_competitors;
       const std::vector<int> &comp_use = filter_competitor_ids(
           ctx, info.competitor_ids, component_idx, filtered_competitors);
-      append_native_mixture_density_term(
+      append_weighted_node_density_term(
           terms, info.node_id, component_idx, donor_outcome_idx,
-          trial_type_key, comp_use, mix_weight * release);
+          trial_type_key, comp_use, false, mix_weight * release);
     }
   };
 
@@ -6046,9 +6723,9 @@ double native_trial_mixture_internal_idx(
       }
       const int donor_outcome_idx_context =
           donor_label.empty() ? -1 : outcome_index_of(ctx, donor_label);
-      append_native_mixture_density_term(
+      append_weighted_node_density_term(
           terms, donor_node, component_idx, donor_outcome_idx_context,
-          trial_type_key, comp_use, mix_weight * release);
+          trial_type_key, comp_use, false, mix_weight * release);
     }
   };
 
@@ -6090,9 +6767,9 @@ double native_trial_mixture_internal_idx(
         direct_weight *= keep_w;
       }
     }
-    append_native_mixture_density_term(
+    append_weighted_node_density_term(
         terms, node_id, comp_idx, keep_outcome_idx_context,
-        cache_entry_ptr->trial_type_key, comp_use, direct_weight);
+        cache_entry_ptr->trial_type_key, comp_use, false, direct_weight);
     if (guess_donors.size() > 0) {
       append_plan_guess_terms(comp_idx, mix_weight,
                               cache_entry_ptr->trial_type_key);
@@ -6105,26 +6782,14 @@ double native_trial_mixture_internal_idx(
 
   const bool use_shared_trigger_eval = (params_ptr != nullptr);
   const std::vector<double> times{t};
-  double total = 0.0;
-  for (const NativeMixtureDensityTerm &term : terms) {
-    const double scaled_weight = term.scaled_weight;
-    if (!std::isfinite(scaled_weight) || scaled_weight <= 0.0) {
-      continue;
-    }
-    std::vector<double> density_out;
-    const bool batched = node_density_entry_batch_idx(
-        ctx, term.node_id, times, term.component_idx, nullptr, false, nullptr,
-        false, term.competitor_ids, params_ptr, term.trial_type_key, false,
-        term.outcome_idx_context, trigger_plan_ptr, use_shared_trigger_eval,
-        density_out, nullptr);
-    if (!batched || density_out.size() != 1u) {
-      Rcpp::stop("Native trial mixture direct batch evaluation failed");
-    }
-    const double density = density_out[0];
-    if (std::isfinite(density) && density > 0.0) {
-      total += scaled_weight * density;
-    }
+  std::vector<double> mixture_density;
+  if (!accumulate_weighted_node_density_terms_batch_idx(
+          ctx, terms, times, params_ptr, trigger_plan_ptr, use_shared_trigger_eval,
+          mixture_density)) {
+    Rcpp::stop("Native trial mixture direct batch evaluation failed");
   }
+  const double total =
+      (mixture_density.size() == 1u) ? mixture_density[0] : 0.0;
 
   if (!std::isfinite(total) || total <= 0.0) {
     return 0.0;
@@ -6196,6 +6861,9 @@ bool mix_outcome_mass_batch_idx(
       trial_to_point_index->size() != trial_count) {
     return false;
   }
+  if (trial_params_batch.size() < point_count) {
+    return false;
+  }
 
   std::vector<const uuber::TrialParamsSoA *> trial_params_soa_batch_storage;
   const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch_ptr =
@@ -6232,8 +6900,6 @@ bool mix_outcome_mass_batch_idx(
   }
 
   out_probabilities.assign(trial_count, 0.0);
-  std::vector<double> batch_probabilities;
-  batch_probabilities.reserve(point_count);
   DensityBatchWorkspace integration_workspace;
   const bool use_implicit_component = component_indices.empty();
   const std::size_t component_count =
@@ -6271,6 +6937,8 @@ bool mix_outcome_mass_batch_idx(
     }
   }
 
+  std::vector<double> batch_probabilities;
+  batch_probabilities.reserve(point_count);
   for (std::size_t outcome_pos = 0;
        outcome_pos < nonresponse_outcome_indices.size(); ++outcome_pos) {
     const int outcome_idx = nonresponse_outcome_indices[outcome_pos];
@@ -6752,6 +7420,7 @@ struct RankedSequenceBatchSpec {
   int param_group_idx{-1};
   int trigger_plan_idx{-1};
   const double *time_data{nullptr};
+  std::size_t time_count{0u};
 };
 
 struct RankedSequenceTemplateCacheKey {
@@ -6951,6 +7620,7 @@ inline bool build_ranked_sequence_batch_spec(
     }
     out.template_ptr = &entry.batch_template;
     out.time_data = eval_input.sequence_time_data;
+    out.time_count = eval_input.sequence_length;
     return true;
   }
 
@@ -6987,6 +7657,7 @@ inline bool build_ranked_sequence_batch_spec(
   entry.buildable = true;
   RankedSequenceBatchTemplate &batch_template = entry.batch_template;
   out.time_data = eval_input.sequence_time_data;
+  out.time_count = eval_input.sequence_length;
   batch_template.contributions.reserve(contributions.size());
   for (const TrialContributionSpec &spec : contributions) {
     RankedSequenceContributionTemplate contribution;
@@ -8800,6 +9471,7 @@ inline double execute_loglik_workload(uuber::NativeContext &ctx,
   }
 
   if (workload.enable_ranked_sequence_batch) {
+    RankedBatchPlanner ranked_batch_transition_planner(ctx);
     for (auto &kv : ranked_sequence_batch_groups) {
       const std::vector<int> &trial_indices = kv.second;
       const int first_trial = trial_indices.front();
@@ -8824,6 +9496,8 @@ inline double execute_loglik_workload(uuber::NativeContext &ctx,
       if (rep_trial_idx < 0 || rep_trial_idx >= n_trials) {
         continue;
       }
+      PreparedTrialParamsRuntime &rep_runtime =
+          prepared_trial_runtimes[static_cast<std::size_t>(rep_trial_idx)];
 
       const SharedTriggerPlan *group_trigger_plan_ptr =
           (group_spec.trigger_plan_idx >= 0 &&
@@ -8864,13 +9538,11 @@ inline double execute_loglik_workload(uuber::NativeContext &ctx,
           }
         }
         if (shared_trigger_ranked_supported) {
-          SharedTriggerMaskSoABatch mask_batch;
-          if (!build_shared_trigger_mask_soa_batch(
-                  ctx, &param_sets[static_cast<std::size_t>(rep_trial_idx)],
-                  *group_trigger_plan_ptr, mask_batch) ||
-              mask_batch.mask_param_ptrs.empty()) {
+          if (!ensure_prepared_trial_params_mask_batch(ctx, rep_runtime) ||
+              rep_runtime.mask_batch.mask_param_ptrs.empty()) {
             shared_trigger_ranked_supported = false;
           } else {
+            const SharedTriggerMaskSoABatch &mask_batch = rep_runtime.mask_batch;
             std::vector<const double *> expanded_times_by_trial;
             std::vector<const uuber::TrialParamsSoA *> expanded_params_soa;
             expanded_times_by_trial.reserve(
@@ -8890,23 +9562,30 @@ inline double execute_loglik_workload(uuber::NativeContext &ctx,
               }
             }
 
+            std::vector<const double *> compressed_times_by_trial;
+            std::vector<const uuber::TrialParamsSoA *> compressed_params_soa;
+            std::vector<std::size_t> expanded_inverse_indices;
+            compress_ranked_sequence_query_batch(
+                expanded_times_by_trial, expanded_params_soa,
+                group_spec.time_count, compressed_times_by_trial,
+                compressed_params_soa, expanded_inverse_indices);
+
             std::vector<double> total_probabilities(trial_indices.size(), 0.0);
-            RankedBatchPlanner ranked_batch_transition_planner(ctx);
             bool batch_ok = true;
             for (const RankedSequenceContributionTemplate &contribution :
                  group_template->contributions) {
-              std::vector<double> expanded_density_out;
+              std::vector<double> compressed_density_out;
               const bool batched = sequence_prefix_density_batch_resolved(
                   ctx, contribution.sequence_outcome_indices,
-                  contribution.sequence_node_indices, expanded_times_by_trial,
+                  contribution.sequence_node_indices, compressed_times_by_trial,
                   contribution.component_idx,
                   &param_sets[static_cast<std::size_t>(rep_trial_idx)],
-                  contribution.trial_type_key, expanded_density_out,
-                  &expanded_params_soa, &ranked_batch_transition_planner,
+                  contribution.trial_type_key, compressed_density_out,
+                  &compressed_params_soa, &ranked_batch_transition_planner,
                   &contribution.step_competitor_ids_ptrs,
                   &contribution.step_persistent_sources);
               if (!batched ||
-                  expanded_density_out.size() != expanded_times_by_trial.size()) {
+                  compressed_density_out.size() != compressed_times_by_trial.size()) {
                 batch_ok = false;
                 break;
               }
@@ -8919,9 +9598,17 @@ inline double execute_loglik_workload(uuber::NativeContext &ctx,
                   if (!(std::isfinite(weight) && weight > 0.0)) {
                     continue;
                   }
-                  const std::size_t point_idx =
+                  const std::size_t expansion_idx =
                       mask_idx * trial_indices.size() + trial_pos;
-                  const double point_density = expanded_density_out[point_idx];
+                  if (expansion_idx >= expanded_inverse_indices.size()) {
+                    continue;
+                  }
+                  const std::size_t unique_idx =
+                      expanded_inverse_indices[expansion_idx];
+                  if (unique_idx >= compressed_density_out.size()) {
+                    continue;
+                  }
+                  const double point_density = compressed_density_out[unique_idx];
                   if (std::isfinite(point_density) && point_density > 0.0) {
                     density += weight * point_density;
                   }
@@ -8942,35 +9629,53 @@ inline double execute_loglik_workload(uuber::NativeContext &ctx,
         }
       }
 
+      if (!ensure_prepared_trial_params_soa(ctx, rep_runtime) ||
+          rep_runtime.soa == nullptr) {
+        Rcpp::stop("Failed to prepare ranked trial params SoA");
+      }
       std::vector<const double *> times_by_trial;
       times_by_trial.reserve(trial_indices.size());
+      std::vector<const uuber::TrialParamsSoA *> query_params_soa(
+          trial_indices.size(), rep_runtime.soa);
       for (int trial_idx : trial_indices) {
         const RankedSequenceBatchSpec &trial_spec =
             ranked_sequence_batch_specs[static_cast<std::size_t>(trial_idx)];
         times_by_trial.push_back(trial_spec.time_data);
       }
 
+      std::vector<const double *> compressed_times_by_trial;
+      std::vector<const uuber::TrialParamsSoA *> compressed_params_soa;
+      std::vector<std::size_t> inverse_indices;
+      compress_ranked_sequence_query_batch(
+          times_by_trial, query_params_soa, group_spec.time_count,
+          compressed_times_by_trial, compressed_params_soa, inverse_indices);
+
       std::vector<double> total_probabilities(trial_indices.size(), 0.0);
-      RankedBatchPlanner ranked_batch_transition_planner(ctx);
       bool batch_ok = true;
       for (const RankedSequenceContributionTemplate &contribution :
            group_template->contributions) {
         std::vector<double> density_out;
         const bool batched = sequence_prefix_density_batch_resolved(
             ctx, contribution.sequence_outcome_indices,
-            contribution.sequence_node_indices, times_by_trial,
+            contribution.sequence_node_indices, compressed_times_by_trial,
             contribution.component_idx,
             &param_sets[static_cast<std::size_t>(rep_trial_idx)],
-            contribution.trial_type_key, density_out, nullptr,
+            contribution.trial_type_key, density_out, &compressed_params_soa,
             &ranked_batch_transition_planner,
             &contribution.step_competitor_ids_ptrs,
             &contribution.step_persistent_sources);
-        if (!batched || density_out.size() != trial_indices.size()) {
+        if (!batched || density_out.size() != compressed_times_by_trial.size()) {
           batch_ok = false;
           break;
         }
         for (std::size_t i = 0; i < trial_indices.size(); ++i) {
-          const double density = density_out[i];
+          const std::size_t query_idx =
+              (i < inverse_indices.size()) ? inverse_indices[i]
+                                           : std::numeric_limits<std::size_t>::max();
+          if (query_idx >= density_out.size()) {
+            continue;
+          }
+          const double density = density_out[query_idx];
           if (std::isfinite(density) && density > 0.0) {
             total_probabilities[i] = safe_density(
                 total_probabilities[i] +
@@ -9004,6 +9709,8 @@ inline double execute_loglik_workload(uuber::NativeContext &ctx,
     if (rep_trial_idx < 0 || rep_trial_idx >= n_trials) {
       continue;
     }
+    PreparedTrialParamsRuntime &rep_runtime =
+        prepared_trial_runtimes[static_cast<std::size_t>(rep_trial_idx)];
 
     const int forced_component_idx =
         (first_trial < static_cast<int>(forced_component_idx_by_trial.size()))
@@ -9019,15 +9726,11 @@ inline double execute_loglik_workload(uuber::NativeContext &ctx,
       continue;
     }
 
-    const SharedTriggerPlan &group_trigger_plan =
-        trigger_plans[static_cast<std::size_t>(group_key.trigger_plan_idx)];
-    SharedTriggerMaskSoABatch mask_batch;
-    if (!build_shared_trigger_mask_soa_batch(
-            ctx, &param_sets[static_cast<std::size_t>(rep_trial_idx)],
-            group_trigger_plan, mask_batch) ||
-        mask_batch.mask_param_ptrs.empty()) {
+    if (!ensure_prepared_trial_params_mask_batch(ctx, rep_runtime) ||
+        rep_runtime.mask_batch.mask_param_ptrs.empty()) {
       continue;
     }
+    const SharedTriggerMaskSoABatch &mask_batch = rep_runtime.mask_batch;
 
     std::vector<const std::vector<double> *> expanded_component_weights_batch;
     std::vector<std::size_t> expanded_trial_to_point_index;
@@ -9422,11 +10125,25 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
     return inserted.first->second;
   };
 
+  struct SharedTriggerMaskBatchCacheEntry {
+    bool ready{false};
+    bool valid{false};
+    SharedTriggerMaskSoABatch batch;
+  };
+
   auto flatten_point_index =
       [n_trials](int param_batch_idx, int trial_idx) -> std::size_t {
     return static_cast<std::size_t>(param_batch_idx) *
                static_cast<std::size_t>(n_trials) +
            static_cast<std::size_t>(trial_idx);
+  };
+  auto flat_idx_of_point =
+      [&](const LogLikPreparedBatchPoint &point) -> std::size_t {
+    return flatten_point_index(point.param_batch_idx, point.trial_idx);
+  };
+  auto first_flat_idx_of_group =
+      [&](const std::vector<LogLikPreparedBatchPoint> &points) -> std::size_t {
+    return flat_idx_of_point(points.front());
   };
 
   auto assign_group_loglik =
@@ -9436,8 +10153,7 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
           std::vector<std::uint8_t> &trial_loglik_batched) -> void {
     for (std::size_t i = 0; i < points.size(); ++i) {
       const LogLikPreparedBatchPoint &point = points[i];
-      const std::size_t flat_idx =
-          flatten_point_index(point.param_batch_idx, point.trial_idx);
+      const std::size_t flat_idx = flat_idx_of_point(point);
       const double prob = (i < probabilities.size()) ? probabilities[i] : 0.0;
       double ll_val = min_ll;
       if (std::isfinite(prob) && prob > 0.0) {
@@ -9454,6 +10170,98 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
   const std::size_t total_point_count =
       static_cast<std::size_t>(n_trials) *
       static_cast<std::size_t>(n_param_batches);
+  std::unordered_map<uuber::NAMapCacheKey, int, uuber::NAMapCacheKeyHash>
+      global_param_group_by_value_key;
+  global_param_group_by_value_key.reserve(total_point_count);
+  auto global_param_group_for =
+      [&](const PreparedTrialParamsRuntime &runtime) -> int {
+    const auto insert_result = global_param_group_by_value_key.emplace(
+        runtime.value_key,
+        static_cast<int>(global_param_group_by_value_key.size()));
+    return insert_result.first->second;
+  };
+  std::unordered_map<uuber::NAMapCacheKey, SharedTriggerMaskBatchCacheEntry,
+                     uuber::NAMapCacheKeyHash>
+      shared_trigger_mask_batch_by_value_key;
+  shared_trigger_mask_batch_by_value_key.reserve(total_point_count);
+  auto resolve_shared_trigger_mask_batch =
+      [&](PreparedTrialParamsRuntime &runtime)
+      -> const SharedTriggerMaskSoABatch * {
+    if (!ensure_prepared_trial_params_trigger_plan(ctx, runtime) ||
+        shared_trigger_count(runtime.trigger_plan) == 0u) {
+      return nullptr;
+    }
+    SharedTriggerMaskBatchCacheEntry &entry =
+        shared_trigger_mask_batch_by_value_key[runtime.value_key];
+    if (!entry.ready) {
+      entry.ready = true;
+      entry.valid = build_shared_trigger_mask_soa_batch(
+                        ctx, runtime.params, runtime.trigger_plan, entry.batch) &&
+                    !entry.batch.mask_param_ptrs.empty();
+      if (!entry.valid) {
+        entry.batch = SharedTriggerMaskSoABatch{};
+      }
+    }
+    return entry.valid ? &entry.batch : nullptr;
+  };
+  auto prepared_params_for_point =
+      [&](const LogLikPreparedBatchPoint &point) -> LogLikPreparedParams & {
+    return prepared_batch[static_cast<std::size_t>(point.param_batch_idx)];
+  };
+  auto prepared_runtime_for_point =
+      [&](const LogLikPreparedBatchPoint &point)
+      -> PreparedTrialParamsRuntime & {
+    return prepared_params_for_point(point).prepared_trial_runtimes
+        [static_cast<std::size_t>(point.trial_idx)];
+  };
+  auto for_each_prepared_query_lane =
+      [&](const std::vector<LogLikPreparedBatchPoint> &points,
+          bool shared_trigger_supported, const TrialParamSet **rep_params_out,
+          auto &&visitor) -> bool {
+    std::unordered_map<uuber::NAMapCacheKey, const uuber::TrialParamsSoA *,
+                       uuber::NAMapCacheKeyHash>
+        canonical_soa_by_value_key;
+    canonical_soa_by_value_key.reserve(points.size());
+    for (std::size_t point_idx = 0; point_idx < points.size(); ++point_idx) {
+      const LogLikPreparedBatchPoint &point = points[point_idx];
+      PreparedTrialParamsRuntime &runtime = prepared_runtime_for_point(point);
+      if (!ensure_prepared_trial_params_soa(ctx, runtime) || runtime.soa == nullptr) {
+        return false;
+      }
+      if (rep_params_out != nullptr && *rep_params_out == nullptr) {
+        *rep_params_out = runtime.params;
+      }
+      const SharedTriggerMaskSoABatch *mask_batch_ptr =
+          shared_trigger_supported ? resolve_shared_trigger_mask_batch(runtime)
+                                   : nullptr;
+      if (mask_batch_ptr != nullptr) {
+        for (std::size_t mask_idx = 0;
+             mask_idx < mask_batch_ptr->mask_param_ptrs.size(); ++mask_idx) {
+          const uuber::TrialParamsSoA *mask_soa =
+              mask_batch_ptr->mask_param_ptrs[mask_idx];
+          const double mask_weight =
+              (mask_idx < mask_batch_ptr->mask_weights.size())
+                  ? mask_batch_ptr->mask_weights[mask_idx]
+                  : 0.0;
+          if (mask_soa == nullptr || !mask_soa->valid ||
+              !std::isfinite(mask_weight) || mask_weight <= 0.0) {
+            continue;
+          }
+          if (!visitor(point_idx, point, runtime, mask_soa, mask_weight, true)) {
+            return false;
+          }
+        }
+        continue;
+      }
+      const auto insert_result =
+          canonical_soa_by_value_key.emplace(runtime.value_key, runtime.soa);
+      if (!visitor(point_idx, point, runtime, insert_result.first->second, 1.0,
+                   false)) {
+        return false;
+      }
+    }
+    return true;
+  };
   std::vector<double> trial_loglik(total_point_count, min_ll);
   std::vector<std::uint8_t> trial_loglik_batched(total_point_count, 0u);
 
@@ -9479,6 +10287,34 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
   if (workload.enable_ranked_sequence_batch) {
     ranked_sequence_batch_groups.reserve(total_point_count);
   }
+
+  std::unordered_map<const RankedSequenceBatchTemplate *, bool>
+      ranked_shared_trigger_support_by_template;
+  auto ranked_template_supports_shared_trigger =
+      [&](const RankedSequenceBatchTemplate *batch_template) -> bool {
+    if (batch_template == nullptr) {
+      return false;
+    }
+    auto it = ranked_shared_trigger_support_by_template.find(batch_template);
+    if (it != ranked_shared_trigger_support_by_template.end()) {
+      return it->second;
+    }
+    bool supported = true;
+    for (const RankedSequenceContributionTemplate &contribution :
+         batch_template->contributions) {
+      for (int outcome_idx : contribution.sequence_outcome_indices) {
+        if (!shared_trigger_mask_batch_supported(ctx, false, outcome_idx)) {
+          supported = false;
+          break;
+        }
+      }
+      if (!supported) {
+        break;
+      }
+    }
+    ranked_shared_trigger_support_by_template.emplace(batch_template, supported);
+    return supported;
+  };
 
   std::unordered_map<OutcomeMassBatchKey, std::vector<LogLikPreparedBatchPoint>,
                      OutcomeMassBatchKeyHash>
@@ -9519,10 +10355,14 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
       }
 
       const LogLikPreparedBatchPoint point{param_batch_idx, trial_idx};
-      const std::size_t flat_idx =
-          flatten_point_index(point.param_batch_idx, point.trial_idx);
+      const std::size_t flat_idx = flat_idx_of_point(point);
       const TrialEvalInput &eval_input =
           trial_eval_inputs[static_cast<std::size_t>(trial_idx)];
+      const LogLikPreparedParams &prepared =
+          prepared_batch[static_cast<std::size_t>(param_batch_idx)];
+      const PreparedTrialParamsRuntime &runtime =
+          prepared.prepared_trial_runtimes[static_cast<std::size_t>(trial_idx)];
+      const int global_param_group_idx = global_param_group_for(runtime);
 
       const std::vector<int> *component_indices_ptr = nullptr;
       const std::vector<ComponentCacheEntry> *cache_entries_ptr = nullptr;
@@ -9534,7 +10374,7 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
       if (build_single_step_direct_batch_spec(
               ctx, eval_input, *component_indices_ptr, *component_weights_ptr,
               *cache_entries_ptr, single_step_spec)) {
-        single_step_spec.param_group_idx = -1;
+        single_step_spec.param_group_idx = global_param_group_idx;
         single_step_spec.trigger_plan_idx = -1;
         single_step_batch_specs[flat_idx] = single_step_spec;
 
@@ -9542,7 +10382,7 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
         key.node_id = single_step_spec.node_id;
         key.component_idx = single_step_spec.component_idx;
         key.outcome_idx_context = single_step_spec.outcome_idx_context;
-        key.param_group_idx = -1;
+        key.param_group_idx = global_param_group_idx;
         key.trigger_plan_idx = -1;
         key.trial_type_key = single_step_spec.trial_type_key;
         key.competitor_ids = single_step_spec.competitor_ids;
@@ -9554,13 +10394,13 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
       if (build_direct_trial_batch_spec(
               ctx, eval_input, *component_indices_ptr, *component_weights_ptr,
               *cache_entries_ptr, direct_trial_spec)) {
-        direct_trial_spec.param_group_idx = -1;
+        direct_trial_spec.param_group_idx = global_param_group_idx;
         direct_trial_spec.trigger_plan_idx = -1;
         direct_trial_batch_specs[flat_idx] = std::move(direct_trial_spec);
 
         DirectTrialBatchKey key;
         key.contributions = direct_trial_batch_specs[flat_idx].contributions;
-        key.param_group_idx = -1;
+        key.param_group_idx = global_param_group_idx;
         key.trigger_plan_idx = -1;
         direct_trial_batch_groups[std::move(key)].push_back(point);
         continue;
@@ -9576,13 +10416,13 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
               *cache_entries_ptr, ranked_spec)) {
         continue;
       }
-      ranked_spec.param_group_idx = -1;
+      ranked_spec.param_group_idx = global_param_group_idx;
       ranked_spec.trigger_plan_idx = -1;
       ranked_sequence_batch_specs[flat_idx] = std::move(ranked_spec);
 
       RankedSequenceBatchKey key;
       key.template_ptr = ranked_sequence_batch_specs[flat_idx].template_ptr;
-      key.param_group_idx = -1;
+      key.param_group_idx = global_param_group_idx;
       key.trigger_plan_idx = -1;
       ranked_sequence_batch_groups[std::move(key)].push_back(point);
     }
@@ -9620,19 +10460,13 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
     if (points.empty()) {
       continue;
     }
-    const std::size_t first_flat_idx =
-        flatten_point_index(points.front().param_batch_idx,
-                            points.front().trial_idx);
+    const std::size_t first_flat_idx = first_flat_idx_of_group(points);
     const SingleStepDirectBatchSpec &group_spec =
         single_step_batch_specs[first_flat_idx];
     const bool shared_trigger_supported =
         shared_trigger_density_batch_supported(ctx, false,
                                               group_spec.outcome_idx_context);
 
-    std::unordered_map<uuber::NAMapCacheKey, const uuber::TrialParamsSoA *,
-                       uuber::NAMapCacheKeyHash>
-        canonical_soa_by_value_key;
-    canonical_soa_by_value_key.reserve(points.size());
     std::vector<double> query_times;
     std::vector<const uuber::TrialParamsSoA *> query_params_soa;
     std::vector<double> query_weights;
@@ -9643,63 +10477,21 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
     query_to_point_index.reserve(points.size());
 
     const TrialParamSet *rep_params = nullptr;
-    bool group_valid = true;
-    for (std::size_t point_idx = 0; point_idx < points.size(); ++point_idx) {
-      const LogLikPreparedBatchPoint &point = points[point_idx];
-      LogLikPreparedParams &prepared =
-          prepared_batch[static_cast<std::size_t>(point.param_batch_idx)];
-      PreparedTrialParamsRuntime &runtime =
-          prepared.prepared_trial_runtimes[static_cast<std::size_t>(
-              point.trial_idx)];
-      if (!ensure_prepared_trial_params_soa(ctx, runtime) || runtime.soa == nullptr) {
-        group_valid = false;
-        break;
-      }
-      if (rep_params == nullptr) {
-        rep_params = runtime.params;
-      }
-      const SingleStepDirectBatchSpec &point_spec =
-          single_step_batch_specs[flatten_point_index(point.param_batch_idx,
-                                                      point.trial_idx)];
-      bool use_mask_expansion = false;
-      if (shared_trigger_supported &&
-          ensure_prepared_trial_params_trigger_plan(ctx, runtime) &&
-          shared_trigger_count(runtime.trigger_plan) > 0u) {
-        use_mask_expansion = true;
-      }
-      if (use_mask_expansion) {
-        if (!ensure_prepared_trial_params_mask_batch(ctx, runtime)) {
-          group_valid = false;
-          break;
-        }
-        for (std::size_t mask_idx = 0;
-             mask_idx < runtime.mask_batch.mask_param_ptrs.size(); ++mask_idx) {
-          const uuber::TrialParamsSoA *mask_soa =
-              runtime.mask_batch.mask_param_ptrs[mask_idx];
-          const double mask_weight =
-              (mask_idx < runtime.mask_batch.mask_weights.size())
-                  ? runtime.mask_batch.mask_weights[mask_idx]
-                  : 0.0;
-          if (mask_soa == nullptr || !mask_soa->valid ||
-              !std::isfinite(mask_weight) || mask_weight <= 0.0) {
-            continue;
-          }
-          query_times.push_back(point_spec.time);
-          query_params_soa.push_back(mask_soa);
-          query_weights.push_back(point_spec.scaled_weight * mask_weight);
-          query_to_point_index.push_back(point_idx);
-        }
-        continue;
-      }
-
-      const auto insert_result =
-          canonical_soa_by_value_key.emplace(runtime.value_key, runtime.soa);
-      query_times.push_back(point_spec.time);
-      query_params_soa.push_back(insert_result.first->second);
-      query_weights.push_back(point_spec.scaled_weight);
-      query_to_point_index.push_back(point_idx);
-    }
-    if (!group_valid) {
+    if (!for_each_prepared_query_lane(
+            points, shared_trigger_supported, &rep_params,
+            [&](std::size_t point_idx, const LogLikPreparedBatchPoint &point,
+                PreparedTrialParamsRuntime &, const uuber::TrialParamsSoA *soa,
+                double expansion_weight, bool) -> bool {
+              const SingleStepDirectBatchSpec &point_spec =
+                  single_step_batch_specs[flatten_point_index(
+                      point.param_batch_idx, point.trial_idx)];
+              query_times.push_back(point_spec.time);
+              query_params_soa.push_back(soa);
+              query_weights.push_back(point_spec.scaled_weight *
+                                      expansion_weight);
+              query_to_point_index.push_back(point_idx);
+              return true;
+            })) {
       Rcpp::stop("Direct multi-parameter group preparation failed");
     }
 
@@ -9738,9 +10530,7 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
     if (points.empty()) {
       continue;
     }
-    const std::size_t first_flat_idx =
-        flatten_point_index(points.front().param_batch_idx,
-                            points.front().trial_idx);
+    const std::size_t first_flat_idx = first_flat_idx_of_group(points);
     const DirectTrialBatchSpec &group_spec = direct_trial_batch_specs[first_flat_idx];
 
     std::vector<double> point_probabilities(points.size(), 0.0);
@@ -9749,10 +10539,6 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
       const bool shared_trigger_supported =
           shared_trigger_density_batch_supported(ctx, false,
                                                 contribution.outcome_idx_context);
-      std::unordered_map<uuber::NAMapCacheKey, const uuber::TrialParamsSoA *,
-                         uuber::NAMapCacheKeyHash>
-          canonical_soa_by_value_key;
-      canonical_soa_by_value_key.reserve(points.size());
       std::vector<double> query_times;
       std::vector<const uuber::TrialParamsSoA *> query_params_soa;
       std::vector<double> query_weights;
@@ -9763,61 +10549,21 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
       query_to_point_index.reserve(points.size());
 
       const TrialParamSet *rep_params = nullptr;
-      bool group_valid = true;
-      for (std::size_t point_idx = 0; point_idx < points.size(); ++point_idx) {
-        const LogLikPreparedBatchPoint &point = points[point_idx];
-        LogLikPreparedParams &prepared =
-            prepared_batch[static_cast<std::size_t>(point.param_batch_idx)];
-        PreparedTrialParamsRuntime &runtime =
-            prepared.prepared_trial_runtimes[static_cast<std::size_t>(
-                point.trial_idx)];
-        if (!ensure_prepared_trial_params_soa(ctx, runtime) ||
-            runtime.soa == nullptr) {
-          group_valid = false;
-          break;
-        }
-        if (rep_params == nullptr) {
-          rep_params = runtime.params;
-        }
-        bool use_mask_expansion = false;
-        if (shared_trigger_supported &&
-            ensure_prepared_trial_params_trigger_plan(ctx, runtime) &&
-            shared_trigger_count(runtime.trigger_plan) > 0u) {
-          use_mask_expansion = true;
-        }
-        if (use_mask_expansion) {
-          if (!ensure_prepared_trial_params_mask_batch(ctx, runtime)) {
-            group_valid = false;
-            break;
-          }
-          for (std::size_t mask_idx = 0;
-               mask_idx < runtime.mask_batch.mask_param_ptrs.size(); ++mask_idx) {
-            const uuber::TrialParamsSoA *mask_soa =
-                runtime.mask_batch.mask_param_ptrs[mask_idx];
-            const double mask_weight =
-                (mask_idx < runtime.mask_batch.mask_weights.size())
-                    ? runtime.mask_batch.mask_weights[mask_idx]
-                    : 0.0;
-            if (mask_soa == nullptr || !mask_soa->valid ||
-                !std::isfinite(mask_weight) || mask_weight <= 0.0) {
-              continue;
-            }
-            query_times.push_back(group_spec.time);
-            query_params_soa.push_back(mask_soa);
-            query_weights.push_back(contribution.scaled_weight * mask_weight);
-            query_to_point_index.push_back(point_idx);
-          }
-          continue;
-        }
-
-        const auto insert_result =
-            canonical_soa_by_value_key.emplace(runtime.value_key, runtime.soa);
-        query_times.push_back(group_spec.time);
-        query_params_soa.push_back(insert_result.first->second);
-        query_weights.push_back(contribution.scaled_weight);
-        query_to_point_index.push_back(point_idx);
-      }
-      if (!group_valid) {
+      if (!for_each_prepared_query_lane(
+              points, shared_trigger_supported, &rep_params,
+              [&](std::size_t point_idx, const LogLikPreparedBatchPoint &point,
+                  PreparedTrialParamsRuntime &, const uuber::TrialParamsSoA *soa,
+                  double expansion_weight, bool) -> bool {
+                const DirectTrialBatchSpec &point_spec =
+                    direct_trial_batch_specs[flatten_point_index(
+                        point.param_batch_idx, point.trial_idx)];
+                query_times.push_back(point_spec.time);
+                query_params_soa.push_back(soa);
+                query_weights.push_back(contribution.scaled_weight *
+                                        expansion_weight);
+                query_to_point_index.push_back(point_idx);
+                return true;
+              })) {
         Rcpp::stop("Direct multi-parameter contribution preparation failed");
       }
       if (query_times.empty()) {
@@ -9851,14 +10597,13 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
   }
 
   if (workload.enable_ranked_sequence_batch) {
+    RankedBatchPlanner ranked_batch_transition_planner(ctx);
     for (auto &kv : ranked_sequence_batch_groups) {
       const std::vector<LogLikPreparedBatchPoint> &points = kv.second;
       if (points.empty()) {
         continue;
       }
-      const std::size_t first_flat_idx =
-          flatten_point_index(points.front().param_batch_idx,
-                              points.front().trial_idx);
+      const std::size_t first_flat_idx = first_flat_idx_of_group(points);
       const RankedSequenceBatchSpec &group_spec =
           ranked_sequence_batch_specs[first_flat_idx];
       const RankedSequenceBatchTemplate *group_template = group_spec.template_ptr;
@@ -9866,24 +10611,9 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
         continue;
       }
 
-      bool shared_trigger_ranked_supported = true;
-      for (const RankedSequenceContributionTemplate &contribution :
-           group_template->contributions) {
-        for (int outcome_idx : contribution.sequence_outcome_indices) {
-          if (!shared_trigger_mask_batch_supported(ctx, false, outcome_idx)) {
-            shared_trigger_ranked_supported = false;
-            break;
-          }
-        }
-        if (!shared_trigger_ranked_supported) {
-          break;
-        }
-      }
+      const bool shared_trigger_ranked_supported =
+          ranked_template_supports_shared_trigger(group_template);
 
-      std::unordered_map<uuber::NAMapCacheKey, const uuber::TrialParamsSoA *,
-                         uuber::NAMapCacheKeyHash>
-          canonical_soa_by_value_key;
-      canonical_soa_by_value_key.reserve(points.size());
       std::vector<const double *> query_times_by_point;
       std::vector<const uuber::TrialParamsSoA *> query_params_soa;
       std::vector<double> query_weights;
@@ -9894,88 +10624,57 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
       query_to_point_index.reserve(points.size());
 
       const TrialParamSet *rep_params = nullptr;
-      bool group_valid = true;
-      for (std::size_t point_idx = 0; point_idx < points.size(); ++point_idx) {
-        const LogLikPreparedBatchPoint &point = points[point_idx];
-        LogLikPreparedParams &prepared =
-            prepared_batch[static_cast<std::size_t>(point.param_batch_idx)];
-        PreparedTrialParamsRuntime &runtime =
-            prepared.prepared_trial_runtimes[static_cast<std::size_t>(
-                point.trial_idx)];
-        if (!ensure_prepared_trial_params_soa(ctx, runtime) ||
-            runtime.soa == nullptr) {
-          group_valid = false;
-          break;
-        }
-        if (rep_params == nullptr) {
-          rep_params = runtime.params;
-        }
-        const RankedSequenceBatchSpec &point_spec =
-            ranked_sequence_batch_specs[flatten_point_index(
-                point.param_batch_idx, point.trial_idx)];
-        bool use_mask_expansion = false;
-        if (shared_trigger_ranked_supported &&
-            ensure_prepared_trial_params_trigger_plan(ctx, runtime) &&
-            shared_trigger_count(runtime.trigger_plan) > 0u) {
-          use_mask_expansion = true;
-        }
-        if (use_mask_expansion) {
-          if (!ensure_prepared_trial_params_mask_batch(ctx, runtime)) {
-            group_valid = false;
-            break;
-          }
-          for (std::size_t mask_idx = 0;
-               mask_idx < runtime.mask_batch.mask_param_ptrs.size(); ++mask_idx) {
-            const uuber::TrialParamsSoA *mask_soa =
-                runtime.mask_batch.mask_param_ptrs[mask_idx];
-            const double mask_weight =
-                (mask_idx < runtime.mask_batch.mask_weights.size())
-                    ? runtime.mask_batch.mask_weights[mask_idx]
-                    : 0.0;
-            if (mask_soa == nullptr || !mask_soa->valid ||
-                !std::isfinite(mask_weight) || mask_weight <= 0.0) {
-              continue;
-            }
-            query_times_by_point.push_back(point_spec.time_data);
-            query_params_soa.push_back(mask_soa);
-            query_weights.push_back(mask_weight);
-            query_to_point_index.push_back(point_idx);
-          }
-          continue;
-        }
-
-        const auto insert_result =
-            canonical_soa_by_value_key.emplace(runtime.value_key, runtime.soa);
-        query_times_by_point.push_back(point_spec.time_data);
-        query_params_soa.push_back(insert_result.first->second);
-        query_weights.push_back(1.0);
-        query_to_point_index.push_back(point_idx);
-      }
-      if (!group_valid) {
+      if (!for_each_prepared_query_lane(
+              points, shared_trigger_ranked_supported, &rep_params,
+              [&](std::size_t point_idx, const LogLikPreparedBatchPoint &point,
+                  PreparedTrialParamsRuntime &, const uuber::TrialParamsSoA *soa,
+                  double expansion_weight, bool) -> bool {
+                const RankedSequenceBatchSpec &point_spec =
+                    ranked_sequence_batch_specs[flatten_point_index(
+                        point.param_batch_idx, point.trial_idx)];
+                query_times_by_point.push_back(point_spec.time_data);
+                query_params_soa.push_back(soa);
+                query_weights.push_back(expansion_weight);
+                query_to_point_index.push_back(point_idx);
+                return true;
+              })) {
         Rcpp::stop("Ranked multi-parameter group preparation failed");
       }
+      std::vector<const double *> compressed_query_times_by_point;
+      std::vector<const uuber::TrialParamsSoA *> compressed_query_params_soa;
+      std::vector<std::size_t> query_inverse_indices;
+      compress_ranked_sequence_query_batch(
+          query_times_by_point, query_params_soa, group_spec.time_count,
+          compressed_query_times_by_point, compressed_query_params_soa,
+          query_inverse_indices);
 
       std::vector<double> point_probabilities(points.size(), 0.0);
-      RankedBatchPlanner ranked_batch_transition_planner(ctx);
       for (const RankedSequenceContributionTemplate &contribution :
            group_template->contributions) {
-        if (query_times_by_point.empty()) {
+        if (compressed_query_times_by_point.empty()) {
           continue;
         }
         std::vector<double> density_out;
         const bool batched = sequence_prefix_density_batch_resolved(
             ctx, contribution.sequence_outcome_indices,
-            contribution.sequence_node_indices, query_times_by_point,
+            contribution.sequence_node_indices, compressed_query_times_by_point,
             contribution.component_idx, rep_params, contribution.trial_type_key,
-            density_out, &query_params_soa, &ranked_batch_transition_planner,
+            density_out, &compressed_query_params_soa,
+            &ranked_batch_transition_planner,
             &contribution.step_competitor_ids_ptrs,
             &contribution.step_persistent_sources);
-        if (!batched || density_out.size() != query_times_by_point.size()) {
+        if (!batched ||
+            density_out.size() != compressed_query_times_by_point.size()) {
           Rcpp::stop("Ranked multi-parameter group evaluation failed");
         }
         std::vector<double> contribution_probabilities(points.size(), 0.0);
-        for (std::size_t query_idx = 0; query_idx < density_out.size(); ++query_idx) {
-          const double density = density_out[query_idx];
+        for (std::size_t query_idx = 0; query_idx < query_inverse_indices.size();
+             ++query_idx) {
+          const std::size_t unique_idx = query_inverse_indices[query_idx];
+          if (unique_idx >= density_out.size()) {
+            continue;
+          }
+          const double density = density_out[unique_idx];
           const double mask_weight = query_weights[query_idx];
           if (!(std::isfinite(density) && density > 0.0 &&
                 std::isfinite(mask_weight) && mask_weight > 0.0)) {
@@ -10033,83 +10732,58 @@ inline Rcpp::NumericVector execute_loglik_workload_multi(
     expansion_weights.reserve(points.size());
     expansion_to_original_point.reserve(points.size());
 
-    bool group_valid = true;
-    for (std::size_t point_idx = 0; point_idx < points.size(); ++point_idx) {
-      const LogLikPreparedBatchPoint &point = points[point_idx];
-      LogLikPreparedParams &prepared =
-          prepared_batch[static_cast<std::size_t>(point.param_batch_idx)];
-      PreparedTrialParamsRuntime &runtime =
-          prepared.prepared_trial_runtimes[static_cast<std::size_t>(
-              point.trial_idx)];
-      if (!ensure_prepared_trial_params_soa(ctx, runtime) || runtime.soa == nullptr) {
-        group_valid = false;
-        break;
-      }
+    if (!for_each_prepared_query_lane(
+            points, true, nullptr,
+            [&](std::size_t point_idx, const LogLikPreparedBatchPoint &point,
+                PreparedTrialParamsRuntime &runtime,
+                const uuber::TrialParamsSoA *soa, double expansion_weight,
+                bool shared_trigger_expanded) -> bool {
+              const int forced_component_idx =
+                  (point.trial_idx <
+                   static_cast<int>(forced_component_idx_by_trial.size()))
+                      ? forced_component_idx_by_trial[static_cast<std::size_t>(
+                            point.trial_idx)]
+                      : -1;
+              const std::vector<double> *component_weights_ptr =
+                  &prepared_params_for_point(point)
+                       .weights_by_trial[static_cast<std::size_t>(
+                           point.trial_idx)];
+              if (forced_component_idx >= 0) {
+                const ForcedComponentBundle &forced_bundle =
+                    forced_bundle_for(forced_component_idx);
+                component_weights_ptr = &forced_bundle.component_weights;
+                if (&forced_bundle.component_indices !=
+                    group_component_indices) {
+                  return false;
+                }
+              } else if (&default_component_indices != group_component_indices) {
+                return false;
+              }
 
-      const int forced_component_idx =
-          (point.trial_idx < static_cast<int>(forced_component_idx_by_trial.size()))
-              ? forced_component_idx_by_trial[static_cast<std::size_t>(
-                    point.trial_idx)]
-              : -1;
-      const std::vector<double> *component_weights_ptr =
-          &prepared.weights_by_trial[static_cast<std::size_t>(point.trial_idx)];
-      if (forced_component_idx >= 0) {
-        const ForcedComponentBundle &forced_bundle =
-            forced_bundle_for(forced_component_idx);
-        component_weights_ptr = &forced_bundle.component_weights;
-        if (&forced_bundle.component_indices != group_component_indices) {
-          group_valid = false;
-          break;
-        }
-      } else if (&default_component_indices != group_component_indices) {
-        group_valid = false;
-        break;
-      }
-
-      if (ensure_prepared_trial_params_trigger_plan(ctx, runtime) &&
-          shared_trigger_count(runtime.trigger_plan) > 0u) {
-        if (!ensure_prepared_trial_params_mask_batch(ctx, runtime)) {
-          group_valid = false;
-          break;
-        }
-        for (std::size_t mask_idx = 0;
-             mask_idx < runtime.mask_batch.mask_param_ptrs.size(); ++mask_idx) {
-          const uuber::TrialParamsSoA *mask_soa =
-              runtime.mask_batch.mask_param_ptrs[mask_idx];
-          const double mask_weight =
-              (mask_idx < runtime.mask_batch.mask_weights.size())
-                  ? runtime.mask_batch.mask_weights[mask_idx]
-                  : 0.0;
-          if (mask_soa == nullptr || !mask_soa->valid ||
-              !std::isfinite(mask_weight) || mask_weight <= 0.0) {
-            continue;
-          }
-          auto insert_result = shared_point_index_by_soa.emplace(
-              mask_soa, unique_params_soa.size());
-          if (insert_result.second) {
-            unique_trial_params.push_back(runtime.params);
-            unique_params_soa.push_back(mask_soa);
-          }
-          component_weights_batch.push_back(component_weights_ptr);
-          trial_to_point_index.push_back(insert_result.first->second);
-          expansion_weights.push_back(mask_weight);
-          expansion_to_original_point.push_back(point_idx);
-        }
-        continue;
-      }
-
-      const auto insert_result = nonshared_point_index_by_value_key.emplace(
-          runtime.value_key, unique_params_soa.size());
-      if (insert_result.second) {
-        unique_trial_params.push_back(runtime.params);
-        unique_params_soa.push_back(runtime.soa);
-      }
-      component_weights_batch.push_back(component_weights_ptr);
-      trial_to_point_index.push_back(insert_result.first->second);
-      expansion_weights.push_back(1.0);
-      expansion_to_original_point.push_back(point_idx);
-    }
-    if (!group_valid) {
+              std::size_t point_index = 0u;
+              if (shared_trigger_expanded) {
+                auto insert_result =
+                    shared_point_index_by_soa.emplace(soa, unique_params_soa.size());
+                point_index = insert_result.first->second;
+                if (insert_result.second) {
+                  unique_trial_params.push_back(runtime.params);
+                  unique_params_soa.push_back(soa);
+                }
+              } else {
+                auto insert_result = nonshared_point_index_by_value_key.emplace(
+                    runtime.value_key, unique_params_soa.size());
+                point_index = insert_result.first->second;
+                if (insert_result.second) {
+                  unique_trial_params.push_back(runtime.params);
+                  unique_params_soa.push_back(soa);
+                }
+              }
+              component_weights_batch.push_back(component_weights_ptr);
+              trial_to_point_index.push_back(point_index);
+              expansion_weights.push_back(expansion_weight);
+              expansion_to_original_point.push_back(point_idx);
+              return true;
+            })) {
       Rcpp::stop("Outcome-mass multi-parameter group preparation failed");
     }
 
@@ -10185,1426 +10859,14 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
                   Rcpp::DataFrame data_df, Rcpp::LogicalVector ok,
                   Rcpp::IntegerVector expand, double min_ll, double rel_tol,
                   double abs_tol, int max_depth) {
-  {
-    Rcpp::XPtr<uuber::NativeContext> ctx_xptr(ctxSEXP);
-    validate_loglik_context_or_stop(*ctx_xptr);
-    LogLikWorkload workload;
-    build_loglik_workload(*ctx_xptr, data_df, ok, expand, workload);
-    LogLikPreparedParams prepared =
-        build_loglik_prepared_params(*ctx_xptr, workload, params_mat);
-    return execute_loglik_workload(*ctx_xptr, workload, prepared, min_ll,
-                                   rel_tol, abs_tol, max_depth);
-  }
-#if 0
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
-  if (!ctx->ir.valid) {
-    Rcpp::stop("loglik requires a compiled IR context");
-  }
-  if (!ctx->tree_program || !ctx->tree_program->valid) {
-    Rcpp::stop("loglik requires a compiled tree vector program");
-  }
-  if (!ctx->tree_runtime.valid) {
-    Rcpp::stop("loglik requires compiled tree guard metadata");
-  }
-  ctx->na_map_cache.clear();
-  ctx->na_cache_order.clear();
-  const int q_col = 0;
-  const int w_col = 1;
-  const int t0_col = 2;
-  std::array<int, 8> p_cols{};
-  p_cols.fill(-1);
-  const int n_param_cols = std::max(0, params_mat.ncol() - 3);
-  const int n_slot_cols = std::min(8, n_param_cols);
-  for (int i = 0; i < n_slot_cols; ++i) {
-    p_cols[static_cast<std::size_t>(i)] = 3 + i;
-  }
-
-  const ComponentMap &comp_map = ctx->components;
-  const std::vector<std::string> &comp_ids = comp_map.ids;
-  const std::vector<int> &outcome_label_ids = ctx->outcome_label_ids;
-  if (outcome_label_ids.empty()) {
-    Rcpp::stop("IR loglik requires native outcome labels in context");
-  }
-
-  auto decode_outcome_factor = [&](SEXP col_sexp) -> Rcpp::IntegerVector {
-    const R_xlen_t n = Rf_xlength(col_sexp);
-    Rcpp::IntegerVector out(n, NA_INTEGER);
-    Rcpp::IntegerVector codes(col_sexp);
-    for (R_xlen_t i = 0; i < n; ++i) {
-      const int code = codes[i];
-      if (code == NA_INTEGER) {
-        continue;
-      }
-      out[i] = outcome_label_ids[static_cast<std::size_t>(code - 1)];
-    }
-    return out;
-  };
-
-  auto decode_component_factor = [&](SEXP col_sexp) -> Rcpp::IntegerVector {
-    const R_xlen_t n = Rf_xlength(col_sexp);
-    Rcpp::IntegerVector out(n, NA_INTEGER);
-    Rcpp::IntegerVector codes(col_sexp);
-    for (R_xlen_t i = 0; i < n; ++i) {
-      const int code = codes[i];
-      if (code == NA_INTEGER) {
-        continue;
-      }
-      out[i] = code - 1;
-    }
-    return out;
-  };
-
-  Rcpp::NumericVector trial_col = data_df["trial"];
-  const bool has_r = data_df.containsElementNamed("R");
-  Rcpp::IntegerVector outcome_id_col =
-      has_r ? decode_outcome_factor(data_df["R"]) : Rcpp::IntegerVector();
-  Rcpp::NumericVector rt_col = data_df["rt"];
-  std::vector<Rcpp::IntegerVector> rank_outcome_id_cols;
-  std::vector<Rcpp::NumericVector> rank_rt_cols;
-  rank_outcome_id_cols.push_back(outcome_id_col);
-  rank_rt_cols.push_back(rt_col);
-  for (int rank = 2;; ++rank) {
-    std::string r_name = "R" + std::to_string(rank);
-    std::string rt_name = "rt" + std::to_string(rank);
-    bool has_r = data_df.containsElementNamed(r_name.c_str());
-    bool has_rt = data_df.containsElementNamed(rt_name.c_str());
-    if (!(has_r && has_rt)) {
-      break;
-    }
-    rank_outcome_id_cols.push_back(decode_outcome_factor(data_df[r_name]));
-    rank_rt_cols.push_back(Rcpp::NumericVector(data_df[rt_name]));
-  }
-  const int rank_width = static_cast<int>(rank_outcome_id_cols.size());
-  const bool ranked_mode = rank_width > 1;
-  if (outcome_id_col.size() == 0) {
-    Rcpp::stop("IR loglik requires factor column 'R'");
-  }
-  const bool has_component_label = data_df.containsElementNamed("component");
-  bool has_component = has_component_label;
-  Rcpp::IntegerVector component_idx_col =
-      has_component_label
-          ? decode_component_factor(data_df["component"])
-          : Rcpp::IntegerVector();
-  bool has_onset = data_df.containsElementNamed("onset");
-  Rcpp::NumericVector onset_col =
-      has_onset ? Rcpp::NumericVector(data_df["onset"]) : Rcpp::NumericVector();
-
-  const std::vector<TrialAccumulatorParams> base_acc_params =
-      build_base_paramset(*ctx).acc_params;
-  std::vector<int> all_acc_indices(ctx->accumulators.size());
-  for (std::size_t i = 0; i < all_acc_indices.size(); ++i)
-    all_acc_indices[i] = static_cast<int>(i);
-  std::vector<std::vector<int>> comp_acc_indices(comp_ids.size());
-  for (std::size_t c = 0; c < comp_ids.size(); ++c) {
-    const std::string &cid = comp_ids[c];
-    for (std::size_t a = 0; a < ctx->accumulators.size(); ++a) {
-      const auto &comps = ctx->accumulators[a].components;
-      if (std::find(comps.begin(), comps.end(), cid) != comps.end()) {
-        comp_acc_indices[c].push_back(static_cast<int>(a));
-      }
-    }
-    if (comp_acc_indices[c].empty()) {
-      comp_acc_indices[c] = all_acc_indices;
-    }
-  }
-
-  std::vector<TrialParamSet> param_sets;
-  std::vector<TrialEvalInput> trial_eval_inputs;
-  std::vector<int> outcome_label_id_by_trial;
-  std::vector<double> rt_by_trial;
-  std::vector<int> comp_idx_by_trial;
-  std::vector<std::vector<double>> weight_override_by_trial;
-
-  const std::size_t comp_count = comp_map.ids.size();
-
-  const R_xlen_t n_rows = params_mat.nrow();
-  if (trial_col.size() != n_rows) {
-    Rcpp::stop(
-        "Parameter matrix rows (%lld) must match nested likelihood rows (%lld)",
-        static_cast<long long>(n_rows),
-        static_cast<long long>(trial_col.size()));
-  }
-  int current_trial_label = std::numeric_limits<int>::min();
-  int trial_idx = -1;
-  std::size_t acc_cursor = 0;
-  const std::vector<int> *current_acc_order = &all_acc_indices;
-  for (R_xlen_t r = 0; r < n_rows; ++r) {
-    int trial_label = static_cast<int>(trial_col[r]);
-    if (r == 0 || trial_label != current_trial_label) {
-      current_trial_label = trial_label;
-      ++trial_idx;
-      TrialParamSet ps;
-      ps.acc_params = base_acc_params;
-      param_sets.push_back(std::move(ps));
-      trial_eval_inputs.push_back(TrialEvalInput{});
-      outcome_label_id_by_trial.push_back(-1);
-      rt_by_trial.push_back(std::numeric_limits<double>::quiet_NaN());
-      comp_idx_by_trial.push_back(-1);
-      weight_override_by_trial.push_back(std::vector<double>(
-          comp_count, std::numeric_limits<double>::quiet_NaN()));
-      if (ranked_mode) {
-        initialize_ranked_trial_eval_input_stage(
-            trial_eval_inputs.back(), static_cast<std::size_t>(rank_width));
-      }
-      acc_cursor = 0;
-      current_acc_order = &all_acc_indices;
-    }
-    if (has_component && comp_idx_by_trial[trial_idx] < 0 &&
-        r < component_idx_col.size()) {
-      int comp_idx_val = component_idx_col[r];
-      if (comp_idx_val != NA_INTEGER) {
-        comp_idx_by_trial[trial_idx] = comp_idx_val;
-        current_acc_order =
-            &comp_acc_indices[static_cast<std::size_t>(comp_idx_val)];
-      }
-    }
-    int acc_idx = (acc_cursor < current_acc_order->size())
-                      ? (*current_acc_order)[acc_cursor]
-                      : all_acc_indices[acc_cursor % all_acc_indices.size()];
-    ++acc_cursor;
-    TrialAccumulatorParams &tap =
-        param_sets[static_cast<std::size_t>(trial_idx)]
-            .acc_params[static_cast<std::size_t>(acc_idx)];
-    double q_val = clamp_probability(params_mat(r, q_col));
-    if (!tap.shared_trigger_id.empty()) {
-      tap.shared_q = q_val;
-      tap.q = 0.0;
-    } else {
-      tap.q = q_val;
-      tap.shared_q = q_val;
-    }
-    tap.dist_cfg.t0 = params_mat(r, t0_col);
-    if (has_onset && r < onset_col.size()) {
-      double onset_val = static_cast<double>(onset_col[r]);
-      if (std::isfinite(onset_val)) {
-        tap.onset = onset_val;
-      }
-    }
-    tap.has_override = true;
-    param_sets[static_cast<std::size_t>(trial_idx)].has_any_override = true;
-    param_sets[static_cast<std::size_t>(trial_idx)].soa_cache_valid = false;
-    const int p1_col = p_cols[0];
-    const int p2_col = p_cols[1];
-    const int p3_col = p_cols[2];
-    const int p4_col = p_cols[3];
-    const int p5_col = p_cols[4];
-    const int p6_col = p_cols[5];
-    const int p7_col = p_cols[6];
-    const int p8_col = p_cols[7];
-    if (p1_col >= 0)
-      tap.dist_cfg.p1 = params_mat(r, p1_col);
-    if (p2_col >= 0)
-      tap.dist_cfg.p2 = params_mat(r, p2_col);
-    if (p3_col >= 0)
-      tap.dist_cfg.p3 = params_mat(r, p3_col);
-    if (p4_col >= 0)
-      tap.dist_cfg.p4 = params_mat(r, p4_col);
-    if (p5_col >= 0)
-      tap.dist_cfg.p5 = params_mat(r, p5_col);
-    if (p6_col >= 0)
-      tap.dist_cfg.p6 = params_mat(r, p6_col);
-    if (p7_col >= 0)
-      tap.dist_cfg.p7 = params_mat(r, p7_col);
-    if (p8_col >= 0)
-      tap.dist_cfg.p8 = params_mat(r, p8_col);
-
-    for (std::size_t c = 0; c < comp_map.leader_idx.size(); ++c) {
-      if (comp_map.leader_idx[c] == acc_idx) {
-        weight_override_by_trial[static_cast<std::size_t>(trial_idx)][c] =
-            params_mat(r, w_col);
-      }
-    }
-
-    if (outcome_label_id_by_trial[trial_idx] < 0 && r < outcome_id_col.size()) {
-      int id_val = outcome_id_col[r];
-      if (id_val != NA_INTEGER) {
-        outcome_label_id_by_trial[trial_idx] = id_val;
-      }
-    }
-    if (!std::isfinite(rt_by_trial[trial_idx]) && r < rt_col.size()) {
-      rt_by_trial[trial_idx] = static_cast<double>(rt_col[r]);
-    }
-    if (ranked_mode) {
-      TrialEvalInput &trial_eval_input =
-          trial_eval_inputs[static_cast<std::size_t>(trial_idx)];
-      std::vector<int> &trial_ranked_ids = trial_eval_input.sequence_label_storage;
-      std::vector<double> &trial_ranked_rt =
-          trial_eval_input.sequence_time_storage;
-      for (int rank_idx = 0; rank_idx < rank_width; ++rank_idx) {
-        if (trial_ranked_ids[static_cast<std::size_t>(rank_idx)] < 0 &&
-            r < rank_outcome_id_cols[static_cast<std::size_t>(rank_idx)].size()) {
-          int id_val = rank_outcome_id_cols[static_cast<std::size_t>(rank_idx)][r];
-          if (id_val != NA_INTEGER) {
-            trial_ranked_ids[static_cast<std::size_t>(rank_idx)] = id_val;
-          }
-        }
-        if (!std::isfinite(
-                trial_ranked_rt[static_cast<std::size_t>(rank_idx)]) &&
-            r < rank_rt_cols[static_cast<std::size_t>(rank_idx)].size()) {
-          double cand_rt =
-              rank_rt_cols[static_cast<std::size_t>(rank_idx)][r];
-          if (std::isfinite(cand_rt)) {
-            trial_ranked_rt[static_cast<std::size_t>(rank_idx)] = cand_rt;
-          }
-        }
-      }
-    }
-  }
-
-  int n_trials = static_cast<int>(param_sets.size());
-  std::vector<PreparedTrialParamsRuntime> prepared_trial_runtimes(
-      static_cast<std::size_t>(n_trials));
-  std::vector<const PreparedTrialParamsRuntime *> prepared_trial_runtime_ptrs(
-      static_cast<std::size_t>(n_trials), nullptr);
-  for (int t = 0; t < n_trials; ++t) {
-    PreparedTrialParamsRuntime &runtime =
-        prepared_trial_runtimes[static_cast<std::size_t>(t)];
-    if (!prepare_trial_params_runtime(*ctx,
-                                      &param_sets[static_cast<std::size_t>(t)],
-                                      runtime)) {
-      Rcpp::stop("Failed to prepare trial runtime metadata");
-    }
-    prepared_trial_runtime_ptrs[static_cast<std::size_t>(t)] = &runtime;
-  }
-
-  std::vector<SharedTriggerPlan> trigger_plans;
-  trigger_plans.reserve(static_cast<std::size_t>(n_trials));
-  std::vector<int> trigger_plan_index_by_trial(static_cast<std::size_t>(n_trials),
-                                               -1);
-  if (n_trials > 0) {
-    std::unordered_map<uuber::NAMapCacheKey, int, uuber::NAMapCacheKeyHash>
-        trigger_plan_index_by_key;
-    trigger_plan_index_by_key.reserve(static_cast<std::size_t>(n_trials));
-    for (int t = 0; t < n_trials; ++t) {
-      PreparedTrialParamsRuntime &runtime =
-          prepared_trial_runtimes[static_cast<std::size_t>(t)];
-      auto insert_result = trigger_plan_index_by_key.emplace(
-          runtime.shared_trigger_source_key,
-          static_cast<int>(trigger_plans.size()));
-      if (insert_result.second) {
-        if (!ensure_prepared_trial_params_trigger_plan(*ctx, runtime)) {
-          Rcpp::stop("Failed to prepare shared-trigger plan");
-        }
-        trigger_plans.push_back(runtime.trigger_plan);
-      }
-      trigger_plan_index_by_trial[static_cast<std::size_t>(t)] =
-          insert_result.first->second;
-    }
-  }
-
-  std::vector<int> param_value_group_by_trial(static_cast<std::size_t>(n_trials),
-                                              -1);
-  std::vector<int> param_value_group_representative_trial;
-  param_value_group_representative_trial.reserve(
-      static_cast<std::size_t>(n_trials));
-  std::unordered_map<uuber::NAMapCacheKey, int, uuber::NAMapCacheKeyHash>
-      param_value_group_by_key;
-  param_value_group_by_key.reserve(static_cast<std::size_t>(n_trials));
-  for (int t = 0; t < n_trials; ++t) {
-    const PreparedTrialParamsRuntime &runtime =
-        prepared_trial_runtimes[static_cast<std::size_t>(t)];
-    auto insert_result = param_value_group_by_key.emplace(
-        runtime.value_key,
-        static_cast<int>(param_value_group_representative_trial.size()));
-    if (insert_result.second) {
-      param_value_group_representative_trial.push_back(t);
-    }
-    param_value_group_by_trial[static_cast<std::size_t>(t)] =
-        insert_result.first->second;
-  }
-
-  std::vector<int> default_component_indices;
-  default_component_indices.reserve(comp_map.ids.size());
-  for (const auto &comp_id : comp_map.ids) {
-    default_component_indices.push_back(component_index_of(*ctx, comp_id));
-  }
-  const std::size_t n_components = default_component_indices.size();
-  const std::vector<ComponentCacheEntry> default_cache_entries =
-      build_component_cache_entries_from_indices(*ctx, default_component_indices);
-  std::vector<int> nonresponse_outcome_indices;
-  nonresponse_outcome_indices.reserve(ctx->outcome_info.size());
-  for (std::size_t oi = 0; oi < ctx->outcome_info.size(); ++oi) {
-    bool is_deadline = false;
-    const bool maps_to_na =
-        ctx->outcome_info[static_cast<std::size_t>(oi)].maps_to_na;
-    if (oi < ctx->ir.outcomes.size()) {
-      int node_idx = ctx->ir.outcomes[oi].node_idx;
-      if (node_idx >= 0 && node_idx < static_cast<int>(ctx->ir.nodes.size())) {
-        const auto flags = ctx->ir.nodes[static_cast<std::size_t>(node_idx)].flags;
-        is_deadline = (flags & uuber::IR_NODE_FLAG_SPECIAL_DEADLINE) != 0u;
-      }
-    }
-    if (!is_deadline && !maps_to_na) {
-      nonresponse_outcome_indices.push_back(static_cast<int>(oi));
-    }
-  }
-  std::vector<std::vector<double>> weights_by_trial(
-      static_cast<std::size_t>(n_trials),
-      std::vector<double>(n_components, 0.0));
-  for (int t = 0; t < n_trials; ++t) {
-    std::vector<double> w = comp_map.base_weights;
-    const auto &overrides =
-        weight_override_by_trial[static_cast<std::size_t>(t)];
-    for (std::size_t c = 0; c < w.size(); ++c) {
-      double cand = overrides[c];
-      if (std::isfinite(cand))
-        w[c] = cand;
-    }
-    double total = 0.0;
-    for (double v : w)
-      total += v;
-    if (!std::isfinite(total) || total <= 0.0) {
-      double uni = 1.0 / static_cast<double>(w.size());
-      std::fill(w.begin(), w.end(), uni);
-    } else {
-      for (double &v : w)
-        v /= total;
-    }
-    weights_by_trial[static_cast<std::size_t>(t)] = std::move(w);
-  }
-
-  auto compute_component_weight_fingerprint =
-      [](const std::vector<double> &weights) -> std::uint64_t {
-    std::uint64_t hash = kFNV64Offset;
-    hash_append_u64(hash, static_cast<std::uint64_t>(weights.size()));
-    for (double weight : weights) {
-      hash_append_u64(hash, canonical_double_bits(weight));
-    }
-    return hash;
-  };
-  std::vector<int> component_weight_group_by_trial(
-      static_cast<std::size_t>(n_trials), -1);
-  std::vector<int> component_weight_group_representative_trial;
-  component_weight_group_representative_trial.reserve(
-      static_cast<std::size_t>(n_trials));
-  std::unordered_map<std::uint64_t, std::vector<int>>
-      component_weight_group_candidates;
-  component_weight_group_candidates.reserve(static_cast<std::size_t>(n_trials));
-  for (int t = 0; t < n_trials; ++t) {
-    const std::vector<double> &weights =
-        weights_by_trial[static_cast<std::size_t>(t)];
-    const std::uint64_t fp = compute_component_weight_fingerprint(weights);
-    std::vector<int> &candidates = component_weight_group_candidates[fp];
-    int group_idx = -1;
-    for (int candidate_idx : candidates) {
-      if (candidate_idx < 0 ||
-          candidate_idx >=
-              static_cast<int>(component_weight_group_representative_trial.size())) {
-        continue;
-      }
-      const int rep_trial_idx =
-          component_weight_group_representative_trial[static_cast<std::size_t>(
-              candidate_idx)];
-      if (rep_trial_idx < 0 || rep_trial_idx >= n_trials) {
-        continue;
-      }
-      if (weights ==
-          weights_by_trial[static_cast<std::size_t>(rep_trial_idx)]) {
-        group_idx = candidate_idx;
-        break;
-      }
-    }
-    if (group_idx < 0) {
-      group_idx =
-          static_cast<int>(component_weight_group_representative_trial.size());
-      component_weight_group_representative_trial.push_back(t);
-      candidates.push_back(group_idx);
-    }
-    component_weight_group_by_trial[static_cast<std::size_t>(t)] = group_idx;
-  }
-
-  if (ok.size() == 0) {
-    ok = Rcpp::LogicalVector(n_trials, true);
-  } else if (ok.size() != n_trials) {
-    Rcpp::stop("Length of ok must equal number of trials");
-  }
-
-  R_xlen_t n_expand = expand.size();
-  if (n_expand == 0) {
-    expand = Rcpp::seq(1, n_trials);
-    n_expand = expand.size();
-  }
-  for (R_xlen_t i = 0; i < n_expand; ++i) {
-    int comp_idx = expand[i];
-    if (comp_idx == NA_INTEGER || comp_idx < 1 || comp_idx > n_trials) {
-      Rcpp::stop("expand indices must reference trials");
-    }
-  }
-
-  for (int t = 0; t < n_trials; ++t) {
-    if (t >= static_cast<int>(trial_eval_inputs.size())) {
-      trial_eval_inputs.resize(static_cast<std::size_t>(t + 1));
-    }
-    TrialEvalInput &eval_input = trial_eval_inputs[static_cast<std::size_t>(t)];
-    if (ranked_mode) {
-      finalize_ranked_trial_eval_input_inline(eval_input,
-                                              &nonresponse_outcome_indices);
-      continue;
-    }
-    const int outcome_label_id =
-        (t < static_cast<int>(outcome_label_id_by_trial.size()))
-            ? outcome_label_id_by_trial[static_cast<std::size_t>(t)]
-            : -1;
-    const double rt = (t < static_cast<int>(rt_by_trial.size()))
-                          ? rt_by_trial[static_cast<std::size_t>(t)]
-                          : std::numeric_limits<double>::quiet_NaN();
-    prepare_observed_trial_eval_input(eval_input, outcome_label_id, rt,
-                                      &nonresponse_outcome_indices);
-  }
-
-  struct ForcedComponentBundle {
-    std::vector<int> component_indices;
-    std::vector<double> component_weights;
-    std::vector<ComponentCacheEntry> cache_entries;
-  };
-  std::unordered_map<int, ForcedComponentBundle> forced_component_bundle_cache;
-  forced_component_bundle_cache.reserve(static_cast<std::size_t>(n_trials));
-  auto forced_bundle_for = [&](int forced_component_idx)
-      -> const ForcedComponentBundle & {
-    auto it = forced_component_bundle_cache.find(forced_component_idx);
-    if (it != forced_component_bundle_cache.end()) {
-      return it->second;
-    }
-    ForcedComponentBundle bundle;
-    bundle.component_indices.push_back(forced_component_idx);
-    bundle.component_weights.push_back(1.0);
-    bundle.cache_entries.push_back(
-        default_component_cache_entry_idx(*ctx, forced_component_idx));
-    auto inserted = forced_component_bundle_cache.emplace(forced_component_idx,
-                                                          std::move(bundle));
-    return inserted.first->second;
-  };
-
-  std::vector<double> trial_loglik(static_cast<std::size_t>(n_trials), min_ll);
-  std::vector<std::uint8_t> trial_loglik_batched(
-      static_cast<std::size_t>(n_trials), 0u);
-
-  bool enable_ranked_sequence_batch = false;
-  for (int t = 0; t < n_trials; ++t) {
-    if (t >= static_cast<int>(ok.size()) || !ok[static_cast<std::size_t>(t)]) {
-      continue;
-    }
-    const TrialEvalInput &eval_input =
-        trial_eval_inputs[static_cast<std::size_t>(t)];
-    if (eval_input.valid &&
-        eval_input.probability_transform ==
-            TrialProbabilityTransform::Identity &&
-        eval_input.sequence_length > 1u &&
-        eval_input.sequence_time_data != nullptr) {
-      enable_ranked_sequence_batch = true;
-      break;
-    }
-  }
-
-  std::vector<SingleStepDirectBatchSpec> single_step_batch_specs(
-      static_cast<std::size_t>(n_trials));
-  std::unordered_map<SingleStepDirectBatchKey, std::vector<int>,
-                     SingleStepDirectBatchKeyHash>
-      single_step_batch_groups;
-  single_step_batch_groups.reserve(static_cast<std::size_t>(n_trials));
-  std::vector<DirectTrialBatchSpec> direct_trial_batch_specs(
-      static_cast<std::size_t>(n_trials));
-  std::unordered_map<DirectTrialBatchKey, std::vector<int>,
-                     DirectTrialBatchKeyHash>
-      direct_trial_batch_groups;
-  direct_trial_batch_groups.reserve(static_cast<std::size_t>(n_trials));
-  std::vector<RankedSequenceBatchSpec> ranked_sequence_batch_specs(
-      enable_ranked_sequence_batch ? static_cast<std::size_t>(n_trials) : 0u);
-  std::unordered_map<RankedSequenceBatchKey, std::vector<int>,
-                     RankedSequenceBatchKeyHash>
-      ranked_sequence_batch_groups;
-  std::unordered_map<OutcomeMassBatchKey, std::vector<int>,
-                     OutcomeMassBatchKeyHash>
-      outcome_mass_batch_groups;
-  std::unordered_map<OutcomeMassSharedTriggerBatchKey, std::vector<int>,
-                     OutcomeMassSharedTriggerBatchKeyHash>
-      outcome_mass_shared_trigger_batch_groups;
-  outcome_mass_batch_groups.reserve(static_cast<std::size_t>(n_trials));
-  outcome_mass_shared_trigger_batch_groups.reserve(
-      static_cast<std::size_t>(n_trials));
-  if (enable_ranked_sequence_batch) {
-    ranked_sequence_batch_groups.reserve(static_cast<std::size_t>(n_trials));
-  }
-
-  for (int t = 0; t < n_trials; ++t) {
-    if (t >= ok.size() || !ok[t]) {
-      continue;
-    }
-
-    const TrialEvalInput &eval_input =
-        trial_eval_inputs[static_cast<std::size_t>(t)];
-    const std::vector<int> *comp_indices_ptr = &default_component_indices;
-    const std::vector<ComponentCacheEntry> *cache_entries_ptr =
-        &default_cache_entries;
-    const std::vector<double> *comp_weights_ptr =
-        &weights_by_trial[static_cast<std::size_t>(t)];
-
-    const int forced_component_idx =
-        (t < static_cast<int>(comp_idx_by_trial.size()))
-            ? comp_idx_by_trial[static_cast<std::size_t>(t)]
-            : -1;
-    if (forced_component_idx >= 0) {
-      const ForcedComponentBundle &forced_bundle =
-          forced_bundle_for(forced_component_idx);
-      comp_indices_ptr = &forced_bundle.component_indices;
-      comp_weights_ptr = &forced_bundle.component_weights;
-      cache_entries_ptr = &forced_bundle.cache_entries;
-    }
-
-    const int trigger_plan_idx =
-        (t >= 0 && t < static_cast<int>(trigger_plan_index_by_trial.size()))
-            ? trigger_plan_index_by_trial[static_cast<std::size_t>(t)]
-            : -1;
-
-    const int param_group_idx =
-        (t < static_cast<int>(param_value_group_by_trial.size()))
-            ? param_value_group_by_trial[static_cast<std::size_t>(t)]
-            : -1;
-    if (param_group_idx < 0) {
-      continue;
-    }
-
-    SingleStepDirectBatchSpec single_step_spec;
-    if (build_single_step_direct_batch_spec(
-            *ctx, eval_input, *comp_indices_ptr, *comp_weights_ptr,
-            *cache_entries_ptr, single_step_spec)) {
-      single_step_spec.param_group_idx = param_group_idx;
-      single_step_spec.trigger_plan_idx = trigger_plan_idx;
-      single_step_batch_specs[static_cast<std::size_t>(t)] = single_step_spec;
-
-      SingleStepDirectBatchKey key;
-      key.node_id = single_step_spec.node_id;
-      key.component_idx = single_step_spec.component_idx;
-      key.outcome_idx_context = single_step_spec.outcome_idx_context;
-      key.param_group_idx = single_step_spec.param_group_idx;
-      key.trigger_plan_idx = single_step_spec.trigger_plan_idx;
-      key.trial_type_key = single_step_spec.trial_type_key;
-      key.competitor_ids = single_step_spec.competitor_ids;
-      single_step_batch_groups[std::move(key)].push_back(t);
-      continue;
-    }
-
-    DirectTrialBatchSpec direct_trial_spec;
-    if (build_direct_trial_batch_spec(
-            *ctx, eval_input, *comp_indices_ptr, *comp_weights_ptr,
-            *cache_entries_ptr, direct_trial_spec)) {
-      direct_trial_spec.param_group_idx = param_group_idx;
-      direct_trial_spec.trigger_plan_idx = trigger_plan_idx;
-      direct_trial_batch_specs[static_cast<std::size_t>(t)] =
-          std::move(direct_trial_spec);
-
-      DirectTrialBatchKey direct_key;
-      direct_key.contributions =
-          direct_trial_batch_specs[static_cast<std::size_t>(t)].contributions;
-      direct_key.param_group_idx =
-          direct_trial_batch_specs[static_cast<std::size_t>(t)].param_group_idx;
-      direct_key.trigger_plan_idx =
-          direct_trial_batch_specs[static_cast<std::size_t>(t)]
-              .trigger_plan_idx;
-      direct_trial_batch_groups[std::move(direct_key)].push_back(t);
-      continue;
-    }
-
-    if (!enable_ranked_sequence_batch) {
-      continue;
-    }
-
-    RankedSequenceBatchSpec ranked_spec;
-    if (!build_ranked_sequence_batch_spec(
-            *ctx, eval_input, *comp_indices_ptr, *comp_weights_ptr,
-            *cache_entries_ptr, ranked_spec)) {
-      continue;
-    }
-    ranked_spec.param_group_idx = param_group_idx;
-    ranked_spec.trigger_plan_idx = trigger_plan_idx;
-    ranked_sequence_batch_specs[static_cast<std::size_t>(t)] =
-        std::move(ranked_spec);
-    const RankedSequenceBatchSpec &stored_ranked_spec =
-        ranked_sequence_batch_specs[static_cast<std::size_t>(t)];
-
-    RankedSequenceBatchKey ranked_key;
-    ranked_key.template_ptr = stored_ranked_spec.template_ptr;
-    ranked_key.param_group_idx = stored_ranked_spec.param_group_idx;
-    ranked_key.trigger_plan_idx = stored_ranked_spec.trigger_plan_idx;
-    ranked_sequence_batch_groups[std::move(ranked_key)].push_back(t);
-  }
-
-  for (int t = 0; t < n_trials; ++t) {
-    if (t >= static_cast<int>(ok.size()) || !ok[static_cast<std::size_t>(t)]) {
-      continue;
-    }
-    const TrialEvalInput &eval_input =
-        trial_eval_inputs[static_cast<std::size_t>(t)];
-    const int trigger_plan_idx =
-        (t >= 0 && t < static_cast<int>(trigger_plan_index_by_trial.size()))
-            ? trigger_plan_index_by_trial[static_cast<std::size_t>(t)]
-            : -1;
-    const SharedTriggerPlan *trigger_plan_ptr =
-        (trigger_plan_idx >= 0 &&
-         trigger_plan_idx < static_cast<int>(trigger_plans.size()))
-            ? &trigger_plans[static_cast<std::size_t>(trigger_plan_idx)]
-            : nullptr;
-
-    const int forced_component_idx =
-        (t < static_cast<int>(comp_idx_by_trial.size()))
-            ? comp_idx_by_trial[static_cast<std::size_t>(t)]
-            : -1;
-    const std::vector<int> *comp_indices_ptr = &default_component_indices;
-    if (forced_component_idx >= 0) {
-      const ForcedComponentBundle &forced_bundle =
-          forced_bundle_for(forced_component_idx);
-      comp_indices_ptr = &forced_bundle.component_indices;
-    }
-
-    OutcomeMassBatchKey outcome_mass_key;
-    if (!build_outcome_mass_batch_key(eval_input, *comp_indices_ptr,
-                                      outcome_mass_key)) {
-      continue;
-    }
-    const int param_group_idx =
-        (t >= 0 && t < static_cast<int>(param_value_group_by_trial.size()))
-            ? param_value_group_by_trial[static_cast<std::size_t>(t)]
-            : -1;
-    if (trigger_plan_ptr != nullptr &&
-        shared_trigger_count(*trigger_plan_ptr) > 0u) {
-      OutcomeMassSharedTriggerBatchKey shared_key;
-      if (!build_outcome_mass_shared_trigger_batch_key(
-              eval_input, *comp_indices_ptr, param_group_idx, trigger_plan_idx,
-              shared_key)) {
-        continue;
-      }
-      outcome_mass_shared_trigger_batch_groups[std::move(shared_key)].push_back(t);
-      continue;
-    }
-    outcome_mass_batch_groups[std::move(outcome_mass_key)].push_back(t);
-  }
-
-  for (auto &kv : single_step_batch_groups) {
-    const std::vector<int> &trial_indices = kv.second;
-    const int first_trial = trial_indices.front();
-    if (first_trial < 0 || first_trial >= n_trials) {
-      continue;
-    }
-    const SingleStepDirectBatchSpec &group_spec =
-        single_step_batch_specs[static_cast<std::size_t>(first_trial)];
-    if (group_spec.param_group_idx < 0 ||
-        group_spec.param_group_idx >=
-            static_cast<int>(param_value_group_representative_trial.size())) {
-      continue;
-    }
-    const int rep_trial_idx =
-        param_value_group_representative_trial[static_cast<std::size_t>(
-            group_spec.param_group_idx)];
-    if (rep_trial_idx < 0 || rep_trial_idx >= n_trials) {
-      continue;
-    }
-    PreparedTrialParamsRuntime &rep_runtime =
-        prepared_trial_runtimes[static_cast<std::size_t>(rep_trial_idx)];
-    if (!ensure_prepared_trial_params_trigger_plan(*ctx, rep_runtime)) {
-      Rcpp::stop("Failed to prepare shared-trigger plan");
-    }
-    const SharedTriggerPlan *group_trigger_plan_ptr = &rep_runtime.trigger_plan;
-    const bool has_shared_triggers =
-        group_trigger_plan_ptr != nullptr &&
-        shared_trigger_count(*group_trigger_plan_ptr) > 0u;
-    std::vector<double> times;
-    times.reserve(trial_indices.size());
-    for (int trial_idx : trial_indices) {
-      const SingleStepDirectBatchSpec &trial_spec =
-          single_step_batch_specs[static_cast<std::size_t>(trial_idx)];
-      times.push_back(trial_spec.time);
-    }
-    const bool use_shared_trigger_eval =
-        has_shared_triggers &&
-        shared_trigger_density_batch_supported(*ctx, false,
-                                               group_spec.outcome_idx_context);
-    const SharedTriggerMaskSoABatch *group_trigger_mask_batch_ptr = nullptr;
-    if (use_shared_trigger_eval &&
-        ensure_prepared_trial_params_mask_batch(*ctx, rep_runtime)) {
-      group_trigger_mask_batch_ptr = &rep_runtime.mask_batch;
-    }
-
-    std::vector<double> density_out;
-    DensityBatchWorkspace density_workspace;
-    const bool batched = node_density_entry_batch_idx(
-        *ctx, group_spec.node_id, times, group_spec.component_idx, nullptr,
-        false, nullptr, false, group_spec.competitor_ids,
-        &param_sets[static_cast<std::size_t>(rep_trial_idx)],
-        group_spec.trial_type_key, false, group_spec.outcome_idx_context,
-        group_trigger_plan_ptr, use_shared_trigger_eval, density_out, nullptr,
-        nullptr, group_trigger_mask_batch_ptr, &density_workspace);
-    if (!batched || density_out.size() != trial_indices.size()) {
-      Rcpp::stop("Direct group batch evaluation failed");
-    }
-
-    for (std::size_t i = 0; i < trial_indices.size(); ++i) {
-      const int trial_idx = trial_indices[i];
-      const SingleStepDirectBatchSpec &trial_spec =
-          single_step_batch_specs[static_cast<std::size_t>(trial_idx)];
-      const double prob = trial_spec.scaled_weight * density_out[i];
-      double ll_val = min_ll;
-      if (std::isfinite(prob) && prob > 0.0) {
-        const double lp = std::log(prob);
-        if (std::isfinite(lp) && lp > min_ll) {
-          ll_val = lp;
-        }
-      }
-      trial_loglik[static_cast<std::size_t>(trial_idx)] = ll_val;
-      trial_loglik_batched[static_cast<std::size_t>(trial_idx)] = 1u;
-    }
-  }
-
-  for (auto &kv : direct_trial_batch_groups) {
-    const std::vector<int> &trial_indices = kv.second;
-    const int first_trial = trial_indices.front();
-    if (first_trial < 0 || first_trial >= n_trials) {
-      continue;
-    }
-    const DirectTrialBatchSpec &group_spec =
-        direct_trial_batch_specs[static_cast<std::size_t>(first_trial)];
-    if (group_spec.param_group_idx < 0 ||
-        group_spec.param_group_idx >=
-            static_cast<int>(param_value_group_representative_trial.size())) {
-      continue;
-    }
-    const int rep_trial_idx =
-        param_value_group_representative_trial[static_cast<std::size_t>(
-            group_spec.param_group_idx)];
-    if (rep_trial_idx < 0 || rep_trial_idx >= n_trials) {
-      continue;
-    }
-    PreparedTrialParamsRuntime &rep_runtime =
-        prepared_trial_runtimes[static_cast<std::size_t>(rep_trial_idx)];
-    if (!ensure_prepared_trial_params_trigger_plan(*ctx, rep_runtime)) {
-      Rcpp::stop("Failed to prepare shared-trigger plan");
-    }
-    const SharedTriggerPlan *group_trigger_plan_ptr = &rep_runtime.trigger_plan;
-    const bool has_shared_triggers =
-        group_trigger_plan_ptr != nullptr &&
-        shared_trigger_count(*group_trigger_plan_ptr) > 0u;
-
-    std::vector<double> times;
-    times.reserve(trial_indices.size());
-    for (int trial_idx : trial_indices) {
-      const DirectTrialBatchSpec &trial_spec =
-          direct_trial_batch_specs[static_cast<std::size_t>(trial_idx)];
-      times.push_back(trial_spec.time);
-    }
-
-    std::vector<double> total_probabilities(trial_indices.size(), 0.0);
-    bool batch_ok = true;
-    const SharedTriggerMaskSoABatch *group_trigger_mask_batch_ptr = nullptr;
-    if (has_shared_triggers &&
-        ensure_prepared_trial_params_mask_batch(*ctx, rep_runtime)) {
-      group_trigger_mask_batch_ptr = &rep_runtime.mask_batch;
-    }
-    DensityBatchWorkspace density_workspace;
-    for (const DirectContributionTemplate &contribution :
-         group_spec.contributions) {
-      const bool use_shared_trigger_eval =
-          has_shared_triggers &&
-          shared_trigger_density_batch_supported(
-              *ctx, false, contribution.outcome_idx_context);
-      if (has_shared_triggers && !use_shared_trigger_eval) {
-        batch_ok = false;
-        break;
-      }
-
-      std::vector<double> density_out;
-      const bool batched = node_density_entry_batch_idx(
-          *ctx, contribution.node_id, times, contribution.component_idx,
-          nullptr, false, nullptr, false, contribution.competitor_ids,
-          &param_sets[static_cast<std::size_t>(rep_trial_idx)],
-          contribution.trial_type_key, false, contribution.outcome_idx_context,
-          group_trigger_plan_ptr, use_shared_trigger_eval, density_out, nullptr,
-          nullptr, group_trigger_mask_batch_ptr, &density_workspace);
-      if (!batched || density_out.size() != trial_indices.size()) {
-        batch_ok = false;
-        break;
-      }
-      for (std::size_t i = 0; i < trial_indices.size(); ++i) {
-        const double density = density_out[i];
-        if (std::isfinite(density) && density > 0.0) {
-          total_probabilities[i] = safe_density(
-              total_probabilities[i] +
-              contribution.scaled_weight * density);
-        }
-      }
-    }
-    if (!batch_ok) {
-      Rcpp::stop("Direct group batch evaluation failed");
-    }
-
-    for (std::size_t i = 0; i < trial_indices.size(); ++i) {
-      const int trial_idx = trial_indices[i];
-      const double prob = total_probabilities[i];
-      double ll_val = min_ll;
-      if (std::isfinite(prob) && prob > 0.0) {
-        const double lp = std::log(prob);
-        if (std::isfinite(lp) && lp > min_ll) {
-          ll_val = lp;
-        }
-      }
-      trial_loglik[static_cast<std::size_t>(trial_idx)] = ll_val;
-      trial_loglik_batched[static_cast<std::size_t>(trial_idx)] = 1u;
-    }
-  }
-
-  if (enable_ranked_sequence_batch) {
-    for (auto &kv : ranked_sequence_batch_groups) {
-      const std::vector<int> &trial_indices = kv.second;
-      const int first_trial = trial_indices.front();
-      if (first_trial < 0 || first_trial >= n_trials) {
-        continue;
-      }
-      const RankedSequenceBatchSpec &group_spec =
-          ranked_sequence_batch_specs[static_cast<std::size_t>(first_trial)];
-      const RankedSequenceBatchTemplate *group_template =
-          group_spec.template_ptr;
-      if (group_template == nullptr || group_template->contributions.empty()) {
-        continue;
-      }
-      if (group_spec.param_group_idx < 0 ||
-          group_spec.param_group_idx >=
-              static_cast<int>(param_value_group_representative_trial.size())) {
-        continue;
-      }
-      const int rep_trial_idx =
-          param_value_group_representative_trial[static_cast<std::size_t>(
-              group_spec.param_group_idx)];
-      if (rep_trial_idx < 0 || rep_trial_idx >= n_trials) {
-        continue;
-      }
-
-      const SharedTriggerPlan *group_trigger_plan_ptr =
-          (group_spec.trigger_plan_idx >= 0 &&
-           group_spec.trigger_plan_idx < static_cast<int>(trigger_plans.size()))
-              ? &trigger_plans[static_cast<std::size_t>(
-                    group_spec.trigger_plan_idx)]
-              : nullptr;
-      auto assign_ranked_group_loglik =
-          [&](const std::vector<double> &probabilities) -> void {
-        for (std::size_t i = 0; i < trial_indices.size(); ++i) {
-          const int trial_idx = trial_indices[i];
-          const double prob =
-              (i < probabilities.size()) ? probabilities[i] : 0.0;
-          double ll_val = min_ll;
-          if (std::isfinite(prob) && prob > 0.0) {
-            const double lp = std::log(prob);
-            if (std::isfinite(lp) && lp > min_ll) {
-              ll_val = lp;
-            }
-          }
-          trial_loglik[static_cast<std::size_t>(trial_idx)] = ll_val;
-          trial_loglik_batched[static_cast<std::size_t>(trial_idx)] = 1u;
-        }
-      };
-      bool shared_trigger_ranked_supported = true;
-      if (group_trigger_plan_ptr != nullptr &&
-          shared_trigger_count(*group_trigger_plan_ptr) > 0u) {
-        for (const RankedSequenceContributionTemplate &contribution :
-             group_template->contributions) {
-          for (int outcome_idx : contribution.sequence_outcome_indices) {
-            if (!shared_trigger_mask_batch_supported(*ctx, false, outcome_idx)) {
-              shared_trigger_ranked_supported = false;
-              break;
-            }
-          }
-          if (!shared_trigger_ranked_supported) {
-            break;
-          }
-        }
-        if (shared_trigger_ranked_supported) {
-          SharedTriggerMaskSoABatch mask_batch;
-          if (!build_shared_trigger_mask_soa_batch(
-                  *ctx, &param_sets[static_cast<std::size_t>(rep_trial_idx)],
-                  *group_trigger_plan_ptr, mask_batch) ||
-              mask_batch.mask_param_ptrs.empty()) {
-            shared_trigger_ranked_supported = false;
-          } else {
-            std::vector<const double *> expanded_times_by_trial;
-            std::vector<const uuber::TrialParamsSoA *> expanded_params_soa;
-            expanded_times_by_trial.reserve(
-                trial_indices.size() * mask_batch.mask_param_ptrs.size());
-            expanded_params_soa.reserve(
-                trial_indices.size() * mask_batch.mask_param_ptrs.size());
-            for (std::size_t mask_idx = 0;
-                 mask_idx < mask_batch.mask_param_ptrs.size(); ++mask_idx) {
-              const uuber::TrialParamsSoA *mask_params_soa =
-                  mask_batch.mask_param_ptrs[mask_idx];
-              for (int trial_idx : trial_indices) {
-                const RankedSequenceBatchSpec &trial_spec =
-                    ranked_sequence_batch_specs[static_cast<std::size_t>(
-                        trial_idx)];
-                expanded_times_by_trial.push_back(trial_spec.time_data);
-                expanded_params_soa.push_back(mask_params_soa);
-              }
-            }
-
-            std::vector<double> total_probabilities(trial_indices.size(), 0.0);
-            RankedBatchPlanner ranked_batch_transition_planner(*ctx);
-            bool batch_ok = true;
-            for (const RankedSequenceContributionTemplate &contribution :
-                 group_template->contributions) {
-              std::vector<double> expanded_density_out;
-              const bool batched = sequence_prefix_density_batch_resolved(
-                  *ctx, contribution.sequence_outcome_indices,
-                  contribution.sequence_node_indices, expanded_times_by_trial,
-                  contribution.component_idx,
-                  &param_sets[static_cast<std::size_t>(rep_trial_idx)],
-                  contribution.trial_type_key, expanded_density_out,
-                  &expanded_params_soa, &ranked_batch_transition_planner,
-                  &contribution.step_competitor_ids_ptrs,
-                  &contribution.step_persistent_sources);
-              if (!batched ||
-                  expanded_density_out.size() != expanded_times_by_trial.size()) {
-                batch_ok = false;
-                break;
-              }
-              for (std::size_t trial_pos = 0; trial_pos < trial_indices.size();
-                   ++trial_pos) {
-                double density = 0.0;
-                for (std::size_t mask_idx = 0;
-                     mask_idx < mask_batch.mask_weights.size(); ++mask_idx) {
-                  const double weight = mask_batch.mask_weights[mask_idx];
-                  if (!(std::isfinite(weight) && weight > 0.0)) {
-                    continue;
-                  }
-                  const std::size_t point_idx =
-                      mask_idx * trial_indices.size() + trial_pos;
-                  const double point_density = expanded_density_out[point_idx];
-                  if (std::isfinite(point_density) && point_density > 0.0) {
-                    density += weight * point_density;
-                  }
-                }
-                density = safe_density(density);
-                if (std::isfinite(density) && density > 0.0) {
-                  total_probabilities[trial_pos] = safe_density(
-                      total_probabilities[trial_pos] +
-                      contribution.scaled_weight * density);
-                }
-              }
-            }
-            if (batch_ok) {
-              assign_ranked_group_loglik(total_probabilities);
-              continue;
-            }
-          }
-        }
-      }
-
-      std::vector<const double *> times_by_trial;
-      times_by_trial.reserve(trial_indices.size());
-      for (int trial_idx : trial_indices) {
-        const RankedSequenceBatchSpec &trial_spec =
-            ranked_sequence_batch_specs[static_cast<std::size_t>(trial_idx)];
-        times_by_trial.push_back(trial_spec.time_data);
-      }
-
-      std::vector<double> total_probabilities(trial_indices.size(), 0.0);
-      RankedBatchPlanner ranked_batch_transition_planner(*ctx);
-      bool batch_ok = true;
-      for (const RankedSequenceContributionTemplate &contribution :
-           group_template->contributions) {
-        std::vector<double> density_out;
-        const bool batched = sequence_prefix_density_batch_resolved(
-            *ctx, contribution.sequence_outcome_indices,
-            contribution.sequence_node_indices, times_by_trial,
-            contribution.component_idx,
-            &param_sets[static_cast<std::size_t>(rep_trial_idx)],
-            contribution.trial_type_key, density_out, nullptr,
-            &ranked_batch_transition_planner,
-            &contribution.step_competitor_ids_ptrs,
-            &contribution.step_persistent_sources);
-        if (!batched || density_out.size() != trial_indices.size()) {
-          batch_ok = false;
-          break;
-        }
-        for (std::size_t i = 0; i < trial_indices.size(); ++i) {
-          const double density = density_out[i];
-          if (std::isfinite(density) && density > 0.0) {
-            total_probabilities[i] = safe_density(
-                total_probabilities[i] +
-                contribution.scaled_weight * density);
-          }
-        }
-      }
-      if (!batch_ok) {
-        continue;
-      }
-      assign_ranked_group_loglik(total_probabilities);
-    }
-  }
-
-  for (auto &kv : outcome_mass_shared_trigger_batch_groups) {
-    const std::vector<int> &trial_indices = kv.second;
-    const OutcomeMassSharedTriggerBatchKey &group_key = kv.first;
-    const int first_trial = trial_indices.front();
-    if (first_trial < 0 || first_trial >= n_trials ||
-        group_key.param_group_idx < 0 ||
-        group_key.param_group_idx >=
-            static_cast<int>(param_value_group_representative_trial.size()) ||
-        group_key.trigger_plan_idx < 0 ||
-        group_key.trigger_plan_idx >= static_cast<int>(trigger_plans.size())) {
-      continue;
-    }
-
-    const int rep_trial_idx =
-        param_value_group_representative_trial[static_cast<std::size_t>(
-            group_key.param_group_idx)];
-    if (rep_trial_idx < 0 || rep_trial_idx >= n_trials) {
-      continue;
-    }
-
-    const int forced_component_idx =
-        (first_trial < static_cast<int>(comp_idx_by_trial.size()))
-            ? comp_idx_by_trial[static_cast<std::size_t>(first_trial)]
-            : -1;
-    const std::vector<int> *group_component_indices = &default_component_indices;
-    if (forced_component_idx >= 0) {
-      const ForcedComponentBundle &forced_bundle =
-          forced_bundle_for(forced_component_idx);
-      group_component_indices = &forced_bundle.component_indices;
-    }
-    if (*group_component_indices != *group_key.component_indices) {
-      continue;
-    }
-
-    const SharedTriggerPlan &group_trigger_plan =
-        trigger_plans[static_cast<std::size_t>(group_key.trigger_plan_idx)];
-    SharedTriggerMaskSoABatch mask_batch;
-    if (!build_shared_trigger_mask_soa_batch(
-            *ctx, &param_sets[static_cast<std::size_t>(rep_trial_idx)],
-            group_trigger_plan, mask_batch) ||
-        mask_batch.mask_param_ptrs.empty()) {
-      continue;
-    }
-
-    std::vector<const std::vector<double> *> expanded_component_weights_batch;
-    std::vector<std::size_t> expanded_trial_to_point_index;
-    expanded_component_weights_batch.reserve(
-        trial_indices.size() * mask_batch.mask_param_ptrs.size());
-    expanded_trial_to_point_index.reserve(
-        trial_indices.size() * mask_batch.mask_param_ptrs.size());
-    bool group_valid = true;
-    for (std::size_t mask_idx = 0; mask_idx < mask_batch.mask_param_ptrs.size();
-         ++mask_idx) {
-      for (int trial_idx : trial_indices) {
-        if (trial_idx < 0 || trial_idx >= n_trials) {
-          group_valid = false;
-          break;
-        }
-        const int trial_forced_component_idx =
-            (trial_idx < static_cast<int>(comp_idx_by_trial.size()))
-                ? comp_idx_by_trial[static_cast<std::size_t>(trial_idx)]
-                : -1;
-        const std::vector<int> *trial_component_indices =
-            &default_component_indices;
-        const std::vector<double> *trial_component_weights =
-            &weights_by_trial[static_cast<std::size_t>(trial_idx)];
-        if (trial_forced_component_idx >= 0) {
-          const ForcedComponentBundle &forced_bundle =
-              forced_bundle_for(trial_forced_component_idx);
-          trial_component_indices = &forced_bundle.component_indices;
-          trial_component_weights = &forced_bundle.component_weights;
-        }
-        if (*trial_component_indices != *group_component_indices) {
-          group_valid = false;
-          break;
-        }
-        expanded_component_weights_batch.push_back(trial_component_weights);
-        expanded_trial_to_point_index.push_back(mask_idx);
-      }
-      if (!group_valid) {
-        break;
-      }
-    }
-    if (!group_valid) {
-      continue;
-    }
-    std::vector<const TrialParamSet *> mask_params_batch(
-        mask_batch.mask_param_ptrs.size(),
-        &param_sets[static_cast<std::size_t>(rep_trial_idx)]);
-    std::vector<double> expanded_probabilities;
-    if (!mix_outcome_mass_batch_idx(
-            *ctx, *group_key.nonresponse_outcome_indices,
-            *group_component_indices, expanded_component_weights_batch,
-            mask_params_batch, rel_tol, abs_tol, max_depth, false,
-            expanded_probabilities, &expanded_trial_to_point_index,
-            &mask_batch.mask_param_ptrs) ||
-        expanded_probabilities.size() != expanded_component_weights_batch.size()) {
-      continue;
-    }
-
-    for (std::size_t trial_pos = 0; trial_pos < trial_indices.size(); ++trial_pos) {
-      double probability = 0.0;
-      for (std::size_t mask_idx = 0; mask_idx < mask_batch.mask_weights.size();
-           ++mask_idx) {
-        const double weight = mask_batch.mask_weights[mask_idx];
-        if (!(std::isfinite(weight) && weight > 0.0)) {
-          continue;
-        }
-        const std::size_t expanded_idx =
-            mask_idx * trial_indices.size() + trial_pos;
-        const double point_probability = expanded_probabilities[expanded_idx];
-        if (std::isfinite(point_probability) && point_probability > 0.0) {
-          probability += weight * point_probability;
-        }
-      }
-      probability = safe_density(probability);
-      if (group_key.probability_transform ==
-          TrialProbabilityTransform::Complement) {
-        probability = clamp_probability(1.0 - probability);
-      }
-      const int trial_idx = trial_indices[trial_pos];
-      double ll_val = min_ll;
-      if (std::isfinite(probability) && probability > 0.0) {
-        const double lp = std::log(probability);
-        if (std::isfinite(lp) && lp > min_ll) {
-          ll_val = lp;
-        }
-      }
-      trial_loglik[static_cast<std::size_t>(trial_idx)] = ll_val;
-      trial_loglik_batched[static_cast<std::size_t>(trial_idx)] = 1u;
-    }
-  }
-
-  for (auto &kv : outcome_mass_batch_groups) {
-    const std::vector<int> &trial_indices = kv.second;
-    const int first_trial = trial_indices.front();
-    if (first_trial < 0 || first_trial >= n_trials) {
-      continue;
-    }
-
-    const OutcomeMassBatchKey &group_key = kv.first;
-    const int forced_component_idx =
-        (first_trial < static_cast<int>(comp_idx_by_trial.size()))
-            ? comp_idx_by_trial[static_cast<std::size_t>(first_trial)]
-            : -1;
-    const std::vector<int> *group_component_indices = &default_component_indices;
-    if (forced_component_idx >= 0) {
-      const ForcedComponentBundle &forced_bundle =
-          forced_bundle_for(forced_component_idx);
-      group_component_indices = &forced_bundle.component_indices;
-    }
-
-    std::vector<const TrialParamSet *> trial_params_batch;
-    std::vector<const PreparedTrialParamsRuntime *> prepared_runtime_batch;
-    std::vector<const std::vector<double> *> component_weights_batch;
-    std::vector<std::size_t> trial_to_point_index;
-    trial_params_batch.reserve(trial_indices.size());
-    prepared_runtime_batch.reserve(trial_indices.size());
-    component_weights_batch.reserve(trial_indices.size());
-    trial_to_point_index.reserve(trial_indices.size());
-    std::unordered_map<int, std::size_t> param_group_to_point_index;
-    param_group_to_point_index.reserve(trial_indices.size());
-
-    bool group_valid = true;
-    for (int trial_idx : trial_indices) {
-      if (trial_idx < 0 || trial_idx >= n_trials) {
-        group_valid = false;
-        break;
-      }
-      const int trial_forced_component_idx =
-          (trial_idx < static_cast<int>(comp_idx_by_trial.size()))
-              ? comp_idx_by_trial[static_cast<std::size_t>(trial_idx)]
-              : -1;
-      const std::vector<int> *trial_component_indices = &default_component_indices;
-      const std::vector<double> *trial_component_weights =
-          &weights_by_trial[static_cast<std::size_t>(trial_idx)];
-      if (trial_forced_component_idx >= 0) {
-        const ForcedComponentBundle &forced_bundle =
-            forced_bundle_for(trial_forced_component_idx);
-        trial_component_indices = &forced_bundle.component_indices;
-        trial_component_weights = &forced_bundle.component_weights;
-      }
-      if (*trial_component_indices != *group_component_indices) {
-        group_valid = false;
-        break;
-      }
-      component_weights_batch.push_back(trial_component_weights);
-      const int param_group_idx =
-          (trial_idx >= 0 &&
-           trial_idx < static_cast<int>(param_value_group_by_trial.size()))
-              ? param_value_group_by_trial[static_cast<std::size_t>(trial_idx)]
-              : -1;
-      std::size_t point_idx = trial_params_batch.size();
-      if (param_group_idx >= 0) {
-        auto it = param_group_to_point_index.find(param_group_idx);
-        if (it != param_group_to_point_index.end()) {
-          point_idx = it->second;
-        } else {
-          int rep_trial_idx = trial_idx;
-          if (param_group_idx <
-              static_cast<int>(param_value_group_representative_trial.size())) {
-            const int candidate_rep =
-                param_value_group_representative_trial[static_cast<std::size_t>(
-                    param_group_idx)];
-            if (candidate_rep >= 0 && candidate_rep < n_trials) {
-              rep_trial_idx = candidate_rep;
-            }
-          }
-          point_idx = trial_params_batch.size();
-          trial_params_batch.push_back(
-              &param_sets[static_cast<std::size_t>(rep_trial_idx)]);
-          prepared_runtime_batch.push_back(
-              prepared_trial_runtime_ptrs[static_cast<std::size_t>(
-                  rep_trial_idx)]);
-          param_group_to_point_index.emplace(param_group_idx, point_idx);
-        }
-      } else {
-        trial_params_batch.push_back(
-            &param_sets[static_cast<std::size_t>(trial_idx)]);
-        prepared_runtime_batch.push_back(
-            prepared_trial_runtime_ptrs[static_cast<std::size_t>(trial_idx)]);
-      }
-      trial_to_point_index.push_back(point_idx);
-    }
-    if (!group_valid) {
-      continue;
-    }
-
-    std::vector<const std::vector<double> *> compressed_component_weights_batch;
-    std::vector<std::size_t> compressed_trial_to_point_index;
-    std::vector<std::vector<std::size_t>> compressed_trial_positions;
-    compressed_component_weights_batch.reserve(component_weights_batch.size());
-    compressed_trial_to_point_index.reserve(trial_to_point_index.size());
-    compressed_trial_positions.reserve(trial_to_point_index.size());
-    std::unordered_map<OutcomeMassTrialSignature, std::size_t,
-                       OutcomeMassTrialSignatureHash>
-        signature_to_index;
-    signature_to_index.reserve(trial_to_point_index.size());
-    for (std::size_t trial_pos = 0; trial_pos < trial_indices.size(); ++trial_pos) {
-      OutcomeMassTrialSignature signature;
-      signature.point_idx = trial_to_point_index[trial_pos];
-      const int trial_idx = trial_indices[trial_pos];
-      signature.component_weight_group_idx =
-          (trial_idx >= 0 &&
-           trial_idx < static_cast<int>(component_weight_group_by_trial.size()))
-              ? component_weight_group_by_trial[static_cast<std::size_t>(trial_idx)]
-              : -1;
-      auto it = signature_to_index.find(signature);
-      if (it == signature_to_index.end()) {
-        const std::size_t compressed_idx = compressed_component_weights_batch.size();
-        signature_to_index.emplace(std::move(signature), compressed_idx);
-        compressed_component_weights_batch.push_back(
-            component_weights_batch[trial_pos]);
-        compressed_trial_to_point_index.push_back(trial_to_point_index[trial_pos]);
-        compressed_trial_positions.push_back({trial_pos});
-      } else {
-        compressed_trial_positions[it->second].push_back(trial_pos);
-      }
-    }
-
-    const std::size_t unique_point_count = trial_params_batch.size();
-    const std::size_t chunk_point_limit =
-        (unique_point_count <= 64u ||
-         unique_point_count * 4u <= trial_indices.size())
-            ? 32u
-            : 1u;
-    std::vector<double> probabilities(trial_indices.size(), 0.0);
-    std::size_t assigned_trial_count = 0u;
-    bool batch_ok = true;
-    for (std::size_t point_begin = 0u; point_begin < trial_params_batch.size();
-         point_begin += chunk_point_limit) {
-      const std::size_t point_end = std::min(
-          trial_params_batch.size(), point_begin + chunk_point_limit);
-      std::vector<const TrialParamSet *> chunk_trial_params;
-      std::vector<const PreparedTrialParamsRuntime *> chunk_prepared_runtimes;
-      chunk_trial_params.reserve(point_end - point_begin);
-      chunk_prepared_runtimes.reserve(point_end - point_begin);
-      for (std::size_t point_idx = point_begin; point_idx < point_end;
-           ++point_idx) {
-        chunk_trial_params.push_back(trial_params_batch[point_idx]);
-        chunk_prepared_runtimes.push_back(prepared_runtime_batch[point_idx]);
-      }
-
-      std::vector<const std::vector<double> *> chunk_component_weights;
-      std::vector<std::size_t> chunk_trial_to_point_index;
-      std::vector<std::size_t> chunk_compressed_indices;
-      chunk_component_weights.reserve(compressed_component_weights_batch.size());
-      chunk_trial_to_point_index.reserve(compressed_trial_to_point_index.size());
-      chunk_compressed_indices.reserve(compressed_trial_to_point_index.size());
-      for (std::size_t compressed_idx = 0u;
-           compressed_idx < compressed_trial_to_point_index.size();
-           ++compressed_idx) {
-        const std::size_t point_idx = compressed_trial_to_point_index[compressed_idx];
-        if (point_idx < point_begin || point_idx >= point_end) {
-          continue;
-        }
-        chunk_component_weights.push_back(
-            compressed_component_weights_batch[compressed_idx]);
-        chunk_trial_to_point_index.push_back(point_idx - point_begin);
-        chunk_compressed_indices.push_back(compressed_idx);
-      }
-      if (chunk_compressed_indices.empty()) {
-        continue;
-      }
-
-      std::vector<double> chunk_probabilities;
-      if (!mix_outcome_mass_batch_idx(
-              *ctx, *group_key.nonresponse_outcome_indices,
-              *group_component_indices, chunk_component_weights,
-              chunk_trial_params, rel_tol, abs_tol, max_depth,
-              group_key.probability_transform ==
-                  TrialProbabilityTransform::Complement,
-              chunk_probabilities, &chunk_trial_to_point_index, nullptr,
-              &chunk_prepared_runtimes) ||
-          chunk_probabilities.size() != chunk_compressed_indices.size()) {
-        batch_ok = false;
-        break;
-      }
-      for (std::size_t i = 0; i < chunk_compressed_indices.size(); ++i) {
-        const std::size_t compressed_idx = chunk_compressed_indices[i];
-        const double prob = chunk_probabilities[i];
-        for (std::size_t trial_pos : compressed_trial_positions[compressed_idx]) {
-          probabilities[trial_pos] = prob;
-          ++assigned_trial_count;
-        }
-      }
-    }
-    if (!batch_ok || assigned_trial_count != trial_indices.size()) {
-      continue;
-    }
-
-    for (std::size_t i = 0; i < trial_indices.size(); ++i) {
-      const int trial_idx = trial_indices[i];
-      const double prob = probabilities[i];
-      double ll_val = min_ll;
-      if (std::isfinite(prob) && prob > 0.0) {
-        const double lp = std::log(prob);
-        if (std::isfinite(lp) && lp > min_ll) {
-          ll_val = lp;
-        }
-      }
-      trial_loglik[static_cast<std::size_t>(trial_idx)] = ll_val;
-      trial_loglik_batched[static_cast<std::size_t>(trial_idx)] = 1u;
-    }
-  }
-
-  for (int t = 0; t < n_trials; ++t) {
-    if (t >= ok.size() || !ok[t]) {
-      trial_loglik[static_cast<std::size_t>(t)] = min_ll;
-      continue;
-    }
-    if (!trial_eval_inputs[static_cast<std::size_t>(t)].valid) {
-      trial_loglik[static_cast<std::size_t>(t)] = min_ll;
-      continue;
-    }
-    if (trial_loglik_batched[static_cast<std::size_t>(t)] == 0u) {
-      Rcpp::stop("cpp_loglik left an eligible trial unassigned after grouped "
-                 "batch evaluation");
-    }
-  }
-
-  double total_loglik = 0.0;
-  for (R_xlen_t i = 0; i < n_expand; ++i) {
-    int comp_idx = expand[i];
-    total_loglik += trial_loglik[static_cast<std::size_t>(comp_idx - 1)];
-  }
-
-  return total_loglik;
-#endif
+  Rcpp::XPtr<uuber::NativeContext> ctx_xptr(ctxSEXP);
+  validate_loglik_context_or_stop(*ctx_xptr);
+  LogLikWorkload workload;
+  build_loglik_workload(*ctx_xptr, data_df, ok, expand, workload);
+  LogLikPreparedParams prepared =
+      build_loglik_prepared_params(*ctx_xptr, workload, params_mat);
+  return execute_loglik_workload(*ctx_xptr, workload, prepared, min_ll,
+                                 rel_tol, abs_tol, max_depth);
 }
 
 // [[Rcpp::export]]
@@ -11614,52 +10876,36 @@ Rcpp::NumericVector cpp_loglik_multiple(SEXP ctxSEXP, Rcpp::List params_list,
                                         Rcpp::IntegerVector expand,
                                         double min_ll, double rel_tol,
                                         double abs_tol, int max_depth) {
-  {
-    Rcpp::XPtr<uuber::NativeContext> ctx_xptr(ctxSEXP);
-    validate_loglik_context_or_stop(*ctx_xptr);
-    LogLikWorkload workload;
-    build_loglik_workload(*ctx_xptr, data_df, ok, expand, workload);
-    Rcpp::NumericVector out(params_list.size());
-    std::vector<int> active_param_indices;
-    active_param_indices.reserve(params_list.size());
-    std::vector<Rcpp::NumericMatrix> active_params_mats;
-    active_params_mats.reserve(params_list.size());
-    std::vector<LogLikPreparedParams> prepared_batch;
-    prepared_batch.reserve(params_list.size());
-    for (R_xlen_t i = 0; i < params_list.size(); ++i) {
-      if (params_list[i] == R_NilValue) {
-        out[i] = NA_REAL;
-        continue;
-      }
-      active_param_indices.push_back(static_cast<int>(i));
-      active_params_mats.emplace_back(params_list[i]);
-    }
-    if (!active_params_mats.empty()) {
-      build_loglik_prepared_params_batch(*ctx_xptr, workload, active_params_mats,
-                                         prepared_batch);
-      const Rcpp::NumericVector active_out = execute_loglik_workload_multi(
-          *ctx_xptr, workload, prepared_batch, min_ll, rel_tol, abs_tol,
-          max_depth);
-      for (std::size_t i = 0; i < active_param_indices.size(); ++i) {
-        out[static_cast<R_xlen_t>(active_param_indices[i])] = active_out[i];
-      }
-    }
-    return out;
-  }
-#if 0
-  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  Rcpp::XPtr<uuber::NativeContext> ctx_xptr(ctxSEXP);
+  validate_loglik_context_or_stop(*ctx_xptr);
+  LogLikWorkload workload;
+  build_loglik_workload(*ctx_xptr, data_df, ok, expand, workload);
   Rcpp::NumericVector out(params_list.size());
+  std::vector<int> active_param_indices;
+  active_param_indices.reserve(params_list.size());
+  std::vector<Rcpp::NumericMatrix> active_params_mats;
+  active_params_mats.reserve(params_list.size());
+  std::vector<LogLikPreparedParams> prepared_batch;
+  prepared_batch.reserve(params_list.size());
   for (R_xlen_t i = 0; i < params_list.size(); ++i) {
     if (params_list[i] == R_NilValue) {
       out[i] = NA_REAL;
       continue;
     }
-    Rcpp::NumericMatrix pm(params_list[i]);
-    out[i] = cpp_loglik(ctxSEXP, pm, data_df, ok, expand, min_ll, rel_tol,
-                        abs_tol, max_depth);
+    active_param_indices.push_back(static_cast<int>(i));
+    active_params_mats.emplace_back(params_list[i]);
+  }
+  if (!active_params_mats.empty()) {
+    build_loglik_prepared_params_batch(*ctx_xptr, workload, active_params_mats,
+                                       prepared_batch);
+    const Rcpp::NumericVector active_out = execute_loglik_workload_multi(
+        *ctx_xptr, workload, prepared_batch, min_ll, rel_tol, abs_tol,
+        max_depth);
+    for (std::size_t i = 0; i < active_param_indices.size(); ++i) {
+      out[static_cast<R_xlen_t>(active_param_indices[i])] = active_out[i];
+    }
   }
   return out;
-#endif
 }
 
 // [[Rcpp::export]]
@@ -11698,4 +10944,74 @@ double native_outcome_probability_params_cpp_idx(
       competitor_ids, rel_tol, abs_tol, max_depth,
       params_holder ? params_holder.get() : nullptr, std::string(), false, -1,
       nullptr, nullptr);
+}
+
+// [[Rcpp::export]]
+Rcpp::NumericVector native_outcome_probability_params_batch_cpp_idx(
+    SEXP ctxSEXP, Rcpp::IntegerVector node_ids, double upper, int component_idx,
+    Rcpp::List competitor_ids_list, double rel_tol, double abs_tol,
+    int max_depth, Rcpp::Nullable<Rcpp::DataFrame> trial_rows) {
+  if (competitor_ids_list.size() != node_ids.size()) {
+    Rcpp::stop("competitor_ids_list must match node_ids length");
+  }
+  Rcpp::XPtr<uuber::NativeContext> ctx(ctxSEXP);
+  std::unique_ptr<TrialParamSet> params_holder =
+      build_trial_params_from_df(*ctx, trial_rows);
+  Rcpp::NumericVector out(node_ids.size());
+  std::vector<const TrialParamSet *> trial_params_batch(
+      1u, params_holder ? params_holder.get() : nullptr);
+  std::vector<std::uint8_t> consumed(static_cast<std::size_t>(node_ids.size()), 0u);
+  DensityBatchWorkspace workspace;
+  for (R_xlen_t i = 0; i < node_ids.size(); ++i) {
+    if (consumed[static_cast<std::size_t>(i)] != 0u) {
+      continue;
+    }
+    Rcpp::IntegerVector competitor_ids_vec =
+        competitor_ids_list[i] == R_NilValue
+            ? Rcpp::IntegerVector()
+            : Rcpp::as<Rcpp::IntegerVector>(competitor_ids_list[i]);
+    const std::vector<int> competitor_ids =
+        integer_vector_to_std(competitor_ids_vec, false);
+    std::vector<R_xlen_t> group_indices;
+    std::vector<int> group_node_ids;
+    for (R_xlen_t j = i; j < node_ids.size(); ++j) {
+      if (consumed[static_cast<std::size_t>(j)] != 0u) {
+        continue;
+      }
+      Rcpp::IntegerVector other_competitor_ids_vec =
+          competitor_ids_list[j] == R_NilValue
+              ? Rcpp::IntegerVector()
+              : Rcpp::as<Rcpp::IntegerVector>(competitor_ids_list[j]);
+      const std::vector<int> other_competitor_ids =
+          integer_vector_to_std(other_competitor_ids_vec, false);
+      if (other_competitor_ids != competitor_ids) {
+        continue;
+      }
+      consumed[static_cast<std::size_t>(j)] = 1u;
+      group_indices.push_back(j);
+      group_node_ids.push_back(node_ids[j]);
+    }
+
+    std::vector<double> group_probabilities;
+    if (group_node_ids.size() > 1u &&
+        integrate_outcome_probabilities_from_density_multi_idx(
+            *ctx, group_node_ids, upper, component_idx, competitor_ids, rel_tol,
+            abs_tol, max_depth, trial_params_batch, std::string(), false, -1,
+            group_probabilities, nullptr, nullptr, &workspace) &&
+        group_probabilities.size() == group_node_ids.size()) {
+      for (std::size_t group_pos = 0; group_pos < group_indices.size(); ++group_pos) {
+        out[group_indices[group_pos]] = group_probabilities[group_pos];
+      }
+      continue;
+    }
+
+    for (std::size_t group_pos = 0; group_pos < group_indices.size(); ++group_pos) {
+      out[group_indices[group_pos]] = native_outcome_probability_bits_impl_idx(
+          *ctx, group_node_ids[group_pos], upper, component_idx, nullptr, false,
+          nullptr, false, competitor_ids, rel_tol, abs_tol, max_depth,
+          params_holder ? params_holder.get() : nullptr, std::string(), false, -1,
+          nullptr, nullptr);
+    }
+  }
+  return out;
 }

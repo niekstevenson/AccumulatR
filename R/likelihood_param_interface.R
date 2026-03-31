@@ -1198,6 +1198,122 @@ prepare_likelihood_data <- function(likelihood_context, data) {
   base
 }
 
+.likelihood_response_prob_components_batch <- function(prep, outcome_labels,
+                                                       component,
+                                                       trial_rows = NULL) {
+  labels <- unique(as.character(outcome_labels))
+  if (length(labels) == 0L) {
+    return(setNames(numeric(0), character(0)))
+  }
+
+  native_ctx <- .prep_native_context(prep)
+  if (!inherits(native_ctx, "externalptr")) {
+    stop("Native context required for response probabilities; R fallback removed", call. = FALSE)
+  }
+
+  competitor_map <- .prep_competitors(prep) %||% list()
+  use_indexed_competitors <- isTRUE(attr(competitor_map, "by_index")) &&
+    length(competitor_map) == length(prep[["outcomes"]])
+  component_idx <- .component_index_from_prep(prep, component)
+  guess_policy <- .get_component_attr(prep, component, "guess")
+
+  request_labels <- character(0)
+  request_node_ids <- integer(0)
+  request_competitor_ids <- list()
+  request_keep_weights <- numeric(0)
+  alias_refs <- vector("list", length(labels))
+  names(alias_refs) <- labels
+
+  for (lbl in labels) {
+    selected_idx <- .resolve_outcome_def_index(prep, lbl, component)
+    if (is.na(selected_idx)) {
+      next
+    }
+    out_def <- prep[["outcomes"]][[selected_idx]]
+    refs <- out_def[["options"]][["alias_of"]] %||% NULL
+    if (!is.null(refs)) {
+      alias_refs[[lbl]] <- as.character(refs)
+      next
+    }
+
+    compiled <- .expr_lookup_compiled(out_def[["expr"]], prep)
+    if (is.null(compiled)) {
+      stop(sprintf("No compiled node for outcome '%s'", lbl), call. = FALSE)
+    }
+
+    comp_exprs <- if (use_indexed_competitors) {
+      competitor_map[[selected_idx]] %||% list()
+    } else {
+      competitor_map[[lbl]] %||% list()
+    }
+    comp_ids <- integer(0)
+    if (length(comp_exprs) > 0L) {
+      comp_nodes <- lapply(comp_exprs, function(ex) .expr_lookup_compiled(ex, prep))
+      if (!any(vapply(comp_nodes, is.null, logical(1)))) {
+        comp_ids <- vapply(comp_nodes, function(node) as.integer(node$id %||% NA_integer_), integer(1))
+      }
+    }
+
+    keep_weight <- 1.0
+    if (!identical(lbl, "GUESS") && !is.null(guess_policy) && !is.null(guess_policy[["weights"]])) {
+      keep_weight <- guess_policy[["weights"]][[lbl]] %||%
+        guess_policy[["weights"]][[normalize_label(lbl)]] %||%
+        1.0
+      keep_weight <- as.numeric(keep_weight)
+    }
+
+    request_labels <- c(request_labels, lbl)
+    request_node_ids <- c(request_node_ids, as.integer(compiled$id))
+    request_competitor_ids[[length(request_competitor_ids) + 1L]] <- as.integer(comp_ids)
+    request_keep_weights <- c(request_keep_weights, keep_weight)
+  }
+
+  probs <- setNames(numeric(length(labels)), labels)
+  if (length(request_labels) > 0L) {
+    trial_rows_df <- if (is.null(trial_rows)) data.frame() else as.data.frame(trial_rows)
+    prob_native <- native_outcome_probability_params_batch_cpp_idx(
+      native_ctx,
+      as.integer(request_node_ids),
+      Inf,
+      as.integer(component_idx),
+      request_competitor_ids,
+      .integrate_rel_tol(),
+      .integrate_abs_tol(),
+      12L,
+      trial_rows_df
+    )
+    if (any(!is.finite(prob_native) | prob_native < 0)) {
+      stop("Native outcome probability batch failed", call. = FALSE)
+    }
+    probs[request_labels] <- as.numeric(prob_native) * request_keep_weights
+  }
+
+  resolved <- new.env(parent = emptyenv(), hash = TRUE)
+  resolve_alias_prob <- function(lbl, seen = character(0)) {
+    cached <- resolved[[lbl]]
+    if (!is.null(cached)) {
+      return(cached)
+    }
+    refs <- alias_refs[[lbl]] %||% NULL
+    if (is.null(refs) || length(refs) == 0L) {
+      val <- probs[[lbl]] %||% 0.0
+      resolved[[lbl]] <- val
+      return(val)
+    }
+    if (lbl %in% seen) {
+      stop(sprintf("Alias cycle detected for outcome '%s'", lbl), call. = FALSE)
+    }
+    val <- sum(vapply(refs, resolve_alias_prob, numeric(1), seen = c(seen, lbl)))
+    resolved[[lbl]] <- val
+    val
+  }
+
+  for (lbl in labels) {
+    probs[[lbl]] <- resolve_alias_prob(lbl)
+  }
+  probs
+}
+
 .aggregate_observed_probs <- function(prep, probs, include_na = TRUE, component = NULL) {
   labels <- unique(names(prep[["outcomes"]]))
   labels <- Filter(function(lbl) {
@@ -1294,9 +1410,9 @@ response_probabilities.model_structure <- function(structure,
   if (is.matrix(params_df) || inherits(params_df, "param_matrix")) {
     params_df <- .param_matrix_to_rows(structure, params_df)
   }
-  model_spec <- .model_spec_with_params(structure$model_spec, params_df)
-  prep_eval_base <- .prepare_model_for_likelihood(model_spec)
+  prep_eval_base <- .likelihood_structure_prep(structure)
   comp_ids <- structure$components$component_id
+  outcome_labels <- unique(names(prep_eval_base$outcomes))
 
   if (!"trial" %in% names(params_df)) params_df$trial <- 1L
   params_df$trial <- params_df$trial
@@ -1311,7 +1427,6 @@ response_probabilities.model_structure <- function(structure,
   for (i in seq_along(trial_ids)) {
     tid <- trial_ids[[i]]
     trial_rows <- params_df[params_df$trial == tid, , drop = FALSE]
-    trial_state <- .eval_state_create()
     comps <- comp_ids
     if ("component" %in% names(trial_rows)) {
       listed <- unique(trial_rows$component)
@@ -1330,16 +1445,12 @@ response_probabilities.model_structure <- function(structure,
     for (idx in seq_along(comps)) {
       comp_id <- comps[[idx]]
       comp_rows <- .likelihood_component_rows(trial_rows, comp_id)
-      labels <- unique(names(prep_eval_base$outcomes))
-      base_probs <- setNames(vapply(labels, function(lbl) {
-        .likelihood_response_prob_component(
-          prep_eval_base,
-          lbl,
-          comp_id,
-          trial_rows = comp_rows,
-          trial_state = trial_state
-        )
-      }, numeric(1)), labels)
+      base_probs <- .likelihood_response_prob_components_batch(
+        prep_eval_base,
+        outcome_labels,
+        comp_id,
+        trial_rows = comp_rows
+      )
       comp_probs <- .aggregate_observed_probs(
         prep_eval_base,
         base_probs,

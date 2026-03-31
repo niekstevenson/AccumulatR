@@ -1,6 +1,6 @@
 # Vectorization Speed Contract
 
-Last updated: 2026-03-28
+Last updated: 2026-03-30
 
 This note is ordered by speed impact only.
 
@@ -55,7 +55,10 @@ Target code:
 
 Current blocker:
 
-- `cpp_loglik_multiple()` is still a scalar loop over full `cpp_loglik()` calls.
+- The old scalar-wrapper blocker is gone.
+- Remaining blocker is proof and throughput closure: the multi-param path is real,
+  but the checked-in milestone artifact does not yet prove the explicit `2x`
+  target and per-param prepared batches are still fairly heavy in memory.
 
 Required end state:
 
@@ -103,7 +106,10 @@ Current blocker:
 
 - ranked still owns frontier scheduling
 - exact still owns scenario scheduling
-- exact still depends on `RankedBatchPlanner`
+- exact no longer hot-depends on `RankedBatchPlanner`, but exact still owns a
+  private scenario shell and ranked still owns a private frontier shell
+- checked-in Milestone 2 probes show modest ranked gains and mostly flat exact
+  gains, so the benchmark bar is still open
 
 Required end state:
 
@@ -152,7 +158,9 @@ Target code:
 
 Current blocker:
 
-- mixture terms are still evaluated sequentially
+- `response_probabilities()` got a real batch win, but the target C++ hot loops
+  are still mostly serial
+- mixture terms are still evaluated sequentially in the native helper
 - donor/source accumulation is still serial across donors
 - outcome-mass still loops outcomes and components outside the batch leaf
 

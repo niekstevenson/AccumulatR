@@ -145,19 +145,6 @@ int exact_resolve_transition_node_idx_impl(
   return current_idx;
 }
 
-class ExactBatchPlanner {
-public:
-  explicit ExactBatchPlanner(const uuber::NativeContext &ctx_);
-
-  const RankedNodeBatchPlan &plan_for_node(int node_idx);
-
-private:
-  void compile_node(int node_idx);
-
-  const uuber::NativeContext &ctx;
-  std::vector<RankedNodeBatchPlan> plans;
-};
-
 inline void exact_scenario_batch_append_lane_copy(
     ExactScenarioBatch &batch, const uuber::VectorLaneRef &point, double t,
     double weight) {
@@ -1290,37 +1277,6 @@ bool exact_eval_node_batch_with_points(
                                       uniform_trial_params_soa);
 }
 
-ExactBatchPlanner::ExactBatchPlanner(const uuber::NativeContext &ctx_)
-    : ctx(ctx_), plans(ctx_.ir.nodes.size()) {}
-
-const RankedNodeBatchPlan &ExactBatchPlanner::plan_for_node(int node_idx) {
-  static const RankedNodeBatchPlan kInvalidPlan;
-  if (node_idx < 0 || node_idx >= static_cast<int>(plans.size())) {
-    return kInvalidPlan;
-  }
-  RankedNodeBatchPlan &plan = plans[static_cast<std::size_t>(node_idx)];
-  if (!plan.compiled) {
-    compile_node(node_idx);
-  }
-  return plan;
-}
-
-void ExactBatchPlanner::compile_node(int node_idx) {
-  RankedNodeBatchPlan &plan = plans[static_cast<std::size_t>(node_idx)];
-  if (plan.compiled || plan.compiling) {
-    return;
-  }
-  plan.compiling = true;
-  compile_ranked_node_batch_plan(
-      ctx, node_idx,
-      [this](int child_node_idx) -> const RankedNodeBatchPlan & {
-        return plan_for_node(child_node_idx);
-      },
-      plan);
-  plan.compiled = true;
-  plan.compiling = false;
-}
-
 inline EvalNeed exact_ranked_eval_need(RankedProgramEvalKind kind) {
   switch (kind) {
   case RankedProgramEvalKind::Density:
@@ -1808,25 +1764,6 @@ ExactTransitionExecutionResult exact_execute_compiled_transition_plan_impl(
         return reducer.consume(points, active_mask, weights);
       },
       uniform_trial_params_soa);
-}
-
-inline std::unordered_map<std::uint64_t,
-                          std::unique_ptr<ExactBatchPlanner>> &
-exact_scenario_planner_cache_registry() {
-  thread_local std::unordered_map<std::uint64_t,
-                                  std::unique_ptr<ExactBatchPlanner>>
-      cache;
-  return cache;
-}
-
-ExactBatchPlanner &exact_scenario_planner_for_ctx(
-    const uuber::NativeContext &ctx) {
-  std::unique_ptr<ExactBatchPlanner> &entry =
-      exact_scenario_planner_cache_registry()[ctx.runtime_cache_instance_id];
-  if (!entry) {
-    entry = std::make_unique<ExactBatchPlanner>(ctx);
-  }
-  return *entry;
 }
 
 inline bool exact_competitor_guard_fastpath_eligible(
@@ -2461,14 +2398,6 @@ int exact_resolve_transition_node_idx(const uuber::NativeContext &ctx,
 
 namespace uuber {
 
-void clear_exact_outcome_runtime_caches(
-    std::uint64_t runtime_cache_instance_id) noexcept {
-  if (runtime_cache_instance_id == 0) {
-    return;
-  }
-  exact_scenario_planner_cache_registry().erase(runtime_cache_instance_id);
-}
-
 } // namespace uuber
 
 bool exact_eval_node_batch_from_batch(
@@ -2528,7 +2457,7 @@ bool exact_outcome_density_batch_from_state(
   if (times.empty()) {
     return true;
   }
-  ExactBatchPlanner &planner = exact_scenario_planner_for_ctx(ctx);
+  RankedBatchPlanner &planner = ranked_transition_planner_for_ctx(ctx);
   const int exec_node_idx =
       exact_resolve_transition_node_idx_impl(ctx, node_idx, state.component_idx);
   if (exec_node_idx == NA_INTEGER) {

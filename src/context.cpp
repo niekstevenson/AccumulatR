@@ -1,6 +1,7 @@
 #include "context.h"
 
 #include "prep_builder.h"
+#include "ranked_transitions.h"
 #include "vector_runtime.h"
 
 #include <atomic>
@@ -35,8 +36,6 @@ namespace uuber {
 
 void clear_ranked_distribution_runtime_caches(
     std::uint64_t runtime_cache_instance_id) noexcept;
-void clear_exact_outcome_runtime_caches(
-    std::uint64_t runtime_cache_instance_id) noexcept;
 
 std::uint64_t next_native_context_runtime_cache_instance_id() noexcept {
   return g_native_context_runtime_cache_instance_counter.fetch_add(
@@ -45,7 +44,7 @@ std::uint64_t next_native_context_runtime_cache_instance_id() noexcept {
 
 NativeContext::~NativeContext() {
   clear_ranked_distribution_runtime_caches(runtime_cache_instance_id);
-  clear_exact_outcome_runtime_caches(runtime_cache_instance_id);
+  clear_ranked_transition_runtime_caches(runtime_cache_instance_id);
 }
 
 Rcpp::XPtr<NativeContext> build_native_context(Rcpp::List prep) {

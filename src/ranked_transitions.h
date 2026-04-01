@@ -328,6 +328,11 @@ private:
   std::vector<RankedNodeBatchPlan> plans;
 };
 
+RankedBatchPlanner &ranked_transition_planner_for_ctx(
+    const uuber::NativeContext &ctx);
+void clear_ranked_transition_runtime_caches(
+    std::uint64_t runtime_cache_instance_id) noexcept;
+
 bool ranked_batch_plan_supports_deterministic_fastpath(
     const RankedBatchPlan &plan);
 

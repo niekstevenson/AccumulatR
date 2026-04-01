@@ -844,6 +844,37 @@ void RankedBatchPlanner::compile_node(int node_idx) {
   plan.compiling = false;
 }
 
+namespace {
+
+inline std::unordered_map<std::uint64_t,
+                          std::unique_ptr<RankedBatchPlanner>> &
+ranked_transition_planner_cache_registry() {
+  thread_local std::unordered_map<std::uint64_t,
+                                  std::unique_ptr<RankedBatchPlanner>>
+      cache;
+  return cache;
+}
+
+} // namespace
+
+RankedBatchPlanner &ranked_transition_planner_for_ctx(
+    const uuber::NativeContext &ctx) {
+  std::unique_ptr<RankedBatchPlanner> &entry =
+      ranked_transition_planner_cache_registry()[ctx.runtime_cache_instance_id];
+  if (!entry) {
+    entry = std::make_unique<RankedBatchPlanner>(ctx);
+  }
+  return *entry;
+}
+
+void clear_ranked_transition_runtime_caches(
+    std::uint64_t runtime_cache_instance_id) noexcept {
+  if (runtime_cache_instance_id == 0) {
+    return;
+  }
+  ranked_transition_planner_cache_registry().erase(runtime_cache_instance_id);
+}
+
 void compile_ranked_node_batch_plan(
     const uuber::NativeContext &ctx, int node_idx,
     const std::function<const RankedNodeBatchPlan &(int)> &plan_lookup,

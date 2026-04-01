@@ -23,6 +23,7 @@ struct RankedProgramEvalRef {
 
 struct RankedProgramSliceRef {
   std::vector<RankedProgramEvalRef> evals;
+  std::vector<int> node_indices;
   std::vector<int> relevant_source_ids;
 
   bool empty() const noexcept { return evals.empty(); }
@@ -299,11 +300,19 @@ struct RankedBatchPlan {
   bool valid{false};
 };
 
+struct RankedBatchPlanGroup {
+  std::size_t leader_index{0};
+  std::vector<std::size_t> plan_indices;
+  bool has_deltas{false};
+};
+
 struct RankedNodeBatchPlan {
   bool compiled{false};
   bool compiling{false};
   bool valid{false};
+  bool has_shared_slice_groups{false};
   std::vector<RankedBatchPlan> batch_plans;
+  std::vector<RankedBatchPlanGroup> batch_plan_groups;
 };
 
 class RankedBatchPlanner {

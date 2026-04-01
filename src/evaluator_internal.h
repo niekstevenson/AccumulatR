@@ -500,7 +500,7 @@ inline bool eval_vector_lanes_with_shared_node_state_group(
                                     shared_state.trial_params_soa);
       point_trial_params_soa[first_trial_param_mismatch] =
           mismatch_trial_params_soa;
-      for (std::size_t i = first_trial_param_mismatch + 1; i < points.size();
+      for (std::size_t i = first_trial_param_mismatch + 1u; i < points.size();
            ++i) {
         if (!uuber::vector_lane_active(active_mask, i)) {
           continue;

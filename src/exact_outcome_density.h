@@ -1,6 +1,5 @@
 #pragma once
 
-#include <functional>
 #include <string>
 #include <vector>
 
@@ -77,17 +76,31 @@ inline VectorLaneRef vector_lane_ref(const ExactScenarioLaneViewBatch &batch,
 
 #include "evaluator_internal.h"
 
-class RankedBatchPlanner;
+struct RankedNodeBatchPlan;
 
 using ExactScenarioBatch = uuber::VectorLaneBatch;
-using ExactScenarioBatchProcessFn = std::function<bool(
-    const ExactScenarioBatch &points,
-    const std::vector<std::uint8_t> *active_mask,
-    const std::vector<double> &weights)>;
-using ExactScenarioProcessFn = std::function<bool(
-    const uuber::ExactScenarioLaneViewBatch &points,
-    const std::vector<std::uint8_t> *active_mask,
-    const std::vector<double> &weights)>;
+
+class ExactTransitionReducer {
+public:
+  virtual ~ExactTransitionReducer() = default;
+
+  virtual bool consume(const ExactScenarioBatch &points,
+                       const std::vector<std::uint8_t> *active_mask,
+                       const std::vector<double> &weights) = 0;
+
+  virtual bool consume(const uuber::ExactScenarioLaneViewBatch &points,
+                       const std::vector<std::uint8_t> *active_mask,
+                       const std::vector<double> &weights) = 0;
+};
+
+enum class ExactTransitionExecutionResult : std::uint8_t {
+  Error = 0u,
+  NoEmission = 1u,
+  Emitted = 2u
+};
+
+int exact_resolve_transition_node_idx(const uuber::NativeContext &ctx,
+                                      int node_idx, int component_idx);
 
 bool exact_eval_node_batch_from_batch(
     const uuber::NativeContext &ctx, int node_idx,
@@ -102,12 +115,11 @@ bool exact_outcome_density_batch_from_state(
     const std::vector<double> &times, std::vector<double> &density_out,
     const uuber::CompetitorClusterCacheEntry *competitor_cache = nullptr);
 
-bool exact_collect_scenarios_batch_process_from_batch(
-    RankedBatchPlanner &planner, const uuber::NativeContext &ctx, int node_idx,
+ExactTransitionExecutionResult exact_execute_compiled_transition_plan_from_batch(
+    const RankedNodeBatchPlan &plan, const uuber::NativeContext &ctx,
     const ExactScenarioBatch &seed_batch, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    const ExactScenarioBatchProcessFn &process_exact_batch,
-    const ExactScenarioProcessFn &process_batch,
+    ExactTransitionReducer &reducer,
     const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr);
 
 void exact_competitor_survival_batch(

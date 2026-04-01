@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "forced_state.h"
+#include "native_utils.h"
 #include "trial_params.h"
 #include "vector_runtime.h"
 
@@ -17,6 +19,37 @@ struct VectorRelevantStateStorage {
   BitsetState forced_survive_bits;
   bool forced_complete_bits_valid{false};
   bool forced_survive_bits_valid{false};
+};
+
+struct VectorRelevantStateSignature {
+  std::uint64_t forced_complete_hash{0u};
+  std::uint64_t forced_survive_hash{0u};
+  std::uint64_t time_constraint_hash{0u};
+  std::uint32_t forced_complete_count{0u};
+  std::uint32_t forced_survive_count{0u};
+  std::uint32_t time_constraint_count{0u};
+
+  bool operator==(const VectorRelevantStateSignature &other) const noexcept {
+    return forced_complete_hash == other.forced_complete_hash &&
+           forced_survive_hash == other.forced_survive_hash &&
+           time_constraint_hash == other.time_constraint_hash &&
+           forced_complete_count == other.forced_complete_count &&
+           forced_survive_count == other.forced_survive_count &&
+           time_constraint_count == other.time_constraint_count;
+  }
+};
+
+struct VectorRelevantStateSignatureHash {
+  std::size_t operator()(const VectorRelevantStateSignature &key) const noexcept {
+    std::uint64_t hash = kFNV64Offset;
+    hash_append_u64(hash, key.forced_complete_hash);
+    hash_append_u64(hash, key.forced_survive_hash);
+    hash_append_u64(hash, key.time_constraint_hash);
+    hash_append_u64(hash, static_cast<std::uint64_t>(key.forced_complete_count));
+    hash_append_u64(hash, static_cast<std::uint64_t>(key.forced_survive_count));
+    hash_append_u64(hash, static_cast<std::uint64_t>(key.time_constraint_count));
+    return static_cast<std::size_t>(mix_hash64(hash));
+  }
 };
 
 inline ForcedStateView make_vector_lane_forced_state_view(
@@ -73,6 +106,23 @@ inline void build_vector_lane_filtered_forced_bits(
                                filtered_bits_valid);
     }
   }
+}
+
+inline void build_vector_lane_relevant_state_storage_from_lane(
+    const NativeContext &ctx, const VectorLaneRef &lane,
+    const std::vector<int> &relevant_source_ids,
+    VectorRelevantStateStorage &storage) {
+  build_vector_lane_filtered_time_constraints(*lane.time_constraints,
+                                              relevant_source_ids,
+                                              storage.time_constraints);
+  build_vector_lane_filtered_forced_bits(
+      ctx, *lane.forced_complete_bits, lane.forced_complete_bits_valid,
+      relevant_source_ids, storage.forced_complete_bits,
+      storage.forced_complete_bits_valid);
+  build_vector_lane_filtered_forced_bits(
+      ctx, *lane.forced_survive_bits, lane.forced_survive_bits_valid,
+      relevant_source_ids, storage.forced_survive_bits,
+      storage.forced_survive_bits_valid);
 }
 
 template <typename PointVec>
@@ -140,6 +190,50 @@ inline bool vector_lanes_share_relevant_state(
 }
 
 template <typename PointVec>
+inline VectorRelevantStateSignature vector_lane_relevant_state_signature(
+    const PointVec &points, std::size_t idx,
+    const std::vector<int> &relevant_source_ids, const NativeContext &ctx) {
+  const VectorLaneRef lane = vector_lane_ref(points, idx);
+  VectorRelevantStateSignature signature;
+  std::uint64_t forced_complete_hash = kFNV64Offset;
+  std::uint64_t forced_survive_hash = kFNV64Offset;
+  std::uint64_t time_constraint_hash = kFNV64Offset;
+  for (int source_id : relevant_source_ids) {
+    const bool has_forced_complete = forced_bits_contains_label_id_strict(
+        ctx, source_id, *lane.forced_complete_bits,
+        lane.forced_complete_bits_valid);
+    const bool has_forced_survive = forced_bits_contains_label_id_strict(
+        ctx, source_id, *lane.forced_survive_bits, lane.forced_survive_bits_valid);
+    signature.forced_complete_count += has_forced_complete ? 1u : 0u;
+    signature.forced_survive_count += has_forced_survive ? 1u : 0u;
+    hash_append_bool(forced_complete_hash, has_forced_complete);
+    hash_append_bool(forced_survive_hash, has_forced_survive);
+
+    const SourceTimeConstraint *constraint =
+        time_constraints_find(lane.time_constraints, source_id);
+    const SourceTimeConstraint value =
+        constraint ? *constraint : SourceTimeConstraint{};
+    signature.time_constraint_count += time_constraint_empty(value) ? 0u : 1u;
+    hash_append_bool(time_constraint_hash, value.has_exact);
+    hash_append_bool(time_constraint_hash, value.has_lower);
+    hash_append_bool(time_constraint_hash, value.has_upper);
+    if (value.has_exact) {
+      hash_append_double(time_constraint_hash, value.exact_time);
+    }
+    if (value.has_lower) {
+      hash_append_double(time_constraint_hash, value.lower);
+    }
+    if (value.has_upper) {
+      hash_append_double(time_constraint_hash, value.upper);
+    }
+  }
+  signature.forced_complete_hash = mix_hash64(forced_complete_hash);
+  signature.forced_survive_hash = mix_hash64(forced_survive_hash);
+  signature.time_constraint_hash = mix_hash64(time_constraint_hash);
+  return signature;
+}
+
+template <typename PointVec>
 inline bool prepare_vector_lane_shared_state_storage(
     const NativeContext &ctx, const PointVec &points,
     const std::vector<std::uint8_t> *active_mask,
@@ -151,17 +245,9 @@ inline bool prepare_vector_lane_shared_state_storage(
     return false;
   }
   const VectorLaneRef anchor = vector_lane_ref(points, anchor_idx);
-  build_vector_lane_filtered_time_constraints(*anchor.time_constraints,
-                                              relevant_source_ids,
-                                              storage.time_constraints);
-  build_vector_lane_filtered_forced_bits(
-      ctx, *anchor.forced_complete_bits, anchor.forced_complete_bits_valid,
-      relevant_source_ids, storage.forced_complete_bits,
-      storage.forced_complete_bits_valid);
-  build_vector_lane_filtered_forced_bits(
-      ctx, *anchor.forced_survive_bits, anchor.forced_survive_bits_valid,
-      relevant_source_ids, storage.forced_survive_bits,
-      storage.forced_survive_bits_valid);
+  build_vector_lane_relevant_state_storage_from_lane(ctx, anchor,
+                                                     relevant_source_ids,
+                                                     storage);
   return true;
 }
 
@@ -171,27 +257,39 @@ inline bool partition_vector_lanes_by_relevant_state(
     const std::vector<int> &relevant_source_ids, const NativeContext &ctx,
     std::vector<std::vector<std::uint8_t>> &group_masks) {
   group_masks.clear();
+  std::unordered_map<VectorRelevantStateSignature, std::vector<std::size_t>,
+                     VectorRelevantStateSignatureHash>
+      group_indices_by_signature;
+  group_indices_by_signature.reserve(points.size());
   std::vector<std::size_t> anchor_indices;
+  anchor_indices.reserve(points.size());
   for (std::size_t i = 0; i < points.size(); ++i) {
     if (active_mask && (i >= active_mask->size() || (*active_mask)[i] == 0u)) {
       continue;
     }
+    const VectorRelevantStateSignature signature =
+        vector_lane_relevant_state_signature(points, i, relevant_source_ids, ctx);
     bool assigned = false;
-    for (std::size_t group_idx = 0; group_idx < anchor_indices.size();
-         ++group_idx) {
-      if (vector_lanes_match_relevant_state(points, anchor_indices[group_idx], i,
-                                            relevant_source_ids, ctx)) {
-        group_masks[group_idx][i] = 1u;
-        assigned = true;
-        break;
+    auto bucket_it = group_indices_by_signature.find(signature);
+    if (bucket_it != group_indices_by_signature.end()) {
+      for (std::size_t group_idx : bucket_it->second) {
+        if (group_idx < anchor_indices.size() &&
+            vector_lanes_match_relevant_state(points, anchor_indices[group_idx], i,
+                                              relevant_source_ids, ctx)) {
+          group_masks[group_idx][i] = 1u;
+          assigned = true;
+          break;
+        }
       }
     }
     if (assigned) {
       continue;
     }
+    const std::size_t new_group_idx = anchor_indices.size();
     anchor_indices.push_back(i);
     group_masks.emplace_back(points.size(), 0u);
     group_masks.back()[i] = 1u;
+    group_indices_by_signature[signature].push_back(new_group_idx);
   }
   return !group_masks.empty();
 }

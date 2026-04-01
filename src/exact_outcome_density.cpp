@@ -104,9 +104,9 @@ inline void exact_build_seed_batch_from_state(
     ExactScenarioBatch &seed_batch,
     const uuber::TrialParamsSoA *&uniform_trial_params_soa);
 
-template <typename Planner, typename ProcessBatchFn>
-bool exact_collect_scenarios_batch_process_impl(
-    Planner &planner, const uuber::NativeContext &ctx, int node_idx,
+template <typename ProcessBatchFn>
+ExactTransitionExecutionResult exact_execute_compiled_transition_plan_process_impl(
+    const RankedNodeBatchPlan &plan, const uuber::NativeContext &ctx,
     const ExactScenarioBatch &seed_batch, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     ProcessBatchFn &&process_batch,
@@ -120,6 +120,30 @@ void exact_competitor_survival_batch_impl(
     const std::string &trial_type_key, const PointVec &points,
     std::vector<double> &survival_out,
     const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr);
+
+int exact_resolve_transition_node_idx_impl(
+    const uuber::NativeContext &ctx, int node_idx, int component_idx) {
+  int current_idx = node_idx;
+  while (current_idx >= 0 &&
+         current_idx < static_cast<int>(ctx.ir.nodes.size())) {
+    const uuber::IrNode &node =
+        ctx.ir.nodes[static_cast<std::size_t>(current_idx)];
+    if (node.op != uuber::IrNodeOp::Guard) {
+      break;
+    }
+    if (!exact_node_allowed_in_component(ctx, node.reference_idx,
+                                         component_idx)) {
+      return NA_INTEGER;
+    }
+    if (!exact_node_allowed_in_component(ctx, node.blocker_idx,
+                                         component_idx)) {
+      current_idx = node.reference_idx;
+      continue;
+    }
+    break;
+  }
+  return current_idx;
+}
 
 class ExactBatchPlanner {
 public:
@@ -171,6 +195,18 @@ inline void exact_scenario_view_batch_append_lane(
                                                 ? 1u
                                                 : 0u);
   batch.time_constraints.push_back(point.time_constraints);
+}
+
+inline void exact_build_scenario_view_batch_from_seed(
+    const ExactScenarioBatch &seed_batch, const std::vector<double> &weights,
+    uuber::ExactScenarioLaneViewBatch &batch) {
+  batch.clear();
+  batch.reserve(seed_batch.size());
+  for (std::size_t i = 0; i < seed_batch.size(); ++i) {
+    exact_scenario_view_batch_append_lane(
+        batch, uuber::vector_lane_ref(seed_batch, i),
+        i < weights.size() ? weights[i] : 0.0);
+  }
 }
 
 inline void exact_apply_transition_mask_to_point(
@@ -1529,12 +1565,6 @@ bool exact_eval_ranked_batch_plan_slice_fused(
            exact_batch_values_size_matches(step_values_out.front(), points.size());
   }
 
-  std::vector<int> slice_node_indices;
-  slice_node_indices.reserve(slice.evals.size());
-  for (const RankedProgramEvalRef &eval_ref : slice.evals) {
-    slice_node_indices.push_back(eval_ref.node_idx);
-  }
-
   step_values_out.resize(slice.evals.size());
   for (uuber::TreeNodeBatchValues &values : step_values_out) {
     exact_init_batch_values(points.size(), values);
@@ -1543,6 +1573,8 @@ bool exact_eval_ranked_batch_plan_slice_fused(
   std::vector<std::size_t> subset_indices;
   std::vector<double> subset_times;
   std::vector<const uuber::TrialParamsSoA *> subset_trial_params_soa;
+  std::vector<uuber::TreeNodeBatchValues> shared_values;
+  shared_values.reserve(slice.evals.size());
 
   return eval_vector_lanes_with_shared_node_state(
       ctx, points, &active, slice.relevant_source_ids, component_idx,
@@ -1556,9 +1588,8 @@ bool exact_eval_ranked_batch_plan_slice_fused(
               if (group_times.empty()) {
                 return true;
               }
-              std::vector<uuber::TreeNodeBatchValues> shared_values;
               if (!evaluator_eval_nodes_batch_with_state_dense(
-                      slice_node_indices, group_times, shared_state,
+                      slice.node_indices, group_times, shared_state,
                       shared_values) ||
                   shared_values.size() != slice.evals.size()) {
                 return false;
@@ -1596,33 +1627,15 @@ bool exact_eval_ranked_batch_plan_slice_fused(
       false, uniform_trial_params_soa);
 }
 
-template <typename Planner, typename ProcessBatchFn>
-bool exact_collect_scenarios_batch_process_impl(
-    Planner &planner, const uuber::NativeContext &ctx, int node_idx,
+template <typename ProcessBatchFn>
+ExactTransitionExecutionResult exact_execute_compiled_transition_plan_process_impl(
+    const RankedNodeBatchPlan &plan, const uuber::NativeContext &ctx,
     const ExactScenarioBatch &seed_batch, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     ProcessBatchFn &&process_batch,
     const uuber::TrialParamsSoA *uniform_trial_params_soa) {
-  if (node_idx >= 0 && node_idx < static_cast<int>(ctx.ir.nodes.size())) {
-    const uuber::IrNode &node =
-        ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
-    if (node.op == uuber::IrNodeOp::Guard) {
-      if (!exact_node_allowed_in_component(ctx, node.reference_idx,
-                                           component_idx)) {
-        return false;
-      }
-      if (!exact_node_allowed_in_component(ctx, node.blocker_idx,
-                                           component_idx)) {
-        return exact_collect_scenarios_batch_process_impl(
-            planner, ctx, node.reference_idx, seed_batch, component_idx,
-            trial_params, trial_type_key, process_batch,
-            uniform_trial_params_soa);
-      }
-    }
-  }
-  const RankedNodeBatchPlan &plan = planner.plan_for_node(node_idx);
   if (!plan.valid || plan.batch_plans.empty()) {
-    return false;
+    return ExactTransitionExecutionResult::NoEmission;
   }
 
   uuber::ExactScenarioLaneViewBatch transition_batch;
@@ -1634,35 +1647,36 @@ bool exact_collect_scenarios_batch_process_impl(
   const std::size_t seed_active_count = exact_initialize_seed_transition_state(
       seed_batch, seed_active, seed_transition_weights);
   if (seed_active_count == 0u) {
-    return false;
+    return ExactTransitionExecutionResult::NoEmission;
   }
+  uuber::ExactScenarioLaneViewBatch base_transition_batch;
   std::vector<std::uint8_t> active;
+  std::vector<std::uint8_t> base_active;
   std::vector<double> transition_weights;
+  std::vector<double> base_transition_weights;
   std::vector<uuber::TreeNodeBatchValues> step_values_by_eval;
   bool emitted_any = false;
-  for (std::size_t plan_idx = 0; plan_idx < plan.batch_plans.size(); ++plan_idx) {
-    const RankedBatchPlan &batch_plan = plan.batch_plans[plan_idx];
-    transition_batch.clear();
+  const bool use_grouped_plans =
+      plan.has_shared_slice_groups && !plan.batch_plan_groups.empty();
+  const std::size_t group_count =
+      use_grouped_plans ? plan.batch_plan_groups.size() : plan.batch_plans.size();
+  for (std::size_t group_idx = 0; group_idx < group_count; ++group_idx) {
+    const RankedBatchPlanGroup *batch_plan_group =
+        use_grouped_plans ? &plan.batch_plan_groups[group_idx] : nullptr;
+    const std::size_t leader_index =
+        batch_plan_group != nullptr ? batch_plan_group->leader_index : group_idx;
+    const RankedBatchPlan &leader_plan = plan.batch_plans[leader_index];
     active = seed_active;
     transition_weights = seed_transition_weights;
     std::size_t active_count = seed_active_count;
-
-    bool points_materialized = false;
-    auto materialize_transition_batch = [&]() {
-      if (points_materialized) {
-        return;
-      }
-      transition_batch.reserve(seed_batch.size());
-      for (std::size_t i = 0; i < seed_batch.size(); ++i) {
-        exact_scenario_view_batch_append_lane(
-            transition_batch, uuber::vector_lane_ref(seed_batch, i),
-            transition_weights[i]);
-      }
-      points_materialized = true;
-    };
-
-    bool transition_valid = true;
-    auto deactivate_point = [&](std::size_t idx) {
+    const bool eval_ok = exact_eval_ranked_batch_plan_slice_fused(
+        ctx, leader_plan.slice, seed_batch, component_idx, trial_params,
+        trial_type_key, active, uniform_trial_params_soa, step_values_by_eval);
+    if (!eval_ok || step_values_by_eval.size() != leader_plan.slice.evals.size()) {
+      continue;
+    }
+    bool base_valid = true;
+    auto deactivate_base_point = [&](std::size_t idx) {
       if (idx < active.size() && active[idx] != 0u) {
         active[idx] = 0u;
         if (active_count > 0u) {
@@ -1672,23 +1686,14 @@ bool exact_collect_scenarios_batch_process_impl(
       if (idx < transition_weights.size()) {
         transition_weights[idx] = 0.0;
       }
-      if (points_materialized && idx < transition_batch.weight.size()) {
-        transition_batch.weight[idx] = 0.0;
-      }
     };
-    const bool eval_ok = exact_eval_ranked_batch_plan_slice_fused(
-        ctx, batch_plan.slice, seed_batch, component_idx, trial_params,
-        trial_type_key, active, uniform_trial_params_soa, step_values_by_eval);
-    if (!eval_ok || step_values_by_eval.size() != batch_plan.slice.evals.size()) {
-      continue;
-    }
-    for (std::size_t eval_idx = 0; eval_idx < batch_plan.slice.evals.size();
+    for (std::size_t eval_idx = 0; eval_idx < leader_plan.slice.evals.size();
          ++eval_idx) {
-      const RankedProgramEvalRef &eval_ref = batch_plan.slice.evals[eval_idx];
+      const RankedProgramEvalRef &eval_ref = leader_plan.slice.evals[eval_idx];
       const uuber::TreeNodeBatchValues &step_values =
           step_values_by_eval[eval_idx];
       if (!exact_batch_values_size_matches(step_values, seed_batch.size())) {
-        transition_valid = false;
+        base_valid = false;
         break;
       }
       for (std::size_t i = 0; i < seed_batch.size(); ++i) {
@@ -1698,28 +1703,73 @@ bool exact_collect_scenarios_batch_process_impl(
         const double factor =
             exact_ranked_eval_factor(eval_ref.kind, step_values, i);
         if (!std::isfinite(factor) || factor <= 0.0) {
-          deactivate_point(i);
+          deactivate_base_point(i);
           continue;
         }
         transition_weights[i] *= factor;
         if (!std::isfinite(transition_weights[i]) ||
             transition_weights[i] <= 0.0) {
-          deactivate_point(i);
+          deactivate_base_point(i);
         }
       }
     }
-    if (!transition_valid || active_count == 0u) {
+    if (!base_valid || active_count == 0u) {
       continue;
     }
-    if (!batch_plan.deltas.empty()) {
-      materialize_transition_batch();
+
+    base_active = active;
+    base_transition_weights = transition_weights;
+    const std::size_t base_active_count = active_count;
+    const bool group_has_deltas =
+        batch_plan_group != nullptr ? batch_plan_group->has_deltas
+                                    : !leader_plan.deltas.empty();
+    if (group_has_deltas) {
+      exact_build_scenario_view_batch_from_seed(
+          seed_batch, base_transition_weights, base_transition_batch);
+    }
+
+    const std::size_t group_plan_count =
+        batch_plan_group != nullptr ? batch_plan_group->plan_indices.size() : 1u;
+    for (std::size_t plan_pos = 0; plan_pos < group_plan_count; ++plan_pos) {
+      const std::size_t batch_plan_index =
+          batch_plan_group != nullptr ? batch_plan_group->plan_indices[plan_pos]
+                                      : group_idx;
+      const RankedBatchPlan &batch_plan = plan.batch_plans[batch_plan_index];
+      if (batch_plan.deltas.empty()) {
+        if (!std::forward<ProcessBatchFn>(process_batch)(
+                seed_batch, &base_active, base_transition_weights)) {
+          return ExactTransitionExecutionResult::Error;
+        }
+        emitted_any = true;
+        continue;
+      }
+
+      transition_batch = base_transition_batch;
+      active = base_active;
+      transition_weights = base_transition_weights;
+      active_count = base_active_count;
+      bool transition_valid = true;
+      auto deactivate_transition_point = [&](std::size_t idx) {
+        if (idx < active.size() && active[idx] != 0u) {
+          active[idx] = 0u;
+          if (active_count > 0u) {
+            --active_count;
+          }
+        }
+        if (idx < transition_weights.size()) {
+          transition_weights[idx] = 0.0;
+        }
+        if (idx < transition_batch.weight.size()) {
+          transition_batch.weight[idx] = 0.0;
+        }
+      };
       for (const RankedStateDelta &delta : batch_plan.deltas) {
         for (std::size_t i = 0; i < transition_batch.size(); ++i) {
           if (active[i] == 0u) {
             continue;
           }
           if (!exact_apply_ranked_state_delta_row(transition_batch, i, delta)) {
-            deactivate_point(i);
+            deactivate_transition_point(i);
           }
         }
         if (active_count == 0u) {
@@ -1732,23 +1782,32 @@ bool exact_collect_scenarios_batch_process_impl(
       }
       exact_collapse_active_scenario_lane_view(transition_batch, active,
                                                transition_weights);
-    }
-    if (points_materialized) {
       if (!std::forward<ProcessBatchFn>(process_batch)(transition_batch, &active,
                                                        transition_weights)) {
-        return false;
-      }
-      emitted_any = true;
-    } else {
-      if (!std::forward<ProcessBatchFn>(process_batch)(seed_batch, &active,
-                                                       transition_weights)) {
-        return false;
+        return ExactTransitionExecutionResult::Error;
       }
       emitted_any = true;
     }
   }
 
-  return emitted_any;
+  return emitted_any ? ExactTransitionExecutionResult::Emitted
+                     : ExactTransitionExecutionResult::NoEmission;
+}
+
+ExactTransitionExecutionResult exact_execute_compiled_transition_plan_impl(
+    const RankedNodeBatchPlan &plan, const uuber::NativeContext &ctx,
+    const ExactScenarioBatch &seed_batch, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
+    ExactTransitionReducer &reducer,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa) {
+  return exact_execute_compiled_transition_plan_process_impl(
+      plan, ctx, seed_batch, component_idx, trial_params,
+      trial_type_key,
+      [&](const auto &points, const std::vector<std::uint8_t> *active_mask,
+          const std::vector<double> &weights) -> bool {
+        return reducer.consume(points, active_mask, weights);
+      },
+      uniform_trial_params_soa);
 }
 
 inline std::unordered_map<std::uint64_t,
@@ -2215,6 +2274,98 @@ inline void exact_flush_competitor_scenario_chunk(
   scenario_chunk.clear();
 }
 
+class ExactDensityAccumulatorReducer final : public ExactTransitionReducer {
+public:
+  ExactDensityAccumulatorReducer(
+      const uuber::NativeContext &ctx_,
+      const uuber::CompetitorClusterCacheEntry *competitor_cache_,
+      int component_idx_, const TrialParamSet *trial_params_,
+      const std::string &trial_type_key_, std::vector<double> &density_out_,
+      const uuber::TrialParamsSoA *uniform_trial_params_soa_)
+      : ctx(ctx_), competitor_cache(competitor_cache_),
+        component_idx(component_idx_), trial_params(trial_params_),
+        trial_type_key(trial_type_key_), density_out(density_out_),
+        uniform_trial_params_soa(uniform_trial_params_soa_) {
+    if (competitor_cache != nullptr) {
+      constexpr std::size_t kExactCompetitorChunkSize = 512u;
+      scenario_chunk.reserve(std::min<std::size_t>(
+          std::max<std::size_t>(density_out.size(), 1u),
+          kExactCompetitorChunkSize));
+    }
+  }
+
+  bool consume(const ExactScenarioBatch &points,
+               const std::vector<std::uint8_t> *active_mask,
+               const std::vector<double> &weights) override {
+    return consume_impl(points, active_mask, weights);
+  }
+
+  bool consume(const uuber::ExactScenarioLaneViewBatch &points,
+               const std::vector<std::uint8_t> *active_mask,
+               const std::vector<double> &weights) override {
+    return consume_impl(points, active_mask, weights);
+  }
+
+  void finish() {
+    if (emitted_any) {
+      exact_finalize_density_output(density_out);
+    }
+  }
+
+private:
+  template <typename PointVec>
+  bool consume_impl(const PointVec &points,
+                    const std::vector<std::uint8_t> *active_mask,
+                    const std::vector<double> &weights) {
+    if (competitor_cache == nullptr) {
+      for (std::size_t i = 0; i < points.size(); ++i) {
+        if (!uuber::vector_lane_active(active_mask, i) || i >= weights.size() ||
+            !std::isfinite(weights[i]) || weights[i] <= 0.0) {
+          continue;
+        }
+        const uuber::VectorLaneRef point = uuber::vector_lane_ref(points, i);
+        if (point.density_index >= density_out.size()) {
+          continue;
+        }
+        density_out[point.density_index] += weights[i];
+        emitted_any = true;
+      }
+      return true;
+    }
+
+    constexpr std::size_t kExactCompetitorChunkSize = 512u;
+    scenario_chunk.clear();
+    for (std::size_t i = 0; i < points.size(); ++i) {
+      if (!uuber::vector_lane_active(active_mask, i) || i >= weights.size() ||
+          !std::isfinite(weights[i]) || weights[i] <= 0.0) {
+        continue;
+      }
+      exact_scenario_view_batch_append_lane(
+          scenario_chunk, uuber::vector_lane_ref(points, i), weights[i]);
+      emitted_any = true;
+      if (scenario_chunk.size() >= kExactCompetitorChunkSize) {
+        exact_flush_competitor_scenario_chunk(
+            ctx, *competitor_cache, component_idx, trial_params, trial_type_key,
+            scenario_chunk, density_out, uniform_trial_params_soa);
+      }
+    }
+    exact_flush_competitor_scenario_chunk(
+        ctx, *competitor_cache, component_idx, trial_params, trial_type_key,
+        scenario_chunk, density_out, uniform_trial_params_soa);
+    return true;
+  }
+
+  const uuber::NativeContext &ctx;
+  const uuber::CompetitorClusterCacheEntry *competitor_cache;
+  int component_idx;
+  const TrialParamSet *trial_params;
+  const std::string &trial_type_key;
+  std::vector<double> &density_out;
+  const uuber::TrialParamsSoA *uniform_trial_params_soa;
+  uuber::ExactScenarioLaneViewBatch scenario_chunk;
+  bool emitted_any{false};
+};
+
 template <typename PointVec>
 void exact_competitor_survival_batch_impl(
     const uuber::NativeContext &ctx,
@@ -2303,6 +2454,11 @@ void exact_competitor_survival_batch_impl(
 
 } // namespace
 
+int exact_resolve_transition_node_idx(const uuber::NativeContext &ctx,
+                                      int node_idx, int component_idx) {
+  return exact_resolve_transition_node_idx_impl(ctx, node_idx, component_idx);
+}
+
 namespace uuber {
 
 void clear_exact_outcome_runtime_caches(
@@ -2327,30 +2483,15 @@ bool exact_eval_node_batch_from_batch(
                                            uniform_trial_params_soa);
 }
 
-bool exact_collect_scenarios_batch_process_from_batch(
-    RankedBatchPlanner &planner, const uuber::NativeContext &ctx, int node_idx,
+ExactTransitionExecutionResult exact_execute_compiled_transition_plan_from_batch(
+    const RankedNodeBatchPlan &plan, const uuber::NativeContext &ctx,
     const ExactScenarioBatch &seed_batch, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    const ExactScenarioBatchProcessFn &process_exact_batch,
-    const ExactScenarioProcessFn &process_batch,
+    ExactTransitionReducer &reducer,
     const uuber::TrialParamsSoA *uniform_trial_params_soa) {
-  if (!process_exact_batch || !process_batch) {
-    return false;
-  }
-  return exact_collect_scenarios_batch_process_impl(
-      planner, ctx, node_idx, seed_batch, component_idx, trial_params,
-      trial_type_key,
-      [&](const auto &points,
-          const std::vector<std::uint8_t> *active_mask,
-          const std::vector<double> &weights) -> bool {
-        using PointBatch = std::decay_t<decltype(points)>;
-        if constexpr (std::is_same_v<PointBatch, ExactScenarioBatch>) {
-          return process_exact_batch(points, active_mask, weights);
-        } else {
-          return process_batch(points, active_mask, weights);
-        }
-      },
-      uniform_trial_params_soa);
+  return exact_execute_compiled_transition_plan_impl(
+      plan, ctx, seed_batch, component_idx, trial_params,
+      trial_type_key, reducer, uniform_trial_params_soa);
 }
 
 void exact_competitor_survival_batch(
@@ -2388,81 +2529,38 @@ bool exact_outcome_density_batch_from_state(
     return true;
   }
   ExactBatchPlanner &planner = exact_scenario_planner_for_ctx(ctx);
+  const int exec_node_idx =
+      exact_resolve_transition_node_idx_impl(ctx, node_idx, state.component_idx);
+  if (exec_node_idx == NA_INTEGER) {
+    return true;
+  }
+  const RankedNodeBatchPlan &transition_plan = planner.plan_for_node(exec_node_idx);
   const double saved_t = state.t;
   ExactScenarioBatch seed_batch;
   const uuber::TrialParamsSoA *uniform_trial_params_soa = nullptr;
   exact_build_seed_batch_from_state(times, state, seed_batch,
                                     uniform_trial_params_soa);
 
+  const uuber::CompetitorClusterCacheEntry *cache_ptr = nullptr;
   if (!competitor_ids.empty()) {
-    const uuber::CompetitorClusterCacheEntry &cache =
-        competitor_cache ? *competitor_cache
-                         : fetch_competitor_cluster_cache(ctx, competitor_ids);
-    constexpr std::size_t kExactCompetitorChunkSize = 512u;
-    uuber::ExactScenarioLaneViewBatch scenario_chunk;
-    scenario_chunk.reserve(std::min<std::size_t>(
-        std::max<std::size_t>(seed_batch.size(), 1u),
-        kExactCompetitorChunkSize));
-    const bool emitted = exact_collect_scenarios_batch_process_impl(
-        planner, ctx, node_idx, seed_batch, state.component_idx,
-        state.trial_params, state.trial_type_key,
-        [&](const auto &points,
-            const std::vector<std::uint8_t> *active_mask,
-            const std::vector<double> &weights) -> bool {
-          scenario_chunk.clear();
-          for (std::size_t i = 0; i < points.size(); ++i) {
-            if (!uuber::vector_lane_active(active_mask, i) ||
-                i >= weights.size() || !std::isfinite(weights[i]) ||
-                weights[i] <= 0.0) {
-              continue;
-            }
-            exact_scenario_view_batch_append_lane(
-                scenario_chunk, uuber::vector_lane_ref(points, i), weights[i]);
-            if (scenario_chunk.size() >= kExactCompetitorChunkSize) {
-              exact_flush_competitor_scenario_chunk(
-                  ctx, cache, state.component_idx, state.trial_params,
-                  state.trial_type_key, scenario_chunk, density_out,
-                  uniform_trial_params_soa);
-            }
-          }
-          exact_flush_competitor_scenario_chunk(
-              ctx, cache, state.component_idx, state.trial_params,
-              state.trial_type_key, scenario_chunk, density_out,
-              uniform_trial_params_soa);
-          return true;
-        },
-        uniform_trial_params_soa);
-    if (!emitted) {
-      state.t = saved_t;
-      return true;
-    }
-    exact_finalize_density_output(density_out);
-    state.t = saved_t;
-    return true;
+    cache_ptr = competitor_cache != nullptr
+                    ? competitor_cache
+                    : &fetch_competitor_cluster_cache(ctx, competitor_ids);
   }
-
-  const bool emitted = exact_collect_scenarios_batch_process_impl(
-      planner, ctx, node_idx, seed_batch, state.component_idx,
-      state.trial_params, state.trial_type_key,
-      [&](const auto &points, const std::vector<std::uint8_t> *active_mask,
-          const std::vector<double> &weights) -> bool {
-        for (std::size_t i = 0; i < points.size(); ++i) {
-          if (!uuber::vector_lane_active(active_mask, i) ||
-              i >= weights.size() || !std::isfinite(weights[i]) ||
-              weights[i] <= 0.0) {
-            continue;
-          }
-          const uuber::VectorLaneRef point = uuber::vector_lane_ref(points, i);
-          if (point.density_index >= density_out.size()) {
-            continue;
-          }
-          density_out[point.density_index] += weights[i];
-        }
-        return true;
-      },
+  ExactDensityAccumulatorReducer reducer(
+      ctx, cache_ptr, state.component_idx, state.trial_params,
+      state.trial_type_key, density_out, uniform_trial_params_soa);
+  const ExactTransitionExecutionResult result =
+      exact_execute_compiled_transition_plan_impl(
+          transition_plan, ctx, seed_batch, state.component_idx,
+      state.trial_params, state.trial_type_key, reducer,
       uniform_trial_params_soa);
-  if (emitted) {
-    exact_finalize_density_output(density_out);
+  if (result == ExactTransitionExecutionResult::Error) {
+    state.t = saved_t;
+    return false;
+  }
+  if (result == ExactTransitionExecutionResult::Emitted) {
+    reducer.finish();
   }
   state.t = saved_t;
   return true;

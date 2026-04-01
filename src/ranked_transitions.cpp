@@ -43,6 +43,7 @@ struct RankedFrontierStorage {
   std::vector<std::uint8_t> forced_complete_bits_valid;
   std::vector<std::uint8_t> forced_survive_bits_valid;
   std::vector<TimeConstraintMap> time_constraints;
+  std::vector<SequenceStateKey> state_keys;
 
   void clear() {
     trial_slot.clear();
@@ -52,6 +53,7 @@ struct RankedFrontierStorage {
     forced_complete_bits_valid.clear();
     forced_survive_bits_valid.clear();
     time_constraints.clear();
+    state_keys.clear();
   }
 
   void reserve(std::size_t n) {
@@ -62,6 +64,7 @@ struct RankedFrontierStorage {
     forced_complete_bits_valid.reserve(n);
     forced_survive_bits_valid.reserve(n);
     time_constraints.reserve(n);
+    state_keys.reserve(n);
   }
 
   std::size_t size() const noexcept { return trial_slot.size(); }
@@ -75,6 +78,7 @@ struct RankedFrontierStorage {
     forced_complete_bits_valid.swap(other.forced_complete_bits_valid);
     forced_survive_bits_valid.swap(other.forced_survive_bits_valid);
     time_constraints.swap(other.time_constraints);
+    state_keys.swap(other.state_keys);
   }
 };
 
@@ -134,6 +138,98 @@ struct RankedFrontierExecutionScratch {
   }
 };
 
+template <typename PointVec>
+inline bool ranked_reduce_exact_batch_into_frontier(
+    const uuber::NativeContext &ctx, const PointVec &points,
+    const RankedFrontierStorage &states,
+    const std::vector<std::size_t> &source_state_indices,
+    const std::vector<double> &scenario_weights, const std::vector<double> &denom,
+    const std::vector<int> &persistent_sources,
+    const std::vector<std::uint8_t> *active_mask,
+    const std::vector<double> *scenario_survival,
+    RankedFrontierStorage &next_states,
+    std::unordered_map<RankedFrontierCollapseKey, std::size_t,
+                       RankedFrontierCollapseKeyHash> *next_state_lookup,
+    std::vector<RankedStateCollapseIndex> *next_state_collapse_order,
+    double branch_eps);
+
+class RankedFrontierReducer final : public ExactTransitionReducer {
+public:
+  RankedFrontierReducer(
+      const uuber::NativeContext &ctx_, const RankedFrontierStorage &states_,
+      const std::vector<std::size_t> &source_state_indices_,
+      const std::vector<double> &denom_,
+      const std::vector<int> &persistent_sources_,
+      const uuber::CompetitorClusterCacheEntry *competitor_cache_ptr_,
+      int component_idx_, const TrialParamSet *trial_params_,
+      const std::string &trial_type_key_,
+      const uuber::TrialParamsSoA *uniform_trial_params_soa_,
+      std::vector<double> &scenario_survival_,
+      RankedFrontierStorage &next_states_,
+      std::unordered_map<RankedFrontierCollapseKey, std::size_t,
+                         RankedFrontierCollapseKeyHash> *next_state_lookup_,
+      std::vector<RankedStateCollapseIndex> *next_state_collapse_order_,
+      double branch_eps_)
+      : ctx(ctx_), states(states_), source_state_indices(source_state_indices_),
+        denom(denom_), persistent_sources(persistent_sources_),
+        competitor_cache_ptr(competitor_cache_ptr_),
+        component_idx(component_idx_), trial_params(trial_params_),
+        trial_type_key(trial_type_key_),
+        uniform_trial_params_soa(uniform_trial_params_soa_),
+        scenario_survival(scenario_survival_), next_states(next_states_),
+        next_state_lookup(next_state_lookup_),
+        next_state_collapse_order(next_state_collapse_order_),
+        branch_eps(branch_eps_) {}
+
+  bool consume(const ExactScenarioBatch &points,
+               const std::vector<std::uint8_t> *active_mask,
+               const std::vector<double> &weights) override {
+    return consume_impl(points, active_mask, weights);
+  }
+
+  bool consume(const uuber::ExactScenarioLaneViewBatch &points,
+               const std::vector<std::uint8_t> *active_mask,
+               const std::vector<double> &weights) override {
+    return consume_impl(points, active_mask, weights);
+  }
+
+private:
+  template <typename PointVec>
+  bool consume_impl(const PointVec &points,
+                    const std::vector<std::uint8_t> *active_mask,
+                    const std::vector<double> &weights) {
+    scenario_survival.clear();
+    if (competitor_cache_ptr != nullptr) {
+      scenario_survival.assign(points.size(), 1.0);
+      exact_competitor_survival_batch(
+          ctx, *competitor_cache_ptr, component_idx, trial_params,
+          trial_type_key, points, scenario_survival, uniform_trial_params_soa);
+    }
+    return ranked_reduce_exact_batch_into_frontier(
+        ctx, points, states, source_state_indices, weights, denom,
+        persistent_sources, active_mask,
+        competitor_cache_ptr != nullptr ? &scenario_survival : nullptr,
+        next_states, next_state_lookup, next_state_collapse_order, branch_eps);
+  }
+
+  const uuber::NativeContext &ctx;
+  const RankedFrontierStorage &states;
+  const std::vector<std::size_t> &source_state_indices;
+  const std::vector<double> &denom;
+  const std::vector<int> &persistent_sources;
+  const uuber::CompetitorClusterCacheEntry *competitor_cache_ptr;
+  int component_idx;
+  const TrialParamSet *trial_params;
+  const std::string &trial_type_key;
+  const uuber::TrialParamsSoA *uniform_trial_params_soa;
+  std::vector<double> &scenario_survival;
+  RankedFrontierStorage &next_states;
+  std::unordered_map<RankedFrontierCollapseKey, std::size_t,
+                     RankedFrontierCollapseKeyHash> *next_state_lookup;
+  std::vector<RankedStateCollapseIndex> *next_state_collapse_order;
+  double branch_eps;
+};
+
 struct RankedActiveFrontier {
   bool valid{true};
   const uuber::TrialParamsSoA *uniform_trial_params_soa{nullptr};
@@ -142,16 +238,17 @@ struct RankedActiveFrontier {
   bool split_groups{false};
 };
 
+struct RankedStepExecutionContext {
+  const RankedNodeBatchPlan *transition_plan{nullptr};
+  int info_node_idx{-1};
+  const std::vector<int> *persistent_sources{nullptr};
+  const uuber::CompetitorClusterCacheEntry *competitor_cache_ptr{nullptr};
+};
+
 inline SequenceStateKey ranked_frontier_state_key(
     const RankedFrontierStorage &states, std::size_t state_index) {
-  return sequence_state_key(
-      states.forced_complete_bits[state_index],
-      state_index < states.forced_complete_bits_valid.size() &&
-          states.forced_complete_bits_valid[state_index] != 0u,
-      states.forced_survive_bits[state_index],
-      state_index < states.forced_survive_bits_valid.size() &&
-          states.forced_survive_bits_valid[state_index] != 0u,
-      states.time_constraints[state_index]);
+  return state_index < states.state_keys.size() ? states.state_keys[state_index]
+                                                : SequenceStateKey{};
 }
 
 inline bool ranked_frontier_state_ref_less(
@@ -190,7 +287,14 @@ inline void ranked_frontier_append_state(
     RankedFrontierStorage &states, int trial_slot, double weight,
     uuber::BitsetState &&forced_complete_bits, bool forced_complete_bits_valid,
     uuber::BitsetState &&forced_survive_bits, bool forced_survive_bits_valid,
-    TimeConstraintMap &&time_constraints) {
+    TimeConstraintMap &&time_constraints,
+    const SequenceStateKey *state_key = nullptr) {
+  const SequenceStateKey computed_state_key =
+      state_key != nullptr
+          ? *state_key
+          : sequence_state_key(forced_complete_bits, forced_complete_bits_valid,
+                               forced_survive_bits, forced_survive_bits_valid,
+                               time_constraints);
   states.trial_slot.push_back(trial_slot);
   states.weight.push_back(weight);
   states.forced_complete_bits.push_back(std::move(forced_complete_bits));
@@ -200,6 +304,7 @@ inline void ranked_frontier_append_state(
   states.forced_survive_bits_valid.push_back(forced_survive_bits_valid ? 1u
                                                                        : 0u);
   states.time_constraints.push_back(std::move(time_constraints));
+  states.state_keys.push_back(computed_state_key);
 }
 
 inline void collapse_ranked_state_candidates(
@@ -242,7 +347,7 @@ inline void collapse_ranked_state_candidates(
         states.forced_complete_bits_valid[idx] != 0u,
         std::move(states.forced_survive_bits[idx]),
         states.forced_survive_bits_valid[idx] != 0u,
-        std::move(states.time_constraints[idx]));
+        std::move(states.time_constraints[idx]), &entry.state_key);
     RankedStateCollapseIndex collapsed_entry = entry;
     collapsed_entry.candidate_index = collapsed_idx;
     collapsed_order.push_back(std::move(collapsed_entry));
@@ -343,7 +448,8 @@ inline bool ranked_append_frontier_candidate(
     ranked_frontier_append_state(
         next_states, trial_slot, weight, std::move(forced_complete_bits),
         forced_complete_bits_valid, std::move(forced_survive_bits),
-        forced_survive_bits_valid, std::move(time_constraints));
+        forced_survive_bits_valid, std::move(time_constraints),
+        &collapse_key.state_key);
     next_state_lookup->emplace(std::move(collapse_key), next_state_index);
     return true;
   }
@@ -362,7 +468,8 @@ inline bool ranked_append_frontier_candidate(
   ranked_frontier_append_state(
       next_states, trial_slot, weight, std::move(forced_complete_bits),
       forced_complete_bits_valid, std::move(forced_survive_bits),
-      forced_survive_bits_valid, std::move(time_constraints));
+      forced_survive_bits_valid, std::move(time_constraints),
+      &collapse_index.state_key);
   next_state_collapse_order->push_back(std::move(collapse_index));
   return true;
 }
@@ -605,8 +712,10 @@ inline bool ranked_batch_plan_supports_deterministic_fastpath_impl(
 
 inline void ranked_finalize_batch_plan(const uuber::NativeContext &ctx,
                                        RankedBatchPlan &plan) {
+  plan.slice.node_indices.clear();
   plan.slice.relevant_source_ids.clear();
   for (const RankedProgramEvalRef &eval_ref : plan.slice.evals) {
+    plan.slice.node_indices.push_back(eval_ref.node_idx);
     std::vector<int> eval_sources =
         relevant_source_ids_for_batch_node(ctx, eval_ref.node_idx);
     plan.slice.relevant_source_ids.insert(plan.slice.relevant_source_ids.end(),
@@ -665,6 +774,38 @@ inline void ranked_dedupe_batch_plans(std::vector<RankedBatchPlan> &batch_plans)
   batch_plans.swap(unique_plans);
 }
 
+inline void ranked_group_batch_plans(RankedNodeBatchPlan &plan) {
+  plan.batch_plan_groups.clear();
+  plan.has_shared_slice_groups = false;
+  if (plan.batch_plans.empty()) {
+    return;
+  }
+  plan.batch_plan_groups.reserve(plan.batch_plans.size());
+  for (std::size_t plan_idx = 0; plan_idx < plan.batch_plans.size(); ++plan_idx) {
+    const RankedBatchPlan &batch_plan = plan.batch_plans[plan_idx];
+    bool grouped = false;
+    for (RankedBatchPlanGroup &group : plan.batch_plan_groups) {
+      const RankedBatchPlan &leader_plan = plan.batch_plans[group.leader_index];
+      if (!ranked_program_slice_same(leader_plan.slice, batch_plan.slice)) {
+        continue;
+      }
+      group.plan_indices.push_back(plan_idx);
+      group.has_deltas = group.has_deltas || !batch_plan.deltas.empty();
+      plan.has_shared_slice_groups = true;
+      grouped = true;
+      break;
+    }
+    if (grouped) {
+      continue;
+    }
+    RankedBatchPlanGroup group;
+    group.leader_index = plan_idx;
+    group.plan_indices.push_back(plan_idx);
+    group.has_deltas = !batch_plan.deltas.empty();
+    plan.batch_plan_groups.push_back(std::move(group));
+  }
+}
+
 } // namespace
 
 bool ranked_batch_plan_supports_deterministic_fastpath(
@@ -708,7 +849,9 @@ void compile_ranked_node_batch_plan(
     const std::function<const RankedNodeBatchPlan &(int)> &plan_lookup,
     RankedNodeBatchPlan &plan) {
   plan.batch_plans.clear();
+  plan.batch_plan_groups.clear();
   plan.valid = false;
+  plan.has_shared_slice_groups = false;
 
   if (node_idx < 0 || node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
     return;
@@ -842,6 +985,7 @@ void compile_ranked_node_batch_plan(
   }
 
   ranked_dedupe_batch_plans(plan.batch_plans);
+  ranked_group_batch_plans(plan);
   plan.valid = !plan.batch_plans.empty();
 }
 
@@ -943,101 +1087,42 @@ inline bool ranked_build_active_frontier(
   return true;
 }
 
-inline bool ranked_process_materialized_lane_group(
-    const uuber::NativeContext &ctx, RankedBatchPlanner &planner,
-    int outcome_node_idx, int info_node_idx, int component_idx,
+inline bool ranked_prepare_group_denom(
+    const uuber::NativeContext &ctx, int info_node_idx, int component_idx,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
-    std::size_t rank_idx, const RankedFrontierStorage &states,
-    const std::vector<int> &persistent_sources,
-    const uuber::CompetitorClusterCacheEntry *competitor_cache_ptr,
-    const uuber::TrialParamsSoA *uniform_trial_params_soa,
-    RankedFrontierExecutionScratch &scratch,
-    RankedFrontierStorage &next_states_collapsed,
-    std::unordered_map<RankedFrontierCollapseKey, std::size_t,
-                       RankedFrontierCollapseKeyHash> *next_state_lookup,
-    std::vector<RankedStateCollapseIndex> *next_state_collapse_order,
-    double branch_eps) {
+    std::size_t rank_idx, const uuber::TrialParamsSoA *uniform_trial_params_soa,
+    RankedFrontierExecutionScratch &scratch) {
   RankedLaneGroupBatch &lane_group_batch = scratch.lane_group_batch;
   std::vector<double> &denom = scratch.denom;
-  std::vector<double> &scenario_survival = scratch.scenario_survival;
-
-  const std::size_t group_size = lane_group_batch.rank_batch.size();
-  denom.assign(group_size, 1.0);
-  if (rank_idx > 0u) {
-    uuber::TreeNodeBatchValues denom_values;
-    if (!exact_eval_node_batch_from_batch(
-            ctx, info_node_idx, lane_group_batch.denom_batch, component_idx,
-            trial_params, trial_type_key, EvalNeed::kSurvival, denom_values,
-            uniform_trial_params_soa) ||
-        denom_values.survival.size() != denom.size()) {
-      return false;
-    }
-    for (std::size_t i = 0; i < denom.size(); ++i) {
-      denom[i] = denom_values.survival[i];
-    }
+  denom.assign(lane_group_batch.rank_batch.size(), 1.0);
+  if (rank_idx == 0u) {
+    return true;
   }
-
-  bool saw_scenario_batch = false;
-  const bool processed = exact_collect_scenarios_batch_process_from_batch(
-      planner, ctx, outcome_node_idx, lane_group_batch.rank_batch, component_idx,
-      trial_params, trial_type_key,
-      [&](const ExactScenarioBatch &points,
-          const std::vector<std::uint8_t> *active_mask,
-          const std::vector<double> &weights) -> bool {
-        saw_scenario_batch = true;
-        scenario_survival.clear();
-        if (competitor_cache_ptr != nullptr) {
-          scenario_survival.assign(points.size(), 1.0);
-          exact_competitor_survival_batch(
-              ctx, *competitor_cache_ptr, component_idx, trial_params,
-              trial_type_key, points, scenario_survival,
-              uniform_trial_params_soa);
-        }
-        return ranked_reduce_exact_batch_into_frontier(
-            ctx, points, states, lane_group_batch.source_state_indices, weights,
-            denom, persistent_sources, active_mask,
-            competitor_cache_ptr != nullptr ? &scenario_survival : nullptr,
-            next_states_collapsed, next_state_lookup, next_state_collapse_order,
-            branch_eps);
-      },
-      [&](const uuber::ExactScenarioLaneViewBatch &points,
-          const std::vector<std::uint8_t> *active_mask,
-          const std::vector<double> &weights) -> bool {
-        saw_scenario_batch = true;
-        scenario_survival.clear();
-        if (competitor_cache_ptr != nullptr) {
-          scenario_survival.assign(points.size(), 1.0);
-          exact_competitor_survival_batch(
-              ctx, *competitor_cache_ptr, component_idx, trial_params,
-              trial_type_key, points, scenario_survival,
-              uniform_trial_params_soa);
-        }
-        return ranked_reduce_exact_batch_into_frontier(
-            ctx, points, states, lane_group_batch.source_state_indices, weights,
-            denom, persistent_sources, active_mask,
-            competitor_cache_ptr != nullptr ? &scenario_survival : nullptr,
-            next_states_collapsed, next_state_lookup, next_state_collapse_order,
-            branch_eps);
-      },
-      uniform_trial_params_soa);
-  if (!processed && saw_scenario_batch) {
+  uuber::TreeNodeBatchValues denom_values;
+  if (!exact_eval_node_batch_from_batch(
+          ctx, info_node_idx, lane_group_batch.denom_batch, component_idx,
+          trial_params, trial_type_key, EvalNeed::kSurvival, denom_values,
+          uniform_trial_params_soa) ||
+      denom_values.survival.size() != denom.size()) {
     return false;
+  }
+  for (std::size_t i = 0; i < denom.size(); ++i) {
+    denom[i] = denom_values.survival[i];
   }
   return true;
 }
 
-inline bool ranked_process_frontier_group(
-    const uuber::NativeContext &ctx, RankedBatchPlanner &planner,
-    int outcome_node_idx, int info_node_idx,
+inline bool ranked_execute_frontier_group(
+    const RankedNodeBatchPlan &transition_plan, const uuber::NativeContext &ctx,
+    int info_node_idx, int component_idx,
+    const TrialParamSet *trial_params, const std::string &trial_type_key,
     const RankedFrontierStorage &states,
     const std::vector<RankedFrontierStateRef> &active_state_refs,
     const std::vector<const double *> &times_by_trial, std::size_t rank_idx,
-    std::size_t group_begin, std::size_t group_end, int component_idx,
-    const TrialParamSet *trial_params,
-    const std::string &trial_type_key,
+    std::size_t group_begin, std::size_t group_end,
+    const uuber::TrialParamsSoA *uniform_trial_params_soa,
     const std::vector<int> &persistent_sources,
     const uuber::CompetitorClusterCacheEntry *competitor_cache_ptr,
-    const uuber::TrialParamsSoA *uniform_trial_params_soa,
     RankedFrontierExecutionScratch &scratch,
     RankedFrontierStorage &next_states_collapsed,
     std::unordered_map<RankedFrontierCollapseKey, std::size_t,
@@ -1045,16 +1130,72 @@ inline bool ranked_process_frontier_group(
     std::vector<RankedStateCollapseIndex> *next_state_collapse_order,
     double branch_eps) {
   scratch.clear_materialized();
-  ranked_materialize_lane_group_batch(states, active_state_refs,
-                                      times_by_trial, rank_idx, group_begin,
-                                      group_end, uniform_trial_params_soa,
-                                      scratch.lane_group_batch);
-  return ranked_process_materialized_lane_group(
-      ctx, planner, outcome_node_idx, info_node_idx, component_idx, trial_params,
-      trial_type_key, rank_idx, states, persistent_sources,
-      competitor_cache_ptr, uniform_trial_params_soa, scratch,
+  ranked_materialize_lane_group_batch(
+      states, active_state_refs, times_by_trial, rank_idx, group_begin,
+      group_end, uniform_trial_params_soa, scratch.lane_group_batch);
+  if (!ranked_prepare_group_denom(
+          ctx, info_node_idx, component_idx, trial_params, trial_type_key,
+          rank_idx, uniform_trial_params_soa, scratch)) {
+    return false;
+  }
+  RankedFrontierReducer reducer(
+      ctx, states, scratch.lane_group_batch.source_state_indices, scratch.denom,
+      persistent_sources, competitor_cache_ptr, component_idx, trial_params,
+      trial_type_key, uniform_trial_params_soa, scratch.scenario_survival,
       next_states_collapsed, next_state_lookup, next_state_collapse_order,
       branch_eps);
+  return exact_execute_compiled_transition_plan_from_batch(
+             transition_plan, ctx, scratch.lane_group_batch.rank_batch,
+             component_idx, trial_params, trial_type_key, reducer,
+             uniform_trial_params_soa) != ExactTransitionExecutionResult::Error;
+}
+
+inline bool ranked_build_step_execution_contexts(
+    const uuber::NativeContext &ctx, const std::vector<int> &outcome_indices,
+    const std::vector<int> &node_indices, int component_idx,
+    RankedBatchPlanner &planner,
+    const std::vector<const std::vector<int> *> &step_competitor_ids_ptrs,
+    const std::vector<std::vector<int>> &step_persistent_sources,
+    std::vector<RankedStepExecutionContext> &step_contexts) {
+  const std::size_t rank_count = outcome_indices.size();
+  if (node_indices.size() != rank_count ||
+      step_competitor_ids_ptrs.size() != rank_count ||
+      step_persistent_sources.size() != rank_count) {
+    return false;
+  }
+  step_contexts.assign(rank_count, RankedStepExecutionContext{});
+  static const std::vector<int> kEmptyCompetitorIds;
+  for (std::size_t rank_idx = 0; rank_idx < rank_count; ++rank_idx) {
+    const int outcome_idx = outcome_indices[rank_idx];
+    if (outcome_idx < 0 ||
+        outcome_idx >= static_cast<int>(ctx.outcome_info.size())) {
+      return false;
+    }
+    const int outcome_node_idx = node_indices[rank_idx];
+    if (outcome_node_idx < 0 ||
+        outcome_node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+      return false;
+    }
+    RankedStepExecutionContext &step_ctx = step_contexts[rank_idx];
+    const int transition_node_idx =
+        exact_resolve_transition_node_idx(ctx, outcome_node_idx, component_idx);
+    if (transition_node_idx != NA_INTEGER) {
+      step_ctx.transition_plan = &planner.plan_for_node(transition_node_idx);
+    }
+    const uuber::OutcomeContextInfo &info =
+        ctx.outcome_info[static_cast<std::size_t>(outcome_idx)];
+    step_ctx.info_node_idx = resolve_dense_node_idx_required(ctx, info.node_id);
+    step_ctx.persistent_sources = &step_persistent_sources[rank_idx];
+    const std::vector<int> &competitors =
+        step_competitor_ids_ptrs[rank_idx] != nullptr
+            ? *step_competitor_ids_ptrs[rank_idx]
+            : kEmptyCompetitorIds;
+    if (!competitors.empty()) {
+      step_ctx.competitor_cache_ptr =
+          &fetch_competitor_cluster_cache(ctx, competitors);
+    }
+  }
+  return true;
 }
 
 bool sequence_prefix_density_batch_resolved(
@@ -1073,11 +1214,8 @@ bool sequence_prefix_density_batch_resolved(
   if (trial_count == 0u) {
     return true;
   }
-  if (outcome_indices.empty() || node_indices.size() != rank_count ||
-      step_competitor_ids_ptrs == nullptr ||
-      step_persistent_sources == nullptr ||
-      step_competitor_ids_ptrs->size() != rank_count ||
-      step_persistent_sources->size() != rank_count) {
+  if (outcome_indices.empty() || step_competitor_ids_ptrs == nullptr ||
+      step_persistent_sources == nullptr) {
     return false;
   }
   for (const double *times_ptr : times_by_trial) {
@@ -1089,6 +1227,12 @@ bool sequence_prefix_density_batch_resolved(
   RankedBatchPlanner local_transition_planner(ctx);
   RankedBatchPlanner *planner =
       transition_planner ? transition_planner : &local_transition_planner;
+  std::vector<RankedStepExecutionContext> step_contexts;
+  if (!ranked_build_step_execution_contexts(
+          ctx, outcome_indices, node_indices, component_idx, *planner,
+          *step_competitor_ids_ptrs, *step_persistent_sources, step_contexts)) {
+    return false;
+  }
   const uuber::TrialParamsSoA *default_trial_params_soa =
       resolve_trial_params_soa(ctx, trial_params);
 
@@ -1113,26 +1257,10 @@ bool sequence_prefix_density_batch_resolved(
   }
 
   for (std::size_t rank_idx = 0; rank_idx < rank_count; ++rank_idx) {
-    const int outcome_idx = outcome_indices[rank_idx];
-    if (outcome_idx < 0 ||
-        outcome_idx >= static_cast<int>(ctx.outcome_info.size())) {
-      return false;
+    const RankedStepExecutionContext &step_ctx = step_contexts[rank_idx];
+    if (step_ctx.transition_plan == nullptr) {
+      continue;
     }
-    const int outcome_node_idx = node_indices[rank_idx];
-    if (outcome_node_idx < 0 ||
-        outcome_node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
-      return false;
-    }
-    const uuber::OutcomeContextInfo &info =
-        ctx.outcome_info[static_cast<std::size_t>(outcome_idx)];
-    const int info_node_idx = resolve_dense_node_idx_required(ctx, info.node_id);
-    static const std::vector<int> kEmptyCompetitorIds;
-    const std::vector<int> &competitors =
-        ((*step_competitor_ids_ptrs)[rank_idx] != nullptr)
-            ? *(*step_competitor_ids_ptrs)[rank_idx]
-            : kEmptyCompetitorIds;
-    const std::vector<int> &persistent_sources =
-        (*step_persistent_sources)[rank_idx];
 
     RankedFrontierStorage next_states_collapsed;
     next_states_collapsed.reserve(states.size() * 2u);
@@ -1154,10 +1282,6 @@ bool sequence_prefix_density_batch_resolved(
     }
     RankedFrontierExecutionScratch scratch;
     scratch.reserve(active_frontier.refs.size());
-    const uuber::CompetitorClusterCacheEntry *competitor_cache_ptr = nullptr;
-    if (!competitors.empty()) {
-      competitor_cache_ptr = &fetch_competitor_cluster_cache(ctx, competitors);
-    }
 
     const bool use_hash_frontier_collapse = active_frontier.split_groups;
     if (use_hash_frontier_collapse) {
@@ -1168,12 +1292,12 @@ bool sequence_prefix_density_batch_resolved(
         if (group.begin >= group.end) {
           continue;
         }
-        if (!ranked_process_frontier_group(
-                ctx, *planner, outcome_node_idx, info_node_idx, states,
-                active_frontier.refs, times_by_trial, rank_idx, group.begin,
-                group.end,
-                component_idx, trial_params, trial_type_key,
-                persistent_sources, competitor_cache_ptr, group.trial_params_soa,
+        if (!ranked_execute_frontier_group(
+                *step_ctx.transition_plan, ctx, step_ctx.info_node_idx, component_idx,
+                trial_params, trial_type_key, states, active_frontier.refs,
+                times_by_trial, rank_idx, group.begin, group.end,
+                group.trial_params_soa, *step_ctx.persistent_sources,
+                step_ctx.competitor_cache_ptr,
                 scratch, next_states_collapsed,
                 use_hash_frontier_collapse ? &next_state_lookup : nullptr,
                 use_hash_frontier_collapse ? nullptr
@@ -1182,19 +1306,20 @@ bool sequence_prefix_density_batch_resolved(
           return false;
         }
       }
-    } else if (!ranked_process_frontier_group(
-                   ctx, *planner, outcome_node_idx, info_node_idx, states,
-                   active_frontier.refs, times_by_trial, rank_idx, 0u,
-                   active_frontier.refs.size(), component_idx,
-                   trial_params,
-                   trial_type_key, persistent_sources, competitor_cache_ptr,
-                   active_frontier.uniform_trial_params_soa, scratch,
-                   next_states_collapsed,
-                   use_hash_frontier_collapse ? &next_state_lookup : nullptr,
-                   use_hash_frontier_collapse ? nullptr
-                                              : &next_state_collapse_order,
-                   kBranchEps)) {
-      return false;
+    } else {
+      if (!ranked_execute_frontier_group(
+              *step_ctx.transition_plan, ctx, step_ctx.info_node_idx, component_idx,
+              trial_params, trial_type_key, states, active_frontier.refs,
+              times_by_trial, rank_idx, 0u, active_frontier.refs.size(),
+              active_frontier.uniform_trial_params_soa,
+              *step_ctx.persistent_sources, step_ctx.competitor_cache_ptr,
+              scratch, next_states_collapsed,
+              use_hash_frontier_collapse ? &next_state_lookup : nullptr,
+              use_hash_frontier_collapse ? nullptr
+                                         : &next_state_collapse_order,
+              kBranchEps)) {
+        return false;
+      }
     }
 
     if (!use_hash_frontier_collapse) {

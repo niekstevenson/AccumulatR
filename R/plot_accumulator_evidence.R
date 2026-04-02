@@ -40,39 +40,6 @@
   character(0)
 }
 
-.pae_collect_and_source_sets <- function(expr) {
-  sets <- list()
-  walk <- function(node) {
-    if (is.null(node)) return(invisible(NULL))
-    kind <- node$kind %||% "event"
-    if (identical(kind, "and")) {
-      sets[[length(sets) + 1L]] <<- unique(.pae_extract_sources(node))
-      args <- node$args %||% list()
-      if (length(args) > 0L) lapply(args, walk)
-      return(invisible(NULL))
-    }
-    if (identical(kind, "guard")) {
-      walk(node$reference)
-      walk(node$blocker)
-      unless_list <- node$unless %||% list()
-      if (length(unless_list) > 0L) lapply(unless_list, walk)
-      return(invisible(NULL))
-    }
-    if (identical(kind, "or")) {
-      args <- node$args %||% list()
-      if (length(args) > 0L) lapply(args, walk)
-      return(invisible(NULL))
-    }
-    if (identical(kind, "not")) {
-      walk(node$arg)
-      return(invisible(NULL))
-    }
-    invisible(NULL)
-  }
-  walk(expr)
-  sets
-}
-
 .pae_collect_guard_source_links <- function(expr) {
   out <- list()
   walk <- function(node) {
@@ -103,11 +70,6 @@
   }
   walk(expr)
   out
-}
-
-.pae_pair_key <- function(a, b) {
-  parts <- sort(c(a, b))
-  paste(parts[[1]], parts[[2]], sep = "||")
 }
 
 .pae_directed_key <- function(from, to) {
@@ -496,8 +458,4 @@ plot_accumulators <- function(model,
     reciprocal_pairs = reciprocal_pairs,
     blocker_pairs = blocker_pairs
   ))
-}
-
-plot_accumulator_evidence <- function(...) {
-  plot_accumulators(...)
 }

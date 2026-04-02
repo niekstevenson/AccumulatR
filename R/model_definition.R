@@ -1,5 +1,3 @@
-`%||%` <- function(lhs, rhs) if (is.null(lhs) || length(lhs) == 0) rhs else lhs
-
 # ------------------------------------------------------------------------------
 # Observation metadata helpers
 # ------------------------------------------------------------------------------
@@ -690,27 +688,6 @@ race_spec <- function(n_outcomes = 1L) {
     mixture_options = list(),
     metadata = metadata
   ), class = "race_spec")
-}
-
-.collect_params <- function(params, dots) {
-  if (!is.null(params) && length(dots) > 0) {
-    stop("Provide either params=list(...) or named arguments, not both")
-  }
-  if (!is.null(params)) {
-    if (!is.list(params)) stop("params must be a list")
-    return(params)
-  }
-  dots
-}
-
-.ensure_acc_param_t0 <- function(params) {
-  if (is.null(params) || length(params) == 0L) params <- list()
-  if (is.null(params$t0) || length(params$t0) == 0L) {
-    params$t0 <- 0
-  } else {
-    params$t0 <- as.numeric(params$t0)[1]
-  }
-  params
 }
 
 #' Add an accumulator definition
@@ -1470,24 +1447,6 @@ sampled_pars <- function(model) {
     }
   }
   unique(params)
-}
-
-param_table <- function(model, ...) {
-  values <- c(...)
-  if (is.null(names(values)) || any(!nzchar(names(values)))) {
-    stop("Named parameter values are required")
-  }
-  params <- sampled_pars(model)
-  missing <- setdiff(params, names(values))
-  if (length(missing) > 0L) {
-    stop("Missing parameter values for: ", paste(missing, collapse = ", "))
-  }
-  data.frame(
-    parameter = params,
-    value = as.numeric(values[params]),
-    row.names = NULL,
-    stringsAsFactors = FALSE
-  )
 }
 
 #' Build a parameter data frame for likelihood/simulation

@@ -2921,6 +2921,10 @@ uuber::TreeEventBatchEvalFn make_tree_event_eval_batch(NodeEvalState &state) {
     if (kneed.cdf) {
       need = need | EvalNeed::kCDF;
     }
+    if (try_eval_conditioned_simple_acc_event_batch(state, event, times, need,
+                                                    out)) {
+      return true;
+    }
     const double saved_t = state.t;
     if (state.trial_params_soa_batch == nullptr) {
       for (std::size_t i = 0; i < times.size(); ++i) {
@@ -3912,7 +3916,6 @@ bool resolve_prepared_linear_guard_chain_info(
   return true;
 }
 
-constexpr std::size_t kLinearGuardChainMaxDepth = 8u;
 constexpr int kLinearChainBaseSteps = 88;
 constexpr int kLinearChainDepthStep = 24;
 constexpr int kLinearChainTolBonus = 16;
@@ -3931,600 +3934,6 @@ inline int linear_chain_step_budget(std::size_t depth,
     steps += kLinearChainTolBonus;
   }
   return std::min(steps, kLinearChainMaxSteps);
-}
-
-template <std::size_t MaxDepth>
-class LinearChainIntegrator final {
-public:
-  using ChainState = std::array<double, MaxDepth>;
-  static constexpr std::size_t kMaxGridPoints =
-      static_cast<std::size_t>(2 * kLinearChainMaxSteps + 1);
-  static constexpr std::size_t kMaxValueWidth = MaxDepth + 1u;
-
-  LinearChainIntegrator(const GuardEvalInput &input,
-                        const LinearGuardChain &chain,
-                        double t,
-                        const CanonicalIntegrationSettings &canonical,
-                        const PreparedLinearGuardChainInfo *prepared = nullptr)
-      : input_(input), chain_(chain), t_(t), canonical_(canonical),
-        depth_(chain.reference_count), value_width_(depth_ + 1u),
-        ref_infos_(depth_), prepared_(prepared) {
-    ref_info_valid_.fill(false);
-    ref_density_ok_.fill(false);
-    if (prepared_ != nullptr && prepared_->valid &&
-        prepared_->chain.reference_count == depth_) {
-      for (std::size_t i = 0; i < depth_; ++i) {
-        ref_info_valid_[i] =
-            (i < prepared_->ref_info_valid.size()) &&
-            (prepared_->ref_info_valid[i] != 0u);
-        ref_density_ok_[i] =
-            (i < prepared_->ref_density_ok.size()) ? prepared_->ref_density_ok[i]
-                                                   : false;
-      }
-      leaf_info_valid_ = prepared_->leaf_info_valid;
-    } else {
-      for (std::size_t i = 0; i < depth_; ++i) {
-        if (fast_event_info_dense_idx(input_, chain_.reference_indices[i],
-                                      ref_infos_[i])) {
-          ref_info_valid_[i] = true;
-          ref_density_ok_[i] =
-              fast_event_density_supported(input_, ref_infos_[i]);
-        }
-      }
-      leaf_info_valid_ =
-          fast_event_info_dense_idx(input_, chain_.leaf_blocker_idx, leaf_info_);
-    }
-  }
-
-  bool solve(double &out_cdf) {
-    if (!is_valid()) {
-      return false;
-    }
-    const int n_steps = linear_chain_step_budget(depth_, canonical_);
-    return solve_fixed_rk4(n_steps, out_cdf);
-  }
-
-private:
-  bool is_valid() const {
-    return chain_.valid && depth_ >= 1u && depth_ <= MaxDepth &&
-           chain_.leaf_blocker_idx >= 0 && std::isfinite(t_) && t_ > 0.0;
-  }
-
-  inline double grid_x_value(std::size_t grid_idx, double h) const {
-    return 0.5 * h * static_cast<double>(grid_idx);
-  }
-
-  inline double *grid_slot(std::size_t grid_idx) {
-    return grid_vals_storage_.data() + (grid_idx * value_width_);
-  }
-
-  bool precompute_uniform_grid_values(int n_steps, double h) {
-    if (n_steps < 1 || !std::isfinite(h) || h <= 0.0) {
-      return false;
-    }
-    const std::size_t grid_points = static_cast<std::size_t>(2 * n_steps + 1);
-    if (grid_points < 3u) {
-      return false;
-    }
-    if (grid_points > kMaxGridPoints || value_width_ > kMaxValueWidth) {
-      return false;
-    }
-    grid_points_ = grid_points;
-    std::fill_n(grid_vals_storage_.data(), grid_points_ * value_width_, 0.0);
-    double *batch_shifted = batch_shifted_storage_.data();
-    double *batch_values = batch_values_storage_.data();
-    std::vector<double> grid_times(grid_points, 0.0);
-    for (std::size_t g = 0; g < grid_points; ++g) {
-      grid_times[g] = grid_x_value(g, h);
-    }
-
-    for (std::size_t i = 0; i < depth_; ++i) {
-      const FastEventInfo *info_ptr =
-          (prepared_ != nullptr && prepared_->valid &&
-           prepared_->chain.reference_count == depth_ &&
-           i < prepared_->ref_infos.size() && ref_info_valid_[i])
-              ? &prepared_->ref_infos[i]
-              : (ref_info_valid_[i] ? &ref_infos_[i] : nullptr);
-      if (info_ptr && ref_density_ok_[i]) {
-        const FastEventInfo &info = *info_ptr;
-        const double onset_eff = total_onset_with_t0(info.onset, info.cfg);
-        const double success_prob = clamp(1.0 - info.q, 0.0, 1.0);
-        for (std::size_t g = 0; g < grid_points; ++g) {
-          batch_shifted[g] = grid_x_value(g, h) - onset_eff;
-        }
-        eval_pdf_vec_with_lower_bound(info.cfg, info.lower_bound, batch_shifted,
-                                      grid_points, batch_values);
-        for (std::size_t g = 0; g < grid_points; ++g) {
-          double dens = 0.0;
-          const double x = grid_x_value(g, h);
-          if (info.component_ok && success_prob > 0.0 && x >= onset_eff) {
-            dens = success_prob * safe_density(batch_values[g]);
-          }
-          double *vals = grid_slot(g);
-          vals[i] = dens;
-        }
-      } else {
-        uuber::TreeNodeBatchValues ref_batch;
-        if (!eval_node_batch_from_guard_input(
-                input_, chain_.reference_indices[i], grid_times,
-                EvalNeed::kDensity, ref_batch) ||
-            ref_batch.density.size() != grid_points) {
-          return false;
-        }
-        for (std::size_t g = 0; g < grid_points; ++g) {
-          double dens = safe_density(ref_batch.density[g]);
-          if (!std::isfinite(dens) || dens <= 0.0) {
-            dens = 0.0;
-          }
-          double *vals = grid_slot(g);
-          vals[i] = dens;
-        }
-      }
-    }
-
-    if (leaf_info_valid_) {
-      const FastEventInfo *leaf_info_ptr =
-          (prepared_ != nullptr && prepared_->valid &&
-           prepared_->chain.reference_count == depth_)
-              ? &prepared_->leaf_info
-              : &leaf_info_;
-      const FastEventInfo &info = *leaf_info_ptr;
-      const double onset_eff = total_onset_with_t0(info.onset, info.cfg);
-      const double success_prob = clamp(1.0 - info.q, 0.0, 1.0);
-      for (std::size_t g = 0; g < grid_points; ++g) {
-        batch_shifted[g] = grid_x_value(g, h) - onset_eff;
-      }
-      eval_cdf_vec_with_lower_bound(info.cfg, info.lower_bound, batch_shifted,
-                                    grid_points, batch_values);
-      for (std::size_t g = 0; g < grid_points; ++g) {
-        double surv = 1.0;
-        const double x = grid_x_value(g, h);
-        if (!info.component_ok) {
-          surv = 1.0;
-        } else if (x >= onset_eff) {
-          const double cdf = clamp_probability(batch_values[g]);
-          surv = info.q + success_prob * (1.0 - cdf);
-        }
-        double *vals = grid_slot(g);
-        vals[depth_] = clamp_probability(surv);
-      }
-    } else {
-      uuber::TreeNodeBatchValues leaf_batch;
-      if (!eval_node_batch_from_guard_input(input_, chain_.leaf_blocker_idx,
-                                            grid_times, EvalNeed::kSurvival,
-                                            leaf_batch) ||
-          leaf_batch.survival.size() != grid_points) {
-        return false;
-      }
-      for (std::size_t g = 0; g < grid_points; ++g) {
-        const double leaf_surv = clamp_probability(leaf_batch.survival[g]);
-        double *vals = grid_slot(g);
-        vals[depth_] = clamp_probability(leaf_surv);
-      }
-    }
-    return true;
-  }
-
-  void deriv_from_vals(const double *vals, const ChainState &state, ChainState &dst) {
-    dst.fill(0.0);
-    for (std::size_t i = depth_; i-- > 0;) {
-      const double f_ref = vals[i];
-      if (!std::isfinite(f_ref) || f_ref <= 0.0) {
-        continue;
-      }
-      const double s_down = (i + 1 < depth_)
-                                ? clamp_probability(1.0 - state[i + 1])
-                                : vals[depth_];
-      if (!std::isfinite(s_down) || s_down <= 0.0) {
-        continue;
-      }
-      const double val = f_ref * s_down;
-      if (std::isfinite(val) && val > 0.0) {
-        dst[i] = val;
-      }
-    }
-  }
-
-  void rk4_step(const ChainState &state, double h, const double *vals_x,
-                const double *vals_half, const double *vals_next,
-                ChainState &out) {
-    out.fill(0.0);
-    deriv_from_vals(vals_x, state, k1_);
-    for (std::size_t i = 0; i < depth_; ++i) {
-      tmp_[i] = state[i] + 0.5 * h * k1_[i];
-    }
-    deriv_from_vals(vals_half, tmp_, k2_);
-    for (std::size_t i = 0; i < depth_; ++i) {
-      tmp_[i] = state[i] + 0.5 * h * k2_[i];
-    }
-    deriv_from_vals(vals_half, tmp_, k3_);
-    for (std::size_t i = 0; i < depth_; ++i) {
-      tmp_[i] = state[i] + h * k3_[i];
-    }
-    deriv_from_vals(vals_next, tmp_, k4_);
-    for (std::size_t i = 0; i < depth_; ++i) {
-      out[i] = state[i] + (h / 6.0) *
-                            (k1_[i] + 2.0 * k2_[i] + 2.0 * k3_[i] + k4_[i]);
-    }
-  }
-
-  bool finalize_state(const ChainState &state, double &out_val) const {
-    const double cdf = state.front();
-    if (!std::isfinite(cdf)) {
-      return false;
-    }
-    out_val = clamp_probability(cdf);
-    return std::isfinite(out_val);
-  }
-
-  bool solve_fixed_rk4(int n_steps, double &out_val) {
-    if (n_steps < 1 || !std::isfinite(t_) || t_ <= 0.0) {
-      return false;
-    }
-    const double h = t_ / static_cast<double>(n_steps);
-    if (!std::isfinite(h) || h <= 0.0) {
-      return false;
-    }
-    if (!precompute_uniform_grid_values(n_steps, h)) {
-      return false;
-    }
-    ChainState state{};
-    ChainState next{};
-    for (int i = 0; i < n_steps; ++i) {
-      const std::size_t g0 = static_cast<std::size_t>(2 * i);
-      const double *vals_x = grid_slot(g0);
-      const double *vals_half = grid_slot(g0 + 1u);
-      const double *vals_next = grid_slot(g0 + 2u);
-      rk4_step(state, h, vals_x, vals_half, vals_next, next);
-      state = next;
-      for (std::size_t j = 0; j < depth_; ++j) {
-        if (!std::isfinite(state[j])) {
-          return false;
-        }
-      }
-    }
-    return finalize_state(state, out_val);
-  }
-
-  const GuardEvalInput &input_;
-  const LinearGuardChain &chain_;
-  double t_{0.0};
-  CanonicalIntegrationSettings canonical_;
-  std::size_t depth_{0u};
-  std::size_t value_width_{0u};
-
-  std::vector<FastEventInfo> ref_infos_;
-  std::array<bool, MaxDepth> ref_info_valid_{};
-  std::array<bool, MaxDepth> ref_density_ok_{};
-  FastEventInfo leaf_info_{};
-  bool leaf_info_valid_{false};
-
-  std::size_t grid_points_{0u};
-  std::array<double, kMaxGridPoints * kMaxValueWidth> grid_vals_storage_;
-  std::array<double, kMaxGridPoints> batch_shifted_storage_;
-  std::array<double, kMaxGridPoints> batch_values_storage_;
-
-  ChainState k1_{};
-  ChainState k2_{};
-  ChainState k3_{};
-  ChainState k4_{};
-  ChainState tmp_{};
-  const PreparedLinearGuardChainInfo *prepared_{nullptr};
-};
-
-bool eval_optimized_linear_guard_chain_ode(
-    const GuardEvalInput &input, const LinearGuardChain &chain, double t,
-    const CanonicalIntegrationSettings &canonical, double &out_cdf,
-    const PreparedLinearGuardChainInfo *prepared = nullptr) {
-  const std::size_t depth = chain.reference_count;
-  if (!chain.valid || depth < 1u || chain.leaf_blocker_idx < 0 ||
-      !std::isfinite(t) || t <= 0.0) {
-    return false;
-  }
-
-  if (depth <= kLinearGuardChainMaxDepth) {
-    LinearChainIntegrator<kLinearGuardChainMaxDepth> integrator(input, chain, t,
-                                                                canonical,
-                                                                prepared);
-    return integrator.solve(out_cdf);
-  }
-
-  class DynamicLinearChainIntegrator final {
-  public:
-    DynamicLinearChainIntegrator(const GuardEvalInput &input,
-                                 const LinearGuardChain &chain, double t,
-                                 const CanonicalIntegrationSettings &canonical,
-                                 const PreparedLinearGuardChainInfo *prepared)
-        : input_(input), chain_(chain), t_(t), canonical_(canonical),
-          depth_(chain.reference_count), value_width_(depth_ + 1u),
-          ref_infos_(depth_), ref_info_valid_(depth_, false),
-          ref_density_ok_(depth_, false), state_(depth_, 0.0),
-          next_(depth_, 0.0), k1_(depth_, 0.0), k2_(depth_, 0.0),
-          k3_(depth_, 0.0), k4_(depth_, 0.0), tmp_(depth_, 0.0),
-          prepared_(prepared) {
-      if (prepared != nullptr && prepared->valid &&
-          prepared->chain.reference_count == depth_) {
-        for (std::size_t i = 0; i < depth_; ++i) {
-          ref_info_valid_[i] =
-              (i < prepared->ref_info_valid.size()) &&
-              (prepared->ref_info_valid[i] != 0u);
-          ref_density_ok_[i] =
-              (i < prepared->ref_density_ok.size()) ? prepared->ref_density_ok[i]
-                                                    : false;
-        }
-        leaf_info_valid_ = prepared->leaf_info_valid;
-      } else {
-        for (std::size_t i = 0; i < depth_; ++i) {
-          if (fast_event_info_dense_idx(input_, chain_.reference_indices[i],
-                                        ref_infos_[i])) {
-            ref_info_valid_[i] = true;
-            ref_density_ok_[i] =
-                fast_event_density_supported(input_, ref_infos_[i]);
-          }
-        }
-        leaf_info_valid_ =
-            fast_event_info_dense_idx(input_, chain_.leaf_blocker_idx, leaf_info_);
-      }
-    }
-
-    bool solve(double &out_cdf) {
-      if (!is_valid()) {
-        return false;
-      }
-      const int n_steps = linear_chain_step_budget(depth_, canonical_);
-      return solve_fixed_rk4(n_steps, out_cdf);
-    }
-
-  private:
-    bool is_valid() const {
-      return chain_.valid && depth_ >= 1u && chain_.leaf_blocker_idx >= 0 &&
-             std::isfinite(t_) && t_ > 0.0;
-    }
-
-    inline double grid_x_value(std::size_t grid_idx, double h) const {
-      return 0.5 * h * static_cast<double>(grid_idx);
-    }
-
-    inline double *grid_slot(std::size_t grid_idx) {
-      return grid_vals_.data() + (grid_idx * value_width_);
-    }
-
-    bool precompute_uniform_grid_values(int n_steps, double h) {
-      if (n_steps < 1 || !std::isfinite(h) || h <= 0.0) {
-        return false;
-      }
-      const std::size_t grid_points = static_cast<std::size_t>(2 * n_steps + 1);
-      if (grid_points < 3u) {
-        return false;
-      }
-      grid_vals_.assign(grid_points * value_width_, 0.0);
-      batch_shifted_.assign(grid_points, 0.0);
-      batch_values_.assign(grid_points, 0.0);
-      std::vector<double> grid_times(grid_points, 0.0);
-      for (std::size_t g = 0; g < grid_points; ++g) {
-        grid_times[g] = grid_x_value(g, h);
-      }
-
-      for (std::size_t i = 0; i < depth_; ++i) {
-        const FastEventInfo *info_ptr =
-            (prepared_ != nullptr && prepared_->valid &&
-             prepared_->chain.reference_count == depth_ &&
-             i < prepared_->ref_infos.size() && ref_info_valid_[i])
-                ? &prepared_->ref_infos[i]
-                : (ref_info_valid_[i] ? &ref_infos_[i] : nullptr);
-        if (info_ptr && ref_density_ok_[i]) {
-          const FastEventInfo &info = *info_ptr;
-          const double onset_eff = total_onset_with_t0(info.onset, info.cfg);
-          const double success_prob = clamp(1.0 - info.q, 0.0, 1.0);
-          for (std::size_t g = 0; g < grid_points; ++g) {
-            batch_shifted_[g] = grid_x_value(g, h) - onset_eff;
-          }
-          eval_pdf_vec_with_lower_bound(
-              info.cfg, info.lower_bound, batch_shifted_.data(), grid_points,
-              batch_values_.data());
-          for (std::size_t g = 0; g < grid_points; ++g) {
-            double dens = 0.0;
-            const double x = grid_x_value(g, h);
-            if (info.component_ok && success_prob > 0.0 && x >= onset_eff) {
-              dens = success_prob * safe_density(batch_values_[g]);
-            }
-            double *vals = grid_slot(g);
-            vals[i] = dens;
-          }
-        } else {
-          uuber::TreeNodeBatchValues ref_batch;
-          if (!eval_node_batch_from_guard_input(
-                  input_, chain_.reference_indices[i], grid_times,
-                  EvalNeed::kDensity, ref_batch) ||
-              ref_batch.density.size() != grid_points) {
-            return false;
-          }
-          for (std::size_t g = 0; g < grid_points; ++g) {
-            double dens = safe_density(ref_batch.density[g]);
-            if (!std::isfinite(dens) || dens <= 0.0) {
-              dens = 0.0;
-            }
-            double *vals = grid_slot(g);
-            vals[i] = dens;
-          }
-        }
-      }
-
-      if (leaf_info_valid_) {
-        const FastEventInfo *leaf_info_ptr =
-            (prepared_ != nullptr && prepared_->valid &&
-             prepared_->chain.reference_count == depth_)
-                ? &prepared_->leaf_info
-                : &leaf_info_;
-        const FastEventInfo &info = *leaf_info_ptr;
-        const double onset_eff = total_onset_with_t0(info.onset, info.cfg);
-        const double success_prob = clamp(1.0 - info.q, 0.0, 1.0);
-        for (std::size_t g = 0; g < grid_points; ++g) {
-          batch_shifted_[g] = grid_x_value(g, h) - onset_eff;
-        }
-        eval_cdf_vec_with_lower_bound(
-            info.cfg, info.lower_bound, batch_shifted_.data(), grid_points,
-            batch_values_.data());
-        for (std::size_t g = 0; g < grid_points; ++g) {
-          double surv = 1.0;
-          const double x = grid_x_value(g, h);
-          if (!info.component_ok) {
-            surv = 1.0;
-          } else if (x >= onset_eff) {
-            const double cdf = clamp_probability(batch_values_[g]);
-            surv = info.q + success_prob * (1.0 - cdf);
-          }
-          double *vals = grid_slot(g);
-          vals[depth_] = clamp_probability(surv);
-        }
-      } else {
-        uuber::TreeNodeBatchValues leaf_batch;
-        if (!eval_node_batch_from_guard_input(input_, chain_.leaf_blocker_idx,
-                                              grid_times, EvalNeed::kSurvival,
-                                              leaf_batch) ||
-            leaf_batch.survival.size() != grid_points) {
-          return false;
-        }
-        for (std::size_t g = 0; g < grid_points; ++g) {
-          const double leaf_surv = clamp_probability(leaf_batch.survival[g]);
-          double *vals = grid_slot(g);
-          vals[depth_] = clamp_probability(leaf_surv);
-        }
-      }
-      return true;
-    }
-
-    void deriv_from_vals(const double *vals, const std::vector<double> &state,
-                         std::vector<double> &dst) {
-      std::fill(dst.begin(), dst.end(), 0.0);
-      for (std::size_t i = depth_; i-- > 0;) {
-        const double f_ref = vals[i];
-        if (!std::isfinite(f_ref) || f_ref <= 0.0) {
-          continue;
-        }
-        const double s_down = (i + 1 < depth_)
-                                  ? clamp_probability(1.0 - state[i + 1])
-                                  : vals[depth_];
-        if (!std::isfinite(s_down) || s_down <= 0.0) {
-          continue;
-        }
-        const double val = f_ref * s_down;
-        if (std::isfinite(val) && val > 0.0) {
-          dst[i] = val;
-        }
-      }
-    }
-
-    void rk4_step(const std::vector<double> &state, double h,
-                  const double *vals_x, const double *vals_half,
-                  const double *vals_next, std::vector<double> &out) {
-      std::fill(out.begin(), out.end(), 0.0);
-      deriv_from_vals(vals_x, state, k1_);
-      for (std::size_t i = 0; i < depth_; ++i) {
-        tmp_[i] = state[i] + 0.5 * h * k1_[i];
-      }
-      deriv_from_vals(vals_half, tmp_, k2_);
-      for (std::size_t i = 0; i < depth_; ++i) {
-        tmp_[i] = state[i] + 0.5 * h * k2_[i];
-      }
-      deriv_from_vals(vals_half, tmp_, k3_);
-      for (std::size_t i = 0; i < depth_; ++i) {
-        tmp_[i] = state[i] + h * k3_[i];
-      }
-      deriv_from_vals(vals_next, tmp_, k4_);
-      for (std::size_t i = 0; i < depth_; ++i) {
-        out[i] = state[i] + (h / 6.0) *
-                              (k1_[i] + 2.0 * k2_[i] + 2.0 * k3_[i] + k4_[i]);
-      }
-    }
-
-    bool solve_fixed_rk4(int n_steps, double &out_val) {
-      if (n_steps < 1 || !std::isfinite(t_) || t_ <= 0.0) {
-        return false;
-      }
-      const double h = t_ / static_cast<double>(n_steps);
-      if (!std::isfinite(h) || h <= 0.0) {
-        return false;
-      }
-      if (!precompute_uniform_grid_values(n_steps, h)) {
-        return false;
-      }
-      std::fill(state_.begin(), state_.end(), 0.0);
-      std::fill(next_.begin(), next_.end(), 0.0);
-      for (int i = 0; i < n_steps; ++i) {
-        const std::size_t g0 = static_cast<std::size_t>(2 * i);
-        const double *vals_x = grid_slot(g0);
-        const double *vals_half = grid_slot(g0 + 1u);
-        const double *vals_next = grid_slot(g0 + 2u);
-        rk4_step(state_, h, vals_x, vals_half, vals_next, next_);
-        state_.swap(next_);
-        for (std::size_t j = 0; j < depth_; ++j) {
-          if (!std::isfinite(state_[j])) {
-            return false;
-          }
-        }
-      }
-      const double cdf = state_.front();
-      if (!std::isfinite(cdf)) {
-        return false;
-      }
-      out_val = clamp_probability(cdf);
-      return std::isfinite(out_val);
-    }
-
-    const GuardEvalInput &input_;
-    const LinearGuardChain &chain_;
-    double t_{0.0};
-    CanonicalIntegrationSettings canonical_;
-    std::size_t depth_{0u};
-    std::size_t value_width_{0u};
-
-    std::vector<FastEventInfo> ref_infos_;
-    std::vector<bool> ref_info_valid_;
-    std::vector<bool> ref_density_ok_;
-    FastEventInfo leaf_info_{};
-    bool leaf_info_valid_{false};
-
-    std::vector<double> grid_vals_;
-    std::vector<double> batch_shifted_;
-    std::vector<double> batch_values_;
-
-    std::vector<double> state_;
-    std::vector<double> next_;
-    std::vector<double> k1_;
-    std::vector<double> k2_;
-    std::vector<double> k3_;
-    std::vector<double> k4_;
-    std::vector<double> tmp_;
-    const PreparedLinearGuardChainInfo *prepared_{nullptr};
-  };
-
-  DynamicLinearChainIntegrator integrator(input, chain, t, canonical, prepared);
-  return integrator.solve(out_cdf);
-}
-
-inline double guard_cdf_internal_prepared(
-    const GuardEvalInput &input, const PreparedLinearGuardChainInfo &prepared,
-    double t, const IntegrationSettings &settings) {
-  if (!std::isfinite(t)) {
-    return 1.0;
-  }
-  if (t <= 0.0) {
-    return 0.0;
-  }
-  const CanonicalIntegrationSettings canonical =
-      canonicalize_integration_settings(settings);
-  if (!prepared.valid || !prepared.chain.valid) {
-    Rcpp::stop("IR guard linear-chain metadata invalid for guard node_idx=%d",
-               input.node_idx);
-  }
-  double cdf_chain = 0.0;
-  if (!eval_optimized_linear_guard_chain_ode(input, prepared.chain, t, canonical,
-                                             cdf_chain, &prepared)) {
-    Rcpp::stop("IR guard linear-chain ODE evaluation failed for node_idx=%d",
-               input.node_idx);
-  }
-  return cdf_chain;
 }
 
 inline bool eval_fast_event_density_batch_from_info(
@@ -4713,6 +4122,218 @@ inline bool guard_cdf_simple_pair_batch_prepared(
   return true;
 }
 
+inline std::uint64_t guard_time_bits(double value) {
+  std::uint64_t bits = 0u;
+  std::memcpy(&bits, &value, sizeof(bits));
+  return bits;
+}
+
+inline bool guard_cdf_general_batch_prepared(
+    const GuardEvalInput &input, const PreparedLinearGuardChainInfo &prepared,
+    const std::vector<double> &times, std::vector<double> &cdf_out) {
+  cdf_out.assign(times.size(), 0.0);
+  if (times.empty()) {
+    return true;
+  }
+  if (!prepared.valid || !prepared.chain.valid ||
+      prepared.chain.reference_count < 1u) {
+    return false;
+  }
+
+  const CanonicalIntegrationSettings canonical =
+      canonicalize_integration_settings(IntegrationSettings{});
+  const std::size_t depth = prepared.chain.reference_count;
+  const int n_steps = linear_chain_step_budget(depth, canonical);
+  if (n_steps < 1) {
+    return false;
+  }
+  const std::size_t grid_points = static_cast<std::size_t>(2 * n_steps + 1);
+  const std::size_t value_width = depth + 1u;
+
+  std::vector<int> time_to_unique(times.size(), -1);
+  std::vector<double> unique_times;
+  unique_times.reserve(times.size());
+  std::unordered_map<std::uint64_t, int> unique_time_lookup;
+  unique_time_lookup.reserve(times.size());
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    const double t = times[i];
+    if (!std::isfinite(t)) {
+      cdf_out[i] = 1.0;
+      continue;
+    }
+    if (!(t > 0.0)) {
+      continue;
+    }
+    const std::uint64_t bits = guard_time_bits(t);
+    auto it = unique_time_lookup.find(bits);
+    if (it == unique_time_lookup.end()) {
+      const int unique_idx = static_cast<int>(unique_times.size());
+      unique_times.push_back(t);
+      unique_time_lookup.emplace(bits, unique_idx);
+      time_to_unique[i] = unique_idx;
+    } else {
+      time_to_unique[i] = it->second;
+    }
+  }
+  if (unique_times.empty()) {
+    return true;
+  }
+
+  std::vector<double> query_times(unique_times.size() * grid_points, 0.0);
+  for (std::size_t unique_idx = 0; unique_idx < unique_times.size();
+       ++unique_idx) {
+    const double h = unique_times[unique_idx] / static_cast<double>(n_steps);
+    const std::size_t base = unique_idx * grid_points;
+    for (std::size_t grid_idx = 0; grid_idx < grid_points; ++grid_idx) {
+      query_times[base + grid_idx] =
+          0.5 * h * static_cast<double>(grid_idx);
+    }
+  }
+
+  std::vector<double> grid_values(query_times.size() * value_width, 0.0);
+  std::vector<double> shifted;
+  std::vector<double> values;
+  auto grid_slot = [&](std::size_t query_idx) {
+    return grid_values.data() + query_idx * value_width;
+  };
+
+  for (std::size_t ref_idx = 0; ref_idx < depth; ++ref_idx) {
+    const bool fast_ref_ok =
+        ref_idx < prepared.ref_infos.size() &&
+        ref_idx < prepared.ref_info_valid.size() &&
+        prepared.ref_info_valid[ref_idx] != 0u &&
+        ref_idx < prepared.ref_density_ok.size() &&
+        prepared.ref_density_ok[ref_idx];
+    if (fast_ref_ok) {
+      std::vector<double> density_values;
+      if (!eval_fast_event_density_batch_from_info(
+              prepared.ref_infos[ref_idx], query_times, shifted, values,
+              density_values) ||
+          density_values.size() != query_times.size()) {
+        return false;
+      }
+      for (std::size_t query_idx = 0; query_idx < query_times.size();
+           ++query_idx) {
+        grid_slot(query_idx)[ref_idx] = safe_density(density_values[query_idx]);
+      }
+    } else {
+      uuber::TreeNodeBatchValues ref_batch;
+      if (!eval_node_batch_from_guard_input(
+              input, prepared.chain.reference_indices[ref_idx], query_times,
+              EvalNeed::kDensity, ref_batch) ||
+          ref_batch.density.size() != query_times.size()) {
+        return false;
+      }
+      for (std::size_t query_idx = 0; query_idx < query_times.size();
+           ++query_idx) {
+        grid_slot(query_idx)[ref_idx] =
+            safe_density(ref_batch.density[query_idx]);
+      }
+    }
+  }
+
+  if (prepared.leaf_info_valid) {
+    std::vector<double> survival_values;
+    if (!eval_fast_event_survival_batch_from_info(
+            prepared.leaf_info, query_times, shifted, values, survival_values) ||
+        survival_values.size() != query_times.size()) {
+      return false;
+    }
+    for (std::size_t query_idx = 0; query_idx < query_times.size();
+         ++query_idx) {
+      grid_slot(query_idx)[depth] =
+          clamp_probability(survival_values[query_idx]);
+    }
+  } else {
+    uuber::TreeNodeBatchValues leaf_batch;
+    if (!eval_node_batch_from_guard_input(
+            input, prepared.chain.leaf_blocker_idx, query_times,
+            EvalNeed::kSurvival, leaf_batch) ||
+        leaf_batch.survival.size() != query_times.size()) {
+      return false;
+    }
+    for (std::size_t query_idx = 0; query_idx < query_times.size();
+         ++query_idx) {
+      grid_slot(query_idx)[depth] =
+          clamp_probability(leaf_batch.survival[query_idx]);
+    }
+  }
+
+  std::vector<double> state(depth, 0.0);
+  std::vector<double> next(depth, 0.0);
+  std::vector<double> k1(depth, 0.0);
+  std::vector<double> k2(depth, 0.0);
+  std::vector<double> k3(depth, 0.0);
+  std::vector<double> k4(depth, 0.0);
+  std::vector<double> tmp(depth, 0.0);
+  auto deriv_from_vals = [&](const double *vals, const std::vector<double> &src,
+                             std::vector<double> &dst) {
+    std::fill(dst.begin(), dst.end(), 0.0);
+    for (std::size_t i = depth; i-- > 0;) {
+      const double f_ref = vals[i];
+      if (!std::isfinite(f_ref) || f_ref <= 0.0) {
+        continue;
+      }
+      const double s_down = (i + 1 < depth)
+                                ? clamp_probability(1.0 - src[i + 1])
+                                : vals[depth];
+      if (!std::isfinite(s_down) || s_down <= 0.0) {
+        continue;
+      }
+      const double val = f_ref * s_down;
+      if (std::isfinite(val) && val > 0.0) {
+        dst[i] = val;
+      }
+    }
+  };
+
+  std::vector<double> unique_cdf(unique_times.size(), 0.0);
+  for (std::size_t unique_idx = 0; unique_idx < unique_times.size();
+       ++unique_idx) {
+    const double h = unique_times[unique_idx] / static_cast<double>(n_steps);
+    const std::size_t base = unique_idx * grid_points;
+    std::fill(state.begin(), state.end(), 0.0);
+    std::fill(next.begin(), next.end(), 0.0);
+    for (int step = 0; step < n_steps; ++step) {
+      const std::size_t g0 = base + static_cast<std::size_t>(2 * step);
+      const double *vals_x = grid_slot(g0);
+      const double *vals_half = grid_slot(g0 + 1u);
+      const double *vals_next = grid_slot(g0 + 2u);
+      deriv_from_vals(vals_x, state, k1);
+      for (std::size_t j = 0; j < depth; ++j) {
+        tmp[j] = state[j] + 0.5 * h * k1[j];
+      }
+      deriv_from_vals(vals_half, tmp, k2);
+      for (std::size_t j = 0; j < depth; ++j) {
+        tmp[j] = state[j] + 0.5 * h * k2[j];
+      }
+      deriv_from_vals(vals_half, tmp, k3);
+      for (std::size_t j = 0; j < depth; ++j) {
+        tmp[j] = state[j] + h * k3[j];
+      }
+      deriv_from_vals(vals_next, tmp, k4);
+      for (std::size_t j = 0; j < depth; ++j) {
+        next[j] = state[j] + (h / 6.0) *
+                                 (k1[j] + 2.0 * k2[j] + 2.0 * k3[j] + k4[j]);
+      }
+      state.swap(next);
+      for (double value : state) {
+        if (!std::isfinite(value)) {
+          return false;
+        }
+      }
+    }
+    unique_cdf[unique_idx] = clamp_probability(state.front());
+  }
+
+  for (std::size_t i = 0; i < times.size(); ++i) {
+    if (time_to_unique[i] >= 0) {
+      cdf_out[i] = unique_cdf[static_cast<std::size_t>(time_to_unique[i])];
+    }
+  }
+  return true;
+}
+
 bool guard_cdf_batch_prepared_internal(const GuardEvalInput &input,
                                        const std::vector<double> &times,
                                        std::vector<double> &cdf_out) {
@@ -4729,12 +4350,7 @@ bool guard_cdf_batch_prepared_internal(const GuardEvalInput &input,
   if (guard_cdf_simple_pair_batch_prepared(input, *prepared, times, cdf_out)) {
     return true;
   }
-  IntegrationSettings settings;
-  for (std::size_t i = 0; i < times.size(); ++i) {
-    cdf_out[i] =
-        guard_cdf_internal_prepared(input, *prepared, times[i], settings);
-  }
-  return true;
+  return guard_cdf_general_batch_prepared(input, *prepared, times, cdf_out);
 }
 
 std::vector<int> gather_blocker_sources(const uuber::NativeContext &ctx,

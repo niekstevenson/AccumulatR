@@ -90,6 +90,8 @@ build_na_map_cache_key_idx(const uuber::OutcomeContextInfo &info,
                            int outcome_idx_context);
 TrialAccumulatorParams base_params(const uuber::NativeAccumulator &base);
 TrialParamSet build_base_paramset(const uuber::NativeContext &ctx);
+void build_base_trial_params_soa(const uuber::NativeContext &ctx,
+                                 uuber::TrialParamsSoA &out);
 void materialize_trial_params_soa(const uuber::NativeContext &ctx,
                                   const TrialParamSet *trial_params,
                                   uuber::TrialParamsSoA &out);

@@ -74,9 +74,9 @@ SEXP accumulatr_cpp_loglik_multiple_ccallable(SEXP ctxSEXP,
 
 namespace {
 
-SEXP ensure_ccallables_registered() {
+void ensure_ccallables_registered() {
   static bool registered = false;
-  if (registered) return R_NilValue;
+  if (registered) return;
 
   R_RegisterCCallable("AccumulatR",
                       "cpp_loglik",
@@ -86,20 +86,12 @@ SEXP ensure_ccallables_registered() {
                       reinterpret_cast<DL_FUNC>(accumulatr_cpp_loglik_multiple_ccallable));
 
   registered = true;
-  return R_NilValue;
 }
-
-struct CcallableRegistrar {
-  CcallableRegistrar() {
-    ensure_ccallables_registered();
-  }
-};
-
-static CcallableRegistrar ccallable_registrar{};
 
 } // namespace
 
-// [[Rcpp::export]]
-SEXP register_ccallables_cpp() {
-  return ensure_ccallables_registered();
+// [[Rcpp::init]]
+void init_ccallables(DllInfo *dll) {
+  (void)dll;
+  ensure_ccallables_registered();
 }

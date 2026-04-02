@@ -93,8 +93,10 @@ inline void refresh_trial_params_soa_signatures(uuber::TrialParamsSoA &soa) {
   }
 }
 
-inline void build_base_trial_params_soa_from_context(
-    const uuber::NativeContext &ctx, uuber::TrialParamsSoA &out) {
+} // namespace
+
+void build_base_trial_params_soa(const uuber::NativeContext &ctx,
+                                 uuber::TrialParamsSoA &out) {
   out = uuber::TrialParamsSoA{};
   out.n_acc = static_cast<int>(ctx.accumulators.size());
   out.dist_code.resize(ctx.accumulators.size(), 0);
@@ -127,6 +129,8 @@ inline void build_base_trial_params_soa_from_context(
   out.valid = true;
   refresh_trial_params_soa_signatures(out);
 }
+
+namespace {
 
 struct TrialSharedTriggerGroup {
   std::vector<int> acc_indices;
@@ -427,7 +431,7 @@ void materialize_trial_params_soa(const uuber::NativeContext &ctx,
       ctx.base_params_soa.n_acc == static_cast<int>(ctx.accumulators.size())) {
     out = ctx.base_params_soa;
   } else {
-    build_base_trial_params_soa_from_context(ctx, out);
+    build_base_trial_params_soa(ctx, out);
   }
   if (!trial_params || !trial_params->has_any_override) {
     return;

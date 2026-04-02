@@ -9,6 +9,7 @@
 
 #include "accumulator.h"
 #include "native_utils.h"
+#include "trial_params.h"
 #include "vector_runtime.h"
 
 namespace uuber {
@@ -2226,36 +2227,7 @@ build_context_from_proto(const NativePrepProto &proto) {
   ctx->ir = std::move(ir);
   ctx->tree_program =
       std::make_unique<VectorProgram>(compile_tree_vector_program(ctx->ir));
-  ctx->base_params_soa = TrialParamsSoA{};
-  ctx->base_params_soa.n_acc = static_cast<int>(ctx->accumulators.size());
-  ctx->base_params_soa.dist_code.resize(ctx->accumulators.size(), 0);
-  ctx->base_params_soa.onset.resize(ctx->accumulators.size(), 0.0);
-  ctx->base_params_soa.q.resize(ctx->accumulators.size(), 0.0);
-  ctx->base_params_soa.t0.resize(ctx->accumulators.size(), 0.0);
-  ctx->base_params_soa.p1.resize(ctx->accumulators.size(), 0.0);
-  ctx->base_params_soa.p2.resize(ctx->accumulators.size(), 0.0);
-  ctx->base_params_soa.p3.resize(ctx->accumulators.size(), 0.0);
-  ctx->base_params_soa.p4.resize(ctx->accumulators.size(), 0.0);
-  ctx->base_params_soa.p5.resize(ctx->accumulators.size(), 0.0);
-  ctx->base_params_soa.p6.resize(ctx->accumulators.size(), 0.0);
-  ctx->base_params_soa.p7.resize(ctx->accumulators.size(), 0.0);
-  ctx->base_params_soa.p8.resize(ctx->accumulators.size(), 0.0);
-  for (std::size_t acc_i = 0; acc_i < ctx->accumulators.size(); ++acc_i) {
-    const NativeAccumulator &acc = ctx->accumulators[acc_i];
-    ctx->base_params_soa.dist_code[acc_i] = acc.dist_cfg.code;
-    ctx->base_params_soa.onset[acc_i] = acc.onset;
-    ctx->base_params_soa.q[acc_i] = acc.q;
-    ctx->base_params_soa.t0[acc_i] = acc.dist_cfg.t0;
-    ctx->base_params_soa.p1[acc_i] = acc.dist_cfg.p1;
-    ctx->base_params_soa.p2[acc_i] = acc.dist_cfg.p2;
-    ctx->base_params_soa.p3[acc_i] = acc.dist_cfg.p3;
-    ctx->base_params_soa.p4[acc_i] = acc.dist_cfg.p4;
-    ctx->base_params_soa.p5[acc_i] = acc.dist_cfg.p5;
-    ctx->base_params_soa.p6[acc_i] = acc.dist_cfg.p6;
-    ctx->base_params_soa.p7[acc_i] = acc.dist_cfg.p7;
-    ctx->base_params_soa.p8[acc_i] = acc.dist_cfg.p8;
-  }
-  ctx->base_params_soa.valid = true;
+  build_base_trial_params_soa(*ctx, ctx->base_params_soa);
   ctx->tree_runtime = TreeRuntimeMetadata{};
   ctx->tree_runtime.forced_bit_count =
       static_cast<int>(ctx->ir.label_id_to_bit_idx.size());

@@ -1,5 +1,3 @@
-`%||%` <- function(lhs, rhs) if (is.null(lhs) || length(lhs) == 0) rhs else lhs
-
 .integrate_rel_tol <- function() getOption("uuber.integrate.rel.tol", 1e-5)
 .integrate_abs_tol <- function() getOption("uuber.integrate.abs.tol", 1e-6)
 .eval_state_create <- function(parent = emptyenv()) {

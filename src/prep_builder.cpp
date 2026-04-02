@@ -8,20 +8,11 @@
 #include <unordered_set>
 
 #include "accumulator.h"
+#include "native_utils.h"
 #include "vector_runtime.h"
 
 namespace uuber {
 namespace {
-
-inline double clamp_probability(double value) {
-  if (!std::isfinite(value))
-    return 0.0;
-  if (value < 0.0)
-    return 0.0;
-  if (value > 1.0)
-    return 1.0;
-  return value;
-}
 
 inline const VectorProgram *compiled_tree_program_ptr(const NativeContext &ctx) {
   return (ctx.tree_program && ctx.tree_program->valid &&

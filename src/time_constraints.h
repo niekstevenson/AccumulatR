@@ -25,10 +25,6 @@ inline bool time_constraint_same_time(double lhs, double rhs) {
   return std::fabs(lhs - rhs) <= 1e-12 * scale;
 }
 
-inline bool time_constraint_has_bounds(const SourceTimeConstraint &constraint) {
-  return constraint.has_lower || constraint.has_upper;
-}
-
 inline bool time_constraint_empty(const SourceTimeConstraint &constraint) {
   return !constraint.has_exact && !constraint.has_lower && !constraint.has_upper;
 }
@@ -102,14 +98,6 @@ inline void time_constraints_cleanup(int source_id,
     return;
   }
   if (time_constraint_empty(it->second)) {
-    time_constraints.erase(it);
-  }
-}
-
-inline void time_constraints_remove(int source_id,
-                                    TimeConstraintMap &time_constraints) {
-  auto it = time_constraints.find(source_id);
-  if (it != time_constraints.end()) {
     time_constraints.erase(it);
   }
 }

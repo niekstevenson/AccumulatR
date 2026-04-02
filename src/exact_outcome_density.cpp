@@ -13,7 +13,6 @@
 #include "competitor_cache.h"
 #include "integrate.h"
 #include "ranked_transitions.h"
-#include "runtime_stats.h"
 #include "vector_lane_utils.h"
 
 namespace {
@@ -1183,9 +1182,7 @@ bool exact_eval_node_batch_common(
   ExactNodeBatchDepthGuard depth_guard;
   const std::size_t active_point_count =
       uuber::count_active_vector_lanes(active_mask, points.size());
-  record_unified_outcome_node_batch_call(
-      static_cast<std::uint64_t>(active_point_count),
-      depth_guard.recursive_call());
+  (void)depth_guard;
 
   std::vector<std::size_t> subset_indices;
   std::vector<double> subset_times;
@@ -1224,7 +1221,8 @@ bool exact_eval_node_batch_common(
           return false;
         },
         [&](std::uint64_t active_count, std::uint64_t group_count) {
-          record_unified_outcome_lane_partition(active_count, group_count);
+          (void)active_count;
+          (void)group_count;
         },
         false, uniform_trial_params_soa);
   };
@@ -1578,7 +1576,8 @@ bool exact_eval_ranked_batch_plan_slice_fused(
         return true;
       },
       [&](std::uint64_t active_count, std::uint64_t group_count) {
-        record_unified_outcome_lane_partition(active_count, group_count);
+        (void)active_count;
+        (void)group_count;
       },
       false, uniform_trial_params_soa);
 }
@@ -1997,9 +1996,7 @@ bool exact_eval_guard_survival_batch_direct(
   ExactNodeBatchDepthGuard depth_guard;
   const std::size_t active_point_count =
       uuber::count_active_vector_lanes(&active, points.size());
-  record_unified_outcome_node_batch_call(
-      static_cast<std::uint64_t>(active_point_count),
-      depth_guard.recursive_call());
+  (void)depth_guard;
 
   exact_init_batch_values(points.size(), node_values);
   if (active_point_count == 0u) {
@@ -2096,7 +2093,8 @@ bool exact_eval_guard_survival_batch_direct(
             uniform_trial_params_soa);
       },
       [&](std::uint64_t active_count, std::uint64_t group_count) {
-        record_unified_outcome_lane_partition(active_count, group_count);
+        (void)active_count;
+        (void)group_count;
       },
       false);
 }

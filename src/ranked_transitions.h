@@ -59,18 +59,6 @@ inline bool ranked_program_slice_same(const RankedProgramSliceRef &lhs,
   return true;
 }
 
-inline std::uint64_t
-ranked_program_slice_hash(const RankedProgramSliceRef &slice) noexcept {
-  std::uint64_t hash = kFNV64Offset;
-  const std::size_t eval_count = slice.evals.size();
-  hash_append_bytes(hash, &eval_count, sizeof(eval_count));
-  for (const RankedProgramEvalRef &eval_ref : slice.evals) {
-    const std::uint64_t eval_hash = ranked_program_eval_ref_hash(eval_ref);
-    hash_append_bytes(hash, &eval_hash, sizeof(eval_hash));
-  }
-  return hash;
-}
-
 enum class RankedStateDeltaKind : std::uint8_t {
   CompleteSources = 0,
   SurviveSources = 1,

@@ -21,10 +21,6 @@ native_ctx_invalid <- function(ptr) {
     .Call(`_AccumulatR_native_ctx_invalid`, ptr)
 }
 
-native_outcome_labels_cpp <- function(ctxSEXP) {
-    .Call(`_AccumulatR_native_outcome_labels_cpp`, ctxSEXP)
-}
-
 #' @noRd
 dist_lognormal_pdf <- function(x, meanlog, sdlog) {
     .Call(`_AccumulatR_dist_lognormal_pdf`, x, meanlog, sdlog)
@@ -110,10 +106,6 @@ dist_rdm_rng <- function(n, v, B, A, s) {
     .Call(`_AccumulatR_dist_rdm_rng`, n, v, B, A, s)
 }
 
-native_trial_mixture_cpp <- function(ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows, guess_donors) {
-    .Call(`_AccumulatR_native_trial_mixture_driver`, ctxSEXP, node_id, t, component_ids, weights, forced_component, competitor_ids, trial_rows, guess_donors)
-}
-
 cpp_loglik <- function(ctxSEXP, params_mat, data_df, ok, expand, min_ll, rel_tol, abs_tol, max_depth) {
     .Call(`_AccumulatR_cpp_loglik`, ctxSEXP, params_mat, data_df, ok, expand, min_ll, rel_tol, abs_tol, max_depth)
 }
@@ -122,23 +114,11 @@ cpp_loglik_multiple <- function(ctxSEXP, params_list, data_df, ok, expand, min_l
     .Call(`_AccumulatR_cpp_loglik_multiple`, ctxSEXP, params_list, data_df, ok, expand, min_ll, rel_tol, abs_tol, max_depth)
 }
 
-native_component_plan_exported <- function(structureSEXP, trial_rowsSEXP, forced_componentSEXP) {
-    .Call(`_AccumulatR_native_component_plan_exported`, structureSEXP, trial_rowsSEXP, forced_componentSEXP)
-}
-
 native_outcome_probability_params_cpp_idx <- function(ctxSEXP, node_id, upper, component_idx, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows) {
     .Call(`_AccumulatR_native_outcome_probability_params_cpp_idx`, ctxSEXP, node_id, upper, component_idx, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows)
 }
 
 native_outcome_probability_params_batch_cpp_idx <- function(ctxSEXP, node_ids, upper, component_idx, competitor_ids_list, rel_tol, abs_tol, max_depth, trial_rows) {
     .Call(`_AccumulatR_native_outcome_probability_params_batch_cpp_idx`, ctxSEXP, node_ids, upper, component_idx, competitor_ids_list, rel_tol, abs_tol, max_depth, trial_rows)
-}
-
-unified_outcome_stats_reset_cpp <- function() {
-    invisible(.Call(`_AccumulatR_unified_outcome_stats_reset_cpp`))
-}
-
-unified_outcome_stats_cpp <- function() {
-    .Call(`_AccumulatR_unified_outcome_stats_cpp`)
 }
 

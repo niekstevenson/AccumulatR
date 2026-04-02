@@ -269,59 +269,6 @@ inline double integrate_boost_core(Fn&& integrand, double lower, double upper,
   return sign * integral;
 }
 
-// Fixed 15-point Gauss-Legendre rule on [lower, upper]; no adaptivity.
-template <typename Fn>
-inline double integrate_fixed_gauss15(Fn&& integrand,
-                                      double lower,
-                                      double upper) {
-  if (!std::isfinite(lower) || !std::isfinite(upper)) return 0.0;
-  if (lower == upper) return 0.0;
-  static const double x[15] = {
-    -0.9879925180204854, -0.9372733924007060, -0.8482065834104272,
-    -0.7244177313601700, -0.5709721726085388, -0.3941513470775634,
-    -0.2011940939974345,  0.0,
-     0.2011940939974345,  0.3941513470775634,  0.5709721726085388,
-     0.7244177313601700,  0.8482065834104272,  0.9372733924007060,
-     0.9879925180204854
-  };
-  static const double w[15] = {
-    0.0307532419961173, 0.0703660474881081, 0.1071592204671719,
-    0.1395706779261543, 0.1662692058169939, 0.1861610000155622,
-    0.1984314853271116, 0.2025782419255613, 0.1984314853271116,
-    0.1861610000155622, 0.1662692058169939, 0.1395706779261543,
-    0.1071592204671719, 0.0703660474881081, 0.0307532419961173
-  };
-  const double a = 0.5 * (upper - lower);
-  const double b = 0.5 * (upper + lower);
-  double sum = 0.0;
-  for (int i = 0; i < 15; ++i) {
-    double xi = b + a * x[i];
-    double vi = integrand(xi);
-    if (!std::isfinite(vi)) vi = 0.0;
-    sum += w[i] * vi;
-  }
-  double res = a * sum;
-  return std::isfinite(res) ? res : 0.0;
-}
-
-inline double integrate_boost(Rcpp::Function integrand,
-                              double lower,
-                              double upper,
-                              double rel_tol,
-                              double abs_tol,
-                              int max_depth) {
-  auto wrapper = [&](double x) -> double {
-    if (!std::isfinite(x)) return 0.0;
-    Rcpp::NumericVector res = integrand(Rcpp::NumericVector::create(x));
-    if (res.size() == 0) return 0.0;
-    double val = res[0];
-    if (!std::isfinite(val)) return 0.0;
-    return val;
-  };
-  return integrate_boost_core(wrapper, lower, upper, rel_tol, abs_tol,
-                              max_depth);
-}
-
 template <typename Fn>
 inline double integrate_boost_fn(Fn&& integrand,
                                  double lower,

@@ -6,20 +6,9 @@
 #include <unordered_map>
 #include <vector>
 
-namespace {
+#include "native_utils.h"
 
-inline double clamp_probability(double value) {
-  if (!std::isfinite(value)) {
-    return 0.0;
-  }
-  if (value < 0.0) {
-    return 0.0;
-  }
-  if (value > 1.0) {
-    return 1.0;
-  }
-  return value;
-}
+namespace {
 
 inline double clamp_unit(double value) { return clamp_probability(value); }
 

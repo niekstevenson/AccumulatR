@@ -16,8 +16,7 @@ namespace uuber {
 namespace {
 
 inline const VectorProgram *compiled_tree_program_ptr(const NativeContext &ctx) {
-  return (ctx.tree_program && ctx.tree_program->valid &&
-          ctx.tree_program->domain == VectorProgramDomain::Tree)
+  return (ctx.tree_program && ctx.tree_program->valid)
              ? ctx.tree_program.get()
              : nullptr;
 }

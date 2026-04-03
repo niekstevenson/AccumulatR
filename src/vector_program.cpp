@@ -81,26 +81,13 @@ VectorProgram compile_tree_vector_program(const IrContext &ir) {
     return program;
   }
 
-  program.domain = VectorProgramDomain::Tree;
   program.outputs.node_idx_to_slot.assign(ir.nodes.size(), -1);
-  program.outputs.slot_to_node_idx.reserve(topo.size());
-  program.outputs.outcome_idx_to_slot.assign(ir.outcomes.size(), -1);
   program.ops.reserve(topo.size());
 
   for (std::size_t slot = 0; slot < topo.size(); ++slot) {
     const int node_idx = topo[slot];
     program.outputs.node_idx_to_slot[static_cast<std::size_t>(node_idx)] =
         static_cast<int>(slot);
-    program.outputs.slot_to_node_idx.push_back(node_idx);
-  }
-  for (std::size_t oi = 0; oi < ir.outcomes.size(); ++oi) {
-    const int node_idx = ir.outcomes[oi].node_idx;
-    if (node_idx < 0 ||
-        node_idx >= static_cast<int>(program.outputs.node_idx_to_slot.size())) {
-      continue;
-    }
-    program.outputs.outcome_idx_to_slot[oi] =
-        program.outputs.node_idx_to_slot[static_cast<std::size_t>(node_idx)];
   }
 
   for (std::size_t slot = 0; slot < topo.size(); ++slot) {
@@ -148,9 +135,6 @@ VectorProgram compile_tree_vector_program(const IrContext &ir) {
           program.children.push_back(-1);
         }
       }
-    }
-    if (op.code == VectorOpCode::TreeGuard) {
-      program.has_guard = true;
     }
     program.ops.push_back(op);
   }

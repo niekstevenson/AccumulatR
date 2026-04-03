@@ -41,7 +41,7 @@ if (!identical(install_status, 0L)) {
 }
 
 suppressPackageStartupMessages(library(AccumulatR, lib.loc = bench_lib))
-source(file.path("dev", "test_beest.R"), local = TRUE)
+source(file.path("tests", "testthat", "helper-beest.R"), local = TRUE)
 
 out_dir <- file.path("dev", "scripts", "scratch_outputs")
 if (!dir.exists(out_dir)) {

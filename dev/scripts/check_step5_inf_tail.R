@@ -46,7 +46,6 @@ native_prob <- function(prep, native_ctx, params_df, outcome_label, upper) {
     comp_ids,
     AccumulatR:::.integrate_rel_tol(),
     AccumulatR:::.integrate_abs_tol(),
-    12L,
     params_df
   )
 }

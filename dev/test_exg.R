@@ -9,7 +9,7 @@ suppressPackageStartupMessages({
   library(EMC2)
 })
 
-source("dev/test_beest.R")
+source("tests/testthat/helper-beest.R")
 
 load("~/Documents/2025/EMC2/23B_Spair_exg.RData")
 

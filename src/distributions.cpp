@@ -3338,8 +3338,7 @@ uuber::TreeGuardBatchEvalFn make_tree_guard_eval_batch(NodeEvalState &state) {
 
 inline const uuber::VectorProgram &
 tree_vector_program_required(const uuber::NativeContext &ctx) {
-  if (!ctx.tree_program || !ctx.tree_program->valid ||
-      ctx.tree_program->domain != uuber::VectorProgramDomain::Tree) {
+  if (!ctx.tree_program || !ctx.tree_program->valid) {
     Rcpp::stop("IR tree vector program unavailable for node evaluation");
   }
   return *ctx.tree_program;
@@ -3388,8 +3387,7 @@ inline bool eval_tree_vector_slots_batch(
     const uuber::TreeEventBatchEvalFn &event_eval_batch,
     const uuber::TreeGuardBatchEvalFn &guard_eval_batch,
     std::vector<uuber::TreeNodeBatchValues> &slots_out) {
-  if (!program.valid || program.domain != uuber::VectorProgramDomain::Tree ||
-      target_slot < 0 || !event_eval_batch) {
+  if (!program.valid || target_slot < 0 || !event_eval_batch) {
     return false;
   }
   if (target_slot >= static_cast<int>(program.ops.size())) {
@@ -6244,26 +6242,6 @@ bool evaluator_eval_nodes_batch_with_state_dense(
                                       node_indices, times, full_need,
                                       event_eval_batch_cb,
                                       guard_eval_batch_cb, out_values);
-}
-
-bool evaluator_node_density_with_competitors_batch_internal(
-    const uuber::NativeContext &ctx, int node_id,
-    const std::vector<double> &times, int component_idx,
-    const uuber::BitsetState *forced_complete_bits,
-    bool forced_complete_bits_valid,
-    const uuber::BitsetState *forced_survive_bits,
-    bool forced_survive_bits_valid, const std::vector<int> &competitor_ids,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    bool include_na_donors, int outcome_idx_context,
-    std::vector<double> &density_out,
-    const TimeConstraintMap *time_constraints,
-    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch) {
-  return node_density_with_competitors_batch_internal(
-      ctx, node_id, times, component_idx, forced_complete_bits,
-      forced_complete_bits_valid, forced_survive_bits,
-      forced_survive_bits_valid, competitor_ids, trial_params, trial_type_key,
-      include_na_donors, outcome_idx_context, density_out, time_constraints,
-      trial_params_soa_batch);
 }
 
 bool mix_outcome_mass_batch_idx(

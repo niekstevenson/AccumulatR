@@ -645,16 +645,3 @@ bool evaluator_eval_node_batch_with_state_dense(
 bool evaluator_eval_nodes_batch_with_state_dense(
     const std::vector<int> &node_indices, const std::vector<double> &times,
     NodeEvalState &state, std::vector<uuber::TreeNodeBatchValues> &out_values);
-bool evaluator_node_density_with_competitors_batch_internal(
-    const uuber::NativeContext &ctx, int node_id,
-    const std::vector<double> &times, int component_idx,
-    const uuber::BitsetState *forced_complete_bits,
-    bool forced_complete_bits_valid,
-    const uuber::BitsetState *forced_survive_bits,
-    bool forced_survive_bits_valid, const std::vector<int> &competitor_ids,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    bool include_na_donors, int outcome_idx_context,
-    std::vector<double> &density_out,
-    const TimeConstraintMap *time_constraints,
-    const std::vector<const uuber::TrialParamsSoA *> *trial_params_soa_batch =
-        nullptr);

@@ -9,54 +9,12 @@
 
 namespace uuber {
 
-enum class VectorProgramDomain : std::uint8_t {
-  None = 0,
-  Tree = 1,
-  OutcomeCoupling = 2
-};
-
-enum class VectorPayloadRole : std::uint8_t {
-  None = 0,
-  PairX = 1,
-  PairY = 2,
-  PairC = 3,
-  PairBlocker = 4,
-  NWayGate = 5,
-  NWayTarget = 6,
-  NWayCompetitor = 7,
-  GenericNode = 8
-};
-
 enum class VectorOpCode : std::uint8_t {
   TreeEvent = 0,
   TreeAnd = 1,
   TreeOr = 2,
   TreeNot = 3,
-  TreeGuard = 4,
-  EventDensity = 5,
-  EventCDF = 6,
-  EventSurvival = 7,
-  GenericDirectCDF = 8,
-  GenericIntegrand = 9,
-  Complement = 10,
-  Multiply = 11,
-  Add = 12,
-  Subtract = 13,
-  Integral = 14
-};
-
-struct VectorEventRefPayload {
-  VectorPayloadRole role{VectorPayloadRole::None};
-  LabelRef ref;
-  int node_id{-1};
-  std::uint32_t node_flags{0u};
-};
-
-struct VectorGenericNodePayload {
-  VectorPayloadRole role{VectorPayloadRole::GenericNode};
-  int node_id{-1};
-  std::vector<int> competitor_node_ids;
-  bool requires_exact_scenario_eval{false};
+  TreeGuard = 4
 };
 
 struct VectorOp {
@@ -68,75 +26,22 @@ struct VectorOp {
   int child_count{0};
   int ref_slot{-1};
   int blocker_slot{-1};
-  int payload_idx{-1};
-  double scalar{1.0};
   std::uint32_t flags{0u};
 };
 
 struct VectorProgramOutputs {
   std::vector<int> node_idx_to_slot;
-  std::vector<int> slot_to_node_idx;
-  std::vector<int> outcome_idx_to_slot;
-  int result_slot{-1};
-  int density_slot{-1};
-  int coeff_slot{-1};
-  std::vector<int> aux_slots;
 };
 
 struct VectorProgram {
-  VectorProgramDomain domain{VectorProgramDomain::None};
   std::vector<VectorOp> ops;
   std::vector<int> children;
-  std::vector<VectorEventRefPayload> event_payloads;
-  std::vector<VectorGenericNodePayload> generic_payloads;
   VectorProgramOutputs outputs;
   int max_child_count{0};
-  bool has_guard{false};
-  bool requires_exact_scenario_eval{false};
   bool valid{false};
 };
 
 VectorProgram compile_tree_vector_program(const IrContext &ir);
-
-inline const VectorEventRefPayload *
-find_vector_event_payload(const VectorProgram &program, VectorPayloadRole role,
-                          std::size_t ordinal = 0u) {
-  std::size_t seen = 0u;
-  for (const auto &payload : program.event_payloads) {
-    if (payload.role != role) {
-      continue;
-    }
-    if (seen == ordinal) {
-      return &payload;
-    }
-    ++seen;
-  }
-  return nullptr;
-}
-
-inline std::vector<const VectorEventRefPayload *>
-collect_vector_event_payloads(const VectorProgram &program,
-                              VectorPayloadRole role) {
-  std::vector<const VectorEventRefPayload *> out;
-  for (const auto &payload : program.event_payloads) {
-    if (payload.role == role) {
-      out.push_back(&payload);
-    }
-  }
-  return out;
-}
-
-inline const VectorGenericNodePayload *
-find_vector_generic_payload(const VectorProgram &program,
-                            VectorPayloadRole role =
-                                VectorPayloadRole::GenericNode) {
-  for (const auto &payload : program.generic_payloads) {
-    if (payload.role == role) {
-      return &payload;
-    }
-  }
-  return nullptr;
-}
 
 struct VectorLaneBatch {
   std::vector<double> t;
@@ -149,8 +54,6 @@ struct VectorLaneBatch {
   std::vector<std::uint8_t> forced_complete_bits_valid;
   std::vector<std::uint8_t> forced_survive_bits_valid;
   std::vector<TimeConstraintMap> time_constraints;
-  std::vector<int> group_id;
-  std::vector<std::uint8_t> active_mask;
 
   void clear() {
     t.clear();
@@ -163,8 +66,6 @@ struct VectorLaneBatch {
     forced_complete_bits_valid.clear();
     forced_survive_bits_valid.clear();
     time_constraints.clear();
-    group_id.clear();
-    active_mask.clear();
   }
 
   void reserve(std::size_t n) {
@@ -178,8 +79,6 @@ struct VectorLaneBatch {
     forced_complete_bits_valid.reserve(n);
     forced_survive_bits_valid.reserve(n);
     time_constraints.reserve(n);
-    group_id.reserve(n);
-    active_mask.reserve(n);
   }
 
   std::size_t size() const noexcept { return t.size(); }
@@ -196,8 +95,6 @@ struct VectorLaneBatch {
     forced_complete_bits_valid.swap(other.forced_complete_bits_valid);
     forced_survive_bits_valid.swap(other.forced_survive_bits_valid);
     time_constraints.swap(other.time_constraints);
-    group_id.swap(other.group_id);
-    active_mask.swap(other.active_mask);
   }
 };
 

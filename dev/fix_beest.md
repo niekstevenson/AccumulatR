@@ -346,7 +346,7 @@ Requirements:
 
 This can live in:
 
-- `dev/test_beest.R`, revised to become exact, or
+- `tests/testthat/helper-beest.R`, revised to become exact, or
 - a new `dev/test_beest_exact.R` if preserving the current approximation is useful for side-by-side comparison
 
 This step should happen first, because otherwise the implementation has no trustworthy regression target.

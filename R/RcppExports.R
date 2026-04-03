@@ -110,16 +110,11 @@ cpp_loglik_multiple <- function(ctxSEXP, params_list, data_df, ok, expand, min_l
     .Call(`_AccumulatR_cpp_loglik_multiple`, ctxSEXP, params_list, data_df, ok, expand, min_ll, rel_tol, abs_tol, max_depth)
 }
 
-native_outcome_probability_params_cpp_idx <- function(ctxSEXP, node_id, upper, component_idx, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth = NULL, trial_rows = NULL) {
-    if (is.null(trial_rows) && !is.null(max_depth) && !is.atomic(max_depth)) {
-        trial_rows <- max_depth
-    }
+native_outcome_probability_params_cpp_idx <- function(ctxSEXP, node_id, upper, component_idx, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, trial_rows) {
     .Call(`_AccumulatR_native_outcome_probability_params_cpp_idx`, ctxSEXP, node_id, upper, component_idx, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, trial_rows)
 }
 
-native_outcome_probability_params_batch_cpp_idx <- function(ctxSEXP, node_ids, upper, component_idx, competitor_ids_list, rel_tol, abs_tol, max_depth = NULL, trial_rows = NULL) {
-    if (is.null(trial_rows) && !is.null(max_depth) && !is.atomic(max_depth)) {
-        trial_rows <- max_depth
-    }
+native_outcome_probability_params_batch_cpp_idx <- function(ctxSEXP, node_ids, upper, component_idx, competitor_ids_list, rel_tol, abs_tol, trial_rows) {
     .Call(`_AccumulatR_native_outcome_probability_params_batch_cpp_idx`, ctxSEXP, node_ids, upper, component_idx, competitor_ids_list, rel_tol, abs_tol, trial_rows)
 }
+

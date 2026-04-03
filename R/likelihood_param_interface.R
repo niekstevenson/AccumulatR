@@ -962,7 +962,6 @@ prepare_likelihood_data <- function(likelihood_context, data) {
       as.integer(comp_ids),
       .integrate_rel_tol(),
       .integrate_abs_tol(),
-      12L,
       trial_rows_df
     ),
     error = function(e) NA_real_
@@ -1063,7 +1062,6 @@ prepare_likelihood_data <- function(likelihood_context, data) {
       request_competitor_ids,
       .integrate_rel_tol(),
       .integrate_abs_tol(),
-      12L,
       trial_rows_df
     )
     if (any(!is.finite(prob_native) | prob_native < 0)) {

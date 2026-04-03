@@ -33,7 +33,7 @@ sim <- simulate(model, param_df, seed = 123)
 head(sim[c("trial", "R", "rt")])
 
 ctx <- build_likelihood_context(model, sim)
-log_likelihood(ctx, sim[c("trial", "R", "rt")], param_df)
+log_likelihood(ctx, sim, param_df)
 ```
 
 `simulate()` returns trial-level choice/RT data; `log_likelihood()` evaluates the log-likelihood for data under a parameter dataframe.

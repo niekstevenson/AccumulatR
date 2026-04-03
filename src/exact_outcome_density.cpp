@@ -866,7 +866,7 @@ bool exact_eval_simple_acc_event_batch(
   std::vector<double> relative_base_cdf;
   std::vector<double> relative_lower_cdf;
   std::vector<double> relative_upper_cdf;
-  std::vector<double> relative_edge_density_unused;
+  std::vector<double> relative_edge_density_scratch;
   if (needs_relative_onset) {
     if (!exact_eval_relative_onset_base_batch(
             ctx, points, onset_source_ref, component_idx, trial_params,
@@ -883,7 +883,7 @@ bool exact_eval_simple_acc_event_batch(
             trial_type_key, cfg, lower_bound, success_probs,
             self_bound_lower, zero_need, bounded_lower_need_cdf,
             onset_lag + onset_eff, active_mask, uniform_trial_params_soa,
-            relative_edge_density_unused, relative_lower_cdf)) {
+            relative_edge_density_scratch, relative_lower_cdf)) {
       return false;
     }
     if (any_mask_set(bounded_upper_need_cdf) &&
@@ -892,7 +892,7 @@ bool exact_eval_simple_acc_event_batch(
             trial_type_key, cfg, lower_bound, success_probs,
             self_bound_upper, zero_need, bounded_upper_need_cdf,
             onset_lag + onset_eff, active_mask, uniform_trial_params_soa,
-            relative_edge_density_unused, relative_upper_cdf)) {
+            relative_edge_density_scratch, relative_upper_cdf)) {
       return false;
     }
   }

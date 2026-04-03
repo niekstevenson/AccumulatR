@@ -336,19 +336,6 @@ bool evaluator_component_active_idx(
     const uuber::NativeAccumulator &acc, int component_idx,
     const TrialAccumulatorParams *override);
 
-NodeEvalResult evaluator_eval_event_ref_idx(
-    const uuber::NativeContext &ctx, const uuber::LabelRef &label_ref,
-    std::uint32_t node_flags, double t, int component_idx, EvalNeed need,
-    const TrialParamSet *trial_params, const std::string &trial_type_key,
-    bool include_na_donors, int outcome_idx_context,
-    const TimeConstraintMap *time_constraints,
-    const ForcedScopeFilter *forced_scope_filter,
-    const uuber::BitsetState *forced_complete_bits,
-    const uuber::BitsetState *forced_survive_bits,
-    const std::unordered_map<int, int> *forced_label_id_to_bit_idx,
-    const uuber::TrialParamsSoA *trial_params_soa,
-    const ForcedStateView *forced_state_view);
-
 struct NodeEvalState {
   NodeEvalState(const uuber::NativeContext &ctx_, double time,
                 int component_idx_val = -1,
@@ -620,13 +607,6 @@ struct GuardEvalInput {
   CompactTimeConstraintLookup local_time_constraint_lookup{};
 };
 
-bool evaluator_eval_node_with_forced_state_view_batch(
-    const uuber::NativeContext &ctx, int node_id_or_idx,
-    const std::vector<double> &times, int component_idx, EvalNeed need,
-    const TrialParamSet *trial_params, const std::string &trial_key,
-    const TimeConstraintMap *time_constraints,
-    const ForcedStateView &forced_state,
-    uuber::TreeNodeBatchValues &out_values);
 GuardEvalInput evaluator_make_guard_input(
     const uuber::NativeContext &ctx, int node_idx, int component_idx,
     const std::string *trial_type_key, const TrialParamSet *trial_params,
@@ -652,15 +632,9 @@ inline GuardEvalInput make_guard_input_forced_state(
 
 std::vector<int> evaluator_gather_blocker_sources(
     const uuber::NativeContext &ctx, int guard_node_idx);
-double evaluator_guard_effective_survival_internal(
-    const GuardEvalInput &input, double t,
-    const IntegrationSettings &settings);
 bool evaluator_guard_cdf_batch_prepared(const GuardEvalInput &input,
                                         const std::vector<double> &times,
                                         std::vector<double> &cdf_out);
-NodeEvalResult evaluator_eval_node_recursive_dense(int node_idx,
-                                                   NodeEvalState &state,
-                                                   EvalNeed need);
 uuber::TreeEventBatchEvalFn evaluator_make_tree_event_eval_batch(
     NodeEvalState &state);
 uuber::TreeGuardBatchEvalFn evaluator_make_tree_guard_eval_batch(
@@ -671,14 +645,6 @@ bool evaluator_eval_node_batch_with_state_dense(
 bool evaluator_eval_nodes_batch_with_state_dense(
     const std::vector<int> &node_indices, const std::vector<double> &times,
     NodeEvalState &state, std::vector<uuber::TreeNodeBatchValues> &out_values);
-double evaluator_evaluate_survival_with_forced(
-    int node_id, const uuber::BitsetState *forced_complete_bits,
-    bool forced_complete_bits_valid,
-    const uuber::BitsetState *forced_survive_bits,
-    bool forced_survive_bits_valid, int component_idx, double t,
-    const uuber::NativeContext &ctx, const std::string &trial_key,
-    const TrialParamSet *trial_params,
-    const TimeConstraintMap *time_constraints);
 bool evaluator_node_density_with_competitors_batch_internal(
     const uuber::NativeContext &ctx, int node_id,
     const std::vector<double> &times, int component_idx,

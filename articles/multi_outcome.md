@@ -1,0 +1,162 @@
+# Simulate and Fit a Multi-Outcome Race Model
+
+This vignette shows how to work with behavioral data in which you
+observe more than the first response. Here each trial records the first
+finishing response (`R`, `rt`) and the second finishing response (`R2`,
+`rt2`). This is useful when your task provides ranked response
+information rather than just the first choice and its latency.
+
+``` r
+library(AccumulatR)
+```
+
+    ## 
+    ## Attaching package: 'AccumulatR'
+
+    ## The following object is masked from 'package:stats':
+    ## 
+    ##     simulate
+
+**Define the model** We use a simple two-accumulator race with direct
+responses `A` and `B`. Setting `n_outcomes = 2` tells the model to
+retain the first and second finishing responses on each trial.
+
+``` r
+model_spec <- race_spec(n_outcomes = 2L) |>
+  add_accumulator("A", "lognormal") |>
+  add_accumulator("B", "lognormal") |>
+  add_outcome("A", "A") |>
+  add_outcome("B", "B")
+
+structure <- finalize_model(model_spec)
+
+true_params <- c(
+  A.meanlog = log(0.30),
+  A.sdlog = 0.18,
+  B.meanlog = log(0.38),
+  B.sdlog = 0.22
+)
+```
+
+**Simulate data** We now generate behavioral data and keep both ordered
+responses for each trial.
+
+``` r
+set.seed(123456)
+
+n_trials <- 500
+params_df <- build_param_matrix(model_spec, true_params, n_trials = n_trials)
+
+sim <- simulate(structure, params_df)
+
+data_df <- data.frame(
+  trial = sim$trial,
+  R = factor(sim$R),
+  rt = sim$rt,
+  R2 = factor(sim$R2),
+  rt2 = sim$rt2,
+  stringsAsFactors = FALSE
+)
+
+table(data_df$R, data_df$R2)
+```
+
+    ##    
+    ##       A   B
+    ##   A   0 404
+    ##   B  96   0
+
+``` r
+summary(data_df$rt2 - data_df$rt)
+```
+
+    ##      Min.   1st Qu.    Median      Mean   3rd Qu.      Max. 
+    ## 0.0001404 0.0497114 0.1001445 0.1110411 0.1531077 0.5709911
+
+**Evaluate the likelihood** Build a likelihood context once, then
+evaluate the ranked log-likelihood at the true parameter values.
+
+``` r
+ctx <- build_likelihood_context(structure, data_df)
+
+params_df_true <- build_param_matrix(
+  model_spec,
+  true_params,
+  n_trials = max(data_df$trial),
+  layout = ctx$param_layout
+)
+
+ll_true <- as.numeric(log_likelihood(ctx, params_df_true))
+ll_true
+```
+
+    ## [1] 1298.606
+
+For comparison, we can also evaluate a parameter set that is clearly too
+slow for response `B`.
+
+``` r
+wrong_params <- true_params
+wrong_params["B.meanlog"] <- log(0.55)
+
+params_df_wrong <- build_param_matrix(
+  model_spec,
+  wrong_params,
+  n_trials = max(data_df$trial),
+  layout = ctx$param_layout
+)
+
+ll_wrong <- as.numeric(log_likelihood(ctx, params_df_wrong))
+ll_wrong
+```
+
+    ## [1] 626.9148
+
+**Estimate parameters with
+[`optim()`](https://rdrr.io/r/stats/optim.html)** We estimate
+`A.meanlog`, `A.sdlog`, `B.meanlog`, and `B.sdlog`. As in many
+psychological fitting routines, we optimize on an unconstrained scale
+for the standard deviations and transform them back inside the objective
+function.
+
+``` r
+neg_loglik <- function(theta) {
+  # optimize on unconstrained scale for sdlog
+  theta[c("A.sdlog", "B.sdlog")] <- exp(theta[c("A.sdlog", "B.sdlog")])
+  params_df <- build_param_matrix(
+    model_spec,
+    theta,
+    n_trials = max(data_df$trial),
+    layout = ctx$param_layout
+  )
+  ll <- log_likelihood(ctx, params_df)
+  -as.numeric(ll)
+}
+
+start <- c(
+  A.meanlog = log(0.24),
+  A.sdlog = log(0.12),
+  B.meanlog = log(0.48),
+  B.sdlog = log(0.12)
+)
+
+fit <- optim(start, neg_loglik, method = "Nelder-Mead")
+
+fit_params <- fit$par
+fit_params[c("A.sdlog", "B.sdlog")] <- exp(fit_params[c("A.sdlog", "B.sdlog")])
+
+data.frame(
+  true = true_params,
+  recovered = fit_params,
+  miss = abs(true_params - fit_params)
+)
+```
+
+    ##                true  recovered        miss
+    ## A.meanlog -1.203973 -1.2097763 0.005803478
+    ## A.sdlog    0.180000  0.1770936 0.002906442
+    ## B.meanlog -0.967584 -0.9585490 0.009035000
+    ## B.sdlog    0.220000  0.2148618 0.005138242
+
+The overall workflow is the same as in the single-response case, but the
+model now uses the additional ranked-response information directly.

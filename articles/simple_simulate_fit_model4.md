@@ -1,0 +1,170 @@
+# Simulate and Fit a Simple Race Model
+
+This vignette walks through the basic workflow for a race model: define
+the architecture, simulate behavioral data, evaluate the likelihood, and
+recover parameters. The example has two accumulators feeding response
+`R1` and one accumulator feeding response `R2`.
+
+``` r
+library(AccumulatR)
+```
+
+    ## 
+    ## Attaching package: 'AccumulatR'
+
+    ## The following object is masked from 'package:stats':
+    ## 
+    ##     simulate
+
+**Define the model** We use three accumulators. `R1_A` and `R1_B` both
+support response `R1`, while `R2` supports response `R2`.
+
+``` r
+model_spec <- race_spec() |>
+  add_accumulator("R1_A", "LBA") |>
+  add_accumulator("R1_B", "RDM") |>
+  add_accumulator("R2", "lognormal") |>
+  add_pool("R1", c("R1_A", "R1_B")) |>
+  add_outcome("R1", "R1") |>
+  add_outcome("R2", "R2")
+
+structure <- finalize_model(model_spec)
+
+true_params <- c(
+  R1_A.v = 2,
+  R1_A.B = 1,
+  R1_A.A = .3,
+  R1_A.sv = 1,
+  R1_B.v = 3,
+  R1_B.B = 1,
+  R1_B.A = .3,
+  R1_B.s = 1,
+  R2.meanlog = log(0.4),
+  R2.sdlog = 0.18
+)
+```
+
+**Simulate data** We generate behavioral data consisting of responses
+and response times.
+
+``` r
+set.seed(123456)
+
+n_trials <- 2000
+params_df <- build_param_matrix(model_spec, true_params, n_trials = n_trials)
+
+sim <- simulate(structure, params_df)
+
+data_df <- data.frame(
+  trial = sim$trial,
+  R = factor(sim$R),
+  rt = sim$rt,
+  stringsAsFactors = FALSE
+)
+
+table(data_df$R)
+```
+
+    ## 
+    ##   R1   R2 
+    ## 1572  428
+
+**Evaluate the likelihood** We build a likelihood context and evaluate
+the log-likelihood of the simulated behavioral data under the true
+parameter values.
+
+``` r
+ctx <- build_likelihood_context(structure, data_df)
+
+params_df_true <- build_param_matrix(
+  model_spec,
+  true_params,
+  n_trials = max(data_df$trial),
+  layout = ctx$param_layout
+)
+
+ll_true <- as.numeric(log_likelihood(ctx, params_df_true))
+ll_true
+```
+
+    ## [1] 1281.428
+
+We can compare that with a clearly misspecified parameter set.
+
+``` r
+wrong_params <- true_params
+wrong_params["R2.meanlog"] <- log(0.45)
+
+params_df_wrong <- build_param_matrix(
+  model_spec,
+  wrong_params,
+  n_trials = max(data_df$trial),
+  layout = ctx$param_layout
+)
+
+ll_wrong <- as.numeric(log_likelihood(ctx, params_df_wrong))
+ll_wrong
+```
+
+    ## [1] 1145.11
+
+**Estimate parameters with
+[`optim()`](https://rdrr.io/r/stats/optim.html)** We estimate five
+parameters: `R1_A.v`, `R1_B.v`, a shared threshold `B` used for both
+`R1_A.B` and `R1_B.B`, plus `R2.meanlog` and `R2.sdlog`.
+
+``` r
+neg_loglik <- function(theta) {
+  est <- true_params
+  est["R1_A.v"] <- theta[["R1_A.v"]]
+  est["R1_B.v"] <- theta[["R1_B.v"]]
+  est["R1_A.B"] <- exp(theta[["log_B_shared"]])
+  est["R1_B.B"] <- exp(theta[["log_B_shared"]])
+  est["R2.meanlog"] <- theta[["R2.meanlog"]]
+  est["R2.sdlog"] <- exp(theta[["log_R2.sdlog"]])
+  params_df <- build_param_matrix(
+    model_spec,
+    est,
+    n_trials = max(data_df$trial),
+    layout = ctx$param_layout
+  )
+  ll <- log_likelihood(ctx, params_df)
+  -as.numeric(ll)
+}
+
+start <- c(
+  R1_A.v = 1.5,
+  R1_B.v = 1.5,
+  log_B_shared = log(1.0),
+  R2.meanlog = log(0.32),
+  log_R2.sdlog = log(0.15)
+)
+
+fit <- optim(start, neg_loglik, method = "Nelder-Mead", control = list(maxit = 4000, reltol = 1e-9))
+fit_params <- c(
+  R1_A.v = fit$par[["R1_A.v"]],
+  R1_B.v = fit$par[["R1_B.v"]],
+  B_shared = exp(fit$par[["log_B_shared"]]),
+  R2.meanlog = fit$par[["R2.meanlog"]],
+  R2.sdlog = exp(fit$par[["log_R2.sdlog"]])
+)
+target <- c(
+  R1_A.v = true_params[["R1_A.v"]],
+  R1_B.v = true_params[["R1_B.v"]],
+  B_shared = true_params[["R1_A.B"]],
+  R2.meanlog = true_params[["R2.meanlog"]],
+  R2.sdlog = true_params[["R2.sdlog"]]
+)
+data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params))
+```
+
+    ##                  true  recovered        miss
+    ## R1_A.v      2.0000000  1.9738644 0.026135641
+    ## R1_B.v      3.0000000  2.8720108 0.127989241
+    ## B_shared    1.0000000  0.9630031 0.036996851
+    ## R2.meanlog -0.9162907 -0.9115338 0.004756882
+    ## R2.sdlog    0.1800000  0.1873125 0.007312532
+
+That is the basic workflow the package is designed for: describe a
+response-time model in psychological terms, simulate data, and then fit
+the same model back to behavioral observations.

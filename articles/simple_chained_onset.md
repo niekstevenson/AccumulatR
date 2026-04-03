@@ -1,0 +1,154 @@
+# Simulate and Fit a Simple Chained-Onset Model
+
+This vignette illustrates a staged architecture in which one process
+cannot start until another has finished. Here accumulator `C` starts
+only after accumulator `B` has completed. This kind of dependency is
+useful when a later decision stage is only available after an earlier
+process finishes.
+
+``` r
+library(AccumulatR)
+```
+
+    ## 
+    ## Attaching package: 'AccumulatR'
+
+    ## The following object is masked from 'package:stats':
+    ## 
+    ##     simulate
+
+**Define the model** `A` is a directly observed process. `B` is latent,
+and `C` is another observed process whose onset depends on `B`.
+
+``` r
+model_spec <- race_spec() |>
+  add_accumulator("A", "lognormal") |>
+  add_accumulator("B", "lognormal") |>
+  add_accumulator("C", "lognormal", onset = after("B")) |>
+  add_outcome("A", "A") |>
+  add_outcome("C", "C")
+
+structure <- finalize_model(model_spec)
+
+true_params <- c(
+  A.meanlog = log(0.28),
+  A.sdlog = 0.14,
+  B.meanlog = log(0.1),
+  B.sdlog = 0.1, 
+  C.meanlog = log(0.15),
+  C.sdlog = 0.1 
+)
+```
+
+**Simulate data** Each trial contributes the observed response label and
+response time.
+
+``` r
+set.seed(123456)
+
+n_trials <- 2000
+params_df <- build_param_matrix(model_spec, true_params, n_trials = n_trials)
+
+sim <- simulate(structure, params_df)
+
+data_df <- data.frame(
+  trial = sim$trial,
+  R = factor(sim$R),
+  rt = sim$rt,
+  stringsAsFactors = FALSE
+)
+
+table(data_df$R)
+```
+
+    ## 
+    ##    A    C 
+    ##  446 1554
+
+**Evaluate the likelihood** Build a likelihood context and evaluate the
+chained-onset model at the true parameter values.
+
+``` r
+ctx <- build_likelihood_context(structure, data_df)
+
+params_df_true <- build_param_matrix(
+  model_spec,
+  true_params,
+  n_trials = max(data_df$trial),
+  layout = ctx$param_layout
+)
+
+ll_true <- as.numeric(log_likelihood(ctx, params_df_true))
+ll_true
+```
+
+    ## [1] 4176.625
+
+As a quick check, compare that value with one from a parameter set that
+delays the latent process `B`.
+
+``` r
+wrong_params <- true_params
+wrong_params["B.meanlog"] <- log(0.14)
+
+params_df_wrong <- build_param_matrix(
+  model_spec,
+  wrong_params,
+  n_trials = max(data_df$trial),
+  layout = ctx$param_layout
+)
+
+ll_wrong <- as.numeric(log_likelihood(ctx, params_df_wrong))
+ll_wrong
+```
+
+    ## [1] 384.6795
+
+**Estimate parameters with
+[`optim()`](https://rdrr.io/r/stats/optim.html)** We estimate
+`A.meanlog`, `A.sdlog`, `B.meanlog`, `B.sdlog`, `C.meanlog`, and
+`C.sdlog`. Again, we optimize on the log scale for the standard
+deviations so the search can proceed without positivity constraints.
+
+``` r
+neg_loglik <- function(theta) {
+  # optimize on unconstrained scale for sdlog
+  theta[c("A.sdlog", "B.sdlog", "C.sdlog")] <- exp(theta[c("A.sdlog", "B.sdlog", "C.sdlog")])
+  params_df <- build_param_matrix(
+    model_spec,
+    theta,
+    n_trials = max(data_df$trial),
+    layout = ctx$param_layout
+  )
+  ll <- log_likelihood(ctx, params_df)
+  -as.numeric(ll)
+}
+
+start <- c(
+  A.meanlog = log(0.22),
+  A.sdlog = log(0.10),
+  B.meanlog = log(0.28),
+  B.sdlog = log(0.10),
+  C.meanlog = log(0.28),
+  C.sdlog = log(0.10)
+)
+
+fit <- optim(start, neg_loglik, method = "Nelder-Mead")
+
+fit_params <- fit$par
+fit_params[c("A.sdlog", "B.sdlog", "C.sdlog")] <- exp(fit_params[c("A.sdlog", "B.sdlog", "C.sdlog")])
+
+data.frame(
+  true = true_params,
+  recovered = fit_params,
+  miss = abs(true_params - fit_params)
+)
+```
+
+    ##                true   recovered        miss
+    ## A.meanlog -1.272966 -1.25003011 0.022935562
+    ## A.sdlog    0.140000  0.09451568 0.045484321
+    ## B.meanlog -2.302585 -2.84037595 0.537790857
+    ## B.sdlog    0.100000  0.02842790 0.071572096
+    ## C.meanlog -1.897120 -1.64098410 0.256135882
+    ## C.sdlog    0.100000  0.10959761 0.009597612

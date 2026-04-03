@@ -2,24 +2,25 @@
 % Please edit documentation in R/model_definition.R
 \name{add_pool}
 \alias{add_pool}
-\title{Add a pool definition}
+\title{Pool several accumulators under a shared label}
 \usage{
 add_pool(spec, id, members, k = 1L)
 }
 \arguments{
-\item{spec}{race_spec object}
+\item{spec}{A `race_spec` object.}
 
-\item{id}{Pool id}
+\item{id}{Label for the pool.}
 
-\item{members}{Member ids}
+\item{members}{Accumulator labels included in the pool.}
 
-\item{k}{Threshold parameter}
+\item{k}{Threshold for a `k`-of-`n` pool rule.}
 }
 \value{
-Updated race_spec
+The updated `race_spec`.
 }
 \description{
-Add a pool definition
+Pools let you talk about several accumulators as one source when defining
+observed responses.
 }
 \examples{
 spec <- race_spec()

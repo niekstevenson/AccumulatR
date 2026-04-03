@@ -1,11 +1,17 @@
 Package: AccumulatR
 Type: Package
-Title: Native Likelihood Kernels for Race Models
+Title: Simulation and Likelihood Tools for Evidence-Accumulation Models
 Version: 0.1.0
 Authors@R: c(
     person("Niek", "Stevenson", email = "niek.stevenson@gmail.com", role = c("aut", "cre"))
   )
-Description: R/C++ toolkit for building simulators and likelihood kernels for generalized race models. The package keeps the R surface intentionally tiny: you prepare a model once in R, obtain the serialized native context plus per-trial metadata, and then execute all likelihood evaluations on the C++ side.
+Description: Tools for simulating and fitting evidence-accumulation and race
+    models to behavioral data. The package is designed for workflows common in
+    cognitive psychology: define a model in terms of accumulators, pooled
+    channels, response rules, and timing dependencies; simulate response-time
+    data; and evaluate the likelihood of observed responses under alternative
+    parameter values. The user-facing interface stays in R, while the repeated
+    likelihood calculations are handled in C++ for speed.
 License: GPL-3
 Encoding: UTF-8
 Depends: R (>= 4.1)
@@ -14,8 +20,11 @@ Imports:
     stats,
     utils
 Suggests:
+    knitr,
+    rmarkdown,
     testthat (>= 3.0.0),
     DiagrammeR
+VignetteBuilder: knitr
 LinkingTo: Rcpp, BH
 SystemRequirements: C++17
 NeedsCompilation: yes

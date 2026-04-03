@@ -3,20 +3,20 @@
 \name{none_of}
 \alias{none_of}
 \alias{exclude}
-\title{None-of expression helper}
+\title{Define the absence of an event}
 \usage{
 none_of(expr)
 
 exclude(expr)
 }
 \arguments{
-\item{expr}{Expression or label to negate}
+\item{expr}{Accumulator label or expression to negate.}
 }
 \value{
-Expression list
+An expression object.
 }
 \description{
-None-of expression helper
+Define the absence of an event
 }
 \examples{
 none_of("A")

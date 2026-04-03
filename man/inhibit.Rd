@@ -2,20 +2,20 @@
 % Please edit documentation in R/model_definition.R
 \name{inhibit}
 \alias{inhibit}
-\title{Define an inhibitory relationship}
+\title{Define a response that is blocked by another process}
 \usage{
 inhibit(reference, by)
 }
 \arguments{
-\item{reference}{Outcome expression or label to inhibit}
+\item{reference}{Response rule or accumulator label to be blocked.}
 
-\item{by}{Blocking expression or label}
+\item{by}{Blocking process or expression.}
 }
 \value{
-Guard expression list
+A guarded expression object.
 }
 \description{
-Define an inhibitory relationship
+Define a response that is blocked by another process
 }
 \examples{
 inhibit("A", "B")

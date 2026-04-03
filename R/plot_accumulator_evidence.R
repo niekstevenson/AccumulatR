@@ -159,35 +159,37 @@
   invisible(NULL)
 }
 
-#' Plot accumulator trajectories with structural links
+#' Plot accumulators and their timing relations
 #'
-#' Draws a model-wide accumulator schematic with time on the x-axis and evidence
-#' on the y-axis. Each accumulator is drawn as an onset-aware diagonal trajectory.
-#' Blocker links from guard relationships are overlaid as red dotted curves.
+#' Draw a schematic view of the model with time on the x-axis and evidence on
+#' the y-axis. Each accumulator is shown as a simple trajectory, and timing or
+#' blocking relations are overlaid so you can inspect the qualitative structure
+#' of the model before fitting.
 #'
-#' @param model A race model (`race_spec`, finalized model structure, or `model_tables`).
-#' @param xlim Optional x-axis limits. If `NULL`, computed from onsets and line length.
+#' @param model A race model (`race_spec`, a finalized model, or `model_tables`).
+#' @param xlim Optional x-axis limits. If `NULL`, they are chosen from the model.
 #' @param ylim Y-axis limits.
-#' @param line_length Trajectory length in plot units.
+#' @param line_length Length of each accumulator trajectory in plot units.
 #' @param angle_dodge Target angular spacing in degrees between neighbouring accumulators.
 #'   Angles are centered at 45 degrees and constrained to the interval [10, 80].
 #'   If there are too many accumulators sharing the same onset, spacing is reduced
 #'   uniformly within that onset group.
 #' @param accumulator_order Optional character vector of accumulator labels, ordered
 #'   from top-to-bottom. This only affects accumulators sharing the same onset.
-#' @param curve_strength Curvature multiplier for relationship arcs.
+#' @param curve_strength Curvature applied to relationship arcs.
 #' @param line_col Color for accumulator trajectories.
 #' @param line_lwd Line width for accumulator trajectories.
 #' @param axis_lwd Line width for x/y axis arrows.
 #' @param link_lwd Reserved for reciprocal relationship arrows (currently disabled).
 #' @param blocker_lwd Line width for blocker arrows.
-#' @param show_labels If `TRUE`, draw accumulator labels near trajectory endpoints.
+#' @param show_labels If `TRUE`, add accumulator labels near the line endpoints.
 #' @param main Main title.
 #' @param xlab X-axis label.
 #' @param ylab Y-axis label.
 #' @param ... Additional arguments passed to `graphics::plot`.
 #'
-#' @return Invisibly returns a list with plotting coordinates and inferred links.
+#' @return Invisibly returns a list with plotting coordinates and inferred
+#'   structural links.
 #' @examples
 #' spec <- race_spec() |>
 #'   add_accumulator("go", "lognormal") |>

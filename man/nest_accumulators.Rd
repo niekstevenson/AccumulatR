@@ -2,19 +2,21 @@
 % Please edit documentation in R/model_definition.R
 \name{nest_accumulators}
 \alias{nest_accumulators}
-\title{Nest data by accumulator}
+\title{Expand behavioral data to one row per accumulator}
 \usage{
 nest_accumulators(model_spec, data)
 }
 \arguments{
-\item{model_spec}{Finalized model (from `finalize_model()`)}
+\item{model_spec}{Finalized model returned by `finalize_model()`.}
 
-\item{data}{Data frame with one row per trial}
+\item{data}{Behavioral data with one row per trial.}
 }
 \value{
-Data frame with rows repeated per accumulator and an `accumulator` column
+A data frame with rows repeated per accumulator and an
+  `accumulator` column.
 }
 \description{
-Expand a trial-level data frame so each trial is repeated for every accumulator
-in a finalized model, adding `trial` (if missing) and `accumulator` columns.
+This is mainly a helper for advanced workflows where you want trial-level
+behavioral data repeated across the accumulators that are active on each
+trial.
 }

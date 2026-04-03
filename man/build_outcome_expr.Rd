@@ -2,18 +2,19 @@
 % Please edit documentation in R/model_definition.R
 \name{build_outcome_expr}
 \alias{build_outcome_expr}
-\title{Normalize an outcome expression}
+\title{Turn a response rule into an internal expression}
 \usage{
 build_outcome_expr(expr)
 }
 \arguments{
-\item{expr}{Expression or symbol describing an event/guard}
+\item{expr}{Expression or symbol describing an event or blocking rule.}
 }
 \value{
-Expression list used in model specs
+An expression object used inside model specifications.
 }
 \description{
-Normalize an outcome expression
+Use this when you want to write a response rule programmatically rather than
+through the helper functions such as `all_of()` or `inhibit()`.
 }
 \examples{
 build_outcome_expr(quote(A & !B))

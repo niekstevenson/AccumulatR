@@ -2,18 +2,18 @@
 % Please edit documentation in R/model_definition.R
 \name{first_of}
 \alias{first_of}
-\title{First-of expression helper}
+\title{Define a response that occurs when the first listed process finishes}
 \usage{
 first_of(...)
 }
 \arguments{
-\item{...}{Expressions or labels to combine with OR}
+\item{...}{Accumulator labels or expression objects to combine with OR.}
 }
 \value{
-Expression list
+An expression object.
 }
 \description{
-First-of expression helper
+Define a response that occurs when the first listed process finishes
 }
 \examples{
 first_of("A", "B")

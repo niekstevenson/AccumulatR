@@ -4,7 +4,7 @@
 \alias{simulate}
 \alias{simulate.model_structure}
 \alias{simulate.default}
-\title{Simulate trials from parameter rows}
+\title{Simulate behavioral data from a model}
 \usage{
 simulate(
   structure,
@@ -31,38 +31,35 @@ simulate(
 \method{simulate}{default}(structure, ...)
 }
 \arguments{
-\item{structure}{Model structure}
+\item{structure}{Finalized model structure.}
 
-\item{params_df}{Parameter data frame}
+\item{params_df}{Trial-level parameter values.}
 
-\item{trial_df}{Optional trial-level or expanded data frame used to condition
-simulation. When `trial_df` includes an `accumulator` column, `onset` and
-`component` values are matched by trial and accumulator. If `layout = "long"`
-and `trial_df` rows align to `params_df`, those rows are treated as the
-accumulator mapping for each trial. Otherwise, values apply to all accumulators
-for a trial.}
+\item{trial_df}{Optional data frame used to condition the simulation. When it
+includes an `accumulator` column, `onset` and `component` values are matched
+by trial and accumulator. Otherwise, values apply at the trial level.}
 
-\item{seed}{Optional RNG seed}
+\item{seed}{Optional random-number seed.}
 
-\item{keep_detail}{Whether to retain per-trial detail}
+\item{keep_detail}{If `TRUE`, keep additional simulation detail.}
 
-\item{keep_component}{Whether to include the chosen component in the output (if multiple components exist).
-If `NULL` (default), fixed mixtures keep the component; sampled mixtures drop it.}
+\item{keep_component}{Whether to keep the chosen mixture component in the
+output when the model has multiple components. If `NULL`, fixed mixtures
+keep the component label and sampled mixtures drop it.}
 
-\item{layout}{Parameter layout. `"rectangular"` expects `n_trials * n_acc` rows ordered
-by trial then accumulator; `"long"` expects either a `trial_df` with `accumulator`
-rows aligned to `params_df`, or a `trial_df` with `component` to infer active
-accumulators. `"auto"` chooses based on row counts and component structure.}
+\item{layout}{Parameter layout. `"rectangular"` expects rows ordered by trial
+and accumulator. `"long"` expects rows aligned to `trial_df` or inferable
+from `component`. `"auto"` chooses automatically.}
 
-\item{...}{Unused; for S3 compatibility}
+\item{...}{Unused; for S3 compatibility.}
 }
 \value{
-Data frame of simulated outcomes/RTs (with optional detail). When
-  `race_spec(n_outcomes = k)` has `k > 1`, additional ordered readout columns
-  are appended as `R2`/`rt2`, `R3`/`rt3`, ..., `Rk`/`rtk`.
+A data frame of simulated behavioral data. For standard models this
+  includes `trial`, `R`, and `rt`. If `n_outcomes > 1`, additional ordered
+  response columns such as `R2`/`rt2` are included.
 }
 \description{
-Simulate trials from parameter rows
+Simulate behavioral data from a model
 }
 \examples{
 spec <- race_spec()

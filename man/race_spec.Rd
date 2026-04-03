@@ -2,18 +2,20 @@
 % Please edit documentation in R/model_definition.R
 \name{race_spec}
 \alias{race_spec}
-\title{Create an empty race specification}
+\title{Start a race-model specification}
 \usage{
 race_spec(n_outcomes = 1L)
 }
 \arguments{
-\item{n_outcomes}{Number of observed outcomes to retain per trial.}
+\item{n_outcomes}{Number of ordered observed responses to retain per trial.
+Use `1` for standard choice/RT data, `2` when you also observe the second
+finishing response, and so on.}
 }
 \value{
-A race_spec object
+A `race_spec` object.
 }
 \description{
-Create an empty race specification
+Start a race-model specification
 }
 \examples{
 race_spec()

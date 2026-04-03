@@ -1,6 +1,11 @@
 ^dev/
+^docs/
+^pkgdown/
+^_pkgdown\.yml$
 ^AccumulatR\.Rproj$
 ^\.Rproj\.user$
+^\.DS_Store$
+^\.Rhistory$
 ^\.gitignore$
 ^\.github$
 ^\.vscode/

@@ -555,10 +555,13 @@
   .expr_from_value(expr)
 }
 
-#' Normalize an outcome expression
+#' Turn a response rule into an internal expression
 #'
-#' @param expr Expression or symbol describing an event/guard
-#' @return Expression list used in model specs
+#' Use this when you want to write a response rule programmatically rather than
+#' through the helper functions such as `all_of()` or `inhibit()`.
+#'
+#' @param expr Expression or symbol describing an event or blocking rule.
+#' @return An expression object used inside model specifications.
 #' @examples
 #' build_outcome_expr(quote(A & !B))
 #' @export
@@ -570,11 +573,11 @@ build_outcome_expr <- function(expr) {
 # Public DSL helpers
 # ------------------------------------------------------------------------------
 
-#' Define an inhibitory relationship
+#' Define a response that is blocked by another process
 #'
-#' @param reference Outcome expression or label to inhibit
-#' @param by Blocking expression or label
-#' @return Guard expression list
+#' @param reference Response rule or accumulator label to be blocked.
+#' @param by Blocking process or expression.
+#' @return A guarded expression object.
 #' @examples
 #' inhibit("A", "B")
 #' @export
@@ -592,10 +595,10 @@ inhibit <- function(reference, by) {
   list(kind = "guard", blocker = blocker_expr, reference = ref_expr)
 }
 
-#' First-of expression helper
+#' Define a response that occurs when the first listed process finishes
 #'
-#' @param ... Expressions or labels to combine with OR
-#' @return Expression list
+#' @param ... Accumulator labels or expression objects to combine with OR.
+#' @return An expression object.
 #' @examples
 #' first_of("A", "B")
 #' @export
@@ -608,10 +611,10 @@ first_of <- function(...) {
   list(kind = "or", args = lapply(args, .expr_from_value))
 }
 
-#' All-of expression helper
+#' Define a response that requires several processes to finish
 #'
-#' @param ... Expressions or labels to combine with AND
-#' @return Expression list
+#' @param ... Accumulator labels or expression objects to combine with AND.
+#' @return An expression object.
 #' @examples
 #' all_of("A", "B")
 #' @export
@@ -624,10 +627,10 @@ all_of <- function(...) {
   list(kind = "and", args = lapply(args, .expr_from_value))
 }
 
-#' None-of expression helper
+#' Define the absence of an event
 #'
-#' @param expr Expression or label to negate
-#' @return Expression list
+#' @param expr Accumulator label or expression to negate.
+#' @return An expression object.
 #' @export
 #' @aliases exclude
 #' @examples
@@ -645,11 +648,14 @@ none_of <- function(expr) {
 #' @export
 exclude <- none_of
 
-#' Define a chained onset relative to another source
+#' Start one accumulator after another process finishes
 #'
-#' @param source Accumulator or pool id that must finish first.
-#' @param lag Non-negative delay added after source completion.
-#' @return A chained onset specification for `add_accumulator(onset = ...)`.
+#' This is useful for staged or contingent architectures, where one process can
+#' only begin after an earlier accumulator or pool has finished.
+#'
+#' @param source Accumulator or pool label that must finish first.
+#' @param lag Optional non-negative delay added after `source` finishes.
+#' @return A chained-onset specification for `add_accumulator(onset = ...)`.
 #' @examples
 #' after("A")
 #' after("pool1", lag = 0.05)
@@ -671,10 +677,12 @@ after <- function(source, lag = 0) {
 # Model builder
 # ------------------------------------------------------------------------------
 
-#' Create an empty race specification
+#' Start a race-model specification
 #'
-#' @param n_outcomes Number of observed outcomes to retain per trial.
-#' @return A race_spec object
+#' @param n_outcomes Number of ordered observed responses to retain per trial.
+#'   Use `1` for standard choice/RT data, `2` when you also observe the second
+#'   finishing response, and so on.
+#' @return A `race_spec` object.
 #' @examples
 #' race_spec()
 #' @export
@@ -713,19 +721,33 @@ race_spec <- function(n_outcomes = 1L) {
   params
 }
 
-#' Add an accumulator definition
+.validate_race_spec_input <- function(spec, fn_name) {
+  if (inherits(spec, "race_spec")) {
+    return(spec)
+  }
+  stop(
+    sprintf(
+      "%s() expects a model specification created with race_spec().",
+      fn_name
+    ),
+    call. = FALSE
+  )
+}
+
+#' Add an accumulator to a model
 #'
-#' @param spec race_spec object
-#' @param id Accumulator id
-#' @param dist Distribution name
-#' @param onset Onset shift; either numeric or `after(source, lag = ...)`.
-#' @return Updated race_spec
+#' @param spec A `race_spec` object.
+#' @param id Label for the accumulator.
+#' @param dist Distribution family used for that accumulator.
+#' @param onset Start time for the accumulator. This can be a fixed numeric
+#'   onset or a chained onset created with `after()`.
+#' @return The updated `race_spec`.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
 #' @export
 add_accumulator <- function(spec, id, dist, onset = 0) {
-  stopifnot(inherits(spec, "race_spec"))
+  spec <- .validate_race_spec_input(spec, "add_accumulator")
   onset <- .normalize_onset_literal(onset)
   spec$accumulators[[length(spec$accumulators) + 1L]] <- list(
     id = id,
@@ -735,19 +757,22 @@ add_accumulator <- function(spec, id, dist, onset = 0) {
   spec
 }
 
-#' Add a pool definition
+#' Pool several accumulators under a shared label
 #'
-#' @param spec race_spec object
-#' @param id Pool id
-#' @param members Member ids
-#' @param k Threshold parameter
-#' @return Updated race_spec
+#' Pools let you talk about several accumulators as one source when defining
+#' observed responses.
+#'
+#' @param spec A `race_spec` object.
+#' @param id Label for the pool.
+#' @param members Accumulator labels included in the pool.
+#' @param k Threshold for a `k`-of-`n` pool rule.
+#' @return The updated `race_spec`.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_pool(spec, "P1", members = c("A", "B"), k = 1L)
 #' @export
 add_pool <- function(spec, id, members, k = 1L) {
-  stopifnot(inherits(spec, "race_spec"))
+  spec <- .validate_race_spec_input(spec, "add_pool")
   if (missing(members) || length(members) == 0) {
     stop("Pool must define at least one member")
   }
@@ -759,19 +784,19 @@ add_pool <- function(spec, id, members, k = 1L) {
   spec
 }
 
-#' Add an outcome definition
+#' Define an observed response
 #'
-#' @param spec race_spec object
-#' @param label Outcome label
-#' @param expr Outcome expression
-#' @param options Optional list of options
-#' @return Updated race_spec
+#' @param spec A `race_spec` object.
+#' @param label Response label that should appear in the behavioral data.
+#' @param expr Rule describing when that response is observed.
+#' @param options Optional response settings.
+#' @return The updated `race_spec`.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_outcome(spec, "A_win", "A")
 #' @export
 add_outcome <- function(spec, label, expr, options = list()) {
-  stopifnot(inherits(spec, "race_spec"))
+  spec <- .validate_race_spec_input(spec, "add_outcome")
   spec$outcomes[[length(spec$outcomes) + 1L]] <- list(
     label = label,
     expr = build_outcome_expr(expr),
@@ -780,23 +805,23 @@ add_outcome <- function(spec, label, expr, options = list()) {
   spec
 }
 
-#' Add a group of members
+#' Define a mixture component
 #'
-#' @param spec race_spec object
-#' @param id Group id
-#' Define a component (unified definition and membership)
+#' Components are useful when trials can come from qualitatively different
+#' processing modes, such as "fast guess" versus "controlled response".
 #'
-#' @param spec race_spec object
-#' @param id Component id (e.g. "fast")
-#' @param members Character vector of accumulator IDs belonging to this component.
-#' @param weight Optional fixed weight (0-1).
-#' @param weight_param Optional parameter name for weight.
-#' @param n_outcomes Optional component-level override for observed outcomes.
-#' @param attrs Additional attributes.
-#' @return Updated race_spec
+#' @param spec A `race_spec` object.
+#' @param id Component label.
+#' @param members Accumulator labels that belong to this component.
+#' @param weight Optional fixed mixture weight.
+#' @param weight_param Optional parameter name for a fitted mixture weight.
+#' @param n_outcomes Optional component-specific override for the number of
+#'   observed ordered responses.
+#' @param attrs Additional component attributes.
+#' @return The updated `race_spec`.
 #' @export
 add_component <- function(spec, id, members, weight = NULL, weight_param = NULL, n_outcomes = NULL, attrs = list()) {
-  stopifnot(inherits(spec, "race_spec"))
+  spec <- .validate_race_spec_input(spec, "add_component")
   if (missing(members) || is.null(members) || length(members) == 0) {
     stop("Component must specify members")
   }
@@ -820,18 +845,22 @@ add_component <- function(spec, id, members, weight = NULL, weight_param = NULL,
   spec
 }
 
-#' Add a shared trigger (gate)
+#' Add a shared trigger or gate
 #'
-#' @param spec race_spec object
-#' @param id Trigger id (optional; defaults to first member name if missing)
-#' @param members Character vector of accumulator IDs sharing this trigger.
-#' @param q Probability (0-1) for trigger failure.
-#' @param param Optional parameter name supplying q.
-#' @param draw Either "shared" (one draw for all members) or "independent" (same q, independent draws).
-#' @return Updated race_spec
+#' Triggers let several accumulators share the same stochastic gating event,
+#' which can be useful in stop-signal or contingent-processing models.
+#'
+#' @param spec A `race_spec` object.
+#' @param id Trigger label. If `NULL`, the first member label is used.
+#' @param members Accumulator labels controlled by the trigger.
+#' @param q Failure probability for the trigger.
+#' @param param Optional parameter name supplying `q`.
+#' @param draw Whether trigger failures are shared across members or drawn
+#'   independently.
+#' @return The updated `race_spec`.
 #' @export
 add_trigger <- function(spec, id, members, q = NULL, param = NULL, draw = c("shared", "independent")) {
-  stopifnot(inherits(spec, "race_spec"))
+  spec <- .validate_race_spec_input(spec, "add_trigger")
   draw <- match.arg(draw)
   if (missing(members) || is.null(members) || length(members) == 0) {
     stop("Trigger must specify members")
@@ -859,15 +888,15 @@ add_trigger <- function(spec, id, members, q = NULL, param = NULL, draw = c("sha
   spec
 }
 
-#' Add shared parameters for a set of accumulators
+#' Tie parameters across accumulators
 #'
-#' @param spec race_spec object
-#' @param members Character vector of accumulator IDs.
-#' @param ... Named parameters to share (e.g., meanlog = "log(0.5)", or explicit value).
-#' @return Updated race_spec
+#' @param spec A `race_spec` object.
+#' @param members Accumulator labels that should share parameter values.
+#' @param ... Named parameters to share.
+#' @return The updated `race_spec`.
 #' @export
 add_shared_params <- function(spec, members, ...) {
-  stopifnot(inherits(spec, "race_spec"))
+  spec <- .validate_race_spec_input(spec, "add_shared_params")
   if (missing(members) || is.null(members) || length(members) == 0) {
     stop("Shared params must specify members")
   }
@@ -883,15 +912,15 @@ add_shared_params <- function(spec, members, ...) {
   spec
 }
 
-#' Set mixture options (global)
+#' Control how mixture components are combined
 #'
-#' @param spec race_spec object
-#' @param mode Mixture mode (e.g. "sample")
-#' @param reference Component ID to use as reference (base)
-#' @return Updated race_spec
+#' @param spec A `race_spec` object.
+#' @param mode Mixture mode.
+#' @param reference Optional reference component.
+#' @return The updated `race_spec`.
 #' @export
 set_mixture_options <- function(spec, mode = "sample", reference = NULL) {
-  stopifnot(inherits(spec, "race_spec"))
+  spec <- .validate_race_spec_input(spec, "set_mixture_options")
   spec$mixture_options <- list(
     mode = mode,
     reference = reference
@@ -899,17 +928,17 @@ set_mixture_options <- function(spec, mode = "sample", reference = NULL) {
   spec
 }
 
-#' Set metadata on a specification
+#' Store model-level settings
 #'
-#' @param spec race_spec object
-#' @param ... Named metadata entries
-#' @return Updated race_spec
+#' @param spec A `race_spec` object.
+#' @param ... Named metadata entries.
+#' @return The updated `race_spec`.
 #' @examples
 #' spec <- race_spec()
 #' spec <- set_metadata(spec, rel_tol = 1e-4)
 #' @export
 set_metadata <- function(spec, ...) {
-  stopifnot(inherits(spec, "race_spec"))
+  spec <- .validate_race_spec_input(spec, "set_metadata")
   updates <- list(...)
   for (nm in names(updates)) {
     spec$metadata[[nm]] <- updates[[nm]]
@@ -919,11 +948,14 @@ set_metadata <- function(spec, ...) {
 
 
 
-#' Build an expression guard node
+#' Build a blocking rule explicitly
 #'
-#' @param blocker Blocker expression or id
-#' @param reference Reference expression or id
-#' @return Guard expression list
+#' Most users will prefer `inhibit()`, but `expr_guard()` is available when you
+#' want to construct the guarded expression directly.
+#'
+#' @param blocker Blocking expression or accumulator label.
+#' @param reference Target expression or accumulator label.
+#' @return A guarded expression object.
 #' @examples
 #' expr_guard("B", "A")
 #' @export
@@ -1349,10 +1381,13 @@ prepare_model <- function(model) {
   acc_df
 }
 
-#' Finalize a model for simulation/likelihood
+#' Compile a model for simulation and fitting
 #'
-#' @param model Model specification
-#' @return A model_structure list
+#' This converts a human-readable model specification into the finalized object
+#' used by `simulate()`, `build_likelihood_context()`, and related functions.
+#'
+#' @param model Model specification.
+#' @return A `model_structure` object.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
@@ -1436,10 +1471,10 @@ dist_param_names <- function(dist) {
   character(0)
 }
 
-#' List sampled parameter names for a model
+#' List the free parameters implied by a model
 #'
-#' @param model race_spec or race_model_spec
-#' @return Character vector of parameter names
+#' @param model A `race_spec` or related model object.
+#' @return A character vector of parameter names.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
@@ -1490,14 +1525,17 @@ param_table <- function(model, ...) {
   )
 }
 
-#' Build a parameter data frame for likelihood/simulation
+#' Create trial-level parameter values
 #'
-#' @param model Model definition
-#' @param param_values Named numeric vector of parameter values
-#' @param n_trials Number of trial rows to generate
-#' @param component Optional component label(s)
-#' @param layout Optional layout for slimmed down construction
-#' @return Data frame of parameters per trial
+#' This expands a named parameter vector into the trial-by-trial format expected
+#' by `simulate()` and `log_likelihood()`.
+#'
+#' @param model Model definition.
+#' @param param_values Named numeric vector of parameter values.
+#' @param n_trials Number of trials to generate.
+#' @param component Optional component label or labels.
+#' @param layout Optional storage layout.
+#' @return A data frame or matrix of parameter values by trial.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
@@ -1895,14 +1933,16 @@ build_param_matrix <- function(model,
   }
 }
 
-#' Nest data by accumulator
+#' Expand behavioral data to one row per accumulator
 #'
-#' Expand a trial-level data frame so each trial is repeated for every accumulator
-#' in a finalized model, adding `trial` (if missing) and `accumulator` columns.
+#' This is mainly a helper for advanced workflows where you want trial-level
+#' behavioral data repeated across the accumulators that are active on each
+#' trial.
 #'
-#' @param model_spec Finalized model (from `finalize_model()`)
-#' @param data Data frame with one row per trial
-#' @return Data frame with rows repeated per accumulator and an `accumulator` column
+#' @param model_spec Finalized model returned by `finalize_model()`.
+#' @param data Behavioral data with one row per trial.
+#' @return A data frame with rows repeated per accumulator and an
+#'   `accumulator` column.
 #' @export
 nest_accumulators <- function(model_spec, data) {
   structure <- .as_model_structure(model_spec)

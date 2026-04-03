@@ -2,18 +2,18 @@
 % Please edit documentation in R/model_definition.R
 \name{all_of}
 \alias{all_of}
-\title{All-of expression helper}
+\title{Define a response that requires several processes to finish}
 \usage{
 all_of(...)
 }
 \arguments{
-\item{...}{Expressions or labels to combine with AND}
+\item{...}{Accumulator labels or expression objects to combine with AND.}
 }
 \value{
-Expression list
+An expression object.
 }
 \description{
-All-of expression helper
+Define a response that requires several processes to finish
 }
 \examples{
 all_of("A", "B")

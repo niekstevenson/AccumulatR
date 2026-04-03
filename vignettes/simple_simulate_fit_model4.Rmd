@@ -1,16 +1,24 @@
 ---
 title: "Simulate and Fit a Simple Race Model"
-output: html_document
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Simulate and Fit a Simple Race Model}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
 ---
 
-This short vignette shows how to simulate data and compute likelihoods for a simple race model, then estimate parameters with `optim()`. The example has two accumulators that feed response `R1`, and one accumulator feeds response `R2`.
+This vignette walks through the basic workflow for a race model: define the
+architecture, simulate behavioral data, evaluate the likelihood, and recover
+parameters. The example has two accumulators feeding response `R1` and one
+accumulator feeding response `R2`.
 
 ```{r}
 library(AccumulatR)
 ```
 
 **Define the model**
-We use three accumulators. `R1_A` and `R1_B` are pooled into response `R1`. `R2` is its own response.
+We use three accumulators. `R1_A` and `R1_B` both support response `R1`, while
+`R2` supports response `R2`.
 
 ```{r}
 model_spec <- race_spec() |>
@@ -38,7 +46,7 @@ true_params <- c(
 ```
 
 **Simulate data**
-We generate a small dataset of response times and choices.
+We generate behavioral data consisting of responses and response times.
 
 ```{r}
 set.seed(123456)
@@ -59,7 +67,8 @@ table(data_df$R)
 ```
 
 **Evaluate the likelihood**
-We build a likelihood context and evaluate the log-likelihood for the true parameters.
+We build a likelihood context and evaluate the log-likelihood of the simulated
+behavioral data under the true parameter values.
 
 ```{r}
 ctx <- build_likelihood_context(structure, data_df)
@@ -75,7 +84,7 @@ ll_true <- as.numeric(log_likelihood(ctx, params_df_true))
 ll_true
 ```
 
-We can compare it to a clearly wrong parameter set.
+We can compare that with a clearly misspecified parameter set.
 
 ```{r}
 wrong_params <- true_params
@@ -93,7 +102,8 @@ ll_wrong
 ```
 
 **Estimate parameters with `optim()`**
-We estimate five parameters: `R1_A.v`, `R1_B.v`, a shared `B` value used for both `R1_A.B` and `R1_B.B`, plus `R2.meanlog` and `R2.sdlog`.
+We estimate five parameters: `R1_A.v`, `R1_B.v`, a shared threshold `B` used
+for both `R1_A.B` and `R1_B.B`, plus `R2.meanlog` and `R2.sdlog`.
 
 ```{r}
 neg_loglik <- function(theta) {
@@ -141,4 +151,6 @@ data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params
 
 ```
 
-That is the most basic pipeline: define a model, simulate data, evaluate the likelihood, and fit parameters with `optim()`.
+That is the basic workflow the package is designed for: describe a response-time
+model in psychological terms, simulate data, and then fit the same model back
+to behavioral observations.

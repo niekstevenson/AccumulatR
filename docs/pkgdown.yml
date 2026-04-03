@@ -1,0 +1,9 @@
+pandoc: '3.8'
+pkgdown: 2.1.2
+pkgdown_sha: ~
+articles:
+  getting_started: getting_started.html
+  multi_outcome: multi_outcome.html
+  simple_chained_onset: simple_chained_onset.html
+  simple_simulate_fit_model4: simple_simulate_fit_model4.html
+last_built: 2026-04-03T14:59Z

@@ -2,20 +2,20 @@
 % Please edit documentation in R/model_definition.R
 \name{add_shared_params}
 \alias{add_shared_params}
-\title{Add shared parameters for a set of accumulators}
+\title{Tie parameters across accumulators}
 \usage{
 add_shared_params(spec, members, ...)
 }
 \arguments{
-\item{spec}{race_spec object}
+\item{spec}{A `race_spec` object.}
 
-\item{members}{Character vector of accumulator IDs.}
+\item{members}{Accumulator labels that should share parameter values.}
 
-\item{...}{Named parameters to share (e.g., meanlog = "log(0.5)", or explicit value).}
+\item{...}{Named parameters to share.}
 }
 \value{
-Updated race_spec
+The updated `race_spec`.
 }
 \description{
-Add shared parameters for a set of accumulators
+Tie parameters across accumulators
 }

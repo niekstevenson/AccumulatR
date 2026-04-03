@@ -2,7 +2,7 @@
 % Please edit documentation in R/model_definition.R
 \name{add_component}
 \alias{add_component}
-\title{Add a group of members}
+\title{Define a mixture component}
 \usage{
 add_component(
   spec,
@@ -15,23 +15,25 @@ add_component(
 )
 }
 \arguments{
-\item{spec}{race_spec object}
+\item{spec}{A `race_spec` object.}
 
-\item{id}{Component id (e.g. "fast")}
+\item{id}{Component label.}
 
-\item{members}{Character vector of accumulator IDs belonging to this component.}
+\item{members}{Accumulator labels that belong to this component.}
 
-\item{weight}{Optional fixed weight (0-1).}
+\item{weight}{Optional fixed mixture weight.}
 
-\item{weight_param}{Optional parameter name for weight.}
+\item{weight_param}{Optional parameter name for a fitted mixture weight.}
 
-\item{n_outcomes}{Optional component-level override for observed outcomes.}
+\item{n_outcomes}{Optional component-specific override for the number of
+observed ordered responses.}
 
-\item{attrs}{Additional attributes.}
+\item{attrs}{Additional component attributes.}
 }
 \value{
-Updated race_spec
+The updated `race_spec`.
 }
 \description{
-Add a group of members
+Components are useful when trials can come from qualitatively different
+processing modes, such as "fast guess" versus "controlled response".
 }

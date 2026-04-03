@@ -2,24 +2,25 @@
 % Please edit documentation in R/model_definition.R
 \name{add_accumulator}
 \alias{add_accumulator}
-\title{Add an accumulator definition}
+\title{Add an accumulator to a model}
 \usage{
 add_accumulator(spec, id, dist, onset = 0)
 }
 \arguments{
-\item{spec}{race_spec object}
+\item{spec}{A `race_spec` object.}
 
-\item{id}{Accumulator id}
+\item{id}{Label for the accumulator.}
 
-\item{dist}{Distribution name}
+\item{dist}{Distribution family used for that accumulator.}
 
-\item{onset}{Onset shift; either numeric or `after(source, lag = ...)`.}
+\item{onset}{Start time for the accumulator. This can be a fixed numeric
+onset or a chained onset created with `after()`.}
 }
 \value{
-Updated race_spec
+The updated `race_spec`.
 }
 \description{
-Add an accumulator definition
+Add an accumulator to a model
 }
 \examples{
 spec <- race_spec()

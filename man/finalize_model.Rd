@@ -2,18 +2,19 @@
 % Please edit documentation in R/model_definition.R
 \name{finalize_model}
 \alias{finalize_model}
-\title{Finalize a model for simulation/likelihood}
+\title{Compile a model for simulation and fitting}
 \usage{
 finalize_model(model)
 }
 \arguments{
-\item{model}{Model specification}
+\item{model}{Model specification.}
 }
 \value{
-A model_structure list
+A `model_structure` object.
 }
 \description{
-Finalize a model for simulation/likelihood
+This converts a human-readable model specification into the finalized object
+used by `simulate()`, `build_likelihood_context()`, and related functions.
 }
 \examples{
 spec <- race_spec()

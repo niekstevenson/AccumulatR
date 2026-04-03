@@ -128,18 +128,20 @@
   )
 }
 
-#' Build a minimal processing tree for model outcomes
+#' Draw a processing tree for the responses in a model
 #'
-#' This tree intentionally avoids mathematical formulas. It focuses on:
-#' outcome labels, relationship arrows, and accumulator/pool definitions.
+#' This is a compact visual summary of the response rules in a model. It avoids
+#' equations and instead shows the observed responses, the accumulators or pools
+#' that feed them, and any blocking relationships.
 #'
-#' @param model A race model (`race_spec`, finalized model structure, or `model_tables`).
-#' @param outcome_label Optional single outcome label. If `NULL`, all outcomes are shown.
-#' @param component Optional mixture component (reserved for future use).
-#' @param return_dot If `TRUE`, return DOT text instead of a `DiagrammeR` graph.
+#' @param model A race model (`race_spec`, a finalized model, or `model_tables`).
+#' @param outcome_label Optional response label. If supplied, only that response
+#'   is shown.
+#' @param component Optional mixture component. Reserved for future use.
+#' @param return_dot If `TRUE`, return the Graphviz DOT string instead of a plot.
 #'
-#' @return If `DiagrammeR` is available and `return_dot = FALSE`, a `DiagrammeR` graph.
-#'   Otherwise, a list with `dot`, `nodes`, and `edges`.
+#' @return If `DiagrammeR` is available and `return_dot = FALSE`, a
+#'   `DiagrammeR` graph. Otherwise, a list with `dot`, `nodes`, and `edges`.
 #' @export
 processing_tree <- function(model, outcome_label = NULL, component = NULL, return_dot = FALSE) {
   if (is_model_tables(model)) {

@@ -2,18 +2,18 @@
 % Please edit documentation in R/model_definition.R
 \name{sampled_pars}
 \alias{sampled_pars}
-\title{List sampled parameter names for a model}
+\title{List the free parameters implied by a model}
 \usage{
 sampled_pars(model)
 }
 \arguments{
-\item{model}{race_spec or race_model_spec}
+\item{model}{A `race_spec` or related model object.}
 }
 \value{
-Character vector of parameter names
+A character vector of parameter names.
 }
 \description{
-List sampled parameter names for a model
+List the free parameters implied by a model
 }
 \examples{
 spec <- race_spec()

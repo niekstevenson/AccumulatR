@@ -2,20 +2,20 @@
 % Please edit documentation in R/model_definition.R
 \name{set_mixture_options}
 \alias{set_mixture_options}
-\title{Set mixture options (global)}
+\title{Control how mixture components are combined}
 \usage{
 set_mixture_options(spec, mode = "sample", reference = NULL)
 }
 \arguments{
-\item{spec}{race_spec object}
+\item{spec}{A `race_spec` object.}
 
-\item{mode}{Mixture mode (e.g. "sample")}
+\item{mode}{Mixture mode.}
 
-\item{reference}{Component ID to use as reference (base)}
+\item{reference}{Optional reference component.}
 }
 \value{
-Updated race_spec
+The updated `race_spec`.
 }
 \description{
-Set mixture options (global)
+Control how mixture components are combined
 }

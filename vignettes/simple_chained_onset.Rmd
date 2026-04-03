@@ -1,16 +1,24 @@
 ---
 title: "Simulate and Fit a Simple Chained-Onset Model"
-output: html_document
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Simulate and Fit a Simple Chained-Onset Model}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
 ---
 
-This short vignette mirrors the other fitting walkthroughs, but uses a chained onset: accumulator `B` starts only after accumulator `A` finishes (`after("A", lag = ...)`). With `race_spec(n_outcomes = 2)`, we observe both processes directly as ranked outcomes (`R/rt`, `R2/rt2`) and fit parameters with `optim()`.
+This vignette illustrates a staged architecture in which one process cannot
+start until another has finished. Here accumulator `C` starts only after
+accumulator `B` has completed. This kind of dependency is useful when a later
+decision stage is only available after an earlier process finishes.
 
 ```{r}
 library(AccumulatR)
 ```
 
 **Define the model**
-`A` is the observed source process. `B` is a second process that begins after `A` completes, plus a fixed lag.
+`A` is a directly observed process. `B` is latent, and `C` is another observed
+process whose onset depends on `B`.
 
 ```{r}
 model_spec <- race_spec() |>
@@ -33,7 +41,7 @@ true_params <- c(
 ```
 
 **Simulate data**
-Each trial records the first observed process (`A`) and the second observed process (`B`) with their times.
+Each trial contributes the observed response label and response time.
 
 ```{r}
 set.seed(123456)
@@ -54,7 +62,8 @@ table(data_df$R)
 ```
 
 **Evaluate the likelihood**
-Build a likelihood context and evaluate the chained ranked likelihood at the true parameters.
+Build a likelihood context and evaluate the chained-onset model at the true
+parameter values.
 
 ```{r}
 ctx <- build_likelihood_context(structure, data_df)
@@ -70,7 +79,8 @@ ll_true <- as.numeric(log_likelihood(ctx, params_df_true))
 ll_true
 ```
 
-Compare with an intentionally wrong parameter set.
+As a quick check, compare that value with one from a parameter set that delays
+the latent process `B`.
 
 ```{r}
 wrong_params <- true_params
@@ -88,8 +98,9 @@ ll_wrong
 ```
 
 **Estimate parameters with `optim()`**
-We estimate `A.meanlog`, `A.sdlog`, `B.meanlog`,`B.sdlog`, `C.meanlog` and `C.sdlog`. As in the other vignettes, we optimize log-`sdlog` and exponentiate inside the objective.
-These unobserved sums are basically impossible to identify under these constraints. There would need to be something else constraining this race
+We estimate `A.meanlog`, `A.sdlog`, `B.meanlog`, `B.sdlog`, `C.meanlog`, and
+`C.sdlog`. Again, we optimize on the log scale for the standard deviations so
+the search can proceed without positivity constraints.
 
 ```{r}
 neg_loglik <- function(theta) {

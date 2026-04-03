@@ -4,7 +4,7 @@
 \alias{log_likelihood}
 \alias{log_likelihood.likelihood_context}
 \alias{log_likelihood.default}
-\title{Native log-likelihood evaluation over multiple parameter sets}
+\title{Evaluate the log-likelihood of behavioral data}
 \usage{
 log_likelihood(
   likelihood_context,
@@ -27,23 +27,27 @@ log_likelihood(
 \method{log_likelihood}{default}(likelihood_context, ...)
 }
 \arguments{
-\item{likelihood_context}{Context built by build_likelihood_context}
+\item{likelihood_context}{Context created with `build_likelihood_context()`.}
 
-\item{parameters}{Parameter data frame, or list of parameter data frames}
+\item{parameters}{A parameter data frame, or a list of parameter data frames.}
 
-\item{ok}{Boolean vector. Can be used to selectively set trial rows to min_ll}
+\item{ok}{Logical vector marking which trials should contribute to the
+likelihood. Trials marked `FALSE` are assigned `min_ll`.}
 
-\item{expand}{If using data compression, can be used to expand likelihood results across duplicate trials}
+\item{expand}{Optional index vector used to expand compressed trial-level
+results back to the original trial count.}
 
-\item{min_ll}{The minimum log-likelihood assigned to a trial}
+\item{min_ll}{Minimum log-likelihood value used for excluded or impossible
+trials.}
 
-\item{...}{Unused; for S3 compatibility}
+\item{...}{Unused; for S3 compatibility.}
 }
 \value{
-Numeric vector of log-likelihood values
+A numeric vector of log-likelihood values.
 }
 \description{
-Native log-likelihood evaluation over multiple parameter sets
+Compute the log-likelihood of the behavioral data stored in a
+`likelihood_context` under one or more candidate parameter sets.
 }
 \examples{
 spec <- race_spec()

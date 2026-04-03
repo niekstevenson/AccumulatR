@@ -2,20 +2,20 @@
 % Please edit documentation in R/model_definition.R
 \name{set_metadata}
 \alias{set_metadata}
-\title{Set metadata on a specification}
+\title{Store model-level settings}
 \usage{
 set_metadata(spec, ...)
 }
 \arguments{
-\item{spec}{race_spec object}
+\item{spec}{A `race_spec` object.}
 
-\item{...}{Named metadata entries}
+\item{...}{Named metadata entries.}
 }
 \value{
-Updated race_spec
+The updated `race_spec`.
 }
 \description{
-Set metadata on a specification
+Store model-level settings
 }
 \examples{
 spec <- race_spec()

@@ -2,20 +2,21 @@
 % Please edit documentation in R/model_definition.R
 \name{expr_guard}
 \alias{expr_guard}
-\title{Build an expression guard node}
+\title{Build a blocking rule explicitly}
 \usage{
 expr_guard(blocker, reference)
 }
 \arguments{
-\item{blocker}{Blocker expression or id}
+\item{blocker}{Blocking expression or accumulator label.}
 
-\item{reference}{Reference expression or id}
+\item{reference}{Target expression or accumulator label.}
 }
 \value{
-Guard expression list
+A guarded expression object.
 }
 \description{
-Build an expression guard node
+Most users will prefer `inhibit()`, but `expr_guard()` is available when you
+want to construct the guarded expression directly.
 }
 \examples{
 expr_guard("B", "A")

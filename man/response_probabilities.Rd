@@ -4,7 +4,7 @@
 \alias{response_probabilities.default}
 \alias{response_probabilities}
 \alias{response_probabilities.model_structure}
-\title{Analytic outcome probabilities for a parameter set}
+\title{Compute predicted response probabilities}
 \usage{
 \method{response_probabilities}{default}(structure, ...)
 
@@ -13,19 +13,22 @@ response_probabilities(structure, params_df, include_na = TRUE, ...)
 \method{response_probabilities}{model_structure}(structure, params_df, include_na = TRUE, ...)
 }
 \arguments{
-\item{structure}{Model structure}
+\item{structure}{Finalized model structure.}
 
-\item{...}{Unused; for S3 compatibility}
+\item{...}{Unused; for S3 compatibility.}
 
-\item{params_df}{Parameter data frame (one or more trials)}
+\item{params_df}{Parameter data frame for one or more trials.}
 
-\item{include_na}{Whether to include NA outcome mass}
+\item{include_na}{If `TRUE`, include any leftover probability mass assigned
+to missing responses.}
 }
 \value{
-Named numeric vector of probabilities
+A named numeric vector of response probabilities.
 }
 \description{
-Analytic outcome probabilities for a parameter set
+This function returns the model-implied response probabilities for a given
+parameter set. It is useful when you want the predicted response distribution
+without evaluating a full trial-by-trial likelihood.
 }
 \examples{
 spec <- race_spec()

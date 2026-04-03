@@ -2,20 +2,21 @@
 % Please edit documentation in R/model_definition.R
 \name{after}
 \alias{after}
-\title{Define a chained onset relative to another source}
+\title{Start one accumulator after another process finishes}
 \usage{
 after(source, lag = 0)
 }
 \arguments{
-\item{source}{Accumulator or pool id that must finish first.}
+\item{source}{Accumulator or pool label that must finish first.}
 
-\item{lag}{Non-negative delay added after source completion.}
+\item{lag}{Optional non-negative delay added after `source` finishes.}
 }
 \value{
-A chained onset specification for `add_accumulator(onset = ...)`.
+A chained-onset specification for `add_accumulator(onset = ...)`.
 }
 \description{
-Define a chained onset relative to another source
+This is useful for staged or contingent architectures, where one process can
+only begin after an earlier accumulator or pool has finished.
 }
 \examples{
 after("A")

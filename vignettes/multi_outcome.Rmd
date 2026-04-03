@@ -1,16 +1,26 @@
 ---
 title: "Simulate and Fit a Multi-Outcome Race Model"
-output: html_document
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Simulate and Fit a Multi-Outcome Race Model}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
 ---
 
-This short vignette mirrors the simple fitting walkthrough, but uses ranked multi-outcome observations (`R/rt`, `R2/rt2`). The model is a two-accumulator race with `race_spec(n_outcomes = 2)`, and the fit uses `optim()` for direct parameter recovery.
+This vignette shows how to work with behavioral data in which you observe more
+than the first response. Here each trial records the first finishing response
+(`R`, `rt`) and the second finishing response (`R2`, `rt2`). This is useful
+when your task provides ranked response information rather than just the first
+choice and its latency.
 
 ```{r}
 library(AccumulatR)
 ```
 
 **Define the model**
-We use two lognormal accumulators with direct outcomes `A` and `B`. With `n_outcomes = 2`, each trial records the first finisher and the second finisher.
+We use a simple two-accumulator race with direct responses `A` and `B`. Setting
+`n_outcomes = 2` tells the model to retain the first and second finishing
+responses on each trial.
 
 ```{r}
 model_spec <- race_spec(n_outcomes = 2L) |>
@@ -30,7 +40,7 @@ true_params <- c(
 ```
 
 **Simulate data**
-We generate ranked observations and keep `R/rt` plus `R2/rt2`.
+We now generate behavioral data and keep both ordered responses for each trial.
 
 ```{r}
 set.seed(123456)
@@ -54,7 +64,8 @@ summary(data_df$rt2 - data_df$rt)
 ```
 
 **Evaluate the likelihood**
-Build a likelihood context and evaluate the ranked log-likelihood at the true parameters.
+Build a likelihood context once, then evaluate the ranked log-likelihood at the
+true parameter values.
 
 ```{r}
 ctx <- build_likelihood_context(structure, data_df)
@@ -70,7 +81,8 @@ ll_true <- as.numeric(log_likelihood(ctx, params_df_true))
 ll_true
 ```
 
-Compare with an intentionally wrong parameter set.
+For comparison, we can also evaluate a parameter set that is clearly too slow
+for response `B`.
 
 ```{r}
 wrong_params <- true_params
@@ -88,7 +100,9 @@ ll_wrong
 ```
 
 **Estimate parameters with `optim()`**
-We estimate `A.meanlog`, `A.sdlog`, `B.meanlog`, and `B.sdlog`. As in the simple vignette, we optimize log-`sdlog` and exponentiate inside the objective.
+We estimate `A.meanlog`, `A.sdlog`, `B.meanlog`, and `B.sdlog`. As in many
+psychological fitting routines, we optimize on an unconstrained scale for the
+standard deviations and transform them back inside the objective function.
 
 ```{r}
 neg_loglik <- function(theta) {
@@ -123,5 +137,5 @@ data.frame(
 )
 ```
 
-This is the same basic pipeline as the single-outcome example, but now fitting the ranked multi-outcome likelihood directly.
-
+The overall workflow is the same as in the single-response case, but the model
+now uses the additional ranked-response information directly.

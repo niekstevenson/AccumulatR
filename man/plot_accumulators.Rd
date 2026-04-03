@@ -2,7 +2,7 @@
 % Please edit documentation in R/plot_accumulator_evidence.R
 \name{plot_accumulators}
 \alias{plot_accumulators}
-\title{Plot accumulator trajectories with structural links}
+\title{Plot accumulators and their timing relations}
 \usage{
 plot_accumulators(
   model,
@@ -25,13 +25,13 @@ plot_accumulators(
 )
 }
 \arguments{
-\item{model}{A race model (`race_spec`, finalized model structure, or `model_tables`).}
+\item{model}{A race model (`race_spec`, a finalized model, or `model_tables`).}
 
-\item{xlim}{Optional x-axis limits. If `NULL`, computed from onsets and line length.}
+\item{xlim}{Optional x-axis limits. If `NULL`, they are chosen from the model.}
 
 \item{ylim}{Y-axis limits.}
 
-\item{line_length}{Trajectory length in plot units.}
+\item{line_length}{Length of each accumulator trajectory in plot units.}
 
 \item{angle_dodge}{Target angular spacing in degrees between neighbouring accumulators.
 Angles are centered at 45 degrees and constrained to the interval [10, 80].
@@ -41,7 +41,7 @@ uniformly within that onset group.}
 \item{accumulator_order}{Optional character vector of accumulator labels, ordered
 from top-to-bottom. This only affects accumulators sharing the same onset.}
 
-\item{curve_strength}{Curvature multiplier for relationship arcs.}
+\item{curve_strength}{Curvature applied to relationship arcs.}
 
 \item{line_col}{Color for accumulator trajectories.}
 
@@ -53,7 +53,7 @@ from top-to-bottom. This only affects accumulators sharing the same onset.}
 
 \item{blocker_lwd}{Line width for blocker arrows.}
 
-\item{show_labels}{If `TRUE`, draw accumulator labels near trajectory endpoints.}
+\item{show_labels}{If `TRUE`, add accumulator labels near the line endpoints.}
 
 \item{main}{Main title.}
 
@@ -64,12 +64,14 @@ from top-to-bottom. This only affects accumulators sharing the same onset.}
 \item{...}{Additional arguments passed to `graphics::plot`.}
 }
 \value{
-Invisibly returns a list with plotting coordinates and inferred links.
+Invisibly returns a list with plotting coordinates and inferred
+  structural links.
 }
 \description{
-Draws a model-wide accumulator schematic with time on the x-axis and evidence
-on the y-axis. Each accumulator is drawn as an onset-aware diagonal trajectory.
-Blocker links from guard relationships are overlaid as red dotted curves.
+Draw a schematic view of the model with time on the x-axis and evidence on
+the y-axis. Each accumulator is shown as a simple trajectory, and timing or
+blocking relations are overlaid so you can inspect the qualitative structure
+of the model before fitting.
 }
 \examples{
 spec <- race_spec() |>

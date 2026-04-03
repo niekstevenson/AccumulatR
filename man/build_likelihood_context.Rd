@@ -2,24 +2,28 @@
 % Please edit documentation in R/likelihood_param_interface.R
 \name{build_likelihood_context}
 \alias{build_likelihood_context}
-\title{Build a likelihood context. Needed for efficient C++ evaluation}
+\title{Prepare behavioral data for repeated likelihood evaluation}
 \usage{
 build_likelihood_context(structure, data_df, prep = NULL, native_bundle = NULL)
 }
 \arguments{
-\item{structure}{Generator structure}
+\item{structure}{Finalized model structure.}
 
-\item{data_df}{Data frame with observed outcome/rt}
+\item{data_df}{Behavioral data. In the simplest case this contains `trial`,
+`R`, and `rt`; for multi-outcome models it can also contain `R2`, `rt2`,
+and so on.}
 
-\item{prep}{Optional prep bundle}
+\item{prep}{Optional preprocessed model bundle.}
 
-\item{native_bundle}{Optional native bundle}
+\item{native_bundle}{Optional serialized native bundle.}
 }
 \value{
-likelihood_context object
+A `likelihood_context` object.
 }
 \description{
-Build a likelihood context. Needed for efficient C++ evaluation
+A likelihood context stores the processed behavioral data, model structure,
+and compiled backend needed for fast repeated calls to `log_likelihood()`.
+Build it once, then reuse it while searching over parameter values.
 }
 \examples{
 spec <- race_spec()

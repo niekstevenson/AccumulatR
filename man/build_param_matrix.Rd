@@ -2,7 +2,7 @@
 % Please edit documentation in R/model_definition.R
 \name{build_param_matrix}
 \alias{build_param_matrix}
-\title{Build a parameter data frame for likelihood/simulation}
+\title{Create trial-level parameter values}
 \usage{
 build_param_matrix(
   model,
@@ -13,21 +13,22 @@ build_param_matrix(
 )
 }
 \arguments{
-\item{model}{Model definition}
+\item{model}{Model definition.}
 
-\item{param_values}{Named numeric vector of parameter values}
+\item{param_values}{Named numeric vector of parameter values.}
 
-\item{n_trials}{Number of trial rows to generate}
+\item{n_trials}{Number of trials to generate.}
 
-\item{component}{Optional component label(s)}
+\item{component}{Optional component label or labels.}
 
-\item{layout}{Optional layout for slimmed down construction}
+\item{layout}{Optional storage layout.}
 }
 \value{
-Data frame of parameters per trial
+A data frame or matrix of parameter values by trial.
 }
 \description{
-Build a parameter data frame for likelihood/simulation
+This expands a named parameter vector into the trial-by-trial format expected
+by `simulate()` and `log_likelihood()`.
 }
 \examples{
 spec <- race_spec()

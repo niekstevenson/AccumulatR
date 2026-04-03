@@ -2,24 +2,24 @@
 % Please edit documentation in R/model_definition.R
 \name{add_outcome}
 \alias{add_outcome}
-\title{Add an outcome definition}
+\title{Define an observed response}
 \usage{
 add_outcome(spec, label, expr, options = list())
 }
 \arguments{
-\item{spec}{race_spec object}
+\item{spec}{A `race_spec` object.}
 
-\item{label}{Outcome label}
+\item{label}{Response label that should appear in the behavioral data.}
 
-\item{expr}{Outcome expression}
+\item{expr}{Rule describing when that response is observed.}
 
-\item{options}{Optional list of options}
+\item{options}{Optional response settings.}
 }
 \value{
-Updated race_spec
+The updated `race_spec`.
 }
 \description{
-Add an outcome definition
+Define an observed response
 }
 \examples{
 spec <- race_spec()

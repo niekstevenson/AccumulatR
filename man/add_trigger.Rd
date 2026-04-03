@@ -2,7 +2,7 @@
 % Please edit documentation in R/model_definition.R
 \name{add_trigger}
 \alias{add_trigger}
-\title{Add a shared trigger (gate)}
+\title{Add a shared trigger or gate}
 \usage{
 add_trigger(
   spec,
@@ -14,21 +14,23 @@ add_trigger(
 )
 }
 \arguments{
-\item{spec}{race_spec object}
+\item{spec}{A `race_spec` object.}
 
-\item{id}{Trigger id (optional; defaults to first member name if missing)}
+\item{id}{Trigger label. If `NULL`, the first member label is used.}
 
-\item{members}{Character vector of accumulator IDs sharing this trigger.}
+\item{members}{Accumulator labels controlled by the trigger.}
 
-\item{q}{Probability (0-1) for trigger failure.}
+\item{q}{Failure probability for the trigger.}
 
-\item{param}{Optional parameter name supplying q.}
+\item{param}{Optional parameter name supplying `q`.}
 
-\item{draw}{Either "shared" (one draw for all members) or "independent" (same q, independent draws).}
+\item{draw}{Whether trigger failures are shared across members or drawn
+independently.}
 }
 \value{
-Updated race_spec
+The updated `race_spec`.
 }
 \description{
-Add a shared trigger (gate)
+Triggers let several accumulators share the same stochastic gating event,
+which can be useful in stop-signal or contingent-processing models.
 }

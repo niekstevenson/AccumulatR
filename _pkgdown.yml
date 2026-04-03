@@ -1,0 +1,64 @@
+template:
+  bootstrap: 5
+
+articles:
+  - title: "Walkthroughs"
+    navbar: "Articles"
+    contents:
+      - getting_started
+      - simple_simulate_fit_model4
+      - multi_outcome
+      - simple_chained_onset
+
+reference:
+  - title: "Package Overview"
+    desc: "Start here for the main package concepts and workflow."
+    contents:
+      - AccumulatR-package
+
+  - title: "Model Specification"
+    desc: "Define accumulators, outcomes, components, triggers, and finalize a race model."
+    contents:
+      - race_spec
+      - add_accumulator
+      - add_pool
+      - add_outcome
+      - add_component
+      - add_shared_params
+      - add_trigger
+      - set_metadata
+      - set_mixture_options
+      - nest_accumulators
+      - finalize_model
+
+  - title: "Outcome Expressions and Timing"
+    desc: "Compose outcome rules and onset dependencies."
+    contents:
+      - build_outcome_expr
+      - all_of
+      - first_of
+      - none_of
+      - inhibit
+      - expr_guard
+      - after
+
+  - title: "Data Preparation"
+    desc: "Inspect model parameters and prepare trial-level parameter matrices."
+    contents:
+      - sampled_pars
+      - build_param_matrix
+
+  - title: "Likelihood and Simulation"
+    desc: "Build native likelihood contexts, simulate observations, and evaluate probabilities."
+    contents:
+      - build_likelihood_context
+      - ensure_native_ctx
+      - log_likelihood
+      - response_probabilities
+      - simulate
+
+  - title: "Visualization"
+    desc: "Plot and inspect model structure."
+    contents:
+      - processing_tree
+      - plot_accumulators

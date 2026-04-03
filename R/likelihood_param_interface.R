@@ -175,13 +175,19 @@
   ), class = "likelihood_context")
 }
 
-#' Build a likelihood context. Needed for efficient C++ evaluation
+#' Prepare behavioral data for repeated likelihood evaluation
 #'
-#' @param structure Generator structure
-#' @param data_df Data frame with observed outcome/rt
-#' @param prep Optional prep bundle
-#' @param native_bundle Optional native bundle
-#' @return likelihood_context object
+#' A likelihood context stores the processed behavioral data, model structure,
+#' and compiled backend needed for fast repeated calls to `log_likelihood()`.
+#' Build it once, then reuse it while searching over parameter values.
+#'
+#' @param structure Finalized model structure.
+#' @param data_df Behavioral data. In the simplest case this contains `trial`,
+#'   `R`, and `rt`; for multi-outcome models it can also contain `R2`, `rt2`,
+#'   and so on.
+#' @param prep Optional preprocessed model bundle.
+#' @param native_bundle Optional serialized native bundle.
+#' @return A `likelihood_context` object.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
@@ -1156,13 +1162,18 @@ response_probabilities.default <- function(structure, ...) {
   stop("response_probabilities() expects a model_structure", call. = FALSE)
 }
 
-#' Analytic outcome probabilities for a parameter set
+#' Compute predicted response probabilities
 #'
-#' @param structure Model structure
-#' @param params_df Parameter data frame (one or more trials)
-#' @param include_na Whether to include NA outcome mass
-#' @param ... Unused; for S3 compatibility
-#' @return Named numeric vector of probabilities
+#' This function returns the model-implied response probabilities for a given
+#' parameter set. It is useful when you want the predicted response distribution
+#' without evaluating a full trial-by-trial likelihood.
+#'
+#' @param structure Finalized model structure.
+#' @param params_df Parameter data frame for one or more trials.
+#' @param include_na If `TRUE`, include any leftover probability mass assigned
+#'   to missing responses.
+#' @param ... Unused; for S3 compatibility.
+#' @return A named numeric vector of response probabilities.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
@@ -1291,15 +1302,21 @@ response_probabilities.model_structure <- function(structure,
 }
 
 
-#' Native log-likelihood evaluation over multiple parameter sets
+#' Evaluate the log-likelihood of behavioral data
 #'
-#' @param likelihood_context Context built by build_likelihood_context
-#' @param parameters Parameter data frame, or list of parameter data frames
-#' @param ok Boolean vector. Can be used to selectively set trial rows to min_ll
-#' @param expand If using data compression, can be used to expand likelihood results across duplicate trials
-#' @param min_ll The minimum log-likelihood assigned to a trial
-#' @param ... Unused; for S3 compatibility
-#' @return Numeric vector of log-likelihood values
+#' Compute the log-likelihood of the behavioral data stored in a
+#' `likelihood_context` under one or more candidate parameter sets.
+#'
+#' @param likelihood_context Context created with `build_likelihood_context()`.
+#' @param parameters A parameter data frame, or a list of parameter data frames.
+#' @param ok Logical vector marking which trials should contribute to the
+#'   likelihood. Trials marked `FALSE` are assigned `min_ll`.
+#' @param expand Optional index vector used to expand compressed trial-level
+#'   results back to the original trial count.
+#' @param min_ll Minimum log-likelihood value used for excluded or impossible
+#'   trials.
+#' @param ... Unused; for S3 compatibility.
+#' @return A numeric vector of log-likelihood values.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
@@ -1390,15 +1407,17 @@ log_likelihood.default <- function(likelihood_context, ...) {
   stop("log_likelihood() expects a likelihood_context", call. = FALSE)
 }
 
-#' Ensure native context pointer is valid
+#' Refresh the compiled backend inside a context
 #'
-#' Checks whether a stored `native_ctx` external pointer is still valid; if not,
-#' it rebuilds the native context from the `model_spec`
-#' Returns the context list with an updated `native_ctx`.
+#' If the stored native pointer is no longer valid, this function rebuilds it
+#' from the model specification. Most users will not need to call this directly,
+#' but it can be useful when caching contexts across sessions or long workflows.
 #'
-#' @param context A list containing `native_ctx` and `prep` or `structure$prep`
-#' @param model_spec Model specification from `finalize_model()`
-#' @return The same list, with `native_ctx` refreshed if needed
+#' @param context A context-like object containing `native_ctx` plus either
+#'   `prep` or `structure$prep`.
+#' @param model_spec Model specification from `finalize_model()`. Usually
+#'   inferred from `context` when available.
+#' @return The same object, with `native_ctx` refreshed if needed.
 #' @export
 ensure_native_ctx <- function(context, model_spec = NULL) {
   ctx <- context

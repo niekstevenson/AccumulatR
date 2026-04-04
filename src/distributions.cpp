@@ -45,9 +45,9 @@ using uuber::LabelRef;
 using uuber::resolve_acc_params_entries;
 
 Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector &x,
-                                       double meanlog, double sdlog);
+                                       double m, double s);
 Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector &x,
-                                       double meanlog, double sdlog);
+                                       double m, double s);
 Rcpp::NumericVector dist_gamma_pdf(const Rcpp::NumericVector &x, double shape,
                                    double rate);
 Rcpp::NumericVector dist_gamma_cdf(const Rcpp::NumericVector &x, double shape,
@@ -237,27 +237,27 @@ inline double safe_density(double value) {
   return value;
 }
 
-inline double lognormal_pdf_fast(double x, double meanlog, double sdlog) {
-  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(meanlog) ||
-      !std::isfinite(sdlog) || sdlog <= 0.0) {
+inline double lognormal_pdf_fast(double x, double m, double s) {
+  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(m) ||
+      !std::isfinite(s) || s <= 0.0) {
     return 0.0;
   }
-  const double inv_sigma = 1.0 / sdlog;
+  const double inv_sigma = 1.0 / s;
   const double logx = std::log(x);
-  const double z = (logx - meanlog) * inv_sigma;
-  const double norm = 0.3989422804014327 * inv_sigma; // 1/sqrt(2*pi) * 1/sdlog
+  const double z = (logx - m) * inv_sigma;
+  const double norm = 0.3989422804014327 * inv_sigma; // 1/sqrt(2*pi) * 1/s
   double val = (norm / x) * std::exp(-0.5 * z * z);
   return std::isfinite(val) && val > 0.0 ? val : 0.0;
 }
 
-inline double lognormal_cdf_fast(double x, double meanlog, double sdlog) {
-  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(meanlog) ||
-      !std::isfinite(sdlog) || sdlog <= 0.0) {
+inline double lognormal_cdf_fast(double x, double m, double s) {
+  if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(m) ||
+      !std::isfinite(s) || s <= 0.0) {
     return 0.0;
   }
-  const double inv_sigma = 1.0 / sdlog;
+  const double inv_sigma = 1.0 / s;
   const double logx = std::log(x);
-  const double z = (logx - meanlog) * inv_sigma;
+  const double z = (logx - m) * inv_sigma;
   // 0.5 * erfc(-z / sqrt(2))
   const double arg = -z * 0.7071067811865475;
   double val = 0.5 * std::erfc(arg);
@@ -573,7 +573,7 @@ inline double eval_pdf_single(const AccDistParams &cfg, double x) {
   case uuber::ACC_DIST_EXGAUSS:
     return exgauss_pdf_fast(x, cfg.p1, cfg.p2, cfg.p3);
   case uuber::ACC_DIST_LBA:
-    return lba_pdf_fast(x, cfg.p1, cfg.p2, cfg.p3, cfg.p4);
+    return lba_pdf_fast(x, cfg.p1, cfg.p4, cfg.p2, cfg.p3);
   case uuber::ACC_DIST_RDM:
     return rdm_pdf_fast(x, cfg.p1, cfg.p2, cfg.p3, cfg.p4);
   default:
@@ -590,7 +590,7 @@ inline double eval_cdf_single(const AccDistParams &cfg, double x) {
   case uuber::ACC_DIST_EXGAUSS:
     return exgauss_cdf_fast(x, cfg.p1, cfg.p2, cfg.p3);
   case uuber::ACC_DIST_LBA:
-    return lba_cdf_fast(x, cfg.p1, cfg.p2, cfg.p3, cfg.p4);
+    return lba_cdf_fast(x, cfg.p1, cfg.p4, cfg.p2, cfg.p3);
   case uuber::ACC_DIST_RDM:
     return rdm_cdf_fast(x, cfg.p1, cfg.p2, cfg.p3, cfg.p4);
   default:
@@ -7951,9 +7951,9 @@ Rcpp::DataFrame native_outcome_labels_cpp(SEXP ctxSEXP) {
 
 // Forward declarations for native distribution helpers
 Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector &x,
-                                       double meanlog, double sdlog);
+                                       double m, double s);
 Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector &x,
-                                       double meanlog, double sdlog);
+                                       double m, double s);
 Rcpp::NumericVector dist_gamma_pdf(const Rcpp::NumericVector &x, double shape,
                                    double rate);
 Rcpp::NumericVector dist_gamma_cdf(const Rcpp::NumericVector &x, double shape,
@@ -8200,10 +8200,10 @@ inline std::vector<int> survivors_from_combo(const std::vector<int> &others,
 //' @noRd
 // [[Rcpp::export]]
 Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector &x,
-                                       double meanlog, double sdlog) {
+                                       double m, double s) {
   R_xlen_t n = x.size();
   Rcpp::NumericVector out(n);
-  if (is_invalid_positive(sdlog)) {
+  if (is_invalid_positive(s)) {
     std::fill(out.begin(), out.end(), NA_REAL);
     return out;
   }
@@ -8217,7 +8217,7 @@ Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector &x,
       out[i] = 0.0;
       continue;
     }
-    out[i] = R::dlnorm(xi, meanlog, sdlog, /*give_log =*/0);
+    out[i] = R::dlnorm(xi, m, s, /*give_log =*/0);
   }
   return out;
 }
@@ -8225,10 +8225,10 @@ Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector &x,
 //' @noRd
 // [[Rcpp::export]]
 Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector &x,
-                                       double meanlog, double sdlog) {
+                                       double m, double s) {
   R_xlen_t n = x.size();
   Rcpp::NumericVector out(n);
-  if (is_invalid_positive(sdlog)) {
+  if (is_invalid_positive(s)) {
     std::fill(out.begin(), out.end(), NA_REAL);
     return out;
   }
@@ -8242,7 +8242,7 @@ Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector &x,
       out[i] = xi < 0.0 ? 0.0 : 1.0;
       continue;
     }
-    out[i] = R::plnorm(xi, meanlog, sdlog, /*lower_tail =*/1, /*log_p =*/0);
+    out[i] = R::plnorm(xi, m, s, /*lower_tail =*/1, /*log_p =*/0);
     out[i] = clamp(out[i], 0.0, 1.0);
   }
   return out;
@@ -8250,12 +8250,12 @@ Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector &x,
 
 //' @noRd
 // [[Rcpp::export]]
-Rcpp::NumericVector dist_lognormal_rng(int n, double meanlog, double sdlog) {
-  if (n <= 0 || is_invalid_positive(sdlog)) {
+Rcpp::NumericVector dist_lognormal_rng(int n, double m, double s) {
+  if (n <= 0 || is_invalid_positive(s)) {
     return Rcpp::NumericVector();
   }
   Rcpp::RNGScope scope;
-  Rcpp::NumericVector draws = Rcpp::rnorm(n, meanlog, sdlog);
+  Rcpp::NumericVector draws = Rcpp::rnorm(n, m, s);
   for (R_xlen_t i = 0; i < draws.size(); ++i) {
     draws[i] = std::exp(draws[i]);
   }
@@ -8367,7 +8367,7 @@ Rcpp::NumericVector dist_exgauss_rng(int n, double mu, double sigma,
 //' @noRd
 // [[Rcpp::export]]
 Rcpp::NumericVector dist_lba_pdf(const Rcpp::NumericVector &x, double v,
-                                 double sv, double B, double A) {
+                                 double B, double A, double sv) {
   R_xlen_t n = x.size();
   Rcpp::NumericVector out(n);
   if (!std::isfinite(v) || is_invalid_positive(sv) || !std::isfinite(B) ||
@@ -8393,7 +8393,7 @@ Rcpp::NumericVector dist_lba_pdf(const Rcpp::NumericVector &x, double v,
 //' @noRd
 // [[Rcpp::export]]
 Rcpp::NumericVector dist_lba_cdf(const Rcpp::NumericVector &x, double v,
-                                 double sv, double B, double A) {
+                                 double B, double A, double sv) {
   R_xlen_t n = x.size();
   Rcpp::NumericVector out(n);
   if (!std::isfinite(v) || is_invalid_positive(sv) || !std::isfinite(B) ||
@@ -8418,8 +8418,8 @@ Rcpp::NumericVector dist_lba_cdf(const Rcpp::NumericVector &x, double v,
 
 //' @noRd
 // [[Rcpp::export]]
-Rcpp::NumericVector dist_lba_rng(int n, double v, double sv, double B,
-                                 double A) {
+Rcpp::NumericVector dist_lba_rng(int n, double v, double B, double A,
+                                 double sv) {
   if (n <= 0 || !std::isfinite(v) || is_invalid_positive(sv) || !std::isfinite(B) ||
       !std::isfinite(A)) {
     return Rcpp::NumericVector();

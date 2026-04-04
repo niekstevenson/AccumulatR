@@ -7,8 +7,8 @@ testthat::test_that("simulate adds R2/rt2 when n_outcomes = 2", {
 
   structure <- finalize_model(spec)
   params <- c(
-    a.meanlog = log(0.30), a.sdlog = 0.20, a.q = 0, a.t0 = 0,
-    b.meanlog = log(0.35), b.sdlog = 0.20, b.q = 0, b.t0 = 0
+    a.m = log(0.30), a.s = 0.20, a.q = 0, a.t0 = 0,
+    b.m = log(0.35), b.s = 0.20, b.q = 0, b.t0 = 0
   )
   params_df <- build_param_matrix(spec, params, n_trials = 200L)
   sim <- simulate(structure, params_df, seed = 123)
@@ -29,8 +29,8 @@ testthat::test_that("simulate pads missing follow-up outcomes with NA", {
 
   structure <- finalize_model(spec)
   params <- c(
-    a.meanlog = log(0.30), a.sdlog = 0.15, a.q = 0, a.t0 = 0,
-    b.meanlog = log(0.35), b.sdlog = 0.15, b.q = 1, b.t0 = 0
+    a.m = log(0.30), a.s = 0.15, a.q = 0, a.t0 = 0,
+    b.m = log(0.35), b.s = 0.15, b.q = 1, b.t0 = 0
   )
   params_df <- build_param_matrix(spec, params, n_trials = 50L)
   sim <- simulate(structure, params_df, seed = 456)
@@ -50,8 +50,8 @@ testthat::test_that("simulate remains backward compatible when n_outcomes = 1", 
 
   structure <- finalize_model(spec)
   params <- c(
-    a.meanlog = log(0.30), a.sdlog = 0.20, a.q = 0, a.t0 = 0,
-    b.meanlog = log(0.35), b.sdlog = 0.20, b.q = 0, b.t0 = 0
+    a.m = log(0.30), a.s = 0.20, a.q = 0, a.t0 = 0,
+    b.m = log(0.35), b.s = 0.20, b.q = 0, b.t0 = 0
   )
   params_df <- build_param_matrix(spec, params, n_trials = 25L)
   sim <- simulate(structure, params_df, seed = 789)
@@ -71,9 +71,9 @@ testthat::test_that("simulate extends naming beyond second response", {
 
   structure <- finalize_model(spec)
   params <- c(
-    a.meanlog = log(0.30), a.sdlog = 0.20, a.q = 0, a.t0 = 0,
-    b.meanlog = log(0.35), b.sdlog = 0.20, b.q = 0, b.t0 = 0,
-    c.meanlog = log(0.40), c.sdlog = 0.20, c.q = 0, c.t0 = 0
+    a.m = log(0.30), a.s = 0.20, a.q = 0, a.t0 = 0,
+    b.m = log(0.35), b.s = 0.20, b.q = 0, b.t0 = 0,
+    c.m = log(0.40), c.s = 0.20, c.q = 0, c.t0 = 0
   )
   params_df <- build_param_matrix(spec, params, n_trials = 100L)
   sim <- simulate(structure, params_df, seed = 321)
@@ -95,8 +95,8 @@ testthat::test_that("component n_outcomes override controls structural rank NAs"
 
   structure <- finalize_model(spec)
   params <- c(
-    a.meanlog = log(0.30), a.sdlog = 0.20, a.q = 0, a.t0 = 0,
-    b.meanlog = log(0.35), b.sdlog = 0.20, b.q = 0, b.t0 = 0
+    a.m = log(0.30), a.s = 0.20, a.q = 0, a.t0 = 0,
+    b.m = log(0.35), b.s = 0.20, b.q = 0, b.t0 = 0
   )
   params_df <- build_param_matrix(spec, params, n_trials = 4L)
   trial_df <- data.frame(

@@ -7,8 +7,8 @@ testthat::test_that("ranked likelihood matches simple independent two-outcome fo
 
   structure <- finalize_model(spec)
   params <- c(
-    a.meanlog = log(0.30), a.sdlog = 0.20, a.q = 0, a.t0 = 0,
-    b.meanlog = log(0.45), b.sdlog = 0.25, b.q = 0, b.t0 = 0
+    a.m = log(0.30), a.s = 0.20, a.q = 0, a.t0 = 0,
+    b.m = log(0.45), b.s = 0.25, b.q = 0, b.t0 = 0
   )
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   data_df <- data.frame(
@@ -21,8 +21,8 @@ testthat::test_that("ranked likelihood matches simple independent two-outcome fo
   ctx <- build_likelihood_context(structure, data_df)
   ll <- as.numeric(log_likelihood(ctx, params_df))
 
-  expected <- dlnorm(0.30, meanlog = log(0.30), sdlog = 0.20) *
-    dlnorm(0.55, meanlog = log(0.45), sdlog = 0.25)
+  expected <- dlnorm(0.30, log(0.30), 0.20) *
+    dlnorm(0.55, log(0.45), 0.25)
   testthat::expect_equal(ll, log(expected), tolerance = 1e-4)
 })
 
@@ -35,8 +35,8 @@ testthat::test_that("ranked likelihood treats missing later ranks as truncation"
 
   structure <- finalize_model(spec)
   params <- c(
-    a.meanlog = log(0.30), a.sdlog = 0.20, a.q = 0, a.t0 = 0,
-    b.meanlog = log(0.45), b.sdlog = 0.25, b.q = 0, b.t0 = 0
+    a.m = log(0.30), a.s = 0.20, a.q = 0, a.t0 = 0,
+    b.m = log(0.45), b.s = 0.25, b.q = 0, b.t0 = 0
   )
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
 
@@ -66,8 +66,8 @@ testthat::test_that("ranked likelihood rejects mismatched rank pairs with min_ll
 
   structure <- finalize_model(spec)
   params <- c(
-    a.meanlog = log(0.30), a.sdlog = 0.20, a.q = 0, a.t0 = 0,
-    b.meanlog = log(0.45), b.sdlog = 0.25, b.q = 0, b.t0 = 0
+    a.m = log(0.30), a.s = 0.20, a.q = 0, a.t0 = 0,
+    b.m = log(0.45), b.s = 0.25, b.q = 0, b.t0 = 0
   )
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   min_ll <- -1e6
@@ -115,8 +115,8 @@ testthat::test_that("ranked likelihood rejects non-increasing times with min_ll"
 
   structure <- finalize_model(spec)
   params <- c(
-    a.meanlog = log(0.30), a.sdlog = 0.20, a.q = 0, a.t0 = 0,
-    b.meanlog = log(0.45), b.sdlog = 0.25, b.q = 0, b.t0 = 0
+    a.m = log(0.30), a.s = 0.20, a.q = 0, a.t0 = 0,
+    b.m = log(0.45), b.s = 0.25, b.q = 0, b.t0 = 0
   )
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   min_ll <- -1e6
@@ -147,9 +147,9 @@ testthat::test_that("ranked likelihood handles pool + shared trigger models", {
 
   structure <- finalize_model(spec)
   params <- c(
-    a1.meanlog = log(0.30), a1.sdlog = 0.20, a1.q = 0.10, a1.t0 = 0,
-    a2.meanlog = log(0.32), a2.sdlog = 0.20, a2.q = 0.10, a2.t0 = 0,
-    b.meanlog = log(0.50), b.sdlog = 0.20, b.q = 0.00, b.t0 = 0
+    a1.m = log(0.30), a1.s = 0.20, a1.q = 0.10, a1.t0 = 0,
+    a2.m = log(0.32), a2.s = 0.20, a2.q = 0.10, a2.t0 = 0,
+    b.m = log(0.50), b.s = 0.20, b.q = 0.00, b.t0 = 0
   )
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   data_df <- data.frame(

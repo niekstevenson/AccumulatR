@@ -22,7 +22,7 @@ testthat::test_that("model-building functions report readable spec errors", {
     "expects a model specification created with race_spec"
   )
   testthat::expect_error(
-    add_shared_params(bad_spec, members = "a", meanlog = 0),
+    add_shared_params(bad_spec, members = "a", m = 0),
     "expects a model specification created with race_spec"
   )
   testthat::expect_error(

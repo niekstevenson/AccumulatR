@@ -183,41 +183,41 @@ BEGIN_RCPP
 END_RCPP
 }
 // dist_lognormal_pdf
-Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector& x, double meanlog, double sdlog);
-RcppExport SEXP _AccumulatR_dist_lognormal_pdf(SEXP xSEXP, SEXP meanlogSEXP, SEXP sdlogSEXP) {
+Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector& x, double m, double s);
+RcppExport SEXP _AccumulatR_dist_lognormal_pdf(SEXP xSEXP, SEXP mSEXP, SEXP sSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type x(xSEXP);
-    Rcpp::traits::input_parameter< double >::type meanlog(meanlogSEXP);
-    Rcpp::traits::input_parameter< double >::type sdlog(sdlogSEXP);
-    rcpp_result_gen = Rcpp::wrap(dist_lognormal_pdf(x, meanlog, sdlog));
+    Rcpp::traits::input_parameter< double >::type m(mSEXP);
+    Rcpp::traits::input_parameter< double >::type s(sSEXP);
+    rcpp_result_gen = Rcpp::wrap(dist_lognormal_pdf(x, m, s));
     return rcpp_result_gen;
 END_RCPP
 }
 // dist_lognormal_cdf
-Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector& x, double meanlog, double sdlog);
-RcppExport SEXP _AccumulatR_dist_lognormal_cdf(SEXP xSEXP, SEXP meanlogSEXP, SEXP sdlogSEXP) {
+Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector& x, double m, double s);
+RcppExport SEXP _AccumulatR_dist_lognormal_cdf(SEXP xSEXP, SEXP mSEXP, SEXP sSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type x(xSEXP);
-    Rcpp::traits::input_parameter< double >::type meanlog(meanlogSEXP);
-    Rcpp::traits::input_parameter< double >::type sdlog(sdlogSEXP);
-    rcpp_result_gen = Rcpp::wrap(dist_lognormal_cdf(x, meanlog, sdlog));
+    Rcpp::traits::input_parameter< double >::type m(mSEXP);
+    Rcpp::traits::input_parameter< double >::type s(sSEXP);
+    rcpp_result_gen = Rcpp::wrap(dist_lognormal_cdf(x, m, s));
     return rcpp_result_gen;
 END_RCPP
 }
 // dist_lognormal_rng
-Rcpp::NumericVector dist_lognormal_rng(int n, double meanlog, double sdlog);
-RcppExport SEXP _AccumulatR_dist_lognormal_rng(SEXP nSEXP, SEXP meanlogSEXP, SEXP sdlogSEXP) {
+Rcpp::NumericVector dist_lognormal_rng(int n, double m, double s);
+RcppExport SEXP _AccumulatR_dist_lognormal_rng(SEXP nSEXP, SEXP mSEXP, SEXP sSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< int >::type n(nSEXP);
-    Rcpp::traits::input_parameter< double >::type meanlog(meanlogSEXP);
-    Rcpp::traits::input_parameter< double >::type sdlog(sdlogSEXP);
-    rcpp_result_gen = Rcpp::wrap(dist_lognormal_rng(n, meanlog, sdlog));
+    Rcpp::traits::input_parameter< double >::type m(mSEXP);
+    Rcpp::traits::input_parameter< double >::type s(sSEXP);
+    rcpp_result_gen = Rcpp::wrap(dist_lognormal_rng(n, m, s));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -303,47 +303,47 @@ BEGIN_RCPP
 END_RCPP
 }
 // dist_lba_pdf
-Rcpp::NumericVector dist_lba_pdf(const Rcpp::NumericVector& x, double v, double sv, double B, double A);
-RcppExport SEXP _AccumulatR_dist_lba_pdf(SEXP xSEXP, SEXP vSEXP, SEXP svSEXP, SEXP BSEXP, SEXP ASEXP) {
+Rcpp::NumericVector dist_lba_pdf(const Rcpp::NumericVector& x, double v, double B, double A, double sv);
+RcppExport SEXP _AccumulatR_dist_lba_pdf(SEXP xSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP svSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type x(xSEXP);
     Rcpp::traits::input_parameter< double >::type v(vSEXP);
-    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
     Rcpp::traits::input_parameter< double >::type B(BSEXP);
     Rcpp::traits::input_parameter< double >::type A(ASEXP);
-    rcpp_result_gen = Rcpp::wrap(dist_lba_pdf(x, v, sv, B, A));
+    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
+    rcpp_result_gen = Rcpp::wrap(dist_lba_pdf(x, v, B, A, sv));
     return rcpp_result_gen;
 END_RCPP
 }
 // dist_lba_cdf
-Rcpp::NumericVector dist_lba_cdf(const Rcpp::NumericVector& x, double v, double sv, double B, double A);
-RcppExport SEXP _AccumulatR_dist_lba_cdf(SEXP xSEXP, SEXP vSEXP, SEXP svSEXP, SEXP BSEXP, SEXP ASEXP) {
+Rcpp::NumericVector dist_lba_cdf(const Rcpp::NumericVector& x, double v, double B, double A, double sv);
+RcppExport SEXP _AccumulatR_dist_lba_cdf(SEXP xSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP svSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< const Rcpp::NumericVector& >::type x(xSEXP);
     Rcpp::traits::input_parameter< double >::type v(vSEXP);
-    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
     Rcpp::traits::input_parameter< double >::type B(BSEXP);
     Rcpp::traits::input_parameter< double >::type A(ASEXP);
-    rcpp_result_gen = Rcpp::wrap(dist_lba_cdf(x, v, sv, B, A));
+    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
+    rcpp_result_gen = Rcpp::wrap(dist_lba_cdf(x, v, B, A, sv));
     return rcpp_result_gen;
 END_RCPP
 }
 // dist_lba_rng
-Rcpp::NumericVector dist_lba_rng(int n, double v, double sv, double B, double A);
-RcppExport SEXP _AccumulatR_dist_lba_rng(SEXP nSEXP, SEXP vSEXP, SEXP svSEXP, SEXP BSEXP, SEXP ASEXP) {
+Rcpp::NumericVector dist_lba_rng(int n, double v, double B, double A, double sv);
+RcppExport SEXP _AccumulatR_dist_lba_rng(SEXP nSEXP, SEXP vSEXP, SEXP BSEXP, SEXP ASEXP, SEXP svSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< int >::type n(nSEXP);
     Rcpp::traits::input_parameter< double >::type v(vSEXP);
-    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
     Rcpp::traits::input_parameter< double >::type B(BSEXP);
     Rcpp::traits::input_parameter< double >::type A(ASEXP);
-    rcpp_result_gen = Rcpp::wrap(dist_lba_rng(n, v, sv, B, A));
+    Rcpp::traits::input_parameter< double >::type sv(svSEXP);
+    rcpp_result_gen = Rcpp::wrap(dist_lba_rng(n, v, B, A, sv));
     return rcpp_result_gen;
 END_RCPP
 }

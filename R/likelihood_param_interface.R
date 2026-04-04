@@ -195,7 +195,7 @@
 #' structure <- finalize_model(spec)
 #' params_df <- build_param_matrix(
 #'   spec,
-#'   c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0),
+#'   c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0),
 #'   n_trials = 2
 #' )
 #' data_df <- simulate(structure, params_df, seed = 1)
@@ -878,7 +878,6 @@ build_likelihood_context <- function(structure,
     }
   }
 
-  # Backward-compatible alias fill for rows lacking dist metadata.
   fill_slot <- function(slot, candidates) {
     if (slot < 1L || slot > ncol(p_mat)) return(invisible(NULL))
     for (nm in candidates) {
@@ -891,10 +890,10 @@ build_likelihood_context <- function(structure,
     }
     invisible(NULL)
   }
-  fill_slot(1L, c("meanlog", "shape", "mu", "v"))
-  fill_slot(2L, c("sdlog", "rate", "sigma", "sv", "B"))
+  fill_slot(1L, c("m", "shape", "mu", "v"))
+  fill_slot(2L, c("s", "rate", "sigma", "B"))
   fill_slot(3L, c("tau", "A"))
-  fill_slot(4L, c("s"))
+  fill_slot(4L, c("sv", "s"))
 
   has_slot <- vapply(seq_len(8L), function(slot) any(!is.na(p_mat[, slot])), logical(1))
   max_params <- if (any(has_slot)) max(which(has_slot)) else 0L
@@ -1181,7 +1180,7 @@ response_probabilities.default <- function(structure, ...) {
 #' structure <- finalize_model(spec)
 #' params_df <- build_param_matrix(
 #'   spec,
-#'   c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0),
+#'   c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0),
 #'   n_trials = 1
 #' )
 #' response_probabilities(structure, params_df)
@@ -1324,7 +1323,7 @@ response_probabilities.model_structure <- function(structure,
 #' structure <- finalize_model(spec)
 #' params_df <- build_param_matrix(
 #'   spec,
-#'   c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0),
+#'   c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0),
 #'   n_trials = 2
 #' )
 #' data_df <- simulate(structure, params_df, seed = 1)

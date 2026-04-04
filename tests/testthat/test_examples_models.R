@@ -20,10 +20,10 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       finalize_model()
   }
   params_example_1_simple <- c(
-    go1.meanlog = log(0.30),
-    go1.sdlog = 0.18,
-    go2.meanlog = log(0.32),
-    go2.sdlog = 0.18
+    go1.m = log(0.30),
+    go1.s = 0.18,
+    go2.m = log(0.32),
+    go2.s = 0.18
   )
 
   example_2_stop_mixture <- function() {
@@ -39,13 +39,13 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       finalize_model()
   }
   params_example_2_stop_mixture <- c(
-    go1.meanlog = log(0.35),
-    go1.sdlog = 0.2,
+    go1.m = log(0.35),
+    go1.s = 0.2,
     stop.mu = 0.1,
     stop.sigma = 0.04,
     stop.tau = 0.1,
-    go2.meanlog = log(0.60),
-    go2.sdlog = 0.18
+    go2.m = log(0.60),
+    go2.s = 0.18
   )
 
   example_3_stop_na <- function() {
@@ -59,12 +59,12 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       finalize_model()
   }
   params_example_3_stop_na <- c(
-    go_left.meanlog = log(0.30),
-    go_left.sdlog = 0.20,
-    go_right.meanlog = log(0.32),
-    go_right.sdlog = 0.20,
-    stop.meanlog = log(0.15),
-    stop.sdlog = 0.18
+    go_left.m = log(0.30),
+    go_left.s = 0.20,
+    go_right.m = log(0.32),
+    go_right.s = 0.20,
+    stop.m = log(0.15),
+    stop.s = 0.18
   )
 
   example_5_timeout_guess <- function() {
@@ -80,12 +80,12 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       finalize_model()
   }
   params_example_5_timeout_guess <- c(
-    go_left.meanlog = log(0.30),
-    go_left.sdlog = 0.18,
-    go_right.meanlog = log(0.325),
-    go_right.sdlog = 0.18,
-    timeout.meanlog = log(0.25),
-    timeout.sdlog = 0.10
+    go_left.m = log(0.30),
+    go_left.s = 0.18,
+    go_right.m = log(0.325),
+    go_right.s = 0.18,
+    timeout.m = log(0.25),
+    timeout.s = 0.10
   )
 
   example_6_dual_path <- function() {
@@ -98,12 +98,12 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       finalize_model()
   }
   params_example_6_dual_path <- c(
-    acc_taskA.meanlog = log(0.28),
-    acc_taskA.sdlog = 0.18,
-    acc_taskB.meanlog = log(0.32),
-    acc_taskB.sdlog = 0.18,
-    acc_gateC.meanlog = log(0.30),
-    acc_gateC.sdlog = 0.18
+    acc_taskA.m = log(0.28),
+    acc_taskA.s = 0.18,
+    acc_taskB.m = log(0.32),
+    acc_taskB.s = 0.18,
+    acc_gateC.m = log(0.30),
+    acc_gateC.s = 0.18
   )
 
   example_7_mixture <- function() {
@@ -120,12 +120,12 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       finalize_model()
   }
   params_example_7_mixture <- c(
-    target_fast.meanlog = log(0.25),
-    target_fast.sdlog = 0.15,
-    target_slow.meanlog = log(0.45),
-    target_slow.sdlog = 0.20,
-    competitor.meanlog = log(0.35),
-    competitor.sdlog = 0.18,
+    target_fast.m = log(0.25),
+    target_fast.s = 0.15,
+    target_slow.m = log(0.45),
+    target_slow.s = 0.20,
+    competitor.m = log(0.35),
+    competitor.s = 0.18,
     p_fast = 0.2
   )
 
@@ -139,12 +139,12 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       finalize_model()
   }
   params_example_10_exclusion <- c(
-    R1_acc.meanlog = log(0.35),
-    R1_acc.sdlog = 0.18,
-    R2_acc.meanlog = log(0.45),
-    R2_acc.sdlog = 0.18,
-    X_acc.meanlog = log(0.35),
-    X_acc.sdlog = 0.18
+    R1_acc.m = log(0.35),
+    R1_acc.s = 0.18,
+    R2_acc.m = log(0.45),
+    R2_acc.s = 0.18,
+    X_acc.m = log(0.35),
+    X_acc.s = 0.18
   )
 
   example_16_guard_tie_simple <- function() {
@@ -158,14 +158,14 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       finalize_model()
   }
   params_example_16_guard_tie_simple <- c(
-    go_fast.meanlog = log(0.28),
-    go_fast.sdlog = 0.18,
-    go_slow.meanlog = log(0.34),
-    go_slow.sdlog = 0.18,
-    gate_shared.meanlog = log(0.30),
-    gate_shared.sdlog = 0.16,
-    stop_control.meanlog = log(0.27),
-    stop_control.sdlog = 0.15
+    go_fast.m = log(0.28),
+    go_fast.s = 0.18,
+    go_slow.m = log(0.34),
+    go_slow.s = 0.18,
+    gate_shared.m = log(0.30),
+    gate_shared.s = 0.16,
+    stop_control.m = log(0.27),
+    stop_control.s = 0.15
   )
 
   example_21_simple_q <- function() {
@@ -181,10 +181,10 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       finalize_model()
   }
   params_example_21_simple_q <- c(
-    go1.meanlog = log(0.30),
-    go1.sdlog = 0.18,
-    go2.meanlog = log(0.32),
-    go2.sdlog = 0.18,
+    go1.m = log(0.30),
+    go1.s = 0.18,
+    go2.m = log(0.32),
+    go2.s = 0.18,
     go_trigger_q = 0.10
   )
 
@@ -201,10 +201,10 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       finalize_model()
   }
   params_example_22_shared_q <- c(
-    go_left.meanlog = log(0.30),
-    go_left.sdlog = 0.18,
-    go_right.meanlog = log(0.32),
-    go_right.sdlog = 0.18,
+    go_left.m = log(0.30),
+    go_left.s = 0.18,
+    go_right.m = log(0.32),
+    go_right.s = 0.18,
     q_shared = 0.10
   )
 

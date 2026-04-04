@@ -20,10 +20,10 @@ testthat::test_that("multi models agree across simulate/probability/likelihood",
       finalize_model()
   }
   params_vignette_multi_outcome <- c(
-    A.meanlog = log(0.30),
-    A.sdlog = 0.18,
-    B.meanlog = log(0.38),
-    B.sdlog = 0.22
+    A.m = log(0.30),
+    A.s = 0.18,
+    B.m = log(0.38),
+    B.s = 0.22
   )
 
   vignette_chained_onset <- function() {
@@ -36,12 +36,12 @@ testthat::test_that("multi models agree across simulate/probability/likelihood",
       finalize_model()
   }
   params_vignette_chained_onset <- c(
-    A.meanlog = log(0.28),
-    A.sdlog = 0.14,
-    B.meanlog = log(0.1),
-    B.sdlog = 0.1,
-    C.meanlog = log(0.15),
-    C.sdlog = 0.1
+    A.m = log(0.28),
+    A.s = 0.14,
+    B.m = log(0.1),
+    B.s = 0.1,
+    C.m = log(0.15),
+    C.s = 0.1
   )
 
   # Bundle target models -------------------------------------------------------

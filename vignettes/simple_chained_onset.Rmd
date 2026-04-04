@@ -31,12 +31,12 @@ model_spec <- race_spec() |>
 structure <- finalize_model(model_spec)
 
 true_params <- c(
-  A.meanlog = log(0.28),
-  A.sdlog = 0.14,
-  B.meanlog = log(0.1),
-  B.sdlog = 0.1, 
-  C.meanlog = log(0.15),
-  C.sdlog = 0.1 
+  A.m = log(0.28),
+  A.s = 0.14,
+  B.m = log(0.1),
+  B.s = 0.1, 
+  C.m = log(0.15),
+  C.s = 0.1 
 )
 ```
 
@@ -84,7 +84,7 @@ the latent process `B`.
 
 ```{r}
 wrong_params <- true_params
-wrong_params["B.meanlog"] <- log(0.14)
+wrong_params["B.m"] <- log(0.14)
 
 params_df_wrong <- build_param_matrix(
   model_spec,
@@ -98,14 +98,14 @@ ll_wrong
 ```
 
 **Estimate parameters with `optim()`**
-We estimate `A.meanlog`, `A.sdlog`, `B.meanlog`, `B.sdlog`, `C.meanlog`, and
-`C.sdlog`. Again, we optimize on the log scale for the standard deviations so
-the search can proceed without positivity constraints.
+We estimate `A.m`, `A.s`, `B.m`, `B.s`, `C.m`, and
+`C.s`. Again, we optimize on the log scale for the spread parameters so the
+search can proceed without positivity constraints.
 
 ```{r}
 neg_loglik <- function(theta) {
-  # optimize on unconstrained scale for sdlog
-  theta[c("A.sdlog", "B.sdlog", "C.sdlog")] <- exp(theta[c("A.sdlog", "B.sdlog", "C.sdlog")])
+  # optimize on an unconstrained scale for s
+  theta[c("A.s", "B.s", "C.s")] <- exp(theta[c("A.s", "B.s", "C.s")])
   params_df <- build_param_matrix(
     model_spec,
     theta,
@@ -117,18 +117,18 @@ neg_loglik <- function(theta) {
 }
 
 start <- c(
-  A.meanlog = log(0.22),
-  A.sdlog = log(0.10),
-  B.meanlog = log(0.28),
-  B.sdlog = log(0.10),
-  C.meanlog = log(0.28),
-  C.sdlog = log(0.10)
+  A.m = log(0.22),
+  A.s = log(0.10),
+  B.m = log(0.28),
+  B.s = log(0.10),
+  C.m = log(0.28),
+  C.s = log(0.10)
 )
 
 fit <- optim(start, neg_loglik, method = "Nelder-Mead")
 
 fit_params <- fit$par
-fit_params[c("A.sdlog", "B.sdlog", "C.sdlog")] <- exp(fit_params[c("A.sdlog", "B.sdlog", "C.sdlog")])
+fit_params[c("A.s", "B.s", "C.s")] <- exp(fit_params[c("A.s", "B.s", "C.s")])
 
 data.frame(
   true = true_params,

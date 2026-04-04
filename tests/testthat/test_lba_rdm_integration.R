@@ -7,10 +7,10 @@ testthat::test_that("sampled_pars exposes canonical LBA/RDM parameter names", {
 
   pars <- sampled_pars(spec)
   expected <- c(
-    "a.v", "a.sv", "a.B", "a.A", "a.q", "a.t0",
+    "a.v", "a.B", "a.A", "a.sv", "a.q", "a.t0",
     "b.v", "b.B", "b.A", "b.s", "b.q", "b.t0"
   )
-  testthat::expect_setequal(pars, expected)
+  testthat::expect_equal(pars, expected)
 })
 
 testthat::test_that("build_param_matrix maps LBA/RDM fourth parameter into p4", {
@@ -21,13 +21,15 @@ testthat::test_that("build_param_matrix maps LBA/RDM fourth parameter into p4", 
     add_outcome("B", "b")
 
   vals <- c(
-    a.v = 2.0, a.sv = 0.6, a.B = 1.2, a.A = 0.4, a.q = 0.0, a.t0 = 0.05,
+    a.v = 2.0, a.B = 1.2, a.A = 0.4, a.sv = 0.6, a.q = 0.0, a.t0 = 0.05,
     b.v = 1.5, b.B = 1.0, b.A = 0.3, b.s = 1.1, b.q = 0.0, b.t0 = 0.02
   )
   pm <- build_param_matrix(spec, vals, n_trials = 1L)
 
   testthat::expect_true(all(c("p1", "p2", "p3", "p4") %in% colnames(pm)))
-  testthat::expect_equal(as.numeric(pm[1, "p4"]), vals[["a.A"]])
+  testthat::expect_equal(as.numeric(pm[1, "p2"]), vals[["a.B"]])
+  testthat::expect_equal(as.numeric(pm[1, "p3"]), vals[["a.A"]])
+  testthat::expect_equal(as.numeric(pm[1, "p4"]), vals[["a.sv"]])
   testthat::expect_equal(as.numeric(pm[2, "p4"]), vals[["b.s"]])
 })
 
@@ -37,7 +39,7 @@ testthat::test_that("LBA model supports simulate + likelihood end-to-end", {
     add_outcome("A", "a")
   structure <- finalize_model(spec)
 
-  vals <- c(a.v = 2.0, a.sv = 0.6, a.B = 1.2, a.A = 0.4, a.q = 0.0, a.t0 = 0.05)
+  vals <- c(a.v = 2.0, a.B = 1.2, a.A = 0.4, a.sv = 0.6, a.q = 0.0, a.t0 = 0.05)
   params_df <- build_param_matrix(spec, vals, n_trials = 12L)
   data_df <- simulate(structure, params_df, seed = 1)
   ctx <- build_likelihood_context(structure, data_df)

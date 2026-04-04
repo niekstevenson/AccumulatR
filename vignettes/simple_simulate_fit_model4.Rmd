@@ -40,8 +40,8 @@ true_params <- c(
   R1_B.B = 1,
   R1_B.A = .3,
   R1_B.s = 1,
-  R2.meanlog = log(0.4),
-  R2.sdlog = 0.18
+  R2.m = log(0.4),
+  R2.s = 0.18
 )
 ```
 
@@ -88,7 +88,7 @@ We can compare that with a clearly misspecified parameter set.
 
 ```{r}
 wrong_params <- true_params
-wrong_params["R2.meanlog"] <- log(0.45)
+wrong_params["R2.m"] <- log(0.45)
 
 params_df_wrong <- build_param_matrix(
   model_spec,
@@ -103,7 +103,7 @@ ll_wrong
 
 **Estimate parameters with `optim()`**
 We estimate five parameters: `R1_A.v`, `R1_B.v`, a shared threshold `B` used
-for both `R1_A.B` and `R1_B.B`, plus `R2.meanlog` and `R2.sdlog`.
+for both `R1_A.B` and `R1_B.B`, plus `R2.m` and `R2.s`.
 
 ```{r}
 neg_loglik <- function(theta) {
@@ -112,8 +112,8 @@ neg_loglik <- function(theta) {
   est["R1_B.v"] <- theta[["R1_B.v"]]
   est["R1_A.B"] <- exp(theta[["log_B_shared"]])
   est["R1_B.B"] <- exp(theta[["log_B_shared"]])
-  est["R2.meanlog"] <- theta[["R2.meanlog"]]
-  est["R2.sdlog"] <- exp(theta[["log_R2.sdlog"]])
+  est["R2.m"] <- theta[["R2.m"]]
+  est["R2.s"] <- exp(theta[["log_R2.s"]])
   params_df <- build_param_matrix(
     model_spec,
     est,
@@ -128,8 +128,8 @@ start <- c(
   R1_A.v = 1.5,
   R1_B.v = 1.5,
   log_B_shared = log(1.0),
-  R2.meanlog = log(0.32),
-  log_R2.sdlog = log(0.15)
+  R2.m = log(0.32),
+  log_R2.s = log(0.15)
 )
 
 fit <- optim(start, neg_loglik, method = "Nelder-Mead", control = list(maxit = 4000, reltol = 1e-9))
@@ -137,15 +137,15 @@ fit_params <- c(
   R1_A.v = fit$par[["R1_A.v"]],
   R1_B.v = fit$par[["R1_B.v"]],
   B_shared = exp(fit$par[["log_B_shared"]]),
-  R2.meanlog = fit$par[["R2.meanlog"]],
-  R2.sdlog = exp(fit$par[["log_R2.sdlog"]])
+  R2.m = fit$par[["R2.m"]],
+  R2.s = exp(fit$par[["log_R2.s"]])
 )
 target <- c(
   R1_A.v = true_params[["R1_A.v"]],
   R1_B.v = true_params[["R1_B.v"]],
   B_shared = true_params[["R1_A.B"]],
-  R2.meanlog = true_params[["R2.meanlog"]],
-  R2.sdlog = true_params[["R2.sdlog"]]
+  R2.m = true_params[["R2.m"]],
+  R2.s = true_params[["R2.s"]]
 )
 data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params))
 

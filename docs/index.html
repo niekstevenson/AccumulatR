@@ -18,7 +18,7 @@
 <script src="deps/headroom-0.11.0/headroom.min.js"></script><script src="deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="deps/search-1.0.0/fuse.min.js"></script><script src="deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="pkgdown.js"></script><meta property="og:title" content="Simulation and Likelihood Tools for Evidence-Accumulation Models">
 <meta name="description" content="Tools for simulating and fitting evidence-accumulation and race models to behavioral data. The package is designed for workflows common in cognitive psychology: define a model in terms of accumulators, pooled channels, response rules, and timing dependencies; simulate response-time data; and evaluate the likelihood of observed responses under alternative parameter values. The user-facing interface stays in R, while the repeated likelihood calculations are handled in C++ for speed.">
 <meta property="og:description" content="Tools for simulating and fitting evidence-accumulation and race models to behavioral data. The package is designed for workflows common in cognitive psychology: define a model in terms of accumulators, pooled channels, response rules, and timing dependencies; simulate response-time data; and evaluate the likelihood of observed responses under alternative parameter values. The user-facing interface stays in R, while the repeated likelihood calculations are handled in C++ for speed.">
-<meta property="og:image" content="/logo.png">
+<meta property="og:image" content="https://niekstevenson.github.io/AccumulatR/logo.png">
 </head>
 <body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
@@ -55,6 +55,7 @@
 <li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="search.json">
 </form></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/niekstevenson/AccumulatR/" aria-label="GitHub"><span class="fa fab fa-github fa-lg"></span></a></li>
       </ul>
 </div>
 
@@ -96,7 +97,7 @@
 </h2>
 <p>The example below defines a two-choice race model, simulates response-time data, and then evaluates the likelihood of those same data under the generating parameters.</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va">AccumulatR</span><span class="op">)</span></span>
+<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://github.com/niekstevenson/AccumulatR" class="external-link">AccumulatR</a></span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">spec</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/race_spec.html">race_spec</a></span><span class="op">(</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"left"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
@@ -107,8 +108,8 @@
 <span><span class="va">model</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="va">spec</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">pars</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
-<span>  left.meanlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.28</span><span class="op">)</span>, left.sdlog <span class="op">=</span> <span class="fl">0.16</span>, left.q <span class="op">=</span> <span class="fl">0</span>, left.t0 <span class="op">=</span> <span class="fl">0</span>,</span>
-<span>  right.meanlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.35</span><span class="op">)</span>, right.sdlog <span class="op">=</span> <span class="fl">0.18</span>, right.q <span class="op">=</span> <span class="fl">0</span>, right.t0 <span class="op">=</span> <span class="fl">0</span></span>
+<span>  left.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.28</span><span class="op">)</span>, left.s <span class="op">=</span> <span class="fl">0.16</span>, left.q <span class="op">=</span> <span class="fl">0</span>, left.t0 <span class="op">=</span> <span class="fl">0</span>,</span>
+<span>  right.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.35</span><span class="op">)</span>, right.s <span class="op">=</span> <span class="fl">0.18</span>, right.q <span class="op">=</span> <span class="fl">0</span>, right.t0 <span class="op">=</span> <span class="fl">0</span></span>
 <span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">param_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span><span class="va">spec</span>, <span class="va">pars</span>, n_trials <span class="op">=</span> <span class="fl">8</span><span class="op">)</span></span>
@@ -121,7 +122,15 @@
 <p>For longer worked examples, see the package articles on the pkgdown site.</p>
 </div>
 </div>
-  </main><aside class="col-md-3"><div class="license">
+  </main><aside class="col-md-3"><div class="links">
+<h2 data-toc-skip>Links</h2>
+<ul class="list-unstyled">
+<li><a href="https://github.com/niekstevenson/AccumulatR/" class="external-link">Browse source code</a></li>
+<li><a href="https://github.com/niekstevenson/AccumulatR/issues" class="external-link">Report a bug</a></li>
+</ul>
+</div>
+
+<div class="license">
 <h2 data-toc-skip>License</h2>
 <ul class="list-unstyled">
 <li><a href="https://www.r-project.org/Licenses/GPL-3" class="external-link">GPL-3</a></li>

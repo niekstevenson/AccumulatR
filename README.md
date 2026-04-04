@@ -50,8 +50,8 @@ spec <- race_spec() |>
 model <- finalize_model(spec)
 
 pars <- c(
-  left.meanlog = log(0.28), left.sdlog = 0.16, left.q = 0, left.t0 = 0,
-  right.meanlog = log(0.35), right.sdlog = 0.18, right.q = 0, right.t0 = 0
+  left.m = log(0.28), left.s = 0.16, left.q = 0, left.t0 = 0,
+  right.m = log(0.35), right.s = 0.18, right.q = 0, right.t0 = 0
 )
 
 param_df <- build_param_matrix(spec, pars, n_trials = 8)

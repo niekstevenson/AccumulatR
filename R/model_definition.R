@@ -1454,7 +1454,7 @@ finalize_model <- function(model) {
 dist_param_names <- function(dist) {
   dist <- tolower(dist)
   if (dist == "lognormal") {
-    return(c("meanlog", "sdlog"))
+    return(c("m", "s"))
   }
   if (dist == "gamma") {
     return(c("shape", "rate"))
@@ -1463,7 +1463,7 @@ dist_param_names <- function(dist) {
     return(c("mu", "sigma", "tau"))
   }
   if (dist == "lba") {
-    return(c("v", "sv", "B", "A"))
+    return(c("v", "B", "A", "sv"))
   }
   if (dist == "rdm") {
     return(c("v", "B", "A", "s"))
@@ -1540,7 +1540,7 @@ param_table <- function(model, ...) {
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
 #' spec <- add_outcome(spec, "A_win", "A")
-#' vals <- c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0)
+#' vals <- c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0)
 #' build_param_matrix(spec, vals, n_trials = 2)
 #' @export
 build_param_matrix <- function(model,
@@ -1632,11 +1632,11 @@ build_param_matrix <- function(model,
 
       # Determine accumulator side name and shared side name
       if (nzchar(pname)) {
-        # named: meanlog = "shared_m" -> acc sets meanlog to shared_m
+        # named: m = "shared_m" -> acc sets m to shared_m
         target_param <- pname
         shared_name <- pvalue
       } else {
-        # unnamed: "meanlog" -> acc sets meanlog to meanlog
+        # unnamed: "m" -> acc sets m to m
         if (!is.character(pvalue) || length(pvalue) != 1) {
           stop("Unnamed shared param arguments must be parameter name strings")
         }
@@ -1649,7 +1649,7 @@ build_param_matrix <- function(model,
       # OR: we create a mapping where 'member.target_param' looks up 'shared_name' from inputs?
 
       # Logic: The input `param_values` (passed to build_param_matrix) contains the RAW values.
-      # If we are sharing, we expect the USER to provide `shared_name` in the input params (e.g. "meanlog")
+      # If we are sharing, we expect the USER to provide `shared_name` in the input params (e.g. "m")
       # And we must ensure that for all members, we use that value.
 
       # Check if shared_name is in param_values

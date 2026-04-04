@@ -52,6 +52,7 @@
 <li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json">
 </form></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/niekstevenson/AccumulatR/" aria-label="GitHub"><span class="fa fab fa-github fa-lg"></span></a></li>
       </ul>
 </div>
 
@@ -67,7 +68,7 @@
       <img src="../logo.png" class="logo" alt=""><h1>Simulate and Fit a Simple Chained-Onset Model</h1>
             
       
-
+      <small class="dont-index">Source: <a href="https://github.com/niekstevenson/AccumulatR/blob/HEAD/vignettes/simple_chained_onset.Rmd" class="external-link"><code>vignettes/simple_chained_onset.Rmd</code></a></small>
       <div class="d-none name"><code>simple_chained_onset.Rmd</code></div>
     </div>
 
@@ -79,7 +80,7 @@ starts only after accumulator <code>B</code> has completed. This kind of
 dependency is useful when a later decision stage is only available after
 an earlier process finishes.</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va">AccumulatR</span><span class="op">)</span></span></code></pre></div>
+<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://github.com/niekstevenson/AccumulatR" class="external-link">AccumulatR</a></span><span class="op">)</span></span></code></pre></div>
 <pre><code><span><span class="co">## </span></span>
 <span><span class="co">## Attaching package: 'AccumulatR'</span></span></code></pre>
 <pre><code><span><span class="co">## The following object is masked from 'package:stats':</span></span>
@@ -99,12 +100,12 @@ another observed process whose onset depends on <code>B</code>.</p>
 <span><span class="va">structure</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="va">model_spec</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">true_params</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
-<span>  A.meanlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.28</span><span class="op">)</span>,</span>
-<span>  A.sdlog <span class="op">=</span> <span class="fl">0.14</span>,</span>
-<span>  B.meanlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.1</span><span class="op">)</span>,</span>
-<span>  B.sdlog <span class="op">=</span> <span class="fl">0.1</span>, </span>
-<span>  C.meanlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.15</span><span class="op">)</span>,</span>
-<span>  C.sdlog <span class="op">=</span> <span class="fl">0.1</span> </span>
+<span>  A.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.28</span><span class="op">)</span>,</span>
+<span>  A.s <span class="op">=</span> <span class="fl">0.14</span>,</span>
+<span>  B.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.1</span><span class="op">)</span>,</span>
+<span>  B.s <span class="op">=</span> <span class="fl">0.1</span>, </span>
+<span>  C.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.15</span><span class="op">)</span>,</span>
+<span>  C.s <span class="op">=</span> <span class="fl">0.1</span> </span>
 <span><span class="op">)</span></span></code></pre></div>
 <p><strong>Simulate data</strong> Each trial contributes the observed
 response label and response time.</p>
@@ -146,7 +147,7 @@ and evaluate the chained-onset model at the true parameter values.</p>
 that delays the latent process <code>B</code>.</p>
 <div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">wrong_params</span> <span class="op">&lt;-</span> <span class="va">true_params</span></span>
-<span><span class="va">wrong_params</span><span class="op">[</span><span class="st">"B.meanlog"</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.14</span><span class="op">)</span></span>
+<span><span class="va">wrong_params</span><span class="op">[</span><span class="st">"B.m"</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.14</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">params_df_wrong</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span></span>
 <span>  <span class="va">model_spec</span>,</span>
@@ -159,15 +160,14 @@ that delays the latent process <code>B</code>.</p>
 <span><span class="va">ll_wrong</span></span></code></pre></div>
 <pre><code><span><span class="co">## [1] 384.6795</span></span></code></pre>
 <p><strong>Estimate parameters with <code><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim()</a></code></strong> We
-estimate <code>A.meanlog</code>, <code>A.sdlog</code>,
-<code>B.meanlog</code>, <code>B.sdlog</code>, <code>C.meanlog</code>,
-and <code>C.sdlog</code>. Again, we optimize on the log scale for the
-standard deviations so the search can proceed without positivity
-constraints.</p>
+estimate <code>A.m</code>, <code>A.s</code>, <code>B.m</code>,
+<code>B.s</code>, <code>C.m</code>, and <code>C.s</code>. Again, we
+optimize on the log scale for the spread parameters so the search can
+proceed without positivity constraints.</p>
 <div class="sourceCode" id="cb11"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">neg_loglik</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">theta</span><span class="op">)</span> <span class="op">{</span></span>
-<span>  <span class="co"># optimize on unconstrained scale for sdlog</span></span>
-<span>  <span class="va">theta</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.sdlog"</span>, <span class="st">"B.sdlog"</span>, <span class="st">"C.sdlog"</span><span class="op">)</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">theta</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.sdlog"</span>, <span class="st">"B.sdlog"</span>, <span class="st">"C.sdlog"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
+<span>  <span class="co"># optimize on an unconstrained scale for s</span></span>
+<span>  <span class="va">theta</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">theta</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
 <span>  <span class="va">params_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span></span>
 <span>    <span class="va">model_spec</span>,</span>
 <span>    <span class="va">theta</span>,</span>
@@ -179,31 +179,31 @@ constraints.</p>
 <span><span class="op">}</span></span>
 <span></span>
 <span><span class="va">start</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
-<span>  A.meanlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.22</span><span class="op">)</span>,</span>
-<span>  A.sdlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.10</span><span class="op">)</span>,</span>
-<span>  B.meanlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.28</span><span class="op">)</span>,</span>
-<span>  B.sdlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.10</span><span class="op">)</span>,</span>
-<span>  C.meanlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.28</span><span class="op">)</span>,</span>
-<span>  C.sdlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.10</span><span class="op">)</span></span>
+<span>  A.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.22</span><span class="op">)</span>,</span>
+<span>  A.s <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.10</span><span class="op">)</span>,</span>
+<span>  B.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.28</span><span class="op">)</span>,</span>
+<span>  B.s <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.10</span><span class="op">)</span>,</span>
+<span>  C.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.28</span><span class="op">)</span>,</span>
+<span>  C.s <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.10</span><span class="op">)</span></span>
 <span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">fit</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim</a></span><span class="op">(</span><span class="va">start</span>, <span class="va">neg_loglik</span>, method <span class="op">=</span> <span class="st">"Nelder-Mead"</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">fit_params</span> <span class="op">&lt;-</span> <span class="va">fit</span><span class="op">$</span><span class="va">par</span></span>
-<span><span class="va">fit_params</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.sdlog"</span>, <span class="st">"B.sdlog"</span>, <span class="st">"C.sdlog"</span><span class="op">)</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">fit_params</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.sdlog"</span>, <span class="st">"B.sdlog"</span>, <span class="st">"C.sdlog"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
+<span><span class="va">fit_params</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">fit_params</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
 <span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span>
 <span>  true <span class="op">=</span> <span class="va">true_params</span>,</span>
 <span>  recovered <span class="op">=</span> <span class="va">fit_params</span>,</span>
 <span>  miss <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">true_params</span> <span class="op">-</span> <span class="va">fit_params</span><span class="op">)</span></span>
 <span><span class="op">)</span></span></code></pre></div>
-<pre><code><span><span class="co">##                true   recovered        miss</span></span>
-<span><span class="co">## A.meanlog -1.272966 -1.25003011 0.022935562</span></span>
-<span><span class="co">## A.sdlog    0.140000  0.09451568 0.045484321</span></span>
-<span><span class="co">## B.meanlog -2.302585 -2.84037595 0.537790857</span></span>
-<span><span class="co">## B.sdlog    0.100000  0.02842790 0.071572096</span></span>
-<span><span class="co">## C.meanlog -1.897120 -1.64098410 0.256135882</span></span>
-<span><span class="co">## C.sdlog    0.100000  0.10959761 0.009597612</span></span></code></pre>
+<pre><code><span><span class="co">##          true   recovered        miss</span></span>
+<span><span class="co">## A.m -1.272966 -1.25003011 0.022935562</span></span>
+<span><span class="co">## A.s  0.140000  0.09451568 0.045484321</span></span>
+<span><span class="co">## B.m -2.302585 -2.84037595 0.537790857</span></span>
+<span><span class="co">## B.s  0.100000  0.02842790 0.071572096</span></span>
+<span><span class="co">## C.m -1.897120 -1.64098410 0.256135882</span></span>
+<span><span class="co">## C.s  0.100000  0.10959761 0.009597612</span></span></code></pre>
   </main>
 </div>
 

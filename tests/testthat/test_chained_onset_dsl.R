@@ -140,9 +140,9 @@ testthat::test_that("simulate honors accumulator chained onset delays", {
 
   finalized <- finalize_model(spec)
   params <- c(
-    a.meanlog = log(0.20), a.sdlog = 0.05, a.q = 0.0, a.t0 = 0.0,
-    b.meanlog = log(0.25), b.sdlog = 0.05, b.q = 0.0, b.t0 = 0.0,
-    c.meanlog = log(0.10), c.sdlog = 0.05, c.q = 0.0, c.t0 = 0.0
+    a.m = log(0.20), a.s = 0.05, a.q = 0.0, a.t0 = 0.0,
+    b.m = log(0.25), b.s = 0.05, b.q = 0.0, b.t0 = 0.0,
+    c.m = log(0.10), c.s = 0.05, c.q = 0.0, c.t0 = 0.0
   )
   params_df <- build_param_matrix(spec, params, n_trials = 64L)
   sim <- simulate(finalized, params_df, seed = 42, keep_detail = TRUE)
@@ -175,9 +175,9 @@ testthat::test_that("simulate honors pool chained onset and missing source compl
 
   finalized <- finalize_model(spec)
   params <- c(
-    a.meanlog = log(0.18), a.sdlog = 0.05, a.q = 0.0, a.t0 = 0.0,
-    b.meanlog = log(0.22), b.sdlog = 0.05, b.q = 0.0, b.t0 = 0.0,
-    c.meanlog = log(0.10), c.sdlog = 0.05, c.q = 0.0, c.t0 = 0.0
+    a.m = log(0.18), a.s = 0.05, a.q = 0.0, a.t0 = 0.0,
+    b.m = log(0.22), b.s = 0.05, b.q = 0.0, b.t0 = 0.0,
+    c.m = log(0.10), c.s = 0.05, c.q = 0.0, c.t0 = 0.0
   )
   params_df <- build_param_matrix(spec, params, n_trials = 64L)
   sim <- simulate(finalized, params_df, seed = 99, keep_detail = TRUE)
@@ -206,9 +206,9 @@ testthat::test_that("simulate honors pool chained onset and missing source compl
     add_outcome("C", "c")
   finalized_missing <- finalize_model(spec_missing)
   params_missing <- c(
-    a.meanlog = log(0.20), a.sdlog = 0.05, a.q = 1.0, a.t0 = 0.0,
-    b.meanlog = log(0.25), b.sdlog = 0.05, b.q = 0.0, b.t0 = 0.0,
-    c.meanlog = log(0.10), c.sdlog = 0.05, c.q = 0.0, c.t0 = 0.0
+    a.m = log(0.20), a.s = 0.05, a.q = 1.0, a.t0 = 0.0,
+    b.m = log(0.25), b.s = 0.05, b.q = 0.0, b.t0 = 0.0,
+    c.m = log(0.10), c.s = 0.05, c.q = 0.0, c.t0 = 0.0
   )
   params_df_missing <- build_param_matrix(spec_missing, params_missing, n_trials = 32L)
   sim_missing <- simulate(finalized_missing, params_df_missing, seed = 7, keep_detail = TRUE)
@@ -226,8 +226,8 @@ testthat::test_that("chained onset likelihood context and evaluation are availab
     add_outcome("B", "b")
   finalized <- finalize_model(spec)
   params <- c(
-    a.meanlog = log(0.25), a.sdlog = 0.10, a.q = 0.0, a.t0 = 0.0,
-    b.meanlog = log(0.20), b.sdlog = 0.12, b.q = 0.0, b.t0 = 0.0
+    a.m = log(0.25), a.s = 0.10, a.q = 0.0, a.t0 = 0.0,
+    b.m = log(0.20), b.s = 0.12, b.q = 0.0, b.t0 = 0.0
   )
   params_df <- build_param_matrix(spec, params, n_trials = 1L)
   data_df <- data.frame(

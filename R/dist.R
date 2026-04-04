@@ -34,25 +34,25 @@ dist_registry <- local({
 
   reg$lognormal <- list(
     r = function(n, par) {
-      meanlog <- .dist_param_scalar(par, "meanlog")
-      sdlog <- .dist_param_scalar(par, "sdlog")
+      m <- .dist_param_scalar(par, "m")
+      s <- .dist_param_scalar(par, "s")
       t0 <- .dist_param_t0(par)
-      dist_lognormal_rng(.dist_as_count(n), meanlog, sdlog) + t0
+      dist_lognormal_rng(.dist_as_count(n), m, s) + t0
     },
     d = function(x, par) {
-      meanlog <- .dist_param_scalar(par, "meanlog")
-      sdlog <- .dist_param_scalar(par, "sdlog")
+      m <- .dist_param_scalar(par, "m")
+      s <- .dist_param_scalar(par, "s")
       t0 <- .dist_param_t0(par)
       shifted <- x - t0
-      out <- dist_lognormal_pdf(shifted, meanlog, sdlog)
+      out <- dist_lognormal_pdf(shifted, m, s)
       .dist_zero_before_t0(out, shifted)
     },
     p = function(x, par) {
-      meanlog <- .dist_param_scalar(par, "meanlog")
-      sdlog <- .dist_param_scalar(par, "sdlog")
+      m <- .dist_param_scalar(par, "m")
+      s <- .dist_param_scalar(par, "s")
       t0 <- .dist_param_t0(par)
       shifted <- x - t0
-      out <- dist_lognormal_cdf(shifted, meanlog, sdlog)
+      out <- dist_lognormal_cdf(shifted, m, s)
       .dist_zero_before_t0(out, shifted)
     }
   )
@@ -113,30 +113,30 @@ dist_registry <- local({
   reg$lba <- list(
     r = function(n, par) {
       v <- .dist_param_scalar(par, "v")
-      sv <- .dist_param_scalar(par, "sv")
       B <- .dist_param_scalar(par, "B")
       A <- .dist_param_scalar(par, "A")
+      sv <- .dist_param_scalar(par, "sv")
       t0 <- .dist_param_t0(par)
-      dist_lba_rng(.dist_as_count(n), v, sv, B, A) + t0
+      dist_lba_rng(.dist_as_count(n), v, B, A, sv) + t0
     },
     d = function(x, par) {
       v <- .dist_param_scalar(par, "v")
-      sv <- .dist_param_scalar(par, "sv")
       B <- .dist_param_scalar(par, "B")
       A <- .dist_param_scalar(par, "A")
+      sv <- .dist_param_scalar(par, "sv")
       t0 <- .dist_param_t0(par)
       shifted <- x - t0
-      out <- dist_lba_pdf(shifted, v, sv, B, A)
+      out <- dist_lba_pdf(shifted, v, B, A, sv)
       .dist_zero_before_t0(out, shifted)
     },
     p = function(x, par) {
       v <- .dist_param_scalar(par, "v")
-      sv <- .dist_param_scalar(par, "sv")
       B <- .dist_param_scalar(par, "B")
       A <- .dist_param_scalar(par, "A")
+      sv <- .dist_param_scalar(par, "sv")
       t0 <- .dist_param_t0(par)
       shifted <- x - t0
-      out <- dist_lba_cdf(shifted, v, sv, B, A)
+      out <- dist_lba_cdf(shifted, v, B, A, sv)
       .dist_zero_before_t0(out, shifted)
     }
   )

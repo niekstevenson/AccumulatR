@@ -3,7 +3,7 @@
 and compiled backend needed for fast repeated calls to `log_likelihood()`.
 Build it once, then reuse it while searching over parameter values."><meta property="og:description" content="A likelihood context stores the processed behavioral data, model structure,
 and compiled backend needed for fast repeated calls to `log_likelihood()`.
-Build it once, then reuse it while searching over parameter values."><meta property="og:image" content="/logo.png"></head><body>
+Build it once, then reuse it while searching over parameter values."><meta property="og:image" content="https://niekstevenson.github.io/AccumulatR/logo.png"></head><body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
 
 
@@ -32,6 +32,7 @@ Build it once, then reuse it while searching over parameter values."><meta prope
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json"></form></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/niekstevenson/AccumulatR/" aria-label="GitHub"><span class="fa fab fa-github fa-lg"></span></a></li>
       </ul></div>
 
 
@@ -40,7 +41,7 @@ Build it once, then reuse it while searching over parameter values."><meta prope
 <div class="row">
   <main id="main" class="col-md-9"><div class="page-header">
       <img src="../logo.png" class="logo" alt=""><h1>Prepare behavioral data for repeated likelihood evaluation</h1>
-
+      <small class="dont-index">Source: <a href="https://github.com/niekstevenson/AccumulatR/blob/HEAD/R/likelihood_param_interface.R" class="external-link"><code>R/likelihood_param_interface.R</code></a></small>
       <div class="d-none name"><code>build_likelihood_context.Rd</code></div>
     </div>
 
@@ -90,7 +91,7 @@ and so on.</p></dd>
 <span class="r-in"><span><span class="va">structure</span> <span class="op">&lt;-</span> <span class="fu"><a href="finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="va">spec</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="va">params_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span></span></span>
 <span class="r-in"><span>  <span class="va">spec</span>,</span></span>
-<span class="r-in"><span>  <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span>A.meanlog <span class="op">=</span> <span class="fl">0</span>, A.sdlog <span class="op">=</span> <span class="fl">0.1</span>, A.q <span class="op">=</span> <span class="fl">0</span>, A.t0 <span class="op">=</span> <span class="fl">0</span><span class="op">)</span>,</span></span>
+<span class="r-in"><span>  <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span>A.m <span class="op">=</span> <span class="fl">0</span>, A.s <span class="op">=</span> <span class="fl">0.1</span>, A.q <span class="op">=</span> <span class="fl">0</span>, A.t0 <span class="op">=</span> <span class="fl">0</span><span class="op">)</span>,</span></span>
 <span class="r-in"><span>  n_trials <span class="op">=</span> <span class="fl">2</span></span></span>
 <span class="r-in"><span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="va">data_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="simulate.html">simulate</a></span><span class="op">(</span><span class="va">structure</span>, <span class="va">params_df</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span></span>
@@ -452,7 +453,7 @@ and so on.</p></dd>
 <span class="r-out co"><span class="r-pr">#&gt;</span>     1     2 </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $prep$.label_cache</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x124091a50&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x10406afd8&gt;</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $prep$.expr_compiled</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $prep$.expr_compiled$nodes</span>
@@ -504,7 +505,7 @@ and so on.</p></dd>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $prep$.expr_compiled$signatures</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1240ab0b0&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1040a1470&gt;</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $prep$.competitors</span>
@@ -565,11 +566,11 @@ and so on.</p></dd>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $prep$.runtime$expr_compiled$signatures</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1240ab0b0&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1040a1470&gt;</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $prep$.runtime$label_cache</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x124091a50&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x10406afd8&gt;</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $prep$.runtime$competitor_map</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $prep$.runtime$competitor_map$A_win</span>
@@ -583,7 +584,7 @@ and so on.</p></dd>
 <span class="r-out co"><span class="r-pr">#&gt;</span>     1     2 </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $prep$.runtime$pool_members_cache</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1240e48d0&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x11e262f90&gt;</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $prep$.runtime$cache_bundle</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $node_plan</span>
@@ -636,29 +637,29 @@ and so on.</p></dd>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $node_plan$signatures</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1240ab0b0&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1040a1470&gt;</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $precomputed_values</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1240f5368&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x11e28b200&gt;</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $pool_templates</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1240f5090&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x11e28ee38&gt;</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $guard_quadrature</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1240f4db8&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x11e28eb60&gt;</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $guard_quadrature_meta</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1240f4ae0&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x11e28e888&gt;</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $guard_quadrature_limit</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> [1] 128</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $native_ctx</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1240e97b0&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x11e277af0&gt;</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $version</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "2026-04-03 17:00:00 CEST"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "2026-04-04 10:18:00 CEST"</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> attr(,"class")</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> [1] "likelihood_cache_bundle"</span>
@@ -666,7 +667,7 @@ and so on.</p></dd>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $native_ctx</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;pointer: 0x116d14e00&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;pointer: 0x10b899600&gt;</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $data_df</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>   trial     R        rt accumulator onset</span>

@@ -50,18 +50,18 @@ native_outcome_labels_cpp <- function(ctxSEXP) {
 }
 
 #' @noRd
-dist_lognormal_pdf <- function(x, meanlog, sdlog) {
-    .Call(`_AccumulatR_dist_lognormal_pdf`, x, meanlog, sdlog)
+dist_lognormal_pdf <- function(x, m, s) {
+    .Call(`_AccumulatR_dist_lognormal_pdf`, x, m, s)
 }
 
 #' @noRd
-dist_lognormal_cdf <- function(x, meanlog, sdlog) {
-    .Call(`_AccumulatR_dist_lognormal_cdf`, x, meanlog, sdlog)
+dist_lognormal_cdf <- function(x, m, s) {
+    .Call(`_AccumulatR_dist_lognormal_cdf`, x, m, s)
 }
 
 #' @noRd
-dist_lognormal_rng <- function(n, meanlog, sdlog) {
-    .Call(`_AccumulatR_dist_lognormal_rng`, n, meanlog, sdlog)
+dist_lognormal_rng <- function(n, m, s) {
+    .Call(`_AccumulatR_dist_lognormal_rng`, n, m, s)
 }
 
 #' @noRd
@@ -95,18 +95,18 @@ dist_exgauss_rng <- function(n, mu, sigma, tau) {
 }
 
 #' @noRd
-dist_lba_pdf <- function(x, v, sv, B, A) {
-    .Call(`_AccumulatR_dist_lba_pdf`, x, v, sv, B, A)
+dist_lba_pdf <- function(x, v, B, A, sv) {
+    .Call(`_AccumulatR_dist_lba_pdf`, x, v, B, A, sv)
 }
 
 #' @noRd
-dist_lba_cdf <- function(x, v, sv, B, A) {
-    .Call(`_AccumulatR_dist_lba_cdf`, x, v, sv, B, A)
+dist_lba_cdf <- function(x, v, B, A, sv) {
+    .Call(`_AccumulatR_dist_lba_cdf`, x, v, B, A, sv)
 }
 
 #' @noRd
-dist_lba_rng <- function(n, v, sv, B, A) {
-    .Call(`_AccumulatR_dist_lba_rng`, n, v, sv, B, A)
+dist_lba_rng <- function(n, v, B, A, sv) {
+    .Call(`_AccumulatR_dist_lba_rng`, n, v, B, A, sv)
 }
 
 #' @noRd

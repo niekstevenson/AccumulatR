@@ -61,8 +61,8 @@ inline AccDistParams resolve_acc_params_entries(const std::string& dist,
   std::string dist_name = normalize_dist_name(dist);
   if (dist_name == "lognormal") {
     cfg.code = ACC_DIST_LOGNORMAL;
-    cfg.p1 = numeric_param(entries, "meanlog");
-    cfg.p2 = numeric_param(entries, "sdlog");
+    cfg.p1 = numeric_param(entries, "m");
+    cfg.p2 = numeric_param(entries, "s");
   } else if (dist_name == "gamma") {
     cfg.code = ACC_DIST_GAMMA;
     cfg.p1 = numeric_param(entries, "shape");
@@ -75,9 +75,9 @@ inline AccDistParams resolve_acc_params_entries(const std::string& dist,
   } else if (dist_name == "lba") {
     cfg.code = ACC_DIST_LBA;
     cfg.p1 = numeric_param(entries, "v");
-    cfg.p2 = numeric_param(entries, "sv");
-    cfg.p3 = numeric_param(entries, "B");
-    cfg.p4 = numeric_param(entries, "A");
+    cfg.p2 = numeric_param(entries, "B");
+    cfg.p3 = numeric_param(entries, "A");
+    cfg.p4 = numeric_param(entries, "sv");
   } else if (dist_name == "rdm") {
     cfg.code = ACC_DIST_RDM;
     cfg.p1 = numeric_param(entries, "v");

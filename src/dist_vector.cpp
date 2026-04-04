@@ -259,7 +259,7 @@ inline double eval_pdf_single(int dist_code, double p1, double p2, double p3,
     return inv_tau * std::exp(exponent) * gaussian_tail;
   }
   case ACC_DIST_LBA:
-    return lba_pdf_single(x, p1, p2, p3, p4);
+    return lba_pdf_single(x, p1, p4, p2, p3);
   case ACC_DIST_RDM:
     return rdm_pdf_single(x, p1, p2, p3, p4);
   default:
@@ -296,7 +296,7 @@ inline double eval_cdf_single(int dist_code, double p1, double p2, double p3,
     return base_cdf - exp_term * tail;
   }
   case ACC_DIST_LBA:
-    return lba_cdf_single(x, p1, p2, p3, p4);
+    return lba_cdf_single(x, p1, p4, p2, p3);
   case ACC_DIST_RDM:
     return rdm_cdf_single(x, p1, p2, p3, p4);
   default:

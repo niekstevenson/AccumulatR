@@ -23,6 +23,15 @@ The main workflow is:
 The R interface is intended to stay readable and model-focused, while the
 repeated numerical work happens in C++.
 }
+\seealso{
+Useful links:
+\itemize{
+  \item \url{https://github.com/niekstevenson/AccumulatR}
+  \item \url{https://niekstevenson.github.io/AccumulatR/}
+  \item Report bugs at \url{https://github.com/niekstevenson/AccumulatR/issues}
+}
+
+}
 \author{
 \strong{Maintainer}: Niek Stevenson \email{niek.stevenson@gmail.com}
 

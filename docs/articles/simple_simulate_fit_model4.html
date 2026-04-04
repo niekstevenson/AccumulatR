@@ -52,6 +52,7 @@
 <li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json">
 </form></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/niekstevenson/AccumulatR/" aria-label="GitHub"><span class="fa fab fa-github fa-lg"></span></a></li>
       </ul>
 </div>
 
@@ -67,7 +68,7 @@
       <img src="../logo.png" class="logo" alt=""><h1>Simulate and Fit a Simple Race Model</h1>
             
       
-
+      <small class="dont-index">Source: <a href="https://github.com/niekstevenson/AccumulatR/blob/HEAD/vignettes/simple_simulate_fit_model4.Rmd" class="external-link"><code>vignettes/simple_simulate_fit_model4.Rmd</code></a></small>
       <div class="d-none name"><code>simple_simulate_fit_model4.Rmd</code></div>
     </div>
 
@@ -79,7 +80,7 @@ likelihood, and recover parameters. The example has two accumulators
 feeding response <code>R1</code> and one accumulator feeding response
 <code>R2</code>.</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va">AccumulatR</span><span class="op">)</span></span></code></pre></div>
+<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://github.com/niekstevenson/AccumulatR" class="external-link">AccumulatR</a></span><span class="op">)</span></span></code></pre></div>
 <pre><code><span><span class="co">## </span></span>
 <span><span class="co">## Attaching package: 'AccumulatR'</span></span></code></pre>
 <pre><code><span><span class="co">## The following object is masked from 'package:stats':</span></span>
@@ -109,8 +110,8 @@ feeding response <code>R1</code> and one accumulator feeding response
 <span>  R1_B.B <span class="op">=</span> <span class="fl">1</span>,</span>
 <span>  R1_B.A <span class="op">=</span> <span class="fl">.3</span>,</span>
 <span>  R1_B.s <span class="op">=</span> <span class="fl">1</span>,</span>
-<span>  R2.meanlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.4</span><span class="op">)</span>,</span>
-<span>  R2.sdlog <span class="op">=</span> <span class="fl">0.18</span></span>
+<span>  R2.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.4</span><span class="op">)</span>,</span>
+<span>  R2.s <span class="op">=</span> <span class="fl">0.18</span></span>
 <span><span class="op">)</span></span></code></pre></div>
 <p><strong>Simulate data</strong> We generate behavioral data consisting
 of responses and response times.</p>
@@ -152,7 +153,7 @@ under the true parameter values.</p>
 <p>We can compare that with a clearly misspecified parameter set.</p>
 <div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">wrong_params</span> <span class="op">&lt;-</span> <span class="va">true_params</span></span>
-<span><span class="va">wrong_params</span><span class="op">[</span><span class="st">"R2.meanlog"</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.45</span><span class="op">)</span></span>
+<span><span class="va">wrong_params</span><span class="op">[</span><span class="st">"R2.m"</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.45</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">params_df_wrong</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span></span>
 <span>  <span class="va">model_spec</span>,</span>
@@ -167,8 +168,7 @@ under the true parameter values.</p>
 <p><strong>Estimate parameters with <code><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim()</a></code></strong> We
 estimate five parameters: <code>R1_A.v</code>, <code>R1_B.v</code>, a
 shared threshold <code>B</code> used for both <code>R1_A.B</code> and
-<code>R1_B.B</code>, plus <code>R2.meanlog</code> and
-<code>R2.sdlog</code>.</p>
+<code>R1_B.B</code>, plus <code>R2.m</code> and <code>R2.s</code>.</p>
 <div class="sourceCode" id="cb11"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">neg_loglik</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">theta</span><span class="op">)</span> <span class="op">{</span></span>
 <span>  <span class="va">est</span> <span class="op">&lt;-</span> <span class="va">true_params</span></span>
@@ -176,8 +176,8 @@ shared threshold <code>B</code> used for both <code>R1_A.B</code> and
 <span>  <span class="va">est</span><span class="op">[</span><span class="st">"R1_B.v"</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="va">theta</span><span class="op">[[</span><span class="st">"R1_B.v"</span><span class="op">]</span><span class="op">]</span></span>
 <span>  <span class="va">est</span><span class="op">[</span><span class="st">"R1_A.B"</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">theta</span><span class="op">[[</span><span class="st">"log_B_shared"</span><span class="op">]</span><span class="op">]</span><span class="op">)</span></span>
 <span>  <span class="va">est</span><span class="op">[</span><span class="st">"R1_B.B"</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">theta</span><span class="op">[[</span><span class="st">"log_B_shared"</span><span class="op">]</span><span class="op">]</span><span class="op">)</span></span>
-<span>  <span class="va">est</span><span class="op">[</span><span class="st">"R2.meanlog"</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="va">theta</span><span class="op">[[</span><span class="st">"R2.meanlog"</span><span class="op">]</span><span class="op">]</span></span>
-<span>  <span class="va">est</span><span class="op">[</span><span class="st">"R2.sdlog"</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">theta</span><span class="op">[[</span><span class="st">"log_R2.sdlog"</span><span class="op">]</span><span class="op">]</span><span class="op">)</span></span>
+<span>  <span class="va">est</span><span class="op">[</span><span class="st">"R2.m"</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="va">theta</span><span class="op">[[</span><span class="st">"R2.m"</span><span class="op">]</span><span class="op">]</span></span>
+<span>  <span class="va">est</span><span class="op">[</span><span class="st">"R2.s"</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">theta</span><span class="op">[[</span><span class="st">"log_R2.s"</span><span class="op">]</span><span class="op">]</span><span class="op">)</span></span>
 <span>  <span class="va">params_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span></span>
 <span>    <span class="va">model_spec</span>,</span>
 <span>    <span class="va">est</span>,</span>
@@ -192,8 +192,8 @@ shared threshold <code>B</code> used for both <code>R1_A.B</code> and
 <span>  R1_A.v <span class="op">=</span> <span class="fl">1.5</span>,</span>
 <span>  R1_B.v <span class="op">=</span> <span class="fl">1.5</span>,</span>
 <span>  log_B_shared <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">1.0</span><span class="op">)</span>,</span>
-<span>  R2.meanlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.32</span><span class="op">)</span>,</span>
-<span>  log_R2.sdlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.15</span><span class="op">)</span></span>
+<span>  R2.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.32</span><span class="op">)</span>,</span>
+<span>  log_R2.s <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.15</span><span class="op">)</span></span>
 <span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">fit</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim</a></span><span class="op">(</span><span class="va">start</span>, <span class="va">neg_loglik</span>, method <span class="op">=</span> <span class="st">"Nelder-Mead"</span>, control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>maxit <span class="op">=</span> <span class="fl">4000</span>, reltol <span class="op">=</span> <span class="fl">1e-9</span><span class="op">)</span><span class="op">)</span></span>
@@ -201,23 +201,23 @@ shared threshold <code>B</code> used for both <code>R1_A.B</code> and
 <span>  R1_A.v <span class="op">=</span> <span class="va">fit</span><span class="op">$</span><span class="va">par</span><span class="op">[[</span><span class="st">"R1_A.v"</span><span class="op">]</span><span class="op">]</span>,</span>
 <span>  R1_B.v <span class="op">=</span> <span class="va">fit</span><span class="op">$</span><span class="va">par</span><span class="op">[[</span><span class="st">"R1_B.v"</span><span class="op">]</span><span class="op">]</span>,</span>
 <span>  B_shared <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">fit</span><span class="op">$</span><span class="va">par</span><span class="op">[[</span><span class="st">"log_B_shared"</span><span class="op">]</span><span class="op">]</span><span class="op">)</span>,</span>
-<span>  R2.meanlog <span class="op">=</span> <span class="va">fit</span><span class="op">$</span><span class="va">par</span><span class="op">[[</span><span class="st">"R2.meanlog"</span><span class="op">]</span><span class="op">]</span>,</span>
-<span>  R2.sdlog <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">fit</span><span class="op">$</span><span class="va">par</span><span class="op">[[</span><span class="st">"log_R2.sdlog"</span><span class="op">]</span><span class="op">]</span><span class="op">)</span></span>
+<span>  R2.m <span class="op">=</span> <span class="va">fit</span><span class="op">$</span><span class="va">par</span><span class="op">[[</span><span class="st">"R2.m"</span><span class="op">]</span><span class="op">]</span>,</span>
+<span>  R2.s <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">fit</span><span class="op">$</span><span class="va">par</span><span class="op">[[</span><span class="st">"log_R2.s"</span><span class="op">]</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="op">)</span></span>
 <span><span class="va">target</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
 <span>  R1_A.v <span class="op">=</span> <span class="va">true_params</span><span class="op">[[</span><span class="st">"R1_A.v"</span><span class="op">]</span><span class="op">]</span>,</span>
 <span>  R1_B.v <span class="op">=</span> <span class="va">true_params</span><span class="op">[[</span><span class="st">"R1_B.v"</span><span class="op">]</span><span class="op">]</span>,</span>
 <span>  B_shared <span class="op">=</span> <span class="va">true_params</span><span class="op">[[</span><span class="st">"R1_A.B"</span><span class="op">]</span><span class="op">]</span>,</span>
-<span>  R2.meanlog <span class="op">=</span> <span class="va">true_params</span><span class="op">[[</span><span class="st">"R2.meanlog"</span><span class="op">]</span><span class="op">]</span>,</span>
-<span>  R2.sdlog <span class="op">=</span> <span class="va">true_params</span><span class="op">[[</span><span class="st">"R2.sdlog"</span><span class="op">]</span><span class="op">]</span></span>
+<span>  R2.m <span class="op">=</span> <span class="va">true_params</span><span class="op">[[</span><span class="st">"R2.m"</span><span class="op">]</span><span class="op">]</span>,</span>
+<span>  R2.s <span class="op">=</span> <span class="va">true_params</span><span class="op">[[</span><span class="st">"R2.s"</span><span class="op">]</span><span class="op">]</span></span>
 <span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span>true <span class="op">=</span> <span class="va">target</span>, recovered <span class="op">=</span> <span class="va">fit_params</span>, miss <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">target</span> <span class="op">-</span> <span class="va">fit_params</span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
-<pre><code><span><span class="co">##                  true  recovered        miss</span></span>
-<span><span class="co">## R1_A.v      2.0000000  1.9738644 0.026135641</span></span>
-<span><span class="co">## R1_B.v      3.0000000  2.8720108 0.127989241</span></span>
-<span><span class="co">## B_shared    1.0000000  0.9630031 0.036996851</span></span>
-<span><span class="co">## R2.meanlog -0.9162907 -0.9115338 0.004756882</span></span>
-<span><span class="co">## R2.sdlog    0.1800000  0.1873125 0.007312532</span></span></code></pre>
+<pre><code><span><span class="co">##                true  recovered        miss</span></span>
+<span><span class="co">## R1_A.v    2.0000000  1.9738644 0.026135641</span></span>
+<span><span class="co">## R1_B.v    3.0000000  2.8720108 0.127989241</span></span>
+<span><span class="co">## B_shared  1.0000000  0.9630031 0.036996851</span></span>
+<span><span class="co">## R2.m     -0.9162907 -0.9115338 0.004756882</span></span>
+<span><span class="co">## R2.s      0.1800000  0.1873125 0.007312532</span></span></code></pre>
 <p>That is the basic workflow the package is designed for: describe a
 response-time model in psychological terms, simulate data, and then fit
 the same model back to behavioral observations.</p>

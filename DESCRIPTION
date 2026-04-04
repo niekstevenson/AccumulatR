@@ -13,6 +13,9 @@ Description: Tools for simulating and fitting evidence-accumulation and race
     parameter values. The user-facing interface stays in R, while the repeated
     likelihood calculations are handled in C++ for speed.
 License: GPL-3
+URL: https://github.com/niekstevenson/AccumulatR,
+    https://niekstevenson.github.io/AccumulatR/
+BugReports: https://github.com/niekstevenson/AccumulatR/issues
 Encoding: UTF-8
 Depends: R (>= 4.1)
 Imports: 

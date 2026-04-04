@@ -2,12 +2,9 @@
 % Please edit documentation in R/model_definition.R
 \name{none_of}
 \alias{none_of}
-\alias{exclude}
 \title{Define the absence of an event}
 \usage{
 none_of(expr)
-
-exclude(expr)
 }
 \arguments{
 \item{expr}{Accumulator label or expression to negate.}

@@ -1100,7 +1100,8 @@ build_likelihood_context <- function(structure,
   if (!identical(outcome_label, "GUESS")) {
     gp <- .get_component_attr(prep, component, "guess")
     if (!is.null(gp) && !is.null(gp[["weights"]])) {
-      keep <- gp[["weights"]][[outcome_label]] %||% gp[["weights"]][[normalize_label(outcome_label)]] %||% 1.0
+      keep_key <- if (is.na(outcome_label)) "<NA>" else as.character(outcome_label)
+      keep <- gp[["weights"]][[outcome_label]] %||% gp[["weights"]][[keep_key]] %||% 1.0
       base <- base * as.numeric(keep)
     }
   }

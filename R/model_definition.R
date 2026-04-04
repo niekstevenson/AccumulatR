@@ -1,5 +1,3 @@
-`%||%` <- function(lhs, rhs) if (is.null(lhs) || length(lhs) == 0) rhs else lhs
-
 # ------------------------------------------------------------------------------
 # Observation metadata helpers
 # ------------------------------------------------------------------------------
@@ -632,7 +630,6 @@ all_of <- function(...) {
 #' @param expr Accumulator label or expression to negate.
 #' @return An expression object.
 #' @export
-#' @aliases exclude
 #' @examples
 #' none_of("A")
 none_of <- function(expr) {
@@ -643,10 +640,6 @@ none_of <- function(expr) {
   }
   list(kind = "not", arg = inner)
 }
-
-#' @rdname none_of
-#' @export
-exclude <- none_of
 
 #' Start one accumulator after another process finishes
 #'
@@ -693,7 +686,7 @@ race_spec <- function(n_outcomes = 1L) {
     pools = list(),
     outcomes = list(),
     triggers = list(),
-    shared_params = list(),
+    parameters = list(),
     components = list(),
     mixture_options = list(),
     metadata = metadata
@@ -709,16 +702,6 @@ race_spec <- function(n_outcomes = 1L) {
     return(params)
   }
   dots
-}
-
-.ensure_acc_param_t0 <- function(params) {
-  if (is.null(params) || length(params) == 0L) params <- list()
-  if (is.null(params$t0) || length(params$t0) == 0L) {
-    params$t0 <- 0
-  } else {
-    params$t0 <- as.numeric(params$t0)[1]
-  }
-  params
 }
 
 .validate_race_spec_input <- function(spec, fn_name) {
@@ -888,27 +871,39 @@ add_trigger <- function(spec, id, members, q = NULL, param = NULL, draw = c("sha
   spec
 }
 
-#' Tie parameters across accumulators
+#' Define the external parameter names for a model
+#'
+#' `set_parameters()` lets you rename parameters and share them across
+#' accumulators using one simple mapping. Each list name is the external
+#' parameter name users will supply; each value is one or more internal model
+#' parameter names such as `go.m` or `stop.t0`.
+#'
+#' Any parameters not mentioned in `parameters` keep their default names.
 #'
 #' @param spec A `race_spec` object.
-#' @param members Accumulator labels that should share parameter values.
-#' @param ... Named parameters to share.
+#' @param parameters A named list mapping external names to one or more model
+#'   parameter names.
 #' @return The updated `race_spec`.
+#' @examples
+#' spec <- race_spec() |>
+#'   add_accumulator("go", "lognormal") |>
+#'   add_accumulator("stop", "lognormal") |>
+#'   add_outcome("go", "go") |>
+#'   add_outcome("stop", "stop") |>
+#'   set_parameters(list(
+#'     drift = c("go.m", "stop.m"),
+#'     spread = c("go.s", "stop.s"),
+#'     onset = "go.t0"
+#'   ))
+#'
+#' sampled_pars(spec)
 #' @export
-add_shared_params <- function(spec, members, ...) {
-  spec <- .validate_race_spec_input(spec, "add_shared_params")
-  if (missing(members) || is.null(members) || length(members) == 0) {
-    stop("Shared params must specify members")
+set_parameters <- function(spec, parameters) {
+  spec <- .validate_race_spec_input(spec, "set_parameters")
+  if (missing(parameters)) {
+    stop("set_parameters() requires a named list of parameter mappings", call. = FALSE)
   }
-  params <- list(...)
-  if (length(params) == 0) {
-    warning("add_shared_params called with no parameters")
-    return(spec)
-  }
-  spec$shared_params[[length(spec$shared_params) + 1L]] <- list(
-    members = as.character(members),
-    params = params
-  )
+  spec$parameters <- .normalize_parameter_spec(parameters)
   spec
 }
 
@@ -928,14 +923,26 @@ set_mixture_options <- function(spec, mode = "sample", reference = NULL) {
   spec
 }
 
-#' Store model-level settings
+#' Store model-level metadata
+#'
+#' `set_metadata()` stores additional metadata on a model specification.
+#' At present, these values are carried through model finalization but do not
+#' directly change simulation or likelihood evaluation. This is mainly useful
+#' for annotating a model or passing labels such as `special_outcomes` to
+#' downstream tools.
 #'
 #' @param spec A `race_spec` object.
 #' @param ... Named metadata entries.
 #' @return The updated `race_spec`.
 #' @examples
-#' spec <- race_spec()
-#' spec <- set_metadata(spec, rel_tol = 1e-4)
+#' spec <- race_spec() |>
+#'   add_accumulator("go", "lognormal") |>
+#'   add_accumulator("watch", "lognormal") |>
+#'   add_outcome("go", "go") |>
+#'   add_outcome("NR_CENSOR", "watch", options = list(class = "censor"))
+#'
+#' spec <- set_metadata(spec, special_outcomes = list(censor = "NR_CENSOR"))
+#' finalize_model(spec)$special_outcomes$censor
 #' @export
 set_metadata <- function(spec, ...) {
   spec <- .validate_race_spec_input(spec, "set_metadata")
@@ -984,9 +991,9 @@ outcome_def <- function(label, expr, options = list()) {
 
 
 
-race_model <- function(accumulators, pools = list(), outcomes, triggers = list(), shared_params = list(), components = list(), mixture_options = list(), metadata = list()) {
+race_model <- function(accumulators, pools = list(), outcomes, triggers = list(), parameters = list(), components = list(), mixture_options = list(), metadata = list()) {
   if (inherits(accumulators, "race_spec")) {
-    if (!missing(pools) || !missing(outcomes) || !missing(triggers) || !missing(shared_params) || !missing(components) || !missing(mixture_options) || !missing(metadata)) {
+    if (!missing(pools) || !missing(outcomes) || !missing(triggers) || !missing(parameters) || !missing(components) || !missing(mixture_options) || !missing(metadata)) {
       stop("When passing a race_spec, provide it alone and call race_model(spec)")
     }
     finalized <- finalize_model(accumulators)
@@ -1013,7 +1020,7 @@ race_model <- function(accumulators, pools = list(), outcomes, triggers = list()
       out
     }),
     triggers = lapply(triggers %||% list(), clone_obj),
-    shared_params = lapply(shared_params %||% list(), clone_obj),
+    parameters = lapply(parameters %||% list(), clone_obj),
     components = lapply(components %||% list(), clone_obj),
     mixture_options = mixture_options %||% list(),
     metadata = .normalize_observation_metadata(metadata %||% list())
@@ -1032,7 +1039,7 @@ race_model <- function(accumulators, pools = list(), outcomes, triggers = list()
       pools = unname(model$pools),
       outcomes = unname(model$outcomes),
       triggers = unname(model$triggers),
-      shared_params = unname(model$shared_params),
+      parameters = clone_obj(model$parameters %||% list()),
       components = unname(model$components),
       mixture_options = model$mixture_options %||% list(),
       metadata = metadata
@@ -1075,20 +1082,6 @@ race_model <- function(accumulators, pools = list(), outcomes, triggers = list()
       shared_trigger_id = NULL,
       shared_trigger_q = NULL
     )
-  }
-
-  # Process shared parameters
-  if (length(model$shared_params) > 0) {
-    for (sp in model$shared_params) {
-      members <- sp$members
-      par_updates <- sp$params
-      if (length(members) == 0 || length(par_updates) == 0) next
-      for (m in members) {
-        if (!is.null(defs[[m]])) {
-          defs[[m]]$params <- modifyList(defs[[m]]$params, par_updates, keep.null = TRUE)
-        }
-      }
-    }
   }
 
   # Process components (membership)
@@ -1471,6 +1464,111 @@ dist_param_names <- function(dist) {
   character(0)
 }
 
+.parameter_targets_from_value <- function(value) {
+  if (is.null(value)) {
+    return(character(0))
+  }
+  if (is.character(value)) {
+    return(as.character(value))
+  }
+  stop(
+    "Parameter mappings must be character vectors like c(\"go.m\", \"stop.m\")",
+    call. = FALSE
+  )
+}
+
+.normalize_parameter_spec <- function(parameters) {
+  if (!is.list(parameters)) {
+    stop("set_parameters() requires a named list", call. = FALSE)
+  }
+  parsed <- lapply(parameters, .parameter_targets_from_value)
+
+  param_names <- names(parsed)
+  if (is.null(param_names) || any(!nzchar(param_names))) {
+    stop("set_parameters() requires a named list", call. = FALSE)
+  }
+  if (anyDuplicated(param_names)) {
+    stop("External parameter names in set_parameters() must be unique", call. = FALSE)
+  }
+  for (nm in param_names) {
+    targets <- as.character(parsed[[nm]])
+    targets <- targets[nzchar(targets)]
+    if (length(targets) == 0L) {
+      stop(sprintf("Parameter '%s' must map to at least one model parameter", nm), call. = FALSE)
+    }
+    parsed[[nm]] <- unname(targets)
+  }
+  parsed
+}
+
+.default_parameter_names <- function(spec) {
+  params <- character(0)
+  for (acc in spec$accumulators) {
+    base <- dist_param_names(acc$dist)
+    acc_params <- c(base, "q", "t0")
+    params <- c(params, paste0(acc$id, ".", acc_params))
+  }
+  comps <- spec$metadata$mixture$components %||% list()
+  for (comp in comps) {
+    weight_param <- comp$attrs$weight_param %||% NULL
+    if (!is.null(weight_param) && nzchar(weight_param)) {
+      params <- c(params, weight_param)
+    }
+  }
+  unique(params)
+}
+
+.parameter_name_lookup <- function(spec) {
+  internal_names <- .default_parameter_names(spec)
+  lookup <- setNames(internal_names, internal_names)
+  mappings <- spec$parameters %||% list()
+  if (length(mappings) == 0L) {
+    return(lookup)
+  }
+
+  seen_targets <- character(0)
+  for (external_name in names(mappings)) {
+    targets <- as.character(mappings[[external_name]])
+    unknown <- setdiff(targets, internal_names)
+    if (length(unknown) > 0L) {
+      stop(
+        sprintf(
+          "set_parameters() references unknown parameter(s): %s",
+          paste(unknown, collapse = ", ")
+        ),
+        call. = FALSE
+      )
+    }
+    duplicated_targets <- intersect(seen_targets, targets)
+    if (length(duplicated_targets) > 0L) {
+      stop(
+        sprintf(
+          "Model parameters cannot be assigned more than once: %s",
+          paste(duplicated_targets, collapse = ", ")
+        ),
+        call. = FALSE
+      )
+    }
+    lookup[targets] <- external_name
+    seen_targets <- c(seen_targets, targets)
+  }
+  lookup
+}
+
+.expand_parameter_values <- function(spec, param_values) {
+  lookup <- .parameter_name_lookup(spec)
+  required <- unique(unname(lookup))
+  missing <- setdiff(required, names(param_values))
+  if (length(missing) > 0L) {
+    stop("Missing parameter values for: ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+  expanded <- vapply(names(lookup), function(internal_name) {
+    as.numeric(param_values[[lookup[[internal_name]]]])[1]
+  }, numeric(1))
+  names(expanded) <- names(lookup)
+  expanded
+}
+
 #' List the free parameters implied by a model
 #'
 #' @param model A `race_spec` or related model object.
@@ -1483,46 +1581,8 @@ dist_param_names <- function(dist) {
 #' @export
 sampled_pars <- function(model) {
   spec <- race_model(model)
-  params <- character(0)
-  for (acc in spec$accumulators) {
-    base <- dist_param_names(acc$dist)
-    # onset is a fixed accumulator attribute; only q and t0 are estimated
-    acc_params <- c(base, "q", "t0")
-    params <- c(params, paste0(acc$id, ".", acc_params))
-  }
-  for (grp in spec$groups %||% list()) {
-    shared <- grp$attrs$shared_params
-    if (is.null(shared)) next
-    shared_names <- unlist(shared, use.names = FALSE)
-    shared_names <- as.character(shared_names)
-    params <- c(params, paste0(grp$id, ".", shared_names))
-  }
-  comps <- spec$metadata$mixture$components %||% list()
-  for (comp in comps) {
-    weight_param <- comp$attrs$weight_param %||% NULL
-    if (!is.null(weight_param) && nzchar(weight_param)) {
-      params <- c(params, weight_param)
-    }
-  }
-  unique(params)
-}
-
-param_table <- function(model, ...) {
-  values <- c(...)
-  if (is.null(names(values)) || any(!nzchar(names(values)))) {
-    stop("Named parameter values are required")
-  }
-  params <- sampled_pars(model)
-  missing <- setdiff(params, names(values))
-  if (length(missing) > 0L) {
-    stop("Missing parameter values for: ", paste(missing, collapse = ", "))
-  }
-  data.frame(
-    parameter = params,
-    value = as.numeric(values[params]),
-    row.names = NULL,
-    stringsAsFactors = FALSE
-  )
+  params <- unname(.parameter_name_lookup(spec))
+  params[!duplicated(params)]
 }
 
 #' Create trial-level parameter values
@@ -1564,9 +1624,10 @@ build_param_matrix <- function(model,
   }
   n_trials <- as.integer(n_trials)
 
-  param_names <- names(param_values)
+  raw_names <- names(param_values)
   param_values <- as.numeric(param_values)
-  names(param_values) <- param_names
+  names(param_values) <- raw_names
+  param_values <- .expand_parameter_values(spec, param_values)
 
   acc_ids <- vapply(accs, `[[`, character(1), "id")
   acc_dists <- vapply(accs, `[[`, character(1), "dist")
@@ -1589,108 +1650,8 @@ build_param_matrix <- function(model,
   weight_params <- weight_params[!is.na(weight_params)]
   col_names <- c(col_names, weight_params)
 
-  # Shared parameter groups (R-side only): expand group-level values to member accumulators.
-  shared_param_values <- list()
-  # Legacy groups
-  for (grp in spec$groups %||% list()) {
-    attrs <- grp$attrs %||% list()
-    shared <- attrs$shared_params %||% NULL
-    if (is.null(shared)) next
-    shared <- unique(as.character(unlist(shared)))
-    shared <- shared[nzchar(shared)]
-    if (length(shared) == 0L) next
-    members <- grp$members %||% character(0)
-    if (length(members) == 0L) next
-    for (par_name in shared) {
-      group_nm <- paste0(grp$id, ".", par_name)
-      if (!group_nm %in% names(param_values)) next
-      value <- as.numeric(param_values[[group_nm]])
-      for (m in members) {
-        if (!m %in% acc_ids) next
-        leaf_nm <- paste0(m, ".", par_name)
-        if (leaf_nm %in% names(param_values)) next
-        if (!is.null(shared_param_values[[leaf_nm]]) &&
-          !isTRUE(all.equal(shared_param_values[[leaf_nm]], value))) {
-          stop(sprintf("Conflicting shared parameter values for '%s'", leaf_nm))
-        }
-        shared_param_values[[leaf_nm]] <- value
-      }
-    }
-  }
-  # New shared_params
-  for (sp in spec$shared_params %||% list()) {
-    members <- sp$members
-    params <- sp$params
-
-    # Handle unnamed arguments (interpreted as param_name = param_name)
-    param_names <- names(params)
-    if (is.null(param_names)) param_names <- rep("", length(params))
-
-    for (i in seq_along(params)) {
-      pname <- param_names[i]
-      pvalue <- params[[i]]
-
-      # Determine accumulator side name and shared side name
-      if (nzchar(pname)) {
-        # named: m = "shared_m" -> acc sets m to shared_m
-        target_param <- pname
-        shared_name <- pvalue
-      } else {
-        # unnamed: "m" -> acc sets m to m
-        if (!is.character(pvalue) || length(pvalue) != 1) {
-          stop("Unnamed shared param arguments must be parameter name strings")
-        }
-        target_param <- pvalue
-        shared_name <- pvalue
-      }
-
-      # Now propagate constraint:
-      # For each member, member.target_param MUST equal member.target_param (if shared)
-      # OR: we create a mapping where 'member.target_param' looks up 'shared_name' from inputs?
-
-      # Logic: The input `param_values` (passed to build_param_matrix) contains the RAW values.
-      # If we are sharing, we expect the USER to provide `shared_name` in the input params (e.g. "m")
-      # And we must ensure that for all members, we use that value.
-
-      # Check if shared_name is in param_values
-      if (shared_name %in% names(param_values)) {
-        val <- as.numeric(param_values[[shared_name]])
-
-        for (m in members) {
-          # Check if this accumulator even needs this param?
-          # We blindly assign/overwrite.
-          # But wait, build_param_matrix constructs the matrix row from `base_params` + overrides.
-          # We need to inject 'val' into the correct column for this accumulator.
-
-          fullname <- paste0(m, ".", target_param)
-
-          # Check consistency if already set?
-          if (fullname %in% names(shared_param_values) &&
-            !isTRUE(all.equal(shared_param_values[[fullname]], val))) {
-            stop(sprintf("Conflicting shared parameter values for '%s'", fullname))
-          }
-          shared_param_values[[fullname]] <- val
-        }
-      }
-    }
-  }
-
-  if (length(shared_param_values) > 0L) {
-    expanded <- unlist(shared_param_values, use.names = TRUE)
-    param_values <- c(param_values, expanded[setdiff(names(expanded), names(param_values))])
-  }
-
-  # Map accumulators to components from group/component declarations.
+  # Map accumulators to components from component declarations.
   comp_attr <- list()
-  for (grp in spec$groups %||% list()) {
-    attrs <- grp$attrs %||% list()
-    comp_val <- attrs$component %||% NULL
-    if (is.null(comp_val)) next
-    members <- grp$members %||% character(0)
-    for (m in members) {
-      comp_attr[[m]] <- comp_val
-    }
-  }
   for (cmp in spec$components %||% list()) {
     cid <- cmp$id
     members <- cmp$members %||% character(0)
@@ -1740,31 +1701,15 @@ build_param_matrix <- function(model,
 
   # Shared trigger groups (q may be shared or independent draws)
   acc_trigger_map <- setNames(vector("list", length(acc_ids)), acc_ids)
-  all_trigger_defs <- c(
-    lapply(spec$groups %||% list(), function(g) {
-      t <- g$attrs$shared_trigger
-      if (!is.null(t)) {
-        list(
-          id = t$id %||% g$id,
-          param = t$param,
-          q = t$q,
-          draw = t$draw,
-          members = g$members
-        )
-      } else {
-        NULL
-      }
-    }),
-    lapply(spec$triggers %||% list(), function(t) {
-      list(
-        id = t$id,
-        param = t$param,
-        q = t$q,
-        draw = t$draw,
-        members = t$members
-      )
-    })
-  )
+  all_trigger_defs <- lapply(spec$triggers %||% list(), function(t) {
+    list(
+      id = t$id,
+      param = t$param,
+      q = t$q,
+      draw = t$draw,
+      members = t$members
+    )
+  })
   all_trigger_defs <- Filter(Negate(is.null), all_trigger_defs)
 
   for (trig in all_trigger_defs) {

@@ -102,10 +102,16 @@ another observed process whose onset depends on <code>B</code>.</p>
 <span><span class="va">true_params</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
 <span>  A.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.28</span><span class="op">)</span>,</span>
 <span>  A.s <span class="op">=</span> <span class="fl">0.14</span>,</span>
+<span>  A.q <span class="op">=</span> <span class="fl">0</span>,</span>
+<span>  A.t0 <span class="op">=</span> <span class="fl">0</span>,</span>
 <span>  B.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.1</span><span class="op">)</span>,</span>
-<span>  B.s <span class="op">=</span> <span class="fl">0.1</span>, </span>
+<span>  B.s <span class="op">=</span> <span class="fl">0.1</span>,</span>
+<span>  B.q <span class="op">=</span> <span class="fl">0</span>,</span>
+<span>  B.t0 <span class="op">=</span> <span class="fl">0</span>,</span>
 <span>  C.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.15</span><span class="op">)</span>,</span>
-<span>  C.s <span class="op">=</span> <span class="fl">0.1</span> </span>
+<span>  C.s <span class="op">=</span> <span class="fl">0.1</span>,</span>
+<span>  C.q <span class="op">=</span> <span class="fl">0</span>,</span>
+<span>  C.t0 <span class="op">=</span> <span class="fl">0</span></span>
 <span><span class="op">)</span></span></code></pre></div>
 <p><strong>Simulate data</strong> Each trial contributes the observed
 response label and response time.</p>
@@ -166,11 +172,12 @@ optimize on the log scale for the spread parameters so the search can
 proceed without positivity constraints.</p>
 <div class="sourceCode" id="cb11"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">neg_loglik</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">theta</span><span class="op">)</span> <span class="op">{</span></span>
-<span>  <span class="co"># optimize on an unconstrained scale for s</span></span>
-<span>  <span class="va">theta</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">theta</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
+<span>  <span class="va">est</span> <span class="op">&lt;-</span> <span class="va">true_params</span></span>
+<span>  <span class="va">est</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.m"</span>, <span class="st">"A.s"</span>, <span class="st">"B.m"</span>, <span class="st">"B.s"</span>, <span class="st">"C.m"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="va">theta</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.m"</span>, <span class="st">"A.s"</span>, <span class="st">"B.m"</span>, <span class="st">"B.s"</span>, <span class="st">"C.m"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span></span>
+<span>  <span class="va">est</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">est</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
 <span>  <span class="va">params_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span></span>
 <span>    <span class="va">model_spec</span>,</span>
-<span>    <span class="va">theta</span>,</span>
+<span>    <span class="va">est</span>,</span>
 <span>    n_trials <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Extremes.html" class="external-link">max</a></span><span class="op">(</span><span class="va">data_df</span><span class="op">$</span><span class="va">trial</span><span class="op">)</span>,</span>
 <span>    layout <span class="op">=</span> <span class="va">ctx</span><span class="op">$</span><span class="va">param_layout</span></span>
 <span>  <span class="op">)</span></span>
@@ -191,11 +198,12 @@ proceed without positivity constraints.</p>
 <span></span>
 <span><span class="va">fit_params</span> <span class="op">&lt;-</span> <span class="va">fit</span><span class="op">$</span><span class="va">par</span></span>
 <span><span class="va">fit_params</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">fit_params</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
+<span><span class="va">target</span> <span class="op">&lt;-</span> <span class="va">true_params</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.m"</span>, <span class="st">"A.s"</span>, <span class="st">"B.m"</span>, <span class="st">"B.s"</span>, <span class="st">"C.m"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span></span>
 <span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span>
-<span>  true <span class="op">=</span> <span class="va">true_params</span>,</span>
+<span>  true <span class="op">=</span> <span class="va">target</span>,</span>
 <span>  recovered <span class="op">=</span> <span class="va">fit_params</span>,</span>
-<span>  miss <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">true_params</span> <span class="op">-</span> <span class="va">fit_params</span><span class="op">)</span></span>
+<span>  miss <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">target</span> <span class="op">-</span> <span class="va">fit_params</span><span class="op">)</span></span>
 <span><span class="op">)</span></span></code></pre></div>
 <pre><code><span><span class="co">##          true   recovered        miss</span></span>
 <span><span class="co">## A.m -1.272966 -1.25003011 0.022935562</span></span>

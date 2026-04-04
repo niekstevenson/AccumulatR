@@ -2,7 +2,7 @@
 % Please edit documentation in R/model_definition.R
 \name{set_metadata}
 \alias{set_metadata}
-\title{Store model-level settings}
+\title{Store model-level metadata}
 \usage{
 set_metadata(spec, ...)
 }
@@ -15,9 +15,19 @@ set_metadata(spec, ...)
 The updated `race_spec`.
 }
 \description{
-Store model-level settings
+`set_metadata()` stores additional metadata on a model specification.
+At present, these values are carried through model finalization but do not
+directly change simulation or likelihood evaluation. This is mainly useful
+for annotating a model or passing labels such as `special_outcomes` to
+downstream tools.
 }
 \examples{
-spec <- race_spec()
-spec <- set_metadata(spec, rel_tol = 1e-4)
+spec <- race_spec() |>
+  add_accumulator("go", "lognormal") |>
+  add_accumulator("watch", "lognormal") |>
+  add_outcome("go", "go") |>
+  add_outcome("NR_CENSOR", "watch", options = list(class = "censor"))
+
+spec <- set_metadata(spec, special_outcomes = list(censor = "NR_CENSOR"))
+finalize_model(spec)$special_outcomes$censor
 }

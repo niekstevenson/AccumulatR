@@ -1,17 +1,3 @@
-`%||%` <- function(lhs, rhs) if (is.null(lhs) || length(lhs) == 0) rhs else lhs
-
-.ensure_acc_param_t0 <- function(params) {
-  if (is.null(params) || length(params) == 0L) {
-    params <- list()
-  }
-  if (is.null(params$t0) || length(params$t0) == 0L) {
-    params$t0 <- 0
-  } else {
-    params$t0 <- as.numeric(params$t0)[1]
-  }
-  params
-}
-
 is_model_tables <- function(x) {
   is.list(x) &&
     all(c("struct_nodes", "component_nodes", "param_values") %in% names(x))
@@ -65,32 +51,6 @@ model_to_tables <- function(model) {
     )
   }
 
-  shared_param_map <- list()
-  shared_param_values <- list()
-  shared_group_counter <- 0L
-  if (!is.null(model$groups) && length(model$groups) > 0) {
-    for (grp in model$groups) {
-      sp <- grp$attrs$shared_params %||% NULL
-      if (is.null(sp) || length(sp) == 0) next
-      shared_group_counter <- shared_group_counter + 1L
-      gid <- grp$id %||% sprintf("shared_group_%d", shared_group_counter)
-      members <- grp$members %||% character(0)
-      if (length(members) == 0) next
-      for (member in members) {
-        if (is.null(shared_param_map[[member]])) shared_param_map[[member]] <- list()
-        for (pname in names(sp)) {
-          shared_id <- sprintf("shared:%s:%s", gid, pname)
-          shared_param_map[[member]][[pname]] <- shared_id
-          if (!is.null(sp[[pname]])) {
-            if (is.null(shared_param_values[[shared_id]])) {
-              shared_param_values[[shared_id]] <- sp[[pname]]
-            }
-          }
-        }
-      }
-    }
-  }
-
   added_param_ids <- character(0)
 
   for (acc in model$accumulators) {
@@ -99,15 +59,10 @@ model_to_tables <- function(model) {
     acc_params <- .ensure_acc_param_t0(acc$params %||% list())
     if (length(acc_params) > 0) {
       for (pname in names(acc_params)) {
-        shared_mapping <- shared_param_map[[acc$id]] %||% list()
-        param_id <- shared_mapping[[pname]] %||% .make_param_id(struct_id, pname)
+        param_id <- .make_param_id(struct_id, pname)
         param_slots[[pname]] <- param_id
         if (!(param_id %in% added_param_ids)) {
-          param_value <- shared_param_values[[param_id]]
-          if (is.null(param_value)) {
-            param_value <- acc_params[[pname]]
-            shared_param_values[[param_id]] <- param_value
-          }
+          param_value <- acc_params[[pname]]
           param_rows[[length(param_rows) + 1L]] <- data.frame(
             param_id = param_id,
             value = param_value,
@@ -210,8 +165,7 @@ model_to_tables <- function(model) {
     ),
     param_values = param_values,
     components = components_df,
-    metadata = model$metadata %||% list(),
-    groups = model$groups %||% list()
+    metadata = model$metadata %||% list()
   )
 
   class(tables) <- c("model_tables", class(tables))
@@ -277,7 +231,6 @@ tables_to_model <- function(tables) {
   })
 
   metadata <- tables$metadata %||% list()
-  groups <- tables$groups %||% list()
 
   if (!is.null(tables$components) && nrow(tables$components) > 0) {
     comps <- lapply(seq_len(nrow(tables$components)), function(i) {
@@ -294,8 +247,7 @@ tables_to_model <- function(tables) {
     accumulators = accumulators,
     pools = pools,
     outcomes = outcomes,
-    metadata = metadata,
-    groups = groups
+    metadata = metadata
   )
   class(model) <- "race_model_spec"
   model

@@ -36,12 +36,18 @@ true_params <- c(
   R1_A.B = 1,
   R1_A.A = .3,
   R1_A.sv = 1,
+  R1_A.q = 0,
+  R1_A.t0 = 0,
   R1_B.v = 3,
   R1_B.B = 1,
   R1_B.A = .3,
   R1_B.s = 1,
+  R1_B.q = 0,
+  R1_B.t0 = 0,
   R2.m = log(0.4),
-  R2.s = 0.18
+  R2.s = 0.18,
+  R2.q = 0,
+  R2.t0 = 0
 )
 ```
 
@@ -102,8 +108,7 @@ ll_wrong
 ```
 
 **Estimate parameters with `optim()`**
-We estimate five parameters: `R1_A.v`, `R1_B.v`, a shared threshold `B` used
-for both `R1_A.B` and `R1_B.B`, plus `R2.m` and `R2.s`.
+We estimate five parameters: `R1_A.v`, `R1_B.v`, a shared threshold `B` used for both `R1_A.B` and `R1_B.B`, plus `R2.m` and `R2.s`. We estimate `B` and `s` on the log scale, to ensure support on the real line.
 
 ```{r}
 neg_loglik <- function(theta) {

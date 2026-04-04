@@ -13,7 +13,6 @@
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/add_component.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/add_outcome.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/add_pool.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/reference/add_shared_params.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/add_trigger.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/after.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/all_of.html</loc></url>
@@ -36,6 +35,7 @@
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/sampled_pars.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/set_metadata.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/set_mixture_options.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/reference/set_parameters.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/simulate.html</loc></url>
 </urlset>
 

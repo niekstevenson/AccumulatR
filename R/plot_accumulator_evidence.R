@@ -499,7 +499,3 @@ plot_accumulators <- function(model,
     blocker_pairs = blocker_pairs
   ))
 }
-
-plot_accumulator_evidence <- function(...) {
-  plot_accumulators(...)
-}

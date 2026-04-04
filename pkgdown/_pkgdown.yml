@@ -26,11 +26,10 @@ reference:
       - add_pool
       - add_outcome
       - add_component
-      - add_shared_params
+      - set_parameters
       - add_trigger
       - set_metadata
       - set_mixture_options
-      - nest_accumulators
       - finalize_model
 
   - title: "Outcome Expressions and Timing"
@@ -47,6 +46,7 @@ reference:
   - title: "Data Preparation"
     desc: "Inspect model parameters and prepare trial-level parameter matrices."
     contents:
+      - nest_accumulators
       - sampled_pars
       - build_param_matrix
 

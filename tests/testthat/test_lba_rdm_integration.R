@@ -77,6 +77,6 @@ testthat::test_that("RDM requires parameter s", {
 
   testthat::expect_error(
     build_param_matrix(spec, vals, n_trials = 1L),
-    "Missing required parameter 's'"
+    "Missing parameter values for: a.s"
   )
 })

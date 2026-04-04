@@ -33,10 +33,16 @@ structure <- finalize_model(model_spec)
 true_params <- c(
   A.m = log(0.28),
   A.s = 0.14,
+  A.q = 0,
+  A.t0 = 0,
   B.m = log(0.1),
-  B.s = 0.1, 
+  B.s = 0.1,
+  B.q = 0,
+  B.t0 = 0,
   C.m = log(0.15),
-  C.s = 0.1 
+  C.s = 0.1,
+  C.q = 0,
+  C.t0 = 0
 )
 ```
 
@@ -104,11 +110,12 @@ search can proceed without positivity constraints.
 
 ```{r}
 neg_loglik <- function(theta) {
-  # optimize on an unconstrained scale for s
-  theta[c("A.s", "B.s", "C.s")] <- exp(theta[c("A.s", "B.s", "C.s")])
+  est <- true_params
+  est[c("A.m", "A.s", "B.m", "B.s", "C.m", "C.s")] <- theta[c("A.m", "A.s", "B.m", "B.s", "C.m", "C.s")]
+  est[c("A.s", "B.s", "C.s")] <- exp(est[c("A.s", "B.s", "C.s")])
   params_df <- build_param_matrix(
     model_spec,
-    theta,
+    est,
     n_trials = max(data_df$trial),
     layout = ctx$param_layout
   )
@@ -129,10 +136,11 @@ fit <- optim(start, neg_loglik, method = "Nelder-Mead")
 
 fit_params <- fit$par
 fit_params[c("A.s", "B.s", "C.s")] <- exp(fit_params[c("A.s", "B.s", "C.s")])
+target <- true_params[c("A.m", "A.s", "B.m", "B.s", "C.m", "C.s")]
 
 data.frame(
-  true = true_params,
+  true = target,
   recovered = fit_params,
-  miss = abs(true_params - fit_params)
+  miss = abs(target - fit_params)
 )
 ```

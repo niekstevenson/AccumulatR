@@ -13,10 +13,10 @@ example_1_simple <- race_spec() |>
   add_outcome("R2", "go2") |>
   finalize_model()
 params_example_1_simple <- c(
-  go1.meanlog = log(0.30),
-  go1.sdlog = 0.18,
-  go2.meanlog = log(0.32),
-  go2.sdlog = 0.18
+  go1.m = log(0.30),
+  go1.s = 0.18,
+  go2.m = log(0.32),
+  go2.s = 0.18
 )
 
 # Example 2 – stop/go mixture with gating and inhibition
@@ -33,13 +33,13 @@ example_2_stop_mixture <- race_spec() |>
   set_mixture_options(mode = "fixed") |>
   finalize_model()
 params_example_2_stop_mixture <- c(
-  go1.meanlog = log(0.35),
-  go1.sdlog = 0.2,
+  go1.m = log(0.35),
+  go1.s = 0.2,
   stop.mu = 0.1,
   stop.sigma = 0.04,
   stop.tau = 0.1,
-  go2.meanlog = log(0.60),
-  go2.sdlog = 0.18
+  go2.m = log(0.60),
+  go2.s = 0.18
 )
 
 # Example 3 – stop outcome mapped to NA
@@ -52,12 +52,12 @@ example_3_stop_na <- race_spec() |>
   add_outcome("STOP", "stop", options = list(map_outcome_to = NA_character_)) |>
   finalize_model()
 params_example_3_stop_na <- c(
-  go_left.meanlog = log(0.30),
-  go_left.sdlog = 0.20,
-  go_right.meanlog = log(0.32),
-  go_right.sdlog = 0.20,
-  stop.meanlog = log(0.15),
-  stop.sdlog = 0.18
+  go_left.m = log(0.30),
+  go_left.s = 0.20,
+  go_right.m = log(0.32),
+  go_right.s = 0.20,
+  stop.m = log(0.15),
+  stop.s = 0.18
 )
 
 # Example 4 – two accumulators vs one
@@ -70,12 +70,12 @@ example_4_two_on_one <- race_spec() |>
   add_outcome("R2", "R2") |>
   finalize_model()
 params_example_4_two_on_one <- c(
-  R1_A.meanlog = log(0.30),
-  R1_A.sdlog = 0.15,
-  R1_B.meanlog = log(0.30),
-  R1_B.sdlog = 0.20,
-  R2.meanlog = log(0.30),
-  R2.sdlog = 0.18
+  R1_A.m = log(0.30),
+  R1_A.s = 0.15,
+  R1_B.m = log(0.30),
+  R1_B.s = 0.20,
+  R2.m = log(0.30),
+  R2.s = 0.18
 )
 
 # Example 5 – timeout with weighted guess
@@ -90,12 +90,12 @@ example_5_timeout_guess <- race_spec() |>
   )) |>
   finalize_model()
 params_example_5_timeout_guess <- c(
-  go_left.meanlog = log(0.30),
-  go_left.sdlog = 0.18,
-  go_right.meanlog = log(0.325),
-  go_right.sdlog = 0.18,
-  timeout.meanlog = log(0.25),
-  timeout.sdlog = 0.10
+  go_left.m = log(0.30),
+  go_left.s = 0.18,
+  go_right.m = log(0.325),
+  go_right.s = 0.18,
+  timeout.m = log(0.25),
+  timeout.s = 0.10
 )
 
 # Example 6 – dual path (A & C) OR (B & C)
@@ -107,12 +107,12 @@ example_6_dual_path <- race_spec() |>
   add_outcome("Outcome_via_B", all_of("acc_taskB", "acc_gateC")) |>
   finalize_model()
 params_example_6_dual_path <- c(
-  acc_taskA.meanlog = log(0.28),
-  acc_taskA.sdlog = 0.18,
-  acc_taskB.meanlog = log(0.32),
-  acc_taskB.sdlog = 0.18,
-  acc_gateC.meanlog = log(0.30),
-  acc_gateC.sdlog = 0.18
+  acc_taskA.m = log(0.28),
+  acc_taskA.s = 0.18,
+  acc_taskB.m = log(0.32),
+  acc_taskB.s = 0.18,
+  acc_gateC.m = log(0.30),
+  acc_gateC.s = 0.18
 )
 
 # Example 7 – fast/slow mixture
@@ -128,12 +128,12 @@ example_7_mixture <- race_spec() |>
   set_mixture_options(mode = "sample", reference = "slow") |>
   finalize_model()
 params_example_7_mixture <- c(
-  target_fast.meanlog = log(0.25),
-  target_fast.sdlog = 0.15,
-  target_slow.meanlog = log(0.45),
-  target_slow.sdlog = 0.20,
-  competitor.meanlog = log(0.35),
-  competitor.sdlog = 0.18,
+  target_fast.m = log(0.25),
+  target_fast.s = 0.15,
+  target_slow.m = log(0.45),
+  target_slow.s = 0.20,
+  competitor.m = log(0.35),
+  competitor.s = 0.18,
   p_fast = 0.2
 )
 
@@ -143,12 +143,12 @@ example_8_shared_params <- race_spec() |>
   add_accumulator("go_right", "lognormal") |>
   add_outcome("Left", "go_left") |>
   add_outcome("Right", "go_right") |>
-  add_shared_params(members = c("go_left", "go_right"), "meanlog") |>
+  set_parameters(list(shared_m = c("go_left.m", "go_right.m"))) |>
   finalize_model()
 params_example_8_shared_params <- c(
-  go_left.sdlog = 0.18,
-  go_right.sdlog = 0.24,
-  `par:shared_mean.meanlog` = log(0.32)
+  go_left.s = 0.18,
+  go_right.s = 0.24,
+  shared_m = log(0.32)
 )
 
 # Example 9 – advanced k-of-n logic
@@ -165,18 +165,22 @@ example_9_advanced_k <- race_spec() |>
   add_pool("B2", c("b2_1", "b2_2")) |>
   add_outcome("A", "A") |>
   add_outcome("B", all_of("B1", "B2")) |>
-  add_shared_params(members = c("a2", "a3"), meanlog = "par:A_shared.meanlog", sdlog = "par:A_shared.sdlog") |>
-  add_shared_params(members = c("a1", "b1_1", "b2_2"), meanlog = "par:Cross_shared.meanlog", sdlog = "par:Cross_shared.sdlog") |>
+  set_parameters(list(
+    A_shared_m = c("a2.m", "a3.m"),
+    A_shared_s = c("a2.s", "a3.s"),
+    Cross_shared_m = c("a1.m", "b1_1.m", "b2_2.m"),
+    Cross_shared_s = c("a1.s", "b1_1.s", "b2_2.s")
+  )) |>
   finalize_model()
 params_example_9_advanced_k <- c(
-  b1_2.meanlog = log(0.50),
-  b1_2.sdlog = 0.25,
-  b2_1.meanlog = log(0.48),
-  b2_1.sdlog = 0.25,
-  `par:A_shared.meanlog` = log(0.575),
-  `par:A_shared.sdlog` = 0.25,
-  `par:Cross_shared.meanlog` = log(0.50),
-  `par:Cross_shared.sdlog` = 0.25
+  b1_2.m = log(0.50),
+  b1_2.s = 0.25,
+  b2_1.m = log(0.48),
+  b2_1.s = 0.25,
+  A_shared_m = log(0.575),
+  A_shared_s = 0.25,
+  Cross_shared_m = log(0.50),
+  Cross_shared_s = 0.25
 )
 
 # Example 10 – exclusion via guard
@@ -188,12 +192,12 @@ example_10_exclusion <- race_spec() |>
   add_outcome("R2", "R2_acc") |>
   finalize_model()
 params_example_10_exclusion <- c(
-  R1_acc.meanlog = log(0.35),
-  R1_acc.sdlog = 0.18,
-  R2_acc.meanlog = log(0.45),
-  R2_acc.sdlog = 0.18,
-  X_acc.meanlog = log(0.35),
-  X_acc.sdlog = 0.18
+  R1_acc.m = log(0.35),
+  R1_acc.s = 0.18,
+  R2_acc.m = log(0.45),
+  R2_acc.s = 0.18,
+  X_acc.m = log(0.35),
+  X_acc.s = 0.18
 )
 
 # Example 11 – censoring pool and deadline
@@ -207,12 +211,12 @@ example_11_censor_deadline <- race_spec() |>
   set_metadata(special_outcomes = list(censor = "NR_CENSOR")) |>
   finalize_model()
 params_example_11_censor_deadline <- c(
-  go_left.meanlog = log(0.28),
-  go_left.sdlog = 0.18,
-  go_right.meanlog = log(0.34),
-  go_right.sdlog = 0.18,
-  censor_watch.meanlog = log(0.40),
-  censor_watch.sdlog = 0.12
+  go_left.m = log(0.28),
+  go_left.s = 0.18,
+  go_right.m = log(0.34),
+  go_right.s = 0.18,
+  censor_watch.m = log(0.40),
+  censor_watch.s = 0.12
 )
 
 # Example 12 – inhibitor with protector
@@ -230,15 +234,15 @@ example_12_inhibitor_with_protector <- race_spec() |>
   set_mixture_options(mode = "fixed") |>
   finalize_model()
 params_example_12_inhibitor_with_protector <- c(
-  go1.meanlog = log(0.35),
-  go1.sdlog = 0.2,
+  go1.m = log(0.35),
+  go1.s = 0.2,
   stop.mu = 0.1,
   stop.sigma = 0.04,
   stop.tau = 0.1,
-  go2.meanlog = log(0.60),
-  go2.sdlog = 0.18,
-  safety.meanlog = log(0.22),
-  safety.sdlog = 0.13
+  go2.m = log(0.60),
+  go2.s = 0.18,
+  safety.m = log(0.22),
+  safety.s = 0.13
 )
 
 # Example 13 – nested pools
@@ -255,16 +259,16 @@ example_13_nested_pools <- race_spec() |>
   add_outcome("TeamB", "B_team") |>
   finalize_model()
 params_example_13_nested_pools <- c(
-  a1.meanlog = log(0.27),
-  a1.sdlog = 0.15,
-  a2.meanlog = log(0.29),
-  a2.sdlog = 0.15,
-  a3.meanlog = log(0.33),
-  a3.sdlog = 0.16,
-  b1.meanlog = log(0.31),
-  b1.sdlog = 0.17,
-  b2.meanlog = log(0.36),
-  b2.sdlog = 0.19
+  a1.m = log(0.27),
+  a1.s = 0.15,
+  a2.m = log(0.29),
+  a2.s = 0.15,
+  a3.m = log(0.33),
+  a3.s = 0.16,
+  b1.m = log(0.31),
+  b1.s = 0.17,
+  b2.m = log(0.36),
+  b2.s = 0.19
 )
 
 # Example 14 – weighted pool
@@ -279,12 +283,12 @@ example_14_weighted_pool <- race_spec() |>
   add_outcome("Competitor", "w3") |>
   finalize_model()
 params_example_14_weighted_pool <- c(
-  w1.meanlog = log(0.30),
-  w1.sdlog = 0.18,
-  w2.meanlog = log(0.30),
-  w2.sdlog = 0.18,
-  w3.meanlog = log(0.30),
-  w3.sdlog = 0.20
+  w1.m = log(0.30),
+  w1.s = 0.18,
+  w2.m = log(0.30),
+  w2.s = 0.18,
+  w3.m = log(0.30),
+  w3.s = 0.20
 )
 
 # Example 15 – mixture with component metadata
@@ -306,14 +310,14 @@ example_15_component_metadata <- race_spec() |>
   set_mixture_options(mode = "fixed") |>
   finalize_model()
 params_example_15_component_metadata <- c(
-  acc_shared_fast.meanlog = log(0.32),
-  acc_shared_fast.sdlog = 0.10,
-  acc_shared_slow.meanlog = log(0.60),
-  acc_shared_slow.sdlog = 0.12,
-  acc_fast.meanlog = log(0.24),
-  acc_fast.sdlog = 0.10,
-  acc_slow.meanlog = log(0.50),
-  acc_slow.sdlog = 0.15
+  acc_shared_fast.m = log(0.32),
+  acc_shared_fast.s = 0.10,
+  acc_shared_slow.m = log(0.60),
+  acc_shared_slow.s = 0.12,
+  acc_fast.m = log(0.24),
+  acc_fast.s = 0.10,
+  acc_slow.m = log(0.50),
+  acc_slow.s = 0.15
 )
 
 # Guard tie – shared gate with stop control
@@ -326,14 +330,14 @@ example_16_guard_tie_simple <- race_spec() |>
   add_outcome("Slow", all_of("go_slow", "gate_shared")) |>
   finalize_model()
 params_example_16_guard_tie_simple <- c(
-  go_fast.meanlog = log(0.28),
-  go_fast.sdlog = 0.18,
-  go_slow.meanlog = log(0.34),
-  go_slow.sdlog = 0.18,
-  gate_shared.meanlog = log(0.30),
-  gate_shared.sdlog = 0.16,
-  stop_control.meanlog = log(0.27),
-  stop_control.sdlog = 0.15
+  go_fast.m = log(0.28),
+  go_fast.s = 0.18,
+  go_slow.m = log(0.34),
+  go_slow.s = 0.18,
+  gate_shared.m = log(0.30),
+  gate_shared.s = 0.16,
+  stop_control.m = log(0.27),
+  stop_control.s = 0.15
 )
 
 example_17_k_of_n_inhibitors <- race_spec() |>
@@ -371,20 +375,26 @@ example_17_k_of_n_inhibitors <- race_spec() |>
     inhibit(all_of("c2", "C13"), by = "b2")
   )) |>
   add_outcome("D", inhibit("D", by = "c3")) |>
-  add_shared_params(members = c("a1", "a2", "a3"), meanlog = "par:shared_A.meanlog", sdlog = "par:shared_A.sdlog") |>
-  add_shared_params(members = c("b1", "b2", "b3"), meanlog = "par:shared_B.meanlog", sdlog = "par:shared_B.sdlog") |>
-  add_shared_params(members = c("c1", "c2", "c3"), meanlog = "par:shared_C.meanlog", sdlog = "par:shared_C.sdlog") |>
-  add_shared_params(members = c("d1", "d2", "d3"), meanlog = "par:shared_D.meanlog", sdlog = "par:shared_D.sdlog") |>
+  set_parameters(list(
+    shared_A_m = c("a1.m", "a2.m", "a3.m"),
+    shared_A_s = c("a1.s", "a2.s", "a3.s"),
+    shared_B_m = c("b1.m", "b2.m", "b3.m"),
+    shared_B_s = c("b1.s", "b2.s", "b3.s"),
+    shared_C_m = c("c1.m", "c2.m", "c3.m"),
+    shared_C_s = c("c1.s", "c2.s", "c3.s"),
+    shared_D_m = c("d1.m", "d2.m", "d3.m"),
+    shared_D_s = c("d1.s", "d2.s", "d3.s")
+  )) |>
   finalize_model()
 params_example_17_k_of_n_inhibitors <- c(
-  `par:shared_A.meanlog` = log(0.30),
-  `par:shared_A.sdlog` = 0.15,
-  `par:shared_B.meanlog` = log(0.30),
-  `par:shared_B.sdlog` = 0.15,
-  `par:shared_C.meanlog` = log(0.30),
-  `par:shared_C.sdlog` = 0.15,
-  `par:shared_D.meanlog` = log(0.30),
-  `par:shared_D.sdlog` = 0.15
+  shared_A_m = log(0.30),
+  shared_A_s = 0.15,
+  shared_B_m = log(0.30),
+  shared_B_s = 0.15,
+  shared_C_m = log(0.30),
+  shared_C_s = 0.15,
+  shared_D_m = log(0.30),
+  shared_D_s = 0.15
 )
 
 # Example 18 univalent stop change - bimanual
@@ -415,16 +425,16 @@ example_18_univalent_stop_change <- race_spec() |>
   set_mixture_options(mode = "fixed") |>
   finalize_model()
 params_example_18_univalent_stop_change <- c(
-  go_left.meanlog = log(0.35),
-  go_left.sdlog = 0.2,
-  go_right.meanlog = log(0.35),
-  go_right.sdlog = 0.2,
-  stop.meanlog = log(.2),
-  stop.sdlog = .1,
-  change2left.meanlog = log(0.3),
-  change2left.sdlog = 0.18,
-  change2right.meanlog = log(0.3),
-  change2right.sdlog = 0.18
+  go_left.m = log(0.35),
+  go_left.s = 0.2,
+  go_right.m = log(0.35),
+  go_right.s = 0.2,
+  stop.m = log(.2),
+  stop.s = .1,
+  change2left.m = log(0.3),
+  change2left.s = 0.18,
+  change2right.m = log(0.3),
+  change2right.s = 0.18
 )
 
 # Helper: shared accumulator definitions for stimulus-selective race
@@ -462,23 +472,26 @@ example_19_stim_select_stop <- .stim_base_spec() |>
   add_component("go_only", members = c("go1"), attrs = list(component = "go_only"), weight = 0.2) |>
   add_component("stop_ignore", members = c("go1", "ignore_high", "go2", "stop1", "stop2"), attrs = list(component = "stop_ignore"), weight = 0.4) |>
   add_component("stop_true", members = c("go1", "ignore_low", "go2", "stop1", "stop2"), attrs = list(component = "stop_true"), weight = 0.4) |>
-  add_shared_params(members = c("ignore_high", "ignore_low"), sdlog = "shared_ignore_sdlog.sdlog") |>
-  add_shared_params(members = c("stop1", "stop2"), sigma = "shared_stop_params.sigma", tau = "shared_stop_params.tau") |>
+  set_parameters(list(
+    shared_ignore_s = c("ignore_high.s", "ignore_low.s"),
+    shared_stop_sigma = c("stop1.sigma", "stop2.sigma"),
+    shared_stop_tau = c("stop1.tau", "stop2.tau")
+  )) |>
   set_mixture_options(mode = "fixed") |>
   finalize_model()
 
 params_example_19_stim_select_stop <- c(
-  go1.meanlog = log(0.50),
-  go1.sdlog = 0.18,
-  ignore_high.meanlog = log(0.20),
-  ignore_low.meanlog = log(0.30),
-  go2.meanlog = log(0.25),
-  go2.sdlog = 0.16,
+  go1.m = log(0.50),
+  go1.s = 0.18,
+  ignore_high.m = log(0.20),
+  ignore_low.m = log(0.30),
+  go2.m = log(0.25),
+  go2.s = 0.16,
   stop1.mu = 0.2,
   stop2.mu = 0.15,
-  `shared_ignore_sdlog.sdlog` = 0.16,
-  `shared_stop_params.sigma` = 0.05,
-  `shared_stop_params.tau` = 0.08
+  shared_ignore_s = 0.16,
+  shared_stop_sigma = 0.05,
+  shared_stop_tau = 0.08
 )
 
 
@@ -508,15 +521,15 @@ example_20_simple_stop_change <- race_spec() |>
   set_mixture_options(mode = "fixed") |>
   finalize_model()
 params_example_20_simple_stop_change <- c(
-  go_left.meanlog = log(0.35),
-  go_left.sdlog = 0.2,
+  go_left.m = log(0.35),
+  go_left.s = 0.2,
   go_left.t0 = .1,
-  go_right.meanlog = log(0.35),
-  go_right.sdlog = 0.2,
-  stop.meanlog = log(.35),
-  stop.sdlog = 0.2,
-  change2right.meanlog = log(0.5),
-  change2right.sdlog = 0.18
+  go_right.m = log(0.35),
+  go_right.s = 0.2,
+  stop.m = log(.35),
+  stop.s = 0.2,
+  change2right.m = log(0.5),
+  change2right.s = 0.18
 )
 
 
@@ -536,10 +549,10 @@ example_21_simple_q <- race_spec() |>
   finalize_model()
 
 params_example_21_simple_q <- c(
-  go1.meanlog = log(0.30),
-  go1.sdlog = 0.18,
-  go2.meanlog = log(0.32),
-  go2.sdlog = 0.18,
+  go1.m = log(0.30),
+  go1.s = 0.18,
+  go2.m = log(0.32),
+  go2.s = 0.18,
   go_trigger_q = 0.10 # estimable shared gate parameter (probability)
 )
 
@@ -556,10 +569,10 @@ example_22_shared_q <- race_spec() |>
   finalize_model()
 
 params_example_22_shared_q <- c(
-  go_left.meanlog = log(0.30),
-  go_left.sdlog = 0.18,
-  go_right.meanlog = log(0.32),
-  go_right.sdlog = 0.18,
+  go_left.m = log(0.30),
+  go_left.s = 0.18,
+  go_right.m = log(0.32),
+  go_right.s = 0.18,
   q_shared = 0.10
 )
 
@@ -592,12 +605,12 @@ example_23_univalent_stop_change <- race_spec() |>
   set_mixture_options(mode = "fixed") |>
   finalize_model()
 params_example_23_univalent_stop_change <- c(
-  go_left.meanlog = log(0.35),
-  go_left.sdlog = 0.2,
-  stop.meanlog = log(.2),
-  stop.sdlog = .1,
-  change2right.meanlog = log(0.3),
-  change2right.sdlog = 0.18,
+  go_left.m = log(0.35),
+  go_left.s = 0.2,
+  stop.m = log(.2),
+  stop.s = .1,
+  change2right.m = log(0.3),
+  change2right.s = 0.18,
   go_shared_q = 0.10,
   stop_shared_q = 0.10
 )

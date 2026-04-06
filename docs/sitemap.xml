@@ -1,9 +1,12 @@
 <urlset xmlns = 'http://www.sitemaps.org/schemas/sitemap/0.9'>
 <url><loc>https://niekstevenson.github.io/AccumulatR/404.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/articles/chained_onset.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/getting_started.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/index.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/articles/logical_rules.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/multi_outcome.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/simple_chained_onset.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/articles/simple_model.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/simple_simulate_fit_model4.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/authors.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/index.html</loc></url>
@@ -20,6 +23,7 @@
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/build_outcome_expr.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/ensure_native_ctx.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/reference/exclude.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/expr_guard.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/finalize_model.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/first_of.html</loc></url>

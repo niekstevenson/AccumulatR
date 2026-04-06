@@ -108,7 +108,7 @@ We estimate `A.m`, `A.s`, `B.m`, and `B.s`. As in many
 psychological fitting routines, we optimize on an unconstrained scale for the
 spread parameters and transform them back inside the objective function.
 
-```{r}
+```{r eval=FALSE}
 neg_loglik <- function(theta) {
   est <- true_params
   est[c("A.m", "A.s", "B.m", "B.s")] <- theta[c("A.m", "A.s", "B.m", "B.s")]
@@ -130,8 +130,24 @@ start <- c(
   B.s = log(0.12)
 )
 
+set.seed(123456)
 fit <- optim(start, neg_loglik, method = "Nelder-Mead")
+```
 
+```{r include=FALSE}
+load_vignette_result <- function(name) {
+  candidates <- c(
+    file.path("vignettes", "data", paste0(name, ".RData")),
+    file.path("data", paste0(name, ".RData"))
+  )
+  path <- candidates[file.exists(candidates)][1]
+  load(path, envir = knitr::knit_global())
+}
+
+load_vignette_result("multi_outcome")
+```
+
+```{r}
 fit_params <- fit$par
 fit_params[c("A.s", "B.s")] <- exp(fit_params[c("A.s", "B.s")])
 target <- true_params[c("A.m", "A.s", "B.m", "B.s")]

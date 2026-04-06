@@ -41,17 +41,6 @@ values might be `"left"` and `"right"`, or `"go"` and `"stop"`.
 
 `rt` is the observed response time for `R`.
 
-### `R2` and `rt2`
-
-If you use `race_spec(n_outcomes = 2)`, the model keeps the first two ordered
-responses on each trial. In that case:
-
-- `R` and `rt` are the first observed response and its response time.
-- `R2` and `rt2` are the second observed response and its response time.
-
-The same logic extends to `R3`, `rt3`, and beyond when more ordered outcomes
-are retained.
-
 ### Component
 
 A `component` is a latent submodel inside a mixture model. This is useful when
@@ -72,6 +61,10 @@ onset can be:
 - a fixed delay, such as `onset = 0.15`
 - a chained onset, such as `onset = after("cue")`, meaning the process starts
   only after another accumulator or pool has finished
+
+Although onset and non-decision time (`t0`) have the same role on the response times
+We make the distinction that `t0` is an estimated parameter, whereas onset is not.
+
 
 ## A minimal model
 
@@ -100,7 +93,7 @@ pars <- c(
 param_df <- build_param_matrix(spec, pars, n_trials = 6)
 sim <- simulate(model, param_df, seed = 123)
 
-sim[c("trial", "R", "rt")]
+head(sim)
 ```
 
 Here each row is one trial, `R` is the observed response, and `rt` is the
@@ -116,12 +109,11 @@ log_likelihood(ctx, param_df)
 ```
 
 `build_likelihood_context()` prepares the behavioral data for repeated
-likelihood evaluation. `log_likelihood()` then tells you how well a parameter
-set explains those observed data.
+likelihood evaluation. `log_likelihood()` then tells you how well a parameter set explains those observed data.
 
 ## Where to go next
 
 - If you want the basic fitting workflow, read the simple race-model vignette.
-- If your experiment records ordered responses, read the multi-outcome
+- If your experiment records multiple ordered responses, read the multi-outcome
   vignette.
 - If your model has staged processing, read the chained-onset vignette.

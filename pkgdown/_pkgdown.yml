@@ -8,9 +8,10 @@ articles:
     navbar: "Articles"
     contents:
       - getting_started
-      - simple_simulate_fit_model4
+      - logical_rules
+      - simple_model
       - multi_outcome
-      - simple_chained_onset
+      - chained_onset
 
 reference:
   - title: "Package Overview"

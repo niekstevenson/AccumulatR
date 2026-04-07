@@ -1508,9 +1508,9 @@ dist_param_names <- function(dist) {
     acc_params <- c(base, "q", "t0")
     params <- c(params, paste0(acc$id, ".", acc_params))
   }
-  comps <- spec$metadata$mixture$components %||% list()
+  comps <- spec$components %||% spec$metadata$mixture$components %||% list()
   for (comp in comps) {
-    weight_param <- comp$attrs$weight_param %||% NULL
+    weight_param <- comp$weight_param %||% comp$attrs$weight_param %||% NULL
     if (!is.null(weight_param) && nzchar(weight_param)) {
       params <- c(params, weight_param)
     }
@@ -1560,12 +1560,33 @@ dist_param_names <- function(dist) {
   required <- unique(unname(lookup))
   missing <- setdiff(required, names(param_values))
   if (length(missing) > 0L) {
-    stop("Missing parameter values for: ", paste(missing, collapse = ", "), call. = FALSE)
+    missing_targets <- split(names(lookup)[lookup %in% missing], unname(lookup[lookup %in% missing]))
+    defaultable <- vapply(missing, function(external_name) {
+      targets <- missing_targets[[external_name]] %||% character(0)
+      suffixes <- sub("^.*\\.", "", targets)
+      length(suffixes) > 0L && all(suffixes %in% c("q", "t0"))
+    }, logical(1))
+
+    non_defaultable <- missing[!defaultable]
+    if (length(non_defaultable) > 0L) {
+      stop("Missing parameter values for: ", paste(non_defaultable, collapse = ", "), call. = FALSE)
+    }
+
+    if (any(defaultable)) {
+      param_values <- c(
+        param_values,
+        stats::setNames(rep(0, sum(defaultable)), missing[defaultable])
+      )
+    }
   }
   expanded <- vapply(names(lookup), function(internal_name) {
     as.numeric(param_values[[lookup[[internal_name]]]])[1]
   }, numeric(1))
   names(expanded) <- names(lookup)
+  if (length(missing) > 0L) {
+    imputed <- names(lookup)[unname(lookup) %in% missing]
+    attr(expanded, "imputed_internal") <- imputed
+  }
   expanded
 }
 
@@ -1628,6 +1649,7 @@ build_param_matrix <- function(model,
   param_values <- as.numeric(param_values)
   names(param_values) <- raw_names
   param_values <- .expand_parameter_values(spec, param_values)
+  imputed_internal <- attr(param_values, "imputed_internal") %||% character(0)
 
   acc_ids <- vapply(accs, `[[`, character(1), "id")
   acc_dists <- vapply(accs, `[[`, character(1), "dist")
@@ -1724,7 +1746,7 @@ build_param_matrix <- function(model,
     }
     if (!is.finite(q_val) || is.na(q_val)) q_val <- 0
 
-    members <- grp$members %||% character(0)
+    members <- trig$members %||% character(0)
     if (length(members) == 0L) next
     for (m in members) {
       if (!m %in% acc_ids) next
@@ -1769,7 +1791,7 @@ build_param_matrix <- function(model,
     }
     # q
     q_nm <- paste0(acc_id, ".q")
-    has_explicit_q <- q_nm %in% names(param_values)
+    has_explicit_q <- q_nm %in% names(param_values) && !(q_nm %in% imputed_internal)
     q_val <- if (has_explicit_q) {
       as.numeric(param_values[[q_nm]])
     } else if (!is.null(acc$q)) {
@@ -1796,7 +1818,8 @@ build_param_matrix <- function(model,
     if (!is.finite(q_val) || is.na(q_val)) q_val <- 0
     # t0
     t0_nm <- paste0(acc_id, ".t0")
-    t0_val <- if (t0_nm %in% names(param_values)) {
+    has_explicit_t0 <- t0_nm %in% names(param_values) && !(t0_nm %in% imputed_internal)
+    t0_val <- if (has_explicit_t0) {
       as.numeric(param_values[[t0_nm]])
     } else if (!is.null(acc$params$t0)) {
       as.numeric(acc$params$t0)

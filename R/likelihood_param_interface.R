@@ -52,69 +52,68 @@
   list(max_rank = max_rank)
 }
 
-.likelihood_context_structure <- function(structure,
-                                          data_df,
-                                          prep = NULL,
-                                          native_bundle = NULL) {
-  if (is.null(data_df) || nrow(data_df) == 0L) {
-    stop("Data frame must contain R/rt per trial", call. = FALSE)
-  }
+.prepare_likelihood_prep <- function(structure, prep = NULL, native_bundle = NULL) {
   structure <- .as_model_structure(structure)
   if (is.null(structure$model_spec)) {
     stop("model structure must include model_spec; rebuild with finalize_model")
   }
-  data_df <- as.data.frame(data_df)
-  required_cols <- c("trial", "R", "rt")
-  missing_cols <- setdiff(required_cols, names(data_df))
-  if (length(missing_cols) > 0L) {
-    stop(sprintf("Data frame must include columns: %s", paste(missing_cols, collapse = ", ")), call. = FALSE)
-  }
-  rank_info <- .validate_ranked_observation_columns(data_df)
-  data_df$trial <- as.integer(data_df$trial)
-  data_df$R <- as.character(data_df$R)
-  data_df$rt <- as.numeric(data_df$rt)
-  if (rank_info$max_rank > 1L) {
-    for (rank in 2:rank_info$max_rank) {
-      data_df[[paste0("R", rank)]] <- as.character(data_df[[paste0("R", rank)]])
-      data_df[[paste0("rt", rank)]] <- as.numeric(data_df[[paste0("rt", rank)]])
-    }
-  }
-  if ("component" %in% names(data_df)) {
-    data_df$component <- as.character(data_df$component)
-  }
   if (!is.null(native_bundle)) {
     prep <- native_bundle$prep %||% prep
   }
-  # ensure runtime caches (compiled expressions, id index, etc.) are present
   prep_eval_base <- prep %||% structure$prep %||% NULL
   if (is.null(prep_eval_base)) {
     prep_eval_base <- prepare_model(structure$model_spec)
   }
-  # attach runtime/id_index if missing
-  prep_eval_base <- (function(prep_obj) {
-    if (!is.null(prep_obj[[".runtime"]]) && !is.null(prep_obj[[".id_index"]])) {
-      return(prep_obj)
+  if (!is.null(prep_eval_base[[".runtime"]]) && !is.null(prep_eval_base[[".id_index"]])) {
+    return(list(structure = structure, prep = prep_eval_base))
+  }
+  outcome_ids <- names(prep_eval_base[["outcomes"]] %||% list())
+  acc_ids <- names(prep_eval_base[["accumulators"]] %||% list())
+  pool_ids <- names(prep_eval_base[["pools"]] %||% list())
+  all_ids <- unique(c(outcome_ids, acc_ids, pool_ids))
+  prep_eval_base[[".id_index"]] <- setNames(seq_along(all_ids), all_ids)
+  prep_eval_base[[".label_cache"]] <- new.env(parent = emptyenv(), hash = TRUE)
+  prep_eval_base <- .precompile_likelihood_expressions(prep_eval_base)
+  prep_eval_base[[".competitors"]] <- .prepare_competitor_map(prep_eval_base)
+  prep_eval_base[[".runtime"]] <- list(
+    expr_compiled = prep_eval_base[[".expr_compiled"]],
+    label_cache = prep_eval_base[[".label_cache"]],
+    competitor_map = prep_eval_base[[".competitors"]],
+    id_index = prep_eval_base[[".id_index"]],
+    pool_members_cache = new.env(parent = emptyenv(), hash = TRUE),
+    cache_bundle = .build_likelihood_cache_bundle(prep_eval_base)
+  )
+  .refresh_compiled_prep_refs(prep_eval_base)
+  list(structure = structure, prep = prep_eval_base)
+}
+
+.prepare_data_structure <- function(structure, data_df, prep = NULL, native_bundle = NULL) {
+  if (inherits(data_df, "accumulatr_data")) {
+    return(data_df)
+  }
+  if (is.null(data_df) || nrow(data_df) == 0L) {
+    stop("Data frame must contain R/rt per trial", call. = FALSE)
+  }
+  prep_info <- .prepare_likelihood_prep(structure, prep = prep, native_bundle = native_bundle)
+  structure <- prep_info$structure
+  prep_eval_base <- prep_info$prep
+  data_df <- as.data.frame(data_df)
+  required_cols <- c("R", "rt")
+  missing_cols <- setdiff(required_cols, names(data_df))
+  if (length(missing_cols) > 0L) {
+    stop(sprintf("Data frame must include columns: %s", paste(missing_cols, collapse = ", ")), call. = FALSE)
+  }
+  if (!"trial" %in% names(data_df)) {
+    if ("trials" %in% names(data_df)) {
+      data_df$trial <- as.integer(data_df$trials)
+    } else {
+      data_df$trial <- seq_len(nrow(data_df))
     }
-    acc_ids <- names(prep_obj[["accumulators"]] %||% list())
-    pool_ids <- names(prep_obj[["pools"]] %||% list())
-    outcome_ids <- names(prep_obj[["outcomes"]] %||% list())
-    all_ids <- unique(c(acc_ids, pool_ids, outcome_ids))
-    prep_obj[[".id_index"]] <- setNames(seq_along(all_ids), all_ids)
-    prep_obj[[".label_cache"]] <- new.env(parent = emptyenv(), hash = TRUE)
-    prep_obj <- .precompile_likelihood_expressions(prep_obj)
-    prep_obj[[".competitors"]] <- .prepare_competitor_map(prep_obj)
-    runtime <- list(
-      expr_compiled = prep_obj[[".expr_compiled"]],
-      label_cache = prep_obj[[".label_cache"]],
-      competitor_map = prep_obj[[".competitors"]],
-      id_index = prep_obj[[".id_index"]],
-      pool_members_cache = new.env(parent = emptyenv(), hash = TRUE),
-      cache_bundle = .build_likelihood_cache_bundle(prep_obj)
-    )
-    prep_obj[[".runtime"]] <- runtime
-    .refresh_compiled_prep_refs(prep_obj)
-  })(prep_eval_base)
-  data_df <- nest_accumulators(structure, data_df)
+  }
+  rank_info <- .validate_ranked_observation_columns(data_df)
+  if (!"accumulator" %in% names(data_df)) {
+    data_df <- .expand_accumulator_rows(structure, data_df)
+  }
   if (!"onset" %in% names(data_df)) {
     acc_defs <- prep_eval_base$accumulators %||% list()
     acc_onset <- vapply(acc_defs, function(a) a$onset %||% 0, numeric(1))
@@ -124,62 +123,58 @@
       onset_map[[acc]] %||% 0
     }, numeric(1))
   }
-  data_df$trial <- as.integer(data_df$trial)
-  data_df$R <- as.character(data_df$R)
+  data_df$trial <- {
+    trial_in <- as.integer(data_df$trial)
+    trial_out <- integer(length(trial_in))
+    trial_idx <- 0L
+    last_trial <- NA_integer_
+    for (i in seq_along(trial_in)) {
+      if (i == 1L || trial_in[[i]] != last_trial) {
+        trial_idx <- trial_idx + 1L
+        last_trial <- trial_in[[i]]
+      }
+      trial_out[[i]] <- trial_idx
+    }
+    trial_out
+  }
   data_df$rt <- as.numeric(data_df$rt)
+  outcome_levels <- unique(names(prep_eval_base$outcomes %||% list()))
+  if (length(outcome_levels) == 0L) {
+    stop("Model must define outcomes", call. = FALSE)
+  }
+  for (rank in seq_len(rank_info$max_rank)) {
+    r_col <- if (rank == 1L) "R" else paste0("R", rank)
+    if (!r_col %in% names(data_df)) {
+      next
+    }
+    data_df[[r_col]] <- .normalize_prepared_index_column(
+      data_df[[r_col]],
+      outcome_levels,
+      r_col
+    )
+  }
   if (rank_info$max_rank > 1L) {
     for (rank in 2:rank_info$max_rank) {
-      data_df[[paste0("R", rank)]] <- as.character(data_df[[paste0("R", rank)]])
       data_df[[paste0("rt", rank)]] <- as.numeric(data_df[[paste0("rt", rank)]])
     }
   }
-  data_df$accumulator <- as.character(data_df$accumulator)
   if ("component" %in% names(data_df)) {
-    data_df$component <- as.character(data_df$component)
+    component_levels <- structure$components$component_id %||% character(0)
+    data_df$component <- .normalize_prepared_index_column(
+      data_df$component,
+      component_levels,
+      "component"
+    )
   }
-  param_layout <- .param_layout_from_data(structure, data_df, prep_eval_base)
-  native_ctx <- .prep_native_context(prep_eval_base)
-  if (!inherits(native_ctx, "externalptr")) {
-    native_ctx <- NULL
-  }
-  outcome_label_id_map <- .build_outcome_label_id_map(native_ctx)
-  component_label_idx_map <- .build_component_label_idx_map(structure)
-  data_df_cpp <- .compact_cpp_likelihood_data(
-    .attach_component_idx_column(
-      .attach_outcome_id_columns(
-        data_df,
-        outcome_label_id_map,
-        rank_info$max_rank
-      ),
-      component_label_idx_map
-    ),
-    rank_info$max_rank
-  )
-  trial_ids <- unique(data_df$trial)
-  n_trials <- length(trial_ids)
-  structure(list(
-    structure = structure,
-    prep = prep_eval_base,
-    native_ctx = native_ctx,
-    data_df = data_df,
-    data_df_cpp = data_df_cpp,
-    param_layout = param_layout,
-    n_trials = n_trials,
-    trial_ids = trial_ids,
-    rank_width = rank_info$max_rank,
-    outcome_label_id_map = outcome_label_id_map,
-    component_label_idx_map = component_label_idx_map,
-    rel_tol = .integrate_rel_tol(),
-    abs_tol = .integrate_abs_tol(),
-    max_depth = getOption("uuber.integrate.max.depth", 12L)
-  ), class = "likelihood_context")
+  class(data_df) <- unique(c("accumulatr_data", class(data_df)))
+  data_df
 }
 
-#' Prepare behavioral data for repeated likelihood evaluation
+#' Prepare behavioral data for likelihood evaluation
 #'
-#' A likelihood context stores the processed behavioral data, model structure,
-#' and compiled backend needed for fast repeated calls to `log_likelihood()`.
-#' Build it once, then reuse it while searching over parameter values.
+#' `prepare_data()` expands trial-level observations to the accumulator layout
+#' expected by the compiled likelihood code and tags the result as trusted
+#' likelihood input.
 #'
 #' @param structure Finalized model structure.
 #' @param data_df Behavioral data. In the simplest case this contains `trial`,
@@ -187,7 +182,7 @@
 #'   and so on.
 #' @param prep Optional preprocessed model bundle.
 #' @param native_bundle Optional serialized native bundle.
-#' @return A `likelihood_context` object.
+#' @return An `accumulatr_data` object.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
@@ -199,13 +194,13 @@
 #'   n_trials = 2
 #' )
 #' data_df <- simulate(structure, params_df, seed = 1)
-#' build_likelihood_context(structure, data_df)
+#' prepare_data(structure, data_df)
 #' @export
-build_likelihood_context <- function(structure,
-                                     data_df,
-                                     prep = NULL,
-                                     native_bundle = NULL) {
-  .likelihood_context_structure(
+prepare_data <- function(structure,
+                         data_df,
+                         prep = NULL,
+                         native_bundle = NULL) {
+  .prepare_data_structure(
     structure = structure,
     data_df = data_df,
     prep = prep,
@@ -213,44 +208,55 @@ build_likelihood_context <- function(structure,
   )
 }
 
-.validate_likelihood_context <- function(context) {
-  if (inherits(context, "likelihood_context")) {
+.make_context_structure <- function(structure, prep = NULL, native_bundle = NULL) {
+  prep_info <- .prepare_likelihood_prep(structure, prep = prep, native_bundle = native_bundle)
+  prep_eval_base <- prep_info$prep
+  native_ctx <- .prep_native_context(prep_eval_base)
+  if (!inherits(native_ctx, "externalptr")) {
+    native_ctx <- NULL
+  }
+  structure(list(
+    native_ctx = native_ctx
+  ), class = "accumulatr_context")
+}
+
+#' Build a compiled likelihood context from a model
+#'
+#' A context stores compiled model/runtime state only. Behavioral data are
+#' prepared separately with `prepare_data()` and supplied to
+#' `log_likelihood()`.
+#'
+#' @param structure Finalized model structure.
+#' @param prep Optional preprocessed model bundle.
+#' @param native_bundle Optional serialized native bundle.
+#' @return An `accumulatr_context` object.
+#' @examples
+#' spec <- race_spec()
+#' spec <- add_accumulator(spec, "A", "lognormal")
+#' spec <- add_outcome(spec, "A_win", "A")
+#' structure <- finalize_model(spec)
+#' make_context(structure)
+#' @export
+make_context <- function(structure, prep = NULL, native_bundle = NULL) {
+  .make_context_structure(
+    structure = structure,
+    prep = prep,
+    native_bundle = native_bundle
+  )
+}
+
+.validate_context <- function(context) {
+  if (inherits(context, "accumulatr_context")) {
     return(context)
   }
-  stop("likelihood context must be created via build_likelihood_context()", call. = FALSE)
+  stop("context must be created via make_context()", call. = FALSE)
 }
 
-.build_outcome_label_id_map <- function(native_ctx) {
-  if (is.null(native_ctx) || !inherits(native_ctx, "externalptr")) {
-    return(NULL)
+.validate_prepared_data <- function(data) {
+  if (inherits(data, "accumulatr_data")) {
+    return(data)
   }
-  lbl_df <- tryCatch(
-    native_outcome_labels_cpp(native_ctx),
-    error = function(...) NULL
-  )
-  if (is.null(lbl_df) || !"label" %in% names(lbl_df) ||
-      !"label_id" %in% names(lbl_df)) {
-    return(NULL)
-  }
-  lbl <- as.character(lbl_df$label)
-  lbl_id <- as.integer(lbl_df$label_id)
-  keep <- !is.na(lbl) & nzchar(lbl) & !is.na(lbl_id)
-  if (!any(keep)) {
-    return(NULL)
-  }
-  out <- lbl_id[keep]
-  names(out) <- lbl[keep]
-  out[!duplicated(names(out))]
-}
-
-.build_component_label_idx_map <- function(structure) {
-  comp_ids <- as.character(structure$components$component_id %||% character(0))
-  if (length(comp_ids) == 0L) {
-    comp_ids <- "__default__"
-  }
-  idx <- seq_along(comp_ids) - 1L
-  names(idx) <- comp_ids
-  idx[!duplicated(names(idx))]
+  stop("data must be created via prepare_data()", call. = FALSE)
 }
 
 .component_index_from_prep <- function(prep, component) {
@@ -267,214 +273,65 @@ build_likelihood_context <- function(structure,
   as.integer(idx - 1L)
 }
 
-.encode_label_ids <- function(values, id_map, error_prefix, column_name = NULL) {
-  if (is.null(id_map) || length(id_map) == 0L) {
-    stop(sprintf("%s requires a non-empty id map", error_prefix), call. = FALSE)
-  }
-  lbl <- as.character(values)
-  levels <- names(id_map)
-  # Convert to factor once, then map factor codes to ids.
-  f <- factor(lbl, levels = levels)
-  level_ids <- as.integer(unname(id_map[levels]))
-  ids <- level_ids[as.integer(f)]
-  ids[is.na(lbl)] <- NA_integer_
-  bad <- !is.na(lbl) & nzchar(lbl) & is.na(ids)
-  if (any(bad)) {
-    bad_vals <- unique(lbl[bad])
-    bad_vals <- bad_vals[!is.na(bad_vals) & nzchar(bad_vals)]
-    where <- if (!is.null(column_name) && nzchar(column_name)) {
-      sprintf(" in '%s'", column_name)
-    } else {
-      ""
+.normalize_prepared_index_column <- function(x, levels, column_name, allow_empty = FALSE) {
+  if (length(levels) == 0L) {
+    if (allow_empty) {
+      return(x)
     }
-    stop(
-      sprintf(
-        "%s encountered unknown labels%s: %s",
-        error_prefix,
-        where,
-        paste(utils::head(bad_vals, 5L), collapse = ", ")
-      ),
-      call. = FALSE
-    )
+    stop(sprintf("Prepared data column '%s' has no valid levels in the model", column_name), call. = FALSE)
   }
-  as.integer(ids)
-}
-
-.attach_outcome_id_columns <- function(data_df, outcome_label_id_map, rank_width) {
-  if (is.null(outcome_label_id_map) || length(outcome_label_id_map) == 0L) {
-    stop("IR likelihood requires a non-empty outcome label-id map", call. = FALSE)
-  }
-  out <- as.data.frame(data_df)
-  rank_width <- as.integer(rank_width %||% 1L)
-  if (rank_width < 1L) {
-    rank_width <- 1L
-  }
-  for (rank in seq_len(rank_width)) {
-    r_col <- if (rank == 1L) "R" else paste0("R", rank)
-    id_col <- if (rank == 1L) "R_id" else paste0("R", rank, "_id")
-    if (!r_col %in% names(out)) {
-      next
+  if (is.factor(x)) {
+    raw_lbl <- as.character(x)
+    out <- factor(raw_lbl, levels = levels, ordered = is.ordered(x))
+    bad <- !is.na(raw_lbl) & nzchar(raw_lbl) & is.na(out)
+    if (any(bad)) {
+      stop(
+        sprintf(
+          "Prepared data encountered unknown labels in '%s': %s",
+          column_name,
+          paste(utils::head(unique(raw_lbl[bad]), 5L), collapse = ", ")
+        ),
+        call. = FALSE
+      )
     }
-    out[[id_col]] <- .encode_label_ids(
-      out[[r_col]],
-      outcome_label_id_map,
-      "IR likelihood",
-      r_col
-    )
-  }
-  out
-}
-
-.attach_component_idx_column <- function(data_df, component_label_idx_map) {
-  out <- as.data.frame(data_df)
-  if (!"component" %in% names(out)) {
     return(out)
   }
-  if (is.null(component_label_idx_map) || length(component_label_idx_map) == 0L) {
-    stop("IR likelihood requires a non-empty component label-index map", call. = FALSE)
+  if (is.character(x)) {
+    out <- factor(x, levels = levels)
+    bad <- !is.na(x) & nzchar(x) & is.na(out)
+    if (any(bad)) {
+      stop(
+        sprintf(
+          "Prepared data encountered unknown labels in '%s': %s",
+          column_name,
+          paste(utils::head(unique(x[bad]), 5L), collapse = ", ")
+        ),
+        call. = FALSE
+      )
+    }
+    return(out)
   }
-  out$component_idx <- .encode_label_ids(
-    out$component,
-    component_label_idx_map,
-    "IR likelihood",
-    "component"
+  if (is.integer(x)) {
+    bad <- !is.na(x) & (x < 1L | x > length(levels))
+    if (any(bad)) {
+      stop(
+        sprintf(
+          "Prepared data integer '%s' values must fall in [1, %d]",
+          column_name,
+          length(levels)
+        ),
+        call. = FALSE
+      )
+    }
+    return(x)
+  }
+  stop(
+    sprintf(
+      "Prepared data column '%s' must be a factor, character, or integer vector",
+      column_name
+    ),
+    call. = FALSE
   )
-  out
-}
-
-.compact_cpp_likelihood_data <- function(data_df, rank_width) {
-  rank_width <- as.integer(rank_width %||% 1L)
-  if (rank_width < 1L) {
-    rank_width <- 1L
-  }
-  keep <- c("trial", "R_id", "rt")
-  if ("onset" %in% names(data_df)) {
-    keep <- c(keep, "onset")
-  }
-  if ("component_idx" %in% names(data_df)) {
-    keep <- c(keep, "component_idx")
-  }
-  if (rank_width > 1L) {
-    for (rank in 2:rank_width) {
-      keep <- c(keep, paste0("R", rank, "_id"), paste0("rt", rank))
-    }
-  }
-  missing <- setdiff(keep, names(data_df))
-  if (length(missing) > 0L) {
-    stop(
-      sprintf(
-        "IR likelihood missing required encoded columns: %s",
-        paste(missing, collapse = ", ")
-      ),
-      call. = FALSE
-    )
-  }
-  out <- data_df[, keep, drop = FALSE]
-  out$trial <- as.integer(out$trial)
-  out$R_id <- as.integer(out$R_id)
-  out$rt <- as.numeric(out$rt)
-  if ("onset" %in% names(out)) {
-    out$onset <- as.numeric(out$onset)
-  }
-  if ("component_idx" %in% names(out)) {
-    out$component_idx <- as.integer(out$component_idx)
-  }
-  if (rank_width > 1L) {
-    for (rank in 2:rank_width) {
-      out[[paste0("R", rank, "_id")]] <- as.integer(out[[paste0("R", rank, "_id")]])
-      out[[paste0("rt", rank)]] <- as.numeric(out[[paste0("rt", rank)]])
-    }
-  }
-  out
-}
-
-.param_layout_from_data <- function(structure, data_df, prep) {
-  acc_defs <- prep$accumulators %||% list()
-  acc_ids <- names(acc_defs)
-  n_acc <- length(acc_ids)
-  if (n_acc == 0L) {
-    stop("No accumulators in model", call. = FALSE)
-  }
-  data_df <- as.data.frame(data_df)
-  orig_has_acc <- "accumulator" %in% names(data_df)
-  if (!"accumulator" %in% names(data_df)) {
-    data_df <- nest_accumulators(structure, data_df)
-  }
-  data_df$trial <- as.integer(data_df$trial)
-  acc_col <- data_df$accumulator
-  if (is.factor(acc_col)) acc_col <- as.character(acc_col)
-  row_acc <- match(acc_col, acc_ids)
-  if (any(is.na(row_acc))) {
-    stop("Accumulator labels must match model accumulators", call. = FALSE)
-  }
-  trial_ids <- unique(data_df$trial)
-  row_trial <- match(data_df$trial, trial_ids)
-  comp_ids <- structure$components$component_id %||% character(0)
-  comp_col <- NULL
-  if ("component" %in% names(data_df)) comp_col <- data_df$component
-  if (is.factor(comp_col)) comp_col <- as.character(comp_col)
-  row_comp <- if (is.null(comp_col)) {
-    rep(NA_integer_, length(row_trial))
-  } else {
-    match(comp_col, comp_ids)
-  }
-  rectangular <- FALSE
-  if (!any(is.na(row_trial)) && length(row_trial) == length(trial_ids) * n_acc) {
-    if (!orig_has_acc && is.null(comp_col)) {
-      rectangular <- TRUE
-    } else {
-      idx <- (row_trial - 1L) * n_acc + row_acc
-      rectangular <- all(tabulate(idx, nbins = length(trial_ids) * n_acc) == 1L)
-    }
-  }
-  list(
-    row_trial = as.integer(row_trial),
-    row_acc = as.integer(row_acc),
-    row_component = as.integer(row_comp),
-    n_trials = as.integer(length(trial_ids)),
-    trial_ids = as.integer(trial_ids),
-    rectangular = rectangular
-  )
-}
-
-.align_param_matrix_to_layout <- function(params_mat, param_layout) {
-  if (is.null(param_layout)) {
-    return(params_mat)
-  }
-  row_trial <- param_layout$row_trial %||% param_layout$trial
-  row_acc <- param_layout$row_acc %||% param_layout$acc
-  if (is.null(row_trial) || is.null(row_acc)) {
-    return(params_mat)
-  }
-  row_trial <- as.integer(row_trial)
-  row_acc <- as.integer(row_acc)
-  if (length(row_trial) == 0L || length(row_trial) != length(row_acc)) {
-    return(params_mat)
-  }
-  target_rows <- length(row_trial)
-  if (nrow(params_mat) == target_rows) {
-    return(params_mat)
-  }
-  n_trials <- as.integer(param_layout$n_trials %||% suppressWarnings(max(row_trial, na.rm = TRUE)))
-  if (!is.finite(n_trials) || n_trials < 1L) {
-    stop("Invalid likelihood context layout: n_trials must be >= 1", call. = FALSE)
-  }
-  if (nrow(params_mat) %% n_trials != 0L) {
-    stop(
-      sprintf(
-        "Parameter matrix has %d rows, but likelihood context expects %d nested rows; cannot align rows to context layout",
-        nrow(params_mat),
-        target_rows
-      ),
-      call. = FALSE
-    )
-  }
-  n_acc <- nrow(params_mat) %/% n_trials
-  row_index <- (row_trial - 1L) * n_acc + row_acc
-  if (anyNA(row_index) || any(row_index < 1L) || any(row_index > nrow(params_mat))) {
-    stop("Parameter matrix rows cannot be aligned to likelihood context accumulator layout", call. = FALSE)
-  }
-  params_mat[row_index, , drop = FALSE]
 }
 
 .param_matrix_to_rows <- function(structure, params_mat) {
@@ -1304,10 +1161,11 @@ response_probabilities.model_structure <- function(structure,
 
 #' Evaluate the log-likelihood of behavioral data
 #'
-#' Compute the log-likelihood of the behavioral data stored in a
-#' `likelihood_context` under one or more candidate parameter sets.
+#' Compute the log-likelihood of prepared behavioral data under one or more
+#' candidate parameter sets.
 #'
-#' @param likelihood_context Context created with `build_likelihood_context()`.
+#' @param context Context created with `make_context()`.
+#' @param data Prepared data created with `prepare_data()`.
 #' @param parameters A parameter data frame, or a list of parameter data frames.
 #' @param ok Logical vector marking which trials should contribute to the
 #'   likelihood. Trials marked `FALSE` are assigned `min_ll`.
@@ -1328,22 +1186,25 @@ response_probabilities.model_structure <- function(structure,
 #'   n_trials = 2
 #' )
 #' data_df <- simulate(structure, params_df, seed = 1)
-#' ctx <- build_likelihood_context(structure, data_df)
-#' log_likelihood(ctx, list(params_df))
+#' prepared <- prepare_data(structure, data_df)
+#' ctx <- make_context(structure)
+#' log_likelihood(ctx, prepared, list(params_df))
 #' @export
-log_likelihood <- function(likelihood_context, parameters, ok = NULL, expand = NULL, min_ll = log(1e-10), ...) {
+log_likelihood <- function(context, data, parameters, ok = NULL, expand = NULL, min_ll = log(1e-10), ...) {
   UseMethod("log_likelihood")
 }
 
 #' @rdname log_likelihood
 #' @export
-log_likelihood.likelihood_context <- function(likelihood_context,
+log_likelihood.accumulatr_context <- function(context,
+                                              data,
                                               parameters,
                                               ok = NULL,
                                               expand = NULL,
                                               min_ll = log(1e-10),
                                               ...) {
-  ctx <- .validate_likelihood_context(likelihood_context)
+  ctx <- .validate_context(context)
+  data_df <- .validate_prepared_data(data)
   native_ctx <- ctx$native_ctx
   if (is.null(native_ctx) || !inherits(native_ctx, "externalptr")) {
     stop("Native context required for log_likelihood", call. = FALSE)
@@ -1353,86 +1214,43 @@ log_likelihood.likelihood_context <- function(likelihood_context,
   } else {
     parameters
   }
-  param_layout <- ctx$param_layout %||% NULL
   params_list <- lapply(params_list, function(pm) {
-    pm_mat <- if (inherits(pm, "param_matrix") || is.matrix(pm)) {
+    if (inherits(pm, "param_matrix") || is.matrix(pm)) {
       pm
     } else {
       as.matrix(pm)
     }
-    .align_param_matrix_to_layout(pm_mat, param_layout)
   })
-  data_df <- ctx$data_df
-  n_trials <- ctx$n_trials %||% length(unique(data_df$trial))
+  trial <- data_df$trial
+  n_trials <- if (length(trial) == 0L) {
+    0L
+  } else {
+    1L + sum(trial[-1L] != trial[-length(trial)])
+  }
   if (is.null(expand) || length(expand) == 0L) {
     expand <- seq_len(n_trials)
   }
   expand <- as.integer(expand)
-  if (any(is.na(expand)) || any(expand < 1L) || any(expand > n_trials)) {
-    stop("expand indices must reference trials in data_df", call. = FALSE)
-  }
   if (is.null(ok) || length(ok) == 0L) {
     ok <- rep_len(TRUE, n_trials)
-  } else if (length(ok) != n_trials) {
-    stop("Length of ok must equal number of trials in data_df", call. = FALSE)
   }
   ok <- as.logical(ok)
   ok[is.na(ok)] <- FALSE
-  rel_tol <- ctx$rel_tol %||% .integrate_rel_tol()
-  abs_tol <- ctx$abs_tol %||% .integrate_abs_tol()
-  max_depth <- ctx$max_depth %||% 12L
-  data_df_eval <- ctx$data_df_cpp
-  if (is.null(data_df_eval)) {
-    stop(
-      "likelihood_context is missing precomputed IR data columns; rebuild with build_likelihood_context()",
-      call. = FALSE
-    )
-  }
   cpp_loglik_multiple(
     native_ctx,
     params_list,
-    data_df_eval,
+    data_df,
     ok,
     expand,
     min_ll,
-    rel_tol,
-    abs_tol,
-    max_depth
+    .integrate_rel_tol(),
+    .integrate_abs_tol(),
+    getOption("uuber.integrate.max.depth", 12L)
   )
 }
 
 #' @rdname log_likelihood
 #' @export
-log_likelihood.default <- function(likelihood_context, ...) {
-  stop("log_likelihood() expects a likelihood_context", call. = FALSE)
-}
-
-#' Refresh the compiled backend inside a context
-#'
-#' If the stored native pointer is no longer valid, this function rebuilds it
-#' from the model specification. Most users will not need to call this directly,
-#' but it can be useful when caching contexts across sessions or long workflows.
-#'
-#' @param context A context-like object containing `native_ctx` plus either
-#'   `prep` or `structure$prep`.
-#' @param model_spec Model specification from `finalize_model()`. Usually
-#'   inferred from `context` when available.
-#' @return The same object, with `native_ctx` refreshed if needed.
-#' @export
-ensure_native_ctx <- function(context, model_spec = NULL) {
-  ctx <- context
-  ptr <- ctx$native_ctx
-  if (is.null(ptr) || !inherits(ptr, "externalptr") || native_ctx_invalid(ptr)) {
-    prep <- ctx$prep %||% ctx$structure$prep %||% NULL
-    if (is.null(prep) || is.null(prep[[".runtime"]]) || is.null(prep[[".id_index"]])) {
-      model_spec <- model_spec %||% ctx$model_spec %||% ctx$structure$model_spec %||% NULL
-      if (is.null(model_spec)) {
-        stop("Cannot rebuild native_ctx: prep/model_spec missing")
-      }
-      prep <- .prepare_model_for_likelihood(model_spec)
-    }
-    ctx$prep <- prep
-    ctx$native_ctx <- native_context_build(prep)
-  }
-  ctx
+log_likelihood.default <- function(context, ...) {
+  stop("log_likelihood() expects a context created with make_context()", call. = FALSE)
 }

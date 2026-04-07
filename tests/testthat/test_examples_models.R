@@ -249,14 +249,14 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     names(emp) <- emp_names
 
     # Non-marginalized likelihood with slim param matrix aligned to components
-    ctx <- build_likelihood_context(structure, data_df)
+    prepared <- prepare_data(structure, data_df)
+    ctx <- make_context(structure)
     params_df_slim <- build_param_matrix(
       spec_obj,
       params_vec,
-      n_trials = max(data_df$trial),
-      layout = ctx$param_layout
+      trial_df = prepared
     )
-    ll <- as.numeric(log_likelihood(ctx, params_df_slim))
+    ll <- as.numeric(log_likelihood(ctx, prepared, params_df_slim))
 
     # Order and round for stable snapshots
     analytic <- round(analytic[order(names(analytic))], 6)

@@ -74,21 +74,21 @@ data_df <- data.frame(
 table(data_df$R)
 ```
 
-**Evaluate the likelihood** We build a likelihood context and evaluate
-the log-likelihood of the simulated behavioral data under the true
+**Evaluate the likelihood** We prepare the simulated behavioral data,
+compile a model context, and evaluate the log-likelihood under the true
 parameter values.
 
 ```{r}
-ctx <- build_likelihood_context(structure, data_df)
+prepared <- prepare_data(structure, data_df)
+ctx <- make_context(structure)
 
 params_df_true <- build_param_matrix(
   model_spec,
   true_params,
-  n_trials = max(data_df$trial),
-  layout = ctx$param_layout
+  trial_df = prepared
 )
 
-ll_true <- as.numeric(log_likelihood(ctx, params_df_true))
+ll_true <- as.numeric(log_likelihood(ctx, prepared, params_df_true))
 ll_true
 ```
 
@@ -101,11 +101,10 @@ wrong_params["R2.m"] <- log(0.45)
 params_df_wrong <- build_param_matrix(
   model_spec,
   wrong_params,
-  n_trials = max(data_df$trial),
-  layout = ctx$param_layout
+  trial_df = prepared
 )
 
-ll_wrong <- as.numeric(log_likelihood(ctx, params_df_wrong))
+ll_wrong <- as.numeric(log_likelihood(ctx, prepared, params_df_wrong))
 ll_wrong
 ```
 
@@ -126,10 +125,9 @@ neg_loglik <- function(theta) {
   params_df <- build_param_matrix(
     model_spec,
     est,
-    n_trials = max(data_df$trial),
-    layout = ctx$param_layout
+    trial_df = prepared
   )
-  ll <- log_likelihood(ctx, params_df)
+  ll <- log_likelihood(ctx, prepared, params_df)
   -as.numeric(ll)
 }
 

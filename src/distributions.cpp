@@ -1440,7 +1440,7 @@ build_na_map_cache_key_idx(const uuber::OutcomeContextInfo &info,
   const bool has_soa_q =
       params_ptr->shared_trigger_mask_valid &&
       params_ptr->soa_cache_valid && params_ptr->soa_cache.valid &&
-      params_ptr->soa_cache.q.size() >= params_ptr->acc_params.size();
+      params_ptr->soa_cache.n_acc >= static_cast<int>(params_ptr->acc_params.size());
   for (std::size_t acc_idx = 0; acc_idx < params_ptr->acc_params.size();
        ++acc_idx) {
     const auto &acc = params_ptr->acc_params[acc_idx];
@@ -1761,8 +1761,7 @@ inline void apply_trigger_state_inplace(TrialParamSet &params, int acc_idx,
   p.has_override = true;
   params.has_any_override = true;
   if (params.soa_cache_valid && params.soa_cache.valid &&
-      acc_idx >= 0 && acc_idx < params.soa_cache.n_acc &&
-      static_cast<std::size_t>(acc_idx) < params.soa_cache.q.size()) {
+      acc_idx >= 0 && acc_idx < params.soa_cache.n_acc) {
     params.soa_cache.q[static_cast<std::size_t>(acc_idx)] = q_val;
   } else {
     params.soa_cache_valid = false;
@@ -1772,8 +1771,7 @@ inline void apply_trigger_state_inplace(TrialParamSet &params, int acc_idx,
 inline void ensure_trial_params_soa(const uuber::NativeContext &ctx,
                                     TrialParamSet &params) {
   if (params.soa_cache_valid && params.soa_cache.valid &&
-      params.soa_cache.n_acc == static_cast<int>(ctx.accumulators.size()) &&
-      params.soa_cache.q.size() == ctx.accumulators.size()) {
+      params.soa_cache.n_acc == static_cast<int>(ctx.accumulators.size())) {
     return;
   }
   materialize_trial_params_soa(ctx, &params, params.soa_cache);
@@ -1846,8 +1844,7 @@ inline void apply_trigger_q_soa_inplace(TrialParamSet &params, int acc_idx,
     return;
   }
   if (!(params.soa_cache_valid && params.soa_cache.valid) ||
-      acc_idx >= params.soa_cache.n_acc ||
-      static_cast<std::size_t>(acc_idx) >= params.soa_cache.q.size()) {
+      acc_idx >= params.soa_cache.n_acc) {
     apply_trigger_state_inplace(params, acc_idx, fail);
     return;
   }
@@ -2201,19 +2198,7 @@ inline void resolve_event_numeric_params(
     const uuber::TrialParamsSoA *trial_params_soa, double &onset_out,
     double &q_out, AccDistParams &cfg_out) {
   if (trial_params_soa && trial_params_soa->valid && acc_index >= 0 &&
-      acc_index < trial_params_soa->n_acc &&
-      static_cast<std::size_t>(acc_index) < trial_params_soa->dist_code.size() &&
-      static_cast<std::size_t>(acc_index) < trial_params_soa->onset.size() &&
-      static_cast<std::size_t>(acc_index) < trial_params_soa->q.size() &&
-      static_cast<std::size_t>(acc_index) < trial_params_soa->t0.size() &&
-      static_cast<std::size_t>(acc_index) < trial_params_soa->p1.size() &&
-      static_cast<std::size_t>(acc_index) < trial_params_soa->p2.size() &&
-      static_cast<std::size_t>(acc_index) < trial_params_soa->p3.size() &&
-      static_cast<std::size_t>(acc_index) < trial_params_soa->p4.size() &&
-      static_cast<std::size_t>(acc_index) < trial_params_soa->p5.size() &&
-      static_cast<std::size_t>(acc_index) < trial_params_soa->p6.size() &&
-      static_cast<std::size_t>(acc_index) < trial_params_soa->p7.size() &&
-      static_cast<std::size_t>(acc_index) < trial_params_soa->p8.size()) {
+      acc_index < trial_params_soa->n_acc) {
     const std::size_t idx = static_cast<std::size_t>(acc_index);
     onset_out = trial_params_soa->onset[idx];
     q_out = trial_params_soa->q[idx];
@@ -7189,6 +7174,124 @@ double evaluate_trial_probability_kernel_idx(
   return finalize_probability(total);
 }
 
+namespace {
+
+inline bool has_named_column(const Rcpp::CharacterVector &names,
+                             const char *target) {
+  for (R_xlen_t i = 0; i < names.size(); ++i) {
+    if (std::strcmp(CHAR(names[i]), target) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline int prepared_rank_width(const Rcpp::CharacterVector &names) {
+  int rank_width = 1;
+  for (int rank = 2;; ++rank) {
+    std::string r_col = "R" + std::to_string(rank);
+    std::string rt_col = "rt" + std::to_string(rank);
+    if (!has_named_column(names, r_col.c_str()) ||
+        !has_named_column(names, rt_col.c_str())) {
+      break;
+    }
+    rank_width = rank;
+  }
+  return rank_width;
+}
+
+struct PreparedLikelihoodData {
+  int n_rows{0};
+  int n_trials{0};
+  int rank_width{1};
+  Rcpp::IntegerVector row_trial0;
+  Rcpp::NumericVector onset_by_row;
+  Rcpp::IntegerVector outcome_id_by_trial;
+  Rcpp::NumericVector rt_by_trial;
+  Rcpp::IntegerVector comp_idx_by_trial0;
+  std::vector<Rcpp::IntegerVector> ranked_outcome_id_by_trial;
+  std::vector<Rcpp::NumericVector> ranked_rt_by_trial;
+};
+
+PreparedLikelihoodData prepared_likelihood_data_from_frame(
+    const Rcpp::DataFrame &data_df) {
+  PreparedLikelihoodData out;
+  const Rcpp::CharacterVector names = data_df.names();
+  out.rank_width = prepared_rank_width(names);
+  out.row_trial0 = Rcpp::IntegerVector(data_df.nrows());
+  out.onset_by_row = Rcpp::NumericVector(data_df["onset"]);
+
+  const Rcpp::IntegerVector trial = Rcpp::IntegerVector(data_df["trial"]);
+  const Rcpp::IntegerVector outcome = Rcpp::IntegerVector(data_df["R"]);
+  const Rcpp::NumericVector rt = Rcpp::NumericVector(data_df["rt"]);
+  const bool has_component = has_named_column(names, "component");
+  const Rcpp::IntegerVector component =
+      has_component ? Rcpp::IntegerVector(data_df["component"])
+                    : Rcpp::IntegerVector();
+
+  std::vector<Rcpp::IntegerVector> ranked_outcome_cols;
+  std::vector<Rcpp::NumericVector> ranked_rt_cols;
+  ranked_outcome_cols.reserve(static_cast<std::size_t>(out.rank_width));
+  ranked_rt_cols.reserve(static_cast<std::size_t>(out.rank_width));
+  ranked_outcome_cols.emplace_back(outcome);
+  ranked_rt_cols.emplace_back(rt);
+  for (int rank = 2; rank <= out.rank_width; ++rank) {
+    ranked_outcome_cols.emplace_back(
+        Rcpp::IntegerVector(data_df["R" + std::to_string(rank)]));
+    ranked_rt_cols.emplace_back(
+        Rcpp::NumericVector(data_df["rt" + std::to_string(rank)]));
+  }
+
+  std::vector<int> outcome_id_by_trial;
+  std::vector<double> rt_by_trial;
+  std::vector<int> comp_idx_by_trial0;
+  std::vector<std::vector<int>> ranked_outcome_id_by_trial(
+      static_cast<std::size_t>(out.rank_width));
+  std::vector<std::vector<double>> ranked_rt_by_trial(
+      static_cast<std::size_t>(out.rank_width));
+  outcome_id_by_trial.reserve(trial.size());
+  rt_by_trial.reserve(trial.size());
+  comp_idx_by_trial0.reserve(trial.size());
+
+  int trial_idx = -1;
+  int last_trial = NA_INTEGER;
+  for (R_xlen_t row_idx = 0; row_idx < trial.size(); ++row_idx) {
+    if (trial_idx < 0 || trial[row_idx] != last_trial) {
+      ++trial_idx;
+      last_trial = trial[row_idx];
+      outcome_id_by_trial.push_back(outcome[row_idx]);
+      rt_by_trial.push_back(rt[row_idx]);
+      comp_idx_by_trial0.push_back(
+          has_component && component[row_idx] != NA_INTEGER
+              ? component[row_idx] - 1
+              : -1);
+      for (int rank_idx = 0; rank_idx < out.rank_width; ++rank_idx) {
+        ranked_outcome_id_by_trial[static_cast<std::size_t>(rank_idx)].push_back(
+            ranked_outcome_cols[static_cast<std::size_t>(rank_idx)][row_idx]);
+        ranked_rt_by_trial[static_cast<std::size_t>(rank_idx)].push_back(
+            ranked_rt_cols[static_cast<std::size_t>(rank_idx)][row_idx]);
+      }
+    }
+    out.row_trial0[row_idx] = trial_idx;
+  }
+  out.n_rows = static_cast<int>(trial.size());
+  out.n_trials = trial_idx + 1;
+  out.outcome_id_by_trial = Rcpp::wrap(outcome_id_by_trial);
+  out.rt_by_trial = Rcpp::wrap(rt_by_trial);
+  out.comp_idx_by_trial0 = Rcpp::wrap(comp_idx_by_trial0);
+  out.ranked_outcome_id_by_trial.reserve(static_cast<std::size_t>(out.rank_width));
+  out.ranked_rt_by_trial.reserve(static_cast<std::size_t>(out.rank_width));
+  for (int rank_idx = 0; rank_idx < out.rank_width; ++rank_idx) {
+    out.ranked_outcome_id_by_trial.emplace_back(
+        Rcpp::wrap(ranked_outcome_id_by_trial[static_cast<std::size_t>(rank_idx)]));
+    out.ranked_rt_by_trial.emplace_back(
+        Rcpp::wrap(ranked_rt_by_trial[static_cast<std::size_t>(rank_idx)]));
+  }
+  return out;
+}
+
+} // namespace
+
 // [[Rcpp::export]]
 double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
                   Rcpp::DataFrame data_df, Rcpp::LogicalVector ok,
@@ -7213,134 +7316,65 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
   for (int i = 0; i < n_slot_cols; ++i) {
     p_cols[static_cast<std::size_t>(i)] = 3 + i;
   }
+  const int component_count = static_cast<int>(ctx->components.ids.size());
+  PreparedLikelihoodData prepared = prepared_likelihood_data_from_frame(data_df);
+  const bool ranked_mode = prepared.rank_width > 1;
+  const int n_acc = static_cast<int>(ctx->accumulators.size());
 
-  Rcpp::NumericVector trial_col = data_df["trial"];
-  Rcpp::IntegerVector outcome_id_col =
-      data_df.containsElementNamed("R_id")
-          ? Rcpp::IntegerVector(data_df["R_id"])
-          : Rcpp::IntegerVector();
-  Rcpp::NumericVector rt_col = data_df["rt"];
-  std::vector<Rcpp::IntegerVector> rank_outcome_id_cols;
-  std::vector<Rcpp::NumericVector> rank_rt_cols;
-  rank_outcome_id_cols.push_back(outcome_id_col);
-  rank_rt_cols.push_back(rt_col);
-  for (int rank = 2;; ++rank) {
-    std::string r_id_name = "R" + std::to_string(rank) + "_id";
-    std::string rt_name = "rt" + std::to_string(rank);
-    bool has_r_id = data_df.containsElementNamed(r_id_name.c_str());
-    bool has_rt = data_df.containsElementNamed(rt_name.c_str());
-    if (!has_r_id && !has_rt) {
-      break;
-    }
-    if (has_r_id != has_rt) {
-      Rcpp::stop("Ranked observations require paired columns '%s' and '%s'",
-                 r_id_name.c_str(), rt_name.c_str());
-    }
-    rank_outcome_id_cols.push_back(Rcpp::IntegerVector(data_df[r_id_name]));
-    rank_rt_cols.push_back(Rcpp::NumericVector(data_df[rt_name]));
+  std::vector<TrialAccumulatorParams> base_acc_params;
+  base_acc_params.reserve(static_cast<std::size_t>(n_acc));
+  for (const auto &acc : ctx->accumulators) {
+    base_acc_params.push_back(base_params(acc));
   }
-  const int rank_width = static_cast<int>(rank_outcome_id_cols.size());
-  const bool ranked_mode = rank_width > 1;
-  if (outcome_id_col.size() == 0) {
-    Rcpp::stop("IR loglik requires integer outcome-id column 'R_id'");
-  }
-  for (int rank_idx = 1; rank_idx < rank_width; ++rank_idx) {
-    if (rank_outcome_id_cols[static_cast<std::size_t>(rank_idx)].size() == 0) {
-      Rcpp::stop("IR loglik requires integer outcome-id column 'R%d_id'",
-                 rank_idx + 1);
-    }
-  }
-  bool has_component = data_df.containsElementNamed("component_idx");
-  Rcpp::IntegerVector component_idx_col =
-      has_component ? Rcpp::IntegerVector(data_df["component_idx"])
-                    : Rcpp::IntegerVector();
-  bool has_onset = data_df.containsElementNamed("onset");
-  Rcpp::NumericVector onset_col =
-      has_onset ? Rcpp::NumericVector(data_df["onset"]) : Rcpp::NumericVector();
-
-  const std::vector<TrialAccumulatorParams> base_acc_params =
-      build_base_paramset(*ctx).acc_params;
   const ComponentMap &comp_map = ctx->components;
-  const std::vector<std::string> &comp_ids = comp_map.ids;
-  std::vector<int> all_acc_indices(ctx->accumulators.size());
-  for (std::size_t i = 0; i < all_acc_indices.size(); ++i)
-    all_acc_indices[i] = static_cast<int>(i);
-  std::vector<std::vector<int>> comp_acc_indices(comp_ids.size());
-  for (std::size_t c = 0; c < comp_ids.size(); ++c) {
-    const std::string &cid = comp_ids[c];
-    for (std::size_t a = 0; a < ctx->accumulators.size(); ++a) {
-      const auto &comps = ctx->accumulators[a].components;
-      if (std::find(comps.begin(), comps.end(), cid) != comps.end()) {
-        comp_acc_indices[c].push_back(static_cast<int>(a));
-      }
-    }
-    if (comp_acc_indices[c].empty()) {
-      comp_acc_indices[c] = all_acc_indices;
+  std::vector<std::vector<int>> leader_components_by_acc(ctx->accumulators.size());
+  for (std::size_t comp_idx = 0; comp_idx < comp_map.leader_idx.size(); ++comp_idx) {
+    const int leader_idx = comp_map.leader_idx[comp_idx];
+    if (leader_idx >= 0 &&
+        leader_idx < static_cast<int>(leader_components_by_acc.size())) {
+      leader_components_by_acc[static_cast<std::size_t>(leader_idx)].push_back(
+          static_cast<int>(comp_idx));
     }
   }
-
-  std::vector<TrialParamSet> param_sets;
-  std::vector<int> outcome_label_id_by_trial;
-  std::vector<double> rt_by_trial;
-  std::vector<int> comp_idx_by_trial;
-  std::vector<std::vector<double>> weight_override_by_trial;
-  std::vector<std::vector<int>> ranked_label_ids_by_trial;
-  std::vector<std::vector<double>> ranked_rt_by_trial;
-
-  const std::size_t comp_count = comp_map.ids.size();
 
   const R_xlen_t n_rows = params_mat.nrow();
-  if (trial_col.size() != n_rows) {
+  if (prepared.n_rows != n_rows) {
     Rcpp::stop(
-        "Parameter matrix rows (%lld) must match nested likelihood rows (%lld)",
-        static_cast<long long>(n_rows),
-        static_cast<long long>(trial_col.size()));
+        "Parameter matrix rows (%lld) must match prepared likelihood rows (%d)",
+        static_cast<long long>(n_rows), prepared.n_rows);
   }
-  int current_trial_label = std::numeric_limits<int>::min();
-  int trial_idx = -1;
-  std::size_t acc_cursor = 0;
-  const std::vector<int> *current_acc_order = &all_acc_indices;
+
+  std::vector<TrialParamSet> param_sets(static_cast<std::size_t>(prepared.n_trials));
+  std::vector<std::vector<double>> weight_override_by_trial;
+  weight_override_by_trial.assign(
+      static_cast<std::size_t>(prepared.n_trials),
+      std::vector<double>(comp_map.ids.size(),
+                          std::numeric_limits<double>::quiet_NaN()));
+  uuber::TrialParamsSoA base_params_soa;
+  if (ctx->base_params_soa.valid &&
+      ctx->base_params_soa.n_acc == static_cast<int>(ctx->accumulators.size())) {
+    base_params_soa = ctx->base_params_soa;
+  } else {
+    build_base_trial_params_soa_from_context(*ctx, base_params_soa);
+  }
+  for (int trial_idx = 0; trial_idx < prepared.n_trials; ++trial_idx) {
+    TrialParamSet &ps = param_sets[static_cast<std::size_t>(trial_idx)];
+    ps.acc_params = base_acc_params;
+    ps.soa_cache = base_params_soa;
+    ps.soa_cache_valid = true;
+    ps.shared_trigger_source_fingerprint =
+        static_cast<std::uint64_t>(trial_idx + 1);
+  }
+  int last_trial_idx = -1;
+  int acc_idx = -1;
   for (R_xlen_t r = 0; r < n_rows; ++r) {
-    int trial_label = static_cast<int>(trial_col[r]);
-    if (r == 0 || trial_label != current_trial_label) {
-      current_trial_label = trial_label;
-      ++trial_idx;
-      TrialParamSet ps;
-      ps.acc_params = base_acc_params;
-      param_sets.push_back(std::move(ps));
-      outcome_label_id_by_trial.push_back(-1);
-      rt_by_trial.push_back(std::numeric_limits<double>::quiet_NaN());
-      comp_idx_by_trial.push_back(-1);
-      weight_override_by_trial.push_back(std::vector<double>(
-          comp_count, std::numeric_limits<double>::quiet_NaN()));
-      if (ranked_mode) {
-        ranked_label_ids_by_trial.push_back(
-            std::vector<int>(static_cast<std::size_t>(rank_width), -1));
-        ranked_rt_by_trial.push_back(std::vector<double>(
-            static_cast<std::size_t>(rank_width),
-            std::numeric_limits<double>::quiet_NaN()));
-      }
-      acc_cursor = 0;
-      current_acc_order = &all_acc_indices;
+    const int trial_idx = prepared.row_trial0[static_cast<std::size_t>(r)];
+    if (trial_idx != last_trial_idx) {
+      last_trial_idx = trial_idx;
+      acc_idx = 0;
+    } else {
+      ++acc_idx;
     }
-    if (has_component && comp_idx_by_trial[trial_idx] < 0 &&
-        r < component_idx_col.size()) {
-      int comp_idx_val = component_idx_col[r];
-      if (comp_idx_val != NA_INTEGER) {
-        if (comp_idx_val < 0 ||
-            comp_idx_val >= static_cast<int>(comp_acc_indices.size())) {
-          Rcpp::stop("component_idx value %d out of range [0, %d)",
-                     comp_idx_val, static_cast<int>(comp_acc_indices.size()));
-        }
-        comp_idx_by_trial[trial_idx] = comp_idx_val;
-        current_acc_order =
-            &comp_acc_indices[static_cast<std::size_t>(comp_idx_val)];
-      }
-    }
-    int acc_idx = (acc_cursor < current_acc_order->size())
-                      ? (*current_acc_order)[acc_cursor]
-                      : all_acc_indices[acc_cursor % all_acc_indices.size()];
-    ++acc_cursor;
     TrialAccumulatorParams &tap =
         param_sets[static_cast<std::size_t>(trial_idx)]
             .acc_params[static_cast<std::size_t>(acc_idx)];
@@ -7353,15 +7387,29 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       tap.shared_q = q_val;
     }
     tap.dist_cfg.t0 = params_mat(r, t0_col);
-    if (has_onset && r < onset_col.size()) {
-      double onset_val = static_cast<double>(onset_col[r]);
-      if (std::isfinite(onset_val)) {
-        tap.onset = onset_val;
-      }
+    if (r < prepared.onset_by_row.size()) {
+      tap.onset = prepared.onset_by_row[r];
     }
     tap.has_override = true;
     param_sets[static_cast<std::size_t>(trial_idx)].has_any_override = true;
-    param_sets[static_cast<std::size_t>(trial_idx)].soa_cache_valid = false;
+    if (param_sets[static_cast<std::size_t>(trial_idx)].soa_cache.valid &&
+        acc_idx >= 0 &&
+        acc_idx < param_sets[static_cast<std::size_t>(trial_idx)].soa_cache.n_acc) {
+      uuber::TrialParamsSoA &soa =
+          param_sets[static_cast<std::size_t>(trial_idx)].soa_cache;
+      const std::size_t soa_idx = static_cast<std::size_t>(acc_idx);
+      soa.onset[soa_idx] = tap.onset;
+      soa.q[soa_idx] = tap.q;
+      soa.t0[soa_idx] = tap.dist_cfg.t0;
+      soa.p1[soa_idx] = tap.dist_cfg.p1;
+      soa.p2[soa_idx] = tap.dist_cfg.p2;
+      soa.p3[soa_idx] = tap.dist_cfg.p3;
+      soa.p4[soa_idx] = tap.dist_cfg.p4;
+      soa.p5[soa_idx] = tap.dist_cfg.p5;
+      soa.p6[soa_idx] = tap.dist_cfg.p6;
+      soa.p7[soa_idx] = tap.dist_cfg.p7;
+      soa.p8[soa_idx] = tap.dist_cfg.p8;
+    }
     const int p1_col = p_cols[0];
     const int p2_col = p_cols[1];
     const int p3_col = p_cols[2];
@@ -7386,91 +7434,28 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
       tap.dist_cfg.p7 = params_mat(r, p7_col);
     if (p8_col >= 0)
       tap.dist_cfg.p8 = params_mat(r, p8_col);
-
-    for (std::size_t c = 0; c < comp_map.leader_idx.size(); ++c) {
-      if (comp_map.leader_idx[c] == acc_idx) {
-        weight_override_by_trial[static_cast<std::size_t>(trial_idx)][c] =
-            params_mat(r, w_col);
-      }
+    if (param_sets[static_cast<std::size_t>(trial_idx)].soa_cache.valid &&
+        acc_idx >= 0 &&
+        acc_idx < param_sets[static_cast<std::size_t>(trial_idx)].soa_cache.n_acc) {
+      uuber::TrialParamsSoA &soa =
+          param_sets[static_cast<std::size_t>(trial_idx)].soa_cache;
+      const std::size_t soa_idx = static_cast<std::size_t>(acc_idx);
+      soa.t0[soa_idx] = tap.dist_cfg.t0;
+      soa.p1[soa_idx] = tap.dist_cfg.p1;
+      soa.p2[soa_idx] = tap.dist_cfg.p2;
+      soa.p3[soa_idx] = tap.dist_cfg.p3;
+      soa.p4[soa_idx] = tap.dist_cfg.p4;
+      soa.p5[soa_idx] = tap.dist_cfg.p5;
+      soa.p6[soa_idx] = tap.dist_cfg.p6;
+      soa.p7[soa_idx] = tap.dist_cfg.p7;
+      soa.p8[soa_idx] = tap.dist_cfg.p8;
     }
 
-    if (outcome_label_id_by_trial[trial_idx] < 0 && r < outcome_id_col.size()) {
-      int id_val = outcome_id_col[r];
-      if (id_val != NA_INTEGER) {
-        outcome_label_id_by_trial[trial_idx] = id_val;
-      }
+    for (int comp_idx : leader_components_by_acc[static_cast<std::size_t>(acc_idx)]) {
+      weight_override_by_trial[static_cast<std::size_t>(trial_idx)]
+                              [static_cast<std::size_t>(comp_idx)] =
+          params_mat(r, w_col);
     }
-    if (!std::isfinite(rt_by_trial[trial_idx]) && r < rt_col.size()) {
-      rt_by_trial[trial_idx] = static_cast<double>(rt_col[r]);
-    }
-    if (ranked_mode) {
-      std::vector<int> &trial_ranked_ids = ranked_label_ids_by_trial[trial_idx];
-      std::vector<double> &trial_ranked_rt = ranked_rt_by_trial[trial_idx];
-      for (int rank_idx = 0; rank_idx < rank_width; ++rank_idx) {
-        if (trial_ranked_ids[static_cast<std::size_t>(rank_idx)] < 0 &&
-            r < rank_outcome_id_cols[static_cast<std::size_t>(rank_idx)].size()) {
-          int id_val = rank_outcome_id_cols[static_cast<std::size_t>(rank_idx)][r];
-          if (id_val != NA_INTEGER) {
-            trial_ranked_ids[static_cast<std::size_t>(rank_idx)] = id_val;
-          }
-        }
-        if (!std::isfinite(
-                trial_ranked_rt[static_cast<std::size_t>(rank_idx)]) &&
-            r < rank_rt_cols[static_cast<std::size_t>(rank_idx)].size()) {
-          double cand_rt =
-              rank_rt_cols[static_cast<std::size_t>(rank_idx)][r];
-          if (std::isfinite(cand_rt)) {
-            trial_ranked_rt[static_cast<std::size_t>(rank_idx)] = cand_rt;
-          }
-        }
-      }
-    }
-  }
-
-  int n_trials = static_cast<int>(param_sets.size());
-  for (TrialParamSet &ps : param_sets) {
-    refresh_trial_param_fingerprint(ps);
-  }
-  std::vector<SharedTriggerPlan> trigger_plans;
-  trigger_plans.reserve(static_cast<std::size_t>(n_trials));
-  std::vector<int> trigger_plan_index_by_trial(static_cast<std::size_t>(n_trials),
-                                               -1);
-  std::vector<int> trigger_plan_representative_trial;
-  trigger_plan_representative_trial.reserve(static_cast<std::size_t>(n_trials));
-  std::unordered_map<std::uint64_t, std::vector<int>> trigger_plan_candidates;
-  trigger_plan_candidates.reserve(static_cast<std::size_t>(n_trials));
-  for (int t = 0; t < n_trials; ++t) {
-    const TrialParamSet &params =
-        param_sets[static_cast<std::size_t>(t)];
-    const std::uint64_t fp = params.shared_trigger_source_fingerprint;
-    std::vector<int> &candidates = trigger_plan_candidates[fp];
-    int plan_idx = -1;
-    for (int candidate_idx : candidates) {
-      if (candidate_idx < 0 ||
-          candidate_idx >=
-              static_cast<int>(trigger_plan_representative_trial.size())) {
-        continue;
-      }
-      const int rep_trial_idx =
-          trigger_plan_representative_trial[static_cast<std::size_t>(
-              candidate_idx)];
-      if (rep_trial_idx < 0 || rep_trial_idx >= n_trials) {
-        continue;
-      }
-      if (trial_paramsets_equivalent(
-              params, param_sets[static_cast<std::size_t>(rep_trial_idx)])) {
-        plan_idx = candidate_idx;
-        break;
-      }
-    }
-    if (plan_idx < 0) {
-      plan_idx = static_cast<int>(trigger_plans.size());
-      trigger_plans.push_back(
-          build_shared_trigger_plan(*ctx, &param_sets[static_cast<std::size_t>(t)]));
-      trigger_plan_representative_trial.push_back(t);
-      candidates.push_back(plan_idx);
-    }
-    trigger_plan_index_by_trial[static_cast<std::size_t>(t)] = plan_idx;
   }
 
   std::vector<int> default_component_indices;
@@ -7500,9 +7485,9 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
   }
 
   std::vector<std::vector<double>> weights_by_trial(
-      static_cast<std::size_t>(n_trials),
+      static_cast<std::size_t>(prepared.n_trials),
       std::vector<double>(n_components, 0.0));
-  for (int t = 0; t < n_trials; ++t) {
+  for (int t = 0; t < prepared.n_trials; ++t) {
     std::vector<double> w = comp_map.base_weights;
     const auto &overrides =
         weight_override_by_trial[static_cast<std::size_t>(t)];
@@ -7525,41 +7510,50 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
   }
 
   if (ok.size() == 0) {
-    ok = Rcpp::LogicalVector(n_trials, true);
-  } else if (ok.size() != n_trials) {
+    ok = Rcpp::LogicalVector(prepared.n_trials, true);
+  } else if (ok.size() != prepared.n_trials) {
     Rcpp::stop("Length of ok must equal number of trials");
   }
 
   R_xlen_t n_expand = expand.size();
   if (n_expand == 0) {
-    expand = Rcpp::seq(1, n_trials);
+    expand = Rcpp::seq(1, prepared.n_trials);
     n_expand = expand.size();
   }
   for (R_xlen_t i = 0; i < n_expand; ++i) {
     int comp_idx = expand[i];
-    if (comp_idx == NA_INTEGER || comp_idx < 1 || comp_idx > n_trials) {
+    if (comp_idx == NA_INTEGER || comp_idx < 1 || comp_idx > prepared.n_trials) {
       Rcpp::stop("expand indices must reference trials");
     }
   }
 
-  std::vector<double> trial_loglik(static_cast<std::size_t>(n_trials), min_ll);
+  std::vector<double> trial_loglik(static_cast<std::size_t>(prepared.n_trials), min_ll);
   TrialParamSet prob_trigger_scratch;
   TrialParamSet ranked_trigger_scratch;
+  std::vector<std::vector<int>> forced_component_indices_by_component(
+      static_cast<std::size_t>(component_count));
+  std::vector<std::vector<double>> forced_component_weights_by_component(
+      static_cast<std::size_t>(component_count), std::vector<double>(1, 1.0));
+  std::vector<std::vector<ComponentCacheEntry>> forced_cache_entries_by_component(
+      static_cast<std::size_t>(component_count));
+  for (int component_idx = 0; component_idx < component_count; ++component_idx) {
+    forced_component_indices_by_component[static_cast<std::size_t>(component_idx)] =
+        {component_idx};
+    forced_cache_entries_by_component[static_cast<std::size_t>(component_idx)] =
+        build_component_cache_entries_from_indices(
+            *ctx,
+            forced_component_indices_by_component[static_cast<std::size_t>(component_idx)]);
+  }
 
-  for (int t = 0; t < n_trials; ++t) {
+  for (int t = 0; t < prepared.n_trials; ++t) {
     if (t >= ok.size() || !ok[t]) {
       trial_loglik[static_cast<std::size_t>(t)] = min_ll;
       continue;
     }
 
     TrialParamSet *params_ptr = &param_sets[static_cast<std::size_t>(t)];
-    double rt = (t < static_cast<int>(rt_by_trial.size()))
-                    ? rt_by_trial[static_cast<std::size_t>(t)]
-                    : std::numeric_limits<double>::quiet_NaN();
-    int outcome_label_id =
-        (t < static_cast<int>(outcome_label_id_by_trial.size()))
-            ? outcome_label_id_by_trial[static_cast<std::size_t>(t)]
-            : -1;
+    double rt = prepared.rt_by_trial[static_cast<std::size_t>(t)];
+    int outcome_label_id = prepared.outcome_id_by_trial[static_cast<std::size_t>(t)];
     const bool outcome_is_na = (outcome_label_id < 0);
     const std::vector<int> *comp_indices_ptr = &default_component_indices;
     const std::vector<ComponentCacheEntry> *cache_entries_ptr =
@@ -7567,55 +7561,33 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
     const std::vector<double> *comp_weights_ptr =
         &weights_by_trial[static_cast<std::size_t>(t)];
 
-    int forced_component_idx =
-        (t < static_cast<int>(comp_idx_by_trial.size()))
-            ? comp_idx_by_trial[static_cast<std::size_t>(t)]
-            : -1;
-    std::vector<int> forced_component_indices;
-    std::vector<double> forced_weights;
-    std::vector<ComponentCacheEntry> forced_cache_entries;
+    int forced_component_idx = prepared.comp_idx_by_trial0[static_cast<std::size_t>(t)];
     if (forced_component_idx >= 0) {
-      forced_component_indices = {forced_component_idx};
-      forced_weights = {1.0};
-      forced_cache_entries =
-          build_component_cache_entries_from_indices(*ctx, forced_component_indices);
-      comp_indices_ptr = &forced_component_indices;
-      comp_weights_ptr = &forced_weights;
-      cache_entries_ptr = &forced_cache_entries;
+      comp_indices_ptr =
+          &forced_component_indices_by_component[static_cast<std::size_t>(forced_component_idx)];
+      comp_weights_ptr =
+          &forced_component_weights_by_component[static_cast<std::size_t>(forced_component_idx)];
+      cache_entries_ptr =
+          &forced_cache_entries_by_component[static_cast<std::size_t>(forced_component_idx)];
     }
-
-    const int trigger_plan_idx =
-        (t >= 0 && t < static_cast<int>(trigger_plan_index_by_trial.size()))
-            ? trigger_plan_index_by_trial[static_cast<std::size_t>(t)]
-            : -1;
-    const SharedTriggerPlan *trigger_plan_ptr =
-        (trigger_plan_idx >= 0 &&
-         trigger_plan_idx < static_cast<int>(trigger_plans.size()))
-            ? &trigger_plans[static_cast<std::size_t>(trigger_plan_idx)]
-            : nullptr;
 
     double prob = 0.0;
     if (ranked_mode) {
       std::vector<int> ranked_label_ids;
       std::vector<double> ranked_times;
-      ranked_label_ids.reserve(static_cast<std::size_t>(rank_width));
-      ranked_times.reserve(static_cast<std::size_t>(rank_width));
+      ranked_label_ids.reserve(static_cast<std::size_t>(prepared.rank_width));
+      ranked_times.reserve(static_cast<std::size_t>(prepared.rank_width));
       bool ranked_valid = true;
       bool seen_truncation = false;
       std::vector<int> seen_label_ids;
-      seen_label_ids.reserve(static_cast<std::size_t>(rank_width));
-      if (t >= static_cast<int>(ranked_label_ids_by_trial.size()) ||
-          t >= static_cast<int>(ranked_rt_by_trial.size())) {
-        ranked_valid = false;
-      } else {
-        const std::vector<int> &trial_ranked_ids =
-            ranked_label_ids_by_trial[static_cast<std::size_t>(t)];
-        const std::vector<double> &trial_ranked_rt =
-            ranked_rt_by_trial[static_cast<std::size_t>(t)];
-        for (int rank_i = 0; rank_i < rank_width; ++rank_i) {
+      seen_label_ids.reserve(static_cast<std::size_t>(prepared.rank_width));
+      for (int rank_i = 0; rank_i < prepared.rank_width; ++rank_i) {
           int observed_label_id =
-              trial_ranked_ids[static_cast<std::size_t>(rank_i)];
-          double rank_rt = trial_ranked_rt[static_cast<std::size_t>(rank_i)];
+              prepared.ranked_outcome_id_by_trial[static_cast<std::size_t>(rank_i)]
+                                                [static_cast<std::size_t>(t)];
+          double rank_rt =
+              prepared.ranked_rt_by_trial[static_cast<std::size_t>(rank_i)]
+                                         [static_cast<std::size_t>(t)];
           bool has_label = (observed_label_id >= 0);
           bool has_rt = std::isfinite(rank_rt);
           if (!has_label && !has_rt) {
@@ -7648,7 +7620,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
           seen_label_ids.insert(seen_it, observed_label_id);
           ranked_label_ids.push_back(observed_label_id);
           ranked_times.push_back(rank_rt);
-        }
       }
 
       if (!ranked_valid) {
@@ -7662,7 +7633,7 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
             &ranked_times, &nonresponse_outcome_indices,
             *comp_indices_ptr, *comp_weights_ptr,
             *cache_entries_ptr, params_ptr, rel_tol, abs_tol, max_depth,
-            trigger_plan_ptr, &prob_trigger_scratch, &ranked_trigger_scratch);
+            nullptr, &prob_trigger_scratch, &ranked_trigger_scratch);
       }
     } else {
       prob = evaluate_trial_probability_kernel_idx(
@@ -7672,7 +7643,7 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
           outcome_label_id, rt, nullptr, nullptr, &nonresponse_outcome_indices,
           *comp_indices_ptr,
           *comp_weights_ptr, *cache_entries_ptr, params_ptr, rel_tol, abs_tol,
-          max_depth, trigger_plan_ptr, &prob_trigger_scratch,
+          max_depth, nullptr, &prob_trigger_scratch,
           &ranked_trigger_scratch);
     }
 
@@ -7808,24 +7779,27 @@ struct PoolPolyScratch {
 };
 
 inline void ensure_prefix_shape(std::vector<std::vector<double>> &prefix,
-                                std::size_t n) {
+                                std::size_t n,
+                                std::size_t order_limit) {
   if (prefix.size() != n + 1) {
     prefix.resize(n + 1);
   }
   for (std::size_t i = 0; i <= n; ++i) {
-    if (prefix[i].size() != i + 1) {
-      prefix[i].assign(i + 1, 0.0);
+    const std::size_t len = std::min(i, order_limit) + 1;
+    if (prefix[i].size() != len) {
+      prefix[i].assign(len, 0.0);
     }
   }
 }
 
 inline void ensure_suffix_shape(std::vector<std::vector<double>> &suffix,
-                                std::size_t n) {
+                                std::size_t n,
+                                std::size_t order_limit) {
   if (suffix.size() != n + 1) {
     suffix.resize(n + 1);
   }
   for (std::size_t i = 0; i <= n; ++i) {
-    std::size_t len = (n - i) + 1;
+    std::size_t len = std::min(n - i, order_limit) + 1;
     if (suffix[i].size() != len) {
       suffix[i].assign(len, 0.0);
     }
@@ -7833,12 +7807,13 @@ inline void ensure_suffix_shape(std::vector<std::vector<double>> &suffix,
 }
 
 inline PoolPolyScratch &fetch_pool_poly_scratch(std::size_t n,
+                                                std::size_t order_limit,
                                                 bool need_suffix) {
   thread_local std::unordered_map<std::size_t, PoolPolyScratch> scratch_map;
   PoolPolyScratch &scratch = scratch_map[n];
-  ensure_prefix_shape(scratch.prefix, n);
+  ensure_prefix_shape(scratch.prefix, n, order_limit);
   if (need_suffix) {
-    ensure_suffix_shape(scratch.suffix, n);
+    ensure_suffix_shape(scratch.suffix, n, order_limit);
   }
   return scratch;
 }
@@ -7854,7 +7829,8 @@ inline void ensure_prob_buffers(PoolPolyScratch &scratch, std::size_t n) {
 
 inline void fill_prefix_buffers(std::vector<std::vector<double>> &prefix,
                                 const std::vector<double> &surv,
-                                const std::vector<double> &fail) {
+                                const std::vector<double> &fail,
+                                std::size_t order_limit) {
   const std::size_t n = surv.size();
   std::fill(prefix[0].begin(), prefix[0].end(), 0.0);
   prefix[0][0] = 1.0;
@@ -7869,14 +7845,17 @@ inline void fill_prefix_buffers(std::vector<std::vector<double>> &prefix,
       if (base == 0.0)
         continue;
       out[j] += base * surv_i;
-      out[j + 1] += base * fail_i;
+      if (j < order_limit && j + 1 < out.size()) {
+        out[j + 1] += base * fail_i;
+      }
     }
   }
 }
 
 inline void fill_suffix_buffers(std::vector<std::vector<double>> &suffix,
                                 const std::vector<double> &surv,
-                                const std::vector<double> &fail) {
+                                const std::vector<double> &fail,
+                                std::size_t order_limit) {
   const std::size_t n = surv.size();
   std::fill(suffix[n].begin(), suffix[n].end(), 0.0);
   suffix[n][0] = 1.0;
@@ -7891,7 +7870,9 @@ inline void fill_suffix_buffers(std::vector<std::vector<double>> &suffix,
       if (base == 0.0)
         continue;
       out[j] += base * surv_i;
-      out[j + 1] += base * fail_i;
+      if (j < order_limit && j + 1 < out.size()) {
+        out[j + 1] += base * fail_i;
+      }
     }
   }
 }
@@ -8419,10 +8400,11 @@ static double pool_density_fast_impl(const double *density,
   if (k > static_cast<int>(n))
     return 0.0;
 
-  PoolPolyScratch &scratch = fetch_pool_poly_scratch(n, true);
+  const std::size_t order_limit = static_cast<std::size_t>(k - 1);
+  PoolPolyScratch &scratch = fetch_pool_poly_scratch(n, order_limit, true);
   fill_surv_fail_buffers(scratch, survival, n);
-  fill_prefix_buffers(scratch.prefix, scratch.surv, scratch.fail);
-  fill_suffix_buffers(scratch.suffix, scratch.surv, scratch.fail);
+  fill_prefix_buffers(scratch.prefix, scratch.surv, scratch.fail, order_limit);
+  fill_suffix_buffers(scratch.suffix, scratch.surv, scratch.fail, order_limit);
 
   double total = 0.0;
   for (std::size_t idx = 0; idx < n; ++idx) {
@@ -8448,9 +8430,10 @@ static double pool_survival_fast_impl(const double *survival, std::size_t n,
   if (k < 1)
     return 0.0;
 
-  PoolPolyScratch &scratch = fetch_pool_poly_scratch(n, false);
+  const std::size_t order_limit = static_cast<std::size_t>(k - 1);
+  PoolPolyScratch &scratch = fetch_pool_poly_scratch(n, order_limit, false);
   fill_surv_fail_buffers(scratch, survival, n);
-  fill_prefix_buffers(scratch.prefix, scratch.surv, scratch.fail);
+  fill_prefix_buffers(scratch.prefix, scratch.surv, scratch.fail, order_limit);
   const std::vector<double> &poly = scratch.prefix.back();
   int upto = std::min<int>(k, static_cast<int>(poly.size()));
   if (upto <= 0)

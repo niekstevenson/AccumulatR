@@ -58,8 +58,9 @@ param_df <- build_param_matrix(spec, pars, n_trials = 8)
 sim <- simulate(model, param_df, seed = 123)
 head(sim[c("trial", "R", "rt")])
 
-ctx <- build_likelihood_context(model, sim[c("trial", "R", "rt")])
-log_likelihood(ctx, param_df)
+prepared <- prepare_data(model, sim[c("trial", "R", "rt")])
+ctx <- make_context(model)
+log_likelihood(ctx, prepared, param_df)
 ```
 
 `simulate()` returns behavioral data with one row per trial. In the simplest

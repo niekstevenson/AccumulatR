@@ -14,7 +14,7 @@ A `model_structure` object.
 }
 \description{
 This converts a human-readable model specification into the finalized object
-used by `simulate()`, `build_likelihood_context()`, and related functions.
+used by `simulate()`, `prepare_data()`, `make_context()`, and related functions.
 }
 \examples{
 spec <- race_spec()

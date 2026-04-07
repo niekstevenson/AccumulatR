@@ -41,7 +41,7 @@ value; unrestricted parameters are profiled on a symmetric additive scale.}
 \value{
 Invisibly returns a list with the completed parameter vector, the
   analytical and simulated probability comparison, the simulated data, the
-  likelihood context, and the profile tables.
+  prepared data, the model context, and the profile tables.
 }
 \description{
 `test_model()` is a quick diagnostic for checking whether a model and a

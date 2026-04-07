@@ -2,12 +2,13 @@
 % Please edit documentation in R/likelihood_param_interface.R
 \name{log_likelihood}
 \alias{log_likelihood}
-\alias{log_likelihood.likelihood_context}
+\alias{log_likelihood.accumulatr_context}
 \alias{log_likelihood.default}
 \title{Evaluate the log-likelihood of behavioral data}
 \usage{
 log_likelihood(
-  likelihood_context,
+  context,
+  data,
   parameters,
   ok = NULL,
   expand = NULL,
@@ -15,8 +16,9 @@ log_likelihood(
   ...
 )
 
-\method{log_likelihood}{likelihood_context}(
-  likelihood_context,
+\method{log_likelihood}{accumulatr_context}(
+  context,
+  data,
   parameters,
   ok = NULL,
   expand = NULL,
@@ -24,10 +26,12 @@ log_likelihood(
   ...
 )
 
-\method{log_likelihood}{default}(likelihood_context, ...)
+\method{log_likelihood}{default}(context, ...)
 }
 \arguments{
-\item{likelihood_context}{Context created with `build_likelihood_context()`.}
+\item{context}{Context created with `make_context()`.}
+
+\item{data}{Prepared data created with `prepare_data()`.}
 
 \item{parameters}{A parameter data frame, or a list of parameter data frames.}
 
@@ -46,8 +50,8 @@ trials.}
 A numeric vector of log-likelihood values.
 }
 \description{
-Compute the log-likelihood of the behavioral data stored in a
-`likelihood_context` under one or more candidate parameter sets.
+Compute the log-likelihood of prepared behavioral data under one or more
+candidate parameter sets.
 }
 \examples{
 spec <- race_spec()
@@ -60,6 +64,7 @@ params_df <- build_param_matrix(
   n_trials = 2
 )
 data_df <- simulate(structure, params_df, seed = 1)
-ctx <- build_likelihood_context(structure, data_df)
-log_likelihood(ctx, list(params_df))
+prepared <- prepare_data(structure, data_df)
+ctx <- make_context(structure)
+log_likelihood(ctx, prepared, list(params_df))
 }

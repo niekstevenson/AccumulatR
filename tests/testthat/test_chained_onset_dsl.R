@@ -236,7 +236,8 @@ testthat::test_that("chained onset likelihood context and evaluation are availab
     rt = 0.75,
     stringsAsFactors = FALSE
   )
-  ctx <- build_likelihood_context(finalized, data_df)
-  ll <- as.numeric(log_likelihood(ctx, params_df))
+  prepared <- prepare_data(finalized, data_df)
+  ctx <- make_context(finalized)
+  ll <- as.numeric(log_likelihood(ctx, prepared, params_df))
   testthat::expect_true(is.finite(ll))
 })

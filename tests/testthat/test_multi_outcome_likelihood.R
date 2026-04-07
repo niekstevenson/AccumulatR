@@ -18,8 +18,9 @@ testthat::test_that("ranked likelihood matches simple independent two-outcome fo
     stringsAsFactors = FALSE
   )
 
-  ctx <- build_likelihood_context(structure, data_df)
-  ll <- as.numeric(log_likelihood(ctx, params_df))
+  prepared <- prepare_data(structure, data_df)
+  ctx <- make_context(structure)
+  ll <- as.numeric(log_likelihood(ctx, prepared, params_df))
 
   expected <- dlnorm(0.30, log(0.30), 0.20) *
     dlnorm(0.55, log(0.45), 0.25)
@@ -52,8 +53,11 @@ testthat::test_that("ranked likelihood treats missing later ranks as truncation"
     stringsAsFactors = FALSE
   )
 
-  ll_ranked <- as.numeric(log_likelihood(build_likelihood_context(structure, ranked_df), params_df))
-  ll_single <- as.numeric(log_likelihood(build_likelihood_context(structure, single_df), params_df))
+  ctx <- make_context(structure)
+  ranked_prepared <- prepare_data(structure, ranked_df)
+  single_prepared <- prepare_data(structure, single_df)
+  ll_ranked <- as.numeric(log_likelihood(ctx, ranked_prepared, params_df))
+  ll_single <- as.numeric(log_likelihood(ctx, single_prepared, params_df))
   testthat::expect_equal(ll_ranked, ll_single, tolerance = 1e-8)
 })
 
@@ -78,15 +82,13 @@ testthat::test_that("ranked likelihood rejects mismatched rank pairs with min_ll
     R2 = "B", rt2 = NA_real_,
     stringsAsFactors = FALSE
   )
-  ll <- as.numeric(log_likelihood(
-    build_likelihood_context(structure, bad_df),
-    params_df,
-    min_ll = min_ll
-  ))
+  prepared <- prepare_data(structure, bad_df)
+  ctx <- make_context(structure)
+  ll <- as.numeric(log_likelihood(ctx, prepared, params_df, min_ll = min_ll))
   testthat::expect_equal(ll, min_ll)
 })
 
-testthat::test_that("likelihood context enforces contiguous ranked columns", {
+testthat::test_that("prepare_data enforces contiguous ranked columns", {
   spec <- race_spec(n_outcomes = 2L) |>
     add_accumulator("a", "lognormal") |>
     add_accumulator("b", "lognormal") |>
@@ -101,7 +103,7 @@ testthat::test_that("likelihood context enforces contiguous ranked columns", {
     stringsAsFactors = FALSE
   )
   testthat::expect_error(
-    build_likelihood_context(structure, bad_df),
+    prepare_data(structure, bad_df),
     "contiguous"
   )
 })
@@ -127,11 +129,9 @@ testthat::test_that("ranked likelihood rejects non-increasing times with min_ll"
     R2 = "B", rt2 = 0.40,
     stringsAsFactors = FALSE
   )
-  ll <- as.numeric(log_likelihood(
-    build_likelihood_context(structure, bad_time_df),
-    params_df,
-    min_ll = min_ll
-  ))
+  prepared <- prepare_data(structure, bad_time_df)
+  ctx <- make_context(structure)
+  ll <- as.numeric(log_likelihood(ctx, prepared, params_df, min_ll = min_ll))
   testthat::expect_equal(ll, min_ll)
 })
 
@@ -159,6 +159,8 @@ testthat::test_that("ranked likelihood handles pool + shared trigger models", {
     stringsAsFactors = FALSE
   )
 
-  ll <- as.numeric(log_likelihood(build_likelihood_context(structure, data_df), params_df))
+  prepared <- prepare_data(structure, data_df)
+  ctx <- make_context(structure)
+  ll <- as.numeric(log_likelihood(ctx, prepared, params_df))
   testthat::expect_true(is.finite(ll))
 })

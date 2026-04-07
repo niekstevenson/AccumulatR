@@ -100,6 +100,7 @@
 
 .test_model_profile_one <- function(structure,
                                     context,
+                                    data,
                                     baseline_values,
                                     parameter,
                                     points,
@@ -115,12 +116,16 @@
   ll <- vapply(grid, function(value) {
     candidate <- baseline_values
     candidate[[parameter]] <- value
+    n_trials <- if (nrow(data) == 0L) {
+      0L
+    } else {
+      1L + sum(data$trial[-1L] != data$trial[-nrow(data)])
+    }
     pm <- tryCatch(
       build_param_matrix(
         structure,
         candidate,
-        n_trials = context$n_trials,
-        layout = context$param_layout
+        n_trials = n_trials
       ),
       error = function(e) NULL
     )
@@ -128,7 +133,7 @@
       return(NA_real_)
     }
     out <- tryCatch(
-      as.numeric(log_likelihood(context, pm)),
+      as.numeric(log_likelihood(context, data, pm)),
       error = function(e) NA_real_
     )
     out[[1]]
@@ -220,7 +225,7 @@
 #' @param plot If `TRUE`, draw one profile plot per supplied parameter.
 #' @return Invisibly returns a list with the completed parameter vector, the
 #'   analytical and simulated probability comparison, the simulated data, the
-#'   likelihood context, and the profile tables.
+#'   prepared data, the model context, and the profile tables.
 #' @examples
 #' spec <- race_spec() |>
 #'   add_accumulator("go", "lognormal") |>
@@ -290,7 +295,8 @@ test_model <- function(model,
   )
 
   sim_df <- simulate(structure, params_df_sim, seed = seed)
-  context <- build_likelihood_context(structure, sim_df)
+  prepared_data <- prepare_data(structure, sim_df)
+  context <- make_context(structure)
 
   labels <- names(analytical)
   simulated <- .test_model_simulated_probabilities(sim_df, labels)
@@ -303,6 +309,7 @@ test_model <- function(model,
     .test_model_profile_one(
       structure = structure,
       context = context,
+      data = prepared_data,
       baseline_values = completed_values,
       parameter = nm,
       points = as.integer(profile_points),

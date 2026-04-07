@@ -11,7 +11,7 @@
 #' 1. Start with `race_spec()`.
 #' 2. Add accumulators, pools, outcomes, and timing relations.
 #' 3. Call `finalize_model()` to prepare the model for simulation and fitting.
-#' 4. Use `simulate()`, `build_likelihood_context()`, and `log_likelihood()`.
+#' 4. Use `simulate()`, `prepare_data()`, `make_context()`, and `log_likelihood()`.
 #'
 #' The R interface is intended to stay readable and model-focused, while the
 #' repeated numerical work happens in C++.

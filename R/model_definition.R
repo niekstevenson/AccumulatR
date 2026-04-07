@@ -1377,7 +1377,7 @@ prepare_model <- function(model) {
 #' Compile a model for simulation and fitting
 #'
 #' This converts a human-readable model specification into the finalized object
-#' used by `simulate()`, `build_likelihood_context()`, and related functions.
+#' used by `simulate()`, `prepare_data()`, `make_context()`, and related functions.
 #'
 #' @param model Model specification.
 #' @return A `model_structure` object.
@@ -1615,6 +1615,8 @@ sampled_pars <- function(model) {
 #' @param param_values Named numeric vector of parameter values.
 #' @param n_trials Number of trials to generate.
 #' @param component Optional component label or labels.
+#' @param trial_df Optional trial/prepared data object. If it includes an
+#'   `accumulator` column, parameter rows are built in that exact row order.
 #' @param layout Optional storage layout.
 #' @return A data frame or matrix of parameter values by trial.
 #' @examples
@@ -1628,6 +1630,7 @@ build_param_matrix <- function(model,
                                param_values,
                                n_trials = 1L,
                                component = NULL,
+                               trial_df = NULL,
                                layout = NULL) {
   spec <- race_model(model)
   accs <- spec$accumulators %||% list()
@@ -1686,6 +1689,25 @@ build_param_matrix <- function(model,
   mix <- spec$mixture_options %||% spec$metadata$mixture %||% list()
   comp_defs <- spec$components %||% mix$components %||% list()
   comp_ids <- vapply(comp_defs, `[[`, character(1), "id")
+  acc_component_membership <- setNames(vector("list", length(acc_ids)), acc_ids)
+  if (length(comp_defs) > 0L) {
+    for (comp in comp_defs) {
+      comp_id <- comp$id %||% NA_character_
+      members <- comp$members %||% character(0)
+      if (!is.character(comp_id) || length(comp_id) != 1L || !nzchar(comp_id)) {
+        next
+      }
+      for (member in members) {
+        if (!member %in% acc_ids) {
+          next
+        }
+        acc_component_membership[[member]] <- unique(c(
+          acc_component_membership[[member]],
+          comp_id
+        ))
+      }
+    }
+  }
   comp_weights <- setNames(rep(NA_real_, length(comp_defs)), comp_ids)
   comp_mode <- mix$mode %||% "fixed"
   comp_ref <- mix$reference %||% if (length(comp_ids) > 0) comp_ids[[1]] else NA_character_
@@ -1846,6 +1868,34 @@ build_param_matrix <- function(model,
     base_mat[i, ] <- row_vals
   }
 
+  if (!is.null(trial_df)) {
+    trial_df <- as.data.frame(trial_df)
+    if (nrow(trial_df) == 0L) {
+      stop("trial_df must contain at least one row")
+    }
+    if ("accumulator" %in% names(trial_df)) {
+      acc_idx <- match(as.character(trial_df$accumulator), acc_ids)
+      if (anyNA(acc_idx)) {
+        stop("trial_df$accumulator values must match model accumulators")
+      }
+      params_mat <- base_mat[acc_idx, , drop = FALSE]
+      colnames(params_mat) <- col_names
+      return(params_mat)
+    }
+    trial_col <- if ("trial" %in% names(trial_df)) {
+      as.integer(trial_df$trial)
+    } else if ("trials" %in% names(trial_df)) {
+      as.integer(trial_df$trials)
+    } else {
+      seq_len(nrow(trial_df))
+    }
+    trial_first <- c(TRUE, trial_col[-1L] != trial_col[-length(trial_col)])
+    n_trials <- sum(trial_first)
+    if (is.null(component) && "component" %in% names(trial_df)) {
+      component <- as.character(trial_df$component[trial_first])
+    }
+  }
+
   # If a pre-built layout is provided (static mapping stored in context), honor it.
   if (!is.null(layout)) {
     row_trial <- layout$row_trial %||% layout$trial
@@ -1880,7 +1930,7 @@ build_param_matrix <- function(model,
     for (t in seq_len(n_trials)) {
       comp_lbl <- as.character(component[[t]])
       for (i in seq_along(accs)) {
-        acc_comp <- accs[[i]]$components %||% character(0)
+        acc_comp <- acc_component_membership[[acc_ids[[i]]]] %||% character(0)
         if (length(acc_comp) > 0 && !comp_lbl %in% acc_comp) {
           next
         }
@@ -1901,18 +1951,7 @@ build_param_matrix <- function(model,
   }
 }
 
-#' Expand behavioral data to one row per accumulator
-#'
-#' This is mainly a helper for advanced workflows where you want trial-level
-#' behavioral data repeated across the accumulators that are active on each
-#' trial.
-#'
-#' @param model_spec Finalized model returned by `finalize_model()`.
-#' @param data Behavioral data with one row per trial.
-#' @return A data frame with rows repeated per accumulator and an
-#'   `accumulator` column.
-#' @export
-nest_accumulators <- function(model_spec, data) {
+.expand_accumulator_rows <- function(model_spec, data) {
   structure <- .as_model_structure(model_spec)
   acc_defs <- structure$prep$accumulators %||% list()
   acc_ids <- names(acc_defs)

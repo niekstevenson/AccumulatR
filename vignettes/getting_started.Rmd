@@ -23,7 +23,7 @@ Most analyses in `AccumulatR` follow the same four steps:
 2. Finalize that model with `finalize_model()`.
 3. Work with behavioral data, either simulated with `simulate()` or collected
    in an experiment.
-4. Build a likelihood context and evaluate candidate parameter values.
+4. Prepare the data, build a model context, and evaluate candidate parameter values.
 
 ## Core ideas
 
@@ -104,12 +104,15 @@ response time.
 To fit a model, the usual pattern is:
 
 ```{r}
-ctx <- build_likelihood_context(model, sim[c("trial", "R", "rt")])
-log_likelihood(ctx, param_df)
+prepared <- prepare_data(model, sim[c("trial", "R", "rt")])
+ctx <- make_context(model)
+log_likelihood(ctx, prepared, param_df)
 ```
 
-`build_likelihood_context()` prepares the behavioral data for repeated
-likelihood evaluation. `log_likelihood()` then tells you how well a parameter set explains those observed data.
+`prepare_data()` expands and normalizes the behavioral data for likelihood
+evaluation, and `make_context()` compiles the model-side runtime state.
+`log_likelihood()` then tells you how well a parameter set explains those
+observed data.
 
 ## Where to go next
 

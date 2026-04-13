@@ -1,0 +1,202 @@
+# Trigger Types
+
+This vignette shows how to add triggers to a model. Here `go1` and `go2`
+produce responses `R1` and `R2`, but both accumulators are controlled by
+the same trigger. On some trials that trigger fails, so no response is
+observed.
+
+With `draw = "shared"`, the trigger failure is joint: both accumulators
+either start together or fail together. With `draw = "independent"`, the
+same failure probability is applied separately to each accumulator.
+
+``` r
+library(AccumulatR)
+```
+
+    ## 
+    ## Attaching package: 'AccumulatR'
+
+    ## The following object is masked from 'package:stats':
+    ## 
+    ##     simulate
+
+**Define the model** We use two lognormal accumulators and one shared
+trigger with failure probability `q = 0.15`.
+
+``` r
+model <- race_spec() |>
+  add_accumulator("go1", "lognormal") |>
+  add_accumulator("go2", "lognormal") |>
+  add_outcome("R1", "go1") |>
+  add_outcome("R2", "go2") |>
+  add_trigger("shared_trigger",
+    members = c("go1", "go2"),
+    q = 0.15,
+    draw = "shared"
+  ) |>
+  finalize_model()
+
+true_params <- c(
+  go1.m = log(0.30),
+  go1.s = 0.18,
+  go2.m = log(0.35),
+  go2.s = 0.18
+)
+```
+
+The trigger probability is fixed in the model definition here, so the
+fitted parameter vector only contains the accumulator timing parameters.
+
+**Simulate data** Failed trigger trials appear as missing responses and
+missing response times.
+
+``` r
+set.seed(123456)
+
+n_trials <- 1500
+params_df <- build_param_matrix(model, true_params, n_trials = n_trials)
+
+sim <- simulate(model, params_df)
+
+data_df <- data.frame(
+  trial = sim$trial,
+  R = factor(sim$R),
+  rt = sim$rt,
+  stringsAsFactors = FALSE
+)
+
+table(data_df$R, useNA = "ifany")
+```
+
+    ## 
+    ##   R1   R2 <NA> 
+    ##  924  361  215
+
+**Evaluate the likelihood** We prepare the data, build a model context,
+and evaluate the shared-trigger model under the true parameter values.
+
+``` r
+prepared <- prepare_data(model, data_df)
+ctx <- make_context(model)
+
+params_df_true <- build_param_matrix(
+  model,
+  true_params,
+  trial_df = prepared
+)
+
+ll_true <- as.numeric(log_likelihood(ctx, prepared, params_df_true))
+ll_true
+```
+
+    ## [1] 785.4287
+
+To see why the trigger type matters, compare that with the same model
+under independent trigger failures instead of joint failures.
+
+``` r
+model_independent <- race_spec() |>
+  add_accumulator("go1", "lognormal") |>
+  add_accumulator("go2", "lognormal") |>
+  add_outcome("R1", "go1") |>
+  add_outcome("R2", "go2") |>
+  add_trigger("shared_trigger",
+    members = c("go1", "go2"),
+    q = 0.15,
+    draw = "independent"
+  ) |>
+  finalize_model()
+
+independent_prepared <- prepare_data(model_independent, data_df)
+independent_ctx <- make_context(model_independent)
+
+params_df_independent <- build_param_matrix(
+  model_independent,
+  true_params,
+  trial_df = independent_prepared
+)
+
+ll_independent <- as.numeric(log_likelihood(
+  independent_ctx,
+  independent_prepared,
+  params_df_independent
+))
+ll_independent
+```
+
+    ## [1] 513.7229
+
+The same syntax can also be used when only one accumulator has a
+trigger.
+
+``` r
+model_single_q <- race_spec() |>
+  add_accumulator("go1", "lognormal") |>
+  add_accumulator("go2", "lognormal") |>
+  add_outcome("R1", "go1") |>
+  add_outcome("R2", "go2") |>
+  add_trigger("go1_trigger",
+    members = c("go1"),
+    q = 0.15
+  ) |>
+  finalize_model()
+```
+
+**Estimate parameters with
+[`optim()`](https://rdrr.io/r/stats/optim.html)** We estimate `go1.m`,
+`go1.s`, `go2.m`, and `go2.s`, while keeping the trigger probability
+fixed at its generating value.
+
+``` r
+neg_loglik <- function(theta) {
+  est <- true_params
+  est["go1.m"] <- theta[["go1.m"]]
+  est["go1.s"] <- exp(theta[["log_go1.s"]])
+  est["go2.m"] <- theta[["go2.m"]]
+  est["go2.s"] <- exp(theta[["log_go2.s"]])
+  params_df <- build_param_matrix(
+    model,
+    est,
+    trial_df = prepared
+  )
+  ll <- log_likelihood(ctx, prepared, params_df)
+  -as.numeric(ll)
+}
+
+start <- c(
+  go1.m = log(0.25),
+  log_go1.s = log(0.12),
+  go2.m = log(0.42),
+  log_go2.s = log(0.12)
+)
+
+set.seed(123456)
+fit <- optim(
+  start,
+  neg_loglik,
+  method = "Nelder-Mead",
+  control = list(maxit = 4000, reltol = 1e-9)
+)
+```
+
+``` r
+fit_params <- c(
+  go1.m = fit$par[["go1.m"]],
+  go1.s = exp(fit$par[["log_go1.s"]]),
+  go2.m = fit$par[["go2.m"]],
+  go2.s = exp(fit$par[["log_go2.s"]])
+)
+target <- true_params[c("go1.m", "go1.s", "go2.m", "go2.s")]
+
+data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params))
+```
+
+    ##            true  recovered         miss
+    ## go1.m -1.203973 -1.2032387 0.0007341542
+    ## go1.s  0.180000  0.1877828 0.0077827916
+    ## go2.m -1.049822 -1.0535251 0.0037029662
+    ## go2.s  0.180000  0.1781906 0.0018094007
+
+Use shared triggers when several accumulators are governed by the same
+gating event. Use independent triggers when the same failure probability
+should apply separately to each accumulator.

@@ -1,8 +1,8 @@
 # Compile a model for simulation and fitting
 
 This converts a human-readable model specification into the finalized
-object used by \`simulate()\`, \`build_likelihood_context()\`, and
-related functions.
+object used by \`simulate()\`, \`prepare_data()\`, \`make_context()\`,
+and related functions.
 
 ## Usage
 
@@ -68,7 +68,7 @@ finalize_model(spec)
 #> $triggers
 #> list()
 #> 
-#> $shared_params
+#> $parameters
 #> list()
 #> 
 #> $components

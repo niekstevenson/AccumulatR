@@ -11,6 +11,7 @@ build_param_matrix(
   param_values,
   n_trials = 1L,
   component = NULL,
+  trial_df = NULL,
   layout = NULL
 )
 ```
@@ -33,6 +34,11 @@ build_param_matrix(
 
   Optional component label or labels.
 
+- trial_df:
+
+  Optional trial/prepared data object. If it includes an \`accumulator\`
+  column, parameter rows are built in that exact row order.
+
 - layout:
 
   Optional storage layout.
@@ -47,7 +53,7 @@ A data frame or matrix of parameter values by trial.
 spec <- race_spec()
 spec <- add_accumulator(spec, "A", "lognormal")
 spec <- add_outcome(spec, "A_win", "A")
-vals <- c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0)
+vals <- c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0)
 build_param_matrix(spec, vals, n_trials = 2)
 #>      q w t0 p1  p2 p3
 #> [1,] 0 1  0  0 0.1  0

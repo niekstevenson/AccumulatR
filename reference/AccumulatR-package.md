@@ -10,11 +10,21 @@ terms, simulate behavioral data, and evaluate likelihoods for fitting.
 The main workflow is: 1. Start with \`race_spec()\`. 2. Add
 accumulators, pools, outcomes, and timing relations. 3. Call
 \`finalize_model()\` to prepare the model for simulation and fitting. 4.
-Use \`simulate()\`, \`build_likelihood_context()\`, and
+Use \`simulate()\`, \`prepare_data()\`, \`make_context()\`, and
 \`log_likelihood()\`.
 
 The R interface is intended to stay readable and model-focused, while
 the repeated numerical work happens in C++.
+
+## See also
+
+Useful links:
+
+- <https://github.com/niekstevenson/AccumulatR>
+
+- <https://niekstevenson.github.io/AccumulatR/>
+
+- Report bugs at <https://github.com/niekstevenson/AccumulatR/issues>
 
 ## Author
 

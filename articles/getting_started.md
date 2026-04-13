@@ -1,8 +1,8 @@
 # Getting Started with AccumulatR
 
-This article is a short orientation to the main objects and column names
-used throughout `AccumulatR`. It is meant to answer the first questions
-most users have before they start fitting specific models.
+This vignette defines the main workflow used throughout `AccumulatR`.
+Read it first if you want the package vocabulary before moving to the
+task-specific examples.
 
 ``` r
 library(AccumulatR)
@@ -17,15 +17,16 @@ library(AccumulatR)
 
 ## The basic workflow
 
-Most analyses in `AccumulatR` follow the same four steps:
+Most workflows in `AccumulatR` follow the same four steps:
 
 1.  Define a model with accumulators, pools, and observed responses.
 2.  Finalize that model with
-    [`finalize_model()`](../reference/finalize_model.md).
+    [`finalize_model()`](https://niekstevenson.github.io/AccumulatR/reference/finalize_model.md).
 3.  Work with behavioral data, either simulated with
-    [`simulate()`](../reference/simulate.md) or collected in an
-    experiment.
-4.  Build a likelihood context and evaluate candidate parameter values.
+    [`simulate()`](https://niekstevenson.github.io/AccumulatR/reference/simulate.md)
+    or collected in an experiment.
+4.  Prepare the data, build a model context, and evaluate candidate
+    parameter values.
 
 ## Core ideas
 
@@ -37,73 +38,68 @@ row of your data corresponds to one trial.
 ### `R`
 
 `R` is the observed response label on a trial. For a two-choice task,
-typical values might be `"left"` and `"right"`, or `"go"` and `"stop"`.
+typical values might be `"left"` and `"right"`, or `"red"` and
+`"green"`, etc.
 
 ### `rt`
 
 `rt` is the observed response time for `R`.
 
-### `R2` and `rt2`
-
-If you use `race_spec(n_outcomes = 2)`, the model keeps the first two
-ordered responses on each trial. In that case:
-
-- `R` and `rt` are the first observed response and its response time.
-- `R2` and `rt2` are the second observed response and its response time.
-
-The same logic extends to `R3`, `rt3`, and beyond when more ordered
-outcomes are retained.
-
 ### Component
 
-A `component` is a latent submodel inside a mixture model. This is
-useful when you think behavior comes from qualitatively different trial
-types, such as:
-
-- a fast-guess process on some trials
-- a more controlled decision process on others
-
-If your model has only one component, you usually do not need to think
-about this column at all.
+A `component` serves two purposes. It can be used to account for
+different trial types in your data, for example when a subset of your
+data requires different accumulator structures. It can also be used to
+allow for latent mixtures *within* trial. If your model has only one
+trial type, you usually do not need this column. See also the **Working
+with Mixtures** vignette.
 
 ### Onset
 
-An `onset` is the time at which an accumulator becomes active. Some
-accumulators start at time 0, while others begin later. In `AccumulatR`,
-an onset can be:
+An `onset` is the time at which an accumulator becomes active. Most
+accumulators start at time `0`, while in some cases, extra information
+appears during the trial. In `AccumulatR`, an onset can be:
 
 - a fixed delay, such as `onset = 0.15`
-- a chained onset, such as `onset = after("cue")`, meaning the process
-  starts only after another accumulator or pool has finished
+- a chained onset, such as `onset = after("A")`, meaning the process
+  starts only after another accumulator (in this case `A`) or pool has
+  finished
+
+Both onset and non-decision time (`t0`) shift response times. The
+difference in `AccumulatR` is that `t0` is an estimated parameter,
+whereas onset is part of the model structure.
 
 ## A minimal model
 
-The example below defines a basic two-choice race model.
+The example below defines a basic two-choice race model with two
+lognormal accumulators.
 
 ``` r
-spec <- race_spec() |>
+model <- race_spec() |>
   add_accumulator("left", "lognormal") |>
   add_accumulator("right", "lognormal") |>
   add_outcome("left", "left") |>
-  add_outcome("right", "right")
-
-model <- finalize_model(spec)
+  add_outcome("right", "right") |>
+  finalize_model()
 ```
 
 ## Simulated behavioral data
 
-We can generate a small behavioral dataset from this model.
+We can generate a small behavioral dataset from this model. Here
+`build_param_matrix` makes one row of parameters per trial. This allows
+you to trial-wise manipulate the specific parameters, for example using
+a design matrix specification.
 
 ``` r
 pars <- c(
-  left.meanlog = log(0.28), left.sdlog = 0.16, left.q = 0, left.t0 = 0,
-  right.meanlog = log(0.35), right.sdlog = 0.18, right.q = 0, right.t0 = 0
+  left.m = log(0.28), left.s = 0.16,
+  right.m = log(0.35), right.s = 0.18
 )
 
-param_df <- build_param_matrix(spec, pars, n_trials = 6)
+param_df <- build_param_matrix(model, pars, n_trials = 6)
 sim <- simulate(model, param_df, seed = 123)
 
-sim[c("trial", "R", "rt")]
+head(sim)
 ```
 
     ##   trial     R        rt
@@ -114,29 +110,37 @@ sim[c("trial", "R", "rt")]
     ## 5     5  left 0.3057125
     ## 6     6 right 0.2456584
 
-Here each row is one trial, `R` is the observed response, and `rt` is
-the response time.
+Each row is one trial, `R` is the observed response, and `rt` is the
+response time.
 
 ## From behavioral data to likelihood
 
 To fit a model, the usual pattern is:
 
 ``` r
-ctx <- build_likelihood_context(model, sim[c("trial", "R", "rt")])
-log_likelihood(ctx, param_df)
+prepared <- prepare_data(model, sim[c("trial", "R", "rt")])
+ctx <- make_context(model)
+log_likelihood(ctx, prepared, param_df)
 ```
 
     ## [1] 5.291506
 
-[`build_likelihood_context()`](../reference/build_likelihood_context.md)
-prepares the behavioral data for repeated likelihood evaluation.
-[`log_likelihood()`](../reference/log_likelihood.md) then tells you how
-well a parameter set explains those observed data.
+[`prepare_data()`](https://niekstevenson.github.io/AccumulatR/reference/prepare_data.md)
+reshapes the behavioral data for likelihood evaluation, and
+[`make_context()`](https://niekstevenson.github.io/AccumulatR/reference/make_context.md)
+builds the model-side runtime state.
+[`log_likelihood()`](https://niekstevenson.github.io/AccumulatR/reference/log_likelihood.md)
+returns the fit of a parameter set to those observed data.
 
 ## Where to go next
 
 - If you want the basic fitting workflow, read the simple race-model
   vignette.
-- If your experiment records ordered responses, read the multi-outcome
-  vignette.
+- If you want to learn more about the different structures, read the
+  logical rules vignettes.
+- If you want pools of accumulators, read the pool vignette.
+- If you want to include trigger failures, read the trigger vignette.
+- If you want to include mixtures, read the mixtures vignette.
+- If your experiment records multiple ordered responses, read the
+  multi-outcome vignette.
 - If your model has staged processing, read the chained-onset vignette.

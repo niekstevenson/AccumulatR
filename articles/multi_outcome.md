@@ -1,10 +1,9 @@
-# Simulate and Fit a Multi-Outcome Race Model
+# Multiple Outcomes
 
-This vignette shows how to work with behavioral data in which you
-observe more than the first response. Here each trial records the first
-finishing response (`R`, `rt`) and the second finishing response (`R2`,
-`rt2`). This is useful when your task provides ranked response
-information rather than just the first choice and its latency.
+This vignette shows how to work with data in which more than one ordered
+response is observed on each trial. Here each trial records the first
+response (`R`, `rt`) and the second response (`R2`, `rt2`), and so on
+for any number of responses (`R3`, `rt3` etc.).
 
 ``` r
 library(AccumulatR)
@@ -19,35 +18,34 @@ library(AccumulatR)
 
 **Define the model** We use a simple two-accumulator race with direct
 responses `A` and `B`. Setting `n_outcomes = 2` tells the model to
-retain the first and second finishing responses on each trial.
+retain the first and second finishing responses.
 
 ``` r
-model_spec <- race_spec(n_outcomes = 2L) |>
+model <- race_spec(n_outcomes = 2L) |>
   add_accumulator("A", "lognormal") |>
   add_accumulator("B", "lognormal") |>
   add_outcome("A", "A") |>
-  add_outcome("B", "B")
-
-structure <- finalize_model(model_spec)
+  add_outcome("B", "B") |>
+  finalize_model()
 
 true_params <- c(
-  A.meanlog = log(0.30),
-  A.sdlog = 0.18,
-  B.meanlog = log(0.38),
-  B.sdlog = 0.22
+  A.m = log(0.30),
+  A.s = 0.18,
+  B.m = log(0.38),
+  B.s = 0.22
 )
 ```
 
-**Simulate data** We now generate behavioral data and keep both ordered
-responses for each trial.
+**Simulate data** We generate data and keep both ordered responses for
+each trial.
 
 ``` r
 set.seed(123456)
 
 n_trials <- 500
-params_df <- build_param_matrix(model_spec, true_params, n_trials = n_trials)
+params_df <- build_param_matrix(model, true_params, n_trials = n_trials)
 
-sim <- simulate(structure, params_df)
+sim <- simulate(model, params_df)
 
 data_df <- data.frame(
   trial = sim$trial,
@@ -58,105 +56,67 @@ data_df <- data.frame(
   stringsAsFactors = FALSE
 )
 
-table(data_df$R, data_df$R2)
+head(data_df)
 ```
 
-    ##    
-    ##       A   B
-    ##   A   0 404
-    ##   B  96   0
-
-``` r
-summary(data_df$rt2 - data_df$rt)
-```
-
-    ##      Min.   1st Qu.    Median      Mean   3rd Qu.      Max. 
-    ## 0.0001404 0.0497114 0.1001445 0.1110411 0.1531077 0.5709911
-
-**Evaluate the likelihood** Build a likelihood context once, then
-evaluate the ranked log-likelihood at the true parameter values.
-
-``` r
-ctx <- build_likelihood_context(structure, data_df)
-
-params_df_true <- build_param_matrix(
-  model_spec,
-  true_params,
-  n_trials = max(data_df$trial),
-  layout = ctx$param_layout
-)
-
-ll_true <- as.numeric(log_likelihood(ctx, params_df_true))
-ll_true
-```
-
-    ## [1] 1298.606
-
-For comparison, we can also evaluate a parameter set that is clearly too
-slow for response `B`.
-
-``` r
-wrong_params <- true_params
-wrong_params["B.meanlog"] <- log(0.55)
-
-params_df_wrong <- build_param_matrix(
-  model_spec,
-  wrong_params,
-  n_trials = max(data_df$trial),
-  layout = ctx$param_layout
-)
-
-ll_wrong <- as.numeric(log_likelihood(ctx, params_df_wrong))
-ll_wrong
-```
-
-    ## [1] 626.9148
+    ##   trial R        rt R2       rt2
+    ## 1     1 A 0.3394130  B 0.3514512
+    ## 2     2 A 0.2373401  B 0.4565748
+    ## 3     3 A 0.3709420  B 0.4913625
+    ## 4     4 B 0.2974072  A 0.3441526
+    ## 5     5 A 0.3297834  B 0.4790856
+    ## 6     6 A 0.3671582  B 0.4663272
 
 **Estimate parameters with
-[`optim()`](https://rdrr.io/r/stats/optim.html)** We estimate
-`A.meanlog`, `A.sdlog`, `B.meanlog`, and `B.sdlog`. As in many
-psychological fitting routines, we optimize on an unconstrained scale
-for the standard deviations and transform them back inside the objective
-function.
+[`optim()`](https://rdrr.io/r/stats/optim.html)** We estimate `A.m`,
+`A.s`, `B.m`, and `B.s`. The variance parameters are optimized on the
+log scale and transformed back inside the function.
 
 ``` r
+prepared <- prepare_data(model, data_df)
+ctx <- make_context(model)
 neg_loglik <- function(theta) {
-  # optimize on unconstrained scale for sdlog
-  theta[c("A.sdlog", "B.sdlog")] <- exp(theta[c("A.sdlog", "B.sdlog")])
+  est <- true_params
+  est[c("A.m", "A.s", "B.m", "B.s")] <- theta[c("A.m", "A.s", "B.m", "B.s")]
+  est[c("A.s", "B.s")] <- exp(est[c("A.s", "B.s")])
   params_df <- build_param_matrix(
-    model_spec,
-    theta,
-    n_trials = max(data_df$trial),
-    layout = ctx$param_layout
+    model,
+    est,
+    trial_df = prepared
   )
-  ll <- log_likelihood(ctx, params_df)
+  ll <- log_likelihood(ctx, prepared, params_df)
   -as.numeric(ll)
 }
 
 start <- c(
-  A.meanlog = log(0.24),
-  A.sdlog = log(0.12),
-  B.meanlog = log(0.48),
-  B.sdlog = log(0.12)
+  A.m = log(0.24),
+  A.s = log(0.12),
+  B.m = log(0.48),
+  B.s = log(0.12)
 )
 
+set.seed(123456)
 fit <- optim(start, neg_loglik, method = "Nelder-Mead")
+```
 
+``` r
 fit_params <- fit$par
-fit_params[c("A.sdlog", "B.sdlog")] <- exp(fit_params[c("A.sdlog", "B.sdlog")])
+fit_params[c("A.s", "B.s")] <- exp(fit_params[c("A.s", "B.s")])
+target <- true_params[c("A.m", "A.s", "B.m", "B.s")]
 
 data.frame(
-  true = true_params,
+  true = target,
   recovered = fit_params,
-  miss = abs(true_params - fit_params)
+  miss = abs(target - fit_params)
 )
 ```
 
-    ##                true  recovered        miss
-    ## A.meanlog -1.203973 -1.2097763 0.005803478
-    ## A.sdlog    0.180000  0.1770936 0.002906442
-    ## B.meanlog -0.967584 -0.9585490 0.009035000
-    ## B.sdlog    0.220000  0.2148618 0.005138242
+    ##          true  recovered        miss
+    ## A.m -1.203973 -1.2097763 0.005803478
+    ## A.s  0.180000  0.1770936 0.002906442
+    ## B.m -0.967584 -0.9585490 0.009035000
+    ## B.s  0.220000  0.2148618 0.005138242
 
-The overall workflow is the same as in the single-response case, but the
-model now uses the additional ranked-response information directly.
+The workflow is the same as in the single-response case, but the
+likelihood now uses the second ranked response as additional
+information.

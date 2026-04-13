@@ -2,8 +2,16 @@ pandoc: 3.1.11
 pkgdown: 2.2.0
 pkgdown_sha: ~
 articles:
+  chained_onset: chained_onset.html
+  distributions: distributions.html
   getting_started: getting_started.html
+  logical_rules: logical_rules.html
+  mixtures: mixtures.html
   multi_outcome: multi_outcome.html
-  simple_chained_onset: simple_chained_onset.html
-  simple_simulate_fit_model4: simple_simulate_fit_model4.html
-last_built: 2026-04-03T17:04Z
+  pool_model: pool_model.html
+  simple_model: simple_model.html
+  trigger_model: trigger_model.html
+last_built: 2026-04-13T13:19Z
+urls:
+  reference: https://niekstevenson.github.io/AccumulatR/reference
+  article: https://niekstevenson.github.io/AccumulatR/articles

@@ -1,13 +1,14 @@
 # Evaluate the log-likelihood of behavioral data
 
-Compute the log-likelihood of the behavioral data stored in a
-\`likelihood_context\` under one or more candidate parameter sets.
+Compute the log-likelihood of prepared behavioral data under one or more
+candidate parameter sets.
 
 ## Usage
 
 ``` r
 log_likelihood(
-  likelihood_context,
+  context,
+  data,
   parameters,
   ok = NULL,
   expand = NULL,
@@ -15,9 +16,10 @@ log_likelihood(
   ...
 )
 
-# S3 method for class 'likelihood_context'
+# S3 method for class 'accumulatr_context'
 log_likelihood(
-  likelihood_context,
+  context,
+  data,
   parameters,
   ok = NULL,
   expand = NULL,
@@ -26,14 +28,18 @@ log_likelihood(
 )
 
 # Default S3 method
-log_likelihood(likelihood_context, ...)
+log_likelihood(context, ...)
 ```
 
 ## Arguments
 
-- likelihood_context:
+- context:
 
-  Context created with \`build_likelihood_context()\`.
+  Context created with \`make_context()\`.
+
+- data:
+
+  Prepared data created with \`prepare_data()\`.
 
 - parameters:
 
@@ -70,11 +76,12 @@ spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
 params_df <- build_param_matrix(
   spec,
-  c(A.meanlog = 0, A.sdlog = 0.1, A.q = 0, A.t0 = 0),
+  c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0),
   n_trials = 2
 )
 data_df <- simulate(structure, params_df, seed = 1)
-ctx <- build_likelihood_context(structure, data_df)
-log_likelihood(ctx, list(params_df))
+prepared <- prepare_data(structure, data_df)
+ctx <- make_context(structure)
+log_likelihood(ctx, prepared, list(params_df))
 #> [1] 2.481128
 ```

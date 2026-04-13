@@ -25,5 +25,5 @@ spec <- race_spec()
 spec <- add_accumulator(spec, "A", "lognormal")
 spec <- add_outcome(spec, "A_win", "A")
 sampled_pars(spec)
-#> [1] "A.meanlog" "A.sdlog"   "A.q"       "A.t0"     
+#> [1] "A.m"  "A.s"  "A.q"  "A.t0"
 ```

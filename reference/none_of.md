@@ -6,8 +6,6 @@ Define the absence of an event
 
 ``` r
 none_of(expr)
-
-exclude(expr)
 ```
 
 ## Arguments

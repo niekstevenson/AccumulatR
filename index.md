@@ -53,23 +53,25 @@ spec <- race_spec() |>
 model <- finalize_model(spec)
 
 pars <- c(
-  left.meanlog = log(0.28), left.sdlog = 0.16, left.q = 0, left.t0 = 0,
-  right.meanlog = log(0.35), right.sdlog = 0.18, right.q = 0, right.t0 = 0
+  left.m = log(0.28), left.s = 0.16, left.q = 0, left.t0 = 0,
+  right.m = log(0.35), right.s = 0.18, right.q = 0, right.t0 = 0
 )
 
 param_df <- build_param_matrix(spec, pars, n_trials = 8)
 sim <- simulate(model, param_df, seed = 123)
 head(sim[c("trial", "R", "rt")])
 
-ctx <- build_likelihood_context(model, sim[c("trial", "R", "rt")])
-log_likelihood(ctx, param_df)
+prepared <- prepare_data(model, sim[c("trial", "R", "rt")])
+ctx <- make_context(model)
+log_likelihood(ctx, prepared, param_df)
 ```
 
-[`simulate()`](reference/simulate.md) returns behavioral data with one
-row per trial. In the simplest case that means a response column (`R`)
-and a response-time column (`rt`).
-[`log_likelihood()`](reference/log_likelihood.md) then evaluates how
-probable those data are under a set of model parameters.
+[`simulate()`](https://niekstevenson.github.io/AccumulatR/reference/simulate.md)
+returns behavioral data with one row per trial. In the simplest case
+that means a response column (`R`) and a response-time column (`rt`).
+[`log_likelihood()`](https://niekstevenson.github.io/AccumulatR/reference/log_likelihood.md)
+then evaluates how probable those data are under a set of model
+parameters.
 
 For longer worked examples, see the package articles on the pkgdown
 site.

@@ -1,0 +1,234 @@
+# Working with Mixtures
+
+Here we highlight how fixed and sampled mixtures can be instantiated in
+`AccumulatR`.
+
+Use fixed components when trial type is known and should be supplied in
+the data. Use sampled mixtures when the component is latent and the
+likelihood must average over the possible processing modes.
+
+``` r
+library(AccumulatR)
+```
+
+    ## 
+    ## Attaching package: 'AccumulatR'
+
+    ## The following object is masked from 'package:stats':
+    ## 
+    ##     simulate
+
+## A common architecture
+
+Both sections use the same fast-versus-slow architecture. Response `R1`
+comes from a target route and response `R2` comes from a competitor. The
+components differ only in whether the target route is fast or slow on a
+given trial.
+
+## Fixed components: known trial types
+
+In this version, component labels are observed and included in the data.
+
+``` r
+model_fixed <- race_spec() |>
+  add_accumulator("target_fast", "lognormal") |>
+  add_accumulator("target_slow", "lognormal") |>
+  add_accumulator("competitor", "lognormal") |>
+  add_pool("TARGET", c("target_fast", "target_slow")) |>
+  add_outcome("R1", "TARGET") |>
+  add_outcome("R2", "competitor") |>
+  add_component("fast", members = c("target_fast", "competitor"), weight = 0.4) |>
+  add_component("slow", members = c("target_slow", "competitor"), weight = 0.6) |>
+  set_mixture_options(mode = "fixed") |>
+  finalize_model()
+
+true_params_fixed <- c(
+  target_fast.m = log(0.25),
+  target_fast.s = 0.15,
+  target_slow.m = log(0.45),
+  target_slow.s = 0.20,
+  competitor.m = log(0.35),
+  competitor.s = 0.18
+)
+```
+
+We now create a trial table that says which component each trial belongs
+to.
+
+``` r
+set.seed(123456)
+
+n_trials_fixed <- 1200
+trial_types <- data.frame(
+  trial = seq_len(n_trials_fixed),
+  component = sample(c("fast", "slow"), n_trials_fixed, replace = TRUE, prob = c(0.4, 0.6)),
+  stringsAsFactors = FALSE
+)
+
+params_df_fixed <- build_param_matrix(
+  model_fixed,
+  true_params_fixed,
+  trial_df = trial_types
+)
+
+sim_fixed <- simulate(
+  model_fixed,
+  params_df_fixed,
+  trial_df = trial_types,
+  layout = "long"
+)
+
+data_fixed <- sim_fixed[, c("trial", "R", "rt", "component")]
+
+table(data_fixed$component, data_fixed$R)
+```
+
+    ##       
+    ##         R1  R2
+    ##   fast 452  30
+    ##   slow 131 587
+
+Because the component is known, the simulated data keep that label. The
+same pattern applies to real data: if trial type is known, keep it in a
+`component` column.
+
+``` r
+prepared_fixed <- prepare_data(model_fixed, data_fixed)
+ctx_fixed <- make_context(model_fixed)
+
+params_df_fixed_true <- build_param_matrix(
+  model_fixed,
+  true_params_fixed,
+  trial_df = prepared_fixed
+)
+
+ll_fixed <- as.numeric(log_likelihood(ctx_fixed, prepared_fixed, params_df_fixed_true))
+ll_fixed
+```
+
+    ## [1] -13142.83
+
+## Sampled components: latent processing modes
+
+Now we use the same architecture as a latent mixture. The component is
+not observed per trial. Instead, the model samples a hidden component
+for each trial, with `p_fast` controlling the proportion of fast trials.
+
+``` r
+model_sampled <- race_spec() |>
+  add_accumulator("target_fast", "lognormal") |>
+  add_accumulator("target_slow", "lognormal") |>
+  add_accumulator("competitor", "lognormal") |>
+  add_pool("TARGET", c("target_fast", "target_slow")) |>
+  add_outcome("R1", "TARGET") |>
+  add_outcome("R2", "competitor") |>
+  add_component("fast", members = c("target_fast", "competitor"), weight_param = "p_fast") |>
+  add_component("slow", members = c("target_slow", "competitor")) |>
+  set_mixture_options(mode = "sample", reference = "slow") |>
+  finalize_model()
+
+true_params_sampled <- c(
+  target_fast.m = log(0.25),
+  target_fast.s = 0.15,
+  target_slow.m = log(0.45),
+  target_slow.s = 0.20,
+  competitor.m = log(0.35),
+  competitor.s = 0.18,
+  p_fast = 0.35
+)
+```
+
+By default, sampled mixtures do not expose the component label in the
+output, because that label is latent.
+
+``` r
+set.seed(123456)
+
+n_trials_sampled <- 1500
+params_df_sampled <- build_param_matrix(
+  model_sampled,
+  true_params_sampled,
+  n_trials = n_trials_sampled
+)
+
+sim_sampled <- simulate(model_sampled, params_df_sampled)
+names(sim_sampled)
+```
+
+    ## [1] "trial" "R"     "rt"
+
+If you want to inspect the hidden generating component, you can ask for
+it explicitly.
+
+``` r
+sim_sampled_with_component <- simulate(
+  model_sampled,
+  params_df_sampled,
+  keep_component = TRUE
+)
+
+table(sim_sampled_with_component$component)
+```
+
+    ## 
+    ## fast slow 
+    ##  541  959
+
+For fitting, we usually work with the observed data only.
+
+``` r
+data_sampled <- sim_sampled[, c("trial", "R", "rt")]
+
+prepared_sampled <- prepare_data(model_sampled, data_sampled)
+ctx_sampled <- make_context(model_sampled)
+
+params_df_sampled_true <- build_param_matrix(
+  model_sampled,
+  true_params_sampled,
+  trial_df = prepared_sampled
+)
+
+ll_sampled_true <- as.numeric(log_likelihood(ctx_sampled, prepared_sampled, params_df_sampled_true))
+ll_sampled_true
+```
+
+    ## [1] 1169.475
+
+## Estimate a sampled-mixture weight
+
+Latent weights can also be estimated. To keep the example simple, we
+estimate only the latent mixture weight `p_fast`, while holding the
+accumulator timing parameters fixed.
+
+``` r
+neg_loglik <- function(theta) {
+  est <- true_params_sampled
+  est["p_fast"] <- plogis(theta[["logit_p_fast"]])
+  params_df <- build_param_matrix(
+    model_sampled,
+    est,
+    trial_df = prepared_sampled
+  )
+  ll <- log_likelihood(ctx_sampled, prepared_sampled, params_df)
+  -as.numeric(ll)
+}
+
+start <- c(logit_p_fast = qlogis(0.60))
+
+set.seed(123456)
+fit <- optim(start, neg_loglik, method = "BFGS")
+```
+
+``` r
+fit_params <- c(p_fast = plogis(fit$par[["logit_p_fast"]]))
+target <- c(p_fast = true_params_sampled[["p_fast"]])
+
+data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params))
+```
+
+    ##        true recovered       miss
+    ## p_fast 0.35 0.3702799 0.02027991
+
+Start with fixed components when trial type is known. Use sampled
+mixtures when trial type is unobserved and the goal is to estimate how
+often each processing mode occurs.

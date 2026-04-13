@@ -36,7 +36,7 @@ race_spec()
 #> $triggers
 #> list()
 #> 
-#> $shared_params
+#> $parameters
 #> list()
 #> 
 #> $components

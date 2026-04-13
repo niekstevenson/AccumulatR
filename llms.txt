@@ -12,13 +12,8 @@ different parameter values explain observed response times and choices.
 
 ## Installation
 
-Install the released version from CRAN:
-
-``` r
-install.packages("AccumulatR")
-```
-
-To install the current development version from GitHub:
+AccumulatR is not yet on CRAN. To install the current development
+version from GitHub:
 
 ``` r
 remotes::install_github("niekstevenson/AccumulatR")

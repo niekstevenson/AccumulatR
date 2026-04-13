@@ -37,7 +37,7 @@ spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
 make_context(structure)
 #> $native_ctx
-#> <pointer: 0x561a6b1d7060>
+#> <pointer: 0x56046783c0b0>
 #> 
 #> attr(,"class")
 #> [1] "accumulatr_context"

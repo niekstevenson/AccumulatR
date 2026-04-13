@@ -192,17 +192,14 @@
   invisible(NULL)
 }
 
-#' Simulate from a model and inspect whether it behaves as expected
+#' Test Model Implementation
 #'
 #' `test_model()` is a quick diagnostic for checking whether a model and a
 #' parameter vector behave sensibly. It does three things:
 #'
-#' 1. fills in any missing parameters with `0` and reports which ones were
-#'    assumed to be zero
-#' 2. compares analytical response probabilities with response proportions from
-#'    simulated behavioral data
-#' 3. profiles the log-likelihood for each parameter you supplied, holding the
-#'    others fixed
+#' It compares analytical response probabilities with response proportions from
+#' simulated behavioral data and profiles the log-likelihood for each parameter 
+#' supplied, holding the others fixed
 #'
 #' This is especially useful when you are building a new model, checking a
 #' custom `set_parameters()` mapping, or verifying that a parameter vector gives
@@ -210,7 +207,7 @@
 #'
 #' @param model Model specification or finalized model.
 #' @param param_values Named numeric vector of parameter values. Parameters not
-#'   supplied are assumed to be `0`, with a message. Names should follow
+#'   supplied are assumed to be `0`. Names should follow
 #'   `sampled_pars(model)`, so custom names from `set_parameters()` are
 #'   supported.
 #' @param n_trials Number of trials to simulate.

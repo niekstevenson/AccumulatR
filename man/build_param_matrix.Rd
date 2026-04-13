@@ -9,6 +9,7 @@ build_param_matrix(
   param_values,
   n_trials = 1L,
   component = NULL,
+  trial_df = NULL,
   layout = NULL
 )
 }
@@ -20,6 +21,9 @@ build_param_matrix(
 \item{n_trials}{Number of trials to generate.}
 
 \item{component}{Optional component label or labels.}
+
+\item{trial_df}{Optional trial/prepared data object. If it includes an
+`accumulator` column, parameter rows are built in that exact row order.}
 
 \item{layout}{Optional storage layout.}
 }

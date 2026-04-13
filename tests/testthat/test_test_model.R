@@ -1,5 +1,3 @@
-pkgload::load_all(".", quiet = TRUE)
-
 testthat::test_that("test_model fills missing parameters and respects set_parameters", {
   spec <- race_spec() |>
     add_accumulator("go", "lognormal") |>

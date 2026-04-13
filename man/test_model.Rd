@@ -2,7 +2,7 @@
 % Please edit documentation in R/test_model.R
 \name{test_model}
 \alias{test_model}
-\title{Simulate from a model and inspect whether it behaves as expected}
+\title{Test Model Implementation}
 \usage{
 test_model(
   model,
@@ -19,7 +19,7 @@ test_model(
 \item{model}{Model specification or finalized model.}
 
 \item{param_values}{Named numeric vector of parameter values. Parameters not
-supplied are assumed to be `0`, with a warning. Names should follow
+supplied are assumed to be `0`. Names should follow
 `sampled_pars(model)`, so custom names from `set_parameters()` are
 supported.}
 
@@ -48,12 +48,9 @@ Invisibly returns a list with the completed parameter vector, the
 parameter vector behave sensibly. It does three things:
 }
 \details{
-1. fills in any missing parameters with `0` and warns which ones were
-   assumed to be zero
-2. compares analytical response probabilities with response proportions from
-   simulated behavioral data
-3. profiles the log-likelihood for each parameter you supplied, holding the
-   others fixed
+It compares analytical response probabilities with response proportions from
+simulated behavioral data and profiles the log-likelihood for each parameter 
+supplied, holding the others fixed
 
 This is especially useful when you are building a new model, checking a
 custom `set_parameters()` mapping, or verifying that a parameter vector gives

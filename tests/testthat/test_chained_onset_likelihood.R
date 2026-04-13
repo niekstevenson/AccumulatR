@@ -144,6 +144,7 @@ testthat::test_that("component with inactive onset source yields non-start", {
   )
   prepared <- prepare_data(structure, observed_df)
   ctx <- make_context(structure)
+  params_df <- build_param_matrix(spec, params, trial_df = prepared)
   ll <- as.numeric(log_likelihood(
     ctx,
     prepared,

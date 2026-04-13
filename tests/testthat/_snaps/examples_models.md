@@ -240,7 +240,7 @@
             {
               "type": "double",
               "attributes": {},
-              "value": [557.066298]
+              "value": [375.128253]
             }
           ]
         },

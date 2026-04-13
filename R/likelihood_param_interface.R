@@ -98,6 +98,10 @@
   structure <- prep_info$structure
   prep_eval_base <- prep_info$prep
   data_df <- as.data.frame(data_df)
+  component_mode <- (structure$components$mode %||% "fixed")[[1]]
+  if (identical(component_mode, "sample") && "component" %in% names(data_df)) {
+    data_df$component <- NULL
+  }
   required_cols <- c("R", "rt")
   missing_cols <- setdiff(required_cols, names(data_df))
   if (length(missing_cols) > 0L) {

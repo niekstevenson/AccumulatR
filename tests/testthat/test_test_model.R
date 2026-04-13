@@ -10,7 +10,7 @@ testthat::test_that("test_model fills missing parameters and respects set_parame
       drift = c("go.m", "stop.m")
     ))
 
-  testthat::expect_warning(
+  testthat::expect_message(
     res <- test_model(
       spec,
       c(

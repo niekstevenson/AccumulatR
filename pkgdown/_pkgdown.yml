@@ -10,6 +10,9 @@ articles:
       - getting_started
       - logical_rules
       - simple_model
+      - pool_model
+      - trigger_model
+      - mixtures
       - multi_outcome
       - chained_onset
 

@@ -10,17 +10,17 @@ editor_options:
     wrap: 72
 ---
 
-This vignette walks through the basic workflow for a race model: define
-the architecture, simulate behavioral data, evaluate the likelihood, and
-recover parameters. The example has two accumulators feeding response
-`R1` and one accumulator feeding response `R2`.
+This vignette shows the basic simulate-and-fit workflow for a race model. The
+example has two accumulators feeding response `R1` and one accumulator feeding
+response `R2`.
 
 ```{r}
 library(AccumulatR)
 ```
 
-**Define the model** We use three accumulators. `R1_A` and `R1_B` both
-support response `R1`, while `R2` supports response `R2`.
+**Define the model**
+We use three accumulators. `R1_A` and `R1_B` both feed response `R1`, while
+`R2` feeds response `R2`.
 
 ```{r}
 model_spec <- race_spec() |>
@@ -38,23 +38,17 @@ true_params <- c(
   R1_A.B = 1,
   R1_A.A = .3,
   R1_A.sv = 1,
-  R1_A.q = 0,
-  R1_A.t0 = 0,
   R1_B.v = 3,
   R1_B.B = 1,
   R1_B.A = .3,
   R1_B.s = 1,
-  R1_B.q = 0,
-  R1_B.t0 = 0,
   R2.m = log(0.4),
-  R2.s = 0.18,
-  R2.q = 0,
-  R2.t0 = 0
+  R2.s = 0.18
 )
 ```
 
-**Simulate data** We generate behavioral data consisting of responses
-and response times.
+**Simulate data**
+We generate response outcomes and response times for each trial.
 
 ```{r}
 set.seed(123456)
@@ -73,10 +67,18 @@ data_df <- data.frame(
 
 table(data_df$R)
 ```
+**Testing your mmodel**
+AccumulatR is a very big package, and I might have made mistakes! Alternatively,
+your model might be too complex to be easily identified given your data constraints 
+A good initial check of your model is to use `test_model`
+```{r}
+test_model(model, true_params, n_trials = n_trials)
+```
 
-**Evaluate the likelihood** We prepare the simulated behavioral data,
-compile a model context, and evaluate the log-likelihood under the true
-parameter values.
+
+**Evaluate the likelihood**
+We prepare the data, build a model context, and evaluate the log-likelihood at
+the true parameter values.
 
 ```{r}
 prepared <- prepare_data(structure, data_df)
@@ -92,7 +94,7 @@ ll_true <- as.numeric(log_likelihood(ctx, prepared, params_df_true))
 ll_true
 ```
 
-We can compare that with a clearly misspecified parameter set.
+For comparison, we can evaluate a clearly misspecified parameter set.
 
 ```{r}
 wrong_params <- true_params
@@ -108,10 +110,11 @@ ll_wrong <- as.numeric(log_likelihood(ctx, prepared, params_df_wrong))
 ll_wrong
 ```
 
-**Estimate parameters with `optim()`** We estimate five parameters:
-`R1_A.v`, `R1_B.v`, a shared threshold `B` used for both `R1_A.B` and
-`R1_B.B`, plus `R2.m` and `R2.s`. We estimate `B` and `s` on the log
-scale, to ensure support on the real line.
+**Estimate parameters with `optim()`**
+We estimate five parameters: `R1_A.v`, `R1_B.v`, a shared threshold `B` used
+for both `R1_A.B` and `R1_B.B`, plus `R2.m` and `R2.s`. `B` and `s` are
+estimated on the log scale so the optimizer can work on an unconstrained
+scale.
 
 ```{r eval=FALSE}
 neg_loglik <- function(theta) {
@@ -174,6 +177,5 @@ target <- c(
 data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params))
 ```
 
-That is the basic workflow the package is designed for: describe a
-response-time model in psychological terms, simulate data, and then fit
-the same model back to behavioral observations.
+This is the core usage pattern of the package: define a model, simulate or
+prepare data, evaluate the likelihood, and fit the parameters of interest.

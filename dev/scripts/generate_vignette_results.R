@@ -43,7 +43,8 @@ save_simple_model <- function() {
     rt = sim$rt,
     stringsAsFactors = FALSE
   )
-  ctx <- build_likelihood_context(structure, data_df)
+  prepared <- prepare_data(structure, data_df)
+  ctx <- make_context(structure)
 
   neg_loglik <- function(theta) {
     est <- true_params
@@ -56,10 +57,9 @@ save_simple_model <- function() {
     params_df <- build_param_matrix(
       model_spec,
       est,
-      n_trials = max(data_df$trial),
-      layout = ctx$param_layout
+      trial_df = prepared
     )
-    -as.numeric(log_likelihood(ctx, params_df))
+    -as.numeric(log_likelihood(ctx, prepared, params_df))
   }
 
   start <- c(
@@ -79,6 +79,209 @@ save_simple_model <- function() {
   )
 
   save(fit, file = "vignettes/data/simple_model.RData")
+}
+
+save_pool_model <- function() {
+  model_spec <- race_spec() |>
+    add_accumulator("A1", "lognormal") |>
+    add_accumulator("A2", "lognormal") |>
+    add_accumulator("A3", "lognormal") |>
+    add_accumulator("B", "lognormal") |>
+    add_pool("A_pool", c("A1", "A2", "A3"), k = 2L) |>
+    add_outcome("A", "A_pool") |>
+    add_outcome("B", "B")
+
+  structure <- finalize_model(model_spec)
+
+  true_params <- c(
+    A1.m = log(0.28),
+    A1.s = 0.16,
+    A1.q = 0,
+    A1.t0 = 0,
+    A2.m = log(0.28),
+    A2.s = 0.16,
+    A2.q = 0,
+    A2.t0 = 0,
+    A3.m = log(0.28),
+    A3.s = 0.16,
+    A3.q = 0,
+    A3.t0 = 0,
+    B.m = log(0.28),
+    B.s = 0.18,
+    B.q = 0,
+    B.t0 = 0
+  )
+
+  set.seed(123456)
+  params_df <- build_param_matrix(model_spec, true_params, n_trials = 1500)
+  sim <- simulate(structure, params_df)
+  data_df <- data.frame(
+    trial = sim$trial,
+    R = factor(sim$R),
+    rt = sim$rt,
+    stringsAsFactors = FALSE
+  )
+  prepared <- prepare_data(structure, data_df)
+  ctx <- make_context(structure)
+
+  neg_loglik <- function(theta) {
+    est <- true_params
+    est[c("A1.m", "A2.m", "A3.m")] <- theta[["A_pool.m"]]
+    est[c("A1.s", "A2.s", "A3.s")] <- exp(theta[["log_A_pool.s"]])
+    est["B.m"] <- theta[["B.m"]]
+    est["B.s"] <- exp(theta[["log_B.s"]])
+    params_df <- build_param_matrix(
+      model_spec,
+      est,
+      trial_df = prepared
+    )
+    -as.numeric(log_likelihood(ctx, prepared, params_df))
+  }
+
+  start <- c(
+    A_pool.m = log(0.24),
+    log_A_pool.s = log(0.12),
+    B.m = log(0.34),
+    log_B.s = log(0.12)
+  )
+
+  set.seed(123456)
+  fit <- optim(
+    start,
+    neg_loglik,
+    method = "Nelder-Mead",
+    control = list(maxit = 4000, reltol = 1e-9)
+  )
+
+  save(fit, file = "vignettes/data/pool_model.RData")
+}
+
+save_trigger_model <- function() {
+  model_spec <- race_spec() |>
+    add_accumulator("go1", "lognormal") |>
+    add_accumulator("go2", "lognormal") |>
+    add_outcome("R1", "go1") |>
+    add_outcome("R2", "go2") |>
+    add_trigger("shared_trigger",
+      members = c("go1", "go2"),
+      q = 0.15,
+      draw = "shared"
+    )
+
+  structure <- finalize_model(model_spec)
+
+  true_params <- c(
+    go1.m = log(0.30),
+    go1.s = 0.18,
+    go1.t0 = 0,
+    go2.m = log(0.35),
+    go2.s = 0.18,
+    go2.t0 = 0
+  )
+
+  set.seed(123456)
+  params_df <- build_param_matrix(model_spec, true_params, n_trials = 1500)
+  sim <- simulate(structure, params_df)
+  data_df <- data.frame(
+    trial = sim$trial,
+    R = factor(sim$R),
+    rt = sim$rt,
+    stringsAsFactors = FALSE
+  )
+  prepared <- prepare_data(structure, data_df)
+  ctx <- make_context(structure)
+
+  neg_loglik <- function(theta) {
+    est <- true_params
+    est["go1.m"] <- theta[["go1.m"]]
+    est["go1.s"] <- exp(theta[["log_go1.s"]])
+    est["go2.m"] <- theta[["go2.m"]]
+    est["go2.s"] <- exp(theta[["log_go2.s"]])
+    params_df <- build_param_matrix(
+      model_spec,
+      est,
+      trial_df = prepared
+    )
+    -as.numeric(log_likelihood(ctx, prepared, params_df))
+  }
+
+  start <- c(
+    go1.m = log(0.25),
+    log_go1.s = log(0.12),
+    go2.m = log(0.42),
+    log_go2.s = log(0.12)
+  )
+
+  set.seed(123456)
+  fit <- optim(
+    start,
+    neg_loglik,
+    method = "Nelder-Mead",
+    control = list(maxit = 4000, reltol = 1e-9)
+  )
+
+  save(fit, file = "vignettes/data/trigger_model.RData")
+}
+
+save_mixtures <- function() {
+  sampled_spec <- race_spec() |>
+    add_accumulator("target_fast", "lognormal") |>
+    add_accumulator("target_slow", "lognormal") |>
+    add_accumulator("competitor", "lognormal") |>
+    add_pool("TARGET", c("target_fast", "target_slow")) |>
+    add_outcome("R1", "TARGET") |>
+    add_outcome("R2", "competitor") |>
+    add_component("fast", members = c("target_fast", "competitor"), weight_param = "p_fast") |>
+    add_component("slow", members = c("target_slow", "competitor")) |>
+    set_mixture_options(mode = "sample", reference = "slow")
+
+  sampled_structure <- finalize_model(sampled_spec)
+
+  true_params_sampled <- c(
+    target_fast.m = log(0.25),
+    target_fast.s = 0.15,
+    target_fast.q = 0,
+    target_fast.t0 = 0,
+    target_slow.m = log(0.45),
+    target_slow.s = 0.20,
+    target_slow.q = 0,
+    target_slow.t0 = 0,
+    competitor.m = log(0.35),
+    competitor.s = 0.18,
+    competitor.q = 0,
+    competitor.t0 = 0,
+    p_fast = 0.35
+  )
+
+  set.seed(123456)
+  params_df_sampled <- build_param_matrix(
+    sampled_spec,
+    true_params_sampled,
+    n_trials = 1500
+  )
+  sim_sampled <- simulate(sampled_structure, params_df_sampled)
+  data_sampled <- sim_sampled[, c("trial", "R", "rt")]
+
+  prepared_sampled <- prepare_data(sampled_structure, data_sampled)
+  ctx_sampled <- make_context(sampled_structure)
+
+  neg_loglik <- function(theta) {
+    est <- true_params_sampled
+    est["p_fast"] <- plogis(theta[["logit_p_fast"]])
+    params_df <- build_param_matrix(
+      sampled_spec,
+      est,
+      trial_df = prepared_sampled
+    )
+    -as.numeric(log_likelihood(ctx_sampled, prepared_sampled, params_df))
+  }
+
+  start <- c(logit_p_fast = qlogis(0.60))
+
+  set.seed(123456)
+  fit <- optim(start, neg_loglik, method = "BFGS")
+
+  save(fit, file = "vignettes/data/mixtures.RData")
 }
 
 save_multi_outcome <- function() {
@@ -112,7 +315,8 @@ save_multi_outcome <- function() {
     rt2 = sim$rt2,
     stringsAsFactors = FALSE
   )
-  ctx <- build_likelihood_context(structure, data_df)
+  prepared <- prepare_data(structure, data_df)
+  ctx <- make_context(structure)
 
   neg_loglik <- function(theta) {
     est <- true_params
@@ -121,10 +325,9 @@ save_multi_outcome <- function() {
     params_df <- build_param_matrix(
       model_spec,
       est,
-      n_trials = max(data_df$trial),
-      layout = ctx$param_layout
+      trial_df = prepared
     )
-    -as.numeric(log_likelihood(ctx, params_df))
+    -as.numeric(log_likelihood(ctx, prepared, params_df))
   }
 
   start <- c(
@@ -174,7 +377,8 @@ save_chained_onset <- function() {
     rt = sim$rt,
     stringsAsFactors = FALSE
   )
-  ctx <- build_likelihood_context(structure, data_df)
+  prepared <- prepare_data(structure, data_df)
+  ctx <- make_context(structure)
 
   neg_loglik <- function(theta) {
     est <- true_params
@@ -183,10 +387,9 @@ save_chained_onset <- function() {
     params_df <- build_param_matrix(
       model_spec,
       est,
-      n_trials = max(data_df$trial),
-      layout = ctx$param_layout
+      trial_df = prepared
     )
-    -as.numeric(log_likelihood(ctx, params_df))
+    -as.numeric(log_likelihood(ctx, prepared, params_df))
   }
 
   start <- c(
@@ -205,5 +408,8 @@ save_chained_onset <- function() {
 }
 
 save_simple_model()
+save_pool_model()
+save_trigger_model()
+save_mixtures()
 save_multi_outcome()
 save_chained_onset()

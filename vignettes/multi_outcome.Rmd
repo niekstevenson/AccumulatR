@@ -7,20 +7,18 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 ---
 
-This vignette shows how to work with behavioral data in which you observe more
-than the first response. Here each trial records the first finishing response
-(`R`, `rt`) and the second finishing response (`R2`, `rt2`). This is useful
-when your task provides ranked response information rather than just the first
-choice and its latency.
+This vignette shows how to work with data in which more than one ordered
+response is observed on each trial. Here each trial records the first response
+(`R`, `rt`) and the second response (`R2`, `rt2`).
 
 ```{r}
 library(AccumulatR)
 ```
 
 **Define the model**
-We use a simple two-accumulator race with direct responses `A` and `B`. Setting
-`n_outcomes = 2` tells the model to retain the first and second finishing
-responses on each trial.
+We use a simple two-accumulator race with direct responses `A` and `B`.
+Setting `n_outcomes = 2` tells the model to retain the first and second
+finishing responses.
 
 ```{r}
 model_spec <- race_spec(n_outcomes = 2L) |>
@@ -44,7 +42,7 @@ true_params <- c(
 ```
 
 **Simulate data**
-We now generate behavioral data and keep both ordered responses for each trial.
+We generate data and keep both ordered responses for each trial.
 
 ```{r}
 set.seed(123456)
@@ -68,7 +66,7 @@ summary(data_df$rt2 - data_df$rt)
 ```
 
 **Evaluate the likelihood**
-Prepare the data once, build a model context, and evaluate the ranked
+We prepare the data once, build a model context, and evaluate the ranked
 log-likelihood at the true parameter values.
 
 ```{r}
@@ -85,8 +83,8 @@ ll_true <- as.numeric(log_likelihood(ctx, prepared, params_df_true))
 ll_true
 ```
 
-For comparison, we can also evaluate a parameter set that is clearly too slow
-for response `B`.
+For comparison, we can also evaluate a parameter set that makes response `B`
+too slow.
 
 ```{r}
 wrong_params <- true_params
@@ -103,9 +101,9 @@ ll_wrong
 ```
 
 **Estimate parameters with `optim()`**
-We estimate `A.m`, `A.s`, `B.m`, and `B.s`. As in many
-psychological fitting routines, we optimize on an unconstrained scale for the
-spread parameters and transform them back inside the objective function.
+We estimate `A.m`, `A.s`, `B.m`, and `B.s`. The spread parameters are
+optimized on the log scale and transformed back inside the objective
+function.
 
 ```{r eval=FALSE}
 neg_loglik <- function(theta) {
@@ -157,5 +155,5 @@ data.frame(
 )
 ```
 
-The overall workflow is the same as in the single-response case, but the model
-now uses the additional ranked-response information directly.
+The workflow is the same as in the single-response case, but the likelihood
+now uses the second ranked response as additional information.

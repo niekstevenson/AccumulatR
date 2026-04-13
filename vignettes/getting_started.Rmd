@@ -120,17 +120,3 @@ log_likelihood(ctx, prepared, param_df)
 and `make_context()` builds the model-side runtime state.
 `log_likelihood()` returns the fit of a parameter set to those observed
 data.
-
-## Where to go next
-
--   If you want the basic fitting workflow, read the simple race-model
-    vignette.
--   If you want to learn more about the different structures, read the
-    logical rules vignettes.
--   If you want pools of accumulators, read the pool vignette.
--   If you want to include trigger failures, read the trigger vignette.
--   If you want to include mixtures, read the mixtures vignette.
--   If your experiment records multiple ordered responses, read the
-    multi-outcome vignette.
--   If your model has staged processing, read the chained-onset
-    vignette.

@@ -11,12 +11,7 @@ values explain observed response times and choices.
 
 ## Installation
 
-Install the released version from CRAN:
-
-``` r
-install.packages("AccumulatR")
-```
-
+AccumulatR is not yet on CRAN.
 To install the current development version from GitHub:
 
 ``` r

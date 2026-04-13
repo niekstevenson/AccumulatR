@@ -29,7 +29,7 @@ differ only in whether the target route is fast or slow on a given trial.
 In this version, component labels are observed and included in the data.
 
 ```{r}
-fixed_spec <- race_spec() |>
+model_fixed <- race_spec() |>
   add_accumulator("target_fast", "lognormal") |>
   add_accumulator("target_slow", "lognormal") |>
   add_accumulator("competitor", "lognormal") |>
@@ -38,23 +38,16 @@ fixed_spec <- race_spec() |>
   add_outcome("R2", "competitor") |>
   add_component("fast", members = c("target_fast", "competitor"), weight = 0.4) |>
   add_component("slow", members = c("target_slow", "competitor"), weight = 0.6) |>
-  set_mixture_options(mode = "fixed")
-
-fixed_structure <- finalize_model(fixed_spec)
+  set_mixture_options(mode = "fixed") |>
+  finalize_model()
 
 true_params_fixed <- c(
   target_fast.m = log(0.25),
   target_fast.s = 0.15,
-  target_fast.q = 0,
-  target_fast.t0 = 0,
   target_slow.m = log(0.45),
   target_slow.s = 0.20,
-  target_slow.q = 0,
-  target_slow.t0 = 0,
   competitor.m = log(0.35),
-  competitor.s = 0.18,
-  competitor.q = 0,
-  competitor.t0 = 0
+  competitor.s = 0.18
 )
 ```
 
@@ -71,13 +64,13 @@ trial_types <- data.frame(
 )
 
 params_df_fixed <- build_param_matrix(
-  fixed_spec,
+  model_fixed,
   true_params_fixed,
   trial_df = trial_types
 )
 
 sim_fixed <- simulate(
-  fixed_structure,
+  model_fixed,
   params_df_fixed,
   trial_df = trial_types,
   layout = "long"
@@ -93,11 +86,11 @@ pattern applies to real data: if trial type is known, keep it in a
 `component` column.
 
 ```{r}
-prepared_fixed <- prepare_data(fixed_structure, data_fixed)
-ctx_fixed <- make_context(fixed_structure)
+prepared_fixed <- prepare_data(model_fixed, data_fixed)
+ctx_fixed <- make_context(model_fixed)
 
 params_df_fixed_true <- build_param_matrix(
-  fixed_spec,
+  model_fixed,
   true_params_fixed,
   trial_df = prepared_fixed
 )
@@ -113,7 +106,7 @@ observed per trial. Instead, the model samples a hidden component for each
 trial, with `p_fast` controlling the proportion of fast trials.
 
 ```{r}
-sampled_spec <- race_spec() |>
+model_sampled <- race_spec() |>
   add_accumulator("target_fast", "lognormal") |>
   add_accumulator("target_slow", "lognormal") |>
   add_accumulator("competitor", "lognormal") |>
@@ -122,23 +115,16 @@ sampled_spec <- race_spec() |>
   add_outcome("R2", "competitor") |>
   add_component("fast", members = c("target_fast", "competitor"), weight_param = "p_fast") |>
   add_component("slow", members = c("target_slow", "competitor")) |>
-  set_mixture_options(mode = "sample", reference = "slow")
-
-sampled_structure <- finalize_model(sampled_spec)
+  set_mixture_options(mode = "sample", reference = "slow") |>
+  finalize_model()
 
 true_params_sampled <- c(
   target_fast.m = log(0.25),
   target_fast.s = 0.15,
-  target_fast.q = 0,
-  target_fast.t0 = 0,
   target_slow.m = log(0.45),
   target_slow.s = 0.20,
-  target_slow.q = 0,
-  target_slow.t0 = 0,
   competitor.m = log(0.35),
   competitor.s = 0.18,
-  competitor.q = 0,
-  competitor.t0 = 0,
   p_fast = 0.35
 )
 ```
@@ -151,12 +137,12 @@ set.seed(123456)
 
 n_trials_sampled <- 1500
 params_df_sampled <- build_param_matrix(
-  sampled_spec,
+  model_sampled,
   true_params_sampled,
   n_trials = n_trials_sampled
 )
 
-sim_sampled <- simulate(sampled_structure, params_df_sampled)
+sim_sampled <- simulate(model_sampled, params_df_sampled)
 names(sim_sampled)
 ```
 
@@ -165,7 +151,7 @@ explicitly.
 
 ```{r}
 sim_sampled_with_component <- simulate(
-  sampled_structure,
+  model_sampled,
   params_df_sampled,
   keep_component = TRUE
 )
@@ -178,11 +164,11 @@ For fitting, we usually work with the observed data only.
 ```{r}
 data_sampled <- sim_sampled[, c("trial", "R", "rt")]
 
-prepared_sampled <- prepare_data(sampled_structure, data_sampled)
-ctx_sampled <- make_context(sampled_structure)
+prepared_sampled <- prepare_data(model_sampled, data_sampled)
+ctx_sampled <- make_context(model_sampled)
 
 params_df_sampled_true <- build_param_matrix(
-  sampled_spec,
+  model_sampled,
   true_params_sampled,
   trial_df = prepared_sampled
 )
@@ -191,38 +177,17 @@ ll_sampled_true <- as.numeric(log_likelihood(ctx_sampled, prepared_sampled, para
 ll_sampled_true
 ```
 
-For comparison, we can evaluate a parameter set that assumes far too many fast
-trials.
-
-```{r}
-wrong_params_sampled <- true_params_sampled
-wrong_params_sampled["p_fast"] <- 0.70
-
-params_df_sampled_wrong <- build_param_matrix(
-  sampled_spec,
-  wrong_params_sampled,
-  trial_df = prepared_sampled
-)
-
-ll_sampled_wrong <- as.numeric(log_likelihood(
-  ctx_sampled,
-  prepared_sampled,
-  params_df_sampled_wrong
-))
-ll_sampled_wrong
-```
-
 ## Estimate a sampled-mixture weight
-
-To keep the example simple, we estimate only the latent mixture weight
-`p_fast`, while holding the accumulator timing parameters fixed.
+Latent weights can also be estimated. To keep the example simple, we estimate 
+only the latent mixture weight `p_fast`, while holding the accumulator timing 
+parameters fixed.
 
 ```{r eval=FALSE}
 neg_loglik <- function(theta) {
   est <- true_params_sampled
   est["p_fast"] <- plogis(theta[["logit_p_fast"]])
   params_df <- build_param_matrix(
-    sampled_spec,
+    model_sampled,
     est,
     trial_df = prepared_sampled
   )

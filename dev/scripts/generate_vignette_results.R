@@ -5,57 +5,54 @@ pkgload::load_all(".", quiet = TRUE)
 dir.create("vignettes/data", recursive = TRUE, showWarnings = FALSE)
 
 save_simple_model <- function() {
-  model_spec <- race_spec() |>
+  model <- race_spec() |>
     add_accumulator("R1_A", "LBA") |>
     add_accumulator("R1_B", "RDM") |>
     add_accumulator("R2", "lognormal") |>
     add_pool("R1", c("R1_A", "R1_B")) |>
     add_outcome("R1", "R1") |>
-    add_outcome("R2", "R2")
-
-  structure <- finalize_model(model_spec)
+    add_outcome("R2", "R2") |>
+    set_parameters(list(
+      B_shared = c("R1_A.B", "R1_B.B"),
+      A_shared = c("R1_A.A", "R1_B.A"),
+      noise_shared = c("R1_A.sv", "R1_B.s"),
+      t0_shared = c("R1_A.t0", "R1_B.t0", "R2.t0")
+    )) |>
+    finalize_model()
 
   true_params <- c(
     R1_A.v = 2,
-    R1_A.B = 1,
-    R1_A.A = 0.3,
-    R1_A.sv = 1,
-    R1_A.q = 0,
-    R1_A.t0 = 0,
     R1_B.v = 3,
-    R1_B.B = 1,
-    R1_B.A = 0.3,
-    R1_B.s = 1,
-    R1_B.q = 0,
-    R1_B.t0 = 0,
+    B_shared = 1,
+    A_shared = 0.3,
+    noise_shared = 1,
     R2.m = log(0.4),
     R2.s = 0.18,
-    R2.q = 0,
-    R2.t0 = 0
+    t0_shared = 0.05
   )
 
   set.seed(123456)
-  params_df <- build_param_matrix(model_spec, true_params, n_trials = 2000)
-  sim <- simulate(structure, params_df)
+  params_df <- build_param_matrix(model, true_params, n_trials = 2000)
+  sim <- simulate(model, params_df)
   data_df <- data.frame(
     trial = sim$trial,
     R = factor(sim$R),
     rt = sim$rt,
     stringsAsFactors = FALSE
   )
-  prepared <- prepare_data(structure, data_df)
-  ctx <- make_context(structure)
+  prepared <- prepare_data(model, data_df)
+  ctx <- make_context(model)
 
   neg_loglik <- function(theta) {
     est <- true_params
     est["R1_A.v"] <- theta[["R1_A.v"]]
     est["R1_B.v"] <- theta[["R1_B.v"]]
-    est["R1_A.B"] <- exp(theta[["log_B_shared"]])
-    est["R1_B.B"] <- exp(theta[["log_B_shared"]])
+    est["B_shared"] <- exp(theta[["log_B_shared"]])
     est["R2.m"] <- theta[["R2.m"]]
     est["R2.s"] <- exp(theta[["log_R2.s"]])
+    est["t0_shared"] <- exp(theta[["log_t0_shared"]])
     params_df <- build_param_matrix(
-      model_spec,
+      model,
       est,
       trial_df = prepared
     )
@@ -67,7 +64,8 @@ save_simple_model <- function() {
     R1_B.v = 1.5,
     log_B_shared = log(1.0),
     R2.m = log(0.32),
-    log_R2.s = log(0.15)
+    log_R2.s = log(0.15),
+    log_t0_shared = log(0.03)
   )
 
   set.seed(123456)
@@ -96,20 +94,12 @@ save_pool_model <- function() {
   true_params <- c(
     A1.m = log(0.28),
     A1.s = 0.16,
-    A1.q = 0,
-    A1.t0 = 0,
     A2.m = log(0.28),
     A2.s = 0.16,
-    A2.q = 0,
-    A2.t0 = 0,
     A3.m = log(0.28),
     A3.s = 0.16,
-    A3.q = 0,
-    A3.t0 = 0,
     B.m = log(0.28),
-    B.s = 0.18,
-    B.q = 0,
-    B.t0 = 0
+    B.s = 0.18
   )
 
   set.seed(123456)
@@ -173,10 +163,8 @@ save_trigger_model <- function() {
   true_params <- c(
     go1.m = log(0.30),
     go1.s = 0.18,
-    go1.t0 = 0,
     go2.m = log(0.35),
-    go2.s = 0.18,
-    go2.t0 = 0
+    go2.s = 0.18
   )
 
   set.seed(123456)
@@ -240,16 +228,10 @@ save_mixtures <- function() {
   true_params_sampled <- c(
     target_fast.m = log(0.25),
     target_fast.s = 0.15,
-    target_fast.q = 0,
-    target_fast.t0 = 0,
     target_slow.m = log(0.45),
     target_slow.s = 0.20,
-    target_slow.q = 0,
-    target_slow.t0 = 0,
     competitor.m = log(0.35),
     competitor.s = 0.18,
-    competitor.q = 0,
-    competitor.t0 = 0,
     p_fast = 0.35
   )
 
@@ -296,12 +278,8 @@ save_multi_outcome <- function() {
   true_params <- c(
     A.m = log(0.30),
     A.s = 0.18,
-    A.q = 0,
-    A.t0 = 0,
     B.m = log(0.38),
-    B.s = 0.22,
-    B.q = 0,
-    B.t0 = 0
+    B.s = 0.22
   )
 
   set.seed(123456)
@@ -356,16 +334,10 @@ save_chained_onset <- function() {
   true_params <- c(
     A.m = log(0.28),
     A.s = 0.14,
-    A.q = 0,
-    A.t0 = 0,
     B.m = log(0.1),
     B.s = 0.1,
-    B.q = 0,
-    B.t0 = 0,
     C.m = log(0.15),
-    C.s = 0.1,
-    C.q = 0,
-    C.t0 = 0
+    C.s = 0.1
   )
 
   set.seed(123456)

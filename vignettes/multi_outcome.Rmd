@@ -3,54 +3,52 @@ title: "Simulate and Fit a Multi-Outcome Race Model"
 output: rmarkdown::html_vignette
 vignette: >
   %\VignetteIndexEntry{Simulate and Fit a Multi-Outcome Race Model}
-  %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{knitr::rmarkdown}
+editor_options: 
+  markdown: 
+    wrap: 72
 ---
 
 This vignette shows how to work with data in which more than one ordered
-response is observed on each trial. Here each trial records the first response
-(`R`, `rt`) and the second response (`R2`, `rt2`).
+response is observed on each trial. Here each trial records the first
+response (`R`, `rt`) and the second response (`R2`, `rt2`), and so on
+for any number of responses (`R3`, `rt3` etc.).
 
 ```{r}
 library(AccumulatR)
 ```
 
-**Define the model**
-We use a simple two-accumulator race with direct responses `A` and `B`.
-Setting `n_outcomes = 2` tells the model to retain the first and second
-finishing responses.
+**Define the model** We use a simple two-accumulator race with direct
+responses `A` and `B`. Setting `n_outcomes = 2` tells the model to
+retain the first and second finishing responses.
 
 ```{r}
-model_spec <- race_spec(n_outcomes = 2L) |>
+model <- race_spec(n_outcomes = 2L) |>
   add_accumulator("A", "lognormal") |>
   add_accumulator("B", "lognormal") |>
   add_outcome("A", "A") |>
-  add_outcome("B", "B")
-
-structure <- finalize_model(model_spec)
+  add_outcome("B", "B") |>
+  finalize_model()
 
 true_params <- c(
   A.m = log(0.30),
   A.s = 0.18,
-  A.q = 0,
-  A.t0 = 0,
   B.m = log(0.38),
-  B.s = 0.22,
-  B.q = 0,
-  B.t0 = 0
+  B.s = 0.22
 )
 ```
 
-**Simulate data**
-We generate data and keep both ordered responses for each trial.
+**Simulate data** We generate data and keep both ordered responses for
+each trial.
 
 ```{r}
 set.seed(123456)
 
 n_trials <- 500
-params_df <- build_param_matrix(model_spec, true_params, n_trials = n_trials)
+params_df <- build_param_matrix(model, true_params, n_trials = n_trials)
 
-sim <- simulate(structure, params_df)
+sim <- simulate(model, params_df)
 
 data_df <- data.frame(
   trial = sim$trial,
@@ -61,57 +59,22 @@ data_df <- data.frame(
   stringsAsFactors = FALSE
 )
 
-table(data_df$R, data_df$R2)
-summary(data_df$rt2 - data_df$rt)
+head(data_df)
 ```
 
-**Evaluate the likelihood**
-We prepare the data once, build a model context, and evaluate the ranked
-log-likelihood at the true parameter values.
-
-```{r}
-prepared <- prepare_data(structure, data_df)
-ctx <- make_context(structure)
-
-params_df_true <- build_param_matrix(
-  model_spec,
-  true_params,
-  trial_df = prepared
-)
-
-ll_true <- as.numeric(log_likelihood(ctx, prepared, params_df_true))
-ll_true
-```
-
-For comparison, we can also evaluate a parameter set that makes response `B`
-too slow.
-
-```{r}
-wrong_params <- true_params
-wrong_params["B.m"] <- log(0.55)
-
-params_df_wrong <- build_param_matrix(
-  model_spec,
-  wrong_params,
-  trial_df = prepared
-)
-
-ll_wrong <- as.numeric(log_likelihood(ctx, prepared, params_df_wrong))
-ll_wrong
-```
-
-**Estimate parameters with `optim()`**
-We estimate `A.m`, `A.s`, `B.m`, and `B.s`. The spread parameters are
-optimized on the log scale and transformed back inside the objective
-function.
+**Estimate parameters with `optim()`** We estimate `A.m`, `A.s`, `B.m`,
+and `B.s`. The variance parameters are optimized on the log scale and
+transformed back inside the function.
 
 ```{r eval=FALSE}
+prepared <- prepare_data(model, data_df)
+ctx <- make_context(model)
 neg_loglik <- function(theta) {
   est <- true_params
   est[c("A.m", "A.s", "B.m", "B.s")] <- theta[c("A.m", "A.s", "B.m", "B.s")]
   est[c("A.s", "B.s")] <- exp(est[c("A.s", "B.s")])
   params_df <- build_param_matrix(
-    model_spec,
+    model,
     est,
     trial_df = prepared
   )
@@ -155,5 +118,6 @@ data.frame(
 )
 ```
 
-The workflow is the same as in the single-response case, but the likelihood
-now uses the second ranked response as additional information.
+The workflow is the same as in the single-response case, but the
+likelihood now uses the second ranked response as additional
+information.

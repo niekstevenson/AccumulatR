@@ -24,7 +24,7 @@ We use two lognormal accumulators and one shared trigger with failure
 probability `q = 0.15`.
 
 ```{r}
-model_spec <- race_spec() |>
+model <- race_spec() |>
   add_accumulator("go1", "lognormal") |>
   add_accumulator("go2", "lognormal") |>
   add_outcome("R1", "go1") |>
@@ -33,17 +33,14 @@ model_spec <- race_spec() |>
     members = c("go1", "go2"),
     q = 0.15,
     draw = "shared"
-  )
-
-structure <- finalize_model(model_spec)
+  ) |>
+  finalize_model()
 
 true_params <- c(
   go1.m = log(0.30),
   go1.s = 0.18,
-  go1.t0 = 0,
   go2.m = log(0.35),
-  go2.s = 0.18,
-  go2.t0 = 0
+  go2.s = 0.18
 )
 ```
 
@@ -57,9 +54,9 @@ Failed trigger trials appear as missing responses and missing response times.
 set.seed(123456)
 
 n_trials <- 1500
-params_df <- build_param_matrix(model_spec, true_params, n_trials = n_trials)
+params_df <- build_param_matrix(model, true_params, n_trials = n_trials)
 
-sim <- simulate(structure, params_df)
+sim <- simulate(model, params_df)
 
 data_df <- data.frame(
   trial = sim$trial,
@@ -76,11 +73,11 @@ We prepare the data, build a model context, and evaluate the shared-trigger
 model under the true parameter values.
 
 ```{r}
-prepared <- prepare_data(structure, data_df)
-ctx <- make_context(structure)
+prepared <- prepare_data(model, data_df)
+ctx <- make_context(model)
 
 params_df_true <- build_param_matrix(
-  model_spec,
+  model,
   true_params,
   trial_df = prepared
 )
@@ -93,7 +90,7 @@ To see why the trigger type matters, compare that with the same model under
 independent trigger failures instead of joint failures.
 
 ```{r}
-independent_spec <- race_spec() |>
+model_independent <- race_spec() |>
   add_accumulator("go1", "lognormal") |>
   add_accumulator("go2", "lognormal") |>
   add_outcome("R1", "go1") |>
@@ -102,14 +99,14 @@ independent_spec <- race_spec() |>
     members = c("go1", "go2"),
     q = 0.15,
     draw = "independent"
-  )
+  ) |>
+  finalize_model()
 
-independent_structure <- finalize_model(independent_spec)
-independent_prepared <- prepare_data(independent_structure, data_df)
-independent_ctx <- make_context(independent_structure)
+independent_prepared <- prepare_data(model_independent, data_df)
+independent_ctx <- make_context(model_independent)
 
 params_df_independent <- build_param_matrix(
-  independent_spec,
+  model_independent,
   true_params,
   trial_df = independent_prepared
 )
@@ -120,6 +117,21 @@ ll_independent <- as.numeric(log_likelihood(
   params_df_independent
 ))
 ll_independent
+```
+
+The same syntax can also be used when only one accumulator has a trigger.
+
+```{r}
+model_single_q <- race_spec() |>
+  add_accumulator("go1", "lognormal") |>
+  add_accumulator("go2", "lognormal") |>
+  add_outcome("R1", "go1") |>
+  add_outcome("R2", "go2") |>
+  add_trigger("go1_trigger",
+    members = c("go1"),
+    q = 0.15
+  ) |>
+  finalize_model()
 ```
 
 **Estimate parameters with `optim()`**
@@ -134,7 +146,7 @@ neg_loglik <- function(theta) {
   est["go2.m"] <- theta[["go2.m"]]
   est["go2.s"] <- exp(theta[["log_go2.s"]])
   params_df <- build_param_matrix(
-    model_spec,
+    model,
     est,
     trial_df = prepared
   )

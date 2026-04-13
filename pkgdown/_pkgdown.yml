@@ -8,6 +8,7 @@ articles:
     navbar: "Articles"
     contents:
       - getting_started
+      - distributions
       - logical_rules
       - simple_model
       - pool_model

@@ -11,10 +11,9 @@
 
   missing <- setdiff(required, names(param_values))
   if (length(missing) > 0L) {
-    warning(
+    message(
       "Assuming 0 for missing parameter(s): ",
-      paste(missing, collapse = ", "),
-      call. = FALSE
+      paste(missing, collapse = ", ")
     )
     param_values <- c(param_values, stats::setNames(rep(0, length(missing)), missing))
   }
@@ -198,7 +197,7 @@
 #' `test_model()` is a quick diagnostic for checking whether a model and a
 #' parameter vector behave sensibly. It does three things:
 #'
-#' 1. fills in any missing parameters with `0` and warns which ones were
+#' 1. fills in any missing parameters with `0` and reports which ones were
 #'    assumed to be zero
 #' 2. compares analytical response probabilities with response proportions from
 #'    simulated behavioral data
@@ -211,7 +210,7 @@
 #'
 #' @param model Model specification or finalized model.
 #' @param param_values Named numeric vector of parameter values. Parameters not
-#'   supplied are assumed to be `0`, with a warning. Names should follow
+#'   supplied are assumed to be `0`, with a message. Names should follow
 #'   `sampled_pars(model)`, so custom names from `set_parameters()` are
 #'   supported.
 #' @param n_trials Number of trials to simulate.

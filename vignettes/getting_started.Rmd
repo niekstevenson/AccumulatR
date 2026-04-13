@@ -76,13 +76,12 @@ The example below defines a basic two-choice race model with two
 lognormal accumulators.
 
 ```{r}
-spec <- race_spec() |>
+model <- race_spec() |>
   add_accumulator("left", "lognormal") |>
   add_accumulator("right", "lognormal") |>
   add_outcome("left", "left") |>
-  add_outcome("right", "right")
-
-model <- finalize_model(spec)
+  add_outcome("right", "right") |>
+  finalize_model()
 ```
 
 ## Simulated behavioral data
@@ -98,7 +97,7 @@ pars <- c(
   right.m = log(0.35), right.s = 0.18
 )
 
-param_df <- build_param_matrix(spec, pars, n_trials = 6)
+param_df <- build_param_matrix(model, pars, n_trials = 6)
 sim <- simulate(model, param_df, seed = 123)
 
 head(sim)

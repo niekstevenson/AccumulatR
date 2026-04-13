@@ -1,8 +1,8 @@
 ---
-title: "Simulate and Fit a Simple Chained-Onset Model"
+title: "Chained Onsets"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Simulate and Fit a Simple Chained-Onset Model}
+  %\VignetteIndexEntry{Chained Onsets}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---

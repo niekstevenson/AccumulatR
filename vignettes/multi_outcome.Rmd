@@ -1,8 +1,8 @@
 ---
-title: "Simulate and Fit a Multi-Outcome Race Model"
+title: "Multiple Outcomes"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Simulate and Fit a Multi-Outcome Race Model}
+  %\VignetteIndexEntry{Multiple Outcomes}
   %\VignetteEncoding{UTF-8}
   %\VignetteEngine{knitr::rmarkdown}
 editor_options: 

@@ -1,8 +1,8 @@
 ---
-title: "Simulate and Fit a Simple Pool Model"
+title: "Pooling Accumulators"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Simulate and Fit a Simple Pool Model}
+  %\VignetteIndexEntry{Pooling Accumulators}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---

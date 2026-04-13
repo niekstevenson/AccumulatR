@@ -5,7 +5,7 @@
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-<title>Simulate and Fit a Multi-Outcome Race Model • AccumulatR</title>
+<title>Multiple Outcomes • AccumulatR</title>
 <!-- favicons --><link rel="icon" type="image/png" sizes="96x96" href="../favicon-96x96.png">
 <link rel="icon" type="”image/svg+xml”" href="../favicon.svg">
 <link rel="apple-touch-icon" sizes="180x180" href="../apple-touch-icon.png">
@@ -15,7 +15,7 @@
 <link href="../deps/bootstrap-5.3.1/bootstrap.min.css" rel="stylesheet">
 <script src="../deps/bootstrap-5.3.1/bootstrap.bundle.min.js"></script><link href="../deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
 <link href="../deps/font-awesome-6.5.2/css/v4-shims.min.css" rel="stylesheet">
-<script src="../deps/headroom-0.11.0/headroom.min.js"></script><script src="../deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="../deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="../deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="../deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="../deps/search-1.0.0/fuse.min.js"></script><script src="../deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="../pkgdown.js"></script><meta property="og:title" content="Simulate and Fit a Multi-Outcome Race Model">
+<script src="../deps/headroom-0.11.0/headroom.min.js"></script><script src="../deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="../deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="../deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="../deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="../deps/search-1.0.0/fuse.min.js"></script><script src="../deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="../pkgdown.js"></script><meta property="og:title" content="Multiple Outcomes">
 </head>
 <body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
@@ -38,13 +38,15 @@
 <li class="active nav-item dropdown">
   <button class="nav-link dropdown-toggle" type="button" id="dropdown-articles" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Articles</button>
   <ul class="dropdown-menu" aria-labelledby="dropdown-articles">
-<li><hr class="dropdown-divider"></li>
-    <li><h6 class="dropdown-header" data-toc-skip>Articles</h6></li>
+<li><a class="dropdown-item" href="../articles/chained_onset.html">Chained Onsets</a></li>
+    <li><a class="dropdown-item" href="../articles/distributions.html">Accumulator Distributions</a></li>
     <li><a class="dropdown-item" href="../articles/getting_started.html">Getting Started with AccumulatR</a></li>
     <li><a class="dropdown-item" href="../articles/logical_rules.html">Logical Rules for Responses</a></li>
-    <li><a class="dropdown-item" href="../articles/simple_model.html">Simulate and Fit a Simple Race Model</a></li>
-    <li><a class="dropdown-item" href="../articles/multi_outcome.html">Simulate and Fit a Multi-Outcome Race Model</a></li>
-    <li><a class="dropdown-item" href="../articles/chained_onset.html">Simulate and Fit a Simple Chained-Onset Model</a></li>
+    <li><a class="dropdown-item" href="../articles/mixtures.html">Working with Mixtures</a></li>
+    <li><a class="dropdown-item" href="../articles/multi_outcome.html">Multiple Outcomes</a></li>
+    <li><a class="dropdown-item" href="../articles/pool_model.html">Pooling Accumulators</a></li>
+    <li><a class="dropdown-item" href="../articles/simple_model.html">A Simple Race Model</a></li>
+    <li><a class="dropdown-item" href="../articles/trigger_model.html">Trigger Types</a></li>
   </ul>
 </li>
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
@@ -66,7 +68,7 @@
 
 <div class="row">
   <main id="main" class="col-md-9"><div class="page-header">
-      <img src="../logo.png" class="logo" alt=""><h1>Simulate and Fit a Multi-Outcome Race Model</h1>
+      <img src="../logo.png" class="logo" alt=""><h1>Multiple Outcomes</h1>
             
       
       <small class="dont-index">Source: <a href="https://github.com/niekstevenson/AccumulatR/blob/HEAD/vignettes/multi_outcome.Rmd" class="external-link"><code>vignettes/multi_outcome.Rmd</code></a></small>
@@ -75,12 +77,11 @@
 
     
     
-<p>This vignette shows how to work with behavioral data in which you
-observe more than the first response. Here each trial records the first
-finishing response (<code>R</code>, <code>rt</code>) and the second
-finishing response (<code>R2</code>, <code>rt2</code>). This is useful
-when your task provides ranked response information rather than just the
-first choice and its latency.</p>
+<p>This vignette shows how to work with data in which more than one
+ordered response is observed on each trial. Here each trial records the
+first response (<code>R</code>, <code>rt</code>) and the second response
+(<code>R2</code>, <code>rt2</code>), and so on for any number of
+responses (<code>R3</code>, <code>rt3</code> etc.).</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://github.com/niekstevenson/AccumulatR" class="external-link">AccumulatR</a></span><span class="op">)</span></span></code></pre></div>
 <pre><code><span><span class="co">## </span></span>
@@ -91,35 +92,30 @@ first choice and its latency.</p>
 <p><strong>Define the model</strong> We use a simple two-accumulator
 race with direct responses <code>A</code> and <code>B</code>. Setting
 <code>n_outcomes = 2</code> tells the model to retain the first and
-second finishing responses on each trial.</p>
+second finishing responses.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">model_spec</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/race_spec.html">race_spec</a></span><span class="op">(</span>n_outcomes <span class="op">=</span> <span class="fl">2L</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<code class="sourceCode R"><span><span class="va">model</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/race_spec.html">race_spec</a></span><span class="op">(</span>n_outcomes <span class="op">=</span> <span class="fl">2L</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"A"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"B"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"A"</span>, <span class="st">"A"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
-<span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"B"</span>, <span class="st">"B"</span><span class="op">)</span></span>
-<span></span>
-<span><span class="va">structure</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="va">model_spec</span><span class="op">)</span></span>
+<span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"B"</span>, <span class="st">"B"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">true_params</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
 <span>  A.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.30</span><span class="op">)</span>,</span>
 <span>  A.s <span class="op">=</span> <span class="fl">0.18</span>,</span>
-<span>  A.q <span class="op">=</span> <span class="fl">0</span>,</span>
-<span>  A.t0 <span class="op">=</span> <span class="fl">0</span>,</span>
 <span>  B.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.38</span><span class="op">)</span>,</span>
-<span>  B.s <span class="op">=</span> <span class="fl">0.22</span>,</span>
-<span>  B.q <span class="op">=</span> <span class="fl">0</span>,</span>
-<span>  B.t0 <span class="op">=</span> <span class="fl">0</span></span>
+<span>  B.s <span class="op">=</span> <span class="fl">0.22</span></span>
 <span><span class="op">)</span></span></code></pre></div>
-<p><strong>Simulate data</strong> We now generate behavioral data and
-keep both ordered responses for each trial.</p>
+<p><strong>Simulate data</strong> We generate data and keep both ordered
+responses for each trial.</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">123456</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">n_trials</span> <span class="op">&lt;-</span> <span class="fl">500</span></span>
-<span><span class="va">params_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span><span class="va">model_spec</span>, <span class="va">true_params</span>, n_trials <span class="op">=</span> <span class="va">n_trials</span><span class="op">)</span></span>
+<span><span class="va">params_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">true_params</span>, n_trials <span class="op">=</span> <span class="va">n_trials</span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">sim</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/simulate.html">simulate</a></span><span class="op">(</span><span class="va">structure</span>, <span class="va">params_df</span><span class="op">)</span></span>
+<span><span class="va">sim</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/simulate.html">simulate</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">params_df</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">data_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span>
 <span>  trial <span class="op">=</span> <span class="va">sim</span><span class="op">$</span><span class="va">trial</span>,</span>
@@ -130,64 +126,31 @@ keep both ordered responses for each trial.</p>
 <span>  stringsAsFactors <span class="op">=</span> <span class="cn">FALSE</span></span>
 <span><span class="op">)</span></span>
 <span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/table.html" class="external-link">table</a></span><span class="op">(</span><span class="va">data_df</span><span class="op">$</span><span class="va">R</span>, <span class="va">data_df</span><span class="op">$</span><span class="va">R2</span><span class="op">)</span></span></code></pre></div>
-<pre><code><span><span class="co">##    </span></span>
-<span><span class="co">##       A   B</span></span>
-<span><span class="co">##   A   0 404</span></span>
-<span><span class="co">##   B  96   0</span></span></code></pre>
-<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/summary.html" class="external-link">summary</a></span><span class="op">(</span><span class="va">data_df</span><span class="op">$</span><span class="va">rt2</span> <span class="op">-</span> <span class="va">data_df</span><span class="op">$</span><span class="va">rt</span><span class="op">)</span></span></code></pre></div>
-<pre><code><span><span class="co">##      Min.   1st Qu.    Median      Mean   3rd Qu.      Max. </span></span>
-<span><span class="co">## 0.0001404 0.0497114 0.1001445 0.1110411 0.1531077 0.5709911</span></span></code></pre>
-<p><strong>Evaluate the likelihood</strong> Build a likelihood context
-once, then evaluate the ranked log-likelihood at the true parameter
-values.</p>
-<div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">ctx</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/build_likelihood_context.html">build_likelihood_context</a></span><span class="op">(</span><span class="va">structure</span>, <span class="va">data_df</span><span class="op">)</span></span>
-<span></span>
-<span><span class="va">params_df_true</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span></span>
-<span>  <span class="va">model_spec</span>,</span>
-<span>  <span class="va">true_params</span>,</span>
-<span>  n_trials <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Extremes.html" class="external-link">max</a></span><span class="op">(</span><span class="va">data_df</span><span class="op">$</span><span class="va">trial</span><span class="op">)</span>,</span>
-<span>  layout <span class="op">=</span> <span class="va">ctx</span><span class="op">$</span><span class="va">param_layout</span></span>
-<span><span class="op">)</span></span>
-<span></span>
-<span><span class="va">ll_true</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">as.numeric</a></span><span class="op">(</span><span class="fu"><a href="../reference/log_likelihood.html">log_likelihood</a></span><span class="op">(</span><span class="va">ctx</span>, <span class="va">params_df_true</span><span class="op">)</span><span class="op">)</span></span>
-<span><span class="va">ll_true</span></span></code></pre></div>
-<pre><code><span><span class="co">## [1] 1298.606</span></span></code></pre>
-<p>For comparison, we can also evaluate a parameter set that is clearly
-too slow for response <code>B</code>.</p>
-<div class="sourceCode" id="cb11"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">wrong_params</span> <span class="op">&lt;-</span> <span class="va">true_params</span></span>
-<span><span class="va">wrong_params</span><span class="op">[</span><span class="st">"B.m"</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.55</span><span class="op">)</span></span>
-<span></span>
-<span><span class="va">params_df_wrong</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span></span>
-<span>  <span class="va">model_spec</span>,</span>
-<span>  <span class="va">wrong_params</span>,</span>
-<span>  n_trials <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Extremes.html" class="external-link">max</a></span><span class="op">(</span><span class="va">data_df</span><span class="op">$</span><span class="va">trial</span><span class="op">)</span>,</span>
-<span>  layout <span class="op">=</span> <span class="va">ctx</span><span class="op">$</span><span class="va">param_layout</span></span>
-<span><span class="op">)</span></span>
-<span></span>
-<span><span class="va">ll_wrong</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">as.numeric</a></span><span class="op">(</span><span class="fu"><a href="../reference/log_likelihood.html">log_likelihood</a></span><span class="op">(</span><span class="va">ctx</span>, <span class="va">params_df_wrong</span><span class="op">)</span><span class="op">)</span></span>
-<span><span class="va">ll_wrong</span></span></code></pre></div>
-<pre><code><span><span class="co">## [1] 626.9148</span></span></code></pre>
+<span><span class="fu"><a href="https://rdrr.io/r/utils/head.html" class="external-link">head</a></span><span class="op">(</span><span class="va">data_df</span><span class="op">)</span></span></code></pre></div>
+<pre><code><span><span class="co">##   trial R        rt R2       rt2</span></span>
+<span><span class="co">## 1     1 A 0.3394130  B 0.3514512</span></span>
+<span><span class="co">## 2     2 A 0.2373401  B 0.4565748</span></span>
+<span><span class="co">## 3     3 A 0.3709420  B 0.4913625</span></span>
+<span><span class="co">## 4     4 B 0.2974072  A 0.3441526</span></span>
+<span><span class="co">## 5     5 A 0.3297834  B 0.4790856</span></span>
+<span><span class="co">## 6     6 A 0.3671582  B 0.4663272</span></span></code></pre>
 <p><strong>Estimate parameters with <code><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim()</a></code></strong> We
 estimate <code>A.m</code>, <code>A.s</code>, <code>B.m</code>, and
-<code>B.s</code>. As in many psychological fitting routines, we optimize
-on an unconstrained scale for the spread parameters and transform them
-back inside the objective function.</p>
-<div class="sourceCode" id="cb13"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">neg_loglik</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">theta</span><span class="op">)</span> <span class="op">{</span></span>
+<code>B.s</code>. The variance parameters are optimized on the log scale
+and transformed back inside the function.</p>
+<div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="va">prepared</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/prepare_data.html">prepare_data</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">data_df</span><span class="op">)</span></span>
+<span><span class="va">ctx</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/make_context.html">make_context</a></span><span class="op">(</span><span class="va">model</span><span class="op">)</span></span>
+<span><span class="va">neg_loglik</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">theta</span><span class="op">)</span> <span class="op">{</span></span>
 <span>  <span class="va">est</span> <span class="op">&lt;-</span> <span class="va">true_params</span></span>
 <span>  <span class="va">est</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.m"</span>, <span class="st">"A.s"</span>, <span class="st">"B.m"</span>, <span class="st">"B.s"</span><span class="op">)</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="va">theta</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.m"</span>, <span class="st">"A.s"</span>, <span class="st">"B.m"</span>, <span class="st">"B.s"</span><span class="op">)</span><span class="op">]</span></span>
 <span>  <span class="va">est</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span><span class="op">)</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">est</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
 <span>  <span class="va">params_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span></span>
-<span>    <span class="va">model_spec</span>,</span>
+<span>    <span class="va">model</span>,</span>
 <span>    <span class="va">est</span>,</span>
-<span>    n_trials <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Extremes.html" class="external-link">max</a></span><span class="op">(</span><span class="va">data_df</span><span class="op">$</span><span class="va">trial</span><span class="op">)</span>,</span>
-<span>    layout <span class="op">=</span> <span class="va">ctx</span><span class="op">$</span><span class="va">param_layout</span></span>
+<span>    trial_df <span class="op">=</span> <span class="va">prepared</span></span>
 <span>  <span class="op">)</span></span>
-<span>  <span class="va">ll</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/log_likelihood.html">log_likelihood</a></span><span class="op">(</span><span class="va">ctx</span>, <span class="va">params_df</span><span class="op">)</span></span>
+<span>  <span class="va">ll</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/log_likelihood.html">log_likelihood</a></span><span class="op">(</span><span class="va">ctx</span>, <span class="va">prepared</span>, <span class="va">params_df</span><span class="op">)</span></span>
 <span>  <span class="op">-</span><span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">as.numeric</a></span><span class="op">(</span><span class="va">ll</span><span class="op">)</span></span>
 <span><span class="op">}</span></span>
 <span></span>
@@ -200,7 +163,7 @@ back inside the objective function.</p>
 <span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">123456</span><span class="op">)</span></span>
 <span><span class="va">fit</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim</a></span><span class="op">(</span><span class="va">start</span>, <span class="va">neg_loglik</span>, method <span class="op">=</span> <span class="st">"Nelder-Mead"</span><span class="op">)</span></span></code></pre></div>
-<div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">fit_params</span> <span class="op">&lt;-</span> <span class="va">fit</span><span class="op">$</span><span class="va">par</span></span>
 <span><span class="va">fit_params</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span><span class="op">)</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">fit_params</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="va">target</span> <span class="op">&lt;-</span> <span class="va">true_params</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.m"</span>, <span class="st">"A.s"</span>, <span class="st">"B.m"</span>, <span class="st">"B.s"</span><span class="op">)</span><span class="op">]</span></span>
@@ -215,9 +178,9 @@ back inside the objective function.</p>
 <span><span class="co">## A.s  0.180000  0.1770936 0.002906442</span></span>
 <span><span class="co">## B.m -0.967584 -0.9585490 0.009035000</span></span>
 <span><span class="co">## B.s  0.220000  0.2148618 0.005138242</span></span></code></pre>
-<p>The overall workflow is the same as in the single-response case, but
-the model now uses the additional ranked-response information
-directly.</p>
+<p>The workflow is the same as in the single-response case, but the
+likelihood now uses the second ranked response as additional
+information.</p>
   </main>
 </div>
 

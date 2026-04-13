@@ -1,13 +1,17 @@
 <urlset xmlns = 'http://www.sitemaps.org/schemas/sitemap/0.9'>
 <url><loc>https://niekstevenson.github.io/AccumulatR/404.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/chained_onset.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/articles/distributions.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/getting_started.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/index.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/logical_rules.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/articles/mixtures.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/multi_outcome.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/articles/pool_model.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/simple_chained_onset.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/simple_model.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/simple_simulate_fit_model4.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/articles/trigger_model.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/authors.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/index.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/news/index.html</loc></url>
@@ -30,9 +34,12 @@
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/index.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/inhibit.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/log_likelihood.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/reference/log_likelihood.likelihood_context.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/reference/make_context.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/nest_accumulators.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/none_of.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/plot_accumulators.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/reference/prepare_data.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/processing_tree.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/race_spec.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/response_probabilities.html</loc></url>
@@ -41,5 +48,6 @@
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/set_mixture_options.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/set_parameters.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/simulate.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/reference/test_model.html</loc></url>
 </urlset>
 

@@ -20,13 +20,15 @@ by `simulate()` and `log_likelihood()`."><meta property="og:image" content="http
       <ul class="navbar-nav me-auto"><li class="active nav-item"><a class="nav-link" href="../reference/index.html">Reference</a></li>
 <li class="nav-item dropdown">
   <button class="nav-link dropdown-toggle" type="button" id="dropdown-articles" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Articles</button>
-  <ul class="dropdown-menu" aria-labelledby="dropdown-articles"><li><hr class="dropdown-divider"></li>
-    <li><h6 class="dropdown-header" data-toc-skip>Articles</h6></li>
+  <ul class="dropdown-menu" aria-labelledby="dropdown-articles"><li><a class="dropdown-item" href="../articles/chained_onset.html">Chained Onsets</a></li>
+    <li><a class="dropdown-item" href="../articles/distributions.html">Accumulator Distributions</a></li>
     <li><a class="dropdown-item" href="../articles/getting_started.html">Getting Started with AccumulatR</a></li>
     <li><a class="dropdown-item" href="../articles/logical_rules.html">Logical Rules for Responses</a></li>
-    <li><a class="dropdown-item" href="../articles/simple_model.html">Simulate and Fit a Simple Race Model</a></li>
-    <li><a class="dropdown-item" href="../articles/multi_outcome.html">Simulate and Fit a Multi-Outcome Race Model</a></li>
-    <li><a class="dropdown-item" href="../articles/chained_onset.html">Simulate and Fit a Simple Chained-Onset Model</a></li>
+    <li><a class="dropdown-item" href="../articles/mixtures.html">Working with Mixtures</a></li>
+    <li><a class="dropdown-item" href="../articles/multi_outcome.html">Multiple Outcomes</a></li>
+    <li><a class="dropdown-item" href="../articles/pool_model.html">Pooling Accumulators</a></li>
+    <li><a class="dropdown-item" href="../articles/simple_model.html">A Simple Race Model</a></li>
+    <li><a class="dropdown-item" href="../articles/trigger_model.html">Trigger Types</a></li>
   </ul></li>
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
       </ul><ul class="navbar-nav"><li class="nav-item"><form class="form-inline" role="search">
@@ -56,6 +58,7 @@ by `simulate()` and `log_likelihood()`.</p>
 <span>  <span class="va">param_values</span>,</span>
 <span>  n_trials <span class="op">=</span> <span class="fl">1L</span>,</span>
 <span>  component <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  trial_df <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  layout <span class="op">=</span> <span class="cn">NULL</span></span>
 <span><span class="op">)</span></span></code></pre></div>
     </div>
@@ -78,6 +81,11 @@ by `simulate()` and `log_likelihood()`.</p>
 
 <dt id="arg-component">component<a class="anchor" aria-label="anchor" href="#arg-component"></a></dt>
 <dd><p>Optional component label or labels.</p></dd>
+
+
+<dt id="arg-trial-df">trial_df<a class="anchor" aria-label="anchor" href="#arg-trial-df"></a></dt>
+<dd><p>Optional trial/prepared data object. If it includes an
+`accumulator` column, parameter rows are built in that exact row order.</p></dd>
 
 
 <dt id="arg-layout">layout<a class="anchor" aria-label="anchor" href="#arg-layout"></a></dt>

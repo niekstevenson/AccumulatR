@@ -1,8 +1,8 @@
 ---
-title: "Simulate and Fit a Simple Race Model"
+title: "A Simple Race Model"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Simulate and Fit a Simple Race Model}
+  %\VignetteIndexEntry{A Simple Race Model}
   %\VignetteEncoding{UTF-8}
   %\VignetteEngine{knitr::rmarkdown}
 editor_options: 

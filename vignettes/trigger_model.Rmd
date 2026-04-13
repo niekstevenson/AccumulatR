@@ -1,8 +1,8 @@
 ---
-title: "Simulate and Fit a Simple Trigger Model"
+title: "Trigger Types"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Simulate and Fit a Simple Trigger Model}
+  %\VignetteIndexEntry{Trigger Types}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---

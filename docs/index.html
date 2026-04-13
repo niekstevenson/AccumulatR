@@ -41,13 +41,15 @@
 <li class="nav-item dropdown">
   <button class="nav-link dropdown-toggle" type="button" id="dropdown-articles" data-bs-toggle="dropdown" aria-expanded="false" aria-haspopup="true">Articles</button>
   <ul class="dropdown-menu" aria-labelledby="dropdown-articles">
-<li><hr class="dropdown-divider"></li>
-    <li><h6 class="dropdown-header" data-toc-skip>Articles</h6></li>
+<li><a class="dropdown-item" href="articles/chained_onset.html">Chained Onsets</a></li>
+    <li><a class="dropdown-item" href="articles/distributions.html">Accumulator Distributions</a></li>
     <li><a class="dropdown-item" href="articles/getting_started.html">Getting Started with AccumulatR</a></li>
     <li><a class="dropdown-item" href="articles/logical_rules.html">Logical Rules for Responses</a></li>
-    <li><a class="dropdown-item" href="articles/simple_model.html">Simulate and Fit a Simple Race Model</a></li>
-    <li><a class="dropdown-item" href="articles/multi_outcome.html">Simulate and Fit a Multi-Outcome Race Model</a></li>
-    <li><a class="dropdown-item" href="articles/chained_onset.html">Simulate and Fit a Simple Chained-Onset Model</a></li>
+    <li><a class="dropdown-item" href="articles/mixtures.html">Working with Mixtures</a></li>
+    <li><a class="dropdown-item" href="articles/multi_outcome.html">Multiple Outcomes</a></li>
+    <li><a class="dropdown-item" href="articles/pool_model.html">Pooling Accumulators</a></li>
+    <li><a class="dropdown-item" href="articles/simple_model.html">A Simple Race Model</a></li>
+    <li><a class="dropdown-item" href="articles/trigger_model.html">Trigger Types</a></li>
   </ul>
 </li>
 <li class="nav-item"><a class="nav-link" href="news/index.html">Changelog</a></li>
@@ -117,8 +119,9 @@
 <span><span class="va">sim</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/simulate.html">simulate</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">param_df</span>, seed <span class="op">=</span> <span class="fl">123</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/utils/head.html" class="external-link">head</a></span><span class="op">(</span><span class="va">sim</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"trial"</span>, <span class="st">"R"</span>, <span class="st">"rt"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">ctx</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/build_likelihood_context.html">build_likelihood_context</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">sim</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"trial"</span>, <span class="st">"R"</span>, <span class="st">"rt"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
-<span><span class="fu"><a href="reference/log_likelihood.html">log_likelihood</a></span><span class="op">(</span><span class="va">ctx</span>, <span class="va">param_df</span><span class="op">)</span></span></code></pre></div>
+<span><span class="va">prepared</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/prepare_data.html">prepare_data</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">sim</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"trial"</span>, <span class="st">"R"</span>, <span class="st">"rt"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
+<span><span class="va">ctx</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/make_context.html">make_context</a></span><span class="op">(</span><span class="va">model</span><span class="op">)</span></span>
+<span><span class="fu"><a href="reference/log_likelihood.html">log_likelihood</a></span><span class="op">(</span><span class="va">ctx</span>, <span class="va">prepared</span>, <span class="va">param_df</span><span class="op">)</span></span></code></pre></div>
 <p><code><a href="reference/simulate.html">simulate()</a></code> returns behavioral data with one row per trial. In the simplest case that means a response column (<code>R</code>) and a response-time column (<code>rt</code>). <code><a href="reference/log_likelihood.html">log_likelihood()</a></code> then evaluates how probable those data are under a set of model parameters.</p>
 <p>For longer worked examples, see the package articles on the pkgdown site.</p>
 </div>

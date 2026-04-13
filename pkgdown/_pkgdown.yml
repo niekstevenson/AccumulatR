@@ -3,23 +3,9 @@ url: https://niekstevenson.github.io/AccumulatR/
 template:
   bootstrap: 5
 
-articles:
-  - title: "Walkthroughs"
-    navbar: "Articles"
-    contents:
-      - getting_started
-      - distributions
-      - logical_rules
-      - simple_model
-      - pool_model
-      - trigger_model
-      - mixtures
-      - multi_outcome
-      - chained_onset
-
 reference:
   - title: "Package Overview"
-    desc: "Start here for the main package concepts and workflow."
+    desc: "Documentation Overview"
     contents:
       - AccumulatR-package
 
@@ -36,6 +22,7 @@ reference:
       - set_metadata
       - set_mixture_options
       - finalize_model
+      - test_model
 
   - title: "Outcome Expressions and Timing"
     desc: "Compose outcome rules and onset dependencies."
@@ -51,15 +38,14 @@ reference:
   - title: "Data Preparation"
     desc: "Inspect model parameters and prepare trial-level parameter matrices."
     contents:
-      - nest_accumulators
+      - prepare_data
       - sampled_pars
       - build_param_matrix
 
   - title: "Likelihood and Simulation"
     desc: "Build native likelihood contexts, simulate observations, and evaluate probabilities."
     contents:
-      - build_likelihood_context
-      - ensure_native_ctx
+      - make_context
       - log_likelihood
       - response_probabilities
       - simulate

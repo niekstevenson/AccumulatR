@@ -1,8 +1,8 @@
 ---
-title: "Accumulator Distributions"
+title: "Supported Distributions"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Accumulator Distributions}
+  %\VignetteIndexEntry{Supported Distributions}
   %\VignetteEncoding{UTF-8}
   %\VignetteEngine{knitr::rmarkdown}
 editor_options: 

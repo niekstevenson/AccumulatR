@@ -3,6 +3,20 @@ url: https://niekstevenson.github.io/AccumulatR/
 template:
   bootstrap: 5
 
+articles:
+  - title: "Walkthroughs"
+    navbar: "Articles"
+    contents:
+      - getting_started
+      - distributions
+      - simple_model
+      - pool_model
+      - logical_rules
+      - trigger_model
+      - mixtures
+      - multi_outcome
+      - chained_onset
+
 reference:
   - title: "Package Overview"
     desc: "Documentation Overview"

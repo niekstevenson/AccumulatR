@@ -1,8 +1,8 @@
 ---
-title: "Logical Rules for Responses"
+title: "Logical Rules"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{Logical Rules for Responses}
+  %\VignetteIndexEntry{Logical Rules}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---

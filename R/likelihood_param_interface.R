@@ -64,26 +64,7 @@
   if (is.null(prep_eval_base)) {
     prep_eval_base <- prepare_model(structure$model_spec)
   }
-  if (!is.null(prep_eval_base[[".runtime"]]) && !is.null(prep_eval_base[[".id_index"]])) {
-    return(list(structure = structure, prep = prep_eval_base))
-  }
-  outcome_ids <- names(prep_eval_base[["outcomes"]] %||% list())
-  acc_ids <- names(prep_eval_base[["accumulators"]] %||% list())
-  pool_ids <- names(prep_eval_base[["pools"]] %||% list())
-  all_ids <- unique(c(outcome_ids, acc_ids, pool_ids))
-  prep_eval_base[[".id_index"]] <- setNames(seq_along(all_ids), all_ids)
-  prep_eval_base[[".label_cache"]] <- new.env(parent = emptyenv(), hash = TRUE)
-  prep_eval_base <- .precompile_likelihood_expressions(prep_eval_base)
-  prep_eval_base[[".competitors"]] <- .prepare_competitor_map(prep_eval_base)
-  prep_eval_base[[".runtime"]] <- list(
-    expr_compiled = prep_eval_base[[".expr_compiled"]],
-    label_cache = prep_eval_base[[".label_cache"]],
-    competitor_map = prep_eval_base[[".competitors"]],
-    id_index = prep_eval_base[[".id_index"]],
-    pool_members_cache = new.env(parent = emptyenv(), hash = TRUE),
-    cache_bundle = .build_likelihood_cache_bundle(prep_eval_base)
-  )
-  .refresh_compiled_prep_refs(prep_eval_base)
+  prep_eval_base <- .ensure_likelihood_runtime(prep_eval_base)
   list(structure = structure, prep = prep_eval_base)
 }
 
@@ -462,7 +443,7 @@ make_context <- function(structure, prep = NULL, native_bundle = NULL) {
     return(model_spec)
   }
   spec_copy <- unserialize(serialize(model_spec, NULL))
-  prep_tmp <- .prepare_model_for_likelihood(model_spec)
+  prep_tmp <- .ensure_likelihood_runtime(prepare_model(model_spec))
   param_state <- .generator_param_state_from_rows(prep_tmp, params_df)
   acc_overrides <- param_state$accs %||% list()
   if (length(acc_overrides) > 0L) {
@@ -1071,7 +1052,7 @@ response_probabilities.model_structure <- function(structure,
     params_df <- .param_matrix_to_rows(structure, params_df)
   }
   model_spec <- .model_spec_with_params(structure$model_spec, params_df)
-  prep_eval_base <- .prepare_model_for_likelihood(model_spec)
+  prep_eval_base <- .ensure_likelihood_runtime(prepare_model(model_spec))
   comp_ids <- structure$components$component_id
 
   if (!"trial" %in% names(params_df)) params_df$trial <- 1L

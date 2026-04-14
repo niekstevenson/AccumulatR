@@ -29,153 +29,66 @@
   as.integer(n_val)
 }
 
+.dist_param_values <- function(par, dist) {
+  param_names <- dist_param_names(dist)
+  if (length(param_names) == 0L) {
+    stop(sprintf("Unknown distribution '%s'", dist), call. = FALSE)
+  }
+  values <- lapply(param_names, function(name) .dist_param_scalar(par, name))
+  names(values) <- param_names
+  values
+}
+
+.dist_shifted_rng <- function(fun, n, par, dist) {
+  t0 <- .dist_param_t0(par)
+  args <- .dist_param_values(par, dist)
+  do.call(fun, c(list(.dist_as_count(n)), args)) + t0
+}
+
+.dist_shifted_eval <- function(fun, x, par, dist) {
+  t0 <- .dist_param_t0(par)
+  shifted <- x - t0
+  args <- .dist_param_values(par, dist)
+  out <- do.call(fun, c(list(shifted), args))
+  .dist_zero_before_t0(out, shifted)
+}
+
+.dist_make_entry <- function(dist, pdf_fun, cdf_fun, rng_fun) {
+  force(dist)
+  force(pdf_fun)
+  force(cdf_fun)
+  force(rng_fun)
+  list(
+    r = function(n, par) .dist_shifted_rng(rng_fun, n, par, dist),
+    d = function(x, par) .dist_shifted_eval(pdf_fun, x, par, dist),
+    p = function(x, par) .dist_shifted_eval(cdf_fun, x, par, dist)
+  )
+}
+
 dist_registry <- local({
   reg <- new.env(parent = emptyenv())
-
-  reg$lognormal <- list(
-    r = function(n, par) {
-      m <- .dist_param_scalar(par, "m")
-      s <- .dist_param_scalar(par, "s")
-      t0 <- .dist_param_t0(par)
-      dist_lognormal_rng(.dist_as_count(n), m, s) + t0
-    },
-    d = function(x, par) {
-      m <- .dist_param_scalar(par, "m")
-      s <- .dist_param_scalar(par, "s")
-      t0 <- .dist_param_t0(par)
-      shifted <- x - t0
-      out <- dist_lognormal_pdf(shifted, m, s)
-      .dist_zero_before_t0(out, shifted)
-    },
-    p = function(x, par) {
-      m <- .dist_param_scalar(par, "m")
-      s <- .dist_param_scalar(par, "s")
-      t0 <- .dist_param_t0(par)
-      shifted <- x - t0
-      out <- dist_lognormal_cdf(shifted, m, s)
-      .dist_zero_before_t0(out, shifted)
-    }
+  families <- list(
+    lognormal = list(pdf = dist_lognormal_pdf, cdf = dist_lognormal_cdf, rng = dist_lognormal_rng),
+    gamma = list(pdf = dist_gamma_pdf, cdf = dist_gamma_cdf, rng = dist_gamma_rng),
+    exgauss = list(pdf = dist_exgauss_pdf, cdf = dist_exgauss_cdf, rng = dist_exgauss_rng),
+    lba = list(pdf = dist_lba_pdf, cdf = dist_lba_cdf, rng = dist_lba_rng),
+    rdm = list(pdf = dist_rdm_pdf, cdf = dist_rdm_cdf, rng = dist_rdm_rng)
   )
 
-  reg$gamma <- list(
-    r = function(n, par) {
-      shape <- .dist_param_scalar(par, "shape")
-      rate <- .dist_param_scalar(par, "rate")
-      t0 <- .dist_param_t0(par)
-      dist_gamma_rng(.dist_as_count(n), shape, rate) + t0
-    },
-    d = function(x, par) {
-      shape <- .dist_param_scalar(par, "shape")
-      rate <- .dist_param_scalar(par, "rate")
-      t0 <- .dist_param_t0(par)
-      shifted <- x - t0
-      out <- dist_gamma_pdf(shifted, shape, rate)
-      .dist_zero_before_t0(out, shifted)
-    },
-    p = function(x, par) {
-      shape <- .dist_param_scalar(par, "shape")
-      rate <- .dist_param_scalar(par, "rate")
-      t0 <- .dist_param_t0(par)
-      shifted <- x - t0
-      out <- dist_gamma_cdf(shifted, shape, rate)
-      .dist_zero_before_t0(out, shifted)
-    }
-  )
-
-  reg$exgauss <- list(
-    r = function(n, par) {
-      mu <- .dist_param_scalar(par, "mu")
-      sigma <- .dist_param_scalar(par, "sigma")
-      tau <- .dist_param_scalar(par, "tau")
-      t0 <- .dist_param_t0(par)
-      dist_exgauss_rng(.dist_as_count(n), mu, sigma, tau) + t0
-    },
-    d = function(x, par) {
-      mu <- .dist_param_scalar(par, "mu")
-      sigma <- .dist_param_scalar(par, "sigma")
-      tau <- .dist_param_scalar(par, "tau")
-      t0 <- .dist_param_t0(par)
-      shifted <- x - t0
-      out <- dist_exgauss_pdf(shifted, mu, sigma, tau)
-      .dist_zero_before_t0(out, shifted)
-    },
-    p = function(x, par) {
-      mu <- .dist_param_scalar(par, "mu")
-      sigma <- .dist_param_scalar(par, "sigma")
-      tau <- .dist_param_scalar(par, "tau")
-      t0 <- .dist_param_t0(par)
-      shifted <- x - t0
-      out <- dist_exgauss_cdf(shifted, mu, sigma, tau)
-      .dist_zero_before_t0(out, shifted)
-    }
-  )
-
-  reg$lba <- list(
-    r = function(n, par) {
-      v <- .dist_param_scalar(par, "v")
-      B <- .dist_param_scalar(par, "B")
-      A <- .dist_param_scalar(par, "A")
-      sv <- .dist_param_scalar(par, "sv")
-      t0 <- .dist_param_t0(par)
-      dist_lba_rng(.dist_as_count(n), v, B, A, sv) + t0
-    },
-    d = function(x, par) {
-      v <- .dist_param_scalar(par, "v")
-      B <- .dist_param_scalar(par, "B")
-      A <- .dist_param_scalar(par, "A")
-      sv <- .dist_param_scalar(par, "sv")
-      t0 <- .dist_param_t0(par)
-      shifted <- x - t0
-      out <- dist_lba_pdf(shifted, v, B, A, sv)
-      .dist_zero_before_t0(out, shifted)
-    },
-    p = function(x, par) {
-      v <- .dist_param_scalar(par, "v")
-      B <- .dist_param_scalar(par, "B")
-      A <- .dist_param_scalar(par, "A")
-      sv <- .dist_param_scalar(par, "sv")
-      t0 <- .dist_param_t0(par)
-      shifted <- x - t0
-      out <- dist_lba_cdf(shifted, v, B, A, sv)
-      .dist_zero_before_t0(out, shifted)
-    }
-  )
-
-  reg$rdm <- list(
-    r = function(n, par) {
-      v <- .dist_param_scalar(par, "v")
-      B <- .dist_param_scalar(par, "B")
-      A <- .dist_param_scalar(par, "A")
-      s <- .dist_param_scalar(par, "s")
-      t0 <- .dist_param_t0(par)
-      dist_rdm_rng(.dist_as_count(n), v, B, A, s) + t0
-    },
-    d = function(x, par) {
-      v <- .dist_param_scalar(par, "v")
-      B <- .dist_param_scalar(par, "B")
-      A <- .dist_param_scalar(par, "A")
-      s <- .dist_param_scalar(par, "s")
-      t0 <- .dist_param_t0(par)
-      shifted <- x - t0
-      out <- dist_rdm_pdf(shifted, v, B, A, s)
-      .dist_zero_before_t0(out, shifted)
-    },
-    p = function(x, par) {
-      v <- .dist_param_scalar(par, "v")
-      B <- .dist_param_scalar(par, "B")
-      A <- .dist_param_scalar(par, "A")
-      s <- .dist_param_scalar(par, "s")
-      t0 <- .dist_param_t0(par)
-      shifted <- x - t0
-      out <- dist_rdm_cdf(shifted, v, B, A, s)
-      .dist_zero_before_t0(out, shifted)
-    }
-  )
+  for (dist in names(families)) {
+    family_fns <- families[[dist]]
+    reg[[dist]] <- .dist_make_entry(
+      dist = dist,
+      pdf_fun = family_fns$pdf,
+      cdf_fun = family_fns$cdf,
+      rng_fun = family_fns$rng
+    )
+  }
 
   function(name) {
     key <- if (is.null(name) || length(name) == 0L) "" else tolower(as.character(name)[1])
     if (!nzchar(key) || !exists(key, envir = reg, inherits = FALSE)) {
-      stop(sprintf("Unknown distribution '%s'", name))
+      stop(sprintf("Unknown distribution '%s'", name), call. = FALSE)
     }
     get(key, envir = reg, inherits = FALSE)
   }

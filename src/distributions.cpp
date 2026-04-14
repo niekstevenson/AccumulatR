@@ -31,7 +31,6 @@
 #include "accumulator.h"
 #include "bitset_state.h"
 #include "context.h"
-#include "dist_vector.h"
 #include "integrate.h"
 #include "kernel_executor.h"
 #include "kernel_jit.h"
@@ -43,27 +42,6 @@ using uuber::AccDistParams;
 using uuber::ComponentMap;
 using uuber::LabelRef;
 using uuber::resolve_acc_params_entries;
-
-Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector &x,
-                                       double m, double s);
-Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector &x,
-                                       double m, double s);
-Rcpp::NumericVector dist_gamma_pdf(const Rcpp::NumericVector &x, double shape,
-                                   double rate);
-Rcpp::NumericVector dist_gamma_cdf(const Rcpp::NumericVector &x, double shape,
-                                   double rate);
-Rcpp::NumericVector dist_exgauss_pdf(const Rcpp::NumericVector &x, double mu,
-                                     double sigma, double tau);
-Rcpp::NumericVector dist_exgauss_cdf(const Rcpp::NumericVector &x, double mu,
-                                     double sigma, double tau);
-Rcpp::NumericVector dist_lba_pdf(const Rcpp::NumericVector &x, double v,
-                                 double sv, double B, double A);
-Rcpp::NumericVector dist_lba_cdf(const Rcpp::NumericVector &x, double v,
-                                 double sv, double B, double A);
-Rcpp::NumericVector dist_rdm_pdf(const Rcpp::NumericVector &x, double v,
-                                 double B, double A, double s);
-Rcpp::NumericVector dist_rdm_cdf(const Rcpp::NumericVector &x, double v,
-                                 double B, double A, double s);
 
 // [[Rcpp::export]]
 SEXP native_context_build(SEXP prepSEXP) {
@@ -591,6 +569,26 @@ inline double eval_cdf_single(const AccDistParams &cfg, double x) {
   }
 }
 
+inline void eval_pdf_vec(const AccDistParams &cfg, const double *x,
+                         std::size_t n, double *out) {
+  if (!x || !out) {
+    return;
+  }
+  for (std::size_t i = 0; i < n; ++i) {
+    out[i] = safe_density(eval_pdf_single(cfg, x[i]));
+  }
+}
+
+inline void eval_cdf_vec(const AccDistParams &cfg, const double *x,
+                         std::size_t n, double *out) {
+  if (!x || !out) {
+    return;
+  }
+  for (std::size_t i = 0; i < n; ++i) {
+    out[i] = clamp_probability(eval_cdf_single(cfg, x[i]));
+  }
+}
+
 struct FusedIntegralResult {
   double density{0.0};
   double cdf{0.0};
@@ -647,15 +645,13 @@ inline FusedIntegralResult integrate_fused_onset_terms(
   std::vector<double> cdf_values;
   if (need_density) {
     pdf_values.resize(n, 0.0);
-    uuber::eval_pdf_vec(cfg.code, cfg.p1, cfg.p2, cfg.p3, cfg.p4, cfg.p5,
-                        cfg.p6, cfg.p7, cfg.p8, shifted_times.data(),
-                        shifted_times.size(), pdf_values.data());
+    eval_pdf_vec(cfg, shifted_times.data(), shifted_times.size(),
+                 pdf_values.data());
   }
   if (need_cdf) {
     cdf_values.resize(n, 0.0);
-    uuber::eval_cdf_vec(cfg.code, cfg.p1, cfg.p2, cfg.p3, cfg.p4, cfg.p5,
-                        cfg.p6, cfg.p7, cfg.p8, shifted_times.data(),
-                        shifted_times.size(), cdf_values.data());
+    eval_cdf_vec(cfg, shifted_times.data(), shifted_times.size(),
+                 cdf_values.data());
   }
 
   double density_sum = 0.0;
@@ -996,16 +992,6 @@ forced_bits_intersects_scope(const ForcedScopeFilter *scope_filter,
 
 struct TrialParamSet;
 
-inline int resolve_observed_label_id(const uuber::NativeContext &ctx,
-                                     const std::string &label) {
-  if (label.empty())
-    return -1;
-  auto it = ctx.label_to_id.find(label);
-  if (it == ctx.label_to_id.end())
-    return -1;
-  return it->second;
-}
-
 inline int accumulator_label_id_of(const uuber::NativeContext &ctx,
                                    int acc_idx) {
   if (acc_idx < 0 ||
@@ -1041,20 +1027,6 @@ component_label_by_index_or_empty(const uuber::NativeContext &ctx,
     return kEmptyComponentLabel;
   }
   return ctx.components.ids[static_cast<std::size_t>(component_idx)];
-}
-
-inline int outcome_index_of(const uuber::NativeContext &ctx,
-                            const std::string &label) {
-  if (label.empty())
-    return -1;
-  int observed_label_id = resolve_observed_label_id(ctx, label);
-  if (observed_label_id < 0)
-    return -1;
-  auto it_out = ctx.ir.label_id_to_outcomes.find(observed_label_id);
-  if (it_out == ctx.ir.label_id_to_outcomes.end() || it_out->second.empty()) {
-    return -1;
-  }
-  return it_out->second.front();
 }
 
 inline bool ir_mask_has_component(const uuber::NativeContext &ctx,
@@ -1363,40 +1335,6 @@ compute_trial_param_fingerprint(const TrialParamSet &params) {
 inline void refresh_trial_param_fingerprint(TrialParamSet &params) {
   params.shared_trigger_source_fingerprint =
       compute_trial_param_fingerprint(params);
-}
-
-inline bool trial_paramsets_equivalent(const TrialParamSet &a,
-                                       const TrialParamSet &b) {
-  if (a.shared_trigger_layout_matches_context !=
-          b.shared_trigger_layout_matches_context ||
-      a.has_any_override != b.has_any_override ||
-      a.acc_params.size() != b.acc_params.size()) {
-    return false;
-  }
-  for (std::size_t i = 0; i < a.acc_params.size(); ++i) {
-    const TrialAccumulatorParams &x = a.acc_params[i];
-    const TrialAccumulatorParams &y = b.acc_params[i];
-    if (x.onset != y.onset || x.onset_kind != y.onset_kind ||
-        x.onset_source_acc_idx != y.onset_source_acc_idx ||
-        x.onset_source_pool_idx != y.onset_source_pool_idx ||
-        x.onset_lag != y.onset_lag || x.q != y.q || x.shared_q != y.shared_q ||
-        x.dist_cfg.code != y.dist_cfg.code || x.dist_cfg.t0 != y.dist_cfg.t0 ||
-        x.dist_cfg.p1 != y.dist_cfg.p1 || x.dist_cfg.p2 != y.dist_cfg.p2 ||
-        x.dist_cfg.p3 != y.dist_cfg.p3 || x.dist_cfg.p4 != y.dist_cfg.p4 ||
-        x.dist_cfg.p5 != y.dist_cfg.p5 || x.dist_cfg.p6 != y.dist_cfg.p6 ||
-        x.dist_cfg.p7 != y.dist_cfg.p7 || x.dist_cfg.p8 != y.dist_cfg.p8 ||
-        x.has_components != y.has_components ||
-        x.has_override != y.has_override ||
-        x.component_indices.size() != y.component_indices.size()) {
-      return false;
-    }
-    for (std::size_t j = 0; j < x.component_indices.size(); ++j) {
-      if (x.component_indices[j] != y.component_indices[j]) {
-        return false;
-      }
-    }
-  }
-  return true;
 }
 
 inline void na_key_mix_u64(std::uint64_t &h1, std::uint64_t &h2,
@@ -2741,62 +2679,6 @@ ComponentCacheEntry default_component_cache_entry_idx(
   return entry;
 }
 
-double accumulate_plan_guess_density(const uuber::NativeContext &ctx,
-                                     const Rcpp::List &donors, double t,
-                                     int component_idx,
-                                     const std::string &trial_type_key,
-                                     const TrialParamSet *trial_params,
-                                     bool include_na_donors) {
-  double total = 0.0;
-  for (R_xlen_t i = 0; i < donors.size(); ++i) {
-    Rcpp::RObject donor_obj = donors[i];
-    if (donor_obj.isNULL())
-      continue;
-    Rcpp::List donor(donor_obj);
-    std::string rt_policy = donor.containsElementNamed("rt_policy")
-                                ? Rcpp::as<std::string>(donor["rt_policy"])
-                                : std::string("keep");
-    bool donor_na = rt_policy == "na";
-    if (donor_na != include_na_donors)
-      continue;
-    double release = donor.containsElementNamed("release")
-                         ? Rcpp::as<double>(donor["release"])
-                         : 0.0;
-    if (!std::isfinite(release))
-      release = 0.0;
-    if (release <= 0.0)
-      continue;
-    int donor_node = donor.containsElementNamed("node_id")
-                         ? Rcpp::as<int>(donor["node_id"])
-                         : NA_INTEGER;
-    if (donor_node == NA_INTEGER)
-      continue;
-    Rcpp::IntegerVector comp_ids =
-        donor.containsElementNamed("competitor_ids")
-            ? Rcpp::IntegerVector(donor["competitor_ids"])
-            : Rcpp::IntegerVector();
-    std::vector<int> comp_vec = integer_vector_to_std(comp_ids, false);
-    std::vector<int> comp_filtered;
-    const std::vector<int> &comp_use =
-        filter_competitor_ids(ctx, comp_vec, component_idx, comp_filtered);
-    std::string donor_label;
-    if (donor.containsElementNamed("source_label") &&
-        !Rf_isNull(donor["source_label"])) {
-      donor_label = Rcpp::as<std::string>(donor["source_label"]);
-    }
-    int outcome_idx_context =
-        donor_label.empty() ? -1 : outcome_index_of(ctx, donor_label);
-    double density = kernel_node_density_entry_idx(
-        ctx, donor_node, t, component_idx, nullptr, false, nullptr, false,
-        comp_use, trial_params, trial_type_key,
-        include_na_donors, outcome_idx_context);
-    if (!std::isfinite(density) || density <= 0.0)
-      continue;
-    total += release * density;
-  }
-  return total;
-}
-
 std::vector<ComponentCacheEntry> build_component_cache_entries_from_indices(
     const uuber::NativeContext &ctx, const std::vector<int> &component_indices) {
   std::vector<ComponentCacheEntry> entries;
@@ -3993,10 +3875,8 @@ private:
         for (std::size_t g = 0; g < grid_points; ++g) {
           batch_shifted_[g] = grid_x_value(g, h) - onset_eff;
         }
-        uuber::eval_pdf_vec(
-            info.cfg.code, info.cfg.p1, info.cfg.p2, info.cfg.p3, info.cfg.p4,
-            info.cfg.p5, info.cfg.p6, info.cfg.p7, info.cfg.p8,
-            batch_shifted_.data(), grid_points, batch_values_.data());
+        eval_pdf_vec(info.cfg, batch_shifted_.data(), grid_points,
+                     batch_values_.data());
         for (std::size_t g = 0; g < grid_points; ++g) {
           double dens = 0.0;
           const double x = grid_x_value(g, h);
@@ -4034,10 +3914,8 @@ private:
       for (std::size_t g = 0; g < grid_points; ++g) {
         batch_shifted_[g] = grid_x_value(g, h) - onset_eff;
       }
-      uuber::eval_cdf_vec(
-          info.cfg.code, info.cfg.p1, info.cfg.p2, info.cfg.p3, info.cfg.p4,
-          info.cfg.p5, info.cfg.p6, info.cfg.p7, info.cfg.p8,
-          batch_shifted_.data(), grid_points, batch_values_.data());
+      eval_cdf_vec(info.cfg, batch_shifted_.data(), grid_points,
+                   batch_values_.data());
       for (std::size_t g = 0; g < grid_points; ++g) {
         double surv = 1.0;
         const double x = grid_x_value(g, h);
@@ -7736,20 +7614,6 @@ Rcpp::DataFrame native_outcome_labels_cpp(SEXP ctxSEXP) {
                                  Rcpp::Named("maps_to_na") = maps_na,
                                  Rcpp::Named("stringsAsFactors") = false);
 }
-
-// Forward declarations for native distribution helpers
-Rcpp::NumericVector dist_lognormal_pdf(const Rcpp::NumericVector &x,
-                                       double m, double s);
-Rcpp::NumericVector dist_lognormal_cdf(const Rcpp::NumericVector &x,
-                                       double m, double s);
-Rcpp::NumericVector dist_gamma_pdf(const Rcpp::NumericVector &x, double shape,
-                                   double rate);
-Rcpp::NumericVector dist_gamma_cdf(const Rcpp::NumericVector &x, double shape,
-                                   double rate);
-Rcpp::NumericVector dist_exgauss_pdf(const Rcpp::NumericVector &x, double mu,
-                                     double sigma, double tau);
-Rcpp::NumericVector dist_exgauss_cdf(const Rcpp::NumericVector &x, double mu,
-                                     double sigma, double tau);
 
 namespace {
 

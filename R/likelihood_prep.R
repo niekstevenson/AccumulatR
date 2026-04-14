@@ -20,23 +20,23 @@
   prep
 }
 
-.prepare_model_for_likelihood <- function(model) {
-  if (exists("is_model_tables", mode = "function") && is_model_tables(model)) {
-    model <- tables_to_model(model)
+.ensure_likelihood_runtime <- function(prep) {
+  if (is.null(prep)) {
+    stop("prep must be a prepared model object", call. = FALSE)
   }
-  if (!exists("prepare_model", mode = "function")) {
-    stop("prepare_model function not found - source generator_new.R first")
+  if (!is.null(prep[[".runtime"]]) && !is.null(prep[[".id_index"]])) {
+    return(.refresh_compiled_prep_refs(prep))
   }
-  prep <- prepare_model(model)
+
+  outcome_ids <- names(prep[["outcomes"]] %||% list())
   acc_ids <- names(prep[["accumulators"]] %||% list())
   pool_ids <- names(prep[["pools"]] %||% list())
-  outcome_ids <- names(prep[["outcomes"]] %||% list())
-  all_ids <- unique(c(acc_ids, pool_ids, outcome_ids))
+  all_ids <- unique(c(outcome_ids, acc_ids, pool_ids))
   prep[[".id_index"]] <- setNames(seq_along(all_ids), all_ids)
   prep[[".label_cache"]] <- new.env(parent = emptyenv(), hash = TRUE)
   prep <- .precompile_likelihood_expressions(prep)
   prep[[".competitors"]] <- .prepare_competitor_map(prep)
-  runtime <- list(
+  prep[[".runtime"]] <- list(
     expr_compiled = prep[[".expr_compiled"]],
     label_cache = prep[[".label_cache"]],
     competitor_map = prep[[".competitors"]],
@@ -44,9 +44,7 @@
     pool_members_cache = new.env(parent = emptyenv(), hash = TRUE),
     cache_bundle = .build_likelihood_cache_bundle(prep)
   )
-  prep[[".runtime"]] <- runtime
-  prep <- .refresh_compiled_prep_refs(prep)
-  prep
+  .refresh_compiled_prep_refs(prep)
 }
 
 .labels_to_ids <- function(prep, labels) {

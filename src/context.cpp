@@ -26,6 +26,15 @@ int resolve_na_cache_limit() {
   }
 }
 
+void assign_na_cache_limit(uuber::NativeContext &ctx, int limit) {
+  ctx.na_cache_limit = limit;
+  for (auto &variant : ctx.component_variants) {
+    if (variant) {
+      assign_na_cache_limit(*variant, limit);
+    }
+  }
+}
+
 } // namespace
 
 namespace uuber {
@@ -33,7 +42,7 @@ namespace uuber {
 Rcpp::XPtr<NativeContext> build_native_context(Rcpp::List prep) {
   NativePrepProto proto = build_prep_proto(prep);
   std::unique_ptr<NativeContext> ctx = build_context_from_proto(proto);
-  ctx->na_cache_limit = resolve_na_cache_limit();
+  assign_na_cache_limit(*ctx, resolve_na_cache_limit());
   return Rcpp::XPtr<NativeContext>(ctx.release(), true);
 }
 

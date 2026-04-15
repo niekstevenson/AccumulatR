@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <deque>
 #include <limits>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -62,7 +63,6 @@ struct NativeAccumulator {
   double onset_lag{0.0};
   double q{};
   std::vector<std::string> components;
-  std::vector<int> component_indices;
   std::string shared_trigger_id;
   AccDistParams dist_cfg;
 };
@@ -116,7 +116,6 @@ struct IrEvent {
   int pool_idx{-1};
   int label_id{-1};
   int outcome_idx{-1};
-  int component_mask_offset{-1};
 };
 
 struct IrOutcomeGuessDonor {
@@ -148,7 +147,6 @@ struct IrOutcome {
   int node_idx{-1};
   int competitor_begin{-1};
   int competitor_count{0};
-  int allowed_component_mask_offset{-1};
   bool maps_to_na{false};
   int alias_begin{-1};
   int alias_count{0};
@@ -165,7 +163,6 @@ struct IrContext {
   std::vector<int> node_source_label_ids;
   std::vector<std::uint64_t> node_source_masks;
   std::vector<int> outcome_competitors;
-  std::vector<std::uint64_t> component_masks;
   std::vector<int> outcome_alias_sources;
   std::vector<IrOutcomeGuessDonor> outcome_guess_donors;
   std::vector<IrSharedGateSpec> shared_gate_specs;
@@ -176,7 +173,6 @@ struct IrContext {
   std::unordered_map<int, int> id_to_node_idx;
   std::unordered_map<int, int> label_id_to_bit_idx;
   int source_mask_words{0};
-  int component_mask_words{0};
   bool valid{false};
 };
 
@@ -284,7 +280,6 @@ struct OutcomeContextInfo {
   std::vector<OutcomeGuessDonor> guess_donors;
   std::vector<int> alias_sources;
   bool maps_to_na{false};
-  std::vector<std::string> allowed_components;
 };
 
 struct ComponentMap {
@@ -337,8 +332,11 @@ struct NativeContext {
   std::vector<int> outcome_label_ids;
   std::vector<OutcomeContextInfo> outcome_info;
   std::vector<int> accumulator_label_ids;
+  std::vector<int> base_acc_idx_by_local;
+  std::vector<int> local_acc_idx_by_base;
   std::vector<int> pool_label_ids;
   ComponentMap components;
+  std::vector<std::unique_ptr<NativeContext>> component_variants;
   IrContext ir;
   KernelProgram kernel_program;
   KernelStateGraph kernel_state_graph;

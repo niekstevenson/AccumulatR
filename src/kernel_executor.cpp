@@ -46,12 +46,12 @@ inline KernelNodeValues default_guard_eval(const KernelNodeValues &ref,
 void reset_kernel_runtime(const KernelProgram &program,
                           KernelRuntimeState &runtime) {
   runtime.program = &program;
-  runtime.slots.assign(program.ops.size(), KernelNodeValues{});
+  runtime.slots.resize(program.ops.size());
   const int max_children = std::max(0, program.max_child_count);
-  runtime.child_primary.assign(static_cast<std::size_t>(max_children), 0.0);
-  runtime.child_density.assign(static_cast<std::size_t>(max_children), 0.0);
-  runtime.prefix.assign(static_cast<std::size_t>(max_children + 1), 1.0);
-  runtime.suffix.assign(static_cast<std::size_t>(max_children + 1), 1.0);
+  runtime.child_primary.resize(static_cast<std::size_t>(max_children));
+  runtime.child_density.resize(static_cast<std::size_t>(max_children));
+  runtime.prefix.resize(static_cast<std::size_t>(max_children + 1));
+  runtime.suffix.resize(static_cast<std::size_t>(max_children + 1));
   runtime.computed_upto = -1;
   runtime.initialized = true;
 }
@@ -74,8 +74,8 @@ bool eval_kernel_node_incremental(const KernelProgram &program,
                                   KernelRuntimeState &runtime,
                                   int target_node_idx,
                                   const KernelEvalNeed &need,
-                                  const KernelEventEvalFn &event_eval,
-                                  const KernelGuardEvalFn &guard_eval,
+                                  const KernelEventEvaluator &event_eval,
+                                  const KernelGuardEvaluator &guard_eval,
                                   KernelNodeValues &out_values) {
   if (!program.valid || target_node_idx < 0 || !event_eval) {
     return false;
@@ -262,8 +262,8 @@ bool eval_kernel_nodes_incremental(const KernelProgram &program,
                                    KernelRuntimeState &runtime,
                                    const std::vector<int> &target_node_indices,
                                    const KernelEvalNeed &need,
-                                   const KernelEventEvalFn &event_eval,
-                                   const KernelGuardEvalFn &guard_eval,
+                                   const KernelEventEvaluator &event_eval,
+                                   const KernelGuardEvaluator &guard_eval,
                                    std::vector<KernelNodeValues> &out_values) {
   out_values.clear();
   if (!program.valid || target_node_indices.empty() || !event_eval) {
@@ -310,8 +310,8 @@ bool eval_kernel_nodes_incremental(const KernelProgram &program,
 
 bool eval_kernel_node(const KernelProgram &program, int target_node_idx,
                       const KernelEvalNeed &need,
-                      const KernelEventEvalFn &event_eval,
-                      const KernelGuardEvalFn &guard_eval,
+                      const KernelEventEvaluator &event_eval,
+                      const KernelGuardEvaluator &guard_eval,
                       KernelNodeValues &out_values) {
   thread_local KernelRuntimeState runtime;
   if (!runtime.initialized || runtime.program != &program ||

@@ -28,8 +28,8 @@ cpp_loglik_multiple <- function(ctxSEXP, params_list, data_df, ok, expand, min_l
     .Call(`_AccumulatR_cpp_loglik_multiple`, ctxSEXP, params_list, data_df, ok, expand, min_ll, rel_tol, abs_tol, max_depth)
 }
 
-native_outcome_probability_params_cpp_idx <- function(ctxSEXP, node_id, upper, component_idx, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows) {
-    .Call(`_AccumulatR_native_outcome_probability_params_cpp_idx`, ctxSEXP, node_id, upper, component_idx, forced_complete, forced_survive, competitor_ids, rel_tol, abs_tol, max_depth, trial_rows)
+native_outcome_probability_label_cpp_idx <- function(ctxSEXP, outcome_label, upper, component_label, rel_tol, abs_tol, max_depth, trial_rows) {
+    .Call(`_AccumulatR_native_outcome_probability_label_cpp_idx`, ctxSEXP, outcome_label, upper, component_label, rel_tol, abs_tol, max_depth, trial_rows)
 }
 
 native_outcome_labels_cpp <- function(ctxSEXP) {
@@ -110,4 +110,3 @@ dist_rdm_cdf <- function(x, v, B, A, s) {
 dist_rdm_rng <- function(n, v, B, A, s) {
     .Call(`_AccumulatR_dist_rdm_rng`, n, v, B, A, s)
 }
-

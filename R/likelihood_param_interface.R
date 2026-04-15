@@ -79,10 +79,6 @@
   structure <- prep_info$structure
   prep_eval_base <- prep_info$prep
   data_df <- as.data.frame(data_df)
-  component_mode <- (structure$components$mode %||% "fixed")[[1]]
-  if (identical(component_mode, "sample") && "component" %in% names(data_df)) {
-    data_df$component <- NULL
-  }
   required_cols <- c("R", "rt")
   missing_cols <- setdiff(required_cols, names(data_df))
   if (length(missing_cols) > 0L) {
@@ -242,20 +238,6 @@ make_context <- function(structure, prep = NULL, native_bundle = NULL) {
     return(data)
   }
   stop("data must be created via prepare_data()", call. = FALSE)
-}
-
-.component_index_from_prep <- function(prep, component) {
-  comp_label <- as.character(component %||% "__default__")
-  comp_label <- if (length(comp_label) > 0L) comp_label[[1L]] else "__default__"
-  if (is.na(comp_label) || !nzchar(comp_label) || identical(comp_label, "__default__")) {
-    return(-1L)
-  }
-  comp_ids <- as.character((prep[["components"]] %||% list())[["ids"]] %||% "__default__")
-  idx <- match(comp_label, comp_ids)
-  if (is.na(idx)) {
-    stop(sprintf("Unknown component '%s' for IR outcome probability", comp_label), call. = FALSE)
-  }
-  as.integer(idx - 1L)
 }
 
 .normalize_prepared_index_column <- function(x, levels, column_name, allow_empty = FALSE) {
@@ -895,38 +877,18 @@ make_context <- function(structure, prep = NULL, native_bundle = NULL) {
     stop("Native context required for response probabilities; R fallback removed", call. = FALSE)
   }
 
-  compiled <- .expr_lookup_compiled(out_def[["expr"]], prep)
-  if (is.null(compiled)) {
-    stop(sprintf("No compiled node for outcome '%s'", outcome_label), call. = FALSE)
-  }
-
-  competitor_map <- .prep_competitors(prep) %||% list()
-  use_indexed_competitors <- isTRUE(attr(competitor_map, "by_index")) &&
-    length(competitor_map) == length(prep[["outcomes"]])
-  comp_exprs <- if (use_indexed_competitors) {
-    competitor_map[[selected_idx]] %||% list()
-  } else {
-    competitor_map[[outcome_label]] %||% list()
-  }
-  comp_ids <- integer(0)
-  if (length(comp_exprs) > 0L) {
-    comp_nodes <- lapply(comp_exprs, function(ex) .expr_lookup_compiled(ex, prep))
-    if (!any(vapply(comp_nodes, is.null, logical(1)))) {
-      comp_ids <- vapply(comp_nodes, function(node) as.integer(node$id %||% NA_integer_), integer(1))
-    }
-  }
-
   trial_rows_df <- if (is.null(trial_rows)) data.frame() else as.data.frame(trial_rows)
-  component_idx <- .component_index_from_prep(prep, component)
+  component_label <- as.character(component %||% "__default__")
+  component_label <- if (length(component_label) > 0L) component_label[[1L]] else "__default__"
+  if (is.na(component_label) || !nzchar(component_label)) {
+    component_label <- "__default__"
+  }
   prob_native <- tryCatch(
-    native_outcome_probability_params_cpp_idx(
+    native_outcome_probability_label_cpp_idx(
       native_ctx,
-      as.integer(compiled$id),
+      as.character(outcome_label),
       Inf,
-      as.integer(component_idx),
-      integer(0),
-      integer(0),
-      as.integer(comp_ids),
+      component_label,
       .integrate_rel_tol(),
       .integrate_abs_tol(),
       12L,

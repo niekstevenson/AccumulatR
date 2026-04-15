@@ -9,6 +9,8 @@
 namespace uuber {
 
 NativePrepProto build_prep_proto(const Rcpp::List& prep);
+NativePrepProto project_proto_for_component(const NativePrepProto& proto,
+                                            const std::string& component);
 std::unique_ptr<NativeContext> build_context_from_proto(const NativePrepProto& proto);
 
 }

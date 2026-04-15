@@ -650,6 +650,683 @@ NativePrepProto build_prep_proto(const Rcpp::List &prep) {
   return proto;
 }
 
+namespace {
+
+enum class ProjectedNodeKind : std::uint8_t {
+  Impossible = 0,
+  Truth = 1,
+  Node = 2
+};
+
+struct ProjectedNodeRef {
+  ProjectedNodeKind kind{ProjectedNodeKind::Impossible};
+  int node_id{-1};
+
+  static ProjectedNodeRef impossible() { return {}; }
+  static ProjectedNodeRef truth() {
+    ProjectedNodeRef out;
+    out.kind = ProjectedNodeKind::Truth;
+    return out;
+  }
+  static ProjectedNodeRef node(int id) {
+    ProjectedNodeRef out;
+    out.kind = ProjectedNodeKind::Node;
+    out.node_id = id;
+    return out;
+  }
+};
+
+inline bool proto_component_matches(const std::vector<std::string> &components,
+                                    const std::string &component) {
+  if (component.empty() || component == "__default__" || components.empty()) {
+    return true;
+  }
+  return std::find(components.begin(), components.end(), component) !=
+         components.end();
+}
+
+inline bool proto_has_real_components(const NativePrepProto &proto) {
+  for (const auto &component : proto.components) {
+    if (!component.id.empty() && component.id != "__default__") {
+      return true;
+    }
+  }
+  return false;
+}
+
+struct ProtoProjectionState {
+  const NativePrepProto &source;
+  const std::string &component;
+  std::unordered_map<int, const ProtoNode *> node_by_id;
+  std::unordered_map<std::string, int> label_id_by_name;
+  std::unordered_map<std::string, int> acc_idx_by_name;
+  std::unordered_map<std::string, int> pool_idx_by_name;
+  std::vector<bool> acc_active;
+  std::vector<std::vector<std::string>> filtered_pool_members;
+  std::unordered_map<int, ProjectedNodeRef> projected_ref_by_id;
+  std::unordered_map<int, ProtoNode> projected_node_by_id;
+};
+
+std::vector<std::vector<std::string>> filter_pool_members_for_active_accumulators(
+    const NativePrepProto &proto,
+    const std::unordered_map<std::string, int> &acc_idx_by_name,
+    const std::vector<bool> &acc_active) {
+  std::vector<std::vector<std::string>> filtered(proto.pools.size());
+  for (std::size_t pool_idx = 0; pool_idx < proto.pools.size(); ++pool_idx) {
+    const ProtoPool &pool = proto.pools[pool_idx];
+    std::vector<std::string> members;
+    members.reserve(pool.members.size());
+    for (const auto &member : pool.members) {
+      const auto acc_it = acc_idx_by_name.find(member);
+      if (acc_it == acc_idx_by_name.end()) {
+        continue;
+      }
+      const int acc_idx = acc_it->second;
+      if (acc_idx >= 0 &&
+          acc_idx < static_cast<int>(acc_active.size()) &&
+          acc_active[static_cast<std::size_t>(acc_idx)]) {
+        members.push_back(member);
+      }
+    }
+    filtered[pool_idx] = std::move(members);
+  }
+  return filtered;
+}
+
+bool pool_is_viable_for_projection(
+    const NativePrepProto &proto, int pool_idx,
+    const std::vector<std::vector<std::string>> &filtered_pool_members) {
+  if (pool_idx < 0 || pool_idx >= static_cast<int>(proto.pools.size()) ||
+      pool_idx >= static_cast<int>(filtered_pool_members.size())) {
+    return false;
+  }
+  const ProtoPool &pool = proto.pools[static_cast<std::size_t>(pool_idx)];
+  const std::size_t member_count =
+      filtered_pool_members[static_cast<std::size_t>(pool_idx)].size();
+  if (member_count == 0u) {
+    return false;
+  }
+  return pool.k <= 0 || member_count >= static_cast<std::size_t>(pool.k);
+}
+
+void resolve_component_projection_activity(ProtoProjectionState &state) {
+  state.acc_active.assign(state.source.accumulators.size(), false);
+  for (std::size_t acc_idx = 0; acc_idx < state.source.accumulators.size();
+       ++acc_idx) {
+    state.acc_active[acc_idx] = proto_component_matches(
+        state.source.accumulators[acc_idx].components, state.component);
+  }
+
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    state.filtered_pool_members = filter_pool_members_for_active_accumulators(
+        state.source, state.acc_idx_by_name, state.acc_active);
+    for (std::size_t acc_idx = 0; acc_idx < state.source.accumulators.size();
+         ++acc_idx) {
+      if (!state.acc_active[acc_idx]) {
+        continue;
+      }
+      const ProtoAccumulator &acc =
+          state.source.accumulators[static_cast<std::size_t>(acc_idx)];
+      bool keep = true;
+      if (acc.onset_kind == ONSET_AFTER_ACCUMULATOR) {
+        const auto src_it = state.acc_idx_by_name.find(acc.onset_source);
+        keep = src_it != state.acc_idx_by_name.end() &&
+               src_it->second >= 0 &&
+               src_it->second < static_cast<int>(state.acc_active.size()) &&
+               state.acc_active[static_cast<std::size_t>(src_it->second)];
+      } else if (acc.onset_kind == ONSET_AFTER_POOL) {
+        const auto pool_it = state.pool_idx_by_name.find(acc.onset_source);
+        keep = pool_it != state.pool_idx_by_name.end() &&
+               pool_is_viable_for_projection(
+                   state.source, pool_it->second, state.filtered_pool_members);
+      }
+      if (!keep) {
+        state.acc_active[acc_idx] = false;
+        changed = true;
+      }
+    }
+  }
+  state.filtered_pool_members = filter_pool_members_for_active_accumulators(
+      state.source, state.acc_idx_by_name, state.acc_active);
+}
+
+void sort_unique_ids(std::vector<int> &ids) {
+  if (ids.empty()) {
+    return;
+  }
+  std::sort(ids.begin(), ids.end());
+  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+}
+
+ProjectedNodeRef project_proto_node(int node_id, ProtoProjectionState &state);
+
+ProjectedNodeRef project_proto_not(const ProtoNode &node,
+                                   ProtoProjectionState &state) {
+  if (node.children.empty()) {
+    return ProjectedNodeRef::impossible();
+  }
+  const ProjectedNodeRef child =
+      project_proto_node(node.children.front(), state);
+  if (child.kind == ProjectedNodeKind::Impossible) {
+    return ProjectedNodeRef::truth();
+  }
+  if (child.kind == ProjectedNodeKind::Truth) {
+    return ProjectedNodeRef::impossible();
+  }
+  ProtoNode projected = node;
+  projected.children = {child.node_id};
+  projected.reference_id = -1;
+  projected.blocker_id = -1;
+  state.projected_node_by_id[node.id] = std::move(projected);
+  return ProjectedNodeRef::node(node.id);
+}
+
+ProjectedNodeRef project_proto_nary(const ProtoNode &node,
+                                    ProtoProjectionState &state) {
+  const IrNodeOp op = static_cast<IrNodeOp>(node.op);
+  std::vector<int> kept_children;
+  kept_children.reserve(node.children.size());
+  bool saw_truth = false;
+  for (int child_id : node.children) {
+    const ProjectedNodeRef child = project_proto_node(child_id, state);
+    if (child.kind == ProjectedNodeKind::Impossible) {
+      if (op == IrNodeOp::And) {
+        return ProjectedNodeRef::impossible();
+      }
+      continue;
+    }
+    if (child.kind == ProjectedNodeKind::Truth) {
+      if (op == IrNodeOp::Or) {
+        return ProjectedNodeRef::truth();
+      }
+      saw_truth = true;
+      continue;
+    }
+    kept_children.push_back(child.node_id);
+  }
+
+  sort_unique_ids(kept_children);
+  if (kept_children.empty()) {
+    return (op == IrNodeOp::And && saw_truth) ? ProjectedNodeRef::truth()
+                                              : ProjectedNodeRef::impossible();
+  }
+  if (kept_children.size() == 1) {
+    return ProjectedNodeRef::node(kept_children.front());
+  }
+  ProtoNode projected = node;
+  projected.children = std::move(kept_children);
+  projected.reference_id = -1;
+  projected.blocker_id = -1;
+  state.projected_node_by_id[node.id] = std::move(projected);
+  return ProjectedNodeRef::node(node.id);
+}
+
+ProjectedNodeRef project_proto_guard(const ProtoNode &node,
+                                     ProtoProjectionState &state) {
+  const ProjectedNodeRef reference =
+      project_proto_node(node.reference_id, state);
+  const ProjectedNodeRef blocker = project_proto_node(node.blocker_id, state);
+  if (reference.kind == ProjectedNodeKind::Impossible) {
+    return ProjectedNodeRef::impossible();
+  }
+  if (blocker.kind == ProjectedNodeKind::Impossible) {
+    return reference;
+  }
+  if (blocker.kind == ProjectedNodeKind::Truth) {
+    return ProjectedNodeRef::impossible();
+  }
+  if (reference.kind == ProjectedNodeKind::Truth) {
+    ProtoNode projected = node;
+    projected.op = static_cast<std::uint8_t>(IrNodeOp::Not);
+    projected.children = {blocker.node_id};
+    projected.reference_id = -1;
+    projected.blocker_id = -1;
+    state.projected_node_by_id[node.id] = std::move(projected);
+    return ProjectedNodeRef::node(node.id);
+  }
+  ProtoNode projected = node;
+  projected.children.clear();
+  projected.reference_id = reference.node_id;
+  projected.blocker_id = blocker.node_id;
+  state.projected_node_by_id[node.id] = std::move(projected);
+  return ProjectedNodeRef::node(node.id);
+}
+
+ProjectedNodeRef project_proto_node(int node_id, ProtoProjectionState &state) {
+  const auto memo_it = state.projected_ref_by_id.find(node_id);
+  if (memo_it != state.projected_ref_by_id.end()) {
+    return memo_it->second;
+  }
+  const auto node_it = state.node_by_id.find(node_id);
+  if (node_it == state.node_by_id.end()) {
+    Rcpp::stop("component projection: unknown node id %d", node_id);
+  }
+  const ProtoNode &node = *node_it->second;
+  ProjectedNodeRef projected = ProjectedNodeRef::impossible();
+  const IrNodeOp op = static_cast<IrNodeOp>(node.op);
+  switch (op) {
+  case IrNodeOp::EventAcc:
+    if (node.event_acc_idx >= 0 &&
+        node.event_acc_idx < static_cast<int>(state.acc_active.size()) &&
+        !state.acc_active[static_cast<std::size_t>(node.event_acc_idx)]) {
+      projected = ProjectedNodeRef::impossible();
+      break;
+    }
+    state.projected_node_by_id[node.id] = node;
+    projected = ProjectedNodeRef::node(node.id);
+    break;
+  case IrNodeOp::EventPool:
+    if (node.event_pool_idx >= 0 &&
+        node.event_pool_idx < static_cast<int>(state.filtered_pool_members.size())) {
+      const std::size_t pool_idx = static_cast<std::size_t>(node.event_pool_idx);
+      const std::size_t member_count = state.filtered_pool_members[pool_idx].size();
+      const int k = (pool_idx < state.source.pools.size())
+                        ? state.source.pools[pool_idx].k
+                        : 0;
+      if (member_count == 0u || (k > 0 && member_count < static_cast<std::size_t>(k))) {
+        projected = ProjectedNodeRef::impossible();
+        break;
+      }
+    }
+    state.projected_node_by_id[node.id] = node;
+    projected = ProjectedNodeRef::node(node.id);
+    break;
+  case IrNodeOp::And:
+  case IrNodeOp::Or:
+    projected = project_proto_nary(node, state);
+    break;
+  case IrNodeOp::Not:
+    projected = project_proto_not(node, state);
+    break;
+  case IrNodeOp::Guard:
+    projected = project_proto_guard(node, state);
+    break;
+  default:
+    Rcpp::stop("component projection: unsupported node op %d for node %d",
+               static_cast<int>(op), node.id);
+  }
+  state.projected_ref_by_id[node.id] = projected;
+  return projected;
+}
+
+void collect_projected_reachable_nodes(
+    int node_id, const std::unordered_map<int, ProtoNode> &projected_node_by_id,
+    std::unordered_set<int> &reachable_ids) {
+  if (!reachable_ids.insert(node_id).second) {
+    return;
+  }
+  const auto it = projected_node_by_id.find(node_id);
+  if (it == projected_node_by_id.end()) {
+    return;
+  }
+  const ProtoNode &node = it->second;
+  for (int child_id : node.children) {
+    collect_projected_reachable_nodes(child_id, projected_node_by_id,
+                                      reachable_ids);
+  }
+  if (node.reference_id >= 0) {
+    collect_projected_reachable_nodes(node.reference_id, projected_node_by_id,
+                                      reachable_ids);
+  }
+  if (node.blocker_id >= 0) {
+    collect_projected_reachable_nodes(node.blocker_id, projected_node_by_id,
+                                      reachable_ids);
+  }
+}
+
+std::vector<int> projected_node_source_ids(
+    int node_id, const NativePrepProto &proto,
+    const std::vector<std::vector<std::string>> &filtered_pool_members,
+    const std::unordered_map<int, ProtoNode> &projected_node_by_id,
+    const std::unordered_map<std::string, int> &label_id_by_name,
+    std::unordered_map<int, std::vector<int>> &cache) {
+  const auto cache_it = cache.find(node_id);
+  if (cache_it != cache.end()) {
+    return cache_it->second;
+  }
+  const auto it = projected_node_by_id.find(node_id);
+  if (it == projected_node_by_id.end()) {
+    return {};
+  }
+  const ProtoNode &node = it->second;
+  std::vector<int> source_ids;
+  const IrNodeOp op = static_cast<IrNodeOp>(node.op);
+  switch (op) {
+  case IrNodeOp::EventAcc:
+    if (node.event_acc_idx >= 0 &&
+        node.event_acc_idx < static_cast<int>(proto.accumulators.size())) {
+      const auto label_it =
+          label_id_by_name.find(proto.accumulators[static_cast<std::size_t>(
+              node.event_acc_idx)].id);
+      if (label_it != label_id_by_name.end()) {
+        source_ids.push_back(label_it->second);
+      }
+    }
+    break;
+  case IrNodeOp::EventPool:
+    if (node.event_pool_idx >= 0 &&
+        node.event_pool_idx < static_cast<int>(filtered_pool_members.size())) {
+      for (const auto &member :
+           filtered_pool_members[static_cast<std::size_t>(node.event_pool_idx)]) {
+        const auto label_it = label_id_by_name.find(member);
+        if (label_it != label_id_by_name.end()) {
+          source_ids.push_back(label_it->second);
+        }
+      }
+    }
+    break;
+  case IrNodeOp::And:
+  case IrNodeOp::Or:
+    for (int child_id : node.children) {
+      std::vector<int> child_ids = projected_node_source_ids(
+          child_id, proto, filtered_pool_members, projected_node_by_id,
+          label_id_by_name, cache);
+      source_ids.insert(source_ids.end(), child_ids.begin(), child_ids.end());
+    }
+    break;
+  case IrNodeOp::Not:
+    if (!node.children.empty()) {
+      source_ids = projected_node_source_ids(node.children.front(), proto,
+                                             filtered_pool_members,
+                                             projected_node_by_id,
+                                             label_id_by_name, cache);
+    }
+    break;
+  case IrNodeOp::Guard:
+    if (node.reference_id >= 0) {
+      std::vector<int> ref_ids = projected_node_source_ids(
+          node.reference_id, proto, filtered_pool_members, projected_node_by_id,
+          label_id_by_name, cache);
+      source_ids.insert(source_ids.end(), ref_ids.begin(), ref_ids.end());
+    }
+    if (node.blocker_id >= 0) {
+      std::vector<int> blk_ids = projected_node_source_ids(
+          node.blocker_id, proto, filtered_pool_members, projected_node_by_id,
+          label_id_by_name, cache);
+      source_ids.insert(source_ids.end(), blk_ids.begin(), blk_ids.end());
+    }
+    break;
+  default:
+    break;
+  }
+  if (source_ids.empty()) {
+    source_ids = node.source_label_ids;
+  }
+  sort_unique_ids(source_ids);
+  cache[node_id] = source_ids;
+  return source_ids;
+}
+
+} // namespace
+
+NativePrepProto project_proto_for_component(const NativePrepProto &proto,
+                                            const std::string &component) {
+  if (component.empty() || component == "__default__" || proto.components.empty()) {
+    return proto;
+  }
+  bool component_known = false;
+  for (const auto &component_proto : proto.components) {
+    if (component_proto.id == component) {
+      component_known = true;
+      break;
+    }
+  }
+  if (!component_known) {
+    Rcpp::stop("component projection: unknown component '%s'",
+               component.c_str());
+  }
+
+  ProtoProjectionState state{proto, component};
+  state.node_by_id.reserve(proto.nodes.size());
+  for (const auto &node : proto.nodes) {
+    state.node_by_id[node.id] = &node;
+  }
+  state.label_id_by_name.reserve(proto.label_index.size());
+  for (const auto &label : proto.label_index) {
+    state.label_id_by_name[label.label] = label.id;
+  }
+  state.acc_idx_by_name.reserve(proto.accumulators.size());
+  for (std::size_t acc_idx = 0; acc_idx < proto.accumulators.size(); ++acc_idx) {
+    if (!proto.accumulators[acc_idx].id.empty()) {
+      state.acc_idx_by_name[proto.accumulators[acc_idx].id] =
+          static_cast<int>(acc_idx);
+    }
+  }
+  state.pool_idx_by_name.reserve(proto.pools.size());
+  for (std::size_t pool_idx = 0; pool_idx < proto.pools.size(); ++pool_idx) {
+    if (!proto.pools[pool_idx].id.empty()) {
+      state.pool_idx_by_name[proto.pools[pool_idx].id] =
+          static_cast<int>(pool_idx);
+    }
+  }
+  resolve_component_projection_activity(state);
+
+  std::vector<ProtoOutcome> projected_outcomes;
+  projected_outcomes.reserve(proto.outcomes.size());
+  std::unordered_set<int> root_node_ids;
+  for (const auto &outcome : proto.outcomes) {
+    if (!proto_component_matches(outcome.allowed_components, component)) {
+      continue;
+    }
+    if (outcome.node_id < 0) {
+      continue;
+    }
+    const ProjectedNodeRef projected_target =
+        project_proto_node(outcome.node_id, state);
+    if (projected_target.kind == ProjectedNodeKind::Impossible) {
+      continue;
+    }
+    if (projected_target.kind == ProjectedNodeKind::Truth) {
+      Rcpp::stop("component projection: unconditional outcome '%s' in component '%s'",
+                 outcome.label.c_str(), component.c_str());
+    }
+    std::vector<int> competitor_ids;
+    competitor_ids.reserve(outcome.competitor_ids.size());
+    bool drop_outcome = false;
+    for (int competitor_id : outcome.competitor_ids) {
+      const ProjectedNodeRef projected_competitor =
+          project_proto_node(competitor_id, state);
+      if (projected_competitor.kind == ProjectedNodeKind::Impossible) {
+        continue;
+      }
+      if (projected_competitor.kind == ProjectedNodeKind::Truth) {
+        drop_outcome = true;
+        break;
+      }
+      if (projected_competitor.node_id == projected_target.node_id) {
+        continue;
+      }
+      competitor_ids.push_back(projected_competitor.node_id);
+    }
+    if (drop_outcome) {
+      continue;
+    }
+    sort_unique_ids(competitor_ids);
+    ProtoOutcome projected = outcome;
+    projected.node_id = projected_target.node_id;
+    projected.competitor_ids = std::move(competitor_ids);
+    projected.allowed_components.clear();
+    projected_outcomes.push_back(std::move(projected));
+    root_node_ids.insert(projected_target.node_id);
+    for (int competitor_id :
+         projected_outcomes.back().competitor_ids) {
+      root_node_ids.insert(competitor_id);
+    }
+  }
+
+  std::unordered_set<int> reachable_node_ids;
+  for (int node_id : root_node_ids) {
+    collect_projected_reachable_nodes(node_id, state.projected_node_by_id,
+                                      reachable_node_ids);
+  }
+
+  NativePrepProto projected = proto;
+  projected.components.clear();
+  std::vector<int> projected_acc_idx_by_source(proto.accumulators.size(), -1);
+  std::vector<ProtoAccumulator> projected_accumulators;
+  projected_accumulators.reserve(proto.accumulators.size());
+  for (std::size_t acc_idx = 0; acc_idx < proto.accumulators.size(); ++acc_idx) {
+    if (!state.acc_active[acc_idx]) {
+      continue;
+    }
+    ProtoAccumulator projected_acc = proto.accumulators[acc_idx];
+    projected_acc.components.clear();
+    projected_acc_idx_by_source[acc_idx] =
+        static_cast<int>(projected_accumulators.size());
+    projected_accumulators.push_back(std::move(projected_acc));
+  }
+  projected.accumulators = std::move(projected_accumulators);
+  for (std::size_t i = 0; i < projected.pools.size(); ++i) {
+    projected.pools[i].members = state.filtered_pool_members[i];
+  }
+  projected.outcomes = std::move(projected_outcomes);
+  projected.nodes.clear();
+  projected.nodes.reserve(reachable_node_ids.size());
+  std::unordered_map<int, std::vector<int>> source_cache;
+  for (const auto &node : proto.nodes) {
+    if (reachable_node_ids.find(node.id) == reachable_node_ids.end()) {
+      continue;
+    }
+    const auto projected_it = state.projected_node_by_id.find(node.id);
+    if (projected_it == state.projected_node_by_id.end()) {
+      continue;
+    }
+    ProtoNode projected_node = projected_it->second;
+    if (projected_node.event_acc_idx >= 0) {
+      if (projected_node.event_acc_idx >=
+          static_cast<int>(projected_acc_idx_by_source.size())) {
+        Rcpp::stop("component projection: invalid projected accumulator index %d",
+                   projected_node.event_acc_idx);
+      }
+      const int mapped_acc_idx =
+          projected_acc_idx_by_source[static_cast<std::size_t>(
+              projected_node.event_acc_idx)];
+      if (mapped_acc_idx < 0) {
+        Rcpp::stop("component projection: reachable node %d references inactive accumulator",
+                   projected_node.id);
+      }
+      projected_node.event_acc_idx = mapped_acc_idx;
+    }
+    projected_node.source_label_ids = projected_node_source_ids(
+        projected_node.id, proto, state.filtered_pool_members,
+        state.projected_node_by_id, state.label_id_by_name, source_cache);
+    projected.nodes.push_back(std::move(projected_node));
+  }
+
+  std::unordered_map<int, int> label_id_to_first_outcome_idx;
+  label_id_to_first_outcome_idx.reserve(projected.outcomes.size());
+  for (std::size_t i = 0; i < projected.outcomes.size(); ++i) {
+    const auto label_it = state.label_id_by_name.find(projected.outcomes[i].label);
+    if (label_it == state.label_id_by_name.end()) {
+      continue;
+    }
+    if (label_id_to_first_outcome_idx.find(label_it->second) ==
+        label_id_to_first_outcome_idx.end()) {
+      label_id_to_first_outcome_idx[label_it->second] = static_cast<int>(i);
+    }
+  }
+  for (auto &node : projected.nodes) {
+    node.event_outcome_idx = -1;
+    if (node.event_label_id < 0) {
+      continue;
+    }
+    const auto outcome_it = label_id_to_first_outcome_idx.find(node.event_label_id);
+    if (outcome_it != label_id_to_first_outcome_idx.end()) {
+      node.event_outcome_idx = outcome_it->second;
+    }
+  }
+
+  return projected;
+}
+
+namespace {
+
+int resolve_first_outcome_index_by_label_id(const NativeContext &ctx,
+                                            int label_id) {
+  if (!ctx.ir.valid || label_id < 0 || label_id == NA_INTEGER) {
+    return -1;
+  }
+  const auto it = ctx.ir.label_id_to_outcomes.find(label_id);
+  if (it == ctx.ir.label_id_to_outcomes.end() || it->second.empty()) {
+    return -1;
+  }
+  return it->second.front();
+}
+
+void assign_projected_component_guess(const NativeContext &base_ctx,
+                                      int base_component_idx,
+                                      NativeContext &variant_ctx) {
+  variant_ctx.component_index.clear();
+  variant_ctx.component_index["__default__"] = 0;
+  variant_ctx.component_info.assign(1, ComponentContextInfo{});
+  if (base_component_idx < 0 ||
+      base_component_idx >= static_cast<int>(base_ctx.component_info.size())) {
+    return;
+  }
+  const ComponentGuessPolicy &base_guess =
+      base_ctx.component_info[static_cast<std::size_t>(base_component_idx)].guess;
+  ComponentGuessPolicy &variant_guess = variant_ctx.component_info[0].guess;
+  variant_guess.target = base_guess.target;
+  variant_guess.target_label_id = base_guess.target_label_id;
+  variant_guess.target_is_guess = base_guess.target_is_guess;
+  variant_guess.keep_weight_na = base_guess.keep_weight_na;
+  variant_guess.has_keep_weight_na = base_guess.has_keep_weight_na;
+  if (base_guess.target_outcome_idx >= 0 &&
+      base_guess.target_outcome_idx <
+          static_cast<int>(base_ctx.outcome_label_ids.size())) {
+    const int target_label_id =
+        base_ctx.outcome_label_ids[static_cast<std::size_t>(
+            base_guess.target_outcome_idx)];
+    variant_guess.target_outcome_idx =
+        resolve_first_outcome_index_by_label_id(variant_ctx, target_label_id);
+  }
+  variant_guess.keep_weights.clear();
+  variant_guess.keep_weights.reserve(base_guess.keep_weights.size());
+  for (const auto &entry : base_guess.keep_weights) {
+    const int base_outcome_idx = entry.first;
+    if (base_outcome_idx < 0 ||
+        base_outcome_idx >= static_cast<int>(base_ctx.outcome_label_ids.size())) {
+      continue;
+    }
+    const int label_id =
+        base_ctx.outcome_label_ids[static_cast<std::size_t>(base_outcome_idx)];
+    const int variant_outcome_idx =
+        resolve_first_outcome_index_by_label_id(variant_ctx, label_id);
+    if (variant_outcome_idx < 0) {
+      continue;
+    }
+    variant_guess.keep_weights.emplace_back(variant_outcome_idx, entry.second);
+  }
+  variant_guess.valid =
+      !variant_guess.keep_weights.empty() || variant_guess.has_keep_weight_na;
+}
+
+void assign_projected_accumulator_mapping(const NativeContext &base_ctx,
+                                          NativeContext &variant_ctx) {
+  variant_ctx.base_acc_idx_by_local.assign(variant_ctx.accumulators.size(), -1);
+  variant_ctx.local_acc_idx_by_base.assign(base_ctx.accumulators.size(), -1);
+  for (std::size_t local_acc_idx = 0;
+       local_acc_idx < variant_ctx.accumulators.size(); ++local_acc_idx) {
+    const auto base_it = base_ctx.accumulator_index.find(
+        variant_ctx.accumulators[local_acc_idx].id);
+    if (base_it == base_ctx.accumulator_index.end()) {
+      Rcpp::stop("component projection: projected accumulator '%s' missing from base context",
+                 variant_ctx.accumulators[local_acc_idx].id.c_str());
+    }
+    const int base_acc_idx = base_it->second;
+    variant_ctx.base_acc_idx_by_local[local_acc_idx] = base_acc_idx;
+    if (base_acc_idx >= 0 &&
+        base_acc_idx < static_cast<int>(variant_ctx.local_acc_idx_by_base.size())) {
+      variant_ctx.local_acc_idx_by_base[static_cast<std::size_t>(base_acc_idx)] =
+          static_cast<int>(local_acc_idx);
+    }
+  }
+}
+
+} // namespace
+
 std::unique_ptr<NativeContext>
 build_context_from_proto(const NativePrepProto &proto) {
   auto sort_unique_ids = [](std::vector<int> &ids) {
@@ -733,6 +1410,13 @@ build_context_from_proto(const NativePrepProto &proto) {
     if (it != ctx->label_to_id.end()) {
       ctx->accumulator_label_ids[i] = it->second;
     }
+  }
+  ctx->base_acc_idx_by_local.resize(ctx->accumulators.size());
+  ctx->local_acc_idx_by_base.resize(ctx->accumulators.size());
+  for (std::size_t i = 0; i < ctx->accumulators.size(); ++i) {
+    const int acc_idx = static_cast<int>(i);
+    ctx->base_acc_idx_by_local[i] = acc_idx;
+    ctx->local_acc_idx_by_base[i] = acc_idx;
   }
   ctx->shared_trigger_groups.clear();
   ctx->shared_trigger_groups.reserve(ctx->shared_trigger_map.size());
@@ -825,7 +1509,6 @@ build_context_from_proto(const NativePrepProto &proto) {
     OutcomeContextInfo info;
     info.node_id = outcome_proto.node_id;
     info.competitor_ids = outcome_proto.competitor_ids;
-    info.allowed_components = outcome_proto.allowed_components;
     info.maps_to_na = outcome_proto.maps_to_na;
     ctx->outcome_info.push_back(std::move(info));
   }
@@ -943,17 +1626,6 @@ build_context_from_proto(const NativePrepProto &proto) {
     }
   }
 
-  for (auto &acc : ctx->accumulators) {
-    acc.component_indices.clear();
-    acc.component_indices.reserve(acc.components.size());
-    for (const auto &comp : acc.components) {
-      auto it = ctx->component_index.find(comp);
-      if (it != ctx->component_index.end()) {
-        acc.component_indices.push_back(it->second);
-      }
-    }
-  }
-
   auto resolve_label_ref = [&](const std::string &label) -> LabelRef {
     LabelRef ref;
     if (label.empty()) {
@@ -1017,14 +1689,6 @@ build_context_from_proto(const NativePrepProto &proto) {
     ir.label_id_to_bit_idx[label_ids[i]] = static_cast<int>(i);
   }
   ir.source_mask_words = mask_word_count(static_cast<int>(label_ids.size()));
-
-  const int n_components = static_cast<int>(ctx->components.ids.size());
-  ir.component_mask_words = mask_word_count(n_components);
-  std::vector<std::uint64_t> all_component_mask(
-      static_cast<std::size_t>(ir.component_mask_words), 0ULL);
-  for (int i = 0; i < n_components; ++i) {
-    set_mask_bit(all_component_mask, i);
-  }
 
   std::unordered_map<int, int> label_id_to_first_outcome;
   for (std::size_t oi = 0; oi < ctx->outcome_label_ids.size(); ++oi) {
@@ -1116,25 +1780,6 @@ build_context_from_proto(const NativePrepProto &proto) {
           event.outcome_idx = it->second;
         }
       }
-      std::vector<std::uint64_t> component_mask(
-          static_cast<std::size_t>(ir.component_mask_words), 0ULL);
-      if (ir.component_mask_words > 0) {
-        if (event.acc_idx >= 0 &&
-            event.acc_idx < static_cast<int>(ctx->accumulators.size()) &&
-            !ctx->accumulators[static_cast<std::size_t>(event.acc_idx)]
-                 .component_indices.empty()) {
-          const auto &indices =
-              ctx->accumulators[static_cast<std::size_t>(event.acc_idx)]
-                  .component_indices;
-          for (int comp_idx : indices) {
-            set_mask_bit(component_mask, comp_idx);
-          }
-        } else {
-          component_mask = all_component_mask;
-        }
-      }
-      event.component_mask_offset =
-          append_mask_words(ir.component_masks, component_mask);
       ir_node.event_idx = static_cast<int>(ir.events.size());
       ir.events.push_back(std::move(event));
     }
@@ -1168,22 +1813,6 @@ build_context_from_proto(const NativePrepProto &proto) {
             : static_cast<int>(ir.outcome_competitors.size()) -
                   ir_out.competitor_begin;
 
-    std::vector<std::uint64_t> allowed_mask(
-        static_cast<std::size_t>(ir.component_mask_words), 0ULL);
-    if (ir.component_mask_words > 0) {
-      if (info.allowed_components.empty()) {
-        allowed_mask = all_component_mask;
-      } else {
-        for (const auto &component : info.allowed_components) {
-          auto it = ctx->component_index.find(component);
-          if (it != ctx->component_index.end()) {
-            set_mask_bit(allowed_mask, it->second);
-          }
-        }
-      }
-    }
-    ir_out.allowed_component_mask_offset =
-        append_mask_words(ir.component_masks, allowed_mask);
     ir_out.maps_to_na = info.maps_to_na;
 
     ir_out.alias_begin = info.alias_sources.empty()
@@ -1674,6 +2303,20 @@ build_context_from_proto(const NativePrepProto &proto) {
   }
   validate_guard_transition_completeness(*ctx);
   ctx->kernel_state_graph.valid = ctx->kernel_program.valid;
+  if (proto_has_real_components(proto)) {
+    ctx->component_variants.resize(ctx->components.ids.size());
+    for (std::size_t component_idx = 0; component_idx < ctx->components.ids.size();
+         ++component_idx) {
+      NativePrepProto projected =
+          project_proto_for_component(proto, ctx->components.ids[component_idx]);
+      std::unique_ptr<NativeContext> variant_ctx =
+          build_context_from_proto(projected);
+      assign_projected_component_guess(*ctx, static_cast<int>(component_idx),
+                                       *variant_ctx);
+      assign_projected_accumulator_mapping(*ctx, *variant_ctx);
+      ctx->component_variants[component_idx] = std::move(variant_ctx);
+    }
+  }
   return ctx;
 }
 

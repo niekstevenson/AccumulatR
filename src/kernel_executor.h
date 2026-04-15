@@ -1,7 +1,5 @@
 #pragma once
 
-#include <functional>
-
 #include "context.h"
 
 namespace uuber {
@@ -29,17 +27,44 @@ struct KernelRuntimeState {
   bool initialized{false};
 };
 
-using KernelEventEvalFn = std::function<KernelNodeValues(int event_idx)>;
-using KernelGuardEvalFn =
-    std::function<KernelNodeValues(const KernelOp &op,
-                                   const KernelNodeValues &reference_value,
-                                   const KernelNodeValues &blocker_value,
-                                   const KernelEvalNeed &need)>;
+using KernelEventEvalFnPtr = KernelNodeValues (*)(const void *context,
+                                                  int event_idx);
+using KernelGuardEvalFnPtr =
+    KernelNodeValues (*)(const void *context, const KernelOp &op,
+                         const KernelNodeValues &reference_value,
+                         const KernelNodeValues &blocker_value,
+                         const KernelEvalNeed &need);
+
+struct KernelEventEvaluator {
+  const void *context{nullptr};
+  KernelEventEvalFnPtr fn{nullptr};
+
+  explicit operator bool() const { return fn != nullptr; }
+
+  KernelNodeValues operator()(int event_idx) const {
+    return fn ? fn(context, event_idx) : KernelNodeValues{};
+  }
+};
+
+struct KernelGuardEvaluator {
+  const void *context{nullptr};
+  KernelGuardEvalFnPtr fn{nullptr};
+
+  explicit operator bool() const { return fn != nullptr; }
+
+  KernelNodeValues operator()(const KernelOp &op,
+                              const KernelNodeValues &reference_value,
+                              const KernelNodeValues &blocker_value,
+                              const KernelEvalNeed &need) const {
+    return fn ? fn(context, op, reference_value, blocker_value, need)
+              : KernelNodeValues{};
+  }
+};
 
 bool eval_kernel_node(const KernelProgram &program, int target_node_idx,
                       const KernelEvalNeed &need,
-                      const KernelEventEvalFn &event_eval,
-                      const KernelGuardEvalFn &guard_eval,
+                      const KernelEventEvaluator &event_eval,
+                      const KernelGuardEvaluator &guard_eval,
                       KernelNodeValues &out_values);
 
 void reset_kernel_runtime(const KernelProgram &program,
@@ -52,16 +77,16 @@ bool eval_kernel_node_incremental(const KernelProgram &program,
                                   KernelRuntimeState &runtime,
                                   int target_node_idx,
                                   const KernelEvalNeed &need,
-                                  const KernelEventEvalFn &event_eval,
-                                  const KernelGuardEvalFn &guard_eval,
+                                  const KernelEventEvaluator &event_eval,
+                                  const KernelGuardEvaluator &guard_eval,
                                   KernelNodeValues &out_values);
 
 bool eval_kernel_nodes_incremental(const KernelProgram &program,
                                    KernelRuntimeState &runtime,
                                    const std::vector<int> &target_node_indices,
                                    const KernelEvalNeed &need,
-                                   const KernelEventEvalFn &event_eval,
-                                   const KernelGuardEvalFn &guard_eval,
+                                   const KernelEventEvaluator &event_eval,
+                                   const KernelGuardEvaluator &guard_eval,
                                    std::vector<KernelNodeValues> &out_values);
 
 TrialParamsSoA build_base_trial_params_soa(const NativeContext &ctx);

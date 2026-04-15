@@ -110,3 +110,4 @@ dist_rdm_cdf <- function(x, v, B, A, s) {
 dist_rdm_rng <- function(n, v, B, A, s) {
     .Call(`_AccumulatR_dist_rdm_rng`, n, v, B, A, s)
 }
+

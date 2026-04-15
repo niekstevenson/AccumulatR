@@ -3,7 +3,6 @@
 #include <Rcpp.h>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <limits>
 #include <memory>
 #include <string>
@@ -202,6 +201,28 @@ struct KernelOutputMap {
   std::vector<int> outcome_idx_to_slot;
 };
 
+struct KernelQueryPlan {
+  std::vector<int> target_slots;
+  std::vector<std::uint8_t> slot_need_masks;
+  int max_slot{-1};
+  bool valid{false};
+};
+
+struct KernelMultiQuerySpec {
+  std::vector<int> target_slots;
+  std::vector<std::uint8_t> target_need_masks;
+
+  bool operator==(const KernelMultiQuerySpec &other) const noexcept {
+    return target_slots == other.target_slots &&
+           target_need_masks == other.target_need_masks;
+  }
+};
+
+struct KernelMultiQueryPlan {
+  KernelMultiQuerySpec spec;
+  KernelQueryPlan plan;
+};
+
 struct KernelProgram {
   std::vector<KernelOp> ops;
   std::vector<int> children;
@@ -209,6 +230,8 @@ struct KernelProgram {
   int max_child_count{0};
   bool has_guard{false};
   bool valid{false};
+  std::vector<KernelQueryPlan> single_query_plans;
+  std::vector<KernelMultiQueryPlan> multi_query_plans;
 };
 
 struct KernelStateTransition {
@@ -274,9 +297,40 @@ struct OutcomeGuessDonor {
   std::string rt_policy;
 };
 
+struct CompetitorMeta {
+  int node_id{-1};
+  int node_idx{-1};
+  int guard_transition_idx{-1};
+  int transition_mask_begin{-1};
+  int transition_mask_count{0};
+  bool transition_required{false};
+  std::vector<int> sources;
+  bool scenario_sensitive{false};
+};
+
+enum class CompetitorClusterExecMode : std::uint8_t {
+  BatchKernel = 0,
+  SequentialTransition = 1
+};
+
+struct CompetitorClusterPlan {
+  std::vector<int> member_indices;
+  std::vector<int> eval_order;
+  CompetitorClusterExecMode mode{CompetitorClusterExecMode::BatchKernel};
+  int batch_query_plan_index{-1};
+};
+
+struct CompetitorClusterInfo {
+  std::vector<int> competitor_ids;
+  std::vector<CompetitorMeta> metas;
+  std::vector<CompetitorClusterPlan> cluster_plans;
+};
+
 struct OutcomeContextInfo {
   int node_id{-1};
   std::vector<int> competitor_ids;
+  CompetitorClusterInfo competitor_cluster;
+  int fused_query_plan_index{-1};
   std::vector<OutcomeGuessDonor> guess_donors;
   std::vector<int> alias_sources;
   bool maps_to_na{false};

@@ -1,5 +1,6 @@
 #include "context.h"
 
+#include "likelihood_plan_precompute.h"
 #include "prep_builder.h"
 
 #include <cmath>
@@ -42,6 +43,7 @@ namespace uuber {
 Rcpp::XPtr<NativeContext> build_native_context(Rcpp::List prep) {
   NativePrepProto proto = build_prep_proto(prep);
   std::unique_ptr<NativeContext> ctx = build_context_from_proto(proto);
+  precompute_likelihood_query_plans_recursive(*ctx);
   assign_na_cache_limit(*ctx, resolve_na_cache_limit());
   return Rcpp::XPtr<NativeContext>(ctx.release(), true);
 }

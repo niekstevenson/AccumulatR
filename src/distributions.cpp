@@ -33,14 +33,24 @@
 #include "context.h"
 #include "integrate.h"
 #include "kernel_executor.h"
-#include "kernel_jit.h"
+#include "kernel_program.h"
+#include "likelihood_plan_precompute.h"
 #include "prep_builder.h"
 #include "proto.h"
 #include "quadrature_batch.h"
 
 using uuber::AccDistParams;
+using uuber::CompetitorClusterExecMode;
+using uuber::CompetitorClusterInfo;
+using uuber::CompetitorClusterPlan;
+using uuber::CompetitorMeta;
 using uuber::ComponentMap;
+using uuber::EvalNeed;
 using uuber::LabelRef;
+using uuber::kEvalAll;
+using uuber::needs_cdf;
+using uuber::needs_density;
+using uuber::needs_survival;
 using uuber::resolve_acc_params_entries;
 
 // [[Rcpp::export]]
@@ -68,6 +78,7 @@ SEXP native_context_from_proto_cpp(Rcpp::RawVector blob) {
       static_cast<std::size_t>(blob.size()));
   std::unique_ptr<uuber::NativeContext> ctx =
       uuber::build_context_from_proto(proto);
+  uuber::precompute_likelihood_query_plans_recursive(*ctx);
   return Rcpp::XPtr<uuber::NativeContext>(ctx.release(), true);
 }
 
@@ -739,39 +750,6 @@ inline double acc_cdf_success_from_cfg(double t, double onset,
     return NA_REAL;
   }
   return clamp(cdf, 0.0, 1.0);
-}
-
-enum class EvalNeed : std::uint8_t {
-  kDensity = 1 << 0,
-  kSurvival = 1 << 1,
-  kCDF = 1 << 2
-};
-
-constexpr EvalNeed kEvalAll =
-    static_cast<EvalNeed>(static_cast<std::uint8_t>(EvalNeed::kDensity) |
-                          static_cast<std::uint8_t>(EvalNeed::kSurvival) |
-                          static_cast<std::uint8_t>(EvalNeed::kCDF));
-
-inline EvalNeed operator|(EvalNeed lhs, EvalNeed rhs) {
-  return static_cast<EvalNeed>(static_cast<std::uint8_t>(lhs) |
-                               static_cast<std::uint8_t>(rhs));
-}
-
-inline EvalNeed operator&(EvalNeed lhs, EvalNeed rhs) {
-  return static_cast<EvalNeed>(static_cast<std::uint8_t>(lhs) &
-                               static_cast<std::uint8_t>(rhs));
-}
-
-inline bool needs_density(EvalNeed need) {
-  return static_cast<std::uint8_t>(need & EvalNeed::kDensity) != 0;
-}
-
-inline bool needs_survival(EvalNeed need) {
-  return static_cast<std::uint8_t>(need & EvalNeed::kSurvival) != 0;
-}
-
-inline bool needs_cdf(EvalNeed need) {
-  return static_cast<std::uint8_t>(need & EvalNeed::kCDF) != 0;
 }
 
 struct NodeEvalResult {
@@ -2873,8 +2851,6 @@ bool shared_gate_pair_cached(const uuber::NativeContext &ctx, int node_id,
   return ir_shared_gate_pair_lookup(ctx, node_id, competitor_node_id, out);
 }
 
-std::string competitor_cache_key(const std::vector<int> &ids);
-
 bool shared_gate_nway_cached(const uuber::NativeContext &ctx, int node_id,
                              const std::vector<int> &competitor_node_ids,
                              SharedGateNWay &out) {
@@ -3287,7 +3263,8 @@ GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
 }
 
 uuber::KernelNodeValues kernel_event_eval_callback(const void *context,
-                                                   int event_idx) {
+                                                   int event_idx,
+                                                   EvalNeed need) {
   const NodeEvalState &state = *static_cast<const NodeEvalState *>(context);
   uuber::KernelNodeValues out{};
   if (event_idx < 0 || event_idx >= static_cast<int>(state.ctx.ir.events.size())) {
@@ -3306,7 +3283,7 @@ uuber::KernelNodeValues kernel_event_eval_callback(const void *context,
     node_flags = state.ctx.ir.nodes[static_cast<std::size_t>(event.node_idx)].flags;
   }
   NodeEvalResult event_eval = eval_event_ref_idx(
-      state.ctx, ref, node_flags, state.t, kEvalAll,
+      state.ctx, ref, node_flags, state.t, need,
       state.trial_params, state.trial_type_key, state.include_na_donors,
       state.outcome_idx, state.exact_source_times, state.source_time_bounds,
       state.forced_scope_filter,
@@ -3323,7 +3300,7 @@ uuber::KernelNodeValues kernel_guard_eval_callback(
     const void *context, const uuber::KernelOp &op,
     const uuber::KernelNodeValues &reference_value,
     const uuber::KernelNodeValues &blocker_value,
-    const uuber::KernelEvalNeed &kneed) {
+    EvalNeed kneed) {
   const NodeEvalState &state = *static_cast<const NodeEvalState *>(context);
   uuber::KernelNodeValues out{};
   GuardEvalInput guard_input = make_guard_input(
@@ -3334,12 +3311,12 @@ uuber::KernelNodeValues kernel_guard_eval_callback(
       state.forced_survive_bits_valid ? &state.forced_survive_bits : nullptr,
       state.forced_label_id_to_bit_idx);
   const IntegrationSettings settings;
-  if (kneed.density) {
+  if (needs_density(kneed)) {
     const double ref_density = safe_density(reference_value.density);
     const double blocker_survival = clamp_probability(blocker_value.survival);
     out.density = safe_density(ref_density * blocker_survival);
   }
-  if (kneed.cdf || kneed.survival) {
+  if (needs_cdf(kneed) || needs_survival(kneed)) {
     out.cdf = guard_cdf_internal(guard_input, state.t, settings);
     out.survival = clamp_probability(1.0 - out.cdf);
   }
@@ -3373,11 +3350,11 @@ NodeEvalResult eval_node_recursive_dense(int node_idx, NodeEvalState &state,
   if (!state.ctx.kernel_program.valid) {
     Rcpp::stop("IR kernel execution unavailable for node evaluation");
   }
-  uuber::KernelEvalNeed kernel_need;
-  // Evaluate all channels once; composition ops require mixed channels internally.
-  kernel_need.density = true;
-  kernel_need.survival = true;
-  kernel_need.cdf = true;
+  const uuber::KernelQueryPlan *plan =
+      uuber::get_kernel_query_plan(state.ctx.kernel_program, node_idx, need);
+  if (plan == nullptr) {
+    Rcpp::stop("IR kernel query plan unavailable for node evaluation");
+  }
   uuber::KernelNodeValues kernel_values;
   const uuber::KernelEventEvaluator event_eval_cb =
       make_kernel_event_eval(state);
@@ -3388,13 +3365,13 @@ NodeEvalResult eval_node_recursive_dense(int node_idx, NodeEvalState &state,
     if (!kernel_runtime_cache_safe(state)) {
       uuber::invalidate_kernel_runtime_from_slot(*state.kernel_runtime_ptr, 0);
     }
-    kernel_ok = uuber::eval_kernel_node_incremental(
-        state.ctx.kernel_program, *state.kernel_runtime_ptr, node_idx, kernel_need,
+    kernel_ok = uuber::eval_kernel_single_query_plan_incremental(
+        state.ctx.kernel_program, *state.kernel_runtime_ptr, *plan,
         event_eval_cb, guard_eval_cb, kernel_values);
   } else {
-    kernel_ok = uuber::eval_kernel_node(state.ctx.kernel_program, node_idx,
-                                        kernel_need, event_eval_cb, guard_eval_cb,
-                                        kernel_values);
+    kernel_ok = uuber::eval_kernel_single_query_plan(
+        state.ctx.kernel_program, *plan, event_eval_cb, guard_eval_cb,
+        kernel_values);
   }
   if (!kernel_ok) {
     Rcpp::stop("IR kernel execution failed for node evaluation");
@@ -3906,49 +3883,6 @@ std::vector<int> gather_blocker_sources(const uuber::NativeContext &ctx,
   return sources;
 }
 
-struct CompetitorMeta {
-  int node_id{-1};
-  int node_idx{-1};
-  int guard_transition_idx{-1};
-  int transition_mask_begin{-1};
-  int transition_mask_count{0};
-  bool transition_required{false};
-  std::vector<int> sources;
-  bool scenario_sensitive{false};
-};
-
-enum class CompetitorClusterExecMode : std::uint8_t {
-  BatchKernel = 0,
-  SequentialTransition = 1
-};
-
-struct CompetitorClusterPlan {
-  std::vector<int> member_indices;
-  std::vector<int> eval_order;
-  CompetitorClusterExecMode mode{CompetitorClusterExecMode::BatchKernel};
-};
-
-struct CompetitorClusterCacheEntry {
-  std::vector<CompetitorMeta> metas;
-  std::vector<CompetitorClusterPlan> cluster_plans;
-};
-
-using CompetitorCacheMap =
-    std::unordered_map<std::string, CompetitorClusterCacheEntry>;
-
-static std::unordered_map<const uuber::NativeContext *, CompetitorCacheMap>
-    g_competitor_cache;
-
-std::string competitor_cache_key(const std::vector<int> &ids) {
-  std::ostringstream oss;
-  for (std::size_t i = 0; i < ids.size(); ++i) {
-    if (i > 0)
-      oss << ",";
-    oss << ids[i];
-  }
-  return oss.str();
-}
-
 // Forward declaration
 std::vector<std::vector<int>>
 build_competitor_clusters(const std::vector<CompetitorMeta> &metas);
@@ -4000,18 +3934,11 @@ inline void validate_competitor_transition_meta(const uuber::NativeContext &ctx,
   }
 }
 
-const CompetitorClusterCacheEntry &
-fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
-                               const std::vector<int> &competitor_ids) {
-  CompetitorCacheMap &cache = g_competitor_cache[&ctx];
-  const std::string key = competitor_cache_key(competitor_ids);
-  auto it = cache.find(key);
-  if (it != cache.end()) {
-    return it->second;
-  }
-
-  CompetitorClusterCacheEntry entry;
-  entry.metas.reserve(competitor_ids.size());
+CompetitorClusterInfo build_competitor_cluster_info(
+    const uuber::NativeContext &ctx, const std::vector<int> &competitor_ids) {
+  CompetitorClusterInfo info;
+  info.competitor_ids = competitor_ids;
+  info.metas.reserve(competitor_ids.size());
   std::unordered_map<int, bool> guard_memo;
   for (int node_id : competitor_ids) {
     int node_idx = resolve_dense_node_idx_required(ctx, node_id);
@@ -4041,18 +3968,19 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
     }
     meta.transition_required = contains_guard && !meta.sources.empty();
     validate_competitor_transition_meta(ctx, meta);
-    entry.metas.push_back(std::move(meta));
+    info.metas.push_back(std::move(meta));
   }
 
-  const std::vector<std::vector<int>> clusters = build_competitor_clusters(entry.metas);
-  entry.cluster_plans.reserve(clusters.size());
+  const std::vector<std::vector<int>> clusters =
+      build_competitor_clusters(info.metas);
+  info.cluster_plans.reserve(clusters.size());
   for (const std::vector<int> &cluster : clusters) {
     CompetitorClusterPlan plan;
     plan.member_indices = cluster;
 
     bool requires_transition = false;
     for (int idx : cluster) {
-      if (entry.metas[static_cast<std::size_t>(idx)].transition_required) {
+      if (info.metas[static_cast<std::size_t>(idx)].transition_required) {
         requires_transition = true;
         break;
       }
@@ -4067,7 +3995,7 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
       std::vector<OrderingMeta> order;
       order.reserve(cluster.size());
       for (int idx : cluster) {
-        const CompetitorMeta &meta = entry.metas[static_cast<std::size_t>(idx)];
+        const CompetitorMeta &meta = info.metas[static_cast<std::size_t>(idx)];
         order.push_back({idx, meta.sources.size(), meta.scenario_sensitive});
       }
       std::sort(order.begin(), order.end(),
@@ -4085,11 +4013,9 @@ fetch_competitor_cluster_cache(const uuber::NativeContext &ctx,
         plan.eval_order.push_back(rec.index);
       }
     }
-    entry.cluster_plans.push_back(std::move(plan));
+    info.cluster_plans.push_back(std::move(plan));
   }
-
-  auto inserted = cache.emplace(key, std::move(entry));
-  return inserted.first->second;
+  return info;
 }
 
 bool share_sources(const std::vector<int> &a, const std::vector<int> &b) {
@@ -4138,6 +4064,36 @@ build_competitor_clusters(const std::vector<CompetitorMeta> &metas) {
     clusters.push_back(cluster);
   }
   return clusters;
+}
+
+const uuber::OutcomeContextInfo *
+matching_outcome_info(const uuber::NativeContext &ctx, int outcome_idx_context,
+                      int node_id, const std::vector<int> &competitor_ids) {
+  if (outcome_idx_context < 0 ||
+      outcome_idx_context >= static_cast<int>(ctx.outcome_info.size())) {
+    return nullptr;
+  }
+  const uuber::OutcomeContextInfo &info =
+      ctx.outcome_info[static_cast<std::size_t>(outcome_idx_context)];
+  if (info.node_id != node_id || info.competitor_ids != competitor_ids) {
+    return nullptr;
+  }
+  return &info;
+}
+
+const CompetitorClusterInfo &resolve_competitor_cluster_info(
+    const uuber::NativeContext &ctx, const std::vector<int> &competitor_ids,
+    int outcome_idx_context, CompetitorClusterInfo &scratch) {
+  if (outcome_idx_context >= 0 &&
+      outcome_idx_context < static_cast<int>(ctx.outcome_info.size())) {
+    const uuber::OutcomeContextInfo &info =
+        ctx.outcome_info[static_cast<std::size_t>(outcome_idx_context)];
+    if (info.competitor_ids == competitor_ids) {
+      return info.competitor_cluster;
+    }
+  }
+  scratch = build_competitor_cluster_info(ctx, competitor_ids);
+  return scratch;
 }
 
 uuber::PoolTemplateCacheEntry
@@ -4249,7 +4205,8 @@ evaluate_survival_with_forced(int node_id,
 }
 
 double compute_competitor_cluster_value(
-    const CompetitorClusterPlan &plan, const std::vector<CompetitorMeta> &metas,
+    const CompetitorClusterPlan &cluster_plan,
+    const std::vector<CompetitorMeta> &metas,
     const uuber::NativeContext &ctx, double t,
     const uuber::BitsetState *forced_complete_bits,
     bool forced_complete_bits_valid,
@@ -4260,11 +4217,12 @@ double compute_competitor_cluster_value(
     const ExactSourceTimeMap *exact_source_times = nullptr,
     const SourceTimeBoundsMap *source_time_bounds = nullptr,
     uuber::KernelRuntimeState *kernel_runtime = nullptr) {
-  if (plan.member_indices.empty()) {
+  if (cluster_plan.member_indices.empty()) {
     return 1.0;
   }
 
-  if (plan.mode == CompetitorClusterExecMode::BatchKernel) {
+  if (cluster_plan.mode == CompetitorClusterExecMode::BatchKernel &&
+      cluster_plan.batch_query_plan_index >= 0) {
     const bool kernel_runtime_usable =
         kernel_runtime &&
         !forced_bits_any(forced_complete_bits, forced_complete_bits_valid) &&
@@ -4275,23 +4233,12 @@ double compute_competitor_cluster_value(
                         forced_complete_bits, forced_complete_bits_valid,
                         forced_survive_bits, forced_survive_bits_valid,
                         kernel_runtime_usable ? kernel_runtime : nullptr);
-    std::vector<int> target_node_indices;
-    target_node_indices.reserve(plan.member_indices.size());
-    for (int idx : plan.member_indices) {
-      const CompetitorMeta &meta = metas[static_cast<std::size_t>(idx)];
-      if (meta.node_idx < 0) {
-        Rcpp::stop("IR competitor node index missing for node %d", meta.node_id);
-      }
-      target_node_indices.push_back(meta.node_idx);
+    const uuber::KernelQueryPlan *kernel_plan =
+        uuber::get_kernel_multi_query_plan(
+            ctx.kernel_program, cluster_plan.batch_query_plan_index);
+    if (kernel_plan == nullptr) {
+      Rcpp::stop("IR kernel query plan unavailable for competitor cluster");
     }
-    if (target_node_indices.empty()) {
-      return 1.0;
-    }
-
-    uuber::KernelEvalNeed kernel_need;
-    kernel_need.density = false;
-    kernel_need.survival = true;
-    kernel_need.cdf = true;
     const uuber::KernelEventEvaluator event_eval_cb =
         make_kernel_event_eval(state);
     const uuber::KernelGuardEvaluator guard_eval_cb =
@@ -4299,22 +4246,18 @@ double compute_competitor_cluster_value(
     std::vector<uuber::KernelNodeValues> kernel_values;
     if (kernel_runtime_usable && state.kernel_runtime_ready &&
         state.kernel_runtime_ptr) {
-      if (!uuber::eval_kernel_nodes_incremental(
-              ctx.kernel_program, *state.kernel_runtime_ptr, target_node_indices,
-              kernel_need, event_eval_cb, guard_eval_cb, kernel_values) ||
-          kernel_values.size() != target_node_indices.size()) {
+      if (!uuber::eval_kernel_query_plan_incremental(
+              ctx.kernel_program, *state.kernel_runtime_ptr, *kernel_plan,
+              event_eval_cb, guard_eval_cb, kernel_values) ||
+          kernel_values.size() != kernel_plan->target_slots.size()) {
         Rcpp::stop("IR kernel execution failed for competitor cluster");
       }
-    } else {
-      kernel_values.resize(target_node_indices.size());
-      for (std::size_t i = 0; i < target_node_indices.size(); ++i) {
-        if (!uuber::eval_kernel_node(ctx.kernel_program, target_node_indices[i],
-                                     kernel_need, event_eval_cb, guard_eval_cb,
-                                     kernel_values[i])) {
-          Rcpp::stop("IR kernel execution failed for competitor cluster");
-        }
+    } else if (!uuber::eval_kernel_query_plan(ctx.kernel_program, *kernel_plan,
+                                              event_eval_cb, guard_eval_cb,
+                                              kernel_values) ||
+               kernel_values.size() != kernel_plan->target_slots.size()) {
+        Rcpp::stop("IR kernel execution failed for competitor cluster");
       }
-    }
     double batch_prod = 1.0;
     for (const auto &vals : kernel_values) {
       double surv = clamp_probability(vals.survival);
@@ -4349,7 +4292,8 @@ double compute_competitor_cluster_value(
       forced_survive_bits_seed_valid ? &forced_survive_bits_seed : nullptr,
       forced_survive_bits_seed_valid, nullptr);
   const std::vector<int> &order =
-      plan.eval_order.empty() ? plan.member_indices : plan.eval_order;
+      cluster_plan.eval_order.empty() ? cluster_plan.member_indices
+                                      : cluster_plan.eval_order;
   if (!ensure_forced_bitset_capacity(ctx, state.forced_survive_bits,
                                      state.forced_survive_bits_valid)) {
     Rcpp::stop(
@@ -4394,12 +4338,14 @@ double competitor_survival_internal(
     const TrialParamSet *trial_params = nullptr,
     const ExactSourceTimeMap *exact_source_times = nullptr,
     const SourceTimeBoundsMap *source_time_bounds = nullptr,
-    uuber::KernelRuntimeState *kernel_runtime = nullptr) {
+    uuber::KernelRuntimeState *kernel_runtime = nullptr,
+    int outcome_idx_context = -1) {
   if (competitor_ids.empty())
     return 1.0;
-  const CompetitorClusterCacheEntry &cache =
-      fetch_competitor_cluster_cache(ctx, competitor_ids);
-  if (cache.cluster_plans.empty())
+  CompetitorClusterInfo local_cluster_info;
+  const CompetitorClusterInfo &cluster_info = resolve_competitor_cluster_info(
+      ctx, competitor_ids, outcome_idx_context, local_cluster_info);
+  if (cluster_info.cluster_plans.empty())
     return 1.0;
 
   uuber::BitsetState forced_complete_bits;
@@ -4416,9 +4362,9 @@ double competitor_survival_internal(
   }
 
   double product = 1.0;
-  for (const CompetitorClusterPlan &plan : cache.cluster_plans) {
+  for (const CompetitorClusterPlan &plan : cluster_info.cluster_plans) {
     double cluster_val = compute_competitor_cluster_value(
-        plan, cache.metas, ctx, t,
+        plan, cluster_info.metas, ctx, t,
         forced_complete_bits_valid ? &forced_complete_bits : nullptr,
         forced_complete_bits_valid,
         forced_survive_bits_valid ? &forced_survive_bits : nullptr,
@@ -4477,37 +4423,29 @@ inline double node_density_with_competitors_from_state(
     const uuber::NativeContext &ctx, int node_id,
     const std::vector<int> &competitor_ids, NodeEvalState &state,
     bool use_fused_competitor_survival, uuber::KernelRuntimeState *kernel_runtime) {
+  const uuber::OutcomeContextInfo *outcome_info = matching_outcome_info(
+      ctx, state.outcome_idx, node_id, competitor_ids);
   if (use_fused_competitor_survival && !competitor_ids.empty() &&
       state.kernel_runtime_ready && state.kernel_runtime_ptr &&
       state.forced_scope_filter == nullptr &&
       !(state.forced_complete_bits_valid && state.forced_complete_bits.any()) &&
       !(state.forced_survive_bits_valid && state.forced_survive_bits.any()) &&
-      state.exact_source_times == nullptr &&
-      state.source_time_bounds == nullptr) {
-    int target_node_idx = resolve_dense_node_idx_required(ctx, node_id);
-    std::vector<int> eval_node_indices;
-    eval_node_indices.reserve(1 + competitor_ids.size());
-    eval_node_indices.push_back(target_node_idx);
-    for (int comp_node_id : competitor_ids) {
-      if (comp_node_id == NA_INTEGER) {
-        continue;
-      }
-      int comp_idx = resolve_dense_node_idx_required(ctx, comp_node_id);
-      eval_node_indices.push_back(comp_idx);
+      state.exact_source_times == nullptr && state.source_time_bounds == nullptr &&
+      outcome_info != nullptr && outcome_info->fused_query_plan_index >= 0) {
+    const uuber::KernelQueryPlan *plan = uuber::get_kernel_multi_query_plan(
+        ctx.kernel_program, outcome_info->fused_query_plan_index);
+    if (plan == nullptr) {
+      Rcpp::stop(
+          "IR kernel query plan unavailable for fused node/competitor evaluation");
     }
-    if (!eval_node_indices.empty()) {
-      uuber::KernelEvalNeed kernel_need;
-      kernel_need.density = true;
-      kernel_need.survival = true;
-      kernel_need.cdf = true;
       std::vector<uuber::KernelNodeValues> kernel_values;
       const uuber::KernelEventEvaluator event_eval_cb =
           make_kernel_event_eval(state);
       const uuber::KernelGuardEvaluator guard_eval_cb =
           make_kernel_guard_eval(state);
-      if (!uuber::eval_kernel_nodes_incremental(
-              ctx.kernel_program, *state.kernel_runtime_ptr, eval_node_indices,
-              kernel_need, event_eval_cb, guard_eval_cb, kernel_values) ||
+      if (!uuber::eval_kernel_query_plan_incremental(
+              ctx.kernel_program, *state.kernel_runtime_ptr, *plan,
+              event_eval_cb, guard_eval_cb, kernel_values) ||
           kernel_values.empty()) {
         Rcpp::stop(
             "IR kernel execution failed for fused node/competitor evaluation");
@@ -4532,7 +4470,6 @@ inline double node_density_with_competitors_from_state(
         return 0.0;
       }
       return out;
-    }
   }
   NodeEvalResult base = eval_node_recursive(node_id, state, EvalNeed::kDensity);
   double density = base.density;
@@ -4554,13 +4491,85 @@ inline double node_density_with_competitors_from_state(
                             state.forced_survive_bits_valid,
                             state.trial_type_key, state.trial_params,
                             state.exact_source_times, state.source_time_bounds,
-                            kernel_runtime);
+                            kernel_runtime, state.outcome_idx);
     if (!std::isfinite(surv) || surv <= 0.0) {
       return 0.0;
     }
     density *= surv;
   }
   return density;
+}
+
+void precompute_likelihood_query_plans_impl(uuber::NativeContext &ctx) {
+  if (!ctx.kernel_program.valid) {
+    return;
+  }
+
+  const std::array<EvalNeed, 7> kSingleQueryNeeds{
+      EvalNeed::kDensity,
+      EvalNeed::kSurvival,
+      EvalNeed::kCDF,
+      EvalNeed::kDensity | EvalNeed::kSurvival,
+      EvalNeed::kDensity | EvalNeed::kCDF,
+      EvalNeed::kSurvival | EvalNeed::kCDF,
+      kEvalAll};
+
+  for (int node_idx : ctx.kernel_program.outputs.slot_to_node_idx) {
+    for (EvalNeed need : kSingleQueryNeeds) {
+      (void)uuber::precompute_kernel_query_plan(ctx.kernel_program, node_idx,
+                                                need);
+    }
+  }
+
+  for (uuber::OutcomeContextInfo &info : ctx.outcome_info) {
+    if (info.node_id < 0) {
+      continue;
+    }
+
+    info.competitor_cluster = build_competitor_cluster_info(ctx, info.competitor_ids);
+    info.fused_query_plan_index = -1;
+
+    std::vector<int> fused_node_indices;
+    fused_node_indices.reserve(1 + info.competitor_cluster.metas.size());
+    fused_node_indices.push_back(
+        resolve_dense_node_idx_required(ctx, info.node_id));
+    for (const CompetitorMeta &meta : info.competitor_cluster.metas) {
+      if (meta.node_idx >= 0) {
+        fused_node_indices.push_back(meta.node_idx);
+      }
+    }
+    if (!fused_node_indices.empty()) {
+      std::vector<EvalNeed> fused_needs(fused_node_indices.size(),
+                                        EvalNeed::kSurvival);
+      fused_needs.front() = EvalNeed::kDensity;
+      info.fused_query_plan_index = uuber::precompute_kernel_multi_query_plan(
+          ctx.kernel_program, fused_node_indices, fused_needs);
+    }
+
+    for (CompetitorClusterPlan &plan : info.competitor_cluster.cluster_plans) {
+      plan.batch_query_plan_index = -1;
+      if (plan.mode != CompetitorClusterExecMode::BatchKernel ||
+          plan.member_indices.empty()) {
+        continue;
+      }
+      std::vector<int> cluster_node_indices;
+      cluster_node_indices.reserve(plan.member_indices.size());
+      for (int meta_idx : plan.member_indices) {
+        const CompetitorMeta &meta =
+            info.competitor_cluster.metas[static_cast<std::size_t>(meta_idx)];
+        if (meta.node_idx >= 0) {
+          cluster_node_indices.push_back(meta.node_idx);
+        }
+      }
+      if (cluster_node_indices.empty()) {
+        continue;
+      }
+      std::vector<EvalNeed> cluster_needs(cluster_node_indices.size(),
+                                          EvalNeed::kSurvival);
+      plan.batch_query_plan_index = uuber::precompute_kernel_multi_query_plan(
+          ctx.kernel_program, cluster_node_indices, cluster_needs);
+    }
+  }
 }
 
 double node_density_with_competitors_internal(
@@ -5156,6 +5165,19 @@ build_trial_params_from_df(const uuber::NativeContext &ctx,
 }
 
 } // namespace
+
+namespace uuber {
+
+void precompute_likelihood_query_plans_recursive(NativeContext &ctx) {
+  precompute_likelihood_query_plans_impl(ctx);
+  for (auto &variant : ctx.component_variants) {
+    if (variant) {
+      precompute_likelihood_query_plans_recursive(*variant);
+    }
+  }
+}
+
+} // namespace uuber
 
 Rcpp::List native_component_plan_impl(const Rcpp::List &structure,
                                       const Rcpp::DataFrame *trial_rows,

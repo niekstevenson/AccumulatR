@@ -4,6 +4,8 @@
 #include <limits>
 #include <vector>
 
+#include "kernel_program.h"
+
 namespace uuber {
 namespace {
 
@@ -29,83 +31,61 @@ inline double safe_density(double x) {
 
 inline KernelNodeValues default_guard_eval(const KernelNodeValues &ref,
                                            const KernelNodeValues &block,
-                                           const KernelEvalNeed &need) {
+                                           EvalNeed need) {
   KernelNodeValues out;
-  out.density = need.density ? safe_density(ref.density * block.survival) : 0.0;
-  if (need.cdf) {
+  out.density = needs_density(need) ? safe_density(ref.density * block.survival)
+                                    : 0.0;
+  if (needs_cdf(need)) {
     out.cdf = clamp_probability(ref.cdf * block.survival);
   }
-  if (need.survival) {
-    out.survival = need.cdf ? clamp_probability(1.0 - out.cdf) : block.survival;
+  if (needs_survival(need)) {
+    out.survival =
+        needs_cdf(need) ? clamp_probability(1.0 - out.cdf) : block.survival;
   }
   return out;
 }
 
-} // namespace
-
-void reset_kernel_runtime(const KernelProgram &program,
-                          KernelRuntimeState &runtime) {
-  runtime.program = &program;
-  runtime.slots.resize(program.ops.size());
-  const int max_children = std::max(0, program.max_child_count);
-  runtime.child_primary.resize(static_cast<std::size_t>(max_children));
-  runtime.child_density.resize(static_cast<std::size_t>(max_children));
-  runtime.prefix.resize(static_cast<std::size_t>(max_children + 1));
-  runtime.suffix.resize(static_cast<std::size_t>(max_children + 1));
-  runtime.computed_upto = -1;
-  runtime.initialized = true;
+inline EvalNeed mask_to_need(std::uint8_t mask) {
+  return static_cast<EvalNeed>(mask);
 }
 
-void invalidate_kernel_runtime_from_slot(KernelRuntimeState &runtime,
-                                         int slot_begin) {
-  if (!runtime.initialized) {
-    return;
-  }
-  if (slot_begin <= 0) {
-    runtime.computed_upto = -1;
-    return;
-  }
-  if (slot_begin - 1 < runtime.computed_upto) {
-    runtime.computed_upto = slot_begin - 1;
-  }
-}
-
-bool eval_kernel_node_incremental(const KernelProgram &program,
-                                  KernelRuntimeState &runtime,
-                                  int target_node_idx,
-                                  const KernelEvalNeed &need,
-                                  const KernelEventEvaluator &event_eval,
-                                  const KernelGuardEvaluator &guard_eval,
-                                  KernelNodeValues &out_values) {
-  if (!program.valid || target_node_idx < 0 || !event_eval) {
-    return false;
-  }
-  if (target_node_idx >=
-      static_cast<int>(program.outputs.node_idx_to_slot.size())) {
-    return false;
-  }
-  int target_slot =
-      program.outputs.node_idx_to_slot[static_cast<std::size_t>(target_node_idx)];
-  if (target_slot < 0 || target_slot >= static_cast<int>(program.ops.size())) {
-    return false;
-  }
+void prepare_runtime_for_plan(const KernelProgram &program,
+                              KernelRuntimeState &runtime,
+                              const KernelQueryPlan &plan) {
   if (!runtime.initialized || runtime.program != &program ||
       runtime.slots.size() != program.ops.size()) {
     reset_kernel_runtime(program, runtime);
   }
-  if (target_slot <= runtime.computed_upto) {
-    out_values = runtime.slots[static_cast<std::size_t>(target_slot)];
-    return true;
+  if (runtime.active_plan != &plan) {
+    invalidate_kernel_runtime_from_slot(runtime, 0);
+    runtime.active_plan = &plan;
   }
+}
 
-  const int eval_slot_count = target_slot + 1;
-  for (int op_idx = std::max(0, runtime.computed_upto + 1); op_idx <= target_slot;
+bool eval_kernel_slots_incremental(const KernelProgram &program,
+                                   KernelRuntimeState &runtime,
+                                   const KernelQueryPlan &plan,
+                                   const KernelEventEvaluator &event_eval,
+                                   const KernelGuardEvaluator &guard_eval) {
+  if (!plan.valid || plan.max_slot < 0 ||
+      plan.slot_need_masks.size() != program.ops.size()) {
+    return false;
+  }
+  const int eval_slot_count = plan.max_slot + 1;
+  for (int op_idx = std::max(0, runtime.computed_upto + 1);
+       op_idx <= plan.max_slot;
        ++op_idx) {
+    const EvalNeed slot_need = mask_to_need(
+        plan.slot_need_masks[static_cast<std::size_t>(op_idx)]);
+    if (!has_any_need(slot_need)) {
+      runtime.slots[static_cast<std::size_t>(op_idx)] = KernelNodeValues{};
+      continue;
+    }
     const KernelOp &op = program.ops[static_cast<std::size_t>(op_idx)];
     KernelNodeValues out;
     switch (op.code) {
     case KernelOpCode::Event: {
-      out = event_eval(op.event_idx);
+      out = event_eval(op.event_idx, slot_need);
       out.density = safe_density(out.density);
       out.survival = clamp_probability(out.survival);
       out.cdf = clamp_probability(out.cdf);
@@ -127,9 +107,9 @@ bool eval_kernel_node_incremental(const KernelProgram &program,
           continue;
         }
         runtime.child_primary[static_cast<std::size_t>(i)] =
-            clamp_probability(runtime.slots[slot].cdf);
+            clamp_probability(runtime.slots[static_cast<std::size_t>(slot)].cdf);
         runtime.child_density[static_cast<std::size_t>(i)] =
-            safe_density(runtime.slots[slot].density);
+            safe_density(runtime.slots[static_cast<std::size_t>(slot)].density);
       }
       runtime.prefix[0] = 1.0;
       runtime.suffix[static_cast<std::size_t>(n)] = 1.0;
@@ -143,12 +123,14 @@ bool eval_kernel_node_incremental(const KernelProgram &program,
             runtime.suffix[static_cast<std::size_t>(i + 1)] *
             runtime.child_primary[static_cast<std::size_t>(i)];
       }
-      out.cdf =
-          clamp_probability(runtime.prefix[static_cast<std::size_t>(n)]);
-      if (need.survival) {
-        out.survival = clamp_probability(1.0 - out.cdf);
+      const double cdf = clamp_probability(runtime.prefix[static_cast<std::size_t>(n)]);
+      if (needs_cdf(slot_need)) {
+        out.cdf = cdf;
       }
-      if (need.density) {
+      if (needs_survival(slot_need)) {
+        out.survival = clamp_probability(1.0 - cdf);
+      }
+      if (needs_density(slot_need)) {
         double d = 0.0;
         for (int i = 0; i < n; ++i) {
           const double others =
@@ -177,9 +159,10 @@ bool eval_kernel_node_incremental(const KernelProgram &program,
           continue;
         }
         runtime.child_primary[static_cast<std::size_t>(i)] =
-            clamp_probability(runtime.slots[slot].survival);
+            clamp_probability(
+                runtime.slots[static_cast<std::size_t>(slot)].survival);
         runtime.child_density[static_cast<std::size_t>(i)] =
-            safe_density(runtime.slots[slot].density);
+            safe_density(runtime.slots[static_cast<std::size_t>(slot)].density);
       }
       runtime.prefix[0] = 1.0;
       runtime.suffix[static_cast<std::size_t>(n)] = 1.0;
@@ -193,10 +176,15 @@ bool eval_kernel_node_incremental(const KernelProgram &program,
             runtime.suffix[static_cast<std::size_t>(i + 1)] *
             runtime.child_primary[static_cast<std::size_t>(i)];
       }
-      out.survival =
+      const double survival =
           clamp_probability(runtime.prefix[static_cast<std::size_t>(n)]);
-      out.cdf = clamp_probability(1.0 - out.survival);
-      if (need.density) {
+      if (needs_survival(slot_need)) {
+        out.survival = survival;
+      }
+      if (needs_cdf(slot_need)) {
+        out.cdf = clamp_probability(1.0 - survival);
+      }
+      if (needs_density(slot_need)) {
         double d = 0.0;
         for (int i = 0; i < n; ++i) {
           const double others =
@@ -222,8 +210,13 @@ bool eval_kernel_node_incremental(const KernelProgram &program,
       }
       const KernelNodeValues &child =
           runtime.slots[static_cast<std::size_t>(child_slot)];
-      out.cdf = clamp_probability(1.0 - child.cdf);
-      out.survival = clamp_probability(child.cdf);
+      const double child_cdf = clamp_probability(child.cdf);
+      if (needs_cdf(slot_need)) {
+        out.cdf = clamp_probability(1.0 - child_cdf);
+      }
+      if (needs_survival(slot_need)) {
+        out.survival = child_cdf;
+      }
       out.density = 0.0;
       break;
     }
@@ -238,9 +231,9 @@ bool eval_kernel_node_incremental(const KernelProgram &program,
               ? runtime.slots[static_cast<std::size_t>(op.blocker_slot)]
               : zero;
       if (guard_eval) {
-        out = guard_eval(op, ref, block, need);
+        out = guard_eval(op, ref, block, slot_need);
       } else {
-        out = default_guard_eval(ref, block, need);
+        out = default_guard_eval(ref, block, slot_need);
       }
       out.density = safe_density(out.density);
       out.survival = clamp_probability(out.survival);
@@ -253,53 +246,59 @@ bool eval_kernel_node_incremental(const KernelProgram &program,
     }
   }
 
-  runtime.computed_upto = std::max(runtime.computed_upto, target_slot);
-  out_values = runtime.slots[static_cast<std::size_t>(target_slot)];
+  runtime.computed_upto = std::max(runtime.computed_upto, plan.max_slot);
   return true;
 }
 
-bool eval_kernel_nodes_incremental(const KernelProgram &program,
-                                   KernelRuntimeState &runtime,
-                                   const std::vector<int> &target_node_indices,
-                                   const KernelEvalNeed &need,
-                                   const KernelEventEvaluator &event_eval,
-                                   const KernelGuardEvaluator &guard_eval,
-                                   std::vector<KernelNodeValues> &out_values) {
+} // namespace
+
+void reset_kernel_runtime(const KernelProgram &program,
+                          KernelRuntimeState &runtime) {
+  runtime.program = &program;
+  runtime.active_plan = nullptr;
+  runtime.slots.resize(program.ops.size());
+  const int max_children = std::max(0, program.max_child_count);
+  runtime.child_primary.resize(static_cast<std::size_t>(max_children));
+  runtime.child_density.resize(static_cast<std::size_t>(max_children));
+  runtime.prefix.resize(static_cast<std::size_t>(max_children + 1));
+  runtime.suffix.resize(static_cast<std::size_t>(max_children + 1));
+  runtime.computed_upto = -1;
+  runtime.initialized = true;
+}
+
+void invalidate_kernel_runtime_from_slot(KernelRuntimeState &runtime,
+                                         int slot_begin) {
+  if (!runtime.initialized) {
+    return;
+  }
+  if (slot_begin <= 0) {
+    runtime.computed_upto = -1;
+    return;
+  }
+  if (slot_begin - 1 < runtime.computed_upto) {
+    runtime.computed_upto = slot_begin - 1;
+  }
+}
+
+bool eval_kernel_query_plan_incremental(
+    const KernelProgram &program, KernelRuntimeState &runtime,
+    const KernelQueryPlan &plan, const KernelEventEvaluator &event_eval,
+    const KernelGuardEvaluator &guard_eval,
+    std::vector<KernelNodeValues> &out_values) {
   out_values.clear();
-  if (!program.valid || target_node_indices.empty() || !event_eval) {
+  if (!program.valid || !plan.valid || !event_eval ||
+      plan.target_slots.empty()) {
     return false;
   }
-  std::vector<int> target_slots;
-  target_slots.reserve(target_node_indices.size());
-  int max_slot = -1;
-  for (int node_idx : target_node_indices) {
-    if (node_idx < 0 ||
-        node_idx >= static_cast<int>(program.outputs.node_idx_to_slot.size())) {
+  prepare_runtime_for_plan(program, runtime, plan);
+  if (plan.max_slot > runtime.computed_upto) {
+    if (!eval_kernel_slots_incremental(program, runtime, plan, event_eval,
+                                       guard_eval)) {
       return false;
     }
-    int slot =
-        program.outputs.node_idx_to_slot[static_cast<std::size_t>(node_idx)];
-    if (slot < 0 || slot >= static_cast<int>(program.ops.size())) {
-      return false;
-    }
-    target_slots.push_back(slot);
-    if (slot > max_slot) {
-      max_slot = slot;
-    }
   }
-  if (max_slot < 0 ||
-      max_slot >= static_cast<int>(program.outputs.slot_to_node_idx.size())) {
-    return false;
-  }
-  const int max_node_idx =
-      program.outputs.slot_to_node_idx[static_cast<std::size_t>(max_slot)];
-  KernelNodeValues ignored{};
-  if (!eval_kernel_node_incremental(program, runtime, max_node_idx, need,
-                                    event_eval, guard_eval, ignored)) {
-    return false;
-  }
-  out_values.reserve(target_slots.size());
-  for (int slot : target_slots) {
+  out_values.reserve(plan.target_slots.size());
+  for (int slot : plan.target_slots) {
     if (slot < 0 || slot >= static_cast<int>(runtime.slots.size())) {
       return false;
     }
@@ -308,11 +307,34 @@ bool eval_kernel_nodes_incremental(const KernelProgram &program,
   return true;
 }
 
-bool eval_kernel_node(const KernelProgram &program, int target_node_idx,
-                      const KernelEvalNeed &need,
-                      const KernelEventEvaluator &event_eval,
-                      const KernelGuardEvaluator &guard_eval,
-                      KernelNodeValues &out_values) {
+bool eval_kernel_single_query_plan_incremental(
+    const KernelProgram &program, KernelRuntimeState &runtime,
+    const KernelQueryPlan &plan, const KernelEventEvaluator &event_eval,
+    const KernelGuardEvaluator &guard_eval, KernelNodeValues &out_values) {
+  if (!program.valid || !plan.valid || !event_eval ||
+      plan.target_slots.size() != 1u) {
+    return false;
+  }
+  prepare_runtime_for_plan(program, runtime, plan);
+  if (plan.max_slot > runtime.computed_upto) {
+    if (!eval_kernel_slots_incremental(program, runtime, plan, event_eval,
+                                       guard_eval)) {
+      return false;
+    }
+  }
+  const int target_slot = plan.target_slots.front();
+  if (target_slot < 0 || target_slot >= static_cast<int>(runtime.slots.size())) {
+    return false;
+  }
+  out_values = runtime.slots[static_cast<std::size_t>(target_slot)];
+  return true;
+}
+
+bool eval_kernel_query_plan(const KernelProgram &program,
+                            const KernelQueryPlan &plan,
+                            const KernelEventEvaluator &event_eval,
+                            const KernelGuardEvaluator &guard_eval,
+                            std::vector<KernelNodeValues> &out_values) {
   thread_local KernelRuntimeState runtime;
   if (!runtime.initialized || runtime.program != &program ||
       runtime.slots.size() != program.ops.size()) {
@@ -320,8 +342,27 @@ bool eval_kernel_node(const KernelProgram &program, int target_node_idx,
   } else {
     invalidate_kernel_runtime_from_slot(runtime, 0);
   }
-  bool ok = eval_kernel_node_incremental(program, runtime, target_node_idx, need,
-                                         event_eval, guard_eval, out_values);
+  bool ok = eval_kernel_query_plan_incremental(program, runtime, plan,
+                                               event_eval, guard_eval,
+                                               out_values);
+  invalidate_kernel_runtime_from_slot(runtime, 0);
+  return ok;
+}
+
+bool eval_kernel_single_query_plan(const KernelProgram &program,
+                                   const KernelQueryPlan &plan,
+                                   const KernelEventEvaluator &event_eval,
+                                   const KernelGuardEvaluator &guard_eval,
+                                   KernelNodeValues &out_values) {
+  thread_local KernelRuntimeState runtime;
+  if (!runtime.initialized || runtime.program != &program ||
+      runtime.slots.size() != program.ops.size()) {
+    reset_kernel_runtime(program, runtime);
+  } else {
+    invalidate_kernel_runtime_from_slot(runtime, 0);
+  }
+  bool ok = eval_kernel_single_query_plan_incremental(
+      program, runtime, plan, event_eval, guard_eval, out_values);
   invalidate_kernel_runtime_from_slot(runtime, 0);
   return ok;
 }

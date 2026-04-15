@@ -68,7 +68,42 @@
   list(structure = structure, prep = prep_eval_base)
 }
 
-.prepare_data_structure <- function(structure, data_df, prep = NULL, native_bundle = NULL) {
+.compress_prepared_trials <- function(data_df) {
+  trial <- as.integer(data_df$trial)
+  n_rows <- length(trial)
+  if (n_rows == 0L) {
+    return(data_df)
+  }
+  trial_starts <- c(1L, which(trial[-1L] != trial[-n_rows]) + 1L)
+  n_trials <- length(trial_starts)
+  if (n_trials <= 1L) {
+    return(data_df)
+  }
+  trial_ends <- c(trial_starts[-1L] - 1L, n_rows)
+  sig_cols <- setdiff(names(data_df), "trial")
+  signatures <- character(n_trials)
+  for (i in seq_len(n_trials)) {
+    block <- data_df[trial_starts[[i]]:trial_ends[[i]], sig_cols, drop = FALSE]
+    rownames(block) <- NULL
+    signatures[[i]] <- rawToChar(serialize(block, NULL, ascii = TRUE))
+  }
+  keep_trials <- which(!duplicated(signatures))
+  if (length(keep_trials) == n_trials) {
+    return(data_df)
+  }
+  keep_rows <- unlist(Map(seq.int, trial_starts[keep_trials], trial_ends[keep_trials]), use.names = FALSE)
+  out <- data_df[keep_rows, , drop = FALSE]
+  out$trial <- rep.int(
+    seq_along(keep_trials),
+    trial_ends[keep_trials] - trial_starts[keep_trials] + 1L
+  )
+  rownames(out) <- NULL
+  attr(out, "expand") <- match(signatures, signatures[keep_trials])
+  class(out) <- class(data_df)
+  out
+}
+
+.prepare_data_structure <- function(structure, data_df, prep = NULL, native_bundle = NULL, compress = FALSE) {
   if (inherits(data_df, "accumulatr_data")) {
     return(data_df)
   }
@@ -148,6 +183,9 @@
     )
   }
   class(data_df) <- unique(c("accumulatr_data", class(data_df)))
+  if (isTRUE(compress)) {
+    data_df <- .compress_prepared_trials(data_df)
+  }
   data_df
 }
 
@@ -161,6 +199,9 @@
 #' @param data_df Behavioral data. In the simplest case this contains `trial`,
 #'   `R`, and `rt`; for multi-outcome models it can also contain `R2`, `rt2`,
 #'   and so on.
+#' @param compress If `TRUE`, collapse repeated prepared trials and attach an
+#'   `expand` mapping for `log_likelihood()` to reuse automatically. Defaults
+#'   to `FALSE`.
 #' @param prep Optional preprocessed model bundle.
 #' @param native_bundle Optional serialized native bundle.
 #' @return An `accumulatr_data` object.
@@ -179,11 +220,13 @@
 #' @export
 prepare_data <- function(structure,
                          data_df,
+                         compress = FALSE,
                          prep = NULL,
                          native_bundle = NULL) {
   .prepare_data_structure(
     structure = structure,
     data_df = data_df,
+    compress = compress,
     prep = prep,
     native_bundle = native_bundle
   )
@@ -1174,15 +1217,36 @@ log_likelihood.accumulatr_context <- function(context,
   } else {
     1L + sum(trial[-1L] != trial[-length(trial)])
   }
+  data_expand <- attr(data_df, "expand", exact = TRUE)
+  using_data_expand <- FALSE
   if (is.null(expand) || length(expand) == 0L) {
-    expand <- seq_len(n_trials)
+    if (!is.null(data_expand) && length(data_expand) > 0L) {
+      expand <- data_expand
+      using_data_expand <- TRUE
+    } else {
+      expand <- seq_len(n_trials)
+    }
   }
   expand <- as.integer(expand)
+  ll_offset <- 0
   if (is.null(ok) || length(ok) == 0L) {
     ok <- rep_len(TRUE, n_trials)
+  } else if (using_data_expand && length(ok) == length(data_expand)) {
+    ok <- as.logical(ok)
+    ok[is.na(ok)] <- FALSE
+    ll_offset <- sum(!ok) * min_ll
+    expand <- expand[ok]
+    ok_comp <- rep_len(FALSE, n_trials)
+    if (length(expand) > 0L) {
+      ok_comp[unique(expand)] <- TRUE
+    }
+    ok <- ok_comp
   }
   ok <- as.logical(ok)
   ok[is.na(ok)] <- FALSE
+  if (length(expand) == 0L) {
+    return(rep_len(ll_offset, length(params_list)))
+  }
   cpp_loglik_multiple(
     native_ctx,
     params_list,
@@ -1193,7 +1257,7 @@ log_likelihood.accumulatr_context <- function(context,
     .integrate_rel_tol(),
     .integrate_abs_tol(),
     getOption("uuber.integrate.max.depth", 12L)
-  )
+  ) + ll_offset
 }
 
 #' @rdname log_likelihood

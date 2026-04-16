@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Rcpp.h>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -336,6 +337,36 @@ struct OutcomeContextInfo {
   bool maps_to_na{false};
 };
 
+constexpr std::size_t kCompiledGuardChainMaxDepth = 8u;
+
+struct GuardFastEventInfo {
+  int acc_idx{-1};
+  int outcome_idx{-1};
+  bool valid{false};
+  bool density_supported{false};
+};
+
+struct GuardLinearChainInfo {
+  std::array<int, kCompiledGuardChainMaxDepth> reference_indices{};
+  int reference_count{0};
+  int leaf_blocker_idx{-1};
+  bool valid{false};
+};
+
+struct GuardContextInfo {
+  int node_idx{-1};
+  int reference_idx{-1};
+  int blocker_idx{-1};
+  int source_id_begin{-1};
+  int source_id_count{0};
+  int source_mask_begin{-1};
+  int source_mask_count{0};
+  bool valid{false};
+  GuardLinearChainInfo linear_chain;
+  std::array<GuardFastEventInfo, kCompiledGuardChainMaxDepth> reference_fast{};
+  GuardFastEventInfo leaf_fast{};
+};
+
 struct ComponentMap {
   std::vector<std::string> ids;
   std::vector<int> leader_idx;
@@ -374,8 +405,6 @@ struct NativeContext {
       pool_template_cache;
   mutable std::unordered_map<NAMapCacheKey, double, NAMapCacheKeyHash>
       na_map_cache;
-  mutable std::unordered_map<std::string, std::deque<std::string>>
-      na_cache_order;
   int na_cache_limit{128};
   std::unordered_map<std::string, std::vector<int>> shared_trigger_map;
   std::vector<SharedTriggerGroup> shared_trigger_groups;
@@ -385,6 +414,7 @@ struct NativeContext {
   std::vector<std::string> outcome_labels;
   std::vector<int> outcome_label_ids;
   std::vector<OutcomeContextInfo> outcome_info;
+  std::vector<GuardContextInfo> guard_info;
   std::vector<int> accumulator_label_ids;
   std::vector<int> base_acc_idx_by_local;
   std::vector<int> local_acc_idx_by_base;

@@ -1,0 +1,562 @@
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\documentclass[
+]{article}
+\usepackage{xcolor}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{color}
+\usepackage{fancyvrb}
+\newcommand{\VerbBar}{|}
+\newcommand{\VERB}{\Verb[commandchars=\\\{\}]}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{commandchars=\\\{\}}
+% Add ',fontsize=\small' for more characters per line
+\usepackage{framed}
+\definecolor{shadecolor}{RGB}{248,248,248}
+\newenvironment{Shaded}{\begin{snugshade}}{\end{snugshade}}
+\newcommand{\AlertTok}[1]{\textcolor[rgb]{0.94,0.16,0.16}{#1}}
+\newcommand{\AnnotationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\AttributeTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{#1}}
+\newcommand{\BaseNTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\BuiltInTok}[1]{#1}
+\newcommand{\CharTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\CommentTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textit{#1}}}
+\newcommand{\CommentVarTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\ConstantTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{#1}}
+\newcommand{\ControlFlowTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\DataTypeTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{#1}}
+\newcommand{\DecValTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\DocumentationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\ErrorTok}[1]{\textcolor[rgb]{0.64,0.00,0.00}{\textbf{#1}}}
+\newcommand{\ExtensionTok}[1]{#1}
+\newcommand{\FloatTok}[1]{\textcolor[rgb]{0.00,0.00,0.81}{#1}}
+\newcommand{\FunctionTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\ImportTok}[1]{#1}
+\newcommand{\InformationTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\newcommand{\KeywordTok}[1]{\textcolor[rgb]{0.13,0.29,0.53}{\textbf{#1}}}
+\newcommand{\NormalTok}[1]{#1}
+\newcommand{\OperatorTok}[1]{\textcolor[rgb]{0.81,0.36,0.00}{\textbf{#1}}}
+\newcommand{\OtherTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{#1}}
+\newcommand{\PreprocessorTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textit{#1}}}
+\newcommand{\RegionMarkerTok}[1]{#1}
+\newcommand{\SpecialCharTok}[1]{\textcolor[rgb]{0.81,0.36,0.00}{\textbf{#1}}}
+\newcommand{\SpecialStringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\StringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\VariableTok}[1]{\textcolor[rgb]{0.00,0.00,0.00}{#1}}
+\newcommand{\VerbatimStringTok}[1]{\textcolor[rgb]{0.31,0.60,0.02}{#1}}
+\newcommand{\WarningTok}[1]{\textcolor[rgb]{0.56,0.35,0.01}{\textbf{\textit{#1}}}}
+\usepackage{graphicx}
+\makeatletter
+\newsavebox\pandoc@box
+\newcommand*\pandocbounded[1]{% scales image to fit in text height/width
+  \sbox\pandoc@box{#1}%
+  \Gscale@div\@tempa{\textheight}{\dimexpr\ht\pandoc@box+\dp\pandoc@box\relax}%
+  \Gscale@div\@tempb{\linewidth}{\wd\pandoc@box}%
+  \ifdim\@tempb\p@<\@tempa\p@\let\@tempa\@tempb\fi% select the smaller of both
+  \ifdim\@tempa\p@<\p@\scalebox{\@tempa}{\usebox\pandoc@box}%
+  \else\usebox{\pandoc@box}%
+  \fi%
+}
+% Set default figure placement to htbp
+\def\fps@figure{htbp}
+\makeatother
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\usepackage{bookmark}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  pdftitle={Stim-Selective Stop Likelihood},
+  hidelinks,
+  pdfcreator={LaTeX via pandoc}}
+
+\title{Stim-Selective Stop Likelihood}
+\author{}
+\date{\vspace{-2.5em}}
+
+\begin{document}
+\maketitle
+
+This note derives a hand-written likelihood for the stop component of
+the stimulus-selective stop model and compares it directly to
+\texttt{AccumulatR}.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\FunctionTok{library}\NormalTok{(AccumulatR)}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{verbatim}
+## 
+## Attaching package: 'AccumulatR'
+\end{verbatim}
+
+\begin{verbatim}
+## The following object is masked from 'package:stats':
+## 
+##     simulate
+\end{verbatim}
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{model }\OtherTok{\textless{}{-}} \FunctionTok{race\_spec}\NormalTok{() }\SpecialCharTok{|\textgreater{}}
+  \FunctionTok{add\_accumulator}\NormalTok{(}\StringTok{"A"}\NormalTok{, }\StringTok{"lognormal"}\NormalTok{) }\SpecialCharTok{|\textgreater{}}
+  \FunctionTok{add\_accumulator}\NormalTok{(}\StringTok{"B"}\NormalTok{, }\StringTok{"lognormal"}\NormalTok{) }\SpecialCharTok{|\textgreater{}}
+  \FunctionTok{add\_accumulator}\NormalTok{(}\StringTok{"S1"}\NormalTok{, }\StringTok{"lognormal"}\NormalTok{) }\SpecialCharTok{|\textgreater{}}
+  \FunctionTok{add\_accumulator}\NormalTok{(}\StringTok{"IS"}\NormalTok{, }\StringTok{"lognormal"}\NormalTok{) }\SpecialCharTok{|\textgreater{}}
+  \FunctionTok{add\_accumulator}\NormalTok{(}\StringTok{"S2"}\NormalTok{, }\StringTok{"lognormal"}\NormalTok{) }\SpecialCharTok{|\textgreater{}}
+  \FunctionTok{add\_outcome}\NormalTok{(}
+    \StringTok{"A"}\NormalTok{,}
+    \FunctionTok{first\_of}\NormalTok{(}
+      \FunctionTok{inhibit}\NormalTok{(}\StringTok{"A"}\NormalTok{, }\AttributeTok{by =} \StringTok{"S1"}\NormalTok{),}
+      \FunctionTok{all\_of}\NormalTok{(}\StringTok{"A"}\NormalTok{, }\StringTok{"S1"}\NormalTok{, }\FunctionTok{inhibit}\NormalTok{(}\StringTok{"IS"}\NormalTok{, }\AttributeTok{by =} \StringTok{"S2"}\NormalTok{))}
+\NormalTok{    )}
+\NormalTok{  ) }\SpecialCharTok{|\textgreater{}}
+  \FunctionTok{add\_outcome}\NormalTok{(}
+    \StringTok{"B"}\NormalTok{,}
+    \FunctionTok{first\_of}\NormalTok{(}
+      \FunctionTok{inhibit}\NormalTok{(}\StringTok{"B"}\NormalTok{, }\AttributeTok{by =} \StringTok{"S1"}\NormalTok{),}
+      \FunctionTok{all\_of}\NormalTok{(}\StringTok{"B"}\NormalTok{, }\StringTok{"S1"}\NormalTok{, }\FunctionTok{inhibit}\NormalTok{(}\StringTok{"IS"}\NormalTok{, }\AttributeTok{by =} \StringTok{"S2"}\NormalTok{))}
+\NormalTok{    )}
+\NormalTok{  ) }\SpecialCharTok{|\textgreater{}}
+  \FunctionTok{add\_outcome}\NormalTok{(}
+    \StringTok{"STOP"}\NormalTok{,}
+    \FunctionTok{all\_of}\NormalTok{(}\StringTok{"S1"}\NormalTok{, }\FunctionTok{inhibit}\NormalTok{(}\StringTok{"S2"}\NormalTok{, }\AttributeTok{by =} \StringTok{"IS"}\NormalTok{)),}
+    \AttributeTok{options =} \FunctionTok{list}\NormalTok{(}\AttributeTok{map\_outcome\_to =} \ConstantTok{NA\_character\_}\NormalTok{)}
+\NormalTok{  ) }\SpecialCharTok{|\textgreater{}}
+  \FunctionTok{add\_component}\NormalTok{(}\StringTok{"go"}\NormalTok{, }\AttributeTok{members =} \FunctionTok{c}\NormalTok{(}\StringTok{"A"}\NormalTok{, }\StringTok{"B"}\NormalTok{)) }\SpecialCharTok{|\textgreater{}}
+  \FunctionTok{add\_component}\NormalTok{(}\StringTok{"stop"}\NormalTok{, }\AttributeTok{members =} \FunctionTok{c}\NormalTok{(}\StringTok{"A"}\NormalTok{, }\StringTok{"B"}\NormalTok{, }\StringTok{"S1"}\NormalTok{, }\StringTok{"IS"}\NormalTok{, }\StringTok{"S2"}\NormalTok{)) }\SpecialCharTok{|\textgreater{}}
+  \FunctionTok{set\_parameters}\NormalTok{(}\FunctionTok{list}\NormalTok{(}
+    \AttributeTok{m\_go =} \FunctionTok{c}\NormalTok{(}\StringTok{"A.m"}\NormalTok{, }\StringTok{"B.m"}\NormalTok{),}
+    \AttributeTok{s\_go =} \FunctionTok{c}\NormalTok{(}\StringTok{"A.s"}\NormalTok{, }\StringTok{"B.s"}\NormalTok{),}
+    \AttributeTok{t0\_go =} \FunctionTok{c}\NormalTok{(}\StringTok{"A.t0"}\NormalTok{, }\StringTok{"B.t0"}\NormalTok{)}
+\NormalTok{  )) }\SpecialCharTok{|\textgreater{}}
+  \FunctionTok{finalize\_model}\NormalTok{()}
+\end{Highlighting}
+\end{Shaded}
+
+Under the \texttt{stop} component there are three declared outcomes:
+
+\begin{itemize}
+\tightlist
+\item
+  \texttt{A\ =\ first\_of(inhibit(A,\ S1),\ all\_of(A,\ S1,\ inhibit(IS,\ S2)))}
+\item
+  \texttt{B\ =\ first\_of(inhibit(B,\ S1),\ all\_of(B,\ S1,\ inhibit(IS,\ S2)))}
+\item
+  \texttt{STOP\ =\ all\_of(S1,\ inhibit(S2,\ IS))}, mapped to
+  \texttt{NA}
+\end{itemize}
+
+Consider the two branches of A and B:
+
+\begin{itemize}
+\tightlist
+\item
+  early \texttt{A}: \texttt{E\_A\ =\ inhibit(A,\ S1)}
+\item
+  late \texttt{A}: \texttt{L\_A\ =\ all\_of(A,\ S1,\ inhibit(IS,\ S2))}
+\item
+  early \texttt{B}: \texttt{E\_B\ =\ inhibit(B,\ S1)}
+\item
+  late \texttt{B}: \texttt{L\_B\ =\ all\_of(B,\ S1,\ inhibit(IS,\ S2))}
+\end{itemize}
+
+Then:
+
+\begin{itemize}
+\tightlist
+\item
+  \texttt{A\_out\ =\ first\_of(E\_A,\ L\_A)}
+\item
+  \texttt{B\_out\ =\ first\_of(E\_B,\ L\_B)}
+\end{itemize}
+
+For the current engine, observed \texttt{NA} is leftover visible mass
+after \texttt{A} and \texttt{B}, so the hand-written likelihood targets:
+
+\begin{itemize}
+\tightlist
+\item
+  \texttt{p(A\_obs\ at\ t)\ =\ f\_A\_out(t)\ S\_B\_out(t)}
+\item
+  \texttt{p(B\_obs\ at\ t)\ =\ f\_B\_out(t)\ S\_A\_out(t)}
+\item
+  \texttt{P(NA\_obs)\ =\ 1\ -\ P(A\_obs)\ -\ P(B\_obs)}
+\end{itemize}
+
+\subsection{The actual formulas}\label{the-actual-formulas}
+
+Write \texttt{f\_X(t)}, \texttt{F\_X(t)}, and \texttt{S\_X(t)} for the
+density, cdf, and survival of accumulator \texttt{X}.
+
+For this model:
+
+\begin{itemize}
+\tightlist
+\item
+  \texttt{E\_A\ =\ inhibit(A,\ S1)}
+\item
+  \texttt{E\_B\ =\ inhibit(B,\ S1)}
+\item
+  \texttt{H\ =\ inhibit(IS,\ S2)}
+\item
+  \texttt{L\_A\ =\ all\_of(A,\ S1,\ H)}
+\item
+  \texttt{L\_B\ =\ all\_of(B,\ S1,\ H)}
+\end{itemize}
+
+The pieces are:
+
+\begin{itemize}
+\item
+  \texttt{f\_EA(t)\ =\ f\_A(t)\ S\_S1(t)}
+\item
+  \texttt{f\_EB(t)\ =\ f\_B(t)\ S\_S1(t)}
+\item
+  \texttt{f\_H(t)\ =\ f\_IS(t)\ S\_S2(t)}
+\item
+  \texttt{F\_EA(t)\ =\ ∫\_0\^{}t\ f\_A(u)\ S\_S1(u)\ du}
+\item
+  \texttt{F\_EB(t)\ =\ ∫\_0\^{}t\ f\_B(u)\ S\_S1(u)\ du}
+\item
+  \texttt{F\_H(t)\ =\ ∫\_0\^{}t\ f\_IS(u)\ S\_S2(u)\ du}
+\item
+  \texttt{S\_EA(t)\ =\ 1\ -\ F\_EA(t)}
+\item
+  \texttt{S\_EB(t)\ =\ 1\ -\ F\_EB(t)}
+\item
+  \texttt{S\_H(t)\ =\ 1\ -\ F\_H(t)}
+\end{itemize}
+
+For the late branches:
+
+\begin{itemize}
+\item
+  \texttt{F\_LA(t)\ =\ F\_A(t)\ F\_S1(t)\ F\_H(t)}
+\item
+  \texttt{F\_LB(t)\ =\ F\_B(t)\ F\_S1(t)\ F\_H(t)}
+\item
+  \texttt{f\_LA(t)\ =\ f\_A(t)\ F\_S1(t)\ F\_H(t)\ +\ F\_A(t)\ f\_S1(t)\ F\_H(t)\ +\ F\_A(t)\ F\_S1(t)\ f\_H(t)}
+\item
+  \texttt{f\_LB(t)\ =\ f\_B(t)\ F\_S1(t)\ F\_H(t)\ +\ F\_B(t)\ f\_S1(t)\ F\_H(t)\ +\ F\_B(t)\ F\_S1(t)\ f\_H(t)}
+\item
+  \texttt{S\_LA(t)\ =\ 1\ -\ F\_LA(t)}
+\item
+  \texttt{S\_LB(t)\ =\ 1\ -\ F\_LB(t)}
+\end{itemize}
+
+The visible outcomes are:
+
+\begin{itemize}
+\tightlist
+\item
+  \texttt{A\_out\ =\ first\_of(E\_A,\ L\_A)}
+\item
+  \texttt{B\_out\ =\ first\_of(E\_B,\ L\_B)}
+\end{itemize}
+
+So:
+
+\begin{itemize}
+\item
+  \texttt{f\_A\_out(t)\ =\ f\_EA(t)\ S\_LA(t)\ +\ f\_LA(t)\ S\_EA(t)}
+\item
+  \texttt{f\_B\_out(t)\ =\ f\_EB(t)\ S\_LB(t)\ +\ f\_LB(t)\ S\_EB(t)}
+\item
+  \texttt{S\_A\_out(t)\ =\ S\_EA(t)\ S\_LA(t)}
+\item
+  \texttt{S\_B\_out(t)\ =\ S\_EB(t)\ S\_LB(t)}
+\end{itemize}
+
+That gives the observed response densities directly:
+
+\begin{itemize}
+\tightlist
+\item
+  \texttt{p(A\_obs\ at\ t)\ =\ f\_A\_out(t)\ S\_B\_out(t)}
+\item
+  \texttt{p(B\_obs\ at\ t)\ =\ f\_B\_out(t)\ S\_A\_out(t)}
+\end{itemize}
+
+Expanding \texttt{A} into its two branches:
+
+\begin{itemize}
+\item
+  early \texttt{A} term:
+
+  \texttt{f\_EA(t)\ S\_LA(t)\ S\_EB(t)\ S\_LB(t)}
+\item
+  late \texttt{A} term:
+
+  \texttt{f\_LA(t)\ S\_EA(t)\ S\_EB(t)\ S\_LB(t)}
+\end{itemize}
+
+and the total is their sum.
+
+By symmetry:
+
+\begin{itemize}
+\item
+  early \texttt{B} term:
+
+  \texttt{f\_EB(t)\ S\_LB(t)\ S\_EA(t)\ S\_LA(t)}
+\item
+  late \texttt{B} term:
+
+  \texttt{f\_LB(t)\ S\_EB(t)\ S\_EA(t)\ S\_LA(t)}
+\end{itemize}
+
+and again the total is their sum.
+
+This is the R code
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{params }\OtherTok{\textless{}{-}} \FunctionTok{c}\NormalTok{(}
+  \AttributeTok{m\_go =} \FunctionTok{log}\NormalTok{(}\FloatTok{0.30}\NormalTok{), }\AttributeTok{s\_go =} \FloatTok{0.18}\NormalTok{, }\AttributeTok{t0\_go =} \FloatTok{0.05}\NormalTok{,}
+  \AttributeTok{S1.m =} \FunctionTok{log}\NormalTok{(}\FloatTok{0.26}\NormalTok{), }\AttributeTok{S1.s =} \FloatTok{0.18}\NormalTok{, }\AttributeTok{S1.t0 =} \FloatTok{0.00}\NormalTok{,}
+  \AttributeTok{IS.m =} \FunctionTok{log}\NormalTok{(}\FloatTok{0.35}\NormalTok{), }\AttributeTok{IS.s =} \FloatTok{0.18}\NormalTok{, }\AttributeTok{IS.t0 =} \FloatTok{0.00}\NormalTok{,}
+  \AttributeTok{S2.m =} \FunctionTok{log}\NormalTok{(}\FloatTok{0.32}\NormalTok{), }\AttributeTok{S2.s =} \FloatTok{0.18}\NormalTok{, }\AttributeTok{S2.t0 =} \FloatTok{0.00}
+\NormalTok{)}
+
+\NormalTok{go\_parts }\OtherTok{\textless{}{-}} \ControlFlowTok{function}\NormalTok{(params) \{}
+  \FunctionTok{list}\NormalTok{(}\AttributeTok{m =}\NormalTok{ params[[}\StringTok{"m\_go"}\NormalTok{]], }\AttributeTok{s =}\NormalTok{ params[[}\StringTok{"s\_go"}\NormalTok{]], }\AttributeTok{q =} \DecValTok{0}\NormalTok{, }\AttributeTok{t0 =}\NormalTok{ params[[}\StringTok{"t0\_go"}\NormalTok{]])}
+\NormalTok{\}}
+
+\NormalTok{acc\_parts }\OtherTok{\textless{}{-}} \ControlFlowTok{function}\NormalTok{(prefix, params) \{}
+  \FunctionTok{list}\NormalTok{(}
+    \AttributeTok{m =}\NormalTok{ params[[}\FunctionTok{paste0}\NormalTok{(prefix, }\StringTok{".m"}\NormalTok{)]],}
+    \AttributeTok{s =}\NormalTok{ params[[}\FunctionTok{paste0}\NormalTok{(prefix, }\StringTok{".s"}\NormalTok{)]],}
+    \AttributeTok{q =} \DecValTok{0}\NormalTok{,}
+    \AttributeTok{t0 =}\NormalTok{ params[[}\FunctionTok{paste0}\NormalTok{(prefix, }\StringTok{".t0"}\NormalTok{)]]}
+\NormalTok{  )}
+\NormalTok{\}}
+
+\NormalTok{acc\_pdf }\OtherTok{\textless{}{-}} \ControlFlowTok{function}\NormalTok{(t, p) \{}
+  \ControlFlowTok{if}\NormalTok{ (}\SpecialCharTok{!}\FunctionTok{is.finite}\NormalTok{(t) }\SpecialCharTok{||}\NormalTok{ t }\SpecialCharTok{\textless{}}\NormalTok{ p}\SpecialCharTok{$}\NormalTok{t0) }\FunctionTok{return}\NormalTok{(}\DecValTok{0}\NormalTok{)}
+\NormalTok{  (}\DecValTok{1} \SpecialCharTok{{-}}\NormalTok{ p}\SpecialCharTok{$}\NormalTok{q) }\SpecialCharTok{*} \FunctionTok{dlnorm}\NormalTok{(t }\SpecialCharTok{{-}}\NormalTok{ p}\SpecialCharTok{$}\NormalTok{t0, }\AttributeTok{meanlog =}\NormalTok{ p}\SpecialCharTok{$}\NormalTok{m, }\AttributeTok{sdlog =}\NormalTok{ p}\SpecialCharTok{$}\NormalTok{s)}
+\NormalTok{\}}
+
+\NormalTok{acc\_cdf }\OtherTok{\textless{}{-}} \ControlFlowTok{function}\NormalTok{(t, p) \{}
+  \ControlFlowTok{if}\NormalTok{ (}\FunctionTok{is.infinite}\NormalTok{(t) }\SpecialCharTok{\&\&}\NormalTok{ t }\SpecialCharTok{\textgreater{}} \DecValTok{0}\NormalTok{) }\FunctionTok{return}\NormalTok{(}\DecValTok{1} \SpecialCharTok{{-}}\NormalTok{ p}\SpecialCharTok{$}\NormalTok{q)}
+  \ControlFlowTok{if}\NormalTok{ (}\SpecialCharTok{!}\FunctionTok{is.finite}\NormalTok{(t) }\SpecialCharTok{||}\NormalTok{ t }\SpecialCharTok{\textless{}}\NormalTok{ p}\SpecialCharTok{$}\NormalTok{t0) }\FunctionTok{return}\NormalTok{(}\DecValTok{0}\NormalTok{)}
+\NormalTok{  (}\DecValTok{1} \SpecialCharTok{{-}}\NormalTok{ p}\SpecialCharTok{$}\NormalTok{q) }\SpecialCharTok{*} \FunctionTok{plnorm}\NormalTok{(t }\SpecialCharTok{{-}}\NormalTok{ p}\SpecialCharTok{$}\NormalTok{t0, }\AttributeTok{meanlog =}\NormalTok{ p}\SpecialCharTok{$}\NormalTok{m, }\AttributeTok{sdlog =}\NormalTok{ p}\SpecialCharTok{$}\NormalTok{s)}
+\NormalTok{\}}
+
+\NormalTok{acc\_surv }\OtherTok{\textless{}{-}} \ControlFlowTok{function}\NormalTok{(t, p) }\DecValTok{1} \SpecialCharTok{{-}} \FunctionTok{acc\_cdf}\NormalTok{(t, p)}
+
+\CommentTok{\# Return density/cdf/survival for one primitive accumulator.}
+\NormalTok{leaf }\OtherTok{\textless{}{-}} \ControlFlowTok{function}\NormalTok{(p) \{}
+  \FunctionTok{force}\NormalTok{(p)}
+  \ControlFlowTok{function}\NormalTok{(t) \{}
+    \FunctionTok{list}\NormalTok{(}
+      \AttributeTok{density =} \FunctionTok{acc\_pdf}\NormalTok{(t, p),}
+      \AttributeTok{cdf =} \FunctionTok{acc\_cdf}\NormalTok{(t, p),}
+      \AttributeTok{survival =} \FunctionTok{acc\_surv}\NormalTok{(t, p)}
+\NormalTok{    )}
+\NormalTok{  \}}
+\NormalTok{\}}
+
+\CommentTok{\# guard(R, B): R succeeds while B has not yet finished.}
+\NormalTok{guard }\OtherTok{\textless{}{-}} \ControlFlowTok{function}\NormalTok{(reference, blocker) \{}
+  \ControlFlowTok{function}\NormalTok{(t) \{}
+    \ControlFlowTok{if}\NormalTok{ (}\SpecialCharTok{!}\FunctionTok{is.finite}\NormalTok{(t) }\SpecialCharTok{||}\NormalTok{ t }\SpecialCharTok{\textless{}} \DecValTok{0}\NormalTok{) \{}
+      \FunctionTok{return}\NormalTok{(}\FunctionTok{list}\NormalTok{(}\AttributeTok{density =} \DecValTok{0}\NormalTok{, }\AttributeTok{cdf =} \DecValTok{0}\NormalTok{, }\AttributeTok{survival =} \DecValTok{1}\NormalTok{))}
+\NormalTok{    \}}
+\NormalTok{    density }\OtherTok{\textless{}{-}} \FunctionTok{reference}\NormalTok{(t)}\SpecialCharTok{$}\NormalTok{density }\SpecialCharTok{*} \FunctionTok{blocker}\NormalTok{(t)}\SpecialCharTok{$}\NormalTok{survival}
+\NormalTok{    cdf }\OtherTok{\textless{}{-}} \ControlFlowTok{if}\NormalTok{ (t }\SpecialCharTok{\textless{}=} \DecValTok{0}\NormalTok{) }\DecValTok{0} \ControlFlowTok{else}\NormalTok{ \{}
+      \FunctionTok{integrate}\NormalTok{(}
+        \ControlFlowTok{function}\NormalTok{(u) \{}
+          \FunctionTok{vapply}\NormalTok{(u, }\ControlFlowTok{function}\NormalTok{(uu) }\FunctionTok{reference}\NormalTok{(uu)}\SpecialCharTok{$}\NormalTok{density }\SpecialCharTok{*} \FunctionTok{blocker}\NormalTok{(uu)}\SpecialCharTok{$}\NormalTok{survival, }\FunctionTok{numeric}\NormalTok{(}\DecValTok{1}\NormalTok{))}
+\NormalTok{        \},}
+        \AttributeTok{lower =} \DecValTok{0}\NormalTok{,}
+        \AttributeTok{upper =}\NormalTok{ t,}
+        \AttributeTok{rel.tol =} \FloatTok{1e{-}8}\NormalTok{,}
+        \AttributeTok{abs.tol =} \FloatTok{1e{-}10}\NormalTok{,}
+        \AttributeTok{subdivisions =} \DecValTok{200}\DataTypeTok{L}
+\NormalTok{      )}\SpecialCharTok{$}\NormalTok{value}
+\NormalTok{    \}}
+\NormalTok{    cdf }\OtherTok{\textless{}{-}} \FunctionTok{min}\NormalTok{(}\FunctionTok{max}\NormalTok{(cdf, }\DecValTok{0}\NormalTok{), }\DecValTok{1}\NormalTok{)}
+    \FunctionTok{list}\NormalTok{(}\AttributeTok{density =}\NormalTok{ density, }\AttributeTok{cdf =}\NormalTok{ cdf, }\AttributeTok{survival =} \DecValTok{1} \SpecialCharTok{{-}}\NormalTok{ cdf)}
+\NormalTok{  \}}
+\NormalTok{\}}
+
+\CommentTok{\# all\_of(X1, X2, ..., Xn)}
+\NormalTok{all\_of\_node }\OtherTok{\textless{}{-}} \ControlFlowTok{function}\NormalTok{(...) \{}
+\NormalTok{  children }\OtherTok{\textless{}{-}} \FunctionTok{list}\NormalTok{(...)}
+  \ControlFlowTok{function}\NormalTok{(t) \{}
+\NormalTok{    vals }\OtherTok{\textless{}{-}} \FunctionTok{lapply}\NormalTok{(children, }\ControlFlowTok{function}\NormalTok{(fn) }\FunctionTok{fn}\NormalTok{(t))}
+\NormalTok{    Fvals }\OtherTok{\textless{}{-}} \FunctionTok{vapply}\NormalTok{(vals, }\StringTok{\textasciigrave{}}\AttributeTok{[[}\StringTok{\textasciigrave{}}\NormalTok{, }\FunctionTok{numeric}\NormalTok{(}\DecValTok{1}\NormalTok{), }\StringTok{"cdf"}\NormalTok{)}
+\NormalTok{    fvals }\OtherTok{\textless{}{-}} \FunctionTok{vapply}\NormalTok{(vals, }\StringTok{\textasciigrave{}}\AttributeTok{[[}\StringTok{\textasciigrave{}}\NormalTok{, }\FunctionTok{numeric}\NormalTok{(}\DecValTok{1}\NormalTok{), }\StringTok{"density"}\NormalTok{)}
+\NormalTok{    cdf }\OtherTok{\textless{}{-}} \FunctionTok{prod}\NormalTok{(Fvals)}
+\NormalTok{    density }\OtherTok{\textless{}{-}} \FunctionTok{sum}\NormalTok{(}\FunctionTok{vapply}\NormalTok{(}
+      \FunctionTok{seq\_along}\NormalTok{(fvals),}
+      \ControlFlowTok{function}\NormalTok{(i) fvals[i] }\SpecialCharTok{*} \ControlFlowTok{if}\NormalTok{ (}\FunctionTok{length}\NormalTok{(fvals) }\SpecialCharTok{==} \DecValTok{1}\DataTypeTok{L}\NormalTok{) }\DecValTok{1} \ControlFlowTok{else} \FunctionTok{prod}\NormalTok{(Fvals[}\SpecialCharTok{{-}}\NormalTok{i]),}
+      \FunctionTok{numeric}\NormalTok{(}\DecValTok{1}\NormalTok{)}
+\NormalTok{    ))}
+\NormalTok{    cdf }\OtherTok{\textless{}{-}} \FunctionTok{min}\NormalTok{(}\FunctionTok{max}\NormalTok{(cdf, }\DecValTok{0}\NormalTok{), }\DecValTok{1}\NormalTok{)}
+    \FunctionTok{list}\NormalTok{(}\AttributeTok{density =}\NormalTok{ density, }\AttributeTok{cdf =}\NormalTok{ cdf, }\AttributeTok{survival =} \DecValTok{1} \SpecialCharTok{{-}}\NormalTok{ cdf)}
+\NormalTok{  \}}
+\NormalTok{\}}
+
+\CommentTok{\# first\_of(X1, X2, ..., Xn)}
+\NormalTok{first\_of\_node }\OtherTok{\textless{}{-}} \ControlFlowTok{function}\NormalTok{(...) \{}
+\NormalTok{  children }\OtherTok{\textless{}{-}} \FunctionTok{list}\NormalTok{(...)}
+  \ControlFlowTok{function}\NormalTok{(t) \{}
+\NormalTok{    vals }\OtherTok{\textless{}{-}} \FunctionTok{lapply}\NormalTok{(children, }\ControlFlowTok{function}\NormalTok{(fn) }\FunctionTok{fn}\NormalTok{(t))}
+\NormalTok{    Svals }\OtherTok{\textless{}{-}} \FunctionTok{vapply}\NormalTok{(vals, }\StringTok{\textasciigrave{}}\AttributeTok{[[}\StringTok{\textasciigrave{}}\NormalTok{, }\FunctionTok{numeric}\NormalTok{(}\DecValTok{1}\NormalTok{), }\StringTok{"survival"}\NormalTok{)}
+\NormalTok{    fvals }\OtherTok{\textless{}{-}} \FunctionTok{vapply}\NormalTok{(vals, }\StringTok{\textasciigrave{}}\AttributeTok{[[}\StringTok{\textasciigrave{}}\NormalTok{, }\FunctionTok{numeric}\NormalTok{(}\DecValTok{1}\NormalTok{), }\StringTok{"density"}\NormalTok{)}
+\NormalTok{    survival }\OtherTok{\textless{}{-}} \FunctionTok{prod}\NormalTok{(Svals)}
+\NormalTok{    density }\OtherTok{\textless{}{-}} \FunctionTok{sum}\NormalTok{(}\FunctionTok{vapply}\NormalTok{(}
+      \FunctionTok{seq\_along}\NormalTok{(fvals),}
+      \ControlFlowTok{function}\NormalTok{(i) fvals[i] }\SpecialCharTok{*} \ControlFlowTok{if}\NormalTok{ (}\FunctionTok{length}\NormalTok{(fvals) }\SpecialCharTok{==} \DecValTok{1}\DataTypeTok{L}\NormalTok{) }\DecValTok{1} \ControlFlowTok{else} \FunctionTok{prod}\NormalTok{(Svals[}\SpecialCharTok{{-}}\NormalTok{i]),}
+      \FunctionTok{numeric}\NormalTok{(}\DecValTok{1}\NormalTok{)}
+\NormalTok{    ))}
+\NormalTok{    survival }\OtherTok{\textless{}{-}} \FunctionTok{min}\NormalTok{(}\FunctionTok{max}\NormalTok{(survival, }\DecValTok{0}\NormalTok{), }\DecValTok{1}\NormalTok{)}
+    \FunctionTok{list}\NormalTok{(}\AttributeTok{density =}\NormalTok{ density, }\AttributeTok{cdf =} \DecValTok{1} \SpecialCharTok{{-}}\NormalTok{ survival, }\AttributeTok{survival =}\NormalTok{ survival)}
+\NormalTok{  \}}
+\NormalTok{\}}
+
+\NormalTok{A  }\OtherTok{\textless{}{-}} \FunctionTok{leaf}\NormalTok{(}\FunctionTok{go\_parts}\NormalTok{(params))}
+\NormalTok{B  }\OtherTok{\textless{}{-}} \FunctionTok{leaf}\NormalTok{(}\FunctionTok{go\_parts}\NormalTok{(params))}
+\NormalTok{S1 }\OtherTok{\textless{}{-}} \FunctionTok{leaf}\NormalTok{(}\FunctionTok{acc\_parts}\NormalTok{(}\StringTok{"S1"}\NormalTok{, params))}
+\NormalTok{IS }\OtherTok{\textless{}{-}} \FunctionTok{leaf}\NormalTok{(}\FunctionTok{acc\_parts}\NormalTok{(}\StringTok{"IS"}\NormalTok{, params))}
+\NormalTok{S2 }\OtherTok{\textless{}{-}} \FunctionTok{leaf}\NormalTok{(}\FunctionTok{acc\_parts}\NormalTok{(}\StringTok{"S2"}\NormalTok{, params))}
+
+\NormalTok{early\_A }\OtherTok{\textless{}{-}} \FunctionTok{guard}\NormalTok{(A, S1)}
+\NormalTok{early\_B }\OtherTok{\textless{}{-}} \FunctionTok{guard}\NormalTok{(B, S1)}
+\NormalTok{ignore\_gate }\OtherTok{\textless{}{-}} \FunctionTok{guard}\NormalTok{(IS, S2)}
+\NormalTok{late\_A }\OtherTok{\textless{}{-}} \FunctionTok{all\_of\_node}\NormalTok{(A, S1, ignore\_gate)}
+\NormalTok{late\_B }\OtherTok{\textless{}{-}} \FunctionTok{all\_of\_node}\NormalTok{(B, S1, ignore\_gate)}
+
+\NormalTok{A\_out }\OtherTok{\textless{}{-}} \FunctionTok{first\_of\_node}\NormalTok{(early\_A, late\_A)}
+\NormalTok{B\_out }\OtherTok{\textless{}{-}} \FunctionTok{first\_of\_node}\NormalTok{(early\_B, late\_B)}
+
+\CommentTok{\# Exact observed response density under the stop component.}
+\NormalTok{obs\_density }\OtherTok{\textless{}{-}} \ControlFlowTok{function}\NormalTok{(response, t) \{}
+  \ControlFlowTok{if}\NormalTok{ (response }\SpecialCharTok{==} \StringTok{"A"}\NormalTok{) \{}
+    \FunctionTok{A\_out}\NormalTok{(t)}\SpecialCharTok{$}\NormalTok{density }\SpecialCharTok{*} \FunctionTok{B\_out}\NormalTok{(t)}\SpecialCharTok{$}\NormalTok{survival}
+\NormalTok{  \} }\ControlFlowTok{else}\NormalTok{ \{}
+    \FunctionTok{B\_out}\NormalTok{(t)}\SpecialCharTok{$}\NormalTok{density }\SpecialCharTok{*} \FunctionTok{A\_out}\NormalTok{(t)}\SpecialCharTok{$}\NormalTok{survival}
+\NormalTok{  \}}
+\NormalTok{\}}
+
+\CommentTok{\# Exact observed response probabilities.}
+\NormalTok{obs\_prob }\OtherTok{\textless{}{-}} \ControlFlowTok{function}\NormalTok{(response) \{}
+  \FunctionTok{integrate}\NormalTok{(}
+    \ControlFlowTok{function}\NormalTok{(t) }\FunctionTok{vapply}\NormalTok{(t, }\ControlFlowTok{function}\NormalTok{(tt) }\FunctionTok{obs\_density}\NormalTok{(response, tt), }\FunctionTok{numeric}\NormalTok{(}\DecValTok{1}\NormalTok{)),}
+    \AttributeTok{lower =} \DecValTok{0}\NormalTok{,}
+    \AttributeTok{upper =} \ConstantTok{Inf}\NormalTok{,}
+    \AttributeTok{rel.tol =} \FloatTok{1e{-}7}\NormalTok{,}
+    \AttributeTok{abs.tol =} \FloatTok{1e{-}9}\NormalTok{,}
+    \AttributeTok{subdivisions =} \DecValTok{200}\DataTypeTok{L}\NormalTok{,}
+    \AttributeTok{stop.on.error =} \ConstantTok{FALSE}
+\NormalTok{  )}\SpecialCharTok{$}\NormalTok{value}
+\NormalTok{\}}
+
+\CommentTok{\# Engine{-}matching NA probability.}
+\NormalTok{na\_prob }\OtherTok{\textless{}{-}} \ControlFlowTok{function}\NormalTok{() \{}
+  \DecValTok{1} \SpecialCharTok{{-}} \FunctionTok{obs\_prob}\NormalTok{(}\StringTok{"A"}\NormalTok{) }\SpecialCharTok{{-}} \FunctionTok{obs\_prob}\NormalTok{(}\StringTok{"B"}\NormalTok{)}
+\NormalTok{\}}
+\end{Highlighting}
+\end{Shaded}
+
+\subsection{Agreement with the engine}\label{agreement-with-the-engine}
+
+The comparison below uses the same parameter vector for both the
+hand-written likelihood and the engine.
+
+\begin{Shaded}
+\begin{Highlighting}[]
+\NormalTok{ctx }\OtherTok{\textless{}{-}} \FunctionTok{make\_context}\NormalTok{(model)}
+
+\NormalTok{engine\_likelihood }\OtherTok{\textless{}{-}} \ControlFlowTok{function}\NormalTok{(response, rt) \{}
+\NormalTok{  data\_df }\OtherTok{\textless{}{-}} \FunctionTok{data.frame}\NormalTok{(}
+    \AttributeTok{trial =} \DecValTok{1}\DataTypeTok{L}\NormalTok{,}
+    \AttributeTok{component =} \StringTok{"stop"}\NormalTok{,}
+    \AttributeTok{R =} \ControlFlowTok{if}\NormalTok{ (}\FunctionTok{is.na}\NormalTok{(response)) }\ConstantTok{NA\_character\_} \ControlFlowTok{else}\NormalTok{ response,}
+    \AttributeTok{rt =}\NormalTok{ rt,}
+    \AttributeTok{stringsAsFactors =} \ConstantTok{FALSE}
+\NormalTok{  )}
+\NormalTok{  prepared }\OtherTok{\textless{}{-}} \FunctionTok{prepare\_data}\NormalTok{(model, data\_df)}
+\NormalTok{  params\_df }\OtherTok{\textless{}{-}} \FunctionTok{build\_param\_matrix}\NormalTok{(model}\SpecialCharTok{$}\NormalTok{model\_spec, params, }\AttributeTok{trial\_df =}\NormalTok{ prepared)}
+  \FunctionTok{exp}\NormalTok{(}\FunctionTok{as.numeric}\NormalTok{(}\FunctionTok{log\_likelihood}\NormalTok{(ctx, prepared, params\_df, }\AttributeTok{min\_ll =} \SpecialCharTok{{-}}\FloatTok{1e12}\NormalTok{)))}
+\NormalTok{\}}
+
+\NormalTok{comparison }\OtherTok{\textless{}{-}} \FunctionTok{data.frame}\NormalTok{(}
+  \AttributeTok{component =} \StringTok{"stop"}\NormalTok{,}
+  \AttributeTok{response =} \FunctionTok{c}\NormalTok{(}\StringTok{"A"}\NormalTok{, }\StringTok{"B"}\NormalTok{, }\ConstantTok{NA\_character\_}\NormalTok{),}
+  \AttributeTok{rt =} \FunctionTok{c}\NormalTok{(}\FloatTok{0.42}\NormalTok{, }\FloatTok{0.47}\NormalTok{, }\ConstantTok{NA\_real\_}\NormalTok{),}
+  \AttributeTok{hand\_written =} \FunctionTok{c}\NormalTok{(}
+    \FunctionTok{obs\_density}\NormalTok{(}\StringTok{"A"}\NormalTok{, }\FloatTok{0.42}\NormalTok{),}
+    \FunctionTok{obs\_density}\NormalTok{(}\StringTok{"B"}\NormalTok{, }\FloatTok{0.47}\NormalTok{),}
+    \FunctionTok{na\_prob}\NormalTok{()}
+\NormalTok{  ),}
+  \AttributeTok{accumulatr =} \FunctionTok{c}\NormalTok{(}
+    \FunctionTok{engine\_likelihood}\NormalTok{(}\StringTok{"A"}\NormalTok{, }\FloatTok{0.42}\NormalTok{),}
+    \FunctionTok{engine\_likelihood}\NormalTok{(}\StringTok{"B"}\NormalTok{, }\FloatTok{0.47}\NormalTok{),}
+    \FunctionTok{engine\_likelihood}\NormalTok{(}\ConstantTok{NA\_character\_}\NormalTok{, }\ConstantTok{NA\_real\_}\NormalTok{)}
+\NormalTok{  ),}
+  \AttributeTok{stringsAsFactors =} \ConstantTok{FALSE}
+\NormalTok{)}
+
+\NormalTok{comparison}\SpecialCharTok{$}\NormalTok{diff }\OtherTok{\textless{}{-}}\NormalTok{ comparison}\SpecialCharTok{$}\NormalTok{accumulatr }\SpecialCharTok{{-}}\NormalTok{ comparison}\SpecialCharTok{$}\NormalTok{hand\_written}
+\NormalTok{comparison}
+\end{Highlighting}
+\end{Shaded}
+
+\begin{verbatim}
+##   component response   rt hand_written accumulatr          diff
+## 1      stop        A 0.42    0.7304224  0.7304224 -4.947786e-10
+## 2      stop        B 0.47    0.1881348  0.1881348 -7.921536e-11
+## 3      stop     <NA>   NA    0.3271459  0.3271439 -1.980178e-06
+\end{verbatim}
+
+For this model, the engine-matching target is exactly:
+
+\begin{itemize}
+\tightlist
+\item
+  \texttt{p(A\_obs\ at\ t)\ =\ f\_A\_out(t)\ S\_B\_out(t)}
+\item
+  \texttt{p(B\_obs\ at\ t)\ =\ f\_B\_out(t)\ S\_A\_out(t)}
+\item
+  \texttt{P(NA\_obs)\ =\ 1\ -\ P(A\_obs)\ -\ P(B\_obs)}
+\end{itemize}
+
+\end{document}

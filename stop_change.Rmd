@@ -1,0 +1,214 @@
+---
+title: "Stop-Change Likelihood"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+This note derives a hand-written likelihood for the stop-change model and compares it directly to `AccumulatR`.
+
+```{r}
+library(AccumulatR)
+
+model <- race_spec() |>
+  add_accumulator("S", "lognormal") |>
+  add_accumulator("stop", "lognormal") |>
+  add_accumulator("change", "lognormal") |>
+  add_outcome("S", inhibit("S", by = "stop")) |>
+  add_outcome("X", all_of("change", "stop")) |>
+  add_component("go_only", members = "S", weight = .75) |>
+  add_component("go_stop", members = c("S", "stop", "change"), weight = .25) |>
+  add_trigger(
+    "stop_trigger",
+    members = c("stop", "change"),
+    q = 0.05,
+    param = "stop_trigger"
+  ) |>
+  set_mixture_options(mode = "fixed") |>
+  set_parameters(list(
+    m_go = "S.m",
+    m_stop = "stop.m",
+    m_change = "change.m",
+    s_go = "S.s",
+    s_stop = "stop.s",
+    s_change = "change.s",
+    t0_go = "S.t0",
+    t0_change = "change.t0",
+    q = c("stop.q", "change.q")
+  )) |>
+  finalize_model()
+```
+
+Under the `go_stop` component there are two declared outcomes:
+
+-   `S = inhibit(S, stop)`
+-   `X = all_of(change, stop)`
+
+The trigger is shared across `stop` and `change`. Inside `go_stop` there are two trigger states:
+
+-   fail, with probability `q`: both `stop` and `change` are absent
+-   succeed, with probability `1 - q`: both are active
+
+For the intended model, the hand-written component-conditioned targets are:
+
+-   `p(S at t | go_only) = f_S(t)`
+-   `p(S at t | go_stop) = q f_S(t) + (1 - q) f_S(t) S_stop(t)`
+-   `p(X at t | go_stop) = (1 - q) f_X_out(t) S_S_out(t)`
+
+where:
+
+-   `f_X_out(t) = f_change(t) F_stop(t) + F_change(t) f_stop(t)`
+-   `F_S_out(t) = ∫_0^t f_S(u) S_stop(u) du`
+-   `S_S_out(t) = 1 - F_S_out(t)`
+
+## The actual formulas
+
+Write `f_S`, `F_S`, and `S_S` for the density, cdf, and survival of accumulator `S`, and similarly for `stop` and `change`.
+
+For this model:
+
+-   `S_out = inhibit(S, stop)`
+-   `X_out = all_of(change, stop)`
+
+So:
+
+-   `f_S_out(t) = f_S(t) S_stop(t)`
+-   `F_S_out(t) = ∫_0^t f_S(u) S_stop(u) du`
+-   `S_S_out(t) = 1 - F_S_out(t)`
+-   `F_X_out(t) = F_change(t) F_stop(t)`
+-   `f_X_out(t) = f_change(t) F_stop(t) + F_change(t) f_stop(t)`
+
+That gives the intended component-conditioned densities:
+
+-   `p(S at t | go_only) = f_S(t)`
+-   `p(S at t | go_stop) = q f_S(t) + (1 - q) f_S(t) S_stop(t)`
+-   `p(X at t | go_stop) = (1 - q) f_X_out(t) S_S_out(t)`
+
+This is the R code.
+
+```{r}
+params <- c(
+  m_go = log(0.30),
+  s_go = 0.18,
+  t0_go = 0.00,
+  m_stop = log(0.22),
+  s_stop = 0.18,
+  m_change = log(0.40),
+  s_change = 0.18,
+  t0_change = 0.00,
+  q = 0.05,
+  S.q = 0.00
+)
+
+ctx <- make_context(model)
+
+acc_pdf <- function(t, m, s, t0 = 0, q = 0) {
+  out <- numeric(length(t))
+  ok <- is.finite(t) & t >= t0
+  out[ok] <- (1 - q) * dlnorm(t[ok] - t0, meanlog = m, sdlog = s)
+  out
+}
+
+acc_cdf <- function(t, m, s, t0 = 0, q = 0) {
+  out <- numeric(length(t))
+  out[is.infinite(t) & t > 0] <- 1 - q
+  ok <- is.finite(t) & t >= t0
+  out[ok] <- (1 - q) * plnorm(t[ok] - t0, meanlog = m, sdlog = s)
+  pmin(pmax(out, 0), 1)
+}
+
+f_S <- function(t) {
+  acc_pdf(t, params[["m_go"]], params[["s_go"]], params[["t0_go"]], q = 0)
+}
+
+F_stop <- function(t) {
+  acc_cdf(t, params[["m_stop"]], params[["s_stop"]], 0, q = 0)
+}
+
+f_stop <- function(t) {
+  acc_pdf(t, params[["m_stop"]], params[["s_stop"]], 0, q = 0)
+}
+
+F_change <- function(t) {
+  acc_cdf(t, params[["m_change"]], params[["s_change"]], params[["t0_change"]], q = 0)
+}
+
+f_change <- function(t) {
+  acc_pdf(t, params[["m_change"]], params[["s_change"]], params[["t0_change"]], q = 0)
+}
+
+F_S_out_1 <- function(t) {
+  if (!is.finite(t) || t <= 0) {
+    return(0)
+  }
+  integrate(
+    function(u) f_S(u) * (1 - F_stop(u)),
+    lower = 0,
+    upper = t,
+    rel.tol = 1e-10,
+    abs.tol = 1e-12,
+    subdivisions = 500L
+  )$value
+}
+
+S_S_out <- function(t) {
+  1 - vapply(t, F_S_out_1, numeric(1))
+}
+
+q_trig <- 0.05
+
+hand_go_only_S <- function(t) {
+  f_S(t)
+}
+
+hand_go_stop_S <- function(t) {
+  q_trig * f_S(t) + (1 - q_trig) * f_S(t) * (1 - F_stop(t))
+}
+
+hand_go_stop_X <- function(t) {
+  f_X_out <- f_change(t) * F_stop(t) + F_change(t) * f_stop(t)
+  (1 - q_trig) * f_X_out * S_S_out(t)
+}
+
+engine_trial <- function(component, R, rt) {
+  data_df <- data.frame(
+    trial = 1L,
+    component = component,
+    R = R,
+    rt = rt,
+    stringsAsFactors = FALSE
+  )
+  prepared <- prepare_data(model, data_df)
+  params_df <- build_param_matrix(model$model_spec, params, trial_df = prepared)
+  exp(log_likelihood(ctx, prepared, params_df))
+}
+
+comparison <- data.frame(
+  case = c("go_only, S @ 0.30", "go_stop, S @ 0.30", "go_stop, X @ 0.50"),
+  hand_written = c(
+    hand_go_only_S(0.30),
+    hand_go_stop_S(0.30),
+    hand_go_stop_X(0.50)
+  ),
+  accumulatr = c(
+    engine_trial("go_only", "S", 0.30),
+    engine_trial("go_stop", "S", 0.30),
+    engine_trial("go_stop", "X", 0.50)
+  )
+)
+
+comparison$diff <- comparison$hand_written - comparison$accumulatr
+comparison
+```
+
+`go_only -> S` matches the engine exactly. `go_stop -> X` also matches. `go_stop -> S` does not.
+
+The mismatch is not coming from the hand derivation being numerically unstable. It is structural. Numerically, the current engine is closely tracked by
+
+-   `f_S(t) S_change(t) [q + (1 - q) S_stop(t)]`
+
+rather than by the intended outcome-level expression
+
+-   `q f_S(t) + (1 - q) f_S(t) S_stop(t)`
+
+So the current engine appears to be carrying `change` as an extra survival constraint on `S`.

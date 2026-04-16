@@ -1,0 +1,357 @@
+---
+title: "Stim-Selective Stop Likelihood"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+This note derives a hand-written likelihood for the stop component of the stimulus-selective stop model and compares it directly to `AccumulatR`.
+
+```{r}
+library(AccumulatR)
+model <- race_spec() |>
+  add_accumulator("A", "lognormal") |>
+  add_accumulator("B", "lognormal") |>
+  add_accumulator("S1", "lognormal") |>
+  add_accumulator("IS", "lognormal") |>
+  add_accumulator("S2", "lognormal") |>
+  add_outcome(
+    "A",
+    first_of(
+      inhibit("A", by = "S1"),
+      all_of("A", "S1", inhibit("IS", by = "S2"))
+    )
+  ) |>
+  add_outcome(
+    "B",
+    first_of(
+      inhibit("B", by = "S1"),
+      all_of("B", "S1", inhibit("IS", by = "S2"))
+    )
+  ) |>
+  add_outcome(
+    "STOP",
+    all_of("S1", inhibit("S2", by = "IS")),
+    options = list(map_outcome_to = NA_character_)
+  ) |>
+  add_component("go", members = c("A", "B")) |>
+  add_component("stop", members = c("A", "B", "S1", "IS", "S2")) |>
+  set_parameters(list(
+    m_go = c("A.m", "B.m"),
+    s_go = c("A.s", "B.s"),
+    t0_go = c("A.t0", "B.t0")
+  )) |>
+  finalize_model()
+```
+
+Under the `stop` component there are three declared outcomes:
+
+-   `A = first_of(inhibit(A, S1), all_of(A, S1, inhibit(IS, S2)))`
+-   `B = first_of(inhibit(B, S1), all_of(B, S1, inhibit(IS, S2)))`
+-   `STOP = all_of(S1, inhibit(S2, IS))`, mapped to `NA`
+
+Consider the two branches of A and B:
+
+-   early `A`: `E_A = inhibit(A, S1)`
+-   late `A`: `L_A = all_of(A, S1, inhibit(IS, S2))`
+-   early `B`: `E_B = inhibit(B, S1)`
+-   late `B`: `L_B = all_of(B, S1, inhibit(IS, S2))`
+
+Then:
+
+-   `A_out = first_of(E_A, L_A)`
+-   `B_out = first_of(E_B, L_B)`
+
+For the current engine, observed `NA` is leftover visible mass after `A` and `B`, so the hand-written likelihood targets:
+
+-   `p(A_obs at t) = f_A_out(t) S_B_out(t)`
+-   `p(B_obs at t) = f_B_out(t) S_A_out(t)`
+-   `P(NA_obs) = 1 - P(A_obs) - P(B_obs)`
+
+## The actual formulas
+
+Write `f_X(t)`, `F_X(t)`, and `S_X(t)` for the density, cdf, and survival of accumulator `X`.
+
+For this model:
+
+-   `E_A = inhibit(A, S1)`
+-   `E_B = inhibit(B, S1)`
+-   `H = inhibit(IS, S2)`
+-   `L_A = all_of(A, S1, H)`
+-   `L_B = all_of(B, S1, H)`
+
+The pieces are:
+
+-   `f_EA(t) = f_A(t) S_S1(t)`
+
+-   `f_EB(t) = f_B(t) S_S1(t)`
+
+-   `f_H(t) = f_IS(t) S_S2(t)`
+
+-   `F_EA(t) = ∫_0^t f_A(u) S_S1(u) du`
+
+-   `F_EB(t) = ∫_0^t f_B(u) S_S1(u) du`
+
+-   `F_H(t) = ∫_0^t f_IS(u) S_S2(u) du`
+
+-   `S_EA(t) = 1 - F_EA(t)`
+
+-   `S_EB(t) = 1 - F_EB(t)`
+
+-   `S_H(t) = 1 - F_H(t)`
+
+For the late branches:
+
+-   `F_LA(t) = F_A(t) F_S1(t) F_H(t)`
+
+-   `F_LB(t) = F_B(t) F_S1(t) F_H(t)`
+
+-   `f_LA(t) = f_A(t) F_S1(t) F_H(t) + F_A(t) f_S1(t) F_H(t) + F_A(t) F_S1(t) f_H(t)`
+
+-   `f_LB(t) = f_B(t) F_S1(t) F_H(t) + F_B(t) f_S1(t) F_H(t) + F_B(t) F_S1(t) f_H(t)`
+
+-   `S_LA(t) = 1 - F_LA(t)`
+
+-   `S_LB(t) = 1 - F_LB(t)`
+
+The visible outcomes are:
+
+-   `A_out = first_of(E_A, L_A)`
+-   `B_out = first_of(E_B, L_B)`
+
+So:
+
+-   `f_A_out(t) = f_EA(t) S_LA(t) + f_LA(t) S_EA(t)`
+
+-   `f_B_out(t) = f_EB(t) S_LB(t) + f_LB(t) S_EB(t)`
+
+-   `S_A_out(t) = S_EA(t) S_LA(t)`
+
+-   `S_B_out(t) = S_EB(t) S_LB(t)`
+
+That gives the observed response densities directly:
+
+-   `p(A_obs at t) = f_A_out(t) S_B_out(t)`
+-   `p(B_obs at t) = f_B_out(t) S_A_out(t)`
+
+Expanding `A` into its two branches:
+
+-   early `A` term:
+
+    `f_EA(t) S_LA(t) S_EB(t) S_LB(t)`
+
+-   late `A` term:
+
+    `f_LA(t) S_EA(t) S_EB(t) S_LB(t)`
+
+and the total is their sum.
+
+By symmetry:
+
+-   early `B` term:
+
+    `f_EB(t) S_LB(t) S_EA(t) S_LA(t)`
+
+-   late `B` term:
+
+    `f_LB(t) S_EB(t) S_EA(t) S_LA(t)`
+
+and again the total is their sum.
+
+This is the R code
+
+```{r}
+params <- c(
+  m_go = log(0.30), s_go = 0.18, t0_go = 0.05,
+  S1.m = log(0.26), S1.s = 0.18, S1.t0 = 0.00,
+  IS.m = log(0.35), IS.s = 0.18, IS.t0 = 0.00,
+  S2.m = log(0.32), S2.s = 0.18, S2.t0 = 0.00
+)
+
+go_parts <- function(params) {
+  list(m = params[["m_go"]], s = params[["s_go"]], q = 0, t0 = params[["t0_go"]])
+}
+
+acc_parts <- function(prefix, params) {
+  list(
+    m = params[[paste0(prefix, ".m")]],
+    s = params[[paste0(prefix, ".s")]],
+    q = 0,
+    t0 = params[[paste0(prefix, ".t0")]]
+  )
+}
+
+acc_pdf <- function(t, p) {
+  if (!is.finite(t) || t < p$t0) return(0)
+  (1 - p$q) * dlnorm(t - p$t0, meanlog = p$m, sdlog = p$s)
+}
+
+acc_cdf <- function(t, p) {
+  if (is.infinite(t) && t > 0) return(1 - p$q)
+  if (!is.finite(t) || t < p$t0) return(0)
+  (1 - p$q) * plnorm(t - p$t0, meanlog = p$m, sdlog = p$s)
+}
+
+acc_surv <- function(t, p) 1 - acc_cdf(t, p)
+
+# Return density/cdf/survival for one primitive accumulator.
+leaf <- function(p) {
+  force(p)
+  function(t) {
+    list(
+      density = acc_pdf(t, p),
+      cdf = acc_cdf(t, p),
+      survival = acc_surv(t, p)
+    )
+  }
+}
+
+# guard(R, B): R succeeds while B has not yet finished.
+guard <- function(reference, blocker) {
+  function(t) {
+    if (!is.finite(t) || t < 0) {
+      return(list(density = 0, cdf = 0, survival = 1))
+    }
+    density <- reference(t)$density * blocker(t)$survival
+    cdf <- if (t <= 0) 0 else {
+      integrate(
+        function(u) {
+          vapply(u, function(uu) reference(uu)$density * blocker(uu)$survival, numeric(1))
+        },
+        lower = 0,
+        upper = t,
+        rel.tol = 1e-8,
+        abs.tol = 1e-10,
+        subdivisions = 200L
+      )$value
+    }
+    cdf <- min(max(cdf, 0), 1)
+    list(density = density, cdf = cdf, survival = 1 - cdf)
+  }
+}
+
+# all_of(X1, X2, ..., Xn)
+all_of_node <- function(...) {
+  children <- list(...)
+  function(t) {
+    vals <- lapply(children, function(fn) fn(t))
+    Fvals <- vapply(vals, `[[`, numeric(1), "cdf")
+    fvals <- vapply(vals, `[[`, numeric(1), "density")
+    cdf <- prod(Fvals)
+    density <- sum(vapply(
+      seq_along(fvals),
+      function(i) fvals[i] * if (length(fvals) == 1L) 1 else prod(Fvals[-i]),
+      numeric(1)
+    ))
+    cdf <- min(max(cdf, 0), 1)
+    list(density = density, cdf = cdf, survival = 1 - cdf)
+  }
+}
+
+# first_of(X1, X2, ..., Xn)
+first_of_node <- function(...) {
+  children <- list(...)
+  function(t) {
+    vals <- lapply(children, function(fn) fn(t))
+    Svals <- vapply(vals, `[[`, numeric(1), "survival")
+    fvals <- vapply(vals, `[[`, numeric(1), "density")
+    survival <- prod(Svals)
+    density <- sum(vapply(
+      seq_along(fvals),
+      function(i) fvals[i] * if (length(fvals) == 1L) 1 else prod(Svals[-i]),
+      numeric(1)
+    ))
+    survival <- min(max(survival, 0), 1)
+    list(density = density, cdf = 1 - survival, survival = survival)
+  }
+}
+
+A  <- leaf(go_parts(params))
+B  <- leaf(go_parts(params))
+S1 <- leaf(acc_parts("S1", params))
+IS <- leaf(acc_parts("IS", params))
+S2 <- leaf(acc_parts("S2", params))
+
+early_A <- guard(A, S1)
+early_B <- guard(B, S1)
+ignore_gate <- guard(IS, S2)
+late_A <- all_of_node(A, S1, ignore_gate)
+late_B <- all_of_node(B, S1, ignore_gate)
+
+A_out <- first_of_node(early_A, late_A)
+B_out <- first_of_node(early_B, late_B)
+
+# Exact observed response density under the stop component.
+obs_density <- function(response, t) {
+  if (response == "A") {
+    A_out(t)$density * B_out(t)$survival
+  } else {
+    B_out(t)$density * A_out(t)$survival
+  }
+}
+
+# Exact observed response probabilities.
+obs_prob <- function(response) {
+  integrate(
+    function(t) vapply(t, function(tt) obs_density(response, tt), numeric(1)),
+    lower = 0,
+    upper = Inf,
+    rel.tol = 1e-7,
+    abs.tol = 1e-9,
+    subdivisions = 200L,
+    stop.on.error = FALSE
+  )$value
+}
+
+# Engine-matching NA probability.
+na_prob <- function() {
+  1 - obs_prob("A") - obs_prob("B")
+}
+```
+
+## Agreement with the engine
+
+The comparison below uses the same parameter vector for both the hand-written likelihood and the engine.
+
+```{r}
+ctx <- make_context(model)
+
+engine_likelihood <- function(response, rt) {
+  data_df <- data.frame(
+    trial = 1L,
+    component = "stop",
+    R = if (is.na(response)) NA_character_ else response,
+    rt = rt,
+    stringsAsFactors = FALSE
+  )
+  prepared <- prepare_data(model, data_df)
+  params_df <- build_param_matrix(model$model_spec, params, trial_df = prepared)
+  exp(as.numeric(log_likelihood(ctx, prepared, params_df, min_ll = -1e12)))
+}
+
+comparison <- data.frame(
+  component = "stop",
+  response = c("A", "B", NA_character_),
+  rt = c(0.42, 0.47, NA_real_),
+  hand_written = c(
+    obs_density("A", 0.42),
+    obs_density("B", 0.47),
+    na_prob()
+  ),
+  accumulatr = c(
+    engine_likelihood("A", 0.42),
+    engine_likelihood("B", 0.47),
+    engine_likelihood(NA_character_, NA_real_)
+  ),
+  stringsAsFactors = FALSE
+)
+
+comparison$diff <- comparison$accumulatr - comparison$hand_written
+comparison
+```
+
+For this model, the engine-matching target is exactly:
+
+-   `p(A_obs at t) = f_A_out(t) S_B_out(t)`
+-   `p(B_obs at t) = f_B_out(t) S_A_out(t)`
+-   `P(NA_obs) = 1 - P(A_obs) - P(B_obs)`

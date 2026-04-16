@@ -1142,6 +1142,14 @@ inline void hash_append_double(std::uint64_t &hash, double value) {
   hash_append_u64(hash, canonical_double_bits(value));
 }
 
+inline void hash_append_string(std::uint64_t &hash,
+                               const std::string &value) {
+  hash_append_u64(hash, static_cast<std::uint64_t>(value.size()));
+  if (!value.empty()) {
+    hash_append_bytes(hash, value.data(), value.size());
+  }
+}
+
 inline std::uint64_t
 compute_trial_param_fingerprint(const TrialParamSet &params) {
   std::uint64_t hash = kFNV64Offset;
@@ -1175,6 +1183,74 @@ compute_trial_param_fingerprint(const TrialParamSet &params) {
 inline void refresh_trial_param_fingerprint(TrialParamSet &params) {
   params.shared_trigger_source_fingerprint =
       compute_trial_param_fingerprint(params);
+}
+
+inline uuber::NAMapCacheKey
+build_na_map_cache_key(const uuber::OutcomeContextInfo &info,
+                       int outcome_idx_context,
+                       const TrialParamSet *params_ptr,
+                       const std::string &trial_type_key) {
+  uuber::NAMapCacheKey key;
+  if (!params_ptr) {
+    return key;
+  }
+  std::uint64_t h1 = kFNV64Offset;
+  std::uint64_t h2 = kFNV64Offset ^ 0x9e3779b97f4a7c15ULL;
+  hash_append_i32(h1, info.node_id);
+  hash_append_i32(h2, info.node_id);
+  hash_append_i32(h1, outcome_idx_context);
+  hash_append_i32(h2, outcome_idx_context);
+  const bool has_soa_q =
+      params_ptr->shared_trigger_mask_valid &&
+      params_ptr->soa_cache_valid && params_ptr->soa_cache.valid &&
+      params_ptr->soa_cache.n_acc >= static_cast<int>(params_ptr->acc_params.size());
+  hash_append_u64(h1,
+                  static_cast<std::uint64_t>(params_ptr->acc_params.size()));
+  hash_append_u64(h2,
+                  static_cast<std::uint64_t>(params_ptr->acc_params.size()));
+  for (std::size_t acc_idx = 0; acc_idx < params_ptr->acc_params.size();
+       ++acc_idx) {
+    const TrialAccumulatorParams &acc = params_ptr->acc_params[acc_idx];
+    const double effective_q =
+        has_soa_q ? params_ptr->soa_cache.q[acc_idx] : acc.q;
+    hash_append_double(h1, effective_q);
+    hash_append_double(h2, effective_q);
+    hash_append_double(h1, acc.shared_q);
+    hash_append_double(h2, acc.shared_q);
+    hash_append_double(h1, acc.onset);
+    hash_append_double(h2, acc.onset);
+    hash_append_i32(h1, acc.onset_kind);
+    hash_append_i32(h2, acc.onset_kind);
+    hash_append_i32(h1, acc.onset_source_acc_idx);
+    hash_append_i32(h2, acc.onset_source_acc_idx);
+    hash_append_i32(h1, acc.onset_source_pool_idx);
+    hash_append_i32(h2, acc.onset_source_pool_idx);
+    hash_append_double(h1, acc.onset_lag);
+    hash_append_double(h2, acc.onset_lag);
+    hash_append_double(h1, acc.dist_cfg.t0);
+    hash_append_double(h2, acc.dist_cfg.t0);
+    hash_append_double(h1, acc.dist_cfg.p1);
+    hash_append_double(h2, acc.dist_cfg.p1);
+    hash_append_double(h1, acc.dist_cfg.p2);
+    hash_append_double(h2, acc.dist_cfg.p2);
+    hash_append_double(h1, acc.dist_cfg.p3);
+    hash_append_double(h2, acc.dist_cfg.p3);
+    hash_append_double(h1, acc.dist_cfg.p4);
+    hash_append_double(h2, acc.dist_cfg.p4);
+    hash_append_double(h1, acc.dist_cfg.p5);
+    hash_append_double(h2, acc.dist_cfg.p5);
+    hash_append_double(h1, acc.dist_cfg.p6);
+    hash_append_double(h2, acc.dist_cfg.p6);
+    hash_append_double(h1, acc.dist_cfg.p7);
+    hash_append_double(h2, acc.dist_cfg.p7);
+    hash_append_double(h1, acc.dist_cfg.p8);
+    hash_append_double(h2, acc.dist_cfg.p8);
+  }
+  hash_append_string(h1, trial_type_key);
+  hash_append_string(h2, trial_type_key);
+  key.hash1 = h1;
+  key.hash2 = h2;
+  return key;
 }
 
 inline TrialAccumulatorParams
@@ -1725,6 +1801,8 @@ resolve_likelihood_context(uuber::NativeContext &ctx,
 
 double component_keep_weight(const uuber::NativeContext &ctx, int outcome_idx);
 
+struct IntegrationSettings;
+
 double native_outcome_probability_impl_idx(
     const uuber::NativeContext &ctx, int node_id, double upper,
     SEXP forced_complete, SEXP forced_survive,
@@ -1758,7 +1836,8 @@ double node_density_with_competitors_internal(
     const std::unordered_map<int, double> *exact_source_times = nullptr,
     const std::unordered_map<int, std::pair<double, double>> *source_time_bounds =
         nullptr,
-    uuber::KernelRuntimeState *kernel_runtime = nullptr);
+    uuber::KernelRuntimeState *kernel_runtime = nullptr,
+    const IntegrationSettings *integration_settings = nullptr);
 
 double kernel_node_density_entry_idx(
     const uuber::NativeContext &ctx, int node_id, double t,
@@ -1772,7 +1851,8 @@ double kernel_node_density_entry_idx(
     const std::unordered_map<int, double> *exact_source_times = nullptr,
     const std::unordered_map<int, std::pair<double, double>> *source_time_bounds =
         nullptr,
-    uuber::KernelRuntimeState *kernel_runtime = nullptr);
+    uuber::KernelRuntimeState *kernel_runtime = nullptr,
+    const IntegrationSettings *integration_settings = nullptr);
 
 double node_density_with_shared_triggers_plan(
     const uuber::NativeContext &ctx, int node_id, double t,
@@ -1783,7 +1863,8 @@ double node_density_with_shared_triggers_plan(
     const std::vector<int> &competitor_ids, const TrialParamSet *trial_params,
     const std::string &trial_type_key, bool include_na_donors,
     int outcome_idx_context, const SharedTriggerPlan *trigger_plan,
-    TrialParamSet *scratch_params);
+    TrialParamSet *scratch_params,
+    const IntegrationSettings *integration_settings = nullptr);
 
 double evaluate_outcome_density_idx(
     const uuber::NativeContext &ctx, int outcome_idx, double t,
@@ -2480,6 +2561,37 @@ double component_keep_weight(const uuber::NativeContext &ctx, int outcome_idx) {
   return 1.0;
 }
 
+struct IntegrationSettings {
+  double rel_tol{kDefaultRelTol};
+  double abs_tol{kDefaultAbsTol};
+  int max_depth{kDefaultMaxDepth};
+};
+
+struct CanonicalIntegrationSettings {
+  double rel_tol{kDefaultRelTol};
+  double abs_tol{kDefaultAbsTol};
+  int max_depth{kDefaultMaxDepth};
+  double effective_tol{std::max(kDefaultRelTol, kDefaultAbsTol)};
+};
+
+inline CanonicalIntegrationSettings
+canonicalize_integration_settings(const IntegrationSettings &settings) {
+  CanonicalIntegrationSettings canonical;
+  canonical.rel_tol =
+      (settings.rel_tol > 0.0 && std::isfinite(settings.rel_tol))
+          ? settings.rel_tol
+          : kDefaultRelTol;
+  canonical.abs_tol =
+      (settings.abs_tol > 0.0 && std::isfinite(settings.abs_tol))
+          ? settings.abs_tol
+          : kDefaultAbsTol;
+  canonical.max_depth = (settings.max_depth > 0) ? settings.max_depth
+                                                  : kDefaultMaxDepth;
+  canonical.effective_tol =
+      std::max(std::max(canonical.rel_tol, canonical.abs_tol), 1e-10);
+  return canonical;
+}
+
 struct NodeEvalState {
   NodeEvalState(const uuber::NativeContext &ctx_, double time,
                 const TrialParamSet *params_ptr = nullptr,
@@ -2493,7 +2605,8 @@ struct NodeEvalState {
                 bool forced_complete_bits_ptr_valid = false,
                 const uuber::BitsetState *forced_survive_bits_ptr = nullptr,
                 bool forced_survive_bits_ptr_valid = false,
-                uuber::KernelRuntimeState *external_kernel_runtime = nullptr)
+                uuber::KernelRuntimeState *external_kernel_runtime = nullptr,
+                const IntegrationSettings *integration_settings_ptr = nullptr)
       : ctx(ctx_), t(time), trial_params(params_ptr),
         trial_type_key(trial_key.empty() ? std::string("__default__")
                                          : trial_key),
@@ -2501,6 +2614,9 @@ struct NodeEvalState {
         exact_source_times(exact_source_times_ptr),
         source_time_bounds(source_time_bounds_ptr),
         forced_scope_filter(forced_scope_filter_ptr),
+        integration_settings(integration_settings_ptr
+                                 ? *integration_settings_ptr
+                                 : IntegrationSettings{}),
         trial_params_soa(nullptr),
         forced_label_id_to_bit_idx(ctx.ir.label_id_to_bit_idx.empty()
                                        ? nullptr
@@ -2556,6 +2672,7 @@ struct NodeEvalState {
   const ExactSourceTimeMap *exact_source_times;
   const SourceTimeBoundsMap *source_time_bounds;
   const ForcedScopeFilter *forced_scope_filter;
+  IntegrationSettings integration_settings;
   const uuber::TrialParamsSoA *trial_params_soa;
   const std::unordered_map<int, int> *forced_label_id_to_bit_idx;
   uuber::BitsetState forced_complete_bits;
@@ -2567,40 +2684,10 @@ struct NodeEvalState {
   bool kernel_runtime_ready{false};
 };
 
-struct IntegrationSettings {
-  double rel_tol{kDefaultRelTol};
-  double abs_tol{kDefaultAbsTol};
-  int max_depth{kDefaultMaxDepth};
-};
-
-struct CanonicalIntegrationSettings {
-  double rel_tol{kDefaultRelTol};
-  double abs_tol{kDefaultAbsTol};
-  int max_depth{kDefaultMaxDepth};
-  double effective_tol{std::max(kDefaultRelTol, kDefaultAbsTol)};
-};
-
-inline CanonicalIntegrationSettings
-canonicalize_integration_settings(const IntegrationSettings &settings) {
-  CanonicalIntegrationSettings canonical;
-  canonical.rel_tol =
-      (settings.rel_tol > 0.0 && std::isfinite(settings.rel_tol))
-          ? settings.rel_tol
-          : kDefaultRelTol;
-  canonical.abs_tol =
-      (settings.abs_tol > 0.0 && std::isfinite(settings.abs_tol))
-          ? settings.abs_tol
-          : kDefaultAbsTol;
-  canonical.max_depth = (settings.max_depth > 0) ? settings.max_depth
-                                                  : kDefaultMaxDepth;
-  canonical.effective_tol =
-      std::max(std::max(canonical.rel_tol, canonical.abs_tol), 1e-10);
-  return canonical;
-}
-
 struct GuardEvalInput {
   const uuber::NativeContext &ctx;
   int node_idx{-1};
+  const uuber::GuardContextInfo *guard_info{nullptr};
   std::string trial_type_key;
   const uuber::BitsetState *forced_complete_bits{nullptr};
   const uuber::BitsetState *forced_survive_bits{nullptr};
@@ -2624,7 +2711,8 @@ NodeEvalResult eval_node_with_forced_dense_bits(
     bool forced_complete_bits_valid = false,
     const uuber::BitsetState *forced_survive_bits = nullptr,
     bool forced_survive_bits_valid = false,
-    uuber::KernelRuntimeState *kernel_runtime = nullptr);
+    uuber::KernelRuntimeState *kernel_runtime = nullptr,
+    const IntegrationSettings *integration_settings = nullptr);
 GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
                                 int node_idx,
                                 const std::string &trial_key,
@@ -3187,7 +3275,8 @@ NodeEvalResult eval_node_with_forced_dense_bits(
     bool forced_complete_bits_valid,
     const uuber::BitsetState *forced_survive_bits,
     bool forced_survive_bits_valid,
-    uuber::KernelRuntimeState *kernel_runtime) {
+    uuber::KernelRuntimeState *kernel_runtime,
+    const IntegrationSettings *integration_settings) {
   const bool kernel_runtime_usable =
       kernel_runtime &&
       (!forced_complete_bits_valid ||
@@ -3200,8 +3289,20 @@ NodeEvalResult eval_node_with_forced_dense_bits(
                       forced_scope_filter, forced_complete_bits,
                       forced_complete_bits_valid, forced_survive_bits,
                       forced_survive_bits_valid,
-                      kernel_runtime_usable ? kernel_runtime : nullptr);
+                      kernel_runtime_usable ? kernel_runtime : nullptr,
+                      integration_settings);
   return eval_node_recursive_dense(node_idx, local, need);
+}
+
+inline const uuber::GuardContextInfo *
+guard_context_info_lookup(const uuber::NativeContext &ctx, int node_idx) {
+  if (node_idx < 0 ||
+      node_idx >= static_cast<int>(ctx.guard_info.size())) {
+    return nullptr;
+  }
+  const uuber::GuardContextInfo &info =
+      ctx.guard_info[static_cast<std::size_t>(node_idx)];
+  return info.valid ? &info : nullptr;
 }
 
 GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
@@ -3216,9 +3317,12 @@ GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
                                 const uuber::BitsetState *forced_survive_bits,
                                 const std::unordered_map<int, int>
                                     *forced_label_id_to_bit_idx) {
+  const uuber::GuardContextInfo *guard_info =
+      guard_context_info_lookup(ctx, node_idx);
   const uuber::IrNode &node = ir_node_required(ctx, node_idx);
   GuardEvalInput input{ctx,
                        node_idx,
+                       guard_info,
                        trial_key.empty() ? std::string("__default__")
                                          : trial_key,
                        forced_complete_bits,
@@ -3231,21 +3335,29 @@ GuardEvalInput make_guard_input(const uuber::NativeContext &ctx,
                        trial_params_soa,
                        exact_source_times,
                        source_time_bounds};
-  if (node.source_id_begin >= 0 && node.source_id_count > 0 &&
-      node.source_id_begin + node.source_id_count <=
+  const int source_id_begin =
+      guard_info ? guard_info->source_id_begin : node.source_id_begin;
+  const int source_id_count =
+      guard_info ? guard_info->source_id_count : node.source_id_count;
+  if (source_id_begin >= 0 && source_id_count > 0 &&
+      source_id_begin + source_id_count <=
           static_cast<int>(ctx.ir.node_source_label_ids.size())) {
     input.local_scope_filter.source_ids_data =
         &ctx.ir.node_source_label_ids[static_cast<std::size_t>(
-            node.source_id_begin)];
-    input.local_scope_filter.source_ids_count = node.source_id_count;
+            source_id_begin)];
+    input.local_scope_filter.source_ids_count = source_id_count;
   }
-  if (node.source_mask_begin >= 0 && node.source_mask_count > 0 &&
-      node.source_mask_begin + node.source_mask_count <=
+  const int source_mask_begin =
+      guard_info ? guard_info->source_mask_begin : node.source_mask_begin;
+  const int source_mask_count =
+      guard_info ? guard_info->source_mask_count : node.source_mask_count;
+  if (source_mask_begin >= 0 && source_mask_count > 0 &&
+      source_mask_begin + source_mask_count <=
           static_cast<int>(ctx.ir.node_source_masks.size())) {
     input.local_scope_filter.source_mask_words =
         &ctx.ir.node_source_masks[static_cast<std::size_t>(
-            node.source_mask_begin)];
-    input.local_scope_filter.source_mask_count = node.source_mask_count;
+            source_mask_begin)];
+    input.local_scope_filter.source_mask_count = source_mask_count;
     input.local_scope_filter.label_id_to_bit_idx = &ctx.ir.label_id_to_bit_idx;
   }
   input.local_scope_filter.parent = forced_scope_filter;
@@ -3310,7 +3422,7 @@ uuber::KernelNodeValues kernel_guard_eval_callback(
       state.forced_complete_bits_valid ? &state.forced_complete_bits : nullptr,
       state.forced_survive_bits_valid ? &state.forced_survive_bits : nullptr,
       state.forced_label_id_to_bit_idx);
-  const IntegrationSettings settings;
+  const IntegrationSettings &settings = state.integration_settings;
   if (needs_density(kneed)) {
     const double ref_density = safe_density(reference_value.density);
     const double blocker_survival = clamp_probability(blocker_value.survival);
@@ -3394,8 +3506,9 @@ double guard_effective_survival_internal(const GuardEvalInput &input, double t,
   if (t <= 0.0) {
     return 1.0;
   }
-  const uuber::IrNode &node = ir_node_required(input.ctx, input.node_idx);
-  int blocker_idx = node.blocker_idx;
+  const int blocker_idx =
+      (input.guard_info ? input.guard_info->blocker_idx
+                        : ir_node_required(input.ctx, input.node_idx).blocker_idx);
   if (blocker_idx < 0) {
     return 1.0;
   }
@@ -3405,16 +3518,19 @@ double guard_effective_survival_internal(const GuardEvalInput &input, double t,
       input.exact_source_times, input.source_time_bounds,
       input.forced_scope_filter, input.forced_complete_bits,
       input.forced_complete_bits != nullptr, input.forced_survive_bits,
-      input.forced_survive_bits != nullptr);
+      input.forced_survive_bits != nullptr, nullptr, &settings);
   return clamp_probability(block.survival);
 }
 
-double guard_reference_density(const GuardEvalInput &input, double t) {
+double guard_reference_density(const GuardEvalInput &input, double t,
+                               const IntegrationSettings &settings) {
   if (!std::isfinite(t) || t < 0.0) {
     return 0.0;
   }
-  const uuber::IrNode &node = ir_node_required(input.ctx, input.node_idx);
-  int reference_idx = node.reference_idx;
+  const int reference_idx =
+      (input.guard_info
+           ? input.guard_info->reference_idx
+           : ir_node_required(input.ctx, input.node_idx).reference_idx);
   if (reference_idx < 0) {
     return 0.0;
   }
@@ -3424,7 +3540,7 @@ double guard_reference_density(const GuardEvalInput &input, double t) {
       input.exact_source_times, input.source_time_bounds,
       input.forced_scope_filter, input.forced_complete_bits,
       input.forced_complete_bits != nullptr, input.forced_survive_bits,
-      input.forced_survive_bits != nullptr);
+      input.forced_survive_bits != nullptr, nullptr, &settings);
   double dens_ref = ref.density;
   if (!std::isfinite(dens_ref) || dens_ref <= 0.0)
     return 0.0;
@@ -3433,7 +3549,7 @@ double guard_reference_density(const GuardEvalInput &input, double t) {
 
 double guard_density_internal(const GuardEvalInput &input, double t,
                               const IntegrationSettings &settings) {
-  double dens_ref = guard_reference_density(input, t);
+  double dens_ref = guard_reference_density(input, t, settings);
   if (dens_ref <= 0.0)
     return 0.0;
   double s_eff = guard_effective_survival_internal(input, t, settings);
@@ -3445,12 +3561,6 @@ double guard_density_internal(const GuardEvalInput &input, double t,
 
 // --- Nested Guard Optimization ---
 
-struct LinearGuardChain {
-  std::vector<int> reference_indices; // Dense IR node indices [Ref0, Ref1, ...]
-  int leaf_blocker_idx{-1};          // Dense IR node index
-  bool valid{false};
-};
-
 struct FastEventInfo {
   const uuber::NativeAccumulator *acc{nullptr};
   const TrialAccumulatorParams *override{nullptr};
@@ -3461,8 +3571,9 @@ struct FastEventInfo {
   int outcome_idx{-1};
 };
 
-bool fast_event_info_dense_idx(const GuardEvalInput &input, int node_idx,
-                               FastEventInfo &info) {
+bool materialize_guard_fast_event_info(
+    const GuardEvalInput &input, const uuber::GuardFastEventInfo &plan,
+    FastEventInfo &info) {
   const bool has_forced_complete =
       input.forced_complete_bits != nullptr && input.forced_complete_bits->any();
   const bool has_forced_survive =
@@ -3472,16 +3583,10 @@ bool fast_event_info_dense_idx(const GuardEvalInput &input, int node_idx,
       input.source_time_bounds != nullptr) {
     return false;
   }
-  const uuber::IrNode &node = ir_node_required(input.ctx, node_idx);
-  if (!(node.op == uuber::IrNodeOp::EventAcc || node.op == uuber::IrNodeOp::EventPool)) {
+  if (!plan.valid) {
     return false;
   }
-  if ((node.flags & uuber::IR_NODE_FLAG_SPECIAL_DEADLINE) != 0u ||
-      (node.flags & uuber::IR_NODE_FLAG_SPECIAL_GUESS) != 0u) {
-    return false;
-  }
-  LabelRef ref = node_label_ref(input.ctx, node);
-  int acc_idx = ref.acc_idx;
+  const int acc_idx = plan.acc_idx;
   if (acc_idx < 0 ||
       acc_idx >= static_cast<int>(input.ctx.accumulators.size())) {
     return false;
@@ -3492,71 +3597,28 @@ bool fast_event_info_dense_idx(const GuardEvalInput &input, int node_idx,
   resolve_event_numeric_params(*info.acc, acc_idx, info.override,
                                input.trial_params_soa, info.onset, info.q,
                                info.cfg);
-  info.outcome_idx = ref.outcome_idx;
+  info.outcome_idx = plan.outcome_idx;
   return true;
 }
 
-inline bool fast_event_density_supported(const GuardEvalInput &input,
-                                         const FastEventInfo &info) {
-  if (info.outcome_idx < 0 ||
-      info.outcome_idx >= static_cast<int>(input.ctx.outcome_info.size())) {
-    return true;
-  }
-  const uuber::OutcomeContextInfo &outcome =
-      input.ctx.outcome_info[static_cast<std::size_t>(info.outcome_idx)];
-  return outcome.alias_sources.empty() && outcome.guess_donors.empty();
-}
-
-// Detects A -> B -> C ... chain.
-// Depth is number of GUARD nodes visited.
-// A chain of depth 2 means: Guard0(A, Guard1(B, C)).
-LinearGuardChain detect_linear_guard_chain(const uuber::NativeContext &ctx,
-                                           int start_node_idx,
-                                           int max_depth_check) {
-  LinearGuardChain chain;
-  int curr_idx = start_node_idx;
-  int depth = 0;
-
-  while (depth < max_depth_check) {
-    const uuber::IrNode &curr = ir_node_required(ctx, curr_idx);
-    if (curr.op != uuber::IrNodeOp::Guard) {
-      break;
-    }
-    if (curr.reference_idx < 0 || curr.blocker_idx < 0) {
-      return {}; // Invalid/Partial
-    }
-    chain.reference_indices.push_back(curr.reference_idx);
-    int next_idx = curr.blocker_idx;
-    const uuber::IrNode &next_node = ir_node_required(ctx, next_idx);
-
-    // Move to next
-    if (next_node.op == uuber::IrNodeOp::Guard) {
-      curr_idx = next_idx;
-      depth++;
-    } else {
-      // Leaf found
-      chain.leaf_blocker_idx = next_idx;
-      chain.valid = true;
-      return chain;
-    }
-  }
-  // If we exited because depth limit hit or kind mismatch (shouldn't happen
-  // with leaf check) If curr is still guard, we exceeded depth or stopped? We
-  // return invalid if we didn't find a non-guard leaf.
-  return {};
-}
-
-constexpr std::size_t kLinearGuardChainMaxDepth = 8u;
-constexpr int kLinearChainBaseSteps = 96;
-constexpr int kLinearChainDepthStep = 24;
-constexpr int kLinearChainTolBonus = 16;
-constexpr int kLinearChainMaxSteps = 240;
+constexpr std::size_t kLinearGuardChainMaxDepth =
+    uuber::kCompiledGuardChainMaxDepth;
+constexpr int kLinearChainBaseSteps = 72;
+constexpr int kLinearChainDepthStep = 16;
+constexpr int kLinearChainTolBonus = 12;
+constexpr int kLinearChainMaxSteps = 192;
+constexpr std::size_t kLinearChainMaxGridPoints =
+    static_cast<std::size_t>(2 * kLinearChainMaxSteps + 1);
+constexpr std::size_t kLinearChainMaxValueWidth =
+    kLinearGuardChainMaxDepth + 1u;
+constexpr std::size_t kLinearChainMaxGridValues =
+    kLinearChainMaxGridPoints * kLinearChainMaxValueWidth;
 
 inline int linear_chain_step_budget(std::size_t depth,
                                     const CanonicalIntegrationSettings &canonical) {
   int steps = kLinearChainBaseSteps;
-  if (depth > 3u) {
-    steps += static_cast<int>(depth - 3u) * kLinearChainDepthStep;
+  if (depth > 1u) {
+    steps += static_cast<int>(depth - 1u) * kLinearChainDepthStep;
   }
   if (canonical.effective_tol <= 1e-7) {
     steps += kLinearChainTolBonus;
@@ -3567,29 +3629,33 @@ inline int linear_chain_step_budget(std::size_t depth,
   return std::min(steps, kLinearChainMaxSteps);
 }
 
-template <std::size_t MaxDepth>
 class LinearChainIntegrator final {
 public:
-  using ChainState = std::array<double, MaxDepth>;
+  using ChainState = std::array<double, kLinearGuardChainMaxDepth>;
 
   LinearChainIntegrator(const GuardEvalInput &input,
-                        const LinearGuardChain &chain,
+                        const uuber::GuardLinearChainInfo &chain,
                         double t,
+                        const IntegrationSettings &settings,
                         const CanonicalIntegrationSettings &canonical)
       : input_(input), chain_(chain), t_(t), canonical_(canonical),
-        depth_(chain.reference_indices.size()), value_width_(depth_ + 1u),
-        ref_infos_(depth_) {
+        settings_(settings), depth_(static_cast<std::size_t>(chain.reference_count)),
+        value_width_(depth_ + 1u) {
     ref_info_ptrs_.fill(nullptr);
     ref_density_ok_.fill(false);
     for (std::size_t i = 0; i < depth_; ++i) {
-      if (fast_event_info_dense_idx(input_, chain_.reference_indices[i],
-                                    ref_infos_[i])) {
+      if (input_.guard_info &&
+          materialize_guard_fast_event_info(input_,
+                                            input_.guard_info->reference_fast[i],
+                                            ref_infos_[i])) {
         ref_info_ptrs_[i] = &ref_infos_[i];
-        ref_density_ok_[i] = fast_event_density_supported(input_, ref_infos_[i]);
+        ref_density_ok_[i] = input_.guard_info->reference_fast[i].density_supported;
       }
     }
     leaf_info_ptr_ =
-        fast_event_info_dense_idx(input_, chain_.leaf_blocker_idx, leaf_info_)
+        (input_.guard_info &&
+         materialize_guard_fast_event_info(input_, input_.guard_info->leaf_fast,
+                                           leaf_info_))
             ? &leaf_info_
             : nullptr;
   }
@@ -3604,7 +3670,7 @@ public:
 
 private:
   bool is_valid() const {
-    return chain_.valid && depth_ >= 1u && depth_ <= MaxDepth &&
+    return chain_.valid && depth_ >= 1u && depth_ <= kLinearGuardChainMaxDepth &&
            chain_.leaf_blocker_idx >= 0 && std::isfinite(t_) && t_ > 0.0;
   }
 
@@ -3624,9 +3690,13 @@ private:
     if (grid_points < 3u) {
       return false;
     }
-    grid_vals_.assign(grid_points * value_width_, 0.0);
-    batch_shifted_.assign(grid_points, 0.0);
-    batch_values_.assign(grid_points, 0.0);
+    if (grid_points > kLinearChainMaxGridPoints ||
+        value_width_ > kLinearChainMaxValueWidth) {
+      return false;
+    }
+    std::fill_n(grid_vals_.data(), grid_points * value_width_, 0.0);
+    std::fill_n(batch_shifted_.data(), grid_points, 0.0);
+    std::fill_n(batch_values_.data(), grid_points, 0.0);
 
     for (std::size_t i = 0; i < depth_; ++i) {
       const FastEventInfo *info_ptr = ref_info_ptrs_[i];
@@ -3658,7 +3728,7 @@ private:
               input_.source_time_bounds, input_.forced_scope_filter,
               input_.forced_complete_bits,
               input_.forced_complete_bits != nullptr, input_.forced_survive_bits,
-              input_.forced_survive_bits != nullptr);
+              input_.forced_survive_bits != nullptr, nullptr, &settings_);
           double dens = safe_density(ref_eval.density);
           if (!std::isfinite(dens) || dens <= 0.0) {
             dens = 0.0;
@@ -3697,7 +3767,8 @@ private:
             input_.trial_type_key, input_.exact_source_times,
             input_.source_time_bounds, input_.forced_scope_filter,
             input_.forced_complete_bits, input_.forced_complete_bits != nullptr,
-            input_.forced_survive_bits, input_.forced_survive_bits != nullptr);
+            input_.forced_survive_bits, input_.forced_survive_bits != nullptr,
+            nullptr, &settings_);
         const double leaf_surv = clamp_probability(leaf_eval.survival);
         double *vals = grid_slot(g);
         vals[depth_] = clamp_probability(leaf_surv);
@@ -3788,21 +3859,22 @@ private:
   }
 
   const GuardEvalInput &input_;
-  const LinearGuardChain &chain_;
+  const uuber::GuardLinearChainInfo &chain_;
   double t_{0.0};
   CanonicalIntegrationSettings canonical_;
+  IntegrationSettings settings_;
   std::size_t depth_{0u};
   std::size_t value_width_{0u};
 
-  std::vector<FastEventInfo> ref_infos_;
-  std::array<const FastEventInfo *, MaxDepth> ref_info_ptrs_{};
-  std::array<bool, MaxDepth> ref_density_ok_{};
+  std::array<FastEventInfo, kLinearGuardChainMaxDepth> ref_infos_{};
+  std::array<const FastEventInfo *, kLinearGuardChainMaxDepth> ref_info_ptrs_{};
+  std::array<bool, kLinearGuardChainMaxDepth> ref_density_ok_{};
   FastEventInfo leaf_info_{};
   const FastEventInfo *leaf_info_ptr_{nullptr};
 
-  std::vector<double> grid_vals_;
-  std::vector<double> batch_shifted_;
-  std::vector<double> batch_values_;
+  std::array<double, kLinearChainMaxGridValues> grid_vals_{};
+  std::array<double, kLinearChainMaxGridPoints> batch_shifted_{};
+  std::array<double, kLinearChainMaxGridPoints> batch_values_{};
 
   ChainState k1_{};
   ChainState k2_{};
@@ -3812,20 +3884,15 @@ private:
 };
 
 bool eval_optimized_linear_guard_chain_ode(
-    const GuardEvalInput &input, const LinearGuardChain &chain, double t,
+    const GuardEvalInput &input, const uuber::GuardLinearChainInfo &chain, double t,
+    const IntegrationSettings &settings,
     const CanonicalIntegrationSettings &canonical, double &out_cdf) {
-  const std::size_t depth = chain.reference_indices.size();
+  const std::size_t depth = static_cast<std::size_t>(chain.reference_count);
   if (!chain.valid || depth < 1u || chain.leaf_blocker_idx < 0 ||
       !std::isfinite(t) || t <= 0.0) {
     return false;
   }
-  if (depth > kLinearGuardChainMaxDepth) {
-    Rcpp::stop("Linear guard chain depth %d exceeds maximum supported depth %d",
-               static_cast<int>(depth),
-               static_cast<int>(kLinearGuardChainMaxDepth));
-  }
-  LinearChainIntegrator<kLinearGuardChainMaxDepth> integrator(input, chain, t,
-                                                              canonical);
+  LinearChainIntegrator integrator(input, chain, t, settings, canonical);
   return integrator.solve(out_cdf);
 }
 
@@ -3839,14 +3906,11 @@ double guard_cdf_internal(const GuardEvalInput &input, double t,
   }
   const CanonicalIntegrationSettings canonical =
       canonicalize_integration_settings(settings);
-
-  const int chain_depth_limit = static_cast<int>(input.ctx.ir.nodes.size());
-  LinearGuardChain chain =
-      detect_linear_guard_chain(input.ctx, input.node_idx, chain_depth_limit);
-  if (chain.valid) {
+  if (input.guard_info && input.guard_info->linear_chain.valid) {
     double cdf_chain = 0.0;
-    if (eval_optimized_linear_guard_chain_ode(input, chain, t, canonical,
-                                              cdf_chain)) {
+    if (eval_optimized_linear_guard_chain_ode(
+            input, input.guard_info->linear_chain, t, settings, canonical,
+            cdf_chain)) {
       return cdf_chain;
     }
   }
@@ -4500,7 +4564,106 @@ inline double node_density_with_competitors_from_state(
   return density;
 }
 
+uuber::GuardFastEventInfo build_guard_fast_event_info(
+    const uuber::NativeContext &ctx, int node_idx) {
+  uuber::GuardFastEventInfo info;
+  if (node_idx < 0 || node_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+    return info;
+  }
+  const uuber::IrNode &node = ctx.ir.nodes[static_cast<std::size_t>(node_idx)];
+  if (!(node.op == uuber::IrNodeOp::EventAcc ||
+        node.op == uuber::IrNodeOp::EventPool)) {
+    return info;
+  }
+  if ((node.flags & uuber::IR_NODE_FLAG_SPECIAL_DEADLINE) != 0u ||
+      (node.flags & uuber::IR_NODE_FLAG_SPECIAL_GUESS) != 0u) {
+    return info;
+  }
+  LabelRef ref = node_label_ref(ctx, node);
+  if (ref.acc_idx < 0 ||
+      ref.acc_idx >= static_cast<int>(ctx.accumulators.size())) {
+    return info;
+  }
+  info.acc_idx = ref.acc_idx;
+  info.outcome_idx = ref.outcome_idx;
+  info.valid = true;
+  if (info.outcome_idx < 0 ||
+      info.outcome_idx >= static_cast<int>(ctx.outcome_info.size())) {
+    info.density_supported = true;
+  } else {
+    const uuber::OutcomeContextInfo &outcome =
+        ctx.outcome_info[static_cast<std::size_t>(info.outcome_idx)];
+    info.density_supported =
+        outcome.alias_sources.empty() && outcome.guess_donors.empty();
+  }
+  return info;
+}
+
+uuber::GuardLinearChainInfo build_guard_linear_chain_info(
+    const uuber::NativeContext &ctx, int start_node_idx) {
+  uuber::GuardLinearChainInfo info;
+  int curr_idx = start_node_idx;
+  int depth = 0;
+  while (depth < static_cast<int>(uuber::kCompiledGuardChainMaxDepth)) {
+    if (curr_idx < 0 || curr_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+      return {};
+    }
+    const uuber::IrNode &curr = ctx.ir.nodes[static_cast<std::size_t>(curr_idx)];
+    if (curr.op != uuber::IrNodeOp::Guard || curr.reference_idx < 0 ||
+        curr.blocker_idx < 0) {
+      return {};
+    }
+    info.reference_indices[static_cast<std::size_t>(depth)] = curr.reference_idx;
+    ++depth;
+    const int next_idx = curr.blocker_idx;
+    if (next_idx < 0 || next_idx >= static_cast<int>(ctx.ir.nodes.size())) {
+      return {};
+    }
+    const uuber::IrNode &next = ctx.ir.nodes[static_cast<std::size_t>(next_idx)];
+    if (next.op == uuber::IrNodeOp::Guard) {
+      curr_idx = next_idx;
+      continue;
+    }
+    info.reference_count = depth;
+    info.leaf_blocker_idx = next_idx;
+    info.valid = true;
+    return info;
+  }
+  return {};
+}
+
+void precompute_guard_context_info(uuber::NativeContext &ctx) {
+  ctx.guard_info.assign(ctx.ir.nodes.size(), uuber::GuardContextInfo{});
+  for (std::size_t node_idx = 0; node_idx < ctx.ir.nodes.size(); ++node_idx) {
+    const uuber::IrNode &node = ctx.ir.nodes[node_idx];
+    if (node.op != uuber::IrNodeOp::Guard) {
+      continue;
+    }
+    uuber::GuardContextInfo &info = ctx.guard_info[node_idx];
+    info.node_idx = static_cast<int>(node_idx);
+    info.reference_idx = node.reference_idx;
+    info.blocker_idx = node.blocker_idx;
+    info.source_id_begin = node.source_id_begin;
+    info.source_id_count = node.source_id_count;
+    info.source_mask_begin = node.source_mask_begin;
+    info.source_mask_count = node.source_mask_count;
+    info.valid = true;
+    info.linear_chain = build_guard_linear_chain_info(ctx, info.node_idx);
+    if (!info.linear_chain.valid) {
+      continue;
+    }
+    for (int i = 0; i < info.linear_chain.reference_count; ++i) {
+      info.reference_fast[static_cast<std::size_t>(i)] =
+          build_guard_fast_event_info(
+              ctx, info.linear_chain.reference_indices[static_cast<std::size_t>(i)]);
+    }
+    info.leaf_fast =
+        build_guard_fast_event_info(ctx, info.linear_chain.leaf_blocker_idx);
+  }
+}
+
 void precompute_likelihood_query_plans_impl(uuber::NativeContext &ctx) {
+  precompute_guard_context_info(ctx);
   if (!ctx.kernel_program.valid) {
     return;
   }
@@ -4583,7 +4746,8 @@ double node_density_with_competitors_internal(
     int outcome_idx_context,
     const ExactSourceTimeMap *exact_source_times,
     const SourceTimeBoundsMap *source_time_bounds,
-    uuber::KernelRuntimeState *kernel_runtime) {
+    uuber::KernelRuntimeState *kernel_runtime,
+    const IntegrationSettings *integration_settings) {
   if (!std::isfinite(t) || t < 0.0) {
     return 0.0;
   }
@@ -4608,7 +4772,7 @@ double node_density_with_competitors_internal(
       forced_complete_bits_valid ? forced_complete_bits : nullptr,
       forced_complete_bits_valid,
       forced_survive_bits_valid ? forced_survive_bits : nullptr,
-      forced_survive_bits_valid, kernel_runtime);
+      forced_survive_bits_valid, kernel_runtime, integration_settings);
   const bool use_fused_competitor_survival =
       !competitor_ids.empty() && forced_empty && exact_source_times == nullptr &&
       source_time_bounds == nullptr &&
@@ -4629,13 +4793,14 @@ double kernel_node_density_entry_idx(
     int outcome_idx_context,
     const std::unordered_map<int, double> *exact_source_times,
     const std::unordered_map<int, std::pair<double, double>> *source_time_bounds,
-    uuber::KernelRuntimeState *kernel_runtime) {
+    uuber::KernelRuntimeState *kernel_runtime,
+    const IntegrationSettings *integration_settings) {
   return node_density_with_competitors_internal(
       ctx, node_id, t, forced_complete_bits,
       forced_complete_bits_valid, forced_survive_bits,
       forced_survive_bits_valid, competitor_ids, trial_params, trial_type_key,
       include_na_donors, outcome_idx_context, exact_source_times,
-      source_time_bounds, kernel_runtime);
+      source_time_bounds, kernel_runtime, integration_settings);
 }
 
 inline double node_density_with_shared_triggers_plan(
@@ -4647,13 +4812,15 @@ inline double node_density_with_shared_triggers_plan(
     const std::vector<int> &competitor_ids, const TrialParamSet *trial_params,
     const std::string &trial_type_key, bool include_na_donors,
     int outcome_idx_context,
-    const SharedTriggerPlan *trigger_plan, TrialParamSet *scratch_params) {
+    const SharedTriggerPlan *trigger_plan, TrialParamSet *scratch_params,
+    const IntegrationSettings *integration_settings) {
   if (!trial_params) {
     return kernel_node_density_entry_idx(
         ctx, node_id, t, forced_complete_bits,
         forced_complete_bits_valid, forced_survive_bits,
         forced_survive_bits_valid, competitor_ids, trial_params, trial_type_key,
-        include_na_donors, outcome_idx_context);
+        include_na_donors, outcome_idx_context, nullptr, nullptr, nullptr,
+        integration_settings);
   }
   SharedTriggerPlan local_plan;
   const SharedTriggerPlan *plan_ptr = trigger_plan;
@@ -4666,7 +4833,8 @@ inline double node_density_with_shared_triggers_plan(
         ctx, node_id, t, forced_complete_bits,
         forced_complete_bits_valid, forced_survive_bits,
         forced_survive_bits_valid, competitor_ids, trial_params, trial_type_key,
-        include_na_donors, outcome_idx_context);
+        include_na_donors, outcome_idx_context, nullptr, nullptr, nullptr,
+        integration_settings);
   }
   TrialParamSet local_scratch;
   TrialParamSet &scratch = scratch_params ? *scratch_params : local_scratch;
@@ -4694,7 +4862,8 @@ inline double node_density_with_shared_triggers_plan(
         forced_complete_bits_valid ? forced_complete_bits : nullptr,
         forced_complete_bits_valid,
         forced_survive_bits_valid ? forced_survive_bits : nullptr,
-        forced_survive_bits_valid, shared_kernel_runtime_ptr);
+        forced_survive_bits_valid, shared_kernel_runtime_ptr,
+        integration_settings);
     prebuilt_fused_competitor_survival =
         !competitor_ids.empty() && forced_empty &&
         competitors_guard_free_dense(ctx, competitor_ids);
@@ -4749,6 +4918,7 @@ double native_outcome_probability_bits_impl_idx(
   const std::vector<int> &comp_vec = comp_vec_raw;
   const CompetitorRouteDecision route =
       resolve_competitor_route(ctx, node_id, comp_vec, forced_empty);
+  const IntegrationSettings integration_settings{rel_tol, abs_tol, max_depth};
   uuber::KernelRuntimeState integrand_kernel_runtime;
   uuber::KernelRuntimeState *integrand_kernel_runtime_ptr = nullptr;
   if (ctx.kernel_program.valid &&
@@ -4770,7 +4940,7 @@ double native_outcome_probability_bits_impl_idx(
         forced_survive_bits,
         forced_survive_bits_valid, comp_vec, params_ptr, trial_type_key,
         include_na_donors, outcome_idx_context, nullptr, nullptr,
-        integrand_kernel_runtime_ptr);
+        integrand_kernel_runtime_ptr, &integration_settings);
     if (!std::isfinite(val) || val <= 0.0)
       return 0.0;
     return val;
@@ -5830,7 +6000,8 @@ bool for_each_ranked_node_transition(
     const uuber::BitsetState *base_forced_complete_bits_in,
     bool base_forced_complete_bits_in_valid,
     const uuber::BitsetState *base_forced_survive_bits_in,
-    bool base_forced_survive_bits_in_valid, EmitFn &&emit) {
+    bool base_forced_survive_bits_in_valid,
+    const IntegrationSettings *integration_settings, EmitFn &&emit) {
   const RankedNodeTransitionPlan &plan = compiler.plan_for_node(node_idx);
   if (!plan.valid || plan.transitions.empty()) {
     return false;
@@ -5838,7 +6009,8 @@ bool for_each_ranked_node_transition(
 
   const uuber::TrialParamsSoA *trial_params_soa =
       resolve_trial_params_soa_for_ranked(ctx, trial_params);
-  IntegrationSettings settings;
+  const IntegrationSettings settings =
+      integration_settings ? *integration_settings : IntegrationSettings{};
   bool emitted_any = false;
   uuber::BitsetState base_forced_complete_bits;
   uuber::BitsetState base_forced_survive_bits;
@@ -5876,7 +6048,7 @@ bool for_each_ranked_node_transition(
             forced_complete_bits_valid ? &forced_complete_bits : nullptr,
             forced_complete_bits_valid,
             forced_survive_bits_valid ? &forced_survive_bits : nullptr,
-            forced_survive_bits_valid, kernel_runtime);
+            forced_survive_bits_valid, kernel_runtime, &settings);
         const double d = eval.density;
         if (!std::isfinite(d) || d <= 0.0) {
           valid = false;
@@ -5891,7 +6063,7 @@ bool for_each_ranked_node_transition(
             forced_complete_bits_valid ? &forced_complete_bits : nullptr,
             forced_complete_bits_valid,
             forced_survive_bits_valid ? &forced_survive_bits : nullptr,
-            forced_survive_bits_valid, kernel_runtime);
+            forced_survive_bits_valid, kernel_runtime, &settings);
         const double Fj = clamp_probability(eval.cdf);
         if (!std::isfinite(Fj) || Fj <= 0.0) {
           valid = false;
@@ -5985,7 +6157,8 @@ double ranked_prefix_density_resolved(
     const std::vector<int> &node_indices, const std::vector<double> &times,
     const TrialParamSet *trial_params, const std::string &trial_type_key,
     uuber::KernelRuntimeState *kernel_runtime = nullptr,
-    RankedTransitionCompiler *transition_compiler = nullptr) {
+    RankedTransitionCompiler *transition_compiler = nullptr,
+    const IntegrationSettings *integration_settings = nullptr) {
   if (outcome_indices.empty() || outcome_indices.size() != times.size() ||
       node_indices.size() != times.size()) {
     return 0.0;
@@ -6176,7 +6349,7 @@ double ranked_prefix_density_resolved(
           forced_complete_bits_valid ? &forced_complete_bits : nullptr,
           forced_complete_bits_valid,
           forced_survive_bits_valid ? &forced_survive_bits : nullptr,
-          forced_survive_bits_valid,
+          forced_survive_bits_valid, integration_settings,
           [&](double scenario_weight, uuber::BitsetState &&scenario_complete_bits,
             bool scenario_complete_bits_valid,
             uuber::BitsetState &&scenario_survive_bits,
@@ -6354,7 +6527,8 @@ double evaluate_sequence_density_kernel_idx(
     const TrialParamSet *active_params,
     RankedTransitionCompiler *ranked_transition_compiler,
     SharedTriggerPlan *single_state_plan, TrialParamSet *prob_scratch_ptr,
-    uuber::KernelRuntimeState *runtime_ptr) {
+    uuber::KernelRuntimeState *runtime_ptr,
+    const IntegrationSettings *integration_settings) {
   if (!spec.enforce_ranked_sequence) {
     if (spec.single_outcome_idx < 0 || spec.single_node_idx < 0 ||
         !std::isfinite(spec.single_time) || spec.single_time < 0.0) {
@@ -6373,7 +6547,7 @@ double evaluate_sequence_density_kernel_idx(
         ctx, node_id, spec.single_time, nullptr,
         false, nullptr, false, spec.competitors, active_params,
         spec.trial_type_key, false, spec.single_outcome_idx, nullptr, nullptr,
-        runtime_ptr);
+        runtime_ptr, integration_settings);
   }
   if (spec.ranked_times_ptr == nullptr || spec.ranked_outcome_indices.empty() ||
       spec.ranked_node_indices.empty()) {
@@ -6382,7 +6556,8 @@ double evaluate_sequence_density_kernel_idx(
   return ranked_prefix_density_resolved(
       ctx, spec.ranked_outcome_indices, spec.ranked_node_indices,
       *spec.ranked_times_ptr, active_params,
-      spec.trial_type_key, runtime_ptr, ranked_transition_compiler);
+      spec.trial_type_key, runtime_ptr, ranked_transition_compiler,
+      integration_settings);
 }
 
 double evaluate_trial_contribution_kernel_idx(
@@ -6391,10 +6566,11 @@ double evaluate_trial_contribution_kernel_idx(
     int max_depth, RankedTransitionCompiler *ranked_transition_compiler,
     SharedTriggerPlan *single_state_plan, TrialParamSet *prob_scratch_ptr,
     uuber::KernelRuntimeState *runtime_ptr) {
+  const IntegrationSettings integration_settings{rel_tol, abs_tol, max_depth};
   if (spec.metric == KernelContributionMetric::SequenceDensity) {
     return evaluate_sequence_density_kernel_idx(
         ctx, spec, active_params, ranked_transition_compiler, single_state_plan,
-        prob_scratch_ptr, runtime_ptr);
+        prob_scratch_ptr, runtime_ptr, &integration_settings);
   }
   const int oi = spec.mass_outcome_idx;
   if (oi < 0 || oi >= static_cast<int>(ctx.outcome_info.size())) {
@@ -6404,6 +6580,17 @@ double evaluate_trial_contribution_kernel_idx(
       ctx.outcome_info[static_cast<std::size_t>(oi)];
   if (info.node_id < 0) {
     return 0.0;
+  }
+  const bool use_cache =
+      (ctx.na_cache_limit > 0) && (active_params != nullptr);
+  uuber::NAMapCacheKey cache_key;
+  if (use_cache) {
+    cache_key =
+        build_na_map_cache_key(info, oi, active_params, spec.trial_type_key);
+    auto hit = ctx.na_map_cache.find(cache_key);
+    if (hit != ctx.na_map_cache.end()) {
+      return hit->second;
+    }
   }
   Rcpp::IntegerVector competitor_ids(info.competitor_ids.begin(),
                                      info.competitor_ids.end());
@@ -6415,7 +6602,7 @@ double evaluate_trial_contribution_kernel_idx(
                                       empty_forced_complete_bits_valid);
   (void)ensure_forced_bitset_capacity(ctx, empty_forced_survive_bits,
                                       empty_forced_survive_bits_valid);
-  return native_outcome_probability_bits_impl_idx(
+  const double out = native_outcome_probability_bits_impl_idx(
       ctx, info.node_id, std::numeric_limits<double>::infinity(),
       empty_forced_complete_bits_valid ? &empty_forced_complete_bits : nullptr,
       empty_forced_complete_bits_valid,
@@ -6423,6 +6610,13 @@ double evaluate_trial_contribution_kernel_idx(
       empty_forced_survive_bits_valid, competitor_ids, rel_tol, abs_tol,
       max_depth, active_params, spec.trial_type_key, false, oi,
       single_state_plan, prob_scratch_ptr);
+  if (use_cache) {
+    if (static_cast<int>(ctx.na_map_cache.size()) >= ctx.na_cache_limit) {
+      ctx.na_map_cache.clear();
+    }
+    ctx.na_map_cache.emplace(std::move(cache_key), out);
+  }
+  return out;
 }
 
 double evaluate_component_trial_total_kernel_idx(
@@ -6881,7 +7075,6 @@ double cpp_loglik(SEXP ctxSEXP, Rcpp::NumericMatrix params_mat,
     Rcpp::stop("loglik requires a compiled kernel program");
   }
   ctx->na_map_cache.clear();
-  ctx->na_cache_order.clear();
   const int q_col = 0;
   const int w_col = 1;
   const int t0_col = 2;

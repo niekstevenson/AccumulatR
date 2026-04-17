@@ -53,3 +53,44 @@ testthat::test_that("set_parameters rejects unknown and duplicated targets", {
     "cannot be assigned more than once"
   )
 })
+
+testthat::test_that("trigger ids are first-class parameter names", {
+  spec <- race_spec() |>
+    add_accumulator("go1", "lognormal") |>
+    add_accumulator("go2", "lognormal") |>
+    add_outcome("R1", "go1") |>
+    add_outcome("R2", "go2") |>
+    add_trigger("shared_trigger", members = c("go1", "go2"), q = 0.10, draw = "shared")
+
+  testthat::expect_true("shared_trigger" %in% sampled_pars(spec))
+  testthat::expect_true("shared_trigger" %in% sampled_pars(finalize_model(spec)))
+
+  params_df <- build_param_matrix(
+    spec,
+    c(
+      go1.m = log(0.30),
+      go1.s = 0.18,
+      go2.m = log(0.32),
+      go2.s = 0.18,
+      shared_trigger = 0.22
+    ),
+    n_trials = 1L
+  )
+  testthat::expect_equal(params_df[, "q"], c(0.22, 0.22))
+
+  renamed_spec <- set_parameters(spec, list(p_stop = "shared_trigger"))
+  testthat::expect_true("p_stop" %in% sampled_pars(renamed_spec))
+
+  renamed_df <- build_param_matrix(
+    renamed_spec,
+    c(
+      go1.m = log(0.30),
+      go1.s = 0.18,
+      go2.m = log(0.32),
+      go2.s = 0.18,
+      p_stop = 0.25
+    ),
+    n_trials = 1L
+  )
+  testthat::expect_equal(renamed_df[, "q"], c(0.25, 0.25))
+})

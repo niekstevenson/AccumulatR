@@ -836,13 +836,13 @@ add_component <- function(spec, id, members, weight = NULL, weight_param = NULL,
 #' @param spec A `race_spec` object.
 #' @param id Trigger label. If `NULL`, the first member label is used.
 #' @param members Accumulator labels controlled by the trigger.
-#' @param q Failure probability for the trigger.
-#' @param param Optional parameter name supplying `q`.
+#' @param q Failure probability for the trigger. The trigger `id` is the
+#'   parameter name for this quantity.
 #' @param draw Whether trigger failures are shared across members or drawn
 #'   independently.
 #' @return The updated `race_spec`.
 #' @export
-add_trigger <- function(spec, id, members, q = NULL, param = NULL, draw = c("shared", "independent")) {
+add_trigger <- function(spec, id, members, q = NULL, draw = c("shared", "independent")) {
   spec <- .validate_race_spec_input(spec, "add_trigger")
   draw <- match.arg(draw)
   if (missing(members) || is.null(members) || length(members) == 0) {
@@ -855,7 +855,6 @@ add_trigger <- function(spec, id, members, q = NULL, param = NULL, draw = c("sha
     id = id,
     members = as.character(members),
     q = q,
-    param = param,
     draw = draw
   )
   if (!is.null(q)) {
@@ -1107,7 +1106,6 @@ race_model <- function(accumulators, pools = list(), outcomes, triggers = list()
       trig_id <- trig$id
       draw_mode <- trig$draw %||% "shared"
       default_q <- trig$q %||% NA_real_
-      param_name <- trig$param %||% NULL
 
       # Validate default_q if NA
       if (is.na(default_q)) {
@@ -1134,7 +1132,6 @@ race_model <- function(accumulators, pools = list(), outcomes, triggers = list()
           group_id = trig_id, # for backwards compat internally, just use trig_id
           members = members,
           q = as.numeric(default_q),
-          param = param_name,
           draw = draw_mode
         )
         for (m in members) {
@@ -1508,14 +1505,69 @@ dist_param_names <- function(dist) {
     acc_params <- c(base, "q", "t0")
     params <- c(params, paste0(acc$id, ".", acc_params))
   }
+  trigger_ids <- vapply(spec$triggers %||% list(), function(trig) {
+    trig$id %||% NA_character_
+  }, character(1))
+  trigger_ids <- trigger_ids[!is.na(trigger_ids) & nzchar(trigger_ids)]
+  if (anyDuplicated(trigger_ids)) {
+    dupes <- unique(trigger_ids[duplicated(trigger_ids)])
+    stop(
+      sprintf(
+        "Trigger ids must be unique in the parameter namespace: %s",
+        paste(dupes, collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+  trigger_conflicts <- intersect(unique(params), trigger_ids)
+  if (length(trigger_conflicts) > 0L) {
+    stop(
+      sprintf(
+        "Trigger ids conflict with existing parameter names: %s",
+        paste(trigger_conflicts, collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+  params <- c(params, trigger_ids)
   comps <- spec$components %||% spec$metadata$mixture$components %||% list()
+  weight_params <- character(0)
   for (comp in comps) {
     weight_param <- comp$weight_param %||% comp$attrs$weight_param %||% NULL
     if (!is.null(weight_param) && nzchar(weight_param)) {
-      params <- c(params, weight_param)
+      weight_params <- c(weight_params, weight_param)
     }
   }
+  weight_params <- unique(weight_params)
+  weight_conflicts <- intersect(unique(params), weight_params)
+  if (length(weight_conflicts) > 0L) {
+    stop(
+      sprintf(
+        "Component weight parameter names conflict with existing parameter names: %s",
+        paste(weight_conflicts, collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+  params <- c(params, weight_params)
   unique(params)
+}
+
+.trigger_parameter_defaults <- function(spec) {
+  triggers <- spec$triggers %||% list()
+  if (length(triggers) == 0L) {
+    return(stats::setNames(numeric(0), character(0)))
+  }
+  ids <- vapply(triggers, function(trig) trig$id %||% NA_character_, character(1))
+  vals <- vapply(triggers, function(trig) {
+    q <- trig$q %||% NA_real_
+    if (length(q) == 0L || is.null(q)) {
+      return(NA_real_)
+    }
+    as.numeric(q)[1]
+  }, numeric(1))
+  keep <- !is.na(ids) & nzchar(ids)
+  stats::setNames(vals[keep], ids[keep])
 }
 
 .parameter_name_lookup <- function(spec) {
@@ -1561,8 +1613,15 @@ dist_param_names <- function(dist) {
   missing <- setdiff(required, names(param_values))
   if (length(missing) > 0L) {
     missing_targets <- split(names(lookup)[lookup %in% missing], unname(lookup[lookup %in% missing]))
+    trigger_defaults <- .trigger_parameter_defaults(spec)
     defaultable <- vapply(missing, function(external_name) {
       targets <- missing_targets[[external_name]] %||% character(0)
+      if (length(targets) > 0L && all(targets %in% names(trigger_defaults))) {
+        vals <- as.numeric(trigger_defaults[targets])
+        return(length(vals) > 0L &&
+          all(is.finite(vals) & !is.na(vals)) &&
+          length(unique(vals)) == 1L)
+      }
       suffixes <- sub("^.*\\.", "", targets)
       length(suffixes) > 0L && all(suffixes %in% c("q", "t0"))
     }, logical(1))
@@ -1573,10 +1632,14 @@ dist_param_names <- function(dist) {
     }
 
     if (any(defaultable)) {
-      param_values <- c(
-        param_values,
-        stats::setNames(rep(0, sum(defaultable)), missing[defaultable])
-      )
+      default_vals <- vapply(missing[defaultable], function(external_name) {
+        targets <- missing_targets[[external_name]] %||% character(0)
+        if (length(targets) > 0L && all(targets %in% names(trigger_defaults))) {
+          return(as.numeric(trigger_defaults[targets[[1]]]))
+        }
+        0
+      }, numeric(1))
+      param_values <- c(param_values, stats::setNames(default_vals, missing[defaultable]))
     }
   }
   expanded <- vapply(names(lookup), function(internal_name) {
@@ -1748,7 +1811,6 @@ build_param_matrix <- function(model,
   all_trigger_defs <- lapply(spec$triggers %||% list(), function(t) {
     list(
       id = t$id,
-      param = t$param,
       q = t$q,
       draw = t$draw,
       members = t$members
@@ -1757,12 +1819,12 @@ build_param_matrix <- function(model,
   all_trigger_defs <- Filter(Negate(is.null), all_trigger_defs)
 
   for (trig in all_trigger_defs) {
-    trig_id <- trig$id %||% trig$param %||% NA_character_
+    trig_id <- trig$id %||% NA_character_
     if (is.null(trig_id) || !nzchar(trig_id)) next
     draw_mode <- trig$draw %||% "shared"
     q_val <- NA_real_
-    if (!is.null(trig$param) && trig$param %in% names(param_values)) {
-      q_val <- as.numeric(param_values[[trig$param]])
+    if (trig_id %in% names(param_values)) {
+      q_val <- as.numeric(param_values[[trig_id]])
     } else if (!is.null(trig$q)) {
       q_val <- as.numeric(trig$q)
     }
@@ -1782,8 +1844,7 @@ build_param_matrix <- function(model,
       acc_trigger_map[[m]] <- list(
         id = trig_id,
         draw = draw_mode,
-        q = q_val,
-        param = trig$param %||% NULL
+        q = q_val
       )
     }
   }

@@ -39,7 +39,6 @@ model <- race_spec() |>
     "shared_trigger",
     members = c("stop", "change"),
     q = 0.10,
-    param = "stop_q",
     draw = "shared"
   ) |>
   finalize_model()

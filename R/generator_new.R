@@ -455,7 +455,7 @@
   # Shared trigger parameter overrides (group-level param names)
   if (!is.null(prep$shared_triggers) && length(prep$shared_triggers) > 0) {
     for (trig in prep$shared_triggers) {
-      param_name <- trig$param %||% NULL
+      param_name <- trig$id %||% NULL
       if (is.null(param_name) || !nzchar(param_name)) next
       if (!param_name %in% names(params_rows)) next
       vals <- params_rows[[param_name]]

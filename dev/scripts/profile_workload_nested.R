@@ -76,8 +76,8 @@ build_shared_gate_nway_trigger_spec <- function() {
     add_outcome("RESP2", all_of("x2", "gate")) |>
     add_outcome("RESP3", all_of("x3", "gate")) |>
     add_outcome("NR_RAW", all_of("x1", "gate"), options = list(map_outcome_to = NA_character_)) |>
-    add_trigger("tg_x12", members = c("x1", "x2"), q = 0.10, param = "q_x12", draw = "shared") |>
-    add_trigger("tg_x3g", members = c("x3", "gate"), q = 0.16, param = "q_x3g", draw = "shared") |>
+    add_trigger("tg_x12", members = c("x1", "x2"), q = 0.10, draw = "shared") |>
+    add_trigger("tg_x3g", members = c("x3", "gate"), q = 0.16, draw = "shared") |>
     finalize_model()
 }
 
@@ -86,8 +86,8 @@ params_shared_gate_nway_trigger <- c(
   x2.meanlog = log(0.34), x2.sdlog = 0.18,
   x3.meanlog = log(0.37), x3.sdlog = 0.18,
   gate.meanlog = log(0.23), gate.sdlog = 0.14,
-  q_x12 = 0.10,
-  q_x3g = 0.16
+  tg_x12 = 0.10,
+  tg_x3g = 0.16
 )
 
 make_case <- function(spec_builder, params, observed_label, rt_mean) {

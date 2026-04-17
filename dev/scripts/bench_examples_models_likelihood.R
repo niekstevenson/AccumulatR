@@ -247,29 +247,29 @@ example_21_simple_q <- function() {
     add_accumulator("go2", "lognormal") |>
     add_outcome("R1", "go1") |>
     add_outcome("R2", "go2") |>
-    add_trigger("shared_trigger",
-      members = c("go1", "go2"),
-      q = 0.10, param = "go_trigger_q", draw = "shared"
-    ) |>
-    finalize_model()
-}
+      add_trigger("shared_trigger",
+        members = c("go1", "go2"),
+      q = 0.10, draw = "shared"
+      ) |>
+      finalize_model()
+  }
 params_example_21_simple_q <- c(
   go1.meanlog = log(0.30),
   go1.sdlog = 0.18,
   go2.meanlog = log(0.32),
   go2.sdlog = 0.18,
-  go_trigger_q = 0.10
+  shared_trigger = 0.10
 )
 
 example_22_shared_q <- function() {
   race_spec() |>
     add_accumulator("go_left", "lognormal") |>
     add_accumulator("go_right", "lognormal") |>
-    add_outcome("Left", "go_left") |>
-    add_outcome("Right", "go_right") |>
-    add_trigger("q_shared",
+  add_outcome("Left", "go_left") |>
+  add_outcome("Right", "go_right") |>
+  add_trigger("q_shared",
       members = c("go_left", "go_right"),
-      q = 0.10, param = "q_shared", draw = "independent"
+      q = 0.10, draw = "independent"
     ) |>
     finalize_model()
 }

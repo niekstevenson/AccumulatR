@@ -176,7 +176,7 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       add_outcome("R2", "go2") |>
       add_trigger("shared_trigger",
         members = c("go1", "go2"),
-        q = 0.10, param = "go_trigger_q", draw = "shared"
+        q = 0.10, draw = "shared"
       ) |>
       finalize_model()
   }
@@ -185,7 +185,7 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
     go1.s = 0.18,
     go2.m = log(0.32),
     go2.s = 0.18,
-    go_trigger_q = 0.10
+    shared_trigger = 0.10
   )
 
   example_22_shared_q <- function() {
@@ -196,7 +196,7 @@ testthat::test_that("selected examples agree across simulate/probability/likelih
       add_outcome("Right", "go_right") |>
       add_trigger("q_shared",
         members = c("go_left", "go_right"),
-        q = 0.10, param = "q_shared", draw = "independent"
+        q = 0.10, draw = "independent"
       ) |>
       finalize_model()
   }

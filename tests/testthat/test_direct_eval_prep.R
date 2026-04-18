@@ -1,0 +1,347 @@
+.repo_root <- normalizePath(testthat::test_path("..", ".."), mustWork = TRUE)
+
+source(file.path(.repo_root, "R", "helpers.R"))
+source(file.path(.repo_root, "R", "model_definition.R"))
+source(file.path(.repo_root, "R", "semantic_bridge.R"))
+
+lba_denom_ref <- function(v, sv) {
+  denom <- pnorm(v / sv)
+  if (!is.finite(denom) || denom < 1e-10) denom <- 1e-10
+  denom
+}
+
+lba_pdf_ref <- function(x, v, B, A, sv) {
+  if (!is.finite(x) || x <= 0 || !is.finite(v) || !is.finite(B) || !is.finite(A) ||
+      !is.finite(sv) || sv <= 0) {
+    return(0)
+  }
+  denom <- lba_denom_ref(v, sv)
+  if (A > 1e-10) {
+    zs <- x * sv
+    cmz <- B - x * v
+    cz <- cmz / zs
+    cz_max <- (cmz - A) / zs
+    pdf <- (v * (pnorm(cz) - pnorm(cz_max)) +
+      sv * (dnorm(cz_max) - dnorm(cz))) / (A * denom)
+  } else {
+    pdf <- dnorm(B / x, mean = v, sd = sv) * B / (x * x * denom)
+  }
+  if (!is.finite(pdf) || pdf <= 0) 0 else pdf
+}
+
+lba_cdf_ref <- function(x, v, B, A, sv) {
+  if (!is.finite(x) || x <= 0 || !is.finite(v) || !is.finite(B) || !is.finite(A) ||
+      !is.finite(sv) || sv <= 0) {
+    return(0)
+  }
+  denom <- lba_denom_ref(v, sv)
+  if (A > 1e-10) {
+    zs <- x * sv
+    cmz <- B - x * v
+    xx <- cmz - A
+    cz <- cmz / zs
+    cz_max <- xx / zs
+    cdf <- (1 +
+      (zs * (dnorm(cz_max) - dnorm(cz)) +
+         xx * pnorm(cz_max) -
+         cmz * pnorm(cz)) / A) / denom
+  } else {
+    cdf <- pnorm(B / x, mean = v, sd = sv, lower.tail = FALSE) / denom
+  }
+  min(max(cdf, 0), 1)
+}
+
+rdm_pigt0_ref <- function(x, k, l) {
+  if (!is.finite(x) || x <= 0 || !is.finite(k) || !is.finite(l)) return(0)
+  if (abs(l) < 1e-12) {
+    z <- k / sqrt(x)
+    return(min(max(2 * (1 - pnorm(z)), 0), 1))
+  }
+  mu <- k / l
+  lambda <- k * k
+  p1 <- 1 - pnorm(sqrt(lambda / x) * (1 + x / mu))
+  p2 <- 1 - pnorm(sqrt(lambda / x) * (1 - x / mu))
+  part <- exp(exp(log(2 * lambda) - log(mu)) + log(max(1e-300, p1)))
+  min(max(part + p2, 0), 1)
+}
+
+rdm_digt0_ref <- function(x, k, l) {
+  if (!is.finite(x) || x <= 0 || !is.finite(k) || !is.finite(l)) return(0)
+  lambda <- k * k
+  exponent <- if (l == 0) {
+    -0.5 * lambda / x
+  } else {
+    mu <- k / l
+    -(lambda / (2 * x)) * ((x * x) / (mu * mu) - 2 * x / mu + 1)
+  }
+  exp(exponent + 0.5 * log(lambda) - 0.5 * log(2 * x * x * x * pi))
+}
+
+rdm_pigt_ref <- function(x, k, l, a, threshold = 1e-10) {
+  if (!is.finite(x) || x <= 0 || !is.finite(k) || !is.finite(l) || !is.finite(a)) return(0)
+  if (a < threshold) return(rdm_pigt0_ref(x, k, l))
+  sqt <- sqrt(x)
+  lgt <- log(x)
+  if (l < threshold) {
+    t5a <- 2 * pnorm((k + a) / sqt) - 1
+    t5b <- 2 * pnorm((-k - a) / sqt) - 1
+    t6a <- -0.5 * ((k + a) * (k + a) / x - log(2) - log(pi) + lgt) - log(a)
+    t6b <- -0.5 * ((k - a) * (k - a) / x - log(2) - log(pi) + lgt) - log(a)
+    cdf <- 1 + exp(t6a) - exp(t6b) + ((-k + a) * t5a - (k - a) * t5b) / (2 * a)
+  } else {
+    t1a <- exp(-0.5 * (k - a - x * l)^2 / x)
+    t1b <- exp(-0.5 * (a + k - x * l)^2 / x)
+    t1 <- exp(0.5 * (lgt - log(2) - log(pi))) * (t1a - t1b)
+    t2a <- exp(2 * l * (k - a) + pnorm(-(k - a + x * l) / sqt, log.p = TRUE))
+    t2b <- exp(2 * l * (k + a) + pnorm(-(k + a + x * l) / sqt, log.p = TRUE))
+    t2 <- a + (t2b - t2a) / (2 * l)
+    t4a <- 2 * pnorm((k + a) / sqt - sqt * l) - 1
+    t4b <- 2 * pnorm((k - a) / sqt - sqt * l) - 1
+    t4 <- 0.5 * (x * l - a - k + 0.5 / l) * t4a +
+      0.5 * (k - a - x * l - 0.5 / l) * t4b
+    cdf <- 0.5 * (t4 + t2 + t1) / a
+  }
+  if (!is.finite(cdf) || cdf < 0) return(0)
+  min(max(cdf, 0), 1)
+}
+
+rdm_digt_ref <- function(x, k, l, a, threshold = 1e-10) {
+  if (!is.finite(x) || x <= 0 || !is.finite(k) || !is.finite(l) || !is.finite(a)) return(0)
+  if (a < threshold) {
+    pdf <- rdm_digt0_ref(x, k, l)
+    return(if (!is.finite(pdf) || pdf <= 0) 0 else pdf)
+  }
+  if (l < threshold) {
+    term <- exp(-(k - a)^2 / (2 * x)) - exp(-(k + a)^2 / (2 * x))
+    pdf <- exp(-0.5 * (log(2) + log(pi) + log(x)) +
+      log(max(1e-300, term)) - log(2) - log(a))
+  } else {
+    sqt <- sqrt(x)
+    t1a <- -(a - k + x * l)^2 / (2 * x)
+    t1b <- -(a + k - x * l)^2 / (2 * x)
+    t1 <- (1 / sqrt(2)) * (exp(t1a) - exp(t1b)) / (sqrt(pi) * sqt)
+    t2a <- 2 * pnorm((-k + a) / sqt + sqt * l) - 1
+    t2b <- 2 * pnorm((k + a) / sqt - sqt * l) - 1
+    t2 <- exp(log(0.5) + log(l)) * (t2a + t2b)
+    pdf <- exp(log(max(1e-300, t1 + t2)) - log(2) - log(a))
+  }
+  if (!is.finite(pdf) || pdf <= 0) 0 else pdf
+}
+
+rdm_pdf_ref <- function(x, v, B, A, s) {
+  if (!is.finite(s) || s <= 0) return(0)
+  rdm_digt_ref(x, B / s + 0.5 * A / s, v / s, 0.5 * A / s)
+}
+
+rdm_cdf_ref <- function(x, v, B, A, s) {
+  if (!is.finite(s) || s <= 0) return(0)
+  rdm_pigt_ref(x, B / s + 0.5 * A / s, v / s, 0.5 * A / s)
+}
+
+testthat::test_that("direct kernel matches simple two-leaf top-1 formula", {
+  spec <- race_spec() |>
+    add_accumulator("a", "lognormal") |>
+    add_accumulator("b", "gamma") |>
+    add_outcome("A", "a") |>
+    add_outcome("B", "b")
+
+  prep <- prepare_model(spec)
+  trial_df <- data.frame(
+    trial = c(1L, 2L),
+    R = c("A", "B"),
+    rt = c(0.30, 0.55),
+    stringsAsFactors = FALSE
+  )
+  params <- c(
+    a.m = log(0.32), a.s = 0.18, a.q = 0.10, a.t0 = 0.02,
+    b.shape = 3.0, b.rate = 8.0, b.q = 0.20, b.t0 = 0.05
+  )
+  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
+
+  out <- .direct_loglik_prep(prep, params_mat, trial_df, rebuild = TRUE, root = .repo_root)
+
+  pa1 <- (1 - params[["a.q"]]) * dlnorm(trial_df$rt[[1]] - params[["a.t0"]], params[["a.m"]], params[["a.s"]])
+  sb1 <- 1 - (1 - params[["b.q"]]) * pgamma(trial_df$rt[[1]] - params[["b.t0"]], shape = params[["b.shape"]], rate = params[["b.rate"]])
+  pb2 <- (1 - params[["b.q"]]) * dgamma(trial_df$rt[[2]] - params[["b.t0"]], shape = params[["b.shape"]], rate = params[["b.rate"]])
+  sa2 <- 1 - (1 - params[["a.q"]]) * plnorm(trial_df$rt[[2]] - params[["a.t0"]], params[["a.m"]], params[["a.s"]])
+  expected <- log(c(pa1 * sb1, pb2 * sa2))
+
+  testthat::expect_equal(as.numeric(out$loglik), expected, tolerance = 1e-10)
+  testthat::expect_equal(out$total_loglik, sum(expected), tolerance = 1e-10)
+  testthat::expect_length(out$blocks, 1L)
+  testthat::expect_equal(out$blocks[[1]]$row_count, 2L)
+})
+
+testthat::test_that("direct kernel matches pooled top-1 formula", {
+  spec <- race_spec() |>
+    add_accumulator("a", "lognormal") |>
+    add_accumulator("b", "lognormal") |>
+    add_accumulator("c", "lognormal") |>
+    add_pool("ab", members = c("a", "b"), k = 1L) |>
+    add_outcome("AB", "ab") |>
+    add_outcome("C", "c")
+
+  prep <- prepare_model(spec)
+  trial_df <- data.frame(
+    trial = 1L,
+    R = "AB",
+    rt = 0.42,
+    stringsAsFactors = FALSE
+  )
+  params <- c(
+    a.m = log(0.35), a.s = 0.16, a.q = 0.00, a.t0 = 0.00,
+    b.m = log(0.45), b.s = 0.18, b.q = 0.00, b.t0 = 0.00,
+    c.m = log(0.55), c.s = 0.20, c.q = 0.00, c.t0 = 0.00
+  )
+  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
+
+  out <- .direct_loglik_prep(prep, params_mat, trial_df, root = .repo_root)
+
+  t <- trial_df$rt[[1]]
+  fa <- dlnorm(t, params[["a.m"]], params[["a.s"]])
+  fb <- dlnorm(t, params[["b.m"]], params[["b.s"]])
+  fc <- dlnorm(t, params[["c.m"]], params[["c.s"]])
+  sa <- 1 - plnorm(t, params[["a.m"]], params[["a.s"]])
+  sb <- 1 - plnorm(t, params[["b.m"]], params[["b.s"]])
+  sc <- 1 - plnorm(t, params[["c.m"]], params[["c.s"]])
+  expected <- log((fa * sb + fb * sa) * sc)
+
+  testthat::expect_equal(as.numeric(out$loglik), expected, tolerance = 1e-10)
+})
+
+testthat::test_that("direct kernel batches contiguous trials by direct variant", {
+  spec <- race_spec() |>
+    add_accumulator("a", "lognormal") |>
+    add_accumulator("b", "lognormal") |>
+    add_outcome("A", "a") |>
+    add_outcome("B", "b") |>
+    add_component("one", members = c("a")) |>
+    add_component("two", members = c("a", "b"))
+
+  prep <- prepare_model(spec)
+  trial_df <- data.frame(
+    trial = 1:3,
+    component = c("one", "one", "two"),
+    R = c("A", "A", "B"),
+    rt = c(0.30, 0.33, 0.40),
+    stringsAsFactors = FALSE
+  )
+  params <- c(
+    a.m = log(0.31), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
+    b.m = log(0.44), b.s = 0.18, b.q = 0.00, b.t0 = 0.00
+  )
+  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
+
+  out <- .direct_loglik_prep(prep, params_mat, trial_df, root = .repo_root)
+
+  expected <- c(
+    log(dlnorm(0.30, params[["a.m"]], params[["a.s"]])),
+    log(dlnorm(0.33, params[["a.m"]], params[["a.s"]])),
+    log(dlnorm(0.40, params[["b.m"]], params[["b.s"]]) *
+          (1 - plnorm(0.40, params[["a.m"]], params[["a.s"]])))
+  )
+
+  testthat::expect_equal(as.numeric(out$loglik), expected, tolerance = 1e-10)
+  testthat::expect_length(out$blocks, 2L)
+  testthat::expect_equal(vapply(out$blocks, `[[`, character(1), "component_id"), c("one", "two"))
+  testthat::expect_equal(vapply(out$blocks, `[[`, integer(1), "row_count"), c(2L, 1L))
+})
+
+testthat::test_that("direct kernel rejects exact variants instead of silently evaluating", {
+  spec <- race_spec() |>
+    add_accumulator("a", "lognormal") |>
+    add_accumulator("b", "lognormal") |>
+    add_outcome("A", "a") |>
+    add_outcome("B", "b") |>
+    add_component("one", members = c("a")) |>
+    add_component("both", members = c("a", "b")) |>
+    add_trigger("tg", members = c("a", "b"), q = 0.2, draw = "shared")
+
+  prep <- prepare_model(spec)
+  trial_df <- data.frame(
+    trial = 1L,
+    component = "both",
+    R = "B",
+    rt = 0.40,
+    stringsAsFactors = FALSE
+  )
+  params <- c(
+    a.m = log(0.31), a.s = 0.15, a.t0 = 0.00,
+    b.m = log(0.44), b.s = 0.18, b.t0 = 0.00,
+    tg = 0.2
+  )
+  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
+
+  testthat::expect_error(
+    .direct_loglik_prep(prep, params_mat, trial_df, root = .repo_root),
+    "no direct variant"
+  )
+})
+
+testthat::test_that("direct kernel matches LBA top-1 formula", {
+  spec <- race_spec() |>
+    add_accumulator("a", "LBA") |>
+    add_accumulator("b", "lognormal") |>
+    add_outcome("A", "a") |>
+    add_outcome("B", "b")
+
+  prep <- prepare_model(spec)
+  trial_df <- data.frame(
+    trial = c(1L, 2L),
+    R = c("A", "B"),
+    rt = c(0.55, 0.68),
+    stringsAsFactors = FALSE
+  )
+  params <- c(
+    a.v = 2.0, a.B = 1.2, a.A = 0.4, a.sv = 0.6, a.q = 0.0, a.t0 = 0.05,
+    b.m = log(0.60), b.s = 0.18, b.q = 0.0, b.t0 = 0.02
+  )
+  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
+
+  out <- .direct_loglik_prep(prep, params_mat, trial_df, root = .repo_root)
+
+  xa <- trial_df$rt - params[["a.t0"]]
+  xb <- trial_df$rt - params[["b.t0"]]
+  expected <- log(c(
+    lba_pdf_ref(xa[[1]], params[["a.v"]], params[["a.B"]], params[["a.A"]], params[["a.sv"]]) *
+      (1 - plnorm(xb[[1]], params[["b.m"]], params[["b.s"]])),
+    dlnorm(xb[[2]], params[["b.m"]], params[["b.s"]]) *
+      (1 - lba_cdf_ref(xa[[2]], params[["a.v"]], params[["a.B"]], params[["a.A"]], params[["a.sv"]]))
+  ))
+
+  testthat::expect_equal(as.numeric(out$loglik), expected, tolerance = 1e-10)
+})
+
+testthat::test_that("direct kernel matches RDM top-1 formula", {
+  spec <- race_spec() |>
+    add_accumulator("a", "RDM") |>
+    add_accumulator("b", "lognormal") |>
+    add_outcome("A", "a") |>
+    add_outcome("B", "b")
+
+  prep <- prepare_model(spec)
+  trial_df <- data.frame(
+    trial = c(1L, 2L),
+    R = c("A", "B"),
+    rt = c(0.52, 0.72),
+    stringsAsFactors = FALSE
+  )
+  params <- c(
+    a.v = 1.5, a.B = 1.0, a.A = 0.3, a.s = 1.1, a.q = 0.0, a.t0 = 0.04,
+    b.m = log(0.62), b.s = 0.17, b.q = 0.0, b.t0 = 0.01
+  )
+  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
+
+  out <- .direct_loglik_prep(prep, params_mat, trial_df, root = .repo_root)
+
+  xa <- trial_df$rt - params[["a.t0"]]
+  xb <- trial_df$rt - params[["b.t0"]]
+  expected <- log(c(
+    rdm_pdf_ref(xa[[1]], params[["a.v"]], params[["a.B"]], params[["a.A"]], params[["a.s"]]) *
+      (1 - plnorm(xb[[1]], params[["b.m"]], params[["b.s"]])),
+    dlnorm(xb[[2]], params[["b.m"]], params[["b.s"]]) *
+      (1 - rdm_cdf_ref(xa[[2]], params[["a.v"]], params[["a.B"]], params[["a.A"]], params[["a.s"]]))
+  ))
+
+  testthat::expect_equal(as.numeric(out$loglik), expected, tolerance = 1e-10)
+})

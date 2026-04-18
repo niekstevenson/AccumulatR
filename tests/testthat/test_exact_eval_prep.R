@@ -135,6 +135,47 @@ testthat::test_that("exact kernel carries positive-mass tie terms for the guarde
   testthat::expect_equal(as.numeric(out$loglik), log(expected), tolerance = 2e-3)
 })
 
+testthat::test_that("exact kernel handles nested logical-guard outcomes directly", {
+  spec <- race_spec() |>
+    add_accumulator("s1", "lognormal") |>
+    add_accumulator("is", "lognormal") |>
+    add_accumulator("s2", "lognormal") |>
+    add_outcome("STOP", all_of("s1", inhibit("s2", by = "is")))
+
+  prep <- prepare_model(spec)
+  t_obs <- 0.42
+  trial_df <- data.frame(
+    trial = 1L,
+    R = "STOP",
+    rt = t_obs,
+    stringsAsFactors = FALSE
+  )
+  params <- c(
+    s1.m = log(0.35), s1.s = 0.16, s1.q = 0.00, s1.t0 = 0.00,
+    is.m = log(0.30), is.s = 0.14, is.q = 0.00, is.t0 = 0.00,
+    s2.m = log(0.28), s2.s = 0.14, s2.q = 0.00, s2.t0 = 0.00
+  )
+  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
+
+  out <- .exact_loglik_prep(prep, params_mat, trial_df, root = .repo_root)
+
+  f_s1 <- function(x) dlnorm(x, params[["s1.m"]], params[["s1.s"]])
+  F_s1 <- function(x) plnorm(x, params[["s1.m"]], params[["s1.s"]])
+  f_s2 <- function(x) dlnorm(x, params[["s2.m"]], params[["s2.s"]])
+  S_is <- function(x) 1 - plnorm(x, params[["is.m"]], params[["is.s"]])
+  guard_cdf <- integrate(
+    function(u) f_s2(u) * S_is(u),
+    lower = 0,
+    upper = t_obs,
+    rel.tol = 1e-10,
+    abs.tol = 0
+  )$value
+  guard_density <- f_s2(t_obs) * S_is(t_obs)
+  expected <- f_s1(t_obs) * guard_cdf + F_s1(t_obs) * guard_density
+
+  testthat::expect_equal(as.numeric(out$loglik), log(expected), tolerance = 2e-3)
+})
+
 testthat::test_that("exact ranked kernel matches simple independent two-outcome formula", {
   spec <- race_spec(n_outcomes = 2L) |>
     add_accumulator("a", "lognormal") |>

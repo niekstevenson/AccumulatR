@@ -5,6 +5,7 @@
 
 #include "../eval/direct_kernel.hpp"
 #include "../eval/exact_kernel.hpp"
+#include "../eval/observed_kernel.hpp"
 #include "../runtime/direct_program.hpp"
 #include "../runtime/exact_program.hpp"
 
@@ -71,6 +72,20 @@ SEXP semantic_direct_loglik_prep_cpp(SEXP prepSEXP,
 }
 
 // [[Rcpp::export]]
+SEXP semantic_direct_prob_prep_cpp(SEXP prepSEXP,
+                                   SEXP paramsSEXP,
+                                   SEXP dataSEXP) {
+  Rcpp::List prep(prepSEXP);
+  const auto model = accumulatr::compile::compile_prep(prep);
+  const auto compiled = accumulatr::compile::project_semantic_model(model);
+  return accumulatr::eval::detail::evaluate_direct_outcome_probabilities(
+      compiled,
+      model,
+      paramsSEXP,
+      dataSEXP);
+}
+
+// [[Rcpp::export]]
 SEXP semantic_exact_loglik_prep_cpp(SEXP prepSEXP,
                                     SEXP paramsSEXP,
                                     SEXP dataSEXP,
@@ -80,6 +95,37 @@ SEXP semantic_exact_loglik_prep_cpp(SEXP prepSEXP,
   const auto compiled = accumulatr::compile::project_semantic_model(model);
   const double min_ll = Rcpp::as<double>(minLLSEXP);
   return accumulatr::eval::detail::evaluate_exact_trials(
+      compiled,
+      paramsSEXP,
+      dataSEXP,
+      min_ll);
+}
+
+// [[Rcpp::export]]
+SEXP semantic_exact_prob_prep_cpp(SEXP prepSEXP,
+                                  SEXP paramsSEXP,
+                                  SEXP dataSEXP) {
+  Rcpp::List prep(prepSEXP);
+  const auto model = accumulatr::compile::compile_prep(prep);
+  const auto compiled = accumulatr::compile::project_semantic_model(model);
+  return accumulatr::eval::detail::evaluate_exact_outcome_probabilities(
+      compiled,
+      paramsSEXP,
+      dataSEXP);
+}
+
+// [[Rcpp::export]]
+SEXP semantic_observed_loglik_prep_cpp(SEXP prepSEXP,
+                                       SEXP paramsSEXP,
+                                       SEXP dataSEXP,
+                                       SEXP minLLSEXP) {
+  Rcpp::List prep(prepSEXP);
+  const auto model = accumulatr::compile::compile_prep(prep);
+  const auto compiled = accumulatr::compile::project_semantic_model(model);
+  const double min_ll = Rcpp::as<double>(minLLSEXP);
+  return accumulatr::eval::detail::evaluate_observed_trials(
+      prep,
+      model,
       compiled,
       paramsSEXP,
       dataSEXP,

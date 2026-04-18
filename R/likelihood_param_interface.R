@@ -235,12 +235,20 @@ prepare_data <- function(structure,
 .make_context_structure <- function(structure, prep = NULL, native_bundle = NULL) {
   prep_info <- .prepare_likelihood_prep(structure, prep = prep, native_bundle = native_bundle)
   prep_eval_base <- prep_info$prep
-  native_ctx <- .prep_native_context(prep_eval_base)
-  if (!inherits(native_ctx, "externalptr")) {
-    native_ctx <- NULL
-  }
+  native_ctx <- tryCatch(.prep_native_context(prep_eval_base), error = function(e) NULL)
+  if (!inherits(native_ctx, "externalptr")) native_ctx <- NULL
+  rebuild_root <- .semantic_bridge_root(".")
+  component_attrs <- structure$components$attrs %||% list()
+  has_component_guess <- any(vapply(component_attrs, function(attrs) {
+    !is.null((attrs %||% list())$guess)
+  }, logical(1)))
   structure(list(
-    native_ctx = native_ctx
+    native_ctx = native_ctx,
+    rebuild = list(
+      root = rebuild_root,
+      prep = prep_eval_base,
+      has_component_guess = has_component_guess
+    )
   ), class = "accumulatr_context")
 }
 
@@ -1148,6 +1156,33 @@ response_probabilities.model_structure <- function(structure,
   result
 }
 
+.coerce_loglik_param_matrix <- function(parameters) {
+  if (inherits(parameters, "param_matrix") || is.matrix(parameters)) {
+    return(parameters)
+  }
+  if (is.data.frame(parameters)) {
+    return(.params_df_to_matrix(parameters))
+  }
+  stop("parameters must be a param_matrix, matrix, or data frame", call. = FALSE)
+}
+
+.prepared_trial_spans <- function(data_df) {
+  if (nrow(data_df) == 0L) {
+    return(data.frame(
+      trial = integer(0),
+      start = integer(0),
+      end = integer(0)
+    ))
+  }
+  trial <- as.integer(data_df$trial)
+  starts <- c(1L, which(trial[-1L] != trial[-length(trial)]) + 1L)
+  ends <- c(starts[-1L] - 1L, nrow(data_df))
+  data.frame(
+    trial = trial[starts],
+    start = starts,
+    end = ends
+  )
+}
 
 #' Evaluate the log-likelihood of behavioral data
 #'
@@ -1195,22 +1230,12 @@ log_likelihood.accumulatr_context <- function(context,
                                               ...) {
   ctx <- .validate_context(context)
   data_df <- .validate_prepared_data(data)
-  native_ctx <- ctx$native_ctx
-  if (is.null(native_ctx) || !inherits(native_ctx, "externalptr")) {
-    stop("Native context required for log_likelihood", call. = FALSE)
-  }
   params_list <- if (is.data.frame(parameters) || is.matrix(parameters) || inherits(parameters, "param_matrix")) {
     list(parameters)
   } else {
     parameters
   }
-  params_list <- lapply(params_list, function(pm) {
-    if (inherits(pm, "param_matrix") || is.matrix(pm)) {
-      pm
-    } else {
-      as.matrix(pm)
-    }
-  })
+  params_list <- lapply(params_list, .coerce_loglik_param_matrix)
   trial <- data_df$trial
   n_trials <- if (length(trial) == 0L) {
     0L
@@ -1231,7 +1256,7 @@ log_likelihood.accumulatr_context <- function(context,
   ll_offset <- 0
   if (is.null(ok) || length(ok) == 0L) {
     ok <- rep_len(TRUE, n_trials)
-  } else if (using_data_expand && length(ok) == length(data_expand)) {
+  } else if (length(ok) == length(expand)) {
     ok <- as.logical(ok)
     ok[is.na(ok)] <- FALSE
     ll_offset <- sum(!ok) * min_ll
@@ -1247,17 +1272,44 @@ log_likelihood.accumulatr_context <- function(context,
   if (length(expand) == 0L) {
     return(rep_len(ll_offset, length(params_list)))
   }
-  cpp_loglik_multiple(
-    native_ctx,
-    params_list,
-    data_df,
-    ok,
-    expand,
-    min_ll,
-    .integrate_rel_tol(),
-    .integrate_abs_tol(),
-    getOption("uuber.integrate.max.depth", 12L)
-  ) + ll_offset
+
+  trial_weights <- tabulate(expand, nbins = n_trials)
+  kept_trials <- which(trial_weights > 0L)
+  if (length(kept_trials) == 0L) {
+    return(rep_len(ll_offset, length(params_list)))
+  }
+
+  spans <- .prepared_trial_spans(data_df)
+  keep_rows <- unlist(lapply(kept_trials, function(trial_index) {
+    seq.int(spans$start[[trial_index]], spans$end[[trial_index]])
+  }), use.names = FALSE)
+  data_kept <- data_df[keep_rows, , drop = FALSE]
+  rownames(data_kept) <- NULL
+  trial_weights_kept <- trial_weights[kept_trials]
+
+  rebuild_ctx <- ctx$rebuild %||% NULL
+  if (is.null(rebuild_ctx)) {
+    stop("Rebuild context required for log_likelihood", call. = FALSE)
+  }
+
+  out <- vapply(params_list, function(param_mat) {
+    if (nrow(param_mat) != nrow(data_df)) {
+      stop("Rebuild likelihood currently requires parameter rows aligned to prepared data rows; use build_param_matrix(..., trial_df = prepared_data)", call. = FALSE)
+    }
+    param_kept <- param_mat[keep_rows, , drop = FALSE]
+    if (isTRUE(rebuild_ctx$has_component_guess)) {
+      stop("Component-level guess is not yet supported on the rebuild likelihood path", call. = FALSE)
+    }
+    observed <- .observed_loglik_prep(
+      rebuild_ctx$prep,
+      param_kept,
+      data_kept,
+      min_ll = min_ll,
+      root = rebuild_ctx$root
+    )
+    sum(trial_weights_kept * as.numeric(observed$loglik)) + ll_offset
+  }, numeric(1))
+  unname(out)
 }
 
 #' @rdname log_likelihood

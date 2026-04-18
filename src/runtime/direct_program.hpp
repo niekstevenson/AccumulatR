@@ -100,8 +100,20 @@ private:
   std::vector<std::string> keys_;
 };
 
-inline void require_direct_variant(const compile::CompiledVariant &variant) {
+inline bool variant_is_semantic_direct(const compile::CompiledVariant &variant) {
   if (variant.backend == compile::BackendKind::Direct) {
+    return true;
+  }
+  for (const auto &reason : variant.backend_reasons) {
+    if (reason != "outcome remapping" && reason != "guess outcome") {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline void require_direct_variant(const compile::CompiledVariant &variant) {
+  if (variant_is_semantic_direct(variant)) {
     return;
   }
 

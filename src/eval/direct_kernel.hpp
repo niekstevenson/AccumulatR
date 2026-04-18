@@ -356,6 +356,50 @@ inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
   return out;
 }
 
+template <typename Fn>
+double simpson_integrate_unit(Fn &&fn, double lower, double upper, int n = 256) {
+  if (!std::isfinite(lower) || !std::isfinite(upper) || !(upper > lower)) {
+    return 0.0;
+  }
+  if (n < 2) {
+    n = 2;
+  }
+  if (n % 2 != 0) {
+    ++n;
+  }
+  const double h = (upper - lower) / static_cast<double>(n);
+  double sum = 0.0;
+  for (int i = 0; i <= n; ++i) {
+    const double x = lower + h * static_cast<double>(i);
+    const double fx = fn(x);
+    const double w = (i == 0 || i == n) ? 1.0 : ((i % 2 == 0) ? 2.0 : 4.0);
+    sum += w * (std::isfinite(fx) ? fx : 0.0);
+  }
+  return sum * h / 3.0;
+}
+
+template <typename Fn>
+double integrate_to_infinity(Fn &&density_fn, int n = 256) {
+  constexpr double kUpper = 1.0 - 1e-8;
+  return simpson_integrate_unit(
+      [&](const double u) {
+        if (!(u >= 0.0) || !(u < 1.0)) {
+          return 0.0;
+        }
+        const double one_minus_u = 1.0 - u;
+        const double t = u / one_minus_u;
+        const double jacobian = 1.0 / (one_minus_u * one_minus_u);
+        const double density = density_fn(t);
+        if (!std::isfinite(density) || !(density > 0.0)) {
+          return 0.0;
+        }
+        return density * jacobian;
+      },
+      0.0,
+      kUpper,
+      n);
+}
+
 struct ParamView {
   Rcpp::NumericMatrix matrix;
   int q_col{-1};
@@ -418,6 +462,12 @@ struct TrialObservation {
   double rt{NA_REAL};
 };
 
+struct ProbabilityQuery {
+  semantic::Index variant_index{semantic::kInvalidIndex};
+  std::string component_id;
+  std::string outcome_label;
+};
+
 struct OutcomePlan {
   semantic::SourceKind source_kind{semantic::SourceKind::Leaf};
   semantic::Index source_index{semantic::kInvalidIndex};
@@ -429,6 +479,18 @@ struct VariantPlan {
   std::unordered_map<std::string, semantic::Index> outcome_index;
   std::vector<OutcomePlan> outcomes;
 };
+
+inline bool variant_is_semantic_direct(const compile::CompiledVariant &variant) {
+  if (variant.backend == compile::BackendKind::Direct) {
+    return true;
+  }
+  for (const auto &reason : variant.backend_reasons) {
+    if (reason != "outcome remapping" && reason != "guess outcome") {
+      return false;
+    }
+  }
+  return true;
+}
 
 inline std::vector<semantic::Index> merge_support(
     std::vector<semantic::Index> merged,
@@ -605,6 +667,81 @@ inline std::vector<runtime::TrialBlock> build_trial_blocks(
   return blocks;
 }
 
+inline std::vector<ProbabilityQuery> collapse_probability_queries(
+    const Rcpp::DataFrame &data,
+    const std::unordered_map<std::string, semantic::Index> &variant_index_by_component) {
+  const auto n_rows = data.nrows();
+  if (n_rows == 0) {
+    return {};
+  }
+  if (!data.containsElementNamed("R")) {
+    throw std::runtime_error("probability queries must include column R");
+  }
+
+  Rcpp::IntegerVector trial =
+      data.containsElementNamed("trial")
+          ? Rcpp::as<Rcpp::IntegerVector>(data["trial"])
+          : Rcpp::seq_len(n_rows);
+  Rcpp::CharacterVector outcome = Rcpp::as<Rcpp::CharacterVector>(data["R"]);
+  const bool has_component = data.containsElementNamed("component");
+  Rcpp::CharacterVector component =
+      has_component ? Rcpp::as<Rcpp::CharacterVector>(data["component"])
+                    : Rcpp::CharacterVector(n_rows, NA_STRING);
+
+  std::vector<ProbabilityQuery> out;
+  out.reserve(static_cast<std::size_t>(n_rows));
+  int last_trial = NA_INTEGER;
+  for (R_xlen_t i = 0; i < n_rows; ++i) {
+    const int trial_id = trial[i];
+    if (i > 0 && trial_id == last_trial) {
+      continue;
+    }
+    last_trial = trial_id;
+
+    std::string component_id = "__default__";
+    if (has_component && component[i] != NA_STRING) {
+      component_id = Rcpp::as<std::string>(component[i]);
+    }
+    const auto it = variant_index_by_component.find(component_id);
+    if (it == variant_index_by_component.end()) {
+      throw std::runtime_error(
+          "probability evaluator found no variant for component '" + component_id + "'");
+    }
+    if (outcome[i] == NA_STRING) {
+      throw std::runtime_error("probability evaluator does not support missing R labels");
+    }
+    out.push_back(ProbabilityQuery{
+        it->second,
+        component_id,
+        Rcpp::as<std::string>(outcome[i])});
+  }
+  return out;
+}
+
+inline std::vector<runtime::TrialBlock> build_trial_blocks(
+    const std::vector<ProbabilityQuery> &queries) {
+  std::vector<runtime::TrialBlock> blocks;
+  if (queries.empty()) {
+    return blocks;
+  }
+  runtime::TrialBlock current;
+  current.variant_index = queries.front().variant_index;
+  current.start_row = 0;
+  current.row_count = 1;
+  for (std::size_t i = 1; i < queries.size(); ++i) {
+    if (queries[i].variant_index == current.variant_index) {
+      ++current.row_count;
+      continue;
+    }
+    blocks.push_back(current);
+    current.variant_index = queries[i].variant_index;
+    current.start_row = static_cast<int>(i);
+    current.row_count = 1;
+  }
+  blocks.push_back(current);
+  return blocks;
+}
+
 class TrialKernel {
 public:
   TrialKernel(const VariantPlan &plan,
@@ -645,6 +782,31 @@ public:
     return std::log(prob);
   }
 
+  double density_for(const std::string &label) {
+    const auto it = plan_.outcome_index.find(label);
+    if (it == plan_.outcome_index.end()) {
+      return 0.0;
+    }
+    load_leaf_channels();
+
+    const auto target_idx = static_cast<std::size_t>(it->second);
+    const auto target = source_channels(plan_.outcomes[target_idx].source_kind,
+                                        plan_.outcomes[target_idx].source_index);
+    double prob = target.pdf;
+    for (std::size_t j = 0; j < plan_.outcomes.size(); ++j) {
+      if (j == target_idx) {
+        continue;
+      }
+      prob *= source_channels(plan_.outcomes[j].source_kind,
+                              plan_.outcomes[j].source_index)
+                  .survival;
+      if (!(prob > 0.0)) {
+        return 0.0;
+      }
+    }
+    return std::isfinite(prob) && prob > 0.0 ? prob : 0.0;
+  }
+
 private:
   const VariantPlan &plan_;
   const runtime::DirectProgram &program_;
@@ -666,12 +828,18 @@ private:
       for (int j = 0; j < n_local; ++j) {
         local_params[j] = params_.p(row, j);
       }
+      double onset_t0 = params_.t0(row);
+      if (static_cast<semantic::OnsetKind>(
+              program_.onset_kind[static_cast<std::size_t>(i)]) ==
+          semantic::OnsetKind::Absolute) {
+        onset_t0 += program_.onset_abs_value[static_cast<std::size_t>(i)];
+      }
       leaf_channels_[static_cast<std::size_t>(i)] = standard_leaf_channels(
           program_.leaf_dist_kind[static_cast<std::size_t>(i)],
           local_params,
           end - begin,
           params_.q(row),
-          params_.t0(row),
+          onset_t0,
           rt_);
     }
   }
@@ -781,8 +949,8 @@ inline Rcpp::List evaluate_direct_trials(const compile::CompiledModel &compiled,
   for (semantic::Index i = 0;
        i < static_cast<semantic::Index>(compiled.variants.size());
        ++i) {
-    if (compiled.variants[static_cast<std::size_t>(i)].backend ==
-        compile::BackendKind::Direct) {
+    if (variant_is_semantic_direct(
+            compiled.variants[static_cast<std::size_t>(i)])) {
       variant_index_by_component.emplace(
           compiled.variants[static_cast<std::size_t>(i)].component_id, i);
     }
@@ -851,6 +1019,76 @@ inline Rcpp::List evaluate_direct_trials(const compile::CompiledModel &compiled,
       Rcpp::Named("total_loglik") = total_loglik,
       Rcpp::Named("blocks") = block_list,
       Rcpp::Named("n_trials") = static_cast<int>(observations.size()),
+      Rcpp::Named("n_variants") = static_cast<int>(plans.size()),
+      Rcpp::Named("n_model_leaves") = static_cast<int>(model.leaves.size()));
+}
+
+inline Rcpp::List evaluate_direct_outcome_probabilities(
+    const compile::CompiledModel &compiled,
+    const semantic::SemanticModel &model,
+    SEXP paramsSEXP,
+    SEXP dataSEXP) {
+  Rcpp::DataFrame data(dataSEXP);
+  ParamView params(paramsSEXP);
+
+  std::unordered_map<std::string, semantic::Index> variant_index_by_component;
+  for (semantic::Index i = 0;
+       i < static_cast<semantic::Index>(compiled.variants.size());
+       ++i) {
+    if (variant_is_semantic_direct(
+            compiled.variants[static_cast<std::size_t>(i)])) {
+      variant_index_by_component.emplace(
+          compiled.variants[static_cast<std::size_t>(i)].component_id, i);
+    }
+  }
+
+  const auto queries = collapse_probability_queries(data, variant_index_by_component);
+  const auto blocks = build_trial_blocks(queries);
+
+  std::unordered_map<semantic::Index, VariantPlan> plans;
+  for (const auto &block : blocks) {
+    if (plans.find(block.variant_index) != plans.end()) {
+      continue;
+    }
+    plans.emplace(
+        block.variant_index,
+        make_variant_plan(runtime::lower_direct_variant(
+            compiled.variants[static_cast<std::size_t>(block.variant_index)])));
+  }
+
+  Rcpp::NumericVector prob(queries.size());
+  std::size_t param_row = 0;
+  for (const auto &block : blocks) {
+    const auto &plan = plans.at(block.variant_index);
+    const auto leaf_count =
+        static_cast<std::size_t>(plan.lowered.program.layout.n_leaves);
+    for (int local = 0; local < block.row_count; ++local) {
+      const auto query_idx = static_cast<std::size_t>(block.start_row + local);
+      if (param_row + leaf_count > static_cast<std::size_t>(params.matrix.nrow())) {
+        throw std::runtime_error(
+            "parameter rows do not match direct probability query layout");
+      }
+      prob[static_cast<R_xlen_t>(query_idx)] = integrate_to_infinity(
+          [&](const double rt) {
+            TrialKernel kernel(
+                plan,
+                params,
+                static_cast<int>(param_row),
+                rt);
+            return kernel.density_for(queries[query_idx].outcome_label);
+          });
+      param_row += leaf_count;
+    }
+  }
+
+  if (param_row != static_cast<std::size_t>(params.matrix.nrow())) {
+    throw std::runtime_error(
+        "parameter rows contain unused entries for the direct probability layout");
+  }
+
+  return Rcpp::List::create(
+      Rcpp::Named("probability") = prob,
+      Rcpp::Named("n_trials") = static_cast<int>(queries.size()),
       Rcpp::Named("n_variants") = static_cast<int>(plans.size()),
       Rcpp::Named("n_model_leaves") = static_cast<int>(model.leaves.size()));
 }

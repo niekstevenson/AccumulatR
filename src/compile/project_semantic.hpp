@@ -689,7 +689,16 @@ private:
                            ? BackendKind::Direct
                            : BackendKind::Exact;
     if (variant->backend == BackendKind::Exact) {
-      variant->direct_outcomes.clear();
+      bool keep_direct_outcomes = true;
+      for (const auto &reason : variant->backend_reasons) {
+        if (reason != "outcome remapping" && reason != "guess outcome") {
+          keep_direct_outcomes = false;
+          break;
+        }
+      }
+      if (!keep_direct_outcomes) {
+        variant->direct_outcomes.clear();
+      }
     }
   }
 };

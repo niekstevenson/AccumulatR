@@ -176,6 +176,54 @@ testthat::test_that("exact kernel handles nested logical-guard outcomes directly
   testthat::expect_equal(as.numeric(out$loglik), log(expected), tolerance = 2e-3)
 })
 
+testthat::test_that("exact kernel handles overlapping guarded competitors without factorizing them", {
+  spec <- race_spec() |>
+    add_accumulator("a", "lognormal") |>
+    add_accumulator("b", "lognormal") |>
+    add_accumulator("stop", "lognormal") |>
+    add_accumulator("d", "lognormal") |>
+    add_outcome("C1", inhibit("a", by = "stop")) |>
+    add_outcome("C2", inhibit("b", by = "stop")) |>
+    add_outcome("D", "d")
+
+  prep <- prepare_model(spec)
+  t_obs <- 0.43
+  trial_df <- data.frame(
+    trial = 1L,
+    R = "D",
+    rt = t_obs,
+    stringsAsFactors = FALSE
+  )
+  params <- c(
+    a.m = log(0.29), a.s = 0.17, a.q = 0.00, a.t0 = 0.00,
+    b.m = log(0.35), b.s = 0.16, b.q = 0.00, b.t0 = 0.00,
+    stop.m = log(0.24), stop.s = 0.14, stop.q = 0.00, stop.t0 = 0.00,
+    d.m = log(0.46), d.s = 0.19, d.q = 0.00, d.t0 = 0.00
+  )
+  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
+
+  out <- .exact_loglik_prep(prep, params_mat, trial_df, root = .repo_root)
+
+  expected <- dlnorm(t_obs, params[["d.m"]], params[["d.s"]]) * (
+    integrate(
+      function(u) {
+        dlnorm(u, params[["stop.m"]], params[["stop.s"]]) *
+          (1 - plnorm(u, params[["a.m"]], params[["a.s"]])) *
+          (1 - plnorm(u, params[["b.m"]], params[["b.s"]]))
+      },
+      lower = 0,
+      upper = t_obs,
+      rel.tol = 1e-10,
+      abs.tol = 0
+    )$value +
+      (1 - plnorm(t_obs, params[["stop.m"]], params[["stop.s"]])) *
+      (1 - plnorm(t_obs, params[["a.m"]], params[["a.s"]])) *
+      (1 - plnorm(t_obs, params[["b.m"]], params[["b.s"]]))
+  )
+
+  testthat::expect_equal(as.numeric(out$loglik), log(expected), tolerance = 2e-3)
+})
+
 testthat::test_that("exact ranked kernel matches simple independent two-outcome formula", {
   spec <- race_spec(n_outcomes = 2L) |>
     add_accumulator("a", "lognormal") |>

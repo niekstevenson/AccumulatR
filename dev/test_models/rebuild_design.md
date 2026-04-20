@@ -643,10 +643,6 @@ DirectEvalResult eval_ranked_direct(
     const BoundTrial& trial,
     const NumericOptions& opts);
 
-ProbabilityTable eval_response_probabilities_direct(
-    const DirectPlan& plan,
-    const BoundLeafParams& params,
-    const NumericOptions& opts);
 ```
 
 This evaluator is allowed to use compact closed forms, pool order-statistic templates, and direct race formulas.
@@ -796,7 +792,6 @@ The public R API should stay essentially the same:
 - `prepare_data()`
 - `make_context()`
 - `log_likelihood()`
-- `response_probabilities()`
 
 But the native boundary should become simpler.
 
@@ -807,7 +802,6 @@ SEXP cpp_compile_model(SEXP prep);
 SEXP cpp_loglik(SEXP compiled_ctx, SEXP params_mat, SEXP data_df, ...);
 SEXP cpp_loglik_multiple(SEXP compiled_ctx, SEXP params_list, SEXP data_df, ...);
 SEXP cpp_simulate(SEXP compiled_ctx, SEXP params_mat, SEXP trial_df, ...);
-SEXP cpp_response_probabilities(SEXP compiled_ctx, SEXP params_mat, SEXP trial_df, ...);
 ```
 
 One compiled context object.

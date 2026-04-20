@@ -41,8 +41,7 @@
     label_cache = prep[[".label_cache"]],
     competitor_map = prep[[".competitors"]],
     id_index = prep[[".id_index"]],
-    pool_members_cache = new.env(parent = emptyenv(), hash = TRUE),
-    cache_bundle = .build_likelihood_cache_bundle(prep)
+    pool_members_cache = new.env(parent = emptyenv(), hash = TRUE)
   )
   .refresh_compiled_prep_refs(prep)
 }

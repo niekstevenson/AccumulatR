@@ -126,95 +126,6 @@
   sprintf("other:%s", kind)
 }
 
-.prep_native_payload <- function(prep) {
-  keep <- c(
-    "accumulators",
-    "pools",
-    "components",
-    "outcomes",
-    "shared_triggers"
-  )
-  payload <- prep[intersect(keep, names(prep))]
-
-  expr_compiled <- prep[[".expr_compiled"]] %||% .prep_expr_compiled(prep)
-  expr_compiled <- .trim_expr_compiled(expr_compiled)
-  id_index <- prep[[".id_index"]] %||% .prep_id_index(prep)
-  competitor_map <- prep[[".competitors"]] %||% .prep_competitors(prep)
-  runtime <- prep[[".runtime"]]
-  runtime_info <- list()
-  if (!is.null(runtime) && !is.null(runtime$cache_bundle)) {
-    cache_stub <- .cache_bundle_native_stub(runtime$cache_bundle)
-    if (!is.null(cache_stub)) {
-      runtime_info$cache_bundle <- cache_stub
-    }
-  }
-  if (!is.null(expr_compiled)) runtime_info$expr_compiled <- expr_compiled
-  if (!is.null(id_index)) runtime_info$id_index <- id_index
-  if (!is.null(competitor_map)) runtime_info$competitor_map <- competitor_map
-  if (length(runtime_info) == 0L) runtime_info <- NULL
-
-  if (!is.null(expr_compiled)) payload[[".expr_compiled"]] <- expr_compiled
-  if (!is.null(id_index)) payload[[".id_index"]] <- id_index
-  if (!is.null(competitor_map)) payload[[".competitors"]] <- competitor_map
-  if (!is.null(runtime_info)) {
-    payload_runtime <- runtime_info
-  } else {
-    payload_runtime <- NULL
-  }
-  payload_no_runtime <- payload
-  payload_no_runtime[[".runtime"]] <- NULL
-  payload_no_runtime <- .strip_functions(payload_no_runtime)
-  if (!is.null(payload_runtime)) {
-    payload_no_runtime[[".runtime"]] <- payload_runtime
-  }
-  payload <- payload_no_runtime
-  payload
-}
-
-.trim_expr_compiled <- function(expr_compiled) {
-  if (is.null(expr_compiled)) {
-    return(NULL)
-  }
-  nodes <- expr_compiled[["nodes"]] %||% list()
-  if (length(nodes) == 0) {
-    return(expr_compiled)
-  }
-  drop_fields <- c(
-    "density_fn", "surv_fn", "cdf_fn", "scenario_fn",
-    "density_fast_fn", "surv_fast_fn", "cdf_fast_fn",
-    "ops"
-  )
-  expr_copy <- unserialize(serialize(expr_compiled, NULL))
-  expr_copy$nodes <- lapply(expr_copy$nodes, function(node) {
-    if (is.null(node)) {
-      return(node)
-    }
-    node[setdiff(names(node), drop_fields)]
-  })
-  expr_copy
-}
-
-.strip_functions <- function(x) {
-  if (is.function(x) || is.environment(x)) {
-    return(NULL)
-  }
-  if (is.pairlist(x)) x <- as.list(x)
-  if (is.list(x)) {
-    atts <- attributes(x)
-    if (length(x) == 0L) {
-      return(x)
-    }
-    x <- lapply(x, .strip_functions)
-    keep <- !vapply(x, is.null, logical(1))
-    x <- x[keep]
-    if (!is.null(atts)) {
-      atts$names <- names(x)
-      attributes(x) <- atts
-    }
-  }
-  x
-}
-
 .precompile_likelihood_expressions <- function(prep) {
   outcome_defs <- prep[["outcomes"]] %||% list()
   if (length(outcome_defs) == 0L) {
@@ -340,26 +251,6 @@
   nodes[[node_idx]]
 }
 
-.cache_bundle_native_stub <- function(bundle) {
-  if (is.null(bundle)) {
-    return(NULL)
-  }
-  stub <- list()
-  native_ctx <- bundle$native_ctx
-  if (!is.environment(native_ctx)) {
-    native_ctx <- new.env(parent = emptyenv())
-    native_ctx$ptr <- NULL
-    native_ctx$proto <- raw(0)
-  }
-  stub$native_ctx <- native_ctx
-  stub$guard_quadrature_limit <- bundle$guard_quadrature_limit %||% 0L
-  if (!is.null(bundle$version)) {
-    stub$version <- bundle$version
-  }
-  class(stub) <- attr(bundle, "class")
-  stub
-}
-
 .prep_runtime_get <- function(prep, key, default = NULL) {
   runtime <- prep[[".runtime"]]
   if (is.null(runtime)) {
@@ -373,61 +264,6 @@
 .prep_label_cache <- function(prep) .prep_runtime_get(prep, "label_cache", prep[[".label_cache"]])
 .prep_competitors <- function(prep) .prep_runtime_get(prep, "competitor_map", prep[[".competitors"]])
 .prep_id_index <- function(prep) .prep_runtime_get(prep, "id_index", prep[[".id_index"]])
-.prep_cache_bundle <- function(prep) .prep_runtime_get(prep, "cache_bundle")
-
-.prep_native_context <- function(prep) {
-  ptr_is_valid <- function(ptr) {
-    if (!inherits(ptr, "externalptr")) {
-      return(FALSE)
-    }
-    isTRUE(tryCatch(!native_ctx_invalid(ptr), error = function(e) FALSE))
-  }
-
-  bundle <- .prep_cache_bundle(prep)
-  native_env <- NULL
-  if (!is.null(bundle) && !is.null(bundle$native_ctx) && is.environment(bundle$native_ctx)) {
-    native_env <- bundle$native_ctx
-  }
-  if (!is.null(bundle) && is.null(native_env)) {
-    native_env <- new.env(parent = emptyenv())
-    native_env$ptr <- NULL
-    native_env$proto <- raw(0)
-    bundle$native_ctx <- native_env
-  }
-  proto_blob <- if (!is.null(native_env)) native_env$proto %||% raw(0) else raw(0)
-  native_ptr <- if (!is.null(native_env)) native_env$ptr %||% NULL else NULL
-  if (ptr_is_valid(native_ptr)) {
-    return(native_ptr)
-  }
-  if (!is.null(native_env)) {
-    native_env$ptr <- NULL
-  }
-  if (length(proto_blob) > 0L) {
-    native_ptr <- tryCatch(native_context_from_proto_cpp(proto_blob), error = function(e) NULL)
-    if (ptr_is_valid(native_ptr)) {
-      if (!is.null(native_env)) {
-        native_env$ptr <- native_ptr
-      } else {
-        attr(native_ptr, "native_proto") <- proto_blob
-      }
-      return(native_ptr)
-    }
-  }
-  payload <- .prep_native_payload(prep)
-  native_ptr <- native_context_build(payload)
-  if (ptr_is_valid(native_ptr)) {
-    proto_blob <- tryCatch(native_prep_serialize_cpp(payload), error = function(e) raw(0))
-    if (!is.null(native_env)) {
-      native_env$ptr <- native_ptr
-      native_env$proto <- proto_blob
-    } else {
-      attr(native_ptr, "native_proto") <- proto_blob
-    }
-  } else if (!is.null(native_env)) {
-    native_env$ptr <- NULL
-  }
-  native_ptr
-}
 
 .canonical_named_list <- function(x) {
   if (!is.list(x)) {
@@ -503,49 +339,6 @@
   payload <- .structure_hash_payload(prep)
   raw_bytes <- serialize(payload, connection = NULL, ascii = TRUE)
   paste(as.character(raw_bytes), collapse = "")
-}
-
-.na_cache_limit_value <- function() {
-  opt <- getOption("uuber.cache.na.max_per_trial", 128L)
-  if (!is.numeric(opt) || length(opt) == 0L || is.na(opt[[1]])) {
-    return(128L)
-  }
-  val <- as.integer(opt[[1]])
-  if (!is.finite(val) || val < 0L) {
-    return(0L)
-  }
-  val
-}
-
-.build_likelihood_cache_bundle <- function(prep) {
-  native_ctx_env <- new.env(parent = emptyenv())
-  native_ctx_env$ptr <- NULL
-  native_ctx_env$proto <- raw(0)
-  native_ctx_env$ptr <- tryCatch(native_context_build(prep), error = function(e) NULL)
-  native_ctx_env$proto <- tryCatch(native_prep_serialize_cpp(prep), error = function(e) raw(0))
-  structure(
-    list(
-      node_plan = prep[[".expr_compiled"]],
-      precomputed_values = new.env(parent = emptyenv(), hash = TRUE),
-      pool_templates = new.env(parent = emptyenv(), hash = TRUE),
-      guard_quadrature = new.env(parent = emptyenv(), hash = TRUE),
-      guard_quadrature_meta = new.env(parent = emptyenv(), hash = TRUE),
-      guard_quadrature_limit = .na_cache_limit_value(),
-      native_ctx = native_ctx_env,
-      version = Sys.time()
-    ),
-    class = "likelihood_cache_bundle"
-  )
-}
-
-.prep_set_cache_bundle <- function(prep, bundle) {
-  runtime <- prep[[".runtime"]]
-  if (is.null(runtime)) {
-    return(prep)
-  }
-  runtime$cache_bundle <- bundle
-  prep[[".runtime"]] <- runtime
-  prep
 }
 
 .prepare_competitor_map <- function(prep) {

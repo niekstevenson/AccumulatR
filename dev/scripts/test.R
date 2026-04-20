@@ -81,14 +81,12 @@ for (example_id in example_ids) {
   # # 4. Analytic response probabilities (native)
   # single_params <- build_param_matrix(model_spec, core_params, n_trials = 1L)
   # analytic_probs <- with_native_only({
-  #   response_probabilities(model_spec, single_params, include_na = TRUE)
   # })
   # cat("Analytic outcome probabilities (native):\n")
   # print(round(analytic_probs, 6))
   # cat(sprintf("Sum: %.6f\n", sum(analytic_probs)))
   # 
   # # 5. Native profiling over parameter grids and repeat log-likelihoods
-  # ctx <- build_likelihood_context(
   #   structure = model_spec,
   #   data_df = data_df
   # )

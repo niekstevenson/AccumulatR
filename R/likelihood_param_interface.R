@@ -52,13 +52,10 @@
   list(max_rank = max_rank)
 }
 
-.prepare_likelihood_prep <- function(structure, prep = NULL, native_bundle = NULL) {
+.prepare_likelihood_prep <- function(structure, prep = NULL) {
   structure <- .as_model_structure(structure)
   if (is.null(structure$model_spec)) {
     stop("model structure must include model_spec; rebuild with finalize_model")
-  }
-  if (!is.null(native_bundle)) {
-    prep <- native_bundle$prep %||% prep
   }
   prep_eval_base <- prep %||% structure$prep %||% NULL
   if (is.null(prep_eval_base)) {
@@ -103,14 +100,14 @@
   out
 }
 
-.prepare_data_structure <- function(structure, data_df, prep = NULL, native_bundle = NULL, compress = FALSE) {
+.prepare_data_structure <- function(structure, data_df, prep = NULL, compress = FALSE) {
   if (inherits(data_df, "accumulatr_data")) {
     return(data_df)
   }
   if (is.null(data_df) || nrow(data_df) == 0L) {
     stop("Data frame must contain R/rt per trial", call. = FALSE)
   }
-  prep_info <- .prepare_likelihood_prep(structure, prep = prep, native_bundle = native_bundle)
+  prep_info <- .prepare_likelihood_prep(structure, prep = prep)
   structure <- prep_info$structure
   prep_eval_base <- prep_info$prep
   data_df <- as.data.frame(data_df)
@@ -203,7 +200,6 @@
 #'   `expand` mapping for `log_likelihood()` to reuse automatically. Defaults
 #'   to `FALSE`.
 #' @param prep Optional preprocessed model bundle.
-#' @param native_bundle Optional serialized native bundle.
 #' @return An `accumulatr_data` object.
 #' @examples
 #' spec <- race_spec()
@@ -221,24 +217,19 @@
 prepare_data <- function(structure,
                          data_df,
                          compress = FALSE,
-                         prep = NULL,
-                         native_bundle = NULL) {
+                         prep = NULL) {
   .prepare_data_structure(
     structure = structure,
     data_df = data_df,
     compress = compress,
-    prep = prep,
-    native_bundle = native_bundle
+    prep = prep
   )
 }
 
-.make_context_structure <- function(structure, prep = NULL, native_bundle = NULL) {
-  prep_info <- .prepare_likelihood_prep(structure, prep = prep, native_bundle = native_bundle)
+.make_context_structure <- function(structure, prep = NULL) {
+  prep_info <- .prepare_likelihood_prep(structure, prep = prep)
   prep_eval_base <- prep_info$prep
-  native_ctx <- tryCatch(.prep_native_context(prep_eval_base), error = function(e) NULL)
-  if (!inherits(native_ctx, "externalptr")) native_ctx <- NULL
   structure(list(
-    native_ctx = native_ctx,
     cpp = list(
       prep = prep_eval_base,
       observed_plan = .compile_observed_plan_prep(prep_eval_base)
@@ -254,7 +245,6 @@ prepare_data <- function(structure,
 #'
 #' @param structure Finalized model structure.
 #' @param prep Optional preprocessed model bundle.
-#' @param native_bundle Optional serialized native bundle.
 #' @return An `accumulatr_context` object.
 #' @examples
 #' spec <- race_spec()
@@ -263,11 +253,10 @@ prepare_data <- function(structure,
 #' structure <- finalize_model(spec)
 #' make_context(structure)
 #' @export
-make_context <- function(structure, prep = NULL, native_bundle = NULL) {
+make_context <- function(structure, prep = NULL) {
   .make_context_structure(
     structure = structure,
-    prep = prep,
-    native_bundle = native_bundle
+    prep = prep
   )
 }
 
@@ -828,269 +817,6 @@ make_context <- function(structure, prep = NULL, native_bundle = NULL) {
     weights <- weights / total
   }
   weights
-}
-
-.resolve_outcome_def_index <- function(prep, outcome_label, component) {
-  all_names <- names(prep[["outcomes"]])
-  idxs <- which(all_names == outcome_label)
-  if (length(idxs) == 0) {
-    return(NA_integer_)
-  }
-  comp_label <- component
-  if (is.factor(comp_label)) comp_label <- as.character(comp_label)
-  if (length(comp_label) == 0L || is.null(comp_label) || is.na(comp_label) || !nzchar(comp_label)) {
-    return(idxs[[1]])
-  }
-  # First pass: explicit component match
-  for (i in idxs) {
-    opts <- prep[["outcomes"]][[i]][["options"]] %||% list()
-    comps <- opts[["component"]]
-    if (!is.null(comps) && comp_label %in% comps) {
-      return(i)
-    }
-  }
-  # Second pass: unrestricted outcome
-  for (i in idxs) {
-    opts <- prep[["outcomes"]][[i]][["options"]] %||% list()
-    if (is.null(opts[["component"]]) || length(opts[["component"]]) == 0L) {
-      return(i)
-    }
-  }
-  NA_integer_
-}
-
-.likelihood_response_prob_component <- function(prep, outcome_label, component,
-                                                trial_rows = NULL,
-                                                trial_state = NULL) {
-  selected_idx <- .resolve_outcome_def_index(prep, outcome_label, component)
-  if (is.na(selected_idx)) {
-    return(0.0)
-  }
-  out_def <- prep[["outcomes"]][[selected_idx]]
-
-  # Native-only probability (upper = Inf) so shared triggers and guards follow the
-  # same path as the main likelihood.
-  native_ctx <- .prep_native_context(prep)
-  if (!inherits(native_ctx, "externalptr")) {
-    stop("Native context required for response probabilities; R fallback removed", call. = FALSE)
-  }
-
-  trial_rows_df <- if (is.null(trial_rows)) data.frame() else as.data.frame(trial_rows)
-  component_label <- as.character(component %||% "__default__")
-  component_label <- if (length(component_label) > 0L) component_label[[1L]] else "__default__"
-  if (is.na(component_label) || !nzchar(component_label)) {
-    component_label <- "__default__"
-  }
-  prob_native <- tryCatch(
-    native_outcome_probability_label_cpp_idx(
-      native_ctx,
-      as.character(outcome_label),
-      Inf,
-      component_label,
-      .integrate_rel_tol(),
-      .integrate_abs_tol(),
-      12L,
-      trial_rows_df
-    ),
-    error = function(e) NA_real_
-  )
-  if (!is.finite(prob_native) || prob_native < 0) {
-    stop(sprintf("Native outcome probability failed for outcome '%s'", outcome_label), call. = FALSE)
-  }
-  as.numeric(prob_native)
-}
-
-.aggregate_observed_probs <- function(prep, probs, include_na = TRUE, component = NULL) {
-  labels <- unique(names(prep[["outcomes"]]))
-  labels <- Filter(function(lbl) {
-    idx <- .resolve_outcome_def_index(prep, lbl, component)
-    if (is.na(idx)) return(FALSE)
-    TRUE
-  }, labels)
-  obs <- numeric(0)
-  na_sum <- 0.0
-  for (lbl in labels) {
-    idx <- .resolve_outcome_def_index(prep, lbl, component)
-    if (is.na(idx)) next
-    out_def <- prep[["outcomes"]][[idx]]
-    map_to <- out_def[["options"]][["map_outcome_to"]] %||% NULL
-    prob <- probs[[lbl]] %||% 0.0
-    if (is.null(map_to)) {
-      current <- obs[lbl]
-      if (length(current) == 0L || is.na(current)) current <- 0.0
-      obs[lbl] <- current + prob
-    } else {
-      map_label <- as.character(map_to)[1]
-      if (!nzchar(map_label) || identical(map_label, "NA") || is.na(map_label)) {
-        na_sum <- na_sum + prob
-      } else {
-        current <- obs[map_label]
-        if (length(current) == 0L || is.na(current)) current <- 0.0
-        obs[map_label] <- current + prob
-      }
-    }
-  }
-  if (include_na && (na_sum > 0 || length(obs) == 0L)) {
-    obs <- c(obs, "NA" = na_sum)
-  }
-  if (include_na) {
-    total <- sum(obs)
-    resid <- 1.0 - total
-    if (!is.finite(resid)) resid <- 0.0
-    if (resid > .Machine$double.eps) {
-      if ("NA" %in% names(obs)) {
-        obs[["NA"]] <- obs[["NA"]] + resid
-      } else {
-        obs <- c(obs, "NA" = resid)
-      }
-    }
-  }
-  obs
-}
-
-#' @rdname response_probabilities
-#' @export
-response_probabilities.default <- function(structure, ...) {
-  stop("response_probabilities() expects a model_structure", call. = FALSE)
-}
-
-#' Compute predicted response probabilities
-#'
-#' This function returns the model-implied response probabilities for a given
-#' parameter set. It is useful when you want the predicted response distribution
-#' without evaluating a full trial-by-trial likelihood.
-#'
-#' @param structure Finalized model structure.
-#' @param params_df Parameter data frame for one or more trials.
-#' @param include_na If `TRUE`, include any leftover probability mass assigned
-#'   to missing responses.
-#' @param ... Unused; for S3 compatibility.
-#' @return A named numeric vector of response probabilities.
-#' @examples
-#' spec <- race_spec()
-#' spec <- add_accumulator(spec, "A", "lognormal")
-#' spec <- add_outcome(spec, "A_win", "A")
-#' structure <- finalize_model(spec)
-#' params_df <- build_param_matrix(
-#'   spec,
-#'   c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0),
-#'   n_trials = 1
-#' )
-#' response_probabilities(structure, params_df)
-#' @export
-response_probabilities <- function(structure,
-                                   params_df,
-                                   include_na = TRUE,
-                                   ...) {
-  UseMethod("response_probabilities")
-}
-
-#' @rdname response_probabilities
-#' @export
-response_probabilities.model_structure <- function(structure,
-                                                   params_df,
-                                                   include_na = TRUE,
-                                                   ...) {
-  if (is.null(params_df) || nrow(params_df) == 0L) {
-    stop("Parameter data frame must contain at least one row")
-  }
-  structure <- .as_model_structure(structure)
-  if (is.null(structure$model_spec)) {
-    stop("model structure must include model_spec; rebuild with finalize_model")
-  }
-  if (is.matrix(params_df) || inherits(params_df, "param_matrix")) {
-    params_df <- .param_matrix_to_rows(structure, params_df)
-  }
-  model_spec <- .model_spec_with_params(structure$model_spec, params_df)
-  prep_eval_base <- .ensure_likelihood_runtime(prepare_model(model_spec))
-  comp_ids <- structure$components$component_id
-
-  if (!"trial" %in% names(params_df)) params_df$trial <- 1L
-  params_df$trial <- params_df$trial
-  if ("component" %in% names(params_df)) {
-    params_df$component <- as.character(params_df$component)
-  }
-
-  trial_ids <- sort(unique(params_df$trial))
-  accum <- list()
-  weights_per_trial <- numeric(length(trial_ids))
-
-  for (i in seq_along(trial_ids)) {
-    tid <- trial_ids[[i]]
-    trial_rows <- params_df[params_df$trial == tid, , drop = FALSE]
-    trial_state <- .eval_state_create()
-    comps <- comp_ids
-    if ("component" %in% names(trial_rows)) {
-      listed <- unique(trial_rows$component)
-      listed <- listed[!is.na(listed)]
-      if (length(listed) > 0L) comps <- intersect(comp_ids, listed)
-    }
-    if (length(comps) == 0L) comps <- comp_ids
-    weights <- .likelihood_component_weights(
-      structure,
-      tid,
-      comps,
-      structure$components$weight,
-      trial_rows = trial_rows
-    )
-    trial_probs <- numeric(0)
-    for (idx in seq_along(comps)) {
-      comp_id <- comps[[idx]]
-      comp_rows <- .likelihood_component_rows(trial_rows, comp_id)
-      labels <- unique(names(prep_eval_base$outcomes))
-      base_probs <- setNames(vapply(labels, function(lbl) {
-        .likelihood_response_prob_component(
-          prep_eval_base,
-          lbl,
-          comp_id,
-          trial_rows = comp_rows,
-          trial_state = trial_state
-        )
-      }, numeric(1)), labels)
-      comp_probs <- .aggregate_observed_probs(
-        prep_eval_base,
-        base_probs,
-        include_na = include_na,
-        component = comp_id
-      )
-      factor <- weights[[idx]]
-      weighted <- factor * comp_probs
-      if (length(trial_probs) == 0L) {
-        trial_probs <- weighted
-      } else {
-        for (lbl in names(weighted)) {
-          current <- trial_probs[lbl]
-          if (length(current) == 0L || is.na(current)) current <- 0
-          trial_probs[lbl] <- current + weighted[[lbl]]
-        }
-      }
-    }
-    if (include_na) {
-      total <- sum(trial_probs)
-      resid <- 1.0 - total
-      if (!is.finite(resid)) resid <- 0.0
-      if (resid > .Machine$double.eps) {
-        current <- trial_probs[["NA"]]
-        if (is.null(current) || is.na(current)) current <- 0.0
-        trial_probs[["NA"]] <- current + resid
-      }
-    }
-    accum[[i]] <- trial_probs
-    weights_per_trial[[i]] <- 1.0
-  }
-  total_weight <- sum(weights_per_trial)
-  combined_labels <- Reduce(union, lapply(accum, names))
-  result <- setNames(numeric(length(combined_labels)), combined_labels)
-  for (i in seq_along(accum)) {
-    vec <- accum[[i]]
-    w <- weights_per_trial[[i]] / total_weight
-    for (lbl in names(vec)) {
-      current <- result[lbl]
-      if (length(current) == 0L || is.na(current)) current <- 0
-      result[lbl] <- current + vec[[lbl]] * w
-    }
-  }
-  result
 }
 
 .coerce_loglik_param_matrix <- function(parameters) {

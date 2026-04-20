@@ -58,7 +58,7 @@ prepared separately with `prepare_data()` and supplied to
 
     <div class="section level2">
     <h2 id="ref-usage">Usage<a class="anchor" aria-label="anchor" href="#ref-usage"></a></h2>
-    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">make_context</span><span class="op">(</span><span class="va">structure</span>, prep <span class="op">=</span> <span class="cn">NULL</span>, native_bundle <span class="op">=</span> <span class="cn">NULL</span><span class="op">)</span></span></code></pre></div>
+    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">make_context</span><span class="op">(</span><span class="va">structure</span>, prep <span class="op">=</span> <span class="cn">NULL</span><span class="op">)</span></span></code></pre></div>
     </div>
 
     <div class="section level2">
@@ -71,10 +71,6 @@ prepared separately with `prepare_data()` and supplied to
 
 <dt id="arg-prep">prep<a class="anchor" aria-label="anchor" href="#arg-prep"></a></dt>
 <dd><p>Optional preprocessed model bundle.</p></dd>
-
-
-<dt id="arg-native-bundle">native_bundle<a class="anchor" aria-label="anchor" href="#arg-native-bundle"></a></dt>
-<dd><p>Optional serialized native bundle.</p></dd>
 
 </dl></div>
     <div class="section level2">
@@ -89,8 +85,318 @@ prepared separately with `prepare_data()` and supplied to
 <span class="r-in"><span><span class="va">spec</span> <span class="op">&lt;-</span> <span class="fu"><a href="add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="va">spec</span>, <span class="st">"A_win"</span>, <span class="st">"A"</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="va">structure</span> <span class="op">&lt;-</span> <span class="fu"><a href="finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="va">spec</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="fu">make_context</span><span class="op">(</span><span class="va">structure</span><span class="op">)</span></span></span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> $native_ctx</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;pointer: 0x148a08000&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$accumulators</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$accumulators$A</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$accumulators$A$id</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "A"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$accumulators$A$dist</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "lognormal"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$accumulators$A$onset</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$accumulators$A$onset_spec</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$accumulators$A$onset_spec$kind</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "absolute"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$accumulators$A$onset_spec$value</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$accumulators$A$q</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$accumulators$A$params</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$accumulators$A$params$t0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$accumulators$A$components</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> character(0)</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$accumulators$A$shared_trigger_id</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> NULL</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$accumulators$A$shared_trigger_q</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> NULL</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$pools</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> named list()</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$outcomes</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$outcomes$A_win</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$outcomes$A_win$label</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "A_win"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$outcomes$A_win$expr</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$outcomes$A_win$expr$kind</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "event"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$outcomes$A_win$expr$source</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "A"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$outcomes$A_win$expr$k</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> NULL</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> attr(,".lik_id")</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 1</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$outcomes$A_win$options</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> list()</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$components</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$components$ids</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "__default__"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$components$weights</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 1</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$components$attrs</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$components$attrs$`__default__`</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$components$attrs$`__default__`$weight_param</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> NULL</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$components$has_weight_param</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] FALSE</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$components$mode</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "fixed"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$components$reference</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "__default__"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$observation</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$observation$mode</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "top_k"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$observation$n_outcomes</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 1</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$observation$global_n_outcomes</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 1</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$observation$component_n_outcomes</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> named list()</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$shared_triggers</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> list()</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$onset_specs</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$onset_specs$A</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$onset_specs$A$kind</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "absolute"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$onset_specs$A$value</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$onset_dependencies</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$onset_dependencies$A</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> character(0)</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$onset_sources</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> named list()</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$onset_topology</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "A"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$onset_has_dependencies</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] FALSE</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.id_index</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> A_win     A </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>     1     2 </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.label_cache</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x107015c10&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$id</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 1</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$kind</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "event"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$expr</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$expr$kind</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "event"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$expr$source</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "A"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$expr$k</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> NULL</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$sources</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 2</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$args</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> NULL</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$reference_id</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] NA</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$blocker_id</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] NA</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$unless_ids</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> NULL</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$arg</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] NA</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$source</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "A"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$needs_forced</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] TRUE</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$nodes[[1]]$scenario_sensitive</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] FALSE</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.expr_compiled$signatures</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1067ea670&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.competitors</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.competitors$A_win</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> list()</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> attr(,"by_index")</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] TRUE</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$id</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 1</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$kind</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "event"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$expr</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$expr$kind</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "event"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$expr$source</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "A"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$expr$k</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> NULL</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$sources</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 2</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$args</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> NULL</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$reference_id</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] NA</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$blocker_id</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] NA</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$unless_ids</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> NULL</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$arg</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] NA</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$source</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "A"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$needs_forced</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] TRUE</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$nodes[[1]]$scenario_sensitive</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] FALSE</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$expr_compiled$signatures</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1067ea670&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$label_cache</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x107015c10&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$competitor_map</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$competitor_map$A_win</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> list()</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> attr(,"by_index")</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] TRUE</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$id_index</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> A_win     A </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>     1     2 </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$prep$.runtime$pool_members_cache</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;environment: 0x1067a2878&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`$observed_backend</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`$semantic_backend</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`$keep</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`$keep$A_win</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`$keep$A_win[[1]]</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`$keep$A_win[[1]]$semantic_label</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "A_win"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`$keep$A_win[[1]]$weight</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 1</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`$keep$A_win[[1]]$rt_kind</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`$missing_rt</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> named list()</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`$finite_observed_branches</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`$finite_observed_branches[[1]]</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`$finite_observed_branches[[1]]$semantic_label</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "A_win"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`$finite_observed_branches[[1]]$weight</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 1</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_plan$`__default__`$finite_observed_branches[[1]]$rt_kind</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> attr(,"class")</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> [1] "accumulatr_context"</span>

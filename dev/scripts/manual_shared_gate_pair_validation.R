@@ -59,28 +59,11 @@ compare_density <- function(rt) {
   )
 }
 
-compare_mass <- function() {
-  params_df <- build_param_matrix(shared_gate_model$model_spec, shared_gate_params, n_trials = 1L)
-  probs <- response_probabilities(shared_gate_model, params_df, include_na = TRUE)
-  manual <- shared_gate_pair_probability_r(eval_x2, eval_x1, eval_gate, Inf)
-  data.frame(
-    response = "RESP",
-    engine = unname(probs[["RESP"]]),
-    manual = manual,
-    diff = unname(probs[["RESP"]]) - manual,
-    stringsAsFactors = FALSE
-  )
-}
-
 density_comparison <- rbind(
   compare_density(0.30),
   compare_density(0.42),
   compare_density(0.47)
 )
 
-mass_comparison <- compare_mass()
-
 cat("Shared-gate pair density comparison\n")
 print(density_comparison)
-cat("\nShared-gate pair probability comparison\n")
-print(mass_comparison)

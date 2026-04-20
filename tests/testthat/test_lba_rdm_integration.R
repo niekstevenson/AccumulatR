@@ -48,8 +48,6 @@ testthat::test_that("LBA model supports simulate + likelihood end-to-end", {
 
   testthat::expect_true(length(ll) == 1L)
   testthat::expect_true(is.finite(ll))
-  probs <- response_probabilities(structure, build_param_matrix(spec, vals, n_trials = 1L))
-  testthat::expect_true(all(is.finite(probs)))
 })
 
 testthat::test_that("RDM model supports simulate + likelihood end-to-end", {
@@ -67,8 +65,6 @@ testthat::test_that("RDM model supports simulate + likelihood end-to-end", {
 
   testthat::expect_true(length(ll) == 1L)
   testthat::expect_true(is.finite(ll))
-  probs <- response_probabilities(structure, build_param_matrix(spec, vals, n_trials = 1L))
-  testthat::expect_true(all(is.finite(probs)))
 })
 
 testthat::test_that("RDM requires parameter s", {

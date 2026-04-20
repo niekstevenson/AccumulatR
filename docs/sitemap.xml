@@ -8,9 +8,7 @@
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/mixtures.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/multi_outcome.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/pool_model.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/articles/simple_chained_onset.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/simple_model.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/articles/simple_simulate_fit_model4.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/trigger_model.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/authors.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/index.html</loc></url>
@@ -23,10 +21,8 @@
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/add_trigger.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/after.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/all_of.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/reference/build_likelihood_context.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/build_outcome_expr.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/reference/ensure_native_ctx.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/exclude.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/expr_guard.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/finalize_model.html</loc></url>
@@ -42,12 +38,10 @@
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/prepare_data.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/processing_tree.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/race_spec.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/reference/response_probabilities.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/sampled_pars.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/set_metadata.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/set_mixture_options.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/set_parameters.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/simulate.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/reference/test_model.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/tie.html</loc></url>
 </urlset>
-

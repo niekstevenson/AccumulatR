@@ -4,7 +4,7 @@
 \alias{prepare_data}
 \title{Prepare behavioral data for likelihood evaluation}
 \usage{
-prepare_data(structure, data_df, prep = NULL, native_bundle = NULL)
+prepare_data(structure, data_df, prep = NULL)
 }
 \arguments{
 \item{structure}{Finalized model structure.}
@@ -14,8 +14,6 @@ prepare_data(structure, data_df, prep = NULL, native_bundle = NULL)
 and so on.}
 
 \item{prep}{Optional preprocessed model bundle.}
-
-\item{native_bundle}{Optional serialized native bundle.}
 }
 \value{
 An `accumulatr_data` object.

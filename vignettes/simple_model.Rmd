@@ -72,16 +72,6 @@ data_df <- data.frame(
 
 table(data_df$R)
 ```
-**Test the model**
-AccumulatR is a very big package and I might have made mistakes! Alternatively, 
-your data might not be sufficient to identify your model. Therefore, 
-`test_model()` is a quick diagnostic for checking whether the likelihood function
-is consistent with the simulator, and whether the profile plots return indicate parameter identifiability. 
-```{r}
-test_model(model, true_params, n_trials = n_trials, plot = FALSE)
-```
-
-
 **Evaluate the likelihood**
 We prepare the data, build a model context, and evaluate the log-likelihood at
 the true parameter values.

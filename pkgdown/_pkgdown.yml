@@ -36,7 +36,6 @@ reference:
       - set_metadata
       - set_mixture_options
       - finalize_model
-      - test_model
 
   - title: "Outcome Expressions and Timing"
     desc: "Compose outcome rules and onset dependencies."
@@ -61,7 +60,6 @@ reference:
     contents:
       - make_context
       - log_likelihood
-      - response_probabilities
       - simulate
 
   - title: "Visualization"

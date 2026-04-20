@@ -4,14 +4,12 @@
 \alias{make_context}
 \title{Build a compiled likelihood context from a model}
 \usage{
-make_context(structure, prep = NULL, native_bundle = NULL)
+make_context(structure, prep = NULL)
 }
 \arguments{
 \item{structure}{Finalized model structure.}
 
 \item{prep}{Optional preprocessed model bundle.}
-
-\item{native_bundle}{Optional serialized native bundle.}
 }
 \value{
 An `accumulatr_context` object.

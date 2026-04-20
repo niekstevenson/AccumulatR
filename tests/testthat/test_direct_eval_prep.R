@@ -1,9 +1,3 @@
-.repo_root <- normalizePath(testthat::test_path("..", ".."), mustWork = TRUE)
-
-source(file.path(.repo_root, "R", "helpers.R"))
-source(file.path(.repo_root, "R", "model_definition.R"))
-source(file.path(.repo_root, "R", "semantic_bridge.R"))
-
 lba_denom_ref <- function(v, sv) {
   denom <- pnorm(v / sv)
   if (!is.finite(denom) || denom < 1e-10) denom <- 1e-10
@@ -138,6 +132,52 @@ rdm_cdf_ref <- function(x, v, B, A, s) {
   rdm_pigt_ref(x, B / s + 0.5 * A / s, v / s, 0.5 * A / s)
 }
 
+exgauss_raw_pdf_ref <- function(x, mu, sigma, tau) {
+  if (!is.finite(x) || !is.finite(mu) || !is.finite(sigma) || sigma <= 0 ||
+      !is.finite(tau) || tau <= 0) {
+    return(0)
+  }
+  inv_tau <- 1 / tau
+  sigma_sq <- sigma * sigma
+  tau_sq <- tau * tau
+  z <- (x - mu) / sigma
+  exponent <- sigma_sq / (2 * tau_sq) - (x - mu) * inv_tau
+  tail <- pnorm(z - sigma * inv_tau)
+  out <- inv_tau * exp(exponent) * tail
+  if (!is.finite(out) || out <= 0) 0 else out
+}
+
+exgauss_raw_cdf_ref <- function(x, mu, sigma, tau) {
+  if (!is.finite(x) || !is.finite(mu) || !is.finite(sigma) || sigma <= 0 ||
+      !is.finite(tau) || tau <= 0) {
+    return(0)
+  }
+  inv_tau <- 1 / tau
+  sigma_sq <- sigma * sigma
+  tau_sq <- tau * tau
+  z <- (x - mu) / sigma
+  exponent <- sigma_sq / (2 * tau_sq) - (x - mu) * inv_tau
+  tail <- pnorm(z - sigma * inv_tau)
+  base <- pnorm(z)
+  min(max(base - exp(exponent) * tail, 0), 1)
+}
+
+exgauss_trunc_pdf_ref <- function(x, mu, sigma, tau) {
+  if (!is.finite(x) || x <= 0) return(0)
+  lower_cdf <- exgauss_raw_cdf_ref(0, mu, sigma, tau)
+  lower_survival <- 1 - lower_cdf
+  if (!is.finite(lower_survival) || lower_survival <= 0) return(0)
+  exgauss_raw_pdf_ref(x, mu, sigma, tau) / lower_survival
+}
+
+exgauss_trunc_cdf_ref <- function(x, mu, sigma, tau) {
+  if (!is.finite(x) || x <= 0) return(0)
+  lower_cdf <- exgauss_raw_cdf_ref(0, mu, sigma, tau)
+  lower_survival <- 1 - lower_cdf
+  if (!is.finite(lower_survival) || lower_survival <= 0) return(0)
+  min(max((exgauss_raw_cdf_ref(x, mu, sigma, tau) - lower_cdf) / lower_survival, 0), 1)
+}
+
 testthat::test_that("direct kernel matches simple two-leaf top-1 formula", {
   spec <- race_spec() |>
     add_accumulator("a", "lognormal") |>
@@ -158,7 +198,7 @@ testthat::test_that("direct kernel matches simple two-leaf top-1 formula", {
   )
   params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
 
-  out <- .direct_loglik_prep(prep, params_mat, trial_df, rebuild = TRUE, root = .repo_root)
+  out <- .direct_loglik_prep(prep, params_mat, trial_df)
 
   pa1 <- (1 - params[["a.q"]]) * dlnorm(trial_df$rt[[1]] - params[["a.t0"]], params[["a.m"]], params[["a.s"]])
   sb1 <- 1 - (1 - params[["b.q"]]) * pgamma(trial_df$rt[[1]] - params[["b.t0"]], shape = params[["b.shape"]], rate = params[["b.rate"]])
@@ -195,7 +235,7 @@ testthat::test_that("direct kernel matches pooled top-1 formula", {
   )
   params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
 
-  out <- .direct_loglik_prep(prep, params_mat, trial_df, root = .repo_root)
+  out <- .direct_loglik_prep(prep, params_mat, trial_df)
 
   t <- trial_df$rt[[1]]
   fa <- dlnorm(t, params[["a.m"]], params[["a.s"]])
@@ -232,7 +272,7 @@ testthat::test_that("direct kernel batches contiguous trials by direct variant",
   )
   params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
 
-  out <- .direct_loglik_prep(prep, params_mat, trial_df, root = .repo_root)
+  out <- .direct_loglik_prep(prep, params_mat, trial_df)
 
   expected <- c(
     log(dlnorm(0.30, params[["a.m"]], params[["a.s"]])),
@@ -273,7 +313,7 @@ testthat::test_that("direct kernel rejects exact variants instead of silently ev
   params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
 
   testthat::expect_error(
-    .direct_loglik_prep(prep, params_mat, trial_df, root = .repo_root),
+    .direct_loglik_prep(prep, params_mat, trial_df),
     "no direct variant"
   )
 })
@@ -298,7 +338,7 @@ testthat::test_that("direct kernel matches LBA top-1 formula", {
   )
   params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
 
-  out <- .direct_loglik_prep(prep, params_mat, trial_df, root = .repo_root)
+  out <- .direct_loglik_prep(prep, params_mat, trial_df)
 
   xa <- trial_df$rt - params[["a.t0"]]
   xb <- trial_df$rt - params[["b.t0"]]
@@ -332,7 +372,7 @@ testthat::test_that("direct kernel matches RDM top-1 formula", {
   )
   params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
 
-  out <- .direct_loglik_prep(prep, params_mat, trial_df, root = .repo_root)
+  out <- .direct_loglik_prep(prep, params_mat, trial_df)
 
   xa <- trial_df$rt - params[["a.t0"]]
   xb <- trial_df$rt - params[["b.t0"]]
@@ -344,4 +384,38 @@ testthat::test_that("direct kernel matches RDM top-1 formula", {
   ))
 
   testthat::expect_equal(as.numeric(out$loglik), expected, tolerance = 1e-10)
+})
+
+testthat::test_that("direct kernel truncates exgauss at the elapsed-time lower bound", {
+  spec <- race_spec() |>
+    add_accumulator("a", "exgauss") |>
+    add_accumulator("b", "lognormal") |>
+    add_outcome("A", "a") |>
+    add_outcome("B", "b")
+
+  prep <- prepare_model(spec)
+  trial_df <- data.frame(
+    trial = c(1L, 2L),
+    R = c("A", "B"),
+    rt = c(0.30, 0.58),
+    stringsAsFactors = FALSE
+  )
+  params <- c(
+    a.mu = -0.08, a.sigma = 0.10, a.tau = 0.22, a.q = 0.00, a.t0 = 0.07,
+    b.m = log(0.52), b.s = 0.16, b.q = 0.00, b.t0 = 0.03
+  )
+  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
+
+  out <- .direct_loglik_prep(prep, params_mat, trial_df)
+
+  xa <- trial_df$rt - params[["a.t0"]]
+  xb <- trial_df$rt - params[["b.t0"]]
+  expected <- log(c(
+    exgauss_trunc_pdf_ref(xa[[1]], params[["a.mu"]], params[["a.sigma"]], params[["a.tau"]]) *
+      (1 - plnorm(xb[[1]], params[["b.m"]], params[["b.s"]])),
+    dlnorm(xb[[2]], params[["b.m"]], params[["b.s"]]) *
+      (1 - exgauss_trunc_cdf_ref(xa[[2]], params[["a.mu"]], params[["a.sigma"]], params[["a.tau"]]))
+  ))
+
+  testthat::expect_equal(as.numeric(out$loglik), expected, tolerance = 1e-8)
 })

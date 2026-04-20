@@ -77,6 +77,16 @@ struct ExactSequenceState {
   std::unordered_map<ExactSourceKey, double, ExactSourceKeyHash> exact_times;
 };
 
+struct ExactStepBranch {
+  double probability{0.0};
+  ExactSequenceState next_state;
+};
+
+struct ExactStepResult {
+  double total_probability{0.0};
+  std::vector<ExactStepBranch> branches;
+};
+
 struct ExactOutcomePlan {
   semantic::Index expr_root{semantic::kInvalidIndex};
   std::vector<semantic::Index> support;
@@ -109,6 +119,7 @@ struct ExactVariantPlan {
   std::vector<std::vector<semantic::Index>> pool_supports;
   std::vector<std::vector<semantic::Index>> expr_supports;
   std::vector<semantic::Index> shared_trigger_indices;
+  bool ranked_supported{true};
 };
 
 struct ExactObservedRank {
@@ -344,22 +355,17 @@ inline void validate_exact_expr(const runtime::LoweredExactVariant &lowered,
   const auto &program = lowered.program;
   const auto kind = static_cast<semantic::ExprKind>(
       program.expr_kind[static_cast<std::size_t>(expr_idx)]);
-  if (kind == semantic::ExprKind::Not) {
-    throw std::runtime_error(
-        "exact kernel does not support logical not outcomes yet");
-  }
   if (kind == semantic::ExprKind::Event) {
-    if (program.expr_event_k[static_cast<std::size_t>(expr_idx)] > 0) {
-      throw std::runtime_error(
-          "exact kernel does not support ranked event selectors yet");
-    }
-    if (child_event_source_kind(program, expr_idx) == semantic::SourceKind::Special) {
-      throw std::runtime_error(
-          "exact kernel does not support special event sources yet");
-    }
     return;
   }
   if (kind == semantic::ExprKind::Impossible || kind == semantic::ExprKind::TrueExpr) {
+    return;
+  }
+  if (kind == semantic::ExprKind::Not) {
+    validate_exact_expr(
+        lowered,
+        program.expr_args[static_cast<std::size_t>(
+            program.expr_arg_offsets[static_cast<std::size_t>(expr_idx)])]);
     return;
   }
   if (kind == semantic::ExprKind::And || kind == semantic::ExprKind::Or) {
@@ -387,6 +393,14 @@ inline void validate_exact_expr(const runtime::LoweredExactVariant &lowered,
 inline ExactSourceKey source_key(const semantic::SourceKind kind,
                                  const semantic::Index index) {
   return ExactSourceKey{kind, index};
+}
+
+inline double clean_signed_value(const double value,
+                                 const double eps = 1e-15) {
+  if (!std::isfinite(value)) {
+    return 0.0;
+  }
+  return std::fabs(value) <= eps ? 0.0 : value;
 }
 
 inline bool append_constraint(
@@ -661,8 +675,8 @@ inline std::vector<ExactTransitionScenario> build_logical_transition_scenarios(
     const std::vector<semantic::Index> &children,
     const semantic::ExprKind kind) {
   const auto &program = plan.lowered.program;
-  std::vector<semantic::Index> active_children;
-  active_children.reserve(children.size());
+  std::vector<semantic::Index> normalized_children;
+  normalized_children.reserve(children.size());
   for (const auto child : children) {
     const auto child_kind = static_cast<semantic::ExprKind>(
         program.expr_kind[static_cast<std::size_t>(child)]);
@@ -672,13 +686,24 @@ inline std::vector<ExactTransitionScenario> build_logical_transition_scenarios(
     if (child_kind == semantic::ExprKind::TrueExpr) {
       continue;
     }
-    active_children.push_back(child);
+    normalized_children.push_back(child);
+  }
+  std::vector<std::vector<ExactTransitionScenario>> child_scenarios(
+      normalized_children.size());
+  for (std::size_t i = 0; i < normalized_children.size(); ++i) {
+    child_scenarios[i] =
+        build_expr_transition_scenarios(plan, normalized_children[i]);
+    if (kind == semantic::ExprKind::Or && child_scenarios[i].empty()) {
+      throw std::runtime_error(
+          "exact kernel does not support logical-not branches inside first_of()/or outcomes");
+    }
   }
   std::vector<ExactTransitionScenario> out;
-  for (std::size_t active = 0; active < active_children.size(); ++active) {
-    const auto child_scenarios =
-        build_expr_transition_scenarios(plan, active_children[active]);
-    for (const auto &child_scenario : child_scenarios) {
+  for (std::size_t active = 0; active < normalized_children.size(); ++active) {
+    if (child_scenarios[active].empty()) {
+      continue;
+    }
+    for (const auto &child_scenario : child_scenarios[active]) {
       ExactTransitionScenario scenario = child_scenario;
       std::unordered_map<ExactSourceKey, ExactRelation, ExactSourceKeyHash> forced;
       for (const auto &constraint : scenario.forced) {
@@ -691,11 +716,11 @@ inline std::vector<ExactTransitionScenario> build_logical_transition_scenarios(
         continue;
       }
       bool ok = true;
-      for (std::size_t other = 0; other < active_children.size(); ++other) {
+      for (std::size_t other = 0; other < normalized_children.size(); ++other) {
         if (other == active) {
           continue;
         }
-        const auto child = active_children[other];
+        const auto child = normalized_children[other];
         if (kind == semantic::ExprKind::And) {
           append_ready_requirement(&scenario, program, child);
           if (expr_is_simple_event(program, child)) {
@@ -822,6 +847,10 @@ inline std::vector<ExactTransitionScenario> build_expr_transition_scenarios(
         plan,
         ExactSourceKey{child_event_source_kind(program, expr_idx),
                        child_event_source_index(program, expr_idx)});
+  }
+
+  if (kind == semantic::ExprKind::Not) {
+    return {};
   }
 
   if (kind == semantic::ExprKind::And || kind == semantic::ExprKind::Or) {
@@ -1071,15 +1100,24 @@ inline ExactTargetCompetitorPlan build_target_competitor_plan(
   return target_plan;
 }
 
+inline bool scenario_supports_ranked_sequence(
+    const ExactTransitionScenario &scenario) {
+  return scenario.before_keys.empty() && scenario.ready_exprs.empty();
+}
+
+inline bool variant_supports_ranked_sequence(const ExactVariantPlan &plan) {
+  for (const auto &outcome : plan.outcomes) {
+    for (const auto &scenario : outcome.scenarios) {
+      if (!scenario_supports_ranked_sequence(scenario)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 inline ExactVariantPlan make_exact_variant_plan(
     const runtime::LoweredExactVariant &lowered) {
-  if (has_reason(lowered.backend_reasons, "special outcome class") ||
-      has_reason(lowered.backend_reasons, "special event source") ||
-      has_reason(lowered.backend_reasons, "ranked event selector")) {
-    throw std::runtime_error(
-        "exact kernel does not support observation wrappers or special outcomes yet");
-  }
-
   ExactVariantPlan plan;
   plan.lowered = lowered;
   ExactSupportBuilder builder(plan.lowered);
@@ -1119,6 +1157,7 @@ inline ExactVariantPlan make_exact_variant_plan(
     plan.competitor_plans.push_back(
         build_target_competitor_plan(plan, target_outcome_idx));
   }
+  plan.ranked_supported = variant_supports_ranked_sequence(plan);
 
   return plan;
 }
@@ -1574,10 +1613,10 @@ public:
       break;
     }
     case semantic::ExprKind::Not:
+      value = clamp_probability(
+          1.0 - expr_cdf(program_.expr_args[static_cast<std::size_t>(
+                    program_.expr_arg_offsets[pos])]));
       break;
-    }
-    if (kind == semantic::ExprKind::Not) {
-      throw std::runtime_error("exact kernel does not support logical not outcomes yet");
     }
     cdf_time_[pos] = oracle_time_;
     cdf_cache_[pos] = value;
@@ -1639,7 +1678,7 @@ public:
            ++i) {
         const auto child = program_.expr_args[static_cast<std::size_t>(i)];
         double term = expr_density(child);
-        if (!(term > 0.0)) {
+        if (!std::isfinite(term) || term == 0.0) {
           continue;
         }
         for (semantic::Index j = program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx)];
@@ -1649,13 +1688,13 @@ public:
             continue;
           }
           term *= expr_cdf(program_.expr_args[static_cast<std::size_t>(j)]);
-          if (!(term > 0.0)) {
+          if (!std::isfinite(term) || term == 0.0) {
             break;
           }
         }
         total += term;
       }
-      value = safe_density(total);
+      value = clean_signed_value(total);
       break;
     }
     case semantic::ExprKind::Or: {
@@ -1665,7 +1704,7 @@ public:
            ++i) {
         const auto child = program_.expr_args[static_cast<std::size_t>(i)];
         double term = expr_density(child);
-        if (!(term > 0.0)) {
+        if (!std::isfinite(term) || term == 0.0) {
           continue;
         }
         for (semantic::Index j = program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx)];
@@ -1675,13 +1714,13 @@ public:
             continue;
           }
           term *= expr_survival(program_.expr_args[static_cast<std::size_t>(j)]);
-          if (!(term > 0.0)) {
+          if (!std::isfinite(term) || term == 0.0) {
             break;
           }
         }
         total += term;
       }
-      value = safe_density(total);
+      value = clean_signed_value(total);
       break;
     }
     case semantic::ExprKind::Guard: {
@@ -1698,7 +1737,7 @@ public:
                       [&](const double u) {
                         oracle_time_ = u;
                         double term = expr_density(blocker);
-                        if (!(term > 0.0)) {
+                        if (!std::isfinite(term) || term == 0.0) {
                           return 0.0;
                         }
                         for (semantic::Index i =
@@ -1708,7 +1747,7 @@ public:
                              ++i) {
                           term *= expr_survival(
                               program_.expr_args[static_cast<std::size_t>(i)]);
-                          if (!(term > 0.0)) {
+                          if (!std::isfinite(term) || term == 0.0) {
                             return 0.0;
                           }
                         }
@@ -1718,14 +1757,14 @@ public:
                       current_time));
         oracle_time_ = current_time;
       }
-      value = safe_density(expr_density(ref) * blocker_survival);
+      value = clean_signed_value(expr_density(ref) * blocker_survival);
       break;
     }
     case semantic::ExprKind::Not:
+      value = clean_signed_value(
+          -expr_density(program_.expr_args[static_cast<std::size_t>(
+               program_.expr_arg_offsets[pos])]));
       break;
-    }
-    if (kind == semantic::ExprKind::Not) {
-      throw std::runtime_error("exact kernel does not support logical not outcomes yet");
     }
     density_time_[pos] = oracle_time_;
     density_cache_[pos] = value;
@@ -1742,7 +1781,7 @@ public:
     double total = 0.0;
     for (std::size_t i = 0; i < exprs.size(); ++i) {
       double term = expr_density(exprs[i]);
-      if (!(term > 0.0)) {
+      if (!std::isfinite(term) || term == 0.0) {
         continue;
       }
       for (std::size_t j = 0; j < exprs.size(); ++j) {
@@ -1750,13 +1789,13 @@ public:
           continue;
         }
         term *= expr_cdf(exprs[j]);
-        if (!(term > 0.0)) {
+        if (!std::isfinite(term) || term == 0.0) {
           break;
         }
       }
       total += term;
     }
-    return safe_density(total);
+    return clean_signed_value(total);
   }
 
   double conjunction_cdf(const std::vector<semantic::Index> &exprs) {
@@ -1850,9 +1889,11 @@ inline double source_survival_at(ExactSourceOracle *oracle,
 inline double readiness_cdf(const ExactTransitionScenario &scenario,
                             ForcedExprEvaluator *evaluator,
                             const double t) {
-  if (!(t > 0.0) ||
-      (scenario.before_keys.empty() && scenario.ready_exprs.empty())) {
-    return (scenario.before_keys.empty() && scenario.ready_exprs.empty()) ? 1.0 : 0.0;
+  if (scenario.before_keys.empty() && scenario.ready_exprs.empty()) {
+    return 1.0;
+  }
+  if (t < 0.0) {
+    return 0.0;
   }
   double value = 1.0;
   const double current_time = evaluator->oracle_time_;
@@ -1909,7 +1950,7 @@ inline double readiness_density(const ExactTransitionScenario &scenario,
   double total = 0.0;
   for (std::size_t i = 0; i < scenario.before_keys.size(); ++i) {
     double term = evaluator->source_pdf(scenario.before_keys[i]);
-    if (!(term > 0.0)) {
+    if (!std::isfinite(term) || term == 0.0) {
       continue;
     }
     for (std::size_t j = 0; j < scenario.before_keys.size(); ++j) {
@@ -1917,7 +1958,16 @@ inline double readiness_density(const ExactTransitionScenario &scenario,
         continue;
       }
       term *= evaluator->source_cdf(scenario.before_keys[j]);
-      if (!(term > 0.0)) {
+      if (!std::isfinite(term) || term == 0.0) {
+        break;
+      }
+    }
+    if (!std::isfinite(term) || term == 0.0) {
+      continue;
+    }
+    for (const auto expr_idx : scenario.ready_exprs) {
+      term *= expr_evaluator.expr_cdf(expr_idx);
+      if (!std::isfinite(term) || term == 0.0) {
         break;
       }
     }
@@ -1925,16 +1975,16 @@ inline double readiness_density(const ExactTransitionScenario &scenario,
   }
   for (std::size_t i = 0; i < scenario.ready_exprs.size(); ++i) {
     double term = expr_evaluator.expr_density(scenario.ready_exprs[i]);
-    if (!(term > 0.0)) {
+    if (!std::isfinite(term) || term == 0.0) {
       continue;
     }
     for (const auto &key : scenario.before_keys) {
       term *= evaluator->source_cdf(key);
-      if (!(term > 0.0)) {
+      if (!std::isfinite(term) || term == 0.0) {
         break;
       }
     }
-    if (!(term > 0.0)) {
+    if (!std::isfinite(term) || term == 0.0) {
       continue;
     }
     for (std::size_t j = 0; j < scenario.ready_exprs.size(); ++j) {
@@ -1942,14 +1992,14 @@ inline double readiness_density(const ExactTransitionScenario &scenario,
         continue;
       }
       term *= expr_evaluator.expr_cdf(scenario.ready_exprs[j]);
-      if (!(term > 0.0)) {
+      if (!std::isfinite(term) || term == 0.0) {
         break;
       }
     }
     total += term;
   }
   evaluator->oracle_time_ = current_time;
-  return safe_density(total);
+  return clean_signed_value(total);
 }
 
 inline double after_survival(const ExactTransitionScenario &scenario,
@@ -2073,11 +2123,24 @@ inline double competitor_non_win_probability(
     const ExactSourceKey target_active_key,
     const double readiness_upper,
     ForcedExprEvaluator *evaluator,
-    const double t) {
+    const double t,
+    const std::vector<std::uint8_t> *used_outcomes = nullptr) {
   double non_win = 1.0;
   for (const auto &block : competitor_plan.blocks) {
     double union_prob = 0.0;
     for (const auto &subset : block.subsets) {
+      if (used_outcomes != nullptr) {
+        bool skip_subset = false;
+        for (const auto outcome_idx : subset.outcome_indices) {
+          if ((*used_outcomes)[static_cast<std::size_t>(outcome_idx)] != 0U) {
+            skip_subset = true;
+            break;
+          }
+        }
+        if (skip_subset) {
+          continue;
+        }
+      }
       union_prob += static_cast<double>(subset.inclusion_sign) *
                     competitor_subset_win_mass(
                         subset, target_active_key, readiness_upper, evaluator, t);
@@ -2091,15 +2154,126 @@ inline double competitor_non_win_probability(
   return clamp_probability(non_win);
 }
 
-inline bool ranked_exact_supported(const ExactVariantPlan &plan) {
-  for (const auto &outcome : plan.outcomes) {
-    for (const auto &scenario : outcome.scenarios) {
-      if (!scenario.before_keys.empty() || !scenario.ready_exprs.empty()) {
-        return false;
+inline ExactSequenceState advance_exact_sequence_state(
+    const ExactSequenceState &sequence_state,
+    const ExactTransitionScenario &scenario,
+    const double observed_time) {
+  ExactSequenceState next_state = sequence_state;
+  next_state.lower_bound = observed_time;
+  next_state.exact_times[scenario.active_key] = observed_time;
+  return next_state;
+}
+
+inline ExactStepResult evaluate_exact_step(
+    const ExactVariantPlan &plan,
+    const ParamView &params,
+    const int first_param_row,
+    const ExactTriggerState &trigger_state,
+    const ExactSequenceState &sequence_state,
+    const semantic::Index target_idx,
+    const double observed_time,
+    const std::vector<std::uint8_t> *used_outcomes = nullptr,
+    const bool collect_successors = false) {
+  ExactStepResult result;
+  const auto target_pos = static_cast<std::size_t>(target_idx);
+  const auto &competitor_plan = plan.competitor_plans[target_pos];
+  ExactSourceOracle oracle(
+      plan, params, first_param_row, trigger_state, sequence_state, observed_time);
+
+  for (const auto &scenario : plan.outcomes[target_pos].scenarios) {
+    if (collect_successors && !scenario_supports_ranked_sequence(scenario)) {
+      throw std::logic_error(
+          "ranked exact step requested for unsupported latent-readiness scenario");
+    }
+
+    std::unordered_map<ExactSourceKey, ExactRelation, ExactSourceKeyHash> forced;
+    bool ok = true;
+    for (const auto &constraint : scenario.forced) {
+      if (!append_constraint(&forced, constraint.key, constraint.relation)) {
+        ok = false;
+        break;
       }
     }
+    if (!ok) {
+      continue;
+    }
+
+    const std::unordered_map<ExactSourceKey, ExactRelation, ExactSourceKeyHash>
+        no_forced;
+    ForcedExprEvaluator target_evaluator(plan, &oracle, no_forced);
+    target_evaluator.oracle_time_ = observed_time;
+    ForcedExprEvaluator competitor_evaluator(plan, &oracle, forced);
+    competitor_evaluator.oracle_time_ = observed_time;
+
+    const double active_pdf =
+        source_pdf_at(&oracle, scenario.active_key, observed_time);
+    const double tail = after_survival(scenario, &target_evaluator, observed_time);
+    if (!(active_pdf > 0.0) || !(tail > 0.0)) {
+      continue;
+    }
+
+    if (scenario.before_keys.empty() && scenario.ready_exprs.empty()) {
+      const double scenario_prob =
+          active_pdf * tail *
+          competitor_non_win_probability(
+              competitor_plan,
+              scenario.active_key,
+              0.0,
+              &competitor_evaluator,
+              observed_time,
+              used_outcomes);
+      if (!(scenario_prob > 0.0)) {
+        continue;
+      }
+      result.total_probability += scenario_prob;
+      if (collect_successors) {
+        result.branches.push_back(ExactStepBranch{
+            scenario_prob,
+            advance_exact_sequence_state(sequence_state, scenario, observed_time)});
+      }
+      continue;
+    }
+
+    const double initial_ready = readiness_cdf(scenario, &target_evaluator, 0.0);
+    if (initial_ready > 0.0) {
+      result.total_probability += initial_ready * active_pdf * tail *
+                                  competitor_non_win_probability(
+                                      competitor_plan,
+                                      scenario.active_key,
+                                      0.0,
+                                      &competitor_evaluator,
+                                      observed_time,
+                                      used_outcomes);
+    }
+
+    result.total_probability += simpson_integrate(
+        [&](const double readiness_time) {
+          double value =
+              readiness_density(scenario, &target_evaluator, readiness_time);
+          if (!std::isfinite(value) || value == 0.0) {
+            return 0.0;
+          }
+          value *= active_pdf * tail;
+          if (!std::isfinite(value) || value == 0.0) {
+            return 0.0;
+          }
+          value *= competitor_non_win_probability(
+              competitor_plan,
+              scenario.active_key,
+              readiness_time,
+              &competitor_evaluator,
+              observed_time,
+              used_outcomes);
+          if (!std::isfinite(value) || value == 0.0) {
+            return 0.0;
+          }
+          return value;
+        },
+        0.0,
+        observed_time);
   }
-  return true;
+
+  return result;
 }
 
 inline std::vector<ExactTrialObservation> collapse_exact_observations(
@@ -2242,8 +2416,7 @@ inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
   if (target_it == plan.outcome_index.end()) {
     return min_ll;
   }
-  const auto target_idx = static_cast<std::size_t>(target_it->second);
-  const auto &competitor_plan = plan.competitor_plans[target_idx];
+  const auto target_idx = target_it->second;
   const auto trigger_states = enumerate_trigger_states(plan, params, first_param_row);
   double total = 0.0;
 
@@ -2251,69 +2424,15 @@ inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
     if (!(trigger_state.weight > 0.0)) {
       continue;
     }
-    ExactSequenceState sequence_state;
-    ExactSourceOracle oracle(
-        plan, params, first_param_row, trigger_state, sequence_state, rt);
-    for (const auto &scenario : plan.outcomes[target_idx].scenarios) {
-      std::unordered_map<ExactSourceKey, ExactRelation, ExactSourceKeyHash> forced;
-      bool ok = true;
-      for (const auto &constraint : scenario.forced) {
-        if (!append_constraint(&forced, constraint.key, constraint.relation)) {
-          ok = false;
-          break;
-        }
-      }
-      if (!ok) {
-        continue;
-      }
-
-      const std::unordered_map<ExactSourceKey, ExactRelation, ExactSourceKeyHash>
-          no_forced;
-      ForcedExprEvaluator target_evaluator(plan, &oracle, no_forced);
-      target_evaluator.oracle_time_ = rt;
-      ForcedExprEvaluator competitor_evaluator(plan, &oracle, forced);
-      competitor_evaluator.oracle_time_ = rt;
-
-      const double active_pdf = source_pdf_at(&oracle, scenario.active_key, rt);
-      const double tail = after_survival(scenario, &target_evaluator, rt);
-      if (!(active_pdf > 0.0) || !(tail > 0.0)) {
-        continue;
-      }
-
-      if (scenario.before_keys.empty() && scenario.ready_exprs.empty()) {
-        double scenario_prob = trigger_state.weight * active_pdf * tail *
-                               competitor_non_win_probability(
-                                   competitor_plan,
-                                   scenario.active_key,
-                                   0.0,
-                                   &competitor_evaluator,
-                                   rt);
-        total += scenario_prob;
-        continue;
-      }
-
-      const auto integrated = simpson_integrate(
-          [&](const double u) {
-            double value = readiness_density(scenario, &target_evaluator, u);
-            if (!(value > 0.0)) {
-              return 0.0;
-            }
-            value *= active_pdf * tail;
-            value *= competitor_non_win_probability(
-                competitor_plan,
-                scenario.active_key,
-                u,
-                &competitor_evaluator,
-                rt);
-            if (!(value > 0.0)) {
-              return 0.0;
-            }
-            return value;
-          },
-          0.0,
-          rt);
-      total += trigger_state.weight * integrated;
-    }
+    const ExactStepResult step = evaluate_exact_step(
+        plan,
+        params,
+        first_param_row,
+        trigger_state,
+        ExactSequenceState{},
+        target_idx,
+        rt);
+    total += trigger_state.weight * step.total_probability;
   }
 
   if (!std::isfinite(total) || !(total > 0.0)) {
@@ -2344,71 +2463,18 @@ inline double exact_ranked_sequence_probability(
   if ((*used_outcomes)[target_idx] != 0U) {
     return 0.0;
   }
-
-  ExactSourceOracle oracle(
-      plan, params, first_param_row, trigger_state, sequence_state, rank.rt);
+  const ExactStepResult step = evaluate_exact_step(
+      plan,
+      params,
+      first_param_row,
+      trigger_state,
+      sequence_state,
+      target_it->second,
+      rank.rt,
+      used_outcomes,
+      true);
   double total = 0.0;
-  for (const auto &scenario : plan.outcomes[target_idx].scenarios) {
-    if (!scenario.before_keys.empty() || !scenario.ready_exprs.empty()) {
-      throw std::runtime_error(
-          "exact ranked kernel does not support latent prerequisite timings yet");
-    }
-
-    std::unordered_map<ExactSourceKey, ExactRelation, ExactSourceKeyHash> forced;
-    bool ok = true;
-    for (const auto &constraint : scenario.forced) {
-      if (!append_constraint(&forced, constraint.key, constraint.relation)) {
-        ok = false;
-        break;
-      }
-    }
-    if (!ok) {
-      continue;
-    }
-
-    const std::unordered_map<ExactSourceKey, ExactRelation, ExactSourceKeyHash>
-        no_forced;
-    ForcedExprEvaluator target_evaluator(plan, &oracle, no_forced);
-    target_evaluator.oracle_time_ = rank.rt;
-    ForcedExprEvaluator competitor_evaluator(plan, &oracle, forced);
-    competitor_evaluator.oracle_time_ = rank.rt;
-
-    double scenario_prob =
-        source_pdf_at(&oracle, scenario.active_key, rank.rt) *
-        after_survival(scenario, &target_evaluator, rank.rt);
-    if (!(scenario_prob > 0.0)) {
-      continue;
-    }
-
-    for (std::size_t outcome_idx = 0; outcome_idx < plan.outcomes.size(); ++outcome_idx) {
-      if (outcome_idx == target_idx || (*used_outcomes)[outcome_idx] != 0U) {
-        continue;
-      }
-      double win_prob =
-          competitor_evaluator.expr_cdf(plan.outcomes[outcome_idx].expr_root);
-      if (win_prob > 0.0) {
-        double same_active_t = 0.0;
-        for (const auto &competitor_scenario : plan.outcomes[outcome_idx].scenarios) {
-          if (competitor_scenario.active_key == scenario.active_key) {
-            same_active_t +=
-                same_active_win_mass(
-                    competitor_scenario, &competitor_evaluator, rank.rt, rank.rt);
-          }
-        }
-        win_prob = clamp_probability(win_prob - same_active_t);
-      }
-      scenario_prob *= clamp_probability(1.0 - win_prob);
-      if (!(scenario_prob > 0.0)) {
-        break;
-      }
-    }
-    if (!(scenario_prob > 0.0)) {
-      continue;
-    }
-
-    ExactSequenceState next_state = sequence_state;
-    next_state.lower_bound = rank.rt;
-    next_state.exact_times[scenario.active_key] = rank.rt;
+  for (const auto &branch : step.branches) {
     (*used_outcomes)[target_idx] = 1U;
     const double tail_prob = exact_ranked_sequence_probability(
         plan,
@@ -2417,10 +2483,10 @@ inline double exact_ranked_sequence_probability(
         trigger_state,
         ranks,
         rank_idx + 1U,
-        next_state,
+        branch.next_state,
         used_outcomes);
     (*used_outcomes)[target_idx] = 0U;
-    total += scenario_prob * tail_prob;
+    total += branch.probability * tail_prob;
   }
   return total;
 }
@@ -2436,10 +2502,6 @@ inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
   if (obs.ranks.size() == 1U) {
     return exact_loglik_for_trial(
         plan, params, first_param_row, obs.ranks.front().outcome_label, obs.ranks.front().rt, min_ll);
-  }
-  if (!ranked_exact_supported(plan)) {
-    throw std::runtime_error(
-        "exact ranked kernel does not support latent prerequisite timings yet");
   }
 
   const auto trigger_states = enumerate_trigger_states(plan, params, first_param_row);
@@ -2572,6 +2634,15 @@ inline SEXP evaluate_exact_trials(const compile::CompiledModel &compiled,
     const auto &plan = plans[static_cast<std::size_t>(block.variant_index)];
     const auto leaf_count =
         static_cast<std::size_t>(plan.lowered.program.layout.n_leaves);
+    if (!plan.ranked_supported) {
+      for (int i = 0; i < block.row_count; ++i) {
+        const auto row = static_cast<std::size_t>(block.start_row + i);
+        if (observations[row].ranks.size() > 1U) {
+          throw std::runtime_error(
+              "exact ranked kernel does not support latent prerequisite timings yet");
+        }
+      }
+    }
     for (int i = 0; i < block.row_count; ++i) {
       const auto row = block.start_row + i;
       if (param_row + leaf_count > static_cast<std::size_t>(params.matrix.nrow())) {

@@ -495,7 +495,6 @@
     pools = pool_payload,
     outcomes = outcome_payload,
     components = .canonical_named_list(prep$components %||% list()),
-    special_outcomes = .canonical_named_list(prep$special_outcomes %||% list()),
     shared_triggers = shared_payload
   )
 }
@@ -585,16 +584,6 @@
   comp_indices <- Filter(function(idx) {
     comp_def <- outcome_defs[[idx]]
     comp_opts <- comp_def[["options"]] %||% list()
-    if (!is.null(comp_opts[["alias_of"]])) {
-      return(FALSE)
-    }
-    expr_lbl <- comp_def[["expr"]]
-    if (!is.null(expr_lbl[["kind"]]) && identical(expr_lbl[["kind"]], "event")) {
-      src <- expr_lbl[["source"]]
-      if (identical(src, "__GUESS__") || identical(src, "__DEADLINE__")) {
-        return(FALSE)
-      }
-    }
     comp_label <- names(outcome_defs)[idx]
     comp_target <- comp_opts[["map_outcome_to"]] %||% comp_label
     if (identical(as.character(comp_target), as.character(target_map))) {

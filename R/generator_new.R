@@ -215,18 +215,14 @@
 }
 
 .event_key <- function(ev) {
-  paste(ev$source, ev$k %||% "", sep = "::")
+  as.character(ev$source)
 }
 
 .resolve_event <- function(ctx, ev) {
   key <- .event_key(ev)
   if (!is.null(ctx$event_cache[[key]])) return(ctx$event_cache[[key]])
   source_id <- ev$source
-  if (identical(source_id, "__DEADLINE__")) {
-    result <- list(time = Inf, core = numeric(0))
-  } else if (identical(source_id, "__GUESS__")) {
-    result <- list(time = Inf, core = numeric(0))
-  } else if (!is.null(ctx$model[["pools"]][[source_id]])) {
+  if (!is.null(ctx$model[["pools"]][[source_id]])) {
     result <- .resolve_pool(ctx, source_id)
   } else if (!is.null(ctx$model[["accumulators"]][[source_id]])) {
     acc_def <- ctx$model[["accumulators"]][[source_id]]
@@ -246,7 +242,7 @@
 .eval_expr <- function(expr, ctx) {
   kind <- expr$kind
   if (identical(kind, "event")) {
-    ev <- list(source = expr$source, k = expr$k %||% NULL)
+    ev <- list(source = expr$source)
     return(.resolve_event(ctx, ev))
   }
   if (identical(kind, "and")) {
@@ -677,16 +673,6 @@
       chosen_time <- NA_real_
     }
     chosen_label <- draw
-  }
-
-  # Component-level guess overrides
-  if (!is.null(component_attr$guess)) {
-    guess <- component_attr$guess
-    w_keep <- guess$weights[[chosen_label]] %||% 1
-    keep <- stats::runif(1) <= w_keep
-    if (!keep) {
-      chosen_label <- guess$outcome %||% chosen_label
-    }
   }
 
   if (!is.null(options$map_outcome_to)) {

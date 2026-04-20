@@ -214,11 +214,13 @@ build_component_observation_plans(const Rcpp::List &prep,
     }
   }
 
-  for (auto &[component_id, plan] : plans) {
+  for (auto &entry : plans) {
+    const auto &component_id = entry.first;
+    auto &plan = entry.second;
     const auto variant_it = std::find_if(
         compiled.variants.begin(),
         compiled.variants.end(),
-        [&](const compile::CompiledVariant &variant) {
+        [&component_id](const compile::CompiledVariant &variant) {
           return variant.component_id == component_id;
         });
     if (variant_it == compiled.variants.end()) {
@@ -247,11 +249,6 @@ build_component_observation_plans(const Rcpp::List &prep,
           outcome.containsElementNamed("options") && !Rf_isNull(outcome["options"])
               ? Rcpp::List(outcome["options"])
               : Rcpp::List();
-
-      if (options.containsElementNamed("alias_of") && !Rf_isNull(options["alias_of"])) {
-        throw std::runtime_error(
-            "alias_of is not yet supported on the rebuild likelihood path");
-      }
 
       std::vector<std::pair<std::string, ObservedBranch>> branches;
       branches.push_back({semantic_label,

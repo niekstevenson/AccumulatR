@@ -1,9 +1,3 @@
-.repo_root <- normalizePath(testthat::test_path("..", ".."), mustWork = TRUE)
-
-source(file.path(.repo_root, "R", "helpers.R"))
-source(file.path(.repo_root, "R", "model_definition.R"))
-source(file.path(.repo_root, "R", "semantic_bridge.R"))
-
 testthat::test_that("projected simple race is classified as direct", {
   spec <- race_spec() |>
     add_accumulator("a", "lognormal") |>
@@ -12,7 +6,7 @@ testthat::test_that("projected simple race is classified as direct", {
     add_outcome("B", "b")
 
   prep <- prepare_model(spec)
-  compiled <- .project_semantic_prep(prep, rebuild = TRUE, root = .repo_root)
+  compiled <- .project_semantic_prep(prep)
 
   testthat::expect_length(compiled$variants, 1L)
   testthat::expect_equal(compiled$variants[[1]]$component_id, "__default__")
@@ -58,7 +52,7 @@ testthat::test_that("projection removes dead guarded branches inside a component
     add_component("stop", members = c("A", "B", "S1", "IS", "S2"))
 
   prep <- prepare_model(spec)
-  compiled <- .project_semantic_prep(prep, root = .repo_root)
+  compiled <- .project_semantic_prep(prep)
 
   by_id <- setNames(compiled$variants, vapply(compiled$variants, `[[`, character(1), "component_id"))
 
@@ -89,7 +83,7 @@ testthat::test_that("shared triggers are projected away when only one member sur
     add_trigger("tg", members = c("a", "b"), q = 0.2, draw = "shared")
 
   prep <- prepare_model(spec)
-  compiled <- .project_semantic_prep(prep, root = .repo_root)
+  compiled <- .project_semantic_prep(prep)
 
   by_id <- setNames(compiled$variants, vapply(compiled$variants, `[[`, character(1), "component_id"))
 
@@ -111,7 +105,7 @@ testthat::test_that("component observation overrides classify only the widened v
     add_component("double", members = c("a", "b"), n_outcomes = 2L, weight = 0.5)
 
   prep <- prepare_model(spec)
-  compiled <- .project_semantic_prep(prep, root = .repo_root)
+  compiled <- .project_semantic_prep(prep)
 
   by_id <- setNames(compiled$variants, vapply(compiled$variants, `[[`, character(1), "component_id"))
 

@@ -341,9 +341,6 @@
   if (!is.character(source) || length(source) != 1L || !nzchar(source)) {
     return(FALSE)
   }
-  if (source %in% c("__GUESS__", "__DEADLINE__")) {
-    return(FALSE)
-  }
   source %in% c(acc_ids, pool_ids)
 }
 
@@ -385,9 +382,6 @@
     if (!is.null(opts$guess)) {
       issues <- c(issues, sprintf("%s (guess option not supported)", label))
     }
-    if (!is.null(opts$alias_of)) {
-      issues <- c(issues, sprintf("%s (alias_of option not supported)", label))
-    }
     if (!is.null(opts$map_outcome_to)) {
       issues <- c(issues, sprintf("%s (map_outcome_to option not supported)", label))
     }
@@ -395,7 +389,7 @@
   if (length(issues) > 0L) {
     stop(
       "n_outcomes > 1 currently supports only direct event outcomes ",
-      "with no guess/alias_of/map_outcome_to options. Invalid outcomes: ",
+      "with no guess/map_outcome_to options. Invalid outcomes: ",
       paste(unique(issues), collapse = ", ")
     )
   }
@@ -471,33 +465,20 @@
   args <- as.list(call)[-1]
   nm <- names(call)[-1]
   id_arg <- NULL
-  k_arg <- NULL
-
+  named_args <- nm[!is.na(nm) & nzchar(nm)]
   if (length(args) >= 1L) {
     arg_name <- if (length(nm) >= 1L) nm[[1L]] else ""
     if (is.null(arg_name) || arg_name == "" || identical(arg_name, "id")) {
       id_arg <- args[[1L]]
     }
   }
-  if (length(args) >= 2L) {
-    arg_name <- if (length(nm) >= 2L) nm[[2L]] else ""
-    if (is.null(arg_name) || arg_name == "" || identical(arg_name, "k")) {
-      k_arg <- args[[2L]]
-    }
-  }
   if ("id" %in% nm) id_arg <- args[[which(nm == "id")[1L]]]
-  if ("k" %in% nm) k_arg <- args[[which(nm == "k")[1L]]]
 
   if (is.null(id_arg)) stop("event() requires an id argument")
-  source <- .expr_label(id_arg)
-  k <- NULL
-  if (!is.null(k_arg)) {
-    if (!is.numeric(k_arg) || length(k_arg) != 1L) {
-      stop("event(k =) must be a single numeric value")
-    }
-    k <- as.integer(k_arg)
+  if (length(args) >= 2L || any(!named_args %in% "id")) {
+    stop("event() accepts only a single id argument", call. = FALSE)
   }
-  list(kind = "event", source = source, k = k)
+  list(kind = "event", source = .expr_label(id_arg), k = NULL)
 }
 
 
@@ -780,10 +761,21 @@ add_pool <- function(spec, id, members, k = 1L) {
 #' @export
 add_outcome <- function(spec, label, expr, options = list()) {
   spec <- .validate_race_spec_input(spec, "add_outcome")
+  options <- options %||% list()
+  if (!is.list(options)) {
+    stop("Outcome options must be a list", call. = FALSE)
+  }
+  unknown_options <- setdiff(names(options), c("component", "map_outcome_to", "guess"))
+  if (length(unknown_options) > 0L) {
+    stop(
+      sprintf("Unknown outcome option(s): %s", paste(unknown_options, collapse = ", ")),
+      call. = FALSE
+    )
+  }
   spec$outcomes[[length(spec$outcomes) + 1L]] <- list(
     label = label,
     expr = build_outcome_expr(expr),
-    options = options %||% list()
+    options = options
   )
   spec
 }
@@ -791,7 +783,7 @@ add_outcome <- function(spec, label, expr, options = list()) {
 #' Define a mixture component
 #'
 #' Components are useful when trials can come from qualitatively different
-#' processing modes, such as "fast guess" versus "controlled response".
+#' processing modes, such as fast versus slow processing.
 #'
 #' @param spec A `race_spec` object.
 #' @param id Component label.
@@ -811,6 +803,13 @@ add_component <- function(spec, id, members, weight = NULL, weight_param = NULL,
   comp_attrs <- attrs %||% list()
   if (!is.list(comp_attrs)) {
     stop("Component attrs must be a list")
+  }
+  unknown_attrs <- setdiff(names(comp_attrs), c("component", "shared_params", "n_outcomes", "weight_param"))
+  if (length(unknown_attrs) > 0L) {
+    stop(
+      sprintf("Unknown component attr(s): %s", paste(unknown_attrs, collapse = ", ")),
+      call. = FALSE
+    )
   }
   if (!is.null(comp_attrs$n_outcomes)) {
     comp_attrs$n_outcomes <- .validate_n_outcomes(comp_attrs$n_outcomes)
@@ -926,9 +925,7 @@ set_mixture_options <- function(spec, mode = "sample", reference = NULL) {
 #'
 #' `set_metadata()` stores additional metadata on a model specification.
 #' At present, these values are carried through model finalization but do not
-#' directly change simulation or likelihood evaluation. This is mainly useful
-#' for annotating a model or passing labels such as `special_outcomes` to
-#' downstream tools.
+#' directly change simulation or likelihood evaluation.
 #'
 #' @param spec A `race_spec` object.
 #' @param ... Named metadata entries.
@@ -936,12 +933,10 @@ set_mixture_options <- function(spec, mode = "sample", reference = NULL) {
 #' @examples
 #' spec <- race_spec() |>
 #'   add_accumulator("go", "lognormal") |>
-#'   add_accumulator("watch", "lognormal") |>
-#'   add_outcome("go", "go") |>
-#'   add_outcome("NR_CENSOR", "watch", options = list(class = "censor"))
+#'   add_outcome("go", "go")
 #'
-#' spec <- set_metadata(spec, special_outcomes = list(censor = "NR_CENSOR"))
-#' finalize_model(spec)$special_outcomes$censor
+#' spec <- set_metadata(spec, note = "example")
+#' finalize_model(spec)$model_spec$metadata$note
 #' @export
 set_metadata <- function(spec, ...) {
   spec <- .validate_race_spec_input(spec, "set_metadata")
@@ -1129,7 +1124,6 @@ race_model <- function(accumulators, pools = list(), outcomes, triggers = list()
       if (identical(draw_mode, "shared")) {
         shared_triggers[[trig_id]] <- list(
           id = trig_id,
-          group_id = trig_id, # for backwards compat internally, just use trig_id
           members = members,
           q = as.numeric(default_q),
           draw = draw_mode
@@ -1169,7 +1163,7 @@ race_model <- function(accumulators, pools = list(), outcomes, triggers = list()
     return(list(
       ids = "__default__",
       weights = 1,
-      attrs = list(`__default__` = list(guess = NULL, weight_param = NULL)),
+      attrs = list(`__default__` = list(weight_param = NULL)),
       has_weight_param = FALSE,
       mode = mode,
       reference = "__default__"
@@ -1213,7 +1207,6 @@ race_model <- function(accumulators, pools = list(), outcomes, triggers = list()
       if (!is.null(n_out)) {
         n_out <- .validate_n_outcomes(n_out)
       }
-      attrs_cmp$guess <- attrs_cmp$guess %||% NULL
       attrs_cmp$weight_param <- wp
       attrs_cmp$n_outcomes <- n_out
       attrs[[cmp_id]] <- attrs_cmp
@@ -1241,7 +1234,6 @@ race_model <- function(accumulators, pools = list(), outcomes, triggers = list()
       if (!is.null(n_out)) {
         n_out <- .validate_n_outcomes(n_out)
       }
-      attrs_cmp$guess <- attrs_cmp$guess %||% NULL
       attrs_cmp$weight_param <- wp
       attrs_cmp$n_outcomes <- n_out
       attrs[[cmp_id]] <- attrs_cmp
@@ -1320,7 +1312,6 @@ prepare_model <- function(model) {
     outcomes = outcome_defs,
     components = component_defs,
     observation = observation,
-    special_outcomes = model$metadata$special_outcomes %||% list(),
     shared_triggers = acc_prep$shared_triggers %||% list(),
     onset_specs = onset_metadata$onset_specs,
     onset_dependencies = onset_metadata$onset_dependencies,
@@ -1416,7 +1407,6 @@ finalize_model <- function(model) {
     prep = prep,
     accumulators = .build_accumulator_template(prep$accumulators),
     components = .build_component_table(prep$components),
-    special_outcomes = prep$special_outcomes,
     shared_triggers = prep$shared_triggers %||% list()
   )
   class(structure) <- c("model_structure", "generator_structure", class(structure))

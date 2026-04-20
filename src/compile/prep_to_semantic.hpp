@@ -138,8 +138,7 @@ inline semantic::SourceRef source_ref_from_name(
     return semantic::SourceRef{
         semantic::SourceKind::Pool, pool_it->second, std::string()};
   }
-  return semantic::SourceRef{
-      semantic::SourceKind::Special, semantic::kInvalidIndex, std::string(name)};
+  throw std::runtime_error("unknown event source '" + std::string(name) + "'");
 }
 
 inline semantic::OnsetSpec compile_onset(
@@ -207,9 +206,6 @@ inline semantic::Index compile_expr(
   case semantic::ExprKind::Event: {
     const std::string source_name = as_string(expr["source"]);
     node.source = source_ref_from_name(source_name, leaf_index, pool_index);
-    if (expr.containsElementNamed("k") && !Rf_isNull(expr["k"])) {
-      node.event_k = as_int(expr["k"], 0);
-    }
     break;
   }
   case semantic::ExprKind::And:
@@ -405,7 +401,6 @@ inline Rcpp::List to_r_list(const semantic::SemanticModel &model) {
         Rcpp::Named("expr_root") = outcome.expr_root + 1,
         Rcpp::Named("component_ids") = outcome.component_ids,
         Rcpp::Named("has_guess") = outcome.has_guess,
-        Rcpp::Named("outcome_class") = outcome.outcome_class,
         Rcpp::Named("mapping") = Rcpp::List::create(
             Rcpp::Named("maps_to_missing") = outcome.mapping.maps_to_missing,
             Rcpp::Named("observed_label") = outcome.mapping.observed_label));
@@ -623,10 +618,6 @@ inline semantic::SemanticModel compile_prep(const Rcpp::List &prep) {
       outcome_spec.has_guess =
           detail::has_named_element(options, "guess") &&
           !Rf_isNull(options["guess"]);
-      if (detail::has_named_element(options, "class") &&
-          !Rf_isNull(options["class"])) {
-        outcome_spec.outcome_class = detail::as_string(options["class"]);
-      }
     }
     model.outcomes.push_back(std::move(outcome_spec));
   }

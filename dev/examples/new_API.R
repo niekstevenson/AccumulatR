@@ -200,27 +200,8 @@ params_example_10_exclusion <- c(
   X_acc.s = 0.18
 )
 
-# Example 11 – censoring pool and deadline
-example_11_censor_deadline <- race_spec() |>
-  add_accumulator("go_left", "lognormal") |>
-  add_accumulator("go_right", "lognormal") |>
-  add_accumulator("censor_watch", "lognormal") |>
-  add_outcome("Left", "go_left") |>
-  add_outcome("Right", "go_right") |>
-  add_outcome("NR_CENSOR", "censor_watch", options = list(class = "censor")) |>
-  set_metadata(special_outcomes = list(censor = "NR_CENSOR")) |>
-  finalize_model()
-params_example_11_censor_deadline <- c(
-  go_left.m = log(0.28),
-  go_left.s = 0.18,
-  go_right.m = log(0.34),
-  go_right.s = 0.18,
-  censor_watch.m = log(0.40),
-  censor_watch.s = 0.12
-)
-
-# Example 12 – inhibitor with protector
-example_12_inhibitor_with_protector <- race_spec() |>
+# Example 11 – inhibitor with protector
+example_11_inhibitor_with_protector <- race_spec() |>
   add_accumulator("go1", "lognormal") |>
   add_accumulator("stop", "exgauss", onset = 0.20) |>
   add_accumulator("go2", "lognormal", onset = 0.20) |>
@@ -233,7 +214,7 @@ example_12_inhibitor_with_protector <- race_spec() |>
   add_component("go_stop", members = c("go1", "stop", "go2", "safety"), attrs = list(component = "go_stop"), weight = 0.5) |>
   set_mixture_options(mode = "fixed") |>
   finalize_model()
-params_example_12_inhibitor_with_protector <- c(
+params_example_11_inhibitor_with_protector <- c(
   go1.m = log(0.35),
   go1.s = 0.2,
   stop.mu = 0.1,
@@ -245,8 +226,8 @@ params_example_12_inhibitor_with_protector <- c(
   safety.s = 0.13
 )
 
-# Example 13 – nested pools
-example_13_nested_pools <- race_spec() |>
+# Example 12 – nested pools
+example_12_nested_pools <- race_spec() |>
   add_accumulator("a1", "lognormal") |>
   add_accumulator("a2", "lognormal") |>
   add_accumulator("a3", "lognormal") |>
@@ -258,7 +239,7 @@ example_13_nested_pools <- race_spec() |>
   add_outcome("TeamA", "A_team") |>
   add_outcome("TeamB", "B_team") |>
   finalize_model()
-params_example_13_nested_pools <- c(
+params_example_12_nested_pools <- c(
   a1.m = log(0.27),
   a1.s = 0.15,
   a2.m = log(0.29),
@@ -271,8 +252,8 @@ params_example_13_nested_pools <- c(
   b2.s = 0.19
 )
 
-# Example 14 – weighted pool
-example_14_weighted_pool <- race_spec() |>
+# Example 13 – weighted pool
+example_13_weighted_pool <- race_spec() |>
   add_accumulator("w1", "lognormal") |>
   add_accumulator("w2", "lognormal") |>
   add_accumulator("w3", "lognormal") |>
@@ -282,7 +263,7 @@ example_14_weighted_pool <- race_spec() |>
   add_outcome("WeightedChoice", "WEIGHTED") |>
   add_outcome("Competitor", "w3") |>
   finalize_model()
-params_example_14_weighted_pool <- c(
+params_example_13_weighted_pool <- c(
   w1.m = log(0.30),
   w1.s = 0.18,
   w2.m = log(0.30),
@@ -291,8 +272,8 @@ params_example_14_weighted_pool <- c(
   w3.s = 0.20
 )
 
-# Example 15 – mixture with component metadata
-example_15_component_metadata <- race_spec() |>
+# Example 14 – mixture with component metadata
+example_14_component_metadata <- race_spec() |>
   # Separate shared accumulators per component to enhance identifiability
   add_accumulator("acc_shared_fast", "lognormal") |>
   add_accumulator("acc_shared_slow", "lognormal") |>
@@ -301,15 +282,13 @@ example_15_component_metadata <- race_spec() |>
   add_pool("FAST", c("acc_fast", "acc_shared_fast")) |>
   add_pool("SLOW", c("acc_slow", "acc_shared_slow")) |>
   add_outcome("Response", first_of("FAST", "SLOW")) |>
-  add_outcome("GUESS", "__GUESS__") |>
   add_component("fast", members = c("acc_fast", "acc_shared_fast"), weight = 0.6, attrs = list(
-    component = "fast",
-    guess = list(outcome = "GUESS", weights = c(Response = 0.7))
+    component = "fast"
   )) |>
   add_component("slow", members = c("acc_slow", "acc_shared_slow"), weight = 0.4, attrs = list(component = "slow")) |>
   set_mixture_options(mode = "fixed") |>
   finalize_model()
-params_example_15_component_metadata <- c(
+params_example_14_component_metadata <- c(
   acc_shared_fast.m = log(0.32),
   acc_shared_fast.s = 0.10,
   acc_shared_slow.m = log(0.60),
@@ -320,8 +299,8 @@ params_example_15_component_metadata <- c(
   acc_slow.s = 0.15
 )
 
-# Guard tie – shared gate with stop control
-example_16_guard_tie_simple <- race_spec() |>
+# Example 15 – guard tie with stop control
+example_15_guard_tie_simple <- race_spec() |>
   add_accumulator("go_fast", "lognormal") |>
   add_accumulator("go_slow", "lognormal") |>
   add_accumulator("gate_shared", "lognormal") |>
@@ -329,7 +308,7 @@ example_16_guard_tie_simple <- race_spec() |>
   add_outcome("Fast", inhibit(all_of("go_fast", "gate_shared"), by = "stop_control")) |>
   add_outcome("Slow", all_of("go_slow", "gate_shared")) |>
   finalize_model()
-params_example_16_guard_tie_simple <- c(
+params_example_15_guard_tie_simple <- c(
   go_fast.m = log(0.28),
   go_fast.s = 0.18,
   go_slow.m = log(0.34),
@@ -340,7 +319,7 @@ params_example_16_guard_tie_simple <- c(
   stop_control.s = 0.15
 )
 
-example_17_k_of_n_inhibitors <- race_spec() |>
+example_16_k_of_n_inhibitors <- race_spec() |>
   add_accumulator("a1", "lognormal") |>
   add_accumulator("a2", "lognormal") |>
   add_accumulator("a3", "lognormal") |>
@@ -386,7 +365,7 @@ example_17_k_of_n_inhibitors <- race_spec() |>
     shared_D_s = c("d1.s", "d2.s", "d3.s")
   )) |>
   finalize_model()
-params_example_17_k_of_n_inhibitors <- c(
+params_example_16_k_of_n_inhibitors <- c(
   shared_A_m = log(0.30),
   shared_A_s = 0.15,
   shared_B_m = log(0.30),
@@ -626,13 +605,12 @@ new_api_examples <- list(
   example_8_shared_params = example_8_shared_params,
   example_9_advanced_k = example_9_advanced_k,
   example_10_exclusion = example_10_exclusion,
-  example_11_censor_deadline = example_11_censor_deadline,
-  example_12_inhibitor_with_protector = example_12_inhibitor_with_protector,
-  example_13_nested_pools = example_13_nested_pools,
-  example_14_weighted_pool = example_14_weighted_pool,
-  example_15_component_metadata = example_15_component_metadata,
-  example_16_guard_tie_simple = example_16_guard_tie_simple,
-  example_17_k_of_n_inhibitors = example_17_k_of_n_inhibitors,
+  example_11_inhibitor_with_protector = example_11_inhibitor_with_protector,
+  example_12_nested_pools = example_12_nested_pools,
+  example_13_weighted_pool = example_13_weighted_pool,
+  example_14_component_metadata = example_14_component_metadata,
+  example_15_guard_tie_simple = example_15_guard_tie_simple,
+  example_16_k_of_n_inhibitors = example_16_k_of_n_inhibitors,
   example_18_univalent_stop_change = example_18_univalent_stop_change,
   example_19_stim_select_stop = example_19_stim_select_stop,
   example_20_simple_stop_change = example_20_simple_stop_change,
@@ -654,13 +632,12 @@ new_api_example_params <- list(
   example_8_shared_params = params_example_8_shared_params,
   example_9_advanced_k = params_example_9_advanced_k,
   example_10_exclusion = params_example_10_exclusion,
-  example_11_censor_deadline = params_example_11_censor_deadline,
-  example_12_inhibitor_with_protector = params_example_12_inhibitor_with_protector,
-  example_13_nested_pools = params_example_13_nested_pools,
-  example_14_weighted_pool = params_example_14_weighted_pool,
-  example_15_component_metadata = params_example_15_component_metadata,
-  example_16_guard_tie_simple = params_example_16_guard_tie_simple,
-  example_17_k_of_n_inhibitors = params_example_17_k_of_n_inhibitors,
+  example_11_inhibitor_with_protector = params_example_11_inhibitor_with_protector,
+  example_12_nested_pools = params_example_12_nested_pools,
+  example_13_weighted_pool = params_example_13_weighted_pool,
+  example_14_component_metadata = params_example_14_component_metadata,
+  example_15_guard_tie_simple = params_example_15_guard_tie_simple,
+  example_16_k_of_n_inhibitors = params_example_16_k_of_n_inhibitors,
   example_18_univalent_stop_change = params_example_18_univalent_stop_change,
   example_19_stim_select_stop = params_example_19_stim_select_stop,
   example_20_simple_stop_change = params_example_20_simple_stop_change,

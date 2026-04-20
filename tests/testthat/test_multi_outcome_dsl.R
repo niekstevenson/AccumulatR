@@ -62,13 +62,6 @@ testthat::test_that("n_outcomes > 1 rejects non-direct and remapped outcomes", {
     add_outcome("B", "b")
   testthat::expect_error(finalize_model(spec_guess), "guess option not supported")
 
-  spec_alias <- race_spec(n_outcomes = 2L) |>
-    add_accumulator("a", "lognormal") |>
-    add_accumulator("b", "lognormal") |>
-    add_outcome("A", "a") |>
-    add_outcome("B", "b", options = list(alias_of = "A"))
-  testthat::expect_error(finalize_model(spec_alias), "alias_of option not supported")
-
   spec_map <- race_spec(n_outcomes = 2L) |>
     add_accumulator("a", "lognormal") |>
     add_accumulator("b", "lognormal") |>

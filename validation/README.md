@@ -8,7 +8,7 @@ Run it from the repo root with:
 Rscript validation/run_validation.R
 ```
 
-The runner compares engine likelihoods against explicit manual references for 18 model shapes:
+The runner compares engine likelihoods against explicit manual references for 19 model shapes:
 
 1. `independent_trigger_two_way`
 2. `pool_vs_competitor`
@@ -28,5 +28,6 @@ The runner compares engine likelihoods against explicit manual references for 18
 16. `overlapping_composite_competitors`
 17. `guarded_overlapping_competitors`
 18. `shared_gate_four_way_tie`
+19. `none_of_conjunction`
 
 The runner exits nonzero if any check fails. That is intentional. This folder is meant to expose correctness gaps, not hide them.

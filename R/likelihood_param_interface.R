@@ -237,17 +237,10 @@ prepare_data <- function(structure,
   prep_eval_base <- prep_info$prep
   native_ctx <- tryCatch(.prep_native_context(prep_eval_base), error = function(e) NULL)
   if (!inherits(native_ctx, "externalptr")) native_ctx <- NULL
-  rebuild_root <- .semantic_bridge_root(".")
-  component_attrs <- structure$components$attrs %||% list()
-  has_component_guess <- any(vapply(component_attrs, function(attrs) {
-    !is.null((attrs %||% list())$guess)
-  }, logical(1)))
   structure(list(
     native_ctx = native_ctx,
-    rebuild = list(
-      root = rebuild_root,
-      prep = prep_eval_base,
-      has_component_guess = has_component_guess
+    cpp = list(
+      prep = prep_eval_base
     )
   ), class = "accumulatr_context")
 }
@@ -650,39 +643,6 @@ make_context <- function(structure, prep = NULL, native_bundle = NULL) {
       guess_target_specs[[tgt_key]] <- c(guess_target_specs[[tgt_key]] %||% list(), list(donor_rec))
     }
   }
-  alias_specs <- lapply(seq_along(outcome_defs), function(idx) {
-    def <- outcome_defs[[idx]]
-    alias_refs <- def[["options"]][["alias_of"]]
-    if (is.null(alias_refs)) {
-      return(NULL)
-    }
-    refs <- as.character(alias_refs)
-    alias_sources <- lapply(refs, function(ref_lbl) {
-      ref_idx <- which(outcome_labels == ref_lbl)
-      if (length(ref_idx) == 0) {
-        return(NULL)
-      }
-      refs_out <- lapply(ref_idx, function(j) {
-        node <- compiled_nodes[[j]]
-        comp_ids <- compiled_competitors[[j]]
-        if (is.null(node) || is.null(comp_ids)) {
-          return(NULL)
-        }
-        list(
-          node_id = as.integer(node$id),
-          competitor_ids = comp_ids %||% integer(0),
-          source_label = ref_lbl
-        )
-      })
-      refs_out
-    })
-    alias_sources <- unlist(alias_sources, recursive = FALSE)
-    if (any(vapply(alias_sources, is.null, logical(1)))) {
-      return(NULL)
-    }
-    alias_sources
-  })
-  names(alias_specs) <- outcome_labels
   rel_tol <- .integrate_rel_tol()
   abs_tol <- .integrate_abs_tol()
   max_depth <- 12L
@@ -692,7 +652,6 @@ make_context <- function(structure, prep = NULL, native_bundle = NULL) {
     compiled_competitors = compiled_competitors,
     na_source_specs = na_source_specs,
     guess_target_specs = guess_target_specs,
-    alias_specs = alias_specs,
     rel_tol = as.numeric(rel_tol),
     abs_tol = as.numeric(abs_tol),
     max_depth = as.integer(max_depth)
@@ -907,19 +866,6 @@ make_context <- function(structure, prep = NULL, native_bundle = NULL) {
     return(0.0)
   }
   out_def <- prep[["outcomes"]][[selected_idx]]
-  if (!is.null(out_def[["options"]][["alias_of"]])) {
-    refs <- as.character(out_def[["options"]][["alias_of"]])
-    vals <- vapply(refs, function(lbl) {
-      .likelihood_response_prob_component(
-        prep = prep,
-        outcome_label = lbl,
-        component = component,
-        trial_rows = trial_rows,
-        trial_state = trial_state
-      )
-    }, numeric(1))
-    return(sum(vals, na.rm = TRUE))
-  }
 
   # Native-only probability (upper = Inf) so shared triggers and guards follow the
   # same path as the main likelihood.
@@ -950,17 +896,7 @@ make_context <- function(structure, prep = NULL, native_bundle = NULL) {
   if (!is.finite(prob_native) || prob_native < 0) {
     stop(sprintf("Native outcome probability failed for outcome '%s'", outcome_label), call. = FALSE)
   }
-  base <- as.numeric(prob_native)
-
-  if (!identical(outcome_label, "GUESS")) {
-    gp <- .get_component_attr(prep, component, "guess")
-    if (!is.null(gp) && !is.null(gp[["weights"]])) {
-      keep_key <- if (is.na(outcome_label)) "<NA>" else as.character(outcome_label)
-      keep <- gp[["weights"]][[outcome_label]] %||% gp[["weights"]][[keep_key]] %||% 1.0
-      base <- base * as.numeric(keep)
-    }
-  }
-  base
+  as.numeric(prob_native)
 }
 
 .aggregate_observed_probs <- function(prep, probs, include_na = TRUE, component = NULL) {
@@ -968,7 +904,7 @@ make_context <- function(structure, prep = NULL, native_bundle = NULL) {
   labels <- Filter(function(lbl) {
     idx <- .resolve_outcome_def_index(prep, lbl, component)
     if (is.na(idx)) return(FALSE)
-    is.null(prep[["outcomes"]][[idx]][["options"]][["alias_of"]])
+    TRUE
   }, labels)
   obs <- numeric(0)
   na_sum <- 0.0
@@ -1287,9 +1223,9 @@ log_likelihood.accumulatr_context <- function(context,
   rownames(data_kept) <- NULL
   trial_weights_kept <- trial_weights[kept_trials]
 
-  rebuild_ctx <- ctx$rebuild %||% NULL
-  if (is.null(rebuild_ctx)) {
-    stop("Rebuild context required for log_likelihood", call. = FALSE)
+  cpp_ctx <- ctx$cpp %||% NULL
+  if (is.null(cpp_ctx)) {
+    stop("C++ context required for log_likelihood", call. = FALSE)
   }
 
   out <- vapply(params_list, function(param_mat) {
@@ -1297,15 +1233,11 @@ log_likelihood.accumulatr_context <- function(context,
       stop("Rebuild likelihood currently requires parameter rows aligned to prepared data rows; use build_param_matrix(..., trial_df = prepared_data)", call. = FALSE)
     }
     param_kept <- param_mat[keep_rows, , drop = FALSE]
-    if (isTRUE(rebuild_ctx$has_component_guess)) {
-      stop("Component-level guess is not yet supported on the rebuild likelihood path", call. = FALSE)
-    }
     observed <- .observed_loglik_prep(
-      rebuild_ctx$prep,
+      cpp_ctx$prep,
       param_kept,
       data_kept,
-      min_ll = min_ll,
-      root = rebuild_ctx$root
+      min_ll = min_ll
     )
     sum(trial_weights_kept * as.numeric(observed$loglik)) + ll_offset
   }, numeric(1))

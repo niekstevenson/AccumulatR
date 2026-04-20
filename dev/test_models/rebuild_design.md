@@ -56,7 +56,6 @@ The user-facing R DSL already commits us to the following features:
 - outcome options used by top-1 models:
   - `map_outcome_to`
   - `guess`
-  - censor/special outcomes
 
 This surface is visible in:
 
@@ -976,7 +975,6 @@ Scope:
 
 - `map_outcome_to`
 - guess redistribution
-- censor/special outcomes
 - component-specific `n_outcomes`
 
 Tests:

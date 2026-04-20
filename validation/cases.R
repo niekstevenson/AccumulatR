@@ -855,6 +855,45 @@ validation_cases <- function() {
         )
       }
       do.call(rbind, rows)
+    },
+
+    none_of_conjunction = function() {
+      structure <- race_spec() |>
+        add_accumulator("go", "lognormal") |>
+        add_accumulator("stop", "lognormal") |>
+        add_accumulator("other", "lognormal") |>
+        add_outcome("RESPOND", all_of("go", none_of("stop"))) |>
+        add_outcome("OTHER", "other") |>
+        finalize_model()
+      params <- c(
+        go.m = log(0.31), go.s = 0.15, go.q = 0.00, go.t0 = 0.00,
+        stop.m = log(0.27), stop.s = 0.13, stop.q = 0.00, stop.t0 = 0.00,
+        other.m = log(0.45), other.s = 0.17, other.q = 0.00, other.t0 = 0.00
+      )
+      go <- acc_parts("go", params)
+      stop <- acc_parts("stop", params)
+      other <- acc_parts("other", params)
+
+      rows <- list()
+      for (rt in c(0.29, 0.41)) {
+        manual <- acc_pdf_scalar(rt, go) *
+          acc_survival_scalar(rt, stop) *
+          acc_survival_scalar(rt, other)
+        engine <- engine_density_or_mass(
+          structure,
+          params,
+          data.frame(trial = 1L, R = "RESPOND", rt = rt, stringsAsFactors = FALSE)
+        )
+        rows[[length(rows) + 1L]] <- check_row(
+          "none_of_conjunction",
+          paste0("RESPOND_rt_", format(rt, nsmall = 2)),
+          engine,
+          manual,
+          2e-3,
+          "Conjunction with none_of as an absence condition"
+        )
+      }
+      do.call(rbind, rows)
     }
   )
 }

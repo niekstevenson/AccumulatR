@@ -1,9 +1,3 @@
-.repo_root <- normalizePath(testthat::test_path("..", ".."), mustWork = TRUE)
-
-source(file.path(.repo_root, "R", "helpers.R"))
-source(file.path(.repo_root, "R", "model_definition.R"))
-source(file.path(.repo_root, "R", "semantic_bridge.R"))
-
 testthat::test_that("exact variant lowers to a dense runtime program", {
   spec <- race_spec() |>
     add_accumulator("s", "lognormal") |>
@@ -14,7 +8,7 @@ testthat::test_that("exact variant lowers to a dense runtime program", {
     add_trigger("tg", members = c("stop", "change"), q = 0.2, draw = "shared")
 
   prep <- prepare_model(spec)
-  lowered <- .lower_exact_prep(prep, rebuild = TRUE, root = .repo_root)
+  lowered <- .lower_exact_prep(prep)
 
   testthat::expect_length(lowered$variants, 1L)
   variant <- lowered$variants[[1]]
@@ -46,7 +40,7 @@ testthat::test_that("direct variants are rejected instead of half-lowering to ex
   prep <- prepare_model(spec)
 
   testthat::expect_error(
-    .lower_exact_prep(prep, root = .repo_root),
+    .lower_exact_prep(prep),
     "cannot lower direct variant"
   )
 })

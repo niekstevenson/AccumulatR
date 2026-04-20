@@ -3,11 +3,11 @@
 
 #include <Rcpp.h>
 
-#include "../eval/direct_kernel.hpp"
-#include "../eval/exact_kernel.hpp"
-#include "../eval/observed_kernel.hpp"
-#include "../runtime/direct_program.hpp"
-#include "../runtime/exact_program.hpp"
+#include "eval/direct_kernel.hpp"
+#include "eval/exact_kernel.hpp"
+#include "eval/observed_kernel.hpp"
+#include "runtime/direct_program.hpp"
+#include "runtime/exact_program.hpp"
 
 // [[Rcpp::export]]
 SEXP semantic_compile_prep_cpp(SEXP prepSEXP) {

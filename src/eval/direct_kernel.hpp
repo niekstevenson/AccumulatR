@@ -45,6 +45,40 @@ inline double normal_cdf_fast(double z) noexcept {
   return clamp_probability(0.5 * std::erfc(arg));
 }
 
+inline double exgauss_raw_pdf(double x, double mu, double sigma,
+                              double tau) noexcept {
+  if (!std::isfinite(x) || !std::isfinite(mu) || !std::isfinite(sigma) ||
+      sigma <= 0.0 || !std::isfinite(tau) || tau <= 0.0) {
+    return 0.0;
+  }
+  const double inv_tau = 1.0 / tau;
+  const double sigma_sq = sigma * sigma;
+  const double tau_sq = tau * tau;
+  const double sigma_over_tau = sigma * inv_tau;
+  const double z = (x - mu) / sigma;
+  const double exponent = sigma_sq / (2.0 * tau_sq) - (x - mu) * inv_tau;
+  const double tail = normal_cdf_fast(z - sigma_over_tau);
+  return safe_density(inv_tau * std::exp(exponent) * tail);
+}
+
+inline double exgauss_raw_cdf(double x, double mu, double sigma,
+                              double tau) noexcept {
+  if (!std::isfinite(x) || !std::isfinite(mu) || !std::isfinite(sigma) ||
+      sigma <= 0.0 || !std::isfinite(tau) || tau <= 0.0) {
+    return 0.0;
+  }
+  const double inv_tau = 1.0 / tau;
+  const double sigma_sq = sigma * sigma;
+  const double tau_sq = tau * tau;
+  const double sigma_over_tau = sigma * inv_tau;
+  const double z = (x - mu) / sigma;
+  const double exponent = sigma_sq / (2.0 * tau_sq) - (x - mu) * inv_tau;
+  const double tail = normal_cdf_fast(z - sigma_over_tau);
+  const double base = normal_cdf_fast(z);
+  const double exp_term = std::exp(exponent);
+  return clamp_probability(base - exp_term * tail);
+}
+
 constexpr double kLogPi = 1.1447298858494001741434;
 
 inline double lba_denom(double v, double sv) noexcept {
@@ -272,6 +306,7 @@ inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
 
   double base_pdf = 0.0;
   double base_cdf = 0.0;
+  double lower_cdf = 0.0;
 
   switch (static_cast<leaf::DistKind>(dist_kind)) {
   case leaf::DistKind::Lognormal: {
@@ -313,18 +348,15 @@ inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
         !std::isfinite(tau) || tau <= 0.0) {
       return impossible_channels();
     }
-    const double inv_tau = 1.0 / tau;
-    const double sigma_sq = sigma * sigma;
-    const double tau_sq = tau * tau;
-    const double sigma_over_tau = sigma * inv_tau;
-    const double z = (x - mu) / sigma;
-    const double exponent = sigma_sq / (2.0 * tau_sq) - (x - mu) * inv_tau;
-    const double tail = normal_cdf_fast(z - sigma_over_tau);
-    base_pdf = inv_tau * std::exp(exponent) * tail;
-
-    const double base = normal_cdf_fast(z);
-    const double exp_term = std::exp(exponent);
-    base_cdf = base - exp_term * tail;
+    base_pdf = exgauss_raw_pdf(x, mu, sigma, tau);
+    base_cdf = exgauss_raw_cdf(x, mu, sigma, tau);
+    lower_cdf = exgauss_raw_cdf(0.0, mu, sigma, tau);
+    const double lower_survival = 1.0 - lower_cdf;
+    if (!(lower_survival > 0.0)) {
+      return impossible_channels();
+    }
+    base_pdf = safe_density(base_pdf / lower_survival);
+    base_cdf = clamp_probability((base_cdf - lower_cdf) / lower_survival);
     break;
   }
   case leaf::DistKind::LBA: {
@@ -516,7 +548,7 @@ inline std::vector<semantic::Index> collect_source_support(
     return {index};
   }
   if (kind != semantic::SourceKind::Pool) {
-    throw std::runtime_error("direct evaluator does not support special sources");
+    throw std::runtime_error("direct evaluator encountered invalid source kind");
   }
 
   const auto pool_idx = static_cast<std::size_t>(index);
@@ -852,7 +884,7 @@ private:
     if (kind == semantic::SourceKind::Pool) {
       return pool_channel(index);
     }
-    throw std::runtime_error("direct evaluator does not support special sources");
+    throw std::runtime_error("direct evaluator encountered invalid source kind");
   }
 
   const leaf::EventChannels &pool_channel(const semantic::Index pool_index) {

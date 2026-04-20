@@ -20,9 +20,9 @@
 "_PACKAGE"
 
 ## usethis namespace: start
-#' @importFrom Rcpp sourceCpp
 #' @importFrom stats setNames
 #' @importFrom utils modifyList
+#' @importFrom Rcpp evalCpp
 #' @useDynLib AccumulatR, .registration = TRUE
 ## usethis namespace: end
 NULL

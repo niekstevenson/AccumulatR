@@ -164,7 +164,6 @@ Decision:
 
 - `map_outcome_to`
 - `guess`
-- censor/special outcomes
 - truncation of missing later ranks
 
 all stay above core event semantics

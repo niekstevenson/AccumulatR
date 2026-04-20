@@ -163,8 +163,7 @@ inline void validate_direct_variant(const compile::CompiledVariant &variant) {
   }
 
   for (const auto &outcome : variant.direct_outcomes) {
-    if (outcome.source.kind == semantic::SourceKind::Special ||
-        !outcome.source.valid()) {
+    if (!outcome.source.valid()) {
       throw std::runtime_error(
           "direct variant contains invalid direct outcome source");
     }

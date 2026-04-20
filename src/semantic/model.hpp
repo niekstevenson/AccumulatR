@@ -117,7 +117,6 @@ struct OutcomeSpec {
   OutcomeMapping mapping{};
   std::vector<std::string> component_ids;
   bool has_guess{false};
-  std::string outcome_class;
 };
 
 struct ComponentSpec {

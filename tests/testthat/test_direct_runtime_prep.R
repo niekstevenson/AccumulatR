@@ -1,9 +1,3 @@
-.repo_root <- normalizePath(testthat::test_path("..", ".."), mustWork = TRUE)
-
-source(file.path(.repo_root, "R", "helpers.R"))
-source(file.path(.repo_root, "R", "model_definition.R"))
-source(file.path(.repo_root, "R", "semantic_bridge.R"))
-
 testthat::test_that("simple direct variant lowers to a dense runtime program", {
   spec <- race_spec() |>
     add_accumulator("a", "lognormal") |>
@@ -12,7 +6,7 @@ testthat::test_that("simple direct variant lowers to a dense runtime program", {
     add_outcome("B", "b")
 
   prep <- prepare_model(spec)
-  lowered <- .lower_direct_prep(prep, rebuild = TRUE, root = .repo_root)
+  lowered <- .lower_direct_prep(prep)
 
   testthat::expect_length(lowered$variants, 1L)
   variant <- lowered$variants[[1]]
@@ -49,7 +43,7 @@ testthat::test_that("projected shared trigger lowers as one independent runtime 
     add_trigger("tg", members = c("a", "b"), q = 0.2, draw = "shared")
 
   prep <- prepare_model(spec)
-  lowered <- .lower_direct_prep(prep, root = .repo_root)
+  lowered <- .lower_direct_prep(prep)
 
   variant <- lowered$variants[[1]]
   program <- variant$program
@@ -75,7 +69,7 @@ testthat::test_that("pooled direct outcomes lower to pool topology without seman
     add_outcome("C", "c")
 
   prep <- prepare_model(spec)
-  lowered <- .lower_direct_prep(prep, root = .repo_root)
+  lowered <- .lower_direct_prep(prep)
 
   variant <- lowered$variants[[1]]
   program <- variant$program
@@ -100,7 +94,7 @@ testthat::test_that("exact variants are rejected instead of half-lowering", {
   prep <- prepare_model(spec)
 
   testthat::expect_error(
-    .lower_direct_prep(prep, root = .repo_root),
+    .lower_direct_prep(prep),
     "cannot lower exact variant.*ranked observation"
   )
 })

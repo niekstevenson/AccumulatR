@@ -663,22 +663,11 @@ private:
       if (outcome.has_guess) {
         push_unique(&variant->backend_reasons, "guess outcome");
       }
-      if (!outcome.outcome_class.empty()) {
-        push_unique(&variant->backend_reasons, "special outcome class");
-      }
 
       const auto &root =
           variant->model.expr_nodes[static_cast<std::size_t>(outcome.expr_root)];
       if (root.kind != semantic::ExprKind::Event) {
         push_unique(&variant->backend_reasons, "non-direct outcome");
-        continue;
-      }
-      if (root.source.kind == semantic::SourceKind::Special) {
-        push_unique(&variant->backend_reasons, "special event source");
-        continue;
-      }
-      if (root.event_k > 0) {
-        push_unique(&variant->backend_reasons, "ranked event selector");
         continue;
       }
       variant->direct_outcomes.push_back(

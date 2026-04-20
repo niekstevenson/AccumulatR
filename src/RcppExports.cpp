@@ -65,6 +65,17 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// semantic_compile_observed_plan_prep_cpp
+SEXP semantic_compile_observed_plan_prep_cpp(SEXP prepSEXP);
+RcppExport SEXP _AccumulatR_semantic_compile_observed_plan_prep_cpp(SEXP prepSEXPSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type prepSEXP(prepSEXPSEXP);
+    rcpp_result_gen = Rcpp::wrap(semantic_compile_observed_plan_prep_cpp(prepSEXP));
+    return rcpp_result_gen;
+END_RCPP
+}
 // semantic_direct_loglik_prep_cpp
 SEXP semantic_direct_loglik_prep_cpp(SEXP prepSEXP, SEXP paramsSEXP, SEXP dataSEXP, SEXP minLLSEXP);
 RcppExport SEXP _AccumulatR_semantic_direct_loglik_prep_cpp(SEXP prepSEXPSEXP, SEXP paramsSEXPSEXP, SEXP dataSEXPSEXP, SEXP minLLSEXPSEXP) {
@@ -120,16 +131,17 @@ BEGIN_RCPP
 END_RCPP
 }
 // semantic_observed_loglik_prep_cpp
-SEXP semantic_observed_loglik_prep_cpp(SEXP prepSEXP, SEXP paramsSEXP, SEXP dataSEXP, SEXP minLLSEXP);
-RcppExport SEXP _AccumulatR_semantic_observed_loglik_prep_cpp(SEXP prepSEXPSEXP, SEXP paramsSEXPSEXP, SEXP dataSEXPSEXP, SEXP minLLSEXPSEXP) {
+SEXP semantic_observed_loglik_prep_cpp(SEXP prepSEXP, SEXP observedPlanSEXP, SEXP paramsSEXP, SEXP dataSEXP, SEXP minLLSEXP);
+RcppExport SEXP _AccumulatR_semantic_observed_loglik_prep_cpp(SEXP prepSEXPSEXP, SEXP observedPlanSEXPSEXP, SEXP paramsSEXPSEXP, SEXP dataSEXPSEXP, SEXP minLLSEXPSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< SEXP >::type prepSEXP(prepSEXPSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type observedPlanSEXP(observedPlanSEXPSEXP);
     Rcpp::traits::input_parameter< SEXP >::type paramsSEXP(paramsSEXPSEXP);
     Rcpp::traits::input_parameter< SEXP >::type dataSEXP(dataSEXPSEXP);
     Rcpp::traits::input_parameter< SEXP >::type minLLSEXP(minLLSEXPSEXP);
-    rcpp_result_gen = Rcpp::wrap(semantic_observed_loglik_prep_cpp(prepSEXP, paramsSEXP, dataSEXP, minLLSEXP));
+    rcpp_result_gen = Rcpp::wrap(semantic_observed_loglik_prep_cpp(prepSEXP, observedPlanSEXP, paramsSEXP, dataSEXP, minLLSEXP));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -140,11 +152,12 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_semantic_project_prep_cpp", (DL_FUNC) &_AccumulatR_semantic_project_prep_cpp, 1},
     {"_AccumulatR_semantic_lower_direct_prep_cpp", (DL_FUNC) &_AccumulatR_semantic_lower_direct_prep_cpp, 1},
     {"_AccumulatR_semantic_lower_exact_prep_cpp", (DL_FUNC) &_AccumulatR_semantic_lower_exact_prep_cpp, 1},
+    {"_AccumulatR_semantic_compile_observed_plan_prep_cpp", (DL_FUNC) &_AccumulatR_semantic_compile_observed_plan_prep_cpp, 1},
     {"_AccumulatR_semantic_direct_loglik_prep_cpp", (DL_FUNC) &_AccumulatR_semantic_direct_loglik_prep_cpp, 4},
     {"_AccumulatR_semantic_direct_prob_prep_cpp", (DL_FUNC) &_AccumulatR_semantic_direct_prob_prep_cpp, 3},
     {"_AccumulatR_semantic_exact_loglik_prep_cpp", (DL_FUNC) &_AccumulatR_semantic_exact_loglik_prep_cpp, 4},
     {"_AccumulatR_semantic_exact_prob_prep_cpp", (DL_FUNC) &_AccumulatR_semantic_exact_prob_prep_cpp, 3},
-    {"_AccumulatR_semantic_observed_loglik_prep_cpp", (DL_FUNC) &_AccumulatR_semantic_observed_loglik_prep_cpp, 4},
+    {"_AccumulatR_semantic_observed_loglik_prep_cpp", (DL_FUNC) &_AccumulatR_semantic_observed_loglik_prep_cpp, 5},
     {NULL, NULL, 0}
 };
 

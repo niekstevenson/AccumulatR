@@ -23,13 +23,24 @@ struct DirectOutcomeSpec {
   semantic::SourceRef source{};
 };
 
+struct VariantCapabilities {
+  bool no_surviving_outcomes{false};
+  bool ranked_observation{false};
+  bool chained_onset{false};
+  bool shared_trigger{false};
+  bool outcome_remapping{false};
+  bool guess_outcome{false};
+  bool non_direct_outcome{false};
+};
+
 struct CompiledVariant {
   std::string component_id;
   double weight{1.0};
   std::string weight_name;
   semantic::SemanticModel model{};
   BackendKind backend{BackendKind::Exact};
-  std::vector<std::string> backend_reasons;
+  BackendKind semantic_backend{BackendKind::Exact};
+  VariantCapabilities capabilities{};
   std::vector<DirectOutcomeSpec> direct_outcomes;
 };
 
@@ -45,11 +56,12 @@ inline std::string to_string(BackendKind backend) {
   return backend == BackendKind::Direct ? "direct" : "exact";
 }
 
-inline void push_unique(std::vector<std::string> *values,
-                        const std::string &value) {
-  if (std::find(values->begin(), values->end(), value) == values->end()) {
-    values->push_back(value);
-  }
+inline bool supports_semantic_direct(const VariantCapabilities &capabilities) {
+  return !capabilities.no_surviving_outcomes &&
+         !capabilities.ranked_observation &&
+         !capabilities.chained_onset &&
+         !capabilities.shared_trigger &&
+         !capabilities.non_direct_outcome;
 }
 
 inline bool source_is_dead(const semantic::SourceRef &ref) {
@@ -638,53 +650,55 @@ private:
 
   void classify_backend(CompiledVariant *variant) {
     if (variant->model.outcomes.empty()) {
-      push_unique(&variant->backend_reasons, "no surviving outcomes");
+      variant->capabilities.no_surviving_outcomes = true;
     }
     if (variant->model.observation.n_outcomes > 1) {
-      push_unique(&variant->backend_reasons, "ranked observation");
+      variant->capabilities.ranked_observation = true;
     }
     for (const auto &leaf : variant->model.leaves) {
       if (leaf.onset.kind != semantic::OnsetKind::Absolute) {
-        push_unique(&variant->backend_reasons, "chained onset");
+        variant->capabilities.chained_onset = true;
       }
     }
     for (const auto &trigger : variant->model.triggers) {
       if (trigger.kind == semantic::TriggerKind::Shared &&
           trigger.leaf_indices.size() > 1U) {
-        push_unique(&variant->backend_reasons, "shared trigger");
+        variant->capabilities.shared_trigger = true;
       }
     }
 
     for (const auto &outcome : variant->model.outcomes) {
       if (outcome.mapping.maps_to_missing ||
           !outcome.mapping.observed_label.empty()) {
-        push_unique(&variant->backend_reasons, "outcome remapping");
+        variant->capabilities.outcome_remapping = true;
       }
       if (outcome.has_guess) {
-        push_unique(&variant->backend_reasons, "guess outcome");
+        variant->capabilities.guess_outcome = true;
       }
 
       const auto &root =
           variant->model.expr_nodes[static_cast<std::size_t>(outcome.expr_root)];
       if (root.kind != semantic::ExprKind::Event) {
-        push_unique(&variant->backend_reasons, "non-direct outcome");
+        variant->capabilities.non_direct_outcome = true;
         continue;
       }
       variant->direct_outcomes.push_back(
           DirectOutcomeSpec{outcome.label, root.source});
     }
 
-    variant->backend = variant->backend_reasons.empty()
-                           ? BackendKind::Direct
-                           : BackendKind::Exact;
+    variant->semantic_backend =
+        supports_semantic_direct(variant->capabilities)
+            ? BackendKind::Direct
+            : BackendKind::Exact;
+    variant->backend =
+        (variant->semantic_backend == BackendKind::Direct &&
+         !variant->capabilities.outcome_remapping &&
+         !variant->capabilities.guess_outcome)
+            ? BackendKind::Direct
+            : BackendKind::Exact;
     if (variant->backend == BackendKind::Exact) {
-      bool keep_direct_outcomes = true;
-      for (const auto &reason : variant->backend_reasons) {
-        if (reason != "outcome remapping" && reason != "guess outcome") {
-          keep_direct_outcomes = false;
-          break;
-        }
-      }
+      const bool keep_direct_outcomes =
+          variant->semantic_backend == BackendKind::Direct;
       if (!keep_direct_outcomes) {
         variant->direct_outcomes.clear();
       }
@@ -751,7 +765,19 @@ inline Rcpp::List to_r_list(const CompiledModel &compiled) {
     variant_list["weight"] = variant.weight;
     variant_list["weight_name"] = variant.weight_name;
     variant_list["backend"] = detail::to_string(variant.backend);
-    variant_list["backend_reasons"] = variant.backend_reasons;
+    variant_list["semantic_backend"] = detail::to_string(variant.semantic_backend);
+    variant_list["capabilities"] = Rcpp::List::create(
+        Rcpp::Named("no_surviving_outcomes") =
+            variant.capabilities.no_surviving_outcomes,
+        Rcpp::Named("ranked_observation") =
+            variant.capabilities.ranked_observation,
+        Rcpp::Named("chained_onset") = variant.capabilities.chained_onset,
+        Rcpp::Named("shared_trigger") = variant.capabilities.shared_trigger,
+        Rcpp::Named("outcome_remapping") =
+            variant.capabilities.outcome_remapping,
+        Rcpp::Named("guess_outcome") = variant.capabilities.guess_outcome,
+        Rcpp::Named("non_direct_outcome") =
+            variant.capabilities.non_direct_outcome);
     variant_list["direct_outcomes"] = direct_outcomes;
     variants[i] = variant_list;
   }

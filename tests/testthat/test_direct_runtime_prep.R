@@ -95,6 +95,6 @@ testthat::test_that("exact variants are rejected instead of half-lowering", {
 
   testthat::expect_error(
     .lower_direct_prep(prep),
-    "cannot lower exact variant.*ranked observation"
+    "cannot lower exact variant"
   )
 })

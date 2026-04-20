@@ -57,7 +57,6 @@ struct LoweredExactVariant {
   std::string component_id;
   double weight{1.0};
   std::string weight_name;
-  std::vector<std::string> backend_reasons;
   ExactProgram program{};
   std::vector<std::string> param_keys;
   std::vector<std::string> leaf_ids;
@@ -203,7 +202,6 @@ inline LoweredExactVariant lower_exact_variant(
   lowered.component_id = variant.component_id;
   lowered.weight = variant.weight;
   lowered.weight_name = variant.weight_name;
-  lowered.backend_reasons = variant.backend_reasons;
 
   const auto &model = variant.model;
   auto &program = lowered.program;
@@ -348,7 +346,6 @@ inline Rcpp::List to_r_list(const LoweredExactModel &lowered) {
         Rcpp::Named("component_id") = variant.component_id,
         Rcpp::Named("weight") = variant.weight,
         Rcpp::Named("weight_name") = variant.weight_name,
-        Rcpp::Named("backend_reasons") = variant.backend_reasons,
         Rcpp::Named("param_keys") = variant.param_keys,
         Rcpp::Named("leaf_ids") = variant.leaf_ids,
         Rcpp::Named("pool_ids") = variant.pool_ids,

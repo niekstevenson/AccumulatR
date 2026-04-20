@@ -18,6 +18,10 @@
   semantic_lower_exact_prep_cpp(prep)
 }
 
+.compile_observed_plan_prep <- function(prep) {
+  semantic_compile_observed_plan_prep_cpp(prep)
+}
+
 .direct_loglik_prep <- function(prep,
                                 params,
                                 data,
@@ -63,11 +67,13 @@
 }
 
 .observed_loglik_prep <- function(prep,
+                                  observed_plan,
                                   params,
                                   data,
                                   min_ll = log(1e-10)) {
   semantic_observed_loglik_prep_cpp(
     prep,
+    observed_plan,
     as.matrix(params),
     as.data.frame(data, stringsAsFactors = FALSE),
     as.numeric(min_ll)

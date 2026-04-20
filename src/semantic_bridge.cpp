@@ -6,6 +6,7 @@
 #include "eval/direct_kernel.hpp"
 #include "eval/exact_kernel.hpp"
 #include "eval/observed_kernel.hpp"
+#include "eval/observed_plan.hpp"
 #include "runtime/direct_program.hpp"
 #include "runtime/exact_program.hpp"
 
@@ -52,6 +53,15 @@ SEXP semantic_lower_exact_prep_cpp(SEXP prepSEXP) {
   const auto compiled = accumulatr::compile::project_semantic_model(model);
   const auto lowered = accumulatr::runtime::lower_exact_model(compiled);
   return accumulatr::runtime::to_r_list(lowered);
+}
+
+// [[Rcpp::export]]
+SEXP semantic_compile_observed_plan_prep_cpp(SEXP prepSEXP) {
+  Rcpp::List prep(prepSEXP);
+  const auto model = accumulatr::compile::compile_prep(prep);
+  const auto compiled = accumulatr::compile::project_semantic_model(model);
+  return accumulatr::eval::detail::to_r_observed_plan(
+      accumulatr::eval::detail::build_component_observation_plans(prep, compiled));
 }
 
 // [[Rcpp::export]]
@@ -116,6 +126,7 @@ SEXP semantic_exact_prob_prep_cpp(SEXP prepSEXP,
 
 // [[Rcpp::export]]
 SEXP semantic_observed_loglik_prep_cpp(SEXP prepSEXP,
+                                       SEXP observedPlanSEXP,
                                        SEXP paramsSEXP,
                                        SEXP dataSEXP,
                                        SEXP minLLSEXP) {
@@ -124,7 +135,7 @@ SEXP semantic_observed_loglik_prep_cpp(SEXP prepSEXP,
   const auto compiled = accumulatr::compile::project_semantic_model(model);
   const double min_ll = Rcpp::as<double>(minLLSEXP);
   return accumulatr::eval::detail::evaluate_observed_trials(
-      prep,
+      observedPlanSEXP,
       model,
       compiled,
       paramsSEXP,

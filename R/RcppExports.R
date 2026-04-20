@@ -21,6 +21,10 @@ semantic_lower_exact_prep_cpp <- function(prepSEXP) {
     .Call(`_AccumulatR_semantic_lower_exact_prep_cpp`, prepSEXP)
 }
 
+semantic_compile_observed_plan_prep_cpp <- function(prepSEXP) {
+    .Call(`_AccumulatR_semantic_compile_observed_plan_prep_cpp`, prepSEXP)
+}
+
 semantic_direct_loglik_prep_cpp <- function(prepSEXP, paramsSEXP, dataSEXP, minLLSEXP) {
     .Call(`_AccumulatR_semantic_direct_loglik_prep_cpp`, prepSEXP, paramsSEXP, dataSEXP, minLLSEXP)
 }
@@ -37,7 +41,7 @@ semantic_exact_prob_prep_cpp <- function(prepSEXP, paramsSEXP, dataSEXP) {
     .Call(`_AccumulatR_semantic_exact_prob_prep_cpp`, prepSEXP, paramsSEXP, dataSEXP)
 }
 
-semantic_observed_loglik_prep_cpp <- function(prepSEXP, paramsSEXP, dataSEXP, minLLSEXP) {
-    .Call(`_AccumulatR_semantic_observed_loglik_prep_cpp`, prepSEXP, paramsSEXP, dataSEXP, minLLSEXP)
+semantic_observed_loglik_prep_cpp <- function(prepSEXP, observedPlanSEXP, paramsSEXP, dataSEXP, minLLSEXP) {
+    .Call(`_AccumulatR_semantic_observed_loglik_prep_cpp`, prepSEXP, observedPlanSEXP, paramsSEXP, dataSEXP, minLLSEXP)
 }
 

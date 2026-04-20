@@ -2,345 +2,13 @@
 
 #include <Rcpp.h>
 
-#include <cmath>
-#include <limits>
-#include <stdexcept>
-#include <string>
-#include <unordered_map>
-#include <utility>
-#include <vector>
-
 #include "direct_kernel.hpp"
 #include "exact_kernel.hpp"
+#include "observed_plan.hpp"
+#include "trial_data.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
-
-enum class ObservedRtKind : std::uint8_t {
-  Keep = 0,
-  Missing = 1
-};
-
-enum class ObservedTrialKind : std::uint8_t {
-  Finite = 0,
-  Ranked = 1,
-  MissingRt = 2,
-  MissingAll = 3,
-  UnsupportedMissingLabel = 4
-};
-
-struct ObservedBranch {
-  std::string semantic_label;
-  double weight{1.0};
-  ObservedRtKind rt_kind{ObservedRtKind::Keep};
-};
-
-struct ComponentObservationPlan {
-  compile::BackendKind observed_backend{compile::BackendKind::Exact};
-  compile::BackendKind semantic_backend{compile::BackendKind::Exact};
-  std::unordered_map<std::string, std::vector<ObservedBranch>> keep;
-  std::unordered_map<std::string, std::vector<ObservedBranch>> missing_rt;
-  std::vector<ObservedBranch> finite_observed_branches;
-};
-
-struct ObservedTrialPlan {
-  semantic::Index trial_index{semantic::kInvalidIndex};
-  semantic::Index start_row{semantic::kInvalidIndex};
-  semantic::Index end_row{semantic::kInvalidIndex};
-  std::string component_id;
-  std::string observed_label;
-  double observed_rt{NA_REAL};
-  ObservedTrialKind kind{ObservedTrialKind::Finite};
-};
-
-struct ObservedRecord {
-  semantic::Index trial_index{semantic::kInvalidIndex};
-  compile::BackendKind backend{compile::BackendKind::Exact};
-  std::string semantic_label;
-  double weight{1.0};
-};
-
-inline bool backend_is_semantic_direct(const compile::CompiledVariant &variant) {
-  if (variant.backend == compile::BackendKind::Direct) {
-    return true;
-  }
-  for (const auto &reason : variant.backend_reasons) {
-    if (reason != "outcome remapping" && reason != "guess outcome") {
-      return false;
-    }
-  }
-  return true;
-}
-
-inline bool string_cell_is_na(const Rcpp::CharacterVector &column,
-                              const R_xlen_t row) {
-  return STRING_ELT(column, row) == NA_STRING;
-}
-
-inline bool string_vector_contains(const std::vector<std::string> &values,
-                                   const std::string &needle) {
-  return std::find(values.begin(), values.end(), needle) != values.end();
-}
-
-inline std::vector<std::string> as_string_vector_checked(SEXP value) {
-  if (Rf_isNull(value)) {
-    return {};
-  }
-  if (TYPEOF(value) != STRSXP) {
-    throw std::runtime_error("observation options must use character vectors");
-  }
-  Rcpp::CharacterVector chr(value);
-  std::vector<std::string> out;
-  out.reserve(chr.size());
-  for (R_xlen_t i = 0; i < chr.size(); ++i) {
-    if (STRING_ELT(chr, i) == NA_STRING) {
-      out.emplace_back();
-    } else {
-      out.push_back(Rcpp::as<std::string>(chr[i]));
-    }
-  }
-  return out;
-}
-
-inline std::string as_optional_string(SEXP value) {
-  if (Rf_isNull(value) || TYPEOF(value) != STRSXP) {
-    return {};
-  }
-  Rcpp::CharacterVector chr(value);
-  if (chr.size() == 0 || STRING_ELT(chr, 0) == NA_STRING) {
-    return {};
-  }
-  return Rcpp::as<std::string>(chr[0]);
-}
-
-inline bool component_matches_outcome(SEXP options_sexp,
-                                      const std::string &component_id) {
-  if (Rf_isNull(options_sexp)) {
-    return false;
-  }
-  Rcpp::List options(options_sexp);
-  if (!options.containsElementNamed("component") || Rf_isNull(options["component"])) {
-    return false;
-  }
-  const auto component_ids = as_string_vector_checked(options["component"]);
-  return string_vector_contains(component_ids, component_id);
-}
-
-inline bool outcome_is_unrestricted(SEXP options_sexp) {
-  if (Rf_isNull(options_sexp)) {
-    return true;
-  }
-  Rcpp::List options(options_sexp);
-  return !options.containsElementNamed("component") || Rf_isNull(options["component"]);
-}
-
-inline semantic::Index resolve_outcome_def_index(const Rcpp::List &outcomes,
-                                                 const Rcpp::CharacterVector &outcome_names,
-                                                 const std::string &semantic_label,
-                                                 const std::string &component_id) {
-  std::vector<semantic::Index> matches;
-  for (R_xlen_t i = 0; i < outcomes.size(); ++i) {
-    if (i < outcome_names.size() &&
-        !string_cell_is_na(outcome_names, i) &&
-        Rcpp::as<std::string>(outcome_names[i]) == semantic_label) {
-      matches.push_back(static_cast<semantic::Index>(i));
-    }
-  }
-  if (matches.empty()) {
-    return semantic::kInvalidIndex;
-  }
-  for (const auto idx : matches) {
-    const Rcpp::List outcome(outcomes[static_cast<R_xlen_t>(idx)]);
-    const SEXP options_sexp =
-        outcome.containsElementNamed("options") ? outcome["options"] : R_NilValue;
-    if (component_matches_outcome(options_sexp, component_id)) {
-      return idx;
-    }
-  }
-  for (const auto idx : matches) {
-    const Rcpp::List outcome(outcomes[static_cast<R_xlen_t>(idx)]);
-    const SEXP options_sexp =
-        outcome.containsElementNamed("options") ? outcome["options"] : R_NilValue;
-    if (outcome_is_unrestricted(options_sexp)) {
-      return idx;
-    }
-  }
-  return semantic::kInvalidIndex;
-}
-
-inline void append_branch(
-    std::unordered_map<std::string, std::vector<ObservedBranch>> *map,
-    const std::string &observed_label,
-    const ObservedBranch &branch,
-    std::vector<ObservedBranch> *finite_observed_branches) {
-  auto &bucket = (*map)[observed_label];
-  bucket.push_back(branch);
-  finite_observed_branches->push_back(branch);
-}
-
-inline std::unordered_map<std::string, ComponentObservationPlan>
-build_component_observation_plans(const Rcpp::List &prep,
-                                  const compile::CompiledModel &compiled) {
-  if (!prep.containsElementNamed("outcomes") || Rf_isNull(prep["outcomes"])) {
-    throw std::runtime_error("prep must contain outcomes for observed likelihood evaluation");
-  }
-
-  std::unordered_map<std::string, ComponentObservationPlan> plans;
-  plans.reserve(compiled.variants.size());
-  for (const auto &variant : compiled.variants) {
-    ComponentObservationPlan plan;
-    plan.observed_backend = variant.backend;
-    plan.semantic_backend =
-        backend_is_semantic_direct(variant) ? compile::BackendKind::Direct
-                                            : compile::BackendKind::Exact;
-    plans.emplace(variant.component_id, std::move(plan));
-  }
-
-  Rcpp::List outcomes(prep["outcomes"]);
-  const SEXP names_sexp = outcomes.names();
-  const Rcpp::CharacterVector outcome_names =
-      Rf_isNull(names_sexp) ? Rcpp::CharacterVector()
-                            : Rcpp::CharacterVector(names_sexp);
-
-  std::vector<std::string> semantic_labels;
-  semantic_labels.reserve(outcomes.size());
-  for (R_xlen_t i = 0; i < outcome_names.size(); ++i) {
-    if (string_cell_is_na(outcome_names, i)) {
-      continue;
-    }
-    const auto label = Rcpp::as<std::string>(outcome_names[i]);
-    if (!string_vector_contains(semantic_labels, label)) {
-      semantic_labels.push_back(label);
-    }
-  }
-
-  for (auto &entry : plans) {
-    const auto &component_id = entry.first;
-    auto &plan = entry.second;
-    const auto variant_it = std::find_if(
-        compiled.variants.begin(),
-        compiled.variants.end(),
-        [&component_id](const compile::CompiledVariant &variant) {
-          return variant.component_id == component_id;
-        });
-    if (variant_it == compiled.variants.end()) {
-      throw std::runtime_error(
-          "observation plan found no compiled variant for component '" +
-          component_id + "'");
-    }
-    std::vector<std::string> surviving_labels;
-    surviving_labels.reserve(variant_it->model.outcomes.size());
-    for (const auto &outcome : variant_it->model.outcomes) {
-      surviving_labels.push_back(outcome.label);
-    }
-
-    for (const auto &semantic_label : semantic_labels) {
-      if (!string_vector_contains(surviving_labels, semantic_label)) {
-        continue;
-      }
-      const auto outcome_idx =
-          resolve_outcome_def_index(outcomes, outcome_names, semantic_label, component_id);
-      if (outcome_idx == semantic::kInvalidIndex) {
-        continue;
-      }
-
-      const Rcpp::List outcome(outcomes[static_cast<R_xlen_t>(outcome_idx)]);
-      const Rcpp::List options =
-          outcome.containsElementNamed("options") && !Rf_isNull(outcome["options"])
-              ? Rcpp::List(outcome["options"])
-              : Rcpp::List();
-
-      std::vector<std::pair<std::string, ObservedBranch>> branches;
-      branches.push_back({semantic_label,
-                          ObservedBranch{semantic_label, 1.0, ObservedRtKind::Keep}});
-
-      if (options.containsElementNamed("guess") && !Rf_isNull(options["guess"])) {
-        const Rcpp::List guess(options["guess"]);
-        if (!guess.containsElementNamed("labels") ||
-            !guess.containsElementNamed("weights") ||
-            Rf_isNull(guess["labels"]) ||
-            Rf_isNull(guess["weights"])) {
-          throw std::runtime_error(
-              "guess option requires labels and weights");
-        }
-        const auto guess_labels = as_string_vector_checked(guess["labels"]);
-        const Rcpp::NumericVector guess_weights(guess["weights"]);
-        const std::string rt_policy =
-            guess.containsElementNamed("rt_policy") && !Rf_isNull(guess["rt_policy"])
-                ? as_optional_string(guess["rt_policy"])
-                : "keep";
-        if (guess_labels.size() != static_cast<std::size_t>(guess_weights.size())) {
-          throw std::runtime_error(
-              "guess option requires labels and weights of equal length");
-        }
-        if (rt_policy != "keep" && rt_policy != "na") {
-          throw std::runtime_error("guess rt_policy must be 'keep' or 'na'");
-        }
-        branches.clear();
-        branches.reserve(guess_labels.size());
-        for (R_xlen_t i = 0; i < guess_weights.size(); ++i) {
-          branches.push_back(
-              {guess_labels[static_cast<std::size_t>(i)],
-               ObservedBranch{
-                   semantic_label,
-                   guess_weights[i],
-                   rt_policy == "na" ? ObservedRtKind::Missing
-                                      : ObservedRtKind::Keep}});
-        }
-      }
-
-      bool map_missing = false;
-      std::string mapped_label;
-      if (options.containsElementNamed("map_outcome_to") &&
-          !Rf_isNull(options["map_outcome_to"])) {
-        if (TYPEOF(options["map_outcome_to"]) != STRSXP) {
-          throw std::runtime_error("map_outcome_to must be character or NA");
-        }
-        Rcpp::CharacterVector target(options["map_outcome_to"]);
-        if (target.size() > 0 && STRING_ELT(target, 0) == NA_STRING) {
-          map_missing = true;
-        } else if (target.size() > 0) {
-          mapped_label = Rcpp::as<std::string>(target[0]);
-        }
-      }
-
-      for (auto &branch : branches) {
-        const double weight = branch.second.weight;
-        if (!std::isfinite(weight) || !(weight > 0.0)) {
-          continue;
-        }
-
-        std::string observed_label = branch.first;
-        if (map_missing) {
-          observed_label.clear();
-          branch.second.rt_kind = ObservedRtKind::Missing;
-        } else if (!mapped_label.empty()) {
-          observed_label = mapped_label;
-        }
-
-        if (observed_label.empty()) {
-          continue;
-        }
-
-        if (branch.second.rt_kind == ObservedRtKind::Keep) {
-          append_branch(
-              &plan.keep,
-              observed_label,
-              branch.second,
-              &plan.finite_observed_branches);
-        } else {
-          append_branch(
-              &plan.missing_rt,
-              observed_label,
-              branch.second,
-              &plan.finite_observed_branches);
-        }
-      }
-    }
-  }
-
-  return plans;
-}
 
 inline std::string read_string_cell(const Rcpp::CharacterVector &column,
                                     const R_xlen_t row) {
@@ -361,32 +29,11 @@ inline std::vector<ObservedTrialPlan> build_observed_trial_plan(
     throw std::runtime_error("observed likelihood evaluator requires columns R and rt");
   }
 
-  int max_rank = 1;
-  for (int rank = 2;; ++rank) {
-    const std::string r_col = "R" + std::to_string(rank);
-    const std::string rt_col = "rt" + std::to_string(rank);
-    const bool has_r = data.containsElementNamed(r_col.c_str());
-    const bool has_rt = data.containsElementNamed(rt_col.c_str());
-    if (has_r != has_rt) {
-      throw std::runtime_error(
-          "ranked columns must appear as matched Rk/rtk pairs");
-    }
-    if (!has_r) {
-      break;
-    }
-    max_rank = rank;
-  }
+  const int max_rank = detect_rank_count(data, "");
 
-  const auto trial =
-      data.containsElementNamed("trial")
-          ? Rcpp::as<Rcpp::IntegerVector>(data["trial"])
-          : Rcpp::seq_len(n_rows);
+  const auto table = read_trial_table_view(data);
   const auto label = Rcpp::as<Rcpp::CharacterVector>(data["R"]);
   const auto rt = Rcpp::as<Rcpp::NumericVector>(data["rt"]);
-  const bool has_component = data.containsElementNamed("component");
-  const auto component =
-      has_component ? Rcpp::as<Rcpp::CharacterVector>(data["component"])
-                    : Rcpp::CharacterVector(n_rows, NA_STRING);
 
   std::vector<Rcpp::CharacterVector> rank_labels(static_cast<std::size_t>(max_rank + 1));
   std::vector<Rcpp::NumericVector> rank_times(static_cast<std::size_t>(max_rank + 1));
@@ -400,22 +47,21 @@ inline std::vector<ObservedTrialPlan> build_observed_trial_plan(
   std::vector<ObservedTrialPlan> out;
   int last_trial = NA_INTEGER;
   for (R_xlen_t i = 0; i < n_rows; ++i) {
-    if (i > 0 && trial[i] == last_trial) {
+    if (i > 0 && table.trial[i] == last_trial) {
       continue;
     }
     const auto start = static_cast<semantic::Index>(i);
     semantic::Index end = start;
-    while (static_cast<R_xlen_t>(end + 1) < n_rows && trial[end + 1] == trial[i]) {
+    while (static_cast<R_xlen_t>(end + 1) < n_rows &&
+           table.trial[end + 1] == table.trial[i]) {
       ++end;
     }
-    last_trial = trial[i];
+    last_trial = table.trial[i];
 
-    std::string component_id = "__default__";
-    if (has_component && !string_cell_is_na(component, i)) {
-      component_id = Rcpp::as<std::string>(component[i]);
-    } else if (component_plans.size() == 1U) {
-      component_id = component_plans.begin()->first;
-    }
+    std::string component_id =
+        component_id_at_row(table, i, component_plans.size() == 1U
+                                          ? component_plans.begin()->first
+                                          : "__default__");
     const auto component_it = component_plans.find(component_id);
     if (component_it == component_plans.end()) {
       throw std::runtime_error(
@@ -714,7 +360,7 @@ inline double logsumexp_records(const std::vector<double> &values) {
   return sum > 0.0 ? anchor + std::log(sum) : R_NegInf;
 }
 
-inline SEXP evaluate_observed_trials(const Rcpp::List &prep,
+inline SEXP evaluate_observed_trials(SEXP observedPlanSEXP,
                                      const semantic::SemanticModel &model,
                                      const compile::CompiledModel &compiled,
                                      SEXP paramsSEXP,
@@ -722,7 +368,7 @@ inline SEXP evaluate_observed_trials(const Rcpp::List &prep,
                                      const double min_ll) {
   Rcpp::DataFrame data(dataSEXP);
   Rcpp::NumericMatrix params(Rcpp::as<Rcpp::NumericMatrix>(paramsSEXP));
-  const auto component_plans = build_component_observation_plans(prep, compiled);
+  const auto component_plans = observed_plan_from_r(observedPlanSEXP);
   const auto trials = build_observed_trial_plan(data, component_plans);
 
   Rcpp::NumericVector loglik(trials.size(), min_ll);

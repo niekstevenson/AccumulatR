@@ -240,7 +240,8 @@ prepare_data <- function(structure,
   structure(list(
     native_ctx = native_ctx,
     cpp = list(
-      prep = prep_eval_base
+      prep = prep_eval_base,
+      observed_plan = .compile_observed_plan_prep(prep_eval_base)
     )
   ), class = "accumulatr_context")
 }
@@ -1235,6 +1236,7 @@ log_likelihood.accumulatr_context <- function(context,
     param_kept <- param_mat[keep_rows, , drop = FALSE]
     observed <- .observed_loglik_prep(
       cpp_ctx$prep,
+      cpp_ctx$observed_plan,
       param_kept,
       data_kept,
       min_ll = min_ll

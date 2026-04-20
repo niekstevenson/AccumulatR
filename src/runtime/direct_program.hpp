@@ -64,17 +64,6 @@ struct LoweredDirectModel {
 
 namespace detail {
 
-inline std::string join_reasons(const std::vector<std::string> &reasons) {
-  std::string joined;
-  for (std::size_t i = 0; i < reasons.size(); ++i) {
-    if (i > 0) {
-      joined += ", ";
-    }
-    joined += reasons[i];
-  }
-  return joined;
-}
-
 class SlotAllocator {
 public:
   semantic::Index slot_for(const std::string &key) {
@@ -101,15 +90,7 @@ private:
 };
 
 inline bool variant_is_semantic_direct(const compile::CompiledVariant &variant) {
-  if (variant.backend == compile::BackendKind::Direct) {
-    return true;
-  }
-  for (const auto &reason : variant.backend_reasons) {
-    if (reason != "outcome remapping" && reason != "guess outcome") {
-      return false;
-    }
-  }
-  return true;
+  return variant.semantic_backend == compile::BackendKind::Direct;
 }
 
 inline void require_direct_variant(const compile::CompiledVariant &variant) {
@@ -120,9 +101,6 @@ inline void require_direct_variant(const compile::CompiledVariant &variant) {
   std::string message = "cannot lower exact variant";
   if (!variant.component_id.empty()) {
     message += " '" + variant.component_id + "'";
-  }
-  if (!variant.backend_reasons.empty()) {
-    message += ": " + join_reasons(variant.backend_reasons);
   }
   throw std::runtime_error(message);
 }

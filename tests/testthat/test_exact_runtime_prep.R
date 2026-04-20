@@ -15,8 +15,6 @@ testthat::test_that("exact variant lowers to a dense runtime program", {
   program <- variant$program
 
   testthat::expect_equal(variant$component_id, "__default__")
-  testthat::expect_true("shared trigger" %in% variant$backend_reasons)
-  testthat::expect_true("non-direct outcome" %in% variant$backend_reasons)
   testthat::expect_equal(variant$leaf_ids, c("s", "stop", "change"))
   testthat::expect_equal(variant$outcome_labels, c("S", "X"))
 

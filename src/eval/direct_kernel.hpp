@@ -14,6 +14,7 @@
 
 #include "../leaf/channels.hpp"
 #include "../runtime/direct_program.hpp"
+#include "trial_data.hpp"
 
 namespace accumulatr::eval {
 
@@ -513,15 +514,7 @@ struct VariantPlan {
 };
 
 inline bool variant_is_semantic_direct(const compile::CompiledVariant &variant) {
-  if (variant.backend == compile::BackendKind::Direct) {
-    return true;
-  }
-  for (const auto &reason : variant.backend_reasons) {
-    if (reason != "outcome remapping" && reason != "guess outcome") {
-      return false;
-    }
-  }
-  return true;
+  return variant.semantic_backend == compile::BackendKind::Direct;
 }
 
 inline std::vector<semantic::Index> merge_support(
@@ -633,31 +626,21 @@ inline std::vector<TrialObservation> collapse_observations(
     throw std::runtime_error("direct evaluator data must include columns R and rt");
   }
 
-  Rcpp::IntegerVector trial =
-      data.containsElementNamed("trial")
-          ? Rcpp::as<Rcpp::IntegerVector>(data["trial"])
-          : Rcpp::seq_len(n_rows);
+  const auto table = read_trial_table_view(data);
   Rcpp::CharacterVector outcome = Rcpp::as<Rcpp::CharacterVector>(data["R"]);
   Rcpp::NumericVector rt = Rcpp::as<Rcpp::NumericVector>(data["rt"]);
-  const bool has_component = data.containsElementNamed("component");
-  Rcpp::CharacterVector component =
-      has_component ? Rcpp::as<Rcpp::CharacterVector>(data["component"])
-                    : Rcpp::CharacterVector(n_rows, NA_STRING);
 
   std::vector<TrialObservation> out;
   out.reserve(static_cast<std::size_t>(n_rows));
   int last_trial = NA_INTEGER;
   for (R_xlen_t i = 0; i < n_rows; ++i) {
-    const int trial_id = trial[i];
+    const int trial_id = table.trial[i];
     if (i > 0 && trial_id == last_trial) {
       continue;
     }
     last_trial = trial_id;
 
-    std::string component_id = "__default__";
-    if (has_component && component[i] != NA_STRING) {
-      component_id = Rcpp::as<std::string>(component[i]);
-    }
+    const std::string component_id = component_id_at_row(table, i);
     const auto it = variant_index_by_component.find(component_id);
     if (it == variant_index_by_component.end()) {
       throw std::runtime_error(
@@ -675,30 +658,6 @@ inline std::vector<TrialObservation> collapse_observations(
   return out;
 }
 
-inline std::vector<runtime::TrialBlock> build_trial_blocks(
-    const std::vector<TrialObservation> &observations) {
-  std::vector<runtime::TrialBlock> blocks;
-  if (observations.empty()) {
-    return blocks;
-  }
-  runtime::TrialBlock current;
-  current.variant_index = observations.front().variant_index;
-  current.start_row = 0;
-  current.row_count = 1;
-  for (std::size_t i = 1; i < observations.size(); ++i) {
-    if (observations[i].variant_index == current.variant_index) {
-      ++current.row_count;
-      continue;
-    }
-    blocks.push_back(current);
-    current.variant_index = observations[i].variant_index;
-    current.start_row = static_cast<int>(i);
-    current.row_count = 1;
-  }
-  blocks.push_back(current);
-  return blocks;
-}
-
 inline std::vector<ProbabilityQuery> collapse_probability_queries(
     const Rcpp::DataFrame &data,
     const std::unordered_map<std::string, semantic::Index> &variant_index_by_component) {
@@ -710,30 +669,20 @@ inline std::vector<ProbabilityQuery> collapse_probability_queries(
     throw std::runtime_error("probability queries must include column R");
   }
 
-  Rcpp::IntegerVector trial =
-      data.containsElementNamed("trial")
-          ? Rcpp::as<Rcpp::IntegerVector>(data["trial"])
-          : Rcpp::seq_len(n_rows);
+  const auto table = read_trial_table_view(data);
   Rcpp::CharacterVector outcome = Rcpp::as<Rcpp::CharacterVector>(data["R"]);
-  const bool has_component = data.containsElementNamed("component");
-  Rcpp::CharacterVector component =
-      has_component ? Rcpp::as<Rcpp::CharacterVector>(data["component"])
-                    : Rcpp::CharacterVector(n_rows, NA_STRING);
 
   std::vector<ProbabilityQuery> out;
   out.reserve(static_cast<std::size_t>(n_rows));
   int last_trial = NA_INTEGER;
   for (R_xlen_t i = 0; i < n_rows; ++i) {
-    const int trial_id = trial[i];
+    const int trial_id = table.trial[i];
     if (i > 0 && trial_id == last_trial) {
       continue;
     }
     last_trial = trial_id;
 
-    std::string component_id = "__default__";
-    if (has_component && component[i] != NA_STRING) {
-      component_id = Rcpp::as<std::string>(component[i]);
-    }
+    const std::string component_id = component_id_at_row(table, i);
     const auto it = variant_index_by_component.find(component_id);
     if (it == variant_index_by_component.end()) {
       throw std::runtime_error(
@@ -748,30 +697,6 @@ inline std::vector<ProbabilityQuery> collapse_probability_queries(
         Rcpp::as<std::string>(outcome[i])});
   }
   return out;
-}
-
-inline std::vector<runtime::TrialBlock> build_trial_blocks(
-    const std::vector<ProbabilityQuery> &queries) {
-  std::vector<runtime::TrialBlock> blocks;
-  if (queries.empty()) {
-    return blocks;
-  }
-  runtime::TrialBlock current;
-  current.variant_index = queries.front().variant_index;
-  current.start_row = 0;
-  current.row_count = 1;
-  for (std::size_t i = 1; i < queries.size(); ++i) {
-    if (queries[i].variant_index == current.variant_index) {
-      ++current.row_count;
-      continue;
-    }
-    blocks.push_back(current);
-    current.variant_index = queries[i].variant_index;
-    current.start_row = static_cast<int>(i);
-    current.row_count = 1;
-  }
-  blocks.push_back(current);
-  return blocks;
 }
 
 class TrialKernel {
@@ -989,7 +914,7 @@ inline Rcpp::List evaluate_direct_trials(const compile::CompiledModel &compiled,
   }
 
   const auto observations = collapse_observations(data, variant_index_by_component);
-  const auto blocks = build_trial_blocks(observations);
+  const auto blocks = build_variant_blocks(observations);
 
   std::unordered_map<semantic::Index, VariantPlan> plans;
   for (const auto &block : blocks) {
@@ -1075,7 +1000,7 @@ inline Rcpp::List evaluate_direct_outcome_probabilities(
   }
 
   const auto queries = collapse_probability_queries(data, variant_index_by_component);
-  const auto blocks = build_trial_blocks(queries);
+  const auto blocks = build_variant_blocks(queries);
 
   std::unordered_map<semantic::Index, VariantPlan> plans;
   for (const auto &block : blocks) {

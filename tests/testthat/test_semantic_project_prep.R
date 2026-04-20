@@ -19,7 +19,8 @@ testthat::test_that("projected simple race is classified as direct", {
     vapply(compiled$variants[[1]]$leaves, `[[`, character(1), "id"),
     c("a", "b")
   )
-  testthat::expect_length(compiled$variants[[1]]$backend_reasons, 0L)
+  testthat::expect_equal(compiled$variants[[1]]$semantic_backend, "direct")
+  testthat::expect_false(compiled$variants[[1]]$capabilities$ranked_observation)
 })
 
 testthat::test_that("projection removes dead guarded branches inside a component", {
@@ -68,8 +69,9 @@ testthat::test_that("projection removes dead guarded branches inside a component
   testthat::expect_true(all(vapply(by_id$go$expr_nodes, `[[`, character(1), "kind") == "event"))
 
   testthat::expect_equal(by_id$stop$backend, "exact")
-  testthat::expect_true("non-direct outcome" %in% by_id$stop$backend_reasons)
-  testthat::expect_true("outcome remapping" %in% by_id$stop$backend_reasons)
+  testthat::expect_equal(by_id$stop$semantic_backend, "exact")
+  testthat::expect_true(by_id$stop$capabilities$non_direct_outcome)
+  testthat::expect_true(by_id$stop$capabilities$outcome_remapping)
 })
 
 testthat::test_that("shared triggers are projected away when only one member survives", {
@@ -88,11 +90,11 @@ testthat::test_that("shared triggers are projected away when only one member sur
   by_id <- setNames(compiled$variants, vapply(compiled$variants, `[[`, character(1), "component_id"))
 
   testthat::expect_equal(by_id$one$backend, "direct")
-  testthat::expect_false("shared trigger" %in% by_id$one$backend_reasons)
+  testthat::expect_false(by_id$one$capabilities$shared_trigger)
   testthat::expect_equal(vapply(by_id$one$leaves, `[[`, character(1), "id"), "a")
 
   testthat::expect_equal(by_id$both$backend, "exact")
-  testthat::expect_true("shared trigger" %in% by_id$both$backend_reasons)
+  testthat::expect_true(by_id$both$capabilities$shared_trigger)
 })
 
 testthat::test_that("component observation overrides classify only the widened variant as exact", {
@@ -114,5 +116,5 @@ testthat::test_that("component observation overrides classify only the widened v
 
   testthat::expect_equal(by_id$double$observation$n_outcomes, 2L)
   testthat::expect_equal(by_id$double$backend, "exact")
-  testthat::expect_true("ranked observation" %in% by_id$double$backend_reasons)
+  testthat::expect_true(by_id$double$capabilities$ranked_observation)
 })

@@ -112,7 +112,7 @@ inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
         params,
         first_param_row,
         trigger_state,
-        ExactSequenceState{},
+        make_exact_sequence_state(plan),
         target_idx,
         rt,
         nullptr,
@@ -203,7 +203,7 @@ inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
       continue;
     }
     std::vector<std::uint8_t> used_outcomes(plan.outcomes.size(), 0U);
-    ExactSequenceState state;
+    ExactSequenceState state = make_exact_sequence_state(plan);
     total += trigger_state.weight *
              exact_ranked_sequence_probability(
                  plan,

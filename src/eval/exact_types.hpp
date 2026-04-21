@@ -59,12 +59,17 @@ struct ExactScenarioFactor {
 
 struct ExactTransitionScenario {
   ExactSourceKey active_key{};
+  semantic::Index active_source_id{semantic::kInvalidIndex};
   std::vector<ExactSourceKey> before_keys;
+  std::vector<semantic::Index> before_source_ids;
   std::vector<ExactSourceKey> after_keys;
+  std::vector<semantic::Index> after_source_ids;
   std::vector<semantic::Index> ready_exprs;
   std::vector<semantic::Index> tail_exprs;
   std::vector<ExactScenarioFactor> factors;
   std::vector<ExactSourceConstraint> forced;
+  std::vector<semantic::Index> forced_source_ids;
+  std::vector<ExactRelation> forced_source_relations;
 };
 
 struct ExactTriggerState {
@@ -74,7 +79,7 @@ struct ExactTriggerState {
 
 struct ExactSequenceState {
   double lower_bound{0.0};
-  std::unordered_map<ExactSourceKey, double, ExactSourceKeyHash> exact_times;
+  std::vector<double> exact_times;
 };
 
 struct ExactStepBranch {
@@ -118,9 +123,20 @@ struct ExactVariantPlan {
   std::vector<std::vector<semantic::Index>> leaf_supports;
   std::vector<std::vector<semantic::Index>> pool_supports;
   std::vector<std::vector<semantic::Index>> expr_supports;
+  semantic::Index source_count{0};
+  std::vector<semantic::Index> leaf_source_ids;
+  std::vector<semantic::Index> pool_source_ids;
   std::vector<semantic::Index> shared_trigger_indices;
   bool ranked_supported{true};
 };
+
+inline ExactSequenceState make_exact_sequence_state(const ExactVariantPlan &plan) {
+  ExactSequenceState state;
+  state.exact_times.assign(
+      static_cast<std::size_t>(plan.source_count),
+      std::numeric_limits<double>::quiet_NaN());
+  return state;
+}
 
 inline std::vector<semantic::Index> merge_sorted_support(
     std::vector<semantic::Index> merged,
@@ -381,6 +397,23 @@ inline void validate_exact_expr(const runtime::LoweredExactVariant &lowered,
 inline ExactSourceKey source_key(const semantic::SourceKind kind,
                                  const semantic::Index index) {
   return ExactSourceKey{kind, index};
+}
+
+inline semantic::Index source_ordinal(const ExactVariantPlan &plan,
+                                      const semantic::SourceKind kind,
+                                      const semantic::Index index) {
+  if (kind == semantic::SourceKind::Leaf) {
+    return plan.leaf_source_ids[static_cast<std::size_t>(index)];
+  }
+  if (kind == semantic::SourceKind::Pool) {
+    return plan.pool_source_ids[static_cast<std::size_t>(index)];
+  }
+  return semantic::kInvalidIndex;
+}
+
+inline semantic::Index source_ordinal(const ExactVariantPlan &plan,
+                                      const ExactSourceKey key) {
+  return source_ordinal(plan, key.kind, key.index);
 }
 
 inline double clean_signed_value(const double value,

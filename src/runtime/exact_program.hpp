@@ -17,6 +17,7 @@ namespace accumulatr::runtime {
 struct ExactProgram {
   RuntimeLayout layout{};
 
+  std::vector<LeafRuntimeDescriptor> leaf_descriptors;
   std::vector<std::uint8_t> leaf_dist_kind;
 
   std::vector<std::uint8_t> onset_kind;
@@ -216,6 +217,7 @@ inline LoweredExactVariant lower_exact_variant(
   lowered.outcome_labels.reserve(model.outcomes.size());
 
   program.leaf_dist_kind.reserve(model.leaves.size());
+  program.leaf_descriptors.reserve(model.leaves.size());
   program.onset_kind.reserve(model.leaves.size());
   program.onset_source_kind.reserve(model.leaves.size());
   program.onset_source_index.reserve(model.leaves.size());
@@ -229,6 +231,8 @@ inline LoweredExactVariant lower_exact_variant(
   detail::ExactSlotAllocator slots;
   program.parameter_layout.leaf_param_offsets.push_back(0);
   for (const auto &leaf : model.leaves) {
+    const auto param_offset = static_cast<semantic::Index>(
+        program.parameter_layout.leaf_param_slots.size());
     lowered.leaf_ids.push_back(leaf.id);
     program.leaf_dist_kind.push_back(static_cast<std::uint8_t>(leaf.dist));
     program.onset_kind.push_back(static_cast<std::uint8_t>(leaf.onset.kind));
@@ -243,13 +247,23 @@ inline LoweredExactVariant lower_exact_variant(
       program.parameter_layout.leaf_param_slots.push_back(
           slots.slot_for(param_name));
     }
-    program.parameter_layout.leaf_param_offsets.push_back(
-        static_cast<semantic::Index>(
-            program.parameter_layout.leaf_param_slots.size()));
+    const auto param_end = static_cast<semantic::Index>(
+        program.parameter_layout.leaf_param_slots.size());
+    program.parameter_layout.leaf_param_offsets.push_back(param_end);
     program.parameter_layout.leaf_q_slots.push_back(
         slots.slot_for(leaf.params.q_name));
     program.parameter_layout.leaf_t0_slots.push_back(
         slots.slot_for(leaf.params.t0_name));
+    program.leaf_descriptors.push_back(LeafRuntimeDescriptor{
+        static_cast<std::uint8_t>(leaf.dist),
+        static_cast<std::uint8_t>(leaf.onset.kind),
+        static_cast<std::uint8_t>(leaf.onset.source.kind),
+        leaf.onset.source.index,
+        leaf.onset.lag,
+        leaf.onset.absolute_value,
+        leaf.trigger_index,
+        param_offset,
+        static_cast<int>(param_end - param_offset)});
   }
 
   program.trigger_kind.reserve(model.triggers.size());

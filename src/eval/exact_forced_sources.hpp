@@ -8,14 +8,18 @@ namespace detail {
 inline leaf::EventChannels resolve_forced_source_channels(
     const ExactVariantPlan &plan,
     ExactSourceOracle *oracle,
-    const std::unordered_map<ExactSourceKey, ExactRelation, ExactSourceKeyHash> &forced,
+    const std::vector<ExactRelation> *forced,
     const double oracle_time,
     const ExactSourceKey key) {
-  const auto it = forced.find(key);
-  if (it != forced.end()) {
-    return forced_channels(it->second);
+  if (forced != nullptr) {
+    const auto source_id = source_ordinal(plan, key);
+    if (source_id != semantic::kInvalidIndex) {
+      const auto relation = (*forced)[static_cast<std::size_t>(source_id)];
+      if (relation != ExactRelation::Unknown) {
+        return forced_channels(relation);
+      }
+    }
   }
-  (void) plan;
   return oracle->source_channels(key.kind, key.index, oracle_time);
 }
 

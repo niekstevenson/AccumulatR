@@ -775,6 +775,29 @@ inline bool variant_supports_ranked_sequence(const ExactVariantPlan &plan) {
   return true;
 }
 
+inline void compile_scenario_runtime_fields(const ExactVariantPlan &plan,
+                                            ExactTransitionScenario *scenario) {
+  scenario->active_source_id = source_ordinal(plan, scenario->active_key);
+  scenario->before_source_ids.clear();
+  scenario->before_source_ids.reserve(scenario->before_keys.size());
+  for (const auto &key : scenario->before_keys) {
+    scenario->before_source_ids.push_back(source_ordinal(plan, key));
+  }
+  scenario->after_source_ids.clear();
+  scenario->after_source_ids.reserve(scenario->after_keys.size());
+  for (const auto &key : scenario->after_keys) {
+    scenario->after_source_ids.push_back(source_ordinal(plan, key));
+  }
+  scenario->forced_source_ids.clear();
+  scenario->forced_source_relations.clear();
+  scenario->forced_source_ids.reserve(scenario->forced.size());
+  scenario->forced_source_relations.reserve(scenario->forced.size());
+  for (const auto &constraint : scenario->forced) {
+    scenario->forced_source_ids.push_back(source_ordinal(plan, constraint.key));
+    scenario->forced_source_relations.push_back(constraint.relation);
+  }
+}
+
 inline ExactVariantPlan make_exact_variant_plan(
     const runtime::LoweredExactVariant &lowered,
     const std::unordered_map<std::string, semantic::Index> &outcome_code_by_label,
@@ -788,6 +811,17 @@ inline ExactVariantPlan make_exact_variant_plan(
   plan.leaf_supports = builder.build_leaf_supports();
   plan.pool_supports = builder.build_pool_supports();
   plan.expr_supports = builder.build_expr_supports();
+  plan.source_count = static_cast<semantic::Index>(
+      plan.lowered.program.layout.n_leaves + plan.lowered.program.layout.n_pools);
+  plan.leaf_source_ids.resize(static_cast<std::size_t>(plan.lowered.program.layout.n_leaves));
+  plan.pool_source_ids.resize(static_cast<std::size_t>(plan.lowered.program.layout.n_pools));
+  for (semantic::Index i = 0; i < plan.lowered.program.layout.n_leaves; ++i) {
+    plan.leaf_source_ids[static_cast<std::size_t>(i)] = i;
+  }
+  for (semantic::Index i = 0; i < plan.lowered.program.layout.n_pools; ++i) {
+    plan.pool_source_ids[static_cast<std::size_t>(i)] =
+        static_cast<semantic::Index>(plan.lowered.program.layout.n_leaves + i);
+  }
 
   const auto &program = plan.lowered.program;
   for (int i = 0; i < program.layout.n_triggers; ++i) {
@@ -827,6 +861,20 @@ inline ExactVariantPlan make_exact_variant_plan(
        ++target_outcome_idx) {
     plan.competitor_plans.push_back(
         build_target_competitor_plan(plan, target_outcome_idx));
+  }
+  for (auto &outcome : plan.outcomes) {
+    for (auto &scenario : outcome.scenarios) {
+      compile_scenario_runtime_fields(plan, &scenario);
+    }
+  }
+  for (auto &target_plan : plan.competitor_plans) {
+    for (auto &block : target_plan.blocks) {
+      for (auto &subset : block.subsets) {
+        for (auto &scenario : subset.scenarios) {
+          compile_scenario_runtime_fields(plan, &scenario);
+        }
+      }
+    }
   }
   plan.ranked_supported = variant_supports_ranked_sequence(plan);
 

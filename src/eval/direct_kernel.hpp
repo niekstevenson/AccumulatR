@@ -3,6 +3,7 @@
 #include <Rcpp.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <limits>
@@ -620,6 +621,12 @@ inline void build_direct_plan_cache(
 
 class TrialKernel {
 public:
+  struct LoadedLeafInput {
+    std::array<double, 8> params{};
+    double q{0.0};
+    double t0{0.0};
+  };
+
   TrialKernel(const VariantPlan &plan,
               const ParamView &params,
               const int first_param_row,
@@ -629,9 +636,31 @@ public:
         params_(params),
         first_param_row_(first_param_row),
         rt_(rt),
+        leaf_inputs_(static_cast<std::size_t>(program_.layout.n_leaves)),
         leaf_channels_(static_cast<std::size_t>(program_.layout.n_leaves)),
         pool_channels_(static_cast<std::size_t>(program_.layout.n_pools)),
-        pool_ready_(static_cast<std::size_t>(program_.layout.n_pools), 0U) {}
+        pool_ready_(static_cast<std::size_t>(program_.layout.n_pools), 0U) {
+    for (int i = 0; i < program_.layout.n_leaves; ++i) {
+      const auto pos = static_cast<std::size_t>(i);
+      const auto &desc = program_.leaf_descriptors[pos];
+      const int row = first_param_row_ + i;
+      auto &loaded = leaf_inputs_[pos];
+      const int n_local = std::min<int>(desc.param_count, 8);
+      for (int j = 0; j < n_local; ++j) {
+        loaded.params[static_cast<std::size_t>(j)] = params_.p(row, j);
+      }
+      for (int j = n_local; j < 8; ++j) {
+        loaded.params[static_cast<std::size_t>(j)] = 0.0;
+      }
+      loaded.q = params_.q(row);
+      loaded.t0 = params_.t0(row);
+    }
+  }
+
+  void set_rt(const double rt) {
+    rt_ = rt;
+    std::fill(pool_ready_.begin(), pool_ready_.end(), 0U);
+  }
 
   double loglik_for_code(const semantic::Index outcome_code,
                          const double min_ll) {
@@ -689,6 +718,7 @@ private:
   const ParamView &params_;
   int first_param_row_;
   double rt_;
+  std::vector<LoadedLeafInput> leaf_inputs_;
   std::vector<leaf::EventChannels> leaf_channels_;
   std::vector<leaf::EventChannels> pool_channels_;
   std::vector<std::uint8_t> pool_ready_;
@@ -713,26 +743,19 @@ private:
 
   void load_leaf_channels() {
     for (int i = 0; i < program_.layout.n_leaves; ++i) {
-      const int row = first_param_row_ + i;
-      const auto begin = program_.parameter_layout.leaf_param_offsets[static_cast<std::size_t>(i)];
-      const auto end =
-          program_.parameter_layout.leaf_param_offsets[static_cast<std::size_t>(i + 1)];
-      double local_params[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-      const int n_local = std::min<int>(end - begin, 8);
-      for (int j = 0; j < n_local; ++j) {
-        local_params[j] = params_.p(row, j);
-      }
-      double onset_t0 = params_.t0(row);
-      if (static_cast<semantic::OnsetKind>(
-              program_.onset_kind[static_cast<std::size_t>(i)]) ==
-          semantic::OnsetKind::Absolute) {
-        onset_t0 += program_.onset_abs_value[static_cast<std::size_t>(i)];
-      }
+      const auto pos = static_cast<std::size_t>(i);
+      const auto &desc = program_.leaf_descriptors[pos];
+      const auto &loaded = leaf_inputs_[pos];
+      const double onset_t0 =
+          static_cast<semantic::OnsetKind>(desc.onset_kind) ==
+                  semantic::OnsetKind::Absolute
+              ? loaded.t0 + desc.onset_abs_value
+              : loaded.t0;
       leaf_channels_[static_cast<std::size_t>(i)] = standard_leaf_channels(
-          program_.leaf_dist_kind[static_cast<std::size_t>(i)],
-          local_params,
-          end - begin,
-          params_.q(row),
+          desc.dist_kind,
+          loaded.params.data(),
+          std::min(desc.param_count, 8),
+          loaded.q,
           onset_t0,
           rt_);
     }
@@ -886,14 +909,15 @@ inline Rcpp::NumericVector evaluate_direct_weighted_probability_queries_cached(
       codes[j] = query.terms[j].outcome_code;
       weights[j] = query.terms[j].weight;
     }
+    TrialKernel kernel(
+        plan,
+        params,
+        static_cast<int>(
+            layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
+        0.0);
     out[static_cast<R_xlen_t>(i)] = integrate_to_infinity(
         [&](const double rt) {
-          TrialKernel kernel(
-              plan,
-              params,
-              static_cast<int>(
-                  layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
-              rt);
+          kernel.set_rt(rt);
           return kernel.weighted_density_sum(
               codes.data(),
               weights.data(),
@@ -913,14 +937,15 @@ inline Rcpp::NumericVector evaluate_direct_total_probability_queries_cached(
   for (std::size_t i = 0; i < queries.size(); ++i) {
     const auto &query = queries[i];
     const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
+    TrialKernel kernel(
+        plan,
+        params,
+        static_cast<int>(
+            layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
+        0.0);
     out[static_cast<R_xlen_t>(i)] = integrate_to_infinity(
         [&](const double rt) {
-          TrialKernel kernel(
-              plan,
-              params,
-              static_cast<int>(
-                  layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
-              rt);
+          kernel.set_rt(rt);
           return kernel.total_density();
         });
   }

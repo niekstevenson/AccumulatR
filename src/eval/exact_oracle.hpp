@@ -1,10 +1,18 @@
 #pragma once
 
+#include <array>
+
 #include "exact_planner.hpp"
 #include "quadrature.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
+
+struct ExactLoadedLeafInput {
+  std::array<double, 8> params{};
+  double q{0.0};
+  double t0{0.0};
+};
 
 inline leaf::EventChannels forced_channels(const ExactRelation relation) {
   switch (relation) {
@@ -27,47 +35,67 @@ public:
                     const ExactTriggerState &trigger_state,
                     const ExactSequenceState &sequence_state,
                     const double top_time)
-      : program_(plan.lowered.program),
+      : plan_(plan),
+        program_(plan.lowered.program),
         params_(params),
         first_param_row_(first_param_row),
         trigger_state_(trigger_state),
         sequence_state_(sequence_state),
-        top_time_(top_time),
-        leaf_cache_(static_cast<std::size_t>(program_.layout.n_leaves)),
-        leaf_ready_(static_cast<std::size_t>(program_.layout.n_leaves), 0U),
-        pool_cache_(static_cast<std::size_t>(program_.layout.n_pools)),
-        pool_ready_(static_cast<std::size_t>(program_.layout.n_pools), 0U) {}
+        current_time_(top_time),
+        leaf_inputs_(static_cast<std::size_t>(program_.layout.n_leaves)),
+        source_cache_(static_cast<std::size_t>(plan.source_count)),
+        source_epoch_(static_cast<std::size_t>(plan.source_count), 0U) {
+    for (int i = 0; i < program_.layout.n_leaves; ++i) {
+      const auto pos = static_cast<std::size_t>(i);
+      const auto &desc = program_.leaf_descriptors[pos];
+      const int row = first_param_row_ + i;
+      auto &loaded = leaf_inputs_[pos];
+      const int n_local = std::min<int>(desc.param_count, 8);
+      for (int j = 0; j < n_local; ++j) {
+        loaded.params[static_cast<std::size_t>(j)] = params_.p(row, j);
+      }
+      for (int j = n_local; j < 8; ++j) {
+        loaded.params[static_cast<std::size_t>(j)] = 0.0;
+      }
+      loaded.q = leaf_q(i, row);
+      loaded.t0 = params_.t0(row);
+    }
+  }
 
   leaf::EventChannels source_channels(const semantic::SourceKind kind,
                                       const semantic::Index index,
                                       const double t) {
-    if (std::fabs(t - top_time_) <= 1e-12) {
-      if (kind == semantic::SourceKind::Leaf) {
-        return cached_leaf(index, t);
-      }
-      return cached_pool(index, t);
-    }
-    return compute_source_channels(kind, index, t);
+    set_time(t);
+    return source_channels(ExactSourceKey{kind, index});
   }
 
 private:
+  const ExactVariantPlan &plan_;
   const runtime::ExactProgram &program_;
   const ParamView &params_;
   int first_param_row_;
   const ExactTriggerState &trigger_state_;
   const ExactSequenceState &sequence_state_;
-  double top_time_;
-  std::vector<leaf::EventChannels> leaf_cache_;
-  std::vector<std::uint8_t> leaf_ready_;
-  std::vector<leaf::EventChannels> pool_cache_;
-  std::vector<std::uint8_t> pool_ready_;
+  double current_time_;
+  std::vector<ExactLoadedLeafInput> leaf_inputs_;
+  std::vector<leaf::EventChannels> source_cache_;
+  std::vector<std::uint32_t> source_epoch_;
+  std::uint32_t current_epoch_{1U};
 
   const double *exact_time_for(const ExactSourceKey key) const {
-    const auto it = sequence_state_.exact_times.find(key);
-    if (it == sequence_state_.exact_times.end()) {
+    const auto source_id = source_ordinal(plan_, key);
+    if (source_id == semantic::kInvalidIndex) {
       return nullptr;
     }
-    return &it->second;
+    const auto pos = static_cast<std::size_t>(source_id);
+    if (pos >= sequence_state_.exact_times.size()) {
+      return nullptr;
+    }
+    const auto value = sequence_state_.exact_times[pos];
+    if (!std::isfinite(value)) {
+      return nullptr;
+    }
+    return &sequence_state_.exact_times[pos];
   }
 
   leaf::EventChannels conditionalize(const leaf::EventChannels uncond,
@@ -101,24 +129,30 @@ private:
     return params_.q(row);
   }
 
-  leaf::EventChannels cached_leaf(const semantic::Index index, const double t) {
-    const auto pos = static_cast<std::size_t>(index);
-    if (leaf_ready_[pos] != 0U) {
-      return leaf_cache_[pos];
+  void set_time(const double t) {
+    if (std::fabs(t - current_time_) <= 1e-12) {
+      return;
     }
-    leaf_ready_[pos] = 1U;
-    leaf_cache_[pos] = compute_source_channels(semantic::SourceKind::Leaf, index, t);
-    return leaf_cache_[pos];
+    current_time_ = t;
+    ++current_epoch_;
+    if (current_epoch_ == 0U) {
+      current_epoch_ = 1U;
+      std::fill(source_epoch_.begin(), source_epoch_.end(), 0U);
+    }
   }
 
-  leaf::EventChannels cached_pool(const semantic::Index index, const double t) {
-    const auto pos = static_cast<std::size_t>(index);
-    if (pool_ready_[pos] != 0U) {
-      return pool_cache_[pos];
+  leaf::EventChannels source_channels(const ExactSourceKey key) {
+    const auto source_id = source_ordinal(plan_, key);
+    if (source_id == semantic::kInvalidIndex) {
+      return compute_source_channels(key.kind, key.index, current_time_);
     }
-    pool_ready_[pos] = 1U;
-    pool_cache_[pos] = compute_source_channels(semantic::SourceKind::Pool, index, t);
-    return pool_cache_[pos];
+    const auto pos = static_cast<std::size_t>(source_id);
+    if (source_epoch_[pos] == current_epoch_) {
+      return source_cache_[pos];
+    }
+    source_cache_[pos] = compute_source_channels(key.kind, key.index, current_time_);
+    source_epoch_[pos] = current_epoch_;
+    return source_cache_[pos];
   }
 
   leaf::EventChannels compute_source_channels(const semantic::SourceKind kind,
@@ -159,45 +193,34 @@ private:
   leaf::EventChannels base_leaf_channels(const semantic::Index index,
                                          const double t) {
     const auto pos = static_cast<std::size_t>(index);
-    const int row = first_param_row_ + index;
-    const auto begin = program_.parameter_layout.leaf_param_offsets[pos];
-    const auto end = program_.parameter_layout.leaf_param_offsets[pos + 1U];
-    double local_params[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
-    const int n_local = std::min<int>(end - begin, 8);
-    for (int j = 0; j < n_local; ++j) {
-      local_params[j] = params_.p(row, j);
-    }
-
-    const double q = leaf_q(index, row);
-    const double t0 = params_.t0(row);
-    const auto onset_kind =
-        static_cast<semantic::OnsetKind>(program_.onset_kind[pos]);
+    const auto &desc = program_.leaf_descriptors[pos];
+    const auto &loaded = leaf_inputs_[pos];
+    const auto onset_kind = static_cast<semantic::OnsetKind>(desc.onset_kind);
     if (onset_kind == semantic::OnsetKind::Absolute) {
       return standard_leaf_channels(
-          program_.leaf_dist_kind[pos],
-          local_params,
-          end - begin,
-          q,
-          t0,
-          t - program_.onset_abs_value[pos]);
+          desc.dist_kind,
+          loaded.params.data(),
+          std::min(desc.param_count, 8),
+          loaded.q,
+          loaded.t0,
+          t - desc.onset_abs_value);
     }
 
-    const double lag = program_.onset_lag[pos];
+    const double lag = desc.onset_lag;
     const double upper = t - lag;
     if (!(upper > 0.0)) {
       return impossible_channels();
     }
-    const auto source_kind =
-        static_cast<semantic::SourceKind>(program_.onset_source_kind[pos]);
-    const auto source_index = program_.onset_source_index[pos];
+    const auto source_kind = static_cast<semantic::SourceKind>(desc.onset_source_kind);
+    const auto source_index = desc.onset_source_index;
     const ExactSourceKey onset_key{source_kind, source_index};
     auto shifted_channels = [&](const double source_time) {
       return standard_leaf_channels(
-          program_.leaf_dist_kind[pos],
-          local_params,
-          end - begin,
-          q,
-          t0,
+          desc.dist_kind,
+          loaded.params.data(),
+          std::min(desc.param_count, 8),
+          loaded.q,
+          loaded.t0,
           t - source_time - lag);
     };
     if (const double *exact_time = exact_time_for(onset_key)) {

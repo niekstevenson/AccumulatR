@@ -28,4 +28,16 @@ struct ParameterLayout {
   std::vector<semantic::Index> leaf_t0_slots;
 };
 
+struct LeafRuntimeDescriptor {
+  std::uint8_t dist_kind{0};
+  std::uint8_t onset_kind{0};
+  std::uint8_t onset_source_kind{0};
+  semantic::Index onset_source_index{semantic::kInvalidIndex};
+  double onset_lag{0.0};
+  double onset_abs_value{0.0};
+  semantic::Index trigger_index{semantic::kInvalidIndex};
+  semantic::Index param_offset{0};
+  int param_count{0};
+};
+
 } // namespace accumulatr::runtime

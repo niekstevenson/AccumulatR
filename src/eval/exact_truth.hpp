@@ -9,22 +9,26 @@ class ForcedExprEvaluator {
 public:
   ForcedExprEvaluator(const ExactVariantPlan &plan,
                       ExactSourceOracle *oracle,
-                      const std::unordered_map<ExactSourceKey, ExactRelation, ExactSourceKeyHash>
-                          &forced)
+                      const std::vector<ExactRelation> *forced_relations)
       : plan_(plan),
         program_(plan.lowered.program),
         oracle_(oracle),
-        forced_(forced),
+        forced_relations_(forced_relations),
         cdf_cache_(program_.expr_kind.size(), 0.0),
-        cdf_time_(program_.expr_kind.size(),
-                  std::numeric_limits<double>::quiet_NaN()),
+        cdf_time_(program_.expr_kind.size(), 0.0),
+        cdf_epoch_(program_.expr_kind.size(), 0U),
         density_cache_(program_.expr_kind.size(), 0.0),
-        density_time_(program_.expr_kind.size(),
-                      std::numeric_limits<double>::quiet_NaN()) {}
+        density_time_(program_.expr_kind.size(), 0.0),
+        density_epoch_(program_.expr_kind.size(), 0U) {}
+
+  void reset_forced_relations(const std::vector<ExactRelation> *forced_relations) {
+    forced_relations_ = forced_relations;
+    ++epoch_;
+  }
 
   double expr_cdf(const semantic::Index expr_idx) {
     const auto pos = static_cast<std::size_t>(expr_idx);
-    if (cdf_time_[pos] == oracle_time_) {
+    if (cdf_epoch_[pos] == epoch_ && cdf_time_[pos] == oracle_time_) {
       return cdf_cache_[pos];
     }
     const auto kind =
@@ -41,7 +45,7 @@ public:
       value = resolve_forced_source_channels(
                  plan_,
                  oracle_,
-                 forced_,
+                 forced_relations_,
                  oracle_time_,
                  ExactSourceKey{child_event_source_kind(program_, expr_idx),
                                 child_event_source_index(program_, expr_idx)})
@@ -90,6 +94,7 @@ public:
                     program_.expr_arg_offsets[pos])]));
       break;
     }
+    cdf_epoch_[pos] = epoch_;
     cdf_time_[pos] = oracle_time_;
     cdf_cache_[pos] = value;
     return value;
@@ -101,17 +106,21 @@ public:
 
   double source_cdf(const ExactSourceKey key) {
     return clamp_probability(
-        resolve_forced_source_channels(plan_, oracle_, forced_, oracle_time_, key).cdf);
+        resolve_forced_source_channels(
+            plan_, oracle_, forced_relations_, oracle_time_, key)
+            .cdf);
   }
 
   double source_pdf(const ExactSourceKey key) {
     return safe_density(
-        resolve_forced_source_channels(plan_, oracle_, forced_, oracle_time_, key).pdf);
+        resolve_forced_source_channels(
+            plan_, oracle_, forced_relations_, oracle_time_, key)
+            .pdf);
   }
 
   double source_survival(const ExactSourceKey key) {
     return clamp_probability(
-        resolve_forced_source_channels(plan_, oracle_, forced_, oracle_time_, key)
+        resolve_forced_source_channels(plan_, oracle_, forced_relations_, oracle_time_, key)
             .survival);
   }
 
@@ -123,14 +132,13 @@ public:
     return plan_;
   }
 
-  const std::unordered_map<ExactSourceKey, ExactRelation, ExactSourceKeyHash> &
-  forced_map() const {
-    return forced_;
+  const std::vector<ExactRelation> *forced_relations() const {
+    return forced_relations_;
   }
 
   double expr_density(const semantic::Index expr_idx) {
     const auto pos = static_cast<std::size_t>(expr_idx);
-    if (density_time_[pos] == oracle_time_) {
+    if (density_epoch_[pos] == epoch_ && density_time_[pos] == oracle_time_) {
       return density_cache_[pos];
     }
     const auto kind =
@@ -145,7 +153,7 @@ public:
       value = resolve_forced_source_channels(
                  plan_,
                  oracle_,
-                 forced_,
+                 forced_relations_,
                  oracle_time_,
                  ExactSourceKey{child_event_source_kind(program_, expr_idx),
                                 child_event_source_index(program_, expr_idx)})
@@ -247,6 +255,7 @@ public:
                program_.expr_arg_offsets[pos])]));
       break;
     }
+    density_epoch_[pos] = epoch_;
     density_time_[pos] = oracle_time_;
     density_cache_[pos] = value;
     return value;
@@ -305,19 +314,54 @@ private:
   const ExactVariantPlan &plan_;
   const runtime::ExactProgram &program_;
   ExactSourceOracle *oracle_;
-  const std::unordered_map<ExactSourceKey, ExactRelation, ExactSourceKeyHash> &forced_;
+  const std::vector<ExactRelation> *forced_relations_;
   std::vector<double> cdf_cache_;
   std::vector<double> cdf_time_;
+  std::vector<std::uint32_t> cdf_epoch_;
   std::vector<double> density_cache_;
   std::vector<double> density_time_;
+  std::vector<std::uint32_t> density_epoch_;
+  std::uint32_t epoch_{1U};
 
 public:
   double oracle_time_{0.0};
 };
 
+struct ForcedExprWorkspace {
+  explicit ForcedExprWorkspace(const ExactVariantPlan &plan,
+                               ExactSourceOracle *oracle)
+      : relations(static_cast<std::size_t>(plan.source_count),
+                  ExactRelation::Unknown),
+        evaluator(plan, oracle, nullptr) {}
+
+  std::vector<ExactRelation> relations;
+  ForcedExprEvaluator evaluator;
+};
+
+inline bool merge_forced_relations(const std::vector<ExactRelation> *base,
+                                   const ExactTransitionScenario &scenario,
+                                   std::vector<ExactRelation> *out) {
+  if (base != nullptr) {
+    *out = *base;
+  } else {
+    std::fill(out->begin(), out->end(), ExactRelation::Unknown);
+  }
+  for (std::size_t i = 0; i < scenario.forced_source_ids.size(); ++i) {
+    const auto source_id = scenario.forced_source_ids[i];
+    const auto relation = scenario.forced_source_relations[i];
+    auto &slot = (*out)[static_cast<std::size_t>(source_id)];
+    if (slot != ExactRelation::Unknown && slot != relation) {
+      return false;
+    }
+    slot = relation;
+  }
+  return true;
+}
+
 inline double readiness_cdf(const ExactTransitionScenario &scenario,
                             ForcedExprEvaluator *evaluator,
-                            const double t) {
+                            const double t,
+                            ForcedExprWorkspace *workspace) {
   if (scenario.before_keys.empty() && scenario.ready_exprs.empty()) {
     return 1.0;
   }
@@ -334,18 +378,15 @@ inline double readiness_cdf(const ExactTransitionScenario &scenario,
       return 0.0;
     }
   }
-  std::unordered_map<ExactSourceKey, ExactRelation, ExactSourceKeyHash> expr_forced =
-      evaluator->forced_map();
-  for (const auto &constraint : scenario.forced) {
-    if (!append_constraint(&expr_forced, constraint.key, constraint.relation)) {
+  if (!merge_forced_relations(
+          evaluator->forced_relations(), scenario, &workspace->relations)) {
       evaluator->oracle_time_ = current_time;
       return 0.0;
-    }
   }
-  ForcedExprEvaluator expr_evaluator(evaluator->plan(), evaluator->oracle(), expr_forced);
-  expr_evaluator.oracle_time_ = t;
+  workspace->evaluator.reset_forced_relations(&workspace->relations);
+  workspace->evaluator.oracle_time_ = t;
   for (const auto expr_idx : scenario.ready_exprs) {
-    value *= expr_evaluator.expr_cdf(expr_idx);
+    value *= workspace->evaluator.expr_cdf(expr_idx);
     if (!(value > 0.0)) {
       evaluator->oracle_time_ = current_time;
       return 0.0;
@@ -357,7 +398,8 @@ inline double readiness_cdf(const ExactTransitionScenario &scenario,
 
 inline double readiness_density(const ExactTransitionScenario &scenario,
                                 ForcedExprEvaluator *evaluator,
-                                const double t) {
+                                const double t,
+                                ForcedExprWorkspace *workspace) {
   if (!(t > 0.0)) {
     return 0.0;
   }
@@ -366,16 +408,13 @@ inline double readiness_density(const ExactTransitionScenario &scenario,
   }
   const double current_time = evaluator->oracle_time_;
   evaluator->oracle_time_ = t;
-  std::unordered_map<ExactSourceKey, ExactRelation, ExactSourceKeyHash> expr_forced =
-      evaluator->forced_map();
-  for (const auto &constraint : scenario.forced) {
-    if (!append_constraint(&expr_forced, constraint.key, constraint.relation)) {
-      evaluator->oracle_time_ = current_time;
-      return 0.0;
-    }
+  if (!merge_forced_relations(
+          evaluator->forced_relations(), scenario, &workspace->relations)) {
+    evaluator->oracle_time_ = current_time;
+    return 0.0;
   }
-  ForcedExprEvaluator expr_evaluator(evaluator->plan(), evaluator->oracle(), expr_forced);
-  expr_evaluator.oracle_time_ = t;
+  workspace->evaluator.reset_forced_relations(&workspace->relations);
+  workspace->evaluator.oracle_time_ = t;
   double total = 0.0;
   for (std::size_t i = 0; i < scenario.before_keys.size(); ++i) {
     double term = evaluator->source_pdf(scenario.before_keys[i]);
@@ -395,7 +434,7 @@ inline double readiness_density(const ExactTransitionScenario &scenario,
       continue;
     }
     for (const auto expr_idx : scenario.ready_exprs) {
-      term *= expr_evaluator.expr_cdf(expr_idx);
+      term *= workspace->evaluator.expr_cdf(expr_idx);
       if (!std::isfinite(term) || term == 0.0) {
         break;
       }
@@ -403,7 +442,7 @@ inline double readiness_density(const ExactTransitionScenario &scenario,
     total += term;
   }
   for (std::size_t i = 0; i < scenario.ready_exprs.size(); ++i) {
-    double term = expr_evaluator.expr_density(scenario.ready_exprs[i]);
+    double term = workspace->evaluator.expr_density(scenario.ready_exprs[i]);
     if (!std::isfinite(term) || term == 0.0) {
       continue;
     }
@@ -420,7 +459,7 @@ inline double readiness_density(const ExactTransitionScenario &scenario,
       if (i == j) {
         continue;
       }
-      term *= expr_evaluator.expr_cdf(scenario.ready_exprs[j]);
+      term *= workspace->evaluator.expr_cdf(scenario.ready_exprs[j]);
       if (!std::isfinite(term) || term == 0.0) {
         break;
       }
@@ -433,7 +472,8 @@ inline double readiness_density(const ExactTransitionScenario &scenario,
 
 inline double after_survival(const ExactTransitionScenario &scenario,
                              ForcedExprEvaluator *evaluator,
-                             const double t) {
+                             const double t,
+                             ForcedExprWorkspace *workspace) {
   double value = 1.0;
   const double current_time = evaluator->oracle_time_;
   evaluator->oracle_time_ = t;
@@ -444,18 +484,15 @@ inline double after_survival(const ExactTransitionScenario &scenario,
       return 0.0;
     }
   }
-  std::unordered_map<ExactSourceKey, ExactRelation, ExactSourceKeyHash> expr_forced =
-      evaluator->forced_map();
-  for (const auto &constraint : scenario.forced) {
-    if (!append_constraint(&expr_forced, constraint.key, constraint.relation)) {
-      evaluator->oracle_time_ = current_time;
-      return 0.0;
-    }
+  if (!merge_forced_relations(
+          evaluator->forced_relations(), scenario, &workspace->relations)) {
+    evaluator->oracle_time_ = current_time;
+    return 0.0;
   }
-  ForcedExprEvaluator expr_evaluator(evaluator->plan(), evaluator->oracle(), expr_forced);
-  expr_evaluator.oracle_time_ = t;
+  workspace->evaluator.reset_forced_relations(&workspace->relations);
+  workspace->evaluator.oracle_time_ = t;
   for (const auto expr_idx : scenario.tail_exprs) {
-    value *= expr_evaluator.expr_survival(expr_idx);
+    value *= workspace->evaluator.expr_survival(expr_idx);
     if (!(value > 0.0)) {
       evaluator->oracle_time_ = current_time;
       return 0.0;
@@ -468,20 +505,22 @@ inline double after_survival(const ExactTransitionScenario &scenario,
 inline double same_active_win_mass(const ExactTransitionScenario &scenario,
                                    ForcedExprEvaluator *evaluator,
                                    const double t,
-                                   const double ready_upper) {
+                                   const double ready_upper,
+                                   ForcedExprWorkspace *workspace) {
   if (!(ready_upper > 0.0)) {
     return 0.0;
   }
-  const double tail = after_survival(scenario, evaluator, t);
+  const double tail = after_survival(scenario, evaluator, t, workspace);
   if (!(tail > 0.0)) {
     return 0.0;
   }
-  return tail * readiness_cdf(scenario, evaluator, ready_upper);
+  return tail * readiness_cdf(scenario, evaluator, ready_upper, workspace);
 }
 
 inline double scenario_truth_cdf(const ExactTransitionScenario &scenario,
                                  ForcedExprEvaluator *evaluator,
-                                 const double t) {
+                                 const double t,
+                                 ForcedExprWorkspace *workspace) {
   if (!(t > 0.0)) {
     return 0.0;
   }
@@ -493,12 +532,12 @@ inline double scenario_truth_cdf(const ExactTransitionScenario &scenario,
         if (!(value > 0.0)) {
           return 0.0;
         }
-        value *= after_survival(scenario, evaluator, u);
+        value *= after_survival(scenario, evaluator, u, workspace);
         if (!(value > 0.0)) {
           return 0.0;
         }
         if (!scenario.before_keys.empty() || !scenario.ready_exprs.empty()) {
-          value *= readiness_cdf(scenario, evaluator, u);
+          value *= readiness_cdf(scenario, evaluator, u, workspace);
           if (!(value > 0.0)) {
             return 0.0;
           }

@@ -73,7 +73,7 @@ public:
         value = 0.0;
         break;
       }
-      const double cdf = simpson_integrate(
+      const double cdf = quadrature::integrate_finite_robust(
           [&](const double u) {
             oracle_time_ = u;
             return expr_density(expr_idx);
@@ -214,7 +214,7 @@ public:
       } else {
         const double current_time = oracle_time_;
         blocker_survival = clamp_probability(
-            1.0 - simpson_integrate(
+            1.0 - quadrature::integrate_finite_robust(
                       [&](const double u) {
                         oracle_time_ = u;
                         double term = expr_density(blocker);
@@ -290,7 +290,7 @@ public:
     if (!(current_time > 0.0)) {
       return 0.0;
     }
-    const double cdf = simpson_integrate(
+    const double cdf = quadrature::integrate_finite_robust(
         [&](const double u) {
           oracle_time_ = u;
           return conjunction_density(exprs);
@@ -486,7 +486,7 @@ inline double scenario_truth_cdf(const ExactTransitionScenario &scenario,
     return 0.0;
   }
   const double current_time = evaluator->oracle_time_;
-  const double integrated = simpson_integrate(
+  const double integrated = quadrature::integrate_finite_robust(
       [&](const double u) {
         evaluator->oracle_time_ = u;
         double value = evaluator->source_pdf(scenario.active_key);

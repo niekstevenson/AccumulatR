@@ -399,7 +399,7 @@ testthat::test_that("identity likelihood supports shared-trigger no-response tri
 
   out <- run_public_loglik(spec, trial_df, params)
 
-  testthat::expect_equal(out, log(0.10), tolerance = 1e-12)
+  testthat::expect_equal(out, log(0.10), tolerance = 1e-8)
 })
 
 testthat::test_that("identity likelihood supports independent-trigger no-response trials", {
@@ -428,5 +428,5 @@ testthat::test_that("identity likelihood supports independent-trigger no-respons
 
   out <- run_public_loglik(spec, trial_df, params)
 
-  testthat::expect_equal(out, log(0.01), tolerance = 1e-12)
+  testthat::expect_equal(out, log(0.01), tolerance = 1e-8)
 })

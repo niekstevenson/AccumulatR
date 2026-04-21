@@ -96,7 +96,8 @@ inline ExactStepResult evaluate_exact_step(
     const semantic::Index target_idx,
     const double observed_time,
     const std::vector<std::uint8_t> *used_outcomes = nullptr,
-    const bool collect_successors = false) {
+    const bool collect_successors = false,
+    const quadrature::FiniteBatch *step_batch = nullptr) {
   ExactStepResult result;
   const auto target_pos = static_cast<std::size_t>(target_idx);
   const auto &competitor_plan = plan.competitor_plans[target_pos];
@@ -169,31 +170,36 @@ inline ExactStepResult evaluate_exact_step(
                                       used_outcomes);
     }
 
-    result.total_probability += simpson_integrate(
-        [&](const double readiness_time) {
-          double value =
-              readiness_density(scenario, &target_evaluator, readiness_time);
-          if (!std::isfinite(value) || value == 0.0) {
-            return 0.0;
-          }
-          value *= active_pdf * tail;
-          if (!std::isfinite(value) || value == 0.0) {
-            return 0.0;
-          }
-          value *= competitor_non_win_probability(
-              competitor_plan,
-              scenario.active_key,
-              readiness_time,
-              &competitor_evaluator,
-              observed_time,
-              used_outcomes);
-          if (!std::isfinite(value) || value == 0.0) {
-            return 0.0;
-          }
-          return value;
-        },
-        0.0,
-        observed_time);
+    const auto owned_batch =
+        step_batch == nullptr
+            ? quadrature::build_finite_batch(0.0, observed_time)
+            : quadrature::FiniteBatch{};
+    const auto &batch = step_batch != nullptr ? *step_batch : owned_batch;
+    double integrated = 0.0;
+    for (std::size_t i = 0; i < batch.nodes.nodes.size(); ++i) {
+      const double readiness_time = batch.nodes.nodes[i];
+      double value =
+          readiness_density(scenario, &target_evaluator, readiness_time);
+      if (!std::isfinite(value) || value == 0.0) {
+        continue;
+      }
+      value *= active_pdf * tail;
+      if (!std::isfinite(value) || value == 0.0) {
+        continue;
+      }
+      value *= competitor_non_win_probability(
+          competitor_plan,
+          scenario.active_key,
+          readiness_time,
+          &competitor_evaluator,
+          observed_time,
+          used_outcomes);
+      if (!std::isfinite(value) || value == 0.0) {
+        continue;
+      }
+      integrated += batch.nodes.weights[i] * value;
+    }
+    result.total_probability += integrated;
   }
 
   return result;

@@ -2,9 +2,12 @@
 
 #include <Rcpp.h>
 
+#include <algorithm>
+#include <cmath>
 #include <vector>
 
 #include "../runtime/layout.hpp"
+#include "quadrature.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
@@ -17,6 +20,8 @@ struct PreparedTrialSpan {
 struct PreparedTrialLayout {
   std::vector<PreparedTrialSpan> spans;
   int max_rank{1};
+  std::vector<double> finite_batch_upper;
+  std::vector<quadrature::FiniteBatch> finite_batches;
 };
 
 struct PreparedDataView {
@@ -82,7 +87,49 @@ inline PreparedTrialLayout build_prepared_trial_layout(
   }
   layout.spans.push_back(
       PreparedTrialSpan{start, static_cast<semantic::Index>(n_rows - 1)});
+
+  std::vector<double> finite_times;
+  finite_times.reserve(static_cast<std::size_t>(n_rows * layout.max_rank));
+  for (int rank = 1; rank <= layout.max_rank; ++rank) {
+    const auto name = rank == 1 ? std::string("rt")
+                                : ("rt" + std::to_string(rank));
+    const auto rt = Rcpp::as<Rcpp::NumericVector>(data[name]);
+    for (R_xlen_t row = 0; row < n_rows; ++row) {
+      const double value = rt[row];
+      if (std::isfinite(value) && value > 0.0) {
+        finite_times.push_back(value);
+      }
+    }
+  }
+  std::sort(finite_times.begin(), finite_times.end());
+  finite_times.erase(
+      std::unique(finite_times.begin(), finite_times.end()),
+      finite_times.end());
+  layout.finite_batch_upper = finite_times;
+  layout.finite_batches.reserve(finite_times.size());
+  for (const auto upper : finite_times) {
+    layout.finite_batches.push_back(quadrature::build_finite_batch(0.0, upper));
+  }
+
   return layout;
+}
+
+inline const quadrature::FiniteBatch *find_finite_batch(
+    const PreparedTrialLayout &layout,
+    const double upper) {
+  if (!std::isfinite(upper) || !(upper > 0.0)) {
+    return nullptr;
+  }
+  const auto it = std::lower_bound(
+      layout.finite_batch_upper.begin(),
+      layout.finite_batch_upper.end(),
+      upper);
+  if (it == layout.finite_batch_upper.end() || *it != upper) {
+    return nullptr;
+  }
+  const auto index = static_cast<std::size_t>(
+      std::distance(layout.finite_batch_upper.begin(), it));
+  return &layout.finite_batches[index];
 }
 
 template <typename T>

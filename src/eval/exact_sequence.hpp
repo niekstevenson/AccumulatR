@@ -92,6 +92,7 @@ inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
                                      const int first_param_row,
                                      const semantic::Index outcome_code,
                                      const double rt,
+                                     const PreparedTrialLayout *layout,
                                      const double min_ll) {
   if (!std::isfinite(rt) || !(rt > 0.0)) {
     return min_ll;
@@ -105,6 +106,7 @@ inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
     if (!(trigger_state.weight > 0.0)) {
       continue;
     }
+    const auto *step_batch = layout == nullptr ? nullptr : find_finite_batch(*layout, rt);
     const ExactStepResult step = evaluate_exact_step(
         plan,
         params,
@@ -112,7 +114,10 @@ inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
         trigger_state,
         ExactSequenceState{},
         target_idx,
-        rt);
+        rt,
+        nullptr,
+        false,
+        step_batch);
     total += trigger_state.weight * step.total_probability;
   }
 
@@ -130,7 +135,8 @@ inline double exact_ranked_sequence_probability(
     const ExactTrialView &obs,
     const std::size_t rank_idx,
     const ExactSequenceState &sequence_state,
-    std::vector<std::uint8_t> *used_outcomes) {
+    std::vector<std::uint8_t> *used_outcomes,
+    const PreparedTrialLayout *layout) {
   if (rank_idx >= static_cast<std::size_t>(obs.rank_count)) {
     return 1.0;
   }
@@ -151,7 +157,9 @@ inline double exact_ranked_sequence_probability(
       target_outcome_index,
       exact_trial_view_rt(obs, rank_idx),
       used_outcomes,
-      true);
+      true,
+      layout == nullptr ? nullptr
+                        : find_finite_batch(*layout, exact_trial_view_rt(obs, rank_idx)));
   double total = 0.0;
   for (const auto &branch : step.branches) {
     (*used_outcomes)[target_idx] = 1U;
@@ -163,7 +171,8 @@ inline double exact_ranked_sequence_probability(
         obs,
         rank_idx + 1U,
         branch.next_state,
-        used_outcomes);
+        used_outcomes,
+        layout);
     (*used_outcomes)[target_idx] = 0U;
     total += branch.probability * tail_prob;
   }
@@ -174,6 +183,7 @@ inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
                                             const ParamView &params,
                                             const int first_param_row,
                                             const ExactTrialView &obs,
+                                            const PreparedTrialLayout *layout,
                                             const double min_ll) {
   if (obs.rank_count == 1) {
     return exact_loglik_for_trial(
@@ -182,6 +192,7 @@ inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
         first_param_row,
         exact_trial_view_outcome_code(obs, 0U),
         exact_trial_view_rt(obs, 0U),
+        layout,
         min_ll);
   }
 
@@ -195,7 +206,15 @@ inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
     ExactSequenceState state;
     total += trigger_state.weight *
              exact_ranked_sequence_probability(
-                 plan, params, first_param_row, trigger_state, obs, 0U, state, &used_outcomes);
+                 plan,
+                 params,
+                 first_param_row,
+                 trigger_state,
+                 obs,
+                 0U,
+                 state,
+                 &used_outcomes,
+                 layout);
   }
   if (!std::isfinite(total) || !(total > 0.0)) {
     return min_ll;
@@ -220,6 +239,7 @@ inline Rcpp::NumericVector evaluate_exact_loglik_queries_cached(
         static_cast<int>(layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
         query.outcome_code,
         query.rt,
+        &layout,
         min_ll);
   }
   return out;
@@ -243,6 +263,7 @@ inline Rcpp::NumericVector evaluate_exact_probability_queries_cached(
               static_cast<int>(layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
               query.outcome_code,
               rt,
+              nullptr,
               -std::numeric_limits<double>::infinity());
           if (!std::isfinite(log_density)) {
             return 0.0;
@@ -282,6 +303,7 @@ inline Rcpp::List evaluate_exact_outcome_probabilities_cached(
                 static_cast<int>(param_row),
                 queries[query_idx].outcome_code,
                 rt,
+                nullptr,
                 -std::numeric_limits<double>::infinity());
             if (!std::isfinite(log_density)) {
               return 0.0;
@@ -353,6 +375,7 @@ inline SEXP evaluate_exact_trials_cached(
         params,
         static_cast<int>(param_row),
         obs,
+        &layout,
         min_ll);
     param_row += leaf_count;
   }

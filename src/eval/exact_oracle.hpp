@@ -1,31 +1,10 @@
 #pragma once
 
 #include "exact_planner.hpp"
+#include "quadrature.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
-
-template <typename Fn>
-double simpson_integrate(Fn &&fn, double lower, double upper, int n = 256) {
-  if (!std::isfinite(lower) || !std::isfinite(upper) || !(upper > lower)) {
-    return 0.0;
-  }
-  if (n < 2) {
-    n = 2;
-  }
-  if (n % 2 != 0) {
-    ++n;
-  }
-  const double h = (upper - lower) / static_cast<double>(n);
-  double sum = 0.0;
-  for (int i = 0; i <= n; ++i) {
-    const double x = lower + h * static_cast<double>(i);
-    const double fx = fn(x);
-    const double w = (i == 0 || i == n) ? 1.0 : ((i % 2 == 0) ? 2.0 : 4.0);
-    sum += w * (std::isfinite(fx) ? fx : 0.0);
-  }
-  return sum * h / 3.0;
-}
 
 inline leaf::EventChannels forced_channels(const ExactRelation relation) {
   switch (relation) {
@@ -224,20 +203,20 @@ private:
     if (const double *exact_time = exact_time_for(onset_key)) {
       return shifted_channels(*exact_time);
     }
-    const auto pdf = simpson_integrate(
-        [&](const double u) {
-          const auto source = base_source_channels(source_kind, source_index, u);
-          return source.pdf * shifted_channels(u).pdf;
-        },
-        0.0,
-        upper);
-    const auto cdf = simpson_integrate(
-        [&](const double u) {
-          const auto source = base_source_channels(source_kind, source_index, u);
-          return source.pdf * shifted_channels(u).cdf;
-        },
-        0.0,
-        upper);
+    const auto batch = quadrature::build_finite_batch(0.0, upper);
+    double pdf = 0.0;
+    double cdf = 0.0;
+    for (std::size_t i = 0; i < batch.nodes.nodes.size(); ++i) {
+      const double u = batch.nodes.nodes[i];
+      const auto source = base_source_channels(source_kind, source_index, u);
+      if (!(source.pdf > 0.0)) {
+        continue;
+      }
+      const auto shifted = shifted_channels(u);
+      const double weight = batch.nodes.weights[i] * source.pdf;
+      pdf += weight * shifted.pdf;
+      cdf += weight * shifted.cdf;
+    }
 
     leaf::EventChannels out;
     out.pdf = safe_density(pdf);

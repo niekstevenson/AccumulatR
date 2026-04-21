@@ -14,6 +14,7 @@
 
 #include "../leaf/channels.hpp"
 #include "../runtime/direct_program.hpp"
+#include "quadrature.hpp"
 #include "trial_data.hpp"
 
 namespace accumulatr::eval {
@@ -376,47 +377,12 @@ inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
 }
 
 template <typename Fn>
-double simpson_integrate_unit(Fn &&fn, double lower, double upper, int n = 256) {
-  if (!std::isfinite(lower) || !std::isfinite(upper) || !(upper > lower)) {
-    return 0.0;
-  }
-  if (n < 2) {
-    n = 2;
-  }
-  if (n % 2 != 0) {
-    ++n;
-  }
-  const double h = (upper - lower) / static_cast<double>(n);
-  double sum = 0.0;
-  for (int i = 0; i <= n; ++i) {
-    const double x = lower + h * static_cast<double>(i);
-    const double fx = fn(x);
-    const double w = (i == 0 || i == n) ? 1.0 : ((i % 2 == 0) ? 2.0 : 4.0);
-    sum += w * (std::isfinite(fx) ? fx : 0.0);
-  }
-  return sum * h / 3.0;
-}
-
-template <typename Fn>
-double integrate_to_infinity(Fn &&density_fn, int n = 256) {
-  constexpr double kUpper = 1.0 - 1e-8;
-  return simpson_integrate_unit(
-      [&](const double u) {
-        if (!(u >= 0.0) || !(u < 1.0)) {
-          return 0.0;
-        }
-        const double one_minus_u = 1.0 - u;
-        const double t = u / one_minus_u;
-        const double jacobian = 1.0 / (one_minus_u * one_minus_u);
+double integrate_to_infinity(Fn &&density_fn) {
+  return quadrature::integrate_tail_default(
+      [&](const double t) {
         const double density = density_fn(t);
-        if (!std::isfinite(density) || !(density > 0.0)) {
-          return 0.0;
-        }
-        return density * jacobian;
-      },
-      0.0,
-      kUpper,
-      n);
+        return std::isfinite(density) && density > 0.0 ? density : 0.0;
+      });
 }
 
 struct ParamView {
@@ -455,6 +421,17 @@ struct DirectProbabilityQuery {
   semantic::Index trial_index{semantic::kInvalidIndex};
   semantic::Index variant_index{semantic::kInvalidIndex};
   semantic::Index outcome_code{semantic::kInvalidIndex};
+};
+
+struct WeightedOutcomeTerm {
+  semantic::Index outcome_code{semantic::kInvalidIndex};
+  double weight{0.0};
+};
+
+struct DirectWeightedProbabilityQuery {
+  semantic::Index trial_index{semantic::kInvalidIndex};
+  semantic::Index variant_index{semantic::kInvalidIndex};
+  std::vector<WeightedOutcomeTerm> terms;
 };
 
 struct OutcomePlan {
@@ -661,19 +638,8 @@ public:
     const auto outcome_index =
         plan_.outcome_index_by_code[static_cast<std::size_t>(outcome_code)];
     load_leaf_channels();
-
-    const auto target_idx = static_cast<std::size_t>(outcome_index);
-    const auto target = source_channels(plan_.outcomes[target_idx].source_kind,
-                                        plan_.outcomes[target_idx].source_index);
-    double prob = target.pdf;
-    for (std::size_t j = 0; j < plan_.outcomes.size(); ++j) {
-      if (j == target_idx) {
-        continue;
-      }
-      prob *= source_channels(plan_.outcomes[j].source_kind,
-                              plan_.outcomes[j].source_index)
-                  .survival;
-    }
+    const double prob =
+        density_for_outcome_index(static_cast<std::size_t>(outcome_index));
     if (!std::isfinite(prob) || !(prob > 0.0)) {
       return min_ll;
     }
@@ -684,8 +650,50 @@ public:
     const auto outcome_index =
         plan_.outcome_index_by_code[static_cast<std::size_t>(outcome_code)];
     load_leaf_channels();
+    return density_for_outcome_index(static_cast<std::size_t>(outcome_index));
+  }
 
-    const auto target_idx = static_cast<std::size_t>(outcome_index);
+  double total_density() {
+    load_leaf_channels();
+    double total = 0.0;
+    for (std::size_t target_idx = 0; target_idx < plan_.outcomes.size();
+         ++target_idx) {
+      const double prob = density_for_outcome_index(target_idx);
+      if (std::isfinite(prob) && prob > 0.0) {
+        total += prob;
+      }
+    }
+    return std::isfinite(total) && total > 0.0 ? total : 0.0;
+  }
+
+  double weighted_density_sum(const semantic::Index *outcome_codes,
+                              const double *weights,
+                              const std::size_t n_terms) {
+    load_leaf_channels();
+    double total = 0.0;
+    for (std::size_t i = 0; i < n_terms; ++i) {
+      const double weight = weights[i];
+      if (!(weight > 0.0)) {
+        continue;
+      }
+      const auto outcome_index = static_cast<std::size_t>(
+          plan_.outcome_index_by_code[static_cast<std::size_t>(outcome_codes[i])]);
+      total += weight * density_for_outcome_index(outcome_index);
+    }
+    return std::isfinite(total) && total > 0.0 ? total : 0.0;
+  }
+
+private:
+  const VariantPlan &plan_;
+  const runtime::DirectProgram &program_;
+  const ParamView &params_;
+  int first_param_row_;
+  double rt_;
+  std::vector<leaf::EventChannels> leaf_channels_;
+  std::vector<leaf::EventChannels> pool_channels_;
+  std::vector<std::uint8_t> pool_ready_;
+
+  double density_for_outcome_index(const std::size_t target_idx) {
     const auto target = source_channels(plan_.outcomes[target_idx].source_kind,
                                         plan_.outcomes[target_idx].source_index);
     double prob = target.pdf;
@@ -702,16 +710,6 @@ public:
     }
     return std::isfinite(prob) && prob > 0.0 ? prob : 0.0;
   }
-
-private:
-  const VariantPlan &plan_;
-  const runtime::DirectProgram &program_;
-  const ParamView &params_;
-  int first_param_row_;
-  double rt_;
-  std::vector<leaf::EventChannels> leaf_channels_;
-  std::vector<leaf::EventChannels> pool_channels_;
-  std::vector<std::uint8_t> pool_ready_;
 
   void load_leaf_channels() {
     for (int i = 0; i < program_.layout.n_leaves; ++i) {
@@ -865,6 +863,65 @@ inline Rcpp::NumericVector evaluate_direct_probability_queries_cached(
               static_cast<int>(layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
               rt);
           return kernel.density_for_code(query.outcome_code);
+        });
+  }
+  return out;
+}
+
+inline Rcpp::NumericVector evaluate_direct_weighted_probability_queries_cached(
+    const std::vector<VariantPlan> &plans,
+    const PreparedTrialLayout &layout,
+    SEXP paramsSEXP,
+    const std::vector<DirectWeightedProbabilityQuery> &queries) {
+  ParamView params(paramsSEXP);
+  Rcpp::NumericVector out(queries.size(), 0.0);
+  std::vector<semantic::Index> codes;
+  std::vector<double> weights;
+  for (std::size_t i = 0; i < queries.size(); ++i) {
+    const auto &query = queries[i];
+    const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
+    codes.resize(query.terms.size());
+    weights.resize(query.terms.size());
+    for (std::size_t j = 0; j < query.terms.size(); ++j) {
+      codes[j] = query.terms[j].outcome_code;
+      weights[j] = query.terms[j].weight;
+    }
+    out[static_cast<R_xlen_t>(i)] = integrate_to_infinity(
+        [&](const double rt) {
+          TrialKernel kernel(
+              plan,
+              params,
+              static_cast<int>(
+                  layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
+              rt);
+          return kernel.weighted_density_sum(
+              codes.data(),
+              weights.data(),
+              codes.size());
+        });
+  }
+  return out;
+}
+
+inline Rcpp::NumericVector evaluate_direct_total_probability_queries_cached(
+    const std::vector<VariantPlan> &plans,
+    const PreparedTrialLayout &layout,
+    SEXP paramsSEXP,
+    const std::vector<DirectProbabilityQuery> &queries) {
+  ParamView params(paramsSEXP);
+  Rcpp::NumericVector out(queries.size(), 0.0);
+  for (std::size_t i = 0; i < queries.size(); ++i) {
+    const auto &query = queries[i];
+    const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
+    out[static_cast<R_xlen_t>(i)] = integrate_to_infinity(
+        [&](const double rt) {
+          TrialKernel kernel(
+              plan,
+              params,
+              static_cast<int>(
+                  layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
+              rt);
+          return kernel.total_density();
         });
   }
   return out;

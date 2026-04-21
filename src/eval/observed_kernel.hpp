@@ -130,6 +130,28 @@ inline Rcpp::NumericVector evaluate_probability_records(
   return out;
 }
 
+inline std::vector<DirectWeightedProbabilityQuery> build_direct_missing_all_queries(
+    const std::vector<ObservedRecord> &records) {
+  std::vector<DirectWeightedProbabilityQuery> queries;
+  queries.reserve(records.size());
+  std::size_t i = 0;
+  while (i < records.size()) {
+    DirectWeightedProbabilityQuery query;
+    query.trial_index = records[i].trial_index;
+    query.variant_index = records[i].variant_index;
+    while (i < records.size() &&
+           records[i].trial_index == query.trial_index &&
+           records[i].variant_index == query.variant_index &&
+           records[i].backend == compile::BackendKind::Direct) {
+      query.terms.push_back(
+          WeightedOutcomeTerm{records[i].semantic_code, records[i].weight});
+      ++i;
+    }
+    queries.push_back(std::move(query));
+  }
+  return queries;
+}
+
 inline double logsumexp_records(const std::vector<double> &values) {
   if (values.empty()) {
     return R_NegInf;
@@ -195,6 +217,7 @@ inline SEXP evaluate_identity_trials_with_missing_all(
   Rcpp::NumericVector loglik(n_trials, min_ll);
   std::vector<ObservedRecord> finite_records;
   std::vector<ObservedRecord> missing_all_records;
+  std::vector<DirectProbabilityQuery> direct_missing_all_total_queries;
   std::vector<bool> missing_all_trial(n_trials, false);
 
   for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
@@ -211,6 +234,13 @@ inline SEXP evaluate_identity_trials_with_missing_all(
 
     if (integer_cell_is_na(label, row)) {
       missing_all_trial[trial_index] = true;
+      if (component_plan.semantic_backend == compile::BackendKind::Direct) {
+        direct_missing_all_total_queries.push_back(DirectProbabilityQuery{
+            static_cast<semantic::Index>(trial_index),
+            variant_index,
+            semantic::kInvalidIndex});
+        continue;
+      }
       for (const auto &branch : component_plan.finite_observed_branches) {
         missing_all_records.push_back(ObservedRecord{
             static_cast<semantic::Index>(trial_index),
@@ -269,6 +299,25 @@ inline SEXP evaluate_identity_trials_with_missing_all(
       }
       const double missing_prob =
           std::max(0.0, 1.0 - (std::isfinite(total_finite) ? total_finite : 1.0));
+      loglik[static_cast<R_xlen_t>(trial_index)] =
+          missing_prob > 0.0 ? std::log(missing_prob) : min_ll;
+    }
+  }
+
+  if (!direct_missing_all_total_queries.empty()) {
+    const auto total_prob = evaluate_direct_total_probability_queries_cached(
+        direct_plans,
+        layout,
+        paramsSEXP,
+        direct_missing_all_total_queries);
+    for (std::size_t i = 0; i < direct_missing_all_total_queries.size(); ++i) {
+      const auto trial_index = static_cast<std::size_t>(
+          direct_missing_all_total_queries[i].trial_index);
+      const double missing_prob = std::max(
+          0.0,
+          1.0 - (std::isfinite(total_prob[static_cast<R_xlen_t>(i)])
+                     ? total_prob[static_cast<R_xlen_t>(i)]
+                     : 1.0));
       loglik[static_cast<R_xlen_t>(trial_index)] =
           missing_prob > 0.0 ? std::log(missing_prob) : min_ll;
     }
@@ -477,24 +526,57 @@ inline SEXP evaluate_observed_trials_cached(
   }
 
   if (!missing_all_records.empty()) {
-    const auto finite_prob = evaluate_probability_records(
-        direct_plans,
-        exact_plans,
-        layout,
-        paramsSEXP,
-        missing_all_records);
+    std::vector<ObservedRecord> direct_missing_all_records;
+    std::vector<ObservedRecord> exact_missing_all_records;
+    direct_missing_all_records.reserve(missing_all_records.size());
+    exact_missing_all_records.reserve(missing_all_records.size());
+    for (const auto &record : missing_all_records) {
+      if (record.backend == compile::BackendKind::Direct) {
+        direct_missing_all_records.push_back(record);
+      } else {
+        exact_missing_all_records.push_back(record);
+      }
+    }
+    Rcpp::NumericVector direct_finite_prob;
+    std::vector<DirectWeightedProbabilityQuery> direct_queries;
+    if (!direct_missing_all_records.empty()) {
+      direct_queries = build_direct_missing_all_queries(
+          direct_missing_all_records);
+      direct_finite_prob = evaluate_direct_weighted_probability_queries_cached(
+          direct_plans,
+          layout,
+          paramsSEXP,
+          direct_queries);
+    }
+    Rcpp::NumericVector exact_finite_prob;
+    if (!exact_missing_all_records.empty()) {
+      exact_finite_prob = evaluate_probability_records(
+          direct_plans,
+          exact_plans,
+          layout,
+          paramsSEXP,
+          exact_missing_all_records);
+    }
     for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
       if (trial_kinds[trial_index] != ObservedTrialKind::MissingAll) {
         continue;
       }
       double total_finite = 0.0;
-      for (std::size_t i = 0; i < missing_all_records.size(); ++i) {
-        if (missing_all_records[i].trial_index !=
+      for (std::size_t i = 0; i < direct_queries.size(); ++i) {
+        if (direct_queries[i].trial_index !=
             static_cast<semantic::Index>(trial_index)) {
           continue;
         }
-        total_finite += missing_all_records[i].weight *
-                        finite_prob[static_cast<R_xlen_t>(i)];
+        total_finite +=
+            direct_finite_prob[static_cast<R_xlen_t>(i)];
+      }
+      for (std::size_t i = 0; i < exact_missing_all_records.size(); ++i) {
+        if (exact_missing_all_records[i].trial_index !=
+            static_cast<semantic::Index>(trial_index)) {
+          continue;
+        }
+        total_finite += exact_missing_all_records[i].weight *
+                        exact_finite_prob[static_cast<R_xlen_t>(i)];
       }
       const double missing_prob =
           std::max(0.0, 1.0 - (std::isfinite(total_finite) ? total_finite : 1.0));

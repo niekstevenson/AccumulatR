@@ -2,7 +2,6 @@
 
 #include <Rcpp.h>
 
-#include <string>
 #include <vector>
 
 #include "../runtime/layout.hpp"
@@ -10,31 +9,33 @@
 namespace accumulatr::eval {
 namespace detail {
 
-struct TrialTableView {
-  Rcpp::IntegerVector trial;
-  bool has_component{false};
-  Rcpp::CharacterVector component;
+struct PreparedTrialSpan {
+  semantic::Index start_row{0};
+  semantic::Index end_row{-1};
 };
 
-inline TrialTableView read_trial_table_view(const Rcpp::DataFrame &data) {
+struct PreparedTrialLayout {
+  std::vector<PreparedTrialSpan> spans;
+  int max_rank{1};
+};
+
+struct PreparedDataView {
+  Rcpp::IntegerVector trial;
+  Rcpp::IntegerVector component;
+};
+
+inline PreparedDataView read_prepared_data_view(const Rcpp::DataFrame &data) {
   const auto n_rows = data.nrows();
-  const bool has_component = data.containsElementNamed("component");
-  return TrialTableView{
+  return PreparedDataView{
       data.containsElementNamed("trial")
           ? Rcpp::as<Rcpp::IntegerVector>(data["trial"])
           : Rcpp::seq_len(n_rows),
-      has_component,
-      has_component ? Rcpp::as<Rcpp::CharacterVector>(data["component"])
-                    : Rcpp::CharacterVector(n_rows, NA_STRING)};
+      Rcpp::as<Rcpp::IntegerVector>(data["component"])};
 }
 
-inline std::string component_id_at_row(const TrialTableView &table,
-                                       const R_xlen_t row,
-                                       const std::string &default_component = "__default__") {
-  if (table.has_component && STRING_ELT(table.component, row) != NA_STRING) {
-    return Rcpp::as<std::string>(table.component[row]);
-  }
-  return default_component;
+inline bool integer_cell_is_na(const Rcpp::IntegerVector &column,
+                               const R_xlen_t row) {
+  return column[row] == NA_INTEGER;
 }
 
 inline int detect_rank_count(const Rcpp::DataFrame &data,
@@ -56,6 +57,32 @@ inline int detect_rank_count(const Rcpp::DataFrame &data,
     max_rank = rank;
   }
   return max_rank;
+}
+
+inline PreparedTrialLayout build_prepared_trial_layout(
+    const Rcpp::DataFrame &data,
+    const std::string &context = std::string()) {
+  PreparedTrialLayout layout;
+  layout.max_rank = detect_rank_count(data, context);
+  const auto n_rows = data.nrows();
+  if (n_rows == 0) {
+    return layout;
+  }
+  const auto table = read_prepared_data_view(data);
+  semantic::Index start = 0;
+  int last_trial = table.trial[0];
+  for (R_xlen_t row = 1; row < n_rows; ++row) {
+    if (table.trial[row] == last_trial) {
+      continue;
+    }
+    layout.spans.push_back(
+        PreparedTrialSpan{start, static_cast<semantic::Index>(row - 1)});
+    start = static_cast<semantic::Index>(row);
+    last_trial = table.trial[row];
+  }
+  layout.spans.push_back(
+      PreparedTrialSpan{start, static_cast<semantic::Index>(n_rows - 1)});
+  return layout;
 }
 
 template <typename T>

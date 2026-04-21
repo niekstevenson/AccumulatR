@@ -66,10 +66,7 @@ public:
       if (kind == semantic::SourceKind::Leaf) {
         return cached_leaf(index, t);
       }
-      if (kind == semantic::SourceKind::Pool) {
-        return cached_pool(index, t);
-      }
-      throw std::runtime_error("exact kernel does not support special sources");
+      return cached_pool(index, t);
     }
     return compute_source_channels(kind, index, t);
   }
@@ -177,10 +174,7 @@ private:
     if (kind == semantic::SourceKind::Leaf) {
       return base_leaf_channels(index, t);
     }
-    if (kind == semantic::SourceKind::Pool) {
-      return base_pool_channels(index, t);
-    }
-    throw std::runtime_error("exact kernel does not support special sources");
+    return base_pool_channels(index, t);
   }
 
   leaf::EventChannels base_leaf_channels(const semantic::Index index,
@@ -259,9 +253,6 @@ private:
     const auto end = program_.pool_member_offsets[pos + 1U];
     const auto k = program_.pool_k[pos];
     const auto n_members = static_cast<int>(end - begin);
-    if (n_members <= 0 || k < 1 || k > n_members) {
-      return impossible_channels();
-    }
 
     std::vector<leaf::EventChannels> members;
     members.reserve(static_cast<std::size_t>(n_members));

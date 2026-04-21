@@ -61,7 +61,7 @@ testthat::test_that("ranked likelihood treats missing later ranks as truncation"
   testthat::expect_equal(ll_ranked, ll_single, tolerance = 1e-8)
 })
 
-testthat::test_that("ranked likelihood rejects mismatched rank pairs with min_ll", {
+testthat::test_that("prepare_data rejects mismatched ranked pairs", {
   spec <- race_spec(n_outcomes = 2L) |>
     add_accumulator("a", "lognormal") |>
     add_accumulator("b", "lognormal") |>
@@ -69,12 +69,6 @@ testthat::test_that("ranked likelihood rejects mismatched rank pairs with min_ll
     add_outcome("B", "b")
 
   structure <- finalize_model(spec)
-  params <- c(
-    a.m = log(0.30), a.s = 0.20, a.q = 0, a.t0 = 0,
-    b.m = log(0.45), b.s = 0.25, b.q = 0, b.t0 = 0
-  )
-  params_df <- build_param_matrix(spec, params, n_trials = 1L)
-  min_ll <- -1e6
 
   bad_df <- data.frame(
     trial = 1L,
@@ -82,10 +76,10 @@ testthat::test_that("ranked likelihood rejects mismatched rank pairs with min_ll
     R2 = "B", rt2 = NA_real_,
     stringsAsFactors = FALSE
   )
-  prepared <- prepare_data(structure, bad_df)
-  ctx <- make_context(structure)
-  ll <- as.numeric(log_likelihood(ctx, prepared, params_df, min_ll = min_ll))
-  testthat::expect_equal(ll, min_ll)
+  testthat::expect_error(
+    prepare_data(structure, bad_df),
+    "paired values"
+  )
 })
 
 testthat::test_that("prepare_data enforces contiguous ranked columns", {
@@ -108,7 +102,7 @@ testthat::test_that("prepare_data enforces contiguous ranked columns", {
   )
 })
 
-testthat::test_that("ranked likelihood rejects non-increasing times with min_ll", {
+testthat::test_that("prepare_data rejects non-increasing ranked times", {
   spec <- race_spec(n_outcomes = 2L) |>
     add_accumulator("a", "lognormal") |>
     add_accumulator("b", "lognormal") |>
@@ -116,12 +110,6 @@ testthat::test_that("ranked likelihood rejects non-increasing times with min_ll"
     add_outcome("B", "b")
 
   structure <- finalize_model(spec)
-  params <- c(
-    a.m = log(0.30), a.s = 0.20, a.q = 0, a.t0 = 0,
-    b.m = log(0.45), b.s = 0.25, b.q = 0, b.t0 = 0
-  )
-  params_df <- build_param_matrix(spec, params, n_trials = 1L)
-  min_ll <- -1e6
 
   bad_time_df <- data.frame(
     trial = 1L,
@@ -129,10 +117,10 @@ testthat::test_that("ranked likelihood rejects non-increasing times with min_ll"
     R2 = "B", rt2 = 0.40,
     stringsAsFactors = FALSE
   )
-  prepared <- prepare_data(structure, bad_time_df)
-  ctx <- make_context(structure)
-  ll <- as.numeric(log_likelihood(ctx, prepared, params_df, min_ll = min_ll))
-  testthat::expect_equal(ll, min_ll)
+  testthat::expect_error(
+    prepare_data(structure, bad_time_df),
+    "strictly increasing"
+  )
 })
 
 testthat::test_that("ranked likelihood handles pool + shared trigger models", {

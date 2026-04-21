@@ -4,5 +4,6 @@
 .RData
 .Ruserdata
 /profiles
+/dev/scripts/scratch_outputs/
 .DS_Store
 .Rapp.history

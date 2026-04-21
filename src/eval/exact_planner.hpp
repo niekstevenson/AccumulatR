@@ -125,6 +125,67 @@ inline std::vector<ExactSourceConstraint> constraints_from_map(
   return out;
 }
 
+inline const std::vector<semantic::Index> &planned_source_support_for(
+    const ExactVariantPlan &plan,
+    const ExactSourceKey key) {
+  if (key.kind == semantic::SourceKind::Leaf) {
+    return plan.leaf_supports[static_cast<std::size_t>(key.index)];
+  }
+  return plan.pool_supports[static_cast<std::size_t>(key.index)];
+}
+
+inline bool scenario_forced_sources_supported(const ExactVariantPlan &plan,
+                                              const ExactTransitionScenario &scenario) {
+  std::vector<ExactSourceKey> referenced_keys;
+  referenced_keys.reserve(
+      1U + scenario.before_keys.size() + scenario.after_keys.size());
+  referenced_keys.push_back(scenario.active_key);
+  referenced_keys.insert(
+      referenced_keys.end(), scenario.before_keys.begin(), scenario.before_keys.end());
+  referenced_keys.insert(
+      referenced_keys.end(), scenario.after_keys.begin(), scenario.after_keys.end());
+
+  for (const auto &constraint : scenario.forced) {
+    if (constraint.key.kind != semantic::SourceKind::Pool) {
+      continue;
+    }
+    const auto &forced_support = planned_source_support_for(plan, constraint.key);
+    for (const auto &other : scenario.forced) {
+      if (other.key == constraint.key || other.key.kind != semantic::SourceKind::Pool) {
+        continue;
+      }
+      if (supports_overlap(
+              forced_support,
+              planned_source_support_for(plan, other.key))) {
+        return false;
+      }
+    }
+    for (const auto &key : referenced_keys) {
+      if (key == constraint.key) {
+        continue;
+      }
+      if (supports_overlap(forced_support, planned_source_support_for(plan, key))) {
+        return false;
+      }
+    }
+    for (const auto expr_idx : scenario.ready_exprs) {
+      if (supports_overlap(
+              forced_support,
+              plan.expr_supports[static_cast<std::size_t>(expr_idx)])) {
+        return false;
+      }
+    }
+    for (const auto expr_idx : scenario.tail_exprs) {
+      if (supports_overlap(
+              forced_support,
+              plan.expr_supports[static_cast<std::size_t>(expr_idx)])) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 inline bool expand_member_subsets(
     const std::vector<ExactSourceKey> &members,
     const int k,
@@ -173,7 +234,9 @@ inline std::vector<ExactTransitionScenario> build_source_transition_scenarios(
       return out;
     }
     scenario.forced = constraints_from_map(forced);
-    out.push_back(std::move(scenario));
+    if (scenario_forced_sources_supported(plan, scenario)) {
+      out.push_back(std::move(scenario));
+    }
     return out;
   }
 
@@ -247,7 +310,9 @@ inline std::vector<ExactTransitionScenario> build_source_transition_scenarios(
         continue;
       }
       scenario.forced = constraints_from_map(forced);
-      out.push_back(std::move(scenario));
+      if (scenario_forced_sources_supported(plan, scenario)) {
+        out.push_back(std::move(scenario));
+      }
     }
   }
   return out;
@@ -342,7 +407,9 @@ inline std::vector<ExactTransitionScenario> build_logical_transition_scenarios(
         continue;
       }
       scenario.forced = constraints_from_map(forced);
-      out.push_back(std::move(scenario));
+      if (scenario_forced_sources_supported(plan, scenario)) {
+        out.push_back(std::move(scenario));
+      }
     }
   }
   return out;
@@ -527,7 +594,9 @@ inline std::vector<ExactTransitionScenario> build_expr_transition_scenarios(
           }
           if (ok) {
             scenario.forced = constraints_from_map(forced);
-            out.push_back(std::move(scenario));
+            if (scenario_forced_sources_supported(plan, scenario)) {
+              out.push_back(std::move(scenario));
+            }
           }
         }
       }
@@ -579,7 +648,9 @@ inline std::vector<ExactTransitionScenario> build_expr_transition_scenarios(
         }
         if (ok) {
           scenario.forced = constraints_from_map(forced);
-          out.push_back(std::move(scenario));
+          if (scenario_forced_sources_supported(plan, scenario)) {
+            out.push_back(std::move(scenario));
+          }
         }
       }
     }
@@ -705,9 +776,14 @@ inline bool variant_supports_ranked_sequence(const ExactVariantPlan &plan) {
 }
 
 inline ExactVariantPlan make_exact_variant_plan(
-    const runtime::LoweredExactVariant &lowered) {
+    const runtime::LoweredExactVariant &lowered,
+    const std::unordered_map<std::string, semantic::Index> &outcome_code_by_label,
+    const std::size_t n_outcome_codes) {
   ExactVariantPlan plan;
   plan.lowered = lowered;
+  plan.outcome_index_by_code.assign(
+      n_outcome_codes + 1U,
+      semantic::kInvalidIndex);
   ExactSupportBuilder builder(plan.lowered);
   plan.leaf_supports = builder.build_leaf_supports();
   plan.pool_supports = builder.build_pool_supports();
@@ -733,8 +809,15 @@ inline ExactVariantPlan make_exact_variant_plan(
     outcome.expr_root = expr_root;
     outcome.support = plan.expr_supports[static_cast<std::size_t>(expr_root)];
     outcome.scenarios = build_expr_transition_scenarios(plan, expr_root);
-    plan.outcome_index.emplace(plan.lowered.outcome_labels[i],
-                               static_cast<semantic::Index>(i));
+    const auto code_it =
+        outcome_code_by_label.find(plan.lowered.outcome_labels[i]);
+    if (code_it == outcome_code_by_label.end()) {
+      throw std::runtime_error(
+          "exact evaluator found no prepared outcome code for '" +
+          plan.lowered.outcome_labels[i] + "'");
+    }
+    plan.outcome_index_by_code[static_cast<std::size_t>(code_it->second)] =
+        static_cast<semantic::Index>(i);
     plan.outcomes.push_back(std::move(outcome));
   }
 

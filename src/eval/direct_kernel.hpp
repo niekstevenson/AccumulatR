@@ -295,6 +295,7 @@ inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
                                                   const double q,
                                                   const double t0,
                                                   const double t) {
+  (void)n_params;
   if (!std::isfinite(t) || !std::isfinite(q) || q < 0.0 || q > 1.0 ||
       !std::isfinite(t0)) {
     return impossible_channels();
@@ -311,9 +312,6 @@ inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
 
   switch (static_cast<leaf::DistKind>(dist_kind)) {
   case leaf::DistKind::Lognormal: {
-    if (n_params < 2) {
-      throw std::runtime_error("lognormal direct kernel requires p1 and p2");
-    }
     const double m = params[0];
     const double s = params[1];
     if (!std::isfinite(m) || !std::isfinite(s) || s <= 0.0) {
@@ -324,9 +322,6 @@ inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
     break;
   }
   case leaf::DistKind::Gamma: {
-    if (n_params < 2) {
-      throw std::runtime_error("gamma direct kernel requires p1 and p2");
-    }
     const double shape = params[0];
     const double rate = params[1];
     if (!std::isfinite(shape) || shape <= 0.0 || !std::isfinite(rate) ||
@@ -339,9 +334,6 @@ inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
     break;
   }
   case leaf::DistKind::Exgauss: {
-    if (n_params < 3) {
-      throw std::runtime_error("exgauss direct kernel requires p1, p2, and p3");
-    }
     const double mu = params[0];
     const double sigma = params[1];
     const double tau = params[2];
@@ -361,17 +353,11 @@ inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
     break;
   }
   case leaf::DistKind::LBA: {
-    if (n_params < 4) {
-      throw std::runtime_error("LBA direct kernel requires p1, p2, p3, and p4");
-    }
     base_pdf = lba_pdf_fast(x, params[0], params[1], params[2], params[3]);
     base_cdf = lba_cdf_fast(x, params[0], params[1], params[2], params[3]);
     break;
   }
   case leaf::DistKind::RDM: {
-    if (n_params < 4) {
-      throw std::runtime_error("RDM direct kernel requires p1, p2, p3, and p4");
-    }
     base_pdf = rdm_pdf_fast(x, params[0], params[1], params[2], params[3]);
     base_cdf = rdm_cdf_fast(x, params[0], params[1], params[2], params[3]);
     break;
@@ -434,71 +420,41 @@ double integrate_to_infinity(Fn &&density_fn, int n = 256) {
 }
 
 struct ParamView {
-  Rcpp::NumericMatrix matrix;
-  int q_col{-1};
-  int t0_col{-1};
-  std::vector<int> p_cols;
+  const double *base;
+  int nrow;
 
-  explicit ParamView(SEXP paramsSEXP) : matrix(Rcpp::as<Rcpp::NumericMatrix>(paramsSEXP)) {
-    const SEXP dimnames = matrix.attr("dimnames");
-    Rcpp::CharacterVector names = Rf_isNull(dimnames)
-                                      ? Rcpp::CharacterVector()
-                                      : Rcpp::as<Rcpp::List>(dimnames)[1];
-    if (names.size() == 0) {
-      throw std::runtime_error("direct evaluator requires named parameter columns");
-    }
-    for (R_xlen_t i = 0; i < names.size(); ++i) {
-      if (names[i] == NA_STRING) {
-        continue;
-      }
-      const std::string name = Rcpp::as<std::string>(names[i]);
-      if (name == "q") {
-        q_col = static_cast<int>(i);
-      } else if (name == "t0") {
-        t0_col = static_cast<int>(i);
-      } else if (name.size() >= 2 && name[0] == 'p') {
-        const int idx = std::atoi(name.c_str() + 1);
-        if (idx > 0) {
-          if (static_cast<int>(p_cols.size()) < idx) {
-            p_cols.resize(static_cast<std::size_t>(idx), -1);
-          }
-          p_cols[static_cast<std::size_t>(idx - 1)] = static_cast<int>(i);
-        }
-      }
-    }
-    if (q_col < 0 || t0_col < 0) {
-      throw std::runtime_error("direct evaluator requires parameter columns q and t0");
-    }
-  }
+  explicit ParamView(SEXP paramsSEXP)
+      : base(REAL(paramsSEXP)), nrow(Rf_nrows(paramsSEXP)) {}
 
   inline double q(const int row) const {
-    return matrix(row, q_col);
+    return base[row];
   }
 
   inline double t0(const int row) const {
-    return matrix(row, t0_col);
+    return base[nrow + row];
   }
 
   inline double p(const int row, const int slot) const {
-    if (slot < 0 || slot >= static_cast<int>(p_cols.size())) {
-      return 0.0;
-    }
-    const int col = p_cols[static_cast<std::size_t>(slot)];
-    return col >= 0 ? matrix(row, col) : 0.0;
+    return base[(slot + 2) * nrow + row];
   }
-};
-
-struct TrialObservation {
-  semantic::Index variant_index{semantic::kInvalidIndex};
-  std::string component_id;
-  std::string outcome_label;
-  double rt{NA_REAL};
 };
 
 struct ProbabilityQuery {
   semantic::Index variant_index{semantic::kInvalidIndex};
-  std::string component_id;
-  std::string outcome_label;
+  semantic::Index outcome_code{semantic::kInvalidIndex};
+};
+
+struct DirectLoglikQuery {
+  semantic::Index trial_index{semantic::kInvalidIndex};
+  semantic::Index variant_index{semantic::kInvalidIndex};
+  semantic::Index outcome_code{semantic::kInvalidIndex};
+  double rt{NA_REAL};
+};
+
+struct DirectProbabilityQuery {
+  semantic::Index trial_index{semantic::kInvalidIndex};
+  semantic::Index variant_index{semantic::kInvalidIndex};
+  semantic::Index outcome_code{semantic::kInvalidIndex};
 };
 
 struct OutcomePlan {
@@ -509,7 +465,7 @@ struct OutcomePlan {
 
 struct VariantPlan {
   runtime::LoweredDirectVariant lowered;
-  std::unordered_map<std::string, semantic::Index> outcome_index;
+  std::vector<semantic::Index> outcome_index_by_code;
   std::vector<OutcomePlan> outcomes;
 };
 
@@ -570,9 +526,15 @@ inline std::vector<semantic::Index> collect_source_support(
   return (*pool_cache)[pool_idx];
 }
 
-inline VariantPlan make_variant_plan(const runtime::LoweredDirectVariant &lowered) {
+inline VariantPlan make_variant_plan(
+    const runtime::LoweredDirectVariant &lowered,
+    const std::unordered_map<std::string, semantic::Index> &outcome_code_by_label,
+    const std::size_t n_outcome_codes) {
   VariantPlan plan;
   plan.lowered = lowered;
+  plan.outcome_index_by_code.assign(
+      n_outcome_codes + 1U,
+      semantic::kInvalidIndex);
 
   const auto &program = plan.lowered.program;
   std::vector<std::vector<semantic::Index>> pool_cache(
@@ -593,7 +555,14 @@ inline VariantPlan make_variant_plan(const runtime::LoweredDirectVariant &lowere
         &pool_cache,
         &pool_state);
     plan.outcomes.push_back(std::move(outcome));
-    plan.outcome_index.emplace(plan.lowered.outcome_labels[static_cast<std::size_t>(i)], i);
+    const auto label =
+        plan.lowered.outcome_labels[static_cast<std::size_t>(i)];
+    const auto code_it = outcome_code_by_label.find(label);
+    if (code_it == outcome_code_by_label.end()) {
+      throw std::runtime_error(
+          "direct evaluator found no prepared outcome code for '" + label + "'");
+    }
+    plan.outcome_index_by_code[static_cast<std::size_t>(code_it->second)] = i;
   }
 
   for (std::size_t i = 0; i < plan.outcomes.size(); ++i) {
@@ -615,88 +584,61 @@ inline VariantPlan make_variant_plan(const runtime::LoweredDirectVariant &lowere
   return plan;
 }
 
-inline std::vector<TrialObservation> collapse_observations(
+inline std::vector<ProbabilityQuery> collapse_probability_queries(
     const Rcpp::DataFrame &data,
-    const std::unordered_map<std::string, semantic::Index> &variant_index_by_component) {
-  const auto n_rows = data.nrows();
-  if (n_rows == 0) {
+    const std::vector<semantic::Index> &variant_index_by_component_code,
+    const PreparedTrialLayout &layout) {
+  if (layout.spans.empty()) {
     return {};
   }
-  if (!data.containsElementNamed("R") || !data.containsElementNamed("rt")) {
-    throw std::runtime_error("direct evaluator data must include columns R and rt");
-  }
 
-  const auto table = read_trial_table_view(data);
-  Rcpp::CharacterVector outcome = Rcpp::as<Rcpp::CharacterVector>(data["R"]);
-  Rcpp::NumericVector rt = Rcpp::as<Rcpp::NumericVector>(data["rt"]);
+  const auto table = read_prepared_data_view(data);
+  Rcpp::IntegerVector outcome = Rcpp::as<Rcpp::IntegerVector>(data["R"]);
 
-  std::vector<TrialObservation> out;
-  out.reserve(static_cast<std::size_t>(n_rows));
-  int last_trial = NA_INTEGER;
-  for (R_xlen_t i = 0; i < n_rows; ++i) {
-    const int trial_id = table.trial[i];
-    if (i > 0 && trial_id == last_trial) {
-      continue;
-    }
-    last_trial = trial_id;
-
-    const std::string component_id = component_id_at_row(table, i);
-    const auto it = variant_index_by_component.find(component_id);
-    if (it == variant_index_by_component.end()) {
-      throw std::runtime_error(
-          "direct evaluator found no direct variant for component '" + component_id + "'");
-    }
-    if (outcome[i] == NA_STRING) {
-      throw std::runtime_error("direct evaluator does not support missing R labels");
-    }
-    out.push_back(TrialObservation{
-        it->second,
-        component_id,
-        Rcpp::as<std::string>(outcome[i]),
-        rt[i]});
+  std::vector<ProbabilityQuery> out;
+  out.reserve(layout.spans.size());
+  for (const auto &span : layout.spans) {
+    const auto row = static_cast<R_xlen_t>(span.start_row);
+    const int component_code = table.component[row];
+    out.push_back(ProbabilityQuery{
+        variant_index_by_component_code[static_cast<std::size_t>(component_code)],
+        outcome[row]});
   }
   return out;
 }
 
-inline std::vector<ProbabilityQuery> collapse_probability_queries(
-    const Rcpp::DataFrame &data,
-    const std::unordered_map<std::string, semantic::Index> &variant_index_by_component) {
-  const auto n_rows = data.nrows();
-  if (n_rows == 0) {
-    return {};
-  }
-  if (!data.containsElementNamed("R")) {
-    throw std::runtime_error("probability queries must include column R");
-  }
-
-  const auto table = read_trial_table_view(data);
-  Rcpp::CharacterVector outcome = Rcpp::as<Rcpp::CharacterVector>(data["R"]);
-
-  std::vector<ProbabilityQuery> out;
-  out.reserve(static_cast<std::size_t>(n_rows));
-  int last_trial = NA_INTEGER;
-  for (R_xlen_t i = 0; i < n_rows; ++i) {
-    const int trial_id = table.trial[i];
-    if (i > 0 && trial_id == last_trial) {
+inline void build_direct_plan_cache(
+    const compile::CompiledModel &compiled,
+    const std::unordered_map<std::string, semantic::Index> &component_code_by_id,
+    const std::unordered_map<std::string, semantic::Index> &outcome_code_by_label,
+    const std::size_t n_component_codes,
+    const std::size_t n_outcome_codes,
+    std::vector<semantic::Index> *variant_index_by_component_code,
+    std::vector<VariantPlan> *plans) {
+  variant_index_by_component_code->assign(
+      n_component_codes + 1U,
+      semantic::kInvalidIndex);
+  plans->clear();
+  plans->reserve(compiled.variants.size());
+  for (const auto &variant : compiled.variants) {
+    if (!variant_is_semantic_direct(variant)) {
       continue;
     }
-    last_trial = trial_id;
-
-    const std::string component_id = component_id_at_row(table, i);
-    const auto it = variant_index_by_component.find(component_id);
-    if (it == variant_index_by_component.end()) {
+    const auto plan_index = static_cast<semantic::Index>(plans->size());
+    const auto component_it = component_code_by_id.find(variant.component_id);
+    if (component_it == component_code_by_id.end()) {
       throw std::runtime_error(
-          "probability evaluator found no variant for component '" + component_id + "'");
+          "direct evaluator found no prepared component code for '" +
+          variant.component_id + "'");
     }
-    if (outcome[i] == NA_STRING) {
-      throw std::runtime_error("probability evaluator does not support missing R labels");
-    }
-    out.push_back(ProbabilityQuery{
-        it->second,
-        component_id,
-        Rcpp::as<std::string>(outcome[i])});
+    (*variant_index_by_component_code)[static_cast<std::size_t>(component_it->second)] =
+        plan_index;
+    plans->push_back(
+      make_variant_plan(
+          runtime::lower_direct_variant(variant),
+          outcome_code_by_label,
+          n_outcome_codes));
   }
-  return out;
 }
 
 class TrialKernel {
@@ -714,14 +656,13 @@ public:
         pool_channels_(static_cast<std::size_t>(program_.layout.n_pools)),
         pool_ready_(static_cast<std::size_t>(program_.layout.n_pools), 0U) {}
 
-  double loglik_for(const std::string &label, const double min_ll) {
-    const auto it = plan_.outcome_index.find(label);
-    if (it == plan_.outcome_index.end()) {
-      return min_ll;
-    }
+  double loglik_for_code(const semantic::Index outcome_code,
+                         const double min_ll) {
+    const auto outcome_index =
+        plan_.outcome_index_by_code[static_cast<std::size_t>(outcome_code)];
     load_leaf_channels();
 
-    const auto target_idx = static_cast<std::size_t>(it->second);
+    const auto target_idx = static_cast<std::size_t>(outcome_index);
     const auto target = source_channels(plan_.outcomes[target_idx].source_kind,
                                         plan_.outcomes[target_idx].source_index);
     double prob = target.pdf;
@@ -739,14 +680,12 @@ public:
     return std::log(prob);
   }
 
-  double density_for(const std::string &label) {
-    const auto it = plan_.outcome_index.find(label);
-    if (it == plan_.outcome_index.end()) {
-      return 0.0;
-    }
+  double density_for_code(const semantic::Index outcome_code) {
+    const auto outcome_index =
+        plan_.outcome_index_by_code[static_cast<std::size_t>(outcome_code)];
     load_leaf_channels();
 
-    const auto target_idx = static_cast<std::size_t>(it->second);
+    const auto target_idx = static_cast<std::size_t>(outcome_index);
     const auto target = source_channels(plan_.outcomes[target_idx].source_kind,
                                         plan_.outcomes[target_idx].source_index);
     double prob = target.pdf;
@@ -806,10 +745,7 @@ private:
     if (kind == semantic::SourceKind::Leaf) {
       return leaf_channels_[static_cast<std::size_t>(index)];
     }
-    if (kind == semantic::SourceKind::Pool) {
-      return pool_channel(index);
-    }
-    throw std::runtime_error("direct evaluator encountered invalid source kind");
+    return pool_channel(index);
   }
 
   const leaf::EventChannels &pool_channel(const semantic::Index pool_index) {
@@ -822,11 +758,6 @@ private:
     const auto end = program_.pool_member_offsets[idx + 1U];
     const auto k = program_.pool_k[idx];
     const auto n_members = static_cast<int>(end - begin);
-    if (n_members <= 0 || k < 1 || k > n_members) {
-      pool_channels_[idx] = impossible_channels();
-      pool_ready_[idx] = 1U;
-      return pool_channels_[idx];
-    }
 
     std::vector<const leaf::EventChannels *> members;
     members.reserve(static_cast<std::size_t>(n_members));
@@ -894,74 +825,107 @@ private:
   }
 };
 
-inline Rcpp::List evaluate_direct_trials(const compile::CompiledModel &compiled,
-                                         const semantic::SemanticModel &model,
-                                         SEXP paramsSEXP,
-                                         SEXP dataSEXP,
-                                         const double min_ll) {
+inline Rcpp::NumericVector evaluate_direct_loglik_queries_cached(
+    const std::vector<VariantPlan> &plans,
+    const PreparedTrialLayout &layout,
+    SEXP paramsSEXP,
+    const std::vector<DirectLoglikQuery> &queries,
+    const double min_ll) {
+  ParamView params(paramsSEXP);
+  Rcpp::NumericVector out(queries.size(), min_ll);
+  for (std::size_t i = 0; i < queries.size(); ++i) {
+    const auto &query = queries[i];
+    const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
+    TrialKernel kernel(
+        plan,
+        params,
+        static_cast<int>(layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
+        query.rt);
+    out[static_cast<R_xlen_t>(i)] =
+        kernel.loglik_for_code(query.outcome_code, min_ll);
+  }
+  return out;
+}
+
+inline Rcpp::NumericVector evaluate_direct_probability_queries_cached(
+    const std::vector<VariantPlan> &plans,
+    const PreparedTrialLayout &layout,
+    SEXP paramsSEXP,
+    const std::vector<DirectProbabilityQuery> &queries) {
+  ParamView params(paramsSEXP);
+  Rcpp::NumericVector out(queries.size(), 0.0);
+  for (std::size_t i = 0; i < queries.size(); ++i) {
+    const auto &query = queries[i];
+    const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
+    out[static_cast<R_xlen_t>(i)] = integrate_to_infinity(
+        [&](const double rt) {
+          TrialKernel kernel(
+              plan,
+              params,
+              static_cast<int>(layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
+              rt);
+          return kernel.density_for_code(query.outcome_code);
+        });
+  }
+  return out;
+}
+
+inline Rcpp::List evaluate_direct_trials_cached(
+    const semantic::SemanticModel &model,
+    const std::vector<semantic::Index> &variant_index_by_component_code,
+    const std::vector<VariantPlan> &plans,
+    const PreparedTrialLayout &layout,
+    SEXP paramsSEXP,
+    SEXP dataSEXP,
+    const double min_ll) {
   Rcpp::DataFrame data(dataSEXP);
   ParamView params(paramsSEXP);
 
-  std::unordered_map<std::string, semantic::Index> variant_index_by_component;
-  for (semantic::Index i = 0;
-       i < static_cast<semantic::Index>(compiled.variants.size());
-       ++i) {
-    if (variant_is_semantic_direct(
-            compiled.variants[static_cast<std::size_t>(i)])) {
-      variant_index_by_component.emplace(
-          compiled.variants[static_cast<std::size_t>(i)].component_id, i);
-    }
-  }
+  const auto table = read_prepared_data_view(data);
+  const auto outcome = Rcpp::as<Rcpp::IntegerVector>(data["R"]);
+  const auto rt = Rcpp::as<Rcpp::NumericVector>(data["rt"]);
 
-  const auto observations = collapse_observations(data, variant_index_by_component);
-  const auto blocks = build_variant_blocks(observations);
-
-  std::unordered_map<semantic::Index, VariantPlan> plans;
-  for (const auto &block : blocks) {
-    if (plans.find(block.variant_index) != plans.end()) {
-      continue;
-    }
-    plans.emplace(
-        block.variant_index,
-        make_variant_plan(runtime::lower_direct_variant(
-            compiled.variants[static_cast<std::size_t>(block.variant_index)])));
-  }
-
-  Rcpp::NumericVector loglik(observations.size());
+  Rcpp::NumericVector loglik(layout.spans.size());
+  std::vector<runtime::TrialBlock> blocks;
   std::size_t param_row = 0;
-  for (const auto &block : blocks) {
-    const auto &plan = plans.at(block.variant_index);
+  runtime::TrialBlock current_block;
+  bool have_block = false;
+  for (std::size_t trial_index = 0; trial_index < layout.spans.size(); ++trial_index) {
+    const auto &span = layout.spans[trial_index];
+    const auto row = static_cast<R_xlen_t>(span.start_row);
+    const int component_code = table.component[row];
+    const auto variant_index =
+        variant_index_by_component_code[static_cast<std::size_t>(component_code)];
+    if (!have_block || current_block.variant_index != variant_index) {
+      if (have_block) {
+        blocks.push_back(current_block);
+      }
+      current_block.variant_index = variant_index;
+      current_block.start_row = static_cast<int>(trial_index);
+      current_block.row_count = 1;
+      have_block = true;
+    } else {
+      ++current_block.row_count;
+    }
+
+    const auto &plan = plans.at(static_cast<std::size_t>(variant_index));
     const auto leaf_count =
         static_cast<std::size_t>(plan.lowered.program.layout.n_leaves);
-    for (int local = 0; local < block.row_count; ++local) {
-      const auto obs_idx = static_cast<std::size_t>(block.start_row + local);
-      if (param_row + leaf_count > static_cast<std::size_t>(params.matrix.nrow())) {
-        throw std::runtime_error(
-            "parameter rows do not match direct trial layout");
-      }
-      TrialKernel kernel(
-          plan,
-          params,
-          static_cast<int>(param_row),
-          observations[obs_idx].rt);
-      loglik[static_cast<R_xlen_t>(obs_idx)] =
-          kernel.loglik_for(observations[obs_idx].outcome_label, min_ll);
-      param_row += leaf_count;
-    }
+    TrialKernel kernel(plan, params, static_cast<int>(param_row), rt[row]);
+    loglik[static_cast<R_xlen_t>(trial_index)] =
+        kernel.loglik_for_code(outcome[row], min_ll);
+    param_row += leaf_count;
   }
-
-  if (param_row != static_cast<std::size_t>(params.matrix.nrow())) {
-    throw std::runtime_error(
-        "parameter rows contain unused entries for the direct trial layout");
+  if (have_block) {
+    blocks.push_back(current_block);
   }
-
   Rcpp::List block_list(blocks.size());
   for (std::size_t i = 0; i < blocks.size(); ++i) {
     const auto &block = blocks[i];
+    const auto &plan = plans.at(static_cast<std::size_t>(block.variant_index));
     block_list[i] = Rcpp::List::create(
         Rcpp::Named("variant_index") = block.variant_index,
-        Rcpp::Named("component_id") =
-            compiled.variants[static_cast<std::size_t>(block.variant_index)].component_id,
+        Rcpp::Named("component_id") = plan.lowered.component_id,
         Rcpp::Named("start_row") = block.start_row,
         Rcpp::Named("row_count") = block.row_count);
   }
@@ -975,56 +939,33 @@ inline Rcpp::List evaluate_direct_trials(const compile::CompiledModel &compiled,
       Rcpp::Named("loglik") = loglik,
       Rcpp::Named("total_loglik") = total_loglik,
       Rcpp::Named("blocks") = block_list,
-      Rcpp::Named("n_trials") = static_cast<int>(observations.size()),
+      Rcpp::Named("n_trials") = static_cast<int>(layout.spans.size()),
       Rcpp::Named("n_variants") = static_cast<int>(plans.size()),
       Rcpp::Named("n_model_leaves") = static_cast<int>(model.leaves.size()));
 }
 
-inline Rcpp::List evaluate_direct_outcome_probabilities(
-    const compile::CompiledModel &compiled,
+inline Rcpp::List evaluate_direct_outcome_probabilities_cached(
     const semantic::SemanticModel &model,
+    const std::vector<semantic::Index> &variant_index_by_component_code,
+    const std::vector<VariantPlan> &plans,
+    const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
     SEXP dataSEXP) {
   Rcpp::DataFrame data(dataSEXP);
   ParamView params(paramsSEXP);
 
-  std::unordered_map<std::string, semantic::Index> variant_index_by_component;
-  for (semantic::Index i = 0;
-       i < static_cast<semantic::Index>(compiled.variants.size());
-       ++i) {
-    if (variant_is_semantic_direct(
-            compiled.variants[static_cast<std::size_t>(i)])) {
-      variant_index_by_component.emplace(
-          compiled.variants[static_cast<std::size_t>(i)].component_id, i);
-    }
-  }
-
-  const auto queries = collapse_probability_queries(data, variant_index_by_component);
+  const auto queries =
+      collapse_probability_queries(data, variant_index_by_component_code, layout);
   const auto blocks = build_variant_blocks(queries);
-
-  std::unordered_map<semantic::Index, VariantPlan> plans;
-  for (const auto &block : blocks) {
-    if (plans.find(block.variant_index) != plans.end()) {
-      continue;
-    }
-    plans.emplace(
-        block.variant_index,
-        make_variant_plan(runtime::lower_direct_variant(
-            compiled.variants[static_cast<std::size_t>(block.variant_index)])));
-  }
 
   Rcpp::NumericVector prob(queries.size());
   std::size_t param_row = 0;
   for (const auto &block : blocks) {
-    const auto &plan = plans.at(block.variant_index);
+    const auto &plan = plans.at(static_cast<std::size_t>(block.variant_index));
     const auto leaf_count =
         static_cast<std::size_t>(plan.lowered.program.layout.n_leaves);
     for (int local = 0; local < block.row_count; ++local) {
       const auto query_idx = static_cast<std::size_t>(block.start_row + local);
-      if (param_row + leaf_count > static_cast<std::size_t>(params.matrix.nrow())) {
-        throw std::runtime_error(
-            "parameter rows do not match direct probability query layout");
-      }
       prob[static_cast<R_xlen_t>(query_idx)] = integrate_to_infinity(
           [&](const double rt) {
             TrialKernel kernel(
@@ -1032,15 +973,10 @@ inline Rcpp::List evaluate_direct_outcome_probabilities(
                 params,
                 static_cast<int>(param_row),
                 rt);
-            return kernel.density_for(queries[query_idx].outcome_label);
+            return kernel.density_for_code(queries[query_idx].outcome_code);
           });
       param_row += leaf_count;
     }
-  }
-
-  if (param_row != static_cast<std::size_t>(params.matrix.nrow())) {
-    throw std::runtime_error(
-        "parameter rows contain unused entries for the direct probability layout");
   }
 
   return Rcpp::List::create(

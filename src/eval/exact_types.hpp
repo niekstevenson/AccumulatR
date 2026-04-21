@@ -112,7 +112,7 @@ struct ExactTargetCompetitorPlan {
 
 struct ExactVariantPlan {
   runtime::LoweredExactVariant lowered;
-  std::unordered_map<std::string, semantic::Index> outcome_index;
+  std::vector<semantic::Index> outcome_index_by_code;
   std::vector<ExactOutcomePlan> outcomes;
   std::vector<ExactTargetCompetitorPlan> competitor_plans;
   std::vector<std::vector<semantic::Index>> leaf_supports;
@@ -120,18 +120,6 @@ struct ExactVariantPlan {
   std::vector<std::vector<semantic::Index>> expr_supports;
   std::vector<semantic::Index> shared_trigger_indices;
   bool ranked_supported{true};
-};
-
-struct ExactObservedRank {
-  std::string outcome_label;
-  double rt{NA_REAL};
-};
-
-struct ExactTrialObservation {
-  semantic::Index variant_index{semantic::kInvalidIndex};
-  std::string component_id;
-  std::vector<ExactObservedRank> ranks;
-  bool valid{true};
 };
 
 inline std::vector<semantic::Index> merge_sorted_support(

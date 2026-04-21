@@ -1,3 +1,11 @@
+run_public_loglik <- function(spec, trial_df, params, min_ll = log(1e-10)) {
+  structure <- finalize_model(spec)
+  context <- make_context(structure)
+  prepared <- prepare_data(structure, trial_df)
+  params_mat <- build_param_matrix(spec, params, trial_df = prepared)
+  as.numeric(log_likelihood(context, prepared, params_mat, min_ll = min_ll))
+}
+
 testthat::test_that("exact kernel conditions shared-trigger competitors on the realized transition", {
   spec <- race_spec() |>
     add_accumulator("s", "lognormal") |>
@@ -7,7 +15,6 @@ testthat::test_that("exact kernel conditions shared-trigger competitors on the r
     add_outcome("X", all_of("change", "stop")) |>
     add_trigger("tg", members = c("stop", "change"), q = 0.05, draw = "shared")
 
-  prep <- prepare_model(spec)
   trial_df <- data.frame(
     trial = 1L,
     R = "S",
@@ -20,17 +27,14 @@ testthat::test_that("exact kernel conditions shared-trigger competitors on the r
     change.m = log(0.40), change.s = 0.18, change.t0 = 0.00,
     tg = 0.05
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .exact_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   t <- trial_df$rt[[1]]
   fs <- dlnorm(t, params[["s.m"]], params[["s.s"]])
   surv_stop <- 1 - plnorm(t, params[["stop.m"]], params[["stop.s"]])
   expected <- log(params[["tg"]] * fs + (1 - params[["tg"]]) * fs * surv_stop)
 
-  testthat::expect_equal(as.numeric(out$loglik), expected, tolerance = 1e-6)
-  testthat::expect_equal(out$total_loglik, expected, tolerance = 1e-6)
+  testthat::expect_equal(out, expected, tolerance = 1e-6)
 })
 
 testthat::test_that("exact kernel matches numeric convolution for single-outcome chained onset", {
@@ -39,7 +43,6 @@ testthat::test_that("exact kernel matches numeric convolution for single-outcome
     add_accumulator("b", "lognormal", onset = after("a")) |>
     add_outcome("B", "b")
 
-  prep <- prepare_model(spec)
   trial_df <- data.frame(
     trial = 1L,
     R = "B",
@@ -50,9 +53,7 @@ testthat::test_that("exact kernel matches numeric convolution for single-outcome
     a.m = log(0.25), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
     b.m = log(0.35), b.s = 0.20, b.q = 0.00, b.t0 = 0.00
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .exact_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   expected <- stats::integrate(
     function(u) {
@@ -64,7 +65,7 @@ testthat::test_that("exact kernel matches numeric convolution for single-outcome
     rel.tol = 1e-8
   )$value
 
-  testthat::expect_equal(as.numeric(out$loglik), log(expected), tolerance = 2e-3)
+  testthat::expect_equal(out, log(expected), tolerance = 2e-3)
 })
 
 testthat::test_that("exact kernel carries positive-mass tie terms for the guarded shared-gate example", {
@@ -76,7 +77,6 @@ testthat::test_that("exact kernel carries positive-mass tie terms for the guarde
     add_outcome("Fast", inhibit(all_of("go_fast", "gate_shared"), by = "stop_control")) |>
     add_outcome("Slow", all_of("go_slow", "gate_shared"))
 
-  prep <- prepare_model(spec)
   t_obs <- 0.30
   trial_df <- data.frame(
     trial = 1L,
@@ -102,9 +102,7 @@ testthat::test_that("exact kernel carries positive-mass tie terms for the guarde
     stop_control.q = 0.00,
     stop_control.t0 = 0.00
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .exact_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   f_fast <- function(x) dlnorm(x, params[["go_fast.m"]], params[["go_fast.s"]])
   F_fast <- function(x) plnorm(x, params[["go_fast.m"]], params[["go_fast.s"]])
@@ -126,7 +124,7 @@ testthat::test_that("exact kernel carries positive-mass tie terms for the guarde
       )$value
   )
 
-  testthat::expect_equal(as.numeric(out$loglik), log(expected), tolerance = 2e-3)
+  testthat::expect_equal(out, log(expected), tolerance = 2e-3)
 })
 
 testthat::test_that("exact kernel handles nested logical-guard outcomes directly", {
@@ -136,7 +134,6 @@ testthat::test_that("exact kernel handles nested logical-guard outcomes directly
     add_accumulator("s2", "lognormal") |>
     add_outcome("STOP", all_of("s1", inhibit("s2", by = "is")))
 
-  prep <- prepare_model(spec)
   t_obs <- 0.42
   trial_df <- data.frame(
     trial = 1L,
@@ -149,9 +146,7 @@ testthat::test_that("exact kernel handles nested logical-guard outcomes directly
     is.m = log(0.30), is.s = 0.14, is.q = 0.00, is.t0 = 0.00,
     s2.m = log(0.28), s2.s = 0.14, s2.q = 0.00, s2.t0 = 0.00
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .exact_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   f_s1 <- function(x) dlnorm(x, params[["s1.m"]], params[["s1.s"]])
   F_s1 <- function(x) plnorm(x, params[["s1.m"]], params[["s1.s"]])
@@ -167,7 +162,7 @@ testthat::test_that("exact kernel handles nested logical-guard outcomes directly
   guard_density <- f_s2(t_obs) * S_is(t_obs)
   expected <- f_s1(t_obs) * guard_cdf + F_s1(t_obs) * guard_density
 
-  testthat::expect_equal(as.numeric(out$loglik), log(expected), tolerance = 2e-3)
+  testthat::expect_equal(out, log(expected), tolerance = 2e-3)
 })
 
 testthat::test_that("exact kernel handles none_of as an absence condition inside conjunctions", {
@@ -178,7 +173,6 @@ testthat::test_that("exact kernel handles none_of as an absence condition inside
     add_outcome("RESPOND", all_of("go", none_of("stop"))) |>
     add_outcome("OTHER", "other")
 
-  prep <- prepare_model(spec)
   t_obs <- 0.41
   trial_df <- data.frame(
     trial = 1L,
@@ -191,15 +185,13 @@ testthat::test_that("exact kernel handles none_of as an absence condition inside
     stop.m = log(0.27), stop.s = 0.13, stop.q = 0.00, stop.t0 = 0.00,
     other.m = log(0.45), other.s = 0.17, other.q = 0.00, other.t0 = 0.00
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .exact_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   expected <- dlnorm(t_obs, params[["go.m"]], params[["go.s"]]) *
     (1 - plnorm(t_obs, params[["stop.m"]], params[["stop.s"]])) *
     (1 - plnorm(t_obs, params[["other.m"]], params[["other.s"]]))
 
-  testthat::expect_equal(as.numeric(out$loglik), log(expected), tolerance = 2e-3)
+  testthat::expect_equal(out, log(expected), tolerance = 2e-3)
 })
 
 testthat::test_that("exact kernel rejects logical-not branches inside first_of/or outcomes", {
@@ -208,7 +200,6 @@ testthat::test_that("exact kernel rejects logical-not branches inside first_of/o
     add_accumulator("stop", "lognormal") |>
     add_outcome("RESPOND", first_of("go", none_of("stop")))
 
-  prep <- prepare_model(spec)
   trial_df <- data.frame(
     trial = 1L,
     R = "RESPOND",
@@ -219,10 +210,8 @@ testthat::test_that("exact kernel rejects logical-not branches inside first_of/o
     go.m = log(0.31), go.s = 0.15, go.q = 0.00, go.t0 = 0.00,
     stop.m = log(0.27), stop.s = 0.13, stop.q = 0.00, stop.t0 = 0.00
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
   testthat::expect_error(
-    .exact_loglik_prep(prep, params_mat, trial_df),
+    run_public_loglik(spec, trial_df, params),
     "logical-not branches inside first_of\\(\\)/or outcomes"
   )
 })
@@ -237,7 +226,6 @@ testthat::test_that("exact kernel handles overlapping guarded competitors withou
     add_outcome("C2", inhibit("b", by = "stop")) |>
     add_outcome("D", "d")
 
-  prep <- prepare_model(spec)
   t_obs <- 0.43
   trial_df <- data.frame(
     trial = 1L,
@@ -251,9 +239,7 @@ testthat::test_that("exact kernel handles overlapping guarded competitors withou
     stop.m = log(0.24), stop.s = 0.14, stop.q = 0.00, stop.t0 = 0.00,
     d.m = log(0.46), d.s = 0.19, d.q = 0.00, d.t0 = 0.00
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .exact_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   expected <- dlnorm(t_obs, params[["d.m"]], params[["d.s"]]) * (
     integrate(
@@ -272,7 +258,7 @@ testthat::test_that("exact kernel handles overlapping guarded competitors withou
       (1 - plnorm(t_obs, params[["b.m"]], params[["b.s"]]))
   )
 
-  testthat::expect_equal(as.numeric(out$loglik), log(expected), tolerance = 2e-3)
+  testthat::expect_equal(out, log(expected), tolerance = 2e-3)
 })
 
 testthat::test_that("exact ranked kernel matches simple independent two-outcome formula", {
@@ -282,7 +268,6 @@ testthat::test_that("exact ranked kernel matches simple independent two-outcome 
     add_outcome("A", "a") |>
     add_outcome("B", "b")
 
-  prep <- prepare_model(spec)
   trial_df <- data.frame(
     trial = 1L,
     R = "A",
@@ -295,13 +280,11 @@ testthat::test_that("exact ranked kernel matches simple independent two-outcome 
     a.m = log(0.30), a.s = 0.20, a.q = 0.00, a.t0 = 0.00,
     b.m = log(0.45), b.s = 0.25, b.q = 0.00, b.t0 = 0.00
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .exact_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   expected <- dlnorm(0.30, params[["a.m"]], params[["a.s"]]) *
     dlnorm(0.55, params[["b.m"]], params[["b.s"]])
-  testthat::expect_equal(as.numeric(out$loglik), log(expected), tolerance = 1e-4)
+  testthat::expect_equal(out, log(expected), tolerance = 1e-4)
 })
 
 testthat::test_that("exact ranked kernel handles shared-trigger overlap at the first rank", {
@@ -314,7 +297,6 @@ testthat::test_that("exact ranked kernel handles shared-trigger overlap at the f
     add_outcome("C", "c") |>
     add_trigger("tg", members = c("b", "c"), q = 0.20, draw = "shared")
 
-  prep <- prepare_model(spec)
   t1 <- 0.31
   t2 <- 0.52
   trial_df <- data.frame(
@@ -331,15 +313,13 @@ testthat::test_that("exact ranked kernel handles shared-trigger overlap at the f
     c.m = log(0.41), c.s = 0.14, c.t0 = 0.00,
     tg = 0.20
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .exact_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   expected <- dlnorm(t1, params[["a.m"]], params[["a.s"]]) *
     (1 - params[["tg"]]) *
     dlnorm(t2, params[["b.m"]], params[["b.s"]]) *
     (1 - plnorm(t2, params[["c.m"]], params[["c.s"]]))
-  testthat::expect_equal(as.numeric(out$loglik), log(expected), tolerance = 2e-3)
+  testthat::expect_equal(out, log(expected), tolerance = 2e-3)
 })
 
 testthat::test_that("exact ranked kernel treats missing later ranks as truncation", {
@@ -349,7 +329,6 @@ testthat::test_that("exact ranked kernel treats missing later ranks as truncatio
     add_outcome("A", "a") |>
     add_outcome("B", "b")
 
-  prep <- prepare_model(spec)
   ranked_df <- data.frame(
     trial = 1L,
     R = "A",
@@ -368,15 +347,12 @@ testthat::test_that("exact ranked kernel treats missing later ranks as truncatio
     a.m = log(0.30), a.s = 0.20, a.q = 0.00, a.t0 = 0.00,
     b.m = log(0.45), b.s = 0.25, b.q = 0.00, b.t0 = 0.00
   )
-  ranked_params <- build_param_matrix(spec, params, trial_df = ranked_df)
-  single_params <- build_param_matrix(spec, params, trial_df = single_df)
-
-  ranked_out <- .exact_loglik_prep(prep, ranked_params, ranked_df)
-  single_out <- .exact_loglik_prep(prep, single_params, single_df)
+  ranked_out <- run_public_loglik(spec, ranked_df, params)
+  single_out <- run_public_loglik(spec, single_df, params)
 
   testthat::expect_equal(
-    as.numeric(ranked_out$loglik),
-    as.numeric(single_out$loglik),
+    ranked_out,
+    single_out,
     tolerance = 1e-8
   )
 })
@@ -388,7 +364,6 @@ testthat::test_that("exact ranked kernel uses observed source time for chained o
     add_outcome("A", "a") |>
     add_outcome("B", "b")
 
-  prep <- prepare_model(spec)
   trial_df <- data.frame(
     trial = 1L,
     R = "A",
@@ -401,23 +376,20 @@ testthat::test_that("exact ranked kernel uses observed source time for chained o
     a.m = log(0.25), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
     b.m = log(0.35), b.s = 0.20, b.q = 0.00, b.t0 = 0.00
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .exact_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   expected <- dlnorm(0.30, params[["a.m"]], params[["a.s"]]) *
     dlnorm(0.60 - 0.30, params[["b.m"]], params[["b.s"]])
-  testthat::expect_equal(as.numeric(out$loglik), log(expected), tolerance = 2e-3)
+  testthat::expect_equal(out, log(expected), tolerance = 2e-3)
 })
 
-testthat::test_that("exact ranked kernel returns min_ll for malformed rank pairs", {
+testthat::test_that("prepare_data rejects malformed ranked rank pairs", {
   spec <- race_spec(n_outcomes = 2L) |>
     add_accumulator("a", "lognormal") |>
     add_accumulator("b", "lognormal") |>
     add_outcome("A", "a") |>
     add_outcome("B", "b")
 
-  prep <- prepare_model(spec)
   trial_df <- data.frame(
     trial = 1L,
     R = "A",
@@ -426,20 +398,11 @@ testthat::test_that("exact ranked kernel returns min_ll for malformed rank pairs
     rt2 = NA_real_,
     stringsAsFactors = FALSE
   )
-  params <- c(
-    a.m = log(0.30), a.s = 0.20, a.q = 0.00, a.t0 = 0.00,
-    b.m = log(0.45), b.s = 0.25, b.q = 0.00, b.t0 = 0.00
+  structure <- finalize_model(spec)
+  testthat::expect_error(
+    prepare_data(structure, trial_df),
+    "paired values"
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-  min_ll <- -1e6
-
-  out <- .exact_loglik_prep(
-    prep,
-    params_mat,
-    trial_df,
-    min_ll = min_ll
-  )
-  testthat::expect_equal(as.numeric(out$loglik), min_ll)
 })
 
 testthat::test_that("exact ranked kernel is finite for pool plus shared trigger models", {
@@ -452,7 +415,6 @@ testthat::test_that("exact ranked kernel is finite for pool plus shared trigger 
     add_outcome("B", "b") |>
     add_trigger("tg", members = c("a1", "a2"), q = 0.10, draw = "shared")
 
-  prep <- prepare_model(spec)
   trial_df <- data.frame(
     trial = 1L,
     R = "A",
@@ -466,20 +428,17 @@ testthat::test_that("exact ranked kernel is finite for pool plus shared trigger 
     a2.m = log(0.32), a2.s = 0.20, a2.q = 0.10, a2.t0 = 0.00,
     b.m = log(0.50), b.s = 0.20, b.q = 0.00, b.t0 = 0.00
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .exact_loglik_prep(prep, params_mat, trial_df)
-  testthat::expect_true(is.finite(as.numeric(out$loglik)))
+  out <- run_public_loglik(spec, trial_df, params)
+  testthat::expect_true(is.finite(out))
 })
 
-testthat::test_that("exact ranked kernel returns min_ll for non-increasing times", {
+testthat::test_that("prepare_data rejects non-increasing ranked times", {
   spec <- race_spec(n_outcomes = 2L) |>
     add_accumulator("a", "lognormal") |>
     add_accumulator("b", "lognormal") |>
     add_outcome("A", "a") |>
     add_outcome("B", "b")
 
-  prep <- prepare_model(spec)
   trial_df <- data.frame(
     trial = 1L,
     R = "A",
@@ -488,18 +447,9 @@ testthat::test_that("exact ranked kernel returns min_ll for non-increasing times
     rt2 = 0.40,
     stringsAsFactors = FALSE
   )
-  params <- c(
-    a.m = log(0.25), a.s = 0.12, a.q = 0.00, a.t0 = 0.00,
-    b.m = log(0.45), b.s = 0.20, b.q = 0.00, b.t0 = 0.00
+  structure <- finalize_model(spec)
+  testthat::expect_error(
+    prepare_data(structure, trial_df),
+    "strictly increasing"
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-  min_ll <- -1e6
-
-  out <- .exact_loglik_prep(
-    prep,
-    params_mat,
-    trial_df,
-    min_ll = min_ll
-  )
-  testthat::expect_equal(as.numeric(out$loglik), min_ll)
 })

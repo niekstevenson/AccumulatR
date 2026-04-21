@@ -65,6 +65,175 @@
   list(structure = structure, prep = prep_eval_base)
 }
 
+.required_p_slots_from_prep <- function(prep) {
+  acc_defs <- prep$accumulators %||% list()
+  if (length(acc_defs) == 0L) {
+    return(0L)
+  }
+  max(vapply(acc_defs, function(acc) {
+    length(dist_param_names(acc$dist %||% ""))
+  }, integer(1)), 0L)
+}
+
+.outcome_allowed_components <- function(prep) {
+  outcome_defs <- prep$outcomes %||% list()
+  outcome_labels <- names(outcome_defs)
+  component_ids <- prep$components$ids %||% "__default__"
+  out <- setNames(vector("list", length(component_ids)), component_ids)
+  for (cid in component_ids) {
+    out[[cid]] <- character(0)
+  }
+  for (label in outcome_labels) {
+    options <- outcome_defs[[label]]$options %||% list()
+    allowed <- options$component %||% component_ids
+    if (length(allowed) == 0L) {
+      allowed <- component_ids
+    }
+    for (cid in allowed) {
+      out[[cid]] <- c(out[[cid]], label)
+    }
+  }
+  lapply(out, unique)
+}
+
+.has_observation_wrappers <- function(prep) {
+  outcome_defs <- prep$outcomes %||% list()
+  any(vapply(outcome_defs, function(outcome) {
+    options <- outcome$options %||% list()
+    !is.null(options$guess) || !is.null(options$map_outcome_to)
+  }, logical(1)))
+}
+
+.validate_trial_level_columns <- function(data_df, columns) {
+  columns <- intersect(columns, names(data_df))
+  if (length(columns) == 0L || nrow(data_df) <= 1L) {
+    return(invisible(NULL))
+  }
+  trial <- as.integer(data_df$trial)
+  starts <- c(1L, which(trial[-1L] != trial[-nrow(data_df)]) + 1L)
+  ends <- c(starts[-1L] - 1L, nrow(data_df))
+  if (length(starts) == nrow(data_df)) {
+    return(invisible(NULL))
+  }
+  same_value <- function(x, rows) {
+    ref <- x[[rows[[1L]]]]
+    vals <- x[rows]
+    same_na <- is.na(vals) & is.na(ref)
+    same_val <- !is.na(vals) & !is.na(ref) & vals == ref
+    all(same_na | same_val)
+  }
+  for (col in columns) {
+    x <- data_df[[col]]
+    for (i in seq_along(starts)) {
+      rows <- starts[[i]]:ends[[i]]
+      if (!same_value(x, rows)) {
+        stop(
+          sprintf(
+            "Prepared data must keep trial-level column '%s' constant within each trial",
+            col
+          ),
+          call. = FALSE
+        )
+      }
+    }
+  }
+  invisible(NULL)
+}
+
+.validate_ranked_trials <- function(data_df, max_rank) {
+  if (max_rank <= 1L || nrow(data_df) == 0L) {
+    return(invisible(NULL))
+  }
+  trial <- as.integer(data_df$trial)
+  starts <- c(1L, which(trial[-1L] != trial[-nrow(data_df)]) + 1L)
+  for (start in starts) {
+    label1 <- as.character(data_df$R[[start]])
+    rt1 <- data_df$rt[[start]]
+    if (is.na(label1) || is.na(rt1) || !is.finite(rt1)) {
+      stop(
+        "Ranked observations must provide a finite first-rank R/rt pair for every trial",
+        call. = FALSE
+      )
+    }
+    seen_labels <- label1
+    prev_rt <- rt1
+    terminated <- FALSE
+    for (rank in 2:max_rank) {
+      r_col <- paste0("R", rank)
+      rt_col <- paste0("rt", rank)
+      label <- as.character(data_df[[r_col]][[start]])
+      rt <- data_df[[rt_col]][[start]]
+      label_missing <- is.na(label)
+      time_missing <- is.na(rt)
+      if (label_missing && time_missing) {
+        terminated <- TRUE
+        next
+      }
+      if (terminated) {
+        stop(
+          "Ranked observations must stop cleanly after the last observed rank",
+          call. = FALSE
+        )
+      }
+      if (label_missing || time_missing) {
+        stop(
+          sprintf("Ranked observations must provide paired values in '%s'/'%s' within each trial", r_col, rt_col),
+          call. = FALSE
+        )
+      }
+      if (!is.finite(rt)) {
+        stop("Ranked observations must provide finite RT values for observed ranks", call. = FALSE)
+      }
+      if (!(rt > prev_rt)) {
+        stop("Ranked observation times must be strictly increasing within each trial", call. = FALSE)
+      }
+      if (label %in% seen_labels) {
+        stop("Ranked observations must not repeat the same outcome label within a trial", call. = FALSE)
+      }
+      seen_labels <- c(seen_labels, label)
+      prev_rt <- rt
+    }
+  }
+  invisible(NULL)
+}
+
+.validate_first_rank_trials <- function(data_df,
+                                        allow_missing_all = FALSE,
+                                        allow_missing_rt = FALSE) {
+  if (nrow(data_df) == 0L) {
+    return(invisible(NULL))
+  }
+  trial <- as.integer(data_df$trial)
+  starts <- c(1L, which(trial[-1L] != trial[-nrow(data_df)]) + 1L)
+  for (start in starts) {
+    label_missing <- is.na(as.character(data_df$R[[start]]))
+    rt <- data_df$rt[[start]]
+    time_missing <- is.na(rt)
+    if (label_missing && !time_missing) {
+      stop("finite RT with missing response label is not supported", call. = FALSE)
+    }
+    if (label_missing && time_missing) {
+      if (!allow_missing_all) {
+        stop(
+          "Identity observations require a finite first-rank R/rt pair for every trial",
+          call. = FALSE
+        )
+      }
+      next
+    }
+    if (time_missing && !allow_missing_rt) {
+      stop(
+        "Identity observations require a finite first-rank R/rt pair for every trial",
+        call. = FALSE
+      )
+    }
+    if (!time_missing && !is.finite(rt)) {
+      stop("Observed RT values must be finite", call. = FALSE)
+    }
+  }
+  invisible(NULL)
+}
+
 .compress_prepared_trials <- function(data_df) {
   trial <- as.integer(data_df$trial)
   n_rows <- length(trial)
@@ -102,6 +271,12 @@
 
 .prepare_data_structure <- function(structure, data_df, prep = NULL, compress = FALSE) {
   if (inherits(data_df, "accumulatr_data")) {
+    if (is.null(attr(data_df, "cpp_layout", exact = TRUE))) {
+      attr(data_df, "cpp_layout") <- .prepare_trial_layout(data_df)
+    }
+    if (is.null(attr(data_df, "max_rank", exact = TRUE))) {
+      attr(data_df, "max_rank") <- .validate_ranked_observation_columns(data_df)$max_rank
+    }
     return(data_df)
   }
   if (is.null(data_df) || nrow(data_df) == 0L) {
@@ -171,18 +346,64 @@
       data_df[[paste0("rt", rank)]] <- as.numeric(data_df[[paste0("rt", rank)]])
     }
   }
-  if ("component" %in% names(data_df)) {
-    component_levels <- structure$components$component_id %||% character(0)
-    data_df$component <- .normalize_prepared_index_column(
-      data_df$component,
-      component_levels,
-      "component"
-    )
+  component_levels <- structure$components$component_id %||% "__default__"
+  if (!"component" %in% names(data_df)) {
+    data_df$component <- "__default__"
   }
+  data_df$component <- .normalize_prepared_index_column(
+    data_df$component,
+    component_levels,
+    "component"
+  )
+  if (rank_info$max_rank > 1L && .has_observation_wrappers(prep_eval_base)) {
+    stop("ranked observations do not support observation wrappers", call. = FALSE)
+  }
+  allowed_by_component <- .outcome_allowed_components(prep_eval_base)
+  component_chr <- as.character(data_df$component)
+  for (rank in seq_len(rank_info$max_rank)) {
+    r_col <- if (rank == 1L) "R" else paste0("R", rank)
+    if (!r_col %in% names(data_df)) {
+      next
+    }
+    label_chr <- as.character(data_df[[r_col]])
+    bad <- !is.na(label_chr) & !is.na(component_chr) & !mapply(
+      function(lbl, cid) lbl %in% (allowed_by_component[[cid]] %||% character(0)),
+      label_chr,
+      component_chr,
+      USE.NAMES = FALSE
+    )
+    if (any(bad)) {
+      bad_idx <- which(bad)[1L]
+      stop(
+        sprintf(
+          "Outcome '%s' is not allowed for component '%s' in column '%s'",
+          label_chr[[bad_idx]],
+          component_chr[[bad_idx]],
+          r_col
+        ),
+        call. = FALSE
+      )
+    }
+  }
+  trial_level_columns <- c(
+    "component",
+    "R",
+    "rt",
+    unlist(lapply(seq.int(2L, rank_info$max_rank), function(rank) c(paste0("R", rank), paste0("rt", rank))), use.names = FALSE)
+  )
+  .validate_trial_level_columns(data_df, trial_level_columns)
+  .validate_first_rank_trials(
+    data_df,
+    allow_missing_all = rank_info$max_rank == 1L,
+    allow_missing_rt = rank_info$max_rank == 1L && .has_observation_wrappers(prep_eval_base)
+  )
+  .validate_ranked_trials(data_df, rank_info$max_rank)
   class(data_df) <- unique(c("accumulatr_data", class(data_df)))
   if (isTRUE(compress)) {
     data_df <- .compress_prepared_trials(data_df)
   }
+  attr(data_df, "cpp_layout") <- .prepare_trial_layout(data_df)
+  attr(data_df, "max_rank") <- rank_info$max_rank
   data_df
 }
 
@@ -230,10 +451,8 @@ prepare_data <- function(structure,
   prep_info <- .prepare_likelihood_prep(structure, prep = prep)
   prep_eval_base <- prep_info$prep
   structure(list(
-    cpp = list(
-      prep = prep_eval_base,
-      observed_plan = .compile_observed_plan_prep(prep_eval_base)
-    )
+    cpp = .make_likelihood_context_prep(prep_eval_base),
+    required_p_slots = .required_p_slots_from_prep(prep_eval_base)
   ), class = "accumulatr_context")
 }
 
@@ -269,6 +488,9 @@ make_context <- function(structure, prep = NULL) {
 
 .validate_prepared_data <- function(data) {
   if (inherits(data, "accumulatr_data")) {
+    if (is.null(attr(data, "cpp_layout", exact = TRUE))) {
+      stop("prepared data are missing native layout metadata; rebuild with prepare_data()", call. = FALSE)
+    }
     return(data)
   }
   stop("data must be created via prepare_data()", call. = FALSE)
@@ -324,11 +546,14 @@ make_context <- function(structure, prep = NULL) {
         call. = FALSE
       )
     }
-    return(x)
+    raw_lbl <- rep.int(NA_character_, length(x))
+    keep <- !is.na(x)
+    raw_lbl[keep] <- levels[x[keep]]
+    return(factor(raw_lbl, levels = levels))
   }
   stop(
     sprintf(
-      "Prepared data column '%s' must be a factor, character, or integer vector",
+      "Prepared data column '%s' must be a factor, character, or integer-coded vector",
       column_name
     ),
     call. = FALSE
@@ -829,22 +1054,26 @@ make_context <- function(structure, prep = NULL) {
   stop("parameters must be a param_matrix, matrix, or data frame", call. = FALSE)
 }
 
-.prepared_trial_spans <- function(data_df) {
-  if (nrow(data_df) == 0L) {
-    return(data.frame(
-      trial = integer(0),
-      start = integer(0),
-      end = integer(0)
-    ))
+.canonicalize_loglik_param_matrix <- function(param_mat, required_p_slots) {
+  cn <- colnames(param_mat)
+  if (is.null(cn) || anyNA(cn) || any(!nzchar(cn))) {
+    stop("Parameter matrix must have named columns", call. = FALSE)
   }
-  trial <- as.integer(data_df$trial)
-  starts <- c(1L, which(trial[-1L] != trial[-length(trial)]) + 1L)
-  ends <- c(starts[-1L] - 1L, nrow(data_df))
-  data.frame(
-    trial = trial[starts],
-    start = starts,
-    end = ends
-  )
+  required_cols <- c("q", "t0", if (required_p_slots > 0L) paste0("p", seq_len(required_p_slots)))
+  missing_cols <- setdiff(required_cols, cn)
+  if (length(missing_cols) > 0L) {
+    stop(
+      sprintf(
+        "Parameter matrix is missing required columns: %s",
+        paste(missing_cols, collapse = ", ")
+      ),
+      call. = FALSE
+    )
+  }
+  out <- unclass(as.matrix(param_mat[, required_cols, drop = FALSE]))
+  storage.mode(out) <- "double"
+  colnames(out) <- required_cols
+  out
 }
 
 #' Evaluate the log-likelihood of behavioral data
@@ -942,32 +1171,37 @@ log_likelihood.accumulatr_context <- function(context,
     return(rep_len(ll_offset, length(params_list)))
   }
 
-  spans <- .prepared_trial_spans(data_df)
-  keep_rows <- unlist(lapply(kept_trials, function(trial_index) {
-    seq.int(spans$start[[trial_index]], spans$end[[trial_index]])
-  }), use.names = FALSE)
-  data_kept <- data_df[keep_rows, , drop = FALSE]
-  rownames(data_kept) <- NULL
-  trial_weights_kept <- trial_weights[kept_trials]
-
   cpp_ctx <- ctx$cpp %||% NULL
-  if (is.null(cpp_ctx)) {
+  if (is.null(cpp_ctx) || is.null(cpp_ctx$native)) {
     stop("C++ context required for log_likelihood", call. = FALSE)
+  }
+  required_p_slots <- as.integer(ctx$required_p_slots %||% 0L)
+  cpp_layout <- attr(data_df, "cpp_layout", exact = TRUE)
+  max_rank <- attr(data_df, "max_rank", exact = TRUE) %||% 1L
+  if (max_rank > 1L) {
+    if (isTRUE(cpp_ctx$observed_identity) &&
+        !identical(cpp_ctx$identity_backend, "exact")) {
+      stop("ranked observations require the exact backend", call. = FALSE)
+    }
+    if (!isTRUE(cpp_ctx$ranked_supported)) {
+      stop("ranked observations are not supported for this model", call. = FALSE)
+    }
   }
 
   out <- vapply(params_list, function(param_mat) {
     if (nrow(param_mat) != nrow(data_df)) {
       stop("Rebuild likelihood currently requires parameter rows aligned to prepared data rows; use build_param_matrix(..., trial_df = prepared_data)", call. = FALSE)
     }
-    param_kept <- param_mat[keep_rows, , drop = FALSE]
-    observed <- .observed_loglik_prep(
-      cpp_ctx$prep,
-      cpp_ctx$observed_plan,
-      param_kept,
-      data_kept,
+    param_mat <- .canonicalize_loglik_param_matrix(param_mat, required_p_slots)
+    observed <- .loglik_context(
+      cpp_ctx$native,
+      cpp_layout,
+      param_mat,
+      data_df,
       min_ll = min_ll
     )
-    sum(trial_weights_kept * as.numeric(observed$loglik)) + ll_offset
+    loglik_vec <- as.numeric(observed$loglik)
+    sum(trial_weights * loglik_vec) + ll_offset
   }, numeric(1))
   unname(out)
 }

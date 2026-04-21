@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -23,40 +24,31 @@ enum class ObservedRtKind : std::uint8_t {
 
 enum class ObservedTrialKind : std::uint8_t {
   Finite = 0,
-  Ranked = 1,
-  MissingRt = 2,
-  MissingAll = 3,
-  UnsupportedMissingLabel = 4
+  MissingRt = 1,
+  MissingAll = 2
 };
 
 struct ObservedBranch {
-  std::string semantic_label;
+  semantic::Index semantic_code{semantic::kInvalidIndex};
   double weight{1.0};
   ObservedRtKind rt_kind{ObservedRtKind::Keep};
 };
 
 struct ComponentObservationPlan {
+  bool present{false};
   compile::BackendKind observed_backend{compile::BackendKind::Exact};
   compile::BackendKind semantic_backend{compile::BackendKind::Exact};
-  std::unordered_map<std::string, std::vector<ObservedBranch>> keep;
-  std::unordered_map<std::string, std::vector<ObservedBranch>> missing_rt;
+  std::vector<std::vector<ObservedBranch>> keep_by_code;
+  std::vector<std::vector<ObservedBranch>> missing_rt_by_code;
   std::vector<ObservedBranch> finite_observed_branches;
-};
-
-struct ObservedTrialPlan {
-  semantic::Index trial_index{semantic::kInvalidIndex};
-  semantic::Index start_row{semantic::kInvalidIndex};
-  semantic::Index end_row{semantic::kInvalidIndex};
-  std::string component_id;
-  std::string observed_label;
-  double observed_rt{NA_REAL};
-  ObservedTrialKind kind{ObservedTrialKind::Finite};
 };
 
 struct ObservedRecord {
   semantic::Index trial_index{semantic::kInvalidIndex};
+  semantic::Index variant_index{semantic::kInvalidIndex};
   compile::BackendKind backend{compile::BackendKind::Exact};
-  std::string semantic_label;
+  semantic::Index semantic_code{semantic::kInvalidIndex};
+  double observed_rt{NA_REAL};
   double weight{1.0};
 };
 
@@ -107,7 +99,8 @@ inline bool component_matches_outcome(SEXP options_sexp,
     return false;
   }
   Rcpp::List options(options_sexp);
-  if (!options.containsElementNamed("component") || Rf_isNull(options["component"])) {
+  if (!options.containsElementNamed("component") ||
+      Rf_isNull(options["component"])) {
     return false;
   }
   const auto component_ids = as_string_vector_checked(options["component"]);
@@ -119,7 +112,8 @@ inline bool outcome_is_unrestricted(SEXP options_sexp) {
     return true;
   }
   Rcpp::List options(options_sexp);
-  return !options.containsElementNamed("component") || Rf_isNull(options["component"]);
+  return !options.containsElementNamed("component") ||
+         Rf_isNull(options["component"]);
 }
 
 inline semantic::Index resolve_outcome_def_index(const Rcpp::List &outcomes,
@@ -156,30 +150,44 @@ inline semantic::Index resolve_outcome_def_index(const Rcpp::List &outcomes,
   return semantic::kInvalidIndex;
 }
 
-inline void append_branch(
-    std::unordered_map<std::string, std::vector<ObservedBranch>> *map,
-    const std::string &observed_label,
-    const ObservedBranch &branch,
-    std::vector<ObservedBranch> *finite_observed_branches) {
-  auto &bucket = (*map)[observed_label];
-  bucket.push_back(branch);
+inline void append_branch(std::vector<std::vector<ObservedBranch>> *buckets,
+                          const semantic::Index observed_code,
+                          const ObservedBranch &branch,
+                          std::vector<ObservedBranch> *finite_observed_branches) {
+  if (observed_code <= 0 ||
+      observed_code >= static_cast<semantic::Index>(buckets->size())) {
+    throw std::runtime_error("observation plan produced an invalid observed outcome code");
+  }
+  (*buckets)[static_cast<std::size_t>(observed_code)].push_back(branch);
   finite_observed_branches->push_back(branch);
 }
 
-inline std::unordered_map<std::string, ComponentObservationPlan>
-build_component_observation_plans(const Rcpp::List &prep,
-                                  const compile::CompiledModel &compiled) {
+inline std::vector<ComponentObservationPlan> build_component_observation_plans(
+    const Rcpp::List &prep,
+    const compile::CompiledModel &compiled,
+    const std::unordered_map<std::string, semantic::Index> &component_code_by_id,
+    const std::unordered_map<std::string, semantic::Index> &outcome_code_by_label,
+    const std::size_t n_component_codes,
+    const std::size_t n_outcome_codes) {
   if (!prep.containsElementNamed("outcomes") || Rf_isNull(prep["outcomes"])) {
-    throw std::runtime_error("prep must contain outcomes for observed likelihood evaluation");
+    throw std::runtime_error(
+        "prep must contain outcomes for observed likelihood evaluation");
   }
 
-  std::unordered_map<std::string, ComponentObservationPlan> plans;
-  plans.reserve(compiled.variants.size());
+  std::vector<ComponentObservationPlan> plans(n_component_codes + 1U);
   for (const auto &variant : compiled.variants) {
-    ComponentObservationPlan plan;
+    const auto component_it = component_code_by_id.find(variant.component_id);
+    if (component_it == component_code_by_id.end()) {
+      throw std::runtime_error(
+          "observation plan found no prepared component code for '" +
+          variant.component_id + "'");
+    }
+    auto &plan = plans[static_cast<std::size_t>(component_it->second)];
+    plan.present = true;
     plan.observed_backend = variant.backend;
     plan.semantic_backend = variant.semantic_backend;
-    plans.emplace(variant.component_id, std::move(plan));
+    plan.keep_by_code.assign(n_outcome_codes + 1U, {});
+    plan.missing_rt_by_code.assign(n_outcome_codes + 1U, {});
   }
 
   Rcpp::List outcomes(prep["outcomes"]);
@@ -188,46 +196,28 @@ build_component_observation_plans(const Rcpp::List &prep,
       Rf_isNull(names_sexp) ? Rcpp::CharacterVector()
                             : Rcpp::CharacterVector(names_sexp);
 
-  std::vector<std::string> semantic_labels;
-  semantic_labels.reserve(outcomes.size());
-  for (R_xlen_t i = 0; i < outcome_names.size(); ++i) {
-    if (string_cell_is_na(outcome_names, i)) {
-      continue;
-    }
-    const auto label = Rcpp::as<std::string>(outcome_names[i]);
-    if (!string_vector_contains(semantic_labels, label)) {
-      semantic_labels.push_back(label);
-    }
-  }
+  for (const auto &variant : compiled.variants) {
+    const auto component_it = component_code_by_id.find(variant.component_id);
+    auto &plan = plans[static_cast<std::size_t>(component_it->second)];
 
-  for (auto &entry : plans) {
-    const auto &component_id = entry.first;
-    auto &plan = entry.second;
-    const auto variant_it = std::find_if(
-        compiled.variants.begin(),
-        compiled.variants.end(),
-        [&component_id](const compile::CompiledVariant &variant) {
-          return variant.component_id == component_id;
-        });
-    if (variant_it == compiled.variants.end()) {
-      throw std::runtime_error(
-          "observation plan found no compiled variant for component '" +
-          component_id + "'");
-    }
-    std::vector<std::string> surviving_labels;
-    surviving_labels.reserve(variant_it->model.outcomes.size());
-    for (const auto &outcome : variant_it->model.outcomes) {
-      surviving_labels.push_back(outcome.label);
-    }
-
-    for (const auto &semantic_label : semantic_labels) {
-      if (!string_vector_contains(surviving_labels, semantic_label)) {
-        continue;
-      }
-      const auto outcome_idx =
-          resolve_outcome_def_index(outcomes, outcome_names, semantic_label, component_id);
+    for (const auto &semantic_outcome : variant.model.outcomes) {
+      const auto &semantic_label = semantic_outcome.label;
+      const auto outcome_idx = resolve_outcome_def_index(
+          outcomes,
+          outcome_names,
+          semantic_label,
+          variant.component_id);
       if (outcome_idx == semantic::kInvalidIndex) {
-        continue;
+        throw std::runtime_error(
+            "observation plan found no outcome definition for '" +
+            semantic_label + "'");
+      }
+
+      const auto semantic_code_it = outcome_code_by_label.find(semantic_label);
+      if (semantic_code_it == outcome_code_by_label.end()) {
+        throw std::runtime_error(
+            "observation plan found no prepared outcome code for '" +
+            semantic_label + "'");
       }
 
       const Rcpp::List outcome(outcomes[static_cast<R_xlen_t>(outcome_idx)]);
@@ -236,9 +226,12 @@ build_component_observation_plans(const Rcpp::List &prep,
               ? Rcpp::List(outcome["options"])
               : Rcpp::List();
 
-      std::vector<std::pair<std::string, ObservedBranch>> branches;
-      branches.push_back({semantic_label,
-                          ObservedBranch{semantic_label, 1.0, ObservedRtKind::Keep}});
+      std::vector<std::pair<semantic::Index, ObservedBranch>> branches;
+      branches.push_back({semantic_code_it->second,
+                          ObservedBranch{
+                              semantic_code_it->second,
+                              1.0,
+                              ObservedRtKind::Keep}});
 
       if (options.containsElementNamed("guess") && !Rf_isNull(options["guess"])) {
         const Rcpp::List guess(options["guess"]);
@@ -246,8 +239,7 @@ build_component_observation_plans(const Rcpp::List &prep,
             !guess.containsElementNamed("weights") ||
             Rf_isNull(guess["labels"]) ||
             Rf_isNull(guess["weights"])) {
-          throw std::runtime_error(
-              "guess option requires labels and weights");
+          throw std::runtime_error("guess option requires labels and weights");
         }
         const auto guess_labels = as_string_vector_checked(guess["labels"]);
         const Rcpp::NumericVector guess_weights(guess["weights"]);
@@ -265,10 +257,17 @@ build_component_observation_plans(const Rcpp::List &prep,
         branches.clear();
         branches.reserve(guess_labels.size());
         for (R_xlen_t i = 0; i < guess_weights.size(); ++i) {
+          const auto observed_code_it =
+              outcome_code_by_label.find(guess_labels[static_cast<std::size_t>(i)]);
+          if (observed_code_it == outcome_code_by_label.end()) {
+            throw std::runtime_error(
+                "guess option refers to unknown observed label '" +
+                guess_labels[static_cast<std::size_t>(i)] + "'");
+          }
           branches.push_back(
-              {guess_labels[static_cast<std::size_t>(i)],
+              {observed_code_it->second,
                ObservedBranch{
-                   semantic_label,
+                   semantic_code_it->second,
                    guess_weights[i],
                    rt_policy == "na" ? ObservedRtKind::Missing
                                       : ObservedRtKind::Keep}});
@@ -276,7 +275,7 @@ build_component_observation_plans(const Rcpp::List &prep,
       }
 
       bool map_missing = false;
-      std::string mapped_label;
+      semantic::Index mapped_code = semantic::kInvalidIndex;
       if (options.containsElementNamed("map_outcome_to") &&
           !Rf_isNull(options["map_outcome_to"])) {
         if (TYPEOF(options["map_outcome_to"]) != STRSXP) {
@@ -286,38 +285,44 @@ build_component_observation_plans(const Rcpp::List &prep,
         if (target.size() > 0 && STRING_ELT(target, 0) == NA_STRING) {
           map_missing = true;
         } else if (target.size() > 0) {
-          mapped_label = Rcpp::as<std::string>(target[0]);
+          const auto mapped_label = Rcpp::as<std::string>(target[0]);
+          const auto mapped_it = outcome_code_by_label.find(mapped_label);
+          if (mapped_it == outcome_code_by_label.end()) {
+            throw std::runtime_error(
+                "map_outcome_to refers to unknown observed label '" +
+                mapped_label + "'");
+          }
+          mapped_code = mapped_it->second;
         }
       }
 
       for (auto &branch : branches) {
-        const double weight = branch.second.weight;
-        if (!std::isfinite(weight) || !(weight > 0.0)) {
+        if (!std::isfinite(branch.second.weight) || !(branch.second.weight > 0.0)) {
           continue;
         }
 
-        std::string observed_label = branch.first;
+        semantic::Index observed_code = branch.first;
         if (map_missing) {
-          observed_label.clear();
+          observed_code = semantic::kInvalidIndex;
           branch.second.rt_kind = ObservedRtKind::Missing;
-        } else if (!mapped_label.empty()) {
-          observed_label = mapped_label;
+        } else if (mapped_code != semantic::kInvalidIndex) {
+          observed_code = mapped_code;
         }
 
-        if (observed_label.empty()) {
+        if (observed_code == semantic::kInvalidIndex) {
           continue;
         }
 
         if (branch.second.rt_kind == ObservedRtKind::Keep) {
           append_branch(
-              &plan.keep,
-              observed_label,
+              &plan.keep_by_code,
+              observed_code,
               branch.second,
               &plan.finite_observed_branches);
         } else {
           append_branch(
-              &plan.missing_rt,
-              observed_label,
+              &plan.missing_rt_by_code,
+              observed_code,
               branch.second,
               &plan.finite_observed_branches);
         }
@@ -326,119 +331,6 @@ build_component_observation_plans(const Rcpp::List &prep,
   }
 
   return plans;
-}
-
-inline Rcpp::List to_r_list(const ObservedBranch &branch) {
-  return Rcpp::List::create(
-      Rcpp::Named("semantic_label") = branch.semantic_label,
-      Rcpp::Named("weight") = branch.weight,
-      Rcpp::Named("rt_kind") = static_cast<int>(branch.rt_kind));
-}
-
-inline ObservedBranch observed_branch_from_r(const Rcpp::List &branch) {
-  ObservedBranch out;
-  out.semantic_label = Rcpp::as<std::string>(branch["semantic_label"]);
-  out.weight = Rcpp::as<double>(branch["weight"]);
-  out.rt_kind = static_cast<ObservedRtKind>(Rcpp::as<int>(branch["rt_kind"]));
-  return out;
-}
-
-inline Rcpp::List to_r_branch_map(
-    const std::unordered_map<std::string, std::vector<ObservedBranch>> &branches) {
-  Rcpp::List out(branches.size());
-  Rcpp::CharacterVector names(branches.size());
-  std::size_t i = 0;
-  for (const auto &[label, values] : branches) {
-    Rcpp::List bucket(values.size());
-    for (std::size_t j = 0; j < values.size(); ++j) {
-      bucket[static_cast<R_xlen_t>(j)] = to_r_list(values[j]);
-    }
-    out[static_cast<R_xlen_t>(i)] = bucket;
-    names[static_cast<R_xlen_t>(i)] = label;
-    ++i;
-  }
-  out.attr("names") = names;
-  return out;
-}
-
-inline std::unordered_map<std::string, std::vector<ObservedBranch>>
-branch_map_from_r(SEXP value) {
-  std::unordered_map<std::string, std::vector<ObservedBranch>> out;
-  if (Rf_isNull(value)) {
-    return out;
-  }
-  Rcpp::List branches(value);
-  const auto names = Rcpp::CharacterVector(branches.names());
-  for (R_xlen_t i = 0; i < branches.size(); ++i) {
-    const auto label = Rcpp::as<std::string>(names[i]);
-    const Rcpp::List bucket(branches[i]);
-    std::vector<ObservedBranch> values;
-    values.reserve(bucket.size());
-    for (R_xlen_t j = 0; j < bucket.size(); ++j) {
-      values.push_back(observed_branch_from_r(Rcpp::List(bucket[j])));
-    }
-    out.emplace(label, std::move(values));
-  }
-  return out;
-}
-
-inline Rcpp::List to_r_list(const ComponentObservationPlan &plan) {
-  Rcpp::List finite(plan.finite_observed_branches.size());
-  for (std::size_t i = 0; i < plan.finite_observed_branches.size(); ++i) {
-    finite[static_cast<R_xlen_t>(i)] = to_r_list(plan.finite_observed_branches[i]);
-  }
-  return Rcpp::List::create(
-      Rcpp::Named("observed_backend") = static_cast<int>(plan.observed_backend),
-      Rcpp::Named("semantic_backend") = static_cast<int>(plan.semantic_backend),
-      Rcpp::Named("keep") = to_r_branch_map(plan.keep),
-      Rcpp::Named("missing_rt") = to_r_branch_map(plan.missing_rt),
-      Rcpp::Named("finite_observed_branches") = finite);
-}
-
-inline ComponentObservationPlan component_plan_from_r(const Rcpp::List &plan) {
-  ComponentObservationPlan out;
-  out.observed_backend =
-      static_cast<compile::BackendKind>(Rcpp::as<int>(plan["observed_backend"]));
-  out.semantic_backend =
-      static_cast<compile::BackendKind>(Rcpp::as<int>(plan["semantic_backend"]));
-  out.keep = branch_map_from_r(plan["keep"]);
-  out.missing_rt = branch_map_from_r(plan["missing_rt"]);
-  const Rcpp::List finite(plan["finite_observed_branches"]);
-  out.finite_observed_branches.reserve(finite.size());
-  for (R_xlen_t i = 0; i < finite.size(); ++i) {
-    out.finite_observed_branches.push_back(
-        observed_branch_from_r(Rcpp::List(finite[i])));
-  }
-  return out;
-}
-
-inline Rcpp::List to_r_observed_plan(
-    const std::unordered_map<std::string, ComponentObservationPlan> &plans) {
-  Rcpp::List out(plans.size());
-  Rcpp::CharacterVector names(plans.size());
-  std::size_t i = 0;
-  for (const auto &[component_id, plan] : plans) {
-    out[static_cast<R_xlen_t>(i)] = to_r_list(plan);
-    names[static_cast<R_xlen_t>(i)] = component_id;
-    ++i;
-  }
-  out.attr("names") = names;
-  return out;
-}
-
-inline std::unordered_map<std::string, ComponentObservationPlan>
-observed_plan_from_r(SEXP value) {
-  std::unordered_map<std::string, ComponentObservationPlan> out;
-  if (Rf_isNull(value)) {
-    return out;
-  }
-  Rcpp::List plans(value);
-  const auto names = Rcpp::CharacterVector(plans.names());
-  for (R_xlen_t i = 0; i < plans.size(); ++i) {
-    const auto component_id = Rcpp::as<std::string>(names[i]);
-    out.emplace(component_id, component_plan_from_r(Rcpp::List(plans[i])));
-  }
-  return out;
 }
 
 } // namespace detail

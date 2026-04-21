@@ -1,79 +1,23 @@
-.compile_semantic_prep <- function(prep) {
-  semantic_compile_prep_cpp(prep)
+.make_likelihood_context_prep <- function(prep) {
+  .Call(`_AccumulatR_semantic_make_likelihood_context_prep_cpp`, prep)
 }
 
-.validate_semantic_prep <- function(prep) {
-  semantic_validate_prep_cpp(prep)
-}
-
-.project_semantic_prep <- function(prep) {
-  semantic_project_prep_cpp(prep)
-}
-
-.lower_direct_prep <- function(prep) {
-  semantic_lower_direct_prep_cpp(prep)
-}
-
-.lower_exact_prep <- function(prep) {
-  semantic_lower_exact_prep_cpp(prep)
-}
-
-.compile_observed_plan_prep <- function(prep) {
-  semantic_compile_observed_plan_prep_cpp(prep)
-}
-
-.direct_loglik_prep <- function(prep,
-                                params,
-                                data,
-                                min_ll = log(1e-10)) {
-  semantic_direct_loglik_prep_cpp(
-    prep,
-    as.matrix(params),
-    as.data.frame(data, stringsAsFactors = FALSE),
-    as.numeric(min_ll)
-  )
-}
-
-.exact_loglik_prep <- function(prep,
-                               params,
-                               data,
-                               min_ll = log(1e-10)) {
-  semantic_exact_loglik_prep_cpp(
-    prep,
-    as.matrix(params),
-    as.data.frame(data, stringsAsFactors = FALSE),
-    as.numeric(min_ll)
-  )
-}
-
-.direct_prob_prep <- function(prep,
-                              params,
-                              data) {
-  semantic_direct_prob_prep_cpp(
-    prep,
-    as.matrix(params),
+.prepare_trial_layout <- function(data) {
+  .Call(
+    `_AccumulatR_semantic_prepare_trial_layout_cpp`,
     as.data.frame(data, stringsAsFactors = FALSE)
   )
 }
 
-.exact_prob_prep <- function(prep,
-                             params,
-                             data) {
-  semantic_exact_prob_prep_cpp(
-    prep,
-    as.matrix(params),
-    as.data.frame(data, stringsAsFactors = FALSE)
-  )
-}
-
-.observed_loglik_prep <- function(prep,
-                                  observed_plan,
-                                  params,
-                                  data,
-                                  min_ll = log(1e-10)) {
-  semantic_observed_loglik_prep_cpp(
-    prep,
-    observed_plan,
+.loglik_context <- function(context,
+                            layout,
+                            params,
+                            data,
+                            min_ll = log(1e-10)) {
+  .Call(
+    `_AccumulatR_semantic_loglik_context_cpp`,
+    context,
+    layout,
     as.matrix(params),
     as.data.frame(data, stringsAsFactors = FALSE),
     as.numeric(min_ll)

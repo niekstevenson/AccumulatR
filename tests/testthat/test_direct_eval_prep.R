@@ -178,6 +178,14 @@ exgauss_trunc_cdf_ref <- function(x, mu, sigma, tau) {
   min(max((exgauss_raw_cdf_ref(x, mu, sigma, tau) - lower_cdf) / lower_survival, 0), 1)
 }
 
+run_public_loglik <- function(spec, trial_df, params, min_ll = log(1e-10)) {
+  structure <- finalize_model(spec)
+  context <- make_context(structure)
+  prepared <- prepare_data(structure, trial_df)
+  params_mat <- build_param_matrix(spec, params, trial_df = prepared)
+  as.numeric(log_likelihood(context, prepared, params_mat, min_ll = min_ll))
+}
+
 testthat::test_that("direct kernel matches simple two-leaf top-1 formula", {
   spec <- race_spec() |>
     add_accumulator("a", "lognormal") |>
@@ -185,7 +193,6 @@ testthat::test_that("direct kernel matches simple two-leaf top-1 formula", {
     add_outcome("A", "a") |>
     add_outcome("B", "b")
 
-  prep <- prepare_model(spec)
   trial_df <- data.frame(
     trial = c(1L, 2L),
     R = c("A", "B"),
@@ -196,9 +203,7 @@ testthat::test_that("direct kernel matches simple two-leaf top-1 formula", {
     a.m = log(0.32), a.s = 0.18, a.q = 0.10, a.t0 = 0.02,
     b.shape = 3.0, b.rate = 8.0, b.q = 0.20, b.t0 = 0.05
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .direct_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   pa1 <- (1 - params[["a.q"]]) * dlnorm(trial_df$rt[[1]] - params[["a.t0"]], params[["a.m"]], params[["a.s"]])
   sb1 <- 1 - (1 - params[["b.q"]]) * pgamma(trial_df$rt[[1]] - params[["b.t0"]], shape = params[["b.shape"]], rate = params[["b.rate"]])
@@ -206,10 +211,7 @@ testthat::test_that("direct kernel matches simple two-leaf top-1 formula", {
   sa2 <- 1 - (1 - params[["a.q"]]) * plnorm(trial_df$rt[[2]] - params[["a.t0"]], params[["a.m"]], params[["a.s"]])
   expected <- log(c(pa1 * sb1, pb2 * sa2))
 
-  testthat::expect_equal(as.numeric(out$loglik), expected, tolerance = 1e-10)
-  testthat::expect_equal(out$total_loglik, sum(expected), tolerance = 1e-10)
-  testthat::expect_length(out$blocks, 1L)
-  testthat::expect_equal(out$blocks[[1]]$row_count, 2L)
+  testthat::expect_equal(out, sum(expected), tolerance = 1e-10)
 })
 
 testthat::test_that("direct kernel matches pooled top-1 formula", {
@@ -221,7 +223,6 @@ testthat::test_that("direct kernel matches pooled top-1 formula", {
     add_outcome("AB", "ab") |>
     add_outcome("C", "c")
 
-  prep <- prepare_model(spec)
   trial_df <- data.frame(
     trial = 1L,
     R = "AB",
@@ -233,9 +234,7 @@ testthat::test_that("direct kernel matches pooled top-1 formula", {
     b.m = log(0.45), b.s = 0.18, b.q = 0.00, b.t0 = 0.00,
     c.m = log(0.55), c.s = 0.20, c.q = 0.00, c.t0 = 0.00
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .direct_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   t <- trial_df$rt[[1]]
   fa <- dlnorm(t, params[["a.m"]], params[["a.s"]])
@@ -246,10 +245,10 @@ testthat::test_that("direct kernel matches pooled top-1 formula", {
   sc <- 1 - plnorm(t, params[["c.m"]], params[["c.s"]])
   expected <- log((fa * sb + fb * sa) * sc)
 
-  testthat::expect_equal(as.numeric(out$loglik), expected, tolerance = 1e-10)
+  testthat::expect_equal(out, expected, tolerance = 1e-10)
 })
 
-testthat::test_that("direct kernel batches contiguous trials by direct variant", {
+testthat::test_that("direct likelihood handles contiguous trials across components", {
   spec <- race_spec() |>
     add_accumulator("a", "lognormal") |>
     add_accumulator("b", "lognormal") |>
@@ -258,7 +257,6 @@ testthat::test_that("direct kernel batches contiguous trials by direct variant",
     add_component("one", members = c("a")) |>
     add_component("two", members = c("a", "b"))
 
-  prep <- prepare_model(spec)
   trial_df <- data.frame(
     trial = 1:3,
     component = c("one", "one", "two"),
@@ -270,9 +268,7 @@ testthat::test_that("direct kernel batches contiguous trials by direct variant",
     a.m = log(0.31), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
     b.m = log(0.44), b.s = 0.18, b.q = 0.00, b.t0 = 0.00
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .direct_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   expected <- c(
     log(dlnorm(0.30, params[["a.m"]], params[["a.s"]])),
@@ -281,41 +277,7 @@ testthat::test_that("direct kernel batches contiguous trials by direct variant",
           (1 - plnorm(0.40, params[["a.m"]], params[["a.s"]])))
   )
 
-  testthat::expect_equal(as.numeric(out$loglik), expected, tolerance = 1e-10)
-  testthat::expect_length(out$blocks, 2L)
-  testthat::expect_equal(vapply(out$blocks, `[[`, character(1), "component_id"), c("one", "two"))
-  testthat::expect_equal(vapply(out$blocks, `[[`, integer(1), "row_count"), c(2L, 1L))
-})
-
-testthat::test_that("direct kernel rejects exact variants instead of silently evaluating", {
-  spec <- race_spec() |>
-    add_accumulator("a", "lognormal") |>
-    add_accumulator("b", "lognormal") |>
-    add_outcome("A", "a") |>
-    add_outcome("B", "b") |>
-    add_component("one", members = c("a")) |>
-    add_component("both", members = c("a", "b")) |>
-    add_trigger("tg", members = c("a", "b"), q = 0.2, draw = "shared")
-
-  prep <- prepare_model(spec)
-  trial_df <- data.frame(
-    trial = 1L,
-    component = "both",
-    R = "B",
-    rt = 0.40,
-    stringsAsFactors = FALSE
-  )
-  params <- c(
-    a.m = log(0.31), a.s = 0.15, a.t0 = 0.00,
-    b.m = log(0.44), b.s = 0.18, b.t0 = 0.00,
-    tg = 0.2
-  )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  testthat::expect_error(
-    .direct_loglik_prep(prep, params_mat, trial_df),
-    "no direct variant"
-  )
+  testthat::expect_equal(out, sum(expected), tolerance = 1e-10)
 })
 
 testthat::test_that("direct kernel matches LBA top-1 formula", {
@@ -325,7 +287,6 @@ testthat::test_that("direct kernel matches LBA top-1 formula", {
     add_outcome("A", "a") |>
     add_outcome("B", "b")
 
-  prep <- prepare_model(spec)
   trial_df <- data.frame(
     trial = c(1L, 2L),
     R = c("A", "B"),
@@ -336,9 +297,7 @@ testthat::test_that("direct kernel matches LBA top-1 formula", {
     a.v = 2.0, a.B = 1.2, a.A = 0.4, a.sv = 0.6, a.q = 0.0, a.t0 = 0.05,
     b.m = log(0.60), b.s = 0.18, b.q = 0.0, b.t0 = 0.02
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .direct_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   xa <- trial_df$rt - params[["a.t0"]]
   xb <- trial_df$rt - params[["b.t0"]]
@@ -349,7 +308,7 @@ testthat::test_that("direct kernel matches LBA top-1 formula", {
       (1 - lba_cdf_ref(xa[[2]], params[["a.v"]], params[["a.B"]], params[["a.A"]], params[["a.sv"]]))
   ))
 
-  testthat::expect_equal(as.numeric(out$loglik), expected, tolerance = 1e-10)
+  testthat::expect_equal(out, sum(expected), tolerance = 1e-10)
 })
 
 testthat::test_that("direct kernel matches RDM top-1 formula", {
@@ -359,7 +318,6 @@ testthat::test_that("direct kernel matches RDM top-1 formula", {
     add_outcome("A", "a") |>
     add_outcome("B", "b")
 
-  prep <- prepare_model(spec)
   trial_df <- data.frame(
     trial = c(1L, 2L),
     R = c("A", "B"),
@@ -370,9 +328,7 @@ testthat::test_that("direct kernel matches RDM top-1 formula", {
     a.v = 1.5, a.B = 1.0, a.A = 0.3, a.s = 1.1, a.q = 0.0, a.t0 = 0.04,
     b.m = log(0.62), b.s = 0.17, b.q = 0.0, b.t0 = 0.01
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .direct_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   xa <- trial_df$rt - params[["a.t0"]]
   xb <- trial_df$rt - params[["b.t0"]]
@@ -383,7 +339,7 @@ testthat::test_that("direct kernel matches RDM top-1 formula", {
       (1 - rdm_cdf_ref(xa[[2]], params[["a.v"]], params[["a.B"]], params[["a.A"]], params[["a.s"]]))
   ))
 
-  testthat::expect_equal(as.numeric(out$loglik), expected, tolerance = 1e-10)
+  testthat::expect_equal(out, sum(expected), tolerance = 1e-10)
 })
 
 testthat::test_that("direct kernel truncates exgauss at the elapsed-time lower bound", {
@@ -393,7 +349,6 @@ testthat::test_that("direct kernel truncates exgauss at the elapsed-time lower b
     add_outcome("A", "a") |>
     add_outcome("B", "b")
 
-  prep <- prepare_model(spec)
   trial_df <- data.frame(
     trial = c(1L, 2L),
     R = c("A", "B"),
@@ -404,9 +359,7 @@ testthat::test_that("direct kernel truncates exgauss at the elapsed-time lower b
     a.mu = -0.08, a.sigma = 0.10, a.tau = 0.22, a.q = 0.00, a.t0 = 0.07,
     b.m = log(0.52), b.s = 0.16, b.q = 0.00, b.t0 = 0.03
   )
-  params_mat <- build_param_matrix(spec, params, trial_df = trial_df)
-
-  out <- .direct_loglik_prep(prep, params_mat, trial_df)
+  out <- run_public_loglik(spec, trial_df, params)
 
   xa <- trial_df$rt - params[["a.t0"]]
   xb <- trial_df$rt - params[["b.t0"]]
@@ -417,5 +370,63 @@ testthat::test_that("direct kernel truncates exgauss at the elapsed-time lower b
       (1 - exgauss_trunc_cdf_ref(xa[[2]], params[["a.mu"]], params[["a.sigma"]], params[["a.tau"]]))
   ))
 
-  testthat::expect_equal(as.numeric(out$loglik), expected, tolerance = 1e-8)
+  testthat::expect_equal(out, sum(expected), tolerance = 1e-8)
+})
+
+testthat::test_that("identity likelihood supports shared-trigger no-response trials", {
+  spec <- race_spec() |>
+    add_accumulator("go1", "lognormal") |>
+    add_accumulator("go2", "lognormal") |>
+    add_outcome("R1", "go1") |>
+    add_outcome("R2", "go2") |>
+    add_trigger("shared_trigger",
+      members = c("go1", "go2"),
+      q = 0.10,
+      draw = "shared"
+    )
+
+  trial_df <- data.frame(
+    trial = 1L,
+    R = NA_character_,
+    rt = NA_real_,
+    stringsAsFactors = FALSE
+  )
+  params <- c(
+    go1.m = log(0.30), go1.s = 0.18, go1.t0 = 0.00,
+    go2.m = log(0.32), go2.s = 0.18, go2.t0 = 0.00,
+    shared_trigger = 0.10
+  )
+
+  out <- run_public_loglik(spec, trial_df, params)
+
+  testthat::expect_equal(out, log(0.10), tolerance = 1e-12)
+})
+
+testthat::test_that("identity likelihood supports independent-trigger no-response trials", {
+  spec <- race_spec() |>
+    add_accumulator("go_left", "lognormal") |>
+    add_accumulator("go_right", "lognormal") |>
+    add_outcome("Left", "go_left") |>
+    add_outcome("Right", "go_right") |>
+    add_trigger("q_shared",
+      members = c("go_left", "go_right"),
+      q = 0.10,
+      draw = "independent"
+    )
+
+  trial_df <- data.frame(
+    trial = 1L,
+    R = NA_character_,
+    rt = NA_real_,
+    stringsAsFactors = FALSE
+  )
+  params <- c(
+    go_left.m = log(0.30), go_left.s = 0.18, go_left.t0 = 0.00,
+    go_right.m = log(0.32), go_right.s = 0.18, go_right.t0 = 0.00,
+    q_shared = 0.10
+  )
+
+  out <- run_public_loglik(spec, trial_df, params)
+
+  testthat::expect_equal(out, log(0.01), tolerance = 1e-12)
 })

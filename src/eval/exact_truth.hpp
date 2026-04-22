@@ -23,7 +23,6 @@ inline bool relation_view_with_overlay(const RelationView &base,
 }
 
 struct ExactScenarioRuntimeView {
-  const ExactVariantPlan &plan;
   const ExactTransitionScenario &scenario;
   const semantic::Index *before_sources{nullptr};
   const semantic::Index *after_sources{nullptr};
@@ -52,7 +51,6 @@ inline ExactScenarioRuntimeView make_exact_scenario_runtime_view(
     const ExactVariantPlan &plan,
     const ExactTransitionScenario &scenario) {
   return ExactScenarioRuntimeView{
-      plan,
       scenario,
       scenario_span_data(plan.scenario_source_ids, scenario.before_source_span),
       scenario_span_data(plan.scenario_source_ids, scenario.after_source_span),

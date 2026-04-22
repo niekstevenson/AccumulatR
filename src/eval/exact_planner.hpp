@@ -671,9 +671,10 @@ inline void enumerate_competitor_subsets(
     ExactCompetitorSubsetPlan subset;
     subset.outcome_indices = *current;
     subset.inclusion_sign = (current->size() % 2U == 1U) ? 1 : -1;
-    subset.expr_roots.reserve(current->size());
+    std::vector<semantic::Index> expr_roots;
+    expr_roots.reserve(current->size());
     for (const auto outcome_idx : *current) {
-      subset.expr_roots.push_back(
+      expr_roots.push_back(
           plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root);
     }
     if (current->size() == 1U) {
@@ -683,7 +684,7 @@ inline void enumerate_competitor_subsets(
       subset.scenarios =
           plan.outcomes[static_cast<std::size_t>(outcome_idx)].scenarios;
     } else {
-      subset.scenarios = build_expr_conjunction_scenarios(plan, subset.expr_roots);
+      subset.scenarios = build_expr_conjunction_scenarios(plan, expr_roots);
     }
     if (!subset.scenarios.empty()) {
       out->push_back(std::move(subset));
@@ -728,8 +729,12 @@ inline std::vector<std::vector<semantic::Index>> build_competitor_overlap_blocks
           continue;
         }
         if (!supports_overlap(
-                plan.outcomes[static_cast<std::size_t>(outcome_idx)].support,
-                plan.outcomes[static_cast<std::size_t>(competitors[other])].support)) {
+                plan.expr_supports[static_cast<std::size_t>(
+                    plan.outcomes[static_cast<std::size_t>(outcome_idx)]
+                        .expr_root)],
+                plan.expr_supports[static_cast<std::size_t>(
+                    plan.outcomes[static_cast<std::size_t>(competitors[other])]
+                        .expr_root)])) {
           continue;
         }
         visited[other] = 1U;
@@ -750,10 +755,8 @@ inline ExactTargetCompetitorPlan build_target_competitor_plan(
   target_plan.blocks.reserve(blocks.size());
   for (const auto &block_outcomes : blocks) {
     ExactCompetitorBlockPlan block;
-    block.outcome_indices = block_outcomes;
     std::vector<semantic::Index> current;
-    enumerate_competitor_subsets(
-        plan, block.outcome_indices, 0U, &current, &block.subsets);
+    enumerate_competitor_subsets(plan, block_outcomes, 0U, &current, &block.subsets);
     target_plan.blocks.push_back(std::move(block));
   }
   return target_plan;
@@ -926,7 +929,6 @@ inline ExactVariantPlan make_exact_variant_plan(
     validate_exact_expr(plan.lowered, expr_root);
     ExactOutcomePlan outcome;
     outcome.expr_root = expr_root;
-    outcome.support = plan.expr_supports[static_cast<std::size_t>(expr_root)];
     outcome.scenarios = build_expr_transition_scenarios(plan, expr_root);
     const auto code_it =
         outcome_code_by_label.find(plan.lowered.outcome_labels[i]);

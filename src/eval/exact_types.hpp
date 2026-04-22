@@ -153,20 +153,17 @@ struct ExactStepResult {
 
 struct ExactOutcomePlan {
   semantic::Index expr_root{semantic::kInvalidIndex};
-  std::vector<semantic::Index> support;
   std::vector<ExactTransitionScenario> scenarios;
 };
 
 struct ExactCompetitorSubsetPlan {
   std::vector<semantic::Index> outcome_indices;
-  std::vector<semantic::Index> expr_roots;
   semantic::Index singleton_expr_root{semantic::kInvalidIndex};
   int inclusion_sign{1};
   std::vector<ExactTransitionScenario> scenarios;
 };
 
 struct ExactCompetitorBlockPlan {
-  std::vector<semantic::Index> outcome_indices;
   std::vector<ExactCompetitorSubsetPlan> subsets;
 };
 

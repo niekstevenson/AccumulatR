@@ -4,14 +4,7 @@
 \alias{add_trigger}
 \title{Add a shared trigger or gate}
 \usage{
-add_trigger(
-  spec,
-  id,
-  members,
-  q = NULL,
-  param = NULL,
-  draw = c("shared", "independent")
-)
+add_trigger(spec, id, members, q = NULL, draw = c("shared", "independent"))
 }
 \arguments{
 \item{spec}{A `race_spec` object.}
@@ -20,9 +13,8 @@ add_trigger(
 
 \item{members}{Accumulator labels controlled by the trigger.}
 
-\item{q}{Failure probability for the trigger.}
-
-\item{param}{Optional parameter name supplying `q`.}
+\item{q}{Failure probability for the trigger. The trigger `id` is the
+parameter name for this quantity.}
 
 \item{draw}{Whether trigger failures are shared across members or drawn
 independently.}

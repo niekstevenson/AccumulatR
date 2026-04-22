@@ -4,7 +4,7 @@
 \alias{prepare_data}
 \title{Prepare behavioral data for likelihood evaluation}
 \usage{
-prepare_data(structure, data_df, prep = NULL)
+prepare_data(structure, data_df, compress = FALSE, prep = NULL)
 }
 \arguments{
 \item{structure}{Finalized model structure.}
@@ -12,6 +12,10 @@ prepare_data(structure, data_df, prep = NULL)
 \item{data_df}{Behavioral data. In the simplest case this contains `trial`,
 `R`, and `rt`; for multi-outcome models it can also contain `R2`, `rt2`,
 and so on.}
+
+\item{compress}{If `TRUE`, collapse repeated prepared trials and attach an
+`expand` mapping for `log_likelihood()` to reuse automatically. Defaults
+to `FALSE`.}
 
 \item{prep}{Optional preprocessed model bundle.}
 }

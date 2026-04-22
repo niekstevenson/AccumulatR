@@ -91,7 +91,7 @@ public:
         value = 0.0;
         break;
       }
-      value = clamp_probability(quadrature::integrate_finite_robust(
+      value = clamp_probability(quadrature::integrate_finite_default(
           [&](const double u) {
             const auto guard = oracle_->conditional_time_guard(u);
             return expr_density(expr_idx);
@@ -225,7 +225,7 @@ public:
         blocker_survival = expr_survival(blocker);
       } else {
         blocker_survival = clamp_probability(
-            1.0 - quadrature::integrate_finite_robust(
+            1.0 - quadrature::integrate_finite_default(
                       [&](const double u) {
                         const auto guard = oracle_->conditional_time_guard(u);
                         double term = expr_density(blocker);
@@ -302,7 +302,7 @@ public:
     if (!(current_time > 0.0)) {
       return 0.0;
     }
-    return clamp_probability(quadrature::integrate_finite_robust(
+    return clamp_probability(quadrature::integrate_finite_default(
         [&](const double u) {
           const auto guard = oracle_->conditional_time_guard(u);
           return conjunction_density(exprs);
@@ -360,7 +360,9 @@ inline double readiness_cdf(const ExactTransitionScenario &scenario,
                             ForcedExprEvaluator *evaluator,
                             const double t,
                             ForcedExprWorkspace *workspace) {
-  if (scenario.before_source_ids.empty() && scenario.ready_exprs.empty()) {
+  const bool has_before = !scenario.before_source_ids.empty();
+  const bool has_ready = !scenario.ready_exprs.empty();
+  if (!has_before && !has_ready) {
     return 1.0;
   }
   if (t < 0.0) {
@@ -368,11 +370,16 @@ inline double readiness_cdf(const ExactTransitionScenario &scenario,
   }
   const auto guard = evaluator->oracle()->conditional_time_guard(t);
   double value = 1.0;
-  for (const auto source_id : scenario.before_source_ids) {
-    value *= evaluator->source_cdf(source_id);
-    if (!(value > 0.0)) {
-      return 0.0;
+  if (has_before) {
+    for (const auto source_id : scenario.before_source_ids) {
+      value *= evaluator->source_cdf(source_id);
+      if (!(value > 0.0)) {
+        return 0.0;
+      }
     }
+  }
+  if (!has_ready) {
+    return clamp_probability(value);
   }
   auto *scenario_evaluator =
       prepare_scenario_evaluator(scenario, evaluator, workspace);
@@ -395,50 +402,63 @@ inline double readiness_density(const ExactTransitionScenario &scenario,
   if (!(t > 0.0)) {
     return 0.0;
   }
-  if (scenario.before_source_ids.empty() && scenario.ready_exprs.empty()) {
+  const bool has_before = !scenario.before_source_ids.empty();
+  const bool has_ready = !scenario.ready_exprs.empty();
+  if (!has_before && !has_ready) {
     return 0.0;
   }
   const auto guard = evaluator->oracle()->conditional_time_guard(t);
-  auto *scenario_evaluator =
-      prepare_scenario_evaluator(scenario, evaluator, workspace);
-  if (scenario_evaluator == nullptr) {
-    return 0.0;
+  ForcedExprEvaluator *scenario_evaluator = nullptr;
+  if (has_ready) {
+    scenario_evaluator = prepare_scenario_evaluator(scenario, evaluator, workspace);
+    if (scenario_evaluator == nullptr) {
+      return 0.0;
+    }
   }
   double total = 0.0;
-  for (std::size_t i = 0; i < scenario.before_source_ids.size(); ++i) {
-    double term = evaluator->source_pdf(scenario.before_source_ids[i]);
-    if (!std::isfinite(term) || term == 0.0) {
-      continue;
-    }
-    for (std::size_t j = 0; j < scenario.before_source_ids.size(); ++j) {
-      if (j == i) {
+  if (has_before) {
+    for (std::size_t i = 0; i < scenario.before_source_ids.size(); ++i) {
+      double term = evaluator->source_pdf(scenario.before_source_ids[i]);
+      if (!std::isfinite(term) || term == 0.0) {
         continue;
       }
-      term *= evaluator->source_cdf(scenario.before_source_ids[j]);
-      if (!std::isfinite(term) || term == 0.0) {
-        break;
+      for (std::size_t j = 0; j < scenario.before_source_ids.size(); ++j) {
+        if (j == i) {
+          continue;
+        }
+        term *= evaluator->source_cdf(scenario.before_source_ids[j]);
+        if (!std::isfinite(term) || term == 0.0) {
+          break;
+        }
       }
-    }
-    if (!std::isfinite(term) || term == 0.0) {
-      continue;
-    }
-    for (const auto expr_idx : scenario.ready_exprs) {
-      term *= scenario_evaluator->expr_cdf(expr_idx);
       if (!std::isfinite(term) || term == 0.0) {
-        break;
+        continue;
       }
+      if (has_ready) {
+        for (const auto expr_idx : scenario.ready_exprs) {
+          term *= scenario_evaluator->expr_cdf(expr_idx);
+          if (!std::isfinite(term) || term == 0.0) {
+            break;
+          }
+        }
+      }
+      total += term;
     }
-    total += term;
+  }
+  if (!has_ready) {
+    return clean_signed_value(total);
   }
   for (std::size_t i = 0; i < scenario.ready_exprs.size(); ++i) {
     double term = scenario_evaluator->expr_density(scenario.ready_exprs[i]);
     if (!std::isfinite(term) || term == 0.0) {
       continue;
     }
-    for (const auto source_id : scenario.before_source_ids) {
-      term *= evaluator->source_cdf(source_id);
-      if (!std::isfinite(term) || term == 0.0) {
-        break;
+    if (has_before) {
+      for (const auto source_id : scenario.before_source_ids) {
+        term *= evaluator->source_cdf(source_id);
+        if (!std::isfinite(term) || term == 0.0) {
+          break;
+        }
       }
     }
     if (!std::isfinite(term) || term == 0.0) {
@@ -464,11 +484,16 @@ inline double after_survival(const ExactTransitionScenario &scenario,
                              ForcedExprWorkspace *workspace) {
   const auto guard = evaluator->oracle()->conditional_time_guard(t);
   double value = 1.0;
-  for (const auto source_id : scenario.after_source_ids) {
-    value *= evaluator->source_survival(source_id);
-    if (!(value > 0.0)) {
-      return 0.0;
+  if (!scenario.after_source_ids.empty()) {
+    for (const auto source_id : scenario.after_source_ids) {
+      value *= evaluator->source_survival(source_id);
+      if (!(value > 0.0)) {
+        return 0.0;
+      }
     }
+  }
+  if (scenario.tail_exprs.empty()) {
+    return clamp_probability(value);
   }
   auto *scenario_evaluator =
       prepare_scenario_evaluator(scenario, evaluator, workspace);
@@ -506,7 +531,7 @@ inline double scenario_truth_cdf(const ExactTransitionScenario &scenario,
   if (!(t > 0.0)) {
     return 0.0;
   }
-  return clamp_probability(quadrature::integrate_finite_robust(
+  return clamp_probability(quadrature::integrate_finite_default(
       [&](const double u) {
         const auto guard = evaluator->oracle()->conditional_time_guard(u);
         double value = evaluator->source_pdf(scenario.active_source_id);
@@ -517,7 +542,8 @@ inline double scenario_truth_cdf(const ExactTransitionScenario &scenario,
         if (!(value > 0.0)) {
           return 0.0;
         }
-        if (!scenario.before_source_ids.empty() || !scenario.ready_exprs.empty()) {
+        if (!scenario.before_source_ids.empty() ||
+            !scenario.ready_exprs.empty()) {
           value *= readiness_cdf(scenario, evaluator, u, workspace);
           if (!(value > 0.0)) {
             return 0.0;

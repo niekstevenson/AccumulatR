@@ -1,21 +1,14 @@
 #pragma once
 
-#include <boost/math/quadrature/exp_sinh.hpp>
-#include <boost/math/quadrature/gauss_kronrod.hpp>
-
 #include <array>
 #include <cmath>
 #include <cstddef>
-#include <limits>
 #include <utility>
 
 namespace accumulatr::eval::quadrature {
 
 constexpr std::size_t kDefaultFiniteOrder = 31;
-constexpr std::size_t kDefaultTailOrder = 63;
-constexpr unsigned kRobustFiniteOrder = 61;
-constexpr unsigned kRobustMaxDepth = 12;
-constexpr double kRobustTolerance = 1e-4;
+constexpr std::size_t kDefaultTailOrder = 47;
 
 template <std::size_t N>
 struct MappedRule {
@@ -168,61 +161,8 @@ inline double integrate_finite_default(Fn &&fn,
 }
 
 template <typename Fn>
-inline double integrate_finite_robust(const double lower,
-                                      const double upper,
-                                      Fn &&fn,
-                                      const double tol = kRobustTolerance) {
-  if (!std::isfinite(lower) || !std::isfinite(upper) || !(upper > lower)) {
-    return 0.0;
-  }
-  double error = 0.0;
-  double l1 = 0.0;
-  const double value =
-      boost::math::quadrature::gauss_kronrod<double, kRobustFiniteOrder>::integrate(
-          std::forward<Fn>(fn),
-          lower,
-          upper,
-          kRobustMaxDepth,
-          tol,
-          &error,
-          &l1);
-  return std::isfinite(value) ? value : 0.0;
-}
-
-template <typename Fn>
-inline double integrate_finite_robust(Fn &&fn,
-                                      const double lower,
-                                      const double upper,
-                                      const double tol = kRobustTolerance) {
-  return integrate_finite_robust(
-      lower, upper, std::forward<Fn>(fn), tol);
-}
-
-template <typename Fn>
 inline double integrate_tail_default(Fn &&fn) {
   return integrate_rule(canonical_tail_batch().nodes, std::forward<Fn>(fn));
-}
-
-template <typename Fn>
-inline double integrate_tail_robust(Fn &&fn,
-                                    const double lower = 0.0,
-                                    const double tol = kRobustTolerance) {
-  if (!std::isfinite(lower)) {
-    return 0.0;
-  }
-  boost::math::quadrature::exp_sinh<double> integrator(12);
-  double error = 0.0;
-  double l1 = 0.0;
-  std::size_t levels = 0;
-  const double value = integrator.integrate(
-      std::forward<Fn>(fn),
-      lower,
-      std::numeric_limits<double>::infinity(),
-      tol,
-      &error,
-      &l1,
-      &levels);
-  return std::isfinite(value) ? value : 0.0;
 }
 
 } // namespace accumulatr::eval::quadrature

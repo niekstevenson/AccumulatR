@@ -1,19 +1,48 @@
 #pragma once
 
+#include <optional>
+
 #include "exact_truth.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
 
+struct ExactStepWorkspace {
+  explicit ExactStepWorkspace(const ExactVariantPlan &plan)
+      : oracle(plan),
+        target_evaluator(plan),
+        competitor_evaluator(plan),
+        target_workspace(plan),
+        competitor_workspace(plan) {}
+
+  void reset(const ParamView &params,
+             const int first_param_row,
+             const ExactTriggerState &trigger_state,
+             const ExactSequenceState &sequence_state,
+             const double observed_time) {
+    oracle.reset(
+        params, first_param_row, trigger_state, sequence_state, observed_time);
+    target_evaluator.reset(&oracle, RelationView{});
+    competitor_evaluator.reset(&oracle, RelationView{});
+    target_workspace.reset(&oracle, RelationView{});
+    competitor_workspace.reset(&oracle, RelationView{});
+  }
+
+  ExactSourceOracle oracle;
+  ForcedExprEvaluator target_evaluator;
+  ForcedExprEvaluator competitor_evaluator;
+  ForcedExprWorkspace target_workspace;
+  ForcedExprWorkspace competitor_workspace;
+};
+
 inline double competitor_subset_win_mass(
     const ExactCompetitorSubsetPlan &subset_plan,
-    const ExactSourceKey target_active_key,
+    const semantic::Index target_active_source_id,
     const double readiness_upper,
     ForcedExprEvaluator *evaluator,
     ForcedExprWorkspace *workspace,
     const double t) {
-  const double current_time = evaluator->oracle_time_;
-  evaluator->oracle_time_ = t;
+  const auto guard = evaluator->oracle()->conditional_time_guard(t);
   double win_prob = 0.0;
   if (subset_plan.outcome_indices.size() == 1U &&
       subset_plan.singleton_expr_root != semantic::kInvalidIndex) {
@@ -22,7 +51,6 @@ inline double competitor_subset_win_mass(
     for (const auto &scenario : subset_plan.scenarios) {
       win_prob += scenario_truth_cdf(scenario, evaluator, t, workspace);
       if (!std::isfinite(win_prob)) {
-        evaluator->oracle_time_ = current_time;
         return 1.0;
       }
     }
@@ -31,20 +59,19 @@ inline double competitor_subset_win_mass(
   double same_active_t = 0.0;
   double same_active_ready = 0.0;
   for (const auto &scenario : subset_plan.scenarios) {
-    if (!(scenario.active_key == target_active_key)) {
+    if (scenario.active_source_id != target_active_source_id) {
       continue;
     }
     same_active_t += same_active_win_mass(scenario, evaluator, t, t, workspace);
     same_active_ready +=
         same_active_win_mass(scenario, evaluator, t, readiness_upper, workspace);
   }
-  evaluator->oracle_time_ = current_time;
   return clamp_probability(win_prob - same_active_t + same_active_ready);
 }
 
 inline double competitor_non_win_probability(
     const ExactTargetCompetitorPlan &competitor_plan,
-    const ExactSourceKey target_active_key,
+    const semantic::Index target_active_source_id,
     const double readiness_upper,
     ForcedExprEvaluator *evaluator,
     ForcedExprWorkspace *workspace,
@@ -69,7 +96,7 @@ inline double competitor_non_win_probability(
       union_prob += static_cast<double>(subset.inclusion_sign) *
                     competitor_subset_win_mass(
                         subset,
-                        target_active_key,
+                        target_active_source_id,
                         readiness_upper,
                         evaluator,
                         workspace,
@@ -111,19 +138,24 @@ inline ExactStepResult evaluate_exact_step(
     const double observed_time,
     const std::vector<std::uint8_t> *used_outcomes = nullptr,
     const bool collect_successors = false,
-    const quadrature::FiniteBatch *step_batch = nullptr) {
+    const quadrature::FiniteBatch *step_batch = nullptr,
+    ExactStepWorkspace *workspace = nullptr) {
   ExactStepResult result;
   const auto target_pos = static_cast<std::size_t>(target_idx);
   const auto &competitor_plan = plan.competitor_plans[target_pos];
-  ExactSourceOracle oracle(
-      plan, params, first_param_row, trigger_state, sequence_state, observed_time);
-  ForcedExprEvaluator target_evaluator(plan, &oracle, nullptr);
-  std::vector<ExactRelation> competitor_relations(
-      static_cast<std::size_t>(plan.source_count),
-      ExactRelation::Unknown);
-  ForcedExprEvaluator competitor_evaluator(plan, &oracle, nullptr);
-  ForcedExprWorkspace target_workspace(plan, &oracle);
-  ForcedExprWorkspace competitor_workspace(plan, &oracle);
+  std::optional<ExactStepWorkspace> local_workspace;
+  if (workspace == nullptr) {
+    local_workspace.emplace(plan);
+    workspace = &*local_workspace;
+  }
+  auto &step_workspace = *workspace;
+  step_workspace.reset(
+      params, first_param_row, trigger_state, sequence_state, observed_time);
+  auto &oracle = step_workspace.oracle;
+  auto &target_evaluator = step_workspace.target_evaluator;
+  auto &competitor_evaluator = step_workspace.competitor_evaluator;
+  auto &target_workspace = step_workspace.target_workspace;
+  auto &competitor_workspace = step_workspace.competitor_workspace;
 
   for (const auto &scenario : plan.outcomes[target_pos].scenarios) {
     if (collect_successors && !scenario_supports_ranked_sequence(scenario)) {
@@ -131,28 +163,28 @@ inline ExactStepResult evaluate_exact_step(
           "ranked exact step requested for unsupported latent-readiness scenario");
     }
 
-    if (!merge_forced_relations(nullptr, scenario, &competitor_relations)) {
+    RelationView competitor_view;
+    if (!relation_view_with_overlay(
+            RelationView{}, scenario.relation_template, &competitor_view)) {
       continue;
     }
-    target_evaluator.reset_forced_relations(nullptr);
-    target_evaluator.oracle_time_ = observed_time;
-    competitor_evaluator.reset_forced_relations(&competitor_relations);
-    competitor_evaluator.oracle_time_ = observed_time;
+    competitor_evaluator.reset(&oracle, competitor_view);
 
     const double active_pdf =
-        source_pdf_at(&oracle, scenario.active_key, observed_time);
+        source_pdf_at(&oracle, scenario.active_source_id, observed_time);
     const double tail =
-        after_survival(scenario, &target_evaluator, observed_time, &target_workspace);
+        after_survival(
+            scenario, &target_evaluator, observed_time, &target_workspace);
     if (!(active_pdf > 0.0) || !(tail > 0.0)) {
       continue;
     }
 
-    if (scenario.before_keys.empty() && scenario.ready_exprs.empty()) {
+    if (scenario.before_source_ids.empty() && scenario.ready_exprs.empty()) {
       const double scenario_prob =
-          active_pdf * tail *
+              active_pdf * tail *
           competitor_non_win_probability(
               competitor_plan,
-              scenario.active_key,
+              scenario.active_source_id,
               0.0,
               &competitor_evaluator,
               &competitor_workspace,
@@ -177,7 +209,7 @@ inline ExactStepResult evaluate_exact_step(
       result.total_probability += initial_ready * active_pdf * tail *
                                   competitor_non_win_probability(
                                       competitor_plan,
-                                      scenario.active_key,
+                                      scenario.active_source_id,
                                       0.0,
                                       &competitor_evaluator,
                                       &competitor_workspace,
@@ -205,7 +237,7 @@ inline ExactStepResult evaluate_exact_step(
       }
       value *= competitor_non_win_probability(
           competitor_plan,
-          scenario.active_key,
+          scenario.active_source_id,
           readiness_time,
           &competitor_evaluator,
           &competitor_workspace,

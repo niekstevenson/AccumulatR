@@ -10,6 +10,45 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
+// semantic_profiler_is_available_cpp
+bool semantic_profiler_is_available_cpp();
+RcppExport SEXP _AccumulatR_semantic_profiler_is_available_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(semantic_profiler_is_available_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
+// semantic_profiler_start_cpp
+void semantic_profiler_start_cpp(SEXP pathSEXP, SEXP frequencySEXP);
+RcppExport SEXP _AccumulatR_semantic_profiler_start_cpp(SEXP pathSEXPSEXP, SEXP frequencySEXPSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< SEXP >::type pathSEXP(pathSEXPSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type frequencySEXP(frequencySEXPSEXP);
+    semantic_profiler_start_cpp(pathSEXP, frequencySEXP);
+    return R_NilValue;
+END_RCPP
+}
+// semantic_profiler_flush_cpp
+void semantic_profiler_flush_cpp();
+RcppExport SEXP _AccumulatR_semantic_profiler_flush_cpp() {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    semantic_profiler_flush_cpp();
+    return R_NilValue;
+END_RCPP
+}
+// semantic_profiler_stop_cpp
+void semantic_profiler_stop_cpp();
+RcppExport SEXP _AccumulatR_semantic_profiler_stop_cpp() {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    semantic_profiler_stop_cpp();
+    return R_NilValue;
+END_RCPP
+}
 // semantic_make_likelihood_context_prep_cpp
 SEXP semantic_make_likelihood_context_prep_cpp(SEXP prepSEXP);
 RcppExport SEXP _AccumulatR_semantic_make_likelihood_context_prep_cpp(SEXP prepSEXPSEXP) {
@@ -49,6 +88,10 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
+    {"_AccumulatR_semantic_profiler_is_available_cpp", (DL_FUNC) &_AccumulatR_semantic_profiler_is_available_cpp, 0},
+    {"_AccumulatR_semantic_profiler_start_cpp", (DL_FUNC) &_AccumulatR_semantic_profiler_start_cpp, 2},
+    {"_AccumulatR_semantic_profiler_flush_cpp", (DL_FUNC) &_AccumulatR_semantic_profiler_flush_cpp, 0},
+    {"_AccumulatR_semantic_profiler_stop_cpp", (DL_FUNC) &_AccumulatR_semantic_profiler_stop_cpp, 0},
     {"_AccumulatR_semantic_make_likelihood_context_prep_cpp", (DL_FUNC) &_AccumulatR_semantic_make_likelihood_context_prep_cpp, 1},
     {"_AccumulatR_semantic_prepare_trial_layout_cpp", (DL_FUNC) &_AccumulatR_semantic_prepare_trial_layout_cpp, 1},
     {"_AccumulatR_semantic_loglik_context_cpp", (DL_FUNC) &_AccumulatR_semantic_loglik_context_cpp, 5},

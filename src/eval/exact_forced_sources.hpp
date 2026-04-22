@@ -6,21 +6,14 @@ namespace accumulatr::eval {
 namespace detail {
 
 inline leaf::EventChannels resolve_forced_source_channels(
-    const ExactVariantPlan &plan,
     ExactSourceOracle *oracle,
-    const std::vector<ExactRelation> *forced,
-    const double oracle_time,
-    const ExactSourceKey key) {
-  if (forced != nullptr) {
-    const auto source_id = source_ordinal(plan, key);
-    if (source_id != semantic::kInvalidIndex) {
-      const auto relation = (*forced)[static_cast<std::size_t>(source_id)];
-      if (relation != ExactRelation::Unknown) {
-        return forced_channels(relation);
-      }
-    }
+    const RelationView &relations,
+    const semantic::Index source_id) {
+  const auto relation = relations.relation_for(source_id);
+  if (relation != ExactRelation::Unknown) {
+    return forced_channels(relation);
   }
-  return oracle->source_channels(key.kind, key.index, oracle_time);
+  return oracle->conditional_source(source_id);
 }
 
 } // namespace detail

@@ -98,29 +98,40 @@ inline Rcpp::NumericVector evaluate_probability_records(
       continue;
     }
 
-    std::vector<DirectProbabilityQuery> queries;
-    queries.reserve(idxs.size());
+    std::vector<DirectMassQuery> direct_queries;
+    std::vector<DirectProbabilityQuery> exact_queries;
+    direct_queries.reserve(idxs.size());
+    exact_queries.reserve(idxs.size());
     for (const auto idx : idxs) {
       const auto &record = records[static_cast<std::size_t>(idx)];
-      queries.push_back(DirectProbabilityQuery{
-          record.trial_index,
-          record.variant_index,
-          record.semantic_code});
+      if (backend == compile::BackendKind::Direct) {
+        DirectMassQuery query;
+        query.trial_index = record.trial_index;
+        query.variant_index = record.variant_index;
+        append_weighted_term(&query.terms, record.semantic_code, 1.0);
+        direct_queries.push_back(std::move(query));
+      } else {
+        exact_queries.push_back(DirectProbabilityQuery{
+            record.trial_index,
+            record.variant_index,
+            record.semantic_code});
+      }
     }
 
     Rcpp::NumericVector prob;
     if (backend == compile::BackendKind::Direct) {
-      prob = evaluate_direct_probability_queries_cached(
-          direct_plans,
-          layout,
-          paramsSEXP,
-          queries);
+      const auto mass = evaluate_direct_mass_queries_cached(
+          direct_plans, layout, paramsSEXP, direct_queries);
+      prob = Rcpp::NumericVector(idxs.size(), 0.0);
+      for (R_xlen_t i = 0; i < prob.size(); ++i) {
+        prob[i] = mass(i, 0);
+      }
     } else {
       prob = evaluate_exact_probability_queries_cached(
           exact_plans,
           layout,
           paramsSEXP,
-          queries);
+          exact_queries);
     }
     for (std::size_t i = 0; i < idxs.size(); ++i) {
       out[static_cast<R_xlen_t>(idxs[i])] = prob[static_cast<R_xlen_t>(i)];
@@ -128,28 +139,6 @@ inline Rcpp::NumericVector evaluate_probability_records(
   }
 
   return out;
-}
-
-inline std::vector<DirectWeightedProbabilityQuery> build_direct_missing_all_queries(
-    const std::vector<ObservedRecord> &records) {
-  std::vector<DirectWeightedProbabilityQuery> queries;
-  queries.reserve(records.size());
-  std::size_t i = 0;
-  while (i < records.size()) {
-    DirectWeightedProbabilityQuery query;
-    query.trial_index = records[i].trial_index;
-    query.variant_index = records[i].variant_index;
-    while (i < records.size() &&
-           records[i].trial_index == query.trial_index &&
-           records[i].variant_index == query.variant_index &&
-           records[i].backend == compile::BackendKind::Direct) {
-      query.terms.push_back(
-          WeightedOutcomeTerm{records[i].semantic_code, records[i].weight});
-      ++i;
-    }
-    queries.push_back(std::move(query));
-  }
-  return queries;
 }
 
 inline double logsumexp_records(const std::vector<double> &values) {
@@ -217,7 +206,7 @@ inline SEXP evaluate_identity_trials_with_missing_all(
   Rcpp::NumericVector loglik(n_trials, min_ll);
   std::vector<ObservedRecord> finite_records;
   std::vector<ObservedRecord> missing_all_records;
-  std::vector<DirectProbabilityQuery> direct_missing_all_total_queries;
+  std::vector<DirectMassQuery> direct_missing_all_total_queries;
   std::vector<bool> missing_all_trial(n_trials, false);
 
   for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
@@ -235,10 +224,11 @@ inline SEXP evaluate_identity_trials_with_missing_all(
     if (integer_cell_is_na(label, row)) {
       missing_all_trial[trial_index] = true;
       if (component_plan.semantic_backend == compile::BackendKind::Direct) {
-        direct_missing_all_total_queries.push_back(DirectProbabilityQuery{
+        direct_missing_all_total_queries.push_back(DirectMassQuery{
             static_cast<semantic::Index>(trial_index),
             variant_index,
-            semantic::kInvalidIndex});
+            {},
+            true});
         continue;
       }
       for (const auto &branch : component_plan.finite_observed_branches) {
@@ -305,7 +295,7 @@ inline SEXP evaluate_identity_trials_with_missing_all(
   }
 
   if (!direct_missing_all_total_queries.empty()) {
-    const auto total_prob = evaluate_direct_total_probability_queries_cached(
+    const auto total_prob = evaluate_direct_mass_queries_cached(
         direct_plans,
         layout,
         paramsSEXP,
@@ -315,8 +305,8 @@ inline SEXP evaluate_identity_trials_with_missing_all(
           direct_missing_all_total_queries[i].trial_index);
       const double missing_prob = std::max(
           0.0,
-          1.0 - (std::isfinite(total_prob[static_cast<R_xlen_t>(i)])
-                     ? total_prob[static_cast<R_xlen_t>(i)]
+          1.0 - (std::isfinite(total_prob(static_cast<R_xlen_t>(i), 1))
+                     ? total_prob(static_cast<R_xlen_t>(i), 1)
                      : 1.0));
       loglik[static_cast<R_xlen_t>(trial_index)] =
           missing_prob > 0.0 ? std::log(missing_prob) : min_ll;
@@ -396,6 +386,12 @@ inline SEXP evaluate_observed_trials_cached(
   std::vector<ObservedRecord> finite_records;
   std::vector<ObservedRecord> missing_rt_records;
   std::vector<ObservedRecord> missing_all_records;
+  std::vector<ObservedRecord> missing_all_mapped_records;
+  std::vector<semantic::Index> missing_all_variant_index(
+      n_trials, semantic::kInvalidIndex);
+  std::vector<compile::BackendKind> missing_all_backend(
+      n_trials, compile::BackendKind::Exact);
+  std::vector<std::uint8_t> missing_all_has_mapped_branch(n_trials, 0U);
 
   for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
     const auto &span = layout.spans[trial_index];
@@ -459,8 +455,20 @@ inline SEXP evaluate_observed_trials_cached(
       break;
     }
     case ObservedTrialKind::MissingAll:
+      missing_all_variant_index[trial_index] = variant_index;
+      missing_all_backend[trial_index] = component_plan.semantic_backend;
       for (const auto &branch : component_plan.finite_observed_branches) {
         missing_all_records.push_back(ObservedRecord{
+            static_cast<semantic::Index>(trial_index),
+            variant_index,
+            component_plan.semantic_backend,
+            branch.semantic_code,
+            observed_rt,
+            branch.weight});
+      }
+      for (const auto &branch : component_plan.missing_all_branches) {
+        missing_all_has_mapped_branch[trial_index] = 1U;
+        missing_all_mapped_records.push_back(ObservedRecord{
             static_cast<semantic::Index>(trial_index),
             variant_index,
             component_plan.semantic_backend,
@@ -480,19 +488,17 @@ inline SEXP evaluate_observed_trials_cached(
         paramsSEXP,
         finite_records,
         min_ll);
-    for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
-      if (trial_kinds[trial_index] != ObservedTrialKind::Finite) {
-        continue;
-      }
+    std::size_t i = 0;
+    while (i < finite_records.size()) {
+      const auto trial_index = finite_records[i].trial_index;
       std::vector<double> values;
-      for (std::size_t i = 0; i < finite_records.size(); ++i) {
-        if (finite_records[i].trial_index !=
-                static_cast<semantic::Index>(trial_index) ||
-            !(finite_records[i].weight > 0.0)) {
-          continue;
+      while (i < finite_records.size() &&
+             finite_records[i].trial_index == trial_index) {
+        if (finite_records[i].weight > 0.0) {
+          values.push_back(std::log(finite_records[i].weight) +
+                           donor_loglik[static_cast<R_xlen_t>(i)]);
         }
-        values.push_back(std::log(finite_records[i].weight) +
-                         donor_loglik[static_cast<R_xlen_t>(i)]);
+        ++i;
       }
       const auto value = logsumexp_records(values);
       loglik[static_cast<R_xlen_t>(trial_index)] =
@@ -507,18 +513,15 @@ inline SEXP evaluate_observed_trials_cached(
         layout,
         paramsSEXP,
         missing_rt_records);
-    for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
-      if (trial_kinds[trial_index] != ObservedTrialKind::MissingRt) {
-        continue;
-      }
+    std::size_t i = 0;
+    while (i < missing_rt_records.size()) {
+      const auto trial_index = missing_rt_records[i].trial_index;
       double total = 0.0;
-      for (std::size_t i = 0; i < missing_rt_records.size(); ++i) {
-        if (missing_rt_records[i].trial_index !=
-            static_cast<semantic::Index>(trial_index)) {
-          continue;
-        }
+      while (i < missing_rt_records.size() &&
+             missing_rt_records[i].trial_index == trial_index) {
         total += missing_rt_records[i].weight *
                  donor_prob[static_cast<R_xlen_t>(i)];
+        ++i;
       }
       loglik[static_cast<R_xlen_t>(trial_index)] =
           std::isfinite(total) && total > 0.0 ? std::log(total) : min_ll;
@@ -526,27 +529,72 @@ inline SEXP evaluate_observed_trials_cached(
   }
 
   if (!missing_all_records.empty()) {
-    std::vector<ObservedRecord> direct_missing_all_records;
+    ParamView params(paramsSEXP);
+    std::vector<double> direct_missing_all_structural_prob(n_trials, 0.0);
+    std::vector<std::uint8_t> direct_missing_all_structural_known(n_trials, 0U);
+    for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
+      if (trial_kinds[trial_index] != ObservedTrialKind::MissingAll ||
+          missing_all_backend[trial_index] != compile::BackendKind::Direct) {
+        continue;
+      }
+      const auto variant_index = missing_all_variant_index[trial_index];
+      if (variant_index == semantic::kInvalidIndex) {
+        continue;
+      }
+      const int first_param_row = static_cast<int>(layout.spans[trial_index].start_row);
+      double total_finite_mass = 0.0;
+      if (!direct_try_exact_total_finite_mass(
+              direct_plans.at(static_cast<std::size_t>(variant_index)),
+              params,
+              first_param_row,
+              &total_finite_mass)) {
+        continue;
+      }
+      direct_missing_all_structural_known[trial_index] = 1U;
+      direct_missing_all_structural_prob[trial_index] =
+          std::max(0.0, 1.0 - total_finite_mass);
+    }
+
+    std::vector<DirectMassQuery> direct_missing_all_queries;
     std::vector<ObservedRecord> exact_missing_all_records;
-    direct_missing_all_records.reserve(missing_all_records.size());
+    direct_missing_all_queries.reserve(n_trials);
     exact_missing_all_records.reserve(missing_all_records.size());
+    std::size_t trial_index = 0;
+    while (trial_index < n_trials) {
+      if (trial_kinds[trial_index] != ObservedTrialKind::MissingAll) {
+        ++trial_index;
+        continue;
+      }
+      if (missing_all_backend[trial_index] == compile::BackendKind::Direct) {
+        DirectMassQuery query;
+        query.trial_index = static_cast<semantic::Index>(trial_index);
+        query.variant_index = missing_all_variant_index[trial_index];
+        query.include_total_finite =
+            direct_missing_all_structural_known[trial_index] == 0U;
+        for (const auto &record : missing_all_mapped_records) {
+          if (record.trial_index != static_cast<semantic::Index>(trial_index)) {
+            continue;
+          }
+          append_weighted_term(
+              &query.terms, record.semantic_code, record.weight);
+        }
+        if (!query.terms.empty() || query.include_total_finite) {
+          direct_missing_all_queries.push_back(std::move(query));
+        }
+        ++trial_index;
+        continue;
+      }
+      ++trial_index;
+    }
     for (const auto &record : missing_all_records) {
-      if (record.backend == compile::BackendKind::Direct) {
-        direct_missing_all_records.push_back(record);
-      } else {
+      if (record.backend == compile::BackendKind::Exact) {
         exact_missing_all_records.push_back(record);
       }
     }
-    Rcpp::NumericVector direct_finite_prob;
-    std::vector<DirectWeightedProbabilityQuery> direct_queries;
-    if (!direct_missing_all_records.empty()) {
-      direct_queries = build_direct_missing_all_queries(
-          direct_missing_all_records);
-      direct_finite_prob = evaluate_direct_weighted_probability_queries_cached(
-          direct_plans,
-          layout,
-          paramsSEXP,
-          direct_queries);
+    Rcpp::NumericMatrix direct_missing_all_mass;
+    if (!direct_missing_all_queries.empty()) {
+      direct_missing_all_mass = evaluate_direct_mass_queries_cached(
+          direct_plans, layout, paramsSEXP, direct_missing_all_queries);
     }
     Rcpp::NumericVector exact_finite_prob;
     if (!exact_missing_all_records.empty()) {
@@ -557,29 +605,38 @@ inline SEXP evaluate_observed_trials_cached(
           paramsSEXP,
           exact_missing_all_records);
     }
+    std::size_t direct_i = 0;
+    std::size_t exact_i = 0;
     for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
       if (trial_kinds[trial_index] != ObservedTrialKind::MissingAll) {
         continue;
       }
-      double total_finite = 0.0;
-      for (std::size_t i = 0; i < direct_queries.size(); ++i) {
-        if (direct_queries[i].trial_index !=
-            static_cast<semantic::Index>(trial_index)) {
-          continue;
+      double missing_prob = 0.0;
+      if (missing_all_backend[trial_index] == compile::BackendKind::Direct &&
+          direct_i < direct_missing_all_queries.size() &&
+          direct_missing_all_queries[direct_i].trial_index ==
+              static_cast<semantic::Index>(trial_index)) {
+        missing_prob += direct_missing_all_mass(static_cast<R_xlen_t>(direct_i), 0);
+        if (direct_missing_all_structural_known[trial_index] != 0U) {
+          missing_prob += direct_missing_all_structural_prob[trial_index];
+        } else if (direct_missing_all_queries[direct_i].include_total_finite) {
+          missing_prob += std::max(
+              0.0,
+              1.0 - direct_missing_all_mass(static_cast<R_xlen_t>(direct_i), 1));
         }
-        total_finite +=
-            direct_finite_prob[static_cast<R_xlen_t>(i)];
-      }
-      for (std::size_t i = 0; i < exact_missing_all_records.size(); ++i) {
-        if (exact_missing_all_records[i].trial_index !=
-            static_cast<semantic::Index>(trial_index)) {
-          continue;
+        ++direct_i;
+      } else if (missing_all_backend[trial_index] == compile::BackendKind::Exact) {
+        double total_finite = 0.0;
+        while (exact_i < exact_missing_all_records.size() &&
+               exact_missing_all_records[exact_i].trial_index ==
+                   static_cast<semantic::Index>(trial_index)) {
+          total_finite += exact_missing_all_records[exact_i].weight *
+                          exact_finite_prob[static_cast<R_xlen_t>(exact_i)];
+          ++exact_i;
         }
-        total_finite += exact_missing_all_records[i].weight *
-                        exact_finite_prob[static_cast<R_xlen_t>(i)];
+        missing_prob =
+            std::max(0.0, 1.0 - (std::isfinite(total_finite) ? total_finite : 1.0));
       }
-      const double missing_prob =
-          std::max(0.0, 1.0 - (std::isfinite(total_finite) ? total_finite : 1.0));
       loglik[static_cast<R_xlen_t>(trial_index)] =
           missing_prob > 0.0 ? std::log(missing_prob) : min_ll;
     }

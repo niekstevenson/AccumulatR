@@ -424,16 +424,53 @@ struct DirectProbabilityQuery {
   semantic::Index outcome_code{semantic::kInvalidIndex};
 };
 
+struct DirectTriggerState {
+  double weight{1.0};
+  std::vector<std::uint8_t> shared_started;
+};
+
 struct WeightedOutcomeTerm {
   semantic::Index outcome_code{semantic::kInvalidIndex};
   double weight{0.0};
 };
 
-struct DirectWeightedProbabilityQuery {
+struct DirectMassQuery {
   semantic::Index trial_index{semantic::kInvalidIndex};
   semantic::Index variant_index{semantic::kInvalidIndex};
   std::vector<WeightedOutcomeTerm> terms;
+  bool include_total_finite{false};
 };
+
+struct DirectMassResult {
+  double weighted_mass{0.0};
+  double total_finite_mass{0.0};
+};
+
+inline void append_weighted_term(std::vector<WeightedOutcomeTerm> *terms,
+                                 const semantic::Index outcome_code,
+                                 const double weight) {
+  if (!(std::isfinite(weight) && weight > 0.0)) {
+    return;
+  }
+  for (auto &term : *terms) {
+    if (term.outcome_code == outcome_code) {
+      term.weight += weight;
+      return;
+    }
+  }
+  terms->push_back(WeightedOutcomeTerm{outcome_code, weight});
+}
+
+inline void append_key_bytes(std::string *key,
+                             const void *bytes,
+                             const std::size_t n_bytes) {
+  key->append(static_cast<const char *>(bytes), n_bytes);
+}
+
+template <typename T>
+inline void append_key_bytes(std::string *key, const T &value) {
+  append_key_bytes(key, &value, sizeof(T));
+}
 
 struct OutcomePlan {
   semantic::SourceKind source_kind{semantic::SourceKind::Leaf};
@@ -445,7 +482,41 @@ struct VariantPlan {
   runtime::LoweredDirectVariant lowered;
   std::vector<semantic::Index> outcome_index_by_code;
   std::vector<OutcomePlan> outcomes;
+  std::vector<semantic::Index> shared_trigger_indices;
+  bool leaf_outcome_partition{false};
 };
+
+inline std::string make_direct_mass_cache_key(const VariantPlan &plan,
+                                              const ParamView &params,
+                                              const int first_param_row,
+                                              const DirectMassQuery &query,
+                                              const semantic::Index *codes,
+                                              const double *weights,
+                                              const std::size_t n_terms) {
+  std::string key;
+  key.reserve(64U +
+              static_cast<std::size_t>(plan.lowered.program.layout.n_leaves) * 96U +
+              n_terms * 24U);
+  append_key_bytes(&key, query.variant_index);
+  append_key_bytes(&key, query.include_total_finite);
+  append_key_bytes(&key, n_terms);
+  for (std::size_t i = 0; i < n_terms; ++i) {
+    append_key_bytes(&key, codes[i]);
+    append_key_bytes(&key, weights[i]);
+  }
+  for (int leaf_index = 0; leaf_index < plan.lowered.program.layout.n_leaves;
+       ++leaf_index) {
+    const int row = first_param_row + leaf_index;
+    append_key_bytes(&key, params.q(row));
+    append_key_bytes(&key, params.t0(row));
+    const auto &desc =
+        plan.lowered.program.leaf_descriptors[static_cast<std::size_t>(leaf_index)];
+    for (int j = 0; j < desc.param_count; ++j) {
+      append_key_bytes(&key, params.p(row, j));
+    }
+  }
+  return key;
+}
 
 inline bool variant_is_semantic_direct(const compile::CompiledVariant &variant) {
   return variant.semantic_backend == compile::BackendKind::Direct;
@@ -559,6 +630,42 @@ inline VariantPlan make_variant_plan(
     }
   }
 
+  for (int i = 0; i < program.layout.n_triggers; ++i) {
+    const auto pos = static_cast<std::size_t>(i);
+    if (static_cast<semantic::TriggerKind>(program.trigger_kind[pos]) ==
+            semantic::TriggerKind::Shared &&
+        program.trigger_member_offsets[pos + 1U] -
+                program.trigger_member_offsets[pos] >
+            1) {
+      plan.shared_trigger_indices.push_back(i);
+    }
+  }
+
+  if (static_cast<int>(plan.outcomes.size()) == program.layout.n_leaves) {
+    std::vector<std::uint8_t> seen(static_cast<std::size_t>(program.layout.n_leaves), 0U);
+    bool all_leaf = true;
+    for (const auto &outcome : plan.outcomes) {
+      if (outcome.source_kind != semantic::SourceKind::Leaf ||
+          outcome.source_index < 0 ||
+          outcome.source_index >= program.layout.n_leaves) {
+        all_leaf = false;
+        break;
+      }
+      const auto pos = static_cast<std::size_t>(outcome.source_index);
+      if (seen[pos] != 0U) {
+        all_leaf = false;
+        break;
+      }
+      seen[pos] = 1U;
+    }
+    if (all_leaf) {
+      plan.leaf_outcome_partition = std::all_of(
+          seen.begin(), seen.end(), [](const std::uint8_t value) {
+            return value != 0U;
+          });
+    }
+  }
+
   return plan;
 }
 
@@ -619,6 +726,183 @@ inline void build_direct_plan_cache(
   }
 }
 
+inline std::vector<DirectTriggerState> enumerate_direct_trigger_states(
+    const VariantPlan &plan,
+    const ParamView &params,
+    const int first_param_row) {
+  std::vector<DirectTriggerState> states(1);
+  states.front().weight = 1.0;
+  states.front().shared_started.assign(
+      static_cast<std::size_t>(plan.lowered.program.layout.n_triggers), 2U);
+
+  for (const auto trigger_index : plan.shared_trigger_indices) {
+    const auto pos = static_cast<std::size_t>(trigger_index);
+    double q = 0.0;
+    if (plan.lowered.program.trigger_has_fixed_q[pos] != 0U) {
+      q = plan.lowered.program.trigger_fixed_q[pos];
+    } else {
+      const auto member_begin = plan.lowered.program.trigger_member_offsets[pos];
+      if (member_begin != plan.lowered.program.trigger_member_offsets[pos + 1U]) {
+        q = params.q(first_param_row +
+                     plan.lowered.program.trigger_member_indices[static_cast<std::size_t>(
+                         member_begin)]);
+      }
+    }
+    q = clamp_probability(q);
+
+    std::vector<DirectTriggerState> next;
+    next.reserve(states.size() * 2U);
+    for (const auto &state : states) {
+      if (q > 0.0) {
+        auto fail = state;
+        fail.weight *= q;
+        fail.shared_started[pos] = 0U;
+        next.push_back(std::move(fail));
+      }
+      if (q < 1.0) {
+        auto start = state;
+        start.weight *= (1.0 - q);
+        start.shared_started[pos] = 1U;
+        next.push_back(std::move(start));
+      }
+    }
+    states.swap(next);
+  }
+
+  return states;
+}
+
+inline double direct_effective_leaf_q(const VariantPlan &plan,
+                                      const ParamView &params,
+                                      const int first_param_row,
+                                      const DirectTriggerState &trigger_state,
+                                      const semantic::Index leaf_index) {
+  const auto pos = static_cast<std::size_t>(leaf_index);
+  const auto trigger_index = plan.lowered.program.leaf_trigger_index[pos];
+  if (trigger_index != semantic::kInvalidIndex &&
+      static_cast<semantic::TriggerKind>(
+          plan.lowered.program.trigger_kind[static_cast<std::size_t>(trigger_index)]) ==
+          semantic::TriggerKind::Shared &&
+      trigger_state.shared_started[static_cast<std::size_t>(trigger_index)] <= 1U) {
+    return trigger_state.shared_started[static_cast<std::size_t>(trigger_index)] == 1U
+               ? 0.0
+               : 1.0;
+  }
+  return params.q(first_param_row + leaf_index);
+}
+
+inline bool direct_source_possible_under_state(
+    const runtime::DirectProgram &program,
+    const VariantPlan &plan,
+    const ParamView &params,
+    const int first_param_row,
+    const DirectTriggerState &trigger_state,
+    const semantic::SourceKind kind,
+    const semantic::Index index,
+    std::vector<std::int8_t> *pool_cache) {
+  if (kind == semantic::SourceKind::Leaf) {
+    return direct_effective_leaf_q(
+               plan, params, first_param_row, trigger_state, index) < 1.0 - 1e-12;
+  }
+  const auto pos = static_cast<std::size_t>(index);
+  if ((*pool_cache)[pos] >= 0) {
+    return (*pool_cache)[pos] != 0;
+  }
+  int live_members = 0;
+  const auto begin = program.pool_member_offsets[pos];
+  const auto end = program.pool_member_offsets[pos + 1U];
+  for (semantic::Index i = begin; i < end; ++i) {
+    if (direct_source_possible_under_state(
+            program,
+            plan,
+            params,
+            first_param_row,
+            trigger_state,
+            static_cast<semantic::SourceKind>(
+                program.pool_member_kind[static_cast<std::size_t>(i)]),
+            program.pool_member_indices[static_cast<std::size_t>(i)],
+            pool_cache)) {
+      ++live_members;
+      if (live_members >= program.pool_k[pos]) {
+        (*pool_cache)[pos] = 1;
+        return true;
+      }
+    }
+  }
+  (*pool_cache)[pos] = 0;
+  return false;
+}
+
+inline bool direct_outcome_possible_under_state(const VariantPlan &plan,
+                                                const ParamView &params,
+                                                const int first_param_row,
+                                                const DirectTriggerState &trigger_state,
+                                                const semantic::Index outcome_code) {
+  const auto outcome_index =
+      plan.outcome_index_by_code[static_cast<std::size_t>(outcome_code)];
+  const auto &outcome = plan.outcomes[static_cast<std::size_t>(outcome_index)];
+  std::vector<std::int8_t> pool_cache(
+      static_cast<std::size_t>(plan.lowered.program.layout.n_pools), -1);
+  return direct_source_possible_under_state(
+      plan.lowered.program,
+      plan,
+      params,
+      first_param_row,
+      trigger_state,
+      outcome.source_kind,
+      outcome.source_index,
+      &pool_cache);
+}
+
+inline bool direct_any_outcome_possible_under_state(const VariantPlan &plan,
+                                                    const ParamView &params,
+                                                    const int first_param_row,
+                                                    const DirectTriggerState &trigger_state) {
+  std::vector<std::int8_t> pool_cache(
+      static_cast<std::size_t>(plan.lowered.program.layout.n_pools), -1);
+  for (const auto &outcome : plan.outcomes) {
+    if (direct_source_possible_under_state(
+            plan.lowered.program,
+            plan,
+            params,
+            first_param_row,
+            trigger_state,
+            outcome.source_kind,
+            outcome.source_index,
+            &pool_cache)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool direct_try_exact_total_finite_mass(const VariantPlan &plan,
+                                               const ParamView &params,
+                                               const int first_param_row,
+                                               double *total_mass) {
+  if (!plan.leaf_outcome_partition) {
+    return false;
+  }
+  const auto states = enumerate_direct_trigger_states(plan, params, first_param_row);
+  double total = 0.0;
+  for (const auto &state : states) {
+    if (!(state.weight > 0.0)) {
+      continue;
+    }
+    double all_failed_prob = 1.0;
+    for (semantic::Index leaf_index = 0;
+         leaf_index < plan.lowered.program.layout.n_leaves;
+         ++leaf_index) {
+      const double q = clamp_probability(direct_effective_leaf_q(
+          plan, params, first_param_row, state, leaf_index));
+      all_failed_prob *= q;
+    }
+    total += state.weight * (1.0 - all_failed_prob);
+  }
+  *total_mass = clamp_probability(total);
+  return true;
+}
+
 class TrialKernel {
 public:
   struct LoadedLeafInput {
@@ -630,12 +914,14 @@ public:
   TrialKernel(const VariantPlan &plan,
               const ParamView &params,
               const int first_param_row,
-              const double rt)
+              const double rt,
+              const std::vector<std::uint8_t> *shared_started = nullptr)
       : plan_(plan),
         program_(plan.lowered.program),
         params_(params),
         first_param_row_(first_param_row),
         rt_(rt),
+        shared_started_(shared_started),
         leaf_inputs_(static_cast<std::size_t>(program_.layout.n_leaves)),
         leaf_channels_(static_cast<std::size_t>(program_.layout.n_leaves)),
         pool_channels_(static_cast<std::size_t>(program_.layout.n_pools)),
@@ -718,10 +1004,28 @@ private:
   const ParamView &params_;
   int first_param_row_;
   double rt_;
+  const std::vector<std::uint8_t> *shared_started_;
   std::vector<LoadedLeafInput> leaf_inputs_;
   std::vector<leaf::EventChannels> leaf_channels_;
   std::vector<leaf::EventChannels> pool_channels_;
   std::vector<std::uint8_t> pool_ready_;
+
+  double leaf_q(const semantic::Index leaf_index) const {
+    if (shared_started_ == nullptr) {
+      return leaf_inputs_[static_cast<std::size_t>(leaf_index)].q;
+    }
+    const auto trigger_index =
+        program_.leaf_trigger_index[static_cast<std::size_t>(leaf_index)];
+    if (trigger_index != semantic::kInvalidIndex &&
+        static_cast<semantic::TriggerKind>(
+            program_.trigger_kind[static_cast<std::size_t>(trigger_index)]) ==
+            semantic::TriggerKind::Shared &&
+        (*shared_started_)[static_cast<std::size_t>(trigger_index)] <= 1U) {
+      return (*shared_started_)[static_cast<std::size_t>(trigger_index)] == 1U ? 0.0
+                                                                               : 1.0;
+    }
+    return leaf_inputs_[static_cast<std::size_t>(leaf_index)].q;
+  }
 
   double density_for_outcome_index(const std::size_t target_idx) {
     const auto target = source_channels(plan_.outcomes[target_idx].source_kind,
@@ -755,7 +1059,7 @@ private:
           desc.dist_kind,
           loaded.params.data(),
           std::min(desc.param_count, 8),
-          loaded.q,
+          leaf_q(i),
           onset_t0,
           rt_);
     }
@@ -846,6 +1150,72 @@ private:
   }
 };
 
+class DirectMixtureKernel {
+public:
+  template <typename Predicate>
+  DirectMixtureKernel(const VariantPlan &plan,
+                      const ParamView &params,
+                      const int first_param_row,
+                      const double rt,
+                      Predicate &&include_state)
+      : states_(enumerate_direct_trigger_states(plan, params, first_param_row)) {
+    kernels_.reserve(states_.size());
+    weights_.reserve(states_.size());
+    for (const auto &state : states_) {
+      if (!(state.weight > 0.0) || !include_state(state)) {
+        continue;
+      }
+      weights_.push_back(state.weight);
+      kernels_.emplace_back(plan, params, first_param_row, rt, &state.shared_started);
+    }
+  }
+
+  void set_rt(const double rt) {
+    for (auto &kernel : kernels_) {
+      kernel.set_rt(rt);
+    }
+  }
+
+  double density_for_code(const semantic::Index outcome_code) {
+    double total = 0.0;
+    for (std::size_t i = 0; i < kernels_.size(); ++i) {
+      total += weights_[i] * kernels_[i].density_for_code(outcome_code);
+    }
+    return std::isfinite(total) && total > 0.0 ? total : 0.0;
+  }
+
+  double total_density() {
+    double total = 0.0;
+    for (std::size_t i = 0; i < kernels_.size(); ++i) {
+      total += weights_[i] * kernels_[i].total_density();
+    }
+    return std::isfinite(total) && total > 0.0 ? total : 0.0;
+  }
+
+  double weighted_density_sum(const semantic::Index *outcome_codes,
+                              const double *weights,
+                              const std::size_t n_terms) {
+    double total = 0.0;
+    for (std::size_t i = 0; i < kernels_.size(); ++i) {
+      total += weights_[i] *
+               kernels_[i].weighted_density_sum(
+                   outcome_codes, weights, n_terms);
+    }
+    return std::isfinite(total) && total > 0.0 ? total : 0.0;
+  }
+
+  double loglik_for_code(const semantic::Index outcome_code,
+                         const double min_ll) {
+    const double density = density_for_code(outcome_code);
+    return density > 0.0 ? std::log(density) : min_ll;
+  }
+
+private:
+  std::vector<DirectTriggerState> states_;
+  std::vector<double> weights_;
+  std::vector<TrialKernel> kernels_;
+};
+
 inline Rcpp::NumericVector evaluate_direct_loglik_queries_cached(
     const std::vector<VariantPlan> &plans,
     const PreparedTrialLayout &layout,
@@ -857,97 +1227,169 @@ inline Rcpp::NumericVector evaluate_direct_loglik_queries_cached(
   for (std::size_t i = 0; i < queries.size(); ++i) {
     const auto &query = queries[i];
     const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
-    TrialKernel kernel(
-        plan,
-        params,
-        static_cast<int>(layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
-        query.rt);
-    out[static_cast<R_xlen_t>(i)] =
-        kernel.loglik_for_code(query.outcome_code, min_ll);
+    const int first_param_row = static_cast<int>(
+        layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row);
+    if (plan.shared_trigger_indices.empty()) {
+      TrialKernel kernel(plan, params, first_param_row, query.rt);
+      out[static_cast<R_xlen_t>(i)] =
+          kernel.loglik_for_code(query.outcome_code, min_ll);
+    } else {
+      DirectMixtureKernel kernel(
+          plan,
+          params,
+          first_param_row,
+          query.rt,
+          [&](const DirectTriggerState &state) {
+            return direct_outcome_possible_under_state(
+                plan, params, first_param_row, state, query.outcome_code);
+          });
+      out[static_cast<R_xlen_t>(i)] =
+          kernel.loglik_for_code(query.outcome_code, min_ll);
+    }
   }
   return out;
 }
 
-inline Rcpp::NumericVector evaluate_direct_probability_queries_cached(
+inline Rcpp::NumericMatrix evaluate_direct_mass_queries_cached(
     const std::vector<VariantPlan> &plans,
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
-    const std::vector<DirectProbabilityQuery> &queries) {
+    const std::vector<DirectMassQuery> &queries) {
   ParamView params(paramsSEXP);
-  Rcpp::NumericVector out(queries.size(), 0.0);
-  for (std::size_t i = 0; i < queries.size(); ++i) {
-    const auto &query = queries[i];
-    const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
-    out[static_cast<R_xlen_t>(i)] = integrate_to_infinity(
-        [&](const double rt) {
-          TrialKernel kernel(
-              plan,
-              params,
-              static_cast<int>(layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
-              rt);
-          return kernel.density_for_code(query.outcome_code);
-        });
-  }
-  return out;
-}
-
-inline Rcpp::NumericVector evaluate_direct_weighted_probability_queries_cached(
-    const std::vector<VariantPlan> &plans,
-    const PreparedTrialLayout &layout,
-    SEXP paramsSEXP,
-    const std::vector<DirectWeightedProbabilityQuery> &queries) {
-  ParamView params(paramsSEXP);
-  Rcpp::NumericVector out(queries.size(), 0.0);
+  Rcpp::NumericMatrix out(queries.size(), 2);
+  std::unordered_map<std::string, DirectMassResult> memo;
   std::vector<semantic::Index> codes;
   std::vector<double> weights;
   for (std::size_t i = 0; i < queries.size(); ++i) {
     const auto &query = queries[i];
     const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
+    const bool need_weighted = !query.terms.empty();
+    bool need_total = query.include_total_finite;
+    double exact_total_mass = 0.0;
+    const int first_param_row = static_cast<int>(
+        layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row);
+    if (need_total &&
+        direct_try_exact_total_finite_mass(
+            plan, params, first_param_row, &exact_total_mass)) {
+      need_total = false;
+      out(static_cast<R_xlen_t>(i), 1) = exact_total_mass;
+    }
+    if (!need_weighted && !need_total) {
+      continue;
+    }
     codes.resize(query.terms.size());
     weights.resize(query.terms.size());
     for (std::size_t j = 0; j < query.terms.size(); ++j) {
       codes[j] = query.terms[j].outcome_code;
       weights[j] = query.terms[j].weight;
     }
-    TrialKernel kernel(
+    if (codes.size() > 1U) {
+      std::vector<std::size_t> order(codes.size());
+      for (std::size_t j = 0; j < order.size(); ++j) {
+        order[j] = j;
+      }
+      std::sort(order.begin(), order.end(), [&](const std::size_t lhs,
+                                                const std::size_t rhs) {
+        return codes[lhs] < codes[rhs];
+      });
+      std::vector<semantic::Index> codes_sorted(codes.size());
+      std::vector<double> weights_sorted(weights.size());
+      for (std::size_t j = 0; j < order.size(); ++j) {
+        codes_sorted[j] = codes[order[j]];
+        weights_sorted[j] = weights[order[j]];
+      }
+      codes.swap(codes_sorted);
+      weights.swap(weights_sorted);
+    }
+    const auto cache_key = make_direct_mass_cache_key(
         plan,
         params,
-        static_cast<int>(
-            layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
-        0.0);
-    out[static_cast<R_xlen_t>(i)] = integrate_to_infinity(
-        [&](const double rt) {
-          kernel.set_rt(rt);
-          return kernel.weighted_density_sum(
-              codes.data(),
-              weights.data(),
-              codes.size());
-        });
-  }
-  return out;
-}
-
-inline Rcpp::NumericVector evaluate_direct_total_probability_queries_cached(
-    const std::vector<VariantPlan> &plans,
-    const PreparedTrialLayout &layout,
-    SEXP paramsSEXP,
-    const std::vector<DirectProbabilityQuery> &queries) {
-  ParamView params(paramsSEXP);
-  Rcpp::NumericVector out(queries.size(), 0.0);
-  for (std::size_t i = 0; i < queries.size(); ++i) {
-    const auto &query = queries[i];
-    const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
-    TrialKernel kernel(
-        plan,
-        params,
-        static_cast<int>(
-            layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
-        0.0);
-    out[static_cast<R_xlen_t>(i)] = integrate_to_infinity(
-        [&](const double rt) {
-          kernel.set_rt(rt);
-          return kernel.total_density();
-        });
+        first_param_row,
+        query,
+        codes.data(),
+        weights.data(),
+        codes.size());
+    const auto memo_it = memo.find(cache_key);
+    if (memo_it != memo.end()) {
+      out(static_cast<R_xlen_t>(i), 0) = memo_it->second.weighted_mass;
+      if (query.include_total_finite) {
+        out(static_cast<R_xlen_t>(i), 1) = memo_it->second.total_finite_mass;
+      }
+      continue;
+    }
+    DirectMassResult result;
+    if (plan.shared_trigger_indices.empty()) {
+      TrialKernel kernel(plan, params, first_param_row, 0.0);
+      const auto &tail_rule = quadrature::canonical_tail_batch().nodes;
+      for (std::size_t node = 0; node < tail_rule.nodes.size(); ++node) {
+        kernel.set_rt(tail_rule.nodes[node]);
+        if (need_weighted) {
+          result.weighted_mass +=
+              tail_rule.weights[node] * kernel.weighted_density_sum(
+                                            codes.data(),
+                                            weights.data(),
+                                            codes.size());
+        }
+        if (need_total) {
+          result.total_finite_mass +=
+              tail_rule.weights[node] * kernel.total_density();
+        }
+      }
+    } else {
+      DirectMixtureKernel kernel(
+          plan,
+          params,
+          first_param_row,
+          0.0,
+          [&](const DirectTriggerState &state) {
+            if (need_total &&
+                direct_any_outcome_possible_under_state(
+                    plan, params, first_param_row, state)) {
+              return true;
+            }
+            if (need_weighted) {
+              for (const auto &term : query.terms) {
+                if (term.weight > 0.0 &&
+                    direct_outcome_possible_under_state(
+                        plan,
+                        params,
+                        first_param_row,
+                        state,
+                        term.outcome_code)) {
+                  return true;
+                }
+              }
+            }
+            return false;
+          });
+      const auto &tail_rule = quadrature::canonical_tail_batch().nodes;
+      for (std::size_t node = 0; node < tail_rule.nodes.size(); ++node) {
+        kernel.set_rt(tail_rule.nodes[node]);
+        if (need_weighted) {
+          result.weighted_mass +=
+              tail_rule.weights[node] * kernel.weighted_density_sum(
+                                            codes.data(),
+                                            weights.data(),
+                                            codes.size());
+        }
+        if (need_total) {
+          result.total_finite_mass +=
+              tail_rule.weights[node] * kernel.total_density();
+        }
+      }
+    }
+    result.weighted_mass =
+        std::isfinite(result.weighted_mass) && result.weighted_mass > 0.0
+            ? result.weighted_mass
+            : 0.0;
+    out(static_cast<R_xlen_t>(i), 0) = result.weighted_mass;
+    if (query.include_total_finite) {
+      const double total_finite = need_total ? result.total_finite_mass
+                                             : exact_total_mass;
+      result.total_finite_mass = clamp_probability(total_finite);
+      out(static_cast<R_xlen_t>(i), 1) = result.total_finite_mass;
+    }
+    memo.emplace(std::move(cache_key), result);
   }
   return out;
 }
@@ -993,9 +1435,27 @@ inline Rcpp::List evaluate_direct_trials_cached(
     const auto &plan = plans.at(static_cast<std::size_t>(variant_index));
     const auto leaf_count =
         static_cast<std::size_t>(plan.lowered.program.layout.n_leaves);
-    TrialKernel kernel(plan, params, static_cast<int>(param_row), rt[row]);
-    loglik[static_cast<R_xlen_t>(trial_index)] =
-        kernel.loglik_for_code(outcome[row], min_ll);
+    if (plan.shared_trigger_indices.empty()) {
+      TrialKernel kernel(plan, params, static_cast<int>(param_row), rt[row]);
+      loglik[static_cast<R_xlen_t>(trial_index)] =
+          kernel.loglik_for_code(outcome[row], min_ll);
+    } else {
+      DirectMixtureKernel kernel(
+          plan,
+          params,
+          static_cast<int>(param_row),
+          rt[row],
+          [&](const DirectTriggerState &state) {
+            return direct_outcome_possible_under_state(
+                plan,
+                params,
+                static_cast<int>(param_row),
+                state,
+                outcome[row]);
+          });
+      loglik[static_cast<R_xlen_t>(trial_index)] =
+          kernel.loglik_for_code(outcome[row], min_ll);
+    }
     param_row += leaf_count;
   }
   if (have_block) {
@@ -1034,31 +1494,27 @@ inline Rcpp::List evaluate_direct_outcome_probabilities_cached(
     SEXP paramsSEXP,
     SEXP dataSEXP) {
   Rcpp::DataFrame data(dataSEXP);
-  ParamView params(paramsSEXP);
 
   const auto queries =
       collapse_probability_queries(data, variant_index_by_component_code, layout);
-  const auto blocks = build_variant_blocks(queries);
 
   Rcpp::NumericVector prob(queries.size());
-  std::size_t param_row = 0;
-  for (const auto &block : blocks) {
-    const auto &plan = plans.at(static_cast<std::size_t>(block.variant_index));
-    const auto leaf_count =
-        static_cast<std::size_t>(plan.lowered.program.layout.n_leaves);
-    for (int local = 0; local < block.row_count; ++local) {
-      const auto query_idx = static_cast<std::size_t>(block.start_row + local);
-      prob[static_cast<R_xlen_t>(query_idx)] = integrate_to_infinity(
-          [&](const double rt) {
-            TrialKernel kernel(
-                plan,
-                params,
-                static_cast<int>(param_row),
-                rt);
-            return kernel.density_for_code(queries[query_idx].outcome_code);
-          });
-      param_row += leaf_count;
-    }
+  std::vector<DirectMassQuery> mass_queries;
+  mass_queries.reserve(queries.size());
+  for (const auto &query : queries) {
+    DirectMassQuery mass_query;
+    mass_query.trial_index = semantic::kInvalidIndex;
+    mass_query.variant_index = query.variant_index;
+    append_weighted_term(&mass_query.terms, query.outcome_code, 1.0);
+    mass_queries.push_back(std::move(mass_query));
+  }
+  for (std::size_t i = 0; i < queries.size(); ++i) {
+    mass_queries[i].trial_index = static_cast<semantic::Index>(i);
+  }
+  const auto mass = evaluate_direct_mass_queries_cached(
+      plans, layout, paramsSEXP, mass_queries);
+  for (R_xlen_t i = 0; i < prob.size(); ++i) {
+    prob[i] = mass(i, 0);
   }
 
   return Rcpp::List::create(

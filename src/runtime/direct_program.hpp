@@ -125,19 +125,6 @@ inline void validate_direct_variant(const compile::CompiledVariant &variant) {
               static_cast<semantic::Index>(variant.model.triggers.size())) {
         throw std::runtime_error("direct variant leaf has invalid trigger index");
       }
-      const auto &trigger = variant.model.triggers[static_cast<std::size_t>(
-          leaf.trigger_index)];
-      if (trigger.kind != semantic::TriggerKind::Independent) {
-        throw std::runtime_error(
-            "direct variant contains shared trigger after backend classification");
-      }
-    }
-  }
-
-  for (const auto &trigger : variant.model.triggers) {
-    if (trigger.kind != semantic::TriggerKind::Independent) {
-      throw std::runtime_error(
-          "direct variant contains shared trigger after backend classification");
     }
   }
 
@@ -284,6 +271,7 @@ inline LoweredDirectVariant lower_direct_variant(
         static_cast<std::uint8_t>(leaf.onset.kind),
         static_cast<std::uint8_t>(leaf.onset.source.kind),
         leaf.onset.source.index,
+        semantic::kInvalidIndex,
         leaf.onset.lag,
         leaf.onset.absolute_value,
         leaf.trigger_index,

@@ -788,13 +788,56 @@ inline void compile_scenario_runtime_fields(const ExactVariantPlan &plan,
   for (const auto &key : scenario->after_keys) {
     scenario->after_source_ids.push_back(source_ordinal(plan, key));
   }
-  scenario->forced_source_ids.clear();
-  scenario->forced_source_relations.clear();
-  scenario->forced_source_ids.reserve(scenario->forced.size());
-  scenario->forced_source_relations.reserve(scenario->forced.size());
+  std::vector<std::pair<semantic::Index, ExactRelation>> relation_pairs;
+  relation_pairs.reserve(scenario->forced.size());
   for (const auto &constraint : scenario->forced) {
-    scenario->forced_source_ids.push_back(source_ordinal(plan, constraint.key));
-    scenario->forced_source_relations.push_back(constraint.relation);
+    relation_pairs.emplace_back(
+        source_ordinal(plan, constraint.key), constraint.relation);
+  }
+  std::sort(
+      relation_pairs.begin(),
+      relation_pairs.end(),
+      [](const auto &lhs, const auto &rhs) { return lhs.first < rhs.first; });
+  scenario->relation_template.source_ids.clear();
+  scenario->relation_template.relations.clear();
+  scenario->relation_template.source_ids.reserve(relation_pairs.size());
+  scenario->relation_template.relations.reserve(relation_pairs.size());
+  for (const auto &[source_id, relation] : relation_pairs) {
+    if (!scenario->relation_template.source_ids.empty() &&
+        scenario->relation_template.source_ids.back() == source_id) {
+      scenario->relation_template.relations.back() = relation;
+      continue;
+    }
+    scenario->relation_template.source_ids.push_back(source_id);
+    scenario->relation_template.relations.push_back(relation);
+  }
+}
+
+inline void compile_program_source_runtime_fields(ExactVariantPlan *plan) {
+  auto &program = plan->lowered.program;
+
+  for (semantic::Index i = 0; i < program.layout.n_leaves; ++i) {
+    const auto pos = static_cast<std::size_t>(i);
+    const auto source_id = source_ordinal(
+        *plan,
+        static_cast<semantic::SourceKind>(program.onset_source_kind[pos]),
+        program.onset_source_index[pos]);
+    program.onset_source_ids[pos] = source_id;
+    program.leaf_descriptors[pos].onset_source_id = source_id;
+  }
+
+  for (std::size_t i = 0; i < program.pool_member_indices.size(); ++i) {
+    program.pool_member_source_ids[i] = source_ordinal(
+        *plan,
+        static_cast<semantic::SourceKind>(program.pool_member_kind[i]),
+        program.pool_member_indices[i]);
+  }
+
+  for (std::size_t i = 0; i < program.expr_source_index.size(); ++i) {
+    program.expr_source_ids[i] = source_ordinal(
+        *plan,
+        static_cast<semantic::SourceKind>(program.expr_source_kind[i]),
+        program.expr_source_index[i]);
   }
 }
 
@@ -822,6 +865,7 @@ inline ExactVariantPlan make_exact_variant_plan(
     plan.pool_source_ids[static_cast<std::size_t>(i)] =
         static_cast<semantic::Index>(plan.lowered.program.layout.n_leaves + i);
   }
+  compile_program_source_runtime_fields(&plan);
 
   const auto &program = plan.lowered.program;
   for (int i = 0; i < program.layout.n_triggers; ++i) {

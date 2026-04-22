@@ -23,3 +23,23 @@
     as.numeric(min_ll)
   )
 }
+
+.profiler_available <- function() {
+  .Call(`_AccumulatR_semantic_profiler_is_available_cpp`)
+}
+
+.profiler_start <- function(path, frequency = 500L) {
+  .Call(
+    `_AccumulatR_semantic_profiler_start_cpp`,
+    as.character(path),
+    as.integer(frequency)
+  )
+}
+
+.profiler_flush <- function() {
+  .Call(`_AccumulatR_semantic_profiler_flush_cpp`)
+}
+
+.profiler_stop <- function() {
+  .Call(`_AccumulatR_semantic_profiler_stop_cpp`)
+}

@@ -23,6 +23,7 @@ struct ExactProgram {
   std::vector<std::uint8_t> onset_kind;
   std::vector<std::uint8_t> onset_source_kind;
   std::vector<semantic::Index> onset_source_index;
+  std::vector<semantic::Index> onset_source_ids;
   std::vector<double> onset_lag;
   std::vector<double> onset_abs_value;
 
@@ -38,6 +39,7 @@ struct ExactProgram {
   std::vector<semantic::Index> pool_member_offsets;
   std::vector<semantic::Index> pool_member_indices;
   std::vector<std::uint8_t> pool_member_kind;
+  std::vector<semantic::Index> pool_member_source_ids;
 
   std::vector<std::uint8_t> expr_kind;
   std::vector<semantic::Index> expr_arg_offsets;
@@ -46,6 +48,7 @@ struct ExactProgram {
   std::vector<semantic::Index> expr_blocker_child;
   std::vector<semantic::Index> expr_source_index;
   std::vector<std::uint8_t> expr_source_kind;
+  std::vector<semantic::Index> expr_source_ids;
   std::vector<int> expr_event_k;
 
   std::vector<semantic::Index> outcome_expr_root;
@@ -142,6 +145,8 @@ inline Rcpp::List to_r_list(const ExactProgram &program) {
           as_integer_vector_exact(program.onset_source_kind),
       Rcpp::Named("onset_source_index") =
           as_integer_vector_exact(program.onset_source_index),
+      Rcpp::Named("onset_source_ids") =
+          as_integer_vector_exact(program.onset_source_ids),
       Rcpp::Named("onset_lag") = as_numeric_vector_exact(program.onset_lag),
       Rcpp::Named("onset_abs_value") =
           as_numeric_vector_exact(program.onset_abs_value),
@@ -164,6 +169,8 @@ inline Rcpp::List to_r_list(const ExactProgram &program) {
           as_integer_vector_exact(program.pool_member_indices),
       Rcpp::Named("pool_member_kind") =
           as_integer_vector_exact(program.pool_member_kind),
+      Rcpp::Named("pool_member_source_ids") =
+          as_integer_vector_exact(program.pool_member_source_ids),
       Rcpp::Named("expr_kind") = as_integer_vector_exact(program.expr_kind),
       Rcpp::Named("expr_arg_offsets") =
           as_integer_vector_exact(program.expr_arg_offsets),
@@ -176,6 +183,8 @@ inline Rcpp::List to_r_list(const ExactProgram &program) {
           as_integer_vector_exact(program.expr_source_index),
       Rcpp::Named("expr_source_kind") =
           as_integer_vector_exact(program.expr_source_kind),
+      Rcpp::Named("expr_source_ids") =
+          as_integer_vector_exact(program.expr_source_ids),
       Rcpp::Named("expr_event_k") =
           as_integer_vector_exact(program.expr_event_k),
       Rcpp::Named("outcome_expr_root") =
@@ -221,6 +230,7 @@ inline LoweredExactVariant lower_exact_variant(
   program.onset_kind.reserve(model.leaves.size());
   program.onset_source_kind.reserve(model.leaves.size());
   program.onset_source_index.reserve(model.leaves.size());
+  program.onset_source_ids.reserve(model.leaves.size());
   program.onset_lag.reserve(model.leaves.size());
   program.onset_abs_value.reserve(model.leaves.size());
   program.leaf_trigger_index.reserve(model.leaves.size());
@@ -239,6 +249,7 @@ inline LoweredExactVariant lower_exact_variant(
     program.onset_source_kind.push_back(
         static_cast<std::uint8_t>(leaf.onset.source.kind));
     program.onset_source_index.push_back(leaf.onset.source.index);
+    program.onset_source_ids.push_back(semantic::kInvalidIndex);
     program.onset_lag.push_back(leaf.onset.lag);
     program.onset_abs_value.push_back(leaf.onset.absolute_value);
     program.leaf_trigger_index.push_back(leaf.trigger_index);
@@ -259,6 +270,7 @@ inline LoweredExactVariant lower_exact_variant(
         static_cast<std::uint8_t>(leaf.onset.kind),
         static_cast<std::uint8_t>(leaf.onset.source.kind),
         leaf.onset.source.index,
+        semantic::kInvalidIndex,
         leaf.onset.lag,
         leaf.onset.absolute_value,
         leaf.trigger_index,
@@ -286,6 +298,7 @@ inline LoweredExactVariant lower_exact_variant(
 
   program.pool_k.reserve(model.pools.size());
   program.pool_member_offsets.reserve(model.pools.size() + 1U);
+  program.pool_member_source_ids.reserve(model.pools.size());
   program.pool_member_offsets.push_back(0);
   for (const auto &pool : model.pools) {
     lowered.pool_ids.push_back(pool.id);
@@ -294,6 +307,7 @@ inline LoweredExactVariant lower_exact_variant(
       program.pool_member_indices.push_back(member.index);
       program.pool_member_kind.push_back(
           static_cast<std::uint8_t>(member.kind));
+      program.pool_member_source_ids.push_back(semantic::kInvalidIndex);
     }
     program.pool_member_offsets.push_back(
         static_cast<semantic::Index>(program.pool_member_indices.size()));
@@ -305,6 +319,7 @@ inline LoweredExactVariant lower_exact_variant(
   program.expr_blocker_child.reserve(model.expr_nodes.size());
   program.expr_source_index.reserve(model.expr_nodes.size());
   program.expr_source_kind.reserve(model.expr_nodes.size());
+  program.expr_source_ids.reserve(model.expr_nodes.size());
   program.expr_event_k.reserve(model.expr_nodes.size());
   program.expr_arg_offsets.push_back(0);
   for (const auto &expr : model.expr_nodes) {
@@ -322,6 +337,7 @@ inline LoweredExactVariant lower_exact_variant(
     program.expr_source_index.push_back(expr.source.index);
     program.expr_source_kind.push_back(
         static_cast<std::uint8_t>(expr.source.kind));
+    program.expr_source_ids.push_back(semantic::kInvalidIndex);
     program.expr_event_k.push_back(expr.event_k);
   }
 

@@ -52,6 +52,53 @@ struct ExactSourceConstraint {
   ExactRelation relation{ExactRelation::Unknown};
 };
 
+struct ExactRelationTemplate {
+  std::vector<semantic::Index> source_ids;
+  std::vector<ExactRelation> relations;
+
+  bool empty() const noexcept {
+    return source_ids.empty();
+  }
+
+  ExactRelation relation_for(const semantic::Index source_id) const noexcept {
+    const auto it =
+        std::lower_bound(source_ids.begin(), source_ids.end(), source_id);
+    if (it == source_ids.end() || *it != source_id) {
+      return ExactRelation::Unknown;
+    }
+    const auto pos = static_cast<std::size_t>(it - source_ids.begin());
+    return relations[pos];
+  }
+};
+
+class RelationView {
+public:
+  RelationView() = default;
+
+  RelationView with_overlay(const ExactRelationTemplate *overlay) const noexcept {
+    return RelationView(this, overlay);
+  }
+
+  ExactRelation relation_for(const semantic::Index source_id) const noexcept {
+    if (overlay_ != nullptr) {
+      const auto relation = overlay_->relation_for(source_id);
+      if (relation != ExactRelation::Unknown) {
+        return relation;
+      }
+    }
+    return parent_ != nullptr ? parent_->relation_for(source_id)
+                              : ExactRelation::Unknown;
+  }
+
+private:
+  RelationView(const RelationView *parent,
+               const ExactRelationTemplate *overlay) noexcept
+      : parent_(parent), overlay_(overlay) {}
+
+  const RelationView *parent_{nullptr};
+  const ExactRelationTemplate *overlay_{nullptr};
+};
+
 struct ExactScenarioFactor {
   ExactSourceKey key{};
   ExactFactorKind kind{ExactFactorKind::AtPdf};
@@ -68,8 +115,7 @@ struct ExactTransitionScenario {
   std::vector<semantic::Index> tail_exprs;
   std::vector<ExactScenarioFactor> factors;
   std::vector<ExactSourceConstraint> forced;
-  std::vector<semantic::Index> forced_source_ids;
-  std::vector<ExactRelation> forced_source_relations;
+  ExactRelationTemplate relation_template;
 };
 
 struct ExactTriggerState {

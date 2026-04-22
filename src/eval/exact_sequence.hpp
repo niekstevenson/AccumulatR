@@ -94,37 +94,68 @@ inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
                                      const double rt,
                                      const PreparedTrialLayout *layout,
                                      const double min_ll) {
-  if (!std::isfinite(rt) || !(rt > 0.0)) {
-    return min_ll;
-  }
+  struct ExactUnrankedTrialKernel {
+    const ExactVariantPlan &plan;
+    const ParamView &params;
+    int first_param_row;
+    semantic::Index target_idx;
+    std::vector<ExactTriggerState> trigger_states;
+    ExactSequenceState initial_state;
+    ExactStepWorkspace step_workspace;
+
+    ExactUnrankedTrialKernel(const ExactVariantPlan &plan_,
+                             const ParamView &params_,
+                             const int first_param_row_,
+                             const semantic::Index target_idx_)
+        : plan(plan_),
+          params(params_),
+          first_param_row(first_param_row_),
+          target_idx(target_idx_),
+          trigger_states(
+              enumerate_trigger_states(plan_, params_, first_param_row_)),
+          initial_state(make_exact_sequence_state(plan_)),
+          step_workspace(plan_) {}
+
+    double density(const double rt,
+                   const quadrature::FiniteBatch *step_batch = nullptr) {
+      if (!std::isfinite(rt) || !(rt > 0.0)) {
+        return 0.0;
+      }
+      double total = 0.0;
+      for (const auto &trigger_state : trigger_states) {
+        if (!(trigger_state.weight > 0.0)) {
+          continue;
+        }
+        const ExactStepResult step = evaluate_exact_step(
+            plan,
+            params,
+            first_param_row,
+            trigger_state,
+            initial_state,
+            target_idx,
+            rt,
+            nullptr,
+            false,
+            step_batch,
+            &step_workspace);
+        total += trigger_state.weight * step.total_probability;
+      }
+      return std::isfinite(total) && total > 0.0 ? total : 0.0;
+    }
+
+    double loglik(const double rt,
+                  const quadrature::FiniteBatch *step_batch,
+                  const double min_ll) {
+      const double total = density(rt, step_batch);
+      return total > 0.0 ? std::log(total) : min_ll;
+    }
+  };
+
   const auto target_idx =
       plan.outcome_index_by_code[static_cast<std::size_t>(outcome_code)];
-  const auto trigger_states = enumerate_trigger_states(plan, params, first_param_row);
-  double total = 0.0;
-
-  for (const auto &trigger_state : trigger_states) {
-    if (!(trigger_state.weight > 0.0)) {
-      continue;
-    }
-    const auto *step_batch = layout == nullptr ? nullptr : find_finite_batch(*layout, rt);
-    const ExactStepResult step = evaluate_exact_step(
-        plan,
-        params,
-        first_param_row,
-        trigger_state,
-        make_exact_sequence_state(plan),
-        target_idx,
-        rt,
-        nullptr,
-        false,
-        step_batch);
-    total += trigger_state.weight * step.total_probability;
-  }
-
-  if (!std::isfinite(total) || !(total > 0.0)) {
-    return min_ll;
-  }
-  return std::log(total);
+  const auto *step_batch = layout == nullptr ? nullptr : find_finite_batch(*layout, rt);
+  ExactUnrankedTrialKernel kernel(plan, params, first_param_row, target_idx);
+  return kernel.loglik(rt, step_batch, min_ll);
 }
 
 inline double exact_ranked_sequence_probability(
@@ -136,7 +167,8 @@ inline double exact_ranked_sequence_probability(
     const std::size_t rank_idx,
     const ExactSequenceState &sequence_state,
     std::vector<std::uint8_t> *used_outcomes,
-    const PreparedTrialLayout *layout) {
+    const PreparedTrialLayout *layout,
+    ExactStepWorkspace *step_workspace) {
   if (rank_idx >= static_cast<std::size_t>(obs.rank_count)) {
     return 1.0;
   }
@@ -159,7 +191,8 @@ inline double exact_ranked_sequence_probability(
       used_outcomes,
       true,
       layout == nullptr ? nullptr
-                        : find_finite_batch(*layout, exact_trial_view_rt(obs, rank_idx)));
+                        : find_finite_batch(*layout, exact_trial_view_rt(obs, rank_idx)),
+      step_workspace);
   double total = 0.0;
   for (const auto &branch : step.branches) {
     (*used_outcomes)[target_idx] = 1U;
@@ -172,7 +205,8 @@ inline double exact_ranked_sequence_probability(
         rank_idx + 1U,
         branch.next_state,
         used_outcomes,
-        layout);
+        layout,
+        step_workspace);
     (*used_outcomes)[target_idx] = 0U;
     total += branch.probability * tail_prob;
   }
@@ -198,6 +232,7 @@ inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
 
   const auto trigger_states = enumerate_trigger_states(plan, params, first_param_row);
   double total = 0.0;
+  ExactStepWorkspace step_workspace(plan);
   for (const auto &trigger_state : trigger_states) {
     if (!(trigger_state.weight > 0.0)) {
       continue;
@@ -214,7 +249,8 @@ inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
                  0U,
                  state,
                  &used_outcomes,
-                 layout);
+                 layout,
+                 &step_workspace);
   }
   if (!std::isfinite(total) || !(total > 0.0)) {
     return min_ll;
@@ -233,14 +269,62 @@ inline Rcpp::NumericVector evaluate_exact_loglik_queries_cached(
   for (std::size_t i = 0; i < queries.size(); ++i) {
     const auto &query = queries[i];
     const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
-    out[static_cast<R_xlen_t>(i)] = exact_loglik_for_trial(
-        plan,
-        params,
-        static_cast<int>(layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
-        query.outcome_code,
-        query.rt,
-        &layout,
-        min_ll);
+    const int first_param_row = static_cast<int>(
+        layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row);
+    const auto target_idx =
+        plan.outcome_index_by_code[static_cast<std::size_t>(query.outcome_code)];
+    const auto *step_batch = find_finite_batch(layout, query.rt);
+    struct ExactUnrankedQueryKernel {
+      const ExactVariantPlan &plan;
+      const ParamView &params;
+      int first_param_row;
+      semantic::Index target_idx;
+      std::vector<ExactTriggerState> trigger_states;
+      ExactSequenceState initial_state;
+      ExactStepWorkspace step_workspace;
+
+      ExactUnrankedQueryKernel(const ExactVariantPlan &plan_,
+                               const ParamView &params_,
+                               const int first_param_row_,
+                               const semantic::Index target_idx_)
+          : plan(plan_),
+            params(params_),
+            first_param_row(first_param_row_),
+            target_idx(target_idx_),
+            trigger_states(
+                enumerate_trigger_states(plan_, params_, first_param_row_)),
+            initial_state(make_exact_sequence_state(plan_)),
+            step_workspace(plan_) {}
+
+      double loglik(const double rt,
+                    const quadrature::FiniteBatch *step_batch,
+                    const double min_ll) {
+        if (!std::isfinite(rt) || !(rt > 0.0)) {
+          return min_ll;
+        }
+        double total = 0.0;
+        for (const auto &trigger_state : trigger_states) {
+          if (!(trigger_state.weight > 0.0)) {
+            continue;
+          }
+          const ExactStepResult step = evaluate_exact_step(
+              plan,
+              params,
+              first_param_row,
+              trigger_state,
+              initial_state,
+              target_idx,
+              rt,
+              nullptr,
+              false,
+              step_batch,
+              &step_workspace);
+          total += trigger_state.weight * step.total_probability;
+        }
+        return std::isfinite(total) && total > 0.0 ? std::log(total) : min_ll;
+      }
+    } kernel(plan, params, first_param_row, target_idx);
+    out[static_cast<R_xlen_t>(i)] = kernel.loglik(query.rt, step_batch, min_ll);
   }
   return out;
 }
@@ -255,21 +339,61 @@ inline Rcpp::NumericVector evaluate_exact_probability_queries_cached(
   for (std::size_t i = 0; i < queries.size(); ++i) {
     const auto &query = queries[i];
     const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
-    out[static_cast<R_xlen_t>(i)] = integrate_to_infinity(
-        [&](const double rt) {
-          const double log_density = exact_loglik_for_trial(
+    const int first_param_row = static_cast<int>(
+        layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row);
+    const auto target_idx =
+        plan.outcome_index_by_code[static_cast<std::size_t>(query.outcome_code)];
+    struct ExactUnrankedProbabilityKernel {
+      const ExactVariantPlan &plan;
+      const ParamView &params;
+      int first_param_row;
+      semantic::Index target_idx;
+      std::vector<ExactTriggerState> trigger_states;
+      ExactSequenceState initial_state;
+      ExactStepWorkspace step_workspace;
+
+      ExactUnrankedProbabilityKernel(const ExactVariantPlan &plan_,
+                                     const ParamView &params_,
+                                     const int first_param_row_,
+                                     const semantic::Index target_idx_)
+          : plan(plan_),
+            params(params_),
+            first_param_row(first_param_row_),
+            target_idx(target_idx_),
+            trigger_states(
+                enumerate_trigger_states(plan_, params_, first_param_row_)),
+            initial_state(make_exact_sequence_state(plan_)),
+            step_workspace(plan_) {}
+
+      double density(const double rt) {
+        if (!std::isfinite(rt) || !(rt > 0.0)) {
+          return 0.0;
+        }
+        double total = 0.0;
+        for (const auto &trigger_state : trigger_states) {
+          if (!(trigger_state.weight > 0.0)) {
+            continue;
+          }
+          const ExactStepResult step = evaluate_exact_step(
               plan,
               params,
-              static_cast<int>(layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row),
-              query.outcome_code,
+              first_param_row,
+              trigger_state,
+              initial_state,
+              target_idx,
               rt,
               nullptr,
-              -std::numeric_limits<double>::infinity());
-          if (!std::isfinite(log_density)) {
-            return 0.0;
-          }
-          const double density = std::exp(log_density);
-          return std::isfinite(density) && density > 0.0 ? density : 0.0;
+              false,
+              nullptr,
+              &step_workspace);
+          total += trigger_state.weight * step.total_probability;
+        }
+        return std::isfinite(total) && total > 0.0 ? total : 0.0;
+      }
+    } kernel(plan, params, first_param_row, target_idx);
+    out[static_cast<R_xlen_t>(i)] = integrate_to_infinity(
+        [&](const double rt) {
+          return kernel.density(rt);
         });
   }
   return out;
@@ -295,21 +419,59 @@ inline Rcpp::List evaluate_exact_outcome_probabilities_cached(
         static_cast<std::size_t>(plan.lowered.program.layout.n_leaves);
     for (int local = 0; local < block.row_count; ++local) {
       const auto query_idx = static_cast<std::size_t>(block.start_row + local);
-      prob[static_cast<R_xlen_t>(query_idx)] = integrate_to_infinity(
-          [&](const double rt) {
-            const double log_density = exact_loglik_for_trial(
+      const auto target_idx = plan.outcome_index_by_code[static_cast<std::size_t>(
+          queries[query_idx].outcome_code)];
+      struct ExactUnrankedProbabilityKernel {
+        const ExactVariantPlan &plan;
+        const ParamView &params;
+        int first_param_row;
+        semantic::Index target_idx;
+        std::vector<ExactTriggerState> trigger_states;
+        ExactSequenceState initial_state;
+        ExactStepWorkspace step_workspace;
+
+        ExactUnrankedProbabilityKernel(const ExactVariantPlan &plan_,
+                                       const ParamView &params_,
+                                       const int first_param_row_,
+                                       const semantic::Index target_idx_)
+            : plan(plan_),
+              params(params_),
+              first_param_row(first_param_row_),
+              target_idx(target_idx_),
+              trigger_states(
+                  enumerate_trigger_states(plan_, params_, first_param_row_)),
+              initial_state(make_exact_sequence_state(plan_)),
+              step_workspace(plan_) {}
+
+        double density(const double rt) {
+          if (!std::isfinite(rt) || !(rt > 0.0)) {
+            return 0.0;
+          }
+          double total = 0.0;
+          for (const auto &trigger_state : trigger_states) {
+            if (!(trigger_state.weight > 0.0)) {
+              continue;
+            }
+            const ExactStepResult step = evaluate_exact_step(
                 plan,
                 params,
-                static_cast<int>(param_row),
-                queries[query_idx].outcome_code,
+                first_param_row,
+                trigger_state,
+                initial_state,
+                target_idx,
                 rt,
                 nullptr,
-                -std::numeric_limits<double>::infinity());
-            if (!std::isfinite(log_density)) {
-              return 0.0;
-            }
-            const double density = std::exp(log_density);
-            return std::isfinite(density) && density > 0.0 ? density : 0.0;
+                false,
+                nullptr,
+                &step_workspace);
+            total += trigger_state.weight * step.total_probability;
+          }
+          return std::isfinite(total) && total > 0.0 ? total : 0.0;
+        }
+      } kernel(plan, params, static_cast<int>(param_row), target_idx);
+      prob[static_cast<R_xlen_t>(query_idx)] = integrate_to_infinity(
+          [&](const double rt) {
+            return kernel.density(rt);
           });
       param_row += leaf_count;
     }

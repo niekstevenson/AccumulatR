@@ -41,6 +41,7 @@ struct ComponentObservationPlan {
   std::vector<std::vector<ObservedBranch>> keep_by_code;
   std::vector<std::vector<ObservedBranch>> missing_rt_by_code;
   std::vector<ObservedBranch> finite_observed_branches;
+  std::vector<ObservedBranch> missing_all_branches;
 };
 
 struct ObservedRecord {
@@ -303,6 +304,7 @@ inline std::vector<ComponentObservationPlan> build_component_observation_plans(
 
         semantic::Index observed_code = branch.first;
         if (map_missing) {
+          plan.missing_all_branches.push_back(branch.second);
           observed_code = semantic::kInvalidIndex;
           branch.second.rt_kind = ObservedRtKind::Missing;
         } else if (mapped_code != semantic::kInvalidIndex) {

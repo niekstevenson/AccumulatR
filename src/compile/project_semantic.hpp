@@ -60,7 +60,6 @@ inline bool supports_semantic_direct(const VariantCapabilities &capabilities) {
   return !capabilities.no_surviving_outcomes &&
          !capabilities.ranked_observation &&
          !capabilities.chained_onset &&
-         !capabilities.shared_trigger &&
          !capabilities.non_direct_outcome;
 }
 

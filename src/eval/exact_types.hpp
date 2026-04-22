@@ -31,6 +31,15 @@ enum class ExactFactorKind : std::uint8_t {
   AfterSurvival = 2
 };
 
+struct ExactIndexSpan {
+  semantic::Index offset{0};
+  semantic::Index size{0};
+
+  [[nodiscard]] bool empty() const noexcept {
+    return size == 0;
+  }
+};
+
 struct ExactSourceKey {
   semantic::SourceKind kind{semantic::SourceKind::Leaf};
   semantic::Index index{semantic::kInvalidIndex};
@@ -109,10 +118,14 @@ struct ExactTransitionScenario {
   semantic::Index active_source_id{semantic::kInvalidIndex};
   std::vector<ExactSourceKey> before_keys;
   std::vector<semantic::Index> before_source_ids;
+  ExactIndexSpan before_source_span{};
   std::vector<ExactSourceKey> after_keys;
   std::vector<semantic::Index> after_source_ids;
+  ExactIndexSpan after_source_span{};
   std::vector<semantic::Index> ready_exprs;
+  ExactIndexSpan ready_expr_span{};
   std::vector<semantic::Index> tail_exprs;
+  ExactIndexSpan tail_expr_span{};
   std::vector<ExactScenarioFactor> factors;
   std::vector<ExactSourceConstraint> forced;
   ExactRelationTemplate relation_template;
@@ -172,6 +185,8 @@ struct ExactVariantPlan {
   semantic::Index source_count{0};
   std::vector<semantic::Index> leaf_source_ids;
   std::vector<semantic::Index> pool_source_ids;
+  std::vector<semantic::Index> scenario_source_ids;
+  std::vector<semantic::Index> scenario_expr_ids;
   std::vector<semantic::Index> shared_trigger_indices;
   bool ranked_supported{true};
 };

@@ -22,6 +22,48 @@ inline bool relation_view_with_overlay(const RelationView &base,
   return true;
 }
 
+struct ExactScenarioRuntimeView {
+  const ExactVariantPlan &plan;
+  const ExactTransitionScenario &scenario;
+  const semantic::Index *before_sources{nullptr};
+  const semantic::Index *after_sources{nullptr};
+  const semantic::Index *ready_exprs{nullptr};
+  const semantic::Index *tail_exprs{nullptr};
+  semantic::Index before_source_count{0};
+  semantic::Index after_source_count{0};
+  semantic::Index ready_expr_count{0};
+  semantic::Index tail_expr_count{0};
+
+  [[nodiscard]] bool has_readiness() const noexcept {
+    return before_source_count > 0 || ready_expr_count > 0;
+  }
+};
+
+inline const semantic::Index *scenario_span_data(
+    const std::vector<semantic::Index> &arena,
+    const ExactIndexSpan span) {
+  if (span.empty()) {
+    return nullptr;
+  }
+  return arena.data() + static_cast<std::size_t>(span.offset);
+}
+
+inline ExactScenarioRuntimeView make_exact_scenario_runtime_view(
+    const ExactVariantPlan &plan,
+    const ExactTransitionScenario &scenario) {
+  return ExactScenarioRuntimeView{
+      plan,
+      scenario,
+      scenario_span_data(plan.scenario_source_ids, scenario.before_source_span),
+      scenario_span_data(plan.scenario_source_ids, scenario.after_source_span),
+      scenario_span_data(plan.scenario_expr_ids, scenario.ready_expr_span),
+      scenario_span_data(plan.scenario_expr_ids, scenario.tail_expr_span),
+      scenario.before_source_span.size,
+      scenario.after_source_span.size,
+      scenario.ready_expr_span.size,
+      scenario.tail_expr_span.size};
+}
+
 class ForcedExprEvaluator {
 public:
   explicit ForcedExprEvaluator(const ExactVariantPlan &plan)
@@ -344,24 +386,26 @@ struct ForcedExprWorkspace {
 };
 
 inline ForcedExprEvaluator *prepare_scenario_evaluator(
-    const ExactTransitionScenario &scenario,
+    const ExactScenarioRuntimeView &scenario_view,
     ForcedExprEvaluator *parent,
     ForcedExprWorkspace *workspace) {
   RelationView view;
   if (!relation_view_with_overlay(
-          parent->relation_view(), scenario.relation_template, &view)) {
+          parent->relation_view(),
+          scenario_view.scenario.relation_template,
+          &view)) {
     return nullptr;
   }
   workspace->reset(parent->oracle(), view);
   return &workspace->evaluator;
 }
 
-inline double readiness_cdf(const ExactTransitionScenario &scenario,
+inline double readiness_cdf(const ExactScenarioRuntimeView &scenario_view,
                             ForcedExprEvaluator *evaluator,
                             const double t,
                             ForcedExprWorkspace *workspace) {
-  const bool has_before = !scenario.before_source_ids.empty();
-  const bool has_ready = !scenario.ready_exprs.empty();
+  const bool has_before = scenario_view.before_source_count > 0;
+  const bool has_ready = scenario_view.ready_expr_count > 0;
   if (!has_before && !has_ready) {
     return 1.0;
   }
@@ -371,7 +415,9 @@ inline double readiness_cdf(const ExactTransitionScenario &scenario,
   const auto guard = evaluator->oracle()->conditional_time_guard(t);
   double value = 1.0;
   if (has_before) {
-    for (const auto source_id : scenario.before_source_ids) {
+    for (semantic::Index i = 0; i < scenario_view.before_source_count; ++i) {
+      const auto source_id =
+          scenario_view.before_sources[static_cast<std::size_t>(i)];
       value *= evaluator->source_cdf(source_id);
       if (!(value > 0.0)) {
         return 0.0;
@@ -382,11 +428,13 @@ inline double readiness_cdf(const ExactTransitionScenario &scenario,
     return clamp_probability(value);
   }
   auto *scenario_evaluator =
-      prepare_scenario_evaluator(scenario, evaluator, workspace);
+      prepare_scenario_evaluator(scenario_view, evaluator, workspace);
   if (scenario_evaluator == nullptr) {
     return 0.0;
   }
-  for (const auto expr_idx : scenario.ready_exprs) {
+  for (semantic::Index i = 0; i < scenario_view.ready_expr_count; ++i) {
+    const auto expr_idx =
+        scenario_view.ready_exprs[static_cast<std::size_t>(i)];
     value *= scenario_evaluator->expr_cdf(expr_idx);
     if (!(value > 0.0)) {
       return 0.0;
@@ -395,38 +443,41 @@ inline double readiness_cdf(const ExactTransitionScenario &scenario,
   return clamp_probability(value);
 }
 
-inline double readiness_density(const ExactTransitionScenario &scenario,
+inline double readiness_density(const ExactScenarioRuntimeView &scenario_view,
                                 ForcedExprEvaluator *evaluator,
                                 const double t,
                                 ForcedExprWorkspace *workspace) {
   if (!(t > 0.0)) {
     return 0.0;
   }
-  const bool has_before = !scenario.before_source_ids.empty();
-  const bool has_ready = !scenario.ready_exprs.empty();
+  const bool has_before = scenario_view.before_source_count > 0;
+  const bool has_ready = scenario_view.ready_expr_count > 0;
   if (!has_before && !has_ready) {
     return 0.0;
   }
   const auto guard = evaluator->oracle()->conditional_time_guard(t);
   ForcedExprEvaluator *scenario_evaluator = nullptr;
   if (has_ready) {
-    scenario_evaluator = prepare_scenario_evaluator(scenario, evaluator, workspace);
+    scenario_evaluator =
+        prepare_scenario_evaluator(scenario_view, evaluator, workspace);
     if (scenario_evaluator == nullptr) {
       return 0.0;
     }
   }
   double total = 0.0;
   if (has_before) {
-    for (std::size_t i = 0; i < scenario.before_source_ids.size(); ++i) {
-      double term = evaluator->source_pdf(scenario.before_source_ids[i]);
+    for (semantic::Index i = 0; i < scenario_view.before_source_count; ++i) {
+      double term = evaluator->source_pdf(
+          scenario_view.before_sources[static_cast<std::size_t>(i)]);
       if (!std::isfinite(term) || term == 0.0) {
         continue;
       }
-      for (std::size_t j = 0; j < scenario.before_source_ids.size(); ++j) {
+      for (semantic::Index j = 0; j < scenario_view.before_source_count; ++j) {
         if (j == i) {
           continue;
         }
-        term *= evaluator->source_cdf(scenario.before_source_ids[j]);
+        term *= evaluator->source_cdf(
+            scenario_view.before_sources[static_cast<std::size_t>(j)]);
         if (!std::isfinite(term) || term == 0.0) {
           break;
         }
@@ -435,7 +486,9 @@ inline double readiness_density(const ExactTransitionScenario &scenario,
         continue;
       }
       if (has_ready) {
-        for (const auto expr_idx : scenario.ready_exprs) {
+        for (semantic::Index j = 0; j < scenario_view.ready_expr_count; ++j) {
+          const auto expr_idx =
+              scenario_view.ready_exprs[static_cast<std::size_t>(j)];
           term *= scenario_evaluator->expr_cdf(expr_idx);
           if (!std::isfinite(term) || term == 0.0) {
             break;
@@ -448,13 +501,16 @@ inline double readiness_density(const ExactTransitionScenario &scenario,
   if (!has_ready) {
     return clean_signed_value(total);
   }
-  for (std::size_t i = 0; i < scenario.ready_exprs.size(); ++i) {
-    double term = scenario_evaluator->expr_density(scenario.ready_exprs[i]);
+  for (semantic::Index i = 0; i < scenario_view.ready_expr_count; ++i) {
+    double term = scenario_evaluator->expr_density(
+        scenario_view.ready_exprs[static_cast<std::size_t>(i)]);
     if (!std::isfinite(term) || term == 0.0) {
       continue;
     }
     if (has_before) {
-      for (const auto source_id : scenario.before_source_ids) {
+      for (semantic::Index j = 0; j < scenario_view.before_source_count; ++j) {
+        const auto source_id =
+            scenario_view.before_sources[static_cast<std::size_t>(j)];
         term *= evaluator->source_cdf(source_id);
         if (!std::isfinite(term) || term == 0.0) {
           break;
@@ -464,11 +520,12 @@ inline double readiness_density(const ExactTransitionScenario &scenario,
     if (!std::isfinite(term) || term == 0.0) {
       continue;
     }
-    for (std::size_t j = 0; j < scenario.ready_exprs.size(); ++j) {
+    for (semantic::Index j = 0; j < scenario_view.ready_expr_count; ++j) {
       if (i == j) {
         continue;
       }
-      term *= scenario_evaluator->expr_cdf(scenario.ready_exprs[j]);
+      term *= scenario_evaluator->expr_cdf(
+          scenario_view.ready_exprs[static_cast<std::size_t>(j)]);
       if (!std::isfinite(term) || term == 0.0) {
         break;
       }
@@ -478,29 +535,33 @@ inline double readiness_density(const ExactTransitionScenario &scenario,
   return clean_signed_value(total);
 }
 
-inline double after_survival(const ExactTransitionScenario &scenario,
+inline double after_survival(const ExactScenarioRuntimeView &scenario_view,
                              ForcedExprEvaluator *evaluator,
                              const double t,
                              ForcedExprWorkspace *workspace) {
   const auto guard = evaluator->oracle()->conditional_time_guard(t);
   double value = 1.0;
-  if (!scenario.after_source_ids.empty()) {
-    for (const auto source_id : scenario.after_source_ids) {
+  if (scenario_view.after_source_count > 0) {
+    for (semantic::Index i = 0; i < scenario_view.after_source_count; ++i) {
+      const auto source_id =
+          scenario_view.after_sources[static_cast<std::size_t>(i)];
       value *= evaluator->source_survival(source_id);
       if (!(value > 0.0)) {
         return 0.0;
       }
     }
   }
-  if (scenario.tail_exprs.empty()) {
+  if (scenario_view.tail_expr_count == 0) {
     return clamp_probability(value);
   }
   auto *scenario_evaluator =
-      prepare_scenario_evaluator(scenario, evaluator, workspace);
+      prepare_scenario_evaluator(scenario_view, evaluator, workspace);
   if (scenario_evaluator == nullptr) {
     return 0.0;
   }
-  for (const auto expr_idx : scenario.tail_exprs) {
+  for (semantic::Index i = 0; i < scenario_view.tail_expr_count; ++i) {
+    const auto expr_idx =
+        scenario_view.tail_exprs[static_cast<std::size_t>(i)];
     value *= scenario_evaluator->expr_survival(expr_idx);
     if (!(value > 0.0)) {
       return 0.0;
@@ -509,7 +570,7 @@ inline double after_survival(const ExactTransitionScenario &scenario,
   return clamp_probability(value);
 }
 
-inline double same_active_win_mass(const ExactTransitionScenario &scenario,
+inline double same_active_win_mass(const ExactScenarioRuntimeView &scenario_view,
                                    ForcedExprEvaluator *evaluator,
                                    const double t,
                                    const double ready_upper,
@@ -517,14 +578,15 @@ inline double same_active_win_mass(const ExactTransitionScenario &scenario,
   if (!(ready_upper > 0.0)) {
     return 0.0;
   }
-  const double tail = after_survival(scenario, evaluator, t, workspace);
+  const double tail = after_survival(scenario_view, evaluator, t, workspace);
   if (!(tail > 0.0)) {
     return 0.0;
   }
-  return tail * readiness_cdf(scenario, evaluator, ready_upper, workspace);
+  return tail *
+         readiness_cdf(scenario_view, evaluator, ready_upper, workspace);
 }
 
-inline double scenario_truth_cdf(const ExactTransitionScenario &scenario,
+inline double scenario_truth_cdf(const ExactScenarioRuntimeView &scenario_view,
                                  ForcedExprEvaluator *evaluator,
                                  const double t,
                                  ForcedExprWorkspace *workspace) {
@@ -534,17 +596,17 @@ inline double scenario_truth_cdf(const ExactTransitionScenario &scenario,
   return clamp_probability(quadrature::integrate_finite_default(
       [&](const double u) {
         const auto guard = evaluator->oracle()->conditional_time_guard(u);
-        double value = evaluator->source_pdf(scenario.active_source_id);
+        double value =
+            evaluator->source_pdf(scenario_view.scenario.active_source_id);
         if (!(value > 0.0)) {
           return 0.0;
         }
-        value *= after_survival(scenario, evaluator, u, workspace);
+        value *= after_survival(scenario_view, evaluator, u, workspace);
         if (!(value > 0.0)) {
           return 0.0;
         }
-        if (!scenario.before_source_ids.empty() ||
-            !scenario.ready_exprs.empty()) {
-          value *= readiness_cdf(scenario, evaluator, u, workspace);
+        if (scenario_view.has_readiness()) {
+          value *= readiness_cdf(scenario_view, evaluator, u, workspace);
           if (!(value > 0.0)) {
             return 0.0;
           }

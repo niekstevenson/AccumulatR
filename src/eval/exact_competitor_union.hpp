@@ -49,7 +49,9 @@ inline double competitor_subset_win_mass(
     win_prob = evaluator->expr_cdf(subset_plan.singleton_expr_root);
   } else {
     for (const auto &scenario : subset_plan.scenarios) {
-      win_prob += scenario_truth_cdf(scenario, evaluator, t, workspace);
+      const auto scenario_view =
+          make_exact_scenario_runtime_view(evaluator->plan(), scenario);
+      win_prob += scenario_truth_cdf(scenario_view, evaluator, t, workspace);
       if (!std::isfinite(win_prob)) {
         return 1.0;
       }
@@ -62,9 +64,13 @@ inline double competitor_subset_win_mass(
     if (scenario.active_source_id != target_active_source_id) {
       continue;
     }
-    same_active_t += same_active_win_mass(scenario, evaluator, t, t, workspace);
+    const auto scenario_view =
+        make_exact_scenario_runtime_view(evaluator->plan(), scenario);
+    same_active_t +=
+        same_active_win_mass(scenario_view, evaluator, t, t, workspace);
     same_active_ready +=
-        same_active_win_mass(scenario, evaluator, t, readiness_upper, workspace);
+        same_active_win_mass(
+            scenario_view, evaluator, t, readiness_upper, workspace);
   }
   return clamp_probability(win_prob - same_active_t + same_active_ready);
 }
@@ -128,6 +134,73 @@ inline ExactSequenceState advance_exact_sequence_state(
   return next_state;
 }
 
+inline double evaluate_scenario_probability(
+    const ExactTargetCompetitorPlan &competitor_plan,
+    const ExactScenarioRuntimeView &scenario_view,
+    const double observed_time,
+    const std::vector<std::uint8_t> *used_outcomes,
+    const quadrature::FiniteBatch *step_batch,
+    ForcedExprEvaluator *target_evaluator,
+    ForcedExprWorkspace *target_workspace,
+    ForcedExprEvaluator *competitor_evaluator,
+    ForcedExprWorkspace *competitor_workspace) {
+  const double active_pdf = source_pdf_at(
+      target_evaluator->oracle(),
+      scenario_view.scenario.active_source_id,
+      observed_time);
+  const double tail = after_survival(
+      scenario_view, target_evaluator, observed_time, target_workspace);
+  if (!(active_pdf > 0.0) || !(tail > 0.0)) {
+    return 0.0;
+  }
+
+  const auto competitor_non_win = [&](const double readiness_upper) {
+    return competitor_non_win_probability(
+        competitor_plan,
+        scenario_view.scenario.active_source_id,
+        readiness_upper,
+        competitor_evaluator,
+        competitor_workspace,
+        observed_time,
+        used_outcomes);
+  };
+
+  if (!scenario_view.has_readiness()) {
+    return active_pdf * tail * competitor_non_win(0.0);
+  }
+
+  double total = 0.0;
+  const double initial_ready =
+      readiness_cdf(scenario_view, target_evaluator, 0.0, target_workspace);
+  if (initial_ready > 0.0) {
+    total += initial_ready * active_pdf * tail * competitor_non_win(0.0);
+  }
+
+  const auto owned_batch =
+      step_batch == nullptr
+          ? quadrature::build_finite_batch(0.0, observed_time)
+          : quadrature::FiniteBatch{};
+  const auto &batch = step_batch != nullptr ? *step_batch : owned_batch;
+  for (std::size_t i = 0; i < batch.nodes.nodes.size(); ++i) {
+    const double readiness_time = batch.nodes.nodes[i];
+    double value = readiness_density(
+        scenario_view, target_evaluator, readiness_time, target_workspace);
+    if (!std::isfinite(value) || value == 0.0) {
+      continue;
+    }
+    value *= active_pdf * tail;
+    if (!std::isfinite(value) || value == 0.0) {
+      continue;
+    }
+    value *= competitor_non_win(readiness_time);
+    if (!std::isfinite(value) || value == 0.0) {
+      continue;
+    }
+    total += batch.nodes.weights[i] * value;
+  }
+  return total;
+}
+
 inline ExactStepResult evaluate_exact_step(
     const ExactVariantPlan &plan,
     const ParamView &params,
@@ -162,6 +235,7 @@ inline ExactStepResult evaluate_exact_step(
       throw std::logic_error(
           "ranked exact step requested for unsupported latent-readiness scenario");
     }
+    const auto scenario_view = make_exact_scenario_runtime_view(plan, scenario);
 
     RelationView competitor_view;
     if (!relation_view_with_overlay(
@@ -170,85 +244,26 @@ inline ExactStepResult evaluate_exact_step(
     }
     competitor_evaluator.reset(&oracle, competitor_view);
 
-    const double active_pdf =
-        source_pdf_at(&oracle, scenario.active_source_id, observed_time);
-    const double tail =
-        after_survival(
-            scenario, &target_evaluator, observed_time, &target_workspace);
-    if (!(active_pdf > 0.0) || !(tail > 0.0)) {
+    const double scenario_prob = evaluate_scenario_probability(
+        competitor_plan,
+        scenario_view,
+        observed_time,
+        used_outcomes,
+        step_batch,
+        &target_evaluator,
+        &target_workspace,
+        &competitor_evaluator,
+        &competitor_workspace);
+    if (!(scenario_prob > 0.0)) {
       continue;
     }
-
-    if (scenario.before_source_ids.empty() && scenario.ready_exprs.empty()) {
-      const double scenario_prob =
-              active_pdf * tail *
-          competitor_non_win_probability(
-              competitor_plan,
-              scenario.active_source_id,
-              0.0,
-              &competitor_evaluator,
-              &competitor_workspace,
-              observed_time,
-              used_outcomes);
-      if (!(scenario_prob > 0.0)) {
-        continue;
-      }
-      result.total_probability += scenario_prob;
-      if (collect_successors) {
-        result.branches.push_back(ExactStepBranch{
-            scenario_prob,
-            advance_exact_sequence_state(
-                plan, sequence_state, scenario, observed_time)});
-      }
-      continue;
+    result.total_probability += scenario_prob;
+    if (collect_successors) {
+      result.branches.push_back(ExactStepBranch{
+          scenario_prob,
+          advance_exact_sequence_state(
+              plan, sequence_state, scenario, observed_time)});
     }
-
-    const double initial_ready =
-        readiness_cdf(scenario, &target_evaluator, 0.0, &target_workspace);
-    if (initial_ready > 0.0) {
-      result.total_probability += initial_ready * active_pdf * tail *
-                                  competitor_non_win_probability(
-                                      competitor_plan,
-                                      scenario.active_source_id,
-                                      0.0,
-                                      &competitor_evaluator,
-                                      &competitor_workspace,
-                                      observed_time,
-                                      used_outcomes);
-    }
-
-    const auto owned_batch =
-        step_batch == nullptr
-            ? quadrature::build_finite_batch(0.0, observed_time)
-            : quadrature::FiniteBatch{};
-    const auto &batch = step_batch != nullptr ? *step_batch : owned_batch;
-    double integrated = 0.0;
-    for (std::size_t i = 0; i < batch.nodes.nodes.size(); ++i) {
-      const double readiness_time = batch.nodes.nodes[i];
-      double value =
-          readiness_density(
-              scenario, &target_evaluator, readiness_time, &target_workspace);
-      if (!std::isfinite(value) || value == 0.0) {
-        continue;
-      }
-      value *= active_pdf * tail;
-      if (!std::isfinite(value) || value == 0.0) {
-        continue;
-      }
-      value *= competitor_non_win_probability(
-          competitor_plan,
-          scenario.active_source_id,
-          readiness_time,
-          &competitor_evaluator,
-          &competitor_workspace,
-          observed_time,
-          used_outcomes);
-      if (!std::isfinite(value) || value == 0.0) {
-        continue;
-      }
-      integrated += batch.nodes.weights[i] * value;
-    }
-    result.total_probability += integrated;
   }
 
   return result;

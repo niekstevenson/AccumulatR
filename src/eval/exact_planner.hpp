@@ -761,7 +761,7 @@ inline ExactTargetCompetitorPlan build_target_competitor_plan(
 
 inline bool scenario_supports_ranked_sequence(
     const ExactTransitionScenario &scenario) {
-  return scenario.before_keys.empty() && scenario.ready_exprs.empty();
+  return scenario.before_source_span.empty() && scenario.ready_expr_span.empty();
 }
 
 inline bool variant_supports_ranked_sequence(const ExactVariantPlan &plan) {
@@ -775,24 +775,65 @@ inline bool variant_supports_ranked_sequence(const ExactVariantPlan &plan) {
   return true;
 }
 
-inline void compile_scenario_runtime_fields(const ExactVariantPlan &plan,
+inline void compile_index_span(const std::vector<semantic::Index> &values,
+                               std::vector<semantic::Index> *arena,
+                               ExactIndexSpan *span) {
+  span->offset = static_cast<semantic::Index>(arena->size());
+  span->size = static_cast<semantic::Index>(values.size());
+  arena->insert(arena->end(), values.begin(), values.end());
+}
+
+template <typename T>
+inline void release_runtime_vector(std::vector<T> *values) {
+  std::vector<T>().swap(*values);
+}
+
+inline void release_scenario_planning_fields(ExactTransitionScenario *scenario) {
+  release_runtime_vector(&scenario->before_keys);
+  release_runtime_vector(&scenario->before_source_ids);
+  release_runtime_vector(&scenario->after_keys);
+  release_runtime_vector(&scenario->after_source_ids);
+  release_runtime_vector(&scenario->ready_exprs);
+  release_runtime_vector(&scenario->tail_exprs);
+  release_runtime_vector(&scenario->factors);
+  release_runtime_vector(&scenario->forced);
+}
+
+inline void compile_scenario_runtime_fields(ExactVariantPlan *plan,
                                             ExactTransitionScenario *scenario) {
-  scenario->active_source_id = source_ordinal(plan, scenario->active_key);
+  scenario->active_source_id = source_ordinal(*plan, scenario->active_key);
   scenario->before_source_ids.clear();
   scenario->before_source_ids.reserve(scenario->before_keys.size());
   for (const auto &key : scenario->before_keys) {
-    scenario->before_source_ids.push_back(source_ordinal(plan, key));
+    scenario->before_source_ids.push_back(source_ordinal(*plan, key));
   }
   scenario->after_source_ids.clear();
   scenario->after_source_ids.reserve(scenario->after_keys.size());
   for (const auto &key : scenario->after_keys) {
-    scenario->after_source_ids.push_back(source_ordinal(plan, key));
+    scenario->after_source_ids.push_back(source_ordinal(*plan, key));
   }
+  compile_index_span(
+      scenario->before_source_ids,
+      &plan->scenario_source_ids,
+      &scenario->before_source_span);
+  compile_index_span(
+      scenario->after_source_ids,
+      &plan->scenario_source_ids,
+      &scenario->after_source_span);
+  compile_index_span(
+      scenario->ready_exprs,
+      &plan->scenario_expr_ids,
+      &scenario->ready_expr_span);
+  compile_index_span(
+      scenario->tail_exprs,
+      &plan->scenario_expr_ids,
+      &scenario->tail_expr_span);
+
   std::vector<std::pair<semantic::Index, ExactRelation>> relation_pairs;
   relation_pairs.reserve(scenario->forced.size());
   for (const auto &constraint : scenario->forced) {
     relation_pairs.emplace_back(
-        source_ordinal(plan, constraint.key), constraint.relation);
+        source_ordinal(*plan, constraint.key), constraint.relation);
   }
   std::sort(
       relation_pairs.begin(),
@@ -906,21 +947,37 @@ inline ExactVariantPlan make_exact_variant_plan(
     plan.competitor_plans.push_back(
         build_target_competitor_plan(plan, target_outcome_idx));
   }
+  plan.scenario_source_ids.clear();
+  plan.scenario_expr_ids.clear();
   for (auto &outcome : plan.outcomes) {
     for (auto &scenario : outcome.scenarios) {
-      compile_scenario_runtime_fields(plan, &scenario);
+      compile_scenario_runtime_fields(&plan, &scenario);
     }
   }
   for (auto &target_plan : plan.competitor_plans) {
     for (auto &block : target_plan.blocks) {
       for (auto &subset : block.subsets) {
         for (auto &scenario : subset.scenarios) {
-          compile_scenario_runtime_fields(plan, &scenario);
+          compile_scenario_runtime_fields(&plan, &scenario);
         }
       }
     }
   }
   plan.ranked_supported = variant_supports_ranked_sequence(plan);
+  for (auto &outcome : plan.outcomes) {
+    for (auto &scenario : outcome.scenarios) {
+      release_scenario_planning_fields(&scenario);
+    }
+  }
+  for (auto &target_plan : plan.competitor_plans) {
+    for (auto &block : target_plan.blocks) {
+      for (auto &subset : block.subsets) {
+        for (auto &scenario : subset.scenarios) {
+          release_scenario_planning_fields(&scenario);
+        }
+      }
+    }
+  }
 
   return plan;
 }

@@ -53,9 +53,6 @@ inline bool observation_plans_are_identity(
     for (std::size_t outcome_code = 1; outcome_code < plan.keep_by_code.size();
          ++outcome_code) {
       const auto &branches = plan.keep_by_code[outcome_code];
-      if (branches.empty()) {
-        continue;
-      }
       if (branches.size() != 1U) {
         return false;
       }

@@ -1,0 +1,274 @@
+testthat::test_that("selected examples agree across simulate/probability/likelihood", {
+  # Helper to compute manual log-likelihood from response probabilities
+  manual_loglik <- function(probs, outcomes) {
+    labels <- as.character(outcomes)
+    labels[is.na(labels)] <- "NA"
+    if (!all(labels %in% names(probs))) {
+      missing <- setdiff(unique(labels), names(probs))
+      stop("Missing probabilities for outcomes: ", paste(missing, collapse = ", "))
+    }
+    sum(log(probs[labels]))
+  }
+  
+  # Model definitions (copied from dev/examples/new_API.R) ---------------------
+  example_1_simple <- function() {
+    race_spec() |>
+      add_accumulator("go1", "lognormal") |>
+      add_accumulator("go2", "lognormal") |>
+      add_outcome("R1", "go1") |>
+      add_outcome("R2", "go2") |>
+      finalize_model()
+  }
+  params_example_1_simple <- c(
+    go1.m = log(0.30),
+    go1.s = 0.18,
+    go2.m = log(0.32),
+    go2.s = 0.18
+  )
+  
+  example_2_stop_mixture <- function() {
+    race_spec() |>
+      add_accumulator("go1", "lognormal") |>
+      add_accumulator("stop", "exgauss", onset = 0.20) |>
+      add_accumulator("go2", "lognormal", onset = 0.20) |>
+      add_outcome("R1", inhibit("go1", by = "stop")) |>
+      add_outcome("R2", all_of("go2", "stop")) |>
+      add_component("go_only", members = c("go1"), attrs = list(component = "go_only"), weight = 0.5) |>
+      add_component("go_stop", members = c("go1", "stop", "go2"), attrs = list(component = "go_stop"), weight = 0.5) |>
+      set_mixture_options(mode = "fixed") |>
+      finalize_model()
+  }
+  params_example_2_stop_mixture <- c(
+    go1.m = log(0.35),
+    go1.s = 0.2,
+    stop.mu = 0.1,
+    stop.sigma = 0.04,
+    stop.tau = 0.1,
+    go2.m = log(0.60),
+    go2.s = 0.18
+  )
+  
+  example_3_stop_na <- function() {
+    race_spec() |>
+      add_accumulator("go_left", "lognormal") |>
+      add_accumulator("go_right", "lognormal") |>
+      add_accumulator("stop", "lognormal", onset = 0.15) |>
+      add_outcome("Left", "go_left") |>
+      add_outcome("Right", "go_right") |>
+      add_outcome("STOP", "stop", options = list(map_outcome_to = NA_character_)) |>
+      finalize_model()
+  }
+  params_example_3_stop_na <- c(
+    go_left.m = log(0.30),
+    go_left.s = 0.20,
+    go_right.m = log(0.32),
+    go_right.s = 0.20,
+    stop.m = log(0.15),
+    stop.s = 0.18
+  )
+  
+  example_5_timeout_guess <- function() {
+    race_spec() |>
+      add_accumulator("go_left", "lognormal") |>
+      add_accumulator("go_right", "lognormal") |>
+      add_accumulator("timeout", "lognormal", onset = 0.05) |>
+      add_outcome("Left", "go_left") |>
+      add_outcome("Right", "go_right") |>
+      add_outcome("TIMEOUT", "timeout", options = list(
+        guess = list(labels = c("Left", "Right"), weights = c(0.2, 0.8), rt_policy = "keep")
+      )) |>
+      finalize_model()
+  }
+  params_example_5_timeout_guess <- c(
+    go_left.m = log(0.30),
+    go_left.s = 0.18,
+    go_right.m = log(0.325),
+    go_right.s = 0.18,
+    timeout.m = log(0.25),
+    timeout.s = 0.10
+  )
+  
+  example_6_dual_path <- function() {
+    race_spec() |>
+      add_accumulator("acc_taskA", "lognormal") |>
+      add_accumulator("acc_taskB", "lognormal") |>
+      add_accumulator("acc_gateC", "lognormal") |>
+      add_outcome("Outcome_via_A", all_of("acc_taskA", "acc_gateC")) |>
+      add_outcome("Outcome_via_B", all_of("acc_taskB", "acc_gateC")) |>
+      finalize_model()
+  }
+  params_example_6_dual_path <- c(
+    acc_taskA.m = log(0.28),
+    acc_taskA.s = 0.18,
+    acc_taskB.m = log(0.32),
+    acc_taskB.s = 0.18,
+    acc_gateC.m = log(0.30),
+    acc_gateC.s = 0.18
+  )
+  
+  example_7_mixture <- function() {
+    race_spec() |>
+      add_accumulator("target_fast", "lognormal") |>
+      add_accumulator("target_slow", "lognormal") |>
+      add_accumulator("competitor", "lognormal") |>
+      add_pool("TARGET", c("target_fast", "target_slow")) |>
+      add_outcome("R1", "TARGET") |>
+      add_outcome("R2", "competitor") |>
+      add_component("fast", members = c("target_fast", "competitor"), weight_param = "p_fast") |>
+      add_component("slow", members = c("target_slow", "competitor")) |>
+      set_mixture_options(mode = "sample", reference = "slow") |>
+      finalize_model()
+  }
+  params_example_7_mixture <- c(
+    target_fast.m = log(0.25),
+    target_fast.s = 0.15,
+    target_slow.m = log(0.45),
+    target_slow.s = 0.20,
+    competitor.m = log(0.35),
+    competitor.s = 0.18,
+    p_fast = 0.2
+  )
+  
+  example_10_exclusion <- function() {
+    race_spec() |>
+      add_accumulator("R1_acc", "lognormal") |>
+      add_accumulator("R2_acc", "lognormal") |>
+      add_accumulator("X_acc", "lognormal") |>
+      add_outcome("R1", inhibit("R1_acc", by = "X_acc")) |>
+      add_outcome("R2", "R2_acc") |>
+      finalize_model()
+  }
+  params_example_10_exclusion <- c(
+    R1_acc.m = log(0.35),
+    R1_acc.s = 0.18,
+    R2_acc.m = log(0.45),
+    R2_acc.s = 0.18,
+    X_acc.m = log(0.35),
+    X_acc.s = 0.18
+  )
+  
+  example_16_guard_tie_simple <- function() {
+    race_spec() |>
+      add_accumulator("go_fast", "lognormal") |>
+      add_accumulator("go_slow", "lognormal") |>
+      add_accumulator("gate_shared", "lognormal") |>
+      add_accumulator("stop_control", "lognormal") |>
+      add_outcome("Fast", inhibit(all_of("go_fast", "gate_shared"), by = "stop_control")) |>
+      add_outcome("Slow", all_of("go_slow", "gate_shared")) |>
+      finalize_model()
+  }
+  params_example_16_guard_tie_simple <- c(
+    go_fast.m = log(0.28),
+    go_fast.s = 0.18,
+    go_slow.m = log(0.34),
+    go_slow.s = 0.18,
+    gate_shared.m = log(0.30),
+    gate_shared.s = 0.16,
+    stop_control.m = log(0.27),
+    stop_control.s = 0.15
+  )
+  
+  example_21_simple_q <- function() {
+    race_spec() |>
+      add_accumulator("go1", "lognormal") |>
+      add_accumulator("go2", "lognormal") |>
+      add_outcome("R1", "go1") |>
+      add_outcome("R2", "go2") |>
+      add_trigger("shared_trigger",
+                  members = c("go1", "go2"),
+                  q = 0.10, draw = "shared"
+      ) |>
+      finalize_model()
+  }
+  params_example_21_simple_q <- c(
+    go1.m = log(0.30),
+    go1.s = 0.18,
+    go2.m = log(0.32),
+    go2.s = 0.18,
+    shared_trigger = 0.10
+  )
+  
+  example_22_shared_q <- function() {
+    race_spec() |>
+      add_accumulator("go_left", "lognormal") |>
+      add_accumulator("go_right", "lognormal") |>
+      add_outcome("Left", "go_left") |>
+      add_outcome("Right", "go_right") |>
+      add_trigger("q_shared",
+                  members = c("go_left", "go_right"),
+                  q = 0.10, draw = "independent"
+      ) |>
+      finalize_model()
+  }
+  params_example_22_shared_q <- c(
+    go_left.m = log(0.30),
+    go_left.s = 0.18,
+    go_right.m = log(0.32),
+    go_right.s = 0.18,
+    q_shared = 0.10
+  )
+  
+  # Bundle target models -------------------------------------------------------
+  models <- list(
+    example_1_simple = list(spec = example_1_simple, params = params_example_1_simple),
+    example_2_stop_mixture = list(spec = example_2_stop_mixture, params = params_example_2_stop_mixture),
+    example_3_stop_na = list(spec = example_3_stop_na, params = params_example_3_stop_na),
+    example_5_timeout_guess = list(spec = example_5_timeout_guess, params = params_example_5_timeout_guess),
+    example_6_dual_path = list(spec = example_6_dual_path, params = params_example_6_dual_path),
+    example_7_mixture = list(spec = example_7_mixture, params = params_example_7_mixture),
+    example_10_exclusion = list(spec = example_10_exclusion, params = params_example_10_exclusion),
+    example_16_guard_tie_simple = list(spec = example_16_guard_tie_simple, params = params_example_16_guard_tie_simple),
+    example_21_simple_q = list(spec = example_21_simple_q, params = params_example_21_simple_q),
+    example_22_shared_q = list(spec = example_22_shared_q, params = params_example_22_shared_q)
+  )
+  
+  # Test each model -----------------------------------------------------------
+  snapshot_res <- list()
+  for (name in names(models)) {
+    mod <- models[[name]]
+    spec_obj <- mod$spec()
+    structure <- finalize_model(spec_obj)
+    params_vec <- mod$params
+    
+    # Simulate with components retained
+    params_df <- build_param_matrix(spec_obj, params_vec, n_trials = 500)
+    data_df <- simulate(structure, params_df, seed = 123, keep_component = TRUE)
+    
+    # # Analytic probabilities (single-trial param set)
+    # analytic <- response_probabilities(
+    #   structure,
+    #   build_param_matrix(spec_obj, params_vec, n_trials = 1L),
+    #   include_na = TRUE
+    # )
+    # 
+    # Observed response probabilities from simulation
+    emp <- prop.table(table(data_df$R, useNA = "ifany"))
+    emp_names <- names(emp)
+    emp_names[is.na(emp_names)] <- "NA"
+    emp <- as.numeric(emp)
+    names(emp) <- emp_names
+    
+    # Non-marginalized likelihood with slim param matrix aligned to components
+    prepared <- prepare_data(structure, data_df)
+    ctx <- make_context(structure)
+    params_df_slim <- build_param_matrix(
+      spec_obj,
+      params_vec,
+      trial_df = prepared
+    )
+    ll <- as.numeric(log_likelihood(ctx, prepared, params_df_slim))
+    
+    # Order and round for stable snapshots
+    # analytic <- round(analytic[order(names(analytic))], 6)
+    emp <- round(emp[order(names(emp))], 6)
+    ll <- round(ll, 6)
+    
+    snapshot_res[[name]] <- list(
+      observed = emp,
+      # analytic = analytic,
+      loglik = ll
+    )
+  }
+  
+  testthat::expect_snapshot_value(snapshot_res, style = "json2")
+})

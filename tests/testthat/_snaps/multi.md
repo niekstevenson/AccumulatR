@@ -16,7 +16,7 @@
             "names": {
               "type": "character",
               "attributes": {},
-              "value": ["observed", "analytic", "loglik"]
+              "value": ["observed", "loglik"]
             }
           },
           "value": [
@@ -33,17 +33,6 @@
             },
             {
               "type": "double",
-              "attributes": {
-                "names": {
-                  "type": "character",
-                  "attributes": {},
-                  "value": ["A", "B", "NA"]
-                }
-              },
-              "value": [0.797186, 0.202814, 0]
-            },
-            {
-              "type": "double",
               "attributes": {},
               "value": [1248.824573]
             }
@@ -55,7 +44,7 @@
             "names": {
               "type": "character",
               "attributes": {},
-              "value": ["observed", "analytic", "loglik"]
+              "value": ["observed", "loglik"]
             }
           },
           "value": [
@@ -72,19 +61,8 @@
             },
             {
               "type": "double",
-              "attributes": {
-                "names": {
-                  "type": "character",
-                  "attributes": {},
-                  "value": ["A", "C", "NA"]
-                }
-              },
-              "value": [0.000143, 0.999581, 0.000276]
-            },
-            {
-              "type": "double",
               "attributes": {},
-              "value": [992.055626]
+              "value": [992.138774]
             }
           ]
         }

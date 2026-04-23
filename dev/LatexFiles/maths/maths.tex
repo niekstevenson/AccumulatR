@@ -35,53 +35,33 @@ The framework has four layers.
 Everything is built from finishing times. Once an object has a finishing time,
 it can compete with other objects in exactly the same way.
 
-\section{Basic Notation}
+\section{Leaves and Basic Notation}
 
-For any process or event $A$, write $T_A$ for its finishing time. We then use
+A leaf is the basic latent process in the model. If leaf $a$ finishes at
+random time $T_a$, write
 \[
-F_A(t) = \Pr(T_A \le t), \qquad
-f_A(t) = \frac{d}{dt}F_A(t), \qquad
-S_A(t) = 1 - F_A(t).
+F_a(t) = \Pr(T_a \le t), \qquad
+f_a(t) = \frac{d}{dt}F_a(t), \qquad
+S_a(t) = 1 - F_a(t).
 \]
-So $F_A(t)$ is the probability that $A$ has finished by time $t$, $f_A(t)$ is
-the density that $A$ finishes at time $t$, and $S_A(t)$ is the probability
-that $A$ is still unfinished at time $t$.
+So $F_a(t)$ is the probability that leaf $a$ has finished by time $t$,
+$f_a(t)$ is the density that it finishes at time $t$, and $S_a(t)$ is the
+probability that it is still unfinished at time $t$.
 
-The same notation will be used for leaves, pools, and outcome rules. That is
-the main reason the framework stays manageable: every object is represented in
-the same way once its finishing-time distribution is known.
+The same notation will be used for pools and outcome rules as well. Once an
+object has a finishing time, it is treated in exactly the same way.
 
 In this note, a \emph{source} means any object with its own finishing time. The
 two basic source types are leaves and pools.
 
-\section{Leaves}
-
-A leaf is the basic latent process in the model. If $a$ is a leaf, then
-$T_a$ is its finishing time and $F_a$, $f_a$, and $S_a$ are its CDF, density,
-and survival function.
-
-At this level, the framework only needs a valid density--CDF pair. The package
+Different leaves may have different finishing-time distributions. The package
 currently supplies the families
 \[
 \texttt{lognormal}, \qquad \texttt{gamma}, \qquad \texttt{exgauss}, \qquad
 \texttt{LBA}, \qquad \texttt{RDM}.
 \]
-Nothing in the later sections depends on a particular family. Later
-constructions only need the functions $F_a$, $f_a$, and $S_a$.
-
-\paragraph{Absolute onset.}
-A leaf may also have an absolute onset delay $d_a \ge 0$. If $T_a^\star$ is the
-baseline finishing time after the process has started, then
-\[
-T_a = d_a + T_a^\star.
-\]
-Equivalently,
-\[
-F_a(t) = F_a^\star(t-d_a), \qquad
-f_a(t) = f_a^\star(t-d_a),
-\]
-with both terms equal to $0$ for $t \le d_a$. So an absolute onset simply
-shifts the finishing-time distribution to the right.
+But the mathematics below does not depend on a particular family. It only
+requires that each leaf has well-defined functions $F_a$, $f_a$, and $S_a$.
 
 \section{Pools}
 
@@ -101,7 +81,7 @@ finished exactly when enough of its members have finished.
 
 If the pool members are exchangeable, with common CDF $F$ and density $f$, then
 \begin{equation}
-F_P(t) = \sum_{m=k}^n {n \choose m} F(t)^m S(t)^{n-m},
+F_P(t) = \sum_{m=k}^n \binom{n}{m} F(t)^m S(t)^{n-m},
 \label{eq:pool-cdf-iid}
 \end{equation}
 and
@@ -229,40 +209,85 @@ T_{R_j} > t \text{ for all } j \ne r
 \end{equation}
 This is the general ``response $r$ wins at time $t$'' formula.
 
-\subsection{Disjoint outcomes}
+\subsection{Disjoint outcome rules}
 
-In the standard case, the outcome rules are disjoint. Then
-Equation~\eqref{eq:general-win} reduces to
+The simplest case is when the outcome rules are \emph{disjoint}. Here
+``disjoint'' means that the same latent trial cannot satisfy two different
+outcome rules at once. Most standard race models have this form: one response
+wins, and the others have not yet become true.
+
+In that case, Equation~\eqref{eq:general-win} reduces to
 \begin{equation}
 \ell_r(t) = f_{R_r}(t)\prod_{j \ne r} S_{R_j}(t).
 \label{eq:simple-race}
 \end{equation}
 This is the familiar race-model likelihood: response $r$ finishes at time $t$,
-and every competing response is still unfinished at time $t$.
+and every competing response is still unfinished at time $t$. This is the form
+most readers will already know from ordinary race models.
 
-\subsection{Overlapping outcomes}
+\subsection{Outcome rules with shared structure}
 
-Some outcome definitions can overlap, so that the same latent path satisfies
-more than one rule. In that case the simple product formula is not enough.
+Sometimes different outcome rules share part of the same latent machinery. For example:
+\[
+\texttt{left} = \texttt{all\_of}(A,C),
+\qquad
+\texttt{right} = \texttt{all\_of}(B,C).
+\]
+Both responses depend on the common process $C$. Their completion times are
+\[
+T_{\texttt{left}} = \max(T_A,T_C),
+\qquad
+T_{\texttt{right}} = \max(T_B,T_C).
+\]
+If $C$ finishes before both $A$ and $B$, the model behaves like an ordinary
+race between $A$ and $B$. If $C$ finishes after both, then
+\[
+T_{\texttt{left}} = T_{\texttt{right}} = T_C.
+\]
+So shared structure can create positive-probability ties between composite
+outcome times, even when the underlying leaf times are continuous.
 
-If this section is not relevant for the model at hand, it can be skipped on a
-first reading. The point is just that overlap is handled by an
-inclusion--exclusion correction.
+For that reason, Equation~\eqref{eq:simple-race} is no longer enough. The
+competitor term can no longer be handled by a simple product of survival
+functions, because competing rules may share part of the same completion event.
 
-Let $\mathcal{C}_r = \{1,\dots,J\}\setminus\{r\}$ be the competitor set for
-outcome $r$. Then
+A useful way to write the likelihood is to sum over the different ways outcome
+rule $r$ can become true:
 \begin{equation}
-\ell_r(t) =
-\sum_{A \subseteq \mathcal{C}_r}
-(-1)^{|A|}
-f_{r \wedge A}(t),
-\label{eq:inclusion-exclusion}
+\ell_r(t) = \sum_{m \in M_r} f_{r,m}(t)\,p_{r,m}^{\mathrm{win}}(t).
+\label{eq:shared-structure}
 \end{equation}
-where $f_{r \wedge A}(t)$ is the density that outcome $r$ and every outcome in
-$A$ are all true at time $t$.
+Here $M_r$ is the set of completion modes for outcome $r$, $f_{r,m}(t)$ is the
+density that mode $m$ makes $r$ available at time $t$, and
+$p_{r,m}^{\mathrm{win}}(t)$ is the probability that this mode wins against the
+competing rules.
 
-The interpretation is straightforward even if the notation is not. The formula
-adds and subtracts overlap terms so that shared latent mass is counted once.
+The quantity $p_{r,m}^{\mathrm{win}}(t)$ is easiest to describe through its
+complement,
+\[
+1 - p_{r,m}^{\mathrm{win}}(t)
+=
+\Pr(\text{at least one competing rule beats mode $m$ at time } t),
+\]
+and this is a union probability. So it is evaluated by inclusion--exclusion:
+\begin{equation}
+1 - p_{r,m}^{\mathrm{win}}(t)
+=
+\sum_s W_{rm,s}(t)
+- \sum_{s<u} W_{rm,su}(t)
++ \cdots,
+\label{eq:shared-union}
+\end{equation}
+where $W_{rm,s}(t)$ is the probability that competitor $s$ beats mode $m$,
+$W_{rm,su}(t)$ the probability that competitors $s$ and $u$ do so jointly, and
+so on.
+
+In the running example, one completion mode for \texttt{left} is that $C$
+finishes at time $t$ after $A$ is already ready. Then $f_{r,m}(t)$ is the
+density of that event. The competitor term asks whether the \texttt{right} rule
+can also claim that same shared finishing stage. If $B$ is not ready, it
+cannot. If $B$ is ready as well, then left and right share the same final time
+$T_C$, and the winner depends on which branch was ready first. 
 
 \paragraph{No-response mass.}
 Some models leave positive probability on ``no observed response'', for example
@@ -275,12 +300,29 @@ p_{\mathrm{none}} =
 So the no-response mass is whatever probability remains after summing the
 finite response probabilities.
 
-\section{Timing Modifiers}
+\section{Onsets}
 
-\subsection{Chained onsets}
+Onset parameters control when a leaf is allowed to begin. They do not change
+the post-start distribution itself. They only change how that post-start
+distribution is placed in time.
 
-A leaf may start only after another source has finished. If leaf $a$ starts
-after source $U$, with an additional lag $\delta \ge 0$, then
+\paragraph{Absolute onset.}
+A leaf may have an absolute onset delay $d_a \ge 0$. If $T_a^\star$ is the
+baseline finishing time after the process has started, then
+\[
+T_a = d_a + T_a^\star.
+\]
+Equivalently,
+\[
+F_a(t) = F_a^\star(t-d_a), \qquad
+f_a(t) = f_a^\star(t-d_a),
+\]
+with both terms equal to $0$ for $t \le d_a$. So an absolute onset simply
+shifts the finishing-time distribution to the right.
+
+\paragraph{Chained onset.}
+A leaf may also start only after another source has finished. If leaf $a$
+starts after source $U$, with an additional lag $\delta \ge 0$, then
 \[
 T_a = T_U + \delta + T_a^\star,
 \]
@@ -302,9 +344,11 @@ F_a^\star(t-\delta-s)\,f_U(s)\,ds.
 \label{eq:after-cdf}
 \end{equation}
 
-\subsection{Triggers}
+\section{Triggers}
 
-Triggers control whether a source starts at all.
+Triggers control whether a source starts at all. Independent triggers act on a
+single leaf. Shared triggers introduce a trial-level on/off mixture across a
+group of leaves.
 
 \paragraph{Independent trigger.}
 If leaf $a$ has start probability $1-q_a$, then the finite-time distribution is
@@ -331,22 +375,31 @@ dependence across several leaves.
 
 \section{Observation Layer}
 
-\subsection{Mixture components}
+\subsection{Mixtures}
 
-A component $c$ defines one variant of the model, with weight $\pi_c$. If the
-component is observed on a trial, then the trial contribution is simply
+A component $c$ defines one variant of the model, with weight $\pi_c$.
+Mixtures can then enter the likelihood in two different ways.
+
+\paragraph{Explicit mixture.}
+If the component is observed on a trial, then the trial contribution is simply
 \[
 L = L_c.
 \]
-If the component is latent, then
+This is just a model with different trial types. Each trial is assigned to one
+known component, and the likelihood conditions on that assignment.
+
+\paragraph{Marginalized mixture.}
+If the component is not observed, then each trial is treated as arising from
+one of several latent process variants, and the likelihood averages over them:
 \begin{equation}
 L = \sum_c \pi_c L_c,
 \qquad
 \sum_c \pi_c = 1.
 \label{eq:mixture}
 \end{equation}
-So observed components condition on one variant, whereas latent components
-average over variants.
+So an explicit mixture separates known trial types, whereas a marginalized
+mixture keeps the component latent and forms a within-trial mixture over
+possible process variants.
 
 \subsection{Outcome remapping and guessing}
 
@@ -388,25 +441,5 @@ L_{\mathrm{rank}} =
 \end{equation}
 Because the times are ordered, the sequence $t_1 < \cdots < t_K$ already
 encodes which response came first, second, and so on.
-
-\section{Scope in the Package}
-
-The mathematical framework above is the background needed to read the models
-currently supported by \texttt{AccumulatR}. In particular, the package includes
-\begin{itemize}
-  \item leaf-level distributions,
-  \item threshold pools, including nested pools,
-  \item logical outcome rules such as \texttt{first\_of()},
-  \texttt{all\_of()}, \texttt{none\_of()}, and \texttt{inhibit()},
-  \item absolute onsets and chained onsets,
-  \item independent and shared triggers,
-  \item fixed and latent mixtures,
-  \item outcome remapping and guessing,
-  \item ranked readout within the restrictions stated above.
-\end{itemize}
-
-The common theme is always the same: define finishing times for the latent
-pieces, build larger objects from them, and then write the likelihood in terms
-of which outcome becomes true first.
 
 \end{document}

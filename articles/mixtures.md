@@ -1,11 +1,19 @@
 # Working with Mixtures
 
-Here we highlight how fixed and sampled mixtures can be instantiated in
-`AccumulatR`.
+Here we show how mixtures work in `AccumulatR`.
 
-Use fixed components when trial type is known and should be supplied in
-the data. Use sampled mixtures when the component is latent and the
-likelihood must average over the possible processing modes.
+Mixtures have two separate pieces:
+
+- The model controls how mixture weights are defined. Use
+  `set_mixture_options(mode = "fixed")` when the weights are known in
+  advance, and `set_mixture_options(mode = "sample")` when one or more
+  mixture weights should be estimated.
+- The data control whether the component is observed on a trial. If a
+  `component` column is present, likelihood evaluation conditions on
+  that component. If `component` is omitted or set to `NA`, the
+  likelihood and
+  [`response_probabilities()`](https://niekstevenson.github.io/AccumulatR/reference/response_probabilities.md)
+  marginalize over components.
 
 ``` r
 library(AccumulatR)
@@ -25,9 +33,10 @@ comes from a target route and response `R2` comes from a competitor. The
 components differ only in whether the target route is fast or slow on a
 given trial.
 
-## Fixed components: known trial types
+## Fixed mixture weights with observed components
 
-In this version, component labels are observed and included in the data.
+In this first example, the mixture weights are fixed and the component
+label is observed on each trial.
 
 ``` r
 model_fixed <- race_spec() |>
@@ -88,9 +97,9 @@ table(data_fixed$component, data_fixed$R)
     ##   fast 452  30
     ##   slow 131 587
 
-Because the component is known, the simulated data keep that label. The
-same pattern applies to real data: if trial type is known, keep it in a
-`component` column.
+Because the component is known here, the simulated data keep that label.
+The same pattern applies to real data: if trial type is observed, keep
+it in a `component` column.
 
 ``` r
 prepared_fixed <- prepare_data(model_fixed, data_fixed)
@@ -106,9 +115,9 @@ ll_fixed <- as.numeric(log_likelihood(ctx_fixed, prepared_fixed, params_df_fixed
 ll_fixed
 ```
 
-    ## [1] -13142.83
+    ## [1] 1554.949
 
-## Sampled components: latent processing modes
+## Sampled mixture weights with latent components
 
 Now we use the same architecture as a latent mixture. The component is
 not observed per trial. Instead, the model samples a hidden component
@@ -174,7 +183,12 @@ table(sim_sampled_with_component$component)
     ## fast slow 
     ##  541  959
 
-For fitting, we usually work with the observed data only.
+For likelihood evaluation, we keep the sampled-mixture data in the same
+form as real latent-mixture data: only the observed response `R` and
+response time `rt`. Because `component` is omitted here, the likelihood
+marginalizes over the possible components. If you do supply a
+`component` column, that component is treated as observed on those
+trials.
 
 ``` r
 data_sampled <- sim_sampled[, c("trial", "R", "rt")]
@@ -229,6 +243,8 @@ data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params
     ##        true recovered       miss
     ## p_fast 0.35 0.3702799 0.02027991
 
-Start with fixed components when trial type is known. Use sampled
-mixtures when trial type is unobserved and the goal is to estimate how
-often each processing mode occurs.
+Use `mode = "fixed"` when mixture weights are known and
+`mode = "sample"` when mixture weights should be estimated.
+Independently of that choice, include a `component` column only when the
+component is observed on a trial. Otherwise omit it, or set it to `NA`,
+so the likelihood marginalizes over components.

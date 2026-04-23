@@ -58,7 +58,7 @@ prepared separately with `prepare_data()` and supplied to
 
     <div class="section level2">
     <h2 id="ref-usage">Usage<a class="anchor" aria-label="anchor" href="#ref-usage"></a></h2>
-    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">make_context</span><span class="op">(</span><span class="va">structure</span>, prep <span class="op">=</span> <span class="cn">NULL</span>, native_bundle <span class="op">=</span> <span class="cn">NULL</span><span class="op">)</span></span></code></pre></div>
+    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">make_context</span><span class="op">(</span><span class="va">structure</span>, prep <span class="op">=</span> <span class="cn">NULL</span><span class="op">)</span></span></code></pre></div>
     </div>
 
     <div class="section level2">
@@ -71,10 +71,6 @@ prepared separately with `prepare_data()` and supplied to
 
 <dt id="arg-prep">prep<a class="anchor" aria-label="anchor" href="#arg-prep"></a></dt>
 <dd><p>Optional preprocessed model bundle.</p></dd>
-
-
-<dt id="arg-native-bundle">native_bundle<a class="anchor" aria-label="anchor" href="#arg-native-bundle"></a></dt>
-<dd><p>Optional serialized native bundle.</p></dd>
 
 </dl></div>
     <div class="section level2">
@@ -89,8 +85,22 @@ prepared separately with `prepare_data()` and supplied to
 <span class="r-in"><span><span class="va">spec</span> <span class="op">&lt;-</span> <span class="fu"><a href="add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="va">spec</span>, <span class="st">"A_win"</span>, <span class="st">"A"</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="va">structure</span> <span class="op">&lt;-</span> <span class="fu"><a href="finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="va">spec</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="fu">make_context</span><span class="op">(</span><span class="va">structure</span><span class="op">)</span></span></span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> $native_ctx</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;pointer: 0x556f96ff8df0&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$native</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;pointer: 0x5653d41e3b90&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_identity</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] TRUE</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$identity_backend</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "direct"</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$ranked_supported</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] TRUE</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $required_p_slots</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 2</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> attr(,"class")</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> [1] "accumulatr_context"</span>

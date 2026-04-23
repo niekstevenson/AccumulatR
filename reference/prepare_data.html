@@ -58,7 +58,7 @@ likelihood input.</p>
 
     <div class="section level2">
     <h2 id="ref-usage">Usage<a class="anchor" aria-label="anchor" href="#ref-usage"></a></h2>
-    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">prepare_data</span><span class="op">(</span><span class="va">structure</span>, <span class="va">data_df</span>, prep <span class="op">=</span> <span class="cn">NULL</span>, native_bundle <span class="op">=</span> <span class="cn">NULL</span><span class="op">)</span></span></code></pre></div>
+    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">prepare_data</span><span class="op">(</span><span class="va">structure</span>, <span class="va">data_df</span>, compress <span class="op">=</span> <span class="cn">FALSE</span>, prep <span class="op">=</span> <span class="cn">NULL</span><span class="op">)</span></span></code></pre></div>
     </div>
 
     <div class="section level2">
@@ -75,12 +75,14 @@ likelihood input.</p>
 and so on.</p></dd>
 
 
+<dt id="arg-compress">compress<a class="anchor" aria-label="anchor" href="#arg-compress"></a></dt>
+<dd><p>If `TRUE`, collapse repeated prepared trials and attach an
+`expand` mapping for `log_likelihood()` to reuse automatically. Defaults
+to `FALSE`.</p></dd>
+
+
 <dt id="arg-prep">prep<a class="anchor" aria-label="anchor" href="#arg-prep"></a></dt>
 <dd><p>Optional preprocessed model bundle.</p></dd>
-
-
-<dt id="arg-native-bundle">native_bundle<a class="anchor" aria-label="anchor" href="#arg-native-bundle"></a></dt>
-<dd><p>Optional serialized native bundle.</p></dd>
 
 </dl></div>
     <div class="section level2">
@@ -101,9 +103,9 @@ and so on.</p></dd>
 <span class="r-in"><span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="va">data_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="simulate.html">simulate</a></span><span class="op">(</span><span class="va">structure</span>, <span class="va">params_df</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="fu">prepare_data</span><span class="op">(</span><span class="va">structure</span>, <span class="va">data_df</span><span class="op">)</span></span></span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>   trial     R        rt accumulator onset</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 1     1 A_win 0.9679031           A     0</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 2     2 A_win 0.9198333           A     0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>   trial     R        rt accumulator onset   component</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 1     1 A_win 0.9679031           A     0 __default__</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 2     2 A_win 0.9198333           A     0 __default__</span>
 </code></pre></div>
     </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

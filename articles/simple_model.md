@@ -74,24 +74,6 @@ table(data_df$R)
     ##   R1   R2 
     ## 1572  428
 
-**Test the model** AccumulatR is a very big package and I might have
-made mistakes! Alternatively, your data might not be sufficient to
-identify your model. Therefore,
-[`test_model()`](https://niekstevenson.github.io/AccumulatR/reference/test_model.md)
-is a quick diagnostic for checking whether the likelihood function is
-consistent with the simulator, and whether the profile plots return
-indicate parameter identifiability.
-
-``` r
-test_model(model, true_params, n_trials = n_trials, plot = FALSE)
-```
-
-    ## Assuming 0 for missing parameter(s): R1_A.q, R1_B.q, R2.q
-
-    ##  response analytical simulated abs_diff
-    ##        R1      0.778     0.775    0.003
-    ##        R2      0.222     0.225    0.003
-
 **Evaluate the likelihood** We prepare the data, build a model context,
 and evaluate the log-likelihood at the true parameter values.
 

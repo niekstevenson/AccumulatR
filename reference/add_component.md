@@ -1,7 +1,7 @@
 # Define a mixture component
 
 Components are useful when trials can come from qualitatively different
-processing modes, such as "fast guess" versus "controlled response".
+processing modes, such as fast versus slow processing.
 
 ## Usage
 

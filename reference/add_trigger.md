@@ -7,14 +7,7 @@ models.
 ## Usage
 
 ``` r
-add_trigger(
-  spec,
-  id,
-  members,
-  q = NULL,
-  param = NULL,
-  draw = c("shared", "independent")
-)
+add_trigger(spec, id, members, q = NULL, draw = c("shared", "independent"))
 ```
 
 ## Arguments
@@ -33,11 +26,8 @@ add_trigger(
 
 - q:
 
-  Failure probability for the trigger.
-
-- param:
-
-  Optional parameter name supplying \`q\`.
+  Failure probability for the trigger. The trigger \`id\` is the
+  parameter name for this quantity.
 
 - draw:
 

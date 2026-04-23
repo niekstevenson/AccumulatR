@@ -79,11 +79,19 @@
 
     
     
-<p>Here we highlight how fixed and sampled mixtures can be instantiated
-in <code>AccumulatR</code>.</p>
-<p>Use fixed components when trial type is known and should be supplied
-in the data. Use sampled mixtures when the component is latent and the
-likelihood must average over the possible processing modes.</p>
+<p>Here we show how mixtures work in <code>AccumulatR</code>.</p>
+<p>Mixtures have two separate pieces:</p>
+<ul>
+<li>The model controls how mixture weights are defined. Use
+<code>set_mixture_options(mode = "fixed")</code> when the weights are
+known in advance, and <code>set_mixture_options(mode = "sample")</code>
+when one or more mixture weights should be estimated.</li>
+<li>The data control whether the component is observed on a trial. If a
+<code>component</code> column is present, likelihood evaluation
+conditions on that component. If <code>component</code> is omitted or
+set to <code>NA</code>, the likelihood and
+<code><a href="../reference/response_probabilities.html">response_probabilities()</a></code> marginalize over components.</li>
+</ul>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://github.com/niekstevenson/AccumulatR" class="external-link">AccumulatR</a></span><span class="op">)</span></span></code></pre></div>
 <pre><code><span><span class="co">## </span></span>
@@ -100,10 +108,10 @@ comes from a competitor. The components differ only in whether the
 target route is fast or slow on a given trial.</p>
 </div>
 <div class="section level2">
-<h2 id="fixed-components-known-trial-types">Fixed components: known trial types<a class="anchor" aria-label="anchor" href="#fixed-components-known-trial-types"></a>
+<h2 id="fixed-mixture-weights-with-observed-components">Fixed mixture weights with observed components<a class="anchor" aria-label="anchor" href="#fixed-mixture-weights-with-observed-components"></a>
 </h2>
-<p>In this version, component labels are observed and included in the
-data.</p>
+<p>In this first example, the mixture weights are fixed and the
+component label is observed on each trial.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">model_fixed</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/race_spec.html">race_spec</a></span><span class="op">(</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"target_fast"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
@@ -157,9 +165,9 @@ belongs to.</p>
 <span><span class="co">##         R1  R2</span></span>
 <span><span class="co">##   fast 452  30</span></span>
 <span><span class="co">##   slow 131 587</span></span></code></pre>
-<p>Because the component is known, the simulated data keep that label.
-The same pattern applies to real data: if trial type is known, keep it
-in a <code>component</code> column.</p>
+<p>Because the component is known here, the simulated data keep that
+label. The same pattern applies to real data: if trial type is observed,
+keep it in a <code>component</code> column.</p>
 <div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">prepared_fixed</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/prepare_data.html">prepare_data</a></span><span class="op">(</span><span class="va">model_fixed</span>, <span class="va">data_fixed</span><span class="op">)</span></span>
 <span><span class="va">ctx_fixed</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/make_context.html">make_context</a></span><span class="op">(</span><span class="va">model_fixed</span><span class="op">)</span></span>
@@ -172,10 +180,10 @@ in a <code>component</code> column.</p>
 <span></span>
 <span><span class="va">ll_fixed</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">as.numeric</a></span><span class="op">(</span><span class="fu"><a href="../reference/log_likelihood.html">log_likelihood</a></span><span class="op">(</span><span class="va">ctx_fixed</span>, <span class="va">prepared_fixed</span>, <span class="va">params_df_fixed_true</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="va">ll_fixed</span></span></code></pre></div>
-<pre><code><span><span class="co">## [1] -13142.83</span></span></code></pre>
+<pre><code><span><span class="co">## [1] 1554.949</span></span></code></pre>
 </div>
 <div class="section level2">
-<h2 id="sampled-components-latent-processing-modes">Sampled components: latent processing modes<a class="anchor" aria-label="anchor" href="#sampled-components-latent-processing-modes"></a>
+<h2 id="sampled-mixture-weights-with-latent-components">Sampled mixture weights with latent components<a class="anchor" aria-label="anchor" href="#sampled-mixture-weights-with-latent-components"></a>
 </h2>
 <p>Now we use the same architecture as a latent mixture. The component
 is not observed per trial. Instead, the model samples a hidden component
@@ -231,7 +239,12 @@ for it explicitly.</p>
 <pre><code><span><span class="co">## </span></span>
 <span><span class="co">## fast slow </span></span>
 <span><span class="co">##  541  959</span></span></code></pre>
-<p>For fitting, we usually work with the observed data only.</p>
+<p>For likelihood evaluation, we keep the sampled-mixture data in the
+same form as real latent-mixture data: only the observed response
+<code>R</code> and response time <code>rt</code>. Because
+<code>component</code> is omitted here, the likelihood marginalizes over
+the possible components. If you do supply a <code>component</code>
+column, that component is treated as observed on those trials.</p>
 <div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">data_sampled</span> <span class="op">&lt;-</span> <span class="va">sim_sampled</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"trial"</span>, <span class="st">"R"</span>, <span class="st">"rt"</span><span class="op">)</span><span class="op">]</span></span>
 <span></span>
@@ -278,9 +291,12 @@ holding the accumulator timing parameters fixed.</p>
 <span><span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span>true <span class="op">=</span> <span class="va">target</span>, recovered <span class="op">=</span> <span class="va">fit_params</span>, miss <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">target</span> <span class="op">-</span> <span class="va">fit_params</span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
 <pre><code><span><span class="co">##        true recovered       miss</span></span>
 <span><span class="co">## p_fast 0.35 0.3702799 0.02027991</span></span></code></pre>
-<p>Start with fixed components when trial type is known. Use sampled
-mixtures when trial type is unobserved and the goal is to estimate how
-often each processing mode occurs.</p>
+<p>Use <code>mode = "fixed"</code> when mixture weights are known and
+<code>mode = "sample"</code> when mixture weights should be estimated.
+Independently of that choice, include a <code>component</code> column
+only when the component is observed on a trial. Otherwise omit it, or
+set it to <code>NA</code>, so the likelihood marginalizes over
+components.</p>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside>

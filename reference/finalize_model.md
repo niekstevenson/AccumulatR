@@ -162,9 +162,6 @@ finalize_model(spec)
 #> 
 #> $prep$components$attrs
 #> $prep$components$attrs$`__default__`
-#> $prep$components$attrs$`__default__`$guess
-#> NULL
-#> 
 #> $prep$components$attrs$`__default__`$weight_param
 #> NULL
 #> 
@@ -193,9 +190,6 @@ finalize_model(spec)
 #> $prep$observation$component_n_outcomes
 #> named list()
 #> 
-#> 
-#> $prep$special_outcomes
-#> list()
 #> 
 #> $prep$shared_triggers
 #> list()
@@ -230,11 +224,8 @@ finalize_model(spec)
 #> A lognormal     0 0              <NA>               NA      0           
 #> 
 #> $components
-#>   component_id weight has_weight_param      attrs  mode   reference
-#> 1  __default__      1            FALSE NULL, NULL fixed __default__
-#> 
-#> $special_outcomes
-#> list()
+#>   component_id weight has_weight_param attrs  mode   reference
+#> 1  __default__      1            FALSE  NULL fixed __default__
 #> 
 #> $shared_triggers
 #> list()

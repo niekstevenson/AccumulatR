@@ -7,7 +7,7 @@ trusted likelihood input.
 ## Usage
 
 ``` r
-prepare_data(structure, data_df, prep = NULL, native_bundle = NULL)
+prepare_data(structure, data_df, compress = FALSE, prep = NULL)
 ```
 
 ## Arguments
@@ -22,13 +22,15 @@ prepare_data(structure, data_df, prep = NULL, native_bundle = NULL)
   and \`rt\`; for multi-outcome models it can also contain \`R2\`,
   \`rt2\`, and so on.
 
+- compress:
+
+  If \`TRUE\`, collapse repeated prepared trials and attach an
+  \`expand\` mapping for \`log_likelihood()\` to reuse automatically.
+  Defaults to \`FALSE\`.
+
 - prep:
 
   Optional preprocessed model bundle.
-
-- native_bundle:
-
-  Optional serialized native bundle.
 
 ## Value
 
@@ -48,7 +50,7 @@ params_df <- build_param_matrix(
 )
 data_df <- simulate(structure, params_df, seed = 1)
 prepare_data(structure, data_df)
-#>   trial     R        rt accumulator onset
-#> 1     1 A_win 0.9679031           A     0
-#> 2     2 A_win 0.9198333           A     0
+#>   trial     R        rt accumulator onset   component
+#> 1     1 A_win 0.9679031           A     0 __default__
+#> 2     2 A_win 0.9198333           A     0 __default__
 ```

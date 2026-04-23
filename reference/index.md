@@ -33,8 +33,6 @@ model.
   : Control how mixture components are combined
 - [`finalize_model()`](https://niekstevenson.github.io/AccumulatR/reference/finalize_model.md)
   : Compile a model for simulation and fitting
-- [`test_model()`](https://niekstevenson.github.io/AccumulatR/reference/test_model.md)
-  : Test Model Implementation
 
 ## Outcome Expressions and Timing
 
@@ -75,10 +73,10 @@ probabilities.
   : Build a compiled likelihood context from a model
 - [`log_likelihood()`](https://niekstevenson.github.io/AccumulatR/reference/log_likelihood.md)
   : Evaluate the log-likelihood of behavioral data
-- [`response_probabilities()`](https://niekstevenson.github.io/AccumulatR/reference/response_probabilities.md)
-  : Compute predicted response probabilities
 - [`simulate()`](https://niekstevenson.github.io/AccumulatR/reference/simulate.md)
   : Simulate behavioral data from a model
+- [`response_probabilities()`](https://niekstevenson.github.io/AccumulatR/reference/response_probabilities.md)
+  : Evaluate marginal response probabilities
 
 ## Visualization
 

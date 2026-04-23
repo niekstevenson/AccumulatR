@@ -258,6 +258,21 @@ inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
   return std::log(total);
 }
 
+inline bool exact_plan_supports_observation(const ExactVariantPlan &plan,
+                                            const ExactTrialView &obs) {
+  for (std::size_t rank_idx = 0; rank_idx < static_cast<std::size_t>(obs.rank_count);
+       ++rank_idx) {
+    const auto outcome_code = exact_trial_view_outcome_code(obs, rank_idx);
+    if (outcome_code <= 0 ||
+        static_cast<std::size_t>(outcome_code) >= plan.outcome_index_by_code.size() ||
+        plan.outcome_index_by_code[static_cast<std::size_t>(outcome_code)] ==
+            semantic::kInvalidIndex) {
+      return false;
+    }
+  }
+  return true;
+}
+
 inline Rcpp::NumericVector evaluate_exact_loglik_queries_cached(
     const std::vector<ExactVariantPlan> &plans,
     const PreparedTrialLayout &layout,
@@ -273,6 +288,10 @@ inline Rcpp::NumericVector evaluate_exact_loglik_queries_cached(
         layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row);
     const auto target_idx =
         plan.outcome_index_by_code[static_cast<std::size_t>(query.outcome_code)];
+    if (target_idx == semantic::kInvalidIndex) {
+      out[static_cast<R_xlen_t>(i)] = min_ll;
+      continue;
+    }
     const auto *step_batch = find_finite_batch(layout, query.rt);
     struct ExactUnrankedQueryKernel {
       const ExactVariantPlan &plan;
@@ -343,6 +362,10 @@ inline Rcpp::NumericVector evaluate_exact_probability_queries_cached(
         layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row);
     const auto target_idx =
         plan.outcome_index_by_code[static_cast<std::size_t>(query.outcome_code)];
+    if (target_idx == semantic::kInvalidIndex) {
+      out[static_cast<R_xlen_t>(i)] = 0.0;
+      continue;
+    }
     struct ExactUnrankedProbabilityKernel {
       const ExactVariantPlan &plan;
       const ParamView &params;
@@ -532,6 +555,11 @@ inline SEXP evaluate_exact_trials_cached(
     const auto &plan = plans[static_cast<std::size_t>(variant_index)];
     const auto leaf_count =
         static_cast<std::size_t>(plan.lowered.program.layout.n_leaves);
+    if (!exact_plan_supports_observation(plan, obs)) {
+      loglik[static_cast<R_xlen_t>(trial_index)] = min_ll;
+      param_row += leaf_count;
+      continue;
+    }
     loglik[static_cast<R_xlen_t>(trial_index)] = exact_ranked_loglik_for_trial(
         plan,
         params,

@@ -1980,6 +1980,12 @@ build_param_matrix <- function(model,
     rows <- list()
     for (t in seq_len(n_trials)) {
       comp_lbl <- as.character(component[[t]])
+      if (is.na(comp_lbl) || !nzchar(comp_lbl)) {
+        for (i in seq_along(accs)) {
+          rows[[length(rows) + 1L]] <- base_mat[i, , drop = FALSE]
+        }
+        next
+      }
       for (i in seq_along(accs)) {
         acc_comp <- acc_component_membership[[acc_ids[[i]]]] %||% character(0)
         if (length(acc_comp) > 0 && !comp_lbl %in% acc_comp) {

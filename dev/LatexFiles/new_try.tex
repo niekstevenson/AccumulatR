@@ -1,10 +1,9 @@
 \documentclass[11pt]{article}
 \usepackage{amsmath,amssymb}
 \usepackage{bm}
-\usepackage[authoryear,round]{natbib}
 \usepackage[hidelinks]{hyperref}
 \title{A General Race-Model Likelihood: Structure, Notation, and Examples}
-\author{Cindy}
+\author{Niek Stevenson}
 \date{}
 \begin{document}
 \maketitle
@@ -129,6 +128,4 @@ Evaluate Equation~\eqref{eq:trial-lik} per component and average via Equation~\e
 \section{Implementation Recipe}
 For each trial: (1) parse each outcome's expression into a tree of events; (2) compute $C_E(t)$ and $h_E(t)$ recursively using Equations~\eqref{eq:pool-kofn}--\eqref{eq:or}; (3) evaluate the per-trial contribution with Equation~\eqref{eq:trial-lik}; (4) include terminals/censors via Equation~\eqref{eq:term-censor} or deadlines via Equation~\eqref{eq:deadline} if present; (5) apply mixtures and any label mappings; (6) sum logs. Absence constraints multiply in as survival factors and do not change first-hit forms.
 \paragraph{Relationships and special cases.} (i) Gates are just ANDs over required pools; (ii) Excluders and inhibitors are absence multipliers; (iii) Terminals/censors are symmetric to responses in the competition, differing only in labelling; (iv) Shared last-pool ties redistribute the at-$t$ mass from the shared pool across tied outcomes; without shared last pools, no tie handling is needed.
-\bibliographystyle{apalike}
-\bibliography{refs}
 \end{document}

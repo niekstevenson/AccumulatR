@@ -382,7 +382,11 @@
   }
   component_levels <- structure$components$component_id %||% "__default__"
   if (!"component" %in% names(data_df)) {
-    data_df$component <- "__default__"
+    data_df$component <- if (length(component_levels) <= 1L) {
+      "__default__"
+    } else {
+      NA_character_
+    }
   }
   data_df$component <- .normalize_prepared_index_column(
     data_df$component,
@@ -996,6 +1000,24 @@ make_context <- function(structure, prep = NULL) {
     }
   }
 
+  base_cols <- c(
+    "trial",
+    "accumulator_index",
+    "accumulator",
+    "onset",
+    "q",
+    "t0",
+    "shared_trigger_q",
+    paste0("p", seq_len(8L))
+  )
+  extra_numeric <- setdiff(names(df), base_cols)
+  for (nm in extra_numeric) {
+    col <- df[[nm]]
+    if (is.numeric(col) || is.integer(col)) {
+      cols[[nm]] <- as.numeric(col)
+    }
+  }
+
   mat <- do.call(cbind, cols)
   storage.mode(mat) <- "double"
   attr(mat, "trial") <- trial
@@ -1104,9 +1126,10 @@ make_context <- function(structure, prep = NULL) {
       call. = FALSE
     )
   }
-  out <- unclass(as.matrix(param_mat[, required_cols, drop = FALSE]))
+  extra_cols <- setdiff(cn, required_cols)
+  out <- unclass(as.matrix(param_mat[, c(required_cols, extra_cols), drop = FALSE]))
   storage.mode(out) <- "double"
-  colnames(out) <- required_cols
+  colnames(out) <- c(required_cols, extra_cols)
   out
 }
 

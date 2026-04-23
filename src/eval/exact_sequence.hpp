@@ -278,14 +278,22 @@ inline Rcpp::NumericVector evaluate_exact_loglik_queries_cached(
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
     const std::vector<DirectLoglikQuery> &queries,
-    const double min_ll) {
-  ParamView params(paramsSEXP);
+    const double min_ll,
+    const std::vector<std::vector<int>> *row_maps = nullptr) {
   Rcpp::NumericVector out(queries.size(), min_ll);
   for (std::size_t i = 0; i < queries.size(); ++i) {
     const auto &query = queries[i];
     const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
-    const int first_param_row = static_cast<int>(
-        layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row);
+    const int *row_map =
+        row_maps != nullptr && query.row_map_index != semantic::kInvalidIndex
+            ? row_maps->at(static_cast<std::size_t>(query.row_map_index)).data()
+            : nullptr;
+    ParamView params(paramsSEXP, row_map);
+    const int first_param_row =
+        row_map == nullptr
+            ? static_cast<int>(
+                  layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row)
+            : 0;
     const auto target_idx =
         plan.outcome_index_by_code[static_cast<std::size_t>(query.outcome_code)];
     if (target_idx == semantic::kInvalidIndex) {
@@ -352,14 +360,22 @@ inline Rcpp::NumericVector evaluate_exact_probability_queries_cached(
     const std::vector<ExactVariantPlan> &plans,
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
-    const std::vector<DirectProbabilityQuery> &queries) {
-  ParamView params(paramsSEXP);
+    const std::vector<DirectProbabilityQuery> &queries,
+    const std::vector<std::vector<int>> *row_maps = nullptr) {
   Rcpp::NumericVector out(queries.size(), 0.0);
   for (std::size_t i = 0; i < queries.size(); ++i) {
     const auto &query = queries[i];
     const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
-    const int first_param_row = static_cast<int>(
-        layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row);
+    const int *row_map =
+        row_maps != nullptr && query.row_map_index != semantic::kInvalidIndex
+            ? row_maps->at(static_cast<std::size_t>(query.row_map_index)).data()
+            : nullptr;
+    ParamView params(paramsSEXP, row_map);
+    const int first_param_row =
+        row_map == nullptr
+            ? static_cast<int>(
+                  layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row)
+            : 0;
     const auto target_idx =
         plan.outcome_index_by_code[static_cast<std::size_t>(query.outcome_code)];
     if (target_idx == semantic::kInvalidIndex) {

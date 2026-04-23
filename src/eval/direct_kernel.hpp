@@ -389,20 +389,30 @@ double integrate_to_infinity(Fn &&density_fn) {
 struct ParamView {
   const double *base;
   int nrow;
+  const int *row_map{nullptr};
 
   explicit ParamView(SEXP paramsSEXP)
       : base(REAL(paramsSEXP)), nrow(Rf_nrows(paramsSEXP)) {}
 
+  ParamView(SEXP paramsSEXP, const int *row_map_)
+      : base(REAL(paramsSEXP)),
+        nrow(Rf_nrows(paramsSEXP)),
+        row_map(row_map_) {}
+
+  inline int physical_row(const int row) const {
+    return row_map == nullptr ? row : row_map[row];
+  }
+
   inline double q(const int row) const {
-    return base[row];
+    return base[physical_row(row)];
   }
 
   inline double t0(const int row) const {
-    return base[nrow + row];
+    return base[nrow + physical_row(row)];
   }
 
   inline double p(const int row, const int slot) const {
-    return base[(slot + 2) * nrow + row];
+    return base[(slot + 2) * nrow + physical_row(row)];
   }
 };
 
@@ -416,12 +426,14 @@ struct DirectLoglikQuery {
   semantic::Index variant_index{semantic::kInvalidIndex};
   semantic::Index outcome_code{semantic::kInvalidIndex};
   double rt{NA_REAL};
+  semantic::Index row_map_index{semantic::kInvalidIndex};
 };
 
 struct DirectProbabilityQuery {
   semantic::Index trial_index{semantic::kInvalidIndex};
   semantic::Index variant_index{semantic::kInvalidIndex};
   semantic::Index outcome_code{semantic::kInvalidIndex};
+  semantic::Index row_map_index{semantic::kInvalidIndex};
 };
 
 struct DirectTriggerState {
@@ -439,6 +451,7 @@ struct DirectMassQuery {
   semantic::Index variant_index{semantic::kInvalidIndex};
   std::vector<WeightedOutcomeTerm> terms;
   bool include_total_finite{false};
+  semantic::Index row_map_index{semantic::kInvalidIndex};
 };
 
 struct DirectMassResult {
@@ -1221,14 +1234,22 @@ inline Rcpp::NumericVector evaluate_direct_loglik_queries_cached(
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
     const std::vector<DirectLoglikQuery> &queries,
-    const double min_ll) {
-  ParamView params(paramsSEXP);
+    const double min_ll,
+    const std::vector<std::vector<int>> *row_maps = nullptr) {
   Rcpp::NumericVector out(queries.size(), min_ll);
   for (std::size_t i = 0; i < queries.size(); ++i) {
     const auto &query = queries[i];
     const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
-    const int first_param_row = static_cast<int>(
-        layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row);
+    const int *row_map =
+        row_maps != nullptr && query.row_map_index != semantic::kInvalidIndex
+            ? row_maps->at(static_cast<std::size_t>(query.row_map_index)).data()
+            : nullptr;
+    ParamView params(paramsSEXP, row_map);
+    const int first_param_row =
+        row_map == nullptr
+            ? static_cast<int>(
+                  layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row)
+            : 0;
     if (plan.shared_trigger_indices.empty()) {
       TrialKernel kernel(plan, params, first_param_row, query.rt);
       out[static_cast<R_xlen_t>(i)] =
@@ -1254,8 +1275,8 @@ inline Rcpp::NumericMatrix evaluate_direct_mass_queries_cached(
     const std::vector<VariantPlan> &plans,
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
-    const std::vector<DirectMassQuery> &queries) {
-  ParamView params(paramsSEXP);
+    const std::vector<DirectMassQuery> &queries,
+    const std::vector<std::vector<int>> *row_maps = nullptr) {
   Rcpp::NumericMatrix out(queries.size(), 2);
   std::unordered_map<std::string, DirectMassResult> memo;
   std::vector<semantic::Index> codes;
@@ -1263,11 +1284,19 @@ inline Rcpp::NumericMatrix evaluate_direct_mass_queries_cached(
   for (std::size_t i = 0; i < queries.size(); ++i) {
     const auto &query = queries[i];
     const auto &plan = plans.at(static_cast<std::size_t>(query.variant_index));
+    const int *row_map =
+        row_maps != nullptr && query.row_map_index != semantic::kInvalidIndex
+            ? row_maps->at(static_cast<std::size_t>(query.row_map_index)).data()
+            : nullptr;
+    ParamView params(paramsSEXP, row_map);
     const bool need_weighted = !query.terms.empty();
     bool need_total = query.include_total_finite;
     double exact_total_mass = 0.0;
-    const int first_param_row = static_cast<int>(
-        layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row);
+    const int first_param_row =
+        row_map == nullptr
+            ? static_cast<int>(
+                  layout.spans.at(static_cast<std::size_t>(query.trial_index)).start_row)
+            : 0;
     if (need_total &&
         direct_try_exact_total_finite_mass(
             plan, params, first_param_row, &exact_total_mass)) {

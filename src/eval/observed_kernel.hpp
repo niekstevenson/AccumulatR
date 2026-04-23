@@ -2,8 +2,11 @@
 
 #include <Rcpp.h>
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "direct_kernel.hpp"
@@ -20,7 +23,8 @@ inline Rcpp::NumericVector evaluate_loglik_records(
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
     const std::vector<ObservedRecord> &records,
-    const double min_ll) {
+    const double min_ll,
+    const std::vector<std::vector<int>> *row_maps = nullptr) {
   Rcpp::NumericVector out(records.size(), R_NegInf);
   if (records.empty()) {
     return out;
@@ -47,7 +51,8 @@ inline Rcpp::NumericVector evaluate_loglik_records(
           record.trial_index,
           record.variant_index,
           record.semantic_code,
-          record.observed_rt});
+          record.observed_rt,
+          record.row_map_index});
     }
 
     Rcpp::NumericVector loglik;
@@ -57,14 +62,16 @@ inline Rcpp::NumericVector evaluate_loglik_records(
           layout,
           paramsSEXP,
           queries,
-          min_ll);
+          min_ll,
+          row_maps);
     } else {
       loglik = evaluate_exact_loglik_queries_cached(
           exact_plans,
           layout,
           paramsSEXP,
           queries,
-          min_ll);
+          min_ll,
+          row_maps);
     }
     for (std::size_t i = 0; i < idxs.size(); ++i) {
       out[static_cast<R_xlen_t>(idxs[i])] = loglik[static_cast<R_xlen_t>(i)];
@@ -79,7 +86,8 @@ inline Rcpp::NumericVector evaluate_probability_records(
     const std::vector<ExactVariantPlan> &exact_plans,
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
-    const std::vector<ObservedRecord> &records) {
+    const std::vector<ObservedRecord> &records,
+    const std::vector<std::vector<int>> *row_maps = nullptr) {
   Rcpp::NumericVector out(records.size(), 0.0);
   if (records.empty()) {
     return out;
@@ -108,20 +116,22 @@ inline Rcpp::NumericVector evaluate_probability_records(
         DirectMassQuery query;
         query.trial_index = record.trial_index;
         query.variant_index = record.variant_index;
+        query.row_map_index = record.row_map_index;
         append_weighted_term(&query.terms, record.semantic_code, 1.0);
         direct_queries.push_back(std::move(query));
       } else {
         exact_queries.push_back(DirectProbabilityQuery{
             record.trial_index,
             record.variant_index,
-            record.semantic_code});
+            record.semantic_code,
+            record.row_map_index});
       }
     }
 
     Rcpp::NumericVector prob;
     if (backend == compile::BackendKind::Direct) {
       const auto mass = evaluate_direct_mass_queries_cached(
-          direct_plans, layout, paramsSEXP, direct_queries);
+          direct_plans, layout, paramsSEXP, direct_queries, row_maps);
       prob = Rcpp::NumericVector(idxs.size(), 0.0);
       for (R_xlen_t i = 0; i < prob.size(); ++i) {
         prob[i] = mass(i, 0);
@@ -131,7 +141,8 @@ inline Rcpp::NumericVector evaluate_probability_records(
           exact_plans,
           layout,
           paramsSEXP,
-          exact_queries);
+          exact_queries,
+          row_maps);
     }
     for (std::size_t i = 0; i < idxs.size(); ++i) {
       out[static_cast<R_xlen_t>(idxs[i])] = prob[static_cast<R_xlen_t>(i)];
@@ -161,6 +172,361 @@ inline double logsumexp_records(const std::vector<double> &values) {
     }
   }
   return sum > 0.0 ? anchor + std::log(sum) : R_NegInf;
+}
+
+inline semantic::Index resolve_variant_index_by_component_code(
+    const semantic::Index component_code,
+    const compile::BackendKind backend,
+    const std::vector<semantic::Index> &direct_variant_index_by_component_code,
+    const std::vector<semantic::Index> &exact_variant_index_by_component_code);
+
+struct NamedParamMatrix {
+  const double *base{nullptr};
+  int nrow{0};
+  std::unordered_map<std::string, int> column_by_name;
+
+  explicit NamedParamMatrix(SEXP paramsSEXP)
+      : base(REAL(paramsSEXP)),
+        nrow(Rf_nrows(paramsSEXP)) {
+    const SEXP dimnames = Rf_getAttrib(paramsSEXP, R_DimNamesSymbol);
+    if (TYPEOF(dimnames) != VECSXP || Rf_length(dimnames) < 2) {
+      return;
+    }
+    const SEXP colnames = VECTOR_ELT(dimnames, 1);
+    if (TYPEOF(colnames) != STRSXP) {
+      return;
+    }
+    const auto n_cols = Rf_length(colnames);
+    column_by_name.reserve(static_cast<std::size_t>(n_cols));
+    for (int i = 0; i < n_cols; ++i) {
+      if (STRING_ELT(colnames, i) == NA_STRING) {
+        continue;
+      }
+      column_by_name.emplace(CHAR(STRING_ELT(colnames, i)), i);
+    }
+  }
+
+  inline bool has(const std::string &name) const {
+    return column_by_name.find(name) != column_by_name.end();
+  }
+
+  inline double value(const int row, const std::string &name) const {
+    const auto it = column_by_name.find(name);
+    if (it == column_by_name.end()) {
+      return NA_REAL;
+    }
+    return base[static_cast<R_xlen_t>(it->second) * nrow + row];
+  }
+};
+
+inline bool trials_have_observed_components(
+    const PreparedTrialLayout &layout,
+    const Rcpp::IntegerVector &component) {
+  for (const auto &span : layout.spans) {
+    if (integer_cell_is_na(component, static_cast<R_xlen_t>(span.start_row))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline std::vector<double> resolve_component_weights(
+    const semantic::SemanticModel &model,
+    const std::vector<semantic::Index> &component_codes,
+    const NamedParamMatrix &params,
+    const int row) {
+  std::vector<double> weights(component_codes.size(), 0.0);
+  if (component_codes.empty()) {
+    return weights;
+  }
+
+  if (model.component_mode != "sample") {
+    for (std::size_t i = 0; i < component_codes.size(); ++i) {
+      const auto component_index =
+          static_cast<std::size_t>(component_codes[i] - 1);
+      const auto weight = model.components[component_index].weight;
+      if (!(std::isfinite(weight) && weight >= 0.0)) {
+        throw std::runtime_error(
+            "Component weights must be non-negative finite numbers");
+      }
+      weights[i] = weight;
+    }
+  } else {
+    const auto reference_id =
+        !model.component_reference.empty() && std::any_of(
+                                                 component_codes.begin(),
+                                                 component_codes.end(),
+                                                 [&](const auto code) {
+                                                   return model.components
+                                                              [static_cast<std::size_t>(code - 1)]
+                                                                  .id ==
+                                                          model.component_reference;
+                                                 })
+            ? model.component_reference
+            : model.components[static_cast<std::size_t>(component_codes.front() - 1)]
+                  .id;
+    double sum_nonref = 0.0;
+    for (std::size_t i = 0; i < component_codes.size(); ++i) {
+      const auto component_index =
+          static_cast<std::size_t>(component_codes[i] - 1);
+      const auto &component = model.components[component_index];
+      if (component.id == reference_id) {
+        continue;
+      }
+      double weight = component.weight;
+      if (!component.weight_name.empty() &&
+          params.has(component.weight_name)) {
+        weight = params.value(row, component.weight_name);
+      }
+      if (!(std::isfinite(weight) && weight >= 0.0 && weight <= 1.0)) {
+        throw std::runtime_error(
+            "Mixture weight '" + component.weight_name +
+            "' must be a probability in [0,1]");
+      }
+      weights[i] = weight;
+      sum_nonref += weight;
+    }
+    for (std::size_t i = 0; i < component_codes.size(); ++i) {
+      const auto component_index =
+          static_cast<std::size_t>(component_codes[i] - 1);
+      const auto &component = model.components[component_index];
+      if (component.id != reference_id) {
+        continue;
+      }
+      double ref_weight = 1.0 - sum_nonref;
+      if (ref_weight < -1e-8) {
+        throw std::runtime_error(
+            "Mixture weights sum to >1; check non-reference weight params");
+      }
+      if (ref_weight < 0.0) {
+        ref_weight = 0.0;
+      }
+      weights[i] = ref_weight;
+      break;
+    }
+  }
+
+  double total = 0.0;
+  for (const auto weight : weights) {
+    total += weight;
+  }
+  if (!(std::isfinite(total) && total > 0.0)) {
+    const auto uniform = 1.0 / static_cast<double>(weights.size());
+    std::fill(weights.begin(), weights.end(), uniform);
+    return weights;
+  }
+  for (auto &weight : weights) {
+    weight /= total;
+  }
+  return weights;
+}
+
+struct TrialComponentChoice {
+  semantic::Index component_code{semantic::kInvalidIndex};
+  double weight{0.0};
+};
+
+struct MissingAllAccumulator {
+  std::vector<DirectMassQuery> direct_queries;
+  std::vector<double> direct_component_weights;
+  std::vector<ObservedRecord> exact_records;
+  std::vector<double> exact_component_weight_sum;
+
+  explicit MissingAllAccumulator(const std::size_t n_trials)
+      : exact_component_weight_sum(n_trials, 0.0) {}
+};
+
+inline std::unordered_map<std::string, int> build_trial_row_map(
+    const Rcpp::CharacterVector &accumulator,
+    const PreparedTrialSpan &span) {
+  std::unordered_map<std::string, int> row_by_accumulator;
+  row_by_accumulator.reserve(
+      static_cast<std::size_t>(span.end_row - span.start_row + 1));
+  for (auto row = static_cast<int>(span.start_row);
+       row <= static_cast<int>(span.end_row);
+       ++row) {
+    row_by_accumulator.emplace(Rcpp::as<std::string>(accumulator[row]), row);
+  }
+  return row_by_accumulator;
+}
+
+inline std::vector<int> build_component_row_map(
+    const std::unordered_map<std::string, int> &row_by_accumulator,
+    const std::vector<std::string> &leaf_ids) {
+  std::vector<int> row_map;
+  row_map.reserve(leaf_ids.size());
+  for (const auto &leaf_id : leaf_ids) {
+    const auto it = row_by_accumulator.find(leaf_id);
+    if (it == row_by_accumulator.end()) {
+      throw std::runtime_error(
+          "prepared data are missing accumulator row for '" + leaf_id + "'");
+    }
+    row_map.push_back(it->second);
+  }
+  return row_map;
+}
+
+inline std::vector<TrialComponentChoice> resolve_trial_components(
+    const std::vector<ComponentObservationPlan> &component_plans_by_code,
+    const semantic::SemanticModel &model,
+    const PreparedTrialLayout &layout,
+    const Rcpp::IntegerVector &component,
+    const NamedParamMatrix &params,
+    const std::size_t trial_index) {
+  const auto row = static_cast<R_xlen_t>(layout.spans[trial_index].start_row);
+  std::vector<TrialComponentChoice> resolved;
+
+  if (!integer_cell_is_na(component, row)) {
+    resolved.push_back(TrialComponentChoice{
+        static_cast<semantic::Index>(component[row]),
+        1.0});
+    return resolved;
+  }
+
+  std::vector<semantic::Index> component_codes;
+  const auto max_component_code = std::min(
+      component_plans_by_code.size(),
+      model.components.size() + 1U);
+  for (std::size_t component_code = 1; component_code < max_component_code;
+       ++component_code) {
+    if (component_plans_by_code[component_code].present) {
+      component_codes.push_back(static_cast<semantic::Index>(component_code));
+    }
+  }
+  if (component_codes.empty()) {
+    return resolved;
+  }
+
+  const auto weights = resolve_component_weights(
+      model,
+      component_codes,
+      params,
+      static_cast<int>(row));
+  resolved.reserve(component_codes.size());
+  for (std::size_t i = 0; i < component_codes.size(); ++i) {
+    if (!(std::isfinite(weights[i]) && weights[i] > 0.0)) {
+      continue;
+    }
+    resolved.push_back(TrialComponentChoice{component_codes[i], weights[i]});
+  }
+  return resolved;
+}
+
+inline void append_weighted_observed_branches(
+    std::vector<ObservedRecord> *out,
+    const semantic::Index trial_index,
+    const semantic::Index variant_index,
+    const compile::BackendKind backend,
+    const double observed_rt,
+    const double scale,
+    const std::vector<ObservedBranch> &branches,
+    const semantic::Index row_map_index) {
+  if (!(std::isfinite(scale) && scale > 0.0)) {
+    return;
+  }
+  for (const auto &branch : branches) {
+    const double weight = scale * branch.weight;
+    if (!(std::isfinite(weight) && weight > 0.0)) {
+      continue;
+    }
+    out->push_back(ObservedRecord{
+        trial_index,
+        variant_index,
+        backend,
+        branch.semantic_code,
+        observed_rt,
+        weight,
+        row_map_index});
+  }
+}
+
+inline void append_trial_component_records(
+    const semantic::Index trial_index,
+    const ObservedTrialKind kind,
+    const semantic::Index observed_label_code,
+    const double observed_rt,
+    const semantic::Index variant_index,
+    const double component_weight,
+    const semantic::Index row_map_index,
+    const ComponentObservationPlan &component_plan,
+    std::vector<ObservedRecord> *finite_records,
+    std::vector<ObservedRecord> *missing_rt_records,
+    MissingAllAccumulator *missing_all) {
+  if (variant_index == semantic::kInvalidIndex ||
+      !(std::isfinite(component_weight) && component_weight > 0.0)) {
+    return;
+  }
+
+  switch (kind) {
+  case ObservedTrialKind::Finite: {
+    if (observed_label_code == semantic::kInvalidIndex) {
+      return;
+    }
+    const auto observed_code = static_cast<std::size_t>(observed_label_code);
+    if (observed_code >= component_plan.keep_by_code.size()) {
+      return;
+    }
+    append_weighted_observed_branches(
+        finite_records,
+        trial_index,
+        variant_index,
+        component_plan.semantic_backend,
+        observed_rt,
+        component_weight,
+        component_plan.keep_by_code[observed_code],
+        row_map_index);
+    return;
+  }
+  case ObservedTrialKind::MissingRt: {
+    if (observed_label_code == semantic::kInvalidIndex) {
+      return;
+    }
+    const auto observed_code = static_cast<std::size_t>(observed_label_code);
+    if (observed_code >= component_plan.missing_rt_by_code.size()) {
+      return;
+    }
+    append_weighted_observed_branches(
+        missing_rt_records,
+        trial_index,
+        variant_index,
+        component_plan.semantic_backend,
+        observed_rt,
+        component_weight,
+        component_plan.missing_rt_by_code[observed_code],
+        row_map_index);
+    return;
+  }
+  case ObservedTrialKind::MissingAll:
+    if (component_plan.semantic_backend == compile::BackendKind::Direct) {
+      DirectMassQuery query;
+      query.trial_index = trial_index;
+      query.variant_index = variant_index;
+      query.include_total_finite = true;
+      query.row_map_index = row_map_index;
+      for (const auto &branch : component_plan.missing_all_branches) {
+        append_weighted_term(
+            &query.terms,
+            branch.semantic_code,
+            component_weight * branch.weight);
+      }
+      missing_all->direct_queries.push_back(std::move(query));
+      missing_all->direct_component_weights.push_back(component_weight);
+      return;
+    }
+
+    missing_all->exact_component_weight_sum[static_cast<std::size_t>(trial_index)] +=
+        component_weight;
+    append_weighted_observed_branches(
+        &missing_all->exact_records,
+        trial_index,
+        variant_index,
+        component_plan.semantic_backend,
+        observed_rt,
+        component_weight,
+        component_plan.finite_observed_branches,
+        row_map_index);
+    return;
+  }
 }
 
 inline semantic::Index resolve_variant_index_by_component_code(
@@ -435,22 +801,35 @@ inline SEXP evaluate_observed_trials_cached(
     SEXP dataSEXP,
     const double min_ll) {
   Rcpp::DataFrame data(dataSEXP);
+  const auto table = read_prepared_data_view(data);
 
   if (observed_identity) {
     const auto label = Rcpp::as<Rcpp::IntegerVector>(data["R"]);
     const auto rt = Rcpp::as<Rcpp::NumericVector>(data["rt"]);
-    if (identity_trials_are_all_finite(layout, label, rt)) {
-      if (identity_backend == compile::BackendKind::Direct) {
-        return evaluate_direct_trials_cached(
-            model,
-            direct_variant_index_by_component_code,
-            direct_plans,
+    if (trials_have_observed_components(layout, table.component)) {
+      if (identity_trials_are_all_finite(layout, label, rt)) {
+        if (identity_backend == compile::BackendKind::Direct) {
+          return evaluate_direct_trials_cached(
+              model,
+              direct_variant_index_by_component_code,
+              direct_plans,
+              layout,
+              paramsSEXP,
+              dataSEXP,
+              min_ll);
+        }
+        return evaluate_exact_trials_cached(
+            exact_variant_index_by_component_code,
+            exact_plans,
             layout,
             paramsSEXP,
             dataSEXP,
             min_ll);
       }
-      return evaluate_exact_trials_cached(
+      return evaluate_identity_trials_with_missing_all(
+          component_plans_by_code,
+          direct_variant_index_by_component_code,
+          direct_plans,
           exact_variant_index_by_component_code,
           exact_plans,
           layout,
@@ -458,40 +837,25 @@ inline SEXP evaluate_observed_trials_cached(
           dataSEXP,
           min_ll);
     }
-    return evaluate_identity_trials_with_missing_all(
-        component_plans_by_code,
-        direct_variant_index_by_component_code,
-        direct_plans,
-        exact_variant_index_by_component_code,
-        exact_plans,
-        layout,
-        paramsSEXP,
-        dataSEXP,
-        min_ll);
   }
 
-  const auto table = read_prepared_data_view(data);
   const auto label = Rcpp::as<Rcpp::IntegerVector>(data["R"]);
   const auto rt = Rcpp::as<Rcpp::NumericVector>(data["rt"]);
+  const auto accumulator = Rcpp::as<Rcpp::CharacterVector>(data["accumulator"]);
+  const NamedParamMatrix named_params(paramsSEXP);
 
   const auto n_trials = layout.spans.size();
   Rcpp::NumericVector loglik(n_trials, min_ll);
   std::vector<ObservedTrialKind> trial_kinds(n_trials, ObservedTrialKind::Finite);
   std::vector<ObservedRecord> finite_records;
   std::vector<ObservedRecord> missing_rt_records;
-  std::vector<ObservedRecord> missing_all_records;
-  std::vector<ObservedRecord> missing_all_mapped_records;
-  std::vector<semantic::Index> missing_all_variant_index(
-      n_trials, semantic::kInvalidIndex);
-  std::vector<compile::BackendKind> missing_all_backend(
-      n_trials, compile::BackendKind::Exact);
-  std::vector<std::uint8_t> missing_all_has_mapped_branch(n_trials, 0U);
+  MissingAllAccumulator missing_all(n_trials);
+  std::vector<std::vector<int>> row_maps;
+  bool has_missing_all = false;
 
   for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
     const auto &span = layout.spans[trial_index];
     const auto row = static_cast<R_xlen_t>(span.start_row);
-    const int component_code_int = table.component[row];
-    const auto component_code = static_cast<semantic::Index>(component_code_int);
     const auto observed_label_code =
         integer_cell_is_na(label, row)
             ? semantic::kInvalidIndex
@@ -508,69 +872,60 @@ inline SEXP evaluate_observed_trials_cached(
     }
     trial_kinds[trial_index] = kind;
 
-    const auto &component_plan =
-        component_plans_by_code[static_cast<std::size_t>(component_code)];
-    const auto variant_index = resolve_variant_index_by_component_code(
-        component_code,
-        component_plan.semantic_backend,
-        direct_variant_index_by_component_code,
-        exact_variant_index_by_component_code);
+    if (kind == ObservedTrialKind::MissingAll) {
+      has_missing_all = true;
+    }
 
-    switch (kind) {
-    case ObservedTrialKind::Finite: {
-      const auto observed_code = static_cast<std::size_t>(observed_label_code);
-      if (observed_code < component_plan.keep_by_code.size()) {
-        for (const auto &branch : component_plan.keep_by_code[observed_code]) {
-          finite_records.push_back(ObservedRecord{
-              static_cast<semantic::Index>(trial_index),
-              variant_index,
-              component_plan.semantic_backend,
-              branch.semantic_code,
-              observed_rt,
-              branch.weight});
-        }
-      }
-      break;
+    const auto components = resolve_trial_components(
+        component_plans_by_code,
+        model,
+        layout,
+        table.component,
+        named_params,
+        trial_index);
+    const auto latent_trial = integer_cell_is_na(table.component, row);
+    std::unordered_map<std::string, int> row_by_accumulator;
+    if (latent_trial) {
+      row_by_accumulator = build_trial_row_map(accumulator, span);
     }
-    case ObservedTrialKind::MissingRt: {
-      const auto observed_code = static_cast<std::size_t>(observed_label_code);
-      if (observed_code < component_plan.missing_rt_by_code.size()) {
-        for (const auto &branch :
-             component_plan.missing_rt_by_code[observed_code]) {
-          missing_rt_records.push_back(ObservedRecord{
-              static_cast<semantic::Index>(trial_index),
-              variant_index,
-              component_plan.semantic_backend,
-              branch.semantic_code,
-              observed_rt,
-              branch.weight});
-        }
+    for (const auto &choice : components) {
+      if (choice.component_code <= 0 ||
+          choice.component_code >=
+              static_cast<semantic::Index>(component_plans_by_code.size())) {
+        continue;
       }
-      break;
-    }
-    case ObservedTrialKind::MissingAll:
-      missing_all_variant_index[trial_index] = variant_index;
-      missing_all_backend[trial_index] = component_plan.semantic_backend;
-      for (const auto &branch : component_plan.finite_observed_branches) {
-        missing_all_records.push_back(ObservedRecord{
-            static_cast<semantic::Index>(trial_index),
-            variant_index,
-            component_plan.semantic_backend,
-            branch.semantic_code,
-            observed_rt,
-            branch.weight});
+      const auto &component_plan =
+          component_plans_by_code[static_cast<std::size_t>(choice.component_code)];
+      if (!component_plan.present) {
+        continue;
       }
-      for (const auto &branch : component_plan.missing_all_branches) {
-        missing_all_has_mapped_branch[trial_index] = 1U;
-        missing_all_mapped_records.push_back(ObservedRecord{
-            static_cast<semantic::Index>(trial_index),
-            variant_index,
-            component_plan.semantic_backend,
-            branch.semantic_code,
-            observed_rt,
-            branch.weight});
+      const auto variant_index = resolve_variant_index_by_component_code(
+          choice.component_code,
+          component_plan.semantic_backend,
+          direct_variant_index_by_component_code,
+          exact_variant_index_by_component_code);
+      semantic::Index row_map_index = semantic::kInvalidIndex;
+      if (latent_trial && variant_index != semantic::kInvalidIndex) {
+        const auto &leaf_ids =
+            component_plan.semantic_backend == compile::BackendKind::Direct
+                ? direct_plans.at(static_cast<std::size_t>(variant_index)).lowered.leaf_ids
+                : exact_plans.at(static_cast<std::size_t>(variant_index)).lowered.leaf_ids;
+        row_maps.push_back(build_component_row_map(row_by_accumulator, leaf_ids));
+        row_map_index =
+            static_cast<semantic::Index>(row_maps.size() - 1U);
       }
-      break;
+      append_trial_component_records(
+          static_cast<semantic::Index>(trial_index),
+          kind,
+          observed_label_code,
+          observed_rt,
+          variant_index,
+          choice.weight,
+          row_map_index,
+          component_plan,
+          &finite_records,
+          &missing_rt_records,
+          &missing_all);
     }
   }
 
@@ -581,7 +936,8 @@ inline SEXP evaluate_observed_trials_cached(
         layout,
         paramsSEXP,
         finite_records,
-        min_ll);
+        min_ll,
+        &row_maps);
     std::size_t i = 0;
     while (i < finite_records.size()) {
       const auto trial_index = finite_records[i].trial_index;
@@ -606,7 +962,8 @@ inline SEXP evaluate_observed_trials_cached(
         exact_plans,
         layout,
         paramsSEXP,
-        missing_rt_records);
+        missing_rt_records,
+        &row_maps);
     std::size_t i = 0;
     while (i < missing_rt_records.size()) {
       const auto trial_index = missing_rt_records[i].trial_index;
@@ -622,82 +979,25 @@ inline SEXP evaluate_observed_trials_cached(
     }
   }
 
-  if (!missing_all_records.empty()) {
-    ParamView params(paramsSEXP);
-    std::vector<double> direct_missing_all_structural_prob(n_trials, 0.0);
-    std::vector<std::uint8_t> direct_missing_all_structural_known(n_trials, 0U);
-    for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
-      if (trial_kinds[trial_index] != ObservedTrialKind::MissingAll ||
-          missing_all_backend[trial_index] != compile::BackendKind::Direct) {
-        continue;
-      }
-      const auto variant_index = missing_all_variant_index[trial_index];
-      if (variant_index == semantic::kInvalidIndex) {
-        continue;
-      }
-      const int first_param_row = static_cast<int>(layout.spans[trial_index].start_row);
-      double total_finite_mass = 0.0;
-      if (!direct_try_exact_total_finite_mass(
-              direct_plans.at(static_cast<std::size_t>(variant_index)),
-              params,
-              first_param_row,
-              &total_finite_mass)) {
-        continue;
-      }
-      direct_missing_all_structural_known[trial_index] = 1U;
-      direct_missing_all_structural_prob[trial_index] =
-          std::max(0.0, 1.0 - total_finite_mass);
-    }
-
-    std::vector<DirectMassQuery> direct_missing_all_queries;
-    std::vector<ObservedRecord> exact_missing_all_records;
-    direct_missing_all_queries.reserve(n_trials);
-    exact_missing_all_records.reserve(missing_all_records.size());
-    std::size_t trial_index = 0;
-    while (trial_index < n_trials) {
-      if (trial_kinds[trial_index] != ObservedTrialKind::MissingAll) {
-        ++trial_index;
-        continue;
-      }
-      if (missing_all_backend[trial_index] == compile::BackendKind::Direct) {
-        DirectMassQuery query;
-        query.trial_index = static_cast<semantic::Index>(trial_index);
-        query.variant_index = missing_all_variant_index[trial_index];
-        query.include_total_finite =
-            direct_missing_all_structural_known[trial_index] == 0U;
-        for (const auto &record : missing_all_mapped_records) {
-          if (record.trial_index != static_cast<semantic::Index>(trial_index)) {
-            continue;
-          }
-          append_weighted_term(
-              &query.terms, record.semantic_code, record.weight);
-        }
-        if (!query.terms.empty() || query.include_total_finite) {
-          direct_missing_all_queries.push_back(std::move(query));
-        }
-        ++trial_index;
-        continue;
-      }
-      ++trial_index;
-    }
-    for (const auto &record : missing_all_records) {
-      if (record.backend == compile::BackendKind::Exact) {
-        exact_missing_all_records.push_back(record);
-      }
-    }
+  if (has_missing_all) {
     Rcpp::NumericMatrix direct_missing_all_mass;
-    if (!direct_missing_all_queries.empty()) {
+    if (!missing_all.direct_queries.empty()) {
       direct_missing_all_mass = evaluate_direct_mass_queries_cached(
-          direct_plans, layout, paramsSEXP, direct_missing_all_queries);
+          direct_plans,
+          layout,
+          paramsSEXP,
+          missing_all.direct_queries,
+          &row_maps);
     }
     Rcpp::NumericVector exact_finite_prob;
-    if (!exact_missing_all_records.empty()) {
+    if (!missing_all.exact_records.empty()) {
       exact_finite_prob = evaluate_probability_records(
           direct_plans,
           exact_plans,
           layout,
           paramsSEXP,
-          exact_missing_all_records);
+          missing_all.exact_records,
+          &row_maps);
     }
     std::size_t direct_i = 0;
     std::size_t exact_i = 0;
@@ -706,39 +1006,34 @@ inline SEXP evaluate_observed_trials_cached(
         continue;
       }
       double missing_prob = 0.0;
-      if (missing_all_backend[trial_index] == compile::BackendKind::Direct &&
-          direct_i < direct_missing_all_queries.size() &&
-          direct_missing_all_queries[direct_i].trial_index ==
-              static_cast<semantic::Index>(trial_index)) {
-        missing_prob += direct_missing_all_mass(static_cast<R_xlen_t>(direct_i), 0);
-        if (direct_missing_all_structural_known[trial_index] != 0U) {
-          missing_prob += direct_missing_all_structural_prob[trial_index];
-        } else if (direct_missing_all_queries[direct_i].include_total_finite) {
-          missing_prob += std::max(
-              0.0,
-              1.0 - direct_missing_all_mass(static_cast<R_xlen_t>(direct_i), 1));
-        }
+      while (direct_i < missing_all.direct_queries.size() &&
+             missing_all.direct_queries[direct_i].trial_index ==
+                 static_cast<semantic::Index>(trial_index)) {
+        missing_prob +=
+            direct_missing_all_mass(static_cast<R_xlen_t>(direct_i), 0);
+        missing_prob += missing_all.direct_component_weights[direct_i] *
+                        std::max(
+                            0.0,
+                            1.0 - direct_missing_all_mass(
+                                      static_cast<R_xlen_t>(direct_i), 1));
         ++direct_i;
-      } else if (missing_all_backend[trial_index] == compile::BackendKind::Exact) {
-        double total_finite = 0.0;
-        while (exact_i < exact_missing_all_records.size() &&
-               exact_missing_all_records[exact_i].trial_index ==
-                   static_cast<semantic::Index>(trial_index)) {
-          total_finite += exact_missing_all_records[exact_i].weight *
-                          exact_finite_prob[static_cast<R_xlen_t>(exact_i)];
-          ++exact_i;
-        }
-        missing_prob =
-            std::max(0.0, 1.0 - (std::isfinite(total_finite) ? total_finite : 1.0));
       }
+      double exact_total_finite = 0.0;
+      while (exact_i < missing_all.exact_records.size() &&
+             missing_all.exact_records[exact_i].trial_index ==
+                 static_cast<semantic::Index>(trial_index)) {
+        exact_total_finite += missing_all.exact_records[exact_i].weight *
+                              exact_finite_prob[static_cast<R_xlen_t>(exact_i)];
+        ++exact_i;
+      }
+      const double exact_missing = std::max(
+          0.0,
+          missing_all.exact_component_weight_sum[trial_index] -
+              (std::isfinite(exact_total_finite) ? exact_total_finite
+                                                 : missing_all.exact_component_weight_sum[trial_index]));
+      missing_prob += exact_missing;
       loglik[static_cast<R_xlen_t>(trial_index)] =
           missing_prob > 0.0 ? std::log(missing_prob) : min_ll;
-    }
-  } else {
-    for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
-      if (trial_kinds[trial_index] == ObservedTrialKind::MissingAll) {
-        loglik[static_cast<R_xlen_t>(trial_index)] = 0.0;
-      }
     }
   }
 

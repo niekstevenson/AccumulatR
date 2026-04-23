@@ -51,6 +51,7 @@ struct ObservedRecord {
   semantic::Index semantic_code{semantic::kInvalidIndex};
   double observed_rt{NA_REAL};
   double weight{1.0};
+  semantic::Index row_map_index{semantic::kInvalidIndex};
 };
 
 inline bool string_cell_is_na(const Rcpp::CharacterVector &column,

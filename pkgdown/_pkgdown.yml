@@ -61,6 +61,7 @@ reference:
       - make_context
       - log_likelihood
       - simulate
+      - response_probabilities
 
   - title: "Visualization"
     desc: "Plot and inspect model structure."

@@ -10,115 +10,133 @@
 \maketitle
 
 \begin{abstract}
-This note gives a standalone mathematical description of the framework
-implemented in \texttt{AccumulatR}. The package is built from a small number of
-objects: leaf-level completion times, threshold pools, logical outcome rules,
-timing modifiers such as chained onsets and triggers, and an observation layer
-for mixtures, remapped labels, and ranked responses. The aim here is to keep
-the notation minimal and to build the full model in layers, starting from a
-simple race and then adding the special cases that the package supports.
+\texttt{AccumulatR} is built around one simple idea: each latent process has a
+random finishing time. Responses are defined by rules about which processes
+must finish, which must not finish, and which finish first. This note gives a
+compact mathematical description of that framework. The aim is not maximal
+generality. The aim is a notation that is simple enough to read from start to
+finish and precise enough to match the package.
 \end{abstract}
 
 \section{Overview}
 
-The framework can be read in four layers.
+The framework has four layers.
 
 \begin{enumerate}
   \item A \emph{leaf} is a single latent finishing-time process.
-  \item A \emph{source} is either a leaf or a threshold pool built from other
-  sources.
-  \item An \emph{outcome rule} says when a response should count as having
-  happened. Rules are built from sources with helpers such as
-  \texttt{first\_of()}, \texttt{all\_of()}, \texttt{none\_of()}, and
-  \texttt{inhibit()}.
-  \item An \emph{observation model} turns latent outcome rules into the data we
-  actually record: one winner, several ranked winners, a mixture over latent
-  components, or relabelled observed responses.
+  \item A \emph{pool} combines several sources into one new source.
+  \item An \emph{outcome rule} says when a modeled response counts as having
+  occurred.
+  \item An \emph{observation layer} turns latent outcomes into the data we
+  actually record, for example through mixtures, remapped labels, or ranked
+  responses.
 \end{enumerate}
 
-The important point is that the package does not need a different likelihood
-formula for every named model. It always starts from leaf completion times and
-then composes them.
+Everything is built from finishing times. Once an object has a finishing time,
+it can compete with other objects in exactly the same way.
 
-\section{Leaf Times}
+\section{Basic Notation}
 
-Let $a$ index leaves. Each leaf has a completion time $T_a$ and corresponding
-distribution functions
+For any process or event $A$, write $T_A$ for its finishing time. We then use
 \[
-F_a(t) = \Pr(T_a \le t), \qquad
-f_a(t) = \frac{d}{dt} F_a(t), \qquad
-S_a(t) = 1 - F_a(t).
+F_A(t) = \Pr(T_A \le t), \qquad
+f_A(t) = \frac{d}{dt}F_A(t), \qquad
+S_A(t) = 1 - F_A(t).
 \]
-We use the same notation for any other object in the model: once a pool or an
-outcome rule has a completion time, it also has $F$, $f$, and $S$.
+So $F_A(t)$ is the probability that $A$ has finished by time $t$, $f_A(t)$ is
+the density that $A$ finishes at time $t$, and $S_A(t)$ is the probability
+that $A$ is still unfinished at time $t$.
 
-At the leaf level, \texttt{AccumulatR} only needs a valid density--CDF pair.
-The current implementation supplies the families
+The same notation will be used for leaves, pools, and outcome rules. That is
+the main reason the framework stays manageable: every object is represented in
+the same way once its finishing-time distribution is known.
+
+In this note, a \emph{source} means any object with its own finishing time. The
+two basic source types are leaves and pools.
+
+\section{Leaves}
+
+A leaf is the basic latent process in the model. If $a$ is a leaf, then
+$T_a$ is its finishing time and $F_a$, $f_a$, and $S_a$ are its CDF, density,
+and survival function.
+
+At this level, the framework only needs a valid density--CDF pair. The package
+currently supplies the families
 \[
-\texttt{lognormal}, \quad \texttt{gamma}, \quad \texttt{exgauss}, \quad
-\texttt{LBA}, \quad \texttt{RDM}.
+\texttt{lognormal}, \qquad \texttt{gamma}, \qquad \texttt{exgauss}, \qquad
+\texttt{LBA}, \qquad \texttt{RDM}.
 \]
-Everything else in the framework is distribution-agnostic.
+Nothing in the later sections depends on a particular family. Later
+constructions only need the functions $F_a$, $f_a$, and $S_a$.
 
 \paragraph{Absolute onset.}
-If a leaf has an absolute onset $d_a \ge 0$ and a baseline finishing time
-$T_a^\star$, then
+A leaf may also have an absolute onset delay $d_a \ge 0$. If $T_a^\star$ is the
+baseline finishing time after the process has started, then
 \[
 T_a = d_a + T_a^\star.
 \]
 Equivalently,
 \[
-F_a(t) = F_a^\star(t - d_a), \qquad
-f_a(t) = f_a^\star(t - d_a),
+F_a(t) = F_a^\star(t-d_a), \qquad
+f_a(t) = f_a^\star(t-d_a),
 \]
-with both terms equal to $0$ for $t \le d_a$.
+with both terms equal to $0$ for $t \le d_a$. So an absolute onset simply
+shifts the finishing-time distribution to the right.
 
 \section{Pools}
 
-A pool $P$ has a member set $M(P)$ and a threshold $k_P$. It finishes when the
-$k_P$th member finishes. Hence
-\[
-T_P = \text{the $k_P$th order statistic of } \{T_m : m \in M(P)\}.
-\]
+A pool turns several sources into one new source. Suppose pool $P$ has members
+with finishing times $T_1,\dots,T_n$, and suppose the pool finishes when the
+$k$th member finishes. Then $T_P$ is the $k$th order statistic of
+$T_1,\dots,T_n$.
 
-The simplest description of the pool CDF is
+The defining identity is
 \begin{equation}
-F_P(t) = \Pr\!\left( \sum_{m \in M(P)} \mathbf{1}\{T_m \le t\} \ge k_P \right).
+F_P(t) = \Pr(T_P \le t)
+= \Pr(\text{at least $k$ of } T_1,\dots,T_n \text{ are } \le t).
 \label{eq:pool-cdf}
 \end{equation}
-For heterogeneous independent members, the density is
+That is the cleanest way to think about a pool: by time $t$, the pool has
+finished exactly when enough of its members have finished.
+
+If the pool members are exchangeable, with common CDF $F$ and density $f$, then
+\begin{equation}
+F_P(t) = \sum_{m=k}^n {n \choose m} F(t)^m S(t)^{n-m},
+\label{eq:pool-cdf-iid}
+\end{equation}
+and
 \begin{equation}
 f_P(t) =
-\sum_{j \in M(P)} f_j(t)
-\sum_{\substack{A \subseteq M(P)\setminus\{j\} \\ |A| = k_P - 1}}
-\prod_{a \in A} F_a(t)
-\prod_{b \in M(P)\setminus(A\cup\{j\})} S_b(t).
-\label{eq:pool-pdf}
+\frac{n!}{(k-1)!(n-k)!}\,
+f(t)\,F(t)^{k-1}S(t)^{n-k}.
+\label{eq:pool-density}
 \end{equation}
+These are the usual formulas for the $k$th finisher.
+
+The package also allows pools whose members have different distributions. The
+notation is then longer, but the idea is the same: a pool is simply another
+source with its own $F_P$, $f_P$, and $S_P$.
 
 Three special cases matter often:
 \begin{itemize}
-  \item $k_P = 1$: the pool is a \emph{first finisher}.
-  \item $k_P = |M(P)|$: the pool is a \emph{last finisher}.
-  \item $|M(P)| = 1$: the pool is just an alias for one source.
+  \item $k=1$: the pool is a first finisher.
+  \item $k=n$: the pool is a last finisher.
+  \item $n=1$: the pool is just an alias for one source.
 \end{itemize}
 
-Pools can be nested. Once the member channels of a source are known, the same
-definitions apply whether the members are leaves or other pools.
+Pools can also be nested. Once a source has its own $F$, $f$, and $S$, it can
+be used as a member of a larger pool.
 
 \section{Outcome Rules}
 
-An outcome rule is an expression built from sources. For any rule $E$, let
-$T_E$ be the time at which the rule first becomes true, with distribution
-functions $F_E$, $f_E$, and $S_E$.
+An outcome rule says when a modeled response becomes available. If $E$ is an
+outcome rule, then $T_E$ is the first time that rule becomes true.
 
-\subsection{Direct Event Rules}
+\subsection{Direct Outcomes}
 
-If the rule is just a source $x$, then
-\[
-T_E = T_x, \qquad F_E = F_x, \qquad f_E = f_x.
-\]
-This is the usual simple race-model case.
+The simplest outcome rule is a direct readout from one source. In that case,
+the outcome simply inherits the finishing-time distribution of that source.
+Nothing new is added mathematically.
 
 \subsection{\texttt{first\_of()}}
 
@@ -126,17 +144,19 @@ If
 \[
 E = \texttt{first\_of}(E_1,\dots,E_m),
 \]
-then the rule becomes true when the first child becomes true, so
+then the rule becomes true when the first child becomes true. Therefore
 \[
-T_E = \min(T_{E_1},\dots,T_{E_m}).
+T_E = \min(T_{E_1},\dots,T_{E_m}),
 \]
-Hence
+and
 \begin{equation}
 F_E(t) = 1 - \prod_{r=1}^m S_{E_r}(t),
 \qquad
 f_E(t) = \sum_{r=1}^m f_{E_r}(t)\prod_{q \ne r} S_{E_q}(t).
 \label{eq:first-of}
 \end{equation}
+The density has the usual interpretation: one child finishes at time $t$, and
+all the others are still unfinished at time $t$.
 
 \subsection{\texttt{all\_of()}}
 
@@ -144,73 +164,60 @@ If
 \[
 E = \texttt{all\_of}(E_1,\dots,E_m),
 \]
-then the rule becomes true when the last required child becomes true, so
+then the rule becomes true when the last required child becomes true.
+Therefore
 \[
-T_E = \max(T_{E_1},\dots,T_{E_m}).
+T_E = \max(T_{E_1},\dots,T_{E_m}),
 \]
-Hence
+and
 \begin{equation}
 F_E(t) = \prod_{r=1}^m F_{E_r}(t),
 \qquad
 f_E(t) = \sum_{r=1}^m f_{E_r}(t)\prod_{q \ne r} F_{E_q}(t).
 \label{eq:all-of}
 \end{equation}
+Here one child finishes at time $t$, and all the others have already finished
+by time $t$.
 
 \subsection{\texttt{none\_of()}}
 
-\texttt{none\_of()} is best read as an \emph{absence condition}. If a rule
-requires \texttt{none\_of(B)}, then by time $t$ the relevant quantity is
+\texttt{none\_of()} is an absence condition. If a rule requires
+\texttt{none\_of(B)}, then the relevant term is simply the survival function of
+$B$:
 \[
-\Pr(B \text{ has not happened by } t) = S_B(t).
+\Pr(B \text{ has not finished by time } t) = S_B(t).
 \]
-For example, if a response is defined as
+For example, if
 \[
-\texttt{all\_of}(A,\texttt{none\_of}(B)),
+E = \texttt{all\_of}(A,\texttt{none\_of}(B)),
 \]
-then the rule holds by time $t$ with probability $F_A(t)S_B(t)$.
-
-So \texttt{none\_of()} does not create a new race winner. It contributes a
+then by time $t$ the rule holds with probability
+\[
+F_E(t) = F_A(t)S_B(t).
+\]
+So \texttt{none\_of()} does not introduce a new race winner. It contributes a
 survival factor.
 
 \subsection{\texttt{inhibit()}}
 
-The guard rule is the package's way to write a stop-like blocker. Let
+The blocking rule is written as
 \[
-G = \texttt{inhibit}(A, B; U_1,\dots,U_m),
+G = \texttt{inhibit}(A,B).
 \]
-where $A$ is the reference event, $B$ is the blocker, and $U_1,\dots,U_m$ are
-optional \texttt{unless} events that can neutralize the blocker.
-
-Define the guard-survival factor
+Its meaning is simple: count $A$ only if $B$ has not finished first. The
+corresponding density is
 \begin{equation}
-H_G(t) =
-1 -
-\int_0^t
-f_B(u)\prod_{r=1}^m S_{U_r}(u)\,du.
-\label{eq:guard-survival}
-\end{equation}
-This is the probability that by time $t$ the blocker has \emph{not} occurred
-at a time when all rescue events were still absent.
-
-The guarded rule then has density
-\begin{equation}
-f_G(t) = f_A(t)\,H_G(t),
+f_G(t) = f_A(t)S_B(t),
 \qquad
 F_G(t) = \int_0^t f_G(u)\,du.
 \label{eq:guard-density}
 \end{equation}
+So $A$ finishes at time $t$, while $B$ is still unfinished at time $t$.
 
-The common special case has no \texttt{unless} terms. Then
-\[
-H_G(t) = S_B(t), \qquad f_G(t) = f_A(t)S_B(t).
-\]
-This is the standard ``go finishes at $t$ and stop has not finished yet''
-construction.
+\section{Trial Likelihood}
 
-\section{From Outcome Rules to Trial Likelihood}
-
-Let the model define outcome rules $R_1,\dots,R_J$. For an observed response
-$r$ at time $t$, the fundamental quantity is
+Suppose the model defines outcomes $R_1,\dots,R_J$. If response $r$ is observed
+at time $t$, then the trial contribution is
 \begin{equation}
 \ell_r(t) =
 \frac{d}{dt}
@@ -220,25 +227,27 @@ T_{R_j} > t \text{ for all } j \ne r
 \right).
 \label{eq:general-win}
 \end{equation}
+This is the general ``response $r$ wins at time $t$'' formula.
 
-\subsection{Simple disjoint races}
+\subsection{Disjoint outcomes}
 
-If the outcome rules are disjoint, Equation~\eqref{eq:general-win} reduces to
-the familiar race-model formula
+In the standard case, the outcome rules are disjoint. Then
+Equation~\eqref{eq:general-win} reduces to
 \begin{equation}
 \ell_r(t) = f_{R_r}(t)\prod_{j \ne r} S_{R_j}(t).
 \label{eq:simple-race}
 \end{equation}
+This is the familiar race-model likelihood: response $r$ finishes at time $t$,
+and every competing response is still unfinished at time $t$.
 
-This is exactly the likelihood for the usual two-choice race, for a pooled
-response against a competitor, or for any other case where the outcome rules do
-not overlap.
+\subsection{Overlapping outcomes}
 
-\subsection{Overlapping outcome rules}
+Some outcome definitions can overlap, so that the same latent path satisfies
+more than one rule. In that case the simple product formula is not enough.
 
-\texttt{AccumulatR} also allows outcomes whose definitions overlap. In that
-case the correct object is not a hand-made tie-breaking rule. It is an
-inclusion--exclusion calculation over overlapping outcome events.
+If this section is not relevant for the model at hand, it can be skipped on a
+first reading. The point is just that overlap is handled by an
+inclusion--exclusion correction.
 
 Let $\mathcal{C}_r = \{1,\dots,J\}\setminus\{r\}$ be the competitor set for
 outcome $r$. Then
@@ -249,16 +258,11 @@ outcome $r$. Then
 f_{r \wedge A}(t),
 \label{eq:inclusion-exclusion}
 \end{equation}
-where $f_{r \wedge A}(t)$ is the density of the conjunction
-\[
-R_r \land \bigwedge_{j \in A} R_j
-\]
-becoming true at time $t$.
+where $f_{r \wedge A}(t)$ is the density that outcome $r$ and every outcome in
+$A$ are all true at time $t$.
 
-This is the mathematical core of overlap handling in the exact backend. Under
-continuous-time leaf distributions, exact equal-time ties have probability zero;
-the real issue is overlapping \emph{definitions}, and that is what
-Equation~\eqref{eq:inclusion-exclusion} resolves.
+The interpretation is straightforward even if the notation is not. The formula
+adds and subtracts overlap terms so that shared latent mass is counted once.
 
 \paragraph{No-response mass.}
 Some models leave positive probability on ``no observed response'', for example
@@ -268,215 +272,141 @@ p_{\mathrm{none}} =
 1 - \sum_{r=1}^J \int_0^\infty \ell_r(t)\,dt.
 \label{eq:no-response}
 \end{equation}
+So the no-response mass is whatever probability remains after summing the
+finite response probabilities.
 
 \section{Timing Modifiers}
 
 \subsection{Chained onsets}
 
-If a leaf $a$ starts only after another source $u$ has finished, with an
-additional lag $\delta \ge 0$, then
+A leaf may start only after another source has finished. If leaf $a$ starts
+after source $U$, with an additional lag $\delta \ge 0$, then
 \[
-T_a = T_u + \delta + T_a^\star,
+T_a = T_U + \delta + T_a^\star,
 \]
 where $T_a^\star$ is the leaf's own post-start finishing time.
 
-The resulting density is a convolution:
+So the total waiting time is: wait for $U$, then wait for the lag, then wait
+for $a$ itself. This gives the convolution
 \begin{equation}
 f_a(t) =
 \int_0^{t-\delta}
-f_u(s)\,f_a^\star(t-\delta-s)\,ds.
+f_U(s)\,f_a^\star(t-\delta-s)\,ds,
 \label{eq:after-density}
 \end{equation}
-Likewise,
+and similarly
 \begin{equation}
 F_a(t) =
 \int_0^\infty
-F_a^\star(t-\delta-s)\,f_u(s)\,ds.
+F_a^\star(t-\delta-s)\,f_U(s)\,ds.
 \label{eq:after-cdf}
 \end{equation}
 
-If the onset source $u$ is itself a pool, then $f_u$ and $F_u$ are the pool
-channels from Equations~\eqref{eq:pool-cdf}--\eqref{eq:pool-pdf}.
-
 \subsection{Triggers}
 
-Triggers are start indicators. They are easiest to write with Bernoulli
-variables.
+Triggers control whether a source starts at all.
 
 \paragraph{Independent trigger.}
-If leaf $a$ has trigger success probability $1-q_a$, let
-\[
-Z_a \sim \mathrm{Bernoulli}(1-q_a),
-\]
-and set $T_a = \infty$ whenever $Z_a = 0$. Then
+If leaf $a$ has start probability $1-q_a$, then the finite-time distribution is
+simply scaled by that probability:
 \begin{equation}
 F_a(t) = (1-q_a)F_a^\dagger(t),
 \qquad
 f_a(t) = (1-q_a)f_a^\dagger(t),
 \label{eq:ind-trigger}
 \end{equation}
-where $(F_a^\dagger, f_a^\dagger)$ are the channels the leaf would have had
+where $F_a^\dagger$ and $f_a^\dagger$ are the channels the leaf would have had
 without trigger failure.
 
 \paragraph{Shared trigger.}
-If a group of leaves shares one trigger, then one Bernoulli variable $Z_g$
-controls all of them. Conditional on $Z_g = 1$, all members are available.
-Conditional on $Z_g = 0$, none of them start. The trial likelihood is then an
-average over trigger states:
+If several leaves share one trigger with failure probability $q_g$, then they
+either all start together or all fail together. The trial likelihood is then a
+two-part mixture:
 \begin{equation}
-L = \sum_z \Pr(Z=z)\,L(z).
+L = (1-q_g)L^{(\mathrm{on})} + q_g L^{(\mathrm{off})}.
 \label{eq:shared-trigger}
 \end{equation}
-This is the only place where the package deliberately introduces joint start
+This is the only point at which the framework introduces joint start
 dependence across several leaves.
 
 \section{Observation Layer}
 
 \subsection{Mixture components}
 
-A component $c$ defines a variant model with active leaf set $A_c$ and weight
-$\pi_c$. If the component is observed on a trial, the contribution is simply
-that component's likelihood:
+A component $c$ defines one variant of the model, with weight $\pi_c$. If the
+component is observed on a trial, then the trial contribution is simply
 \[
 L = L_c.
 \]
-If the component is latent, the trial contribution is
+If the component is latent, then
 \begin{equation}
 L = \sum_c \pi_c L_c,
 \qquad
 \sum_c \pi_c = 1.
 \label{eq:mixture}
 \end{equation}
-
-In sampled mixtures one component is taken as the reference component, and its
-weight is whatever mass remains after the other weights are assigned.
+So observed components condition on one variant, whereas latent components
+average over variants.
 
 \subsection{Outcome remapping and guessing}
 
-The semantic outcome generated by the race need not be the same as the observed
-label. Let $M_{yr}$ be the probability that semantic outcome $r$ is observed as
-label $y$. Then
+The outcome generated by the model need not be the same as the label that is
+observed. Let $M_{yr}$ be the probability that latent outcome $r$ is recorded
+as observed label $y$. Then
 \begin{equation}
 \ell_y(t) = \sum_r M_{yr}\,\ell_r(t).
 \label{eq:remap}
 \end{equation}
+So the observed density is a weighted sum of the latent outcome densities.
 
-This covers simple many-to-one relabelling and probabilistic guessing rules.
-If the observed label is kept but the response time is discarded, the
+If the observed label is kept but the response time is discarded, then the
 contribution becomes the integrated mass
 \begin{equation}
 p_y = \int_0^\infty \ell_y(t)\,dt.
 \label{eq:missing-rt}
 \end{equation}
 
-\subsection{Ranked observations}
+\subsection{Ranked responses}
 
-If the model records the first $K$ outcomes on a trial, the data are
+The package can also use data in which the first $K$ responses are observed on
+each trial:
 \[
 (r_1,t_1),\dots,(r_K,t_K),
 \qquad
 0 < t_1 < \cdots < t_K.
 \]
 
-In the current implementation, ranked observation is intentionally narrower than
-the full expression language. It is supported for direct event outcomes with
-the exact backend, and the declared outcomes must have disjoint deterministic
-supports.
+This part of the framework is narrower than the single-response case. The
+current ranked implementation is for direct, disjoint outcomes.
 
-Under those conditions, the ranked likelihood is the joint density of the
-ordered completion event
-\begin{equation}
-L_{\mathrm{rank}} =
-\frac{
-\Pr\!\left(
-T_{r_1}\in dt_1,\dots,T_{r_K}\in dt_K,\;
-T_j > t_K \text{ for all } j \notin \{r_1,\dots,r_K\}
-\right)
-}{
-\prod_{m=1}^K dt_m
-}.
-\label{eq:rank-general}
-\end{equation}
-
-For independent direct outcomes this simplifies to
+In that setting, the ranked likelihood is
 \begin{equation}
 L_{\mathrm{rank}} =
 \left[\prod_{m=1}^K f_{r_m}(t_m)\right]
 \left[\prod_{j \notin \{r_1,\dots,r_K\}} S_j(t_K)\right].
 \label{eq:rank-simple}
 \end{equation}
+Because the times are ordered, the sequence $t_1 < \cdots < t_K$ already
+encodes which response came first, second, and so on.
 
-The exact evaluator computes this sequentially by removing already used
-outcomes after each observed rank.
+\section{Scope in the Package}
 
-\section{Special Cases}
-
-The general framework above contains the common models used in the package.
-
-\paragraph{Simple two-choice race.}
-If $R_1$ and $R_2$ are direct outcomes from disjoint leaves,
-\[
-\ell_{R_1}(t) = f_{R_1}(t)S_{R_2}(t),
-\qquad
-\ell_{R_2}(t) = f_{R_2}(t)S_{R_1}(t).
-\]
-
-\paragraph{$2$-of-$3$ pooled response.}
-If response $A$ is a $2$-of-$3$ pool and response $B$ is a single competing
-leaf, first compute $(F_A,f_A)$ from Equations~\eqref{eq:pool-cdf} and
-\eqref{eq:pool-pdf}, then use
-\[
-\ell_A(t) = f_A(t)S_B(t), \qquad \ell_B(t) = f_B(t)S_A(t),
-\]
-provided the two outcomes are disjoint.
-
-\paragraph{Stop-like inhibition.}
-If response \texttt{go} is written as \texttt{inhibit(go, stop)}, then
-\[
-\ell_{\mathrm{go}}(t) = f_{\mathrm{go}}(t)S_{\mathrm{stop}}(t)
-\prod_{j \ne \mathrm{go}} S_{R_j}(t)
-\]
-in the simple disjoint case.
-
-\paragraph{Staged processing.}
-If leaf $C$ starts only after $B$ has finished, then the response-time
-distribution for $C$ is the convolution in
-Equation~\eqref{eq:after-density}.
-
-\paragraph{Latent fast/slow mixture.}
-If trials arise from a fast component and a slow component with weight $\pi$,
-then
-\[
-L = \pi L_{\mathrm{fast}} + (1-\pi)L_{\mathrm{slow}}.
-\]
-
-\section{What the Package Currently Supports}
-
-The mathematics above matches the current code path in \texttt{src/}. The
-implemented framework includes
+The mathematical framework above is the background needed to read the models
+currently supported by \texttt{AccumulatR}. In particular, the package includes
 \begin{itemize}
-  \item leaf distributions from the five supported families,
+  \item leaf-level distributions,
   \item threshold pools, including nested pools,
-  \item outcome rules built from the logical helpers \texttt{first\_of},
-  \texttt{all\_of}, \texttt{none\_of}, and \texttt{inhibit},
-  \item absolute onsets and chained onsets via \texttt{after()},
+  \item logical outcome rules such as \texttt{first\_of()},
+  \texttt{all\_of()}, \texttt{none\_of()}, and \texttt{inhibit()},
+  \item absolute onsets and chained onsets,
   \item independent and shared triggers,
-  \item fixed and sampled mixtures,
-  \item observed-label remapping and guessing,
-  \item top-$K$ ranked readout subject to the restrictions stated above.
+  \item fixed and latent mixtures,
+  \item outcome remapping and guessing,
+  \item ranked readout within the restrictions stated above.
 \end{itemize}
 
-It does \emph{not} need separate mathematical theories for ``ranked models'',
-``mixture models'', ``guard models'', and so on. Those are all special cases of
-the same layered construction:
-\[
-\begin{aligned}
-\text{leaf times}
-&\longrightarrow \text{source times}
-\longrightarrow \text{outcome rules} \\
-&\longrightarrow \text{trial likelihood}
-\longrightarrow \text{observation model}.
-\end{aligned}
-\]
+The common theme is always the same: define finishing times for the latent
+pieces, build larger objects from them, and then write the likelihood in terms
+of which outcome becomes true first.
 
 \end{document}

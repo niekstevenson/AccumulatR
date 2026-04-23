@@ -38,6 +38,7 @@
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/prepare_data.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/processing_tree.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/race_spec.html</loc></url>
+<url><loc>https://niekstevenson.github.io/AccumulatR/reference/response_probabilities.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/sampled_pars.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/set_metadata.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/set_mixture_options.html</loc></url>
@@ -45,3 +46,4 @@
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/simulate.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/tie.html</loc></url>
 </urlset>
+

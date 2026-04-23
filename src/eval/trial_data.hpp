@@ -29,6 +29,70 @@ struct PreparedDataView {
   Rcpp::IntegerVector component;
 };
 
+struct TrialEvalControl {
+  std::vector<int> weights;
+  std::vector<unsigned char> selected;
+};
+
+inline TrialEvalControl build_trial_eval_control(
+    const std::size_t n_trials,
+    const Rcpp::LogicalVector &ok,
+    const Rcpp::IntegerVector &expand) {
+  TrialEvalControl out;
+
+  if (expand.size() > 0) {
+    out.weights.assign(n_trials, 0);
+    for (R_xlen_t i = 0; i < expand.size(); ++i) {
+      ++out.weights[static_cast<std::size_t>(expand[i] - 1)];
+    }
+  }
+
+  if (ok.size() > 0) {
+    bool any_false = false;
+    for (std::size_t i = 0; i < n_trials; ++i) {
+      if (ok[static_cast<R_xlen_t>(i)] != TRUE) {
+        any_false = true;
+        break;
+      }
+    }
+    if (any_false) {
+      out.selected.assign(n_trials, 0U);
+      for (std::size_t i = 0; i < n_trials; ++i) {
+        out.selected[i] = static_cast<unsigned char>(
+            ok[static_cast<R_xlen_t>(i)] == TRUE);
+      }
+    }
+  }
+  return out;
+}
+
+inline bool trial_is_selected(const std::vector<unsigned char> *selected,
+                              const std::size_t trial_index) {
+  return selected == nullptr || (*selected)[trial_index] != 0U;
+}
+
+inline double aggregate_trial_loglik(
+    const Rcpp::NumericVector &loglik,
+    const TrialEvalControl &control) {
+  if (control.weights.empty()) {
+    double total_loglik = 0.0;
+    for (R_xlen_t i = 0; i < loglik.size(); ++i) {
+      total_loglik += static_cast<double>(loglik[i]);
+    }
+    return total_loglik;
+  }
+
+  double total_loglik = 0.0;
+  for (std::size_t i = 0; i < control.weights.size(); ++i) {
+    if (control.weights[i] == 0) {
+      continue;
+    }
+    total_loglik += static_cast<double>(control.weights[i]) *
+                    static_cast<double>(loglik[static_cast<R_xlen_t>(i)]);
+  }
+  return total_loglik;
+}
+
 inline PreparedDataView read_prepared_data_view(const Rcpp::DataFrame &data) {
   const auto n_rows = data.nrows();
   return PreparedDataView{

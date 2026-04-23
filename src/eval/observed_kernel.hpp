@@ -221,9 +221,15 @@ struct NamedParamMatrix {
 
 inline bool trials_have_observed_components(
     const PreparedTrialLayout &layout,
-    const Rcpp::IntegerVector &component) {
-  for (const auto &span : layout.spans) {
-    if (integer_cell_is_na(component, static_cast<R_xlen_t>(span.start_row))) {
+    const Rcpp::IntegerVector &component,
+    const std::vector<unsigned char> *selected = nullptr) {
+  for (std::size_t trial_index = 0; trial_index < layout.spans.size(); ++trial_index) {
+    if (!trial_is_selected(selected, trial_index)) {
+      continue;
+    }
+    if (integer_cell_is_na(
+            component,
+            static_cast<R_xlen_t>(layout.spans[trial_index].start_row))) {
       return false;
     }
   }
@@ -543,9 +549,13 @@ inline semantic::Index resolve_variant_index_by_component_code(
 inline bool identity_trials_are_all_finite(
     const PreparedTrialLayout &layout,
     const Rcpp::IntegerVector &label,
-    const Rcpp::NumericVector &rt) {
-  for (const auto &span : layout.spans) {
-    const auto row = static_cast<R_xlen_t>(span.start_row);
+    const Rcpp::NumericVector &rt,
+    const std::vector<unsigned char> *selected = nullptr) {
+  for (std::size_t trial_index = 0; trial_index < layout.spans.size(); ++trial_index) {
+    if (!trial_is_selected(selected, trial_index)) {
+      continue;
+    }
+    const auto row = static_cast<R_xlen_t>(layout.spans[trial_index].start_row);
     if (integer_cell_is_na(label, row) || Rcpp::NumericVector::is_na(rt[row])) {
       return false;
     }
@@ -656,7 +666,8 @@ inline SEXP evaluate_identity_trials_with_missing_all(
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
     SEXP dataSEXP,
-    const double min_ll) {
+    const double min_ll,
+    const std::vector<unsigned char> *selected = nullptr) {
   Rcpp::DataFrame data(dataSEXP);
   const auto table = read_prepared_data_view(data);
   const auto label = Rcpp::as<Rcpp::IntegerVector>(data["R"]);
@@ -672,6 +683,9 @@ inline SEXP evaluate_identity_trials_with_missing_all(
   for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
     const auto &span = layout.spans[trial_index];
     const auto row = static_cast<R_xlen_t>(span.start_row);
+    if (!trial_is_selected(selected, trial_index)) {
+      continue;
+    }
     const auto component_code = static_cast<semantic::Index>(table.component[row]);
     const auto &component_plan =
         component_plans_by_code[static_cast<std::size_t>(component_code)];
@@ -799,15 +813,16 @@ inline SEXP evaluate_observed_trials_cached(
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
     SEXP dataSEXP,
-    const double min_ll) {
+    const double min_ll,
+    const std::vector<unsigned char> *selected = nullptr) {
   Rcpp::DataFrame data(dataSEXP);
   const auto table = read_prepared_data_view(data);
 
   if (observed_identity) {
     const auto label = Rcpp::as<Rcpp::IntegerVector>(data["R"]);
     const auto rt = Rcpp::as<Rcpp::NumericVector>(data["rt"]);
-    if (trials_have_observed_components(layout, table.component)) {
-      if (identity_trials_are_all_finite(layout, label, rt)) {
+    if (trials_have_observed_components(layout, table.component, selected)) {
+      if (identity_trials_are_all_finite(layout, label, rt, selected)) {
         if (identity_backend == compile::BackendKind::Direct) {
           return evaluate_direct_trials_cached(
               model,
@@ -816,7 +831,8 @@ inline SEXP evaluate_observed_trials_cached(
               layout,
               paramsSEXP,
               dataSEXP,
-              min_ll);
+              min_ll,
+              selected);
         }
         return evaluate_exact_trials_cached(
             exact_variant_index_by_component_code,
@@ -824,7 +840,8 @@ inline SEXP evaluate_observed_trials_cached(
             layout,
             paramsSEXP,
             dataSEXP,
-            min_ll);
+            min_ll,
+            selected);
       }
       return evaluate_identity_trials_with_missing_all(
           component_plans_by_code,
@@ -835,7 +852,8 @@ inline SEXP evaluate_observed_trials_cached(
           layout,
           paramsSEXP,
           dataSEXP,
-          min_ll);
+          min_ll,
+          selected);
     }
   }
 
@@ -856,6 +874,9 @@ inline SEXP evaluate_observed_trials_cached(
   for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
     const auto &span = layout.spans[trial_index];
     const auto row = static_cast<R_xlen_t>(span.start_row);
+    if (!trial_is_selected(selected, trial_index)) {
+      continue;
+    }
     const auto observed_label_code =
         integer_cell_is_na(label, row)
             ? semantic::kInvalidIndex

@@ -528,7 +528,8 @@ inline SEXP evaluate_exact_trials_cached(
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
     SEXP dataSEXP,
-    const double min_ll) {
+    const double min_ll,
+    const std::vector<unsigned char> *selected = nullptr) {
   ParamView params(paramsSEXP);
   Rcpp::DataFrame data(dataSEXP);
   const int max_rank = layout.max_rank;
@@ -571,6 +572,10 @@ inline SEXP evaluate_exact_trials_cached(
     const auto &plan = plans[static_cast<std::size_t>(variant_index)];
     const auto leaf_count =
         static_cast<std::size_t>(plan.lowered.program.layout.n_leaves);
+    if (!trial_is_selected(selected, trial_index)) {
+      param_row += leaf_count;
+      continue;
+    }
     if (!exact_plan_supports_observation(plan, obs)) {
       loglik[static_cast<R_xlen_t>(trial_index)] = min_ll;
       param_row += leaf_count;

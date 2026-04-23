@@ -1443,47 +1443,16 @@ log_likelihood.accumulatr_context <- function(context,
     parameters
   }
   params_list <- lapply(params_list, .coerce_loglik_param_matrix)
-  trial <- data_df$trial
-  n_trials <- if (length(trial) == 0L) {
-    0L
-  } else {
-    1L + sum(trial[-1L] != trial[-length(trial)])
-  }
   data_expand <- attr(data_df, "expand", exact = TRUE)
-  using_data_expand <- FALSE
   if (is.null(expand) || length(expand) == 0L) {
     if (!is.null(data_expand) && length(data_expand) > 0L) {
       expand <- data_expand
-      using_data_expand <- TRUE
     } else {
-      expand <- seq_len(n_trials)
+      expand <- NULL
     }
   }
-  expand <- as.integer(expand)
-  ll_offset <- 0
   if (is.null(ok) || length(ok) == 0L) {
-    ok <- rep_len(TRUE, n_trials)
-  } else if (length(ok) == length(expand)) {
-    ok <- as.logical(ok)
-    ok[is.na(ok)] <- FALSE
-    ll_offset <- sum(!ok) * min_ll
-    expand <- expand[ok]
-    ok_comp <- rep_len(FALSE, n_trials)
-    if (length(expand) > 0L) {
-      ok_comp[unique(expand)] <- TRUE
-    }
-    ok <- ok_comp
-  }
-  ok <- as.logical(ok)
-  ok[is.na(ok)] <- FALSE
-  if (length(expand) == 0L) {
-    return(rep_len(ll_offset, length(params_list)))
-  }
-
-  trial_weights <- tabulate(expand, nbins = n_trials)
-  kept_trials <- which(trial_weights > 0L)
-  if (length(kept_trials) == 0L) {
-    return(rep_len(ll_offset, length(params_list)))
+    ok <- NULL
   }
 
   cpp_ctx <- ctx$cpp %||% NULL
@@ -1513,10 +1482,11 @@ log_likelihood.accumulatr_context <- function(context,
       cpp_layout,
       param_mat,
       data_df,
+      ok = ok,
+      expand = expand,
       min_ll = min_ll
     )
-    loglik_vec <- as.numeric(observed$loglik)
-    sum(trial_weights * loglik_vec) + ll_offset
+    as.numeric(observed$total_loglik)
   }, numeric(1))
   unname(out)
 }

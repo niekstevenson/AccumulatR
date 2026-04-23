@@ -1,0 +1,259 @@
+\documentclass[article]{jss}
+
+\newcommand{\pkgname}{\pkg{AccumulatR}}
+\newcommand{\fct}[1]{\code{#1()}}
+
+\author{Niek Stevenson\\Affiliation to be added}
+\Plainauthor{Niek Stevenson}
+
+\title{\pkgname: Simulation and Likelihood Tools for Evidence-Accumulation Models in \proglang{R}}
+\Plaintitle{AccumulatR: Simulation and Likelihood Tools for Evidence-Accumulation Models in R}
+\Shorttitle{\pkgname{} in \proglang{R}}
+
+\Abstract{
+  Evidence-accumulation models are widely used in mathematical psychology to
+  explain response choices and response times. In practice, however, applied
+  work often requires more than fitting a single named model family. Researchers
+  may need architectures with multiple competing routes, pooled channels,
+  stopping or gating processes, staged onsets, latent mixtures, or response
+  rules that are not direct readouts of a single accumulator. \pkgname{} is an
+  \proglang{R}/\proglang{C++} package designed around that modeling problem. It
+  provides a declarative \proglang{R} interface for specifying accumulators,
+  pools, triggers, timing dependencies, and observed outcome rules; it then
+  supports simulation and likelihood evaluation for the resulting model. The
+  user-facing workflow stays in \proglang{R}, while repeated numerical work is
+  delegated to compiled \proglang{C++} code. This paper gives a first
+  software-focused overview of the package, describes its model-building
+  vocabulary, and illustrates the basic simulation-and-fitting workflow.
+}
+
+\Keywords{evidence accumulation, race models, response times, mathematical psychology, \proglang{R}}
+\Plainkeywords{evidence accumulation, race models, response times, mathematical psychology, R}
+
+\Address{
+  Niek Stevenson\\
+  Affiliation to be added\\
+  E-mail: \email{niek.stevenson@gmail.com}
+}
+
+\begin{document}
+
+\section[Introduction: Evidence-accumulation modeling in R]{Introduction: Evidence-accumulation modeling in \proglang{R}}
+\label{sec:introduction}
+
+Evidence-accumulation models play a central role in mathematical psychology
+ because they provide process accounts of both response choice and response
+ time data \citep{ratcliffDiffusionDecision2016, brownSimplestComplete2008,
+ heathcoteWinnerTakes2022}. In many applications the practical modeling problem
+ is not merely to estimate one standard model, but to express a psychologically
+ motivated architecture: multiple routes can race toward the same response,
+ some processes may be gated or inhibited, stages may begin only after earlier
+ events, and the observed response may be defined by a logical rule rather than
+ by the first finisher alone.
+
+Several software tools already support important parts of this landscape. Some
+ focus on specific model families or distributions, such as Wiener diffusion
+ tools \citep{wabersichRWienerPackage2014} or recent \proglang{Stan}-based
+ implementations of diffusion models \citep{henrichSevenparameterDiffusion2024}.
+ Other packages provide highly flexible estimation frameworks, including
+ multilevel or Bayesian modeling interfaces \citep{batesFittingLinear2015,
+ burknerBrmsPackage2017, vandekerckhoveHierarchicalDiffusion2011}. However,
+ those interfaces do not primarily target direct specification of race-model
+ architectures with pooled channels, trigger failures, chained onsets, and
+ logical response rules as first-class model components.
+
+\pkgname{} was written to target that gap. The package provides a model-focused
+ interface in \proglang{R} for specifying evidence-accumulation systems in terms
+ that are close to how mathematical psychologists often describe their models:
+ accumulators, pools, outcomes, timing relations, and mixtures. These model
+ definitions can then be used for simulation and for likelihood evaluation
+ against observed behavioral data. Computationally intensive repeated work is
+ handled in \proglang{C++}, while the user-facing workflow remains in
+ \proglang{R} \citep{R}.
+
+This draft paper is intentionally modest. Its goals are to describe the current
+ package vocabulary, show the core workflow, and mark the sections that would
+ need deeper development for a full \emph{Journal of Statistical Software}
+ submission.
+
+\section{Package overview}
+\label{sec:overview}
+
+The basic object in \pkgname{} is a model specification created with
+\fct{race\_spec}. A specification is built incrementally and then finalized for
+ simulation or fitting using \fct{finalize\_model}. The resulting workflow is
+ centered on four stages:
+\begin{enumerate}
+  \item define a model architecture,
+  \item generate trial-wise parameters,
+  \item simulate or prepare behavioral data,
+  \item evaluate the likelihood of the observed data under candidate
+    parameters.
+\end{enumerate}
+
+At present, the package supports several accumulator distributions, including
+ lognormal, gamma, ex-Gaussian, linear ballistic accumulator (LBA), and race
+ diffusion model (RDM) parameterizations. In addition to accumulator-level
+ timing parameters, the package supports several structural operators that are
+ especially useful in mathematical psychology:
+
+\begin{table}[t!]
+\centering
+\begin{tabular}{ll}
+\hline
+Model component & Main interface \\ \hline
+Accumulator definition & \fct{add\_accumulator} \\
+Pooled channels & \fct{add\_pool} \\
+Observed response labels & \fct{add\_outcome} \\
+Logical response rules & \fct{first\_of}, \fct{all\_of}, \fct{none\_of}, \fct{inhibit} \\
+Triggered or gated starts & \fct{add\_trigger} \\
+Staged onsets & \fct{after} \\
+Latent or observed mixtures & \fct{add\_component}, \fct{set\_mixture\_options} \\
+Multiple ranked responses & \fct{race\_spec(n\_outcomes = ...)} \\ \hline
+\end{tabular}
+\caption{Core building blocks currently exposed by \pkgname{}.}
+\label{tab:components}
+\end{table}
+
+This feature set means that \pkgname{} is not limited to a single ``winner
+ takes all'' architecture. It can also represent models in which a response is
+ produced by one of several routes, by a $k$-of-$n$ pool, by the joint
+ satisfaction of several events, or by a route that is itself vulnerable to a
+ stop-like blocker. Likewise, mixtures can be handled either as observed trial
+ types or as latent components marginalized in the likelihood.
+
+\section{Core workflow}
+\label{sec:workflow}
+
+The package API is deliberately compact. A minimal model is first described in
+ terms of accumulators and outcomes, and is then turned into a finalized model
+ object. Trial-wise parameters are generated with \fct{build\_param\_matrix},
+ data are either simulated with \fct{simulate} or supplied by the user, and
+ likelihood evaluation then uses \fct{prepare\_data}, \fct{make\_context}, and
+ \fct{log\_likelihood}.
+
+\begin{Code}
+library("AccumulatR")
+
+spec <- race_spec() |>
+  add_accumulator("left", "lognormal") |>
+  add_accumulator("right", "lognormal") |>
+  add_outcome("left", "left") |>
+  add_outcome("right", "right")
+
+model <- finalize_model(spec)
+
+pars <- c(
+  left.m = log(0.28), left.s = 0.16,
+  right.m = log(0.35), right.s = 0.18
+)
+
+param_df <- build_param_matrix(model, pars, n_trials = 500)
+sim <- simulate(model, param_df, seed = 123)
+
+prepared <- prepare_data(model, sim[c("trial", "R", "rt")])
+ctx <- make_context(model)
+log_likelihood(ctx, prepared, param_df)
+\end{Code}
+
+This example deliberately uses a simple two-choice lognormal race so that the
+ main workflow is clear. The same sequence of calls is used for more structured
+ models. The package vignettes extend this pattern to pooled channels, trigger
+ failures, chained onsets, latent mixtures, and trials with multiple observed
+ response ranks.
+
+One design choice worth emphasizing is the separation between structural
+ specification and trial-wise parameters. The model object defines the
+ architecture, while the parameter matrix defines the per-trial numerical values
+ to be used in simulation or likelihood evaluation. This makes it straightforward
+ to represent designs in which some parameters vary by condition or by observed
+ trial type without changing the model architecture itself.
+
+\section{Illustrative structural extensions}
+\label{sec:extensions}
+
+The main contribution of \pkgname{} is not the minimal race model above, but
+ the way it generalizes beyond it. Three extensions are especially important.
+
+First, pools allow an observed response to depend on multiple underlying
+ accumulators. For example, a response may occur when any two of three channels
+ have completed. This is useful when the model posits converging routes rather
+ than a single unitary evidence stream.
+
+Second, outcome rules can be expressed logically. A response can be generated by
+ one of several routes, require the conjunction of several events, require the
+ absence of another event, or be blocked by an inhibitory process. This feature
+ is intended for models in which the observed response is a structured readout
+ from latent events rather than a simple label attached to a single accumulator.
+
+Third, timing dependencies can be structural rather than purely parametric.
+ With \fct{after}, an accumulator can begin only when another accumulator or
+ pool has completed. Through triggers, one can specify shared or independent
+ failures of a gating process. These mechanisms are useful for staged-processing
+ and stop-like architectures that are common in mathematical psychology
+ \citep{heathcoteDynamicModels2019}.
+
+The package also exposes utilities that support inspection rather than only
+ estimation. For example, \fct{processing\_tree} provides a compact visual
+ representation of the response logic encoded in a model, and
+ \fct{response\_probabilities} evaluates response probabilities implied by a
+ model and parameter set. These tools are helpful when debugging more complex
+ architectures.
+
+\section{Relation to existing software}
+\label{sec:comparison}
+
+At its current stage, \pkgname{} should be viewed as complementary to existing
+ software rather than as a replacement for it. Packages such as \pkg{RWiener}
+ \citep{wabersichRWienerPackage2014} and recent diffusion implementations in
+ \proglang{Stan} \citep{henrichSevenparameterDiffusion2024} provide tools that
+ are tightly tied to particular sequential-sampling model families. More
+ general-purpose modeling interfaces such as \pkg{lme4} \citep{batesFittingLinear2015}
+ or \pkg{brms} \citep{burknerBrmsPackage2017} offer powerful estimation
+ environments, but they do not natively present race-model architecture itself
+ as the central software object.
+
+The contribution of \pkgname{} is therefore primarily representational. It lets
+ users describe an evidence-accumulation architecture directly, then reuse that
+ same object for simulation, data preparation, and likelihood evaluation. For
+ mathematical psychologists, that can be an advantage when the main scientific
+ problem is the architecture of the process model rather than only the fitting
+ of a standard named model.
+
+This section is still incomplete for a full JSS submission. A stronger version
+ should add a broader comparison to other cognitive-model software in
+ \proglang{R} and beyond, including estimation-focused tools and packages aimed
+ at hierarchical cognitive modeling (CITE).
+
+\section{Discussion}
+\label{sec:discussion}
+
+\pkgname{} is an attempt to make evidence-accumulation modeling more modular on
+ the software side. The package is built around a simple idea: model structure
+ should be declared explicitly in \proglang{R}, while repeated numerical work
+ should be delegated to compiled code. This is useful when the scientific target
+ is a psychologically interpretable architecture involving multiple latent
+ channels, dependencies, and response rules.
+
+The current draft is intentionally only a starting point. A full
+ \emph{Journal of Statistical Software} article should add at least three things.
+ First, it should include a more systematic comparison to related software.
+ Second, it should contain one or more worked examples that are closer to the
+ kinds of tasks for which mathematical psychologists would actually use the
+ package. Third, it should include benchmark and replication material that makes
+ the software claims more concrete.
+
+Even so, the present draft already captures the package's actual center of
+ gravity: \pkgname{} is not mainly a package for one fixed diffusion or race
+ model, but a package for expressing and evaluating structured
+ evidence-accumulation systems.
+
+\section*{Acknowledgments}
+
+This is a first draft prepared from the current package state, local JSS
+ guidance, and the package vignettes. Author affiliations, a fuller software
+ comparison, and a worked empirical example remain to be completed.
+
+\bibliography{../refs,accumulatr-jss-draft}
+
+\end{document}

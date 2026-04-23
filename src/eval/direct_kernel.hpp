@@ -1430,7 +1430,8 @@ inline Rcpp::List evaluate_direct_trials_cached(
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
     SEXP dataSEXP,
-    const double min_ll) {
+    const double min_ll,
+    const std::vector<unsigned char> *selected = nullptr) {
   Rcpp::DataFrame data(dataSEXP);
   ParamView params(paramsSEXP);
 
@@ -1438,7 +1439,7 @@ inline Rcpp::List evaluate_direct_trials_cached(
   const auto outcome = Rcpp::as<Rcpp::IntegerVector>(data["R"]);
   const auto rt = Rcpp::as<Rcpp::NumericVector>(data["rt"]);
 
-  Rcpp::NumericVector loglik(layout.spans.size());
+  Rcpp::NumericVector loglik(layout.spans.size(), min_ll);
   std::vector<runtime::TrialBlock> blocks;
   std::size_t param_row = 0;
   runtime::TrialBlock current_block;
@@ -1464,6 +1465,10 @@ inline Rcpp::List evaluate_direct_trials_cached(
     const auto &plan = plans.at(static_cast<std::size_t>(variant_index));
     const auto leaf_count =
         static_cast<std::size_t>(plan.lowered.program.layout.n_leaves);
+    if (!trial_is_selected(selected, trial_index)) {
+      param_row += leaf_count;
+      continue;
+    }
     if (plan.shared_trigger_indices.empty()) {
       TrialKernel kernel(plan, params, static_cast<int>(param_row), rt[row]);
       loglik[static_cast<R_xlen_t>(trial_index)] =

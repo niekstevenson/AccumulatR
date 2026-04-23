@@ -96,6 +96,40 @@
   lapply(out, unique)
 }
 
+.observed_outcome_allowed_components <- function(prep) {
+  outcome_defs <- prep$outcomes %||% list()
+  component_ids <- prep$components$ids %||% "__default__"
+  out <- setNames(vector("list", length(component_ids)), component_ids)
+  for (cid in component_ids) {
+    out[[cid]] <- character(0)
+  }
+  for (label in names(outcome_defs)) {
+    options <- outcome_defs[[label]]$options %||% list()
+    allowed <- options$component %||% component_ids
+    if (length(allowed) == 0L) {
+      allowed <- component_ids
+    }
+    observed_labels <- if (!is.null(options$guess)) {
+      as.character(options$guess$labels %||% character(0))
+    } else {
+      label
+    }
+    if (!is.null(options$map_outcome_to)) {
+      map_to <- options$map_outcome_to
+      observed_labels <- if (length(map_to) == 0L || is.na(map_to)) {
+        character(0)
+      } else {
+        as.character(map_to[[1L]])
+      }
+    }
+    observed_labels <- observed_labels[!is.na(observed_labels) & nzchar(observed_labels)]
+    for (cid in allowed) {
+      out[[cid]] <- c(out[[cid]], observed_labels)
+    }
+  }
+  lapply(out, unique)
+}
+
 .has_observation_wrappers <- function(prep) {
   outcome_defs <- prep$outcomes %||% list()
   any(vapply(outcome_defs, function(outcome) {
@@ -1074,6 +1108,264 @@ make_context <- function(structure, prep = NULL) {
   storage.mode(out) <- "double"
   colnames(out) <- required_cols
   out
+}
+
+.coerce_response_probability_params <- function(structure, params_df) {
+  if (inherits(params_df, "param_matrix") || is.matrix(params_df)) {
+    n_acc <- length(structure$prep$accumulators %||% list())
+    if (n_acc <= 0L || nrow(params_df) %% n_acc != 0L) {
+      stop(
+        "response_probabilities() expects a rectangular param_matrix; use a row-form parameter data frame for prepared-row-aligned inputs",
+        call. = FALSE
+      )
+    }
+    params_df <- .param_matrix_to_rows(structure, params_df)
+  } else if (is.data.frame(params_df)) {
+    params_df <- as.data.frame(params_df, stringsAsFactors = FALSE)
+  } else {
+    stop("params_df must be a param_matrix, matrix, or data frame", call. = FALSE)
+  }
+
+  if (!"trial" %in% names(params_df)) {
+    params_df$trial <- 1L
+  }
+  if ("component" %in% names(params_df)) {
+    params_df$component <- as.character(params_df$component)
+  }
+  params_df
+}
+
+.response_param_accumulator_ids <- function(structure, rows_df) {
+  acc_ids <- names(structure$prep$accumulators %||% list())
+  if ("accumulator_index" %in% names(rows_df)) {
+    idx <- as.integer(rows_df$accumulator_index)
+  } else if ("accumulator" %in% names(rows_df)) {
+    acc <- rows_df$accumulator
+    if (is.numeric(acc) || is.integer(acc)) {
+      idx <- as.integer(acc)
+    } else {
+      return(as.character(acc))
+    }
+  } else {
+    stop(
+      "response_probabilities() parameter rows must include accumulator information",
+      call. = FALSE
+    )
+  }
+  if (anyNA(idx) || any(idx < 1L) || any(idx > length(acc_ids))) {
+    stop(
+      "response_probabilities() parameter rows use invalid accumulator indices",
+      call. = FALSE
+    )
+  }
+  acc_ids[idx]
+}
+
+.align_response_probability_rows <- function(structure,
+                                             source_rows,
+                                             prepared_rows,
+                                             component) {
+  rows_df <- .likelihood_component_rows(source_rows, component)
+  source_acc <- .response_param_accumulator_ids(structure, rows_df)
+  query_acc <- as.character(prepared_rows$accumulator)
+  match_idx <- match(query_acc, source_acc)
+  if (anyNA(match_idx)) {
+    stop(
+      sprintf(
+        "response_probabilities() could not align parameter rows for component '%s'",
+        component %||% "__default__"
+      ),
+      call. = FALSE
+    )
+  }
+  rows_df[match_idx, , drop = FALSE]
+}
+
+#' Evaluate marginal response probabilities
+#'
+#' @param structure Finalized model structure.
+#' @param params_df A parameter data frame or rectangular parameter matrix.
+#' @param include_na If `TRUE`, include residual mass as `"NA"`.
+#' @param ... Unused; for S3 compatibility.
+#' @export
+response_probabilities <- function(structure, params_df, include_na = TRUE, ...) {
+  UseMethod("response_probabilities")
+}
+
+#' @rdname response_probabilities
+#' @export
+response_probabilities.model_structure <- function(structure,
+                                                   params_df,
+                                                   include_na = TRUE,
+                                                   ...) {
+  if (is.null(params_df) || NROW(params_df) == 0L) {
+    stop("Parameter data frame must contain at least one row", call. = FALSE)
+  }
+
+  prep_info <- .prepare_likelihood_prep(structure)
+  structure <- prep_info$structure
+  params_rows <- .coerce_response_probability_params(structure, params_df)
+  params_by_trial <- .likelihood_params_by_trial(params_rows)
+  if (length(params_by_trial) == 0L) {
+    stop("Parameter data frame must contain at least one row", call. = FALSE)
+  }
+
+  component_ids <- structure$components$component_id %||% "__default__"
+  observed_labels_by_component <- .observed_outcome_allowed_components(prep_info$prep)
+  context <- .make_context_structure(structure, prep = prep_info$prep)
+
+  query_rows <- list()
+  query_meta <- list()
+  query_trial_id <- 1L
+  trial_keys <- names(params_by_trial)
+  trial_probs <- setNames(vector("list", length(trial_keys)), trial_keys)
+
+  for (trial_key in trial_keys) {
+    source_rows <- as.data.frame(params_by_trial[[trial_key]])
+    source_trial_id <- source_rows$trial[[1L]] %||% NA_integer_
+    comps <- component_ids
+    if ("component" %in% names(source_rows)) {
+      listed <- unique(source_rows$component)
+      listed <- listed[!is.na(listed)]
+      if (length(listed) > 0L) {
+        comps <- intersect(component_ids, listed)
+      }
+    }
+    if (length(comps) == 0L) {
+      comps <- component_ids
+    }
+
+    weights <- .likelihood_component_weights(
+      structure,
+      source_trial_id,
+      comps,
+      structure$components$weight,
+      trial_rows = source_rows
+    )
+
+    for (idx in seq_along(comps)) {
+      if (!(weights[[idx]] > 0)) {
+        next
+      }
+      comp_id <- comps[[idx]]
+      labels <- observed_labels_by_component[[comp_id]] %||% character(0)
+      if (length(labels) == 0L) {
+        next
+      }
+      for (label in labels) {
+        query_rows[[query_trial_id]] <- data.frame(
+          trial = query_trial_id,
+          component = comp_id,
+          R = label,
+          rt = 1,
+          stringsAsFactors = FALSE
+        )
+        query_meta[[query_trial_id]] <- list(
+          source_trial = trial_key,
+          component = comp_id,
+          label = label,
+          component_weight = weights[[idx]]
+        )
+        query_trial_id <- query_trial_id + 1L
+      }
+    }
+  }
+
+  query_prob <- numeric(0)
+  if (length(query_rows) > 0L) {
+    query_df <- do.call(rbind, query_rows)
+    prepared <- prepare_data(structure, query_df, prep = prep_info$prep)
+    aligned_rows <- vector("list", length(query_meta))
+    for (idx in seq_along(query_meta)) {
+      meta <- query_meta[[idx]]
+      prepared_rows <- prepared[prepared$trial == idx, , drop = FALSE]
+      source_rows <- as.data.frame(params_by_trial[[meta$source_trial]])
+      aligned <- .align_response_probability_rows(
+        structure,
+        source_rows,
+        prepared_rows,
+        meta$component
+      )
+      aligned$trial <- idx
+      aligned_rows[[idx]] <- aligned
+    }
+    param_mat <- .params_df_to_matrix(do.call(rbind, aligned_rows))
+    param_mat <- .canonicalize_loglik_param_matrix(
+      param_mat,
+      context$required_p_slots
+    )
+    query_prob <- as.numeric(.probability_context(
+      context$cpp$native,
+      attr(prepared, "cpp_layout", exact = TRUE),
+      param_mat,
+      prepared
+    )$probability)
+  }
+
+  for (trial_key in trial_keys) {
+    trial_probs[[trial_key]] <- numeric(0)
+  }
+  if (length(query_meta) > 0L) {
+    for (idx in seq_along(query_meta)) {
+      meta <- query_meta[[idx]]
+      current <- trial_probs[[meta$source_trial]]
+      value <- meta$component_weight * query_prob[[idx]]
+      label <- meta$label
+      existing <- unname(current[label])
+      if (length(existing) == 0L || is.na(existing)) {
+        existing <- 0.0
+      }
+      current[label] <- existing + value
+      trial_probs[[meta$source_trial]] <- current
+    }
+  }
+
+  for (trial_key in trial_keys) {
+    current <- trial_probs[[trial_key]]
+    if (include_na) {
+      residual <- 1.0 - sum(current)
+      if (!is.finite(residual)) {
+        residual <- 0.0
+      }
+      if (residual < 0) {
+        residual <- 0.0
+      }
+      if (residual > .Machine$double.eps) {
+        existing <- unname(current["NA"])
+        if (length(existing) == 0L || is.na(existing)) {
+          existing <- 0.0
+        }
+        current["NA"] <- existing + residual
+      }
+    } else {
+      current <- current[setdiff(names(current), "NA")]
+    }
+    trial_probs[[trial_key]] <- current
+  }
+
+  labels <- Reduce(union, lapply(trial_probs, names), init = character(0))
+  result <- setNames(numeric(length(labels)), labels)
+  for (trial_key in trial_keys) {
+    current <- trial_probs[[trial_key]]
+    if (length(current) == 0L) {
+      next
+    }
+    result[names(current)] <- result[names(current)] +
+      current / length(trial_keys)
+  }
+  result
+}
+
+#' @rdname response_probabilities
+#' @export
+response_probabilities.default <- function(structure,
+                                           params_df,
+                                           include_na = TRUE,
+                                           ...) {
+  stop(
+    "response_probabilities() expects a finalized model structure",
+    call. = FALSE
+  )
 }
 
 #' Evaluate the log-likelihood of behavioral data

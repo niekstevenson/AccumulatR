@@ -159,10 +159,12 @@ sim_sampled_with_component <- simulate(
 table(sim_sampled_with_component$component)
 ```
 
-For fitting, we usually work with the observed data only.
+For fixed mixtures, observed `R`/`rt` is enough. For sampled mixtures, the
+current likelihood code still needs the per-trial component label, so we keep
+that column here.
 
 ```{r}
-data_sampled <- sim_sampled[, c("trial", "R", "rt")]
+data_sampled <- sim_sampled_with_component[, c("trial", "component", "R", "rt")]
 
 prepared_sampled <- prepare_data(model_sampled, data_sampled)
 ctx_sampled <- make_context(model_sampled)
@@ -221,6 +223,7 @@ target <- c(p_fast = true_params_sampled[["p_fast"]])
 data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params))
 ```
 
-Start with fixed components when trial type is known. Use sampled mixtures
-when trial type is unobserved and the goal is to estimate how often each
-processing mode occurs.
+Start with fixed components when trial type is known. The current
+sampled-mixture likelihood implementation still expects the component column
+during fitting, so this example estimates the sampled weight with that
+component assignment retained.

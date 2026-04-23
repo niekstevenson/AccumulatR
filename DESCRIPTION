@@ -28,7 +28,7 @@ Suggests:
     testthat (>= 3.0.0),
     DiagrammeR
 VignetteBuilder: knitr
-LinkingTo: Rcpp, BH
+LinkingTo: Rcpp
 SystemRequirements: C++17
 NeedsCompilation: yes
 LazyData: false

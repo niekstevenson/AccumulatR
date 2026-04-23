@@ -10,5 +10,9 @@
 ^\.github$
 ^\.vscode/
 ^AccumulatR_logo\.png$
-^src/.*\\.o$
-^src/.*\\.(so|dll|dylib)$
+^src/.*\.o$
+^src/.*\.(so|dll|dylib)$
+^prep_context\.md$
+^runtime_oracle\.md$
+^tie\.md$
+^validation/

@@ -187,6 +187,100 @@ inline bool identity_trials_are_all_finite(
   return true;
 }
 
+inline Rcpp::List evaluate_outcome_queries_cached(
+    const std::vector<ComponentObservationPlan> &component_plans_by_code,
+    const std::vector<semantic::Index> &direct_variant_index_by_component_code,
+    const std::vector<VariantPlan> &direct_plans,
+    const std::vector<semantic::Index> &exact_variant_index_by_component_code,
+    const std::vector<ExactVariantPlan> &exact_plans,
+    const PreparedTrialLayout &layout,
+    SEXP paramsSEXP,
+    SEXP dataSEXP) {
+  Rcpp::DataFrame data(dataSEXP);
+  const auto table = read_prepared_data_view(data);
+  const auto label = Rcpp::as<Rcpp::IntegerVector>(data["R"]);
+
+  const auto n_trials = layout.spans.size();
+  Rcpp::NumericVector probability(n_trials, 0.0);
+  std::vector<ObservedRecord> records;
+
+  for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
+    const auto row = static_cast<R_xlen_t>(layout.spans[trial_index].start_row);
+    if (integer_cell_is_na(table.component, row) || integer_cell_is_na(label, row)) {
+      continue;
+    }
+
+    const auto component_code =
+        static_cast<semantic::Index>(table.component[row]);
+    if (component_code <= 0 ||
+        component_code >=
+            static_cast<semantic::Index>(component_plans_by_code.size())) {
+      continue;
+    }
+
+    const auto &component_plan =
+        component_plans_by_code[static_cast<std::size_t>(component_code)];
+    if (!component_plan.present) {
+      continue;
+    }
+
+    const auto variant_index = resolve_variant_index_by_component_code(
+        component_code,
+        component_plan.semantic_backend,
+        direct_variant_index_by_component_code,
+        exact_variant_index_by_component_code);
+    if (variant_index == semantic::kInvalidIndex) {
+      continue;
+    }
+
+    const auto observed_code =
+        static_cast<std::size_t>(static_cast<semantic::Index>(label[row]));
+    const auto append_records =
+        [&](const std::vector<ObservedBranch> &branches) {
+          for (const auto &branch : branches) {
+            records.push_back(ObservedRecord{
+                static_cast<semantic::Index>(trial_index),
+                variant_index,
+                component_plan.semantic_backend,
+                branch.semantic_code,
+                NA_REAL,
+                branch.weight});
+          }
+        };
+
+    if (observed_code < component_plan.keep_by_code.size()) {
+      append_records(component_plan.keep_by_code[observed_code]);
+    }
+    if (observed_code < component_plan.missing_rt_by_code.size()) {
+      append_records(component_plan.missing_rt_by_code[observed_code]);
+    }
+  }
+
+  if (!records.empty()) {
+    const auto donor_prob = evaluate_probability_records(
+        direct_plans,
+        exact_plans,
+        layout,
+        paramsSEXP,
+        records);
+    std::size_t i = 0;
+    while (i < records.size()) {
+      const auto trial_index = records[i].trial_index;
+      double total = 0.0;
+      while (i < records.size() && records[i].trial_index == trial_index) {
+        total += records[i].weight * donor_prob[static_cast<R_xlen_t>(i)];
+        ++i;
+      }
+      probability[static_cast<R_xlen_t>(trial_index)] =
+          std::isfinite(total) && total > 0.0 ? total : 0.0;
+    }
+  }
+
+  return Rcpp::List::create(
+      Rcpp::Named("probability") = probability,
+      Rcpp::Named("n_trials") = static_cast<int>(n_trials));
+}
+
 inline SEXP evaluate_identity_trials_with_missing_all(
     const std::vector<ComponentObservationPlan> &component_plans_by_code,
     const std::vector<semantic::Index> &direct_variant_index_by_component_code,

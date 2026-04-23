@@ -1,6 +1,4 @@
 // [[Rcpp::depends(Rcpp)]]
-// [[Rcpp::plugins(cpp17)]]
-
 #include <Rcpp.h>
 
 #include "eval/likelihood_context.hpp"
@@ -55,4 +53,24 @@ SEXP semantic_loglik_context_cpp(SEXP contextSEXP,
       paramsSEXP,
       dataSEXP,
       min_ll);
+}
+
+// [[Rcpp::export]]
+SEXP semantic_probability_context_cpp(SEXP contextSEXP,
+                                      SEXP layoutSEXP,
+                                      SEXP paramsSEXP,
+                                      SEXP dataSEXP) {
+  const auto &ctx =
+      accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
+  const auto &layout =
+      accumulatr::eval::detail::trial_layout_from_xptr(layoutSEXP);
+  return accumulatr::eval::detail::evaluate_outcome_queries_cached(
+      ctx.observed_plans_by_component_code,
+      ctx.direct_variant_index_by_component_code,
+      ctx.direct_plans,
+      ctx.exact_variant_index_by_component_code,
+      ctx.exact_plans,
+      layout,
+      paramsSEXP,
+      dataSEXP);
 }

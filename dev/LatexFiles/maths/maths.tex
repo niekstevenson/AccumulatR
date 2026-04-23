@@ -1,0 +1,482 @@
+\documentclass[11pt]{article}
+\usepackage{amsmath,amssymb}
+\usepackage[hidelinks]{hyperref}
+
+\title{Mathematical Background for \texttt{AccumulatR}}
+\author{Niek Stevenson}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This note gives a standalone mathematical description of the framework
+implemented in \texttt{AccumulatR}. The package is built from a small number of
+objects: leaf-level completion times, threshold pools, logical outcome rules,
+timing modifiers such as chained onsets and triggers, and an observation layer
+for mixtures, remapped labels, and ranked responses. The aim here is to keep
+the notation minimal and to build the full model in layers, starting from a
+simple race and then adding the special cases that the package supports.
+\end{abstract}
+
+\section{Overview}
+
+The framework can be read in four layers.
+
+\begin{enumerate}
+  \item A \emph{leaf} is a single latent finishing-time process.
+  \item A \emph{source} is either a leaf or a threshold pool built from other
+  sources.
+  \item An \emph{outcome rule} says when a response should count as having
+  happened. Rules are built from sources with helpers such as
+  \texttt{first\_of()}, \texttt{all\_of()}, \texttt{none\_of()}, and
+  \texttt{inhibit()}.
+  \item An \emph{observation model} turns latent outcome rules into the data we
+  actually record: one winner, several ranked winners, a mixture over latent
+  components, or relabelled observed responses.
+\end{enumerate}
+
+The important point is that the package does not need a different likelihood
+formula for every named model. It always starts from leaf completion times and
+then composes them.
+
+\section{Leaf Times}
+
+Let $a$ index leaves. Each leaf has a completion time $T_a$ and corresponding
+distribution functions
+\[
+F_a(t) = \Pr(T_a \le t), \qquad
+f_a(t) = \frac{d}{dt} F_a(t), \qquad
+S_a(t) = 1 - F_a(t).
+\]
+We use the same notation for any other object in the model: once a pool or an
+outcome rule has a completion time, it also has $F$, $f$, and $S$.
+
+At the leaf level, \texttt{AccumulatR} only needs a valid density--CDF pair.
+The current implementation supplies the families
+\[
+\texttt{lognormal}, \quad \texttt{gamma}, \quad \texttt{exgauss}, \quad
+\texttt{LBA}, \quad \texttt{RDM}.
+\]
+Everything else in the framework is distribution-agnostic.
+
+\paragraph{Absolute onset.}
+If a leaf has an absolute onset $d_a \ge 0$ and a baseline finishing time
+$T_a^\star$, then
+\[
+T_a = d_a + T_a^\star.
+\]
+Equivalently,
+\[
+F_a(t) = F_a^\star(t - d_a), \qquad
+f_a(t) = f_a^\star(t - d_a),
+\]
+with both terms equal to $0$ for $t \le d_a$.
+
+\section{Pools}
+
+A pool $P$ has a member set $M(P)$ and a threshold $k_P$. It finishes when the
+$k_P$th member finishes. Hence
+\[
+T_P = \text{the $k_P$th order statistic of } \{T_m : m \in M(P)\}.
+\]
+
+The simplest description of the pool CDF is
+\begin{equation}
+F_P(t) = \Pr\!\left( \sum_{m \in M(P)} \mathbf{1}\{T_m \le t\} \ge k_P \right).
+\label{eq:pool-cdf}
+\end{equation}
+For heterogeneous independent members, the density is
+\begin{equation}
+f_P(t) =
+\sum_{j \in M(P)} f_j(t)
+\sum_{\substack{A \subseteq M(P)\setminus\{j\} \\ |A| = k_P - 1}}
+\prod_{a \in A} F_a(t)
+\prod_{b \in M(P)\setminus(A\cup\{j\})} S_b(t).
+\label{eq:pool-pdf}
+\end{equation}
+
+Three special cases matter often:
+\begin{itemize}
+  \item $k_P = 1$: the pool is a \emph{first finisher}.
+  \item $k_P = |M(P)|$: the pool is a \emph{last finisher}.
+  \item $|M(P)| = 1$: the pool is just an alias for one source.
+\end{itemize}
+
+Pools can be nested. Once the member channels of a source are known, the same
+definitions apply whether the members are leaves or other pools.
+
+\section{Outcome Rules}
+
+An outcome rule is an expression built from sources. For any rule $E$, let
+$T_E$ be the time at which the rule first becomes true, with distribution
+functions $F_E$, $f_E$, and $S_E$.
+
+\subsection{Direct Event Rules}
+
+If the rule is just a source $x$, then
+\[
+T_E = T_x, \qquad F_E = F_x, \qquad f_E = f_x.
+\]
+This is the usual simple race-model case.
+
+\subsection{\texttt{first\_of()}}
+
+If
+\[
+E = \texttt{first\_of}(E_1,\dots,E_m),
+\]
+then the rule becomes true when the first child becomes true, so
+\[
+T_E = \min(T_{E_1},\dots,T_{E_m}).
+\]
+Hence
+\begin{equation}
+F_E(t) = 1 - \prod_{r=1}^m S_{E_r}(t),
+\qquad
+f_E(t) = \sum_{r=1}^m f_{E_r}(t)\prod_{q \ne r} S_{E_q}(t).
+\label{eq:first-of}
+\end{equation}
+
+\subsection{\texttt{all\_of()}}
+
+If
+\[
+E = \texttt{all\_of}(E_1,\dots,E_m),
+\]
+then the rule becomes true when the last required child becomes true, so
+\[
+T_E = \max(T_{E_1},\dots,T_{E_m}).
+\]
+Hence
+\begin{equation}
+F_E(t) = \prod_{r=1}^m F_{E_r}(t),
+\qquad
+f_E(t) = \sum_{r=1}^m f_{E_r}(t)\prod_{q \ne r} F_{E_q}(t).
+\label{eq:all-of}
+\end{equation}
+
+\subsection{\texttt{none\_of()}}
+
+\texttt{none\_of()} is best read as an \emph{absence condition}. If a rule
+requires \texttt{none\_of(B)}, then by time $t$ the relevant quantity is
+\[
+\Pr(B \text{ has not happened by } t) = S_B(t).
+\]
+For example, if a response is defined as
+\[
+\texttt{all\_of}(A,\texttt{none\_of}(B)),
+\]
+then the rule holds by time $t$ with probability $F_A(t)S_B(t)$.
+
+So \texttt{none\_of()} does not create a new race winner. It contributes a
+survival factor.
+
+\subsection{\texttt{inhibit()}}
+
+The guard rule is the package's way to write a stop-like blocker. Let
+\[
+G = \texttt{inhibit}(A, B; U_1,\dots,U_m),
+\]
+where $A$ is the reference event, $B$ is the blocker, and $U_1,\dots,U_m$ are
+optional \texttt{unless} events that can neutralize the blocker.
+
+Define the guard-survival factor
+\begin{equation}
+H_G(t) =
+1 -
+\int_0^t
+f_B(u)\prod_{r=1}^m S_{U_r}(u)\,du.
+\label{eq:guard-survival}
+\end{equation}
+This is the probability that by time $t$ the blocker has \emph{not} occurred
+at a time when all rescue events were still absent.
+
+The guarded rule then has density
+\begin{equation}
+f_G(t) = f_A(t)\,H_G(t),
+\qquad
+F_G(t) = \int_0^t f_G(u)\,du.
+\label{eq:guard-density}
+\end{equation}
+
+The common special case has no \texttt{unless} terms. Then
+\[
+H_G(t) = S_B(t), \qquad f_G(t) = f_A(t)S_B(t).
+\]
+This is the standard ``go finishes at $t$ and stop has not finished yet''
+construction.
+
+\section{From Outcome Rules to Trial Likelihood}
+
+Let the model define outcome rules $R_1,\dots,R_J$. For an observed response
+$r$ at time $t$, the fundamental quantity is
+\begin{equation}
+\ell_r(t) =
+\frac{d}{dt}
+\Pr\!\left(
+T_{R_r} \le t,\;
+T_{R_j} > t \text{ for all } j \ne r
+\right).
+\label{eq:general-win}
+\end{equation}
+
+\subsection{Simple disjoint races}
+
+If the outcome rules are disjoint, Equation~\eqref{eq:general-win} reduces to
+the familiar race-model formula
+\begin{equation}
+\ell_r(t) = f_{R_r}(t)\prod_{j \ne r} S_{R_j}(t).
+\label{eq:simple-race}
+\end{equation}
+
+This is exactly the likelihood for the usual two-choice race, for a pooled
+response against a competitor, or for any other case where the outcome rules do
+not overlap.
+
+\subsection{Overlapping outcome rules}
+
+\texttt{AccumulatR} also allows outcomes whose definitions overlap. In that
+case the correct object is not a hand-made tie-breaking rule. It is an
+inclusion--exclusion calculation over overlapping outcome events.
+
+Let $\mathcal{C}_r = \{1,\dots,J\}\setminus\{r\}$ be the competitor set for
+outcome $r$. Then
+\begin{equation}
+\ell_r(t) =
+\sum_{A \subseteq \mathcal{C}_r}
+(-1)^{|A|}
+f_{r \wedge A}(t),
+\label{eq:inclusion-exclusion}
+\end{equation}
+where $f_{r \wedge A}(t)$ is the density of the conjunction
+\[
+R_r \land \bigwedge_{j \in A} R_j
+\]
+becoming true at time $t$.
+
+This is the mathematical core of overlap handling in the exact backend. Under
+continuous-time leaf distributions, exact equal-time ties have probability zero;
+the real issue is overlapping \emph{definitions}, and that is what
+Equation~\eqref{eq:inclusion-exclusion} resolves.
+
+\paragraph{No-response mass.}
+Some models leave positive probability on ``no observed response'', for example
+because a trigger fails. Before any relabelling or guessing, that probability is
+\begin{equation}
+p_{\mathrm{none}} =
+1 - \sum_{r=1}^J \int_0^\infty \ell_r(t)\,dt.
+\label{eq:no-response}
+\end{equation}
+
+\section{Timing Modifiers}
+
+\subsection{Chained onsets}
+
+If a leaf $a$ starts only after another source $u$ has finished, with an
+additional lag $\delta \ge 0$, then
+\[
+T_a = T_u + \delta + T_a^\star,
+\]
+where $T_a^\star$ is the leaf's own post-start finishing time.
+
+The resulting density is a convolution:
+\begin{equation}
+f_a(t) =
+\int_0^{t-\delta}
+f_u(s)\,f_a^\star(t-\delta-s)\,ds.
+\label{eq:after-density}
+\end{equation}
+Likewise,
+\begin{equation}
+F_a(t) =
+\int_0^\infty
+F_a^\star(t-\delta-s)\,f_u(s)\,ds.
+\label{eq:after-cdf}
+\end{equation}
+
+If the onset source $u$ is itself a pool, then $f_u$ and $F_u$ are the pool
+channels from Equations~\eqref{eq:pool-cdf}--\eqref{eq:pool-pdf}.
+
+\subsection{Triggers}
+
+Triggers are start indicators. They are easiest to write with Bernoulli
+variables.
+
+\paragraph{Independent trigger.}
+If leaf $a$ has trigger success probability $1-q_a$, let
+\[
+Z_a \sim \mathrm{Bernoulli}(1-q_a),
+\]
+and set $T_a = \infty$ whenever $Z_a = 0$. Then
+\begin{equation}
+F_a(t) = (1-q_a)F_a^\dagger(t),
+\qquad
+f_a(t) = (1-q_a)f_a^\dagger(t),
+\label{eq:ind-trigger}
+\end{equation}
+where $(F_a^\dagger, f_a^\dagger)$ are the channels the leaf would have had
+without trigger failure.
+
+\paragraph{Shared trigger.}
+If a group of leaves shares one trigger, then one Bernoulli variable $Z_g$
+controls all of them. Conditional on $Z_g = 1$, all members are available.
+Conditional on $Z_g = 0$, none of them start. The trial likelihood is then an
+average over trigger states:
+\begin{equation}
+L = \sum_z \Pr(Z=z)\,L(z).
+\label{eq:shared-trigger}
+\end{equation}
+This is the only place where the package deliberately introduces joint start
+dependence across several leaves.
+
+\section{Observation Layer}
+
+\subsection{Mixture components}
+
+A component $c$ defines a variant model with active leaf set $A_c$ and weight
+$\pi_c$. If the component is observed on a trial, the contribution is simply
+that component's likelihood:
+\[
+L = L_c.
+\]
+If the component is latent, the trial contribution is
+\begin{equation}
+L = \sum_c \pi_c L_c,
+\qquad
+\sum_c \pi_c = 1.
+\label{eq:mixture}
+\end{equation}
+
+In sampled mixtures one component is taken as the reference component, and its
+weight is whatever mass remains after the other weights are assigned.
+
+\subsection{Outcome remapping and guessing}
+
+The semantic outcome generated by the race need not be the same as the observed
+label. Let $M_{yr}$ be the probability that semantic outcome $r$ is observed as
+label $y$. Then
+\begin{equation}
+\ell_y(t) = \sum_r M_{yr}\,\ell_r(t).
+\label{eq:remap}
+\end{equation}
+
+This covers simple many-to-one relabelling and probabilistic guessing rules.
+If the observed label is kept but the response time is discarded, the
+contribution becomes the integrated mass
+\begin{equation}
+p_y = \int_0^\infty \ell_y(t)\,dt.
+\label{eq:missing-rt}
+\end{equation}
+
+\subsection{Ranked observations}
+
+If the model records the first $K$ outcomes on a trial, the data are
+\[
+(r_1,t_1),\dots,(r_K,t_K),
+\qquad
+0 < t_1 < \cdots < t_K.
+\]
+
+In the current implementation, ranked observation is intentionally narrower than
+the full expression language. It is supported for direct event outcomes with
+the exact backend, and the declared outcomes must have disjoint deterministic
+supports.
+
+Under those conditions, the ranked likelihood is the joint density of the
+ordered completion event
+\begin{equation}
+L_{\mathrm{rank}} =
+\frac{
+\Pr\!\left(
+T_{r_1}\in dt_1,\dots,T_{r_K}\in dt_K,\;
+T_j > t_K \text{ for all } j \notin \{r_1,\dots,r_K\}
+\right)
+}{
+\prod_{m=1}^K dt_m
+}.
+\label{eq:rank-general}
+\end{equation}
+
+For independent direct outcomes this simplifies to
+\begin{equation}
+L_{\mathrm{rank}} =
+\left[\prod_{m=1}^K f_{r_m}(t_m)\right]
+\left[\prod_{j \notin \{r_1,\dots,r_K\}} S_j(t_K)\right].
+\label{eq:rank-simple}
+\end{equation}
+
+The exact evaluator computes this sequentially by removing already used
+outcomes after each observed rank.
+
+\section{Special Cases}
+
+The general framework above contains the common models used in the package.
+
+\paragraph{Simple two-choice race.}
+If $R_1$ and $R_2$ are direct outcomes from disjoint leaves,
+\[
+\ell_{R_1}(t) = f_{R_1}(t)S_{R_2}(t),
+\qquad
+\ell_{R_2}(t) = f_{R_2}(t)S_{R_1}(t).
+\]
+
+\paragraph{$2$-of-$3$ pooled response.}
+If response $A$ is a $2$-of-$3$ pool and response $B$ is a single competing
+leaf, first compute $(F_A,f_A)$ from Equations~\eqref{eq:pool-cdf} and
+\eqref{eq:pool-pdf}, then use
+\[
+\ell_A(t) = f_A(t)S_B(t), \qquad \ell_B(t) = f_B(t)S_A(t),
+\]
+provided the two outcomes are disjoint.
+
+\paragraph{Stop-like inhibition.}
+If response \texttt{go} is written as \texttt{inhibit(go, stop)}, then
+\[
+\ell_{\mathrm{go}}(t) = f_{\mathrm{go}}(t)S_{\mathrm{stop}}(t)
+\prod_{j \ne \mathrm{go}} S_{R_j}(t)
+\]
+in the simple disjoint case.
+
+\paragraph{Staged processing.}
+If leaf $C$ starts only after $B$ has finished, then the response-time
+distribution for $C$ is the convolution in
+Equation~\eqref{eq:after-density}.
+
+\paragraph{Latent fast/slow mixture.}
+If trials arise from a fast component and a slow component with weight $\pi$,
+then
+\[
+L = \pi L_{\mathrm{fast}} + (1-\pi)L_{\mathrm{slow}}.
+\]
+
+\section{What the Package Currently Supports}
+
+The mathematics above matches the current code path in \texttt{src/}. The
+implemented framework includes
+\begin{itemize}
+  \item leaf distributions from the five supported families,
+  \item threshold pools, including nested pools,
+  \item outcome rules built from the logical helpers \texttt{first\_of},
+  \texttt{all\_of}, \texttt{none\_of}, and \texttt{inhibit},
+  \item absolute onsets and chained onsets via \texttt{after()},
+  \item independent and shared triggers,
+  \item fixed and sampled mixtures,
+  \item observed-label remapping and guessing,
+  \item top-$K$ ranked readout subject to the restrictions stated above.
+\end{itemize}
+
+It does \emph{not} need separate mathematical theories for ``ranked models'',
+``mixture models'', ``guard models'', and so on. Those are all special cases of
+the same layered construction:
+\[
+\begin{aligned}
+\text{leaf times}
+&\longrightarrow \text{source times}
+\longrightarrow \text{outcome rules} \\
+&\longrightarrow \text{trial likelihood}
+\longrightarrow \text{observation model}.
+\end{aligned}
+\]
+
+\end{document}

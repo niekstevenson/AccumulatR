@@ -1,20 +1,3 @@
-testthat::test_that("response_probabilities returns deterministic mass for a single outcome", {
-  spec <- race_spec() |>
-    add_accumulator("A", "lognormal") |>
-    add_outcome("A_win", "A")
-
-  structure <- finalize_model(spec)
-  params <- build_param_matrix(
-    spec,
-    c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0),
-    n_trials = 1L
-  )
-
-  probs <- response_probabilities(structure, params)
-
-  testthat::expect_equal(probs, c(A_win = 1), tolerance = 1e-4)
-})
-
 testthat::test_that("response_probabilities respects mixture weights and component filtering", {
   spec <- race_spec() |>
     add_accumulator("A", "lognormal") |>

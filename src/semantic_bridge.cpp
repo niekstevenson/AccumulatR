@@ -1,5 +1,6 @@
 // [[Rcpp::depends(Rcpp)]]
 #include <Rcpp.h>
+#include <R_ext/Rdynload.h>
 
 #include "eval/likelihood_context.hpp"
 #include "eval/observed_kernel.hpp"
@@ -72,6 +73,47 @@ SEXP semantic_loglik_context_cpp(SEXP contextSEXP,
             control);
   }
   return observed;
+}
+
+extern "C" {
+
+double accumulatr_cpp_loglik_ccallable(SEXP contextSEXP,
+                                       SEXP paramsSEXP,
+                                       SEXP dataSEXP,
+                                       SEXP okSEXP,
+                                       SEXP expandSEXP,
+                                       double min_ll) {
+  try {
+    SEXP layoutSEXP = Rf_getAttrib(dataSEXP, Rf_install("cpp_layout"));
+    if (layoutSEXP == R_NilValue) {
+      Rcpp::stop("prepared data are missing native layout metadata");
+    }
+    Rcpp::List observed = semantic_loglik_context_cpp(
+        contextSEXP,
+        layoutSEXP,
+        paramsSEXP,
+        dataSEXP,
+        okSEXP,
+        expandSEXP,
+        Rcpp::wrap(min_ll));
+    return Rcpp::as<double>(observed["total_loglik"]);
+  } catch (const std::exception &e) {
+    ::Rf_error("%s", e.what());
+  } catch (...) {
+    ::Rf_error("Unknown C++ exception in AccumulatR::cpp_loglik");
+  }
+  return NA_REAL;
+}
+
+} // extern "C"
+
+// [[Rcpp::init]]
+void accumulatr_register_ccallables(DllInfo *dll) {
+  (void)dll;
+  R_RegisterCCallable(
+      "AccumulatR",
+      "cpp_loglik",
+      reinterpret_cast<DL_FUNC>(accumulatr_cpp_loglik_ccallable));
 }
 
 // [[Rcpp::export]]

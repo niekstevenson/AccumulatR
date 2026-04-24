@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "direct_kernel.hpp"
-#include "exact_kernel.hpp"
+#include "exact_sequence.hpp"
 #include "observed_plan.hpp"
 #include "trial_data.hpp"
 

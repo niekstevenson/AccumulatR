@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -65,31 +64,6 @@ struct LoweredDirectModel {
 
 namespace detail {
 
-class SlotAllocator {
-public:
-  semantic::Index slot_for(const std::string &key) {
-    if (key.empty()) {
-      return semantic::kInvalidIndex;
-    }
-    const auto it = slot_by_key_.find(key);
-    if (it != slot_by_key_.end()) {
-      return it->second;
-    }
-    const auto slot = static_cast<semantic::Index>(keys_.size());
-    keys_.push_back(key);
-    slot_by_key_.emplace(key, slot);
-    return slot;
-  }
-
-  const std::vector<std::string> &keys() const noexcept {
-    return keys_;
-  }
-
-private:
-  std::unordered_map<std::string, semantic::Index> slot_by_key_;
-  std::vector<std::string> keys_;
-};
-
 inline bool variant_is_semantic_direct(const compile::CompiledVariant &variant) {
   return variant.semantic_backend == compile::BackendKind::Direct;
 }
@@ -136,31 +110,9 @@ inline void validate_direct_variant(const compile::CompiledVariant &variant) {
   }
 }
 
-template <typename T>
-Rcpp::IntegerVector as_integer_vector(const std::vector<T> &values) {
-  Rcpp::IntegerVector out(values.size());
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    out[static_cast<R_xlen_t>(i)] = static_cast<int>(values[i]);
-  }
-  return out;
-}
-
-inline Rcpp::NumericVector as_numeric_vector(const std::vector<double> &values) {
-  Rcpp::NumericVector out(values.size());
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    out[static_cast<R_xlen_t>(i)] = values[i];
-  }
-  return out;
-}
-
 inline Rcpp::List to_r_list(const DirectProgram &program) {
   return Rcpp::List::create(
-      Rcpp::Named("layout") = Rcpp::List::create(
-          Rcpp::Named("n_leaves") = program.layout.n_leaves,
-          Rcpp::Named("n_pools") = program.layout.n_pools,
-          Rcpp::Named("n_outcomes") = program.layout.n_outcomes,
-          Rcpp::Named("n_params") = program.layout.n_params,
-          Rcpp::Named("n_triggers") = program.layout.n_triggers),
+      Rcpp::Named("layout") = runtime_layout_to_r_list(program.layout),
       Rcpp::Named("leaf_dist_kind") = as_integer_vector(program.leaf_dist_kind),
       Rcpp::Named("onset_kind") = as_integer_vector(program.onset_kind),
       Rcpp::Named("onset_source_kind") =
@@ -194,15 +146,8 @@ inline Rcpp::List to_r_list(const DirectProgram &program) {
           as_integer_vector(program.outcome_source_kind),
       Rcpp::Named("observed_label_index") =
           as_integer_vector(program.observed_label_index),
-      Rcpp::Named("parameter_layout") = Rcpp::List::create(
-          Rcpp::Named("leaf_param_offsets") =
-              as_integer_vector(program.parameter_layout.leaf_param_offsets),
-          Rcpp::Named("leaf_param_slots") =
-              as_integer_vector(program.parameter_layout.leaf_param_slots),
-          Rcpp::Named("leaf_q_slots") =
-              as_integer_vector(program.parameter_layout.leaf_q_slots),
-          Rcpp::Named("leaf_t0_slots") =
-              as_integer_vector(program.parameter_layout.leaf_t0_slots)));
+      Rcpp::Named("parameter_layout") =
+          parameter_layout_to_r_list(program.parameter_layout));
 }
 
 } // namespace detail

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "exact_planner.hpp"
+#include "leaf_kernel.hpp"
 #include "quadrature.hpp"
 
 namespace accumulatr::eval {

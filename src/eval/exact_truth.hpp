@@ -1,6 +1,8 @@
 #pragma once
 
-#include "exact_forced_sources.hpp"
+#include "exact_oracle.hpp"
+#include "leaf_kernel.hpp"
+#include "quadrature.hpp"
 
 namespace accumulatr::eval {
 namespace detail {

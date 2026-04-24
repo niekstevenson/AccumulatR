@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <stdexcept>
@@ -12,7 +13,6 @@
 #include <utility>
 #include <vector>
 
-#include "direct_kernel.hpp"
 #include "../runtime/exact_program.hpp"
 
 namespace accumulatr::eval {

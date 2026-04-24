@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -87,119 +86,64 @@ inline void require_exact_variant(const compile::CompiledVariant &variant) {
   throw std::runtime_error(message);
 }
 
-template <typename T>
-Rcpp::IntegerVector as_integer_vector_exact(const std::vector<T> &values) {
-  Rcpp::IntegerVector out(values.size());
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    out[static_cast<R_xlen_t>(i)] = static_cast<int>(values[i]);
-  }
-  return out;
-}
-
-inline Rcpp::NumericVector as_numeric_vector_exact(
-    const std::vector<double> &values) {
-  Rcpp::NumericVector out(values.size());
-  for (std::size_t i = 0; i < values.size(); ++i) {
-    out[static_cast<R_xlen_t>(i)] = values[i];
-  }
-  return out;
-}
-
-class ExactSlotAllocator {
-public:
-  semantic::Index slot_for(const std::string &key) {
-    if (key.empty()) {
-      return semantic::kInvalidIndex;
-    }
-    const auto it = slot_by_key_.find(key);
-    if (it != slot_by_key_.end()) {
-      return it->second;
-    }
-    const auto slot = static_cast<semantic::Index>(keys_.size());
-    keys_.push_back(key);
-    slot_by_key_.emplace(key, slot);
-    return slot;
-  }
-
-  const std::vector<std::string> &keys() const noexcept {
-    return keys_;
-  }
-
-private:
-  std::unordered_map<std::string, semantic::Index> slot_by_key_;
-  std::vector<std::string> keys_;
-};
-
 inline Rcpp::List to_r_list(const ExactProgram &program) {
   return Rcpp::List::create(
-      Rcpp::Named("layout") = Rcpp::List::create(
-          Rcpp::Named("n_leaves") = program.layout.n_leaves,
-          Rcpp::Named("n_pools") = program.layout.n_pools,
-          Rcpp::Named("n_outcomes") = program.layout.n_outcomes,
-          Rcpp::Named("n_params") = program.layout.n_params,
-          Rcpp::Named("n_triggers") = program.layout.n_triggers),
+      Rcpp::Named("layout") = runtime_layout_to_r_list(program.layout),
       Rcpp::Named("leaf_dist_kind") =
-          as_integer_vector_exact(program.leaf_dist_kind),
-      Rcpp::Named("onset_kind") = as_integer_vector_exact(program.onset_kind),
+          as_integer_vector(program.leaf_dist_kind),
+      Rcpp::Named("onset_kind") = as_integer_vector(program.onset_kind),
       Rcpp::Named("onset_source_kind") =
-          as_integer_vector_exact(program.onset_source_kind),
+          as_integer_vector(program.onset_source_kind),
       Rcpp::Named("onset_source_index") =
-          as_integer_vector_exact(program.onset_source_index),
+          as_integer_vector(program.onset_source_index),
       Rcpp::Named("onset_source_ids") =
-          as_integer_vector_exact(program.onset_source_ids),
-      Rcpp::Named("onset_lag") = as_numeric_vector_exact(program.onset_lag),
+          as_integer_vector(program.onset_source_ids),
+      Rcpp::Named("onset_lag") = as_numeric_vector(program.onset_lag),
       Rcpp::Named("onset_abs_value") =
-          as_numeric_vector_exact(program.onset_abs_value),
+          as_numeric_vector(program.onset_abs_value),
       Rcpp::Named("leaf_trigger_index") =
-          as_integer_vector_exact(program.leaf_trigger_index),
+          as_integer_vector(program.leaf_trigger_index),
       Rcpp::Named("trigger_kind") =
-          as_integer_vector_exact(program.trigger_kind),
+          as_integer_vector(program.trigger_kind),
       Rcpp::Named("trigger_fixed_q") =
-          as_numeric_vector_exact(program.trigger_fixed_q),
+          as_numeric_vector(program.trigger_fixed_q),
       Rcpp::Named("trigger_has_fixed_q") =
-          as_integer_vector_exact(program.trigger_has_fixed_q),
+          as_integer_vector(program.trigger_has_fixed_q),
       Rcpp::Named("trigger_member_offsets") =
-          as_integer_vector_exact(program.trigger_member_offsets),
+          as_integer_vector(program.trigger_member_offsets),
       Rcpp::Named("trigger_member_indices") =
-          as_integer_vector_exact(program.trigger_member_indices),
-      Rcpp::Named("pool_k") = as_integer_vector_exact(program.pool_k),
+          as_integer_vector(program.trigger_member_indices),
+      Rcpp::Named("pool_k") = as_integer_vector(program.pool_k),
       Rcpp::Named("pool_member_offsets") =
-          as_integer_vector_exact(program.pool_member_offsets),
+          as_integer_vector(program.pool_member_offsets),
       Rcpp::Named("pool_member_indices") =
-          as_integer_vector_exact(program.pool_member_indices),
+          as_integer_vector(program.pool_member_indices),
       Rcpp::Named("pool_member_kind") =
-          as_integer_vector_exact(program.pool_member_kind),
+          as_integer_vector(program.pool_member_kind),
       Rcpp::Named("pool_member_source_ids") =
-          as_integer_vector_exact(program.pool_member_source_ids),
-      Rcpp::Named("expr_kind") = as_integer_vector_exact(program.expr_kind),
+          as_integer_vector(program.pool_member_source_ids),
+      Rcpp::Named("expr_kind") = as_integer_vector(program.expr_kind),
       Rcpp::Named("expr_arg_offsets") =
-          as_integer_vector_exact(program.expr_arg_offsets),
-      Rcpp::Named("expr_args") = as_integer_vector_exact(program.expr_args),
+          as_integer_vector(program.expr_arg_offsets),
+      Rcpp::Named("expr_args") = as_integer_vector(program.expr_args),
       Rcpp::Named("expr_ref_child") =
-          as_integer_vector_exact(program.expr_ref_child),
+          as_integer_vector(program.expr_ref_child),
       Rcpp::Named("expr_blocker_child") =
-          as_integer_vector_exact(program.expr_blocker_child),
+          as_integer_vector(program.expr_blocker_child),
       Rcpp::Named("expr_source_index") =
-          as_integer_vector_exact(program.expr_source_index),
+          as_integer_vector(program.expr_source_index),
       Rcpp::Named("expr_source_kind") =
-          as_integer_vector_exact(program.expr_source_kind),
+          as_integer_vector(program.expr_source_kind),
       Rcpp::Named("expr_source_ids") =
-          as_integer_vector_exact(program.expr_source_ids),
+          as_integer_vector(program.expr_source_ids),
       Rcpp::Named("expr_event_k") =
-          as_integer_vector_exact(program.expr_event_k),
+          as_integer_vector(program.expr_event_k),
       Rcpp::Named("outcome_expr_root") =
-          as_integer_vector_exact(program.outcome_expr_root),
+          as_integer_vector(program.outcome_expr_root),
       Rcpp::Named("observed_label_index") =
-          as_integer_vector_exact(program.observed_label_index),
-      Rcpp::Named("parameter_layout") = Rcpp::List::create(
-          Rcpp::Named("leaf_param_offsets") =
-              as_integer_vector_exact(program.parameter_layout.leaf_param_offsets),
-          Rcpp::Named("leaf_param_slots") =
-              as_integer_vector_exact(program.parameter_layout.leaf_param_slots),
-          Rcpp::Named("leaf_q_slots") =
-              as_integer_vector_exact(program.parameter_layout.leaf_q_slots),
-          Rcpp::Named("leaf_t0_slots") =
-              as_integer_vector_exact(program.parameter_layout.leaf_t0_slots)));
+          as_integer_vector(program.observed_label_index),
+      Rcpp::Named("parameter_layout") =
+          parameter_layout_to_r_list(program.parameter_layout));
 }
 
 } // namespace detail
@@ -238,7 +182,7 @@ inline LoweredExactVariant lower_exact_variant(
   program.parameter_layout.leaf_q_slots.reserve(model.leaves.size());
   program.parameter_layout.leaf_t0_slots.reserve(model.leaves.size());
 
-  detail::ExactSlotAllocator slots;
+  detail::SlotAllocator slots;
   program.parameter_layout.leaf_param_offsets.push_back(0);
   for (const auto &leaf : model.leaves) {
     const auto param_offset = static_cast<semantic::Index>(

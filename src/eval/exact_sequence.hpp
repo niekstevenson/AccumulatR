@@ -1,6 +1,7 @@
 #pragma once
 
-#include "exact_step.hpp"
+#include "direct_kernel.hpp"
+#include "exact_competitor_union.hpp"
 #include "trial_data.hpp"
 
 namespace accumulatr::eval {
@@ -92,7 +93,6 @@ inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
                                      const int first_param_row,
                                      const semantic::Index outcome_code,
                                      const double rt,
-                                     const PreparedTrialLayout *layout,
                                      const double min_ll) {
   struct ExactUnrankedTrialKernel {
     const ExactVariantPlan &plan;
@@ -116,8 +116,7 @@ inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
           initial_state(make_exact_sequence_state(plan_)),
           step_workspace(plan_) {}
 
-    double density(const double rt,
-                   const quadrature::FiniteBatch *step_batch = nullptr) {
+    double density(const double rt) {
       if (!std::isfinite(rt) || !(rt > 0.0)) {
         return 0.0;
       }
@@ -136,26 +135,22 @@ inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
             rt,
             nullptr,
             false,
-            step_batch,
             &step_workspace);
         total += trigger_state.weight * step.total_probability;
       }
       return std::isfinite(total) && total > 0.0 ? total : 0.0;
     }
 
-    double loglik(const double rt,
-                  const quadrature::FiniteBatch *step_batch,
-                  const double min_ll) {
-      const double total = density(rt, step_batch);
+    double loglik(const double rt, const double min_ll) {
+      const double total = density(rt);
       return total > 0.0 ? std::log(total) : min_ll;
     }
   };
 
   const auto target_idx =
       plan.outcome_index_by_code[static_cast<std::size_t>(outcome_code)];
-  const auto *step_batch = layout == nullptr ? nullptr : find_finite_batch(*layout, rt);
   ExactUnrankedTrialKernel kernel(plan, params, first_param_row, target_idx);
-  return kernel.loglik(rt, step_batch, min_ll);
+  return kernel.loglik(rt, min_ll);
 }
 
 inline double exact_ranked_sequence_probability(
@@ -167,7 +162,6 @@ inline double exact_ranked_sequence_probability(
     const std::size_t rank_idx,
     const ExactSequenceState &sequence_state,
     std::vector<std::uint8_t> *used_outcomes,
-    const PreparedTrialLayout *layout,
     ExactStepWorkspace *step_workspace) {
   if (rank_idx >= static_cast<std::size_t>(obs.rank_count)) {
     return 1.0;
@@ -190,8 +184,6 @@ inline double exact_ranked_sequence_probability(
       exact_trial_view_rt(obs, rank_idx),
       used_outcomes,
       true,
-      layout == nullptr ? nullptr
-                        : find_finite_batch(*layout, exact_trial_view_rt(obs, rank_idx)),
       step_workspace);
   double total = 0.0;
   for (const auto &branch : step.branches) {
@@ -205,7 +197,6 @@ inline double exact_ranked_sequence_probability(
         rank_idx + 1U,
         branch.next_state,
         used_outcomes,
-        layout,
         step_workspace);
     (*used_outcomes)[target_idx] = 0U;
     total += branch.probability * tail_prob;
@@ -217,7 +208,6 @@ inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
                                             const ParamView &params,
                                             const int first_param_row,
                                             const ExactTrialView &obs,
-                                            const PreparedTrialLayout *layout,
                                             const double min_ll) {
   if (obs.rank_count == 1) {
     return exact_loglik_for_trial(
@@ -226,7 +216,6 @@ inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
         first_param_row,
         exact_trial_view_outcome_code(obs, 0U),
         exact_trial_view_rt(obs, 0U),
-        layout,
         min_ll);
   }
 
@@ -249,7 +238,6 @@ inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
                  0U,
                  state,
                  &used_outcomes,
-                 layout,
                  &step_workspace);
   }
   if (!std::isfinite(total) || !(total > 0.0)) {
@@ -300,7 +288,6 @@ inline Rcpp::NumericVector evaluate_exact_loglik_queries_cached(
       out[static_cast<R_xlen_t>(i)] = min_ll;
       continue;
     }
-    const auto *step_batch = find_finite_batch(layout, query.rt);
     struct ExactUnrankedQueryKernel {
       const ExactVariantPlan &plan;
       const ParamView &params;
@@ -323,9 +310,7 @@ inline Rcpp::NumericVector evaluate_exact_loglik_queries_cached(
             initial_state(make_exact_sequence_state(plan_)),
             step_workspace(plan_) {}
 
-      double loglik(const double rt,
-                    const quadrature::FiniteBatch *step_batch,
-                    const double min_ll) {
+      double loglik(const double rt, const double min_ll) {
         if (!std::isfinite(rt) || !(rt > 0.0)) {
           return min_ll;
         }
@@ -344,14 +329,13 @@ inline Rcpp::NumericVector evaluate_exact_loglik_queries_cached(
               rt,
               nullptr,
               false,
-              step_batch,
               &step_workspace);
           total += trigger_state.weight * step.total_probability;
         }
         return std::isfinite(total) && total > 0.0 ? std::log(total) : min_ll;
       }
     } kernel(plan, params, first_param_row, target_idx);
-    out[static_cast<R_xlen_t>(i)] = kernel.loglik(query.rt, step_batch, min_ll);
+    out[static_cast<R_xlen_t>(i)] = kernel.loglik(query.rt, min_ll);
   }
   return out;
 }
@@ -423,7 +407,6 @@ inline Rcpp::NumericVector evaluate_exact_probability_queries_cached(
               rt,
               nullptr,
               false,
-              nullptr,
               &step_workspace);
           total += trigger_state.weight * step.total_probability;
         }
@@ -501,7 +484,6 @@ inline Rcpp::List evaluate_exact_outcome_probabilities_cached(
                 rt,
                 nullptr,
                 false,
-                nullptr,
                 &step_workspace);
             total += trigger_state.weight * step.total_probability;
           }
@@ -586,7 +568,6 @@ inline SEXP evaluate_exact_trials_cached(
         params,
         static_cast<int>(param_row),
         obs,
-        &layout,
         min_ll);
     param_row += leaf_count;
   }

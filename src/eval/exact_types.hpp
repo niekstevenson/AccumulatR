@@ -61,6 +61,17 @@ struct ExactSourceConstraint {
   ExactRelation relation{ExactRelation::Unknown};
 };
 
+struct ExactSourceOrderFact {
+  semantic::Index before_source_id{semantic::kInvalidIndex};
+  semantic::Index after_source_id{semantic::kInvalidIndex};
+};
+
+struct ExactGuardUpperBoundFact {
+  semantic::Index expr_id{semantic::kInvalidIndex};
+  semantic::Index ref_source_id{semantic::kInvalidIndex};
+  semantic::Index blocker_source_id{semantic::kInvalidIndex};
+};
+
 struct ExactRelationTemplate {
   std::vector<semantic::Index> source_ids;
   std::vector<ExactRelation> relations;
@@ -138,6 +149,7 @@ struct ExactTransitionScenario {
   ExactIndexSpan tail_expr_span{};
   std::vector<ExactScenarioFactor> factors;
   std::vector<ExactSourceConstraint> forced;
+  std::vector<ExactSourceOrderFact> source_order_facts;
   ExactRelationTemplate relation_template;
 };
 
@@ -206,6 +218,7 @@ struct ExactRuntimeTruthFormula {
 struct ExactRuntimeScenarioFormula {
   semantic::Index active_source_id{semantic::kInvalidIndex};
   ExactRelationTemplate relation_template;
+  std::vector<ExactSourceOrderFact> source_order_facts;
   bool has_readiness{false};
   ExactRuntimeTruthFormula readiness_cdf;
   ExactRuntimeTruthFormula readiness_density;

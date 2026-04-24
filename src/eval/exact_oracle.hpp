@@ -181,6 +181,153 @@ public:
     bool active_{false};
   };
 
+  class SourceUpperBoundOverlayGuard {
+  public:
+    SourceUpperBoundOverlayGuard(ExactOracleScratch *oracle,
+                                 const semantic::Index source_id,
+                                 const double time)
+        : oracle_(oracle), source_id_(source_id) {
+      if (oracle_ == nullptr || source_id == semantic::kInvalidIndex ||
+          !std::isfinite(time)) {
+        return;
+      }
+      previous_time_ = oracle_->set_source_upper_bound_overlay(source_id, time);
+      active_ = true;
+    }
+
+    SourceUpperBoundOverlayGuard(const SourceUpperBoundOverlayGuard &) = delete;
+    SourceUpperBoundOverlayGuard &operator=(
+        const SourceUpperBoundOverlayGuard &) = delete;
+
+    ~SourceUpperBoundOverlayGuard() {
+      if (oracle_ != nullptr && active_) {
+        oracle_->set_source_upper_bound_overlay(source_id_, previous_time_);
+      }
+    }
+
+  private:
+    ExactOracleScratch *oracle_{nullptr};
+    semantic::Index source_id_{semantic::kInvalidIndex};
+    double previous_time_{std::numeric_limits<double>::quiet_NaN()};
+    bool active_{false};
+  };
+
+  struct ExprUpperBoundOverlayState {
+    double time{std::numeric_limits<double>::quiet_NaN()};
+    double normalizer{std::numeric_limits<double>::quiet_NaN()};
+  };
+
+  class ExprUpperBoundOverlayGuard {
+  public:
+    ExprUpperBoundOverlayGuard(ExactOracleScratch *oracle,
+                               const semantic::Index expr_id,
+                               const double time,
+                               const double normalizer)
+        : oracle_(oracle), expr_id_(expr_id) {
+      if (oracle_ == nullptr || expr_id == semantic::kInvalidIndex ||
+          !std::isfinite(time) || !(normalizer > 0.0)) {
+        return;
+      }
+      previous_ =
+          oracle_->set_expr_upper_bound_overlay(expr_id, time, normalizer);
+      active_ = true;
+    }
+
+    ExprUpperBoundOverlayGuard(const ExprUpperBoundOverlayGuard &) = delete;
+    ExprUpperBoundOverlayGuard &operator=(
+        const ExprUpperBoundOverlayGuard &) = delete;
+
+    ~ExprUpperBoundOverlayGuard() {
+      if (oracle_ != nullptr && active_) {
+        oracle_->set_expr_upper_bound_overlay(
+            expr_id_, previous_.time, previous_.normalizer);
+      }
+    }
+
+  private:
+    ExactOracleScratch *oracle_{nullptr};
+    semantic::Index expr_id_{semantic::kInvalidIndex};
+    ExprUpperBoundOverlayState previous_{};
+    bool active_{false};
+  };
+
+  class SourceOrderOverlayGuard {
+  public:
+    SourceOrderOverlayGuard(ExactOracleScratch *oracle,
+                            const std::vector<ExactSourceOrderFact> &facts)
+        : oracle_(oracle) {
+      if (oracle_ == nullptr || facts.empty()) {
+        return;
+      }
+      previous_size_ = oracle_->source_order_overlays_.size();
+      for (const auto &fact : facts) {
+        if (fact.before_source_id == semantic::kInvalidIndex ||
+            fact.after_source_id == semantic::kInvalidIndex ||
+            fact.before_source_id == fact.after_source_id) {
+          continue;
+        }
+        oracle_->source_order_overlays_.push_back(fact);
+      }
+      active_ = oracle_->source_order_overlays_.size() != previous_size_;
+    }
+
+    SourceOrderOverlayGuard(const SourceOrderOverlayGuard &) = delete;
+    SourceOrderOverlayGuard &operator=(const SourceOrderOverlayGuard &) = delete;
+
+    ~SourceOrderOverlayGuard() {
+      if (oracle_ != nullptr && active_) {
+        oracle_->source_order_overlays_.resize(previous_size_);
+      }
+    }
+
+  private:
+    ExactOracleScratch *oracle_{nullptr};
+    std::size_t previous_size_{0U};
+    bool active_{false};
+  };
+
+  struct GuardUpperBoundOverlay {
+    semantic::Index ref_source_id{semantic::kInvalidIndex};
+    semantic::Index blocker_source_id{semantic::kInvalidIndex};
+    double time{std::numeric_limits<double>::quiet_NaN()};
+    double normalizer{0.0};
+  };
+
+  class GuardUpperBoundOverlayGuard {
+  public:
+    GuardUpperBoundOverlayGuard(ExactOracleScratch *oracle,
+                                const semantic::Index ref_source_id,
+                                const semantic::Index blocker_source_id,
+                                const double time,
+                                const double normalizer)
+        : oracle_(oracle) {
+      if (oracle_ == nullptr || ref_source_id == semantic::kInvalidIndex ||
+          blocker_source_id == semantic::kInvalidIndex || !std::isfinite(time) ||
+          !(normalizer > 0.0)) {
+        return;
+      }
+      previous_size_ = oracle_->guard_upper_bound_overlays_.size();
+      oracle_->guard_upper_bound_overlays_.push_back(GuardUpperBoundOverlay{
+          ref_source_id, blocker_source_id, time, normalizer});
+      active_ = true;
+    }
+
+    GuardUpperBoundOverlayGuard(const GuardUpperBoundOverlayGuard &) = delete;
+    GuardUpperBoundOverlayGuard &operator=(
+        const GuardUpperBoundOverlayGuard &) = delete;
+
+    ~GuardUpperBoundOverlayGuard() {
+      if (oracle_ != nullptr && active_) {
+        oracle_->guard_upper_bound_overlays_.resize(previous_size_);
+      }
+    }
+
+  private:
+    ExactOracleScratch *oracle_{nullptr};
+    std::size_t previous_size_{0U};
+    bool active_{false};
+  };
+
   explicit ExactOracleScratch(const ExactVariantPlan &plan)
       : plan_(plan),
         program_(plan.lowered.program),
@@ -193,6 +340,13 @@ public:
             std::numeric_limits<double>::quiet_NaN()),
         source_lower_bound_overlays_(
             static_cast<std::size_t>(plan.source_count),
+            std::numeric_limits<double>::quiet_NaN()),
+        source_upper_bound_overlays_(
+            static_cast<std::size_t>(plan.source_count),
+            std::numeric_limits<double>::quiet_NaN()),
+        expr_upper_bound_overlays_(program_.expr_kind.size(),
+                                   std::numeric_limits<double>::quiet_NaN()),
+        expr_upper_bound_normalizers_(program_.expr_kind.size(),
             std::numeric_limits<double>::quiet_NaN()) {
     recursive_base_caches_.reserve(
         static_cast<std::size_t>(std::max(program_.layout.n_leaves, 1)));
@@ -220,6 +374,20 @@ public:
         source_lower_bound_overlays_.begin(),
         source_lower_bound_overlays_.end(),
         std::numeric_limits<double>::quiet_NaN());
+    std::fill(
+        source_upper_bound_overlays_.begin(),
+        source_upper_bound_overlays_.end(),
+        std::numeric_limits<double>::quiet_NaN());
+    std::fill(
+        expr_upper_bound_overlays_.begin(),
+        expr_upper_bound_overlays_.end(),
+        std::numeric_limits<double>::quiet_NaN());
+    std::fill(
+        expr_upper_bound_normalizers_.begin(),
+        expr_upper_bound_normalizers_.end(),
+        std::numeric_limits<double>::quiet_NaN());
+    source_order_overlays_.clear();
+    guard_upper_bound_overlays_.clear();
     conditional_cache_.reset(top_time);
     base_current_cache_.reset(top_time);
     base_lower_cache_.reset(sequence_state.lower_bound);
@@ -283,6 +451,33 @@ public:
     return SourceLowerBoundOverlayGuard(this, source_id, time);
   }
 
+  [[nodiscard]] SourceUpperBoundOverlayGuard source_upper_bound_overlay(
+      const semantic::Index source_id,
+      const double time) {
+    return SourceUpperBoundOverlayGuard(this, source_id, time);
+  }
+
+  [[nodiscard]] ExprUpperBoundOverlayGuard expr_upper_bound_overlay(
+      const semantic::Index expr_id,
+      const double time,
+      const double normalizer) {
+    return ExprUpperBoundOverlayGuard(this, expr_id, time, normalizer);
+  }
+
+  [[nodiscard]] SourceOrderOverlayGuard source_order_overlay(
+      const std::vector<ExactSourceOrderFact> &facts) {
+    return SourceOrderOverlayGuard(this, facts);
+  }
+
+  [[nodiscard]] GuardUpperBoundOverlayGuard guard_upper_bound_overlay(
+      const semantic::Index ref_source_id,
+      const semantic::Index blocker_source_id,
+      const double time,
+      const double normalizer) {
+    return GuardUpperBoundOverlayGuard(
+        this, ref_source_id, blocker_source_id, time, normalizer);
+  }
+
   bool has_exact_time_overlay(const semantic::Index source_id) const {
     if (source_id == semantic::kInvalidIndex) {
       return false;
@@ -300,11 +495,74 @@ public:
     return (pos < exact_time_overlays_.size() &&
             std::isfinite(exact_time_overlays_[pos])) ||
            (pos < source_lower_bound_overlays_.size() &&
-            std::isfinite(source_lower_bound_overlays_[pos]));
+            std::isfinite(source_lower_bound_overlays_[pos])) ||
+           (pos < source_upper_bound_overlays_.size() &&
+            std::isfinite(source_upper_bound_overlays_[pos]));
   }
 
   const double *exact_time_for_source(const semantic::Index source_id) const {
     return exact_time_for(source_id);
+  }
+
+  const double *expr_upper_bound_for(const semantic::Index expr_id) const {
+    if (expr_id == semantic::kInvalidIndex) {
+      return nullptr;
+    }
+    const auto pos = static_cast<std::size_t>(expr_id);
+    if (pos >= expr_upper_bound_overlays_.size() ||
+        !std::isfinite(expr_upper_bound_overlays_[pos])) {
+      return nullptr;
+    }
+    return &expr_upper_bound_overlays_[pos];
+  }
+
+  double expr_upper_bound_normalizer(const semantic::Index expr_id) const {
+    if (expr_id == semantic::kInvalidIndex) {
+      return 0.0;
+    }
+    const auto pos = static_cast<std::size_t>(expr_id);
+    if (pos >= expr_upper_bound_normalizers_.size()) {
+      return 0.0;
+    }
+    return expr_upper_bound_normalizers_[pos];
+  }
+
+  bool source_order_known_before(const semantic::Index before_source_id,
+                                 const semantic::Index after_source_id) const {
+    if (before_source_id == semantic::kInvalidIndex ||
+        after_source_id == semantic::kInvalidIndex ||
+        before_source_id == after_source_id) {
+      return false;
+    }
+    for (const auto &fact : source_order_overlays_) {
+      if (fact.before_source_id == before_source_id &&
+          fact.after_source_id == after_source_id) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  const GuardUpperBoundOverlay *guard_upper_bound_for(
+      const semantic::Index ref_source_id,
+      const semantic::Index blocker_source_id) const {
+    for (auto it = guard_upper_bound_overlays_.rbegin();
+         it != guard_upper_bound_overlays_.rend();
+         ++it) {
+      if (it->ref_source_id == ref_source_id &&
+          it->blocker_source_id == blocker_source_id) {
+        return &*it;
+      }
+    }
+    return nullptr;
+  }
+
+  bool has_guard_upper_bound_overlay() const {
+    return !guard_upper_bound_overlays_.empty();
+  }
+
+  bool has_source_order_overlay() const {
+    return !source_order_overlays_.empty();
   }
 
 private:
@@ -323,6 +581,11 @@ private:
   std::vector<TimedCache *> base_cache_stack_;
   std::vector<double> exact_time_overlays_;
   std::vector<double> source_lower_bound_overlays_;
+  std::vector<double> source_upper_bound_overlays_;
+  std::vector<double> expr_upper_bound_overlays_;
+  std::vector<double> expr_upper_bound_normalizers_;
+  std::vector<ExactSourceOrderFact> source_order_overlays_;
+  std::vector<GuardUpperBoundOverlay> guard_upper_bound_overlays_;
   semantic::Index recursive_cache_depth_{0};
 
   bool set_conditional_time(const double t) {
@@ -398,6 +661,39 @@ private:
     return previous;
   }
 
+  double set_source_upper_bound_overlay(const semantic::Index source_id,
+                                        const double time) {
+    const auto pos = static_cast<std::size_t>(source_id);
+    if (pos >= source_upper_bound_overlays_.size()) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double previous = source_upper_bound_overlays_[pos];
+    if ((std::isfinite(previous) && std::isfinite(time) &&
+         std::fabs(previous - time) <= 1e-12) ||
+        (!std::isfinite(previous) && !std::isfinite(time))) {
+      return previous;
+    }
+    source_upper_bound_overlays_[pos] = time;
+    invalidate_all_timed_caches();
+    return previous;
+  }
+
+  ExprUpperBoundOverlayState set_expr_upper_bound_overlay(
+      const semantic::Index expr_id,
+      const double time,
+      const double normalizer) {
+    const auto pos = static_cast<std::size_t>(expr_id);
+    if (pos >= expr_upper_bound_overlays_.size()) {
+      return ExprUpperBoundOverlayState{};
+    }
+    ExprUpperBoundOverlayState previous{
+        expr_upper_bound_overlays_[pos],
+        expr_upper_bound_normalizers_[pos]};
+    expr_upper_bound_overlays_[pos] = time;
+    expr_upper_bound_normalizers_[pos] = normalizer;
+    return previous;
+  }
+
   TimedCache *active_base_cache() {
     if (base_cache_stack_.empty()) {
       return nullptr;
@@ -440,6 +736,15 @@ private:
            std::isfinite(source_lower_bound_overlays_[pos]);
   }
 
+  bool has_source_upper_bound_overlay(const semantic::Index source_id) const {
+    if (source_id == semantic::kInvalidIndex) {
+      return false;
+    }
+    const auto pos = static_cast<std::size_t>(source_id);
+    return pos < source_upper_bound_overlays_.size() &&
+           std::isfinite(source_upper_bound_overlays_[pos]);
+  }
+
   double lower_bound_for(const semantic::Index source_id) const {
     double lower_bound = sequence_state_->lower_bound;
     if (source_id != semantic::kInvalidIndex) {
@@ -452,6 +757,18 @@ private:
     return lower_bound;
   }
 
+  double upper_bound_for(const semantic::Index source_id) const {
+    if (source_id == semantic::kInvalidIndex) {
+      return std::numeric_limits<double>::infinity();
+    }
+    const auto pos = static_cast<std::size_t>(source_id);
+    if (pos < source_upper_bound_overlays_.size() &&
+        std::isfinite(source_upper_bound_overlays_[pos])) {
+      return source_upper_bound_overlays_[pos];
+    }
+    return std::numeric_limits<double>::infinity();
+  }
+
   leaf::EventChannels conditionalize(const leaf::EventChannels uncond,
                                      const leaf::EventChannels lower) const {
     const double surv_lb = lower.survival;
@@ -462,6 +779,21 @@ private:
     out.pdf = safe_density(uncond.pdf / surv_lb);
     out.cdf = clamp_probability((uncond.cdf - lower.cdf) / surv_lb);
     out.survival = clamp_probability(uncond.survival / surv_lb);
+    return out;
+  }
+
+  leaf::EventChannels conditionalize_between(
+      const leaf::EventChannels uncond,
+      const leaf::EventChannels lower,
+      const leaf::EventChannels upper) const {
+    const double mass = upper.cdf - lower.cdf;
+    if (!std::isfinite(mass) || !(mass > 0.0)) {
+      return impossible_channels();
+    }
+    leaf::EventChannels out;
+    out.pdf = safe_density(uncond.pdf / mass);
+    out.cdf = clamp_probability((uncond.cdf - lower.cdf) / mass);
+    out.survival = clamp_probability((upper.cdf - uncond.cdf) / mass);
     return out;
   }
 
@@ -482,8 +814,15 @@ private:
 
   leaf::EventChannels compute_conditional_source(const semantic::Index source_id) {
     const double lower_bound = lower_bound_for(source_id);
+    const double upper_bound = upper_bound_for(source_id);
+    if (std::isfinite(upper_bound) && !(upper_bound > lower_bound)) {
+      return impossible_channels();
+    }
     if (const double *exact_time = exact_time_for(source_id)) {
       if (lower_bound > 0.0 && !(*exact_time > lower_bound)) {
+        return impossible_channels();
+      }
+      if (std::isfinite(upper_bound) && !(*exact_time < upper_bound)) {
         return impossible_channels();
       }
       if (!(conditional_time_ >= *exact_time)) {
@@ -494,19 +833,34 @@ private:
 
     const auto uncond =
         load_base_source(&base_current_cache_, conditional_time_, source_id);
-    if (!(lower_bound > 0.0)) {
+    if (!(lower_bound > 0.0) && !std::isfinite(upper_bound)) {
       return uncond;
     }
 
-    leaf::EventChannels lower;
+    leaf::EventChannels lower = leaf::EventChannels::impossible();
     if (!has_source_lower_bound_overlay(source_id) &&
         std::fabs(lower_bound - sequence_state_->lower_bound) <= 1e-12) {
       lower = load_base_source(&base_lower_cache_, lower_bound, source_id);
-    } else {
+    } else if (lower_bound > 0.0) {
       const auto frame = base_time_guard(lower_bound);
       lower = base_source(source_id);
     }
-    return conditionalize(uncond, lower);
+    if (!std::isfinite(upper_bound)) {
+      return conditionalize(uncond, lower);
+    }
+    const auto frame = base_time_guard(upper_bound);
+    const auto upper = base_source(source_id);
+    if (!std::isfinite(upper.cdf - lower.cdf) ||
+        !(upper.cdf - lower.cdf > 0.0)) {
+      return impossible_channels();
+    }
+    if (conditional_time_ >= upper_bound) {
+      return leaf::EventChannels::certain();
+    }
+    if (conditional_time_ <= lower_bound) {
+      return impossible_channels();
+    }
+    return conditionalize_between(uncond, lower, upper);
   }
 
   leaf::EventChannels base_source(const semantic::Index source_id) {

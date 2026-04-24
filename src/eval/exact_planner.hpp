@@ -85,6 +85,104 @@ inline void append_tail_requirement(ExactTransitionScenario *scenario,
   scenario->tail_exprs.push_back(expr_idx);
 }
 
+inline bool scenario_key_happens_by_transition(
+    const ExactTransitionScenario &scenario,
+    const ExactSourceKey key) {
+  if (scenario.active_key == key) {
+    return true;
+  }
+  return std::find_if(
+             scenario.before_keys.begin(),
+             scenario.before_keys.end(),
+             [&](const ExactSourceKey &existing) { return existing == key; }) !=
+         scenario.before_keys.end();
+}
+
+inline bool scenario_key_known_before_active(
+    const ExactTransitionScenario &scenario,
+    const ExactSourceKey key) {
+  return std::find_if(
+             scenario.before_keys.begin(),
+             scenario.before_keys.end(),
+             [&](const ExactSourceKey &existing) { return existing == key; }) !=
+         scenario.before_keys.end();
+}
+
+inline semantic::Index source_ordinal(const ExactVariantPlan &plan,
+                                      const ExactSourceKey key);
+
+inline void append_source_order_fact(
+    std::vector<ExactSourceOrderFact> *facts,
+    const ExactVariantPlan &plan,
+    const ExactSourceKey before_key,
+    const ExactSourceKey after_key) {
+  const auto before_source_id = source_ordinal(plan, before_key);
+  const auto after_source_id = source_ordinal(plan, after_key);
+  if (before_source_id == semantic::kInvalidIndex ||
+      after_source_id == semantic::kInvalidIndex ||
+      before_source_id == after_source_id) {
+    return;
+  }
+  for (const auto &fact : *facts) {
+    if (fact.before_source_id == before_source_id &&
+        fact.after_source_id == after_source_id) {
+      return;
+    }
+  }
+  facts->push_back(ExactSourceOrderFact{before_source_id, after_source_id});
+}
+
+inline void append_scenario_source_order_fact(
+    ExactTransitionScenario *scenario,
+    const ExactVariantPlan &plan,
+    const ExactSourceKey before_key,
+    const ExactSourceKey after_key) {
+  append_source_order_fact(
+      &scenario->source_order_facts, plan, before_key, after_key);
+}
+
+inline bool append_tail_order_requirement(ExactTransitionScenario *scenario,
+                                          const ExactVariantPlan &plan,
+                                          const semantic::Index expr_idx) {
+  const auto &program = plan.lowered.program;
+  const auto pos = static_cast<std::size_t>(expr_idx);
+  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
+  if (kind != semantic::ExprKind::Guard ||
+      program.expr_arg_offsets[pos] != program.expr_arg_offsets[pos + 1U]) {
+    return true;
+  }
+  const auto ref = program.expr_ref_child[pos];
+  const auto blocker = program.expr_blocker_child[pos];
+  if (!expr_is_simple_event(program, ref) ||
+      !expr_is_simple_event(program, blocker)) {
+    return true;
+  }
+  const auto ref_key =
+      ExactSourceKey{child_event_source_kind(program, ref),
+                     child_event_source_index(program, ref)};
+  const auto blocker_key =
+      ExactSourceKey{child_event_source_kind(program, blocker),
+                     child_event_source_index(program, blocker)};
+  if (!scenario_key_happens_by_transition(*scenario, ref_key) ||
+      !scenario_key_happens_by_transition(*scenario, blocker_key)) {
+    return true;
+  }
+  if (scenario->active_key == blocker_key &&
+      scenario_key_known_before_active(*scenario, ref_key)) {
+    return false;
+  }
+  const auto before_source_id = source_ordinal(plan, blocker_key);
+  const auto after_source_id = source_ordinal(plan, ref_key);
+  for (const auto &fact : scenario->source_order_facts) {
+    if (fact.before_source_id == before_source_id &&
+        fact.after_source_id == after_source_id) {
+      return true;
+    }
+  }
+  append_scenario_source_order_fact(scenario, plan, blocker_key, ref_key);
+  return true;
+}
+
 inline bool append_source_truth_constraints(
     const ExactVariantPlan &plan,
     const ExactSourceKey key,
@@ -387,11 +485,13 @@ inline std::vector<ExactTransitionScenario> build_logical_transition_scenarios(
           }
         } else {
           append_tail_requirement(&scenario, plan.lowered.program, child);
+          ok = append_tail_order_requirement(&scenario, plan, child);
           if (expr_is_simple_event(plan.lowered.program, child)) {
             const auto child_key =
                 ExactSourceKey{child_event_source_kind(plan.lowered.program, child),
                                child_event_source_index(plan.lowered.program, child)};
-            ok = append_factor(
+            ok = ok &&
+                 append_factor(
                      &scenario,
                      ExactScenarioFactor{child_key, ExactFactorKind::AfterSurvival},
                      plan) &&
@@ -800,6 +900,7 @@ inline void release_scenario_planning_fields(ExactTransitionScenario *scenario) 
   release_runtime_vector(&scenario->tail_exprs);
   release_runtime_vector(&scenario->factors);
   release_runtime_vector(&scenario->forced);
+  release_runtime_vector(&scenario->source_order_facts);
 }
 
 inline void compile_scenario_runtime_fields(ExactVariantPlan *plan,
@@ -986,6 +1087,7 @@ inline ExactRuntimeScenarioFormula compile_runtime_scenario_formula(
   ExactRuntimeScenarioFormula formula;
   formula.active_source_id = scenario.active_source_id;
   formula.relation_template = scenario.relation_template;
+  formula.source_order_facts = scenario.source_order_facts;
   formula.has_readiness =
       !scenario.before_source_span.empty() || !scenario.ready_expr_span.empty();
   formula.readiness_cdf = compile_runtime_readiness_cdf(plan, scenario);

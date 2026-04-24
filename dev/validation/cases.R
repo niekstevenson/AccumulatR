@@ -295,6 +295,241 @@ validation_cases <- function() {
       )
     },
 
+    stop_change_shared_trigger = function() {
+      structure <- race_spec() |>
+        add_accumulator("S", "lognormal") |>
+        add_accumulator("stop", "lognormal") |>
+        add_accumulator("change", "lognormal") |>
+        add_outcome("S", inhibit("S", by = "stop")) |>
+        add_outcome("X", all_of("change", "stop")) |>
+        add_component("go_only", members = "S", weight = .75) |>
+        add_component("go_stop", members = c("S", "stop", "change"), weight = .25) |>
+        add_trigger("stop_trigger", members = c("stop", "change"), q = 0.05) |>
+        set_mixture_options(mode = "fixed") |>
+        set_parameters(list(
+          m_go = "S.m",
+          m_stop = "stop.m",
+          m_change = "change.m",
+          s_go = "S.s",
+          s_stop = "stop.s",
+          s_change = "change.s",
+          t0_go = "S.t0",
+          t0_change = "change.t0",
+          q = c("stop.q", "change.q")
+        )) |>
+        finalize_model()
+      params <- c(
+        m_go = log(0.30), s_go = 0.18, t0_go = 0.00,
+        m_stop = log(0.22), s_stop = 0.18,
+        m_change = log(0.40), s_change = 0.18, t0_change = 0.00,
+        q = 0.05, S.q = 0.00
+      )
+      S <- list(m = params[["m_go"]], s = params[["s_go"]], q = 0.0, t0 = params[["t0_go"]])
+      stop <- list(m = params[["m_stop"]], s = params[["s_stop"]], q = 0.0, t0 = 0.0)
+      change <- list(m = params[["m_change"]], s = params[["s_change"]], q = 0.0, t0 = params[["t0_change"]])
+      q_trig <- params[["q"]]
+
+      engine <- function(component, response, rt) {
+        engine_density_or_mass(
+          structure,
+          params,
+          data.frame(
+            trial = 1L,
+            component = component,
+            R = response,
+            rt = rt,
+            stringsAsFactors = FALSE
+          )
+        )
+      }
+      stop_change_x_density <- function(t) {
+        stop_before_change <- integrate_scalar(
+          function(u) acc_pdf_scalar(u, stop) * acc_survival_scalar(u, S),
+          0.0,
+          t
+        )
+        (1.0 - q_trig) * (
+          acc_pdf_scalar(t, change) * stop_before_change +
+            acc_pdf_scalar(t, stop) *
+            acc_cdf_scalar(t, change) *
+            acc_survival_scalar(t, S)
+        )
+      }
+
+      rows <- list()
+      rows[[length(rows) + 1L]] <- {
+        rt <- 0.30
+        manual <- acc_pdf_scalar(rt, S)
+        check_row(
+          "stop_change_shared_trigger",
+          "go_only_S_rt_0.30",
+          engine("go_only", "S", rt),
+          manual,
+          1e-9,
+          "Stop-change go-only S response"
+        )
+      }
+      for (rt in c(0.25, 0.30, 0.40, 0.50)) {
+        manual_s <- q_trig * acc_pdf_scalar(rt, S) +
+          (1.0 - q_trig) *
+          acc_pdf_scalar(rt, S) *
+          acc_survival_scalar(rt, stop)
+        rows[[length(rows) + 1L]] <- check_row(
+          "stop_change_shared_trigger",
+          paste0("go_stop_S_rt_", format(rt, nsmall = 2)),
+          engine("go_stop", "S", rt),
+          manual_s,
+          1e-9,
+          "Stop-change S response conditions X on realized stop state"
+        )
+
+        rows[[length(rows) + 1L]] <- check_row(
+          "stop_change_shared_trigger",
+          paste0("go_stop_X_rt_", format(rt, nsmall = 2)),
+          engine("go_stop", "X", rt),
+          stop_change_x_density(rt),
+          2e-3,
+          "Stop-change X response keeps latent stop time for S competitor"
+        )
+      }
+      do.call(rbind, rows)
+    },
+
+    stim_selective_stop = function() {
+      structure <- race_spec() |>
+        add_accumulator("A", "lognormal") |>
+        add_accumulator("B", "lognormal") |>
+        add_accumulator("S1", "lognormal") |>
+        add_accumulator("IS", "lognormal") |>
+        add_accumulator("S2", "lognormal") |>
+        add_outcome(
+          "A",
+          first_of(
+            inhibit("A", by = "S1"),
+            all_of("A", "S1", inhibit("IS", by = "S2"))
+          )
+        ) |>
+        add_outcome(
+          "B",
+          first_of(
+            inhibit("B", by = "S1"),
+            all_of("B", "S1", inhibit("IS", by = "S2"))
+          )
+        ) |>
+        add_outcome(
+          "STOP",
+          all_of("S1", inhibit("S2", by = "IS")),
+          options = list(map_outcome_to = NA_character_)
+        ) |>
+        add_component("go", members = c("A", "B")) |>
+        add_component("stop", members = c("A", "B", "S1", "IS", "S2")) |>
+        set_parameters(list(
+          m_go = c("A.m", "B.m"),
+          s_go = c("A.s", "B.s"),
+          t0_go = c("A.t0", "B.t0")
+        )) |>
+        finalize_model()
+      params <- c(
+        m_go = log(0.30), s_go = 0.18, t0_go = 0.05,
+        S1.m = log(0.26), S1.s = 0.18, S1.t0 = 0.00,
+        IS.m = log(0.35), IS.s = 0.18, IS.t0 = 0.00,
+        S2.m = log(0.32), S2.s = 0.18, S2.t0 = 0.00
+      )
+      A <- list(m = params[["m_go"]], s = params[["s_go"]], q = 0.0, t0 = params[["t0_go"]])
+      B <- list(m = params[["m_go"]], s = params[["s_go"]], q = 0.0, t0 = params[["t0_go"]])
+      S1 <- list(m = params[["S1.m"]], s = params[["S1.s"]], q = 0.0, t0 = params[["S1.t0"]])
+      IS <- list(m = params[["IS.m"]], s = params[["IS.s"]], q = 0.0, t0 = params[["IS.t0"]])
+      S2 <- list(m = params[["S2.m"]], s = params[["S2.s"]], q = 0.0, t0 = params[["S2.t0"]])
+
+      ignore_density <- function(t) {
+        acc_pdf_scalar(t, IS) * acc_survival_scalar(t, S2)
+      }
+      ignore_cdf <- function(t) {
+        inhibit_cdf_scalar(
+          function(u) acc_pdf_scalar(u, IS),
+          function(u) acc_cdf_scalar(u, S2),
+          t
+        )
+      }
+      visible_density <- function(target, competitor, t) {
+        early_or_target_active_late <- acc_pdf_scalar(t, target) *
+          acc_survival_scalar(t, competitor) *
+          (
+            acc_survival_scalar(t, S1) +
+              acc_cdf_scalar(t, S1) * ignore_cdf(t)
+          )
+        ignore_active_late <- ignore_density(t) * integrate_scalar(
+          function(u) {
+            acc_pdf_scalar(u, target) *
+              acc_cdf_scalar(u, S1) *
+              acc_survival_scalar(u, competitor)
+          },
+          0.0,
+          t
+        )
+        early_or_target_active_late + ignore_active_late
+      }
+      visible_probability <- function(target, competitor) {
+        integrate(
+          function(t) {
+            vapply(
+              t,
+              function(tt) visible_density(target, competitor, tt),
+              numeric(1)
+            )
+          },
+          lower = 0.0,
+          upper = Inf,
+          rel.tol = 1e-7,
+          abs.tol = 1e-9,
+          subdivisions = 200L,
+          stop.on.error = FALSE
+        )$value
+      }
+      engine <- function(response, rt) {
+        engine_density_or_mass(
+          structure,
+          params,
+          data.frame(
+            trial = 1L,
+            component = "stop",
+            R = response,
+            rt = rt,
+            stringsAsFactors = FALSE
+          )
+        )
+      }
+
+      p_a <- visible_probability(A, B)
+      p_b <- visible_probability(B, A)
+      rbind(
+        check_row(
+          "stim_selective_stop",
+          "A_rt_0.42",
+          engine("A", 0.42),
+          visible_density(A, B, 0.42),
+          2e-3,
+          "Stim-selective A response keeps S1 and ignore-gate path conditioning"
+        ),
+        check_row(
+          "stim_selective_stop",
+          "B_rt_0.47",
+          engine("B", 0.47),
+          visible_density(B, A, 0.47),
+          2e-3,
+          "Stim-selective B response keeps S1 and ignore-gate path conditioning"
+        ),
+        check_row(
+          "stim_selective_stop",
+          "NA_mass",
+          engine(NA_character_, NA_real_),
+          max(0.0, 1.0 - p_a - p_b),
+          2e-3,
+          "Stim-selective mapped-NA mass from correctly conditioned visible responses"
+        )
+      )
+    },
+
     shared_gate_pair = function() {
       structure <- race_spec() |>
         add_accumulator("x1", "lognormal") |>

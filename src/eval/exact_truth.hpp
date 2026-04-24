@@ -400,6 +400,209 @@ inline ForcedExprEvaluator *prepare_scenario_evaluator(
   return &workspace->evaluator;
 }
 
+inline ForcedExprEvaluator *prepare_runtime_scenario_evaluator(
+    const ExactRuntimeScenarioFormula &scenario,
+    ForcedExprEvaluator *parent,
+    ForcedExprWorkspace *workspace) {
+  RelationView view;
+  if (!relation_view_with_overlay(
+          parent->relation_view(),
+          scenario.relation_template,
+          &view)) {
+    return nullptr;
+  }
+  workspace->reset(parent->oracle(), view);
+  return &workspace->evaluator;
+}
+
+inline bool runtime_factors_empty(const ExactRuntimeFactors &factors) {
+  return factors.source_pdf.empty() &&
+         factors.source_cdf.empty() &&
+         factors.source_survival.empty() &&
+         factors.expr_density.empty() &&
+         factors.expr_cdf.empty() &&
+         factors.expr_survival.empty();
+}
+
+inline double evaluate_runtime_factors(const ExactRuntimeFactors &factors,
+                                       ForcedExprEvaluator *parent,
+                                       ForcedExprEvaluator *scenario) {
+  double value = 1.0;
+  auto multiply = [&](const double factor) {
+    value *= factor;
+    return std::isfinite(value) && value != 0.0;
+  };
+
+  for (const auto source_id : factors.source_pdf) {
+    if (!multiply(parent->source_pdf(source_id))) {
+      return 0.0;
+    }
+  }
+  for (const auto source_id : factors.source_cdf) {
+    if (!multiply(parent->source_cdf(source_id))) {
+      return 0.0;
+    }
+  }
+  for (const auto source_id : factors.source_survival) {
+    if (!multiply(parent->source_survival(source_id))) {
+      return 0.0;
+    }
+  }
+
+  if (scenario == nullptr &&
+      (!factors.expr_density.empty() ||
+       !factors.expr_cdf.empty() ||
+       !factors.expr_survival.empty())) {
+    return 0.0;
+  }
+  for (const auto expr_id : factors.expr_density) {
+    if (!multiply(scenario->expr_density(expr_id))) {
+      return 0.0;
+    }
+  }
+  for (const auto expr_id : factors.expr_cdf) {
+    if (!multiply(scenario->expr_cdf(expr_id))) {
+      return 0.0;
+    }
+  }
+  for (const auto expr_id : factors.expr_survival) {
+    if (!multiply(scenario->expr_survival(expr_id))) {
+      return 0.0;
+    }
+  }
+
+  return value;
+}
+
+inline double evaluate_runtime_truth_formula(
+    const ExactRuntimeTruthFormula &formula,
+    const ExactRuntimeScenarioFormula &scenario_formula,
+    ForcedExprEvaluator *parent,
+    ForcedExprWorkspace *workspace) {
+  ForcedExprEvaluator *scenario_evaluator = nullptr;
+  if (formula.requires_scenario) {
+    scenario_evaluator =
+        prepare_runtime_scenario_evaluator(scenario_formula, parent, workspace);
+    if (scenario_evaluator == nullptr) {
+      return 0.0;
+    }
+  }
+
+  if (!formula.sum_of_products) {
+    const double value =
+        runtime_factors_empty(formula.product)
+            ? formula.empty_value
+            : evaluate_runtime_factors(
+                  formula.product, parent, scenario_evaluator);
+    return clamp_probability(value);
+  }
+
+  double total = formula.sum_terms.empty() ? formula.empty_value : 0.0;
+  for (const auto &term : formula.sum_terms) {
+    const double value =
+        evaluate_runtime_factors(term.factors, parent, scenario_evaluator);
+    total += value;
+  }
+  return formula.clean_signed ? clean_signed_value(total) : total;
+}
+
+inline double runtime_readiness_cdf(
+    const ExactRuntimeScenarioFormula &scenario_formula,
+    ForcedExprEvaluator *evaluator,
+    const double t,
+    ForcedExprWorkspace *workspace) {
+  if (t < 0.0) {
+    return 0.0;
+  }
+  const auto guard = evaluator->oracle()->conditional_time_guard(t);
+  return evaluate_runtime_truth_formula(
+      scenario_formula.readiness_cdf,
+      scenario_formula,
+      evaluator,
+      workspace);
+}
+
+inline double runtime_readiness_density(
+    const ExactRuntimeScenarioFormula &scenario_formula,
+    ForcedExprEvaluator *evaluator,
+    const double t,
+    ForcedExprWorkspace *workspace) {
+  if (!(t > 0.0)) {
+    return 0.0;
+  }
+  const auto guard = evaluator->oracle()->conditional_time_guard(t);
+  return evaluate_runtime_truth_formula(
+      scenario_formula.readiness_density,
+      scenario_formula,
+      evaluator,
+      workspace);
+}
+
+inline double runtime_after_survival(
+    const ExactRuntimeScenarioFormula &scenario_formula,
+    ForcedExprEvaluator *evaluator,
+    const double t,
+    ForcedExprWorkspace *workspace) {
+  const auto guard = evaluator->oracle()->conditional_time_guard(t);
+  return evaluate_runtime_truth_formula(
+      scenario_formula.after_survival,
+      scenario_formula,
+      evaluator,
+      workspace);
+}
+
+inline double runtime_same_active_win_mass(
+    const ExactRuntimeScenarioFormula &scenario_formula,
+    ForcedExprEvaluator *evaluator,
+    const double t,
+    const double ready_upper,
+    ForcedExprWorkspace *workspace) {
+  if (!(ready_upper > 0.0)) {
+    return 0.0;
+  }
+  const double tail =
+      runtime_after_survival(scenario_formula, evaluator, t, workspace);
+  if (!(tail > 0.0)) {
+    return 0.0;
+  }
+  return tail *
+         runtime_readiness_cdf(
+             scenario_formula, evaluator, ready_upper, workspace);
+}
+
+inline double runtime_scenario_truth_cdf(
+    const ExactRuntimeScenarioFormula &scenario_formula,
+    ForcedExprEvaluator *evaluator,
+    const double t,
+    ForcedExprWorkspace *workspace) {
+  if (!(t > 0.0)) {
+    return 0.0;
+  }
+  return clamp_probability(quadrature::integrate_finite_default(
+      [&](const double u) {
+        const auto guard = evaluator->oracle()->conditional_time_guard(u);
+        double value = evaluator->source_pdf(scenario_formula.active_source_id);
+        if (!(value > 0.0)) {
+          return 0.0;
+        }
+        value *= runtime_after_survival(
+            scenario_formula, evaluator, u, workspace);
+        if (!(value > 0.0)) {
+          return 0.0;
+        }
+        if (scenario_formula.has_readiness) {
+          value *= runtime_readiness_cdf(
+              scenario_formula, evaluator, u, workspace);
+          if (!(value > 0.0)) {
+            return 0.0;
+          }
+        }
+        return value;
+      },
+      0.0,
+      t));
+}
+
 inline double readiness_cdf(const ExactScenarioRuntimeView &scenario_view,
                             ForcedExprEvaluator *evaluator,
                             const double t,

@@ -885,6 +885,186 @@ inline void compile_program_source_runtime_fields(ExactVariantPlan *plan) {
   }
 }
 
+inline void append_runtime_span_values(
+    const std::vector<semantic::Index> &arena,
+    const ExactIndexSpan span,
+    std::vector<semantic::Index> *values) {
+  for (semantic::Index i = 0; i < span.size; ++i) {
+    values->push_back(arena[static_cast<std::size_t>(span.offset + i)]);
+  }
+}
+
+inline ExactRuntimeTruthFormula compile_runtime_readiness_cdf(
+    const ExactVariantPlan &plan,
+    const ExactTransitionScenario &scenario) {
+  ExactRuntimeTruthFormula formula;
+  formula.empty_value = 1.0;
+  append_runtime_span_values(
+      plan.scenario_source_ids,
+      scenario.before_source_span,
+      &formula.product.source_cdf);
+  append_runtime_span_values(
+      plan.scenario_expr_ids,
+      scenario.ready_expr_span,
+      &formula.product.expr_cdf);
+  formula.requires_scenario = !scenario.ready_expr_span.empty();
+  return formula;
+}
+
+inline ExactRuntimeTruthFormula compile_runtime_after_survival(
+    const ExactVariantPlan &plan,
+    const ExactTransitionScenario &scenario) {
+  ExactRuntimeTruthFormula formula;
+  formula.empty_value = 1.0;
+  append_runtime_span_values(
+      plan.scenario_source_ids,
+      scenario.after_source_span,
+      &formula.product.source_survival);
+  append_runtime_span_values(
+      plan.scenario_expr_ids,
+      scenario.tail_expr_span,
+      &formula.product.expr_survival);
+  formula.requires_scenario = !scenario.tail_expr_span.empty();
+  return formula;
+}
+
+inline ExactRuntimeTruthFormula compile_runtime_readiness_density(
+    const ExactVariantPlan &plan,
+    const ExactTransitionScenario &scenario) {
+  ExactRuntimeTruthFormula formula;
+  formula.sum_of_products = true;
+  formula.clean_signed = true;
+  formula.empty_value = 0.0;
+  formula.requires_scenario = !scenario.ready_expr_span.empty();
+
+  for (semantic::Index i = 0; i < scenario.before_source_span.size; ++i) {
+    const auto source_id = plan.scenario_source_ids[
+        static_cast<std::size_t>(scenario.before_source_span.offset + i)];
+    ExactRuntimeProductTerm term;
+    term.factors.source_pdf.push_back(source_id);
+    for (semantic::Index j = 0; j < scenario.before_source_span.size; ++j) {
+      if (i == j) {
+        continue;
+      }
+      term.factors.source_cdf.push_back(
+          plan.scenario_source_ids[static_cast<std::size_t>(
+              scenario.before_source_span.offset + j)]);
+    }
+    append_runtime_span_values(
+        plan.scenario_expr_ids,
+        scenario.ready_expr_span,
+        &term.factors.expr_cdf);
+    formula.sum_terms.push_back(std::move(term));
+  }
+
+  for (semantic::Index i = 0; i < scenario.ready_expr_span.size; ++i) {
+    const auto expr_id = plan.scenario_expr_ids[
+        static_cast<std::size_t>(scenario.ready_expr_span.offset + i)];
+    ExactRuntimeProductTerm term;
+    term.factors.expr_density.push_back(expr_id);
+    append_runtime_span_values(
+        plan.scenario_source_ids,
+        scenario.before_source_span,
+        &term.factors.source_cdf);
+    for (semantic::Index j = 0; j < scenario.ready_expr_span.size; ++j) {
+      if (i == j) {
+        continue;
+      }
+      term.factors.expr_cdf.push_back(
+          plan.scenario_expr_ids[static_cast<std::size_t>(
+              scenario.ready_expr_span.offset + j)]);
+    }
+    formula.sum_terms.push_back(std::move(term));
+  }
+
+  return formula;
+}
+
+inline ExactRuntimeScenarioFormula compile_runtime_scenario_formula(
+    const ExactVariantPlan &plan,
+    const ExactTransitionScenario &scenario) {
+  ExactRuntimeScenarioFormula formula;
+  formula.active_source_id = scenario.active_source_id;
+  formula.relation_template = scenario.relation_template;
+  formula.has_readiness =
+      !scenario.before_source_span.empty() || !scenario.ready_expr_span.empty();
+  formula.readiness_cdf = compile_runtime_readiness_cdf(plan, scenario);
+  formula.readiness_density = compile_runtime_readiness_density(plan, scenario);
+  formula.after_survival = compile_runtime_after_survival(plan, scenario);
+  return formula;
+}
+
+inline ExactRuntimeVariantPlan compile_exact_runtime_plan(
+    const ExactVariantPlan &plan) {
+  ExactRuntimeVariantPlan runtime;
+  runtime.outcomes.reserve(plan.outcomes.size());
+
+  for (semantic::Index target_idx = 0;
+       target_idx < static_cast<semantic::Index>(plan.outcomes.size());
+       ++target_idx) {
+    const auto target_pos = static_cast<std::size_t>(target_idx);
+    const auto &outcome = plan.outcomes[target_pos];
+    const auto &competitor_plan = plan.competitor_plans[target_pos];
+
+    ExactRuntimeOutcomePlan runtime_outcome;
+    runtime_outcome.scenarios.reserve(outcome.scenarios.size());
+    for (const auto &scenario : outcome.scenarios) {
+      runtime_outcome.scenarios.push_back(
+          compile_runtime_scenario_formula(plan, scenario));
+    }
+
+    runtime_outcome.competitor_blocks.reserve(competitor_plan.blocks.size());
+    for (const auto &block : competitor_plan.blocks) {
+      ExactRuntimeCompetitorBlockPlan runtime_block;
+      runtime_block.subsets.reserve(block.subsets.size());
+      for (const auto &subset : block.subsets) {
+        ExactRuntimeCompetitorSubsetPlan runtime_subset;
+        runtime_subset.outcome_indices = subset.outcome_indices;
+        runtime_subset.inclusion_sign = subset.inclusion_sign;
+        runtime_subset.singleton_expr_root = subset.singleton_expr_root;
+        runtime_subset.scenarios.reserve(subset.scenarios.size());
+        for (const auto &scenario : subset.scenarios) {
+          runtime_subset.scenarios.push_back(
+              compile_runtime_scenario_formula(plan, scenario));
+        }
+        runtime_block.subsets.push_back(std::move(runtime_subset));
+      }
+      runtime_outcome.competitor_blocks.push_back(std::move(runtime_block));
+    }
+
+    runtime_outcome.competitor_by_scenario.reserve(outcome.scenarios.size());
+    for (const auto &target_scenario : outcome.scenarios) {
+      ExactRuntimeScenarioCompetitorView scenario_view;
+      scenario_view.blocks.reserve(competitor_plan.blocks.size());
+      for (std::size_t block_idx = 0; block_idx < competitor_plan.blocks.size();
+           ++block_idx) {
+        const auto &block = competitor_plan.blocks[block_idx];
+        ExactRuntimeScenarioBlockView block_view;
+        block_view.subsets.reserve(block.subsets.size());
+        for (const auto &subset : block.subsets) {
+          ExactRuntimeScenarioSubsetView subset_view;
+          for (semantic::Index scenario_idx = 0;
+               scenario_idx < static_cast<semantic::Index>(subset.scenarios.size());
+               ++scenario_idx) {
+            const auto &scenario =
+                subset.scenarios[static_cast<std::size_t>(scenario_idx)];
+            if (scenario.active_source_id == target_scenario.active_source_id) {
+              subset_view.same_active_scenario_indices.push_back(scenario_idx);
+            }
+          }
+          block_view.subsets.push_back(std::move(subset_view));
+        }
+        scenario_view.blocks.push_back(std::move(block_view));
+      }
+      runtime_outcome.competitor_by_scenario.push_back(std::move(scenario_view));
+    }
+
+    runtime.outcomes.push_back(std::move(runtime_outcome));
+  }
+
+  return runtime;
+}
+
 inline ExactVariantPlan make_exact_variant_plan(
     const runtime::LoweredExactVariant &lowered,
     const std::unordered_map<std::string, semantic::Index> &outcome_code_by_label,
@@ -965,6 +1145,7 @@ inline ExactVariantPlan make_exact_variant_plan(
       }
     }
   }
+  plan.runtime = compile_exact_runtime_plan(plan);
   plan.ranked_supported = variant_supports_ranked_sequence(plan);
   for (auto &outcome : plan.outcomes) {
     for (auto &scenario : outcome.scenarios) {

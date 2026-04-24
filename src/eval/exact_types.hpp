@@ -171,11 +171,76 @@ struct ExactTargetCompetitorPlan {
   std::vector<ExactCompetitorBlockPlan> blocks;
 };
 
+struct ExactRuntimeFactors {
+  std::vector<semantic::Index> source_pdf;
+  std::vector<semantic::Index> source_cdf;
+  std::vector<semantic::Index> source_survival;
+  std::vector<semantic::Index> expr_density;
+  std::vector<semantic::Index> expr_cdf;
+  std::vector<semantic::Index> expr_survival;
+};
+
+struct ExactRuntimeProductTerm {
+  ExactRuntimeFactors factors;
+};
+
+struct ExactRuntimeTruthFormula {
+  ExactRuntimeFactors product;
+  std::vector<ExactRuntimeProductTerm> sum_terms;
+  double empty_value{0.0};
+  bool sum_of_products{false};
+  bool clean_signed{false};
+  bool requires_scenario{false};
+};
+
+struct ExactRuntimeScenarioFormula {
+  semantic::Index active_source_id{semantic::kInvalidIndex};
+  ExactRelationTemplate relation_template;
+  bool has_readiness{false};
+  ExactRuntimeTruthFormula readiness_cdf;
+  ExactRuntimeTruthFormula readiness_density;
+  ExactRuntimeTruthFormula after_survival;
+};
+
+struct ExactRuntimeCompetitorSubsetPlan {
+  std::vector<semantic::Index> outcome_indices;
+  int inclusion_sign{1};
+  semantic::Index singleton_expr_root{semantic::kInvalidIndex};
+  std::vector<ExactRuntimeScenarioFormula> scenarios;
+};
+
+struct ExactRuntimeCompetitorBlockPlan {
+  std::vector<ExactRuntimeCompetitorSubsetPlan> subsets;
+};
+
+struct ExactRuntimeScenarioSubsetView {
+  std::vector<semantic::Index> same_active_scenario_indices;
+};
+
+struct ExactRuntimeScenarioBlockView {
+  std::vector<ExactRuntimeScenarioSubsetView> subsets;
+};
+
+struct ExactRuntimeScenarioCompetitorView {
+  std::vector<ExactRuntimeScenarioBlockView> blocks;
+};
+
+struct ExactRuntimeOutcomePlan {
+  std::vector<ExactRuntimeScenarioFormula> scenarios;
+  std::vector<ExactRuntimeCompetitorBlockPlan> competitor_blocks;
+  std::vector<ExactRuntimeScenarioCompetitorView> competitor_by_scenario;
+};
+
+struct ExactRuntimeVariantPlan {
+  std::vector<ExactRuntimeOutcomePlan> outcomes;
+};
+
 struct ExactVariantPlan {
   runtime::LoweredExactVariant lowered;
   std::vector<semantic::Index> outcome_index_by_code;
   std::vector<ExactOutcomePlan> outcomes;
   std::vector<ExactTargetCompetitorPlan> competitor_plans;
+  ExactRuntimeVariantPlan runtime;
   std::vector<std::vector<semantic::Index>> leaf_supports;
   std::vector<std::vector<semantic::Index>> pool_supports;
   std::vector<std::vector<semantic::Index>> expr_supports;

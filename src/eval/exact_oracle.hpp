@@ -120,13 +120,80 @@ public:
     bool active_{false};
   };
 
+  class ExactTimeOverlayGuard {
+  public:
+    ExactTimeOverlayGuard(ExactOracleScratch *oracle,
+                          const semantic::Index source_id,
+                          const double time)
+        : oracle_(oracle), source_id_(source_id) {
+      if (oracle_ == nullptr || source_id == semantic::kInvalidIndex ||
+          !std::isfinite(time)) {
+        return;
+      }
+      previous_time_ = oracle_->set_exact_time_overlay(source_id, time);
+      active_ = true;
+    }
+
+    ExactTimeOverlayGuard(const ExactTimeOverlayGuard &) = delete;
+    ExactTimeOverlayGuard &operator=(const ExactTimeOverlayGuard &) = delete;
+
+    ~ExactTimeOverlayGuard() {
+      if (oracle_ != nullptr && active_) {
+        oracle_->set_exact_time_overlay(source_id_, previous_time_);
+      }
+    }
+
+  private:
+    ExactOracleScratch *oracle_{nullptr};
+    semantic::Index source_id_{semantic::kInvalidIndex};
+    double previous_time_{std::numeric_limits<double>::quiet_NaN()};
+    bool active_{false};
+  };
+
+  class SourceLowerBoundOverlayGuard {
+  public:
+    SourceLowerBoundOverlayGuard(ExactOracleScratch *oracle,
+                                 const semantic::Index source_id,
+                                 const double time)
+        : oracle_(oracle), source_id_(source_id) {
+      if (oracle_ == nullptr || source_id == semantic::kInvalidIndex ||
+          !std::isfinite(time)) {
+        return;
+      }
+      previous_time_ = oracle_->set_source_lower_bound_overlay(source_id, time);
+      active_ = true;
+    }
+
+    SourceLowerBoundOverlayGuard(const SourceLowerBoundOverlayGuard &) = delete;
+    SourceLowerBoundOverlayGuard &operator=(
+        const SourceLowerBoundOverlayGuard &) = delete;
+
+    ~SourceLowerBoundOverlayGuard() {
+      if (oracle_ != nullptr && active_) {
+        oracle_->set_source_lower_bound_overlay(source_id_, previous_time_);
+      }
+    }
+
+  private:
+    ExactOracleScratch *oracle_{nullptr};
+    semantic::Index source_id_{semantic::kInvalidIndex};
+    double previous_time_{std::numeric_limits<double>::quiet_NaN()};
+    bool active_{false};
+  };
+
   explicit ExactOracleScratch(const ExactVariantPlan &plan)
       : plan_(plan),
         program_(plan.lowered.program),
         leaf_inputs_(static_cast<std::size_t>(program_.layout.n_leaves)),
         conditional_cache_(static_cast<std::size_t>(plan.source_count)),
         base_current_cache_(static_cast<std::size_t>(plan.source_count)),
-        base_lower_cache_(static_cast<std::size_t>(plan.source_count)) {
+        base_lower_cache_(static_cast<std::size_t>(plan.source_count)),
+        exact_time_overlays_(
+            static_cast<std::size_t>(plan.source_count),
+            std::numeric_limits<double>::quiet_NaN()),
+        source_lower_bound_overlays_(
+            static_cast<std::size_t>(plan.source_count),
+            std::numeric_limits<double>::quiet_NaN()) {
     recursive_base_caches_.reserve(
         static_cast<std::size_t>(std::max(program_.layout.n_leaves, 1)));
     base_cache_stack_.reserve(
@@ -145,6 +212,14 @@ public:
     conditional_time_ = top_time;
     recursive_cache_depth_ = 0;
     base_cache_stack_.clear();
+    std::fill(
+        exact_time_overlays_.begin(),
+        exact_time_overlays_.end(),
+        std::numeric_limits<double>::quiet_NaN());
+    std::fill(
+        source_lower_bound_overlays_.begin(),
+        source_lower_bound_overlays_.end(),
+        std::numeric_limits<double>::quiet_NaN());
     conditional_cache_.reset(top_time);
     base_current_cache_.reset(top_time);
     base_lower_cache_.reset(sequence_state.lower_bound);
@@ -196,6 +271,42 @@ public:
     return conditional_source(source_id);
   }
 
+  [[nodiscard]] ExactTimeOverlayGuard exact_time_overlay(
+      const semantic::Index source_id,
+      const double time) {
+    return ExactTimeOverlayGuard(this, source_id, time);
+  }
+
+  [[nodiscard]] SourceLowerBoundOverlayGuard source_lower_bound_overlay(
+      const semantic::Index source_id,
+      const double time) {
+    return SourceLowerBoundOverlayGuard(this, source_id, time);
+  }
+
+  bool has_exact_time_overlay(const semantic::Index source_id) const {
+    if (source_id == semantic::kInvalidIndex) {
+      return false;
+    }
+    const auto pos = static_cast<std::size_t>(source_id);
+    return pos < exact_time_overlays_.size() &&
+           std::isfinite(exact_time_overlays_[pos]);
+  }
+
+  bool has_source_condition_overlay(const semantic::Index source_id) const {
+    if (source_id == semantic::kInvalidIndex) {
+      return false;
+    }
+    const auto pos = static_cast<std::size_t>(source_id);
+    return (pos < exact_time_overlays_.size() &&
+            std::isfinite(exact_time_overlays_[pos])) ||
+           (pos < source_lower_bound_overlays_.size() &&
+            std::isfinite(source_lower_bound_overlays_[pos]));
+  }
+
+  const double *exact_time_for_source(const semantic::Index source_id) const {
+    return exact_time_for(source_id);
+  }
+
 private:
   const ExactVariantPlan &plan_;
   const runtime::ExactProgram &program_;
@@ -210,6 +321,8 @@ private:
   TimedCache base_lower_cache_;
   std::vector<TimedCache> recursive_base_caches_;
   std::vector<TimedCache *> base_cache_stack_;
+  std::vector<double> exact_time_overlays_;
+  std::vector<double> source_lower_bound_overlays_;
   semantic::Index recursive_cache_depth_{0};
 
   bool set_conditional_time(const double t) {
@@ -242,6 +355,49 @@ private:
     }
   }
 
+  void invalidate_all_timed_caches() {
+    conditional_cache_.invalidate();
+    base_current_cache_.invalidate();
+    base_lower_cache_.invalidate();
+    for (auto &cache : recursive_base_caches_) {
+      cache.invalidate();
+    }
+  }
+
+  double set_exact_time_overlay(const semantic::Index source_id,
+                                const double time) {
+    const auto pos = static_cast<std::size_t>(source_id);
+    if (pos >= exact_time_overlays_.size()) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double previous = exact_time_overlays_[pos];
+    if ((std::isfinite(previous) && std::isfinite(time) &&
+         std::fabs(previous - time) <= 1e-12) ||
+        (!std::isfinite(previous) && !std::isfinite(time))) {
+      return previous;
+    }
+    exact_time_overlays_[pos] = time;
+    invalidate_all_timed_caches();
+    return previous;
+  }
+
+  double set_source_lower_bound_overlay(const semantic::Index source_id,
+                                        const double time) {
+    const auto pos = static_cast<std::size_t>(source_id);
+    if (pos >= source_lower_bound_overlays_.size()) {
+      return std::numeric_limits<double>::quiet_NaN();
+    }
+    const double previous = source_lower_bound_overlays_[pos];
+    if ((std::isfinite(previous) && std::isfinite(time) &&
+         std::fabs(previous - time) <= 1e-12) ||
+        (!std::isfinite(previous) && !std::isfinite(time))) {
+      return previous;
+    }
+    source_lower_bound_overlays_[pos] = time;
+    invalidate_all_timed_caches();
+    return previous;
+  }
+
   TimedCache *active_base_cache() {
     if (base_cache_stack_.empty()) {
       return nullptr;
@@ -259,6 +415,12 @@ private:
       return nullptr;
     }
     const auto pos = static_cast<std::size_t>(source_id);
+    if (pos < exact_time_overlays_.size()) {
+      const auto overlay = exact_time_overlays_[pos];
+      if (std::isfinite(overlay)) {
+        return &exact_time_overlays_[pos];
+      }
+    }
     if (pos >= sequence_state_->exact_times.size()) {
       return nullptr;
     }
@@ -269,11 +431,29 @@ private:
     return &sequence_state_->exact_times[pos];
   }
 
+  bool has_source_lower_bound_overlay(const semantic::Index source_id) const {
+    if (source_id == semantic::kInvalidIndex) {
+      return false;
+    }
+    const auto pos = static_cast<std::size_t>(source_id);
+    return pos < source_lower_bound_overlays_.size() &&
+           std::isfinite(source_lower_bound_overlays_[pos]);
+  }
+
+  double lower_bound_for(const semantic::Index source_id) const {
+    double lower_bound = sequence_state_->lower_bound;
+    if (source_id != semantic::kInvalidIndex) {
+      const auto pos = static_cast<std::size_t>(source_id);
+      if (pos < source_lower_bound_overlays_.size() &&
+          std::isfinite(source_lower_bound_overlays_[pos])) {
+        lower_bound = std::max(lower_bound, source_lower_bound_overlays_[pos]);
+      }
+    }
+    return lower_bound;
+  }
+
   leaf::EventChannels conditionalize(const leaf::EventChannels uncond,
                                      const leaf::EventChannels lower) const {
-    if (!(sequence_state_->lower_bound > 0.0)) {
-      return uncond;
-    }
     const double surv_lb = lower.survival;
     if (!std::isfinite(surv_lb) || !(surv_lb > 0.0)) {
       return impossible_channels();
@@ -301,7 +481,11 @@ private:
   }
 
   leaf::EventChannels compute_conditional_source(const semantic::Index source_id) {
+    const double lower_bound = lower_bound_for(source_id);
     if (const double *exact_time = exact_time_for(source_id)) {
+      if (lower_bound > 0.0 && !(*exact_time > lower_bound)) {
+        return impossible_channels();
+      }
       if (!(conditional_time_ >= *exact_time)) {
         return impossible_channels();
       }
@@ -310,12 +494,18 @@ private:
 
     const auto uncond =
         load_base_source(&base_current_cache_, conditional_time_, source_id);
-    if (!(sequence_state_->lower_bound > 0.0)) {
+    if (!(lower_bound > 0.0)) {
       return uncond;
     }
 
-    const auto lower = load_base_source(
-        &base_lower_cache_, sequence_state_->lower_bound, source_id);
+    leaf::EventChannels lower;
+    if (!has_source_lower_bound_overlay(source_id) &&
+        std::fabs(lower_bound - sequence_state_->lower_bound) <= 1e-12) {
+      lower = load_base_source(&base_lower_cache_, lower_bound, source_id);
+    } else {
+      const auto frame = base_time_guard(lower_bound);
+      lower = base_source(source_id);
+    }
     return conditionalize(uncond, lower);
   }
 

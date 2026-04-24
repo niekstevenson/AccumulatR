@@ -85,6 +85,12 @@ public:
   RelationView() = default;
 
   RelationView with_overlay(const ExactRelationTemplate *overlay) const noexcept {
+    if (overlay == nullptr || overlay->empty()) {
+      return *this;
+    }
+    if (empty()) {
+      return RelationView(nullptr, overlay);
+    }
     return RelationView(this, overlay);
   }
 
@@ -97,6 +103,10 @@ public:
     }
     return parent_ != nullptr ? parent_->relation_for(source_id)
                               : ExactRelation::Unknown;
+  }
+
+  bool empty() const noexcept {
+    return parent_ == nullptr && overlay_ == nullptr;
   }
 
 private:

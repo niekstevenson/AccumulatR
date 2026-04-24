@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <memory>
 #include <optional>
 
 #include "exact_truth.hpp"
@@ -42,6 +44,34 @@ struct ExactStepWorkspace {
   std::vector<semantic::Index> prepared_competitor_block_offsets;
   std::vector<ExactRuntimePreparedCompetitorSubset> prepared_competitor_subsets;
 };
+
+struct ExactRuntimeConditionGuards {
+  std::unique_ptr<ExactSourceOracle::ExactTimeOverlayGuard> exact_time;
+  std::vector<std::unique_ptr<ExactSourceOracle::SourceLowerBoundOverlayGuard>>
+      lower_bounds;
+};
+
+inline ExactRuntimeConditionGuards apply_runtime_condition(
+    ExactSourceOracle *oracle,
+    const ExactRuntimeTermCondition &condition,
+    const double time) {
+  ExactRuntimeConditionGuards guards;
+  if (oracle == nullptr || runtime_condition_empty(condition)) {
+    return guards;
+  }
+  if (condition.exact_source_id != semantic::kInvalidIndex) {
+    guards.exact_time =
+        std::make_unique<ExactSourceOracle::ExactTimeOverlayGuard>(
+            oracle, condition.exact_source_id, time);
+  }
+  guards.lower_bounds.reserve(condition.lower_bound_source_ids.size());
+  for (const auto source_id : condition.lower_bound_source_ids) {
+    guards.lower_bounds.push_back(
+        std::make_unique<ExactSourceOracle::SourceLowerBoundOverlayGuard>(
+            oracle, source_id, time));
+  }
+  return guards;
+}
 
 inline double competitor_subset_win_mass(
     const ExactCompetitorSubsetPlan &subset_plan,
@@ -134,6 +164,105 @@ inline bool runtime_subset_is_used(
   for (const auto outcome_idx : subset.outcome_indices) {
     if ((*used_outcomes)[static_cast<std::size_t>(outcome_idx)] != 0U) {
       return true;
+    }
+  }
+  return false;
+}
+
+inline bool support_contains_source(const std::vector<semantic::Index> &support,
+                                    const semantic::Index source_id) {
+  return source_id != semantic::kInvalidIndex &&
+         std::binary_search(support.begin(), support.end(), source_id);
+}
+
+inline bool expr_guard_blocker_contains_source(const ExactVariantPlan &plan,
+                                               const semantic::Index expr_idx,
+                                               const semantic::Index source_id) {
+  if (source_id == semantic::kInvalidIndex ||
+      expr_idx == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto &program = plan.lowered.program;
+  const auto pos = static_cast<std::size_t>(expr_idx);
+  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
+  if (kind == semantic::ExprKind::Guard) {
+    const auto blocker = program.expr_blocker_child[pos];
+    if (support_contains_source(
+            plan.expr_supports[static_cast<std::size_t>(blocker)],
+            source_id)) {
+      return true;
+    }
+    if (expr_guard_blocker_contains_source(
+            plan, program.expr_ref_child[pos], source_id) ||
+        expr_guard_blocker_contains_source(plan, blocker, source_id)) {
+      return true;
+    }
+  }
+  const auto begin = program.expr_arg_offsets[pos];
+  const auto end = program.expr_arg_offsets[pos + 1U];
+  for (semantic::Index i = begin; i < end; ++i) {
+    if (expr_guard_blocker_contains_source(
+            plan, program.expr_args[static_cast<std::size_t>(i)], source_id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool runtime_condition_relevant_to_competitors(
+    const ExactRuntimeTermCondition &condition,
+    const ExactRuntimeOutcomePlan &runtime_outcome,
+    const std::vector<std::uint8_t> *used_outcomes,
+    const ExactVariantPlan &plan) {
+  if (runtime_condition_empty(condition)) {
+    return false;
+  }
+  auto source_relevant = [&](const semantic::Index source_id) {
+    for (const auto &block : runtime_outcome.competitor_blocks) {
+      for (const auto &subset : block.subsets) {
+        if (runtime_subset_is_used(subset, used_outcomes)) {
+          continue;
+        }
+        for (const auto outcome_idx : subset.outcome_indices) {
+          const auto expr_root =
+              plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+          if (expr_guard_blocker_contains_source(plan, expr_root, source_id)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  };
+  if (condition.exact_source_id != semantic::kInvalidIndex &&
+      source_relevant(condition.exact_source_id)) {
+    return true;
+  }
+  for (const auto source_id : condition.lower_bound_source_ids) {
+    if (source_relevant(source_id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool runtime_source_relevant_as_competitor_guard_blocker(
+    const semantic::Index source_id,
+    const ExactRuntimeOutcomePlan &runtime_outcome,
+    const std::vector<std::uint8_t> *used_outcomes,
+    const ExactVariantPlan &plan) {
+  for (const auto &block : runtime_outcome.competitor_blocks) {
+    for (const auto &subset : block.subsets) {
+      if (runtime_subset_is_used(subset, used_outcomes)) {
+        continue;
+      }
+      for (const auto outcome_idx : subset.outcome_indices) {
+        const auto expr_root =
+            plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+        if (expr_guard_blocker_contains_source(plan, expr_root, source_id)) {
+          return true;
+        }
+      }
     }
   }
   return false;
@@ -368,16 +497,31 @@ inline double evaluate_runtime_scenario_probability(
     return 0.0;
   }
 
-  prepare_runtime_competitor_non_win(
-      runtime_outcome,
-      scenario_competitor,
-      used_outcomes,
-      competitor_evaluator,
-      competitor_workspace,
-      observed_time,
-      step_workspace);
+  std::unique_ptr<ExactSourceOracle::ExactTimeOverlayGuard> active_time;
+  if (runtime_source_relevant_as_competitor_guard_blocker(
+          scenario_formula.active_source_id,
+          runtime_outcome,
+          used_outcomes,
+          target_evaluator->plan())) {
+    active_time = std::make_unique<ExactSourceOracle::ExactTimeOverlayGuard>(
+        target_evaluator->oracle(),
+        scenario_formula.active_source_id,
+        observed_time);
+  }
 
-  const auto competitor_non_win = [&](const double readiness_upper) {
+  auto prepare_competitor = [&]() {
+    competitor_evaluator->invalidate_cache();
+    prepare_runtime_competitor_non_win(
+        runtime_outcome,
+        scenario_competitor,
+        used_outcomes,
+        competitor_evaluator,
+        competitor_workspace,
+        observed_time,
+        step_workspace);
+  };
+
+  auto competitor_non_win_prepared = [&](const double readiness_upper) {
     return runtime_competitor_non_win_probability(
         runtime_outcome,
         scenario_competitor,
@@ -386,6 +530,21 @@ inline double evaluate_runtime_scenario_probability(
         observed_time,
         readiness_upper,
         *step_workspace);
+  };
+
+  bool base_competitor_prepared = false;
+  const auto competitor_non_win = [&](const double readiness_upper) {
+    if (!base_competitor_prepared) {
+      prepare_competitor();
+      base_competitor_prepared = true;
+    }
+    return competitor_non_win_prepared(readiness_upper);
+  };
+
+  const auto conditioned_competitor_non_win = [&](const double readiness_upper) {
+    prepare_competitor();
+    base_competitor_prepared = false;
+    return competitor_non_win_prepared(readiness_upper);
   };
 
   if (!scenario_formula.has_readiness) {
@@ -399,23 +558,107 @@ inline double evaluate_runtime_scenario_probability(
     total += initial_ready * active_pdf * tail * competitor_non_win(0.0);
   }
 
+  const auto &readiness_terms = scenario_formula.readiness_density.sum_terms;
+  std::vector<ExactRuntimeTermCondition> term_conditions;
+  std::vector<std::uint8_t> term_competitor_conditions;
+  term_conditions.reserve(readiness_terms.size());
+  term_competitor_conditions.reserve(readiness_terms.size());
+  bool has_conditioned_terms = false;
+  for (const auto &term : readiness_terms) {
+    auto condition =
+        runtime_product_term_condition(term, target_evaluator->plan());
+    const bool competitor_condition = runtime_condition_relevant_to_competitors(
+        condition,
+        runtime_outcome,
+        used_outcomes,
+        target_evaluator->plan());
+    if (!competitor_condition) {
+      condition = ExactRuntimeTermCondition{};
+    } else {
+      has_conditioned_terms = true;
+    }
+    term_conditions.push_back(condition);
+    term_competitor_conditions.push_back(competitor_condition ? 1U : 0U);
+  }
+
+  if (!has_conditioned_terms) {
+    const auto batch = quadrature::build_finite_batch(0.0, observed_time);
+    for (std::size_t i = 0; i < batch.nodes.nodes.size(); ++i) {
+      const double readiness_time = batch.nodes.nodes[i];
+      double value = runtime_readiness_density(
+          scenario_formula, target_evaluator, readiness_time, target_workspace);
+      if (!std::isfinite(value) || value == 0.0) {
+        continue;
+      }
+      value *= active_pdf * tail;
+      if (!std::isfinite(value) || value == 0.0) {
+        continue;
+      }
+      value *= competitor_non_win(readiness_time);
+      if (!std::isfinite(value) || value == 0.0) {
+        continue;
+      }
+      total += batch.nodes.weights[i] * value;
+    }
+    return total;
+  }
+
   const auto batch = quadrature::build_finite_batch(0.0, observed_time);
   for (std::size_t i = 0; i < batch.nodes.nodes.size(); ++i) {
     const double readiness_time = batch.nodes.nodes[i];
-    double value = runtime_readiness_density(
-        scenario_formula, target_evaluator, readiness_time, target_workspace);
-    if (!std::isfinite(value) || value == 0.0) {
-      continue;
+    const auto time_guard =
+        target_evaluator->oracle()->conditional_time_guard(readiness_time);
+    ForcedExprEvaluator *scenario_evaluator = nullptr;
+    if (scenario_formula.readiness_density.requires_scenario) {
+      scenario_evaluator = prepare_runtime_scenario_evaluator(
+          scenario_formula,
+          target_evaluator,
+          target_workspace);
+      if (scenario_evaluator == nullptr) {
+        continue;
+      }
     }
-    value *= active_pdf * tail;
-    if (!std::isfinite(value) || value == 0.0) {
-      continue;
+    for (std::size_t term_idx = 0; term_idx < readiness_terms.size();
+         ++term_idx) {
+      const auto &term = readiness_terms[term_idx];
+      double value = evaluate_runtime_factors(
+          term.factors,
+          target_evaluator,
+          scenario_evaluator);
+      if (!std::isfinite(value) || value == 0.0) {
+        continue;
+      }
+      value *= active_pdf * tail;
+      if (!std::isfinite(value) || value == 0.0) {
+        continue;
+      }
+
+      const auto &condition = term_conditions[term_idx];
+      const bool has_condition = !runtime_condition_empty(condition);
+      const bool competitor_condition =
+          term_competitor_conditions[term_idx] != 0U;
+
+      double term_non_win = 0.0;
+      if (has_condition) {
+        {
+          const auto condition_guards = apply_runtime_condition(
+              target_evaluator->oracle(), condition, readiness_time);
+          if (competitor_condition) {
+            term_non_win = conditioned_competitor_non_win(readiness_time);
+          }
+        }
+        if (!competitor_condition) {
+          term_non_win = competitor_non_win(readiness_time);
+        }
+      } else {
+        term_non_win = competitor_non_win(readiness_time);
+      }
+      value *= term_non_win;
+      if (!std::isfinite(value) || value == 0.0) {
+        continue;
+      }
+      total += batch.nodes.weights[i] * value;
     }
-    value *= competitor_non_win(readiness_time);
-    if (!std::isfinite(value) || value == 0.0) {
-      continue;
-    }
-    total += batch.nodes.weights[i] * value;
   }
   return total;
 }

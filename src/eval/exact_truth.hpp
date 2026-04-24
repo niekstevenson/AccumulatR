@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include "exact_oracle.hpp"
 #include "leaf_kernel.hpp"
 #include "quadrature.hpp"
@@ -79,6 +81,10 @@ public:
   void reset(ExactSourceOracle *oracle, const RelationView relation_view = {}) {
     oracle_ = oracle;
     relation_view_ = relation_view;
+    invalidate_cache();
+  }
+
+  void invalidate_cache() {
     ++epoch_;
     if (epoch_ == 0U) {
       epoch_ = 1U;
@@ -132,6 +138,72 @@ public:
       if (!(current_time > 0.0)) {
         value = 0.0;
         break;
+      }
+      const auto ref =
+          program_.expr_ref_child[static_cast<std::size_t>(expr_idx)];
+      const auto blocker =
+          program_.expr_blocker_child[static_cast<std::size_t>(expr_idx)];
+      const bool has_unless =
+          program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx)] !=
+          program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx + 1)];
+      const auto ref_kind = static_cast<semantic::ExprKind>(
+          program_.expr_kind[static_cast<std::size_t>(ref)]);
+      const auto blocker_kind = static_cast<semantic::ExprKind>(
+          program_.expr_kind[static_cast<std::size_t>(blocker)]);
+      if (!has_unless && ref_kind == semantic::ExprKind::Event) {
+        const auto ref_source_id =
+            program_.expr_source_ids[static_cast<std::size_t>(ref)];
+        if (const double *ref_time = oracle_->exact_time_for_source(ref_source_id)) {
+          if (!(current_time >= *ref_time)) {
+            value = 0.0;
+          } else {
+            const auto guard = oracle_->conditional_time_guard(*ref_time);
+            value = expr_survival(blocker);
+          }
+          break;
+        }
+      }
+      if (!has_unless && ref_kind == semantic::ExprKind::And) {
+        bool ref_has_current_exact_child = false;
+        for (semantic::Index i =
+                 program_.expr_arg_offsets[static_cast<std::size_t>(ref)];
+             i < program_.expr_arg_offsets[static_cast<std::size_t>(ref + 1)];
+             ++i) {
+          const auto child = program_.expr_args[static_cast<std::size_t>(i)];
+          const auto child_kind = static_cast<semantic::ExprKind>(
+              program_.expr_kind[static_cast<std::size_t>(child)]);
+          if (child_kind != semantic::ExprKind::Event) {
+            continue;
+          }
+          const auto child_source_id =
+              program_.expr_source_ids[static_cast<std::size_t>(child)];
+          const double *child_time =
+              oracle_->exact_time_for_source(child_source_id);
+          if (child_time != nullptr &&
+              std::fabs(*child_time - current_time) <= 1e-12) {
+            ref_has_current_exact_child = true;
+            break;
+          }
+        }
+        if (ref_has_current_exact_child) {
+          value = clamp_probability(expr_cdf(ref) * expr_survival(blocker));
+          break;
+        }
+      }
+      if (!has_unless && blocker_kind == semantic::ExprKind::Event) {
+        const auto blocker_source_id =
+            program_.expr_source_ids[static_cast<std::size_t>(blocker)];
+        if (const double *blocker_time =
+                oracle_->exact_time_for_source(blocker_source_id)) {
+          const double upper = std::min(current_time, *blocker_time);
+          if (!(upper > 0.0)) {
+            value = 0.0;
+          } else {
+            const auto guard = oracle_->conditional_time_guard(upper);
+            value = expr_cdf(ref);
+          }
+          break;
+        }
       }
       value = clamp_probability(quadrature::integrate_finite_default(
           [&](const double u) {
@@ -355,6 +427,9 @@ public:
 
 private:
   leaf::EventChannels source_channels(const semantic::Index source_id) const {
+    if (oracle_->has_source_condition_overlay(source_id)) {
+      return oracle_->conditional_source(source_id);
+    }
     const auto relation = relation_view_.relation_for(source_id);
     if (relation != ExactRelation::Unknown) {
       return forced_channels(relation);
@@ -384,6 +459,29 @@ struct ForcedExprWorkspace {
 
   ForcedExprEvaluator evaluator;
 };
+
+struct ExactRuntimeTermCondition {
+  semantic::Index exact_source_id{semantic::kInvalidIndex};
+  std::vector<semantic::Index> lower_bound_source_ids;
+};
+
+inline void append_runtime_condition_index(
+    std::vector<semantic::Index> *sources,
+    const semantic::Index index) {
+  if (index == semantic::kInvalidIndex) {
+    return;
+  }
+  if (std::find(sources->begin(), sources->end(), index) ==
+      sources->end()) {
+    sources->push_back(index);
+  }
+}
+
+inline bool runtime_condition_empty(
+    const ExactRuntimeTermCondition &condition) {
+  return condition.exact_source_id == semantic::kInvalidIndex &&
+         condition.lower_bound_source_ids.empty();
+}
 
 inline ForcedExprEvaluator *prepare_scenario_evaluator(
     const ExactScenarioRuntimeView &scenario_view,
@@ -472,6 +570,58 @@ inline double evaluate_runtime_factors(const ExactRuntimeFactors &factors,
   }
 
   return value;
+}
+
+inline semantic::Index runtime_product_term_source_density_id(
+    const ExactRuntimeProductTerm &term) {
+  if (term.factors.source_pdf.size() != 1U ||
+      !term.factors.expr_density.empty()) {
+    return semantic::kInvalidIndex;
+  }
+  return term.factors.source_pdf.front();
+}
+
+inline ExactRuntimeTermCondition runtime_product_term_condition(
+    const ExactRuntimeProductTerm &term,
+    const ExactVariantPlan &plan) {
+  ExactRuntimeTermCondition condition;
+  const auto source_id = runtime_product_term_source_density_id(term);
+  if (source_id != semantic::kInvalidIndex) {
+    condition.exact_source_id = source_id;
+    return condition;
+  }
+
+  if (term.factors.expr_density.size() != 1U ||
+      !term.factors.source_pdf.empty()) {
+    return condition;
+  }
+  const auto expr_id = term.factors.expr_density.front();
+  const auto &program = plan.lowered.program;
+  const auto kind =
+      static_cast<semantic::ExprKind>(program.expr_kind[static_cast<std::size_t>(expr_id)]);
+  if (kind != semantic::ExprKind::Guard ||
+      program.expr_arg_offsets[static_cast<std::size_t>(expr_id)] !=
+          program.expr_arg_offsets[static_cast<std::size_t>(expr_id + 1)]) {
+    return condition;
+  }
+
+  const auto ref = program.expr_ref_child[static_cast<std::size_t>(expr_id)];
+  const auto blocker = program.expr_blocker_child[static_cast<std::size_t>(expr_id)];
+  const auto ref_kind =
+      static_cast<semantic::ExprKind>(program.expr_kind[static_cast<std::size_t>(ref)]);
+  const auto blocker_kind = static_cast<semantic::ExprKind>(
+      program.expr_kind[static_cast<std::size_t>(blocker)]);
+  if (ref_kind != semantic::ExprKind::Event ||
+      blocker_kind != semantic::ExprKind::Event) {
+    return condition;
+  }
+
+  condition.exact_source_id =
+      program.expr_source_ids[static_cast<std::size_t>(ref)];
+  append_runtime_condition_index(
+      &condition.lower_bound_source_ids,
+      program.expr_source_ids[static_cast<std::size_t>(blocker)]);
+  return condition;
 }
 
 inline double evaluate_runtime_truth_formula(

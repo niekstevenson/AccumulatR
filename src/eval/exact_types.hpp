@@ -72,6 +72,143 @@ struct ExactGuardUpperBoundFact {
   semantic::Index blocker_source_id{semantic::kInvalidIndex};
 };
 
+struct ExactRuntimeTermCondition {
+  semantic::Index exact_source_id{semantic::kInvalidIndex};
+  std::vector<semantic::Index> upper_bound_source_ids;
+  std::vector<semantic::Index> lower_bound_source_ids;
+  std::vector<semantic::Index> upper_bound_expr_ids;
+  std::vector<ExactSourceOrderFact> source_order_facts;
+  std::vector<ExactGuardUpperBoundFact> guard_upper_bound_facts;
+};
+
+inline bool runtime_condition_contains_source(
+    const std::vector<semantic::Index> &sources,
+    const semantic::Index source_id) {
+  return std::find(sources.begin(), sources.end(), source_id) != sources.end();
+}
+
+inline void append_runtime_condition_index(
+    std::vector<semantic::Index> *sources,
+    const semantic::Index index) {
+  if (index == semantic::kInvalidIndex) {
+    return;
+  }
+  if (std::find(sources->begin(), sources->end(), index) ==
+      sources->end()) {
+    sources->push_back(index);
+  }
+}
+
+inline void append_runtime_source_order_fact(
+    std::vector<ExactSourceOrderFact> *facts,
+    const semantic::Index before_source_id,
+    const semantic::Index after_source_id) {
+  if (before_source_id == semantic::kInvalidIndex ||
+      after_source_id == semantic::kInvalidIndex ||
+      before_source_id == after_source_id) {
+    return;
+  }
+  for (const auto &fact : *facts) {
+    if (fact.before_source_id == before_source_id &&
+        fact.after_source_id == after_source_id) {
+      return;
+    }
+  }
+  facts->push_back(ExactSourceOrderFact{before_source_id, after_source_id});
+}
+
+inline void append_runtime_guard_upper_bound_fact(
+    std::vector<ExactGuardUpperBoundFact> *facts,
+    const semantic::Index expr_id,
+    const semantic::Index ref_source_id,
+    const semantic::Index blocker_source_id) {
+  if (expr_id == semantic::kInvalidIndex ||
+      ref_source_id == semantic::kInvalidIndex ||
+      blocker_source_id == semantic::kInvalidIndex ||
+      ref_source_id == blocker_source_id) {
+    return;
+  }
+  for (const auto &fact : *facts) {
+    if (fact.expr_id == expr_id &&
+        fact.ref_source_id == ref_source_id &&
+        fact.blocker_source_id == blocker_source_id) {
+      return;
+    }
+  }
+  facts->push_back(
+      ExactGuardUpperBoundFact{expr_id, ref_source_id, blocker_source_id});
+}
+
+inline bool runtime_condition_empty(
+    const ExactRuntimeTermCondition &condition) {
+  return condition.exact_source_id == semantic::kInvalidIndex &&
+         condition.upper_bound_source_ids.empty() &&
+         condition.lower_bound_source_ids.empty() &&
+         condition.upper_bound_expr_ids.empty() &&
+         condition.source_order_facts.empty() &&
+         condition.guard_upper_bound_facts.empty();
+}
+
+inline bool runtime_condition_equal(const ExactRuntimeTermCondition &lhs,
+                                    const ExactRuntimeTermCondition &rhs) {
+  return lhs.exact_source_id == rhs.exact_source_id &&
+         lhs.upper_bound_source_ids == rhs.upper_bound_source_ids &&
+         lhs.lower_bound_source_ids == rhs.lower_bound_source_ids &&
+         lhs.upper_bound_expr_ids == rhs.upper_bound_expr_ids &&
+         lhs.source_order_facts.size() == rhs.source_order_facts.size() &&
+         lhs.guard_upper_bound_facts.size() == rhs.guard_upper_bound_facts.size() &&
+         std::equal(
+             lhs.source_order_facts.begin(),
+             lhs.source_order_facts.end(),
+             rhs.source_order_facts.begin(),
+             [](const auto &a, const auto &b) {
+               return a.before_source_id == b.before_source_id &&
+                      a.after_source_id == b.after_source_id;
+             }) &&
+         std::equal(
+             lhs.guard_upper_bound_facts.begin(),
+             lhs.guard_upper_bound_facts.end(),
+             rhs.guard_upper_bound_facts.begin(),
+             [](const auto &a, const auto &b) {
+               return a.expr_id == b.expr_id &&
+                      a.ref_source_id == b.ref_source_id &&
+                      a.blocker_source_id == b.blocker_source_id;
+             });
+}
+
+inline bool runtime_condition_order_contradiction(
+    const ExactRuntimeTermCondition &condition) {
+  for (const auto &fact : condition.source_order_facts) {
+    if (condition.exact_source_id == fact.before_source_id &&
+        runtime_condition_contains_source(
+            condition.upper_bound_source_ids,
+            fact.after_source_id)) {
+      return true;
+    }
+    if (condition.exact_source_id == fact.after_source_id &&
+        runtime_condition_contains_source(
+            condition.lower_bound_source_ids,
+            fact.before_source_id)) {
+      return true;
+    }
+    if (runtime_condition_contains_source(
+            condition.lower_bound_source_ids,
+            fact.before_source_id) &&
+        runtime_condition_contains_source(
+            condition.upper_bound_source_ids,
+            fact.after_source_id)) {
+      return true;
+    }
+    for (const auto &guard_fact : condition.guard_upper_bound_facts) {
+      if (fact.before_source_id == guard_fact.blocker_source_id &&
+          fact.after_source_id == guard_fact.ref_source_id) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 struct ExactRelationTemplate {
   std::vector<semantic::Index> source_ids;
   std::vector<ExactRelation> relations;
@@ -204,6 +341,22 @@ struct ExactRuntimeFactors {
 
 struct ExactRuntimeProductTerm {
   ExactRuntimeFactors factors;
+  ExactRuntimeTermCondition condition;
+  ExactRuntimeTermCondition tail_condition;
+  ExactRuntimeTermCondition competitor_condition;
+  semantic::Index context_group_index{semantic::kInvalidIndex};
+  bool condition_impossible{false};
+};
+
+struct ExactRuntimeCompetitorSubsetMask {
+  std::vector<std::vector<std::uint8_t>> affected;
+  bool any_affected{false};
+};
+
+struct ExactRuntimeConditionGroup {
+  ExactRuntimeTermCondition tail_condition;
+  ExactRuntimeTermCondition competitor_condition;
+  ExactRuntimeCompetitorSubsetMask competitor_subset_mask;
 };
 
 struct ExactRuntimeTruthFormula {
@@ -219,6 +372,12 @@ struct ExactRuntimeScenarioFormula {
   semantic::Index active_source_id{semantic::kInvalidIndex};
   ExactRelationTemplate relation_template;
   std::vector<ExactSourceOrderFact> source_order_facts;
+  ExactRuntimeTermCondition tail_condition;
+  ExactRuntimeTermCondition tail_competitor_condition;
+  ExactRuntimeCompetitorSubsetMask tail_competitor_subset_mask;
+  std::vector<ExactRuntimeConditionGroup> condition_groups;
+  bool has_tail_competitor_condition{false};
+  bool has_conditioned_readiness_terms{false};
   bool has_readiness{false};
   ExactRuntimeTruthFormula readiness_cdf;
   ExactRuntimeTruthFormula readiness_density;
@@ -305,6 +464,684 @@ inline bool supports_overlap(const std::vector<semantic::Index> &lhs,
                         rhs.end(),
                         std::back_inserter(overlap));
   return !overlap.empty();
+}
+
+inline bool runtime_subset_is_used(
+    const ExactRuntimeCompetitorSubsetPlan &subset,
+    const std::vector<std::uint8_t> *used_outcomes) {
+  if (used_outcomes == nullptr) {
+    return false;
+  }
+  for (const auto outcome_idx : subset.outcome_indices) {
+    if ((*used_outcomes)[static_cast<std::size_t>(outcome_idx)] != 0U) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool support_contains_source(const std::vector<semantic::Index> &support,
+                                    const semantic::Index source_id) {
+  return source_id != semantic::kInvalidIndex &&
+         std::binary_search(support.begin(), support.end(), source_id);
+}
+
+inline bool expr_support_contains_source(const ExactVariantPlan &plan,
+                                         const semantic::Index expr_idx,
+                                         const semantic::Index source_id) {
+  if (expr_idx == semantic::kInvalidIndex ||
+      source_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  return support_contains_source(
+      plan.expr_supports[static_cast<std::size_t>(expr_idx)], source_id);
+}
+
+inline bool expr_supports_overlap(const ExactVariantPlan &plan,
+                                  const semantic::Index lhs_expr_idx,
+                                  const semantic::Index rhs_expr_idx) {
+  if (lhs_expr_idx == semantic::kInvalidIndex ||
+      rhs_expr_idx == semantic::kInvalidIndex) {
+    return false;
+  }
+  return supports_overlap(
+      plan.expr_supports[static_cast<std::size_t>(lhs_expr_idx)],
+      plan.expr_supports[static_cast<std::size_t>(rhs_expr_idx)]);
+}
+
+inline bool simple_event_guard_sources(const ExactVariantPlan &plan,
+                                       const semantic::Index expr_id,
+                                       semantic::Index *ref_source_id,
+                                       semantic::Index *blocker_source_id) {
+  if (expr_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto &program = plan.lowered.program;
+  const auto pos = static_cast<std::size_t>(expr_id);
+  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
+  if (kind != semantic::ExprKind::Guard ||
+      program.expr_arg_offsets[pos] != program.expr_arg_offsets[pos + 1U]) {
+    return false;
+  }
+  const auto ref = program.expr_ref_child[pos];
+  const auto blocker = program.expr_blocker_child[pos];
+  const auto ref_kind =
+      static_cast<semantic::ExprKind>(program.expr_kind[static_cast<std::size_t>(ref)]);
+  const auto blocker_kind = static_cast<semantic::ExprKind>(
+      program.expr_kind[static_cast<std::size_t>(blocker)]);
+  if (ref_kind != semantic::ExprKind::Event ||
+      blocker_kind != semantic::ExprKind::Event) {
+    return false;
+  }
+  *ref_source_id = program.expr_source_ids[static_cast<std::size_t>(ref)];
+  *blocker_source_id =
+      program.expr_source_ids[static_cast<std::size_t>(blocker)];
+  return true;
+}
+
+inline bool expr_contains_simple_guard_pair(const ExactVariantPlan &plan,
+                                            const semantic::Index expr_idx,
+                                            const semantic::Index ref_source_id,
+                                            const semantic::Index blocker_source_id) {
+  if (expr_idx == semantic::kInvalidIndex ||
+      ref_source_id == semantic::kInvalidIndex ||
+      blocker_source_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto &program = plan.lowered.program;
+  const auto pos = static_cast<std::size_t>(expr_idx);
+  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
+  if (kind == semantic::ExprKind::Guard) {
+    semantic::Index guard_ref_source_id{semantic::kInvalidIndex};
+    semantic::Index guard_blocker_source_id{semantic::kInvalidIndex};
+    if (simple_event_guard_sources(
+            plan, expr_idx, &guard_ref_source_id, &guard_blocker_source_id) &&
+        guard_ref_source_id == ref_source_id &&
+        guard_blocker_source_id == blocker_source_id) {
+      return true;
+    }
+    if (expr_contains_simple_guard_pair(
+            plan, program.expr_ref_child[pos], ref_source_id, blocker_source_id) ||
+        expr_contains_simple_guard_pair(
+            plan,
+            program.expr_blocker_child[pos],
+            ref_source_id,
+            blocker_source_id)) {
+      return true;
+    }
+  }
+  const auto begin = program.expr_arg_offsets[pos];
+  const auto end = program.expr_arg_offsets[pos + 1U];
+  for (semantic::Index i = begin; i < end; ++i) {
+    if (expr_contains_simple_guard_pair(
+            plan,
+            program.expr_args[static_cast<std::size_t>(i)],
+            ref_source_id,
+            blocker_source_id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool runtime_source_relevant_to_competitors(
+    const semantic::Index source_id,
+    const ExactRuntimeOutcomePlan &runtime_outcome,
+    const std::vector<std::uint8_t> *used_outcomes,
+    const ExactVariantPlan &plan) {
+  for (const auto &block : runtime_outcome.competitor_blocks) {
+    for (const auto &subset : block.subsets) {
+      if (runtime_subset_is_used(subset, used_outcomes)) {
+        continue;
+      }
+      for (const auto outcome_idx : subset.outcome_indices) {
+        const auto expr_root =
+            plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+        if (expr_support_contains_source(plan, expr_root, source_id)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+inline bool runtime_expr_relevant_to_competitors(
+    const semantic::Index expr_id,
+    const ExactRuntimeOutcomePlan &runtime_outcome,
+    const std::vector<std::uint8_t> *used_outcomes,
+    const ExactVariantPlan &plan) {
+  for (const auto &block : runtime_outcome.competitor_blocks) {
+    for (const auto &subset : block.subsets) {
+      if (runtime_subset_is_used(subset, used_outcomes)) {
+        continue;
+      }
+      for (const auto outcome_idx : subset.outcome_indices) {
+        const auto expr_root =
+            plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+        if (expr_supports_overlap(plan, expr_id, expr_root)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+inline bool runtime_source_order_relevant_to_competitors(
+    const ExactSourceOrderFact &fact,
+    const ExactRuntimeOutcomePlan &runtime_outcome,
+    const std::vector<std::uint8_t> *used_outcomes,
+    const ExactVariantPlan &plan) {
+  for (const auto &block : runtime_outcome.competitor_blocks) {
+    for (const auto &subset : block.subsets) {
+      if (runtime_subset_is_used(subset, used_outcomes)) {
+        continue;
+      }
+      for (const auto outcome_idx : subset.outcome_indices) {
+        const auto expr_root =
+            plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+        if (expr_contains_simple_guard_pair(
+                plan,
+                expr_root,
+                fact.after_source_id,
+                fact.before_source_id)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+inline bool runtime_guard_upper_relevant_to_competitors(
+    const ExactGuardUpperBoundFact &fact,
+    const ExactRuntimeOutcomePlan &runtime_outcome,
+    const std::vector<std::uint8_t> *used_outcomes,
+    const ExactVariantPlan &plan) {
+  for (const auto &block : runtime_outcome.competitor_blocks) {
+    for (const auto &subset : block.subsets) {
+      if (runtime_subset_is_used(subset, used_outcomes)) {
+        continue;
+      }
+      for (const auto outcome_idx : subset.outcome_indices) {
+        const auto expr_root =
+            plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+        if (expr_contains_simple_guard_pair(
+                plan,
+                expr_root,
+                fact.ref_source_id,
+                fact.blocker_source_id)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
+inline bool runtime_source_relevant_to_competitor_subset(
+    const semantic::Index source_id,
+    const ExactRuntimeCompetitorSubsetPlan &subset,
+    const ExactVariantPlan &plan) {
+  for (const auto outcome_idx : subset.outcome_indices) {
+    const auto expr_root =
+        plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+    if (expr_support_contains_source(plan, expr_root, source_id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool runtime_expr_relevant_to_competitor_subset(
+    const semantic::Index expr_id,
+    const ExactRuntimeCompetitorSubsetPlan &subset,
+    const ExactVariantPlan &plan) {
+  for (const auto outcome_idx : subset.outcome_indices) {
+    const auto expr_root =
+        plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+    if (expr_supports_overlap(plan, expr_id, expr_root)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool runtime_source_order_relevant_to_competitor_subset(
+    const ExactSourceOrderFact &fact,
+    const ExactRuntimeCompetitorSubsetPlan &subset,
+    const ExactVariantPlan &plan) {
+  for (const auto outcome_idx : subset.outcome_indices) {
+    const auto expr_root =
+        plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+    if (expr_contains_simple_guard_pair(
+            plan,
+            expr_root,
+            fact.after_source_id,
+            fact.before_source_id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool runtime_guard_upper_relevant_to_competitor_subset(
+    const ExactGuardUpperBoundFact &fact,
+    const ExactRuntimeCompetitorSubsetPlan &subset,
+    const ExactVariantPlan &plan) {
+  for (const auto outcome_idx : subset.outcome_indices) {
+    const auto expr_root =
+        plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+    if (expr_contains_simple_guard_pair(
+            plan,
+            expr_root,
+            fact.ref_source_id,
+            fact.blocker_source_id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool runtime_condition_relevant_to_competitor_subset(
+    const ExactRuntimeTermCondition &condition,
+    const ExactRuntimeCompetitorSubsetPlan &subset,
+    const ExactVariantPlan &plan) {
+  if (condition.exact_source_id != semantic::kInvalidIndex &&
+      runtime_source_relevant_to_competitor_subset(
+          condition.exact_source_id, subset, plan)) {
+    return true;
+  }
+  for (const auto source_id : condition.upper_bound_source_ids) {
+    if (runtime_source_relevant_to_competitor_subset(source_id, subset, plan)) {
+      return true;
+    }
+  }
+  for (const auto source_id : condition.lower_bound_source_ids) {
+    if (runtime_source_relevant_to_competitor_subset(source_id, subset, plan)) {
+      return true;
+    }
+  }
+  for (const auto expr_id : condition.upper_bound_expr_ids) {
+    if (runtime_expr_relevant_to_competitor_subset(expr_id, subset, plan)) {
+      return true;
+    }
+  }
+  for (const auto &fact : condition.source_order_facts) {
+    if (runtime_source_order_relevant_to_competitor_subset(
+            fact, subset, plan)) {
+      return true;
+    }
+  }
+  for (const auto &fact : condition.guard_upper_bound_facts) {
+    if (runtime_guard_upper_relevant_to_competitor_subset(
+            fact, subset, plan)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline ExactRuntimeCompetitorSubsetMask runtime_competitor_subset_mask(
+    const ExactRuntimeTermCondition &condition,
+    const ExactRuntimeOutcomePlan &runtime_outcome,
+    const ExactVariantPlan &plan) {
+  ExactRuntimeCompetitorSubsetMask mask;
+  mask.affected.reserve(runtime_outcome.competitor_blocks.size());
+  if (runtime_condition_empty(condition)) {
+    return mask;
+  }
+  for (const auto &block : runtime_outcome.competitor_blocks) {
+    std::vector<std::uint8_t> block_mask;
+    block_mask.reserve(block.subsets.size());
+    for (const auto &subset : block.subsets) {
+      const bool affected =
+          runtime_condition_relevant_to_competitor_subset(
+              condition, subset, plan);
+      block_mask.push_back(affected ? 1U : 0U);
+      mask.any_affected = mask.any_affected || affected;
+    }
+    mask.affected.push_back(std::move(block_mask));
+  }
+  if (!mask.any_affected) {
+    mask.affected.clear();
+  }
+  return mask;
+}
+
+inline bool runtime_competitor_subset_mask_affected(
+    const ExactRuntimeCompetitorSubsetMask *mask,
+    const std::size_t block_idx,
+    const std::size_t subset_idx) {
+  if (mask == nullptr) {
+    return false;
+  }
+  if (!mask->any_affected) {
+    return false;
+  }
+  return mask->affected[block_idx][subset_idx] != 0U;
+}
+
+inline ExactRuntimeTermCondition filter_runtime_condition_for_competitors(
+    const ExactRuntimeTermCondition &condition,
+    const ExactRuntimeOutcomePlan &runtime_outcome,
+    const std::vector<std::uint8_t> *used_outcomes,
+    const ExactVariantPlan &plan) {
+  ExactRuntimeTermCondition filtered;
+  if (condition.exact_source_id != semantic::kInvalidIndex &&
+      runtime_source_relevant_to_competitors(
+          condition.exact_source_id, runtime_outcome, used_outcomes, plan)) {
+    filtered.exact_source_id = condition.exact_source_id;
+  }
+  for (const auto source_id : condition.upper_bound_source_ids) {
+    if (runtime_source_relevant_to_competitors(
+            source_id, runtime_outcome, used_outcomes, plan)) {
+      append_runtime_condition_index(
+          &filtered.upper_bound_source_ids, source_id);
+    }
+  }
+  for (const auto source_id : condition.lower_bound_source_ids) {
+    if (runtime_source_relevant_to_competitors(
+            source_id, runtime_outcome, used_outcomes, plan)) {
+      append_runtime_condition_index(
+          &filtered.lower_bound_source_ids, source_id);
+    }
+  }
+  for (const auto expr_id : condition.upper_bound_expr_ids) {
+    if (runtime_expr_relevant_to_competitors(
+            expr_id, runtime_outcome, used_outcomes, plan)) {
+      append_runtime_condition_index(&filtered.upper_bound_expr_ids, expr_id);
+    }
+  }
+  for (const auto &fact : condition.source_order_facts) {
+    if (runtime_source_order_relevant_to_competitors(
+            fact, runtime_outcome, used_outcomes, plan)) {
+      append_runtime_source_order_fact(
+          &filtered.source_order_facts,
+          fact.before_source_id,
+          fact.after_source_id);
+    }
+  }
+  for (const auto &fact : condition.guard_upper_bound_facts) {
+    if (runtime_guard_upper_relevant_to_competitors(
+            fact, runtime_outcome, used_outcomes, plan)) {
+      append_runtime_guard_upper_bound_fact(
+          &filtered.guard_upper_bound_facts,
+          fact.expr_id,
+          fact.ref_source_id,
+          fact.blocker_source_id);
+    }
+  }
+  return filtered;
+}
+
+inline bool runtime_factors_source_relevant(const ExactRuntimeFactors &factors,
+                                            const ExactVariantPlan &plan,
+                                            const semantic::Index source_id) {
+  if (runtime_condition_contains_source(factors.source_pdf, source_id) ||
+      runtime_condition_contains_source(factors.source_cdf, source_id) ||
+      runtime_condition_contains_source(factors.source_survival, source_id)) {
+    return true;
+  }
+  for (const auto expr_id : factors.expr_density) {
+    if (expr_support_contains_source(plan, expr_id, source_id)) {
+      return true;
+    }
+  }
+  for (const auto expr_id : factors.expr_cdf) {
+    if (expr_support_contains_source(plan, expr_id, source_id)) {
+      return true;
+    }
+  }
+  for (const auto expr_id : factors.expr_survival) {
+    if (expr_support_contains_source(plan, expr_id, source_id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool runtime_truth_source_relevant(const ExactRuntimeTruthFormula &formula,
+                                          const ExactVariantPlan &plan,
+                                          const semantic::Index source_id) {
+  if (runtime_factors_source_relevant(formula.product, plan, source_id)) {
+    return true;
+  }
+  for (const auto &term : formula.sum_terms) {
+    if (runtime_factors_source_relevant(term.factors, plan, source_id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool runtime_factors_expr_relevant(const ExactRuntimeFactors &factors,
+                                          const ExactVariantPlan &plan,
+                                          const semantic::Index expr_id) {
+  for (const auto source_id :
+       plan.expr_supports[static_cast<std::size_t>(expr_id)]) {
+    if (runtime_factors_source_relevant(factors, plan, source_id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool runtime_truth_expr_relevant(const ExactRuntimeTruthFormula &formula,
+                                        const ExactVariantPlan &plan,
+                                        const semantic::Index expr_id) {
+  if (runtime_factors_expr_relevant(formula.product, plan, expr_id)) {
+    return true;
+  }
+  for (const auto &term : formula.sum_terms) {
+    if (runtime_factors_expr_relevant(term.factors, plan, expr_id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool runtime_factors_contain_guard_pair(
+    const ExactRuntimeFactors &factors,
+    const ExactVariantPlan &plan,
+    const semantic::Index ref_source_id,
+    const semantic::Index blocker_source_id) {
+  auto contains_pair = [&](const std::vector<semantic::Index> &expr_ids) {
+    for (const auto expr_id : expr_ids) {
+      if (expr_contains_simple_guard_pair(
+              plan, expr_id, ref_source_id, blocker_source_id)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  return contains_pair(factors.expr_density) ||
+         contains_pair(factors.expr_cdf) ||
+         contains_pair(factors.expr_survival);
+}
+
+inline bool runtime_truth_contains_guard_pair(
+    const ExactRuntimeTruthFormula &formula,
+    const ExactVariantPlan &plan,
+    const semantic::Index ref_source_id,
+    const semantic::Index blocker_source_id) {
+  if (runtime_factors_contain_guard_pair(
+          formula.product, plan, ref_source_id, blocker_source_id)) {
+    return true;
+  }
+  for (const auto &term : formula.sum_terms) {
+    if (runtime_factors_contain_guard_pair(
+            term.factors, plan, ref_source_id, blocker_source_id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline ExactRuntimeTermCondition filter_runtime_condition_for_truth(
+    const ExactRuntimeTermCondition &condition,
+    const ExactRuntimeTruthFormula &formula,
+    const ExactVariantPlan &plan) {
+  ExactRuntimeTermCondition filtered;
+  if (condition.exact_source_id != semantic::kInvalidIndex &&
+      runtime_truth_source_relevant(formula, plan, condition.exact_source_id)) {
+    filtered.exact_source_id = condition.exact_source_id;
+  }
+  for (const auto source_id : condition.upper_bound_source_ids) {
+    if (runtime_truth_source_relevant(formula, plan, source_id)) {
+      append_runtime_condition_index(
+          &filtered.upper_bound_source_ids, source_id);
+    }
+  }
+  for (const auto source_id : condition.lower_bound_source_ids) {
+    if (runtime_truth_source_relevant(formula, plan, source_id)) {
+      append_runtime_condition_index(
+          &filtered.lower_bound_source_ids, source_id);
+    }
+  }
+  for (const auto expr_id : condition.upper_bound_expr_ids) {
+    if (runtime_truth_expr_relevant(formula, plan, expr_id)) {
+      append_runtime_condition_index(&filtered.upper_bound_expr_ids, expr_id);
+    }
+  }
+  for (const auto &fact : condition.source_order_facts) {
+    if (runtime_truth_contains_guard_pair(
+            formula, plan, fact.after_source_id, fact.before_source_id)) {
+      append_runtime_source_order_fact(
+          &filtered.source_order_facts,
+          fact.before_source_id,
+          fact.after_source_id);
+    }
+  }
+  for (const auto &fact : condition.guard_upper_bound_facts) {
+    if (runtime_truth_contains_guard_pair(
+            formula, plan, fact.ref_source_id, fact.blocker_source_id)) {
+      append_runtime_guard_upper_bound_fact(
+          &filtered.guard_upper_bound_facts,
+          fact.expr_id,
+          fact.ref_source_id,
+          fact.blocker_source_id);
+    }
+  }
+  return filtered;
+}
+
+inline semantic::Index runtime_product_term_source_density_id(
+    const ExactRuntimeProductTerm &term) {
+  if (term.factors.source_pdf.size() != 1U ||
+      !term.factors.expr_density.empty()) {
+    return semantic::kInvalidIndex;
+  }
+  return term.factors.source_pdf.front();
+}
+
+inline void append_runtime_factor_source_conditions(
+    const ExactRuntimeProductTerm &term,
+    ExactRuntimeTermCondition *condition) {
+  for (const auto source_id : term.factors.source_cdf) {
+    append_runtime_condition_index(
+        &condition->upper_bound_source_ids,
+        source_id);
+  }
+  for (const auto source_id : term.factors.source_survival) {
+    append_runtime_condition_index(
+        &condition->lower_bound_source_ids,
+        source_id);
+  }
+}
+
+inline void append_runtime_factor_expr_conditions(
+    const ExactRuntimeProductTerm &term,
+    const ExactVariantPlan &plan,
+    ExactRuntimeTermCondition *condition) {
+  for (const auto expr_id : term.factors.expr_cdf) {
+    semantic::Index ref_source_id{semantic::kInvalidIndex};
+    semantic::Index blocker_source_id{semantic::kInvalidIndex};
+    if (simple_event_guard_sources(
+            plan, expr_id, &ref_source_id, &blocker_source_id)) {
+      append_runtime_guard_upper_bound_fact(
+          &condition->guard_upper_bound_facts,
+          expr_id,
+          ref_source_id,
+          blocker_source_id);
+      append_runtime_source_order_fact(
+          &condition->source_order_facts,
+          ref_source_id,
+          blocker_source_id);
+      continue;
+    }
+    append_runtime_condition_index(&condition->upper_bound_expr_ids, expr_id);
+  }
+}
+
+inline void append_runtime_condition_order_facts(
+    ExactRuntimeTermCondition *condition,
+    const std::vector<ExactSourceOrderFact> &facts) {
+  for (const auto &fact : facts) {
+    append_runtime_source_order_fact(
+        &condition->source_order_facts,
+        fact.before_source_id,
+        fact.after_source_id);
+  }
+}
+
+inline ExactRuntimeTermCondition runtime_product_term_condition(
+    const ExactRuntimeProductTerm &term,
+    const ExactVariantPlan &plan,
+    const std::vector<ExactSourceOrderFact> &source_order_facts = {}) {
+  ExactRuntimeTermCondition condition;
+  append_runtime_factor_source_conditions(term, &condition);
+  append_runtime_factor_expr_conditions(term, plan, &condition);
+  append_runtime_condition_order_facts(&condition, source_order_facts);
+  const auto source_id = runtime_product_term_source_density_id(term);
+  if (source_id != semantic::kInvalidIndex) {
+    condition.exact_source_id = source_id;
+    return condition;
+  }
+
+  if (term.factors.expr_density.size() != 1U ||
+      !term.factors.source_pdf.empty()) {
+    return condition;
+  }
+  const auto expr_id = term.factors.expr_density.front();
+  semantic::Index ref_source_id{semantic::kInvalidIndex};
+  semantic::Index blocker_source_id{semantic::kInvalidIndex};
+  if (!simple_event_guard_sources(
+          plan, expr_id, &ref_source_id, &blocker_source_id)) {
+    append_runtime_condition_index(&condition.upper_bound_expr_ids, expr_id);
+    return condition;
+  }
+
+  append_runtime_guard_upper_bound_fact(
+      &condition.guard_upper_bound_facts,
+      expr_id,
+      ref_source_id,
+      blocker_source_id);
+  condition.exact_source_id = ref_source_id;
+  append_runtime_condition_index(
+      &condition.lower_bound_source_ids,
+      blocker_source_id);
+  append_runtime_source_order_fact(
+      &condition.source_order_facts,
+      ref_source_id,
+      blocker_source_id);
+  return condition;
+}
+
+inline ExactRuntimeTermCondition runtime_scenario_tail_condition(
+    const ExactRuntimeScenarioFormula &scenario_formula) {
+  ExactRuntimeTermCondition condition;
+  for (const auto source_id :
+       scenario_formula.after_survival.product.source_survival) {
+    append_runtime_condition_index(
+        &condition.lower_bound_source_ids,
+        source_id);
+  }
+  append_runtime_condition_order_facts(
+      &condition,
+      scenario_formula.source_order_facts);
+  return condition;
 }
 
 inline bool has_reason(const std::vector<std::string> &reasons,

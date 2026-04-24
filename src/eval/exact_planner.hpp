@@ -1055,6 +1055,8 @@ inline ExactRuntimeTruthFormula compile_runtime_readiness_density(
         plan.scenario_expr_ids,
         scenario.ready_expr_span,
         &term.factors.expr_cdf);
+    term.condition =
+        runtime_product_term_condition(term, plan, scenario.source_order_facts);
     formula.sum_terms.push_back(std::move(term));
   }
 
@@ -1075,6 +1077,8 @@ inline ExactRuntimeTruthFormula compile_runtime_readiness_density(
           plan.scenario_expr_ids[static_cast<std::size_t>(
               scenario.ready_expr_span.offset + j)]);
     }
+    term.condition =
+        runtime_product_term_condition(term, plan, scenario.source_order_facts);
     formula.sum_terms.push_back(std::move(term));
   }
 
@@ -1093,7 +1097,76 @@ inline ExactRuntimeScenarioFormula compile_runtime_scenario_formula(
   formula.readiness_cdf = compile_runtime_readiness_cdf(plan, scenario);
   formula.readiness_density = compile_runtime_readiness_density(plan, scenario);
   formula.after_survival = compile_runtime_after_survival(plan, scenario);
+  formula.tail_condition = runtime_scenario_tail_condition(formula);
   return formula;
+}
+
+inline void compile_runtime_scenario_contextual_conditions(
+    const ExactVariantPlan &plan,
+    const ExactRuntimeOutcomePlan &runtime_outcome,
+    ExactRuntimeScenarioFormula *formula) {
+  formula->tail_competitor_condition =
+      filter_runtime_condition_for_competitors(
+          formula->tail_condition,
+          runtime_outcome,
+          nullptr,
+          plan);
+  formula->has_tail_competitor_condition =
+      !runtime_condition_empty(formula->tail_competitor_condition);
+  formula->tail_competitor_subset_mask =
+      runtime_competitor_subset_mask(
+          formula->tail_competitor_condition,
+          runtime_outcome,
+          plan);
+  formula->has_conditioned_readiness_terms = false;
+  formula->condition_groups.clear();
+  for (auto &term : formula->readiness_density.sum_terms) {
+    term.condition_impossible =
+        runtime_condition_order_contradiction(term.condition);
+    term.tail_condition = filter_runtime_condition_for_truth(
+        term.condition,
+        formula->after_survival,
+        plan);
+    term.competitor_condition = filter_runtime_condition_for_competitors(
+        term.condition,
+        runtime_outcome,
+        nullptr,
+        plan);
+    if (term.condition_impossible ||
+        !runtime_condition_empty(term.tail_condition) ||
+        !runtime_condition_empty(term.competitor_condition)) {
+      formula->has_conditioned_readiness_terms = true;
+    }
+    term.context_group_index = semantic::kInvalidIndex;
+    if (term.condition_impossible) {
+      continue;
+    }
+    for (semantic::Index group_idx = 0;
+         group_idx < static_cast<semantic::Index>(formula->condition_groups.size());
+         ++group_idx) {
+      const auto &group =
+          formula->condition_groups[static_cast<std::size_t>(group_idx)];
+      if (runtime_condition_equal(group.tail_condition, term.tail_condition) &&
+          runtime_condition_equal(
+              group.competitor_condition,
+              term.competitor_condition)) {
+        term.context_group_index = group_idx;
+        break;
+      }
+    }
+    if (term.context_group_index == semantic::kInvalidIndex) {
+      term.context_group_index =
+          static_cast<semantic::Index>(formula->condition_groups.size());
+      formula->condition_groups.push_back(
+          ExactRuntimeConditionGroup{
+              term.tail_condition,
+              term.competitor_condition,
+              runtime_competitor_subset_mask(
+                  term.competitor_condition,
+                  runtime_outcome,
+                  plan)});
+    }
+  }
 }
 
 inline ExactRuntimeVariantPlan compile_exact_runtime_plan(
@@ -1132,6 +1205,13 @@ inline ExactRuntimeVariantPlan compile_exact_runtime_plan(
         runtime_block.subsets.push_back(std::move(runtime_subset));
       }
       runtime_outcome.competitor_blocks.push_back(std::move(runtime_block));
+    }
+
+    for (auto &scenario : runtime_outcome.scenarios) {
+      compile_runtime_scenario_contextual_conditions(
+          plan,
+          runtime_outcome,
+          &scenario);
     }
 
     runtime_outcome.competitor_by_scenario.reserve(outcome.scenarios.size());

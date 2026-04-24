@@ -15,6 +15,16 @@ struct ExactRuntimePreparedCompetitorSubset {
   double fixed_mass{0.0};
 };
 
+struct ExactRuntimePreparedCompetitorCache {
+  std::vector<semantic::Index> block_offsets;
+  std::vector<ExactRuntimePreparedCompetitorSubset> subsets;
+
+  void clear() {
+    block_offsets.clear();
+    subsets.clear();
+  }
+};
+
 struct ExactStepWorkspace {
   explicit ExactStepWorkspace(const ExactVariantPlan &plan)
       : oracle(plan),
@@ -41,8 +51,11 @@ struct ExactStepWorkspace {
   ForcedExprEvaluator competitor_evaluator;
   ForcedExprWorkspace target_workspace;
   ForcedExprWorkspace competitor_workspace;
-  std::vector<semantic::Index> prepared_competitor_block_offsets;
-  std::vector<ExactRuntimePreparedCompetitorSubset> prepared_competitor_subsets;
+  ExactRuntimePreparedCompetitorCache base_competitor_cache;
+  ExactRuntimePreparedCompetitorCache conditioned_competitor_cache;
+  std::vector<double> term_values;
+  std::vector<double> group_tails;
+  std::vector<double> group_non_wins;
 };
 
 struct ExactRuntimeConditionGuards {
@@ -58,45 +71,6 @@ struct ExactRuntimeConditionGuards {
       guard_upper_bounds;
   std::unique_ptr<ExactSourceOracle::SourceOrderOverlayGuard> source_order;
 };
-
-inline bool runtime_condition_contains_source(
-    const std::vector<semantic::Index> &sources,
-    const semantic::Index source_id) {
-  return std::find(sources.begin(), sources.end(), source_id) != sources.end();
-}
-
-inline bool runtime_condition_order_contradiction(
-    const ExactRuntimeTermCondition &condition) {
-  for (const auto &fact : condition.source_order_facts) {
-    if (condition.exact_source_id == fact.before_source_id &&
-        runtime_condition_contains_source(
-            condition.upper_bound_source_ids,
-            fact.after_source_id)) {
-      return true;
-    }
-    if (condition.exact_source_id == fact.after_source_id &&
-        runtime_condition_contains_source(
-            condition.lower_bound_source_ids,
-            fact.before_source_id)) {
-      return true;
-    }
-    if (runtime_condition_contains_source(
-            condition.lower_bound_source_ids,
-            fact.before_source_id) &&
-        runtime_condition_contains_source(
-            condition.upper_bound_source_ids,
-            fact.after_source_id)) {
-      return true;
-    }
-    for (const auto &guard_fact : condition.guard_upper_bound_facts) {
-      if (fact.before_source_id == guard_fact.blocker_source_id &&
-          fact.after_source_id == guard_fact.ref_source_id) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
 
 inline ExactRuntimeConditionGuards apply_runtime_condition(
     ExactSourceOracle *oracle,
@@ -257,394 +231,6 @@ inline double competitor_non_win_probability(
   return clamp_probability(non_win);
 }
 
-inline bool runtime_subset_is_used(
-    const ExactRuntimeCompetitorSubsetPlan &subset,
-    const std::vector<std::uint8_t> *used_outcomes) {
-  if (used_outcomes == nullptr) {
-    return false;
-  }
-  for (const auto outcome_idx : subset.outcome_indices) {
-    if ((*used_outcomes)[static_cast<std::size_t>(outcome_idx)] != 0U) {
-      return true;
-    }
-  }
-  return false;
-}
-
-inline bool support_contains_source(const std::vector<semantic::Index> &support,
-                                    const semantic::Index source_id) {
-  return source_id != semantic::kInvalidIndex &&
-         std::binary_search(support.begin(), support.end(), source_id);
-}
-
-inline bool expr_support_contains_source(const ExactVariantPlan &plan,
-                                         const semantic::Index expr_idx,
-                                         const semantic::Index source_id) {
-  if (expr_idx == semantic::kInvalidIndex ||
-      source_id == semantic::kInvalidIndex) {
-    return false;
-  }
-  return support_contains_source(
-      plan.expr_supports[static_cast<std::size_t>(expr_idx)], source_id);
-}
-
-inline bool expr_supports_overlap(const ExactVariantPlan &plan,
-                                  const semantic::Index lhs_expr_idx,
-                                  const semantic::Index rhs_expr_idx) {
-  if (lhs_expr_idx == semantic::kInvalidIndex ||
-      rhs_expr_idx == semantic::kInvalidIndex) {
-    return false;
-  }
-  return supports_overlap(
-      plan.expr_supports[static_cast<std::size_t>(lhs_expr_idx)],
-      plan.expr_supports[static_cast<std::size_t>(rhs_expr_idx)]);
-}
-
-inline bool expr_contains_simple_guard_pair(const ExactVariantPlan &plan,
-                                            const semantic::Index expr_idx,
-                                            const semantic::Index ref_source_id,
-                                            const semantic::Index blocker_source_id) {
-  if (expr_idx == semantic::kInvalidIndex ||
-      ref_source_id == semantic::kInvalidIndex ||
-      blocker_source_id == semantic::kInvalidIndex) {
-    return false;
-  }
-  const auto &program = plan.lowered.program;
-  const auto pos = static_cast<std::size_t>(expr_idx);
-  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
-  if (kind == semantic::ExprKind::Guard) {
-    semantic::Index guard_ref_source_id{semantic::kInvalidIndex};
-    semantic::Index guard_blocker_source_id{semantic::kInvalidIndex};
-    if (simple_event_guard_sources(
-            plan, expr_idx, &guard_ref_source_id, &guard_blocker_source_id) &&
-        guard_ref_source_id == ref_source_id &&
-        guard_blocker_source_id == blocker_source_id) {
-      return true;
-    }
-    if (expr_contains_simple_guard_pair(
-            plan, program.expr_ref_child[pos], ref_source_id, blocker_source_id) ||
-        expr_contains_simple_guard_pair(
-            plan,
-            program.expr_blocker_child[pos],
-            ref_source_id,
-            blocker_source_id)) {
-      return true;
-    }
-  }
-  const auto begin = program.expr_arg_offsets[pos];
-  const auto end = program.expr_arg_offsets[pos + 1U];
-  for (semantic::Index i = begin; i < end; ++i) {
-    if (expr_contains_simple_guard_pair(
-            plan,
-            program.expr_args[static_cast<std::size_t>(i)],
-            ref_source_id,
-            blocker_source_id)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-inline bool runtime_source_relevant_to_competitors(
-    const semantic::Index source_id,
-    const ExactRuntimeOutcomePlan &runtime_outcome,
-    const std::vector<std::uint8_t> *used_outcomes,
-    const ExactVariantPlan &plan) {
-  for (const auto &block : runtime_outcome.competitor_blocks) {
-    for (const auto &subset : block.subsets) {
-      if (runtime_subset_is_used(subset, used_outcomes)) {
-        continue;
-      }
-      for (const auto outcome_idx : subset.outcome_indices) {
-        const auto expr_root =
-            plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
-        if (expr_support_contains_source(plan, expr_root, source_id)) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
-inline bool runtime_expr_relevant_to_competitors(
-    const semantic::Index expr_id,
-    const ExactRuntimeOutcomePlan &runtime_outcome,
-    const std::vector<std::uint8_t> *used_outcomes,
-    const ExactVariantPlan &plan) {
-  for (const auto &block : runtime_outcome.competitor_blocks) {
-    for (const auto &subset : block.subsets) {
-      if (runtime_subset_is_used(subset, used_outcomes)) {
-        continue;
-      }
-      for (const auto outcome_idx : subset.outcome_indices) {
-        const auto expr_root =
-            plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
-        if (expr_supports_overlap(plan, expr_id, expr_root)) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
-inline bool runtime_source_order_relevant_to_competitors(
-    const ExactSourceOrderFact &fact,
-    const ExactRuntimeOutcomePlan &runtime_outcome,
-    const std::vector<std::uint8_t> *used_outcomes,
-    const ExactVariantPlan &plan) {
-  for (const auto &block : runtime_outcome.competitor_blocks) {
-    for (const auto &subset : block.subsets) {
-      if (runtime_subset_is_used(subset, used_outcomes)) {
-        continue;
-      }
-      for (const auto outcome_idx : subset.outcome_indices) {
-        const auto expr_root =
-            plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
-        if (expr_contains_simple_guard_pair(
-                plan,
-                expr_root,
-                fact.after_source_id,
-                fact.before_source_id)) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
-inline bool runtime_guard_upper_relevant_to_competitors(
-    const ExactGuardUpperBoundFact &fact,
-    const ExactRuntimeOutcomePlan &runtime_outcome,
-    const std::vector<std::uint8_t> *used_outcomes,
-    const ExactVariantPlan &plan) {
-  for (const auto &block : runtime_outcome.competitor_blocks) {
-    for (const auto &subset : block.subsets) {
-      if (runtime_subset_is_used(subset, used_outcomes)) {
-        continue;
-      }
-      for (const auto outcome_idx : subset.outcome_indices) {
-        const auto expr_root =
-            plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
-        if (expr_contains_simple_guard_pair(
-                plan,
-                expr_root,
-                fact.ref_source_id,
-                fact.blocker_source_id)) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
-inline ExactRuntimeTermCondition filter_runtime_condition_for_competitors(
-    const ExactRuntimeTermCondition &condition,
-    const ExactRuntimeOutcomePlan &runtime_outcome,
-    const std::vector<std::uint8_t> *used_outcomes,
-    const ExactVariantPlan &plan) {
-  ExactRuntimeTermCondition filtered;
-  if (condition.exact_source_id != semantic::kInvalidIndex &&
-      runtime_source_relevant_to_competitors(
-          condition.exact_source_id, runtime_outcome, used_outcomes, plan)) {
-    filtered.exact_source_id = condition.exact_source_id;
-  }
-  for (const auto source_id : condition.upper_bound_source_ids) {
-    if (runtime_source_relevant_to_competitors(
-            source_id, runtime_outcome, used_outcomes, plan)) {
-      append_runtime_condition_index(
-          &filtered.upper_bound_source_ids, source_id);
-    }
-  }
-  for (const auto source_id : condition.lower_bound_source_ids) {
-    if (runtime_source_relevant_to_competitors(
-            source_id, runtime_outcome, used_outcomes, plan)) {
-      append_runtime_condition_index(
-          &filtered.lower_bound_source_ids, source_id);
-    }
-  }
-  for (const auto expr_id : condition.upper_bound_expr_ids) {
-    if (runtime_expr_relevant_to_competitors(
-            expr_id, runtime_outcome, used_outcomes, plan)) {
-      append_runtime_condition_index(&filtered.upper_bound_expr_ids, expr_id);
-    }
-  }
-  for (const auto &fact : condition.source_order_facts) {
-    if (runtime_source_order_relevant_to_competitors(
-            fact, runtime_outcome, used_outcomes, plan)) {
-      append_runtime_source_order_fact(
-          &filtered.source_order_facts,
-          fact.before_source_id,
-          fact.after_source_id);
-    }
-  }
-  for (const auto &fact : condition.guard_upper_bound_facts) {
-    if (runtime_guard_upper_relevant_to_competitors(
-            fact, runtime_outcome, used_outcomes, plan)) {
-      append_runtime_guard_upper_bound_fact(
-          &filtered.guard_upper_bound_facts,
-          fact.expr_id,
-          fact.ref_source_id,
-          fact.blocker_source_id);
-    }
-  }
-  return filtered;
-}
-
-inline bool runtime_factors_source_relevant(const ExactRuntimeFactors &factors,
-                                            const ExactVariantPlan &plan,
-                                            const semantic::Index source_id) {
-  if (runtime_condition_contains_source(factors.source_pdf, source_id) ||
-      runtime_condition_contains_source(factors.source_cdf, source_id) ||
-      runtime_condition_contains_source(factors.source_survival, source_id)) {
-    return true;
-  }
-  for (const auto expr_id : factors.expr_density) {
-    if (expr_support_contains_source(plan, expr_id, source_id)) {
-      return true;
-    }
-  }
-  for (const auto expr_id : factors.expr_cdf) {
-    if (expr_support_contains_source(plan, expr_id, source_id)) {
-      return true;
-    }
-  }
-  for (const auto expr_id : factors.expr_survival) {
-    if (expr_support_contains_source(plan, expr_id, source_id)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-inline bool runtime_truth_source_relevant(const ExactRuntimeTruthFormula &formula,
-                                          const ExactVariantPlan &plan,
-                                          const semantic::Index source_id) {
-  if (runtime_factors_source_relevant(formula.product, plan, source_id)) {
-    return true;
-  }
-  for (const auto &term : formula.sum_terms) {
-    if (runtime_factors_source_relevant(term.factors, plan, source_id)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-inline bool runtime_factors_expr_relevant(const ExactRuntimeFactors &factors,
-                                          const ExactVariantPlan &plan,
-                                          const semantic::Index expr_id) {
-  for (const auto source_id :
-       plan.expr_supports[static_cast<std::size_t>(expr_id)]) {
-    if (runtime_factors_source_relevant(factors, plan, source_id)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-inline bool runtime_truth_expr_relevant(const ExactRuntimeTruthFormula &formula,
-                                        const ExactVariantPlan &plan,
-                                        const semantic::Index expr_id) {
-  if (runtime_factors_expr_relevant(formula.product, plan, expr_id)) {
-    return true;
-  }
-  for (const auto &term : formula.sum_terms) {
-    if (runtime_factors_expr_relevant(term.factors, plan, expr_id)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-inline bool runtime_factors_contain_guard_pair(
-    const ExactRuntimeFactors &factors,
-    const ExactVariantPlan &plan,
-    const semantic::Index ref_source_id,
-    const semantic::Index blocker_source_id) {
-  auto contains_pair = [&](const std::vector<semantic::Index> &expr_ids) {
-    for (const auto expr_id : expr_ids) {
-      if (expr_contains_simple_guard_pair(
-              plan, expr_id, ref_source_id, blocker_source_id)) {
-        return true;
-      }
-    }
-    return false;
-  };
-  return contains_pair(factors.expr_density) ||
-         contains_pair(factors.expr_cdf) ||
-         contains_pair(factors.expr_survival);
-}
-
-inline bool runtime_truth_contains_guard_pair(
-    const ExactRuntimeTruthFormula &formula,
-    const ExactVariantPlan &plan,
-    const semantic::Index ref_source_id,
-    const semantic::Index blocker_source_id) {
-  if (runtime_factors_contain_guard_pair(
-          formula.product, plan, ref_source_id, blocker_source_id)) {
-    return true;
-  }
-  for (const auto &term : formula.sum_terms) {
-    if (runtime_factors_contain_guard_pair(
-            term.factors, plan, ref_source_id, blocker_source_id)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-inline ExactRuntimeTermCondition filter_runtime_condition_for_truth(
-    const ExactRuntimeTermCondition &condition,
-    const ExactRuntimeTruthFormula &formula,
-    const ExactVariantPlan &plan) {
-  ExactRuntimeTermCondition filtered;
-  if (condition.exact_source_id != semantic::kInvalidIndex &&
-      runtime_truth_source_relevant(formula, plan, condition.exact_source_id)) {
-    filtered.exact_source_id = condition.exact_source_id;
-  }
-  for (const auto source_id : condition.upper_bound_source_ids) {
-    if (runtime_truth_source_relevant(formula, plan, source_id)) {
-      append_runtime_condition_index(
-          &filtered.upper_bound_source_ids, source_id);
-    }
-  }
-  for (const auto source_id : condition.lower_bound_source_ids) {
-    if (runtime_truth_source_relevant(formula, plan, source_id)) {
-      append_runtime_condition_index(
-          &filtered.lower_bound_source_ids, source_id);
-    }
-  }
-  for (const auto expr_id : condition.upper_bound_expr_ids) {
-    if (runtime_truth_expr_relevant(formula, plan, expr_id)) {
-      append_runtime_condition_index(&filtered.upper_bound_expr_ids, expr_id);
-    }
-  }
-  for (const auto &fact : condition.source_order_facts) {
-    if (runtime_truth_contains_guard_pair(
-            formula, plan, fact.after_source_id, fact.before_source_id)) {
-      append_runtime_source_order_fact(
-          &filtered.source_order_facts,
-          fact.before_source_id,
-          fact.after_source_id);
-    }
-  }
-  for (const auto &fact : condition.guard_upper_bound_facts) {
-    if (runtime_truth_contains_guard_pair(
-            formula, plan, fact.ref_source_id, fact.blocker_source_id)) {
-      append_runtime_guard_upper_bound_fact(
-          &filtered.guard_upper_bound_facts,
-          fact.expr_id,
-          fact.ref_source_id,
-          fact.blocker_source_id);
-    }
-  }
-  return filtered;
-}
-
 inline double runtime_competitor_subset_win_at_t(
     const ExactRuntimeCompetitorSubsetPlan &subset,
     ForcedExprEvaluator *evaluator,
@@ -707,14 +293,17 @@ inline void prepare_runtime_competitor_non_win(
     ForcedExprEvaluator *evaluator,
     ForcedExprWorkspace *workspace,
     const double t,
-    ExactStepWorkspace *step_workspace) {
-  auto &offsets = step_workspace->prepared_competitor_block_offsets;
-  auto &prepared = step_workspace->prepared_competitor_subsets;
-  offsets.clear();
-  prepared.clear();
+    ExactRuntimePreparedCompetitorCache *cache,
+    const ExactRuntimePreparedCompetitorCache *base_cache = nullptr,
+    const ExactRuntimeCompetitorSubsetMask *mask_a = nullptr,
+    const ExactRuntimeCompetitorSubsetMask *mask_b = nullptr) {
+  auto &offsets = cache->block_offsets;
+  auto &prepared = cache->subsets;
+  cache->clear();
   offsets.reserve(runtime_outcome.competitor_blocks.size() + 1U);
   offsets.push_back(0);
 
+  std::size_t base_pos = 0;
   for (std::size_t block_idx = 0;
        block_idx < runtime_outcome.competitor_blocks.size();
        ++block_idx) {
@@ -725,6 +314,24 @@ inline void prepare_runtime_competitor_non_win(
       const auto &subset = block.subsets[subset_idx];
       if (runtime_subset_is_used(subset, used_outcomes)) {
         continue;
+      }
+      const bool has_subset_mask = mask_a != nullptr || mask_b != nullptr;
+      const bool affected =
+          !has_subset_mask ||
+          runtime_competitor_subset_mask_affected(mask_a, block_idx, subset_idx) ||
+          runtime_competitor_subset_mask_affected(mask_b, block_idx, subset_idx);
+      if (base_cache != nullptr && !affected &&
+          base_pos < base_cache->subsets.size() &&
+          base_cache->subsets[base_pos].block_index ==
+              static_cast<semantic::Index>(block_idx) &&
+          base_cache->subsets[base_pos].subset_index ==
+              static_cast<semantic::Index>(subset_idx)) {
+        prepared.push_back(base_cache->subsets[base_pos]);
+        ++base_pos;
+        continue;
+      }
+      if (base_cache != nullptr) {
+        ++base_pos;
       }
       const auto &subset_view = block_view.subsets[subset_idx];
       const double win_prob =
@@ -747,10 +354,10 @@ inline double runtime_competitor_non_win_probability(
     ForcedExprWorkspace *workspace,
     const double t,
     const double readiness_upper,
-    const ExactStepWorkspace &step_workspace) {
+    const ExactRuntimePreparedCompetitorCache &cache) {
   double non_win = 1.0;
-  const auto &offsets = step_workspace.prepared_competitor_block_offsets;
-  const auto &prepared = step_workspace.prepared_competitor_subsets;
+  const auto &offsets = cache.block_offsets;
+  const auto &prepared = cache.subsets;
   for (std::size_t block_idx = 0;
        block_idx < runtime_outcome.competitor_blocks.size();
        ++block_idx) {
@@ -887,14 +494,20 @@ inline double evaluate_runtime_scenario_probability(
       target_evaluator->oracle(),
       scenario_formula.active_source_id,
       observed_time);
-  const auto tail_competitor_condition =
-      filter_runtime_condition_for_competitors(
-          runtime_scenario_tail_condition(scenario_formula),
-          runtime_outcome,
-          used_outcomes,
-          target_evaluator->plan());
+  std::optional<ExactRuntimeTermCondition> ranked_tail_competitor_condition;
+  const ExactRuntimeTermCondition *tail_competitor_condition =
+      &scenario_formula.tail_competitor_condition;
+  if (used_outcomes != nullptr) {
+    ranked_tail_competitor_condition =
+        filter_runtime_condition_for_competitors(
+            scenario_formula.tail_condition,
+            runtime_outcome,
+            used_outcomes,
+            target_evaluator->plan());
+    tail_competitor_condition = &*ranked_tail_competitor_condition;
+  }
   const bool has_tail_competitor_condition =
-      !runtime_condition_empty(tail_competitor_condition);
+      !runtime_condition_empty(*tail_competitor_condition);
 
   auto prepare_competitor = [&]() {
     competitor_evaluator->invalidate_cache();
@@ -905,10 +518,12 @@ inline double evaluate_runtime_scenario_probability(
         competitor_evaluator,
         competitor_workspace,
         observed_time,
-        step_workspace);
+        &step_workspace->base_competitor_cache);
   };
 
-  auto competitor_non_win_prepared = [&](const double readiness_upper) {
+  auto competitor_non_win_prepared =
+      [&](const double readiness_upper,
+          const ExactRuntimePreparedCompetitorCache &cache) {
     return runtime_competitor_non_win_probability(
         runtime_outcome,
         scenario_competitor,
@@ -916,7 +531,7 @@ inline double evaluate_runtime_scenario_probability(
         competitor_workspace,
         observed_time,
         readiness_upper,
-        *step_workspace);
+        cache);
   };
 
   bool base_competitor_prepared = false;
@@ -925,25 +540,64 @@ inline double evaluate_runtime_scenario_probability(
       prepare_competitor();
       base_competitor_prepared = true;
     }
-    return competitor_non_win_prepared(readiness_upper);
+    return competitor_non_win_prepared(
+        readiness_upper,
+        step_workspace->base_competitor_cache);
   };
 
-  const auto conditioned_competitor_non_win = [&](const double readiness_upper) {
-    prepare_competitor();
-    base_competitor_prepared = false;
-    return competitor_non_win_prepared(readiness_upper);
+  const auto conditioned_competitor_non_win =
+      [&](const double readiness_upper,
+          const ExactRuntimeCompetitorSubsetMask *mask_a,
+          const ExactRuntimeCompetitorSubsetMask *mask_b) {
+    if (!base_competitor_prepared) {
+      prepare_competitor();
+      base_competitor_prepared = true;
+    }
+    competitor_evaluator->invalidate_cache();
+    prepare_runtime_competitor_non_win(
+        runtime_outcome,
+        scenario_competitor,
+        used_outcomes,
+        competitor_evaluator,
+        competitor_workspace,
+        observed_time,
+        &step_workspace->conditioned_competitor_cache,
+        &step_workspace->base_competitor_cache,
+        mask_a,
+        mask_b);
+    return competitor_non_win_prepared(
+        readiness_upper,
+        step_workspace->conditioned_competitor_cache);
   };
+
+  const auto invalidate_after_condition =
+      [&](ForcedExprEvaluator *condition_evaluator) {
+        target_evaluator->invalidate_cache();
+        competitor_evaluator->invalidate_cache();
+        if (condition_evaluator != nullptr &&
+            condition_evaluator != target_evaluator &&
+            condition_evaluator != competitor_evaluator) {
+          condition_evaluator->invalidate_cache();
+        }
+      };
 
   const auto competitor_non_win_with_conditions =
       [&](const double readiness_upper,
           const ExactRuntimeTermCondition &term_condition,
           const double term_time,
-          ForcedExprEvaluator *term_evaluator) {
+          ForcedExprEvaluator *term_evaluator,
+          const ExactRuntimeCompetitorSubsetMask *term_mask) {
         const bool has_term_condition =
             !runtime_condition_empty(term_condition);
         if (!has_term_condition && !has_tail_competitor_condition) {
           return competitor_non_win(readiness_upper);
         }
+        const auto *tail_mask =
+            has_tail_competitor_condition && used_outcomes == nullptr
+                ? &scenario_formula.tail_competitor_subset_mask
+                : nullptr;
+        const auto *prepared_term_mask =
+            has_term_condition && used_outcomes == nullptr ? term_mask : nullptr;
         double value = 0.0;
         if (has_term_condition) {
           {
@@ -953,42 +607,46 @@ inline double evaluate_runtime_scenario_probability(
                 term_time,
                 term_evaluator);
             if (!term_guards.impossible) {
-              target_evaluator->invalidate_cache();
-              competitor_evaluator->invalidate_cache();
+              invalidate_after_condition(term_evaluator);
               if (has_tail_competitor_condition) {
                 const auto tail_guards = apply_runtime_condition(
                     target_evaluator->oracle(),
-                    tail_competitor_condition,
+                    *tail_competitor_condition,
                     observed_time,
                     target_evaluator);
                 if (!tail_guards.impossible) {
-                  target_evaluator->invalidate_cache();
-                  competitor_evaluator->invalidate_cache();
-                  value = conditioned_competitor_non_win(readiness_upper);
+                  invalidate_after_condition(term_evaluator);
+                  value = conditioned_competitor_non_win(
+                      readiness_upper,
+                      prepared_term_mask,
+                      tail_mask);
                 }
               } else {
-                value = conditioned_competitor_non_win(readiness_upper);
+                value = conditioned_competitor_non_win(
+                    readiness_upper,
+                    prepared_term_mask,
+                    nullptr);
               }
             }
           }
-          target_evaluator->invalidate_cache();
-          competitor_evaluator->invalidate_cache();
+          invalidate_after_condition(term_evaluator);
           return value;
         }
         {
           const auto tail_guards = apply_runtime_condition(
               target_evaluator->oracle(),
-              tail_competitor_condition,
+              *tail_competitor_condition,
               observed_time,
               target_evaluator);
           if (!tail_guards.impossible) {
-            target_evaluator->invalidate_cache();
-            competitor_evaluator->invalidate_cache();
-            value = conditioned_competitor_non_win(readiness_upper);
+            invalidate_after_condition(term_evaluator);
+            value = conditioned_competitor_non_win(
+                readiness_upper,
+                nullptr,
+                tail_mask);
           }
         }
-        target_evaluator->invalidate_cache();
-        competitor_evaluator->invalidate_cache();
+        invalidate_after_condition(term_evaluator);
         return value;
       };
 
@@ -1011,7 +669,7 @@ inline double evaluate_runtime_scenario_probability(
               condition_time,
               condition_evaluator);
           if (!condition_guards.impossible) {
-            target_evaluator->invalidate_cache();
+            invalidate_after_condition(condition_evaluator);
             tail = runtime_after_survival(
                 scenario_formula,
                 target_evaluator,
@@ -1019,7 +677,7 @@ inline double evaluate_runtime_scenario_probability(
                 target_workspace);
           }
         }
-        target_evaluator->invalidate_cache();
+        invalidate_after_condition(condition_evaluator);
         return tail;
       };
 
@@ -1033,7 +691,8 @@ inline double evaluate_runtime_scenario_probability(
         0.0,
         ExactRuntimeTermCondition{},
         observed_time,
-        target_evaluator);
+        target_evaluator,
+        nullptr);
     return active_pdf * tail * non_win;
   }
 
@@ -1047,48 +706,34 @@ inline double evaluate_runtime_scenario_probability(
         0.0,
         ExactRuntimeTermCondition{},
         observed_time,
-        target_evaluator);
+        target_evaluator,
+        nullptr);
     total += initial_ready * active_pdf * base_tail * non_win;
   }
 
   const auto &readiness_terms = scenario_formula.readiness_density.sum_terms;
-  std::vector<ExactRuntimeTermCondition> term_tail_conditions;
-  std::vector<ExactRuntimeTermCondition> term_competitor_conditions;
-  std::vector<std::uint8_t> term_impossible;
-  term_tail_conditions.reserve(readiness_terms.size());
-  term_competitor_conditions.reserve(readiness_terms.size());
-  term_impossible.reserve(readiness_terms.size());
-  bool has_conditioned_terms = false;
-  for (const auto &term : readiness_terms) {
-    auto full_condition =
-        runtime_product_term_condition(term, target_evaluator->plan());
-    for (const auto &fact : scenario_formula.source_order_facts) {
-      append_runtime_source_order_fact(
-          &full_condition.source_order_facts,
-          fact.before_source_id,
-          fact.after_source_id);
+  std::vector<ExactRuntimeTermCondition> ranked_term_competitor_conditions;
+  if (used_outcomes != nullptr) {
+    ranked_term_competitor_conditions.reserve(readiness_terms.size());
+    for (const auto &term : readiness_terms) {
+      ranked_term_competitor_conditions.push_back(
+          filter_runtime_condition_for_competitors(
+              term.condition,
+              runtime_outcome,
+              used_outcomes,
+              target_evaluator->plan()));
     }
-    const bool impossible = runtime_condition_order_contradiction(full_condition);
-    auto tail_condition = filter_runtime_condition_for_truth(
-        full_condition,
-        scenario_formula.after_survival,
-        target_evaluator->plan());
-    auto competitor_condition = filter_runtime_condition_for_competitors(
-        full_condition,
-        runtime_outcome,
-        used_outcomes,
-        target_evaluator->plan());
-    if (impossible ||
-        !runtime_condition_empty(tail_condition) ||
-        !runtime_condition_empty(competitor_condition)) {
-      has_conditioned_terms = true;
-    }
-    term_tail_conditions.push_back(std::move(tail_condition));
-    term_competitor_conditions.push_back(std::move(competitor_condition));
-    term_impossible.push_back(impossible ? 1U : 0U);
   }
+  const auto term_competitor_condition =
+      [&](const std::size_t term_idx,
+          const ExactRuntimeProductTerm &term) -> const ExactRuntimeTermCondition & {
+        return used_outcomes != nullptr
+                   ? ranked_term_competitor_conditions[term_idx]
+                   : term.competitor_condition;
+      };
 
-  if (!has_conditioned_terms && !has_tail_competitor_condition) {
+  if (!scenario_formula.has_conditioned_readiness_terms &&
+      !has_tail_competitor_condition) {
     if (!(base_tail > 0.0)) {
       return total;
     }
@@ -1128,37 +773,117 @@ inline double evaluate_runtime_scenario_probability(
         continue;
       }
     }
+    const auto condition_evaluator =
+        scenario_evaluator != nullptr ? scenario_evaluator : target_evaluator;
+    auto &term_values = step_workspace->term_values;
+    term_values.assign(readiness_terms.size(), 0.0);
+    bool has_nonzero_term = false;
     for (std::size_t term_idx = 0; term_idx < readiness_terms.size();
          ++term_idx) {
       const auto &term = readiness_terms[term_idx];
-      double value = evaluate_runtime_factors(
+      if (term.condition_impossible) {
+        continue;
+      }
+      const double value = evaluate_runtime_factors(
           term.factors,
           target_evaluator,
           scenario_evaluator);
       if (!std::isfinite(value) || value == 0.0) {
         continue;
       }
+      term_values[term_idx] = value;
+      has_nonzero_term = true;
+    }
+    if (!has_nonzero_term) {
+      continue;
+    }
 
-      if (term_impossible[term_idx] != 0U) {
+    if (used_outcomes == nullptr) {
+      auto &group_tails = step_workspace->group_tails;
+      auto &group_non_wins = step_workspace->group_non_wins;
+      group_tails.assign(
+          scenario_formula.condition_groups.size(),
+          std::numeric_limits<double>::quiet_NaN());
+      group_non_wins.assign(
+          scenario_formula.condition_groups.size(),
+          std::numeric_limits<double>::quiet_NaN());
+      const auto ensure_group = [&](const std::size_t group_idx) {
+        if (std::isfinite(group_tails[group_idx])) {
+          return;
+        }
+        const auto &group = scenario_formula.condition_groups[group_idx];
+        const double group_tail =
+            runtime_condition_empty(group.tail_condition)
+                ? base_tail
+                : tail_with_condition(
+                      group.tail_condition,
+                      readiness_time,
+                      condition_evaluator);
+        group_tails[group_idx] = group_tail;
+        group_non_wins[group_idx] =
+            group_tail > 0.0
+                ? competitor_non_win_with_conditions(
+                      readiness_time,
+                      group.competitor_condition,
+                      readiness_time,
+                      condition_evaluator,
+                      &group.competitor_subset_mask)
+                : 0.0;
+      };
+      for (std::size_t term_idx = 0; term_idx < readiness_terms.size();
+           ++term_idx) {
+        const auto &term = readiness_terms[term_idx];
+        double value = term_values[term_idx];
+        if (value == 0.0 ||
+            term.context_group_index == semantic::kInvalidIndex) {
+          continue;
+        }
+        const auto group_idx =
+            static_cast<std::size_t>(term.context_group_index);
+        ensure_group(group_idx);
+        const double term_tail = group_tails[group_idx];
+        const double term_non_win = group_non_wins[group_idx];
+        if (!(term_tail > 0.0)) {
+          continue;
+        }
+        value *= active_pdf * term_tail;
+        if (!std::isfinite(value) || value == 0.0) {
+          continue;
+        }
+        value *= term_non_win;
+        if (!std::isfinite(value) || value == 0.0) {
+          continue;
+        }
+        total += batch.nodes.weights[i] * value;
+      }
+      continue;
+    }
+
+    for (std::size_t term_idx = 0; term_idx < readiness_terms.size();
+         ++term_idx) {
+      const auto &term = readiness_terms[term_idx];
+      double value = term_values[term_idx];
+      if (value == 0.0) {
         continue;
       }
 
-      const auto condition_evaluator =
-          scenario_evaluator != nullptr ? scenario_evaluator : target_evaluator;
-      const double term_tail = runtime_condition_empty(term_tail_conditions[term_idx])
-                                   ? base_tail
-                                   : tail_with_condition(
-                                         term_tail_conditions[term_idx],
-                                         readiness_time,
-                                         condition_evaluator);
+      double term_tail = 0.0;
+      double term_non_win = 0.0;
+      term_tail = runtime_condition_empty(term.tail_condition)
+                      ? base_tail
+                      : tail_with_condition(
+                            term.tail_condition,
+                            readiness_time,
+                            condition_evaluator);
+      term_non_win = competitor_non_win_with_conditions(
+          readiness_time,
+          term_competitor_condition(term_idx, term),
+          readiness_time,
+          condition_evaluator,
+          nullptr);
       if (!(term_tail > 0.0)) {
         continue;
       }
-      const double term_non_win = competitor_non_win_with_conditions(
-          readiness_time,
-          term_competitor_conditions[term_idx],
-          readiness_time,
-          condition_evaluator);
       value *= active_pdf * term_tail;
       if (!std::isfinite(value) || value == 0.0) {
         continue;

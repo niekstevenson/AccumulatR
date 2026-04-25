@@ -72,6 +72,42 @@ struct ExactGuardUpperBoundFact {
   semantic::Index blocker_source_id{semantic::kInvalidIndex};
 };
 
+struct ExactTimedSourceFact {
+  semantic::Index source_id{semantic::kInvalidIndex};
+  double time{std::numeric_limits<double>::quiet_NaN()};
+};
+
+struct ExactTimedExprUpperBound {
+  semantic::Index expr_id{semantic::kInvalidIndex};
+  double time{std::numeric_limits<double>::quiet_NaN()};
+  double normalizer{0.0};
+};
+
+struct ExactTimedGuardUpperBound {
+  semantic::Index ref_source_id{semantic::kInvalidIndex};
+  semantic::Index blocker_source_id{semantic::kInvalidIndex};
+  double time{std::numeric_limits<double>::quiet_NaN()};
+  double normalizer{0.0};
+};
+
+struct ExactConditionFrame {
+  semantic::Index id{0};
+  bool impossible{false};
+  bool has_source_order_facts{false};
+  bool has_guard_upper_bounds{false};
+  bool has_expr_upper_bounds{false};
+  const ExactConditionFrame *parent{nullptr};
+  std::vector<double> source_exact_times;
+  std::vector<double> source_lower_bounds;
+  std::vector<double> source_upper_bounds;
+  std::vector<ExactTimedSourceFact> exact_times;
+  std::vector<ExactTimedSourceFact> upper_bounds;
+  std::vector<ExactTimedSourceFact> lower_bounds;
+  std::vector<ExactTimedExprUpperBound> expr_upper_bounds;
+  std::vector<ExactTimedGuardUpperBound> guard_upper_bounds;
+  std::vector<ExactSourceOrderFact> source_order_facts;
+};
+
 struct ExactRuntimeTermCondition {
   semantic::Index exact_source_id{semantic::kInvalidIndex};
   std::vector<semantic::Index> upper_bound_source_ids;
@@ -417,12 +453,37 @@ struct ExactRuntimeVariantPlan {
   std::vector<ExactRuntimeOutcomePlan> outcomes;
 };
 
+struct ExactExprUnionSubset {
+  ExactIndexSpan children;
+  int sign{1};
+};
+
+struct ExactExprKernel {
+  semantic::ExprKind kind{semantic::ExprKind::Impossible};
+  ExactIndexSpan children;
+  ExactIndexSpan union_subset_span;
+  ExactIndexSpan guard_ref_child_span;
+  semantic::Index event_source_id{semantic::kInvalidIndex};
+  semantic::Index guard_ref_expr_id{semantic::kInvalidIndex};
+  semantic::Index guard_blocker_expr_id{semantic::kInvalidIndex};
+  semantic::Index guard_ref_source_id{semantic::kInvalidIndex};
+  semantic::Index guard_blocker_source_id{semantic::kInvalidIndex};
+  semantic::ExprKind guard_ref_kind{semantic::ExprKind::Impossible};
+  semantic::ExprKind guard_blocker_kind{semantic::ExprKind::Impossible};
+  bool children_overlap{false};
+  bool simple_event_guard{false};
+  bool has_unless{false};
+};
+
 struct ExactVariantPlan {
   runtime::LoweredExactVariant lowered;
   std::vector<semantic::Index> outcome_index_by_code;
   std::vector<ExactOutcomePlan> outcomes;
   std::vector<ExactTargetCompetitorPlan> competitor_plans;
   ExactRuntimeVariantPlan runtime;
+  std::vector<ExactExprKernel> expr_kernels;
+  std::vector<ExactExprUnionSubset> expr_union_subsets;
+  std::vector<semantic::Index> expr_union_subset_children;
   std::vector<std::vector<semantic::Index>> leaf_supports;
   std::vector<std::vector<semantic::Index>> pool_supports;
   std::vector<std::vector<semantic::Index>> expr_supports;
@@ -513,29 +574,20 @@ inline bool simple_event_guard_sources(const ExactVariantPlan &plan,
                                        const semantic::Index expr_id,
                                        semantic::Index *ref_source_id,
                                        semantic::Index *blocker_source_id) {
-  if (expr_id == semantic::kInvalidIndex) {
+  if (expr_id == semantic::kInvalidIndex ||
+      static_cast<std::size_t>(expr_id) >= plan.expr_kernels.size()) {
     return false;
   }
-  const auto &program = plan.lowered.program;
-  const auto pos = static_cast<std::size_t>(expr_id);
-  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
-  if (kind != semantic::ExprKind::Guard ||
-      program.expr_arg_offsets[pos] != program.expr_arg_offsets[pos + 1U]) {
+  const auto &kernel = plan.expr_kernels[static_cast<std::size_t>(expr_id)];
+  if (!kernel.simple_event_guard || kernel.has_unless) {
     return false;
   }
-  const auto ref = program.expr_ref_child[pos];
-  const auto blocker = program.expr_blocker_child[pos];
-  const auto ref_kind =
-      static_cast<semantic::ExprKind>(program.expr_kind[static_cast<std::size_t>(ref)]);
-  const auto blocker_kind = static_cast<semantic::ExprKind>(
-      program.expr_kind[static_cast<std::size_t>(blocker)]);
-  if (ref_kind != semantic::ExprKind::Event ||
-      blocker_kind != semantic::ExprKind::Event) {
-    return false;
+  if (ref_source_id != nullptr) {
+    *ref_source_id = kernel.guard_ref_source_id;
   }
-  *ref_source_id = program.expr_source_ids[static_cast<std::size_t>(ref)];
-  *blocker_source_id =
-      program.expr_source_ids[static_cast<std::size_t>(blocker)];
+  if (blocker_source_id != nullptr) {
+    *blocker_source_id = kernel.guard_blocker_source_id;
+  }
   return true;
 }
 

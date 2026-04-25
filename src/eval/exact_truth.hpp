@@ -74,15 +74,31 @@ public:
         program_(plan.lowered.program),
         cdf_cache_(program_.expr_kind.size(), 0.0),
         cdf_time_(program_.expr_kind.size(), 0.0),
+        cdf_condition_id_(program_.expr_kind.size(), 0),
         cdf_epoch_(program_.expr_kind.size(), 0U),
         density_cache_(program_.expr_kind.size(), 0.0),
         density_time_(program_.expr_kind.size(), 0.0),
+        density_condition_id_(program_.expr_kind.size(), 0),
         density_epoch_(program_.expr_kind.size(), 0U) {}
 
-  void reset(ExactSourceOracle *oracle, const RelationView relation_view = {}) {
+  void reset(ExactSourceOracle *oracle,
+             const RelationView relation_view = {},
+             const ExactConditionFrame *condition_frame = nullptr) {
     oracle_ = oracle;
     relation_view_ = relation_view;
+    condition_frame_ = condition_frame;
     invalidate_cache();
+  }
+
+  const ExactConditionFrame *set_condition_frame(
+      const ExactConditionFrame *condition_frame) noexcept {
+    const auto *previous = condition_frame_;
+    condition_frame_ = condition_frame;
+    return previous;
+  }
+
+  const ExactConditionFrame *condition_frame() const noexcept {
+    return condition_frame_;
   }
 
   void invalidate_cache() {
@@ -97,21 +113,24 @@ public:
   double expr_cdf(const semantic::Index expr_idx) {
     const auto pos = static_cast<std::size_t>(expr_idx);
     const double current_time = oracle_->conditional_time();
+    const auto frame_id = condition_frame_id();
     const bool ignoring_guard_upper =
         ignored_guard_upper_ref_ != semantic::kInvalidIndex;
     const bool cacheable =
         ignored_expr_upper_ != expr_idx && !ignoring_guard_upper;
     if (cacheable && cdf_epoch_[pos] == epoch_ &&
-        cdf_time_[pos] == current_time) {
+        cdf_time_[pos] == current_time &&
+        cdf_condition_id_[pos] == frame_id) {
       return cdf_cache_[pos];
     }
     if (cacheable) {
-      if (const double *upper = oracle_->expr_upper_bound_for(expr_idx)) {
-        const double normalizer = oracle_->expr_upper_bound_normalizer(expr_idx);
+      if (const auto *upper =
+              oracle_->expr_upper_bound_for(expr_idx, condition_frame_)) {
+        const double normalizer = upper->normalizer;
         if (!(normalizer > 0.0)) {
           return 0.0;
         }
-        if (current_time >= *upper) {
+        if (current_time >= upper->time) {
           return 1.0;
         }
         const auto previous_ignore = ignored_expr_upper_;
@@ -121,10 +140,9 @@ public:
         return clamp_probability(raw / normalizer);
       }
     }
-    const auto kind =
-        static_cast<semantic::ExprKind>(program_.expr_kind[pos]);
+    const auto &kernel = plan_.expr_kernels[pos];
     double value = 0.0;
-    switch (kind) {
+    switch (kernel.kind) {
     case semantic::ExprKind::Impossible:
       value = 0.0;
       break;
@@ -132,38 +150,28 @@ public:
       value = 1.0;
       break;
     case semantic::ExprKind::Event:
-      value = source_channels(program_.expr_source_ids[pos]).cdf;
+      value = source_channels(kernel.event_source_id).cdf;
       break;
     case semantic::ExprKind::And: {
       double cdf = 1.0;
-      for (semantic::Index i =
-               program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx)];
-           i < program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx + 1)];
-           ++i) {
-        cdf *= expr_cdf(program_.expr_args[static_cast<std::size_t>(i)]);
+      for (semantic::Index i = 0; i < kernel.children.size; ++i) {
+        cdf *= expr_cdf(expr_child(kernel.children, i));
       }
       value = clamp_probability(cdf);
       break;
     }
     case semantic::ExprKind::Or: {
-      std::vector<semantic::Index> children;
-      for (semantic::Index i =
-               program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx)];
-           i < program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx + 1)];
-           ++i) {
-        children.push_back(program_.expr_args[static_cast<std::size_t>(i)]);
-      }
       semantic::Index absorbed_source_id{semantic::kInvalidIndex};
-      if (or_absorbed_event_source(children, &absorbed_source_id)) {
+      if (or_absorbed_event_source(kernel.children, &absorbed_source_id)) {
         value = source_cdf(absorbed_source_id);
-      } else if ((oracle_->has_guard_upper_bound_overlay() ||
-           oracle_->has_source_order_overlay()) &&
-          expr_children_overlap(children)) {
-        value = expr_union_cdf(children);
+      } else if ((oracle_->has_guard_upper_bound_overlay(condition_frame_) ||
+           oracle_->has_source_order_overlay(condition_frame_)) &&
+          kernel.children_overlap) {
+        value = expr_union_cdf(kernel);
       } else {
         double surv = 1.0;
-        for (const auto child : children) {
-          surv *= expr_survival(child);
+        for (semantic::Index i = 0; i < kernel.children.size; ++i) {
+          surv *= expr_survival(expr_child(kernel.children, i));
         }
         value = clamp_probability(1.0 - surv);
       }
@@ -174,23 +182,24 @@ public:
         value = 0.0;
         break;
       }
-      const auto ref =
-          program_.expr_ref_child[static_cast<std::size_t>(expr_idx)];
-      const auto blocker =
-          program_.expr_blocker_child[static_cast<std::size_t>(expr_idx)];
-      semantic::Index ref_source_id{semantic::kInvalidIndex};
-      semantic::Index blocker_source_id{semantic::kInvalidIndex};
-      const bool simple_guard =
-          simple_guard_source_ids(ref, blocker, &ref_source_id, &blocker_source_id);
-      if (simple_guard &&
-          oracle_->source_order_known_before(blocker_source_id, ref_source_id)) {
+      const auto ref = kernel.guard_ref_expr_id;
+      const auto blocker = kernel.guard_blocker_expr_id;
+      if (kernel.simple_event_guard &&
+          oracle_->source_order_known_before(
+              kernel.guard_blocker_source_id,
+              kernel.guard_ref_source_id,
+              condition_frame_)) {
         value = 0.0;
         break;
       }
-      if (simple_guard &&
-          !guard_upper_bound_ignored(ref_source_id, blocker_source_id)) {
+      if (kernel.simple_event_guard &&
+          !guard_upper_bound_ignored(
+              kernel.guard_ref_source_id,
+              kernel.guard_blocker_source_id)) {
         if (const auto *upper = oracle_->guard_upper_bound_for(
-                ref_source_id, blocker_source_id)) {
+                kernel.guard_ref_source_id,
+                kernel.guard_blocker_source_id,
+                condition_frame_)) {
           if (!(upper->normalizer > 0.0)) {
             value = 0.0;
             break;
@@ -201,8 +210,8 @@ public:
           }
           const auto previous_ref = ignored_guard_upper_ref_;
           const auto previous_blocker = ignored_guard_upper_blocker_;
-          ignored_guard_upper_ref_ = ref_source_id;
-          ignored_guard_upper_blocker_ = blocker_source_id;
+          ignored_guard_upper_ref_ = kernel.guard_ref_source_id;
+          ignored_guard_upper_blocker_ = kernel.guard_blocker_source_id;
           const double raw = expr_cdf(expr_idx);
           ignored_guard_upper_ref_ = previous_ref;
           ignored_guard_upper_blocker_ = previous_blocker;
@@ -210,17 +219,11 @@ public:
           break;
         }
       }
-      const bool has_unless =
-          program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx)] !=
-          program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx + 1)];
-      const auto ref_kind = static_cast<semantic::ExprKind>(
-          program_.expr_kind[static_cast<std::size_t>(ref)]);
-      const auto blocker_kind = static_cast<semantic::ExprKind>(
-          program_.expr_kind[static_cast<std::size_t>(blocker)]);
-      if (!has_unless && ref_kind == semantic::ExprKind::Event) {
-        const auto ref_source_id =
-            program_.expr_source_ids[static_cast<std::size_t>(ref)];
-        if (const double *ref_time = oracle_->exact_time_for_source(ref_source_id)) {
+      if (!kernel.has_unless &&
+          kernel.guard_ref_kind == semantic::ExprKind::Event) {
+        const auto ref_source_id = kernel.guard_ref_source_id;
+        if (const double *ref_time =
+                oracle_->exact_time_for_source(ref_source_id, condition_frame_)) {
           if (!(current_time >= *ref_time)) {
             value = 0.0;
           } else {
@@ -230,22 +233,21 @@ public:
           break;
         }
       }
-      if (!has_unless && ref_kind == semantic::ExprKind::And) {
+      if (!kernel.has_unless &&
+          kernel.guard_ref_kind == semantic::ExprKind::And) {
         std::vector<semantic::Index> remaining_ref_children;
         double exact_ref_time = -std::numeric_limits<double>::infinity();
         bool has_exact_ref_child = false;
-        for (semantic::Index i =
-                 program_.expr_arg_offsets[static_cast<std::size_t>(ref)];
-             i < program_.expr_arg_offsets[static_cast<std::size_t>(ref + 1)];
-             ++i) {
-          const auto child = program_.expr_args[static_cast<std::size_t>(i)];
+        for (semantic::Index i = 0; i < kernel.guard_ref_child_span.size; ++i) {
+          const auto child = expr_child(kernel.guard_ref_child_span, i);
           const auto child_kind = static_cast<semantic::ExprKind>(
               program_.expr_kind[static_cast<std::size_t>(child)]);
           if (child_kind == semantic::ExprKind::Event) {
             const auto child_source_id =
                 program_.expr_source_ids[static_cast<std::size_t>(child)];
             if (const double *child_time =
-                    oracle_->exact_time_for_source(child_source_id)) {
+                    oracle_->exact_time_for_source(
+                        child_source_id, condition_frame_)) {
               exact_ref_time = std::max(exact_ref_time, *child_time);
               has_exact_ref_child = true;
               continue;
@@ -286,11 +288,8 @@ public:
         }
 
         bool ref_has_current_exact_child = false;
-        for (semantic::Index i =
-                 program_.expr_arg_offsets[static_cast<std::size_t>(ref)];
-             i < program_.expr_arg_offsets[static_cast<std::size_t>(ref + 1)];
-             ++i) {
-          const auto child = program_.expr_args[static_cast<std::size_t>(i)];
+        for (semantic::Index i = 0; i < kernel.guard_ref_child_span.size; ++i) {
+          const auto child = expr_child(kernel.guard_ref_child_span, i);
           const auto child_kind = static_cast<semantic::ExprKind>(
               program_.expr_kind[static_cast<std::size_t>(child)]);
           if (child_kind != semantic::ExprKind::Event) {
@@ -299,7 +298,7 @@ public:
           const auto child_source_id =
               program_.expr_source_ids[static_cast<std::size_t>(child)];
           const double *child_time =
-              oracle_->exact_time_for_source(child_source_id);
+              oracle_->exact_time_for_source(child_source_id, condition_frame_);
           if (child_time != nullptr &&
               std::fabs(*child_time - current_time) <= 1e-12) {
             ref_has_current_exact_child = true;
@@ -311,11 +310,15 @@ public:
           break;
         }
       }
-      if (!has_unless && blocker_kind == semantic::ExprKind::Event) {
+      if (!kernel.has_unless &&
+          kernel.guard_blocker_kind == semantic::ExprKind::Event) {
         const auto blocker_source_id =
-            program_.expr_source_ids[static_cast<std::size_t>(blocker)];
+            kernel.simple_event_guard
+                ? kernel.guard_blocker_source_id
+                : program_.expr_source_ids[static_cast<std::size_t>(blocker)];
         if (const double *blocker_time =
-                oracle_->exact_time_for_source(blocker_source_id)) {
+                oracle_->exact_time_for_source(
+                    blocker_source_id, condition_frame_)) {
           const double upper = std::min(current_time, *blocker_time);
           if (!(upper > 0.0)) {
             value = 0.0;
@@ -325,6 +328,24 @@ public:
           }
           break;
         }
+      }
+      if (!kernel.has_unless && kernel.simple_event_guard) {
+        value = clamp_probability(quadrature::integrate_finite_default(
+            [&](const double u) {
+              const auto guard = oracle_->conditional_time_guard(u);
+              const double ref_density =
+                  source_pdf(kernel.guard_ref_source_id);
+              if (!std::isfinite(ref_density) || ref_density == 0.0) {
+                return 0.0;
+              }
+              const double blocker_survival =
+                  source_survival(kernel.guard_blocker_source_id);
+              const double term = ref_density * blocker_survival;
+              return std::isfinite(term) ? term : 0.0;
+            },
+            0.0,
+            current_time));
+        break;
       }
       value = clamp_probability(quadrature::integrate_finite_default(
           [&](const double u) {
@@ -337,13 +358,13 @@ public:
     }
     case semantic::ExprKind::Not:
       value = clamp_probability(
-          1.0 - expr_cdf(program_.expr_args[static_cast<std::size_t>(
-                    program_.expr_arg_offsets[pos])]));
+          1.0 - expr_cdf(expr_child(kernel.children, 0)));
       break;
     }
     if (cacheable) {
       cdf_epoch_[pos] = epoch_;
       cdf_time_[pos] = current_time;
+      cdf_condition_id_[pos] = frame_id;
       cdf_cache_[pos] = value;
     }
     return value;
@@ -380,18 +401,21 @@ public:
   double expr_density(const semantic::Index expr_idx) {
     const auto pos = static_cast<std::size_t>(expr_idx);
     const double current_time = oracle_->conditional_time();
+    const auto frame_id = condition_frame_id();
     const bool ignoring_guard_upper =
         ignored_guard_upper_ref_ != semantic::kInvalidIndex;
     const bool cacheable =
         ignored_expr_upper_ != expr_idx && !ignoring_guard_upper;
     if (cacheable && density_epoch_[pos] == epoch_ &&
-        density_time_[pos] == current_time) {
+        density_time_[pos] == current_time &&
+        density_condition_id_[pos] == frame_id) {
       return density_cache_[pos];
     }
     if (cacheable) {
-      if (const double *upper = oracle_->expr_upper_bound_for(expr_idx)) {
-        const double normalizer = oracle_->expr_upper_bound_normalizer(expr_idx);
-        if (!(normalizer > 0.0) || current_time >= *upper) {
+      if (const auto *upper =
+              oracle_->expr_upper_bound_for(expr_idx, condition_frame_)) {
+        const double normalizer = upper->normalizer;
+        if (!(normalizer > 0.0) || current_time >= upper->time) {
           return 0.0;
         }
         const auto previous_ignore = ignored_expr_upper_;
@@ -401,37 +425,29 @@ public:
         return safe_density(raw / normalizer);
       }
     }
-    const auto kind =
-        static_cast<semantic::ExprKind>(program_.expr_kind[pos]);
+    const auto &kernel = plan_.expr_kernels[pos];
     double value = 0.0;
-    switch (kind) {
+    switch (kernel.kind) {
     case semantic::ExprKind::Impossible:
     case semantic::ExprKind::TrueExpr:
       value = 0.0;
       break;
     case semantic::ExprKind::Event:
-      value = source_channels(program_.expr_source_ids[pos]).pdf;
+      value = source_channels(kernel.event_source_id).pdf;
       break;
     case semantic::ExprKind::And: {
       double total = 0.0;
-      for (semantic::Index i =
-               program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx)];
-           i < program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx + 1)];
-           ++i) {
-        const auto child = program_.expr_args[static_cast<std::size_t>(i)];
+      for (semantic::Index i = 0; i < kernel.children.size; ++i) {
+        const auto child = expr_child(kernel.children, i);
         double term = expr_density(child);
         if (!std::isfinite(term) || term == 0.0) {
           continue;
         }
-        for (semantic::Index j =
-                 program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx)];
-             j <
-             program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx + 1)];
-             ++j) {
+        for (semantic::Index j = 0; j < kernel.children.size; ++j) {
           if (i == j) {
             continue;
           }
-          term *= expr_cdf(program_.expr_args[static_cast<std::size_t>(j)]);
+          term *= expr_cdf(expr_child(kernel.children, j));
           if (!std::isfinite(term) || term == 0.0) {
             break;
           }
@@ -442,32 +458,25 @@ public:
       break;
     }
     case semantic::ExprKind::Or: {
-      std::vector<semantic::Index> children;
-      for (semantic::Index i =
-               program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx)];
-           i < program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx + 1)];
-           ++i) {
-        children.push_back(program_.expr_args[static_cast<std::size_t>(i)]);
-      }
       semantic::Index absorbed_source_id{semantic::kInvalidIndex};
-      if (or_absorbed_event_source(children, &absorbed_source_id)) {
+      if (or_absorbed_event_source(kernel.children, &absorbed_source_id)) {
         value = source_pdf(absorbed_source_id);
-      } else if ((oracle_->has_guard_upper_bound_overlay() ||
-           oracle_->has_source_order_overlay()) &&
-          expr_children_overlap(children)) {
-        value = expr_union_density(children);
+      } else if ((oracle_->has_guard_upper_bound_overlay(condition_frame_) ||
+           oracle_->has_source_order_overlay(condition_frame_)) &&
+          kernel.children_overlap) {
+        value = expr_union_density(kernel);
       } else {
         double total = 0.0;
-        for (std::size_t i = 0; i < children.size(); ++i) {
-          double term = expr_density(children[i]);
+        for (semantic::Index i = 0; i < kernel.children.size; ++i) {
+          double term = expr_density(expr_child(kernel.children, i));
           if (!std::isfinite(term) || term == 0.0) {
             continue;
           }
-          for (std::size_t j = 0; j < children.size(); ++j) {
+          for (semantic::Index j = 0; j < kernel.children.size; ++j) {
             if (i == j) {
               continue;
             }
-            term *= expr_survival(children[j]);
+            term *= expr_survival(expr_child(kernel.children, j));
             if (!std::isfinite(term) || term == 0.0) {
               break;
             }
@@ -479,30 +488,32 @@ public:
       break;
     }
     case semantic::ExprKind::Guard: {
-      const auto ref = program_.expr_ref_child[static_cast<std::size_t>(expr_idx)];
-      const auto blocker =
-          program_.expr_blocker_child[static_cast<std::size_t>(expr_idx)];
-      semantic::Index ref_source_id{semantic::kInvalidIndex};
-      semantic::Index blocker_source_id{semantic::kInvalidIndex};
-      const bool simple_guard =
-          simple_guard_source_ids(ref, blocker, &ref_source_id, &blocker_source_id);
-      if (simple_guard &&
-          oracle_->source_order_known_before(blocker_source_id, ref_source_id)) {
+      const auto ref = kernel.guard_ref_expr_id;
+      const auto blocker = kernel.guard_blocker_expr_id;
+      if (kernel.simple_event_guard &&
+          oracle_->source_order_known_before(
+              kernel.guard_blocker_source_id,
+              kernel.guard_ref_source_id,
+              condition_frame_)) {
         value = 0.0;
         break;
       }
-      if (simple_guard &&
-          !guard_upper_bound_ignored(ref_source_id, blocker_source_id)) {
+      if (kernel.simple_event_guard &&
+          !guard_upper_bound_ignored(
+              kernel.guard_ref_source_id,
+              kernel.guard_blocker_source_id)) {
         if (const auto *upper = oracle_->guard_upper_bound_for(
-                ref_source_id, blocker_source_id)) {
+                kernel.guard_ref_source_id,
+                kernel.guard_blocker_source_id,
+                condition_frame_)) {
           if (!(upper->normalizer > 0.0) || current_time >= upper->time) {
             value = 0.0;
             break;
           }
           const auto previous_ref = ignored_guard_upper_ref_;
           const auto previous_blocker = ignored_guard_upper_blocker_;
-          ignored_guard_upper_ref_ = ref_source_id;
-          ignored_guard_upper_blocker_ = blocker_source_id;
+          ignored_guard_upper_ref_ = kernel.guard_ref_source_id;
+          ignored_guard_upper_blocker_ = kernel.guard_blocker_source_id;
           const double raw = expr_density(expr_idx);
           ignored_guard_upper_ref_ = previous_ref;
           ignored_guard_upper_blocker_ = previous_blocker;
@@ -510,9 +521,14 @@ public:
           break;
         }
       }
+      if (!kernel.has_unless && kernel.simple_event_guard) {
+        value = clean_signed_value(
+            source_pdf(kernel.guard_ref_source_id) *
+            source_survival(kernel.guard_blocker_source_id));
+        break;
+      }
       double blocker_survival = 0.0;
-      if (program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx)] ==
-          program_.expr_arg_offsets[static_cast<std::size_t>(expr_idx + 1)]) {
+      if (!kernel.has_unless) {
         blocker_survival = expr_survival(blocker);
       } else {
         blocker_survival = clamp_probability(
@@ -523,14 +539,8 @@ public:
                         if (!std::isfinite(term) || term == 0.0) {
                           return 0.0;
                         }
-                        for (semantic::Index i = program_.expr_arg_offsets
-                                                    [static_cast<std::size_t>(
-                                                        expr_idx)];
-                             i < program_.expr_arg_offsets[static_cast<std::size_t>(
-                                      expr_idx + 1)];
-                             ++i) {
-                          term *= expr_survival(
-                              program_.expr_args[static_cast<std::size_t>(i)]);
+                        for (semantic::Index i = 0; i < kernel.children.size; ++i) {
+                          term *= expr_survival(expr_child(kernel.children, i));
                           if (!std::isfinite(term) || term == 0.0) {
                             return 0.0;
                           }
@@ -545,13 +555,13 @@ public:
     }
     case semantic::ExprKind::Not:
       value = clean_signed_value(
-          -expr_density(program_.expr_args[static_cast<std::size_t>(
-               program_.expr_arg_offsets[pos])]));
+          -expr_density(expr_child(kernel.children, 0)));
       break;
     }
     if (cacheable) {
       density_epoch_[pos] = epoch_;
       density_time_[pos] = current_time;
+      density_condition_id_[pos] = frame_id;
       density_cache_[pos] = value;
     }
     return value;
@@ -605,26 +615,16 @@ public:
   }
 
 private:
-  bool simple_guard_source_ids(const semantic::Index ref,
-                               const semantic::Index blocker,
-                               semantic::Index *ref_source_id,
-                               semantic::Index *blocker_source_id) const {
-    const auto ref_kind = static_cast<semantic::ExprKind>(
-        program_.expr_kind[static_cast<std::size_t>(ref)]);
-    const auto blocker_kind = static_cast<semantic::ExprKind>(
-        program_.expr_kind[static_cast<std::size_t>(blocker)]);
-    if (ref_kind != semantic::ExprKind::Event ||
-        blocker_kind != semantic::ExprKind::Event) {
-      return false;
-    }
-    if (ref_source_id != nullptr) {
-      *ref_source_id = program_.expr_source_ids[static_cast<std::size_t>(ref)];
-    }
-    if (blocker_source_id != nullptr) {
-      *blocker_source_id =
-          program_.expr_source_ids[static_cast<std::size_t>(blocker)];
-    }
-    return true;
+  semantic::Index expr_child(const ExactIndexSpan span,
+                             const semantic::Index index) const {
+    return program_.expr_args[
+        static_cast<std::size_t>(span.offset + index)];
+  }
+
+  semantic::Index union_subset_child(const ExactIndexSpan span,
+                                     const semantic::Index index) const {
+    return plan_.expr_union_subset_children[
+        static_cast<std::size_t>(span.offset + index)];
   }
 
   bool guard_upper_bound_ignored(const semantic::Index ref_source_id,
@@ -728,15 +728,17 @@ private:
     return false;
   }
 
-  bool or_absorbed_event_source(const std::vector<semantic::Index> &children,
+  bool or_absorbed_event_source(const ExactIndexSpan children,
                                 semantic::Index *source_id) {
-    for (const auto child : children) {
+    for (semantic::Index i = 0; i < children.size; ++i) {
+      const auto child = expr_child(children, i);
       semantic::Index candidate{semantic::kInvalidIndex};
       if (!expr_equivalent_event_source(child, &candidate)) {
         continue;
       }
       bool absorbs_all = true;
-      for (const auto other : children) {
+      for (semantic::Index j = 0; j < children.size; ++j) {
+        const auto other = expr_child(children, j);
         if (!expr_subset_of_event_source(other, candidate)) {
           absorbs_all = false;
           break;
@@ -753,92 +755,125 @@ private:
     return false;
   }
 
-  bool expr_children_overlap(
-      const std::vector<semantic::Index> &children) const {
-    for (std::size_t i = 0; i < children.size(); ++i) {
-      const auto &lhs =
-          plan_.expr_supports[static_cast<std::size_t>(children[i])];
-      for (std::size_t j = i + 1U; j < children.size(); ++j) {
-        const auto &rhs =
-            plan_.expr_supports[static_cast<std::size_t>(children[j])];
-        if (supports_overlap(lhs, rhs)) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  double expr_union_cdf(const std::vector<semantic::Index> &children) {
-    if (children.empty()) {
+  double conjunction_density(const std::vector<semantic::Index> &arena,
+                             const ExactIndexSpan span) {
+    if (span.empty()) {
       return 0.0;
     }
-    if (children.size() == 1U) {
-      return expr_cdf(children.front());
+    if (span.size == 1U) {
+      return expr_density(arena[static_cast<std::size_t>(span.offset)]);
     }
     double total = 0.0;
-    const std::size_t max_mask = std::size_t{1} << children.size();
-    for (std::size_t mask = 1U; mask < max_mask; ++mask) {
-      std::vector<semantic::Index> subset;
-      subset.reserve(children.size());
-      for (std::size_t bit = 0; bit < children.size(); ++bit) {
-        if ((mask & (std::size_t{1} << bit)) != 0U) {
-          subset.push_back(children[bit]);
+    for (semantic::Index i = 0; i < span.size; ++i) {
+      const auto active =
+          arena[static_cast<std::size_t>(span.offset + i)];
+      double term = expr_density(active);
+      if (!std::isfinite(term) || term == 0.0) {
+        continue;
+      }
+      for (semantic::Index j = 0; j < span.size; ++j) {
+        if (i == j) {
+          continue;
+        }
+        term *= expr_cdf(
+            arena[static_cast<std::size_t>(span.offset + j)]);
+        if (!std::isfinite(term) || term == 0.0) {
+          break;
         }
       }
-      const double value = subset.size() == 1U
-                               ? expr_cdf(subset.front())
-                               : conjunction_cdf(subset);
-      total += (subset.size() % 2U == 1U) ? value : -value;
+      total += term;
+    }
+    return clean_signed_value(total);
+  }
+
+  double conjunction_cdf(const std::vector<semantic::Index> &arena,
+                         const ExactIndexSpan span) {
+    if (span.empty()) {
+      return 0.0;
+    }
+    if (span.size == 1U) {
+      return expr_cdf(arena[static_cast<std::size_t>(span.offset)]);
+    }
+    const double current_time = oracle_->conditional_time();
+    if (!(current_time > 0.0)) {
+      return 0.0;
+    }
+    return clamp_probability(quadrature::integrate_finite_default(
+        [&](const double u) {
+          const auto guard = oracle_->conditional_time_guard(u);
+          return conjunction_density(arena, span);
+        },
+        0.0,
+        current_time));
+  }
+
+  double expr_union_cdf(const ExactExprKernel &kernel) {
+    if (kernel.children.empty()) {
+      return 0.0;
+    }
+    if (kernel.children.size == 1U) {
+      return expr_cdf(expr_child(kernel.children, 0));
+    }
+    double total = 0.0;
+    for (semantic::Index i = 0; i < kernel.union_subset_span.size; ++i) {
+      const auto &subset = plan_.expr_union_subsets[
+          static_cast<std::size_t>(kernel.union_subset_span.offset + i)];
+      const double value =
+          subset.children.size == 1U
+              ? expr_cdf(union_subset_child(subset.children, 0))
+              : conjunction_cdf(
+                    plan_.expr_union_subset_children, subset.children);
+      total += static_cast<double>(subset.sign) * value;
     }
     return clamp_probability(total);
   }
 
-  double expr_union_density(const std::vector<semantic::Index> &children) {
-    if (children.empty()) {
+  double expr_union_density(const ExactExprKernel &kernel) {
+    if (kernel.children.empty()) {
       return 0.0;
     }
-    if (children.size() == 1U) {
-      return expr_density(children.front());
+    if (kernel.children.size == 1U) {
+      return expr_density(expr_child(kernel.children, 0));
     }
     double total = 0.0;
-    const std::size_t max_mask = std::size_t{1} << children.size();
-    for (std::size_t mask = 1U; mask < max_mask; ++mask) {
-      std::vector<semantic::Index> subset;
-      subset.reserve(children.size());
-      for (std::size_t bit = 0; bit < children.size(); ++bit) {
-        if ((mask & (std::size_t{1} << bit)) != 0U) {
-          subset.push_back(children[bit]);
-        }
-      }
-      const double value = subset.size() == 1U
-                               ? expr_density(subset.front())
-                               : conjunction_density(subset);
-      total += (subset.size() % 2U == 1U) ? value : -value;
+    for (semantic::Index i = 0; i < kernel.union_subset_span.size; ++i) {
+      const auto &subset = plan_.expr_union_subsets[
+          static_cast<std::size_t>(kernel.union_subset_span.offset + i)];
+      const double value =
+          subset.children.size == 1U
+              ? expr_density(union_subset_child(subset.children, 0))
+              : conjunction_density(
+                    plan_.expr_union_subset_children, subset.children);
+      total += static_cast<double>(subset.sign) * value;
     }
     return clean_signed_value(total);
   }
 
   leaf::EventChannels source_channels(const semantic::Index source_id) const {
-    if (oracle_->has_source_condition_overlay(source_id)) {
-      return oracle_->conditional_source(source_id);
-    }
     const auto relation = relation_view_.relation_for(source_id);
-    if (relation != ExactRelation::Unknown) {
+    if (relation != ExactRelation::Unknown &&
+        !oracle_->has_source_condition_overlay(source_id, condition_frame_)) {
       return forced_channels(relation);
     }
-    return oracle_->conditional_source(source_id);
+    return oracle_->conditional_source(source_id, condition_frame_);
+  }
+
+  semantic::Index condition_frame_id() const noexcept {
+    return condition_frame_ == nullptr ? 0 : condition_frame_->id;
   }
 
   const ExactVariantPlan &plan_;
   const runtime::ExactProgram &program_;
   ExactSourceOracle *oracle_{nullptr};
   RelationView relation_view_;
+  const ExactConditionFrame *condition_frame_{nullptr};
   std::vector<double> cdf_cache_;
   std::vector<double> cdf_time_;
+  std::vector<semantic::Index> cdf_condition_id_;
   std::vector<std::uint32_t> cdf_epoch_;
   std::vector<double> density_cache_;
   std::vector<double> density_time_;
+  std::vector<semantic::Index> density_condition_id_;
   std::vector<std::uint32_t> density_epoch_;
   std::uint32_t epoch_{1U};
   semantic::Index ignored_expr_upper_{semantic::kInvalidIndex};
@@ -849,8 +884,10 @@ private:
 struct ForcedExprWorkspace {
   explicit ForcedExprWorkspace(const ExactVariantPlan &plan) : evaluator(plan) {}
 
-  void reset(ExactSourceOracle *oracle, const RelationView relation_view = {}) {
-    evaluator.reset(oracle, relation_view);
+  void reset(ExactSourceOracle *oracle,
+             const RelationView relation_view = {},
+             const ExactConditionFrame *condition_frame = nullptr) {
+    evaluator.reset(oracle, relation_view, condition_frame);
   }
 
   ForcedExprEvaluator evaluator;
@@ -867,7 +904,7 @@ inline ForcedExprEvaluator *prepare_scenario_evaluator(
           &view)) {
     return nullptr;
   }
-  workspace->reset(parent->oracle(), view);
+  workspace->reset(parent->oracle(), view, parent->condition_frame());
   return &workspace->evaluator;
 }
 
@@ -882,7 +919,7 @@ inline ForcedExprEvaluator *prepare_runtime_scenario_evaluator(
           &view)) {
     return nullptr;
   }
-  workspace->reset(parent->oracle(), view);
+  workspace->reset(parent->oracle(), view, parent->condition_frame());
   return &workspace->evaluator;
 }
 

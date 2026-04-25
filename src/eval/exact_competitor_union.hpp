@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <deque>
 #include <memory>
 #include <optional>
 
@@ -44,6 +45,8 @@ struct ExactStepWorkspace {
     competitor_evaluator.reset(&oracle, RelationView{});
     target_workspace.reset(&oracle, RelationView{});
     competitor_workspace.reset(&oracle, RelationView{});
+    condition_frames.clear();
+    next_condition_frame_id = 1;
   }
 
   ExactSourceOracle oracle;
@@ -56,7 +59,181 @@ struct ExactStepWorkspace {
   std::vector<double> term_values;
   std::vector<double> group_tails;
   std::vector<double> group_non_wins;
+  std::deque<ExactConditionFrame> condition_frames;
+  semantic::Index next_condition_frame_id{1};
 };
+
+struct ExactEvaluatorConditionGuard {
+  ExactEvaluatorConditionGuard(ForcedExprEvaluator *evaluator,
+                               const ExactConditionFrame *frame)
+      : evaluator_(evaluator) {
+    if (evaluator_ != nullptr) {
+      previous_ = evaluator_->set_condition_frame(frame);
+    }
+  }
+
+  ExactEvaluatorConditionGuard(const ExactEvaluatorConditionGuard &) = delete;
+  ExactEvaluatorConditionGuard &operator=(
+      const ExactEvaluatorConditionGuard &) = delete;
+
+  ~ExactEvaluatorConditionGuard() {
+    if (evaluator_ != nullptr) {
+      evaluator_->set_condition_frame(previous_);
+    }
+  }
+
+private:
+  ForcedExprEvaluator *evaluator_{nullptr};
+  const ExactConditionFrame *previous_{nullptr};
+};
+
+inline const ExactConditionFrame *store_condition_frame(
+    ExactStepWorkspace *workspace,
+    ExactConditionFrame frame) {
+  frame.id = workspace->next_condition_frame_id++;
+  workspace->condition_frames.push_back(std::move(frame));
+  return &workspace->condition_frames.back();
+}
+
+inline ExactConditionFrame copy_condition_frame(
+    const ExactConditionFrame *parent) {
+  ExactConditionFrame frame;
+  frame.parent = parent;
+  frame.impossible = parent != nullptr && parent->impossible;
+  frame.has_source_order_facts =
+      parent != nullptr && parent->has_source_order_facts;
+  frame.has_guard_upper_bounds =
+      parent != nullptr && parent->has_guard_upper_bounds;
+  frame.has_expr_upper_bounds =
+      parent != nullptr && parent->has_expr_upper_bounds;
+  if (parent != nullptr) {
+    frame.source_exact_times = parent->source_exact_times;
+    frame.source_lower_bounds = parent->source_lower_bounds;
+    frame.source_upper_bounds = parent->source_upper_bounds;
+  }
+  return frame;
+}
+
+inline void ensure_source_condition_size(std::vector<double> *values,
+                                         const semantic::Index source_id) {
+  if (source_id == semantic::kInvalidIndex) {
+    return;
+  }
+  const auto size = static_cast<std::size_t>(source_id + 1);
+  if (values->size() < size) {
+    values->resize(size, std::numeric_limits<double>::quiet_NaN());
+  }
+}
+
+inline const ExactConditionFrame *append_exact_source_frame(
+    ExactStepWorkspace *workspace,
+    const ExactConditionFrame *parent,
+    const semantic::Index source_id,
+    const double time) {
+  if (source_id == semantic::kInvalidIndex || !std::isfinite(time)) {
+    return parent;
+  }
+  auto frame = copy_condition_frame(parent);
+  ensure_source_condition_size(&frame.source_exact_times, source_id);
+  frame.source_exact_times[static_cast<std::size_t>(source_id)] = time;
+  frame.exact_times.push_back(ExactTimedSourceFact{source_id, time});
+  return store_condition_frame(workspace, std::move(frame));
+}
+
+inline const ExactConditionFrame *append_runtime_condition_frame(
+    ExactStepWorkspace *workspace,
+    const ExactConditionFrame *parent,
+    const ExactRuntimeTermCondition &condition,
+    const double time,
+    ForcedExprEvaluator *normalizer_evaluator) {
+  if (runtime_condition_empty(condition)) {
+    return parent;
+  }
+  auto frame = copy_condition_frame(parent);
+  if (runtime_condition_order_contradiction(condition)) {
+    frame.impossible = true;
+    return store_condition_frame(workspace, std::move(frame));
+  }
+  if (condition.exact_source_id != semantic::kInvalidIndex) {
+    ensure_source_condition_size(
+        &frame.source_exact_times, condition.exact_source_id);
+    frame.source_exact_times[
+        static_cast<std::size_t>(condition.exact_source_id)] = time;
+    frame.exact_times.push_back(
+        ExactTimedSourceFact{condition.exact_source_id, time});
+  }
+  for (const auto source_id : condition.upper_bound_source_ids) {
+    ensure_source_condition_size(&frame.source_upper_bounds, source_id);
+    auto &upper =
+        frame.source_upper_bounds[static_cast<std::size_t>(source_id)];
+    upper = std::isfinite(upper) ? std::min(upper, time) : time;
+    frame.upper_bounds.push_back(ExactTimedSourceFact{source_id, time});
+  }
+  for (const auto source_id : condition.lower_bound_source_ids) {
+    ensure_source_condition_size(&frame.source_lower_bounds, source_id);
+    auto &lower =
+        frame.source_lower_bounds[static_cast<std::size_t>(source_id)];
+    lower = std::isfinite(lower) ? std::max(lower, time) : time;
+    frame.lower_bounds.push_back(ExactTimedSourceFact{source_id, time});
+  }
+  for (const auto &fact : condition.source_order_facts) {
+    append_runtime_source_order_fact(
+        &frame.source_order_facts,
+        fact.before_source_id,
+        fact.after_source_id);
+  }
+  frame.has_source_order_facts =
+      frame.has_source_order_facts || !frame.source_order_facts.empty();
+
+  const ExactConditionFrame *current =
+      store_condition_frame(workspace, std::move(frame));
+  for (const auto expr_id : condition.upper_bound_expr_ids) {
+    if (normalizer_evaluator == nullptr) {
+      auto impossible = copy_condition_frame(current);
+      impossible.impossible = true;
+      return store_condition_frame(workspace, std::move(impossible));
+    }
+    const ExactEvaluatorConditionGuard evaluator_frame(
+        normalizer_evaluator, current);
+    const double normalizer = normalizer_evaluator->expr_cdf(expr_id);
+    if (!(normalizer > 0.0)) {
+      auto impossible = copy_condition_frame(current);
+      impossible.impossible = true;
+      return store_condition_frame(workspace, std::move(impossible));
+    }
+    auto next = copy_condition_frame(current);
+    next.has_expr_upper_bounds = true;
+    next.expr_upper_bounds.push_back(
+        ExactTimedExprUpperBound{expr_id, time, normalizer});
+    current = store_condition_frame(workspace, std::move(next));
+  }
+
+  for (const auto &fact : condition.guard_upper_bound_facts) {
+    if (normalizer_evaluator == nullptr) {
+      auto impossible = copy_condition_frame(current);
+      impossible.impossible = true;
+      return store_condition_frame(workspace, std::move(impossible));
+    }
+    const ExactEvaluatorConditionGuard evaluator_frame(
+        normalizer_evaluator, current);
+    const double normalizer = normalizer_evaluator->expr_cdf(fact.expr_id);
+    if (!(normalizer > 0.0)) {
+      auto impossible = copy_condition_frame(current);
+      impossible.impossible = true;
+      return store_condition_frame(workspace, std::move(impossible));
+    }
+    auto next = copy_condition_frame(current);
+    next.has_guard_upper_bounds = true;
+    next.guard_upper_bounds.push_back(
+        ExactTimedGuardUpperBound{
+            fact.ref_source_id,
+            fact.blocker_source_id,
+            time,
+            normalizer});
+    current = store_condition_frame(workspace, std::move(next));
+  }
+  return current;
+}
 
 struct ExactRuntimeConditionGuards {
   bool impossible{false};
@@ -151,7 +328,8 @@ inline double competitor_subset_win_mass(
       subset_plan.singleton_expr_root != semantic::kInvalidIndex) {
     win_prob = evaluator->expr_cdf(subset_plan.singleton_expr_root);
   } else {
-    if (evaluator->oracle()->has_guard_upper_bound_overlay()) {
+    if (evaluator->oracle()->has_guard_upper_bound_overlay(
+            evaluator->condition_frame())) {
       for (const auto outcome_idx : subset_plan.outcome_indices) {
         const auto expr_root =
             evaluator->plan().outcomes[static_cast<std::size_t>(outcome_idx)]
@@ -242,7 +420,8 @@ inline double runtime_competitor_subset_win_at_t(
     return evaluator->expr_cdf(subset.singleton_expr_root);
   }
 
-  if (evaluator->oracle()->has_guard_upper_bound_overlay()) {
+  if (evaluator->oracle()->has_guard_upper_bound_overlay(
+          evaluator->condition_frame())) {
     for (const auto outcome_idx : subset.outcome_indices) {
       const auto expr_root =
           evaluator->plan().outcomes[static_cast<std::size_t>(outcome_idx)]
@@ -490,10 +669,15 @@ inline double evaluate_runtime_scenario_probability(
     return 0.0;
   }
 
-  auto active_time = std::make_unique<ExactSourceOracle::ExactTimeOverlayGuard>(
-      target_evaluator->oracle(),
+  const ExactConditionFrame *scenario_frame = append_exact_source_frame(
+      step_workspace,
+      nullptr,
       scenario_formula.active_source_id,
       observed_time);
+  const ExactEvaluatorConditionGuard target_scenario_frame(
+      target_evaluator, scenario_frame);
+  const ExactEvaluatorConditionGuard competitor_scenario_frame(
+      competitor_evaluator, scenario_frame);
   std::optional<ExactRuntimeTermCondition> ranked_tail_competitor_condition;
   const ExactRuntimeTermCondition *tail_competitor_condition =
       &scenario_formula.tail_competitor_condition;
@@ -510,7 +694,6 @@ inline double evaluate_runtime_scenario_probability(
       !runtime_condition_empty(*tail_competitor_condition);
 
   auto prepare_competitor = [&]() {
-    competitor_evaluator->invalidate_cache();
     prepare_runtime_competitor_non_win(
         runtime_outcome,
         scenario_competitor,
@@ -548,12 +731,14 @@ inline double evaluate_runtime_scenario_probability(
   const auto conditioned_competitor_non_win =
       [&](const double readiness_upper,
           const ExactRuntimeCompetitorSubsetMask *mask_a,
-          const ExactRuntimeCompetitorSubsetMask *mask_b) {
+          const ExactRuntimeCompetitorSubsetMask *mask_b,
+          const ExactConditionFrame *condition_frame) {
     if (!base_competitor_prepared) {
       prepare_competitor();
       base_competitor_prepared = true;
     }
-    competitor_evaluator->invalidate_cache();
+    const ExactEvaluatorConditionGuard competitor_frame(
+        competitor_evaluator, condition_frame);
     prepare_runtime_competitor_non_win(
         runtime_outcome,
         scenario_competitor,
@@ -569,17 +754,6 @@ inline double evaluate_runtime_scenario_probability(
         readiness_upper,
         step_workspace->conditioned_competitor_cache);
   };
-
-  const auto invalidate_after_condition =
-      [&](ForcedExprEvaluator *condition_evaluator) {
-        target_evaluator->invalidate_cache();
-        competitor_evaluator->invalidate_cache();
-        if (condition_evaluator != nullptr &&
-            condition_evaluator != target_evaluator &&
-            condition_evaluator != competitor_evaluator) {
-          condition_evaluator->invalidate_cache();
-        }
-      };
 
   const auto competitor_non_win_with_conditions =
       [&](const double readiness_upper,
@@ -598,56 +772,35 @@ inline double evaluate_runtime_scenario_probability(
                 : nullptr;
         const auto *prepared_term_mask =
             has_term_condition && used_outcomes == nullptr ? term_mask : nullptr;
-        double value = 0.0;
+        const ExactConditionFrame *condition_frame = scenario_frame;
         if (has_term_condition) {
-          {
-            const auto term_guards = apply_runtime_condition(
-                target_evaluator->oracle(),
-                term_condition,
-                term_time,
-                term_evaluator);
-            if (!term_guards.impossible) {
-              invalidate_after_condition(term_evaluator);
-              if (has_tail_competitor_condition) {
-                const auto tail_guards = apply_runtime_condition(
-                    target_evaluator->oracle(),
-                    *tail_competitor_condition,
-                    observed_time,
-                    target_evaluator);
-                if (!tail_guards.impossible) {
-                  invalidate_after_condition(term_evaluator);
-                  value = conditioned_competitor_non_win(
-                      readiness_upper,
-                      prepared_term_mask,
-                      tail_mask);
-                }
-              } else {
-                value = conditioned_competitor_non_win(
-                    readiness_upper,
-                    prepared_term_mask,
-                    nullptr);
-              }
-            }
+          condition_frame = append_runtime_condition_frame(
+              step_workspace,
+              condition_frame,
+              term_condition,
+              term_time,
+              term_evaluator);
+          if (condition_frame->impossible) {
+            return 0.0;
           }
-          invalidate_after_condition(term_evaluator);
-          return value;
         }
-        {
-          const auto tail_guards = apply_runtime_condition(
-              target_evaluator->oracle(),
+
+        if (has_tail_competitor_condition) {
+          condition_frame = append_runtime_condition_frame(
+              step_workspace,
+              condition_frame,
               *tail_competitor_condition,
               observed_time,
               target_evaluator);
-          if (!tail_guards.impossible) {
-            invalidate_after_condition(term_evaluator);
-            value = conditioned_competitor_non_win(
-                readiness_upper,
-                nullptr,
-                tail_mask);
+          if (condition_frame->impossible) {
+            return 0.0;
           }
         }
-        invalidate_after_condition(term_evaluator);
-        return value;
+        return conditioned_competitor_non_win(
+            readiness_upper,
+            prepared_term_mask,
+            tail_mask,
+            condition_frame);
       };
 
   const auto tail_with_condition =
@@ -661,24 +814,23 @@ inline double evaluate_runtime_scenario_probability(
               observed_time,
               target_workspace);
         }
-        double tail = 0.0;
-        {
-          const auto condition_guards = apply_runtime_condition(
-              target_evaluator->oracle(),
-              tail_condition,
-              condition_time,
-              condition_evaluator);
-          if (!condition_guards.impossible) {
-            invalidate_after_condition(condition_evaluator);
-            tail = runtime_after_survival(
-                scenario_formula,
-                target_evaluator,
-                observed_time,
-                target_workspace);
-          }
+        const ExactConditionFrame *condition_frame =
+            append_runtime_condition_frame(
+                step_workspace,
+                scenario_frame,
+                tail_condition,
+                condition_time,
+                condition_evaluator);
+        if (condition_frame->impossible) {
+          return 0.0;
         }
-        invalidate_after_condition(condition_evaluator);
-        return tail;
+        const ExactEvaluatorConditionGuard target_frame(
+            target_evaluator, condition_frame);
+        return runtime_after_survival(
+            scenario_formula,
+            target_evaluator,
+            observed_time,
+            target_workspace);
       };
 
   if (!scenario_formula.has_readiness) {

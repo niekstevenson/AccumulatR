@@ -127,9 +127,14 @@ public:
 
     std::vector<semantic::ExprNode> temp_expr_nodes;
     std::vector<semantic::OutcomeSpec> projected_outcomes;
+    std::vector<semantic::Index> original_to_projected(
+        model_.outcomes.size(), semantic::kInvalidIndex);
     projected_outcomes.reserve(model_.outcomes.size());
 
-    for (const auto &outcome : model_.outcomes) {
+    for (semantic::Index outcome_index = 0;
+         outcome_index < static_cast<semantic::Index>(model_.outcomes.size());
+         ++outcome_index) {
+      const auto &outcome = model_.outcomes[static_cast<std::size_t>(outcome_index)];
       if (!source_in_component(outcome, component_.id)) {
         continue;
       }
@@ -142,18 +147,78 @@ public:
       semantic::OutcomeSpec projected = outcome;
       projected.component_ids.clear();
       projected.expr_root = materialize_expr(expr_result, &temp_expr_nodes);
+      projected.competitor_expr_roots.clear();
+      projected.competitor_outcome_indices.clear();
+      for (std::size_t j = 0; j < outcome.competitor_expr_roots.size(); ++j) {
+        const auto competitor_root = outcome.competitor_expr_roots[j];
+        if (competitor_root == semantic::kInvalidIndex) {
+          continue;
+        }
+        const auto competitor_result =
+            simplify_expr(competitor_root, &temp_expr_nodes);
+        if (competitor_result.kind == ExprResultKind::Impossible) {
+          continue;
+        }
+        projected.competitor_expr_roots.push_back(
+            materialize_expr(competitor_result, &temp_expr_nodes));
+        projected.competitor_outcome_indices.push_back(
+            j < outcome.competitor_outcome_indices.size()
+                ? outcome.competitor_outcome_indices[j]
+                : semantic::kInvalidIndex);
+      }
+      original_to_projected[static_cast<std::size_t>(outcome_index)] =
+          static_cast<semantic::Index>(projected_outcomes.size());
       projected_outcomes.push_back(std::move(projected));
     }
 
+    for (auto &outcome : projected_outcomes) {
+      std::vector<semantic::Index> remapped_roots;
+      std::vector<semantic::Index> remapped_origins;
+      remapped_roots.reserve(outcome.competitor_expr_roots.size());
+      remapped_origins.reserve(outcome.competitor_outcome_indices.size());
+      for (std::size_t j = 0; j < outcome.competitor_expr_roots.size(); ++j) {
+        semantic::Index origin = semantic::kInvalidIndex;
+        if (j < outcome.competitor_outcome_indices.size()) {
+          origin = outcome.competitor_outcome_indices[j];
+        }
+        if (origin != semantic::kInvalidIndex) {
+          if (origin < 0 ||
+              origin >= static_cast<semantic::Index>(original_to_projected.size())) {
+            continue;
+          }
+          origin = original_to_projected[static_cast<std::size_t>(origin)];
+          if (origin == semantic::kInvalidIndex) {
+            continue;
+          }
+        }
+        remapped_roots.push_back(outcome.competitor_expr_roots[j]);
+        remapped_origins.push_back(origin);
+      }
+      outcome.competitor_expr_roots = std::move(remapped_roots);
+      outcome.competitor_outcome_indices = std::move(remapped_origins);
+    }
+
+    std::vector<bool> reachable_exprs(temp_expr_nodes.size(), false);
     std::vector<bool> reachable_leaves(model_.leaves.size(), false);
     std::vector<bool> reachable_pools(model_.pools.size(), false);
     for (const auto &outcome : projected_outcomes) {
+      mark_expr_node(outcome.expr_root, temp_expr_nodes, &reachable_exprs);
       mark_expr_sources(
           outcome.expr_root,
           temp_expr_nodes,
           &reachable_leaves,
           &reachable_pools);
+      for (const auto competitor_root : outcome.competitor_expr_roots) {
+        mark_expr_node(competitor_root, temp_expr_nodes, &reachable_exprs);
+        mark_expr_sources(
+            competitor_root,
+            temp_expr_nodes,
+            &reachable_leaves,
+            &reachable_pools);
+      }
     }
+    auto compacted_expr_nodes =
+        compact_expr_nodes(temp_expr_nodes, reachable_exprs, &projected_outcomes);
 
     CompiledVariant variant;
     variant.component_id = component_.id;
@@ -225,7 +290,7 @@ public:
       }
     }
 
-    variant.model.expr_nodes = temp_expr_nodes;
+    variant.model.expr_nodes = std::move(compacted_expr_nodes);
     for (auto &node : variant.model.expr_nodes) {
       if (node.kind == semantic::ExprKind::Event) {
         node.source = remap_source(node.source, leaf_map, pool_map);
@@ -525,6 +590,43 @@ private:
     throw std::runtime_error("unknown expression kind in projector");
   }
 
+  void mark_expr_node(const semantic::Index expr_index,
+                      const std::vector<semantic::ExprNode> &expr_nodes,
+                      std::vector<bool> *reachable_exprs) {
+    if (expr_index == semantic::kInvalidIndex) {
+      return;
+    }
+    const auto pos = static_cast<std::size_t>(expr_index);
+    if (pos >= expr_nodes.size()) {
+      throw std::runtime_error("projected expression root is out of range");
+    }
+    if ((*reachable_exprs)[pos]) {
+      return;
+    }
+    (*reachable_exprs)[pos] = true;
+    const auto &node = expr_nodes[pos];
+    switch (node.kind) {
+    case semantic::ExprKind::Event:
+    case semantic::ExprKind::Impossible:
+    case semantic::ExprKind::TrueExpr:
+      break;
+    case semantic::ExprKind::And:
+    case semantic::ExprKind::Or:
+    case semantic::ExprKind::Not:
+      for (const auto child_index : node.children) {
+        mark_expr_node(child_index, expr_nodes, reachable_exprs);
+      }
+      break;
+    case semantic::ExprKind::Guard:
+      mark_expr_node(node.reference_child, expr_nodes, reachable_exprs);
+      mark_expr_node(node.blocker_child, expr_nodes, reachable_exprs);
+      for (const auto child_index : node.unless_children) {
+        mark_expr_node(child_index, expr_nodes, reachable_exprs);
+      }
+      break;
+    }
+  }
+
   void mark_source(const semantic::SourceRef &source,
                    std::vector<bool> *reachable_leaves,
                    std::vector<bool> *reachable_pools) {
@@ -604,6 +706,59 @@ private:
     case semantic::ExprKind::TrueExpr:
       break;
     }
+  }
+
+  semantic::Index remap_expr_index(
+      const semantic::Index expr_index,
+      const std::vector<semantic::Index> &expr_map) const {
+    if (expr_index == semantic::kInvalidIndex) {
+      return semantic::kInvalidIndex;
+    }
+    const auto pos = static_cast<std::size_t>(expr_index);
+    if (pos >= expr_map.size() || expr_map[pos] == semantic::kInvalidIndex) {
+      throw std::runtime_error("projected expression references a pruned node");
+    }
+    return expr_map[pos];
+  }
+
+  void remap_expr_references(
+      semantic::ExprNode *node,
+      const std::vector<semantic::Index> &expr_map) const {
+    for (auto &child : node->children) {
+      child = remap_expr_index(child, expr_map);
+    }
+    node->reference_child = remap_expr_index(node->reference_child, expr_map);
+    node->blocker_child = remap_expr_index(node->blocker_child, expr_map);
+    for (auto &child : node->unless_children) {
+      child = remap_expr_index(child, expr_map);
+    }
+  }
+
+  std::vector<semantic::ExprNode> compact_expr_nodes(
+      const std::vector<semantic::ExprNode> &expr_nodes,
+      const std::vector<bool> &reachable_exprs,
+      std::vector<semantic::OutcomeSpec> *outcomes) const {
+    std::vector<semantic::Index> expr_map(
+        expr_nodes.size(), semantic::kInvalidIndex);
+    std::vector<semantic::ExprNode> compacted;
+    compacted.reserve(expr_nodes.size());
+    for (std::size_t i = 0; i < expr_nodes.size(); ++i) {
+      if (!reachable_exprs[i]) {
+        continue;
+      }
+      expr_map[i] = static_cast<semantic::Index>(compacted.size());
+      compacted.push_back(expr_nodes[i]);
+    }
+    for (auto &node : compacted) {
+      remap_expr_references(&node, expr_map);
+    }
+    for (auto &outcome : *outcomes) {
+      outcome.expr_root = remap_expr_index(outcome.expr_root, expr_map);
+      for (auto &root : outcome.competitor_expr_roots) {
+        root = remap_expr_index(root, expr_map);
+      }
+    }
+    return compacted;
   }
 
   semantic::SourceRef remap_source(

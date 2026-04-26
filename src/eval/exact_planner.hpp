@@ -183,6 +183,151 @@ inline bool append_tail_order_requirement(ExactTransitionScenario *scenario,
   return true;
 }
 
+inline bool scenario_key_known_after_active(
+    const ExactTransitionScenario &scenario,
+    const ExactSourceKey key) {
+  return std::find_if(
+             scenario.after_keys.begin(),
+             scenario.after_keys.end(),
+             [&](const ExactSourceKey &existing) { return existing == key; }) !=
+         scenario.after_keys.end();
+}
+
+inline bool scenario_key_known_before_key(
+    const ExactVariantPlan &plan,
+    const ExactTransitionScenario &scenario,
+    const ExactSourceKey before_key,
+    const ExactSourceKey after_key) {
+  if (before_key == after_key) {
+    return false;
+  }
+  if (scenario.active_key == after_key &&
+      scenario_key_known_before_active(scenario, before_key)) {
+    return true;
+  }
+  if (scenario.active_key == before_key &&
+      scenario_key_known_after_active(scenario, after_key)) {
+    return true;
+  }
+  const auto before_source_id = source_ordinal(plan, before_key);
+  const auto after_source_id = source_ordinal(plan, after_key);
+  if (before_source_id == semantic::kInvalidIndex ||
+      after_source_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  for (const auto &fact : scenario.source_order_facts) {
+    if (fact.before_source_id == before_source_id &&
+        fact.after_source_id == after_source_id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool expr_certainly_not_completed_by_active(
+    const ExactVariantPlan &plan,
+    const ExactTransitionScenario &scenario,
+    const semantic::Index expr_idx);
+
+inline bool expr_children_any_not_completed_by_active(
+    const ExactVariantPlan &plan,
+    const ExactTransitionScenario &scenario,
+    const ExactIndexSpan children) {
+  const auto &program = plan.lowered.program;
+  for (semantic::Index i = 0; i < children.size; ++i) {
+    const auto child = program.expr_args[
+        static_cast<std::size_t>(children.offset + i)];
+    if (expr_certainly_not_completed_by_active(plan, scenario, child)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool expr_children_all_not_completed_by_active(
+    const ExactVariantPlan &plan,
+    const ExactTransitionScenario &scenario,
+    const ExactIndexSpan children) {
+  if (children.empty()) {
+    return false;
+  }
+  const auto &program = plan.lowered.program;
+  for (semantic::Index i = 0; i < children.size; ++i) {
+    const auto child = program.expr_args[
+        static_cast<std::size_t>(children.offset + i)];
+    if (!expr_certainly_not_completed_by_active(plan, scenario, child)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline bool expr_certainly_not_completed_by_active(
+    const ExactVariantPlan &plan,
+    const ExactTransitionScenario &scenario,
+    const semantic::Index expr_idx) {
+  const auto &program = plan.lowered.program;
+  const auto pos = static_cast<std::size_t>(expr_idx);
+  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
+  switch (kind) {
+  case semantic::ExprKind::Impossible:
+    return true;
+  case semantic::ExprKind::TrueExpr:
+    return false;
+  case semantic::ExprKind::Event:
+    return scenario_key_known_after_active(
+        scenario,
+        ExactSourceKey{
+            child_event_source_kind(program, expr_idx),
+            child_event_source_index(program, expr_idx)});
+  case semantic::ExprKind::And:
+    return expr_children_any_not_completed_by_active(
+        plan,
+        scenario,
+        ExactIndexSpan{
+            program.expr_arg_offsets[pos],
+            static_cast<semantic::Index>(
+                program.expr_arg_offsets[pos + 1U] -
+                program.expr_arg_offsets[pos])});
+  case semantic::ExprKind::Or:
+    return expr_children_all_not_completed_by_active(
+        plan,
+        scenario,
+        ExactIndexSpan{
+            program.expr_arg_offsets[pos],
+            static_cast<semantic::Index>(
+                program.expr_arg_offsets[pos + 1U] -
+                program.expr_arg_offsets[pos])});
+  case semantic::ExprKind::Guard: {
+    const auto ref = program.expr_ref_child[pos];
+    if (expr_certainly_not_completed_by_active(plan, scenario, ref)) {
+      return true;
+    }
+    const auto blocker = program.expr_blocker_child[pos];
+    if (!expr_is_simple_event(program, ref) ||
+        !expr_is_simple_event(program, blocker)) {
+      return false;
+    }
+    const auto ref_key =
+        ExactSourceKey{
+            child_event_source_kind(program, ref),
+            child_event_source_index(program, ref)};
+    const auto blocker_key =
+        ExactSourceKey{
+            child_event_source_kind(program, blocker),
+            child_event_source_index(program, blocker)};
+    return scenario_key_known_before_key(
+        plan,
+        scenario,
+        blocker_key,
+        ref_key);
+  }
+  case semantic::ExprKind::Not:
+    return false;
+  }
+  return false;
+}
+
 inline bool append_source_truth_constraints(
     const ExactVariantPlan &plan,
     const ExactSourceKey key,
@@ -483,12 +628,18 @@ inline std::vector<ExactTransitionScenario> build_logical_transition_scenarios(
                  append_source_truth_constraints(
                      plan, child_key, ExactRelation::Before, &forced);
           }
-        } else {
-          append_tail_requirement(&scenario, plan.lowered.program, child);
-          ok = append_tail_order_requirement(&scenario, plan, child);
-          if (expr_is_simple_event(plan.lowered.program, child)) {
-            const auto child_key =
-                ExactSourceKey{child_event_source_kind(plan.lowered.program, child),
+	        } else {
+	          if (expr_certainly_not_completed_by_active(
+	                  plan,
+	                  scenario,
+	                  child)) {
+	            continue;
+	          }
+	          append_tail_requirement(&scenario, plan.lowered.program, child);
+	          ok = append_tail_order_requirement(&scenario, plan, child);
+	          if (expr_is_simple_event(plan.lowered.program, child)) {
+	            const auto child_key =
+	                ExactSourceKey{child_event_source_kind(plan.lowered.program, child),
                                child_event_source_index(plan.lowered.program, child)};
             ok = ok &&
                  append_factor(
@@ -760,57 +911,105 @@ inline std::vector<ExactTransitionScenario> build_expr_transition_scenarios(
   throw std::runtime_error("unsupported exact outcome expression");
 }
 
+struct ExactCompetitorCandidate {
+  semantic::Index expr_root{semantic::kInvalidIndex};
+  semantic::Index outcome_index{semantic::kInvalidIndex};
+};
+
 inline void enumerate_competitor_subsets(
     const ExactVariantPlan &plan,
-    const std::vector<semantic::Index> &block_outcomes,
+    const std::vector<ExactCompetitorCandidate> &block_competitors,
     const std::size_t start,
-    std::vector<semantic::Index> *current,
+    std::vector<ExactCompetitorCandidate> *current,
     std::vector<ExactCompetitorSubsetPlan> *out) {
-  for (std::size_t i = start; i < block_outcomes.size(); ++i) {
-    current->push_back(block_outcomes[i]);
+  for (std::size_t i = start; i < block_competitors.size(); ++i) {
+    current->push_back(block_competitors[i]);
     ExactCompetitorSubsetPlan subset;
-    subset.outcome_indices = *current;
     subset.inclusion_sign = (current->size() % 2U == 1U) ? 1 : -1;
-    std::vector<semantic::Index> expr_roots;
-    expr_roots.reserve(current->size());
-    for (const auto outcome_idx : *current) {
-      expr_roots.push_back(
-          plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root);
+    subset.expr_roots.reserve(current->size());
+    subset.outcome_indices.reserve(current->size());
+    for (const auto &competitor : *current) {
+      subset.expr_roots.push_back(competitor.expr_root);
+      if (competitor.outcome_index != semantic::kInvalidIndex) {
+        subset.outcome_indices.push_back(competitor.outcome_index);
+      }
     }
     if (current->size() == 1U) {
-      const auto outcome_idx = current->front();
-      subset.singleton_expr_root =
-          plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
-      subset.scenarios =
-          plan.outcomes[static_cast<std::size_t>(outcome_idx)].scenarios;
+      const auto &competitor = current->front();
+      subset.singleton_expr_root = competitor.expr_root;
+      if (competitor.outcome_index != semantic::kInvalidIndex &&
+          competitor.outcome_index <
+              static_cast<semantic::Index>(plan.outcomes.size()) &&
+          plan.outcomes[static_cast<std::size_t>(competitor.outcome_index)]
+                  .expr_root == competitor.expr_root) {
+        subset.scenarios =
+            plan.outcomes[static_cast<std::size_t>(competitor.outcome_index)]
+                .scenarios;
+      } else {
+        subset.scenarios =
+            build_expr_transition_scenarios(plan, competitor.expr_root);
+      }
     } else {
-      subset.scenarios = build_expr_conjunction_scenarios(plan, expr_roots);
+      subset.scenarios =
+          build_expr_conjunction_scenarios(plan, subset.expr_roots);
     }
     if (!subset.scenarios.empty()) {
       out->push_back(std::move(subset));
     }
-    enumerate_competitor_subsets(plan, block_outcomes, i + 1U, current, out);
+    enumerate_competitor_subsets(
+        plan, block_competitors, i + 1U, current, out);
     current->pop_back();
   }
 }
 
-inline std::vector<std::vector<semantic::Index>> build_competitor_overlap_blocks(
+inline std::vector<ExactCompetitorCandidate> planned_competitor_candidates(
     const ExactVariantPlan &plan,
     const semantic::Index target_outcome_idx) {
-  std::vector<semantic::Index> competitors;
-  competitors.reserve(plan.outcomes.size());
-  for (semantic::Index outcome_idx = 0;
-       outcome_idx < static_cast<semantic::Index>(plan.outcomes.size());
-       ++outcome_idx) {
-    if (outcome_idx == target_outcome_idx) {
-      continue;
-    }
-    if (plan.outcomes[static_cast<std::size_t>(outcome_idx)].scenarios.empty()) {
-      continue;
-    }
-    competitors.push_back(outcome_idx);
+  const auto &program = plan.lowered.program;
+  if (target_outcome_idx < 0 ||
+      target_outcome_idx + 1 >=
+          static_cast<semantic::Index>(program.outcome_competitor_offsets.size())) {
+    throw std::runtime_error("exact competitor plan has invalid target outcome");
   }
-  std::vector<std::vector<semantic::Index>> blocks;
+
+  const auto begin =
+      program.outcome_competitor_offsets[static_cast<std::size_t>(target_outcome_idx)];
+  const auto end =
+      program.outcome_competitor_offsets[static_cast<std::size_t>(target_outcome_idx + 1)];
+  std::vector<ExactCompetitorCandidate> competitors;
+  competitors.reserve(static_cast<std::size_t>(end - begin));
+  for (semantic::Index pos = begin; pos < end; ++pos) {
+    const auto idx = static_cast<std::size_t>(pos);
+    const auto expr_root = program.outcome_competitor_expr_roots[idx];
+    if (expr_root == semantic::kInvalidIndex) {
+      continue;
+    }
+    ExactCompetitorCandidate candidate;
+    candidate.expr_root = expr_root;
+    candidate.outcome_index =
+        idx < program.outcome_competitor_indices.size()
+            ? program.outcome_competitor_indices[idx]
+            : semantic::kInvalidIndex;
+    const bool duplicate = std::any_of(
+        competitors.begin(),
+        competitors.end(),
+        [&](const ExactCompetitorCandidate &existing) {
+          return existing.expr_root == candidate.expr_root &&
+                 existing.outcome_index == candidate.outcome_index;
+        });
+    if (!duplicate) {
+      competitors.push_back(candidate);
+    }
+  }
+  return competitors;
+}
+
+inline std::vector<std::vector<ExactCompetitorCandidate>>
+build_competitor_overlap_blocks(
+    const ExactVariantPlan &plan,
+    const semantic::Index target_outcome_idx) {
+  const auto competitors = planned_competitor_candidates(plan, target_outcome_idx);
+  std::vector<std::vector<ExactCompetitorCandidate>> blocks;
   std::vector<std::uint8_t> visited(competitors.size(), 0U);
   for (std::size_t start = 0; start < competitors.size(); ++start) {
     if (visited[start] != 0U) {
@@ -818,30 +1017,37 @@ inline std::vector<std::vector<semantic::Index>> build_competitor_overlap_blocks
     }
     std::vector<std::size_t> stack{start};
     visited[start] = 1U;
-    std::vector<semantic::Index> block;
+    std::vector<ExactCompetitorCandidate> block;
     while (!stack.empty()) {
       const auto idx = stack.back();
       stack.pop_back();
-      const auto outcome_idx = competitors[idx];
-      block.push_back(outcome_idx);
+      const auto competitor = competitors[idx];
+      block.push_back(competitor);
       for (std::size_t other = 0; other < competitors.size(); ++other) {
         if (visited[other] != 0U) {
           continue;
         }
         if (!supports_overlap(
                 plan.expr_supports[static_cast<std::size_t>(
-                    plan.outcomes[static_cast<std::size_t>(outcome_idx)]
-                        .expr_root)],
+                    competitor.expr_root)],
                 plan.expr_supports[static_cast<std::size_t>(
-                    plan.outcomes[static_cast<std::size_t>(competitors[other])]
-                        .expr_root)])) {
+                    competitors[other].expr_root)])) {
           continue;
         }
         visited[other] = 1U;
         stack.push_back(other);
       }
     }
-    std::sort(block.begin(), block.end());
+    std::sort(
+        block.begin(),
+        block.end(),
+        [](const ExactCompetitorCandidate &lhs,
+           const ExactCompetitorCandidate &rhs) {
+          if (lhs.expr_root != rhs.expr_root) {
+            return lhs.expr_root < rhs.expr_root;
+          }
+          return lhs.outcome_index < rhs.outcome_index;
+        });
     blocks.push_back(std::move(block));
   }
   return blocks;
@@ -853,10 +1059,11 @@ inline ExactTargetCompetitorPlan build_target_competitor_plan(
   ExactTargetCompetitorPlan target_plan;
   const auto blocks = build_competitor_overlap_blocks(plan, target_outcome_idx);
   target_plan.blocks.reserve(blocks.size());
-  for (const auto &block_outcomes : blocks) {
+  for (const auto &block_competitors : blocks) {
     ExactCompetitorBlockPlan block;
-    std::vector<semantic::Index> current;
-    enumerate_competitor_subsets(plan, block_outcomes, 0U, &current, &block.subsets);
+    std::vector<ExactCompetitorCandidate> current;
+    enumerate_competitor_subsets(
+        plan, block_competitors, 0U, &current, &block.subsets);
     target_plan.blocks.push_back(std::move(block));
   }
   return target_plan;
@@ -986,6 +1193,41 @@ inline void compile_program_source_runtime_fields(ExactVariantPlan *plan) {
   }
 }
 
+inline void compile_source_kernels(ExactVariantPlan *plan) {
+  const auto &program = plan->lowered.program;
+  plan->source_kernels.assign(
+      static_cast<std::size_t>(plan->source_count), ExactSourceKernel{});
+
+  for (semantic::Index i = 0; i < program.layout.n_leaves; ++i) {
+    const auto pos = static_cast<std::size_t>(i);
+    auto &kernel = plan->source_kernels[pos];
+    kernel.source_id = i;
+    kernel.leaf_index = i;
+    kernel.onset_source_id = program.onset_source_ids[pos];
+    kernel.kind = static_cast<semantic::OnsetKind>(
+                      program.onset_kind[pos]) ==
+                          semantic::OnsetKind::Absolute
+                      ? CompiledSourceChannelKernelKind::LeafAbsolute
+                      : CompiledSourceChannelKernelKind::LeafOnsetConvolution;
+  }
+
+  for (semantic::Index i = 0; i < program.layout.n_pools; ++i) {
+    const auto source_id =
+        static_cast<semantic::Index>(program.layout.n_leaves + i);
+    const auto pos = static_cast<std::size_t>(i);
+    auto &kernel =
+        plan->source_kernels[static_cast<std::size_t>(source_id)];
+    kernel.kind = CompiledSourceChannelKernelKind::PoolKOfN;
+    kernel.source_id = source_id;
+    kernel.pool_index = i;
+    kernel.pool_member_offset = program.pool_member_offsets[pos];
+    kernel.pool_member_count =
+        program.pool_member_offsets[pos + 1U] -
+        program.pool_member_offsets[pos];
+    kernel.pool_k = program.pool_k[pos];
+  }
+}
+
 inline void append_runtime_span_values(
     const std::vector<semantic::Index> &arena,
     const ExactIndexSpan span,
@@ -997,18 +1239,28 @@ inline void append_runtime_span_values(
 
 inline void append_expr_union_subset(
     ExactVariantPlan *plan,
-    const std::vector<semantic::Index> &children) {
+    const std::vector<semantic::Index> &children,
+    const std::vector<semantic::Index> &child_positions) {
   const auto offset = static_cast<semantic::Index>(
       plan->expr_union_subset_children.size());
   plan->expr_union_subset_children.insert(
       plan->expr_union_subset_children.end(),
       children.begin(),
       children.end());
+  const auto position_offset = static_cast<semantic::Index>(
+      plan->expr_union_subset_child_positions.size());
+  plan->expr_union_subset_child_positions.insert(
+      plan->expr_union_subset_child_positions.end(),
+      child_positions.begin(),
+      child_positions.end());
   plan->expr_union_subsets.push_back(
       ExactExprUnionSubset{
           ExactIndexSpan{
               offset,
               static_cast<semantic::Index>(children.size())},
+          ExactIndexSpan{
+              position_offset,
+              static_cast<semantic::Index>(child_positions.size())},
           children.size() % 2U == 1U ? 1 : -1});
 }
 
@@ -1016,11 +1268,15 @@ inline void enumerate_expr_union_subsets(
     ExactVariantPlan *plan,
     const std::vector<semantic::Index> &children,
     const std::size_t start,
-    std::vector<semantic::Index> *current) {
+    std::vector<semantic::Index> *current,
+    std::vector<semantic::Index> *current_positions) {
   for (std::size_t i = start; i < children.size(); ++i) {
     current->push_back(children[i]);
-    append_expr_union_subset(plan, *current);
-    enumerate_expr_union_subsets(plan, children, i + 1U, current);
+    current_positions->push_back(static_cast<semantic::Index>(i));
+    append_expr_union_subset(plan, *current, *current_positions);
+    enumerate_expr_union_subsets(
+        plan, children, i + 1U, current, current_positions);
+    current_positions->pop_back();
     current->pop_back();
   }
 }
@@ -1039,7 +1295,10 @@ inline ExactIndexSpan compile_expr_union_subsets(
   }
   std::vector<semantic::Index> current;
   current.reserve(children.size());
-  enumerate_expr_union_subsets(plan, children, 0U, &current);
+  std::vector<semantic::Index> current_positions;
+  current_positions.reserve(children.size());
+  enumerate_expr_union_subsets(
+      plan, children, 0U, &current, &current_positions);
   return ExactIndexSpan{
       offset,
       static_cast<semantic::Index>(
@@ -1066,11 +1325,162 @@ inline bool expr_children_supports_overlap(
   return false;
 }
 
+inline bool expr_static_subset_of_event_source(
+    const ExactVariantPlan &plan,
+    const semantic::Index expr_idx,
+    const semantic::Index source_id);
+
+inline bool expr_static_can_equiv_event_source(
+    const ExactVariantPlan &plan,
+    const semantic::Index expr_idx,
+    const semantic::Index source_id);
+
+inline bool expr_span_static_has_event_source_subset(
+    const ExactVariantPlan &plan,
+    const ExactIndexSpan span,
+    const semantic::Index source_id) {
+  const auto &program = plan.lowered.program;
+  for (semantic::Index i = span.offset; i < span.offset + span.size; ++i) {
+    if (expr_static_subset_of_event_source(
+            plan,
+            program.expr_args[static_cast<std::size_t>(i)],
+            source_id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool expr_static_subset_of_event_source(
+    const ExactVariantPlan &plan,
+    const semantic::Index expr_idx,
+    const semantic::Index source_id) {
+  if (expr_idx == semantic::kInvalidIndex ||
+      source_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto &program = plan.lowered.program;
+  const auto pos = static_cast<std::size_t>(expr_idx);
+  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
+  switch (kind) {
+  case semantic::ExprKind::Event:
+    return program.expr_source_ids[pos] == source_id;
+  case semantic::ExprKind::And:
+    return expr_span_static_has_event_source_subset(
+        plan,
+        ExactIndexSpan{
+            program.expr_arg_offsets[pos],
+            static_cast<semantic::Index>(
+                program.expr_arg_offsets[pos + 1U] -
+                program.expr_arg_offsets[pos])},
+        source_id);
+  case semantic::ExprKind::Or: {
+    const auto begin = program.expr_arg_offsets[pos];
+    const auto end = program.expr_arg_offsets[pos + 1U];
+    if (begin == end) {
+      return false;
+    }
+    for (semantic::Index i = begin; i < end; ++i) {
+      if (!expr_static_subset_of_event_source(
+              plan,
+              program.expr_args[static_cast<std::size_t>(i)],
+              source_id)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  case semantic::ExprKind::Guard:
+    return expr_static_subset_of_event_source(
+        plan,
+        program.expr_ref_child[pos],
+        source_id);
+  case semantic::ExprKind::Impossible:
+    return true;
+  case semantic::ExprKind::TrueExpr:
+  case semantic::ExprKind::Not:
+    return false;
+  }
+  return false;
+}
+
+inline bool expr_static_can_equiv_event_source(
+    const ExactVariantPlan &plan,
+    const semantic::Index expr_idx,
+    const semantic::Index source_id) {
+  if (expr_idx == semantic::kInvalidIndex ||
+      source_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto &program = plan.lowered.program;
+  const auto pos = static_cast<std::size_t>(expr_idx);
+  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
+  if (kind == semantic::ExprKind::Event) {
+    return program.expr_source_ids[pos] == source_id;
+  }
+  if (kind == semantic::ExprKind::Guard) {
+    const auto &kernel = plan.expr_kernels[pos];
+    return kernel.simple_event_guard &&
+           !kernel.has_unless &&
+           kernel.guard_ref_source_id == source_id;
+  }
+  if (kind != semantic::ExprKind::And) {
+    return false;
+  }
+  const auto begin = program.expr_arg_offsets[pos];
+  const auto end = program.expr_arg_offsets[pos + 1U];
+  for (semantic::Index i = begin; i < end; ++i) {
+    if (expr_static_can_equiv_event_source(
+            plan,
+            program.expr_args[static_cast<std::size_t>(i)],
+            source_id)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline ExactIndexSpan compile_expr_union_absorption_candidates(
+    ExactVariantPlan *plan,
+    const semantic::Index expr_idx,
+    const ExactExprKernel &kernel) {
+  const auto offset = static_cast<semantic::Index>(
+      plan->expr_union_absorption_sources.size());
+  const auto &program = plan->lowered.program;
+  const auto &support = plan->expr_supports[static_cast<std::size_t>(expr_idx)];
+  for (const auto source_id : support) {
+    bool all_subset = true;
+    bool any_equiv = false;
+    for (semantic::Index i = 0; i < kernel.children.size; ++i) {
+      const auto child = program.expr_args[
+          static_cast<std::size_t>(kernel.children.offset + i)];
+      if (!expr_static_subset_of_event_source(*plan, child, source_id)) {
+        all_subset = false;
+        break;
+      }
+      any_equiv =
+          any_equiv ||
+          expr_static_can_equiv_event_source(*plan, child, source_id);
+    }
+    if (all_subset && any_equiv) {
+      plan->expr_union_absorption_sources.push_back(source_id);
+    }
+  }
+  return ExactIndexSpan{
+      offset,
+      static_cast<semantic::Index>(
+          plan->expr_union_absorption_sources.size() -
+          static_cast<std::size_t>(offset))};
+}
+
 inline void compile_exact_expr_kernels(ExactVariantPlan *plan) {
   const auto &program = plan->lowered.program;
   plan->expr_kernels.assign(program.expr_kind.size(), ExactExprKernel{});
   plan->expr_union_subsets.clear();
   plan->expr_union_subset_children.clear();
+  plan->expr_union_subset_child_positions.clear();
+  plan->expr_union_absorption_sources.clear();
+  plan->expr_union_kernel_cache_slot_count = 0;
 
   for (semantic::Index expr_idx = 0;
        expr_idx < static_cast<semantic::Index>(program.expr_kind.size());
@@ -1095,6 +1505,11 @@ inline void compile_exact_expr_kernels(ExactVariantPlan *plan) {
       if (kernel.children_overlap) {
         kernel.union_subset_span =
             compile_expr_union_subsets(plan, kernel.children);
+        kernel.union_absorption_candidate_span =
+            compile_expr_union_absorption_candidates(
+                plan, expr_idx, kernel);
+        kernel.union_kernel_cache_slot =
+            plan->expr_union_kernel_cache_slot_count++;
       }
       continue;
     }
@@ -1144,7 +1559,6 @@ inline ExactRuntimeTruthFormula compile_runtime_readiness_cdf(
       plan.scenario_expr_ids,
       scenario.ready_expr_span,
       &formula.product.expr_cdf);
-  formula.requires_scenario = !scenario.ready_expr_span.empty();
   return formula;
 }
 
@@ -1161,7 +1575,6 @@ inline ExactRuntimeTruthFormula compile_runtime_after_survival(
       plan.scenario_expr_ids,
       scenario.tail_expr_span,
       &formula.product.expr_survival);
-  formula.requires_scenario = !scenario.tail_expr_span.empty();
   return formula;
 }
 
@@ -1172,7 +1585,6 @@ inline ExactRuntimeTruthFormula compile_runtime_readiness_density(
   formula.sum_of_products = true;
   formula.clean_signed = true;
   formula.empty_value = 0.0;
-  formula.requires_scenario = !scenario.ready_expr_span.empty();
 
   for (semantic::Index i = 0; i < scenario.before_source_span.size; ++i) {
     const auto source_id = plan.scenario_source_ids[
@@ -1221,53 +1633,2456 @@ inline ExactRuntimeTruthFormula compile_runtime_readiness_density(
   return formula;
 }
 
-inline ExactRuntimeScenarioFormula compile_runtime_scenario_formula(
+inline bool compile_runtime_factors_empty(const ExactRuntimeFactors &factors) {
+  return factors.source_pdf.empty() &&
+         factors.source_cdf.empty() &&
+         factors.source_survival.empty() &&
+         factors.expr_density.empty() &&
+         factors.expr_cdf.empty() &&
+         factors.expr_survival.empty();
+}
+
+inline semantic::Index compile_relation_condition_id(
+    ExactVariantPlan *plan,
+    const ExactRelationTemplate &relation_template) {
+  CompiledMathConditionKey key;
+  key.source_ids = relation_template.source_ids;
+  key.relations.reserve(relation_template.relations.size());
+  for (const auto relation : relation_template.relations) {
+    key.relations.push_back(static_cast<std::uint8_t>(relation));
+  }
+  return compiled_math_intern_condition(&plan->compiled_math, std::move(key));
+}
+
+inline bool relation_template_equal(const ExactRelationTemplate &lhs,
+                                    const ExactRelationTemplate &rhs) {
+  return lhs.source_ids == rhs.source_ids && lhs.relations == rhs.relations;
+}
+
+inline semantic::Index compile_source_view_id(
+    ExactVariantPlan *plan,
+    const ExactRelationTemplate &relation_template) {
+  if (relation_template.empty()) {
+    return 0;
+  }
+  for (semantic::Index i = 0;
+       i < static_cast<semantic::Index>(plan->compiled_source_views.size());
+       ++i) {
+    if (relation_template_equal(
+            plan->compiled_source_views[static_cast<std::size_t>(i)],
+            relation_template)) {
+      return i + 1U;
+    }
+  }
+  plan->compiled_source_views.push_back(relation_template);
+  return static_cast<semantic::Index>(plan->compiled_source_views.size());
+}
+
+inline semantic::Index compile_expr_value_node(
+    ExactVariantPlan *plan,
+    semantic::Index expr_id,
+    CompiledMathNodeKind value_kind,
+    semantic::Index condition_id,
+    semantic::Index time_id =
+        static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
+    semantic::Index source_view_id = 0);
+
+struct CompiledConditionNormalizer {
+  semantic::Index node_id{semantic::kInvalidIndex};
+  semantic::Index root_id{semantic::kInvalidIndex};
+};
+
+inline CompiledConditionNormalizer compile_condition_normalizer(
+    ExactVariantPlan *plan,
+    const semantic::Index expr_id,
+    const CompiledMathTimeSlot time_slot) {
+  if (expr_id == semantic::kInvalidIndex) {
+    return {};
+  }
+  const auto normalizer_node =
+      compile_expr_value_node(
+          plan,
+          expr_id,
+          CompiledMathNodeKind::ExprCdf,
+          0,
+          static_cast<semantic::Index>(time_slot));
+  return CompiledConditionNormalizer{
+      normalizer_node,
+      compiled_math_make_root(&plan->compiled_math, normalizer_node)};
+}
+
+inline void append_compiled_condition_fact(
+    CompiledMathConditionKey *key,
+    const CompiledMathConditionFactKind kind,
+    const semantic::Index subject_id,
+    const semantic::Index aux_id,
+    const semantic::Index aux2_id,
+    const CompiledMathTimeSlot time_slot,
+    const CompiledConditionNormalizer normalizer = {}) {
+  if (subject_id == semantic::kInvalidIndex) {
+    return;
+  }
+  key->fact_kinds.push_back(static_cast<std::uint8_t>(kind));
+  key->fact_subject_ids.push_back(subject_id);
+  key->fact_aux_ids.push_back(aux_id);
+  key->fact_aux2_ids.push_back(aux2_id);
+  key->fact_time_ids.push_back(static_cast<semantic::Index>(time_slot));
+  key->fact_normalizer_node_ids.push_back(normalizer.node_id);
+  key->fact_normalizer_root_ids.push_back(normalizer.root_id);
+}
+
+inline void append_runtime_condition_to_compiled_key(
+    ExactVariantPlan *plan,
+    CompiledMathConditionKey *key,
+    const ExactRuntimeTermCondition &condition,
+    const CompiledMathTimeSlot time_slot) {
+  if (condition.exact_source_id != semantic::kInvalidIndex) {
+    append_compiled_condition_fact(
+        key,
+        CompiledMathConditionFactKind::SourceExact,
+        condition.exact_source_id,
+        semantic::kInvalidIndex,
+        semantic::kInvalidIndex,
+        time_slot);
+  }
+  for (const auto source_id : condition.upper_bound_source_ids) {
+    append_compiled_condition_fact(
+        key,
+        CompiledMathConditionFactKind::SourceUpperBound,
+        source_id,
+        semantic::kInvalidIndex,
+        semantic::kInvalidIndex,
+        time_slot);
+  }
+  for (const auto source_id : condition.lower_bound_source_ids) {
+    append_compiled_condition_fact(
+        key,
+        CompiledMathConditionFactKind::SourceLowerBound,
+        source_id,
+        semantic::kInvalidIndex,
+        semantic::kInvalidIndex,
+        time_slot);
+  }
+  for (const auto expr_id : condition.upper_bound_expr_ids) {
+    append_compiled_condition_fact(
+        key,
+        CompiledMathConditionFactKind::ExprUpperBound,
+        expr_id,
+        semantic::kInvalidIndex,
+        semantic::kInvalidIndex,
+        time_slot,
+        compile_condition_normalizer(plan, expr_id, time_slot));
+  }
+  for (const auto &fact : condition.source_order_facts) {
+    append_compiled_condition_fact(
+        key,
+        CompiledMathConditionFactKind::SourceOrder,
+        fact.before_source_id,
+        fact.after_source_id,
+        semantic::kInvalidIndex,
+        time_slot);
+  }
+  for (const auto &fact : condition.guard_upper_bound_facts) {
+    append_compiled_condition_fact(
+        key,
+        CompiledMathConditionFactKind::GuardUpperBound,
+        fact.expr_id,
+        fact.ref_source_id,
+        fact.blocker_source_id,
+        time_slot,
+        compile_condition_normalizer(plan, fact.expr_id, time_slot));
+  }
+}
+
+inline semantic::Index compile_runtime_condition_id(
+    ExactVariantPlan *plan,
+    const ExactRuntimeTermCondition &condition,
+    const CompiledMathTimeSlot time_slot) {
+  if (runtime_condition_empty(condition)) {
+    return 0;
+  }
+  CompiledMathConditionKey key;
+  key.impossible = runtime_condition_order_contradiction(condition);
+  append_runtime_condition_to_compiled_key(plan, &key, condition, time_slot);
+  return compiled_math_intern_condition(&plan->compiled_math, std::move(key));
+}
+
+inline semantic::Index compile_combined_runtime_condition_id(
+    ExactVariantPlan *plan,
+    const ExactRuntimeTermCondition &readiness_condition,
+    const ExactRuntimeTermCondition &observed_condition) {
+  if (runtime_condition_empty(readiness_condition) &&
+      runtime_condition_empty(observed_condition)) {
+    return 0;
+  }
+  CompiledMathConditionKey key;
+  key.impossible =
+      runtime_condition_order_contradiction(readiness_condition) ||
+      runtime_condition_order_contradiction(observed_condition);
+  append_runtime_condition_to_compiled_key(
+      plan, &key, readiness_condition, CompiledMathTimeSlot::Readiness);
+  append_runtime_condition_to_compiled_key(
+      plan, &key, observed_condition, CompiledMathTimeSlot::Observed);
+  return compiled_math_intern_condition(&plan->compiled_math, std::move(key));
+}
+
+inline void compile_runtime_condition_ids(
+    ExactVariantPlan *plan,
+    ExactRuntimeTermCondition *condition) {
+  condition->observed_condition_id =
+      compile_runtime_condition_id(
+          plan, *condition, CompiledMathTimeSlot::Observed);
+  condition->readiness_condition_id =
+      compile_runtime_condition_id(
+          plan, *condition, CompiledMathTimeSlot::Readiness);
+}
+
+inline semantic::Index compile_source_exact_condition_id(
+    ExactVariantPlan *plan,
+    const semantic::Index source_id,
+    const CompiledMathTimeSlot time_slot) {
+  if (source_id == semantic::kInvalidIndex) {
+    return 0;
+  }
+  CompiledMathConditionKey key;
+  append_compiled_condition_fact(
+      &key,
+      CompiledMathConditionFactKind::SourceExact,
+      source_id,
+      semantic::kInvalidIndex,
+      semantic::kInvalidIndex,
+      time_slot);
+  return compiled_math_intern_condition(&plan->compiled_math, std::move(key));
+}
+
+inline semantic::Index compile_expr_source_node(
+    ExactVariantPlan *plan,
+    const CompiledMathNodeKind kind,
+    const semantic::Index source_id,
+    const semantic::Index condition_id,
+    const semantic::Index time_id =
+        static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
+    const semantic::Index source_view_id = 0) {
+  return compiled_math_source_node(
+      &plan->compiled_math,
+      kind,
+      source_id,
+      condition_id,
+      time_id,
+      source_view_id);
+}
+
+inline semantic::Index compile_expr_child_value_node(
+    ExactVariantPlan *plan,
+    const ExactIndexSpan children,
+    const semantic::Index index,
+    const CompiledMathNodeKind value_kind,
+    const semantic::Index condition_id,
+    const semantic::Index time_id =
+        static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
+    const semantic::Index source_view_id = 0) {
+  const auto &program = plan->lowered.program;
+  return compile_expr_value_node(
+      plan,
+      program.expr_args[static_cast<std::size_t>(children.offset + index)],
+      value_kind,
+      condition_id,
+      time_id,
+      source_view_id);
+}
+
+inline semantic::Index compile_expr_unsupported_node(
+    ExactVariantPlan *plan,
+    const CompiledMathNodeKind kind,
+    const semantic::Index expr_id,
+    const semantic::Index condition_id) {
+  (void)plan;
+  (void)kind;
+  (void)condition_id;
+  throw std::runtime_error(
+      "exact expression compilation reached unsupported expression " +
+      std::to_string(expr_id) +
+      "; runtime expression interpretation is disabled");
+}
+
+inline bool compiled_condition_has_union_conditioning(
+    const CompiledMathProgram &program,
+    const semantic::Index condition_id) {
+  if (condition_id == 0 || condition_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
+  if (condition_pos >= program.conditions.size()) {
+    return false;
+  }
+  const auto &condition = program.conditions[condition_pos];
+  for (const auto kind_value : condition.fact_kinds) {
+    const auto kind =
+        static_cast<CompiledMathConditionFactKind>(kind_value);
+    if (kind == CompiledMathConditionFactKind::SourceExact ||
+        kind == CompiledMathConditionFactKind::SourceUpperBound ||
+        kind == CompiledMathConditionFactKind::SourceLowerBound ||
+        kind == CompiledMathConditionFactKind::ExprUpperBound ||
+        kind == CompiledMathConditionFactKind::SourceOrder ||
+        kind == CompiledMathConditionFactKind::GuardUpperBound) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool compiled_condition_has_source_order(
+    const CompiledMathProgram &program,
+    const semantic::Index condition_id,
+    const semantic::Index before_source_id,
+    const semantic::Index after_source_id) {
+  if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
+      before_source_id == semantic::kInvalidIndex ||
+      after_source_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
+  if (condition_pos >= program.conditions.size()) {
+    return false;
+  }
+  const auto &condition = program.conditions[condition_pos];
+  for (std::size_t i = 0; i < condition.fact_kinds.size(); ++i) {
+    const auto kind =
+        static_cast<CompiledMathConditionFactKind>(condition.fact_kinds[i]);
+    if (kind == CompiledMathConditionFactKind::SourceOrder &&
+        condition.fact_subject_ids[i] == before_source_id &&
+        condition.fact_aux_ids[i] == after_source_id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline semantic::Index compiled_condition_source_exact_time_id(
+    const CompiledMathProgram &program,
+    const semantic::Index condition_id,
+    const semantic::Index source_id) {
+  if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
+      source_id == semantic::kInvalidIndex) {
+    return semantic::kInvalidIndex;
+  }
+  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
+  if (condition_pos >= program.conditions.size()) {
+    return semantic::kInvalidIndex;
+  }
+  const auto &condition = program.conditions[condition_pos];
+  for (std::size_t i = 0; i < condition.fact_kinds.size(); ++i) {
+    if (static_cast<CompiledMathConditionFactKind>(condition.fact_kinds[i]) ==
+            CompiledMathConditionFactKind::SourceExact &&
+        condition.fact_subject_ids[i] == source_id) {
+      return condition.fact_time_ids[i];
+    }
+  }
+  return semantic::kInvalidIndex;
+}
+
+inline bool compiled_condition_has_expr_upper_bound(
+    const CompiledMathProgram &program,
+    const semantic::Index condition_id,
+    const semantic::Index expr_id) {
+  if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
+      expr_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
+  if (condition_pos >= program.conditions.size()) {
+    return false;
+  }
+  const auto &condition = program.conditions[condition_pos];
+  for (std::size_t i = 0; i < condition.fact_kinds.size(); ++i) {
+    const auto kind =
+        static_cast<CompiledMathConditionFactKind>(condition.fact_kinds[i]);
+    if (kind == CompiledMathConditionFactKind::ExprUpperBound &&
+        condition.fact_subject_ids[i] == expr_id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool compiled_condition_has_source_relation(
+    const CompiledMathProgram &program,
+    const semantic::Index condition_id,
+    const semantic::Index source_id,
+    const ExactRelation relation) {
+  if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
+      source_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
+  if (condition_pos >= program.conditions.size()) {
+    return false;
+  }
+  const auto &condition = program.conditions[condition_pos];
+  for (std::size_t i = 0; i < condition.source_ids.size(); ++i) {
+    if (condition.source_ids[i] == source_id &&
+        static_cast<ExactRelation>(condition.relations[i]) == relation) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool compiled_source_view_knows_before(
     const ExactVariantPlan &plan,
+    const semantic::Index source_view_id,
+    const semantic::Index before_source_id,
+    const semantic::Index after_source_id) {
+  if (source_view_id == 0 ||
+      source_view_id == semantic::kInvalidIndex ||
+      before_source_id == semantic::kInvalidIndex ||
+      after_source_id == semantic::kInvalidIndex ||
+      before_source_id == after_source_id) {
+    return false;
+  }
+  const auto pos = static_cast<std::size_t>(source_view_id - 1U);
+  if (pos >= plan.compiled_source_views.size()) {
+    return false;
+  }
+  const auto &source_view = plan.compiled_source_views[pos];
+  auto relation_for = [&](const semantic::Index source_id) {
+    for (std::size_t i = 0; i < source_view.source_ids.size(); ++i) {
+      if (source_view.source_ids[i] == source_id) {
+        return source_view.relations[i];
+      }
+    }
+    return ExactRelation::Unknown;
+  };
+  const auto before_relation = relation_for(before_source_id);
+  const auto after_relation = relation_for(after_source_id);
+  return before_relation != ExactRelation::Unknown &&
+         after_relation != ExactRelation::Unknown &&
+         before_relation < after_relation;
+}
+
+inline bool compiled_guard_order_blocks(
+    const ExactVariantPlan &plan,
+    const semantic::Index condition_id,
+    const semantic::Index source_view_id,
+    const semantic::Index blocker_source_id,
+    const semantic::Index ref_source_id) {
+  return compiled_condition_has_source_order(
+             plan.compiled_math,
+             condition_id,
+             blocker_source_id,
+             ref_source_id) ||
+         compiled_source_view_knows_before(
+             plan,
+             source_view_id,
+             blocker_source_id,
+             ref_source_id);
+}
+
+inline bool compiled_condition_has_source_fact(
+    const CompiledMathProgram &program,
+    const semantic::Index condition_id,
+    const CompiledMathConditionFactKind fact_kind,
+    const semantic::Index source_id,
+    const CompiledMathTimeSlot time_slot) {
+  if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
+      source_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
+  if (condition_pos >= program.conditions.size()) {
+    return false;
+  }
+  const auto &condition = program.conditions[condition_pos];
+  const auto target_time = static_cast<semantic::Index>(time_slot);
+  for (std::size_t i = 0; i < condition.fact_kinds.size(); ++i) {
+    if (static_cast<CompiledMathConditionFactKind>(condition.fact_kinds[i]) ==
+            fact_kind &&
+        condition.fact_subject_ids[i] == source_id &&
+        condition.fact_time_ids[i] == target_time) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool compiled_condition_forces_source_after_observed(
+    const CompiledMathProgram &program,
+    const semantic::Index condition_id,
+    const semantic::Index source_id) {
+  if (compiled_condition_has_source_relation(
+          program, condition_id, source_id, ExactRelation::After)) {
+    return true;
+  }
+  return compiled_condition_has_source_fact(
+             program,
+             condition_id,
+             CompiledMathConditionFactKind::SourceLowerBound,
+             source_id,
+             CompiledMathTimeSlot::Observed) ||
+         compiled_condition_has_source_fact(
+             program,
+             condition_id,
+             CompiledMathConditionFactKind::SourceLowerBound,
+             source_id,
+             CompiledMathTimeSlot::Readiness) ||
+         compiled_condition_has_source_fact(
+             program,
+             condition_id,
+             CompiledMathConditionFactKind::SourceLowerBound,
+             source_id,
+             CompiledMathTimeSlot::Active);
+}
+
+inline bool compiled_condition_forces_source_certain(
+    const CompiledMathProgram &program,
+    const semantic::Index condition_id,
+    const semantic::Index source_id) {
+  return compiled_condition_has_source_relation(
+             program, condition_id, source_id, ExactRelation::Before) ||
+         compiled_condition_has_source_relation(
+             program, condition_id, source_id, ExactRelation::At);
+}
+
+inline bool expr_condition_equiv_event_source(
+    const ExactVariantPlan &plan,
+    const semantic::Index expr_id,
+    const semantic::Index source_id,
+    const semantic::Index condition_id);
+
+inline bool compiled_condition_has_guard_upper_bound_expr(
+    const CompiledMathProgram &program,
+    const semantic::Index condition_id,
+    const semantic::Index expr_id) {
+  if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
+      expr_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
+  if (condition_pos >= program.conditions.size()) {
+    return false;
+  }
+  const auto &condition = program.conditions[condition_pos];
+  for (std::size_t i = 0; i < condition.fact_kinds.size(); ++i) {
+    if (static_cast<CompiledMathConditionFactKind>(condition.fact_kinds[i]) ==
+            CompiledMathConditionFactKind::GuardUpperBound &&
+        condition.fact_subject_ids[i] == expr_id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool compiled_condition_has_guard_upper_bound_fact(
+    const CompiledMathProgram &program,
+    const semantic::Index condition_id) {
+  if (condition_id == 0 || condition_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
+  if (condition_pos >= program.conditions.size()) {
+    return false;
+  }
+  const auto &condition = program.conditions[condition_pos];
+  for (const auto kind_value : condition.fact_kinds) {
+    if (static_cast<CompiledMathConditionFactKind>(kind_value) ==
+        CompiledMathConditionFactKind::GuardUpperBound) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool compiled_condition_has_guard_upper_bound_signature(
+    const CompiledMathProgram &program,
+    const semantic::Index condition_id,
+    const semantic::Index ref_source_id,
+    const semantic::Index blocker_source_id) {
+  if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
+      ref_source_id == semantic::kInvalidIndex ||
+      blocker_source_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
+  if (condition_pos >= program.conditions.size()) {
+    return false;
+  }
+  const auto &condition = program.conditions[condition_pos];
+  for (std::size_t i = 0; i < condition.fact_kinds.size(); ++i) {
+    if (static_cast<CompiledMathConditionFactKind>(condition.fact_kinds[i]) ==
+            CompiledMathConditionFactKind::GuardUpperBound &&
+        condition.fact_aux_ids[i] == ref_source_id &&
+        condition.fact_aux2_ids[i] == blocker_source_id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool expr_condition_certain(
+    const ExactVariantPlan &plan,
+    const semantic::Index expr_id,
+    const semantic::Index condition_id) {
+  if (expr_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto &program = plan.lowered.program;
+  const auto pos = static_cast<std::size_t>(expr_id);
+  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
+  switch (kind) {
+  case semantic::ExprKind::TrueExpr:
+    return true;
+  case semantic::ExprKind::Event:
+    return compiled_condition_forces_source_certain(
+        plan.compiled_math,
+        condition_id,
+        program.expr_source_ids[pos]);
+  case semantic::ExprKind::And: {
+    const auto begin = program.expr_arg_offsets[pos];
+    const auto end = program.expr_arg_offsets[pos + 1U];
+    if (begin == end) {
+      return false;
+    }
+    for (semantic::Index i = begin; i < end; ++i) {
+      if (!expr_condition_certain(
+              plan,
+              program.expr_args[static_cast<std::size_t>(i)],
+              condition_id)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  case semantic::ExprKind::Or: {
+    const auto begin = program.expr_arg_offsets[pos];
+    const auto end = program.expr_arg_offsets[pos + 1U];
+    for (semantic::Index i = begin; i < end; ++i) {
+      if (expr_condition_certain(
+              plan,
+              program.expr_args[static_cast<std::size_t>(i)],
+              condition_id)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  case semantic::ExprKind::Impossible:
+  case semantic::ExprKind::Guard:
+  case semantic::ExprKind::Not:
+    return false;
+  }
+  return false;
+}
+
+inline bool expr_condition_equiv_event_source(
+    const ExactVariantPlan &plan,
+    const semantic::Index expr_id,
+    const semantic::Index source_id,
+    const semantic::Index condition_id) {
+  if (expr_id == semantic::kInvalidIndex ||
+      source_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto &program = plan.lowered.program;
+  const auto pos = static_cast<std::size_t>(expr_id);
+  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
+  if (kind == semantic::ExprKind::Event) {
+    return program.expr_source_ids[pos] == source_id;
+  }
+  if (kind == semantic::ExprKind::Guard) {
+    const auto &kernel = plan.expr_kernels[pos];
+    return kernel.simple_event_guard &&
+           !kernel.has_unless &&
+           kernel.guard_ref_source_id == source_id &&
+           compiled_condition_forces_source_after_observed(
+               plan.compiled_math,
+               condition_id,
+               kernel.guard_blocker_source_id);
+  }
+  if (kind != semantic::ExprKind::And) {
+    return false;
+  }
+  bool found_candidate = false;
+  const auto begin = program.expr_arg_offsets[pos];
+  const auto end = program.expr_arg_offsets[pos + 1U];
+  for (semantic::Index i = begin; i < end; ++i) {
+    const auto child = program.expr_args[static_cast<std::size_t>(i)];
+    if (expr_condition_equiv_event_source(
+            plan, child, source_id, condition_id)) {
+      if (found_candidate) {
+        return false;
+      }
+      found_candidate = true;
+      continue;
+    }
+    if (!expr_condition_certain(plan, child, condition_id)) {
+      return false;
+    }
+  }
+  return found_candidate;
+}
+
+inline bool expr_condition_certain_at_observed_cdf(
+    const ExactVariantPlan &plan,
+    const semantic::Index expr_id,
+    const semantic::Index condition_id) {
+  if (expr_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto &program = plan.lowered.program;
+  const auto pos = static_cast<std::size_t>(expr_id);
+  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
+  switch (kind) {
+  case semantic::ExprKind::TrueExpr:
+    return true;
+  case semantic::ExprKind::Event: {
+    const auto source_id = program.expr_source_ids[pos];
+    return compiled_condition_forces_source_certain(
+               plan.compiled_math,
+               condition_id,
+               source_id) ||
+           compiled_condition_has_source_fact(
+               plan.compiled_math,
+               condition_id,
+               CompiledMathConditionFactKind::SourceExact,
+               source_id,
+               CompiledMathTimeSlot::Observed) ||
+	           compiled_condition_has_source_fact(
+	               plan.compiled_math,
+	               condition_id,
+	               CompiledMathConditionFactKind::SourceExact,
+	               source_id,
+	               CompiledMathTimeSlot::Readiness) ||
+           compiled_condition_has_source_fact(
+               plan.compiled_math,
+               condition_id,
+               CompiledMathConditionFactKind::SourceExact,
+               source_id,
+               CompiledMathTimeSlot::Active) ||
+	           compiled_condition_has_source_fact(
+	               plan.compiled_math,
+	               condition_id,
+	               CompiledMathConditionFactKind::SourceUpperBound,
+	               source_id,
+	               CompiledMathTimeSlot::Observed) ||
+	           compiled_condition_has_source_fact(
+	               plan.compiled_math,
+	               condition_id,
+	               CompiledMathConditionFactKind::SourceUpperBound,
+	               source_id,
+	               CompiledMathTimeSlot::Readiness) ||
+           compiled_condition_has_source_fact(
+               plan.compiled_math,
+               condition_id,
+               CompiledMathConditionFactKind::SourceUpperBound,
+               source_id,
+               CompiledMathTimeSlot::Active);
+	  }
+  case semantic::ExprKind::Guard: {
+    const auto &kernel = plan.expr_kernels[pos];
+    return compiled_condition_has_guard_upper_bound_expr(
+               plan.compiled_math,
+               condition_id,
+               expr_id) ||
+           (kernel.simple_event_guard &&
+            !kernel.has_unless &&
+            compiled_condition_has_guard_upper_bound_signature(
+                plan.compiled_math,
+                condition_id,
+                kernel.guard_ref_source_id,
+                kernel.guard_blocker_source_id));
+  }
+  case semantic::ExprKind::And: {
+    const auto begin = program.expr_arg_offsets[pos];
+    const auto end = program.expr_arg_offsets[pos + 1U];
+    if (begin == end) {
+      return false;
+    }
+    for (semantic::Index i = begin; i < end; ++i) {
+      if (!expr_condition_certain_at_observed_cdf(
+              plan,
+              program.expr_args[static_cast<std::size_t>(i)],
+              condition_id)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  case semantic::ExprKind::Or: {
+    const auto begin = program.expr_arg_offsets[pos];
+    const auto end = program.expr_arg_offsets[pos + 1U];
+    for (semantic::Index i = begin; i < end; ++i) {
+      if (expr_condition_certain_at_observed_cdf(
+              plan,
+              program.expr_args[static_cast<std::size_t>(i)],
+              condition_id)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  case semantic::ExprKind::Impossible:
+  case semantic::ExprKind::Not:
+    return false;
+  }
+  return false;
+}
+
+inline bool expr_condition_equiv_event_source_at_observed_cdf(
+    const ExactVariantPlan &plan,
+    const semantic::Index expr_id,
+    const semantic::Index source_id,
+    const semantic::Index condition_id) {
+  if (expr_id == semantic::kInvalidIndex ||
+      source_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto &program = plan.lowered.program;
+  const auto pos = static_cast<std::size_t>(expr_id);
+  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
+  if (kind == semantic::ExprKind::Event) {
+    return program.expr_source_ids[pos] == source_id;
+  }
+  if (kind == semantic::ExprKind::Guard) {
+    return expr_condition_equiv_event_source(
+        plan, expr_id, source_id, condition_id);
+  }
+  if (kind != semantic::ExprKind::And) {
+    return false;
+  }
+  bool found_candidate = false;
+  const auto begin = program.expr_arg_offsets[pos];
+  const auto end = program.expr_arg_offsets[pos + 1U];
+  for (semantic::Index i = begin; i < end; ++i) {
+    const auto child = program.expr_args[static_cast<std::size_t>(i)];
+    if (expr_condition_equiv_event_source_at_observed_cdf(
+            plan, child, source_id, condition_id)) {
+      if (found_candidate) {
+        return false;
+      }
+      found_candidate = true;
+      continue;
+    }
+    if (!expr_condition_certain_at_observed_cdf(
+            plan, child, condition_id)) {
+      return false;
+    }
+  }
+  return found_candidate;
+}
+
+inline bool compiled_condition_absorbs_union_to_source(
+    const ExactVariantPlan &plan,
+    const ExactExprKernel &kernel,
+    const semantic::Index condition_id,
+    const bool observed_cdf_context,
+    semantic::Index *source_id) {
+  for (semantic::Index i = 0;
+       i < kernel.union_absorption_candidate_span.size;
+       ++i) {
+    const auto candidate = plan.expr_union_absorption_sources[
+        static_cast<std::size_t>(
+            kernel.union_absorption_candidate_span.offset + i)];
+    for (semantic::Index j = 0; j < kernel.children.size; ++j) {
+      const auto child = plan.lowered.program.expr_args[
+          static_cast<std::size_t>(kernel.children.offset + j)];
+      const bool child_equiv =
+          observed_cdf_context
+              ? expr_condition_equiv_event_source_at_observed_cdf(
+                    plan, child, candidate, condition_id)
+              : expr_condition_equiv_event_source(
+                    plan, child, candidate, condition_id);
+      if (child_equiv) {
+        if (source_id != nullptr) {
+          *source_id = candidate;
+        }
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+inline semantic::Index compile_integral_zero_to_current_node(
+    ExactVariantPlan *plan,
+    const semantic::Index integrand_node,
+    const semantic::Index condition_id,
+    const semantic::Index time_id =
+        static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
+    const semantic::Index source_view_id = 0,
+    const semantic::Index bind_time_id = semantic::kInvalidIndex) {
+  const auto integrand_root =
+      compiled_math_make_root(&plan->compiled_math, integrand_node);
+  return compiled_math_integral_zero_to_current_node(
+      &plan->compiled_math,
+      integrand_root,
+      condition_id,
+      time_id,
+      source_view_id,
+      bind_time_id);
+}
+
+inline semantic::Index compile_simple_guard_raw_density_node(
+    ExactVariantPlan *plan,
+    const ExactExprKernel &kernel,
+    const semantic::Index condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0) {
+  std::vector<semantic::Index> factors;
+  factors.reserve(2U);
+  factors.push_back(
+      compiled_math_source_node(
+          &plan->compiled_math,
+          CompiledMathNodeKind::SourcePdf,
+          kernel.guard_ref_source_id,
+          condition_id,
+          time_id,
+          source_view_id));
+  factors.push_back(
+      compiled_math_source_node(
+          &plan->compiled_math,
+          CompiledMathNodeKind::SourceSurvival,
+          kernel.guard_blocker_source_id,
+          condition_id,
+          time_id,
+          source_view_id));
+  return compiled_math_algebra_node(
+      &plan->compiled_math,
+      CompiledMathNodeKind::Product,
+      std::move(factors),
+      CompiledMathValueKind::Density);
+}
+
+inline semantic::Index compile_simple_guard_upper_wrapper_node(
+    ExactVariantPlan *plan,
+    const CompiledMathNodeKind kind,
+    const semantic::Index expr_id,
+    const semantic::Index raw_node,
+    const semantic::Index condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0) {
+  CompiledMathNodeKey key;
+  key.kind = kind;
+  key.value_kind = kind == CompiledMathNodeKind::SimpleGuardDensity
+                       ? CompiledMathValueKind::Density
+                       : CompiledMathValueKind::Cdf;
+  key.subject_id = expr_id;
+  key.condition_id = condition_id;
+  key.time_id = time_id;
+  key.source_view_id = source_view_id;
+  key.children.push_back(raw_node);
+  return compiled_math_intern_node(&plan->compiled_math, std::move(key));
+}
+
+inline bool compile_simple_guard_needs_upper_wrapper(
+    const ExactVariantPlan &plan,
+    const ExactExprKernel &kernel,
+    const semantic::Index condition_id) {
+  return compiled_condition_has_guard_upper_bound_signature(
+             plan.compiled_math,
+             condition_id,
+             kernel.guard_ref_source_id,
+             kernel.guard_blocker_source_id);
+}
+
+inline semantic::Index compile_simple_guard_density_node(
+    ExactVariantPlan *plan,
+    const semantic::Index expr_id,
+    const ExactExprKernel &kernel,
+    const semantic::Index condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0) {
+  if (compiled_guard_order_blocks(
+          *plan,
+          condition_id,
+          source_view_id,
+          kernel.guard_blocker_source_id,
+          kernel.guard_ref_source_id)) {
+    return compiled_math_constant(&plan->compiled_math, 0.0);
+  }
+  const auto raw_node =
+      compile_simple_guard_raw_density_node(
+          plan, kernel, condition_id, time_id, source_view_id);
+  if (!compile_simple_guard_needs_upper_wrapper(
+          *plan, kernel, condition_id)) {
+    return raw_node;
+  }
+  return compile_simple_guard_upper_wrapper_node(
+      plan,
+      CompiledMathNodeKind::SimpleGuardDensity,
+      expr_id,
+      raw_node,
+      condition_id,
+      time_id,
+      source_view_id);
+}
+
+inline semantic::Index compile_simple_guard_raw_cdf_node(
+    ExactVariantPlan *plan,
+    const semantic::Index expr_id,
+    const ExactExprKernel &kernel,
+    const semantic::Index condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0) {
+  if (compiled_guard_order_blocks(
+          *plan,
+          condition_id,
+          source_view_id,
+          kernel.guard_blocker_source_id,
+          kernel.guard_ref_source_id)) {
+    return compiled_math_constant(&plan->compiled_math, 0.0);
+  }
+
+  const auto ref_exact_time_id =
+      compiled_condition_source_exact_time_id(
+          plan->compiled_math,
+          condition_id,
+          kernel.guard_ref_source_id);
+  if (ref_exact_time_id != semantic::kInvalidIndex) {
+    const auto blocker_survival_at_ref =
+        compiled_math_source_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::SourceSurvival,
+            kernel.guard_blocker_source_id,
+            condition_id,
+            ref_exact_time_id,
+            source_view_id);
+    return compiled_math_time_gate_node(
+        &plan->compiled_math,
+        blocker_survival_at_ref,
+        time_id,
+        ref_exact_time_id,
+        CompiledMathValueKind::Cdf);
+  }
+
+  const auto blocker_exact_time_id =
+      compiled_condition_source_exact_time_id(
+          plan->compiled_math,
+          condition_id,
+          kernel.guard_blocker_source_id);
+  if (blocker_exact_time_id != semantic::kInvalidIndex) {
+    return compiled_math_source_node(
+        &plan->compiled_math,
+        CompiledMathNodeKind::SourceCdf,
+        kernel.guard_ref_source_id,
+        condition_id,
+        time_id,
+        source_view_id,
+        blocker_exact_time_id);
+  }
+
+  (void)expr_id;
+  const auto bind_time_id =
+      time_id == static_cast<semantic::Index>(CompiledMathTimeSlot::Active)
+          ? time_id
+          : static_cast<semantic::Index>(CompiledMathTimeSlot::Active);
+  const auto raw_density_node =
+      compile_simple_guard_raw_density_node(
+          plan, kernel, condition_id, bind_time_id, source_view_id);
+  return compile_integral_zero_to_current_node(
+      plan,
+      raw_density_node,
+      condition_id,
+      time_id,
+      source_view_id,
+      bind_time_id);
+}
+
+inline semantic::Index compile_simple_guard_cdf_node(
+    ExactVariantPlan *plan,
+    const semantic::Index expr_id,
+    const ExactExprKernel &kernel,
+    const semantic::Index condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0) {
+  const auto raw_node =
+      compile_simple_guard_raw_cdf_node(
+          plan, expr_id, kernel, condition_id, time_id, source_view_id);
+  if (!compile_simple_guard_needs_upper_wrapper(
+          *plan, kernel, condition_id)) {
+    return raw_node;
+  }
+  return compile_simple_guard_upper_wrapper_node(
+      plan,
+      CompiledMathNodeKind::SimpleGuardCdf,
+      expr_id,
+      raw_node,
+      condition_id,
+      time_id,
+      source_view_id);
+}
+
+inline semantic::Index compile_signed_term_node(
+    ExactVariantPlan *plan,
+    const semantic::Index node_id,
+    const int sign) {
+  if (sign >= 0) {
+    return node_id;
+  }
+  return compiled_math_unary_node(
+      &plan->compiled_math,
+      CompiledMathNodeKind::Negate,
+      node_id);
+}
+
+inline semantic::Index compile_outcome_subset_unused_node(
+    ExactVariantPlan *plan,
+    const std::vector<semantic::Index> &outcome_indices) {
+  if (outcome_indices.empty()) {
+    return compiled_math_constant(&plan->compiled_math, 1.0);
+  }
+  const auto offset =
+      static_cast<semantic::Index>(
+          plan->compiled_outcome_gate_indices.size());
+  plan->compiled_outcome_gate_indices.insert(
+      plan->compiled_outcome_gate_indices.end(),
+      outcome_indices.begin(),
+      outcome_indices.end());
+  CompiledMathNodeKey key;
+  key.kind = CompiledMathNodeKind::OutcomeSubsetUnused;
+  key.value_kind = CompiledMathValueKind::Scalar;
+  key.subject_id = offset;
+  key.aux_id = static_cast<semantic::Index>(outcome_indices.size());
+  return compiled_math_intern_node(&plan->compiled_math, std::move(key));
+}
+
+inline semantic::Index compile_expr_span_conjunction_density_node(
+    ExactVariantPlan *plan,
+    const std::vector<semantic::Index> &arena,
+    const ExactIndexSpan span,
+    const semantic::Index condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0) {
+  if (span.empty()) {
+    return compiled_math_constant(&plan->compiled_math, 0.0);
+  }
+  if (span.size == 1U) {
+    return compile_expr_value_node(
+        plan,
+        arena[static_cast<std::size_t>(span.offset)],
+        CompiledMathNodeKind::ExprDensity,
+        condition_id,
+        time_id,
+        source_view_id);
+  }
+
+  std::vector<semantic::Index> terms;
+  terms.reserve(static_cast<std::size_t>(span.size));
+  for (semantic::Index i = 0; i < span.size; ++i) {
+    std::vector<semantic::Index> factors;
+    factors.reserve(static_cast<std::size_t>(span.size));
+    factors.push_back(
+        compile_expr_value_node(
+            plan,
+            arena[static_cast<std::size_t>(span.offset + i)],
+            CompiledMathNodeKind::ExprDensity,
+            condition_id,
+            time_id,
+            source_view_id));
+    for (semantic::Index j = 0; j < span.size; ++j) {
+      if (i == j) {
+        continue;
+      }
+      factors.push_back(
+          compile_expr_value_node(
+              plan,
+              arena[static_cast<std::size_t>(span.offset + j)],
+              CompiledMathNodeKind::ExprCdf,
+              condition_id,
+              time_id,
+              source_view_id));
+    }
+    terms.push_back(
+        compiled_math_algebra_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::Product,
+            std::move(factors)));
+  }
+  return compiled_math_algebra_node(
+      &plan->compiled_math,
+      CompiledMathNodeKind::CleanSignedSum,
+      std::move(terms),
+      CompiledMathValueKind::Density);
+}
+
+inline bool exact_union_has_multi_subset(const ExactVariantPlan &plan,
+                                         const ExactExprKernel &kernel) {
+  for (semantic::Index i = 0; i < kernel.union_subset_span.size; ++i) {
+    const auto &subset = plan.expr_union_subsets[
+        static_cast<std::size_t>(kernel.union_subset_span.offset + i)];
+    if (subset.child_positions.size > 1U) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline std::vector<semantic::Index> compile_union_child_density_cdf_nodes(
+    ExactVariantPlan *plan,
+    const ExactExprKernel &kernel,
+    const semantic::Index condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0) {
+  std::vector<semantic::Index> children;
+  children.reserve(static_cast<std::size_t>(kernel.children.size) * 2U);
+  for (semantic::Index i = 0; i < kernel.children.size; ++i) {
+    children.push_back(
+        compile_expr_child_value_node(
+            plan,
+            kernel.children,
+            i,
+            CompiledMathNodeKind::ExprDensity,
+            condition_id,
+            time_id,
+            source_view_id));
+  }
+  for (semantic::Index i = 0; i < kernel.children.size; ++i) {
+    children.push_back(
+        compile_expr_child_value_node(
+            plan,
+            kernel.children,
+            i,
+            CompiledMathNodeKind::ExprCdf,
+            condition_id,
+            time_id,
+            source_view_id));
+  }
+  return children;
+}
+
+inline semantic::Index compile_union_multi_subset_density_node(
+    ExactVariantPlan *plan,
+    const semantic::Index expr_id,
+    const ExactExprKernel &kernel,
+    const semantic::Index condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0,
+    const semantic::Index bind_time_id = semantic::kInvalidIndex) {
+  const auto density_time_id =
+      bind_time_id == semantic::kInvalidIndex ? time_id : bind_time_id;
+  return compiled_math_union_kernel_node(
+      &plan->compiled_math,
+      CompiledMathNodeKind::UnionKernelMultiSubsetDensity,
+      expr_id,
+      condition_id,
+      compile_union_child_density_cdf_nodes(
+          plan, kernel, condition_id, density_time_id, source_view_id),
+      semantic::kInvalidIndex,
+      density_time_id,
+      source_view_id);
+}
+
+inline semantic::Index compile_overlapping_union_kernel_node(
+    ExactVariantPlan *plan,
+    const semantic::Index expr_id,
+    const ExactExprKernel &kernel,
+    const CompiledMathNodeKind value_kind,
+    const semantic::Index condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0) {
+  if (value_kind == CompiledMathNodeKind::ExprSurvival) {
+    return compiled_math_unary_node(
+        &plan->compiled_math,
+        CompiledMathNodeKind::Complement,
+        compile_overlapping_union_kernel_node(
+            plan,
+            expr_id,
+            kernel,
+            CompiledMathNodeKind::ExprCdf,
+            condition_id,
+            time_id,
+            source_view_id),
+        CompiledMathValueKind::Survival);
+  }
+
+  auto *program = &plan->compiled_math;
+  if (value_kind == CompiledMathNodeKind::ExprDensity) {
+    return compiled_math_union_kernel_node(
+        program,
+        CompiledMathNodeKind::UnionKernelDensity,
+        expr_id,
+        condition_id,
+        compile_union_child_density_cdf_nodes(
+            plan, kernel, condition_id, time_id, source_view_id),
+        semantic::kInvalidIndex,
+        time_id,
+        source_view_id);
+  }
+
+  std::vector<semantic::Index> children;
+  children.reserve(static_cast<std::size_t>(kernel.children.size) + 1U);
+  for (semantic::Index i = 0; i < kernel.children.size; ++i) {
+    children.push_back(
+        compile_expr_child_value_node(
+            plan,
+            kernel.children,
+            i,
+            CompiledMathNodeKind::ExprCdf,
+            condition_id,
+            time_id,
+            source_view_id));
+  }
+  if (exact_union_has_multi_subset(*plan, kernel)) {
+    const auto bind_time_id =
+        time_id == static_cast<semantic::Index>(CompiledMathTimeSlot::Active)
+            ? time_id
+            : static_cast<semantic::Index>(CompiledMathTimeSlot::Active);
+    const auto multi_density_node =
+        compile_union_multi_subset_density_node(
+            plan,
+            expr_id,
+            kernel,
+            condition_id,
+            time_id,
+            source_view_id,
+            bind_time_id);
+    const auto multi_density_root =
+        compiled_math_make_root(program, multi_density_node);
+    children.push_back(
+        compiled_math_union_kernel_node(
+            program,
+            CompiledMathNodeKind::UnionKernelMultiSubsetCdf,
+            expr_id,
+            condition_id,
+            {},
+            multi_density_root,
+            time_id,
+            source_view_id,
+            bind_time_id));
+  }
+  return compiled_math_union_kernel_node(
+      program,
+      CompiledMathNodeKind::UnionKernelCdf,
+      expr_id,
+      condition_id,
+      std::move(children),
+      semantic::kInvalidIndex,
+      time_id,
+      source_view_id);
+}
+
+inline semantic::Index compile_overlapping_union_node(
+    ExactVariantPlan *plan,
+    const semantic::Index expr_id,
+    const ExactExprKernel &kernel,
+    const CompiledMathNodeKind value_kind,
+    const semantic::Index condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0) {
+  if (value_kind == CompiledMathNodeKind::ExprSurvival) {
+    return compiled_math_unary_node(
+        &plan->compiled_math,
+        CompiledMathNodeKind::Complement,
+        compile_overlapping_union_node(
+            plan,
+            expr_id,
+            kernel,
+            CompiledMathNodeKind::ExprCdf,
+            condition_id,
+            time_id,
+            source_view_id),
+        CompiledMathValueKind::Survival);
+  }
+
+  if (!kernel.union_absorption_candidate_span.empty() &&
+      compiled_condition_has_union_conditioning(plan->compiled_math, condition_id)) {
+    semantic::Index absorbed_source_id{semantic::kInvalidIndex};
+    const bool absorbed = compiled_condition_absorbs_union_to_source(
+        *plan,
+        kernel,
+        condition_id,
+        value_kind == CompiledMathNodeKind::ExprCdf,
+        &absorbed_source_id);
+    if (absorbed) {
+      if (value_kind == CompiledMathNodeKind::ExprDensity) {
+        return compile_expr_source_node(
+            plan,
+            CompiledMathNodeKind::SourcePdf,
+            absorbed_source_id,
+            condition_id,
+            time_id,
+            source_view_id);
+      }
+      return compile_expr_source_node(
+          plan,
+          CompiledMathNodeKind::SourceCdf,
+          absorbed_source_id,
+          condition_id,
+          time_id,
+          source_view_id);
+    }
+  }
+
+  return compile_overlapping_union_kernel_node(
+      plan, expr_id, kernel, value_kind, condition_id, time_id, source_view_id);
+}
+
+inline semantic::Index compile_expr_value_node(
+    ExactVariantPlan *plan,
+    const semantic::Index expr_id,
+    const CompiledMathNodeKind value_kind,
+    const semantic::Index condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id);
+
+inline semantic::Index compile_expr_value_node_raw(
+    ExactVariantPlan *plan,
+    const semantic::Index expr_id,
+    const CompiledMathNodeKind value_kind,
+    const semantic::Index condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0) {
+  const auto &program = plan->lowered.program;
+  const auto &kernel = plan->expr_kernels[static_cast<std::size_t>(expr_id)];
+  const auto constant = [&](const double value) {
+    return compiled_math_constant(&plan->compiled_math, value);
+  };
+  const auto complement = [&](const semantic::Index child) {
+    return compiled_math_unary_node(
+        &plan->compiled_math,
+        CompiledMathNodeKind::Complement,
+        child,
+        CompiledMathValueKind::Cdf);
+  };
+  const auto unsupported = [&]() {
+    return compile_expr_unsupported_node(plan, value_kind, expr_id, condition_id);
+  };
+
+  switch (kernel.kind) {
+  case semantic::ExprKind::Impossible:
+    if (value_kind == CompiledMathNodeKind::ExprSurvival) {
+      return constant(1.0);
+    }
+    return constant(0.0);
+
+  case semantic::ExprKind::TrueExpr:
+    if (value_kind == CompiledMathNodeKind::ExprDensity) {
+      return constant(0.0);
+    }
+    return constant(1.0);
+
+  case semantic::ExprKind::Event:
+    if (value_kind == CompiledMathNodeKind::ExprDensity) {
+      return compile_expr_source_node(
+          plan,
+          CompiledMathNodeKind::SourcePdf,
+          kernel.event_source_id,
+          condition_id,
+          time_id,
+          source_view_id);
+    }
+    if (value_kind == CompiledMathNodeKind::ExprCdf) {
+      return compile_expr_source_node(
+          plan,
+          CompiledMathNodeKind::SourceCdf,
+          kernel.event_source_id,
+          condition_id,
+          time_id,
+          source_view_id);
+    }
+    return compile_expr_source_node(
+        plan,
+        CompiledMathNodeKind::SourceSurvival,
+        kernel.event_source_id,
+        condition_id,
+        time_id,
+        source_view_id);
+
+  case semantic::ExprKind::And: {
+    if (value_kind == CompiledMathNodeKind::ExprCdf) {
+      std::vector<semantic::Index> children;
+      children.reserve(static_cast<std::size_t>(kernel.children.size));
+      for (semantic::Index i = 0; i < kernel.children.size; ++i) {
+        children.push_back(
+            compile_expr_child_value_node(
+                plan,
+                kernel.children,
+                i,
+                CompiledMathNodeKind::ExprCdf,
+                condition_id,
+                time_id,
+                source_view_id));
+      }
+      return compiled_math_unary_node(
+          &plan->compiled_math,
+          CompiledMathNodeKind::ClampProbability,
+          compiled_math_algebra_node(
+              &plan->compiled_math,
+              CompiledMathNodeKind::Product,
+              std::move(children)),
+          CompiledMathValueKind::Cdf);
+    }
+    if (value_kind == CompiledMathNodeKind::ExprSurvival) {
+      return complement(
+          compile_expr_value_node(
+              plan,
+              expr_id,
+              CompiledMathNodeKind::ExprCdf,
+              condition_id,
+              time_id,
+              source_view_id));
+    }
+    std::vector<semantic::Index> terms;
+    terms.reserve(static_cast<std::size_t>(kernel.children.size));
+    for (semantic::Index i = 0; i < kernel.children.size; ++i) {
+      std::vector<semantic::Index> factors;
+      factors.reserve(static_cast<std::size_t>(kernel.children.size));
+      factors.push_back(
+          compile_expr_child_value_node(
+              plan,
+              kernel.children,
+              i,
+              CompiledMathNodeKind::ExprDensity,
+              condition_id,
+              time_id,
+              source_view_id));
+      for (semantic::Index j = 0; j < kernel.children.size; ++j) {
+        if (i == j) {
+          continue;
+        }
+        factors.push_back(
+            compile_expr_child_value_node(
+                plan,
+                kernel.children,
+                j,
+                CompiledMathNodeKind::ExprCdf,
+                condition_id,
+                time_id,
+                source_view_id));
+      }
+      terms.push_back(
+          compiled_math_algebra_node(
+              &plan->compiled_math,
+              CompiledMathNodeKind::Product,
+              std::move(factors)));
+    }
+    return compiled_math_algebra_node(
+        &plan->compiled_math,
+        CompiledMathNodeKind::CleanSignedSum,
+        std::move(terms),
+        CompiledMathValueKind::Density);
+  }
+
+	  case semantic::ExprKind::Or: {
+	    if (kernel.children_overlap) {
+	      return compile_overlapping_union_node(
+	          plan,
+	          expr_id,
+          kernel,
+          value_kind,
+          condition_id,
+          time_id,
+          source_view_id);
+    }
+    if (value_kind == CompiledMathNodeKind::ExprSurvival) {
+      std::vector<semantic::Index> children;
+      children.reserve(static_cast<std::size_t>(kernel.children.size));
+      for (semantic::Index i = 0; i < kernel.children.size; ++i) {
+        children.push_back(
+            compile_expr_child_value_node(
+                plan,
+                kernel.children,
+                i,
+                CompiledMathNodeKind::ExprSurvival,
+                condition_id,
+                time_id,
+                source_view_id));
+      }
+      return compiled_math_unary_node(
+          &plan->compiled_math,
+          CompiledMathNodeKind::ClampProbability,
+          compiled_math_algebra_node(
+              &plan->compiled_math,
+              CompiledMathNodeKind::Product,
+              std::move(children)),
+          CompiledMathValueKind::Survival);
+    }
+    if (value_kind == CompiledMathNodeKind::ExprCdf) {
+      return complement(
+          compile_expr_value_node(
+              plan,
+              expr_id,
+              CompiledMathNodeKind::ExprSurvival,
+              condition_id,
+              time_id,
+              source_view_id));
+    }
+    std::vector<semantic::Index> terms;
+    terms.reserve(static_cast<std::size_t>(kernel.children.size));
+    for (semantic::Index i = 0; i < kernel.children.size; ++i) {
+      std::vector<semantic::Index> factors;
+      factors.reserve(static_cast<std::size_t>(kernel.children.size));
+      factors.push_back(
+          compile_expr_child_value_node(
+              plan,
+              kernel.children,
+              i,
+              CompiledMathNodeKind::ExprDensity,
+              condition_id,
+              time_id,
+              source_view_id));
+      for (semantic::Index j = 0; j < kernel.children.size; ++j) {
+        if (i == j) {
+          continue;
+        }
+        factors.push_back(
+            compile_expr_child_value_node(
+                plan,
+                kernel.children,
+                j,
+                CompiledMathNodeKind::ExprSurvival,
+                condition_id,
+                time_id,
+                source_view_id));
+      }
+      terms.push_back(
+          compiled_math_algebra_node(
+              &plan->compiled_math,
+              CompiledMathNodeKind::Product,
+              std::move(factors)));
+    }
+    return compiled_math_algebra_node(
+        &plan->compiled_math,
+        CompiledMathNodeKind::CleanSignedSum,
+        std::move(terms),
+        CompiledMathValueKind::Density);
+  }
+
+  case semantic::ExprKind::Not: {
+    const auto child =
+        program.expr_args[static_cast<std::size_t>(kernel.children.offset)];
+    if (value_kind == CompiledMathNodeKind::ExprCdf) {
+      return complement(
+          compile_expr_value_node(
+              plan,
+              child,
+              CompiledMathNodeKind::ExprCdf,
+              condition_id,
+              time_id,
+              source_view_id));
+    }
+    if (value_kind == CompiledMathNodeKind::ExprSurvival) {
+      return compile_expr_value_node(
+          plan,
+          child,
+          CompiledMathNodeKind::ExprCdf,
+          condition_id,
+          time_id,
+          source_view_id);
+    }
+    return compiled_math_unary_node(
+        &plan->compiled_math,
+        CompiledMathNodeKind::Negate,
+        compile_expr_value_node(
+            plan,
+            child,
+            CompiledMathNodeKind::ExprDensity,
+            condition_id,
+            time_id,
+            source_view_id),
+        CompiledMathValueKind::Density);
+  }
+
+  case semantic::ExprKind::Guard:
+    if (kernel.simple_event_guard && !kernel.has_unless) {
+      if (value_kind == CompiledMathNodeKind::ExprDensity) {
+        return compile_simple_guard_density_node(
+            plan,
+            expr_id,
+            kernel,
+            condition_id,
+            time_id,
+            source_view_id);
+      }
+      if (value_kind == CompiledMathNodeKind::ExprCdf) {
+        return compile_simple_guard_cdf_node(
+            plan,
+            expr_id,
+            kernel,
+            condition_id,
+            time_id,
+            source_view_id);
+      }
+      return compiled_math_unary_node(
+          &plan->compiled_math,
+          CompiledMathNodeKind::Complement,
+          compile_expr_value_node(
+              plan,
+              expr_id,
+              CompiledMathNodeKind::ExprCdf,
+              condition_id,
+              time_id,
+              source_view_id),
+          CompiledMathValueKind::Survival);
+    }
+    if (!kernel.has_unless) {
+      if (value_kind == CompiledMathNodeKind::ExprDensity) {
+        std::vector<semantic::Index> factors;
+        factors.reserve(2U);
+        factors.push_back(
+            compile_expr_value_node(
+                plan,
+                kernel.guard_ref_expr_id,
+                CompiledMathNodeKind::ExprDensity,
+                condition_id,
+                time_id,
+                source_view_id));
+        factors.push_back(
+            compile_expr_value_node(
+                plan,
+                kernel.guard_blocker_expr_id,
+                CompiledMathNodeKind::ExprSurvival,
+                condition_id,
+                time_id,
+                source_view_id));
+        return compiled_math_algebra_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::Product,
+            std::move(factors),
+            CompiledMathValueKind::Density);
+      }
+      if (value_kind == CompiledMathNodeKind::ExprCdf) {
+        const auto bind_time_id =
+            time_id == static_cast<semantic::Index>(CompiledMathTimeSlot::Active)
+                ? time_id
+                : static_cast<semantic::Index>(CompiledMathTimeSlot::Active);
+        const auto density_node =
+            compile_expr_value_node(
+                plan,
+                expr_id,
+                CompiledMathNodeKind::ExprDensity,
+                condition_id,
+                bind_time_id,
+                source_view_id);
+        return compile_integral_zero_to_current_node(
+            plan,
+            density_node,
+            condition_id,
+            time_id,
+            source_view_id,
+            bind_time_id);
+      }
+      return compiled_math_unary_node(
+          &plan->compiled_math,
+          CompiledMathNodeKind::Complement,
+          compile_expr_value_node(
+              plan,
+              expr_id,
+              CompiledMathNodeKind::ExprCdf,
+              condition_id,
+              time_id,
+              source_view_id),
+          CompiledMathValueKind::Survival);
+    }
+    return unsupported();
+  }
+
+  return unsupported();
+}
+
+inline semantic::Index compile_expr_upper_bound_node(
+    ExactVariantPlan *plan,
+    const semantic::Index expr_id,
+    const semantic::Index child_node,
+    const CompiledMathNodeKind value_kind,
+    const semantic::Index condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0) {
+  CompiledMathNodeKey key;
+  key.kind = value_kind == CompiledMathNodeKind::ExprDensity
+                 ? CompiledMathNodeKind::ExprUpperBoundDensity
+                 : CompiledMathNodeKind::ExprUpperBoundCdf;
+  key.value_kind = value_kind == CompiledMathNodeKind::ExprDensity
+                       ? CompiledMathValueKind::Density
+                       : CompiledMathValueKind::Cdf;
+  key.subject_id = expr_id;
+  key.condition_id = condition_id;
+  key.time_id = time_id;
+  key.source_view_id = source_view_id;
+  key.children.push_back(child_node);
+  return compiled_math_intern_node(&plan->compiled_math, std::move(key));
+}
+
+inline semantic::Index compile_expr_value_node(
+    ExactVariantPlan *plan,
+    const semantic::Index expr_id,
+    const CompiledMathNodeKind value_kind,
+    const semantic::Index condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id) {
+  if (compiled_condition_has_expr_upper_bound(
+          plan->compiled_math,
+          condition_id,
+          expr_id)) {
+    if (value_kind == CompiledMathNodeKind::ExprSurvival) {
+      return compiled_math_unary_node(
+          &plan->compiled_math,
+          CompiledMathNodeKind::Complement,
+          compile_expr_value_node(
+              plan,
+              expr_id,
+              CompiledMathNodeKind::ExprCdf,
+              condition_id,
+              time_id,
+              source_view_id),
+          CompiledMathValueKind::Survival);
+    }
+    const auto raw_node =
+        compile_expr_value_node_raw(
+            plan, expr_id, value_kind, condition_id, time_id, source_view_id);
+    if (value_kind == CompiledMathNodeKind::ExprDensity ||
+        value_kind == CompiledMathNodeKind::ExprCdf) {
+      return compile_expr_upper_bound_node(
+          plan,
+          expr_id,
+          raw_node,
+          value_kind,
+          condition_id,
+          time_id,
+          source_view_id);
+    }
+    return raw_node;
+  }
+  return compile_expr_value_node_raw(
+      plan, expr_id, value_kind, condition_id, time_id, source_view_id);
+}
+
+inline semantic::Index compile_runtime_factors_node(
+    ExactVariantPlan *plan,
+    const ExactRuntimeFactors &factors,
+    const semantic::Index source_condition_id,
+    const semantic::Index expr_condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0) {
+  std::vector<semantic::Index> children;
+  children.reserve(
+      factors.source_pdf.size() +
+      factors.source_cdf.size() +
+      factors.source_survival.size() +
+      factors.expr_density.size() +
+      factors.expr_cdf.size() +
+      factors.expr_survival.size());
+
+  for (const auto source_id : factors.source_pdf) {
+    children.push_back(
+        compiled_math_source_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::SourcePdf,
+            source_id,
+            source_condition_id,
+            time_id));
+  }
+  for (const auto source_id : factors.source_cdf) {
+    children.push_back(
+        compiled_math_source_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::SourceCdf,
+            source_id,
+            source_condition_id,
+            time_id));
+  }
+  for (const auto source_id : factors.source_survival) {
+    children.push_back(
+        compiled_math_source_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::SourceSurvival,
+            source_id,
+            source_condition_id,
+            time_id));
+  }
+  for (const auto expr_id : factors.expr_density) {
+    children.push_back(
+        compile_expr_value_node(
+            plan,
+            expr_id,
+            CompiledMathNodeKind::ExprDensity,
+            expr_condition_id,
+            time_id,
+            source_view_id));
+  }
+  for (const auto expr_id : factors.expr_cdf) {
+    children.push_back(
+        compile_expr_value_node(
+            plan,
+            expr_id,
+            CompiledMathNodeKind::ExprCdf,
+            expr_condition_id,
+            time_id,
+            source_view_id));
+  }
+  for (const auto expr_id : factors.expr_survival) {
+    children.push_back(
+        compile_expr_value_node(
+            plan,
+            expr_id,
+            CompiledMathNodeKind::ExprSurvival,
+            expr_condition_id,
+            time_id,
+            source_view_id));
+  }
+
+  return compiled_math_algebra_node(
+      &plan->compiled_math,
+      CompiledMathNodeKind::Product,
+      std::move(children));
+}
+
+inline void compile_runtime_truth_formula_math(
+    ExactVariantPlan *plan,
+    ExactRuntimeTruthFormula *formula,
+    const semantic::Index source_condition_id,
+    const semantic::Index expr_condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0) {
+  if (!formula->sum_of_products) {
+    const auto product_node =
+        compile_runtime_factors_empty(formula->product)
+            ? compiled_math_constant(&plan->compiled_math, formula->empty_value)
+            : compile_runtime_factors_node(
+                  plan,
+                  formula->product,
+                  source_condition_id,
+                  expr_condition_id,
+                  time_id,
+                  source_view_id);
+    const auto root_node =
+        compiled_math_unary_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::ClampProbability,
+            product_node,
+            CompiledMathValueKind::Cdf);
+    formula->compiled_root_id =
+        compiled_math_make_root(&plan->compiled_math, root_node);
+    return;
+  }
+
+  std::vector<semantic::Index> term_nodes;
+  term_nodes.reserve(formula->sum_terms.size());
+  for (auto &term : formula->sum_terms) {
+    const auto term_node =
+        compile_runtime_factors_node(
+            plan,
+            term.factors,
+            source_condition_id,
+            expr_condition_id,
+            time_id,
+            source_view_id);
+    term.compiled_root_id =
+        compiled_math_make_root(&plan->compiled_math, term_node);
+    term_nodes.push_back(term_node);
+  }
+  const auto sum_node =
+      term_nodes.empty()
+          ? compiled_math_constant(&plan->compiled_math, formula->empty_value)
+          : compiled_math_algebra_node(
+                &plan->compiled_math,
+                formula->clean_signed
+                    ? CompiledMathNodeKind::CleanSignedSum
+                    : CompiledMathNodeKind::Sum,
+                std::move(term_nodes));
+  formula->compiled_root_id =
+      compiled_math_make_root(&plan->compiled_math, sum_node);
+}
+
+inline semantic::Index compile_runtime_truth_formula_root(
+    ExactVariantPlan *plan,
+    const ExactRuntimeTruthFormula &formula,
+    const semantic::Index source_condition_id,
+    const semantic::Index expr_condition_id,
+    const semantic::Index time_id,
+    const semantic::Index source_view_id = 0) {
+  if (!formula.sum_of_products) {
+    const auto product_node =
+        compile_runtime_factors_empty(formula.product)
+            ? compiled_math_constant(&plan->compiled_math, formula.empty_value)
+            : compile_runtime_factors_node(
+                  plan,
+                  formula.product,
+                  source_condition_id,
+                  expr_condition_id,
+                  time_id,
+                  source_view_id);
+    return compiled_math_make_root(
+        &plan->compiled_math,
+        compiled_math_unary_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::ClampProbability,
+            product_node,
+            CompiledMathValueKind::Cdf));
+  }
+
+  std::vector<semantic::Index> term_nodes;
+  term_nodes.reserve(formula.sum_terms.size());
+  for (const auto &term : formula.sum_terms) {
+    term_nodes.push_back(
+        compile_runtime_factors_node(
+            plan,
+            term.factors,
+            source_condition_id,
+            expr_condition_id,
+            time_id,
+            source_view_id));
+  }
+  const auto sum_node =
+      term_nodes.empty()
+          ? compiled_math_constant(&plan->compiled_math, formula.empty_value)
+          : compiled_math_algebra_node(
+                &plan->compiled_math,
+                formula.clean_signed
+                    ? CompiledMathNodeKind::CleanSignedSum
+                    : CompiledMathNodeKind::Sum,
+                std::move(term_nodes));
+  return compiled_math_make_root(&plan->compiled_math, sum_node);
+}
+
+inline semantic::Index compiled_math_root_node_id(
+    const CompiledMathProgram &program,
+    const semantic::Index root_id) {
+  if (root_id == semantic::kInvalidIndex) {
+    return semantic::kInvalidIndex;
+  }
+  return program.roots[static_cast<std::size_t>(root_id)].node_id;
+}
+
+inline semantic::Index compile_runtime_scenario_same_active_root(
+    ExactVariantPlan *plan,
+    const ExactRuntimeScenarioFormula &formula,
+    const semantic::Index extra_condition_id,
+    const semantic::Index ready_upper_time_id =
+        static_cast<semantic::Index>(CompiledMathTimeSlot::Readiness),
+    const ExactRuntimeTruthFormula *covered_after_survival = nullptr);
+
+inline void erase_runtime_factor_once(std::vector<semantic::Index> *factors,
+                                      const semantic::Index value) {
+  const auto it = std::find(factors->begin(), factors->end(), value);
+  if (it != factors->end()) {
+    factors->erase(it);
+  }
+}
+
+inline ExactRuntimeTruthFormula runtime_after_survival_excluding_covered(
+    ExactRuntimeTruthFormula after_survival,
+    const ExactRuntimeTruthFormula *covered_after_survival) {
+  if (covered_after_survival == nullptr) {
+    return after_survival;
+  }
+  for (const auto source_id : covered_after_survival->product.source_survival) {
+    erase_runtime_factor_once(&after_survival.product.source_survival, source_id);
+  }
+  for (const auto expr_id : covered_after_survival->product.expr_survival) {
+    erase_runtime_factor_once(&after_survival.product.expr_survival, expr_id);
+  }
+  return after_survival;
+}
+
+inline semantic::Index compile_runtime_scenario_truth_cdf_root(
+    ExactVariantPlan *plan,
+    const ExactRuntimeScenarioFormula &formula,
+    const semantic::Index extra_condition_id) {
+  const auto active_time_id =
+      static_cast<semantic::Index>(CompiledMathTimeSlot::Active);
+  const auto upper_time_id =
+      static_cast<semantic::Index>(CompiledMathTimeSlot::Observed);
+  const auto active_condition_id =
+      compile_source_exact_condition_id(
+          plan,
+          formula.active_source_id,
+          CompiledMathTimeSlot::Active);
+  const auto relation_condition_id =
+      compile_relation_condition_id(plan, formula.relation_template);
+  const auto source_condition_id =
+      compiled_math_merge_conditions(
+          &plan->compiled_math,
+          {active_condition_id, extra_condition_id});
+  const auto expr_condition_id =
+      compiled_math_merge_conditions(
+          &plan->compiled_math,
+          {relation_condition_id, source_condition_id});
+
+  std::vector<semantic::Index> factors;
+  factors.push_back(
+      compiled_math_source_node(
+          &plan->compiled_math,
+          CompiledMathNodeKind::SourcePdf,
+          formula.active_source_id,
+          0,
+          active_time_id));
+
+  const auto after_node =
+      compiled_math_root_node_id(
+          plan->compiled_math,
+          compile_runtime_truth_formula_root(
+              plan,
+              formula.after_survival,
+              source_condition_id,
+              expr_condition_id,
+              active_time_id,
+              formula.source_view_id));
+  if (after_node != semantic::kInvalidIndex) {
+    factors.push_back(after_node);
+  }
+  if (formula.has_readiness) {
+    const auto readiness_node =
+        compile_runtime_factors_empty(formula.readiness_cdf.product)
+            ? compiled_math_constant(
+                  &plan->compiled_math,
+                  formula.readiness_cdf.empty_value)
+            : compile_runtime_factors_node(
+                  plan,
+                  formula.readiness_cdf.product,
+                  source_condition_id,
+                  expr_condition_id,
+                  active_time_id,
+                  formula.source_view_id);
+    factors.push_back(
+        compiled_math_unary_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::ClampProbability,
+            readiness_node,
+            CompiledMathValueKind::Cdf));
+  }
+
+  const auto integrand_root =
+      compiled_math_make_root(
+          &plan->compiled_math,
+          compiled_math_algebra_node(
+              &plan->compiled_math,
+              CompiledMathNodeKind::Product,
+              std::move(factors)));
+  return compiled_math_make_root(
+      &plan->compiled_math,
+      compiled_math_integral_zero_to_current_node(
+          &plan->compiled_math,
+          integrand_root,
+          source_condition_id,
+          upper_time_id,
+          formula.source_view_id,
+          active_time_id));
+}
+
+inline semantic::Index compile_runtime_scenario_same_active_root(
+    ExactVariantPlan *plan,
+    const ExactRuntimeScenarioFormula &formula,
+    const semantic::Index extra_condition_id,
+    const semantic::Index ready_upper_time_id,
+    const ExactRuntimeTruthFormula *covered_after_survival) {
+  const auto relation_condition_id =
+      compile_relation_condition_id(plan, formula.relation_template);
+  const auto base_expr_condition_id =
+      compiled_math_merge_conditions(
+          &plan->compiled_math,
+          {relation_condition_id, extra_condition_id});
+  const auto observed_time_id =
+      static_cast<semantic::Index>(CompiledMathTimeSlot::Observed);
+  const auto zero_time_id =
+      static_cast<semantic::Index>(CompiledMathTimeSlot::Zero);
+
+  const auto after_survival =
+      runtime_after_survival_excluding_covered(
+          formula.after_survival,
+          covered_after_survival);
+
+  auto compile_tail_node = [&](const semantic::Index condition_id) {
+    const auto expr_condition_id =
+        compiled_math_merge_conditions(
+            &plan->compiled_math,
+            {relation_condition_id, condition_id});
+    return compiled_math_root_node_id(
+        plan->compiled_math,
+        compile_runtime_truth_formula_root(
+            plan,
+            after_survival,
+            condition_id,
+            expr_condition_id,
+            observed_time_id,
+            formula.source_view_id));
+  };
+
+  if (!formula.has_readiness) {
+    return compile_runtime_truth_formula_root(
+        plan,
+        after_survival,
+        extra_condition_id,
+        base_expr_condition_id,
+        observed_time_id,
+        formula.source_view_id);
+  }
+
+  std::vector<semantic::Index> branches;
+  const auto base_tail_node = compile_tail_node(extra_condition_id);
+  const auto initial_ready_node =
+      compiled_math_root_node_id(
+          plan->compiled_math,
+          compile_runtime_truth_formula_root(
+              plan,
+              formula.readiness_cdf,
+              extra_condition_id,
+              base_expr_condition_id,
+              zero_time_id,
+              formula.source_view_id));
+  if (initial_ready_node != semantic::kInvalidIndex &&
+      base_tail_node != semantic::kInvalidIndex) {
+    branches.push_back(
+        compiled_math_algebra_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::Product,
+            std::vector<semantic::Index>{initial_ready_node, base_tail_node},
+            CompiledMathValueKind::Scalar));
+  }
+
+  std::vector<semantic::Index> term_nodes;
+  term_nodes.reserve(formula.readiness_density.sum_terms.size());
+  for (const auto &term : formula.readiness_density.sum_terms) {
+    if (runtime_condition_order_contradiction(term.condition)) {
+      continue;
+    }
+    const auto tail_condition =
+        filter_runtime_condition_for_truth(
+            term.condition,
+            after_survival,
+            *plan);
+    ExactRuntimeTermCondition compiled_tail_condition = tail_condition;
+    compile_runtime_condition_ids(plan, &compiled_tail_condition);
+    const auto tail_context_id =
+        compiled_math_merge_conditions(
+            &plan->compiled_math,
+            {extra_condition_id,
+             compiled_tail_condition.readiness_condition_id});
+    if (compiled_condition_impossible(plan->compiled_math, tail_context_id)) {
+      continue;
+    }
+    const auto term_node =
+        compile_runtime_factors_node(
+            plan,
+            term.factors,
+            extra_condition_id,
+            base_expr_condition_id,
+            static_cast<semantic::Index>(CompiledMathTimeSlot::Readiness),
+            formula.source_view_id);
+    const auto tail_node = compile_tail_node(tail_context_id);
+    if (term_node == semantic::kInvalidIndex ||
+        tail_node == semantic::kInvalidIndex) {
+      continue;
+    }
+    term_nodes.push_back(
+        compiled_math_algebra_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::Product,
+            std::vector<semantic::Index>{term_node, tail_node},
+            CompiledMathValueKind::Scalar));
+  }
+
+  const auto integrand_node =
+      term_nodes.empty()
+          ? compiled_math_constant(&plan->compiled_math, 0.0)
+          : compiled_math_algebra_node(
+                &plan->compiled_math,
+                CompiledMathNodeKind::CleanSignedSum,
+                std::move(term_nodes),
+                CompiledMathValueKind::Scalar);
+  const auto integrand_root =
+      compiled_math_make_root(&plan->compiled_math, integrand_node);
+  branches.push_back(
+      compiled_math_raw_integral_zero_to_current_node(
+          &plan->compiled_math,
+          integrand_root,
+          0,
+          ready_upper_time_id,
+          0,
+          static_cast<semantic::Index>(CompiledMathTimeSlot::Readiness)));
+
+  return compiled_math_make_root(
+      &plan->compiled_math,
+      compiled_math_unary_node(
+          &plan->compiled_math,
+          CompiledMathNodeKind::ClampProbability,
+          compiled_math_algebra_node(
+              &plan->compiled_math,
+              CompiledMathNodeKind::CleanSignedSum,
+              std::move(branches),
+              CompiledMathValueKind::Scalar),
+          CompiledMathValueKind::Cdf));
+}
+
+inline semantic::Index compile_competitor_subset_win_cdf_root(
+    ExactVariantPlan *plan,
+    ExactRuntimeCompetitorSubsetPlan *subset,
+    const semantic::Index condition_id) {
+  if (condition_id == semantic::kInvalidIndex) {
+    return semantic::kInvalidIndex;
+  }
+  if (condition_id == 0 &&
+      subset->win_cdf_root_id != semantic::kInvalidIndex) {
+    return subset->win_cdf_root_id;
+  }
+  for (const auto &root : subset->conditioned_win_cdf_roots) {
+    if (root.condition_id == condition_id) {
+      return root.root_id;
+    }
+  }
+  semantic::Index root_id = semantic::kInvalidIndex;
+  if (compiled_condition_impossible(plan->compiled_math, condition_id)) {
+    root_id =
+        compiled_math_make_root(
+            &plan->compiled_math,
+            compiled_math_constant(&plan->compiled_math, 0.0));
+  } else if (subset->singleton_expr_root != semantic::kInvalidIndex) {
+    const auto node =
+        compile_expr_value_node(
+            plan,
+            subset->singleton_expr_root,
+            CompiledMathNodeKind::ExprCdf,
+            condition_id,
+            static_cast<semantic::Index>(CompiledMathTimeSlot::Observed));
+    root_id = compiled_math_make_root(&plan->compiled_math, node);
+	  } else if (subset->scenarios.empty()) {
+	    root_id =
+	        compiled_math_make_root(
+	            &plan->compiled_math,
+	            compiled_math_constant(&plan->compiled_math, 0.0));
+	  } else {
+    std::vector<semantic::Index> scenario_nodes;
+    scenario_nodes.reserve(subset->scenarios.size());
+    for (const auto &scenario : subset->scenarios) {
+      const auto scenario_root =
+          compile_runtime_scenario_truth_cdf_root(
+              plan,
+              scenario,
+              condition_id);
+      scenario_nodes.push_back(
+          compiled_math_root_node_id(plan->compiled_math, scenario_root));
+    }
+    const auto sum_node =
+        compiled_math_algebra_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::Sum,
+            std::move(scenario_nodes),
+            CompiledMathValueKind::Cdf);
+    root_id =
+        compiled_math_make_root(
+            &plan->compiled_math,
+            compiled_math_unary_node(
+                &plan->compiled_math,
+                CompiledMathNodeKind::ClampProbability,
+                sum_node,
+                CompiledMathValueKind::Cdf));
+  }
+  subset->conditioned_win_cdf_roots.push_back(
+      ExactConditionedRoot{condition_id, root_id});
+  return root_id;
+}
+
+inline void compile_competitor_conditioned_roots(
+    ExactVariantPlan *plan,
+    ExactRuntimeOutcomePlan *runtime_outcome,
+    const semantic::Index condition_id) {
+  if (condition_id == semantic::kInvalidIndex || condition_id == 0) {
+    return;
+  }
+  for (auto &block : runtime_outcome->competitor_blocks) {
+    for (auto &subset : block.subsets) {
+      compile_competitor_subset_win_cdf_root(plan, &subset, condition_id);
+    }
+  }
+}
+
+inline ExactRuntimeScenarioFormula compile_runtime_scenario_formula(
+    ExactVariantPlan *plan,
     const ExactTransitionScenario &scenario) {
   ExactRuntimeScenarioFormula formula;
   formula.active_source_id = scenario.active_source_id;
+  formula.active_observed_condition_id =
+      compile_source_exact_condition_id(
+          plan,
+          scenario.active_source_id,
+          CompiledMathTimeSlot::Observed);
   formula.relation_template = scenario.relation_template;
+  formula.source_view_id =
+      compile_source_view_id(plan, scenario.relation_template);
   formula.source_order_facts = scenario.source_order_facts;
   formula.has_readiness =
       !scenario.before_source_span.empty() || !scenario.ready_expr_span.empty();
-  formula.readiness_cdf = compile_runtime_readiness_cdf(plan, scenario);
-  formula.readiness_density = compile_runtime_readiness_density(plan, scenario);
-  formula.after_survival = compile_runtime_after_survival(plan, scenario);
+  const auto relation_condition_id =
+      compile_relation_condition_id(plan, scenario.relation_template);
+  const auto source_condition_id = formula.active_observed_condition_id;
+  const auto expr_condition_id =
+      compiled_math_merge_conditions(
+          &plan->compiled_math,
+          {relation_condition_id, source_condition_id});
+  formula.readiness_cdf = compile_runtime_readiness_cdf(*plan, scenario);
+  formula.readiness_density = compile_runtime_readiness_density(*plan, scenario);
+  formula.after_survival = compile_runtime_after_survival(*plan, scenario);
   formula.tail_condition = runtime_scenario_tail_condition(formula);
+  compile_runtime_condition_ids(plan, &formula.tail_condition);
+  compile_runtime_truth_formula_math(
+      plan,
+      &formula.readiness_cdf,
+      source_condition_id,
+      expr_condition_id,
+      static_cast<semantic::Index>(CompiledMathTimeSlot::Readiness),
+      formula.source_view_id);
+  compile_runtime_truth_formula_math(
+      plan,
+      &formula.readiness_density,
+      source_condition_id,
+      expr_condition_id,
+      static_cast<semantic::Index>(CompiledMathTimeSlot::Readiness),
+      formula.source_view_id);
+  compile_runtime_truth_formula_math(
+      plan,
+      &formula.after_survival,
+      source_condition_id,
+      expr_condition_id,
+      static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
+      formula.source_view_id);
   return formula;
 }
 
 inline void compile_runtime_scenario_contextual_conditions(
-    const ExactVariantPlan &plan,
-    const ExactRuntimeOutcomePlan &runtime_outcome,
+    ExactVariantPlan *plan,
+    ExactRuntimeOutcomePlan *runtime_outcome,
     ExactRuntimeScenarioFormula *formula) {
   formula->tail_competitor_condition =
       filter_runtime_condition_for_competitors(
           formula->tail_condition,
-          runtime_outcome,
-          nullptr,
-          plan);
+          *runtime_outcome,
+          *plan);
+  compile_runtime_condition_ids(plan, &formula->tail_competitor_condition);
+  compile_competitor_conditioned_roots(
+      plan,
+      runtime_outcome,
+      formula->tail_competitor_condition.observed_condition_id);
   formula->has_tail_competitor_condition =
       !runtime_condition_empty(formula->tail_competitor_condition);
   formula->tail_competitor_subset_mask =
       runtime_competitor_subset_mask(
           formula->tail_competitor_condition,
-          runtime_outcome,
-          plan);
+          *runtime_outcome,
+          *plan);
   formula->has_conditioned_readiness_terms = false;
   formula->condition_groups.clear();
   for (auto &term : formula->readiness_density.sum_terms) {
     term.condition_impossible =
         runtime_condition_order_contradiction(term.condition);
+    compile_runtime_condition_ids(plan, &term.condition);
     term.tail_condition = filter_runtime_condition_for_truth(
         term.condition,
         formula->after_survival,
-        plan);
+        *plan);
+    compile_runtime_condition_ids(plan, &term.tail_condition);
     term.competitor_condition = filter_runtime_condition_for_competitors(
         term.condition,
+        *runtime_outcome,
+        *plan);
+    compile_runtime_condition_ids(plan, &term.competitor_condition);
+    const auto term_combined_competitor_condition_id =
+        compile_combined_runtime_condition_id(
+            plan,
+            term.competitor_condition,
+            formula->tail_competitor_condition);
+    compile_competitor_conditioned_roots(
+        plan,
         runtime_outcome,
-        nullptr,
-        plan);
+        term_combined_competitor_condition_id);
     if (term.condition_impossible ||
         !runtime_condition_empty(term.tail_condition) ||
         !runtime_condition_empty(term.competitor_condition)) {
@@ -1299,29 +4114,729 @@ inline void compile_runtime_scenario_contextual_conditions(
               term.competitor_condition,
               runtime_competitor_subset_mask(
                   term.competitor_condition,
-                  runtime_outcome,
-                  plan)});
+                  *runtime_outcome,
+                  *plan),
+              term_combined_competitor_condition_id});
+      compile_runtime_condition_ids(
+          plan,
+          &formula->condition_groups.back().tail_condition);
+      compile_runtime_condition_ids(
+          plan,
+          &formula->condition_groups.back().competitor_condition);
+      compile_competitor_conditioned_roots(
+          plan,
+          runtime_outcome,
+          formula->condition_groups.back().combined_competitor_condition_id);
     }
   }
 }
 
+inline semantic::Index append_runtime_kernel_context(
+    ExactVariantPlan *plan,
+    ExactRuntimeScenarioExecutionKernel *kernel,
+    const std::initializer_list<semantic::Index> condition_ids) {
+  ExactRuntimeConditionContextPlan context;
+  context.condition_id =
+      compiled_math_merge_conditions(&plan->compiled_math, condition_ids);
+  context.impossible =
+      compiled_condition_impossible(plan->compiled_math, context.condition_id);
+  for (semantic::Index i = 0;
+       i < static_cast<semantic::Index>(kernel->condition_contexts.size());
+       ++i) {
+    if (kernel->condition_contexts[static_cast<std::size_t>(i)] == context) {
+      return i;
+    }
+  }
+  const auto index =
+      static_cast<semantic::Index>(kernel->condition_contexts.size());
+  kernel->condition_contexts.push_back(std::move(context));
+  return index;
+}
+
+inline void compile_runtime_kernel_context_roots(
+    ExactVariantPlan *plan,
+    ExactRuntimeScenarioExecutionKernel *kernel,
+    const ExactRuntimeScenarioFormula &formula) {
+  const auto relation_condition_id =
+      compile_relation_condition_id(plan, formula.relation_template);
+  for (auto &context : kernel->condition_contexts) {
+    if (context.impossible) {
+      continue;
+    }
+    const auto expr_condition_id =
+        compiled_math_merge_conditions(
+            &plan->compiled_math,
+            {relation_condition_id, context.condition_id});
+    context.after_survival_root_id =
+        compile_runtime_truth_formula_root(
+            plan,
+            formula.after_survival,
+            context.condition_id,
+            expr_condition_id,
+            static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
+            formula.source_view_id);
+  }
+}
+
+inline void compile_runtime_scenario_execution_kernel(
+    ExactVariantPlan *plan,
+    ExactRuntimeScenarioFormula *formula) {
+  auto &kernel = formula->execution_kernel;
+  kernel = ExactRuntimeScenarioExecutionKernel{};
+  kernel.has_readiness = formula->has_readiness;
+  kernel.has_tail_competitor_condition =
+      formula->has_tail_competitor_condition;
+  kernel.has_conditioned_readiness_terms =
+      formula->has_conditioned_readiness_terms;
+  kernel.target_scenario_context_index =
+      append_runtime_kernel_context(
+          plan,
+          &kernel,
+          {formula->active_observed_condition_id});
+  kernel.competitor_scenario_context_index =
+      append_runtime_kernel_context(
+          plan,
+          &kernel,
+          {formula->active_observed_condition_id});
+  kernel.tail_competitor_context_index =
+      formula->has_tail_competitor_condition
+          ? append_runtime_kernel_context(
+                plan,
+                &kernel,
+                {formula->active_observed_condition_id,
+                 formula->tail_competitor_condition.observed_condition_id})
+          : kernel.competitor_scenario_context_index;
+
+  kernel.condition_groups.reserve(formula->condition_groups.size());
+  for (semantic::Index group_idx = 0;
+       group_idx < static_cast<semantic::Index>(
+                       formula->condition_groups.size());
+       ++group_idx) {
+    const auto &group =
+        formula->condition_groups[static_cast<std::size_t>(group_idx)];
+    const bool has_tail_condition =
+        !runtime_condition_empty(group.tail_condition);
+    const bool has_competitor_condition =
+        !runtime_condition_empty(group.competitor_condition);
+    const auto target_tail_context =
+        has_tail_condition
+            ? append_runtime_kernel_context(
+                  plan,
+                  &kernel,
+                  {formula->active_observed_condition_id,
+                   group.tail_condition.readiness_condition_id})
+            : kernel.target_scenario_context_index;
+    const auto competitor_context =
+        (has_competitor_condition ||
+         formula->has_tail_competitor_condition)
+            ? append_runtime_kernel_context(
+                  plan,
+                  &kernel,
+                  {formula->active_observed_condition_id,
+                   has_competitor_condition
+                       ? group.competitor_condition.readiness_condition_id
+                       : semantic::kInvalidIndex,
+                   formula->has_tail_competitor_condition
+                       ? formula->tail_competitor_condition.observed_condition_id
+                       : semantic::kInvalidIndex})
+            : kernel.competitor_scenario_context_index;
+	    kernel.condition_groups.push_back(
+	        ExactRuntimeConditionGroupKernel{
+	            group_idx,
+	            target_tail_context,
+	            competitor_context,
+	            group.combined_competitor_condition_id,
+	            semantic::kInvalidIndex,
+	            has_tail_condition,
+	            has_competitor_condition});
+  }
+
+  for (semantic::Index term_idx = 0;
+       term_idx < static_cast<semantic::Index>(
+                      formula->readiness_density.sum_terms.size());
+       ++term_idx) {
+    const auto &term =
+        formula->readiness_density.sum_terms[static_cast<std::size_t>(term_idx)];
+    if (!term.condition_impossible) {
+      kernel.readiness_terms.push_back(
+          ExactRuntimeReadinessTermKernel{
+              term_idx,
+              term.context_group_index});
+    }
+  }
+  compile_runtime_kernel_context_roots(plan, &kernel, *formula);
+}
+
+inline semantic::Index compile_runtime_competitor_subset_precedence_root(
+    ExactVariantPlan *plan,
+    ExactRuntimeCompetitorSubsetPlan *subset,
+    const semantic::Index condition_id,
+    const ExactRuntimeScenarioFormula &target_formula,
+    const semantic::Index ready_upper_time_id) {
+  if (condition_id == semantic::kInvalidIndex ||
+      compiled_condition_impossible(plan->compiled_math, condition_id)) {
+    return compiled_math_make_root(
+        &plan->compiled_math,
+        compiled_math_constant(&plan->compiled_math, 0.0));
+  }
+  if (subset->scenarios.empty()) {
+    return compiled_math_make_root(
+        &plan->compiled_math,
+        compiled_math_constant(&plan->compiled_math, 0.0));
+  }
+
+  const bool has_same_active =
+      std::any_of(
+          subset->scenarios.begin(),
+          subset->scenarios.end(),
+          [&](const ExactRuntimeScenarioFormula &scenario) {
+            return scenario.active_source_id == target_formula.active_source_id;
+          });
+  if (!has_same_active) {
+    return compile_competitor_subset_win_cdf_root(
+        plan,
+        subset,
+        condition_id);
+  }
+
+  std::vector<semantic::Index> scenario_nodes;
+  scenario_nodes.reserve(subset->scenarios.size());
+  for (const auto &scenario : subset->scenarios) {
+    const auto root_id =
+        scenario.active_source_id == target_formula.active_source_id
+            ? compile_runtime_scenario_same_active_root(
+                  plan,
+                  scenario,
+                  condition_id,
+                  ready_upper_time_id,
+                  &target_formula.after_survival)
+            : compile_runtime_scenario_truth_cdf_root(
+                  plan,
+                  scenario,
+                  condition_id);
+    const auto node_id = compiled_math_root_node_id(plan->compiled_math, root_id);
+    if (node_id != semantic::kInvalidIndex) {
+      scenario_nodes.push_back(node_id);
+    }
+  }
+
+  return compiled_math_make_root(
+      &plan->compiled_math,
+      compiled_math_unary_node(
+          &plan->compiled_math,
+          CompiledMathNodeKind::ClampProbability,
+          compiled_math_algebra_node(
+              &plan->compiled_math,
+              CompiledMathNodeKind::CleanSignedSum,
+              std::move(scenario_nodes),
+              CompiledMathValueKind::Cdf),
+          CompiledMathValueKind::Cdf));
+}
+
+inline semantic::Index compile_runtime_competitor_non_win_root(
+    ExactVariantPlan *plan,
+    const ExactRuntimeOutcomePlan &runtime_outcome,
+    const ExactRuntimeCompetitorNonWinPlan &non_win_plan) {
+  if (non_win_plan.impossible) {
+    return compiled_math_make_root(
+        &plan->compiled_math,
+        compiled_math_constant(&plan->compiled_math, 0.0));
+  }
+  if (non_win_plan.blocks.empty()) {
+    return compiled_math_make_root(
+        &plan->compiled_math,
+        compiled_math_constant(&plan->compiled_math, 1.0));
+  }
+
+  std::vector<semantic::Index> block_non_win_nodes;
+  block_non_win_nodes.reserve(non_win_plan.blocks.size());
+  for (const auto &block : non_win_plan.blocks) {
+    std::vector<semantic::Index> subset_terms;
+    subset_terms.reserve(static_cast<std::size_t>(block.subset_span.size));
+    for (semantic::Index i = 0; i < block.subset_span.size; ++i) {
+      const auto &subset =
+          non_win_plan.subsets[
+              static_cast<std::size_t>(block.subset_span.offset + i)];
+      if (subset.block_index == semantic::kInvalidIndex ||
+          subset.subset_index == semantic::kInvalidIndex ||
+          subset.win_cdf_root_id == semantic::kInvalidIndex) {
+        continue;
+      }
+      const auto &runtime_subset =
+          runtime_outcome
+              .competitor_blocks[static_cast<std::size_t>(subset.block_index)]
+              .subsets[static_cast<std::size_t>(subset.subset_index)];
+      const auto subset_mass =
+          compiled_math_unary_node(
+              &plan->compiled_math,
+              CompiledMathNodeKind::ClampProbability,
+              compiled_math_root_node_id(
+                  plan->compiled_math,
+                  subset.win_cdf_root_id),
+              CompiledMathValueKind::Cdf);
+      const auto gate =
+          compile_outcome_subset_unused_node(
+              plan,
+              runtime_subset.outcome_indices);
+      const auto gated_mass =
+          compiled_math_algebra_node(
+              &plan->compiled_math,
+              CompiledMathNodeKind::Product,
+              std::vector<semantic::Index>{gate, subset_mass},
+              CompiledMathValueKind::Cdf);
+      subset_terms.push_back(
+          compile_signed_term_node(
+              plan,
+              gated_mass,
+              subset.inclusion_sign));
+    }
+    const auto union_node =
+        compiled_math_unary_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::ClampProbability,
+            compiled_math_algebra_node(
+                &plan->compiled_math,
+                CompiledMathNodeKind::CleanSignedSum,
+                std::move(subset_terms),
+                CompiledMathValueKind::Cdf),
+            CompiledMathValueKind::Cdf);
+    block_non_win_nodes.push_back(
+        compiled_math_unary_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::Complement,
+            union_node,
+            CompiledMathValueKind::Cdf));
+  }
+
+  return compiled_math_make_root(
+      &plan->compiled_math,
+      compiled_math_unary_node(
+          &plan->compiled_math,
+          CompiledMathNodeKind::ClampProbability,
+          compiled_math_algebra_node(
+              &plan->compiled_math,
+              CompiledMathNodeKind::Product,
+              std::move(block_non_win_nodes)),
+          CompiledMathValueKind::Cdf));
+}
+
+inline semantic::Index append_runtime_competitor_non_win_plan(
+    ExactVariantPlan *plan,
+    ExactRuntimeOutcomePlan *runtime_outcome,
+    ExactRuntimeScenarioExecutionKernel *kernel,
+    const ExactRuntimeScenarioFormula &target_formula,
+    const semantic::Index context_index,
+    const semantic::Index ready_upper_time_id,
+    const ExactRuntimeCompetitorSubsetMask *mask_a,
+    const ExactRuntimeCompetitorSubsetMask *mask_b) {
+  const auto &context_plan =
+      kernel->condition_contexts[static_cast<std::size_t>(context_index)];
+  ExactRuntimeCompetitorNonWinPlan non_win_plan;
+  non_win_plan.impossible = context_plan.impossible;
+  const auto context_condition_id = context_plan.condition_id;
+  const auto base_condition_id =
+      kernel->condition_contexts[
+          static_cast<std::size_t>(
+              kernel->competitor_scenario_context_index)].condition_id;
+  const bool has_subset_mask = mask_a != nullptr || mask_b != nullptr;
+
+  non_win_plan.blocks.reserve(runtime_outcome->competitor_blocks.size());
+  for (std::size_t block_idx = 0;
+       block_idx < runtime_outcome->competitor_blocks.size();
+       ++block_idx) {
+    auto &block = runtime_outcome->competitor_blocks[block_idx];
+    const auto subset_offset =
+        static_cast<semantic::Index>(non_win_plan.subsets.size());
+    for (std::size_t subset_idx = 0; subset_idx < block.subsets.size();
+         ++subset_idx) {
+      auto &subset = block.subsets[subset_idx];
+      const bool affected =
+          !has_subset_mask ||
+          runtime_competitor_subset_mask_affected(mask_a, block_idx, subset_idx) ||
+          runtime_competitor_subset_mask_affected(mask_b, block_idx, subset_idx);
+      const auto subset_condition_id =
+          affected ? context_condition_id : base_condition_id;
+      non_win_plan.subsets.push_back(
+          ExactRuntimeCompetitorNonWinSubsetPlan{
+              static_cast<semantic::Index>(block_idx),
+              static_cast<semantic::Index>(subset_idx),
+              subset.inclusion_sign,
+              compile_runtime_competitor_subset_precedence_root(
+                  plan,
+                  &subset,
+                  subset_condition_id,
+                  target_formula,
+                  ready_upper_time_id)});
+    }
+    non_win_plan.blocks.push_back(
+        ExactRuntimeCompetitorNonWinBlockPlan{
+            ExactIndexSpan{
+                subset_offset,
+                static_cast<semantic::Index>(
+                    non_win_plan.subsets.size()) -
+                    subset_offset}});
+  }
+
+  const auto index =
+      static_cast<semantic::Index>(kernel->competitor_non_win_plans.size());
+  non_win_plan.root_id =
+      compile_runtime_competitor_non_win_root(
+          plan,
+          *runtime_outcome,
+          non_win_plan);
+  kernel->competitor_non_win_plans.push_back(std::move(non_win_plan));
+  return index;
+}
+
+inline void compile_runtime_scenario_competitor_non_win_plans(
+    ExactVariantPlan *plan,
+    ExactRuntimeOutcomePlan *runtime_outcome,
+    ExactRuntimeScenarioFormula *formula) {
+  auto &kernel = formula->execution_kernel;
+  kernel.base_competitor_non_win_plan_index =
+      append_runtime_competitor_non_win_plan(
+          plan,
+          runtime_outcome,
+          &kernel,
+          *formula,
+          kernel.competitor_scenario_context_index,
+          static_cast<semantic::Index>(CompiledMathTimeSlot::Readiness),
+          nullptr,
+          nullptr);
+  const auto *tail_mask =
+      kernel.has_tail_competitor_condition
+          ? &formula->tail_competitor_subset_mask
+          : nullptr;
+  kernel.tail_competitor_non_win_plan_index =
+      append_runtime_competitor_non_win_plan(
+          plan,
+          runtime_outcome,
+          &kernel,
+          *formula,
+          kernel.tail_competitor_context_index,
+          static_cast<semantic::Index>(CompiledMathTimeSlot::Zero),
+          nullptr,
+          tail_mask);
+  for (auto &group_kernel : kernel.condition_groups) {
+    const auto &group = formula->condition_groups[
+        static_cast<std::size_t>(group_kernel.group_index)];
+    group_kernel.competitor_non_win_plan_index =
+        append_runtime_competitor_non_win_plan(
+            plan,
+            runtime_outcome,
+            &kernel,
+            *formula,
+            group_kernel.competitor_context_index,
+            static_cast<semantic::Index>(CompiledMathTimeSlot::Readiness),
+            group_kernel.has_competitor_condition
+                ? &group.competitor_subset_mask
+                : nullptr,
+            tail_mask);
+  }
+}
+
+inline semantic::Index compile_runtime_root_value_node(
+    ExactVariantPlan *plan,
+    const semantic::Index root_id,
+    const semantic::Index source_view_id = 0,
+    const CompiledMathValueKind value_kind = CompiledMathValueKind::Scalar) {
+  if (root_id == semantic::kInvalidIndex) {
+    return compiled_math_constant(&plan->compiled_math, 0.0);
+  }
+  return compiled_math_root_value_node(
+      &plan->compiled_math,
+      root_id,
+      source_view_id,
+      value_kind);
+}
+
+inline semantic::Index compile_runtime_competitor_non_win_value_node(
+    ExactVariantPlan *plan,
+    const ExactRuntimeScenarioExecutionKernel &kernel,
+    const semantic::Index plan_index,
+    const semantic::Index target_source_view_id) {
+  if (plan_index == semantic::kInvalidIndex ||
+      static_cast<std::size_t>(plan_index) >=
+          kernel.competitor_non_win_plans.size()) {
+    throw std::runtime_error(
+        "scenario probability root is missing a competitor non-win plan");
+  }
+  const auto &non_win_plan =
+      kernel.competitor_non_win_plans[static_cast<std::size_t>(plan_index)];
+  if (non_win_plan.impossible) {
+    return compiled_math_constant(&plan->compiled_math, 0.0);
+  }
+  if (non_win_plan.root_id == semantic::kInvalidIndex) {
+    throw std::runtime_error(
+        "scenario probability root reached an uncompiled competitor plan");
+  }
+  return compile_runtime_root_value_node(
+      plan,
+      non_win_plan.root_id,
+      target_source_view_id,
+      CompiledMathValueKind::Cdf);
+}
+
+inline semantic::Index compile_runtime_context_tail_node(
+    ExactVariantPlan *plan,
+    const ExactRuntimeScenarioFormula &formula,
+    const semantic::Index context_index) {
+  const auto &kernel = formula.execution_kernel;
+  if (context_index == semantic::kInvalidIndex ||
+      static_cast<std::size_t>(context_index) >=
+          kernel.condition_contexts.size()) {
+    throw std::runtime_error(
+        "scenario probability root is missing a tail context");
+  }
+  const auto &context =
+      kernel.condition_contexts[static_cast<std::size_t>(context_index)];
+  if (context.impossible ||
+      context.after_survival_root_id == semantic::kInvalidIndex) {
+    return compiled_math_constant(&plan->compiled_math, 0.0);
+  }
+  return compile_runtime_root_value_node(
+      plan,
+      context.after_survival_root_id,
+      0,
+      CompiledMathValueKind::Survival);
+}
+
+inline semantic::Index compile_runtime_scenario_probability_root(
+    ExactVariantPlan *plan,
+    ExactRuntimeScenarioFormula *formula) {
+  const auto &kernel = formula->execution_kernel;
+  const auto observed_time_id =
+      static_cast<semantic::Index>(CompiledMathTimeSlot::Observed);
+  const auto readiness_time_id =
+      static_cast<semantic::Index>(CompiledMathTimeSlot::Readiness);
+  const auto zero_time_id =
+      static_cast<semantic::Index>(CompiledMathTimeSlot::Zero);
+
+  const auto active_pdf_root =
+      compiled_math_make_root(
+          &plan->compiled_math,
+          compiled_math_source_node(
+              &plan->compiled_math,
+              CompiledMathNodeKind::SourcePdf,
+              formula->active_source_id,
+              0,
+              observed_time_id));
+  const auto active_pdf_node =
+      compile_runtime_root_value_node(
+          plan,
+          active_pdf_root,
+          0,
+          CompiledMathValueKind::Pdf);
+  const auto base_tail_node =
+      compile_runtime_context_tail_node(
+          plan,
+          *formula,
+          kernel.target_scenario_context_index);
+
+  if (!kernel.has_readiness) {
+    const auto non_win_node =
+        compile_runtime_competitor_non_win_value_node(
+            plan,
+            kernel,
+            kernel.tail_competitor_non_win_plan_index,
+            formula->source_view_id);
+    return compiled_math_make_root(
+        &plan->compiled_math,
+        compiled_math_lazy_product_node(
+            &plan->compiled_math,
+            std::vector<semantic::Index>{
+                active_pdf_node,
+                base_tail_node,
+                non_win_node},
+            CompiledMathValueKind::Scalar));
+  }
+
+  std::vector<semantic::Index> branches;
+  branches.reserve(2U);
+
+  const auto relation_condition_id =
+      compile_relation_condition_id(plan, formula->relation_template);
+  const auto expr_condition_id =
+      compiled_math_merge_conditions(
+          &plan->compiled_math,
+          {relation_condition_id, formula->active_observed_condition_id});
+  const auto initial_ready_root =
+      compile_runtime_truth_formula_root(
+          plan,
+          formula->readiness_cdf,
+          formula->active_observed_condition_id,
+          expr_condition_id,
+          zero_time_id,
+          formula->source_view_id);
+  const auto initial_ready_node =
+      compile_runtime_root_value_node(
+          plan,
+          initial_ready_root,
+          0,
+          CompiledMathValueKind::Cdf);
+  const auto initial_non_win_node =
+      compile_runtime_competitor_non_win_value_node(
+          plan,
+          kernel,
+          kernel.tail_competitor_non_win_plan_index,
+          formula->source_view_id);
+  branches.push_back(
+      compiled_math_lazy_product_node(
+          &plan->compiled_math,
+          std::vector<semantic::Index>{
+              initial_ready_node,
+              active_pdf_node,
+              base_tail_node,
+              initial_non_win_node},
+          CompiledMathValueKind::Scalar));
+
+  semantic::Index integrand_node{semantic::kInvalidIndex};
+  if (!kernel.has_conditioned_readiness_terms &&
+      !kernel.has_tail_competitor_condition) {
+    const auto readiness_density_node =
+        compile_runtime_root_value_node(
+            plan,
+            formula->readiness_density.compiled_root_id,
+            0,
+            CompiledMathValueKind::Density);
+    const auto non_win_node =
+        compile_runtime_competitor_non_win_value_node(
+            plan,
+            kernel,
+            kernel.base_competitor_non_win_plan_index,
+            formula->source_view_id);
+    integrand_node =
+        compiled_math_lazy_product_node(
+            &plan->compiled_math,
+            std::vector<semantic::Index>{
+                readiness_density_node,
+                non_win_node},
+            CompiledMathValueKind::Scalar);
+    const auto integrand_root =
+        compiled_math_make_root(&plan->compiled_math, integrand_node);
+    const auto integral_node =
+        compiled_math_raw_integral_zero_to_current_node(
+            &plan->compiled_math,
+            integrand_root,
+            0,
+            observed_time_id,
+            0,
+            readiness_time_id);
+    const auto integral_value_node =
+        compile_runtime_root_value_node(
+            plan,
+            compiled_math_make_root(&plan->compiled_math, integral_node));
+    branches.push_back(
+        compiled_math_lazy_product_node(
+            &plan->compiled_math,
+            std::vector<semantic::Index>{
+                active_pdf_node,
+                base_tail_node,
+                integral_value_node},
+            CompiledMathValueKind::Scalar));
+  } else {
+    std::vector<semantic::Index> term_nodes;
+    term_nodes.reserve(kernel.readiness_terms.size());
+    const auto &readiness_terms = formula->readiness_density.sum_terms;
+    for (const auto &term_kernel : kernel.readiness_terms) {
+      if (term_kernel.group_kernel_index == semantic::kInvalidIndex) {
+        continue;
+      }
+      const auto term_pos =
+          static_cast<std::size_t>(term_kernel.term_index);
+      if (term_pos >= readiness_terms.size()) {
+        throw std::runtime_error(
+            "scenario probability root points outside readiness terms");
+      }
+      const auto &group_kernel =
+          kernel.condition_groups[
+              static_cast<std::size_t>(term_kernel.group_kernel_index)];
+      const auto term_node =
+          compile_runtime_root_value_node(
+              plan,
+              readiness_terms[term_pos].compiled_root_id,
+              0,
+              CompiledMathValueKind::Density);
+      const auto tail_node =
+          group_kernel.has_tail_condition
+              ? compile_runtime_context_tail_node(
+                    plan,
+                    *formula,
+                    group_kernel.target_tail_context_index)
+              : base_tail_node;
+      const auto non_win_node =
+          compile_runtime_competitor_non_win_value_node(
+              plan,
+              kernel,
+              group_kernel.competitor_non_win_plan_index,
+              formula->source_view_id);
+      term_nodes.push_back(
+          compiled_math_lazy_product_node(
+              &plan->compiled_math,
+              std::vector<semantic::Index>{
+                  term_node,
+                  tail_node,
+                  non_win_node},
+              CompiledMathValueKind::Scalar));
+    }
+    integrand_node =
+        compiled_math_algebra_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::CleanSignedSum,
+            std::move(term_nodes),
+            CompiledMathValueKind::Scalar);
+    const auto integrand_root =
+        compiled_math_make_root(&plan->compiled_math, integrand_node);
+    const auto integral_node =
+        compiled_math_raw_integral_zero_to_current_node(
+            &plan->compiled_math,
+            integrand_root,
+            0,
+            observed_time_id,
+            0,
+            readiness_time_id);
+    const auto integral_value_node =
+        compile_runtime_root_value_node(
+            plan,
+            compiled_math_make_root(&plan->compiled_math, integral_node));
+    branches.push_back(
+        compiled_math_lazy_product_node(
+            &plan->compiled_math,
+            std::vector<semantic::Index>{
+                active_pdf_node,
+                integral_value_node},
+            CompiledMathValueKind::Scalar));
+  }
+
+  return compiled_math_make_root(
+      &plan->compiled_math,
+      compiled_math_algebra_node(
+          &plan->compiled_math,
+          CompiledMathNodeKind::CleanSignedSum,
+          std::move(branches),
+          CompiledMathValueKind::Scalar));
+}
+
 inline ExactRuntimeVariantPlan compile_exact_runtime_plan(
-    const ExactVariantPlan &plan) {
+    ExactVariantPlan *plan) {
+  const ExactVariantPlan &plan_ref = *plan;
   ExactRuntimeVariantPlan runtime;
-  runtime.outcomes.reserve(plan.outcomes.size());
+  runtime.outcomes.reserve(plan_ref.outcomes.size());
 
   for (semantic::Index target_idx = 0;
-       target_idx < static_cast<semantic::Index>(plan.outcomes.size());
+       target_idx < static_cast<semantic::Index>(plan_ref.outcomes.size());
        ++target_idx) {
     const auto target_pos = static_cast<std::size_t>(target_idx);
-    const auto &outcome = plan.outcomes[target_pos];
-    const auto &competitor_plan = plan.competitor_plans[target_pos];
+    const auto &outcome = plan_ref.outcomes[target_pos];
+    const auto &competitor_plan = plan_ref.competitor_plans[target_pos];
 
     ExactRuntimeOutcomePlan runtime_outcome;
     runtime_outcome.scenarios.reserve(outcome.scenarios.size());
     for (const auto &scenario : outcome.scenarios) {
       runtime_outcome.scenarios.push_back(
-          compile_runtime_scenario_formula(plan, scenario));
+          compile_runtime_scenario_formula(
+              plan,
+              scenario));
     }
 
     runtime_outcome.competitor_blocks.reserve(competitor_plan.blocks.size());
@@ -1331,13 +4846,21 @@ inline ExactRuntimeVariantPlan compile_exact_runtime_plan(
       for (const auto &subset : block.subsets) {
         ExactRuntimeCompetitorSubsetPlan runtime_subset;
         runtime_subset.outcome_indices = subset.outcome_indices;
+        runtime_subset.expr_roots = subset.expr_roots;
         runtime_subset.inclusion_sign = subset.inclusion_sign;
         runtime_subset.singleton_expr_root = subset.singleton_expr_root;
         runtime_subset.scenarios.reserve(subset.scenarios.size());
         for (const auto &scenario : subset.scenarios) {
           runtime_subset.scenarios.push_back(
-              compile_runtime_scenario_formula(plan, scenario));
+              compile_runtime_scenario_formula(
+                  plan,
+                  scenario));
         }
+        runtime_subset.win_cdf_root_id =
+            compile_competitor_subset_win_cdf_root(
+                plan,
+                &runtime_subset,
+                0);
         runtime_block.subsets.push_back(std::move(runtime_subset));
       }
       runtime_outcome.competitor_blocks.push_back(std::move(runtime_block));
@@ -1346,41 +4869,88 @@ inline ExactRuntimeVariantPlan compile_exact_runtime_plan(
     for (auto &scenario : runtime_outcome.scenarios) {
       compile_runtime_scenario_contextual_conditions(
           plan,
-          runtime_outcome,
+          &runtime_outcome,
+          &scenario);
+      compile_runtime_scenario_execution_kernel(
+          plan,
           &scenario);
     }
 
-    runtime_outcome.competitor_by_scenario.reserve(outcome.scenarios.size());
-    for (const auto &target_scenario : outcome.scenarios) {
-      ExactRuntimeScenarioCompetitorView scenario_view;
-      scenario_view.blocks.reserve(competitor_plan.blocks.size());
-      for (std::size_t block_idx = 0; block_idx < competitor_plan.blocks.size();
-           ++block_idx) {
-        const auto &block = competitor_plan.blocks[block_idx];
-        ExactRuntimeScenarioBlockView block_view;
-        block_view.subsets.reserve(block.subsets.size());
-        for (const auto &subset : block.subsets) {
-          ExactRuntimeScenarioSubsetView subset_view;
-          for (semantic::Index scenario_idx = 0;
-               scenario_idx < static_cast<semantic::Index>(subset.scenarios.size());
-               ++scenario_idx) {
-            const auto &scenario =
-                subset.scenarios[static_cast<std::size_t>(scenario_idx)];
-            if (scenario.active_source_id == target_scenario.active_source_id) {
-              subset_view.same_active_scenario_indices.push_back(scenario_idx);
-            }
-          }
-          block_view.subsets.push_back(std::move(subset_view));
-        }
-        scenario_view.blocks.push_back(std::move(block_view));
-      }
-      runtime_outcome.competitor_by_scenario.push_back(std::move(scenario_view));
-    }
+	    for (std::size_t scenario_idx = 0;
+	         scenario_idx < runtime_outcome.scenarios.size();
+	         ++scenario_idx) {
+      compile_runtime_scenario_competitor_non_win_plans(
+          plan,
+          &runtime_outcome,
+          &runtime_outcome.scenarios[scenario_idx]);
+      runtime_outcome.scenarios[scenario_idx].probability_root_id =
+          compile_runtime_scenario_probability_root(
+              plan,
+              &runtime_outcome.scenarios[scenario_idx]);
+	    }
 
-    runtime.outcomes.push_back(std::move(runtime_outcome));
+	    runtime.outcomes.push_back(std::move(runtime_outcome));
   }
 
   return runtime;
+}
+
+inline void validate_compiled_math_has_no_interpreter_expr_nodes(
+    const CompiledMathProgram &program) {
+  for (std::size_t i = 0; i < program.nodes.size(); ++i) {
+    const auto kind = program.nodes[i].kind;
+    if (kind == CompiledMathNodeKind::ExprDensity ||
+        kind == CompiledMathNodeKind::ExprCdf ||
+        kind == CompiledMathNodeKind::ExprSurvival) {
+      throw std::runtime_error(
+          "exact compiled math contains an unlowered semantic node at " +
+          std::to_string(i));
+    }
+  }
+}
+
+inline bool compiled_condition_has_any_source_overlay(
+    const CompiledMathProgram &program,
+    const semantic::Index condition_id,
+    const semantic::Index source_id) {
+  if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
+      source_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
+  if (condition_pos >= program.conditions.size()) {
+    return false;
+  }
+  const auto &condition = program.conditions[condition_pos];
+  const auto has_span =
+      [source_id](const std::vector<CompiledMathIndexSpan> &spans) {
+        const auto pos = static_cast<std::size_t>(source_id);
+        return pos < spans.size() && !spans[pos].empty();
+      };
+  return has_span(condition.source_exact_fact_spans) ||
+         has_span(condition.source_lower_fact_spans) ||
+         has_span(condition.source_upper_fact_spans);
+}
+
+inline void compile_source_channel_plans(ExactVariantPlan *plan) {
+  auto &program = plan->compiled_math;
+  program.source_channel_plans.clear();
+  program.source_channel_plans.reserve(program.source_channel_keys.size());
+  for (const auto &request : program.source_channel_keys) {
+    CompiledSourceChannelPlan channel_plan;
+    channel_plan.request = request;
+    if (request.source_id != semantic::kInvalidIndex &&
+        static_cast<std::size_t>(request.source_id) <
+            plan->source_kernels.size()) {
+      channel_plan.kernel =
+          plan->source_kernels[static_cast<std::size_t>(request.source_id)]
+              .kind;
+    }
+    channel_plan.has_source_condition_overlay =
+        compiled_condition_has_any_source_overlay(
+            program, request.condition_id, request.source_id);
+    program.source_channel_plans.push_back(channel_plan);
+  }
 }
 
 inline ExactVariantPlan make_exact_variant_plan(
@@ -1408,6 +4978,7 @@ inline ExactVariantPlan make_exact_variant_plan(
         static_cast<semantic::Index>(plan.lowered.program.layout.n_leaves + i);
   }
   compile_program_source_runtime_fields(&plan);
+  compile_source_kernels(&plan);
   compile_exact_expr_kernels(&plan);
 
   const auto &program = plan.lowered.program;
@@ -1464,7 +5035,10 @@ inline ExactVariantPlan make_exact_variant_plan(
       }
     }
   }
-  plan.runtime = compile_exact_runtime_plan(plan);
+  plan.runtime = compile_exact_runtime_plan(&plan);
+  compile_source_channel_plans(&plan);
+  validate_compiled_math_has_no_interpreter_expr_nodes(plan.compiled_math);
+  compiled_math_release_planning_fields(&plan.compiled_math);
   plan.ranked_supported = variant_supports_ranked_sequence(plan);
   for (auto &outcome : plan.outcomes) {
     for (auto &scenario : outcome.scenarios) {

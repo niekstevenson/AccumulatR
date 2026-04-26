@@ -52,6 +52,9 @@ struct ExactProgram {
 
   std::vector<semantic::Index> outcome_expr_root;
   std::vector<semantic::Index> observed_label_index;
+  std::vector<semantic::Index> outcome_competitor_offsets;
+  std::vector<semantic::Index> outcome_competitor_expr_roots;
+  std::vector<semantic::Index> outcome_competitor_indices;
 
   ParameterLayout parameter_layout{};
 };
@@ -142,6 +145,12 @@ inline Rcpp::List to_r_list(const ExactProgram &program) {
           as_integer_vector(program.outcome_expr_root),
       Rcpp::Named("observed_label_index") =
           as_integer_vector(program.observed_label_index),
+      Rcpp::Named("outcome_competitor_offsets") =
+          as_integer_vector(program.outcome_competitor_offsets),
+      Rcpp::Named("outcome_competitor_expr_roots") =
+          as_integer_vector(program.outcome_competitor_expr_roots),
+      Rcpp::Named("outcome_competitor_indices") =
+          as_integer_vector(program.outcome_competitor_indices),
       Rcpp::Named("parameter_layout") =
           parameter_layout_to_r_list(program.parameter_layout));
 }
@@ -287,11 +296,24 @@ inline LoweredExactVariant lower_exact_variant(
 
   program.outcome_expr_root.reserve(model.outcomes.size());
   program.observed_label_index.reserve(model.outcomes.size());
+  program.outcome_competitor_offsets.reserve(model.outcomes.size() + 1U);
+  program.outcome_competitor_offsets.push_back(0);
   for (std::size_t i = 0; i < model.outcomes.size(); ++i) {
     const auto &outcome = model.outcomes[i];
     lowered.outcome_labels.push_back(outcome.label);
     program.outcome_expr_root.push_back(outcome.expr_root);
     program.observed_label_index.push_back(static_cast<semantic::Index>(i));
+    for (std::size_t j = 0; j < outcome.competitor_expr_roots.size(); ++j) {
+      program.outcome_competitor_expr_roots.push_back(
+          outcome.competitor_expr_roots[j]);
+      program.outcome_competitor_indices.push_back(
+          j < outcome.competitor_outcome_indices.size()
+              ? outcome.competitor_outcome_indices[j]
+              : semantic::kInvalidIndex);
+    }
+    program.outcome_competitor_offsets.push_back(
+        static_cast<semantic::Index>(
+            program.outcome_competitor_expr_roots.size()));
   }
 
   lowered.param_keys = slots.keys();

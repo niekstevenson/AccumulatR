@@ -407,6 +407,7 @@
       length(comp_sources) == 0 || any(!comp_sources %in% blocker_sources)
     }, logical(1))
     comps <- comps[keep_idx]
+    comp_indices <- comp_indices[keep_idx]
   }
   if (length(comps) > 0 && isTRUE(getOption("uuber.filter_guard_competitors", TRUE))) {
     primary_guards <- .collect_guards(target_expr)
@@ -416,8 +417,10 @@
         !any(vapply(primary_guards, function(pg) .guards_conflict(pg, comp_expr), logical(1)))
       }, logical(1))
       comps <- comps[guard_keep]
+      comp_indices <- comp_indices[guard_keep]
     }
   }
+  attr(comps, "outcome_indices") <- as.integer(comp_indices)
   comps
 }
 

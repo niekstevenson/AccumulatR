@@ -1,9 +1,10 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <limits>
 
-#include "exact_oracle.hpp"
+#include "exact_source_channels.hpp"
 #include "leaf_kernel.hpp"
 #include "quadrature.hpp"
 
@@ -27,367 +28,21 @@ inline bool relation_view_with_overlay(const RelationView &base,
   return true;
 }
 
-struct ExactScenarioRuntimeView {
-  const ExactTransitionScenario &scenario;
-  const semantic::Index *before_sources{nullptr};
-  const semantic::Index *after_sources{nullptr};
-  const semantic::Index *ready_exprs{nullptr};
-  const semantic::Index *tail_exprs{nullptr};
-  semantic::Index before_source_count{0};
-  semantic::Index after_source_count{0};
-  semantic::Index ready_expr_count{0};
-  semantic::Index tail_expr_count{0};
-
-  [[nodiscard]] bool has_readiness() const noexcept {
-    return before_source_count > 0 || ready_expr_count > 0;
-  }
-};
-
-inline const semantic::Index *scenario_span_data(
-    const std::vector<semantic::Index> &arena,
-    const ExactIndexSpan span) {
-  if (span.empty()) {
-    return nullptr;
-  }
-  return arena.data() + static_cast<std::size_t>(span.offset);
-}
-
-inline ExactScenarioRuntimeView make_exact_scenario_runtime_view(
-    const ExactVariantPlan &plan,
-    const ExactTransitionScenario &scenario) {
-  return ExactScenarioRuntimeView{
-      scenario,
-      scenario_span_data(plan.scenario_source_ids, scenario.before_source_span),
-      scenario_span_data(plan.scenario_source_ids, scenario.after_source_span),
-      scenario_span_data(plan.scenario_expr_ids, scenario.ready_expr_span),
-      scenario_span_data(plan.scenario_expr_ids, scenario.tail_expr_span),
-      scenario.before_source_span.size,
-      scenario.after_source_span.size,
-      scenario.ready_expr_span.size,
-      scenario.tail_expr_span.size};
-}
-
-class ForcedExprEvaluator {
+class CompiledSourceView {
 public:
-  explicit ForcedExprEvaluator(const ExactVariantPlan &plan)
-      : plan_(plan),
-        program_(plan.lowered.program),
-        cdf_cache_(program_.expr_kind.size(), 0.0),
-        cdf_time_(program_.expr_kind.size(), 0.0),
-        cdf_condition_id_(program_.expr_kind.size(), 0),
-        cdf_epoch_(program_.expr_kind.size(), 0U),
-        density_cache_(program_.expr_kind.size(), 0.0),
-        density_time_(program_.expr_kind.size(), 0.0),
-        density_condition_id_(program_.expr_kind.size(), 0),
-        density_epoch_(program_.expr_kind.size(), 0U) {}
+  explicit CompiledSourceView(const ExactVariantPlan &plan)
+      : plan_(plan) {}
 
-  void reset(ExactSourceOracle *oracle,
-             const RelationView relation_view = {},
-             const ExactConditionFrame *condition_frame = nullptr) {
-    oracle_ = oracle;
+  void reset(ExactSourceChannels *source_channels,
+             const RelationView relation_view = {}) {
+    source_channels_ = source_channels;
     relation_view_ = relation_view;
-    condition_frame_ = condition_frame;
-    invalidate_cache();
   }
 
-  const ExactConditionFrame *set_condition_frame(
-      const ExactConditionFrame *condition_frame) noexcept {
-    const auto *previous = condition_frame_;
-    condition_frame_ = condition_frame;
-    return previous;
-  }
+  void invalidate_cache() noexcept {}
 
-  const ExactConditionFrame *condition_frame() const noexcept {
-    return condition_frame_;
-  }
-
-  void invalidate_cache() {
-    ++epoch_;
-    if (epoch_ == 0U) {
-      epoch_ = 1U;
-      std::fill(cdf_epoch_.begin(), cdf_epoch_.end(), 0U);
-      std::fill(density_epoch_.begin(), density_epoch_.end(), 0U);
-    }
-  }
-
-  double expr_cdf(const semantic::Index expr_idx) {
-    const auto pos = static_cast<std::size_t>(expr_idx);
-    const double current_time = oracle_->conditional_time();
-    const auto frame_id = condition_frame_id();
-    const bool ignoring_guard_upper =
-        ignored_guard_upper_ref_ != semantic::kInvalidIndex;
-    const bool cacheable =
-        ignored_expr_upper_ != expr_idx && !ignoring_guard_upper;
-    if (cacheable && cdf_epoch_[pos] == epoch_ &&
-        cdf_time_[pos] == current_time &&
-        cdf_condition_id_[pos] == frame_id) {
-      return cdf_cache_[pos];
-    }
-    if (cacheable) {
-      if (const auto *upper =
-              oracle_->expr_upper_bound_for(expr_idx, condition_frame_)) {
-        const double normalizer = upper->normalizer;
-        if (!(normalizer > 0.0)) {
-          return 0.0;
-        }
-        if (current_time >= upper->time) {
-          return 1.0;
-        }
-        const auto previous_ignore = ignored_expr_upper_;
-        ignored_expr_upper_ = expr_idx;
-        const double raw = expr_cdf(expr_idx);
-        ignored_expr_upper_ = previous_ignore;
-        return clamp_probability(raw / normalizer);
-      }
-    }
-    const auto &kernel = plan_.expr_kernels[pos];
-    double value = 0.0;
-    switch (kernel.kind) {
-    case semantic::ExprKind::Impossible:
-      value = 0.0;
-      break;
-    case semantic::ExprKind::TrueExpr:
-      value = 1.0;
-      break;
-    case semantic::ExprKind::Event:
-      value = source_channels(kernel.event_source_id).cdf;
-      break;
-    case semantic::ExprKind::And: {
-      double cdf = 1.0;
-      for (semantic::Index i = 0; i < kernel.children.size; ++i) {
-        cdf *= expr_cdf(expr_child(kernel.children, i));
-      }
-      value = clamp_probability(cdf);
-      break;
-    }
-    case semantic::ExprKind::Or: {
-      semantic::Index absorbed_source_id{semantic::kInvalidIndex};
-      if (or_absorbed_event_source(kernel.children, &absorbed_source_id)) {
-        value = source_cdf(absorbed_source_id);
-      } else if ((oracle_->has_guard_upper_bound_overlay(condition_frame_) ||
-           oracle_->has_source_order_overlay(condition_frame_)) &&
-          kernel.children_overlap) {
-        value = expr_union_cdf(kernel);
-      } else {
-        double surv = 1.0;
-        for (semantic::Index i = 0; i < kernel.children.size; ++i) {
-          surv *= expr_survival(expr_child(kernel.children, i));
-        }
-        value = clamp_probability(1.0 - surv);
-      }
-      break;
-    }
-    case semantic::ExprKind::Guard: {
-      if (!(current_time > 0.0)) {
-        value = 0.0;
-        break;
-      }
-      const auto ref = kernel.guard_ref_expr_id;
-      const auto blocker = kernel.guard_blocker_expr_id;
-      if (kernel.simple_event_guard &&
-          oracle_->source_order_known_before(
-              kernel.guard_blocker_source_id,
-              kernel.guard_ref_source_id,
-              condition_frame_)) {
-        value = 0.0;
-        break;
-      }
-      if (kernel.simple_event_guard &&
-          !guard_upper_bound_ignored(
-              kernel.guard_ref_source_id,
-              kernel.guard_blocker_source_id)) {
-        if (const auto *upper = oracle_->guard_upper_bound_for(
-                kernel.guard_ref_source_id,
-                kernel.guard_blocker_source_id,
-                condition_frame_)) {
-          if (!(upper->normalizer > 0.0)) {
-            value = 0.0;
-            break;
-          }
-          if (current_time >= upper->time) {
-            value = 1.0;
-            break;
-          }
-          const auto previous_ref = ignored_guard_upper_ref_;
-          const auto previous_blocker = ignored_guard_upper_blocker_;
-          ignored_guard_upper_ref_ = kernel.guard_ref_source_id;
-          ignored_guard_upper_blocker_ = kernel.guard_blocker_source_id;
-          const double raw = expr_cdf(expr_idx);
-          ignored_guard_upper_ref_ = previous_ref;
-          ignored_guard_upper_blocker_ = previous_blocker;
-          value = clamp_probability(raw / upper->normalizer);
-          break;
-        }
-      }
-      if (!kernel.has_unless &&
-          kernel.guard_ref_kind == semantic::ExprKind::Event) {
-        const auto ref_source_id = kernel.guard_ref_source_id;
-        if (const double *ref_time =
-                oracle_->exact_time_for_source(ref_source_id, condition_frame_)) {
-          if (!(current_time >= *ref_time)) {
-            value = 0.0;
-          } else {
-            const auto guard = oracle_->conditional_time_guard(*ref_time);
-            value = expr_survival(blocker);
-          }
-          break;
-        }
-      }
-      if (!kernel.has_unless &&
-          kernel.guard_ref_kind == semantic::ExprKind::And) {
-        std::vector<semantic::Index> remaining_ref_children;
-        double exact_ref_time = -std::numeric_limits<double>::infinity();
-        bool has_exact_ref_child = false;
-        for (semantic::Index i = 0; i < kernel.guard_ref_child_span.size; ++i) {
-          const auto child = expr_child(kernel.guard_ref_child_span, i);
-          const auto child_kind = static_cast<semantic::ExprKind>(
-              program_.expr_kind[static_cast<std::size_t>(child)]);
-          if (child_kind == semantic::ExprKind::Event) {
-            const auto child_source_id =
-                program_.expr_source_ids[static_cast<std::size_t>(child)];
-            if (const double *child_time =
-                    oracle_->exact_time_for_source(
-                        child_source_id, condition_frame_)) {
-              exact_ref_time = std::max(exact_ref_time, *child_time);
-              has_exact_ref_child = true;
-              continue;
-            }
-          }
-          remaining_ref_children.push_back(child);
-        }
-        if (has_exact_ref_child) {
-          if (!(current_time >= exact_ref_time)) {
-            value = 0.0;
-            break;
-          }
-          {
-            const auto guard = oracle_->conditional_time_guard(exact_ref_time);
-            const double ready_at_exact =
-                remaining_ref_children.empty()
-                    ? 1.0
-                    : conjunction_cdf(remaining_ref_children);
-            value = ready_at_exact * expr_survival(blocker);
-          }
-          if (!remaining_ref_children.empty() &&
-              current_time > exact_ref_time) {
-            value += quadrature::integrate_finite_default(
-                [&](const double u) {
-                  const auto guard = oracle_->conditional_time_guard(u);
-                  double term = conjunction_density(remaining_ref_children);
-                  if (!std::isfinite(term) || term == 0.0) {
-                    return 0.0;
-                  }
-                  term *= expr_survival(blocker);
-                  return std::isfinite(term) ? term : 0.0;
-                },
-                exact_ref_time,
-                current_time);
-          }
-          value = clamp_probability(value);
-          break;
-        }
-
-        bool ref_has_current_exact_child = false;
-        for (semantic::Index i = 0; i < kernel.guard_ref_child_span.size; ++i) {
-          const auto child = expr_child(kernel.guard_ref_child_span, i);
-          const auto child_kind = static_cast<semantic::ExprKind>(
-              program_.expr_kind[static_cast<std::size_t>(child)]);
-          if (child_kind != semantic::ExprKind::Event) {
-            continue;
-          }
-          const auto child_source_id =
-              program_.expr_source_ids[static_cast<std::size_t>(child)];
-          const double *child_time =
-              oracle_->exact_time_for_source(child_source_id, condition_frame_);
-          if (child_time != nullptr &&
-              std::fabs(*child_time - current_time) <= 1e-12) {
-            ref_has_current_exact_child = true;
-            break;
-          }
-        }
-        if (ref_has_current_exact_child) {
-          value = clamp_probability(expr_cdf(ref) * expr_survival(blocker));
-          break;
-        }
-      }
-      if (!kernel.has_unless &&
-          kernel.guard_blocker_kind == semantic::ExprKind::Event) {
-        const auto blocker_source_id =
-            kernel.simple_event_guard
-                ? kernel.guard_blocker_source_id
-                : program_.expr_source_ids[static_cast<std::size_t>(blocker)];
-        if (const double *blocker_time =
-                oracle_->exact_time_for_source(
-                    blocker_source_id, condition_frame_)) {
-          const double upper = std::min(current_time, *blocker_time);
-          if (!(upper > 0.0)) {
-            value = 0.0;
-          } else {
-            const auto guard = oracle_->conditional_time_guard(upper);
-            value = expr_cdf(ref);
-          }
-          break;
-        }
-      }
-      if (!kernel.has_unless && kernel.simple_event_guard) {
-        value = clamp_probability(quadrature::integrate_finite_default(
-            [&](const double u) {
-              const auto guard = oracle_->conditional_time_guard(u);
-              const double ref_density =
-                  source_pdf(kernel.guard_ref_source_id);
-              if (!std::isfinite(ref_density) || ref_density == 0.0) {
-                return 0.0;
-              }
-              const double blocker_survival =
-                  source_survival(kernel.guard_blocker_source_id);
-              const double term = ref_density * blocker_survival;
-              return std::isfinite(term) ? term : 0.0;
-            },
-            0.0,
-            current_time));
-        break;
-      }
-      value = clamp_probability(quadrature::integrate_finite_default(
-          [&](const double u) {
-            const auto guard = oracle_->conditional_time_guard(u);
-            return expr_density(expr_idx);
-          },
-          0.0,
-          current_time));
-      break;
-    }
-    case semantic::ExprKind::Not:
-      value = clamp_probability(
-          1.0 - expr_cdf(expr_child(kernel.children, 0)));
-      break;
-    }
-    if (cacheable) {
-      cdf_epoch_[pos] = epoch_;
-      cdf_time_[pos] = current_time;
-      cdf_condition_id_[pos] = frame_id;
-      cdf_cache_[pos] = value;
-    }
-    return value;
-  }
-
-  double expr_survival(const semantic::Index expr_idx) {
-    return clamp_probability(1.0 - expr_cdf(expr_idx));
-  }
-
-  double source_cdf(const semantic::Index source_id) {
-    return clamp_probability(source_channels(source_id).cdf);
-  }
-
-  double source_pdf(const semantic::Index source_id) {
-    return safe_density(source_channels(source_id).pdf);
-  }
-
-  double source_survival(const semantic::Index source_id) {
-    return clamp_probability(source_channels(source_id).survival);
-  }
-
-  ExactSourceOracle *oracle() const {
-    return oracle_;
+  ExactSourceChannels *source_channels() const {
+    return source_channels_;
   }
 
   const ExactVariantPlan &plan() const {
@@ -398,845 +53,434 @@ public:
     return relation_view_;
   }
 
-  double expr_density(const semantic::Index expr_idx) {
-    const auto pos = static_cast<std::size_t>(expr_idx);
-    const double current_time = oracle_->conditional_time();
-    const auto frame_id = condition_frame_id();
-    const bool ignoring_guard_upper =
-        ignored_guard_upper_ref_ != semantic::kInvalidIndex;
-    const bool cacheable =
-        ignored_expr_upper_ != expr_idx && !ignoring_guard_upper;
-    if (cacheable && density_epoch_[pos] == epoch_ &&
-        density_time_[pos] == current_time &&
-        density_condition_id_[pos] == frame_id) {
-      return density_cache_[pos];
+  leaf::EventChannels source_channels_for_slot(
+      const semantic::Index source_channel_slot,
+      const double t,
+      const CompiledMathWorkspace *workspace) const {
+    const auto slot = static_cast<std::size_t>(source_channel_slot);
+    if (slot >= plan_.compiled_math.source_channel_plans.size()) {
+      return leaf::EventChannels::impossible();
     }
-    if (cacheable) {
-      if (const auto *upper =
-              oracle_->expr_upper_bound_for(expr_idx, condition_frame_)) {
-        const double normalizer = upper->normalizer;
-        if (!(normalizer > 0.0) || current_time >= upper->time) {
-          return 0.0;
-        }
-        const auto previous_ignore = ignored_expr_upper_;
-        ignored_expr_upper_ = expr_idx;
-        const double raw = expr_density(expr_idx);
-        ignored_expr_upper_ = previous_ignore;
-        return safe_density(raw / normalizer);
-      }
+    const auto &channel_plan =
+        plan_.compiled_math.source_channel_plans[slot];
+    const auto &request = channel_plan.request;
+    const auto relation = relation_view_.relation_for(request.source_id);
+    if (relation != ExactRelation::Unknown &&
+        !channel_plan.has_source_condition_overlay) {
+      return forced_channels(relation);
     }
-    const auto &kernel = plan_.expr_kernels[pos];
-    double value = 0.0;
-    switch (kernel.kind) {
-    case semantic::ExprKind::Impossible:
-    case semantic::ExprKind::TrueExpr:
-      value = 0.0;
-      break;
-    case semantic::ExprKind::Event:
-      value = source_channels(kernel.event_source_id).pdf;
-      break;
-    case semantic::ExprKind::And: {
-      double total = 0.0;
-      for (semantic::Index i = 0; i < kernel.children.size; ++i) {
-        const auto child = expr_child(kernel.children, i);
-        double term = expr_density(child);
-        if (!std::isfinite(term) || term == 0.0) {
-          continue;
-        }
-        for (semantic::Index j = 0; j < kernel.children.size; ++j) {
-          if (i == j) {
-            continue;
-          }
-          term *= expr_cdf(expr_child(kernel.children, j));
-          if (!std::isfinite(term) || term == 0.0) {
-            break;
-          }
-        }
-        total += term;
-      }
-      value = clean_signed_value(total);
-      break;
-    }
-    case semantic::ExprKind::Or: {
-      semantic::Index absorbed_source_id{semantic::kInvalidIndex};
-      if (or_absorbed_event_source(kernel.children, &absorbed_source_id)) {
-        value = source_pdf(absorbed_source_id);
-      } else if ((oracle_->has_guard_upper_bound_overlay(condition_frame_) ||
-           oracle_->has_source_order_overlay(condition_frame_)) &&
-          kernel.children_overlap) {
-        value = expr_union_density(kernel);
-      } else {
-        double total = 0.0;
-        for (semantic::Index i = 0; i < kernel.children.size; ++i) {
-          double term = expr_density(expr_child(kernel.children, i));
-          if (!std::isfinite(term) || term == 0.0) {
-            continue;
-          }
-          for (semantic::Index j = 0; j < kernel.children.size; ++j) {
-            if (i == j) {
-              continue;
-            }
-            term *= expr_survival(expr_child(kernel.children, j));
-            if (!std::isfinite(term) || term == 0.0) {
-              break;
-            }
-          }
-          total += term;
-        }
-        value = clean_signed_value(total);
-      }
-      break;
-    }
-    case semantic::ExprKind::Guard: {
-      const auto ref = kernel.guard_ref_expr_id;
-      const auto blocker = kernel.guard_blocker_expr_id;
-      if (kernel.simple_event_guard &&
-          oracle_->source_order_known_before(
-              kernel.guard_blocker_source_id,
-              kernel.guard_ref_source_id,
-              condition_frame_)) {
-        value = 0.0;
-        break;
-      }
-      if (kernel.simple_event_guard &&
-          !guard_upper_bound_ignored(
-              kernel.guard_ref_source_id,
-              kernel.guard_blocker_source_id)) {
-        if (const auto *upper = oracle_->guard_upper_bound_for(
-                kernel.guard_ref_source_id,
-                kernel.guard_blocker_source_id,
-                condition_frame_)) {
-          if (!(upper->normalizer > 0.0) || current_time >= upper->time) {
-            value = 0.0;
-            break;
-          }
-          const auto previous_ref = ignored_guard_upper_ref_;
-          const auto previous_blocker = ignored_guard_upper_blocker_;
-          ignored_guard_upper_ref_ = kernel.guard_ref_source_id;
-          ignored_guard_upper_blocker_ = kernel.guard_blocker_source_id;
-          const double raw = expr_density(expr_idx);
-          ignored_guard_upper_ref_ = previous_ref;
-          ignored_guard_upper_blocker_ = previous_blocker;
-          value = safe_density(raw / upper->normalizer);
-          break;
-        }
-      }
-      if (!kernel.has_unless && kernel.simple_event_guard) {
-        value = clean_signed_value(
-            source_pdf(kernel.guard_ref_source_id) *
-            source_survival(kernel.guard_blocker_source_id));
-        break;
-      }
-      double blocker_survival = 0.0;
-      if (!kernel.has_unless) {
-        blocker_survival = expr_survival(blocker);
-      } else {
-        blocker_survival = clamp_probability(
-            1.0 - quadrature::integrate_finite_default(
-                      [&](const double u) {
-                        const auto guard = oracle_->conditional_time_guard(u);
-                        double term = expr_density(blocker);
-                        if (!std::isfinite(term) || term == 0.0) {
-                          return 0.0;
-                        }
-                        for (semantic::Index i = 0; i < kernel.children.size; ++i) {
-                          term *= expr_survival(expr_child(kernel.children, i));
-                          if (!std::isfinite(term) || term == 0.0) {
-                            return 0.0;
-                          }
-                        }
-                        return term;
-                      },
-                      0.0,
-                      current_time));
-      }
-      value = clean_signed_value(expr_density(ref) * blocker_survival);
-      break;
-    }
-    case semantic::ExprKind::Not:
-      value = clean_signed_value(
-          -expr_density(expr_child(kernel.children, 0)));
-      break;
-    }
-    if (cacheable) {
-      density_epoch_[pos] = epoch_;
-      density_time_[pos] = current_time;
-      density_condition_id_[pos] = frame_id;
-      density_cache_[pos] = value;
-    }
-    return value;
+    return source_channels_->evaluate_conditioned_source_at(
+        request.source_id, t, request.condition_id, workspace);
   }
 
-  double conjunction_density(const std::vector<semantic::Index> &exprs) {
-    if (exprs.empty()) {
-      return 0.0;
-    }
-    if (exprs.size() == 1U) {
-      return expr_density(exprs.front());
-    }
-    double total = 0.0;
-    for (std::size_t i = 0; i < exprs.size(); ++i) {
-      double term = expr_density(exprs[i]);
-      if (!std::isfinite(term) || term == 0.0) {
-        continue;
-      }
-      for (std::size_t j = 0; j < exprs.size(); ++j) {
-        if (i == j) {
-          continue;
-        }
-        term *= expr_cdf(exprs[j]);
-        if (!std::isfinite(term) || term == 0.0) {
-          break;
-        }
-      }
-      total += term;
-    }
-    return clean_signed_value(total);
+  const ExactTimedExprUpperBound *expr_upper_bound_for(
+      const semantic::Index expr_id,
+      const semantic::Index condition_id,
+      const CompiledMathWorkspace *workspace) const {
+    return source_channels_->expr_upper_bound_for(
+        expr_id, condition_id, workspace);
   }
 
-  double conjunction_cdf(const std::vector<semantic::Index> &exprs) {
-    if (exprs.empty()) {
-      return 0.0;
+  const ExactTimedGuardUpperBound *guard_upper_bound_for(
+      const semantic::Index ref_source_id,
+      const semantic::Index blocker_source_id,
+      const semantic::Index condition_id,
+      const CompiledMathWorkspace *workspace) const {
+    return source_channels_->guard_upper_bound_for(
+        ref_source_id, blocker_source_id, condition_id, workspace);
+  }
+
+  bool source_order_known_before(
+      const semantic::Index before_source_id,
+      const semantic::Index after_source_id,
+      const semantic::Index condition_id,
+      const CompiledMathWorkspace *workspace) const {
+    if (relation_view_knows_before(before_source_id, after_source_id)) {
+      return true;
     }
-    if (exprs.size() == 1U) {
-      return expr_cdf(exprs.front());
-    }
-    const double current_time = oracle_->conditional_time();
-    if (!(current_time > 0.0)) {
-      return 0.0;
-    }
-    return clamp_probability(quadrature::integrate_finite_default(
-        [&](const double u) {
-          const auto guard = oracle_->conditional_time_guard(u);
-          return conjunction_density(exprs);
-        },
-        0.0,
-        current_time));
+    return source_channels_->source_order_known_before(
+        before_source_id, after_source_id, condition_id, workspace);
+  }
+
+  const double *exact_time_for_source(
+      const semantic::Index source_id,
+      const semantic::Index condition_id,
+      const CompiledMathWorkspace *workspace) const {
+    return source_channels_->exact_time_for_source(
+        source_id, condition_id, workspace);
+  }
+
+  bool has_guard_upper_bound_overlay(
+      const semantic::Index condition_id,
+      const CompiledMathWorkspace *workspace) const {
+    (void)workspace;
+    return source_channels_->has_guard_upper_bound_overlay(
+        condition_id);
   }
 
 private:
-  semantic::Index expr_child(const ExactIndexSpan span,
-                             const semantic::Index index) const {
-    return program_.expr_args[
-        static_cast<std::size_t>(span.offset + index)];
-  }
-
-  semantic::Index union_subset_child(const ExactIndexSpan span,
-                                     const semantic::Index index) const {
-    return plan_.expr_union_subset_children[
-        static_cast<std::size_t>(span.offset + index)];
-  }
-
-  bool guard_upper_bound_ignored(const semantic::Index ref_source_id,
-                                 const semantic::Index blocker_source_id) const {
-    return ignored_guard_upper_ref_ == ref_source_id &&
-           ignored_guard_upper_blocker_ == blocker_source_id;
-  }
-
-  bool expr_equivalent_event_source(const semantic::Index expr_idx,
-                                    semantic::Index *source_id) {
-    const auto pos = static_cast<std::size_t>(expr_idx);
-    const auto kind =
-        static_cast<semantic::ExprKind>(program_.expr_kind[pos]);
-    if (kind == semantic::ExprKind::Event) {
-      if (source_id != nullptr) {
-        *source_id = program_.expr_source_ids[pos];
-      }
-      return true;
-    }
-    if (kind != semantic::ExprKind::And) {
+  bool relation_view_knows_before(const semantic::Index before_source_id,
+                                  const semantic::Index after_source_id) const {
+    if (before_source_id == semantic::kInvalidIndex ||
+        after_source_id == semantic::kInvalidIndex ||
+        before_source_id == after_source_id) {
       return false;
     }
-
-    semantic::Index candidate{semantic::kInvalidIndex};
-    bool found_candidate = false;
-    const auto begin = program_.expr_arg_offsets[pos];
-    const auto end = program_.expr_arg_offsets[pos + 1U];
-    for (semantic::Index i = begin; i < end; ++i) {
-      const auto child = program_.expr_args[static_cast<std::size_t>(i)];
-      semantic::Index child_source{semantic::kInvalidIndex};
-      if (expr_equivalent_event_source(child, &child_source)) {
-        const double child_cdf = expr_cdf(child);
-        if (child_cdf < 1.0 - 1e-10) {
-          if (found_candidate) {
-            return false;
-          }
-          candidate = child_source;
-          found_candidate = true;
-          continue;
-        }
-      }
-      if (expr_cdf(child) < 1.0 - 1e-10) {
-        return false;
-      }
-    }
-    if (!found_candidate) {
-      return false;
-    }
-    if (source_id != nullptr) {
-      *source_id = candidate;
-    }
-    return true;
+    const auto before_relation = relation_view_.relation_for(before_source_id);
+    const auto after_relation = relation_view_.relation_for(after_source_id);
+    return before_relation != ExactRelation::Unknown &&
+           after_relation != ExactRelation::Unknown &&
+           before_relation < after_relation;
   }
 
-  bool expr_subset_of_event_source(const semantic::Index expr_idx,
-                                   const semantic::Index source_id) const {
-    if (source_id == semantic::kInvalidIndex) {
-      return false;
-    }
-    const auto pos = static_cast<std::size_t>(expr_idx);
-    const auto kind =
-        static_cast<semantic::ExprKind>(program_.expr_kind[pos]);
-    switch (kind) {
-    case semantic::ExprKind::Event:
-      return program_.expr_source_ids[pos] == source_id;
-    case semantic::ExprKind::And: {
-      const auto begin = program_.expr_arg_offsets[pos];
-      const auto end = program_.expr_arg_offsets[pos + 1U];
-      for (semantic::Index i = begin; i < end; ++i) {
-        if (expr_subset_of_event_source(
-                program_.expr_args[static_cast<std::size_t>(i)], source_id)) {
-          return true;
-        }
-      }
-      return false;
-    }
-    case semantic::ExprKind::Or: {
-      const auto begin = program_.expr_arg_offsets[pos];
-      const auto end = program_.expr_arg_offsets[pos + 1U];
-      if (begin == end) {
-        return false;
-      }
-      for (semantic::Index i = begin; i < end; ++i) {
-        if (!expr_subset_of_event_source(
-                program_.expr_args[static_cast<std::size_t>(i)], source_id)) {
-          return false;
-        }
-      }
-      return true;
-    }
-    case semantic::ExprKind::Guard: {
-      const auto ref = program_.expr_ref_child[pos];
-      return expr_subset_of_event_source(ref, source_id);
-    }
-    case semantic::ExprKind::Impossible:
-      return true;
-    case semantic::ExprKind::TrueExpr:
-    case semantic::ExprKind::Not:
-      return false;
-    }
-    return false;
+public:
+  semantic::Index condition_cache_id() const noexcept {
+    return 0;
   }
 
-  bool or_absorbed_event_source(const ExactIndexSpan children,
-                                semantic::Index *source_id) {
-    for (semantic::Index i = 0; i < children.size; ++i) {
-      const auto child = expr_child(children, i);
-      semantic::Index candidate{semantic::kInvalidIndex};
-      if (!expr_equivalent_event_source(child, &candidate)) {
-        continue;
-      }
-      bool absorbs_all = true;
-      for (semantic::Index j = 0; j < children.size; ++j) {
-        const auto other = expr_child(children, j);
-        if (!expr_subset_of_event_source(other, candidate)) {
-          absorbs_all = false;
-          break;
-        }
-      }
-      if (!absorbs_all) {
-        continue;
-      }
-      if (source_id != nullptr) {
-        *source_id = candidate;
-      }
-      return true;
-    }
-    return false;
-  }
-
-  double conjunction_density(const std::vector<semantic::Index> &arena,
-                             const ExactIndexSpan span) {
-    if (span.empty()) {
-      return 0.0;
-    }
-    if (span.size == 1U) {
-      return expr_density(arena[static_cast<std::size_t>(span.offset)]);
-    }
-    double total = 0.0;
-    for (semantic::Index i = 0; i < span.size; ++i) {
-      const auto active =
-          arena[static_cast<std::size_t>(span.offset + i)];
-      double term = expr_density(active);
-      if (!std::isfinite(term) || term == 0.0) {
-        continue;
-      }
-      for (semantic::Index j = 0; j < span.size; ++j) {
-        if (i == j) {
-          continue;
-        }
-        term *= expr_cdf(
-            arena[static_cast<std::size_t>(span.offset + j)]);
-        if (!std::isfinite(term) || term == 0.0) {
-          break;
-        }
-      }
-      total += term;
-    }
-    return clean_signed_value(total);
-  }
-
-  double conjunction_cdf(const std::vector<semantic::Index> &arena,
-                         const ExactIndexSpan span) {
-    if (span.empty()) {
-      return 0.0;
-    }
-    if (span.size == 1U) {
-      return expr_cdf(arena[static_cast<std::size_t>(span.offset)]);
-    }
-    const double current_time = oracle_->conditional_time();
-    if (!(current_time > 0.0)) {
-      return 0.0;
-    }
-    return clamp_probability(quadrature::integrate_finite_default(
-        [&](const double u) {
-          const auto guard = oracle_->conditional_time_guard(u);
-          return conjunction_density(arena, span);
-        },
-        0.0,
-        current_time));
-  }
-
-  double expr_union_cdf(const ExactExprKernel &kernel) {
-    if (kernel.children.empty()) {
-      return 0.0;
-    }
-    if (kernel.children.size == 1U) {
-      return expr_cdf(expr_child(kernel.children, 0));
-    }
-    double total = 0.0;
-    for (semantic::Index i = 0; i < kernel.union_subset_span.size; ++i) {
-      const auto &subset = plan_.expr_union_subsets[
-          static_cast<std::size_t>(kernel.union_subset_span.offset + i)];
-      const double value =
-          subset.children.size == 1U
-              ? expr_cdf(union_subset_child(subset.children, 0))
-              : conjunction_cdf(
-                    plan_.expr_union_subset_children, subset.children);
-      total += static_cast<double>(subset.sign) * value;
-    }
-    return clamp_probability(total);
-  }
-
-  double expr_union_density(const ExactExprKernel &kernel) {
-    if (kernel.children.empty()) {
-      return 0.0;
-    }
-    if (kernel.children.size == 1U) {
-      return expr_density(expr_child(kernel.children, 0));
-    }
-    double total = 0.0;
-    for (semantic::Index i = 0; i < kernel.union_subset_span.size; ++i) {
-      const auto &subset = plan_.expr_union_subsets[
-          static_cast<std::size_t>(kernel.union_subset_span.offset + i)];
-      const double value =
-          subset.children.size == 1U
-              ? expr_density(union_subset_child(subset.children, 0))
-              : conjunction_density(
-                    plan_.expr_union_subset_children, subset.children);
-      total += static_cast<double>(subset.sign) * value;
-    }
-    return clean_signed_value(total);
-  }
-
-  leaf::EventChannels source_channels(const semantic::Index source_id) const {
-    const auto relation = relation_view_.relation_for(source_id);
-    if (relation != ExactRelation::Unknown &&
-        !oracle_->has_source_condition_overlay(source_id, condition_frame_)) {
-      return forced_channels(relation);
-    }
-    return oracle_->conditional_source(source_id, condition_frame_);
-  }
-
-  semantic::Index condition_frame_id() const noexcept {
-    return condition_frame_ == nullptr ? 0 : condition_frame_->id;
-  }
-
+private:
   const ExactVariantPlan &plan_;
-  const runtime::ExactProgram &program_;
-  ExactSourceOracle *oracle_{nullptr};
+  ExactSourceChannels *source_channels_{nullptr};
   RelationView relation_view_;
-  const ExactConditionFrame *condition_frame_{nullptr};
-  std::vector<double> cdf_cache_;
-  std::vector<double> cdf_time_;
-  std::vector<semantic::Index> cdf_condition_id_;
-  std::vector<std::uint32_t> cdf_epoch_;
-  std::vector<double> density_cache_;
-  std::vector<double> density_time_;
-  std::vector<semantic::Index> density_condition_id_;
-  std::vector<std::uint32_t> density_epoch_;
-  std::uint32_t epoch_{1U};
-  semantic::Index ignored_expr_upper_{semantic::kInvalidIndex};
-  semantic::Index ignored_guard_upper_ref_{semantic::kInvalidIndex};
-  semantic::Index ignored_guard_upper_blocker_{semantic::kInvalidIndex};
 };
 
-struct ForcedExprWorkspace {
-  explicit ForcedExprWorkspace(const ExactVariantPlan &plan) : evaluator(plan) {}
+inline semantic::Index exact_condition_cache_id(
+    const CompiledSourceView *evaluator) {
+  return evaluator == nullptr ? 0 : evaluator->condition_cache_id();
+}
 
-  void reset(ExactSourceOracle *oracle,
-             const RelationView relation_view = {},
-             const ExactConditionFrame *condition_frame = nullptr) {
-    evaluator.reset(oracle, relation_view, condition_frame);
+inline void exact_hash_condition_part(std::size_t *seed,
+                                      const std::size_t value) noexcept {
+  *seed ^= value + 0x9e3779b97f4a7c15ULL + (*seed << 6U) + (*seed >> 2U);
+}
+
+inline semantic::Index compiled_node_condition_cache_id(
+    const CompiledMathNode &node,
+    const CompiledSourceView *evaluator,
+    const CompiledMathWorkspace &workspace) {
+  const auto evaluator_id = exact_condition_cache_id(evaluator);
+  if (node.condition_id == 0 ||
+      node.condition_id == semantic::kInvalidIndex) {
+    return evaluator_id;
+  }
+  std::size_t seed = 0x9e3779b97f4a7c15ULL;
+  exact_hash_condition_part(&seed, static_cast<std::size_t>(evaluator_id));
+  exact_hash_condition_part(&seed, static_cast<std::size_t>(node.condition_id));
+  for (std::size_t i = 0; i < workspace.time_values.size(); ++i) {
+    if (i >= workspace.time_valid.size() || workspace.time_valid[i] == 0U) {
+      continue;
+    }
+    exact_hash_condition_part(&seed, i + 1U);
+    exact_hash_condition_part(
+        &seed, std::hash<double>{}(workspace.time_values[i]));
+  }
+  return static_cast<semantic::Index>(
+      (seed & static_cast<std::size_t>(0x3fffffffU)) + 1U);
+}
+
+struct CompiledEvalWorkspace {
+  explicit CompiledEvalWorkspace(const ExactVariantPlan &plan)
+      : evaluator(plan),
+        compiled_math(plan.compiled_math) {
+    const auto source_view_count = plan.compiled_source_views.size();
+    source_view_evaluators.reserve(source_view_count);
+    for (std::size_t i = 0; i < source_view_count; ++i) {
+      source_view_evaluators.emplace_back(plan);
+    }
+    source_view_parents.assign(source_view_count, nullptr);
+    source_view_condition_ids.assign(source_view_count, 0);
+    source_view_valid.assign(source_view_count, 0U);
   }
 
-  ForcedExprEvaluator evaluator;
+  void reset(ExactSourceChannels *source_channels,
+             const RelationView relation_view = {}) {
+    evaluator.reset(source_channels, relation_view);
+    compiled_math.reset_cache();
+    reset_source_views();
+  }
+
+  void reset_planned_caches() {}
+
+  void reset_source_views() {
+    std::fill(source_view_valid.begin(), source_view_valid.end(), 0U);
+  }
+
+  CompiledSourceView *source_view_evaluator(
+      const semantic::Index source_view_id,
+      CompiledSourceView *parent) {
+    if (source_view_id == 0 || source_view_id == semantic::kInvalidIndex) {
+      return parent;
+    }
+    if (parent == nullptr) {
+      return nullptr;
+    }
+    const auto pos = static_cast<std::size_t>(source_view_id - 1U);
+    if (pos >= parent->plan().compiled_source_views.size() ||
+        pos >= source_view_evaluators.size()) {
+      throw std::runtime_error("compiled source view id is outside the plan");
+    }
+    const auto condition_id = exact_condition_cache_id(parent);
+    if (source_view_valid[pos] != 0U &&
+        source_view_parents[pos] == parent &&
+        source_view_condition_ids[pos] == condition_id) {
+      return &source_view_evaluators[pos];
+    }
+
+    RelationView view;
+    if (!relation_view_with_overlay(
+            parent->relation_view(),
+            parent->plan().compiled_source_views[pos],
+            &view)) {
+      source_view_valid[pos] = 0U;
+      return nullptr;
+    }
+    auto &evaluator_for_view = source_view_evaluators[pos];
+    evaluator_for_view.reset(parent->source_channels(), view);
+    source_view_parents[pos] = parent;
+    source_view_condition_ids[pos] = condition_id;
+    source_view_valid[pos] = 1U;
+    return &evaluator_for_view;
+  }
+
+  CompiledSourceView evaluator;
+  CompiledMathWorkspace compiled_math;
+  std::vector<CompiledSourceView> source_view_evaluators;
+  std::vector<const CompiledSourceView *> source_view_parents;
+  std::vector<semantic::Index> source_view_condition_ids;
+  std::vector<std::uint8_t> source_view_valid;
 };
 
-inline ForcedExprEvaluator *prepare_scenario_evaluator(
-    const ExactScenarioRuntimeView &scenario_view,
-    ForcedExprEvaluator *parent,
-    ForcedExprWorkspace *workspace) {
-  RelationView view;
-  if (!relation_view_with_overlay(
-          parent->relation_view(),
-          scenario_view.scenario.relation_template,
-          &view)) {
-    return nullptr;
-  }
-  workspace->reset(parent->oracle(), view, parent->condition_frame());
-  return &workspace->evaluator;
+inline bool compiled_math_node_cacheable(
+    const CompiledMathNodeKind kind) noexcept {
+  return kind == CompiledMathNodeKind::SimpleGuardCdf ||
+         kind == CompiledMathNodeKind::IntegralZeroToCurrent ||
+         kind == CompiledMathNodeKind::IntegralZeroToCurrentRaw ||
+         kind == CompiledMathNodeKind::UnionKernelDensity ||
+         kind == CompiledMathNodeKind::UnionKernelCdf ||
+         kind == CompiledMathNodeKind::UnionKernelMultiSubsetDensity ||
+         kind == CompiledMathNodeKind::UnionKernelMultiSubsetCdf;
 }
 
-inline ForcedExprEvaluator *prepare_runtime_scenario_evaluator(
-    const ExactRuntimeScenarioFormula &scenario,
-    ForcedExprEvaluator *parent,
-    ForcedExprWorkspace *workspace) {
-  RelationView view;
-  if (!relation_view_with_overlay(
-          parent->relation_view(),
-          scenario.relation_template,
-          &view)) {
-    return nullptr;
-  }
-  workspace->reset(parent->oracle(), view, parent->condition_frame());
-  return &workspace->evaluator;
+inline bool compiled_math_load_node_cache_entry(
+    const CompiledMathNode &node,
+    const CompiledSourceView *evaluator,
+    const CompiledMathWorkspace &workspace,
+    double *value);
+
+inline void compiled_math_store_node_cache_entry(
+    const CompiledMathNode &node,
+    const CompiledSourceView *evaluator,
+    CompiledMathWorkspace *workspace,
+    double value);
+
+inline double compiled_math_node_time(const CompiledMathNode &node,
+                                      const CompiledMathWorkspace &workspace) {
+  return workspace.time(node.time_id);
 }
 
-inline bool runtime_factors_empty(const ExactRuntimeFactors &factors) {
-  return factors.source_pdf.empty() &&
-         factors.source_cdf.empty() &&
-         factors.source_survival.empty() &&
-         factors.expr_density.empty() &&
-         factors.expr_cdf.empty() &&
-         factors.expr_survival.empty();
+inline double compiled_math_source_node_time(
+    const CompiledMathNode &node,
+    const CompiledMathWorkspace &workspace) {
+  const double time = compiled_math_node_time(node, workspace);
+  if (node.aux_id == semantic::kInvalidIndex) {
+    return time;
+  }
+  return std::min(time, workspace.time(node.aux_id));
 }
 
-inline double evaluate_runtime_factors(const ExactRuntimeFactors &factors,
-                                       ForcedExprEvaluator *parent,
-                                       ForcedExprEvaluator *scenario) {
-  double value = 1.0;
-  auto multiply = [&](const double factor) {
-    value *= factor;
-    return std::isfinite(value) && value != 0.0;
-  };
+inline bool compiled_math_load_node_cache(
+    const CompiledMathNode &node,
+    const CompiledSourceView *evaluator,
+    const CompiledMathWorkspace &workspace,
+    double *value) {
+  if (evaluator == nullptr || !compiled_math_node_cacheable(node.kind)) {
+    return false;
+  }
+  return compiled_math_load_node_cache_entry(
+      node, evaluator, workspace, value);
+}
 
-  for (const auto source_id : factors.source_pdf) {
-    if (!multiply(parent->source_pdf(source_id))) {
-      return 0.0;
-    }
+inline bool compiled_math_load_node_cache_entry(
+    const CompiledMathNode &node,
+    const CompiledSourceView *evaluator,
+    const CompiledMathWorkspace &workspace,
+    double *value) {
+  if (evaluator == nullptr) {
+    return false;
   }
-  for (const auto source_id : factors.source_cdf) {
-    if (!multiply(parent->source_cdf(source_id))) {
-      return 0.0;
-    }
+  const auto slot = static_cast<std::size_t>(node.cache_slot);
+  if (slot >= workspace.cache_valid.size() ||
+      workspace.cache_valid[slot] == 0U ||
+      workspace.cache_evaluators[slot] != evaluator ||
+      workspace.cache_condition_ids[slot] !=
+          compiled_node_condition_cache_id(node, evaluator, workspace) ||
+      workspace.cache_times[slot] !=
+          compiled_math_node_time(node, workspace)) {
+    return false;
   }
-  for (const auto source_id : factors.source_survival) {
-    if (!multiply(parent->source_survival(source_id))) {
-      return 0.0;
-    }
+  *value = workspace.cache_values[slot];
+  return true;
+}
+
+inline CompiledSourceView *compiled_math_node_evaluator(
+    const CompiledMathNode &node,
+    CompiledSourceView *parent,
+    CompiledEvalWorkspace *workspace) {
+  if (node.source_view_id == 0 ||
+      node.source_view_id == semantic::kInvalidIndex) {
+    return parent;
+  }
+  if (workspace == nullptr) {
+    throw std::runtime_error(
+        "compiled node requires a planned source view but no workspace was supplied");
+  }
+  return workspace->source_view_evaluator(node.source_view_id, parent);
+}
+
+inline void compiled_math_store_node_cache(
+    const CompiledMathNode &node,
+    const CompiledSourceView *evaluator,
+    CompiledMathWorkspace *workspace,
+    const double value) {
+  if (evaluator == nullptr || !compiled_math_node_cacheable(node.kind)) {
+    return;
+  }
+  compiled_math_store_node_cache_entry(node, evaluator, workspace, value);
+}
+
+inline void compiled_math_store_node_cache_entry(
+    const CompiledMathNode &node,
+    const CompiledSourceView *evaluator,
+    CompiledMathWorkspace *workspace,
+    const double value) {
+  if (evaluator == nullptr) {
+    return;
+  }
+  const auto slot = static_cast<std::size_t>(node.cache_slot);
+  if (slot >= workspace->cache_valid.size()) {
+    return;
+  }
+  workspace->cache_valid[slot] = 1U;
+  workspace->cache_evaluators[slot] = evaluator;
+  workspace->cache_condition_ids[slot] =
+      compiled_node_condition_cache_id(node, evaluator, *workspace);
+  workspace->cache_times[slot] = compiled_math_node_time(node, *workspace);
+  workspace->cache_values[slot] = value;
+}
+
+inline leaf::EventChannels compiled_math_store_source_channels(
+    const CompiledMathNode &node,
+    CompiledSourceView *evaluator,
+    CompiledMathWorkspace *workspace) {
+  if (workspace == nullptr) {
+    return leaf::EventChannels{0.0, 0.0, 0.0};
+  }
+  const double time = compiled_math_source_node_time(node, *workspace);
+  const auto slot = static_cast<std::size_t>(node.source_channel_slot);
+  if (node.source_channel_slot == semantic::kInvalidIndex ||
+      slot >= workspace->source_channel_valid.size()) {
+    throw std::runtime_error(
+        "compiled source node reached evaluation without a source-channel slot");
   }
 
-  if (scenario == nullptr &&
-      (!factors.expr_density.empty() ||
-       !factors.expr_cdf.empty() ||
-       !factors.expr_survival.empty())) {
+  const auto condition_cache_id =
+      evaluator == nullptr
+          ? 0
+          : compiled_node_condition_cache_id(node, evaluator, *workspace);
+  if (workspace->source_channel_valid[slot] != 0U &&
+      workspace->source_channel_evaluators[slot] == evaluator &&
+      workspace->source_channel_condition_ids[slot] == condition_cache_id &&
+      workspace->source_channel_times[slot] == time) {
+    return leaf::EventChannels{
+        workspace->source_channel_pdf[slot],
+        workspace->source_channel_cdf[slot],
+        workspace->source_channel_survival[slot]};
+  }
+
+  const auto channels =
+      evaluator == nullptr
+          ? leaf::EventChannels{0.0, 0.0, 0.0}
+          : evaluator->source_channels_for_slot(
+                node.source_channel_slot, time, workspace);
+  workspace->source_channel_valid[slot] = 1U;
+  workspace->source_channel_evaluators[slot] = evaluator;
+  workspace->source_channel_condition_ids[slot] = condition_cache_id;
+  workspace->source_channel_times[slot] = time;
+  workspace->source_channel_pdf[slot] = channels.pdf;
+  workspace->source_channel_cdf[slot] = channels.cdf;
+  workspace->source_channel_survival[slot] = channels.survival;
+  return channels;
+}
+
+inline leaf::EventChannels compiled_math_source_channels(
+    const CompiledMathNode &node,
+    const CompiledMathWorkspace *workspace) {
+  if (workspace == nullptr ||
+      node.source_channel_slot == semantic::kInvalidIndex) {
+    throw std::runtime_error(
+        "compiled source value has no planned source-channel slot");
+  }
+  const auto slot = static_cast<std::size_t>(node.source_channel_slot);
+  if (slot >= workspace->source_channel_valid.size() ||
+      workspace->source_channel_valid[slot] == 0U) {
+    throw std::runtime_error(
+        "compiled source value reached before source-channel load");
+  }
+  return leaf::EventChannels{
+      workspace->source_channel_pdf[slot],
+      workspace->source_channel_cdf[slot],
+      workspace->source_channel_survival[slot]};
+}
+
+inline double compiled_union_kernel_child_value(
+    const CompiledMathProgram &program,
+    const CompiledMathNode &node,
+    const CompiledMathWorkspace &workspace,
+    const semantic::Index child_index) {
+  if (child_index >= node.children.size) {
     return 0.0;
   }
-  for (const auto expr_id : factors.expr_density) {
-    if (!multiply(scenario->expr_density(expr_id))) {
-      return 0.0;
-    }
-  }
-  for (const auto expr_id : factors.expr_cdf) {
-    if (!multiply(scenario->expr_cdf(expr_id))) {
-      return 0.0;
-    }
-  }
-  for (const auto expr_id : factors.expr_survival) {
-    if (!multiply(scenario->expr_survival(expr_id))) {
-      return 0.0;
-    }
-  }
-
-  return value;
+  const auto child_id = program.child_nodes[
+      static_cast<std::size_t>(node.children.offset + child_index)];
+  return workspace.values[static_cast<std::size_t>(child_id)];
 }
 
-inline double evaluate_runtime_truth_formula(
-    const ExactRuntimeTruthFormula &formula,
-    const ExactRuntimeScenarioFormula &scenario_formula,
-    ForcedExprEvaluator *parent,
-    ForcedExprWorkspace *workspace) {
-  ForcedExprEvaluator *scenario_evaluator = nullptr;
-  if (formula.requires_scenario) {
-    scenario_evaluator =
-        prepare_runtime_scenario_evaluator(scenario_formula, parent, workspace);
-    if (scenario_evaluator == nullptr) {
-      return 0.0;
-    }
-  }
-
-  if (!formula.sum_of_products) {
-    const double value =
-        runtime_factors_empty(formula.product)
-            ? formula.empty_value
-            : evaluate_runtime_factors(
-                  formula.product, parent, scenario_evaluator);
-    return clamp_probability(value);
-  }
-
-  double total = formula.sum_terms.empty() ? formula.empty_value : 0.0;
-  for (const auto &term : formula.sum_terms) {
-    const double value =
-        evaluate_runtime_factors(term.factors, parent, scenario_evaluator);
-    total += value;
-  }
-  return formula.clean_signed ? clean_signed_value(total) : total;
-}
-
-inline double runtime_readiness_cdf(
-    const ExactRuntimeScenarioFormula &scenario_formula,
-    ForcedExprEvaluator *evaluator,
-    const double t,
-    ForcedExprWorkspace *workspace) {
-  if (t < 0.0) {
+inline double compiled_union_subset_conjunction_density(
+    const CompiledMathProgram &program,
+    const CompiledMathNode &node,
+    const CompiledMathWorkspace &workspace,
+    const ExactVariantPlan &plan,
+    const ExactExprUnionSubset &subset,
+    const semantic::Index child_count) {
+  if (subset.child_positions.empty()) {
     return 0.0;
   }
-  const auto guard = evaluator->oracle()->conditional_time_guard(t);
-  return evaluate_runtime_truth_formula(
-      scenario_formula.readiness_cdf,
-      scenario_formula,
-      evaluator,
-      workspace);
-}
-
-inline double runtime_readiness_density(
-    const ExactRuntimeScenarioFormula &scenario_formula,
-    ForcedExprEvaluator *evaluator,
-    const double t,
-    ForcedExprWorkspace *workspace) {
-  if (!(t > 0.0)) {
-    return 0.0;
-  }
-  const auto guard = evaluator->oracle()->conditional_time_guard(t);
-  return evaluate_runtime_truth_formula(
-      scenario_formula.readiness_density,
-      scenario_formula,
-      evaluator,
-      workspace);
-}
-
-inline double runtime_after_survival(
-    const ExactRuntimeScenarioFormula &scenario_formula,
-    ForcedExprEvaluator *evaluator,
-    const double t,
-    ForcedExprWorkspace *workspace) {
-  const auto guard = evaluator->oracle()->conditional_time_guard(t);
-  return evaluate_runtime_truth_formula(
-      scenario_formula.after_survival,
-      scenario_formula,
-      evaluator,
-      workspace);
-}
-
-inline double runtime_same_active_win_mass(
-    const ExactRuntimeScenarioFormula &scenario_formula,
-    ForcedExprEvaluator *evaluator,
-    const double t,
-    const double ready_upper,
-    ForcedExprWorkspace *workspace) {
-  if (!(ready_upper > 0.0)) {
-    return 0.0;
-  }
-  const double tail =
-      runtime_after_survival(scenario_formula, evaluator, t, workspace);
-  if (!(tail > 0.0)) {
-    return 0.0;
-  }
-  return tail *
-         runtime_readiness_cdf(
-             scenario_formula, evaluator, ready_upper, workspace);
-}
-
-inline double runtime_scenario_truth_cdf(
-    const ExactRuntimeScenarioFormula &scenario_formula,
-    ForcedExprEvaluator *evaluator,
-    const double t,
-    ForcedExprWorkspace *workspace) {
-  if (!(t > 0.0)) {
-    return 0.0;
-  }
-  return clamp_probability(quadrature::integrate_finite_default(
-      [&](const double u) {
-        const auto guard = evaluator->oracle()->conditional_time_guard(u);
-        double value = evaluator->source_pdf(scenario_formula.active_source_id);
-        if (!(value > 0.0)) {
-          return 0.0;
-        }
-        value *= runtime_after_survival(
-            scenario_formula, evaluator, u, workspace);
-        if (!(value > 0.0)) {
-          return 0.0;
-        }
-        if (scenario_formula.has_readiness) {
-          value *= runtime_readiness_cdf(
-              scenario_formula, evaluator, u, workspace);
-          if (!(value > 0.0)) {
-            return 0.0;
-          }
-        }
-        return value;
-      },
-      0.0,
-      t));
-}
-
-inline double readiness_cdf(const ExactScenarioRuntimeView &scenario_view,
-                            ForcedExprEvaluator *evaluator,
-                            const double t,
-                            ForcedExprWorkspace *workspace) {
-  const bool has_before = scenario_view.before_source_count > 0;
-  const bool has_ready = scenario_view.ready_expr_count > 0;
-  if (!has_before && !has_ready) {
-    return 1.0;
-  }
-  if (t < 0.0) {
-    return 0.0;
-  }
-  const auto guard = evaluator->oracle()->conditional_time_guard(t);
-  double value = 1.0;
-  if (has_before) {
-    for (semantic::Index i = 0; i < scenario_view.before_source_count; ++i) {
-      const auto source_id =
-          scenario_view.before_sources[static_cast<std::size_t>(i)];
-      value *= evaluator->source_cdf(source_id);
-      if (!(value > 0.0)) {
-        return 0.0;
-      }
-    }
-  }
-  if (!has_ready) {
-    return clamp_probability(value);
-  }
-  auto *scenario_evaluator =
-      prepare_scenario_evaluator(scenario_view, evaluator, workspace);
-  if (scenario_evaluator == nullptr) {
-    return 0.0;
-  }
-  for (semantic::Index i = 0; i < scenario_view.ready_expr_count; ++i) {
-    const auto expr_idx =
-        scenario_view.ready_exprs[static_cast<std::size_t>(i)];
-    value *= scenario_evaluator->expr_cdf(expr_idx);
-    if (!(value > 0.0)) {
-      return 0.0;
-    }
-  }
-  return clamp_probability(value);
-}
-
-inline double readiness_density(const ExactScenarioRuntimeView &scenario_view,
-                                ForcedExprEvaluator *evaluator,
-                                const double t,
-                                ForcedExprWorkspace *workspace) {
-  if (!(t > 0.0)) {
-    return 0.0;
-  }
-  const bool has_before = scenario_view.before_source_count > 0;
-  const bool has_ready = scenario_view.ready_expr_count > 0;
-  if (!has_before && !has_ready) {
-    return 0.0;
-  }
-  const auto guard = evaluator->oracle()->conditional_time_guard(t);
-  ForcedExprEvaluator *scenario_evaluator = nullptr;
-  if (has_ready) {
-    scenario_evaluator =
-        prepare_scenario_evaluator(scenario_view, evaluator, workspace);
-    if (scenario_evaluator == nullptr) {
-      return 0.0;
-    }
+  if (subset.child_positions.size == 1U) {
+    const auto active_pos = plan.expr_union_subset_child_positions[
+        static_cast<std::size_t>(subset.child_positions.offset)];
+    return compiled_union_kernel_child_value(
+        program, node, workspace, active_pos);
   }
   double total = 0.0;
-  if (has_before) {
-    for (semantic::Index i = 0; i < scenario_view.before_source_count; ++i) {
-      double term = evaluator->source_pdf(
-          scenario_view.before_sources[static_cast<std::size_t>(i)]);
-      if (!std::isfinite(term) || term == 0.0) {
-        continue;
-      }
-      for (semantic::Index j = 0; j < scenario_view.before_source_count; ++j) {
-        if (j == i) {
-          continue;
-        }
-        term *= evaluator->source_cdf(
-            scenario_view.before_sources[static_cast<std::size_t>(j)]);
-        if (!std::isfinite(term) || term == 0.0) {
-          break;
-        }
-      }
-      if (!std::isfinite(term) || term == 0.0) {
-        continue;
-      }
-      if (has_ready) {
-        for (semantic::Index j = 0; j < scenario_view.ready_expr_count; ++j) {
-          const auto expr_idx =
-              scenario_view.ready_exprs[static_cast<std::size_t>(j)];
-          term *= scenario_evaluator->expr_cdf(expr_idx);
-          if (!std::isfinite(term) || term == 0.0) {
-            break;
-          }
-        }
-      }
-      total += term;
-    }
-  }
-  if (!has_ready) {
-    return clean_signed_value(total);
-  }
-  for (semantic::Index i = 0; i < scenario_view.ready_expr_count; ++i) {
-    double term = scenario_evaluator->expr_density(
-        scenario_view.ready_exprs[static_cast<std::size_t>(i)]);
+  for (semantic::Index i = 0; i < subset.child_positions.size; ++i) {
+    const auto active_pos = plan.expr_union_subset_child_positions[
+        static_cast<std::size_t>(subset.child_positions.offset + i)];
+    double term =
+        compiled_union_kernel_child_value(program, node, workspace, active_pos);
     if (!std::isfinite(term) || term == 0.0) {
       continue;
     }
-    if (has_before) {
-      for (semantic::Index j = 0; j < scenario_view.before_source_count; ++j) {
-        const auto source_id =
-            scenario_view.before_sources[static_cast<std::size_t>(j)];
-        term *= evaluator->source_cdf(source_id);
-        if (!std::isfinite(term) || term == 0.0) {
-          break;
-        }
-      }
-    }
-    if (!std::isfinite(term) || term == 0.0) {
-      continue;
-    }
-    for (semantic::Index j = 0; j < scenario_view.ready_expr_count; ++j) {
+    for (semantic::Index j = 0; j < subset.child_positions.size; ++j) {
       if (i == j) {
         continue;
       }
-      term *= scenario_evaluator->expr_cdf(
-          scenario_view.ready_exprs[static_cast<std::size_t>(j)]);
+      const auto other_pos = plan.expr_union_subset_child_positions[
+          static_cast<std::size_t>(subset.child_positions.offset + j)];
+      term *= compiled_union_kernel_child_value(
+          program,
+          node,
+          workspace,
+          child_count + other_pos);
       if (!std::isfinite(term) || term == 0.0) {
         break;
       }
@@ -1246,86 +490,709 @@ inline double readiness_density(const ExactScenarioRuntimeView &scenario_view,
   return clean_signed_value(total);
 }
 
-inline double after_survival(const ExactScenarioRuntimeView &scenario_view,
-                             ForcedExprEvaluator *evaluator,
-                             const double t,
-                             ForcedExprWorkspace *workspace) {
-  const auto guard = evaluator->oracle()->conditional_time_guard(t);
-  double value = 1.0;
-  if (scenario_view.after_source_count > 0) {
-    for (semantic::Index i = 0; i < scenario_view.after_source_count; ++i) {
-      const auto source_id =
-          scenario_view.after_sources[static_cast<std::size_t>(i)];
-      value *= evaluator->source_survival(source_id);
-      if (!(value > 0.0)) {
+inline double evaluate_compiled_union_kernel_density(
+    const CompiledMathProgram &program,
+    const CompiledMathNode &node,
+    const CompiledMathWorkspace &workspace,
+    const ExactVariantPlan &plan,
+    CompiledSourceView *evaluator,
+    const bool multi_subset_only) {
+  (void)evaluator;
+  const auto expr_pos = static_cast<std::size_t>(node.subject_id);
+  if (expr_pos >= plan.expr_kernels.size()) {
+    return 0.0;
+  }
+  const auto &kernel = plan.expr_kernels[expr_pos];
+  if (kernel.children.empty()) {
+    return 0.0;
+  }
+  const auto child_count = kernel.children.size;
+  if (!multi_subset_only && child_count == 1U) {
+    return compiled_union_kernel_child_value(program, node, workspace, 0);
+  }
+  double total = 0.0;
+  for (semantic::Index i = 0; i < kernel.union_subset_span.size; ++i) {
+    const auto &subset = plan.expr_union_subsets[
+        static_cast<std::size_t>(kernel.union_subset_span.offset + i)];
+    if (multi_subset_only && subset.child_positions.size <= 1U) {
+      continue;
+    }
+    const double value =
+        compiled_union_subset_conjunction_density(
+            program,
+            node,
+            workspace,
+            plan,
+            subset,
+            child_count);
+    total += static_cast<double>(subset.sign) * value;
+  }
+  return clean_signed_value(total);
+}
+
+inline double evaluate_compiled_union_kernel_cdf(
+    const CompiledMathProgram &program,
+    const CompiledMathNode &node,
+    const CompiledMathWorkspace &workspace,
+    CompiledSourceView *evaluator) {
+  (void)evaluator;
+  double total = 0.0;
+  for (semantic::Index i = 0; i < node.children.size; ++i) {
+    total += compiled_union_kernel_child_value(program, node, workspace, i);
+  }
+  return clamp_probability(total);
+}
+
+inline double evaluate_compiled_math_root(
+    const CompiledMathProgram &program,
+    semantic::Index root_id,
+    CompiledMathWorkspace *workspace,
+    CompiledSourceView *parent,
+    CompiledSourceView *scenario,
+    CompiledEvalWorkspace *eval_workspace = nullptr);
+
+inline double evaluate_compiled_math_schedule(
+    const CompiledMathProgram &program,
+    CompiledMathIndexSpan schedule,
+    semantic::Index result_node_id,
+    CompiledMathWorkspace *workspace,
+    CompiledSourceView *parent,
+    CompiledSourceView *scenario,
+    CompiledEvalWorkspace *eval_workspace = nullptr,
+    const std::vector<semantic::Index> *schedule_nodes = nullptr,
+    bool workspace_prepared = false);
+
+inline double evaluate_compiled_lazy_child(
+    const CompiledMathProgram &program,
+    const semantic::Index node_id,
+    CompiledMathWorkspace *workspace,
+    CompiledSourceView *parent,
+    CompiledSourceView *scenario,
+    CompiledEvalWorkspace *eval_workspace) {
+  if (node_id == semantic::kInvalidIndex) {
+    return 0.0;
+  }
+  const auto &node = program.nodes[static_cast<std::size_t>(node_id)];
+  switch (node.kind) {
+  case CompiledMathNodeKind::Constant:
+    return node.constant;
+  case CompiledMathNodeKind::RootValue: {
+    auto *condition_evaluator =
+        compiled_math_node_evaluator(node, parent, eval_workspace);
+    if (node.subject_id == semantic::kInvalidIndex ||
+        condition_evaluator == nullptr) {
+      return 0.0;
+    }
+    const double value =
+        evaluate_compiled_math_root(
+            program,
+            node.subject_id,
+            workspace,
+            condition_evaluator,
+            scenario,
+            eval_workspace);
+    return std::isfinite(value) ? value : 0.0;
+  }
+  case CompiledMathNodeKind::LazyProduct: {
+    double product = 1.0;
+    for (semantic::Index i = 0; i < node.children.size; ++i) {
+      const auto child_id = program.child_nodes[
+          static_cast<std::size_t>(node.children.offset + i)];
+      const double child =
+          evaluate_compiled_lazy_child(
+              program,
+              child_id,
+              workspace,
+              parent,
+              scenario,
+              eval_workspace);
+      product *= child;
+      if (!std::isfinite(product) || product == 0.0) {
         return 0.0;
       }
     }
+    return product;
   }
-  if (scenario_view.tail_expr_count == 0) {
-    return clamp_probability(value);
+  default:
+    throw std::runtime_error(
+        "lazy compiled product contains a non-root child");
   }
-  auto *scenario_evaluator =
-      prepare_scenario_evaluator(scenario_view, evaluator, workspace);
-  if (scenario_evaluator == nullptr) {
-    return 0.0;
-  }
-  for (semantic::Index i = 0; i < scenario_view.tail_expr_count; ++i) {
-    const auto expr_idx =
-        scenario_view.tail_exprs[static_cast<std::size_t>(i)];
-    value *= scenario_evaluator->expr_survival(expr_idx);
-    if (!(value > 0.0)) {
-      return 0.0;
-    }
-  }
-  return clamp_probability(value);
 }
 
-inline double same_active_win_mass(const ExactScenarioRuntimeView &scenario_view,
-                                   ForcedExprEvaluator *evaluator,
-                                   const double t,
-                                   const double ready_upper,
-                                   ForcedExprWorkspace *workspace) {
-  if (!(ready_upper > 0.0)) {
+inline double compiled_math_source_value_for_node(
+    const CompiledMathNode &node,
+    CompiledMathWorkspace *workspace,
+    CompiledSourceView *parent,
+    CompiledEvalWorkspace *eval_workspace) {
+  auto *condition_evaluator =
+      compiled_math_node_evaluator(node, parent, eval_workspace);
+  if (condition_evaluator == nullptr) {
     return 0.0;
   }
-  const double tail = after_survival(scenario_view, evaluator, t, workspace);
-  if (!(tail > 0.0)) {
-    return 0.0;
+  const auto channels =
+      compiled_math_store_source_channels(node, condition_evaluator, workspace);
+  switch (node.kind) {
+  case CompiledMathNodeKind::SourcePdf:
+    return safe_density(channels.pdf);
+  case CompiledMathNodeKind::SourceCdf:
+    return clamp_probability(channels.cdf);
+  case CompiledMathNodeKind::SourceSurvival:
+    return clamp_probability(channels.survival);
+  default:
+    break;
   }
-  return tail *
-         readiness_cdf(scenario_view, evaluator, ready_upper, workspace);
+  throw std::runtime_error("source-product integral contains a non-source node");
 }
 
-inline double scenario_truth_cdf(const ExactScenarioRuntimeView &scenario_view,
-                                 ForcedExprEvaluator *evaluator,
-                                 const double t,
-                                 ForcedExprWorkspace *workspace) {
-  if (!(t > 0.0)) {
-    return 0.0;
-  }
-  return clamp_probability(quadrature::integrate_finite_default(
+inline double evaluate_compiled_source_product_integral_kernel(
+    const CompiledMathProgram &program,
+    const CompiledMathIntegralKernel &kernel,
+    CompiledMathWorkspace *workspace,
+    CompiledSourceView *parent,
+    CompiledEvalWorkspace *eval_workspace,
+    const double lower,
+    const double upper) {
+  auto &integral_workspace = workspace->integral_workspace_for(program);
+  return quadrature::integrate_finite_default(
       [&](const double u) {
-        const auto guard = evaluator->oracle()->conditional_time_guard(u);
-        double value =
-            evaluator->source_pdf(scenario_view.scenario.active_source_id);
-        if (!(value > 0.0)) {
+        CompiledMathWorkspace::TimeBinding bind(
+            &integral_workspace,
+            kernel.bind_time_id,
+            u);
+        if (kernel.kind == CompiledMathIntegralKernelKind::SourceProduct) {
+          double product = 1.0;
+          for (semantic::Index i = 0; i < kernel.source_value_nodes.size; ++i) {
+            const auto node_id =
+                program.integral_kernel_source_value_nodes[
+                    static_cast<std::size_t>(
+                        kernel.source_value_nodes.offset + i)];
+            const auto &source_node =
+                program.nodes[static_cast<std::size_t>(node_id)];
+            product *= compiled_math_source_value_for_node(
+                source_node,
+                &integral_workspace,
+                parent,
+                eval_workspace);
+            if (!std::isfinite(product) || product == 0.0) {
+              return 0.0;
+            }
+          }
+          return std::isfinite(product) ? product : 0.0;
+        }
+        double total = 0.0;
+        for (semantic::Index term_idx = 0;
+             term_idx < kernel.source_product_terms.size;
+             ++term_idx) {
+          const auto &term =
+              program.integral_kernel_source_product_terms[
+                  static_cast<std::size_t>(
+                      kernel.source_product_terms.offset + term_idx)];
+          double product = term.sign;
+          for (semantic::Index i = 0; i < term.source_value_nodes.size; ++i) {
+            const auto node_id =
+                program.integral_kernel_source_value_nodes[
+                    static_cast<std::size_t>(
+                        term.source_value_nodes.offset + i)];
+            const auto &source_node =
+                program.nodes[static_cast<std::size_t>(node_id)];
+            product *= compiled_math_source_value_for_node(
+                source_node,
+                &integral_workspace,
+                parent,
+                eval_workspace);
+            if (!std::isfinite(product) || product == 0.0) {
+              product = 0.0;
+              break;
+            }
+          }
+          total += product;
+        }
+        if (!std::isfinite(total)) {
           return 0.0;
         }
-        value *= after_survival(scenario_view, evaluator, u, workspace);
-        if (!(value > 0.0)) {
-          return 0.0;
+        return kernel.clean_signed_source_sum ? clean_signed_value(total)
+                                              : total;
+      },
+      lower,
+      upper);
+}
+
+inline double evaluate_compiled_integral_kernel(
+    const CompiledMathProgram &program,
+    const CompiledMathNode &node,
+    CompiledMathWorkspace *workspace,
+    CompiledSourceView *parent,
+    CompiledSourceView *scenario,
+    CompiledEvalWorkspace *eval_workspace,
+    const double lower,
+    const double upper) {
+  if (node.integral_kernel_slot == semantic::kInvalidIndex) {
+    throw std::runtime_error(
+        "compiled integral node has no planned integral kernel");
+  }
+  const auto kernel_pos =
+      static_cast<std::size_t>(node.integral_kernel_slot);
+  if (kernel_pos >= program.integral_kernels.size()) {
+    throw std::runtime_error(
+        "compiled integral node points outside integral kernels");
+  }
+  const auto &kernel = program.integral_kernels[kernel_pos];
+  if (kernel.kind == CompiledMathIntegralKernelKind::SourceProduct ||
+      kernel.kind == CompiledMathIntegralKernelKind::SourceProductSum) {
+    return evaluate_compiled_source_product_integral_kernel(
+        program,
+        kernel,
+        workspace,
+        parent,
+        eval_workspace,
+        lower,
+        upper);
+  }
+  auto &integral_workspace = workspace->integral_workspace_for(program);
+  return quadrature::integrate_finite_default(
+      [&](const double u) {
+        CompiledMathWorkspace::TimeBinding bind(
+            &integral_workspace,
+            kernel.bind_time_id,
+            u);
+        const double term = evaluate_compiled_math_schedule(
+            program,
+            kernel.schedule,
+            kernel.result_node_id,
+            &integral_workspace,
+            parent,
+            scenario,
+            eval_workspace,
+            nullptr,
+            true);
+        return std::isfinite(term) ? term : 0.0;
+      },
+      lower,
+      upper);
+}
+
+inline double evaluate_compiled_math_schedule(
+    const CompiledMathProgram &program,
+    const CompiledMathIndexSpan schedule,
+    const semantic::Index result_node_id,
+    CompiledMathWorkspace *workspace,
+    CompiledSourceView *parent,
+    CompiledSourceView *scenario,
+    CompiledEvalWorkspace *eval_workspace,
+    const std::vector<semantic::Index> *schedule_nodes,
+    const bool workspace_prepared) {
+  (void)scenario;
+  if (result_node_id == semantic::kInvalidIndex) {
+    return 0.0;
+  }
+  if (!workspace_prepared) {
+    workspace->ensure_size(program);
+  }
+  const auto &nodes =
+      schedule_nodes == nullptr ? program.root_schedule_nodes : *schedule_nodes;
+  for (semantic::Index schedule_idx = 0; schedule_idx < schedule.size;
+       ++schedule_idx) {
+    const auto node_id = nodes[
+        static_cast<std::size_t>(schedule.offset + schedule_idx)];
+    const auto &node = program.nodes[static_cast<std::size_t>(node_id)];
+    auto *condition_evaluator =
+        compiled_math_node_evaluator(node, parent, eval_workspace);
+    double value = 0.0;
+    if (compiled_math_load_node_cache(
+            node,
+            condition_evaluator,
+            *workspace,
+            &value)) {
+      workspace->values[static_cast<std::size_t>(node.cache_slot)] = value;
+      continue;
+    }
+    switch (node.kind) {
+    case CompiledMathNodeKind::Constant:
+      value = node.constant;
+      break;
+    case CompiledMathNodeKind::SourceChannelLoad:
+      (void)compiled_math_store_source_channels(
+          node, condition_evaluator, workspace);
+      value = 0.0;
+      break;
+    case CompiledMathNodeKind::SourcePdf:
+      value = safe_density(
+          compiled_math_source_channels(node, workspace).pdf);
+      break;
+    case CompiledMathNodeKind::SourceCdf:
+      value = clamp_probability(
+          compiled_math_source_channels(node, workspace).cdf);
+      break;
+    case CompiledMathNodeKind::SourceSurvival:
+      value = clamp_probability(
+          compiled_math_source_channels(node, workspace).survival);
+      break;
+    case CompiledMathNodeKind::TimeGate: {
+      const auto child_id =
+          program.child_nodes[static_cast<std::size_t>(node.children.offset)];
+      const double raw =
+          workspace->values[static_cast<std::size_t>(child_id)];
+      value = workspace->time(node.time_id) >= workspace->time(node.aux_id)
+                  ? raw
+                  : 0.0;
+      break;
+    }
+    case CompiledMathNodeKind::ExprDensity:
+    case CompiledMathNodeKind::ExprCdf:
+    case CompiledMathNodeKind::ExprSurvival:
+      throw std::runtime_error(
+          "compiled math root contains an interpreter expression node");
+    case CompiledMathNodeKind::SimpleGuardDensity: {
+      if (condition_evaluator == nullptr) {
+        value = 0.0;
+        break;
+      }
+      const auto &kernel = parent->plan().expr_kernels[
+          static_cast<std::size_t>(node.subject_id)];
+      if (!kernel.simple_event_guard || kernel.has_unless) {
+        throw std::runtime_error(
+            "compiled simple guard density reached a non-simple guard");
+      }
+      const auto child_id =
+          program.child_nodes[static_cast<std::size_t>(node.children.offset)];
+      const double raw =
+          workspace->values[static_cast<std::size_t>(child_id)];
+      if (condition_evaluator->source_order_known_before(
+              kernel.guard_blocker_source_id,
+              kernel.guard_ref_source_id,
+              node.condition_id,
+              workspace)) {
+        value = 0.0;
+        break;
+      }
+      const double current_time = compiled_math_node_time(node, *workspace);
+      if (const auto *upper =
+              condition_evaluator->guard_upper_bound_for(
+                  kernel.guard_ref_source_id,
+                  kernel.guard_blocker_source_id,
+                  node.condition_id,
+                  workspace)) {
+        if (!(upper->normalizer > 0.0) ||
+            current_time >= upper->time) {
+          value = 0.0;
+          break;
         }
-        if (scenario_view.has_readiness()) {
-          value *= readiness_cdf(scenario_view, evaluator, u, workspace);
-          if (!(value > 0.0)) {
-            return 0.0;
+        value = clean_signed_value(raw / upper->normalizer);
+        break;
+      }
+      value = clean_signed_value(raw);
+      break;
+    }
+    case CompiledMathNodeKind::SimpleGuardCdf: {
+      if (condition_evaluator == nullptr) {
+        value = 0.0;
+        break;
+      }
+      const auto &kernel = parent->plan().expr_kernels[
+          static_cast<std::size_t>(node.subject_id)];
+      if (!kernel.simple_event_guard || kernel.has_unless) {
+        throw std::runtime_error(
+            "compiled simple guard cdf reached a non-simple guard");
+      }
+      const auto child_id =
+          program.child_nodes[static_cast<std::size_t>(node.children.offset)];
+      const double raw =
+          workspace->values[static_cast<std::size_t>(child_id)];
+      if (condition_evaluator->source_order_known_before(
+              kernel.guard_blocker_source_id,
+              kernel.guard_ref_source_id,
+              node.condition_id,
+              workspace)) {
+        value = 0.0;
+        break;
+      }
+      const double current_time = compiled_math_node_time(node, *workspace);
+      if (const auto *upper =
+              condition_evaluator->guard_upper_bound_for(
+                  kernel.guard_ref_source_id,
+                  kernel.guard_blocker_source_id,
+                  node.condition_id,
+                  workspace)) {
+        if (!(upper->normalizer > 0.0)) {
+          value = 0.0;
+          break;
+        }
+        if (current_time >= upper->time) {
+          value = 1.0;
+          break;
+        }
+        value = clamp_probability(raw / upper->normalizer);
+        break;
+      }
+      value = clamp_probability(raw);
+      break;
+    }
+    case CompiledMathNodeKind::UnionKernelDensity:
+      value = parent == nullptr
+                  ? 0.0
+                  : evaluate_compiled_union_kernel_density(
+                        program,
+                        node,
+                        *workspace,
+                        parent->plan(),
+                        condition_evaluator,
+                        false);
+      break;
+    case CompiledMathNodeKind::UnionKernelMultiSubsetDensity:
+      value = parent == nullptr
+                  ? 0.0
+                  : evaluate_compiled_union_kernel_density(
+                        program,
+                        node,
+                        *workspace,
+                        parent->plan(),
+                        condition_evaluator,
+                        true);
+      break;
+    case CompiledMathNodeKind::UnionKernelCdf:
+      value = evaluate_compiled_union_kernel_cdf(
+          program, node, *workspace, condition_evaluator);
+      break;
+    case CompiledMathNodeKind::UnionKernelMultiSubsetCdf: {
+      if (condition_evaluator == nullptr ||
+          node.integral_kernel_slot == semantic::kInvalidIndex) {
+        value = 0.0;
+        break;
+      }
+      const double current_time = compiled_math_node_time(node, *workspace);
+      if (!(current_time > 0.0)) {
+        value = 0.0;
+        break;
+      }
+      value = evaluate_compiled_integral_kernel(
+          program,
+          node,
+          workspace,
+          parent,
+          scenario,
+          eval_workspace,
+          0.0,
+          current_time);
+      value = std::isfinite(value) ? value : 0.0;
+      break;
+    }
+    case CompiledMathNodeKind::OutcomeSubsetUnused: {
+      value = 1.0;
+      if (workspace->used_outcomes != nullptr) {
+        const auto offset = static_cast<std::size_t>(node.subject_id);
+        const auto size = static_cast<std::size_t>(node.aux_id);
+        const auto &indices = parent->plan().compiled_outcome_gate_indices;
+        if (offset + size > indices.size()) {
+          throw std::runtime_error(
+              "compiled outcome-used gate points outside the plan");
+        }
+        for (std::size_t i = 0; i < size; ++i) {
+          const auto outcome_idx = indices[offset + i];
+          if (outcome_idx != semantic::kInvalidIndex &&
+              static_cast<std::size_t>(outcome_idx) <
+                  workspace->used_outcomes->size() &&
+              (*workspace->used_outcomes)[
+                  static_cast<std::size_t>(outcome_idx)] != 0U) {
+            value = 0.0;
+            break;
           }
         }
-        return value;
-      },
-      0.0,
-      t));
+      }
+      break;
+    }
+    case CompiledMathNodeKind::RootValue: {
+      if (node.subject_id == semantic::kInvalidIndex ||
+          condition_evaluator == nullptr) {
+        value = 0.0;
+        break;
+      }
+      value = evaluate_compiled_math_root(
+          program,
+          node.subject_id,
+          workspace,
+          condition_evaluator,
+          scenario,
+          eval_workspace);
+      value = std::isfinite(value) ? value : 0.0;
+      break;
+    }
+    case CompiledMathNodeKind::LazyProduct: {
+      value = 1.0;
+      for (semantic::Index i = 0; i < node.children.size; ++i) {
+        const auto child_id = program.child_nodes[
+            static_cast<std::size_t>(node.children.offset + i)];
+        value *= evaluate_compiled_lazy_child(
+            program,
+            child_id,
+            workspace,
+            parent,
+            scenario,
+            eval_workspace);
+        if (!std::isfinite(value) || value == 0.0) {
+          value = 0.0;
+          break;
+        }
+      }
+      break;
+    }
+    case CompiledMathNodeKind::IntegralZeroToCurrent: {
+      if (condition_evaluator == nullptr ||
+          node.integral_kernel_slot == semantic::kInvalidIndex) {
+        value = 0.0;
+        break;
+      }
+      const double current_time = compiled_math_node_time(node, *workspace);
+      if (!(current_time > 0.0)) {
+        value = 0.0;
+        break;
+      }
+      value = clamp_probability(
+          evaluate_compiled_integral_kernel(
+              program,
+              node,
+              workspace,
+              parent,
+              scenario,
+              eval_workspace,
+              0.0,
+              current_time));
+      break;
+    }
+    case CompiledMathNodeKind::IntegralZeroToCurrentRaw: {
+      if (condition_evaluator == nullptr ||
+          node.integral_kernel_slot == semantic::kInvalidIndex) {
+        value = 0.0;
+        break;
+      }
+      const double current_time = compiled_math_node_time(node, *workspace);
+      if (!(current_time > 0.0)) {
+        value = 0.0;
+        break;
+      }
+      value = evaluate_compiled_integral_kernel(
+          program,
+          node,
+          workspace,
+          parent,
+          scenario,
+          eval_workspace,
+          0.0,
+          current_time);
+      value = std::isfinite(value) ? clean_signed_value(value) : 0.0;
+      break;
+    }
+    case CompiledMathNodeKind::ExprUpperBoundDensity:
+    case CompiledMathNodeKind::ExprUpperBoundCdf: {
+      const auto child_id =
+          program.child_nodes[static_cast<std::size_t>(node.children.offset)];
+      const double raw =
+          workspace->values[static_cast<std::size_t>(child_id)];
+      if (condition_evaluator == nullptr) {
+        value = raw;
+        break;
+      }
+      const auto *upper =
+          condition_evaluator->expr_upper_bound_for(
+              node.subject_id, node.condition_id, workspace);
+      if (upper == nullptr) {
+        value = raw;
+        break;
+      }
+      const double current_time = compiled_math_node_time(node, *workspace);
+      if (node.kind == CompiledMathNodeKind::ExprUpperBoundCdf) {
+        if (!(upper->normalizer > 0.0)) {
+          value = 0.0;
+        } else if (current_time >= upper->time) {
+          value = 1.0;
+        } else {
+          value = clamp_probability(raw / upper->normalizer);
+        }
+      } else {
+        if (!(upper->normalizer > 0.0) || current_time >= upper->time) {
+          value = 0.0;
+        } else {
+          value = safe_density(raw / upper->normalizer);
+        }
+      }
+      break;
+    }
+    case CompiledMathNodeKind::Product: {
+      value = 1.0;
+      for (semantic::Index i = 0; i < node.children.size; ++i) {
+        const auto child_id = program.child_nodes[
+            static_cast<std::size_t>(node.children.offset + i)];
+        value *= workspace->values[static_cast<std::size_t>(child_id)];
+        if (!std::isfinite(value) || value == 0.0) {
+          value = 0.0;
+          break;
+        }
+      }
+      break;
+    }
+    case CompiledMathNodeKind::Sum:
+    case CompiledMathNodeKind::CleanSignedSum: {
+      double total = 0.0;
+      for (semantic::Index i = 0; i < node.children.size; ++i) {
+        const auto child_id = program.child_nodes[
+            static_cast<std::size_t>(node.children.offset + i)];
+        total += workspace->values[static_cast<std::size_t>(child_id)];
+      }
+      value = node.kind == CompiledMathNodeKind::CleanSignedSum
+                  ? clean_signed_value(total)
+                  : total;
+      break;
+    }
+    case CompiledMathNodeKind::ClampProbability: {
+      const auto child_id =
+          program.child_nodes[static_cast<std::size_t>(node.children.offset)];
+      value = clamp_probability(
+          workspace->values[static_cast<std::size_t>(child_id)]);
+      break;
+    }
+    case CompiledMathNodeKind::Complement: {
+      const auto child_id =
+          program.child_nodes[static_cast<std::size_t>(node.children.offset)];
+      value = clamp_probability(
+          1.0 - workspace->values[static_cast<std::size_t>(child_id)]);
+      break;
+    }
+    case CompiledMathNodeKind::Negate: {
+      const auto child_id =
+          program.child_nodes[static_cast<std::size_t>(node.children.offset)];
+      value = clean_signed_value(
+          -workspace->values[static_cast<std::size_t>(child_id)]);
+      break;
+    }
+    }
+    compiled_math_store_node_cache(
+        node,
+        condition_evaluator,
+        workspace,
+        value);
+    workspace->values[static_cast<std::size_t>(node.cache_slot)] = value;
+  }
+  return workspace->values[static_cast<std::size_t>(result_node_id)];
+}
+
+inline double evaluate_compiled_math_root(
+    const CompiledMathProgram &program,
+    const semantic::Index root_id,
+    CompiledMathWorkspace *workspace,
+    CompiledSourceView *parent,
+    CompiledSourceView *scenario,
+    CompiledEvalWorkspace *eval_workspace) {
+  if (root_id == semantic::kInvalidIndex) {
+    return 0.0;
+  }
+  const auto &root = program.roots[static_cast<std::size_t>(root_id)];
+  return evaluate_compiled_math_schedule(
+      program,
+      root.schedule,
+      root.node_id,
+      workspace,
+      parent,
+      scenario,
+      eval_workspace);
 }
 
 } // namespace detail

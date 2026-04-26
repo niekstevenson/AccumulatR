@@ -115,6 +115,8 @@ struct OutcomeSpec {
   std::string label;
   Index expr_root{kInvalidIndex};
   OutcomeMapping mapping{};
+  std::vector<Index> competitor_expr_roots;
+  std::vector<Index> competitor_outcome_indices;
   std::vector<std::string> component_ids;
   bool has_guess{false};
 };

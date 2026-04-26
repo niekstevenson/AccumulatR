@@ -2,6 +2,7 @@
 
 #include <Rcpp.h>
 
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -95,6 +96,25 @@ inline bool has_named_element(const Rcpp::List &list, const char *name) {
     }
   }
   return false;
+}
+
+inline int expr_likelihood_id(const Rcpp::RObject &expr_obj) {
+  SEXP id_attr = Rf_getAttrib(expr_obj, Rf_install(".lik_id"));
+  if (Rf_isNull(id_attr) || Rf_length(id_attr) == 0) {
+    return 0;
+  }
+  if (TYPEOF(id_attr) == INTSXP) {
+    const int value = INTEGER(id_attr)[0];
+    return value == NA_INTEGER ? 0 : value;
+  }
+  if (TYPEOF(id_attr) == REALSXP) {
+    const double value = REAL(id_attr)[0];
+    if (!std::isfinite(value) || value <= 0.0) {
+      return 0;
+    }
+    return static_cast<int>(value);
+  }
+  return 0;
 }
 
 inline std::vector<std::string> internal_param_keys(const std::string &leaf_id,
@@ -193,9 +213,18 @@ inline semantic::ExprKind expr_kind_from_string(std::string_view kind) {
 inline semantic::Index compile_expr(
     const Rcpp::RObject &expr_obj, semantic::SemanticModel *model,
     const std::unordered_map<std::string, semantic::Index> &leaf_index,
-    const std::unordered_map<std::string, semantic::Index> &pool_index) {
+    const std::unordered_map<std::string, semantic::Index> &pool_index,
+    std::unordered_map<int, semantic::Index> *expr_id_index = nullptr) {
   if (expr_obj.isNULL()) {
     throw std::runtime_error("expression node must not be NULL");
+  }
+
+  const int likelihood_id = expr_likelihood_id(expr_obj);
+  if (likelihood_id > 0 && expr_id_index != nullptr) {
+    const auto found = expr_id_index->find(likelihood_id);
+    if (found != expr_id_index->end()) {
+      return found->second;
+    }
   }
 
   Rcpp::List expr(expr_obj);
@@ -214,26 +243,26 @@ inline semantic::Index compile_expr(
     node.children.reserve(args.size());
     for (R_xlen_t i = 0; i < args.size(); ++i) {
       node.children.push_back(
-          compile_expr(args[i], model, leaf_index, pool_index));
+          compile_expr(args[i], model, leaf_index, pool_index, expr_id_index));
     }
     break;
   }
   case semantic::ExprKind::Not: {
     node.children.push_back(
-        compile_expr(expr["arg"], model, leaf_index, pool_index));
+        compile_expr(expr["arg"], model, leaf_index, pool_index, expr_id_index));
     break;
   }
   case semantic::ExprKind::Guard: {
     node.reference_child =
-        compile_expr(expr["reference"], model, leaf_index, pool_index);
+        compile_expr(expr["reference"], model, leaf_index, pool_index, expr_id_index);
     node.blocker_child =
-        compile_expr(expr["blocker"], model, leaf_index, pool_index);
+        compile_expr(expr["blocker"], model, leaf_index, pool_index, expr_id_index);
     if (expr.containsElementNamed("unless") && !Rf_isNull(expr["unless"])) {
       Rcpp::List unless_list(expr["unless"]);
       node.unless_children.reserve(unless_list.size());
       for (R_xlen_t i = 0; i < unless_list.size(); ++i) {
         node.unless_children.push_back(
-            compile_expr(unless_list[i], model, leaf_index, pool_index));
+            compile_expr(unless_list[i], model, leaf_index, pool_index, expr_id_index));
       }
     }
     break;
@@ -244,7 +273,11 @@ inline semantic::Index compile_expr(
   }
 
   model->expr_nodes.push_back(std::move(node));
-  return static_cast<semantic::Index>(model->expr_nodes.size() - 1);
+  const auto index = static_cast<semantic::Index>(model->expr_nodes.size() - 1);
+  if (likelihood_id > 0 && expr_id_index != nullptr) {
+    (*expr_id_index)[likelihood_id] = index;
+  }
+  return index;
 }
 
 inline Rcpp::List to_r_list(const semantic::SemanticModel &model) {
@@ -583,6 +616,7 @@ inline semantic::SemanticModel compile_prep(const Rcpp::List &prep) {
 
   Rcpp::List outcomes(prep["outcomes"]);
   model.outcomes.reserve(outcomes.size());
+  std::unordered_map<int, semantic::Index> expr_id_index;
   SEXP outcome_names_sexp = outcomes.names();
   Rcpp::CharacterVector outcome_names =
       Rf_isNull(outcome_names_sexp) ? Rcpp::CharacterVector()
@@ -595,7 +629,7 @@ inline semantic::SemanticModel compile_prep(const Rcpp::List &prep) {
             ? Rcpp::as<std::string>(outcome_names[i])
             : detail::as_string(outcome["label"]);
     outcome_spec.expr_root = detail::compile_expr(
-        outcome["expr"], &model, leaf_index, pool_index);
+        outcome["expr"], &model, leaf_index, pool_index, &expr_id_index);
     if (outcome.containsElementNamed("options") && !Rf_isNull(outcome["options"])) {
       Rcpp::List options(outcome["options"]);
       if (detail::has_named_element(options, "component") &&
@@ -620,6 +654,72 @@ inline semantic::SemanticModel compile_prep(const Rcpp::List &prep) {
           !Rf_isNull(options["guess"]);
     }
     model.outcomes.push_back(std::move(outcome_spec));
+  }
+
+  Rcpp::List competitor_map;
+  if (prep.containsElementNamed(".runtime") && !Rf_isNull(prep[".runtime"])) {
+    Rcpp::List runtime(prep[".runtime"]);
+    if (runtime.containsElementNamed("competitor_map") &&
+        !Rf_isNull(runtime["competitor_map"])) {
+      competitor_map = Rcpp::List(runtime["competitor_map"]);
+    }
+  }
+  if (competitor_map.isNULL() &&
+      prep.containsElementNamed(".competitors") &&
+      !Rf_isNull(prep[".competitors"])) {
+    competitor_map = Rcpp::List(prep[".competitors"]);
+  }
+  if (!competitor_map.isNULL()) {
+    const bool by_index = competitor_map.size() == outcomes.size();
+    const SEXP comp_names_sexp = competitor_map.names();
+    const Rcpp::CharacterVector comp_names =
+        Rf_isNull(comp_names_sexp) ? Rcpp::CharacterVector()
+                                  : Rcpp::CharacterVector(comp_names_sexp);
+    for (R_xlen_t i = 0; i < outcomes.size(); ++i) {
+      Rcpp::List competitor_exprs;
+      if (by_index) {
+        competitor_exprs = Rcpp::List(competitor_map[i]);
+      } else {
+        const std::string label = model.outcomes[static_cast<std::size_t>(i)].label;
+        for (R_xlen_t j = 0; j < competitor_map.size(); ++j) {
+          if (!comp_names.isNULL() && STRING_ELT(comp_names, j) != NA_STRING &&
+              Rcpp::as<std::string>(comp_names[j]) == label) {
+            competitor_exprs = Rcpp::List(competitor_map[j]);
+            break;
+          }
+        }
+      }
+      if (competitor_exprs.isNULL()) {
+        continue;
+      }
+
+      std::vector<semantic::Index> origin_indices;
+      SEXP origin_attr = Rf_getAttrib(competitor_exprs, Rf_install("outcome_indices"));
+      if (!Rf_isNull(origin_attr)) {
+        Rcpp::IntegerVector origins(origin_attr);
+        origin_indices.reserve(origins.size());
+        for (R_xlen_t j = 0; j < origins.size(); ++j) {
+          const int origin = origins[j];
+          origin_indices.push_back(
+              origin == NA_INTEGER || origin <= 0
+                  ? semantic::kInvalidIndex
+                  : static_cast<semantic::Index>(origin - 1));
+        }
+      }
+
+      auto &outcome_spec = model.outcomes[static_cast<std::size_t>(i)];
+      outcome_spec.competitor_expr_roots.reserve(competitor_exprs.size());
+      outcome_spec.competitor_outcome_indices.reserve(competitor_exprs.size());
+      for (R_xlen_t j = 0; j < competitor_exprs.size(); ++j) {
+        const auto root = detail::compile_expr(
+            competitor_exprs[j], &model, leaf_index, pool_index, &expr_id_index);
+        outcome_spec.competitor_expr_roots.push_back(root);
+        outcome_spec.competitor_outcome_indices.push_back(
+            static_cast<std::size_t>(j) < origin_indices.size()
+                ? origin_indices[static_cast<std::size_t>(j)]
+                : semantic::kInvalidIndex);
+      }
+    }
   }
 
   if (prep.containsElementNamed("components") && !Rf_isNull(prep["components"])) {

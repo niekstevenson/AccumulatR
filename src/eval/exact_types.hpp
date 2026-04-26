@@ -3,6 +3,7 @@
 #include <Rcpp.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <functional>
@@ -13,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "compiled_math.hpp"
 #include "../runtime/exact_program.hpp"
 
 namespace accumulatr::eval {
@@ -90,24 +92,6 @@ struct ExactTimedGuardUpperBound {
   double normalizer{0.0};
 };
 
-struct ExactConditionFrame {
-  semantic::Index id{0};
-  bool impossible{false};
-  bool has_source_order_facts{false};
-  bool has_guard_upper_bounds{false};
-  bool has_expr_upper_bounds{false};
-  const ExactConditionFrame *parent{nullptr};
-  std::vector<double> source_exact_times;
-  std::vector<double> source_lower_bounds;
-  std::vector<double> source_upper_bounds;
-  std::vector<ExactTimedSourceFact> exact_times;
-  std::vector<ExactTimedSourceFact> upper_bounds;
-  std::vector<ExactTimedSourceFact> lower_bounds;
-  std::vector<ExactTimedExprUpperBound> expr_upper_bounds;
-  std::vector<ExactTimedGuardUpperBound> guard_upper_bounds;
-  std::vector<ExactSourceOrderFact> source_order_facts;
-};
-
 struct ExactRuntimeTermCondition {
   semantic::Index exact_source_id{semantic::kInvalidIndex};
   std::vector<semantic::Index> upper_bound_source_ids;
@@ -115,6 +99,8 @@ struct ExactRuntimeTermCondition {
   std::vector<semantic::Index> upper_bound_expr_ids;
   std::vector<ExactSourceOrderFact> source_order_facts;
   std::vector<ExactGuardUpperBoundFact> guard_upper_bound_facts;
+  semantic::Index observed_condition_id{semantic::kInvalidIndex};
+  semantic::Index readiness_condition_id{semantic::kInvalidIndex};
 };
 
 inline bool runtime_condition_contains_source(
@@ -353,6 +339,7 @@ struct ExactOutcomePlan {
 
 struct ExactCompetitorSubsetPlan {
   std::vector<semantic::Index> outcome_indices;
+  std::vector<semantic::Index> expr_roots;
   semantic::Index singleton_expr_root{semantic::kInvalidIndex};
   int inclusion_sign{1};
   std::vector<ExactTransitionScenario> scenarios;
@@ -381,6 +368,7 @@ struct ExactRuntimeProductTerm {
   ExactRuntimeTermCondition tail_condition;
   ExactRuntimeTermCondition competitor_condition;
   semantic::Index context_group_index{semantic::kInvalidIndex};
+  semantic::Index compiled_root_id{semantic::kInvalidIndex};
   bool condition_impossible{false};
 };
 
@@ -393,6 +381,67 @@ struct ExactRuntimeConditionGroup {
   ExactRuntimeTermCondition tail_condition;
   ExactRuntimeTermCondition competitor_condition;
   ExactRuntimeCompetitorSubsetMask competitor_subset_mask;
+  semantic::Index combined_competitor_condition_id{semantic::kInvalidIndex};
+};
+
+struct ExactRuntimeConditionContextPlan {
+  semantic::Index condition_id{0};
+  semantic::Index after_survival_root_id{semantic::kInvalidIndex};
+  bool impossible{false};
+
+  bool operator==(const ExactRuntimeConditionContextPlan &other) const
+      noexcept {
+    return condition_id == other.condition_id &&
+           impossible == other.impossible;
+  }
+};
+
+struct ExactRuntimeConditionGroupKernel {
+  semantic::Index group_index{semantic::kInvalidIndex};
+  semantic::Index target_tail_context_index{semantic::kInvalidIndex};
+  semantic::Index competitor_context_index{semantic::kInvalidIndex};
+  semantic::Index combined_competitor_condition_id{semantic::kInvalidIndex};
+  semantic::Index competitor_non_win_plan_index{semantic::kInvalidIndex};
+  bool has_tail_condition{false};
+  bool has_competitor_condition{false};
+};
+
+struct ExactRuntimeReadinessTermKernel {
+  semantic::Index term_index{semantic::kInvalidIndex};
+  semantic::Index group_kernel_index{semantic::kInvalidIndex};
+};
+
+struct ExactRuntimeCompetitorNonWinSubsetPlan {
+  semantic::Index block_index{semantic::kInvalidIndex};
+  semantic::Index subset_index{semantic::kInvalidIndex};
+  int inclusion_sign{1};
+  semantic::Index win_cdf_root_id{semantic::kInvalidIndex};
+};
+
+struct ExactRuntimeCompetitorNonWinBlockPlan {
+  ExactIndexSpan subset_span{};
+};
+
+struct ExactRuntimeCompetitorNonWinPlan {
+  std::vector<ExactRuntimeCompetitorNonWinBlockPlan> blocks;
+  std::vector<ExactRuntimeCompetitorNonWinSubsetPlan> subsets;
+  semantic::Index root_id{semantic::kInvalidIndex};
+  bool impossible{false};
+};
+
+struct ExactRuntimeScenarioExecutionKernel {
+  semantic::Index target_scenario_context_index{semantic::kInvalidIndex};
+  semantic::Index competitor_scenario_context_index{semantic::kInvalidIndex};
+  semantic::Index tail_competitor_context_index{semantic::kInvalidIndex};
+  bool has_tail_competitor_condition{false};
+  bool has_conditioned_readiness_terms{false};
+  bool has_readiness{false};
+  std::vector<ExactRuntimeConditionContextPlan> condition_contexts;
+  std::vector<ExactRuntimeConditionGroupKernel> condition_groups;
+  std::vector<ExactRuntimeReadinessTermKernel> readiness_terms;
+  std::vector<ExactRuntimeCompetitorNonWinPlan> competitor_non_win_plans;
+  semantic::Index base_competitor_non_win_plan_index{semantic::kInvalidIndex};
+  semantic::Index tail_competitor_non_win_plan_index{semantic::kInvalidIndex};
 };
 
 struct ExactRuntimeTruthFormula {
@@ -401,11 +450,13 @@ struct ExactRuntimeTruthFormula {
   double empty_value{0.0};
   bool sum_of_products{false};
   bool clean_signed{false};
-  bool requires_scenario{false};
+  semantic::Index compiled_root_id{semantic::kInvalidIndex};
 };
 
 struct ExactRuntimeScenarioFormula {
   semantic::Index active_source_id{semantic::kInvalidIndex};
+  semantic::Index active_observed_condition_id{semantic::kInvalidIndex};
+  semantic::Index source_view_id{0};
   ExactRelationTemplate relation_template;
   std::vector<ExactSourceOrderFact> source_order_facts;
   ExactRuntimeTermCondition tail_condition;
@@ -418,12 +469,22 @@ struct ExactRuntimeScenarioFormula {
   ExactRuntimeTruthFormula readiness_cdf;
   ExactRuntimeTruthFormula readiness_density;
   ExactRuntimeTruthFormula after_survival;
+  semantic::Index probability_root_id{semantic::kInvalidIndex};
+  ExactRuntimeScenarioExecutionKernel execution_kernel;
+};
+
+struct ExactConditionedRoot {
+  semantic::Index condition_id{semantic::kInvalidIndex};
+  semantic::Index root_id{semantic::kInvalidIndex};
 };
 
 struct ExactRuntimeCompetitorSubsetPlan {
   std::vector<semantic::Index> outcome_indices;
+  std::vector<semantic::Index> expr_roots;
   int inclusion_sign{1};
   semantic::Index singleton_expr_root{semantic::kInvalidIndex};
+  semantic::Index win_cdf_root_id{semantic::kInvalidIndex};
+  std::vector<ExactConditionedRoot> conditioned_win_cdf_roots;
   std::vector<ExactRuntimeScenarioFormula> scenarios;
 };
 
@@ -431,22 +492,9 @@ struct ExactRuntimeCompetitorBlockPlan {
   std::vector<ExactRuntimeCompetitorSubsetPlan> subsets;
 };
 
-struct ExactRuntimeScenarioSubsetView {
-  std::vector<semantic::Index> same_active_scenario_indices;
-};
-
-struct ExactRuntimeScenarioBlockView {
-  std::vector<ExactRuntimeScenarioSubsetView> subsets;
-};
-
-struct ExactRuntimeScenarioCompetitorView {
-  std::vector<ExactRuntimeScenarioBlockView> blocks;
-};
-
 struct ExactRuntimeOutcomePlan {
   std::vector<ExactRuntimeScenarioFormula> scenarios;
   std::vector<ExactRuntimeCompetitorBlockPlan> competitor_blocks;
-  std::vector<ExactRuntimeScenarioCompetitorView> competitor_by_scenario;
 };
 
 struct ExactRuntimeVariantPlan {
@@ -455,6 +503,7 @@ struct ExactRuntimeVariantPlan {
 
 struct ExactExprUnionSubset {
   ExactIndexSpan children;
+  ExactIndexSpan child_positions;
   int sign{1};
 };
 
@@ -462,6 +511,7 @@ struct ExactExprKernel {
   semantic::ExprKind kind{semantic::ExprKind::Impossible};
   ExactIndexSpan children;
   ExactIndexSpan union_subset_span;
+  ExactIndexSpan union_absorption_candidate_span;
   ExactIndexSpan guard_ref_child_span;
   semantic::Index event_source_id{semantic::kInvalidIndex};
   semantic::Index guard_ref_expr_id{semantic::kInvalidIndex};
@@ -470,9 +520,22 @@ struct ExactExprKernel {
   semantic::Index guard_blocker_source_id{semantic::kInvalidIndex};
   semantic::ExprKind guard_ref_kind{semantic::ExprKind::Impossible};
   semantic::ExprKind guard_blocker_kind{semantic::ExprKind::Impossible};
+  semantic::Index union_kernel_cache_slot{semantic::kInvalidIndex};
   bool children_overlap{false};
   bool simple_event_guard{false};
   bool has_unless{false};
+};
+
+struct ExactSourceKernel {
+  CompiledSourceChannelKernelKind kind{
+      CompiledSourceChannelKernelKind::Invalid};
+  semantic::Index source_id{semantic::kInvalidIndex};
+  semantic::Index leaf_index{semantic::kInvalidIndex};
+  semantic::Index pool_index{semantic::kInvalidIndex};
+  semantic::Index onset_source_id{semantic::kInvalidIndex};
+  semantic::Index pool_member_offset{0};
+  semantic::Index pool_member_count{0};
+  semantic::Index pool_k{0};
 };
 
 struct ExactVariantPlan {
@@ -481,18 +544,25 @@ struct ExactVariantPlan {
   std::vector<ExactOutcomePlan> outcomes;
   std::vector<ExactTargetCompetitorPlan> competitor_plans;
   ExactRuntimeVariantPlan runtime;
+  CompiledMathProgram compiled_math;
+  std::vector<ExactRelationTemplate> compiled_source_views;
   std::vector<ExactExprKernel> expr_kernels;
+  std::vector<ExactSourceKernel> source_kernels;
   std::vector<ExactExprUnionSubset> expr_union_subsets;
   std::vector<semantic::Index> expr_union_subset_children;
+  std::vector<semantic::Index> expr_union_subset_child_positions;
+  std::vector<semantic::Index> expr_union_absorption_sources;
   std::vector<std::vector<semantic::Index>> leaf_supports;
   std::vector<std::vector<semantic::Index>> pool_supports;
   std::vector<std::vector<semantic::Index>> expr_supports;
+  std::vector<semantic::Index> compiled_outcome_gate_indices;
   semantic::Index source_count{0};
   std::vector<semantic::Index> leaf_source_ids;
   std::vector<semantic::Index> pool_source_ids;
   std::vector<semantic::Index> scenario_source_ids;
   std::vector<semantic::Index> scenario_expr_ids;
   std::vector<semantic::Index> shared_trigger_indices;
+  semantic::Index expr_union_kernel_cache_slot_count{0};
   bool ranked_supported{true};
 };
 
@@ -525,20 +595,6 @@ inline bool supports_overlap(const std::vector<semantic::Index> &lhs,
                         rhs.end(),
                         std::back_inserter(overlap));
   return !overlap.empty();
-}
-
-inline bool runtime_subset_is_used(
-    const ExactRuntimeCompetitorSubsetPlan &subset,
-    const std::vector<std::uint8_t> *used_outcomes) {
-  if (used_outcomes == nullptr) {
-    return false;
-  }
-  for (const auto outcome_idx : subset.outcome_indices) {
-    if ((*used_outcomes)[static_cast<std::size_t>(outcome_idx)] != 0U) {
-      return true;
-    }
-  }
-  return false;
 }
 
 inline bool support_contains_source(const std::vector<semantic::Index> &support,
@@ -639,16 +695,10 @@ inline bool expr_contains_simple_guard_pair(const ExactVariantPlan &plan,
 inline bool runtime_source_relevant_to_competitors(
     const semantic::Index source_id,
     const ExactRuntimeOutcomePlan &runtime_outcome,
-    const std::vector<std::uint8_t> *used_outcomes,
     const ExactVariantPlan &plan) {
   for (const auto &block : runtime_outcome.competitor_blocks) {
     for (const auto &subset : block.subsets) {
-      if (runtime_subset_is_used(subset, used_outcomes)) {
-        continue;
-      }
-      for (const auto outcome_idx : subset.outcome_indices) {
-        const auto expr_root =
-            plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+      for (const auto expr_root : subset.expr_roots) {
         if (expr_support_contains_source(plan, expr_root, source_id)) {
           return true;
         }
@@ -661,16 +711,10 @@ inline bool runtime_source_relevant_to_competitors(
 inline bool runtime_expr_relevant_to_competitors(
     const semantic::Index expr_id,
     const ExactRuntimeOutcomePlan &runtime_outcome,
-    const std::vector<std::uint8_t> *used_outcomes,
     const ExactVariantPlan &plan) {
   for (const auto &block : runtime_outcome.competitor_blocks) {
     for (const auto &subset : block.subsets) {
-      if (runtime_subset_is_used(subset, used_outcomes)) {
-        continue;
-      }
-      for (const auto outcome_idx : subset.outcome_indices) {
-        const auto expr_root =
-            plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+      for (const auto expr_root : subset.expr_roots) {
         if (expr_supports_overlap(plan, expr_id, expr_root)) {
           return true;
         }
@@ -683,16 +727,10 @@ inline bool runtime_expr_relevant_to_competitors(
 inline bool runtime_source_order_relevant_to_competitors(
     const ExactSourceOrderFact &fact,
     const ExactRuntimeOutcomePlan &runtime_outcome,
-    const std::vector<std::uint8_t> *used_outcomes,
     const ExactVariantPlan &plan) {
   for (const auto &block : runtime_outcome.competitor_blocks) {
     for (const auto &subset : block.subsets) {
-      if (runtime_subset_is_used(subset, used_outcomes)) {
-        continue;
-      }
-      for (const auto outcome_idx : subset.outcome_indices) {
-        const auto expr_root =
-            plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+      for (const auto expr_root : subset.expr_roots) {
         if (expr_contains_simple_guard_pair(
                 plan,
                 expr_root,
@@ -709,16 +747,10 @@ inline bool runtime_source_order_relevant_to_competitors(
 inline bool runtime_guard_upper_relevant_to_competitors(
     const ExactGuardUpperBoundFact &fact,
     const ExactRuntimeOutcomePlan &runtime_outcome,
-    const std::vector<std::uint8_t> *used_outcomes,
     const ExactVariantPlan &plan) {
   for (const auto &block : runtime_outcome.competitor_blocks) {
     for (const auto &subset : block.subsets) {
-      if (runtime_subset_is_used(subset, used_outcomes)) {
-        continue;
-      }
-      for (const auto outcome_idx : subset.outcome_indices) {
-        const auto expr_root =
-            plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+      for (const auto expr_root : subset.expr_roots) {
         if (expr_contains_simple_guard_pair(
                 plan,
                 expr_root,
@@ -736,9 +768,7 @@ inline bool runtime_source_relevant_to_competitor_subset(
     const semantic::Index source_id,
     const ExactRuntimeCompetitorSubsetPlan &subset,
     const ExactVariantPlan &plan) {
-  for (const auto outcome_idx : subset.outcome_indices) {
-    const auto expr_root =
-        plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+  for (const auto expr_root : subset.expr_roots) {
     if (expr_support_contains_source(plan, expr_root, source_id)) {
       return true;
     }
@@ -750,9 +780,7 @@ inline bool runtime_expr_relevant_to_competitor_subset(
     const semantic::Index expr_id,
     const ExactRuntimeCompetitorSubsetPlan &subset,
     const ExactVariantPlan &plan) {
-  for (const auto outcome_idx : subset.outcome_indices) {
-    const auto expr_root =
-        plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+  for (const auto expr_root : subset.expr_roots) {
     if (expr_supports_overlap(plan, expr_id, expr_root)) {
       return true;
     }
@@ -764,9 +792,7 @@ inline bool runtime_source_order_relevant_to_competitor_subset(
     const ExactSourceOrderFact &fact,
     const ExactRuntimeCompetitorSubsetPlan &subset,
     const ExactVariantPlan &plan) {
-  for (const auto outcome_idx : subset.outcome_indices) {
-    const auto expr_root =
-        plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+  for (const auto expr_root : subset.expr_roots) {
     if (expr_contains_simple_guard_pair(
             plan,
             expr_root,
@@ -782,9 +808,7 @@ inline bool runtime_guard_upper_relevant_to_competitor_subset(
     const ExactGuardUpperBoundFact &fact,
     const ExactRuntimeCompetitorSubsetPlan &subset,
     const ExactVariantPlan &plan) {
-  for (const auto outcome_idx : subset.outcome_indices) {
-    const auto expr_root =
-        plan.outcomes[static_cast<std::size_t>(outcome_idx)].expr_root;
+  for (const auto expr_root : subset.expr_roots) {
     if (expr_contains_simple_guard_pair(
             plan,
             expr_root,
@@ -878,37 +902,36 @@ inline bool runtime_competitor_subset_mask_affected(
 inline ExactRuntimeTermCondition filter_runtime_condition_for_competitors(
     const ExactRuntimeTermCondition &condition,
     const ExactRuntimeOutcomePlan &runtime_outcome,
-    const std::vector<std::uint8_t> *used_outcomes,
     const ExactVariantPlan &plan) {
   ExactRuntimeTermCondition filtered;
   if (condition.exact_source_id != semantic::kInvalidIndex &&
       runtime_source_relevant_to_competitors(
-          condition.exact_source_id, runtime_outcome, used_outcomes, plan)) {
+          condition.exact_source_id, runtime_outcome, plan)) {
     filtered.exact_source_id = condition.exact_source_id;
   }
   for (const auto source_id : condition.upper_bound_source_ids) {
     if (runtime_source_relevant_to_competitors(
-            source_id, runtime_outcome, used_outcomes, plan)) {
+            source_id, runtime_outcome, plan)) {
       append_runtime_condition_index(
           &filtered.upper_bound_source_ids, source_id);
     }
   }
   for (const auto source_id : condition.lower_bound_source_ids) {
     if (runtime_source_relevant_to_competitors(
-            source_id, runtime_outcome, used_outcomes, plan)) {
+            source_id, runtime_outcome, plan)) {
       append_runtime_condition_index(
           &filtered.lower_bound_source_ids, source_id);
     }
   }
   for (const auto expr_id : condition.upper_bound_expr_ids) {
     if (runtime_expr_relevant_to_competitors(
-            expr_id, runtime_outcome, used_outcomes, plan)) {
+            expr_id, runtime_outcome, plan)) {
       append_runtime_condition_index(&filtered.upper_bound_expr_ids, expr_id);
     }
   }
   for (const auto &fact : condition.source_order_facts) {
     if (runtime_source_order_relevant_to_competitors(
-            fact, runtime_outcome, used_outcomes, plan)) {
+            fact, runtime_outcome, plan)) {
       append_runtime_source_order_fact(
           &filtered.source_order_facts,
           fact.before_source_id,
@@ -917,7 +940,7 @@ inline ExactRuntimeTermCondition filter_runtime_condition_for_competitors(
   }
   for (const auto &fact : condition.guard_upper_bound_facts) {
     if (runtime_guard_upper_relevant_to_competitors(
-            fact, runtime_outcome, used_outcomes, plan)) {
+            fact, runtime_outcome, plan)) {
       append_runtime_guard_upper_bound_fact(
           &filtered.guard_upper_bound_facts,
           fact.expr_id,

@@ -53,9 +53,9 @@ enum class CompiledMathNodeKind : std::uint8_t {
 };
 
 enum class CompiledMathIntegralKernelKind : std::uint8_t {
-  Schedule = 0,
-  SourceProduct = 1,
-  SourceProductSum = 2
+  SourceProduct = 0,
+  SourceProductSum = 1,
+  Subgraph = 2
 };
 
 enum class CompiledSourceChannelKernelKind : std::uint8_t {
@@ -112,10 +112,11 @@ struct CompiledMathIntegralSourceProductTerm {
 };
 
 struct CompiledMathIntegralKernel {
-  CompiledMathIntegralKernelKind kind{CompiledMathIntegralKernelKind::Schedule};
+  CompiledMathIntegralKernelKind kind{
+      CompiledMathIntegralKernelKind::Subgraph};
   semantic::Index root_id{semantic::kInvalidIndex};
   semantic::Index result_node_id{semantic::kInvalidIndex};
-  CompiledMathIndexSpan schedule{};
+  CompiledMathIndexSpan subgraph{};
   semantic::Index bind_time_id{semantic::kInvalidIndex};
   CompiledMathIndexSpan source_value_nodes{};
   CompiledMathIndexSpan source_product_terms{};
@@ -191,6 +192,7 @@ struct CompiledSourceChannelPlan {
   CompiledMathSourceChannelKey request{};
   CompiledSourceChannelKernelKind kernel{
       CompiledSourceChannelKernelKind::Invalid};
+  semantic::Index source_kernel_slot{semantic::kInvalidIndex};
   bool has_source_condition_overlay{false};
 };
 
@@ -314,6 +316,7 @@ struct CompiledMathCondition {
   std::vector<semantic::Index> expr_upper_fact_indices;
   CompiledMathPairFactLookup source_order_fact_lookup;
   CompiledMathPairFactLookup guard_upper_fact_lookup;
+  std::vector<semantic::Index> time_dependency_ids;
 };
 
 struct CompiledMathProgram {
@@ -370,6 +373,7 @@ struct CompiledMathWorkspace {
     source_channel_survival.assign(program.source_channel_count, 1.0);
     time_values.assign(4U, 0.0);
     time_valid.assign(4U, 0U);
+    reset_condition_time_dependencies(program);
   }
 
   void ensure_size(const CompiledMathProgram &program) {
@@ -393,6 +397,27 @@ struct CompiledMathWorkspace {
       source_channel_pdf.resize(size, 0.0);
       source_channel_cdf.resize(size, 0.0);
       source_channel_survival.resize(size, 1.0);
+    }
+    if (condition_time_dependency_spans.size() !=
+        program.conditions.size() + 1U) {
+      reset_condition_time_dependencies(program);
+    }
+  }
+
+  void reset_condition_time_dependencies(const CompiledMathProgram &program) {
+    condition_time_dependency_spans.assign(
+        program.conditions.size() + 1U, CompiledMathIndexSpan{});
+    condition_time_dependency_ids.clear();
+    for (std::size_t i = 0; i < program.conditions.size(); ++i) {
+      const auto offset =
+          static_cast<semantic::Index>(condition_time_dependency_ids.size());
+      const auto &ids = program.conditions[i].time_dependency_ids;
+      condition_time_dependency_ids.insert(
+          condition_time_dependency_ids.end(), ids.begin(), ids.end());
+      condition_time_dependency_spans[i + 1U] =
+          CompiledMathIndexSpan{
+              offset,
+              static_cast<semantic::Index>(ids.size())};
     }
   }
 
@@ -501,6 +526,8 @@ struct CompiledMathWorkspace {
   std::vector<double> source_channel_survival;
   std::vector<double> time_values;
   std::vector<std::uint8_t> time_valid;
+  std::vector<CompiledMathIndexSpan> condition_time_dependency_spans;
+  std::vector<semantic::Index> condition_time_dependency_ids;
   const std::vector<std::uint8_t> *used_outcomes{nullptr};
   std::unique_ptr<CompiledMathWorkspace> integral_workspace;
 };
@@ -675,7 +702,7 @@ inline semantic::Index compiled_math_integral_kernel_slot(
   CompiledMathIntegralKernel kernel;
   kernel.root_id = root_id;
   kernel.result_node_id = root.node_id;
-  kernel.schedule = root.schedule;
+  kernel.subgraph = root.schedule;
   kernel.bind_time_id = compiled_math_integral_bind_time_id(node);
 
   std::vector<CompiledMathIntegralSourceProductTerm> source_product_terms;
@@ -709,6 +736,7 @@ inline semantic::Index compiled_math_integral_kernel_slot(
   } else {
     program->integral_kernel_source_value_nodes.resize(
         source_value_node_mark);
+    kernel.kind = CompiledMathIntegralKernelKind::Subgraph;
   }
   program->integral_kernels.push_back(kernel);
   return slot;
@@ -851,12 +879,21 @@ inline void compiled_math_build_condition_access(
   std::vector<std::vector<semantic::Index>> source_lower;
   std::vector<std::vector<semantic::Index>> source_upper;
   std::vector<std::vector<semantic::Index>> expr_upper;
+  condition->time_dependency_ids.clear();
   condition->source_order_fact_lookup.entries.clear();
   condition->source_order_fact_lookup.fact_indices.clear();
   condition->guard_upper_fact_lookup.entries.clear();
   condition->guard_upper_fact_lookup.fact_indices.clear();
 
   for (std::size_t i = 0; i < condition->fact_kinds.size(); ++i) {
+    const auto time_id = condition->fact_time_ids[i];
+    if (time_id != semantic::kInvalidIndex &&
+        std::find(
+            condition->time_dependency_ids.begin(),
+            condition->time_dependency_ids.end(),
+            time_id) == condition->time_dependency_ids.end()) {
+      condition->time_dependency_ids.push_back(time_id);
+    }
     const auto kind =
         static_cast<CompiledMathConditionFactKind>(condition->fact_kinds[i]);
     const auto fact_index = static_cast<semantic::Index>(i);

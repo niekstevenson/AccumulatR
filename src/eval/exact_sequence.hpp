@@ -125,7 +125,7 @@ inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
         if (!(trigger_state.weight > 0.0)) {
           continue;
         }
-        const ExactStepResult step = evaluate_exact_step(
+        const ExactStepDistributionView step = evaluate_exact_step_distribution(
             plan,
             params,
             first_param_row,
@@ -153,53 +153,142 @@ inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
   return kernel.loglik(rt, min_ll);
 }
 
-inline double exact_ranked_sequence_probability(
+struct ExactRankedFrontierEntry {
+  double probability{0.0};
+  ExactSequenceState state;
+};
+
+inline void advance_exact_sequence_state(
+    ExactSequenceState *state,
+    const semantic::Index active_source_id,
+    const double observed_time) {
+  if (state == nullptr ||
+      active_source_id == semantic::kInvalidIndex ||
+      static_cast<std::size_t>(active_source_id) >= state->exact_times.size()) {
+    return;
+  }
+  state->lower_bound = observed_time;
+  state->exact_times[static_cast<std::size_t>(active_source_id)] =
+      observed_time;
+}
+
+inline bool exact_sequence_states_equal(const ExactSequenceState &lhs,
+                                        const ExactSequenceState &rhs) {
+  if (lhs.lower_bound != rhs.lower_bound ||
+      lhs.exact_times.size() != rhs.exact_times.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < lhs.exact_times.size(); ++i) {
+    const bool lhs_na = std::isnan(lhs.exact_times[i]);
+    const bool rhs_na = std::isnan(rhs.exact_times[i]);
+    if (lhs_na || rhs_na) {
+      if (lhs_na != rhs_na) {
+        return false;
+      }
+      continue;
+    }
+    if (lhs.exact_times[i] != rhs.exact_times[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline void append_ranked_frontier_entry(
+    std::vector<ExactRankedFrontierEntry> *frontier,
+    ExactRankedFrontierEntry entry) {
+  if (!(entry.probability > 0.0)) {
+    return;
+  }
+  for (auto &existing : *frontier) {
+    if (exact_sequence_states_equal(existing.state, entry.state)) {
+      existing.probability += entry.probability;
+      return;
+    }
+  }
+  frontier->push_back(std::move(entry));
+}
+
+inline double exact_ranked_trigger_probability(
     const ExactVariantPlan &plan,
     const ParamView &params,
     const int first_param_row,
     const ExactTriggerState &trigger_state,
     const ExactTrialView &obs,
-    const std::size_t rank_idx,
-    const ExactSequenceState &sequence_state,
-    std::vector<std::uint8_t> *used_outcomes,
     ExactStepWorkspace *step_workspace) {
-  if (rank_idx >= static_cast<std::size_t>(obs.rank_count)) {
-    return 1.0;
+  std::vector<std::uint8_t> used_outcomes(plan.outcomes.size(), 0U);
+  std::vector<ExactRankedFrontierEntry> frontier;
+  std::vector<ExactRankedFrontierEntry> next_frontier;
+  frontier.push_back(
+      ExactRankedFrontierEntry{1.0, make_exact_sequence_state(plan)});
+
+  for (std::size_t rank_idx = 0;
+       rank_idx < static_cast<std::size_t>(obs.rank_count);
+       ++rank_idx) {
+    const auto outcome_code = exact_trial_view_outcome_code(obs, rank_idx);
+    const auto target_outcome_index =
+        plan.outcome_index_by_code[static_cast<std::size_t>(outcome_code)];
+    const auto target_idx = static_cast<std::size_t>(target_outcome_index);
+    if (used_outcomes[target_idx] != 0U) {
+      return 0.0;
+    }
+
+    const auto &successors =
+        plan.runtime.outcomes[target_idx].successor_distribution;
+    next_frontier.clear();
+    for (const auto &entry : frontier) {
+      if (!(entry.probability > 0.0)) {
+        continue;
+      }
+      const ExactStepDistributionView step =
+          evaluate_exact_step_distribution(
+              plan,
+              params,
+              first_param_row,
+              trigger_state,
+              entry.state,
+              target_outcome_index,
+              exact_trial_view_rt(obs, rank_idx),
+              &used_outcomes,
+              true,
+              step_workspace);
+      if (step.transition_probabilities == nullptr) {
+        continue;
+      }
+      for (std::size_t transition_idx = 0;
+           transition_idx < step.transition_probabilities->size();
+           ++transition_idx) {
+        const double transition_probability =
+            (*step.transition_probabilities)[transition_idx];
+        if (!(transition_probability > 0.0)) {
+          continue;
+        }
+        if (transition_idx >= successors.transitions.size()) {
+          throw std::runtime_error(
+              "ranked successor distribution points outside transitions");
+        }
+        ExactRankedFrontierEntry next_entry{
+            entry.probability * transition_probability,
+            entry.state};
+        advance_exact_sequence_state(
+            &next_entry.state,
+            successors.transitions[transition_idx].active_source_id,
+            exact_trial_view_rt(obs, rank_idx));
+        append_ranked_frontier_entry(
+            &next_frontier,
+            std::move(next_entry));
+      }
+    }
+    if (next_frontier.empty()) {
+      return 0.0;
+    }
+    used_outcomes[target_idx] = 1U;
+    frontier.swap(next_frontier);
   }
 
-  const auto outcome_code = exact_trial_view_outcome_code(obs, rank_idx);
-  const auto target_outcome_index =
-      plan.outcome_index_by_code[static_cast<std::size_t>(outcome_code)];
-  const auto target_idx = static_cast<std::size_t>(target_outcome_index);
-  if ((*used_outcomes)[target_idx] != 0U) {
-    return 0.0;
-  }
-  const ExactStepResult step = evaluate_exact_step(
-      plan,
-      params,
-      first_param_row,
-      trigger_state,
-      sequence_state,
-      target_outcome_index,
-      exact_trial_view_rt(obs, rank_idx),
-      used_outcomes,
-      true,
-      step_workspace);
   double total = 0.0;
-  for (const auto &branch : step.branches) {
-    (*used_outcomes)[target_idx] = 1U;
-    const double tail_prob = exact_ranked_sequence_probability(
-        plan,
-        params,
-        first_param_row,
-        trigger_state,
-        obs,
-        rank_idx + 1U,
-        branch.next_state,
-        used_outcomes,
-        step_workspace);
-    (*used_outcomes)[target_idx] = 0U;
-    total += branch.probability * tail_prob;
+  for (const auto &entry : frontier) {
+    total += entry.probability;
   }
   return total;
 }
@@ -226,18 +315,13 @@ inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
     if (!(trigger_state.weight > 0.0)) {
       continue;
     }
-    std::vector<std::uint8_t> used_outcomes(plan.outcomes.size(), 0U);
-    ExactSequenceState state = make_exact_sequence_state(plan);
     total += trigger_state.weight *
-             exact_ranked_sequence_probability(
+             exact_ranked_trigger_probability(
                  plan,
                  params,
                  first_param_row,
                  trigger_state,
                  obs,
-                 0U,
-                 state,
-                 &used_outcomes,
                  &step_workspace);
   }
   if (!std::isfinite(total) || !(total > 0.0)) {
@@ -319,7 +403,7 @@ inline Rcpp::NumericVector evaluate_exact_loglik_queries_cached(
           if (!(trigger_state.weight > 0.0)) {
             continue;
           }
-          const ExactStepResult step = evaluate_exact_step(
+          const ExactStepDistributionView step = evaluate_exact_step_distribution(
               plan,
               params,
               first_param_row,
@@ -397,7 +481,7 @@ inline Rcpp::NumericVector evaluate_exact_probability_queries_cached(
           if (!(trigger_state.weight > 0.0)) {
             continue;
           }
-          const ExactStepResult step = evaluate_exact_step(
+          const ExactStepDistributionView step = evaluate_exact_step_distribution(
               plan,
               params,
               first_param_row,
@@ -474,7 +558,7 @@ inline Rcpp::List evaluate_exact_outcome_probabilities_cached(
             if (!(trigger_state.weight > 0.0)) {
               continue;
             }
-            const ExactStepResult step = evaluate_exact_step(
+            const ExactStepDistributionView step = evaluate_exact_step_distribution(
                 plan,
                 params,
                 first_param_row,

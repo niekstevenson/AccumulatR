@@ -69,25 +69,8 @@ public:
         !channel_plan.has_source_condition_overlay) {
       return forced_channels(relation);
     }
-    return source_channels_->evaluate_conditioned_source_at(
-        request.source_id, t, request.condition_id, workspace);
-  }
-
-  const ExactTimedExprUpperBound *expr_upper_bound_for(
-      const semantic::Index expr_id,
-      const semantic::Index condition_id,
-      const CompiledMathWorkspace *workspace) const {
-    return source_channels_->expr_upper_bound_for(
-        expr_id, condition_id, workspace);
-  }
-
-  const ExactTimedGuardUpperBound *guard_upper_bound_for(
-      const semantic::Index ref_source_id,
-      const semantic::Index blocker_source_id,
-      const semantic::Index condition_id,
-      const CompiledMathWorkspace *workspace) const {
-    return source_channels_->guard_upper_bound_for(
-        ref_source_id, blocker_source_id, condition_id, workspace);
+    return source_channels_->evaluate_source_channel_plan_at(
+        channel_plan, t, workspace);
   }
 
   bool source_order_known_before(
@@ -166,13 +149,24 @@ inline semantic::Index compiled_node_condition_cache_id(
   std::size_t seed = 0x9e3779b97f4a7c15ULL;
   exact_hash_condition_part(&seed, static_cast<std::size_t>(evaluator_id));
   exact_hash_condition_part(&seed, static_cast<std::size_t>(node.condition_id));
-  for (std::size_t i = 0; i < workspace.time_values.size(); ++i) {
-    if (i >= workspace.time_valid.size() || workspace.time_valid[i] == 0U) {
+  const auto condition_pos = static_cast<std::size_t>(node.condition_id);
+  if (condition_pos >= workspace.condition_time_dependency_spans.size()) {
+    return static_cast<semantic::Index>(
+        (seed & static_cast<std::size_t>(0x3fffffffU)) + 1U);
+  }
+  const auto span = workspace.condition_time_dependency_spans[condition_pos];
+  for (semantic::Index i = 0; i < span.size; ++i) {
+    const auto time_id =
+        workspace.condition_time_dependency_ids[
+            static_cast<std::size_t>(span.offset + i)];
+    const auto time_pos = static_cast<std::size_t>(time_id);
+    if (time_pos >= workspace.time_valid.size() ||
+        workspace.time_valid[time_pos] == 0U) {
       continue;
     }
-    exact_hash_condition_part(&seed, i + 1U);
+    exact_hash_condition_part(&seed, static_cast<std::size_t>(time_id) + 1U);
     exact_hash_condition_part(
-        &seed, std::hash<double>{}(workspace.time_values[i]));
+        &seed, std::hash<double>{}(workspace.time_values[time_pos]));
   }
   return static_cast<semantic::Index>(
       (seed & static_cast<std::size_t>(0x3fffffffU)) + 1U);
@@ -286,6 +280,93 @@ inline double compiled_math_source_node_time(
     return time;
   }
   return std::min(time, workspace.time(node.aux_id));
+}
+
+struct CompiledTimedUpperBound {
+  bool found{false};
+  double time{std::numeric_limits<double>::infinity()};
+  double normalizer{0.0};
+};
+
+inline const CompiledMathCondition *compiled_math_condition_by_id(
+    const CompiledMathProgram &program,
+    const semantic::Index condition_id) {
+  if (condition_id == 0 || condition_id == semantic::kInvalidIndex) {
+    return nullptr;
+  }
+  const auto pos = static_cast<std::size_t>(condition_id - 1U);
+  if (pos >= program.conditions.size()) {
+    return nullptr;
+  }
+  return &program.conditions[pos];
+}
+
+inline double compiled_math_fact_time(
+    const CompiledMathCondition &condition,
+    const std::size_t fact_pos,
+    const CompiledMathNode &node,
+    const CompiledMathWorkspace &workspace) {
+  if (fact_pos >= condition.fact_time_ids.size()) {
+    return compiled_math_node_time(node, workspace);
+  }
+  const auto time_id = condition.fact_time_ids[fact_pos];
+  if (time_id != semantic::kInvalidIndex && workspace.has_time(time_id)) {
+    return workspace.time(time_id);
+  }
+  return compiled_math_node_time(node, workspace);
+}
+
+inline double compiled_math_fact_normalizer(
+    const CompiledMathCondition &condition,
+    const std::size_t fact_pos,
+    const CompiledMathWorkspace &workspace) {
+  if (fact_pos >= condition.fact_normalizer_node_ids.size()) {
+    return 0.0;
+  }
+  const auto node_id = condition.fact_normalizer_node_ids[fact_pos];
+  if (node_id == semantic::kInvalidIndex) {
+    return 0.0;
+  }
+  const auto pos = static_cast<std::size_t>(node_id);
+  if (pos >= workspace.values.size()) {
+    return 0.0;
+  }
+  return workspace.values[pos];
+}
+
+inline CompiledTimedUpperBound compiled_math_upper_bound_from_facts(
+    const CompiledMathProgram &program,
+    const CompiledMathNode &node,
+    const CompiledMathWorkspace &workspace,
+    const std::vector<semantic::Index> &fact_indices) {
+  CompiledTimedUpperBound best;
+  const auto *condition =
+      compiled_math_condition_by_id(program, node.condition_id);
+  if (condition == nullptr ||
+      node.aux_id == semantic::kInvalidIndex ||
+      node.aux2_id == semantic::kInvalidIndex) {
+    return best;
+  }
+  const auto offset = static_cast<std::size_t>(node.aux_id);
+  const auto size = static_cast<std::size_t>(node.aux2_id);
+  if (offset + size > fact_indices.size()) {
+    throw std::runtime_error(
+        "compiled upper-bound node points outside condition fact slots");
+  }
+  for (std::size_t i = 0; i < size; ++i) {
+    const auto fact_pos = static_cast<std::size_t>(fact_indices[offset + i]);
+    const double fact_time =
+        compiled_math_fact_time(*condition, fact_pos, node, workspace);
+    const double normalizer =
+        compiled_math_fact_normalizer(*condition, fact_pos, workspace);
+    if (std::isfinite(fact_time) && normalizer > 0.0 &&
+        (!best.found || fact_time < best.time)) {
+      best.found = true;
+      best.time = fact_time;
+      best.normalizer = normalizer;
+    }
+  }
+  return best;
 }
 
 inline bool compiled_math_load_node_cache(
@@ -551,7 +632,7 @@ inline double evaluate_compiled_math_root(
     CompiledSourceView *scenario,
     CompiledEvalWorkspace *eval_workspace = nullptr);
 
-inline double evaluate_compiled_math_schedule(
+inline double evaluate_compiled_node_span(
     const CompiledMathProgram &program,
     CompiledMathIndexSpan schedule,
     semantic::Index result_node_id,
@@ -561,6 +642,16 @@ inline double evaluate_compiled_math_schedule(
     CompiledEvalWorkspace *eval_workspace = nullptr,
     const std::vector<semantic::Index> *schedule_nodes = nullptr,
     bool workspace_prepared = false);
+
+inline double evaluate_compiled_integral_kernel(
+    const CompiledMathProgram &program,
+    const CompiledMathNode &node,
+    CompiledMathWorkspace *workspace,
+    CompiledSourceView *parent,
+    CompiledSourceView *scenario,
+    CompiledEvalWorkspace *eval_workspace,
+    double lower,
+    double upper);
 
 inline double evaluate_compiled_lazy_child(
     const CompiledMathProgram &program,
@@ -748,30 +839,33 @@ inline double evaluate_compiled_integral_kernel(
         lower,
         upper);
   }
-  auto &integral_workspace = workspace->integral_workspace_for(program);
-  return quadrature::integrate_finite_default(
-      [&](const double u) {
-        CompiledMathWorkspace::TimeBinding bind(
-            &integral_workspace,
-            kernel.bind_time_id,
-            u);
-        const double term = evaluate_compiled_math_schedule(
-            program,
-            kernel.schedule,
-            kernel.result_node_id,
-            &integral_workspace,
-            parent,
-            scenario,
-            eval_workspace,
-            nullptr,
-            true);
-        return std::isfinite(term) ? term : 0.0;
-      },
-      lower,
-      upper);
+  if (kernel.kind == CompiledMathIntegralKernelKind::Subgraph) {
+    auto &integral_workspace = workspace->integral_workspace_for(program);
+    return quadrature::integrate_finite_default(
+        [&](const double u) {
+          CompiledMathWorkspace::TimeBinding bind(
+              &integral_workspace,
+              kernel.bind_time_id,
+              u);
+          const double term = evaluate_compiled_node_span(
+              program,
+              kernel.subgraph,
+              kernel.result_node_id,
+              &integral_workspace,
+              parent,
+              scenario,
+              eval_workspace,
+              nullptr,
+              true);
+          return std::isfinite(term) ? term : 0.0;
+        },
+        lower,
+        upper);
+  }
+  throw std::runtime_error("compiled integral kernel has no planned evaluator");
 }
 
-inline double evaluate_compiled_math_schedule(
+inline double evaluate_compiled_node_span(
     const CompiledMathProgram &program,
     const CompiledMathIndexSpan schedule,
     const semantic::Index result_node_id,
@@ -865,19 +959,24 @@ inline double evaluate_compiled_math_schedule(
         value = 0.0;
         break;
       }
-      const double current_time = compiled_math_node_time(node, *workspace);
-      if (const auto *upper =
-              condition_evaluator->guard_upper_bound_for(
-                  kernel.guard_ref_source_id,
-                  kernel.guard_blocker_source_id,
-                  node.condition_id,
-                  workspace)) {
-        if (!(upper->normalizer > 0.0) ||
-            current_time >= upper->time) {
+      const auto *condition =
+          compiled_math_condition_by_id(program, node.condition_id);
+      const auto upper =
+          condition == nullptr
+              ? CompiledTimedUpperBound{}
+              : compiled_math_upper_bound_from_facts(
+                    program,
+                    node,
+                    *workspace,
+                    condition->guard_upper_fact_lookup.fact_indices);
+      if (upper.found) {
+        const double current_time = compiled_math_node_time(node, *workspace);
+        if (!(upper.normalizer > 0.0) ||
+            current_time >= upper.time) {
           value = 0.0;
           break;
         }
-        value = clean_signed_value(raw / upper->normalizer);
+        value = clean_signed_value(raw / upper.normalizer);
         break;
       }
       value = clean_signed_value(raw);
@@ -906,22 +1005,27 @@ inline double evaluate_compiled_math_schedule(
         value = 0.0;
         break;
       }
-      const double current_time = compiled_math_node_time(node, *workspace);
-      if (const auto *upper =
-              condition_evaluator->guard_upper_bound_for(
-                  kernel.guard_ref_source_id,
-                  kernel.guard_blocker_source_id,
-                  node.condition_id,
-                  workspace)) {
-        if (!(upper->normalizer > 0.0)) {
+      const auto *condition =
+          compiled_math_condition_by_id(program, node.condition_id);
+      const auto upper =
+          condition == nullptr
+              ? CompiledTimedUpperBound{}
+              : compiled_math_upper_bound_from_facts(
+                    program,
+                    node,
+                    *workspace,
+                    condition->guard_upper_fact_lookup.fact_indices);
+      if (upper.found) {
+        const double current_time = compiled_math_node_time(node, *workspace);
+        if (!(upper.normalizer > 0.0)) {
           value = 0.0;
           break;
         }
-        if (current_time >= upper->time) {
+        if (current_time >= upper.time) {
           value = 1.0;
           break;
         }
-        value = clamp_probability(raw / upper->normalizer);
+        value = clamp_probability(raw / upper.normalizer);
         break;
       }
       value = clamp_probability(raw);
@@ -1087,31 +1191,34 @@ inline double evaluate_compiled_math_schedule(
           program.child_nodes[static_cast<std::size_t>(node.children.offset)];
       const double raw =
           workspace->values[static_cast<std::size_t>(child_id)];
-      if (condition_evaluator == nullptr) {
-        value = raw;
-        break;
-      }
-      const auto *upper =
-          condition_evaluator->expr_upper_bound_for(
-              node.subject_id, node.condition_id, workspace);
-      if (upper == nullptr) {
+      const auto *condition =
+          compiled_math_condition_by_id(program, node.condition_id);
+      const auto upper =
+          condition == nullptr
+              ? CompiledTimedUpperBound{}
+              : compiled_math_upper_bound_from_facts(
+                    program,
+                    node,
+                    *workspace,
+                    condition->expr_upper_fact_indices);
+      if (!upper.found) {
         value = raw;
         break;
       }
       const double current_time = compiled_math_node_time(node, *workspace);
       if (node.kind == CompiledMathNodeKind::ExprUpperBoundCdf) {
-        if (!(upper->normalizer > 0.0)) {
+        if (!(upper.normalizer > 0.0)) {
           value = 0.0;
-        } else if (current_time >= upper->time) {
+        } else if (current_time >= upper.time) {
           value = 1.0;
         } else {
-          value = clamp_probability(raw / upper->normalizer);
+          value = clamp_probability(raw / upper.normalizer);
         }
       } else {
-        if (!(upper->normalizer > 0.0) || current_time >= upper->time) {
+        if (!(upper.normalizer > 0.0) || current_time >= upper.time) {
           value = 0.0;
         } else {
-          value = safe_density(raw / upper->normalizer);
+          value = safe_density(raw / upper.normalizer);
         }
       }
       break;
@@ -1185,7 +1292,7 @@ inline double evaluate_compiled_math_root(
     return 0.0;
   }
   const auto &root = program.roots[static_cast<std::size_t>(root_id)];
-  return evaluate_compiled_math_schedule(
+  return evaluate_compiled_node_span(
       program,
       root.schedule,
       root.node_id,

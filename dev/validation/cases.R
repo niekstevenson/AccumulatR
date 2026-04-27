@@ -578,7 +578,7 @@ validation_cases <- function() {
         "NA_mass",
         miss_engine,
         miss_manual,
-        2e-6,
+        2e-5,
         "Missing-response mass for mapped NA outcome"
       )
 

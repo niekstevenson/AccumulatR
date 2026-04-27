@@ -322,14 +322,9 @@ struct ExactSequenceState {
   std::vector<double> exact_times;
 };
 
-struct ExactStepBranch {
-  double probability{0.0};
-  ExactSequenceState next_state;
-};
-
-struct ExactStepResult {
+struct ExactStepDistributionView {
   double total_probability{0.0};
-  std::vector<ExactStepBranch> branches;
+  const std::vector<double> *transition_probabilities{nullptr};
 };
 
 struct ExactOutcomePlan {
@@ -492,9 +487,21 @@ struct ExactRuntimeCompetitorBlockPlan {
   std::vector<ExactRuntimeCompetitorSubsetPlan> subsets;
 };
 
+struct ExactRuntimeScenarioTransitionPlan {
+  semantic::Index probability_root_id{semantic::kInvalidIndex};
+  semantic::Index active_source_id{semantic::kInvalidIndex};
+  bool ranked_supported{false};
+};
+
+struct ExactRuntimeSuccessorDistributionPlan {
+  std::vector<ExactRuntimeScenarioTransitionPlan> transitions;
+  semantic::Index total_probability_root_id{semantic::kInvalidIndex};
+};
+
 struct ExactRuntimeOutcomePlan {
   std::vector<ExactRuntimeScenarioFormula> scenarios;
   std::vector<ExactRuntimeCompetitorBlockPlan> competitor_blocks;
+  ExactRuntimeSuccessorDistributionPlan successor_distribution;
 };
 
 struct ExactRuntimeVariantPlan {

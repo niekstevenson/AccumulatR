@@ -37,45 +37,10 @@ struct ExactStepWorkspace {
   ExactSourceChannels source_channels;
   CompiledSourceView target_evaluator;
   CompiledEvalWorkspace target_workspace;
+  std::vector<double> transition_probabilities;
 };
 
-inline ExactSequenceState advance_exact_sequence_state(
-    const ExactVariantPlan &plan,
-    const ExactSequenceState &sequence_state,
-    const ExactTransitionScenario &scenario,
-    const double observed_time) {
-  ExactSequenceState next_state = sequence_state;
-  next_state.lower_bound = observed_time;
-  if (next_state.exact_times.empty()) {
-    next_state.exact_times.assign(
-        static_cast<std::size_t>(plan.source_count),
-        std::numeric_limits<double>::quiet_NaN());
-  }
-  next_state.exact_times[static_cast<std::size_t>(scenario.active_source_id)] =
-      observed_time;
-  return next_state;
-}
-
-inline double evaluate_compiled_scenario_probability(
-    const ExactRuntimeScenarioFormula &scenario_formula,
-    CompiledSourceView *target_evaluator,
-    CompiledEvalWorkspace *target_workspace) {
-  if (scenario_formula.probability_root_id == semantic::kInvalidIndex) {
-    throw std::runtime_error(
-        "runtime scenario reached evaluation without a compiled probability root");
-  }
-  const double value =
-      evaluate_compiled_math_root(
-          target_evaluator->plan().compiled_math,
-          scenario_formula.probability_root_id,
-          &target_workspace->compiled_math,
-          target_evaluator,
-          nullptr,
-          target_workspace);
-  return std::isfinite(value) ? value : 0.0;
-}
-
-inline ExactStepResult evaluate_exact_step(
+inline ExactStepDistributionView evaluate_exact_step_distribution(
     const ExactVariantPlan &plan,
     const ParamView &params,
     const int first_param_row,
@@ -86,7 +51,7 @@ inline ExactStepResult evaluate_exact_step(
     const std::vector<std::uint8_t> *used_outcomes = nullptr,
     const bool collect_successors = false,
     ExactStepWorkspace *workspace = nullptr) {
-  ExactStepResult result;
+  ExactStepDistributionView result;
   const auto target_pos = static_cast<std::size_t>(target_idx);
   std::optional<ExactStepWorkspace> local_workspace;
   if (workspace == nullptr) {
@@ -100,35 +65,59 @@ inline ExactStepResult evaluate_exact_step(
   auto &target_workspace = step_workspace.target_workspace;
   target_workspace.compiled_math.used_outcomes = used_outcomes;
   const auto &runtime_outcome = plan.runtime.outcomes[target_pos];
+  const auto &successors = runtime_outcome.successor_distribution;
+  step_workspace.transition_probabilities.clear();
 
-  for (std::size_t scenario_idx = 0;
-       scenario_idx < plan.outcomes[target_pos].scenarios.size();
-       ++scenario_idx) {
-    const auto &scenario =
-        plan.outcomes[target_pos].scenarios[scenario_idx];
-    const auto &runtime_scenario =
-        runtime_outcome.scenarios[scenario_idx];
-    if (collect_successors && !scenario_supports_ranked_sequence(scenario)) {
+  if (!collect_successors &&
+      successors.total_probability_root_id != semantic::kInvalidIndex) {
+    result.total_probability =
+        evaluate_compiled_math_root(
+            plan.compiled_math,
+            successors.total_probability_root_id,
+            &target_workspace.compiled_math,
+            &target_evaluator,
+            nullptr,
+            &target_workspace);
+    if (!std::isfinite(result.total_probability) ||
+        !(result.total_probability > 0.0)) {
+      result.total_probability = 0.0;
+    }
+    return result;
+  }
+
+  step_workspace.transition_probabilities.assign(
+      successors.transitions.size(), 0.0);
+  for (std::size_t transition_idx = 0;
+       transition_idx < successors.transitions.size();
+       ++transition_idx) {
+    const auto &transition = successors.transitions[transition_idx];
+    if (collect_successors && !transition.ranked_supported) {
       throw std::logic_error(
           "ranked exact step requested for unsupported latent-readiness scenario");
     }
+    if (transition.probability_root_id == semantic::kInvalidIndex) {
+      continue;
+    }
 
-    const double scenario_prob = evaluate_compiled_scenario_probability(
-        runtime_scenario,
-        &target_evaluator,
-        &target_workspace);
+    const double scenario_prob =
+        evaluate_compiled_math_root(
+            plan.compiled_math,
+            transition.probability_root_id,
+            &target_workspace.compiled_math,
+            &target_evaluator,
+            nullptr,
+            &target_workspace);
     if (!(scenario_prob > 0.0)) {
       continue;
     }
+    step_workspace.transition_probabilities[transition_idx] = scenario_prob;
     result.total_probability += scenario_prob;
-    if (collect_successors) {
-      result.branches.push_back(ExactStepBranch{
-          scenario_prob,
-          advance_exact_sequence_state(
-              plan, sequence_state, scenario, observed_time)});
-    }
   }
 
+  if (collect_successors) {
+    result.transition_probabilities =
+        &step_workspace.transition_probabilities;
+  }
   return result;
 }
 

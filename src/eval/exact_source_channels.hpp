@@ -162,15 +162,15 @@ public:
         time);
   }
 
-  leaf::EventChannels evaluate_conditioned_source_at(
-      const semantic::Index source_id,
+  leaf::EventChannels evaluate_source_channel_plan_at(
+      const CompiledSourceChannelPlan &channel_plan,
       const double time,
-      const semantic::Index condition_id = 0,
       const CompiledMathWorkspace *workspace = nullptr) {
+    const auto &request = channel_plan.request;
     conditional_cache_.set_context(
-        time, compiled_condition_cache_id(condition_id, workspace));
+        time, compiled_condition_cache_id(request.condition_id, workspace));
     return load_conditional_source(
-        &conditional_cache_, time, source_id, condition_id, workspace);
+        &conditional_cache_, time, channel_plan, workspace);
   }
 
   bool has_exact_time_overlay(
@@ -190,16 +190,6 @@ public:
     return exact_time_for(source_id, condition_id, workspace);
   }
 
-  const ExactTimedExprUpperBound *expr_upper_bound_for(
-      const semantic::Index expr_id,
-      const semantic::Index condition_id = 0,
-      const CompiledMathWorkspace *workspace = nullptr) const {
-    if (expr_id == semantic::kInvalidIndex) {
-      return nullptr;
-    }
-    return condition_expr_upper_bound_for(expr_id, condition_id, workspace);
-  }
-
   bool source_order_known_before(
       const semantic::Index before_source_id,
       const semantic::Index after_source_id,
@@ -212,15 +202,6 @@ public:
     }
     return condition_source_order_known_before(
         before_source_id, after_source_id, condition_id, workspace);
-  }
-
-  const ExactTimedGuardUpperBound *guard_upper_bound_for(
-      const semantic::Index ref_source_id,
-      const semantic::Index blocker_source_id,
-      const semantic::Index condition_id = 0,
-      const CompiledMathWorkspace *workspace = nullptr) const {
-    return condition_guard_upper_bound_for(
-        ref_source_id, blocker_source_id, condition_id, workspace);
   }
 
   bool has_guard_upper_bound_overlay(
@@ -249,8 +230,6 @@ private:
   TimedCache base_lower_cache_;
   std::vector<TimedCache> recursive_base_caches_;
   std::vector<TimedCache *> base_cache_stack_;
-  mutable ExactTimedExprUpperBound legacy_expr_upper_bound_;
-  mutable ExactTimedGuardUpperBound legacy_guard_upper_bound_;
   mutable double compiled_condition_time_{
       std::numeric_limits<double>::quiet_NaN()};
   semantic::Index recursive_cache_depth_{0};
@@ -285,15 +264,36 @@ private:
     std::size_t seed = 0x517cc1b727220a95ULL;
     hash_condition_part(&seed, static_cast<std::size_t>(condition_id));
     if (workspace != nullptr) {
-      for (std::size_t i = 0; i < workspace->time_values.size(); ++i) {
-        if (i >= workspace->time_valid.size() ||
-            workspace->time_valid[i] == 0U) {
-          continue;
+      const auto condition_pos = static_cast<std::size_t>(condition_id);
+      if (condition_pos < workspace->condition_time_dependency_spans.size()) {
+        const auto span =
+            workspace->condition_time_dependency_spans[condition_pos];
+        for (semantic::Index i = 0; i < span.size; ++i) {
+          const auto time_id =
+              workspace->condition_time_dependency_ids[
+                  static_cast<std::size_t>(span.offset + i)];
+          const auto time_pos = static_cast<std::size_t>(time_id);
+          if (time_pos >= workspace->time_valid.size() ||
+              workspace->time_valid[time_pos] == 0U) {
+            continue;
+          }
+          hash_condition_part(
+              &seed, static_cast<std::size_t>(time_id) + 1U);
+          hash_condition_part(
+              &seed,
+              std::hash<double>{}(workspace->time_values[time_pos]));
         }
-        hash_condition_part(&seed, i + 1U);
-        hash_condition_part(
-            &seed,
-            std::hash<double>{}(workspace->time_values[i]));
+      } else {
+        for (std::size_t i = 0; i < workspace->time_values.size(); ++i) {
+          if (i >= workspace->time_valid.size() ||
+              workspace->time_valid[i] == 0U) {
+            continue;
+          }
+          hash_condition_part(&seed, i + 1U);
+          hash_condition_part(
+              &seed,
+              std::hash<double>{}(workspace->time_values[i]));
+        }
       }
     }
     return static_cast<semantic::Index>(
@@ -362,19 +362,6 @@ private:
     return &plan_.compiled_math.conditions[pos];
   }
 
-  static const CompiledMathIndexSpan *condition_fact_span_for(
-      const std::vector<CompiledMathIndexSpan> &spans,
-      const semantic::Index key) {
-    if (key == semantic::kInvalidIndex) {
-      return nullptr;
-    }
-    const auto pos = static_cast<std::size_t>(key);
-    if (pos >= spans.size() || spans[pos].empty()) {
-      return nullptr;
-    }
-    return &spans[pos];
-  }
-
   static const CompiledMathPairFactEntry *condition_pair_entry_for(
       const CompiledMathPairFactLookup &lookup,
       const semantic::Index first,
@@ -413,25 +400,6 @@ private:
       return workspace->time(time_id);
     }
     return conditional_time_;
-  }
-
-  double condition_fact_normalizer(
-      const CompiledMathWorkspace *workspace,
-      const CompiledMathCondition &condition,
-      const std::size_t fact_index) const {
-    if (workspace == nullptr ||
-        fact_index >= condition.fact_normalizer_node_ids.size()) {
-      return 0.0;
-    }
-    const auto node_id = condition.fact_normalizer_node_ids[fact_index];
-    if (node_id == semantic::kInvalidIndex) {
-      return 0.0;
-    }
-    const auto pos = static_cast<std::size_t>(node_id);
-    if (pos >= workspace->values.size()) {
-      return 0.0;
-    }
-    return workspace->values[pos];
   }
 
   bool condition_has_fact(
@@ -596,90 +564,6 @@ private:
     return upper_bound;
   }
 
-  const ExactTimedExprUpperBound *condition_expr_upper_bound_for(
-      const semantic::Index expr_id,
-      const semantic::Index condition_id,
-      const CompiledMathWorkspace *workspace) const {
-    if (expr_id == semantic::kInvalidIndex) {
-      return nullptr;
-    }
-    const auto *condition = condition_by_id(condition_id);
-    if (condition == nullptr) {
-      return nullptr;
-    }
-    bool found = false;
-    double best_time = std::numeric_limits<double>::infinity();
-    double best_normalizer = 0.0;
-    const auto *span =
-        condition_fact_span_for(condition->expr_upper_fact_spans, expr_id);
-    if (span == nullptr) {
-      return nullptr;
-    }
-    for (semantic::Index i = 0; i < span->size; ++i) {
-      const auto fact_pos = static_cast<std::size_t>(
-          condition->expr_upper_fact_indices[
-              static_cast<std::size_t>(span->offset + i)]);
-      const double fact_time =
-          condition_fact_time(workspace, *condition, fact_pos);
-      const double normalizer =
-          condition_fact_normalizer(workspace, *condition, fact_pos);
-      if (std::isfinite(fact_time) && normalizer > 0.0 &&
-          (!found || fact_time < best_time)) {
-        found = true;
-        best_time = fact_time;
-        best_normalizer = normalizer;
-      }
-    }
-    if (!found) {
-      return nullptr;
-    }
-    legacy_expr_upper_bound_ =
-        ExactTimedExprUpperBound{expr_id, best_time, best_normalizer};
-    return &legacy_expr_upper_bound_;
-  }
-
-  const ExactTimedGuardUpperBound *condition_guard_upper_bound_for(
-      const semantic::Index ref_source_id,
-      const semantic::Index blocker_source_id,
-      const semantic::Index condition_id,
-      const CompiledMathWorkspace *workspace) const {
-    const auto *condition = condition_by_id(condition_id);
-    if (condition == nullptr) {
-      return nullptr;
-    }
-    bool found = false;
-    double best_time = std::numeric_limits<double>::infinity();
-    double best_normalizer = 0.0;
-    const auto *entry = condition_pair_entry_for(
-        condition->guard_upper_fact_lookup,
-        ref_source_id,
-        blocker_source_id);
-    if (entry == nullptr) {
-      return nullptr;
-    }
-    for (semantic::Index i = 0; i < entry->facts.size; ++i) {
-      const auto fact_pos = static_cast<std::size_t>(
-          condition->guard_upper_fact_lookup.fact_indices[
-              static_cast<std::size_t>(entry->facts.offset + i)]);
-      const double fact_time =
-          condition_fact_time(workspace, *condition, fact_pos);
-      const double normalizer =
-          condition_fact_normalizer(workspace, *condition, fact_pos);
-      if (std::isfinite(fact_time) && normalizer > 0.0 &&
-          (!found || fact_time < best_time)) {
-        found = true;
-        best_time = fact_time;
-        best_normalizer = normalizer;
-      }
-    }
-    if (!found) {
-      return nullptr;
-    }
-    legacy_guard_upper_bound_ = ExactTimedGuardUpperBound{
-        ref_source_id, blocker_source_id, best_time, best_normalizer};
-    return &legacy_guard_upper_bound_;
-  }
-
   bool condition_source_order_known_before(
       const semantic::Index before_source_id,
       const semantic::Index after_source_id,
@@ -804,10 +688,19 @@ private:
   }
 
   leaf::EventChannels evaluate_conditioned_source_kernel(
-      const semantic::Index source_id,
+      const CompiledSourceChannelPlan &channel_plan,
       const double current_time,
-      const semantic::Index condition_id,
       const CompiledMathWorkspace *workspace) {
+    const auto &request = channel_plan.request;
+    const auto source_id = request.source_id;
+    const auto condition_id = request.condition_id;
+    const auto *planned_kernel =
+        source_kernel_for(channel_plan.source_kernel_slot);
+    if (planned_kernel == nullptr ||
+        planned_kernel->source_id != source_id ||
+        planned_kernel->kind != channel_plan.kernel) {
+      return impossible_channels();
+    }
     const double lower_bound = lower_bound_for(source_id, condition_id, workspace);
     const double upper_bound = upper_bound_for(source_id, condition_id, workspace);
     if (std::isfinite(upper_bound) && !(upper_bound > lower_bound)) {
@@ -884,42 +777,66 @@ private:
       }
       return leaf::EventChannels::certain();
     }
-    if (source_id == semantic::kInvalidIndex ||
-        static_cast<std::size_t>(source_id) >= plan_.source_kernels.size()) {
+    const auto *kernel = source_kernel_for(source_id);
+    if (kernel == nullptr) {
       return impossible_channels();
     }
-    const auto &kernel = plan_.source_kernels[
-        static_cast<std::size_t>(source_id)];
-    switch (kernel.kind) {
+    switch (kernel->kind) {
     case CompiledSourceChannelKernelKind::LeafAbsolute:
+      return evaluate_leaf_absolute_kernel(*kernel);
     case CompiledSourceChannelKernelKind::LeafOnsetConvolution:
-      return base_leaf_channels(source_id, condition_id, workspace);
+      return evaluate_leaf_onset_convolution_kernel(
+          *kernel, condition_id, workspace);
     case CompiledSourceChannelKernelKind::PoolKOfN:
-      return base_pool_channels(kernel.pool_index, condition_id, workspace);
+      return evaluate_pool_kofn_kernel(*kernel, condition_id, workspace);
     case CompiledSourceChannelKernelKind::Invalid:
       break;
     }
     return impossible_channels();
   }
 
-  leaf::EventChannels base_leaf_channels(
-      const semantic::Index index,
-      const semantic::Index condition_id,
-      const CompiledMathWorkspace *workspace) {
-    const auto pos = static_cast<std::size_t>(index);
+  const ExactSourceKernel *source_kernel_for(
+      const semantic::Index source_id) const {
+    if (source_id == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(source_id) >= plan_.source_kernels.size()) {
+      return nullptr;
+    }
+    return &plan_.source_kernels[static_cast<std::size_t>(source_id)];
+  }
+
+  leaf::EventChannels evaluate_leaf_absolute_kernel(
+      const ExactSourceKernel &kernel) {
+    const auto pos = static_cast<std::size_t>(kernel.leaf_index);
+    if (kernel.leaf_index == semantic::kInvalidIndex ||
+        pos >= program_.leaf_descriptors.size() ||
+        pos >= leaf_inputs_.size()) {
+      return impossible_channels();
+    }
     const auto &desc = program_.leaf_descriptors[pos];
     const auto &loaded = leaf_inputs_[pos];
-    const auto onset_kind = static_cast<semantic::OnsetKind>(desc.onset_kind);
     const double t = active_base_time();
-    if (onset_kind == semantic::OnsetKind::Absolute) {
-      return standard_leaf_channels(
-          desc.dist_kind,
-          loaded.params.data(),
-          std::min(desc.param_count, 8),
-          loaded.q,
-          loaded.t0,
-          t - desc.onset_abs_value);
+    return standard_leaf_channels(
+        desc.dist_kind,
+        loaded.params.data(),
+        std::min(desc.param_count, 8),
+        loaded.q,
+        loaded.t0,
+        t - desc.onset_abs_value);
+  }
+
+  leaf::EventChannels evaluate_leaf_onset_convolution_kernel(
+      const ExactSourceKernel &kernel,
+      const semantic::Index condition_id,
+      const CompiledMathWorkspace *workspace) {
+    const auto pos = static_cast<std::size_t>(kernel.leaf_index);
+    if (kernel.leaf_index == semantic::kInvalidIndex ||
+        pos >= program_.leaf_descriptors.size() ||
+        pos >= leaf_inputs_.size()) {
+      return impossible_channels();
     }
+    const auto &desc = program_.leaf_descriptors[pos];
+    const auto &loaded = leaf_inputs_[pos];
+    const double t = active_base_time();
 
     const double lag = desc.onset_lag;
     const double upper = t - lag;
@@ -937,7 +854,7 @@ private:
           t - source_time - lag);
     };
 
-    const auto onset_source_id = desc.onset_source_id;
+    const auto onset_source_id = kernel.onset_source_id;
     if (const double *exact_time =
             exact_time_for(onset_source_id, condition_id, workspace)) {
       return shifted_channels(*exact_time);
@@ -966,14 +883,17 @@ private:
     return out;
   }
 
-  leaf::EventChannels base_pool_channels(
-      const semantic::Index index,
+  leaf::EventChannels evaluate_pool_kofn_kernel(
+      const ExactSourceKernel &kernel,
       const semantic::Index condition_id,
       const CompiledMathWorkspace *workspace) {
-    const auto pos = static_cast<std::size_t>(index);
-    const auto begin = program_.pool_member_offsets[pos];
-    const auto end = program_.pool_member_offsets[pos + 1U];
-    const auto k = program_.pool_k[pos];
+    const auto begin = kernel.pool_member_offset;
+    const auto end = begin + kernel.pool_member_count;
+    const auto k = kernel.pool_k;
+    if (end > static_cast<semantic::Index>(
+                  program_.pool_member_source_ids.size())) {
+      return impossible_channels();
+    }
     const auto n_members = static_cast<int>(end - begin);
 
     std::vector<leaf::EventChannels> members;
@@ -1044,9 +964,9 @@ private:
   leaf::EventChannels load_conditional_source(
       TimedCache *cache,
       const double time,
-      const semantic::Index source_id,
-      const semantic::Index condition_id,
+      const CompiledSourceChannelPlan &channel_plan,
       const CompiledMathWorkspace *workspace) {
+    const auto source_id = channel_plan.request.source_id;
     if (cache == nullptr || source_id == semantic::kInvalidIndex) {
       return impossible_channels();
     }
@@ -1056,7 +976,7 @@ private:
     }
     cache->channels[pos] =
         evaluate_conditioned_source_kernel(
-            source_id, time, condition_id, workspace);
+            channel_plan, time, workspace);
     cache->epoch[pos] = cache->current_epoch;
     return cache->channels[pos];
   }

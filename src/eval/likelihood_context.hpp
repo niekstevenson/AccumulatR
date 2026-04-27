@@ -11,7 +11,6 @@
 #include "../compile/prep_to_semantic.hpp"
 #include "../compile/project_semantic.hpp"
 #include "../semantic/model.hpp"
-#include "direct_kernel.hpp"
 #include "exact_sequence.hpp"
 #include "observed_plan.hpp"
 #include "trial_data.hpp"
@@ -23,10 +22,8 @@ struct NativeLikelihoodContext {
   semantic::SemanticModel model;
   std::vector<ComponentObservationPlan> observed_plans_by_component_code;
   bool observed_identity{false};
-  compile::BackendKind identity_backend{compile::BackendKind::Direct};
+  compile::BackendKind identity_backend{compile::BackendKind::Exact};
   bool ranked_supported{true};
-  std::vector<semantic::Index> direct_variant_index_by_component_code;
-  std::vector<VariantPlan> direct_plans;
   std::vector<semantic::Index> exact_variant_index_by_component_code;
   std::vector<ExactVariantPlan> exact_plans;
 };
@@ -34,7 +31,7 @@ struct NativeLikelihoodContext {
 inline bool observation_plans_are_identity(
     const std::vector<ComponentObservationPlan> &plans,
     compile::BackendKind *identity_backend = nullptr) {
-  compile::BackendKind backend = compile::BackendKind::Direct;
+  compile::BackendKind backend = compile::BackendKind::Exact;
   bool have_backend = false;
   for (std::size_t component_code = 1; component_code < plans.size(); ++component_code) {
     const auto &plan = plans[component_code];
@@ -154,14 +151,6 @@ inline NativeLikelihoodContext build_native_likelihood_context(
   ctx.observed_identity = observation_plans_are_identity(
       ctx.observed_plans_by_component_code,
       &ctx.identity_backend);
-  build_direct_plan_cache(
-      compiled,
-      component_code_by_id,
-      outcome_code_by_label,
-      component_ids.size(),
-      outcome_labels.size(),
-      &ctx.direct_variant_index_by_component_code,
-      &ctx.direct_plans);
   build_exact_plan_cache(
       compiled,
       component_code_by_id,

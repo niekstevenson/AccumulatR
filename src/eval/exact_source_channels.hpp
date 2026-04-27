@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "eval_query.hpp"
 #include "exact_planner.hpp"
 #include "leaf_kernel.hpp"
 #include "quadrature.hpp"
@@ -115,7 +116,7 @@ public:
         static_cast<std::size_t>(std::max(program_.layout.n_leaves, 1)));
     base_cache_stack_.reserve(
         static_cast<std::size_t>(std::max(program_.layout.n_leaves, 1)));
-    build_condition_source_access();
+    build_source_kernel_evaluators();
   }
 
   void reset(const ParamView &params,
@@ -210,6 +211,30 @@ public:
         condition_id, CompiledMathConditionFactKind::GuardUpperBound);
   }
 
+  bool expr_upper_bound_for(
+      const semantic::Index expr_id,
+      ExactTimedExprUpperBound *out) const {
+    if (expr_id == semantic::kInvalidIndex || sequence_state_ == nullptr) {
+      return false;
+    }
+    const auto pos = static_cast<std::size_t>(expr_id);
+    if (pos >= sequence_state_->expr_upper_bounds.size() ||
+        pos >= sequence_state_->expr_upper_normalizers.size()) {
+      return false;
+    }
+    const double time = sequence_state_->expr_upper_bounds[pos];
+    const double normalizer = sequence_state_->expr_upper_normalizers[pos];
+    if (!std::isfinite(time) || !(normalizer > 0.0)) {
+      return false;
+    }
+    if (out != nullptr) {
+      out->expr_id = expr_id;
+      out->time = time;
+      out->normalizer = normalizer;
+    }
+    return true;
+  }
+
   bool has_source_order_overlay(
       const semantic::Index condition_id = 0) const {
     return condition_has_fact(
@@ -230,25 +255,23 @@ private:
   TimedCache base_lower_cache_;
   std::vector<TimedCache> recursive_base_caches_;
   std::vector<TimedCache *> base_cache_stack_;
+  using SourceKernelEvaluator = leaf::EventChannels (CompiledSourceChannels::*)(
+      const ExactSourceKernel &,
+      semantic::Index,
+      const CompiledMathWorkspace *);
+  std::vector<SourceKernelEvaluator> source_kernel_evaluators_;
   mutable double compiled_condition_time_{
       std::numeric_limits<double>::quiet_NaN()};
   semantic::Index recursive_cache_depth_{0};
 
-  struct SourceConditionAccess {
-    CompiledMathIndexSpan exact{};
-    CompiledMathIndexSpan lower{};
-    CompiledMathIndexSpan upper{};
-    bool has_exact{false};
-    bool has_lower{false};
-    bool has_upper{false};
+  CompiledSourceBoundPlan empty_source_bound_plan_{};
 
-    bool has_overlay() const noexcept {
-      return has_exact || has_lower || has_upper;
-    }
+  struct ResolvedSourceBounds {
+    const double *exact_time{nullptr};
+    double lower{0.0};
+    double upper{std::numeric_limits<double>::infinity()};
+    bool has_condition_lower{false};
   };
-
-  std::vector<SourceConditionAccess> source_condition_access_;
-  SourceConditionAccess empty_source_condition_access_{};
 
   static void hash_condition_part(std::size_t *seed,
                                   const std::size_t value) noexcept {
@@ -300,54 +323,41 @@ private:
         (seed & static_cast<std::size_t>(0x3fffffffU)) + 1U);
   }
 
-  void build_condition_source_access() {
-    const auto source_count = static_cast<std::size_t>(plan_.source_count);
-    source_condition_access_.assign(
-        (plan_.compiled_math.conditions.size() + 1U) * source_count,
-        SourceConditionAccess{});
-    if (source_count == 0U) {
-      return;
-    }
-    for (std::size_t condition_pos = 0;
-         condition_pos < plan_.compiled_math.conditions.size();
-         ++condition_pos) {
-      const auto &condition = plan_.compiled_math.conditions[condition_pos];
-      const auto condition_id = condition_pos + 1U;
-      for (std::size_t source_pos = 0; source_pos < source_count; ++source_pos) {
-        auto &access =
-            source_condition_access_[condition_id * source_count + source_pos];
-        if (source_pos < condition.source_exact_fact_spans.size()) {
-          access.exact = condition.source_exact_fact_spans[source_pos];
-          access.has_exact = !access.exact.empty();
-        }
-        if (source_pos < condition.source_lower_fact_spans.size()) {
-          access.lower = condition.source_lower_fact_spans[source_pos];
-          access.has_lower = !access.lower.empty();
-        }
-        if (source_pos < condition.source_upper_fact_spans.size()) {
-          access.upper = condition.source_upper_fact_spans[source_pos];
-          access.has_upper = !access.upper.empty();
-        }
+  void build_source_kernel_evaluators() {
+    source_kernel_evaluators_.assign(
+        plan_.source_kernels.size(),
+        nullptr);
+    for (std::size_t i = 0; i < plan_.source_kernels.size(); ++i) {
+      switch (plan_.source_kernels[i].kind) {
+      case CompiledSourceChannelKernelKind::LeafAbsolute:
+        source_kernel_evaluators_[i] =
+            &CompiledSourceChannels::evaluate_leaf_absolute_kernel;
+        break;
+      case CompiledSourceChannelKernelKind::LeafOnsetConvolution:
+        source_kernel_evaluators_[i] =
+            &CompiledSourceChannels::evaluate_leaf_onset_convolution_kernel;
+        break;
+      case CompiledSourceChannelKernelKind::PoolKOfN:
+        source_kernel_evaluators_[i] =
+            &CompiledSourceChannels::evaluate_pool_kofn_kernel;
+        break;
+      case CompiledSourceChannelKernelKind::Invalid:
+        break;
       }
     }
   }
 
-  const SourceConditionAccess &source_condition_access(
+  const CompiledSourceBoundPlan &source_bound_plan(
       const semantic::Index condition_id,
       const semantic::Index source_id) const {
-    if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
-        source_id == semantic::kInvalidIndex) {
-      return empty_source_condition_access_;
+    const auto slot =
+        compiled_source_bound_plan_slot(
+            plan_.compiled_math, condition_id, source_id);
+    if (slot == semantic::kInvalidIndex) {
+      return empty_source_bound_plan_;
     }
-    const auto source_count = static_cast<std::size_t>(plan_.source_count);
-    const auto condition_pos = static_cast<std::size_t>(condition_id);
-    const auto source_pos = static_cast<std::size_t>(source_id);
-    if (source_count == 0U ||
-        condition_pos > plan_.compiled_math.conditions.size() ||
-        source_pos >= source_count) {
-      return empty_source_condition_access_;
-    }
-    return source_condition_access_[condition_pos * source_count + source_pos];
+    return plan_.compiled_math.source_condition_bound_plans[
+        static_cast<std::size_t>(slot)];
   }
 
   const CompiledMathCondition *condition_by_id(
@@ -454,114 +464,96 @@ private:
     if (source_id == semantic::kInvalidIndex) {
       return false;
     }
-    return source_condition_access(condition_id, source_id).has_exact;
-  }
-
-  bool has_condition_source_overlay(
-      const semantic::Index source_id,
-      const semantic::Index condition_id,
-      const CompiledMathWorkspace *workspace) const {
-    (void)workspace;
-    if (source_id == semantic::kInvalidIndex) {
-      return false;
-    }
-    return source_condition_access(condition_id, source_id).has_overlay();
+    return source_bound_plan(condition_id, source_id).has_condition_exact;
   }
 
   const double *exact_time_for(
       const semantic::Index source_id,
       const semantic::Index condition_id,
       const CompiledMathWorkspace *workspace) const {
-    if (source_id == semantic::kInvalidIndex) {
-      return nullptr;
-    }
-    if (const auto *condition = condition_by_id(condition_id)) {
-      const auto &access = source_condition_access(condition_id, source_id);
-      if (access.has_exact) {
-        const auto fact_pos = static_cast<std::size_t>(
-            condition->source_exact_fact_indices[
-                static_cast<std::size_t>(access.exact.offset)]);
-        compiled_condition_time_ =
-            condition_fact_time(workspace, *condition, fact_pos);
-        return &compiled_condition_time_;
-      }
-    }
-    const auto pos = static_cast<std::size_t>(source_id);
-    if (pos >= sequence_state_->exact_times.size()) {
-      return nullptr;
-    }
-    const auto value = sequence_state_->exact_times[pos];
-    if (!std::isfinite(value)) {
-      return nullptr;
-    }
-    return &sequence_state_->exact_times[pos];
+    return resolve_source_bounds(
+        source_id,
+        condition_id,
+        source_bound_plan(condition_id, source_id),
+        workspace).exact_time;
   }
 
-  bool has_source_lower_bound_overlay(
+  ResolvedSourceBounds resolve_source_bounds(
       const semantic::Index source_id,
       const semantic::Index condition_id,
+      const CompiledSourceBoundPlan &bounds,
       const CompiledMathWorkspace *workspace) const {
-    (void)workspace;
+    ResolvedSourceBounds resolved;
+    if (bounds.use_sequence_lower && sequence_state_ != nullptr) {
+      resolved.lower = sequence_state_->lower_bound;
+    }
     if (source_id == semantic::kInvalidIndex) {
-      return false;
+      return resolved;
     }
-    return source_condition_access(condition_id, source_id).has_lower;
-  }
+    const auto source_pos = static_cast<std::size_t>(source_id);
+    const bool sequence_exact =
+        bounds.use_sequence_exact &&
+        sequence_state_ != nullptr &&
+        source_pos < sequence_state_->exact_times.size() &&
+        std::isfinite(sequence_state_->exact_times[source_pos]);
+    const bool sequence_upper =
+        bounds.use_sequence_upper &&
+        sequence_state_ != nullptr &&
+        source_pos < sequence_state_->upper_bounds.size() &&
+        std::isfinite(sequence_state_->upper_bounds[source_pos]);
+    if (sequence_exact || sequence_upper) {
+      resolved.lower = 0.0;
+    }
+    if (sequence_upper) {
+      resolved.upper = sequence_state_->upper_bounds[source_pos];
+    }
 
-  bool has_source_upper_bound_overlay(
-      const semantic::Index source_id,
-      const semantic::Index condition_id,
-      const CompiledMathWorkspace *workspace) const {
-    (void)workspace;
-    if (source_id == semantic::kInvalidIndex) {
-      return false;
-    }
-    return source_condition_access(condition_id, source_id).has_upper;
-  }
-
-  double lower_bound_for(
-      const semantic::Index source_id,
-      const semantic::Index condition_id,
-      const CompiledMathWorkspace *workspace) const {
-    double lower_bound = sequence_state_->lower_bound;
-    if (source_id != semantic::kInvalidIndex) {
-      const auto *condition = condition_by_id(condition_id);
-      const auto &access = source_condition_access(condition_id, source_id);
-      if (condition != nullptr && access.has_lower) {
-        for (semantic::Index i = 0; i < access.lower.size; ++i) {
-          const auto fact_pos = static_cast<std::size_t>(
-              condition->source_lower_fact_indices[
-                  static_cast<std::size_t>(access.lower.offset + i)]);
-          lower_bound = std::max(
-              lower_bound,
-              condition_fact_time(workspace, *condition, fact_pos));
-        }
-      }
-    }
-    return lower_bound;
-  }
-
-  double upper_bound_for(
-      const semantic::Index source_id,
-      const semantic::Index condition_id,
-      const CompiledMathWorkspace *workspace) const {
-    if (source_id == semantic::kInvalidIndex) {
-      return std::numeric_limits<double>::infinity();
-    }
-    double upper_bound = std::numeric_limits<double>::infinity();
     const auto *condition = condition_by_id(condition_id);
-    const auto &access = source_condition_access(condition_id, source_id);
-    if (condition != nullptr && access.has_upper) {
-      for (semantic::Index i = 0; i < access.upper.size; ++i) {
+    if (condition != nullptr && bounds.has_condition_lower) {
+      for (semantic::Index i = 0; i < bounds.lower.size; ++i) {
+        const auto fact_pos = static_cast<std::size_t>(
+            condition->source_lower_fact_indices[
+                static_cast<std::size_t>(bounds.lower.offset + i)]);
+        resolved.lower = std::max(
+            resolved.lower,
+            condition_fact_time(workspace, *condition, fact_pos));
+      }
+      resolved.has_condition_lower = true;
+    }
+    if (condition != nullptr && bounds.has_condition_upper) {
+      for (semantic::Index i = 0; i < bounds.upper.size; ++i) {
         const auto fact_pos = static_cast<std::size_t>(
             condition->source_upper_fact_indices[
-                static_cast<std::size_t>(access.upper.offset + i)]);
-        upper_bound = std::min(
-            upper_bound,
+                static_cast<std::size_t>(bounds.upper.offset + i)]);
+        resolved.upper = std::min(
+            resolved.upper,
             condition_fact_time(workspace, *condition, fact_pos));
       }
     }
-    return upper_bound;
+    if (condition != nullptr && bounds.has_condition_exact) {
+      const auto fact_pos = static_cast<std::size_t>(
+          condition->source_exact_fact_indices[
+              static_cast<std::size_t>(bounds.exact.offset)]);
+      compiled_condition_time_ =
+          condition_fact_time(workspace, *condition, fact_pos);
+      resolved.exact_time = &compiled_condition_time_;
+      return resolved;
+    }
+    if (sequence_exact) {
+      resolved.exact_time = &sequence_state_->exact_times[source_pos];
+    }
+    return resolved;
+  }
+
+  ResolvedSourceBounds resolve_source_bounds(
+      const semantic::Index source_id,
+      const semantic::Index condition_id,
+      const CompiledMathWorkspace *workspace) const {
+    return resolve_source_bounds(
+        source_id,
+        condition_id,
+        source_bound_plan(condition_id, source_id),
+        workspace);
   }
 
   bool condition_source_order_known_before(
@@ -701,13 +693,14 @@ private:
         planned_kernel->kind != channel_plan.kernel) {
       return impossible_channels();
     }
-    const double lower_bound = lower_bound_for(source_id, condition_id, workspace);
-    const double upper_bound = upper_bound_for(source_id, condition_id, workspace);
+    const auto bounds = resolve_source_bounds(
+        source_id, condition_id, channel_plan.bounds, workspace);
+    const double lower_bound = bounds.lower;
+    const double upper_bound = bounds.upper;
     if (std::isfinite(upper_bound) && !(upper_bound > lower_bound)) {
       return impossible_channels();
     }
-    if (const double *exact_time =
-            exact_time_for(source_id, condition_id, workspace)) {
+    if (const double *exact_time = bounds.exact_time) {
       if (lower_bound > 0.0 && !(*exact_time > lower_bound)) {
         return impossible_channels();
       }
@@ -728,7 +721,7 @@ private:
     }
 
     leaf::EventChannels lower = leaf::EventChannels::impossible();
-    if (!has_source_lower_bound_overlay(source_id, condition_id, workspace) &&
+    if (!bounds.has_condition_lower &&
         std::fabs(lower_bound - sequence_state_->lower_bound) <= 1e-12) {
       lower = load_base_source(
           &base_lower_cache_, lower_bound, source_id, condition_id, workspace);
@@ -770,8 +763,8 @@ private:
       const semantic::Index source_id,
       const semantic::Index condition_id,
       const CompiledMathWorkspace *workspace) {
-    if (const double *exact_time =
-            exact_time_for(source_id, condition_id, workspace)) {
+    const auto bounds = resolve_source_bounds(source_id, condition_id, workspace);
+    if (const double *exact_time = bounds.exact_time) {
       if (!(active_base_time() >= *exact_time)) {
         return impossible_channels();
       }
@@ -781,18 +774,15 @@ private:
     if (kernel == nullptr) {
       return impossible_channels();
     }
-    switch (kernel->kind) {
-    case CompiledSourceChannelKernelKind::LeafAbsolute:
-      return evaluate_leaf_absolute_kernel(*kernel);
-    case CompiledSourceChannelKernelKind::LeafOnsetConvolution:
-      return evaluate_leaf_onset_convolution_kernel(
-          *kernel, condition_id, workspace);
-    case CompiledSourceChannelKernelKind::PoolKOfN:
-      return evaluate_pool_kofn_kernel(*kernel, condition_id, workspace);
-    case CompiledSourceChannelKernelKind::Invalid:
-      break;
+    const auto source_pos = static_cast<std::size_t>(source_id);
+    if (source_pos >= source_kernel_evaluators_.size() ||
+        source_kernel_evaluators_[source_pos] == nullptr) {
+      return impossible_channels();
     }
-    return impossible_channels();
+    return (this->*source_kernel_evaluators_[source_pos])(
+        *kernel,
+        condition_id,
+        workspace);
   }
 
   const ExactSourceKernel *source_kernel_for(
@@ -805,7 +795,11 @@ private:
   }
 
   leaf::EventChannels evaluate_leaf_absolute_kernel(
-      const ExactSourceKernel &kernel) {
+      const ExactSourceKernel &kernel,
+      const semantic::Index condition_id,
+      const CompiledMathWorkspace *workspace) {
+    (void)condition_id;
+    (void)workspace;
     const auto pos = static_cast<std::size_t>(kernel.leaf_index);
     if (kernel.leaf_index == semantic::kInvalidIndex ||
         pos >= program_.leaf_descriptors.size() ||
@@ -855,8 +849,9 @@ private:
     };
 
     const auto onset_source_id = kernel.onset_source_id;
-    if (const double *exact_time =
-            exact_time_for(onset_source_id, condition_id, workspace)) {
+    const auto onset_bounds =
+        resolve_source_bounds(onset_source_id, condition_id, workspace);
+    if (const double *exact_time = onset_bounds.exact_time) {
       return shifted_channels(*exact_time);
     }
 
@@ -905,39 +900,42 @@ private:
           workspace));
     }
 
-    std::vector<std::vector<double>> prefix(
-        static_cast<std::size_t>(n_members + 1),
-        std::vector<double>(static_cast<std::size_t>(n_members + 1), 0.0));
-    std::vector<std::vector<double>> suffix(
-        static_cast<std::size_t>(n_members + 1),
-        std::vector<double>(static_cast<std::size_t>(n_members + 1), 0.0));
-    prefix[0][0] = 1.0;
+    const auto width = static_cast<std::size_t>(n_members + 1);
+    const auto table_size = width * width;
+    std::vector<double> prefix(table_size, 0.0);
+    std::vector<double> suffix(table_size, 0.0);
+    const auto idx = [width](const int row, const int col) {
+      return static_cast<std::size_t>(row) * width +
+             static_cast<std::size_t>(col);
+    };
+
+    prefix[idx(0, 0)] = 1.0;
     for (int i = 0; i < n_members; ++i) {
       for (int m = 0; m <= i; ++m) {
-        prefix[static_cast<std::size_t>(i + 1)][static_cast<std::size_t>(m)] +=
-            prefix[static_cast<std::size_t>(i)][static_cast<std::size_t>(m)] *
+        prefix[idx(i + 1, m)] +=
+            prefix[idx(i, m)] *
             members[static_cast<std::size_t>(i)].survival;
-        prefix[static_cast<std::size_t>(i + 1)][static_cast<std::size_t>(m + 1)] +=
-            prefix[static_cast<std::size_t>(i)][static_cast<std::size_t>(m)] *
+        prefix[idx(i + 1, m + 1)] +=
+            prefix[idx(i, m)] *
             members[static_cast<std::size_t>(i)].cdf;
       }
     }
-    suffix[static_cast<std::size_t>(n_members)][0] = 1.0;
+    suffix[idx(n_members, 0)] = 1.0;
     for (int i = n_members - 1; i >= 0; --i) {
       const int count = n_members - i - 1;
       for (int m = 0; m <= count; ++m) {
-        suffix[static_cast<std::size_t>(i)][static_cast<std::size_t>(m)] +=
-            suffix[static_cast<std::size_t>(i + 1)][static_cast<std::size_t>(m)] *
+        suffix[idx(i, m)] +=
+            suffix[idx(i + 1, m)] *
             members[static_cast<std::size_t>(i)].survival;
-        suffix[static_cast<std::size_t>(i)][static_cast<std::size_t>(m + 1)] +=
-            suffix[static_cast<std::size_t>(i + 1)][static_cast<std::size_t>(m)] *
+        suffix[idx(i, m + 1)] +=
+            suffix[idx(i + 1, m)] *
             members[static_cast<std::size_t>(i)].cdf;
       }
     }
 
     double surv = 0.0;
     for (int m = 0; m < k; ++m) {
-      surv += prefix[static_cast<std::size_t>(n_members)][static_cast<std::size_t>(m)];
+      surv += prefix[idx(n_members, m)];
     }
     double pdf = 0.0;
     for (int i = 0; i < n_members; ++i) {
@@ -948,8 +946,7 @@ private:
           continue;
         }
         others_exact +=
-            prefix[static_cast<std::size_t>(i)][static_cast<std::size_t>(left)] *
-            suffix[static_cast<std::size_t>(i + 1)][static_cast<std::size_t>(right)];
+            prefix[idx(i, left)] * suffix[idx(i + 1, right)];
       }
       pdf += members[static_cast<std::size_t>(i)].pdf * others_exact;
     }

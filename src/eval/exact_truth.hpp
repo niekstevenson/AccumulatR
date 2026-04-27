@@ -1,8 +1,9 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
+#include <cstdint>
 #include <limits>
+#include <vector>
 
 #include "exact_source_channels.hpp"
 #include "leaf_kernel.hpp"
@@ -99,6 +100,13 @@ public:
     (void)workspace;
     return source_channels_->has_guard_upper_bound_overlay(
         condition_id);
+  }
+
+  bool expr_upper_bound_for(
+      const semantic::Index expr_id,
+      ExactTimedExprUpperBound *out) const {
+    return source_channels_ != nullptr &&
+           source_channels_->expr_upper_bound_for(expr_id, out);
   }
 
 private:
@@ -364,6 +372,37 @@ inline CompiledTimedUpperBound compiled_math_upper_bound_from_facts(
       best.found = true;
       best.time = fact_time;
       best.normalizer = normalizer;
+    }
+  }
+  return best;
+}
+
+inline CompiledTimedUpperBound compiled_math_expr_upper_bound_for_node(
+    const CompiledMathProgram &program,
+    const CompiledMathNode &node,
+    const CompiledMathWorkspace &workspace,
+    const CompiledSourceView *condition_evaluator) {
+  const auto *condition =
+      compiled_math_condition_by_id(program, node.condition_id);
+  CompiledTimedUpperBound best =
+      condition == nullptr
+          ? CompiledTimedUpperBound{}
+          : compiled_math_upper_bound_from_facts(
+                program,
+                node,
+                workspace,
+                condition->expr_upper_fact_indices);
+  if (condition_evaluator != nullptr) {
+    ExactTimedExprUpperBound sequence_upper;
+    if (condition_evaluator->expr_upper_bound_for(
+            node.subject_id,
+            &sequence_upper) &&
+        std::isfinite(sequence_upper.time) &&
+        sequence_upper.normalizer > 0.0 &&
+        (!best.found || sequence_upper.time < best.time)) {
+      best.found = true;
+      best.time = sequence_upper.time;
+      best.normalizer = sequence_upper.normalizer;
     }
   }
   return best;
@@ -653,63 +692,6 @@ inline double evaluate_compiled_integral_kernel(
     double lower,
     double upper);
 
-inline double evaluate_compiled_lazy_child(
-    const CompiledMathProgram &program,
-    const semantic::Index node_id,
-    CompiledMathWorkspace *workspace,
-    CompiledSourceView *parent,
-    CompiledSourceView *scenario,
-    CompiledEvalWorkspace *eval_workspace) {
-  if (node_id == semantic::kInvalidIndex) {
-    return 0.0;
-  }
-  const auto &node = program.nodes[static_cast<std::size_t>(node_id)];
-  switch (node.kind) {
-  case CompiledMathNodeKind::Constant:
-    return node.constant;
-  case CompiledMathNodeKind::RootValue: {
-    auto *condition_evaluator =
-        compiled_math_node_evaluator(node, parent, eval_workspace);
-    if (node.subject_id == semantic::kInvalidIndex ||
-        condition_evaluator == nullptr) {
-      return 0.0;
-    }
-    const double value =
-        evaluate_compiled_math_root(
-            program,
-            node.subject_id,
-            workspace,
-            condition_evaluator,
-            scenario,
-            eval_workspace);
-    return std::isfinite(value) ? value : 0.0;
-  }
-  case CompiledMathNodeKind::LazyProduct: {
-    double product = 1.0;
-    for (semantic::Index i = 0; i < node.children.size; ++i) {
-      const auto child_id = program.child_nodes[
-          static_cast<std::size_t>(node.children.offset + i)];
-      const double child =
-          evaluate_compiled_lazy_child(
-              program,
-              child_id,
-              workspace,
-              parent,
-              scenario,
-              eval_workspace);
-      product *= child;
-      if (!std::isfinite(product) || product == 0.0) {
-        return 0.0;
-      }
-    }
-    return product;
-  }
-  default:
-    throw std::runtime_error(
-        "lazy compiled product contains a non-root child");
-  }
-}
-
 inline double compiled_math_source_value_for_node(
     const CompiledMathNode &node,
     CompiledMathWorkspace *workspace,
@@ -735,6 +717,271 @@ inline double compiled_math_source_value_for_node(
   throw std::runtime_error("source-product integral contains a non-source node");
 }
 
+inline bool compiled_math_outcome_gate_open_for_node(
+    const CompiledMathNode &node,
+    const CompiledMathWorkspace &workspace,
+    const CompiledSourceView *parent) {
+  if (node.kind != CompiledMathNodeKind::OutcomeSubsetUnused) {
+    throw std::runtime_error("integral outcome gate contains a non-gate node");
+  }
+  if (workspace.used_outcomes == nullptr) {
+    return true;
+  }
+  if (parent == nullptr) {
+    throw std::runtime_error(
+        "integral outcome gate requires a compiled source view");
+  }
+  const auto offset = static_cast<std::size_t>(node.subject_id);
+  const auto size = static_cast<std::size_t>(node.aux_id);
+  const auto &indices = parent->plan().compiled_outcome_gate_indices;
+  if (offset + size > indices.size()) {
+    throw std::runtime_error(
+        "compiled outcome-used gate points outside the plan");
+  }
+  for (std::size_t i = 0; i < size; ++i) {
+    const auto outcome_idx = indices[offset + i];
+    if (outcome_idx != semantic::kInvalidIndex &&
+        static_cast<std::size_t>(outcome_idx) <
+            workspace.used_outcomes->size() &&
+        (*workspace.used_outcomes)[static_cast<std::size_t>(outcome_idx)] !=
+            0U) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline bool compiled_math_integral_outcome_gates_open(
+    const CompiledMathProgram &program,
+    const CompiledMathIndexSpan outcome_gate_nodes,
+    const CompiledMathWorkspace &workspace,
+    const CompiledSourceView *parent) {
+  for (semantic::Index i = 0; i < outcome_gate_nodes.size; ++i) {
+    const auto node_id =
+        program.integral_kernel_outcome_gate_nodes[
+            static_cast<std::size_t>(outcome_gate_nodes.offset + i)];
+    const auto &gate_node =
+        program.nodes[static_cast<std::size_t>(node_id)];
+    if (!compiled_math_outcome_gate_open_for_node(
+            gate_node,
+            workspace,
+            parent)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline bool compiled_math_integral_time_gates_open(
+    const CompiledMathProgram &program,
+    const CompiledMathIndexSpan time_gate_nodes,
+    const CompiledMathWorkspace &workspace) {
+  for (semantic::Index i = 0; i < time_gate_nodes.size; ++i) {
+    const auto node_id =
+        program.integral_kernel_time_gate_nodes[
+            static_cast<std::size_t>(time_gate_nodes.offset + i)];
+    const auto &gate_node =
+        program.nodes[static_cast<std::size_t>(node_id)];
+    if (gate_node.kind != CompiledMathNodeKind::TimeGate) {
+      throw std::runtime_error("integral time gate contains a non-gate node");
+    }
+    if (workspace.time(gate_node.time_id) < workspace.time(gate_node.aux_id)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline double compiled_math_integral_factor_value_for_node(
+    const CompiledMathProgram &program,
+    const CompiledMathNode &node,
+    CompiledMathWorkspace *workspace,
+    CompiledSourceView *parent,
+    CompiledSourceView *scenario,
+    CompiledEvalWorkspace *eval_workspace) {
+  if (!compiled_math_is_integral_node(node.kind)) {
+    throw std::runtime_error("integral factor contains a non-integral node");
+  }
+  const double current_time = compiled_math_node_time(node, *workspace);
+  if (!(current_time > 0.0)) {
+    return 0.0;
+  }
+  double value =
+      evaluate_compiled_integral_kernel(
+          program,
+          node,
+          workspace,
+          parent,
+          scenario,
+          eval_workspace,
+          0.0,
+          current_time);
+  if (!std::isfinite(value)) {
+    return 0.0;
+  }
+  if (node.kind == CompiledMathNodeKind::IntegralZeroToCurrent) {
+    value = clamp_probability(value);
+  }
+  return value;
+}
+
+inline bool compiled_math_apply_expr_upper_factor(
+    const CompiledMathProgram &program,
+    const CompiledMathIntegralExprUpperFactor &factor,
+    CompiledMathWorkspace *workspace,
+    CompiledSourceView *parent,
+    CompiledEvalWorkspace *eval_workspace,
+    double *product) {
+  const auto &node =
+      program.nodes[static_cast<std::size_t>(factor.node_id)];
+  if (node.kind != CompiledMathNodeKind::ExprUpperBoundDensity &&
+      node.kind != CompiledMathNodeKind::ExprUpperBoundCdf) {
+    throw std::runtime_error(
+        "integral expression upper factor contains a non-upper node");
+  }
+  const auto upper =
+      compiled_math_expr_upper_bound_for_node(
+          program,
+          node,
+          *workspace,
+          compiled_math_node_evaluator(node, parent, eval_workspace));
+  const bool has_upper = upper.found && upper.normalizer > 0.0;
+  const double current_time = compiled_math_node_time(node, *workspace);
+  if (factor.mode == CompiledMathIntegralExprUpperMode::AfterOne) {
+    if (!has_upper || current_time < upper.time) {
+      *product = 0.0;
+      return false;
+    }
+    return true;
+  }
+  if (!has_upper) {
+    return true;
+  }
+  if (current_time >= upper.time) {
+    *product = 0.0;
+    return false;
+  }
+  *product /= upper.normalizer;
+  return std::isfinite(*product) && *product != 0.0;
+}
+
+inline double compiled_math_source_product_value_for_nodes(
+    const CompiledMathProgram &program,
+    const CompiledMathIndexSpan source_value_nodes,
+    CompiledMathWorkspace *workspace,
+    CompiledSourceView *parent,
+    CompiledEvalWorkspace *eval_workspace) {
+  double product = 1.0;
+  for (semantic::Index i = 0; i < source_value_nodes.size; ++i) {
+    const auto node_id =
+        program.integral_kernel_source_value_nodes[
+            static_cast<std::size_t>(source_value_nodes.offset + i)];
+    const auto &source_node =
+        program.nodes[static_cast<std::size_t>(node_id)];
+    product *= compiled_math_source_value_for_node(
+        source_node,
+        workspace,
+        parent,
+        eval_workspace);
+    if (!std::isfinite(product) || product == 0.0) {
+      return 0.0;
+    }
+  }
+  return std::isfinite(product) ? product : 0.0;
+}
+
+inline double evaluate_compiled_source_product_integral_sample(
+    const CompiledMathProgram &program,
+    const CompiledMathIntegralKernel &kernel,
+    CompiledMathWorkspace *integral_workspace,
+    CompiledSourceView *parent,
+    CompiledEvalWorkspace *eval_workspace,
+    const std::vector<std::uint8_t> *term_outcome_open) {
+  if (kernel.kind == CompiledMathIntegralKernelKind::SourceProduct) {
+    return compiled_math_source_product_value_for_nodes(
+        program,
+        kernel.source_value_nodes,
+        integral_workspace,
+        parent,
+        eval_workspace);
+  }
+
+  double total = 0.0;
+  for (semantic::Index term_idx = 0;
+       term_idx < kernel.source_product_terms.size;
+       ++term_idx) {
+    const auto &term =
+        program.integral_kernel_source_product_terms[
+            static_cast<std::size_t>(
+                kernel.source_product_terms.offset + term_idx)];
+    const auto term_pos = static_cast<std::size_t>(term_idx);
+    if (term_outcome_open != nullptr &&
+        term_pos < term_outcome_open->size() &&
+        (*term_outcome_open)[term_pos] == 0U) {
+      continue;
+    }
+    if (!compiled_math_integral_time_gates_open(
+            program, term.time_gate_nodes, *integral_workspace)) {
+      continue;
+    }
+    double product = term.sign;
+    for (semantic::Index i = 0; i < term.integral_factor_nodes.size; ++i) {
+      const auto node_id =
+          program.integral_kernel_integral_factor_nodes[
+              static_cast<std::size_t>(
+                  term.integral_factor_nodes.offset + i)];
+      const auto &integral_node =
+          program.nodes[static_cast<std::size_t>(node_id)];
+      product *= compiled_math_integral_factor_value_for_node(
+          program,
+          integral_node,
+          integral_workspace,
+          parent,
+          nullptr,
+          eval_workspace);
+      if (!std::isfinite(product) || product == 0.0) {
+        product = 0.0;
+        break;
+      }
+    }
+    if (product == 0.0) {
+      continue;
+    }
+    for (semantic::Index i = 0; i < term.expr_upper_factors.size; ++i) {
+      const auto &factor =
+          program.integral_kernel_expr_upper_factors[
+              static_cast<std::size_t>(
+                  term.expr_upper_factors.offset + i)];
+      if (!compiled_math_apply_expr_upper_factor(
+              program,
+              factor,
+              integral_workspace,
+              parent,
+              eval_workspace,
+              &product)) {
+        break;
+      }
+    }
+    if (!std::isfinite(product) || product == 0.0) {
+      continue;
+    }
+    product *= compiled_math_source_product_value_for_nodes(
+        program,
+        term.source_value_nodes,
+        integral_workspace,
+        parent,
+        eval_workspace);
+    if (!std::isfinite(product) || product == 0.0) {
+      continue;
+    }
+    total += product;
+  }
+  if (!std::isfinite(total)) {
+    return 0.0;
+  }
+  return kernel.clean_signed_source_sum ? clean_signed_value(total) : total;
+}
+
 inline double evaluate_compiled_source_product_integral_kernel(
     const CompiledMathProgram &program,
     const CompiledMathIntegralKernel &kernel,
@@ -743,69 +990,56 @@ inline double evaluate_compiled_source_product_integral_kernel(
     CompiledEvalWorkspace *eval_workspace,
     const double lower,
     const double upper) {
+  if (!std::isfinite(lower) || !std::isfinite(upper) || !(upper > lower)) {
+    return 0.0;
+  }
+
   auto &integral_workspace = workspace->integral_workspace_for(program);
-  return quadrature::integrate_finite_default(
-      [&](const double u) {
-        CompiledMathWorkspace::TimeBinding bind(
+  const auto batch = quadrature::build_finite_batch(lower, upper);
+  const std::vector<std::uint8_t> *term_outcome_open_ptr = nullptr;
+  if (kernel.kind == CompiledMathIntegralKernelKind::SourceProductSum) {
+    integral_workspace.integral_term_open.assign(
+        static_cast<std::size_t>(kernel.source_product_terms.size), 1U);
+    for (semantic::Index term_idx = 0;
+         term_idx < kernel.source_product_terms.size;
+         ++term_idx) {
+      const auto &term =
+          program.integral_kernel_source_product_terms[
+              static_cast<std::size_t>(
+                  kernel.source_product_terms.offset + term_idx)];
+      integral_workspace.integral_term_open[static_cast<std::size_t>(term_idx)] =
+          compiled_math_integral_outcome_gates_open(
+              program,
+              term.outcome_gate_nodes,
+              integral_workspace,
+              parent)
+              ? 1U
+              : 0U;
+    }
+    term_outcome_open_ptr = &integral_workspace.integral_term_open;
+  }
+  double sum = 0.0;
+  CompiledMathWorkspace::RebindableTimeBinding bind(
+      &integral_workspace,
+      kernel.bind_time_id);
+  for (std::size_t sample_idx = 0;
+       sample_idx < quadrature::kDefaultFiniteOrder;
+       ++sample_idx) {
+    bind.set(batch.nodes.nodes[sample_idx]);
+    const double value =
+        evaluate_compiled_source_product_integral_sample(
+            program,
+            kernel,
             &integral_workspace,
-            kernel.bind_time_id,
-            u);
-        if (kernel.kind == CompiledMathIntegralKernelKind::SourceProduct) {
-          double product = 1.0;
-          for (semantic::Index i = 0; i < kernel.source_value_nodes.size; ++i) {
-            const auto node_id =
-                program.integral_kernel_source_value_nodes[
-                    static_cast<std::size_t>(
-                        kernel.source_value_nodes.offset + i)];
-            const auto &source_node =
-                program.nodes[static_cast<std::size_t>(node_id)];
-            product *= compiled_math_source_value_for_node(
-                source_node,
-                &integral_workspace,
-                parent,
-                eval_workspace);
-            if (!std::isfinite(product) || product == 0.0) {
-              return 0.0;
-            }
-          }
-          return std::isfinite(product) ? product : 0.0;
-        }
-        double total = 0.0;
-        for (semantic::Index term_idx = 0;
-             term_idx < kernel.source_product_terms.size;
-             ++term_idx) {
-          const auto &term =
-              program.integral_kernel_source_product_terms[
-                  static_cast<std::size_t>(
-                      kernel.source_product_terms.offset + term_idx)];
-          double product = term.sign;
-          for (semantic::Index i = 0; i < term.source_value_nodes.size; ++i) {
-            const auto node_id =
-                program.integral_kernel_source_value_nodes[
-                    static_cast<std::size_t>(
-                        term.source_value_nodes.offset + i)];
-            const auto &source_node =
-                program.nodes[static_cast<std::size_t>(node_id)];
-            product *= compiled_math_source_value_for_node(
-                source_node,
-                &integral_workspace,
-                parent,
-                eval_workspace);
-            if (!std::isfinite(product) || product == 0.0) {
-              product = 0.0;
-              break;
-            }
-          }
-          total += product;
-        }
-        if (!std::isfinite(total)) {
-          return 0.0;
-        }
-        return kernel.clean_signed_source_sum ? clean_signed_value(total)
-                                              : total;
-      },
-      lower,
-      upper);
+            parent,
+            eval_workspace,
+            term_outcome_open_ptr);
+    if (!std::isfinite(value) || value == 0.0) {
+      continue;
+    }
+    sum += batch.nodes.weights[sample_idx] * value;
+  }
+  return std::isfinite(sum) ? sum : 0.0;
 }
 
 inline double evaluate_compiled_integral_kernel(
@@ -836,29 +1070,6 @@ inline double evaluate_compiled_integral_kernel(
         workspace,
         parent,
         eval_workspace,
-        lower,
-        upper);
-  }
-  if (kernel.kind == CompiledMathIntegralKernelKind::Subgraph) {
-    auto &integral_workspace = workspace->integral_workspace_for(program);
-    return quadrature::integrate_finite_default(
-        [&](const double u) {
-          CompiledMathWorkspace::TimeBinding bind(
-              &integral_workspace,
-              kernel.bind_time_id,
-              u);
-          const double term = evaluate_compiled_node_span(
-              program,
-              kernel.subgraph,
-              kernel.result_node_id,
-              &integral_workspace,
-              parent,
-              scenario,
-              eval_workspace,
-              nullptr,
-              true);
-          return std::isfinite(term) ? term : 0.0;
-        },
         lower,
         upper);
   }
@@ -1104,41 +1315,6 @@ inline double evaluate_compiled_node_span(
       }
       break;
     }
-    case CompiledMathNodeKind::RootValue: {
-      if (node.subject_id == semantic::kInvalidIndex ||
-          condition_evaluator == nullptr) {
-        value = 0.0;
-        break;
-      }
-      value = evaluate_compiled_math_root(
-          program,
-          node.subject_id,
-          workspace,
-          condition_evaluator,
-          scenario,
-          eval_workspace);
-      value = std::isfinite(value) ? value : 0.0;
-      break;
-    }
-    case CompiledMathNodeKind::LazyProduct: {
-      value = 1.0;
-      for (semantic::Index i = 0; i < node.children.size; ++i) {
-        const auto child_id = program.child_nodes[
-            static_cast<std::size_t>(node.children.offset + i)];
-        value *= evaluate_compiled_lazy_child(
-            program,
-            child_id,
-            workspace,
-            parent,
-            scenario,
-            eval_workspace);
-        if (!std::isfinite(value) || value == 0.0) {
-          value = 0.0;
-          break;
-        }
-      }
-      break;
-    }
     case CompiledMathNodeKind::IntegralZeroToCurrent: {
       if (condition_evaluator == nullptr ||
           node.integral_kernel_slot == semantic::kInvalidIndex) {
@@ -1191,34 +1367,31 @@ inline double evaluate_compiled_node_span(
           program.child_nodes[static_cast<std::size_t>(node.children.offset)];
       const double raw =
           workspace->values[static_cast<std::size_t>(child_id)];
-      const auto *condition =
-          compiled_math_condition_by_id(program, node.condition_id);
-      const auto upper =
-          condition == nullptr
-              ? CompiledTimedUpperBound{}
-              : compiled_math_upper_bound_from_facts(
-                    program,
-                    node,
-                    *workspace,
-                    condition->expr_upper_fact_indices);
-      if (!upper.found) {
+      const auto best_upper =
+          compiled_math_expr_upper_bound_for_node(
+              program,
+              node,
+              *workspace,
+              condition_evaluator);
+      if (!best_upper.found) {
         value = raw;
         break;
       }
       const double current_time = compiled_math_node_time(node, *workspace);
       if (node.kind == CompiledMathNodeKind::ExprUpperBoundCdf) {
-        if (!(upper.normalizer > 0.0)) {
+        if (!(best_upper.normalizer > 0.0)) {
           value = 0.0;
-        } else if (current_time >= upper.time) {
+        } else if (current_time >= best_upper.time) {
           value = 1.0;
         } else {
-          value = clamp_probability(raw / upper.normalizer);
+          value = clamp_probability(raw / best_upper.normalizer);
         }
       } else {
-        if (!(upper.normalizer > 0.0) || current_time >= upper.time) {
+        if (!(best_upper.normalizer > 0.0) ||
+            current_time >= best_upper.time) {
           value = 0.0;
         } else {
-          value = safe_density(raw / upper.normalizer);
+          value = safe_density(raw / best_upper.normalizer);
         }
       }
       break;

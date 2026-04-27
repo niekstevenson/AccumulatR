@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <memory>
 #include <stdexcept>
 #include <unordered_map>
@@ -45,17 +46,14 @@ enum class CompiledMathNodeKind : std::uint8_t {
   UnionKernelMultiSubsetDensity = 22,
   UnionKernelMultiSubsetCdf = 23,
   OutcomeSubsetUnused = 24,
-  RootValue = 25,
   IntegralZeroToCurrentRaw = 26,
-  LazyProduct = 27,
   SourceChannelLoad = 28,
   TimeGate = 29
 };
 
 enum class CompiledMathIntegralKernelKind : std::uint8_t {
   SourceProduct = 0,
-  SourceProductSum = 1,
-  Subgraph = 2
+  SourceProductSum = 1
 };
 
 enum class CompiledSourceChannelKernelKind : std::uint8_t {
@@ -108,15 +106,28 @@ struct CompiledMathRoot {
 
 struct CompiledMathIntegralSourceProductTerm {
   CompiledMathIndexSpan source_value_nodes{};
+  CompiledMathIndexSpan outcome_gate_nodes{};
+  CompiledMathIndexSpan time_gate_nodes{};
+  CompiledMathIndexSpan integral_factor_nodes{};
+  CompiledMathIndexSpan expr_upper_factors{};
   double sign{1.0};
+};
+
+enum class CompiledMathIntegralExprUpperMode : std::uint8_t {
+  BeforeScale = 0,
+  AfterOne = 1
+};
+
+struct CompiledMathIntegralExprUpperFactor {
+  semantic::Index node_id{semantic::kInvalidIndex};
+  CompiledMathIntegralExprUpperMode mode{
+      CompiledMathIntegralExprUpperMode::BeforeScale};
 };
 
 struct CompiledMathIntegralKernel {
   CompiledMathIntegralKernelKind kind{
-      CompiledMathIntegralKernelKind::Subgraph};
+      CompiledMathIntegralKernelKind::SourceProductSum};
   semantic::Index root_id{semantic::kInvalidIndex};
-  semantic::Index result_node_id{semantic::kInvalidIndex};
-  CompiledMathIndexSpan subgraph{};
   semantic::Index bind_time_id{semantic::kInvalidIndex};
   CompiledMathIndexSpan source_value_nodes{};
   CompiledMathIndexSpan source_product_terms{};
@@ -188,11 +199,25 @@ struct CompiledMathSourceChannelKey {
   }
 };
 
+struct CompiledSourceBoundPlan {
+  CompiledMathIndexSpan exact{};
+  CompiledMathIndexSpan lower{};
+  CompiledMathIndexSpan upper{};
+  bool has_condition_exact{false};
+  bool has_condition_lower{false};
+  bool has_condition_upper{false};
+  bool use_sequence_exact{true};
+  bool use_sequence_lower{true};
+  bool use_sequence_upper{true};
+};
+
 struct CompiledSourceChannelPlan {
   CompiledMathSourceChannelKey request{};
   CompiledSourceChannelKernelKind kernel{
       CompiledSourceChannelKernelKind::Invalid};
   semantic::Index source_kernel_slot{semantic::kInvalidIndex};
+  semantic::Index bound_plan_slot{semantic::kInvalidIndex};
+  CompiledSourceBoundPlan bounds{};
   bool has_source_condition_overlay{false};
 };
 
@@ -329,9 +354,16 @@ struct CompiledMathProgram {
   std::vector<CompiledMathIntegralSourceProductTerm>
       integral_kernel_source_product_terms;
   std::vector<semantic::Index> integral_kernel_source_value_nodes;
+  std::vector<semantic::Index> integral_kernel_outcome_gate_nodes;
+  std::vector<semantic::Index> integral_kernel_time_gate_nodes;
+  std::vector<semantic::Index> integral_kernel_integral_factor_nodes;
+  std::vector<CompiledMathIntegralExprUpperFactor>
+      integral_kernel_expr_upper_factors;
   std::vector<CompiledMathSourceChannelKey> source_channel_keys;
   std::vector<CompiledSourceChannelPlan> source_channel_plans;
+  std::vector<CompiledSourceBoundPlan> source_condition_bound_plans;
   std::vector<semantic::Index> source_channel_use_counts;
+  semantic::Index source_condition_bound_source_count{0};
   semantic::Index source_channel_count{0};
   std::unordered_map<
       CompiledMathNodeKey,
@@ -499,6 +531,55 @@ struct CompiledMathWorkspace {
     bool had_previous_{false};
   };
 
+  class RebindableTimeBinding {
+  public:
+    RebindableTimeBinding(CompiledMathWorkspace *workspace,
+                          const semantic::Index time_id)
+        : workspace_(workspace), time_id_(time_id) {
+      if (workspace_ == nullptr) {
+        return;
+      }
+      pos_ = static_cast<std::size_t>(time_id_);
+      if (workspace_->time_values.size() <= pos_) {
+        workspace_->time_values.resize(pos_ + 1U, 0.0);
+        workspace_->time_valid.resize(pos_ + 1U, 0U);
+      }
+      had_previous_ = workspace_->time_valid[pos_] != 0U;
+      previous_ = workspace_->time_values[pos_];
+    }
+
+    RebindableTimeBinding(const RebindableTimeBinding &) = delete;
+    RebindableTimeBinding &operator=(const RebindableTimeBinding &) = delete;
+
+    ~RebindableTimeBinding() {
+      if (workspace_ == nullptr) {
+        return;
+      }
+      if (had_previous_) {
+        workspace_->time_values[pos_] = previous_;
+        workspace_->time_valid[pos_] = 1U;
+      } else {
+        workspace_->time_values[pos_] = 0.0;
+        workspace_->time_valid[pos_] = 0U;
+      }
+    }
+
+    void set(const double value) {
+      if (workspace_ == nullptr) {
+        return;
+      }
+      workspace_->time_values[pos_] = value;
+      workspace_->time_valid[pos_] = 1U;
+    }
+
+  private:
+    CompiledMathWorkspace *workspace_{nullptr};
+    semantic::Index time_id_{0};
+    std::size_t pos_{0};
+    double previous_{0.0};
+    bool had_previous_{false};
+  };
+
   CompiledMathWorkspace &integral_workspace_for(
       const CompiledMathProgram &program) {
     if (!integral_workspace) {
@@ -528,6 +609,7 @@ struct CompiledMathWorkspace {
   std::vector<std::uint8_t> time_valid;
   std::vector<CompiledMathIndexSpan> condition_time_dependency_spans;
   std::vector<semantic::Index> condition_time_dependency_ids;
+  std::vector<std::uint8_t> integral_term_open;
   const std::vector<std::uint8_t> *used_outcomes{nullptr};
   std::unique_ptr<CompiledMathWorkspace> integral_workspace;
 };
@@ -596,45 +678,103 @@ inline semantic::Index compiled_math_source_channel_slot(
   return slot;
 }
 
-inline bool compiled_math_source_product_kernel_nodes(
+struct CompiledMathSourceProductTermBuild {
+  std::vector<semantic::Index> source_value_nodes;
+  std::vector<semantic::Index> outcome_gate_nodes;
+  std::vector<semantic::Index> time_gate_nodes;
+  std::vector<semantic::Index> integral_factor_nodes;
+  std::vector<CompiledMathIntegralExprUpperFactor> expr_upper_factors;
+  double sign{1.0};
+};
+
+inline bool compiled_math_expand_source_product_terms(
     const CompiledMathProgram &program,
     const semantic::Index node_id,
-    std::vector<semantic::Index> *source_value_nodes) {
+    const double sign,
+    std::vector<CompiledMathSourceProductTermBuild> *terms,
+    bool *clean_signed) {
   if (node_id == semantic::kInvalidIndex) {
     return false;
   }
   const auto &node = program.nodes[static_cast<std::size_t>(node_id)];
   if (compiled_math_is_source_value_node(node.kind)) {
-    source_value_nodes->push_back(node_id);
+    terms->push_back(
+        CompiledMathSourceProductTermBuild{{node_id}, {}, {}, {}, {}, sign});
     return true;
   }
-  if (node.kind != CompiledMathNodeKind::Product) {
-    return false;
+  if (node.kind == CompiledMathNodeKind::Constant) {
+    const double term_sign = sign * node.constant;
+    if (term_sign != 0.0) {
+      terms->push_back(
+          CompiledMathSourceProductTermBuild{{}, {}, {}, {}, {}, term_sign});
+    }
+    return true;
   }
-  if (node.children.empty()) {
-    return false;
+  if (node.kind == CompiledMathNodeKind::OutcomeSubsetUnused) {
+    terms->push_back(
+        CompiledMathSourceProductTermBuild{{}, {node_id}, {}, {}, {}, sign});
+    return true;
   }
-  for (semantic::Index i = 0; i < node.children.size; ++i) {
-    const auto child_id = program.child_nodes[
-        static_cast<std::size_t>(node.children.offset + i)];
-    if (!compiled_math_source_product_kernel_nodes(
-            program, child_id, source_value_nodes)) {
+  if (compiled_math_is_integral_node(node.kind)) {
+    if (node.integral_kernel_slot == semantic::kInvalidIndex) {
       return false;
     }
+    terms->push_back(
+        CompiledMathSourceProductTermBuild{{}, {}, {}, {node_id}, {}, sign});
+    return true;
   }
-  return !source_value_nodes->empty();
-}
-
-inline bool compiled_math_collect_source_product_terms(
-    CompiledMathProgram *program,
-    const semantic::Index node_id,
-    const double sign,
-    std::vector<CompiledMathIntegralSourceProductTerm> *terms,
-    bool *clean_signed) {
-  if (node_id == semantic::kInvalidIndex) {
-    return false;
+  if ((node.kind == CompiledMathNodeKind::ExprUpperBoundDensity ||
+       node.kind == CompiledMathNodeKind::ExprUpperBoundCdf) &&
+      node.children.size == 1U) {
+    const auto child_id = program.child_nodes[
+        static_cast<std::size_t>(node.children.offset)];
+    std::vector<CompiledMathSourceProductTermBuild> bounded_terms;
+    if (!compiled_math_expand_source_product_terms(
+            program, child_id, sign, &bounded_terms, clean_signed)) {
+      return false;
+    }
+    for (auto &term : bounded_terms) {
+      term.expr_upper_factors.push_back(
+          CompiledMathIntegralExprUpperFactor{
+              node_id,
+              CompiledMathIntegralExprUpperMode::BeforeScale});
+    }
+    terms->insert(
+        terms->end(),
+        std::make_move_iterator(bounded_terms.begin()),
+        std::make_move_iterator(bounded_terms.end()));
+    if (node.kind == CompiledMathNodeKind::ExprUpperBoundCdf) {
+      terms->push_back(
+          CompiledMathSourceProductTermBuild{
+              {},
+              {},
+              {},
+              {},
+              {CompiledMathIntegralExprUpperFactor{
+                  node_id,
+                  CompiledMathIntegralExprUpperMode::AfterOne}},
+              sign});
+    }
+    return true;
   }
-  const auto &node = program->nodes[static_cast<std::size_t>(node_id)];
+  if (node.kind == CompiledMathNodeKind::TimeGate &&
+      node.children.size == 1U) {
+    const auto child_id = program.child_nodes[
+        static_cast<std::size_t>(node.children.offset)];
+    std::vector<CompiledMathSourceProductTermBuild> gated_terms;
+    if (!compiled_math_expand_source_product_terms(
+            program, child_id, sign, &gated_terms, clean_signed)) {
+      return false;
+    }
+    for (auto &term : gated_terms) {
+      term.time_gate_nodes.push_back(node_id);
+    }
+    terms->insert(
+        terms->end(),
+        std::make_move_iterator(gated_terms.begin()),
+        std::make_move_iterator(gated_terms.end()));
+    return true;
+  }
   if (node.kind == CompiledMathNodeKind::Sum ||
       node.kind == CompiledMathNodeKind::CleanSignedSum) {
     if (node.kind == CompiledMathNodeKind::CleanSignedSum &&
@@ -645,9 +785,9 @@ inline bool compiled_math_collect_source_product_terms(
       return false;
     }
     for (semantic::Index i = 0; i < node.children.size; ++i) {
-      const auto child_id = program->child_nodes[
+      const auto child_id = program.child_nodes[
           static_cast<std::size_t>(node.children.offset + i)];
-      if (!compiled_math_collect_source_product_terms(
+      if (!compiled_math_expand_source_product_terms(
               program, child_id, sign, terms, clean_signed)) {
         return false;
       }
@@ -655,29 +795,190 @@ inline bool compiled_math_collect_source_product_terms(
     return true;
   }
   if (node.kind == CompiledMathNodeKind::Negate && node.children.size == 1U) {
-    const auto child_id = program->child_nodes[
+    const auto child_id = program.child_nodes[
         static_cast<std::size_t>(node.children.offset)];
-    return compiled_math_collect_source_product_terms(
+    return compiled_math_expand_source_product_terms(
         program, child_id, -sign, terms, clean_signed);
   }
+  if (node.kind == CompiledMathNodeKind::ClampProbability &&
+      node.children.size == 1U) {
+    if (clean_signed != nullptr) {
+      *clean_signed = true;
+    }
+    const auto child_id = program.child_nodes[
+        static_cast<std::size_t>(node.children.offset)];
+    return compiled_math_expand_source_product_terms(
+        program, child_id, sign, terms, clean_signed);
+  }
+  if (node.kind == CompiledMathNodeKind::Complement &&
+      node.children.size == 1U) {
+    const auto child_id = program.child_nodes[
+        static_cast<std::size_t>(node.children.offset)];
+    terms->push_back(CompiledMathSourceProductTermBuild{{}, {}, {}, {}, {}, sign});
+    return compiled_math_expand_source_product_terms(
+        program, child_id, -sign, terms, clean_signed);
+  }
+  if (node.kind != CompiledMathNodeKind::Product) {
+    throw std::runtime_error(
+        "source-product integral collector reached unsupported node kind " +
+        std::to_string(static_cast<int>(node.kind)));
+  }
 
-  std::vector<semantic::Index> source_value_nodes;
-  if (!compiled_math_source_product_kernel_nodes(
-          *program, node_id, &source_value_nodes)) {
+  std::vector<CompiledMathSourceProductTermBuild> product_terms(1);
+  product_terms.front().sign = sign;
+  for (semantic::Index i = 0; i < node.children.size; ++i) {
+    const auto child_id = program.child_nodes[
+        static_cast<std::size_t>(node.children.offset + i)];
+    std::vector<CompiledMathSourceProductTermBuild> child_terms;
+    if (!compiled_math_expand_source_product_terms(
+            program, child_id, 1.0, &child_terms, clean_signed)) {
+      return false;
+    }
+    std::vector<CompiledMathSourceProductTermBuild> next_terms;
+    next_terms.reserve(product_terms.size() * child_terms.size());
+    for (const auto &lhs : product_terms) {
+      for (const auto &rhs : child_terms) {
+        CompiledMathSourceProductTermBuild combined;
+        combined.sign = lhs.sign * rhs.sign;
+        combined.source_value_nodes.reserve(
+            lhs.source_value_nodes.size() + rhs.source_value_nodes.size());
+        combined.source_value_nodes.insert(
+            combined.source_value_nodes.end(),
+            lhs.source_value_nodes.begin(),
+            lhs.source_value_nodes.end());
+        combined.source_value_nodes.insert(
+            combined.source_value_nodes.end(),
+            rhs.source_value_nodes.begin(),
+            rhs.source_value_nodes.end());
+        combined.outcome_gate_nodes.reserve(
+            lhs.outcome_gate_nodes.size() + rhs.outcome_gate_nodes.size());
+        combined.outcome_gate_nodes.insert(
+            combined.outcome_gate_nodes.end(),
+            lhs.outcome_gate_nodes.begin(),
+            lhs.outcome_gate_nodes.end());
+        combined.outcome_gate_nodes.insert(
+            combined.outcome_gate_nodes.end(),
+            rhs.outcome_gate_nodes.begin(),
+            rhs.outcome_gate_nodes.end());
+        combined.time_gate_nodes.reserve(
+            lhs.time_gate_nodes.size() + rhs.time_gate_nodes.size());
+        combined.time_gate_nodes.insert(
+            combined.time_gate_nodes.end(),
+            lhs.time_gate_nodes.begin(),
+            lhs.time_gate_nodes.end());
+        combined.time_gate_nodes.insert(
+            combined.time_gate_nodes.end(),
+            rhs.time_gate_nodes.begin(),
+            rhs.time_gate_nodes.end());
+        combined.integral_factor_nodes.reserve(
+            lhs.integral_factor_nodes.size() +
+            rhs.integral_factor_nodes.size());
+        combined.integral_factor_nodes.insert(
+            combined.integral_factor_nodes.end(),
+            lhs.integral_factor_nodes.begin(),
+            lhs.integral_factor_nodes.end());
+        combined.integral_factor_nodes.insert(
+            combined.integral_factor_nodes.end(),
+            rhs.integral_factor_nodes.begin(),
+            rhs.integral_factor_nodes.end());
+        combined.expr_upper_factors.reserve(
+            lhs.expr_upper_factors.size() + rhs.expr_upper_factors.size());
+        combined.expr_upper_factors.insert(
+            combined.expr_upper_factors.end(),
+            lhs.expr_upper_factors.begin(),
+            lhs.expr_upper_factors.end());
+        combined.expr_upper_factors.insert(
+            combined.expr_upper_factors.end(),
+            rhs.expr_upper_factors.begin(),
+            rhs.expr_upper_factors.end());
+        if (combined.sign != 0.0) {
+          next_terms.push_back(std::move(combined));
+        }
+      }
+    }
+    product_terms = std::move(next_terms);
+  }
+  terms->insert(terms->end(), product_terms.begin(), product_terms.end());
+  return true;
+}
+
+inline bool compiled_math_collect_source_product_terms(
+    CompiledMathProgram *program,
+    const semantic::Index node_id,
+    const double sign,
+    std::vector<CompiledMathIntegralSourceProductTerm> *terms,
+    bool *clean_signed) {
+  std::vector<CompiledMathSourceProductTermBuild> built_terms;
+  if (!compiled_math_expand_source_product_terms(
+          *program, node_id, sign, &built_terms, clean_signed)) {
     return false;
   }
-  const auto offset = static_cast<semantic::Index>(
-      program->integral_kernel_source_value_nodes.size());
-  program->integral_kernel_source_value_nodes.insert(
-      program->integral_kernel_source_value_nodes.end(),
-      source_value_nodes.begin(),
-      source_value_nodes.end());
-  terms->push_back(
-      CompiledMathIntegralSourceProductTerm{
-          CompiledMathIndexSpan{
-              offset,
-              static_cast<semantic::Index>(source_value_nodes.size())},
-          sign});
+  if (built_terms.empty()) {
+    terms->push_back(
+        CompiledMathIntegralSourceProductTerm{
+            CompiledMathIndexSpan{},
+            CompiledMathIndexSpan{},
+            CompiledMathIndexSpan{},
+            CompiledMathIndexSpan{},
+            CompiledMathIndexSpan{},
+            0.0});
+    return true;
+  }
+  for (const auto &built : built_terms) {
+    const auto offset = static_cast<semantic::Index>(
+        program->integral_kernel_source_value_nodes.size());
+    program->integral_kernel_source_value_nodes.insert(
+        program->integral_kernel_source_value_nodes.end(),
+        built.source_value_nodes.begin(),
+        built.source_value_nodes.end());
+    const auto gate_offset = static_cast<semantic::Index>(
+        program->integral_kernel_outcome_gate_nodes.size());
+    program->integral_kernel_outcome_gate_nodes.insert(
+        program->integral_kernel_outcome_gate_nodes.end(),
+        built.outcome_gate_nodes.begin(),
+        built.outcome_gate_nodes.end());
+    const auto time_gate_offset = static_cast<semantic::Index>(
+        program->integral_kernel_time_gate_nodes.size());
+    program->integral_kernel_time_gate_nodes.insert(
+        program->integral_kernel_time_gate_nodes.end(),
+        built.time_gate_nodes.begin(),
+        built.time_gate_nodes.end());
+    const auto integral_factor_offset = static_cast<semantic::Index>(
+        program->integral_kernel_integral_factor_nodes.size());
+    program->integral_kernel_integral_factor_nodes.insert(
+        program->integral_kernel_integral_factor_nodes.end(),
+        built.integral_factor_nodes.begin(),
+        built.integral_factor_nodes.end());
+    const auto expr_upper_offset = static_cast<semantic::Index>(
+        program->integral_kernel_expr_upper_factors.size());
+    program->integral_kernel_expr_upper_factors.insert(
+        program->integral_kernel_expr_upper_factors.end(),
+        built.expr_upper_factors.begin(),
+        built.expr_upper_factors.end());
+    terms->push_back(
+        CompiledMathIntegralSourceProductTerm{
+            CompiledMathIndexSpan{
+                offset,
+                static_cast<semantic::Index>(
+                    built.source_value_nodes.size())},
+            CompiledMathIndexSpan{
+                gate_offset,
+                static_cast<semantic::Index>(
+                    built.outcome_gate_nodes.size())},
+            CompiledMathIndexSpan{
+                time_gate_offset,
+                static_cast<semantic::Index>(
+                    built.time_gate_nodes.size())},
+            CompiledMathIndexSpan{
+                integral_factor_offset,
+                static_cast<semantic::Index>(
+                    built.integral_factor_nodes.size())},
+            CompiledMathIndexSpan{
+                expr_upper_offset,
+                static_cast<semantic::Index>(
+                    built.expr_upper_factors.size())},
+            built.sign});
+  }
   return true;
 }
 
@@ -701,14 +1002,20 @@ inline semantic::Index compiled_math_integral_kernel_slot(
       static_cast<semantic::Index>(program->integral_kernels.size());
   CompiledMathIntegralKernel kernel;
   kernel.root_id = root_id;
-  kernel.result_node_id = root.node_id;
-  kernel.subgraph = root.schedule;
   kernel.bind_time_id = compiled_math_integral_bind_time_id(node);
 
   std::vector<CompiledMathIntegralSourceProductTerm> source_product_terms;
   bool clean_signed_source_sum = false;
   const auto source_value_node_mark =
       program->integral_kernel_source_value_nodes.size();
+  const auto outcome_gate_node_mark =
+      program->integral_kernel_outcome_gate_nodes.size();
+  const auto time_gate_node_mark =
+      program->integral_kernel_time_gate_nodes.size();
+  const auto integral_factor_node_mark =
+      program->integral_kernel_integral_factor_nodes.size();
+  const auto expr_upper_factor_mark =
+      program->integral_kernel_expr_upper_factors.size();
   if (compiled_math_collect_source_product_terms(
           program,
           root.node_id,
@@ -717,6 +1024,10 @@ inline semantic::Index compiled_math_integral_kernel_slot(
           &clean_signed_source_sum)) {
     if (source_product_terms.size() == 1U &&
         source_product_terms.front().sign == 1.0 &&
+        source_product_terms.front().outcome_gate_nodes.empty() &&
+        source_product_terms.front().time_gate_nodes.empty() &&
+        source_product_terms.front().integral_factor_nodes.empty() &&
+        source_product_terms.front().expr_upper_factors.empty() &&
         !clean_signed_source_sum) {
       kernel.kind = CompiledMathIntegralKernelKind::SourceProduct;
       kernel.source_value_nodes =
@@ -736,7 +1047,15 @@ inline semantic::Index compiled_math_integral_kernel_slot(
   } else {
     program->integral_kernel_source_value_nodes.resize(
         source_value_node_mark);
-    kernel.kind = CompiledMathIntegralKernelKind::Subgraph;
+    program->integral_kernel_outcome_gate_nodes.resize(
+        outcome_gate_node_mark);
+    program->integral_kernel_time_gate_nodes.resize(time_gate_node_mark);
+    program->integral_kernel_integral_factor_nodes.resize(
+        integral_factor_node_mark);
+    program->integral_kernel_expr_upper_factors.resize(
+        expr_upper_factor_mark);
+    throw std::runtime_error(
+        "compiled integral root is not a planned source-product kernel");
   }
   program->integral_kernels.push_back(kernel);
   return slot;
@@ -1135,23 +1454,6 @@ inline semantic::Index compiled_math_unary_node(
   return compiled_math_intern_node(program, std::move(key));
 }
 
-inline semantic::Index compiled_math_lazy_product_node(
-    CompiledMathProgram *program,
-    std::vector<semantic::Index> children,
-    const CompiledMathValueKind value_kind = CompiledMathValueKind::Scalar) {
-  if (children.empty()) {
-    return compiled_math_constant(program, 1.0);
-  }
-  if (children.size() == 1U) {
-    return children.front();
-  }
-  CompiledMathNodeKey key;
-  key.kind = CompiledMathNodeKind::LazyProduct;
-  key.value_kind = value_kind;
-  key.children = std::move(children);
-  return compiled_math_intern_node(program, std::move(key));
-}
-
 inline semantic::Index compiled_math_time_gate_node(
     CompiledMathProgram *program,
     const semantic::Index child,
@@ -1203,19 +1505,6 @@ inline semantic::Index compiled_math_raw_integral_zero_to_current_node(
   return compiled_math_intern_node(program, std::move(key));
 }
 
-inline semantic::Index compiled_math_root_value_node(
-    CompiledMathProgram *program,
-    const semantic::Index root_id,
-    const semantic::Index source_view_id = 0,
-    const CompiledMathValueKind value_kind = CompiledMathValueKind::Scalar) {
-  CompiledMathNodeKey key;
-  key.kind = CompiledMathNodeKind::RootValue;
-  key.value_kind = value_kind;
-  key.subject_id = root_id;
-  key.source_view_id = source_view_id;
-  return compiled_math_intern_node(program, std::move(key));
-}
-
 inline semantic::Index compiled_math_union_kernel_node(
     CompiledMathProgram *program,
     const CompiledMathNodeKind kind,
@@ -1257,10 +1546,6 @@ inline void compiled_math_append_schedule_node(
   }
   (*visited)[pos] = 1U;
   const auto &node = program.nodes[pos];
-  if (node.kind == CompiledMathNodeKind::LazyProduct) {
-    schedule->push_back(node_id);
-    return;
-  }
   if (node.condition_id != 0 &&
       node.condition_id != semantic::kInvalidIndex) {
     const auto condition_pos = static_cast<std::size_t>(node.condition_id - 1U);

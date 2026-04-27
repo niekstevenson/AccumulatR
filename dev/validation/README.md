@@ -5,7 +5,7 @@ This folder contains a hand-derived validation harness for the rebuild likelihoo
 Run it from the repo root with:
 
 ```sh
-Rscript validation/run_validation.R
+Rscript dev/validation/run_validation.R
 ```
 
 The runner compares engine likelihoods against explicit manual references for 19 model shapes:

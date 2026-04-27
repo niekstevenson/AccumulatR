@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "direct_kernel.hpp"
+#include "eval_query.hpp"
 #include "exact_sequence.hpp"
 #include "observed_plan.hpp"
 #include "trial_data.hpp"
@@ -18,7 +18,6 @@ namespace accumulatr::eval {
 namespace detail {
 
 inline Rcpp::NumericVector evaluate_loglik_records(
-    const std::vector<VariantPlan> &direct_plans,
     const std::vector<ExactVariantPlan> &exact_plans,
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
@@ -30,59 +29,35 @@ inline Rcpp::NumericVector evaluate_loglik_records(
     return out;
   }
 
-  for (const auto backend :
-       {compile::BackendKind::Direct, compile::BackendKind::Exact}) {
-    std::vector<semantic::Index> idxs;
-    idxs.reserve(records.size());
-    for (std::size_t i = 0; i < records.size(); ++i) {
-      if (records[i].backend == backend) {
-        idxs.push_back(static_cast<semantic::Index>(i));
-      }
+  std::vector<EvalLoglikQuery> queries;
+  queries.reserve(records.size());
+  for (const auto &record : records) {
+    if (record.backend != compile::BackendKind::Exact) {
+      throw std::runtime_error(
+          "observed likelihood received a non-exact record after exact planning");
     }
-    if (idxs.empty()) {
-      continue;
-    }
-
-    std::vector<DirectLoglikQuery> queries;
-    queries.reserve(idxs.size());
-    for (const auto idx : idxs) {
-      const auto &record = records[static_cast<std::size_t>(idx)];
-      queries.push_back(DirectLoglikQuery{
-          record.trial_index,
-          record.variant_index,
-          record.semantic_code,
-          record.observed_rt,
-          record.row_map_index});
-    }
-
-    Rcpp::NumericVector loglik;
-    if (backend == compile::BackendKind::Direct) {
-      loglik = evaluate_direct_loglik_queries_cached(
-          direct_plans,
-          layout,
-          paramsSEXP,
-          queries,
-          min_ll,
-          row_maps);
-    } else {
-      loglik = evaluate_exact_loglik_queries_cached(
-          exact_plans,
-          layout,
-          paramsSEXP,
-          queries,
-          min_ll,
-          row_maps);
-    }
-    for (std::size_t i = 0; i < idxs.size(); ++i) {
-      out[static_cast<R_xlen_t>(idxs[i])] = loglik[static_cast<R_xlen_t>(i)];
-    }
+    queries.push_back(EvalLoglikQuery{
+        record.trial_index,
+        record.variant_index,
+        record.semantic_code,
+        record.observed_rt,
+        record.row_map_index});
+  }
+  const auto loglik = evaluate_exact_loglik_queries_cached(
+      exact_plans,
+      layout,
+      paramsSEXP,
+      queries,
+      min_ll,
+      row_maps);
+  for (R_xlen_t i = 0; i < loglik.size(); ++i) {
+    out[i] = loglik[i];
   }
 
   return out;
 }
 
 inline Rcpp::NumericVector evaluate_probability_records(
-    const std::vector<VariantPlan> &direct_plans,
     const std::vector<ExactVariantPlan> &exact_plans,
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
@@ -93,60 +68,27 @@ inline Rcpp::NumericVector evaluate_probability_records(
     return out;
   }
 
-  for (const auto backend :
-       {compile::BackendKind::Direct, compile::BackendKind::Exact}) {
-    std::vector<semantic::Index> idxs;
-    idxs.reserve(records.size());
-    for (std::size_t i = 0; i < records.size(); ++i) {
-      if (records[i].backend == backend) {
-        idxs.push_back(static_cast<semantic::Index>(i));
-      }
+  std::vector<EvalProbabilityQuery> queries;
+  queries.reserve(records.size());
+  for (const auto &record : records) {
+    if (record.backend != compile::BackendKind::Exact) {
+      throw std::runtime_error(
+          "observed probability received a non-exact record after exact planning");
     }
-    if (idxs.empty()) {
-      continue;
-    }
-
-    std::vector<DirectMassQuery> direct_queries;
-    std::vector<DirectProbabilityQuery> exact_queries;
-    direct_queries.reserve(idxs.size());
-    exact_queries.reserve(idxs.size());
-    for (const auto idx : idxs) {
-      const auto &record = records[static_cast<std::size_t>(idx)];
-      if (backend == compile::BackendKind::Direct) {
-        DirectMassQuery query;
-        query.trial_index = record.trial_index;
-        query.variant_index = record.variant_index;
-        query.row_map_index = record.row_map_index;
-        append_weighted_term(&query.terms, record.semantic_code, 1.0);
-        direct_queries.push_back(std::move(query));
-      } else {
-        exact_queries.push_back(DirectProbabilityQuery{
-            record.trial_index,
-            record.variant_index,
-            record.semantic_code,
-            record.row_map_index});
-      }
-    }
-
-    Rcpp::NumericVector prob;
-    if (backend == compile::BackendKind::Direct) {
-      const auto mass = evaluate_direct_mass_queries_cached(
-          direct_plans, layout, paramsSEXP, direct_queries, row_maps);
-      prob = Rcpp::NumericVector(idxs.size(), 0.0);
-      for (R_xlen_t i = 0; i < prob.size(); ++i) {
-        prob[i] = mass(i, 0);
-      }
-    } else {
-      prob = evaluate_exact_probability_queries_cached(
-          exact_plans,
-          layout,
-          paramsSEXP,
-          exact_queries,
-          row_maps);
-    }
-    for (std::size_t i = 0; i < idxs.size(); ++i) {
-      out[static_cast<R_xlen_t>(idxs[i])] = prob[static_cast<R_xlen_t>(i)];
-    }
+    queries.push_back(EvalProbabilityQuery{
+        record.trial_index,
+        record.variant_index,
+        record.semantic_code,
+        record.row_map_index});
+  }
+  const auto prob = evaluate_exact_probability_queries_cached(
+      exact_plans,
+      layout,
+      paramsSEXP,
+      queries,
+      row_maps);
+  for (R_xlen_t i = 0; i < prob.size(); ++i) {
+    out[i] = prob[i];
   }
 
   return out;
@@ -176,8 +118,6 @@ inline double logsumexp_records(const std::vector<double> &values) {
 
 inline semantic::Index resolve_variant_index_by_component_code(
     const semantic::Index component_code,
-    const compile::BackendKind backend,
-    const std::vector<semantic::Index> &direct_variant_index_by_component_code,
     const std::vector<semantic::Index> &exact_variant_index_by_component_code);
 
 struct NamedParamMatrix {
@@ -333,8 +273,6 @@ struct TrialComponentChoice {
 };
 
 struct MissingAllAccumulator {
-  std::vector<DirectMassQuery> direct_queries;
-  std::vector<double> direct_component_weights;
   std::vector<ObservedRecord> exact_records;
   std::vector<double> exact_component_weight_sum;
 
@@ -503,23 +441,6 @@ inline void append_trial_component_records(
     return;
   }
   case ObservedTrialKind::MissingAll:
-    if (component_plan.semantic_backend == compile::BackendKind::Direct) {
-      DirectMassQuery query;
-      query.trial_index = trial_index;
-      query.variant_index = variant_index;
-      query.include_total_finite = true;
-      query.row_map_index = row_map_index;
-      for (const auto &branch : component_plan.missing_all_branches) {
-        append_weighted_term(
-            &query.terms,
-            branch.semantic_code,
-            component_weight * branch.weight);
-      }
-      missing_all->direct_queries.push_back(std::move(query));
-      missing_all->direct_component_weights.push_back(component_weight);
-      return;
-    }
-
     missing_all->exact_component_weight_sum[static_cast<std::size_t>(trial_index)] +=
         component_weight;
     append_weighted_observed_branches(
@@ -537,13 +458,9 @@ inline void append_trial_component_records(
 
 inline semantic::Index resolve_variant_index_by_component_code(
     const semantic::Index component_code,
-    const compile::BackendKind backend,
-    const std::vector<semantic::Index> &direct_variant_index_by_component_code,
     const std::vector<semantic::Index> &exact_variant_index_by_component_code) {
   const auto idx = static_cast<std::size_t>(component_code);
-  return backend == compile::BackendKind::Direct
-             ? direct_variant_index_by_component_code[idx]
-             : exact_variant_index_by_component_code[idx];
+  return exact_variant_index_by_component_code[idx];
 }
 
 inline bool identity_trials_are_all_finite(
@@ -565,8 +482,6 @@ inline bool identity_trials_are_all_finite(
 
 inline Rcpp::List evaluate_outcome_queries_cached(
     const std::vector<ComponentObservationPlan> &component_plans_by_code,
-    const std::vector<semantic::Index> &direct_variant_index_by_component_code,
-    const std::vector<VariantPlan> &direct_plans,
     const std::vector<semantic::Index> &exact_variant_index_by_component_code,
     const std::vector<ExactVariantPlan> &exact_plans,
     const PreparedTrialLayout &layout,
@@ -602,8 +517,6 @@ inline Rcpp::List evaluate_outcome_queries_cached(
 
     const auto variant_index = resolve_variant_index_by_component_code(
         component_code,
-        component_plan.semantic_backend,
-        direct_variant_index_by_component_code,
         exact_variant_index_by_component_code);
     if (variant_index == semantic::kInvalidIndex) {
       continue;
@@ -634,7 +547,6 @@ inline Rcpp::List evaluate_outcome_queries_cached(
 
   if (!records.empty()) {
     const auto donor_prob = evaluate_probability_records(
-        direct_plans,
         exact_plans,
         layout,
         paramsSEXP,
@@ -659,8 +571,6 @@ inline Rcpp::List evaluate_outcome_queries_cached(
 
 inline SEXP evaluate_identity_trials_with_missing_all(
     const std::vector<ComponentObservationPlan> &component_plans_by_code,
-    const std::vector<semantic::Index> &direct_variant_index_by_component_code,
-    const std::vector<VariantPlan> &direct_plans,
     const std::vector<semantic::Index> &exact_variant_index_by_component_code,
     const std::vector<ExactVariantPlan> &exact_plans,
     const PreparedTrialLayout &layout,
@@ -677,7 +587,6 @@ inline SEXP evaluate_identity_trials_with_missing_all(
   Rcpp::NumericVector loglik(n_trials, min_ll);
   std::vector<ObservedRecord> finite_records;
   std::vector<ObservedRecord> missing_all_records;
-  std::vector<DirectMassQuery> direct_missing_all_total_queries;
   std::vector<bool> missing_all_trial(n_trials, false);
 
   for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
@@ -691,20 +600,10 @@ inline SEXP evaluate_identity_trials_with_missing_all(
         component_plans_by_code[static_cast<std::size_t>(component_code)];
     const auto variant_index = resolve_variant_index_by_component_code(
         component_code,
-        component_plan.semantic_backend,
-        direct_variant_index_by_component_code,
         exact_variant_index_by_component_code);
 
     if (integer_cell_is_na(label, row)) {
       missing_all_trial[trial_index] = true;
-      if (component_plan.semantic_backend == compile::BackendKind::Direct) {
-        direct_missing_all_total_queries.push_back(DirectMassQuery{
-            static_cast<semantic::Index>(trial_index),
-            variant_index,
-            {},
-            true});
-        continue;
-      }
       for (const auto &branch : component_plan.finite_observed_branches) {
         missing_all_records.push_back(ObservedRecord{
             static_cast<semantic::Index>(trial_index),
@@ -728,7 +627,6 @@ inline SEXP evaluate_identity_trials_with_missing_all(
 
   if (!finite_records.empty()) {
     const auto donor_loglik = evaluate_loglik_records(
-        direct_plans,
         exact_plans,
         layout,
         paramsSEXP,
@@ -743,7 +641,6 @@ inline SEXP evaluate_identity_trials_with_missing_all(
 
   if (!missing_all_records.empty()) {
     const auto finite_prob = evaluate_probability_records(
-        direct_plans,
         exact_plans,
         layout,
         paramsSEXP,
@@ -768,25 +665,6 @@ inline SEXP evaluate_identity_trials_with_missing_all(
     }
   }
 
-  if (!direct_missing_all_total_queries.empty()) {
-    const auto total_prob = evaluate_direct_mass_queries_cached(
-        direct_plans,
-        layout,
-        paramsSEXP,
-        direct_missing_all_total_queries);
-    for (std::size_t i = 0; i < direct_missing_all_total_queries.size(); ++i) {
-      const auto trial_index = static_cast<std::size_t>(
-          direct_missing_all_total_queries[i].trial_index);
-      const double missing_prob = std::max(
-          0.0,
-          1.0 - (std::isfinite(total_prob(static_cast<R_xlen_t>(i), 1))
-                     ? total_prob(static_cast<R_xlen_t>(i), 1)
-                     : 1.0));
-      loglik[static_cast<R_xlen_t>(trial_index)] =
-          missing_prob > 0.0 ? std::log(missing_prob) : min_ll;
-    }
-  }
-
   double total_loglik = 0.0;
   for (R_xlen_t i = 0; i < loglik.size(); ++i) {
     if (!std::isfinite(loglik[i])) {
@@ -804,10 +682,7 @@ inline SEXP evaluate_identity_trials_with_missing_all(
 inline SEXP evaluate_observed_trials_cached(
     const std::vector<ComponentObservationPlan> &component_plans_by_code,
     const bool observed_identity,
-    const compile::BackendKind identity_backend,
     const semantic::SemanticModel &model,
-    const std::vector<semantic::Index> &direct_variant_index_by_component_code,
-    const std::vector<VariantPlan> &direct_plans,
     const std::vector<semantic::Index> &exact_variant_index_by_component_code,
     const std::vector<ExactVariantPlan> &exact_plans,
     const PreparedTrialLayout &layout,
@@ -823,17 +698,7 @@ inline SEXP evaluate_observed_trials_cached(
     const auto rt = Rcpp::as<Rcpp::NumericVector>(data["rt"]);
     if (trials_have_observed_components(layout, table.component, selected)) {
       if (identity_trials_are_all_finite(layout, label, rt, selected)) {
-        if (identity_backend == compile::BackendKind::Direct) {
-          return evaluate_direct_trials_cached(
-              model,
-              direct_variant_index_by_component_code,
-              direct_plans,
-              layout,
-              paramsSEXP,
-              dataSEXP,
-              min_ll,
-              selected);
-        }
+        (void)model;
         return evaluate_exact_trials_cached(
             exact_variant_index_by_component_code,
             exact_plans,
@@ -845,8 +710,6 @@ inline SEXP evaluate_observed_trials_cached(
       }
       return evaluate_identity_trials_with_missing_all(
           component_plans_by_code,
-          direct_variant_index_by_component_code,
-          direct_plans,
           exact_variant_index_by_component_code,
           exact_plans,
           layout,
@@ -922,15 +785,12 @@ inline SEXP evaluate_observed_trials_cached(
       }
       const auto variant_index = resolve_variant_index_by_component_code(
           choice.component_code,
-          component_plan.semantic_backend,
-          direct_variant_index_by_component_code,
           exact_variant_index_by_component_code);
       semantic::Index row_map_index = semantic::kInvalidIndex;
       if (latent_trial && variant_index != semantic::kInvalidIndex) {
         const auto &leaf_ids =
-            component_plan.semantic_backend == compile::BackendKind::Direct
-                ? direct_plans.at(static_cast<std::size_t>(variant_index)).lowered.leaf_ids
-                : exact_plans.at(static_cast<std::size_t>(variant_index)).lowered.leaf_ids;
+            exact_plans.at(static_cast<std::size_t>(variant_index))
+                .lowered.leaf_ids;
         row_maps.push_back(build_component_row_map(row_by_accumulator, leaf_ids));
         row_map_index =
             static_cast<semantic::Index>(row_maps.size() - 1U);
@@ -952,7 +812,6 @@ inline SEXP evaluate_observed_trials_cached(
 
   if (!finite_records.empty()) {
     const auto donor_loglik = evaluate_loglik_records(
-        direct_plans,
         exact_plans,
         layout,
         paramsSEXP,
@@ -979,7 +838,6 @@ inline SEXP evaluate_observed_trials_cached(
 
   if (!missing_rt_records.empty()) {
     const auto donor_prob = evaluate_probability_records(
-        direct_plans,
         exact_plans,
         layout,
         paramsSEXP,
@@ -1001,44 +859,21 @@ inline SEXP evaluate_observed_trials_cached(
   }
 
   if (has_missing_all) {
-    Rcpp::NumericMatrix direct_missing_all_mass;
-    if (!missing_all.direct_queries.empty()) {
-      direct_missing_all_mass = evaluate_direct_mass_queries_cached(
-          direct_plans,
-          layout,
-          paramsSEXP,
-          missing_all.direct_queries,
-          &row_maps);
-    }
     Rcpp::NumericVector exact_finite_prob;
     if (!missing_all.exact_records.empty()) {
       exact_finite_prob = evaluate_probability_records(
-          direct_plans,
           exact_plans,
           layout,
           paramsSEXP,
           missing_all.exact_records,
           &row_maps);
     }
-    std::size_t direct_i = 0;
     std::size_t exact_i = 0;
     for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
       if (trial_kinds[trial_index] != ObservedTrialKind::MissingAll) {
         continue;
       }
       double missing_prob = 0.0;
-      while (direct_i < missing_all.direct_queries.size() &&
-             missing_all.direct_queries[direct_i].trial_index ==
-                 static_cast<semantic::Index>(trial_index)) {
-        missing_prob +=
-            direct_missing_all_mass(static_cast<R_xlen_t>(direct_i), 0);
-        missing_prob += missing_all.direct_component_weights[direct_i] *
-                        std::max(
-                            0.0,
-                            1.0 - direct_missing_all_mass(
-                                      static_cast<R_xlen_t>(direct_i), 1));
-        ++direct_i;
-      }
       double exact_total_finite = 0.0;
       while (exact_i < missing_all.exact_records.size() &&
              missing_all.exact_records[exact_i].trial_index ==

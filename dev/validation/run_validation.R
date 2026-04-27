@@ -3,17 +3,21 @@ file_arg <- grep("^--file=", args, value = TRUE)
 script_path <- if (length(file_arg) > 0L) {
   normalizePath(sub("^--file=", "", file_arg[[1L]]), mustWork = TRUE)
 } else {
-  normalizePath("validation/run_validation.R", mustWork = TRUE)
+  normalizePath("dev/validation/run_validation.R", mustWork = TRUE)
 }
-repo_root <- normalizePath(file.path(dirname(script_path), ".."), mustWork = TRUE)
+repo_root <- normalizePath(file.path(dirname(script_path), "..", ".."), mustWork = TRUE)
 
-source(file.path(repo_root, "validation", "helpers.R"))
-source(file.path(repo_root, "validation", "cases.R"))
+source(file.path(repo_root, "dev", "validation", "helpers.R"))
+source(file.path(repo_root, "dev", "validation", "cases.R"))
 
 old_wd <- getwd()
 on.exit(setwd(old_wd), add = TRUE)
 setwd(repo_root)
 
+suppressPackageStartupMessages({
+  library(pkgload)
+})
+pkgload::load_all(repo_root, quiet = TRUE, helpers = FALSE)
 validation_source_rebuild(repo_root)
 
 cases <- validation_cases()

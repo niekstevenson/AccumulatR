@@ -82,7 +82,7 @@ inline void require_exact_variant(const compile::CompiledVariant &variant) {
   if (variant.backend == compile::BackendKind::Exact) {
     return;
   }
-  std::string message = "cannot lower direct variant";
+  std::string message = "cannot lower non-exact variant";
   if (!variant.component_id.empty()) {
     message += " '" + variant.component_id + "'";
   }

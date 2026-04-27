@@ -1,6 +1,6 @@
 #pragma once
 
-#include "direct_kernel.hpp"
+#include "eval_query.hpp"
 #include "exact_competitor_union.hpp"
 #include "trial_data.hpp"
 
@@ -161,21 +161,74 @@ struct ExactRankedFrontierEntry {
 inline void advance_exact_sequence_state(
     ExactSequenceState *state,
     const semantic::Index active_source_id,
-    const double observed_time) {
-  if (state == nullptr ||
-      active_source_id == semantic::kInvalidIndex ||
-      static_cast<std::size_t>(active_source_id) >= state->exact_times.size()) {
+    const ExactTransitionScenario &scenario,
+    const ExactVariantPlan &plan,
+    const double observed_time,
+    const std::vector<double> *ready_expr_normalizers = nullptr) {
+  if (state == nullptr) {
     return;
   }
   state->lower_bound = observed_time;
-  state->exact_times[static_cast<std::size_t>(active_source_id)] =
-      observed_time;
+  if (active_source_id != semantic::kInvalidIndex &&
+      static_cast<std::size_t>(active_source_id) < state->exact_times.size()) {
+    state->exact_times[static_cast<std::size_t>(active_source_id)] =
+        observed_time;
+  }
+  for (semantic::Index i = 0; i < scenario.before_source_span.size; ++i) {
+    const auto source_id =
+        plan.scenario_source_ids[
+            static_cast<std::size_t>(
+                scenario.before_source_span.offset + i)];
+    if (source_id == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(source_id) >= state->upper_bounds.size()) {
+      continue;
+    }
+    auto &upper = state->upper_bounds[static_cast<std::size_t>(source_id)];
+    upper = std::isfinite(upper) ? std::min(upper, observed_time)
+                                 : observed_time;
+  }
+  for (semantic::Index i = 0; i < scenario.ready_expr_span.size; ++i) {
+    const auto expr_id =
+        plan.scenario_expr_ids[
+            static_cast<std::size_t>(
+                scenario.ready_expr_span.offset + i)];
+    if (expr_id == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(expr_id) >=
+            state->expr_upper_bounds.size() ||
+        static_cast<std::size_t>(expr_id) >=
+            state->expr_upper_normalizers.size()) {
+      continue;
+    }
+    const std::size_t ready_pos = static_cast<std::size_t>(i);
+    if (ready_expr_normalizers == nullptr ||
+        ready_pos >= ready_expr_normalizers->size()) {
+      continue;
+    }
+    const double normalizer = (*ready_expr_normalizers)[ready_pos];
+    if (!(normalizer > 0.0) || !std::isfinite(normalizer)) {
+      continue;
+    }
+    auto &upper =
+        state->expr_upper_bounds[static_cast<std::size_t>(expr_id)];
+    if (std::isfinite(upper) && upper <= observed_time) {
+      continue;
+    }
+    upper = observed_time;
+    state->expr_upper_normalizers[static_cast<std::size_t>(expr_id)] =
+        normalizer;
+  }
 }
 
 inline bool exact_sequence_states_equal(const ExactSequenceState &lhs,
                                         const ExactSequenceState &rhs) {
   if (lhs.lower_bound != rhs.lower_bound ||
-      lhs.exact_times.size() != rhs.exact_times.size()) {
+      lhs.exact_times.size() != rhs.exact_times.size() ||
+      lhs.upper_bounds.size() != rhs.upper_bounds.size()) {
+    return false;
+  }
+  if (lhs.expr_upper_bounds.size() != rhs.expr_upper_bounds.size() ||
+      lhs.expr_upper_normalizers.size() !=
+          rhs.expr_upper_normalizers.size()) {
     return false;
   }
   for (std::size_t i = 0; i < lhs.exact_times.size(); ++i) {
@@ -188,6 +241,21 @@ inline bool exact_sequence_states_equal(const ExactSequenceState &lhs,
       continue;
     }
     if (lhs.exact_times[i] != rhs.exact_times[i]) {
+      return false;
+    }
+  }
+  for (std::size_t i = 0; i < lhs.upper_bounds.size(); ++i) {
+    if (lhs.upper_bounds[i] != rhs.upper_bounds[i]) {
+      return false;
+    }
+  }
+  for (std::size_t i = 0; i < lhs.expr_upper_bounds.size(); ++i) {
+    if (lhs.expr_upper_bounds[i] != rhs.expr_upper_bounds[i]) {
+      return false;
+    }
+  }
+  for (std::size_t i = 0; i < lhs.expr_upper_normalizers.size(); ++i) {
+    if (lhs.expr_upper_normalizers[i] != rhs.expr_upper_normalizers[i]) {
       return false;
     }
   }
@@ -207,6 +275,40 @@ inline void append_ranked_frontier_entry(
     }
   }
   frontier->push_back(std::move(entry));
+}
+
+inline std::vector<double> exact_sequence_ready_expr_normalizers(
+    const ExactVariantPlan &plan,
+    const ExactTransitionScenario &scenario,
+    ExactStepWorkspace *workspace) {
+  std::vector<double> normalizers;
+  normalizers.reserve(static_cast<std::size_t>(scenario.ready_expr_span.size));
+  for (semantic::Index i = 0; i < scenario.ready_expr_span.size; ++i) {
+    const auto expr_id =
+        plan.scenario_expr_ids[
+            static_cast<std::size_t>(
+                scenario.ready_expr_span.offset + i)];
+    double normalizer = 0.0;
+    if (expr_id != semantic::kInvalidIndex &&
+        static_cast<std::size_t>(expr_id) <
+            plan.sequence_expr_cdf_roots.size()) {
+      const auto root_id =
+          plan.sequence_expr_cdf_roots[static_cast<std::size_t>(expr_id)];
+      if (root_id != semantic::kInvalidIndex) {
+        normalizer =
+            evaluate_compiled_math_root(
+                plan.compiled_math,
+                root_id,
+                &workspace->target_workspace.compiled_math,
+                &workspace->target_evaluator,
+                nullptr,
+                &workspace->target_workspace);
+      }
+    }
+    normalizers.push_back(
+        std::isfinite(normalizer) ? clamp_probability(normalizer) : 0.0);
+  }
+  return normalizers;
 }
 
 inline double exact_ranked_trigger_probability(
@@ -270,10 +372,21 @@ inline double exact_ranked_trigger_probability(
         ExactRankedFrontierEntry next_entry{
             entry.probability * transition_probability,
             entry.state};
+        const auto &transition_scenario =
+            plan.outcomes[static_cast<std::size_t>(target_outcome_index)]
+                .scenarios[transition_idx];
+        const auto ready_expr_normalizers =
+            exact_sequence_ready_expr_normalizers(
+                plan,
+                transition_scenario,
+                step_workspace);
         advance_exact_sequence_state(
             &next_entry.state,
             successors.transitions[transition_idx].active_source_id,
-            exact_trial_view_rt(obs, rank_idx));
+            transition_scenario,
+            plan,
+            exact_trial_view_rt(obs, rank_idx),
+            &ready_expr_normalizers);
         append_ranked_frontier_entry(
             &next_frontier,
             std::move(next_entry));
@@ -349,7 +462,7 @@ inline Rcpp::NumericVector evaluate_exact_loglik_queries_cached(
     const std::vector<ExactVariantPlan> &plans,
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
-    const std::vector<DirectLoglikQuery> &queries,
+    const std::vector<EvalLoglikQuery> &queries,
     const double min_ll,
     const std::vector<std::vector<int>> *row_maps = nullptr) {
   Rcpp::NumericVector out(queries.size(), min_ll);
@@ -428,7 +541,7 @@ inline Rcpp::NumericVector evaluate_exact_probability_queries_cached(
     const std::vector<ExactVariantPlan> &plans,
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
-    const std::vector<DirectProbabilityQuery> &queries,
+    const std::vector<EvalProbabilityQuery> &queries,
     const std::vector<std::vector<int>> *row_maps = nullptr) {
   Rcpp::NumericVector out(queries.size(), 0.0);
   for (std::size_t i = 0; i < queries.size(); ++i) {

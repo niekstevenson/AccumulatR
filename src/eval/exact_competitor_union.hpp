@@ -87,14 +87,10 @@ inline ExactStepDistributionView evaluate_exact_step_distribution(
 
   step_workspace.transition_probabilities.assign(
       successors.transitions.size(), 0.0);
-  for (std::size_t transition_idx = 0;
-       transition_idx < successors.transitions.size();
-       ++transition_idx) {
-    const auto &transition = successors.transitions[transition_idx];
-    if (collect_successors && !transition.ranked_supported) {
-      throw std::logic_error(
-          "ranked exact step requested for unsupported latent-readiness scenario");
-    }
+    for (std::size_t transition_idx = 0;
+         transition_idx < successors.transitions.size();
+         ++transition_idx) {
+      const auto &transition = successors.transitions[transition_idx];
     if (transition.probability_root_id == semantic::kInvalidIndex) {
       continue;
     }

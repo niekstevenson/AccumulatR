@@ -320,6 +320,9 @@ struct ExactTriggerState {
 struct ExactSequenceState {
   double lower_bound{0.0};
   std::vector<double> exact_times;
+  std::vector<double> upper_bounds;
+  std::vector<double> expr_upper_bounds;
+  std::vector<double> expr_upper_normalizers;
 };
 
 struct ExactStepDistributionView {
@@ -562,6 +565,8 @@ struct ExactVariantPlan {
   std::vector<std::vector<semantic::Index>> leaf_supports;
   std::vector<std::vector<semantic::Index>> pool_supports;
   std::vector<std::vector<semantic::Index>> expr_supports;
+  std::vector<std::uint8_t> sequence_expr_upper_bound_used;
+  std::vector<semantic::Index> sequence_expr_cdf_roots;
   std::vector<semantic::Index> compiled_outcome_gate_indices;
   semantic::Index source_count{0};
   std::vector<semantic::Index> leaf_source_ids;
@@ -578,6 +583,15 @@ inline ExactSequenceState make_exact_sequence_state(const ExactVariantPlan &plan
   state.exact_times.assign(
       static_cast<std::size_t>(plan.source_count),
       std::numeric_limits<double>::quiet_NaN());
+  state.upper_bounds.assign(
+      static_cast<std::size_t>(plan.source_count),
+      std::numeric_limits<double>::infinity());
+  state.expr_upper_bounds.assign(
+      plan.lowered.program.expr_kind.size(),
+      std::numeric_limits<double>::infinity());
+  state.expr_upper_normalizers.assign(
+      plan.lowered.program.expr_kind.size(),
+      0.0);
   return state;
 }
 

@@ -14,13 +14,7 @@
 namespace accumulatr::compile {
 
 enum class BackendKind : std::uint8_t {
-  Direct = 0,
-  Exact = 1
-};
-
-struct DirectOutcomeSpec {
-  std::string label;
-  semantic::SourceRef source{};
+  Exact = 0
 };
 
 struct VariantCapabilities {
@@ -30,7 +24,7 @@ struct VariantCapabilities {
   bool shared_trigger{false};
   bool outcome_remapping{false};
   bool guess_outcome{false};
-  bool non_direct_outcome{false};
+  bool non_event_outcome{false};
 };
 
 struct CompiledVariant {
@@ -41,7 +35,6 @@ struct CompiledVariant {
   BackendKind backend{BackendKind::Exact};
   BackendKind semantic_backend{BackendKind::Exact};
   VariantCapabilities capabilities{};
-  std::vector<DirectOutcomeSpec> direct_outcomes;
 };
 
 struct CompiledModel {
@@ -53,14 +46,8 @@ struct CompiledModel {
 namespace detail {
 
 inline std::string to_string(BackendKind backend) {
-  return backend == BackendKind::Direct ? "direct" : "exact";
-}
-
-inline bool supports_semantic_direct(const VariantCapabilities &capabilities) {
-  return !capabilities.no_surviving_outcomes &&
-         !capabilities.ranked_observation &&
-         !capabilities.chained_onset &&
-         !capabilities.non_direct_outcome;
+  (void)backend;
+  return "exact";
 }
 
 inline bool source_is_dead(const semantic::SourceRef &ref) {
@@ -833,30 +820,12 @@ private:
       const auto &root =
           variant->model.expr_nodes[static_cast<std::size_t>(outcome.expr_root)];
       if (root.kind != semantic::ExprKind::Event) {
-        variant->capabilities.non_direct_outcome = true;
-        continue;
+        variant->capabilities.non_event_outcome = true;
       }
-      variant->direct_outcomes.push_back(
-          DirectOutcomeSpec{outcome.label, root.source});
     }
 
-    variant->semantic_backend =
-        supports_semantic_direct(variant->capabilities)
-            ? BackendKind::Direct
-            : BackendKind::Exact;
-    variant->backend =
-        (variant->semantic_backend == BackendKind::Direct &&
-         !variant->capabilities.outcome_remapping &&
-         !variant->capabilities.guess_outcome)
-            ? BackendKind::Direct
-            : BackendKind::Exact;
-    if (variant->backend == BackendKind::Exact) {
-      const bool keep_direct_outcomes =
-          variant->semantic_backend == BackendKind::Direct;
-      if (!keep_direct_outcomes) {
-        variant->direct_outcomes.clear();
-      }
-    }
+    variant->semantic_backend = BackendKind::Exact;
+    variant->backend = BackendKind::Exact;
   }
 };
 
@@ -892,29 +861,6 @@ inline Rcpp::List to_r_list(const CompiledModel &compiled) {
     const auto &variant = compiled.variants[i];
     Rcpp::List variant_list = detail::to_r_list(variant.model);
 
-    Rcpp::List direct_outcomes(variant.direct_outcomes.size());
-    for (std::size_t j = 0; j < variant.direct_outcomes.size(); ++j) {
-      const auto &outcome = variant.direct_outcomes[j];
-      std::string source_kind;
-      std::string source_id;
-      if (outcome.source.kind == semantic::SourceKind::Leaf) {
-        source_kind = "leaf";
-        source_id = variant.model.leaves[
-            static_cast<std::size_t>(outcome.source.index)].id;
-      } else if (outcome.source.kind == semantic::SourceKind::Pool) {
-        source_kind = "pool";
-        source_id = variant.model.pools[
-            static_cast<std::size_t>(outcome.source.index)].id;
-      } else {
-        source_kind = "special";
-        source_id = outcome.source.special_id;
-      }
-      direct_outcomes[j] = Rcpp::List::create(
-          Rcpp::Named("label") = outcome.label,
-          Rcpp::Named("source_kind") = source_kind,
-          Rcpp::Named("source_id") = source_id);
-    }
-
     variant_list["component_id"] = variant.component_id;
     variant_list["weight"] = variant.weight;
     variant_list["weight_name"] = variant.weight_name;
@@ -930,9 +876,8 @@ inline Rcpp::List to_r_list(const CompiledModel &compiled) {
         Rcpp::Named("outcome_remapping") =
             variant.capabilities.outcome_remapping,
         Rcpp::Named("guess_outcome") = variant.capabilities.guess_outcome,
-        Rcpp::Named("non_direct_outcome") =
-            variant.capabilities.non_direct_outcome);
-    variant_list["direct_outcomes"] = direct_outcomes;
+        Rcpp::Named("non_event_outcome") =
+            variant.capabilities.non_event_outcome);
     variants[i] = variant_list;
   }
 

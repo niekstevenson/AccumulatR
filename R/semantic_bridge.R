@@ -20,11 +20,11 @@
     `_AccumulatR_semantic_loglik_context_cpp`,
     context,
     layout,
-    as.matrix(params),
-    as.data.frame(data, stringsAsFactors = FALSE),
-    if (is.null(ok)) NULL else as.logical(ok),
-    if (is.null(expand)) NULL else as.integer(expand),
-    as.numeric(min_ll)
+    params,
+    data,
+    ok,
+    expand,
+    min_ll
   )
 }
 

@@ -390,6 +390,7 @@ struct CompiledMathWorkspace {
   }
 
   void resize(const CompiledMathProgram &program) {
+    program_ = &program;
     values.assign(program.nodes.size(), 0.0);
     cache_valid.assign(program.nodes.size(), 0U);
     cache_condition_ids.assign(program.nodes.size(), 0);
@@ -405,10 +406,10 @@ struct CompiledMathWorkspace {
     source_channel_survival.assign(program.source_channel_count, 1.0);
     time_values.assign(4U, 0.0);
     time_valid.assign(4U, 0U);
-    reset_condition_time_dependencies(program);
   }
 
   void ensure_size(const CompiledMathProgram &program) {
+    program_ = &program;
     if (values.size() < program.nodes.size()) {
       const auto size = program.nodes.size();
       values.resize(size, 0.0);
@@ -430,27 +431,20 @@ struct CompiledMathWorkspace {
       source_channel_cdf.resize(size, 0.0);
       source_channel_survival.resize(size, 1.0);
     }
-    if (condition_time_dependency_spans.size() !=
-        program.conditions.size() + 1U) {
-      reset_condition_time_dependencies(program);
-    }
   }
 
-  void reset_condition_time_dependencies(const CompiledMathProgram &program) {
-    condition_time_dependency_spans.assign(
-        program.conditions.size() + 1U, CompiledMathIndexSpan{});
-    condition_time_dependency_ids.clear();
-    for (std::size_t i = 0; i < program.conditions.size(); ++i) {
-      const auto offset =
-          static_cast<semantic::Index>(condition_time_dependency_ids.size());
-      const auto &ids = program.conditions[i].time_dependency_ids;
-      condition_time_dependency_ids.insert(
-          condition_time_dependency_ids.end(), ids.begin(), ids.end());
-      condition_time_dependency_spans[i + 1U] =
-          CompiledMathIndexSpan{
-              offset,
-              static_cast<semantic::Index>(ids.size())};
+  const std::vector<semantic::Index> *condition_time_dependencies(
+      const semantic::Index condition_id) const {
+    if (program_ == nullptr ||
+        condition_id <= 0 ||
+        condition_id == semantic::kInvalidIndex) {
+      return nullptr;
     }
+    const auto condition_pos = static_cast<std::size_t>(condition_id - 1);
+    if (condition_pos >= program_->conditions.size()) {
+      return nullptr;
+    }
+    return &program_->conditions[condition_pos].time_dependency_ids;
   }
 
   void reset_cache() {
@@ -607,11 +601,12 @@ struct CompiledMathWorkspace {
   std::vector<double> source_channel_survival;
   std::vector<double> time_values;
   std::vector<std::uint8_t> time_valid;
-  std::vector<CompiledMathIndexSpan> condition_time_dependency_spans;
-  std::vector<semantic::Index> condition_time_dependency_ids;
   std::vector<std::uint8_t> integral_term_open;
   const std::vector<std::uint8_t> *used_outcomes{nullptr};
   std::unique_ptr<CompiledMathWorkspace> integral_workspace;
+
+private:
+  const CompiledMathProgram *program_{nullptr};
 };
 
 inline bool compiled_math_is_source_value_node(

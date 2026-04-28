@@ -167,11 +167,20 @@ public:
       const CompiledSourceChannelPlan &channel_plan,
       const double time,
       const CompiledMathWorkspace *workspace = nullptr) {
+    if (can_evaluate_direct_leaf_absolute(channel_plan)) {
+      return evaluate_direct_leaf_absolute_at(channel_plan, time, workspace);
+    }
     const auto &request = channel_plan.request;
     conditional_cache_.set_context(
         time, compiled_condition_cache_id(request.condition_id, workspace));
     return load_conditional_source(
         &conditional_cache_, time, channel_plan, workspace);
+  }
+
+  bool source_channel_condition_invariant(
+      const CompiledSourceChannelPlan &channel_plan) const {
+    return channel_plan.kernel == CompiledSourceChannelKernelKind::LeafAbsolute &&
+           !channel_plan.has_source_condition_overlay;
   }
 
   bool has_exact_time_overlay(
@@ -287,14 +296,10 @@ private:
     std::size_t seed = 0x517cc1b727220a95ULL;
     hash_condition_part(&seed, static_cast<std::size_t>(condition_id));
     if (workspace != nullptr) {
-      const auto condition_pos = static_cast<std::size_t>(condition_id);
-      if (condition_pos < workspace->condition_time_dependency_spans.size()) {
-        const auto span =
-            workspace->condition_time_dependency_spans[condition_pos];
-        for (semantic::Index i = 0; i < span.size; ++i) {
-          const auto time_id =
-              workspace->condition_time_dependency_ids[
-                  static_cast<std::size_t>(span.offset + i)];
+      const auto *time_dependencies =
+          workspace->condition_time_dependencies(condition_id);
+      if (time_dependencies != nullptr) {
+        for (const auto time_id : *time_dependencies) {
           const auto time_pos = static_cast<std::size_t>(time_id);
           if (time_pos >= workspace->time_valid.size() ||
               workspace->time_valid[time_pos] == 0U) {
@@ -345,6 +350,69 @@ private:
         break;
       }
     }
+  }
+
+  bool sequence_bounds_inactive_for(
+      const semantic::Index source_id,
+      const CompiledSourceBoundPlan &bounds) const {
+    if (sequence_state_ == nullptr) {
+      return true;
+    }
+    if (bounds.use_sequence_lower && sequence_state_->lower_bound > 0.0) {
+      return false;
+    }
+    const auto source_pos = static_cast<std::size_t>(source_id);
+    if (bounds.use_sequence_exact &&
+        source_pos < sequence_state_->exact_times.size() &&
+        std::isfinite(sequence_state_->exact_times[source_pos])) {
+      return false;
+    }
+    if (bounds.use_sequence_upper &&
+        source_pos < sequence_state_->upper_bounds.size() &&
+        std::isfinite(sequence_state_->upper_bounds[source_pos])) {
+      return false;
+    }
+    return true;
+  }
+
+  bool can_evaluate_direct_leaf_absolute(
+      const CompiledSourceChannelPlan &channel_plan) const {
+    const auto &request = channel_plan.request;
+    if (request.source_id == semantic::kInvalidIndex ||
+        channel_plan.source_kernel_slot == semantic::kInvalidIndex ||
+        !source_channel_condition_invariant(channel_plan)) {
+      return false;
+    }
+    return sequence_bounds_inactive_for(request.source_id, channel_plan.bounds);
+  }
+
+  leaf::EventChannels evaluate_direct_leaf_absolute_at(
+      const CompiledSourceChannelPlan &channel_plan,
+      const double time,
+      const CompiledMathWorkspace *workspace) {
+    const auto source_id = channel_plan.request.source_id;
+    const auto *kernel = source_kernel_for(channel_plan.source_kernel_slot);
+    if (kernel == nullptr ||
+        kernel->source_id != source_id ||
+        kernel->kind != CompiledSourceChannelKernelKind::LeafAbsolute) {
+      return impossible_channels();
+    }
+    base_current_cache_.set_context(time, 0);
+    const auto pos = static_cast<std::size_t>(source_id);
+    if (base_current_cache_.epoch[pos] == base_current_cache_.current_epoch) {
+      return base_current_cache_.channels[pos];
+    }
+    const bool needs_frame = active_base_cache() != &base_current_cache_;
+    if (needs_frame) {
+      base_cache_stack_.push_back(&base_current_cache_);
+    }
+    base_current_cache_.channels[pos] =
+        evaluate_leaf_absolute_kernel(*kernel, 0, workspace);
+    base_current_cache_.epoch[pos] = base_current_cache_.current_epoch;
+    if (needs_frame) {
+      base_cache_stack_.pop_back();
+    }
+    return base_current_cache_.channels[pos];
   }
 
   const CompiledSourceBoundPlan &source_bound_plan(
@@ -1007,13 +1075,19 @@ private:
 
 using ExactSourceChannels = CompiledSourceChannels;
 
-inline std::vector<ExactTriggerState> enumerate_trigger_states(
+inline void enumerate_trigger_states_into(
     const ExactVariantPlan &plan,
     const ParamView &params,
-    const int first_param_row) {
-  std::vector<ExactTriggerState> states(1);
-  states.front().weight = 1.0;
-  states.front().shared_started.assign(
+    const int first_param_row,
+    std::vector<ExactTriggerState> *states,
+    std::vector<ExactTriggerState> *buffer = nullptr) {
+  if (states == nullptr) {
+    return;
+  }
+  states->clear();
+  states->resize(1);
+  states->front().weight = 1.0;
+  states->front().shared_started.assign(
       static_cast<std::size_t>(plan.lowered.program.layout.n_triggers), 2U);
 
   for (const auto trigger_index : plan.shared_trigger_indices) {
@@ -1031,25 +1105,34 @@ inline std::vector<ExactTriggerState> enumerate_trigger_states(
     }
     q = clamp_probability(q);
 
-    std::vector<ExactTriggerState> next;
-    next.reserve(states.size() * 2U);
-    for (const auto &state : states) {
+    std::vector<ExactTriggerState> local_buffer;
+    auto *next = buffer == nullptr ? &local_buffer : buffer;
+    next->clear();
+    next->reserve(states->size() * 2U);
+    for (const auto &state : *states) {
       if (q > 0.0) {
         auto fail = state;
         fail.weight *= q;
         fail.shared_started[pos] = 0U;
-        next.push_back(std::move(fail));
+        next->push_back(std::move(fail));
       }
       if (q < 1.0) {
         auto start = state;
         start.weight *= (1.0 - q);
         start.shared_started[pos] = 1U;
-        next.push_back(std::move(start));
+        next->push_back(std::move(start));
       }
     }
-    states.swap(next);
+    states->swap(*next);
   }
+}
 
+inline std::vector<ExactTriggerState> enumerate_trigger_states(
+    const ExactVariantPlan &plan,
+    const ParamView &params,
+    const int first_param_row) {
+  std::vector<ExactTriggerState> states;
+  enumerate_trigger_states_into(plan, params, first_param_row, &states);
   return states;
 }
 

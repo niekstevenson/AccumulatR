@@ -2,6 +2,7 @@
 
 #include <Rcpp.h>
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <string>
@@ -27,6 +28,48 @@ struct NativeLikelihoodContext {
   std::vector<semantic::Index> exact_variant_index_by_component_code;
   std::vector<ExactVariantPlan> exact_plans;
 };
+
+inline void compile_component_weight_parameter_layout(
+    semantic::SemanticModel *model) {
+  if (model == nullptr) {
+    return;
+  }
+  std::unordered_map<std::string, int> index_by_name;
+  for (auto &component : model->components) {
+    component.weight_param_index = -1;
+    if (component.weight_name.empty()) {
+      continue;
+    }
+    auto it = index_by_name.find(component.weight_name);
+    if (it == index_by_name.end()) {
+      const int next = static_cast<int>(index_by_name.size());
+      it = index_by_name.emplace(component.weight_name, next).first;
+    }
+    component.weight_param_index = it->second;
+  }
+  model->component_weight_param_count =
+      static_cast<int>(index_by_name.size());
+}
+
+inline void compile_exact_plan_leaf_row_offsets(
+    const semantic::SemanticModel &model,
+    std::vector<ExactVariantPlan> *plans) {
+  if (plans == nullptr) {
+    return;
+  }
+  std::unordered_map<std::string, int> global_leaf_index;
+  global_leaf_index.reserve(model.leaves.size());
+  for (std::size_t i = 0; i < model.leaves.size(); ++i) {
+    global_leaf_index.emplace(model.leaves[i].id, static_cast<int>(i));
+  }
+  for (auto &plan : *plans) {
+    plan.leaf_row_offsets.clear();
+    plan.leaf_row_offsets.reserve(plan.lowered.leaf_ids.size());
+    for (const auto &leaf_id : plan.lowered.leaf_ids) {
+      plan.leaf_row_offsets.push_back(global_leaf_index.at(leaf_id));
+    }
+  }
+}
 
 inline bool observation_plans_are_identity(
     const std::vector<ComponentObservationPlan> &plans,
@@ -74,6 +117,136 @@ inline bool observation_plans_are_identity(
     *identity_backend = backend;
   }
   return true;
+}
+
+inline bool observed_branches_cover_exact_outcomes(
+    const ExactVariantPlan &exact_plan,
+    const std::vector<ObservedBranch> &branches) {
+  if (exact_plan.outcomes.empty()) {
+    return false;
+  }
+
+  std::vector<double> covered_weight(exact_plan.outcomes.size(), 0.0);
+  for (const auto &branch : branches) {
+    if (!(std::isfinite(branch.weight) && branch.weight > 0.0) ||
+        branch.semantic_code == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(branch.semantic_code) >=
+            exact_plan.outcome_index_by_code.size()) {
+      return false;
+    }
+    const auto outcome_index =
+        exact_plan.outcome_index_by_code[
+            static_cast<std::size_t>(branch.semantic_code)];
+    if (outcome_index == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(outcome_index) >= covered_weight.size()) {
+      return false;
+    }
+    covered_weight[static_cast<std::size_t>(outcome_index)] += branch.weight;
+  }
+
+  for (const auto weight : covered_weight) {
+    if (std::fabs(weight - 1.0) > 1e-12) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline bool observation_plan_can_use_direct_missing_all(
+    const ComponentObservationPlan &observed_plan,
+    const ExactVariantPlan &exact_plan) {
+  if (!exact_plan.no_response.terminal_leaf_survival_product ||
+      !observed_plan.missing_all_branches.empty()) {
+    return false;
+  }
+  if (observed_plan.finite_observed_branches.empty()) {
+    return false;
+  }
+  std::vector<ObservedBranch> branches;
+  branches.reserve(observed_plan.finite_observed_branches.size());
+  branches.insert(
+      branches.end(),
+      observed_plan.finite_observed_branches.begin(),
+      observed_plan.finite_observed_branches.end());
+  return observed_branches_cover_exact_outcomes(exact_plan, branches);
+}
+
+inline bool observation_code_can_use_no_response_complement(
+    const ComponentObservationPlan &observed_plan,
+    const ExactVariantPlan &exact_plan,
+    const std::size_t observed_code) {
+  if (!exact_plan.no_response.terminal_leaf_survival_product ||
+      observed_code >= observed_plan.keep_by_code.size() ||
+      observed_code >= observed_plan.missing_rt_by_code.size()) {
+    return false;
+  }
+  std::vector<ObservedBranch> branches;
+  branches.reserve(
+      observed_plan.keep_by_code[observed_code].size() +
+      observed_plan.missing_rt_by_code[observed_code].size());
+  branches.insert(
+      branches.end(),
+      observed_plan.keep_by_code[observed_code].begin(),
+      observed_plan.keep_by_code[observed_code].end());
+  branches.insert(
+      branches.end(),
+      observed_plan.missing_rt_by_code[observed_code].begin(),
+      observed_plan.missing_rt_by_code[observed_code].end());
+  return observed_branches_cover_exact_outcomes(exact_plan, branches);
+}
+
+inline void compile_observation_probability_modes(
+    std::vector<ComponentObservationPlan> *observed_plans,
+    const std::vector<semantic::Index> &exact_variant_index_by_component_code,
+    const std::vector<ExactVariantPlan> &exact_plans) {
+  if (observed_plans == nullptr) {
+    return;
+  }
+  for (std::size_t component_code = 1;
+       component_code < observed_plans->size() &&
+       component_code < exact_variant_index_by_component_code.size();
+       ++component_code) {
+    auto &observed_plan = (*observed_plans)[component_code];
+    observed_plan.missing_all_mode =
+        MissingAllProbabilityMode::FiniteComplement;
+    if (observed_plan.missing_rt_mode_by_code.size() <
+        observed_plan.keep_by_code.size()) {
+      observed_plan.missing_rt_mode_by_code.assign(
+          observed_plan.keep_by_code.size(),
+          MissingRtProbabilityMode::BranchIntegral);
+    } else {
+      std::fill(
+          observed_plan.missing_rt_mode_by_code.begin(),
+          observed_plan.missing_rt_mode_by_code.end(),
+          MissingRtProbabilityMode::BranchIntegral);
+    }
+    if (!observed_plan.present) {
+      continue;
+    }
+    const auto variant_index =
+        exact_variant_index_by_component_code[component_code];
+    if (variant_index == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(variant_index) >= exact_plans.size()) {
+      continue;
+    }
+    if (observation_plan_can_use_direct_missing_all(
+            observed_plan,
+            exact_plans[static_cast<std::size_t>(variant_index)])) {
+      observed_plan.missing_all_mode =
+          MissingAllProbabilityMode::DirectNoResponse;
+    }
+    for (std::size_t observed_code = 1;
+         observed_code < observed_plan.missing_rt_mode_by_code.size();
+         ++observed_code) {
+      if (observation_code_can_use_no_response_complement(
+              observed_plan,
+              exact_plans[static_cast<std::size_t>(variant_index)],
+              observed_code)) {
+        observed_plan.missing_rt_mode_by_code[observed_code] =
+            MissingRtProbabilityMode::FiniteComplementOfNoResponse;
+      }
+    }
+  }
 }
 
 inline std::vector<std::string> prepared_outcome_labels(const Rcpp::List &prep) {
@@ -134,6 +307,7 @@ inline NativeLikelihoodContext build_native_likelihood_context(
     const Rcpp::List &prep) {
   NativeLikelihoodContext ctx;
   ctx.model = compile::compile_prep(prep);
+  compile_component_weight_parameter_layout(&ctx.model);
   const auto compiled = compile::project_semantic_model(ctx.model);
 
   const auto outcome_labels = prepared_outcome_labels(prep);
@@ -148,9 +322,6 @@ inline NativeLikelihoodContext build_native_likelihood_context(
       outcome_code_by_label,
       component_ids.size(),
       outcome_labels.size());
-  ctx.observed_identity = observation_plans_are_identity(
-      ctx.observed_plans_by_component_code,
-      &ctx.identity_backend);
   build_exact_plan_cache(
       compiled,
       component_code_by_id,
@@ -159,6 +330,15 @@ inline NativeLikelihoodContext build_native_likelihood_context(
       outcome_labels.size(),
       &ctx.exact_variant_index_by_component_code,
       &ctx.exact_plans);
+  compile_exact_plan_leaf_row_offsets(ctx.model, &ctx.exact_plans);
+  compile_observation_probability_modes(
+      &ctx.observed_plans_by_component_code,
+      ctx.exact_variant_index_by_component_code,
+      ctx.exact_plans);
+  compile_observation_probability_plans(&ctx.observed_plans_by_component_code);
+  ctx.observed_identity = observation_plans_are_identity(
+      ctx.observed_plans_by_component_code,
+      &ctx.identity_backend);
   for (const auto &plan : ctx.exact_plans) {
     if (!plan.ranked_supported) {
       ctx.ranked_supported = false;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <optional>
 
 #include "exact_truth.hpp"
@@ -11,7 +12,8 @@ struct ExactStepWorkspace {
   explicit ExactStepWorkspace(const ExactVariantPlan &plan)
       : source_channels(plan),
         target_evaluator(plan),
-        target_workspace(plan) {}
+        target_workspace(plan),
+        initial_state(make_exact_sequence_state(plan)) {}
 
   void reset(const ParamView &params,
              const int first_param_row,
@@ -37,7 +39,30 @@ struct ExactStepWorkspace {
   ExactSourceChannels source_channels;
   CompiledSourceView target_evaluator;
   CompiledEvalWorkspace target_workspace;
+  ExactSequenceState initial_state;
+  std::vector<ExactTriggerState> trigger_states;
+  std::vector<ExactTriggerState> trigger_state_buffer;
   std::vector<double> transition_probabilities;
+};
+
+struct ExactStepWorkspacePool {
+  explicit ExactStepWorkspacePool(const std::size_t plan_count)
+      : workspaces(plan_count) {}
+
+  ExactStepWorkspace &get(const std::vector<ExactVariantPlan> &plans,
+                         const semantic::Index variant_index) {
+    const auto pos = static_cast<std::size_t>(variant_index);
+    if (pos >= workspaces.size()) {
+      throw std::runtime_error("exact workspace pool variant index out of range");
+    }
+    if (!workspaces[pos]) {
+      workspaces[pos] =
+          std::make_unique<ExactStepWorkspace>(plans.at(pos));
+    }
+    return *workspaces[pos];
+  }
+
+  std::vector<std::unique_ptr<ExactStepWorkspace>> workspaces;
 };
 
 inline ExactStepDistributionView evaluate_exact_step_distribution(

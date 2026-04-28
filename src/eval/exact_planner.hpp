@@ -1111,6 +1111,121 @@ inline void release_scenario_planning_fields(ExactTransitionScenario *scenario) 
   release_runtime_vector(&scenario->source_order_facts);
 }
 
+inline bool scenario_is_terminal_no_response_source(
+    const ExactVariantPlan &plan,
+    const ExactTransitionScenario &scenario,
+    semantic::Index *source_id) {
+  if (scenario.active_source_id == semantic::kInvalidIndex ||
+      !scenario.before_source_span.empty() ||
+      !scenario.after_source_span.empty() ||
+      !scenario.ready_expr_span.empty() ||
+      !scenario.tail_expr_span.empty() ||
+      scenario.factors.size() != 1U ||
+      scenario.factors.front().kind != ExactFactorKind::AtPdf) {
+    return false;
+  }
+  const auto pos = static_cast<std::size_t>(scenario.active_source_id);
+  if (pos >= plan.source_kernels.size() ||
+      plan.source_kernels[pos].kind !=
+          CompiledSourceChannelKernelKind::LeafAbsolute) {
+    return false;
+  }
+  if (source_id != nullptr) {
+    *source_id = scenario.active_source_id;
+  }
+  return true;
+}
+
+inline ExactNoResponsePlan compile_no_response_plan(
+    const ExactVariantPlan &plan) {
+  ExactNoResponsePlan no_response;
+  if (plan.source_count <= 0 || plan.outcomes.empty()) {
+    return no_response;
+  }
+
+  std::vector<std::uint8_t> covered(
+      static_cast<std::size_t>(plan.source_count), 0U);
+  for (const auto &outcome : plan.outcomes) {
+    if (outcome.scenarios.size() != 1U) {
+      return ExactNoResponsePlan{};
+    }
+    semantic::Index source_id{semantic::kInvalidIndex};
+    if (!scenario_is_terminal_no_response_source(
+            plan, outcome.scenarios.front(), &source_id)) {
+      return ExactNoResponsePlan{};
+    }
+    const auto pos = static_cast<std::size_t>(source_id);
+    if (pos >= covered.size() || covered[pos] != 0U) {
+      return ExactNoResponsePlan{};
+    }
+    covered[pos] = 1U;
+  }
+
+  no_response.source_ids.reserve(covered.size());
+  for (std::size_t i = 0; i < covered.size(); ++i) {
+    if (covered[i] == 0U) {
+      return ExactNoResponsePlan{};
+    }
+    no_response.source_ids.push_back(static_cast<semantic::Index>(i));
+  }
+  no_response.terminal_leaf_survival_product = true;
+  return no_response;
+}
+
+inline ExactSimpleRacePlan compile_simple_race_plan(
+    const ExactVariantPlan &plan) {
+  ExactSimpleRacePlan simple;
+  if (!plan.no_response.terminal_leaf_survival_product ||
+      plan.outcomes.empty()) {
+    return simple;
+  }
+
+  simple.source_ids = plan.no_response.source_ids;
+  simple.outcome_source_ids.assign(
+      plan.outcomes.size(),
+      semantic::kInvalidIndex);
+  simple.source_leaf_indices.assign(
+      static_cast<std::size_t>(plan.source_count),
+      semantic::kInvalidIndex);
+
+  for (const auto source_id : simple.source_ids) {
+    const auto source_pos = static_cast<std::size_t>(source_id);
+    if (source_id == semantic::kInvalidIndex ||
+        source_pos >= plan.source_kernels.size()) {
+      return ExactSimpleRacePlan{};
+    }
+    const auto &kernel = plan.source_kernels[source_pos];
+    if (kernel.kind != CompiledSourceChannelKernelKind::LeafAbsolute ||
+        kernel.leaf_index == semantic::kInvalidIndex) {
+      return ExactSimpleRacePlan{};
+    }
+    simple.source_leaf_indices[source_pos] = kernel.leaf_index;
+  }
+
+  for (std::size_t outcome_index = 0; outcome_index < plan.outcomes.size();
+       ++outcome_index) {
+    if (plan.outcomes[outcome_index].scenarios.size() != 1U) {
+      return ExactSimpleRacePlan{};
+    }
+    semantic::Index source_id{semantic::kInvalidIndex};
+    if (!scenario_is_terminal_no_response_source(
+            plan,
+            plan.outcomes[outcome_index].scenarios.front(),
+            &source_id)) {
+      return ExactSimpleRacePlan{};
+    }
+    const auto source_pos = static_cast<std::size_t>(source_id);
+    if (source_pos >= simple.source_leaf_indices.size() ||
+        simple.source_leaf_indices[source_pos] == semantic::kInvalidIndex) {
+      return ExactSimpleRacePlan{};
+    }
+    simple.outcome_source_ids[outcome_index] = source_id;
+  }
+
+  simple.terminal_leaf_top1 = true;
+  return simple;
+}
+
 inline void compile_scenario_runtime_fields(ExactVariantPlan *plan,
                                             ExactTransitionScenario *scenario) {
   scenario->active_source_id = source_ordinal(*plan, scenario->active_key);
@@ -5763,6 +5878,7 @@ inline ExactVariantPlan make_exact_variant_plan(
       compile_scenario_runtime_fields(&plan, &scenario);
     }
   }
+  plan.no_response = compile_no_response_plan(plan);
   for (auto &target_plan : plan.competitor_plans) {
     for (auto &block : target_plan.blocks) {
       for (auto &subset : block.subsets) {
@@ -5775,6 +5891,7 @@ inline ExactVariantPlan make_exact_variant_plan(
   compile_sequence_expr_upper_bound_roots(&plan);
   plan.runtime = compile_exact_runtime_plan(&plan);
   compile_source_channel_plans(&plan);
+  plan.simple_race = compile_simple_race_plan(plan);
   validate_compiled_math_has_no_interpreter_expr_nodes(plan.compiled_math);
   compiled_math_release_planning_fields(&plan.compiled_math);
   plan.ranked_supported = variant_supports_ranked_sequence(plan);

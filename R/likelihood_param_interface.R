@@ -1126,6 +1126,10 @@ make_context <- function(structure, prep = NULL) {
       call. = FALSE
     )
   }
+  canonical_prefix <- identical(cn[seq_along(required_cols)], required_cols)
+  if (canonical_prefix && is.double(param_mat) && is.matrix(param_mat)) {
+    return(param_mat)
+  }
   extra_cols <- setdiff(cn, required_cols)
   out <- unclass(as.matrix(param_mat[, c(required_cols, extra_cols), drop = FALSE]))
   storage.mode(out) <- "double"
@@ -1420,7 +1424,7 @@ response_probabilities.default <- function(structure,
 #' data_df <- simulate(structure, params_df, seed = 1)
 #' prepared <- prepare_data(structure, data_df)
 #' ctx <- make_context(structure)
-#' log_likelihood(ctx, prepared, list(params_df))
+#' log_likelihood(ctx, prepared, params_df)
 #' @export
 log_likelihood <- function(context, data, parameters, ok = NULL, expand = NULL, min_ll = log(1e-10), ...) {
   UseMethod("log_likelihood")
@@ -1435,15 +1439,7 @@ log_likelihood.accumulatr_context <- function(context,
                                               expand = NULL,
                                               min_ll = log(1e-10),
                                               ...) {
-  ctx <- .validate_context(context)
-  data_df <- .validate_prepared_data(data)
-  params_list <- if (is.data.frame(parameters) || is.matrix(parameters) || inherits(parameters, "param_matrix")) {
-    list(parameters)
-  } else {
-    parameters
-  }
-  params_list <- lapply(params_list, .coerce_loglik_param_matrix)
-  data_expand <- attr(data_df, "expand", exact = TRUE)
+  data_expand <- attr(data, "expand", exact = TRUE)
   if (is.null(expand) || length(expand) == 0L) {
     if (!is.null(data_expand) && length(data_expand) > 0L) {
       expand <- data_expand
@@ -1455,40 +1451,18 @@ log_likelihood.accumulatr_context <- function(context,
     ok <- NULL
   }
 
-  cpp_ctx <- ctx$cpp %||% NULL
-  if (is.null(cpp_ctx) || is.null(cpp_ctx$native)) {
-    stop("C++ context required for log_likelihood", call. = FALSE)
-  }
-  required_p_slots <- as.integer(ctx$required_p_slots %||% 0L)
-  cpp_layout <- attr(data_df, "cpp_layout", exact = TRUE)
-  max_rank <- attr(data_df, "max_rank", exact = TRUE) %||% 1L
-  if (max_rank > 1L) {
-    if (isTRUE(cpp_ctx$observed_identity) &&
-        !identical(cpp_ctx$identity_backend, "exact")) {
-      stop("ranked observations require the exact backend", call. = FALSE)
-    }
-    if (!isTRUE(cpp_ctx$ranked_supported)) {
-      stop("ranked observations are not supported for this model", call. = FALSE)
-    }
-  }
-
-  out <- vapply(params_list, function(param_mat) {
-    if (nrow(param_mat) != nrow(data_df)) {
-      stop("Rebuild likelihood currently requires parameter rows aligned to prepared data rows; use build_param_matrix(..., trial_df = prepared_data)", call. = FALSE)
-    }
-    param_mat <- .canonicalize_loglik_param_matrix(param_mat, required_p_slots)
-    observed <- .loglik_context(
-      cpp_ctx$native,
-      cpp_layout,
-      param_mat,
-      data_df,
-      ok = ok,
-      expand = expand,
-      min_ll = min_ll
-    )
-    as.numeric(observed$total_loglik)
-  }, numeric(1))
-  unname(out)
+  cpp_ctx <- context$cpp
+  cpp_layout <- attr(data, "cpp_layout", exact = TRUE)
+  observed <- .loglik_context(
+    cpp_ctx$native,
+    cpp_layout,
+    parameters,
+    data,
+    ok = ok,
+    expand = expand,
+    min_ll = min_ll
+  )
+  as.numeric(observed$total_loglik)
 }
 
 #' @rdname log_likelihood

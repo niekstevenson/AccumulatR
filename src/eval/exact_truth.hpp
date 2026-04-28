@@ -74,6 +74,18 @@ public:
         channel_plan, t, workspace);
   }
 
+  bool source_channel_condition_invariant(
+      const semantic::Index source_channel_slot) const {
+    const auto slot = static_cast<std::size_t>(source_channel_slot);
+    if (source_channels_ == nullptr ||
+        source_channel_slot == semantic::kInvalidIndex ||
+        slot >= plan_.compiled_math.source_channel_plans.size()) {
+      return false;
+    }
+    return source_channels_->source_channel_condition_invariant(
+        plan_.compiled_math.source_channel_plans[slot]);
+  }
+
   bool source_order_known_before(
       const semantic::Index before_source_id,
       const semantic::Index after_source_id,
@@ -157,24 +169,19 @@ inline semantic::Index compiled_node_condition_cache_id(
   std::size_t seed = 0x9e3779b97f4a7c15ULL;
   exact_hash_condition_part(&seed, static_cast<std::size_t>(evaluator_id));
   exact_hash_condition_part(&seed, static_cast<std::size_t>(node.condition_id));
-  const auto condition_pos = static_cast<std::size_t>(node.condition_id);
-  if (condition_pos >= workspace.condition_time_dependency_spans.size()) {
-    return static_cast<semantic::Index>(
-        (seed & static_cast<std::size_t>(0x3fffffffU)) + 1U);
-  }
-  const auto span = workspace.condition_time_dependency_spans[condition_pos];
-  for (semantic::Index i = 0; i < span.size; ++i) {
-    const auto time_id =
-        workspace.condition_time_dependency_ids[
-            static_cast<std::size_t>(span.offset + i)];
-    const auto time_pos = static_cast<std::size_t>(time_id);
-    if (time_pos >= workspace.time_valid.size() ||
-        workspace.time_valid[time_pos] == 0U) {
-      continue;
+  const auto *time_dependencies =
+      workspace.condition_time_dependencies(node.condition_id);
+  if (time_dependencies != nullptr) {
+    for (const auto time_id : *time_dependencies) {
+      const auto time_pos = static_cast<std::size_t>(time_id);
+      if (time_pos >= workspace.time_valid.size() ||
+          workspace.time_valid[time_pos] == 0U) {
+        continue;
+      }
+      exact_hash_condition_part(&seed, static_cast<std::size_t>(time_id) + 1U);
+      exact_hash_condition_part(
+          &seed, std::hash<double>{}(workspace.time_values[time_pos]));
     }
-    exact_hash_condition_part(&seed, static_cast<std::size_t>(time_id) + 1U);
-    exact_hash_condition_part(
-        &seed, std::hash<double>{}(workspace.time_values[time_pos]));
   }
   return static_cast<semantic::Index>(
       (seed & static_cast<std::size_t>(0x3fffffffU)) + 1U);
@@ -503,8 +510,11 @@ inline leaf::EventChannels compiled_math_store_source_channels(
         "compiled source node reached evaluation without a source-channel slot");
   }
 
+  const bool condition_invariant =
+      evaluator != nullptr &&
+      evaluator->source_channel_condition_invariant(node.source_channel_slot);
   const auto condition_cache_id =
-      evaluator == nullptr
+      evaluator == nullptr || condition_invariant
           ? 0
           : compiled_node_condition_cache_id(node, evaluator, *workspace);
   if (workspace->source_channel_valid[slot] != 0U &&
@@ -1100,14 +1110,22 @@ inline double evaluate_compiled_node_span(
     const auto node_id = nodes[
         static_cast<std::size_t>(schedule.offset + schedule_idx)];
     const auto &node = program.nodes[static_cast<std::size_t>(node_id)];
-    auto *condition_evaluator =
-        compiled_math_node_evaluator(node, parent, eval_workspace);
+    auto *condition_evaluator = parent;
+    if (node.source_view_id != 0 &&
+        node.source_view_id != semantic::kInvalidIndex) {
+      if (eval_workspace == nullptr) {
+        throw std::runtime_error(
+            "compiled node requires a planned source view but no workspace was supplied");
+      }
+      condition_evaluator =
+          eval_workspace->source_view_evaluator(node.source_view_id, parent);
+    }
+    const bool cacheable = compiled_math_node_cacheable(node.kind);
     double value = 0.0;
-    if (compiled_math_load_node_cache(
-            node,
-            condition_evaluator,
-            *workspace,
-            &value)) {
+    if (condition_evaluator != nullptr &&
+        cacheable &&
+        compiled_math_load_node_cache_entry(
+            node, condition_evaluator, *workspace, &value)) {
       workspace->values[static_cast<std::size_t>(node.cache_slot)] = value;
       continue;
     }
@@ -1122,15 +1140,18 @@ inline double evaluate_compiled_node_span(
       break;
     case CompiledMathNodeKind::SourcePdf:
       value = safe_density(
-          compiled_math_source_channels(node, workspace).pdf);
+          workspace->source_channel_pdf[
+              static_cast<std::size_t>(node.source_channel_slot)]);
       break;
     case CompiledMathNodeKind::SourceCdf:
       value = clamp_probability(
-          compiled_math_source_channels(node, workspace).cdf);
+          workspace->source_channel_cdf[
+              static_cast<std::size_t>(node.source_channel_slot)]);
       break;
     case CompiledMathNodeKind::SourceSurvival:
       value = clamp_probability(
-          compiled_math_source_channels(node, workspace).survival);
+          workspace->source_channel_survival[
+              static_cast<std::size_t>(node.source_channel_slot)]);
       break;
     case CompiledMathNodeKind::TimeGate: {
       const auto child_id =
@@ -1444,11 +1465,13 @@ inline double evaluate_compiled_node_span(
       break;
     }
     }
-    compiled_math_store_node_cache(
-        node,
-        condition_evaluator,
-        workspace,
-        value);
+    if (condition_evaluator != nullptr && cacheable) {
+      compiled_math_store_node_cache_entry(
+          node,
+          condition_evaluator,
+          workspace,
+          value);
+    }
     workspace->values[static_cast<std::size_t>(node.cache_slot)] = value;
   }
   return workspace->values[static_cast<std::size_t>(result_node_id)];

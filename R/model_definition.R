@@ -1716,7 +1716,8 @@ build_param_matrix <- function(model,
   }
   max_p <- max_needed
   max_p <- max(3L, max_p)
-  col_names <- c("q", "w", "t0", paste0("p", seq_len(max_p)))
+  p_col_names <- paste0("p", seq_len(max_p))
+  col_names <- c("q", "t0", p_col_names, "w")
 
   # Identify mixture weight parameters to include as columns
   mix <- spec$mixture_options %||% spec$metadata$mixture %||% list()
@@ -1911,7 +1912,7 @@ build_param_matrix <- function(model,
         1
       }
     }
-    row_vals <- c(q_val, w_val, t0_val, p_vals)
+    row_vals <- c(q_val, t0_val, p_vals, w_val)
     for (wp in weight_params) {
       val <- if (wp %in% names(param_values)) as.numeric(param_values[[wp]]) else NA_real_
       row_vals <- c(row_vals, val)

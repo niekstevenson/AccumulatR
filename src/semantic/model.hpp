@@ -126,6 +126,7 @@ struct ComponentSpec {
   std::vector<Index> active_leaf_indices;
   double weight{1.0};
   std::string weight_name;
+  int weight_param_index{-1};
   int n_outcomes_override{0};
 };
 
@@ -145,6 +146,7 @@ struct SemanticModel {
   ObservationSpec observation{};
   std::string component_mode{"fixed"};
   std::string component_reference;
+  int component_weight_param_count{0};
 };
 
 struct ValidationIssue {

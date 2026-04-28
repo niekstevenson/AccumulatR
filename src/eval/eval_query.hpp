@@ -14,6 +14,7 @@ struct ParamView {
   const double *base;
   int nrow;
   const int *row_map{nullptr};
+  int row_offset{0};
 
   explicit ParamView(SEXP paramsSEXP)
       : base(REAL(paramsSEXP)), nrow(Rf_nrows(paramsSEXP)) {}
@@ -23,8 +24,14 @@ struct ParamView {
         nrow(Rf_nrows(paramsSEXP)),
         row_map(row_map_) {}
 
+  ParamView(SEXP paramsSEXP, const int *row_map_, const int row_offset_)
+      : base(REAL(paramsSEXP)),
+        nrow(Rf_nrows(paramsSEXP)),
+        row_map(row_map_),
+        row_offset(row_offset_) {}
+
   inline int physical_row(const int row) const {
-    return row_map == nullptr ? row : row_map[row];
+    return row_offset + (row_map == nullptr ? row : row_map[row]);
   }
 
   inline double q(const int row) const {
@@ -60,16 +67,23 @@ struct EvalProbabilityQuery {
   semantic::Index row_map_index{semantic::kInvalidIndex};
 };
 
+struct EvalNoResponseQuery {
+  semantic::Index trial_index{semantic::kInvalidIndex};
+  semantic::Index variant_index{semantic::kInvalidIndex};
+  semantic::Index row_map_index{semantic::kInvalidIndex};
+};
+
 inline std::vector<ProbabilityQuery> collapse_probability_queries(
-    const Rcpp::DataFrame &data,
+    SEXP dataSEXP,
     const std::vector<semantic::Index> &variant_index_by_component_code,
     const PreparedTrialLayout &layout) {
   if (layout.spans.empty()) {
     return {};
   }
 
-  const auto table = read_prepared_data_view(data);
-  Rcpp::IntegerVector outcome = Rcpp::as<Rcpp::IntegerVector>(data["R"]);
+  const auto table = read_prepared_data_view(dataSEXP, layout);
+  const int *outcome =
+      INTEGER(trusted_data_column(dataSEXP, layout.label_cols[1]));
 
   std::vector<ProbabilityQuery> out;
   out.reserve(layout.spans.size());

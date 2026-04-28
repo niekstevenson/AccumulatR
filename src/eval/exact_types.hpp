@@ -511,6 +511,18 @@ struct ExactRuntimeVariantPlan {
   std::vector<ExactRuntimeOutcomePlan> outcomes;
 };
 
+struct ExactNoResponsePlan {
+  bool terminal_leaf_survival_product{false};
+  std::vector<semantic::Index> source_ids;
+};
+
+struct ExactSimpleRacePlan {
+  bool terminal_leaf_top1{false};
+  std::vector<semantic::Index> source_ids;
+  std::vector<semantic::Index> outcome_source_ids;
+  std::vector<semantic::Index> source_leaf_indices;
+};
+
 struct ExactExprUnionSubset {
   ExactIndexSpan children;
   ExactIndexSpan child_positions;
@@ -554,6 +566,9 @@ struct ExactVariantPlan {
   std::vector<ExactOutcomePlan> outcomes;
   std::vector<ExactTargetCompetitorPlan> competitor_plans;
   ExactRuntimeVariantPlan runtime;
+  ExactNoResponsePlan no_response;
+  ExactSimpleRacePlan simple_race;
+  std::vector<int> leaf_row_offsets;
   CompiledMathProgram compiled_math;
   std::vector<ExactRelationTemplate> compiled_source_views;
   std::vector<ExactExprKernel> expr_kernels;

@@ -72,7 +72,6 @@ testthat::test_that("latent sampled mixtures marginalize on the C++ likelihood p
     params_lo,
     trial_df = latent_prepared
   )
-  latent_rows_lo <- AccumulatR:::.param_matrix_to_rows(structure, latent_mat_lo)
   fast_mat_lo <- build_param_matrix(
     structure$model_spec,
     params_lo,
@@ -85,7 +84,6 @@ testthat::test_that("latent sampled mixtures marginalize on the C++ likelihood p
   )
 
   ll_latent_lo <- as.numeric(log_likelihood(ctx, latent_prepared, latent_mat_lo))
-  ll_latent_rows_lo <- as.numeric(log_likelihood(ctx, latent_prepared, latent_rows_lo))
   ll_explicit_na_lo <- as.numeric(log_likelihood(
     ctx,
     explicit_na_prepared,
@@ -100,7 +98,6 @@ testthat::test_that("latent sampled mixtures marginalize on the C++ likelihood p
   )
 
   testthat::expect_equal(ll_latent_lo, expected_lo, tolerance = 1e-8)
-  testthat::expect_equal(ll_latent_rows_lo, ll_latent_lo, tolerance = 1e-8)
   testthat::expect_equal(ll_explicit_na_lo, ll_latent_lo, tolerance = 1e-8)
 
   params_hi <- latent_sampled_mixture_params(0.8)
@@ -168,4 +165,71 @@ testthat::test_that("latent fixed mixtures use fixed component weights in likeli
   ))
 
   testthat::expect_equal(ll_latent, log(0.25) + ll_left, tolerance = 1e-8)
+})
+
+testthat::test_that("latent missing-all mixtures use compiled terminal no-response when available", {
+  structure <- race_spec() |>
+    add_accumulator("A", "lognormal") |>
+    add_accumulator("B", "lognormal") |>
+    add_outcome("Left", "A") |>
+    add_outcome("Right", "B") |>
+    add_component("left_only", members = "A", weight = 0.25) |>
+    add_component("right_only", members = "B", weight = 0.75) |>
+    set_mixture_options(mode = "fixed") |>
+    finalize_model()
+
+  prepared <- prepare_data(
+    structure,
+    data.frame(
+      trial = 1L,
+      R = NA_character_,
+      rt = NA_real_,
+      stringsAsFactors = FALSE
+    )
+  )
+  params <- c(
+    A.m = log(0.30), A.s = 0.18, A.q = 0.20,
+    B.m = log(0.32), B.s = 0.18, B.q = 0.40
+  )
+
+  out <- as.numeric(log_likelihood(
+    make_context(structure),
+    prepared,
+    build_param_matrix(structure$model_spec, params, trial_df = prepared)
+  ))
+
+  testthat::expect_equal(out, log(0.25 * 0.20 + 0.75 * 0.40), tolerance = 1e-10)
+})
+
+testthat::test_that("observed labels with missing RT marginalize over finite response", {
+  structure <- race_spec() |>
+    add_accumulator("A", "lognormal") |>
+    add_accumulator("B", "lognormal") |>
+    add_outcome("Seen", "A") |>
+    add_outcome("HiddenSeen", "B", options = list(
+      guess = list(labels = "Seen", weights = 1, rt_policy = "na")
+    )) |>
+    finalize_model()
+
+  prepared <- prepare_data(
+    structure,
+    data.frame(
+      trial = 1L,
+      R = "Seen",
+      rt = NA_real_,
+      stringsAsFactors = FALSE
+    )
+  )
+  params <- c(
+    A.m = log(0.30), A.s = 0.18, A.q = 0.20, A.t0 = 0,
+    B.m = log(0.32), B.s = 0.18, B.q = 0.30, B.t0 = 0
+  )
+
+  out <- as.numeric(log_likelihood(
+    make_context(structure),
+    prepared,
+    build_param_matrix(structure$model_spec, params, trial_df = prepared)
+  ))
+
+  testthat::expect_equal(out, log(1 - 0.20 * 0.30), tolerance = 1e-10)
 })

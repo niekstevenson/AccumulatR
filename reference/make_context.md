@@ -34,7 +34,7 @@ structure <- finalize_model(spec)
 make_context(structure)
 #> $cpp
 #> $cpp$native
-#> <pointer: 0x55bf733b2480>
+#> <pointer: 0x56081e282b40>
 #> 
 #> $cpp$observed_identity
 #> [1] TRUE

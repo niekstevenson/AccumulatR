@@ -1,6 +1,5 @@
 <urlset xmlns = 'http://www.sitemaps.org/schemas/sitemap/0.9'>
 <url><loc>https://niekstevenson.github.io/AccumulatR/404.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/DAG.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/chained_onset.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/distributions.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/getting_started.html</loc></url>
@@ -12,11 +11,8 @@
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/simple_model.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/articles/trigger_model.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/authors.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/exacttransition_fix.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/index.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/news/index.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/planning.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/precompile.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/AccumulatR-package.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/add_accumulator.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/add_component.html</loc></url>

@@ -52,8 +52,9 @@ log_likelihood(context, ...)
 
 - expand:
 
-  Optional index vector used to expand compressed trial-level results
-  back to the original trial count.
+  Optional 1-based index vector mapping original trials to evaluated
+  trial log-likelihood positions. If \`NULL\`, the \`expand\` attribute
+  from \`data\` is used when present; otherwise no expansion is applied.
 
 - min_ll:
 
@@ -82,6 +83,6 @@ params_df <- build_param_matrix(
 data_df <- simulate(structure, params_df, seed = 1)
 prepared <- prepare_data(structure, data_df)
 ctx <- make_context(structure)
-log_likelihood(ctx, prepared, list(params_df))
-#> Error in .loglik_context(cpp_ctx$native, cpp_layout, parameters, data,     ok = ok, expand = expand, min_ll = min_ll): REAL() can only be applied to a 'numeric', not a 'list'
+log_likelihood(ctx, prepared, params_df)
+#> [1] 2.481128
 ```

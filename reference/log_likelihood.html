@@ -102,8 +102,10 @@ likelihood. Trials marked `FALSE` are assigned `min_ll`.</p></dd>
 
 
 <dt id="arg-expand">expand<a class="anchor" aria-label="anchor" href="#arg-expand"></a></dt>
-<dd><p>Optional index vector used to expand compressed trial-level
-results back to the original trial count.</p></dd>
+<dd><p>Optional 1-based index vector mapping original trials to
+evaluated trial log-likelihood positions. If `NULL`, the `expand`
+attribute from `data` is used when present; otherwise no expansion is
+applied.</p></dd>
 
 
 <dt id="arg-min-ll">min_ll<a class="anchor" aria-label="anchor" href="#arg-min-ll"></a></dt>
@@ -134,8 +136,8 @@ trials.</p></dd>
 <span class="r-in"><span><span class="va">data_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="simulate.html">simulate</a></span><span class="op">(</span><span class="va">structure</span>, <span class="va">params_df</span>, seed <span class="op">=</span> <span class="fl">1</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="va">prepared</span> <span class="op">&lt;-</span> <span class="fu"><a href="prepare_data.html">prepare_data</a></span><span class="op">(</span><span class="va">structure</span>, <span class="va">data_df</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="va">ctx</span> <span class="op">&lt;-</span> <span class="fu"><a href="make_context.html">make_context</a></span><span class="op">(</span><span class="va">structure</span><span class="op">)</span></span></span>
-<span class="r-in"><span><span class="fu">log_likelihood</span><span class="op">(</span><span class="va">ctx</span>, <span class="va">prepared</span>, <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span><span class="va">params_df</span><span class="op">)</span><span class="op">)</span></span></span>
-<span class="r-err co"><span class="r-pr">#&gt;</span> <span class="error">Error in .loglik_context(cpp_ctx$native, cpp_layout, parameters, data,     ok = ok, expand = expand, min_ll = min_ll):</span> REAL() can only be applied to a 'numeric', not a 'list'</span>
+<span class="r-in"><span><span class="fu">log_likelihood</span><span class="op">(</span><span class="va">ctx</span>, <span class="va">prepared</span>, <span class="va">params_df</span><span class="op">)</span></span></span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] 2.481128</span>
 </code></pre></div>
     </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>

@@ -38,8 +38,10 @@ log_likelihood(
 \item{ok}{Logical vector marking which trials should contribute to the
 likelihood. Trials marked `FALSE` are assigned `min_ll`.}
 
-\item{expand}{Optional index vector used to expand compressed trial-level
-results back to the original trial count.}
+\item{expand}{Optional 1-based index vector mapping original trials to
+evaluated trial log-likelihood positions. If `NULL`, the `expand`
+attribute from `data` is used when present; otherwise no expansion is
+applied.}
 
 \item{min_ll}{Minimum log-likelihood value used for excluded or impossible
 trials.}
@@ -66,5 +68,5 @@ params_df <- build_param_matrix(
 data_df <- simulate(structure, params_df, seed = 1)
 prepared <- prepare_data(structure, data_df)
 ctx <- make_context(structure)
-log_likelihood(ctx, prepared, list(params_df))
+log_likelihood(ctx, prepared, params_df)
 }

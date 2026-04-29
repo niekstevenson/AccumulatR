@@ -39,7 +39,6 @@ SEXP semantic_loglik_context_cpp(SEXP contextSEXP,
       accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
   const auto &layout =
       accumulatr::eval::detail::trial_layout_from_xptr(layoutSEXP);
-  (void)expandSEXP;
   const int *ok = Rf_isNull(okSEXP) ? nullptr : LOGICAL(okSEXP);
   const double min_ll = REAL(minLLSEXP)[0];
   Rcpp::List observed = accumulatr::eval::detail::evaluate_observed_trials_cached(
@@ -52,6 +51,7 @@ SEXP semantic_loglik_context_cpp(SEXP contextSEXP,
       paramsSEXP,
       dataSEXP,
       min_ll,
+      expandSEXP,
       ok);
   return observed;
 }

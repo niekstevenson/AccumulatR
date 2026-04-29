@@ -927,6 +927,7 @@ inline SEXP evaluate_exact_trials_cached(
     SEXP paramsSEXP,
     SEXP dataSEXP,
     const double min_ll,
+    SEXP expandSEXP,
     const int *ok = nullptr) {
   ParamView params(paramsSEXP);
   const auto table = read_prepared_data_view(dataSEXP, layout);
@@ -1019,7 +1020,7 @@ inline SEXP evaluate_exact_trials_cached(
         Rcpp::Named("row_count") = block.row_count);
   }
 
-  const double total_loglik = aggregate_trial_loglik(loglik, layout);
+  const double total_loglik = aggregate_trial_loglik(loglik, expandSEXP);
 
   return Rcpp::List::create(
       Rcpp::Named("loglik") = loglik,

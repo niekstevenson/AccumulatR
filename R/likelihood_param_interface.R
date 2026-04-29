@@ -1405,8 +1405,10 @@ response_probabilities.default <- function(structure,
 #' @param parameters A parameter data frame, or a list of parameter data frames.
 #' @param ok Logical vector marking which trials should contribute to the
 #'   likelihood. Trials marked `FALSE` are assigned `min_ll`.
-#' @param expand Deprecated. Expansion is compiled into prepared data created
-#'   with `compress = TRUE`.
+#' @param expand Optional 1-based index vector mapping original trials to
+#'   evaluated trial log-likelihood positions. If `NULL`, the `expand`
+#'   attribute from `data` is used when present; otherwise no expansion is
+#'   applied.
 #' @param min_ll Minimum log-likelihood value used for excluded or impossible
 #'   trials.
 #' @param ... Unused; for S3 compatibility.
@@ -1439,7 +1441,12 @@ log_likelihood.accumulatr_context <- function(context,
                                               expand = NULL,
                                               min_ll = log(1e-10),
                                               ...) {
-  expand <- NULL
+  if (is.null(expand) || length(expand) == 0L) {
+    expand <- attr(data, "expand", exact = TRUE)
+  }
+  if (is.null(expand) || length(expand) == 0L) {
+    expand <- NULL
+  }
   if (is.null(ok) || length(ok) == 0L) {
     ok <- NULL
   }

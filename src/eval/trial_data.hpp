@@ -19,7 +19,6 @@ struct PreparedTrialSpan {
 
 struct PreparedTrialLayout {
   std::vector<PreparedTrialSpan> spans;
-  std::vector<int> expand_weights;
   int max_rank{1};
   int trial_col{-1};
   int component_col{-1};
@@ -41,8 +40,8 @@ inline bool trial_is_selected(const int *ok,
 
 inline double aggregate_trial_loglik(
     const Rcpp::NumericVector &loglik,
-    const PreparedTrialLayout &layout) {
-  if (layout.expand_weights.empty()) {
+    SEXP expandSEXP) {
+  if (expandSEXP == R_NilValue || XLENGTH(expandSEXP) == 0) {
     double total_loglik = 0.0;
     for (R_xlen_t i = 0; i < loglik.size(); ++i) {
       total_loglik += static_cast<double>(loglik[i]);
@@ -51,12 +50,10 @@ inline double aggregate_trial_loglik(
   }
 
   double total_loglik = 0.0;
-  for (std::size_t i = 0; i < layout.expand_weights.size(); ++i) {
-    if (layout.expand_weights[i] == 0) {
-      continue;
-    }
-    total_loglik += static_cast<double>(layout.expand_weights[i]) *
-                    static_cast<double>(loglik[static_cast<R_xlen_t>(i)]);
+  const int *expand = INTEGER(expandSEXP);
+  for (R_xlen_t i = 0; i < XLENGTH(expandSEXP); ++i) {
+    total_loglik += static_cast<double>(
+        loglik[static_cast<R_xlen_t>(expand[i] - 1)]);
   }
   return total_loglik;
 }
@@ -177,16 +174,6 @@ inline PreparedTrialLayout build_prepared_trial_layout(
   }
   layout.spans.push_back(
       PreparedTrialSpan{start, static_cast<semantic::Index>(n_rows - 1)});
-
-  const SEXP expand = Rf_getAttrib(dataSEXP, Rf_install("expand"));
-  if (expand != R_NilValue && XLENGTH(expand) > 0) {
-    layout.expand_weights.assign(layout.spans.size(), 0);
-    const int *expand_values = INTEGER(expand);
-    for (R_xlen_t i = 0; i < XLENGTH(expand); ++i) {
-      ++layout.expand_weights[
-          static_cast<std::size_t>(expand_values[i] - 1)];
-    }
-  }
 
   return layout;
 }

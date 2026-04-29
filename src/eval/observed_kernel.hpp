@@ -611,6 +611,7 @@ inline SEXP evaluate_observed_trials_cached(
     SEXP paramsSEXP,
     SEXP dataSEXP,
     const double min_ll,
+    SEXP expandSEXP,
     const int *ok = nullptr) {
   const auto table = read_prepared_data_view(dataSEXP, layout);
 
@@ -628,6 +629,7 @@ inline SEXP evaluate_observed_trials_cached(
             paramsSEXP,
             dataSEXP,
             min_ll,
+            expandSEXP,
             ok);
       }
     }
@@ -771,7 +773,7 @@ inline SEXP evaluate_observed_trials_cached(
     }
   }
 
-  const double total_loglik = aggregate_trial_loglik(loglik, layout);
+  const double total_loglik = aggregate_trial_loglik(loglik, expandSEXP);
 
   return Rcpp::List::create(
       Rcpp::Named("loglik") = loglik,

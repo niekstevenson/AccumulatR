@@ -78,11 +78,11 @@ params <- c(
 build_param_matrix(model, params, n_trials = 2)
 ```
 
-    ##      q w t0        p1   p2   p3
-    ## [1,] 0 1  0 -1.203973 0.18 0.00
-    ## [2,] 0 1  0  0.100000 0.04 0.08
-    ## [3,] 0 1  0 -1.203973 0.18 0.00
-    ## [4,] 0 1  0  0.100000 0.04 0.08
+    ##      q t0        p1   p2   p3 w
+    ## [1,] 0  0 -1.203973 0.18 0.00 1
+    ## [2,] 0  0  0.100000 0.04 0.08 1
+    ## [3,] 0  0 -1.203973 0.18 0.00 1
+    ## [4,] 0  0  0.100000 0.04 0.08 1
 
 Choose the distribution that matches the accumulator you want to
 specify, then use its parameter names consistently in

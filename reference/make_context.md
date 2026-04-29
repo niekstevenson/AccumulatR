@@ -34,13 +34,13 @@ structure <- finalize_model(spec)
 make_context(structure)
 #> $cpp
 #> $cpp$native
-#> <pointer: 0x5653d41e3b90>
+#> <pointer: 0x55bf733b2480>
 #> 
 #> $cpp$observed_identity
 #> [1] TRUE
 #> 
 #> $cpp$identity_backend
-#> [1] "direct"
+#> [1] "exact"
 #> 
 #> $cpp$ranked_supported
 #> [1] TRUE

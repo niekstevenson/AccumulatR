@@ -55,7 +55,7 @@ spec <- add_accumulator(spec, "A", "lognormal")
 spec <- add_outcome(spec, "A_win", "A")
 vals <- c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0)
 build_param_matrix(spec, vals, n_trials = 2)
-#>      q w t0 p1  p2 p3
-#> [1,] 0 1  0  0 0.1  0
-#> [2,] 0 1  0  0 0.1  0
+#>      q t0 p1  p2 p3 w
+#> [1,] 0  0  0 0.1  0 1
+#> [2,] 0  0  0 0.1  0 1
 ```

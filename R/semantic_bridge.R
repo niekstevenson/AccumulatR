@@ -36,7 +36,7 @@
     `_AccumulatR_semantic_probability_context_cpp`,
     context,
     layout,
-    as.matrix(params),
-    as.data.frame(data, stringsAsFactors = FALSE)
+    params,
+    data
   )
 }

@@ -39,15 +39,9 @@ SEXP semantic_loglik_context_cpp(SEXP contextSEXP,
       accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
   const auto &layout =
       accumulatr::eval::detail::trial_layout_from_xptr(layoutSEXP);
-  const Rcpp::LogicalVector ok =
-      Rf_isNull(okSEXP) ? Rcpp::LogicalVector() : Rcpp::LogicalVector(okSEXP);
-  const Rcpp::IntegerVector expand =
-      Rf_isNull(expandSEXP) ? Rcpp::IntegerVector() : Rcpp::IntegerVector(expandSEXP);
-  const double min_ll = Rcpp::as<double>(minLLSEXP);
-  const auto control = accumulatr::eval::detail::build_trial_eval_control(
-      layout.spans.size(),
-      ok,
-      expand);
+  (void)expandSEXP;
+  const int *ok = Rf_isNull(okSEXP) ? nullptr : LOGICAL(okSEXP);
+  const double min_ll = REAL(minLLSEXP)[0];
   Rcpp::List observed = accumulatr::eval::detail::evaluate_observed_trials_cached(
       ctx.observed_plans_by_component_code,
       ctx.observed_identity,
@@ -58,14 +52,7 @@ SEXP semantic_loglik_context_cpp(SEXP contextSEXP,
       paramsSEXP,
       dataSEXP,
       min_ll,
-      control.selected.empty() ? nullptr : &control.selected);
-  if (!control.weights.empty()) {
-    const Rcpp::NumericVector loglik = observed["loglik"];
-    observed["total_loglik"] =
-        accumulatr::eval::detail::aggregate_trial_loglik(
-            loglik,
-            control);
-  }
+      ok);
   return observed;
 }
 

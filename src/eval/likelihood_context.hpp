@@ -339,6 +339,7 @@ inline NativeLikelihoodContext build_native_likelihood_context(
   ctx.observed_identity = observation_plans_are_identity(
       ctx.observed_plans_by_component_code,
       &ctx.identity_backend);
+  prune_observation_planning_state(&ctx.observed_plans_by_component_code);
   for (const auto &plan : ctx.exact_plans) {
     if (!plan.ranked_supported) {
       ctx.ranked_supported = false;

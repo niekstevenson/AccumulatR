@@ -25,6 +25,7 @@ PROFILE_FILE=${ACCUMULATR_PROFILE_FILE:-"$REPO_ROOT/dev/accumulatr_profile_cpp.t
 PROFILE_DURATION=${ACCUMULATR_PROFILE_DURATION:-20}
 PROFILE_INTERVAL=${ACCUMULATR_PROFILE_INTERVAL:-1}
 PROFILE_START_TIMEOUT=${ACCUMULATR_PROFILE_START_TIMEOUT:-60}
+PROFILE_TARGET_SIGNALS=${ACCUMULATR_PROFILE_TARGET_SIGNALS:-0}
 
 PROFILE_LIB=$(mktemp -d /tmp/accumulatr_profile_lib.XXXXXX)
 PROFILE_TMP=$(mktemp -d /tmp/accumulatr_profile_run.XXXXXX)
@@ -43,17 +44,18 @@ cat > "$PROFILE_WRAPPER_SCRIPT" <<'EOF'
 start_file <- Sys.getenv("ACCUMULATR_PROFILE_START_FILE", "")
 end_file <- Sys.getenv("ACCUMULATR_PROFILE_END_FILE", "")
 target_script <- Sys.getenv("ACCUMULATR_PROFILE_R_SCRIPT", "")
+target_signals <- identical(Sys.getenv("ACCUMULATR_PROFILE_TARGET_SIGNALS", "0"), "1")
 
 if (!nzchar(target_script)) {
   stop("ACCUMULATR_PROFILE_R_SCRIPT not set")
 }
-if (nzchar(start_file)) {
+if (!target_signals && nzchar(start_file)) {
   writeLines("start", start_file)
 }
 
 source(target_script)
 
-if (nzchar(end_file)) {
+if (!target_signals && nzchar(end_file)) {
   writeLines("end", end_file)
 }
 EOF
@@ -63,6 +65,7 @@ echo "Launching R profiling workload (${PROFILE_R_SCRIPT})..."
 ACCUMULATR_PROFILE_START_FILE="$PROFILE_START_FILE" \
 ACCUMULATR_PROFILE_END_FILE="$PROFILE_END_FILE" \
 ACCUMULATR_PROFILE_R_SCRIPT="$PROFILE_R_SCRIPT" \
+ACCUMULATR_PROFILE_TARGET_SIGNALS="$PROFILE_TARGET_SIGNALS" \
 R --vanilla --quiet -f "$PROFILE_WRAPPER_SCRIPT" &
 R_PID=$!
 
@@ -127,8 +130,6 @@ wait $SAMPLE_PID >/dev/null 2>&1 || true
 
 if [[ ! -f "$PROFILE_END_FILE" ]]; then
   echo "Warning: calc_ll end marker not observed; sample may be truncated (increase ACCUMULATR_PROFILE_DURATION)" >&2
-elif ! ps -p $R_PID >/dev/null 2>&1; then
-  echo "Warning: R exited before calc_ll completed" >&2
 fi
 
 wait $R_PID || true

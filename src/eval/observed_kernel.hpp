@@ -6,7 +6,6 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "eval_query.hpp"
@@ -16,83 +15,6 @@
 
 namespace accumulatr::eval {
 namespace detail {
-
-inline Rcpp::NumericVector evaluate_loglik_records(
-    const std::vector<ExactVariantPlan> &exact_plans,
-    const PreparedTrialLayout &layout,
-    SEXP paramsSEXP,
-    const std::vector<ObservedRecord> &records,
-    const double min_ll,
-    const std::vector<std::vector<int>> *row_maps = nullptr) {
-  Rcpp::NumericVector out(records.size(), R_NegInf);
-  if (records.empty()) {
-    return out;
-  }
-
-  std::vector<EvalLoglikQuery> queries;
-  queries.reserve(records.size());
-  for (const auto &record : records) {
-    if (record.backend != compile::BackendKind::Exact) {
-      throw std::runtime_error(
-          "observed likelihood received a non-exact record after exact planning");
-    }
-    queries.push_back(EvalLoglikQuery{
-        record.trial_index,
-        record.variant_index,
-        record.semantic_code,
-        record.observed_rt,
-        record.row_map_index});
-  }
-  const auto loglik = evaluate_exact_loglik_queries_cached(
-      exact_plans,
-      layout,
-      paramsSEXP,
-      queries,
-      min_ll,
-      row_maps);
-  for (R_xlen_t i = 0; i < loglik.size(); ++i) {
-    out[i] = loglik[i];
-  }
-
-  return out;
-}
-
-inline Rcpp::NumericVector evaluate_probability_records(
-    const std::vector<ExactVariantPlan> &exact_plans,
-    const PreparedTrialLayout &layout,
-    SEXP paramsSEXP,
-    const std::vector<ObservedRecord> &records,
-    const std::vector<std::vector<int>> *row_maps = nullptr) {
-  Rcpp::NumericVector out(records.size(), 0.0);
-  if (records.empty()) {
-    return out;
-  }
-
-  std::vector<EvalProbabilityQuery> queries;
-  queries.reserve(records.size());
-  for (const auto &record : records) {
-    if (record.backend != compile::BackendKind::Exact) {
-      throw std::runtime_error(
-          "observed probability received a non-exact record after exact planning");
-    }
-    queries.push_back(EvalProbabilityQuery{
-        record.trial_index,
-        record.variant_index,
-        record.semantic_code,
-        record.row_map_index});
-  }
-  const auto prob = evaluate_exact_probability_queries_cached(
-      exact_plans,
-      layout,
-      paramsSEXP,
-      queries,
-      row_maps);
-  for (R_xlen_t i = 0; i < prob.size(); ++i) {
-    out[i] = prob[i];
-  }
-
-  return out;
-}
 
 inline double logsumexp_records(const std::vector<double> &values) {
   if (values.empty()) {
@@ -144,9 +66,9 @@ struct TrustedParamMatrix {
 inline bool trials_have_observed_components(
     const PreparedTrialLayout &layout,
     const int *component,
-    const std::vector<unsigned char> *selected = nullptr) {
+    const int *ok = nullptr) {
   for (std::size_t trial_index = 0; trial_index < layout.spans.size(); ++trial_index) {
-    if (!trial_is_selected(selected, trial_index)) {
+    if (!trial_is_selected(ok, trial_index)) {
       continue;
     }
     if (integer_cell_is_na(
@@ -232,50 +154,6 @@ struct TrialComponentChoice {
   double weight{0.0};
 };
 
-struct ObservationPlanRequest {
-  const ObservationProbabilityPlan *plan{nullptr};
-  semantic::Index trial_index{semantic::kInvalidIndex};
-  semantic::Index variant_index{semantic::kInvalidIndex};
-  double observed_rt{NA_REAL};
-  double component_weight{1.0};
-  semantic::Index row_map_index{semantic::kInvalidIndex};
-};
-
-struct ObservationLeafTarget {
-  std::size_t value_index{0};
-  double weight{1.0};
-};
-
-inline std::unordered_map<std::string, int> build_trial_row_map(
-    SEXP accumulator,
-    const PreparedTrialSpan &span) {
-  std::unordered_map<std::string, int> row_by_accumulator;
-  row_by_accumulator.reserve(
-      static_cast<std::size_t>(span.end_row - span.start_row + 1));
-  for (auto row = static_cast<int>(span.start_row);
-       row <= static_cast<int>(span.end_row);
-       ++row) {
-    row_by_accumulator.emplace(CHAR(STRING_ELT(accumulator, row)), row);
-  }
-  return row_by_accumulator;
-}
-
-inline std::vector<int> build_component_row_map(
-    const std::unordered_map<std::string, int> &row_by_accumulator,
-    const std::vector<std::string> &leaf_ids) {
-  std::vector<int> row_map;
-  row_map.reserve(leaf_ids.size());
-  for (const auto &leaf_id : leaf_ids) {
-    const auto it = row_by_accumulator.find(leaf_id);
-    if (it == row_by_accumulator.end()) {
-      throw std::runtime_error(
-          "prepared data are missing accumulator row for '" + leaf_id + "'");
-    }
-    row_map.push_back(it->second);
-  }
-  return row_map;
-}
-
 inline std::vector<TrialComponentChoice> resolve_trial_components(
     const std::vector<ComponentObservationPlan> &component_plans_by_code,
     const semantic::SemanticModel &model,
@@ -322,29 +200,6 @@ inline std::vector<TrialComponentChoice> resolve_trial_components(
   return resolved;
 }
 
-inline void append_observation_plan_request(
-    std::vector<ObservationPlanRequest> *requests,
-    const semantic::Index trial_index,
-    const semantic::Index variant_index,
-    const double observed_rt,
-    const double component_weight,
-    const semantic::Index row_map_index,
-    const ObservationProbabilityPlan &plan) {
-  if (requests == nullptr ||
-      plan.empty() ||
-      variant_index == semantic::kInvalidIndex ||
-      !(std::isfinite(component_weight) && component_weight > 0.0)) {
-    return;
-  }
-  requests->push_back(ObservationPlanRequest{
-      &plan,
-      trial_index,
-      variant_index,
-      observed_rt,
-      component_weight,
-      row_map_index});
-}
-
 inline semantic::Index resolve_variant_index_by_component_code(
     const semantic::Index component_code,
     const std::vector<semantic::Index> &exact_variant_index_by_component_code) {
@@ -356,9 +211,9 @@ inline bool identity_trials_are_all_finite(
     const PreparedTrialLayout &layout,
     const int *label,
     const double *rt,
-    const std::vector<unsigned char> *selected = nullptr) {
+    const int *ok = nullptr) {
   for (std::size_t trial_index = 0; trial_index < layout.spans.size(); ++trial_index) {
-    if (!trial_is_selected(selected, trial_index)) {
+    if (!trial_is_selected(ok, trial_index)) {
       continue;
     }
     const auto row = static_cast<R_xlen_t>(layout.spans[trial_index].start_row);
@@ -367,241 +222,6 @@ inline bool identity_trials_are_all_finite(
     }
   }
   return true;
-}
-
-inline std::vector<double> evaluate_observation_plan_requests(
-    const std::vector<ExactVariantPlan> &exact_plans,
-    const PreparedTrialLayout &layout,
-    SEXP paramsSEXP,
-    const std::vector<ObservationPlanRequest> &requests,
-    const double min_ll,
-    const std::vector<std::vector<int>> *row_maps = nullptr) {
-  std::vector<double> roots(requests.size(), min_ll);
-  if (requests.empty()) {
-    return roots;
-  }
-
-  std::vector<std::size_t> request_offsets(requests.size(), 0U);
-  std::size_t value_count = 0;
-  for (std::size_t i = 0; i < requests.size(); ++i) {
-    request_offsets[i] = value_count;
-    value_count += requests[i].plan == nullptr ? 0U : requests[i].plan->ops.size();
-  }
-
-  std::vector<double> values(value_count, 0.0);
-  std::vector<ObservedRecord> log_records;
-  std::vector<ObservationLeafTarget> log_targets;
-  std::vector<ObservedRecord> probability_records;
-  std::vector<ObservationLeafTarget> probability_targets;
-  std::vector<EvalNoResponseQuery> no_response_queries;
-  std::vector<ObservationLeafTarget> no_response_targets;
-
-  for (std::size_t request_index = 0; request_index < requests.size();
-       ++request_index) {
-    const auto &request = requests[request_index];
-    const auto *plan = request.plan;
-    if (plan == nullptr || plan->empty()) {
-      continue;
-    }
-    const auto offset = request_offsets[request_index];
-    for (std::size_t op_index = 0; op_index < plan->ops.size(); ++op_index) {
-      const auto &op = plan->ops[op_index];
-      const auto value_index = offset + op_index;
-      switch (op.kind) {
-      case ObservationPlanOpKind::Constant:
-        values[value_index] = op.constant;
-        break;
-      case ObservationPlanOpKind::LogDensity:
-        if (std::isfinite(op.weight) && op.weight > 0.0) {
-          log_targets.push_back(ObservationLeafTarget{value_index, op.weight});
-          log_records.push_back(ObservedRecord{
-              request.trial_index,
-              request.variant_index,
-              op.backend,
-              op.semantic_code,
-              request.observed_rt,
-              op.weight,
-              request.row_map_index});
-        } else {
-          values[value_index] = min_ll;
-        }
-        break;
-      case ObservationPlanOpKind::FiniteOutcomeProbability:
-        if (std::isfinite(op.weight) && op.weight > 0.0) {
-          probability_targets.push_back(
-              ObservationLeafTarget{value_index, op.weight});
-          probability_records.push_back(ObservedRecord{
-              request.trial_index,
-              request.variant_index,
-              op.backend,
-              op.semantic_code,
-              NA_REAL,
-              op.weight,
-              request.row_map_index});
-        }
-        break;
-      case ObservationPlanOpKind::NoResponseProbability:
-        if (std::isfinite(op.weight) && op.weight > 0.0) {
-          no_response_targets.push_back(
-              ObservationLeafTarget{value_index, op.weight});
-          no_response_queries.push_back(EvalNoResponseQuery{
-              request.trial_index,
-              request.variant_index,
-              request.row_map_index});
-        }
-        break;
-      case ObservationPlanOpKind::Complement:
-      case ObservationPlanOpKind::WeightedSum:
-      case ObservationPlanOpKind::Log:
-        break;
-      }
-    }
-  }
-
-  if (!log_records.empty()) {
-    const auto loglik = evaluate_loglik_records(
-        exact_plans,
-        layout,
-        paramsSEXP,
-        log_records,
-        min_ll,
-        row_maps);
-    for (std::size_t i = 0; i < log_targets.size(); ++i) {
-      const auto &target = log_targets[i];
-      const double value = loglik[static_cast<R_xlen_t>(i)];
-      values[target.value_index] =
-          std::isfinite(value) && target.weight > 0.0
-              ? std::log(target.weight) + value
-              : min_ll;
-    }
-  }
-
-  if (!probability_records.empty()) {
-    const auto probabilities = evaluate_probability_records(
-        exact_plans,
-        layout,
-        paramsSEXP,
-        probability_records,
-        row_maps);
-    for (std::size_t i = 0; i < probability_targets.size(); ++i) {
-      const auto &target = probability_targets[i];
-      const double probability = probabilities[static_cast<R_xlen_t>(i)];
-      values[target.value_index] =
-          std::isfinite(probability) && probability > 0.0
-              ? target.weight * probability
-              : 0.0;
-    }
-  }
-
-  if (!no_response_queries.empty()) {
-    const auto probabilities = evaluate_exact_no_response_queries_cached(
-        exact_plans,
-        layout,
-        paramsSEXP,
-        no_response_queries,
-        row_maps);
-    for (std::size_t i = 0; i < no_response_targets.size(); ++i) {
-      const double probability = probabilities[static_cast<R_xlen_t>(i)];
-      if (Rcpp::NumericVector::is_na(probability) ||
-          !std::isfinite(probability)) {
-        throw std::runtime_error(
-            "compiled no-response observation probability was unavailable");
-      }
-      values[no_response_targets[i].value_index] =
-          no_response_targets[i].weight * probability;
-    }
-  }
-
-  for (std::size_t request_index = 0; request_index < requests.size();
-       ++request_index) {
-    const auto &request = requests[request_index];
-    const auto *plan = request.plan;
-    if (plan == nullptr || plan->empty()) {
-      continue;
-    }
-    const auto offset = request_offsets[request_index];
-    for (std::size_t op_index = 0; op_index < plan->ops.size(); ++op_index) {
-      const auto &op = plan->ops[op_index];
-      const auto value_index = offset + op_index;
-      switch (op.kind) {
-      case ObservationPlanOpKind::WeightedSum: {
-        if (op.value_kind == ObservationPlanValueKind::Log) {
-          std::vector<double> child_values;
-          child_values.reserve(static_cast<std::size_t>(op.children.size));
-          for (semantic::Index i = 0; i < op.children.size; ++i) {
-            const auto child = plan->child_ops[
-                static_cast<std::size_t>(op.children.offset + i)];
-            if (child != semantic::kInvalidIndex) {
-              child_values.push_back(values[offset + static_cast<std::size_t>(child)]);
-            }
-          }
-          const double value = logsumexp_records(child_values);
-          values[value_index] = std::isfinite(value) ? value : min_ll;
-        } else {
-          double sum = 0.0;
-          for (semantic::Index i = 0; i < op.children.size; ++i) {
-            const auto child = plan->child_ops[
-                static_cast<std::size_t>(op.children.offset + i)];
-            if (child == semantic::kInvalidIndex) {
-              continue;
-            }
-            const double value = values[offset + static_cast<std::size_t>(child)];
-            if (std::isfinite(value) && value > 0.0) {
-              sum += value;
-            }
-          }
-          values[value_index] = sum;
-        }
-        break;
-      }
-      case ObservationPlanOpKind::Complement: {
-        double sum = 0.0;
-        bool unavailable = false;
-        for (semantic::Index i = 0; i < op.children.size; ++i) {
-          const auto child = plan->child_ops[
-              static_cast<std::size_t>(op.children.offset + i)];
-          if (child == semantic::kInvalidIndex) {
-            continue;
-          }
-          const double value = values[offset + static_cast<std::size_t>(child)];
-          if (!std::isfinite(value)) {
-            unavailable = true;
-            break;
-          }
-          sum += value;
-        }
-        values[value_index] = unavailable ? 0.0 : std::max(0.0, 1.0 - sum);
-        break;
-      }
-      case ObservationPlanOpKind::Log: {
-        double probability = 0.0;
-        if (op.children.size > 0) {
-          const auto child = plan->child_ops[
-              static_cast<std::size_t>(op.children.offset)];
-          if (child != semantic::kInvalidIndex) {
-            probability = values[offset + static_cast<std::size_t>(child)];
-          }
-        }
-        values[value_index] =
-            std::isfinite(probability) && probability > 0.0
-                ? std::log(probability)
-                : min_ll;
-        break;
-      }
-      case ObservationPlanOpKind::Constant:
-      case ObservationPlanOpKind::LogDensity:
-      case ObservationPlanOpKind::FiniteOutcomeProbability:
-      case ObservationPlanOpKind::NoResponseProbability:
-        break;
-      }
-    }
-    if (plan->root != semantic::kInvalidIndex) {
-      roots[request_index] =
-          values[offset + static_cast<std::size_t>(plan->root)];
-    }
-  }
-
-  return roots;
 }
 
 inline double evaluate_observation_plan_direct(
@@ -617,7 +237,7 @@ inline double evaluate_observation_plan_direct(
     const int row_offset,
     ExactStepWorkspacePool *workspace_pool,
     std::vector<double> *values) {
-  if (values == nullptr || workspace_pool == nullptr || obs_plan.empty()) {
+  if (values == nullptr || workspace_pool == nullptr) {
     return min_ll;
   }
   values->assign(obs_plan.ops.size(), 0.0);
@@ -658,16 +278,12 @@ inline double evaluate_observation_plan_direct(
       const auto target_idx =
           exact_plan.outcome_index_by_code[static_cast<std::size_t>(
               op.semantic_code)];
-      const double probability = integrate_to_infinity(
-          [&](const double rt) {
-            return exact_unranked_target_density(
-                exact_plan,
-                params,
-                first_param_row,
-                target_idx,
-                rt,
-                &workspace);
-          });
+      const double probability = exact_finite_probability_program_value(
+          exact_plan,
+          params,
+          first_param_row,
+          target_idx,
+          &workspace);
       value =
           std::isfinite(probability) && probability > 0.0 && op.weight > 0.0
               ? op.weight * probability
@@ -675,16 +291,11 @@ inline double evaluate_observation_plan_direct(
       break;
     }
     case ObservationPlanOpKind::NoResponseProbability: {
-      double probability = 0.0;
-      if (!exact_no_response_probability(
-              exact_plan,
-              params,
-              first_param_row,
-              &probability,
-              &workspace)) {
-        throw std::runtime_error(
-            "compiled no-response observation probability was unavailable");
-      }
+      const double probability = exact_no_response_program_value(
+          exact_plan,
+          params,
+          first_param_row,
+          &workspace);
       value =
           std::isfinite(probability) && probability > 0.0 && op.weight > 0.0
               ? op.weight * probability
@@ -795,8 +406,8 @@ inline Rcpp::List evaluate_outcome_queries_cached(
 
   const auto n_trials = layout.spans.size();
   Rcpp::NumericVector probability(n_trials, 0.0);
-  std::vector<ObservationPlanRequest> requests;
-  requests.reserve(n_trials);
+  ExactStepWorkspacePool workspace_pool(exact_plans.size());
+  std::vector<double> plan_values;
 
   for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
     const auto row = static_cast<R_xlen_t>(layout.spans[trial_index].start_row);
@@ -827,33 +438,28 @@ inline Rcpp::List evaluate_outcome_queries_cached(
 
     const auto observed_code =
         static_cast<semantic::Index>(label[row]);
-    if (observed_code <= 0 ||
-        static_cast<std::size_t>(observed_code) >=
-            component_plan.missing_rt_probability_plans_by_code.size()) {
+    if (observed_code <= 0) {
       continue;
     }
-    append_observation_plan_request(
-        &requests,
+    const auto state_code =
+        missing_rt_observation_state_code(component_plan, observed_code);
+    const auto &plan =
+        observation_probability_plan_for_state(component_plan, state_code);
+    const double value = evaluate_observation_plan_direct(
+        exact_plans,
+        layout,
+        paramsSEXP,
+        plan,
         static_cast<semantic::Index>(trial_index),
         variant_index,
         NA_REAL,
-        1.0,
-        semantic::kInvalidIndex,
-        component_plan.missing_rt_probability_plans_by_code[
-            static_cast<std::size_t>(observed_code)]);
-  }
-
-  const auto probabilities = evaluate_observation_plan_requests(
-      exact_plans,
-      layout,
-      paramsSEXP,
-      requests,
-      std::log(1e-10));
-  for (std::size_t i = 0; i < requests.size(); ++i) {
-    const auto trial_index = static_cast<R_xlen_t>(requests[i].trial_index);
-    const double value = probabilities[i] * requests[i].component_weight;
+        std::log(1e-10),
+        nullptr,
+        0,
+        &workspace_pool,
+        &plan_values);
     if (std::isfinite(value) && value > 0.0) {
-      probability[trial_index] += value;
+      probability[static_cast<R_xlen_t>(trial_index)] = value;
     }
   }
 
@@ -872,7 +478,7 @@ inline SEXP evaluate_observed_trials_cached(
     SEXP paramsSEXP,
     SEXP dataSEXP,
     const double min_ll,
-    const std::vector<unsigned char> *selected = nullptr) {
+    const int *ok = nullptr) {
   const auto table = read_prepared_data_view(dataSEXP, layout);
 
   if (observed_identity) {
@@ -880,8 +486,8 @@ inline SEXP evaluate_observed_trials_cached(
         INTEGER(trusted_data_column(dataSEXP, layout.label_cols[1]));
     const double *rt =
         REAL(trusted_data_column(dataSEXP, layout.time_cols[1]));
-    if (trials_have_observed_components(layout, table.component, selected)) {
-      if (identity_trials_are_all_finite(layout, label, rt, selected)) {
+    if (trials_have_observed_components(layout, table.component, ok)) {
+      if (identity_trials_are_all_finite(layout, label, rt, ok)) {
         return evaluate_exact_trials_cached(
             exact_variant_index_by_component_code,
             exact_plans,
@@ -889,7 +495,7 @@ inline SEXP evaluate_observed_trials_cached(
             paramsSEXP,
             dataSEXP,
             min_ll,
-            selected);
+            ok);
       }
     }
   }
@@ -911,7 +517,7 @@ inline SEXP evaluate_observed_trials_cached(
   for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
     const auto &span = layout.spans[trial_index];
     const auto row = static_cast<R_xlen_t>(span.start_row);
-    if (!trial_is_selected(selected, trial_index)) {
+    if (!trial_is_selected(ok, trial_index)) {
       continue;
     }
     trial_values.clear();
@@ -947,27 +553,19 @@ inline SEXP evaluate_observed_trials_cached(
         continue;
       }
 
-      const ObservationProbabilityPlan *plan = nullptr;
-      double plan_rt = NA_REAL;
-      if (observed_label_code == semantic::kInvalidIndex &&
-          Rcpp::NumericVector::is_na(observed_rt)) {
-        plan = &component_plan.missing_all_log_plan;
-      } else if (observed_label_code != semantic::kInvalidIndex &&
-                 Rcpp::NumericVector::is_na(observed_rt)) {
-        const auto observed_code = static_cast<std::size_t>(observed_label_code);
-        if (observed_code < component_plan.missing_rt_log_plans_by_code.size()) {
-          plan = &component_plan.missing_rt_log_plans_by_code[observed_code];
-        }
-      } else if (observed_label_code != semantic::kInvalidIndex) {
-        const auto observed_code = static_cast<std::size_t>(observed_label_code);
-        if (observed_code < component_plan.finite_log_plans_by_code.size()) {
-          plan = &component_plan.finite_log_plans_by_code[observed_code];
-          plan_rt = observed_rt;
-        }
-      }
-      if (plan == nullptr || plan->empty()) {
+      const auto state_code = observation_state_code(
+          component_plan,
+          observed_label_code,
+          observed_rt);
+      if (state_code == semantic::kInvalidIndex) {
         continue;
       }
+      const auto &plan =
+          observation_log_plan_for_state(component_plan, state_code);
+      const double plan_rt =
+          observation_state_uses_rt(component_plan, state_code)
+              ? observed_rt
+              : NA_REAL;
 
       const int *row_map_ptr = nullptr;
       int row_offset = 0;
@@ -982,7 +580,7 @@ inline SEXP evaluate_observed_trials_cached(
           exact_plans,
           layout,
           paramsSEXP,
-          *plan,
+          plan,
           static_cast<semantic::Index>(trial_index),
           variant_index,
           plan_rt,
@@ -1006,10 +604,7 @@ inline SEXP evaluate_observed_trials_cached(
     }
   }
 
-  double total_loglik = 0.0;
-  for (R_xlen_t i = 0; i < loglik.size(); ++i) {
-    total_loglik += static_cast<double>(loglik[i]);
-  }
+  const double total_loglik = aggregate_trial_loglik(loglik, layout);
 
   return Rcpp::List::create(
       Rcpp::Named("loglik") = loglik,

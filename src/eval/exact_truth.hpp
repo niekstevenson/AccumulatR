@@ -12,32 +12,16 @@
 namespace accumulatr::eval {
 namespace detail {
 
-inline bool relation_view_with_overlay(const RelationView &base,
-                                       const ExactRelationTemplate &overlay,
-                                       RelationView *out) {
-  for (std::size_t i = 0; i < overlay.source_ids.size(); ++i) {
-    const auto source_id = overlay.source_ids[i];
-    const auto relation = overlay.relations[i];
-    const auto inherited = base.relation_for(source_id);
-    if (inherited != ExactRelation::Unknown && inherited != relation) {
-      return false;
-    }
-  }
-  if (out != nullptr) {
-    *out = overlay.empty() ? base : base.with_overlay(&overlay);
-  }
-  return true;
-}
-
 class CompiledSourceView {
 public:
   explicit CompiledSourceView(const ExactVariantPlan &plan)
       : plan_(plan) {}
 
   void reset(ExactSourceChannels *source_channels,
-             const RelationView relation_view = {}) {
+             const semantic::Index source_view_id = 0) {
     source_channels_ = source_channels;
-    relation_view_ = relation_view;
+    source_view_id_ =
+        source_view_id == semantic::kInvalidIndex ? 0 : source_view_id;
   }
 
   void invalidate_cache() noexcept {}
@@ -50,14 +34,11 @@ public:
     return plan_;
   }
 
-  const RelationView &relation_view() const {
-    return relation_view_;
-  }
-
   leaf::EventChannels source_channels_for_slot(
       const semantic::Index source_channel_slot,
       const double t,
-      const CompiledMathWorkspace *workspace) const {
+      const CompiledMathWorkspace *workspace,
+      const std::uint8_t channel_mask = kLeafChannelAll) const {
     const auto slot = static_cast<std::size_t>(source_channel_slot);
     if (slot >= plan_.compiled_math.source_channel_plans.size()) {
       return leaf::EventChannels::impossible();
@@ -65,25 +46,15 @@ public:
     const auto &channel_plan =
         plan_.compiled_math.source_channel_plans[slot];
     const auto &request = channel_plan.request;
-    const auto relation = relation_view_.relation_for(request.source_id);
+    const auto relation =
+        exact_compiled_source_view_relation(
+            plan_, source_view_id_, request.source_id);
     if (relation != ExactRelation::Unknown &&
         !channel_plan.has_source_condition_overlay) {
       return forced_channels(relation);
     }
     return source_channels_->evaluate_source_channel_plan_at(
-        channel_plan, t, workspace);
-  }
-
-  bool source_channel_condition_invariant(
-      const semantic::Index source_channel_slot) const {
-    const auto slot = static_cast<std::size_t>(source_channel_slot);
-    if (source_channels_ == nullptr ||
-        source_channel_slot == semantic::kInvalidIndex ||
-        slot >= plan_.compiled_math.source_channel_plans.size()) {
-      return false;
-    }
-    return source_channels_->source_channel_condition_invariant(
-        plan_.compiled_math.source_channel_plans[slot]);
+        channel_plan, t, workspace, channel_mask);
   }
 
   bool source_order_known_before(
@@ -106,14 +77,6 @@ public:
         source_id, condition_id, workspace);
   }
 
-  bool has_guard_upper_bound_overlay(
-      const semantic::Index condition_id,
-      const CompiledMathWorkspace *workspace) const {
-    (void)workspace;
-    return source_channels_->has_guard_upper_bound_overlay(
-        condition_id);
-  }
-
   bool expr_upper_bound_for(
       const semantic::Index expr_id,
       ExactTimedExprUpperBound *out) const {
@@ -129,8 +92,12 @@ private:
         before_source_id == after_source_id) {
       return false;
     }
-    const auto before_relation = relation_view_.relation_for(before_source_id);
-    const auto after_relation = relation_view_.relation_for(after_source_id);
+    const auto before_relation =
+        exact_compiled_source_view_relation(
+            plan_, source_view_id_, before_source_id);
+    const auto after_relation =
+        exact_compiled_source_view_relation(
+            plan_, source_view_id_, after_source_id);
     return before_relation != ExactRelation::Unknown &&
            after_relation != ExactRelation::Unknown &&
            before_relation < after_relation;
@@ -138,13 +105,17 @@ private:
 
 public:
   semantic::Index condition_cache_id() const noexcept {
-    return 0;
+    return source_view_id_;
+  }
+
+  semantic::Index source_view_id() const noexcept {
+    return source_view_id_;
   }
 
 private:
   const ExactVariantPlan &plan_;
   ExactSourceChannels *source_channels_{nullptr};
-  RelationView relation_view_;
+  semantic::Index source_view_id_{0};
 };
 
 inline semantic::Index exact_condition_cache_id(
@@ -158,6 +129,7 @@ inline void exact_hash_condition_part(std::size_t *seed,
 }
 
 inline semantic::Index compiled_node_condition_cache_id(
+    const CompiledMathProgram &program,
     const CompiledMathNode &node,
     const CompiledSourceView *evaluator,
     const CompiledMathWorkspace &workspace) {
@@ -166,22 +138,56 @@ inline semantic::Index compiled_node_condition_cache_id(
       node.condition_id == semantic::kInvalidIndex) {
     return evaluator_id;
   }
+  const auto condition_pos = static_cast<std::size_t>(node.condition_id);
+  const auto &cache_plan = program.condition_cache_plans[condition_pos];
+  if (!cache_plan.dynamic) {
+    return compiled_math_static_source_view_condition_cache_id(
+        evaluator_id,
+        node.condition_id);
+  }
   std::size_t seed = 0x9e3779b97f4a7c15ULL;
   exact_hash_condition_part(&seed, static_cast<std::size_t>(evaluator_id));
   exact_hash_condition_part(&seed, static_cast<std::size_t>(node.condition_id));
-  const auto *time_dependencies =
-      workspace.condition_time_dependencies(node.condition_id);
-  if (time_dependencies != nullptr) {
-    for (const auto time_id : *time_dependencies) {
-      const auto time_pos = static_cast<std::size_t>(time_id);
-      if (time_pos >= workspace.time_valid.size() ||
-          workspace.time_valid[time_pos] == 0U) {
-        continue;
-      }
-      exact_hash_condition_part(&seed, static_cast<std::size_t>(time_id) + 1U);
-      exact_hash_condition_part(
-          &seed, std::hash<double>{}(workspace.time_values[time_pos]));
-    }
+  for (semantic::Index i = 0; i < cache_plan.time_dependencies.size; ++i) {
+    const auto time_id =
+        program.condition_cache_time_dependencies[
+            static_cast<std::size_t>(
+                cache_plan.time_dependencies.offset + i)];
+    const auto time_pos = static_cast<std::size_t>(time_id);
+    exact_hash_condition_part(&seed, static_cast<std::size_t>(time_id) + 1U);
+    exact_hash_condition_part(
+        &seed, std::hash<double>{}(workspace.time_values[time_pos]));
+  }
+  return static_cast<semantic::Index>(
+      (seed & static_cast<std::size_t>(0x3fffffffU)) + 1U);
+}
+
+inline semantic::Index compiled_source_channel_condition_cache_id(
+    const CompiledMathProgram &program,
+    const CompiledSourceChannelPlan &channel_plan,
+    const CompiledMathWorkspace &workspace) {
+  if (!channel_plan.source_view_condition_cache_dynamic) {
+    return channel_plan.source_view_condition_static_cache_id;
+  }
+  const auto source_view_id =
+      channel_plan.request.source_view_id == semantic::kInvalidIndex
+          ? 0
+          : channel_plan.request.source_view_id;
+  std::size_t seed = 0x9e3779b97f4a7c15ULL;
+  exact_hash_condition_part(&seed, static_cast<std::size_t>(source_view_id));
+  exact_hash_condition_part(
+      &seed, static_cast<std::size_t>(channel_plan.request.condition_id));
+  for (semantic::Index i = 0;
+       i < channel_plan.condition_time_dependencies.size;
+       ++i) {
+    const auto time_id =
+        program.condition_cache_time_dependencies[
+            static_cast<std::size_t>(
+                channel_plan.condition_time_dependencies.offset + i)];
+    const auto time_pos = static_cast<std::size_t>(time_id);
+    exact_hash_condition_part(&seed, static_cast<std::size_t>(time_id) + 1U);
+    exact_hash_condition_part(
+        &seed, std::hash<double>{}(workspace.time_values[time_pos]));
   }
   return static_cast<semantic::Index>(
       (seed & static_cast<std::size_t>(0x3fffffffU)) + 1U);
@@ -196,23 +202,22 @@ struct CompiledEvalWorkspace {
     for (std::size_t i = 0; i < source_view_count; ++i) {
       source_view_evaluators.emplace_back(plan);
     }
-    source_view_parents.assign(source_view_count, nullptr);
-    source_view_condition_ids.assign(source_view_count, 0);
-    source_view_valid.assign(source_view_count, 0U);
   }
 
   void reset(ExactSourceChannels *source_channels,
-             const RelationView relation_view = {}) {
-    evaluator.reset(source_channels, relation_view);
+             const semantic::Index source_view_id = 0) {
+    evaluator.reset(source_channels, source_view_id);
+    if (source_views_channels_ != source_channels) {
+      for (std::size_t i = 0; i < source_view_evaluators.size(); ++i) {
+        source_view_evaluators[i].reset(
+            source_channels, static_cast<semantic::Index>(i + 1U));
+      }
+      source_views_channels_ = source_channels;
+    }
     compiled_math.reset_cache();
-    reset_source_views();
   }
 
   void reset_planned_caches() {}
-
-  void reset_source_views() {
-    std::fill(source_view_valid.begin(), source_view_valid.end(), 0U);
-  }
 
   CompiledSourceView *source_view_evaluator(
       const semantic::Index source_view_id,
@@ -228,35 +233,13 @@ struct CompiledEvalWorkspace {
         pos >= source_view_evaluators.size()) {
       throw std::runtime_error("compiled source view id is outside the plan");
     }
-    const auto condition_id = exact_condition_cache_id(parent);
-    if (source_view_valid[pos] != 0U &&
-        source_view_parents[pos] == parent &&
-        source_view_condition_ids[pos] == condition_id) {
-      return &source_view_evaluators[pos];
-    }
-
-    RelationView view;
-    if (!relation_view_with_overlay(
-            parent->relation_view(),
-            parent->plan().compiled_source_views[pos],
-            &view)) {
-      source_view_valid[pos] = 0U;
-      return nullptr;
-    }
-    auto &evaluator_for_view = source_view_evaluators[pos];
-    evaluator_for_view.reset(parent->source_channels(), view);
-    source_view_parents[pos] = parent;
-    source_view_condition_ids[pos] = condition_id;
-    source_view_valid[pos] = 1U;
-    return &evaluator_for_view;
+    return &source_view_evaluators[pos];
   }
 
   CompiledSourceView evaluator;
   CompiledMathWorkspace compiled_math;
   std::vector<CompiledSourceView> source_view_evaluators;
-  std::vector<const CompiledSourceView *> source_view_parents;
-  std::vector<semantic::Index> source_view_condition_ids;
-  std::vector<std::uint8_t> source_view_valid;
+  ExactSourceChannels *source_views_channels_{nullptr};
 };
 
 inline bool compiled_math_node_cacheable(
@@ -271,12 +254,14 @@ inline bool compiled_math_node_cacheable(
 }
 
 inline bool compiled_math_load_node_cache_entry(
+    const CompiledMathProgram &program,
     const CompiledMathNode &node,
     const CompiledSourceView *evaluator,
     const CompiledMathWorkspace &workspace,
     double *value);
 
 inline void compiled_math_store_node_cache_entry(
+    const CompiledMathProgram &program,
     const CompiledMathNode &node,
     const CompiledSourceView *evaluator,
     CompiledMathWorkspace *workspace,
@@ -284,7 +269,7 @@ inline void compiled_math_store_node_cache_entry(
 
 inline double compiled_math_node_time(const CompiledMathNode &node,
                                       const CompiledMathWorkspace &workspace) {
-  return workspace.time(node.time_id);
+  return workspace.time_values[static_cast<std::size_t>(node.time_id)];
 }
 
 inline double compiled_math_source_node_time(
@@ -303,77 +288,40 @@ struct CompiledTimedUpperBound {
   double normalizer{0.0};
 };
 
-inline const CompiledMathCondition *compiled_math_condition_by_id(
-    const CompiledMathProgram &program,
-    const semantic::Index condition_id) {
-  if (condition_id == 0 || condition_id == semantic::kInvalidIndex) {
-    return nullptr;
-  }
-  const auto pos = static_cast<std::size_t>(condition_id - 1U);
-  if (pos >= program.conditions.size()) {
-    return nullptr;
-  }
-  return &program.conditions[pos];
-}
-
-inline double compiled_math_fact_time(
-    const CompiledMathCondition &condition,
-    const std::size_t fact_pos,
+inline double compiled_math_timed_upper_bound_term_time(
+    const CompiledMathTimedUpperBoundTerm &term,
     const CompiledMathNode &node,
     const CompiledMathWorkspace &workspace) {
-  if (fact_pos >= condition.fact_time_ids.size()) {
-    return compiled_math_node_time(node, workspace);
-  }
-  const auto time_id = condition.fact_time_ids[fact_pos];
+  const auto time_id = term.time_id;
   if (time_id != semantic::kInvalidIndex && workspace.has_time(time_id)) {
     return workspace.time(time_id);
   }
   return compiled_math_node_time(node, workspace);
 }
 
-inline double compiled_math_fact_normalizer(
-    const CompiledMathCondition &condition,
-    const std::size_t fact_pos,
+inline double compiled_math_timed_upper_bound_term_normalizer(
+    const CompiledMathTimedUpperBoundTerm &term,
     const CompiledMathWorkspace &workspace) {
-  if (fact_pos >= condition.fact_normalizer_node_ids.size()) {
-    return 0.0;
-  }
-  const auto node_id = condition.fact_normalizer_node_ids[fact_pos];
-  if (node_id == semantic::kInvalidIndex) {
-    return 0.0;
-  }
-  const auto pos = static_cast<std::size_t>(node_id);
-  if (pos >= workspace.values.size()) {
-    return 0.0;
-  }
-  return workspace.values[pos];
+  return workspace.values[static_cast<std::size_t>(term.normalizer_node_id)];
 }
 
-inline CompiledTimedUpperBound compiled_math_upper_bound_from_facts(
+inline CompiledTimedUpperBound compiled_math_upper_bound_from_terms(
     const CompiledMathProgram &program,
     const CompiledMathNode &node,
-    const CompiledMathWorkspace &workspace,
-    const std::vector<semantic::Index> &fact_indices) {
+    const CompiledMathWorkspace &workspace) {
   CompiledTimedUpperBound best;
-  const auto *condition =
-      compiled_math_condition_by_id(program, node.condition_id);
-  if (condition == nullptr ||
-      node.aux_id == semantic::kInvalidIndex ||
+  if (node.aux_id == semantic::kInvalidIndex ||
       node.aux2_id == semantic::kInvalidIndex) {
     return best;
   }
   const auto offset = static_cast<std::size_t>(node.aux_id);
   const auto size = static_cast<std::size_t>(node.aux2_id);
-  if (offset + size > fact_indices.size()) {
-    throw std::runtime_error(
-        "compiled upper-bound node points outside condition fact slots");
-  }
   for (std::size_t i = 0; i < size; ++i) {
-    const auto fact_pos = static_cast<std::size_t>(fact_indices[offset + i]);
+    const auto &term = program.timed_upper_bound_terms[offset + i];
     const double fact_time =
-        compiled_math_fact_time(*condition, fact_pos, node, workspace);
+        compiled_math_timed_upper_bound_term_time(term, node, workspace);
     const double normalizer =
-        compiled_math_fact_normalizer(*condition, fact_pos, workspace);
+        compiled_math_timed_upper_bound_term_normalizer(term, workspace);
     if (std::isfinite(fact_time) && normalizer > 0.0 &&
         (!best.found || fact_time < best.time)) {
       best.found = true;
@@ -389,16 +337,8 @@ inline CompiledTimedUpperBound compiled_math_expr_upper_bound_for_node(
     const CompiledMathNode &node,
     const CompiledMathWorkspace &workspace,
     const CompiledSourceView *condition_evaluator) {
-  const auto *condition =
-      compiled_math_condition_by_id(program, node.condition_id);
   CompiledTimedUpperBound best =
-      condition == nullptr
-          ? CompiledTimedUpperBound{}
-          : compiled_math_upper_bound_from_facts(
-                program,
-                node,
-                workspace,
-                condition->expr_upper_fact_indices);
+      compiled_math_upper_bound_from_terms(program, node, workspace);
   if (condition_evaluator != nullptr) {
     ExactTimedExprUpperBound sequence_upper;
     if (condition_evaluator->expr_upper_bound_for(
@@ -416,6 +356,7 @@ inline CompiledTimedUpperBound compiled_math_expr_upper_bound_for_node(
 }
 
 inline bool compiled_math_load_node_cache(
+    const CompiledMathProgram &program,
     const CompiledMathNode &node,
     const CompiledSourceView *evaluator,
     const CompiledMathWorkspace &workspace,
@@ -424,10 +365,11 @@ inline bool compiled_math_load_node_cache(
     return false;
   }
   return compiled_math_load_node_cache_entry(
-      node, evaluator, workspace, value);
+      program, node, evaluator, workspace, value);
 }
 
 inline bool compiled_math_load_node_cache_entry(
+    const CompiledMathProgram &program,
     const CompiledMathNode &node,
     const CompiledSourceView *evaluator,
     const CompiledMathWorkspace &workspace,
@@ -440,7 +382,7 @@ inline bool compiled_math_load_node_cache_entry(
       workspace.cache_valid[slot] == 0U ||
       workspace.cache_evaluators[slot] != evaluator ||
       workspace.cache_condition_ids[slot] !=
-          compiled_node_condition_cache_id(node, evaluator, workspace) ||
+          compiled_node_condition_cache_id(program, node, evaluator, workspace) ||
       workspace.cache_times[slot] !=
           compiled_math_node_time(node, workspace)) {
     return false;
@@ -465,6 +407,7 @@ inline CompiledSourceView *compiled_math_node_evaluator(
 }
 
 inline void compiled_math_store_node_cache(
+    const CompiledMathProgram &program,
     const CompiledMathNode &node,
     const CompiledSourceView *evaluator,
     CompiledMathWorkspace *workspace,
@@ -472,10 +415,12 @@ inline void compiled_math_store_node_cache(
   if (evaluator == nullptr || !compiled_math_node_cacheable(node.kind)) {
     return;
   }
-  compiled_math_store_node_cache_entry(node, evaluator, workspace, value);
+  compiled_math_store_node_cache_entry(
+      program, node, evaluator, workspace, value);
 }
 
 inline void compiled_math_store_node_cache_entry(
+    const CompiledMathProgram &program,
     const CompiledMathNode &node,
     const CompiledSourceView *evaluator,
     CompiledMathWorkspace *workspace,
@@ -490,12 +435,13 @@ inline void compiled_math_store_node_cache_entry(
   workspace->cache_valid[slot] = 1U;
   workspace->cache_evaluators[slot] = evaluator;
   workspace->cache_condition_ids[slot] =
-      compiled_node_condition_cache_id(node, evaluator, *workspace);
+      compiled_node_condition_cache_id(program, node, evaluator, *workspace);
   workspace->cache_times[slot] = compiled_math_node_time(node, *workspace);
   workspace->cache_values[slot] = value;
 }
 
 inline leaf::EventChannels compiled_math_store_source_channels(
+    const CompiledMathProgram &program,
     const CompiledMathNode &node,
     CompiledSourceView *evaluator,
     CompiledMathWorkspace *workspace) {
@@ -509,14 +455,12 @@ inline leaf::EventChannels compiled_math_store_source_channels(
     throw std::runtime_error(
         "compiled source node reached evaluation without a source-channel slot");
   }
-
-  const bool condition_invariant =
-      evaluator != nullptr &&
-      evaluator->source_channel_condition_invariant(node.source_channel_slot);
+  const auto &channel_plan = program.source_channel_plans[slot];
   const auto condition_cache_id =
-      evaluator == nullptr || condition_invariant
+      evaluator == nullptr
           ? 0
-          : compiled_node_condition_cache_id(node, evaluator, *workspace);
+          : compiled_source_channel_condition_cache_id(
+                program, channel_plan, *workspace);
   if (workspace->source_channel_valid[slot] != 0U &&
       workspace->source_channel_evaluators[slot] == evaluator &&
       workspace->source_channel_condition_ids[slot] == condition_cache_id &&
@@ -531,7 +475,10 @@ inline leaf::EventChannels compiled_math_store_source_channels(
       evaluator == nullptr
           ? leaf::EventChannels{0.0, 0.0, 0.0}
           : evaluator->source_channels_for_slot(
-                node.source_channel_slot, time, workspace);
+                node.source_channel_slot,
+                time,
+                workspace,
+                channel_plan.required_channels);
   workspace->source_channel_valid[slot] = 1U;
   workspace->source_channel_evaluators[slot] = evaluator;
   workspace->source_channel_condition_ids[slot] = condition_cache_id;
@@ -702,31 +649,6 @@ inline double evaluate_compiled_integral_kernel(
     double lower,
     double upper);
 
-inline double compiled_math_source_value_for_node(
-    const CompiledMathNode &node,
-    CompiledMathWorkspace *workspace,
-    CompiledSourceView *parent,
-    CompiledEvalWorkspace *eval_workspace) {
-  auto *condition_evaluator =
-      compiled_math_node_evaluator(node, parent, eval_workspace);
-  if (condition_evaluator == nullptr) {
-    return 0.0;
-  }
-  const auto channels =
-      compiled_math_store_source_channels(node, condition_evaluator, workspace);
-  switch (node.kind) {
-  case CompiledMathNodeKind::SourcePdf:
-    return safe_density(channels.pdf);
-  case CompiledMathNodeKind::SourceCdf:
-    return clamp_probability(channels.cdf);
-  case CompiledMathNodeKind::SourceSurvival:
-    return clamp_probability(channels.survival);
-  default:
-    break;
-  }
-  throw std::runtime_error("source-product integral contains a non-source node");
-}
-
 inline bool compiled_math_outcome_gate_open_for_node(
     const CompiledMathNode &node,
     const CompiledMathWorkspace &workspace,
@@ -795,7 +717,8 @@ inline bool compiled_math_integral_time_gates_open(
     if (gate_node.kind != CompiledMathNodeKind::TimeGate) {
       throw std::runtime_error("integral time gate contains a non-gate node");
     }
-    if (workspace.time(gate_node.time_id) < workspace.time(gate_node.aux_id)) {
+    if (workspace.time_values[static_cast<std::size_t>(gate_node.time_id)] <
+        workspace.time_values[static_cast<std::size_t>(gate_node.aux_id)]) {
       return false;
     }
   }
@@ -826,9 +749,6 @@ inline double compiled_math_integral_factor_value_for_node(
           eval_workspace,
           0.0,
           current_time);
-  if (!std::isfinite(value)) {
-    return 0.0;
-  }
   if (node.kind == CompiledMathNodeKind::IntegralZeroToCurrent) {
     value = clamp_probability(value);
   }
@@ -872,124 +792,403 @@ inline bool compiled_math_apply_expr_upper_factor(
     return false;
   }
   *product /= upper.normalizer;
-  return std::isfinite(*product) && *product != 0.0;
+  return *product != 0.0;
 }
 
-inline double compiled_math_source_product_value_for_nodes(
-    const CompiledMathProgram &program,
-    const CompiledMathIndexSpan source_value_nodes,
+inline double compiled_math_source_product_channel_time(
+    const CompiledMathSourceProductChannel &channel,
+    const CompiledMathWorkspace &workspace) {
+  const double time =
+      workspace.time_values[static_cast<std::size_t>(channel.time_id)];
+  if (channel.time_cap_id == semantic::kInvalidIndex) {
+    return time;
+  }
+  return std::min(
+      time,
+      workspace.time_values[static_cast<std::size_t>(channel.time_cap_id)]);
+}
+
+inline ExactSourceChannels::SourceProductScalarFill
+compiled_math_source_product_finish_base_fill(
+    const double base_pdf,
+    const double base_cdf,
+    const double q,
+    const std::uint8_t fill_mask) {
+  const double start_prob = 1.0 - q;
+  ExactSourceChannels::SourceProductScalarFill fill;
+  fill.mask = fill_mask;
+  if ((fill_mask & kLeafChannelPdf) != 0U) {
+    fill.pdf = start_prob * safe_density(base_pdf);
+  }
+  if ((fill_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U) {
+    const double cdf = clamp_probability(start_prob * clamp_probability(base_cdf));
+    if ((fill_mask & kLeafChannelCdf) != 0U) {
+      fill.cdf = cdf;
+    }
+    if ((fill_mask & kLeafChannelSurvival) != 0U) {
+      fill.survival = clamp_probability(1.0 - cdf);
+    }
+  }
+  return fill;
+}
+
+inline ExactSourceChannels::SourceProductScalarFill
+compiled_math_source_product_lognormal_leaf_fill(
+    const ExactLoadedLeafInput &loaded,
+    const double x,
+    const std::uint8_t fill_mask) {
+  const bool need_pdf = (fill_mask & kLeafChannelPdf) != 0U;
+  const bool need_cdf =
+      (fill_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
+  const double m = loaded.params[0];
+  const double s = loaded.params[1];
+  return compiled_math_source_product_finish_base_fill(
+      need_pdf ? R::dlnorm(x, m, s, 0) : 0.0,
+      need_cdf ? R::plnorm(x, m, s, 1, 0) : 0.0,
+      loaded.q,
+      fill_mask);
+}
+
+inline ExactSourceChannels::SourceProductScalarFill
+compiled_math_source_product_gamma_leaf_fill(
+    const ExactLoadedLeafInput &loaded,
+    const double x,
+    const std::uint8_t fill_mask) {
+  const bool need_pdf = (fill_mask & kLeafChannelPdf) != 0U;
+  const bool need_cdf =
+      (fill_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
+  const double shape = loaded.params[0];
+  const double scale = 1.0 / loaded.params[1];
+  return compiled_math_source_product_finish_base_fill(
+      need_pdf ? R::dgamma(x, shape, scale, 0) : 0.0,
+      need_cdf ? R::pgamma(x, shape, scale, 1, 0) : 0.0,
+      loaded.q,
+      fill_mask);
+}
+
+inline ExactSourceChannels::SourceProductScalarFill
+compiled_math_source_product_exgauss_leaf_fill(
+    const ExactLoadedLeafInput &loaded,
+    const double x,
+    const std::uint8_t fill_mask) {
+  const bool need_pdf = (fill_mask & kLeafChannelPdf) != 0U;
+  const bool need_cdf =
+      (fill_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
+  const double mu = loaded.params[0];
+  const double sigma = loaded.params[1];
+  const double tau = loaded.params[2];
+  const double lower_cdf = exgauss_raw_cdf(0.0, mu, sigma, tau);
+  const double lower_survival = 1.0 - lower_cdf;
+  if (!(lower_survival > 0.0)) {
+    ExactSourceChannels::SourceProductScalarFill fill;
+    fill.mask = fill_mask;
+    if ((fill_mask & kLeafChannelSurvival) != 0U) {
+      fill.survival = 1.0;
+    }
+    return fill;
+  }
+  return compiled_math_source_product_finish_base_fill(
+      need_pdf ? exgauss_raw_pdf(x, mu, sigma, tau) / lower_survival : 0.0,
+      need_cdf
+          ? (exgauss_raw_cdf(x, mu, sigma, tau) - lower_cdf) /
+                lower_survival
+          : 0.0,
+      loaded.q,
+      fill_mask);
+}
+
+inline ExactSourceChannels::SourceProductScalarFill
+compiled_math_source_product_lba_leaf_fill(
+    const ExactLoadedLeafInput &loaded,
+    const double x,
+    const std::uint8_t fill_mask) {
+  const bool need_pdf = (fill_mask & kLeafChannelPdf) != 0U;
+  const bool need_cdf =
+      (fill_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
+  return compiled_math_source_product_finish_base_fill(
+      need_pdf
+          ? lba_pdf_fast(x, loaded.params[0], loaded.params[1],
+                         loaded.params[2], loaded.params[3])
+          : 0.0,
+      need_cdf
+          ? lba_cdf_fast(x, loaded.params[0], loaded.params[1],
+                         loaded.params[2], loaded.params[3])
+          : 0.0,
+      loaded.q,
+      fill_mask);
+}
+
+inline ExactSourceChannels::SourceProductScalarFill
+compiled_math_source_product_rdm_leaf_fill(
+    const ExactLoadedLeafInput &loaded,
+    const double x,
+    const std::uint8_t fill_mask) {
+  const bool need_pdf = (fill_mask & kLeafChannelPdf) != 0U;
+  const bool need_cdf =
+      (fill_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
+  return compiled_math_source_product_finish_base_fill(
+      need_pdf
+          ? rdm_pdf_fast(x, loaded.params[0], loaded.params[1],
+                         loaded.params[2], loaded.params[3])
+          : 0.0,
+      need_cdf
+          ? rdm_cdf_fast(x, loaded.params[0], loaded.params[1],
+                         loaded.params[2], loaded.params[3])
+          : 0.0,
+      loaded.q,
+      fill_mask);
+}
+
+inline ExactSourceChannels::SourceProductScalarFill
+compiled_math_source_product_direct_leaf_fill(
+    const CompiledMathSourceProductChannel &channel,
+    const ExactLoadedLeafInput &loaded,
+    const double time,
+    const std::uint8_t fill_mask) {
+  const double x = time - channel.leaf_onset_abs_value - loaded.t0;
+  if (!(x > 0.0)) {
+    ExactSourceChannels::SourceProductScalarFill fill;
+    fill.mask = fill_mask;
+    if ((fill_mask & kLeafChannelSurvival) != 0U) {
+      fill.survival = 1.0;
+    }
+    return fill;
+  }
+  switch (static_cast<leaf::DistKind>(channel.leaf_dist_kind)) {
+  case leaf::DistKind::Lognormal:
+    return compiled_math_source_product_lognormal_leaf_fill(
+        loaded, x, fill_mask);
+  case leaf::DistKind::Gamma:
+    return compiled_math_source_product_gamma_leaf_fill(
+        loaded, x, fill_mask);
+  case leaf::DistKind::Exgauss:
+    return compiled_math_source_product_exgauss_leaf_fill(
+        loaded, x, fill_mask);
+  case leaf::DistKind::LBA:
+    return compiled_math_source_product_lba_leaf_fill(
+        loaded, x, fill_mask);
+  case leaf::DistKind::RDM:
+    return compiled_math_source_product_rdm_leaf_fill(
+        loaded, x, fill_mask);
+  }
+  return ExactSourceChannels::SourceProductScalarFill{};
+}
+
+inline double compiled_math_source_product_finish_base_scalar(
+    const double base_pdf,
+    const double base_cdf,
+    const double q,
+    const std::uint8_t channel_mask) {
+  const double start_prob = 1.0 - q;
+  if (channel_mask == kLeafChannelPdf) {
+    return start_prob * safe_density(base_pdf);
+  }
+  const double cdf = clamp_probability(start_prob * clamp_probability(base_cdf));
+  if (channel_mask == kLeafChannelCdf) {
+    return cdf;
+  }
+  return channel_mask == kLeafChannelSurvival
+             ? clamp_probability(1.0 - cdf)
+             : 0.0;
+}
+
+inline double compiled_math_source_product_direct_leaf_scalar(
+    const CompiledMathSourceProductChannel &channel,
+    const ExactLoadedLeafInput &loaded,
+    const double time,
+    const std::uint8_t channel_mask) {
+  const double x = time - channel.leaf_onset_abs_value - loaded.t0;
+  if (!(x > 0.0)) {
+    return channel_mask == kLeafChannelSurvival ? 1.0 : 0.0;
+  }
+  const bool need_pdf = channel_mask == kLeafChannelPdf;
+  switch (static_cast<leaf::DistKind>(channel.leaf_dist_kind)) {
+  case leaf::DistKind::Lognormal: {
+    const double m = loaded.params[0];
+    const double s = loaded.params[1];
+    return compiled_math_source_product_finish_base_scalar(
+        need_pdf ? R::dlnorm(x, m, s, 0) : 0.0,
+        need_pdf ? 0.0 : R::plnorm(x, m, s, 1, 0),
+        loaded.q,
+        channel_mask);
+  }
+  case leaf::DistKind::Gamma: {
+    const double shape = loaded.params[0];
+    const double scale = 1.0 / loaded.params[1];
+    return compiled_math_source_product_finish_base_scalar(
+        need_pdf ? R::dgamma(x, shape, scale, 0) : 0.0,
+        need_pdf ? 0.0 : R::pgamma(x, shape, scale, 1, 0),
+        loaded.q,
+        channel_mask);
+  }
+  case leaf::DistKind::Exgauss: {
+    const double mu = loaded.params[0];
+    const double sigma = loaded.params[1];
+    const double tau = loaded.params[2];
+    const double lower_cdf = exgauss_raw_cdf(0.0, mu, sigma, tau);
+    const double lower_survival = 1.0 - lower_cdf;
+    if (!(lower_survival > 0.0)) {
+      return channel_mask == kLeafChannelSurvival ? 1.0 : 0.0;
+    }
+    return compiled_math_source_product_finish_base_scalar(
+        need_pdf ? exgauss_raw_pdf(x, mu, sigma, tau) / lower_survival : 0.0,
+        need_pdf
+            ? 0.0
+            : (exgauss_raw_cdf(x, mu, sigma, tau) - lower_cdf) /
+                  lower_survival,
+        loaded.q,
+        channel_mask);
+  }
+  case leaf::DistKind::LBA:
+    return compiled_math_source_product_finish_base_scalar(
+        need_pdf
+            ? lba_pdf_fast(x, loaded.params[0], loaded.params[1],
+                           loaded.params[2], loaded.params[3])
+            : 0.0,
+        need_pdf
+            ? 0.0
+            : lba_cdf_fast(x, loaded.params[0], loaded.params[1],
+                           loaded.params[2], loaded.params[3]),
+        loaded.q,
+        channel_mask);
+  case leaf::DistKind::RDM:
+    return compiled_math_source_product_finish_base_scalar(
+        need_pdf
+            ? rdm_pdf_fast(x, loaded.params[0], loaded.params[1],
+                           loaded.params[2], loaded.params[3])
+            : 0.0,
+        need_pdf
+            ? 0.0
+            : rdm_cdf_fast(x, loaded.params[0], loaded.params[1],
+                           loaded.params[2], loaded.params[3]),
+        loaded.q,
+        channel_mask);
+  }
+  return 0.0;
+}
+
+inline void compiled_math_store_source_product_fill(
     CompiledMathWorkspace *workspace,
-    CompiledSourceView *parent,
-    CompiledEvalWorkspace *eval_workspace) {
+    const std::size_t channel_pos,
+    const ExactSourceChannels::SourceProductScalarFill &fill) {
+  if (workspace->source_product_channel_epoch[channel_pos] !=
+      workspace->source_product_channel_current_epoch) {
+    workspace->source_product_channel_epoch[channel_pos] =
+        workspace->source_product_channel_current_epoch;
+    workspace->source_product_channel_valid_mask[channel_pos] = 0U;
+  }
+  workspace->source_product_channel_valid_mask[channel_pos] |= fill.mask;
+  if ((fill.mask & kLeafChannelPdf) != 0U) {
+    workspace->source_product_channel_pdf[channel_pos] = fill.pdf;
+  }
+  if ((fill.mask & kLeafChannelCdf) != 0U) {
+    workspace->source_product_channel_cdf[channel_pos] = fill.cdf;
+  }
+  if ((fill.mask & kLeafChannelSurvival) != 0U) {
+    workspace->source_product_channel_survival[channel_pos] = fill.survival;
+  }
+}
+
+inline double compiled_math_source_product_fill_value(
+    const ExactSourceChannels::SourceProductScalarFill &fill,
+    const std::uint8_t channel_mask) {
+  if (channel_mask == kLeafChannelPdf) {
+    return fill.pdf;
+  }
+  if (channel_mask == kLeafChannelCdf) {
+    return fill.cdf;
+  }
+  if (channel_mask == kLeafChannelSurvival) {
+    return fill.survival;
+  }
+  return 0.0;
+}
+
+inline double compiled_math_source_product_value_for_ops(
+    const CompiledMathProgram &program,
+    const CompiledMathIndexSpan source_product_ops,
+    CompiledMathWorkspace *workspace,
+    ExactSourceChannels *source_channels,
+    const semantic::Index parent_source_view_id) {
   double product = 1.0;
-  for (semantic::Index i = 0; i < source_value_nodes.size; ++i) {
-    const auto node_id =
-        program.integral_kernel_source_value_nodes[
-            static_cast<std::size_t>(source_value_nodes.offset + i)];
-    const auto &source_node =
-        program.nodes[static_cast<std::size_t>(node_id)];
-    product *= compiled_math_source_value_for_node(
-        source_node,
-        workspace,
-        parent,
-        eval_workspace);
-    if (!std::isfinite(product) || product == 0.0) {
+  for (semantic::Index i = 0; i < source_product_ops.size; ++i) {
+    const auto &op =
+        program.integral_kernel_source_product_ops[
+            static_cast<std::size_t>(source_product_ops.offset + i)];
+    double value = op.constant_value;
+    const auto channel_mask = op.value_channel_mask;
+    if (channel_mask == 0U) {
+      if (value == 0.0) {
+        return 0.0;
+      }
+    } else {
+      const auto channel_pos =
+          static_cast<std::size_t>(op.source_product_channel_id);
+      const auto &channel =
+          program.integral_kernel_source_product_channels[channel_pos];
+      if (!op.cache_result) {
+        const double time =
+            compiled_math_source_product_channel_time(channel, *workspace);
+        if (source_channels->source_product_direct_leaf_available(
+                op.source_product_channel_id)) {
+          value = compiled_math_source_product_direct_leaf_scalar(
+              channel,
+              source_channels->source_product_leaf_input(channel.leaf_index),
+              time,
+              channel_mask);
+        } else {
+          const auto fill =
+              source_channels->evaluate_source_product_channel_fill(
+                  channel,
+                  channel_mask,
+                  time,
+                  parent_source_view_id,
+                  workspace);
+          value = compiled_math_source_product_fill_value(fill, channel_mask);
+        }
+      } else {
+        if (workspace->source_product_channel_epoch[channel_pos] !=
+                workspace->source_product_channel_current_epoch ||
+            (workspace->source_product_channel_valid_mask[channel_pos] &
+             channel_mask) == 0U) {
+          const double time =
+              compiled_math_source_product_channel_time(channel, *workspace);
+          const auto fill_mask = op.fill_channel_mask;
+          const auto fill =
+              source_channels->source_product_direct_leaf_available(
+                  op.source_product_channel_id)
+                  ? compiled_math_source_product_direct_leaf_fill(
+                        channel,
+                        source_channels->source_product_leaf_input(
+                            channel.leaf_index),
+                        time,
+                        fill_mask)
+                  : source_channels->evaluate_source_product_channel_fill(
+                        channel,
+                        fill_mask,
+                        time,
+                        parent_source_view_id,
+                        workspace);
+          compiled_math_store_source_product_fill(
+              workspace,
+              channel_pos,
+              fill);
+        }
+        if (channel_mask == kLeafChannelPdf) {
+          value = workspace->source_product_channel_pdf[channel_pos];
+        } else if (channel_mask == kLeafChannelCdf) {
+          value = workspace->source_product_channel_cdf[channel_pos];
+        } else {
+          value = workspace->source_product_channel_survival[channel_pos];
+        }
+      }
+    }
+    product *= value;
+    if (product == 0.0) {
       return 0.0;
     }
   }
-  return std::isfinite(product) ? product : 0.0;
-}
-
-inline double evaluate_compiled_source_product_integral_sample(
-    const CompiledMathProgram &program,
-    const CompiledMathIntegralKernel &kernel,
-    CompiledMathWorkspace *integral_workspace,
-    CompiledSourceView *parent,
-    CompiledEvalWorkspace *eval_workspace,
-    const std::vector<std::uint8_t> *term_outcome_open) {
-  if (kernel.kind == CompiledMathIntegralKernelKind::SourceProduct) {
-    return compiled_math_source_product_value_for_nodes(
-        program,
-        kernel.source_value_nodes,
-        integral_workspace,
-        parent,
-        eval_workspace);
-  }
-
-  double total = 0.0;
-  for (semantic::Index term_idx = 0;
-       term_idx < kernel.source_product_terms.size;
-       ++term_idx) {
-    const auto &term =
-        program.integral_kernel_source_product_terms[
-            static_cast<std::size_t>(
-                kernel.source_product_terms.offset + term_idx)];
-    const auto term_pos = static_cast<std::size_t>(term_idx);
-    if (term_outcome_open != nullptr &&
-        term_pos < term_outcome_open->size() &&
-        (*term_outcome_open)[term_pos] == 0U) {
-      continue;
-    }
-    if (!compiled_math_integral_time_gates_open(
-            program, term.time_gate_nodes, *integral_workspace)) {
-      continue;
-    }
-    double product = term.sign;
-    for (semantic::Index i = 0; i < term.integral_factor_nodes.size; ++i) {
-      const auto node_id =
-          program.integral_kernel_integral_factor_nodes[
-              static_cast<std::size_t>(
-                  term.integral_factor_nodes.offset + i)];
-      const auto &integral_node =
-          program.nodes[static_cast<std::size_t>(node_id)];
-      product *= compiled_math_integral_factor_value_for_node(
-          program,
-          integral_node,
-          integral_workspace,
-          parent,
-          nullptr,
-          eval_workspace);
-      if (!std::isfinite(product) || product == 0.0) {
-        product = 0.0;
-        break;
-      }
-    }
-    if (product == 0.0) {
-      continue;
-    }
-    for (semantic::Index i = 0; i < term.expr_upper_factors.size; ++i) {
-      const auto &factor =
-          program.integral_kernel_expr_upper_factors[
-              static_cast<std::size_t>(
-                  term.expr_upper_factors.offset + i)];
-      if (!compiled_math_apply_expr_upper_factor(
-              program,
-              factor,
-              integral_workspace,
-              parent,
-              eval_workspace,
-              &product)) {
-        break;
-      }
-    }
-    if (!std::isfinite(product) || product == 0.0) {
-      continue;
-    }
-    product *= compiled_math_source_product_value_for_nodes(
-        program,
-        term.source_value_nodes,
-        integral_workspace,
-        parent,
-        eval_workspace);
-    if (!std::isfinite(product) || product == 0.0) {
-      continue;
-    }
-    total += product;
-  }
-  if (!std::isfinite(total)) {
-    return 0.0;
-  }
-  return kernel.clean_signed_source_sum ? clean_signed_value(total) : total;
+  return product;
 }
 
 inline double evaluate_compiled_source_product_integral_kernel(
@@ -1000,9 +1199,19 @@ inline double evaluate_compiled_source_product_integral_kernel(
     CompiledEvalWorkspace *eval_workspace,
     const double lower,
     const double upper) {
-  if (!std::isfinite(lower) || !std::isfinite(upper) || !(upper > lower)) {
+  if (!(upper > lower)) {
     return 0.0;
   }
+  auto *source_channels = parent == nullptr ? nullptr : parent->source_channels();
+  if (source_channels == nullptr) {
+    return 0.0;
+  }
+  const auto parent_source_view_id =
+      parent == nullptr ? semantic::Index{0} : parent->source_view_id();
+  const auto source_product_source_view_id =
+      kernel.source_view_id == 0 || kernel.source_view_id == semantic::kInvalidIndex
+          ? parent_source_view_id
+          : kernel.source_view_id;
 
   auto &integral_workspace = workspace->integral_workspace_for(program);
   const auto batch = quadrature::build_finite_batch(lower, upper);
@@ -1036,20 +1245,94 @@ inline double evaluate_compiled_source_product_integral_kernel(
        sample_idx < quadrature::kDefaultFiniteOrder;
        ++sample_idx) {
     bind.set(batch.nodes.nodes[sample_idx]);
-    const double value =
-        evaluate_compiled_source_product_integral_sample(
+    integral_workspace.reset_source_product_channel_cache();
+    double value = 0.0;
+    if (kernel.kind == CompiledMathIntegralKernelKind::SourceProduct) {
+      value = compiled_math_source_product_value_for_ops(
             program,
-            kernel,
+            kernel.source_product_ops,
             &integral_workspace,
-            parent,
-            eval_workspace,
-            term_outcome_open_ptr);
-    if (!std::isfinite(value) || value == 0.0) {
+            source_channels,
+            source_product_source_view_id);
+    } else {
+      double total = 0.0;
+      for (semantic::Index term_idx = 0;
+           term_idx < kernel.source_product_terms.size;
+           ++term_idx) {
+        const auto &term =
+            program.integral_kernel_source_product_terms[
+                static_cast<std::size_t>(
+                    kernel.source_product_terms.offset + term_idx)];
+        const auto term_pos = static_cast<std::size_t>(term_idx);
+        if (term_outcome_open_ptr != nullptr &&
+            term_pos < term_outcome_open_ptr->size() &&
+            (*term_outcome_open_ptr)[term_pos] == 0U) {
+          continue;
+        }
+        if (!compiled_math_integral_time_gates_open(
+                program, term.time_gate_nodes, integral_workspace)) {
+          continue;
+        }
+        double product = term.sign;
+        for (semantic::Index i = 0; i < term.integral_factor_nodes.size; ++i) {
+          const auto node_id =
+              program.integral_kernel_integral_factor_nodes[
+                  static_cast<std::size_t>(
+                      term.integral_factor_nodes.offset + i)];
+          const auto &integral_node =
+              program.nodes[static_cast<std::size_t>(node_id)];
+          product *= compiled_math_integral_factor_value_for_node(
+              program,
+              integral_node,
+              &integral_workspace,
+              parent,
+              nullptr,
+              eval_workspace);
+          if (product == 0.0) {
+            product = 0.0;
+            break;
+          }
+        }
+        if (product == 0.0) {
+          continue;
+        }
+        for (semantic::Index i = 0; i < term.expr_upper_factors.size; ++i) {
+          const auto &factor =
+              program.integral_kernel_expr_upper_factors[
+                  static_cast<std::size_t>(
+                      term.expr_upper_factors.offset + i)];
+          if (!compiled_math_apply_expr_upper_factor(
+                  program,
+                  factor,
+                  &integral_workspace,
+                  parent,
+                  eval_workspace,
+                  &product)) {
+            break;
+          }
+        }
+        if (product == 0.0) {
+          continue;
+        }
+        product *= compiled_math_source_product_value_for_ops(
+            program,
+            term.source_product_ops,
+            &integral_workspace,
+            source_channels,
+            source_product_source_view_id);
+        if (product == 0.0) {
+          continue;
+        }
+        total += product;
+      }
+      value = kernel.clean_signed_source_sum ? clean_signed_value(total) : total;
+    }
+    if (value == 0.0) {
       continue;
     }
     sum += batch.nodes.weights[sample_idx] * value;
   }
-  return std::isfinite(sum) ? sum : 0.0;
+  return sum;
 }
 
 inline double evaluate_compiled_integral_kernel(
@@ -1125,6 +1408,7 @@ inline double evaluate_compiled_node_span(
     if (condition_evaluator != nullptr &&
         cacheable &&
         compiled_math_load_node_cache_entry(
+            program,
             node, condition_evaluator, *workspace, &value)) {
       workspace->values[static_cast<std::size_t>(node.cache_slot)] = value;
       continue;
@@ -1135,7 +1419,7 @@ inline double evaluate_compiled_node_span(
       break;
     case CompiledMathNodeKind::SourceChannelLoad:
       (void)compiled_math_store_source_channels(
-          node, condition_evaluator, workspace);
+          program, node, condition_evaluator, workspace);
       value = 0.0;
       break;
     case CompiledMathNodeKind::SourcePdf:
@@ -1191,16 +1475,8 @@ inline double evaluate_compiled_node_span(
         value = 0.0;
         break;
       }
-      const auto *condition =
-          compiled_math_condition_by_id(program, node.condition_id);
       const auto upper =
-          condition == nullptr
-              ? CompiledTimedUpperBound{}
-              : compiled_math_upper_bound_from_facts(
-                    program,
-                    node,
-                    *workspace,
-                    condition->guard_upper_fact_lookup.fact_indices);
+          compiled_math_upper_bound_from_terms(program, node, *workspace);
       if (upper.found) {
         const double current_time = compiled_math_node_time(node, *workspace);
         if (!(upper.normalizer > 0.0) ||
@@ -1237,16 +1513,8 @@ inline double evaluate_compiled_node_span(
         value = 0.0;
         break;
       }
-      const auto *condition =
-          compiled_math_condition_by_id(program, node.condition_id);
       const auto upper =
-          condition == nullptr
-              ? CompiledTimedUpperBound{}
-              : compiled_math_upper_bound_from_facts(
-                    program,
-                    node,
-                    *workspace,
-                    condition->guard_upper_fact_lookup.fact_indices);
+          compiled_math_upper_bound_from_terms(program, node, *workspace);
       if (upper.found) {
         const double current_time = compiled_math_node_time(node, *workspace);
         if (!(upper.normalizer > 0.0)) {
@@ -1467,6 +1735,7 @@ inline double evaluate_compiled_node_span(
     }
     if (condition_evaluator != nullptr && cacheable) {
       compiled_math_store_node_cache_entry(
+          program,
           node,
           condition_evaluator,
           workspace,
@@ -1495,7 +1764,9 @@ inline double evaluate_compiled_math_root(
       workspace,
       parent,
       scenario,
-      eval_workspace);
+      eval_workspace,
+      nullptr,
+      true);
 }
 
 } // namespace detail

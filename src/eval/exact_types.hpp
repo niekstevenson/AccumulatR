@@ -238,54 +238,6 @@ struct ExactRelationTemplate {
   bool empty() const noexcept {
     return source_ids.empty();
   }
-
-  ExactRelation relation_for(const semantic::Index source_id) const noexcept {
-    const auto it =
-        std::lower_bound(source_ids.begin(), source_ids.end(), source_id);
-    if (it == source_ids.end() || *it != source_id) {
-      return ExactRelation::Unknown;
-    }
-    const auto pos = static_cast<std::size_t>(it - source_ids.begin());
-    return relations[pos];
-  }
-};
-
-class RelationView {
-public:
-  RelationView() = default;
-
-  RelationView with_overlay(const ExactRelationTemplate *overlay) const noexcept {
-    if (overlay == nullptr || overlay->empty()) {
-      return *this;
-    }
-    if (empty()) {
-      return RelationView(nullptr, overlay);
-    }
-    return RelationView(this, overlay);
-  }
-
-  ExactRelation relation_for(const semantic::Index source_id) const noexcept {
-    if (overlay_ != nullptr) {
-      const auto relation = overlay_->relation_for(source_id);
-      if (relation != ExactRelation::Unknown) {
-        return relation;
-      }
-    }
-    return parent_ != nullptr ? parent_->relation_for(source_id)
-                              : ExactRelation::Unknown;
-  }
-
-  bool empty() const noexcept {
-    return parent_ == nullptr && overlay_ == nullptr;
-  }
-
-private:
-  RelationView(const RelationView *parent,
-               const ExactRelationTemplate *overlay) noexcept
-      : parent_(parent), overlay_(overlay) {}
-
-  const RelationView *parent_{nullptr};
-  const ExactRelationTemplate *overlay_{nullptr};
 };
 
 struct ExactScenarioFactor {
@@ -314,7 +266,25 @@ struct ExactTransitionScenario {
 
 struct ExactTriggerState {
   double weight{1.0};
-  std::vector<std::uint8_t> shared_started;
+  const std::uint8_t *shared_started{nullptr};
+};
+
+struct ExactCompiledTriggerWeightTerm {
+  semantic::Index leaf_index{semantic::kInvalidIndex};
+  std::uint8_t shared_started{2U};
+};
+
+struct ExactCompiledTriggerState {
+  double fixed_weight{1.0};
+  ExactIndexSpan weight_terms{};
+  semantic::Index shared_started_offset{0};
+};
+
+struct ExactCompiledTriggerStateTable {
+  std::vector<ExactCompiledTriggerState> states;
+  std::vector<ExactCompiledTriggerWeightTerm> weight_terms;
+  std::vector<std::uint8_t> shared_started_values;
+  semantic::Index trigger_count{0};
 };
 
 struct ExactSequenceState {
@@ -323,6 +293,11 @@ struct ExactSequenceState {
   std::vector<double> upper_bounds;
   std::vector<double> expr_upper_bounds;
   std::vector<double> expr_upper_normalizers;
+};
+
+struct ExactRankedFrontierEntry {
+  double probability{0.0};
+  semantic::Index state_index{semantic::kInvalidIndex};
 };
 
 struct ExactStepDistributionView {
@@ -493,6 +468,8 @@ struct ExactRuntimeCompetitorBlockPlan {
 struct ExactRuntimeScenarioTransitionPlan {
   semantic::Index probability_root_id{semantic::kInvalidIndex};
   semantic::Index active_source_id{semantic::kInvalidIndex};
+  ExactIndexSpan before_source_span{};
+  ExactIndexSpan ready_expr_span{};
   bool ranked_supported{false};
 };
 
@@ -521,6 +498,57 @@ struct ExactSimpleRacePlan {
   std::vector<semantic::Index> source_ids;
   std::vector<semantic::Index> outcome_source_ids;
   std::vector<semantic::Index> source_leaf_indices;
+};
+
+enum class ExactProbabilityOpKind : std::uint8_t {
+  Constant = 0,
+  Top1LeafRaceDensity = 1,
+  TerminalNoResponseProbability = 2,
+  GenericTransitionDensity = 3,
+  GenericTransitionProbability = 4,
+  RankedTransitionSequence = 5,
+  Integral = 6,
+  WeightedTriggerSum = 7,
+  Log = 8
+};
+
+enum class ExactProbabilityValueKind : std::uint8_t {
+  Probability = 0,
+  Density = 1,
+  Log = 2
+};
+
+struct ExactProbabilityOp {
+  ExactProbabilityOpKind kind{ExactProbabilityOpKind::Constant};
+  ExactProbabilityValueKind value_kind{ExactProbabilityValueKind::Probability};
+  semantic::Index outcome_index{semantic::kInvalidIndex};
+  semantic::Index target_source_id{semantic::kInvalidIndex};
+  semantic::Index time_slot{semantic::kInvalidIndex};
+  ExactIndexSpan source_span{};
+  ExactIndexSpan trigger_state_span{};
+  ExactIndexSpan children{};
+  double constant{0.0};
+};
+
+struct ExactProbabilityProgram {
+  std::vector<ExactProbabilityOp> ops;
+  std::vector<semantic::Index> child_ops;
+  semantic::Index root{semantic::kInvalidIndex};
+  semantic::Index root_child{semantic::kInvalidIndex};
+  ExactProbabilityValueKind value_kind{ExactProbabilityValueKind::Probability};
+  bool requires_trigger_enumeration{false};
+
+  [[nodiscard]] bool empty() const noexcept {
+    return root == semantic::kInvalidIndex || ops.empty();
+  }
+};
+
+struct ExactProbabilityProgramSet {
+  std::vector<ExactProbabilityProgram> programs;
+  std::vector<semantic::Index> density_by_outcome;
+  std::vector<semantic::Index> finite_probability_by_outcome;
+  std::vector<semantic::Index> source_ids;
+  semantic::Index no_response_probability{semantic::kInvalidIndex};
 };
 
 struct ExactExprUnionSubset {
@@ -568,6 +596,7 @@ struct ExactVariantPlan {
   ExactRuntimeVariantPlan runtime;
   ExactNoResponsePlan no_response;
   ExactSimpleRacePlan simple_race;
+  ExactProbabilityProgramSet probability_programs;
   std::vector<int> leaf_row_offsets;
   CompiledMathProgram compiled_math;
   std::vector<ExactRelationTemplate> compiled_source_views;
@@ -589,6 +618,9 @@ struct ExactVariantPlan {
   std::vector<semantic::Index> scenario_source_ids;
   std::vector<semantic::Index> scenario_expr_ids;
   std::vector<semantic::Index> shared_trigger_indices;
+  ExactCompiledTriggerStateTable trigger_state_table;
+  std::vector<std::uint8_t> compiled_source_view_relations;
+  semantic::Index compiled_source_view_source_count{0};
   semantic::Index expr_union_kernel_cache_slot_count{0};
   bool ranked_supported{true};
 };
@@ -608,6 +640,29 @@ inline ExactSequenceState make_exact_sequence_state(const ExactVariantPlan &plan
       plan.lowered.program.expr_kind.size(),
       0.0);
   return state;
+}
+
+inline ExactRelation exact_compiled_source_view_relation(
+    const ExactVariantPlan &plan,
+    const semantic::Index source_view_id,
+    const semantic::Index source_id) noexcept {
+  if (source_view_id == 0 ||
+      source_view_id == semantic::kInvalidIndex ||
+      source_id == semantic::kInvalidIndex ||
+      plan.compiled_source_view_source_count <= 0) {
+    return ExactRelation::Unknown;
+  }
+  const auto source_count =
+      static_cast<std::size_t>(plan.compiled_source_view_source_count);
+  const auto view_pos = static_cast<std::size_t>(source_view_id - 1U);
+  const auto source_pos = static_cast<std::size_t>(source_id);
+  const auto offset = view_pos * source_count + source_pos;
+  if (source_pos >= source_count ||
+      offset >= plan.compiled_source_view_relations.size()) {
+    return ExactRelation::Unknown;
+  }
+  return static_cast<ExactRelation>(
+      plan.compiled_source_view_relations[offset]);
 }
 
 inline std::vector<semantic::Index> merge_sorted_support(

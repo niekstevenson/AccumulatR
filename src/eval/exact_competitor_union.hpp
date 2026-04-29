@@ -13,7 +13,13 @@ struct ExactStepWorkspace {
       : source_channels(plan),
         target_evaluator(plan),
         target_workspace(plan),
-        initial_state(make_exact_sequence_state(plan)) {}
+        initial_state(make_exact_sequence_state(plan)) {
+    default_trigger_state.weight = 1.0;
+    default_trigger_state.shared_started =
+        plan.trigger_state_table.shared_started_values.empty()
+            ? nullptr
+            : plan.trigger_state_table.shared_started_values.data();
+  }
 
   void reset(const ParamView &params,
              const int first_param_row,
@@ -22,8 +28,8 @@ struct ExactStepWorkspace {
              const double observed_time) {
     source_channels.reset(
         params, first_param_row, trigger_state, sequence_state, observed_time);
-    target_evaluator.reset(&source_channels, RelationView{});
-    target_workspace.reset(&source_channels, RelationView{});
+    target_evaluator.reset(&source_channels, 0);
+    target_workspace.reset(&source_channels, 0);
     target_workspace.compiled_math.set_time(
         static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
         observed_time);
@@ -40,9 +46,14 @@ struct ExactStepWorkspace {
   CompiledSourceView target_evaluator;
   CompiledEvalWorkspace target_workspace;
   ExactSequenceState initial_state;
-  std::vector<ExactTriggerState> trigger_states;
-  std::vector<ExactTriggerState> trigger_state_buffer;
+  ExactTriggerState default_trigger_state;
   std::vector<double> transition_probabilities;
+  std::vector<std::uint8_t> ranked_used_outcomes;
+  std::vector<ExactRankedFrontierEntry> ranked_frontier;
+  std::vector<ExactRankedFrontierEntry> ranked_next_frontier;
+  std::vector<ExactSequenceState> ranked_states;
+  std::vector<ExactSequenceState> ranked_next_states;
+  std::vector<double> ready_expr_normalizers;
 };
 
 struct ExactStepWorkspacePool {

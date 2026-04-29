@@ -289,12 +289,20 @@ inline double rdm_cdf_fast(double x, double v, double B, double A,
   return rdm_pigt(x, B_sc + 0.5 * A_sc, v_sc, 0.5 * A_sc);
 }
 
-inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
-                                                  const double *params,
-                                                  const int n_params,
-                                                  const double q,
-                                                  const double t0,
-                                                  const double t) {
+constexpr std::uint8_t kLeafChannelPdf = 1U;
+constexpr std::uint8_t kLeafChannelCdf = 2U;
+constexpr std::uint8_t kLeafChannelSurvival = 4U;
+constexpr std::uint8_t kLeafChannelAll =
+    kLeafChannelPdf | kLeafChannelCdf | kLeafChannelSurvival;
+
+inline leaf::EventChannels standard_leaf_channels_mask(
+    const std::uint8_t dist_kind,
+    const double *params,
+    const int n_params,
+    const double q,
+    const double t0,
+    const double t,
+    const std::uint8_t channel_mask) {
   (void)n_params;
   if (!std::isfinite(t) || !std::isfinite(q) || q < 0.0 || q > 1.0 ||
       !std::isfinite(t0)) {
@@ -306,9 +314,82 @@ inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
     return impossible_channels();
   }
 
+  if (channel_mask == kLeafChannelAll) {
+    double base_pdf = 0.0;
+    double base_cdf = 0.0;
+    double lower_cdf = 0.0;
+
+    switch (static_cast<leaf::DistKind>(dist_kind)) {
+    case leaf::DistKind::Lognormal: {
+      const double m = params[0];
+      const double s = params[1];
+      if (!std::isfinite(m) || !std::isfinite(s) || s <= 0.0) {
+        return impossible_channels();
+      }
+      base_pdf = R::dlnorm(x, m, s, 0);
+      base_cdf = R::plnorm(x, m, s, 1, 0);
+      break;
+    }
+    case leaf::DistKind::Gamma: {
+      const double shape = params[0];
+      const double rate = params[1];
+      if (!std::isfinite(shape) || shape <= 0.0 || !std::isfinite(rate) ||
+          rate <= 0.0) {
+        return impossible_channels();
+      }
+      const double scale = 1.0 / rate;
+      base_pdf = R::dgamma(x, shape, scale, 0);
+      base_cdf = R::pgamma(x, shape, scale, 1, 0);
+      break;
+    }
+    case leaf::DistKind::Exgauss: {
+      const double mu = params[0];
+      const double sigma = params[1];
+      const double tau = params[2];
+      if (!std::isfinite(mu) || !std::isfinite(sigma) || sigma <= 0.0 ||
+          !std::isfinite(tau) || tau <= 0.0) {
+        return impossible_channels();
+      }
+      base_pdf = exgauss_raw_pdf(x, mu, sigma, tau);
+      base_cdf = exgauss_raw_cdf(x, mu, sigma, tau);
+      lower_cdf = exgauss_raw_cdf(0.0, mu, sigma, tau);
+      const double lower_survival = 1.0 - lower_cdf;
+      if (!(lower_survival > 0.0)) {
+        return impossible_channels();
+      }
+      base_pdf = safe_density(base_pdf / lower_survival);
+      base_cdf = clamp_probability((base_cdf - lower_cdf) / lower_survival);
+      break;
+    }
+    case leaf::DistKind::LBA: {
+      base_pdf = lba_pdf_fast(x, params[0], params[1], params[2], params[3]);
+      base_cdf = lba_cdf_fast(x, params[0], params[1], params[2], params[3]);
+      break;
+    }
+    case leaf::DistKind::RDM: {
+      base_pdf = rdm_pdf_fast(x, params[0], params[1], params[2], params[3]);
+      base_cdf = rdm_cdf_fast(x, params[0], params[1], params[2], params[3]);
+      break;
+    }
+    }
+
+    base_pdf = std::isfinite(base_pdf) && base_pdf > 0.0 ? base_pdf : 0.0;
+    base_cdf = clamp_probability(base_cdf);
+
+    leaf::EventChannels out;
+    const double start_prob = 1.0 - q;
+    out.pdf = start_prob * base_pdf;
+    out.cdf = clamp_probability(start_prob * base_cdf);
+    out.survival = clamp_probability(1.0 - out.cdf);
+    return out;
+  }
+
   double base_pdf = 0.0;
   double base_cdf = 0.0;
   double lower_cdf = 0.0;
+  const bool need_pdf = (channel_mask & kLeafChannelPdf) != 0U;
+  const bool need_cdf =
+      (channel_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
 
   switch (static_cast<leaf::DistKind>(dist_kind)) {
   case leaf::DistKind::Lognormal: {
@@ -317,8 +398,12 @@ inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
     if (!std::isfinite(m) || !std::isfinite(s) || s <= 0.0) {
       return impossible_channels();
     }
-    base_pdf = R::dlnorm(x, m, s, 0);
-    base_cdf = R::plnorm(x, m, s, 1, 0);
+    if (need_pdf) {
+      base_pdf = R::dlnorm(x, m, s, 0);
+    }
+    if (need_cdf) {
+      base_cdf = R::plnorm(x, m, s, 1, 0);
+    }
     break;
   }
   case leaf::DistKind::Gamma: {
@@ -329,8 +414,12 @@ inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
       return impossible_channels();
     }
     const double scale = 1.0 / rate;
-    base_pdf = R::dgamma(x, shape, scale, 0);
-    base_cdf = R::pgamma(x, shape, scale, 1, 0);
+    if (need_pdf) {
+      base_pdf = R::dgamma(x, shape, scale, 0);
+    }
+    if (need_cdf) {
+      base_cdf = R::pgamma(x, shape, scale, 1, 0);
+    }
     break;
   }
   case leaf::DistKind::Exgauss: {
@@ -341,38 +430,78 @@ inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
         !std::isfinite(tau) || tau <= 0.0) {
       return impossible_channels();
     }
-    base_pdf = exgauss_raw_pdf(x, mu, sigma, tau);
-    base_cdf = exgauss_raw_cdf(x, mu, sigma, tau);
+    if (need_pdf) {
+      base_pdf = exgauss_raw_pdf(x, mu, sigma, tau);
+    }
+    if (need_cdf) {
+      base_cdf = exgauss_raw_cdf(x, mu, sigma, tau);
+    }
     lower_cdf = exgauss_raw_cdf(0.0, mu, sigma, tau);
     const double lower_survival = 1.0 - lower_cdf;
     if (!(lower_survival > 0.0)) {
       return impossible_channels();
     }
-    base_pdf = safe_density(base_pdf / lower_survival);
-    base_cdf = clamp_probability((base_cdf - lower_cdf) / lower_survival);
+    if (need_pdf) {
+      base_pdf = safe_density(base_pdf / lower_survival);
+    }
+    if (need_cdf) {
+      base_cdf = clamp_probability((base_cdf - lower_cdf) / lower_survival);
+    }
     break;
   }
   case leaf::DistKind::LBA: {
-    base_pdf = lba_pdf_fast(x, params[0], params[1], params[2], params[3]);
-    base_cdf = lba_cdf_fast(x, params[0], params[1], params[2], params[3]);
+    if (need_pdf) {
+      base_pdf = lba_pdf_fast(x, params[0], params[1], params[2], params[3]);
+    }
+    if (need_cdf) {
+      base_cdf = lba_cdf_fast(x, params[0], params[1], params[2], params[3]);
+    }
     break;
   }
   case leaf::DistKind::RDM: {
-    base_pdf = rdm_pdf_fast(x, params[0], params[1], params[2], params[3]);
-    base_cdf = rdm_cdf_fast(x, params[0], params[1], params[2], params[3]);
+    if (need_pdf) {
+      base_pdf = rdm_pdf_fast(x, params[0], params[1], params[2], params[3]);
+    }
+    if (need_cdf) {
+      base_cdf = rdm_cdf_fast(x, params[0], params[1], params[2], params[3]);
+    }
     break;
   }
   }
 
-  base_pdf = std::isfinite(base_pdf) && base_pdf > 0.0 ? base_pdf : 0.0;
-  base_cdf = clamp_probability(base_cdf);
-
   leaf::EventChannels out;
   const double start_prob = 1.0 - q;
-  out.pdf = start_prob * base_pdf;
-  out.cdf = clamp_probability(start_prob * base_cdf);
-  out.survival = clamp_probability(1.0 - out.cdf);
+  if (need_pdf) {
+    base_pdf = std::isfinite(base_pdf) && base_pdf > 0.0 ? base_pdf : 0.0;
+    out.pdf = start_prob * base_pdf;
+  }
+  if (need_cdf) {
+    base_cdf = clamp_probability(base_cdf);
+    const double cdf = clamp_probability(start_prob * base_cdf);
+    if ((channel_mask & kLeafChannelCdf) != 0U) {
+      out.cdf = cdf;
+    }
+    if ((channel_mask & kLeafChannelSurvival) != 0U) {
+      out.survival = clamp_probability(1.0 - cdf);
+    }
+  }
   return out;
+}
+
+inline leaf::EventChannels standard_leaf_channels(const std::uint8_t dist_kind,
+                                                  const double *params,
+                                                  const int n_params,
+                                                  const double q,
+                                                  const double t0,
+                                                  const double t) {
+  return standard_leaf_channels_mask(
+      dist_kind,
+      params,
+      n_params,
+      q,
+      t0,
+      t,
+      kLeafChannelAll);
 }
 
 template <typename Fn>

@@ -21,17 +21,23 @@ on.exit(setwd(old_wd), add = TRUE)
 setwd(repo_root)
 
 suppressPackageStartupMessages({
-  library(pkgload)
+  if (identical(Sys.getenv("ACCUMULATR_BENCH_INSTALLED"), "true")) {
+    library(AccumulatR)
+  } else {
+    library(pkgload)
+    load_all(repo_root, quiet = TRUE, helpers = FALSE)
+  }
 })
-
-load_all(repo_root, quiet = TRUE, helpers = FALSE)
 source(file.path("dev", "examples", "new_API.R"))
 
 out_dir <- file.path("dev", "scripts", "scratch_outputs")
 if (!dir.exists(out_dir)) {
   dir.create(out_dir, recursive = TRUE)
 }
-out_file <- file.path(out_dir, "benchmark_speed.csv")
+out_file <- Sys.getenv("ACCUMULATR_BENCH_OUT", "")
+if (!nzchar(out_file)) {
+  out_file <- file.path(out_dir, "benchmark_speed.csv")
+}
 
 n_trials <- as.integer(Sys.getenv("ACCUMULATR_BENCH_TRIALS", "50"))
 if (!is.finite(n_trials) || n_trials < 1L) {

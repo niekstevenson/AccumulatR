@@ -340,11 +340,16 @@ The compiled math evaluator is still a node-schedule interpreter.
   so quadrature samples no longer walk source-value node IDs or call the generic
   source-node interpreter for every factor
 - source-product channels now own their source id, effective static source-view
-  relation where one exists, source kernel slot, direct leaf distribution kind,
-  required component mask, bounds, and condition cache ids; direct leaf channels
-  no longer call the generic source-channel plan evaluator
-- generic conditioned/onset/pool source-channel cases still go through
-  source-channel objects and cache checks
+  relation for every valid source, source kernel slot, direct leaf distribution
+  kind, required component mask, and bounds; `source_view_id == 0` means an
+  explicitly compiled `Unknown` relation, not inherited runtime structure
+- source-product integrals now own `CompiledMathSourceProductProgram` objects
+  for conditioned sources, exact gates, leaf-absolute kernels, onset
+  convolution, and pool k-of-n composition. The residual
+  `evaluate_source_product_channel_fill()` / `source_product_base_fill()` loader
+  API has been deleted.
+- source-product pool programs use compiled scratch offsets instead of allocating
+  member/prefix/suffix vectors during evaluation
 - cache layouts and condition ids are compiled, but cache-valid/evaluator/time
   checks still occur during evaluation
 - some workspace growth/checking remains through `ensure_size()` and time-slot
@@ -352,19 +357,27 @@ The compiled math evaluator is still a node-schedule interpreter.
 - quadrature still calls back into compiled roots instead of always using
   canonical closed forms when the plan can provide them
 
-The exact source-channel layer still has object dispatch and cache machinery.
+The old source-channel load path has been deleted.
 
-- source channels are evaluated through `ExactSourceChannels`
-- direct leaf-absolute eligibility is now partly compiled into
-  `CompiledSourceChannelPlan`, but source-channel condition/cache machinery is
-  still checked during evaluation
+- ordinary `SourcePdf`, `SourceCdf`, and `SourceSurvival` roots now carry a
+  compiled source arithmetic program id
+- those ordinary roots execute the same typed source arithmetic program machinery
+  used by source-product integrals
+- `SourceChannelLoad`, `CompiledSourceChannelPlan`,
+  `compiled_math_store_source_channels()`, `compiled_math_source_channels()`,
+  source-channel workspace arrays, and
+  `CompiledSourceView::source_channels_for_slot()` have been deleted
+- the remaining `ExactSourceChannels` object is now a runtime holder for loaded
+  leaf inputs, compiled source-view identity, direct-leaf availability, and
+  bound-time reads; it no longer owns the old source-channel evaluator/cache path
 - source-channel condition bounds are now compiled into
   `CompiledSourceBoundPlan` plus flat `CompiledSourceBoundTerm` spans; evaluation
   no longer walks condition fact arrays to discover exact/lower/upper bounds
 - source-view relations are now dense compiled `(source_view_id, source_id)`
   tables; source-channel evaluation no longer walks overlay relation views
-- source-channel plans are compiled, but the execution path is still layered
-  through source-channel objects, cache checks, and distribution calls
+- source-channel plans are compiled, but non-source-product compiled math loads
+  still execute through source-channel objects, cache checks, and distribution
+  calls
 
 The response-probability API now uses the same compiled observation plans, but
 it is not a hot-path API.
@@ -391,29 +404,52 @@ Latest accepted profiles:
   stopped owning vector-backed states. Allocator frames dropped from a dominant
   ranked cost to residual setup/reuse noise.
 - hard mixed profile
-  `dev/scripts/scratch_outputs/profile_hard_source_product_channel_mask_full.sample.txt`:
-  the old runtime discovery symbols are absent (`condition_has_fact`,
-  `resolve_source_bounds`, `compiled_math_condition_by_id`,
-  `exact_plan_supports_observation`) and the source-product specific
-  `compiled_math_store_source_factor_channels` frame is gone. The remaining top
-  frames are now the component-pruned direct leaf evaluator
-  (`standard_leaf_channels_mask`), distribution math (`Rf_pnorm_both`, `exp`,
-  `log`, `Rf_dlnorm`), and the still-generic source-product integral loop.
+  `dev/scripts/scratch_outputs/profile_source_view_materialized_pruned_hard.sample.txt`:
+  the old source-product loader symbols are absent
+  (`evaluate_source_product_channel_fill`,
+  `evaluate_source_product_conditioned_fill`, `source_product_base_fill`,
+  `load_source_product_base_fill`, `load_source_product_conditioned_fill`).
+  Source-product source-view inheritance symbols are also absent
+  (`source_product_relation`, `parent_source_view_id`).
+  The remaining source-product profile is the fused source-product integral
+  loop, direct leaf distribution math (`Rf_pnorm_both`, `Rf_plnorm`,
+  `Rf_dlnorm`, `log`, `exp`), and small compiled program frames such as
+  `compiled_math_source_product_program_conditioned_fill`.
 
 Latest accepted installed benchmark:
 
-- `dev/scripts/scratch_outputs/benchmark_speed_source_product_channel_mask_full.csv`
-- versus `benchmark_speed_final_dag_consolidation.csv`, geomean changed by about
-  -10.2%.
-- hard rows improved materially:
-  `example_6_dual_path` 2.670 ms -> 2.130 ms,
-  `example_16_guard_tie_simple` 6.690 ms -> 6.448 ms,
-  `stop_change_shared_trigger` 0.318 ms -> 0.258 ms,
-  `stim_selective_stop` 748 ms -> 558 ms.
-- cheap/simple rows were flat or faster in this run.
-- Direct uncached source-factor attempts without component pruning reduced some
-  profile frames but worsened the full benchmark, so they were removed. Profile
-  wins do not count if the full speed gate regresses.
+- `dev/scripts/scratch_outputs/benchmark_speed_source_arithmetic_cleanup_repeat.csv`
+- versus `benchmark_speed_source_product_arithmetic_program_rerun.csv`, the
+  clean rerun is effectively flat to slightly slower at benchmark granularity:
+  `example_6_dual_path` 1.310 ms -> 1.330 ms,
+  `example_16_guard_tie_simple` 4.120 ms -> 4.240 ms,
+  `stop_change_shared_trigger` 0.155 ms -> 0.155 ms,
+  `stim_selective_stop` 338 ms -> 345 ms.
+- simple rows are unchanged at timer granularity. This cleanup is accepted as an
+  architectural pruning step, not as a hard-case speed win. The small hard-row
+  slowdown is not explained by old source-channel dispatch, which is absent from
+  the profile; it is consistent with the remaining source-product/distribution
+  wall and benchmark noise at this granularity.
+
+Latest hard mixed profile:
+
+- `dev/scripts/scratch_outputs/profile_source_arithmetic_cleanup_hard.sample.txt`
+- workload:
+  `example_2_stop_mixture,example_6_dual_path,example_10_exclusion,example_16_guard_tie_simple,example_23_ranked_chain,stop_change_shared_trigger,stim_selective_stop`
+- old ordinary source-channel symbols are absent:
+  `SourceChannelLoad`, `compiled_math_store_source_channels`,
+  `compiled_math_source_channels`, `source_channels_for_slot`,
+  `evaluate_source_channel_plan_at`
+- top collapsed frames are now:
+  `compiled_math_source_product_direct_leaf_scalar` 47 samples,
+  `compiled_math_source_product_value_for_ops` 42,
+  `evaluate_compiled_source_product_integral_kernel` 42,
+  `Rf_pnorm_both` 40, `exp` 36, `log` 33, `Rf_dlnorm` 15,
+  `Rf_pnorm5` 15, and
+  `CompiledSourceChannels::compiled_source_bounds` 9.
+- conclusion: the requested old source-channel cleanup is real; the remaining
+  hard-case wall is source-product integral arithmetic, distribution kernels,
+  and small compiled bound/source-program frames.
 
 ## Required Pruning
 
@@ -558,9 +594,9 @@ Remaining work under this heading:
 
 ### D2. Compile Source-Channel Condition And Source-View Structure
 
-Current status: completed for source bounds, source-view relation lookup,
-condition-cache layouts, guard/expr upper-bound term lowering, and
-source-product channel component requirements.
+Current status: completed for source bounds, static source-view relation lookup,
+condition-cache layouts, guard/expr upper-bound term lowering, source-product
+channel component requirements, and source-product arithmetic lowering.
 
 Implemented:
 
@@ -585,14 +621,34 @@ Implemented:
   requested by a source-product channel; survival-only competitors no longer
   compute unused densities, and pdf-only factors no longer compute unused
   CDF/survival terms
+- source-product factors now reference a compiled
+  `CompiledMathSourceProductProgram`; conditioned lower/between/exact handling,
+  base exact gates, onset convolution, pool k-of-n composition, and direct leaf
+  kernels are represented as typed source-product program kinds
+- pool source-product programs own member program spans and compiled scratch
+  offsets; evaluation reuses workspace scratch instead of allocating DP vectors
+- the old source-product scalar loader/cache API has been deleted:
+  `evaluate_source_product_channel_fill()`,
+  `evaluate_source_product_conditioned_fill()`,
+  `source_product_base_fill()`, `load_source_product_base_fill()`, and
+  `load_source_product_conditioned_fill()` no longer exist
+- source-product relation-sensitive programs now carry a compiled final
+  source-view relation. `source_product_relation()` and the evaluator's
+  `parent_source_view_id` inheritance path have been deleted, and compile-time
+  validation rejects relation-sensitive source-product programs without a
+  materialized relation.
+- the unused source-product channel cache arrays and store helper were pruned;
+  source-product sample caching now uses only compiled program ids.
 
 Remaining work:
 
 - source-view evaluator objects still exist as cache/evaluator identities, though
   they now wrap a compiled source-view id rather than reconstructing overlays
-- source-channel cache/object checks remain visible, but the current hard profile
-  is much more dominated by the requested component math than by old
-  source-factor cache machinery
+- ordinary source roots still dispatch through the compiled math node interpreter
+  before entering the source arithmetic program
+- the source arithmetic program still has small program/cache/bounds frames; hard
+  profiles show these are residual compared with source-product integral work and
+  distribution kernels, but they are not zero
 
 ### E. Flatten Compiled Math Execution
 
@@ -1041,54 +1097,63 @@ Top-frame counts, before -> final:
     stim 927 -> 68
 
 Honest conclusion:
-  This achieves the requested source-product flattening target for direct
-  leaf-heavy hard cases. The source-product integral now owns source-channel
-  loads, static effective source-view context where valid, component
-  requirements, and leaf distribution kernel choice up front. The old generic
-  source-product lookup/sample frames disappear from hard profiles.
+  This achieves the requested source-product flattening target for the
+  source-product integral path. The source-product integral now owns
+  source-channel loads, final source-view relation data, component requirements,
+  source bounds, typed base source programs, and leaf distribution kernel choice
+  up front. The old generic source-product lookup/sample frames disappear from
+  hard profiles.
 
   This is still not pure math. The remaining top evaluator frame is
   evaluate_compiled_source_product_integral_kernel(), because the fused
   quadrature/product arithmetic now lives there. Generic source-product
-  conditioned/base/onset/pool cases no longer convert through EventChannels:
-  they use SourceProductScalarFill caches and scalar kernel evaluators. The
-  old source-product helpers load_source_product_conditioned_channel(),
-  evaluate_source_product_conditioned_channel(), and
-  source_product_fill_from_channels() are deleted. The remaining non-math
-  source-product frames are load_source_product_conditioned_fill(),
-  evaluate_source_product_conditioned_fill(), load_source_product_base_fill(),
-  and compute_source_product_base_fill(). Those are scalar, but they are still
-  evaluator/cache frames rather than a fully flattened native arithmetic kernel.
-  The mathematical wall is now clear: Rf_pnorm_both, Rf_dlnorm, Rf_pnorm5,
-  exp, and log are top frames in the hard profiles.
+  conditioned/base/onset/pool cases lower into
+  CompiledMathSourceProductProgram objects rather than EventChannels or residual
+  source-product loader functions. The remaining non-math source-product frames
+  are small compiled-program interpreter frames and cache fills. The
+  mathematical wall is now clear: Rf_pnorm_both, Rf_dlnorm, Rf_pnorm5, exp, and
+  log are top frames in the hard profiles.
 
-Latest residual source-product scalar-kernel cleanup:
-  Source-product generic channels now have scalar conditioned/base/onset/pool
-  kernels in src/eval/exact_source_channels.hpp. This removes the remaining
-  source-product EventChannels bridge for non-direct channels without changing
-  the non-source-product SourceChannelLoad API.
+Latest source-product arithmetic-program cleanup:
+  Source-product generic channels now lower into typed
+  CompiledMathSourceProductProgram objects. The old scalar residual loader API
+  in src/eval/exact_source_channels.hpp has been deleted; conditioned bounds,
+  exact gates, onset convolution, pool k-of-n composition, and direct leaf
+  kernels are evaluated from compiled program ids and workspace scratch.
 
-  Benchmark against benchmark_speed_source_product_scalar_program_final.csv:
+  Benchmark against benchmark_speed_source_product_scalar_generic_final.csv:
+    example_1_simple:             0.0100 ms ->   0.0100 ms
+    example_2_stop_mixture:       0.0650 ms ->   0.0700 ms
+    example_3_stop_na:            0.1100 ms ->   0.1150 ms
+    example_5_timeout_guess:      0.0200 ms ->   0.0200 ms
+    example_6_dual_path:          1.2700 ms ->   1.3300 ms
+    example_16_guard_tie_simple:  4.4600 ms ->   4.1400 ms
+    stop_change_shared_trigger:   0.1500 ms ->   0.1550 ms
+    stim_selective_stop:        347.0000 ms -> 343.0000 ms
+
+  Source-view materialization rerun against
+  benchmark_speed_source_product_arithmetic_program_rerun.csv:
     example_1_simple:             0.0100 ms ->   0.0100 ms
     example_2_stop_mixture:       0.0700 ms ->   0.0650 ms
-    example_3_stop_na:            0.1250 ms ->   0.1100 ms
+    example_3_stop_na:            0.1150 ms ->   0.1150 ms
     example_5_timeout_guess:      0.0200 ms ->   0.0200 ms
-    example_6_dual_path:          1.4050 ms ->   1.2700 ms
-    example_16_guard_tie_simple:  4.9512 ms ->   4.4600 ms
-    stop_change_shared_trigger:   0.1650 ms ->   0.1500 ms
-    stim_selective_stop:        381.0000 ms -> 347.0000 ms
+    example_6_dual_path:          1.3300 ms ->   1.3100 ms
+    example_16_guard_tie_simple:  4.1400 ms ->   4.1200 ms
+    stop_change_shared_trigger:   0.1550 ms ->   0.1550 ms
+    stim_selective_stop:        343.0000 ms -> 338.0000 ms
 
-  Profile artifacts:
-    profile_source_product_scalar_generic_hard.sample.txt
-    profile_source_product_scalar_generic_balanced.sample.txt
+  Profile artifact:
+    profile_source_view_materialized_pruned_hard.sample.txt
 
   Profile check:
-    evaluate_source_channel_plan_at, load_conditional_source,
-    load_source_product_conditioned_channel,
-    evaluate_source_product_conditioned_channel, and
-    source_product_fill_from_channels are absent from the source-product hard
-    profile. The residual scalar loader frames are visible only in the hard
-    profile and small relative to distribution/kernel work.
+    evaluate_source_product_channel_fill,
+    evaluate_source_product_conditioned_fill, source_product_base_fill,
+    load_source_product_base_fill, and load_source_product_conditioned_fill are
+    absent because those functions no longer exist. source_product_relation and
+    parent_source_view_id are absent too. Remaining source-product time is the
+    fused integral kernel, direct leaf distribution math, and small
+    compiled-program frames such as
+    compiled_math_source_product_program_conditioned_fill.
 ```
 
 The profile workload must match the change. Use simple workloads for simple

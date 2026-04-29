@@ -6192,123 +6192,291 @@ inline void compile_condition_cache_plans(CompiledMathProgram *program) {
   }
 }
 
-inline void compile_source_channel_plans(ExactVariantPlan *plan) {
+inline void compile_source_arithmetic_dependencies(ExactVariantPlan *plan) {
   auto &program = plan->compiled_math;
   compile_condition_cache_plans(&program);
   compile_source_condition_bound_plans(plan);
-  program.source_channel_plans.clear();
-  program.source_channel_plans.reserve(program.source_channel_keys.size());
-  for (std::size_t request_pos = 0;
-       request_pos < program.source_channel_keys.size();
-       ++request_pos) {
-    const auto &request = program.source_channel_keys[request_pos];
-    CompiledSourceChannelPlan channel_plan;
-    channel_plan.request = request;
-    if (request_pos < program.source_channel_required_channels.size() &&
-        program.source_channel_required_channels[request_pos] != 0U) {
-      channel_plan.required_channels =
-          program.source_channel_required_channels[request_pos];
-    }
-    if (request.source_id != semantic::kInvalidIndex &&
-        static_cast<std::size_t>(request.source_id) <
-            plan->source_kernels.size()) {
-      channel_plan.source_kernel_slot = request.source_id;
-      channel_plan.kernel =
-          plan->source_kernels[static_cast<std::size_t>(request.source_id)]
-              .kind;
-    }
-    channel_plan.bound_plan_slot =
-        compiled_source_bound_plan_slot(
-            program, request.condition_id, request.source_id);
-    if (channel_plan.bound_plan_slot != semantic::kInvalidIndex) {
-      channel_plan.bounds =
-          program.source_condition_bound_plans[
-              static_cast<std::size_t>(channel_plan.bound_plan_slot)];
-    }
-    channel_plan.has_source_condition_overlay =
-        channel_plan.bounds.has_condition_exact ||
-        channel_plan.bounds.has_condition_lower ||
-        channel_plan.bounds.has_condition_upper;
-    channel_plan.direct_leaf_absolute_candidate =
-        request.source_id != semantic::kInvalidIndex &&
-        channel_plan.source_kernel_slot != semantic::kInvalidIndex &&
-        channel_plan.kernel == CompiledSourceChannelKernelKind::LeafAbsolute &&
-        !channel_plan.has_source_condition_overlay;
-    const auto condition_pos =
-        request.condition_id == semantic::kInvalidIndex
-            ? static_cast<std::size_t>(0U)
-            : static_cast<std::size_t>(request.condition_id);
-    if (condition_pos < program.condition_cache_plans.size()) {
-      const auto &cache_plan = program.condition_cache_plans[condition_pos];
-      channel_plan.condition_time_dependencies =
-          cache_plan.time_dependencies;
-      channel_plan.condition_static_cache_id =
-          cache_plan.static_cache_id;
-      channel_plan.condition_cache_dynamic =
-          cache_plan.dynamic;
-    }
-    channel_plan.source_view_condition_static_cache_id =
-        channel_plan.direct_leaf_absolute_candidate
-            ? 0
-            : compiled_math_static_source_view_condition_cache_id(
-                  request.source_view_id,
-                  request.condition_id);
-    channel_plan.source_view_condition_cache_dynamic =
-        !channel_plan.direct_leaf_absolute_candidate &&
-        channel_plan.condition_cache_dynamic;
-    program.source_channel_plans.push_back(channel_plan);
+}
+
+inline const CompiledSourceBoundPlan &source_product_bound_plan_for(
+    const ExactVariantPlan &plan,
+    const semantic::Index condition_id,
+    const semantic::Index source_id);
+
+inline void compile_source_product_channel_fields(
+    ExactVariantPlan *plan,
+    CompiledMathSourceProductChannel *channel) {
+  if (channel == nullptr) {
+    return;
   }
+  if (channel->source_id != semantic::kInvalidIndex &&
+      static_cast<std::size_t>(channel->source_id) <
+          plan->source_kernels.size()) {
+    channel->source_kernel_slot = channel->source_id;
+    channel->kernel =
+        plan->source_kernels[static_cast<std::size_t>(channel->source_id)]
+            .kind;
+  }
+  if (channel->source_id != semantic::kInvalidIndex) {
+    channel->static_source_view_relation = static_cast<std::uint8_t>(
+        exact_compiled_source_view_relation(
+            *plan, channel->source_view_id, channel->source_id));
+    channel->has_static_source_view_relation = true;
+  }
+  if (channel->source_kernel_slot != semantic::kInvalidIndex &&
+      static_cast<std::size_t>(channel->source_kernel_slot) <
+          plan->source_kernels.size()) {
+    const auto &source_kernel =
+        plan->source_kernels[
+            static_cast<std::size_t>(channel->source_kernel_slot)];
+    channel->leaf_index = source_kernel.leaf_index;
+    if (channel->leaf_index != semantic::kInvalidIndex &&
+        static_cast<std::size_t>(channel->leaf_index) <
+            plan->lowered.program.leaf_descriptors.size()) {
+      const auto &leaf =
+          plan->lowered.program.leaf_descriptors[
+              static_cast<std::size_t>(channel->leaf_index)];
+      channel->leaf_dist_kind = leaf.dist_kind;
+      channel->leaf_param_count = leaf.param_count;
+      channel->leaf_onset_abs_value = leaf.onset_abs_value;
+    }
+  }
+  channel->bounds =
+      source_product_bound_plan_for(
+          *plan, channel->condition_id, channel->source_id);
+  channel->has_source_condition_overlay =
+      channel->bounds.has_condition_exact ||
+      channel->bounds.has_condition_lower ||
+      channel->bounds.has_condition_upper;
+  channel->direct_leaf_absolute_candidate =
+      channel->source_id != semantic::kInvalidIndex &&
+      channel->source_kernel_slot != semantic::kInvalidIndex &&
+      channel->kernel == CompiledSourceChannelKernelKind::LeafAbsolute &&
+      !channel->has_source_condition_overlay;
 }
 
 inline void compile_source_product_channel_programs(ExactVariantPlan *plan) {
   auto &program = plan->compiled_math;
   for (auto &channel : program.integral_kernel_source_product_channels) {
-    const auto slot = static_cast<std::size_t>(channel.source_channel_slot);
-    if (channel.source_channel_slot == semantic::kInvalidIndex ||
-        slot >= program.source_channel_plans.size()) {
-      continue;
-    }
-    const auto &channel_plan = program.source_channel_plans[slot];
-    channel.source_id = channel_plan.request.source_id;
-    channel.condition_id = channel_plan.request.condition_id;
-    channel.source_kernel_slot = channel_plan.source_kernel_slot;
-    channel.kernel = channel_plan.kernel;
-    if (channel.source_view_id != 0 &&
-        channel.source_view_id != semantic::kInvalidIndex &&
-        channel.source_id != semantic::kInvalidIndex) {
-      channel.static_source_view_relation = static_cast<std::uint8_t>(
-          exact_compiled_source_view_relation(
-              *plan, channel.source_view_id, channel.source_id));
-      channel.has_static_source_view_relation = true;
-    }
-    if (channel.source_kernel_slot != semantic::kInvalidIndex &&
-        static_cast<std::size_t>(channel.source_kernel_slot) <
-            plan->source_kernels.size()) {
-      const auto &source_kernel =
-          plan->source_kernels[
-              static_cast<std::size_t>(channel.source_kernel_slot)];
-      channel.leaf_index = source_kernel.leaf_index;
-      if (channel.leaf_index != semantic::kInvalidIndex &&
-          static_cast<std::size_t>(channel.leaf_index) <
-              plan->lowered.program.leaf_descriptors.size()) {
-        const auto &leaf =
-            plan->lowered.program.leaf_descriptors[
-                static_cast<std::size_t>(channel.leaf_index)];
-        channel.leaf_dist_kind = leaf.dist_kind;
-        channel.leaf_param_count = leaf.param_count;
-        channel.leaf_onset_abs_value = leaf.onset_abs_value;
-      }
-    }
-    channel.bounds = channel_plan.bounds;
-    channel.condition_time_dependencies =
-        channel_plan.condition_time_dependencies;
-    channel.condition_static_cache_id = channel_plan.condition_static_cache_id;
-    channel.direct_leaf_absolute_candidate =
-        channel_plan.direct_leaf_absolute_candidate;
-    channel.has_source_condition_overlay =
-        channel_plan.has_source_condition_overlay;
-    channel.condition_cache_dynamic = channel_plan.condition_cache_dynamic;
+    compile_source_product_channel_fields(plan, &channel);
   }
+}
+
+inline const CompiledSourceBoundPlan &source_product_bound_plan_for(
+    const ExactVariantPlan &plan,
+    const semantic::Index condition_id,
+    const semantic::Index source_id) {
+  static const CompiledSourceBoundPlan empty{};
+  const auto slot = compiled_source_bound_plan_slot(
+      plan.compiled_math, condition_id, source_id);
+  if (slot == semantic::kInvalidIndex ||
+      static_cast<std::size_t>(slot) >=
+          plan.compiled_math.source_condition_bound_plans.size()) {
+    return empty;
+  }
+  return plan.compiled_math.source_condition_bound_plans[
+      static_cast<std::size_t>(slot)];
+}
+
+inline semantic::Index push_source_product_program(
+    CompiledMathProgram *program,
+    CompiledMathSourceProductProgram source_program) {
+  const auto id = static_cast<semantic::Index>(
+      program->integral_kernel_source_product_programs.size());
+  program->integral_kernel_source_product_programs.push_back(
+      source_program);
+  return id;
+}
+
+inline semantic::Index compile_source_product_base_program(
+    ExactVariantPlan *plan,
+    const semantic::Index source_id,
+    const semantic::Index condition_id,
+    const semantic::Index source_view_id);
+
+inline semantic::Index compile_source_product_exact_gate_program(
+    ExactVariantPlan *plan,
+    const semantic::Index source_id,
+    const semantic::Index condition_id,
+    const semantic::Index source_view_id,
+    const semantic::Index child_program_id) {
+  CompiledMathSourceProductProgram source_program;
+  source_program.kind = CompiledMathSourceProductProgramKind::ExactGate;
+  source_program.source_id = source_id;
+  source_program.condition_id = condition_id;
+  source_program.source_view_id =
+      source_view_id == semantic::kInvalidIndex ? 0 : source_view_id;
+  source_program.child_program_id = child_program_id;
+  source_program.bounds =
+      source_product_bound_plan_for(*plan, condition_id, source_id);
+  if (source_id != semantic::kInvalidIndex) {
+    source_program.static_source_view_relation = static_cast<std::uint8_t>(
+        exact_compiled_source_view_relation(
+            *plan, source_program.source_view_id, source_id));
+    source_program.has_static_source_view_relation = true;
+  }
+  return push_source_product_program(&plan->compiled_math, source_program);
+}
+
+inline semantic::Index compile_source_product_leaf_program(
+    ExactVariantPlan *plan,
+    const ExactSourceKernel &kernel,
+    const semantic::Index condition_id,
+    const semantic::Index source_view_id) {
+  CompiledMathSourceProductProgram source_program;
+  source_program.kind = CompiledMathSourceProductProgramKind::LeafAbsolute;
+  source_program.source_id = kernel.source_id;
+  source_program.condition_id = condition_id;
+  source_program.source_view_id = source_view_id;
+  source_program.leaf_index = kernel.leaf_index;
+  if (kernel.leaf_index != semantic::kInvalidIndex &&
+      static_cast<std::size_t>(kernel.leaf_index) <
+          plan->lowered.program.leaf_descriptors.size()) {
+    const auto &leaf =
+        plan->lowered.program.leaf_descriptors[
+            static_cast<std::size_t>(kernel.leaf_index)];
+    source_program.leaf_dist_kind = leaf.dist_kind;
+    source_program.leaf_onset_abs_value = leaf.onset_abs_value;
+  }
+  const auto leaf_program_id =
+      push_source_product_program(&plan->compiled_math, source_program);
+  return compile_source_product_exact_gate_program(
+      plan, kernel.source_id, condition_id, source_view_id, leaf_program_id);
+}
+
+inline semantic::Index compile_source_product_onset_program(
+    ExactVariantPlan *plan,
+    const ExactSourceKernel &kernel,
+    const semantic::Index condition_id,
+    const semantic::Index source_view_id) {
+  CompiledMathSourceProductProgram source_program;
+  source_program.kind = CompiledMathSourceProductProgramKind::OnsetConvolution;
+  source_program.source_id = kernel.source_id;
+  source_program.condition_id = condition_id;
+  source_program.source_view_id = source_view_id;
+  source_program.leaf_index = kernel.leaf_index;
+  source_program.onset_source_program_id =
+      compile_source_product_base_program(
+          plan, kernel.onset_source_id, condition_id, source_view_id);
+  source_program.onset_bounds =
+      source_product_bound_plan_for(
+          *plan, condition_id, kernel.onset_source_id);
+  if (kernel.leaf_index != semantic::kInvalidIndex &&
+      static_cast<std::size_t>(kernel.leaf_index) <
+          plan->lowered.program.leaf_descriptors.size()) {
+    const auto &leaf =
+        plan->lowered.program.leaf_descriptors[
+            static_cast<std::size_t>(kernel.leaf_index)];
+    source_program.leaf_dist_kind = leaf.dist_kind;
+    source_program.leaf_onset_lag = leaf.onset_lag;
+  }
+  const auto onset_program_id =
+      push_source_product_program(&plan->compiled_math, source_program);
+  return compile_source_product_exact_gate_program(
+      plan, kernel.source_id, condition_id, source_view_id, onset_program_id);
+}
+
+inline semantic::Index compile_source_product_pool_program(
+    ExactVariantPlan *plan,
+    const ExactSourceKernel &kernel,
+    const semantic::Index condition_id,
+    const semantic::Index source_view_id) {
+  auto &program = plan->compiled_math;
+  CompiledMathSourceProductProgram source_program;
+  source_program.kind = CompiledMathSourceProductProgramKind::PoolKOfN;
+  source_program.source_id = kernel.source_id;
+  source_program.condition_id = condition_id;
+  source_program.source_view_id = source_view_id;
+  source_program.pool_k = kernel.pool_k;
+  const auto member_offset = static_cast<semantic::Index>(
+      program.integral_kernel_source_product_program_members.size());
+  const auto member_end = kernel.pool_member_offset + kernel.pool_member_count;
+  for (semantic::Index i = kernel.pool_member_offset; i < member_end; ++i) {
+    const auto member_source =
+        plan->lowered.program.pool_member_source_ids[
+            static_cast<std::size_t>(i)];
+    program.integral_kernel_source_product_program_members.push_back(
+        compile_source_product_base_program(
+            plan, member_source, condition_id, source_view_id));
+  }
+  source_program.member_programs = CompiledMathIndexSpan{
+      member_offset,
+      kernel.pool_member_count};
+  const auto member_count =
+      static_cast<semantic::Index>(kernel.pool_member_count);
+  const auto width = member_count + 1;
+  const auto table_size = width * width;
+  source_program.source_product_scratch_offset =
+      program.integral_kernel_source_product_scratch_size;
+  source_program.source_product_scratch_size =
+      3 * member_count + 2 * table_size;
+  program.integral_kernel_source_product_scratch_size +=
+      source_program.source_product_scratch_size;
+  const auto pool_program_id =
+      push_source_product_program(&program, source_program);
+  return compile_source_product_exact_gate_program(
+      plan, kernel.source_id, condition_id, source_view_id, pool_program_id);
+}
+
+inline semantic::Index compile_source_product_base_program(
+    ExactVariantPlan *plan,
+    const semantic::Index source_id,
+    const semantic::Index condition_id,
+    const semantic::Index source_view_id) {
+  if (source_id == semantic::kInvalidIndex ||
+      static_cast<std::size_t>(source_id) >= plan->source_kernels.size()) {
+    CompiledMathSourceProductProgram source_program;
+    source_program.kind = CompiledMathSourceProductProgramKind::ConstantZero;
+    return push_source_product_program(&plan->compiled_math, source_program);
+  }
+  const auto &kernel =
+      plan->source_kernels[static_cast<std::size_t>(source_id)];
+  switch (kernel.kind) {
+  case CompiledSourceChannelKernelKind::LeafAbsolute:
+    return compile_source_product_leaf_program(
+        plan, kernel, condition_id, source_view_id);
+  case CompiledSourceChannelKernelKind::LeafOnsetConvolution:
+    return compile_source_product_onset_program(
+        plan, kernel, condition_id, source_view_id);
+  case CompiledSourceChannelKernelKind::PoolKOfN:
+    return compile_source_product_pool_program(
+        plan, kernel, condition_id, source_view_id);
+  case CompiledSourceChannelKernelKind::Invalid:
+    break;
+  }
+  CompiledMathSourceProductProgram source_program;
+  source_program.kind = CompiledMathSourceProductProgramKind::ConstantZero;
+  return push_source_product_program(&plan->compiled_math, source_program);
+}
+
+inline semantic::Index compile_source_product_channel_program(
+    ExactVariantPlan *plan,
+    CompiledMathSourceProductChannel *channel) {
+  if (channel->source_product_program_id != semantic::kInvalidIndex) {
+    return channel->source_product_program_id;
+  }
+  const auto child_program_id =
+      compile_source_product_base_program(
+          plan,
+          channel->source_id,
+          channel->condition_id,
+          channel->source_view_id);
+  CompiledMathSourceProductProgram source_program;
+  source_program.kind = CompiledMathSourceProductProgramKind::Conditioned;
+  source_program.source_id = channel->source_id;
+  source_program.condition_id = channel->condition_id;
+  source_program.time_id = channel->time_id;
+  source_program.time_cap_id = channel->time_cap_id;
+  source_program.source_view_id = channel->source_view_id;
+  source_program.child_program_id = child_program_id;
+  source_program.bounds = channel->bounds;
+  source_program.static_source_view_relation =
+      channel->static_source_view_relation;
+  source_program.has_static_source_view_relation =
+      channel->has_static_source_view_relation;
+  channel->source_product_program_id =
+      push_source_product_program(&plan->compiled_math, source_program);
+  return channel->source_product_program_id;
 }
 
 inline CompiledMathSourceProductOpKind source_product_generic_op_kind(
@@ -6453,8 +6621,9 @@ inline std::uint8_t source_product_op_fill_mask(
 }
 
 inline CompiledMathIndexSpan compile_source_product_ops_for_factor_span(
-    CompiledMathProgram *program,
+    ExactVariantPlan *plan,
     const CompiledMathIndexSpan factors) {
+  auto *program = &plan->compiled_math;
   const auto offset = static_cast<semantic::Index>(
       program->integral_kernel_source_product_ops.size());
   for (semantic::Index i = 0; i < factors.size; ++i) {
@@ -6474,6 +6643,7 @@ inline CompiledMathIndexSpan compile_source_product_ops_for_factor_span(
           CompiledMathSourceProductOp{
               kind,
               semantic::kInvalidIndex,
+              semantic::kInvalidIndex,
               0U,
               0U,
               0.0});
@@ -6484,17 +6654,24 @@ inline CompiledMathIndexSpan compile_source_product_ops_for_factor_span(
     }
     const auto value_mask =
         compiled_math_source_product_op_channel_mask(kind);
+    const auto fill_mask =
+        static_cast<std::uint8_t>(
+            value_mask == 0U
+                ? 0U
+                : source_product_op_fill_mask(channel, kind));
     program->integral_kernel_source_product_channels[channel_pos]
         .scalar_op_count++;
+    const auto program_id =
+        compile_source_product_channel_program(
+            plan,
+            &program->integral_kernel_source_product_channels[channel_pos]);
     program->integral_kernel_source_product_ops.push_back(
         CompiledMathSourceProductOp{
             kind,
             factor.source_product_channel_id,
+            program_id,
             value_mask,
-            static_cast<std::uint8_t>(
-                value_mask == 0U
-                    ? 0U
-                    : source_product_op_fill_mask(channel, kind)),
+            fill_mask,
             kind == CompiledMathSourceProductOpKind::ConstantOne ? 1.0 : 0.0});
   }
   return CompiledMathIndexSpan{
@@ -6507,14 +6684,18 @@ inline CompiledMathIndexSpan compile_source_product_ops_for_factor_span(
 inline void compile_source_product_scalar_ops(ExactVariantPlan *plan) {
   auto &program = plan->compiled_math;
   program.integral_kernel_source_product_ops.clear();
+  program.integral_kernel_source_product_programs.clear();
+  program.integral_kernel_source_product_program_members.clear();
+  program.integral_kernel_source_product_scratch_size = 0;
   for (auto &channel : program.integral_kernel_source_product_channels) {
     channel.scalar_op_count = 0;
+    channel.source_product_program_id = semantic::kInvalidIndex;
   }
   for (auto &kernel : program.integral_kernels) {
     if (kernel.kind == CompiledMathIntegralKernelKind::SourceProduct) {
       kernel.source_product_ops =
           compile_source_product_ops_for_factor_span(
-              &program, kernel.source_value_factors);
+              plan, kernel.source_value_factors);
       continue;
     }
     for (semantic::Index i = 0; i < kernel.source_product_terms.size; ++i) {
@@ -6524,7 +6705,7 @@ inline void compile_source_product_scalar_ops(ExactVariantPlan *plan) {
                   kernel.source_product_terms.offset + i)];
       term.source_product_ops =
           compile_source_product_ops_for_factor_span(
-              &program, term.source_value_factors);
+              plan, term.source_value_factors);
     }
   }
   for (auto &op : program.integral_kernel_source_product_ops) {
@@ -6535,8 +6716,146 @@ inline void compile_source_product_scalar_ops(ExactVariantPlan *plan) {
     const auto &channel =
         program.integral_kernel_source_product_channels[
             static_cast<std::size_t>(op.source_product_channel_id)];
-    op.cache_result = channel.scalar_op_count > 1 ||
-                      op.fill_channel_mask != op.value_channel_mask;
+    op.cache_result = op.source_product_program_id != semantic::kInvalidIndex &&
+                      (channel.scalar_op_count > 1 ||
+                      op.fill_channel_mask != op.value_channel_mask);
+  }
+}
+
+struct SourceArithmeticNodeProgramKey {
+  semantic::Index source_id{semantic::kInvalidIndex};
+  semantic::Index condition_id{0};
+  semantic::Index source_view_id{0};
+  semantic::Index time_id{0};
+  semantic::Index time_cap_id{semantic::kInvalidIndex};
+
+  bool operator==(const SourceArithmeticNodeProgramKey &other) const noexcept {
+    return source_id == other.source_id &&
+           condition_id == other.condition_id &&
+           source_view_id == other.source_view_id &&
+           time_id == other.time_id &&
+           time_cap_id == other.time_cap_id;
+  }
+};
+
+struct SourceArithmeticNodeProgramKeyHash {
+  std::size_t operator()(const SourceArithmeticNodeProgramKey &key) const
+      noexcept {
+    std::size_t seed = static_cast<std::size_t>(key.source_id);
+    hash_combine(&seed, static_cast<std::size_t>(key.condition_id));
+    hash_combine(&seed, static_cast<std::size_t>(key.source_view_id));
+    hash_combine(&seed, static_cast<std::size_t>(key.time_id));
+    hash_combine(&seed, static_cast<std::size_t>(key.time_cap_id));
+    return seed;
+  }
+
+private:
+  static void hash_combine(std::size_t *seed, const std::size_t value) noexcept {
+    *seed ^= value + 0x9e3779b97f4a7c15ULL + (*seed << 6U) + (*seed >> 2U);
+  }
+};
+
+inline semantic::Index compile_source_node_program(
+    ExactVariantPlan *plan,
+    const CompiledMathNode &node) {
+  CompiledMathSourceProductChannel channel;
+  channel.source_id = node.subject_id;
+  channel.condition_id = node.condition_id;
+  channel.source_view_id =
+      node.source_view_id == semantic::kInvalidIndex ? 0 : node.source_view_id;
+  channel.time_id = node.time_id;
+  channel.time_cap_id = node.aux_id;
+  channel.required_channels =
+      compiled_math_source_factor_channel_mask(node.kind);
+  compile_source_product_channel_fields(plan, &channel);
+  return compile_source_product_channel_program(plan, &channel);
+}
+
+inline void compile_source_node_programs(ExactVariantPlan *plan) {
+  auto &program = plan->compiled_math;
+  std::unordered_map<
+      SourceArithmeticNodeProgramKey,
+      semantic::Index,
+      SourceArithmeticNodeProgramKeyHash>
+      program_index;
+  for (auto &node : program.nodes) {
+    if (!compiled_math_is_source_value_node(node.kind)) {
+      continue;
+    }
+    SourceArithmeticNodeProgramKey key;
+    key.source_id = node.subject_id;
+    key.condition_id = node.condition_id;
+    key.source_view_id =
+        node.source_view_id == semantic::kInvalidIndex ? 0 : node.source_view_id;
+    key.time_id = node.time_id;
+    key.time_cap_id = node.aux_id;
+    const auto found = program_index.find(key);
+    if (found != program_index.end()) {
+      node.source_program_id = found->second;
+      continue;
+    }
+    const auto program_id = compile_source_node_program(plan, node);
+    program_index.emplace(key, program_id);
+    node.source_program_id = program_id;
+  }
+}
+
+inline void validate_source_product_relations_materialized(
+    const CompiledMathProgram &program) {
+  for (std::size_t i = 0;
+       i < program.integral_kernel_source_product_channels.size();
+       ++i) {
+    const auto &channel = program.integral_kernel_source_product_channels[i];
+    if (channel.source_id != semantic::kInvalidIndex &&
+        !channel.has_static_source_view_relation) {
+      throw std::runtime_error(
+          "source-product channel " + std::to_string(i) +
+          " has no compiled source-view relation");
+    }
+  }
+  for (std::size_t i = 0;
+       i < program.integral_kernel_source_product_programs.size();
+       ++i) {
+    const auto &source_program =
+        program.integral_kernel_source_product_programs[i];
+    const bool relation_sensitive =
+        source_program.kind ==
+            CompiledMathSourceProductProgramKind::Conditioned ||
+        source_program.kind ==
+            CompiledMathSourceProductProgramKind::ExactGate;
+    if (relation_sensitive &&
+        source_program.source_id != semantic::kInvalidIndex &&
+        !source_program.has_static_source_view_relation) {
+      throw std::runtime_error(
+          "source-product program " + std::to_string(i) +
+          " has no compiled source-view relation");
+    }
+  }
+  for (std::size_t i = 0;
+       i < program.integral_kernel_source_product_ops.size();
+       ++i) {
+    const auto &op = program.integral_kernel_source_product_ops[i];
+    if (op.value_channel_mask != 0U &&
+        (op.source_product_program_id == semantic::kInvalidIndex ||
+         static_cast<std::size_t>(op.source_product_program_id) >=
+             program.integral_kernel_source_product_programs.size())) {
+      throw std::runtime_error(
+          "source-product op " + std::to_string(i) +
+          " has no compiled source-product program");
+    }
+  }
+  for (std::size_t i = 0; i < program.nodes.size(); ++i) {
+    const auto &node = program.nodes[i];
+    if (!compiled_math_is_source_value_node(node.kind)) {
+      continue;
+    }
+    if (node.source_program_id == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(node.source_program_id) >=
+            program.integral_kernel_source_product_programs.size()) {
+      throw std::runtime_error(
+          "source node " + std::to_string(i) +
+          " has no compiled source arithmetic program");
+    }
   }
 }
 
@@ -6759,10 +7078,12 @@ inline ExactVariantPlan make_exact_variant_plan(
   }
   compile_sequence_expr_upper_bound_roots(&plan);
   plan.runtime = compile_exact_runtime_plan(&plan);
-  compile_source_channel_plans(&plan);
+  compile_source_arithmetic_dependencies(&plan);
   compile_source_view_relation_tables(&plan);
   compile_source_product_channel_programs(&plan);
   compile_source_product_scalar_ops(&plan);
+  compile_source_node_programs(&plan);
+  validate_source_product_relations_materialized(plan.compiled_math);
   plan.simple_race = compile_simple_race_plan(plan);
   plan.probability_programs = compile_exact_probability_programs(plan);
   validate_compiled_math_has_no_interpreter_expr_nodes(plan.compiled_math);

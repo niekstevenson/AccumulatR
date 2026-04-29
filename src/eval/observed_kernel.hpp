@@ -3,9 +3,12 @@
 #include <Rcpp.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "eval_query.hpp"
@@ -153,6 +156,136 @@ struct TrialComponentChoice {
   semantic::Index component_code{semantic::kInvalidIndex};
   double weight{0.0};
 };
+
+inline bool param_leaf_blocks_equal(SEXP paramsSEXP,
+                                    const int lhs_first_row,
+                                    const int rhs_first_row,
+                                    const std::size_t row_count) {
+  if (lhs_first_row == rhs_first_row) {
+    return true;
+  }
+  if (lhs_first_row < 0 || rhs_first_row < 0) {
+    return false;
+  }
+  const int nrow = Rf_nrows(paramsSEXP);
+  const int ncol = Rf_ncols(paramsSEXP);
+  if (lhs_first_row + static_cast<int>(row_count) > nrow ||
+      rhs_first_row + static_cast<int>(row_count) > nrow) {
+    return false;
+  }
+  const double *base = REAL(paramsSEXP);
+  for (int col = 0; col < ncol; ++col) {
+    const auto col_offset = static_cast<R_xlen_t>(col) * nrow;
+    for (std::size_t i = 0; i < row_count; ++i) {
+      const auto row_delta = static_cast<R_xlen_t>(i);
+      const double lhs =
+          base[col_offset + static_cast<R_xlen_t>(lhs_first_row) + row_delta];
+      const double rhs =
+          base[col_offset + static_cast<R_xlen_t>(rhs_first_row) + row_delta];
+      if (lhs != rhs) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+inline std::uint64_t param_leaf_block_hash(SEXP paramsSEXP,
+                                           const int first_row,
+                                           const std::size_t row_count) {
+  if (first_row < 0) {
+    return 0U;
+  }
+  const int nrow = Rf_nrows(paramsSEXP);
+  const int ncol = Rf_ncols(paramsSEXP);
+  if (first_row + static_cast<int>(row_count) > nrow) {
+    return 0U;
+  }
+  constexpr std::uint64_t kFnvOffset = 1469598103934665603ULL;
+  constexpr std::uint64_t kFnvPrime = 1099511628211ULL;
+  std::uint64_t hash = kFnvOffset;
+  const double *base = REAL(paramsSEXP);
+  for (int col = 0; col < ncol; ++col) {
+    const auto col_offset = static_cast<R_xlen_t>(col) * nrow;
+    for (std::size_t i = 0; i < row_count; ++i) {
+      double value =
+          base[col_offset + static_cast<R_xlen_t>(first_row) +
+               static_cast<R_xlen_t>(i)];
+      if (value == 0.0) {
+        value = 0.0;
+      }
+      std::uint64_t bits = 0U;
+      std::memcpy(&bits, &value, sizeof(bits));
+      hash ^= bits;
+      hash *= kFnvPrime;
+    }
+  }
+  return hash;
+}
+
+struct RtFreeObservationPlanCacheKey {
+  semantic::Index component_code{semantic::kInvalidIndex};
+  semantic::Index variant_index{semantic::kInvalidIndex};
+  semantic::Index state_code{semantic::kInvalidIndex};
+  std::size_t leaf_count{0U};
+  std::uint64_t param_hash{0U};
+
+  bool operator==(const RtFreeObservationPlanCacheKey &other) const noexcept {
+    return component_code == other.component_code &&
+           variant_index == other.variant_index &&
+           state_code == other.state_code &&
+           leaf_count == other.leaf_count &&
+           param_hash == other.param_hash;
+  }
+};
+
+struct RtFreeObservationPlanCacheKeyHash {
+  std::size_t operator()(const RtFreeObservationPlanCacheKey &key) const noexcept {
+    std::uint64_t hash = 1469598103934665603ULL;
+    auto mix = [&](const std::uint64_t value) {
+      hash ^= value;
+      hash *= 1099511628211ULL;
+    };
+    mix(static_cast<std::uint64_t>(key.component_code));
+    mix(static_cast<std::uint64_t>(key.variant_index));
+    mix(static_cast<std::uint64_t>(key.state_code));
+    mix(static_cast<std::uint64_t>(key.leaf_count));
+    mix(key.param_hash);
+    return static_cast<std::size_t>(hash);
+  }
+};
+
+struct RtFreeObservationPlanCacheEntry {
+  int first_param_row{0};
+  double value{0.0};
+};
+
+inline bool rt_free_observation_cache_lookup(
+    const std::unordered_map<
+        RtFreeObservationPlanCacheKey,
+        std::vector<RtFreeObservationPlanCacheEntry>,
+        RtFreeObservationPlanCacheKeyHash> &cache,
+    SEXP paramsSEXP,
+    const RtFreeObservationPlanCacheKey &key,
+    const int first_param_row,
+    double *value) {
+  const auto found = cache.find(key);
+  if (found == cache.end()) {
+    return false;
+  }
+  for (const auto &entry : found->second) {
+    if (!param_leaf_blocks_equal(
+            paramsSEXP,
+            entry.first_param_row,
+            first_param_row,
+            key.leaf_count)) {
+      continue;
+    }
+    *value = entry.value;
+    return true;
+  }
+  return false;
+}
 
 inline std::vector<TrialComponentChoice> resolve_trial_components(
     const std::vector<ComponentObservationPlan> &component_plans_by_code,
@@ -513,6 +646,10 @@ inline SEXP evaluate_observed_trials_cached(
   ExactStepWorkspacePool workspace_pool(exact_plans.size());
   std::vector<double> trial_values;
   std::vector<double> plan_values;
+  std::unordered_map<
+      RtFreeObservationPlanCacheKey,
+      std::vector<RtFreeObservationPlanCacheEntry>,
+      RtFreeObservationPlanCacheKeyHash> rt_free_plan_cache;
 
   for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
     const auto &span = layout.spans[trial_index];
@@ -569,26 +706,56 @@ inline SEXP evaluate_observed_trials_cached(
 
       const int *row_map_ptr = nullptr;
       int row_offset = 0;
+      const auto &exact_plan =
+          exact_plans[static_cast<std::size_t>(variant_index)];
+      const auto leaf_count =
+          static_cast<std::size_t>(exact_plan.lowered.program.layout.n_leaves);
       if (latent_trial) {
         const auto &leaf_offsets =
-            exact_plans[static_cast<std::size_t>(variant_index)]
-                .leaf_row_offsets;
+            exact_plan.leaf_row_offsets;
         row_map_ptr = leaf_offsets.data();
         row_offset = static_cast<int>(span.start_row);
       }
-      const double value = evaluate_observation_plan_direct(
-          exact_plans,
-          layout,
-          paramsSEXP,
-          plan,
-          static_cast<semantic::Index>(trial_index),
+      const bool cacheable_rt_free_plan =
+          row_map_ptr == nullptr && !std::isfinite(plan_rt);
+      const int first_param_row = static_cast<int>(span.start_row);
+      const auto cache_key = RtFreeObservationPlanCacheKey{
+          choice.component_code,
           variant_index,
-          plan_rt,
-          min_ll,
-          row_map_ptr,
-          row_offset,
-          &workspace_pool,
-          &plan_values);
+          state_code,
+          leaf_count,
+          cacheable_rt_free_plan
+              ? param_leaf_block_hash(paramsSEXP, first_param_row, leaf_count)
+              : 0U};
+      double value = 0.0;
+      bool cache_hit = false;
+      if (cacheable_rt_free_plan) {
+        cache_hit = rt_free_observation_cache_lookup(
+            rt_free_plan_cache,
+            paramsSEXP,
+            cache_key,
+            first_param_row,
+            &value);
+      }
+      if (!cache_hit) {
+        value = evaluate_observation_plan_direct(
+            exact_plans,
+            layout,
+            paramsSEXP,
+            plan,
+            static_cast<semantic::Index>(trial_index),
+            variant_index,
+            plan_rt,
+            min_ll,
+            row_map_ptr,
+            row_offset,
+            &workspace_pool,
+            &plan_values);
+        if (cacheable_rt_free_plan && std::isfinite(value)) {
+          rt_free_plan_cache[cache_key].push_back(
+              RtFreeObservationPlanCacheEntry{first_param_row, value});
+        }
+      }
       if (std::isfinite(value) && choice.weight > 0.0) {
         trial_values.push_back(std::log(choice.weight) + value);
       }

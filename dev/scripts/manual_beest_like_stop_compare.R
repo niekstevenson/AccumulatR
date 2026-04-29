@@ -47,7 +47,7 @@ stop_selective_model <- function() {
 }
 
 stop_selective_params <- c(
-  m_go = log(0.30), s_go = 0.18, t0_go = 0.00,
+  m_go = log(0.30), s_go = 0.18, t0_go = 0.05,
   S1.m = log(0.26), S1.s = 0.18, S1.q = 0.00, S1.t0 = 0.00,
   IS.m = log(0.35), IS.s = 0.18, IS.q = 0.00, IS.t0 = 0.00,
   S2.m = log(0.32), S2.s = 0.18, S2.q = 0.00, S2.t0 = 0.00
@@ -71,13 +71,6 @@ acc_parts <- function(prefix, params) {
   )
 }
 
-trapz <- function(x, y) {
-  if (length(x) < 2L) {
-    return(0.0)
-  }
-  sum(diff(x) * (head(y, -1L) + tail(y, -1L))) / 2.0
-}
-
 acc_pdf <- function(t, p) {
   out <- numeric(length(t))
   ok <- is.finite(t) & t >= p$t0
@@ -98,19 +91,42 @@ acc_survival <- function(t, p) {
   1.0 - acc_cdf(t, p)
 }
 
+integrate_vec <- function(fn,
+                          lower,
+                          upper,
+                          rel_tol = 1e-10,
+                          abs_tol = 1e-12,
+                          subdivisions = 400L) {
+  if (is.finite(upper) && upper <= lower) {
+    return(0.0)
+  }
+  integrate(
+    function(x) {
+      y <- fn(x)
+      y[!is.finite(y)] <- 0.0
+      y
+    },
+    lower = lower,
+    upper = upper,
+    rel.tol = rel_tol,
+    abs.tol = abs_tol,
+    subdivisions = subdivisions,
+    stop.on.error = FALSE
+  )$value
+}
+
 ignore_pdf <- function(t, is_par, s2_par) {
   acc_pdf(t, is_par) * acc_survival(t, s2_par)
 }
 
-ignore_cdf <- function(t, is_par, s2_par, grid_n = 500L) {
+ignore_cdf <- function(t, is_par, s2_par) {
   if (!is.finite(t) || t <= 0.0) {
     return(0.0)
   }
-  x <- seq(0.0, t, length.out = grid_n)
-  trapz(x, ignore_pdf(x, is_par, s2_par))
+  integrate_vec(function(x) ignore_pdf(x, is_par, s2_par), 0.0, t)
 }
 
-# Manual BEEST-like reduction used here:
+# Validated stimulus-selective stop reduction:
 # - before S1, the stop component behaves like a standard A/B go race
 # - after S1, the ignore branch is represented by a latent process H with
 #   density h(t) = f_IS(t) * S_S2(t)
@@ -119,11 +135,7 @@ ignore_cdf <- function(t, is_par, s2_par, grid_n = 500L) {
 #   h(t) * ∫_0^t f_A(a) * S_B(a) * F_S1(a) da
 # - B is symmetric
 #
-# This is intentionally written out by hand in R. The comparison below shows
-# where it agrees with the engine and where it does not.
-manual_beest_like_density <- function(component, response, rt, params,
-                                      inner_grid_n = 500L,
-                                      ignore_grid_n = 500L) {
+manual_beest_like_density <- function(component, response, rt, params) {
   go_a <- go_parts(params)
   go_b <- go_parts(params)
   s1 <- acc_parts("S1", params)
@@ -144,7 +156,7 @@ manual_beest_like_density <- function(component, response, rt, params,
   competitor <- if (identical(response, "A")) go_b else go_a
 
   h_t <- ignore_pdf(rt, is_par, s2)
-  H_t <- ignore_cdf(rt, is_par, s2, grid_n = ignore_grid_n)
+  H_t <- ignore_cdf(rt, is_par, s2)
   base <- acc_pdf(rt, target) * acc_survival(rt, competitor) *
     (acc_survival(rt, s1) + acc_cdf(rt, s1) * H_t)
 
@@ -152,68 +164,66 @@ manual_beest_like_density <- function(component, response, rt, params,
     return(base)
   }
 
-  a_grid <- seq(0.0, rt, length.out = inner_grid_n)
-  inner <- acc_pdf(a_grid, target) *
-    acc_survival(a_grid, competitor) *
-    acc_cdf(a_grid, s1)
+  inner <- integrate_vec(
+    function(t) {
+      acc_pdf(t, target) *
+        acc_survival(t, competitor) *
+        acc_cdf(t, s1)
+    },
+    0.0,
+    rt
+  )
 
-  base + h_t * trapz(a_grid, inner)
+  base + h_t * inner
 }
 
-manual_beest_like_mass <- function(component, params,
-                                   outer_upper = 2.0,
-                                   outer_grid_n = 800L,
-                                   inner_grid_n = 300L,
-                                   ignore_grid_n = 300L) {
-  t_grid <- seq(0.0, outer_upper, length.out = outer_grid_n)
+manual_beest_like_visible_probability <- function(target, competitor, s1,
+                                                  is_par, s2) {
+  early <- integrate_vec(
+    function(t) {
+      acc_pdf(t, target) *
+        acc_survival(t, competitor) *
+        acc_survival(t, s1)
+    },
+    0.0,
+    Inf
+  )
+  ignore_mass <- integrate_vec(function(t) ignore_pdf(t, is_par, s2), 0.0, Inf)
+  late_target <- integrate_vec(
+    function(t) {
+      acc_pdf(t, target) *
+        acc_survival(t, competitor) *
+        acc_cdf(t, s1)
+    },
+    0.0,
+    Inf
+  )
+  early + ignore_mass * late_target
+}
+
+manual_beest_like_mass <- function(component, params) {
+  go_a <- go_parts(params)
+  go_b <- go_parts(params)
+  s1 <- acc_parts("S1", params)
+  is_par <- acc_parts("IS", params)
+  s2 <- acc_parts("S2", params)
+
   if (component == "go") {
-    p_a <- trapz(
-      t_grid,
-      vapply(
-        t_grid,
-        function(tt) manual_beest_like_density("go", "A", tt, params),
-        numeric(1)
-      )
+    p_a <- integrate_vec(
+      function(t) acc_pdf(t, go_a) * acc_survival(t, go_b),
+      0.0,
+      Inf
     )
-    p_b <- trapz(
-      t_grid,
-      vapply(
-        t_grid,
-        function(tt) manual_beest_like_density("go", "B", tt, params),
-        numeric(1)
-      )
+    p_b <- integrate_vec(
+      function(t) acc_pdf(t, go_b) * acc_survival(t, go_a),
+      0.0,
+      Inf
     )
     return(max(0.0, 1.0 - p_a - p_b))
   }
 
-  p_a <- trapz(
-    t_grid,
-    vapply(
-      t_grid,
-      function(tt) {
-        manual_beest_like_density(
-          "stop", "A", tt, params,
-          inner_grid_n = inner_grid_n,
-          ignore_grid_n = ignore_grid_n
-        )
-      },
-      numeric(1)
-    )
-  )
-  p_b <- trapz(
-    t_grid,
-    vapply(
-      t_grid,
-      function(tt) {
-        manual_beest_like_density(
-          "stop", "B", tt, params,
-          inner_grid_n = inner_grid_n,
-          ignore_grid_n = ignore_grid_n
-        )
-      },
-      numeric(1)
-    )
-  )
+  p_a <- manual_beest_like_visible_probability(go_a, go_b, s1, is_par, s2)
+  p_b <- manual_beest_like_visible_probability(go_b, go_a, s1, is_par, s2)
   max(0.0, 1.0 - p_a - p_b)
 }
 

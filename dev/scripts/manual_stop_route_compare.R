@@ -35,186 +35,120 @@ stop_model <- race_spec() |>
   finalize_model()
 
 stop_params <- c(
-  m_go = log(0.30), s_go = 0.18, t0_go = 0.00,
+  m_go = log(0.30), s_go = 0.18, t0_go = 0.05,
   S1.m = log(0.26), S1.s = 0.18, S1.q = 0.00, S1.t0 = 0.00,
   IS.m = log(0.35), IS.s = 0.18, IS.q = 0.00, IS.t0 = 0.00,
   S2.m = log(0.32), S2.s = 0.18, S2.q = 0.00, S2.t0 = 0.00
 )
 
-# Primitive accumulator parameters used by the hand derivation.
 go_a <- go_parts(stop_params)
 go_b <- go_parts(stop_params)
 s1_par <- acc_parts("S1", stop_params)
 is_par <- acc_parts("IS", stop_params)
 s2_par <- acc_parts("S2", stop_params)
 
-# Leaf event: return density/cdf/survival for one accumulator at time t.
-leaf_node <- function(p) {
-  force(p)
-  function(t) {
-    list(
-      density = acc_pdf_scalar(t, p),
-      cdf = acc_cdf_scalar(t, p),
-      survival = acc_survival_scalar(t, p)
-    )
+integrate_scalar <- function(fn,
+                             lower,
+                             upper,
+                             rel_tol = 1e-10,
+                             abs_tol = 1e-12,
+                             subdivisions = 400L) {
+  if (is.finite(upper) && upper <= lower) {
+    return(0.0)
   }
-}
-
-# Guard node: reference succeeds only while the blocker has not yet finished.
-# This mirrors the generic engine route:
-#   density(t) = f_ref(t) * S_blocker(t)
-#   cdf(t)     = integral_0^t f_ref(u) * S_blocker(u) du
-guard_node <- function(reference, blocker) {
-  function(t) {
-    if (!is.finite(t) || t < 0.0) {
-      return(list(density = 0.0, cdf = 0.0, survival = 1.0))
-    }
-    density <- reference(t)$density * blocker(t)$survival
-    cdf <- if (t <= 0.0) {
-      0.0
-    } else {
-      integrate(
-        function(u) {
-          vapply(
-            u,
-            function(uu) {
-              reference(uu)$density * blocker(uu)$survival
-            },
-            numeric(1)
-          )
-        },
-        lower = 0.0,
-        upper = t,
-        rel.tol = 1e-8,
-        abs.tol = 1e-10,
-        subdivisions = 200L
-      )$value
-    }
-    cdf <- min(max(cdf, 0.0), 1.0)
-    list(density = density, cdf = cdf, survival = 1.0 - cdf)
-  }
-}
-
-# AND node: event occurs once all children have occurred.
-# For independent child times:
-#   F_and(t) = prod_i F_i(t)
-#   f_and(t) = sum_i f_i(t) * prod_{j != i} F_j(t)
-and_node <- function(...) {
-  children <- list(...)
-  function(t) {
-    vals <- lapply(children, function(fn) fn(t))
-    cdfs <- vapply(vals, `[[`, numeric(1), "cdf")
-    densities <- vapply(vals, `[[`, numeric(1), "density")
-    cdf <- prod(cdfs)
-    density <- sum(vapply(
-      seq_along(densities),
-      function(i) {
-        others <- if (length(densities) == 1L) 1.0 else prod(cdfs[-i])
-        densities[i] * others
-      },
-      numeric(1)
-    ))
-    cdf <- min(max(cdf, 0.0), 1.0)
-    list(density = density, cdf = cdf, survival = 1.0 - cdf)
-  }
-}
-
-# OR / first_of node: event occurs when the first child occurs.
-# For independent child times:
-#   S_or(t) = prod_i S_i(t)
-#   f_or(t) = sum_i f_i(t) * prod_{j != i} S_j(t)
-or_node <- function(...) {
-  children <- list(...)
-  function(t) {
-    vals <- lapply(children, function(fn) fn(t))
-    survivals <- vapply(vals, `[[`, numeric(1), "survival")
-    densities <- vapply(vals, `[[`, numeric(1), "density")
-    survival <- prod(survivals)
-    density <- sum(vapply(
-      seq_along(densities),
-      function(i) {
-        others <- if (length(densities) == 1L) 1.0 else prod(survivals[-i])
-        densities[i] * others
-      },
-      numeric(1)
-    ))
-    survival <- min(max(survival, 0.0), 1.0)
-    list(density = density, cdf = 1.0 - survival, survival = survival)
-  }
-}
-
-event_a <- leaf_node(go_a)
-event_b <- leaf_node(go_b)
-event_s1 <- leaf_node(s1_par)
-event_is <- leaf_node(is_par)
-event_s2 <- leaf_node(s2_par)
-
-# Exact node graph for the stop component.
-early_a <- guard_node(event_a, event_s1)
-early_b <- guard_node(event_b, event_s1)
-ignore_gate <- guard_node(event_is, event_s2)
-late_a <- and_node(event_a, event_s1, ignore_gate)
-late_b <- and_node(event_b, event_s1, ignore_gate)
-
-a_out <- or_node(early_a, late_a)
-b_out <- or_node(early_b, late_b)
-
-# Split the observed response density into the two branches of first_of().
-observed_density_terms <- function(response, rt) {
-  if (identical(response, "A")) {
-    early_target <- early_a(rt)
-    late_target <- late_a(rt)
-    competitor_early <- early_b(rt)
-    competitor_late <- late_b(rt)
-  } else {
-    early_target <- early_b(rt)
-    late_target <- late_b(rt)
-    competitor_early <- early_a(rt)
-    competitor_late <- late_a(rt)
-  }
-
-  competitor_survival <- competitor_early$survival * competitor_late$survival
-  early_term <- early_target$density * late_target$survival * competitor_survival
-  late_term <- late_target$density * early_target$survival * competitor_survival
-  total <- early_term + late_term
-
-  list(
-    early_term = early_term,
-    late_term = late_term,
-    total = total
-  )
-}
-
-# Exact observed density for one visible response:
-#   p(A_obs at t) = f_A_out(t) * S_B_out(t)
-#   p(B_obs at t) = f_B_out(t) * S_A_out(t)
-observed_density_exact <- function(response, rt) {
-  if (identical(response, "A")) {
-    a_out(rt)$density * b_out(rt)$survival
-  } else {
-    b_out(rt)$density * a_out(rt)$survival
-  }
-}
-
-probability_exact <- function(response) {
   integrate(
-    function(t) {
+    function(x) {
       vapply(
-        t,
-        function(tt) observed_density_exact(response, tt),
+        x,
+        function(xx) {
+          value <- fn(xx)
+          if (!is.finite(value)) 0.0 else value
+        },
         numeric(1)
       )
     },
-    lower = 0.0,
-    upper = Inf,
-    rel.tol = 1e-7,
-    abs.tol = 1e-9,
-    subdivisions = 200L,
+    lower = lower,
+    upper = upper,
+    rel.tol = rel_tol,
+    abs.tol = abs_tol,
+    subdivisions = subdivisions,
     stop.on.error = FALSE
   )$value
 }
 
-# Compare the hand-derived visible-response density against the engine.
+ignore_density <- function(t) {
+  acc_pdf_scalar(t, is_par) * acc_survival_scalar(t, s2_par)
+}
+
+ignore_cdf <- function(t) {
+  integrate_scalar(ignore_density, 0.0, t)
+}
+
+late_target_integrand <- function(t, target, competitor) {
+  acc_pdf_scalar(t, target) *
+    acc_cdf_scalar(t, s1_par) *
+    acc_survival_scalar(t, competitor)
+}
+
+early_target_integrand <- function(t, target, competitor) {
+  acc_pdf_scalar(t, target) *
+    acc_survival_scalar(t, s1_par) *
+    acc_survival_scalar(t, competitor)
+}
+
+late_target_cdf_part <- function(t, target, competitor) {
+  integrate_scalar(
+    function(u) late_target_integrand(u, target, competitor),
+    0.0,
+    t
+  )
+}
+
+# Correct stimulus-selective stop semantics:
+# S1 gates the visible route; it is not an independent response clock.
+# If the target accumulator already beat its competitor, later ignore release
+# can reveal that target identity.
+visible_density_terms <- function(target, competitor, t) {
+  target_at_t <- acc_pdf_scalar(t, target) *
+    acc_survival_scalar(t, competitor) *
+    (
+      acc_survival_scalar(t, s1_par) +
+        acc_cdf_scalar(t, s1_par) * ignore_cdf(t)
+    )
+
+  ignore_release_at_t <- ignore_density(t) *
+    late_target_cdf_part(t, target, competitor)
+
+  list(
+    target_at_t = target_at_t,
+    ignore_release_at_t = ignore_release_at_t,
+    total = target_at_t + ignore_release_at_t
+  )
+}
+
+visible_density <- function(response, t) {
+  if (identical(response, "A")) {
+    visible_density_terms(go_a, go_b, t)$total
+  } else {
+    visible_density_terms(go_b, go_a, t)$total
+  }
+}
+
+visible_probability_fubini <- function(target, competitor) {
+  early_mass <- integrate_scalar(
+    function(t) early_target_integrand(t, target, competitor),
+    0.0,
+    Inf
+  )
+  ignore_mass <- integrate_scalar(ignore_density, 0.0, Inf)
+  late_target_mass <- integrate_scalar(
+    function(t) late_target_integrand(t, target, competitor),
+    0.0,
+    Inf
+  )
+  early_mass + ignore_mass * late_target_mass
+}
+
 compare_observed <- function(response, rt) {
   data_df <- data.frame(
     trial = 1L,
@@ -223,25 +157,25 @@ compare_observed <- function(response, rt) {
     rt = rt,
     stringsAsFactors = FALSE
   )
-  terms <- observed_density_terms(response, rt)
-  manual <- observed_density_exact(response, rt)
+  terms <- if (identical(response, "A")) {
+    visible_density_terms(go_a, go_b, rt)
+  } else {
+    visible_density_terms(go_b, go_a, rt)
+  }
   engine <- engine_trial_density_or_mass(stop_model, stop_params, data_df)
   data.frame(
     component = "stop",
     response = response,
     rt = rt,
-    early_term = terms$early_term,
-    late_term = terms$late_term,
+    target_at_t = terms$target_at_t,
+    ignore_release_at_t = terms$ignore_release_at_t,
     manual_total = terms$total,
-    exact_total = manual,
     engine_total = engine,
-    diff = engine - manual,
+    diff = engine - terms$total,
     stringsAsFactors = FALSE
   )
 }
 
-# Under the current engine semantics, map_outcome_to = NA is an observation map.
-# The NA likelihood is therefore the leftover observed mass after A and B.
 compare_stop_mass <- function() {
   data_df <- data.frame(
     trial = 1L,
@@ -251,9 +185,9 @@ compare_stop_mass <- function() {
     stringsAsFactors = FALSE
   )
   engine <- engine_trial_density_or_mass(stop_model, stop_params, data_df)
-  prob_a <- probability_exact("A")
-  prob_b <- probability_exact("B")
-  manual <- 1.0 - prob_a - prob_b
+  prob_a <- visible_probability_fubini(go_a, go_b)
+  prob_b <- visible_probability_fubini(go_b, go_a)
+  manual <- max(0.0, 1.0 - prob_a - prob_b)
   data.frame(
     component = "stop",
     response = NA_character_,

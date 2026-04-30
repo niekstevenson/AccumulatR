@@ -541,6 +541,608 @@ inline double evaluate_exact_probability_program(
   return 0.0;
 }
 
+struct ExactProbabilityBatchLane {
+  ParamView params;
+  int first_param_row{0};
+  double observed_time{NA_REAL};
+  ExactStepWorkspace *workspace{nullptr};
+
+  ExactProbabilityBatchLane(SEXP paramsSEXP,
+                            const int *row_map,
+                            const int row_offset,
+                            const int first_param_row_,
+                            const double observed_time_,
+                            ExactStepWorkspace *workspace_)
+      : params(paramsSEXP, row_map, row_offset),
+        first_param_row(first_param_row_),
+        observed_time(observed_time_),
+        workspace(workspace_) {}
+};
+
+struct ExactProbabilityBatchWorkspace {
+  std::vector<CompiledMathBatchLane> compiled_lanes;
+  std::vector<ExactTriggerState> trigger_states;
+  std::vector<ExactProbabilityBatchLane> sub_lanes;
+  std::vector<std::size_t> sub_lane_indices;
+  std::vector<double> values_a;
+  std::vector<double> values_b;
+  CompiledMathBatchWorkspace compiled_workspace;
+};
+
+inline void evaluate_exact_probability_trigger_op_batch(
+    const ExactVariantPlan &plan,
+    const ExactProbabilityProgram &program,
+    const ExactProbabilityProgramSet &programs,
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    const ExactProbabilityOp &op,
+    const std::vector<ExactTriggerState> &trigger_states,
+    ExactProbabilityBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane);
+
+inline void evaluate_exact_probability_program_op_batch(
+    const ExactVariantPlan &plan,
+    const ExactProbabilityProgram &program,
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    const ExactProbabilityOp &op,
+    ExactProbabilityBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane);
+
+inline void exact_probability_batch_lanes_at_time(
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    const double observed_time,
+    std::vector<ExactProbabilityBatchLane> *out) {
+  out->clear();
+  out->reserve(lanes.size());
+  for (const auto &lane : lanes) {
+    out->push_back(lane);
+    out->back().observed_time = observed_time;
+  }
+}
+
+inline void exact_probability_accumulate_positive_values(
+    const std::vector<double> &values,
+    const double weight,
+    std::vector<double> *out_by_lane) {
+  for (std::size_t lane = 0; lane < values.size(); ++lane) {
+    const double value = values[lane];
+    if (std::isfinite(value) && value > 0.0) {
+      (*out_by_lane)[lane] += weight * value;
+    }
+  }
+}
+
+inline void evaluate_exact_step_distribution_total_probability_batch(
+    const ExactVariantPlan &plan,
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    const std::vector<ExactTriggerState> &trigger_states,
+    const semantic::Index outcome_index,
+    ExactProbabilityBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane) {
+  out_by_lane->assign(lanes.size(), 0.0);
+  if (lanes.empty() || outcome_index == semantic::kInvalidIndex) {
+    return;
+  }
+  const auto target_pos = static_cast<std::size_t>(outcome_index);
+  const auto &runtime_outcome = plan.runtime.outcomes[target_pos];
+  const auto &successors = runtime_outcome.successor_distribution;
+  const auto root_id = successors.total_probability_root_id;
+  if (root_id == semantic::kInvalidIndex) {
+    return;
+  }
+
+  auto &compiled_lanes = batch_workspace->compiled_lanes;
+  compiled_lanes.clear();
+  compiled_lanes.reserve(lanes.size());
+  for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+    auto *workspace = lanes[lane].workspace;
+    if (workspace == nullptr) {
+      compiled_lanes.push_back(CompiledMathBatchLane{});
+      continue;
+    }
+    workspace->reset(
+        lanes[lane].params,
+        lanes[lane].first_param_row,
+        trigger_states[lane],
+        workspace->initial_state,
+        lanes[lane].observed_time);
+    workspace->target_workspace.compiled_math.used_outcomes = nullptr;
+    compiled_lanes.push_back(CompiledMathBatchLane{
+        &workspace->target_workspace.compiled_math,
+        &workspace->target_evaluator,
+        nullptr,
+        &workspace->target_workspace});
+  }
+
+  evaluate_compiled_math_root_batch(
+      plan.compiled_math,
+      root_id,
+      compiled_lanes,
+      &batch_workspace->compiled_workspace,
+      out_by_lane);
+  for (auto &value : *out_by_lane) {
+    if (!std::isfinite(value) || !(value > 0.0)) {
+      value = 0.0;
+    }
+  }
+}
+
+inline void evaluate_exact_probability_trigger_children_sum_batch(
+    const ExactVariantPlan &plan,
+    const ExactProbabilityProgram &program,
+    const ExactProbabilityProgramSet &programs,
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    const ExactProbabilityOp &root,
+    const std::vector<ExactTriggerState> &trigger_states,
+    ExactProbabilityBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane) {
+  out_by_lane->assign(lanes.size(), 0.0);
+  for (semantic::Index i = 0; i < root.children.size; ++i) {
+    const auto child =
+        program.child_ops[
+            static_cast<std::size_t>(root.children.offset + i)];
+    if (child == semantic::kInvalidIndex) {
+      continue;
+    }
+    std::vector<double> child_values;
+    evaluate_exact_probability_trigger_op_batch(
+        plan,
+        program,
+        programs,
+        lanes,
+        program.ops[static_cast<std::size_t>(child)],
+        trigger_states,
+        batch_workspace,
+        &child_values);
+    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+      (*out_by_lane)[lane] += child_values[lane];
+    }
+  }
+}
+
+inline void evaluate_exact_probability_weighted_trigger_sum_batch(
+    const ExactVariantPlan &plan,
+    const ExactProbabilityProgram &program,
+    const ExactProbabilityProgramSet &programs,
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    const ExactProbabilityOp &root,
+    ExactProbabilityBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane) {
+  out_by_lane->assign(lanes.size(), 0.0);
+  if (lanes.empty()) {
+    return;
+  }
+
+  auto evaluate_for_states =
+      [&](const std::vector<ExactProbabilityBatchLane> &state_lanes,
+          const std::vector<ExactTriggerState> &states,
+          std::vector<double> *state_values) {
+        if (program.root_child != semantic::kInvalidIndex) {
+          evaluate_exact_probability_trigger_op_batch(
+              plan,
+              program,
+              programs,
+              state_lanes,
+              program.ops[static_cast<std::size_t>(program.root_child)],
+              states,
+              batch_workspace,
+              state_values);
+          return;
+        }
+        evaluate_exact_probability_trigger_children_sum_batch(
+            plan,
+            program,
+            programs,
+            state_lanes,
+            root,
+            states,
+            batch_workspace,
+            state_values);
+      };
+
+  if (!program.requires_trigger_enumeration) {
+    auto &states = batch_workspace->trigger_states;
+    states.clear();
+    states.reserve(lanes.size());
+    for (const auto &lane : lanes) {
+      states.push_back(lane.workspace->default_trigger_state);
+    }
+    evaluate_for_states(lanes, states, out_by_lane);
+    for (auto &value : *out_by_lane) {
+      value = root.value_kind == ExactProbabilityValueKind::Probability
+                  ? clamp_probability(value)
+                  : (std::isfinite(value) && value > 0.0 ? value : 0.0);
+    }
+    return;
+  }
+
+  auto &sub_lanes = batch_workspace->sub_lanes;
+  auto &sub_indices = batch_workspace->sub_lane_indices;
+  auto &states = batch_workspace->trigger_states;
+  std::vector<double> state_weights;
+  for (const auto &compiled_state : plan.trigger_state_table.states) {
+    sub_lanes.clear();
+    sub_indices.clear();
+    states.clear();
+    state_weights.clear();
+    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+      const auto state =
+          exact_compiled_trigger_state_view(
+              plan,
+              lanes[lane].params,
+              lanes[lane].first_param_row,
+              compiled_state);
+      if (!(state.weight > 0.0)) {
+        continue;
+      }
+      sub_indices.push_back(lane);
+      sub_lanes.push_back(lanes[lane]);
+      states.push_back(state);
+      state_weights.push_back(state.weight);
+    }
+    if (sub_lanes.empty()) {
+      continue;
+    }
+    std::vector<double> state_values;
+    evaluate_for_states(sub_lanes, states, &state_values);
+    for (std::size_t i = 0; i < sub_lanes.size(); ++i) {
+      (*out_by_lane)[sub_indices[i]] += state_weights[i] * state_values[i];
+    }
+  }
+
+  for (auto &value : *out_by_lane) {
+    value = root.value_kind == ExactProbabilityValueKind::Probability
+                ? clamp_probability(value)
+                : (std::isfinite(value) && value > 0.0 ? value : 0.0);
+  }
+}
+
+inline void evaluate_exact_probability_generic_transition_probability_batch(
+    const ExactVariantPlan &plan,
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    const std::vector<ExactTriggerState> &trigger_states,
+    const semantic::Index outcome_index,
+    ExactProbabilityBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane) {
+  out_by_lane->assign(lanes.size(), 0.0);
+  if (lanes.empty()) {
+    return;
+  }
+  const auto &rule = quadrature::canonical_tail_batch().nodes;
+  std::vector<ExactProbabilityBatchLane> time_lanes;
+  std::vector<double> sample_values;
+  time_lanes.reserve(lanes.size());
+  for (std::size_t q = 0; q < quadrature::kDefaultTailOrder; ++q) {
+    exact_probability_batch_lanes_at_time(lanes, rule.nodes[q], &time_lanes);
+    evaluate_exact_step_distribution_total_probability_batch(
+        plan,
+        time_lanes,
+        trigger_states,
+        outcome_index,
+        batch_workspace,
+        &sample_values);
+    exact_probability_accumulate_positive_values(
+        sample_values,
+        rule.weights[q],
+        out_by_lane);
+  }
+  for (auto &value : *out_by_lane) {
+    value = clamp_probability(value);
+  }
+}
+
+inline void evaluate_exact_probability_trigger_integral_batch(
+    const ExactVariantPlan &plan,
+    const ExactProbabilityProgram &program,
+    const ExactProbabilityProgramSet &programs,
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    const ExactProbabilityOp &op,
+    const std::vector<ExactTriggerState> &trigger_states,
+    ExactProbabilityBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane) {
+  out_by_lane->assign(lanes.size(), 0.0);
+  if (lanes.empty() || op.children.size == 0) {
+    return;
+  }
+  const auto child =
+      program.child_ops[static_cast<std::size_t>(op.children.offset)];
+  const auto &child_op = program.ops[static_cast<std::size_t>(child)];
+  const auto &rule = quadrature::canonical_tail_batch().nodes;
+  std::vector<ExactProbabilityBatchLane> time_lanes;
+  std::vector<double> sample_values;
+  time_lanes.reserve(lanes.size());
+  for (std::size_t q = 0; q < quadrature::kDefaultTailOrder; ++q) {
+    exact_probability_batch_lanes_at_time(lanes, rule.nodes[q], &time_lanes);
+    evaluate_exact_probability_trigger_op_batch(
+        plan,
+        program,
+        programs,
+        time_lanes,
+        child_op,
+        trigger_states,
+        batch_workspace,
+        &sample_values);
+    exact_probability_accumulate_positive_values(
+        sample_values,
+        rule.weights[q],
+        out_by_lane);
+  }
+  if (op.value_kind == ExactProbabilityValueKind::Probability) {
+    for (auto &value : *out_by_lane) {
+      value = clamp_probability(value);
+    }
+  }
+}
+
+inline void evaluate_exact_probability_trigger_op_batch(
+    const ExactVariantPlan &plan,
+    const ExactProbabilityProgram &program,
+    const ExactProbabilityProgramSet &programs,
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    const ExactProbabilityOp &op,
+    const std::vector<ExactTriggerState> &trigger_states,
+    ExactProbabilityBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane) {
+  out_by_lane->assign(lanes.size(), 0.0);
+  if (lanes.empty()) {
+    return;
+  }
+  switch (op.kind) {
+  case ExactProbabilityOpKind::Constant:
+    std::fill(out_by_lane->begin(), out_by_lane->end(), op.constant);
+    return;
+
+  case ExactProbabilityOpKind::Top1LeafRaceDensity:
+    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+      double term = 1.0;
+      for (semantic::Index i = 0; i < op.source_span.size; ++i) {
+        const auto source_id =
+            programs.source_ids[
+                static_cast<std::size_t>(op.source_span.offset + i)];
+        const auto &kernel =
+            plan.source_kernels[static_cast<std::size_t>(source_id)];
+        const auto channels = exact_simple_race_leaf_channels_at(
+            plan,
+            lanes[lane].params,
+            lanes[lane].first_param_row,
+            trigger_states[lane],
+            kernel.leaf_index,
+            lanes[lane].observed_time);
+        const double factor =
+            source_id == op.target_source_id
+                ? safe_density(channels.pdf)
+                : clamp_probability(channels.survival);
+        term *= factor;
+        if (!(term > 0.0)) {
+          break;
+        }
+      }
+      (*out_by_lane)[lane] = term > 0.0 ? term : 0.0;
+    }
+    return;
+
+  case ExactProbabilityOpKind::TerminalNoResponseProbability:
+    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+      double terminal_survival = 1.0;
+      for (semantic::Index i = 0; i < op.source_span.size; ++i) {
+        const auto source_id =
+            programs.source_ids[
+                static_cast<std::size_t>(op.source_span.offset + i)];
+        terminal_survival *= exact_terminal_leaf_survival_probability(
+            plan,
+            lanes[lane].params,
+            lanes[lane].first_param_row,
+            trigger_states[lane],
+            source_id);
+        if (!(terminal_survival > 0.0)) {
+          break;
+        }
+      }
+      (*out_by_lane)[lane] = clamp_probability(terminal_survival);
+    }
+    return;
+
+  case ExactProbabilityOpKind::GenericTransitionDensity:
+    evaluate_exact_step_distribution_total_probability_batch(
+        plan,
+        lanes,
+        trigger_states,
+        op.outcome_index,
+        batch_workspace,
+        out_by_lane);
+    return;
+
+  case ExactProbabilityOpKind::GenericTransitionProbability:
+    evaluate_exact_probability_generic_transition_probability_batch(
+        plan,
+        lanes,
+        trigger_states,
+        op.outcome_index,
+        batch_workspace,
+        out_by_lane);
+    return;
+
+  case ExactProbabilityOpKind::Integral:
+    evaluate_exact_probability_trigger_integral_batch(
+        plan,
+        program,
+        programs,
+        lanes,
+        op,
+        trigger_states,
+        batch_workspace,
+        out_by_lane);
+    return;
+
+  case ExactProbabilityOpKind::Log: {
+    const auto child =
+        program.child_ops[static_cast<std::size_t>(op.children.offset)];
+    std::vector<double> child_values;
+    evaluate_exact_probability_trigger_op_batch(
+        plan,
+        program,
+        programs,
+        lanes,
+        program.ops[static_cast<std::size_t>(child)],
+        trigger_states,
+        batch_workspace,
+        &child_values);
+    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+      const double probability = child_values[lane];
+      (*out_by_lane)[lane] =
+          std::isfinite(probability) && probability > 0.0
+              ? std::log(probability)
+              : R_NegInf;
+    }
+    return;
+  }
+
+  case ExactProbabilityOpKind::WeightedTriggerSum:
+  case ExactProbabilityOpKind::RankedTransitionSequence:
+    return;
+  }
+}
+
+inline void evaluate_exact_probability_program_integral_batch(
+    const ExactVariantPlan &plan,
+    const ExactProbabilityProgram &program,
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    const ExactProbabilityOp &op,
+    ExactProbabilityBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane) {
+  out_by_lane->assign(lanes.size(), 0.0);
+  if (lanes.empty() || op.children.size == 0) {
+    return;
+  }
+  const auto child =
+      program.child_ops[static_cast<std::size_t>(op.children.offset)];
+  const auto &child_op = program.ops[static_cast<std::size_t>(child)];
+  const auto &rule = quadrature::canonical_tail_batch().nodes;
+  std::vector<ExactProbabilityBatchLane> time_lanes;
+  std::vector<double> sample_values;
+  time_lanes.reserve(lanes.size());
+  for (std::size_t q = 0; q < quadrature::kDefaultTailOrder; ++q) {
+    exact_probability_batch_lanes_at_time(lanes, rule.nodes[q], &time_lanes);
+    evaluate_exact_probability_program_op_batch(
+        plan,
+        program,
+        time_lanes,
+        child_op,
+        batch_workspace,
+        &sample_values);
+    exact_probability_accumulate_positive_values(
+        sample_values,
+        rule.weights[q],
+        out_by_lane);
+  }
+  if (op.value_kind == ExactProbabilityValueKind::Probability) {
+    for (auto &value : *out_by_lane) {
+      value = clamp_probability(value);
+    }
+  }
+}
+
+inline void evaluate_exact_probability_program_op_batch(
+    const ExactVariantPlan &plan,
+    const ExactProbabilityProgram &program,
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    const ExactProbabilityOp &op,
+    ExactProbabilityBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane) {
+  out_by_lane->assign(lanes.size(), 0.0);
+  if (lanes.empty()) {
+    return;
+  }
+  switch (op.kind) {
+  case ExactProbabilityOpKind::WeightedTriggerSum:
+    evaluate_exact_probability_weighted_trigger_sum_batch(
+        plan,
+        program,
+        plan.probability_programs,
+        lanes,
+        op,
+        batch_workspace,
+        out_by_lane);
+    return;
+
+  case ExactProbabilityOpKind::Integral:
+    evaluate_exact_probability_program_integral_batch(
+        plan,
+        program,
+        lanes,
+        op,
+        batch_workspace,
+        out_by_lane);
+    return;
+
+  case ExactProbabilityOpKind::Log: {
+    const auto child =
+        program.child_ops[static_cast<std::size_t>(op.children.offset)];
+    std::vector<double> child_values;
+    evaluate_exact_probability_program_op_batch(
+        plan,
+        program,
+        lanes,
+        program.ops[static_cast<std::size_t>(child)],
+        batch_workspace,
+        &child_values);
+    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+      const double probability = child_values[lane];
+      (*out_by_lane)[lane] =
+          std::isfinite(probability) && probability > 0.0
+              ? std::log(probability)
+              : R_NegInf;
+    }
+    return;
+  }
+
+  case ExactProbabilityOpKind::Top1LeafRaceDensity:
+  case ExactProbabilityOpKind::TerminalNoResponseProbability:
+  case ExactProbabilityOpKind::Constant:
+  case ExactProbabilityOpKind::GenericTransitionDensity:
+  case ExactProbabilityOpKind::GenericTransitionProbability: {
+    auto &states = batch_workspace->trigger_states;
+    states.clear();
+    states.reserve(lanes.size());
+    for (const auto &lane : lanes) {
+      states.push_back(lane.workspace->default_trigger_state);
+    }
+    evaluate_exact_probability_trigger_op_batch(
+        plan,
+        program,
+        plan.probability_programs,
+        lanes,
+        op,
+        states,
+        batch_workspace,
+        out_by_lane);
+    return;
+  }
+
+  case ExactProbabilityOpKind::RankedTransitionSequence:
+    return;
+  }
+}
+
+inline void evaluate_exact_probability_program_batch(
+    const ExactVariantPlan &plan,
+    const ExactProbabilityProgram &program,
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    ExactProbabilityBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane) {
+  out_by_lane->assign(lanes.size(), 0.0);
+  if (program.empty() || lanes.empty()) {
+    return;
+  }
+  const auto &root = program.ops[static_cast<std::size_t>(program.root)];
+  evaluate_exact_probability_program_op_batch(
+      plan,
+      program,
+      lanes,
+      root,
+      batch_workspace,
+      out_by_lane);
+}
+
 inline double exact_density_program_value(
     const ExactVariantPlan &plan,
     const ParamView &params,

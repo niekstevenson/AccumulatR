@@ -5,6 +5,7 @@
 #include <limits>
 #include <vector>
 
+#include "batch_source_product.hpp"
 #include "exact_source_channels.hpp"
 #include "leaf_kernel.hpp"
 #include "quadrature.hpp"
@@ -1677,10 +1678,10 @@ inline double evaluate_compiled_source_product_integral_kernel(
     CompiledEvalWorkspace *eval_workspace,
     const double lower,
     const double upper) {
+  auto *source_channels = parent == nullptr ? nullptr : parent->source_channels();
   if (!(upper > lower)) {
     return 0.0;
   }
-  auto *source_channels = parent == nullptr ? nullptr : parent->source_channels();
   if (source_channels == nullptr) {
     return 0.0;
   }
@@ -1720,10 +1721,18 @@ inline double evaluate_compiled_source_product_integral_kernel(
     double value = 0.0;
     if (kernel.kind == CompiledMathIntegralKernelKind::SourceProduct) {
       value = compiled_math_source_product_value_for_ops(
+          program,
+          kernel.source_product_ops,
+          &integral_workspace,
+          source_channels);
+      if (batch_source_product_debug_enabled()) {
+        batch_debug_compare_source_product_ops_to_scalar(
             program,
             kernel.source_product_ops,
             &integral_workspace,
-            source_channels);
+            source_channels,
+            value);
+      }
     } else {
       double total = 0.0;
       for (semantic::Index term_idx = 0;
@@ -1784,11 +1793,21 @@ inline double evaluate_compiled_source_product_integral_kernel(
         if (product == 0.0) {
           continue;
         }
-        product *= compiled_math_source_product_value_for_ops(
-            program,
-            term.source_product_ops,
-            &integral_workspace,
-            source_channels);
+        const double source_product =
+            compiled_math_source_product_value_for_ops(
+                program,
+                term.source_product_ops,
+                &integral_workspace,
+                source_channels);
+        if (batch_source_product_debug_enabled()) {
+          batch_debug_compare_source_product_ops_to_scalar(
+              program,
+              term.source_product_ops,
+              &integral_workspace,
+              source_channels,
+              source_product);
+        }
+        product *= source_product;
         if (product == 0.0) {
           continue;
         }
@@ -1800,6 +1819,16 @@ inline double evaluate_compiled_source_product_integral_kernel(
       continue;
     }
     sum += batch.nodes.weights[sample_idx] * value;
+  }
+  if (batch_finite_integral_debug_enabled()) {
+    batch_debug_compare_finite_integral_to_scalar(
+        program,
+        kernel,
+        workspace,
+        source_channels,
+        lower,
+        upper,
+        sum);
   }
   return sum;
 }
@@ -2220,6 +2249,573 @@ inline double evaluate_compiled_math_root(
       parent,
       scenario,
       eval_workspace,
+      nullptr,
+      true);
+}
+
+struct CompiledMathBatchLane {
+  CompiledMathWorkspace *workspace{nullptr};
+  CompiledSourceView *parent{nullptr};
+  CompiledSourceView *scenario{nullptr};
+  CompiledEvalWorkspace *eval_workspace{nullptr};
+};
+
+struct CompiledMathBatchWorkspace {
+  std::vector<CompiledSourceView *> condition_evaluators;
+  std::vector<semantic::Index> active_lanes;
+  std::vector<std::size_t> active_lane_indices;
+  std::vector<double> parent_time_values;
+  std::vector<ExactLoadedLeafInput> parent_leaf_inputs;
+  std::vector<double> lower_by_lane;
+  std::vector<double> upper_by_lane;
+  std::vector<double> batch_values;
+  BatchFiniteIntegralWorkspace finite_integral_workspace;
+};
+
+inline bool evaluate_compiled_integral_node_batch_direct_leaf(
+    const CompiledMathProgram &program,
+    const CompiledMathNode &node,
+    const CompiledMathIntegralKernel &kernel,
+    const std::vector<CompiledMathBatchLane> &lanes,
+    const std::vector<CompiledSourceView *> &condition_evaluators,
+    CompiledMathBatchWorkspace *batch_workspace,
+    std::vector<double> *node_values) {
+  if (batch_workspace == nullptr || node_values == nullptr ||
+      !batch_finite_integral_kernel_direct_leaf_supported(program, kernel)) {
+    return false;
+  }
+  const auto max_leaf =
+      batch_source_product_max_leaf_index(program, kernel.source_product_ops);
+  const std::size_t leaf_count =
+      max_leaf == semantic::kInvalidIndex
+          ? 0U
+          : static_cast<std::size_t>(max_leaf) + 1U;
+  const auto max_time =
+      batch_source_product_max_time_id_for_ops(program, kernel.source_product_ops);
+  const std::size_t time_slot_count =
+      static_cast<std::size_t>(
+          std::max(max_time, kernel.bind_time_id)) +
+      1U;
+
+  auto &active_lanes = batch_workspace->active_lanes;
+  auto &active_lane_indices = batch_workspace->active_lane_indices;
+  auto &lower_by_lane = batch_workspace->lower_by_lane;
+  auto &upper_by_lane = batch_workspace->upper_by_lane;
+  active_lanes.clear();
+  active_lane_indices.clear();
+  lower_by_lane.clear();
+  upper_by_lane.clear();
+
+  for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+    auto *workspace = lanes[lane].workspace;
+    auto *parent = lanes[lane].parent;
+    if (workspace == nullptr || parent == nullptr ||
+        lane >= condition_evaluators.size() ||
+        condition_evaluators[lane] == nullptr ||
+        workspace->time_values.size() < time_slot_count) {
+      continue;
+    }
+    auto *source_channels = parent->source_channels();
+    if (source_channels == nullptr ||
+        !batch_source_product_ops_have_available_direct_leaf_inputs(
+            program,
+            kernel.source_product_ops,
+            source_channels)) {
+      continue;
+    }
+    const double upper = compiled_math_node_time(node, *workspace);
+    if (!(upper > 0.0) || !std::isfinite(upper)) {
+      continue;
+    }
+    active_lane_indices.push_back(lane);
+    active_lanes.push_back(
+        static_cast<semantic::Index>(active_lanes.size()));
+    lower_by_lane.push_back(0.0);
+    upper_by_lane.push_back(upper);
+  }
+
+  if (active_lanes.empty()) {
+    return false;
+  }
+
+  const std::size_t batch_lane_count = active_lanes.size();
+  auto &parent_time_values = batch_workspace->parent_time_values;
+  auto &parent_leaf_inputs = batch_workspace->parent_leaf_inputs;
+  auto &batch_values = batch_workspace->batch_values;
+  parent_time_values.assign(time_slot_count * batch_lane_count, 0.0);
+  parent_leaf_inputs.resize(leaf_count * batch_lane_count);
+  batch_values.assign(batch_lane_count, 0.0);
+
+  for (std::size_t batch_lane = 0; batch_lane < batch_lane_count;
+       ++batch_lane) {
+    const auto lane = active_lane_indices[batch_lane];
+    auto *workspace = lanes[lane].workspace;
+    auto *source_channels = lanes[lane].parent->source_channels();
+    for (std::size_t time_slot = 0; time_slot < time_slot_count;
+         ++time_slot) {
+      parent_time_values[time_slot * batch_lane_count + batch_lane] =
+          workspace->time_values[time_slot];
+    }
+    for (std::size_t leaf = 0; leaf < leaf_count; ++leaf) {
+      parent_leaf_inputs[leaf * batch_lane_count + batch_lane] =
+          source_channels->source_product_leaf_input(
+              static_cast<semantic::Index>(leaf));
+    }
+  }
+
+  const BatchSourceProductContext parent_context{
+      batch_lane_count,
+      BatchTimeSlotView{parent_time_values.data(), batch_lane_count},
+      BatchLeafInputView{parent_leaf_inputs.data(), batch_lane_count},
+      0};
+  const BatchActiveLaneSpan active{
+      active_lanes.data(),
+      batch_lane_count};
+  if (!batch_finite_integral_source_product_direct_leaf(
+          program,
+          kernel,
+          parent_context,
+          active,
+          lower_by_lane.data(),
+          upper_by_lane.data(),
+          time_slot_count,
+          leaf_count,
+          &batch_workspace->finite_integral_workspace,
+          batch_values.data())) {
+    return false;
+  }
+
+  for (std::size_t batch_lane = 0; batch_lane < batch_lane_count;
+       ++batch_lane) {
+    const auto lane = active_lane_indices[batch_lane];
+    double value = batch_values[batch_lane];
+    if (node.kind == CompiledMathNodeKind::IntegralZeroToCurrent) {
+      value = clamp_probability(value);
+    } else if (node.kind == CompiledMathNodeKind::IntegralZeroToCurrentRaw) {
+      value = std::isfinite(value) ? clean_signed_value(value) : 0.0;
+    } else {
+      value = std::isfinite(value) ? value : 0.0;
+    }
+    (*node_values)[lane] = value;
+  }
+  return true;
+}
+
+inline void evaluate_compiled_integral_node_batch(
+    const CompiledMathProgram &program,
+    const CompiledMathNode &node,
+    const std::vector<CompiledMathBatchLane> &lanes,
+    const std::vector<CompiledSourceView *> &condition_evaluators,
+    CompiledMathBatchWorkspace *batch_workspace,
+    std::vector<double> *node_values) {
+  node_values->assign(lanes.size(), 0.0);
+  if (node.integral_kernel_slot == semantic::kInvalidIndex) {
+    return;
+  }
+  const auto kernel_pos =
+      static_cast<std::size_t>(node.integral_kernel_slot);
+  if (kernel_pos >= program.integral_kernels.size()) {
+    throw std::runtime_error(
+        "compiled integral node points outside integral kernels");
+  }
+  const auto &kernel = program.integral_kernels[kernel_pos];
+  std::vector<std::uint8_t> batched(lanes.size(), 0U);
+  if (evaluate_compiled_integral_node_batch_direct_leaf(
+          program,
+          node,
+          kernel,
+          lanes,
+          condition_evaluators,
+          batch_workspace,
+          node_values)) {
+    for (const auto lane : batch_workspace->active_lane_indices) {
+      batched[lane] = 1U;
+    }
+  }
+
+  for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+    if (batched[lane] != 0U) {
+      continue;
+    }
+    auto *workspace = lanes[lane].workspace;
+    if (workspace == nullptr || lane >= condition_evaluators.size() ||
+        condition_evaluators[lane] == nullptr ||
+        node.integral_kernel_slot == semantic::kInvalidIndex) {
+      (*node_values)[lane] = 0.0;
+      continue;
+    }
+    const double current_time = compiled_math_node_time(node, *workspace);
+    if (!(current_time > 0.0)) {
+      (*node_values)[lane] = 0.0;
+      continue;
+    }
+    double value = evaluate_compiled_integral_kernel(
+        program,
+        node,
+        workspace,
+        lanes[lane].parent,
+        lanes[lane].scenario,
+        lanes[lane].eval_workspace,
+        0.0,
+        current_time);
+    if (node.kind == CompiledMathNodeKind::IntegralZeroToCurrent) {
+      value = clamp_probability(value);
+    } else if (node.kind == CompiledMathNodeKind::IntegralZeroToCurrentRaw) {
+      value = std::isfinite(value) ? clean_signed_value(value) : 0.0;
+    } else {
+      value = std::isfinite(value) ? value : 0.0;
+    }
+    (*node_values)[lane] = value;
+  }
+}
+
+inline void evaluate_compiled_node_span_batch(
+    const CompiledMathProgram &program,
+    const CompiledMathIndexSpan schedule,
+    const semantic::Index result_node_id,
+    const std::vector<CompiledMathBatchLane> &lanes,
+    CompiledMathBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane,
+    const std::vector<semantic::Index> *schedule_nodes = nullptr,
+    const bool workspace_prepared = false) {
+  out_by_lane->assign(lanes.size(), 0.0);
+  if (result_node_id == semantic::kInvalidIndex || lanes.empty()) {
+    return;
+  }
+  if (batch_workspace == nullptr) {
+    throw std::runtime_error("compiled math batch evaluation requires a workspace");
+  }
+  if (!workspace_prepared) {
+    for (const auto &lane : lanes) {
+      if (lane.workspace != nullptr) {
+        lane.workspace->ensure_size(program);
+      }
+    }
+  }
+  auto &condition_evaluators = batch_workspace->condition_evaluators;
+  condition_evaluators.assign(lanes.size(), nullptr);
+  std::vector<double> integral_values;
+  const auto &nodes =
+      schedule_nodes == nullptr ? program.root_schedule_nodes : *schedule_nodes;
+  for (semantic::Index schedule_idx = 0; schedule_idx < schedule.size;
+       ++schedule_idx) {
+    const auto node_id = nodes[
+        static_cast<std::size_t>(schedule.offset + schedule_idx)];
+    const auto &node = program.nodes[static_cast<std::size_t>(node_id)];
+    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+      auto *condition_evaluator = lanes[lane].parent;
+      if (node.source_view_id != 0 &&
+          node.source_view_id != semantic::kInvalidIndex) {
+        if (lanes[lane].eval_workspace == nullptr) {
+          throw std::runtime_error(
+              "compiled node requires a planned source view but no workspace was supplied");
+        }
+        condition_evaluator =
+            lanes[lane].eval_workspace->source_view_evaluator(
+                node.source_view_id,
+                lanes[lane].parent);
+      }
+      condition_evaluators[lane] = condition_evaluator;
+    }
+
+    if (compiled_math_is_integral_node(node.kind)) {
+      evaluate_compiled_integral_node_batch(
+          program,
+          node,
+          lanes,
+          condition_evaluators,
+          batch_workspace,
+          &integral_values);
+      for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+        auto *workspace = lanes[lane].workspace;
+        if (workspace != nullptr) {
+          workspace->values[static_cast<std::size_t>(node.cache_slot)] =
+              integral_values[lane];
+        }
+      }
+      continue;
+    }
+
+    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+      auto *workspace = lanes[lane].workspace;
+      auto *parent = lanes[lane].parent;
+      auto *condition_evaluator = condition_evaluators[lane];
+      if (workspace == nullptr) {
+        continue;
+      }
+      double value = 0.0;
+      switch (node.kind) {
+      case CompiledMathNodeKind::Constant:
+        value = node.constant;
+        break;
+      case CompiledMathNodeKind::SourcePdf:
+      case CompiledMathNodeKind::SourceCdf:
+      case CompiledMathNodeKind::SourceSurvival:
+        value = compiled_math_source_node_value(
+            program, node, condition_evaluator, workspace);
+        break;
+      case CompiledMathNodeKind::TimeGate: {
+        const auto child_id =
+            program.child_nodes[static_cast<std::size_t>(node.children.offset)];
+        const double raw =
+            workspace->values[static_cast<std::size_t>(child_id)];
+        value = workspace->time(node.time_id) >= workspace->time(node.aux_id)
+                    ? raw
+                    : 0.0;
+        break;
+      }
+      case CompiledMathNodeKind::ExprDensity:
+      case CompiledMathNodeKind::ExprCdf:
+      case CompiledMathNodeKind::ExprSurvival:
+        throw std::runtime_error(
+            "compiled math root contains an interpreter expression node");
+      case CompiledMathNodeKind::SimpleGuardDensity: {
+        if (condition_evaluator == nullptr) {
+          value = 0.0;
+          break;
+        }
+        const auto &kernel = parent->plan().expr_kernels[
+            static_cast<std::size_t>(node.subject_id)];
+        if (!kernel.simple_event_guard || kernel.has_unless) {
+          throw std::runtime_error(
+              "compiled simple guard density reached a non-simple guard");
+        }
+        const auto child_id =
+            program.child_nodes[static_cast<std::size_t>(node.children.offset)];
+        const double raw =
+            workspace->values[static_cast<std::size_t>(child_id)];
+        if (condition_evaluator->source_order_known_before(
+                kernel.guard_blocker_source_id,
+                kernel.guard_ref_source_id,
+                node.condition_id,
+                workspace)) {
+          value = 0.0;
+          break;
+        }
+        const auto upper =
+            compiled_math_upper_bound_from_terms(program, node, *workspace);
+        if (upper.found) {
+          const double current_time = compiled_math_node_time(node, *workspace);
+          if (!(upper.normalizer > 0.0) ||
+              current_time >= upper.time) {
+            value = 0.0;
+            break;
+          }
+          value = clean_signed_value(raw / upper.normalizer);
+          break;
+        }
+        value = clean_signed_value(raw);
+        break;
+      }
+      case CompiledMathNodeKind::SimpleGuardCdf: {
+        if (condition_evaluator == nullptr) {
+          value = 0.0;
+          break;
+        }
+        const auto &kernel = parent->plan().expr_kernels[
+            static_cast<std::size_t>(node.subject_id)];
+        if (!kernel.simple_event_guard || kernel.has_unless) {
+          throw std::runtime_error(
+              "compiled simple guard cdf reached a non-simple guard");
+        }
+        const auto child_id =
+            program.child_nodes[static_cast<std::size_t>(node.children.offset)];
+        const double raw =
+            workspace->values[static_cast<std::size_t>(child_id)];
+        if (condition_evaluator->source_order_known_before(
+                kernel.guard_blocker_source_id,
+                kernel.guard_ref_source_id,
+                node.condition_id,
+                workspace)) {
+          value = 0.0;
+          break;
+        }
+        const auto upper =
+            compiled_math_upper_bound_from_terms(program, node, *workspace);
+        if (upper.found) {
+          const double current_time = compiled_math_node_time(node, *workspace);
+          if (!(upper.normalizer > 0.0)) {
+            value = 0.0;
+            break;
+          }
+          if (current_time >= upper.time) {
+            value = 1.0;
+            break;
+          }
+          value = clamp_probability(raw / upper.normalizer);
+          break;
+        }
+        value = clamp_probability(raw);
+        break;
+      }
+      case CompiledMathNodeKind::UnionKernelDensity:
+        value = parent == nullptr
+                    ? 0.0
+                    : evaluate_compiled_union_kernel_density(
+                          program,
+                          node,
+                          *workspace,
+                          parent->plan(),
+                          condition_evaluator,
+                          false);
+        break;
+      case CompiledMathNodeKind::UnionKernelMultiSubsetDensity:
+        value = parent == nullptr
+                    ? 0.0
+                    : evaluate_compiled_union_kernel_density(
+                          program,
+                          node,
+                          *workspace,
+                          parent->plan(),
+                          condition_evaluator,
+                          true);
+        break;
+      case CompiledMathNodeKind::UnionKernelCdf:
+        value = evaluate_compiled_union_kernel_cdf(
+            program, node, *workspace, condition_evaluator);
+        break;
+      case CompiledMathNodeKind::UnionKernelMultiSubsetCdf:
+      case CompiledMathNodeKind::IntegralZeroToCurrent:
+      case CompiledMathNodeKind::IntegralZeroToCurrentRaw:
+        throw std::runtime_error("integral node was not handled by batch path");
+      case CompiledMathNodeKind::OutcomeSubsetUnused: {
+        value = 1.0;
+        if (workspace->used_outcomes != nullptr) {
+          const auto offset = static_cast<std::size_t>(node.subject_id);
+          const auto size = static_cast<std::size_t>(node.aux_id);
+          const auto &indices = parent->plan().compiled_outcome_gate_indices;
+          if (offset + size > indices.size()) {
+            throw std::runtime_error(
+                "compiled outcome-used gate points outside the plan");
+          }
+          for (std::size_t i = 0; i < size; ++i) {
+            const auto outcome_idx = indices[offset + i];
+            if (outcome_idx != semantic::kInvalidIndex &&
+                static_cast<std::size_t>(outcome_idx) <
+                    workspace->used_outcomes->size() &&
+                (*workspace->used_outcomes)[
+                    static_cast<std::size_t>(outcome_idx)] != 0U) {
+              value = 0.0;
+              break;
+            }
+          }
+        }
+        break;
+      }
+      case CompiledMathNodeKind::ExprUpperBoundDensity:
+      case CompiledMathNodeKind::ExprUpperBoundCdf: {
+        const auto child_id =
+            program.child_nodes[static_cast<std::size_t>(node.children.offset)];
+        const double raw =
+            workspace->values[static_cast<std::size_t>(child_id)];
+        const auto best_upper =
+            compiled_math_expr_upper_bound_for_node(
+                program,
+                node,
+                *workspace,
+                condition_evaluator);
+        if (!best_upper.found) {
+          value = raw;
+          break;
+        }
+        const double current_time = compiled_math_node_time(node, *workspace);
+        if (node.kind == CompiledMathNodeKind::ExprUpperBoundCdf) {
+          if (!(best_upper.normalizer > 0.0)) {
+            value = 0.0;
+          } else if (current_time >= best_upper.time) {
+            value = 1.0;
+          } else {
+            value = clamp_probability(raw / best_upper.normalizer);
+          }
+        } else {
+          if (!(best_upper.normalizer > 0.0) ||
+              current_time >= best_upper.time) {
+            value = 0.0;
+          } else {
+            value = safe_density(raw / best_upper.normalizer);
+          }
+        }
+        break;
+      }
+      case CompiledMathNodeKind::Product: {
+        value = 1.0;
+        for (semantic::Index i = 0; i < node.children.size; ++i) {
+          const auto child_id = program.child_nodes[
+              static_cast<std::size_t>(node.children.offset + i)];
+          value *= workspace->values[static_cast<std::size_t>(child_id)];
+          if (!std::isfinite(value) || value == 0.0) {
+            value = 0.0;
+            break;
+          }
+        }
+        break;
+      }
+      case CompiledMathNodeKind::Sum:
+      case CompiledMathNodeKind::CleanSignedSum: {
+        double total = 0.0;
+        for (semantic::Index i = 0; i < node.children.size; ++i) {
+          const auto child_id = program.child_nodes[
+              static_cast<std::size_t>(node.children.offset + i)];
+          total += workspace->values[static_cast<std::size_t>(child_id)];
+        }
+        value = node.kind == CompiledMathNodeKind::CleanSignedSum
+                    ? clean_signed_value(total)
+                    : total;
+        break;
+      }
+      case CompiledMathNodeKind::ClampProbability: {
+        const auto child_id =
+            program.child_nodes[static_cast<std::size_t>(node.children.offset)];
+        value = clamp_probability(
+            workspace->values[static_cast<std::size_t>(child_id)]);
+        break;
+      }
+      case CompiledMathNodeKind::Complement: {
+        const auto child_id =
+            program.child_nodes[static_cast<std::size_t>(node.children.offset)];
+        value = clamp_probability(
+            1.0 - workspace->values[static_cast<std::size_t>(child_id)]);
+        break;
+      }
+      case CompiledMathNodeKind::Negate: {
+        const auto child_id =
+            program.child_nodes[static_cast<std::size_t>(node.children.offset)];
+        value = clean_signed_value(
+            -workspace->values[static_cast<std::size_t>(child_id)]);
+        break;
+      }
+      }
+      workspace->values[static_cast<std::size_t>(node.cache_slot)] = value;
+    }
+  }
+
+  for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+    auto *workspace = lanes[lane].workspace;
+    (*out_by_lane)[lane] =
+        workspace == nullptr
+            ? 0.0
+            : workspace->values[static_cast<std::size_t>(result_node_id)];
+  }
+}
+
+inline void evaluate_compiled_math_root_batch(
+    const CompiledMathProgram &program,
+    const semantic::Index root_id,
+    const std::vector<CompiledMathBatchLane> &lanes,
+    CompiledMathBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane) {
+  out_by_lane->assign(lanes.size(), 0.0);
+  if (root_id == semantic::kInvalidIndex || lanes.empty()) {
+    return;
+  }
+  const auto &root = program.roots[static_cast<std::size_t>(root_id)];
+  evaluate_compiled_node_span_batch(
+      program,
+      root.schedule,
+      root.node_id,
+      lanes,
+      batch_workspace,
+      out_by_lane,
       nullptr,
       true);
 }

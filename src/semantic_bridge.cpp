@@ -20,16 +20,7 @@ SEXP semantic_make_likelihood_context_prep_cpp(SEXP prepSEXP) {
 }
 
 // [[Rcpp::export]]
-SEXP semantic_prepare_trial_layout_cpp(SEXP dataSEXP) {
-  return Rcpp::XPtr<accumulatr::eval::detail::PreparedTrialLayout>(
-      new accumulatr::eval::detail::PreparedTrialLayout(
-          accumulatr::eval::detail::build_native_trial_layout(dataSEXP)),
-      true);
-}
-
-// [[Rcpp::export]]
 SEXP semantic_loglik_context_cpp(SEXP contextSEXP,
-                                 SEXP layoutSEXP,
                                  SEXP paramsSEXP,
                                  SEXP dataSEXP,
                                  SEXP okSEXP,
@@ -37,8 +28,8 @@ SEXP semantic_loglik_context_cpp(SEXP contextSEXP,
                                  SEXP minLLSEXP) {
   const auto &ctx =
       accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
-  const auto &layout =
-      accumulatr::eval::detail::trial_layout_from_xptr(layoutSEXP);
+  const auto layout =
+      accumulatr::eval::detail::read_prepared_trial_layout(dataSEXP);
   const int *ok = Rf_isNull(okSEXP) ? nullptr : LOGICAL(okSEXP);
   const double min_ll = REAL(minLLSEXP)[0];
   Rcpp::List observed = accumulatr::eval::detail::evaluate_observed_trials_cached(
@@ -65,13 +56,8 @@ double accumulatr_cpp_loglik_ccallable(SEXP contextSEXP,
                                        SEXP expandSEXP,
                                        double min_ll) {
   try {
-    SEXP layoutSEXP = Rf_getAttrib(dataSEXP, Rf_install("cpp_layout"));
-    if (layoutSEXP == R_NilValue) {
-      Rcpp::stop("prepared data are missing native layout metadata");
-    }
     Rcpp::List observed = semantic_loglik_context_cpp(
         contextSEXP,
-        layoutSEXP,
         paramsSEXP,
         dataSEXP,
         okSEXP,
@@ -99,13 +85,12 @@ void accumulatr_register_ccallables(DllInfo *dll) {
 
 // [[Rcpp::export]]
 SEXP semantic_probability_context_cpp(SEXP contextSEXP,
-                                      SEXP layoutSEXP,
                                       SEXP paramsSEXP,
                                       SEXP dataSEXP) {
   const auto &ctx =
       accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
-  const auto &layout =
-      accumulatr::eval::detail::trial_layout_from_xptr(layoutSEXP);
+  const auto layout =
+      accumulatr::eval::detail::read_prepared_trial_layout(dataSEXP);
   return accumulatr::eval::detail::evaluate_outcome_queries_cached(
       ctx.observed_plans_by_component_code,
       ctx.exact_variant_index_by_component_code,

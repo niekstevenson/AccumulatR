@@ -22,10 +22,10 @@ inline cpp_loglik_ccallable_t cpp_loglik_ccallable() {
 }
 
 inline double cpp_loglik(SEXP ctx_ptr,
-                         const Rcpp::NumericMatrix &param_matrix,
-                         const Rcpp::DataFrame &data_df,
-                         const Rcpp::LogicalVector &ok,
-                         const Rcpp::IntegerVector &expand,
+                         SEXP param_matrix,
+                         SEXP data_df,
+                         SEXP ok,
+                         SEXP expand,
                          double min_ll) {
   return cpp_loglik_ccallable()(ctx_ptr,
                                 param_matrix,

@@ -2,15 +2,7 @@
   .Call(`_AccumulatR_semantic_make_likelihood_context_prep_cpp`, prep)
 }
 
-.prepare_trial_layout <- function(data) {
-  .Call(
-    `_AccumulatR_semantic_prepare_trial_layout_cpp`,
-    as.data.frame(data, stringsAsFactors = FALSE)
-  )
-}
-
 .loglik_context <- function(context,
-                            layout,
                             params,
                             data,
                             ok = NULL,
@@ -19,7 +11,6 @@
   .Call(
     `_AccumulatR_semantic_loglik_context_cpp`,
     context,
-    layout,
     params,
     data,
     ok,
@@ -29,13 +20,11 @@
 }
 
 .probability_context <- function(context,
-                                 layout,
                                  params,
                                  data) {
   .Call(
     `_AccumulatR_semantic_probability_context_cpp`,
     context,
-    layout,
     params,
     data
   )

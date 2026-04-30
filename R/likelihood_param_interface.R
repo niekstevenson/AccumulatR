@@ -303,15 +303,36 @@
   out
 }
 
+.attach_prepared_layout_attrs <- function(data_df, max_rank) {
+  trial <- as.integer(data_df$trial)
+  n_rows <- length(trial)
+  trial_starts <- c(1L, which(trial[-1L] != trial[-n_rows]) + 1L)
+  trial_ends <- c(trial_starts[-1L] - 1L, n_rows)
+
+  rank_names <- c("R", if (max_rank > 1L) paste0("R", seq.int(2L, max_rank)))
+  time_names <- c("rt", if (max_rank > 1L) paste0("rt", seq.int(2L, max_rank)))
+
+  attr(data_df, "trial_spans") <- cbind(
+    start = as.integer(trial_starts),
+    end = as.integer(trial_ends)
+  )
+  attr(data_df, "layout_cols") <- setNames(
+    as.integer(match(c("trial", "component", "accumulator"), names(data_df))),
+    c("trial", "component", "accumulator")
+  )
+  attr(data_df, "label_cols") <- as.integer(match(rank_names, names(data_df)))
+  attr(data_df, "time_cols") <- as.integer(match(time_names, names(data_df)))
+  attr(data_df, "max_rank") <- as.integer(max_rank)
+  attr(data_df, "cpp_layout") <- NULL
+  data_df
+}
+
 .prepare_data_structure <- function(structure, data_df, prep = NULL, compress = FALSE) {
   if (inherits(data_df, "accumulatr_data")) {
-    if (is.null(attr(data_df, "cpp_layout", exact = TRUE))) {
-      attr(data_df, "cpp_layout") <- .prepare_trial_layout(data_df)
-    }
     if (is.null(attr(data_df, "max_rank", exact = TRUE))) {
       attr(data_df, "max_rank") <- .validate_ranked_observation_columns(data_df)$max_rank
     }
-    return(data_df)
+    return(.attach_prepared_layout_attrs(data_df, attr(data_df, "max_rank", exact = TRUE)))
   }
   if (is.null(data_df) || nrow(data_df) == 0L) {
     stop("Data frame must contain R/rt per trial", call. = FALSE)
@@ -440,9 +461,7 @@
   if (isTRUE(compress)) {
     data_df <- .compress_prepared_trials(data_df)
   }
-  attr(data_df, "cpp_layout") <- .prepare_trial_layout(data_df)
-  attr(data_df, "max_rank") <- rank_info$max_rank
-  data_df
+  .attach_prepared_layout_attrs(data_df, rank_info$max_rank)
 }
 
 #' Prepare behavioral data for likelihood evaluation
@@ -526,7 +545,11 @@ make_context <- function(structure, prep = NULL) {
 
 .validate_prepared_data <- function(data) {
   if (inherits(data, "accumulatr_data")) {
-    if (is.null(attr(data, "cpp_layout", exact = TRUE))) {
+    required_attrs <- c("trial_spans", "layout_cols", "label_cols", "time_cols", "max_rank")
+    missing_attrs <- required_attrs[vapply(required_attrs, function(attr_name) {
+      is.null(attr(data, attr_name, exact = TRUE))
+    }, logical(1))]
+    if (length(missing_attrs) > 0L) {
       stop("prepared data are missing native layout metadata; rebuild with prepare_data()", call. = FALSE)
     }
     return(data)
@@ -1323,7 +1346,6 @@ response_probabilities.model_structure <- function(structure,
     )
     query_prob <- as.numeric(.probability_context(
       context$cpp$native,
-      attr(prepared, "cpp_layout", exact = TRUE),
       param_mat,
       prepared
     )$probability)
@@ -1452,10 +1474,8 @@ log_likelihood.accumulatr_context <- function(context,
   }
 
   cpp_ctx <- context$cpp
-  cpp_layout <- attr(data, "cpp_layout", exact = TRUE)
   observed <- .loglik_context(
     cpp_ctx$native,
-    cpp_layout,
     parameters,
     data,
     ok = ok,

@@ -3,9 +3,6 @@
 #include <Rcpp.h>
 
 #include <cstring>
-#include <stdexcept>
-#include <string>
-#include <vector>
 
 #include "../runtime/layout.hpp"
 
@@ -17,14 +14,38 @@ struct PreparedTrialSpan {
   semantic::Index end_row{-1};
 };
 
+struct PreparedTrialSpansView {
+  const int *start_rows{nullptr};
+  const int *end_rows{nullptr};
+  R_xlen_t n{0};
+
+  std::size_t size() const {
+    return static_cast<std::size_t>(n);
+  }
+
+  PreparedTrialSpan operator[](const std::size_t index) const {
+    return PreparedTrialSpan{
+        static_cast<semantic::Index>(start_rows[index] - 1),
+        static_cast<semantic::Index>(end_rows[index] - 1)};
+  }
+};
+
+struct PreparedRankColumnView {
+  const int *cols{nullptr};
+
+  int operator[](const std::size_t rank) const {
+    return cols[rank - 1U] - 1;
+  }
+};
+
 struct PreparedTrialLayout {
-  std::vector<PreparedTrialSpan> spans;
+  PreparedTrialSpansView spans;
   int max_rank{1};
   int trial_col{-1};
   int component_col{-1};
   int accumulator_col{-1};
-  std::vector<int> label_cols;
-  std::vector<int> time_cols;
+  PreparedRankColumnView label_cols;
+  PreparedRankColumnView time_cols;
 };
 
 struct PreparedDataView {
@@ -58,38 +79,48 @@ inline double aggregate_trial_loglik(
   return total_loglik;
 }
 
-inline SEXP trusted_data_column(SEXP dataSEXP, const char *name) {
-  const SEXP names = Rf_getAttrib(dataSEXP, R_NamesSymbol);
-  const R_xlen_t n_cols = XLENGTH(dataSEXP);
-  for (R_xlen_t i = 0; i < n_cols; ++i) {
-    if (std::strcmp(CHAR(STRING_ELT(names, i)), name) == 0) {
-      return VECTOR_ELT(dataSEXP, i);
-    }
-  }
-  return R_NilValue;
-}
-
 inline SEXP trusted_data_column(SEXP dataSEXP, const int column_index) {
   return VECTOR_ELT(dataSEXP, column_index);
 }
 
-inline int trusted_data_column_index(SEXP dataSEXP, const char *name) {
-  const SEXP names = Rf_getAttrib(dataSEXP, R_NamesSymbol);
-  const R_xlen_t n_cols = XLENGTH(dataSEXP);
-  for (R_xlen_t i = 0; i < n_cols; ++i) {
-    if (std::strcmp(CHAR(STRING_ELT(names, i)), name) == 0) {
-      return static_cast<int>(i);
-    }
-  }
-  return -1;
+inline SEXP trusted_data_attr(SEXP dataSEXP, const char *name) {
+  return Rf_getAttrib(dataSEXP, Rf_install(name));
 }
 
-inline PreparedDataView read_prepared_data_view(SEXP dataSEXP) {
-  const auto n_rows = XLENGTH(trusted_data_column(dataSEXP, "component"));
-  return PreparedDataView{
-      INTEGER(trusted_data_column(dataSEXP, "trial")),
-      INTEGER(trusted_data_column(dataSEXP, "component")),
-      n_rows};
+inline int trusted_named_integer(SEXP valuesSEXP, const char *name) {
+  const SEXP names = Rf_getAttrib(valuesSEXP, R_NamesSymbol);
+  const R_xlen_t n = XLENGTH(valuesSEXP);
+  const int *values = INTEGER(valuesSEXP);
+  for (R_xlen_t i = 0; i < n; ++i) {
+    if (std::strcmp(CHAR(STRING_ELT(names, i)), name) == 0) {
+      return values[i];
+    }
+  }
+  return NA_INTEGER;
+}
+
+inline PreparedTrialLayout read_prepared_trial_layout(SEXP dataSEXP) {
+  PreparedTrialLayout layout;
+
+  const SEXP spansSEXP = trusted_data_attr(dataSEXP, "trial_spans");
+  const SEXP dimsSEXP = Rf_getAttrib(spansSEXP, R_DimSymbol);
+  const int *dims = INTEGER(dimsSEXP);
+  const R_xlen_t n_trials = static_cast<R_xlen_t>(dims[0]);
+  const int *spans = INTEGER(spansSEXP);
+  layout.spans.start_rows = spans;
+  layout.spans.end_rows = spans + n_trials;
+  layout.spans.n = n_trials;
+
+  const SEXP layoutColsSEXP = trusted_data_attr(dataSEXP, "layout_cols");
+  layout.trial_col = trusted_named_integer(layoutColsSEXP, "trial") - 1;
+  layout.component_col = trusted_named_integer(layoutColsSEXP, "component") - 1;
+  layout.accumulator_col = trusted_named_integer(layoutColsSEXP, "accumulator") - 1;
+
+  layout.label_cols.cols = INTEGER(trusted_data_attr(dataSEXP, "label_cols"));
+  layout.time_cols.cols = INTEGER(trusted_data_attr(dataSEXP, "time_cols"));
+  layout.max_rank = INTEGER(trusted_data_attr(dataSEXP, "max_rank"))[0];
+
+  return layout;
 }
 
 inline PreparedDataView read_prepared_data_view(
@@ -102,80 +133,9 @@ inline PreparedDataView read_prepared_data_view(
       XLENGTH(component)};
 }
 
-inline PreparedDataView read_prepared_data_view(const Rcpp::DataFrame &data) {
-  return read_prepared_data_view(static_cast<SEXP>(data));
-}
-
-inline bool integer_cell_is_na(const Rcpp::IntegerVector &column,
-                               const R_xlen_t row) {
-  return column[row] == NA_INTEGER;
-}
-
 inline bool integer_cell_is_na(const int *column,
                                const R_xlen_t row) {
   return column[row] == NA_INTEGER;
-}
-
-inline int detect_rank_count(const Rcpp::DataFrame &data,
-                             const std::string &context) {
-  const std::string prefix = context.empty() ? "" : (context + " ");
-  int max_rank = 1;
-  for (int rank = 2;; ++rank) {
-    const auto r_col = "R" + std::to_string(rank);
-    const auto rt_col = "rt" + std::to_string(rank);
-    const bool has_r = data.containsElementNamed(r_col.c_str());
-    const bool has_rt = data.containsElementNamed(rt_col.c_str());
-    if (has_r != has_rt) {
-      throw std::runtime_error(
-          prefix + "ranked columns must appear as matched Rk/rtk pairs");
-    }
-    if (!has_r) {
-      break;
-    }
-    max_rank = rank;
-  }
-  return max_rank;
-}
-
-inline PreparedTrialLayout build_prepared_trial_layout(
-    const Rcpp::DataFrame &data,
-    const std::string &context = std::string()) {
-  PreparedTrialLayout layout;
-  layout.max_rank = detect_rank_count(data, context);
-  const SEXP dataSEXP = static_cast<SEXP>(data);
-  layout.trial_col = trusted_data_column_index(dataSEXP, "trial");
-  layout.component_col = trusted_data_column_index(dataSEXP, "component");
-  layout.accumulator_col = trusted_data_column_index(dataSEXP, "accumulator");
-  layout.label_cols.assign(static_cast<std::size_t>(layout.max_rank + 1), -1);
-  layout.time_cols.assign(static_cast<std::size_t>(layout.max_rank + 1), -1);
-  layout.label_cols[1] = trusted_data_column_index(dataSEXP, "R");
-  layout.time_cols[1] = trusted_data_column_index(dataSEXP, "rt");
-  for (int rank = 2; rank <= layout.max_rank; ++rank) {
-    layout.label_cols[static_cast<std::size_t>(rank)] =
-        trusted_data_column_index(dataSEXP, ("R" + std::to_string(rank)).c_str());
-    layout.time_cols[static_cast<std::size_t>(rank)] =
-        trusted_data_column_index(dataSEXP, ("rt" + std::to_string(rank)).c_str());
-  }
-  const auto n_rows = data.nrows();
-  if (n_rows == 0) {
-    return layout;
-  }
-  const auto table = read_prepared_data_view(dataSEXP, layout);
-  semantic::Index start = 0;
-  int last_trial = table.trial[0];
-  for (R_xlen_t row = 1; row < n_rows; ++row) {
-    if (table.trial[row] == last_trial) {
-      continue;
-    }
-    layout.spans.push_back(
-        PreparedTrialSpan{start, static_cast<semantic::Index>(row - 1)});
-    start = static_cast<semantic::Index>(row);
-    last_trial = table.trial[row];
-  }
-  layout.spans.push_back(
-      PreparedTrialSpan{start, static_cast<semantic::Index>(n_rows - 1)});
-
-  return layout;
 }
 
 } // namespace detail

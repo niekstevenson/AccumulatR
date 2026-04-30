@@ -349,12 +349,6 @@ inline NativeLikelihoodContext build_native_likelihood_context(
   return ctx;
 }
 
-inline PreparedTrialLayout build_native_trial_layout(SEXP dataSEXP) {
-  return build_prepared_trial_layout(
-      Rcpp::DataFrame(dataSEXP),
-      "prepared data");
-}
-
 template <typename T>
 inline Rcpp::XPtr<T> checked_xptr(SEXP value, const char *what) {
   if (TYPEOF(value) != EXTPTRSXP) {
@@ -369,10 +363,6 @@ inline Rcpp::XPtr<T> checked_xptr(SEXP value, const char *what) {
 
 inline const NativeLikelihoodContext &likelihood_context_from_xptr(SEXP value) {
   return *checked_xptr<NativeLikelihoodContext>(value, "likelihood context");
-}
-
-inline const PreparedTrialLayout &trial_layout_from_xptr(SEXP value) {
-  return *checked_xptr<PreparedTrialLayout>(value, "prepared trial layout");
 }
 
 } // namespace detail

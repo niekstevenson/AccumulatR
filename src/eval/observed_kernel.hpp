@@ -341,7 +341,7 @@ inline semantic::Index resolve_variant_index_by_component_code(
   return exact_variant_index_by_component_code[idx];
 }
 
-inline bool identity_trials_are_all_finite(
+inline bool ranked_identity_trials_have_finite_first_rank(
     const PreparedTrialLayout &layout,
     const int *label,
     const double *rt,
@@ -358,173 +358,36 @@ inline bool identity_trials_are_all_finite(
   return true;
 }
 
-inline double evaluate_observation_plan_direct(
-    const std::vector<ExactVariantPlan> &exact_plans,
+inline bool identity_trials_have_ranked_observations(
     const PreparedTrialLayout &layout,
-    SEXP paramsSEXP,
-    const ObservationProbabilityPlan &obs_plan,
-    const semantic::Index trial_index,
-    const semantic::Index variant_index,
-    const double observed_rt,
-    const double min_ll,
-    const int *row_map,
-    const int row_offset,
-    ExactStepWorkspacePool *workspace_pool,
-    std::vector<double> *values) {
-  if (values == nullptr || workspace_pool == nullptr) {
-    return min_ll;
+    SEXP dataSEXP,
+    const int *ok = nullptr) {
+  if (layout.max_rank <= 1) {
+    return false;
   }
-  values->assign(obs_plan.ops.size(), 0.0);
-  const auto &exact_plan = exact_plans[static_cast<std::size_t>(variant_index)];
-  ParamView params(paramsSEXP, row_map, row_offset);
-  const int first_param_row =
-      row_map == nullptr
-          ? static_cast<int>(
-                layout.spans[static_cast<std::size_t>(trial_index)].start_row)
-          : 0;
-  auto &workspace = workspace_pool->get(exact_plans, variant_index);
-
-  for (std::size_t op_index = 0; op_index < obs_plan.ops.size(); ++op_index) {
-    const auto &op = obs_plan.ops[op_index];
-    double value = 0.0;
-    switch (op.kind) {
-    case ObservationPlanOpKind::Constant:
-      value = op.constant;
-      break;
-    case ObservationPlanOpKind::LogDensity: {
-      const auto target_idx =
-          exact_plan.outcome_index_by_code[static_cast<std::size_t>(
-              op.semantic_code)];
-      const double density = exact_unranked_target_density(
-          exact_plan,
-          params,
-          first_param_row,
-          target_idx,
-          observed_rt,
-          &workspace);
-      value =
-          std::isfinite(density) && density > 0.0 && op.weight > 0.0
-              ? std::log(op.weight) + std::log(density)
-              : min_ll;
-      break;
-    }
-    case ObservationPlanOpKind::FiniteOutcomeProbability: {
-      const auto target_idx =
-          exact_plan.outcome_index_by_code[static_cast<std::size_t>(
-              op.semantic_code)];
-      const double probability = exact_finite_probability_program_value(
-          exact_plan,
-          params,
-          first_param_row,
-          target_idx,
-          &workspace);
-      value =
-          std::isfinite(probability) && probability > 0.0 && op.weight > 0.0
-              ? op.weight * probability
-              : 0.0;
-      break;
-    }
-    case ObservationPlanOpKind::NoResponseProbability: {
-      const double probability = exact_no_response_program_value(
-          exact_plan,
-          params,
-          first_param_row,
-          &workspace);
-      value =
-          std::isfinite(probability) && probability > 0.0 && op.weight > 0.0
-              ? op.weight * probability
-              : 0.0;
-      break;
-    }
-    case ObservationPlanOpKind::WeightedSum:
-      if (op.value_kind == ObservationPlanValueKind::Log) {
-        double anchor = R_NegInf;
-        for (semantic::Index i = 0; i < op.children.size; ++i) {
-          const auto child = obs_plan.child_ops[
-              static_cast<std::size_t>(op.children.offset + i)];
-          if (child == semantic::kInvalidIndex) {
-            continue;
-          }
-          const double child_value =
-              (*values)[static_cast<std::size_t>(child)];
-          if (std::isfinite(child_value) && child_value > anchor) {
-            anchor = child_value;
-          }
-        }
-        if (!std::isfinite(anchor)) {
-          value = min_ll;
-          break;
-        }
-        double sum = 0.0;
-        for (semantic::Index i = 0; i < op.children.size; ++i) {
-          const auto child = obs_plan.child_ops[
-              static_cast<std::size_t>(op.children.offset + i)];
-          if (child == semantic::kInvalidIndex) {
-            continue;
-          }
-          const double child_value =
-              (*values)[static_cast<std::size_t>(child)];
-          if (std::isfinite(child_value)) {
-            sum += std::exp(child_value - anchor);
-          }
-        }
-        value = sum > 0.0 ? anchor + std::log(sum) : min_ll;
-      } else {
-        double sum = 0.0;
-        for (semantic::Index i = 0; i < op.children.size; ++i) {
-          const auto child = obs_plan.child_ops[
-              static_cast<std::size_t>(op.children.offset + i)];
-          if (child == semantic::kInvalidIndex) {
-            continue;
-          }
-          const double child_value =
-              (*values)[static_cast<std::size_t>(child)];
-          if (std::isfinite(child_value) && child_value > 0.0) {
-            sum += child_value;
-          }
-        }
-        value = sum;
+  for (int rank = 2; rank <= layout.max_rank; ++rank) {
+    const int *label =
+        INTEGER(trusted_data_column(
+            dataSEXP,
+            layout.label_cols[static_cast<std::size_t>(rank)]));
+    const double *rt =
+        REAL(trusted_data_column(
+            dataSEXP,
+            layout.time_cols[static_cast<std::size_t>(rank)]));
+    for (std::size_t trial_index = 0; trial_index < layout.spans.size();
+         ++trial_index) {
+      if (!trial_is_selected(ok, trial_index)) {
+        continue;
       }
-      break;
-    case ObservationPlanOpKind::Complement: {
-      double sum = 0.0;
-      for (semantic::Index i = 0; i < op.children.size; ++i) {
-        const auto child = obs_plan.child_ops[
-            static_cast<std::size_t>(op.children.offset + i)];
-        if (child == semantic::kInvalidIndex) {
-          continue;
-        }
-        const double child_value =
-            (*values)[static_cast<std::size_t>(child)];
-        if (std::isfinite(child_value)) {
-          sum += child_value;
-        }
+      const auto row =
+          static_cast<R_xlen_t>(layout.spans[trial_index].start_row);
+      if (!integer_cell_is_na(label, row) ||
+          !Rcpp::NumericVector::is_na(rt[row])) {
+        return true;
       }
-      value = std::max(0.0, 1.0 - sum);
-      break;
     }
-    case ObservationPlanOpKind::Log: {
-      double probability = 0.0;
-      if (op.children.size > 0) {
-        const auto child =
-            obs_plan.child_ops[static_cast<std::size_t>(op.children.offset)];
-        if (child != semantic::kInvalidIndex) {
-          probability = (*values)[static_cast<std::size_t>(child)];
-        }
-      }
-      value =
-          std::isfinite(probability) && probability > 0.0
-              ? std::log(probability)
-              : min_ll;
-      break;
-    }
-    }
-    (*values)[op_index] = value;
   }
-
-  return obs_plan.root == semantic::kInvalidIndex
-             ? min_ll
-             : (*values)[static_cast<std::size_t>(obs_plan.root)];
+  return false;
 }
 
 struct ObservationBatchLane {
@@ -542,16 +405,38 @@ struct ObservationBatchGroup {
   std::vector<ObservationBatchLane> lanes;
 };
 
+struct RankedObservationBatchLane {
+  std::size_t trial_index{0};
+  double component_weight{1.0};
+  const int *row_map{nullptr};
+  int row_offset{0};
+  int first_param_row{0};
+  ExactTrialView obs{};
+};
+
+struct RankedObservationBatchGroup {
+  semantic::Index variant_index{semantic::kInvalidIndex};
+  std::vector<RankedObservationBatchLane> lanes;
+};
+
 struct ObservationBatchWorkspace {
   semantic::Index workspace_variant_index{semantic::kInvalidIndex};
   std::vector<std::unique_ptr<ExactStepWorkspace>> step_workspaces;
   std::vector<ExactProbabilityBatchLane> exact_lanes;
   ExactProbabilityBatchWorkspace exact_workspace;
+  std::vector<ExactRankedBatchLane> ranked_lanes;
+  ExactRankedBatchWorkspace ranked_workspace;
+  std::vector<double> ranked_values;
   std::vector<double> exact_values;
   std::vector<double> unique_exact_values;
   std::vector<double> op_values;
   std::vector<double> child_values;
 };
+
+inline void ObservationBatchWorkspaceDeleter::operator()(
+    ObservationBatchWorkspace *workspace) const noexcept {
+  delete workspace;
+}
 
 inline ObservationBatchGroup &find_or_add_observation_batch_group(
     std::vector<ObservationBatchGroup> *groups,
@@ -563,6 +448,18 @@ inline ObservationBatchGroup &find_or_add_observation_batch_group(
     }
   }
   groups->push_back(ObservationBatchGroup{variant_index, &plan, {}});
+  return groups->back();
+}
+
+inline RankedObservationBatchGroup &find_or_add_ranked_observation_batch_group(
+    std::vector<RankedObservationBatchGroup> *groups,
+    const semantic::Index variant_index) {
+  for (auto &group : *groups) {
+    if (group.variant_index == variant_index) {
+      return group;
+    }
+  }
+  groups->push_back(RankedObservationBatchGroup{variant_index, {}});
   return groups->back();
 }
 
@@ -918,6 +815,45 @@ inline void evaluate_observation_batch_group(
   }
 }
 
+inline void evaluate_ranked_observation_batch_group(
+    const std::vector<ExactVariantPlan> &exact_plans,
+    SEXP paramsSEXP,
+    const double min_ll,
+    RankedObservationBatchGroup *group,
+    ObservationBatchWorkspace *workspace,
+    std::vector<double> *out_by_lane) {
+  const auto lane_count = group->lanes.size();
+  out_by_lane->assign(lane_count, min_ll);
+  if (group->variant_index == semantic::kInvalidIndex || lane_count == 0U) {
+    return;
+  }
+  const auto &exact_plan =
+      exact_plans[static_cast<std::size_t>(group->variant_index)];
+  observation_batch_workspace_ensure_step_workspaces(
+      workspace,
+      exact_plan,
+      group->variant_index,
+      lane_count);
+  workspace->ranked_lanes.clear();
+  workspace->ranked_lanes.reserve(lane_count);
+  for (std::size_t lane = 0; lane < lane_count; ++lane) {
+    const auto &batch_lane = group->lanes[lane];
+    workspace->ranked_lanes.emplace_back(
+        paramsSEXP,
+        batch_lane.row_map,
+        batch_lane.row_offset,
+        batch_lane.first_param_row,
+        batch_lane.obs,
+        workspace->step_workspaces[lane].get());
+  }
+  exact_ranked_loglik_batch(
+      exact_plan,
+      workspace->ranked_lanes,
+      min_ll,
+      &workspace->ranked_workspace,
+      out_by_lane);
+}
+
 inline Rcpp::List evaluate_outcome_queries_cached(
     const std::vector<ComponentObservationPlan> &component_plans_by_code,
     const std::vector<semantic::Index> &exact_variant_index_by_component_code,
@@ -931,8 +867,7 @@ inline Rcpp::List evaluate_outcome_queries_cached(
 
   const auto n_trials = layout.spans.size();
   Rcpp::NumericVector probability(n_trials, 0.0);
-  ExactStepWorkspacePool workspace_pool(exact_plans.size());
-  std::vector<double> plan_values;
+  std::vector<ObservationBatchGroup> observation_groups;
 
   for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
     const auto row = static_cast<R_xlen_t>(layout.spans[trial_index].start_row);
@@ -970,21 +905,35 @@ inline Rcpp::List evaluate_outcome_queries_cached(
         missing_rt_observation_state_code(component_plan, observed_code);
     const auto &plan =
         observation_probability_plan_for_state(component_plan, state_code);
-    const double value = evaluate_observation_plan_direct(
-        exact_plans,
-        layout,
-        paramsSEXP,
-        plan,
-        static_cast<semantic::Index>(trial_index),
+    auto &group = find_or_add_observation_batch_group(
+        &observation_groups,
         variant_index,
+        plan);
+    group.lanes.push_back(ObservationBatchLane{
+        trial_index,
+        1.0,
         NA_REAL,
-        std::log(1e-10),
         nullptr,
         0,
-        &workspace_pool,
-        &plan_values);
-    if (std::isfinite(value) && value > 0.0) {
-      probability[static_cast<R_xlen_t>(trial_index)] = value;
+        static_cast<int>(layout.spans[trial_index].start_row)});
+  }
+
+  ObservationBatchWorkspace workspace;
+  std::vector<double> group_values;
+  for (auto &group : observation_groups) {
+    evaluate_observation_batch_group(
+        exact_plans,
+        paramsSEXP,
+        std::log(1e-10),
+        &group,
+        &workspace,
+        &group_values);
+    for (std::size_t lane = 0; lane < group.lanes.size(); ++lane) {
+      const double value = group_values[lane];
+      if (std::isfinite(value) && value > 0.0) {
+        probability[static_cast<R_xlen_t>(group.lanes[lane].trial_index)] =
+            value;
+      }
     }
   }
 
@@ -1004,29 +953,25 @@ inline SEXP evaluate_observed_trials_cached_impl(
     SEXP dataSEXP,
     const double min_ll,
     SEXP expandSEXP,
+    ObservationBatchWorkspace *reusable_batch_workspace = nullptr,
     const int *ok = nullptr) {
   BatchSourceProductDebugScope batch_source_product_debug_scope;
   BatchFiniteIntegralDebugScope batch_finite_integral_debug_scope;
   const auto table = read_prepared_data_view(dataSEXP, layout);
 
-  if (observed_identity) {
+  const bool ranked_identity_present =
+      observed_identity &&
+      identity_trials_have_ranked_observations(layout, dataSEXP, ok);
+  if (ranked_identity_present) {
     const int *label =
         INTEGER(trusted_data_column(dataSEXP, layout.label_cols[1]));
     const double *rt =
         REAL(trusted_data_column(dataSEXP, layout.time_cols[1]));
-    if (trials_have_observed_components(layout, table.component, ok)) {
-      if (identity_trials_are_all_finite(layout, label, rt, ok)) {
-        SEXP result = evaluate_exact_trials_cached(
-            exact_variant_index_by_component_code,
-            exact_plans,
-            layout,
-            paramsSEXP,
-            dataSEXP,
-            min_ll,
-            expandSEXP,
-            ok);
-        return result;
-      }
+    if (!trials_have_observed_components(layout, table.component, ok) ||
+        !ranked_identity_trials_have_finite_first_rank(layout, label, rt, ok)) {
+      throw std::runtime_error(
+          "ranked identity observations are not covered by the batch "
+          "observation executor for latent or missing first-rank trials");
     }
   }
 
@@ -1040,8 +985,14 @@ inline SEXP evaluate_observed_trials_cached_impl(
 
   const auto n_trials = layout.spans.size();
   Rcpp::NumericVector loglik(n_trials, min_ll);
+  std::vector<std::uint8_t> ranked_loglik_assigned(n_trials, 0U);
   std::vector<std::vector<double>> trial_values(n_trials);
   std::vector<ObservationBatchGroup> observation_groups;
+  std::vector<RankedObservationBatchGroup> ranked_observation_groups;
+  ExactTrialColumns ranked_columns;
+  if (ranked_identity_present) {
+    ranked_columns = read_exact_trial_columns(layout, dataSEXP);
+  }
 
   for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
     const auto &span = layout.spans[trial_index];
@@ -1063,6 +1014,16 @@ inline SEXP evaluate_observed_trials_cached_impl(
         trusted_params,
         trial_index);
     const auto latent_trial = integer_cell_is_na(table.component, row);
+    ExactTrialView ranked_obs;
+    const bool ranked_trial =
+        ranked_identity_present && !latent_trial &&
+        (ranked_obs = read_exact_observation_view(
+             table,
+             exact_variant_index_by_component_code,
+             layout,
+             trial_index,
+             ranked_columns))
+                .rank_count > 1;
     for (const auto &choice : components) {
       if (choice.component_code <= 0 ||
           choice.component_code >=
@@ -1081,6 +1042,34 @@ inline SEXP evaluate_observed_trials_cached_impl(
         continue;
       }
 
+      const int *row_map_ptr = nullptr;
+      int row_offset = 0;
+      const auto &exact_plan =
+          exact_plans[static_cast<std::size_t>(variant_index)];
+      (void)exact_plan;
+      if (latent_trial) {
+        const auto &leaf_offsets =
+            exact_plan.leaf_row_offsets;
+        row_map_ptr = leaf_offsets.data();
+        row_offset = static_cast<int>(span.start_row);
+      }
+      const int first_param_row =
+          row_map_ptr == nullptr ? static_cast<int>(span.start_row) : 0;
+
+      if (ranked_trial) {
+        auto &group = find_or_add_ranked_observation_batch_group(
+            &ranked_observation_groups,
+            variant_index);
+        group.lanes.push_back(RankedObservationBatchLane{
+            trial_index,
+            choice.weight,
+            row_map_ptr,
+            row_offset,
+            first_param_row,
+            ranked_obs});
+        continue;
+      }
+
       const auto state_code = observation_state_code(
           component_plan,
           observed_label_code,
@@ -1095,19 +1084,6 @@ inline SEXP evaluate_observed_trials_cached_impl(
               ? observed_rt
               : NA_REAL;
 
-      const int *row_map_ptr = nullptr;
-      int row_offset = 0;
-      const auto &exact_plan =
-          exact_plans[static_cast<std::size_t>(variant_index)];
-      (void)exact_plan;
-      if (latent_trial) {
-        const auto &leaf_offsets =
-            exact_plan.leaf_row_offsets;
-        row_map_ptr = leaf_offsets.data();
-        row_offset = static_cast<int>(span.start_row);
-      }
-      const int first_param_row =
-          row_map_ptr == nullptr ? static_cast<int>(span.start_row) : 0;
       auto &group = find_or_add_observation_batch_group(
           &observation_groups,
           variant_index,
@@ -1122,7 +1098,10 @@ inline SEXP evaluate_observed_trials_cached_impl(
     }
   }
 
-  ObservationBatchWorkspace batch_workspace;
+  ObservationBatchWorkspace local_batch_workspace;
+  auto *batch_workspace =
+      reusable_batch_workspace == nullptr ? &local_batch_workspace
+                                          : reusable_batch_workspace;
   std::vector<double> group_values;
   for (auto &group : observation_groups) {
     evaluate_observation_batch_group(
@@ -1130,7 +1109,7 @@ inline SEXP evaluate_observed_trials_cached_impl(
         paramsSEXP,
         min_ll,
         &group,
-        &batch_workspace,
+        batch_workspace,
         &group_values);
     for (std::size_t lane = 0; lane < group.lanes.size(); ++lane) {
       const auto &batch_lane = group.lanes[lane];
@@ -1142,7 +1121,34 @@ inline SEXP evaluate_observed_trials_cached_impl(
     }
   }
 
+  for (auto &group : ranked_observation_groups) {
+    evaluate_ranked_observation_batch_group(
+        exact_plans,
+        paramsSEXP,
+        min_ll,
+        &group,
+        batch_workspace,
+        &group_values);
+    for (std::size_t lane = 0; lane < group.lanes.size(); ++lane) {
+      const auto &batch_lane = group.lanes[lane];
+      const double value = group_values[lane];
+      if (std::isfinite(value) && batch_lane.component_weight > 0.0) {
+        if (batch_lane.component_weight == 1.0 &&
+            trial_values[batch_lane.trial_index].empty()) {
+          loglik[static_cast<R_xlen_t>(batch_lane.trial_index)] = value;
+          ranked_loglik_assigned[batch_lane.trial_index] = 1U;
+        } else {
+          trial_values[batch_lane.trial_index].push_back(
+              std::log(batch_lane.component_weight) + value);
+        }
+      }
+    }
+  }
+
   for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
+    if (ranked_loglik_assigned[trial_index] != 0U) {
+      continue;
+    }
     const auto value = logsumexp_records(trial_values[trial_index]);
     loglik[static_cast<R_xlen_t>(trial_index)] =
         std::isfinite(value) ? value : min_ll;
@@ -1173,6 +1179,7 @@ inline SEXP evaluate_observed_trials_cached(
     SEXP dataSEXP,
     const double min_ll,
     SEXP expandSEXP,
+    ObservationBatchWorkspace *reusable_batch_workspace = nullptr,
     const int *ok = nullptr) {
   return evaluate_observed_trials_cached_impl(
       component_plans_by_code,
@@ -1185,6 +1192,7 @@ inline SEXP evaluate_observed_trials_cached(
       dataSEXP,
       min_ll,
       expandSEXP,
+      reusable_batch_workspace,
       ok);
 }
 

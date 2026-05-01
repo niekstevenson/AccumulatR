@@ -158,13 +158,109 @@ public:
       const CompiledSourceBoundPlan &bounds,
       const double *time_values,
       const std::size_t lane_stride,
-      const semantic::Index lane) const {
+      const semantic::Index lane,
+      const std::uint8_t *time_valid = nullptr) const {
     return compiled_source_bounds_from_time_slots(
         source_id,
         bounds,
         time_values,
         lane_stride,
-        lane);
+        lane,
+        time_valid);
+  }
+
+  void source_product_resolved_bound_values_from_time_slots(
+      const semantic::Index source_id,
+      const CompiledSourceBoundPlan &bounds,
+      const double *time_values,
+      const std::size_t lane_stride,
+      const semantic::Index lane,
+      const std::uint8_t *time_valid,
+      double *lower,
+      double *upper,
+      double *exact_time,
+      std::uint8_t *has_exact_time) const {
+    double resolved_lower = 0.0;
+    double resolved_upper = std::numeric_limits<double>::infinity();
+    double resolved_exact = 0.0;
+    std::uint8_t resolved_has_exact = 0U;
+    if (bounds.use_sequence_lower && sequence_state_ != nullptr) {
+      resolved_lower = sequence_state_->lower_bound;
+    }
+    if (source_id != semantic::kInvalidIndex) {
+      const auto source_pos = static_cast<std::size_t>(source_id);
+      const bool sequence_exact =
+          bounds.use_sequence_exact &&
+          sequence_state_ != nullptr &&
+          source_pos < sequence_state_->exact_times.size() &&
+          std::isfinite(sequence_state_->exact_times[source_pos]);
+      const bool sequence_upper =
+          bounds.use_sequence_upper &&
+          sequence_state_ != nullptr &&
+          source_pos < sequence_state_->upper_bounds.size() &&
+          std::isfinite(sequence_state_->upper_bounds[source_pos]);
+      if (sequence_exact || sequence_upper) {
+        resolved_lower = 0.0;
+      }
+      if (sequence_upper) {
+        resolved_upper = sequence_state_->upper_bounds[source_pos];
+      }
+
+      if (bounds.has_condition_lower) {
+        for (semantic::Index i = 0; i < bounds.lower.size; ++i) {
+          const auto term_pos =
+              static_cast<std::size_t>(bounds.lower.offset + i);
+          resolved_lower = std::max(
+              resolved_lower,
+              compiled_bound_term_time_from_time_slots(
+                  time_values,
+                  lane_stride,
+                  lane,
+                  plan_.compiled_math.source_condition_bound_terms[term_pos],
+                  time_valid));
+        }
+      }
+      if (bounds.has_condition_upper) {
+        for (semantic::Index i = 0; i < bounds.upper.size; ++i) {
+          const auto term_pos =
+              static_cast<std::size_t>(bounds.upper.offset + i);
+          resolved_upper = std::min(
+              resolved_upper,
+              compiled_bound_term_time_from_time_slots(
+                  time_values,
+                  lane_stride,
+                  lane,
+                  plan_.compiled_math.source_condition_bound_terms[term_pos],
+                  time_valid));
+        }
+      }
+      if (bounds.has_condition_exact) {
+        resolved_exact =
+            compiled_bound_term_time_from_time_slots(
+                time_values,
+                lane_stride,
+                lane,
+                plan_.compiled_math.source_condition_bound_terms[
+                    static_cast<std::size_t>(bounds.exact.offset)],
+                time_valid);
+        resolved_has_exact = 1U;
+      } else if (sequence_exact) {
+        resolved_exact = sequence_state_->exact_times[source_pos];
+        resolved_has_exact = 1U;
+      }
+    }
+    if (lower != nullptr) {
+      *lower = resolved_lower;
+    }
+    if (upper != nullptr) {
+      *upper = resolved_upper;
+    }
+    if (exact_time != nullptr) {
+      *exact_time = resolved_exact;
+    }
+    if (has_exact_time != nullptr) {
+      *has_exact_time = resolved_has_exact;
+    }
   }
 
 private:
@@ -232,12 +328,16 @@ private:
       const double *time_values,
       const std::size_t lane_stride,
       const semantic::Index lane,
-      const CompiledSourceBoundTerm &term) const {
+      const CompiledSourceBoundTerm &term,
+      const std::uint8_t *time_valid = nullptr) const {
     const auto time_id = term.time_id;
     if (time_values != nullptr && time_id != semantic::kInvalidIndex) {
-      return time_values[
+      const auto pos =
           static_cast<std::size_t>(time_id) * lane_stride +
-          static_cast<std::size_t>(lane)];
+          static_cast<std::size_t>(lane);
+      if (time_valid == nullptr || time_valid[pos] != 0U) {
+        return time_values[pos];
+      }
     }
     return conditional_time_;
   }
@@ -324,7 +424,8 @@ private:
       const CompiledSourceBoundPlan &bounds,
       const double *time_values,
       const std::size_t lane_stride,
-      const semantic::Index lane) const {
+      const semantic::Index lane,
+      const std::uint8_t *time_valid = nullptr) const {
     ResolvedSourceBounds resolved;
     if (bounds.use_sequence_lower && sequence_state_ != nullptr) {
       resolved.lower = sequence_state_->lower_bound;
@@ -360,7 +461,8 @@ private:
                 time_values,
                 lane_stride,
                 lane,
-                plan_.compiled_math.source_condition_bound_terms[term_pos]));
+                plan_.compiled_math.source_condition_bound_terms[term_pos],
+                time_valid));
       }
       resolved.has_condition_lower = true;
     }
@@ -374,7 +476,8 @@ private:
                 time_values,
                 lane_stride,
                 lane,
-                plan_.compiled_math.source_condition_bound_terms[term_pos]));
+                plan_.compiled_math.source_condition_bound_terms[term_pos],
+                time_valid));
       }
     }
     if (bounds.has_condition_exact) {
@@ -384,7 +487,8 @@ private:
               lane_stride,
               lane,
               plan_.compiled_math.source_condition_bound_terms[
-                  static_cast<std::size_t>(bounds.exact.offset)]);
+                  static_cast<std::size_t>(bounds.exact.offset)],
+              time_valid);
       resolved.exact_time = &compiled_condition_time_;
       return resolved;
     }

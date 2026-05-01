@@ -76,6 +76,30 @@ struct ExactStepWorkspacePool {
   std::vector<std::unique_ptr<ExactStepWorkspace>> workspaces;
 };
 
+inline double evaluate_prepared_exact_step_root_batch(
+    const ExactVariantPlan &plan,
+    const semantic::Index root_id,
+    ExactStepWorkspace *workspace) {
+  if (root_id == semantic::kInvalidIndex || workspace == nullptr) {
+    return 0.0;
+  }
+  std::vector<CompiledMathBatchLane> lanes;
+  lanes.push_back(CompiledMathBatchLane{
+      &workspace->target_workspace.compiled_math,
+      &workspace->target_evaluator,
+      nullptr,
+      &workspace->target_workspace});
+  CompiledMathBatchWorkspace batch_workspace;
+  std::vector<double> values;
+  evaluate_compiled_math_root_batch(
+      plan.compiled_math,
+      root_id,
+      lanes,
+      &batch_workspace,
+      &values);
+  return values.empty() ? 0.0 : values[0];
+}
+
 inline ExactStepDistributionView evaluate_exact_step_distribution(
     const ExactVariantPlan &plan,
     const ParamView &params,
@@ -97,7 +121,6 @@ inline ExactStepDistributionView evaluate_exact_step_distribution(
   auto &step_workspace = *workspace;
   step_workspace.reset(
       params, first_param_row, trigger_state, sequence_state, observed_time);
-  auto &target_evaluator = step_workspace.target_evaluator;
   auto &target_workspace = step_workspace.target_workspace;
   target_workspace.compiled_math.used_outcomes = used_outcomes;
   const auto &runtime_outcome = plan.runtime.outcomes[target_pos];
@@ -107,13 +130,10 @@ inline ExactStepDistributionView evaluate_exact_step_distribution(
   if (!collect_successors &&
       successors.total_probability_root_id != semantic::kInvalidIndex) {
     result.total_probability =
-        evaluate_compiled_math_root(
-            plan.compiled_math,
+        evaluate_prepared_exact_step_root_batch(
+            plan,
             successors.total_probability_root_id,
-            &target_workspace.compiled_math,
-            &target_evaluator,
-            nullptr,
-            &target_workspace);
+            &step_workspace);
     if (!std::isfinite(result.total_probability) ||
         !(result.total_probability > 0.0)) {
       result.total_probability = 0.0;
@@ -132,13 +152,10 @@ inline ExactStepDistributionView evaluate_exact_step_distribution(
     }
 
     const double scenario_prob =
-        evaluate_compiled_math_root(
-            plan.compiled_math,
+        evaluate_prepared_exact_step_root_batch(
+            plan,
             transition.probability_root_id,
-            &target_workspace.compiled_math,
-            &target_evaluator,
-            nullptr,
-            &target_workspace);
+            &step_workspace);
     if (!(scenario_prob > 0.0)) {
       continue;
     }

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -19,6 +20,11 @@
 namespace accumulatr::eval {
 namespace detail {
 
+struct ObservationBatchWorkspace;
+struct ObservationBatchWorkspaceDeleter {
+  void operator()(ObservationBatchWorkspace *workspace) const noexcept;
+};
+
 struct NativeLikelihoodContext {
   semantic::SemanticModel model;
   std::vector<ComponentObservationPlan> observed_plans_by_component_code;
@@ -27,6 +33,8 @@ struct NativeLikelihoodContext {
   bool ranked_supported{true};
   std::vector<semantic::Index> exact_variant_index_by_component_code;
   std::vector<ExactVariantPlan> exact_plans;
+  std::unique_ptr<ObservationBatchWorkspace, ObservationBatchWorkspaceDeleter>
+      observation_batch_workspace;
 };
 
 inline void compile_component_weight_parameter_layout(
@@ -362,6 +370,10 @@ inline Rcpp::XPtr<T> checked_xptr(SEXP value, const char *what) {
 }
 
 inline const NativeLikelihoodContext &likelihood_context_from_xptr(SEXP value) {
+  return *checked_xptr<NativeLikelihoodContext>(value, "likelihood context");
+}
+
+inline NativeLikelihoodContext &mutable_likelihood_context_from_xptr(SEXP value) {
   return *checked_xptr<NativeLikelihoodContext>(value, "likelihood context");
 }
 

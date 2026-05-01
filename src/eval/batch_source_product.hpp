@@ -26,6 +26,17 @@ struct BatchActiveLaneSpan {
 struct BatchTimeSlotView {
   const double *values{nullptr};
   std::size_t lane_stride{0};
+  const std::uint8_t *valid{nullptr};
+
+  bool has(const semantic::Index time_id,
+           const semantic::Index lane) const noexcept {
+    if (valid == nullptr) {
+      return true;
+    }
+    return valid[
+        static_cast<std::size_t>(time_id) * lane_stride +
+        static_cast<std::size_t>(lane)] != 0U;
+  }
 
   double get(const semantic::Index time_id,
              const semantic::Index lane) const noexcept {
@@ -38,13 +49,16 @@ struct BatchTimeSlotView {
 struct BatchLeafInputView {
   const ExactLoadedLeafInput *inputs{nullptr};
   std::size_t lane_stride{0};
+  const semantic::Index *lane_map{nullptr};
 
   const ExactLoadedLeafInput &get(
       const semantic::Index leaf_index,
       const semantic::Index lane) const noexcept {
+    const auto mapped_lane =
+        lane_map == nullptr ? lane : lane_map[static_cast<std::size_t>(lane)];
     return inputs[
         static_cast<std::size_t>(leaf_index) * lane_stride +
-        static_cast<std::size_t>(lane)];
+        static_cast<std::size_t>(mapped_lane)];
   }
 };
 
@@ -119,13 +133,10 @@ struct BatchFiniteIntegralWorkspace {
   void ensure_size(const std::size_t time_slot_count,
                    const std::size_t leaf_count,
                    const std::size_t child_capacity) {
+    (void)leaf_count;
     const auto time_value_count = time_slot_count * child_capacity;
     if (child_time_values.size() < time_value_count) {
       child_time_values.resize(time_value_count, 0.0);
-    }
-    const auto leaf_value_count = leaf_count * child_capacity;
-    if (child_leaf_inputs.size() < leaf_value_count) {
-      child_leaf_inputs.resize(leaf_value_count);
     }
     if (child_active.size() < child_capacity) {
       child_active.resize(child_capacity);
@@ -346,8 +357,8 @@ inline double batch_source_product_lognormal_leaf_value(
   const double m = loaded.params[0];
   const double s = loaded.params[1];
   return batch_source_product_finish_base_value(
-      need_pdf ? R::dlnorm(x, m, s, 0) : 0.0,
-      need_pdf ? 0.0 : R::plnorm(x, m, s, 1, 0),
+      need_pdf ? lognormal_pdf_fast(x, m, s) : 0.0,
+      need_pdf ? 0.0 : lognormal_cdf_fast(x, m, s),
       loaded.q,
       channel_mask);
 }
@@ -361,9 +372,10 @@ inline double batch_source_product_gamma_leaf_value(
   }
   const bool need_pdf = channel_mask == kLeafChannelPdf;
   const double shape = loaded.params[0];
-  const double scale = 1.0 / loaded.params[1];
+  const double rate = loaded.params[1];
+  const double scale = 1.0 / rate;
   return batch_source_product_finish_base_value(
-      need_pdf ? R::dgamma(x, shape, scale, 0) : 0.0,
+      need_pdf ? gamma_pdf_fast_rate(x, shape, rate) : 0.0,
       need_pdf ? 0.0 : R::pgamma(x, shape, scale, 1, 0),
       loaded.q,
       channel_mask);
@@ -879,12 +891,6 @@ inline bool batch_finite_integral_source_product_direct_leaf(
       workspace->child_time_values[
           static_cast<std::size_t>(kernel.bind_time_id) * child_capacity +
           child_count] = shift + scale * rule.nodes[q];
-      for (std::size_t leaf = 0; leaf < leaf_count; ++leaf) {
-        workspace->child_leaf_inputs[leaf * child_capacity + child_count] =
-            parent_context.leaf_inputs.get(
-                static_cast<semantic::Index>(leaf),
-                parent_lane);
-      }
       ++child_count;
     }
   }
@@ -898,7 +904,10 @@ inline bool batch_finite_integral_source_product_direct_leaf(
   const BatchSourceProductContext child_context{
       child_capacity,
       BatchTimeSlotView{workspace->child_time_values.data(), child_capacity},
-      BatchLeafInputView{workspace->child_leaf_inputs.data(), child_capacity},
+      BatchLeafInputView{
+          parent_context.leaf_inputs.inputs,
+          parent_context.leaf_inputs.lane_stride,
+          workspace->child_parent_lanes.data()},
       static_cast<semantic::Index>(parent_context.cache_scope_id + 1)};
   const BatchActiveLaneSpan child_active{
       workspace->child_active.data(),

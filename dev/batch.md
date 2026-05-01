@@ -1,648 +1,546 @@
-# Batch Exact Evaluation Contract
+# Batch Exact Evaluation Implementation Contract
 
-This is the implementation contract for batched exact likelihood evaluation.
-The goal is not to make scalar evaluation look vectorized. The goal is to stop
-walking the same compiled exact probability program and source-product kernels
-one parameter/data combination at a time.
+This document is the implementation contract for turning exact likelihood
+evaluation into a coherent lane-batched executor.
 
-The correct target is:
+The goal is not "some batch helpers exist." The goal is:
 
 ```text
-group compatible evaluation requests
-  -> execute compiled probability programs over active lanes
-  -> execute source-product/integral kernels over contiguous active lanes
-  -> reduce integral child lanes back to parent lanes
-  -> write per-trial log-likelihoods
+group compatible likelihood lanes
+  -> walk each compiled probability/evaluation shape once per group
+  -> execute source-product and integral work over active lane arrays
+  -> call distribution math through lane-batch kernels
+  -> reduce child lanes back to parent lanes
+  -> write per-trial likelihoods
 ```
 
-The important distinction is this:
+The final implementation must not be a collection of unrelated wrappers around
+the scalar evaluator. Covered shapes get one canonical hot path. Unsupported
+shapes may use scalar only through an explicit unsupported-shape boundary.
 
-- The vector DAG/tree walk is orchestration.
-- The source-product/integral executor is the performance target.
+## Current State
 
-A generic vector tree walk that still calls the scalar source-product machinery
-is not success. That implementation was already tried and lost.
+This is the current mixed state after the fail-closed batch consolidation work.
+It is materially better than scalar replay, but it is not fully SIMD/vectorized.
 
-## Non-Negotiable Outcome
+### Already Batched Or Grouped
 
-The implementation is worth keeping only if all of these are true:
+- Observation requests are grouped into `ObservationBatchGroup`s for the
+  non-identity observation path.
+- Exact probability programs have batch execution entry points:
+  `evaluate_exact_program_for_observation_batch()`,
+  `evaluate_exact_probability_program_op_batch()`, and related trigger/state
+  batch functions.
+- Compiled math spans have batch entry points:
+  `evaluate_compiled_node_span_batch()`,
+  `evaluate_compiled_integral_node_batch()`, and
+  `evaluate_compiled_integral_node_batch_lane_native()`.
+- Covered compiled source and integral nodes no longer fall back to scalar
+  evaluation inside the batch executor. If a source/integral fragment reaches
+  the batch path without batch support, it throws instead of silently calling
+  `compiled_math_source_node_value()` or `evaluate_compiled_integral_kernel()`.
+- Regular non-integral compiled nodes now dispatch once per scheduled node and
+  then apply that operation across lanes. They no longer choose the node kind
+  inside every lane iteration.
+- Finite integral kernels can execute as lane batches:
+  parent lanes are filtered, quadrature child lanes are generated, child lanes
+  evaluate the integrand in a grouped path, and child values are reduced back to
+  parent lanes.
+- Source-product op evaluation is grouped:
+  `compiled_math_batch_source_product_value_for_ops()` dispatches once per op
+  over the current active lane list and compacts lanes after zero/impossible
+  factors.
+- Source-product program fills are grouped:
+  conditioned fills, exact-gate fills, onset convolution fills, pool-k-of-n
+  fills, and leaf fills run over lane arrays.
+- The old hot scalar source-product symbols are no longer dominant in the
+  stimulus-selective profile:
+  `compiled_math_source_product_value_for_ops()`,
+  `compiled_math_source_product_direct_leaf_scalar()`, and old scalar leaf
+  callbacks are not the main target path.
+- Batch scratch and observation batch workspace are reused enough that previous
+  allocation hot spots such as `std::vector<double>::__append` and `madvise`
+  are no longer central in the stimulus-selective profile.
+- Finite unranked identity observations now enter the same observation batch
+  grouping and exact probability batch executor as non-identity observations.
+- Ranked identity observations now enter grouped ranked observation batches.
+  Transition roots and ready-expression normalizers are evaluated through the
+  compiled batch root executor.
+- `OnsetConvolution` source programs now handle both exact-onset and latent
+  convolution cases in the batch path. Latent onset convolution uses grouped
+  quadrature samples and calls the batch source-program executor for onset
+  density.
+- `PoolKOfN` source programs now use a lane-batch dynamic program for member
+  CDF/survival/PDF composition instead of the scalar source-product program.
 
-1. `dev/validation/run_validation.R` passes with the current tolerances.
-2. `dev/scripts/benchmark_speed.R` improves `stim_selective_stop` by at least
-   20% against the scalar baseline.
-3. No benchmark case regresses for a structural reason.
-4. Profiles show reduced scalar observation-plan dispatch, scalar exact program
-   dispatch, scalar compiled-node dispatch, and scalar source-product dispatch.
-5. Remaining hot source-channel samples are real distribution/math work over
-   contiguous active lane loops.
-6. Integral-heavy cases do not do more source-channel work than scalar unless
-   the extra work is mathematically unavoidable and measured.
-7. Covered compiled shapes have one canonical hot path. Scalar remains a
-   correctness oracle and an unsupported-shape path during development only.
-8. Missing batch metadata is a compiler failure, not a runtime fallback.
-9. Code size is justified by the benchmark and profile result.
+### Already Vectorized Distribution Math
 
-Minimum useful target:
+- Lognormal batch leaf paths use vector log/exp and batched normal CDF:
+  `compiled_math_batch_lognormal_leaf_values_from_times()`.
+- Batched normal CDF uses a rational high-accuracy implementation with vector
+  `vvexp()` for larger lane counts:
+  `compiled_math_batch_normal_cdf_from_z()`.
+- Ex-Gaussian batch leaf paths are present and route the normal-CDF and exp work
+  through batched helpers where possible.
+- Gamma PDF batch paths use vector log/exp for the density calculation.
+
+### Still Scalar Or Partially Scalar
+
+- The legacy scalar exact-trial evaluator remains in the source as dead
+  fallback/oracle code, but covered likelihood evaluation no longer calls
+  `evaluate_exact_trials_cached()`.
+- Gamma CDF/survival still calls scalar `R::pgamma()` in covered leaf paths.
+- LBA and RDM still use scalar per-lane formulas internally. They are grouped at
+  the evaluator/source-product level, but their distribution math is not
+  lane-vectorized.
+- Regular non-integral nodes still read/write per-lane `CompiledMathWorkspace`
+  value arrays. The node dispatch is batched, but the value storage is not yet a
+  dense structure-of-arrays evaluator frame.
+- Bound resolution is still per lane:
+  `CompiledSourceChannels::source_product_resolved_bound_values_from_time_slots()`.
+- Expr-upper and timed normalizer machinery still contains per-lane work:
+  `compiled_math_batch_node_evaluator_for_lane()` and
+  `compiled_math_batch_expr_upper_bound_for_node()`.
+- Source-product control still does per-op/per-lane product updates and active
+  lane compaction. That control is expected, but it must stay small compared to
+  math.
+- Some scalar C++ math remains in non-batch or unsupported paths. That is
+  acceptable only while those shapes are explicitly unsupported by the batch
+  coverage contract.
+
+## Current Evidence
+
+Installed-package benchmarks show the current state is consolidated but not a
+clear speed win over the previous best batch snapshot:
 
 ```text
-stim_selective_stop, 50 trials, installed package, current quadrature:
-  scalar baseline: about 34-36 ms/eval
-  keep threshold: below 28 ms/eval
-  preferred target: below 20 ms/eval
+case                         current measured
+stim_selective_stop, 400      44.00 ms/eval
+stim_selective_stop, 50       24.33 ms/eval
+example_6_dual_path, 400       8.33 ms/eval
+stop_change_shared_trigger, 400 1.48 ms/eval
+example_23_ranked_chain, 400   0.21 ms/eval
 ```
 
-If a serious implementation cannot meet the keep threshold and explain the win
-in the profile, delete it.
+Profile interpretation for `stim_selective_stop`, 400 trials:
 
-## Current Scalar Shape
+- active source/integral batch execution no longer samples
+  `compiled_math_source_node_value()` or scalar
+  `evaluate_compiled_integral_kernel()`;
+- old scalar leaf callbacks are effectively gone from the hot profile;
+- `erfc` is no longer the main wall;
+- top frames are now batch leaf math and vector math:
+  `compiled_math_batch_lognormal_leaf_values_from_times()`,
+  `compiled_math_batch_normal_cdf_from_z()`, `VVLOG`, and `VVEXP`;
+- remaining non-math cost is mostly source-product control, per-lane bound
+  resolution, expr-upper/timed-normalizer lookup, scratch `ensure_size()`, and
+  vector assignment/allocation noise.
 
-The current exact finite-observation path is:
+This is not the finish line. It is a cleaner, fail-closed grouped evaluator
+shape. The next speed work must attack the remaining lane-state and math
+storage costs, not reintroduce scalar fallbacks.
+
+## Non-Negotiable Design Rules
+
+1. No model-specific fast paths.
+2. No scalar replay hidden behind a batch-looking wrapper.
+3. No eager dense source precompute across inactive branches or unused
+   quadrature children.
+4. No fallback to scalar after a covered batch shape has begun execution.
+5. No runtime semantic lookup in hot loops.
+6. No per-lane heap allocation in hot loops.
+7. No loosened validation tolerances.
+8. No new approximate distribution math without an error audit over parameter
+   ranges, data ranges, tails, and summed likelihoods.
+9. No duplicate long-term paths for the same covered shape.
+10. Scalar `lane_count = 1` is allowed only as the same batch executor, or as an
+    explicitly unsupported-shape boundary.
+
+## Target Architecture
+
+### Lane
+
+A lane is one likelihood contribution request.
+
+At minimum a lane carries:
 
 ```text
-evaluate_observed_trials_cached()
-  -> evaluate_observation_plan_direct()
-  -> evaluate_exact_probability_program()
-  -> evaluate_exact_step_distribution()
-  -> evaluate_compiled_node_span()
-  -> evaluate_compiled_source_product_integral_kernel()
-  -> compiled_math_source_product_value_for_ops()
-  -> source PDF/CDF/survival calls
+trial index
+component code
+variant id
+observation plan id
+probability program id
+observed state/outcome/rank shape
+observed time slots
+parameter row
+component weight
+trigger/sequence/ranked state slots
 ```
 
-The useful scalar property is laziness. It evaluates only the branch, source
-channel, and quadrature sample demanded by the active scalar path. Batch must
-preserve that property.
-
-The harmful scalar property is the unit of execution. The current source-product
-integral kernel loops one parent request, one quadrature sample, one compiled
-source-product op, and one source-channel call at a time. That repeats dispatch,
-cache checks, time rebinding, and distribution calls across lanes that share the
-same compiled shape.
-
-## Rejected Implementations
-
-### Eager Source Precompute
-
-Do not collect broad source/time demands and fill dense source buffers before
-evaluation.
-
-That design is rejected because it:
-
-- precomputed source/time combinations before branch gates knew which lanes
-  remained active;
-- made sparse nested integrals dense;
-- created Cartesian products of parent and child quadrature nodes;
-- moved cost into source precompute and distribution math;
-- destroyed the scalar evaluator's useful laziness.
-
-Observed evidence:
-
-```text
-case                         scalar/head   eager batch   disabled batch
-stim_selective_stop          34.5 ms       746 ms        35.5 ms
-example_16_guard_tie_simple  4.08 ms       4.08 ms       4.15 ms
-example_6_dual_path          1.26 ms       1.32 ms       1.34 ms
-stop_change_shared_trigger   0.14 ms       0.15 ms       0.15 ms
-```
-
-### Vector Wrapper Around Scalar Kernels
-
-Do not wrap scalar exact evaluation in a lane loop. Do not build a vector tree
-walk whose source-product leaf still calls scalar
-`compiled_math_source_product_value_for_ops()` per lane.
-
-A literal vector tree-walk implementation was validated and removed because it
-failed the keep criteria:
-
-```text
-shape                                      stim_selective_stop
-scalar/head                                34-36 ms/eval
-full vector tree walk                      about 376 ms/eval
-vector tree walk plus RT-free dedup         about 54 ms/eval
-source-product op vector rewrite            about 92 ms/eval
-```
-
-The lesson is precise: correctness is not enough. A lane-vector wrapper around
-the current scalar source-product machinery does not reduce the mathematical
-work and adds setup/reduction overhead.
-
-## Required Execution Model
-
-### Lane Definition
-
-A root lane is one evaluation request, not just one trial.
-
-At minimum, a lane identifies:
-
-```text
-trial_index
-component_code
-variant_index
-observation_state_code
-observation_plan_id
-probability_program_id
-target_outcome_id when applicable
-observed_rt when applicable
-first_param_row or row_map layout
-mixture/component weight slot when applicable
-```
-
-The executor may pack this more tightly, but it must not rediscover the same
-information semantically at runtime.
-
-### Grouping
-
-Batch only compatible lanes together. Group keys must be compiled integer keys.
-
-Required grouping dimensions:
-
-- component code;
-- exact variant id;
-- observation plan id;
-- probability program id/root id;
-- outcome/state/rank shape;
-- parameter row-layout compatibility;
-- trigger-state enumeration shape;
-- ranked/sequence state shape when ranked observations are involved.
-
-Forbidden grouping behavior:
-
-- string keys;
-- semantic-name lookup;
-- asking the scalar evaluator whether a row is supported;
-- per-row heap allocation in the hot path;
-- grouping that forces dense work for lanes that will be gated off immediately.
+The hot path must use integer ids and precompiled offsets. It must not use
+strings or semantic names.
 
 ### Active Sets
 
-Represent active work with compressed active-index arrays. Bit masks are allowed
-as secondary metadata, but the hot source loops need compact lane lists.
-
-Required:
+Every batch executor receives compact active lane arrays:
 
 ```text
 active_count
-active_lane[i]
+active_lane[active_count]
 ```
 
-Reason: gates, zero-width integrals, failed bounds, impossible source
-conditions, and zero products will make masks sparse. Iterating all lanes and
-checking a boolean is not the intended hot shape.
+Boolean masks may exist as side metadata, but distribution math and
+source-product loops operate over compact lane lists.
 
-## Vector Context
+### Workspace
 
-The vector context is a structure-of-arrays workspace.
-
-Required logical fields:
+Workspace is structure-of-arrays and reused:
 
 ```text
-lane_count
-active_lane[]
-param_row[lane]
-trial_index[lane]
-component_weight[lane]
 time_slot[slot][lane]
-trigger_state_slot[slot][lane]
-sequence_exact_time[source][lane]
-sequence_upper_bound[source][lane]
-expr_upper_bound[expr][lane]
-expr_upper_normalizer[expr][lane]
-used_outcome[outcome][lane]
+time_valid[slot][lane]
 node_value[node][lane]
+source_leaf_value[lane]
+product[lane]
+weight[lane]
 parent_lane[child_lane]
-quadrature_weight[child_lane]
-cache_scope_id
+bound_lower[lane]
+bound_upper[lane]
+scratch_x[lane]
+scratch_y[lane]
+scratch_lane[active_count]
 ```
 
-Implementation can compress or omit fields for unsupported shapes, but a
-covered shape must not use scalar workspace mutation shared across lanes.
+Covered hot paths must not mutate scalar `CompiledMathWorkspace` per lane.
 
-Required invariants:
+### Distribution Kernels
 
-- active lanes are the only lanes that may trigger source math;
-- child contexts know their parent lane and quadrature weight;
-- nested integrals get distinct cache scopes when the same time slot has a new
-  meaning;
-- buffers are allocated from compiled workspace size estimates and reused;
-- source-channel loops operate over contiguous arrays or compressed active
-  lists;
-- no per-lane maps exist in the hot path.
+Distribution-specific code is allowed only behind one batch leaf-kernel
+interface. That means distribution kernels are specialized by distribution
+family, not by benchmark model or evaluator context.
 
-Forbidden:
-
-- optional null workspaces in covered hot paths;
-- vector growth because runtime discovered new structure;
-- scalar `CompiledMathWorkspace` rebinding shared across lanes;
-- treating inactive lanes as valid work for convenience;
-- fallback to scalar evaluation on cache miss.
-
-## Source-Product Kernel Contract
-
-The source-product kernel is the main target. Its loop shape must be inverted
-from scalar execution.
-
-Current scalar shape:
+Required interface shape:
 
 ```text
-for lane:
-  for source_product_op:
-    value = scalar_source_value(op, lane)
-    product *= value
+batch_leaf_values(
+  dist_kind,
+  leaf_index,
+  onset,
+  active_lanes,
+  time_by_lane,
+  channel_mask,
+  source_channels_by_lane,
+  scratch,
+  out_by_lane
+)
 ```
 
-Required batch shape:
+Source-product program leaves, direct source-product leaves, and bind-time
+integral leaves must all call the same distribution-kernel interface.
 
-```text
-product[active_lane] = 1
-current_active = active_lane
+## Implementation Plan
 
-for source_product_op in compiled order:
-  values = vector_source_value(op, current_active)
-  for lane in current_active:
-    product[lane] *= values[lane]
-  compact current_active by dropping zero/impossible lanes
-```
+### Phase 0: Freeze The Measured Baseline
 
-The op dispatch happens once per source-product op, not once per lane.
-
-### Vector Source Reads
-
-Source reads are demand-driven:
-
-```text
-source_value(source_product_channel, channel_kind, time_slot, active_lanes):
-  key = source/channel/condition/time/cache_scope
-  fill only missing active lanes
-  return values for active lanes
-```
-
-Required behavior:
-
-- fill only requested active lanes;
-- preserve scalar laziness across gates and nested integrals;
-- dispatch by distribution/source kind outside the lane loop;
-- use one contiguous or compressed loop for one source/channel/condition;
-- expose cache miss counts in development profiles;
-- reject missing compiled source metadata before execution.
-
-Initial distribution loops may still call scalar R math functions inside the
-lane loop. That is acceptable only if source/op dispatch is already outside the
-lane loop. SIMD is a later implementation detail.
-
-Forbidden:
-
-- precomputing every source channel for every possible quadrature time;
-- filling inactive lanes;
-- using only source/time ids as cache keys when nested integrals can rebind the
-  same time slot;
-- falling back to scalar source-channel evaluation on cache miss.
-
-## Integral Kernel Contract
-
-Integrals are vector control flow plus reduction. They are not an excuse for
-dense precompute.
-
-Required finite-integral shape:
-
-```text
-parent_active = active lanes entering integral
-child_count = 0
-
-for parent in parent_active:
-  lower, upper = bounds(parent)
-  if upper <= lower:
-    result[parent] = 0
-    continue
-
-  for q in GL31:
-    child_parent[child_count] = parent
-    child_time[bind_time_slot][child_count] = map(q, lower, upper)
-    child_weight[child_count] = mapped_weight(q, lower, upper)
-    child_count += 1
-
-child_active = 0..child_count-1
-child_value = eval_integrand(child_context, child_active)
-
-for child in child_active:
-  result[child_parent[child]] += child_weight[child] * child_value[child]
-```
-
-Tail/no-response integrals use the existing GL47 tail rule with the same child
-lane and reduction model.
-
-Required:
-
-- no child lanes for inactive parents;
-- no child lanes for invalid or zero-width bounds;
-- one vector integrand/source-product execution over child lanes when compiled
-  shape is compatible;
-- nested integrals repeat the same rule recursively;
-- child contexts carry parent lane and quadrature weight explicitly;
-- reduction metadata comes from compiled integral metadata;
-- quadrature order is unchanged.
-
-Forbidden:
-
-- global dense parent x child quadrature precompute;
-- special formulas for named benchmark models;
-- hidden product-rule rewrites inside integral execution;
-- changing quadrature method as part of batching.
-
-## Compiled Metadata Contract
-
-Compilation must decide whether a compiled probability program is covered by the
-batch executor. It must not prescribe eager source buffers.
-
-Required metadata:
-
-- stable ids for observation plans, probability programs, roots, and source
-  product kernels;
-- grouping keys for compatible root lanes;
-- node arity, value kind, result slot, child span, and schedule span;
-- time-slot reads/writes;
-- source-view and condition ids;
-- trigger-state table shape;
-- sequence/ranked state slot counts;
-- integral metadata: lower slot, upper slot, quadrature rule id, bind time slot,
-  integrand root/span id, child workspace estimate, and reduction target;
-- source-product metadata: op span, source channel id, source program id,
-  channel kind, fill mask, condition slots, time slot, time cap slot, source view
-  id, and cache-scope id;
-- maximum root lanes, maximum child lanes per integral level, and workspace
-  size estimates;
-- `batch_complete` flag for the exact covered shape.
-
-Allowed metadata:
-
-- static flags for dense finite-only shapes that can use simpler contiguous
-  loops;
-- debug-only scalar comparison hooks outside the hot path;
-- development counters for cache misses and active-lane compaction.
-
-Forbidden metadata:
-
-- semantic string names in the hot path;
-- global lists of source/time pairs to precompute;
-- runtime discovery flags such as "maybe batch";
-- metadata that requires scalar fallback after execution starts.
-
-## Observation Plan Contract
-
-Observation plans should be batch-scheduled, not scalar-interpreted per trial.
-
-Required:
-
-- group lanes by observation plan id and state code before execution;
-- evaluate identical `LogDensity`, `FiniteOutcomeProbability`, and
-  `NoResponseProbability` ops as batch requests;
-- combine weighted sums over lane values after child probability programs finish;
-- preserve RT-free parameter-block dedup semantics for missing-response plans;
-- handle latent component choices as separate lanes with component weights, then
-  reduce by trial using log-sum-exp.
-
-Forbidden:
-
-- one `evaluate_observation_plan_direct()` call per lane in the covered path;
-- per-trial vectors for structural plan values;
-- runtime semantic lookup of components, outcomes, or backends.
-
-## Implementation Order
-
-### 1. Baseline
-
-Record validation, benchmark, and profile before changes:
+Before further behavior changes, record these files:
 
 ```sh
 Rscript dev/validation/run_validation.R
+
 ACCUMULATR_BENCH_INSTALLED=true \
-  ACCUMULATR_BENCH_OUT=dev/scripts/scratch_outputs/benchmark_speed_batch_baseline.csv \
-  Rscript dev/scripts/benchmark_speed.R
+ACCUMULATR_BENCH_TRIALS=400 \
+ACCUMULATR_BENCH_OUT=dev/scripts/scratch_outputs/benchmark_batch_contract_n400.csv \
+Rscript dev/scripts/benchmark_speed.R
+
+ACCUMULATR_BENCH_INSTALLED=true \
+ACCUMULATR_BENCH_TRIALS=50 \
+ACCUMULATR_BENCH_OUT=dev/scripts/scratch_outputs/benchmark_batch_contract_n50.csv \
+Rscript dev/scripts/benchmark_speed.R
+
 ACCUMULATR_PROFILE_R_SCRIPT=$PWD/dev/scripts/profile_workload_mixed.R \
-  ACCUMULATR_PROFILE_CASES=stim_selective_stop \
-  ACCUMULATR_PROFILE_TRIALS=50 \
-  ACCUMULATR_PROFILE_WORKLOAD_SECONDS=16 \
-  ACCUMULATR_PROFILE_DURATION=12 \
-  ACCUMULATR_PROFILE_INTERVAL=1 \
-  ACCUMULATR_PROFILE_TARGET_SIGNALS=1 \
-  ACCUMULATR_PROFILE_FILE=$PWD/dev/scripts/scratch_outputs/profile_batch_baseline.txt \
-  bash dev/scripts/profile_cpp_simple.sh
+ACCUMULATR_PROFILE_CASES=stim_selective_stop \
+ACCUMULATR_PROFILE_TRIALS=400 \
+ACCUMULATR_PROFILE_WORKLOAD_SECONDS=30 \
+ACCUMULATR_PROFILE_DURATION=30 \
+ACCUMULATR_PROFILE_INTERVAL=1 \
+ACCUMULATR_PROFILE_TARGET_SIGNALS=1 \
+ACCUMULATR_PROFILE_FILE=$PWD/dev/scripts/scratch_outputs/profile_batch_contract_stim_400.txt \
+bash dev/scripts/profile_cpp_simple.sh
 ```
 
 Record:
 
-- evals/sec and ms/eval for `stim_selective_stop`;
-- benchmark rows for other exact-heavy cases;
-- top profile frames and sample counts;
-- git commit and dirty status.
+- git commit and dirty status;
+- installed-package benchmark rows;
+- eval-only profile top frames;
+- counts for scalar symbols listed in the acceptance table below.
 
-### 2. Remove Dead Batch Paths
+### Phase 1: Declare Batch Coverage Explicitly
 
-Remove or quarantine failed eager-precompute machinery before adding new batch
-code.
+Add a compiled coverage report for every exact variant and probability program.
+
+Required categories:
+
+```text
+BatchComplete
+BatchGroupedButScalarLeafMath
+BatchGroupedButScalarBounds
+BatchGroupedButScalarExprUpper
+ScalarIdentityShortcut
+Unsupported
+```
+
+Success criteria:
+
+- coverage is determined before execution;
+- logs/debug output can summarize counts by category;
+- no runtime path asks the scalar evaluator whether it can proceed;
+- validation remains 49/49.
+
+### Phase 2: Consolidate The Evaluator Entry Points
+
+Remove the architectural split where identity observations use a separate
+scalar exact-trial shortcut.
 
 Required:
 
-- no dense source-buffer hot path remains;
-- no disabled runtime switches imply a dormant batch engine;
-- validation stays green.
+- identity finite observations become lanes in the same observation/probability
+  batch executor;
+- scalar `evaluate_exact_trials_cached()` is not used for covered identity
+  shapes;
+- scalar exact evaluation remains only for explicitly unsupported shapes;
+- no semantic behavior changes.
 
-### 3. Add Metadata Without Behavior Change
-
-Add batch-completeness and workspace metadata to the compiled exact plan.
-
-Success:
-
-- scalar results are unchanged;
-- unsupported shapes are classified before execution;
-- no runtime fallback is added.
-
-### 4. Build Grouping Without Behavior Change
-
-Create deterministic integer-key grouping for root evaluation requests.
-
-Success:
-
-- group sizes are visible in a debug benchmark;
-- scalar results are unchanged;
-- grouping does not allocate per lane in the hot path.
-
-### 5. Implement Vector Source-Product Kernel
-
-Implement the inverted source-product loop and vector source reads first.
-
-This is the first real performance step. If this still calls scalar
-`compiled_math_source_product_value_for_ops()` per lane, the design has failed.
-
-Success:
-
-- op dispatch is outside the lane loop;
-- source-channel dispatch is outside the lane loop;
-- active lanes compact after zero/impossible factors;
-- profiles show fewer samples in scalar source-product dispatch.
-
-### 6. Implement Vector Integral Child Contexts
-
-Implement finite and tail integral child-lane creation and reduction.
-
-Success:
-
-- invalid bounds produce no child lanes;
-- nested integrals do not create global dense buffers;
-- child contexts preserve scalar time-rebinding semantics exactly;
-- representative per-trial probabilities match scalar.
-
-### 7. Add Vector DAG/Observation Wrapper
-
-Only after the source-product/integral kernel is real, widen the wrapper to
-batch observation plans and compiled math nodes.
-
-Success:
-
-- scalar observation-plan interpretation falls in profiles;
-- scalar compiled-node dispatch falls in profiles;
-- simple arithmetic nodes do not dominate the implementation.
-
-### 8. Enable Covered Shapes
-
-Enable the batch executor only for `batch_complete` compiled shapes.
-
-During development:
+Success criteria:
 
 ```text
-batch_complete     -> batch executor
-not batch_complete -> scalar executor, with documented deletion conditions
+example_6_dual_path profile:
+  evaluate_compiled_source_product_integral_kernel      absent or tiny
+  compiled_math_source_product_value_for_ops            absent or tiny
+  batch executor frames explain the work
 ```
 
-Final covered shapes must not keep equal-priority scalar and batch hot paths.
+Benchmarks must not regress `example_6_dual_path`, `example_16_guard_tie`, or
+`stim_selective_stop`.
 
-### 9. Consolidate
+### Phase 3: Consolidate Source-Product Leaf Calls
 
-After validation, benchmark, and profile prove a win:
+There must be one source-product leaf value path for covered shapes.
 
-- remove superseded scalar hot-path code for covered shapes;
-- collapse duplicate workspaces;
-- delete development flags;
-- delete failed scratch code;
-- keep only maintained benchmark/profile scripts.
+Required:
 
-No cleanup means no accepted win.
+- source-product program leaf fill uses the batch leaf-kernel interface;
+- direct source-product leaf values use the same interface;
+- bind-time integral direct leaves use the same interface;
+- scalar `batch_source_product_*_leaf_value()` callbacks are not used in
+  covered batch hot paths;
+- direct leaf availability checks are hoisted or made cheap enough to stay out
+  of the math profile.
 
-## Accuracy Contract
-
-Batch evaluation must preserve the current numerical method.
-
-- Keep GL31 finite quadrature.
-- Keep GL47 tail quadrature.
-- Do not switch to Simpson/trapezoid as part of this work.
-- Do not loosen validation tolerances.
-- Compare representative per-trial probabilities while debugging, not only total
-  log-likelihoods.
-
-## SIMD Contract
-
-SIMD is not the architecture.
-
-SIMD becomes worth testing only after:
-
-- source-channel loops operate over contiguous or compressed active lane arrays;
-- dispatch is outside the lane loop;
-- masks can be compressed or skipped cheaply;
-- profiles have moved from scalar evaluator dispatch into distribution math.
-
-If profiles still show scalar tree/node/source-product dispatch, SIMD work is
-premature.
-
-## Benchmark And Profile Contract
-
-Every behavior-changing phase must run:
-
-```sh
-Rscript dev/validation/run_validation.R
-ACCUMULATR_BENCH_INSTALLED=true Rscript dev/scripts/benchmark_speed.R
-```
-
-Hard-case profile:
-
-```sh
-ACCUMULATR_PROFILE_R_SCRIPT=$PWD/dev/scripts/profile_workload_mixed.R \
-ACCUMULATR_PROFILE_CASES=stim_selective_stop \
-ACCUMULATR_PROFILE_TRIALS=50 \
-ACCUMULATR_PROFILE_WORKLOAD_SECONDS=16 \
-ACCUMULATR_PROFILE_DURATION=12 \
-ACCUMULATR_PROFILE_INTERVAL=1 \
-ACCUMULATR_PROFILE_TARGET_SIGNALS=1 \
-ACCUMULATR_PROFILE_FILE=$PWD/dev/scripts/scratch_outputs/profile_batch_after.txt \
-bash dev/scripts/profile_cpp_simple.sh
-```
-
-Required comparison table:
+Success criteria:
 
 ```text
-case                       before ms/eval   after ms/eval   ratio
-stim_selective_stop
-example_16_guard_tie_simple
-example_6_dual_path
-stop_change_shared_trigger
+batch_source_product_lognormal_leaf_value      0 meaningful samples
+batch_source_product_gamma_leaf_value          0 meaningful samples
+batch_source_product_exgauss_leaf_value        0 meaningful samples
+compiled_math_batch_program_leaf_values_for_kind 0 meaningful samples
 ```
 
-Required profile comparison:
+### Phase 4: Vectorize Remaining Distribution Kernels
+
+This phase is distribution math, not evaluator wrapping.
+
+Required order:
+
+1. Gamma CDF/survival.
+2. LBA normal-CDF/PDF subexpressions.
+3. RDM normal-CDF/log-CDF subexpressions.
+4. Ex-Gaussian tail cases and small-lane thresholds.
+
+Gamma CDF is the hardest correctness risk. Use one of these only:
+
+- a high-accuracy vector implementation with an error audit;
+- a stable library vector call if available;
+- scalar `R::pgamma()` only while gamma CDF is marked
+  `BatchGroupedButScalarLeafMath`, not `BatchComplete`.
+
+Error audit requirements:
 
 ```text
-frame/symbol                                      before samples   after samples
-evaluate_observed_trials_cached
+max absolute error
+max relative error where reference is not near zero
+signed mean error
+sum error across realistic likelihood batches
+tail error
+monotonicity checks
+validation models using the distribution
+```
+
+Success criteria:
+
+- no validation tolerance changes;
+- no systematic signed error over sweeps;
+- profile moves time from scalar distribution symbols into vector math or
+  unavoidable distribution arithmetic;
+- benchmark does not regress non-target models.
+
+### Phase 5: Batch Source Bound Resolution
+
+Replace per-lane bound resolution with a lane-batch bound resolver.
+
+Current scalar-ish symbol:
+
+```text
+CompiledSourceChannels::source_product_resolved_bound_values_from_time_slots()
+```
+
+Required:
+
+- resolve one bound plan over active lanes;
+- use precompiled bound term offsets and time slots;
+- write `lower`, `upper`, `exact`, and `has_exact` arrays;
+- preserve time-valid semantics;
+- no per-lane virtual/semantic source lookup.
+
+Success criteria:
+
+```text
+source_product_resolved_bound_values_from_time_slots
+  drops from visible hot profile to absent/tiny
+```
+
+### Phase 6: Batch Expr-Upper And Timed Normalizers
+
+Replace per-lane expr-upper lookup and timed-normalizer work with batch
+evaluation over active lanes.
+
+Current scalar-ish symbols:
+
+```text
+compiled_math_batch_node_evaluator_for_lane()
+compiled_math_batch_expr_upper_bound_for_node()
+compiled_math_batch_upper_bound_from_terms()
+```
+
+Required:
+
+- precompute source-view ids and subject ids in metadata;
+- evaluate timed upper terms over active lanes;
+- preserve sequence upper-bound precedence;
+- write upper time and normalizer arrays;
+- compact lanes after impossible upper-bound factors.
+
+Success criteria:
+
+- expr-upper symbols stop appearing as meaningful hot frames;
+- guarded/tie validation remains green;
+- `example_16_guard_tie_simple` improves or does not regress.
+
+### Phase 7: Reduce Source-Product Control Overhead
+
+Only after phases 3-6, optimize control overhead.
+
+Allowed:
+
+- predecode op spans into compact kernel records;
+- split constant-only/product-only op spans;
+- keep active lane arrays in scratch without repeated clears;
+- avoid repeated direct-leaf availability checks inside quadrature loops when
+  metadata proves availability.
+
+Forbidden:
+
+- model-specific rewrites;
+- source/time precompute across branches;
+- duplicate evaluator paths for the same shape.
+
+Success criteria:
+
+```text
+compiled_math_batch_source_product_value_for_ops
+  is small relative to distribution math and quadrature work
+```
+
+### Phase 8: Remove Transitional Scalar Paths For Covered Shapes
+
+After coverage is explicit and benchmarks/profiles prove the batch path:
+
+- delete or quarantine old scalar hot-path code for covered shapes;
+- keep scalar only as unsupported-shape executor and test oracle;
+- make covered shape scalar entry a failure in debug builds;
+- remove development comparison hooks from hot paths;
+- keep a small set of benchmark/profile scripts.
+
+Success criteria:
+
+- covered shapes have one hot path;
+- scalar remains reachable only through an explicit unsupported category;
+- code is smaller or at least structurally simpler than before consolidation.
+
+## Acceptance Table
+
+Every behavior-changing phase must report this table:
+
+```text
+case                          before ms/eval   after ms/eval   ratio
+stim_selective_stop, 400
+stim_selective_stop, 50
+example_6_dual_path, 400
+example_16_guard_tie, 400
+stop_change_shared_trigger, 400
+```
+
+Every behavior-changing phase must also report profile counts for:
+
+```text
 evaluate_observation_plan_direct
-evaluate_exact_probability_program
-evaluate_exact_step_distribution
-evaluate_compiled_node_span
+evaluate_exact_trials_cached
 evaluate_compiled_source_product_integral_kernel
 compiled_math_source_product_value_for_ops
 compiled_math_source_product_direct_leaf_scalar
-Rf_pnorm/Rf_plnorm/Rf_dlnorm/log/exp
+batch_source_product_lognormal_leaf_value
+batch_source_product_gamma_leaf_value
+batch_source_product_exgauss_leaf_value
+compiled_math_batch_program_leaf_values_for_kind
+CompiledSourceChannels::source_product_resolved_bound_values_from_time_slots
+compiled_math_batch_node_evaluator_for_lane
+compiled_math_batch_expr_upper_bound_for_node
+R::pgamma / Rf_pgamma
+erfc
+VVLOG
+VVEXP
+std::vector<double>::__append
+madvise
 ```
 
-A benchmark-only win is insufficient. The profile must explain why the win
-happened.
+Benchmark-only wins are not accepted. The profile must explain the win.
+
+## Definition Of Done
+
+The batch evaluator is done only when:
+
+1. Validation passes without tolerance changes.
+2. Covered shapes do not enter scalar exact/source-product/integral hot paths.
+3. Scalar `lane_count = 1` works through the same batch executor where the shape
+   is covered.
+4. Distribution math is vectorized for lognormal, ex-Gaussian, gamma, LBA, and
+   RDM, or the non-vectorized distribution is explicitly not `BatchComplete`.
+5. Identity finite observations no longer bypass the batch evaluator.
+6. Bound resolution and expr-upper/timed-normalizer work are lane-batched.
+7. Allocation and vector growth are absent from the hot profile.
+8. Installed-package benchmarks show no structural regressions.
+9. The implementation has no model-specific paths.
+10. The code has one maintained execution path per covered shape.
 
 ## Kill Criteria
 
-Delete the batch work if any of these remain true after a serious implementation
-attempt:
+Delete or revert a phase if any of these are true:
 
-- validation requires weaker tolerances;
-- `stim_selective_stop` speedup is below 20%;
-- profile samples do not move away from scalar observation/exact/node/source
-  dispatch;
-- source-channel calls increase because inactive or unnecessary lanes are
-  filled;
-- nested or tail integrals become dense Cartesian precompute;
-- code size grows while scalar exact paths remain the default for covered
-  shapes;
-- the implementation is stimulus-selective in disguise;
-- simple benchmark cases regress structurally;
-- missing batch metadata falls back at runtime.
-
-Failed batch work is useful only if it is removed cleanly.
-
-## Expected End State
-
-```text
-compiled exact plan
-  owns grouping keys
-  owns batch-completeness metadata
-  owns source-product kernel metadata
-  owns integral child/reduction metadata
-  owns workspace size estimates
-
-likelihood evaluation
-  groups compatible root requests
-  runs covered observation plans over lanes
-  runs covered probability programs over lanes
-  executes source-product kernels over active lane lists
-  creates integral child lanes only when demanded
-  reduces child lanes back to parents
-  reduces component-choice lanes back to trial log-likelihoods
-```
-
-The final covered path is one coherent batch exact evaluator. Scalar execution
-is not the optimized implementation; it is the oracle and the temporary path for
-unsupported shapes.
+- validation needs weaker tolerances;
+- the profile does not move time away from scalar dispatch or scalar math;
+- inactive lanes are evaluated for convenience;
+- nested integrals become dense parent x quadrature x source precompute;
+- a change only helps `stim_selective_stop` while regressing broader exact-heavy
+  cases;
+- code adds another long-term path instead of replacing a path;
+- benchmark improvements cannot be explained by the profile.

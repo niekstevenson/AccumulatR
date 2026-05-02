@@ -18,6 +18,9 @@
 namespace accumulatr::eval {
 namespace detail {
 
+constexpr std::size_t kFiniteDirectLeafQuadratureTileOrder =
+    quadrature::kDefaultFiniteOrder;
+
 #if defined(ACCUMULATR_USE_ACCELERATE_VFORCE)
 inline void compiled_math_batch_normal_cdf_from_z(
     double *z_by_lane,
@@ -445,6 +448,7 @@ struct CompiledMathLaneBatchState {
   const double *node_values{nullptr};
   std::size_t node_value_lane_stride{0};
   const semantic::Index *node_value_lane_map{nullptr};
+  const std::vector<const ExactLoadedLeafInput *> *leaf_inputs_by_lane{nullptr};
 
   CompiledMathWorkspace *workspace(const semantic::Index lane) const {
     const auto pos = static_cast<std::size_t>(lane);
@@ -511,6 +515,22 @@ struct CompiledMathLaneBatchState {
     return 0.0;
   }
 };
+
+inline const ExactLoadedLeafInput *compiled_math_batch_leaf_input_for_lane(
+    const CompiledMathLaneBatchState &state,
+    const semantic::Index lane,
+    const semantic::Index leaf_index) {
+  const auto lane_pos = static_cast<std::size_t>(lane);
+  if (state.leaf_inputs_by_lane != nullptr &&
+      lane_pos < state.leaf_inputs_by_lane->size()) {
+    return (*state.leaf_inputs_by_lane)[lane_pos];
+  }
+  auto *source_channels = state.source_channels(lane);
+  if (source_channels == nullptr) {
+    return nullptr;
+  }
+  return &source_channels->source_product_leaf_input(leaf_index);
+}
 
 struct CompiledMathBatchSourceProductScratch {
   std::vector<semantic::Index> lanes_a;
@@ -610,6 +630,14 @@ struct CompiledMathBatchSourceProductScratch {
   }
 };
 
+struct CompiledMathDirectLeafPreparedOp {
+  const CompiledMathSourceProductOp *op{nullptr};
+  const CompiledMathSourceProductChannel *channel{nullptr};
+  bool time_is_bind{false};
+  bool has_time_cap{false};
+  bool cap_is_bind{false};
+};
+
 struct CompiledMathBatchIntegralFrame {
   std::vector<double> time_values;
   std::vector<std::uint8_t> time_valid;
@@ -632,6 +660,14 @@ struct CompiledMathBatchIntegralFrame {
   std::vector<double> source_values;
   std::vector<double> source_leaf_values;
   std::vector<double> bind_times;
+  std::vector<const ExactLoadedLeafInput *> source_leaf_inputs_by_lane;
+  std::vector<const ExactLoadedLeafInput *> source_leaf_inputs_by_op_parent;
+  std::vector<ExactSourceChannels *> direct_source_channels_by_parent;
+  std::vector<CompiledMathDirectLeafPreparedOp> direct_leaf_ops;
+  std::vector<double> direct_parent_scale;
+  std::vector<double> direct_parent_shift;
+  std::vector<double> direct_source_time_by_op_parent;
+  std::vector<double> direct_source_cap_by_op_parent;
   std::vector<CompiledSourceView *> condition_evaluators;
   std::vector<std::uint8_t> upper_found_by_lane;
   std::vector<double> upper_time_by_lane;
@@ -712,6 +748,18 @@ struct CompiledMathBatchIntegralFrame {
     }
     if (bind_times.size() < lane_capacity) {
       bind_times.resize(lane_capacity, 0.0);
+    }
+    if (source_leaf_inputs_by_lane.size() < lane_capacity) {
+      source_leaf_inputs_by_lane.resize(lane_capacity, nullptr);
+    }
+    if (direct_source_channels_by_parent.size() < lane_capacity) {
+      direct_source_channels_by_parent.resize(lane_capacity, nullptr);
+    }
+    if (direct_parent_scale.size() < lane_capacity) {
+      direct_parent_scale.resize(lane_capacity, 0.0);
+    }
+    if (direct_parent_shift.size() < lane_capacity) {
+      direct_parent_shift.resize(lane_capacity, 0.0);
     }
     if (condition_evaluators.size() < lane_capacity) {
       condition_evaluators.resize(lane_capacity, nullptr);
@@ -887,11 +935,57 @@ inline bool compiled_math_batch_product_is_live(
   return std::isfinite(value) && value != 0.0;
 }
 
+inline bool compiled_math_batch_multiply_product_value_at(
+    const std::size_t lane_pos,
+    const double factor,
+    double *products_by_lane) noexcept {
+  const double current = products_by_lane[lane_pos];
+  if (!compiled_math_batch_product_is_live(current)) {
+    products_by_lane[lane_pos] = 0.0;
+    return false;
+  }
+  const double product = current * factor;
+  if (compiled_math_batch_product_is_live(product)) {
+    products_by_lane[lane_pos] = product;
+    return true;
+  }
+  products_by_lane[lane_pos] = 0.0;
+  return false;
+}
+
+inline bool compiled_math_batch_lanes_are_contiguous(
+    const semantic::Index *lanes,
+    const std::size_t lane_count,
+    std::size_t *offset) {
+  if (lane_count == 0U) {
+    if (offset != nullptr) {
+      *offset = 0U;
+    }
+    return true;
+  }
+  const auto first = static_cast<std::size_t>(lanes[0]);
+  for (std::size_t i = 1; i < lane_count; ++i) {
+    if (static_cast<std::size_t>(lanes[i]) != first + i) {
+      return false;
+    }
+  }
+  if (offset != nullptr) {
+    *offset = first;
+  }
+  return true;
+}
+
 inline void compiled_math_batch_array_fill(
     const semantic::Index *lanes,
     const std::size_t lane_count,
     const double value,
     double *out_by_lane) {
+  std::size_t offset = 0U;
+  if (compiled_math_batch_lanes_are_contiguous(
+          lanes, lane_count, &offset)) {
+    std::fill(out_by_lane + offset, out_by_lane + offset + lane_count, value);
+    return;
+  }
   for (std::size_t i = 0; i < lane_count; ++i) {
     out_by_lane[static_cast<std::size_t>(lanes[i])] = value;
   }
@@ -903,6 +997,17 @@ inline std::size_t compiled_math_batch_array_compact_live(
     const double *values_by_lane,
     semantic::Index *next_lanes) {
   std::size_t next_count = 0U;
+  std::size_t offset = 0U;
+  if (compiled_math_batch_lanes_are_contiguous(
+          lanes, lane_count, &offset)) {
+    for (std::size_t i = 0; i < lane_count; ++i) {
+      if (values_by_lane[offset + i] != 0.0) {
+        next_lanes[next_count++] =
+            static_cast<semantic::Index>(offset + i);
+      }
+    }
+    return next_count;
+  }
   for (std::size_t i = 0; i < lane_count; ++i) {
     const auto lane = lanes[i];
     if (values_by_lane[static_cast<std::size_t>(lane)] != 0.0) {
@@ -910,6 +1015,46 @@ inline std::size_t compiled_math_batch_array_compact_live(
     }
   }
   return next_count;
+}
+
+inline std::size_t compiled_math_batch_array_live_lanes_from_mask(
+    const semantic::Index *lanes,
+    const std::size_t lane_count,
+    const double *products_by_lane,
+    semantic::Index *live_lanes) {
+  std::size_t live_count = 0U;
+  std::size_t offset = 0U;
+  if (compiled_math_batch_lanes_are_contiguous(
+          lanes, lane_count, &offset)) {
+    for (std::size_t i = 0; i < lane_count; ++i) {
+      if (compiled_math_batch_product_is_live(products_by_lane[offset + i])) {
+        live_lanes[live_count++] =
+            static_cast<semantic::Index>(offset + i);
+      }
+    }
+    return live_count;
+  }
+  for (std::size_t i = 0; i < lane_count; ++i) {
+    const auto lane = lanes[i];
+    if (compiled_math_batch_product_is_live(
+            products_by_lane[static_cast<std::size_t>(lane)])) {
+      live_lanes[live_count++] = lane;
+    }
+  }
+  return live_count;
+}
+
+inline std::size_t compiled_math_batch_array_live_lanes_from_dense_mask(
+    const std::size_t lane_count,
+    const double *products_by_lane,
+    semantic::Index *live_lanes) {
+  std::size_t live_count = 0U;
+  for (std::size_t lane_pos = 0; lane_pos < lane_count; ++lane_pos) {
+    if (compiled_math_batch_product_is_live(products_by_lane[lane_pos])) {
+      live_lanes[live_count++] = static_cast<semantic::Index>(lane_pos);
+    }
+  }
+  return live_count;
 }
 
 inline std::size_t compiled_math_batch_array_multiply_scalar_mask(
@@ -922,8 +1067,54 @@ inline std::size_t compiled_math_batch_array_multiply_scalar_mask(
     return 0U;
   }
   std::size_t live_count = 0U;
+  std::size_t offset = 0U;
+  if (compiled_math_batch_lanes_are_contiguous(
+          lanes, lane_count, &offset)) {
+    double *products = products_by_lane + offset;
+    for (std::size_t i = 0; i < lane_count; ++i) {
+      const double current = products[i];
+      if (!compiled_math_batch_product_is_live(current)) {
+        products[i] = 0.0;
+        continue;
+      }
+      const double product = current * scalar;
+      if (compiled_math_batch_product_is_live(product)) {
+        products[i] = product;
+        ++live_count;
+      } else {
+        products[i] = 0.0;
+      }
+    }
+    return live_count;
+  }
   for (std::size_t i = 0; i < lane_count; ++i) {
     const auto lane_pos = static_cast<std::size_t>(lanes[i]);
+    const double current = products_by_lane[lane_pos];
+    if (!compiled_math_batch_product_is_live(current)) {
+      products_by_lane[lane_pos] = 0.0;
+      continue;
+    }
+    const double product = current * scalar;
+    if (compiled_math_batch_product_is_live(product)) {
+      products_by_lane[lane_pos] = product;
+      ++live_count;
+    } else {
+      products_by_lane[lane_pos] = 0.0;
+    }
+  }
+  return live_count;
+}
+
+inline std::size_t compiled_math_batch_array_multiply_scalar_dense_mask(
+    const std::size_t lane_count,
+    const double scalar,
+    double *products_by_lane) {
+  if (scalar == 0.0 || !std::isfinite(scalar)) {
+    std::fill(products_by_lane, products_by_lane + lane_count, 0.0);
+    return 0U;
+  }
+  std::size_t live_count = 0U;
+  for (std::size_t lane_pos = 0; lane_pos < lane_count; ++lane_pos) {
     const double current = products_by_lane[lane_pos];
     if (!compiled_math_batch_product_is_live(current)) {
       products_by_lane[lane_pos] = 0.0;
@@ -946,6 +1137,27 @@ inline std::size_t compiled_math_batch_array_multiply_values_mask(
     const double *factors_by_lane,
     double *products_by_lane) {
   std::size_t live_count = 0U;
+  std::size_t offset = 0U;
+  if (compiled_math_batch_lanes_are_contiguous(
+          lanes, lane_count, &offset)) {
+    const double *factors = factors_by_lane + offset;
+    double *products = products_by_lane + offset;
+    for (std::size_t i = 0; i < lane_count; ++i) {
+      const double current = products[i];
+      if (!compiled_math_batch_product_is_live(current)) {
+        products[i] = 0.0;
+        continue;
+      }
+      const double product = current * factors[i];
+      if (compiled_math_batch_product_is_live(product)) {
+        products[i] = product;
+        ++live_count;
+      } else {
+        products[i] = 0.0;
+      }
+    }
+    return live_count;
+  }
   for (std::size_t i = 0; i < lane_count; ++i) {
     const auto lane_pos = static_cast<std::size_t>(lanes[i]);
     const double current = products_by_lane[lane_pos];
@@ -1056,6 +1268,20 @@ inline void compiled_math_batch_array_weighted_accumulate(
     const double *weights_by_lane,
     const double *values_by_lane,
     double *out_by_lane) {
+  std::size_t offset = 0U;
+  if (compiled_math_batch_lanes_are_contiguous(
+          lanes, lane_count, &offset)) {
+    const double *weights = weights_by_lane + offset;
+    const double *values = values_by_lane + offset;
+    double *out = out_by_lane + offset;
+    for (std::size_t i = 0; i < lane_count; ++i) {
+      const double value = values[i];
+      if (compiled_math_batch_product_is_live(value)) {
+        out[i] += weights[i] * value;
+      }
+    }
+    return;
+  }
   for (std::size_t i = 0; i < lane_count; ++i) {
     const auto lane_pos = static_cast<std::size_t>(lanes[i]);
     const double value = values_by_lane[lane_pos];
@@ -1071,6 +1297,20 @@ inline void compiled_math_batch_array_accumulate_product(
     const double *left_by_lane,
     const double *right_by_lane,
     double *out_by_lane) {
+  std::size_t offset = 0U;
+  if (compiled_math_batch_lanes_are_contiguous(
+          lanes, lane_count, &offset)) {
+    const double *left = left_by_lane + offset;
+    const double *right = right_by_lane + offset;
+    double *out = out_by_lane + offset;
+    for (std::size_t i = 0; i < lane_count; ++i) {
+      const double product = left[i] * right[i];
+      if (compiled_math_batch_product_is_live(product)) {
+        out[i] += product;
+      }
+    }
+    return;
+  }
   for (std::size_t i = 0; i < lane_count; ++i) {
     const auto lane_pos = static_cast<std::size_t>(lanes[i]);
     const double product = left_by_lane[lane_pos] * right_by_lane[lane_pos];
@@ -1087,6 +1327,22 @@ inline void compiled_math_batch_array_weighted_accumulate_parent(
     const double *weights_by_child_lane,
     const double *values_by_child_lane,
     double *out_by_parent_lane) {
+  std::size_t offset = 0U;
+  if (compiled_math_batch_lanes_are_contiguous(
+          child_lanes,
+          lane_count,
+          &offset)) {
+    const double *weights = weights_by_child_lane + offset;
+    const double *values = values_by_child_lane + offset;
+    for (std::size_t i = 0; i < lane_count; ++i) {
+      const double value = values[i];
+      if (compiled_math_batch_product_is_live(value)) {
+        out_by_parent_lane[static_cast<std::size_t>(parent_lanes[i])] +=
+            weights[i] * value;
+      }
+    }
+    return;
+  }
   for (std::size_t i = 0; i < lane_count; ++i) {
     const auto child_lane = child_lanes[i];
     const auto child_pos = static_cast<std::size_t>(child_lane);
@@ -1095,6 +1351,28 @@ inline void compiled_math_batch_array_weighted_accumulate_parent(
       out_by_parent_lane[static_cast<std::size_t>(parent_lanes[i])] +=
           weights_by_child_lane[i] * value;
     }
+  }
+}
+
+inline void compiled_math_batch_array_weighted_accumulate_parent_rows(
+    const semantic::Index *parent_lanes,
+    const std::size_t parent_count,
+    const std::size_t child_width,
+    const double *weights_by_child_lane,
+    const double *values_by_child_lane,
+    double *out_by_parent_lane) {
+  for (std::size_t parent_pos = 0; parent_pos < parent_count; ++parent_pos) {
+    const auto parent_lane = static_cast<std::size_t>(parent_lanes[parent_pos]);
+    const auto row_offset = parent_pos * child_width;
+    double sum = 0.0;
+    for (std::size_t child_pos = 0; child_pos < child_width; ++child_pos) {
+      const auto pos = row_offset + child_pos;
+      const double value = values_by_child_lane[pos];
+      if (compiled_math_batch_product_is_live(value)) {
+        sum += weights_by_child_lane[pos] * value;
+      }
+    }
+    out_by_parent_lane[parent_lane] += sum;
   }
 }
 
@@ -1673,16 +1951,16 @@ inline bool compiled_math_batch_lognormal_leaf_values_from_times(
     std::size_t valid_count = 0U;
     for (std::size_t i = 0; i < lane_count; ++i) {
       const auto lane = lanes[i];
-      auto *source_channels = state.source_channels(lane);
-      if (source_channels == nullptr) {
+      const auto *loaded =
+          compiled_math_batch_leaf_input_for_lane(state, lane, leaf_index);
+      if (loaded == nullptr) {
         return false;
       }
       const auto lane_pos = static_cast<std::size_t>(lane);
-      const auto &loaded = source_channels->source_product_leaf_input(leaf_index);
       const double x =
-          current_time_by_lane[lane_pos] - leaf_onset_abs_value - loaded.t0;
-      const double m = loaded.params[0];
-      const double s = loaded.params[1];
+          current_time_by_lane[lane_pos] - leaf_onset_abs_value - loaded->t0;
+      const double m = loaded->params[0];
+      const double s = loaded->params[1];
       if (!(x > 0.0) || !std::isfinite(m) || !std::isfinite(s) ||
           s <= 0.0) {
         values_by_lane[lane_pos] =
@@ -1691,12 +1969,15 @@ inline bool compiled_math_batch_lognormal_leaf_values_from_times(
                 : batch_source_product_finish_base_value(
                       0.0,
                       0.0,
-                      loaded.q,
+                      loaded->q,
                       channel_mask);
         continue;
       }
       scratch->lanes_a[valid_count] = lane;
       scratch->lower[valid_count] = x;
+      scratch->pdf_a[valid_count] = m;
+      scratch->cdf_a[valid_count] = s;
+      scratch->survival_a[valid_count] = loaded->q;
       ++valid_count;
     }
     if (valid_count == 0U) {
@@ -1706,36 +1987,28 @@ inline bool compiled_math_batch_lognormal_leaf_values_from_times(
     vvlog(scratch->upper.data(), scratch->lower.data(), &n);
     if (channel_mask == kLeafChannelPdf) {
       for (std::size_t i = 0; i < valid_count; ++i) {
-        const auto lane = scratch->lanes_a[i];
-        auto *source_channels = state.source_channels(lane);
-        const auto &loaded = source_channels->source_product_leaf_input(leaf_index);
         const double z =
-            (scratch->upper[i] - loaded.params[0]) / loaded.params[1];
+            (scratch->upper[i] - scratch->pdf_a[i]) / scratch->cdf_a[i];
         scratch->upper[i] = -0.5 * z * z;
       }
       vvexp(scratch->upper.data(), scratch->upper.data(), &n);
       for (std::size_t i = 0; i < valid_count; ++i) {
         const auto lane = scratch->lanes_a[i];
         const auto lane_pos = static_cast<std::size_t>(lane);
-        auto *source_channels = state.source_channels(lane);
-        const auto &loaded = source_channels->source_product_leaf_input(leaf_index);
         const double base_pdf =
             kInvSqrtTwoPi * scratch->upper[i] /
-            (scratch->lower[i] * loaded.params[1]);
+            (scratch->lower[i] * scratch->cdf_a[i]);
         values_by_lane[lane_pos] =
             batch_source_product_finish_base_value(
                 base_pdf,
                 0.0,
-                loaded.q,
+                scratch->survival_a[i],
                 channel_mask);
       }
     } else {
       for (std::size_t i = 0; i < valid_count; ++i) {
-        const auto lane = scratch->lanes_a[i];
-        auto *source_channels = state.source_channels(lane);
-        const auto &loaded = source_channels->source_product_leaf_input(leaf_index);
         scratch->upper[i] =
-            (scratch->upper[i] - loaded.params[0]) / loaded.params[1];
+            (scratch->upper[i] - scratch->pdf_a[i]) / scratch->cdf_a[i];
       }
       compiled_math_batch_normal_cdf_from_z(
           scratch->upper.data(),
@@ -1744,13 +2017,11 @@ inline bool compiled_math_batch_lognormal_leaf_values_from_times(
       for (std::size_t i = 0; i < valid_count; ++i) {
         const auto lane = scratch->lanes_a[i];
         const auto lane_pos = static_cast<std::size_t>(lane);
-        auto *source_channels = state.source_channels(lane);
-        const auto &loaded = source_channels->source_product_leaf_input(leaf_index);
         values_by_lane[lane_pos] =
             batch_source_product_finish_base_value(
                 0.0,
                 scratch->upper[i],
-                loaded.q,
+                scratch->survival_a[i],
                 channel_mask);
       }
     }
@@ -1843,16 +2114,16 @@ inline bool compiled_math_batch_gamma_leaf_values_from_times(
     std::size_t valid_count = 0U;
     for (std::size_t i = 0; i < lane_count; ++i) {
       const auto lane = lanes[i];
-      auto *source_channels = state.source_channels(lane);
-      if (source_channels == nullptr) {
+      const auto *loaded =
+          compiled_math_batch_leaf_input_for_lane(state, lane, leaf_index);
+      if (loaded == nullptr) {
         return false;
       }
       const auto lane_pos = static_cast<std::size_t>(lane);
-      const auto &loaded = source_channels->source_product_leaf_input(leaf_index);
       const double x =
-          current_time_by_lane[lane_pos] - leaf_onset_abs_value - loaded.t0;
-      const double shape = loaded.params[0];
-      const double rate = loaded.params[1];
+          current_time_by_lane[lane_pos] - leaf_onset_abs_value - loaded->t0;
+      const double shape = loaded->params[0];
+      const double rate = loaded->params[1];
       if (!(x > 0.0) || !std::isfinite(shape) || shape <= 0.0 ||
           !std::isfinite(rate) || rate <= 0.0) {
         values_by_lane[lane_pos] =
@@ -1861,7 +2132,7 @@ inline bool compiled_math_batch_gamma_leaf_values_from_times(
                 : batch_source_product_finish_base_value(
                       0.0,
                       0.0,
-                      loaded.q,
+                      loaded->q,
                       channel_mask);
         continue;
       }
@@ -1869,7 +2140,7 @@ inline bool compiled_math_batch_gamma_leaf_values_from_times(
       scratch->lower[valid_count] = x;
       scratch->pdf_a[valid_count] = shape;
       scratch->cdf_a[valid_count] = rate;
-      scratch->survival_a[valid_count] = loaded.q;
+      scratch->survival_a[valid_count] = loaded->q;
       ++valid_count;
     }
     if (valid_count == 0U) {
@@ -1952,17 +2223,17 @@ inline bool compiled_math_batch_exgauss_leaf_values_from_times(
     std::size_t valid_count = 0U;
     for (std::size_t i = 0; i < lane_count; ++i) {
       const auto lane = lanes[i];
-      auto *source_channels = state.source_channels(lane);
-      if (source_channels == nullptr) {
+      const auto *loaded =
+          compiled_math_batch_leaf_input_for_lane(state, lane, leaf_index);
+      if (loaded == nullptr) {
         return false;
       }
       const auto lane_pos = static_cast<std::size_t>(lane);
-      const auto &loaded = source_channels->source_product_leaf_input(leaf_index);
       const double x =
-          current_time_by_lane[lane_pos] - leaf_onset_abs_value - loaded.t0;
-      const double mu = loaded.params[0];
-      const double sigma = loaded.params[1];
-      const double tau = loaded.params[2];
+          current_time_by_lane[lane_pos] - leaf_onset_abs_value - loaded->t0;
+      const double mu = loaded->params[0];
+      const double sigma = loaded->params[1];
+      const double tau = loaded->params[2];
       if (!(x > 0.0) || !std::isfinite(mu) || !std::isfinite(sigma) ||
           sigma <= 0.0 || !std::isfinite(tau) || tau <= 0.0) {
         values_by_lane[lane_pos] =
@@ -1971,7 +2242,7 @@ inline bool compiled_math_batch_exgauss_leaf_values_from_times(
                 : batch_source_product_finish_base_value(
                       0.0,
                       0.0,
-                      loaded.q,
+                      loaded->q,
                       channel_mask);
         continue;
       }
@@ -1982,7 +2253,7 @@ inline bool compiled_math_batch_exgauss_leaf_values_from_times(
       scratch->pdf_b[lane_pos] = mu;
       scratch->cdf_b[lane_pos] = sigma;
       scratch->survival_b[lane_pos] = tau;
-      scratch->survival_a[lane_pos] = loaded.q;
+      scratch->survival_a[lane_pos] = loaded->q;
       scratch->lanes_a[valid_count] = lane;
       scratch->upper[valid_count] = z0;
       scratch->exact[valid_count] = z0 - sigma_over_tau;
@@ -2112,18 +2383,18 @@ inline bool compiled_math_batch_lba_leaf_values_from_times(
     std::size_t valid_count = 0U;
     for (std::size_t i = 0; i < lane_count; ++i) {
       const auto lane = lanes[i];
-      auto *source_channels = state.source_channels(lane);
-      if (source_channels == nullptr) {
+      const auto *loaded =
+          compiled_math_batch_leaf_input_for_lane(state, lane, leaf_index);
+      if (loaded == nullptr) {
         return false;
       }
       const auto lane_pos = static_cast<std::size_t>(lane);
-      const auto &loaded = source_channels->source_product_leaf_input(leaf_index);
       const double x =
-          current_time_by_lane[lane_pos] - leaf_onset_abs_value - loaded.t0;
-      const double v = loaded.params[0];
-      const double B = loaded.params[1];
-      const double A = loaded.params[2];
-      const double sv = loaded.params[3];
+          current_time_by_lane[lane_pos] - leaf_onset_abs_value - loaded->t0;
+      const double v = loaded->params[0];
+      const double B = loaded->params[1];
+      const double A = loaded->params[2];
+      const double sv = loaded->params[3];
       if (!(x > 0.0)) {
         values_by_lane[lane_pos] =
             batch_source_product_before_onset_value(channel_mask);
@@ -2135,7 +2406,7 @@ inline bool compiled_math_batch_lba_leaf_values_from_times(
             batch_source_product_finish_base_value(
                 0.0,
                 0.0,
-                loaded.q,
+                loaded->q,
                 channel_mask);
         continue;
       }
@@ -2145,7 +2416,7 @@ inline bool compiled_math_batch_lba_leaf_values_from_times(
       scratch->exact[valid_count] = B;
       scratch->pdf_a[valid_count] = A;
       scratch->cdf_a[valid_count] = sv;
-      scratch->survival_a[valid_count] = loaded.q;
+      scratch->survival_a[valid_count] = loaded->q;
       scratch->pdf_b[valid_count] = v / sv;
       ++valid_count;
     }
@@ -2314,18 +2585,18 @@ inline bool compiled_math_batch_rdm_leaf_values_from_times(
     std::size_t small_drift_count = 0U;
     for (std::size_t i = 0; i < lane_count; ++i) {
       const auto lane = lanes[i];
-      auto *source_channels = state.source_channels(lane);
-      if (source_channels == nullptr) {
+      const auto *loaded =
+          compiled_math_batch_leaf_input_for_lane(state, lane, leaf_index);
+      if (loaded == nullptr) {
         return false;
       }
       const auto lane_pos = static_cast<std::size_t>(lane);
-      const auto &loaded = source_channels->source_product_leaf_input(leaf_index);
       const double x =
-          current_time_by_lane[lane_pos] - leaf_onset_abs_value - loaded.t0;
-      const double v = loaded.params[0];
-      const double B = loaded.params[1];
-      const double A = loaded.params[2];
-      const double s = loaded.params[3];
+          current_time_by_lane[lane_pos] - leaf_onset_abs_value - loaded->t0;
+      const double v = loaded->params[0];
+      const double B = loaded->params[1];
+      const double A = loaded->params[2];
+      const double s = loaded->params[3];
       if (!(x > 0.0)) {
         values_by_lane[lane_pos] =
             batch_source_product_before_onset_value(channel_mask);
@@ -2337,7 +2608,7 @@ inline bool compiled_math_batch_rdm_leaf_values_from_times(
             batch_source_product_finish_base_value(
                 0.0,
                 0.0,
-                loaded.q,
+                loaded->q,
                 channel_mask);
         continue;
       }
@@ -2352,7 +2623,7 @@ inline bool compiled_math_batch_rdm_leaf_values_from_times(
             batch_source_product_finish_base_value(
                 0.0,
                 0.0,
-                loaded.q,
+                loaded->q,
                 channel_mask);
         continue;
       }
@@ -2361,7 +2632,7 @@ inline bool compiled_math_batch_rdm_leaf_values_from_times(
         scratch->cdf_a[point_count] = x;
         scratch->cdf_b[point_count] = k;
         scratch->cdf_c[point_count] = l;
-        scratch->survival_c[point_count] = loaded.q;
+        scratch->survival_c[point_count] = loaded->q;
         ++point_count;
         continue;
       }
@@ -2371,7 +2642,7 @@ inline bool compiled_math_batch_rdm_leaf_values_from_times(
         scratch->survival_b[small_drift_count] = k;
         scratch->pdf_c[small_drift_count] = l;
         scratch->onset_upper[small_drift_count] = a;
-        scratch->survival_c[small_drift_count] = loaded.q;
+        scratch->survival_c[small_drift_count] = loaded->q;
         ++small_drift_count;
         continue;
       }
@@ -2380,7 +2651,7 @@ inline bool compiled_math_batch_rdm_leaf_values_from_times(
       scratch->upper[common_count] = k;
       scratch->exact[common_count] = l;
       scratch->pdf_a[common_count] = a;
-      scratch->survival_a[common_count] = loaded.q;
+      scratch->survival_a[common_count] = loaded->q;
       ++common_count;
     }
     if (point_count != 0U) {
@@ -3920,23 +4191,18 @@ inline bool compiled_math_batch_direct_leaf_values(
     const std::uint8_t channel_mask,
     double *values_by_lane,
     CompiledMathBatchSourceProductScratch *scratch) {
-  if (channel.leaf_index == semantic::kInvalidIndex) {
-    return false;
-  }
-  if (scratch != nullptr) {
-    scratch->ensure_size(state.lane_count, active.size);
-    for (std::size_t i = 0; i < active.size; ++i) {
-      const auto lane = active.lanes[i];
-      auto *source_channels = state.source_channels(lane);
-      if (source_channels == nullptr ||
-          !source_channels->source_product_direct_leaf_available(
-              source_product_channel_id)) {
-        return false;
-      }
-      const auto lane_pos = static_cast<std::size_t>(lane);
-      scratch->times[lane_pos] =
-          batch_source_product_channel_time(channel, state.time_slots, lane);
-    }
+	  if (channel.leaf_index == semantic::kInvalidIndex) {
+	    return false;
+	  }
+	  (void)source_product_channel_id;
+	  if (scratch != nullptr) {
+	    scratch->ensure_size(state.lane_count, active.size);
+	    for (std::size_t i = 0; i < active.size; ++i) {
+	      const auto lane = active.lanes[i];
+	      const auto lane_pos = static_cast<std::size_t>(lane);
+	      scratch->times[lane_pos] =
+	          batch_source_product_channel_time(channel, state.time_slots, lane);
+	    }
     return compiled_math_batch_leaf_values_from_times(
         channel.leaf_dist_kind,
         channel.leaf_index,
@@ -3994,6 +4260,21 @@ inline bool compiled_math_batch_source_product_value_for_ops(
         op.source_product_program_id == semantic::kInvalidIndex) {
       return false;
     }
+    const semantic::Index *eval_lanes = term_lanes;
+    std::size_t eval_count = term_count;
+    if (live_count != term_count) {
+      eval_count =
+          compiled_math_batch_array_live_lanes_from_mask(
+              term_lanes,
+              term_count,
+              out_by_lane,
+              frame->source_lanes_a.data());
+      eval_lanes = frame->source_lanes_a.data();
+    }
+    if (eval_count == 0U) {
+      live_count = 0U;
+      break;
+    }
     const auto &channel =
         program.integral_kernel_source_product_channels[
             static_cast<std::size_t>(op.source_product_channel_id)];
@@ -4001,8 +4282,8 @@ inline bool compiled_math_batch_source_product_value_for_ops(
     bool direct_leaf_for_all_lanes =
         channel.leaf_index != semantic::kInvalidIndex;
     if (direct_leaf_for_all_lanes) {
-      for (std::size_t i = 0; i < term_count; ++i) {
-        auto *source_channels = state.source_channels(term_lanes[i]);
+      for (std::size_t i = 0; i < eval_count; ++i) {
+        auto *source_channels = state.source_channels(eval_lanes[i]);
         if (source_channels == nullptr) {
           return false;
         }
@@ -4016,8 +4297,8 @@ inline bool compiled_math_batch_source_product_value_for_ops(
 
     if (!op.cache_result && direct_leaf_for_all_lanes) {
       const BatchActiveLaneSpan current_active{
-          term_lanes,
-          term_count};
+          eval_lanes,
+          eval_count};
       if (!compiled_math_batch_direct_leaf_values(
               channel,
               op.source_product_channel_id,
@@ -4028,13 +4309,13 @@ inline bool compiled_math_batch_source_product_value_for_ops(
               &frame->source_product_scratch_layer(
                   0U,
                   state.lane_count,
-                  term_count))) {
+                  eval_count))) {
         return false;
       }
       live_count =
           compiled_math_batch_array_multiply_values_mask(
-              term_lanes,
-              term_count,
+              eval_lanes,
+              eval_count,
               frame->source_leaf_values.data(),
               out_by_lane);
       continue;
@@ -4044,11 +4325,11 @@ inline bool compiled_math_batch_source_product_value_for_ops(
         frame->source_product_scratch_layer(
             0U,
             state.lane_count,
-            term_count);
+            eval_count);
     semantic::Index cache_slot = semantic::kInvalidIndex;
     if (!op.cache_result) {
-      for (std::size_t i = 0; i < term_count; ++i) {
-        const auto lane = term_lanes[i];
+      for (std::size_t i = 0; i < eval_count; ++i) {
+        const auto lane = eval_lanes[i];
         frame->bind_times[static_cast<std::size_t>(lane)] =
             batch_source_product_channel_time(
                 channel,
@@ -4059,8 +4340,8 @@ inline bool compiled_math_batch_source_product_value_for_ops(
               program,
               op.source_product_program_id,
               state,
-              term_lanes,
-              term_count,
+              eval_lanes,
+              eval_count,
               frame->bind_times.data(),
               channel_mask,
               frame,
@@ -4077,9 +4358,9 @@ inline bool compiled_math_batch_source_product_value_for_ops(
       if (cache_slot == semantic::kInvalidIndex) {
         return false;
       }
-      bool any_missing = false;
-      for (std::size_t i = 0; i < term_count; ++i) {
-        const auto lane = term_lanes[i];
+      std::size_t missing_count = 0U;
+      for (std::size_t i = 0; i < eval_count; ++i) {
+        const auto lane = eval_lanes[i];
         const auto lane_pos = static_cast<std::size_t>(lane);
         const auto program_pos =
             static_cast<std::size_t>(cache_slot) * state.lane_count +
@@ -4088,23 +4369,20 @@ inline bool compiled_math_batch_source_product_value_for_ops(
              channel_mask) != 0U) {
           continue;
         }
-        any_missing = true;
+        frame->bind_times[lane_pos] =
+            batch_source_product_channel_time(
+                channel,
+                state.time_slots,
+                lane);
+        fill_scratch.lanes_a[missing_count++] = lane;
       }
-      if (any_missing) {
-        for (std::size_t i = 0; i < term_count; ++i) {
-          const auto lane = term_lanes[i];
-          frame->bind_times[static_cast<std::size_t>(lane)] =
-              batch_source_product_channel_time(
-                  channel,
-                  state.time_slots,
-                  lane);
-        }
+      if (missing_count != 0U) {
         if (!compiled_math_batch_source_product_program_fill(
                 program,
                 op.source_product_program_id,
                 state,
-                term_lanes,
-                term_count,
+                fill_scratch.lanes_a.data(),
+                missing_count,
                 frame->bind_times.data(),
                 op.fill_channel_mask,
                 frame,
@@ -4115,8 +4393,8 @@ inline bool compiled_math_batch_source_product_value_for_ops(
                 fill_scratch.survival_a.data())) {
           return false;
         }
-        for (std::size_t i = 0; i < term_count; ++i) {
-          const auto lane = term_lanes[i];
+        for (std::size_t i = 0; i < missing_count; ++i) {
+          const auto lane = fill_scratch.lanes_a[i];
           const auto lane_pos = static_cast<std::size_t>(lane);
           ExactSourceChannels::SourceProductBatchFill fill;
           fill.mask = fill_scratch.mask_a[lane_pos];
@@ -4133,8 +4411,8 @@ inline bool compiled_math_batch_source_product_value_for_ops(
       }
     }
 
-    for (std::size_t i = 0; i < term_count; ++i) {
-      const auto lane = term_lanes[i];
+    for (std::size_t i = 0; i < eval_count; ++i) {
+      const auto lane = eval_lanes[i];
       const auto lane_pos = static_cast<std::size_t>(lane);
       frame->source_leaf_values[lane_pos] =
           op.cache_result
@@ -4153,8 +4431,8 @@ inline bool compiled_math_batch_source_product_value_for_ops(
     }
     live_count =
         compiled_math_batch_array_multiply_values_mask(
-            term_lanes,
-            term_count,
+            eval_lanes,
+            eval_count,
             frame->source_leaf_values.data(),
             out_by_lane);
   }
@@ -4441,84 +4719,1335 @@ inline bool compiled_math_batch_apply_expr_upper_factor_to_lanes(
           upper_normalizer_by_lane,
           products_by_lane,
           next_lanes);
+	  return true;
+	}
+
+inline void compiled_math_direct_tile_multiply_value_at(
+    const std::size_t child_pos,
+    const double value,
+    CompiledMathBatchIntegralFrame *frame,
+    std::size_t *live_count) {
+  if (compiled_math_batch_multiply_product_value_at(
+          child_pos,
+          value,
+          frame->products.data())) {
+    ++(*live_count);
+  }
+}
+
+inline void compiled_math_direct_tile_multiply_finished_value_at(
+    const std::size_t child_pos,
+    const double base_pdf,
+    const double base_cdf,
+    const double q,
+    const std::uint8_t channel_mask,
+    CompiledMathBatchIntegralFrame *frame,
+    std::size_t *live_count) {
+  compiled_math_direct_tile_multiply_value_at(
+      child_pos,
+      batch_source_product_finish_base_value(
+          base_pdf,
+          base_cdf,
+          q,
+          channel_mask),
+      frame,
+	      live_count);
+}
+
+inline std::size_t compiled_math_direct_tile_child_pos(
+    const semantic::Index *eval_lanes,
+    const std::size_t eval_pos) noexcept {
+  return eval_lanes == nullptr
+             ? eval_pos
+             : static_cast<std::size_t>(eval_lanes[eval_pos]);
+}
+
+inline double compiled_math_direct_tile_bind_time(
+    const CompiledMathBatchIntegralFrame &frame,
+    const std::size_t parent_pos,
+    const std::size_t q_abs,
+    const quadrature::Rule<quadrature::kDefaultFiniteOrder> &rule) noexcept {
+  return frame.direct_parent_shift[parent_pos] +
+         frame.direct_parent_scale[parent_pos] * rule.nodes[q_abs];
+}
+
+inline void compiled_math_direct_tile_weighted_accumulate_parent_rows(
+    const semantic::Index *parent_lanes,
+    const std::size_t parent_count,
+    const std::size_t child_width,
+    const std::size_t q_begin,
+    const quadrature::Rule<quadrature::kDefaultFiniteOrder> &rule,
+    const double *parent_scale,
+    const double *values_by_child_lane,
+    double *out_by_parent_lane) {
+  for (std::size_t parent_pos = 0; parent_pos < parent_count; ++parent_pos) {
+    const auto parent_lane = static_cast<std::size_t>(parent_lanes[parent_pos]);
+    const auto row_offset = parent_pos * child_width;
+    const double scale = parent_scale[parent_pos];
+    double sum = 0.0;
+    for (std::size_t q_slot = 0; q_slot < child_width; ++q_slot) {
+      const auto pos = row_offset + q_slot;
+      const double value = values_by_child_lane[pos];
+      if (compiled_math_batch_product_is_live(value)) {
+        sum += scale * rule.weights[q_begin + q_slot] * value;
+      }
+    }
+    out_by_parent_lane[parent_lane] += sum;
+  }
+}
+
+inline bool compiled_math_direct_tile_lognormal_update(
+    const CompiledMathDirectLeafPreparedOp &prepared,
+    const std::size_t op_parent_offset,
+    const std::size_t eligible_count,
+    const std::size_t q_begin,
+    const quadrature::Rule<quadrature::kDefaultFiniteOrder> &rule,
+    const std::size_t child_width,
+    const std::size_t tile_capacity,
+    const semantic::Index *eval_lanes,
+    const std::size_t eval_count,
+    CompiledMathBatchIntegralFrame *frame,
+    CompiledMathBatchSourceProductScratch *scratch,
+    std::size_t *live_count_out) {
+  if (prepared.op == nullptr || prepared.channel == nullptr ||
+      frame == nullptr || scratch == nullptr ||
+      live_count_out == nullptr ||
+      prepared.channel->leaf_index == semantic::kInvalidIndex ||
+      static_cast<leaf::DistKind>(prepared.channel->leaf_dist_kind) !=
+          leaf::DistKind::Lognormal) {
+    return false;
+  }
+#if defined(ACCUMULATR_USE_ACCELERATE_VFORCE)
+	  std::size_t live_count = 0U;
+	  std::size_t valid_count = 0U;
+	  for (std::size_t eval_pos = 0; eval_pos < eval_count; ++eval_pos) {
+	    const auto child_pos =
+	        compiled_math_direct_tile_child_pos(eval_lanes, eval_pos);
+	    const auto parent_pos = child_pos / child_width;
+	    if (parent_pos >= eligible_count) {
+	      return false;
+	    }
+	    const auto child_lane = static_cast<semantic::Index>(child_pos);
+	    const auto q_slot = child_pos - parent_pos * child_width;
+	    const auto op_parent_pos = op_parent_offset + parent_pos;
+	    const auto *loaded = frame->source_leaf_inputs_by_op_parent[op_parent_pos];
+	    if (loaded == nullptr) {
+	      return false;
+	    }
+	    const double bind_time =
+	        compiled_math_direct_tile_bind_time(
+	            *frame,
+	            parent_pos,
+	            q_begin + q_slot,
+	            rule);
+    double current_time =
+        prepared.time_is_bind
+            ? bind_time
+            : frame->direct_source_time_by_op_parent[op_parent_pos];
+    if (prepared.has_time_cap) {
+      const double cap =
+          prepared.cap_is_bind
+              ? bind_time
+              : frame->direct_source_cap_by_op_parent[op_parent_pos];
+      current_time = std::min(current_time, cap);
+    }
+    const double x =
+        current_time - prepared.channel->leaf_onset_abs_value - loaded->t0;
+    const double m = loaded->params[0];
+    const double s = loaded->params[1];
+    if (!(x > 0.0) || !std::isfinite(m) || !std::isfinite(s) ||
+        s <= 0.0) {
+      compiled_math_direct_tile_multiply_value_at(
+          child_pos,
+          !(x > 0.0)
+              ? batch_source_product_before_onset_value(
+                    prepared.op->value_channel_mask)
+              : batch_source_product_finish_base_value(
+                    0.0,
+                    0.0,
+                    loaded->q,
+                    prepared.op->value_channel_mask),
+          frame,
+          &live_count);
+      continue;
+    }
+    scratch->lanes_a[valid_count] = child_lane;
+    scratch->lower[valid_count] = x;
+    scratch->pdf_a[valid_count] = m;
+    scratch->cdf_a[valid_count] = s;
+    scratch->survival_a[valid_count] = loaded->q;
+    ++valid_count;
+  }
+
+  if (valid_count != 0U) {
+    const auto n = static_cast<int>(valid_count);
+    vvlog(scratch->upper.data(), scratch->lower.data(), &n);
+    if (prepared.op->value_channel_mask == kLeafChannelPdf) {
+      for (std::size_t i = 0; i < valid_count; ++i) {
+        const double z =
+            (scratch->upper[i] - scratch->pdf_a[i]) / scratch->cdf_a[i];
+        scratch->upper[i] = -0.5 * z * z;
+      }
+      vvexp(scratch->upper.data(), scratch->upper.data(), &n);
+      for (std::size_t i = 0; i < valid_count; ++i) {
+        const auto child_pos = static_cast<std::size_t>(scratch->lanes_a[i]);
+        const double base_pdf =
+            kInvSqrtTwoPi * scratch->upper[i] /
+            (scratch->lower[i] * scratch->cdf_a[i]);
+        compiled_math_direct_tile_multiply_finished_value_at(
+            child_pos,
+            base_pdf,
+            0.0,
+            scratch->survival_a[i],
+            prepared.op->value_channel_mask,
+            frame,
+            &live_count);
+      }
+    } else {
+      for (std::size_t i = 0; i < valid_count; ++i) {
+        scratch->upper[i] =
+            (scratch->upper[i] - scratch->pdf_a[i]) / scratch->cdf_a[i];
+      }
+      compiled_math_batch_normal_cdf_from_z(
+          scratch->upper.data(),
+          scratch->lower.data(),
+          valid_count);
+      for (std::size_t i = 0; i < valid_count; ++i) {
+        const auto child_pos = static_cast<std::size_t>(scratch->lanes_a[i]);
+        compiled_math_direct_tile_multiply_finished_value_at(
+            child_pos,
+            0.0,
+            scratch->upper[i],
+            scratch->survival_a[i],
+            prepared.op->value_channel_mask,
+            frame,
+            &live_count);
+      }
+    }
+  }
+
+  *live_count_out = live_count;
+  return true;
+#else
+	  (void)op_parent_offset;
+	  (void)eligible_count;
+	  (void)q_begin;
+	  (void)rule;
+	  (void)child_width;
+  (void)tile_capacity;
+  (void)eval_count;
+  return false;
+#endif
+}
+
+inline bool compiled_math_direct_tile_gamma_update(
+    const CompiledMathDirectLeafPreparedOp &prepared,
+    const std::size_t op_parent_offset,
+    const std::size_t eligible_count,
+    const std::size_t q_begin,
+    const quadrature::Rule<quadrature::kDefaultFiniteOrder> &rule,
+    const std::size_t child_width,
+    const std::size_t tile_capacity,
+    const semantic::Index *eval_lanes,
+    const std::size_t eval_count,
+    CompiledMathBatchIntegralFrame *frame,
+    CompiledMathBatchSourceProductScratch *scratch,
+    std::size_t *live_count_out) {
+  if (prepared.op == nullptr || prepared.channel == nullptr ||
+      frame == nullptr || scratch == nullptr ||
+      live_count_out == nullptr ||
+      prepared.channel->leaf_index == semantic::kInvalidIndex ||
+      static_cast<leaf::DistKind>(prepared.channel->leaf_dist_kind) !=
+          leaf::DistKind::Gamma) {
+    return false;
+  }
+  const auto channel_mask = prepared.op->value_channel_mask;
+	  std::size_t live_count = 0U;
+	  std::size_t valid_count = 0U;
+	  for (std::size_t eval_pos = 0; eval_pos < eval_count; ++eval_pos) {
+	    const auto child_pos =
+	        compiled_math_direct_tile_child_pos(eval_lanes, eval_pos);
+	    const auto parent_pos = child_pos / child_width;
+	    if (parent_pos >= eligible_count) {
+	      return false;
+	    }
+	    const auto child_lane = static_cast<semantic::Index>(child_pos);
+	    const auto q_slot = child_pos - parent_pos * child_width;
+	    const auto op_parent_pos = op_parent_offset + parent_pos;
+	    const auto *loaded = frame->source_leaf_inputs_by_op_parent[op_parent_pos];
+	    if (loaded == nullptr) {
+	      return false;
+	    }
+	    const double bind_time =
+	        compiled_math_direct_tile_bind_time(
+	            *frame,
+	            parent_pos,
+	            q_begin + q_slot,
+	            rule);
+    double current_time =
+        prepared.time_is_bind
+            ? bind_time
+            : frame->direct_source_time_by_op_parent[op_parent_pos];
+    if (prepared.has_time_cap) {
+      const double cap =
+          prepared.cap_is_bind
+              ? bind_time
+              : frame->direct_source_cap_by_op_parent[op_parent_pos];
+      current_time = std::min(current_time, cap);
+    }
+    const double x =
+        current_time - prepared.channel->leaf_onset_abs_value - loaded->t0;
+    const double shape = loaded->params[0];
+    const double rate = loaded->params[1];
+    if (!(x > 0.0) || !std::isfinite(shape) || shape <= 0.0 ||
+        !std::isfinite(rate) || rate <= 0.0) {
+      compiled_math_direct_tile_multiply_value_at(
+          child_pos,
+          !(x > 0.0)
+              ? batch_source_product_before_onset_value(channel_mask)
+              : batch_source_product_finish_base_value(
+                    0.0,
+                    0.0,
+                    loaded->q,
+                    channel_mask),
+          frame,
+          &live_count);
+      continue;
+    }
+    scratch->lanes_a[valid_count] = child_lane;
+    scratch->lower[valid_count] = x;
+    scratch->pdf_a[valid_count] = shape;
+    scratch->cdf_a[valid_count] = rate;
+    scratch->survival_a[valid_count] = loaded->q;
+    ++valid_count;
+  }
+  if (valid_count == 0U) {
+    *live_count_out = live_count;
+    return true;
+  }
+  if (channel_mask != kLeafChannelPdf) {
+    for (std::size_t i = 0; i < valid_count; ++i) {
+      scratch->upper[i] = scratch->cdf_a[i] * scratch->lower[i];
+    }
+    compiled_math_batch_gamma_regularized_lower_values(
+        scratch->pdf_a.data(),
+        scratch->upper.data(),
+        valid_count,
+        scratch->exact.data());
+    for (std::size_t i = 0; i < valid_count; ++i) {
+      compiled_math_direct_tile_multiply_finished_value_at(
+          static_cast<std::size_t>(scratch->lanes_a[i]),
+          0.0,
+          scratch->exact[i],
+          scratch->survival_a[i],
+          channel_mask,
+          frame,
+          &live_count);
+    }
+    *live_count_out = live_count;
+    return true;
+  }
+#if defined(ACCUMULATR_USE_ACCELERATE_VFORCE)
+  const auto n = static_cast<int>(valid_count);
+  vvlog(scratch->upper.data(), scratch->lower.data(), &n);
+  for (std::size_t i = 0; i < valid_count; ++i) {
+    const double shape = scratch->pdf_a[i];
+    const double rate = scratch->cdf_a[i];
+    scratch->upper[i] =
+        shape * std::log(rate) + (shape - 1.0) * scratch->upper[i] -
+        rate * scratch->lower[i] - std::lgamma(shape);
+  }
+  vvexp(scratch->upper.data(), scratch->upper.data(), &n);
+#else
+  for (std::size_t i = 0; i < valid_count; ++i) {
+    scratch->upper[i] =
+        std::exp(
+            scratch->pdf_a[i] * std::log(scratch->cdf_a[i]) +
+            (scratch->pdf_a[i] - 1.0) * std::log(scratch->lower[i]) -
+            scratch->cdf_a[i] * scratch->lower[i] -
+            std::lgamma(scratch->pdf_a[i]));
+  }
+#endif
+  for (std::size_t i = 0; i < valid_count; ++i) {
+    compiled_math_direct_tile_multiply_finished_value_at(
+        static_cast<std::size_t>(scratch->lanes_a[i]),
+        scratch->upper[i],
+        0.0,
+        scratch->survival_a[i],
+        channel_mask,
+        frame,
+        &live_count);
+  }
+  *live_count_out = live_count;
   return true;
 }
 
-inline double compiled_math_batch_direct_leaf_channel_time(
-    const CompiledMathSourceProductChannel &channel,
-    const semantic::Index bind_time_id,
-    const CompiledMathLaneBatchState &state,
-    const semantic::Index lane,
-    const double bind_time) noexcept {
-  double time =
-      channel.time_id == bind_time_id
-          ? bind_time
-          : state.time(channel.time_id, lane);
-  if (channel.time_cap_id != semantic::kInvalidIndex) {
-    const double cap =
-        channel.time_cap_id == bind_time_id
-            ? bind_time
-            : state.time(channel.time_cap_id, lane);
-    time = std::min(time, cap);
-  }
-  return time;
-}
-
-inline bool compiled_math_batch_direct_leaf_values_at_bind_times(
-    const CompiledMathSourceProductChannel &channel,
-    const semantic::Index source_product_channel_id,
-    const semantic::Index bind_time_id,
-    const CompiledMathLaneBatchState &state,
-    const semantic::Index *lanes,
-    const std::size_t lane_count,
-    const double *bind_times_by_lane,
-    const std::uint8_t channel_mask,
-    double *values_by_lane,
-    double *scratch_x,
-    double *scratch_y,
-    semantic::Index *scratch_lanes,
-    CompiledMathBatchSourceProductScratch *scratch) {
-  if (channel.leaf_index == semantic::kInvalidIndex ||
-      lanes == nullptr || bind_times_by_lane == nullptr ||
-      values_by_lane == nullptr) {
+inline bool compiled_math_direct_tile_exgauss_update(
+    const CompiledMathDirectLeafPreparedOp &prepared,
+    const std::size_t op_parent_offset,
+    const std::size_t eligible_count,
+    const std::size_t q_begin,
+    const quadrature::Rule<quadrature::kDefaultFiniteOrder> &rule,
+    const std::size_t child_width,
+    const std::size_t tile_capacity,
+    const semantic::Index *eval_lanes,
+    const std::size_t eval_count,
+    CompiledMathBatchIntegralFrame *frame,
+    CompiledMathBatchSourceProductScratch *scratch,
+    std::size_t *live_count_out) {
+  if (prepared.op == nullptr || prepared.channel == nullptr ||
+      frame == nullptr || scratch == nullptr ||
+      live_count_out == nullptr ||
+      prepared.channel->leaf_index == semantic::kInvalidIndex ||
+      static_cast<leaf::DistKind>(prepared.channel->leaf_dist_kind) !=
+          leaf::DistKind::Exgauss) {
     return false;
   }
-  if (scratch != nullptr) {
-    scratch->ensure_size(state.lane_count, lane_count);
-    for (std::size_t i = 0; i < lane_count; ++i) {
-      const auto lane = lanes[i];
-      auto *source_channels = state.source_channels(lane);
-      if (source_channels == nullptr) {
-        return false;
-      }
-      if (!source_channels->source_product_direct_leaf_available(
-              source_product_channel_id)) {
-        return false;
-      }
-      const auto lane_pos = static_cast<std::size_t>(lane);
-      scratch->times[lane_pos] =
-          compiled_math_batch_direct_leaf_channel_time(
-              channel,
-              bind_time_id,
-              state,
-              lane,
-              bind_times_by_lane[lane_pos]);
+#if defined(ACCUMULATR_USE_ACCELERATE_VFORCE)
+  const auto channel_mask = prepared.op->value_channel_mask;
+	  std::size_t live_count = 0U;
+	  std::size_t valid_count = 0U;
+	  for (std::size_t eval_pos = 0; eval_pos < eval_count; ++eval_pos) {
+	    const auto child_pos =
+	        compiled_math_direct_tile_child_pos(eval_lanes, eval_pos);
+	    const auto parent_pos = child_pos / child_width;
+	    if (parent_pos >= eligible_count) {
+	      return false;
+	    }
+	    const auto child_lane = static_cast<semantic::Index>(child_pos);
+	    const auto q_slot = child_pos - parent_pos * child_width;
+	    const auto op_parent_pos = op_parent_offset + parent_pos;
+	    const auto *loaded = frame->source_leaf_inputs_by_op_parent[op_parent_pos];
+	    if (loaded == nullptr) {
+	      return false;
+	    }
+	    const double bind_time =
+	        compiled_math_direct_tile_bind_time(
+	            *frame,
+	            parent_pos,
+	            q_begin + q_slot,
+	            rule);
+    double current_time =
+        prepared.time_is_bind
+            ? bind_time
+            : frame->direct_source_time_by_op_parent[op_parent_pos];
+    if (prepared.has_time_cap) {
+      const double cap =
+          prepared.cap_is_bind
+              ? bind_time
+              : frame->direct_source_cap_by_op_parent[op_parent_pos];
+      current_time = std::min(current_time, cap);
     }
-    return compiled_math_batch_leaf_values_from_times(
-        channel.leaf_dist_kind,
-        channel.leaf_index,
-        channel.leaf_onset_abs_value,
-        state,
-        lanes,
-        lane_count,
-        scratch->times.data(),
-        channel_mask,
-        values_by_lane,
-        scratch);
+    const double x =
+        current_time - prepared.channel->leaf_onset_abs_value - loaded->t0;
+    const double mu = loaded->params[0];
+    const double sigma = loaded->params[1];
+    const double tau = loaded->params[2];
+    if (!(x > 0.0) || !std::isfinite(mu) || !std::isfinite(sigma) ||
+        sigma <= 0.0 || !std::isfinite(tau) || tau <= 0.0) {
+      compiled_math_direct_tile_multiply_value_at(
+          child_pos,
+          !(x > 0.0)
+              ? batch_source_product_before_onset_value(channel_mask)
+              : batch_source_product_finish_base_value(
+                    0.0,
+                    0.0,
+                    loaded->q,
+                    channel_mask),
+          frame,
+          &live_count);
+      continue;
+    }
+    const double inv_tau = 1.0 / tau;
+    const double sigma_over_tau = sigma * inv_tau;
+    const double z0 = -mu / sigma;
+    scratch->times[child_pos] = x;
+    scratch->pdf_b[child_pos] = mu;
+    scratch->cdf_b[child_pos] = sigma;
+    scratch->survival_b[child_pos] = tau;
+    scratch->survival_a[child_pos] = loaded->q;
+    scratch->lanes_a[valid_count] = child_lane;
+    scratch->upper[valid_count] = z0;
+    scratch->exact[valid_count] = z0 - sigma_over_tau;
+    scratch->lower[valid_count] =
+        sigma * sigma * inv_tau * inv_tau * 0.5 + mu * inv_tau;
+    ++valid_count;
   }
-  (void)scratch_x;
-  (void)scratch_y;
-  (void)scratch_lanes;
+  if (valid_count == 0U) {
+    *live_count_out = live_count;
+    return true;
+  }
+  const auto n = static_cast<int>(valid_count);
+  vvexp(scratch->lower.data(), scratch->lower.data(), &n);
+  compiled_math_batch_normal_cdf_from_z(
+      scratch->upper.data(),
+      scratch->cdf_a.data(),
+      valid_count);
+  compiled_math_batch_normal_cdf_from_z(
+      scratch->exact.data(),
+      scratch->cdf_a.data(),
+      valid_count);
+  std::size_t conditioned_count = 0U;
+  for (std::size_t i = 0; i < valid_count; ++i) {
+    const auto child_lane = scratch->lanes_a[i];
+    const auto child_pos = static_cast<std::size_t>(child_lane);
+    const double lower_cdf =
+        clamp_probability(scratch->upper[i] - scratch->lower[i] * scratch->exact[i]);
+    const double lower_survival = 1.0 - lower_cdf;
+    if (!(lower_survival > 0.0)) {
+      compiled_math_direct_tile_multiply_value_at(
+          child_pos,
+          batch_source_product_before_onset_value(channel_mask),
+          frame,
+          &live_count);
+      continue;
+    }
+    scratch->cdf_c[child_pos] = lower_cdf;
+    scratch->survival_c[child_pos] = lower_survival;
+    scratch->lanes_b[conditioned_count++] = child_lane;
+  }
+  if (conditioned_count == 0U) {
+    *live_count_out = live_count;
+    return true;
+  }
+  for (std::size_t i = 0; i < conditioned_count; ++i) {
+    const auto child_lane = scratch->lanes_b[i];
+    const auto child_pos = static_cast<std::size_t>(child_lane);
+    const double x = scratch->times[child_pos];
+    const double mu = scratch->pdf_b[child_pos];
+    const double sigma = scratch->cdf_b[child_pos];
+    const double tau = scratch->survival_b[child_pos];
+    const double inv_tau = 1.0 / tau;
+    const double sigma_over_tau = sigma * inv_tau;
+    const double z = (x - mu) / sigma;
+    scratch->pdf_a[i] = tau;
+    scratch->pdf_c[i] = scratch->survival_a[child_pos];
+    scratch->onset_upper[i] = scratch->cdf_c[child_pos];
+    scratch->lower[i] =
+        sigma * sigma * inv_tau * inv_tau * 0.5 -
+        (x - mu) * inv_tau;
+    scratch->exact[i] = z - sigma_over_tau;
+    if (channel_mask != kLeafChannelPdf) {
+      scratch->upper[i] = z;
+    }
+  }
+  const auto conditioned_n = static_cast<int>(conditioned_count);
+  vvexp(scratch->lower.data(), scratch->lower.data(), &conditioned_n);
+  compiled_math_batch_normal_cdf_from_z(
+      scratch->exact.data(),
+      scratch->cdf_a.data(),
+      conditioned_count);
+  if (channel_mask != kLeafChannelPdf) {
+    compiled_math_batch_normal_cdf_from_z(
+        scratch->upper.data(),
+        scratch->cdf_a.data(),
+        conditioned_count);
+  }
+  for (std::size_t i = 0; i < conditioned_count; ++i) {
+    const auto child_pos = static_cast<std::size_t>(scratch->lanes_b[i]);
+    const double lower_cdf = scratch->onset_upper[i];
+    const double lower_survival = 1.0 - lower_cdf;
+    if (channel_mask == kLeafChannelPdf) {
+      const double base_pdf =
+          (scratch->lower[i] * scratch->exact[i] / scratch->pdf_a[i]) /
+          lower_survival;
+      compiled_math_direct_tile_multiply_finished_value_at(
+          child_pos,
+          base_pdf,
+          0.0,
+          scratch->pdf_c[i],
+          channel_mask,
+          frame,
+          &live_count);
+    } else {
+      const double raw_cdf =
+          clamp_probability(scratch->upper[i] -
+                            scratch->lower[i] * scratch->exact[i]);
+      const double base_cdf = (raw_cdf - lower_cdf) / lower_survival;
+      compiled_math_direct_tile_multiply_finished_value_at(
+          child_pos,
+          0.0,
+          base_cdf,
+          scratch->pdf_c[i],
+          channel_mask,
+          frame,
+          &live_count);
+    }
+  }
+  *live_count_out = live_count;
+  return true;
+#else
+	  (void)op_parent_offset;
+	  (void)eligible_count;
+	  (void)q_begin;
+	  (void)rule;
+	  (void)child_width;
+  (void)tile_capacity;
+  (void)eval_count;
+  return false;
+#endif
+}
+
+inline bool compiled_math_direct_tile_lba_update(
+    const CompiledMathDirectLeafPreparedOp &prepared,
+    const std::size_t op_parent_offset,
+    const std::size_t eligible_count,
+    const std::size_t q_begin,
+    const quadrature::Rule<quadrature::kDefaultFiniteOrder> &rule,
+    const std::size_t child_width,
+    const std::size_t tile_capacity,
+    const semantic::Index *eval_lanes,
+    const std::size_t eval_count,
+    CompiledMathBatchIntegralFrame *frame,
+    CompiledMathBatchSourceProductScratch *scratch,
+    std::size_t *live_count_out) {
+  if (prepared.op == nullptr || prepared.channel == nullptr ||
+      frame == nullptr || scratch == nullptr ||
+      live_count_out == nullptr ||
+      prepared.channel->leaf_index == semantic::kInvalidIndex ||
+      static_cast<leaf::DistKind>(prepared.channel->leaf_dist_kind) !=
+          leaf::DistKind::LBA) {
+    return false;
+  }
+#if defined(ACCUMULATR_USE_ACCELERATE_VFORCE)
+  const auto channel_mask = prepared.op->value_channel_mask;
+	  std::size_t live_count = 0U;
+	  std::size_t valid_count = 0U;
+	  for (std::size_t eval_pos = 0; eval_pos < eval_count; ++eval_pos) {
+	    const auto child_pos =
+	        compiled_math_direct_tile_child_pos(eval_lanes, eval_pos);
+	    const auto parent_pos = child_pos / child_width;
+	    if (parent_pos >= eligible_count) {
+	      return false;
+	    }
+	    const auto child_lane = static_cast<semantic::Index>(child_pos);
+	    const auto q_slot = child_pos - parent_pos * child_width;
+	    const auto op_parent_pos = op_parent_offset + parent_pos;
+	    const auto *loaded = frame->source_leaf_inputs_by_op_parent[op_parent_pos];
+	    if (loaded == nullptr) {
+	      return false;
+	    }
+	    const double bind_time =
+	        compiled_math_direct_tile_bind_time(
+	            *frame,
+	            parent_pos,
+	            q_begin + q_slot,
+	            rule);
+    double current_time =
+        prepared.time_is_bind
+            ? bind_time
+            : frame->direct_source_time_by_op_parent[op_parent_pos];
+    if (prepared.has_time_cap) {
+      const double cap =
+          prepared.cap_is_bind
+              ? bind_time
+              : frame->direct_source_cap_by_op_parent[op_parent_pos];
+      current_time = std::min(current_time, cap);
+    }
+    const double x =
+        current_time - prepared.channel->leaf_onset_abs_value - loaded->t0;
+    const double v = loaded->params[0];
+    const double B = loaded->params[1];
+    const double A = loaded->params[2];
+    const double sv = loaded->params[3];
+    if (!(x > 0.0)) {
+      compiled_math_direct_tile_multiply_value_at(
+          child_pos,
+          batch_source_product_before_onset_value(channel_mask),
+          frame,
+          &live_count);
+      continue;
+    }
+    if (!std::isfinite(v) || !std::isfinite(B) ||
+        !std::isfinite(A) || !std::isfinite(sv) || sv <= 0.0) {
+      compiled_math_direct_tile_multiply_finished_value_at(
+          child_pos,
+          0.0,
+          0.0,
+	          loaded->q,
+		          channel_mask,
+          frame,
+          &live_count);
+      continue;
+    }
+    scratch->lanes_a[valid_count] = child_lane;
+    scratch->lower[valid_count] = x;
+    scratch->upper[valid_count] = v;
+    scratch->exact[valid_count] = B;
+    scratch->pdf_a[valid_count] = A;
+    scratch->cdf_a[valid_count] = sv;
+    scratch->survival_a[valid_count] = loaded->q;
+    scratch->pdf_b[valid_count] = v / sv;
+    ++valid_count;
+  }
+  if (valid_count == 0U) {
+    *live_count_out = live_count;
+    return true;
+  }
+
+  compiled_math_batch_normal_cdf_from_z(
+      scratch->pdf_b.data(),
+      scratch->survival_b.data(),
+      valid_count);
+  for (std::size_t i = 0; i < valid_count; ++i) {
+    if (!std::isfinite(scratch->pdf_b[i]) || scratch->pdf_b[i] < 1e-10) {
+      scratch->pdf_b[i] = 1e-10;
+    }
+  }
+
+  std::size_t wide_count = 0U;
+  std::size_t point_count = 0U;
+  for (std::size_t i = 0; i < valid_count; ++i) {
+    const double x = scratch->lower[i];
+    const double v = scratch->upper[i];
+    const double B = scratch->exact[i];
+    const double A = scratch->pdf_a[i];
+    const double sv = scratch->cdf_a[i];
+    if (A > 1e-10) {
+      const double zs = x * sv;
+      if (!(zs > 0.0) || !std::isfinite(zs)) {
+        compiled_math_direct_tile_multiply_finished_value_at(
+            static_cast<std::size_t>(scratch->lanes_a[i]),
+            0.0,
+            0.0,
+            scratch->survival_a[i],
+            channel_mask,
+            frame,
+            &live_count);
+        continue;
+      }
+      const double cmz = B - x * v;
+      const double xx = cmz - A;
+      const double cz = cmz / zs;
+      const double cz_max = xx / zs;
+      scratch->lanes_b[wide_count] = static_cast<semantic::Index>(i);
+      scratch->cdf_b[wide_count] = cz;
+      scratch->survival_b[wide_count] = cz_max;
+      scratch->times[wide_count] = -0.5 * cz * cz;
+      scratch->onset_upper[wide_count] = -0.5 * cz_max * cz_max;
+      ++wide_count;
+    } else {
+      const double z = (B / x - v) / sv;
+      scratch->lanes_c[point_count] = static_cast<semantic::Index>(i);
+      scratch->cdf_c[point_count] = z;
+      scratch->survival_c[point_count] = -0.5 * z * z;
+      ++point_count;
+    }
+  }
+
+  if (wide_count != 0U) {
+    const auto n = static_cast<int>(wide_count);
+    compiled_math_batch_normal_cdf_from_z(
+        scratch->cdf_b.data(),
+        scratch->mask_a.empty() ? nullptr : scratch->pdf_c.data(),
+        wide_count);
+    compiled_math_batch_normal_cdf_from_z(
+        scratch->survival_b.data(),
+        scratch->mask_a.empty() ? nullptr : scratch->pdf_c.data(),
+        wide_count);
+    vvexp(scratch->times.data(), scratch->times.data(), &n);
+    vvexp(scratch->onset_upper.data(), scratch->onset_upper.data(), &n);
+    for (std::size_t j = 0; j < wide_count; ++j) {
+      const auto src = static_cast<std::size_t>(scratch->lanes_b[j]);
+      const auto child_pos = static_cast<std::size_t>(scratch->lanes_a[src]);
+      const double x = scratch->lower[src];
+      const double v = scratch->upper[src];
+      const double B = scratch->exact[src];
+      const double A = scratch->pdf_a[src];
+      const double sv = scratch->cdf_a[src];
+      const double denom = scratch->pdf_b[src];
+      const double cmz = B - x * v;
+      const double xx = cmz - A;
+      const double phi_cz = kInvSqrtTwoPi * scratch->times[j];
+      const double phi_cz_max = kInvSqrtTwoPi * scratch->onset_upper[j];
+      double base_pdf = 0.0;
+      double base_cdf = 0.0;
+      if (channel_mask == kLeafChannelPdf) {
+        base_pdf =
+            (v * (scratch->cdf_b[j] - scratch->survival_b[j]) +
+             sv * (phi_cz_max - phi_cz)) /
+            (A * denom);
+      } else {
+        base_cdf =
+            (1.0 + (x * sv * (phi_cz_max - phi_cz) +
+                    xx * scratch->survival_b[j] -
+                    cmz * scratch->cdf_b[j]) /
+                       A) /
+            denom;
+      }
+      compiled_math_direct_tile_multiply_finished_value_at(
+          child_pos,
+          base_pdf,
+          base_cdf,
+          scratch->survival_a[src],
+          channel_mask,
+          frame,
+          &live_count);
+    }
+  }
+
+  if (point_count != 0U) {
+    compiled_math_batch_normal_cdf_from_z(
+        scratch->cdf_c.data(),
+        scratch->pdf_c.data(),
+        point_count);
+    const auto n = static_cast<int>(point_count);
+    vvexp(scratch->survival_c.data(), scratch->survival_c.data(), &n);
+    for (std::size_t j = 0; j < point_count; ++j) {
+      const auto src = static_cast<std::size_t>(scratch->lanes_c[j]);
+      const auto child_pos = static_cast<std::size_t>(scratch->lanes_a[src]);
+      const double x = scratch->lower[src];
+      const double B = scratch->exact[src];
+      const double sv = scratch->cdf_a[src];
+      const double denom = scratch->pdf_b[src];
+      double base_pdf = 0.0;
+      double base_cdf = 0.0;
+      if (channel_mask == kLeafChannelPdf) {
+        base_pdf =
+            kInvSqrtTwoPi * scratch->survival_c[j] * B /
+            (sv * x * x * denom);
+      } else {
+        base_cdf = clamp_probability(1.0 - scratch->cdf_c[j]) / denom;
+      }
+      compiled_math_direct_tile_multiply_finished_value_at(
+          child_pos,
+          base_pdf,
+          base_cdf,
+          scratch->survival_a[src],
+          channel_mask,
+          frame,
+          &live_count);
+    }
+  }
+  *live_count_out = live_count;
+  return true;
+#else
+	  (void)op_parent_offset;
+	  (void)eligible_count;
+	  (void)q_begin;
+	  (void)rule;
+	  (void)child_width;
+  (void)tile_capacity;
+  (void)eval_count;
+  return false;
+#endif
+}
+
+inline bool compiled_math_direct_tile_rdm_update(
+    const CompiledMathDirectLeafPreparedOp &prepared,
+    const std::size_t op_parent_offset,
+    const std::size_t eligible_count,
+    const std::size_t q_begin,
+    const quadrature::Rule<quadrature::kDefaultFiniteOrder> &rule,
+    const std::size_t child_width,
+    const std::size_t tile_capacity,
+    const semantic::Index *eval_lanes,
+    const std::size_t eval_count,
+    CompiledMathBatchIntegralFrame *frame,
+    CompiledMathBatchSourceProductScratch *scratch,
+    std::size_t *live_count_out) {
+  if (prepared.op == nullptr || prepared.channel == nullptr ||
+      frame == nullptr || scratch == nullptr ||
+      live_count_out == nullptr ||
+      prepared.channel->leaf_index == semantic::kInvalidIndex ||
+      static_cast<leaf::DistKind>(prepared.channel->leaf_dist_kind) !=
+          leaf::DistKind::RDM) {
+    return false;
+  }
+#if defined(ACCUMULATR_USE_ACCELERATE_VFORCE)
+  const auto channel_mask = prepared.op->value_channel_mask;
+  std::size_t live_count = 0U;
+	  std::size_t common_count = 0U;
+	  std::size_t point_count = 0U;
+	  std::size_t small_drift_count = 0U;
+	  for (std::size_t eval_pos = 0; eval_pos < eval_count; ++eval_pos) {
+	    const auto child_pos =
+	        compiled_math_direct_tile_child_pos(eval_lanes, eval_pos);
+	    const auto parent_pos = child_pos / child_width;
+	    if (parent_pos >= eligible_count) {
+	      return false;
+	    }
+	    const auto child_lane = static_cast<semantic::Index>(child_pos);
+	    const auto q_slot = child_pos - parent_pos * child_width;
+	    const auto op_parent_pos = op_parent_offset + parent_pos;
+	    const auto *loaded = frame->source_leaf_inputs_by_op_parent[op_parent_pos];
+	    if (loaded == nullptr) {
+	      return false;
+	    }
+	    const double bind_time =
+	        compiled_math_direct_tile_bind_time(
+	            *frame,
+	            parent_pos,
+	            q_begin + q_slot,
+	            rule);
+    double current_time =
+        prepared.time_is_bind
+            ? bind_time
+            : frame->direct_source_time_by_op_parent[op_parent_pos];
+    if (prepared.has_time_cap) {
+      const double cap =
+          prepared.cap_is_bind
+              ? bind_time
+              : frame->direct_source_cap_by_op_parent[op_parent_pos];
+      current_time = std::min(current_time, cap);
+    }
+    const double x =
+        current_time - prepared.channel->leaf_onset_abs_value - loaded->t0;
+    const double v = loaded->params[0];
+    const double B = loaded->params[1];
+    const double A = loaded->params[2];
+    const double s = loaded->params[3];
+    if (!(x > 0.0)) {
+      compiled_math_direct_tile_multiply_value_at(
+          child_pos,
+          batch_source_product_before_onset_value(channel_mask),
+          frame,
+          &live_count);
+      continue;
+    }
+    if (!std::isfinite(s) || s <= 0.0 || !std::isfinite(v) ||
+        !std::isfinite(B) || !std::isfinite(A)) {
+      compiled_math_direct_tile_multiply_finished_value_at(
+          child_pos,
+          0.0,
+          0.0,
+	          loaded->q,
+		          channel_mask,
+          frame,
+          &live_count);
+      continue;
+    }
+    const double v_sc = v / s;
+    const double B_sc = B / s;
+    const double A_sc = A / s;
+    const double a = 0.5 * A_sc;
+    const double k = B_sc + a;
+    const double l = v_sc;
+    if (!std::isfinite(a) || !std::isfinite(k) || !std::isfinite(l)) {
+      compiled_math_direct_tile_multiply_finished_value_at(
+	          child_pos,
+	          0.0,
+	          0.0,
+	          loaded->q,
+	          channel_mask,
+          frame,
+          &live_count);
+      continue;
+    }
+    if (a < 1e-10) {
+      scratch->lanes_c[point_count] = child_lane;
+      scratch->cdf_a[point_count] = x;
+      scratch->cdf_b[point_count] = k;
+      scratch->cdf_c[point_count] = l;
+      scratch->survival_c[point_count] = loaded->q;
+      ++point_count;
+      continue;
+    }
+    if (l < 1e-10) {
+      scratch->lanes_d[small_drift_count] = child_lane;
+      scratch->pdf_b[small_drift_count] = x;
+      scratch->survival_b[small_drift_count] = k;
+      scratch->pdf_c[small_drift_count] = l;
+      scratch->onset_upper[small_drift_count] = a;
+      scratch->survival_c[small_drift_count] = loaded->q;
+      ++small_drift_count;
+      continue;
+    }
+    scratch->lanes_b[common_count] = child_lane;
+    scratch->lower[common_count] = x;
+    scratch->upper[common_count] = k;
+    scratch->exact[common_count] = l;
+    scratch->pdf_a[common_count] = a;
+    scratch->survival_a[common_count] = loaded->q;
+    ++common_count;
+  }
+
+  if (point_count != 0U) {
+    if (channel_mask == kLeafChannelPdf) {
+      for (std::size_t i = 0; i < point_count; ++i) {
+        const double x = scratch->cdf_a[i];
+        const double k = scratch->cdf_b[i];
+        const double l = scratch->cdf_c[i];
+        const double lambda = k * k;
+        double exponent = 0.0;
+        if (l == 0.0) {
+          exponent = -0.5 * lambda / x;
+        } else {
+          const double mu = k / l;
+          exponent =
+              -(lambda / (2.0 * x)) *
+              ((x * x) / (mu * mu) - 2.0 * x / mu + 1.0);
+        }
+        scratch->times[i] =
+            exponent + 0.5 * std::log(lambda) -
+            0.5 * std::log(2.0 * x * x * x * M_PI);
+      }
+      const auto n = static_cast<int>(point_count);
+      vvexp(scratch->times.data(), scratch->times.data(), &n);
+      for (std::size_t i = 0; i < point_count; ++i) {
+        compiled_math_direct_tile_multiply_finished_value_at(
+            static_cast<std::size_t>(scratch->lanes_c[i]),
+            scratch->times[i],
+            0.0,
+            scratch->survival_c[i],
+            channel_mask,
+            frame,
+            &live_count);
+      }
+    } else {
+      for (std::size_t i = 0; i < point_count; ++i) {
+        const double x = scratch->cdf_a[i];
+        const double k = scratch->cdf_b[i];
+        const double l = scratch->cdf_c[i];
+        if (std::fabs(l) < 1e-12) {
+          scratch->times[i] = k / std::sqrt(x);
+          scratch->onset_upper[i] =
+              std::numeric_limits<double>::quiet_NaN();
+        } else {
+          const double mu = k / l;
+          const double z_base = std::sqrt((k * k) / x);
+          scratch->times[i] = z_base * (1.0 + x / mu);
+          scratch->onset_upper[i] = z_base * (1.0 - x / mu);
+        }
+      }
+      compiled_math_batch_normal_cdf_from_z(
+          scratch->times.data(),
+          scratch->lower.data(),
+          point_count);
+      compiled_math_batch_normal_cdf_from_z(
+          scratch->onset_upper.data(),
+          scratch->lower.data(),
+          point_count);
+      for (std::size_t i = 0; i < point_count; ++i) {
+        const double k = scratch->cdf_b[i];
+        const double l = scratch->cdf_c[i];
+        double base_cdf = 0.0;
+        if (std::fabs(l) < 1e-12) {
+          base_cdf = 2.0 * (1.0 - scratch->times[i]);
+        } else {
+          const double p1 = 1.0 - scratch->times[i];
+          const double p2 = 1.0 - scratch->onset_upper[i];
+          base_cdf =
+              std::exp(
+                  2.0 * k * l +
+                  std::log(std::max(1e-300, p1))) +
+              p2;
+        }
+        compiled_math_direct_tile_multiply_finished_value_at(
+            static_cast<std::size_t>(scratch->lanes_c[i]),
+            0.0,
+            base_cdf,
+            scratch->survival_c[i],
+            channel_mask,
+            frame,
+            &live_count);
+      }
+    }
+  }
+
+  if (small_drift_count != 0U) {
+    if (channel_mask == kLeafChannelPdf) {
+      for (std::size_t i = 0; i < small_drift_count; ++i) {
+        const double x = scratch->pdf_b[i];
+        const double k = scratch->survival_b[i];
+        const double a = scratch->onset_upper[i];
+        scratch->times[i] = -((k - a) * (k - a)) / (2.0 * x);
+        scratch->upper[i] = -((k + a) * (k + a)) / (2.0 * x);
+      }
+      const auto n = static_cast<int>(small_drift_count);
+      vvexp(scratch->times.data(), scratch->times.data(), &n);
+      vvexp(scratch->upper.data(), scratch->upper.data(), &n);
+      for (std::size_t i = 0; i < small_drift_count; ++i) {
+        const double x = scratch->pdf_b[i];
+        const double a = scratch->onset_upper[i];
+        const double term = scratch->times[i] - scratch->upper[i];
+        const double base_pdf =
+            std::exp(
+                -0.5 * (M_LN2 + kLogPi + std::log(x)) +
+                std::log(std::max(1e-300, term)) -
+                M_LN2 - std::log(a));
+        compiled_math_direct_tile_multiply_finished_value_at(
+            static_cast<std::size_t>(scratch->lanes_d[i]),
+            base_pdf,
+            0.0,
+            scratch->survival_c[i],
+            channel_mask,
+            frame,
+            &live_count);
+      }
+    } else {
+      for (std::size_t i = 0; i < small_drift_count; ++i) {
+        const double x = scratch->pdf_b[i];
+        const double k = scratch->survival_b[i];
+        const double a = scratch->onset_upper[i];
+        const double sqt = std::sqrt(x);
+        scratch->times[i] = (k + a) / sqt;
+        scratch->upper[i] = (-k - a) / sqt;
+        scratch->lower[i] =
+            -0.5 * (((k + a) * (k + a)) / x - M_LN2 - kLogPi +
+                    std::log(x)) -
+            std::log(a);
+        scratch->exact[i] =
+            -0.5 * (((k - a) * (k - a)) / x - M_LN2 - kLogPi +
+                    std::log(x)) -
+            std::log(a);
+      }
+      compiled_math_batch_normal_cdf_from_z(
+          scratch->times.data(),
+          scratch->cdf_b.data(),
+          small_drift_count);
+      compiled_math_batch_normal_cdf_from_z(
+          scratch->upper.data(),
+          scratch->cdf_b.data(),
+          small_drift_count);
+      const auto n = static_cast<int>(small_drift_count);
+      vvexp(scratch->lower.data(), scratch->lower.data(), &n);
+      vvexp(scratch->exact.data(), scratch->exact.data(), &n);
+      for (std::size_t i = 0; i < small_drift_count; ++i) {
+        const double k = scratch->survival_b[i];
+        const double a = scratch->onset_upper[i];
+        const double t5a = 2.0 * scratch->times[i] - 1.0;
+        const double t5b = 2.0 * scratch->upper[i] - 1.0;
+        const double base_cdf =
+            1.0 + scratch->lower[i] - scratch->exact[i] +
+            ((-k + a) * t5a - (k - a) * t5b) / (2.0 * a);
+        compiled_math_direct_tile_multiply_finished_value_at(
+            static_cast<std::size_t>(scratch->lanes_d[i]),
+            0.0,
+            base_cdf,
+            scratch->survival_c[i],
+            channel_mask,
+            frame,
+            &live_count);
+      }
+    }
+  }
+
+  if (common_count != 0U) {
+    if (channel_mask == kLeafChannelPdf) {
+      for (std::size_t i = 0; i < common_count; ++i) {
+        const double x = scratch->lower[i];
+        const double k = scratch->upper[i];
+        const double l = scratch->exact[i];
+        const double a = scratch->pdf_a[i];
+        const double sqt = std::sqrt(x);
+        scratch->cdf_b[i] = -std::pow(a - k + x * l, 2.0) / (2.0 * x);
+        scratch->survival_b[i] =
+            -std::pow(a + k - x * l, 2.0) / (2.0 * x);
+        scratch->times[i] = (-k + a) / sqt + sqt * l;
+        scratch->onset_upper[i] = (k + a) / sqt - sqt * l;
+      }
+      const auto n = static_cast<int>(common_count);
+      vvexp(scratch->cdf_b.data(), scratch->cdf_b.data(), &n);
+      vvexp(scratch->survival_b.data(), scratch->survival_b.data(), &n);
+      compiled_math_batch_normal_cdf_from_z(
+          scratch->times.data(),
+          scratch->pdf_b.data(),
+          common_count);
+      compiled_math_batch_normal_cdf_from_z(
+          scratch->onset_upper.data(),
+          scratch->pdf_b.data(),
+          common_count);
+      for (std::size_t i = 0; i < common_count; ++i) {
+        const double x = scratch->lower[i];
+        const double l = scratch->exact[i];
+        const double a = scratch->pdf_a[i];
+        const double sqt = std::sqrt(x);
+        const double t1 =
+            kInvSqrtTwo *
+            (scratch->cdf_b[i] - scratch->survival_b[i]) /
+            (std::sqrt(M_PI) * sqt);
+        const double t2 =
+            0.5 * l *
+            ((2.0 * scratch->times[i] - 1.0) +
+             (2.0 * scratch->onset_upper[i] - 1.0));
+        const double base_pdf =
+            std::exp(std::log(std::max(1e-300, t1 + t2)) -
+                     M_LN2 - std::log(a));
+        compiled_math_direct_tile_multiply_finished_value_at(
+            static_cast<std::size_t>(scratch->lanes_b[i]),
+            base_pdf,
+            0.0,
+            scratch->survival_a[i],
+            channel_mask,
+            frame,
+            &live_count);
+      }
+    } else {
+      for (std::size_t i = 0; i < common_count; ++i) {
+        const double x = scratch->lower[i];
+        const double k = scratch->upper[i];
+        const double l = scratch->exact[i];
+        const double a = scratch->pdf_a[i];
+        const double sqt = std::sqrt(x);
+        scratch->cdf_b[i] = -0.5 * std::pow(k - a - x * l, 2.0) / x;
+        scratch->survival_b[i] =
+            -0.5 * std::pow(a + k - x * l, 2.0) / x;
+        scratch->pdf_c[i] = 0.5 * (std::log(x) - M_LN2 - kLogPi);
+        scratch->times[i] = -(k - a + x * l) / sqt;
+        scratch->onset_upper[i] = -(k + a + x * l) / sqt;
+        scratch->pdf_b[i] = (k + a) / sqt - sqt * l;
+        scratch->cdf_c[i] = (k - a) / sqt - sqt * l;
+      }
+      const auto n = static_cast<int>(common_count);
+      vvexp(scratch->cdf_b.data(), scratch->cdf_b.data(), &n);
+      vvexp(scratch->survival_b.data(), scratch->survival_b.data(), &n);
+      vvexp(scratch->pdf_c.data(), scratch->pdf_c.data(), &n);
+      compiled_math_batch_normal_log_cdf_from_z(
+          scratch->times.data(),
+          scratch->survival_c.data(),
+          common_count);
+      compiled_math_batch_normal_log_cdf_from_z(
+          scratch->onset_upper.data(),
+          scratch->survival_c.data(),
+          common_count);
+      for (std::size_t i = 0; i < common_count; ++i) {
+        const double k = scratch->upper[i];
+        const double l = scratch->exact[i];
+        const double a = scratch->pdf_a[i];
+        scratch->times[i] += 2.0 * l * (k - a);
+        scratch->onset_upper[i] += 2.0 * l * (k + a);
+      }
+      vvexp(scratch->times.data(), scratch->times.data(), &n);
+      vvexp(scratch->onset_upper.data(), scratch->onset_upper.data(), &n);
+      compiled_math_batch_normal_cdf_from_z(
+          scratch->pdf_b.data(),
+          scratch->survival_c.data(),
+          common_count);
+      compiled_math_batch_normal_cdf_from_z(
+          scratch->cdf_c.data(),
+          scratch->survival_c.data(),
+          common_count);
+      for (std::size_t i = 0; i < common_count; ++i) {
+        const double x = scratch->lower[i];
+        const double k = scratch->upper[i];
+        const double l = scratch->exact[i];
+        const double a = scratch->pdf_a[i];
+        const double t1 =
+            scratch->pdf_c[i] *
+            (scratch->cdf_b[i] - scratch->survival_b[i]);
+        const double t2 =
+            a + (scratch->onset_upper[i] - scratch->times[i]) /
+                    (2.0 * l);
+        const double t4a = 2.0 * scratch->pdf_b[i] - 1.0;
+        const double t4b = 2.0 * scratch->cdf_c[i] - 1.0;
+        const double t4 =
+            0.5 * (x * l - a - k + 0.5 / l) * t4a +
+            0.5 * (k - a - x * l - 0.5 / l) * t4b;
+        const double base_cdf = 0.5 * (t4 + t2 + t1) / a;
+        compiled_math_direct_tile_multiply_finished_value_at(
+            static_cast<std::size_t>(scratch->lanes_b[i]),
+            0.0,
+            base_cdf,
+            scratch->survival_a[i],
+            channel_mask,
+            frame,
+            &live_count);
+      }
+    }
+  }
+  *live_count_out = live_count;
+  return true;
+#else
+	  (void)op_parent_offset;
+	  (void)eligible_count;
+	  (void)q_begin;
+	  (void)rule;
+	  (void)child_width;
+  (void)tile_capacity;
+  (void)eval_count;
+  return false;
+#endif
+}
+
+inline bool compiled_math_direct_tile_leaf_update(
+    const CompiledMathDirectLeafPreparedOp &prepared,
+    const std::size_t op_parent_offset,
+    const std::size_t eligible_count,
+    const std::size_t q_begin,
+    const quadrature::Rule<quadrature::kDefaultFiniteOrder> &rule,
+    const std::size_t child_width,
+    const std::size_t tile_capacity,
+    const semantic::Index *eval_lanes,
+    const std::size_t eval_count,
+    CompiledMathBatchIntegralFrame *frame,
+    CompiledMathBatchSourceProductScratch *scratch,
+    std::size_t *live_count_out) {
+  if (prepared.channel == nullptr) {
+    return false;
+  }
+  switch (static_cast<leaf::DistKind>(prepared.channel->leaf_dist_kind)) {
+  case leaf::DistKind::Lognormal:
+	    return compiled_math_direct_tile_lognormal_update(
+	        prepared,
+	        op_parent_offset,
+	        eligible_count,
+	        q_begin,
+	        rule,
+	        child_width,
+        tile_capacity,
+        eval_lanes,
+        eval_count,
+        frame,
+        scratch,
+        live_count_out);
+  case leaf::DistKind::Gamma:
+	    return compiled_math_direct_tile_gamma_update(
+	        prepared,
+	        op_parent_offset,
+	        eligible_count,
+	        q_begin,
+	        rule,
+	        child_width,
+        tile_capacity,
+        eval_lanes,
+        eval_count,
+        frame,
+        scratch,
+        live_count_out);
+  case leaf::DistKind::Exgauss:
+	    return compiled_math_direct_tile_exgauss_update(
+	        prepared,
+	        op_parent_offset,
+	        eligible_count,
+	        q_begin,
+	        rule,
+	        child_width,
+        tile_capacity,
+        eval_lanes,
+        eval_count,
+        frame,
+        scratch,
+        live_count_out);
+  case leaf::DistKind::LBA:
+	    return compiled_math_direct_tile_lba_update(
+	        prepared,
+	        op_parent_offset,
+	        eligible_count,
+	        q_begin,
+	        rule,
+	        child_width,
+        tile_capacity,
+        eval_lanes,
+        eval_count,
+        frame,
+        scratch,
+        live_count_out);
+  case leaf::DistKind::RDM:
+	    return compiled_math_direct_tile_rdm_update(
+	        prepared,
+	        op_parent_offset,
+	        eligible_count,
+	        q_begin,
+	        rule,
+	        child_width,
+        tile_capacity,
+        eval_lanes,
+        eval_count,
+        frame,
+        scratch,
+        live_count_out);
+  }
   return false;
 }
 
@@ -4567,20 +6096,16 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_direct_leaf(
       return false;
     }
   }
-  for (std::size_t i = 0; i < parent_active.size; ++i) {
-    auto *source_channels = parent_state.source_channels(parent_active.lanes[i]);
-    if (!batch_source_product_ops_have_available_direct_leaf_inputs(
-            program,
-            kernel.source_product_ops,
-            source_channels)) {
-      return false;
-    }
-  }
-
   auto &frame = compiled_math_batch_integral_frame(batch_workspace, depth);
+  const auto time_slot_count =
+      std::max(
+          parent_state.time_slot_count,
+          static_cast<std::size_t>(kernel.bind_time_id) + 1U);
+  const auto max_child_capacity =
+      parent_active.size * kFiniteDirectLeafQuadratureTileOrder;
   frame.ensure_lane_capacity(
-      parent_state.time_slot_count,
-      parent_state.lane_count);
+      time_slot_count,
+      std::max(parent_state.lane_count, max_child_capacity));
   std::size_t eligible_count = 0U;
   for (std::size_t active_pos = 0; active_pos < parent_active.size;
        ++active_pos) {
@@ -4592,91 +6117,167 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_direct_leaf(
     if (!std::isfinite(lower) || !std::isfinite(upper) || !(upper > lower)) {
       continue;
     }
-    frame.lower_by_lane[lane_pos] = 0.5 * (upper - lower);
-    frame.upper_by_lane[lane_pos] = 0.5 * (upper + lower);
-    frame.active_lanes[eligible_count++] = lane;
+    frame.direct_parent_scale[eligible_count] = 0.5 * (upper - lower);
+    frame.direct_parent_shift[eligible_count] = 0.5 * (upper + lower);
+    frame.direct_source_channels_by_parent[eligible_count] =
+        parent_state.source_channels(lane);
+    frame.source_lanes_b[eligible_count++] = lane;
   }
   if (eligible_count == 0U) {
     return true;
   }
+  const auto op_count =
+      static_cast<std::size_t>(kernel.source_product_ops.size);
+  if (frame.direct_leaf_ops.size() < op_count) {
+    frame.direct_leaf_ops.resize(op_count);
+  }
+  const auto op_parent_count = op_count * eligible_count;
+  if (frame.source_leaf_inputs_by_op_parent.size() < op_parent_count) {
+    frame.source_leaf_inputs_by_op_parent.resize(op_parent_count, nullptr);
+  }
+  if (frame.direct_source_time_by_op_parent.size() < op_parent_count) {
+    frame.direct_source_time_by_op_parent.resize(op_parent_count, 0.0);
+  }
+  if (frame.direct_source_cap_by_op_parent.size() < op_parent_count) {
+    frame.direct_source_cap_by_op_parent.resize(op_parent_count, 0.0);
+  }
+
+  for (std::size_t op_pos = 0; op_pos < op_count; ++op_pos) {
+    const auto &op =
+        program.integral_kernel_source_product_ops[
+            static_cast<std::size_t>(
+                kernel.source_product_ops.offset +
+                static_cast<semantic::Index>(op_pos))];
+    auto &prepared = frame.direct_leaf_ops[op_pos];
+    prepared.op = &op;
+    prepared.channel = nullptr;
+    prepared.time_is_bind = false;
+    prepared.has_time_cap = false;
+    prepared.cap_is_bind = false;
+    if (op.value_channel_mask == 0U) {
+      continue;
+    }
+
+    const auto &channel =
+        program.integral_kernel_source_product_channels[
+            static_cast<std::size_t>(op.source_product_channel_id)];
+    prepared.channel = &channel;
+    prepared.time_is_bind = channel.time_id == kernel.bind_time_id;
+    prepared.has_time_cap = channel.time_cap_id != semantic::kInvalidIndex;
+    prepared.cap_is_bind =
+        prepared.has_time_cap &&
+        channel.time_cap_id == kernel.bind_time_id;
+    const auto op_parent_offset = op_pos * eligible_count;
+    for (std::size_t parent_pos = 0; parent_pos < eligible_count;
+         ++parent_pos) {
+      auto *source_channels =
+          frame.direct_source_channels_by_parent[parent_pos];
+      if (source_channels == nullptr ||
+          !source_channels->source_product_direct_leaf_available(
+              op.source_product_channel_id)) {
+        return false;
+	      }
+	      const auto op_parent_pos = op_parent_offset + parent_pos;
+	      frame.source_leaf_inputs_by_op_parent[op_parent_pos] =
+	          &source_channels->source_product_leaf_input(channel.leaf_index);
+	      const auto parent_lane = frame.source_lanes_b[parent_pos];
+      frame.direct_source_time_by_op_parent[op_parent_pos] =
+          prepared.time_is_bind
+              ? 0.0
+              : parent_state.time(channel.time_id, parent_lane);
+      frame.direct_source_cap_by_op_parent[op_parent_pos] =
+          prepared.has_time_cap && !prepared.cap_is_bind
+              ? parent_state.time(channel.time_cap_id, parent_lane)
+              : 0.0;
+    }
+  }
 
   const auto &rule =
       quadrature::gauss_legendre_rule<quadrature::kDefaultFiniteOrder>();
-  for (std::size_t q = 0; q < quadrature::kDefaultFiniteOrder; ++q) {
-    for (std::size_t i = 0; i < eligible_count; ++i) {
-      const auto lane = frame.active_lanes[i];
-      const auto lane_pos = static_cast<std::size_t>(lane);
-      const double scale = frame.lower_by_lane[lane_pos];
-      frame.products[lane_pos] = 1.0;
-      frame.weights[lane_pos] = scale * rule.weights[q];
-      frame.bind_times[lane_pos] =
-          frame.upper_by_lane[lane_pos] + scale * rule.nodes[q];
-    }
-    const auto *term_lanes = frame.active_lanes.data();
-    const std::size_t term_count = eligible_count;
-    std::size_t live_count = term_count;
+  for (std::size_t q_begin = 0; q_begin < quadrature::kDefaultFiniteOrder;
+       q_begin += kFiniteDirectLeafQuadratureTileOrder) {
+    const auto q_end =
+        std::min(
+            q_begin + kFiniteDirectLeafQuadratureTileOrder,
+            static_cast<std::size_t>(quadrature::kDefaultFiniteOrder));
+	    const auto child_width = q_end - q_begin;
+	    const auto tile_capacity = eligible_count * child_width;
+	    std::fill(
+	        frame.products.begin(),
+	        frame.products.begin() + static_cast<std::ptrdiff_t>(tile_capacity),
+	        1.0);
+	    const std::size_t term_count = tile_capacity;
+	    std::size_t live_count = term_count;
+	    auto &direct_scratch =
+	        frame.source_product_scratch_layer(
+	            0U,
+	            tile_capacity,
+	            tile_capacity);
 
-    for (semantic::Index op_idx = 0; op_idx < kernel.source_product_ops.size;
-         ++op_idx) {
+    for (std::size_t op_pos = 0; op_pos < op_count; ++op_pos) {
       if (live_count == 0U) {
         break;
       }
-      const auto &op =
-          program.integral_kernel_source_product_ops[
-              static_cast<std::size_t>(
-                  kernel.source_product_ops.offset + op_idx)];
-      if (op.value_channel_mask == 0U) {
-        live_count =
-            compiled_math_batch_array_multiply_scalar_mask(
-                term_lanes,
-                term_count,
-                op.constant_value,
-                frame.products.data());
-        continue;
-      }
-
-      const auto &channel =
-          program.integral_kernel_source_product_channels[
-              static_cast<std::size_t>(op.source_product_channel_id)];
-      if (!compiled_math_batch_direct_leaf_values_at_bind_times(
-              channel,
-              op.source_product_channel_id,
-              kernel.bind_time_id,
-              parent_state,
-              term_lanes,
-              term_count,
-              frame.bind_times.data(),
-              op.value_channel_mask,
-              frame.source_leaf_values.data(),
-              frame.source_values.data(),
-              frame.factor_values.data(),
-              frame.term_lanes_a.data(),
-              &frame.source_product_scratch_layer(
-                  0U,
-                  parent_state.lane_count,
-                  term_count))) {
+      const auto &prepared = frame.direct_leaf_ops[op_pos];
+      const auto *op = prepared.op;
+      if (op == nullptr) {
         return false;
       }
-      live_count =
-          compiled_math_batch_array_multiply_values_mask(
-              term_lanes,
-              term_count,
-              frame.source_leaf_values.data(),
-              frame.products.data());
+	      if (op->value_channel_mask == 0U) {
+	        live_count =
+	            compiled_math_batch_array_multiply_scalar_dense_mask(
+	                term_count,
+	                op->constant_value,
+	                frame.products.data());
+        continue;
+      }
+      const auto *channel = prepared.channel;
+      if (channel == nullptr) {
+        return false;
+	      }
+	      const auto op_parent_offset = op_pos * eligible_count;
+	      const semantic::Index *eval_lanes = nullptr;
+	      std::size_t eval_count = term_count;
+	      if (live_count != term_count) {
+	        eval_count =
+	            compiled_math_batch_array_live_lanes_from_dense_mask(
+	                term_count,
+	                frame.products.data(),
+	                frame.source_lanes_a.data());
+        eval_lanes = frame.source_lanes_a.data();
+      }
+      if (eval_count == 0U) {
+        live_count = 0U;
+        break;
+      }
+      std::size_t direct_live_count = 0U;
+	      if (!compiled_math_direct_tile_leaf_update(
+	              prepared,
+	              op_parent_offset,
+	              eligible_count,
+	              q_begin,
+	              rule,
+	              child_width,
+	              tile_capacity,
+              eval_lanes,
+              eval_count,
+              &frame,
+              &direct_scratch,
+              &direct_live_count)) {
+        return false;
+      }
+      live_count = direct_live_count;
     }
 
-    const std::size_t final_count =
-        compiled_math_batch_array_compact_live(
-            term_lanes,
-            term_count,
-            frame.products.data(),
-            frame.source_lanes_a.data());
-    compiled_math_batch_array_weighted_accumulate(
-        frame.source_lanes_a.data(),
-        final_count,
-        frame.weights.data(),
-        frame.products.data(),
-        out_by_parent_lane);
+	    compiled_math_direct_tile_weighted_accumulate_parent_rows(
+	        frame.source_lanes_b.data(),
+	        eligible_count,
+	        q_end - q_begin,
+	        q_begin,
+	        rule,
+	        frame.direct_parent_scale.data(),
+	        frame.products.data(),
+	        out_by_parent_lane);
   }
   return true;
 }

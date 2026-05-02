@@ -59,6 +59,9 @@ It is materially better than scalar replay, but it is not fully SIMD/vectorized.
   factors, expr-upper factors, integral factors, and parent reductions call
   shared array operations instead of open-coded product/update loops at each
   call site.
+- Batch-array primitives now detect contiguous lane spans and run against
+  dense pointer ranges where possible. Non-contiguous active sets still use
+  lane-index gather/scatter loops.
 - Source-product program fills are grouped:
   conditioned fills, exact-gate fills, onset convolution fills, pool-k-of-n
   fills, and leaf fills run over lane arrays.
@@ -126,37 +129,88 @@ It is materially better than scalar replay, but it is not fully SIMD/vectorized.
   `compiled_math_batch_node_evaluator_for_lane()`,
   `compiled_math_batch_expr_upper_bound_for_node()`, and
   `compiled_math_batch_upper_bound_from_terms()` entry points are gone.
-- Source-product control no longer compacts or gathers live product lanes after
-  every op. Each source-product op evaluates over the original term lane span,
-  updates the lane-indexed product/mask arrays, and defers product compaction to
-  the term/block boundary.
+- Source-product control keeps lane-indexed product/mask state. Expensive
+  source-product value evaluators are mask-aware: while the product mask is
+  dense, they use the current term span; after the mask becomes sparse, they
+  receive a live-lane span derived from the mask so dead lanes do not continue
+  through leaf/source-program math.
+- Finite direct-leaf integral evaluation now uses a fused parent-lane x
+  quadrature-tile path. It pre-resolves parent leaf inputs for each
+  source-product op and no longer builds child batch state with source-channel
+  or time-slot overlay indirection for this path.
+- The direct-leaf integral path also precomputes parent/op mini-kernel state
+  before the quadrature tile loop: parent scale/shift, source-channel pointers,
+  leaf inputs, non-bind time values, non-bind cap values, and bind/cap mode
+  flags. The tile loop should not re-check source-channel availability or chase
+  source leaf inputs.
+- Lognormal batch leaf evaluation loads `m`, `s`, and `q` into scratch arrays
+  during the first lane pass, then reuses those arrays for the vector log,
+  vector exp, CDF, and final store phases instead of repeatedly chasing
+  `compiled_math_batch_leaf_input_for_lane()`.
+- The finite direct-leaf integral path has distribution-specific direct-tile
+  kernels for lognormal, gamma, ex-Gaussian, LBA, and RDM:
+  `compiled_math_direct_tile_*_update()`. Covered direct-leaf ops dispatch once
+  by distribution family, derive distribution inputs from prepared parent/op
+  state, run the distribution array kernel, and multiply the tile product array
+  during leaf-value finalization. They bypass the generic `source_values`,
+  `source_leaf_inputs_by_lane`, `source_leaf_values`, and
+  `compiled_math_batch_leaf_values_from_times()` path for direct-leaf tile ops.
+- The current direct-tile path uses the full finite quadrature order as one tile
+  and computes bind time inside the distribution kernel. A precomputed
+  bind-time/weight array variant was measured and rejected for the
+  `stim_selective_stop` case.
 - Some scalar C++ math remains in non-batch or unsupported paths. That is
   acceptable only while those shapes are explicitly unsupported by the batch
   coverage contract.
 
 ## Current Evidence
 
-Installed-package benchmarks show the current state is consolidated but not a
-clear speed win over the previous best batch snapshot:
+Installed-package benchmarks after generalized direct-tile distribution kernels
+and full-order direct tiles do **not** show the production speedup we wanted for
+`stim_selective_stop`. They validate the cleaner execution shape and broader
+distribution coverage, but they are not a net speed win over the prior accepted
+lognormal-only direct-tile baseline.
 
 ```text
 case                         current measured
-stim_selective_stop, 400      50.00 ms/eval
-stim_selective_stop, 50       27.00 ms/eval
-example_6_dual_path, 400       8.00 ms/eval
-stop_change_shared_trigger, 400 1.47 ms/eval
-example_23_ranked_chain, 400   0.218 ms/eval
+stim_selective_stop, 400      44.50 ms/eval
+stim_selective_stop, 50       24.27 ms/eval
+example_6_dual_path, 400       8.75 ms/eval
+stop_change_shared_trigger, 400 1.568 ms/eval
+example_23_ranked_chain, 400   0.234 ms/eval
 ```
 
 The batch-array primitive layer is therefore a structural consolidation, not a
 speed win by itself. It creates one place to install dense-lane,
 compiler-vectorized, or Accelerate-backed kernels, but the current
 implementation still uses lane-index gather/scatter loops inside the
-primitives. The full-span mask-first source-product op path is structurally
-cleaner, but it is not a speed win on the stimulus-selective benchmark because
-it now evaluates later op values for lanes that previous per-op compaction would
-have skipped. The remaining speed work is inside the array kernels, masked value
-evaluation APIs, and integral lane control.
+primitives when active lanes are non-contiguous. The masked source-product
+value evaluator recovers part of the strict full-span regression. The fused
+direct-leaf integral tile and prepared parent/op mini-kernel remove the old
+child-state/source-channel overlay and repeated source-channel and leaf-input
+work. The distribution-specific direct-tile kernels remove the generic
+leaf-dispatch and source-value materialization phases for covered direct-leaf
+ops. This is structural consolidation and broader vector-kernel coverage, not
+the final vectorization speedup. The remaining speed work is inside direct-tile
+lane/time/product control, generic integral control, lognormal/normal-CDF
+kernels, and remaining generic source-product/bound-resolution traffic.
+
+Rejected changes from the direct-tile follow-up:
+
+```text
+change                                      result
+direct tile width 16                        stim_selective_stop 45.33 ms/eval, 400 trials
+direct tile width 4                         stim_selective_stop 44.17 ms/eval, 400 trials
+whole-tile lognormal row-reduction owner    regressed vs current direct-tile shape
+vDSP z/pdf transform micro-kernels          regressed vs scalar dense loops around VVLOG/VVEXP
+dense full-span dead-lane skipping in kernel stim_selective_stop 42.67 ms/eval, 400 trials
+full-order direct tile with precomputed bind/weight arrays stim_selective_stop 44.17 ms/eval, 400 trials
+```
+
+The current full-order direct tile is only a modest improvement over the
+immediate generalized-distribution version, not a solved endpoint. Earlier
+smaller-tile results were from the lognormal-only shape and should not be used as
+the only evidence after the distribution-generalized kernels landed.
 
 Leaf-vectorization benchmark, run through production likelihood evaluation with
 4000 two-choice trials:
@@ -185,12 +239,41 @@ Profile interpretation for `stim_selective_stop`, 400 trials:
   compiled source-node or scalar compiled integral entry points;
 - old scalar leaf callbacks are effectively gone from the hot profile;
 - `erfc` is no longer the main wall;
-- top frames are now batch leaf math and vector math:
-  `compiled_math_batch_lognormal_leaf_values_from_times()`,
+- top frames are still the fused lognormal direct-tile kernel plus vector math:
+  `compiled_math_direct_tile_lognormal_update()`,
   `compiled_math_batch_normal_cdf_from_z()`, `VVLOG`, and `VVEXP`;
-- remaining non-math cost is mostly source-product control, scratch
-  `ensure_size()`, vector assignment/allocation noise, and ordinary batch
-  lane-control loops.
+- the direct-tile lognormal kernel now multiplies products while finalizing leaf
+  values, removing the extra post-value product-update pass;
+- `compiled_math_batch_lognormal_leaf_values_from_times()` is still present but
+  much smaller in the focused profile; it now represents remaining generic
+  contexts rather than the main direct-leaf tile path;
+- the old `compiled_math_batch_direct_leaf_values_at_bind_times()` wrapper is
+  gone from source;
+- direct-leaf/control samples per eval dropped after preparing parent/op
+  mini-kernel state outside the tile loop;
+- remaining non-math cost is still mostly direct-leaf tile control, generic
+  integral control, expr-upper/node-evaluator preparation, vector
+  assignment/allocation noise, and ordinary batch lane-control loops.
+- attempted dense parent-row remapping inside
+  `compiled_math_direct_tile_lognormal_update()` regressed the benchmark and was
+  rejected. Do not add row-order micro-specialization without profile evidence;
+  the current profitable boundary is removing generic materialization/dispatch,
+  not changing every tile loop shape.
+- eval-only profile after generalized direct-tile kernels and full-order direct
+  tiles, `stim_selective_stop`, 400 trials:
+
+```text
+compiled_math_direct_tile_lognormal_update       3029
+evaluate_compiled_integral_kernel_lane_batch     1181
+compiled_math_batch_normal_cdf_from_z             764
+VVLOG                                             734
+VVEXP                                             635
+evaluate_compiled_integral_kernel_lane_batch_direct_leaf 604
+compiled_math_batch_source_product_value_for_ops  293
+compiled_math_batch_lognormal_leaf_values_from_times 279
+compiled_math_batch_resolve_source_bounds_for_source 239
+compiled_math_batch_apply_expr_upper_factor_to_lanes 130
+```
 
 This is not the finish line. It is a cleaner, fail-closed grouped evaluator
 shape. The next speed work must attack the remaining lane-state and math

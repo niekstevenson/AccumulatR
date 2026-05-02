@@ -1,7 +1,5 @@
 #pragma once
 
-#include <array>
-
 #include "eval_query.hpp"
 #include "exact_competitor_union.hpp"
 #include "trial_data.hpp"
@@ -111,80 +109,6 @@ inline void build_exact_plan_cache(
   }
 }
 
-inline double exact_simple_race_leaf_q(
-    const ExactVariantPlan &plan,
-    const ParamView &params,
-    const int first_param_row,
-    const ExactTriggerState &trigger_state,
-    const semantic::Index leaf_index) {
-  const auto leaf_pos = static_cast<std::size_t>(leaf_index);
-  const auto &program = plan.lowered.program;
-  const auto trigger_index = program.leaf_trigger_index[leaf_pos];
-  if (trigger_index != semantic::kInvalidIndex) {
-    const auto trigger_pos = static_cast<std::size_t>(trigger_index);
-    if (static_cast<semantic::TriggerKind>(program.trigger_kind[trigger_pos]) ==
-            semantic::TriggerKind::Shared &&
-        trigger_state.shared_started[trigger_pos] <= 1U) {
-      return trigger_state.shared_started[trigger_pos] == 1U ? 0.0 : 1.0;
-    }
-  }
-  return params.q(first_param_row + leaf_index);
-}
-
-inline leaf::EventChannels exact_simple_race_leaf_channels_at(
-    const ExactVariantPlan &plan,
-    const ParamView &params,
-    const int first_param_row,
-    const ExactTriggerState &trigger_state,
-    const semantic::Index leaf_index,
-    const double rt) {
-  const auto leaf_pos = static_cast<std::size_t>(leaf_index);
-  const auto &program = plan.lowered.program;
-  const auto &desc = program.leaf_descriptors[leaf_pos];
-  std::array<double, 8> local_params{};
-  const int row = first_param_row + leaf_index;
-  const int n_local = std::min<int>(desc.param_count, 8);
-  for (int j = 0; j < n_local; ++j) {
-    local_params[static_cast<std::size_t>(j)] = params.p(row, j);
-  }
-  const double q =
-      exact_simple_race_leaf_q(
-          plan,
-          params,
-          first_param_row,
-          trigger_state,
-          leaf_index);
-  return standard_leaf_channels(
-      desc.dist_kind,
-      local_params.data(),
-      n_local,
-      q,
-      params.t0(row),
-      rt - desc.onset_abs_value);
-}
-
-inline double exact_terminal_leaf_survival_probability(
-    const ExactVariantPlan &plan,
-    const ParamView &params,
-    const int first_param_row,
-    const ExactTriggerState &trigger_state,
-    const semantic::Index source_id) {
-  const auto source_pos = static_cast<std::size_t>(source_id);
-  const auto &kernel = plan.source_kernels[source_pos];
-  const auto leaf_pos = static_cast<std::size_t>(kernel.leaf_index);
-  const auto &program = plan.lowered.program;
-  const auto trigger_index = program.leaf_trigger_index[leaf_pos];
-  if (trigger_index != semantic::kInvalidIndex) {
-    const auto trigger_pos = static_cast<std::size_t>(trigger_index);
-    if (static_cast<semantic::TriggerKind>(program.trigger_kind[trigger_pos]) ==
-            semantic::TriggerKind::Shared &&
-        trigger_state.shared_started[trigger_pos] <= 1U) {
-      return trigger_state.shared_started[trigger_pos] == 1U ? 0.0 : 1.0;
-    }
-  }
-  return clamp_probability(params.q(first_param_row + kernel.leaf_index));
-}
-
 struct ExactProbabilityBatchLane {
   ParamView params;
   int first_param_row{0};
@@ -208,8 +132,12 @@ struct ExactProbabilityBatchWorkspace {
   std::vector<ExactTriggerState> trigger_states;
   std::vector<ExactProbabilityBatchLane> sub_lanes;
   std::vector<std::size_t> sub_lane_indices;
+  std::vector<ExactSourceChannels *> source_channels_by_lane;
+  std::vector<semantic::Index> active_lanes;
+  std::vector<double> observed_times;
   std::vector<double> values_a;
   std::vector<double> values_b;
+  CompiledMathBatchSourceProductScratch source_scratch;
   CompiledMathBatchWorkspace compiled_workspace;
 };
 
@@ -284,6 +212,180 @@ struct ExactRankedBatchWorkspace {
   std::vector<double> candidate_ready_expr_normalizers;
   CompiledMathBatchWorkspace compiled_workspace;
 };
+
+inline bool prepare_exact_probability_leaf_batch_state(
+    const ExactVariantPlan &plan,
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    const std::vector<ExactTriggerState> &trigger_states,
+    ExactProbabilityBatchWorkspace *batch_workspace,
+    CompiledMathLaneBatchState *state) {
+  (void)plan;
+  if (batch_workspace == nullptr || state == nullptr ||
+      trigger_states.size() < lanes.size()) {
+    return false;
+  }
+  const auto lane_count = lanes.size();
+  batch_workspace->source_channels_by_lane.assign(lane_count, nullptr);
+  batch_workspace->active_lanes.resize(lane_count);
+  batch_workspace->observed_times.resize(lane_count);
+  batch_workspace->values_a.assign(lane_count, 0.0);
+  for (std::size_t lane = 0; lane < lane_count; ++lane) {
+    auto *workspace = lanes[lane].workspace;
+    if (workspace == nullptr) {
+      return false;
+    }
+    workspace->source_channels.reset(
+        lanes[lane].params,
+        lanes[lane].first_param_row,
+        trigger_states[lane],
+        workspace->initial_state,
+        lanes[lane].observed_time);
+    batch_workspace->source_channels_by_lane[lane] =
+        &workspace->source_channels;
+    batch_workspace->active_lanes[lane] =
+        static_cast<semantic::Index>(lane);
+    batch_workspace->observed_times[lane] = lanes[lane].observed_time;
+  }
+  *state = CompiledMathLaneBatchState{
+      lane_count,
+      0U,
+      BatchTimeSlotView{},
+      nullptr,
+      &batch_workspace->source_channels_by_lane,
+      nullptr,
+      nullptr,
+      nullptr};
+  return true;
+}
+
+inline bool evaluate_exact_probability_top1_leaf_race_batch(
+    const ExactVariantPlan &plan,
+    const ExactProbabilityProgramSet &programs,
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    const ExactProbabilityOp &op,
+    const std::vector<ExactTriggerState> &trigger_states,
+    ExactProbabilityBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane) {
+  if (batch_workspace == nullptr || out_by_lane == nullptr) {
+    return false;
+  }
+  out_by_lane->assign(lanes.size(), 0.0);
+  if (lanes.empty()) {
+    return true;
+  }
+  CompiledMathLaneBatchState state;
+  if (!prepare_exact_probability_leaf_batch_state(
+          plan,
+          lanes,
+          trigger_states,
+          batch_workspace,
+          &state)) {
+    return false;
+  }
+  std::fill(out_by_lane->begin(), out_by_lane->end(), 1.0);
+  for (semantic::Index i = 0; i < op.source_span.size; ++i) {
+    const auto source_id =
+        programs.source_ids[
+            static_cast<std::size_t>(op.source_span.offset + i)];
+    if (source_id == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(source_id) >= plan.source_kernels.size()) {
+      return false;
+    }
+    const auto &kernel =
+        plan.source_kernels[static_cast<std::size_t>(source_id)];
+    if (kernel.leaf_index == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(kernel.leaf_index) >=
+            plan.lowered.program.leaf_descriptors.size()) {
+      return false;
+    }
+    const auto &leaf =
+        plan.lowered.program.leaf_descriptors[
+            static_cast<std::size_t>(kernel.leaf_index)];
+    const auto channel_mask =
+        source_id == op.target_source_id
+            ? kLeafChannelPdf
+            : kLeafChannelSurvival;
+    if (!compiled_math_batch_leaf_values_from_times(
+            leaf.dist_kind,
+            kernel.leaf_index,
+            leaf.onset_abs_value,
+            state,
+            batch_workspace->active_lanes.data(),
+            lanes.size(),
+            batch_workspace->observed_times.data(),
+            channel_mask,
+            batch_workspace->values_a.data(),
+            &batch_workspace->source_scratch)) {
+      return false;
+    }
+    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+      const double product =
+          (*out_by_lane)[lane] * batch_workspace->values_a[lane];
+      (*out_by_lane)[lane] =
+          std::isfinite(product) && product > 0.0 ? product : 0.0;
+    }
+  }
+  return true;
+}
+
+inline bool evaluate_exact_probability_terminal_no_response_batch(
+    const ExactVariantPlan &plan,
+    const ExactProbabilityProgramSet &programs,
+    const std::vector<ExactProbabilityBatchLane> &lanes,
+    const ExactProbabilityOp &op,
+    const std::vector<ExactTriggerState> &trigger_states,
+    ExactProbabilityBatchWorkspace *batch_workspace,
+    std::vector<double> *out_by_lane) {
+  if (batch_workspace == nullptr || out_by_lane == nullptr) {
+    return false;
+  }
+  out_by_lane->assign(lanes.size(), 0.0);
+  if (lanes.empty()) {
+    return true;
+  }
+  CompiledMathLaneBatchState state;
+  if (!prepare_exact_probability_leaf_batch_state(
+          plan,
+          lanes,
+          trigger_states,
+          batch_workspace,
+          &state)) {
+    return false;
+  }
+  std::fill(out_by_lane->begin(), out_by_lane->end(), 1.0);
+  for (semantic::Index i = 0; i < op.source_span.size; ++i) {
+    const auto source_id =
+        programs.source_ids[
+            static_cast<std::size_t>(op.source_span.offset + i)];
+    if (source_id == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(source_id) >= plan.source_kernels.size()) {
+      return false;
+    }
+    const auto &kernel =
+        plan.source_kernels[static_cast<std::size_t>(source_id)];
+    if (kernel.leaf_index == semantic::kInvalidIndex) {
+      return false;
+    }
+    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
+      const auto *source_channels = state.source_channels(
+          static_cast<semantic::Index>(lane));
+      if (source_channels == nullptr) {
+        return false;
+      }
+      const double q =
+          clamp_probability(
+              source_channels->source_product_leaf_input(
+                  kernel.leaf_index).q);
+      const double product = (*out_by_lane)[lane] * q;
+      (*out_by_lane)[lane] =
+          std::isfinite(product) && product > 0.0 ? product : 0.0;
+    }
+  }
+  for (auto &value : *out_by_lane) {
+    value = clamp_probability(value);
+  }
+  return true;
+}
 
 inline void evaluate_exact_probability_trigger_op_batch(
     const ExactVariantPlan &plan,
@@ -721,52 +823,30 @@ inline void evaluate_exact_probability_trigger_op_batch(
     return;
 
   case ExactProbabilityOpKind::Top1LeafRaceDensity:
-    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
-      double term = 1.0;
-      for (semantic::Index i = 0; i < op.source_span.size; ++i) {
-        const auto source_id =
-            programs.source_ids[
-                static_cast<std::size_t>(op.source_span.offset + i)];
-        const auto &kernel =
-            plan.source_kernels[static_cast<std::size_t>(source_id)];
-        const auto channels = exact_simple_race_leaf_channels_at(
+    if (!evaluate_exact_probability_top1_leaf_race_batch(
             plan,
-            lanes[lane].params,
-            lanes[lane].first_param_row,
-            trigger_states[lane],
-            kernel.leaf_index,
-            lanes[lane].observed_time);
-        const double factor =
-            source_id == op.target_source_id
-                ? safe_density(channels.pdf)
-                : clamp_probability(channels.survival);
-        term *= factor;
-        if (!(term > 0.0)) {
-          break;
-        }
-      }
-      (*out_by_lane)[lane] = term > 0.0 ? term : 0.0;
+            programs,
+            lanes,
+            op,
+            trigger_states,
+            batch_workspace,
+            out_by_lane)) {
+      throw std::runtime_error(
+          "top-1 leaf race probability op has no batch implementation");
     }
     return;
 
   case ExactProbabilityOpKind::TerminalNoResponseProbability:
-    for (std::size_t lane = 0; lane < lanes.size(); ++lane) {
-      double terminal_survival = 1.0;
-      for (semantic::Index i = 0; i < op.source_span.size; ++i) {
-        const auto source_id =
-            programs.source_ids[
-                static_cast<std::size_t>(op.source_span.offset + i)];
-        terminal_survival *= exact_terminal_leaf_survival_probability(
+    if (!evaluate_exact_probability_terminal_no_response_batch(
             plan,
-            lanes[lane].params,
-            lanes[lane].first_param_row,
-            trigger_states[lane],
-            source_id);
-        if (!(terminal_survival > 0.0)) {
-          break;
-        }
-      }
-      (*out_by_lane)[lane] = clamp_probability(terminal_survival);
+            programs,
+            lanes,
+            op,
+            trigger_states,
+            batch_workspace,
+            out_by_lane)) {
+      throw std::runtime_error(
+          "terminal no-response probability op has no batch implementation");
     }
     return;
 
@@ -1583,139 +1663,6 @@ inline void exact_ranked_loglik_batch(
     (*out_by_lane)[lane] =
         std::isfinite(total) && total > 0.0 ? std::log(total) : min_ll;
   }
-}
-
-inline SEXP evaluate_exact_trials_cached(
-    const std::vector<semantic::Index> &variant_index_by_component_code,
-    const std::vector<ExactVariantPlan> &plans,
-    const PreparedTrialLayout &layout,
-    SEXP paramsSEXP,
-    SEXP dataSEXP,
-    const double min_ll,
-    SEXP expandSEXP,
-    const int *ok = nullptr) {
-  const auto table = read_prepared_data_view(dataSEXP, layout);
-  const auto columns = read_exact_trial_columns(layout, dataSEXP);
-  Rcpp::NumericVector loglik(layout.spans.size(), min_ll);
-  std::vector<runtime::TrialBlock> blocks;
-  ExactStepWorkspacePool workspace_pool(plans.size());
-  std::vector<ExactProbabilityBatchLane> exact_lanes;
-  ExactProbabilityBatchWorkspace exact_batch_workspace;
-  std::vector<double> exact_values;
-  std::vector<ExactRankedBatchLane> ranked_lanes;
-  ExactRankedBatchWorkspace ranked_batch_workspace;
-  std::vector<double> ranked_values;
-  std::size_t param_row = 0;
-  runtime::TrialBlock current_block;
-  bool have_block = false;
-  for (std::size_t trial_index = 0; trial_index < layout.spans.size(); ++trial_index) {
-    const auto row = static_cast<R_xlen_t>(layout.spans[trial_index].start_row);
-    const auto variant_index =
-        variant_index_by_component_code[
-            static_cast<std::size_t>(table.component[row])];
-    if (!have_block || current_block.variant_index != variant_index) {
-      if (have_block) {
-        blocks.push_back(current_block);
-      }
-      current_block.variant_index = variant_index;
-      current_block.start_row = static_cast<int>(trial_index);
-      current_block.row_count = 1;
-      have_block = true;
-    } else {
-      ++current_block.row_count;
-    }
-
-    const auto &plan = plans[static_cast<std::size_t>(variant_index)];
-    const auto leaf_count =
-        static_cast<std::size_t>(plan.lowered.program.layout.n_leaves);
-    if (!trial_is_selected(ok, trial_index)) {
-      param_row += leaf_count;
-      continue;
-    }
-    const auto obs = read_exact_observation_view(
-        table,
-        variant_index_by_component_code,
-        layout,
-        trial_index,
-        columns);
-    auto &workspace = workspace_pool.get(plans, variant_index);
-    if (obs.rank_count == 1) {
-      const auto outcome_code = exact_trial_view_outcome_code(obs, 0U);
-      const auto target_idx =
-          plan.outcome_index_by_code[static_cast<std::size_t>(outcome_code)];
-      const double rt = exact_trial_view_rt(obs, 0U);
-      double value = min_ll;
-      if (target_idx != semantic::kInvalidIndex &&
-          std::isfinite(rt) &&
-          rt > 0.0) {
-        const auto program_index =
-            plan.probability_programs.density_by_outcome[
-                static_cast<std::size_t>(target_idx)];
-        const auto &program =
-            plan.probability_programs.programs[
-                static_cast<std::size_t>(program_index)];
-        exact_lanes.clear();
-        exact_lanes.emplace_back(
-            paramsSEXP,
-            nullptr,
-            0,
-            static_cast<int>(param_row),
-            rt,
-            &workspace);
-        evaluate_exact_probability_program_batch(
-            plan,
-            program,
-            exact_lanes,
-            &exact_batch_workspace,
-            &exact_values);
-        if (!exact_values.empty() &&
-            std::isfinite(exact_values[0]) &&
-            exact_values[0] > 0.0) {
-          value = std::log(exact_values[0]);
-        }
-      }
-      loglik[static_cast<R_xlen_t>(trial_index)] = value;
-    } else {
-      ranked_lanes.clear();
-      ranked_lanes.emplace_back(
-          paramsSEXP,
-          nullptr,
-          0,
-          static_cast<int>(param_row),
-          obs,
-          &workspace);
-      exact_ranked_loglik_batch(
-          plan,
-          ranked_lanes,
-          min_ll,
-          &ranked_batch_workspace,
-          &ranked_values);
-      loglik[static_cast<R_xlen_t>(trial_index)] =
-          ranked_values.empty() ? min_ll : ranked_values[0];
-    }
-    param_row += leaf_count;
-  }
-  if (have_block) {
-    blocks.push_back(current_block);
-  }
-
-  Rcpp::List block_list(blocks.size());
-  for (std::size_t i = 0; i < blocks.size(); ++i) {
-    const auto &block = blocks[i];
-    const auto &plan = plans[static_cast<std::size_t>(block.variant_index)];
-    block_list[i] = Rcpp::List::create(
-        Rcpp::Named("component_id") =
-            plan.lowered.component_id,
-        Rcpp::Named("start_row") = block.start_row + 1,
-        Rcpp::Named("row_count") = block.row_count);
-  }
-
-  const double total_loglik = aggregate_trial_loglik(loglik, expandSEXP);
-
-  return Rcpp::List::create(
-      Rcpp::Named("loglik") = loglik,
-      Rcpp::Named("total_loglik") = total_loglik,
-      Rcpp::Named("blocks") = block_list);
 }
 
 } // namespace detail

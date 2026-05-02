@@ -83,15 +83,6 @@ inline int coverage_index(const Index value) noexcept {
              : static_cast<int>(value);
 }
 
-inline bool coverage_bound_plan_has_work(
-    const CompiledSourceBoundPlan &bounds) noexcept {
-  return !bounds.exact.empty() || !bounds.lower.empty() ||
-         !bounds.upper.empty() || bounds.has_condition_exact ||
-         bounds.has_condition_lower || bounds.has_condition_upper ||
-         !bounds.use_sequence_exact || !bounds.use_sequence_lower ||
-         !bounds.use_sequence_upper;
-}
-
 inline const char *coverage_node_kind_name(
     const CompiledMathNodeKind kind) noexcept {
   switch (kind) {
@@ -170,31 +161,6 @@ inline const char *coverage_program_kind_name(
   return "UnknownSourceProgram";
 }
 
-inline const char *coverage_probability_op_kind_name(
-    const ExactProbabilityOpKind kind) noexcept {
-  switch (kind) {
-  case ExactProbabilityOpKind::Constant:
-    return "Constant";
-  case ExactProbabilityOpKind::Top1LeafRaceDensity:
-    return "Top1LeafRaceDensity";
-  case ExactProbabilityOpKind::TerminalNoResponseProbability:
-    return "TerminalNoResponseProbability";
-  case ExactProbabilityOpKind::GenericTransitionDensity:
-    return "GenericTransitionDensity";
-  case ExactProbabilityOpKind::GenericTransitionProbability:
-    return "GenericTransitionProbability";
-  case ExactProbabilityOpKind::RankedTransitionSequence:
-    return "RankedTransitionSequence";
-  case ExactProbabilityOpKind::Integral:
-    return "Integral";
-  case ExactProbabilityOpKind::WeightedTriggerSum:
-    return "WeightedTriggerSum";
-  case ExactProbabilityOpKind::Log:
-    return "Log";
-  }
-  return "UnknownProbabilityOp";
-}
-
 inline const char *coverage_dist_kind_name(const std::uint8_t kind) noexcept {
   switch (static_cast<accumulatr::leaf::DistKind>(kind)) {
   case accumulatr::leaf::DistKind::Lognormal:
@@ -219,25 +185,17 @@ inline bool coverage_leaf_math_is_scalar(
   (void)channel_mask;
   return true;
 #else
+  (void)channel_mask;
   switch (static_cast<accumulatr::leaf::DistKind>(leaf_dist_kind)) {
   case accumulatr::leaf::DistKind::Lognormal:
-  case accumulatr::leaf::DistKind::Exgauss:
-    return false;
   case accumulatr::leaf::DistKind::Gamma:
-    return (channel_mask & ~1U) != 0U;
+  case accumulatr::leaf::DistKind::Exgauss:
   case accumulatr::leaf::DistKind::LBA:
   case accumulatr::leaf::DistKind::RDM:
-    return true;
+    return false;
   }
   return true;
 #endif
-}
-
-inline bool coverage_source_product_op_is_generic(
-    const CompiledMathSourceProductOpKind kind) noexcept {
-  return kind == CompiledMathSourceProductOpKind::GenericPdf ||
-         kind == CompiledMathSourceProductOpKind::GenericCdf ||
-         kind == CompiledMathSourceProductOpKind::GenericSurvival;
 }
 
 void scan_source_product_program_coverage(const CompiledMathProgram &program,
@@ -281,30 +239,12 @@ void scan_source_product_ops_coverage(const CompiledMathProgram &program,
     if (op.value_channel_mask == 0U) {
       continue;
     }
-    if (coverage_source_product_op_is_generic(op.kind)) {
-      rows->add(
-          "program",
-          variant_index,
-          probability_program_index,
-          root_id,
-          "BatchGroupedButScalarLeafMath",
-          "generic source-product op has no distribution-specific vector kernel");
-    }
     if (op.source_product_channel_id != accumulatr::semantic::kInvalidIndex) {
       const auto channel_index =
           static_cast<std::size_t>(op.source_product_channel_id);
       if (channel_index < program.integral_kernel_source_product_channels.size()) {
         const auto &channel =
             program.integral_kernel_source_product_channels[channel_index];
-        if (coverage_bound_plan_has_work(channel.bounds)) {
-          rows->add(
-              "program",
-              variant_index,
-              probability_program_index,
-              root_id,
-              "BatchGroupedButScalarBounds",
-              "source-product channel resolves bounds per lane");
-        }
         if (channel.leaf_index != accumulatr::semantic::kInvalidIndex &&
             coverage_leaf_math_is_scalar(
                 channel.leaf_dist_kind,
@@ -373,18 +313,6 @@ void scan_source_product_program_coverage(const CompiledMathProgram &program,
   }
   const auto &source_program =
       program.integral_kernel_source_product_programs[source_program_index];
-  if (coverage_bound_plan_has_work(source_program.bounds) ||
-      coverage_bound_plan_has_work(source_program.onset_bounds)) {
-    rows->add(
-        "program",
-        variant_index,
-        probability_program_index,
-        root_id,
-        "BatchGroupedButScalarBounds",
-        std::string("source-product program ") +
-            coverage_program_kind_name(source_program.kind) +
-            " resolves bounds per lane");
-  }
   switch (source_program.kind) {
   case CompiledMathSourceProductProgramKind::ConstantZero:
   case CompiledMathSourceProductProgramKind::ConstantOne:
@@ -490,15 +418,6 @@ void scan_integral_kernel_coverage(const CompiledMathProgram &program,
     }
     const auto &term =
         program.integral_kernel_source_product_terms[term_index];
-    if (!term.expr_upper_factors.empty()) {
-      rows->add(
-          "program",
-          variant_index,
-          probability_program_index,
-          root_id,
-          "BatchGroupedButScalarExprUpper",
-          "source-product term applies expr-upper factors per lane");
-    }
     scan_source_product_ops_coverage(
         program,
         term.source_product_ops,
@@ -636,25 +555,17 @@ void scan_compiled_root_coverage(const ExactVariantPlan &variant,
     case CompiledMathNodeKind::SourcePdf:
     case CompiledMathNodeKind::SourceCdf:
     case CompiledMathNodeKind::SourceSurvival:
-      rows->add(
-          "program",
+      scan_source_product_program_coverage(
+          program,
+          node.source_program_id,
           variant_index,
           probability_program_index,
           static_cast<int>(root_id),
-          "BatchGroupedButScalarLeafMath",
-          std::string("compiled source node is still evaluated per lane: ") +
-              coverage_node_kind_name(node.kind));
+          0U,
+          rows);
       break;
     case CompiledMathNodeKind::ExprUpperBoundDensity:
     case CompiledMathNodeKind::ExprUpperBoundCdf:
-      rows->add(
-          "program",
-          variant_index,
-          probability_program_index,
-          static_cast<int>(root_id),
-          "BatchGroupedButScalarExprUpper",
-          std::string("compiled expr-upper node is still evaluated per lane: ") +
-              coverage_node_kind_name(node.kind));
       break;
     case CompiledMathNodeKind::ExprDensity:
     case CompiledMathNodeKind::ExprCdf:
@@ -694,17 +605,8 @@ void scan_probability_op_coverage(const ExactVariantPlan &variant,
   }
   switch (op.kind) {
   case ExactProbabilityOpKind::Constant:
-    return;
   case ExactProbabilityOpKind::Top1LeafRaceDensity:
   case ExactProbabilityOpKind::TerminalNoResponseProbability:
-    rows->add(
-        "program",
-        variant_index,
-        probability_program_index,
-        r_na_int(),
-        "BatchGroupedButScalarLeafMath",
-        std::string("probability op uses scalar simple-race leaf math: ") +
-            coverage_probability_op_kind_name(op.kind));
     return;
   case ExactProbabilityOpKind::GenericTransitionDensity:
   case ExactProbabilityOpKind::GenericTransitionProbability: {
@@ -819,7 +721,7 @@ Rcpp::List make_batch_coverage_report(const NativeLikelihoodContext &ctx) {
             static_cast<int>(program_pos),
             r_na_int(),
             "BatchComplete",
-            "no unsupported, scalar leaf-math, scalar-bound, or scalar expr-upper marker found");
+            "no unsupported or scalar leaf-math marker found");
       }
     }
   }

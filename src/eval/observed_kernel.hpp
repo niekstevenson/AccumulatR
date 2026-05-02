@@ -955,8 +955,6 @@ inline SEXP evaluate_observed_trials_cached_impl(
     SEXP expandSEXP,
     ObservationBatchWorkspace *reusable_batch_workspace = nullptr,
     const int *ok = nullptr) {
-  BatchSourceProductDebugScope batch_source_product_debug_scope;
-  BatchFiniteIntegralDebugScope batch_finite_integral_debug_scope;
   const auto table = read_prepared_data_view(dataSEXP, layout);
 
   const bool ranked_identity_present =

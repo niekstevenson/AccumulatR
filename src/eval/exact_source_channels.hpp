@@ -24,7 +24,7 @@ struct ExactLoadedLeafInput {
 
 class CompiledSourceChannels {
 public:
-  struct SourceProductScalarFill {
+  struct SourceProductBatchFill {
     std::uint8_t mask{0U};
     double pdf{0.0};
     double cdf{0.0};
@@ -146,36 +146,13 @@ public:
     return true;
   }
 
-  ResolvedSourceBounds source_product_resolved_bounds(
-      const semantic::Index source_id,
-      const CompiledSourceBoundPlan &bounds,
-      const CompiledMathWorkspace *workspace) const {
-    return compiled_source_bounds(source_id, bounds, workspace);
+  double compiled_condition_fallback_time() const noexcept {
+    return conditional_time_;
   }
 
-  ResolvedSourceBounds source_product_resolved_bounds_from_time_slots(
+  void source_product_sequence_bound_values(
       const semantic::Index source_id,
       const CompiledSourceBoundPlan &bounds,
-      const double *time_values,
-      const std::size_t lane_stride,
-      const semantic::Index lane,
-      const std::uint8_t *time_valid = nullptr) const {
-    return compiled_source_bounds_from_time_slots(
-        source_id,
-        bounds,
-        time_values,
-        lane_stride,
-        lane,
-        time_valid);
-  }
-
-  void source_product_resolved_bound_values_from_time_slots(
-      const semantic::Index source_id,
-      const CompiledSourceBoundPlan &bounds,
-      const double *time_values,
-      const std::size_t lane_stride,
-      const semantic::Index lane,
-      const std::uint8_t *time_valid,
       double *lower,
       double *upper,
       double *exact_time,
@@ -206,45 +183,7 @@ public:
         resolved_upper = sequence_state_->upper_bounds[source_pos];
       }
 
-      if (bounds.has_condition_lower) {
-        for (semantic::Index i = 0; i < bounds.lower.size; ++i) {
-          const auto term_pos =
-              static_cast<std::size_t>(bounds.lower.offset + i);
-          resolved_lower = std::max(
-              resolved_lower,
-              compiled_bound_term_time_from_time_slots(
-                  time_values,
-                  lane_stride,
-                  lane,
-                  plan_.compiled_math.source_condition_bound_terms[term_pos],
-                  time_valid));
-        }
-      }
-      if (bounds.has_condition_upper) {
-        for (semantic::Index i = 0; i < bounds.upper.size; ++i) {
-          const auto term_pos =
-              static_cast<std::size_t>(bounds.upper.offset + i);
-          resolved_upper = std::min(
-              resolved_upper,
-              compiled_bound_term_time_from_time_slots(
-                  time_values,
-                  lane_stride,
-                  lane,
-                  plan_.compiled_math.source_condition_bound_terms[term_pos],
-                  time_valid));
-        }
-      }
-      if (bounds.has_condition_exact) {
-        resolved_exact =
-            compiled_bound_term_time_from_time_slots(
-                time_values,
-                lane_stride,
-                lane,
-                plan_.compiled_math.source_condition_bound_terms[
-                    static_cast<std::size_t>(bounds.exact.offset)],
-                time_valid);
-        resolved_has_exact = 1U;
-      } else if (sequence_exact) {
+      if (sequence_exact) {
         resolved_exact = sequence_state_->exact_times[source_pos];
         resolved_has_exact = 1U;
       }
@@ -324,24 +263,6 @@ private:
     return conditional_time_;
   }
 
-  double compiled_bound_term_time_from_time_slots(
-      const double *time_values,
-      const std::size_t lane_stride,
-      const semantic::Index lane,
-      const CompiledSourceBoundTerm &term,
-      const std::uint8_t *time_valid = nullptr) const {
-    const auto time_id = term.time_id;
-    if (time_values != nullptr && time_id != semantic::kInvalidIndex) {
-      const auto pos =
-          static_cast<std::size_t>(time_id) * lane_stride +
-          static_cast<std::size_t>(lane);
-      if (time_valid == nullptr || time_valid[pos] != 0U) {
-        return time_values[pos];
-      }
-    }
-    return conditional_time_;
-  }
-
   const double *exact_time_for(
       const semantic::Index source_id,
       const semantic::Index condition_id,
@@ -410,85 +331,6 @@ private:
               workspace,
               plan_.compiled_math.source_condition_bound_terms[
                   static_cast<std::size_t>(bounds.exact.offset)]);
-      resolved.exact_time = &compiled_condition_time_;
-      return resolved;
-    }
-    if (sequence_exact) {
-      resolved.exact_time = &sequence_state_->exact_times[source_pos];
-    }
-    return resolved;
-  }
-
-  ResolvedSourceBounds compiled_source_bounds_from_time_slots(
-      const semantic::Index source_id,
-      const CompiledSourceBoundPlan &bounds,
-      const double *time_values,
-      const std::size_t lane_stride,
-      const semantic::Index lane,
-      const std::uint8_t *time_valid = nullptr) const {
-    ResolvedSourceBounds resolved;
-    if (bounds.use_sequence_lower && sequence_state_ != nullptr) {
-      resolved.lower = sequence_state_->lower_bound;
-    }
-    if (source_id == semantic::kInvalidIndex) {
-      return resolved;
-    }
-    const auto source_pos = static_cast<std::size_t>(source_id);
-    const bool sequence_exact =
-        bounds.use_sequence_exact &&
-        sequence_state_ != nullptr &&
-        source_pos < sequence_state_->exact_times.size() &&
-        std::isfinite(sequence_state_->exact_times[source_pos]);
-    const bool sequence_upper =
-        bounds.use_sequence_upper &&
-        sequence_state_ != nullptr &&
-        source_pos < sequence_state_->upper_bounds.size() &&
-        std::isfinite(sequence_state_->upper_bounds[source_pos]);
-    if (sequence_exact || sequence_upper) {
-      resolved.lower = 0.0;
-    }
-    if (sequence_upper) {
-      resolved.upper = sequence_state_->upper_bounds[source_pos];
-    }
-
-    if (bounds.has_condition_lower) {
-      for (semantic::Index i = 0; i < bounds.lower.size; ++i) {
-        const auto term_pos =
-            static_cast<std::size_t>(bounds.lower.offset + i);
-        resolved.lower = std::max(
-            resolved.lower,
-            compiled_bound_term_time_from_time_slots(
-                time_values,
-                lane_stride,
-                lane,
-                plan_.compiled_math.source_condition_bound_terms[term_pos],
-                time_valid));
-      }
-      resolved.has_condition_lower = true;
-    }
-    if (bounds.has_condition_upper) {
-      for (semantic::Index i = 0; i < bounds.upper.size; ++i) {
-        const auto term_pos =
-            static_cast<std::size_t>(bounds.upper.offset + i);
-        resolved.upper = std::min(
-            resolved.upper,
-            compiled_bound_term_time_from_time_slots(
-                time_values,
-                lane_stride,
-                lane,
-                plan_.compiled_math.source_condition_bound_terms[term_pos],
-                time_valid));
-      }
-    }
-    if (bounds.has_condition_exact) {
-      compiled_condition_time_ =
-          compiled_bound_term_time_from_time_slots(
-              time_values,
-              lane_stride,
-              lane,
-              plan_.compiled_math.source_condition_bound_terms[
-                  static_cast<std::size_t>(bounds.exact.offset)],
-              time_valid);
       resolved.exact_time = &compiled_condition_time_;
       return resolved;
     }

@@ -37,27 +37,35 @@ It is materially better than scalar replay, but it is not fully SIMD/vectorized.
   `evaluate_compiled_integral_node_batch_lane_native()`.
 - Covered compiled source and integral nodes no longer fall back to scalar
   evaluation inside the batch executor. If a source/integral fragment reaches
-  the batch path without batch support, it throws instead of silently calling
-  `compiled_math_source_node_value()` or `evaluate_compiled_integral_kernel()`.
+  the batch path without batch support, it throws instead of silently entering
+  the deleted scalar compiled source-node or integral evaluator.
 - Regular non-integral compiled nodes now dispatch once per scheduled node and
   then apply that operation across lanes. They no longer choose the node kind
   inside every lane iteration.
+- Regular arithmetic compiled nodes now use the same batch-array primitive layer
+  for constants, time gates, products, sums, probability clamps, complements,
+  and negation.
 - Finite integral kernels can execute as lane batches:
   parent lanes are filtered, quadrature child lanes are generated, child lanes
   evaluate the integrand in a grouped path, and child values are reduced back to
   parent lanes.
 - Source-product op evaluation is grouped:
   `compiled_math_batch_source_product_value_for_ops()` dispatches once per op
-  over the current active lane list and compacts lanes after zero/impossible
-  factors.
+  over a lane group. Product state is held in lane-indexed arrays, factors
+  update an active mask, and product compaction is deferred to the term/block
+  boundary instead of swapping compacted lane buffers after every op.
+- Source-product product updates now route through a small batch-array
+  primitive layer. Constant factors, direct leaf factors, cached source-program
+  factors, expr-upper factors, integral factors, and parent reductions call
+  shared array operations instead of open-coded product/update loops at each
+  call site.
 - Source-product program fills are grouped:
   conditioned fills, exact-gate fills, onset convolution fills, pool-k-of-n
   fills, and leaf fills run over lane arrays.
 - The old hot scalar source-product symbols are no longer dominant in the
-  stimulus-selective profile:
-  `compiled_math_source_product_value_for_ops()`,
-  `compiled_math_source_product_direct_leaf_scalar()`, and old scalar leaf
-  callbacks are not the main target path.
+  stimulus-selective profile. The scalar source-product op evaluator,
+  direct-leaf scalar callback, and scalar leaf-fill program have been removed
+  from the active compiled evaluator source.
 - Batch scratch and observation batch workspace are reused enough that previous
   allocation hot spots such as `std::vector<double>::__append` and `madvise`
   are no longer central in the stimulus-selective profile.
@@ -81,29 +89,47 @@ It is materially better than scalar replay, but it is not fully SIMD/vectorized.
   `vvexp()` for larger lane counts:
   `compiled_math_batch_normal_cdf_from_z()`.
 - Ex-Gaussian batch leaf paths are present and route the normal-CDF and exp work
-  through batched helpers where possible.
+  through batched helpers. Lower-CDF/tail composition now carries per-lane
+  parameter state through scratch arrays instead of reloading source parameters
+  during each composition pass.
 - Gamma PDF batch paths use vector log/exp for the density calculation.
+- Gamma CDF/survival no longer calls `R::pgamma()` in the covered compiled
+  leaf path. It uses an internal regularized-gamma implementation driven from
+  the batch leaf executor. This is batch-native, but not a hardware SIMD gamma
+  CDF.
+- Batch leaf evaluation has one dispatcher:
+  `compiled_math_batch_leaf_values_from_times()`. Source-program leaves, direct
+  leaves, bind-time integral leaves, and top-1 probability leaves route through
+  this dispatcher.
+- The old scalar distribution leaf primitives have been removed from source:
+  `lognormal_*_fast`, `gamma_*_fast_rate`, `exgauss_raw_*`, `lba_*_fast`,
+  `rdm_*`, and `standard_leaf_channels*`.
+- LBA batch leaf paths now have distribution-specific batch implementations for
+  the PDF/CDF/survival formulas. Normal-CDF calls inside those formulas route
+  through `compiled_math_batch_normal_cdf_from_z()`.
+- RDM batch leaf paths now have distribution-specific batch implementations for
+  the common and near-degenerate branches, so the covered compiled path no
+  longer calls the scalar RDM leaf primitive. Normal-CDF and normal-log-CDF
+  calls inside those formulas route through the batch normal helpers.
 
 ### Still Scalar Or Partially Scalar
 
-- The legacy scalar exact-trial evaluator remains in the source as dead
-  fallback/oracle code, but covered likelihood evaluation no longer calls
-  `evaluate_exact_trials_cached()`.
-- Gamma CDF/survival still calls scalar `R::pgamma()` in covered leaf paths.
-- LBA and RDM still use scalar per-lane formulas internally. They are grouped at
-  the evaluator/source-product level, but their distribution math is not
-  lane-vectorized.
-- Regular non-integral nodes still read/write per-lane `CompiledMathWorkspace`
-  value arrays. The node dispatch is batched, but the value storage is not yet a
-  dense structure-of-arrays evaluator frame.
-- Bound resolution is still per lane:
-  `CompiledSourceChannels::source_product_resolved_bound_values_from_time_slots()`.
-- Expr-upper and timed normalizer machinery still contains per-lane work:
-  `compiled_math_batch_node_evaluator_for_lane()` and
-  `compiled_math_batch_expr_upper_bound_for_node()`.
-- Source-product control still does per-op/per-lane product updates and active
-  lane compaction. That control is expected, but it must stay small compared to
-  math.
+- Regular non-integral nodes now write to batch-owned node-value storage rather
+  than `CompiledMathWorkspace::values`. Arithmetic nodes still apply simple
+  operations over lanes, but they no longer use scalar-shaped storage.
+- Source-product bound resolution now resolves sequence bounds and condition
+  terms into lane arrays. The old
+  `CompiledSourceChannels::source_product_resolved_bound_values_from_time_slots()`
+  entry point is gone.
+- Expr-upper and timed normalizer handling now computes upper-bound time and
+  normalizer arrays for active lanes. The old
+  `compiled_math_batch_node_evaluator_for_lane()`,
+  `compiled_math_batch_expr_upper_bound_for_node()`, and
+  `compiled_math_batch_upper_bound_from_terms()` entry points are gone.
+- Source-product control no longer compacts or gathers live product lanes after
+  every op. Each source-product op evaluates over the original term lane span,
+  updates the lane-indexed product/mask arrays, and defers product compaction to
+  the term/block boundary.
 - Some scalar C++ math remains in non-batch or unsupported paths. That is
   acceptable only while those shapes are explicitly unsupported by the batch
   coverage contract.
@@ -115,26 +141,56 @@ clear speed win over the previous best batch snapshot:
 
 ```text
 case                         current measured
-stim_selective_stop, 400      44.00 ms/eval
-stim_selective_stop, 50       24.33 ms/eval
-example_6_dual_path, 400       8.33 ms/eval
-stop_change_shared_trigger, 400 1.48 ms/eval
-example_23_ranked_chain, 400   0.21 ms/eval
+stim_selective_stop, 400      50.00 ms/eval
+stim_selective_stop, 50       27.00 ms/eval
+example_6_dual_path, 400       8.00 ms/eval
+stop_change_shared_trigger, 400 1.47 ms/eval
+example_23_ranked_chain, 400   0.218 ms/eval
 ```
+
+The batch-array primitive layer is therefore a structural consolidation, not a
+speed win by itself. It creates one place to install dense-lane,
+compiler-vectorized, or Accelerate-backed kernels, but the current
+implementation still uses lane-index gather/scatter loops inside the
+primitives. The full-span mask-first source-product op path is structurally
+cleaner, but it is not a speed win on the stimulus-selective benchmark because
+it now evaluates later op values for lanes that previous per-op compaction would
+have skipped. The remaining speed work is inside the array kernels, masked value
+evaluation APIs, and integral lane control.
+
+Leaf-vectorization benchmark, run through production likelihood evaluation with
+4000 two-choice trials:
+
+```text
+case                         current ms/eval  abs loglik error
+gamma_pdf_and_survival            0.4691          9.09e-13
+exgauss_pdf_and_survival          0.5000          9.09e-13
+lba_pdf_and_survival              0.4691          0
+rdm_pdf_and_survival              0.5250          9.09e-13
+```
+
+The benchmark is `dev/scripts/benchmark_leaf_vectorization.R`. It also checks
+the engine log likelihood against independent R formulas.
+
+Interpretation: removing `R::pgamma()` was a real local win in the earlier
+before/after benchmark. The current Ex-Gaussian, LBA, and RDM implementations
+are cleaner and remove scalar callback entry from the covered compiled path, but
+the latest benchmark is a correctness/current-speed check, not evidence of a
+production speedup. Do not cite these distribution cleanups as a production
+speedup without a profile showing where the saved work appears.
 
 Profile interpretation for `stim_selective_stop`, 400 trials:
 
-- active source/integral batch execution no longer samples
-  `compiled_math_source_node_value()` or scalar
-  `evaluate_compiled_integral_kernel()`;
+- active source/integral batch execution no longer samples the deleted scalar
+  compiled source-node or scalar compiled integral entry points;
 - old scalar leaf callbacks are effectively gone from the hot profile;
 - `erfc` is no longer the main wall;
 - top frames are now batch leaf math and vector math:
   `compiled_math_batch_lognormal_leaf_values_from_times()`,
   `compiled_math_batch_normal_cdf_from_z()`, `VVLOG`, and `VVEXP`;
-- remaining non-math cost is mostly source-product control, per-lane bound
-  resolution, expr-upper/timed-normalizer lookup, scratch `ensure_size()`, and
-  vector assignment/allocation noise.
+- remaining non-math cost is mostly source-product control, scratch
+  `ensure_size()`, vector assignment/allocation noise, and ordinary batch
+  lane-control loops.
 
 This is not the finish line. It is a cleaner, fail-closed grouped evaluator
 shape. The next speed work must attack the remaining lane-state and math
@@ -290,6 +346,10 @@ ScalarIdentityShortcut
 Unsupported
 ```
 
+`BatchGroupedButScalarBounds` and `BatchGroupedButScalarExprUpper` are retained
+as zero-count report categories so stale regressions are visible. Covered paths
+must not emit them.
+
 Success criteria:
 
 - coverage is determined before execution;
@@ -306,8 +366,7 @@ Required:
 
 - identity finite observations become lanes in the same observation/probability
   batch executor;
-- scalar `evaluate_exact_trials_cached()` is not used for covered identity
-  shapes;
+- the scalar `evaluate_exact_trials_cached()` implementation is deleted;
 - scalar exact evaluation remains only for explicitly unsupported shapes;
 - no semantic behavior changes.
 
@@ -315,8 +374,8 @@ Success criteria:
 
 ```text
 example_6_dual_path profile:
-  evaluate_compiled_source_product_integral_kernel      absent or tiny
-  compiled_math_source_product_value_for_ops            absent or tiny
+  scalar source-product integral frames                 absent
+  scalar source-product op frames                       absent
   batch executor frames explain the work
 ```
 
@@ -364,6 +423,10 @@ Gamma CDF is the hardest correctness risk. Use one of these only:
 - scalar `R::pgamma()` only while gamma CDF is marked
   `BatchGroupedButScalarLeafMath`, not `BatchComplete`.
 
+Current state: the covered compiled path uses an internal regularized-gamma
+implementation instead of `R::pgamma()`. Keep the benchmark/error audit in place
+because this code is not delegated to R's gamma implementation anymore.
+
 Error audit requirements:
 
 ```text
@@ -386,9 +449,9 @@ Success criteria:
 
 ### Phase 5: Batch Source Bound Resolution
 
-Replace per-lane bound resolution with a lane-batch bound resolver.
+Status: completed for covered source-product bound plans.
 
-Current scalar-ish symbol:
+Deleted scalar-ish symbol:
 
 ```text
 CompiledSourceChannels::source_product_resolved_bound_values_from_time_slots()
@@ -411,10 +474,10 @@ source_product_resolved_bound_values_from_time_slots
 
 ### Phase 6: Batch Expr-Upper And Timed Normalizers
 
-Replace per-lane expr-upper lookup and timed-normalizer work with batch
-evaluation over active lanes.
+Status: completed for covered expr-upper factors and compiled expr-upper nodes.
+Upper-bound time and normalizer values are produced as lane arrays.
 
-Current scalar-ish symbols:
+Deleted scalar-ish symbols:
 
 ```text
 compiled_math_batch_node_evaluator_for_lane()
@@ -494,10 +557,9 @@ Every behavior-changing phase must also report profile counts for:
 
 ```text
 evaluate_observation_plan_direct
-evaluate_exact_trials_cached
-evaluate_compiled_source_product_integral_kernel
-compiled_math_source_product_value_for_ops
-compiled_math_source_product_direct_leaf_scalar
+scalar compiled source-product integral frames
+scalar compiled source-product op frames
+scalar compiled direct-leaf frames
 batch_source_product_lognormal_leaf_value
 batch_source_product_gamma_leaf_value
 batch_source_product_exgauss_leaf_value

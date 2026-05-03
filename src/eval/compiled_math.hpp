@@ -194,6 +194,7 @@ struct CompiledMathIntegralSourceProductTerm {
   CompiledMathIndexSpan outcome_gate_nodes{};
   CompiledMathIndexSpan time_gate_nodes{};
   CompiledMathIndexSpan integral_factor_nodes{};
+  CompiledMathIndexSpan integral_factor_cache_slots{};
   CompiledMathIndexSpan expr_upper_factors{};
   double sign{1.0};
   CompiledMathIndexSpan source_product_ops{};
@@ -288,6 +289,7 @@ struct CompiledMathIntegralKernel {
   CompiledMathIndexSpan source_product_ops{};
   CompiledMathIndexSpan source_product_channels{};
   CompiledMathIndexSpan source_product_terms{};
+  CompiledMathIndexSpan cached_integral_factor_nodes{};
   bool clean_signed_source_sum{false};
 };
 
@@ -540,6 +542,8 @@ struct CompiledMathProgram {
   std::vector<semantic::Index> integral_kernel_outcome_gate_nodes;
   std::vector<semantic::Index> integral_kernel_time_gate_nodes;
   std::vector<semantic::Index> integral_kernel_integral_factor_nodes;
+  std::vector<semantic::Index> integral_kernel_cached_integral_factor_nodes;
+  std::vector<semantic::Index> integral_kernel_integral_factor_cache_slots;
   std::vector<CompiledMathIntegralExprUpperFactor>
       integral_kernel_expr_upper_factors;
   std::vector<CompiledMathTimedUpperBoundTerm> timed_upper_bound_terms;
@@ -1069,6 +1073,7 @@ inline bool compiled_math_collect_source_product_terms(
             CompiledMathIndexSpan{},
             CompiledMathIndexSpan{},
             CompiledMathIndexSpan{},
+            CompiledMathIndexSpan{},
             0.0});
     return true;
   }
@@ -1143,6 +1148,7 @@ inline bool compiled_math_collect_source_product_terms(
                 integral_factor_offset,
                 static_cast<semantic::Index>(
                     built.integral_factor_nodes.size())},
+            CompiledMathIndexSpan{},
             CompiledMathIndexSpan{
                 expr_upper_offset,
                 static_cast<semantic::Index>(
@@ -1150,6 +1156,94 @@ inline bool compiled_math_collect_source_product_terms(
             built.sign});
   }
   return true;
+}
+
+inline CompiledMathIndexSpan compiled_math_store_cached_integral_factor_nodes(
+    CompiledMathProgram *program,
+    const std::vector<CompiledMathIntegralSourceProductTerm> &terms) {
+  std::vector<semantic::Index> factor_nodes;
+  std::vector<std::uint32_t> factor_counts;
+  bool has_gated_terms = false;
+  for (const auto &term : terms) {
+    if (!term.outcome_gate_nodes.empty() || !term.time_gate_nodes.empty()) {
+      has_gated_terms = true;
+    }
+    for (semantic::Index i = 0; i < term.integral_factor_nodes.size; ++i) {
+      const auto node_id =
+          program->integral_kernel_integral_factor_nodes[
+              static_cast<std::size_t>(
+                  term.integral_factor_nodes.offset + i)];
+      bool found = false;
+      for (std::size_t slot = 0; slot < factor_nodes.size(); ++slot) {
+        if (factor_nodes[slot] == node_id) {
+          ++factor_counts[slot];
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        factor_nodes.push_back(node_id);
+        factor_counts.push_back(1U);
+      }
+    }
+  }
+
+  bool has_repeated_factor = false;
+  for (const auto count : factor_counts) {
+    if (count > 1U) {
+      has_repeated_factor = true;
+      break;
+    }
+  }
+  const auto offset = static_cast<semantic::Index>(
+      program->integral_kernel_cached_integral_factor_nodes.size());
+  if (factor_nodes.empty() ||
+      (has_gated_terms && !has_repeated_factor)) {
+    return CompiledMathIndexSpan{offset, 0};
+  }
+  for (std::size_t slot = 0; slot < factor_nodes.size(); ++slot) {
+    if (!has_gated_terms || factor_counts[slot] > 1U) {
+      program->integral_kernel_cached_integral_factor_nodes.push_back(
+          factor_nodes[slot]);
+    }
+  }
+  return CompiledMathIndexSpan{
+      offset,
+      static_cast<semantic::Index>(
+          program->integral_kernel_cached_integral_factor_nodes.size() -
+          static_cast<std::size_t>(offset))};
+}
+
+inline void compiled_math_store_integral_factor_cache_slots(
+    CompiledMathProgram *program,
+    const CompiledMathIntegralKernel &kernel,
+    std::vector<CompiledMathIntegralSourceProductTerm> *terms) {
+  const auto cached_factor_count = kernel.cached_integral_factor_nodes.size;
+  const auto cached_factor_offset = kernel.cached_integral_factor_nodes.offset;
+  for (auto &term : *terms) {
+    const auto offset = static_cast<semantic::Index>(
+        program->integral_kernel_integral_factor_cache_slots.size());
+    for (semantic::Index i = 0; i < term.integral_factor_nodes.size; ++i) {
+      const auto node_id =
+          program->integral_kernel_integral_factor_nodes[
+              static_cast<std::size_t>(
+                  term.integral_factor_nodes.offset + i)];
+      semantic::Index cache_slot = semantic::kInvalidIndex;
+      for (semantic::Index slot = 0; slot < cached_factor_count; ++slot) {
+        if (program->integral_kernel_cached_integral_factor_nodes[
+                static_cast<std::size_t>(cached_factor_offset + slot)] ==
+            node_id) {
+          cache_slot = slot;
+          break;
+        }
+      }
+      program->integral_kernel_integral_factor_cache_slots.push_back(
+          cache_slot);
+    }
+    term.integral_factor_cache_slots = CompiledMathIndexSpan{
+        offset,
+        term.integral_factor_nodes.size};
+  }
 }
 
 inline bool compiled_math_same_source_product_channel(
@@ -1269,6 +1363,10 @@ inline semantic::Index compiled_math_integral_kernel_slot(
       program->integral_kernel_time_gate_nodes.size();
   const auto integral_factor_node_mark =
       program->integral_kernel_integral_factor_nodes.size();
+  const auto cached_integral_factor_node_mark =
+      program->integral_kernel_cached_integral_factor_nodes.size();
+  const auto integral_factor_cache_slot_mark =
+      program->integral_kernel_integral_factor_cache_slots.size();
   const auto expr_upper_factor_mark =
       program->integral_kernel_expr_upper_factors.size();
   if (compiled_math_collect_source_product_terms(
@@ -1295,6 +1393,14 @@ inline semantic::Index compiled_math_integral_kernel_slot(
           static_cast<semantic::Index>(
               program->integral_kernel_source_product_terms.size()),
           static_cast<semantic::Index>(source_product_terms.size())};
+      kernel.cached_integral_factor_nodes =
+          compiled_math_store_cached_integral_factor_nodes(
+              program,
+              source_product_terms);
+      compiled_math_store_integral_factor_cache_slots(
+          program,
+          kernel,
+          &source_product_terms);
       kernel.clean_signed_source_sum = clean_signed_source_sum;
       program->integral_kernel_source_product_terms.insert(
           program->integral_kernel_source_product_terms.end(),
@@ -1317,6 +1423,10 @@ inline semantic::Index compiled_math_integral_kernel_slot(
     program->integral_kernel_time_gate_nodes.resize(time_gate_node_mark);
     program->integral_kernel_integral_factor_nodes.resize(
         integral_factor_node_mark);
+    program->integral_kernel_cached_integral_factor_nodes.resize(
+        cached_integral_factor_node_mark);
+    program->integral_kernel_integral_factor_cache_slots.resize(
+        integral_factor_cache_slot_mark);
     program->integral_kernel_expr_upper_factors.resize(
         expr_upper_factor_mark);
     throw std::runtime_error(

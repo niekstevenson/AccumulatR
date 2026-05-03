@@ -6461,6 +6461,27 @@ inline semantic::Index compile_source_product_channel_program(
           channel->source_id,
           channel->condition_id,
           channel->source_view_id);
+  auto direct_conditioned_leaf_program_id = semantic::kInvalidIndex;
+  const auto child_pos = static_cast<std::size_t>(child_program_id);
+  if (child_program_id != semantic::kInvalidIndex &&
+      child_pos < plan->compiled_math.integral_kernel_source_product_programs.size()) {
+    const auto &child_program =
+        plan->compiled_math.integral_kernel_source_product_programs[child_pos];
+    if (child_program.kind == CompiledMathSourceProductProgramKind::ExactGate &&
+        child_program.source_id == channel->source_id &&
+        child_program.condition_id == channel->condition_id &&
+        child_program.child_program_id != semantic::kInvalidIndex) {
+      const auto leaf_pos =
+          static_cast<std::size_t>(child_program.child_program_id);
+      if (leaf_pos <
+          plan->compiled_math.integral_kernel_source_product_programs.size() &&
+          plan->compiled_math.integral_kernel_source_product_programs[leaf_pos]
+                  .kind ==
+              CompiledMathSourceProductProgramKind::LeafAbsolute) {
+        direct_conditioned_leaf_program_id = child_program.child_program_id;
+      }
+    }
+  }
   CompiledMathSourceProductProgram source_program;
   source_program.kind = CompiledMathSourceProductProgramKind::Conditioned;
   source_program.source_id = channel->source_id;
@@ -6469,6 +6490,8 @@ inline semantic::Index compile_source_product_channel_program(
   source_program.time_cap_id = channel->time_cap_id;
   source_program.source_view_id = channel->source_view_id;
   source_program.child_program_id = child_program_id;
+  source_program.direct_conditioned_leaf_program_id =
+      direct_conditioned_leaf_program_id;
   source_program.bounds = channel->bounds;
   source_program.static_source_view_relation =
       channel->static_source_view_relation;
@@ -6681,6 +6704,35 @@ inline CompiledMathIndexSpan compile_source_product_ops_for_factor_span(
           static_cast<std::size_t>(offset))};
 }
 
+inline bool compiled_math_source_product_op_is_conditioned_direct_leaf(
+    const CompiledMathProgram &program,
+    const CompiledMathSourceProductOp &op,
+    const CompiledMathSourceProductChannel &channel) noexcept {
+  if (channel.leaf_index == semantic::kInvalidIndex ||
+      op.source_product_program_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto program_pos =
+      static_cast<std::size_t>(op.source_product_program_id);
+  if (program_pos >= program.integral_kernel_source_product_programs.size()) {
+    return false;
+  }
+  const auto &source_program =
+      program.integral_kernel_source_product_programs[program_pos];
+  if (source_program.kind != CompiledMathSourceProductProgramKind::Conditioned ||
+      source_program.direct_conditioned_leaf_program_id ==
+          semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto leaf_program_pos =
+      static_cast<std::size_t>(
+          source_program.direct_conditioned_leaf_program_id);
+  return leaf_program_pos <
+             program.integral_kernel_source_product_programs.size() &&
+         program.integral_kernel_source_product_programs[leaf_program_pos].kind ==
+             CompiledMathSourceProductProgramKind::LeafAbsolute;
+}
+
 inline void compile_source_product_scalar_ops(ExactVariantPlan *plan) {
   auto &program = plan->compiled_math;
   program.integral_kernel_source_product_ops.clear();
@@ -6711,6 +6763,8 @@ inline void compile_source_product_scalar_ops(ExactVariantPlan *plan) {
   for (auto &op : program.integral_kernel_source_product_ops) {
     if (op.value_channel_mask == 0U) {
       op.cache_result = false;
+      op.direct_leaf_integrable = true;
+      op.conditioned_direct_leaf = false;
       continue;
     }
     const auto &channel =
@@ -6718,7 +6772,458 @@ inline void compile_source_product_scalar_ops(ExactVariantPlan *plan) {
             static_cast<std::size_t>(op.source_product_channel_id)];
     op.cache_result = op.source_product_program_id != semantic::kInvalidIndex &&
                       (channel.scalar_op_count > 1 ||
-                      op.fill_channel_mask != op.value_channel_mask);
+                       op.fill_channel_mask != op.value_channel_mask);
+    op.conditioned_direct_leaf =
+        !channel.direct_leaf_absolute_candidate &&
+        compiled_math_source_product_op_is_conditioned_direct_leaf(
+            program,
+            op,
+            channel);
+    op.direct_leaf_integrable =
+        (channel.direct_leaf_absolute_candidate &&
+         channel.leaf_index != semantic::kInvalidIndex) ||
+        op.conditioned_direct_leaf;
+  }
+}
+
+inline CompiledMathSourceProductBlockFactorKind
+compiled_math_source_product_block_factor_kind(
+    const CompiledMathSourceProductOp &op) noexcept {
+  if (op.value_channel_mask == 0U) {
+    return CompiledMathSourceProductBlockFactorKind::Constant;
+  }
+  if (op.conditioned_direct_leaf) {
+    return CompiledMathSourceProductBlockFactorKind::ConditionedDirectLeaf;
+  }
+  if (compiled_math_source_product_op_is_direct_leaf(op.kind)) {
+    return CompiledMathSourceProductBlockFactorKind::DirectLeaf;
+  }
+  return CompiledMathSourceProductBlockFactorKind::SourceProgram;
+}
+
+inline bool compiled_math_source_product_block_same_factor(
+    const CompiledMathSourceProductBlockFactor &lhs,
+    const CompiledMathSourceProductBlockFactor &rhs) noexcept {
+  return lhs.op_kind == rhs.op_kind &&
+         lhs.factor_kind == rhs.factor_kind &&
+         lhs.source_product_channel_id == rhs.source_product_channel_id &&
+         lhs.source_product_program_id == rhs.source_product_program_id &&
+         lhs.value_channel_mask == rhs.value_channel_mask &&
+         lhs.fill_channel_mask == rhs.fill_channel_mask &&
+         lhs.constant_value == rhs.constant_value &&
+         lhs.cache_result == rhs.cache_result;
+}
+
+inline void compiled_math_source_product_block_add_cached_program(
+    const semantic::Index program_id,
+    std::vector<semantic::Index> *program_ids) {
+  if (program_id == semantic::kInvalidIndex || program_ids == nullptr) {
+    return;
+  }
+  for (const auto existing : *program_ids) {
+    if (existing == program_id) {
+      return;
+    }
+  }
+  program_ids->push_back(program_id);
+}
+
+inline semantic::Index compiled_math_source_product_block_factor_id(
+    CompiledMathProgram *program,
+    const semantic::Index factor_offset,
+    const semantic::Index op_id,
+    std::vector<semantic::Index> *cached_program_ids) {
+  const auto op_pos = static_cast<std::size_t>(op_id);
+  const auto &op = program->integral_kernel_source_product_ops[op_pos];
+  CompiledMathSourceProductBlockFactor factor;
+  factor.op_id = op_id;
+  factor.op_kind = op.kind;
+  factor.factor_kind = compiled_math_source_product_block_factor_kind(op);
+  factor.source_product_channel_id = op.source_product_channel_id;
+  factor.source_product_program_id = op.source_product_program_id;
+  factor.value_channel_mask = op.value_channel_mask;
+  factor.fill_channel_mask = op.fill_channel_mask;
+  factor.constant_value = op.constant_value;
+  factor.cache_result = op.cache_result;
+
+  const auto factor_end =
+      static_cast<semantic::Index>(
+          program->integral_kernel_source_product_block_factors.size());
+  for (semantic::Index factor_id = 0; factor_id < factor_end - factor_offset;
+       ++factor_id) {
+    const auto global_factor_id =
+        static_cast<std::size_t>(factor_offset + factor_id);
+    if (compiled_math_source_product_block_same_factor(
+            program->integral_kernel_source_product_block_factors[
+                global_factor_id],
+            factor)) {
+      if (factor.cache_result) {
+        compiled_math_source_product_block_add_cached_program(
+            factor.source_product_program_id,
+            cached_program_ids);
+      }
+      return factor_id;
+    }
+  }
+
+  program->integral_kernel_source_product_block_factors.push_back(factor);
+  if (factor.cache_result) {
+    compiled_math_source_product_block_add_cached_program(
+        factor.source_product_program_id,
+        cached_program_ids);
+  }
+  return static_cast<semantic::Index>(factor_end - factor_offset);
+}
+
+inline CompiledMathIndexSpan compile_source_product_block_factor_ids(
+    CompiledMathProgram *program,
+    const semantic::Index factor_offset,
+    const CompiledMathIndexSpan source_product_ops,
+    std::vector<semantic::Index> *cached_program_ids) {
+  const auto id_offset =
+      static_cast<semantic::Index>(
+          program->integral_kernel_source_product_block_factor_ids.size());
+  for (semantic::Index i = 0; i < source_product_ops.size; ++i) {
+    const auto op_id = source_product_ops.offset + i;
+    const auto factor_id =
+        compiled_math_source_product_block_factor_id(
+            program,
+            factor_offset,
+            op_id,
+            cached_program_ids);
+    program->integral_kernel_source_product_block_factor_ids.push_back(
+        factor_id);
+    if (factor_id != semantic::kInvalidIndex) {
+      ++program
+            ->integral_kernel_source_product_block_factors[
+                static_cast<std::size_t>(factor_offset + factor_id)]
+            .use_count;
+    }
+  }
+  return CompiledMathIndexSpan{
+      id_offset,
+      static_cast<semantic::Index>(
+          program->integral_kernel_source_product_block_factor_ids.size() -
+          static_cast<std::size_t>(id_offset))};
+}
+
+inline void compile_source_product_block_plan_for_kernel(
+    CompiledMathProgram *program,
+    CompiledMathIntegralKernel *kernel) {
+  const auto factor_offset =
+      static_cast<semantic::Index>(
+          program->integral_kernel_source_product_block_factors.size());
+  const auto term_offset =
+      static_cast<semantic::Index>(
+          program->integral_kernel_source_product_block_terms.size());
+  const auto cached_program_offset =
+      static_cast<semantic::Index>(
+          program->integral_kernel_source_product_block_cached_source_programs
+              .size());
+  std::vector<semantic::Index> cached_program_ids;
+  semantic::Index max_factor_count = 0;
+
+  if (kernel->kind == CompiledMathIntegralKernelKind::SourceProduct) {
+    const auto factor_ids =
+        compile_source_product_block_factor_ids(
+            program,
+            factor_offset,
+            kernel->source_product_ops,
+            &cached_program_ids);
+    max_factor_count = factor_ids.size;
+    program->integral_kernel_source_product_block_terms.push_back(
+        CompiledMathSourceProductBlockTerm{
+            factor_ids,
+            CompiledMathIndexSpan{},
+            CompiledMathIndexSpan{},
+            CompiledMathIndexSpan{},
+            CompiledMathIndexSpan{},
+            1.0});
+  } else if (kernel->kind == CompiledMathIntegralKernelKind::SourceProductSum) {
+    for (semantic::Index term_idx = 0;
+         term_idx < kernel->source_product_terms.size;
+         ++term_idx) {
+      const auto &term =
+          program->integral_kernel_source_product_terms[
+              static_cast<std::size_t>(
+                  kernel->source_product_terms.offset + term_idx)];
+      const auto factor_ids =
+          compile_source_product_block_factor_ids(
+              program,
+              factor_offset,
+              term.source_product_ops,
+              &cached_program_ids);
+      max_factor_count = std::max(max_factor_count, factor_ids.size);
+      program->integral_kernel_source_product_block_terms.push_back(
+          CompiledMathSourceProductBlockTerm{
+              factor_ids,
+              term.outcome_gate_nodes,
+              term.time_gate_nodes,
+              term.integral_factor_cache_slots,
+              term.expr_upper_factors,
+              term.sign});
+    }
+  }
+
+  program->integral_kernel_source_product_block_cached_source_programs.insert(
+      program->integral_kernel_source_product_block_cached_source_programs.end(),
+      cached_program_ids.begin(),
+      cached_program_ids.end());
+  kernel->source_product_block_factors = CompiledMathIndexSpan{
+      factor_offset,
+      static_cast<semantic::Index>(
+          program->integral_kernel_source_product_block_factors.size() -
+          static_cast<std::size_t>(factor_offset))};
+  kernel->source_product_block_terms = CompiledMathIndexSpan{
+      term_offset,
+      static_cast<semantic::Index>(
+          program->integral_kernel_source_product_block_terms.size() -
+          static_cast<std::size_t>(term_offset))};
+  kernel->source_product_block_cached_source_programs = CompiledMathIndexSpan{
+      cached_program_offset,
+      static_cast<semantic::Index>(
+          program->integral_kernel_source_product_block_cached_source_programs
+              .size() -
+          static_cast<std::size_t>(cached_program_offset))};
+  kernel->source_product_block_max_factor_count = max_factor_count;
+}
+
+inline void compile_source_product_block_plans(ExactVariantPlan *plan) {
+  auto &program = plan->compiled_math;
+  program.integral_kernel_source_product_block_factors.clear();
+  program.integral_kernel_source_product_block_factor_ids.clear();
+  program.integral_kernel_source_product_block_terms.clear();
+  program.integral_kernel_source_product_block_cached_source_programs.clear();
+  for (auto &kernel : program.integral_kernels) {
+    kernel.source_product_block_factors = CompiledMathIndexSpan{};
+    kernel.source_product_block_terms = CompiledMathIndexSpan{};
+    kernel.source_product_block_cached_source_programs = CompiledMathIndexSpan{};
+    kernel.source_product_block_max_factor_count = 0;
+    compile_source_product_block_plan_for_kernel(&program, &kernel);
+  }
+}
+
+inline bool compiled_math_cached_factor_direct_leaf_channel_available(
+    const CompiledMathSourceProductChannel &channel) noexcept {
+  return channel.direct_leaf_absolute_candidate &&
+         channel.leaf_index != semantic::kInvalidIndex;
+}
+
+inline bool compiled_math_cached_factor_conditioned_direct_leaf_available(
+    const CompiledMathProgram &program,
+    const CompiledMathSourceProductOp &op,
+    const CompiledMathSourceProductChannel &channel,
+    const semantic::Index bind_time_id) noexcept {
+  (void)channel;
+  if (!op.conditioned_direct_leaf ||
+      op.source_product_program_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  const auto program_pos =
+      static_cast<std::size_t>(op.source_product_program_id);
+  if (program_pos >= program.integral_kernel_source_product_programs.size()) {
+    return false;
+  }
+  const auto &source_program =
+      program.integral_kernel_source_product_programs[program_pos];
+  const auto bound_uses_bind_time = [&](const CompiledMathIndexSpan span) {
+    for (semantic::Index i = 0; i < span.size; ++i) {
+      const auto term_pos =
+          static_cast<std::size_t>(span.offset + i);
+      if (term_pos < program.source_condition_bound_terms.size() &&
+          program.source_condition_bound_terms[term_pos].time_id ==
+              bind_time_id) {
+        return true;
+      }
+    }
+    return false;
+  };
+  if (bound_uses_bind_time(source_program.bounds.lower) ||
+      bound_uses_bind_time(source_program.bounds.upper) ||
+      bound_uses_bind_time(source_program.bounds.exact)) {
+    return false;
+  }
+  return true;
+}
+
+inline bool compiled_math_cached_factor_direct_leaf_supported(
+    const CompiledMathProgram &program,
+    const CompiledMathIntegralKernel &kernel) noexcept {
+  if (kernel.kind != CompiledMathIntegralKernelKind::SourceProduct ||
+      kernel.bind_time_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  bool has_leaf = false;
+  for (semantic::Index i = 0; i < kernel.source_product_ops.size; ++i) {
+    const auto op_pos =
+        static_cast<std::size_t>(kernel.source_product_ops.offset + i);
+    if (op_pos >= program.integral_kernel_source_product_ops.size()) {
+      return false;
+    }
+    const auto &op = program.integral_kernel_source_product_ops[op_pos];
+    if (op.value_channel_mask == 0U) {
+      continue;
+    }
+    if (op.source_product_channel_id == semantic::kInvalidIndex) {
+      return false;
+    }
+    const auto channel_pos =
+        static_cast<std::size_t>(op.source_product_channel_id);
+    if (channel_pos >= program.integral_kernel_source_product_channels.size()) {
+      return false;
+    }
+    const auto &channel =
+        program.integral_kernel_source_product_channels[channel_pos];
+    if (!compiled_math_cached_factor_direct_leaf_channel_available(channel) &&
+        !compiled_math_cached_factor_conditioned_direct_leaf_available(
+            program,
+            op,
+            channel,
+            kernel.bind_time_id)) {
+      return false;
+    }
+    has_leaf = true;
+  }
+  return has_leaf;
+}
+
+inline bool compiled_math_cached_factor_pdf_antiderivative_supported(
+    const CompiledMathProgram &program,
+    const CompiledMathIntegralKernel &kernel) noexcept {
+  if (kernel.kind != CompiledMathIntegralKernelKind::SourceProduct ||
+      kernel.bind_time_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  bool has_pdf = false;
+  const auto pdf_mask =
+      compiled_math_source_product_op_channel_mask(
+          CompiledMathSourceProductOpKind::GenericPdf);
+  for (semantic::Index i = 0; i < kernel.source_product_ops.size; ++i) {
+    const auto op_pos =
+        static_cast<std::size_t>(kernel.source_product_ops.offset + i);
+    if (op_pos >= program.integral_kernel_source_product_ops.size()) {
+      return false;
+    }
+    const auto &op = program.integral_kernel_source_product_ops[op_pos];
+    if (op.value_channel_mask == 0U) {
+      continue;
+    }
+    if (has_pdf || op.value_channel_mask != pdf_mask ||
+        op.source_product_channel_id == semantic::kInvalidIndex) {
+      return false;
+    }
+    const auto channel_pos =
+        static_cast<std::size_t>(op.source_product_channel_id);
+    if (channel_pos >= program.integral_kernel_source_product_channels.size()) {
+      return false;
+    }
+    const auto &channel =
+        program.integral_kernel_source_product_channels[channel_pos];
+    if (!compiled_math_cached_factor_direct_leaf_channel_available(channel) ||
+        channel.time_id != kernel.bind_time_id ||
+        (channel.time_cap_id != semantic::kInvalidIndex &&
+         channel.time_cap_id != kernel.bind_time_id)) {
+      return false;
+    }
+    has_pdf = true;
+  }
+  return has_pdf;
+}
+
+inline bool compiled_math_cached_factor_flat_quadrature_supported(
+    const CompiledMathProgram &program,
+    const CompiledMathIntegralKernel &kernel) noexcept {
+  if (kernel.bind_time_id == semantic::kInvalidIndex) {
+    return false;
+  }
+  if (kernel.kind == CompiledMathIntegralKernelKind::SourceProduct) {
+    return true;
+  }
+  if (kernel.kind != CompiledMathIntegralKernelKind::SourceProductSum ||
+      kernel.cached_integral_factor_nodes.size != 0) {
+    return false;
+  }
+  for (semantic::Index term_idx = 0;
+       term_idx < kernel.source_product_terms.size;
+       ++term_idx) {
+    const auto term_pos =
+        static_cast<std::size_t>(kernel.source_product_terms.offset + term_idx);
+    if (term_pos >= program.integral_kernel_source_product_terms.size()) {
+      return false;
+    }
+    const auto &term =
+        program.integral_kernel_source_product_terms[term_pos];
+    if (term.integral_factor_nodes.size != 0 ||
+        term.integral_factor_cache_slots.size != 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline void compile_cached_integral_factor_plans(ExactVariantPlan *plan) {
+  auto &program = plan->compiled_math;
+  program.integral_kernel_cached_integral_factor_plans.clear();
+  for (auto &kernel : program.integral_kernels) {
+    kernel.cached_integral_factor_plans = CompiledMathIndexSpan{
+        static_cast<semantic::Index>(
+            program.integral_kernel_cached_integral_factor_plans.size()),
+        0};
+  }
+  for (auto &kernel : program.integral_kernels) {
+    const auto cached_count = kernel.cached_integral_factor_nodes.size;
+    const auto cached_offset = kernel.cached_integral_factor_nodes.offset;
+    const auto plan_offset = static_cast<semantic::Index>(
+        program.integral_kernel_cached_integral_factor_plans.size());
+    for (semantic::Index i = 0; i < cached_count; ++i) {
+      const auto node_pos = static_cast<std::size_t>(cached_offset + i);
+      CompiledMathCachedIntegralFactor factor_plan;
+      if (node_pos <
+          program.integral_kernel_cached_integral_factor_nodes.size()) {
+        factor_plan.node_id =
+            program.integral_kernel_cached_integral_factor_nodes[node_pos];
+      }
+      if (factor_plan.node_id != semantic::kInvalidIndex &&
+          static_cast<std::size_t>(factor_plan.node_id) <
+              program.nodes.size()) {
+        const auto &factor_node =
+            program.nodes[static_cast<std::size_t>(factor_plan.node_id)];
+        factor_plan.kernel_slot = factor_node.integral_kernel_slot;
+        factor_plan.upper_time_id = factor_node.time_id;
+        factor_plan.clamp_probability =
+            factor_node.kind == CompiledMathNodeKind::IntegralZeroToCurrent;
+        if (factor_plan.kernel_slot != semantic::kInvalidIndex &&
+            static_cast<std::size_t>(factor_plan.kernel_slot) <
+                program.integral_kernels.size()) {
+          const auto &factor_kernel =
+              program.integral_kernels[
+                  static_cast<std::size_t>(factor_plan.kernel_slot)];
+          if (compiled_math_cached_factor_pdf_antiderivative_supported(
+                  program,
+                  factor_kernel)) {
+            factor_plan.kind =
+                CompiledMathCachedIntegralFactorKind::PdfAntiderivative;
+          } else if (compiled_math_cached_factor_direct_leaf_supported(
+                         program,
+                         factor_kernel)) {
+            factor_plan.kind =
+                CompiledMathCachedIntegralFactorKind::DirectLeaf;
+          } else if (compiled_math_cached_factor_flat_quadrature_supported(
+                         program,
+                         factor_kernel)) {
+            factor_plan.kind =
+                CompiledMathCachedIntegralFactorKind::FlatQuadrature;
+          }
+        }
+      }
+      program.integral_kernel_cached_integral_factor_plans.push_back(
+          factor_plan);
+    }
+    kernel.cached_integral_factor_plans = CompiledMathIndexSpan{
+        plan_offset,
+        static_cast<semantic::Index>(
+            program.integral_kernel_cached_integral_factor_plans.size() -
+            static_cast<std::size_t>(plan_offset))};
   }
 }
 
@@ -7082,6 +7587,8 @@ inline ExactVariantPlan make_exact_variant_plan(
   compile_source_view_relation_tables(&plan);
   compile_source_product_channel_programs(&plan);
   compile_source_product_scalar_ops(&plan);
+  compile_source_product_block_plans(&plan);
+  compile_cached_integral_factor_plans(&plan);
   compile_source_node_programs(&plan);
   validate_source_product_relations_materialized(plan.compiled_math);
   plan.simple_race = compile_simple_race_plan(plan);

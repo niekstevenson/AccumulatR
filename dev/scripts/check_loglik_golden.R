@@ -7,149 +7,45 @@ if (requireNamespace("devtools", quietly = TRUE)) {
   suppressPackageStartupMessages(library(AccumulatR))
 }
 
-`%||%` <- function(x, y) {
-  if (is.null(x)) y else x
-}
+source(file.path("tests", "testthat", "helper-loglik-golden.R"))
 
-trial_loglik_vector <- function(ctx, params_df, min_ll = log(1e-10)) {
-  stop("trial_loglik_vector() requires prepared data in the current API",
-       call. = FALSE)
-}
-
-build_depth3_case <- function(n_trials = 40L) {
-  spec <- race_spec() |>
-    add_accumulator("plain", "lognormal") |>
-    add_accumulator("a", "lognormal") |>
-    add_accumulator("b", "lognormal") |>
-    add_accumulator("c", "lognormal") |>
-    add_accumulator("d", "lognormal") |>
-    add_outcome("PLAIN", "plain") |>
-    add_outcome("GUARD", inhibit("a", by = inhibit("b", by = inhibit("c", by = "d")))) |>
-    finalize_model()
-  params_df <- build_param_matrix(
-    spec,
-    c(
-      plain.m = log(0.42), plain.s = 0.18,
-      a.m = log(0.34), a.s = 0.20,
-      b.m = log(0.30), b.s = 0.20,
-      c.m = log(0.28), c.s = 0.18,
-      d.m = log(0.26), d.s = 0.16
-    ),
-    n_trials = n_trials
-  )
-  data_df <- data.frame(
-    trial = seq_len(n_trials),
-    R = rep("PLAIN", n_trials),
-    rt = stats::rlnorm(n_trials, meanlog = log(0.48), sdlog = 0.12),
-    stringsAsFactors = FALSE
-  )
-  prep <- prepare_data(spec, data_df)
-  ctx <- make_context(spec)
-  params_df <- build_param_matrix(spec, c(
-    plain.m = log(0.42), plain.s = 0.18,
-    a.m = log(0.34), a.s = 0.20,
-    b.m = log(0.30), b.s = 0.20,
-    c.m = log(0.28), c.s = 0.18,
-    d.m = log(0.26), d.s = 0.16
-  ), trial_df = prep)
-  list(label = "depth3_guard_competitor", ctx = ctx, prep = prep,
-       params_df = params_df)
-}
-
-build_shared_nway_trigger_case <- function(n_trials = 40L) {
-  spec <- race_spec() |>
-    add_accumulator("x1", "lognormal") |>
-    add_accumulator("x2", "lognormal") |>
-    add_accumulator("x3", "lognormal") |>
-    add_accumulator("gate", "lognormal") |>
-    add_outcome("RESP2", all_of("x2", "gate")) |>
-    add_outcome("RESP3", all_of("x3", "gate")) |>
-    add_outcome("NR_RAW", all_of("x1", "gate"),
-                options = list(map_outcome_to = NA_character_)) |>
-    add_trigger("tg_x12", members = c("x1", "x2"), q = 0.10,
-                draw = "shared") |>
-    add_trigger("tg_x3g", members = c("x3", "gate"), q = 0.16,
-                draw = "shared") |>
-    finalize_model()
-  params_df <- build_param_matrix(
-    spec,
-    c(
-      x1.m = log(0.31), x1.s = 0.18,
-      x2.m = log(0.34), x2.s = 0.18,
-      x3.m = log(0.37), x3.s = 0.18,
-      gate.m = log(0.23), gate.s = 0.14,
-      tg_x12 = 0.10,
-      tg_x3g = 0.16
-    ),
-    n_trials = n_trials
-  )
-  data_df <- data.frame(
-    trial = seq_len(n_trials),
-    R = rep(NA_character_, n_trials),
-    rt = rep(NA_real_, n_trials),
-    stringsAsFactors = FALSE
-  )
-  prep <- prepare_data(spec, data_df)
-  ctx <- make_context(spec)
-  params_df <- build_param_matrix(spec, c(
-    x1.m = log(0.31), x1.s = 0.18,
-    x2.m = log(0.34), x2.s = 0.18,
-    x3.m = log(0.37), x3.s = 0.18,
-    gate.m = log(0.23), gate.s = 0.14,
-    tg_x12 = 0.10,
-    tg_x3g = 0.16
-  ), trial_df = prep)
-  list(label = "shared_gate_nway_shared_triggers", ctx = ctx, prep = prep,
-       params_df = params_df)
-}
-
-fixture_path <- file.path("dev", "scripts", "scratch_outputs", "loglik_golden_v1.rds")
+fixture_path <- file.path("tests", "testthat", "fixtures", "loglik_golden_v1.rds")
 if (!file.exists(fixture_path)) {
   stop("Golden fixture missing: ", fixture_path)
 }
 golden <- readRDS(fixture_path)
-tolerance <- golden$tolerance %||% 1e-4
-
-cases <- list(
-  build_depth3_case(),
-  build_shared_nway_trigger_case()
-)
-
-case_map <- setNames(cases, vapply(cases, `[[`, character(1), "label"))
 golden_map <- setNames(golden$cases, vapply(golden$cases, `[[`, character(1), "label"))
+registry <- loglik_golden_case_registry()
+
+if (!setequal(names(registry), names(golden_map))) {
+  stop("Golden fixture case set does not match registry")
+}
 
 max_diff <- 0.0
-for (label in names(case_map)) {
-  if (!label %in% names(golden_map)) {
-    stop("Golden fixture is missing case: ", label)
-  }
-  cs <- case_map[[label]]
+max_tolerance <- 0.0
+failed <- FALSE
+for (label in names(registry)) {
   gl <- golden_map[[label]]
-  total <- as.numeric(log_likelihood(cs$ctx, cs$prep, cs$params_df))
-  trial_ids <- unique(cs$prep$trial)
-  trial <- vapply(trial_ids, function(trial_id) {
-    row_idx <- cs$prep$trial == trial_id
-    as.numeric(log_likelihood(
-      cs$ctx,
-      cs$prep[row_idx, , drop = FALSE],
-      cs$params_df[row_idx, , drop = FALSE]
-    ))
-  }, numeric(1))
-  if (length(trial) != gl$n_trials) {
-    stop("Case ", label, " trial count mismatch: ", length(trial), " vs ", gl$n_trials)
-  }
-  diff_total <- abs(total - gl$total_loglik)
-  diff_trial <- max(abs(trial - gl$trial_loglik))
+  values <- evaluate_loglik_golden_case(
+    registry[[label]]$build(),
+    gl$data_df,
+    gl$params
+  )
+  diff_total <- abs(values$total_loglik - gl$total_loglik)
+  diff_trial <- max(abs(values$trial_loglik - gl$trial_loglik))
   case_max <- max(diff_total, diff_trial)
+  tolerance <- gl$tolerance %||% golden$tolerance %||% 1e-4
   max_diff <- max(max_diff, case_max)
+  max_tolerance <- max(max_tolerance, tolerance)
+  failed <- failed || !is.finite(case_max) || case_max > tolerance
   cat(sprintf(
-    "%s: total_diff=%.6g trial_max_diff=%.6g\n",
-    label, diff_total, diff_trial
+    "%s: total_diff=%.6g trial_max_diff=%.6g tolerance=%.6g\n",
+    label, diff_total, diff_trial, tolerance
   ))
 }
 
-cat(sprintf("max_abs_diff=%.6g tolerance=%.6g\n", max_diff, tolerance))
-if (!is.finite(max_diff) || max_diff > tolerance) {
+cat(sprintf("max_abs_diff=%.6g max_tolerance=%.6g\n", max_diff, max_tolerance))
+if (failed) {
   stop("Golden check failed")
 }
 cat("Golden check passed\n")

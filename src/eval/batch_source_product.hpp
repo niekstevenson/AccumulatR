@@ -85,18 +85,7 @@ inline bool batch_source_product_ops_are_direct_leaf_only(
     const auto &op =
         program.integral_kernel_source_product_ops[
             static_cast<std::size_t>(source_product_ops.offset + i)];
-    if (op.value_channel_mask == 0U) {
-      continue;
-    }
-    const auto channel_pos =
-        static_cast<std::size_t>(op.source_product_channel_id);
-    if (channel_pos >= program.integral_kernel_source_product_channels.size()) {
-      return false;
-    }
-    const auto &channel =
-        program.integral_kernel_source_product_channels[channel_pos];
-    if (!channel.direct_leaf_absolute_candidate ||
-        channel.leaf_index == semantic::kInvalidIndex) {
+    if (!op.direct_leaf_integrable) {
       return false;
     }
   }

@@ -1590,198 +1590,6 @@ inline std::size_t compiled_math_program_time_slot_count(
   return static_cast<std::size_t>(max_time) + 1U;
 }
 
-inline bool compiled_math_batch_source_program_supported(
-    const CompiledMathProgram &program,
-    semantic::Index source_product_program_id,
-    std::size_t depth);
-
-inline bool compiled_math_batch_kernel_supported(
-    const CompiledMathProgram &program,
-    const CompiledMathIntegralKernel &kernel,
-    std::size_t depth);
-
-inline bool compiled_math_batch_source_product_ops_supported(
-    const CompiledMathProgram &program,
-    const CompiledMathIndexSpan source_product_ops,
-    const std::size_t depth) {
-  for (semantic::Index i = 0; i < source_product_ops.size; ++i) {
-    const auto &op =
-        program.integral_kernel_source_product_ops[
-            static_cast<std::size_t>(source_product_ops.offset + i)];
-    if (op.value_channel_mask == 0U) {
-      continue;
-    }
-    if (op.source_product_program_id == semantic::kInvalidIndex ||
-        !compiled_math_batch_source_program_supported(
-            program,
-            op.source_product_program_id,
-            depth + 1U)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-inline bool compiled_math_batch_source_program_supported(
-    const CompiledMathProgram &program,
-    const semantic::Index source_product_program_id,
-    const std::size_t depth) {
-  if (source_product_program_id == semantic::kInvalidIndex) {
-    return true;
-  }
-  if (depth > 32U) {
-    return false;
-  }
-  const auto pos = static_cast<std::size_t>(source_product_program_id);
-  if (pos >= program.integral_kernel_source_product_programs.size()) {
-    return false;
-  }
-  const auto &source_program =
-      program.integral_kernel_source_product_programs[pos];
-  switch (source_program.kind) {
-  case CompiledMathSourceProductProgramKind::ConstantZero:
-  case CompiledMathSourceProductProgramKind::ConstantOne:
-  case CompiledMathSourceProductProgramKind::LeafAbsolute:
-    return true;
-  case CompiledMathSourceProductProgramKind::ExactGate:
-  case CompiledMathSourceProductProgramKind::Conditioned:
-    return compiled_math_batch_source_program_supported(
-        program,
-        source_program.child_program_id,
-        depth + 1U);
-  case CompiledMathSourceProductProgramKind::OnsetConvolution:
-    return source_program.leaf_index != semantic::kInvalidIndex &&
-           compiled_math_batch_source_program_supported(
-               program,
-               source_program.onset_source_program_id,
-               depth + 1U);
-  case CompiledMathSourceProductProgramKind::PoolKOfN:
-    if (source_program.member_programs.empty()) {
-      return false;
-    }
-    for (semantic::Index i = 0; i < source_program.member_programs.size; ++i) {
-      const auto member_program_id =
-          program.integral_kernel_source_product_program_members[
-              static_cast<std::size_t>(
-                  source_program.member_programs.offset + i)];
-      if (!compiled_math_batch_source_program_supported(
-              program,
-              member_program_id,
-              depth + 1U)) {
-        return false;
-      }
-    }
-    return true;
-  }
-  return false;
-}
-
-inline bool compiled_math_batch_expr_upper_supported(
-    const CompiledMathProgram &program,
-    const CompiledMathIndexSpan expr_upper_factors) {
-  for (semantic::Index i = 0; i < expr_upper_factors.size; ++i) {
-    const auto &factor =
-        program.integral_kernel_expr_upper_factors[
-            static_cast<std::size_t>(expr_upper_factors.offset + i)];
-    const auto &node =
-        program.nodes[static_cast<std::size_t>(factor.node_id)];
-    if (node.kind != CompiledMathNodeKind::ExprUpperBoundDensity &&
-        node.kind != CompiledMathNodeKind::ExprUpperBoundCdf) {
-      return false;
-    }
-    if (node.aux_id == semantic::kInvalidIndex ||
-        node.aux2_id == semantic::kInvalidIndex ||
-        node.aux2_id == 0) {
-      continue;
-    }
-    const auto offset = static_cast<std::size_t>(node.aux_id);
-    const auto size = static_cast<std::size_t>(node.aux2_id);
-    if (offset + size > program.timed_upper_bound_terms.size()) {
-      return false;
-    }
-    for (std::size_t term_pos = 0; term_pos < size; ++term_pos) {
-      const auto &term =
-          program.timed_upper_bound_terms[offset + term_pos];
-      if (term.normalizer_node_id == semantic::kInvalidIndex ||
-          static_cast<std::size_t>(term.normalizer_node_id) >=
-              program.nodes.size()) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
-inline bool compiled_math_batch_integral_node_supported(
-    const CompiledMathProgram &program,
-    const CompiledMathNode &node,
-    const std::size_t depth) {
-  if (!compiled_math_is_integral_node(node.kind) ||
-      node.integral_kernel_slot == semantic::kInvalidIndex ||
-      depth > 16U) {
-    return false;
-  }
-  const auto kernel_pos = static_cast<std::size_t>(node.integral_kernel_slot);
-  if (kernel_pos >= program.integral_kernels.size()) {
-    return false;
-  }
-  if (!compiled_math_batch_kernel_supported(
-          program,
-          program.integral_kernels[kernel_pos],
-          depth + 1U)) {
-    return false;
-  }
-  return true;
-}
-
-inline bool compiled_math_batch_kernel_supported(
-    const CompiledMathProgram &program,
-    const CompiledMathIntegralKernel &kernel,
-    const std::size_t depth) {
-  if (kernel.bind_time_id == semantic::kInvalidIndex || depth > 16U) {
-    return false;
-  }
-  if (kernel.kind == CompiledMathIntegralKernelKind::SourceProduct) {
-    return compiled_math_batch_source_product_ops_supported(
-        program,
-        kernel.source_product_ops,
-        depth + 1U);
-  }
-  if (kernel.kind != CompiledMathIntegralKernelKind::SourceProductSum) {
-    return false;
-  }
-  for (semantic::Index term_idx = 0;
-       term_idx < kernel.source_product_terms.size;
-       ++term_idx) {
-    const auto &term =
-        program.integral_kernel_source_product_terms[
-            static_cast<std::size_t>(
-                kernel.source_product_terms.offset + term_idx)];
-    if (!compiled_math_batch_expr_upper_supported(
-            program,
-            term.expr_upper_factors) ||
-        !compiled_math_batch_source_product_ops_supported(
-            program,
-            term.source_product_ops,
-            depth + 1U)) {
-      return false;
-    }
-    for (semantic::Index i = 0; i < term.integral_factor_nodes.size; ++i) {
-      const auto node_id =
-          program.integral_kernel_integral_factor_nodes[
-              static_cast<std::size_t>(
-                  term.integral_factor_nodes.offset + i)];
-      if (!compiled_math_batch_integral_node_supported(
-              program,
-              program.nodes[static_cast<std::size_t>(node_id)],
-              depth + 1U)) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
-
 inline bool compiled_math_source_product_ops_need_batch_cache(
     const CompiledMathProgram &program,
     const CompiledMathIndexSpan source_product_ops) {
@@ -4841,7 +4649,7 @@ inline bool compiled_math_batch_time_gates_open(
 
 inline bool compiled_math_source_product_term_uses_cache_slot(
     const CompiledMathProgram &program,
-    const CompiledMathSourceProductBlockTerm &term,
+    const CompiledMathIntegralSourceProductTerm &term,
     const semantic::Index cache_slot,
     bool *uses_slot) {
   if (uses_slot == nullptr) {
@@ -4862,14 +4670,14 @@ inline bool compiled_math_source_product_term_uses_cache_slot(
 }
 
 inline bool compiled_math_source_product_term_has_gates(
-    const CompiledMathSourceProductBlockTerm &term) noexcept {
+    const CompiledMathIntegralSourceProductTerm &term) noexcept {
   return term.outcome_gate_nodes.size != 0 ||
          term.time_gate_nodes.size != 0;
 }
 
 inline bool compiled_math_batch_source_product_term_gates_open(
     const CompiledMathProgram &program,
-    const CompiledMathSourceProductBlockTerm &term,
+    const CompiledMathIntegralSourceProductTerm &term,
     const CompiledMathLaneBatchState &state,
     const semantic::Index lane) {
   return compiled_math_batch_outcome_gates_open(
@@ -4901,12 +4709,12 @@ inline bool compiled_math_batch_factor_active_lanes_for_cache_slot(
 
   bool has_gated_use = false;
   for (semantic::Index term_idx = 0;
-       term_idx < kernel.source_product_block_terms.size;
+       term_idx < kernel.source_product_terms.size;
        ++term_idx) {
     const auto &term =
-        program.integral_kernel_source_product_block_terms[
+        program.integral_kernel_source_product_terms[
             static_cast<std::size_t>(
-                kernel.source_product_block_terms.offset + term_idx)];
+                kernel.source_product_terms.offset + term_idx)];
     bool uses_slot = false;
     if (!compiled_math_source_product_term_uses_cache_slot(
             program,
@@ -4934,12 +4742,12 @@ inline bool compiled_math_batch_factor_active_lanes_for_cache_slot(
     const auto lane = frame->active_lanes[child_pos];
     bool lane_needed = false;
     for (semantic::Index term_idx = 0;
-         term_idx < kernel.source_product_block_terms.size;
+         term_idx < kernel.source_product_terms.size;
          ++term_idx) {
       const auto &term =
-          program.integral_kernel_source_product_block_terms[
+          program.integral_kernel_source_product_terms[
               static_cast<std::size_t>(
-                  kernel.source_product_block_terms.offset + term_idx)];
+                  kernel.source_product_terms.offset + term_idx)];
       bool uses_slot = false;
       if (!compiled_math_source_product_term_uses_cache_slot(
               program,
@@ -7560,246 +7368,100 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_flat_quadrature(
     const std::size_t depth,
     double *out_by_parent_lane);
 
-inline bool compiled_math_direct_source_product_sum_supported(
+inline bool evaluate_compiled_integral_kernel_lane_batch(
     const CompiledMathProgram &program,
-    const CompiledMathIntegralKernel &kernel) {
-  if (kernel.kind != CompiledMathIntegralKernelKind::SourceProductSum ||
-      kernel.bind_time_id == semantic::kInvalidIndex) {
-    return false;
-  }
-  if (kernel.cached_integral_factor_plans.size !=
-      kernel.cached_integral_factor_nodes.size) {
-    return false;
-  }
-  for (semantic::Index i = 0; i < kernel.cached_integral_factor_plans.size;
-       ++i) {
-    const auto plan_pos =
-        static_cast<std::size_t>(kernel.cached_integral_factor_plans.offset + i);
-    if (plan_pos >= program.integral_kernel_cached_integral_factor_plans.size()) {
-      return false;
-    }
-    const auto &plan =
-        program.integral_kernel_cached_integral_factor_plans[plan_pos];
-    if (plan.node_id == semantic::kInvalidIndex ||
-        static_cast<std::size_t>(plan.node_id) >= program.nodes.size() ||
-        plan.kernel_slot == semantic::kInvalidIndex ||
-        static_cast<std::size_t>(plan.kernel_slot) >=
-            program.integral_kernels.size() ||
-        plan.upper_time_id == semantic::kInvalidIndex) {
-      return false;
-    }
-    switch (plan.kind) {
-    case CompiledMathCachedIntegralFactorKind::PdfAntiderivative:
-    case CompiledMathCachedIntegralFactorKind::DirectLeaf:
-    case CompiledMathCachedIntegralFactorKind::FlatQuadrature:
-      break;
-    case CompiledMathCachedIntegralFactorKind::Generic:
-      return false;
-    }
-  }
-  if (kernel.source_product_block_terms.size !=
-      kernel.source_product_terms.size) {
-    return false;
-  }
-  const auto factor_offset =
-      static_cast<std::size_t>(kernel.source_product_block_factors.offset);
-  const auto factor_count =
-      static_cast<std::size_t>(kernel.source_product_block_factors.size);
-  if (factor_offset + factor_count >
-      program.integral_kernel_source_product_block_factors.size()) {
-    return false;
-  }
-  for (std::size_t factor_idx = 0; factor_idx < factor_count; ++factor_idx) {
-    const auto &factor =
-        program.integral_kernel_source_product_block_factors[
-            factor_offset + factor_idx];
-    switch (factor.factor_kind) {
-    case CompiledMathSourceProductBlockFactorKind::Constant:
-    case CompiledMathSourceProductBlockFactorKind::DirectLeaf:
-    case CompiledMathSourceProductBlockFactorKind::ConditionedDirectLeaf:
-      break;
-    case CompiledMathSourceProductBlockFactorKind::SourceProgram:
-      return false;
-    }
-  }
-  for (semantic::Index term_idx = 0;
-       term_idx < kernel.source_product_block_terms.size;
-       ++term_idx) {
-    const auto term_pos =
-        static_cast<std::size_t>(
-            kernel.source_product_block_terms.offset + term_idx);
-    if (term_pos >= program.integral_kernel_source_product_block_terms.size()) {
-      return false;
-    }
-    const auto &term =
-        program.integral_kernel_source_product_block_terms[term_pos];
-    for (semantic::Index i = 0; i < term.factor_ids.size; ++i) {
-      const auto id_pos =
-          static_cast<std::size_t>(term.factor_ids.offset + i);
-      if (id_pos >=
-          program.integral_kernel_source_product_block_factor_ids.size()) {
-        return false;
-      }
-      const auto factor_id =
-          program.integral_kernel_source_product_block_factor_ids[id_pos];
-      if (factor_id == semantic::kInvalidIndex ||
-          static_cast<std::size_t>(factor_id) >= factor_count) {
-        return false;
-      }
-    }
-    for (semantic::Index i = 0; i < term.integral_factor_cache_slots.size;
-         ++i) {
-      const auto cache_slot =
-          program.integral_kernel_integral_factor_cache_slots[
-              static_cast<std::size_t>(
-                  term.integral_factor_cache_slots.offset + i)];
-      if (cache_slot == semantic::kInvalidIndex ||
-          static_cast<std::size_t>(cache_slot) >=
-              static_cast<std::size_t>(
-                  kernel.cached_integral_factor_nodes.size)) {
-        return false;
-      }
-    }
-  }
-  return true;
-}
+    const CompiledMathNode &node,
+    const CompiledMathIntegralKernel &kernel,
+    const CompiledMathLaneBatchState &parent_state,
+    const BatchActiveLaneSpan parent_active,
+    const double *lower_by_lane,
+    const double *upper_by_lane,
+    CompiledMathBatchWorkspace *batch_workspace,
+    const std::size_t depth,
+    double *out_by_parent_lane);
 
-inline bool compiled_math_direct_source_product_sum_evaluate_cached_factors(
+inline bool compiled_math_direct_tile_integral_factor_values(
     const CompiledMathProgram &program,
     const CompiledMathIntegralKernel &kernel,
+    const CompiledMathSourceProductBlockFactor &factor,
     const CompiledMathLaneBatchState &child_state,
-    const std::size_t child_count,
-    const std::size_t child_capacity,
+    const semantic::Index *lanes,
+    const std::size_t lane_count,
     CompiledMathBatchIntegralFrame *frame,
     CompiledMathBatchWorkspace *batch_workspace,
-    const std::size_t depth) {
-  if (frame == nullptr || batch_workspace == nullptr) {
+    const std::size_t depth,
+    double *values_out) {
+  if (frame == nullptr || batch_workspace == nullptr || values_out == nullptr) {
     return false;
   }
-  const auto cached_factor_count =
-      static_cast<std::size_t>(kernel.cached_integral_factor_nodes.size);
-  if (cached_factor_count == 0U) {
+  if (lane_count == 0U) {
     return true;
   }
-  const auto cached_factor_plan_count =
-      static_cast<std::size_t>(kernel.cached_integral_factor_plans.size);
-  if (cached_factor_plan_count != cached_factor_count) {
-    throw std::runtime_error(
-        "cached integral factor plan count does not match cached nodes");
+  if (lanes == nullptr ||
+      factor.factor_kind !=
+          CompiledMathSourceProductBlockFactorKind::IntegralFactor ||
+      factor.integral_factor_cache_slot == semantic::kInvalidIndex) {
+    return false;
   }
-  const auto cache_value_count = cached_factor_count * child_capacity;
-  if (frame->cached_integral_factor_values.size() < cache_value_count) {
-    frame->cached_integral_factor_values.resize(cache_value_count, 0.0);
+  const auto cache_slot =
+      static_cast<std::size_t>(factor.integral_factor_cache_slot);
+  if (cache_slot >=
+      static_cast<std::size_t>(kernel.cached_integral_factor_nodes.size) ||
+      cache_slot >=
+          static_cast<std::size_t>(kernel.cached_integral_factor_plans.size)) {
+    return false;
   }
-  const auto cached_factor_plan_offset =
-      static_cast<std::size_t>(kernel.cached_integral_factor_plans.offset);
-  for (std::size_t slot = 0; slot < cached_factor_count; ++slot) {
-    auto *cached_values =
-        frame->cached_integral_factor_values.data() + slot * child_capacity;
-    std::fill(
-        cached_values,
-        cached_values + static_cast<std::ptrdiff_t>(child_capacity),
-        0.0);
-
-    const semantic::Index *factor_lanes = nullptr;
-    std::size_t factor_count = 0U;
-    if (!compiled_math_batch_factor_active_lanes_for_cache_slot(
-            program,
-            kernel,
-            static_cast<semantic::Index>(slot),
-            child_state,
-            frame,
-            child_count,
-            &factor_lanes,
-            &factor_count)) {
-      return false;
-    }
-    if (factor_count == 0U) {
-      continue;
-    }
-    const auto &factor_plan =
-        program.integral_kernel_cached_integral_factor_plans[
-            cached_factor_plan_offset + slot];
-    if (factor_plan.node_id == semantic::kInvalidIndex ||
-        static_cast<std::size_t>(factor_plan.node_id) >= program.nodes.size() ||
-        factor_plan.kernel_slot == semantic::kInvalidIndex ||
-        static_cast<std::size_t>(factor_plan.kernel_slot) >=
-            program.integral_kernels.size() ||
-        factor_plan.upper_time_id == semantic::kInvalidIndex ||
-        static_cast<std::size_t>(factor_plan.upper_time_id) >=
-            child_state.time_slot_count) {
-      throw std::runtime_error(
-          "cached integral factor plan points outside compiled state");
-    }
-    const auto &factor_node =
-        program.nodes[static_cast<std::size_t>(factor_plan.node_id)];
-    const auto &factor_kernel =
-        program.integral_kernels[
-            static_cast<std::size_t>(factor_plan.kernel_slot)];
-    for (std::size_t i = 0; i < factor_count; ++i) {
-      const auto lane = factor_lanes[i];
-      const auto lane_index = static_cast<std::size_t>(lane);
-      frame->lower_by_lane[lane_index] = 0.0;
-      frame->upper_by_lane[lane_index] =
-          child_state.time(factor_plan.upper_time_id, lane);
-    }
-    const BatchActiveLaneSpan factor_active{factor_lanes, factor_count};
-    bool factor_ok = false;
-    switch (factor_plan.kind) {
-    case CompiledMathCachedIntegralFactorKind::PdfAntiderivative:
-      factor_ok =
-          evaluate_compiled_integral_kernel_lane_batch_pdf_antiderivative(
-              program,
-              factor_kernel,
-              child_state,
-              factor_active,
-              frame->lower_by_lane.data(),
-              frame->upper_by_lane.data(),
-              batch_workspace,
-              depth + 1U,
-              cached_values);
-      break;
-    case CompiledMathCachedIntegralFactorKind::DirectLeaf:
-      factor_ok =
-          evaluate_compiled_integral_kernel_lane_batch_direct_leaf(
-              program,
-              factor_kernel,
-              child_state,
-              factor_active,
-              frame->lower_by_lane.data(),
-              frame->upper_by_lane.data(),
-              batch_workspace,
-              depth + 1U,
-              cached_values);
-      break;
-    case CompiledMathCachedIntegralFactorKind::FlatQuadrature:
-      factor_ok =
-          evaluate_compiled_integral_kernel_lane_batch_flat_quadrature(
-              program,
-              factor_node,
-              factor_kernel,
-              child_state,
-              factor_active,
-              frame->lower_by_lane.data(),
-              frame->upper_by_lane.data(),
-              batch_workspace,
-              depth + 1U,
-              cached_values);
-      break;
-    case CompiledMathCachedIntegralFactorKind::Generic:
-      return false;
-    }
-    if (!factor_ok) {
-      throw std::runtime_error(
-          "cached integral factor plan dispatch failed for kind " +
-          std::to_string(static_cast<int>(factor_plan.kind)));
-    }
-    if (factor_plan.clamp_probability) {
-      for (std::size_t i = 0; i < factor_count; ++i) {
-        const auto lane_index = static_cast<std::size_t>(factor_lanes[i]);
-        cached_values[lane_index] =
-            clamp_probability(cached_values[lane_index]);
-      }
+  const auto plan_pos =
+      static_cast<std::size_t>(kernel.cached_integral_factor_plans.offset) +
+      cache_slot;
+  if (plan_pos >= program.integral_kernel_cached_integral_factor_plans.size()) {
+    return false;
+  }
+  const auto &factor_plan =
+      program.integral_kernel_cached_integral_factor_plans[plan_pos];
+  if (factor_plan.kind == CompiledMathCachedIntegralFactorKind::Generic ||
+      factor_plan.node_id == semantic::kInvalidIndex ||
+      static_cast<std::size_t>(factor_plan.node_id) >= program.nodes.size() ||
+      factor_plan.kernel_slot == semantic::kInvalidIndex ||
+      static_cast<std::size_t>(factor_plan.kernel_slot) >=
+          program.integral_kernels.size() ||
+      factor_plan.upper_time_id == semantic::kInvalidIndex ||
+      static_cast<std::size_t>(factor_plan.upper_time_id) >=
+          child_state.time_slot_count) {
+    return false;
+  }
+  const auto &factor_node =
+      program.nodes[static_cast<std::size_t>(factor_plan.node_id)];
+  const auto &factor_kernel =
+      program.integral_kernels[
+          static_cast<std::size_t>(factor_plan.kernel_slot)];
+  for (std::size_t i = 0; i < lane_count; ++i) {
+    const auto lane = lanes[i];
+    const auto lane_index = static_cast<std::size_t>(lane);
+    frame->lower_by_lane[lane_index] = 0.0;
+    frame->upper_by_lane[lane_index] =
+        child_state.time(factor_plan.upper_time_id, lane);
+  }
+  const BatchActiveLaneSpan factor_active{lanes, lane_count};
+  const bool factor_ok =
+      evaluate_compiled_integral_kernel_lane_batch(
+          program,
+          factor_node,
+          factor_kernel,
+          child_state,
+          factor_active,
+          frame->lower_by_lane.data(),
+          frame->upper_by_lane.data(),
+          batch_workspace,
+          depth + 1U,
+          values_out);
+  if (!factor_ok) {
+    return false;
+  }
+  if (factor_plan.clamp_probability) {
+    for (std::size_t i = 0; i < lane_count; ++i) {
+      const auto lane_index = static_cast<std::size_t>(lanes[i]);
+      values_out[lane_index] = clamp_probability(values_out[lane_index]);
     }
   }
   return true;
@@ -8158,6 +7820,14 @@ inline bool compiled_math_prepare_direct_tile_block_factors(
     prepared.has_time_cap = false;
     prepared.cap_is_bind = false;
     prepared.conditioned_direct_leaf = false;
+    if (factor.factor_kind ==
+        CompiledMathSourceProductBlockFactorKind::IntegralFactor) {
+      continue;
+    }
+    if (factor.factor_kind ==
+        CompiledMathSourceProductBlockFactorKind::SourceProgram) {
+      return false;
+    }
     if (factor.value_channel_mask == 0U) {
       if (factor.op_id != semantic::kInvalidIndex &&
           static_cast<std::size_t>(factor.op_id) <
@@ -8438,7 +8108,8 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_direct_source_product_s
     double *out_by_parent_lane) {
   if (batch_workspace == nullptr || lower_by_lane == nullptr ||
       upper_by_lane == nullptr || out_by_parent_lane == nullptr ||
-      !compiled_math_direct_source_product_sum_supported(program, kernel)) {
+      kernel.eval_kind !=
+          CompiledMathIntegralKernelEvalKind::SourceProductBlock) {
     return false;
   }
   const auto block_factor_count =
@@ -8504,6 +8175,8 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_direct_source_product_s
             static_cast<std::size_t>(quadrature::kDefaultFiniteOrder));
     const auto child_width = q_end - q_begin;
     const auto tile_capacity = eligible_count * child_width;
+    CompiledMathLaneBatchState child_state{};
+    const CompiledMathLaneBatchState *integral_child_state = nullptr;
     if (cached_factor_count != 0U) {
       std::size_t child_count = 0U;
       for (std::size_t parent_pos = 0; parent_pos < eligible_count;
@@ -8556,7 +8229,7 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_direct_source_product_s
           ++child_count;
         }
       }
-      const CompiledMathLaneBatchState child_state{
+      child_state = CompiledMathLaneBatchState{
           tile_capacity,
           time_slot_count,
           BatchTimeSlotView{
@@ -8571,17 +8244,8 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_direct_source_product_s
           parent_state.node_values,
           parent_state.node_value_lane_stride,
           frame.node_value_lane_map.data()};
-      if (!compiled_math_direct_source_product_sum_evaluate_cached_factors(
-              program,
-              kernel,
-              child_state,
-              child_count,
-              tile_capacity,
-              &frame,
-              batch_workspace,
-              depth)) {
-        return false;
-      }
+      (void)child_count;
+      integral_child_state = &child_state;
     }
     if (cache_reused_block_factors) {
       compiled_math_reset_direct_tile_block_factor_cache(
@@ -8645,33 +8309,6 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_direct_source_product_s
       auto *current_lanes = &frame.term_lanes_a;
       auto *next_lanes = &frame.term_lanes_b;
 
-      for (semantic::Index i = 0; i < term.integral_factor_cache_slots.size;
-           ++i) {
-        if (term_count == 0U) {
-          break;
-        }
-        const auto cache_slot =
-            program.integral_kernel_integral_factor_cache_slots[
-                static_cast<std::size_t>(
-                    term.integral_factor_cache_slots.offset + i)];
-        if (cache_slot == semantic::kInvalidIndex ||
-            static_cast<std::size_t>(cache_slot) >= cached_factor_count) {
-          return false;
-        }
-        const double *factor_values =
-            frame.cached_integral_factor_values.data() +
-            static_cast<std::size_t>(cache_slot) * tile_capacity;
-        const auto next_count =
-            compiled_math_batch_array_multiply_values_compact(
-                current_lanes->data(),
-                term_count,
-                factor_values,
-                frame.products.data(),
-                next_lanes->data());
-        std::swap(current_lanes, next_lanes);
-        term_count = next_count;
-      }
-
       for (semantic::Index i = 0; i < term.expr_upper_factors.size; ++i) {
         if (term_count == 0U) {
           break;
@@ -8726,11 +8363,6 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_direct_source_product_s
         const auto &factor =
             program.integral_kernel_source_product_block_factors[
                 factor_offset + factor_pos];
-        const auto &prepared = frame.direct_leaf_ops[factor_pos];
-        const auto *op = prepared.op;
-        if (op == nullptr) {
-          return false;
-        }
         if (factor.value_channel_mask == 0U) {
           const auto next_count =
               compiled_math_batch_array_multiply_scalar_compact(
@@ -8742,6 +8374,90 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_direct_source_product_s
           std::swap(current_lanes, next_lanes);
           term_count = next_count;
           continue;
+        }
+        if (factor.factor_kind ==
+            CompiledMathSourceProductBlockFactorKind::IntegralFactor) {
+          if (integral_child_state == nullptr) {
+            return false;
+          }
+          if (factor.use_count > 1) {
+            auto *factor_values =
+                frame.source_product_block_factor_values.data() +
+                factor_pos * tile_capacity;
+            auto *factor_valid =
+                frame.source_product_block_factor_valid.data() +
+                factor_pos * tile_capacity;
+            std::size_t missing_count = 0U;
+            for (std::size_t i = 0; i < term_count; ++i) {
+              const auto child_pos =
+                  static_cast<std::size_t>((*current_lanes)[i]);
+              if (factor_valid[child_pos] == 0U) {
+                frame.source_lanes_a[missing_count++] =
+                    static_cast<semantic::Index>(child_pos);
+              }
+            }
+            if (missing_count != 0U) {
+              if (!compiled_math_direct_tile_integral_factor_values(
+                      program,
+                      kernel,
+                      factor,
+                      *integral_child_state,
+                      frame.source_lanes_a.data(),
+                      missing_count,
+                      &frame,
+                      batch_workspace,
+                      depth,
+                      factor_values)) {
+                return false;
+              }
+              for (std::size_t i = 0; i < missing_count; ++i) {
+                factor_valid[static_cast<std::size_t>(
+                    frame.source_lanes_a[i])] = 1U;
+              }
+            }
+            const auto next_count =
+                compiled_math_batch_array_multiply_values_compact(
+                    current_lanes->data(),
+                    term_count,
+                    factor_values,
+                    frame.products.data(),
+                    next_lanes->data());
+            std::swap(current_lanes, next_lanes);
+            term_count = next_count;
+            continue;
+          }
+          if (!compiled_math_direct_tile_integral_factor_values(
+                  program,
+                  kernel,
+                  factor,
+                  *integral_child_state,
+                  current_lanes->data(),
+                  term_count,
+                  &frame,
+                  batch_workspace,
+                  depth,
+                  frame.factor_values.data())) {
+            return false;
+          }
+          const auto next_count =
+              compiled_math_batch_array_multiply_values_compact(
+                  current_lanes->data(),
+                  term_count,
+                  frame.factor_values.data(),
+                  frame.products.data(),
+                  next_lanes->data());
+          std::swap(current_lanes, next_lanes);
+          term_count = next_count;
+          continue;
+        }
+        if (factor.factor_kind ==
+            CompiledMathSourceProductBlockFactorKind::SourceProgram) {
+          return false;
+        }
+        const auto &prepared = frame.direct_leaf_ops[factor_pos];
+        const auto *op = prepared.op;
+        if (op == nullptr) {
+          return false;
         }
         if (factor.use_count > 1) {
           auto *factor_values =
@@ -8871,7 +8587,8 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_pdf_antiderivative(
     double *out_by_parent_lane) {
   if (batch_workspace == nullptr || lower_by_lane == nullptr ||
       upper_by_lane == nullptr || out_by_parent_lane == nullptr ||
-      kernel.kind != CompiledMathIntegralKernelKind::SourceProduct) {
+      kernel.eval_kind !=
+          CompiledMathIntegralKernelEvalKind::PdfAntiderivative) {
     return false;
   }
 
@@ -8992,15 +8709,9 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_direct_leaf(
     double *out_by_parent_lane) {
   if (batch_workspace == nullptr || lower_by_lane == nullptr ||
       upper_by_lane == nullptr || out_by_parent_lane == nullptr ||
-      !batch_finite_integral_kernel_direct_leaf_supported(program, kernel)) {
+      kernel.eval_kind != CompiledMathIntegralKernelEvalKind::DirectLeaf) {
     return false;
   }
-  const auto max_leaf =
-      batch_source_product_max_leaf_index(program, kernel.source_product_ops);
-  if (max_leaf == semantic::kInvalidIndex) {
-    return false;
-  }
-  (void)max_leaf;
   for (semantic::Index op_idx = 0; op_idx < kernel.source_product_ops.size;
        ++op_idx) {
     const auto &op =
@@ -9399,31 +9110,6 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_direct_leaf(
   return true;
 }
 
-inline bool compiled_math_flat_quadrature_kernel_supported(
-    const CompiledMathProgram &program,
-    const CompiledMathIntegralKernel &kernel) {
-  if (kernel.kind == CompiledMathIntegralKernelKind::SourceProduct) {
-    return true;
-  }
-  if (kernel.kind != CompiledMathIntegralKernelKind::SourceProductSum ||
-      kernel.cached_integral_factor_nodes.size != 0) {
-    return false;
-  }
-  for (semantic::Index term_idx = 0;
-       term_idx < kernel.source_product_terms.size;
-       ++term_idx) {
-    const auto &term =
-        program.integral_kernel_source_product_terms[
-            static_cast<std::size_t>(
-                kernel.source_product_terms.offset + term_idx)];
-    if (term.integral_factor_nodes.size != 0 ||
-        term.integral_factor_cache_slots.size != 0) {
-      return false;
-    }
-  }
-  return true;
-}
-
 inline bool evaluate_compiled_integral_kernel_lane_batch_flat_quadrature(
     const CompiledMathProgram &program,
     const CompiledMathNode &node,
@@ -9437,35 +9123,8 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_flat_quadrature(
     double *out_by_parent_lane) {
   if (batch_workspace == nullptr || lower_by_lane == nullptr ||
       upper_by_lane == nullptr || out_by_parent_lane == nullptr ||
-      !compiled_math_flat_quadrature_kernel_supported(program, kernel) ||
-      !compiled_math_batch_kernel_supported(program, kernel, 0U)) {
+      kernel.eval_kind != CompiledMathIntegralKernelEvalKind::FlatQuadrature) {
     return false;
-  }
-  if (kernel.kind == CompiledMathIntegralKernelKind::SourceProduct &&
-      evaluate_compiled_integral_kernel_lane_batch_direct_leaf(
-          program,
-          kernel,
-          parent_state,
-          parent_active,
-          lower_by_lane,
-          upper_by_lane,
-          batch_workspace,
-          depth,
-          out_by_parent_lane)) {
-    return true;
-  }
-  if (kernel.kind == CompiledMathIntegralKernelKind::SourceProductSum &&
-      evaluate_compiled_integral_kernel_lane_batch_direct_source_product_sum(
-          program,
-          kernel,
-          parent_state,
-          parent_active,
-          lower_by_lane,
-          upper_by_lane,
-          batch_workspace,
-          depth,
-          out_by_parent_lane)) {
-    return true;
   }
   for (std::size_t i = 0; i < parent_active.size; ++i) {
     out_by_parent_lane[static_cast<std::size_t>(parent_active.lanes[i])] =
@@ -9699,8 +9358,7 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_quadrature(
     const std::size_t depth,
     double *out_by_parent_lane) {
   if (batch_workspace == nullptr || lower_by_lane == nullptr ||
-      upper_by_lane == nullptr || out_by_parent_lane == nullptr ||
-      !compiled_math_batch_kernel_supported(program, kernel, 0U)) {
+      upper_by_lane == nullptr || out_by_parent_lane == nullptr) {
     return false;
   }
   for (std::size_t i = 0; i < parent_active.size; ++i) {
@@ -9888,69 +9546,18 @@ inline bool evaluate_compiled_integral_kernel_lane_batch_quadrature(
         auto *cached_values =
             frame.cached_integral_factor_values.data() +
             slot * child_capacity;
-        bool factor_ok = false;
-        switch (factor_plan.kind) {
-        case CompiledMathCachedIntegralFactorKind::PdfAntiderivative:
-          factor_ok =
-              evaluate_compiled_integral_kernel_lane_batch_pdf_antiderivative(
-                  program,
-                  factor_kernel,
-                  child_state,
-                  factor_active,
-                  frame.lower_by_lane.data(),
-                  frame.upper_by_lane.data(),
-                  batch_workspace,
-                  depth + 1U,
-                  cached_values);
-          break;
-        case CompiledMathCachedIntegralFactorKind::DirectLeaf:
-          if (!batch_finite_integral_kernel_direct_leaf_supported(
-                  program,
-                  factor_kernel)) {
-            throw std::runtime_error(
-                "cached integral factor planned direct leaf but kernel is not direct-leaf supported");
-          }
-          factor_ok =
-              evaluate_compiled_integral_kernel_lane_batch_direct_leaf(
-                  program,
-                  factor_kernel,
-                  child_state,
-                  factor_active,
-                  frame.lower_by_lane.data(),
-                  frame.upper_by_lane.data(),
-                  batch_workspace,
-                  depth + 1U,
-                  cached_values);
-          break;
-        case CompiledMathCachedIntegralFactorKind::FlatQuadrature:
-          factor_ok =
-              evaluate_compiled_integral_kernel_lane_batch_flat_quadrature(
-                  program,
-                  factor_node,
-                  factor_kernel,
-                  child_state,
-                  factor_active,
-                  frame.lower_by_lane.data(),
-                  frame.upper_by_lane.data(),
-                  batch_workspace,
-                  depth + 1U,
-                  cached_values);
-          break;
-        case CompiledMathCachedIntegralFactorKind::Generic:
-          factor_ok =
-              evaluate_compiled_integral_kernel_lane_batch_quadrature(
-                  program,
-                  factor_node,
-                  factor_kernel,
-                  child_state,
-                  factor_active,
-                  frame.lower_by_lane.data(),
-                  frame.upper_by_lane.data(),
-                  batch_workspace,
-                  depth + 1U,
-                  cached_values);
-          break;
-        }
+        const bool factor_ok =
+            evaluate_compiled_integral_kernel_lane_batch(
+                program,
+                factor_node,
+                factor_kernel,
+                child_state,
+                factor_active,
+                frame.lower_by_lane.data(),
+                frame.upper_by_lane.data(),
+                batch_workspace,
+                depth + 1U,
+                cached_values);
         if (!factor_ok) {
           throw std::runtime_error(
               "cached integral factor plan dispatch failed for kind " +
@@ -10114,8 +9721,7 @@ inline bool evaluate_compiled_integral_kernel_lane_batch(
     const std::size_t depth,
     double *out_by_parent_lane) {
   if (batch_workspace == nullptr || lower_by_lane == nullptr ||
-      upper_by_lane == nullptr || out_by_parent_lane == nullptr ||
-      !compiled_math_batch_kernel_supported(program, kernel, 0U)) {
+      upper_by_lane == nullptr || out_by_parent_lane == nullptr) {
     return false;
   }
   for (std::size_t i = 0; i < parent_active.size; ++i) {
@@ -10125,53 +9731,66 @@ inline bool evaluate_compiled_integral_kernel_lane_batch(
   if (parent_active.size == 0U) {
     return true;
   }
-  if (evaluate_compiled_integral_kernel_lane_batch_pdf_antiderivative(
-          program,
-          kernel,
-          parent_state,
-          parent_active,
-          lower_by_lane,
-          upper_by_lane,
-          batch_workspace,
-          depth,
-          out_by_parent_lane)) {
-    return true;
+  switch (kernel.eval_kind) {
+  case CompiledMathIntegralKernelEvalKind::PdfAntiderivative:
+    return evaluate_compiled_integral_kernel_lane_batch_pdf_antiderivative(
+        program,
+        kernel,
+        parent_state,
+        parent_active,
+        lower_by_lane,
+        upper_by_lane,
+        batch_workspace,
+        depth,
+        out_by_parent_lane);
+  case CompiledMathIntegralKernelEvalKind::DirectLeaf:
+    return evaluate_compiled_integral_kernel_lane_batch_direct_leaf(
+        program,
+        kernel,
+        parent_state,
+        parent_active,
+        lower_by_lane,
+        upper_by_lane,
+        batch_workspace,
+        depth,
+        out_by_parent_lane);
+  case CompiledMathIntegralKernelEvalKind::SourceProductBlock:
+    return evaluate_compiled_integral_kernel_lane_batch_direct_source_product_sum(
+        program,
+        kernel,
+        parent_state,
+        parent_active,
+        lower_by_lane,
+        upper_by_lane,
+        batch_workspace,
+        depth,
+        out_by_parent_lane);
+  case CompiledMathIntegralKernelEvalKind::FlatQuadrature:
+    return evaluate_compiled_integral_kernel_lane_batch_flat_quadrature(
+        program,
+        node,
+        kernel,
+        parent_state,
+        parent_active,
+        lower_by_lane,
+        upper_by_lane,
+        batch_workspace,
+        depth,
+        out_by_parent_lane);
+  case CompiledMathIntegralKernelEvalKind::GenericQuadrature:
+    return evaluate_compiled_integral_kernel_lane_batch_quadrature(
+        program,
+        node,
+        kernel,
+        parent_state,
+        parent_active,
+        lower_by_lane,
+        upper_by_lane,
+        batch_workspace,
+        depth,
+        out_by_parent_lane);
   }
-  if (evaluate_compiled_integral_kernel_lane_batch_direct_leaf(
-          program,
-          kernel,
-          parent_state,
-          parent_active,
-          lower_by_lane,
-          upper_by_lane,
-          batch_workspace,
-          depth,
-          out_by_parent_lane)) {
-    return true;
-  }
-  if (evaluate_compiled_integral_kernel_lane_batch_direct_source_product_sum(
-          program,
-          kernel,
-          parent_state,
-          parent_active,
-          lower_by_lane,
-          upper_by_lane,
-          batch_workspace,
-          depth,
-          out_by_parent_lane)) {
-    return true;
-  }
-  return evaluate_compiled_integral_kernel_lane_batch_quadrature(
-      program,
-      node,
-      kernel,
-      parent_state,
-      parent_active,
-      lower_by_lane,
-      upper_by_lane,
-      batch_workspace,
-      depth,
-      out_by_parent_lane);
+  return false;
 }
 
 inline bool evaluate_compiled_integral_node_batch_lane_native(
@@ -10182,8 +9801,7 @@ inline bool evaluate_compiled_integral_node_batch_lane_native(
     const std::vector<CompiledSourceView *> &condition_evaluators,
     CompiledMathBatchWorkspace *batch_workspace,
     std::vector<double> *node_values) {
-  if (batch_workspace == nullptr || node_values == nullptr ||
-      !compiled_math_batch_kernel_supported(program, kernel, 0U)) {
+  if (batch_workspace == nullptr || node_values == nullptr) {
     return false;
   }
 

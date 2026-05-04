@@ -55,6 +55,14 @@ enum class CompiledMathIntegralKernelKind : std::uint8_t {
   SourceProductSum = 1
 };
 
+enum class CompiledMathIntegralKernelEvalKind : std::uint8_t {
+  PdfAntiderivative = 0,
+  DirectLeaf = 1,
+  SourceProductBlock = 2,
+  FlatQuadrature = 3,
+  GenericQuadrature = 4
+};
+
 enum class CompiledMathCachedIntegralFactorKind : std::uint8_t {
   Generic = 0,
   PdfAntiderivative = 1,
@@ -99,7 +107,8 @@ enum class CompiledMathSourceProductBlockFactorKind : std::uint8_t {
   Constant = 0,
   DirectLeaf = 1,
   ConditionedDirectLeaf = 2,
-  SourceProgram = 3
+  IntegralFactor = 3,
+  SourceProgram = 4
 };
 
 inline std::uint8_t compiled_math_source_product_op_channel_mask(
@@ -305,6 +314,8 @@ struct CompiledMathTimedUpperBoundTerm {
 struct CompiledMathIntegralKernel {
   CompiledMathIntegralKernelKind kind{
       CompiledMathIntegralKernelKind::SourceProductSum};
+  CompiledMathIntegralKernelEvalKind eval_kind{
+      CompiledMathIntegralKernelEvalKind::GenericQuadrature};
   semantic::Index root_id{semantic::kInvalidIndex};
   semantic::Index bind_time_id{semantic::kInvalidIndex};
   semantic::Index source_view_id{0};
@@ -353,6 +364,7 @@ struct CompiledMathSourceProductBlockFactor {
       CompiledMathSourceProductBlockFactorKind::SourceProgram};
   semantic::Index source_product_channel_id{semantic::kInvalidIndex};
   semantic::Index source_product_program_id{semantic::kInvalidIndex};
+  semantic::Index integral_factor_cache_slot{semantic::kInvalidIndex};
   std::uint8_t value_channel_mask{0U};
   std::uint8_t fill_channel_mask{0U};
   double constant_value{0.0};
@@ -876,6 +888,218 @@ inline bool compiled_math_is_integral_node(
   return kind == CompiledMathNodeKind::IntegralZeroToCurrent ||
          kind == CompiledMathNodeKind::IntegralZeroToCurrentRaw ||
          kind == CompiledMathNodeKind::UnionKernelMultiSubsetCdf;
+}
+
+inline bool compiled_math_batch_source_program_supported(
+    const CompiledMathProgram &program,
+    semantic::Index source_product_program_id,
+    std::size_t depth);
+
+inline bool compiled_math_batch_kernel_supported(
+    const CompiledMathProgram &program,
+    const CompiledMathIntegralKernel &kernel,
+    std::size_t depth);
+
+inline bool compiled_math_batch_source_product_ops_supported(
+    const CompiledMathProgram &program,
+    const CompiledMathIndexSpan source_product_ops,
+    const std::size_t depth) {
+  for (semantic::Index i = 0; i < source_product_ops.size; ++i) {
+    const auto op_pos =
+        static_cast<std::size_t>(source_product_ops.offset + i);
+    if (op_pos >= program.integral_kernel_source_product_ops.size()) {
+      return false;
+    }
+    const auto &op = program.integral_kernel_source_product_ops[op_pos];
+    if (op.value_channel_mask == 0U) {
+      continue;
+    }
+    if (op.source_product_program_id == semantic::kInvalidIndex ||
+        !compiled_math_batch_source_program_supported(
+            program,
+            op.source_product_program_id,
+            depth + 1U)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+inline bool compiled_math_batch_source_program_supported(
+    const CompiledMathProgram &program,
+    const semantic::Index source_product_program_id,
+    const std::size_t depth) {
+  if (source_product_program_id == semantic::kInvalidIndex) {
+    return true;
+  }
+  if (depth > 32U) {
+    return false;
+  }
+  const auto pos = static_cast<std::size_t>(source_product_program_id);
+  if (pos >= program.integral_kernel_source_product_programs.size()) {
+    return false;
+  }
+  const auto &source_program =
+      program.integral_kernel_source_product_programs[pos];
+  switch (source_program.kind) {
+  case CompiledMathSourceProductProgramKind::ConstantZero:
+  case CompiledMathSourceProductProgramKind::ConstantOne:
+  case CompiledMathSourceProductProgramKind::LeafAbsolute:
+    return true;
+  case CompiledMathSourceProductProgramKind::ExactGate:
+  case CompiledMathSourceProductProgramKind::Conditioned:
+    return compiled_math_batch_source_program_supported(
+        program,
+        source_program.child_program_id,
+        depth + 1U);
+  case CompiledMathSourceProductProgramKind::OnsetConvolution:
+    return source_program.leaf_index != semantic::kInvalidIndex &&
+           compiled_math_batch_source_program_supported(
+               program,
+               source_program.onset_source_program_id,
+               depth + 1U);
+  case CompiledMathSourceProductProgramKind::PoolKOfN:
+    if (source_program.member_programs.empty()) {
+      return false;
+    }
+    for (semantic::Index i = 0; i < source_program.member_programs.size; ++i) {
+      const auto member_pos =
+          static_cast<std::size_t>(source_program.member_programs.offset + i);
+      if (member_pos >=
+          program.integral_kernel_source_product_program_members.size()) {
+        return false;
+      }
+      const auto member_program_id =
+          program.integral_kernel_source_product_program_members[member_pos];
+      if (!compiled_math_batch_source_program_supported(
+              program,
+              member_program_id,
+              depth + 1U)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+inline bool compiled_math_batch_expr_upper_supported(
+    const CompiledMathProgram &program,
+    const CompiledMathIndexSpan expr_upper_factors) {
+  for (semantic::Index i = 0; i < expr_upper_factors.size; ++i) {
+    const auto factor_pos =
+        static_cast<std::size_t>(expr_upper_factors.offset + i);
+    if (factor_pos >= program.integral_kernel_expr_upper_factors.size()) {
+      return false;
+    }
+    const auto &factor = program.integral_kernel_expr_upper_factors[factor_pos];
+    if (factor.node_id == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(factor.node_id) >= program.nodes.size()) {
+      return false;
+    }
+    const auto &node =
+        program.nodes[static_cast<std::size_t>(factor.node_id)];
+    if (node.kind != CompiledMathNodeKind::ExprUpperBoundDensity &&
+        node.kind != CompiledMathNodeKind::ExprUpperBoundCdf) {
+      return false;
+    }
+    if (node.aux_id == semantic::kInvalidIndex ||
+        node.aux2_id == semantic::kInvalidIndex ||
+        node.aux2_id == 0) {
+      continue;
+    }
+    const auto offset = static_cast<std::size_t>(node.aux_id);
+    const auto size = static_cast<std::size_t>(node.aux2_id);
+    if (offset + size > program.timed_upper_bound_terms.size()) {
+      return false;
+    }
+    for (std::size_t term_pos = 0; term_pos < size; ++term_pos) {
+      const auto &term =
+          program.timed_upper_bound_terms[offset + term_pos];
+      if (term.normalizer_node_id == semantic::kInvalidIndex ||
+          static_cast<std::size_t>(term.normalizer_node_id) >=
+              program.nodes.size()) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+inline bool compiled_math_batch_integral_node_supported(
+    const CompiledMathProgram &program,
+    const CompiledMathNode &node,
+    const std::size_t depth) {
+  if (!compiled_math_is_integral_node(node.kind) ||
+      node.integral_kernel_slot == semantic::kInvalidIndex ||
+      depth > 16U) {
+    return false;
+  }
+  const auto kernel_pos = static_cast<std::size_t>(node.integral_kernel_slot);
+  if (kernel_pos >= program.integral_kernels.size()) {
+    return false;
+  }
+  return compiled_math_batch_kernel_supported(
+      program,
+      program.integral_kernels[kernel_pos],
+      depth + 1U);
+}
+
+inline bool compiled_math_batch_kernel_supported(
+    const CompiledMathProgram &program,
+    const CompiledMathIntegralKernel &kernel,
+    const std::size_t depth) {
+  if (kernel.bind_time_id == semantic::kInvalidIndex || depth > 16U) {
+    return false;
+  }
+  if (kernel.kind == CompiledMathIntegralKernelKind::SourceProduct) {
+    return compiled_math_batch_source_product_ops_supported(
+        program,
+        kernel.source_product_ops,
+        depth + 1U);
+  }
+  if (kernel.kind != CompiledMathIntegralKernelKind::SourceProductSum) {
+    return false;
+  }
+  for (semantic::Index term_idx = 0;
+       term_idx < kernel.source_product_terms.size;
+       ++term_idx) {
+    const auto term_pos =
+        static_cast<std::size_t>(kernel.source_product_terms.offset + term_idx);
+    if (term_pos >= program.integral_kernel_source_product_terms.size()) {
+      return false;
+    }
+    const auto &term = program.integral_kernel_source_product_terms[term_pos];
+    if (!compiled_math_batch_expr_upper_supported(
+            program,
+            term.expr_upper_factors) ||
+        !compiled_math_batch_source_product_ops_supported(
+            program,
+            term.source_product_ops,
+            depth + 1U)) {
+      return false;
+    }
+    for (semantic::Index i = 0; i < term.integral_factor_nodes.size; ++i) {
+      const auto node_pos =
+          static_cast<std::size_t>(term.integral_factor_nodes.offset + i);
+      if (node_pos >= program.integral_kernel_integral_factor_nodes.size()) {
+        return false;
+      }
+      const auto node_id =
+          program.integral_kernel_integral_factor_nodes[node_pos];
+      if (node_id == semantic::kInvalidIndex ||
+          static_cast<std::size_t>(node_id) >= program.nodes.size()) {
+        return false;
+      }
+      if (!compiled_math_batch_integral_node_supported(
+              program,
+              program.nodes[static_cast<std::size_t>(node_id)],
+              depth + 1U)) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 inline semantic::Index compiled_math_integral_root_id(

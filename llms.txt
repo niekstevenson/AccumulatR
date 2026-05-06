@@ -16,6 +16,7 @@ AccumulatR is not yet on CRAN. To install the current development
 version from GitHub:
 
 ``` r
+
 remotes::install_github("niekstevenson/AccumulatR")
 ```
 
@@ -37,6 +38,7 @@ response-time data, and then evaluates the likelihood of those same data
 under the generating parameters.
 
 ``` r
+
 library(AccumulatR)
 
 spec <- race_spec() |>

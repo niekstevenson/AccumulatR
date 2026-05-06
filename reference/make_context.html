@@ -87,7 +87,7 @@ prepared separately with `prepare_data()` and supplied to
 <span class="r-in"><span><span class="fu">make_context</span><span class="op">(</span><span class="va">structure</span><span class="op">)</span></span></span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $cpp</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$native</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;pointer: 0x56081e282b40&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;pointer: 0x55f381addf00&gt;</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_identity</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> [1] TRUE</span>
@@ -97,6 +97,27 @@ prepared separately with `prepare_data()` and supplied to
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$ranked_supported</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> [1] TRUE</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$batch_coverage</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$batch_coverage$summary</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>                         category count</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 1                  BatchComplete     3</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 2  BatchGroupedButScalarLeafMath     0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 3    BatchGroupedButScalarBounds     0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 4 BatchGroupedButScalarExprUpper     0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 5         ScalarIdentityShortcut     0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 6                    Unsupported     0</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$batch_coverage$programs</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>     scope variant_index program_index root_id      category</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 1 program             0             0      NA BatchComplete</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 2 program             0             1      NA BatchComplete</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 3 program             0             2      NA BatchComplete</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span>                                            reason</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 1 no unsupported or scalar leaf-math marker found</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 2 no unsupported or scalar leaf-math marker found</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> 3 no unsupported or scalar leaf-math marker found</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $required_p_slots</span>

@@ -5,6 +5,7 @@ This vignette shows how to define staged processing with
 Here accumulator `C` starts only after accumulator `B` has finished.
 
 ``` r
+
 library(AccumulatR)
 ```
 
@@ -19,6 +20,7 @@ library(AccumulatR)
 observed and starts only after `B` has finished.
 
 ``` r
+
 model <- race_spec() |>
   add_accumulator("A", "lognormal") |>
   add_accumulator("B", "lognormal") |>
@@ -41,6 +43,7 @@ true_params <- c(
 response time.
 
 ``` r
+
 set.seed(123456)
 
 n_trials <- 2000
@@ -68,6 +71,7 @@ table(data_df$R)
 optimized on the log scale.
 
 ``` r
+
 prepared <- prepare_data(model, data_df)
 ctx <- make_context(model)
 
@@ -98,6 +102,7 @@ fit <- optim(start, neg_loglik, method = "Nelder-Mead")
 ```
 
 ``` r
+
 fit_params <- fit$par
 fit_params[c("A.s", "B.s", "C.s")] <- exp(fit_params[c("A.s", "B.s", "C.s")])
 target <- true_params[c("A.m", "A.s", "B.m", "B.s", "C.m", "C.s")]

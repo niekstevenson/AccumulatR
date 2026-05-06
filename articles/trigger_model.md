@@ -10,6 +10,7 @@ either start together or fail together. With `draw = "independent"`, the
 same failure probability is applied separately to each accumulator.
 
 ``` r
+
 library(AccumulatR)
 ```
 
@@ -24,6 +25,7 @@ library(AccumulatR)
 trigger with failure probability `q = 0.15`.
 
 ``` r
+
 model <- race_spec() |>
   add_accumulator("go1", "lognormal") |>
   add_accumulator("go2", "lognormal") |>
@@ -51,6 +53,7 @@ fitted parameter vector only contains the accumulator timing parameters.
 missing response times.
 
 ``` r
+
 set.seed(123456)
 
 n_trials <- 1500
@@ -76,6 +79,7 @@ table(data_df$R, useNA = "ifany")
 and evaluate the shared-trigger model under the true parameter values.
 
 ``` r
+
 prepared <- prepare_data(model, data_df)
 ctx <- make_context(model)
 
@@ -95,6 +99,7 @@ To see why the trigger type matters, compare that with the same model
 under independent trigger failures instead of joint failures.
 
 ``` r
+
 model_independent <- race_spec() |>
   add_accumulator("go1", "lognormal") |>
   add_accumulator("go2", "lognormal") |>
@@ -130,6 +135,7 @@ The same syntax can also be used when only one accumulator has a
 trigger.
 
 ``` r
+
 model_single_q <- race_spec() |>
   add_accumulator("go1", "lognormal") |>
   add_accumulator("go2", "lognormal") |>
@@ -148,6 +154,7 @@ model_single_q <- race_spec() |>
 fixed at its generating value.
 
 ``` r
+
 neg_loglik <- function(theta) {
   est <- true_params
   est["go1.m"] <- theta[["go1.m"]]
@@ -180,6 +187,7 @@ fit <- optim(
 ```
 
 ``` r
+
 fit_params <- c(
   go1.m = fit$par[["go1.m"]],
   go1.s = exp(fit$par[["log_go1.s"]]),

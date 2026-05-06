@@ -10,6 +10,7 @@ Use these helpers when a response is not a direct readout from a single
 accumulator.
 
 ``` r
+
 library(AccumulatR)
 ```
 
@@ -50,6 +51,7 @@ Use
 when one of several routes can generate the same response.
 
 ``` r
+
 model_first <- race_spec() |>
   add_accumulator("word_route", "lognormal") |>
   add_accumulator("picture_route", "lognormal") |>
@@ -68,6 +70,7 @@ Use
 when a response depends on several processes all being complete.
 
 ``` r
+
 model_all <- race_spec() |>
   add_accumulator("encoding", "lognormal") |>
   add_accumulator("verification", "lognormal") |>
@@ -86,6 +89,7 @@ Use
 when the rule itself requires an event not to happen.
 
 ``` r
+
 model_none <- race_spec() |>
   add_accumulator("go", "lognormal") |>
   add_accumulator("stop", "lognormal") |>
@@ -106,6 +110,7 @@ Use
 when one process would generate the response and another can block it.
 
 ``` r
+
 model_inhibit <- race_spec() |>
   add_accumulator("go", "lognormal") |>
   add_accumulator("stop", "lognormal") |>
@@ -124,6 +129,7 @@ Here `go` is the response-generating process and `stop` blocks it.
 These two rules look similar:
 
 ``` r
+
 rule_none <- all_of("go", none_of("stop"))
 rule_inhibit <- inhibit("go", "stop")
 
@@ -160,6 +166,7 @@ rule_none
     ## NULL
 
 ``` r
+
 rule_inhibit
 ```
 
@@ -216,6 +223,7 @@ logic at once. For example, suppose a response requires:
 - no stop event
 
 ``` r
+
 model_combo <- race_spec() |>
   add_accumulator("encoding", "lognormal") |>
   add_accumulator("left_route", "lognormal") |>

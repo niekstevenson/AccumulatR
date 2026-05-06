@@ -5,6 +5,7 @@ Read it first if you want the package vocabulary before moving to the
 task-specific examples.
 
 ``` r
+
 library(AccumulatR)
 ```
 
@@ -75,6 +76,7 @@ The example below defines a basic two-choice race model with two
 lognormal accumulators.
 
 ``` r
+
 model <- race_spec() |>
   add_accumulator("left", "lognormal") |>
   add_accumulator("right", "lognormal") |>
@@ -91,6 +93,7 @@ you to trial-wise manipulate the specific parameters, for example using
 a design matrix specification.
 
 ``` r
+
 pars <- c(
   left.m = log(0.28), left.s = 0.16,
   right.m = log(0.35), right.s = 0.18
@@ -118,6 +121,7 @@ response time.
 To fit a model, the usual pattern is:
 
 ``` r
+
 prepared <- prepare_data(model, sim[c("trial", "R", "rt")])
 ctx <- make_context(model)
 log_likelihood(ctx, prepared, param_df)

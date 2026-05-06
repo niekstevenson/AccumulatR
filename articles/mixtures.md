@@ -16,6 +16,7 @@ Mixtures have two separate pieces:
   marginalize over components.
 
 ``` r
+
 library(AccumulatR)
 ```
 
@@ -39,6 +40,7 @@ In this first example, the mixture weights are fixed and the component
 label is observed on each trial.
 
 ``` r
+
 model_fixed <- race_spec() |>
   add_accumulator("target_fast", "lognormal") |>
   add_accumulator("target_slow", "lognormal") |>
@@ -65,6 +67,7 @@ We now create a trial table that says which component each trial belongs
 to.
 
 ``` r
+
 set.seed(123456)
 
 n_trials_fixed <- 1200
@@ -102,6 +105,7 @@ The same pattern applies to real data: if trial type is observed, keep
 it in a `component` column.
 
 ``` r
+
 prepared_fixed <- prepare_data(model_fixed, data_fixed)
 ctx_fixed <- make_context(model_fixed)
 
@@ -124,6 +128,7 @@ not observed per trial. Instead, the model samples a hidden component
 for each trial, with `p_fast` controlling the proportion of fast trials.
 
 ``` r
+
 model_sampled <- race_spec() |>
   add_accumulator("target_fast", "lognormal") |>
   add_accumulator("target_slow", "lognormal") |>
@@ -151,6 +156,7 @@ By default, sampled mixtures do not expose the component label in the
 output, because that label is latent.
 
 ``` r
+
 set.seed(123456)
 
 n_trials_sampled <- 1500
@@ -170,6 +176,7 @@ If you want to inspect the hidden generating component, you can ask for
 it explicitly.
 
 ``` r
+
 sim_sampled_with_component <- simulate(
   model_sampled,
   params_df_sampled,
@@ -191,6 +198,7 @@ marginalizes over the possible components. If you do supply a
 trials.
 
 ``` r
+
 data_sampled <- sim_sampled[, c("trial", "R", "rt")]
 
 prepared_sampled <- prepare_data(model_sampled, data_sampled)
@@ -215,6 +223,7 @@ estimate only the latent mixture weight `p_fast`, while holding the
 accumulator timing parameters fixed.
 
 ``` r
+
 neg_loglik <- function(theta) {
   est <- true_params_sampled
   est["p_fast"] <- plogis(theta[["logit_p_fast"]])
@@ -234,6 +243,7 @@ fit <- optim(start, neg_loglik, method = "BFGS")
 ```
 
 ``` r
+
 fit_params <- c(p_fast = plogis(fit$par[["logit_p_fast"]]))
 target <- c(p_fast = true_params_sampled[["p_fast"]])
 

@@ -34,7 +34,7 @@ structure <- finalize_model(spec)
 make_context(structure)
 #> $cpp
 #> $cpp$native
-#> <pointer: 0x56081e282b40>
+#> <pointer: 0x55f381addf00>
 #> 
 #> $cpp$observed_identity
 #> [1] TRUE
@@ -44,6 +44,27 @@ make_context(structure)
 #> 
 #> $cpp$ranked_supported
 #> [1] TRUE
+#> 
+#> $cpp$batch_coverage
+#> $cpp$batch_coverage$summary
+#>                         category count
+#> 1                  BatchComplete     3
+#> 2  BatchGroupedButScalarLeafMath     0
+#> 3    BatchGroupedButScalarBounds     0
+#> 4 BatchGroupedButScalarExprUpper     0
+#> 5         ScalarIdentityShortcut     0
+#> 6                    Unsupported     0
+#> 
+#> $cpp$batch_coverage$programs
+#>     scope variant_index program_index root_id      category
+#> 1 program             0             0      NA BatchComplete
+#> 2 program             0             1      NA BatchComplete
+#> 3 program             0             2      NA BatchComplete
+#>                                            reason
+#> 1 no unsupported or scalar leaf-math marker found
+#> 2 no unsupported or scalar leaf-math marker found
+#> 3 no unsupported or scalar leaf-math marker found
+#> 
 #> 
 #> 
 #> $required_p_slots

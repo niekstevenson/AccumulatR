@@ -6,6 +6,7 @@ response (`R`, `rt`) and the second response (`R2`, `rt2`), and so on
 for any number of responses (`R3`, `rt3` etc.).
 
 ``` r
+
 library(AccumulatR)
 ```
 
@@ -21,6 +22,7 @@ responses `A` and `B`. Setting `n_outcomes = 2` tells the model to
 retain the first and second finishing responses.
 
 ``` r
+
 model <- race_spec(n_outcomes = 2L) |>
   add_accumulator("A", "lognormal") |>
   add_accumulator("B", "lognormal") |>
@@ -40,6 +42,7 @@ true_params <- c(
 each trial.
 
 ``` r
+
 set.seed(123456)
 
 n_trials <- 500
@@ -73,6 +76,7 @@ head(data_df)
 log scale and transformed back inside the function.
 
 ``` r
+
 prepared <- prepare_data(model, data_df)
 ctx <- make_context(model)
 neg_loglik <- function(theta) {
@@ -100,6 +104,7 @@ fit <- optim(start, neg_loglik, method = "Nelder-Mead")
 ```
 
 ``` r
+
 fit_params <- fit$par
 fit_params[c("A.s", "B.s")] <- exp(fit_params[c("A.s", "B.s")])
 target <- true_params[c("A.m", "A.s", "B.m", "B.s")]

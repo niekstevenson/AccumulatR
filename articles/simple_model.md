@@ -5,6 +5,7 @@ model. The example has two accumulators feeding response `R1` and one
 accumulator feeding response `R2`.
 
 ``` r
+
 library(AccumulatR)
 ```
 
@@ -22,6 +23,7 @@ call shares `A`, `B`, and a variability parameter across the LBA and RDM
 accumulators, and shares `t0` across all three accumulators.
 
 ``` r
+
 model <- race_spec() |>
   add_accumulator("R1_A", "LBA") |>
   add_accumulator("R1_B", "RDM") |>
@@ -53,6 +55,7 @@ true_params <- c(
 each trial.
 
 ``` r
+
 set.seed(123456)
 
 n_trials <- 2000
@@ -78,6 +81,7 @@ table(data_df$R)
 and evaluate the log-likelihood at the true parameter values.
 
 ``` r
+
 prepared <- prepare_data(model, data_df)
 ctx <- make_context(model)
 
@@ -96,6 +100,7 @@ ll_true
 For comparison, we can evaluate a clearly misspecified parameter set.
 
 ``` r
+
 wrong_params <- true_params
 wrong_params["t0_shared"] <- 0.08
 
@@ -118,6 +123,7 @@ parameters: `R1_A.v`, `R1_B.v`, shared `B`, `R2.m`, `R2.s`, and shared
 `A` and variability parameters are held fixed for scaling constraints.
 
 ``` r
+
 neg_loglik <- function(theta) {
   est <- true_params
   est["R1_A.v"] <- theta[["R1_A.v"]]
@@ -149,6 +155,7 @@ fit <- optim(start, neg_loglik, method = "Nelder-Mead", control = list(maxit = 4
 ```
 
 ``` r
+
 fit_params <- c(
   R1_A.v = fit$par[["R1_A.v"]],
   R1_B.v = fit$par[["R1_B.v"]],

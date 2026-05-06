@@ -4,6 +4,7 @@ This vignette lists the accumulator distributions currently available in
 `AccumulatR` and the parameter names they use.
 
 ``` r
+
 library(AccumulatR)
 ```
 
@@ -23,6 +24,7 @@ accumulators `go`, `stop`, and `choice`.
 ## Available distributions
 
 ``` r
+
 data.frame(
   distribution = c("lognormal", "gamma", "exgauss", "LBA", "RDM"),
   parameters = c(
@@ -60,6 +62,7 @@ The same model can combine different accumulator distributions. The only
 thing that changes is the parameter suffix used in the parameter vector.
 
 ``` r
+
 model <- race_spec() |>
   add_accumulator("go", "lognormal") |>
   add_accumulator("stop", "exgauss") |>

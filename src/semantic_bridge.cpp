@@ -19,7 +19,7 @@ using accumulatr::eval::detail::CompiledMathNode;
 using accumulatr::eval::detail::CompiledMathNodeKind;
 using accumulatr::eval::detail::CompiledMathProgram;
 using accumulatr::eval::detail::CompiledMathSourceProductOpKind;
-using accumulatr::eval::detail::CompiledMathSourceProductProgramKind;
+using accumulatr::eval::detail::CompiledMathSourceVectorOpKind;
 using accumulatr::eval::detail::CompiledSourceBoundPlan;
 using accumulatr::eval::detail::ExactProbabilityOp;
 using accumulatr::eval::detail::ExactProbabilityOpKind;
@@ -140,27 +140,6 @@ inline const char *coverage_node_kind_name(
   return "UnknownNode";
 }
 
-inline const char *coverage_program_kind_name(
-    const CompiledMathSourceProductProgramKind kind) noexcept {
-  switch (kind) {
-  case CompiledMathSourceProductProgramKind::ConstantZero:
-    return "ConstantZero";
-  case CompiledMathSourceProductProgramKind::ConstantOne:
-    return "ConstantOne";
-  case CompiledMathSourceProductProgramKind::LeafAbsolute:
-    return "LeafAbsolute";
-  case CompiledMathSourceProductProgramKind::ExactGate:
-    return "ExactGate";
-  case CompiledMathSourceProductProgramKind::Conditioned:
-    return "Conditioned";
-  case CompiledMathSourceProductProgramKind::OnsetConvolution:
-    return "OnsetConvolution";
-  case CompiledMathSourceProductProgramKind::PoolKOfN:
-    return "PoolKOfN";
-  }
-  return "UnknownSourceProgram";
-}
-
 inline const char *coverage_dist_kind_name(const std::uint8_t kind) noexcept {
   switch (static_cast<accumulatr::leaf::DistKind>(kind)) {
   case accumulatr::leaf::DistKind::Lognormal:
@@ -198,13 +177,13 @@ inline bool coverage_leaf_math_is_scalar(
 #endif
 }
 
-void scan_source_product_program_coverage(const CompiledMathProgram &program,
-                                          Index source_program_id,
-                                          int variant_index,
-                                          int probability_program_index,
-                                          int root_id,
-                                          std::size_t depth,
-                                          BatchCoverageRows *rows);
+void scan_source_vector_program_coverage(const CompiledMathProgram &program,
+                                         Index source_vector_program_id,
+                                         int variant_index,
+                                         int probability_program_index,
+                                         int root_id,
+                                         std::size_t depth,
+                                         BatchCoverageRows *rows);
 
 void scan_source_product_ops_coverage(const CompiledMathProgram &program,
                                       const CompiledMathIndexSpan ops,
@@ -268,9 +247,9 @@ void scan_source_product_ops_coverage(const CompiledMathProgram &program,
             "source-product op points outside the compiled channel table");
       }
     }
-    scan_source_product_program_coverage(
+    scan_source_vector_program_coverage(
         program,
-        op.source_product_program_id,
+        op.source_vector_program_id,
         variant_index,
         probability_program_index,
         root_id,
@@ -279,16 +258,13 @@ void scan_source_product_ops_coverage(const CompiledMathProgram &program,
   }
 }
 
-void scan_source_product_program_coverage(const CompiledMathProgram &program,
-                                          const Index source_program_id,
-                                          const int variant_index,
-                                          const int probability_program_index,
-                                          const int root_id,
-                                          const std::size_t depth,
-                                          BatchCoverageRows *rows) {
-  if (source_program_id == accumulatr::semantic::kInvalidIndex) {
-    return;
-  }
+void scan_source_vector_op_span_coverage(const CompiledMathProgram &program,
+                                         const CompiledMathIndexSpan ops,
+                                         const int variant_index,
+                                         const int probability_program_index,
+                                         const int root_id,
+                                         const std::size_t depth,
+                                         BatchCoverageRows *rows) {
   if (depth > 32U) {
     rows->add(
         "program",
@@ -296,64 +272,95 @@ void scan_source_product_program_coverage(const CompiledMathProgram &program,
         probability_program_index,
         root_id,
         "Unsupported",
-        "source-product program recursion exceeded the coverage depth limit");
+        "source-vector op recursion exceeded the coverage depth limit");
     return;
   }
-  const auto source_program_index = static_cast<std::size_t>(source_program_id);
-  if (source_program_index >=
-      program.integral_kernel_source_product_programs.size()) {
-    rows->add(
-        "program",
-        variant_index,
-        probability_program_index,
-        root_id,
-        "Unsupported",
-        "source-product op points outside the compiled source-program table");
-    return;
-  }
-  const auto &source_program =
-      program.integral_kernel_source_product_programs[source_program_index];
-  switch (source_program.kind) {
-  case CompiledMathSourceProductProgramKind::ConstantZero:
-  case CompiledMathSourceProductProgramKind::ConstantOne:
-    return;
-  case CompiledMathSourceProductProgramKind::LeafAbsolute:
-    if (coverage_leaf_math_is_scalar(
-            source_program.leaf_dist_kind,
-            1U | 2U | 4U)) {
-      rows->add(
-          "program",
+  for (Index i = 0; i < ops.size; ++i) {
+    const auto op_index = static_cast<std::size_t>(ops.offset + i);
+    if (op_index >= program.integral_kernel_source_vector_ops.size()) {
+        rows->add(
+            "program",
+            variant_index,
+            probability_program_index,
+            root_id,
+            "Unsupported",
+            "source-vector op span points outside the op table");
+      continue;
+    }
+    const auto &op = program.integral_kernel_source_vector_ops[op_index];
+    switch (op.kind) {
+    case CompiledMathSourceVectorOpKind::ConstantZero:
+    case CompiledMathSourceVectorOpKind::ConstantOne:
+      break;
+    case CompiledMathSourceVectorOpKind::LeafAbsolute:
+      if (coverage_leaf_math_is_scalar(op.leaf_dist_kind, 1U | 2U | 4U)) {
+        rows->add(
+            "program",
+            variant_index,
+            probability_program_index,
+            root_id,
+            "BatchGroupedButScalarLeafMath",
+            std::string("source-vector leaf op is not vector-native for ") +
+                coverage_dist_kind_name(op.leaf_dist_kind));
+      }
+      break;
+    case CompiledMathSourceVectorOpKind::ExactGate:
+    case CompiledMathSourceVectorOpKind::Conditioned:
+    case CompiledMathSourceVectorOpKind::PoolKOfN:
+      break;
+    case CompiledMathSourceVectorOpKind::OnsetConvolution:
+      if (coverage_leaf_math_is_scalar(op.leaf_dist_kind, 1U | 2U | 4U)) {
+        rows->add(
+            "program",
+            variant_index,
+            probability_program_index,
+            root_id,
+            "BatchGroupedButScalarLeafMath",
+            std::string("source-vector onset leaf op is not vector-native for ") +
+                coverage_dist_kind_name(op.leaf_dist_kind));
+      }
+      scan_source_vector_op_span_coverage(
+          program,
+          op.child_ops,
           variant_index,
           probability_program_index,
           root_id,
-          "BatchGroupedButScalarLeafMath",
-          std::string("source-product leaf program is not vector-native for ") +
-              coverage_dist_kind_name(source_program.leaf_dist_kind));
+          depth + 1U,
+          rows);
+      break;
     }
+  }
+}
+
+void scan_source_vector_program_coverage(const CompiledMathProgram &program,
+                                         const Index source_vector_program_id,
+                                         const int variant_index,
+                                         const int probability_program_index,
+                                         const int root_id,
+                                         const std::size_t depth,
+                                         BatchCoverageRows *rows) {
+  if (source_vector_program_id == accumulatr::semantic::kInvalidIndex) {
     return;
-  case CompiledMathSourceProductProgramKind::ExactGate:
-  case CompiledMathSourceProductProgramKind::Conditioned:
-    scan_source_product_program_coverage(
-        program,
-        source_program.child_program_id,
-        variant_index,
-        probability_program_index,
-        root_id,
-        depth + 1U,
-        rows);
-    return;
-  case CompiledMathSourceProductProgramKind::OnsetConvolution:
-  case CompiledMathSourceProductProgramKind::PoolKOfN:
+  }
+  const auto program_index = static_cast<std::size_t>(source_vector_program_id);
+  if (program_index >= program.integral_kernel_source_vector_programs.size()) {
     rows->add(
         "program",
         variant_index,
         probability_program_index,
         root_id,
         "Unsupported",
-        std::string("source-product program kind is not lane-native: ") +
-            coverage_program_kind_name(source_program.kind));
+        "source-product op points outside the compiled source-vector table");
     return;
   }
+  scan_source_vector_op_span_coverage(
+      program,
+      program.integral_kernel_source_vector_programs[program_index].ops,
+      variant_index,
+      probability_program_index,
+      root_id,
+      depth,
+      rows);
 }
 
 void scan_integral_kernel_coverage(const CompiledMathProgram &program,
@@ -555,9 +562,9 @@ void scan_compiled_root_coverage(const ExactVariantPlan &variant,
     case CompiledMathNodeKind::SourcePdf:
     case CompiledMathNodeKind::SourceCdf:
     case CompiledMathNodeKind::SourceSurvival:
-      scan_source_product_program_coverage(
+      scan_source_vector_program_coverage(
           program,
-          node.source_program_id,
+          node.source_vector_program_id,
           variant_index,
           probability_program_index,
           static_cast<int>(root_id),

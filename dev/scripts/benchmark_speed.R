@@ -199,6 +199,57 @@ stim_selective_model <- function() {
   list(structure = structure, pars = pars)
 }
 
+source_program_repeated_pool_model <- function() {
+  structure <- race_spec() |>
+    add_accumulator("p1", "lognormal") |>
+    add_accumulator("p2", "lognormal") |>
+    add_accumulator("p3", "lognormal") |>
+    add_accumulator("gate", "lognormal") |>
+    add_accumulator("stop", "lognormal") |>
+    add_pool("P", c("p1", "p2", "p3"), k = 2L) |>
+    add_outcome(
+      "A",
+      first_of(
+        inhibit(all_of("P", "gate"), by = "stop"),
+        all_of("P", "stop")
+      )
+    ) |>
+    add_outcome("B", inhibit("gate", by = "P")) |>
+    finalize_model()
+  pars <- c(
+    p1.m = log(0.27), p1.s = 0.15,
+    p2.m = log(0.31), p2.s = 0.16,
+    p3.m = log(0.35), p3.s = 0.17,
+    gate.m = log(0.30), gate.s = 0.16,
+    stop.m = log(0.29), stop.s = 0.18
+  )
+  list(structure = structure, pars = pars)
+}
+
+source_program_repeated_onset_model <- function() {
+  structure <- race_spec() |>
+    add_accumulator("start", "lognormal") |>
+    add_accumulator("chain", "lognormal", onset = after("start")) |>
+    add_accumulator("gate", "lognormal") |>
+    add_accumulator("stop", "lognormal") |>
+    add_outcome(
+      "A",
+      first_of(
+        inhibit(all_of("chain", "gate"), by = "stop"),
+        all_of("chain", "stop")
+      )
+    ) |>
+    add_outcome("B", inhibit("gate", by = "chain")) |>
+    finalize_model()
+  pars <- c(
+    start.m = log(0.24), start.s = 0.15,
+    chain.m = log(0.20), chain.s = 0.16,
+    gate.m = log(0.31), gate.s = 0.16,
+    stop.m = log(0.29), stop.s = 0.18
+  )
+  list(structure = structure, pars = pars)
+}
+
 models <- list(
   example_1_simple = list(
     structure = new_api_examples[["example_1_simple"]],
@@ -250,6 +301,8 @@ models <- list(
     pars <- c(a.m = log(0.30), a.s = 0.16, b.m = log(0.22), b.s = 0.16)
     list(structure = structure, pars = pars)
   }),
+  source_program_repeated_pool = source_program_repeated_pool_model(),
+  source_program_repeated_onset = source_program_repeated_onset_model(),
   stop_change_shared_trigger = stop_change_model(),
   stim_selective_stop = stim_selective_model()
 )

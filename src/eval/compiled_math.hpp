@@ -93,7 +93,7 @@ enum class CompiledMathSourceProductOpKind : std::uint8_t {
   GenericSurvival = 19
 };
 
-enum class CompiledMathSourceProductProgramKind : std::uint8_t {
+enum class CompiledMathSourceVectorOpKind : std::uint8_t {
   ConstantZero = 0,
   ConstantOne = 1,
   LeafAbsolute = 2,
@@ -109,6 +109,36 @@ enum class CompiledMathSourceProductBlockFactorKind : std::uint8_t {
   ConditionedDirectLeaf = 2,
   IntegralFactor = 3,
   SourceProgram = 4
+};
+
+enum class CompiledMathLaneTermOpKind : std::uint8_t {
+  ExprUpper = 0,
+  ConstantFactor = 1,
+  DirectLeafFactor = 2,
+  ConditionedDirectLeafFactor = 3,
+  IntegralFactor = 4,
+  SourceProgramFactor = 5
+};
+
+enum class CompiledMathLaneTermGateKind : std::uint8_t {
+  None = 0,
+  Outcome = 1,
+  Time = 2,
+  OutcomeAndTime = 3
+};
+
+enum class CompiledMathBoundVectorOpKind : std::uint8_t {
+  ConstantZero = 0,
+  StateTimeSlot = 1,
+  DirectBindTime = 2,
+  DirectPreparedTime = 3,
+  DirectPreparedCap = 4,
+  MinDirectBindTime = 5,
+  MinDirectPreparedCap = 6,
+  SourceSequenceBounds = 7,
+  ConditionLower = 8,
+  ConditionUpper = 9,
+  ConditionExact = 10
 };
 
 inline std::uint8_t compiled_math_source_product_op_channel_mask(
@@ -201,7 +231,7 @@ struct CompiledMathNode {
   semantic::Index source_view_id{0};
   CompiledMathIndexSpan children{};
   semantic::Index cache_slot{semantic::kInvalidIndex};
-  semantic::Index source_program_id{semantic::kInvalidIndex};
+  semantic::Index source_vector_program_id{semantic::kInvalidIndex};
   semantic::Index integral_kernel_slot{semantic::kInvalidIndex};
   double constant{0.0};
 };
@@ -226,7 +256,8 @@ struct CompiledMathIntegralSourceProductTerm {
 struct CompiledMathCachedIntegralFactor {
   semantic::Index node_id{semantic::kInvalidIndex};
   semantic::Index kernel_slot{semantic::kInvalidIndex};
-  semantic::Index upper_time_id{semantic::kInvalidIndex};
+  semantic::Index lower_bound_plan_id{semantic::kInvalidIndex};
+  semantic::Index upper_bound_plan_id{semantic::kInvalidIndex};
   CompiledMathCachedIntegralFactorKind kind{
       CompiledMathCachedIntegralFactorKind::Generic};
   bool clamp_probability{false};
@@ -251,7 +282,7 @@ struct CompiledMathSourceProductChannel {
   semantic::Index time_id{0};
   semantic::Index time_cap_id{semantic::kInvalidIndex};
   std::uint8_t required_channels{0U};
-  semantic::Index source_product_program_id{semantic::kInvalidIndex};
+  semantic::Index source_vector_program_id{semantic::kInvalidIndex};
   semantic::Index source_kernel_slot{semantic::kInvalidIndex};
   semantic::Index leaf_index{semantic::kInvalidIndex};
   CompiledSourceChannelKernelKind kernel{
@@ -270,29 +301,50 @@ struct CompiledMathSourceProductChannel {
   bool condition_cache_dynamic{false};
 };
 
-struct CompiledMathSourceProductProgram {
-  CompiledMathSourceProductProgramKind kind{
-      CompiledMathSourceProductProgramKind::ConstantZero};
+struct CompiledMathSourceVectorSlotSet {
+  semantic::Index mask{semantic::kInvalidIndex};
+  semantic::Index pdf{semantic::kInvalidIndex};
+  semantic::Index cdf{semantic::kInvalidIndex};
+  semantic::Index survival{semantic::kInvalidIndex};
+};
+
+struct CompiledMathSourceVectorOp {
+  CompiledMathSourceVectorOpKind kind{
+      CompiledMathSourceVectorOpKind::ConstantZero};
   semantic::Index source_id{semantic::kInvalidIndex};
   semantic::Index condition_id{0};
   semantic::Index time_id{semantic::kInvalidIndex};
   semantic::Index time_cap_id{semantic::kInvalidIndex};
   semantic::Index source_view_id{0};
-  semantic::Index child_program_id{semantic::kInvalidIndex};
-  semantic::Index direct_conditioned_leaf_program_id{semantic::kInvalidIndex};
-  semantic::Index onset_source_program_id{semantic::kInvalidIndex};
-  CompiledMathIndexSpan member_programs{};
-  CompiledSourceBoundPlan bounds{};
-  CompiledSourceBoundPlan onset_bounds{};
+  semantic::Index onset_source_id{semantic::kInvalidIndex};
   semantic::Index leaf_index{semantic::kInvalidIndex};
   std::uint8_t leaf_dist_kind{0U};
   double leaf_onset_abs_value{0.0};
   double leaf_onset_lag{0.0};
   semantic::Index pool_k{0};
-  semantic::Index source_product_scratch_offset{0};
-  semantic::Index source_product_scratch_size{0};
+  CompiledSourceBoundPlan bounds{};
+  CompiledSourceBoundPlan onset_bounds{};
   std::uint8_t static_source_view_relation{0U};
   bool has_static_source_view_relation{false};
+  CompiledMathIndexSpan child_ops{};
+  CompiledMathIndexSpan member_slots{};
+  semantic::Index input_mask_slot{semantic::kInvalidIndex};
+  semantic::Index input_pdf_slot{semantic::kInvalidIndex};
+  semantic::Index input_cdf_slot{semantic::kInvalidIndex};
+  semantic::Index input_survival_slot{semantic::kInvalidIndex};
+  semantic::Index output_mask_slot{semantic::kInvalidIndex};
+  semantic::Index output_pdf_slot{semantic::kInvalidIndex};
+  semantic::Index output_cdf_slot{semantic::kInvalidIndex};
+  semantic::Index output_survival_slot{semantic::kInvalidIndex};
+};
+
+struct CompiledMathSourceVectorProgram {
+  CompiledMathIndexSpan ops{};
+  semantic::Index slot_count{0};
+  semantic::Index output_mask_slot{0};
+  semantic::Index output_pdf_slot{0};
+  semantic::Index output_cdf_slot{0};
+  semantic::Index output_survival_slot{0};
 };
 
 enum class CompiledMathIntegralExprUpperMode : std::uint8_t {
@@ -328,8 +380,15 @@ struct CompiledMathIntegralKernel {
   CompiledMathIndexSpan cached_integral_factor_plans{};
   CompiledMathIndexSpan source_product_block_factors{};
   CompiledMathIndexSpan source_product_block_terms{};
-  CompiledMathIndexSpan source_product_block_cached_source_programs{};
+  CompiledMathIndexSpan source_product_block_cached_source_vector_programs{};
+  CompiledMathIndexSpan lane_term_schedules{};
   semantic::Index source_product_block_max_factor_count{0};
+  semantic::Index lane_term_max_op_count{0};
+  bool source_product_block_reuses_factors{false};
+  bool source_product_block_has_source_program_factors{false};
+  bool source_product_block_needs_batch_source_cache{false};
+  bool source_product_block_needs_child_state{false};
+  bool source_product_block_needs_direct_leaf_prepare{false};
   bool clean_signed_source_sum{false};
 };
 
@@ -347,13 +406,48 @@ struct CompiledMathSourceProductOp {
   CompiledMathSourceProductOpKind kind{
       CompiledMathSourceProductOpKind::GenericSurvival};
   semantic::Index source_product_channel_id{semantic::kInvalidIndex};
-  semantic::Index source_product_program_id{semantic::kInvalidIndex};
+  semantic::Index source_vector_program_id{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_plan_id{semantic::kInvalidIndex};
   std::uint8_t value_channel_mask{0U};
   std::uint8_t fill_channel_mask{0U};
   double constant_value{0.0};
   bool cache_result{true};
   bool direct_leaf_integrable{false};
   bool conditioned_direct_leaf{false};
+  CompiledMathSourceProductBlockFactorKind factor_kind{
+      CompiledMathSourceProductBlockFactorKind::SourceProgram};
+};
+
+struct CompiledMathBoundVectorOp {
+  CompiledMathBoundVectorOpKind kind{
+      CompiledMathBoundVectorOpKind::ConstantZero};
+  semantic::Index time_id{semantic::kInvalidIndex};
+  semantic::Index source_id{semantic::kInvalidIndex};
+  CompiledSourceBoundPlan bounds{};
+};
+
+struct CompiledMathBoundVectorPlan {
+  CompiledMathIndexSpan ops{};
+};
+
+struct CompiledMathDirectLeafOpPlan {
+  semantic::Index source_product_channel_id{semantic::kInvalidIndex};
+  semantic::Index source_vector_program_id{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_index{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_time_id{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_time_cap_id{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_source_id{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_parent_time_plan_id{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_parent_cap_plan_id{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_tile_time_plan_id{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_condition_bounds_plan_id{semantic::kInvalidIndex};
+  CompiledSourceBoundPlan direct_leaf_bounds{};
+  std::uint8_t direct_leaf_dist_kind{0U};
+  double direct_leaf_onset_abs_value{0.0};
+  bool direct_leaf_time_is_bind{false};
+  bool direct_leaf_has_time_cap{false};
+  bool direct_leaf_cap_is_bind{false};
+  bool direct_leaf_conditioned{false};
 };
 
 struct CompiledMathSourceProductBlockFactor {
@@ -363,12 +457,27 @@ struct CompiledMathSourceProductBlockFactor {
   CompiledMathSourceProductBlockFactorKind factor_kind{
       CompiledMathSourceProductBlockFactorKind::SourceProgram};
   semantic::Index source_product_channel_id{semantic::kInvalidIndex};
-  semantic::Index source_product_program_id{semantic::kInvalidIndex};
+  semantic::Index source_vector_program_id{semantic::kInvalidIndex};
   semantic::Index integral_factor_cache_slot{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_index{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_time_id{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_time_cap_id{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_source_id{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_parent_time_plan_id{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_parent_cap_plan_id{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_tile_time_plan_id{semantic::kInvalidIndex};
+  semantic::Index direct_leaf_condition_bounds_plan_id{semantic::kInvalidIndex};
+  CompiledSourceBoundPlan direct_leaf_bounds{};
   std::uint8_t value_channel_mask{0U};
   std::uint8_t fill_channel_mask{0U};
+  std::uint8_t direct_leaf_dist_kind{0U};
   double constant_value{0.0};
+  double direct_leaf_onset_abs_value{0.0};
   bool cache_result{false};
+  bool direct_leaf_time_is_bind{false};
+  bool direct_leaf_has_time_cap{false};
+  bool direct_leaf_cap_is_bind{false};
+  bool direct_leaf_conditioned{false};
   semantic::Index use_count{0};
 };
 
@@ -379,6 +488,40 @@ struct CompiledMathSourceProductBlockTerm {
   CompiledMathIndexSpan integral_factor_cache_slots{};
   CompiledMathIndexSpan expr_upper_factors{};
   double sign{1.0};
+};
+
+struct CompiledMathLaneTermOp {
+  CompiledMathLaneTermOpKind kind{CompiledMathLaneTermOpKind::ConstantFactor};
+  semantic::Index factor_id{semantic::kInvalidIndex};
+  semantic::Index expr_upper_factor_id{semantic::kInvalidIndex};
+  semantic::Index expr_upper_node_id{semantic::kInvalidIndex};
+  semantic::Index expr_upper_subject_id{semantic::kInvalidIndex};
+  semantic::Index expr_upper_time_id{semantic::kInvalidIndex};
+  semantic::Index expr_upper_source_view_id{0};
+  CompiledMathIndexSpan expr_upper_timed_upper_bound_terms{};
+  CompiledMathIntegralExprUpperMode expr_upper_mode{
+      CompiledMathIntegralExprUpperMode::BeforeScale};
+  semantic::Index op_id{semantic::kInvalidIndex};
+  CompiledMathSourceProductOpKind op_kind{
+      CompiledMathSourceProductOpKind::GenericSurvival};
+  CompiledMathSourceProductBlockFactorKind factor_kind{
+      CompiledMathSourceProductBlockFactorKind::SourceProgram};
+  semantic::Index source_product_channel_id{semantic::kInvalidIndex};
+  semantic::Index source_vector_program_id{semantic::kInvalidIndex};
+  semantic::Index integral_factor_cache_slot{semantic::kInvalidIndex};
+  std::uint8_t value_channel_mask{0U};
+  std::uint8_t fill_channel_mask{0U};
+  double constant_value{0.0};
+  bool cache_result{false};
+  semantic::Index use_count{0};
+};
+
+struct CompiledMathLaneTermSchedule {
+  CompiledMathIndexSpan ops{};
+  CompiledMathIndexSpan outcome_gate_nodes{};
+  CompiledMathIndexSpan time_gate_nodes{};
+  double sign{1.0};
+  CompiledMathLaneTermGateKind gate_kind{CompiledMathLaneTermGateKind::None};
 };
 
 struct CompiledMathNodeKey {
@@ -601,6 +744,10 @@ struct CompiledMathProgram {
       integral_kernel_source_product_channels;
   std::vector<CompiledMathSourceProductOp>
       integral_kernel_source_product_ops;
+  std::vector<CompiledMathDirectLeafOpPlan>
+      integral_kernel_direct_leaf_op_plans;
+  std::vector<CompiledMathBoundVectorOp> bound_vector_ops;
+  std::vector<CompiledMathBoundVectorPlan> bound_vector_plans;
   std::vector<CompiledMathSourceProductBlockFactor>
       integral_kernel_source_product_block_factors;
   std::vector<semantic::Index>
@@ -608,12 +755,16 @@ struct CompiledMathProgram {
   std::vector<CompiledMathSourceProductBlockTerm>
       integral_kernel_source_product_block_terms;
   std::vector<semantic::Index>
-      integral_kernel_source_product_block_cached_source_programs;
-  std::vector<CompiledMathSourceProductProgram>
-      integral_kernel_source_product_programs;
-  std::vector<semantic::Index>
-      integral_kernel_source_product_program_members;
-  semantic::Index integral_kernel_source_product_scratch_size{0};
+      integral_kernel_source_product_block_cached_source_vector_programs;
+  std::vector<CompiledMathLaneTermOp> integral_kernel_lane_term_ops;
+  std::vector<CompiledMathLaneTermSchedule>
+      integral_kernel_lane_term_schedules;
+  std::vector<CompiledMathSourceVectorOp>
+      integral_kernel_source_vector_ops;
+  std::vector<CompiledMathSourceVectorSlotSet>
+      integral_kernel_source_vector_slot_sets;
+  std::vector<CompiledMathSourceVectorProgram>
+      integral_kernel_source_vector_programs;
   std::vector<semantic::Index> integral_kernel_outcome_gate_nodes;
   std::vector<semantic::Index> integral_kernel_time_gate_nodes;
   std::vector<semantic::Index> integral_kernel_integral_factor_nodes;
@@ -657,18 +808,6 @@ struct CompiledMathWorkspace {
     cache_times.assign(program.nodes.size(), 0.0);
     cache_evaluators.assign(program.nodes.size(), nullptr);
     cache_values.assign(program.nodes.size(), 0.0);
-    const auto source_product_program_count =
-        program.integral_kernel_source_product_programs.size();
-    source_product_program_epoch.assign(source_product_program_count, 0U);
-    source_product_program_valid_mask.assign(
-        source_product_program_count, 0U);
-    source_product_program_pdf.assign(source_product_program_count, 0.0);
-    source_product_program_cdf.assign(source_product_program_count, 0.0);
-    source_product_program_survival.assign(source_product_program_count, 1.0);
-    source_product_scratch.assign(
-        static_cast<std::size_t>(
-            program.integral_kernel_source_product_scratch_size),
-        0.0);
     time_values.assign(4U, 0.0);
     time_valid.assign(4U, 0U);
   }
@@ -683,43 +822,10 @@ struct CompiledMathWorkspace {
       cache_evaluators.resize(size, nullptr);
       cache_values.resize(size, 0.0);
     }
-    if (source_product_program_epoch.size() <
-        program.integral_kernel_source_product_programs.size()) {
-      const auto size = program.integral_kernel_source_product_programs.size();
-      source_product_program_epoch.resize(size, 0U);
-      source_product_program_valid_mask.resize(size, 0U);
-      source_product_program_pdf.resize(size, 0.0);
-      source_product_program_cdf.resize(size, 0.0);
-      source_product_program_survival.resize(size, 1.0);
-    }
-    if (source_product_scratch.size() <
-        static_cast<std::size_t>(
-            program.integral_kernel_source_product_scratch_size)) {
-      source_product_scratch.resize(
-          static_cast<std::size_t>(
-              program.integral_kernel_source_product_scratch_size),
-          0.0);
-    }
   }
 
   void reset_cache() {
     std::fill(cache_valid.begin(), cache_valid.end(), 0U);
-    reset_source_product_program_cache();
-  }
-
-  void reset_source_product_program_cache() {
-    ++source_product_program_current_epoch;
-    if (source_product_program_current_epoch == 0U) {
-      source_product_program_current_epoch = 1U;
-      std::fill(
-          source_product_program_epoch.begin(),
-          source_product_program_epoch.end(),
-          0U);
-      std::fill(
-          source_product_program_valid_mask.begin(),
-          source_product_program_valid_mask.end(),
-          0U);
-    }
   }
 
   void set_time(const semantic::Index time_id, const double value) {
@@ -861,13 +967,6 @@ struct CompiledMathWorkspace {
   std::vector<double> cache_times;
   std::vector<const void *> cache_evaluators;
   std::vector<double> cache_values;
-  std::vector<std::uint32_t> source_product_program_epoch;
-  std::vector<std::uint8_t> source_product_program_valid_mask;
-  std::vector<double> source_product_program_pdf;
-  std::vector<double> source_product_program_cdf;
-  std::vector<double> source_product_program_survival;
-  std::uint32_t source_product_program_current_epoch{1U};
-  std::vector<double> source_product_scratch;
   std::vector<double> time_values;
   std::vector<std::uint8_t> time_valid;
   std::vector<std::uint8_t> integral_term_open;
@@ -890,11 +989,6 @@ inline bool compiled_math_is_integral_node(
          kind == CompiledMathNodeKind::UnionKernelMultiSubsetCdf;
 }
 
-inline bool compiled_math_batch_source_program_supported(
-    const CompiledMathProgram &program,
-    semantic::Index source_product_program_id,
-    std::size_t depth);
-
 inline bool compiled_math_batch_kernel_supported(
     const CompiledMathProgram &program,
     const CompiledMathIntegralKernel &kernel,
@@ -914,73 +1008,13 @@ inline bool compiled_math_batch_source_product_ops_supported(
     if (op.value_channel_mask == 0U) {
       continue;
     }
-    if (op.source_product_program_id == semantic::kInvalidIndex ||
-        !compiled_math_batch_source_program_supported(
-            program,
-            op.source_product_program_id,
-            depth + 1U)) {
+    if (op.source_vector_program_id == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(op.source_vector_program_id) >=
+            program.integral_kernel_source_vector_programs.size()) {
       return false;
     }
   }
   return true;
-}
-
-inline bool compiled_math_batch_source_program_supported(
-    const CompiledMathProgram &program,
-    const semantic::Index source_product_program_id,
-    const std::size_t depth) {
-  if (source_product_program_id == semantic::kInvalidIndex) {
-    return true;
-  }
-  if (depth > 32U) {
-    return false;
-  }
-  const auto pos = static_cast<std::size_t>(source_product_program_id);
-  if (pos >= program.integral_kernel_source_product_programs.size()) {
-    return false;
-  }
-  const auto &source_program =
-      program.integral_kernel_source_product_programs[pos];
-  switch (source_program.kind) {
-  case CompiledMathSourceProductProgramKind::ConstantZero:
-  case CompiledMathSourceProductProgramKind::ConstantOne:
-  case CompiledMathSourceProductProgramKind::LeafAbsolute:
-    return true;
-  case CompiledMathSourceProductProgramKind::ExactGate:
-  case CompiledMathSourceProductProgramKind::Conditioned:
-    return compiled_math_batch_source_program_supported(
-        program,
-        source_program.child_program_id,
-        depth + 1U);
-  case CompiledMathSourceProductProgramKind::OnsetConvolution:
-    return source_program.leaf_index != semantic::kInvalidIndex &&
-           compiled_math_batch_source_program_supported(
-               program,
-               source_program.onset_source_program_id,
-               depth + 1U);
-  case CompiledMathSourceProductProgramKind::PoolKOfN:
-    if (source_program.member_programs.empty()) {
-      return false;
-    }
-    for (semantic::Index i = 0; i < source_program.member_programs.size; ++i) {
-      const auto member_pos =
-          static_cast<std::size_t>(source_program.member_programs.offset + i);
-      if (member_pos >=
-          program.integral_kernel_source_product_program_members.size()) {
-        return false;
-      }
-      const auto member_program_id =
-          program.integral_kernel_source_product_program_members[member_pos];
-      if (!compiled_math_batch_source_program_supported(
-              program,
-              member_program_id,
-              depth + 1U)) {
-        return false;
-      }
-    }
-    return true;
-  }
-  return false;
 }
 
 inline bool compiled_math_batch_expr_upper_supported(

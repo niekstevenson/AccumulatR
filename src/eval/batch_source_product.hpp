@@ -21,6 +21,13 @@ struct BatchActiveLaneSpan {
   std::size_t size{0};
 };
 
+struct CompiledMathActiveBoundBatch {
+  const semantic::Index *lanes{nullptr};
+  std::size_t count{0};
+  const double *lower{nullptr};
+  const double *upper{nullptr};
+};
+
 struct BatchTimeSlotView {
   const double *values{nullptr};
   std::size_t lane_stride{0};

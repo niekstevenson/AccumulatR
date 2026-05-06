@@ -24,13 +24,6 @@ struct ExactLoadedLeafInput {
 
 class CompiledSourceChannels {
 public:
-  struct SourceProductBatchFill {
-    std::uint8_t mask{0U};
-    double pdf{0.0};
-    double cdf{0.0};
-    double survival{1.0};
-  };
-
   struct ResolvedSourceBounds {
     const double *exact_time{nullptr};
     double lower{0.0};
@@ -193,6 +186,39 @@ public:
     }
     if (upper != nullptr) {
       *upper = resolved_upper;
+    }
+    if (exact_time != nullptr) {
+      *exact_time = resolved_exact;
+    }
+    if (has_exact_time != nullptr) {
+      *has_exact_time = resolved_has_exact;
+    }
+  }
+
+  void source_product_exact_bound_value(
+      const semantic::Index source_id,
+      const CompiledSourceBoundPlan &bounds,
+      const CompiledMathWorkspace *workspace,
+      double *exact_time,
+      std::uint8_t *has_exact_time) const {
+    double resolved_exact = 0.0;
+    std::uint8_t resolved_has_exact = 0U;
+    if (source_id != semantic::kInvalidIndex && bounds.use_sequence_exact &&
+        sequence_state_ != nullptr) {
+      const auto source_pos = static_cast<std::size_t>(source_id);
+      if (source_pos < sequence_state_->exact_times.size() &&
+          std::isfinite(sequence_state_->exact_times[source_pos])) {
+        resolved_exact = sequence_state_->exact_times[source_pos];
+        resolved_has_exact = 1U;
+      }
+    }
+    if (bounds.has_condition_exact) {
+      resolved_exact =
+          compiled_bound_term_time(
+              workspace,
+              plan_.compiled_math.source_condition_bound_terms[
+                  static_cast<std::size_t>(bounds.exact.offset)]);
+      resolved_has_exact = 1U;
     }
     if (exact_time != nullptr) {
       *exact_time = resolved_exact;

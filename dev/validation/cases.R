@@ -1372,7 +1372,7 @@ validation_cases <- function(include_adversarial = FALSE) {
       do.call(rbind, rows)
     },
 
-    oracle_nested_choice_guard_absence = function() {
+    nested_choice_guard_absence = function() {
       structure <- race_spec() |>
         add_accumulator("a", "lognormal") |>
         add_accumulator("s", "lognormal") |>
@@ -1552,7 +1552,6 @@ validation_cases <- function(include_adversarial = FALSE) {
       names(cases),
       c(
         "oracle_repeated_shared_gate_six_way",
-        "oracle_nested_choice_guard_absence",
         "oracle_deep_composite_blocker",
         "oracle_pool_k2_shared_gate_guard"
       )

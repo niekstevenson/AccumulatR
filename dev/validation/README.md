@@ -8,7 +8,7 @@ Run it from the repo root with:
 Rscript dev/validation/run_validation.R
 ```
 
-The default runner compares engine likelihoods against explicit manual references for 24 model shapes:
+The default runner compares engine likelihoods against explicit manual references for 25 model shapes:
 
 1. `independent_trigger_two_way`
 2. `pool_vs_competitor`
@@ -34,6 +34,7 @@ The default runner compares engine likelihoods against explicit manual reference
 22. `stim_selective_stop2`
 23. `density_lift_competitor_subset`
 24. `partial_overlap_composite_gates`
+25. `nested_choice_guard_absence`
 
 There is also a heavier adversarial runner:
 
@@ -44,14 +45,13 @@ Rscript dev/validation/run_adversarial_validation.R
 To run one adversarial case:
 
 ```sh
-Rscript dev/validation/run_adversarial_validation.R --case=oracle_nested_choice_guard_absence
+Rscript dev/validation/run_adversarial_validation.R --case=oracle_deep_composite_blocker
 ```
 
 That runner includes intentionally expensive or currently suspicious compositions:
 
 1. `oracle_repeated_shared_gate_six_way`
-2. `oracle_nested_choice_guard_absence`
-3. `oracle_deep_composite_blocker`
-4. `oracle_pool_k2_shared_gate_guard`
+2. `oracle_deep_composite_blocker`
+3. `oracle_pool_k2_shared_gate_guard`
 
 The runner exits nonzero if any check fails. That is intentional. This folder is meant to expose correctness gaps, not hide them.

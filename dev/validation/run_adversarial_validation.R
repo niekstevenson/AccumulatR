@@ -22,7 +22,6 @@ validation_source_rebuild(repo_root)
 
 adversarial_case_names <- c(
   "oracle_repeated_shared_gate_six_way",
-  "oracle_nested_choice_guard_absence",
   "oracle_deep_composite_blocker",
   "oracle_pool_k2_shared_gate_guard"
 )

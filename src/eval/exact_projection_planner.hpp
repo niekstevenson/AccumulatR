@@ -489,6 +489,8 @@ struct ExactProjectionRelationOps {
   bool (*context_overlaps_expr)(const ExactVariantPlan &,
                                 const ExactRegionCell &,
                                 semantic::Index){nullptr};
+  bool (*relation_can_collapse)(const ExactVariantPlan &,
+                                semantic::Index){nullptr};
   bool (*expand_relation)(const ExactVariantPlan &,
                           const ExactOrderRegionExprValueFactor &,
                           ExactOrderRegionBuilder *,
@@ -966,9 +968,14 @@ inline bool exact_projection_relation_factor_coupled(
     const ExactRegionCell &term,
     const ExactOrderRegionExprValueFactor &factor,
     const ExactProjectionRelationOps *ops) {
-  return ops != nullptr &&
-         ops->context_overlaps_expr != nullptr &&
-         !factor.density &&
+  if (ops == nullptr || factor.density) {
+    return false;
+  }
+  if (ops->relation_can_collapse != nullptr &&
+      !ops->relation_can_collapse(plan, factor.expr_id)) {
+    return true;
+  }
+  return ops->context_overlaps_expr != nullptr &&
          ops->context_overlaps_expr(plan, term, factor.expr_id);
 }
 

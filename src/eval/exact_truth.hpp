@@ -530,11 +530,12 @@ inline bool compiled_math_outcome_gate_open_for_node(
     const CompiledMathNode &node,
     const CompiledMathWorkspace &workspace,
     const CompiledSourceView *parent) {
-  if (node.kind != CompiledMathNodeKind::OutcomeSubsetUnused) {
+  if (node.kind != CompiledMathNodeKind::OutcomeSubsetUnused &&
+      node.kind != CompiledMathNodeKind::OutcomeSubsetUsed) {
     throw std::runtime_error("integral outcome gate contains a non-gate node");
   }
   if (workspace.used_outcomes == nullptr) {
-    return true;
+    return node.kind == CompiledMathNodeKind::OutcomeSubsetUnused;
   }
   if (parent == nullptr) {
     throw std::runtime_error(
@@ -547,6 +548,7 @@ inline bool compiled_math_outcome_gate_open_for_node(
     throw std::runtime_error(
         "compiled outcome-used gate points outside the plan");
   }
+  bool any_used = false;
   for (std::size_t i = 0; i < size; ++i) {
     const auto outcome_idx = indices[offset + i];
     if (outcome_idx != semantic::kInvalidIndex &&
@@ -554,10 +556,13 @@ inline bool compiled_math_outcome_gate_open_for_node(
             workspace.used_outcomes->size() &&
         (*workspace.used_outcomes)[static_cast<std::size_t>(outcome_idx)] !=
             0U) {
-      return false;
+      any_used = true;
+      break;
     }
   }
-  return true;
+  return node.kind == CompiledMathNodeKind::OutcomeSubsetUsed
+             ? any_used
+             : !any_used;
 }
 
 inline bool compiled_math_integral_outcome_gates_open(
@@ -591,11 +596,19 @@ inline bool compiled_math_integral_time_gates_open(
             static_cast<std::size_t>(time_gate_nodes.offset + i)];
     const auto &gate_node =
         program.nodes[static_cast<std::size_t>(node_id)];
-    if (gate_node.kind != CompiledMathNodeKind::TimeGate) {
+    if (gate_node.kind != CompiledMathNodeKind::TimeGate &&
+        gate_node.kind != CompiledMathNodeKind::StrictTimeGate) {
       throw std::runtime_error("integral time gate contains a non-gate node");
     }
-    if (workspace.time_values[static_cast<std::size_t>(gate_node.time_id)] <
-        workspace.time_values[static_cast<std::size_t>(gate_node.aux_id)]) {
+    const auto current =
+        workspace.time_values[static_cast<std::size_t>(gate_node.time_id)];
+    const auto gate =
+        workspace.time_values[static_cast<std::size_t>(gate_node.aux_id)];
+    const bool open =
+        gate_node.kind == CompiledMathNodeKind::StrictTimeGate
+            ? current > gate
+            : current >= gate;
+    if (!open) {
       return false;
     }
   }
@@ -1685,7 +1698,6 @@ inline double evaluate_compiled_source_product_integral_kernel(
     return 0.0;
   }
   auto &integral_workspace = workspace->integral_workspace_for(program);
-  const auto batch = quadrature::build_finite_batch(lower, upper);
   const std::vector<std::uint8_t> *term_outcome_open_ptr = nullptr;
   if (kernel.kind == CompiledMathIntegralKernelKind::SourceProductSum) {
     integral_workspace.integral_term_open.assign(
@@ -1712,18 +1724,14 @@ inline double evaluate_compiled_source_product_integral_kernel(
   CompiledMathWorkspace::RebindableTimeBinding bind(
       &integral_workspace,
       kernel.bind_time_id);
-  for (std::size_t sample_idx = 0;
-       sample_idx < quadrature::kDefaultFiniteOrder;
-       ++sample_idx) {
-    bind.set(batch.nodes.nodes[sample_idx]);
-    integral_workspace.reset_source_product_program_cache();
+  auto evaluate_sample = [&]() {
     double value = 0.0;
     if (kernel.kind == CompiledMathIntegralKernelKind::SourceProduct) {
       value = compiled_math_source_product_value_for_ops(
-            program,
-            kernel.source_product_ops,
-            &integral_workspace,
-            source_channels);
+          program,
+          kernel.source_product_ops,
+          &integral_workspace,
+          source_channels);
     } else {
       double total = 0.0;
       for (semantic::Index term_idx = 0;
@@ -1794,14 +1802,86 @@ inline double evaluate_compiled_source_product_integral_kernel(
         }
         total += product;
       }
-      value = kernel.clean_signed_source_sum ? clean_signed_value(total) : total;
+      value =
+          kernel.clean_signed_source_sum ? clean_signed_value(total) : total;
     }
-    if (value == 0.0) {
-      continue;
+    return value;
+  };
+  auto integrate_nodes = [&](const auto &nodes) {
+    double local_sum = 0.0;
+    for (std::size_t sample_idx = 0;
+         sample_idx < nodes.nodes.size();
+         ++sample_idx) {
+      bind.set(nodes.nodes[sample_idx]);
+      integral_workspace.reset_source_product_program_cache();
+      const double value = evaluate_sample();
+      if (value == 0.0) {
+        continue;
+      }
+      local_sum += nodes.weights[sample_idx] * value;
     }
-    sum += batch.nodes.weights[sample_idx] * value;
+    return local_sum;
+  };
+  if (kernel.kind == CompiledMathIntegralKernelKind::SourceProductSum) {
+    const auto nodes =
+        quadrature::map_rule_to_finite_interval<
+            quadrature::kGenericFiniteOrder>(lower, upper);
+    sum = integrate_nodes(nodes);
+  } else {
+    const auto batch = quadrature::build_finite_batch(lower, upper);
+    sum = integrate_nodes(batch.nodes);
   }
   return sum;
+}
+
+inline double evaluate_compiled_generic_integral_kernel(
+    const CompiledMathProgram &program,
+    const CompiledMathIntegralKernel &kernel,
+    CompiledMathWorkspace *workspace,
+    CompiledSourceView *parent,
+    CompiledSourceView *scenario,
+    CompiledEvalWorkspace *eval_workspace,
+    const double lower,
+    const double upper) {
+  if (!(upper > lower)) {
+    return 0.0;
+  }
+  const auto root_pos = static_cast<std::size_t>(kernel.root_id);
+  if (root_pos >= program.roots.size()) {
+    throw std::runtime_error(
+        "generic integral kernel references an unplanned integrand root");
+  }
+  auto &integral_workspace = workspace->integral_workspace_for(program);
+  integral_workspace.ensure_size(program);
+  const auto &root = program.roots[root_pos];
+  const auto nodes =
+      quadrature::map_rule_to_finite_interval<
+          quadrature::kGenericFiniteOrder>(lower, upper);
+  double sum = 0.0;
+  CompiledMathWorkspace::RebindableTimeBinding bind(
+      &integral_workspace,
+      kernel.bind_time_id);
+  for (std::size_t sample_idx = 0;
+       sample_idx < quadrature::kGenericFiniteOrder;
+       ++sample_idx) {
+    bind.set(nodes.nodes[sample_idx]);
+    integral_workspace.reset_cache();
+    const double value = evaluate_compiled_node_span(
+        program,
+        root.schedule,
+        root.node_id,
+        &integral_workspace,
+        parent,
+        scenario,
+        eval_workspace,
+        nullptr,
+        true);
+    if (!std::isfinite(value) || value == 0.0) {
+      continue;
+    }
+    sum += nodes.weights[sample_idx] * value;
+  }
+  return std::isfinite(sum) ? sum : 0.0;
 }
 
 inline double evaluate_compiled_integral_kernel(
@@ -1831,6 +1911,17 @@ inline double evaluate_compiled_integral_kernel(
         kernel,
         workspace,
         parent,
+        eval_workspace,
+        lower,
+        upper);
+  }
+  if (kernel.kind == CompiledMathIntegralKernelKind::Generic) {
+    return evaluate_compiled_generic_integral_kernel(
+        program,
+        kernel,
+        workspace,
+        parent,
+        scenario,
         eval_workspace,
         lower,
         upper);
@@ -1892,14 +1983,17 @@ inline double evaluate_compiled_node_span(
       value = compiled_math_source_node_value(
           program, node, condition_evaluator, workspace);
       break;
-    case CompiledMathNodeKind::TimeGate: {
+    case CompiledMathNodeKind::TimeGate:
+    case CompiledMathNodeKind::StrictTimeGate: {
       const auto child_id =
           program.child_nodes[static_cast<std::size_t>(node.children.offset)];
       const double raw =
           workspace->values[static_cast<std::size_t>(child_id)];
-      value = workspace->time(node.time_id) >= workspace->time(node.aux_id)
-                  ? raw
-                  : 0.0;
+      const bool open =
+          node.kind == CompiledMathNodeKind::StrictTimeGate
+              ? workspace->time(node.time_id) > workspace->time(node.aux_id)
+              : workspace->time(node.time_id) >= workspace->time(node.aux_id);
+      value = open ? raw : 0.0;
       break;
     }
     case CompiledMathNodeKind::ExprDensity:
@@ -2035,8 +2129,10 @@ inline double evaluate_compiled_node_span(
       value = std::isfinite(value) ? value : 0.0;
       break;
     }
-    case CompiledMathNodeKind::OutcomeSubsetUnused: {
-      value = 1.0;
+    case CompiledMathNodeKind::OutcomeSubsetUnused:
+    case CompiledMathNodeKind::OutcomeSubsetUsed: {
+      value =
+          node.kind == CompiledMathNodeKind::OutcomeSubsetUnused ? 1.0 : 0.0;
       if (workspace->used_outcomes != nullptr) {
         const auto offset = static_cast<std::size_t>(node.subject_id);
         const auto size = static_cast<std::size_t>(node.aux_id);
@@ -2045,6 +2141,7 @@ inline double evaluate_compiled_node_span(
           throw std::runtime_error(
               "compiled outcome-used gate points outside the plan");
         }
+        bool any_used = false;
         for (std::size_t i = 0; i < size; ++i) {
           const auto outcome_idx = indices[offset + i];
           if (outcome_idx != semantic::kInvalidIndex &&
@@ -2052,10 +2149,13 @@ inline double evaluate_compiled_node_span(
                   workspace->used_outcomes->size() &&
               (*workspace->used_outcomes)[
                   static_cast<std::size_t>(outcome_idx)] != 0U) {
-            value = 0.0;
+            any_used = true;
             break;
           }
         }
+        value = node.kind == CompiledMathNodeKind::OutcomeSubsetUsed
+                    ? (any_used ? 1.0 : 0.0)
+                    : (any_used ? 0.0 : 1.0);
       }
       break;
     }

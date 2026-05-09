@@ -84,7 +84,7 @@ complex model contains the extra nodes needed for that complexity.
 
 Allowed:
 
-- a compiled opcode such as `LogDensity`, `NoResponseProbability`,
+- a compiled opcode such as `LogDensity`, `FiniteOutcomeProbability`,
   `WeightedSum`, or `IntegralZeroToCurrent`
 - loops over precompiled child spans, source spans, trigger states, or op spans
 - dispatch on a precompiled opcode when every model lowers into the same plan
@@ -204,9 +204,8 @@ A change counts as a real DAG fix only if all of these are true:
 
 Examples that count:
 
-- lowering no-response into `NoResponseProbability`
-- lowering missing RT into `Log(Complement(NoResponseProbability))` when that is
-  the canonical observation semantics
+- lowering missing/no-RT observations into finite-outcome probability plans
+  backed by the compiled exact math roots
 - storing component weight parameter indices in the native context
 - storing prepared data column indices in `PreparedTrialLayout`
 - storing variant leaf row offsets in `ExactVariantPlan`
@@ -270,26 +269,18 @@ Observation probability has a real compiled plan.
   executor; the old request/record executor has been deleted
 - planning-only observation branch vectors are released after context compilation
 
-Exact finite density and finite probability now execute through
-`ExactProbabilityProgram`.
+Exact finite density and finite probability now execute through the compiled
+math DAG emitted by the exact runtime plan.
 
-- simple terminal top-1 races lower to
-  `WeightedTriggerSum(Top1LeafRaceDensity)`
-- generic finite density lowers to
-  `WeightedTriggerSum(GenericTransitionDensity)`
-- finite outcome probability lowers into exact probability programs as
-  `Integral(WeightedTriggerSum(...Density))`; the observation executor no longer
-  owns the quadrature callback for missing-RT or finite-complement observation
-  plans
-- terminal no-response lowers to
-  `WeightedTriggerSum(TerminalNoResponseProbability)`
-- single-child weighted trigger programs own a precompiled `root_child` slot
-- programs that do not need shared-trigger variation use a workspace-owned
-  default trigger state and do not enumerate trigger-state vectors
-- the old `exact_simple_race_target_density()` and
-  `exact_no_response_probability()` backup functions have been deleted
+- finite density evaluates the target outcome's compiled runtime probability
+  root for each trigger state
+- finite outcome probability integrates that same density function
+- missing-RT and missing-all observation plans are expressed as weighted
+  finite-outcome probabilities and complements
+- the old `ExactProbabilityProgram`, simple-race density program, and terminal
+  no-response opcode have been deleted
 - `exact_unranked_target_density()` no longer contains a simple-race
-  try-else-generic branch; it executes the compiled exact probability program
+  try-else-generic branch; it evaluates the compiled runtime probability root
 
 ### Still Violating The Contract
 
@@ -506,48 +497,26 @@ Maintained target:
 - do not reintroduce `ObservedRecord`
 - do not reintroduce record-based exact query batches
 
-### C. Fold Exact Probability Into A Unified Exact Probability Program
+### C. Fold Exact Probability Into The Compiled Math Runtime
 
 Current status: active for finite density, finite probability mass, and
-canonical terminal no-response. `ExactVariantPlan` owns an
-`ExactProbabilityProgramSet`, and `log_likelihood()` finite-density and
-finite-probability evaluation enter that program rather than branching between
-simple and generic exact implementations.
+missing-response observation plans. `ExactVariantPlan` no longer owns an
+`ExactProbabilityProgramSet`; unranked likelihood evaluation enters the same
+compiled runtime probability roots used by ranked successor evaluation.
 
-Target exact probability op examples:
+The exact observation path is now:
 
-- `Top1LeafRaceDensity`
-- `TerminalNoResponseProbability`
-- `GenericTransitionDensity`
-- `GenericTransitionProbability`
-- `RankedTransitionSequence`
-- `Integral`
-- `WeightedTriggerSum`
+```text
+ObservationProbabilityPlan
+-> exact outcome index
+-> ExactRuntimeOutcomePlan.successor_distribution
+-> compiled_math root
+```
 
-Every exact observation lowers into a sequence of these ops. The evaluator executes
-the program. It does not try one shape and fall back to another.
-
-Implemented now:
-
-- `Top1LeafRaceDensity`
-- `TerminalNoResponseProbability`
-- `GenericTransitionDensity`
-- `GenericTransitionProbability` executor support
-- `Integral`
-- `WeightedTriggerSum`
-
-Lowered exact probability program shapes now include:
-
-- finite density: `WeightedTriggerSum(Top1LeafRaceDensity)` or
-  `WeightedTriggerSum(GenericTransitionDensity)`
-- finite probability: `Integral(WeightedTriggerSum(Top1LeafRaceDensity))` or
-  `Integral(WeightedTriggerSum(GenericTransitionDensity))`
-- terminal no-response:
-  `WeightedTriggerSum(TerminalNoResponseProbability)`
-
-The finite probability shape intentionally keeps `Integral` outside
-`WeightedTriggerSum` for shared-trigger cases. Hoisting trigger enumeration
-outside the integral changed shared-trigger finite-complement numerics; the
+Finite probability mass is still an integral over finite density, but the
+integrand is the compiled runtime probability root. Trigger-state weighting is
+handled directly around that root evaluation, not by a second probability-program
+IR.
 current shape preserves the existing mixture-density quadrature semantics while
 still making the exact program own the integration.
 
@@ -835,8 +804,8 @@ Latest hard-case C profile reference:
 stim_selective_stop:
   before C finite-probability lowering: 12 loops / 10s profile
   after C finite-probability lowering:  10 loops / 8s profile
-  dominant stack after: ObservationPlan -> ExactProbabilityProgram ->
-    GenericTransitionDensity -> compiled source-product integral
+  dominant stack after: ObservationPlan -> compiled runtime probability root ->
+    compiled source-product integral
   top self frames after: Rf_pnorm_both, standard_leaf_channels,
     CompiledSourceChannels::evaluate_direct_leaf_absolute_at,
     compiled_math_store_source_channels,

@@ -46,13 +46,16 @@ enum class CompiledMathNodeKind : std::uint8_t {
   UnionKernelMultiSubsetDensity = 22,
   UnionKernelMultiSubsetCdf = 23,
   OutcomeSubsetUnused = 24,
+  OutcomeSubsetUsed = 25,
   IntegralZeroToCurrentRaw = 26,
-  TimeGate = 29
+  TimeGate = 29,
+  StrictTimeGate = 30
 };
 
 enum class CompiledMathIntegralKernelKind : std::uint8_t {
   SourceProduct = 0,
-  SourceProductSum = 1
+  SourceProductSum = 1,
+  Generic = 2
 };
 
 enum class CompiledMathSourceProductOpKind : std::uint8_t {
@@ -590,6 +593,7 @@ struct CompiledMathWorkspace {
         0.0);
     time_values.assign(4U, 0.0);
     time_valid.assign(4U, 0U);
+    time_valid[static_cast<std::size_t>(CompiledMathTimeSlot::Zero)] = 1U;
   }
 
   void ensure_size(const CompiledMathProgram &program) {
@@ -659,7 +663,9 @@ struct CompiledMathWorkspace {
   double time(const semantic::Index time_id) const {
     const auto pos = static_cast<std::size_t>(time_id);
     if (pos >= time_valid.size() || time_valid[pos] == 0U) {
-      throw std::runtime_error("compiled math time slot is unbound");
+      throw std::runtime_error(
+          "compiled math time slot is unbound: " +
+          std::to_string(time_id));
     }
     return time_values[pos];
   }
@@ -857,7 +863,8 @@ inline bool compiled_math_expand_source_product_terms(
     }
     return true;
   }
-  if (node.kind == CompiledMathNodeKind::OutcomeSubsetUnused) {
+  if (node.kind == CompiledMathNodeKind::OutcomeSubsetUnused ||
+      node.kind == CompiledMathNodeKind::OutcomeSubsetUsed) {
     terms->push_back(
         CompiledMathSourceProductTermBuild{{}, {node_id}, {}, {}, {}, sign});
     return true;
@@ -904,7 +911,8 @@ inline bool compiled_math_expand_source_product_terms(
     }
     return true;
   }
-  if (node.kind == CompiledMathNodeKind::TimeGate &&
+  if ((node.kind == CompiledMathNodeKind::TimeGate ||
+       node.kind == CompiledMathNodeKind::StrictTimeGate) &&
       node.children.size == 1U) {
     const auto child_id = program.child_nodes[
         static_cast<std::size_t>(node.children.offset)];
@@ -966,9 +974,7 @@ inline bool compiled_math_expand_source_product_terms(
         program, child_id, -sign, terms, clean_signed);
   }
   if (node.kind != CompiledMathNodeKind::Product) {
-    throw std::runtime_error(
-        "source-product integral collector reached unsupported node kind " +
-        std::to_string(static_cast<int>(node.kind)));
+    return false;
   }
 
   std::vector<CompiledMathSourceProductTermBuild> product_terms(1);
@@ -1319,8 +1325,7 @@ inline semantic::Index compiled_math_integral_kernel_slot(
         integral_factor_node_mark);
     program->integral_kernel_expr_upper_factors.resize(
         expr_upper_factor_mark);
-    throw std::runtime_error(
-        "compiled integral root is not a planned source-product kernel");
+    kernel.kind = CompiledMathIntegralKernelKind::Generic;
   }
   program->integral_kernels.push_back(kernel);
   return slot;
@@ -1715,6 +1720,21 @@ inline semantic::Index compiled_math_time_gate_node(
     const CompiledMathValueKind value_kind = CompiledMathValueKind::Scalar) {
   CompiledMathNodeKey key;
   key.kind = CompiledMathNodeKind::TimeGate;
+  key.value_kind = value_kind;
+  key.time_id = current_time_id;
+  key.aux_id = gate_time_id;
+  key.children.push_back(child);
+  return compiled_math_intern_node(program, std::move(key));
+}
+
+inline semantic::Index compiled_math_strict_time_gate_node(
+    CompiledMathProgram *program,
+    const semantic::Index child,
+    const semantic::Index current_time_id,
+    const semantic::Index gate_time_id,
+    const CompiledMathValueKind value_kind = CompiledMathValueKind::Scalar) {
+  CompiledMathNodeKey key;
+  key.kind = CompiledMathNodeKind::StrictTimeGate;
   key.value_kind = value_kind;
   key.time_id = current_time_id;
   key.aux_id = gate_time_id;

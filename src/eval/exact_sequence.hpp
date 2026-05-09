@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <limits>
 #include <optional>
 
@@ -93,20 +92,6 @@ inline void build_exact_plan_cache(
   }
 }
 
-inline double exact_density_program_value(
-    const ExactVariantPlan &plan,
-    const ParamView &params,
-    int first_param_row,
-    semantic::Index target_idx,
-    double rt,
-    ExactStepWorkspace *workspace = nullptr);
-
-inline double exact_no_response_program_value(
-    const ExactVariantPlan &plan,
-    const ParamView &params,
-    int first_param_row,
-    ExactStepWorkspace *workspace = nullptr);
-
 inline double exact_unranked_target_density(
     const ExactVariantPlan &plan,
     const ParamView &params,
@@ -119,487 +104,57 @@ inline double exact_unranked_target_density(
       !(rt > 0.0)) {
     return 0.0;
   }
-  return exact_density_program_value(
-      plan,
-      params,
-      first_param_row,
-      target_idx,
-      rt,
-      workspace);
-}
-
-inline double exact_simple_race_leaf_q(
-    const ExactVariantPlan &plan,
-    const ParamView &params,
-    const int first_param_row,
-    const ExactTriggerState &trigger_state,
-    const semantic::Index leaf_index) {
-  const auto leaf_pos = static_cast<std::size_t>(leaf_index);
-  const auto &program = plan.lowered.program;
-  const auto trigger_index = program.leaf_trigger_index[leaf_pos];
-  if (trigger_index != semantic::kInvalidIndex) {
-    const auto trigger_pos = static_cast<std::size_t>(trigger_index);
-    if (static_cast<semantic::TriggerKind>(program.trigger_kind[trigger_pos]) ==
-            semantic::TriggerKind::Shared &&
-        trigger_state.shared_started[trigger_pos] <= 1U) {
-      return trigger_state.shared_started[trigger_pos] == 1U ? 0.0 : 1.0;
-    }
-  }
-  return params.q(first_param_row + leaf_index);
-}
-
-inline leaf::EventChannels exact_simple_race_leaf_channels_at(
-    const ExactVariantPlan &plan,
-    const ParamView &params,
-    const int first_param_row,
-    const ExactTriggerState &trigger_state,
-    const semantic::Index leaf_index,
-    const double rt) {
-  const auto leaf_pos = static_cast<std::size_t>(leaf_index);
-  const auto &program = plan.lowered.program;
-  const auto &desc = program.leaf_descriptors[leaf_pos];
-  std::array<double, 8> local_params{};
-  const int row = first_param_row + leaf_index;
-  const int n_local = std::min<int>(desc.param_count, 8);
-  for (int j = 0; j < n_local; ++j) {
-    local_params[static_cast<std::size_t>(j)] = params.p(row, j);
-  }
-  const double q =
-      exact_simple_race_leaf_q(plan, params, first_param_row, trigger_state, leaf_index);
-  return standard_leaf_channels(
-      desc.dist_kind,
-      local_params.data(),
-      n_local,
-      q,
-      params.t0(row),
-      rt - desc.onset_abs_value);
-}
-
-inline double exact_terminal_leaf_survival_probability(
-    const ExactVariantPlan &plan,
-    const ParamView &params,
-    const int first_param_row,
-    const ExactTriggerState &trigger_state,
-    const semantic::Index source_id) {
-  const auto source_pos = static_cast<std::size_t>(source_id);
-  const auto &kernel = plan.source_kernels[source_pos];
-  const auto leaf_pos = static_cast<std::size_t>(kernel.leaf_index);
-  const auto &program = plan.lowered.program;
-  const auto trigger_index = program.leaf_trigger_index[leaf_pos];
-  if (trigger_index != semantic::kInvalidIndex) {
-    const auto trigger_pos = static_cast<std::size_t>(trigger_index);
-    if (static_cast<semantic::TriggerKind>(program.trigger_kind[trigger_pos]) ==
-            semantic::TriggerKind::Shared &&
-        trigger_state.shared_started[trigger_pos] <= 1U) {
-      return trigger_state.shared_started[trigger_pos] == 1U ? 0.0 : 1.0;
-    }
-  }
-  return clamp_probability(params.q(first_param_row + kernel.leaf_index));
-}
-
-inline double evaluate_exact_probability_trigger_op(
-    const ExactVariantPlan &plan,
-    const ExactProbabilityProgram &program,
-    const ExactProbabilityProgramSet &programs,
-    const ParamView &params,
-    const int first_param_row,
-    const double observed_time,
-    const ExactProbabilityOp &op,
-    const ExactTriggerState &trigger_state,
-    ExactStepWorkspace *workspace) {
-  switch (op.kind) {
-  case ExactProbabilityOpKind::Constant:
-    return op.constant;
-
-  case ExactProbabilityOpKind::Top1LeafRaceDensity: {
-    double term = 1.0;
-    for (semantic::Index i = 0; i < op.source_span.size; ++i) {
-      const auto source_id =
-          programs.source_ids[
-              static_cast<std::size_t>(op.source_span.offset + i)];
-      const auto &kernel =
-          plan.source_kernels[static_cast<std::size_t>(source_id)];
-      const auto channels = exact_simple_race_leaf_channels_at(
-          plan,
-          params,
-          first_param_row,
-          trigger_state,
-          kernel.leaf_index,
-          observed_time);
-      const double factor =
-          source_id == op.target_source_id
-              ? safe_density(channels.pdf)
-              : clamp_probability(channels.survival);
-      term *= factor;
-      if (!(term > 0.0)) {
-        break;
-      }
-    }
-    return term > 0.0 ? term : 0.0;
-  }
-
-  case ExactProbabilityOpKind::TerminalNoResponseProbability: {
-    double terminal_survival = 1.0;
-    for (semantic::Index i = 0; i < op.source_span.size; ++i) {
-      const auto source_id =
-          programs.source_ids[
-              static_cast<std::size_t>(op.source_span.offset + i)];
-      const double source_survival =
-          exact_terminal_leaf_survival_probability(
-              plan,
-              params,
-              first_param_row,
-              trigger_state,
-              source_id);
-      terminal_survival *= source_survival;
-      if (!(terminal_survival > 0.0)) {
-        break;
-      }
-    }
-    return clamp_probability(terminal_survival);
-  }
-
-  case ExactProbabilityOpKind::GenericTransitionDensity: {
-    const ExactStepDistributionView step = evaluate_exact_step_distribution(
-        plan,
-        params,
-        first_param_row,
-        trigger_state,
-        workspace->initial_state,
-        op.outcome_index,
-        observed_time,
-        nullptr,
-        false,
-        workspace);
-    return step.total_probability;
-  }
-
-  case ExactProbabilityOpKind::GenericTransitionProbability: {
-    const double probability = integrate_to_infinity(
-        [&](const double rt) {
-          const ExactStepDistributionView step =
-              evaluate_exact_step_distribution(
-                  plan,
-                  params,
-                  first_param_row,
-                  trigger_state,
-                  workspace->initial_state,
-                  op.outcome_index,
-                  rt,
-                  nullptr,
-                  false,
-                  workspace);
-          return step.total_probability;
-        });
-    return clamp_probability(probability);
-  }
-
-  case ExactProbabilityOpKind::Integral: {
-    const auto child =
-        program.child_ops[static_cast<std::size_t>(op.children.offset)];
-    const auto &child_op = program.ops[static_cast<std::size_t>(child)];
-    const double probability = integrate_to_infinity(
-        [&](const double rt) {
-          return evaluate_exact_probability_trigger_op(
-              plan,
-              program,
-              programs,
-              params,
-              first_param_row,
-              rt,
-              child_op,
-              trigger_state,
-              workspace);
-        });
-    return op.value_kind == ExactProbabilityValueKind::Probability
-               ? clamp_probability(probability)
-               : probability;
-  }
-
-  case ExactProbabilityOpKind::Log: {
-    const auto child =
-        program.child_ops[static_cast<std::size_t>(op.children.offset)];
-    const double probability = evaluate_exact_probability_trigger_op(
-        plan,
-        program,
-        programs,
-        params,
-        first_param_row,
-        observed_time,
-        program.ops[static_cast<std::size_t>(child)],
-        trigger_state,
-        workspace);
-    return std::isfinite(probability) && probability > 0.0
-               ? std::log(probability)
-               : R_NegInf;
-  }
-
-  case ExactProbabilityOpKind::WeightedTriggerSum:
-  case ExactProbabilityOpKind::RankedTransitionSequence:
-    return 0.0;
-  }
-  return 0.0;
-}
-
-inline double evaluate_exact_probability_weighted_trigger_sum(
-    const ExactVariantPlan &plan,
-    const ExactProbabilityProgram &program,
-    const ExactProbabilityProgramSet &programs,
-    const ParamView &params,
-    const int first_param_row,
-    const double observed_time,
-    const ExactProbabilityOp &root,
-    ExactStepWorkspace *workspace) {
-  if (program.root_child != semantic::kInvalidIndex) {
-    const auto &child_op =
-        program.ops[static_cast<std::size_t>(program.root_child)];
-    if (!program.requires_trigger_enumeration) {
-      const double total = evaluate_exact_probability_trigger_op(
-          plan,
-          program,
-          programs,
-          params,
-          first_param_row,
-          observed_time,
-          child_op,
-          workspace->default_trigger_state,
-          workspace);
-      return root.value_kind == ExactProbabilityValueKind::Probability
-                 ? clamp_probability(total)
-                 : (std::isfinite(total) && total > 0.0 ? total : 0.0);
-    }
-
-    double total = 0.0;
-    for (const auto &compiled_state : plan.trigger_state_table.states) {
-      const auto state =
-          exact_compiled_trigger_state_view(
-              plan, params, first_param_row, compiled_state);
-      if (!(state.weight > 0.0)) {
-        continue;
-      }
-      total += state.weight * evaluate_exact_probability_trigger_op(
-          plan,
-          program,
-          programs,
-          params,
-          first_param_row,
-          observed_time,
-          child_op,
-          state,
-          workspace);
-    }
-    return root.value_kind == ExactProbabilityValueKind::Probability
-               ? clamp_probability(total)
-               : (std::isfinite(total) && total > 0.0 ? total : 0.0);
-  }
-
-  if (!program.requires_trigger_enumeration) {
-    double total = 0.0;
-    for (semantic::Index i = 0; i < root.children.size; ++i) {
-      const auto child =
-          program.child_ops[
-              static_cast<std::size_t>(root.children.offset + i)];
-      total += evaluate_exact_probability_trigger_op(
-          plan,
-          program,
-          programs,
-          params,
-          first_param_row,
-          observed_time,
-          program.ops[static_cast<std::size_t>(child)],
-          workspace->default_trigger_state,
-          workspace);
-    }
-    return root.value_kind == ExactProbabilityValueKind::Probability
-               ? clamp_probability(total)
-               : (std::isfinite(total) && total > 0.0 ? total : 0.0);
-  }
-
-  double total = 0.0;
-  for (const auto &compiled_state : plan.trigger_state_table.states) {
-    const auto state =
-        exact_compiled_trigger_state_view(
-            plan, params, first_param_row, compiled_state);
-    if (!(state.weight > 0.0)) {
-      continue;
-    }
-    double state_value = 0.0;
-    for (semantic::Index i = 0; i < root.children.size; ++i) {
-      const auto child =
-          program.child_ops[
-              static_cast<std::size_t>(root.children.offset + i)];
-      state_value += evaluate_exact_probability_trigger_op(
-          plan,
-          program,
-          programs,
-          params,
-          first_param_row,
-          observed_time,
-          program.ops[static_cast<std::size_t>(child)],
-          state,
-          workspace);
-    }
-    total += state.weight * state_value;
-  }
-  return root.value_kind == ExactProbabilityValueKind::Probability
-             ? clamp_probability(total)
-             : (std::isfinite(total) && total > 0.0 ? total : 0.0);
-}
-
-inline double evaluate_exact_probability_program(
-    const ExactVariantPlan &plan,
-    const ExactProbabilityProgram &program,
-    const ParamView &params,
-    const int first_param_row,
-    const double observed_time,
-    ExactStepWorkspace *workspace = nullptr) {
   std::optional<ExactStepWorkspace> local_workspace;
   if (workspace == nullptr) {
     local_workspace.emplace(plan);
     workspace = &*local_workspace;
   }
-  const auto evaluate_program_op =
-      [&](const auto &self,
-          const ExactProbabilityOp &op,
-          const double op_time) -> double {
-    switch (op.kind) {
-    case ExactProbabilityOpKind::WeightedTriggerSum:
-      return evaluate_exact_probability_weighted_trigger_sum(
-          plan,
-          program,
-          plan.probability_programs,
-          params,
-          first_param_row,
-          op_time,
-          op,
-          workspace);
-    case ExactProbabilityOpKind::Integral: {
-      const auto child =
-          program.child_ops[static_cast<std::size_t>(op.children.offset)];
-      const auto &child_op = program.ops[static_cast<std::size_t>(child)];
-      const double probability = integrate_to_infinity(
-          [&](const double rt) {
-            return self(self, child_op, rt);
-          });
-      return op.value_kind == ExactProbabilityValueKind::Probability
-                 ? clamp_probability(probability)
-                 : probability;
+  double total = 0.0;
+  for (const auto &compiled_state : plan.trigger_state_table.states) {
+    const auto trigger_state =
+        exact_compiled_trigger_state_view(
+            plan, params, first_param_row, compiled_state);
+    if (!(trigger_state.weight > 0.0)) {
+      continue;
     }
-    case ExactProbabilityOpKind::Log: {
-      const auto child =
-          program.child_ops[static_cast<std::size_t>(op.children.offset)];
-      const double probability =
-          self(self, program.ops[static_cast<std::size_t>(child)], op_time);
-      return std::isfinite(probability) && probability > 0.0
-                 ? std::log(probability)
-                 : R_NegInf;
-    }
-    case ExactProbabilityOpKind::Top1LeafRaceDensity:
-    case ExactProbabilityOpKind::TerminalNoResponseProbability:
-    case ExactProbabilityOpKind::GenericTransitionDensity:
-    case ExactProbabilityOpKind::GenericTransitionProbability:
-      return evaluate_exact_probability_trigger_op(
-          plan,
-          program,
-          plan.probability_programs,
-          params,
-          first_param_row,
-          op_time,
-          op,
-          workspace->default_trigger_state,
-          workspace);
-    case ExactProbabilityOpKind::Constant:
-      return op.constant;
-    case ExactProbabilityOpKind::RankedTransitionSequence:
-      return 0.0;
-    }
-    return 0.0;
-  };
-  const auto &root = program.ops[static_cast<std::size_t>(program.root)];
-  switch (root.kind) {
-  case ExactProbabilityOpKind::WeightedTriggerSum:
-    return evaluate_exact_probability_weighted_trigger_sum(
-        plan,
-        program,
-        plan.probability_programs,
-        params,
-        first_param_row,
-        observed_time,
-        root,
-        workspace);
-  case ExactProbabilityOpKind::Integral:
-  case ExactProbabilityOpKind::Log:
-    return evaluate_program_op(evaluate_program_op, root, observed_time);
-  case ExactProbabilityOpKind::Top1LeafRaceDensity:
-  case ExactProbabilityOpKind::TerminalNoResponseProbability:
-  case ExactProbabilityOpKind::Constant:
-  case ExactProbabilityOpKind::GenericTransitionDensity:
-  case ExactProbabilityOpKind::GenericTransitionProbability:
-  case ExactProbabilityOpKind::RankedTransitionSequence:
-    return evaluate_program_op(evaluate_program_op, root, observed_time);
+    const auto step =
+        evaluate_exact_step_distribution(
+            plan,
+            params,
+            first_param_row,
+            trigger_state,
+            workspace->initial_state,
+            target_idx,
+            rt,
+            nullptr,
+            false,
+            workspace);
+    total += trigger_state.weight * step.total_probability;
   }
-  return 0.0;
+  return std::isfinite(total) && total > 0.0 ? total : 0.0;
 }
 
-inline double exact_density_program_value(
-    const ExactVariantPlan &plan,
-    const ParamView &params,
-    const int first_param_row,
-    const semantic::Index target_idx,
-    const double rt,
-    ExactStepWorkspace *workspace) {
-  const auto program_index =
-      plan.probability_programs.density_by_outcome[
-          static_cast<std::size_t>(target_idx)];
-  const auto &program =
-      plan.probability_programs.programs[
-          static_cast<std::size_t>(program_index)];
-  return evaluate_exact_probability_program(
-      plan,
-      program,
-      params,
-      first_param_row,
-      rt,
-      workspace);
-}
-
-inline double exact_no_response_program_value(
-    const ExactVariantPlan &plan,
-    const ParamView &params,
-    const int first_param_row,
-    ExactStepWorkspace *workspace) {
-  const auto &program =
-      plan.probability_programs.programs[
-          static_cast<std::size_t>(
-              plan.probability_programs.no_response_probability)];
-  return evaluate_exact_probability_program(
-      plan,
-      program,
-      params,
-      first_param_row,
-      NA_REAL,
-      workspace);
-}
-
-inline double exact_finite_probability_program_value(
+inline double exact_finite_outcome_probability(
     const ExactVariantPlan &plan,
     const ParamView &params,
     const int first_param_row,
     const semantic::Index target_idx,
     ExactStepWorkspace *workspace) {
-  const auto program_index =
-      plan.probability_programs.finite_probability_by_outcome[
-          static_cast<std::size_t>(target_idx)];
-  const auto &program =
-      plan.probability_programs.programs[
-          static_cast<std::size_t>(program_index)];
-  return evaluate_exact_probability_program(
-      plan,
-      program,
-      params,
-      first_param_row,
-      NA_REAL,
-      workspace);
+  if (target_idx == semantic::kInvalidIndex) {
+    return 0.0;
+  }
+  const double probability =
+      integrate_to_infinity(
+          [&](const double rt) {
+            return exact_unranked_target_density(
+                plan,
+                params,
+                first_param_row,
+                target_idx,
+                rt,
+                workspace);
+          });
+  return std::isfinite(probability) ? clamp_probability(probability) : 0.0;
 }
 
 inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
@@ -627,17 +182,13 @@ inline void advance_exact_sequence_state(
     return;
   }
   state->lower_bound = observed_time;
-  if (transition.active_source_id != semantic::kInvalidIndex &&
-      static_cast<std::size_t>(transition.active_source_id) <
+  if (transition.release_source_id != semantic::kInvalidIndex &&
+      static_cast<std::size_t>(transition.release_source_id) <
           state->exact_times.size()) {
-    state->exact_times[static_cast<std::size_t>(transition.active_source_id)] =
+    state->exact_times[static_cast<std::size_t>(transition.release_source_id)] =
         observed_time;
   }
-  for (semantic::Index i = 0; i < transition.before_source_span.size; ++i) {
-    const auto source_id =
-        plan.scenario_source_ids[
-            static_cast<std::size_t>(
-                transition.before_source_span.offset + i)];
+  for (const auto source_id : transition.readiness_source_ids) {
     if (source_id == semantic::kInvalidIndex ||
         static_cast<std::size_t>(source_id) >= state->upper_bounds.size()) {
       continue;
@@ -646,11 +197,8 @@ inline void advance_exact_sequence_state(
     upper = std::isfinite(upper) ? std::min(upper, observed_time)
                                  : observed_time;
   }
-  for (semantic::Index i = 0; i < transition.ready_expr_span.size; ++i) {
-    const auto expr_id =
-        plan.scenario_expr_ids[
-            static_cast<std::size_t>(
-                transition.ready_expr_span.offset + i)];
+  for (std::size_t i = 0; i < transition.readiness_expr_ids.size(); ++i) {
+    const auto expr_id = transition.readiness_expr_ids[i];
     if (expr_id == semantic::kInvalidIndex ||
         static_cast<std::size_t>(expr_id) >=
             state->expr_upper_bounds.size() ||
@@ -658,12 +206,11 @@ inline void advance_exact_sequence_state(
             state->expr_upper_normalizers.size()) {
       continue;
     }
-    const std::size_t ready_pos = static_cast<std::size_t>(i);
     if (ready_expr_normalizers == nullptr ||
-        ready_pos >= ready_expr_normalizers->size()) {
+        i >= ready_expr_normalizers->size()) {
       continue;
     }
-    const double normalizer = (*ready_expr_normalizers)[ready_pos];
+    const double normalizer = (*ready_expr_normalizers)[i];
     if (!(normalizer > 0.0) || !std::isfinite(normalizer)) {
       continue;
     }
@@ -757,13 +304,8 @@ inline void exact_sequence_ready_expr_normalizers(
     ExactStepWorkspace *workspace,
     std::vector<double> *normalizers) {
   normalizers->clear();
-  normalizers->reserve(
-      static_cast<std::size_t>(transition.ready_expr_span.size));
-  for (semantic::Index i = 0; i < transition.ready_expr_span.size; ++i) {
-    const auto expr_id =
-        plan.scenario_expr_ids[
-            static_cast<std::size_t>(
-                transition.ready_expr_span.offset + i)];
+  normalizers->reserve(transition.readiness_expr_ids.size());
+  for (const auto expr_id : transition.readiness_expr_ids) {
     double normalizer = 0.0;
     if (expr_id != semantic::kInvalidIndex &&
         static_cast<std::size_t>(expr_id) <

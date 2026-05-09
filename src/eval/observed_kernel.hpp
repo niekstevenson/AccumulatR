@@ -411,23 +411,11 @@ inline double evaluate_observation_plan_direct(
       const auto target_idx =
           exact_plan.outcome_index_by_code[static_cast<std::size_t>(
               op.semantic_code)];
-      const double probability = exact_finite_probability_program_value(
+      const double probability = exact_finite_outcome_probability(
           exact_plan,
           params,
           first_param_row,
           target_idx,
-          &workspace);
-      value =
-          std::isfinite(probability) && probability > 0.0 && op.weight > 0.0
-              ? op.weight * probability
-              : 0.0;
-      break;
-    }
-    case ObservationPlanOpKind::NoResponseProbability: {
-      const double probability = exact_no_response_program_value(
-          exact_plan,
-          params,
-          first_param_row,
           &workspace);
       value =
           std::isfinite(probability) && probability > 0.0 && op.weight > 0.0

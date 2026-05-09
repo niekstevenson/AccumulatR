@@ -530,6 +530,101 @@ validation_cases <- function() {
       )
     },
 
+    stim_selective_stop2 = function() {
+      structure <- race_spec() |>
+        add_accumulator("A", "lognormal") |>
+        add_accumulator("B", "lognormal") |>
+        add_accumulator("S1", "lognormal") |>
+        add_accumulator("IS", "lognormal") |>
+        add_accumulator("S2", "lognormal") |>
+        add_outcome(
+          "A",
+          first_of(
+            inhibit("A", by = "S1"),
+            all_of("A", "S1", inhibit("IS", by = "S2"))
+          )
+        ) |>
+        add_outcome(
+          "B",
+          first_of(
+            inhibit("B", by = "S1"),
+            all_of("B", "S1", inhibit("IS", by = "S2"))
+          )
+        ) |>
+        add_outcome("STOP", all_of("S1", "S2")) |>
+        add_component("go", members = c("A", "B")) |>
+        add_component("stop", members = c("A", "B", "S1", "IS", "S2")) |>
+        set_parameters(list(
+          m_go = c("A.m", "B.m"),
+          s_go = c("A.s", "B.s"),
+          t0_go = c("A.t0", "B.t0")
+        )) |>
+        finalize_model()
+      params <- c(
+        m_go = log(0.30), s_go = 0.18, t0_go = 0.05,
+        S1.m = log(0.26), S1.s = 0.18, S1.t0 = 0.00,
+        IS.m = log(0.35), IS.s = 0.18, IS.t0 = 0.00,
+        S2.m = log(0.32), S2.s = 0.18, S2.t0 = 0.00
+      )
+      A <- list(m = params[["m_go"]], s = params[["s_go"]], q = 0.0, t0 = params[["t0_go"]])
+      B <- list(m = params[["m_go"]], s = params[["s_go"]], q = 0.0, t0 = params[["t0_go"]])
+      S1 <- list(m = params[["S1.m"]], s = params[["S1.s"]], q = 0.0, t0 = params[["S1.t0"]])
+      IS <- list(m = params[["IS.m"]], s = params[["IS.s"]], q = 0.0, t0 = params[["IS.t0"]])
+      S2 <- list(m = params[["S2.m"]], s = params[["S2.s"]], q = 0.0, t0 = params[["S2.t0"]])
+
+      stop_density <- function(t) {
+        s1_latest <- acc_pdf_scalar(t, S1) *
+          acc_cdf_scalar(t, S2) *
+          acc_survival_scalar(t, A) *
+          acc_survival_scalar(t, B)
+
+        s1_ready_before_t <- integrate_scalar(
+          function(u) {
+            acc_pdf_scalar(u, S1) *
+              acc_survival_scalar(u, A) *
+              acc_survival_scalar(u, B)
+          },
+          0.0,
+          t
+        )
+        s2_latest <- acc_pdf_scalar(t, S2) * (
+          acc_survival_scalar(t, IS) * s1_ready_before_t +
+            acc_cdf_scalar(t, IS) *
+              acc_cdf_scalar(t, S1) *
+              acc_survival_scalar(t, A) *
+              acc_survival_scalar(t, B)
+        )
+
+        s1_latest + s2_latest
+      }
+      engine <- function(rt) {
+        engine_density_or_mass(
+          structure,
+          params,
+          data.frame(
+            trial = 1L,
+            component = "stop",
+            R = "STOP",
+            rt = rt,
+            stringsAsFactors = FALSE
+          )
+        )
+      }
+
+      rows <- list()
+      for (rt in c(0.20, 0.22, 0.24, 0.30, 0.38, 0.42)) {
+        rows[[length(rows) + 1L]] <- check_row(
+          "stim_selective_stop2",
+          paste0("STOP_rt_", format(rt, nsmall = 2)),
+          engine(rt),
+          stop_density(rt),
+          2e-3,
+          "Stim-selective stop response with all_of(S1, S2)"
+        )
+      }
+      do.call(rbind, rows)
+    },
+
     shared_gate_pair = function() {
       structure <- race_spec() |>
         add_accumulator("x1", "lognormal") |>
@@ -928,6 +1023,47 @@ validation_cases <- function() {
           manual,
           2e-3,
           "Guarded shared-gate tie with pooled readiness branch"
+        )
+      }
+      do.call(rbind, rows)
+    },
+
+    density_lift_competitor_subset = function() {
+      structure <- race_spec() |>
+        add_accumulator("a", "lognormal") |>
+        add_accumulator("b", "lognormal") |>
+        add_accumulator("gate", "lognormal") |>
+        add_accumulator("d", "lognormal") |>
+        add_outcome("AB_GATE", all_of(all_of("a", "b"), "gate")) |>
+        add_outcome("AB", all_of("a", "b")) |>
+        add_outcome("D", "d") |>
+        finalize_model()
+      params <- c(
+        a.m = log(0.29), a.s = 0.16, a.q = 0.00, a.t0 = 0.00,
+        b.m = log(0.36), b.s = 0.17, b.q = 0.00, b.t0 = 0.00,
+        gate.m = log(0.24), gate.s = 0.14, gate.q = 0.00, gate.t0 = 0.00,
+        d.m = log(0.50), d.s = 0.18, d.q = 0.00, d.t0 = 0.00
+      )
+      a <- acc_parts("a", params)
+      b <- acc_parts("b", params)
+      d <- acc_parts("d", params)
+
+      rows <- list()
+      for (rt in c(0.31, 0.46)) {
+        manual <- acc_pdf_scalar(rt, d) *
+          (1.0 - acc_cdf_scalar(rt, a) * acc_cdf_scalar(rt, b))
+        engine <- engine_density_or_mass(
+          structure,
+          params,
+          data.frame(trial = 1L, R = "D", rt = rt, stringsAsFactors = FALSE)
+        )
+        rows[[length(rows) + 1L]] <- check_row(
+          "density_lift_competitor_subset",
+          paste0("D_rt_", format(rt, nsmall = 2)),
+          engine,
+          manual,
+          2e-3,
+          "Competitor subset disjointification across density-bearing cells"
         )
       }
       do.call(rbind, rows)

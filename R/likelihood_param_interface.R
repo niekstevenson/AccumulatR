@@ -536,6 +536,16 @@ make_context <- function(structure, prep = NULL) {
   )
 }
 
+#' Return compiled exact complexity metrics
+#'
+#' @param context Context created with `make_context()`.
+#' @return A list with per-variant and total symbolic/compiled metrics.
+#' @export
+complexity_metrics <- function(context) {
+  context <- .validate_context(context)
+  context$cpp$complexity
+}
+
 .validate_context <- function(context) {
   if (inherits(context, "accumulatr_context")) {
     return(context)

@@ -28,16 +28,6 @@ enum class ObservedTrialKind : std::uint8_t {
   MissingAll = 2
 };
 
-enum class MissingAllProbabilityMode : std::uint8_t {
-  FiniteComplement = 0,
-  DirectNoResponse = 1
-};
-
-enum class MissingRtProbabilityMode : std::uint8_t {
-  BranchIntegral = 0,
-  FiniteComplementOfNoResponse = 1
-};
-
 enum class ObservationPlanValueKind : std::uint8_t {
   Probability = 0,
   Log = 1
@@ -47,10 +37,9 @@ enum class ObservationPlanOpKind : std::uint8_t {
   Constant = 0,
   LogDensity = 1,
   FiniteOutcomeProbability = 2,
-  NoResponseProbability = 3,
-  Complement = 4,
-  WeightedSum = 5,
-  Log = 6
+  Complement = 3,
+  WeightedSum = 4,
+  Log = 5
 };
 
 struct ObservationIndexSpan {
@@ -92,11 +81,8 @@ struct ComponentObservationPlan {
   semantic::Index missing_rt_state_offset{semantic::kInvalidIndex};
   std::vector<std::vector<ObservedBranch>> keep_by_code;
   std::vector<std::vector<ObservedBranch>> missing_rt_by_code;
-  std::vector<MissingRtProbabilityMode> missing_rt_mode_by_code;
   std::vector<ObservedBranch> finite_observed_branches;
   std::vector<ObservedBranch> missing_all_branches;
-  MissingAllProbabilityMode missing_all_mode{
-      MissingAllProbabilityMode::FiniteComplement};
   std::vector<ObservationProbabilityPlan> log_plans_by_state_code;
   std::vector<ObservationProbabilityPlan> probability_plans_by_state_code;
 };
@@ -250,16 +236,6 @@ inline ObservationProbabilityPlan make_weighted_probability_plan(
   return plan;
 }
 
-inline ObservationProbabilityPlan make_no_response_probability_plan() {
-  ObservationProbabilityPlan plan =
-      make_empty_observation_plan(ObservationPlanValueKind::Probability);
-  ObservationPlanOp root;
-  root.kind = ObservationPlanOpKind::NoResponseProbability;
-  root.value_kind = ObservationPlanValueKind::Probability;
-  plan.root = append_observation_plan_op(&plan, root);
-  return plan;
-}
-
 inline ObservationProbabilityPlan make_complement_probability_plan(
     const ObservationProbabilityPlan &inner) {
   if (inner.empty()) {
@@ -293,11 +269,6 @@ inline ObservationProbabilityPlan wrap_observation_plan_log(
 inline ObservationProbabilityPlan make_missing_rt_probability_plan(
     const ComponentObservationPlan &component_plan,
     const std::size_t observed_code) {
-  if (observed_code < component_plan.missing_rt_mode_by_code.size() &&
-      component_plan.missing_rt_mode_by_code[observed_code] ==
-          MissingRtProbabilityMode::FiniteComplementOfNoResponse) {
-    return make_complement_probability_plan(make_no_response_probability_plan());
-  }
   std::vector<ObservedBranch> branches;
   if (observed_code < component_plan.keep_by_code.size()) {
     branches.insert(
@@ -318,10 +289,6 @@ inline ObservationProbabilityPlan make_missing_rt_probability_plan(
 
 inline ObservationProbabilityPlan make_missing_all_probability_plan(
     const ComponentObservationPlan &component_plan) {
-  if (component_plan.missing_all_mode ==
-      MissingAllProbabilityMode::DirectNoResponse) {
-    return make_no_response_probability_plan();
-  }
   return make_complement_probability_plan(
       make_weighted_probability_plan(
           component_plan.finite_observed_branches,
@@ -399,8 +366,6 @@ inline void prune_component_observation_planning_state(
   std::vector<std::vector<ObservedBranch>>().swap(component_plan->keep_by_code);
   std::vector<std::vector<ObservedBranch>>().swap(
       component_plan->missing_rt_by_code);
-  std::vector<MissingRtProbabilityMode>().swap(
-      component_plan->missing_rt_mode_by_code);
   std::vector<ObservedBranch>().swap(component_plan->finite_observed_branches);
   std::vector<ObservedBranch>().swap(component_plan->missing_all_branches);
 }
@@ -551,9 +516,6 @@ inline std::vector<ComponentObservationPlan> build_component_observation_plans(
     plan.semantic_backend = variant.semantic_backend;
     plan.keep_by_code.assign(n_outcome_codes + 1U, {});
     plan.missing_rt_by_code.assign(n_outcome_codes + 1U, {});
-    plan.missing_rt_mode_by_code.assign(
-        n_outcome_codes + 1U,
-        MissingRtProbabilityMode::BranchIntegral);
   }
 
   Rcpp::List outcomes(prep["outcomes"]);

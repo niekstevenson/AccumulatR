@@ -5,6 +5,129 @@
 #include "eval/likelihood_context.hpp"
 #include "eval/observed_kernel.hpp"
 
+namespace {
+
+Rcpp::List complexity_metrics_list(
+    const accumulatr::eval::detail::NativeLikelihoodContext &ctx) {
+  const auto n = ctx.exact_plans.size();
+  Rcpp::IntegerVector variant_index(n);
+  Rcpp::IntegerVector symbolic_regions(n);
+  Rcpp::IntegerVector symbolic_cells(n);
+  Rcpp::IntegerVector max_symbolic_cells_per_region(n);
+  Rcpp::IntegerVector negative_symbolic_cells(n);
+  Rcpp::IntegerVector overlapping_symbolic_cell_pairs(n);
+  Rcpp::IntegerVector expr_relation_atoms(n);
+  Rcpp::IntegerVector compiled_roots(n);
+  Rcpp::IntegerVector compiled_nodes(n);
+  Rcpp::IntegerVector integral_nodes(n);
+  Rcpp::IntegerVector integral_kernels(n);
+  Rcpp::IntegerVector source_product_integral_kernels(n);
+  Rcpp::IntegerVector generic_integral_kernels(n);
+  Rcpp::IntegerVector max_integral_depth(n);
+
+  int total_symbolic_regions = 0;
+  int total_symbolic_cells = 0;
+  int total_negative_symbolic_cells = 0;
+  int total_overlapping_symbolic_cell_pairs = 0;
+  int total_expr_relation_atoms = 0;
+  int total_compiled_roots = 0;
+  int total_compiled_nodes = 0;
+  int total_integral_nodes = 0;
+  int total_integral_kernels = 0;
+  int total_source_product_integral_kernels = 0;
+  int total_generic_integral_kernels = 0;
+  int aggregate_max_symbolic_cells = 0;
+  int aggregate_max_integral_depth = 0;
+
+  for (std::size_t i = 0; i < n; ++i) {
+    const auto &metrics = ctx.exact_plans[i].complexity;
+    variant_index[i] = static_cast<int>(i);
+    symbolic_regions[i] = metrics.symbolic_region_count;
+    symbolic_cells[i] = metrics.symbolic_cell_count;
+    max_symbolic_cells_per_region[i] =
+        metrics.max_symbolic_cells_per_region;
+    negative_symbolic_cells[i] = metrics.negative_symbolic_cell_count;
+    overlapping_symbolic_cell_pairs[i] =
+        metrics.overlapping_symbolic_cell_pair_count;
+    expr_relation_atoms[i] = metrics.expr_relation_atom_count;
+    compiled_roots[i] = metrics.compiled_root_count;
+    compiled_nodes[i] = metrics.compiled_node_count;
+    integral_nodes[i] = metrics.integral_node_count;
+    integral_kernels[i] = metrics.integral_kernel_count;
+    source_product_integral_kernels[i] =
+        metrics.source_product_integral_kernel_count;
+    generic_integral_kernels[i] = metrics.generic_integral_kernel_count;
+    max_integral_depth[i] = metrics.max_integral_depth;
+
+    total_symbolic_regions += metrics.symbolic_region_count;
+    total_symbolic_cells += metrics.symbolic_cell_count;
+    total_negative_symbolic_cells += metrics.negative_symbolic_cell_count;
+    total_overlapping_symbolic_cell_pairs +=
+        metrics.overlapping_symbolic_cell_pair_count;
+    total_expr_relation_atoms += metrics.expr_relation_atom_count;
+    total_compiled_roots += metrics.compiled_root_count;
+    total_compiled_nodes += metrics.compiled_node_count;
+    total_integral_nodes += metrics.integral_node_count;
+    total_integral_kernels += metrics.integral_kernel_count;
+    total_source_product_integral_kernels +=
+        metrics.source_product_integral_kernel_count;
+    total_generic_integral_kernels += metrics.generic_integral_kernel_count;
+    aggregate_max_symbolic_cells =
+        std::max(
+            aggregate_max_symbolic_cells,
+            static_cast<int>(metrics.max_symbolic_cells_per_region));
+    aggregate_max_integral_depth =
+        std::max(
+            aggregate_max_integral_depth,
+            static_cast<int>(metrics.max_integral_depth));
+  }
+
+  return Rcpp::List::create(
+      Rcpp::Named("variants") = Rcpp::DataFrame::create(
+          Rcpp::Named("variant_index") = variant_index,
+          Rcpp::Named("symbolic_regions") = symbolic_regions,
+          Rcpp::Named("symbolic_cells") = symbolic_cells,
+          Rcpp::Named("max_symbolic_cells_per_region") =
+              max_symbolic_cells_per_region,
+          Rcpp::Named("negative_symbolic_cells") =
+              negative_symbolic_cells,
+          Rcpp::Named("overlapping_symbolic_cell_pairs") =
+              overlapping_symbolic_cell_pairs,
+          Rcpp::Named("expr_relation_atoms") = expr_relation_atoms,
+          Rcpp::Named("compiled_roots") = compiled_roots,
+          Rcpp::Named("compiled_nodes") = compiled_nodes,
+          Rcpp::Named("integral_nodes") = integral_nodes,
+          Rcpp::Named("integral_kernels") = integral_kernels,
+          Rcpp::Named("source_product_integral_kernels") =
+              source_product_integral_kernels,
+          Rcpp::Named("generic_integral_kernels") =
+              generic_integral_kernels,
+          Rcpp::Named("max_integral_depth") = max_integral_depth),
+      Rcpp::Named("total") = Rcpp::List::create(
+          Rcpp::Named("symbolic_regions") = total_symbolic_regions,
+          Rcpp::Named("symbolic_cells") = total_symbolic_cells,
+          Rcpp::Named("max_symbolic_cells_per_region") =
+              aggregate_max_symbolic_cells,
+          Rcpp::Named("negative_symbolic_cells") =
+              total_negative_symbolic_cells,
+          Rcpp::Named("overlapping_symbolic_cell_pairs") =
+              total_overlapping_symbolic_cell_pairs,
+          Rcpp::Named("expr_relation_atoms") =
+              total_expr_relation_atoms,
+          Rcpp::Named("compiled_roots") = total_compiled_roots,
+          Rcpp::Named("compiled_nodes") = total_compiled_nodes,
+          Rcpp::Named("integral_nodes") = total_integral_nodes,
+          Rcpp::Named("integral_kernels") = total_integral_kernels,
+          Rcpp::Named("source_product_integral_kernels") =
+              total_source_product_integral_kernels,
+          Rcpp::Named("generic_integral_kernels") =
+              total_generic_integral_kernels,
+          Rcpp::Named("max_integral_depth") =
+              aggregate_max_integral_depth));
+}
+
+} // namespace
+
 // [[Rcpp::export]]
 SEXP semantic_make_likelihood_context_prep_cpp(SEXP prepSEXP) {
   Rcpp::List prep(prepSEXP);
@@ -14,9 +137,9 @@ SEXP semantic_make_likelihood_context_prep_cpp(SEXP prepSEXP) {
       true);
   return Rcpp::List::create(
       Rcpp::Named("native") = ptr,
+      Rcpp::Named("complexity") = complexity_metrics_list(*ptr),
       Rcpp::Named("observed_identity") = ptr->observed_identity,
-      Rcpp::Named("identity_backend") = "exact",
-      Rcpp::Named("ranked_supported") = ptr->ranked_supported);
+      Rcpp::Named("identity_backend") = "exact");
 }
 
 // [[Rcpp::export]]

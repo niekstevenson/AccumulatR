@@ -2150,7 +2150,8 @@ inline std::vector<ExactOrderRegionAxis> exact_order_region_pair_axes(
 
 inline bool exact_order_region_try_merge_axis_partition_step(
     ExactRegionCell *lhs,
-    ExactRegionCell *rhs) {
+    ExactRegionCell *rhs,
+    const bool allow_density_segments) {
   if (lhs->sign != rhs->sign || lhs->impossible || rhs->impossible) {
     return false;
   }
@@ -2161,6 +2162,13 @@ inline bool exact_order_region_try_merge_axis_partition_step(
         !exact_order_region_simple_axis_segment(*rhs, axis, &rhs_segment) ||
         lhs_segment.kind == ExactOrderRegionAxisSegmentKind::None ||
         rhs_segment.kind == ExactOrderRegionAxisSegmentKind::None) {
+      continue;
+    }
+    // Interval segments carry density binders; merging them is projection
+    // algebra, not pure region canonicalization.
+    if (!allow_density_segments &&
+        (lhs_segment.kind == ExactOrderRegionAxisSegmentKind::Interval ||
+         rhs_segment.kind == ExactOrderRegionAxisSegmentKind::Interval)) {
       continue;
     }
     auto lhs_rest =
@@ -2453,7 +2461,8 @@ inline bool exact_order_region_try_merge_boolean_partition_step(
 }
 
 inline bool exact_order_region_try_minimize_union_step(
-    std::vector<ExactRegionCell> *terms) {
+    std::vector<ExactRegionCell> *terms,
+    const bool allow_density_segments) {
   for (std::size_t i = 0; i < terms->size(); ++i) {
     if ((*terms)[i].sign == 0.0) {
       continue;
@@ -2465,7 +2474,7 @@ inline bool exact_order_region_try_minimize_union_step(
       if (exact_order_region_try_merge_boolean_partition_step(
               &(*terms)[i], &(*terms)[j]) ||
           exact_order_region_try_merge_axis_partition_step(
-              &(*terms)[i], &(*terms)[j])) {
+              &(*terms)[i], &(*terms)[j], allow_density_segments)) {
         return true;
       }
     }
@@ -2474,8 +2483,10 @@ inline bool exact_order_region_try_minimize_union_step(
 }
 
 inline void exact_order_region_minimize_union_cells(
-    std::vector<ExactRegionCell> *terms) {
-  while (exact_order_region_try_minimize_union_step(terms)) {
+    std::vector<ExactRegionCell> *terms,
+    const bool allow_density_segments) {
+  while (exact_order_region_try_minimize_union_step(
+      terms, allow_density_segments)) {
   }
 }
 
@@ -2816,6 +2827,7 @@ inline ExactOrderRegionExpr exact_order_region_union(
 inline ExactOrderRegionExpr exact_order_region_minimize_positive_union(
     ExactOrderRegionExpr expr) {
   expr = exact_order_region_simplify(std::move(expr));
+  exact_order_region_minimize_union_cells(&expr.terms, true);
   for (std::size_t i = 0; i < expr.terms.size(); ++i) {
     if (expr.terms[i].sign <= 0.0 || expr.terms[i].impossible) {
       continue;
@@ -2855,7 +2867,7 @@ inline ExactOrderRegionExpr exact_order_region_simplify(
       simplified.push_back(std::move(term));
     }
   }
-  exact_order_region_minimize_union_cells(&simplified);
+  exact_order_region_minimize_union_cells(&simplified, false);
   for (std::size_t i = 0; i < simplified.size(); ++i) {
     if (simplified[i].sign == 0.0) {
       continue;

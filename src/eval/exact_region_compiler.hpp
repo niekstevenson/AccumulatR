@@ -1544,23 +1544,6 @@ inline bool exact_order_region_factor_context_overlaps_expr(
   return false;
 }
 
-inline bool exact_order_region_find_materialized_relation(
-    const ExactVariantPlan &plan,
-    const ExactRegionCell &term,
-    ExactOrderRegionExprValueFactor *out) {
-  for (const auto &factor : exact_region_expr_atoms(term)) {
-    if (factor.density) {
-      continue;
-    }
-    if (exact_order_region_factor_context_overlaps_expr(
-            plan, term, factor.expr_id)) {
-      *out = factor;
-      return true;
-    }
-  }
-  return false;
-}
-
 inline bool exact_order_region_expand_relation_factor(
     const ExactVariantPlan &plan,
     const ExactOrderRegionExprValueFactor &factor,
@@ -1583,55 +1566,6 @@ inline bool exact_order_region_expand_relation_factor(
   }
   return exact_order_region_expr_after(
       plan, factor.expr_id, factor.time_id, builder, out);
-}
-
-inline bool exact_order_region_materialize_coupled_relations(
-    const ExactVariantPlan &plan,
-    ExactOrderRegionExpr expr,
-    ExactOrderRegionBuilder *builder,
-    ExactOrderRegionExpr *out) {
-  expr = exact_order_region_simplify(std::move(expr));
-  while (true) {
-    bool changed = false;
-    ExactOrderRegionExpr next = exact_order_region_zero();
-    for (auto term : expr.terms) {
-      exact_order_region_canonicalize_term(&term);
-      if (term.impossible || term.sign == 0.0) {
-        continue;
-      }
-      ExactOrderRegionExprValueFactor factor;
-      if (!exact_order_region_find_materialized_relation(plan, term, &factor)) {
-        next.terms.push_back(std::move(term));
-        continue;
-      }
-      changed = true;
-      ExactRegionCell residual = std::move(term);
-      if (!exact_order_region_remove_expr_value_atom(&residual, factor)) {
-        return false;
-      }
-      exact_order_region_canonicalize_term(&residual);
-      if (residual.impossible || residual.sign == 0.0) {
-        continue;
-      }
-      ExactOrderRegionExpr residual_expr;
-      residual_expr.terms.push_back(std::move(residual));
-      ExactOrderRegionExpr relation;
-      if (!exact_order_region_expand_relation_factor(
-              plan, factor, builder, &relation)) {
-        return false;
-      }
-      auto materialized =
-          exact_order_region_simplify(
-              exact_order_region_conjoin(residual_expr, relation));
-      exact_order_region_append_expr(&next, std::move(materialized));
-    }
-    next = exact_order_region_simplify(std::move(next));
-    if (!changed) {
-      *out = std::move(next);
-      return true;
-    }
-    expr = std::move(next);
-  }
 }
 
 inline void exact_complexity_observe_region(
@@ -1696,17 +1630,35 @@ inline bool exact_order_region_probability_root(
     auto region =
         exact_order_region_simplify(
             exact_order_region_conjoin(branch.expr, non_win));
-    if (!exact_order_region_materialize_coupled_relations(
-            *plan, std::move(region), &builder, &region)) {
-      throw std::runtime_error(
-          "exact order-region relation materialization failed");
-    }
     region = exact_order_region_minimize_positive_union(std::move(region));
+    const ExactProjectionRelationOps projection_ops{
+        exact_order_region_factor_context_overlaps_expr,
+        exact_order_region_expand_relation_factor};
+    ExactOrderRegionExpr planned_metric_region;
+    for (const auto &term : region.terms) {
+      ExactProjectionPlan projection_plan;
+      if (!exact_projection_plan_cell(
+              *plan,
+              term,
+              {},
+              {},
+              &projection_ops,
+              builder,
+              &projection_plan)) {
+        throw std::runtime_error("exact order-region projection planning failed");
+      }
+      builder = projection_plan.builder_after;
+      exact_projection_collect_metric_cells(
+          projection_plan, &planned_metric_region);
+    }
+    region =
+        exact_order_region_minimize_positive_union(
+            exact_order_region_simplify(std::move(planned_metric_region)));
     exact_complexity_observe_region(plan, region);
     for (const auto &term : region.terms) {
       semantic::Index term_root{semantic::kInvalidIndex};
       if (!exact_order_region_lower_term_root(
-              plan, term, 0, &builder, &term_root)) {
+              plan, term, 0, &builder, &projection_ops, &term_root)) {
         throw std::runtime_error("exact order-region term lowering failed");
       }
       terms.push_back(

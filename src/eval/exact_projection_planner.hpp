@@ -485,6 +485,76 @@ struct ExactOrderRegionProjectionCandidate {
   ExactOrderRegionProjectionBounds bounds;
 };
 
+struct ExactProjectionRelationOps {
+  bool (*context_overlaps_expr)(const ExactVariantPlan &,
+                                const ExactRegionCell &,
+                                semantic::Index){nullptr};
+  bool (*expand_relation)(const ExactVariantPlan &,
+                          const ExactOrderRegionExprValueFactor &,
+                          ExactOrderRegionBuilder *,
+                          ExactOrderRegionExpr *){nullptr};
+};
+
+struct ExactProjectionCost {
+  semantic::Index generic_integral_nodes{0};
+  semantic::Index max_integral_depth{0};
+  semantic::Index integral_nodes{0};
+  semantic::Index symbolic_cells{0};
+  semantic::Index compiled_nodes{0};
+  semantic::Index latent_times{0};
+};
+
+inline bool exact_projection_cost_less(const ExactProjectionCost &lhs,
+                                       const ExactProjectionCost &rhs) {
+  if (lhs.generic_integral_nodes != rhs.generic_integral_nodes) {
+    return lhs.generic_integral_nodes < rhs.generic_integral_nodes;
+  }
+  if (lhs.max_integral_depth != rhs.max_integral_depth) {
+    return lhs.max_integral_depth < rhs.max_integral_depth;
+  }
+  if (lhs.integral_nodes != rhs.integral_nodes) {
+    return lhs.integral_nodes < rhs.integral_nodes;
+  }
+  if (lhs.symbolic_cells != rhs.symbolic_cells) {
+    return lhs.symbolic_cells < rhs.symbolic_cells;
+  }
+  if (lhs.compiled_nodes != rhs.compiled_nodes) {
+    return lhs.compiled_nodes < rhs.compiled_nodes;
+  }
+  return lhs.latent_times < rhs.latent_times;
+}
+
+inline ExactProjectionCost exact_projection_cost_sum(
+    const ExactProjectionCost &lhs,
+    const ExactProjectionCost &rhs) {
+  return ExactProjectionCost{
+      lhs.generic_integral_nodes + rhs.generic_integral_nodes,
+      std::max(lhs.max_integral_depth, rhs.max_integral_depth),
+      lhs.integral_nodes + rhs.integral_nodes,
+      lhs.symbolic_cells + rhs.symbolic_cells,
+      lhs.compiled_nodes + rhs.compiled_nodes,
+      lhs.latent_times + rhs.latent_times};
+}
+
+enum class ExactProjectionPlanKind : std::uint8_t {
+  Terminal = 0,
+  Product = 1,
+  Sum = 2
+};
+
+struct ExactProjectionFactor {
+  ExactOrderRegionProjectionCandidate candidate;
+};
+
+struct ExactProjectionPlan {
+  ExactProjectionPlanKind kind{ExactProjectionPlanKind::Terminal};
+  ExactProjectionCost cost;
+  ExactOrderRegionBuilder builder_after;
+  std::vector<ExactProjectionFactor> factors;
+  std::vector<ExactProjectionPlan> children;
+  ExactRegionCell residual;
+};
+
 inline bool exact_order_region_contains_time_id(
     const std::vector<semantic::Index> &time_ids,
     const semantic::Index time_id) {
@@ -626,6 +696,69 @@ inline bool exact_order_region_density_binder_projectable(
   return true;
 }
 
+inline void exact_projection_append_latent_times(
+    std::vector<semantic::Index> *dst,
+    const std::vector<semantic::Index> &src) {
+  for (const auto time_id : src) {
+    exact_order_region_append_latent_time_id(dst, time_id);
+  }
+}
+
+inline void exact_projection_append_factor_latent_times(
+    std::vector<semantic::Index> *dst,
+    const ExactProjectionFactor &factor) {
+  exact_projection_append_latent_times(
+      dst, factor.candidate.bounds.lower_time_ids);
+  exact_projection_append_latent_times(
+      dst, factor.candidate.bounds.upper_time_ids);
+}
+
+inline void exact_projection_append_residual_latent_times(
+    std::vector<semantic::Index> *latent_time_ids,
+    const ExactRegionCell &residual) {
+  for (const auto &exact : exact_region_exact_source_atoms(residual)) {
+    exact_order_region_append_latent_time_id(latent_time_ids, exact.time_id);
+  }
+  for (const auto &bound : exact_region_lower_source_atoms(residual)) {
+    exact_order_region_append_latent_time_id(latent_time_ids, bound.time_id);
+  }
+  for (const auto &bound : exact_region_upper_source_atoms(residual)) {
+    exact_order_region_append_latent_time_id(latent_time_ids, bound.time_id);
+  }
+  for (const auto &factor : exact_region_expr_atoms(residual)) {
+    exact_order_region_append_latent_time_id(latent_time_ids, factor.time_id);
+  }
+  for (const auto &order : exact_region_time_order_atoms(residual)) {
+    exact_order_region_append_latent_time_id(
+        latent_time_ids, order.before_time_id);
+    exact_order_region_append_latent_time_id(
+        latent_time_ids, order.after_time_id);
+  }
+}
+
+inline ExactProjectionCost exact_projection_terminal_cost(
+    const ExactRegionCell &residual,
+    const std::vector<semantic::Index> &projected_latent_time_ids) {
+  std::vector<semantic::Index> latent_time_ids = projected_latent_time_ids;
+  exact_projection_append_residual_latent_times(&latent_time_ids, residual);
+  const auto latent_count =
+      static_cast<semantic::Index>(latent_time_ids.size());
+  const auto atom_count =
+      static_cast<semantic::Index>(residual.atoms.size());
+  return ExactProjectionCost{
+      latent_count,
+      latent_count,
+      latent_count,
+      1,
+      static_cast<semantic::Index>(1 + atom_count + residual.equalities.size()),
+      latent_count};
+}
+
+inline semantic::Index exact_projection_factor_node(
+    ExactVariantPlan *plan,
+    const ExactProjectionFactor &factor,
+    const semantic::Index source_view_id);
+
 inline bool exact_order_region_time_has_density(
     const ExactRegionCell &term,
     const semantic::Index time_id) {
@@ -702,13 +835,12 @@ inline bool exact_order_region_cell_has_positive_measure(
   return true;
 }
 
-inline bool exact_order_region_find_projection_candidate(
+inline std::vector<ExactOrderRegionProjectionCandidate>
+exact_order_region_projection_candidates(
     const ExactVariantPlan &plan,
     const ExactRegionCell &term,
-    const std::vector<semantic::Index> &blocked_time_ids,
-    ExactOrderRegionProjectionCandidate *out) {
-  bool found = false;
-  std::size_t best_score = static_cast<std::size_t>(-1);
+    const std::vector<semantic::Index> &blocked_time_ids) {
+  std::vector<ExactOrderRegionProjectionCandidate> out;
   const auto consider =
       [&](const ExactOrderRegionDensityBinder &binder) {
         ExactOrderRegionProjectionBounds bounds;
@@ -717,16 +849,9 @@ inline bool exact_order_region_find_projection_candidate(
                 term, binder, blocked_time_ids, &bounds, &score)) {
           return;
         }
-        if (!found || score < best_score ||
-            (score == best_score &&
-             (binder.kind < out->binder.kind ||
-              (binder.kind == out->binder.kind &&
-               binder.subject_id < out->binder.subject_id)))) {
-          out->binder = binder;
-          out->bounds = std::move(bounds);
-          best_score = score;
-          found = true;
-        }
+        out.push_back(
+            ExactOrderRegionProjectionCandidate{
+                binder, std::move(bounds)});
       };
   for (const auto &exact : exact_region_exact_source_atoms(term)) {
     if (exact.source_id == semantic::kInvalidIndex ||
@@ -753,7 +878,26 @@ inline bool exact_order_region_find_projection_candidate(
             factor.expr_id,
             factor.time_id});
   }
-  return found;
+  std::sort(
+      out.begin(),
+      out.end(),
+      [](const auto &lhs, const auto &rhs) {
+        const auto lhs_deps =
+            exact_order_region_projection_latent_dependency_count(lhs.bounds);
+        const auto rhs_deps =
+            exact_order_region_projection_latent_dependency_count(rhs.bounds);
+        if (lhs_deps != rhs_deps) {
+          return lhs_deps < rhs_deps;
+        }
+        if (lhs.binder.kind != rhs.binder.kind) {
+          return lhs.binder.kind < rhs.binder.kind;
+        }
+        if (lhs.binder.subject_id != rhs.binder.subject_id) {
+          return lhs.binder.subject_id < rhs.binder.subject_id;
+        }
+        return lhs.binder.time_id < rhs.binder.time_id;
+      });
+  return out;
 }
 
 inline semantic::Index exact_order_region_projection_node(
@@ -776,25 +920,22 @@ inline semantic::Index exact_order_region_projection_node(
       source_view_id);
 }
 
-inline bool exact_order_region_project_density_binder(
+inline semantic::Index exact_projection_factor_node(
     ExactVariantPlan *plan,
+    const ExactProjectionFactor &factor,
+    const semantic::Index source_view_id) {
+  return exact_order_region_projection_node(
+      plan, factor.candidate, source_view_id);
+}
+
+inline bool exact_projection_apply_density_projection(
     ExactRegionCell *term,
     const ExactOrderRegionProjectionCandidate &candidate,
-    const semantic::Index source_view_id,
-    std::vector<semantic::Index> *factors,
-    std::vector<semantic::Index> *factor_latent_time_ids,
     std::vector<semantic::Index> *blocked_time_ids) {
-  const auto node =
-      exact_order_region_projection_node(plan, candidate, source_view_id);
-  factors->push_back(node);
   for (const auto time_id : candidate.bounds.lower_time_ids) {
-    exact_order_region_append_latent_time_id(
-        factor_latent_time_ids, time_id);
     exact_order_region_append_latent_time_id(blocked_time_ids, time_id);
   }
   for (const auto time_id : candidate.bounds.upper_time_ids) {
-    exact_order_region_append_latent_time_id(
-        factor_latent_time_ids, time_id);
     exact_order_region_append_latent_time_id(blocked_time_ids, time_id);
   }
   bool removed = false;
@@ -820,37 +961,328 @@ inline bool exact_order_region_project_density_binder(
   return !term->impossible;
 }
 
-inline bool exact_order_region_project_density_binders(
-    ExactVariantPlan *plan,
-    ExactRegionCell *term,
-    const semantic::Index source_view_id,
-    std::vector<semantic::Index> *factors,
-    std::vector<semantic::Index> *factor_latent_time_ids) {
-  std::vector<semantic::Index> blocked_time_ids;
-  while (true) {
-    ExactOrderRegionProjectionCandidate candidate;
-    if (!exact_order_region_find_projection_candidate(
-            *plan, *term, blocked_time_ids, &candidate)) {
-      break;
-    }
-    if (!exact_order_region_project_density_binder(
-            plan,
-            term,
-            candidate,
-            source_view_id,
-            factors,
-            factor_latent_time_ids,
-            &blocked_time_ids)) {
-      return false;
+inline bool exact_projection_relation_factor_coupled(
+    const ExactVariantPlan &plan,
+    const ExactRegionCell &term,
+    const ExactOrderRegionExprValueFactor &factor,
+    const ExactProjectionRelationOps *ops) {
+  return ops != nullptr &&
+         ops->context_overlaps_expr != nullptr &&
+         !factor.density &&
+         ops->context_overlaps_expr(plan, term, factor.expr_id);
+}
+
+inline std::vector<ExactOrderRegionExprValueFactor>
+exact_projection_coupled_relation_factors(
+    const ExactVariantPlan &plan,
+    const ExactRegionCell &term,
+    const ExactProjectionRelationOps *ops) {
+  std::vector<ExactOrderRegionExprValueFactor> out;
+  for (const auto &factor : exact_region_expr_atoms(term)) {
+    if (exact_projection_relation_factor_coupled(plan, term, factor, ops)) {
+      out.push_back(factor);
     }
   }
+  std::sort(out.begin(), out.end(), exact_order_region_expr_factor_less);
+  out.erase(
+      std::unique(
+          out.begin(),
+          out.end(),
+          [](const auto &lhs, const auto &rhs) {
+            return lhs.expr_id == rhs.expr_id &&
+                   lhs.time_id == rhs.time_id &&
+                   lhs.before == rhs.before &&
+                   lhs.inclusive == rhs.inclusive &&
+                   lhs.density == rhs.density;
+          }),
+      out.end());
+  return out;
+}
+
+inline bool exact_projection_materialize_relation_factor(
+    const ExactVariantPlan &plan,
+    const ExactRegionCell &term,
+    const ExactOrderRegionExprValueFactor &factor,
+    const ExactProjectionRelationOps &ops,
+    ExactOrderRegionBuilder *builder,
+    ExactOrderRegionExpr *out) {
+  if (ops.expand_relation == nullptr || factor.density) {
+    return false;
+  }
+  ExactRegionCell residual = term;
+  if (!exact_order_region_remove_expr_value_atom(&residual, factor)) {
+    return false;
+  }
+  exact_order_region_canonicalize_term(&residual);
+  if (residual.impossible || residual.sign == 0.0) {
+    *out = exact_order_region_zero();
+    return true;
+  }
+  ExactOrderRegionExpr residual_expr;
+  residual_expr.terms.push_back(std::move(residual));
+  ExactOrderRegionExpr relation;
+  if (!ops.expand_relation(plan, factor, builder, &relation)) {
+    return false;
+  }
+  *out =
+      exact_order_region_minimize_positive_union(
+          exact_order_region_simplify(
+              exact_order_region_conjoin(
+                  std::move(residual_expr), std::move(relation))));
   return true;
 }
 
-inline bool exact_order_region_lower_term_node(
+inline ExactProjectionCost exact_projection_factor_cost(
+    const ExactProjectionFactor &factor) {
+  const auto latent_count =
+      static_cast<semantic::Index>(
+          exact_order_region_projection_latent_dependency_count(
+              factor.candidate.bounds));
+  const auto lower_count =
+      static_cast<semantic::Index>(
+          factor.candidate.bounds.lower_time_ids.size());
+  const auto upper_count =
+      static_cast<semantic::Index>(
+          factor.candidate.bounds.upper_time_ids.size());
+  return ExactProjectionCost{
+      0,
+      0,
+      latent_count,
+      0,
+      static_cast<semantic::Index>(1 + lower_count + upper_count),
+      latent_count};
+}
+
+inline bool exact_projection_plan_cell(
+    const ExactVariantPlan &plan,
+    ExactRegionCell term,
+    std::vector<semantic::Index> blocked_time_ids,
+    std::vector<semantic::Index> projected_latent_time_ids,
+    const ExactProjectionRelationOps *ops,
+    ExactOrderRegionBuilder builder,
+    ExactProjectionPlan *out);
+
+inline bool exact_projection_candidate_better(
+    const bool have_best,
+    const ExactProjectionPlan &candidate,
+    const ExactProjectionPlan &best) {
+  return !have_best || exact_projection_cost_less(candidate.cost, best.cost);
+}
+
+inline bool exact_projection_make_terminal_plan(
+    ExactRegionCell term,
+    const std::vector<semantic::Index> &projected_latent_time_ids,
+    ExactOrderRegionBuilder builder,
+    ExactProjectionPlan *out) {
+  exact_order_region_canonicalize_term(&term);
+  if (term.impossible || term.sign == 0.0) {
+    return false;
+  }
+  out->kind = ExactProjectionPlanKind::Terminal;
+  out->residual = std::move(term);
+  out->children.clear();
+  out->factors.clear();
+  out->builder_after = builder;
+  out->cost =
+      exact_projection_terminal_cost(
+          out->residual, projected_latent_time_ids);
+  return true;
+}
+
+inline void exact_projection_make_zero_plan(
+    ExactOrderRegionBuilder builder,
+    ExactProjectionPlan *out) {
+  out->kind = ExactProjectionPlanKind::Sum;
+  out->cost = ExactProjectionCost{};
+  out->builder_after = builder;
+  out->factors.clear();
+  out->children.clear();
+  out->residual = ExactRegionCell{};
+}
+
+inline bool exact_projection_make_project_plan(
+    const ExactVariantPlan &plan,
+    const ExactRegionCell &term,
+    const ExactOrderRegionProjectionCandidate &candidate,
+    const std::vector<semantic::Index> &blocked_time_ids,
+    const std::vector<semantic::Index> &projected_latent_time_ids,
+    const ExactProjectionRelationOps *ops,
+    ExactOrderRegionBuilder builder,
+    ExactProjectionPlan *out) {
+  auto next_term = term;
+  auto next_blocked_time_ids = blocked_time_ids;
+  if (!exact_projection_apply_density_projection(
+          &next_term, candidate, &next_blocked_time_ids)) {
+    return false;
+  }
+  auto next_projected_latent_time_ids = projected_latent_time_ids;
+  exact_projection_append_latent_times(
+      &next_projected_latent_time_ids, candidate.bounds.lower_time_ids);
+  exact_projection_append_latent_times(
+      &next_projected_latent_time_ids, candidate.bounds.upper_time_ids);
+
+  ExactProjectionPlan child;
+  if (!exact_projection_plan_cell(
+          plan,
+          std::move(next_term),
+          std::move(next_blocked_time_ids),
+          std::move(next_projected_latent_time_ids),
+          ops,
+          builder,
+          &child)) {
+    return false;
+  }
+  ExactProjectionFactor factor{candidate};
+  out->kind = ExactProjectionPlanKind::Product;
+  out->factors.clear();
+  out->factors.push_back(factor);
+  out->children.clear();
+  out->children.push_back(std::move(child));
+  out->residual = ExactRegionCell{};
+  out->builder_after = out->children.front().builder_after;
+  out->cost =
+      exact_projection_cost_sum(
+          exact_projection_factor_cost(factor),
+          out->children.front().cost);
+  return true;
+}
+
+inline bool exact_projection_make_materialized_plan(
+    const ExactVariantPlan &plan,
+    const ExactRegionCell &term,
+    const ExactOrderRegionExprValueFactor &factor,
+    const std::vector<semantic::Index> &blocked_time_ids,
+    const std::vector<semantic::Index> &projected_latent_time_ids,
+    const ExactProjectionRelationOps &ops,
+    ExactOrderRegionBuilder builder,
+    ExactProjectionPlan *out) {
+  ExactOrderRegionExpr materialized;
+  if (!exact_projection_materialize_relation_factor(
+          plan, term, factor, ops, &builder, &materialized)) {
+    return false;
+  }
+  materialized = exact_order_region_simplify(std::move(materialized));
+  if (materialized.terms.empty()) {
+    exact_projection_make_zero_plan(builder, out);
+    return true;
+  }
+
+  out->kind = ExactProjectionPlanKind::Sum;
+  out->factors.clear();
+  out->children.clear();
+  out->residual = ExactRegionCell{};
+  out->cost = ExactProjectionCost{};
+  out->cost.symbolic_cells =
+      static_cast<semantic::Index>(materialized.terms.size());
+
+  bool have_child = false;
+  for (auto child_term : materialized.terms) {
+    ExactProjectionPlan child;
+    if (!exact_projection_plan_cell(
+            plan,
+            std::move(child_term),
+            blocked_time_ids,
+            projected_latent_time_ids,
+            &ops,
+            builder,
+            &child)) {
+      continue;
+    }
+    builder = child.builder_after;
+    out->cost = exact_projection_cost_sum(out->cost, child.cost);
+    out->children.push_back(std::move(child));
+    have_child = true;
+  }
+  if (!have_child) {
+    return false;
+  }
+  out->builder_after = builder;
+  return true;
+}
+
+inline bool exact_projection_plan_cell(
+    const ExactVariantPlan &plan,
+    ExactRegionCell term,
+    std::vector<semantic::Index> blocked_time_ids,
+    std::vector<semantic::Index> projected_latent_time_ids,
+    const ExactProjectionRelationOps *ops,
+    ExactOrderRegionBuilder builder,
+    ExactProjectionPlan *out) {
+  exact_order_region_canonicalize_term(&term);
+  if (term.impossible || term.sign == 0.0) {
+    exact_projection_make_zero_plan(builder, out);
+    return true;
+  }
+
+  ExactProjectionPlan best;
+  bool have_best = false;
+  const auto coupled_relations =
+      exact_projection_coupled_relation_factors(plan, term, ops);
+  const auto projection_candidates =
+      exact_order_region_projection_candidates(
+          plan, term, blocked_time_ids);
+  if (coupled_relations.empty()) {
+    ExactProjectionPlan terminal;
+    if (exact_projection_make_terminal_plan(
+            term, projected_latent_time_ids, builder, &terminal)) {
+      best = std::move(terminal);
+      have_best = true;
+    }
+  }
+
+  for (const auto &candidate : projection_candidates) {
+    ExactProjectionPlan projected;
+    if (!exact_projection_make_project_plan(
+            plan,
+            term,
+            candidate,
+            blocked_time_ids,
+            projected_latent_time_ids,
+            ops,
+            builder,
+            &projected)) {
+      continue;
+    }
+    if (exact_projection_candidate_better(have_best, projected, best)) {
+      best = std::move(projected);
+      have_best = true;
+    }
+  }
+
+  if (ops != nullptr && ops->expand_relation != nullptr) {
+    for (const auto &factor : coupled_relations) {
+      ExactProjectionPlan materialized;
+      if (!exact_projection_make_materialized_plan(
+              plan,
+              term,
+              factor,
+              blocked_time_ids,
+              projected_latent_time_ids,
+              *ops,
+              builder,
+              &materialized)) {
+        continue;
+      }
+      if (exact_projection_candidate_better(
+              have_best, materialized, best)) {
+        best = std::move(materialized);
+        have_best = true;
+      }
+    }
+  }
+
+  if (!have_best) {
+    return false;
+  }
+  *out = std::move(best);
+  return true;
+}
+
+inline bool exact_projection_emit_terminal_node(
     ExactVariantPlan *plan,
     const ExactRegionCell &term,
     const semantic::Index source_view_id,
+    const std::vector<ExactProjectionFactor> &projected_factors,
     semantic::Index *out_node_id,
     ExactRegionCell *out_residual,
     std::vector<semantic::Index> *out_factor_latent_time_ids) {
@@ -882,13 +1314,12 @@ inline bool exact_order_region_lower_term_node(
   }
   std::vector<semantic::Index> factors;
   std::vector<semantic::Index> factor_latent_time_ids;
-  if (!exact_order_region_project_density_binders(
-          plan,
-          &residual,
-          source_view_id,
-          &factors,
-          &factor_latent_time_ids)) {
-    return false;
+  factors.reserve(projected_factors.size());
+  for (const auto &factor : projected_factors) {
+    factors.push_back(
+        exact_projection_factor_node(plan, factor, source_view_id));
+    exact_projection_append_factor_latent_times(
+        &factor_latent_time_ids, factor);
   }
   std::vector<SourceBounds> bounds(static_cast<std::size_t>(plan->source_count));
   std::vector<ExprBounds> expr_bounds(plan->expr_kernels.size());
@@ -1086,12 +1517,57 @@ inline bool exact_order_region_lower_term_node(
   return true;
 }
 
-inline bool exact_order_region_lower_term_root(
+inline bool exact_projection_emit_plan_root(
     ExactVariantPlan *plan,
-    const ExactRegionCell &term,
+    const ExactProjectionPlan &projection_plan,
     const semantic::Index source_view_id,
-    ExactOrderRegionBuilder *builder,
+    std::vector<ExactProjectionFactor> inherited_factors,
     semantic::Index *out_root_id) {
+  if (projection_plan.kind == ExactProjectionPlanKind::Product) {
+    inherited_factors.insert(
+        inherited_factors.end(),
+        projection_plan.factors.begin(),
+        projection_plan.factors.end());
+    if (projection_plan.children.size() != 1U) {
+      return false;
+    }
+    return exact_projection_emit_plan_root(
+        plan,
+        projection_plan.children.front(),
+        source_view_id,
+        std::move(inherited_factors),
+        out_root_id);
+  }
+
+  if (projection_plan.kind == ExactProjectionPlanKind::Sum) {
+    std::vector<semantic::Index> child_nodes;
+    child_nodes.reserve(projection_plan.children.size());
+    for (const auto &child : projection_plan.children) {
+      semantic::Index child_root{semantic::kInvalidIndex};
+      if (!exact_projection_emit_plan_root(
+              plan,
+              child,
+              source_view_id,
+              inherited_factors,
+              &child_root)) {
+        return false;
+      }
+      child_nodes.push_back(
+          compiled_math_root_node_id(plan->compiled_math, child_root));
+    }
+    const auto node =
+        child_nodes.empty()
+            ? compiled_math_constant(&plan->compiled_math, 0.0)
+            : compiled_math_algebra_node(
+                  &plan->compiled_math,
+                  CompiledMathNodeKind::CleanSignedSum,
+                  std::move(child_nodes),
+                  CompiledMathValueKind::Scalar);
+    *out_root_id = compiled_math_make_root(&plan->compiled_math, node);
+    return true;
+  }
+
+  const auto &term = projection_plan.residual;
   if (term.impossible || term.sign == 0.0) {
     *out_root_id = compiled_math_make_root(
         &plan->compiled_math,
@@ -1101,10 +1577,11 @@ inline bool exact_order_region_lower_term_root(
   semantic::Index node{semantic::kInvalidIndex};
   ExactRegionCell residual;
   std::vector<semantic::Index> factor_latent_time_ids;
-  if (!exact_order_region_lower_term_node(
+  if (!exact_projection_emit_terminal_node(
           plan,
           term,
           source_view_id,
+          inherited_factors,
           &node,
           &residual,
           &factor_latent_time_ids)) {
@@ -1157,6 +1634,93 @@ inline bool exact_order_region_lower_term_root(
   }
   *out_root_id = compiled_math_make_root(&plan->compiled_math, node);
   return true;
+}
+
+inline void exact_projection_apply_factor_to_metric_cell(
+    ExactRegionCell *term,
+    const ExactProjectionFactor &factor) {
+  const auto &candidate = factor.candidate;
+  if (candidate.binder.kind == ExactOrderRegionDensityBinderKind::Source) {
+    exact_order_region_append_exact(
+        term,
+        candidate.binder.subject_id,
+        candidate.binder.time_id);
+  } else {
+    exact_order_region_append_expr_factor(
+        term,
+        candidate.binder.subject_id,
+        candidate.binder.time_id,
+        true,
+        true);
+  }
+  for (const auto lower_time_id : candidate.bounds.lower_time_ids) {
+    exact_order_region_append_time_order(
+        term, lower_time_id, candidate.binder.time_id);
+  }
+  for (const auto upper_time_id : candidate.bounds.upper_time_ids) {
+    exact_order_region_append_time_order(
+        term, candidate.binder.time_id, upper_time_id);
+  }
+}
+
+inline void exact_projection_collect_metric_cells_impl(
+    const ExactProjectionPlan &projection_plan,
+    std::vector<ExactProjectionFactor> inherited_factors,
+    ExactOrderRegionExpr *out) {
+  if (projection_plan.kind == ExactProjectionPlanKind::Terminal) {
+    auto term = projection_plan.residual;
+    for (const auto &factor : inherited_factors) {
+      exact_projection_apply_factor_to_metric_cell(&term, factor);
+    }
+    exact_order_region_canonicalize_term(&term);
+    if (!term.impossible && term.sign != 0.0) {
+      out->terms.push_back(std::move(term));
+    }
+    return;
+  }
+  if (projection_plan.kind == ExactProjectionPlanKind::Product) {
+    inherited_factors.insert(
+        inherited_factors.end(),
+        projection_plan.factors.begin(),
+        projection_plan.factors.end());
+  }
+  for (const auto &child : projection_plan.children) {
+    exact_projection_collect_metric_cells_impl(
+        child, inherited_factors, out);
+  }
+}
+
+inline void exact_projection_collect_metric_cells(
+    const ExactProjectionPlan &projection_plan,
+    ExactOrderRegionExpr *out) {
+  exact_projection_collect_metric_cells_impl(projection_plan, {}, out);
+}
+
+inline bool exact_order_region_lower_term_root(
+    ExactVariantPlan *plan,
+    const ExactRegionCell &term,
+    const semantic::Index source_view_id,
+    ExactOrderRegionBuilder *builder,
+    const ExactProjectionRelationOps *ops,
+    semantic::Index *out_root_id) {
+  ExactProjectionPlan projection_plan;
+  if (!exact_projection_plan_cell(
+          *plan,
+          term,
+          {},
+          {},
+          ops,
+          *builder,
+          &projection_plan)) {
+    return false;
+  }
+  *builder = projection_plan.builder_after;
+  return exact_projection_emit_plan_root(
+      plan,
+      projection_plan,
+      source_view_id,
+      {},
+      out_root_id);
 }
 
 

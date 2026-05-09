@@ -134,7 +134,7 @@ acceptance_cases <- list(
     build = model_shared_gate_competitors,
     max_integral_depth = 1L,
     max_integral_nodes = 4L,
-    max_symbolic_cells = 32L
+    max_symbolic_cells = 31L
   ),
   guarded_overlap = list(
     build = model_guarded_overlap,
@@ -145,8 +145,8 @@ acceptance_cases <- list(
   stim_selective_stop2 = list(
     build = model_stim_selective_stop2,
     max_integral_depth = 3L,
-    max_integral_nodes = 237L,
-    max_symbolic_cells = 128L
+    max_integral_nodes = 83L,
+    max_symbolic_cells = 60L
   )
 )
 

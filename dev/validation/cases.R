@@ -1,5 +1,5 @@
-validation_cases <- function() {
-  list(
+validation_cases <- function(include_adversarial = FALSE) {
+  cases <- list(
     independent_trigger_two_way = function() {
       structure <- race_spec() |>
         add_accumulator("a", "lognormal") |>
@@ -1265,6 +1265,298 @@ validation_cases <- function() {
         )
       }
       do.call(rbind, rows)
+    },
+
+    oracle_repeated_shared_gate_six_way = function() {
+      structure <- race_spec() |>
+        add_accumulator("x1", "lognormal") |>
+        add_accumulator("x2", "lognormal") |>
+        add_accumulator("x3", "lognormal") |>
+        add_accumulator("x4", "lognormal") |>
+        add_accumulator("x5", "lognormal") |>
+        add_accumulator("x6", "lognormal") |>
+        add_accumulator("gate", "lognormal") |>
+        add_outcome("R1", all_of("x1", "gate")) |>
+        add_outcome("R2", all_of("x2", "gate")) |>
+        add_outcome("R3", all_of("x3", "gate")) |>
+        add_outcome("R4", all_of("x4", "gate")) |>
+        add_outcome("R5", all_of("x5", "gate")) |>
+        add_outcome("R6", all_of("x6", "gate")) |>
+        finalize_model()
+      params <- c(
+        x1.m = log(0.29), x1.s = 0.15, x1.q = 0.00, x1.t0 = 0.00,
+        x2.m = log(0.33), x2.s = 0.16, x2.q = 0.00, x2.t0 = 0.00,
+        x3.m = log(0.37), x3.s = 0.17, x3.q = 0.00, x3.t0 = 0.00,
+        x4.m = log(0.41), x4.s = 0.18, x4.q = 0.00, x4.t0 = 0.00,
+        x5.m = log(0.45), x5.s = 0.19, x5.q = 0.00, x5.t0 = 0.00,
+        x6.m = log(0.49), x6.s = 0.20, x6.q = 0.00, x6.t0 = 0.00,
+        gate.m = log(0.24), gate.s = 0.13, gate.q = 0.00, gate.t0 = 0.00
+      )
+      eval_source <- function(name) {
+        p <- acc_parts(name, params)
+        function(t) {
+          list(
+            density = acc_pdf_scalar(t, p),
+            survival = acc_survival_scalar(t, p)
+          )
+        }
+      }
+      eval_x1 <- eval_source("x1")
+      eval_others <- lapply(paste0("x", 2:6), eval_source)
+      eval_gate <- eval_source("gate")
+
+      rows <- list()
+      for (rt in c(0.32, 0.48)) {
+        manual <- shared_gate_many_density_r(eval_x1, eval_others, eval_gate, rt)
+        engine <- engine_density_or_mass(
+          structure,
+          params,
+          data.frame(trial = 1L, R = "R1", rt = rt, stringsAsFactors = FALSE)
+        )
+        rows[[length(rows) + 1L]] <- check_row(
+          "oracle_repeated_shared_gate_six_way",
+          paste0("R1_rt_", format(rt, nsmall = 2)),
+          engine,
+          manual,
+          2e-3,
+          "Six repeated shared-gate competitors checked by n-way manual formula"
+        )
+      }
+      do.call(rbind, rows)
+    },
+
+    partial_overlap_composite_gates = function() {
+      structure <- race_spec() |>
+        add_accumulator("a", "lognormal") |>
+        add_accumulator("b", "lognormal") |>
+        add_accumulator("g1", "lognormal") |>
+        add_accumulator("g2", "lognormal") |>
+        add_accumulator("d", "lognormal") |>
+        add_outcome("C1", all_of("a", "g1", "g2")) |>
+        add_outcome("C2", all_of("b", "g1")) |>
+        add_outcome("D", "d") |>
+        finalize_model()
+      params <- c(
+        a.m = log(0.30), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
+        b.m = log(0.35), b.s = 0.16, b.q = 0.00, b.t0 = 0.00,
+        g1.m = log(0.25), g1.s = 0.14, g1.q = 0.00, g1.t0 = 0.00,
+        g2.m = log(0.28), g2.s = 0.13, g2.q = 0.00, g2.t0 = 0.00,
+        d.m = log(0.46), d.s = 0.18, d.q = 0.00, d.t0 = 0.00
+      )
+      a <- acc_parts("a", params)
+      b <- acc_parts("b", params)
+      g1 <- acc_parts("g1", params)
+      g2 <- acc_parts("g2", params)
+      d <- acc_parts("d", params)
+      rows <- list()
+      for (rt in c(0.32, 0.50)) {
+        non_win <- acc_survival_scalar(rt, g1) +
+          acc_cdf_scalar(rt, g1) *
+          acc_survival_scalar(rt, b) *
+          (1.0 - acc_cdf_scalar(rt, a) * acc_cdf_scalar(rt, g2))
+        manual <- acc_pdf_scalar(rt, d) * non_win
+        engine <- engine_density_or_mass(
+          structure,
+          params,
+          data.frame(trial = 1L, R = "D", rt = rt, stringsAsFactors = FALSE)
+        )
+        rows[[length(rows) + 1L]] <- check_row(
+          "partial_overlap_composite_gates",
+          paste0("D_rt_", format(rt, nsmall = 2)),
+          engine,
+          manual,
+          2e-3,
+          "Partially overlapping composite gates checked by derived non-win formula"
+        )
+      }
+      do.call(rbind, rows)
+    },
+
+    oracle_nested_choice_guard_absence = function() {
+      structure <- race_spec() |>
+        add_accumulator("a", "lognormal") |>
+        add_accumulator("s", "lognormal") |>
+        add_accumulator("b", "lognormal") |>
+        add_accumulator("c", "lognormal") |>
+        add_accumulator("d", "lognormal") |>
+        add_outcome(
+          "R",
+          first_of(
+            all_of("a", none_of("s")),
+            inhibit("b", by = "c")
+          )
+        ) |>
+        add_outcome("D", "d") |>
+        finalize_model()
+      params <- c(
+        a.m = log(0.31), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
+        s.m = log(0.27), s.s = 0.14, s.q = 0.00, s.t0 = 0.00,
+        b.m = log(0.36), b.s = 0.17, b.q = 0.00, b.t0 = 0.00,
+        c.m = log(0.29), c.s = 0.16, c.q = 0.00, c.t0 = 0.00,
+        d.m = log(0.48), d.s = 0.18, d.q = 0.00, d.t0 = 0.00
+      )
+      a <- acc_parts("a", params)
+      s <- acc_parts("s", params)
+      b <- acc_parts("b", params)
+      c <- acc_parts("c", params)
+      d <- acc_parts("d", params)
+      x_density <- function(t) acc_pdf_scalar(t, a) * acc_survival_scalar(t, s)
+      y_density <- function(t) acc_pdf_scalar(t, b) * acc_survival_scalar(t, c)
+      x_cdf <- function(t) integrate_scalar(x_density, 0.0, t)
+      y_cdf <- function(t) integrate_scalar(y_density, 0.0, t)
+
+      rows <- list()
+      for (rt in c(0.33, 0.47)) {
+        manual <- acc_survival_scalar(rt, d) * (
+          x_density(rt) * (1.0 - y_cdf(rt)) +
+            y_density(rt) * (1.0 - x_cdf(rt))
+        )
+        engine <- engine_density_or_mass(
+          structure,
+          params,
+          data.frame(trial = 1L, R = "R", rt = rt, stringsAsFactors = FALSE)
+        )
+        rows[[length(rows) + 1L]] <- check_row(
+          "nested_choice_guard_absence",
+          paste0("R_rt_", format(rt, nsmall = 2)),
+          engine,
+          manual,
+          2e-3,
+          "Nested first_of/all_of/inhibit/none_of checked by derived branch formula"
+        )
+      }
+      do.call(rbind, rows)
+    },
+
+    oracle_deep_composite_blocker = function() {
+      structure <- race_spec() |>
+        add_accumulator("a", "lognormal") |>
+        add_accumulator("b", "lognormal") |>
+        add_accumulator("g1", "lognormal") |>
+        add_accumulator("s1", "lognormal") |>
+        add_accumulator("g2", "lognormal") |>
+        add_accumulator("h", "lognormal") |>
+        add_accumulator("d", "lognormal") |>
+        add_outcome(
+          "R",
+          all_of(
+            inhibit(
+              first_of("a", all_of("b", "g1")),
+              by = all_of("s1", "g2")
+            ),
+            "h"
+          )
+        ) |>
+        add_outcome("D", "d") |>
+        finalize_model()
+      params <- c(
+        a.m = log(0.30), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
+        b.m = log(0.34), b.s = 0.16, b.q = 0.00, b.t0 = 0.00,
+        g1.m = log(0.26), g1.s = 0.13, g1.q = 0.00, g1.t0 = 0.00,
+        s1.m = log(0.28), s1.s = 0.15, s1.q = 0.00, s1.t0 = 0.00,
+        g2.m = log(0.33), g2.s = 0.14, g2.q = 0.00, g2.t0 = 0.00,
+        h.m = log(0.37), h.s = 0.17, h.q = 0.00, h.t0 = 0.00,
+        d.m = log(0.50), d.s = 0.18, d.q = 0.00, d.t0 = 0.00
+      )
+      outcomes <- list(
+        R = oracle_all(
+          oracle_inhibit(
+            oracle_first(
+              oracle_source("a"),
+              oracle_all(oracle_source("b"), oracle_source("g1"))
+            ),
+            oracle_all(oracle_source("s1"), oracle_source("g2"))
+          ),
+          oracle_source("h")
+        ),
+        D = oracle_source("d")
+      )
+      oracle_density_rows(
+        "oracle_deep_composite_blocker",
+        structure,
+        params,
+        outcomes,
+        c("a", "b", "g1", "s1", "g2", "h", "d"),
+        "R",
+        c(0.36, 0.50),
+        1.2e-2,
+        "Deep first_of inside inhibit inside all_of checked by slow source-time oracle",
+        nodes = 6L
+      )
+    },
+
+    oracle_pool_k2_shared_gate_guard = function() {
+      structure <- race_spec() |>
+        add_accumulator("p1", "lognormal") |>
+        add_accumulator("p2", "lognormal") |>
+        add_accumulator("p3", "lognormal") |>
+        add_accumulator("gate", "lognormal") |>
+        add_accumulator("stop", "lognormal") |>
+        add_accumulator("b", "lognormal") |>
+        add_accumulator("d", "lognormal") |>
+        add_pool("P", c("p1", "p2", "p3"), k = 2L) |>
+        add_outcome("A", inhibit(all_of("P", "gate"), by = "stop")) |>
+        add_outcome("B", all_of("b", "gate")) |>
+        add_outcome("D", "d") |>
+        finalize_model()
+      params <- c(
+        p1.m = log(0.27), p1.s = 0.15, p1.q = 0.00, p1.t0 = 0.00,
+        p2.m = log(0.32), p2.s = 0.16, p2.q = 0.00, p2.t0 = 0.00,
+        p3.m = log(0.37), p3.s = 0.17, p3.q = 0.00, p3.t0 = 0.00,
+        gate.m = log(0.25), gate.s = 0.13, gate.q = 0.00, gate.t0 = 0.00,
+        stop.m = log(0.30), stop.s = 0.14, stop.q = 0.00, stop.t0 = 0.00,
+        b.m = log(0.40), b.s = 0.18, b.q = 0.00, b.t0 = 0.00,
+        d.m = log(0.52), d.s = 0.19, d.q = 0.00, d.t0 = 0.00
+      )
+      outcomes <- list(
+        A = oracle_inhibit(
+          oracle_all(
+            oracle_pool(c("p1", "p2", "p3"), k = 2L),
+            oracle_source("gate")
+          ),
+          oracle_source("stop")
+        ),
+        B = oracle_all(oracle_source("b"), oracle_source("gate")),
+        D = oracle_source("d")
+      )
+      rbind(
+        oracle_density_rows(
+          "oracle_pool_k2_shared_gate_guard",
+          structure,
+          params,
+          outcomes,
+          c("p1", "p2", "p3", "gate", "stop", "b", "d"),
+          "A",
+          c(0.36),
+          1.2e-2,
+          "Top-2 pool plus shared gate and guard checked by slow source-time oracle",
+          nodes = 6L
+        ),
+        oracle_density_rows(
+          "oracle_pool_k2_shared_gate_guard",
+          structure,
+          params,
+          outcomes,
+          c("p1", "p2", "p3", "gate", "stop", "b", "d"),
+          "D",
+          c(0.50),
+          1.2e-2,
+          "Top-2 pool competitor survival checked by slow source-time oracle",
+          nodes = 6L
+        )
+      )
     }
   )
+  if (!include_adversarial) {
+    cases <- cases[setdiff(
+      names(cases),
+      c(
+        "oracle_repeated_shared_gate_six_way",
+        "oracle_nested_choice_guard_absence",
+        "oracle_deep_composite_blocker",
+        "oracle_pool_k2_shared_gate_guard"
+      )
+    )]
+  }
+  cases
 }

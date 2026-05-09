@@ -125,7 +125,7 @@ testthat::test_that("shared-gate and guarded-overlap competitors materialize wit
     shared_metrics,
     max_integral_depth = 1L,
     max_integral_nodes = 4L,
-    max_symbolic_cells = 32L
+    max_symbolic_cells = 31L
   )
 
   guarded_metrics <- compiler_total_metrics(build_guarded_overlap_model())

@@ -8,7 +8,7 @@ Run it from the repo root with:
 Rscript dev/validation/run_validation.R
 ```
 
-The default runner compares engine likelihoods against explicit manual references for 25 model shapes:
+The default runner compares engine likelihoods against explicit manual references for 28 model shapes:
 
 1. `independent_trigger_two_way`
 2. `pool_vs_competitor`
@@ -35,6 +35,9 @@ The default runner compares engine likelihoods against explicit manual reference
 23. `density_lift_competitor_subset`
 24. `partial_overlap_composite_gates`
 25. `nested_choice_guard_absence`
+26. `first_of_absence_choice`
+27. `guarded_composite_vs_guarded_competitor`
+28. `composite_blocker_guard`
 
 There is also a heavier adversarial runner:
 

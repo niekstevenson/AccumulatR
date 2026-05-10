@@ -103,3 +103,81 @@ testthat::test_that("repeated shared subexpressions equal their flattened form",
     tolerance = 2e-3
   )
 })
+
+testthat::test_that("none_of conjunction matches inhibit syntax", {
+  absence <- race_spec() |>
+    add_accumulator("a", "lognormal") |>
+    add_accumulator("s", "lognormal") |>
+    add_accumulator("d", "lognormal") |>
+    add_outcome("R", all_of("a", none_of("s"))) |>
+    add_outcome("D", "d") |>
+    finalize_model()
+  inhibited <- race_spec() |>
+    add_accumulator("a", "lognormal") |>
+    add_accumulator("s", "lognormal") |>
+    add_accumulator("d", "lognormal") |>
+    add_outcome("R", inhibit("a", by = "s")) |>
+    add_outcome("D", "d") |>
+    finalize_model()
+  params <- c(
+    a.m = log(0.31), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
+    s.m = log(0.27), s.s = 0.14, s.q = 0.00, s.t0 = 0.00,
+    d.m = log(0.48), d.s = 0.18, d.q = 0.00, d.t0 = 0.00
+  )
+
+  for (rt in c(0.30, 0.43)) {
+    testthat::expect_equal(
+      metamorphic_loglik(absence, params, "R", rt),
+      metamorphic_loglik(inhibited, params, "R", rt),
+      tolerance = 1e-10
+    )
+  }
+})
+
+testthat::test_that("nested absence choice matches nested inhibit choice", {
+  absence_choice <- race_spec() |>
+    add_accumulator("a", "lognormal") |>
+    add_accumulator("s", "lognormal") |>
+    add_accumulator("b", "lognormal") |>
+    add_accumulator("c", "lognormal") |>
+    add_accumulator("d", "lognormal") |>
+    add_outcome(
+      "R",
+      first_of(
+        all_of("a", none_of("s")),
+        inhibit("b", by = "c")
+      )
+    ) |>
+    add_outcome("D", "d") |>
+    finalize_model()
+  inhibit_choice <- race_spec() |>
+    add_accumulator("a", "lognormal") |>
+    add_accumulator("s", "lognormal") |>
+    add_accumulator("b", "lognormal") |>
+    add_accumulator("c", "lognormal") |>
+    add_accumulator("d", "lognormal") |>
+    add_outcome(
+      "R",
+      first_of(
+        inhibit("a", by = "s"),
+        inhibit("b", by = "c")
+      )
+    ) |>
+    add_outcome("D", "d") |>
+    finalize_model()
+  params <- c(
+    a.m = log(0.31), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
+    s.m = log(0.27), s.s = 0.14, s.q = 0.00, s.t0 = 0.00,
+    b.m = log(0.36), b.s = 0.17, b.q = 0.00, b.t0 = 0.00,
+    c.m = log(0.29), c.s = 0.16, c.q = 0.00, c.t0 = 0.00,
+    d.m = log(0.48), d.s = 0.18, d.q = 0.00, d.t0 = 0.00
+  )
+
+  for (rt in c(0.33, 0.47)) {
+    testthat::expect_equal(
+      metamorphic_loglik(absence_choice, params, "R", rt),
+      metamorphic_loglik(inhibit_choice, params, "R", rt),
+      tolerance = 1e-10
+    )
+  }
+})

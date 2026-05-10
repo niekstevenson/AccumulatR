@@ -1267,6 +1267,141 @@ validation_cases <- function(include_adversarial = FALSE) {
       do.call(rbind, rows)
     },
 
+    first_of_absence_choice = function() {
+      structure <- race_spec() |>
+        add_accumulator("a", "lognormal") |>
+        add_accumulator("s", "lognormal") |>
+        add_accumulator("b", "lognormal") |>
+        add_accumulator("d", "lognormal") |>
+        add_outcome("R", first_of(all_of("a", none_of("s")), "b")) |>
+        add_outcome("D", "d") |>
+        finalize_model()
+      params <- c(
+        a.m = log(0.31), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
+        s.m = log(0.27), s.s = 0.14, s.q = 0.00, s.t0 = 0.00,
+        b.m = log(0.36), b.s = 0.17, b.q = 0.00, b.t0 = 0.00,
+        d.m = log(0.48), d.s = 0.18, d.q = 0.00, d.t0 = 0.00
+      )
+      a <- acc_parts("a", params)
+      s <- acc_parts("s", params)
+      b <- acc_parts("b", params)
+      d <- acc_parts("d", params)
+
+      absence_density <- function(t) {
+        acc_pdf_scalar(t, a) * acc_survival_scalar(t, s)
+      }
+      absence_cdf <- function(t) integrate_scalar(absence_density, 0.0, t)
+
+      rows <- list()
+      for (rt in c(0.33, 0.47)) {
+        manual <- acc_survival_scalar(rt, d) * (
+          absence_density(rt) * acc_survival_scalar(rt, b) +
+            acc_pdf_scalar(rt, b) * (1.0 - absence_cdf(rt))
+        )
+        engine <- engine_density_or_mass(
+          structure,
+          params,
+          data.frame(trial = 1L, R = "R", rt = rt, stringsAsFactors = FALSE)
+        )
+        rows[[length(rows) + 1L]] <- check_row(
+          "first_of_absence_choice",
+          paste0("R_rt_", format(rt, nsmall = 2)),
+          engine,
+          manual,
+          2e-3,
+          "first_of branch where one alternative is a none_of-guarded source"
+        )
+      }
+      do.call(rbind, rows)
+    },
+
+    guarded_composite_vs_guarded_competitor = function() {
+      structure <- race_spec() |>
+        add_accumulator("a", "lognormal") |>
+        add_accumulator("b", "lognormal") |>
+        add_accumulator("c", "lognormal") |>
+        add_accumulator("s", "lognormal") |>
+        add_outcome("R", inhibit(all_of("a", "b"), by = "s")) |>
+        add_outcome("C", inhibit("c", by = "s")) |>
+        finalize_model()
+      params <- c(
+        a.m = log(0.30), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
+        b.m = log(0.36), b.s = 0.16, b.q = 0.00, b.t0 = 0.00,
+        c.m = log(0.42), c.s = 0.18, c.q = 0.00, c.t0 = 0.00,
+        s.m = log(0.28), s.s = 0.14, s.q = 0.00, s.t0 = 0.00
+      )
+      a <- acc_parts("a", params)
+      b <- acc_parts("b", params)
+      c <- acc_parts("c", params)
+      s <- acc_parts("s", params)
+
+      rows <- list()
+      for (rt in c(0.34, 0.50)) {
+        manual <- (
+          acc_pdf_scalar(rt, a) * acc_cdf_scalar(rt, b) +
+            acc_pdf_scalar(rt, b) * acc_cdf_scalar(rt, a)
+        ) *
+          acc_survival_scalar(rt, s) *
+          acc_survival_scalar(rt, c)
+        engine <- engine_density_or_mass(
+          structure,
+          params,
+          data.frame(trial = 1L, R = "R", rt = rt, stringsAsFactors = FALSE)
+        )
+        rows[[length(rows) + 1L]] <- check_row(
+          "guarded_composite_vs_guarded_competitor",
+          paste0("R_rt_", format(rt, nsmall = 2)),
+          engine,
+          manual,
+          2e-3,
+          "all_of reference under inhibit racing a competitor with the same blocker"
+        )
+      }
+      do.call(rbind, rows)
+    },
+
+    composite_blocker_guard = function() {
+      structure <- race_spec() |>
+        add_accumulator("a", "lognormal") |>
+        add_accumulator("s", "lognormal") |>
+        add_accumulator("g", "lognormal") |>
+        add_accumulator("d", "lognormal") |>
+        add_outcome("R", inhibit("a", by = all_of("s", "g"))) |>
+        add_outcome("D", "d") |>
+        finalize_model()
+      params <- c(
+        a.m = log(0.32), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
+        s.m = log(0.27), s.s = 0.14, s.q = 0.00, s.t0 = 0.00,
+        g.m = log(0.35), g.s = 0.16, g.q = 0.00, g.t0 = 0.00,
+        d.m = log(0.48), d.s = 0.18, d.q = 0.00, d.t0 = 0.00
+      )
+      a <- acc_parts("a", params)
+      s <- acc_parts("s", params)
+      g <- acc_parts("g", params)
+      d <- acc_parts("d", params)
+
+      rows <- list()
+      for (rt in c(0.33, 0.49)) {
+        manual <- acc_pdf_scalar(rt, a) *
+          (1.0 - acc_cdf_scalar(rt, s) * acc_cdf_scalar(rt, g)) *
+          acc_survival_scalar(rt, d)
+        engine <- engine_density_or_mass(
+          structure,
+          params,
+          data.frame(trial = 1L, R = "R", rt = rt, stringsAsFactors = FALSE)
+        )
+        rows[[length(rows) + 1L]] <- check_row(
+          "composite_blocker_guard",
+          paste0("R_rt_", format(rt, nsmall = 2)),
+          engine,
+          manual,
+          2e-3,
+          "inhibit with an all_of composite blocker"
+        )
+      }
+      do.call(rbind, rows)
+    },
+
     oracle_repeated_shared_gate_six_way = function() {
       structure <- race_spec() |>
         add_accumulator("x1", "lognormal") |>

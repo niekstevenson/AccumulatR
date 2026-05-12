@@ -3,7 +3,6 @@
 #include <Rcpp.h>
 
 #include <cstdint>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -78,17 +77,6 @@ struct LoweredExactModel {
 
 namespace detail {
 
-inline void require_exact_variant(const compile::CompiledVariant &variant) {
-  if (variant.backend == compile::BackendKind::Exact) {
-    return;
-  }
-  std::string message = "cannot lower non-exact variant";
-  if (!variant.component_id.empty()) {
-    message += " '" + variant.component_id + "'";
-  }
-  throw std::runtime_error(message);
-}
-
 inline Rcpp::List to_r_list(const ExactProgram &program) {
   return Rcpp::List::create(
       Rcpp::Named("layout") = runtime_layout_to_r_list(program.layout),
@@ -159,8 +147,6 @@ inline Rcpp::List to_r_list(const ExactProgram &program) {
 
 inline LoweredExactVariant lower_exact_variant(
     const compile::CompiledVariant &variant) {
-  detail::require_exact_variant(variant);
-
   LoweredExactVariant lowered;
   lowered.component_id = variant.component_id;
   lowered.weight = variant.weight;

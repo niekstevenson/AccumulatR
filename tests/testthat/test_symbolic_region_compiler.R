@@ -73,6 +73,18 @@ build_guarded_overlap_model <- function() {
     finalize_model()
 }
 
+build_expr_distribution_model <- function(expr) {
+  race_spec() |>
+    add_accumulator("a", "lognormal") |>
+    add_accumulator("b", "lognormal") |>
+    add_accumulator("c", "lognormal") |>
+    add_accumulator("g", "lognormal") |>
+    add_accumulator("d", "lognormal") |>
+    add_outcome("R", expr) |>
+    add_outcome("D", "d") |>
+    finalize_model()
+}
+
 testthat::test_that("compiler complexity metrics expose structural acceptance fields", {
   metrics <- compiler_total_metrics(build_simple_first_of_model())
   testthat::expect_named(
@@ -137,6 +149,123 @@ testthat::test_that("shared-gate and guarded-overlap competitors materialize wit
     max_integral_nodes = 14L,
     max_symbolic_cells = 21L
   )
+})
+
+testthat::test_that("first_of expression distributions preserve cheap union cases", {
+  cases <- list(
+    independent_child_union = list(
+      expr = first_of("a", "b"),
+      max_roots = 11L,
+      max_nodes = 23L,
+      max_cells = 6L
+    ),
+    overlapping_child_union = list(
+      expr = first_of(all_of("a", "g"), all_of("b", "g")),
+      max_roots = 15L,
+      max_nodes = 34L,
+      max_cells = 8L
+    ),
+    absorbed_union = list(
+      expr = first_of(all_of("a", "g"), "g"),
+      max_roots = 6L,
+      max_nodes = 14L,
+      max_cells = 4L
+    ),
+    multi_child_union = list(
+      expr = first_of("a", "b", "c"),
+      max_roots = 14L,
+      max_nodes = 30L,
+      max_cells = 8L
+    ),
+    nested_first_of = list(
+      expr = first_of("a", first_of("b", "c")),
+      max_roots = 14L,
+      max_nodes = 30L,
+      max_cells = 8L
+    )
+  )
+
+  for (case_name in names(cases)) {
+    case <- cases[[case_name]]
+    metrics <- compiler_total_metrics(
+      build_expr_distribution_model(case$expr))
+    expect_clean_region_cells(metrics)
+    expect_no_generic_integrals(metrics)
+    testthat::expect_equal(metrics[["integral_nodes"]], 0L, info = case_name)
+    testthat::expect_equal(metrics[["integral_kernels"]], 0L, info = case_name)
+    testthat::expect_true(
+      metrics[["compiled_roots"]] <= case$max_roots, info = case_name)
+    testthat::expect_true(
+      metrics[["compiled_nodes"]] <= case$max_nodes, info = case_name)
+    testthat::expect_true(
+      metrics[["symbolic_cells"]] <= case$max_cells, info = case_name)
+  }
+})
+
+testthat::test_that("common conjunct first_of canonicalizes to factored all_of cost", {
+  unfactored <- compiler_total_metrics(
+    build_expr_distribution_model(
+      first_of(all_of("a", "g"), all_of("b", "g"))))
+  factored <- compiler_total_metrics(
+    build_expr_distribution_model(
+      all_of(first_of("a", "b"), "g")))
+  fields <- c(
+    "symbolic_regions",
+    "symbolic_cells",
+    "expr_relation_atoms",
+    "compiled_roots",
+    "compiled_nodes",
+    "integral_nodes",
+    "generic_integral_kernels"
+  )
+  testthat::expect_equal(unfactored[fields], factored[fields])
+})
+
+testthat::test_that("all_of and simple guard expression distributions stay compact", {
+  cases <- list(
+    all_of_pair = list(
+      expr = all_of("a", "b"),
+      max_roots = 11L,
+      max_nodes = 24L,
+      max_integrals = 0L,
+      max_depth = 0L,
+      max_cells = 6L
+    ),
+    all_of_three = list(
+      expr = all_of("a", "b", "c"),
+      max_roots = 14L,
+      max_nodes = 31L,
+      max_integrals = 0L,
+      max_depth = 0L,
+      max_cells = 8L
+    ),
+    simple_guard = list(
+      expr = inhibit("a", by = "g"),
+      max_roots = 8L,
+      max_nodes = 19L,
+      max_integrals = 1L,
+      max_depth = 1L,
+      max_cells = 5L
+    )
+  )
+
+  for (case_name in names(cases)) {
+    case <- cases[[case_name]]
+    metrics <- compiler_total_metrics(
+      build_expr_distribution_model(case$expr))
+    expect_clean_region_cells(metrics)
+    expect_no_generic_integrals(metrics)
+    testthat::expect_true(
+      metrics[["compiled_roots"]] <= case$max_roots, info = case_name)
+    testthat::expect_true(
+      metrics[["compiled_nodes"]] <= case$max_nodes, info = case_name)
+    testthat::expect_true(
+      metrics[["integral_nodes"]] <= case$max_integrals, info = case_name)
+    testthat::expect_true(
+      metrics[["max_integral_depth"]] <= case$max_depth, info = case_name)
+    testthat::expect_true(
+      metrics[["symbolic_cells"]] <= case$max_cells, info = case_name)
+  }
 })
 
 testthat::test_that("shared-gate likelihood is invariant to child and outcome order", {

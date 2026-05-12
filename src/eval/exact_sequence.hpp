@@ -4,7 +4,7 @@
 #include <optional>
 
 #include "eval_query.hpp"
-#include "exact_competitor_union.hpp"
+#include "exact_step_distribution.hpp"
 #include "trial_data.hpp"
 
 namespace accumulatr::eval {
@@ -72,9 +72,6 @@ inline void build_exact_plan_cache(
   plans->clear();
   plans->reserve(compiled.variants.size());
   for (const auto &variant : compiled.variants) {
-    if (variant.backend != compile::BackendKind::Exact) {
-      continue;
-    }
     const auto plan_index = static_cast<semantic::Index>(plans->size());
     const auto component_it = component_code_by_id.find(variant.component_id);
     if (component_it == component_code_by_id.end()) {
@@ -174,7 +171,7 @@ inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
 
 inline void advance_exact_sequence_state(
     ExactSequenceState *state,
-    const ExactRuntimeScenarioTransitionPlan &transition,
+    const ExactCompiledTransitionPlan &transition,
     const ExactVariantPlan &plan,
     const double observed_time,
     const std::vector<double> *ready_expr_normalizers = nullptr) {
@@ -300,7 +297,7 @@ inline ExactSequenceState &ranked_sequence_state_slot(
 
 inline void exact_sequence_ready_expr_normalizers(
     const ExactVariantPlan &plan,
-    const ExactRuntimeScenarioTransitionPlan &transition,
+    const ExactCompiledTransitionPlan &transition,
     ExactStepWorkspace *workspace,
     std::vector<double> *normalizers) {
   normalizers->clear();
@@ -309,9 +306,9 @@ inline void exact_sequence_ready_expr_normalizers(
     double normalizer = 0.0;
     if (expr_id != semantic::kInvalidIndex &&
         static_cast<std::size_t>(expr_id) <
-            plan.sequence_expr_cdf_roots.size()) {
+            plan.sequence.expr_cdf_roots.size()) {
       const auto root_id =
-          plan.sequence_expr_cdf_roots[static_cast<std::size_t>(expr_id)];
+          plan.sequence.expr_cdf_roots[static_cast<std::size_t>(expr_id)];
       if (root_id != semantic::kInvalidIndex) {
         normalizer =
             evaluate_compiled_math_root(
@@ -340,7 +337,7 @@ inline double exact_ranked_trigger_probability(
   auto &next_frontier = step_workspace->ranked_next_frontier;
   auto &states = step_workspace->ranked_states;
   auto &next_states = step_workspace->ranked_next_states;
-  used_outcomes.assign(plan.outcomes.size(), 0U);
+  used_outcomes.assign(plan.compiled_outcomes.size(), 0U);
   frontier.clear();
   next_frontier.clear();
   ranked_sequence_state_slot(&states, plan, 0) = step_workspace->initial_state;
@@ -357,8 +354,7 @@ inline double exact_ranked_trigger_probability(
       return 0.0;
     }
 
-    const auto &successors =
-        plan.runtime.outcomes[target_idx].successor_distribution;
+    const auto &compiled_outcome = plan.compiled_outcomes[target_idx];
     next_frontier.clear();
     std::size_t next_state_count = 0;
     for (const auto &entry : frontier) {
@@ -394,7 +390,7 @@ inline double exact_ranked_trigger_probability(
         auto &candidate_state =
             ranked_sequence_state_slot(&next_states, plan, candidate_index);
         candidate_state = states[entry_state_index];
-        const auto &transition = successors.transitions[transition_idx];
+        const auto &transition = compiled_outcome.transitions[transition_idx];
         exact_sequence_ready_expr_normalizers(
             plan,
             transition,

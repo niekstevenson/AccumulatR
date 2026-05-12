@@ -57,12 +57,6 @@ testthat::test_that("bounded generated grammar shapes compile within symbolic bu
     s.m = log(0.27), s.s = 0.14, s.q = 0.00, s.t0 = 0.00,
     g.m = log(0.34), g.s = 0.15, g.q = 0.00, g.t0 = 0.00
   )
-  shapes_with_remaining_symbolic_overlap <- c(
-    "guarded_all vs guarded",
-    "nested_absence_choice vs source",
-    "nested_absence_choice vs shared_gate"
-  )
-
   for (target_name in names(targets)) {
     for (competitor_name in names(competitors)) {
       shape_id <- paste(target_name, "vs", competitor_name)
@@ -76,10 +70,8 @@ testthat::test_that("bounded generated grammar shapes compile within symbolic bu
       testthat::expect_true(is.finite(ll), info = shape_id)
       testthat::expect_equal(
         metrics[["negative_symbolic_cells"]], 0L, info = shape_id)
-      if (!(shape_id %in% shapes_with_remaining_symbolic_overlap)) {
-        testthat::expect_equal(
-          metrics[["overlapping_symbolic_cell_pairs"]], 0L, info = shape_id)
-      }
+      testthat::expect_equal(
+        metrics[["overlapping_symbolic_cell_pairs"]], 0L, info = shape_id)
       testthat::expect_equal(
         metrics[["generic_integral_kernels"]], 0L, info = shape_id)
       testthat::expect_true(

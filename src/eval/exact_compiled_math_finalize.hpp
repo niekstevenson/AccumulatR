@@ -88,7 +88,7 @@ inline semantic::Index exact_complexity_max_integral_depth(
   return out;
 }
 
-inline void exact_complexity_finalize(ExactVariantPlan *plan) {
+inline void exact_complexity_finalize(ExactVariantBuildState *plan) {
   auto &metrics = plan->complexity;
   const auto &program = plan->compiled_math;
   metrics.compiled_root_count =
@@ -143,7 +143,7 @@ inline semantic::Index compiled_source_bound_plan_slot(
   return static_cast<semantic::Index>(slot);
 }
 
-inline void compile_source_condition_bound_plans(ExactVariantPlan *plan) {
+inline void compile_source_condition_bound_plans(ExactVariantBuildState *plan) {
   auto &program = plan->compiled_math;
   const auto source_count = static_cast<std::size_t>(plan->source_count);
   program.source_condition_bound_source_count = plan->source_count;
@@ -283,19 +283,19 @@ inline void compile_condition_cache_plans(CompiledMathProgram *program) {
   }
 }
 
-inline void compile_source_arithmetic_dependencies(ExactVariantPlan *plan) {
+inline void compile_source_arithmetic_dependencies(ExactVariantBuildState *plan) {
   auto &program = plan->compiled_math;
   compile_condition_cache_plans(&program);
   compile_source_condition_bound_plans(plan);
 }
 
 inline const CompiledSourceBoundPlan &source_product_bound_plan_for(
-    const ExactVariantPlan &plan,
+    const ExactVariantBuildState &plan,
     const semantic::Index condition_id,
     const semantic::Index source_id);
 
 inline void compile_source_product_channel_fields(
-    ExactVariantPlan *plan,
+    ExactVariantBuildState *plan,
     CompiledMathSourceProductChannel *channel) {
   if (channel == nullptr) {
     return;
@@ -346,7 +346,7 @@ inline void compile_source_product_channel_fields(
       !channel->has_source_condition_overlay;
 }
 
-inline void compile_source_product_channel_programs(ExactVariantPlan *plan) {
+inline void compile_source_product_channel_programs(ExactVariantBuildState *plan) {
   auto &program = plan->compiled_math;
   for (auto &channel : program.integral_kernel_source_product_channels) {
     compile_source_product_channel_fields(plan, &channel);
@@ -354,7 +354,7 @@ inline void compile_source_product_channel_programs(ExactVariantPlan *plan) {
 }
 
 inline const CompiledSourceBoundPlan &source_product_bound_plan_for(
-    const ExactVariantPlan &plan,
+    const ExactVariantBuildState &plan,
     const semantic::Index condition_id,
     const semantic::Index source_id) {
   static const CompiledSourceBoundPlan empty{};
@@ -380,13 +380,13 @@ inline semantic::Index push_source_product_program(
 }
 
 inline semantic::Index compile_source_product_base_program(
-    ExactVariantPlan *plan,
+    ExactVariantBuildState *plan,
     const semantic::Index source_id,
     const semantic::Index condition_id,
     const semantic::Index source_view_id);
 
 inline semantic::Index compile_source_product_exact_gate_program(
-    ExactVariantPlan *plan,
+    ExactVariantBuildState *plan,
     const semantic::Index source_id,
     const semantic::Index condition_id,
     const semantic::Index source_view_id,
@@ -410,7 +410,7 @@ inline semantic::Index compile_source_product_exact_gate_program(
 }
 
 inline semantic::Index compile_source_product_leaf_program(
-    ExactVariantPlan *plan,
+    ExactVariantBuildState *plan,
     const ExactSourceKernel &kernel,
     const semantic::Index condition_id,
     const semantic::Index source_view_id) {
@@ -436,7 +436,7 @@ inline semantic::Index compile_source_product_leaf_program(
 }
 
 inline semantic::Index compile_source_product_onset_program(
-    ExactVariantPlan *plan,
+    ExactVariantBuildState *plan,
     const ExactSourceKernel &kernel,
     const semantic::Index condition_id,
     const semantic::Index source_view_id) {
@@ -468,7 +468,7 @@ inline semantic::Index compile_source_product_onset_program(
 }
 
 inline semantic::Index compile_source_product_pool_program(
-    ExactVariantPlan *plan,
+    ExactVariantBuildState *plan,
     const ExactSourceKernel &kernel,
     const semantic::Index condition_id,
     const semantic::Index source_view_id) {
@@ -510,7 +510,7 @@ inline semantic::Index compile_source_product_pool_program(
 }
 
 inline semantic::Index compile_source_product_base_program(
-    ExactVariantPlan *plan,
+    ExactVariantBuildState *plan,
     const semantic::Index source_id,
     const semantic::Index condition_id,
     const semantic::Index source_view_id) {
@@ -541,7 +541,7 @@ inline semantic::Index compile_source_product_base_program(
 }
 
 inline semantic::Index compile_source_product_channel_program(
-    ExactVariantPlan *plan,
+    ExactVariantBuildState *plan,
     CompiledMathSourceProductChannel *channel) {
   if (channel->source_product_program_id != semantic::kInvalidIndex) {
     return channel->source_product_program_id;
@@ -712,7 +712,7 @@ inline std::uint8_t source_product_op_fill_mask(
 }
 
 inline CompiledMathIndexSpan compile_source_product_ops_for_factor_span(
-    ExactVariantPlan *plan,
+    ExactVariantBuildState *plan,
     const CompiledMathIndexSpan factors) {
   auto *program = &plan->compiled_math;
   const auto offset = static_cast<semantic::Index>(
@@ -772,7 +772,7 @@ inline CompiledMathIndexSpan compile_source_product_ops_for_factor_span(
           static_cast<std::size_t>(offset))};
 }
 
-inline void compile_source_product_scalar_ops(ExactVariantPlan *plan) {
+inline void compile_source_product_scalar_ops(ExactVariantBuildState *plan) {
   auto &program = plan->compiled_math;
   program.integral_kernel_source_product_ops.clear();
   program.integral_kernel_source_product_programs.clear();
@@ -847,7 +847,7 @@ private:
 };
 
 inline semantic::Index compile_source_node_program(
-    ExactVariantPlan *plan,
+    ExactVariantBuildState *plan,
     const CompiledMathNode &node) {
   CompiledMathSourceProductChannel channel;
   channel.source_id = node.subject_id;
@@ -862,7 +862,7 @@ inline semantic::Index compile_source_node_program(
   return compile_source_product_channel_program(plan, &channel);
 }
 
-inline void compile_source_node_programs(ExactVariantPlan *plan) {
+inline void compile_source_node_programs(ExactVariantBuildState *plan) {
   auto &program = plan->compiled_math;
   std::unordered_map<
       SourceArithmeticNodeProgramKey,
@@ -950,7 +950,7 @@ inline void validate_source_product_relations_materialized(
   }
 }
 
-inline void compile_source_view_relation_tables(ExactVariantPlan *plan) {
+inline void compile_source_view_relation_tables(ExactVariantBuildState *plan) {
   const auto source_count = static_cast<std::size_t>(plan->source_count);
   plan->compiled_source_view_source_count = plan->source_count;
   plan->compiled_source_view_relations.assign(

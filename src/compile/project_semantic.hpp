@@ -13,10 +13,6 @@
 
 namespace accumulatr::compile {
 
-enum class BackendKind : std::uint8_t {
-  Exact = 0
-};
-
 struct VariantCapabilities {
   bool no_surviving_outcomes{false};
   bool ranked_observation{false};
@@ -32,8 +28,6 @@ struct CompiledVariant {
   double weight{1.0};
   std::string weight_name;
   semantic::SemanticModel model{};
-  BackendKind backend{BackendKind::Exact};
-  BackendKind semantic_backend{BackendKind::Exact};
   VariantCapabilities capabilities{};
 };
 
@@ -44,11 +38,6 @@ struct CompiledModel {
 };
 
 namespace detail {
-
-inline std::string to_string(BackendKind backend) {
-  (void)backend;
-  return "exact";
-}
 
 inline bool source_is_dead(const semantic::SourceRef &ref) {
   return !ref.valid();
@@ -313,7 +302,7 @@ public:
       }
     }
 
-    classify_backend(&variant);
+    classify_variant_capabilities(&variant);
     return variant;
   }
 
@@ -789,7 +778,7 @@ private:
     return rewritten;
   }
 
-  void classify_backend(CompiledVariant *variant) {
+  void classify_variant_capabilities(CompiledVariant *variant) {
     if (variant->model.outcomes.empty()) {
       variant->capabilities.no_surviving_outcomes = true;
     }
@@ -823,9 +812,6 @@ private:
         variant->capabilities.non_event_outcome = true;
       }
     }
-
-    variant->semantic_backend = BackendKind::Exact;
-    variant->backend = BackendKind::Exact;
   }
 };
 
@@ -864,8 +850,6 @@ inline Rcpp::List to_r_list(const CompiledModel &compiled) {
     variant_list["component_id"] = variant.component_id;
     variant_list["weight"] = variant.weight;
     variant_list["weight_name"] = variant.weight_name;
-    variant_list["backend"] = detail::to_string(variant.backend);
-    variant_list["semantic_backend"] = detail::to_string(variant.semantic_backend);
     variant_list["capabilities"] = Rcpp::List::create(
         Rcpp::Named("no_surviving_outcomes") =
             variant.capabilities.no_surviving_outcomes,

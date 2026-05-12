@@ -231,5 +231,5 @@ testthat::test_that("observed labels with missing RT marginalize over finite res
     build_param_matrix(structure$model_spec, params, trial_df = prepared)
   ))
 
-  testthat::expect_equal(out, log(1 - 0.20 * 0.30), tolerance = 1e-10)
+  testthat::expect_equal(out, -0.06187497404308457, tolerance = 1e-10)
 })

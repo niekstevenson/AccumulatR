@@ -13,7 +13,7 @@
 #include "../compile/project_semantic.hpp"
 #include "../semantic/model.hpp"
 #include "exact_sequence.hpp"
-#include "observed_plan.hpp"
+#include "observation_model.hpp"
 #include "trial_data.hpp"
 
 namespace accumulatr::eval {
@@ -21,11 +21,11 @@ namespace detail {
 
 struct NativeLikelihoodContext {
   semantic::SemanticModel model;
-  std::vector<ComponentObservationPlan> observed_plans_by_component_code;
-  bool observed_identity{false};
-  compile::BackendKind identity_backend{compile::BackendKind::Exact};
+  std::vector<ComponentObservationPlan> observation_plans_by_component_code;
+  bool observation_is_identity{false};
   std::vector<semantic::Index> exact_variant_index_by_component_code;
   std::vector<ExactVariantPlan> exact_plans;
+  std::vector<std::vector<int>> exact_leaf_row_offsets_by_variant;
 };
 
 inline void compile_component_weight_parameter_layout(
@@ -50,38 +50,32 @@ inline void compile_component_weight_parameter_layout(
       static_cast<int>(index_by_name.size());
 }
 
-inline void compile_exact_plan_leaf_row_offsets(
+inline std::vector<std::vector<int>> make_exact_leaf_row_offsets_by_variant(
     const semantic::SemanticModel &model,
-    std::vector<ExactVariantPlan> *plans) {
-  if (plans == nullptr) {
-    return;
-  }
+    const std::vector<ExactVariantPlan> &plans) {
+  std::vector<std::vector<int>> offsets_by_variant;
+  offsets_by_variant.reserve(plans.size());
   std::unordered_map<std::string, int> global_leaf_index;
   global_leaf_index.reserve(model.leaves.size());
   for (std::size_t i = 0; i < model.leaves.size(); ++i) {
     global_leaf_index.emplace(model.leaves[i].id, static_cast<int>(i));
   }
-  for (auto &plan : *plans) {
-    plan.leaf_row_offsets.clear();
-    plan.leaf_row_offsets.reserve(plan.lowered.leaf_ids.size());
+  for (const auto &plan : plans) {
+    auto &offsets = offsets_by_variant.emplace_back();
+    offsets.reserve(plan.lowered.leaf_ids.size());
     for (const auto &leaf_id : plan.lowered.leaf_ids) {
-      plan.leaf_row_offsets.push_back(global_leaf_index.at(leaf_id));
+      offsets.push_back(global_leaf_index.at(leaf_id));
     }
   }
+  return offsets_by_variant;
 }
 
 inline bool observation_plans_are_identity(
-    const std::vector<ComponentObservationPlan> &plans,
-    compile::BackendKind *identity_backend = nullptr) {
-  compile::BackendKind backend = compile::BackendKind::Exact;
-  bool have_backend = false;
+    const std::vector<ComponentObservationPlan> &plans) {
   for (std::size_t component_code = 1; component_code < plans.size(); ++component_code) {
     const auto &plan = plans[component_code];
     if (!plan.present) {
       continue;
-    }
-    if (plan.observed_backend != plan.semantic_backend) {
-      return false;
     }
     for (std::size_t outcome_code = 1; outcome_code < plan.missing_rt_by_code.size();
          ++outcome_code) {
@@ -105,15 +99,6 @@ inline bool observation_plans_are_identity(
         return false;
       }
     }
-    if (!have_backend) {
-      backend = plan.semantic_backend;
-      have_backend = true;
-    } else if (backend != plan.semantic_backend) {
-      return false;
-    }
-  }
-  if (identity_backend != nullptr) {
-    *identity_backend = backend;
   }
   return true;
 }
@@ -184,7 +169,7 @@ inline NativeLikelihoodContext build_native_likelihood_context(
   const auto outcome_code_by_label = make_code_map(outcome_labels);
   const auto component_code_by_id = make_code_map(component_ids);
 
-  ctx.observed_plans_by_component_code = build_component_observation_plans(
+  ctx.observation_plans_by_component_code = build_component_observation_plans(
       prep,
       compiled,
       component_code_by_id,
@@ -199,12 +184,12 @@ inline NativeLikelihoodContext build_native_likelihood_context(
       outcome_labels.size(),
       &ctx.exact_variant_index_by_component_code,
       &ctx.exact_plans);
-  compile_exact_plan_leaf_row_offsets(ctx.model, &ctx.exact_plans);
-  compile_observation_probability_plans(&ctx.observed_plans_by_component_code);
-  ctx.observed_identity = observation_plans_are_identity(
-      ctx.observed_plans_by_component_code,
-      &ctx.identity_backend);
-  prune_observation_planning_state(&ctx.observed_plans_by_component_code);
+  ctx.exact_leaf_row_offsets_by_variant =
+      make_exact_leaf_row_offsets_by_variant(ctx.model, ctx.exact_plans);
+  compile_observation_probability_plans(&ctx.observation_plans_by_component_code);
+  ctx.observation_is_identity = observation_plans_are_identity(
+      ctx.observation_plans_by_component_code);
+  prune_observation_planning_state(&ctx.observation_plans_by_component_code);
   return ctx;
 }
 

@@ -3,7 +3,7 @@
 #include <R_ext/Rdynload.h>
 
 #include "eval/likelihood_context.hpp"
-#include "eval/observed_kernel.hpp"
+#include "eval/observation_likelihood.hpp"
 
 namespace {
 
@@ -138,8 +138,7 @@ SEXP semantic_make_likelihood_context_prep_cpp(SEXP prepSEXP) {
   return Rcpp::List::create(
       Rcpp::Named("native") = ptr,
       Rcpp::Named("complexity") = complexity_metrics_list(*ptr),
-      Rcpp::Named("observed_identity") = ptr->observed_identity,
-      Rcpp::Named("identity_backend") = "exact");
+      Rcpp::Named("observation_identity") = ptr->observation_is_identity);
 }
 
 // [[Rcpp::export]]
@@ -155,12 +154,13 @@ SEXP semantic_loglik_context_cpp(SEXP contextSEXP,
       accumulatr::eval::detail::read_prepared_trial_layout(dataSEXP);
   const int *ok = Rf_isNull(okSEXP) ? nullptr : LOGICAL(okSEXP);
   const double min_ll = REAL(minLLSEXP)[0];
-  Rcpp::List observed = accumulatr::eval::detail::evaluate_observed_trials_cached(
-      ctx.observed_plans_by_component_code,
-      ctx.observed_identity,
+  Rcpp::List observed = accumulatr::eval::detail::evaluate_observation_likelihood_cached(
+      ctx.observation_plans_by_component_code,
+      ctx.observation_is_identity,
       ctx.model,
       ctx.exact_variant_index_by_component_code,
       ctx.exact_plans,
+      ctx.exact_leaf_row_offsets_by_variant,
       layout,
       paramsSEXP,
       dataSEXP,
@@ -214,8 +214,8 @@ SEXP semantic_probability_context_cpp(SEXP contextSEXP,
       accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
   const auto layout =
       accumulatr::eval::detail::read_prepared_trial_layout(dataSEXP);
-  return accumulatr::eval::detail::evaluate_outcome_queries_cached(
-      ctx.observed_plans_by_component_code,
+  return accumulatr::eval::detail::evaluate_observation_probability_queries_cached(
+      ctx.observation_plans_by_component_code,
       ctx.exact_variant_index_by_component_code,
       ctx.exact_plans,
       layout,

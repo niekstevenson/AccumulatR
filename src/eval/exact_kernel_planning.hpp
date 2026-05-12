@@ -5,7 +5,7 @@
 namespace accumulatr::eval {
 namespace detail {
 
-inline void compile_exact_support_context(ExactVariantPlan *plan) {
+inline void compile_exact_support_context(ExactVariantBuildState *plan) {
   ExactSupportBuilder builder(plan->lowered);
   plan->leaf_supports = builder.build_leaf_supports();
   plan->pool_supports = builder.build_pool_supports();
@@ -26,7 +26,7 @@ inline void compile_exact_support_context(ExactVariantPlan *plan) {
   }
 }
 
-inline void compile_program_source_runtime_fields(ExactVariantPlan *plan) {
+inline void compile_program_source_runtime_fields(ExactVariantBuildState *plan) {
   auto &program = plan->lowered.program;
 
   for (semantic::Index i = 0; i < program.layout.n_leaves; ++i) {
@@ -54,7 +54,7 @@ inline void compile_program_source_runtime_fields(ExactVariantPlan *plan) {
   }
 }
 
-inline void compile_source_kernels(ExactVariantPlan *plan) {
+inline void compile_source_kernels(ExactVariantBuildState *plan) {
   const auto &program = plan->lowered.program;
   plan->source_kernels.assign(
       static_cast<std::size_t>(plan->source_count), ExactSourceKernel{});
@@ -89,250 +89,9 @@ inline void compile_source_kernels(ExactVariantPlan *plan) {
   }
 }
 
-inline void append_expr_union_subset(
-    ExactVariantPlan *plan,
-    const std::vector<semantic::Index> &children,
-    const std::vector<semantic::Index> &child_positions) {
-  const auto offset = static_cast<semantic::Index>(
-      plan->expr_union_subset_children.size());
-  plan->expr_union_subset_children.insert(
-      plan->expr_union_subset_children.end(),
-      children.begin(),
-      children.end());
-  const auto position_offset = static_cast<semantic::Index>(
-      plan->expr_union_subset_child_positions.size());
-  plan->expr_union_subset_child_positions.insert(
-      plan->expr_union_subset_child_positions.end(),
-      child_positions.begin(),
-      child_positions.end());
-  plan->expr_union_subsets.push_back(
-      ExactExprUnionSubset{
-          ExactIndexSpan{
-              offset,
-              static_cast<semantic::Index>(children.size())},
-          ExactIndexSpan{
-              position_offset,
-              static_cast<semantic::Index>(child_positions.size())},
-          children.size() % 2U == 1U ? 1 : -1});
-}
-
-inline void enumerate_expr_union_subsets(
-    ExactVariantPlan *plan,
-    const std::vector<semantic::Index> &children,
-    const std::size_t start,
-    std::vector<semantic::Index> *current,
-    std::vector<semantic::Index> *current_positions) {
-  for (std::size_t i = start; i < children.size(); ++i) {
-    current->push_back(children[i]);
-    current_positions->push_back(static_cast<semantic::Index>(i));
-    append_expr_union_subset(plan, *current, *current_positions);
-    enumerate_expr_union_subsets(
-        plan, children, i + 1U, current, current_positions);
-    current_positions->pop_back();
-    current->pop_back();
-  }
-}
-
-inline ExactIndexSpan compile_expr_union_subsets(
-    ExactVariantPlan *plan,
-    const ExactIndexSpan children_span) {
-  const auto offset =
-      static_cast<semantic::Index>(plan->expr_union_subsets.size());
-  std::vector<semantic::Index> children;
-  children.reserve(static_cast<std::size_t>(children_span.size));
-  const auto &program = plan->lowered.program;
-  for (semantic::Index i = 0; i < children_span.size; ++i) {
-    children.push_back(
-        program.expr_args[static_cast<std::size_t>(children_span.offset + i)]);
-  }
-  std::vector<semantic::Index> current;
-  current.reserve(children.size());
-  std::vector<semantic::Index> current_positions;
-  current_positions.reserve(children.size());
-  enumerate_expr_union_subsets(
-      plan, children, 0U, &current, &current_positions);
-  return ExactIndexSpan{
-      offset,
-      static_cast<semantic::Index>(
-          plan->expr_union_subsets.size() - static_cast<std::size_t>(offset))};
-}
-
-inline bool expr_children_supports_overlap(
-    const ExactVariantPlan &plan,
-    const ExactIndexSpan children_span) {
-  const auto &program = plan.lowered.program;
-  for (semantic::Index i = 0; i < children_span.size; ++i) {
-    const auto lhs_idx =
-        program.expr_args[static_cast<std::size_t>(children_span.offset + i)];
-    const auto &lhs = plan.expr_supports[static_cast<std::size_t>(lhs_idx)];
-    for (semantic::Index j = i + 1; j < children_span.size; ++j) {
-      const auto rhs_idx =
-          program.expr_args[static_cast<std::size_t>(children_span.offset + j)];
-      const auto &rhs = plan.expr_supports[static_cast<std::size_t>(rhs_idx)];
-      if (supports_overlap(lhs, rhs)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-inline bool expr_static_subset_of_event_source(
-    const ExactVariantPlan &plan,
-    const semantic::Index expr_idx,
-    const semantic::Index source_id);
-
-inline bool expr_static_can_equiv_event_source(
-    const ExactVariantPlan &plan,
-    const semantic::Index expr_idx,
-    const semantic::Index source_id);
-
-inline bool expr_span_static_has_event_source_subset(
-    const ExactVariantPlan &plan,
-    const ExactIndexSpan span,
-    const semantic::Index source_id) {
-  const auto &program = plan.lowered.program;
-  for (semantic::Index i = span.offset; i < span.offset + span.size; ++i) {
-    if (expr_static_subset_of_event_source(
-            plan,
-            program.expr_args[static_cast<std::size_t>(i)],
-            source_id)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-inline bool expr_static_subset_of_event_source(
-    const ExactVariantPlan &plan,
-    const semantic::Index expr_idx,
-    const semantic::Index source_id) {
-  if (expr_idx == semantic::kInvalidIndex ||
-      source_id == semantic::kInvalidIndex) {
-    return false;
-  }
-  const auto &program = plan.lowered.program;
-  const auto pos = static_cast<std::size_t>(expr_idx);
-  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
-  switch (kind) {
-  case semantic::ExprKind::Event:
-    return program.expr_source_ids[pos] == source_id;
-  case semantic::ExprKind::And:
-    return expr_span_static_has_event_source_subset(
-        plan,
-        ExactIndexSpan{
-            program.expr_arg_offsets[pos],
-            static_cast<semantic::Index>(
-                program.expr_arg_offsets[pos + 1U] -
-                program.expr_arg_offsets[pos])},
-        source_id);
-  case semantic::ExprKind::Or: {
-    const auto begin = program.expr_arg_offsets[pos];
-    const auto end = program.expr_arg_offsets[pos + 1U];
-    if (begin == end) {
-      return false;
-    }
-    for (semantic::Index i = begin; i < end; ++i) {
-      if (!expr_static_subset_of_event_source(
-              plan,
-              program.expr_args[static_cast<std::size_t>(i)],
-              source_id)) {
-        return false;
-      }
-    }
-    return true;
-  }
-  case semantic::ExprKind::Guard:
-    return expr_static_subset_of_event_source(
-        plan,
-        program.expr_ref_child[pos],
-        source_id);
-  case semantic::ExprKind::Impossible:
-    return true;
-  case semantic::ExprKind::TrueExpr:
-  case semantic::ExprKind::Not:
-    return false;
-  }
-  return false;
-}
-
-inline bool expr_static_can_equiv_event_source(
-    const ExactVariantPlan &plan,
-    const semantic::Index expr_idx,
-    const semantic::Index source_id) {
-  if (expr_idx == semantic::kInvalidIndex ||
-      source_id == semantic::kInvalidIndex) {
-    return false;
-  }
-  const auto &program = plan.lowered.program;
-  const auto pos = static_cast<std::size_t>(expr_idx);
-  const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
-  if (kind == semantic::ExprKind::Event) {
-    return program.expr_source_ids[pos] == source_id;
-  }
-  if (kind == semantic::ExprKind::Guard) {
-    const auto &kernel = plan.expr_kernels[pos];
-    return kernel.simple_event_guard &&
-           !kernel.has_unless &&
-           kernel.guard_ref_source_id == source_id;
-  }
-  if (kind != semantic::ExprKind::And) {
-    return false;
-  }
-  const auto begin = program.expr_arg_offsets[pos];
-  const auto end = program.expr_arg_offsets[pos + 1U];
-  for (semantic::Index i = begin; i < end; ++i) {
-    if (expr_static_can_equiv_event_source(
-            plan,
-            program.expr_args[static_cast<std::size_t>(i)],
-            source_id)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-inline ExactIndexSpan compile_expr_union_absorption_candidates(
-    ExactVariantPlan *plan,
-    const semantic::Index expr_idx,
-    const ExactExprKernel &kernel) {
-  const auto offset = static_cast<semantic::Index>(
-      plan->expr_union_absorption_sources.size());
-  const auto &program = plan->lowered.program;
-  const auto &support = plan->expr_supports[static_cast<std::size_t>(expr_idx)];
-  for (const auto source_id : support) {
-    bool all_subset = true;
-    bool any_equiv = false;
-    for (semantic::Index i = 0; i < kernel.children.size; ++i) {
-      const auto child = program.expr_args[
-          static_cast<std::size_t>(kernel.children.offset + i)];
-      if (!expr_static_subset_of_event_source(*plan, child, source_id)) {
-        all_subset = false;
-        break;
-      }
-      any_equiv =
-          any_equiv ||
-          expr_static_can_equiv_event_source(*plan, child, source_id);
-    }
-    if (all_subset && any_equiv) {
-      plan->expr_union_absorption_sources.push_back(source_id);
-    }
-  }
-  return ExactIndexSpan{
-      offset,
-      static_cast<semantic::Index>(
-          plan->expr_union_absorption_sources.size() -
-          static_cast<std::size_t>(offset))};
-}
-
-inline void compile_exact_expr_kernels(ExactVariantPlan *plan) {
+inline void compile_exact_expr_kernels(ExactVariantBuildState *plan) {
   const auto &program = plan->lowered.program;
   plan->expr_kernels.assign(program.expr_kind.size(), ExactExprKernel{});
-  plan->expr_union_subsets.clear();
-  plan->expr_union_subset_children.clear();
-  plan->expr_union_subset_child_positions.clear();
-  plan->expr_union_absorption_sources.clear();
-  plan->expr_union_kernel_cache_slot_count = 0;
 
   for (semantic::Index expr_idx = 0;
        expr_idx < static_cast<semantic::Index>(program.expr_kind.size());
@@ -351,21 +110,6 @@ inline void compile_exact_expr_kernels(ExactVariantPlan *plan) {
       continue;
     }
 
-    if (kernel.kind == semantic::ExprKind::Or) {
-      kernel.children_overlap =
-          expr_children_supports_overlap(*plan, kernel.children);
-      if (kernel.children_overlap) {
-        kernel.union_subset_span =
-            compile_expr_union_subsets(plan, kernel.children);
-        kernel.union_absorption_candidate_span =
-            compile_expr_union_absorption_candidates(
-                plan, expr_idx, kernel);
-        kernel.union_kernel_cache_slot =
-            plan->expr_union_kernel_cache_slot_count++;
-      }
-      continue;
-    }
-
     if (kernel.kind != semantic::ExprKind::Guard) {
       continue;
     }
@@ -373,31 +117,9 @@ inline void compile_exact_expr_kernels(ExactVariantPlan *plan) {
     kernel.guard_ref_expr_id = program.expr_ref_child[pos];
     kernel.guard_blocker_expr_id = program.expr_blocker_child[pos];
     kernel.has_unless = !kernel.children.empty();
-    const auto ref_pos =
-        static_cast<std::size_t>(kernel.guard_ref_expr_id);
-    const auto blocker_pos =
-        static_cast<std::size_t>(kernel.guard_blocker_expr_id);
-    kernel.guard_ref_kind =
-        static_cast<semantic::ExprKind>(program.expr_kind[ref_pos]);
-    kernel.guard_blocker_kind =
-        static_cast<semantic::ExprKind>(program.expr_kind[blocker_pos]);
-    kernel.simple_event_guard =
-        kernel.guard_ref_kind == semantic::ExprKind::Event &&
-        kernel.guard_blocker_kind == semantic::ExprKind::Event;
-    if (kernel.simple_event_guard) {
-      kernel.guard_ref_source_id = program.expr_source_ids[ref_pos];
-      kernel.guard_blocker_source_id = program.expr_source_ids[blocker_pos];
-    }
-    if (kernel.guard_ref_kind == semantic::ExprKind::And) {
-      kernel.guard_ref_child_span = ExactIndexSpan{
-          program.expr_arg_offsets[ref_pos],
-          static_cast<semantic::Index>(
-              program.expr_arg_offsets[ref_pos + 1U] -
-              program.expr_arg_offsets[ref_pos])};
-    }
   }
 }
-inline void compile_trigger_state_table(ExactVariantPlan *plan) {
+inline void compile_trigger_state_table(ExactVariantBuildState *plan) {
   struct TriggerStateBuilder {
     double fixed_weight{1.0};
     std::vector<ExactCompiledTriggerWeightTerm> weight_terms;
@@ -503,7 +225,7 @@ inline void compile_trigger_state_table(ExactVariantPlan *plan) {
   }
 }
 
-inline void compile_shared_trigger_state_table(ExactVariantPlan *plan) {
+inline void compile_shared_trigger_state_table(ExactVariantBuildState *plan) {
   plan->shared_trigger_indices.clear();
   const auto &program = plan->lowered.program;
   for (int i = 0; i < program.layout.n_triggers; ++i) {

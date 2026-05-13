@@ -27,6 +27,7 @@ inline ExactVariantPlan make_exact_variant_plan(
       &build,
       outcome_code_by_label,
       n_outcome_codes);
+  build.no_response = compile_terminal_no_response_plan(build);
   auto competitor_plans = compile_target_competitor_plans(&build);
   compile_sequence_plan(&build, competitor_plans);
   build.compiled_outcomes =

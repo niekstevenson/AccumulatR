@@ -5,12 +5,12 @@ Version: 0.1.0
 Authors@R: c(
     person("Niek", "Stevenson", email = "niek.stevenson@gmail.com", role = c("aut", "cre"))
   )
-Description: Tools for simulating and fitting evidence-accumulation and race
-    models to behavioral data. The package is designed for workflows common in
-    cognitive psychology: define a model in terms of accumulators, pooled
-    channels, response rules, and timing dependencies; simulate response-time
-    data; and evaluate the likelihood of observed responses under alternative
-    parameter values. The user-facing interface stays in R, while the repeated
+Description: Toolbox for designing, simulating and fitting custom evidence-accumulation
+    models to behavioral data. Users define a model in terms of accumulators, pooled
+    channels, logical response rules, and timing dependencies. This allows more direct
+    embedding of psychological hypotheses into the model. With that model you can
+    simulate decision-making data and evaluate the likelihood of observed responses 
+    under alternative parameter values. The user-facing interface stays in R, while the
     likelihood calculations are handled in C++ for speed.
 License: GPL-3
 URL: https://github.com/niekstevenson/AccumulatR,
@@ -31,6 +31,5 @@ VignetteBuilder: knitr
 LinkingTo: Rcpp
 SystemRequirements: C++17
 NeedsCompilation: yes
-LazyData: false
 RoxygenNote: 7.3.3
 Config/testthat/edition: 3

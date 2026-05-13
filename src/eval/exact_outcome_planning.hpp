@@ -8,6 +8,79 @@
 namespace accumulatr::eval {
 namespace detail {
 
+inline bool exact_scenario_is_terminal_leaf_release(
+    const ExactVariantBuildState &plan,
+    const ExactSymbolicTransitionScenario &scenario,
+    semantic::Index *leaf_index) {
+  const auto source_id =
+      exact_symbolic_transition_release_source_id(scenario.transition);
+  if (source_id == semantic::kInvalidIndex ||
+      source_id >= plan.lowered.program.layout.n_leaves ||
+      plan.source_count != plan.lowered.program.layout.n_leaves) {
+    return false;
+  }
+  if (!scenario.transition.readiness_time_expr.requirements.empty() ||
+      !scenario.transition.guards.empty() ||
+      !scenario.transition.order_region.source_order_facts.empty()) {
+    return false;
+  }
+  const auto &relations = scenario.transition.relation_template;
+  if (!relations.empty() &&
+      !(relations.source_ids.size() == 1U &&
+        relations.relations.size() == 1U &&
+        relations.source_ids.front() == source_id &&
+        relations.relations.front() == ExactRelation::At)) {
+    return false;
+  }
+  if (!scenario.transition.active_sources.empty() &&
+      (scenario.transition.active_sources.size() != 1U ||
+       scenario.transition.active_sources.front() != source_id)) {
+    return false;
+  }
+  if (leaf_index != nullptr) {
+    *leaf_index = source_id;
+  }
+  return true;
+}
+
+inline ExactTerminalNoResponsePlan compile_terminal_no_response_plan(
+    const ExactVariantBuildState &plan) {
+  ExactTerminalNoResponsePlan no_response;
+  const auto leaf_count = plan.lowered.program.layout.n_leaves;
+  if (leaf_count <= 0 ||
+      plan.source_count != leaf_count ||
+      plan.outcomes.empty()) {
+    return no_response;
+  }
+
+  std::vector<std::uint8_t> covered(static_cast<std::size_t>(leaf_count), 0U);
+  for (const auto &outcome : plan.outcomes) {
+    if (outcome.scenarios.size() != 1U) {
+      return ExactTerminalNoResponsePlan{};
+    }
+    semantic::Index leaf_index{semantic::kInvalidIndex};
+    if (!exact_scenario_is_terminal_leaf_release(
+            plan, outcome.scenarios.front(), &leaf_index)) {
+      return ExactTerminalNoResponsePlan{};
+    }
+    const auto pos = static_cast<std::size_t>(leaf_index);
+    if (pos >= covered.size() || covered[pos] != 0U) {
+      return ExactTerminalNoResponsePlan{};
+    }
+    covered[pos] = 1U;
+  }
+
+  no_response.leaf_indices.reserve(covered.size());
+  for (std::size_t i = 0; i < covered.size(); ++i) {
+    if (covered[i] == 0U) {
+      return ExactTerminalNoResponsePlan{};
+    }
+    no_response.leaf_indices.push_back(static_cast<semantic::Index>(i));
+  }
+  no_response.direct_leaf_failure_product = true;
+  return no_response;
+}
+
 inline semantic::Index compile_scenario_probability_root(
     ExactVariantBuildState *plan,
     const ExactOutcomeRegionCompileContext &outcome_context,

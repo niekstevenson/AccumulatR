@@ -212,6 +212,12 @@ inline double evaluate_observation_plan_direct(
               : 0.0;
       break;
     }
+    case ObservationPlanOpKind::NoResponseProbability:
+      value = exact_terminal_no_response_probability(
+          exact_plan,
+          params,
+          first_param_row);
+      break;
     case ObservationPlanOpKind::WeightedSum:
       if (op.value_kind == ObservationPlanValueKind::Log) {
         double anchor = R_NegInf;

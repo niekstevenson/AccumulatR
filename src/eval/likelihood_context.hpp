@@ -184,6 +184,23 @@ inline NativeLikelihoodContext build_native_likelihood_context(
       outcome_labels.size(),
       &ctx.exact_variant_index_by_component_code,
       &ctx.exact_plans);
+  for (std::size_t component_code = 0;
+       component_code < ctx.observation_plans_by_component_code.size() &&
+       component_code < ctx.exact_variant_index_by_component_code.size();
+       ++component_code) {
+    const auto variant_index =
+        ctx.exact_variant_index_by_component_code[component_code];
+    if (variant_index == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(variant_index) >= ctx.exact_plans.size()) {
+      continue;
+    }
+    ctx.observation_plans_by_component_code[component_code]
+        .direct_no_response =
+        ctx.exact_plans[static_cast<std::size_t>(variant_index)]
+            .no_response.direct_leaf_failure_product &&
+        !ctx.exact_plans[static_cast<std::size_t>(variant_index)]
+             .no_response.leaf_indices.empty();
+  }
   ctx.exact_leaf_row_offsets_by_variant =
       make_exact_leaf_row_offsets_by_variant(ctx.model, ctx.exact_plans);
   compile_observation_probability_plans(&ctx.observation_plans_by_component_code);

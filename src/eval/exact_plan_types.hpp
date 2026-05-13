@@ -47,6 +47,11 @@ struct ExactSequencePlan {
   std::vector<semantic::Index> expr_cdf_roots;
 };
 
+struct ExactTerminalNoResponsePlan {
+  bool direct_leaf_failure_product{false};
+  std::vector<semantic::Index> leaf_indices;
+};
+
 struct ExactExprDistributionKey {
   semantic::Index expr_id{semantic::kInvalidIndex};
   CompiledMathNodeKind value_kind{CompiledMathNodeKind::ExprCdf};
@@ -68,6 +73,7 @@ struct ExactVariantBuildState {
   std::vector<ExactOutcomePlan> outcomes;
   std::vector<ExactCompiledOutcomePlan> compiled_outcomes;
   ExactSequencePlan sequence;
+  ExactTerminalNoResponsePlan no_response;
   std::vector<ExactExprDistributionPlan> expr_distributions;
   ExactComplexityMetrics complexity;
   CompiledMathProgram compiled_math;
@@ -94,6 +100,7 @@ struct ExactVariantPlan {
   std::vector<semantic::Index> outcome_index_by_code;
   std::vector<ExactCompiledOutcomePlan> compiled_outcomes;
   ExactSequencePlan sequence;
+  ExactTerminalNoResponsePlan no_response;
   ExactComplexityMetrics complexity;
   CompiledMathProgram compiled_math;
   std::vector<ExactRelationTemplate> compiled_source_views;
@@ -111,6 +118,7 @@ inline ExactVariantPlan finalize_exact_variant_plan(
   plan.outcome_index_by_code = std::move(build.outcome_index_by_code);
   plan.compiled_outcomes = std::move(build.compiled_outcomes);
   plan.sequence = std::move(build.sequence);
+  plan.no_response = std::move(build.no_response);
   plan.complexity = build.complexity;
   plan.compiled_math = std::move(build.compiled_math);
   plan.compiled_source_views = std::move(build.compiled_source_views);

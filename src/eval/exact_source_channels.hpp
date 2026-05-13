@@ -22,6 +22,28 @@ struct ExactLoadedLeafInput {
   double t0{0.0};
 };
 
+inline double exact_leaf_q_for_trigger_state(
+    const runtime::ExactProgram &program,
+    const ParamView &params,
+    const int row,
+    const ExactTriggerState &trigger_state,
+    const semantic::Index leaf_index) {
+  const auto trigger_index =
+      program.leaf_trigger_index[static_cast<std::size_t>(leaf_index)];
+  if (trigger_index != semantic::kInvalidIndex &&
+      static_cast<semantic::TriggerKind>(
+          program.trigger_kind[static_cast<std::size_t>(trigger_index)]) ==
+          semantic::TriggerKind::Shared &&
+      trigger_state.shared_started != nullptr) {
+    const auto started =
+        trigger_state.shared_started[static_cast<std::size_t>(trigger_index)];
+    if (started <= 1U) {
+      return started == 1U ? 0.0 : 1.0;
+    }
+  }
+  return params.q(row);
+}
+
 class CompiledSourceChannels {
 public:
   struct SourceProductScalarFill {
@@ -204,6 +226,15 @@ private:
         static_cast<std::size_t>(slot)];
   }
 
+  double leaf_q(const semantic::Index leaf_index, const int row) const {
+    return exact_leaf_q_for_trigger_state(
+        program_,
+        *params_,
+        row,
+        *trigger_state_,
+        leaf_index);
+  }
+
   double compiled_bound_term_time(
       const CompiledMathWorkspace *workspace,
       const CompiledSourceBoundTerm &term) const {
@@ -331,20 +362,6 @@ private:
     return false;
   }
 
-  double leaf_q(const semantic::Index leaf_index, const int row) const {
-    const auto trigger_index =
-        program_.leaf_trigger_index[static_cast<std::size_t>(leaf_index)];
-    if (trigger_index != semantic::kInvalidIndex &&
-        static_cast<semantic::TriggerKind>(
-            program_.trigger_kind[static_cast<std::size_t>(trigger_index)]) ==
-            semantic::TriggerKind::Shared &&
-        trigger_state_->shared_started[static_cast<std::size_t>(trigger_index)] <= 1U) {
-      return trigger_state_->shared_started[static_cast<std::size_t>(trigger_index)] == 1U
-                 ? 0.0
-                 : 1.0;
-    }
-    return params_->q(row);
-  }
 };
 
 using ExactSourceChannels = CompiledSourceChannels;

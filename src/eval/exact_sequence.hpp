@@ -22,6 +22,26 @@ struct ExactTrialView {
   const ExactTrialColumns *columns{nullptr};
 };
 
+inline ExactTrialColumns make_exact_trial_columns(
+    SEXP dataSEXP,
+    const PreparedTrialLayout &layout) {
+  ExactTrialColumns columns;
+  const int max_rank = layout.max_rank;
+  columns.labels.assign(static_cast<std::size_t>(max_rank + 1), nullptr);
+  columns.times.assign(static_cast<std::size_t>(max_rank + 1), nullptr);
+  for (int rank = 1; rank <= max_rank; ++rank) {
+    columns.labels[static_cast<std::size_t>(rank)] =
+        INTEGER(trusted_data_column(
+            dataSEXP,
+            layout.label_cols[static_cast<std::size_t>(rank)]));
+    columns.times[static_cast<std::size_t>(rank)] =
+        REAL(trusted_data_column(
+            dataSEXP,
+            layout.time_cols[static_cast<std::size_t>(rank)]));
+  }
+  return columns;
+}
+
 inline semantic::Index exact_trial_view_outcome_code(const ExactTrialView &view,
                                                      const std::size_t rank_idx) {
   return view.columns->labels[rank_idx + 1U][view.row];
@@ -152,6 +172,40 @@ inline double exact_finite_outcome_probability(
                 workspace);
           });
   return std::isfinite(probability) ? clamp_probability(probability) : 0.0;
+}
+
+inline double exact_terminal_no_response_probability(
+    const ExactVariantPlan &plan,
+    const ParamView &params,
+    const int first_param_row) {
+  if (!plan.no_response.direct_leaf_failure_product ||
+      plan.no_response.leaf_indices.empty()) {
+    return 0.0;
+  }
+  double total = 0.0;
+  for (const auto &compiled_state : plan.trigger_state_table.states) {
+    const auto trigger_state =
+        exact_compiled_trigger_state_view(
+            plan, params, first_param_row, compiled_state);
+    if (!(trigger_state.weight > 0.0)) {
+      continue;
+    }
+    double product = trigger_state.weight;
+    for (const auto leaf_index : plan.no_response.leaf_indices) {
+      product *= clamp_probability(
+          exact_leaf_q_for_trigger_state(
+              plan.lowered.program,
+              params,
+              first_param_row + static_cast<int>(leaf_index),
+              trigger_state,
+              leaf_index));
+      if (!(product > 0.0)) {
+        break;
+      }
+    }
+    total += product;
+  }
+  return std::isfinite(total) ? clamp_probability(total) : 0.0;
 }
 
 inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
@@ -469,24 +523,7 @@ inline SEXP evaluate_exact_trials_cached(
     const int *ok = nullptr) {
   ParamView params(paramsSEXP);
   const auto table = read_prepared_data_view(dataSEXP, layout);
-  const int max_rank = layout.max_rank;
-  ExactTrialColumns columns;
-  columns.labels.assign(static_cast<std::size_t>(max_rank + 1), nullptr);
-  columns.times.assign(static_cast<std::size_t>(max_rank + 1), nullptr);
-  columns.labels[1] =
-      INTEGER(trusted_data_column(dataSEXP, layout.label_cols[1]));
-  columns.times[1] =
-      REAL(trusted_data_column(dataSEXP, layout.time_cols[1]));
-  for (int rank = 2; rank <= max_rank; ++rank) {
-    columns.labels[static_cast<std::size_t>(rank)] =
-        INTEGER(trusted_data_column(
-            dataSEXP,
-            layout.label_cols[static_cast<std::size_t>(rank)]));
-    columns.times[static_cast<std::size_t>(rank)] =
-        REAL(trusted_data_column(
-            dataSEXP,
-            layout.time_cols[static_cast<std::size_t>(rank)]));
-  }
+  const auto columns = make_exact_trial_columns(dataSEXP, layout);
   Rcpp::NumericVector loglik(layout.spans.size(), min_ll);
   std::vector<runtime::TrialBlock> blocks;
   ExactStepWorkspacePool workspace_pool(plans.size());

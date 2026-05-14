@@ -146,17 +146,16 @@ inline bool rt_free_observation_cache_lookup(
   return false;
 }
 
-inline double evaluate_observation_plan_direct(
+inline double evaluate_observation_plan_at_row(
     const std::vector<ExactVariantPlan> &exact_plans,
-    const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
     const ObservationProbabilityPlan &obs_plan,
-    const semantic::Index trial_index,
     const semantic::Index variant_index,
     const double observed_rt,
     const double min_ll,
     const int *row_map,
     const int row_offset,
+    const int first_param_row,
     ExactStepWorkspacePool *workspace_pool,
     std::vector<double> *values) {
   if (values == nullptr || workspace_pool == nullptr) {
@@ -165,11 +164,6 @@ inline double evaluate_observation_plan_direct(
   values->assign(obs_plan.ops.size(), 0.0);
   const auto &exact_plan = exact_plans[static_cast<std::size_t>(variant_index)];
   ParamView params(paramsSEXP, row_map, row_offset);
-  const int first_param_row =
-      row_map == nullptr
-          ? static_cast<int>(
-                layout.spans[static_cast<std::size_t>(trial_index)].start_row)
-          : 0;
   auto &workspace = workspace_pool->get(exact_plans, variant_index);
 
   for (std::size_t op_index = 0; op_index < obs_plan.ops.size(); ++op_index) {
@@ -307,6 +301,38 @@ inline double evaluate_observation_plan_direct(
   return obs_plan.root == semantic::kInvalidIndex
              ? min_ll
              : (*values)[static_cast<std::size_t>(obs_plan.root)];
+}
+
+inline double evaluate_observation_plan_direct(
+    const std::vector<ExactVariantPlan> &exact_plans,
+    const PreparedTrialLayout &layout,
+    SEXP paramsSEXP,
+    const ObservationProbabilityPlan &obs_plan,
+    const semantic::Index trial_index,
+    const semantic::Index variant_index,
+    const double observed_rt,
+    const double min_ll,
+    const int *row_map,
+    const int row_offset,
+    ExactStepWorkspacePool *workspace_pool,
+    std::vector<double> *values) {
+  const int first_param_row =
+      row_map == nullptr
+          ? static_cast<int>(
+                layout.trials[static_cast<std::size_t>(trial_index)].start_row)
+          : 0;
+  return evaluate_observation_plan_at_row(
+      exact_plans,
+      paramsSEXP,
+      obs_plan,
+      variant_index,
+      observed_rt,
+      min_ll,
+      row_map,
+      row_offset,
+      first_param_row,
+      workspace_pool,
+      values);
 }
 
 } // namespace detail

@@ -5,11 +5,15 @@ semantic_make_likelihood_context_prep_cpp <- function(prepSEXP) {
     .Call(`_AccumulatR_semantic_make_likelihood_context_prep_cpp`, prepSEXP)
 }
 
+semantic_complexity_metrics_context_cpp <- function(contextSEXP) {
+    .Call(`_AccumulatR_semantic_complexity_metrics_context_cpp`, contextSEXP)
+}
+
 semantic_loglik_context_cpp <- function(contextSEXP, paramsSEXP, dataSEXP, okSEXP, expandSEXP, minLLSEXP) {
     .Call(`_AccumulatR_semantic_loglik_context_cpp`, contextSEXP, paramsSEXP, dataSEXP, okSEXP, expandSEXP, minLLSEXP)
 }
 
-semantic_probability_context_cpp <- function(contextSEXP, paramsSEXP, dataSEXP) {
-    .Call(`_AccumulatR_semantic_probability_context_cpp`, contextSEXP, paramsSEXP, dataSEXP)
+semantic_response_probabilities_context_cpp <- function(contextSEXP, paramsSEXP, layoutSEXP) {
+    .Call(`_AccumulatR_semantic_response_probabilities_context_cpp`, contextSEXP, paramsSEXP, layoutSEXP)
 }
 

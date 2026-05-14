@@ -136,9 +136,14 @@ SEXP semantic_make_likelihood_context_prep_cpp(SEXP prepSEXP) {
       new accumulatr::eval::detail::NativeLikelihoodContext(std::move(ctx)),
       true);
   return Rcpp::List::create(
-      Rcpp::Named("native") = ptr,
-      Rcpp::Named("complexity") = complexity_metrics_list(*ptr),
-      Rcpp::Named("observation_identity") = ptr->observation_is_identity);
+      Rcpp::Named("native") = ptr);
+}
+
+// [[Rcpp::export]]
+SEXP semantic_complexity_metrics_context_cpp(SEXP contextSEXP) {
+  const auto &ctx =
+      accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
+  return complexity_metrics_list(ctx);
 }
 
 // [[Rcpp::export]]
@@ -157,7 +162,7 @@ SEXP semantic_loglik_context_cpp(SEXP contextSEXP,
   Rcpp::List observed = accumulatr::eval::detail::evaluate_observation_likelihood_cached(
       ctx.observation_plans_by_component_code,
       ctx.observation_is_identity,
-      ctx.model,
+      ctx.component_mixture,
       ctx.exact_variant_index_by_component_code,
       ctx.exact_plans,
       ctx.exact_leaf_row_offsets_by_variant,
@@ -207,18 +212,18 @@ void accumulatr_register_ccallables(DllInfo *dll) {
 }
 
 // [[Rcpp::export]]
-SEXP semantic_probability_context_cpp(SEXP contextSEXP,
-                                      SEXP paramsSEXP,
-                                      SEXP dataSEXP) {
+SEXP semantic_response_probabilities_context_cpp(SEXP contextSEXP,
+                                                 SEXP paramsSEXP,
+                                                 SEXP layoutSEXP) {
   const auto &ctx =
       accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
-  const auto layout =
-      accumulatr::eval::detail::read_prepared_trial_layout(dataSEXP);
-  return accumulatr::eval::detail::evaluate_observation_probability_queries_cached(
+  return accumulatr::eval::detail::evaluate_response_probabilities_cached(
+      ctx.component_mixture,
       ctx.observation_plans_by_component_code,
       ctx.exact_variant_index_by_component_code,
       ctx.exact_plans,
-      layout,
+      ctx.exact_leaf_row_offsets_by_variant,
+      ctx.outcome_count,
       paramsSEXP,
-      dataSEXP);
+      layoutSEXP);
 }

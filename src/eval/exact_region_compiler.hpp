@@ -66,6 +66,12 @@ inline bool exact_expr_completion_monotone(
     const ExactVariantBuildState &plan,
     semantic::Index expr_id);
 
+inline bool exact_order_region_expand_relation_factor(
+    const ExactVariantBuildState &plan,
+    const ExactOrderRegionExprValueFactor &factor,
+    ExactOrderRegionBuilder *builder,
+    ExactOrderRegionExpr *out);
+
 inline ExactOrderRegionExpr exact_order_region_subtract_region(
     ExactOrderRegionExpr domain,
     const ExactOrderRegionExpr &covered);
@@ -1234,6 +1240,219 @@ inline ExactOrderRegionExpr exact_order_region_subtract_region(
   return exact_order_region_simplify(std::move(domain));
 }
 
+inline bool exact_order_region_expr_has_positive_measure(
+    ExactOrderRegionExpr region) {
+  region =
+      exact_order_region_minimize_positive_union(
+          exact_order_region_simplify(std::move(region)));
+  for (const auto &term : region.terms) {
+    if (term.sign > 0.0 &&
+        exact_order_region_cell_has_positive_measure(term)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+inline bool exact_order_region_expr_is_tautology(
+    ExactOrderRegionExpr region) {
+  return !exact_order_region_expr_has_positive_measure(
+      exact_order_region_subtract_region(
+          exact_order_region_one(),
+          exact_order_region_simplify(std::move(region))));
+}
+
+inline bool exact_order_region_materialize_relation_factors(
+    const ExactVariantBuildState &plan,
+    ExactOrderRegionExpr region,
+    ExactOrderRegionBuilder *builder,
+    ExactOrderRegionExpr *out) {
+  const ExactProjectionRelationOps ops{
+      nullptr,
+      nullptr,
+      exact_order_region_expand_relation_factor};
+  region =
+      exact_order_region_minimize_positive_union(
+          exact_order_region_simplify(std::move(region)));
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    ExactOrderRegionExpr next = exact_order_region_zero();
+    for (const auto &term : region.terms) {
+      const auto factors = exact_projection_materializable_relation_factors(term);
+      bool expanded = false;
+      for (const auto &factor : factors) {
+        ExactOrderRegionExpr materialized;
+        if (!exact_projection_materialize_relation_factor(
+                plan,
+                term,
+                factor,
+                ops,
+                builder,
+                &materialized)) {
+          continue;
+        }
+        exact_order_region_append_expr(&next, std::move(materialized));
+        changed = true;
+        expanded = true;
+        break;
+      }
+      if (!expanded) {
+        next.terms.push_back(term);
+      }
+    }
+    region =
+        exact_order_region_minimize_positive_union(
+            exact_order_region_simplify(std::move(next)));
+  }
+  *out = std::move(region);
+  return true;
+}
+
+inline bool exact_order_region_apply_transition_order_facts(
+    ExactOrderRegionExpr *region,
+    const ExactSymbolicTransitionTime &transition,
+    ExactOrderRegionBuilder *builder) {
+  return exact_order_region_apply_source_order_facts(
+      region,
+      transition.order_region.source_order_facts,
+      builder);
+}
+
+inline bool exact_order_region_transition_strict_precedence(
+    const ExactVariantBuildState &plan,
+    const ExactSymbolicTransitionTime &competitor,
+    ExactOrderRegionBuilder *builder,
+    ExactOrderRegionExpr *out) {
+  const auto observed_time_id =
+      static_cast<semantic::Index>(CompiledMathTimeSlot::Observed);
+  const auto competitor_time_id = exact_order_region_new_time(builder);
+  ExactOrderRegionExpr wins;
+  if (!exact_order_region_symbolic_transition_at_time(
+          plan,
+          competitor,
+          competitor_time_id,
+          builder,
+          &wins)) {
+    return false;
+  }
+  for (auto &term : wins.terms) {
+    exact_order_region_append_time_order(
+        &term, competitor_time_id, observed_time_id);
+  }
+  *out =
+      exact_order_region_minimize_positive_union(
+          exact_order_region_simplify(std::move(wins)));
+  return true;
+}
+
+inline bool exact_order_region_transition_coincident_precedence(
+    const ExactVariantBuildState &plan,
+    const ExactSymbolicTransitionTime &competitor,
+    const semantic::Index target_readiness_time_id,
+    ExactOrderRegionBuilder *builder,
+    ExactOrderRegionExpr *out) {
+  const auto observed_time_id =
+      static_cast<semantic::Index>(CompiledMathTimeSlot::Observed);
+  const auto readiness_time_id =
+      target_readiness_time_id == semantic::kInvalidIndex
+          ? static_cast<semantic::Index>(CompiledMathTimeSlot::Zero)
+          : target_readiness_time_id;
+  ExactOrderRegionExpr wins;
+  if (!exact_order_region_transition_requirements_at_times(
+          plan,
+          competitor,
+          competitor.guards,
+          observed_time_id,
+          readiness_time_id,
+          observed_time_id,
+          builder,
+          &wins)) {
+    return false;
+  }
+  if (!exact_order_region_apply_transition_order_facts(
+          &wins, competitor, builder)) {
+    return false;
+  }
+  *out =
+      exact_order_region_minimize_positive_union(
+          exact_order_region_simplify(std::move(wins)));
+  return true;
+}
+
+inline bool exact_order_region_transition_precedence(
+    const ExactVariantBuildState &plan,
+    const ExactSymbolicTransitionTime &target,
+    const ExactSymbolicTransitionTime &competitor,
+    const semantic::Index target_readiness_time_id,
+    ExactOrderRegionBuilder *builder,
+    ExactOrderRegionExpr *out) {
+  const auto relation =
+      exact_symbolic_transition_relation(target, competitor);
+  ExactOrderRegionExpr wins = exact_order_region_zero();
+  if (relation.competitor_can_strictly_precede) {
+    ExactOrderRegionExpr strict_wins;
+    if (!exact_order_region_transition_strict_precedence(
+            plan,
+            competitor,
+            builder,
+            &strict_wins)) {
+      return false;
+    }
+    wins = exact_order_region_union(std::move(wins), std::move(strict_wins));
+  }
+  if (relation.competitor_can_positively_coincide) {
+    ExactOrderRegionExpr coincident_wins;
+    if (!exact_order_region_transition_coincident_precedence(
+            plan,
+            competitor,
+            target_readiness_time_id,
+            builder,
+            &coincident_wins)) {
+      return false;
+    }
+    wins =
+        exact_order_region_union(
+            std::move(wins),
+            std::move(coincident_wins));
+  }
+  *out =
+      exact_order_region_minimize_positive_union(
+          exact_order_region_simplify(std::move(wins)));
+  return true;
+}
+
+inline bool exact_order_region_competitor_scenario_can_win_on_branch(
+    const ExactVariantBuildState &plan,
+    const ExactSymbolicTransitionScenario &target,
+    const ExactSymbolicTransitionScenario &competitor,
+    const ExactOrderRegionExpr &target_branch,
+    const semantic::Index target_readiness_time_id,
+    ExactOrderRegionBuilder builder,
+    bool *can_win) {
+  ExactOrderRegionExpr wins;
+  if (!exact_order_region_transition_precedence(
+          plan,
+          target.transition,
+          competitor.transition,
+          target_readiness_time_id,
+          &builder,
+          &wins)) {
+    return false;
+  }
+  ExactOrderRegionExpr overlap =
+      exact_order_region_conjoin(target_branch, wins);
+  if (!exact_order_region_materialize_relation_factors(
+          plan,
+          std::move(overlap),
+          &builder,
+          &overlap)) {
+    return false;
+  }
+  *can_win = exact_order_region_expr_has_positive_measure(std::move(overlap));
+  return true;
+}
+
 inline bool exact_order_region_transition_no_strict_precedence(
     const ExactVariantBuildState &plan,
     const ExactSymbolicTransitionRelation &relation,
@@ -1420,6 +1639,7 @@ inline bool exact_order_region_competitor_plan_non_win(
     const ExactVariantBuildState &plan,
     const ExactSymbolicTransitionScenario &target,
     const ExactCompetitorRegionPlan &competitor,
+    const ExactOrderRegionExpr &target_branch,
     const semantic::Index target_readiness_time_id,
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
@@ -1436,6 +1656,20 @@ inline bool exact_order_region_competitor_plan_non_win(
 
   ExactOrderRegionExpr non_win = exact_order_region_one();
   for (const auto &scenario : competitor.scenarios) {
+    bool can_win = true;
+    if (!exact_order_region_competitor_scenario_can_win_on_branch(
+            plan,
+            target,
+            scenario,
+            target_branch,
+            target_readiness_time_id,
+            *builder,
+            &can_win)) {
+      return false;
+    }
+    if (!can_win) {
+      continue;
+    }
     ExactOrderRegionExpr scenario_non_win;
     if (!exact_order_region_competitor_scenario_non_win(
             plan,
@@ -1455,7 +1689,8 @@ inline bool exact_order_region_competitor_plan_non_win(
 inline ExactOrderRegionExpr exact_order_region_gate_non_win(
     ExactOrderRegionExpr non_win,
     const std::vector<semantic::Index> &outcome_indices) {
-  if (outcome_indices.empty()) {
+  if (outcome_indices.empty() ||
+      exact_order_region_expr_is_tautology(non_win)) {
     return non_win;
   }
   return exact_order_region_union(
@@ -1471,6 +1706,7 @@ inline bool exact_order_region_competitor_non_win(
     const ExactVariantBuildState &plan,
     const ExactOutcomeRegionCompileContext &outcome_context,
     const ExactSymbolicTransitionScenario &target,
+    const ExactOrderRegionExpr &target_branch,
     const semantic::Index target_readiness_time_id,
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
@@ -1481,6 +1717,7 @@ inline bool exact_order_region_competitor_non_win(
             plan,
             target,
             competitor,
+            target_branch,
             target_readiness_time_id,
             builder,
             &competitor_non_win)) {
@@ -1817,6 +2054,7 @@ inline bool exact_order_region_probability_root(
             *plan,
             outcome_context,
             formula,
+            branch.expr,
             branch.readiness_time_id,
             &builder,
             &non_win)) {

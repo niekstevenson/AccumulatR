@@ -3,6 +3,8 @@
 #include <Rcpp.h>
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <vector>
 
 #include "observation_model.hpp"
@@ -16,11 +18,11 @@ struct TrustedParamMatrix {
   int nrow{0};
   int component_weight_start{0};
 
-  TrustedParamMatrix(SEXP paramsSEXP, const int component_weight_param_count)
+  TrustedParamMatrix(SEXP paramsSEXP, const int weight_param_count)
       : base(REAL(paramsSEXP)),
         nrow(Rf_nrows(paramsSEXP)),
         component_weight_start(
-            Rf_ncols(paramsSEXP) - component_weight_param_count) {}
+            Rf_ncols(paramsSEXP) - weight_param_count) {}
 
   inline double component_weight(const int row,
                                  const int weight_param_index) const {
@@ -29,11 +31,28 @@ struct TrustedParamMatrix {
             nrow +
         row];
   }
+};
 
+enum class ComponentMixtureMode : std::uint8_t {
+  Fixed = 0,
+  Sample = 1
+};
+
+struct ComponentMixtureEntry {
+  double fixed_weight{0.0};
+  int weight_param_index{-1};
+};
+
+struct ComponentMixturePlan {
+  ComponentMixtureMode mode{ComponentMixtureMode::Fixed};
+  semantic::Index reference_component_code{semantic::kInvalidIndex};
+  int weight_param_count{0};
+  std::vector<ComponentMixtureEntry> component_by_code;
+  std::vector<semantic::Index> present_component_codes;
 };
 
 inline std::vector<double> resolve_component_weights(
-    const semantic::SemanticModel &model,
+    const ComponentMixturePlan &mixture,
     const std::vector<semantic::Index> &component_codes,
     const TrustedParamMatrix &params,
     const int row) {
@@ -42,57 +61,58 @@ inline std::vector<double> resolve_component_weights(
     return weights;
   }
 
-  if (model.component_mode != "sample") {
+  if (mixture.mode != ComponentMixtureMode::Sample) {
     for (std::size_t i = 0; i < component_codes.size(); ++i) {
-      const auto component_index =
-          static_cast<std::size_t>(component_codes[i] - 1);
-      weights[i] = model.components[component_index].weight;
+      weights[i] =
+          mixture.component_by_code[static_cast<std::size_t>(component_codes[i])]
+              .fixed_weight;
     }
   } else {
-    const auto reference_id =
-        !model.component_reference.empty() && std::any_of(
-                                                 component_codes.begin(),
-                                                 component_codes.end(),
-                                                 [&](const auto code) {
-                                                   return model.components
-                                                              [static_cast<std::size_t>(code - 1)]
-                                                                  .id ==
-                                                          model.component_reference;
-                                                 })
-            ? model.component_reference
-            : model.components[static_cast<std::size_t>(component_codes.front() - 1)]
-                  .id;
+    const auto reference_it =
+        std::find(
+            component_codes.begin(),
+            component_codes.end(),
+            mixture.reference_component_code);
+    const bool reference_available = reference_it != component_codes.end();
+    const auto reference_code =
+        reference_available ? mixture.reference_component_code
+                            : semantic::kInvalidIndex;
     double sum_nonref = 0.0;
     for (std::size_t i = 0; i < component_codes.size(); ++i) {
-      const auto component_index =
-          static_cast<std::size_t>(component_codes[i] - 1);
-      const auto &component = model.components[component_index];
-      if (component.id == reference_id) {
+      const auto code = component_codes[i];
+      if (reference_available && code == reference_code) {
         continue;
       }
-      double weight = component.weight;
+      const auto &component =
+          mixture.component_by_code[static_cast<std::size_t>(code)];
+      double weight = component.fixed_weight;
       if (component.weight_param_index >= 0) {
         weight = params.component_weight(row, component.weight_param_index);
       }
       weights[i] = weight;
       sum_nonref += weight;
     }
-    for (std::size_t i = 0; i < component_codes.size(); ++i) {
-      const auto component_index =
-          static_cast<std::size_t>(component_codes[i] - 1);
-      const auto &component = model.components[component_index];
-      if (component.id != reference_id) {
-        continue;
+    if (reference_available) {
+      for (std::size_t i = 0; i < component_codes.size(); ++i) {
+        if (component_codes[i] != reference_code) {
+          continue;
+        }
+        weights[i] = 1.0 - sum_nonref;
+        break;
       }
-      double ref_weight = 1.0 - sum_nonref;
-      weights[i] = ref_weight;
-      break;
     }
   }
 
   double total = 0.0;
   for (const auto weight : weights) {
     total += weight;
+  }
+  if (!(std::isfinite(total) && total > 0.0)) {
+    const double uniform = 1.0 / static_cast<double>(weights.size());
+    for (auto &weight : weights) {
+      weight = uniform;
+    }
+    return weights;
   }
   const double inv_total = 1.0 / total;
   for (auto &weight : weights) {
@@ -107,13 +127,12 @@ struct TrialComponentChoice {
 };
 
 inline std::vector<TrialComponentChoice> resolve_trial_components(
-    const std::vector<ComponentObservationPlan> &component_plans_by_code,
-    const semantic::SemanticModel &model,
+    const ComponentMixturePlan &mixture,
     const PreparedTrialLayout &layout,
     const int *component,
     const TrustedParamMatrix &params,
     const std::size_t trial_index) {
-  const auto row = static_cast<R_xlen_t>(layout.spans[trial_index].start_row);
+  const auto row = static_cast<R_xlen_t>(layout.trials[trial_index].start_row);
   std::vector<TrialComponentChoice> resolved;
 
   if (!integer_cell_is_na(component, row)) {
@@ -123,31 +142,22 @@ inline std::vector<TrialComponentChoice> resolve_trial_components(
     return resolved;
   }
 
-  std::vector<semantic::Index> component_codes;
-  const auto max_component_code = std::min(
-      component_plans_by_code.size(),
-      model.components.size() + 1U);
-  for (std::size_t component_code = 1; component_code < max_component_code;
-       ++component_code) {
-    if (component_plans_by_code[component_code].present) {
-      component_codes.push_back(static_cast<semantic::Index>(component_code));
-    }
-  }
-  if (component_codes.empty()) {
+  if (mixture.present_component_codes.empty()) {
     return resolved;
   }
 
   const auto weights = resolve_component_weights(
-      model,
-      component_codes,
+      mixture,
+      mixture.present_component_codes,
       params,
       static_cast<int>(row));
-  resolved.reserve(component_codes.size());
-  for (std::size_t i = 0; i < component_codes.size(); ++i) {
+  resolved.reserve(mixture.present_component_codes.size());
+  for (std::size_t i = 0; i < mixture.present_component_codes.size(); ++i) {
     if (!(weights[i] > 0.0)) {
       continue;
     }
-    resolved.push_back(TrialComponentChoice{component_codes[i], weights[i]});
+    resolved.push_back(
+        TrialComponentChoice{mixture.present_component_codes[i], weights[i]});
   }
   return resolved;
 }

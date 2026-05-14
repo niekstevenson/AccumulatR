@@ -54,6 +54,16 @@ inline bool source_in_component(const semantic::OutcomeSpec &outcome,
              component_id) != outcome.component_ids.end();
 }
 
+inline std::string observed_target_key(const semantic::OutcomeSpec &outcome) {
+  if (outcome.mapping.maps_to_missing) {
+    return std::string("\x1fmissing");
+  }
+  if (!outcome.mapping.observed_label.empty()) {
+    return outcome.mapping.observed_label;
+  }
+  return outcome.label;
+}
+
 enum class PoolProjectionKind : std::uint8_t {
   Dead = 0,
   Alias = 1,
@@ -103,8 +113,6 @@ public:
 
     std::vector<semantic::ExprNode> temp_expr_nodes;
     std::vector<semantic::OutcomeSpec> projected_outcomes;
-    std::vector<semantic::Index> original_to_projected(
-        model_.outcomes.size(), semantic::kInvalidIndex);
     projected_outcomes.reserve(model_.outcomes.size());
 
     for (semantic::Index outcome_index = 0;
@@ -125,53 +133,29 @@ public:
       projected.expr_root = materialize_expr(expr_result, &temp_expr_nodes);
       projected.competitor_expr_roots.clear();
       projected.competitor_outcome_indices.clear();
-      for (std::size_t j = 0; j < outcome.competitor_expr_roots.size(); ++j) {
-        const auto competitor_root = outcome.competitor_expr_roots[j];
-        if (competitor_root == semantic::kInvalidIndex) {
-          continue;
-        }
-        const auto competitor_result =
-            simplify_expr(competitor_root, &temp_expr_nodes);
-        if (competitor_result.kind == ExprResultKind::Impossible) {
-          continue;
-        }
-        projected.competitor_expr_roots.push_back(
-            materialize_expr(competitor_result, &temp_expr_nodes));
-        projected.competitor_outcome_indices.push_back(
-            j < outcome.competitor_outcome_indices.size()
-                ? outcome.competitor_outcome_indices[j]
-                : semantic::kInvalidIndex);
-      }
-      original_to_projected[static_cast<std::size_t>(outcome_index)] =
-          static_cast<semantic::Index>(projected_outcomes.size());
       projected_outcomes.push_back(std::move(projected));
     }
 
-    for (auto &outcome : projected_outcomes) {
-      std::vector<semantic::Index> remapped_roots;
-      std::vector<semantic::Index> remapped_origins;
-      remapped_roots.reserve(outcome.competitor_expr_roots.size());
-      remapped_origins.reserve(outcome.competitor_outcome_indices.size());
-      for (std::size_t j = 0; j < outcome.competitor_expr_roots.size(); ++j) {
-        semantic::Index origin = semantic::kInvalidIndex;
-        if (j < outcome.competitor_outcome_indices.size()) {
-          origin = outcome.competitor_outcome_indices[j];
+    for (semantic::Index target_index = 0;
+         target_index < static_cast<semantic::Index>(projected_outcomes.size());
+         ++target_index) {
+      auto &target = projected_outcomes[static_cast<std::size_t>(target_index)];
+      const auto target_observed = observed_target_key(target);
+      for (semantic::Index competitor_index = 0;
+           competitor_index <
+               static_cast<semantic::Index>(projected_outcomes.size());
+           ++competitor_index) {
+        if (competitor_index == target_index) {
+          continue;
         }
-        if (origin != semantic::kInvalidIndex) {
-          if (origin < 0 ||
-              origin >= static_cast<semantic::Index>(original_to_projected.size())) {
-            continue;
-          }
-          origin = original_to_projected[static_cast<std::size_t>(origin)];
-          if (origin == semantic::kInvalidIndex) {
-            continue;
-          }
+        const auto &competitor =
+            projected_outcomes[static_cast<std::size_t>(competitor_index)];
+        if (observed_target_key(competitor) == target_observed) {
+          continue;
         }
-        remapped_roots.push_back(outcome.competitor_expr_roots[j]);
-        remapped_origins.push_back(origin);
+        target.competitor_expr_roots.push_back(competitor.expr_root);
+        target.competitor_outcome_indices.push_back(competitor_index);
       }
-      outcome.competitor_expr_roots = std::move(remapped_roots);
-      outcome.competitor_outcome_indices = std::move(remapped_origins);
     }
 
     std::vector<bool> reachable_exprs(temp_expr_nodes.size(), false);
@@ -839,36 +823,6 @@ inline CompiledModel project_semantic_model(const semantic::SemanticModel &model
     compiled.variants.push_back(detail::VariantProjector(model, component).project());
   }
   return compiled;
-}
-
-inline Rcpp::List to_r_list(const CompiledModel &compiled) {
-  Rcpp::List variants(compiled.variants.size());
-  for (std::size_t i = 0; i < compiled.variants.size(); ++i) {
-    const auto &variant = compiled.variants[i];
-    Rcpp::List variant_list = detail::to_r_list(variant.model);
-
-    variant_list["component_id"] = variant.component_id;
-    variant_list["weight"] = variant.weight;
-    variant_list["weight_name"] = variant.weight_name;
-    variant_list["capabilities"] = Rcpp::List::create(
-        Rcpp::Named("no_surviving_outcomes") =
-            variant.capabilities.no_surviving_outcomes,
-        Rcpp::Named("ranked_observation") =
-            variant.capabilities.ranked_observation,
-        Rcpp::Named("chained_onset") = variant.capabilities.chained_onset,
-        Rcpp::Named("shared_trigger") = variant.capabilities.shared_trigger,
-        Rcpp::Named("outcome_remapping") =
-            variant.capabilities.outcome_remapping,
-        Rcpp::Named("guess_outcome") = variant.capabilities.guess_outcome,
-        Rcpp::Named("non_event_outcome") =
-            variant.capabilities.non_event_outcome);
-    variants[i] = variant_list;
-  }
-
-  return Rcpp::List::create(
-      Rcpp::Named("component_mode") = compiled.component_mode,
-      Rcpp::Named("component_reference") = compiled.component_reference,
-      Rcpp::Named("variants") = variants);
 }
 
 } // namespace accumulatr::compile

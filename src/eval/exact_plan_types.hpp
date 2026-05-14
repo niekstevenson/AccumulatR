@@ -96,7 +96,7 @@ struct ExactVariantBuildState {
 };
 
 struct ExactVariantPlan {
-  runtime::LoweredExactVariant lowered;
+  runtime::ExactProgram program;
   std::vector<semantic::Index> outcome_index_by_code;
   std::vector<ExactCompiledOutcomePlan> compiled_outcomes;
   ExactSequencePlan sequence;
@@ -114,7 +114,7 @@ struct ExactVariantPlan {
 inline ExactVariantPlan finalize_exact_variant_plan(
     ExactVariantBuildState &&build) {
   ExactVariantPlan plan;
-  plan.lowered = std::move(build.lowered);
+  plan.program = std::move(build.lowered.program);
   plan.outcome_index_by_code = std::move(build.outcome_index_by_code);
   plan.compiled_outcomes = std::move(build.compiled_outcomes);
   plan.sequence = std::move(build.sequence);
@@ -142,10 +142,10 @@ inline ExactSequenceState make_exact_sequence_state(const ExactVariantPlan &plan
       static_cast<std::size_t>(plan.source_count),
       std::numeric_limits<double>::infinity());
   state.expr_upper_bounds.assign(
-      plan.lowered.program.expr_kind.size(),
+      plan.program.expr_kind.size(),
       std::numeric_limits<double>::infinity());
   state.expr_upper_normalizers.assign(
-      plan.lowered.program.expr_kind.size(),
+      plan.program.expr_kind.size(),
       0.0);
   return state;
 }

@@ -5,8 +5,6 @@
 validation_source_rebuild <- function(repo_root) {
   source(file.path(repo_root, "R", "helpers.R"))
   source(file.path(repo_root, "R", "model_definition.R"))
-  source(file.path(repo_root, "R", "likelihood_prep.R"))
-  source(file.path(repo_root, "R", "likelihood_common.R"))
   source(file.path(repo_root, "R", "semantic_bridge.R"))
   source(file.path(repo_root, "R", "likelihood_param_interface.R"))
 }

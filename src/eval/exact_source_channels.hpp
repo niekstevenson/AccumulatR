@@ -62,7 +62,7 @@ public:
 
   explicit CompiledSourceChannels(const ExactVariantPlan &plan)
       : plan_(plan),
-        program_(plan.lowered.program),
+        program_(plan.program),
         leaf_inputs_(static_cast<std::size_t>(program_.layout.n_leaves)),
         source_product_direct_available_(
             plan.compiled_math.integral_kernel_source_product_channels.size(),

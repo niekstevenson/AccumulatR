@@ -9,24 +9,21 @@
 namespace accumulatr::eval {
 namespace detail {
 
-struct PreparedTrialSpan {
+struct PreparedTrialRow {
   semantic::Index start_row{0};
-  semantic::Index end_row{-1};
 };
 
-struct PreparedTrialSpansView {
+struct PreparedTrialRowsView {
   const int *start_rows{nullptr};
-  const int *end_rows{nullptr};
   R_xlen_t n{0};
 
   std::size_t size() const {
     return static_cast<std::size_t>(n);
   }
 
-  PreparedTrialSpan operator[](const std::size_t index) const {
-    return PreparedTrialSpan{
-        static_cast<semantic::Index>(start_rows[index] - 1),
-        static_cast<semantic::Index>(end_rows[index] - 1)};
+  PreparedTrialRow operator[](const std::size_t index) const {
+    return PreparedTrialRow{
+        static_cast<semantic::Index>(start_rows[index] - 1)};
   }
 };
 
@@ -39,17 +36,14 @@ struct PreparedRankColumnView {
 };
 
 struct PreparedTrialLayout {
-  PreparedTrialSpansView spans;
+  PreparedTrialRowsView trials;
   int max_rank{1};
-  int trial_col{-1};
   int component_col{-1};
-  int accumulator_col{-1};
   PreparedRankColumnView label_cols;
   PreparedRankColumnView time_cols;
 };
 
 struct PreparedDataView {
-  const int *trial{nullptr};
   const int *component{nullptr};
   R_xlen_t n_rows{0};
 };
@@ -102,19 +96,12 @@ inline int trusted_named_integer(SEXP valuesSEXP, const char *name) {
 inline PreparedTrialLayout read_prepared_trial_layout(SEXP dataSEXP) {
   PreparedTrialLayout layout;
 
-  const SEXP spansSEXP = trusted_data_attr(dataSEXP, "trial_spans");
-  const SEXP dimsSEXP = Rf_getAttrib(spansSEXP, R_DimSymbol);
-  const int *dims = INTEGER(dimsSEXP);
-  const R_xlen_t n_trials = static_cast<R_xlen_t>(dims[0]);
-  const int *spans = INTEGER(spansSEXP);
-  layout.spans.start_rows = spans;
-  layout.spans.end_rows = spans + n_trials;
-  layout.spans.n = n_trials;
+  const SEXP startsSEXP = trusted_data_attr(dataSEXP, "trial_start_rows");
+  layout.trials.start_rows = INTEGER(startsSEXP);
+  layout.trials.n = XLENGTH(startsSEXP);
 
   const SEXP layoutColsSEXP = trusted_data_attr(dataSEXP, "layout_cols");
-  layout.trial_col = trusted_named_integer(layoutColsSEXP, "trial") - 1;
   layout.component_col = trusted_named_integer(layoutColsSEXP, "component") - 1;
-  layout.accumulator_col = trusted_named_integer(layoutColsSEXP, "accumulator") - 1;
 
   layout.label_cols.cols = INTEGER(trusted_data_attr(dataSEXP, "label_cols"));
   layout.time_cols.cols = INTEGER(trusted_data_attr(dataSEXP, "time_cols"));
@@ -128,7 +115,6 @@ inline PreparedDataView read_prepared_data_view(
     const PreparedTrialLayout &layout) {
   const SEXP component = trusted_data_column(dataSEXP, layout.component_col);
   return PreparedDataView{
-      INTEGER(trusted_data_column(dataSEXP, layout.trial_col)),
       INTEGER(component),
       XLENGTH(component)};
 }

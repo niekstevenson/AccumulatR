@@ -58,8 +58,8 @@ inline ExactTrialView read_exact_observation_view(
     const PreparedTrialLayout &layout,
     const std::size_t trial_index,
     const ExactTrialColumns &columns) {
-  const auto &span = layout.spans[trial_index];
-  const auto row = static_cast<R_xlen_t>(span.start_row);
+  const auto &trial_row = layout.trials[trial_index];
+  const auto row = static_cast<R_xlen_t>(trial_row.start_row);
   const int component_code = table.component[row];
   ExactTrialView obs;
   obs.variant_index =
@@ -194,7 +194,7 @@ inline double exact_terminal_no_response_probability(
     for (const auto leaf_index : plan.no_response.leaf_indices) {
       product *= clamp_probability(
           exact_leaf_q_for_trigger_state(
-              plan.lowered.program,
+              plan.program,
               params,
               first_param_row + static_cast<int>(leaf_index),
               trigger_state,
@@ -524,32 +524,18 @@ inline SEXP evaluate_exact_trials_cached(
   ParamView params(paramsSEXP);
   const auto table = read_prepared_data_view(dataSEXP, layout);
   const auto columns = make_exact_trial_columns(dataSEXP, layout);
-  Rcpp::NumericVector loglik(layout.spans.size(), min_ll);
-  std::vector<runtime::TrialBlock> blocks;
+  Rcpp::NumericVector loglik(layout.trials.size(), min_ll);
   ExactStepWorkspacePool workspace_pool(plans.size());
   std::size_t param_row = 0;
-  runtime::TrialBlock current_block;
-  bool have_block = false;
-  for (std::size_t trial_index = 0; trial_index < layout.spans.size(); ++trial_index) {
-    const auto row = static_cast<R_xlen_t>(layout.spans[trial_index].start_row);
+  for (std::size_t trial_index = 0; trial_index < layout.trials.size(); ++trial_index) {
+    const auto row = static_cast<R_xlen_t>(layout.trials[trial_index].start_row);
     const auto variant_index =
         variant_index_by_component_code[
             static_cast<std::size_t>(table.component[row])];
-    if (!have_block || current_block.variant_index != variant_index) {
-      if (have_block) {
-        blocks.push_back(current_block);
-      }
-      current_block.variant_index = variant_index;
-      current_block.start_row = static_cast<int>(trial_index);
-      current_block.row_count = 1;
-      have_block = true;
-    } else {
-      ++current_block.row_count;
-    }
 
     const auto &plan = plans[static_cast<std::size_t>(variant_index)];
     const auto leaf_count =
-        static_cast<std::size_t>(plan.lowered.program.layout.n_leaves);
+        static_cast<std::size_t>(plan.program.layout.n_leaves);
     if (!trial_is_selected(ok, trial_index)) {
       param_row += leaf_count;
       continue;
@@ -580,27 +566,11 @@ inline SEXP evaluate_exact_trials_cached(
                   &workspace);
     param_row += leaf_count;
   }
-  if (have_block) {
-    blocks.push_back(current_block);
-  }
-
-  Rcpp::List block_list(blocks.size());
-  for (std::size_t i = 0; i < blocks.size(); ++i) {
-    const auto &block = blocks[i];
-    const auto &plan = plans[static_cast<std::size_t>(block.variant_index)];
-    block_list[i] = Rcpp::List::create(
-        Rcpp::Named("component_id") =
-            plan.lowered.component_id,
-        Rcpp::Named("start_row") = block.start_row + 1,
-        Rcpp::Named("row_count") = block.row_count);
-  }
-
   const double total_loglik = aggregate_trial_loglik(loglik, expandSEXP);
 
   return Rcpp::List::create(
       Rcpp::Named("loglik") = loglik,
-      Rcpp::Named("total_loglik") = total_loglik,
-      Rcpp::Named("blocks") = block_list);
+      Rcpp::Named("total_loglik") = total_loglik);
 }
 
 } // namespace detail

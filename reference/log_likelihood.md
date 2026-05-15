@@ -11,7 +11,7 @@ log_likelihood(
   data,
   parameters,
   ok = NULL,
-  expand = NULL,
+  trial_weights = NULL,
   min_ll = log(1e-10),
   ...
 )
@@ -22,7 +22,7 @@ log_likelihood(
   data,
   parameters,
   ok = NULL,
-  expand = NULL,
+  trial_weights = NULL,
   min_ll = log(1e-10),
   ...
 )
@@ -50,11 +50,11 @@ log_likelihood(context, ...)
   Logical vector marking which trials should contribute to the
   likelihood. Trials marked \`FALSE\` are assigned \`min_ll\`.
 
-- expand:
+- trial_weights:
 
-  Optional 1-based index vector mapping original trials to evaluated
-  trial log-likelihood positions. If \`NULL\`, the \`expand\` attribute
-  from \`data\` is used when present; otherwise no expansion is applied.
+  Optional integer weights for compact prepared trials. If \`NULL\`, the
+  \`trial_weights\` attribute from \`data\` is used when present;
+  otherwise each prepared trial has weight one.
 
 - min_ll:
 

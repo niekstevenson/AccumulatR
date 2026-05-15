@@ -60,7 +60,7 @@ candidate parameter sets.</p>
 <span>  <span class="va">data</span>,</span>
 <span>  <span class="va">parameters</span>,</span>
 <span>  ok <span class="op">=</span> <span class="cn">NULL</span>,</span>
-<span>  expand <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  trial_weights <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  min_ll <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">1e-10</span><span class="op">)</span>,</span>
 <span>  <span class="va">...</span></span>
 <span><span class="op">)</span></span>
@@ -71,7 +71,7 @@ candidate parameter sets.</p>
 <span>  <span class="va">data</span>,</span>
 <span>  <span class="va">parameters</span>,</span>
 <span>  ok <span class="op">=</span> <span class="cn">NULL</span>,</span>
-<span>  expand <span class="op">=</span> <span class="cn">NULL</span>,</span>
+<span>  trial_weights <span class="op">=</span> <span class="cn">NULL</span>,</span>
 <span>  min_ll <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">1e-10</span><span class="op">)</span>,</span>
 <span>  <span class="va">...</span></span>
 <span><span class="op">)</span></span>
@@ -101,11 +101,10 @@ candidate parameter sets.</p>
 likelihood. Trials marked `FALSE` are assigned `min_ll`.</p></dd>
 
 
-<dt id="arg-expand">expand<a class="anchor" aria-label="anchor" href="#arg-expand"></a></dt>
-<dd><p>Optional 1-based index vector mapping original trials to
-evaluated trial log-likelihood positions. If `NULL`, the `expand`
-attribute from `data` is used when present; otherwise no expansion is
-applied.</p></dd>
+<dt id="arg-trial-weights">trial_weights<a class="anchor" aria-label="anchor" href="#arg-trial-weights"></a></dt>
+<dd><p>Optional integer weights for compact prepared trials.
+If `NULL`, the `trial_weights` attribute from `data` is used when present;
+otherwise each prepared trial has weight one.</p></dd>
 
 
 <dt id="arg-min-ll">min_ll<a class="anchor" aria-label="anchor" href="#arg-min-ll"></a></dt>

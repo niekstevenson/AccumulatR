@@ -7,27 +7,18 @@ accumulators or pools that feed them, and any blocking relationships.
 ## Usage
 
 ``` r
-processing_tree(
-  model,
-  outcome_label = NULL,
-  component = NULL,
-  return_dot = FALSE
-)
+processing_tree(model, outcome_label = NULL, return_dot = FALSE)
 ```
 
 ## Arguments
 
 - model:
 
-  A race model (\`race_spec\`, a finalized model, or \`model_tables\`).
+  A race model or finalized model structure.
 
 - outcome_label:
 
   Optional response label. If supplied, only that response is shown.
-
-- component:
-
-  Optional mixture component. Reserved for future use.
 
 - return_dot:
 

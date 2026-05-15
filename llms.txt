@@ -108,6 +108,8 @@ model.
   : Control how mixture components are combined
 - [`finalize_model()`](https://niekstevenson.github.io/AccumulatR/reference/finalize_model.md)
   : Compile a model for simulation and fitting
+- [`complexity_metrics()`](https://niekstevenson.github.io/AccumulatR/reference/complexity_metrics.md)
+  : Return compiled exact complexity metrics
 
 ## Outcome Expressions and Timing
 
@@ -128,7 +130,7 @@ Compose outcome rules and onset dependencies.
 - [`after()`](https://niekstevenson.github.io/AccumulatR/reference/after.md)
   : Start one accumulator after another process finishes
 
-## Data Preparation
+## Model Preparation
 
 Inspect model parameters and prepare trial-level parameter matrices.
 

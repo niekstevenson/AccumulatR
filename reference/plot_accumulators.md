@@ -19,7 +19,6 @@ plot_accumulators(
   line_col = "gray20",
   line_lwd = 3,
   axis_lwd = 3,
-  link_lwd = 2.2,
   blocker_lwd = 2.6,
   show_labels = TRUE,
   main = "Accumulator Schematic",
@@ -33,7 +32,7 @@ plot_accumulators(
 
 - model:
 
-  A race model (\`race_spec\`, a finalized model, or \`model_tables\`).
+  A race model or finalized model structure.
 
 - xlim:
 
@@ -74,10 +73,6 @@ plot_accumulators(
 - axis_lwd:
 
   Line width for x/y axis arrows.
-
-- link_lwd:
-
-  Reserved for reciprocal relationship arrows (currently disabled).
 
 - blocker_lwd:
 

@@ -24,8 +24,8 @@ prepare_data(structure, data_df, compress = FALSE, prep = NULL)
 
 - compress:
 
-  If \`TRUE\`, collapse repeated prepared trials and attach an
-  \`expand\` mapping for \`log_likelihood()\` to reuse automatically.
+  If \`TRUE\`, collapse repeated prepared trials and attach
+  compact-trial weights for \`log_likelihood()\` to reuse automatically.
   Defaults to \`FALSE\`.
 
 - prep:

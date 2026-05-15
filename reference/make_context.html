@@ -58,7 +58,7 @@ prepared separately with `prepare_data()` and supplied to
 
     <div class="section level2">
     <h2 id="ref-usage">Usage<a class="anchor" aria-label="anchor" href="#ref-usage"></a></h2>
-    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">make_context</span><span class="op">(</span><span class="va">structure</span>, prep <span class="op">=</span> <span class="cn">NULL</span><span class="op">)</span></span></code></pre></div>
+    <div class="sourceCode"><pre class="sourceCode r"><code><span><span class="fu">make_context</span><span class="op">(</span><span class="va">structure</span>, prep <span class="op">=</span> <span class="cn">NULL</span>, diagnostics <span class="op">=</span> <span class="cn">FALSE</span><span class="op">)</span></span></code></pre></div>
     </div>
 
     <div class="section level2">
@@ -71,6 +71,10 @@ prepared separately with `prepare_data()` and supplied to
 
 <dt id="arg-prep">prep<a class="anchor" aria-label="anchor" href="#arg-prep"></a></dt>
 <dd><p>Optional preprocessed model bundle.</p></dd>
+
+
+<dt id="arg-diagnostics">diagnostics<a class="anchor" aria-label="anchor" href="#arg-diagnostics"></a></dt>
+<dd><p>If `TRUE`, collect symbolic/compiled complexity metrics.</p></dd>
 
 </dl></div>
     <div class="section level2">
@@ -87,37 +91,10 @@ prepared separately with `prepare_data()` and supplied to
 <span class="r-in"><span><span class="fu">make_context</span><span class="op">(</span><span class="va">structure</span><span class="op">)</span></span></span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $cpp</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$native</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;pointer: 0x55f381addf00&gt;</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> &lt;pointer: 0x560826d505d0&gt;</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$observed_identity</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> [1] TRUE</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$identity_backend</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> [1] "exact"</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$ranked_supported</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> [1] TRUE</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$batch_coverage</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$batch_coverage$summary</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>                         category count</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 1                  BatchComplete     3</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 2  BatchGroupedButScalarLeafMath     0</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 3    BatchGroupedButScalarBounds     0</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 4 BatchGroupedButScalarExprUpper     0</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 5         ScalarIdentityShortcut     0</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 6                    Unsupported     0</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$batch_coverage$programs</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>     scope variant_index program_index root_id      category</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 1 program             0             0      NA BatchComplete</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 2 program             0             1      NA BatchComplete</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 3 program             0             2      NA BatchComplete</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span>                                            reason</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 1 no unsupported or scalar leaf-math marker found</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 2 no unsupported or scalar leaf-math marker found</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> 3 no unsupported or scalar leaf-math marker found</span>
-<span class="r-out co"><span class="r-pr">#&gt;</span> </span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> $cpp$has_complexity_metrics</span>
+<span class="r-out co"><span class="r-pr">#&gt;</span> [1] FALSE</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> </span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> $required_p_slots</span>

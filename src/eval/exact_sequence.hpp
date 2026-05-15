@@ -87,12 +87,17 @@ inline void build_exact_plan_cache(
     const std::size_t n_component_codes,
     const std::size_t n_outcome_codes,
     std::vector<semantic::Index> *variant_index_by_component_code,
-    std::vector<ExactVariantPlan> *plans) {
+    std::vector<ExactVariantPlan> *plans,
+    std::vector<ExactComplexityMetrics> *complexity_metrics_by_variant = nullptr) {
   variant_index_by_component_code->assign(
       n_component_codes + 1U,
       semantic::kInvalidIndex);
   plans->clear();
   plans->reserve(compiled.variants.size());
+  if (complexity_metrics_by_variant != nullptr) {
+    complexity_metrics_by_variant->clear();
+    complexity_metrics_by_variant->reserve(compiled.variants.size());
+  }
   for (const auto &variant : compiled.variants) {
     const auto plan_index = static_cast<semantic::Index>(plans->size());
     const auto component_it = component_code_by_id.find(variant.component_id);
@@ -107,8 +112,15 @@ inline void build_exact_plan_cache(
         accumulatr::compile::lower_exact_evaluation_program(
             variant,
             outcome_code_by_label);
+    ExactComplexityMetrics metrics;
     plans->push_back(
-        make_exact_variant_plan(std::move(evaluation_program), n_outcome_codes));
+        make_exact_variant_plan(
+            std::move(evaluation_program),
+            n_outcome_codes,
+            complexity_metrics_by_variant == nullptr ? nullptr : &metrics));
+    if (complexity_metrics_by_variant != nullptr) {
+      complexity_metrics_by_variant->push_back(metrics);
+    }
   }
 }
 
@@ -515,19 +527,18 @@ inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
   return std::log(total);
 }
 
-inline SEXP evaluate_exact_trials_cached(
+inline double evaluate_exact_trials_total_cached(
     const std::vector<semantic::Index> &variant_index_by_component_code,
     const std::vector<ExactVariantPlan> &plans,
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
     SEXP dataSEXP,
     const double min_ll,
-    SEXP expandSEXP,
     const int *ok = nullptr) {
   ParamView params(paramsSEXP);
   const auto table = read_prepared_data_view(dataSEXP, layout);
   const auto columns = make_exact_trial_columns(dataSEXP, layout);
-  Rcpp::NumericVector loglik(layout.trials.size(), min_ll);
+  double total_loglik = 0.0;
   ExactStepWorkspacePool workspace_pool(plans.size());
   std::size_t param_row = 0;
   for (std::size_t trial_index = 0; trial_index < layout.trials.size(); ++trial_index) {
@@ -539,41 +550,42 @@ inline SEXP evaluate_exact_trials_cached(
     const auto &plan = plans[static_cast<std::size_t>(variant_index)];
     const auto leaf_count =
         static_cast<std::size_t>(plan.program.layout.n_leaves);
-    if (!trial_is_selected(ok, trial_index)) {
+    const double weight = prepared_trial_weight(layout, trial_index);
+    if (!(weight > 0.0)) {
       param_row += leaf_count;
       continue;
     }
-    const auto obs = read_exact_observation_view(
-        table,
-        variant_index_by_component_code,
-        layout,
-        trial_index,
-        columns);
-    auto &workspace = workspace_pool.get(plans, variant_index);
-    loglik[static_cast<R_xlen_t>(trial_index)] =
-        obs.rank_count == 1
-            ? exact_loglik_for_trial(
-                  plan,
-                  params,
-                  static_cast<int>(param_row),
-                  exact_trial_view_outcome_code(obs, 0U),
-                  exact_trial_view_rt(obs, 0U),
-                  min_ll,
-                  &workspace)
-            : exact_ranked_loglik_for_trial(
-                  plan,
-                  params,
-                  static_cast<int>(param_row),
-                  obs,
-                  min_ll,
-                  &workspace);
+    double value = min_ll;
+    if (trial_is_selected(ok, trial_index)) {
+      const auto obs = read_exact_observation_view(
+          table,
+          variant_index_by_component_code,
+          layout,
+          trial_index,
+          columns);
+      auto &workspace = workspace_pool.get(plans, variant_index);
+      value =
+          obs.rank_count == 1
+              ? exact_loglik_for_trial(
+                    plan,
+                    params,
+                    static_cast<int>(param_row),
+                    exact_trial_view_outcome_code(obs, 0U),
+                    exact_trial_view_rt(obs, 0U),
+                    min_ll,
+                    &workspace)
+              : exact_ranked_loglik_for_trial(
+                    plan,
+                    params,
+                    static_cast<int>(param_row),
+                    obs,
+                    min_ll,
+                    &workspace);
+    }
+    total_loglik += weight * value;
     param_row += leaf_count;
   }
-  const double total_loglik = aggregate_trial_loglik(loglik, expandSEXP);
-
-  return Rcpp::List::create(
-      Rcpp::Named("loglik") = loglik,
-      Rcpp::Named("total_loglik") = total_loglik);
+  return total_loglik;
 }
 
 } // namespace detail

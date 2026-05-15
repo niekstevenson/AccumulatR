@@ -7,7 +7,7 @@
 complexity_metrics(context)
 }
 \arguments{
-\item{context}{Context created with `make_context()`.}
+\item{context}{Context created with `make_context(diagnostics = TRUE)`.}
 }
 \value{
 A list with per-variant and total symbolic/compiled metrics.

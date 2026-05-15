@@ -2003,7 +2003,10 @@ inline bool exact_order_region_expand_relation_factor(
 inline void exact_complexity_observe_region(
     ExactVariantBuildState *plan,
     const ExactOrderRegionExpr &region) {
-  auto &metrics = plan->complexity;
+  if (plan->complexity_metrics == nullptr) {
+    return;
+  }
+  auto &metrics = *plan->complexity_metrics;
   ++metrics.symbolic_region_count;
   const auto cell_count =
       static_cast<semantic::Index>(region.terms.size());

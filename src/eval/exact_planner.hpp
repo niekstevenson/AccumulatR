@@ -15,9 +15,11 @@ namespace detail {
 
 inline ExactVariantPlan make_exact_variant_plan(
     runtime::ExactEvaluationProgram program,
-    const std::size_t n_outcome_codes) {
+    const std::size_t n_outcome_codes,
+    ExactComplexityMetrics *complexity_metrics = nullptr) {
   ExactVariantBuildState build;
   build.program = std::move(program);
+  build.complexity_metrics = complexity_metrics;
   canonicalize_exact_evaluation_program_expressions(&build.program);
   compile_exact_support_context(&build);
   compile_program_source_runtime_fields(&build);

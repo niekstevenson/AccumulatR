@@ -4,12 +4,14 @@
 \alias{make_context}
 \title{Build a compiled likelihood context from a model}
 \usage{
-make_context(structure, prep = NULL)
+make_context(structure, prep = NULL, diagnostics = FALSE)
 }
 \arguments{
 \item{structure}{Finalized model structure.}
 
 \item{prep}{Optional preprocessed model bundle.}
+
+\item{diagnostics}{If `TRUE`, collect symbolic/compiled complexity metrics.}
 }
 \value{
 An `accumulatr_context` object.

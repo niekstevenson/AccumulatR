@@ -37,6 +37,8 @@ struct PreparedRankColumnView {
 
 struct PreparedTrialLayout {
   PreparedTrialRowsView trials;
+  const int *trial_weights{nullptr};
+  R_xlen_t n_trial_weights{0};
   int max_rank{1};
   int component_col{-1};
   PreparedRankColumnView label_cols;
@@ -53,24 +55,15 @@ inline bool trial_is_selected(const int *ok,
   return ok == nullptr || ok[static_cast<R_xlen_t>(trial_index)] == TRUE;
 }
 
-inline double aggregate_trial_loglik(
-    const Rcpp::NumericVector &loglik,
-    SEXP expandSEXP) {
-  if (expandSEXP == R_NilValue || XLENGTH(expandSEXP) == 0) {
-    double total_loglik = 0.0;
-    for (R_xlen_t i = 0; i < loglik.size(); ++i) {
-      total_loglik += static_cast<double>(loglik[i]);
-    }
-    return total_loglik;
+inline double prepared_trial_weight(
+    const PreparedTrialLayout &layout,
+    const std::size_t trial_index) {
+  if (layout.trial_weights == nullptr ||
+      static_cast<R_xlen_t>(trial_index) >= layout.n_trial_weights) {
+    return 1.0;
   }
-
-  double total_loglik = 0.0;
-  const int *expand = INTEGER(expandSEXP);
-  for (R_xlen_t i = 0; i < XLENGTH(expandSEXP); ++i) {
-    total_loglik += static_cast<double>(
-        loglik[static_cast<R_xlen_t>(expand[i] - 1)]);
-  }
-  return total_loglik;
+  return static_cast<double>(
+      layout.trial_weights[static_cast<R_xlen_t>(trial_index)]);
 }
 
 inline SEXP trusted_data_column(SEXP dataSEXP, const int column_index) {
@@ -93,12 +86,23 @@ inline int trusted_named_integer(SEXP valuesSEXP, const char *name) {
   return NA_INTEGER;
 }
 
-inline PreparedTrialLayout read_prepared_trial_layout(SEXP dataSEXP) {
+inline PreparedTrialLayout read_prepared_trial_layout(
+    SEXP dataSEXP,
+    SEXP trialWeightsSEXP = R_NilValue) {
   PreparedTrialLayout layout;
 
   const SEXP startsSEXP = trusted_data_attr(dataSEXP, "trial_start_rows");
   layout.trials.start_rows = INTEGER(startsSEXP);
   layout.trials.n = XLENGTH(startsSEXP);
+
+  SEXP weightsSEXP = trialWeightsSEXP;
+  if (weightsSEXP == R_NilValue || XLENGTH(weightsSEXP) == 0) {
+    weightsSEXP = trusted_data_attr(dataSEXP, "trial_weights");
+  }
+  if (weightsSEXP != R_NilValue && XLENGTH(weightsSEXP) > 0) {
+    layout.trial_weights = INTEGER(weightsSEXP);
+    layout.n_trial_weights = XLENGTH(weightsSEXP);
+  }
 
   const SEXP layoutColsSEXP = trusted_data_attr(dataSEXP, "layout_cols");
   layout.component_col = trusted_named_integer(layoutColsSEXP, "component") - 1;

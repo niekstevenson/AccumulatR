@@ -1,5 +1,5 @@
 compiler_total_metrics <- function(structure) {
-  complexity_metrics(make_context(structure))$total
+  complexity_metrics(make_context(structure, diagnostics = TRUE))$total
 }
 
 expect_clean_region_cells <- function(metrics) {

@@ -6,6 +6,53 @@ run_public_loglik <- function(spec, trial_df, params, min_ll = log(1e-10)) {
   as.numeric(log_likelihood(context, prepared, params_mat, min_ll = min_ll))
 }
 
+testthat::test_that("compressed prepared trials use weights after compact ok filtering", {
+  spec <- race_spec() |>
+    add_accumulator("A", "lognormal") |>
+    add_outcome("A_win", "A")
+  structure <- finalize_model(spec)
+  ctx <- make_context(structure)
+  data_df <- data.frame(
+    trial = 1:5,
+    R = "A_win",
+    rt = c(0.3, 0.3, 0.4, 0.3, 0.4),
+    stringsAsFactors = FALSE
+  )
+  full <- prepare_data(structure, data_df)
+  compressed <- prepare_data(structure, data_df, compress = TRUE)
+  params <- c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0)
+  full_params <- build_param_matrix(spec, params, n_trials = 5)
+  compressed_params <- build_param_matrix(spec, params, n_trials = 2)
+
+  testthat::expect_null(attr(compressed, "expand", exact = TRUE))
+  testthat::expect_identical(
+    attr(compressed, "trial_weights", exact = TRUE),
+    c(3L, 2L)
+  )
+  testthat::expect_equal(
+    log_likelihood(ctx, compressed, compressed_params),
+    log_likelihood(ctx, full, full_params),
+    tolerance = 1e-12
+  )
+
+  min_ll <- -123
+  ok_value <- log_likelihood(
+    ctx,
+    compressed,
+    compressed_params,
+    ok = c(TRUE, FALSE),
+    min_ll = min_ll
+  )
+  first_only <- log_likelihood(
+    ctx,
+    compressed,
+    compressed_params,
+    trial_weights = c(3L, 0L),
+    min_ll = min_ll
+  )
+  testthat::expect_equal(ok_value, first_only + 2 * min_ll, tolerance = 1e-12)
+})
+
 testthat::test_that("exact kernel carries positive-mass tie terms for the guarded shared-gate example", {
   spec <- race_spec() |>
     add_accumulator("go_fast", "lognormal") |>

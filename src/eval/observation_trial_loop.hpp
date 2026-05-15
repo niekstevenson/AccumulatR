@@ -230,7 +230,158 @@ inline Rcpp::NumericVector evaluate_response_probabilities_cached(
   return probability;
 }
 
-inline SEXP evaluate_observation_likelihood_cached(
+inline void evaluate_observation_likelihood_trials_cached(
+    const std::vector<ComponentObservationPlan> &component_plans_by_code,
+    const ComponentMixturePlan &component_mixture,
+    const std::vector<semantic::Index> &exact_variant_index_by_component_code,
+    const std::vector<ExactVariantPlan> &exact_plans,
+    const std::vector<std::vector<int>> &exact_leaf_row_offsets_by_variant,
+    const PreparedTrialLayout &layout,
+    SEXP paramsSEXP,
+    SEXP dataSEXP,
+    const double min_ll,
+    const int *ok,
+    double *total_loglik) {
+  const auto table = read_prepared_data_view(dataSEXP, layout);
+  const int *label =
+      INTEGER(trusted_data_column(dataSEXP, layout.label_cols[1]));
+  const double *rt =
+      REAL(trusted_data_column(dataSEXP, layout.time_cols[1]));
+  const TrustedParamMatrix trusted_params(
+      paramsSEXP,
+      component_mixture.weight_param_count);
+
+  ExactStepWorkspacePool workspace_pool(exact_plans.size());
+  std::vector<double> trial_values;
+  std::vector<double> plan_values;
+  std::unordered_map<
+      RtFreeObservationPlanCacheKey,
+      std::vector<RtFreeObservationPlanCacheEntry>,
+      RtFreeObservationPlanCacheKeyHash> rt_free_plan_cache;
+
+  for (std::size_t trial_index = 0; trial_index < layout.trials.size(); ++trial_index) {
+    const auto &trial_row = layout.trials[trial_index];
+    const auto row = static_cast<R_xlen_t>(trial_row.start_row);
+    const double weight = prepared_trial_weight(layout, trial_index);
+    if (!(weight > 0.0)) {
+      continue;
+    }
+    double trial_loglik = min_ll;
+    if (trial_is_selected(ok, trial_index)) {
+      trial_values.clear();
+      const auto observed_label_code =
+          integer_cell_is_na(label, row)
+              ? semantic::kInvalidIndex
+              : static_cast<semantic::Index>(label[row]);
+      const double observed_rt = rt[row];
+
+      const auto components = resolve_trial_components(
+          component_mixture,
+          layout,
+          table.component,
+          trusted_params,
+          trial_index);
+      const auto latent_trial = integer_cell_is_na(table.component, row);
+      for (const auto &choice : components) {
+        if (choice.component_code <= 0 ||
+            choice.component_code >=
+                static_cast<semantic::Index>(component_plans_by_code.size())) {
+          continue;
+        }
+        const auto &component_plan =
+            component_plans_by_code[static_cast<std::size_t>(choice.component_code)];
+        if (!component_plan.present) {
+          continue;
+        }
+        const auto variant_index = resolve_variant_index_by_component_code(
+            choice.component_code,
+            exact_variant_index_by_component_code);
+        if (variant_index == semantic::kInvalidIndex) {
+          continue;
+        }
+
+        const auto state_code = observation_state_code(
+            component_plan,
+            observed_label_code,
+            observed_rt);
+        if (state_code == semantic::kInvalidIndex) {
+          continue;
+        }
+        const auto &plan =
+            observation_log_plan_for_state(component_plan, state_code);
+        const double plan_rt =
+            observation_state_uses_rt(component_plan, state_code)
+                ? observed_rt
+                : NA_REAL;
+
+        const int *row_map_ptr = nullptr;
+        int row_offset = 0;
+        const auto &exact_plan =
+            exact_plans[static_cast<std::size_t>(variant_index)];
+        const auto leaf_count =
+            static_cast<std::size_t>(exact_plan.program.layout.n_leaves);
+        if (latent_trial) {
+          const auto &leaf_offsets =
+              exact_leaf_row_offsets_by_variant[
+                  static_cast<std::size_t>(variant_index)];
+          row_map_ptr = leaf_offsets.data();
+          row_offset = static_cast<int>(trial_row.start_row);
+        }
+        const bool cacheable_rt_free_plan =
+            row_map_ptr == nullptr && !std::isfinite(plan_rt);
+        const int first_param_row = static_cast<int>(trial_row.start_row);
+        const auto cache_key = RtFreeObservationPlanCacheKey{
+            choice.component_code,
+            variant_index,
+            state_code,
+            leaf_count,
+            cacheable_rt_free_plan
+                ? param_leaf_block_hash(paramsSEXP, first_param_row, leaf_count)
+                : 0U};
+        double value = 0.0;
+        bool cache_hit = false;
+        if (cacheable_rt_free_plan) {
+          cache_hit = rt_free_observation_cache_lookup(
+              rt_free_plan_cache,
+              paramsSEXP,
+              cache_key,
+              first_param_row,
+              &value);
+        }
+        if (!cache_hit) {
+          value = evaluate_observation_plan_direct(
+              exact_plans,
+              layout,
+              paramsSEXP,
+              plan,
+              static_cast<semantic::Index>(trial_index),
+              variant_index,
+              plan_rt,
+              min_ll,
+              row_map_ptr,
+              row_offset,
+              &workspace_pool,
+              &plan_values);
+          if (cacheable_rt_free_plan && std::isfinite(value)) {
+            rt_free_plan_cache[cache_key].push_back(
+                RtFreeObservationPlanCacheEntry{first_param_row, value});
+          }
+        }
+        if (std::isfinite(value) && choice.weight > 0.0) {
+          trial_values.push_back(std::log(choice.weight) + value);
+        }
+      }
+      const auto value = logsumexp_records(trial_values);
+      if (std::isfinite(value)) {
+        trial_loglik = value;
+      }
+    }
+
+    *total_loglik += weight * trial_loglik;
+  }
+}
+
+inline double evaluate_observation_likelihood_total_cached(
     const std::vector<ComponentObservationPlan> &component_plans_by_code,
     const bool observation_is_identity,
     const ComponentMixturePlan &component_mixture,
@@ -241,7 +392,6 @@ inline SEXP evaluate_observation_likelihood_cached(
     SEXP paramsSEXP,
     SEXP dataSEXP,
     const double min_ll,
-    SEXP expandSEXP,
     const int *ok = nullptr) {
   const auto table = read_prepared_data_view(dataSEXP, layout);
 
@@ -252,163 +402,32 @@ inline SEXP evaluate_observation_likelihood_cached(
         REAL(trusted_data_column(dataSEXP, layout.time_cols[1]));
     if (trials_have_observed_components(layout, table.component, ok)) {
       if (identity_trials_are_all_finite(layout, label, rt, ok)) {
-        return evaluate_exact_trials_cached(
+        return evaluate_exact_trials_total_cached(
             exact_variant_index_by_component_code,
             exact_plans,
             layout,
             paramsSEXP,
             dataSEXP,
             min_ll,
-            expandSEXP,
             ok);
       }
     }
   }
 
-  const int *label =
-      INTEGER(trusted_data_column(dataSEXP, layout.label_cols[1]));
-  const double *rt =
-      REAL(trusted_data_column(dataSEXP, layout.time_cols[1]));
-  const TrustedParamMatrix trusted_params(
+  double total_loglik = 0.0;
+  evaluate_observation_likelihood_trials_cached(
+      component_plans_by_code,
+      component_mixture,
+      exact_variant_index_by_component_code,
+      exact_plans,
+      exact_leaf_row_offsets_by_variant,
+      layout,
       paramsSEXP,
-      component_mixture.weight_param_count);
-
-  const auto n_trials = layout.trials.size();
-  Rcpp::NumericVector loglik(n_trials, min_ll);
-  ExactStepWorkspacePool workspace_pool(exact_plans.size());
-  std::vector<double> trial_values;
-  std::vector<double> plan_values;
-  std::unordered_map<
-      RtFreeObservationPlanCacheKey,
-      std::vector<RtFreeObservationPlanCacheEntry>,
-      RtFreeObservationPlanCacheKeyHash> rt_free_plan_cache;
-
-  for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
-    const auto &trial_row = layout.trials[trial_index];
-    const auto row = static_cast<R_xlen_t>(trial_row.start_row);
-    if (!trial_is_selected(ok, trial_index)) {
-      continue;
-    }
-    trial_values.clear();
-    const auto observed_label_code =
-        integer_cell_is_na(label, row)
-            ? semantic::kInvalidIndex
-            : static_cast<semantic::Index>(label[row]);
-    const double observed_rt = rt[row];
-
-    const auto components = resolve_trial_components(
-        component_mixture,
-        layout,
-        table.component,
-        trusted_params,
-        trial_index);
-    const auto latent_trial = integer_cell_is_na(table.component, row);
-    for (const auto &choice : components) {
-      if (choice.component_code <= 0 ||
-          choice.component_code >=
-              static_cast<semantic::Index>(component_plans_by_code.size())) {
-        continue;
-      }
-      const auto &component_plan =
-          component_plans_by_code[static_cast<std::size_t>(choice.component_code)];
-      if (!component_plan.present) {
-        continue;
-      }
-      const auto variant_index = resolve_variant_index_by_component_code(
-          choice.component_code,
-          exact_variant_index_by_component_code);
-      if (variant_index == semantic::kInvalidIndex) {
-        continue;
-      }
-
-      const auto state_code = observation_state_code(
-          component_plan,
-          observed_label_code,
-          observed_rt);
-      if (state_code == semantic::kInvalidIndex) {
-        continue;
-      }
-      const auto &plan =
-          observation_log_plan_for_state(component_plan, state_code);
-      const double plan_rt =
-          observation_state_uses_rt(component_plan, state_code)
-              ? observed_rt
-              : NA_REAL;
-
-      const int *row_map_ptr = nullptr;
-      int row_offset = 0;
-      const auto &exact_plan =
-          exact_plans[static_cast<std::size_t>(variant_index)];
-      const auto leaf_count =
-          static_cast<std::size_t>(exact_plan.program.layout.n_leaves);
-      if (latent_trial) {
-        const auto &leaf_offsets =
-            exact_leaf_row_offsets_by_variant[
-                static_cast<std::size_t>(variant_index)];
-        row_map_ptr = leaf_offsets.data();
-        row_offset = static_cast<int>(trial_row.start_row);
-      }
-      const bool cacheable_rt_free_plan =
-          row_map_ptr == nullptr && !std::isfinite(plan_rt);
-      const int first_param_row = static_cast<int>(trial_row.start_row);
-      const auto cache_key = RtFreeObservationPlanCacheKey{
-          choice.component_code,
-          variant_index,
-          state_code,
-          leaf_count,
-          cacheable_rt_free_plan
-              ? param_leaf_block_hash(paramsSEXP, first_param_row, leaf_count)
-              : 0U};
-      double value = 0.0;
-      bool cache_hit = false;
-      if (cacheable_rt_free_plan) {
-        cache_hit = rt_free_observation_cache_lookup(
-            rt_free_plan_cache,
-            paramsSEXP,
-            cache_key,
-            first_param_row,
-            &value);
-      }
-      if (!cache_hit) {
-        value = evaluate_observation_plan_direct(
-            exact_plans,
-            layout,
-            paramsSEXP,
-            plan,
-            static_cast<semantic::Index>(trial_index),
-            variant_index,
-            plan_rt,
-            min_ll,
-            row_map_ptr,
-            row_offset,
-            &workspace_pool,
-            &plan_values);
-        if (cacheable_rt_free_plan && std::isfinite(value)) {
-          rt_free_plan_cache[cache_key].push_back(
-              RtFreeObservationPlanCacheEntry{first_param_row, value});
-        }
-      }
-      if (std::isfinite(value) && choice.weight > 0.0) {
-        trial_values.push_back(std::log(choice.weight) + value);
-      }
-    }
-    const auto value = logsumexp_records(trial_values);
-    loglik[static_cast<R_xlen_t>(trial_index)] =
-        std::isfinite(value) ? value : min_ll;
-  }
-
-  for (R_xlen_t i = 0; i < loglik.size(); ++i) {
-    if (!std::isfinite(loglik[i])) {
-      loglik[i] = min_ll;
-    }
-  }
-
-  const double total_loglik = aggregate_trial_loglik(loglik, expandSEXP);
-
-  return Rcpp::List::create(
-      Rcpp::Named("loglik") = loglik,
-      Rcpp::Named("total_loglik") = total_loglik,
-      Rcpp::Named("n_trials") = static_cast<int>(n_trials));
+      dataSEXP,
+      min_ll,
+      ok,
+      &total_loglik);
+  return total_loglik;
 }
 
 } // namespace detail

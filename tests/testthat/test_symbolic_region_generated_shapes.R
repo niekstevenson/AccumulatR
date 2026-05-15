@@ -1,5 +1,5 @@
 generated_region_metrics <- function(structure) {
-  complexity_metrics(make_context(structure))$total
+  complexity_metrics(make_context(structure, diagnostics = TRUE))$total
 }
 
 generated_loglik <- function(structure, params, rt) {

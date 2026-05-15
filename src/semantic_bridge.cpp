@@ -9,7 +9,11 @@ namespace {
 
 Rcpp::List complexity_metrics_list(
     const accumulatr::eval::detail::NativeLikelihoodContext &ctx) {
-  const auto n = ctx.exact_plans.size();
+  const auto n = ctx.exact_complexity_metrics.size();
+  if (n == 0U && !ctx.exact_plans.empty()) {
+    Rcpp::stop(
+        "complexity metrics were not collected; create the context with diagnostics = TRUE");
+  }
   Rcpp::IntegerVector variant_index(n);
   Rcpp::IntegerVector symbolic_regions(n);
   Rcpp::IntegerVector symbolic_cells(n);
@@ -40,7 +44,7 @@ Rcpp::List complexity_metrics_list(
   int aggregate_max_integral_depth = 0;
 
   for (std::size_t i = 0; i < n; ++i) {
-    const auto &metrics = ctx.exact_plans[i].complexity;
+    const auto &metrics = ctx.exact_complexity_metrics[i];
     variant_index[i] = static_cast<int>(i);
     symbolic_regions[i] = metrics.symbolic_region_count;
     symbolic_cells[i] = metrics.symbolic_cell_count;
@@ -126,40 +130,20 @@ Rcpp::List complexity_metrics_list(
               aggregate_max_integral_depth));
 }
 
-} // namespace
-
-// [[Rcpp::export]]
-SEXP semantic_make_likelihood_context_prep_cpp(SEXP prepSEXP) {
-  Rcpp::List prep(prepSEXP);
-  auto ctx = accumulatr::eval::detail::build_native_likelihood_context(prep);
-  auto ptr = Rcpp::XPtr<accumulatr::eval::detail::NativeLikelihoodContext>(
-      new accumulatr::eval::detail::NativeLikelihoodContext(std::move(ctx)),
-      true);
-  return Rcpp::List::create(
-      Rcpp::Named("native") = ptr);
-}
-
-// [[Rcpp::export]]
-SEXP semantic_complexity_metrics_context_cpp(SEXP contextSEXP) {
-  const auto &ctx =
-      accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
-  return complexity_metrics_list(ctx);
-}
-
-// [[Rcpp::export]]
-SEXP semantic_loglik_context_cpp(SEXP contextSEXP,
-                                 SEXP paramsSEXP,
-                                 SEXP dataSEXP,
-                                 SEXP okSEXP,
-                                 SEXP expandSEXP,
-                                 SEXP minLLSEXP) {
+double loglik_total_context(SEXP contextSEXP,
+                            SEXP paramsSEXP,
+                            SEXP dataSEXP,
+                            SEXP okSEXP,
+                            SEXP trialWeightsSEXP,
+                            const double min_ll) {
   const auto &ctx =
       accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
   const auto layout =
-      accumulatr::eval::detail::read_prepared_trial_layout(dataSEXP);
+      accumulatr::eval::detail::read_prepared_trial_layout(
+          dataSEXP,
+          trialWeightsSEXP);
   const int *ok = Rf_isNull(okSEXP) ? nullptr : LOGICAL(okSEXP);
-  const double min_ll = REAL(minLLSEXP)[0];
-  Rcpp::List observed = accumulatr::eval::detail::evaluate_observation_likelihood_cached(
+  return accumulatr::eval::detail::evaluate_observation_likelihood_total_cached(
       ctx.observation_plans_by_component_code,
       ctx.observation_is_identity,
       ctx.component_mixture,
@@ -170,32 +154,70 @@ SEXP semantic_loglik_context_cpp(SEXP contextSEXP,
       paramsSEXP,
       dataSEXP,
       min_ll,
-      expandSEXP,
       ok);
-  return observed;
+}
+
+} // namespace
+
+// [[Rcpp::export]]
+SEXP semantic_make_likelihood_context_prep_cpp(SEXP prepSEXP,
+                                               SEXP diagnosticsSEXP) {
+  Rcpp::List prep(prepSEXP);
+  const bool diagnostics = Rcpp::as<bool>(diagnosticsSEXP);
+  auto ctx = accumulatr::eval::detail::build_native_likelihood_context(
+      prep,
+      diagnostics);
+  auto ptr = Rcpp::XPtr<accumulatr::eval::detail::NativeLikelihoodContext>(
+      new accumulatr::eval::detail::NativeLikelihoodContext(std::move(ctx)),
+      true);
+  return Rcpp::List::create(
+      Rcpp::Named("native") = ptr,
+      Rcpp::Named("has_complexity_metrics") = diagnostics);
+}
+
+// [[Rcpp::export]]
+SEXP semantic_complexity_metrics_context_cpp(SEXP contextSEXP) {
+  const auto &ctx =
+      accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
+  return complexity_metrics_list(ctx);
+}
+
+// [[Rcpp::export]]
+double semantic_loglik_total_context_cpp(SEXP contextSEXP,
+                                         SEXP paramsSEXP,
+                                         SEXP dataSEXP,
+                                         SEXP okSEXP,
+                                         SEXP trialWeightsSEXP,
+                                         SEXP minLLSEXP) {
+  return loglik_total_context(
+      contextSEXP,
+      paramsSEXP,
+      dataSEXP,
+      okSEXP,
+      trialWeightsSEXP,
+      REAL(minLLSEXP)[0]);
 }
 
 extern "C" {
 
-double accumulatr_cpp_loglik_ccallable(SEXP contextSEXP,
-                                       SEXP paramsSEXP,
-                                       SEXP dataSEXP,
-                                       SEXP okSEXP,
-                                       SEXP expandSEXP,
-                                       double min_ll) {
+double accumulatr_loglik_total_ccallable(SEXP contextSEXP,
+                                         SEXP paramsSEXP,
+                                         SEXP dataSEXP,
+                                         SEXP okSEXP,
+                                         SEXP trialWeightsSEXP,
+                                         double min_ll) {
   try {
-    Rcpp::List observed = semantic_loglik_context_cpp(
+    return loglik_total_context(
         contextSEXP,
         paramsSEXP,
         dataSEXP,
         okSEXP,
-        expandSEXP,
-        Rcpp::wrap(min_ll));
-    return Rcpp::as<double>(observed["total_loglik"]);
+        trialWeightsSEXP,
+        min_ll);
   } catch (const std::exception &e) {
     ::Rf_error("%s", e.what());
   } catch (...) {
-    ::Rf_error("Unknown C++ exception in AccumulatR::cpp_loglik");
+    ::Rf_error("Unknown C++ exception in AccumulatR::loglik_total");
   }
   return NA_REAL;
 }
@@ -207,8 +229,8 @@ void accumulatr_register_ccallables(DllInfo *dll) {
   (void)dll;
   R_RegisterCCallable(
       "AccumulatR",
-      "cpp_loglik",
-      reinterpret_cast<DL_FUNC>(accumulatr_cpp_loglik_ccallable));
+      "loglik_total",
+      reinterpret_cast<DL_FUNC>(accumulatr_loglik_total_ccallable));
 }
 
 // [[Rcpp::export]]

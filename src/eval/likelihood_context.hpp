@@ -27,6 +27,7 @@ struct NativeLikelihoodContext {
   std::size_t outcome_count{0U};
   std::vector<semantic::Index> exact_variant_index_by_component_code;
   std::vector<ExactVariantPlan> exact_plans;
+  std::vector<ExactComplexityMetrics> exact_complexity_metrics;
   std::vector<std::vector<int>> exact_leaf_row_offsets_by_variant;
 };
 
@@ -204,7 +205,8 @@ inline std::unordered_map<std::string, semantic::Index> make_code_map(
 }
 
 inline NativeLikelihoodContext build_native_likelihood_context(
-    const Rcpp::List &prep) {
+    const Rcpp::List &prep,
+    const bool collect_complexity_metrics = false) {
   NativeLikelihoodContext ctx;
   const auto model = compile::compile_prep(prep);
   const auto compiled = compile::project_semantic_model(model);
@@ -229,7 +231,8 @@ inline NativeLikelihoodContext build_native_likelihood_context(
       component_ids.size(),
       outcome_labels.size(),
       &ctx.exact_variant_index_by_component_code,
-      &ctx.exact_plans);
+      &ctx.exact_plans,
+      collect_complexity_metrics ? &ctx.exact_complexity_metrics : nullptr);
   ctx.component_mixture = build_component_mixture_plan(
       model,
       component_code_by_id,

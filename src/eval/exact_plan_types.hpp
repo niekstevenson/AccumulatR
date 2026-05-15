@@ -75,7 +75,7 @@ struct ExactVariantBuildState {
   ExactSequencePlan sequence;
   ExactTerminalNoResponsePlan no_response;
   std::vector<ExactExprDistributionPlan> expr_distributions;
-  ExactComplexityMetrics complexity;
+  ExactComplexityMetrics *complexity_metrics{nullptr};
   CompiledMathProgram compiled_math;
   std::vector<ExactRelationTemplate> compiled_source_views;
   std::vector<ExactExprKernel> expr_kernels;
@@ -101,7 +101,6 @@ struct ExactVariantPlan {
   std::vector<ExactCompiledOutcomePlan> compiled_outcomes;
   ExactSequencePlan sequence;
   ExactTerminalNoResponsePlan no_response;
-  ExactComplexityMetrics complexity;
   CompiledMathProgram compiled_math;
   std::vector<ExactRelationTemplate> compiled_source_views;
   std::vector<semantic::Index> compiled_outcome_gate_indices;
@@ -119,7 +118,6 @@ inline ExactVariantPlan finalize_exact_variant_plan(
   plan.compiled_outcomes = std::move(build.compiled_outcomes);
   plan.sequence = std::move(build.sequence);
   plan.no_response = std::move(build.no_response);
-  plan.complexity = build.complexity;
   plan.compiled_math = std::move(build.compiled_math);
   plan.compiled_source_views = std::move(build.compiled_source_views);
   plan.compiled_outcome_gate_indices =

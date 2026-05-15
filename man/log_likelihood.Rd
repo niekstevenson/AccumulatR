@@ -11,7 +11,7 @@ log_likelihood(
   data,
   parameters,
   ok = NULL,
-  expand = NULL,
+  trial_weights = NULL,
   min_ll = log(1e-10),
   ...
 )
@@ -21,7 +21,7 @@ log_likelihood(
   data,
   parameters,
   ok = NULL,
-  expand = NULL,
+  trial_weights = NULL,
   min_ll = log(1e-10),
   ...
 )
@@ -38,10 +38,9 @@ log_likelihood(
 \item{ok}{Logical vector marking which trials should contribute to the
 likelihood. Trials marked `FALSE` are assigned `min_ll`.}
 
-\item{expand}{Optional 1-based index vector mapping original trials to
-evaluated trial log-likelihood positions. If `NULL`, the `expand`
-attribute from `data` is used when present; otherwise no expansion is
-applied.}
+\item{trial_weights}{Optional integer weights for compact prepared trials.
+If `NULL`, the `trial_weights` attribute from `data` is used when present;
+otherwise each prepared trial has weight one.}
 
 \item{min_ll}{Minimum log-likelihood value used for excluded or impossible
 trials.}
@@ -49,7 +48,7 @@ trials.}
 \item{...}{Unused; for S3 compatibility.}
 }
 \value{
-A numeric vector of log-likelihood values.
+Total log-likelihood as a numeric scalar.
 }
 \description{
 Compute the log-likelihood of prepared behavioral data under one or more

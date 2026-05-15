@@ -297,7 +297,9 @@
     trial_ends[keep_trials] - trial_starts[keep_trials] + 1L
   )
   rownames(out) <- NULL
-  attr(out, "expand") <- match(signatures, signatures[keep_trials])
+  attr(out, "trial_weights") <-
+    as.integer(tabulate(match(signatures, signatures[keep_trials]),
+                        nbins = length(keep_trials)))
   class(out) <- class(data_df)
   out
 }
@@ -468,9 +470,9 @@
 #' @param data_df Behavioral data. In the simplest case this contains `trial`,
 #'   `R`, and `rt`; for multi-outcome models it can also contain `R2`, `rt2`,
 #'   and so on.
-#' @param compress If `TRUE`, collapse repeated prepared trials and attach an
-#'   `expand` mapping for `log_likelihood()` to reuse automatically. Defaults
-#'   to `FALSE`.
+#' @param compress If `TRUE`, collapse repeated prepared trials and attach
+#'   compact-trial weights for `log_likelihood()` to reuse automatically.
+#'   Defaults to `FALSE`.
 #' @param prep Optional preprocessed model bundle.
 #' @return An `accumulatr_data` object.
 #' @examples
@@ -498,11 +500,11 @@ prepare_data <- function(structure,
   )
 }
 
-.make_context_structure <- function(structure, prep = NULL) {
+.make_context_structure <- function(structure, prep = NULL, diagnostics = FALSE) {
   prep_info <- .prepare_likelihood_prep(structure, prep = prep)
   prep_eval_base <- prep_info$prep
   structure(list(
-    cpp = .make_likelihood_context_prep(prep_eval_base),
+    cpp = .make_likelihood_context_prep(prep_eval_base, diagnostics = diagnostics),
     required_p_slots = .required_p_slots_from_prep(prep_eval_base)
   ), class = "accumulatr_context")
 }
@@ -515,6 +517,7 @@ prepare_data <- function(structure,
 #'
 #' @param structure Finalized model structure.
 #' @param prep Optional preprocessed model bundle.
+#' @param diagnostics If `TRUE`, collect symbolic/compiled complexity metrics.
 #' @return An `accumulatr_context` object.
 #' @examples
 #' spec <- race_spec()
@@ -523,20 +526,27 @@ prepare_data <- function(structure,
 #' structure <- finalize_model(spec)
 #' make_context(structure)
 #' @export
-make_context <- function(structure, prep = NULL) {
+make_context <- function(structure, prep = NULL, diagnostics = FALSE) {
   .make_context_structure(
     structure = structure,
-    prep = prep
+    prep = prep,
+    diagnostics = diagnostics
   )
 }
 
 #' Return compiled exact complexity metrics
 #'
-#' @param context Context created with `make_context()`.
+#' @param context Context created with `make_context(diagnostics = TRUE)`.
 #' @return A list with per-variant and total symbolic/compiled metrics.
 #' @export
 complexity_metrics <- function(context) {
   context <- .validate_context(context)
+  if (!isTRUE(context$cpp$has_complexity_metrics)) {
+    stop(
+      "complexity metrics were not collected; create the context with diagnostics = TRUE",
+      call. = FALSE
+    )
+  }
   .complexity_metrics_context(context$cpp$native)
 }
 
@@ -1159,10 +1169,9 @@ response_probabilities.default <- function(structure,
 #' @param parameters A parameter data frame, or a list of parameter data frames.
 #' @param ok Logical vector marking which trials should contribute to the
 #'   likelihood. Trials marked `FALSE` are assigned `min_ll`.
-#' @param expand Optional 1-based index vector mapping original trials to
-#'   evaluated trial log-likelihood positions. If `NULL`, the `expand`
-#'   attribute from `data` is used when present; otherwise no expansion is
-#'   applied.
+#' @param trial_weights Optional integer weights for compact prepared trials.
+#'   If `NULL`, the `trial_weights` attribute from `data` is used when present;
+#'   otherwise each prepared trial has weight one.
 #' @param min_ll Minimum log-likelihood value used for excluded or impossible
 #'   trials.
 #' @param ... Unused; for S3 compatibility.
@@ -1182,7 +1191,7 @@ response_probabilities.default <- function(structure,
 #' ctx <- make_context(structure)
 #' log_likelihood(ctx, prepared, params_df)
 #' @export
-log_likelihood <- function(context, data, parameters, ok = NULL, expand = NULL, min_ll = log(1e-10), ...) {
+log_likelihood <- function(context, data, parameters, ok = NULL, trial_weights = NULL, min_ll = log(1e-10), ...) {
   UseMethod("log_likelihood")
 }
 
@@ -1192,29 +1201,28 @@ log_likelihood.accumulatr_context <- function(context,
                                               data,
                                               parameters,
                                               ok = NULL,
-                                              expand = NULL,
+                                              trial_weights = NULL,
                                               min_ll = log(1e-10),
                                               ...) {
-  if (is.null(expand) || length(expand) == 0L) {
-    expand <- attr(data, "expand", exact = TRUE)
+  if (is.null(trial_weights) || length(trial_weights) == 0L) {
+    trial_weights <- attr(data, "trial_weights", exact = TRUE)
   }
-  if (is.null(expand) || length(expand) == 0L) {
-    expand <- NULL
+  if (is.null(trial_weights) || length(trial_weights) == 0L) {
+    trial_weights <- NULL
   }
   if (is.null(ok) || length(ok) == 0L) {
     ok <- NULL
   }
 
   cpp_ctx <- context$cpp
-  observed <- .loglik_context(
+  .loglik_total_context(
     cpp_ctx$native,
     parameters,
     data,
     ok = ok,
-    expand = expand,
+    trial_weights = trial_weights,
     min_ll = min_ll
   )
-  as.numeric(observed$total_loglik)
 }
 
 #' @rdname log_likelihood

@@ -89,7 +89,10 @@ inline semantic::Index exact_complexity_max_integral_depth(
 }
 
 inline void exact_complexity_finalize(ExactVariantBuildState *plan) {
-  auto &metrics = plan->complexity;
+  if (plan->complexity_metrics == nullptr) {
+    return;
+  }
+  auto &metrics = *plan->complexity_metrics;
   const auto &program = plan->compiled_math;
   metrics.compiled_root_count =
       static_cast<semantic::Index>(program.roots.size());

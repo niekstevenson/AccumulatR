@@ -12,7 +12,7 @@ inline semantic::Index compile_source_view_id(
 inline const std::vector<semantic::Index> &planned_source_support_for_id(
     const ExactVariantBuildState &plan,
     const semantic::Index source_id) {
-  const auto leaf_count = plan.lowered.program.layout.n_leaves;
+  const auto leaf_count = plan.program.layout.n_leaves;
   if (source_id < leaf_count) {
     return plan.leaf_supports[static_cast<std::size_t>(source_id)];
   }
@@ -21,7 +21,7 @@ inline const std::vector<semantic::Index> &planned_source_support_for_id(
 
 inline bool source_id_is_pool(const ExactVariantBuildState &plan,
                               const semantic::Index source_id) {
-  const auto leaf_count = plan.lowered.program.layout.n_leaves;
+  const auto leaf_count = plan.program.layout.n_leaves;
   return source_id >= leaf_count && source_id < plan.source_count;
 }
 
@@ -53,7 +53,7 @@ inline bool transition_has_source_guard(
              }) != guards.guards.end();
 }
 
-inline bool expr_is_runtime_const(const runtime::ExactProgram &program,
+inline bool expr_is_runtime_const(const runtime::ExactEvaluationProgram &program,
                                   const semantic::Index expr_idx) {
   const auto kind = static_cast<semantic::ExprKind>(
       program.expr_kind[static_cast<std::size_t>(expr_idx)]);
@@ -61,7 +61,7 @@ inline bool expr_is_runtime_const(const runtime::ExactProgram &program,
          kind == semantic::ExprKind::TrueExpr;
 }
 
-inline bool expr_is_simple_event(const runtime::ExactProgram &program,
+inline bool expr_is_simple_event(const runtime::ExactEvaluationProgram &program,
                                  const semantic::Index expr_idx) {
   return static_cast<semantic::ExprKind>(
              program.expr_kind[static_cast<std::size_t>(expr_idx)]) ==
@@ -71,7 +71,7 @@ inline bool expr_is_simple_event(const runtime::ExactProgram &program,
 inline bool append_ready_requirement(ExactSymbolicTransitionScenario *scenario,
                                      const ExactVariantBuildState &plan,
                                      const semantic::Index expr_idx) {
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   if (expr_is_runtime_const(program, expr_idx)) {
     return true;
   }
@@ -90,7 +90,7 @@ inline bool append_ready_requirement(ExactSymbolicTransitionScenario *scenario,
 inline bool append_tail_requirement(ExactSymbolicTransitionScenario *scenario,
                                     const ExactVariantBuildState &plan,
                                     const semantic::Index expr_idx) {
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   if (expr_is_runtime_const(program, expr_idx)) {
     return true;
   }
@@ -161,7 +161,7 @@ inline bool append_tail_order_requirement(ExactSymbolicTransitionScenario *scena
                                           const semantic::Index expr_idx,
                                           bool *handled) {
   *handled = false;
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   const auto pos = static_cast<std::size_t>(expr_idx);
   const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
   if (kind != semantic::ExprKind::Guard ||
@@ -245,7 +245,7 @@ inline bool expr_children_any_not_completed_by_active(
     const ExactVariantBuildState &plan,
     const ExactSymbolicTransitionScenario &scenario,
     const ExactIndexSpan children) {
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   for (semantic::Index i = 0; i < children.size; ++i) {
     const auto child = program.expr_args[
         static_cast<std::size_t>(children.offset + i)];
@@ -263,7 +263,7 @@ inline bool expr_children_all_not_completed_by_active(
   if (children.empty()) {
     return false;
   }
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   for (semantic::Index i = 0; i < children.size; ++i) {
     const auto child = program.expr_args[
         static_cast<std::size_t>(children.offset + i)];
@@ -278,7 +278,7 @@ inline bool expr_certainly_not_completed_by_active(
     const ExactVariantBuildState &plan,
     const ExactSymbolicTransitionScenario &scenario,
     const semantic::Index expr_idx) {
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   const auto pos = static_cast<std::size_t>(expr_idx);
   const auto kind = static_cast<semantic::ExprKind>(program.expr_kind[pos]);
   switch (kind) {
@@ -357,7 +357,7 @@ inline bool append_source_truth_constraints(
   if (!append_transition_relation(scenario, source_id, relation)) {
     return false;
   }
-  const auto leaf_count = plan.lowered.program.layout.n_leaves;
+  const auto leaf_count = plan.program.layout.n_leaves;
   if (source_id >= leaf_count) {
     return true;
   }
@@ -366,13 +366,13 @@ inline bool append_source_truth_constraints(
   }
   const auto pos = static_cast<std::size_t>(source_id);
   const auto onset_kind = static_cast<semantic::OnsetKind>(
-      plan.lowered.program.onset_kind[pos]);
+      plan.program.onset_kind[pos]);
   if (onset_kind == semantic::OnsetKind::Absolute) {
     return true;
   }
   return append_source_truth_constraints(
       plan,
-      plan.lowered.program.onset_source_ids[pos],
+      plan.program.onset_source_ids[pos],
       ExactRelation::Before,
       scenario);
 }
@@ -524,7 +524,7 @@ inline std::vector<ExactSymbolicTransitionScenario> build_source_transition_scen
     const ExactVariantBuildState &plan,
     const semantic::Index source_id) {
   std::vector<ExactSymbolicTransitionScenario> out;
-  const auto leaf_count = plan.lowered.program.layout.n_leaves;
+  const auto leaf_count = plan.program.layout.n_leaves;
   if (source_id < leaf_count) {
     auto scenario = make_source_release_transition_scenario(source_id);
     if (!append_source_truth_constraints(
@@ -538,14 +538,14 @@ inline std::vector<ExactSymbolicTransitionScenario> build_source_transition_scen
   }
 
   const auto pool_idx = static_cast<std::size_t>(source_id - leaf_count);
-  const auto begin = plan.lowered.program.pool_member_offsets[pool_idx];
-  const auto end = plan.lowered.program.pool_member_offsets[pool_idx + 1U];
-  const auto k = plan.lowered.program.pool_k[pool_idx];
+  const auto begin = plan.program.pool_member_offsets[pool_idx];
+  const auto end = plan.program.pool_member_offsets[pool_idx + 1U];
+  const auto k = plan.program.pool_k[pool_idx];
   std::vector<semantic::Index> members;
   members.reserve(static_cast<std::size_t>(end - begin));
   for (semantic::Index i = begin; i < end; ++i) {
     members.push_back(
-        plan.lowered.program.pool_member_source_ids[static_cast<std::size_t>(i)]);
+        plan.program.pool_member_source_ids[static_cast<std::size_t>(i)]);
   }
   if (k < 1 || k > static_cast<int>(members.size())) {
     return out;
@@ -612,7 +612,7 @@ inline std::vector<ExactSymbolicTransitionScenario> build_logical_transition_sce
     const ExactVariantBuildState &plan,
     const std::vector<semantic::Index> &children,
     const semantic::ExprKind kind) {
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   std::vector<semantic::Index> normalized_children;
   normalized_children.reserve(children.size());
   for (const auto child : children) {
@@ -651,10 +651,10 @@ inline std::vector<ExactSymbolicTransitionScenario> build_logical_transition_sce
         const auto child = normalized_children[other];
         if (kind == semantic::ExprKind::And) {
           ok = append_ready_requirement(&scenario, plan, child);
-          if (ok && expr_is_simple_event(plan.lowered.program, child)) {
+          if (ok && expr_is_simple_event(plan.program, child)) {
             ok = append_source_truth_constraints(
                 plan,
-                plan.lowered.program.expr_source_ids[
+                plan.program.expr_source_ids[
                     static_cast<std::size_t>(child)],
                 ExactRelation::Before,
                 &scenario);
@@ -672,10 +672,10 @@ inline std::vector<ExactSymbolicTransitionScenario> build_logical_transition_sce
           if (ok && !tail_order_handled) {
             ok = append_tail_requirement(&scenario, plan, child);
           }
-          if (ok && expr_is_simple_event(plan.lowered.program, child)) {
+          if (ok && expr_is_simple_event(plan.program, child)) {
             ok = append_source_truth_constraints(
                 plan,
-                plan.lowered.program.expr_source_ids[
+                plan.program.expr_source_ids[
                     static_cast<std::size_t>(child)],
                 ExactRelation::After,
                 &scenario);
@@ -699,7 +699,7 @@ inline std::vector<ExactSymbolicTransitionScenario> build_logical_transition_sce
 inline std::vector<ExactSymbolicTransitionScenario> build_expr_transition_scenarios(
     const ExactVariantBuildState &plan,
     const semantic::Index expr_idx) {
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   const auto kind = static_cast<semantic::ExprKind>(
       program.expr_kind[static_cast<std::size_t>(expr_idx)]);
 
@@ -908,7 +908,7 @@ finalize_symbolic_transition_scenarios(
 inline std::vector<ExactCompetitorCandidate> planned_competitor_candidates(
     const ExactVariantBuildState &plan,
     const semantic::Index target_outcome_idx) {
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   if (target_outcome_idx < 0 ||
       target_outcome_idx + 1 >=
           static_cast<semantic::Index>(program.outcome_competitor_offsets.size())) {
@@ -954,7 +954,7 @@ inline ExactTargetCompetitorPlan build_target_competitor_plan(
   const auto competitors =
       planned_competitor_candidates(*plan, target_outcome_idx);
   target_plan.competitors.reserve(competitors.size());
-  const auto &program = plan->lowered.program;
+  const auto &program = plan->program;
   for (const auto &competitor : competitors) {
     ExactCompetitorRegionPlan competitor_plan;
     competitor_plan.expr_root = competitor.expr_root;
@@ -999,30 +999,28 @@ inline std::vector<ExactTargetCompetitorPlan> compile_target_competitor_plans(
 
 inline void compile_exact_outcome_transition_scenarios(
     ExactVariantBuildState *plan,
-    const std::unordered_map<std::string, semantic::Index> &outcome_code_by_label,
     const std::size_t n_outcome_codes) {
   plan->outcome_index_by_code.assign(
       n_outcome_codes + 1U,
       semantic::kInvalidIndex);
-  const auto &program = plan->lowered.program;
+  const auto &program = plan->program;
   plan->outcomes.clear();
-  plan->outcomes.reserve(plan->lowered.outcome_labels.size());
-  for (std::size_t i = 0; i < plan->lowered.outcome_labels.size(); ++i) {
+  plan->outcomes.reserve(program.outcome_expr_root.size());
+  for (std::size_t i = 0; i < program.outcome_expr_root.size(); ++i) {
     const auto expr_root = program.outcome_expr_root[i];
-    validate_exact_expr(plan->lowered, expr_root);
+    validate_exact_expr(program, expr_root);
     ExactOutcomePlan outcome;
     outcome.scenarios = finalize_symbolic_transition_scenarios(
         plan,
         build_expr_transition_scenarios(*plan, expr_root),
         static_cast<semantic::Index>(i));
-    const auto code_it =
-        outcome_code_by_label.find(plan->lowered.outcome_labels[i]);
-    if (code_it == outcome_code_by_label.end()) {
-      throw std::runtime_error(
-          "exact evaluator found no prepared outcome code for '" +
-          plan->lowered.outcome_labels[i] + "'");
+    const auto outcome_code = program.outcome_codes[i];
+    if (outcome_code == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(outcome_code) >=
+            plan->outcome_index_by_code.size()) {
+      throw std::runtime_error("exact program contains invalid outcome code");
     }
-    plan->outcome_index_by_code[static_cast<std::size_t>(code_it->second)] =
+    plan->outcome_index_by_code[static_cast<std::size_t>(outcome_code)] =
         static_cast<semantic::Index>(i);
     plan->outcomes.push_back(std::move(outcome));
   }

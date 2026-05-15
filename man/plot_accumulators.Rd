@@ -15,7 +15,6 @@ plot_accumulators(
   line_col = "gray20",
   line_lwd = 3,
   axis_lwd = 3,
-  link_lwd = 2.2,
   blocker_lwd = 2.6,
   show_labels = TRUE,
   main = "Accumulator Schematic",
@@ -25,7 +24,7 @@ plot_accumulators(
 )
 }
 \arguments{
-\item{model}{A race model (`race_spec`, a finalized model, or `model_tables`).}
+\item{model}{A race model or finalized model structure.}
 
 \item{xlim}{Optional x-axis limits. If `NULL`, they are chosen from the model.}
 
@@ -48,8 +47,6 @@ from top-to-bottom. This only affects accumulators sharing the same onset.}
 \item{line_lwd}{Line width for accumulator trajectories.}
 
 \item{axis_lwd}{Line width for x/y axis arrows.}
-
-\item{link_lwd}{Reserved for reciprocal relationship arrows (currently disabled).}
 
 \item{blocker_lwd}{Line width for blocker arrows.}
 

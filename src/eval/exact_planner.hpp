@@ -1,5 +1,7 @@
 #pragma once
 
+#include <utility>
+
 #include "exact_types.hpp"
 #include "exact_compiled_math_lowering.hpp"
 #include "exact_transition_lowering.hpp"
@@ -12,21 +14,17 @@ namespace accumulatr::eval {
 namespace detail {
 
 inline ExactVariantPlan make_exact_variant_plan(
-    const runtime::LoweredExactVariant &lowered,
-    const std::unordered_map<std::string, semantic::Index> &outcome_code_by_label,
+    runtime::ExactEvaluationProgram program,
     const std::size_t n_outcome_codes) {
   ExactVariantBuildState build;
-  build.lowered = lowered;
-  canonicalize_exact_program_expressions(&build.lowered.program);
+  build.program = std::move(program);
+  canonicalize_exact_evaluation_program_expressions(&build.program);
   compile_exact_support_context(&build);
   compile_program_source_runtime_fields(&build);
   compile_source_kernels(&build);
   compile_exact_expr_kernels(&build);
   compile_shared_trigger_state_table(&build);
-  compile_exact_outcome_transition_scenarios(
-      &build,
-      outcome_code_by_label,
-      n_outcome_codes);
+  compile_exact_outcome_transition_scenarios(&build, n_outcome_codes);
   build.no_response = compile_terminal_no_response_plan(build);
   auto competitor_plans = compile_target_competitor_plans(&build);
   compile_sequence_plan(&build, competitor_plans);

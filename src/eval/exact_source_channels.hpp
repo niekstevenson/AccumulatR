@@ -23,7 +23,7 @@ struct ExactLoadedLeafInput {
 };
 
 inline double exact_leaf_q_for_trigger_state(
-    const runtime::ExactProgram &program,
+    const runtime::ExactEvaluationProgram &program,
     const ParamView &params,
     const int row,
     const ExactTriggerState &trigger_state,
@@ -177,7 +177,7 @@ public:
 
 private:
   const ExactVariantPlan &plan_;
-  const runtime::ExactProgram &program_;
+  const runtime::ExactEvaluationProgram &program_;
   const ParamView *params_{nullptr};
   int first_param_row_;
   const ExactTriggerState *trigger_state_{nullptr};

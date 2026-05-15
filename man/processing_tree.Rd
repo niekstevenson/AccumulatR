@@ -4,20 +4,13 @@
 \alias{processing_tree}
 \title{Draw a processing tree for the responses in a model}
 \usage{
-processing_tree(
-  model,
-  outcome_label = NULL,
-  component = NULL,
-  return_dot = FALSE
-)
+processing_tree(model, outcome_label = NULL, return_dot = FALSE)
 }
 \arguments{
-\item{model}{A race model (`race_spec`, a finalized model, or `model_tables`).}
+\item{model}{A race model or finalized model structure.}
 
 \item{outcome_label}{Optional response label. If supplied, only that response
 is shown.}
-
-\item{component}{Optional mixture component. Reserved for future use.}
 
 \item{return_dot}{If `TRUE`, return the Graphviz DOT string instead of a plot.}
 }

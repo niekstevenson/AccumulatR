@@ -294,7 +294,7 @@ inline bool exact_order_region_expr_satisfied_at_time(
   if (expr_id == semantic::kInvalidIndex) {
     return false;
   }
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   const auto pos = static_cast<std::size_t>(expr_id);
   const auto &kernel = plan.expr_kernels[pos];
   switch (kernel.kind) {
@@ -380,7 +380,7 @@ inline bool exact_order_region_guard_allowed_at_time(
     const semantic::Index time_id,
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   ExactOrderRegionExpr allowed;
   if (!exact_order_region_expr_after(
           plan,
@@ -450,7 +450,7 @@ inline bool exact_order_region_guard_blocked_at_time(
           &blocked)) {
     return false;
   }
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   for (semantic::Index i = 0; i < kernel.children.size; ++i) {
     const auto child =
         program.expr_args[
@@ -1775,7 +1775,7 @@ inline bool exact_order_region_expr_relation_can_collapse(
       static_cast<std::size_t>(expr_id) >= plan.expr_kernels.size()) {
     return false;
   }
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   const auto &kernel = plan.expr_kernels[static_cast<std::size_t>(expr_id)];
   switch (kernel.kind) {
   case semantic::ExprKind::Impossible:
@@ -1822,7 +1822,7 @@ inline bool exact_expr_completion_monotone(
       static_cast<std::size_t>(expr_id) >= plan.expr_kernels.size()) {
     return false;
   }
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   const auto &kernel = plan.expr_kernels[static_cast<std::size_t>(expr_id)];
   switch (kernel.kind) {
   case semantic::ExprKind::Impossible:
@@ -1859,7 +1859,7 @@ inline bool exact_order_region_monotone_expr_before_or_at(
       static_cast<std::size_t>(expr_id) >= plan.expr_kernels.size()) {
     return false;
   }
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   const auto &kernel = plan.expr_kernels[static_cast<std::size_t>(expr_id)];
   switch (kernel.kind) {
   case semantic::ExprKind::Impossible:

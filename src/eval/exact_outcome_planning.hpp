@@ -15,8 +15,8 @@ inline bool exact_scenario_is_terminal_leaf_release(
   const auto source_id =
       exact_symbolic_transition_release_source_id(scenario.transition);
   if (source_id == semantic::kInvalidIndex ||
-      source_id >= plan.lowered.program.layout.n_leaves ||
-      plan.source_count != plan.lowered.program.layout.n_leaves) {
+      source_id >= plan.program.layout.n_leaves ||
+      plan.source_count != plan.program.layout.n_leaves) {
     return false;
   }
   if (!scenario.transition.readiness_time_expr.requirements.empty() ||
@@ -46,7 +46,7 @@ inline bool exact_scenario_is_terminal_leaf_release(
 inline ExactTerminalNoResponsePlan compile_terminal_no_response_plan(
     const ExactVariantBuildState &plan) {
   ExactTerminalNoResponsePlan no_response;
-  const auto leaf_count = plan.lowered.program.layout.n_leaves;
+  const auto leaf_count = plan.program.layout.n_leaves;
   if (leaf_count <= 0 ||
       plan.source_count != leaf_count ||
       plan.outcomes.empty()) {
@@ -146,7 +146,7 @@ inline void mark_sequence_expr_upper_bounds_for_scenario(
 inline void compile_sequence_plan(
     ExactVariantBuildState *plan,
     const std::vector<ExactTargetCompetitorPlan> &competitor_plans) {
-  const auto expr_count = plan->lowered.program.expr_kind.size();
+  const auto expr_count = plan->program.expr_kind.size();
   plan->sequence.expr_upper_bound_used.assign(expr_count, 0U);
   plan->sequence.expr_cdf_roots.assign(
       expr_count,

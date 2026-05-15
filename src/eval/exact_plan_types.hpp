@@ -10,7 +10,7 @@
 #include "exact_region_types.hpp"
 #include "exact_support_types.hpp"
 #include "exact_transition_types.hpp"
-#include "../runtime/exact_program.hpp"
+#include "../runtime/exact_evaluation_program.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
@@ -68,7 +68,7 @@ struct ExactExprDistributionPlan {
 };
 
 struct ExactVariantBuildState {
-  runtime::LoweredExactVariant lowered;
+  runtime::ExactEvaluationProgram program;
   std::vector<semantic::Index> outcome_index_by_code;
   std::vector<ExactOutcomePlan> outcomes;
   std::vector<ExactCompiledOutcomePlan> compiled_outcomes;
@@ -96,7 +96,7 @@ struct ExactVariantBuildState {
 };
 
 struct ExactVariantPlan {
-  runtime::ExactProgram program;
+  runtime::ExactEvaluationProgram program;
   std::vector<semantic::Index> outcome_index_by_code;
   std::vector<ExactCompiledOutcomePlan> compiled_outcomes;
   ExactSequencePlan sequence;
@@ -114,7 +114,7 @@ struct ExactVariantPlan {
 inline ExactVariantPlan finalize_exact_variant_plan(
     ExactVariantBuildState &&build) {
   ExactVariantPlan plan;
-  plan.program = std::move(build.lowered.program);
+  plan.program = std::move(build.program);
   plan.outcome_index_by_code = std::move(build.outcome_index_by_code);
   plan.compiled_outcomes = std::move(build.compiled_outcomes);
   plan.sequence = std::move(build.sequence);

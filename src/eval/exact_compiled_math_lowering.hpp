@@ -84,7 +84,7 @@ inline semantic::Index compile_expr_child_value_node(
     const semantic::Index time_id =
         static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
     const semantic::Index source_view_id = 0) {
-  const auto &program = plan->lowered.program;
+  const auto &program = plan->program;
   return compile_expr_value_node(
       plan,
       program.expr_args[static_cast<std::size_t>(children.offset + index)],
@@ -114,7 +114,7 @@ inline semantic::Index compile_guard_unless_allowed_node(
     const semantic::Index condition_id,
     const semantic::Index time_id,
     const semantic::Index source_view_id) {
-  const auto &program = plan->lowered.program;
+  const auto &program = plan->program;
   std::vector<semantic::Index> blocked_factors;
   blocked_factors.push_back(
       compile_expr_value_node(
@@ -531,7 +531,7 @@ inline semantic::Index compile_expr_value_node_raw(
     const semantic::Index condition_id,
     const semantic::Index time_id,
     const semantic::Index source_view_id = 0) {
-  const auto &program = plan->lowered.program;
+  const auto &program = plan->program;
   const auto &kernel = plan->expr_kernels[static_cast<std::size_t>(expr_id)];
   const auto constant = [&](const double value) {
     return compiled_math_constant(&plan->compiled_math, value);

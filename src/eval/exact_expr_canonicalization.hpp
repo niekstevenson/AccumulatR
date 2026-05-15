@@ -13,7 +13,7 @@ namespace detail {
 
 class ExactExprCanonicalizer {
 public:
-  explicit ExactExprCanonicalizer(const runtime::ExactProgram &program)
+  explicit ExactExprCanonicalizer(const runtime::ExactEvaluationProgram &program)
       : input_(program),
         canonical_(program.expr_kind.size(), semantic::kInvalidIndex) {
     output_ = input_;
@@ -29,7 +29,7 @@ public:
     output_.expr_arg_offsets.push_back(0);
   }
 
-  runtime::ExactProgram run() {
+  runtime::ExactEvaluationProgram run() {
     for (auto &root : output_.outcome_expr_root) {
       root = canonicalize(root);
     }
@@ -40,8 +40,8 @@ public:
   }
 
 private:
-  const runtime::ExactProgram &input_;
-  runtime::ExactProgram output_;
+  const runtime::ExactEvaluationProgram &input_;
+  runtime::ExactEvaluationProgram output_;
   std::vector<semantic::Index> canonical_;
   std::map<std::vector<semantic::Index>, semantic::Index> interned_;
 
@@ -418,8 +418,8 @@ private:
   }
 };
 
-inline void canonicalize_exact_program_expressions(
-    runtime::ExactProgram *program) {
+inline void canonicalize_exact_evaluation_program_expressions(
+    runtime::ExactEvaluationProgram *program) {
   if (program == nullptr) {
     return;
   }

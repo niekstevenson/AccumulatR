@@ -205,7 +205,7 @@ inline void exact_expr_distribution_collect_same_kind_children(
     const semantic::Index expr_id,
     const semantic::ExprKind kind,
     std::vector<semantic::Index> *children) {
-  const auto &program = plan.lowered.program;
+  const auto &program = plan.program;
   if (expr_id == semantic::kInvalidIndex ||
       static_cast<std::size_t>(expr_id) >= plan.expr_kernels.size()) {
     return;

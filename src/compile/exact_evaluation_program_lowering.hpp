@@ -1,90 +1,26 @@
 #pragma once
 
 #include <cstdint>
+#include <stdexcept>
 #include <string>
-#include <utility>
-#include <vector>
+#include <unordered_map>
 
-#include "layout.hpp"
-#include "../compile/project_semantic.hpp"
+#include "../runtime/exact_evaluation_program.hpp"
+#include "project_semantic.hpp"
 
-namespace accumulatr::runtime {
+namespace accumulatr::compile {
 
-struct ExactProgram {
-  RuntimeLayout layout{};
-
-  std::vector<LeafRuntimeDescriptor> leaf_descriptors;
-  std::vector<std::uint8_t> leaf_dist_kind;
-
-  std::vector<std::uint8_t> onset_kind;
-  std::vector<std::uint8_t> onset_source_kind;
-  std::vector<semantic::Index> onset_source_index;
-  std::vector<semantic::Index> onset_source_ids;
-  std::vector<double> onset_lag;
-  std::vector<double> onset_abs_value;
-
-  std::vector<semantic::Index> leaf_trigger_index;
-
-  std::vector<std::uint8_t> trigger_kind;
-  std::vector<double> trigger_fixed_q;
-  std::vector<std::uint8_t> trigger_has_fixed_q;
-  std::vector<semantic::Index> trigger_member_offsets;
-  std::vector<semantic::Index> trigger_member_indices;
-
-  std::vector<semantic::Index> pool_k;
-  std::vector<semantic::Index> pool_member_offsets;
-  std::vector<semantic::Index> pool_member_indices;
-  std::vector<std::uint8_t> pool_member_kind;
-  std::vector<semantic::Index> pool_member_source_ids;
-
-  std::vector<std::uint8_t> expr_kind;
-  std::vector<semantic::Index> expr_arg_offsets;
-  std::vector<semantic::Index> expr_args;
-  std::vector<semantic::Index> expr_ref_child;
-  std::vector<semantic::Index> expr_blocker_child;
-  std::vector<semantic::Index> expr_source_index;
-  std::vector<std::uint8_t> expr_source_kind;
-  std::vector<semantic::Index> expr_source_ids;
-  std::vector<int> expr_event_k;
-
-  std::vector<semantic::Index> outcome_expr_root;
-  std::vector<semantic::Index> observed_label_index;
-  std::vector<semantic::Index> outcome_competitor_offsets;
-  std::vector<semantic::Index> outcome_competitor_expr_roots;
-  std::vector<semantic::Index> outcome_competitor_indices;
-
-  ParameterLayout parameter_layout{};
-};
-
-struct LoweredExactVariant {
-  std::string component_id;
-  double weight{1.0};
-  std::string weight_name;
-  ExactProgram program{};
-  std::vector<std::string> param_keys;
-  std::vector<std::string> leaf_ids;
-  std::vector<std::string> pool_ids;
-  std::vector<std::string> outcome_labels;
-};
-
-inline LoweredExactVariant lower_exact_variant(
-    const compile::CompiledVariant &variant) {
-  LoweredExactVariant lowered;
-  lowered.component_id = variant.component_id;
-  lowered.weight = variant.weight;
-  lowered.weight_name = variant.weight_name;
-
+inline runtime::ExactEvaluationProgram lower_exact_evaluation_program(
+    const CompiledVariant &variant,
+    const std::unordered_map<std::string, semantic::Index>
+        &outcome_code_by_label) {
   const auto &model = variant.model;
-  auto &program = lowered.program;
+  runtime::ExactEvaluationProgram program;
 
   program.layout.n_leaves = static_cast<int>(model.leaves.size());
   program.layout.n_pools = static_cast<int>(model.pools.size());
   program.layout.n_outcomes = static_cast<int>(model.outcomes.size());
   program.layout.n_triggers = static_cast<int>(model.triggers.size());
-
-  lowered.leaf_ids.reserve(model.leaves.size());
-  lowered.pool_ids.reserve(model.pools.size());
-  lowered.outcome_labels.reserve(model.outcomes.size());
 
   program.leaf_dist_kind.reserve(model.leaves.size());
   program.leaf_descriptors.reserve(model.leaves.size());
@@ -95,16 +31,8 @@ inline LoweredExactVariant lower_exact_variant(
   program.onset_lag.reserve(model.leaves.size());
   program.onset_abs_value.reserve(model.leaves.size());
   program.leaf_trigger_index.reserve(model.leaves.size());
-  program.parameter_layout.leaf_param_offsets.reserve(model.leaves.size() + 1U);
-  program.parameter_layout.leaf_q_slots.reserve(model.leaves.size());
-  program.parameter_layout.leaf_t0_slots.reserve(model.leaves.size());
 
-  detail::SlotAllocator slots;
-  program.parameter_layout.leaf_param_offsets.push_back(0);
   for (const auto &leaf : model.leaves) {
-    const auto param_offset = static_cast<semantic::Index>(
-        program.parameter_layout.leaf_param_slots.size());
-    lowered.leaf_ids.push_back(leaf.id);
     program.leaf_dist_kind.push_back(static_cast<std::uint8_t>(leaf.dist));
     program.onset_kind.push_back(static_cast<std::uint8_t>(leaf.onset.kind));
     program.onset_source_kind.push_back(
@@ -115,18 +43,7 @@ inline LoweredExactVariant lower_exact_variant(
     program.onset_abs_value.push_back(leaf.onset.absolute_value);
     program.leaf_trigger_index.push_back(leaf.trigger_index);
 
-    for (const auto &param_name : leaf.params.dist_param_names) {
-      program.parameter_layout.leaf_param_slots.push_back(
-          slots.slot_for(param_name));
-    }
-    const auto param_end = static_cast<semantic::Index>(
-        program.parameter_layout.leaf_param_slots.size());
-    program.parameter_layout.leaf_param_offsets.push_back(param_end);
-    program.parameter_layout.leaf_q_slots.push_back(
-        slots.slot_for(leaf.params.q_name));
-    program.parameter_layout.leaf_t0_slots.push_back(
-        slots.slot_for(leaf.params.t0_name));
-    program.leaf_descriptors.push_back(LeafRuntimeDescriptor{
+    program.leaf_descriptors.push_back(runtime::LeafRuntimeDescriptor{
         static_cast<std::uint8_t>(leaf.dist),
         static_cast<std::uint8_t>(leaf.onset.kind),
         static_cast<std::uint8_t>(leaf.onset.source.kind),
@@ -135,8 +52,7 @@ inline LoweredExactVariant lower_exact_variant(
         leaf.onset.lag,
         leaf.onset.absolute_value,
         leaf.trigger_index,
-        param_offset,
-        static_cast<int>(param_end - param_offset)});
+        static_cast<int>(leaf.params.dist_param_names.size())});
   }
 
   program.trigger_kind.reserve(model.triggers.size());
@@ -162,7 +78,6 @@ inline LoweredExactVariant lower_exact_variant(
   program.pool_member_source_ids.reserve(model.pools.size());
   program.pool_member_offsets.push_back(0);
   for (const auto &pool : model.pools) {
-    lowered.pool_ids.push_back(pool.id);
     program.pool_k.push_back(pool.k);
     for (const auto &member : pool.members) {
       program.pool_member_indices.push_back(member.index);
@@ -203,14 +118,18 @@ inline LoweredExactVariant lower_exact_variant(
   }
 
   program.outcome_expr_root.reserve(model.outcomes.size());
-  program.observed_label_index.reserve(model.outcomes.size());
+  program.outcome_codes.reserve(model.outcomes.size());
   program.outcome_competitor_offsets.reserve(model.outcomes.size() + 1U);
   program.outcome_competitor_offsets.push_back(0);
-  for (std::size_t i = 0; i < model.outcomes.size(); ++i) {
-    const auto &outcome = model.outcomes[i];
-    lowered.outcome_labels.push_back(outcome.label);
+  for (const auto &outcome : model.outcomes) {
+    const auto code_it = outcome_code_by_label.find(outcome.label);
+    if (code_it == outcome_code_by_label.end()) {
+      throw std::runtime_error(
+          "exact evaluator found no prepared outcome code for '" +
+          outcome.label + "'");
+    }
     program.outcome_expr_root.push_back(outcome.expr_root);
-    program.observed_label_index.push_back(static_cast<semantic::Index>(i));
+    program.outcome_codes.push_back(code_it->second);
     for (std::size_t j = 0; j < outcome.competitor_expr_roots.size(); ++j) {
       program.outcome_competitor_expr_roots.push_back(
           outcome.competitor_expr_roots[j]);
@@ -224,10 +143,7 @@ inline LoweredExactVariant lower_exact_variant(
             program.outcome_competitor_expr_roots.size()));
   }
 
-  lowered.param_keys = slots.keys();
-  program.layout.n_params = static_cast<int>(lowered.param_keys.size());
-
-  return lowered;
+  return program;
 }
 
-} // namespace accumulatr::runtime
+} // namespace accumulatr::compile

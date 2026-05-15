@@ -6,28 +6,28 @@ namespace accumulatr::eval {
 namespace detail {
 
 inline void compile_exact_support_context(ExactVariantBuildState *plan) {
-  ExactSupportBuilder builder(plan->lowered);
+  ExactSupportBuilder builder(plan->program);
   plan->leaf_supports = builder.build_leaf_supports();
   plan->pool_supports = builder.build_pool_supports();
   plan->expr_supports = builder.build_expr_supports();
   plan->source_count = static_cast<semantic::Index>(
-      plan->lowered.program.layout.n_leaves +
-      plan->lowered.program.layout.n_pools);
+      plan->program.layout.n_leaves +
+      plan->program.layout.n_pools);
   plan->leaf_source_ids.resize(
-      static_cast<std::size_t>(plan->lowered.program.layout.n_leaves));
+      static_cast<std::size_t>(plan->program.layout.n_leaves));
   plan->pool_source_ids.resize(
-      static_cast<std::size_t>(plan->lowered.program.layout.n_pools));
-  for (semantic::Index i = 0; i < plan->lowered.program.layout.n_leaves; ++i) {
+      static_cast<std::size_t>(plan->program.layout.n_pools));
+  for (semantic::Index i = 0; i < plan->program.layout.n_leaves; ++i) {
     plan->leaf_source_ids[static_cast<std::size_t>(i)] = i;
   }
-  for (semantic::Index i = 0; i < plan->lowered.program.layout.n_pools; ++i) {
+  for (semantic::Index i = 0; i < plan->program.layout.n_pools; ++i) {
     plan->pool_source_ids[static_cast<std::size_t>(i)] =
-        static_cast<semantic::Index>(plan->lowered.program.layout.n_leaves + i);
+        static_cast<semantic::Index>(plan->program.layout.n_leaves + i);
   }
 }
 
 inline void compile_program_source_runtime_fields(ExactVariantBuildState *plan) {
-  auto &program = plan->lowered.program;
+  auto &program = plan->program;
 
   for (semantic::Index i = 0; i < program.layout.n_leaves; ++i) {
     const auto pos = static_cast<std::size_t>(i);
@@ -55,7 +55,7 @@ inline void compile_program_source_runtime_fields(ExactVariantBuildState *plan) 
 }
 
 inline void compile_source_kernels(ExactVariantBuildState *plan) {
-  const auto &program = plan->lowered.program;
+  const auto &program = plan->program;
   plan->source_kernels.assign(
       static_cast<std::size_t>(plan->source_count), ExactSourceKernel{});
 
@@ -90,7 +90,7 @@ inline void compile_source_kernels(ExactVariantBuildState *plan) {
 }
 
 inline void compile_exact_expr_kernels(ExactVariantBuildState *plan) {
-  const auto &program = plan->lowered.program;
+  const auto &program = plan->program;
   plan->expr_kernels.assign(program.expr_kind.size(), ExactExprKernel{});
 
   for (semantic::Index expr_idx = 0;
@@ -130,14 +130,14 @@ inline void compile_trigger_state_table(ExactVariantBuildState *plan) {
   table.states.clear();
   table.weight_terms.clear();
   table.shared_started_values.clear();
-  table.trigger_count = plan->lowered.program.layout.n_triggers;
+  table.trigger_count = plan->program.layout.n_triggers;
 
   std::vector<TriggerStateBuilder> builders;
   builders.push_back(TriggerStateBuilder{});
   builders.front().shared_started.assign(
       static_cast<std::size_t>(table.trigger_count), 2U);
 
-  const auto &program = plan->lowered.program;
+  const auto &program = plan->program;
   for (const auto trigger_index : plan->shared_trigger_indices) {
     const auto trigger_pos = static_cast<std::size_t>(trigger_index);
     const bool fixed_q = program.trigger_has_fixed_q[trigger_pos] != 0U;
@@ -227,7 +227,7 @@ inline void compile_trigger_state_table(ExactVariantBuildState *plan) {
 
 inline void compile_shared_trigger_state_table(ExactVariantBuildState *plan) {
   plan->shared_trigger_indices.clear();
-  const auto &program = plan->lowered.program;
+  const auto &program = plan->program;
   for (int i = 0; i < program.layout.n_triggers; ++i) {
     const auto trigger_pos = static_cast<std::size_t>(i);
     if (static_cast<semantic::TriggerKind>(program.trigger_kind[trigger_pos]) ==

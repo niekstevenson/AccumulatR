@@ -9,7 +9,7 @@
 
 #include "compiled_math_types.hpp"
 #include "exact_common_types.hpp"
-#include "../runtime/exact_program.hpp"
+#include "../runtime/exact_evaluation_program.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
@@ -113,8 +113,8 @@ inline bool has_reason(const std::vector<std::string> &reasons,
 
 class ExactSupportBuilder {
 public:
-  explicit ExactSupportBuilder(const runtime::LoweredExactVariant &lowered)
-      : program_(lowered.program),
+  explicit ExactSupportBuilder(const runtime::ExactEvaluationProgram &program)
+      : program_(program),
         leaf_ready_(static_cast<std::size_t>(program_.layout.n_leaves), 0U),
         pool_ready_(static_cast<std::size_t>(program_.layout.n_pools), 0U),
         expr_ready_(program_.expr_kind.size(), 0U),
@@ -146,7 +146,7 @@ public:
   }
 
 private:
-  const runtime::ExactProgram &program_;
+  const runtime::ExactEvaluationProgram &program_;
   std::vector<std::uint8_t> leaf_ready_;
   std::vector<std::uint8_t> pool_ready_;
   std::vector<std::uint8_t> expr_ready_;
@@ -271,21 +271,20 @@ private:
   }
 };
 
-inline semantic::Index child_event_source_index(const runtime::ExactProgram &program,
+inline semantic::Index child_event_source_index(const runtime::ExactEvaluationProgram &program,
                                                 const semantic::Index expr_idx) {
   return program.expr_source_index[static_cast<std::size_t>(expr_idx)];
 }
 
 inline semantic::SourceKind child_event_source_kind(
-    const runtime::ExactProgram &program,
+    const runtime::ExactEvaluationProgram &program,
     const semantic::Index expr_idx) {
   return static_cast<semantic::SourceKind>(
       program.expr_source_kind[static_cast<std::size_t>(expr_idx)]);
 }
 
-inline void validate_exact_expr(const runtime::LoweredExactVariant &lowered,
+inline void validate_exact_expr(const runtime::ExactEvaluationProgram &program,
                                 const semantic::Index expr_idx) {
-  const auto &program = lowered.program;
   const auto kind = static_cast<semantic::ExprKind>(
       program.expr_kind[static_cast<std::size_t>(expr_idx)]);
   if (kind == semantic::ExprKind::Event) {
@@ -296,7 +295,7 @@ inline void validate_exact_expr(const runtime::LoweredExactVariant &lowered,
   }
   if (kind == semantic::ExprKind::Not) {
     validate_exact_expr(
-        lowered,
+        program,
         program.expr_args[static_cast<std::size_t>(
             program.expr_arg_offsets[static_cast<std::size_t>(expr_idx)])]);
     return;
@@ -305,21 +304,21 @@ inline void validate_exact_expr(const runtime::LoweredExactVariant &lowered,
     for (semantic::Index i = program.expr_arg_offsets[static_cast<std::size_t>(expr_idx)];
          i < program.expr_arg_offsets[static_cast<std::size_t>(expr_idx + 1)];
          ++i) {
-      validate_exact_expr(lowered, program.expr_args[static_cast<std::size_t>(i)]);
+      validate_exact_expr(program, program.expr_args[static_cast<std::size_t>(i)]);
     }
     return;
   }
   if (kind == semantic::ExprKind::Guard) {
     validate_exact_expr(
-        lowered,
+        program,
         program.expr_ref_child[static_cast<std::size_t>(expr_idx)]);
     validate_exact_expr(
-        lowered,
+        program,
         program.expr_blocker_child[static_cast<std::size_t>(expr_idx)]);
     for (semantic::Index i = program.expr_arg_offsets[static_cast<std::size_t>(expr_idx)];
          i < program.expr_arg_offsets[static_cast<std::size_t>(expr_idx + 1)];
          ++i) {
-      validate_exact_expr(lowered, program.expr_args[static_cast<std::size_t>(i)]);
+      validate_exact_expr(program, program.expr_args[static_cast<std::size_t>(i)]);
     }
   }
 }

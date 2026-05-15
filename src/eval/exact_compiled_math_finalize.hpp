@@ -323,9 +323,9 @@ inline void compile_source_product_channel_fields(
     channel->leaf_index = source_kernel.leaf_index;
     if (channel->leaf_index != semantic::kInvalidIndex &&
         static_cast<std::size_t>(channel->leaf_index) <
-            plan->lowered.program.leaf_descriptors.size()) {
+            plan->program.leaf_descriptors.size()) {
       const auto &leaf =
-          plan->lowered.program.leaf_descriptors[
+          plan->program.leaf_descriptors[
               static_cast<std::size_t>(channel->leaf_index)];
       channel->leaf_dist_kind = leaf.dist_kind;
       channel->leaf_param_count = leaf.param_count;
@@ -422,9 +422,9 @@ inline semantic::Index compile_source_product_leaf_program(
   source_program.leaf_index = kernel.leaf_index;
   if (kernel.leaf_index != semantic::kInvalidIndex &&
       static_cast<std::size_t>(kernel.leaf_index) <
-          plan->lowered.program.leaf_descriptors.size()) {
+          plan->program.leaf_descriptors.size()) {
     const auto &leaf =
-        plan->lowered.program.leaf_descriptors[
+        plan->program.leaf_descriptors[
             static_cast<std::size_t>(kernel.leaf_index)];
     source_program.leaf_dist_kind = leaf.dist_kind;
     source_program.leaf_onset_abs_value = leaf.onset_abs_value;
@@ -454,9 +454,9 @@ inline semantic::Index compile_source_product_onset_program(
           *plan, condition_id, kernel.onset_source_id);
   if (kernel.leaf_index != semantic::kInvalidIndex &&
       static_cast<std::size_t>(kernel.leaf_index) <
-          plan->lowered.program.leaf_descriptors.size()) {
+          plan->program.leaf_descriptors.size()) {
     const auto &leaf =
-        plan->lowered.program.leaf_descriptors[
+        plan->program.leaf_descriptors[
             static_cast<std::size_t>(kernel.leaf_index)];
     source_program.leaf_dist_kind = leaf.dist_kind;
     source_program.leaf_onset_lag = leaf.onset_lag;
@@ -484,7 +484,7 @@ inline semantic::Index compile_source_product_pool_program(
   const auto member_end = kernel.pool_member_offset + kernel.pool_member_count;
   for (semantic::Index i = kernel.pool_member_offset; i < member_end; ++i) {
     const auto member_source =
-        plan->lowered.program.pool_member_source_ids[
+        plan->program.pool_member_source_ids[
             static_cast<std::size_t>(i)];
     program.integral_kernel_source_product_program_members.push_back(
         compile_source_product_base_program(

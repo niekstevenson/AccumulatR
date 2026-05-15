@@ -1,32 +1,17 @@
-.pt_build_struct_lookup <- function(struct_nodes) {
-  lookup <- list()
-  for (i in seq_len(nrow(struct_nodes))) {
-    row <- struct_nodes[i, ]
-    if (is.null(lookup[[row$label]])) {
-      lookup[[row$label]] <- list(
-        struct_id = row$struct_id,
-        node_type = row$node_type,
-        payload = row$payload[[1]] %||% list()
-      )
-    }
+.pt_node_definition <- function(source_id, model_view) {
+  source_id <- as.character(source_id %||% "")
+  if (length(source_id) != 1L || is.na(source_id) || !nzchar(source_id)) {
+    source_id <- "?"
   }
-  lookup
-}
-
-.pt_node_definition <- function(source_id, struct_lookup) {
-  info <- struct_lookup[[source_id]] %||% list(node_type = "event", payload = list())
-  node_type <- info$node_type %||% "event"
-  payload <- info$payload %||% list()
-
-  if (identical(node_type, "accumulator")) {
+  if (!is.null(model_view$accumulators[[source_id]])) {
     lines <- c(source_id, "accumulator")
     return(list(type = "accumulator", label = paste(lines, collapse = "\\n")))
   }
 
-  if (identical(node_type, "pool")) {
-    members <- payload$members %||% character(0)
-    rule <- payload$rule %||% list()
-    k <- suppressWarnings(as.integer(rule$k %||% NA_integer_)[1])
+  pool <- model_view$pools[[source_id]]
+  if (!is.null(pool)) {
+    members <- pool$members %||% character(0)
+    k <- suppressWarnings(as.integer(pool$k %||% NA_integer_)[1])
     n <- length(members)
     if (!is.na(k) && n > 0) {
       pool_line <- sprintf("pool: %d-of-%d", k, n)
@@ -39,7 +24,7 @@
     return(list(type = "pool", label = paste(lines, collapse = "\\n")))
   }
 
-  list(type = "event", label = paste(c(source_id, node_type), collapse = "\\n"))
+  list(type = "event", label = paste(c(source_id, "event"), collapse = "\\n"))
 }
 
 .pt_to_dot <- function(nodes, edges) {
@@ -134,33 +119,28 @@
 #' equations and instead shows the observed responses, the accumulators or pools
 #' that feed them, and any blocking relationships.
 #'
-#' @param model A race model (`race_spec`, a finalized model, or `model_tables`).
+#' @param model A race model or finalized model structure.
 #' @param outcome_label Optional response label. If supplied, only that response
 #'   is shown.
-#' @param component Optional mixture component. Reserved for future use.
 #' @param return_dot If `TRUE`, return the Graphviz DOT string instead of a plot.
 #'
 #' @return If `DiagrammeR` is available and `return_dot = FALSE`, a
 #'   `DiagrammeR` graph. Otherwise, a list with `dot`, `nodes`, and `edges`.
 #' @export
-processing_tree <- function(model, outcome_label = NULL, component = NULL, return_dot = FALSE) {
-  if (is_model_tables(model)) {
-    tables <- model
-  } else {
-    if (is.list(model) && !is.null(model$model_spec) && is.list(model$model_spec)) {
-      model <- model$model_spec
-    }
-    tables <- model_to_tables(model)
-  }
+processing_tree <- function(model, outcome_label = NULL, return_dot = FALSE) {
+  view <- .model_view(model)
+  outcomes <- view$outcomes
+  if (length(outcomes) == 0L) stop("No outcomes found in model", call. = FALSE)
 
-  struct_lookup <- .pt_build_struct_lookup(tables$struct_nodes)
-  outcome_rows <- tables$struct_nodes[tables$struct_nodes$node_type == "outcome", , drop = FALSE]
-  if (nrow(outcome_rows) == 0) stop("No outcomes found in model tables")
-
+  labels <- vapply(outcomes, function(out) out$label %||% "", character(1))
+  missing_labels <- is.na(labels) | !nzchar(labels)
+  labels[missing_labels] <- names(outcomes)[missing_labels]
   if (!is.null(outcome_label)) {
-    outcome_rows <- outcome_rows[outcome_rows$label == outcome_label, , drop = FALSE]
-    if (nrow(outcome_rows) == 0) {
-      stop(sprintf("Outcome '%s' not found in model tables", outcome_label))
+    keep <- labels == outcome_label
+    outcomes <- outcomes[keep]
+    labels <- labels[keep]
+    if (length(outcomes) == 0L) {
+      stop(sprintf("Outcome '%s' not found in model", outcome_label), call. = FALSE)
     }
   }
 
@@ -195,24 +175,32 @@ processing_tree <- function(model, outcome_label = NULL, component = NULL, retur
   }
 
   ensure_event_node <- function(source_id) {
+    source_id <- as.character(source_id %||% "?")
+    if (length(source_id) != 1L || is.na(source_id) || !nzchar(source_id)) {
+      source_id <- "?"
+    }
     key <- sprintf("event:%s", source_id)
     existing <- event_nodes[[key]] %||% NA_character_
     if (!is.na(existing) && nzchar(existing)) return(existing)
     node_id <- next_id("e")
-    def <- .pt_node_definition(source_id, struct_lookup)
+    def <- .pt_node_definition(source_id, view)
     add_node(node_id, def$label, def$type)
     event_nodes[[key]] <<- node_id
     node_id
   }
 
   expand_pool <- function(source_id) {
-    info <- struct_lookup[[source_id]] %||% list(node_type = "event", payload = list())
-    if (!identical(info$node_type %||% "", "pool")) return(invisible(NULL))
+    source_id <- as.character(source_id %||% "")
+    if (length(source_id) != 1L || is.na(source_id) || !nzchar(source_id)) {
+      return(invisible(NULL))
+    }
+    pool <- view$pools[[source_id]]
+    if (is.null(pool)) return(invisible(NULL))
     key <- sprintf("pool:%s", source_id)
     if (isTRUE(pool_expanded[[key]])) return(invisible(NULL))
 
     pool_id <- ensure_event_node(source_id)
-    members <- (info$payload %||% list())$members %||% character(0)
+    members <- pool$members %||% character(0)
     if (length(members) > 0) {
       for (i in seq_along(members)) {
         member <- members[[i]]
@@ -278,12 +266,11 @@ processing_tree <- function(model, outcome_label = NULL, component = NULL, retur
     node_id
   }
 
-  for (i in seq_len(nrow(outcome_rows))) {
-    row <- outcome_rows[i, ]
-    payload <- row$payload[[1]] %||% list()
-    expr <- payload$expr
+  for (i in seq_along(outcomes)) {
+    outcome <- outcomes[[i]]
+    expr <- outcome$expr
     outcome_id <- next_id("out")
-    add_node(outcome_id, paste(c(row$label, "outcome"), collapse = "\\n"), "outcome")
+    add_node(outcome_id, paste(c(labels[[i]], "outcome"), collapse = "\\n"), "outcome")
     if (!is.null(expr)) {
       build_expr(expr, parent_id = outcome_id, edge_label = "defined by", parent_role = "reference")
     }

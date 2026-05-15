@@ -2,10 +2,12 @@
 
 #include <limits>
 #include <optional>
+#include <utility>
 
 #include "eval_query.hpp"
 #include "exact_step_distribution.hpp"
 #include "trial_data.hpp"
+#include "../compile/exact_evaluation_program_lowering.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
@@ -101,11 +103,12 @@ inline void build_exact_plan_cache(
     }
     (*variant_index_by_component_code)[static_cast<std::size_t>(component_it->second)] =
         plan_index;
+    auto evaluation_program =
+        accumulatr::compile::lower_exact_evaluation_program(
+            variant,
+            outcome_code_by_label);
     plans->push_back(
-      make_exact_variant_plan(
-          runtime::lower_exact_variant(variant),
-          outcome_code_by_label,
-          n_outcome_codes));
+        make_exact_variant_plan(std::move(evaluation_program), n_outcome_codes));
   }
 }
 

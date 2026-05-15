@@ -1,13 +1,3 @@
-.pae_extract_tables <- function(model) {
-  if (is_model_tables(model)) {
-    return(model)
-  }
-  if (is.list(model) && !is.null(model$model_spec) && is.list(model$model_spec)) {
-    model <- model$model_spec
-  }
-  model_to_tables(model)
-}
-
 .pae_extract_sources <- function(expr) {
   if (is.null(expr)) return(character(0))
   kind <- expr$kind %||% "event"
@@ -166,7 +156,7 @@
 #' blocking relations are overlaid so you can inspect the qualitative structure
 #' of the model before fitting.
 #'
-#' @param model A race model (`race_spec`, a finalized model, or `model_tables`).
+#' @param model A race model or finalized model structure.
 #' @param xlim Optional x-axis limits. If `NULL`, they are chosen from the model.
 #' @param ylim Y-axis limits.
 #' @param line_length Length of each accumulator trajectory in plot units.
@@ -180,7 +170,6 @@
 #' @param line_col Color for accumulator trajectories.
 #' @param line_lwd Line width for accumulator trajectories.
 #' @param axis_lwd Line width for x/y axis arrows.
-#' @param link_lwd Reserved for reciprocal relationship arrows (currently disabled).
 #' @param blocker_lwd Line width for blocker arrows.
 #' @param show_labels If `TRUE`, add accumulator labels near the line endpoints.
 #' @param main Main title.
@@ -209,36 +198,31 @@ plot_accumulators <- function(model,
                               line_col = "gray20",
                               line_lwd = 3,
                               axis_lwd = 3,
-                              link_lwd = 2.2,
                               blocker_lwd = 2.6,
                               show_labels = TRUE,
                               main = "Accumulator Schematic",
                               xlab = "Time",
                               ylab = "Evidence",
                               ...) {
-  tables <- .pae_extract_tables(model)
-
-  struct_nodes <- tables$struct_nodes
-  acc_rows <- struct_nodes[struct_nodes$node_type == "accumulator", , drop = FALSE]
-  pool_rows <- struct_nodes[struct_nodes$node_type == "pool", , drop = FALSE]
-  outcome_rows <- struct_nodes[struct_nodes$node_type == "outcome", , drop = FALSE]
-  if (nrow(acc_rows) == 0L) {
+  view <- .model_view(model)
+  accumulators <- view$accumulators
+  pools <- view$pools
+  outcomes <- view$outcomes
+  if (length(accumulators) == 0L) {
     stop("Model contains no accumulators", call. = FALSE)
   }
 
-  acc_ids <- as.character(acc_rows$label)
+  acc_ids <- names(accumulators)
   pool_members <- setNames(
-    lapply(seq_len(nrow(pool_rows)), function(i) {
-      payload <- pool_rows$payload[[i]] %||% list()
-      as.character(payload$members %||% character(0))
-    }),
-    as.character(pool_rows$label)
+    lapply(pools, function(pool) as.character(pool$members %||% character(0))),
+    names(pools)
   )
 
   expand_to_accumulators <- local({
     cache <- new.env(parent = emptyenv())
     rec <- function(source, stack = character(0)) {
       source <- as.character(source %||% "")
+      if (length(source) != 1L || is.na(source)) return(character(0))
       if (!nzchar(source)) return(character(0))
       if (exists(source, envir = cache, inherits = FALSE)) {
         return(get(source, envir = cache, inherits = FALSE))
@@ -258,10 +242,7 @@ plot_accumulators <- function(model,
   })
 
   onset_raw <- setNames(
-    lapply(seq_len(nrow(acc_rows)), function(i) {
-      payload <- acc_rows$payload[[i]] %||% list()
-      payload$onset %||% 0
-    }),
+    lapply(accumulators, .model_view_accumulator_onset),
     acc_ids
   )
 
@@ -336,9 +317,6 @@ plot_accumulators <- function(model,
   if (!is.numeric(axis_lwd) || length(axis_lwd) != 1L || !is.finite(axis_lwd) || axis_lwd <= 0) {
     stop("axis_lwd must be a positive finite numeric scalar", call. = FALSE)
   }
-  if (!is.numeric(link_lwd) || length(link_lwd) != 1L || !is.finite(link_lwd) || link_lwd <= 0) {
-    stop("link_lwd must be a positive finite numeric scalar", call. = FALSE)
-  }
   if (!is.numeric(blocker_lwd) || length(blocker_lwd) != 1L || !is.finite(blocker_lwd) || blocker_lwd <= 0) {
     stop("blocker_lwd must be a positive finite numeric scalar", call. = FALSE)
   }
@@ -407,12 +385,10 @@ plot_accumulators <- function(model,
 
   idx_map <- setNames(seq_along(acc_ids), acc_ids)
 
-  reciprocal_pairs <- matrix(character(0), ncol = 2L)
   guard_links <- list()
-  if (nrow(outcome_rows) > 0L) {
-    for (i in seq_len(nrow(outcome_rows))) {
-      payload <- outcome_rows$payload[[i]] %||% list()
-      expr <- payload$expr
+  if (length(outcomes) > 0L) {
+    for (outcome in outcomes) {
+      expr <- outcome$expr
       if (is.null(expr)) next
       guard_links <- c(guard_links, .pae_collect_guard_source_links(expr))
     }
@@ -495,7 +471,6 @@ plot_accumulators <- function(model,
       y1 = as.numeric(y1),
       stringsAsFactors = FALSE
     ),
-    reciprocal_pairs = reciprocal_pairs,
     blocker_pairs = blocker_pairs
   ))
 }

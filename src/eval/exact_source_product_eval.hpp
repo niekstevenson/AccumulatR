@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdint>
 
+#include "../leaf/dist_kind.hpp"
 #include "exact_eval_workspace.hpp"
 #include "leaf_kernel.hpp"
 #include "quadrature.hpp"

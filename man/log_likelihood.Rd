@@ -48,7 +48,7 @@ trials.}
 \item{...}{Unused; for S3 compatibility.}
 }
 \value{
-Total log-likelihood as a numeric scalar.
+A numeric vector of log-likelihood values.
 }
 \description{
 Compute the log-likelihood of prepared behavioral data under one or more

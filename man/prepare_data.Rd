@@ -13,7 +13,7 @@ prepare_data(structure, data_df, compress = FALSE, prep = NULL)
 `R`, and `rt`; for multi-outcome models it can also contain `R2`, `rt2`,
 and so on.}
 
-\item{compress}{If `TRUE`, collapse repeated prepared trials and attach an
+\item{compress}{If `TRUE`, collapse repeated prepared trials and attach
 compact-trial weights for `log_likelihood()` to reuse automatically.
 Defaults to `FALSE`.}
 

@@ -36,6 +36,7 @@ reference:
       - set_metadata
       - set_mixture_options
       - finalize_model
+      - complexity_metrics
 
   - title: "Outcome Expressions and Timing"
     desc: "Compose outcome rules and onset dependencies."
@@ -48,7 +49,7 @@ reference:
       - expr_guard
       - after
 
-  - title: "Data Preparation"
+  - title: "Model Preparation"
     desc: "Inspect model parameters and prepare trial-level parameter matrices."
     contents:
       - prepare_data

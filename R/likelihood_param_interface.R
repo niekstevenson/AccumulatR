@@ -297,9 +297,7 @@
     trial_ends[keep_trials] - trial_starts[keep_trials] + 1L
   )
   rownames(out) <- NULL
-  attr(out, "trial_weights") <-
-    as.integer(tabulate(match(signatures, signatures[keep_trials]),
-                        nbins = length(keep_trials)))
+  attr(out, "expand") <- as.integer(match(signatures, signatures[keep_trials]))
   class(out) <- class(data_df)
   out
 }
@@ -471,7 +469,8 @@
 #'   `R`, and `rt`; for multi-outcome models it can also contain `R2`, `rt2`,
 #'   and so on.
 #' @param compress If `TRUE`, collapse repeated prepared trials and attach
-#'   compact-trial weights for `log_likelihood()` to reuse automatically.
+#'   an `expand` index so `log_likelihood()` can return trial-level values on
+#'   the original trial scale.
 #'   Defaults to `FALSE`.
 #' @param prep Optional preprocessed model bundle.
 #' @return An `accumulatr_data` object.
@@ -1159,23 +1158,23 @@ response_probabilities.default <- function(structure,
   )
 }
 
-#' Evaluate the log-likelihood of behavioral data
+#' Evaluate log-likelihoods of behavioral data
 #'
-#' Compute the log-likelihood of prepared behavioral data under one or more
-#' candidate parameter sets.
+#' Compute the summed log-likelihood by default, or trial-wise log-likelihoods
+#' when `sum = FALSE`.
 #'
 #' @param context Context created with `make_context()`.
 #' @param data Prepared data created with `prepare_data()`.
 #' @param parameters A parameter data frame, or a list of parameter data frames.
 #' @param ok Logical vector marking which trials should contribute to the
 #'   likelihood. Trials marked `FALSE` are assigned `min_ll`.
-#' @param trial_weights Optional integer weights for compact prepared trials.
-#'   If `NULL`, the `trial_weights` attribute from `data` is used when present;
-#'   otherwise each prepared trial has weight one.
+#' @param sum If `TRUE`, return the summed log-likelihood. If `FALSE`, return
+#'   trial-wise log-likelihood values.
 #' @param min_ll Minimum log-likelihood value used for excluded or impossible
 #'   trials.
 #' @param ... Unused; for S3 compatibility.
-#' @return A numeric vector of log-likelihood values.
+#' @return A summed log-likelihood by default, or a numeric vector of
+#'   trial-wise log-likelihood values when `sum = FALSE`.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
@@ -1191,7 +1190,7 @@ response_probabilities.default <- function(structure,
 #' ctx <- make_context(structure)
 #' log_likelihood(ctx, prepared, params_df)
 #' @export
-log_likelihood <- function(context, data, parameters, ok = NULL, trial_weights = NULL, min_ll = log(1e-10), ...) {
+log_likelihood <- function(context, data, parameters, ok = NULL, sum = TRUE, min_ll = log(1e-10), ...) {
   UseMethod("log_likelihood")
 }
 
@@ -1201,28 +1200,26 @@ log_likelihood.accumulatr_context <- function(context,
                                               data,
                                               parameters,
                                               ok = NULL,
-                                              trial_weights = NULL,
+                                              sum = TRUE,
                                               min_ll = log(1e-10),
                                               ...) {
-  if (is.null(trial_weights) || length(trial_weights) == 0L) {
-    trial_weights <- attr(data, "trial_weights", exact = TRUE)
-  }
-  if (is.null(trial_weights) || length(trial_weights) == 0L) {
-    trial_weights <- NULL
-  }
   if (is.null(ok) || length(ok) == 0L) {
     ok <- NULL
   }
 
   cpp_ctx <- context$cpp
-  .loglik_total_context(
+  value <- .loglik_context(
     cpp_ctx$native,
     parameters,
     data,
     ok = ok,
-    trial_weights = trial_weights,
     min_ll = min_ll
   )
+  if (isTRUE(sum)) {
+    base::sum(value)
+  } else {
+    value
+  }
 }
 
 #' @rdname log_likelihood

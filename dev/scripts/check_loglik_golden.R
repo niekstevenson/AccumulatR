@@ -66,10 +66,8 @@ build_shared_nway_trigger_case <- function(n_trials = 40L) {
     add_outcome("RESP3", all_of("x3", "gate")) |>
     add_outcome("NR_RAW", all_of("x1", "gate"),
                 options = list(map_outcome_to = NA_character_)) |>
-    add_trigger("tg_x12", members = c("x1", "x2"), q = 0.10,
-                draw = "shared") |>
-    add_trigger("tg_x3g", members = c("x3", "gate"), q = 0.16,
-                draw = "shared") |>
+    add_trigger("tg_x12", members = c("x1", "x2")) |>
+    add_trigger("tg_x3g", members = c("x3", "gate")) |>
     finalize_model()
   params_df <- build_param_matrix(
     spec,

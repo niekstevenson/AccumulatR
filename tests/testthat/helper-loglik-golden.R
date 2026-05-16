@@ -31,9 +31,9 @@ loglik_golden_case_registry <- function() {
           add_accumulator("go2", "lognormal", onset = 0.20) |>
           add_outcome("R1", inhibit("go1", by = "stop")) |>
           add_outcome("R2", all_of("go2", "stop")) |>
-          add_component("go_only", members = c("go1"), weight = 0.5) |>
-          add_component("go_stop", members = c("go1", "stop", "go2"), weight = 0.5) |>
-          set_mixture_options(mode = "fixed") |>
+          add_component("go_only", members = c("go1")) |>
+          add_component("go_stop", members = c("go1", "stop", "go2")) |>
+          set_mixture(mode = "fixed", weights = c(go_only = 0.5, go_stop = 0.5)) |>
           finalize_model()
       },
       params = c(
@@ -129,9 +129,9 @@ loglik_golden_case_registry <- function() {
           add_pool("TARGET", c("target_fast", "target_slow")) |>
           add_outcome("R1", "TARGET") |>
           add_outcome("R2", "competitor") |>
-          add_component("fast", members = c("target_fast", "competitor"), weight_param = "p_fast") |>
+          add_component("fast", members = c("target_fast", "competitor")) |>
           add_component("slow", members = c("target_slow", "competitor")) |>
-          set_mixture_options(mode = "sample", reference = "slow") |>
+          set_mixture(mode = "sample", reference = "slow") |>
           finalize_model()
       },
       params = c(
@@ -141,7 +141,7 @@ loglik_golden_case_registry <- function() {
         target_slow.s = 0.20,
         competitor.m = log(0.35),
         competitor.s = 0.18,
-        p_fast = 0.20
+        p.fast = 0.20
       ),
       n_trials = 12L,
       seed = 1006L,
@@ -201,7 +201,7 @@ loglik_golden_case_registry <- function() {
           add_accumulator("go2", "lognormal") |>
           add_outcome("R1", "go1") |>
           add_outcome("R2", "go2") |>
-          add_trigger("shared_trigger", members = c("go1", "go2"), q = 0.10, draw = "shared") |>
+          add_trigger("shared_trigger", members = c("go1", "go2")) |>
           finalize_model()
       },
       params = c(
@@ -222,7 +222,8 @@ loglik_golden_case_registry <- function() {
           add_accumulator("go_right", "lognormal") |>
           add_outcome("Left", "go_left") |>
           add_outcome("Right", "go_right") |>
-          add_trigger("q_shared", members = c("go_left", "go_right"), q = 0.10, draw = "independent") |>
+          add_trigger("q_left", members = "go_left") |>
+          add_trigger("q_right", members = "go_right") |>
           finalize_model()
       },
       params = c(
@@ -230,7 +231,8 @@ loglik_golden_case_registry <- function() {
         go_left.s = 0.18,
         go_right.m = log(0.32),
         go_right.s = 0.18,
-        q_shared = 0.10
+        q_left = 0.10,
+        q_right = 0.10
       ),
       n_trials = 12L,
       seed = 1010L,

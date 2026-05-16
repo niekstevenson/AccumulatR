@@ -28,9 +28,9 @@ example_2_stop_mixture <- race_spec() |>
     options = list(component = c("go_only", "go_stop"))
   ) |>
   add_outcome("R2", all_of("go2", "stop"), options = list(component = "go_stop")) |>
-  add_component("go_only", members = c("go1"), attrs = list(component = "go_only"), weight = 0.5) |>
-  add_component("go_stop", members = c("go1", "stop", "go2"), attrs = list(component = "go_stop"), weight = 0.5) |>
-  set_mixture_options(mode = "fixed") |>
+  add_component("go_only", members = c("go1"), attrs = list(component = "go_only")) |>
+  add_component("go_stop", members = c("go1", "stop", "go2"), attrs = list(component = "go_stop")) |>
+  set_mixture(mode = "fixed", weights = c(go_only = 0.5, go_stop = 0.5)) |>
   finalize_model()
 params_example_2_stop_mixture <- c(
   go1.m = log(0.35),
@@ -123,9 +123,9 @@ example_7_mixture <- race_spec() |>
   add_pool("TARGET", c("target_fast", "target_slow")) |>
   add_outcome("R1", "TARGET") |>
   add_outcome("R2", "competitor") |>
-  add_component("fast", members = c("target_fast", "competitor"), weight_param = "p_fast") |>
+  add_component("fast", members = c("target_fast", "competitor")) |>
   add_component("slow", members = c("target_slow", "competitor")) |>
-  set_mixture_options(mode = "sample", reference = "slow") |>
+  set_mixture(mode = "sample", reference = "slow") |>
   finalize_model()
 params_example_7_mixture <- c(
   target_fast.m = log(0.25),
@@ -134,7 +134,7 @@ params_example_7_mixture <- c(
   target_slow.s = 0.20,
   competitor.m = log(0.35),
   competitor.s = 0.18,
-  p_fast = 0.2
+  p.fast = 0.2
 )
 
 # Example 8 – shared parameter group
@@ -210,9 +210,9 @@ example_11_inhibitor_with_protector <- race_spec() |>
     options = list(component = c("go_only", "go_stop"))
   ) |>
   add_outcome("R2", all_of("go2", "stop"), options = list(component = "go_stop")) |>
-  add_component("go_only", members = c("go1"), attrs = list(component = "go_only"), weight = 0.5) |>
-  add_component("go_stop", members = c("go1", "stop", "go2", "safety"), attrs = list(component = "go_stop"), weight = 0.5) |>
-  set_mixture_options(mode = "fixed") |>
+  add_component("go_only", members = c("go1"), attrs = list(component = "go_only")) |>
+  add_component("go_stop", members = c("go1", "stop", "go2", "safety"), attrs = list(component = "go_stop")) |>
+  set_mixture(mode = "fixed", weights = c(go_only = 0.5, go_stop = 0.5)) |>
   finalize_model()
 params_example_11_inhibitor_with_protector <- c(
   go1.m = log(0.35),
@@ -282,11 +282,11 @@ example_14_component_metadata <- race_spec() |>
   add_pool("FAST", c("acc_fast", "acc_shared_fast")) |>
   add_pool("SLOW", c("acc_slow", "acc_shared_slow")) |>
   add_outcome("Response", first_of("FAST", "SLOW")) |>
-  add_component("fast", members = c("acc_fast", "acc_shared_fast"), weight = 0.6, attrs = list(
+  add_component("fast", members = c("acc_fast", "acc_shared_fast"), attrs = list(
     component = "fast"
   )) |>
-  add_component("slow", members = c("acc_slow", "acc_shared_slow"), weight = 0.4, attrs = list(component = "slow")) |>
-  set_mixture_options(mode = "fixed") |>
+  add_component("slow", members = c("acc_slow", "acc_shared_slow"), attrs = list(component = "slow")) |>
+  set_mixture(mode = "fixed", weights = c(fast = 0.6, slow = 0.4)) |>
   finalize_model()
 params_example_14_component_metadata <- c(
   acc_shared_fast.m = log(0.32),
@@ -399,9 +399,9 @@ example_18_univalent_stop_change <- race_spec() |>
     ),
     options = list(component = c("go_only", "go_stop"))
   ) |>
-  add_component("go_only", members = c("go_left", "go_right"), attrs = list(component = "go_only"), weight = 0.75) |>
-  add_component("go_stop", members = c("go_left", "go_right", "stop", "change2left", "change2right"), attrs = list(component = "go_stop"), weight = 0.25) |>
-  set_mixture_options(mode = "fixed") |>
+  add_component("go_only", members = c("go_left", "go_right"), attrs = list(component = "go_only")) |>
+  add_component("go_stop", members = c("go_left", "go_right", "stop", "change2left", "change2right"), attrs = list(component = "go_stop")) |>
+  set_mixture(mode = "fixed", weights = c(go_only = 0.75, go_stop = 0.25)) |>
   finalize_model()
 params_example_18_univalent_stop_change <- c(
   go_left.m = log(0.35),
@@ -448,15 +448,15 @@ example_19_stim_select_stop <- .stim_base_spec() |>
     ),
     options = list(component = c("stop_ignore", "stop_true"), map_outcome_to = NA_character_)
   ) |>
-  add_component("go_only", members = c("go1"), attrs = list(component = "go_only"), weight = 0.2) |>
-  add_component("stop_ignore", members = c("go1", "ignore_high", "go2", "stop1", "stop2"), attrs = list(component = "stop_ignore"), weight = 0.4) |>
-  add_component("stop_true", members = c("go1", "ignore_low", "go2", "stop1", "stop2"), attrs = list(component = "stop_true"), weight = 0.4) |>
+  add_component("go_only", members = c("go1"), attrs = list(component = "go_only")) |>
+  add_component("stop_ignore", members = c("go1", "ignore_high", "go2", "stop1", "stop2"), attrs = list(component = "stop_ignore")) |>
+  add_component("stop_true", members = c("go1", "ignore_low", "go2", "stop1", "stop2"), attrs = list(component = "stop_true")) |>
   set_parameters(list(
     shared_ignore_s = c("ignore_high.s", "ignore_low.s"),
     shared_stop_sigma = c("stop1.sigma", "stop2.sigma"),
     shared_stop_tau = c("stop1.tau", "stop2.tau")
   )) |>
-  set_mixture_options(mode = "fixed") |>
+  set_mixture(mode = "fixed", weights = c(go_only = 0.2, stop_ignore = 0.4, stop_true = 0.4)) |>
   finalize_model()
 
 params_example_19_stim_select_stop <- c(
@@ -495,9 +495,9 @@ example_20_simple_stop_change <- race_spec() |>
     ),
     options = list(component = "go_stop")
   ) |>
-  add_component("go_only", members = c("go_left", "go_right"), attrs = list(component = "go_only"), weight = 0.5) |>
-  add_component("go_stop", members = c("go_left", "go_right", "stop", "change2right"), attrs = list(component = "go_stop"), weight = 0.5) |>
-  set_mixture_options(mode = "fixed") |>
+  add_component("go_only", members = c("go_left", "go_right"), attrs = list(component = "go_only")) |>
+  add_component("go_stop", members = c("go_left", "go_right", "stop", "change2right"), attrs = list(component = "go_stop")) |>
+  set_mixture(mode = "fixed", weights = c(go_only = 0.5, go_stop = 0.5)) |>
   finalize_model()
 params_example_20_simple_stop_change <- c(
   go_left.m = log(0.35),
@@ -512,7 +512,7 @@ params_example_20_simple_stop_change <- c(
 )
 
 
-# Example 21 – simple two-response race with trigger failure
+# Example 21 – simple two-response race with a shared absence trigger
 example_21_simple_q <- race_spec() |>
   add_accumulator("go1", "lognormal") |>
   add_accumulator("go2", "lognormal") |>
@@ -520,9 +520,7 @@ example_21_simple_q <- race_spec() |>
   add_outcome("R2", "go2") |>
   add_trigger(
     "shared_trigger",
-    members = c("go1", "go2"),
-    q = 0.10,
-    draw = "shared"
+    members = c("go1", "go2")
   ) |>
   finalize_model()
 
@@ -534,16 +532,14 @@ params_example_21_simple_q <- c(
   shared_trigger = 0.10 # estimable shared gate parameter (probability)
 )
 
-# Example 22 – independent shared q (per-acc Bernoulli) for go accumulators
+# Example 22 – independent trigger probabilities for go accumulators
 example_22_shared_q <- race_spec() |>
   add_accumulator("go_left", "lognormal") |>
   add_accumulator("go_right", "lognormal") |>
   add_outcome("Left", "go_left") |>
   add_outcome("Right", "go_right") |>
-  add_trigger("q_shared",
-    members = c("go_left", "go_right"),
-    q = 0.10, draw = "independent"
-  ) |>
+  add_trigger("q_left", members = "go_left") |>
+  add_trigger("q_right", members = "go_right") |>
   finalize_model()
 
 params_example_22_shared_q <- c(
@@ -551,7 +547,8 @@ params_example_22_shared_q <- c(
   go_left.s = 0.18,
   go_right.m = log(0.32),
   go_right.s = 0.18,
-  q_shared = 0.10
+  q_left = 0.10,
+  q_right = 0.10
 )
 
 # Example 23 univalent stop change - bimanual
@@ -570,17 +567,11 @@ example_23_univalent_stop_change <- race_spec() |>
     all_of("stop", "change2right"),
     options = list(component = c("go_only", "go_stop"))
   ) |>
-  add_component("go_only", members = c("go_left"), attrs = list(component = "go_only"), weight = 0.5) |>
-  add_component("go_stop", members = c("go_left", "stop", "change2right"), attrs = list(component = "go_stop"), weight = 0.5) |>
-  add_trigger("go_shared_q",
-    members = c("go_left"),
-    q = 0.10, draw = "independent"
-  ) |>
-  add_trigger("stop_shared_q",
-    members = c("stop", "change2right"),
-    q = 0.10, draw = "independent"
-  ) |>
-  set_mixture_options(mode = "fixed") |>
+  add_component("go_only", members = c("go_left"), attrs = list(component = "go_only")) |>
+  add_component("go_stop", members = c("go_left", "stop", "change2right"), attrs = list(component = "go_stop")) |>
+  add_trigger("go_shared_q", members = "go_left") |>
+  add_trigger("stop_shared_q", members = c("stop", "change2right")) |>
+  set_mixture(mode = "fixed", weights = c(go_only = 0.5, go_stop = 0.5)) |>
   finalize_model()
 params_example_23_univalent_stop_change <- c(
   go_left.m = log(0.35),

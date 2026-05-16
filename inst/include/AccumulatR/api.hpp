@@ -5,34 +5,34 @@
 
 namespace accumulatr {
 
-using loglik_total_ccallable_t =
-    double (*)(SEXP, SEXP, SEXP, SEXP, SEXP, double);
+using loglik_trials_ccallable_t =
+    void (*)(SEXP, SEXP, SEXP, SEXP, double, double *);
 
-inline loglik_total_ccallable_t loglik_total_ccallable() {
-  static loglik_total_ccallable_t fn = nullptr;
+inline loglik_trials_ccallable_t loglik_trials_ccallable() {
+  static loglik_trials_ccallable_t fn = nullptr;
   if (!fn) {
-    fn = reinterpret_cast<loglik_total_ccallable_t>(
-        R_GetCCallable("AccumulatR", "loglik_total"));
+    fn = reinterpret_cast<loglik_trials_ccallable_t>(
+        R_GetCCallable("AccumulatR", "loglik_trials"));
     if (!fn) {
       Rcpp::stop(
-          "AccumulatR C-callable 'loglik_total' not found (is AccumulatR loaded?)");
+          "AccumulatR C-callable 'loglik_trials' not found (is AccumulatR loaded?)");
     }
   }
   return fn;
 }
 
-inline double loglik_total(SEXP ctx_ptr,
-                           SEXP param_matrix,
-                           SEXP data_df,
-                           SEXP ok,
-                           SEXP trial_weights,
-                           double min_ll) {
-  return loglik_total_ccallable()(ctx_ptr,
-                                  param_matrix,
-                                  data_df,
-                                  ok,
-                                  trial_weights,
-                                  min_ll);
+inline void loglik_trials(SEXP ctx_ptr,
+                          SEXP param_matrix,
+                          SEXP data_df,
+                          SEXP ok,
+                          double min_ll,
+                          double *out) {
+  loglik_trials_ccallable()(ctx_ptr,
+                            param_matrix,
+                            data_df,
+                            ok,
+                            min_ll,
+                            out);
 }
 
 } // namespace accumulatr

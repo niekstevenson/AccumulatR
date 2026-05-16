@@ -140,38 +140,18 @@ inline void compile_trigger_state_table(ExactVariantBuildState *plan) {
   const auto &program = plan->program;
   for (const auto trigger_index : plan->shared_trigger_indices) {
     const auto trigger_pos = static_cast<std::size_t>(trigger_index);
-    const bool fixed_q = program.trigger_has_fixed_q[trigger_pos] != 0U;
-    const double raw_fixed_q =
-        fixed_q ? program.trigger_fixed_q[trigger_pos] : 0.0;
-    const double q_fixed =
-        fixed_q
-            ? (!std::isfinite(raw_fixed_q)
-                   ? 0.0
-                   : (raw_fixed_q <= 0.0
-                          ? 0.0
-                          : (raw_fixed_q >= 1.0 ? 1.0 : raw_fixed_q)))
-            : 0.0;
     semantic::Index q_leaf_index{semantic::kInvalidIndex};
-    if (!fixed_q) {
-      const auto member_begin = program.trigger_member_offsets[trigger_pos];
-      const auto member_end = program.trigger_member_offsets[trigger_pos + 1U];
-      if (member_begin != member_end) {
-        q_leaf_index =
-            program.trigger_member_indices[
-                static_cast<std::size_t>(member_begin)];
-      }
+    const auto member_begin = program.trigger_member_offsets[trigger_pos];
+    const auto member_end = program.trigger_member_offsets[trigger_pos + 1U];
+    if (member_begin != member_end) {
+      q_leaf_index =
+          program.trigger_member_indices[
+              static_cast<std::size_t>(member_begin)];
     }
 
     std::vector<TriggerStateBuilder> next;
     next.reserve(builders.size() * 2U);
     for (const auto &builder : builders) {
-      auto append_state =
-          [&](const std::uint8_t shared_started, const double fixed_weight) {
-            auto out = builder;
-            out.fixed_weight *= fixed_weight;
-            out.shared_started[trigger_pos] = shared_started;
-            next.push_back(std::move(out));
-          };
       auto append_variable_state =
           [&](const std::uint8_t shared_started) {
             auto out = builder;
@@ -182,17 +162,8 @@ inline void compile_trigger_state_table(ExactVariantBuildState *plan) {
             next.push_back(std::move(out));
           };
 
-      if (fixed_q) {
-        if (q_fixed > 0.0) {
-          append_state(0U, q_fixed);
-        }
-        if (q_fixed < 1.0) {
-          append_state(1U, 1.0 - q_fixed);
-        }
-      } else {
-        append_variable_state(0U);
-        append_variable_state(1U);
-      }
+      append_variable_state(0U);
+      append_variable_state(1U);
     }
     builders.swap(next);
   }
@@ -230,9 +201,7 @@ inline void compile_shared_trigger_state_table(ExactVariantBuildState *plan) {
   const auto &program = plan->program;
   for (int i = 0; i < program.layout.n_triggers; ++i) {
     const auto trigger_pos = static_cast<std::size_t>(i);
-    if (static_cast<semantic::TriggerKind>(program.trigger_kind[trigger_pos]) ==
-            semantic::TriggerKind::Shared &&
-        program.trigger_member_offsets[trigger_pos + 1U] -
+    if (program.trigger_member_offsets[trigger_pos + 1U] -
                 program.trigger_member_offsets[trigger_pos] >
             1) {
       plan->shared_trigger_indices.push_back(i);

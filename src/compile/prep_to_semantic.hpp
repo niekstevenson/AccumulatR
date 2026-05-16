@@ -383,14 +383,7 @@ inline semantic::SemanticModel compile_prep(const Rcpp::List &prep) {
           !trigger_names.isNULL() && trigger_names[i] != NA_STRING
               ? Rcpp::as<std::string>(trigger_names[i])
               : detail::as_string(trigger["id"]);
-      const std::string draw = detail::as_string(trigger["draw"], "shared");
-      trigger_spec.kind = draw == "independent" ? semantic::TriggerKind::Independent
-                                                : semantic::TriggerKind::Shared;
       trigger_spec.q_name = trigger_spec.id;
-      if (trigger.containsElementNamed("q") && !Rf_isNull(trigger["q"])) {
-        trigger_spec.fixed_q = detail::as_double(trigger["q"], 0.0);
-        trigger_spec.has_fixed_q = true;
-      }
       const auto member_names = detail::as_string_vector(trigger["members"]);
       for (const auto &name : member_names) {
         auto it = leaf_index.find(name);

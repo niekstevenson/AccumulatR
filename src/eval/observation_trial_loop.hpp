@@ -230,6 +230,7 @@ inline Rcpp::NumericVector evaluate_response_probabilities_cached(
   return probability;
 }
 
+template <typename TrialSink>
 inline void evaluate_observation_likelihood_trials_cached(
     const std::vector<ComponentObservationPlan> &component_plans_by_code,
     const ComponentMixturePlan &component_mixture,
@@ -241,7 +242,7 @@ inline void evaluate_observation_likelihood_trials_cached(
     SEXP dataSEXP,
     const double min_ll,
     const int *ok,
-    double *total_loglik) {
+    TrialSink &&sink) {
   const auto table = read_prepared_data_view(dataSEXP, layout);
   const int *label =
       INTEGER(trusted_data_column(dataSEXP, layout.label_cols[1]));
@@ -262,10 +263,6 @@ inline void evaluate_observation_likelihood_trials_cached(
   for (std::size_t trial_index = 0; trial_index < layout.trials.size(); ++trial_index) {
     const auto &trial_row = layout.trials[trial_index];
     const auto row = static_cast<R_xlen_t>(trial_row.start_row);
-    const double weight = prepared_trial_weight(layout, trial_index);
-    if (!(weight > 0.0)) {
-      continue;
-    }
     double trial_loglik = min_ll;
     if (trial_is_selected(ok, trial_index)) {
       trial_values.clear();
@@ -377,11 +374,11 @@ inline void evaluate_observation_likelihood_trials_cached(
       }
     }
 
-    *total_loglik += weight * trial_loglik;
+    sink(trial_index, trial_loglik);
   }
 }
 
-inline double evaluate_observation_likelihood_total_cached(
+inline void evaluate_observation_likelihood_trial_values_cached(
     const std::vector<ComponentObservationPlan> &component_plans_by_code,
     const bool observation_is_identity,
     const ComponentMixturePlan &component_mixture,
@@ -392,7 +389,8 @@ inline double evaluate_observation_likelihood_total_cached(
     SEXP paramsSEXP,
     SEXP dataSEXP,
     const double min_ll,
-    const int *ok = nullptr) {
+    const int *ok,
+    double *trial_loglik) {
   const auto table = read_prepared_data_view(dataSEXP, layout);
 
   if (observation_is_identity) {
@@ -400,21 +398,23 @@ inline double evaluate_observation_likelihood_total_cached(
         INTEGER(trusted_data_column(dataSEXP, layout.label_cols[1]));
     const double *rt =
         REAL(trusted_data_column(dataSEXP, layout.time_cols[1]));
-    if (trials_have_observed_components(layout, table.component, ok)) {
-      if (identity_trials_are_all_finite(layout, label, rt, ok)) {
-        return evaluate_exact_trials_total_cached(
-            exact_variant_index_by_component_code,
-            exact_plans,
-            layout,
-            paramsSEXP,
-            dataSEXP,
-            min_ll,
-            ok);
-      }
+    if (trials_have_observed_components(layout, table.component, ok) &&
+        identity_trials_are_all_finite(layout, label, rt, ok)) {
+      evaluate_exact_trials_cached(
+          exact_variant_index_by_component_code,
+          exact_plans,
+          layout,
+          paramsSEXP,
+          dataSEXP,
+          min_ll,
+          ok,
+          [&](const std::size_t trial_index, const double value) {
+            trial_loglik[trial_index] = value;
+          });
+      return;
     }
   }
 
-  double total_loglik = 0.0;
   evaluate_observation_likelihood_trials_cached(
       component_plans_by_code,
       component_mixture,
@@ -426,8 +426,9 @@ inline double evaluate_observation_likelihood_total_cached(
       dataSEXP,
       min_ll,
       ok,
-      &total_loglik);
-  return total_loglik;
+      [&](const std::size_t trial_index, const double value) {
+        trial_loglik[trial_index] = value;
+      });
 }
 
 } // namespace detail

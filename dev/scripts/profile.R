@@ -32,15 +32,14 @@ model <- race_spec() |>
               options = list(component = c("go_only", "go_stop"))) |>
   add_outcome("X", all_of("change", "stop"),
               options = list(component = "go_stop")) |>
-  add_component("go_only", members = c("go_left", "go_right"), weight = .75) |>
-  add_component("go_stop", members = c("go_left", "go_right", "stop", "change"), weight = .25) |>
-  set_mixture_options(mode = "fixed") |>
+  add_component("go_only", members = c("go_left", "go_right")) |>
+  add_component("go_stop", members = c("go_left", "go_right", "stop", "change")) |>
+  set_mixture(mode = "fixed", weights = c(go_only = .75, go_stop = .25)) |>
   add_trigger(
     "shared_trigger",
-    members = c("stop", "change"),
-    q = 0.10,
-    draw = "shared"
+    members = c("stop", "change")
   ) |>
+  set_parameters(list(q = "shared_trigger")) |>
   finalize_model()
 
 
@@ -117,9 +116,9 @@ system.time(
 #   add_outcome("A", inhibit("A", inhibit("stop", "ignore")), options = list(component = "go_stop")) |>
 #   add_outcome("B", inhibit("B", inhibit("stop", "ignore")), options = list(component = "go_stop")) |>
 #   add_outcome("stop", inhibit("stop", "ignore"), options = list(component = "go_stop", map_outcome_to = NA_character_)) |>
-#   add_component("go_only", members = c("A", "B"), weight = .75) |>
-#   add_component("go_stop", members = c("A", "B", "stop", "ignore"), weight = .25) |>
-#   set_mixture_options(mode = "fixed") |>
+#   add_component("go_only", members = c("A", "B")) |>
+#   add_component("go_stop", members = c("A", "B", "stop", "ignore")) |>
+#   set_mixture(mode = "fixed", weights = c(go_only = .75, go_stop = .25)) |>
 #   finalize_model()
 # 
 # 

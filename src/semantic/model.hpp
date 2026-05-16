@@ -37,11 +37,6 @@ enum class ExprKind : std::uint8_t {
   TrueExpr = 6
 };
 
-enum class TriggerKind : std::uint8_t {
-  Independent = 0,
-  Shared = 1
-};
-
 enum class ObservationMode : std::uint8_t {
   TopK = 0
 };
@@ -89,11 +84,8 @@ struct PoolSpec {
 
 struct TriggerSpec {
   std::string id;
-  TriggerKind kind{TriggerKind::Independent};
   std::vector<Index> leaf_indices;
   std::string q_name;
-  double fixed_q{0.0};
-  bool has_fixed_q{false};
 };
 
 struct ExprNode {
@@ -322,11 +314,6 @@ inline std::vector<ValidationIssue> validate_basic(const SemanticModel &model) {
 
   for (Index i = 0; i < static_cast<Index>(model.triggers.size()); ++i) {
     const auto &trigger = model.triggers[static_cast<std::size_t>(i)];
-    if (trigger.has_fixed_q && (trigger.fixed_q < 0.0 || trigger.fixed_q > 1.0)) {
-      std::ostringstream ss;
-      ss << "trigger[" << i << "] fixed_q must be in [0, 1]";
-      add_issue(&issues, ss.str());
-    }
     for (const auto &leaf_index : trigger.leaf_indices) {
       if (leaf_index < 0 ||
           leaf_index >= static_cast<Index>(model.leaves.size())) {

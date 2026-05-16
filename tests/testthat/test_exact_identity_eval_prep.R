@@ -379,11 +379,7 @@ testthat::test_that("identity likelihood supports shared-trigger no-response tri
     add_accumulator("go2", "lognormal") |>
     add_outcome("R1", "go1") |>
     add_outcome("R2", "go2") |>
-    add_trigger("shared_trigger",
-      members = c("go1", "go2"),
-      q = 0.10,
-      draw = "shared"
-    )
+    add_trigger("shared_trigger", members = c("go1", "go2"))
 
   trial_df <- data.frame(
     trial = 1L,
@@ -408,11 +404,8 @@ testthat::test_that("identity likelihood supports independent-trigger no-respons
     add_accumulator("go_right", "lognormal") |>
     add_outcome("Left", "go_left") |>
     add_outcome("Right", "go_right") |>
-    add_trigger("q_shared",
-      members = c("go_left", "go_right"),
-      q = 0.10,
-      draw = "independent"
-    )
+    add_trigger("q_left", members = "go_left") |>
+    add_trigger("q_right", members = "go_right")
 
   trial_df <- data.frame(
     trial = 1L,
@@ -423,7 +416,8 @@ testthat::test_that("identity likelihood supports independent-trigger no-respons
   params <- c(
     go_left.m = log(0.30), go_left.s = 0.18, go_left.t0 = 0.00,
     go_right.m = log(0.32), go_right.s = 0.18, go_right.t0 = 0.00,
-    q_shared = 0.10
+    q_left = 0.10,
+    q_right = 0.10
   )
 
   out <- run_public_loglik(spec, trial_df, params)

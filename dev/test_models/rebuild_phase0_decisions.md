@@ -97,8 +97,8 @@ Consequence:
 
 Decision:
 
-- independent trigger failure is leaf-local
-- shared trigger failure is a latent discrete state above leaves
+- independent trigger absence is leaf-local
+- shared trigger absence is a latent discrete state above leaves
 
 Reason:
 

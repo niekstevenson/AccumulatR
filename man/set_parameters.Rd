@@ -36,5 +36,5 @@ spec <- race_spec() |>
     onset = "go.t0"
   ))
 
-sampled_pars(spec)
+par_names(spec)
 }

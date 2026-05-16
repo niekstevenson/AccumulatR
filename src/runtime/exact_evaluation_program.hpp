@@ -22,9 +22,6 @@ struct ExactEvaluationProgram {
 
   std::vector<semantic::Index> leaf_trigger_index;
 
-  std::vector<std::uint8_t> trigger_kind;
-  std::vector<double> trigger_fixed_q;
-  std::vector<std::uint8_t> trigger_has_fixed_q;
   std::vector<semantic::Index> trigger_member_offsets;
   std::vector<semantic::Index> trigger_member_indices;
 

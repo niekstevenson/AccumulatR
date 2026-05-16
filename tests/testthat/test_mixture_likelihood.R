@@ -6,17 +6,13 @@ latent_sampled_mixture_spec <- function() {
     add_pool("TARGET", c("target_fast", "target_slow")) |>
     add_outcome("Target", "TARGET") |>
     add_outcome("Competitor", "competitor") |>
-    add_component(
-      "fast",
-      members = c("target_fast", "competitor"),
-      weight_param = "p_fast"
-    ) |>
+    add_component("fast", members = c("target_fast", "competitor")) |>
     add_component("slow", members = c("target_slow", "competitor")) |>
-    set_mixture_options(mode = "sample", reference = "slow") |>
+    set_mixture(mode = "sample", reference = "slow") |>
     finalize_model()
 }
 
-latent_sampled_mixture_params <- function(p_fast) {
+latent_sampled_mixture_params <- function(p.fast) {
   c(
     target_fast.m = log(0.25),
     target_fast.s = 0.15,
@@ -24,7 +20,7 @@ latent_sampled_mixture_params <- function(p_fast) {
     target_slow.s = 0.20,
     competitor.m = log(0.35),
     competitor.s = 0.18,
-    p_fast = p_fast
+    p.fast = p.fast
   )
 }
 
@@ -122,9 +118,9 @@ testthat::test_that("latent fixed mixtures use fixed component weights in likeli
     add_accumulator("B", "lognormal") |>
     add_outcome("Left", "A") |>
     add_outcome("Right", "B") |>
-    add_component("left_only", members = "A", weight = 0.25) |>
-    add_component("right_only", members = "B", weight = 0.75) |>
-    set_mixture_options(mode = "fixed") |>
+    add_component("left_only", members = "A") |>
+    add_component("right_only", members = "B") |>
+    set_mixture(mode = "fixed", weights = c(left_only = 0.25, right_only = 0.75)) |>
     finalize_model()
 
   params <- c(
@@ -173,9 +169,9 @@ testthat::test_that("latent missing-all mixtures use compiled terminal no-respon
     add_accumulator("B", "lognormal") |>
     add_outcome("Left", "A") |>
     add_outcome("Right", "B") |>
-    add_component("left_only", members = "A", weight = 0.25) |>
-    add_component("right_only", members = "B", weight = 0.75) |>
-    set_mixture_options(mode = "fixed") |>
+    add_component("left_only", members = "A") |>
+    add_component("right_only", members = "B") |>
+    set_mixture(mode = "fixed", weights = c(left_only = 0.25, right_only = 0.75)) |>
     finalize_model()
 
   prepared <- prepare_data(

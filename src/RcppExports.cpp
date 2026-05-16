@@ -33,9 +33,9 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// semantic_loglik_total_context_cpp
-double semantic_loglik_total_context_cpp(SEXP contextSEXP, SEXP paramsSEXP, SEXP dataSEXP, SEXP okSEXP, SEXP trialWeightsSEXP, SEXP minLLSEXP);
-RcppExport SEXP _AccumulatR_semantic_loglik_total_context_cpp(SEXP contextSEXPSEXP, SEXP paramsSEXPSEXP, SEXP dataSEXPSEXP, SEXP okSEXPSEXP, SEXP trialWeightsSEXPSEXP, SEXP minLLSEXPSEXP) {
+// semantic_loglik_context_cpp
+SEXP semantic_loglik_context_cpp(SEXP contextSEXP, SEXP paramsSEXP, SEXP dataSEXP, SEXP okSEXP, SEXP minLLSEXP);
+RcppExport SEXP _AccumulatR_semantic_loglik_context_cpp(SEXP contextSEXPSEXP, SEXP paramsSEXPSEXP, SEXP dataSEXPSEXP, SEXP okSEXPSEXP, SEXP minLLSEXPSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
@@ -43,9 +43,8 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< SEXP >::type paramsSEXP(paramsSEXPSEXP);
     Rcpp::traits::input_parameter< SEXP >::type dataSEXP(dataSEXPSEXP);
     Rcpp::traits::input_parameter< SEXP >::type okSEXP(okSEXPSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type trialWeightsSEXP(trialWeightsSEXPSEXP);
     Rcpp::traits::input_parameter< SEXP >::type minLLSEXP(minLLSEXPSEXP);
-    rcpp_result_gen = Rcpp::wrap(semantic_loglik_total_context_cpp(contextSEXP, paramsSEXP, dataSEXP, okSEXP, trialWeightsSEXP, minLLSEXP));
+    rcpp_result_gen = Rcpp::wrap(semantic_loglik_context_cpp(contextSEXP, paramsSEXP, dataSEXP, okSEXP, minLLSEXP));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -66,7 +65,7 @@ END_RCPP
 static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_semantic_make_likelihood_context_prep_cpp", (DL_FUNC) &_AccumulatR_semantic_make_likelihood_context_prep_cpp, 2},
     {"_AccumulatR_semantic_complexity_metrics_context_cpp", (DL_FUNC) &_AccumulatR_semantic_complexity_metrics_context_cpp, 1},
-    {"_AccumulatR_semantic_loglik_total_context_cpp", (DL_FUNC) &_AccumulatR_semantic_loglik_total_context_cpp, 6},
+    {"_AccumulatR_semantic_loglik_context_cpp", (DL_FUNC) &_AccumulatR_semantic_loglik_context_cpp, 5},
     {"_AccumulatR_semantic_response_probabilities_context_cpp", (DL_FUNC) &_AccumulatR_semantic_response_probabilities_context_cpp, 3},
     {NULL, NULL, 0}
 };

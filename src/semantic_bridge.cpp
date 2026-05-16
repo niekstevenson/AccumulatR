@@ -130,20 +130,18 @@ Rcpp::List complexity_metrics_list(
               aggregate_max_integral_depth));
 }
 
-double loglik_total_context(SEXP contextSEXP,
-                            SEXP paramsSEXP,
-                            SEXP dataSEXP,
-                            SEXP okSEXP,
-                            SEXP trialWeightsSEXP,
-                            const double min_ll) {
+void loglik_trials_context(SEXP contextSEXP,
+                           SEXP paramsSEXP,
+                           SEXP dataSEXP,
+                           SEXP okSEXP,
+                           const double min_ll,
+                           double *out) {
   const auto &ctx =
       accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
   const auto layout =
-      accumulatr::eval::detail::read_prepared_trial_layout(
-          dataSEXP,
-          trialWeightsSEXP);
+      accumulatr::eval::detail::read_prepared_trial_layout(dataSEXP);
   const int *ok = Rf_isNull(okSEXP) ? nullptr : LOGICAL(okSEXP);
-  return accumulatr::eval::detail::evaluate_observation_likelihood_total_cached(
+  accumulatr::eval::detail::evaluate_observation_likelihood_trial_values_cached(
       ctx.observation_plans_by_component_code,
       ctx.observation_is_identity,
       ctx.component_mixture,
@@ -154,7 +152,38 @@ double loglik_total_context(SEXP contextSEXP,
       paramsSEXP,
       dataSEXP,
       min_ll,
-      ok);
+      ok,
+      out);
+}
+
+Rcpp::NumericVector loglik_context(SEXP contextSEXP,
+                                   SEXP paramsSEXP,
+                                   SEXP dataSEXP,
+                                   SEXP okSEXP,
+                                   const double min_ll) {
+  const auto layout =
+      accumulatr::eval::detail::read_prepared_trial_layout(dataSEXP);
+  Rcpp::NumericVector compact(static_cast<R_xlen_t>(layout.trials.size()));
+  loglik_trials_context(
+      contextSEXP,
+      paramsSEXP,
+      dataSEXP,
+      okSEXP,
+      min_ll,
+      REAL(compact));
+
+  const SEXP expandSEXP =
+      accumulatr::eval::detail::trusted_data_attr(dataSEXP, "expand");
+  if (expandSEXP == R_NilValue || XLENGTH(expandSEXP) == 0) {
+    return compact;
+  }
+
+  const int *expand = INTEGER(expandSEXP);
+  Rcpp::NumericVector out(XLENGTH(expandSEXP));
+  for (R_xlen_t i = 0; i < out.size(); ++i) {
+    out[i] = compact[expand[i] - 1];
+  }
+  return out;
 }
 
 } // namespace
@@ -183,43 +212,41 @@ SEXP semantic_complexity_metrics_context_cpp(SEXP contextSEXP) {
 }
 
 // [[Rcpp::export]]
-double semantic_loglik_total_context_cpp(SEXP contextSEXP,
-                                         SEXP paramsSEXP,
-                                         SEXP dataSEXP,
-                                         SEXP okSEXP,
-                                         SEXP trialWeightsSEXP,
-                                         SEXP minLLSEXP) {
-  return loglik_total_context(
+SEXP semantic_loglik_context_cpp(SEXP contextSEXP,
+                                 SEXP paramsSEXP,
+                                 SEXP dataSEXP,
+                                 SEXP okSEXP,
+                                 SEXP minLLSEXP) {
+  return loglik_context(
       contextSEXP,
       paramsSEXP,
       dataSEXP,
       okSEXP,
-      trialWeightsSEXP,
       REAL(minLLSEXP)[0]);
 }
 
 extern "C" {
 
-double accumulatr_loglik_total_ccallable(SEXP contextSEXP,
-                                         SEXP paramsSEXP,
-                                         SEXP dataSEXP,
-                                         SEXP okSEXP,
-                                         SEXP trialWeightsSEXP,
-                                         double min_ll) {
+void accumulatr_loglik_trials_ccallable(SEXP contextSEXP,
+                                        SEXP paramsSEXP,
+                                        SEXP dataSEXP,
+                                        SEXP okSEXP,
+                                        double min_ll,
+                                        double *out) {
   try {
-    return loglik_total_context(
+    loglik_trials_context(
         contextSEXP,
         paramsSEXP,
         dataSEXP,
         okSEXP,
-        trialWeightsSEXP,
-        min_ll);
+        min_ll,
+        out);
+    return;
   } catch (const std::exception &e) {
     ::Rf_error("%s", e.what());
   } catch (...) {
-    ::Rf_error("Unknown C++ exception in AccumulatR::loglik_total");
+    ::Rf_error("Unknown C++ exception in AccumulatR::loglik_trials");
   }
-  return NA_REAL;
 }
 
 } // extern "C"
@@ -229,8 +256,8 @@ void accumulatr_register_ccallables(DllInfo *dll) {
   (void)dll;
   R_RegisterCCallable(
       "AccumulatR",
-      "loglik_total",
-      reinterpret_cast<DL_FUNC>(accumulatr_loglik_total_ccallable));
+      "loglik_trials",
+      reinterpret_cast<DL_FUNC>(accumulatr_loglik_trials_ccallable));
 }
 
 // [[Rcpp::export]]

@@ -4,14 +4,14 @@
 \alias{log_likelihood}
 \alias{log_likelihood.accumulatr_context}
 \alias{log_likelihood.default}
-\title{Evaluate the log-likelihood of behavioral data}
+\title{Evaluate log-likelihoods of behavioral data}
 \usage{
 log_likelihood(
   context,
   data,
   parameters,
   ok = NULL,
-  trial_weights = NULL,
+  sum = TRUE,
   min_ll = log(1e-10),
   ...
 )
@@ -21,7 +21,7 @@ log_likelihood(
   data,
   parameters,
   ok = NULL,
-  trial_weights = NULL,
+  sum = TRUE,
   min_ll = log(1e-10),
   ...
 )
@@ -38,9 +38,8 @@ log_likelihood(
 \item{ok}{Logical vector marking which trials should contribute to the
 likelihood. Trials marked `FALSE` are assigned `min_ll`.}
 
-\item{trial_weights}{Optional integer weights for compact prepared trials.
-If `NULL`, the `trial_weights` attribute from `data` is used when present;
-otherwise each prepared trial has weight one.}
+\item{sum}{If `TRUE`, return the summed log-likelihood. If `FALSE`, return
+trial-wise log-likelihood values.}
 
 \item{min_ll}{Minimum log-likelihood value used for excluded or impossible
 trials.}
@@ -48,11 +47,12 @@ trials.}
 \item{...}{Unused; for S3 compatibility.}
 }
 \value{
-A numeric vector of log-likelihood values.
+A summed log-likelihood by default, or a numeric vector of
+  trial-wise log-likelihood values when `sum = FALSE`.
 }
 \description{
-Compute the log-likelihood of prepared behavioral data under one or more
-candidate parameter sets.
+Compute the summed log-likelihood by default, or trial-wise log-likelihoods
+when `sum = FALSE`.
 }
 \examples{
 spec <- race_spec()

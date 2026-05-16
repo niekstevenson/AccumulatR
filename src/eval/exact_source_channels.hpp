@@ -31,9 +31,6 @@ inline double exact_leaf_q_for_trigger_state(
   const auto trigger_index =
       program.leaf_trigger_index[static_cast<std::size_t>(leaf_index)];
   if (trigger_index != semantic::kInvalidIndex &&
-      static_cast<semantic::TriggerKind>(
-          program.trigger_kind[static_cast<std::size_t>(trigger_index)]) ==
-          semantic::TriggerKind::Shared &&
       trigger_state.shared_started != nullptr) {
     const auto started =
         trigger_state.shared_started[static_cast<std::size_t>(trigger_index)];

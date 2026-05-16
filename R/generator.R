@@ -389,8 +389,8 @@
     }
     return(base_weights)
   }
-  # mode == "sample": use per-component weight_param values (probabilities) for non-reference,
-  # reference weight is residual.
+  # Sampled mixtures use automatic p.<component> values for non-reference
+  # components; the reference component receives the residual probability.
   comp_attrs <- comp_table$attrs
   ref_id <- comp_table$reference[[1]] %||% available_components[[1]]
   weights <- numeric(length(available_components))
@@ -402,7 +402,7 @@
     attrs <- comp_attrs[[cid]] %||% list()
     wp <- attrs$weight_param
     if (is.null(wp) || !nzchar(wp)) {
-      stop(sprintf("Component '%s' missing weight_param for sampled mixture", cid))
+      stop(sprintf("Component '%s' missing mixture weight parameter for sampled mixture", cid))
     }
     val <- NA_real_
     if (!is.null(trial_rows) && wp %in% names(trial_rows)) {

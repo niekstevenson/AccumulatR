@@ -9,8 +9,8 @@ semantic_complexity_metrics_context_cpp <- function(contextSEXP) {
     .Call(`_AccumulatR_semantic_complexity_metrics_context_cpp`, contextSEXP)
 }
 
-semantic_loglik_total_context_cpp <- function(contextSEXP, paramsSEXP, dataSEXP, okSEXP, trialWeightsSEXP, minLLSEXP) {
-    .Call(`_AccumulatR_semantic_loglik_total_context_cpp`, contextSEXP, paramsSEXP, dataSEXP, okSEXP, trialWeightsSEXP, minLLSEXP)
+semantic_loglik_context_cpp <- function(contextSEXP, paramsSEXP, dataSEXP, okSEXP, minLLSEXP) {
+    .Call(`_AccumulatR_semantic_loglik_context_cpp`, contextSEXP, paramsSEXP, dataSEXP, okSEXP, minLLSEXP)
 }
 
 semantic_response_probabilities_context_cpp <- function(contextSEXP, paramsSEXP, layoutSEXP) {

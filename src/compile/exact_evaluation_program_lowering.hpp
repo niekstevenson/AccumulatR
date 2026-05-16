@@ -55,17 +55,9 @@ inline runtime::ExactEvaluationProgram lower_exact_evaluation_program(
         static_cast<int>(leaf.params.dist_param_names.size())});
   }
 
-  program.trigger_kind.reserve(model.triggers.size());
-  program.trigger_fixed_q.reserve(model.triggers.size());
-  program.trigger_has_fixed_q.reserve(model.triggers.size());
   program.trigger_member_offsets.reserve(model.triggers.size() + 1U);
   program.trigger_member_offsets.push_back(0);
   for (const auto &trigger : model.triggers) {
-    program.trigger_kind.push_back(static_cast<std::uint8_t>(trigger.kind));
-    program.trigger_fixed_q.push_back(trigger.fixed_q);
-    program.trigger_has_fixed_q.push_back(
-        trigger.has_fixed_q ? static_cast<std::uint8_t>(1)
-                            : static_cast<std::uint8_t>(0));
     for (const auto leaf_index : trigger.leaf_indices) {
       program.trigger_member_indices.push_back(leaf_index);
     }

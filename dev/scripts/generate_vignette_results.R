@@ -152,11 +152,7 @@ save_trigger_model <- function() {
     add_accumulator("go2", "lognormal") |>
     add_outcome("R1", "go1") |>
     add_outcome("R2", "go2") |>
-    add_trigger("shared_trigger",
-      members = c("go1", "go2"),
-      q = 0.15,
-      draw = "shared"
-    )
+    add_trigger("shared_trigger", members = c("go1", "go2"))
 
   structure <- finalize_model(model_spec)
 
@@ -164,7 +160,8 @@ save_trigger_model <- function() {
     go1.m = log(0.30),
     go1.s = 0.18,
     go2.m = log(0.35),
-    go2.s = 0.18
+    go2.s = 0.18,
+    shared_trigger = 0.15
   )
 
   set.seed(123456)
@@ -219,9 +216,9 @@ save_mixtures <- function() {
     add_pool("TARGET", c("target_fast", "target_slow")) |>
     add_outcome("R1", "TARGET") |>
     add_outcome("R2", "competitor") |>
-    add_component("fast", members = c("target_fast", "competitor"), weight_param = "p_fast") |>
+    add_component("fast", members = c("target_fast", "competitor")) |>
     add_component("slow", members = c("target_slow", "competitor")) |>
-    set_mixture_options(mode = "sample", reference = "slow")
+    set_mixture(mode = "sample", reference = "slow")
 
   sampled_structure <- finalize_model(sampled_spec)
 
@@ -232,7 +229,7 @@ save_mixtures <- function() {
     target_slow.s = 0.20,
     competitor.m = log(0.35),
     competitor.s = 0.18,
-    p_fast = 0.35
+    p.fast = 0.35
   )
 
   set.seed(123456)
@@ -249,7 +246,7 @@ save_mixtures <- function() {
 
   neg_loglik <- function(theta) {
     est <- true_params_sampled
-    est["p_fast"] <- plogis(theta[["logit_p_fast"]])
+    est["p.fast"] <- plogis(theta[["logit_p_fast"]])
     params_df <- build_param_matrix(
       sampled_spec,
       est,

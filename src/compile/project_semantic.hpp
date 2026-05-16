@@ -273,10 +273,6 @@ public:
 
       semantic::TriggerSpec projected = trigger;
       projected.leaf_indices = std::move(members);
-      if (projected.kind == semantic::TriggerKind::Shared &&
-          projected.leaf_indices.size() < 2U) {
-        projected.kind = semantic::TriggerKind::Independent;
-      }
       const auto trigger_index =
           static_cast<semantic::Index>(variant.model.triggers.size());
       variant.model.triggers.push_back(projected);
@@ -775,8 +771,7 @@ private:
       }
     }
     for (const auto &trigger : variant->model.triggers) {
-      if (trigger.kind == semantic::TriggerKind::Shared &&
-          trigger.leaf_indices.size() > 1U) {
+      if (trigger.leaf_indices.size() > 1U) {
         variant->capabilities.shared_trigger = true;
       }
     }

@@ -168,7 +168,7 @@ stim_sel_split_stop2 <- race_spec() |>
   )) |>
   finalize_model()
 
-# Version 4: Guarded model with shared trigger failures across response groups
+# Version 4: Guarded model with shared absence triggers across response groups
 stim_sel_guarded_triggered <- .stim_base_spec() |>
   add_accumulator("trigger_go1", "lognormal") |>
   add_accumulator("trigger_stop", "lognormal") |>

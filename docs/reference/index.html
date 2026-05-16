@@ -25,7 +25,7 @@
     <li><a class="dropdown-item" href="../articles/simple_model.html">A Simple Race Model</a></li>
     <li><a class="dropdown-item" href="../articles/pool_model.html">Pooling Accumulators</a></li>
     <li><a class="dropdown-item" href="../articles/logical_rules.html">Logical Rules</a></li>
-    <li><a class="dropdown-item" href="../articles/trigger_model.html">Trigger Types</a></li>
+    <li><a class="dropdown-item" href="../articles/trigger_model.html">Shared Absence Triggers</a></li>
     <li><a class="dropdown-item" href="../articles/mixtures.html">Working with Mixtures</a></li>
     <li><a class="dropdown-item" href="../articles/multi_outcome.html">Multiple Outcomes</a></li>
     <li><a class="dropdown-item" href="../articles/chained_onset.html">Chained Onsets</a></li>
@@ -113,7 +113,7 @@
           <code><a href="add_trigger.html">add_trigger()</a></code>
 
         </dt>
-        <dd>Add a shared trigger or gate</dd>
+        <dd>Add a shared absence trigger</dd>
       </dl><dl><dt>
 
           <code><a href="set_metadata.html">set_metadata()</a></code>
@@ -122,7 +122,7 @@
         <dd>Store model-level metadata</dd>
       </dl><dl><dt>
 
-          <code><a href="set_mixture_options.html">set_mixture_options()</a></code>
+          <code><a href="set_mixture.html">set_mixture()</a></code>
 
         </dt>
         <dd>Control how mixture components are combined</dd>
@@ -132,6 +132,12 @@
 
         </dt>
         <dd>Compile a model for simulation and fitting</dd>
+      </dl><dl><dt>
+
+          <code><a href="complexity_metrics.html">complexity_metrics()</a></code>
+
+        </dt>
+        <dd>Return compiled exact complexity metrics</dd>
       </dl></div><div class="section level2">
       <h2 id="outcome-expressions-and-timing">Outcome Expressions and Timing<a class="anchor" aria-label="anchor" href="#outcome-expressions-and-timing"></a></h2>
 
@@ -186,7 +192,7 @@
         </dt>
         <dd>Start one accumulator after another process finishes</dd>
       </dl></div><div class="section level2">
-      <h2 id="data-preparation">Data Preparation<a class="anchor" aria-label="anchor" href="#data-preparation"></a></h2>
+      <h2 id="model-preparation">Model Preparation<a class="anchor" aria-label="anchor" href="#model-preparation"></a></h2>
 
       <div class="section-desc"><p>Inspect model parameters and prepare trial-level parameter matrices.</p></div>
 
@@ -204,7 +210,7 @@
         <dd>Prepare behavioral data for likelihood evaluation</dd>
       </dl><dl><dt>
 
-          <code><a href="sampled_pars.html">sampled_pars()</a></code>
+          <code><a href="par_names.html">par_names()</a></code>
 
         </dt>
         <dd>List the free parameters implied by a model</dd>
@@ -236,7 +242,7 @@
           <code><a href="log_likelihood.html">log_likelihood()</a></code>
 
         </dt>
-        <dd>Evaluate the log-likelihood of behavioral data</dd>
+        <dd>Evaluate log-likelihoods of behavioral data</dd>
       </dl><dl><dt>
 
           <code><a href="simulate.html">simulate()</a></code>

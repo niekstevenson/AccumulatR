@@ -2,27 +2,22 @@
 % Please edit documentation in R/model_definition.R
 \name{add_trigger}
 \alias{add_trigger}
-\title{Add a shared trigger or gate}
+\title{Add a shared absence trigger}
 \usage{
-add_trigger(spec, id, members, q = NULL, draw = c("shared", "independent"))
+add_trigger(spec, name, members)
 }
 \arguments{
 \item{spec}{A `race_spec` object.}
 
-\item{id}{Trigger label. If `NULL`, the first member label is used.}
+\item{name}{Trigger parameter name.}
 
-\item{members}{Accumulator labels controlled by the trigger.}
-
-\item{q}{Failure probability for the trigger. The trigger `id` is the
-parameter name for this quantity.}
-
-\item{draw}{Whether trigger failures are shared across members or drawn
-independently.}
+\item{members}{Accumulator labels controlled by the shared absence draw.}
 }
 \value{
 The updated `race_spec`.
 }
 \description{
-Triggers let several accumulators share the same stochastic gating event,
-which can be useful in stop-signal or contingent-processing models.
+A trigger is a named absence-probability parameter. All members in one
+trigger call share the same absence draw. Use separate trigger calls for
+independent absence draws.
 }

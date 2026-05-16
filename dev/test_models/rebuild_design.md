@@ -820,7 +820,7 @@ Deliverable:
   - guard
   - none_of
   - tie resolution
-  - shared trigger failure
+  - shared trigger absence
   - NA/censor/guess/remap behavior
 
 Exit gate:

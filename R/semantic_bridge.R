@@ -10,19 +10,17 @@
   .Call(`_AccumulatR_semantic_complexity_metrics_context_cpp`, context)
 }
 
-.loglik_total_context <- function(context,
-                                  params,
-                                  data,
-                                  ok = NULL,
-                                  trial_weights = NULL,
-                                  min_ll = log(1e-10)) {
+.loglik_context <- function(context,
+                            params,
+                            data,
+                            ok = NULL,
+                            min_ll = log(1e-10)) {
   .Call(
-    `_AccumulatR_semantic_loglik_total_context_cpp`,
+    `_AccumulatR_semantic_loglik_context_cpp`,
     context,
     params,
     data,
     ok,
-    trial_weights,
     min_ll
   )
 }

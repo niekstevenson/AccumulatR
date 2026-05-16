@@ -34,7 +34,7 @@ reference:
       - set_parameters
       - add_trigger
       - set_metadata
-      - set_mixture_options
+      - set_mixture
       - finalize_model
       - complexity_metrics
 
@@ -53,7 +53,7 @@ reference:
     desc: "Inspect model parameters and prepare trial-level parameter matrices."
     contents:
       - prepare_data
-      - sampled_pars
+      - par_names
       - build_param_matrix
 
   - title: "Likelihood and Simulation"

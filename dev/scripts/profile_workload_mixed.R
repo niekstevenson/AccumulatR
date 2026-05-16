@@ -52,10 +52,10 @@ stop_change_model <- function() {
     add_accumulator("change", "lognormal") |>
     add_outcome("S", inhibit("S", by = "stop")) |>
     add_outcome("X", all_of("change", "stop")) |>
-    add_component("go_only", members = "S", weight = .75) |>
-    add_component("go_stop", members = c("S", "stop", "change"), weight = .25) |>
-    add_trigger("stop_trigger", members = c("stop", "change"), q = 0.05) |>
-    set_mixture_options(mode = "fixed") |>
+    add_component("go_only", members = "S") |>
+    add_component("go_stop", members = c("S", "stop", "change")) |>
+    add_trigger("stop_trigger", members = c("stop", "change")) |>
+    set_mixture(mode = "fixed", weights = c(go_only = .75, go_stop = .25)) |>
     set_parameters(list(
       m_go = "S.m",
       m_stop = "stop.m",
@@ -65,7 +65,7 @@ stop_change_model <- function() {
       s_change = "change.s",
       t0_go = "S.t0",
       t0_change = "change.t0",
-      q = c("stop.q", "change.q")
+      q = "stop_trigger"
     )) |>
     finalize_model()
   pars <- c(

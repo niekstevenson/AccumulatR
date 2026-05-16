@@ -4,15 +4,7 @@
 \alias{add_component}
 \title{Define a mixture component}
 \usage{
-add_component(
-  spec,
-  id,
-  members,
-  weight = NULL,
-  weight_param = NULL,
-  n_outcomes = NULL,
-  attrs = list()
-)
+add_component(spec, id, members, n_outcomes = NULL, attrs = list())
 }
 \arguments{
 \item{spec}{A `race_spec` object.}
@@ -20,10 +12,6 @@ add_component(
 \item{id}{Component label.}
 
 \item{members}{Accumulator labels that belong to this component.}
-
-\item{weight}{Optional fixed mixture weight.}
-
-\item{weight_param}{Optional parameter name for a fitted mixture weight.}
 
 \item{n_outcomes}{Optional component-specific override for the number of
 observed ordered responses.}
@@ -35,5 +23,7 @@ The updated `race_spec`.
 }
 \description{
 Components are useful when trials can come from qualitatively different
-processing modes, such as fast versus slow processing.
+processing modes, such as fast versus slow processing. Component declarations
+define membership only; component probabilities are configured with
+`set_mixture()`.
 }

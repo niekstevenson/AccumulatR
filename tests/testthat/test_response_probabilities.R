@@ -4,9 +4,9 @@ testthat::test_that("response_probabilities respects mixture weights and compone
     add_accumulator("B", "lognormal") |>
     add_outcome("Left", "A") |>
     add_outcome("Right", "B") |>
-    add_component("left_only", members = "A", weight = 0.25) |>
-    add_component("right_only", members = "B", weight = 0.75) |>
-    set_mixture_options(mode = "fixed")
+    add_component("left_only", members = "A") |>
+    add_component("right_only", members = "B") |>
+    set_mixture(mode = "fixed", weights = c(left_only = 0.25, right_only = 0.75))
 
   structure <- finalize_model(spec)
   params <- build_param_matrix(
@@ -39,9 +39,9 @@ testthat::test_that("response_probabilities returns residual NA mass for mapped 
     add_accumulator("B", "lognormal") |>
     add_outcome("Seen", "A") |>
     add_outcome("Miss", "B", options = list(map_outcome_to = NA_character_)) |>
-    add_component("seen", members = "A", weight = 0.7) |>
-    add_component("missing", members = "B", weight = 0.3) |>
-    set_mixture_options(mode = "fixed")
+    add_component("seen", members = "A") |>
+    add_component("missing", members = "B") |>
+    set_mixture(mode = "fixed", weights = c(seen = 0.7, missing = 0.3))
 
   structure <- finalize_model(spec)
   params <- build_param_matrix(
@@ -72,17 +72,13 @@ latent_sampled_response_spec <- function() {
     add_pool("Target", c("target_fast", "target_slow")) |>
     add_outcome("Target", "Target") |>
     add_outcome("Competitor", "competitor") |>
-    add_component(
-      "fast",
-      members = c("target_fast", "competitor"),
-      weight_param = "p_fast"
-    ) |>
+    add_component("fast", members = c("target_fast", "competitor")) |>
     add_component("slow", members = c("target_slow", "competitor")) |>
-    set_mixture_options(mode = "sample", reference = "slow") |>
+    set_mixture(mode = "sample", reference = "slow") |>
     finalize_model()
 }
 
-latent_sampled_response_params <- function(p_fast) {
+latent_sampled_response_params <- function(p.fast) {
   c(
     target_fast.m = log(0.25),
     target_fast.s = 0.15,
@@ -90,7 +86,7 @@ latent_sampled_response_params <- function(p_fast) {
     target_slow.s = 0.20,
     competitor.m = log(0.35),
     competitor.s = 0.18,
-    p_fast = p_fast
+    p.fast = p.fast
   )
 }
 

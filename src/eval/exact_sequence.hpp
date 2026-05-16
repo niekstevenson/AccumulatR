@@ -527,18 +527,19 @@ inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
   return std::log(total);
 }
 
-inline double evaluate_exact_trials_total_cached(
+template <typename TrialSink>
+inline void evaluate_exact_trials_cached(
     const std::vector<semantic::Index> &variant_index_by_component_code,
     const std::vector<ExactVariantPlan> &plans,
     const PreparedTrialLayout &layout,
     SEXP paramsSEXP,
     SEXP dataSEXP,
     const double min_ll,
-    const int *ok = nullptr) {
+    const int *ok,
+    TrialSink &&sink) {
   ParamView params(paramsSEXP);
   const auto table = read_prepared_data_view(dataSEXP, layout);
   const auto columns = make_exact_trial_columns(dataSEXP, layout);
-  double total_loglik = 0.0;
   ExactStepWorkspacePool workspace_pool(plans.size());
   std::size_t param_row = 0;
   for (std::size_t trial_index = 0; trial_index < layout.trials.size(); ++trial_index) {
@@ -550,11 +551,6 @@ inline double evaluate_exact_trials_total_cached(
     const auto &plan = plans[static_cast<std::size_t>(variant_index)];
     const auto leaf_count =
         static_cast<std::size_t>(plan.program.layout.n_leaves);
-    const double weight = prepared_trial_weight(layout, trial_index);
-    if (!(weight > 0.0)) {
-      param_row += leaf_count;
-      continue;
-    }
     double value = min_ll;
     if (trial_is_selected(ok, trial_index)) {
       const auto obs = read_exact_observation_view(
@@ -582,10 +578,9 @@ inline double evaluate_exact_trials_total_cached(
                     min_ll,
                     &workspace);
     }
-    total_loglik += weight * value;
+    sink(trial_index, value);
     param_row += leaf_count;
   }
-  return total_loglik;
 }
 
 } // namespace detail

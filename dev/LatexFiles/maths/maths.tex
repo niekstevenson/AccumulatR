@@ -11,29 +11,31 @@
 
 \begin{abstract}
 \texttt{AccumulatR} is built around one simple idea: each latent process has a
-random finishing time. Responses are defined by rules about which processes
-must finish, which must not finish, and which finish first. This note gives a
-compact mathematical description of that framework. The aim is not maximal
-generality. The aim is a notation that is simple enough to read from start to
-finish and precise enough to match the package.
+random finishing time, and responses are defined by rules about the relative
+order of those finishing times. This note gives a compact mathematical
+description of that framework. The aim is not maximal generality. The aim is a
+notation that is simple enough to read from start to finish and precise enough
+to match the package.
 \end{abstract}
 
 \section{Overview}
 
-The framework has four layers.
-
+The framework has four modeling layers.
 \begin{enumerate}
   \item A \emph{leaf} is a single latent finishing-time process.
   \item A \emph{pool} combines several sources into one new source.
-  \item An \emph{outcome rule} says when a modeled response counts as having
-  occurred.
+  \item An \emph{outcome rule} says when a modeled response becomes available.
   \item An \emph{observation layer} turns latent outcomes into the data we
-  actually record, for example through mixtures, remapped labels, or ranked
-  responses.
+  actually record, for example through mixtures, remapped labels, missing
+  response times, or ranked responses.
 \end{enumerate}
 
-Everything is built from finishing times. Once an object has a finishing time,
-it can compete with other objects in exactly the same way.
+The evaluator has one additional layer. It lowers the model to symbolic
+transition scenarios, turns target and competitor relations into one order
+region, simplifies that region, and then compiles it to numerical expressions.
+Simple models reduce to familiar products of densities, distribution functions,
+and survival functions. More structured models are still handled by the same
+order-region machinery rather than by separate special-case formulas.
 
 \section{Leaves and Basic Notation}
 
@@ -46,13 +48,12 @@ S_a(t) = 1 - F_a(t).
 \]
 So $F_a(t)$ is the probability that leaf $a$ has finished by time $t$,
 $f_a(t)$ is the density that it finishes at time $t$, and $S_a(t)$ is the
-probability that it is still unfinished at time $t$.
+probability that it has not finished by time $t$.
 
-The same notation will be used for pools and outcome rules as well. Once an
-object has a finishing time, it is treated in exactly the same way.
-
-In this note, a \emph{source} means any object with its own finishing time. The
-two basic source types are leaves and pools.
+The same notation can be used for any source whose finishing-time distribution
+has already been defined. In this note, a \emph{source} means a leaf or pool.
+Outcome rules are slightly more general: they may become true in several
+different ways, and those ways may share latent sources with other rules.
 
 Different leaves may have different finishing-time distributions. The package
 currently supplies the families
@@ -60,8 +61,8 @@ currently supplies the families
 \texttt{lognormal}, \qquad \texttt{gamma}, \qquad \texttt{exgauss}, \qquad
 \texttt{LBA}, \qquad \texttt{RDM}.
 \]
-But the mathematics below does not depend on a particular family. It only
-requires that each leaf has well-defined functions $F_a$, $f_a$, and $S_a$.
+The exact calculations below do not depend on a particular family. They only
+require that each leaf supplies the needed density and distribution functions.
 
 \section{Pools}
 
@@ -72,8 +73,11 @@ $T_1,\dots,T_n$.
 
 The defining identity is
 \begin{equation}
-F_P(t) = \Pr(T_P \le t)
-= \Pr(\text{at least $k$ of } T_1,\dots,T_n \text{ are } \le t).
+F_P(t)
+=
+\Pr(T_P \le t)
+=
+\Pr(\text{at least $k$ of } T_1,\dots,T_n \text{ are } \le t).
 \label{eq:pool-cdf}
 \end{equation}
 That is the cleanest way to think about a pool: by time $t$, the pool has
@@ -86,31 +90,34 @@ F_P(t) = \sum_{m=k}^n \binom{n}{m} F(t)^m S(t)^{n-m},
 \end{equation}
 and
 \begin{equation}
-f_P(t) =
+f_P(t)
+=
 \frac{n!}{(k-1)!(n-k)!}\,
 f(t)\,F(t)^{k-1}S(t)^{n-k}.
 \label{eq:pool-density}
 \end{equation}
 These are the usual formulas for the $k$th finisher.
 
-The package also allows pools whose members have different distributions. The
-notation is then longer, but the idea is the same: a pool is simply another
-source with its own $F_P$, $f_P$, and $S_P$.
-
-Three special cases matter often:
-\begin{itemize}
-  \item $k=1$: the pool is a first finisher.
-  \item $k=n$: the pool is a last finisher.
-  \item $n=1$: the pool is just an alias for one source.
-\end{itemize}
-
-Pools can also be nested. Once a source has its own $F$, $f$, and $S$, it can
-be used as a member of a larger pool.
+The package also allows pools with non-identical members and nested pools. In
+those cases the product formulas are no longer the main definition. The pool is
+compiled as order constraints over its members. If a pool shares a member with
+another source or rule, that shared latent time remains shared in the compiled
+region.
 
 \section{Outcome Rules}
 
 An outcome rule says when a modeled response becomes available. If $E$ is an
-outcome rule, then $T_E$ is the first time that rule becomes true.
+outcome rule, then it is useful to think of $E$ as a union of transition
+scenarios. A transition scenario records
+\begin{itemize}
+  \item which source releases the rule at the transition time,
+  \item which other requirements must already be ready,
+  \item which guards or absence conditions must still hold,
+  \item and which order facts are implied by that way of becoming true.
+\end{itemize}
+
+For simple independent rules, these scenarios collapse to familiar formulas.
+For shared or nested rules, the scenarios are kept as symbolic order regions.
 
 \subsection{Direct Outcomes}
 
@@ -124,11 +131,8 @@ If
 \[
 E = \texttt{first\_of}(E_1,\dots,E_m),
 \]
-then the rule becomes true when the first child becomes true. Therefore
-\[
-T_E = \min(T_{E_1},\dots,T_{E_m}),
-\]
-and
+then the rule becomes true when the first child becomes true. If the children
+are independent and do not share latent sources, then
 \begin{equation}
 F_E(t) = 1 - \prod_{r=1}^m S_{E_r}(t),
 \qquad
@@ -138,18 +142,18 @@ f_E(t) = \sum_{r=1}^m f_{E_r}(t)\prod_{q \ne r} S_{E_q}(t).
 The density has the usual interpretation: one child finishes at time $t$, and
 all the others are still unfinished at time $t$.
 
+In the general case, the compiler does not assume this product form. It creates
+one transition scenario for each child being the first available route, then
+adds order constraints saying that the other children are not earlier.
+
 \subsection{\texttt{all\_of()}}
 
 If
 \[
 E = \texttt{all\_of}(E_1,\dots,E_m),
 \]
-then the rule becomes true when the last required child becomes true.
-Therefore
-\[
-T_E = \max(T_{E_1},\dots,T_{E_m}),
-\]
-and
+then the rule becomes true when the last required child becomes true. If the
+children are independent and do not share latent sources, then
 \begin{equation}
 F_E(t) = \prod_{r=1}^m F_{E_r}(t),
 \qquad
@@ -159,11 +163,17 @@ f_E(t) = \sum_{r=1}^m f_{E_r}(t)\prod_{q \ne r} F_{E_q}(t).
 Here one child finishes at time $t$, and all the others have already finished
 by time $t$.
 
+In the general case, the compiler again works by scenarios. Each scenario says
+which child supplies the final release time and which children must already be
+ready. If two rules share that final release source, the equality is kept as a
+model tie rather than being discarded as a zero-probability boundary.
+
 \subsection{\texttt{none\_of()}}
 
 \texttt{none\_of()} is an absence condition. If a rule requires
-\texttt{none\_of(B)}, then the relevant term is simply the survival function of
-$B$:
+\texttt{none\_of(B)} at time $t$, then $B$ must not have become true before
+that time. In the simplest case, where $B$ is an independent source, this is
+just
 \[
 \Pr(B \text{ has not finished by time } t) = S_B(t).
 \]
@@ -171,12 +181,15 @@ For example, if
 \[
 E = \texttt{all\_of}(A,\texttt{none\_of}(B)),
 \]
-then by time $t$ the rule holds with probability
+and $A$ and $B$ are independent direct sources, then the transition density is
 \[
-F_E(t) = F_A(t)S_B(t).
+f_E(t) = f_A(t)S_B(t),
+\qquad
+F_E(t) = \int_0^t f_A(u)S_B(u)\,du.
 \]
-So \texttt{none\_of()} does not introduce a new race winner. It contributes a
-survival factor.
+For composite or shared blockers, \texttt{none\_of()} is represented as an
+order constraint. It does not introduce a new observed race winner, but it can
+still share latent state with the target rule or with competitors.
 
 \subsection{\texttt{inhibit()}}
 
@@ -184,121 +197,244 @@ The blocking rule is written as
 \[
 G = \texttt{inhibit}(A,B).
 \]
-Its meaning is simple: count $A$ only if $B$ has not finished first. The
-corresponding density is
+Its meaning is: count $A$ only if blocker $B$ is not before $A$. If $A$ and
+$B$ are independent direct sources, then
 \begin{equation}
 f_G(t) = f_A(t)S_B(t),
 \qquad
-F_G(t) = \int_0^t f_G(u)\,du.
+F_G(t) = \int_0^t f_A(u)S_B(u)\,du.
 \label{eq:guard-density}
 \end{equation}
 So $A$ finishes at time $t$, while $B$ is still unfinished at time $t$.
 
-\section{Trial Likelihood}
+In the general case, $A$ and $B$ may themselves be composite rules. The compiler
+therefore compares transition scenarios: a target scenario from $A$ is kept
+only on the order region where no scenario from $B$ occurs before it. This is
+why shared gates, nested guards, and absence conditions are handled in the same
+symbolic layer.
 
-Suppose the model defines outcomes $R_1,\dots,R_J$. If response $r$ is observed
-at time $t$, then the trial contribution is
-\begin{equation}
-\ell_r(t) =
-\frac{d}{dt}
-\Pr\!\left(
-T_{R_r} \le t,\;
-T_{R_j} > t \text{ for all } j \ne r
-\right).
-\label{eq:general-win}
-\end{equation}
-This is the general ``response $r$ wins at time $t$'' formula.
+\section{Order Regions and Likelihoods}
 
-\subsection{Disjoint outcome rules}
+The outcome rules above describe when a latent response becomes available. A
+trial likelihood asks a slightly different question: one target response is
+observed at time $t$, and all competing responses must not have occurred before
+that target. The exact evaluator answers this by breaking the event into cases.
+Each case is a region of latent finishing-time space.
 
-The simplest case is when the outcome rules are \emph{disjoint}. Here
-``disjoint'' means that the same latent trial cannot satisfy two different
-outcome rules at once. Most standard race models have this form: one response
-wins, and the others have not yet become true.
+The smallest pieces of a region are order facts. We call one order fact an
+\emph{atom}. For example, the atoms
+\[
+T_a < t, \qquad T_a > t, \qquad T_a < T_b, \qquad T_a = T_b
+\]
+say that source $a$ finished before the observed time, after the observed time,
+before source $b$, or at the same time as source $b$.
 
-In that case, Equation~\eqref{eq:general-win} reduces to
-\begin{equation}
-\ell_r(t) = f_{R_r}(t)\prod_{j \ne r} S_{R_j}(t).
-\label{eq:simple-race}
-\end{equation}
-This is the familiar race-model likelihood: response $r$ finishes at time $t$,
-and every competing response is still unfinished at time $t$. This is the form
-most readers will already know from ordinary race models.
+A \emph{cell} is one compatible case. It says which source releases at the
+observed time and which atoms must also hold. If source $a$ releases at time
+$t$, the cell contributes the density factor $f_a(t)$. The rest of the cell
+then says what must be true of the other sources. For example, it may require
+$T_b>t$ because competitor $b$ has not yet won, or $T_b<t$ because $b$ must
+already be ready. A contradictory case, such as one requiring both $T_a<t$ and
+$T_a>t$, is empty and contributes nothing.
 
-\subsection{Outcome rules with shared structure}
+An \emph{order region} is a union of cells. It starts from the cells for a
+target transition scenario, then competitor conditions refine those cells. Some
+conditions simply add an atom. Others split a cell into several alternatives.
+After all conditions have been applied, empty cells are removed. Duplicate cells
+and cells already contained in another cell are removed as well. If two
+remaining cells would count the same event with nonzero probability, they are
+made non-overlapping before projection. The likelihood contribution of the
+region is then the sum of its cell contributions.
 
-Sometimes different outcome rules share part of the same latent machinery. For example:
+\subsection{The simple race as a region}
+
+Suppose the observed response is $A$ at time $t$, and the only competitor is
+$B$. The relevant region is
+\[
+\text{$A$ releases at $t$}, \qquad T_B > t.
+\]
+For independent direct sources, this immediately lowers to
+\[
+f_A(t)S_B(t).
+\]
+With competitors $B_1,\dots,B_m$, the same reasoning gives
+\[
+f_A(t)\prod_{j=1}^m S_{B_j}(t).
+\]
+This familiar race likelihood is therefore not a separate idea. It is the
+cheapest possible order region: one density at the observed time and survival
+factors for the competitors.
+
+\subsection{A composite target}
+
+Now let
+\[
+E = \texttt{all\_of}(A,B).
+\]
+The rule can release in two ways. Either $A$ releases at time $t$ and $B$ is
+already ready, or $B$ releases at time $t$ and $A$ is already ready:
+\[
+\begin{array}{ll}
+\text{scenario 1:} & \text{$A$ releases at $t$}, \quad T_B < t,\\[2mm]
+\text{scenario 2:} & \text{$B$ releases at $t$}, \quad T_A < t.
+\end{array}
+\]
+If $A$ and $B$ are independent direct sources, these two regions project to
+\[
+f_A(t)F_B(t) + f_B(t)F_A(t),
+\]
+which is the density formula for \texttt{all\_of()}. The important point is
+that the product formula is recovered from two cells. One cell says that $A$ is
+the releasing source and $B$ is already below $t$; the other says the reverse.
+These two cells are disjoint except for the zero-probability boundary
+$T_A=T_B=t$, so their contributions add. The region is the more basic object,
+because the same representation still works when the children are shared,
+nested, guarded, or blocked.
+
+\subsection{A shared-gate example}
+
+Shared structure is the place where direct product formulas become misleading.
+Consider
 \[
 \texttt{left} = \texttt{all\_of}(A,C),
 \qquad
 \texttt{right} = \texttt{all\_of}(B,C).
 \]
-Both responses depend on the common process $C$. Their completion times are
+Both responses use the same latent source $C$. Their completion times are
 \[
 T_{\texttt{left}} = \max(T_A,T_C),
 \qquad
 T_{\texttt{right}} = \max(T_B,T_C).
 \]
-If $C$ finishes before both $A$ and $B$, the model behaves like an ordinary
-race between $A$ and $B$. If $C$ finishes after both, then
+
+Suppose \texttt{left} is observed at time $t$. It has two target scenarios:
 \[
-T_{\texttt{left}} = T_{\texttt{right}} = T_C.
+\begin{array}{ll}
+\text{$A$ releases:} & \text{$A$ releases at $t$}, \quad T_C < t,\\[2mm]
+\text{$C$ releases:} & \text{$C$ releases at $t$}, \quad T_A < t.
+\end{array}
 \]
-So shared structure can create positive-probability ties between composite
-outcome times, even when the underlying leaf times are continuous.
+In the first scenario, $C$ is already before $t$. For \texttt{right} not to be
+before the target, $B$ must not have released before $t$, so this scenario
+contains the ordinary survival condition $T_B > t$.
 
-For that reason, Equation~\eqref{eq:simple-race} is no longer enough. The
-competitor term can no longer be handled by a simple product of survival
-functions, because competing rules may share part of the same completion event.
+In the second scenario, $C$ itself is the release source. Then the competitor
+does not have a single independent survival factor. If $T_B > t$,
+\texttt{right} is later. If $T_B < t$, then $B$ is already ready when $C$
+finishes, so \texttt{right} also releases at the same time $T_C=t$.
 
-A useful way to write the likelihood is to sum over the different ways outcome
-rule $r$ can become true:
-\begin{equation}
-\ell_r(t) = \sum_{m \in M_r} f_{r,m}(t)\,p_{r,m}^{\mathrm{win}}(t).
-\label{eq:shared-structure}
-\end{equation}
-Here $M_r$ is the set of completion modes for outcome $r$, $f_{r,m}(t)$ is the
-density that mode $m$ makes $r$ available at time $t$, and
-$p_{r,m}^{\mathrm{win}}(t)$ is the probability that this mode wins against the
-competing rules.
-
-The quantity $p_{r,m}^{\mathrm{win}}(t)$ is easiest to describe through its
-complement,
+This creates a model tie with positive mass. It is not the event that two
+independent continuous variables happen to be exactly equal; that event has
+probability zero. The tie has mass because both composite outcomes inherit the
+same release time from the same latent source. For a fixed observed time $t$,
+the cell
 \[
-1 - p_{r,m}^{\mathrm{win}}(t)
-=
-\Pr(\text{at least one competing rule beats mode $m$ at time } t),
+\text{$C$ releases at $t$}, \qquad T_A < t, \qquad T_B < t
 \]
-and this is a union probability. So it is evaluated by inclusion--exclusion:
-\begin{equation}
-1 - p_{r,m}^{\mathrm{win}}(t)
-=
-\sum_s W_{rm,s}(t)
-- \sum_{s<u} W_{rm,su}(t)
-+ \cdots,
-\label{eq:shared-union}
-\end{equation}
-where $W_{rm,s}(t)$ is the probability that competitor $s$ beats mode $m$,
-$W_{rm,su}(t)$ the probability that competitors $s$ and $u$ do so jointly, and
-so on.
+has density proportional to $f_C(t)F_A(t)F_B(t)$, so it contributes real density
+to the likelihood. The compiler therefore keeps this case as an explicit cell
+instead of multiplying the target by a precomputed competitor survival
+probability.
 
-In the running example, one completion mode for \texttt{left} is that $C$
-finishes at time $t$ after $A$ is already ready. Then $f_{r,m}(t)$ is the
-density of that event. The competitor term asks whether the \texttt{right} rule
-can also claim that same shared finishing stage. If $B$ is not ready, it
-cannot. If $B$ is ready as well, then left and right share the same final time
-$T_C$, and the winner depends on which branch was ready first. 
+This is the main reason for order regions. They keep the joint latent state
+visible until the target and competitor relation has been expressed correctly.
+Only after that does the evaluator simplify and project the region.
+
+\subsection{Cells and projection}
+
+A cell $C$ contributes one numerical term to the density at the observed time
+$t$. We write that term as $I_C(t)$. It is not a new model component; it is just
+the amount of likelihood density contributed by that one case.
+
+Some cells project immediately. For example, the simple race cell
+\[
+\text{$A$ releases at $t$}, \qquad T_B > t
+\]
+has contribution
+\[
+I_C(t) = f_A(t)S_B(t).
+\]
+There is no integral because the only unobserved fact, $T_B>t$, collapses to a
+survival function.
+
+Other cells leave latent times that must still be integrated over. A compact
+way to write such a contribution is
+\[
+I_C(t)
+=
+\int_{u \in C(t)}
+\prod_{a \in D_C} f_a(u_a)
+\prod_{q \in Q_C} h_q(u,t)
+\,du,
+\]
+where:
+
+\begin{itemize}
+  \item $u$ is the vector of latent finishing times that remain after simple
+  projections have been done.
+  \item $u \in C(t)$ means that those latent times must satisfy all atoms in
+  the cell, with the observed time held fixed at $t$.
+  \item $D_C$ indexes the latent sources whose densities remain inside the
+  integral.
+  \item $Q_C$ indexes the other factors attached to the cell.
+  \item Each $h_q(u,t)$ is one of those other factors. Depending on the cell, it
+  may be a CDF, survival function, interval probability, observed density
+  factor, or gate.
+\end{itemize}
+
+The planner removes variables from this expression symbolically whenever it can.
+For example,
+\[
+T_a < t \mapsto F_a(t), \qquad
+T_a > t \mapsto S_a(t), \qquad
+s < T_a < t \mapsto F_a(t)-F_a(s).
+\]
+Thus a simple cell becomes cheap math. Only a genuinely coupled cell remains as
+an integral.
+
+For continuous independent leaves, an equality such as $T_a=T_b$ has zero
+probability and can usually be discarded as a boundary. But an equality caused
+by shared latent identity is different: it is the same random time appearing in
+two rules. The framework therefore distinguishes ordinary zero-measure
+equalities from positive-mass model ties.
+
+\subsection{From regions to a trial likelihood}
+
+Suppose the model defines outcomes $R_1,\dots,R_J$. If response $r$ is observed
+at time $t$, the likelihood sums over all target scenarios that can make
+outcome $r$ available at that time:
+\begin{equation}
+\ell_r(t)
+=
+\sum_{m \in M_r}
+I_{r,m}^{\mathrm{win}}(t).
+\label{eq:scenario-win}
+\end{equation}
+Here $M_r$ is the set of target scenarios for outcome $r$, and
+$I_{r,m}^{\mathrm{win}}(t)$ is the region contribution for scenario $m$
+occurring at $t$ while all competing outcomes are not before it.
+
+The familiar independent race likelihood is the special case
+\begin{equation}
+\ell_r(t) = f_{R_r}(t)\prod_{j \ne r} S_{R_j}(t).
+\label{eq:simple-race}
+\end{equation}
+The general formula is still the same idea, but the competitor non-win event is
+represented jointly with the target event before any CDF or survival factor is
+formed.
 
 \paragraph{No-response mass.}
 Some models leave positive probability on ``no observed response'', for example
-because a trigger fails. Before any relabelling or guessing, that probability is
+because a trigger fails or because observed labels are remapped away. Before any
+observation remapping, the finite response probabilities satisfy
 \begin{equation}
-p_{\mathrm{none}} =
+p_{\mathrm{none}}
+=
 1 - \sum_{r=1}^J \int_0^\infty \ell_r(t)\,dt.
 \label{eq:no-response}
 \end{equation}
 So the no-response mass is whatever probability remains after summing the
-finite response probabilities.
+finite latent response probabilities.
 
 \section{Onsets}
 
@@ -326,67 +462,75 @@ starts after source $U$, with an additional lag $\delta \ge 0$, then
 \[
 T_a = T_U + \delta + T_a^\star,
 \]
-where $T_a^\star$ is the leaf's own post-start finishing time.
-
-So the total waiting time is: wait for $U$, then wait for the lag, then wait
-for $a$ itself. This gives the convolution
+where $T_a^\star$ is the leaf's own post-start finishing time. When $U$ has
+density $f_U$, this gives the convolution
 \begin{equation}
-f_a(t) =
+f_a(t)
+=
 \int_0^{t-\delta}
 f_U(s)\,f_a^\star(t-\delta-s)\,ds,
 \label{eq:after-density}
 \end{equation}
 and similarly
 \begin{equation}
-F_a(t) =
+F_a(t)
+=
 \int_0^\infty
 F_a^\star(t-\delta-s)\,f_U(s)\,ds.
 \label{eq:after-cdf}
 \end{equation}
+In the package, the source $U$ may be an accumulator or pool. Once the delayed
+leaf has been defined, it participates in the same order-region machinery as
+any other leaf.
 
 \section{Triggers}
 
-Triggers control whether a source starts at all. Independent triggers act on a
-single leaf. Shared triggers introduce a trial-level on/off mixture across a
-group of leaves.
+Triggers control whether a source starts at all. Independent trigger draws
+factor across members. Shared trigger draws introduce a trial-level on/off
+state across a group of leaves.
 
 \paragraph{Independent trigger.}
 If leaf $a$ has start probability $1-q_a$, then the finite-time distribution is
-simply scaled by that probability:
+scaled by that probability:
 \begin{equation}
 F_a(t) = (1-q_a)F_a^\dagger(t),
 \qquad
-f_a(t) = (1-q_a)f_a^\dagger(t),
+f_a(t) = (1-q_a)f_a^\dagger(t).
 \label{eq:ind-trigger}
 \end{equation}
-where $F_a^\dagger$ and $f_a^\dagger$ are the channels the leaf would have had
-without trigger failure.
+The survival function includes both unfinished started trials and failed-start
+trials:
+\[
+S_a(t) = q_a + (1-q_a)S_a^\dagger(t).
+\]
 
 \paragraph{Shared trigger.}
 If several leaves share one trigger with failure probability $q_g$, then they
-either all start together or all fail together. The trial likelihood is then a
-two-part mixture:
+either all start together or all fail together. The trial likelihood is a
+mixture over trigger states:
 \begin{equation}
 L = (1-q_g)L^{(\mathrm{on})} + q_g L^{(\mathrm{off})}.
 \label{eq:shared-trigger}
 \end{equation}
-This is the only point at which the framework introduces joint start
-dependence across several leaves.
+With several shared triggers, the exact evaluator enumerates the possible
+trigger states and weights their likelihood contributions. This is a source of
+joint dependence, because leaves controlled by the same trigger do not fail
+independently.
 
 \section{Observation Layer}
 
 \subsection{Mixtures}
 
 A component $c$ defines one variant of the model, with weight $\pi_c$.
-Mixtures can then enter the likelihood in two different ways.
+Mixtures can enter the likelihood in two different ways.
 
 \paragraph{Explicit mixture.}
 If the component is observed on a trial, then the trial contribution is simply
 \[
 L = L_c.
 \]
-This is just a model with different trial types. Each trial is assigned to one
-known component, and the likelihood conditions on that assignment.
+This is just a model with known trial types. Each trial is assigned to one
+component, and the likelihood conditions on that assignment.
 
 \paragraph{Marginalized mixture.}
 If the component is not observed, then each trial is treated as arising from
@@ -397,20 +541,19 @@ L = \sum_c \pi_c L_c,
 \sum_c \pi_c = 1.
 \label{eq:mixture}
 \end{equation}
-So an explicit mixture separates known trial types, whereas a marginalized
-mixture keeps the component latent and forms a within-trial mixture over
-possible process variants.
+Weights may be fixed or supplied through trial-wise parameters. The runtime
+context stores only the compact mixture plan needed for evaluation.
 
 \subsection{Outcome remapping and guessing}
 
 The outcome generated by the model need not be the same as the label that is
 observed. Let $M_{yr}$ be the probability that latent outcome $r$ is recorded
-as observed label $y$. Then
+as observed label $y$. When the response time is kept,
 \begin{equation}
 \ell_y(t) = \sum_r M_{yr}\,\ell_r(t).
 \label{eq:remap}
 \end{equation}
-So the observed density is a weighted sum of the latent outcome densities.
+So the observed density is a weighted sum of latent outcome densities.
 
 If the observed label is kept but the response time is discarded, then the
 contribution becomes the integrated mass
@@ -418,6 +561,8 @@ contribution becomes the integrated mass
 p_y = \int_0^\infty \ell_y(t)\,dt.
 \label{eq:missing-rt}
 \end{equation}
+If no response label and no response time are observed, the observation layer
+uses the corresponding no-response mass.
 
 \subsection{Ranked responses}
 
@@ -429,17 +574,59 @@ each trial:
 0 < t_1 < \cdots < t_K.
 \]
 
-This part of the framework is narrower than the single-response case. The
-current ranked implementation is for direct, disjoint outcomes.
-
-In that setting, the ranked likelihood is
+The ranked likelihood is evaluated sequentially. After observing response
+$r_1$ at time $t_1$, the internal sequence state is advanced; then the next
+step evaluates the probability of response $r_2$ at time $t_2$ given that
+state, and so on. In shorthand,
 \begin{equation}
-L_{\mathrm{rank}} =
+L_{\mathrm{rank}}
+=
+\prod_{m=1}^K
+\ell\!\left(r_m,t_m \mid H_{m-1}\right),
+\label{eq:rank-general}
+\end{equation}
+where $H_{m-1}$ is the history and latent sequence state after the first
+$m-1$ observed responses.
+
+For direct, disjoint outcomes this reduces to the familiar simple formula
+\begin{equation}
+L_{\mathrm{rank}}
+=
 \left[\prod_{m=1}^K f_{r_m}(t_m)\right]
 \left[\prod_{j \notin \{r_1,\dots,r_K\}} S_j(t_K)\right].
 \label{eq:rank-simple}
 \end{equation}
-Because the times are ordered, the sequence $t_1 < \cdots < t_K$ already
-encodes which response came first, second, and so on.
+The exact implementation uses the more general sequential step distribution,
+so structured outcomes can still be represented through the same compiled
+transition machinery.
+
+\section{Compiled Evaluation}
+
+The exact evaluator follows one path:
+\[
+\begin{aligned}
+\text{model formula}
+&\rightarrow \text{symbolic transition scenarios} \\
+&\rightarrow \text{winner/non-winner order regions} \\
+&\rightarrow \text{canonical region cells} \\
+&\rightarrow \text{source projection} \\
+&\rightarrow \text{compiled math}.
+\end{aligned}
+\]
+
+This last object is a numerical program. It contains constants, sums, products,
+leaf densities, CDFs, survival functions, expression distributions, and
+integrals where needed. The planning work is done when the likelihood context
+is built. Repeated likelihood calls then reuse the same compiled structure and
+mostly pay the mathematical evaluation cost.
+
+Prepared data may also compress repeated trials. In that case, a compact trial
+with weight $w_i$ contributes
+\[
+w_i \log L_i
+\]
+to the total log-likelihood. If an \texttt{ok} vector is supplied, it is
+interpreted on the compact trials: an excluded compact trial contributes
+$w_i$ times the minimum log-likelihood value.
 
 \end{document}

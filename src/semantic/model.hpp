@@ -53,11 +53,10 @@ struct SourceRef {
 
 struct ParamBinding {
   std::vector<std::string> dist_param_names;
-  std::string q_name;
   std::string t0_name;
 
   bool empty() const noexcept {
-    return dist_param_names.empty() && q_name.empty() && t0_name.empty();
+    return dist_param_names.empty() && t0_name.empty();
   }
 };
 
@@ -85,7 +84,6 @@ struct PoolSpec {
 struct TriggerSpec {
   std::string id;
   std::vector<Index> leaf_indices;
-  std::string q_name;
 };
 
 struct ExprNode {

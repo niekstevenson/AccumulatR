@@ -135,23 +135,30 @@ stop_change_model <- function() {
     add_component("go_stop", members = c("S", "stop", "change")) |>
     add_trigger("stop_trigger", members = c("stop", "change")) |>
     set_mixture(mode = "fixed", weights = c(go_only = .75, go_stop = .25)) |>
-    set_parameters(list(
-      m_go = "S.m",
-      m_stop = "stop.m",
-      m_change = "change.m",
-      s_go = "S.s",
-      s_stop = "stop.s",
-      s_change = "change.s",
-      t0_go = "S.t0",
-      t0_change = "change.t0",
-      q = "stop_trigger"
-    )) |>
+    set_parameters(
+      separate = list(
+        m = c("S", "stop", "change"),
+        s = c("S", "stop", "change"),
+        t0 = c("S", "change")
+      ),
+      rename = c(
+        S.m = "m_go",
+        stop.m = "m_stop",
+        change.m = "m_change",
+        S.s = "s_go",
+        stop.s = "s_stop",
+        change.s = "s_change",
+        S.t0 = "t0_go",
+        change.t0 = "t0_change",
+        stop_trigger = "q"
+      )
+    ) |>
     finalize_model()
   pars <- c(
     m_go = log(0.30), s_go = 0.18, t0_go = 0.00,
     m_stop = log(0.22), s_stop = 0.18,
     m_change = log(0.40), s_change = 0.18, t0_change = 0.00,
-    q = 0.05, S.q = 0.00
+    q = 0.05
   )
   list(structure = structure, pars = pars)
 }
@@ -184,11 +191,18 @@ stim_selective_model <- function() {
     ) |>
     add_component("go", members = c("A", "B")) |>
     add_component("stop", members = c("A", "B", "S1", "IS", "S2")) |>
-    set_parameters(list(
-      m_go = c("A.m", "B.m"),
-      s_go = c("A.s", "B.s"),
-      t0_go = c("A.t0", "B.t0")
-    )) |>
+    set_parameters(
+      separate = list(
+        m = c("S1", "IS", "S2"),
+        s = c("S1", "IS", "S2"),
+        t0 = c("S1", "IS", "S2")
+      ),
+      share = list(
+        m_go = c("A.m", "B.m"),
+        s_go = c("A.s", "B.s"),
+        t0_go = c("A.t0", "B.t0")
+      )
+    ) |>
     finalize_model()
   pars <- c(
     m_go = log(0.30), s_go = 0.18, t0_go = 0.05,

@@ -10,14 +10,33 @@ validation_source_rebuild <- function(repo_root) {
 }
 
 acc_parts <- function(prefix, params) {
-  q_name <- paste0(prefix, ".q")
   t0_name <- paste0(prefix, ".t0")
   list(
     m = unname(params[[paste0(prefix, ".m")]]),
     s = unname(params[[paste0(prefix, ".s")]]),
-    q = if (q_name %in% names(params)) unname(params[[q_name]]) else 0.0,
+    q = 0.0,
     t0 = if (t0_name %in% names(params)) unname(params[[t0_name]]) else 0.0
   )
+}
+
+validation_separate_all_parameters <- function(spec) {
+  lookup <- .default_parameter_lookup(spec)
+  groups <- unique(unname(lookup))
+  groups <- groups[nzchar(groups)]
+  if (length(groups) == 0L) {
+    return(spec)
+  }
+  spec$parameters <- .normalize_parameter_spec(
+    separate = stats::setNames(rep(list(TRUE), length(groups)), groups)
+  )
+  spec
+}
+
+validation_spec_for_params <- function(spec, params) {
+  if (all(names(params) %in% par_names(spec))) {
+    return(spec)
+  }
+  validation_separate_all_parameters(spec)
 }
 
 acc_pdf_scalar <- function(t, p) {
@@ -92,7 +111,11 @@ inhibit_cdf_scalar <- function(ref_pdf,
 engine_loglik <- function(structure, params, data_df, min_ll = -1e12) {
   prepared <- prepare_data(structure, data_df)
   ctx <- make_context(structure)
-  params_df <- build_param_matrix(structure$model_spec, params, trial_df = prepared)
+  params_df <- build_param_matrix(
+    validation_spec_for_params(structure$model_spec, params),
+    params,
+    trial_df = prepared
+  )
   as.numeric(log_likelihood(ctx, prepared, params_df, min_ll = min_ll))
 }
 
@@ -577,14 +600,17 @@ oracle_density_rows <- function(model_id,
   engine_for_data <- function(data_df) {
     prepared <- prepare_data(structure, data_df)
     params_df <- build_param_matrix(
-      structure$model_spec, params, trial_df = prepared)
+      validation_spec_for_params(structure$model_spec, params),
+      params,
+      trial_df = prepared
+    )
     exp(as.numeric(log_likelihood(context, prepared, params_df)))
   }
   rows <- vector("list", length(rts))
   for (i in seq_along(rts)) {
     rt <- rts[[i]]
     data_df <- data.frame(
-      trial = 1L,
+      trials = 1L,
       R = response,
       rt = rt,
       stringsAsFactors = FALSE

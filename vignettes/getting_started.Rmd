@@ -31,10 +31,10 @@ Most workflows in `AccumulatR` follow the same four steps:
 
 ## Core ideas
 
-### Trial
+### `trials`
 
-A `trial` is a single behavioral observation. In the simplest case, each
-row of your data corresponds to one trial.
+`trials` identifies the behavioral observation. In the simplest case,
+each row of your data corresponds to one trial.
 
 ### `R`
 
@@ -111,7 +111,7 @@ response time.
 To fit a model, the usual pattern is:
 
 ```{r}
-prepared <- prepare_data(model, sim[c("trial", "R", "rt")])
+prepared <- prepare_data(model, sim[c("trials", "R", "rt")])
 ctx <- make_context(model)
 log_likelihood(ctx, prepared, param_df)
 ```

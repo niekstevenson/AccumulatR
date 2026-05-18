@@ -61,7 +61,7 @@ spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
 params_df <- build_param_matrix(
   spec,
-  c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0),
+  c(m = 0, s = 0.1),
   n_trials = 2
 )
 data_df <- simulate(structure, params_df, seed = 1)

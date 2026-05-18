@@ -279,9 +279,6 @@ params_stim_sel_split_stop2 <- c(
 
 params_stim_sel_guarded_triggered <- c(
   stim_selective_base_params,
-  trigger_go1.q = 0.1,
-  trigger_stop.q = 0.1,
-  trigger_ignore_go2.q = 0.1,
   `shared_trigger_timing.meanlog` = log(0.02),
   `shared_trigger_timing.sdlog` = 0.05
 )

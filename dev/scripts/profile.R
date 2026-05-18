@@ -39,7 +39,7 @@ model <- race_spec() |>
     "shared_trigger",
     members = c("stop", "change")
   ) |>
-  set_parameters(list(q = "shared_trigger")) |>
+  set_parameters(rename = c(shared_trigger = "q")) |>
   finalize_model()
 
 

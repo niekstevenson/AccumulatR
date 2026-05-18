@@ -143,7 +143,7 @@ example_8_shared_params <- race_spec() |>
   add_accumulator("go_right", "lognormal") |>
   add_outcome("Left", "go_left") |>
   add_outcome("Right", "go_right") |>
-  set_parameters(list(shared_m = c("go_left.m", "go_right.m"))) |>
+  set_parameters(rename = c(m = "shared_m")) |>
   finalize_model()
 params_example_8_shared_params <- c(
   go_left.s = 0.18,
@@ -165,12 +165,14 @@ example_9_advanced_k <- race_spec() |>
   add_pool("B2", c("b2_1", "b2_2")) |>
   add_outcome("A", "A") |>
   add_outcome("B", all_of("B1", "B2")) |>
-  set_parameters(list(
-    A_shared_m = c("a2.m", "a3.m"),
-    A_shared_s = c("a2.s", "a3.s"),
-    Cross_shared_m = c("a1.m", "b1_1.m", "b2_2.m"),
-    Cross_shared_s = c("a1.s", "b1_1.s", "b2_2.s")
-  )) |>
+  set_parameters(
+    share = list(
+      A_shared_m = c("a2.m", "a3.m"),
+      A_shared_s = c("a2.s", "a3.s"),
+      Cross_shared_m = c("a1.m", "b1_1.m", "b2_2.m"),
+      Cross_shared_s = c("a1.s", "b1_1.s", "b2_2.s")
+    )
+  ) |>
   finalize_model()
 params_example_9_advanced_k <- c(
   b1_2.m = log(0.50),
@@ -354,16 +356,18 @@ example_16_k_of_n_inhibitors <- race_spec() |>
     inhibit(all_of("c2", "C13"), by = "b2")
   )) |>
   add_outcome("D", inhibit("D", by = "c3")) |>
-  set_parameters(list(
-    shared_A_m = c("a1.m", "a2.m", "a3.m"),
-    shared_A_s = c("a1.s", "a2.s", "a3.s"),
-    shared_B_m = c("b1.m", "b2.m", "b3.m"),
-    shared_B_s = c("b1.s", "b2.s", "b3.s"),
-    shared_C_m = c("c1.m", "c2.m", "c3.m"),
-    shared_C_s = c("c1.s", "c2.s", "c3.s"),
-    shared_D_m = c("d1.m", "d2.m", "d3.m"),
-    shared_D_s = c("d1.s", "d2.s", "d3.s")
-  )) |>
+  set_parameters(
+    share = list(
+      shared_A_m = c("a1.m", "a2.m", "a3.m"),
+      shared_A_s = c("a1.s", "a2.s", "a3.s"),
+      shared_B_m = c("b1.m", "b2.m", "b3.m"),
+      shared_B_s = c("b1.s", "b2.s", "b3.s"),
+      shared_C_m = c("c1.m", "c2.m", "c3.m"),
+      shared_C_s = c("c1.s", "c2.s", "c3.s"),
+      shared_D_m = c("d1.m", "d2.m", "d3.m"),
+      shared_D_s = c("d1.s", "d2.s", "d3.s")
+    )
+  ) |>
   finalize_model()
 params_example_16_k_of_n_inhibitors <- c(
   shared_A_m = log(0.30),
@@ -451,11 +455,13 @@ example_19_stim_select_stop <- .stim_base_spec() |>
   add_component("go_only", members = c("go1"), attrs = list(component = "go_only")) |>
   add_component("stop_ignore", members = c("go1", "ignore_high", "go2", "stop1", "stop2"), attrs = list(component = "stop_ignore")) |>
   add_component("stop_true", members = c("go1", "ignore_low", "go2", "stop1", "stop2"), attrs = list(component = "stop_true")) |>
-  set_parameters(list(
-    shared_ignore_s = c("ignore_high.s", "ignore_low.s"),
-    shared_stop_sigma = c("stop1.sigma", "stop2.sigma"),
-    shared_stop_tau = c("stop1.tau", "stop2.tau")
-  )) |>
+  set_parameters(
+    share = list(
+      shared_ignore_s = c("ignore_high.s", "ignore_low.s"),
+      shared_stop_sigma = c("stop1.sigma", "stop2.sigma"),
+      shared_stop_tau = c("stop1.tau", "stop2.tau")
+    )
+  ) |>
   set_mixture(mode = "fixed", weights = c(go_only = 0.2, stop_ignore = 0.4, stop_true = 0.4)) |>
   finalize_model()
 

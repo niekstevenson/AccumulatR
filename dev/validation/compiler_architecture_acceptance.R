@@ -83,16 +83,23 @@ model_stim_selective_stop2 <- function() {
     add_outcome("STOP", all_of("S1", "S2")) |>
     add_component("go", members = c("A", "B")) |>
     add_component("stop", members = c("A", "B", "S1", "IS", "S2")) |>
-    set_parameters(list(
-      m_go = c("A.m", "B.m"),
-      s_go = c("A.s", "B.s"),
-      t0_go = c("A.t0", "B.t0")
-    )) |>
+    set_parameters(
+      separate = list(
+        m = c("S1", "IS", "S2"),
+        s = c("S1", "IS", "S2"),
+        t0 = c("S1", "IS", "S2")
+      ),
+      share = list(
+        m_go = c("A.m", "B.m"),
+        s_go = c("A.s", "B.s"),
+        t0_go = c("A.t0", "B.t0")
+      )
+    ) |>
     finalize_model()
 }
 
 compiler_metrics <- function(structure) {
-  as.list(complexity_metrics(make_context(structure))$total)
+  as.list(complexity_metrics(make_context(structure, diagnostics = TRUE))$total)
 }
 
 make_check <- function(model_name, metric, observed, relation, expected, passed) {

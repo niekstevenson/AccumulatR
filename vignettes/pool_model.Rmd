@@ -56,7 +56,7 @@ params_df <- build_param_matrix(model, true_params, n_trials = n_trials)
 sim <- simulate(model, params_df)
 
 data_df <- data.frame(
-  trial = sim$trial,
+  trials = sim$trials,
   R = factor(sim$R),
   rt = sim$rt,
   stringsAsFactors = FALSE

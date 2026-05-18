@@ -667,7 +667,7 @@ race_spec <- function(n_outcomes = 1L) {
     pools = list(),
     outcomes = list(),
     triggers = list(),
-    parameters = list(),
+    parameters = .normalize_parameter_spec(),
     components = list(),
     mixture_options = list(),
     metadata = metadata
@@ -851,18 +851,21 @@ add_trigger <- function(spec, name, members) {
   spec
 }
 
-#' Define the external parameter names for a model
+#' Control parameter grouping and names
 #'
-#' `set_parameters()` lets you rename parameters and share them across
-#' accumulators using one simple mapping. Each list name is the external
-#' parameter name users will supply; each value is one or more internal model
-#' parameter names such as `go.m` or `stop.t0`.
-#'
-#' Any parameters not mentioned in `parameters` keep their default names.
+#' Parameters are grouped by compatible type by default. For example, two
+#' lognormal accumulators expose one `m`, one `s`, and one `t0` parameter unless
+#' you ask for specific parameters to be separate. Triggers expose their trigger name
+#' directly, and sampled mixtures expose automatic `p.<component>` parameters.
 #'
 #' @param spec A `race_spec` object.
-#' @param parameters A named list mapping external names to one or more model
-#'   parameter names.
+#' @param separate Named list. Each name is a grouped public parameter, and each
+#'   value is one or more accumulator ids to split from that group. Use `TRUE`
+#'   to split every member of a group.
+#' @param share Named list mapping a new public name to default public names or
+#'   internal parameter names that should share one value.
+#' @param rename Named character vector mapping current public names to new
+#'   public names.
 #' @return The updated `race_spec`.
 #' @examples
 #' spec <- race_spec() |>
@@ -870,20 +873,16 @@ add_trigger <- function(spec, name, members) {
 #'   add_accumulator("stop", "lognormal") |>
 #'   add_outcome("go", "go") |>
 #'   add_outcome("stop", "stop") |>
-#'   set_parameters(list(
-#'     drift = c("go.m", "stop.m"),
-#'     spread = c("go.s", "stop.s"),
-#'     onset = "go.t0"
-#'   ))
+#'   set_parameters(
+#'     separate = list(m = c("go", "stop")),
+#'     rename = c(s = "spread", t0 = "onset")
+#'   )
 #'
 #' par_names(spec)
 #' @export
-set_parameters <- function(spec, parameters) {
+set_parameters <- function(spec, separate = NULL, share = NULL, rename = NULL) {
   spec <- .validate_race_spec_input(spec, "set_parameters")
-  if (missing(parameters)) {
-    stop("set_parameters() requires a named list of parameter mappings", call. = FALSE)
-  }
-  spec$parameters <- .normalize_parameter_spec(parameters)
+  spec$parameters <- .normalize_parameter_spec(separate = separate, share = share, rename = rename)
   spec
 }
 
@@ -991,7 +990,7 @@ outcome_def <- function(label, expr, options = list()) {
 
 
 
-race_model <- function(accumulators, pools = list(), outcomes, triggers = list(), parameters = list(), components = list(), mixture_options = list(), metadata = list()) {
+race_model <- function(accumulators, pools = list(), outcomes, triggers = list(), parameters = NULL, components = list(), mixture_options = list(), metadata = list()) {
   if (inherits(accumulators, "race_spec")) {
     if (!missing(pools) || !missing(outcomes) || !missing(triggers) || !missing(parameters) || !missing(components) || !missing(mixture_options) || !missing(metadata)) {
       stop("When passing a race_spec, provide it alone and call race_model(spec)")
@@ -1011,6 +1010,7 @@ race_model <- function(accumulators, pools = list(), outcomes, triggers = list()
   if (missing(accumulators) || missing(outcomes)) {
     stop("accumulators and outcomes must be supplied")
   }
+  parameter_spec <- if (is.null(parameters)) .normalize_parameter_spec() else parameters
   structure(list(
     accumulators = lapply(accumulators, clone_obj),
     pools = lapply(pools %||% list(), clone_obj),
@@ -1020,7 +1020,7 @@ race_model <- function(accumulators, pools = list(), outcomes, triggers = list()
       out
     }),
     triggers = lapply(triggers %||% list(), clone_obj),
-    parameters = lapply(parameters %||% list(), clone_obj),
+    parameters = lapply(parameter_spec, clone_obj),
     components = lapply(components %||% list(), clone_obj),
     mixture_options = mixture_options %||% list(),
     metadata = .normalize_observation_metadata(metadata %||% list())
@@ -1039,7 +1039,7 @@ race_model <- function(accumulators, pools = list(), outcomes, triggers = list()
       pools = unname(model$pools),
       outcomes = unname(model$outcomes),
       triggers = unname(model$triggers),
-      parameters = clone_obj(model$parameters %||% list()),
+      parameters = clone_obj(model$parameters),
       components = unname(model$components),
       mixture_options = model$mixture_options %||% list(),
       metadata = metadata
@@ -1402,41 +1402,92 @@ dist_param_names <- function(dist) {
   character(0)
 }
 
-.parameter_targets_from_value <- function(value) {
+.parameter_character <- function(value, what) {
   if (is.null(value)) {
     return(character(0))
   }
   if (is.character(value)) {
     return(as.character(value))
   }
-  stop(
-    "Parameter mappings must be character vectors like c(\"go.m\", \"stop.m\")",
-    call. = FALSE
-  )
+  stop(sprintf("%s must be a character vector", what), call. = FALSE)
 }
 
-.normalize_parameter_spec <- function(parameters) {
-  if (!is.list(parameters)) {
-    stop("set_parameters() requires a named list", call. = FALSE)
+.normalize_parameter_spec <- function(separate = NULL, share = NULL, rename = NULL) {
+  if (is.null(separate)) {
+    separate <- list()
   }
-  parsed <- lapply(parameters, .parameter_targets_from_value)
+  if (!is.list(separate)) {
+    stop("separate must be a named list", call. = FALSE)
+  }
+  separate_names <- names(separate)
+  if (length(separate) > 0L && (is.null(separate_names) || any(!nzchar(separate_names)))) {
+    stop("separate must be a named list", call. = FALSE)
+  }
+  if (anyDuplicated(separate_names)) {
+    stop("separate names must be unique", call. = FALSE)
+  }
+  separate <- lapply(names(separate), function(nm) {
+    value <- separate[[nm]]
+    if (isTRUE(value)) {
+      return(TRUE)
+    }
+    members <- .parameter_character(value, sprintf("separate[['%s']]", nm))
+    members <- unique(members[nzchar(members)])
+    if (length(members) == 0L) {
+      stop(sprintf("separate parameter '%s' must name at least one accumulator or use TRUE", nm), call. = FALSE)
+    }
+    members
+  }) |>
+    stats::setNames(separate_names)
 
-  param_names <- names(parsed)
-  if (is.null(param_names) || any(!nzchar(param_names))) {
-    stop("set_parameters() requires a named list", call. = FALSE)
+  if (is.null(share)) {
+    share <- list()
   }
-  if (anyDuplicated(param_names)) {
-    stop("External parameter names in set_parameters() must be unique", call. = FALSE)
+  if (!is.list(share)) {
+    stop("share must be a named list", call. = FALSE)
   }
-  for (nm in param_names) {
-    targets <- as.character(parsed[[nm]])
+  share_names <- names(share)
+  if (length(share) > 0L && (is.null(share_names) || any(!nzchar(share_names)))) {
+    stop("share must be a named list", call. = FALSE)
+  }
+  if (anyDuplicated(share_names)) {
+    stop("share names must be unique", call. = FALSE)
+  }
+  share <- lapply(names(share), function(nm) {
+    targets <- .parameter_character(share[[nm]], sprintf("share[['%s']]", nm))
     targets <- targets[nzchar(targets)]
     if (length(targets) == 0L) {
-      stop(sprintf("Parameter '%s' must map to at least one model parameter", nm), call. = FALSE)
+      stop(sprintf("share parameter '%s' must reference at least one parameter", nm), call. = FALSE)
     }
-    parsed[[nm]] <- unname(targets)
+    unname(targets)
+  }) |>
+    stats::setNames(share_names)
+
+  if (is.null(rename)) {
+    rename <- character(0)
   }
-  parsed
+  if (!is.character(rename)) {
+    stop("rename must be a named character vector like c(old = 'new')", call. = FALSE)
+  }
+  if (length(rename) > 0L && (is.null(names(rename)) || any(!nzchar(names(rename))))) {
+    stop("rename must be a named character vector like c(old = 'new')", call. = FALSE)
+  }
+  rename_names <- names(rename)
+  rename <- as.character(rename)
+  names(rename) <- rename_names
+  rename <- rename[nzchar(rename)]
+  if (anyDuplicated(names(rename))) {
+    stop("rename source names must be unique", call. = FALSE)
+  }
+  if (anyDuplicated(unname(rename))) {
+    stop("rename target names must be unique", call. = FALSE)
+  }
+
+  list(
+    separate = separate,
+    share = share,
+    rename = rename
+  )
 }
 
 .mixture_weight_parameter_names <- function(spec) {
@@ -1453,16 +1504,48 @@ dist_param_names <- function(dist) {
   setdiff(paste0("p.", ids), paste0("p.", reference))
 }
 
-.default_parameter_names <- function(spec) {
-  params <- character(0)
-  trigger_members <- unique(unlist(lapply(spec$triggers %||% list(), function(trig) {
-    trig$members %||% character(0)
-  }), use.names = FALSE))
-  for (acc in spec$accumulators) {
-    base <- dist_param_names(acc$dist)
-    acc_params <- c(base, if (!acc$id %in% trigger_members) "q", "t0")
-    params <- c(params, paste0(acc$id, ".", acc_params))
+.parameter_base_table <- function(spec) {
+  rows <- list()
+  append_row <- function(internal, public, kind, acc = NA_character_, dist = NA_character_, param = NA_character_, slot = NA_integer_) {
+    rows[[length(rows) + 1L]] <<- list(
+      internal = internal,
+      public = public,
+      kind = kind,
+      accumulator = acc,
+      dist = dist,
+      param = param,
+      slot = slot
+    )
   }
+
+  accs <- spec$accumulators %||% list()
+  for (acc in accs) {
+    acc_id <- acc$id
+    dist <- tolower(acc$dist)
+    params <- dist_param_names(dist)
+    for (slot in seq_along(params)) {
+      param <- params[[slot]]
+      append_row(
+        internal = paste(acc_id, param, sep = "."),
+        public = param,
+        kind = "distribution",
+        acc = acc_id,
+        dist = dist,
+        param = param,
+        slot = slot
+      )
+    }
+    append_row(
+      internal = paste(acc_id, "t0", sep = "."),
+      public = "t0",
+      kind = "t0",
+      acc = acc_id,
+      dist = dist,
+      param = "t0",
+      slot = NA_integer_
+    )
+  }
+
   trigger_ids <- vapply(spec$triggers %||% list(), function(trig) {
     trig$id %||% NA_character_
   }, character(1))
@@ -1477,58 +1560,153 @@ dist_param_names <- function(dist) {
       call. = FALSE
     )
   }
-  trigger_conflicts <- intersect(unique(params), trigger_ids)
-  if (length(trigger_conflicts) > 0L) {
-    stop(
-      sprintf(
-        "Trigger ids conflict with existing parameter names: %s",
-        paste(trigger_conflicts, collapse = ", ")
-      ),
-      call. = FALSE
+  for (trigger_id in trigger_ids) {
+    append_row(
+      internal = trigger_id,
+      public = trigger_id,
+      kind = "trigger",
+      param = trigger_id
     )
   }
-  params <- c(params, trigger_ids)
+
   weight_params <- .mixture_weight_parameter_names(spec)
-  weight_conflicts <- intersect(unique(params), weight_params)
-  if (length(weight_conflicts) > 0L) {
+  for (weight_param in weight_params) {
+    append_row(
+      internal = weight_param,
+      public = weight_param,
+      kind = "mixture",
+      param = weight_param
+    )
+  }
+
+  if (length(rows) == 0L) {
+    return(data.frame(
+      internal = character(0),
+      public = character(0),
+      kind = character(0),
+      accumulator = character(0),
+      dist = character(0),
+      param = character(0),
+      slot = integer(0),
+      stringsAsFactors = FALSE
+    ))
+  }
+
+  out <- do.call(rbind, lapply(rows, as.data.frame, stringsAsFactors = FALSE))
+  out$slot <- as.integer(out$slot)
+  collision <- intersect(
+    unique(out$public[out$kind %in% c("distribution", "t0")]),
+    c(trigger_ids, weight_params)
+  )
+  if (length(collision) > 0L) {
     stop(
       sprintf(
-        "Component weight parameter names conflict with existing parameter names: %s",
-        paste(weight_conflicts, collapse = ", ")
+        "Parameter names conflict with trigger or mixture names: %s",
+        paste(collision, collapse = ", ")
       ),
       call. = FALSE
     )
   }
-  params <- c(params, weight_params)
-  unique(params)
+  out
+}
+
+.default_parameter_lookup <- function(spec) {
+  params <- .parameter_base_table(spec)
+  if (nrow(params) == 0L) {
+    return(setNames(character(0), character(0)))
+  }
+
+  distribution <- params$kind == "distribution"
+  if (any(distribution)) {
+    dist_rows <- params[distribution, , drop = FALSE]
+    split_names <- names(which(vapply(split(dist_rows, dist_rows$param), function(group) {
+      length(unique(group$slot)) > 1L
+    }, logical(1))))
+    for (param in split_names) {
+      idx <- distribution & params$param == param
+      params$public[idx] <- paste(params$dist[idx], params$param[idx], sep = ".")
+    }
+  }
+
+  lookup <- setNames(params$public, params$internal)
+  duplicate_public <- unique(unname(lookup)[duplicated(unname(lookup))])
+  for (public in duplicate_public) {
+    internals <- names(lookup)[lookup == public]
+    kinds <- unique(params$kind[match(internals, params$internal)])
+    if (length(kinds) > 1L || "trigger" %in% kinds || "mixture" %in% kinds) {
+      lookup[internals] <- internals
+    }
+  }
+  lookup
+}
+
+.resolve_parameter_targets <- function(targets, lookup, what) {
+  out <- character(0)
+  for (target in targets) {
+    if (target %in% names(lookup)) {
+      out <- c(out, target)
+      next
+    }
+    if (target %in% unname(lookup)) {
+      out <- c(out, names(lookup)[lookup == target])
+      next
+    }
+    stop(sprintf("%s references unknown parameter '%s'", what, target), call. = FALSE)
+  }
+  unique(out)
+}
+
+.resolve_separate_targets <- function(group_name, members, lookup) {
+  group_targets <- names(lookup)[lookup == group_name]
+  if (length(group_targets) == 0L) {
+    stop(sprintf("separate references unknown grouped parameter '%s'", group_name), call. = FALSE)
+  }
+  if (isTRUE(members)) {
+    return(group_targets)
+  }
+
+  out <- character(0)
+  for (member in members) {
+    internal_name <- paste(member, group_name, sep = ".")
+    if (internal_name %in% group_targets) {
+      out <- c(out, internal_name)
+      next
+    }
+    if (member %in% group_targets) {
+      out <- c(out, member)
+      next
+    }
+    stop(
+      sprintf(
+        "separate[['%s']] references '%s', but '%s' is not in that parameter group",
+        group_name,
+        member,
+        internal_name
+      ),
+      call. = FALSE
+    )
+  }
+  unique(out)
 }
 
 .parameter_name_lookup <- function(spec) {
-  internal_names <- .default_parameter_names(spec)
-  lookup <- setNames(internal_names, internal_names)
-  mappings <- spec$parameters %||% list()
-  if (length(mappings) == 0L) {
-    return(lookup)
+  lookup <- .default_parameter_lookup(spec)
+  mappings <- spec$parameters
+
+  separate <- mappings$separate
+  for (group_name in names(separate)) {
+    targets <- .resolve_separate_targets(group_name, separate[[group_name]], lookup)
+    lookup[targets] <- targets
   }
 
   seen_targets <- character(0)
-  for (external_name in names(mappings)) {
-    targets <- as.character(mappings[[external_name]])
-    unknown <- setdiff(targets, internal_names)
-    if (length(unknown) > 0L) {
-      stop(
-        sprintf(
-          "set_parameters() references unknown parameter(s): %s",
-          paste(unknown, collapse = ", ")
-        ),
-        call. = FALSE
-      )
-    }
+  for (external_name in names(mappings$share)) {
+    targets <- .resolve_parameter_targets(mappings$share[[external_name]], lookup, sprintf("share[['%s']]", external_name))
     duplicated_targets <- intersect(seen_targets, targets)
     if (length(duplicated_targets) > 0L) {
       stop(
         sprintf(
-          "Model parameters cannot be assigned more than once: %s",
+          "share targets cannot be assigned more than once: %s",
           paste(duplicated_targets, collapse = ", ")
         ),
         call. = FALSE
@@ -1537,40 +1715,67 @@ dist_param_names <- function(dist) {
     lookup[targets] <- external_name
     seen_targets <- c(seen_targets, targets)
   }
+
+  rename <- mappings$rename
+  pre_rename_lookup <- lookup
+  for (old_name in names(rename)) {
+    if (!old_name %in% unname(lookup)) {
+      stop(sprintf("rename references unknown public parameter '%s'", old_name), call. = FALSE)
+    }
+    lookup[lookup == old_name] <- unname(rename[[old_name]])
+  }
+  final_groups <- split(names(lookup), unname(lookup))
+  for (public_name in names(final_groups)) {
+    previous_names <- unique(unname(pre_rename_lookup[final_groups[[public_name]]]))
+    if (length(previous_names) > 1L) {
+      stop(
+        sprintf(
+          "rename target '%s' would merge existing parameters (%s); use share for intentional sharing",
+          public_name,
+          paste(previous_names, collapse = ", ")
+        ),
+        call. = FALSE
+      )
+    }
+  }
+
   lookup
 }
 
 .expand_parameter_values <- function(spec, param_values) {
   lookup <- .parameter_name_lookup(spec)
   required <- unique(unname(lookup))
-  missing <- setdiff(required, names(param_values))
-  if (length(missing) > 0L) {
-    missing_targets <- split(names(lookup)[lookup %in% missing], unname(lookup[lookup %in% missing]))
-    defaultable <- vapply(missing, function(external_name) {
-      targets <- missing_targets[[external_name]] %||% character(0)
-      suffixes <- sub("^.*\\.", "", targets)
-      length(suffixes) > 0L && all(suffixes %in% c("q", "t0"))
-    }, logical(1))
+  expanded <- setNames(numeric(length(lookup)), names(lookup))
+  imputed <- character(0)
+  missing <- character(0)
+  used_names <- character(0)
 
-    non_defaultable <- missing[!defaultable]
-    if (length(non_defaultable) > 0L) {
-      stop("Missing parameter values for: ", paste(non_defaultable, collapse = ", "), call. = FALSE)
+  for (external_name in required) {
+    targets <- names(lookup)[lookup == external_name]
+    if (external_name %in% names(param_values)) {
+      expanded[targets] <- as.numeric(param_values[[external_name]])[1]
+      used_names <- c(used_names, external_name)
+      next
     }
-
-    if (any(defaultable)) {
-      default_vals <- vapply(missing[defaultable], function(external_name) {
-        0
-      }, numeric(1))
-      param_values <- c(param_values, stats::setNames(default_vals, missing[defaultable]))
+    suffixes <- sub("^.*\\.", "", targets)
+    defaultable <- length(suffixes) > 0L && all(suffixes %in% "t0")
+    if (defaultable) {
+      expanded[targets] <- 0
+      imputed <- c(imputed, targets)
+      next
     }
+    missing <- c(missing, external_name)
   }
-  expanded <- vapply(names(lookup), function(internal_name) {
-    as.numeric(param_values[[lookup[[internal_name]]]])[1]
-  }, numeric(1))
-  names(expanded) <- names(lookup)
+
   if (length(missing) > 0L) {
-    imputed <- names(lookup)[unname(lookup) %in% missing]
-    attr(expanded, "imputed_internal") <- imputed
+    stop("Missing parameter values for: ", paste(missing, collapse = ", "), call. = FALSE)
+  }
+  if (length(imputed) > 0L) {
+    attr(expanded, "imputed_internal") <- unique(imputed)
+  }
+  unknown <- setdiff(names(param_values), unique(used_names))
+  if (length(unknown) > 0L) {
+    stop("Unknown parameter values: ", paste(unknown, collapse = ", "), call. = FALSE)
   }
   expanded
 }
@@ -1600,7 +1805,7 @@ par_names <- function(model) {
 #' @param param_values Named numeric vector of parameter values.
 #' @param n_trials Number of trials to generate.
 #' @param component Optional component label or labels.
-#' @param trial_df Optional trial/prepared data object. If it includes an
+#' @param trial_df Optional trials/prepared data object. If it includes an
 #'   `accumulator` column, parameter rows are built in that exact row order.
 #' @param layout Optional storage layout.
 #' @return A data frame or matrix of parameter values by trial.
@@ -1608,7 +1813,7 @@ par_names <- function(model) {
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
 #' spec <- add_outcome(spec, "A_win", "A")
-#' vals <- c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0)
+#' vals <- c(m = 0, s = 0.1)
 #' build_param_matrix(spec, vals, n_trials = 2)
 #' @export
 build_param_matrix <- function(model,
@@ -1786,24 +1991,10 @@ build_param_matrix <- function(model,
         stop(sprintf("Missing required parameter '%s' for accumulator '%s'", dist_params[[j]], acc_id))
       }
     }
-    # q
-    q_nm <- paste0(acc_id, ".q")
-    has_explicit_q <- q_nm %in% names(param_values) && !(q_nm %in% imputed_internal)
-    q_val <- if (has_explicit_q) {
-      as.numeric(param_values[[q_nm]])
-    } else if (!is.null(acc$q)) {
-      as.numeric(acc$q)
-    } else {
-      NA_real_
-    }
+    # q is an evaluation column. Public absence probabilities come from triggers.
+    q_val <- if (!is.null(acc$q)) as.numeric(acc$q) else NA_real_
     trig_info <- acc_trigger_map[[acc_id]] %||% NULL
     if (!is.null(trig_info)) {
-      if (has_explicit_q && !isTRUE(all.equal(q_val, trig_info$q))) {
-        stop(sprintf(
-          "Accumulator '%s' provides '%s' but belongs to trigger '%s' with probability %.6f",
-          acc_id, q_nm, trig_info$id, trig_info$q
-        ))
-      }
       q_val <- trig_info$q
     }
     if (!is.finite(q_val) || is.na(q_val)) q_val <- 0
@@ -1851,9 +2042,7 @@ build_param_matrix <- function(model,
       colnames(params_mat) <- col_names
       return(params_mat)
     }
-    trial_col <- if ("trial" %in% names(trial_df)) {
-      as.integer(trial_df$trial)
-    } else if ("trials" %in% names(trial_df)) {
+    trial_col <- if ("trials" %in% names(trial_df)) {
       as.integer(trial_df$trials)
     } else {
       seq_len(nrow(trial_df))
@@ -1867,7 +2056,7 @@ build_param_matrix <- function(model,
 
   # If a pre-built layout is provided (static mapping stored in context), honor it.
   if (!is.null(layout)) {
-    row_trial <- layout$row_trial %||% layout$trial
+    row_trial <- layout$row_trial
     row_acc <- layout$row_acc %||% layout$acc
     if (is.null(row_trial) || is.null(row_acc)) {
       stop("layout must include row_trial and row_acc")
@@ -1934,8 +2123,8 @@ build_param_matrix <- function(model,
     stop("Model must define accumulators")
   }
   df <- as.data.frame(data)
-  if (!"trial" %in% names(df)) {
-    df$trial <- seq_len(nrow(df))
+  if (!"trials" %in% names(df)) {
+    df$trials <- seq_len(nrow(df))
   }
 
   use_component <- "component" %in% names(df)

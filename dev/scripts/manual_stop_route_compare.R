@@ -27,18 +27,25 @@ stop_model <- race_spec() |>
   ) |>
   add_component("go", members = c("A", "B")) |>
   add_component("stop", members = c("A", "B", "S1", "IS", "S2")) |>
-  set_parameters(list(
-    m_go = c("A.m", "B.m"),
-    s_go = c("A.s", "B.s"),
-    t0_go = c("A.t0", "B.t0")
-  )) |>
+  set_parameters(
+    separate = list(
+      m = c("S1", "IS", "S2"),
+      s = c("S1", "IS", "S2"),
+      t0 = c("S1", "IS", "S2")
+    ),
+    share = list(
+      m_go = c("A.m", "B.m"),
+      s_go = c("A.s", "B.s"),
+      t0_go = c("A.t0", "B.t0")
+    )
+  ) |>
   finalize_model()
 
 stop_params <- c(
   m_go = log(0.30), s_go = 0.18, t0_go = 0.05,
-  S1.m = log(0.26), S1.s = 0.18, S1.q = 0.00, S1.t0 = 0.00,
-  IS.m = log(0.35), IS.s = 0.18, IS.q = 0.00, IS.t0 = 0.00,
-  S2.m = log(0.32), S2.s = 0.18, S2.q = 0.00, S2.t0 = 0.00
+  S1.m = log(0.26), S1.s = 0.18, S1.t0 = 0.00,
+  IS.m = log(0.35), IS.s = 0.18, IS.t0 = 0.00,
+  S2.m = log(0.32), S2.s = 0.18, S2.t0 = 0.00
 )
 
 go_a <- go_parts(stop_params)
@@ -151,7 +158,7 @@ visible_probability_fubini <- function(target, competitor) {
 
 compare_observed <- function(response, rt) {
   data_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     component = "stop",
     R = response,
     rt = rt,
@@ -178,7 +185,7 @@ compare_observed <- function(response, rt) {
 
 compare_stop_mass <- function() {
   data_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     component = "stop",
     R = NA_character_,
     rt = NA_real_,

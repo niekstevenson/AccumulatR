@@ -77,7 +77,7 @@ inline PreparedTrialLayout read_prepared_trial_layout(
     SEXP dataSEXP) {
   PreparedTrialLayout layout;
 
-  const SEXP startsSEXP = trusted_data_attr(dataSEXP, "trial_start_rows");
+  const SEXP startsSEXP = trusted_data_attr(dataSEXP, "trials_start_rows");
   layout.trials.start_rows = INTEGER(startsSEXP);
   layout.trials.n = XLENGTH(startsSEXP);
 

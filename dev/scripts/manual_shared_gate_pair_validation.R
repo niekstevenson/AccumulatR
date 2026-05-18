@@ -10,9 +10,9 @@ shared_gate_model <- race_spec() |>
   finalize_model()
 
 shared_gate_params <- c(
-  x1.m = log(0.32), x1.s = 0.18, x1.q = 0.00, x1.t0 = 0.00,
-  x2.m = log(0.36), x2.s = 0.18, x2.q = 0.00, x2.t0 = 0.00,
-  gate.m = log(0.24), gate.s = 0.14, gate.q = 0.00, gate.t0 = 0.00
+  x1.m = log(0.32), x1.s = 0.18, x1.t0 = 0.00,
+  x2.m = log(0.36), x2.s = 0.18, x2.t0 = 0.00,
+  gate.m = log(0.24), gate.s = 0.14, gate.t0 = 0.00
 )
 
 x1_par <- acc_parts("x1", shared_gate_params)
@@ -42,7 +42,7 @@ eval_gate <- function(t) {
 
 compare_density <- function(rt) {
   data_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     R = "RESP",
     rt = rt,
     stringsAsFactors = FALSE

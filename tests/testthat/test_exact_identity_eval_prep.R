@@ -191,24 +191,27 @@ testthat::test_that("exact identity likelihood matches simple two-leaf top-1 for
     add_accumulator("a", "lognormal") |>
     add_accumulator("b", "gamma") |>
     add_outcome("A", "a") |>
-    add_outcome("B", "b")
+    add_outcome("B", "b") |>
+    add_trigger("a_absent", members = "a") |>
+    add_trigger("b_absent", members = "b") |>
+    test_separate_all_parameters()
 
   trial_df <- data.frame(
-    trial = c(1L, 2L),
+    trials = c(1L, 2L),
     R = c("A", "B"),
     rt = c(0.30, 0.55),
     stringsAsFactors = FALSE
   )
   params <- c(
-    a.m = log(0.32), a.s = 0.18, a.q = 0.10, a.t0 = 0.02,
-    b.shape = 3.0, b.rate = 8.0, b.q = 0.20, b.t0 = 0.05
+    a.m = log(0.32), a.s = 0.18, a_absent = 0.10, a.t0 = 0.02,
+    b.shape = 3.0, b.rate = 8.0, b_absent = 0.20, b.t0 = 0.05
   )
   out <- run_public_loglik(spec, trial_df, params)
 
-  pa1 <- (1 - params[["a.q"]]) * dlnorm(trial_df$rt[[1]] - params[["a.t0"]], params[["a.m"]], params[["a.s"]])
-  sb1 <- 1 - (1 - params[["b.q"]]) * pgamma(trial_df$rt[[1]] - params[["b.t0"]], shape = params[["b.shape"]], rate = params[["b.rate"]])
-  pb2 <- (1 - params[["b.q"]]) * dgamma(trial_df$rt[[2]] - params[["b.t0"]], shape = params[["b.shape"]], rate = params[["b.rate"]])
-  sa2 <- 1 - (1 - params[["a.q"]]) * plnorm(trial_df$rt[[2]] - params[["a.t0"]], params[["a.m"]], params[["a.s"]])
+  pa1 <- (1 - params[["a_absent"]]) * dlnorm(trial_df$rt[[1]] - params[["a.t0"]], params[["a.m"]], params[["a.s"]])
+  sb1 <- 1 - (1 - params[["b_absent"]]) * pgamma(trial_df$rt[[1]] - params[["b.t0"]], shape = params[["b.shape"]], rate = params[["b.rate"]])
+  pb2 <- (1 - params[["b_absent"]]) * dgamma(trial_df$rt[[2]] - params[["b.t0"]], shape = params[["b.shape"]], rate = params[["b.rate"]])
+  sa2 <- 1 - (1 - params[["a_absent"]]) * plnorm(trial_df$rt[[2]] - params[["a.t0"]], params[["a.m"]], params[["a.s"]])
   expected <- log(c(pa1 * sb1, pb2 * sa2))
 
   testthat::expect_equal(out, sum(expected), tolerance = 1e-10)
@@ -221,18 +224,19 @@ testthat::test_that("exact identity likelihood matches pooled top-1 formula", {
     add_accumulator("c", "lognormal") |>
     add_pool("ab", members = c("a", "b"), k = 1L) |>
     add_outcome("AB", "ab") |>
-    add_outcome("C", "c")
+    add_outcome("C", "c") |>
+    test_separate_all_parameters()
 
   trial_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     R = "AB",
     rt = 0.42,
     stringsAsFactors = FALSE
   )
   params <- c(
-    a.m = log(0.35), a.s = 0.16, a.q = 0.00, a.t0 = 0.00,
-    b.m = log(0.45), b.s = 0.18, b.q = 0.00, b.t0 = 0.00,
-    c.m = log(0.55), c.s = 0.20, c.q = 0.00, c.t0 = 0.00
+    a.m = log(0.35), a.s = 0.16, a.t0 = 0.00,
+    b.m = log(0.45), b.s = 0.18, b.t0 = 0.00,
+    c.m = log(0.55), c.s = 0.20, c.t0 = 0.00
   )
   out <- run_public_loglik(spec, trial_df, params)
 
@@ -255,18 +259,19 @@ testthat::test_that("exact identity likelihood handles contiguous trials across 
     add_outcome("A", "a") |>
     add_outcome("B", "b") |>
     add_component("one", members = c("a")) |>
-    add_component("two", members = c("a", "b"))
+    add_component("two", members = c("a", "b")) |>
+    test_separate_all_parameters()
 
   trial_df <- data.frame(
-    trial = 1:3,
+    trials = 1:3,
     component = c("one", "one", "two"),
     R = c("A", "A", "B"),
     rt = c(0.30, 0.33, 0.40),
     stringsAsFactors = FALSE
   )
   params <- c(
-    a.m = log(0.31), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
-    b.m = log(0.44), b.s = 0.18, b.q = 0.00, b.t0 = 0.00
+    a.m = log(0.31), a.s = 0.15, a.t0 = 0.00,
+    b.m = log(0.44), b.s = 0.18, b.t0 = 0.00
   )
   out <- run_public_loglik(spec, trial_df, params)
 
@@ -285,17 +290,18 @@ testthat::test_that("exact identity likelihood matches LBA top-1 formula", {
     add_accumulator("a", "LBA") |>
     add_accumulator("b", "lognormal") |>
     add_outcome("A", "a") |>
-    add_outcome("B", "b")
+    add_outcome("B", "b") |>
+    test_separate_all_parameters()
 
   trial_df <- data.frame(
-    trial = c(1L, 2L),
+    trials = c(1L, 2L),
     R = c("A", "B"),
     rt = c(0.55, 0.68),
     stringsAsFactors = FALSE
   )
   params <- c(
-    a.v = 2.0, a.B = 1.2, a.A = 0.4, a.sv = 0.6, a.q = 0.0, a.t0 = 0.05,
-    b.m = log(0.60), b.s = 0.18, b.q = 0.0, b.t0 = 0.02
+    a.v = 2.0, a.B = 1.2, a.A = 0.4, a.sv = 0.6, a.t0 = 0.05,
+    b.m = log(0.60), b.s = 0.18, b.t0 = 0.02
   )
   out <- run_public_loglik(spec, trial_df, params)
 
@@ -316,17 +322,18 @@ testthat::test_that("exact identity likelihood matches RDM top-1 formula", {
     add_accumulator("a", "RDM") |>
     add_accumulator("b", "lognormal") |>
     add_outcome("A", "a") |>
-    add_outcome("B", "b")
+    add_outcome("B", "b") |>
+    test_separate_all_parameters()
 
   trial_df <- data.frame(
-    trial = c(1L, 2L),
+    trials = c(1L, 2L),
     R = c("A", "B"),
     rt = c(0.52, 0.72),
     stringsAsFactors = FALSE
   )
   params <- c(
-    a.v = 1.5, a.B = 1.0, a.A = 0.3, a.s = 1.1, a.q = 0.0, a.t0 = 0.04,
-    b.m = log(0.62), b.s = 0.17, b.q = 0.0, b.t0 = 0.01
+    a.v = 1.5, a.B = 1.0, a.A = 0.3, a.s = 1.1, a.t0 = 0.04,
+    b.m = log(0.62), b.s = 0.17, b.t0 = 0.01
   )
   out <- run_public_loglik(spec, trial_df, params)
 
@@ -347,17 +354,18 @@ testthat::test_that("exact identity likelihood truncates exgauss at the elapsed-
     add_accumulator("a", "exgauss") |>
     add_accumulator("b", "lognormal") |>
     add_outcome("A", "a") |>
-    add_outcome("B", "b")
+    add_outcome("B", "b") |>
+    test_separate_all_parameters()
 
   trial_df <- data.frame(
-    trial = c(1L, 2L),
+    trials = c(1L, 2L),
     R = c("A", "B"),
     rt = c(0.30, 0.58),
     stringsAsFactors = FALSE
   )
   params <- c(
-    a.mu = -0.08, a.sigma = 0.10, a.tau = 0.22, a.q = 0.00, a.t0 = 0.07,
-    b.m = log(0.52), b.s = 0.16, b.q = 0.00, b.t0 = 0.03
+    a.mu = -0.08, a.sigma = 0.10, a.tau = 0.22, a.t0 = 0.07,
+    b.m = log(0.52), b.s = 0.16, b.t0 = 0.03
   )
   out <- run_public_loglik(spec, trial_df, params)
 
@@ -379,10 +387,11 @@ testthat::test_that("identity likelihood supports shared-trigger no-response tri
     add_accumulator("go2", "lognormal") |>
     add_outcome("R1", "go1") |>
     add_outcome("R2", "go2") |>
-    add_trigger("shared_trigger", members = c("go1", "go2"))
+    add_trigger("shared_trigger", members = c("go1", "go2")) |>
+    test_separate_all_parameters()
 
   trial_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     R = NA_character_,
     rt = NA_real_,
     stringsAsFactors = FALSE
@@ -405,10 +414,11 @@ testthat::test_that("identity likelihood supports independent-trigger no-respons
     add_outcome("Left", "go_left") |>
     add_outcome("Right", "go_right") |>
     add_trigger("q_left", members = "go_left") |>
-    add_trigger("q_right", members = "go_right")
+    add_trigger("q_right", members = "go_right") |>
+    test_separate_all_parameters()
 
   trial_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     R = NA_character_,
     rt = NA_real_,
     stringsAsFactors = FALSE

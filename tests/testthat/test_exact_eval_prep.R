@@ -13,14 +13,14 @@ testthat::test_that("compressed prepared trials expand after compact ok filterin
   structure <- finalize_model(spec)
   ctx <- make_context(structure)
   data_df <- data.frame(
-    trial = 1:5,
+    trials = 1:5,
     R = "A_win",
     rt = c(0.3, 0.3, 0.4, 0.3, 0.4),
     stringsAsFactors = FALSE
   )
   full <- prepare_data(structure, data_df)
   compressed <- prepare_data(structure, data_df, compress = TRUE)
-  params <- c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0)
+  params <- c(m = 0, s = 0.1, t0 = 0)
   full_params <- build_param_matrix(spec, params, n_trials = 5)
   compressed_params <- build_param_matrix(spec, params, n_trials = 2)
 
@@ -59,11 +59,12 @@ testthat::test_that("exact kernel carries positive-mass tie terms for the guarde
     add_accumulator("gate_shared", "lognormal") |>
     add_accumulator("stop_control", "lognormal") |>
     add_outcome("Fast", inhibit(all_of("go_fast", "gate_shared"), by = "stop_control")) |>
-    add_outcome("Slow", all_of("go_slow", "gate_shared"))
+    add_outcome("Slow", all_of("go_slow", "gate_shared")) |>
+    test_separate_all_parameters()
 
   t_obs <- 0.30
   trial_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     R = "Fast",
     rt = t_obs,
     stringsAsFactors = FALSE
@@ -71,19 +72,15 @@ testthat::test_that("exact kernel carries positive-mass tie terms for the guarde
   params <- c(
     go_fast.m = log(0.28),
     go_fast.s = 0.18,
-    go_fast.q = 0.00,
     go_fast.t0 = 0.00,
     go_slow.m = log(0.34),
     go_slow.s = 0.18,
-    go_slow.q = 0.00,
     go_slow.t0 = 0.00,
     gate_shared.m = log(0.30),
     gate_shared.s = 0.16,
-    gate_shared.q = 0.00,
     gate_shared.t0 = 0.00,
     stop_control.m = log(0.27),
     stop_control.s = 0.15,
-    stop_control.q = 0.00,
     stop_control.t0 = 0.00
   )
   out <- run_public_loglik(spec, trial_df, params)
@@ -116,19 +113,20 @@ testthat::test_that("exact kernel handles nested logical-guard outcomes directly
     add_accumulator("s1", "lognormal") |>
     add_accumulator("is", "lognormal") |>
     add_accumulator("s2", "lognormal") |>
-    add_outcome("STOP", all_of("s1", inhibit("s2", by = "is")))
+    add_outcome("STOP", all_of("s1", inhibit("s2", by = "is"))) |>
+    test_separate_all_parameters()
 
   t_obs <- 0.42
   trial_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     R = "STOP",
     rt = t_obs,
     stringsAsFactors = FALSE
   )
   params <- c(
-    s1.m = log(0.35), s1.s = 0.16, s1.q = 0.00, s1.t0 = 0.00,
-    is.m = log(0.30), is.s = 0.14, is.q = 0.00, is.t0 = 0.00,
-    s2.m = log(0.28), s2.s = 0.14, s2.q = 0.00, s2.t0 = 0.00
+    s1.m = log(0.35), s1.s = 0.16, s1.t0 = 0.00,
+    is.m = log(0.30), is.s = 0.14, is.t0 = 0.00,
+    s2.m = log(0.28), s2.s = 0.14, s2.t0 = 0.00
   )
   out <- run_public_loglik(spec, trial_df, params)
 
@@ -155,19 +153,20 @@ testthat::test_that("exact kernel handles none_of as an absence condition inside
     add_accumulator("stop", "lognormal") |>
     add_accumulator("other", "lognormal") |>
     add_outcome("RESPOND", all_of("go", none_of("stop"))) |>
-    add_outcome("OTHER", "other")
+    add_outcome("OTHER", "other") |>
+    test_separate_all_parameters()
 
   t_obs <- 0.41
   trial_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     R = "RESPOND",
     rt = t_obs,
     stringsAsFactors = FALSE
   )
   params <- c(
-    go.m = log(0.31), go.s = 0.15, go.q = 0.00, go.t0 = 0.00,
-    stop.m = log(0.27), stop.s = 0.13, stop.q = 0.00, stop.t0 = 0.00,
-    other.m = log(0.45), other.s = 0.17, other.q = 0.00, other.t0 = 0.00
+    go.m = log(0.31), go.s = 0.15, go.t0 = 0.00,
+    stop.m = log(0.27), stop.s = 0.13, stop.t0 = 0.00,
+    other.m = log(0.45), other.s = 0.17, other.t0 = 0.00
   )
   out <- run_public_loglik(spec, trial_df, params)
 
@@ -182,17 +181,18 @@ testthat::test_that("exact kernel rejects logical-not branches inside first_of/o
   spec <- race_spec() |>
     add_accumulator("go", "lognormal") |>
     add_accumulator("stop", "lognormal") |>
-    add_outcome("RESPOND", first_of("go", none_of("stop")))
+    add_outcome("RESPOND", first_of("go", none_of("stop"))) |>
+    test_separate_all_parameters()
 
   trial_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     R = "RESPOND",
     rt = 0.30,
     stringsAsFactors = FALSE
   )
   params <- c(
-    go.m = log(0.31), go.s = 0.15, go.q = 0.00, go.t0 = 0.00,
-    stop.m = log(0.27), stop.s = 0.13, stop.q = 0.00, stop.t0 = 0.00
+    go.m = log(0.31), go.s = 0.15, go.t0 = 0.00,
+    stop.m = log(0.27), stop.s = 0.13, stop.t0 = 0.00
   )
   testthat::expect_error(
     run_public_loglik(spec, trial_df, params),
@@ -208,20 +208,21 @@ testthat::test_that("exact kernel handles overlapping guarded competitors withou
     add_accumulator("d", "lognormal") |>
     add_outcome("C1", inhibit("a", by = "stop")) |>
     add_outcome("C2", inhibit("b", by = "stop")) |>
-    add_outcome("D", "d")
+    add_outcome("D", "d") |>
+    test_separate_all_parameters()
 
   t_obs <- 0.43
   trial_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     R = "D",
     rt = t_obs,
     stringsAsFactors = FALSE
   )
   params <- c(
-    a.m = log(0.29), a.s = 0.17, a.q = 0.00, a.t0 = 0.00,
-    b.m = log(0.35), b.s = 0.16, b.q = 0.00, b.t0 = 0.00,
-    stop.m = log(0.24), stop.s = 0.14, stop.q = 0.00, stop.t0 = 0.00,
-    d.m = log(0.46), d.s = 0.19, d.q = 0.00, d.t0 = 0.00
+    a.m = log(0.29), a.s = 0.17, a.t0 = 0.00,
+    b.m = log(0.35), b.s = 0.16, b.t0 = 0.00,
+    stop.m = log(0.24), stop.s = 0.14, stop.t0 = 0.00,
+    d.m = log(0.46), d.s = 0.19, d.t0 = 0.00
   )
   out <- run_public_loglik(spec, trial_df, params)
 

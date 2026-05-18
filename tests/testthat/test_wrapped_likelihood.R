@@ -7,17 +7,18 @@ testthat::test_that("guess outcomes are aggregated in observed finite-label like
     add_outcome("Right", "go_right") |>
     add_outcome("TIMEOUT", "timeout", options = list(
       guess = list(labels = c("Left", "Right"), weights = c(0.2, 0.8), rt_policy = "keep")
-    ))
+    )) |>
+    test_separate_all_parameters()
 
   structure <- finalize_model(spec)
   params <- c(
-    go_left.m = log(0.30), go_left.s = 0.18, go_left.q = 0.00, go_left.t0 = 0.00,
-    go_right.m = log(0.325), go_right.s = 0.18, go_right.q = 0.00, go_right.t0 = 0.00,
-    timeout.m = log(0.25), timeout.s = 0.10, timeout.q = 0.00, timeout.t0 = 0.00
+    go_left.m = log(0.30), go_left.s = 0.18, go_left.t0 = 0.00,
+    go_right.m = log(0.325), go_right.s = 0.18, go_right.t0 = 0.00,
+    timeout.m = log(0.25), timeout.s = 0.10, timeout.t0 = 0.00
   )
   rt_obs <- 0.35
   data_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     R = "Right",
     rt = rt_obs,
     stringsAsFactors = FALSE

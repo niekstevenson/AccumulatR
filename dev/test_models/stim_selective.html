@@ -648,7 +648,7 @@ hand-written likelihood and the engine.</p>
 
 engine_likelihood &lt;- function(response, rt) {
   data_df &lt;- data.frame(
-    trial = 1L,
+    trials = 1L,
     component = &quot;stop&quot;,
     R = if (is.na(response)) NA_character_ else response,
     rt = rt,

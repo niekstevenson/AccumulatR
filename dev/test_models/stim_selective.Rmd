@@ -36,11 +36,18 @@ model <- race_spec() |>
   ) |>
   add_component("go", members = c("A", "B")) |>
   add_component("stop", members = c("A", "B", "S1", "IS", "S2")) |>
-  set_parameters(list(
-    m_go = c("A.m", "B.m"),
-    s_go = c("A.s", "B.s"),
-    t0_go = c("A.t0", "B.t0")
-  )) |>
+  set_parameters(
+    separate = list(
+      m = c("S1", "IS", "S2"),
+      s = c("S1", "IS", "S2"),
+      t0 = c("S1", "IS", "S2")
+    ),
+    share = list(
+      m_go = c("A.m", "B.m"),
+      s_go = c("A.s", "B.s"),
+      t0_go = c("A.t0", "B.t0")
+    )
+  ) |>
   finalize_model()
 ```
 
@@ -318,7 +325,7 @@ ctx <- make_context(model)
 
 engine_likelihood <- function(response, rt) {
   data_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     component = "stop",
     R = if (is.na(response)) NA_character_ else response,
     rt = rt,

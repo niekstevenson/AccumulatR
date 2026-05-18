@@ -26,6 +26,7 @@ testthat::test_that("go-component likelihood matches the simple A/B race", {
     ) |>
     add_component("go", members = c("A", "B")) |>
     add_component("stop", members = c("A", "B", "S1", "IS", "S2")) |>
+    test_separate_all_parameters() |>
     finalize_model()
 
   simple <- race_spec() |>
@@ -33,29 +34,30 @@ testthat::test_that("go-component likelihood matches the simple A/B race", {
     add_accumulator("B", "lognormal") |>
     add_outcome("A", "A") |>
     add_outcome("B", "B") |>
+    test_separate_all_parameters() |>
     finalize_model()
 
   params_guarded <- c(
-    A.m = log(0.30), A.s = 0.18, A.q = 0.00, A.t0 = 0.00,
-    B.m = log(0.33), B.s = 0.18, B.q = 0.00, B.t0 = 0.00,
-    S1.m = log(0.26), S1.s = 0.18, S1.q = 0.00, S1.t0 = 0.00,
-    IS.m = log(0.35), IS.s = 0.18, IS.q = 0.00, IS.t0 = 0.00,
-    S2.m = log(0.32), S2.s = 0.18, S2.q = 0.00, S2.t0 = 0.00
+    A.m = log(0.30), A.s = 0.18, A.t0 = 0.00,
+    B.m = log(0.33), B.s = 0.18, B.t0 = 0.00,
+    S1.m = log(0.26), S1.s = 0.18, S1.t0 = 0.00,
+    IS.m = log(0.35), IS.s = 0.18, IS.t0 = 0.00,
+    S2.m = log(0.32), S2.s = 0.18, S2.t0 = 0.00
   )
   params_simple <- c(
-    A.m = log(0.30), A.s = 0.18, A.q = 0.00, A.t0 = 0.00,
-    B.m = log(0.33), B.s = 0.18, B.q = 0.00, B.t0 = 0.00
+    A.m = log(0.30), A.s = 0.18, A.t0 = 0.00,
+    B.m = log(0.33), B.s = 0.18, B.t0 = 0.00
   )
 
   data_guarded <- data.frame(
-    trial = 1:3,
+    trials = 1:3,
     component = "go",
     R = c("A", "B", "A"),
     rt = c(0.42, 0.47, 0.51),
     stringsAsFactors = FALSE
   )
   data_simple <- data.frame(
-    trial = 1:3,
+    trials = 1:3,
     R = c("A", "B", "A"),
     rt = c(0.42, 0.47, 0.51),
     stringsAsFactors = FALSE

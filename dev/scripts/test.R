@@ -67,7 +67,7 @@ for (example_id in example_ids) {
   # # 3. Simulate data and compute observed probabilities
   # sim <- simulate(model_spec, params_df, seed = seed, keep_component = TRUE)
   # data_df <- data.frame(
-  #   trial = sim$trial,
+  #   trials = sim$trials,
   #   R = factor(sim$R),
   #   rt = sim$rt,
   #   stringsAsFactors = FALSE

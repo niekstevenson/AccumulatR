@@ -6,13 +6,17 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_accumulator("b", "lognormal") |>
         add_outcome("A", "a") |>
         add_outcome("B", "b") |>
+        add_trigger("a_absent", members = "a") |>
+        add_trigger("b_absent", members = "b") |>
         finalize_model()
       params <- c(
-        a.m = log(0.32), a.s = 0.18, a.q = 0.15, a.t0 = 0.02,
-        b.m = log(0.39), b.s = 0.16, b.q = 0.30, b.t0 = 0.01
+        a.m = log(0.32), a.s = 0.18, a_absent = 0.15, a.t0 = 0.02,
+        b.m = log(0.39), b.s = 0.16, b_absent = 0.30, b.t0 = 0.01
       )
       a <- acc_parts("a", params)
       b <- acc_parts("b", params)
+      a$q <- params[["a_absent"]]
+      b$q <- params[["b_absent"]]
       rows <- list()
       for (check in list(list(label = "A", rt = 0.45), list(label = "B", rt = 0.52))) {
         target <- if (identical(check$label, "A")) a else b
@@ -21,7 +25,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = check$label, rt = check$rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = check$label, rt = check$rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "independent_trigger_two_way",
@@ -29,7 +33,7 @@ validation_cases <- function(include_adversarial = FALSE) {
           engine,
           manual,
           1e-9,
-          "Two-way race with independent q semantics"
+          "Two-way race with independent trigger semantics"
         )
       }
       do.call(rbind, rows)
@@ -45,9 +49,9 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("B", "b") |>
         finalize_model()
       params <- c(
-        a1.m = log(0.28), a1.s = 0.17, a1.q = 0.00, a1.t0 = 0.00,
-        a2.m = log(0.34), a2.s = 0.15, a2.q = 0.00, a2.t0 = 0.00,
-        b.m = log(0.42), b.s = 0.18, b.q = 0.00, b.t0 = 0.00
+        a1.m = log(0.28), a1.s = 0.17, a1.t0 = 0.00,
+        a2.m = log(0.34), a2.s = 0.15, a2.t0 = 0.00,
+        b.m = log(0.42), b.s = 0.18, b.t0 = 0.00
       )
       a1 <- acc_parts("a1", params)
       a2 <- acc_parts("a2", params)
@@ -62,7 +66,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "A", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "A", rt = rt, stringsAsFactors = FALSE)
         )
         check_row("pool_vs_competitor", "A_rt_0.40", engine, manual, 1e-9, "k = 1 pool winner against competitor")
       }
@@ -74,7 +78,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "B", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "B", rt = rt, stringsAsFactors = FALSE)
         )
         check_row("pool_vs_competitor", "B_rt_0.48", engine, manual, 1e-9, "Competitor outruns pooled branch")
       }
@@ -91,10 +95,10 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("D", "d") |>
         finalize_model()
       params <- c(
-        a.m = log(0.29), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
-        b.m = log(0.34), b.s = 0.16, b.q = 0.00, b.t0 = 0.00,
-        c.m = log(0.38), c.s = 0.14, c.q = 0.00, c.t0 = 0.00,
-        d.m = log(0.44), d.s = 0.17, d.q = 0.00, d.t0 = 0.00
+        a.m = log(0.29), a.s = 0.15, a.t0 = 0.00,
+        b.m = log(0.34), b.s = 0.16, b.t0 = 0.00,
+        c.m = log(0.38), c.s = 0.14, c.t0 = 0.00,
+        d.m = log(0.44), d.s = 0.17, d.t0 = 0.00
       )
       a <- acc_parts("a", params)
       b <- acc_parts("b", params)
@@ -109,7 +113,7 @@ validation_cases <- function(include_adversarial = FALSE) {
       engine <- engine_density_or_mass(
         structure,
         params,
-        data.frame(trial = 1L, R = "ABC", rt = rt, stringsAsFactors = FALSE)
+        data.frame(trials = 1L, R = "ABC", rt = rt, stringsAsFactors = FALSE)
       )
       check_row(
         "all_of_three_way",
@@ -131,10 +135,10 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("D", "d") |>
         finalize_model()
       params <- c(
-        a.m = log(0.27), a.s = 0.14, a.q = 0.00, a.t0 = 0.00,
-        b.m = log(0.31), b.s = 0.16, b.q = 0.00, b.t0 = 0.00,
-        c.m = log(0.36), c.s = 0.15, c.q = 0.00, c.t0 = 0.00,
-        d.m = log(0.43), d.s = 0.17, d.q = 0.00, d.t0 = 0.00
+        a.m = log(0.27), a.s = 0.14, a.t0 = 0.00,
+        b.m = log(0.31), b.s = 0.16, b.t0 = 0.00,
+        c.m = log(0.36), c.s = 0.15, c.t0 = 0.00,
+        d.m = log(0.43), d.s = 0.17, d.t0 = 0.00
       )
       a <- acc_parts("a", params)
       b <- acc_parts("b", params)
@@ -149,7 +153,7 @@ validation_cases <- function(include_adversarial = FALSE) {
       engine <- engine_density_or_mass(
         structure,
         params,
-        data.frame(trial = 1L, R = "ABC_FIRST", rt = rt, stringsAsFactors = FALSE)
+        data.frame(trials = 1L, R = "ABC_FIRST", rt = rt, stringsAsFactors = FALSE)
       )
       check_row(
         "first_of_three_way",
@@ -168,8 +172,8 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("B", "b") |>
         finalize_model()
       params <- c(
-        a.m = log(0.25), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
-        b.m = log(0.35), b.s = 0.20, b.q = 0.00, b.t0 = 0.00
+        a.m = log(0.25), a.s = 0.15, a.t0 = 0.00,
+        b.m = log(0.35), b.s = 0.20, b.t0 = 0.00
       )
       a <- acc_parts("a", params)
       b <- acc_parts("b", params)
@@ -182,7 +186,7 @@ validation_cases <- function(include_adversarial = FALSE) {
       engine <- engine_density_or_mass(
         structure,
         params,
-        data.frame(trial = 1L, R = "B", rt = rt, stringsAsFactors = FALSE)
+        data.frame(trials = 1L, R = "B", rt = rt, stringsAsFactors = FALSE)
       )
       check_row(
         "chained_onset_single_outcome",
@@ -202,13 +206,13 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("B", "b") |>
         finalize_model()
       params <- c(
-        a.m = log(0.30), a.s = 0.20, a.q = 0.00, a.t0 = 0.00,
-        b.m = log(0.45), b.s = 0.25, b.q = 0.00, b.t0 = 0.00
+        a.m = log(0.30), a.s = 0.20, a.t0 = 0.00,
+        b.m = log(0.45), b.s = 0.25, b.t0 = 0.00
       )
       a <- acc_parts("a", params)
       b <- acc_parts("b", params)
       data_df <- data.frame(
-        trial = 1L,
+        trials = 1L,
         R = "A",
         rt = 0.30,
         R2 = "B",
@@ -235,13 +239,13 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("B", "b") |>
         finalize_model()
       params <- c(
-        a.m = log(0.25), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
-        b.m = log(0.35), b.s = 0.20, b.q = 0.00, b.t0 = 0.00
+        a.m = log(0.25), a.s = 0.15, a.t0 = 0.00,
+        b.m = log(0.35), b.s = 0.20, b.t0 = 0.00
       )
       a <- acc_parts("a", params)
       b <- acc_parts("b", params)
       data_df <- data.frame(
-        trial = 1L,
+        trials = 1L,
         R = "A",
         rt = 0.30,
         R2 = "B",
@@ -267,10 +271,10 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_accumulator("change", "lognormal") |>
         add_outcome("S", inhibit("s", by = "stop")) |>
         add_outcome("X", all_of("change", "stop")) |>
-        add_trigger("tg", members = c("stop", "change"), q = 0.05, draw = "shared") |>
+        add_trigger("tg", members = c("stop", "change")) |>
         finalize_model()
       params <- c(
-        s.m = log(0.28), s.s = 0.12, s.q = 0.00, s.t0 = 0.00,
+        s.m = log(0.28), s.s = 0.12, s.t0 = 0.00,
         stop.m = log(0.35), stop.s = 0.15, stop.t0 = 0.00,
         change.m = log(0.40), change.s = 0.18, change.t0 = 0.00,
         tg = 0.05
@@ -283,7 +287,7 @@ validation_cases <- function(include_adversarial = FALSE) {
       engine <- engine_density_or_mass(
         structure,
         params,
-        data.frame(trial = 1L, R = "S", rt = rt, stringsAsFactors = FALSE)
+        data.frame(trials = 1L, R = "S", rt = rt, stringsAsFactors = FALSE)
       )
       check_row(
         "shared_trigger_conditioning",
@@ -302,27 +306,34 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_accumulator("change", "lognormal") |>
         add_outcome("S", inhibit("S", by = "stop")) |>
         add_outcome("X", all_of("change", "stop")) |>
-        add_component("go_only", members = "S", weight = .75) |>
-        add_component("go_stop", members = c("S", "stop", "change"), weight = .25) |>
-        add_trigger("stop_trigger", members = c("stop", "change"), q = 0.05) |>
-        set_mixture_options(mode = "fixed") |>
-        set_parameters(list(
-          m_go = "S.m",
-          m_stop = "stop.m",
-          m_change = "change.m",
-          s_go = "S.s",
-          s_stop = "stop.s",
-          s_change = "change.s",
-          t0_go = "S.t0",
-          t0_change = "change.t0",
-          q = c("stop.q", "change.q")
-        )) |>
+        add_component("go_only", members = "S") |>
+        add_component("go_stop", members = c("S", "stop", "change")) |>
+        add_trigger("stop_trigger", members = c("stop", "change")) |>
+        set_mixture(mode = "fixed", weights = c(go_only = .75, go_stop = .25)) |>
+        set_parameters(
+          separate = list(
+            m = c("S", "stop", "change"),
+            s = c("S", "stop", "change"),
+            t0 = c("S", "change")
+          ),
+          rename = c(
+            S.m = "m_go",
+            stop.m = "m_stop",
+            change.m = "m_change",
+            S.s = "s_go",
+            stop.s = "s_stop",
+            change.s = "s_change",
+            S.t0 = "t0_go",
+            change.t0 = "t0_change",
+            stop_trigger = "q"
+          )
+        ) |>
         finalize_model()
       params <- c(
         m_go = log(0.30), s_go = 0.18, t0_go = 0.00,
         m_stop = log(0.22), s_stop = 0.18,
         m_change = log(0.40), s_change = 0.18, t0_change = 0.00,
-        q = 0.05, S.q = 0.00
+        q = 0.05
       )
       S <- list(m = params[["m_go"]], s = params[["s_go"]], q = 0.0, t0 = params[["t0_go"]])
       stop <- list(m = params[["m_stop"]], s = params[["s_stop"]], q = 0.0, t0 = 0.0)
@@ -334,7 +345,7 @@ validation_cases <- function(include_adversarial = FALSE) {
           structure,
           params,
           data.frame(
-            trial = 1L,
+            trials = 1L,
             component = component,
             R = response,
             rt = rt,
@@ -423,11 +434,18 @@ validation_cases <- function(include_adversarial = FALSE) {
         ) |>
         add_component("go", members = c("A", "B")) |>
         add_component("stop", members = c("A", "B", "S1", "IS", "S2")) |>
-        set_parameters(list(
-          m_go = c("A.m", "B.m"),
-          s_go = c("A.s", "B.s"),
-          t0_go = c("A.t0", "B.t0")
-        )) |>
+        set_parameters(
+          separate = list(
+            m = c("S1", "IS", "S2"),
+            s = c("S1", "IS", "S2"),
+            t0 = c("S1", "IS", "S2")
+          ),
+          share = list(
+            m_go = c("A.m", "B.m"),
+            s_go = c("A.s", "B.s"),
+            t0_go = c("A.t0", "B.t0")
+          )
+        ) |>
         finalize_model()
       params <- c(
         m_go = log(0.30), s_go = 0.18, t0_go = 0.05,
@@ -491,7 +509,7 @@ validation_cases <- function(include_adversarial = FALSE) {
           structure,
           params,
           data.frame(
-            trial = 1L,
+            trials = 1L,
             component = "stop",
             R = response,
             rt = rt,
@@ -554,11 +572,18 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("STOP", all_of("S1", "S2")) |>
         add_component("go", members = c("A", "B")) |>
         add_component("stop", members = c("A", "B", "S1", "IS", "S2")) |>
-        set_parameters(list(
-          m_go = c("A.m", "B.m"),
-          s_go = c("A.s", "B.s"),
-          t0_go = c("A.t0", "B.t0")
-        )) |>
+        set_parameters(
+          separate = list(
+            m = c("S1", "IS", "S2"),
+            s = c("S1", "IS", "S2"),
+            t0 = c("S1", "IS", "S2")
+          ),
+          share = list(
+            m_go = c("A.m", "B.m"),
+            s_go = c("A.s", "B.s"),
+            t0_go = c("A.t0", "B.t0")
+          )
+        ) |>
         finalize_model()
       params <- c(
         m_go = log(0.30), s_go = 0.18, t0_go = 0.05,
@@ -602,7 +627,7 @@ validation_cases <- function(include_adversarial = FALSE) {
           structure,
           params,
           data.frame(
-            trial = 1L,
+            trials = 1L,
             component = "stop",
             R = "STOP",
             rt = rt,
@@ -634,9 +659,9 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("NR_RAW", all_of("x1", "gate"), options = list(map_outcome_to = NA_character_)) |>
         finalize_model()
       params <- c(
-        x1.m = log(0.32), x1.s = 0.18, x1.q = 0.00, x1.t0 = 0.00,
-        x2.m = log(0.36), x2.s = 0.18, x2.q = 0.00, x2.t0 = 0.00,
-        gate.m = log(0.24), gate.s = 0.14, gate.q = 0.00, gate.t0 = 0.00
+        x1.m = log(0.32), x1.s = 0.18, x1.t0 = 0.00,
+        x2.m = log(0.36), x2.s = 0.18, x2.t0 = 0.00,
+        gate.m = log(0.24), gate.s = 0.14, gate.t0 = 0.00
       )
       x1 <- acc_parts("x1", params)
       x2 <- acc_parts("x2", params)
@@ -650,7 +675,7 @@ validation_cases <- function(include_adversarial = FALSE) {
       resp_engine <- engine_density_or_mass(
         structure,
         params,
-        data.frame(trial = 1L, R = "RESP", rt = resp_rt, stringsAsFactors = FALSE)
+        data.frame(trials = 1L, R = "RESP", rt = resp_rt, stringsAsFactors = FALSE)
       )
       resp_row <- check_row(
         "shared_gate_pair",
@@ -666,7 +691,7 @@ validation_cases <- function(include_adversarial = FALSE) {
       miss_engine <- engine_density_or_mass(
         structure,
         params,
-        data.frame(trial = 1L, R = NA_character_, rt = NA_real_, stringsAsFactors = FALSE)
+        data.frame(trials = 1L, R = NA_character_, rt = NA_real_, stringsAsFactors = FALSE)
       )
       miss_row <- check_row(
         "shared_gate_pair",
@@ -690,10 +715,10 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("Slow", all_of("go_slow", "gate_shared")) |>
         finalize_model()
       params <- c(
-        go_fast.m = log(0.28), go_fast.s = 0.18, go_fast.q = 0.00, go_fast.t0 = 0.00,
-        go_slow.m = log(0.34), go_slow.s = 0.18, go_slow.q = 0.00, go_slow.t0 = 0.00,
-        gate_shared.m = log(0.30), gate_shared.s = 0.16, gate_shared.q = 0.00, gate_shared.t0 = 0.00,
-        stop_control.m = log(0.27), stop_control.s = 0.15, stop_control.q = 0.00, stop_control.t0 = 0.00
+        go_fast.m = log(0.28), go_fast.s = 0.18, go_fast.t0 = 0.00,
+        go_slow.m = log(0.34), go_slow.s = 0.18, go_slow.t0 = 0.00,
+        gate_shared.m = log(0.30), gate_shared.s = 0.16, gate_shared.t0 = 0.00,
+        stop_control.m = log(0.27), stop_control.s = 0.15, stop_control.t0 = 0.00
       )
       rt <- 0.30
       f_fast <- function(x) dlnorm(x, params[["go_fast.m"]], params[["go_fast.s"]])
@@ -716,7 +741,7 @@ validation_cases <- function(include_adversarial = FALSE) {
       engine <- engine_density_or_mass(
         structure,
         params,
-        data.frame(trial = 1L, R = "Fast", rt = rt, stringsAsFactors = FALSE)
+        data.frame(trials = 1L, R = "Fast", rt = rt, stringsAsFactors = FALSE)
       )
       check_row(
         "guarded_positive_mass_tie",
@@ -739,10 +764,10 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("R3", all_of("x3", "gate")) |>
         finalize_model()
       params <- c(
-        x1.m = log(0.31), x1.s = 0.16, x1.q = 0.00, x1.t0 = 0.00,
-        x2.m = log(0.36), x2.s = 0.18, x2.q = 0.00, x2.t0 = 0.00,
-        x3.m = log(0.41), x3.s = 0.17, x3.q = 0.00, x3.t0 = 0.00,
-        gate.m = log(0.24), gate.s = 0.14, gate.q = 0.00, gate.t0 = 0.00
+        x1.m = log(0.31), x1.s = 0.16, x1.t0 = 0.00,
+        x2.m = log(0.36), x2.s = 0.18, x2.t0 = 0.00,
+        x3.m = log(0.41), x3.s = 0.17, x3.t0 = 0.00,
+        gate.m = log(0.24), gate.s = 0.14, gate.t0 = 0.00
       )
       x1 <- acc_parts("x1", params)
       x2 <- acc_parts("x2", params)
@@ -767,7 +792,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "R1", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "R1", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "shared_gate_three_way_tie",
@@ -789,9 +814,9 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("STOP", all_of("s1", inhibit("s2", by = "is"))) |>
         finalize_model()
       params <- c(
-        s1.m = log(0.35), s1.s = 0.16, s1.q = 0.00, s1.t0 = 0.00,
-        is.m = log(0.30), is.s = 0.14, is.q = 0.00, is.t0 = 0.00,
-        s2.m = log(0.28), s2.s = 0.14, s2.q = 0.00, s2.t0 = 0.00
+        s1.m = log(0.35), s1.s = 0.16, s1.t0 = 0.00,
+        is.m = log(0.30), is.s = 0.14, is.t0 = 0.00,
+        s2.m = log(0.28), s2.s = 0.14, s2.t0 = 0.00
       )
       rt <- 0.42
       f_s1 <- function(x) dlnorm(x, params[["s1.m"]], params[["s1.s"]])
@@ -804,7 +829,7 @@ validation_cases <- function(include_adversarial = FALSE) {
       engine <- engine_density_or_mass(
         structure,
         params,
-        data.frame(trial = 1L, R = "STOP", rt = rt, stringsAsFactors = FALSE)
+        data.frame(trials = 1L, R = "STOP", rt = rt, stringsAsFactors = FALSE)
       )
       check_row(
         "nested_guard_pair",
@@ -827,11 +852,11 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("GUARD", inhibit("a", by = inhibit("b", by = inhibit("c", by = "d")))) |>
         finalize_model()
       params <- c(
-        plain.m = log(0.42), plain.s = 0.18, plain.q = 0.00, plain.t0 = 0.00,
-        a.m = log(0.34), a.s = 0.20, a.q = 0.00, a.t0 = 0.00,
-        b.m = log(0.30), b.s = 0.20, b.q = 0.00, b.t0 = 0.00,
-        c.m = log(0.28), c.s = 0.18, c.q = 0.00, c.t0 = 0.00,
-        d.m = log(0.26), d.s = 0.16, d.q = 0.00, d.t0 = 0.00
+        plain.m = log(0.42), plain.s = 0.18, plain.t0 = 0.00,
+        a.m = log(0.34), a.s = 0.20, a.t0 = 0.00,
+        b.m = log(0.30), b.s = 0.20, b.t0 = 0.00,
+        c.m = log(0.28), c.s = 0.18, c.t0 = 0.00,
+        d.m = log(0.26), d.s = 0.16, d.t0 = 0.00
       )
       plain <- acc_parts("plain", params)
       a <- acc_parts("a", params)
@@ -873,7 +898,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine_plain <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "PLAIN", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "PLAIN", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "deep_guard_chain",
@@ -888,7 +913,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine_guard <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "GUARD", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "GUARD", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "deep_guard_chain",
@@ -913,10 +938,10 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("B", all_of("b", "gate")) |>
         finalize_model()
       params <- c(
-        a1.m = log(0.29), a1.s = 0.16, a1.q = 0.00, a1.t0 = 0.00,
-        a2.m = log(0.35), a2.s = 0.17, a2.q = 0.00, a2.t0 = 0.00,
-        b.m = log(0.38), b.s = 0.18, b.q = 0.00, b.t0 = 0.00,
-        gate.m = log(0.25), gate.s = 0.14, gate.q = 0.00, gate.t0 = 0.00
+        a1.m = log(0.29), a1.s = 0.16, a1.t0 = 0.00,
+        a2.m = log(0.35), a2.s = 0.17, a2.t0 = 0.00,
+        b.m = log(0.38), b.s = 0.18, b.t0 = 0.00,
+        gate.m = log(0.25), gate.s = 0.14, gate.t0 = 0.00
       )
       a1 <- acc_parts("a1", params)
       a2 <- acc_parts("a2", params)
@@ -949,7 +974,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "A", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "A", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "pooled_shared_gate_tie",
@@ -975,11 +1000,11 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("B", all_of("b", "gate")) |>
         finalize_model()
       params <- c(
-        a1.m = log(0.27), a1.s = 0.15, a1.q = 0.00, a1.t0 = 0.00,
-        a2.m = log(0.33), a2.s = 0.16, a2.q = 0.00, a2.t0 = 0.00,
-        b.m = log(0.36), b.s = 0.18, b.q = 0.00, b.t0 = 0.00,
-        gate.m = log(0.24), gate.s = 0.13, gate.q = 0.00, gate.t0 = 0.00,
-        stop.m = log(0.31), stop.s = 0.15, stop.q = 0.00, stop.t0 = 0.00
+        a1.m = log(0.27), a1.s = 0.15, a1.t0 = 0.00,
+        a2.m = log(0.33), a2.s = 0.16, a2.t0 = 0.00,
+        b.m = log(0.36), b.s = 0.18, b.t0 = 0.00,
+        gate.m = log(0.24), gate.s = 0.13, gate.t0 = 0.00,
+        stop.m = log(0.31), stop.s = 0.15, stop.t0 = 0.00
       )
       a1 <- acc_parts("a1", params)
       a2 <- acc_parts("a2", params)
@@ -1014,7 +1039,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "A", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "A", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "pooled_guarded_shared_gate_tie",
@@ -1039,10 +1064,10 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("D", "d") |>
         finalize_model()
       params <- c(
-        a.m = log(0.29), a.s = 0.16, a.q = 0.00, a.t0 = 0.00,
-        b.m = log(0.36), b.s = 0.17, b.q = 0.00, b.t0 = 0.00,
-        gate.m = log(0.24), gate.s = 0.14, gate.q = 0.00, gate.t0 = 0.00,
-        d.m = log(0.50), d.s = 0.18, d.q = 0.00, d.t0 = 0.00
+        a.m = log(0.29), a.s = 0.16, a.t0 = 0.00,
+        b.m = log(0.36), b.s = 0.17, b.t0 = 0.00,
+        gate.m = log(0.24), gate.s = 0.14, gate.t0 = 0.00,
+        d.m = log(0.50), d.s = 0.18, d.t0 = 0.00
       )
       a <- acc_parts("a", params)
       b <- acc_parts("b", params)
@@ -1055,7 +1080,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "D", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "D", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "density_lift_competitor_subset",
@@ -1080,10 +1105,10 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("D", "d") |>
         finalize_model()
       params <- c(
-        a.m = log(0.28), a.s = 0.16, a.q = 0.00, a.t0 = 0.00,
-        b.m = log(0.34), b.s = 0.17, b.q = 0.00, b.t0 = 0.00,
-        gate.m = log(0.23), gate.s = 0.14, gate.q = 0.00, gate.t0 = 0.00,
-        d.m = log(0.47), d.s = 0.19, d.q = 0.00, d.t0 = 0.00
+        a.m = log(0.28), a.s = 0.16, a.t0 = 0.00,
+        b.m = log(0.34), b.s = 0.17, b.t0 = 0.00,
+        gate.m = log(0.23), gate.s = 0.14, gate.t0 = 0.00,
+        d.m = log(0.47), d.s = 0.19, d.t0 = 0.00
       )
       a <- acc_parts("a", params)
       b <- acc_parts("b", params)
@@ -1101,7 +1126,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "D", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "D", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "overlapping_composite_competitors",
@@ -1126,10 +1151,10 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("D", "d") |>
         finalize_model()
       params <- c(
-        a.m = log(0.29), a.s = 0.17, a.q = 0.00, a.t0 = 0.00,
-        b.m = log(0.35), b.s = 0.16, b.q = 0.00, b.t0 = 0.00,
-        stop.m = log(0.24), stop.s = 0.14, stop.q = 0.00, stop.t0 = 0.00,
-        d.m = log(0.46), d.s = 0.19, d.q = 0.00, d.t0 = 0.00
+        a.m = log(0.29), a.s = 0.17, a.t0 = 0.00,
+        b.m = log(0.35), b.s = 0.16, b.t0 = 0.00,
+        stop.m = log(0.24), stop.s = 0.14, stop.t0 = 0.00,
+        d.m = log(0.46), d.s = 0.19, d.t0 = 0.00
       )
       a <- acc_parts("a", params)
       b <- acc_parts("b", params)
@@ -1155,7 +1180,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "D", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "D", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "guarded_overlapping_competitors",
@@ -1182,11 +1207,11 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("R4", all_of("x4", "gate")) |>
         finalize_model()
       params <- c(
-        x1.m = log(0.30), x1.s = 0.15, x1.q = 0.00, x1.t0 = 0.00,
-        x2.m = log(0.34), x2.s = 0.16, x2.q = 0.00, x2.t0 = 0.00,
-        x3.m = log(0.39), x3.s = 0.17, x3.q = 0.00, x3.t0 = 0.00,
-        x4.m = log(0.44), x4.s = 0.18, x4.q = 0.00, x4.t0 = 0.00,
-        gate.m = log(0.22), gate.s = 0.13, gate.q = 0.00, gate.t0 = 0.00
+        x1.m = log(0.30), x1.s = 0.15, x1.t0 = 0.00,
+        x2.m = log(0.34), x2.s = 0.16, x2.t0 = 0.00,
+        x3.m = log(0.39), x3.s = 0.17, x3.t0 = 0.00,
+        x4.m = log(0.44), x4.s = 0.18, x4.t0 = 0.00,
+        gate.m = log(0.22), gate.s = 0.13, gate.t0 = 0.00
       )
       x1 <- acc_parts("x1", params)
       x2 <- acc_parts("x2", params)
@@ -1214,7 +1239,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "R1", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "R1", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "shared_gate_four_way_tie",
@@ -1237,9 +1262,9 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("OTHER", "other") |>
         finalize_model()
       params <- c(
-        go.m = log(0.31), go.s = 0.15, go.q = 0.00, go.t0 = 0.00,
-        stop.m = log(0.27), stop.s = 0.13, stop.q = 0.00, stop.t0 = 0.00,
-        other.m = log(0.45), other.s = 0.17, other.q = 0.00, other.t0 = 0.00
+        go.m = log(0.31), go.s = 0.15, go.t0 = 0.00,
+        stop.m = log(0.27), stop.s = 0.13, stop.t0 = 0.00,
+        other.m = log(0.45), other.s = 0.17, other.t0 = 0.00
       )
       go <- acc_parts("go", params)
       stop <- acc_parts("stop", params)
@@ -1253,7 +1278,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "RESPOND", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "RESPOND", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "none_of_conjunction",
@@ -1277,10 +1302,10 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("D", "d") |>
         finalize_model()
       params <- c(
-        a.m = log(0.31), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
-        s.m = log(0.27), s.s = 0.14, s.q = 0.00, s.t0 = 0.00,
-        b.m = log(0.36), b.s = 0.17, b.q = 0.00, b.t0 = 0.00,
-        d.m = log(0.48), d.s = 0.18, d.q = 0.00, d.t0 = 0.00
+        a.m = log(0.31), a.s = 0.15, a.t0 = 0.00,
+        s.m = log(0.27), s.s = 0.14, s.t0 = 0.00,
+        b.m = log(0.36), b.s = 0.17, b.t0 = 0.00,
+        d.m = log(0.48), d.s = 0.18, d.t0 = 0.00
       )
       a <- acc_parts("a", params)
       s <- acc_parts("s", params)
@@ -1301,7 +1326,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "R", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "R", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "first_of_absence_choice",
@@ -1325,10 +1350,10 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("C", inhibit("c", by = "s")) |>
         finalize_model()
       params <- c(
-        a.m = log(0.30), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
-        b.m = log(0.36), b.s = 0.16, b.q = 0.00, b.t0 = 0.00,
-        c.m = log(0.42), c.s = 0.18, c.q = 0.00, c.t0 = 0.00,
-        s.m = log(0.28), s.s = 0.14, s.q = 0.00, s.t0 = 0.00
+        a.m = log(0.30), a.s = 0.15, a.t0 = 0.00,
+        b.m = log(0.36), b.s = 0.16, b.t0 = 0.00,
+        c.m = log(0.42), c.s = 0.18, c.t0 = 0.00,
+        s.m = log(0.28), s.s = 0.14, s.t0 = 0.00
       )
       a <- acc_parts("a", params)
       b <- acc_parts("b", params)
@@ -1346,7 +1371,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "R", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "R", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "guarded_composite_vs_guarded_competitor",
@@ -1370,10 +1395,10 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("D", "d") |>
         finalize_model()
       params <- c(
-        a.m = log(0.32), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
-        s.m = log(0.27), s.s = 0.14, s.q = 0.00, s.t0 = 0.00,
-        g.m = log(0.35), g.s = 0.16, g.q = 0.00, g.t0 = 0.00,
-        d.m = log(0.48), d.s = 0.18, d.q = 0.00, d.t0 = 0.00
+        a.m = log(0.32), a.s = 0.15, a.t0 = 0.00,
+        s.m = log(0.27), s.s = 0.14, s.t0 = 0.00,
+        g.m = log(0.35), g.s = 0.16, g.t0 = 0.00,
+        d.m = log(0.48), d.s = 0.18, d.t0 = 0.00
       )
       a <- acc_parts("a", params)
       s <- acc_parts("s", params)
@@ -1388,7 +1413,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "R", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "R", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "composite_blocker_guard",
@@ -1419,13 +1444,13 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("R6", all_of("x6", "gate")) |>
         finalize_model()
       params <- c(
-        x1.m = log(0.29), x1.s = 0.15, x1.q = 0.00, x1.t0 = 0.00,
-        x2.m = log(0.33), x2.s = 0.16, x2.q = 0.00, x2.t0 = 0.00,
-        x3.m = log(0.37), x3.s = 0.17, x3.q = 0.00, x3.t0 = 0.00,
-        x4.m = log(0.41), x4.s = 0.18, x4.q = 0.00, x4.t0 = 0.00,
-        x5.m = log(0.45), x5.s = 0.19, x5.q = 0.00, x5.t0 = 0.00,
-        x6.m = log(0.49), x6.s = 0.20, x6.q = 0.00, x6.t0 = 0.00,
-        gate.m = log(0.24), gate.s = 0.13, gate.q = 0.00, gate.t0 = 0.00
+        x1.m = log(0.29), x1.s = 0.15, x1.t0 = 0.00,
+        x2.m = log(0.33), x2.s = 0.16, x2.t0 = 0.00,
+        x3.m = log(0.37), x3.s = 0.17, x3.t0 = 0.00,
+        x4.m = log(0.41), x4.s = 0.18, x4.t0 = 0.00,
+        x5.m = log(0.45), x5.s = 0.19, x5.t0 = 0.00,
+        x6.m = log(0.49), x6.s = 0.20, x6.t0 = 0.00,
+        gate.m = log(0.24), gate.s = 0.13, gate.t0 = 0.00
       )
       eval_source <- function(name) {
         p <- acc_parts(name, params)
@@ -1446,7 +1471,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "R1", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "R1", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "oracle_repeated_shared_gate_six_way",
@@ -1472,11 +1497,11 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("D", "d") |>
         finalize_model()
       params <- c(
-        a.m = log(0.30), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
-        b.m = log(0.35), b.s = 0.16, b.q = 0.00, b.t0 = 0.00,
-        g1.m = log(0.25), g1.s = 0.14, g1.q = 0.00, g1.t0 = 0.00,
-        g2.m = log(0.28), g2.s = 0.13, g2.q = 0.00, g2.t0 = 0.00,
-        d.m = log(0.46), d.s = 0.18, d.q = 0.00, d.t0 = 0.00
+        a.m = log(0.30), a.s = 0.15, a.t0 = 0.00,
+        b.m = log(0.35), b.s = 0.16, b.t0 = 0.00,
+        g1.m = log(0.25), g1.s = 0.14, g1.t0 = 0.00,
+        g2.m = log(0.28), g2.s = 0.13, g2.t0 = 0.00,
+        d.m = log(0.46), d.s = 0.18, d.t0 = 0.00
       )
       a <- acc_parts("a", params)
       b <- acc_parts("b", params)
@@ -1493,7 +1518,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "D", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "D", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "partial_overlap_composite_gates",
@@ -1524,11 +1549,11 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("D", "d") |>
         finalize_model()
       params <- c(
-        a.m = log(0.31), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
-        s.m = log(0.27), s.s = 0.14, s.q = 0.00, s.t0 = 0.00,
-        b.m = log(0.36), b.s = 0.17, b.q = 0.00, b.t0 = 0.00,
-        c.m = log(0.29), c.s = 0.16, c.q = 0.00, c.t0 = 0.00,
-        d.m = log(0.48), d.s = 0.18, d.q = 0.00, d.t0 = 0.00
+        a.m = log(0.31), a.s = 0.15, a.t0 = 0.00,
+        s.m = log(0.27), s.s = 0.14, s.t0 = 0.00,
+        b.m = log(0.36), b.s = 0.17, b.t0 = 0.00,
+        c.m = log(0.29), c.s = 0.16, c.t0 = 0.00,
+        d.m = log(0.48), d.s = 0.18, d.t0 = 0.00
       )
       a <- acc_parts("a", params)
       s <- acc_parts("s", params)
@@ -1549,7 +1574,7 @@ validation_cases <- function(include_adversarial = FALSE) {
         engine <- engine_density_or_mass(
           structure,
           params,
-          data.frame(trial = 1L, R = "R", rt = rt, stringsAsFactors = FALSE)
+          data.frame(trials = 1L, R = "R", rt = rt, stringsAsFactors = FALSE)
         )
         rows[[length(rows) + 1L]] <- check_row(
           "nested_choice_guard_absence",
@@ -1585,13 +1610,13 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("D", "d") |>
         finalize_model()
       params <- c(
-        a.m = log(0.30), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
-        b.m = log(0.34), b.s = 0.16, b.q = 0.00, b.t0 = 0.00,
-        g1.m = log(0.26), g1.s = 0.13, g1.q = 0.00, g1.t0 = 0.00,
-        s1.m = log(0.28), s1.s = 0.15, s1.q = 0.00, s1.t0 = 0.00,
-        g2.m = log(0.33), g2.s = 0.14, g2.q = 0.00, g2.t0 = 0.00,
-        h.m = log(0.37), h.s = 0.17, h.q = 0.00, h.t0 = 0.00,
-        d.m = log(0.50), d.s = 0.18, d.q = 0.00, d.t0 = 0.00
+        a.m = log(0.30), a.s = 0.15, a.t0 = 0.00,
+        b.m = log(0.34), b.s = 0.16, b.t0 = 0.00,
+        g1.m = log(0.26), g1.s = 0.13, g1.t0 = 0.00,
+        s1.m = log(0.28), s1.s = 0.15, s1.t0 = 0.00,
+        g2.m = log(0.33), g2.s = 0.14, g2.t0 = 0.00,
+        h.m = log(0.37), h.s = 0.17, h.t0 = 0.00,
+        d.m = log(0.50), d.s = 0.18, d.t0 = 0.00
       )
       outcomes <- list(
         R = oracle_all(
@@ -1635,13 +1660,13 @@ validation_cases <- function(include_adversarial = FALSE) {
         add_outcome("D", "d") |>
         finalize_model()
       params <- c(
-        p1.m = log(0.27), p1.s = 0.15, p1.q = 0.00, p1.t0 = 0.00,
-        p2.m = log(0.32), p2.s = 0.16, p2.q = 0.00, p2.t0 = 0.00,
-        p3.m = log(0.37), p3.s = 0.17, p3.q = 0.00, p3.t0 = 0.00,
-        gate.m = log(0.25), gate.s = 0.13, gate.q = 0.00, gate.t0 = 0.00,
-        stop.m = log(0.30), stop.s = 0.14, stop.q = 0.00, stop.t0 = 0.00,
-        b.m = log(0.40), b.s = 0.18, b.q = 0.00, b.t0 = 0.00,
-        d.m = log(0.52), d.s = 0.19, d.q = 0.00, d.t0 = 0.00
+        p1.m = log(0.27), p1.s = 0.15, p1.t0 = 0.00,
+        p2.m = log(0.32), p2.s = 0.16, p2.t0 = 0.00,
+        p3.m = log(0.37), p3.s = 0.17, p3.t0 = 0.00,
+        gate.m = log(0.25), gate.s = 0.13, gate.t0 = 0.00,
+        stop.m = log(0.30), stop.s = 0.14, stop.t0 = 0.00,
+        b.m = log(0.40), b.s = 0.18, b.t0 = 0.00,
+        d.m = log(0.52), d.s = 0.19, d.t0 = 0.00
       )
       outcomes <- list(
         A = oracle_inhibit(

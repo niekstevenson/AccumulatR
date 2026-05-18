@@ -11,11 +11,12 @@ suppressPackageStartupMessages({
 })
 
 acc_parts <- function(prefix, params) {
+  t0_name <- paste0(prefix, ".t0")
   list(
     m = unname(params[[paste0(prefix, ".m")]]),
     s = unname(params[[paste0(prefix, ".s")]]),
-    q = unname(params[[paste0(prefix, ".q")]]),
-    t0 = unname(params[[paste0(prefix, ".t0")]])
+    q = 0.0,
+    t0 = if (t0_name %in% names(params)) unname(params[[t0_name]]) else 0.0
   )
 }
 

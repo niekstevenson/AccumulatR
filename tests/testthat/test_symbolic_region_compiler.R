@@ -51,12 +51,14 @@ build_shared_gate_competitor_model <- function(reverse = FALSE) {
       add_outcome("D", "d") |>
       add_outcome("C2", all_of("gate", "b")) |>
       add_outcome("C1", all_of("gate", "a")) |>
+      test_separate_all_parameters() |>
       finalize_model()
   } else {
     spec |>
       add_outcome("C1", all_of("a", "gate")) |>
       add_outcome("C2", all_of("b", "gate")) |>
       add_outcome("D", "d") |>
+      test_separate_all_parameters() |>
       finalize_model()
   }
 }
@@ -270,13 +272,13 @@ testthat::test_that("all_of and simple guard expression distributions stay compa
 
 testthat::test_that("shared-gate likelihood is invariant to child and outcome order", {
   params <- c(
-    a.m = log(0.29), a.s = 0.17, a.q = 0.00, a.t0 = 0.00,
-    b.m = log(0.35), b.s = 0.16, b.q = 0.00, b.t0 = 0.00,
-    gate.m = log(0.24), gate.s = 0.14, gate.q = 0.00, gate.t0 = 0.00,
-    d.m = log(0.46), d.s = 0.19, d.q = 0.00, d.t0 = 0.00
+    a.m = log(0.29), a.s = 0.17, a.t0 = 0.00,
+    b.m = log(0.35), b.s = 0.16, b.t0 = 0.00,
+    gate.m = log(0.24), gate.s = 0.14, gate.t0 = 0.00,
+    d.m = log(0.46), d.s = 0.19, d.t0 = 0.00
   )
   data <- data.frame(
-    trial = 1L,
+    trials = 1L,
     R = "D",
     rt = 0.43,
     stringsAsFactors = FALSE

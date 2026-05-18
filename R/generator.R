@@ -349,7 +349,7 @@
 
 .param_override_columns <- function(params_rows) {
   base_cols <- c(
-    "trial", "component", "accumulator",
+    "trials", "component", "accumulator",
     "type",
     "outcome", "rt", "params", "condition",
     "component_weight"
@@ -719,14 +719,14 @@
 
   trial_df <- as.data.frame(trial_df)
   trial_has_acc <- "accumulator" %in% names(trial_df)
-  if (!"trial" %in% names(trial_df)) {
-    if (trial_has_acc) stop("trial_df with accumulator must include a trial column")
-    trial_df$trial <- seq_len(nrow(trial_df))
+  if (!"trials" %in% names(trial_df)) {
+    if (trial_has_acc) stop("trial_df with accumulator must include a trials column")
+    trial_df$trials <- seq_len(nrow(trial_df))
   }
-  if (is.factor(trial_df$trial)) trial_df$trial <- as.character(trial_df$trial)
-  trial_df$trial <- suppressWarnings(as.integer(trial_df$trial))
-  if (any(is.na(trial_df$trial)) || any(trial_df$trial < 1L)) {
-    stop("trial_df$trial must contain positive integers")
+  if (is.factor(trial_df$trials)) trial_df$trials <- as.character(trial_df$trials)
+  trial_df$trials <- suppressWarnings(as.integer(trial_df$trials))
+  if (any(is.na(trial_df$trials)) || any(trial_df$trials < 1L)) {
+    stop("trial_df$trials must contain positive integers")
   }
 
   if (trial_has_acc) {
@@ -747,9 +747,9 @@
                                       paste(bad_vals, collapse = ", "))
       trial_df$accumulator <- acc_ids_vec
     }
-    pair_key <- paste(trial_df$trial, trial_df$accumulator, sep = "::")
+    pair_key <- paste(trial_df$trials, trial_df$accumulator, sep = "::")
     if (any(duplicated(pair_key))) {
-      stop("trial_df with accumulator must have at most one row per trial/accumulator")
+      stop("trial_df with accumulator must have at most one row per trials/accumulator")
     }
   }
 
@@ -794,7 +794,7 @@
 #' @param params_df Trial-level parameter values.
 #' @param trial_df Optional data frame used to condition the simulation. When it
 #'   includes an `accumulator` column, `onset` and `component` values are matched
-#'   by trial and accumulator. Otherwise, values apply at the trial level.
+#'   by `trials` and accumulator. Otherwise, values apply at the trial level.
 #' @param seed Optional random-number seed.
 #' @param keep_detail If `TRUE`, keep additional simulation detail.
 #' @param keep_component Whether to keep the chosen mixture component in the
@@ -805,14 +805,14 @@
 #'   from `component`. `"auto"` chooses automatically.
 #' @param ... Unused; for S3 compatibility.
 #' @return A data frame of simulated behavioral data. For standard models this
-#'   includes `trial`, `R`, and `rt`. If `n_outcomes > 1`, additional ordered
+#'   includes `trials`, `R`, and `rt`. If `n_outcomes > 1`, additional ordered
 #'   response columns such as `R2`/`rt2` are included.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
 #' spec <- add_outcome(spec, "A_win", "A")
 #' structure <- finalize_model(spec)
-#' params <- c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0)
+#' params <- c(m = 0, s = 0.1)
 #' df <- build_param_matrix(spec, params, n_trials = 3)
 #' simulate(structure, df, seed = 123)
 #' @export
@@ -868,7 +868,7 @@ simulate.model_structure <- function(structure,
   trial_has_acc <- trial_info$trial_has_acc
   trial_has_component <- trial_info$trial_has_component
   trial_has_onset <- trial_info$trial_has_onset
-  trial_ids <- if (!is.null(trial_df)) sort(unique(trial_df$trial)) else integer(0)
+  trial_ids <- if (!is.null(trial_df)) sort(unique(trial_df$trials)) else integer(0)
 
   layout_mode <- layout
   if (identical(layout, "auto")) {
@@ -904,8 +904,8 @@ simulate.model_structure <- function(structure,
     }
     n_trials <- as.integer(n_trials)
     if (!is.null(trial_df)) {
-      if (any(trial_df$trial > n_trials)) {
-        stop("trial_df$trial values must be between 1 and n_trials")
+      if (any(trial_df$trials > n_trials)) {
+        stop("trial_df$trials values must be between 1 and n_trials")
       }
     }
   } else if (identical(mapping_mode, "explicit")) {
@@ -924,7 +924,7 @@ simulate.model_structure <- function(structure,
   component_vec <- NULL
   if (!is.null(trial_df) && trial_has_component) {
     component_vec <- rep(NA_character_, n_trials)
-    comp_by_trial <- split(trial_df$component, trial_df$trial)
+    comp_by_trial <- split(trial_df$component, trial_df$trials)
     for (tid in names(comp_by_trial)) {
       vals <- unique(comp_by_trial[[tid]])
       vals <- vals[!is.na(vals)]
@@ -954,7 +954,7 @@ simulate.model_structure <- function(structure,
     if (trial_has_acc) {
       acc_idx <- match(trial_df$accumulator, acc_ids)
       for (i in seq_len(nrow(trial_df))) {
-        t <- trial_df$trial[[i]]
+        t <- trial_df$trials[[i]]
         a <- acc_idx[[i]]
         onset_val <- trial_df$onset[[i]]
         if (!is.finite(onset_val)) next
@@ -962,7 +962,7 @@ simulate.model_structure <- function(structure,
       }
     } else {
       for (i in seq_len(nrow(trial_df))) {
-        t <- trial_df$trial[[i]]
+        t <- trial_df$trials[[i]]
         onset_val <- trial_df$onset[[i]]
         if (!is.finite(onset_val)) next
         onset_mat[t, ] <- onset_val
@@ -985,7 +985,7 @@ simulate.model_structure <- function(structure,
       row_map[[i]] <- setNames(start + seq_len(n_acc), acc_ids)
     }
   } else if (identical(mapping_mode, "explicit")) {
-    rows_by_trial <- split(seq_len(nrow(trial_df)), trial_df$trial)
+    rows_by_trial <- split(seq_len(nrow(trial_df)), trial_df$trials)
     for (i in seq_len(n_trials)) {
       rows <- rows_by_trial[[as.character(i)]]
       if (is.null(rows) || length(rows) == 0L) stop(sprintf("No parameter rows mapped to trial %d", i))
@@ -1142,7 +1142,7 @@ simulate.model_structure <- function(structure,
   }
 
   out_df <- data.frame(
-    trial = trial_ids,
+    trials = trial_ids,
     R = outcomes[, 1L],
     rt = rts[, 1L],
     stringsAsFactors = FALSE

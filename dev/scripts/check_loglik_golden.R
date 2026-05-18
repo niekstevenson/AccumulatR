@@ -38,7 +38,7 @@ build_depth3_case <- function(n_trials = 40L) {
     n_trials = n_trials
   )
   data_df <- data.frame(
-    trial = seq_len(n_trials),
+    trials = seq_len(n_trials),
     R = rep("PLAIN", n_trials),
     rt = stats::rlnorm(n_trials, meanlog = log(0.48), sdlog = 0.12),
     stringsAsFactors = FALSE
@@ -82,7 +82,7 @@ build_shared_nway_trigger_case <- function(n_trials = 40L) {
     n_trials = n_trials
   )
   data_df <- data.frame(
-    trial = seq_len(n_trials),
+    trials = seq_len(n_trials),
     R = rep(NA_character_, n_trials),
     rt = rep(NA_real_, n_trials),
     stringsAsFactors = FALSE
@@ -124,9 +124,9 @@ for (label in names(case_map)) {
   cs <- case_map[[label]]
   gl <- golden_map[[label]]
   total <- as.numeric(log_likelihood(cs$ctx, cs$prep, cs$params_df))
-  trial_ids <- unique(cs$prep$trial)
+  trial_ids <- unique(cs$prep$trials)
   trial <- vapply(trial_ids, function(trial_id) {
-    row_idx <- cs$prep$trial == trial_id
+    row_idx <- cs$prep$trials == trial_id
     as.numeric(log_likelihood(
       cs$ctx,
       cs$prep[row_idx, , drop = FALSE],

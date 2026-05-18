@@ -312,7 +312,6 @@ inline semantic::SemanticModel compile_prep(const Rcpp::List &prep) {
     leaf_spec.id = leaf_id;
     leaf_spec.dist = dist;
     leaf_spec.params.dist_param_names = detail::internal_param_keys(leaf_id, dist);
-    leaf_spec.params.q_name = leaf_id + ".q";
     leaf_spec.params.t0_name = leaf_id + ".t0";
     model.leaves.push_back(std::move(leaf_spec));
   }
@@ -383,7 +382,6 @@ inline semantic::SemanticModel compile_prep(const Rcpp::List &prep) {
           !trigger_names.isNULL() && trigger_names[i] != NA_STRING
               ? Rcpp::as<std::string>(trigger_names[i])
               : detail::as_string(trigger["id"]);
-      trigger_spec.q_name = trigger_spec.id;
       const auto member_names = detail::as_string_vector(trigger["members"]);
       for (const auto &name : member_names) {
         auto it = leaf_index.find(name);
@@ -402,8 +400,6 @@ inline semantic::SemanticModel compile_prep(const Rcpp::List &prep) {
     for (const auto leaf_i :
          model.triggers[static_cast<std::size_t>(i)].leaf_indices) {
       model.leaves[static_cast<std::size_t>(leaf_i)].trigger_index = i;
-      model.leaves[static_cast<std::size_t>(leaf_i)].params.q_name =
-          model.triggers[static_cast<std::size_t>(i)].q_name;
     }
   }
 

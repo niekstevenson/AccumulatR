@@ -142,7 +142,7 @@
   if (length(columns) == 0L || nrow(data_df) <= 1L) {
     return(invisible(NULL))
   }
-  trial <- as.integer(data_df$trial)
+  trial <- as.integer(data_df$trials)
   starts <- c(1L, which(trial[-1L] != trial[-nrow(data_df)]) + 1L)
   ends <- c(starts[-1L] - 1L, nrow(data_df))
   if (length(starts) == nrow(data_df)) {
@@ -177,7 +177,7 @@
   if (max_rank <= 1L || nrow(data_df) == 0L) {
     return(invisible(NULL))
   }
-  trial <- as.integer(data_df$trial)
+  trial <- as.integer(data_df$trials)
   starts <- c(1L, which(trial[-1L] != trial[-nrow(data_df)]) + 1L)
   for (start in starts) {
     label1 <- as.character(data_df$R[[start]])
@@ -236,7 +236,7 @@
   if (nrow(data_df) == 0L) {
     return(invisible(NULL))
   }
-  trial <- as.integer(data_df$trial)
+  trial <- as.integer(data_df$trials)
   starts <- c(1L, which(trial[-1L] != trial[-nrow(data_df)]) + 1L)
   for (start in starts) {
     label_missing <- is.na(as.character(data_df$R[[start]]))
@@ -268,7 +268,7 @@
 }
 
 .compress_prepared_trials <- function(data_df) {
-  trial <- as.integer(data_df$trial)
+  trial <- as.integer(data_df$trials)
   n_rows <- length(trial)
   if (n_rows == 0L) {
     return(data_df)
@@ -279,7 +279,7 @@
     return(data_df)
   }
   trial_ends <- c(trial_starts[-1L] - 1L, n_rows)
-  sig_cols <- setdiff(names(data_df), "trial")
+  sig_cols <- setdiff(names(data_df), "trials")
   signatures <- character(n_trials)
   for (i in seq_len(n_trials)) {
     block <- data_df[trial_starts[[i]]:trial_ends[[i]], sig_cols, drop = FALSE]
@@ -292,7 +292,7 @@
   }
   keep_rows <- unlist(Map(seq.int, trial_starts[keep_trials], trial_ends[keep_trials]), use.names = FALSE)
   out <- data_df[keep_rows, , drop = FALSE]
-  out$trial <- rep.int(
+  out$trials <- rep.int(
     seq_along(keep_trials),
     trial_ends[keep_trials] - trial_starts[keep_trials] + 1L
   )
@@ -303,14 +303,14 @@
 }
 
 .attach_prepared_layout_attrs <- function(data_df, max_rank) {
-  trial <- as.integer(data_df$trial)
+  trial <- as.integer(data_df$trials)
   n_rows <- length(trial)
   trial_starts <- c(1L, which(trial[-1L] != trial[-n_rows]) + 1L)
 
   rank_names <- c("R", if (max_rank > 1L) paste0("R", seq.int(2L, max_rank)))
   time_names <- c("rt", if (max_rank > 1L) paste0("rt", seq.int(2L, max_rank)))
 
-  attr(data_df, "trial_start_rows") <- as.integer(trial_starts)
+  attr(data_df, "trials_start_rows") <- as.integer(trial_starts)
   attr(data_df, "layout_cols") <- setNames(
     as.integer(match("component", names(data_df))),
     "component"
@@ -340,12 +340,11 @@
   if (length(missing_cols) > 0L) {
     stop(sprintf("Data frame must include columns: %s", paste(missing_cols, collapse = ", ")), call. = FALSE)
   }
-  if (!"trial" %in% names(data_df)) {
-    if ("trials" %in% names(data_df)) {
-      data_df$trial <- as.integer(data_df$trials)
-    } else {
-      data_df$trial <- seq_len(nrow(data_df))
+  if (!"trials" %in% names(data_df)) {
+    if ("accumulator" %in% names(data_df)) {
+      stop("Accumulator-level data must include a 'trials' column", call. = FALSE)
     }
+    data_df$trials <- seq_len(nrow(data_df))
   }
   rank_info <- .validate_ranked_observation_columns(data_df)
   if (!"accumulator" %in% names(data_df)) {
@@ -360,8 +359,8 @@
       onset_map[[acc]] %||% 0
     }, numeric(1))
   }
-  data_df$trial <- {
-    trial_in <- as.integer(data_df$trial)
+  data_df$trials <- {
+    trial_in <- as.integer(data_df$trials)
     trial_out <- integer(length(trial_in))
     trial_idx <- 0L
     last_trial <- NA_integer_
@@ -465,7 +464,7 @@
 #' likelihood input.
 #'
 #' @param structure Finalized model structure.
-#' @param data_df Behavioral data. In the simplest case this contains `trial`,
+#' @param data_df Behavioral data. In the simplest case this contains `trials`,
 #'   `R`, and `rt`; for multi-outcome models it can also contain `R2`, `rt2`,
 #'   and so on.
 #' @param compress If `TRUE`, collapse repeated prepared trials and attach
@@ -481,7 +480,7 @@
 #' structure <- finalize_model(spec)
 #' params_df <- build_param_matrix(
 #'   spec,
-#'   c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0),
+#'   c(m = 0, s = 0.1),
 #'   n_trials = 2
 #' )
 #' data_df <- simulate(structure, params_df, seed = 1)
@@ -558,7 +557,7 @@ complexity_metrics <- function(context) {
 
 .validate_prepared_data <- function(data) {
   if (inherits(data, "accumulatr_data")) {
-    required_attrs <- c("trial_start_rows", "layout_cols", "label_cols", "time_cols", "max_rank")
+    required_attrs <- c("trials_start_rows", "layout_cols", "label_cols", "time_cols", "max_rank")
     missing_attrs <- required_attrs[vapply(required_attrs, function(attr_name) {
       is.null(attr(data, attr_name, exact = TRUE))
     }, logical(1))]
@@ -673,7 +672,7 @@ complexity_metrics <- function(context) {
   global_dist_params <- unique(unlist(dist_param_list))
   weight_param_names <- unique(comp_weight_param[!is.na(comp_weight_param) & nzchar(comp_weight_param)])
   all_cols <- c(
-    "trial", "accumulator", "q", "t0", "onset",
+    "trials", "accumulator", "q", "t0", "onset",
     "shared_trigger_id", "shared_trigger_q",
     global_dist_params,
     weight_param_names
@@ -707,7 +706,7 @@ complexity_metrics <- function(context) {
       }
       p_vals <- params_mat[row_idx, p_cols][seq_along(dist_params)]
       row <- list(
-        trial = t,
+        trials = t,
         accumulator = i,
         q = params_mat[row_idx, "q"],
         t0 = params_mat[row_idx, "t0"],
@@ -739,8 +738,8 @@ complexity_metrics <- function(context) {
 }
 
 .params_df_to_matrix <- function(df) {
-  if (!"trial" %in% names(df)) {
-    stop("Parameter table must include 'trial'", call. = FALSE)
+  if (!"trials" %in% names(df)) {
+    stop("Parameter table must include 'trials'", call. = FALSE)
   }
 
   n <- nrow(df)
@@ -749,7 +748,7 @@ complexity_metrics <- function(context) {
   }
 
   # Core columns
-  trial <- as.numeric(df$trial)
+  trial <- as.numeric(df$trials)
   acc_idx <- if ("accumulator_index" %in% names(df)) {
     as.numeric(df$accumulator_index)
   } else if ("accumulator" %in% names(df)) {
@@ -814,7 +813,7 @@ complexity_metrics <- function(context) {
   max_params <- as.integer(min(max_params, 8L))
 
   cols <- list(
-    trial = trial,
+    trials = trial,
     accumulator_index = acc_idx,
     onset = onset,
     q = q,
@@ -828,7 +827,7 @@ complexity_metrics <- function(context) {
   }
 
   base_cols <- c(
-    "trial",
+    "trials",
     "accumulator_index",
     "accumulator",
     "onset",
@@ -847,7 +846,7 @@ complexity_metrics <- function(context) {
 
   mat <- do.call(cbind, cols)
   storage.mode(mat) <- "double"
-  attr(mat, "trial") <- trial
+  attr(mat, "trials") <- trial
   colnames(mat) <- names(cols)
   mat
 }
@@ -856,7 +855,7 @@ complexity_metrics <- function(context) {
   if (is.null(params_df) || nrow(params_df) == 0L) {
     return(list())
   }
-  trials <- params_df$trial %||% seq_len(nrow(params_df))
+  trials <- params_df$trials %||% seq_len(nrow(params_df))
   if (is.factor(trials)) trials <- as.character(trials)
   split(params_df, as.character(trials))
 }
@@ -914,8 +913,8 @@ complexity_metrics <- function(context) {
     stop("params_df must be a param_matrix, matrix, or data frame", call. = FALSE)
   }
 
-  if (!"trial" %in% names(params_df)) {
-    params_df$trial <- 1L
+  if (!"trials" %in% names(params_df)) {
+    params_df$trials <- 1L
   }
   if ("component" %in% names(params_df)) {
     params_df$component <- as.character(params_df$component)
@@ -990,7 +989,7 @@ complexity_metrics <- function(context) {
     )
   }
   out <- source_rows[match_idx, , drop = FALSE]
-  out$trial <- trial_index
+  out$trials <- trial_index
   out$accumulator_index <- active_accumulator_indices
   out$accumulator <- active_accumulator_indices
   out
@@ -1182,7 +1181,7 @@ response_probabilities.default <- function(structure,
 #' structure <- finalize_model(spec)
 #' params_df <- build_param_matrix(
 #'   spec,
-#'   c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0),
+#'   c(m = 0, s = 0.1),
 #'   n_trials = 2
 #' )
 #' data_df <- simulate(structure, params_df, seed = 1)

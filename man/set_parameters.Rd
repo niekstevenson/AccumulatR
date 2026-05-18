@@ -2,27 +2,31 @@
 % Please edit documentation in R/model_definition.R
 \name{set_parameters}
 \alias{set_parameters}
-\title{Define the external parameter names for a model}
+\title{Control parameter grouping and names}
 \usage{
-set_parameters(spec, parameters)
+set_parameters(spec, separate = NULL, share = NULL, rename = NULL)
 }
 \arguments{
 \item{spec}{A `race_spec` object.}
 
-\item{parameters}{A named list mapping external names to one or more model
-parameter names.}
+\item{separate}{Named list. Each name is a grouped public parameter, and each
+value is one or more accumulator ids to split from that group. Use `TRUE`
+to split every member of a group.}
+
+\item{share}{Named list mapping a new public name to default public names or
+internal parameter names that should share one value.}
+
+\item{rename}{Named character vector mapping current public names to new
+public names.}
 }
 \value{
 The updated `race_spec`.
 }
 \description{
-`set_parameters()` lets you rename parameters and share them across
-accumulators using one simple mapping. Each list name is the external
-parameter name users will supply; each value is one or more internal model
-parameter names such as `go.m` or `stop.t0`.
-}
-\details{
-Any parameters not mentioned in `parameters` keep their default names.
+Parameters are grouped by compatible type by default. For example, two
+lognormal accumulators expose one `m`, one `s`, and one `t0` parameter unless
+you ask for specific parameters to be separate. Triggers expose their trigger name
+directly, and sampled mixtures expose automatic `p.<component>` parameters.
 }
 \examples{
 spec <- race_spec() |>
@@ -30,11 +34,10 @@ spec <- race_spec() |>
   add_accumulator("stop", "lognormal") |>
   add_outcome("go", "go") |>
   add_outcome("stop", "stop") |>
-  set_parameters(list(
-    drift = c("go.m", "stop.m"),
-    spread = c("go.s", "stop.s"),
-    onset = "go.t0"
-  ))
+  set_parameters(
+    separate = list(m = c("go", "stop")),
+    rename = c(s = "spread", t0 = "onset")
+  )
 
 par_names(spec)
 }

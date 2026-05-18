@@ -64,7 +64,7 @@ set.seed(123456)
 
 n_trials_fixed <- 1200
 trial_types <- data.frame(
-  trial = seq_len(n_trials_fixed),
+  trials = seq_len(n_trials_fixed),
   component = sample(c("fast", "slow"), n_trials_fixed, replace = TRUE, prob = c(0.4, 0.6)),
   stringsAsFactors = FALSE
 )
@@ -82,7 +82,7 @@ sim_fixed <- simulate(
   layout = "long"
 )
 
-data_fixed <- sim_fixed[, c("trial", "R", "rt", "component")]
+data_fixed <- sim_fixed[, c("trials", "R", "rt", "component")]
 
 table(data_fixed$component, data_fixed$R)
 ```
@@ -172,7 +172,7 @@ the possible components. If you do supply a `component` column, that
 component is treated as observed on those trials.
 
 ```{r}
-data_sampled <- sim_sampled[, c("trial", "R", "rt")]
+data_sampled <- sim_sampled[, c("trials", "R", "rt")]
 
 prepared_sampled <- prepare_data(model_sampled, data_sampled)
 ctx_sampled <- make_context(model_sampled)

@@ -151,7 +151,7 @@ pars <- c(
 param_df <- build_param_matrix(model, pars, n_trials = 500)
 sim <- simulate(model, param_df, seed = 123)
 
-prepared <- prepare_data(model, sim[c("trial", "R", "rt")])
+prepared <- prepare_data(model, sim[c("trials", "R", "rt")])
 ctx <- make_context(model)
 log_likelihood(ctx, prepared, param_df)
 \end{Code}

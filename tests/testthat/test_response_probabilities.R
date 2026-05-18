@@ -6,14 +6,15 @@ testthat::test_that("response_probabilities respects mixture weights and compone
     add_outcome("Right", "B") |>
     add_component("left_only", members = "A") |>
     add_component("right_only", members = "B") |>
-    set_mixture(mode = "fixed", weights = c(left_only = 0.25, right_only = 0.75))
+    set_mixture(mode = "fixed", weights = c(left_only = 0.25, right_only = 0.75)) |>
+    test_separate_all_parameters()
 
   structure <- finalize_model(spec)
   params <- build_param_matrix(
     spec,
     c(
-      A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0,
-      B.m = 0, B.s = 0.1, B.q = 0, B.t0 = 0
+      A.m = 0, A.s = 0.1, A.t0 = 0,
+      B.m = 0, B.s = 0.1, B.t0 = 0
     ),
     n_trials = 1L
   )
@@ -41,14 +42,15 @@ testthat::test_that("response_probabilities returns residual NA mass for mapped 
     add_outcome("Miss", "B", options = list(map_outcome_to = NA_character_)) |>
     add_component("seen", members = "A") |>
     add_component("missing", members = "B") |>
-    set_mixture(mode = "fixed", weights = c(seen = 0.7, missing = 0.3))
+    set_mixture(mode = "fixed", weights = c(seen = 0.7, missing = 0.3)) |>
+    test_separate_all_parameters()
 
   structure <- finalize_model(spec)
   params <- build_param_matrix(
     spec,
     c(
-      A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0,
-      B.m = 0, B.s = 0.1, B.q = 0, B.t0 = 0
+      A.m = 0, A.s = 0.1, A.t0 = 0,
+      B.m = 0, B.s = 0.1, B.t0 = 0
     ),
     n_trials = 1L
   )
@@ -75,6 +77,7 @@ latent_sampled_response_spec <- function() {
     add_component("fast", members = c("target_fast", "competitor")) |>
     add_component("slow", members = c("target_slow", "competitor")) |>
     set_mixture(mode = "sample", reference = "slow") |>
+    test_separate_all_parameters() |>
     finalize_model()
 }
 

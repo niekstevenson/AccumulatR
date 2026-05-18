@@ -37,7 +37,7 @@ simulate(
 
 \item{trial_df}{Optional data frame used to condition the simulation. When it
 includes an `accumulator` column, `onset` and `component` values are matched
-by trial and accumulator. Otherwise, values apply at the trial level.}
+by `trials` and accumulator. Otherwise, values apply at the trial level.}
 
 \item{seed}{Optional random-number seed.}
 
@@ -55,7 +55,7 @@ from `component`. `"auto"` chooses automatically.}
 }
 \value{
 A data frame of simulated behavioral data. For standard models this
-  includes `trial`, `R`, and `rt`. If `n_outcomes > 1`, additional ordered
+  includes `trials`, `R`, and `rt`. If `n_outcomes > 1`, additional ordered
   response columns such as `R2`/`rt2` are included.
 }
 \description{
@@ -66,7 +66,7 @@ spec <- race_spec()
 spec <- add_accumulator(spec, "A", "lognormal")
 spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
-params <- c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0)
+params <- c(m = 0, s = 0.1)
 df <- build_param_matrix(spec, params, n_trials = 3)
 simulate(structure, df, seed = 123)
 }

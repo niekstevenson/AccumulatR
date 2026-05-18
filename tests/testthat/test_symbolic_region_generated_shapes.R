@@ -4,7 +4,7 @@ generated_region_metrics <- function(structure) {
 
 generated_loglik <- function(structure, params, rt) {
   data <- data.frame(
-    trial = 1L,
+    trials = 1L,
     R = "R",
     rt = rt,
     stringsAsFactors = FALSE
@@ -25,6 +25,7 @@ generated_shape_model <- function(target_expr, competitor_expr) {
     add_accumulator("g", "lognormal") |>
     add_outcome("R", target_expr) |>
     add_outcome("C", competitor_expr) |>
+    test_separate_all_parameters() |>
     finalize_model()
 }
 
@@ -50,12 +51,12 @@ testthat::test_that("bounded generated grammar shapes compile within symbolic bu
     guarded = function() inhibit("c", by = "s")
   )
   params <- c(
-    a.m = log(0.31), a.s = 0.15, a.q = 0.00, a.t0 = 0.00,
-    b.m = log(0.36), b.s = 0.16, b.q = 0.00, b.t0 = 0.00,
-    c.m = log(0.29), c.s = 0.17, c.q = 0.00, c.t0 = 0.00,
-    d.m = log(0.48), d.s = 0.18, d.q = 0.00, d.t0 = 0.00,
-    s.m = log(0.27), s.s = 0.14, s.q = 0.00, s.t0 = 0.00,
-    g.m = log(0.34), g.s = 0.15, g.q = 0.00, g.t0 = 0.00
+    a.m = log(0.31), a.s = 0.15, a.t0 = 0.00,
+    b.m = log(0.36), b.s = 0.16, b.t0 = 0.00,
+    c.m = log(0.29), c.s = 0.17, c.t0 = 0.00,
+    d.m = log(0.48), d.s = 0.18, d.t0 = 0.00,
+    s.m = log(0.27), s.s = 0.14, s.t0 = 0.00,
+    g.m = log(0.34), g.s = 0.15, g.t0 = 0.00
   )
   for (target_name in names(targets)) {
     for (competitor_name in names(competitors)) {

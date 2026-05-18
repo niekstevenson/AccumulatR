@@ -12,12 +12,15 @@ save_simple_model <- function() {
     add_pool("R1", c("R1_A", "R1_B")) |>
     add_outcome("R1", "R1") |>
     add_outcome("R2", "R2") |>
-    set_parameters(list(
-      B_shared = c("R1_A.B", "R1_B.B"),
-      A_shared = c("R1_A.A", "R1_B.A"),
-      noise_shared = c("R1_A.sv", "R1_B.s"),
-      t0_shared = c("R1_A.t0", "R1_B.t0", "R2.t0")
-    )) |>
+    set_parameters(
+      separate = list(v = c("R1_A", "R1_B")),
+      share = list(
+        B_shared = c("R1_A.B", "R1_B.B"),
+        A_shared = c("R1_A.A", "R1_B.A"),
+        noise_shared = c("R1_A.sv", "R1_B.s")
+      ),
+      rename = c(t0 = "t0_shared")
+    ) |>
     finalize_model()
 
   true_params <- c(
@@ -26,8 +29,8 @@ save_simple_model <- function() {
     B_shared = 1,
     A_shared = 0.3,
     noise_shared = 1,
-    R2.m = log(0.4),
-    R2.s = 0.18,
+    m = log(0.4),
+    lognormal.s = 0.18,
     t0_shared = 0.05
   )
 
@@ -35,7 +38,7 @@ save_simple_model <- function() {
   params_df <- build_param_matrix(model, true_params, n_trials = 2000)
   sim <- simulate(model, params_df)
   data_df <- data.frame(
-    trial = sim$trial,
+    trials = sim$trials,
     R = factor(sim$R),
     rt = sim$rt,
     stringsAsFactors = FALSE
@@ -106,7 +109,7 @@ save_pool_model <- function() {
   params_df <- build_param_matrix(model_spec, true_params, n_trials = 1500)
   sim <- simulate(structure, params_df)
   data_df <- data.frame(
-    trial = sim$trial,
+    trials = sim$trials,
     R = factor(sim$R),
     rt = sim$rt,
     stringsAsFactors = FALSE
@@ -168,7 +171,7 @@ save_trigger_model <- function() {
   params_df <- build_param_matrix(model_spec, true_params, n_trials = 1500)
   sim <- simulate(structure, params_df)
   data_df <- data.frame(
-    trial = sim$trial,
+    trials = sim$trials,
     R = factor(sim$R),
     rt = sim$rt,
     stringsAsFactors = FALSE
@@ -239,7 +242,7 @@ save_mixtures <- function() {
     n_trials = 1500
   )
   sim_sampled <- simulate(sampled_structure, params_df_sampled)
-  data_sampled <- sim_sampled[, c("trial", "R", "rt")]
+  data_sampled <- sim_sampled[, c("trials", "R", "rt")]
 
   prepared_sampled <- prepare_data(sampled_structure, data_sampled)
   ctx_sampled <- make_context(sampled_structure)
@@ -283,7 +286,7 @@ save_multi_outcome <- function() {
   params_df <- build_param_matrix(model_spec, true_params, n_trials = 500)
   sim <- simulate(structure, params_df)
   data_df <- data.frame(
-    trial = sim$trial,
+    trials = sim$trials,
     R = factor(sim$R),
     rt = sim$rt,
     R2 = factor(sim$R2),
@@ -341,7 +344,7 @@ save_chained_onset <- function() {
   params_df <- build_param_matrix(model_spec, true_params, n_trials = 2000)
   sim <- simulate(structure, params_df)
   data_df <- data.frame(
-    trial = sim$trial,
+    trials = sim$trials,
     R = factor(sim$R),
     rt = sim$rt,
     stringsAsFactors = FALSE

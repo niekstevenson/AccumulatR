@@ -9,6 +9,7 @@ latent_sampled_mixture_spec <- function() {
     add_component("fast", members = c("target_fast", "competitor")) |>
     add_component("slow", members = c("target_slow", "competitor")) |>
     set_mixture(mode = "sample", reference = "slow") |>
+    test_separate_all_parameters() |>
     finalize_model()
 }
 
@@ -29,7 +30,7 @@ testthat::test_that("latent sampled mixtures marginalize on the C++ likelihood p
   ctx <- make_context(structure)
 
   latent_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     R = "Target",
     rt = 0.30,
     stringsAsFactors = FALSE
@@ -37,7 +38,7 @@ testthat::test_that("latent sampled mixtures marginalize on the C++ likelihood p
   latent_prepared <- prepare_data(structure, latent_df)
 
   explicit_na_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     component = NA_character_,
     R = "Target",
     rt = 0.30,
@@ -46,14 +47,14 @@ testthat::test_that("latent sampled mixtures marginalize on the C++ likelihood p
   explicit_na_prepared <- prepare_data(structure, explicit_na_df)
 
   fast_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     component = "fast",
     R = "Target",
     rt = 0.30,
     stringsAsFactors = FALSE
   )
   slow_df <- data.frame(
-    trial = 1L,
+    trials = 1L,
     component = "slow",
     R = "Target",
     rt = 0.30,
@@ -121,18 +122,19 @@ testthat::test_that("latent fixed mixtures use fixed component weights in likeli
     add_component("left_only", members = "A") |>
     add_component("right_only", members = "B") |>
     set_mixture(mode = "fixed", weights = c(left_only = 0.25, right_only = 0.75)) |>
+    test_separate_all_parameters() |>
     finalize_model()
 
   params <- c(
-    A.m = log(0.30), A.s = 0.15, A.q = 0, A.t0 = 0,
-    B.m = log(0.40), B.s = 0.15, B.q = 0, B.t0 = 0
+    A.m = log(0.30), A.s = 0.15, A.t0 = 0,
+    B.m = log(0.40), B.s = 0.15, B.t0 = 0
   )
   ctx <- make_context(structure)
 
   latent_prepared <- prepare_data(
     structure,
     data.frame(
-      trial = 1L,
+      trials = 1L,
       R = "Left",
       rt = 0.32,
       stringsAsFactors = FALSE
@@ -141,7 +143,7 @@ testthat::test_that("latent fixed mixtures use fixed component weights in likeli
   left_prepared <- prepare_data(
     structure,
     data.frame(
-      trial = 1L,
+      trials = 1L,
       component = "left_only",
       R = "Left",
       rt = 0.32,
@@ -169,23 +171,26 @@ testthat::test_that("latent missing-all mixtures use compiled terminal no-respon
     add_accumulator("B", "lognormal") |>
     add_outcome("Left", "A") |>
     add_outcome("Right", "B") |>
+    add_trigger("A_absent", members = "A") |>
+    add_trigger("B_absent", members = "B") |>
     add_component("left_only", members = "A") |>
     add_component("right_only", members = "B") |>
     set_mixture(mode = "fixed", weights = c(left_only = 0.25, right_only = 0.75)) |>
+    test_separate_all_parameters() |>
     finalize_model()
 
   prepared <- prepare_data(
     structure,
     data.frame(
-      trial = 1L,
+      trials = 1L,
       R = NA_character_,
       rt = NA_real_,
       stringsAsFactors = FALSE
     )
   )
   params <- c(
-    A.m = log(0.30), A.s = 0.18, A.q = 0.20,
-    B.m = log(0.32), B.s = 0.18, B.q = 0.40
+    A.m = log(0.30), A.s = 0.18, A_absent = 0.20,
+    B.m = log(0.32), B.s = 0.18, B_absent = 0.40
   )
 
   out <- as.numeric(log_likelihood(
@@ -205,20 +210,23 @@ testthat::test_that("observed labels with missing RT marginalize over finite res
     add_outcome("HiddenSeen", "B", options = list(
       guess = list(labels = "Seen", weights = 1, rt_policy = "na")
     )) |>
+    add_trigger("A_absent", members = "A") |>
+    add_trigger("B_absent", members = "B") |>
+    test_separate_all_parameters() |>
     finalize_model()
 
   prepared <- prepare_data(
     structure,
     data.frame(
-      trial = 1L,
+      trials = 1L,
       R = "Seen",
       rt = NA_real_,
       stringsAsFactors = FALSE
     )
   )
   params <- c(
-    A.m = log(0.30), A.s = 0.18, A.q = 0.20, A.t0 = 0,
-    B.m = log(0.32), B.s = 0.18, B.q = 0.30, B.t0 = 0
+    A.m = log(0.30), A.s = 0.18, A_absent = 0.20, A.t0 = 0,
+    B.m = log(0.32), B.s = 0.18, B_absent = 0.30, B.t0 = 0
   )
 
   out <- as.numeric(log_likelihood(

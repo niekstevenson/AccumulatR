@@ -11,6 +11,7 @@ loglik_golden_case_registry <- function() {
           add_accumulator("go2", "lognormal") |>
           add_outcome("R1", "go1") |>
           add_outcome("R2", "go2") |>
+          test_separate_all_parameters() |>
           finalize_model()
       },
       params = c(
@@ -21,7 +22,7 @@ loglik_golden_case_registry <- function() {
       ),
       n_trials = 12L,
       seed = 1001L,
-      data_cols = c("trial", "R", "rt")
+      data_cols = c("trials", "R", "rt")
     ),
     example_2_stop_mixture = list(
       build = function() {
@@ -34,6 +35,7 @@ loglik_golden_case_registry <- function() {
           add_component("go_only", members = c("go1")) |>
           add_component("go_stop", members = c("go1", "stop", "go2")) |>
           set_mixture(mode = "fixed", weights = c(go_only = 0.5, go_stop = 0.5)) |>
+          test_separate_all_parameters() |>
           finalize_model()
       },
       params = c(
@@ -48,7 +50,7 @@ loglik_golden_case_registry <- function() {
       n_trials = 12L,
       seed = 1002L,
       simulate_args = list(keep_component = TRUE),
-      data_cols = c("trial", "component", "R", "rt")
+      data_cols = c("trials", "component", "R", "rt")
     ),
     example_3_stop_na = list(
       build = function() {
@@ -59,6 +61,7 @@ loglik_golden_case_registry <- function() {
           add_outcome("Left", "go_left") |>
           add_outcome("Right", "go_right") |>
           add_outcome("STOP", "stop", options = list(map_outcome_to = NA_character_)) |>
+          test_separate_all_parameters() |>
           finalize_model()
       },
       params = c(
@@ -71,7 +74,7 @@ loglik_golden_case_registry <- function() {
       ),
       n_trials = 12L,
       seed = 1003L,
-      data_cols = c("trial", "R", "rt")
+      data_cols = c("trials", "R", "rt")
     ),
     example_5_timeout_guess = list(
       build = function() {
@@ -84,6 +87,7 @@ loglik_golden_case_registry <- function() {
           add_outcome("TIMEOUT", "timeout", options = list(
             guess = list(labels = c("Left", "Right"), weights = c(0.2, 0.8), rt_policy = "keep")
           )) |>
+          test_separate_all_parameters() |>
           finalize_model()
       },
       params = c(
@@ -96,7 +100,7 @@ loglik_golden_case_registry <- function() {
       ),
       n_trials = 12L,
       seed = 1004L,
-      data_cols = c("trial", "R", "rt")
+      data_cols = c("trials", "R", "rt")
     ),
     example_6_dual_path = list(
       build = function() {
@@ -106,6 +110,7 @@ loglik_golden_case_registry <- function() {
           add_accumulator("acc_gateC", "lognormal") |>
           add_outcome("Outcome_via_A", all_of("acc_taskA", "acc_gateC")) |>
           add_outcome("Outcome_via_B", all_of("acc_taskB", "acc_gateC")) |>
+          test_separate_all_parameters() |>
           finalize_model()
       },
       params = c(
@@ -118,7 +123,7 @@ loglik_golden_case_registry <- function() {
       ),
       n_trials = 10L,
       seed = 1005L,
-      data_cols = c("trial", "R", "rt")
+      data_cols = c("trials", "R", "rt")
     ),
     example_7_mixture = list(
       build = function() {
@@ -132,6 +137,7 @@ loglik_golden_case_registry <- function() {
           add_component("fast", members = c("target_fast", "competitor")) |>
           add_component("slow", members = c("target_slow", "competitor")) |>
           set_mixture(mode = "sample", reference = "slow") |>
+          test_separate_all_parameters() |>
           finalize_model()
       },
       params = c(
@@ -145,7 +151,7 @@ loglik_golden_case_registry <- function() {
       ),
       n_trials = 12L,
       seed = 1006L,
-      data_cols = c("trial", "R", "rt")
+      data_cols = c("trials", "R", "rt")
     ),
     example_10_exclusion = list(
       build = function() {
@@ -155,6 +161,7 @@ loglik_golden_case_registry <- function() {
           add_accumulator("X_acc", "lognormal") |>
           add_outcome("R1", inhibit("R1_acc", by = "X_acc")) |>
           add_outcome("R2", "R2_acc") |>
+          test_separate_all_parameters() |>
           finalize_model()
       },
       params = c(
@@ -167,7 +174,7 @@ loglik_golden_case_registry <- function() {
       ),
       n_trials = 10L,
       seed = 1007L,
-      data_cols = c("trial", "R", "rt")
+      data_cols = c("trials", "R", "rt")
     ),
     example_16_guard_tie_simple = list(
       build = function() {
@@ -178,6 +185,7 @@ loglik_golden_case_registry <- function() {
           add_accumulator("stop_control", "lognormal") |>
           add_outcome("Fast", inhibit(all_of("go_fast", "gate_shared"), by = "stop_control")) |>
           add_outcome("Slow", all_of("go_slow", "gate_shared")) |>
+          test_separate_all_parameters() |>
           finalize_model()
       },
       params = c(
@@ -192,7 +200,7 @@ loglik_golden_case_registry <- function() {
       ),
       n_trials = 10L,
       seed = 1008L,
-      data_cols = c("trial", "R", "rt")
+      data_cols = c("trials", "R", "rt")
     ),
     example_21_simple_q = list(
       build = function() {
@@ -202,6 +210,7 @@ loglik_golden_case_registry <- function() {
           add_outcome("R1", "go1") |>
           add_outcome("R2", "go2") |>
           add_trigger("shared_trigger", members = c("go1", "go2")) |>
+          test_separate_all_parameters() |>
           finalize_model()
       },
       params = c(
@@ -213,7 +222,7 @@ loglik_golden_case_registry <- function() {
       ),
       n_trials = 12L,
       seed = 1009L,
-      data_cols = c("trial", "R", "rt")
+      data_cols = c("trials", "R", "rt")
     ),
     example_22_shared_q = list(
       build = function() {
@@ -224,6 +233,7 @@ loglik_golden_case_registry <- function() {
           add_outcome("Right", "go_right") |>
           add_trigger("q_left", members = "go_left") |>
           add_trigger("q_right", members = "go_right") |>
+          test_separate_all_parameters() |>
           finalize_model()
       },
       params = c(
@@ -236,7 +246,7 @@ loglik_golden_case_registry <- function() {
       ),
       n_trials = 12L,
       seed = 1010L,
-      data_cols = c("trial", "R", "rt")
+      data_cols = c("trials", "R", "rt")
     ),
     example_23_ranked_chain = list(
       build = function() {
@@ -245,6 +255,7 @@ loglik_golden_case_registry <- function() {
           add_accumulator("b", "lognormal", onset = after("a")) |>
           add_outcome("A", "a") |>
           add_outcome("B", "b") |>
+          test_separate_all_parameters() |>
           finalize_model()
       },
       params = c(
@@ -255,7 +266,7 @@ loglik_golden_case_registry <- function() {
       ),
       n_trials = 10L,
       seed = 1011L,
-      data_cols = c("trial", "R", "rt", "R2", "rt2")
+      data_cols = c("trials", "R", "rt", "R2", "rt2")
     )
   )
 }
@@ -282,11 +293,11 @@ evaluate_loglik_golden_case <- function(structure, data_df, params) {
   prepared <- prepare_data(structure, data_df)
   ctx <- make_context(structure)
   params_df <- build_param_matrix(structure$model_spec, params, trial_df = prepared)
-  trial_ids <- unique(prepared$trial)
+  trial_ids <- unique(prepared$trials)
   list(
     total_loglik = as.numeric(log_likelihood(ctx, prepared, params_df)),
     trial_loglik = vapply(trial_ids, function(trial_id) {
-      trial_df <- data_df[data_df$trial == trial_id, , drop = FALSE]
+      trial_df <- data_df[data_df$trials == trial_id, , drop = FALSE]
       trial_prepared <- prepare_data(structure, trial_df)
       trial_params_df <- build_param_matrix(
         structure$model_spec,

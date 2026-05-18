@@ -507,7 +507,7 @@ hand-written likelihood and the engine.
 
 \NormalTok{engine\_likelihood }\OtherTok{\textless{}{-}} \ControlFlowTok{function}\NormalTok{(response, rt) \{}
 \NormalTok{  data\_df }\OtherTok{\textless{}{-}} \FunctionTok{data.frame}\NormalTok{(}
-    \AttributeTok{trial =} \DecValTok{1}\DataTypeTok{L}\NormalTok{,}
+    \AttributeTok{trials =} \DecValTok{1}\DataTypeTok{L}\NormalTok{,}
     \AttributeTok{component =} \StringTok{"stop"}\NormalTok{,}
     \AttributeTok{R =} \ControlFlowTok{if}\NormalTok{ (}\FunctionTok{is.na}\NormalTok{(response)) }\ConstantTok{NA\_character\_} \ControlFlowTok{else}\NormalTok{ response,}
     \AttributeTok{rt =}\NormalTok{ rt,}

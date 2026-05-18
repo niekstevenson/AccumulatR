@@ -462,7 +462,7 @@ plot_accumulators <- function(model,
 
   invisible(list(
     accumulators = data.frame(
-      accumulator = acc_ids,
+      racer = acc_ids,
       onset = as.numeric(onset_value),
       angle_deg = as.numeric(angle_deg),
       x0 = as.numeric(x0),

@@ -1511,7 +1511,7 @@ dist_param_names <- function(dist) {
       internal = internal,
       public = public,
       kind = kind,
-      accumulator = acc,
+      racer = acc,
       dist = dist,
       param = param,
       slot = slot
@@ -1584,7 +1584,7 @@ dist_param_names <- function(dist) {
       internal = character(0),
       public = character(0),
       kind = character(0),
-      accumulator = character(0),
+      racer = character(0),
       dist = character(0),
       param = character(0),
       slot = integer(0),
@@ -1805,8 +1805,8 @@ par_names <- function(model) {
 #' @param param_values Named numeric vector of parameter values.
 #' @param n_trials Number of trials to generate.
 #' @param component Optional component label or labels.
-#' @param trial_df Optional trials/prepared data object. If it includes an
-#'   `accumulator` column, parameter rows are built in that exact row order.
+#' @param trial_df Optional trials/prepared data object. If it includes a
+#'   `racer` column, parameter rows are built in that exact row order.
 #' @param layout Optional storage layout.
 #' @return A data frame or matrix of parameter values by trial.
 #' @examples
@@ -2033,10 +2033,10 @@ build_param_matrix <- function(model,
     if (nrow(trial_df) == 0L) {
       stop("trial_df must contain at least one row")
     }
-    if ("accumulator" %in% names(trial_df)) {
-      acc_idx <- match(as.character(trial_df$accumulator), acc_ids)
+    if ("racer" %in% names(trial_df)) {
+      acc_idx <- match(as.character(trial_df$racer), acc_ids)
       if (anyNA(acc_idx)) {
-        stop("trial_df$accumulator values must match model accumulators")
+        stop("trial_df$racer values must match model racers")
       }
       params_mat <- base_mat[acc_idx, , drop = FALSE]
       colnames(params_mat) <- col_names
@@ -2057,16 +2057,16 @@ build_param_matrix <- function(model,
   # If a pre-built layout is provided (static mapping stored in context), honor it.
   if (!is.null(layout)) {
     row_trial <- layout$row_trial
-    row_acc <- layout$row_acc %||% layout$acc
-    if (is.null(row_trial) || is.null(row_acc)) {
-      stop("layout must include row_trial and row_acc")
+    row_racer <- layout$row_racer
+    if (is.null(row_trial) || is.null(row_racer)) {
+      stop("layout must include row_trial and row_racer")
     }
-    if (length(row_trial) != length(row_acc)) {
-      stop("layout row_trial/row_acc lengths must match")
+    if (length(row_trial) != length(row_racer)) {
+      stop("layout row_trial/row_racer lengths must match")
     }
     rows <- lapply(seq_along(row_trial), function(idx) {
       t <- as.integer(row_trial[[idx]])
-      a <- as.integer(row_acc[[idx]])
+      a <- as.integer(row_racer[[idx]])
       if (is.na(t) || is.na(a) || a < 1L || a > length(accs)) {
         stop("layout indices out of range")
       }
@@ -2164,7 +2164,7 @@ build_param_matrix <- function(model,
 
   total_rows <- sum(vapply(accs_per_trial, length, integer(1)))
   out <- vector("list", length(df) + 1L)
-  names(out) <- c(names(df), "accumulator")
+  names(out) <- c(names(df), "racer")
   idx <- 1L
   for (nm in names(df)) {
     col <- df[[nm]]
@@ -2180,7 +2180,7 @@ build_param_matrix <- function(model,
       out[[nm]] <- vector(mode(col), total_rows)
     }
   }
-  out$accumulator <- character(total_rows)
+  out$racer <- character(total_rows)
 
   for (t in seq_len(n_trials)) {
     accs_t <- accs_per_trial[[t]]
@@ -2196,7 +2196,7 @@ build_param_matrix <- function(model,
         out[[nm]][rng] <- val
       }
     }
-    out$accumulator[rng] <- accs_t
+    out$racer[rng] <- accs_t
     idx <- idx + len
   }
   out_df <- as.data.frame(out, stringsAsFactors = FALSE)

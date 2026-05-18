@@ -22,8 +22,8 @@ build_param_matrix(
 
 \item{component}{Optional component label or labels.}
 
-\item{trial_df}{Optional trial/prepared data object. If it includes an
-`accumulator` column, parameter rows are built in that exact row order.}
+\item{trial_df}{Optional trials/prepared data object. If it includes a
+`racer` column, parameter rows are built in that exact row order.}
 
 \item{layout}{Optional storage layout.}
 }

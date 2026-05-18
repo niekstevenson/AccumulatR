@@ -335,7 +335,7 @@
     if (is.null(v) || (length(v) == 1L && is.na(v))) return(NULL)
     v
   }
-  raw <- if ("accumulator" %in% names(row)) pick_id(row[["accumulator"]]) else NULL
+  raw <- if ("racer" %in% names(row)) pick_id(row[["racer"]]) else NULL
   if (!is.null(raw)) {
     if (is.numeric(raw)) {
       idx <- as.integer(raw)
@@ -344,12 +344,12 @@
       }
     }
   }
-  stop("Parameter rows must include a valid numeric 'accumulator' column")
+  stop("Parameter rows must include a valid numeric 'racer' column")
 }
 
 .param_override_columns <- function(params_rows) {
   base_cols <- c(
-    "trials", "component", "accumulator",
+    "trials", "component", "racer",
     "type",
     "outcome", "rt", "params", "condition",
     "component_weight"
@@ -718,9 +718,9 @@
   }
 
   trial_df <- as.data.frame(trial_df)
-  trial_has_acc <- "accumulator" %in% names(trial_df)
+  trial_has_acc <- "racer" %in% names(trial_df)
   if (!"trials" %in% names(trial_df)) {
-    if (trial_has_acc) stop("trial_df with accumulator must include a trials column")
+    if (trial_has_acc) stop("trial_df with racer must include a trials column")
     trial_df$trials <- seq_len(nrow(trial_df))
   }
   if (is.factor(trial_df$trials)) trial_df$trials <- as.character(trial_df$trials)
@@ -730,26 +730,26 @@
   }
 
   if (trial_has_acc) {
-    acc_raw <- trial_df$accumulator
+    acc_raw <- trial_df$racer
     if (is.factor(acc_raw)) acc_raw <- as.character(acc_raw)
     if (is.numeric(acc_raw)) {
       acc_idx <- suppressWarnings(as.integer(acc_raw))
       if (any(is.na(acc_idx)) || any(acc_idx < 1L | acc_idx > length(acc_ids))) {
-        stop("trial_df$accumulator numeric values must be 1..n_acc")
+        stop("trial_df$racer numeric values must be 1..n_acc")
       }
-      trial_df$accumulator <- acc_ids[acc_idx]
+      trial_df$racer <- acc_ids[acc_idx]
     } else {
       acc_ids_vec <- as.character(acc_raw)
       acc_ids_vec[!is.na(acc_ids_vec) & !nzchar(acc_ids_vec)] <- NA_character_
-      if (any(is.na(acc_ids_vec))) stop("trial_df$accumulator must include valid accumulator ids")
+      if (any(is.na(acc_ids_vec))) stop("trial_df$racer must include valid racer ids")
       bad_vals <- unique(acc_ids_vec[!acc_ids_vec %in% acc_ids])
-      if (length(bad_vals) > 0L) stop("trial_df accumulator values must match model accumulators: ",
+      if (length(bad_vals) > 0L) stop("trial_df racer values must match model racers: ",
                                       paste(bad_vals, collapse = ", "))
-      trial_df$accumulator <- acc_ids_vec
+      trial_df$racer <- acc_ids_vec
     }
-    pair_key <- paste(trial_df$trials, trial_df$accumulator, sep = "::")
+    pair_key <- paste(trial_df$trials, trial_df$racer, sep = "::")
     if (any(duplicated(pair_key))) {
-      stop("trial_df with accumulator must have at most one row per trials/accumulator")
+      stop("trial_df with racer must have at most one row per trials/racer")
     }
   }
 
@@ -793,15 +793,15 @@
 #' @param structure Finalized model structure.
 #' @param params_df Trial-level parameter values.
 #' @param trial_df Optional data frame used to condition the simulation. When it
-#'   includes an `accumulator` column, `onset` and `component` values are matched
-#'   by `trials` and accumulator. Otherwise, values apply at the trial level.
+#'   includes a `racer` column, `onset` and `component` values are matched
+#'   by `trials` and racer. Otherwise, values apply at the trial level.
 #' @param seed Optional random-number seed.
 #' @param keep_detail If `TRUE`, keep additional simulation detail.
 #' @param keep_component Whether to keep the chosen mixture component in the
 #'   output when the model has multiple components. If `NULL`, fixed mixtures
 #'   keep the component label and sampled mixtures drop it.
 #' @param layout Parameter layout. `"rectangular"` expects rows ordered by trial
-#'   and accumulator. `"long"` expects rows aligned to `trial_df` or inferable
+#'   and racer. `"long"` expects rows aligned to `trial_df` or inferable
 #'   from `component`. `"auto"` chooses automatically.
 #' @param ... Unused; for S3 compatibility.
 #' @return A data frame of simulated behavioral data. For standard models this
@@ -910,13 +910,13 @@ simulate.model_structure <- function(structure,
     }
   } else if (identical(mapping_mode, "explicit")) {
     if (is.null(trial_df) || !trial_has_acc) {
-      stop("layout = \"long\" with explicit mapping requires trial_df with accumulator")
+      stop("layout = \"long\" with explicit mapping requires trial_df with racer")
     }
     if (nrow(params_mat) != nrow(trial_df)) stop("For explicit long layout, params_df rows must match trial_df rows")
     if (length(trial_ids) == 0L) stop("trial_df must include trial rows")
     n_trials <- max(trial_ids)
   } else {
-    if (is.null(trial_df) || !trial_has_component) stop("Non-rectangular layout requires trial_df with component when accumulator mapping is absent")
+    if (is.null(trial_df) || !trial_has_component) stop("Non-rectangular layout requires trial_df with component when racer mapping is absent")
     n_trials <- length(trial_ids)
     if (n_trials == 0L) stop("trial_df must include trial rows")
   }
@@ -933,7 +933,7 @@ simulate.model_structure <- function(structure,
     }
     if (identical(layout_mode, "long") && identical(mapping_mode, "implicit") &&
         any(is.na(component_vec))) {
-      stop("component values must be provided for each trial when accumulator mapping is absent")
+      stop("component values must be provided for each trial when racer mapping is absent")
     }
   }
 
@@ -952,7 +952,7 @@ simulate.model_structure <- function(structure,
   if (!is.null(trial_df) && trial_has_onset) {
     onset_mat <- matrix(NA_real_, nrow = n_trials, ncol = n_acc, dimnames = list(NULL, acc_ids))
     if (trial_has_acc) {
-      acc_idx <- match(trial_df$accumulator, acc_ids)
+      acc_idx <- match(trial_df$racer, acc_ids)
       for (i in seq_len(nrow(trial_df))) {
         t <- trial_df$trials[[i]]
         a <- acc_idx[[i]]
@@ -989,7 +989,7 @@ simulate.model_structure <- function(structure,
     for (i in seq_len(n_trials)) {
       rows <- rows_by_trial[[as.character(i)]]
       if (is.null(rows) || length(rows) == 0L) stop(sprintf("No parameter rows mapped to trial %d", i))
-      accs <- trial_df$accumulator[rows]
+      accs <- trial_df$racer[rows]
       mapped <- setNames(rows, accs)
       mapped <- mapped[acc_ids[acc_ids %in% names(mapped)]]
       row_map[[i]] <- mapped

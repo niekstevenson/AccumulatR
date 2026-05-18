@@ -341,13 +341,13 @@
     stop(sprintf("Data frame must include columns: %s", paste(missing_cols, collapse = ", ")), call. = FALSE)
   }
   if (!"trials" %in% names(data_df)) {
-    if ("accumulator" %in% names(data_df)) {
-      stop("Accumulator-level data must include a 'trials' column", call. = FALSE)
+    if ("racer" %in% names(data_df)) {
+      stop("Racer-level data must include a 'trials' column", call. = FALSE)
     }
     data_df$trials <- seq_len(nrow(data_df))
   }
   rank_info <- .validate_ranked_observation_columns(data_df)
-  if (!"accumulator" %in% names(data_df)) {
+  if (!"racer" %in% names(data_df)) {
     data_df <- .expand_accumulator_rows(structure, data_df)
   }
   if (!"onset" %in% names(data_df)) {
@@ -355,7 +355,7 @@
     acc_onset <- vapply(acc_defs, function(a) a$onset %||% 0, numeric(1))
     acc_ids <- names(acc_defs)
     onset_map <- setNames(acc_onset, acc_ids)
-    data_df$onset <- vapply(as.character(data_df$accumulator), function(acc) {
+    data_df$onset <- vapply(as.character(data_df$racer), function(acc) {
       onset_map[[acc]] %||% 0
     }, numeric(1))
   }
@@ -672,7 +672,7 @@ complexity_metrics <- function(context) {
   global_dist_params <- unique(unlist(dist_param_list))
   weight_param_names <- unique(comp_weight_param[!is.na(comp_weight_param) & nzchar(comp_weight_param)])
   all_cols <- c(
-    "trials", "accumulator", "q", "t0", "onset",
+    "trials", "racer", "q", "t0", "onset",
     "shared_trigger_id", "shared_trigger_q",
     global_dist_params,
     weight_param_names
@@ -707,7 +707,7 @@ complexity_metrics <- function(context) {
       p_vals <- params_mat[row_idx, p_cols][seq_along(dist_params)]
       row <- list(
         trials = t,
-        accumulator = i,
+        racer = i,
         q = params_mat[row_idx, "q"],
         t0 = params_mat[row_idx, "t0"],
         onset = acc$onset %||% 0,
@@ -749,12 +749,12 @@ complexity_metrics <- function(context) {
 
   # Core columns
   trial <- as.numeric(df$trials)
-  acc_idx <- if ("accumulator_index" %in% names(df)) {
-    as.numeric(df$accumulator_index)
-  } else if ("accumulator" %in% names(df)) {
-    as.numeric(df$accumulator)
+  acc_idx <- if ("racer_index" %in% names(df)) {
+    as.numeric(df$racer_index)
+  } else if ("racer" %in% names(df)) {
+    as.numeric(df$racer)
   } else {
-    stop("Parameter table must include 'accumulator_index' (or numeric 'accumulator')", call. = FALSE)
+    stop("Parameter table must include 'racer_index' (or numeric 'racer')", call. = FALSE)
   }
   onset <- as.numeric(df$onset %||% 0)
   q <- as.numeric(df$q %||% 0)
@@ -814,7 +814,7 @@ complexity_metrics <- function(context) {
 
   cols <- list(
     trials = trial,
-    accumulator_index = acc_idx,
+    racer_index = acc_idx,
     onset = onset,
     q = q,
     t0 = t0,
@@ -828,8 +828,8 @@ complexity_metrics <- function(context) {
 
   base_cols <- c(
     "trials",
-    "accumulator_index",
-    "accumulator",
+    "racer_index",
+    "racer",
     "onset",
     "q",
     "t0",
@@ -941,10 +941,10 @@ complexity_metrics <- function(context) {
 
 .response_param_accumulator_indices <- function(structure, rows_df) {
   acc_ids <- names(structure$prep$accumulators %||% list())
-  if ("accumulator_index" %in% names(rows_df)) {
-    idx <- as.integer(rows_df$accumulator_index)
-  } else if ("accumulator" %in% names(rows_df)) {
-    acc <- rows_df$accumulator
+  if ("racer_index" %in% names(rows_df)) {
+    idx <- as.integer(rows_df$racer_index)
+  } else if ("racer" %in% names(rows_df)) {
+    acc <- rows_df$racer
     if (is.factor(acc)) {
       idx <- match(as.character(acc), acc_ids)
     } else if (is.numeric(acc) || is.integer(acc)) {
@@ -954,13 +954,13 @@ complexity_metrics <- function(context) {
     }
   } else {
     stop(
-      "response_probabilities() parameter rows must include accumulator information",
+      "response_probabilities() parameter rows must include racer information",
       call. = FALSE
     )
   }
   if (anyNA(idx) || any(idx < 1L) || any(idx > length(acc_ids))) {
     stop(
-      "response_probabilities() parameter rows use invalid accumulator indices",
+      "response_probabilities() parameter rows use invalid racer indices",
       call. = FALSE
     )
   }
@@ -990,8 +990,8 @@ complexity_metrics <- function(context) {
   }
   out <- source_rows[match_idx, , drop = FALSE]
   out$trials <- trial_index
-  out$accumulator_index <- active_accumulator_indices
-  out$accumulator <- active_accumulator_indices
+  out$racer_index <- active_accumulator_indices
+  out$racer <- active_accumulator_indices
   out
 }
 

@@ -36,8 +36,8 @@ simulate(
 \item{params_df}{Trial-level parameter values.}
 
 \item{trial_df}{Optional data frame used to condition the simulation. When it
-includes an `accumulator` column, `onset` and `component` values are matched
-by `trials` and accumulator. Otherwise, values apply at the trial level.}
+includes a `racer` column, `onset` and `component` values are matched
+by `trials` and racer. Otherwise, values apply at the trial level.}
 
 \item{seed}{Optional random-number seed.}
 
@@ -48,7 +48,7 @@ output when the model has multiple components. If `NULL`, fixed mixtures
 keep the component label and sampled mixtures drop it.}
 
 \item{layout}{Parameter layout. `"rectangular"` expects rows ordered by trial
-and accumulator. `"long"` expects rows aligned to `trial_df` or inferable
+and racer. `"long"` expects rows aligned to `trial_df` or inferable
 from `component`. `"auto"` chooses automatically.}
 
 \item{...}{Unused; for S3 compatibility.}

@@ -20,6 +20,7 @@ struct ExactLoadedLeafInput {
   std::array<double, 8> params{};
   double q{0.0};
   double t0{0.0};
+  double onset_abs{0.0};
 };
 
 inline double exact_leaf_q_for_trigger_state(
@@ -89,6 +90,7 @@ public:
       }
       loaded.q = leaf_q(i, row);
       loaded.t0 = params_->t0(row);
+      loaded.onset_abs = params_->onset_abs(row, desc.onset_abs_value);
     }
     const auto &source_product_channels =
         plan_.compiled_math.integral_kernel_source_product_channels;

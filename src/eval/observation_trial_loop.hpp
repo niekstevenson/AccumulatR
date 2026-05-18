@@ -206,6 +206,7 @@ inline Rcpp::NumericVector evaluate_response_probabilities_cached(
         const double value = evaluate_observation_plan_at_row(
             exact_plans,
             paramsSEXP,
+            nullptr,
             plan,
             variant_index,
             NA_REAL,
@@ -248,6 +249,10 @@ inline void evaluate_observation_likelihood_trials_cached(
       INTEGER(trusted_data_column(dataSEXP, layout.label_cols[1]));
   const double *rt =
       REAL(trusted_data_column(dataSEXP, layout.time_cols[1]));
+  const double *onset =
+      layout.onset_col >= 0
+          ? REAL(trusted_data_column(dataSEXP, layout.onset_col))
+          : nullptr;
   const TrustedParamMatrix trusted_params(
       paramsSEXP,
       component_mixture.weight_param_count);
@@ -333,7 +338,11 @@ inline void evaluate_observation_likelihood_trials_cached(
             state_code,
             leaf_count,
             cacheable_rt_free_plan
-                ? param_leaf_block_hash(paramsSEXP, first_param_row, leaf_count)
+                ? param_leaf_block_hash(
+                      paramsSEXP,
+                      onset,
+                      first_param_row,
+                      leaf_count)
                 : 0U};
         double value = 0.0;
         bool cache_hit = false;
@@ -341,6 +350,7 @@ inline void evaluate_observation_likelihood_trials_cached(
           cache_hit = rt_free_observation_cache_lookup(
               rt_free_plan_cache,
               paramsSEXP,
+              onset,
               cache_key,
               first_param_row,
               &value);
@@ -349,6 +359,7 @@ inline void evaluate_observation_likelihood_trials_cached(
           value = evaluate_observation_plan_direct(
               exact_plans,
               layout,
+              onset,
               paramsSEXP,
               plan,
               static_cast<semantic::Index>(trial_index),

@@ -39,6 +39,7 @@ struct PreparedTrialLayout {
   PreparedTrialRowsView trials;
   int max_rank{1};
   int component_col{-1};
+  int onset_col{-1};
   PreparedRankColumnView label_cols;
   PreparedRankColumnView time_cols;
 };
@@ -83,6 +84,7 @@ inline PreparedTrialLayout read_prepared_trial_layout(
 
   const SEXP layoutColsSEXP = trusted_data_attr(dataSEXP, "layout_cols");
   layout.component_col = trusted_named_integer(layoutColsSEXP, "component") - 1;
+  layout.onset_col = trusted_named_integer(layoutColsSEXP, "onset") - 1;
 
   layout.label_cols.cols = INTEGER(trusted_data_attr(dataSEXP, "label_cols"));
   layout.time_cols.cols = INTEGER(trusted_data_attr(dataSEXP, "time_cols"));

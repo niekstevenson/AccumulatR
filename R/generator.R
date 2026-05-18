@@ -276,9 +276,9 @@
   if (identical(kind, "not")) {
     inner <- .eval_expr(expr$arg, ctx)
     if (is.finite(inner$time)) {
-      list(time = Inf, core = numeric(0))
+      return(list(time = Inf, core = numeric(0)))
     } else {
-      list(time = 0, core = numeric(0))
+      return(list(time = 0, core = numeric(0)))
     }
   }
   if (identical(kind, "guard")) {

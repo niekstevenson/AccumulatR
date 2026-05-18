@@ -537,7 +537,11 @@ inline void evaluate_exact_trials_cached(
     const double min_ll,
     const int *ok,
     TrialSink &&sink) {
-  ParamView params(paramsSEXP);
+  const double *onset =
+      layout.onset_col >= 0
+          ? REAL(trusted_data_column(dataSEXP, layout.onset_col))
+          : nullptr;
+  ParamView params(paramsSEXP, onset);
   const auto table = read_prepared_data_view(dataSEXP, layout);
   const auto columns = make_exact_trial_columns(dataSEXP, layout);
   ExactStepWorkspacePool workspace_pool(plans.size());

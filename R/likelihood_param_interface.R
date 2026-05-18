@@ -312,8 +312,8 @@
 
   attr(data_df, "trials_start_rows") <- as.integer(trial_starts)
   attr(data_df, "layout_cols") <- setNames(
-    as.integer(match("component", names(data_df))),
-    "component"
+    as.integer(match(c("component", "onset"), names(data_df))),
+    c("component", "onset")
   )
   attr(data_df, "label_cols") <- as.integer(match(rank_names, names(data_df)))
   attr(data_df, "time_cols") <- as.integer(match(time_names, names(data_df)))

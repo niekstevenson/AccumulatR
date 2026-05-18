@@ -200,7 +200,7 @@ compiled_math_source_product_direct_leaf_fill(
   return compiled_math_source_product_direct_leaf_fill(
       channel.leaf_dist_kind,
       loaded,
-      time - channel.leaf_onset_abs_value,
+      time - loaded.onset_abs,
       fill_mask);
 }
 
@@ -227,7 +227,7 @@ inline double compiled_math_source_product_direct_leaf_scalar(
     const ExactLoadedLeafInput &loaded,
     const double time,
     const std::uint8_t channel_mask) {
-  const double x = time - channel.leaf_onset_abs_value - loaded.t0;
+  const double x = time - loaded.onset_abs - loaded.t0;
   if (!(x > 0.0)) {
     return channel_mask == kLeafChannelSurvival ? 1.0 : 0.0;
   }
@@ -420,10 +420,12 @@ compiled_math_source_product_program_leaf_fill(
     ExactSourceChannels *source_channels,
     const double current_time,
     const std::uint8_t fill_mask) {
+  const auto &loaded =
+      source_channels->source_product_leaf_input(source_program.leaf_index);
   return compiled_math_source_product_direct_leaf_fill(
       source_program.leaf_dist_kind,
-      source_channels->source_product_leaf_input(source_program.leaf_index),
-      current_time - source_program.leaf_onset_abs_value,
+      loaded,
+      current_time - loaded.onset_abs,
       fill_mask);
 }
 

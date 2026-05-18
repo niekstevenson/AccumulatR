@@ -17,6 +17,7 @@ namespace accumulatr::eval {
 namespace detail {
 
 inline bool param_leaf_blocks_equal(SEXP paramsSEXP,
+                                    const double *onset,
                                     const int lhs_first_row,
                                     const int rhs_first_row,
                                     const std::size_t row_count) {
@@ -46,10 +47,20 @@ inline bool param_leaf_blocks_equal(SEXP paramsSEXP,
       }
     }
   }
+  if (onset != nullptr) {
+    for (std::size_t i = 0; i < row_count; ++i) {
+      const auto row_delta = static_cast<R_xlen_t>(i);
+      if (onset[static_cast<R_xlen_t>(lhs_first_row) + row_delta] !=
+          onset[static_cast<R_xlen_t>(rhs_first_row) + row_delta]) {
+        return false;
+      }
+    }
+  }
   return true;
 }
 
 inline std::uint64_t param_leaf_block_hash(SEXP paramsSEXP,
+                                           const double *onset,
                                            const int first_row,
                                            const std::size_t row_count) {
   if (first_row < 0) {
@@ -70,6 +81,19 @@ inline std::uint64_t param_leaf_block_hash(SEXP paramsSEXP,
       double value =
           base[col_offset + static_cast<R_xlen_t>(first_row) +
                static_cast<R_xlen_t>(i)];
+      if (value == 0.0) {
+        value = 0.0;
+      }
+      std::uint64_t bits = 0U;
+      std::memcpy(&bits, &value, sizeof(bits));
+      hash ^= bits;
+      hash *= kFnvPrime;
+    }
+  }
+  if (onset != nullptr) {
+    for (std::size_t i = 0; i < row_count; ++i) {
+      double value =
+          onset[static_cast<R_xlen_t>(first_row) + static_cast<R_xlen_t>(i)];
       if (value == 0.0) {
         value = 0.0;
       }
@@ -125,6 +149,7 @@ inline bool rt_free_observation_cache_lookup(
         std::vector<RtFreeObservationPlanCacheEntry>,
         RtFreeObservationPlanCacheKeyHash> &cache,
     SEXP paramsSEXP,
+    const double *onset,
     const RtFreeObservationPlanCacheKey &key,
     const int first_param_row,
     double *value) {
@@ -135,6 +160,7 @@ inline bool rt_free_observation_cache_lookup(
   for (const auto &entry : found->second) {
     if (!param_leaf_blocks_equal(
             paramsSEXP,
+            onset,
             entry.first_param_row,
             first_param_row,
             key.leaf_count)) {
@@ -149,6 +175,7 @@ inline bool rt_free_observation_cache_lookup(
 inline double evaluate_observation_plan_at_row(
     const std::vector<ExactVariantPlan> &exact_plans,
     SEXP paramsSEXP,
+    const double *onset,
     const ObservationProbabilityPlan &obs_plan,
     const semantic::Index variant_index,
     const double observed_rt,
@@ -163,7 +190,7 @@ inline double evaluate_observation_plan_at_row(
   }
   values->assign(obs_plan.ops.size(), 0.0);
   const auto &exact_plan = exact_plans[static_cast<std::size_t>(variant_index)];
-  ParamView params(paramsSEXP, row_map, row_offset);
+  ParamView params(paramsSEXP, onset, row_map, row_offset);
   auto &workspace = workspace_pool->get(exact_plans, variant_index);
 
   for (std::size_t op_index = 0; op_index < obs_plan.ops.size(); ++op_index) {
@@ -306,6 +333,7 @@ inline double evaluate_observation_plan_at_row(
 inline double evaluate_observation_plan_direct(
     const std::vector<ExactVariantPlan> &exact_plans,
     const PreparedTrialLayout &layout,
+    const double *onset,
     SEXP paramsSEXP,
     const ObservationProbabilityPlan &obs_plan,
     const semantic::Index trial_index,
@@ -324,6 +352,7 @@ inline double evaluate_observation_plan_direct(
   return evaluate_observation_plan_at_row(
       exact_plans,
       paramsSEXP,
+      onset,
       obs_plan,
       variant_index,
       observed_rt,

@@ -29,6 +29,7 @@ model <- race_spec(n_outcomes = 2L) |>
   add_accumulator("B", "lognormal") |>
   add_outcome("A", "A") |>
   add_outcome("B", "B") |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
   finalize_model()
 
 true_params <- c(

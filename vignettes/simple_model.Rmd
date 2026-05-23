@@ -33,7 +33,7 @@ model <- race_spec() |>
   add_outcome("R1", "R1") |>
   add_outcome("R2", "R2") |>
   set_parameters(
-    separate = list(v = c("R1_A", "R1_B")),
+    separate = list(v = c("R1_A", "R1_B"), m = TRUE, lognormal.s = TRUE),
     share = list(
       B_shared = c("R1_A.B", "R1_B.B"),
       A_shared = c("R1_A.A", "R1_B.A"),
@@ -49,8 +49,8 @@ true_params <- c(
   B_shared = 1,
   A_shared = 0.3,
   noise_shared = 1,
-  m = log(0.4),
-  lognormal.s = 0.18,
+  R2.m = log(0.4),
+  R2.s = 0.18,
   t0_shared = 0.05
 )
 ```

@@ -44,6 +44,7 @@ model_fixed <- race_spec() |>
   add_outcome("R2", "competitor") |>
   add_component("fast", members = c("target_fast", "competitor")) |>
   add_component("slow", members = c("target_slow", "competitor")) |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
   set_mixture(mode = "fixed", weights = c(fast = 0.4, slow = 0.6)) |>
   finalize_model()
 
@@ -121,6 +122,7 @@ model_sampled <- race_spec() |>
   add_outcome("R2", "competitor") |>
   add_component("fast", members = c("target_fast", "competitor")) |>
   add_component("slow", members = c("target_slow", "competitor")) |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
   set_mixture(mode = "sample", reference = "slow") |>
   finalize_model()
 

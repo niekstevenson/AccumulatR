@@ -81,6 +81,7 @@ model <- race_spec() |>
   add_accumulator("right", "lognormal") |>
   add_outcome("left", "left") |>
   add_outcome("right", "right") |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
   finalize_model()
 ```
 

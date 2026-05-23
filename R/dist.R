@@ -307,6 +307,7 @@ dist_lba_rng <- function(n, v, B, A, sv) {
 
 dist_rdm_pdf <- function(x, v, B, A, s) {
   if (!is.finite(s) || s <= 0) return(rep(NA_real_, length(x)))
+  if (!is.finite(v) || v < 0) return(rep(0, length(x)))
   .dist_vapply_numeric(x, function(xi) {
     if (is.na(xi)) return(NA_real_)
     if (!is.finite(xi)) return(0)
@@ -316,6 +317,7 @@ dist_rdm_pdf <- function(x, v, B, A, s) {
 
 dist_rdm_cdf <- function(x, v, B, A, s) {
   if (!is.finite(s) || s <= 0) return(rep(NA_real_, length(x)))
+  if (!is.finite(v) || v < 0) return(rep(0, length(x)))
   .dist_vapply_numeric(x, function(xi) {
     if (is.na(xi)) return(NA_real_)
     if (!is.finite(xi)) return(if (xi < 0) 0 else 1)

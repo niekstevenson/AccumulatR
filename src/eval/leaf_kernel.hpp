@@ -267,6 +267,9 @@ inline double rdm_pdf_fast(double x, double v, double B, double A,
     return 0.0;
   }
   const double v_sc = v / s;
+  if (!std::isfinite(v_sc) || v_sc < 0.0) {
+    return 0.0;
+  }
   const double B_sc = B / s;
   const double A_sc = A / s;
   return rdm_digt(x, B_sc + 0.5 * A_sc, v_sc, 0.5 * A_sc);
@@ -278,6 +281,9 @@ inline double rdm_cdf_fast(double x, double v, double B, double A,
     return 0.0;
   }
   const double v_sc = v / s;
+  if (!std::isfinite(v_sc) || v_sc < 0.0) {
+    return 0.0;
+  }
   const double B_sc = B / s;
   const double A_sc = A / s;
   return rdm_pigt(x, B_sc + 0.5 * A_sc, v_sc, 0.5 * A_sc);

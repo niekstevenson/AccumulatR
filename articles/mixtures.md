@@ -5,9 +5,9 @@ Here we show how mixtures work in `AccumulatR`.
 Mixtures have two separate pieces:
 
 - The model controls how mixture weights are defined. Use
-  `set_mixture_options(mode = "fixed")` when the weights are known in
-  advance, and `set_mixture_options(mode = "sample")` when one or more
-  mixture weights should be estimated.
+  `set_mixture(mode = "fixed")` when the weights are known in advance,
+  and `set_mixture(mode = "sample")` when mixture weights should be
+  estimated.
 - The data control whether the component is observed on a trial. If a
   `component` column is present, likelihood evaluation conditions on
   that component. If `component` is omitted or set to `NA`, the
@@ -48,9 +48,10 @@ model_fixed <- race_spec() |>
   add_pool("TARGET", c("target_fast", "target_slow")) |>
   add_outcome("R1", "TARGET") |>
   add_outcome("R2", "competitor") |>
-  add_component("fast", members = c("target_fast", "competitor"), weight = 0.4) |>
-  add_component("slow", members = c("target_slow", "competitor"), weight = 0.6) |>
-  set_mixture_options(mode = "fixed") |>
+  add_component("fast", members = c("target_fast", "competitor")) |>
+  add_component("slow", members = c("target_slow", "competitor")) |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
+  set_mixture(mode = "fixed", weights = c(fast = 0.4, slow = 0.6)) |>
   finalize_model()
 
 true_params_fixed <- c(
@@ -72,7 +73,7 @@ set.seed(123456)
 
 n_trials_fixed <- 1200
 trial_types <- data.frame(
-  trial = seq_len(n_trials_fixed),
+  trials = seq_len(n_trials_fixed),
   component = sample(c("fast", "slow"), n_trials_fixed, replace = TRUE, prob = c(0.4, 0.6)),
   stringsAsFactors = FALSE
 )
@@ -90,7 +91,7 @@ sim_fixed <- simulate(
   layout = "long"
 )
 
-data_fixed <- sim_fixed[, c("trial", "R", "rt", "component")]
+data_fixed <- sim_fixed[, c("trials", "R", "rt", "component")]
 
 table(data_fixed$component, data_fixed$R)
 ```
@@ -125,7 +126,7 @@ ll_fixed
 
 Now we use the same architecture as a latent mixture. The component is
 not observed per trial. Instead, the model samples a hidden component
-for each trial, with `p_fast` controlling the proportion of fast trials.
+for each trial, with `p.fast` controlling the proportion of fast trials.
 
 ``` r
 
@@ -136,9 +137,10 @@ model_sampled <- race_spec() |>
   add_pool("TARGET", c("target_fast", "target_slow")) |>
   add_outcome("R1", "TARGET") |>
   add_outcome("R2", "competitor") |>
-  add_component("fast", members = c("target_fast", "competitor"), weight_param = "p_fast") |>
+  add_component("fast", members = c("target_fast", "competitor")) |>
   add_component("slow", members = c("target_slow", "competitor")) |>
-  set_mixture_options(mode = "sample", reference = "slow") |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
+  set_mixture(mode = "sample", reference = "slow") |>
   finalize_model()
 
 true_params_sampled <- c(
@@ -148,7 +150,7 @@ true_params_sampled <- c(
   target_slow.s = 0.20,
   competitor.m = log(0.35),
   competitor.s = 0.18,
-  p_fast = 0.35
+  p.fast = 0.35
 )
 ```
 
@@ -170,7 +172,7 @@ sim_sampled <- simulate(model_sampled, params_df_sampled)
 names(sim_sampled)
 ```
 
-    ## [1] "trial" "R"     "rt"
+    ## [1] "trials" "R"      "rt"
 
 If you want to inspect the hidden generating component, you can ask for
 it explicitly.
@@ -199,7 +201,7 @@ trials.
 
 ``` r
 
-data_sampled <- sim_sampled[, c("trial", "R", "rt")]
+data_sampled <- sim_sampled[, c("trials", "R", "rt")]
 
 prepared_sampled <- prepare_data(model_sampled, data_sampled)
 ctx_sampled <- make_context(model_sampled)
@@ -219,14 +221,14 @@ ll_sampled_true
 ## Estimate a sampled-mixture weight
 
 Latent weights can also be estimated. To keep the example simple, we
-estimate only the latent mixture weight `p_fast`, while holding the
+estimate only the latent mixture weight `p.fast`, while holding the
 accumulator timing parameters fixed.
 
 ``` r
 
 neg_loglik <- function(theta) {
   est <- true_params_sampled
-  est["p_fast"] <- plogis(theta[["logit_p_fast"]])
+  est["p.fast"] <- plogis(theta[["logit_p_fast"]])
   params_df <- build_param_matrix(
     model_sampled,
     est,
@@ -244,14 +246,14 @@ fit <- optim(start, neg_loglik, method = "BFGS")
 
 ``` r
 
-fit_params <- c(p_fast = plogis(fit$par[["logit_p_fast"]]))
-target <- c(p_fast = true_params_sampled[["p_fast"]])
+fit_params <- c(p.fast = plogis(fit$par[["logit_p_fast"]]))
+target <- c(p.fast = true_params_sampled[["p.fast"]])
 
 data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params))
 ```
 
     ##        true recovered       miss
-    ## p_fast 0.35 0.3702799 0.02027991
+    ## p.fast 0.35 0.3702799 0.02027991
 
 Use `mode = "fixed"` when mixture weights are known and
 `mode = "sample"` when mixture weights should be estimated.

@@ -1,14 +1,15 @@
-# Define the external parameter names for a model
+# Control parameter grouping and names
 
-\`set_parameters()\` lets you rename parameters and share them across
-accumulators using one simple mapping. Each list name is the external
-parameter name users will supply; each value is one or more internal
-model parameter names such as \`go.m\` or \`stop.t0\`.
+Parameters are grouped by compatible type by default. For example, two
+lognormal accumulators expose one \`m\`, one \`s\`, and one \`t0\`
+parameter unless you ask for specific parameters to be separate.
+Triggers expose their trigger name directly, and sampled mixtures expose
+automatic \`p.\<component\>\` parameters.
 
 ## Usage
 
 ``` r
-set_parameters(spec, parameters)
+set_parameters(spec, separate = NULL, share = NULL, rename = NULL)
 ```
 
 ## Arguments
@@ -17,18 +18,25 @@ set_parameters(spec, parameters)
 
   A \`race_spec\` object.
 
-- parameters:
+- separate:
 
-  A named list mapping external names to one or more model parameter
+  Named list. Each name is a grouped public parameter, and each value is
+  one or more accumulator ids to split from that group. Use \`TRUE\` to
+  split every member of a group.
+
+- share:
+
+  Named list mapping a new public name to default public names or
+  internal parameter names that should share one value.
+
+- rename:
+
+  Named character vector mapping current public names to new public
   names.
 
 ## Value
 
 The updated \`race_spec\`.
-
-## Details
-
-Any parameters not mentioned in \`parameters\` keep their default names.
 
 ## Examples
 
@@ -38,12 +46,11 @@ spec <- race_spec() |>
   add_accumulator("stop", "lognormal") |>
   add_outcome("go", "go") |>
   add_outcome("stop", "stop") |>
-  set_parameters(list(
-    drift = c("go.m", "stop.m"),
-    spread = c("go.s", "stop.s"),
-    onset = "go.t0"
-  ))
+  set_parameters(
+    separate = list(m = c("go", "stop")),
+    rename = c(s = "spread", t0 = "onset")
+  )
 
-sampled_pars(spec)
-#> [1] "drift"   "spread"  "go.q"    "onset"   "stop.q"  "stop.t0"
+par_names(spec)
+#> [1] "go.m"   "spread" "onset"  "stop.m"
 ```

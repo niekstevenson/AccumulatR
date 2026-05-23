@@ -12,8 +12,8 @@
   Accumulators](https://niekstevenson.github.io/AccumulatR/articles/pool_model.md):
 - [Logical
   Rules](https://niekstevenson.github.io/AccumulatR/articles/logical_rules.md):
-- [Trigger
-  Types](https://niekstevenson.github.io/AccumulatR/articles/trigger_model.md):
+- [Shared Absence
+  Triggers](https://niekstevenson.github.io/AccumulatR/articles/trigger_model.md):
 - [Working with
   Mixtures](https://niekstevenson.github.io/AccumulatR/articles/mixtures.md):
 - [Multiple

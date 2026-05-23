@@ -38,7 +38,7 @@ structure <- finalize_model(spec)
 make_context(structure)
 #> $cpp
 #> $cpp$native
-#> <pointer: 0x55a08be839a0>
+#> <pointer: 0x555eb1cb4b90>
 #> 
 #> $cpp$has_complexity_metrics
 #> [1] FALSE

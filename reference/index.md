@@ -24,12 +24,12 @@ model.
 - [`add_component()`](https://niekstevenson.github.io/AccumulatR/reference/add_component.md)
   : Define a mixture component
 - [`set_parameters()`](https://niekstevenson.github.io/AccumulatR/reference/set_parameters.md)
-  : Define the external parameter names for a model
+  : Control parameter grouping and names
 - [`add_trigger()`](https://niekstevenson.github.io/AccumulatR/reference/add_trigger.md)
-  : Add a shared trigger or gate
+  : Add a shared absence trigger
 - [`set_metadata()`](https://niekstevenson.github.io/AccumulatR/reference/set_metadata.md)
   : Store model-level metadata
-- [`set_mixture_options()`](https://niekstevenson.github.io/AccumulatR/reference/set_mixture_options.md)
+- [`set_mixture()`](https://niekstevenson.github.io/AccumulatR/reference/set_mixture.md)
   : Control how mixture components are combined
 - [`finalize_model()`](https://niekstevenson.github.io/AccumulatR/reference/finalize_model.md)
   : Compile a model for simulation and fitting
@@ -61,7 +61,7 @@ Inspect model parameters and prepare trial-level parameter matrices.
 
 - [`prepare_data()`](https://niekstevenson.github.io/AccumulatR/reference/prepare_data.md)
   : Prepare behavioral data for likelihood evaluation
-- [`sampled_pars()`](https://niekstevenson.github.io/AccumulatR/reference/sampled_pars.md)
+- [`par_names()`](https://niekstevenson.github.io/AccumulatR/reference/par_names.md)
   : List the free parameters implied by a model
 - [`build_param_matrix()`](https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.md)
   : Create trial-level parameter values
@@ -74,7 +74,7 @@ probabilities.
 - [`make_context()`](https://niekstevenson.github.io/AccumulatR/reference/make_context.md)
   : Build a compiled likelihood context from a model
 - [`log_likelihood()`](https://niekstevenson.github.io/AccumulatR/reference/log_likelihood.md)
-  : Evaluate the log-likelihood of behavioral data
+  : Evaluate log-likelihoods of behavioral data
 - [`simulate()`](https://niekstevenson.github.io/AccumulatR/reference/simulate.md)
   : Simulate behavioral data from a model
 - [`response_probabilities()`](https://niekstevenson.github.io/AccumulatR/reference/response_probabilities.md)

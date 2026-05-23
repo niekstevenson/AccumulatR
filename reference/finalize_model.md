@@ -69,7 +69,15 @@ finalize_model(spec)
 #> list()
 #> 
 #> $parameters
+#> $parameters$separate
 #> list()
+#> 
+#> $parameters$share
+#> list()
+#> 
+#> $parameters$rename
+#> character(0)
+#> 
 #> 
 #> $components
 #> list()
@@ -162,9 +170,7 @@ finalize_model(spec)
 #> 
 #> $prep$components$attrs
 #> $prep$components$attrs$`__default__`
-#> $prep$components$attrs$`__default__`$weight_param
-#> NULL
-#> 
+#> list()
 #> 
 #> 
 #> $prep$components$has_weight_param
@@ -225,7 +231,7 @@ finalize_model(spec)
 #> 
 #> $components
 #>   component_id weight has_weight_param attrs  mode   reference
-#> 1  __default__      1            FALSE  NULL fixed __default__
+#> 1  __default__      1            FALSE       fixed __default__
 #> 
 #> $shared_triggers
 #> list()

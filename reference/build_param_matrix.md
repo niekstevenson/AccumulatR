@@ -36,7 +36,7 @@ build_param_matrix(
 
 - trial_df:
 
-  Optional trial/prepared data object. If it includes an \`accumulator\`
+  Optional trials/prepared data object. If it includes a \`racer\`
   column, parameter rows are built in that exact row order.
 
 - layout:
@@ -53,7 +53,7 @@ A data frame or matrix of parameter values by trial.
 spec <- race_spec()
 spec <- add_accumulator(spec, "A", "lognormal")
 spec <- add_outcome(spec, "A_win", "A")
-vals <- c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0)
+vals <- c(m = 0, s = 0.1)
 build_param_matrix(spec, vals, n_trials = 2)
 #>      q t0 p1  p2 p3 w
 #> [1,] 0  0  0 0.1  0 1

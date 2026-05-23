@@ -1,7 +1,7 @@
-# Evaluate the log-likelihood of behavioral data
+# Evaluate log-likelihoods of behavioral data
 
-Compute the log-likelihood of prepared behavioral data under one or more
-candidate parameter sets.
+Compute the summed log-likelihood by default, or trial-wise
+log-likelihoods when \`sum = FALSE\`.
 
 ## Usage
 
@@ -11,7 +11,7 @@ log_likelihood(
   data,
   parameters,
   ok = NULL,
-  trial_weights = NULL,
+  sum = TRUE,
   min_ll = log(1e-10),
   ...
 )
@@ -22,7 +22,7 @@ log_likelihood(
   data,
   parameters,
   ok = NULL,
-  trial_weights = NULL,
+  sum = TRUE,
   min_ll = log(1e-10),
   ...
 )
@@ -50,11 +50,10 @@ log_likelihood(context, ...)
   Logical vector marking which trials should contribute to the
   likelihood. Trials marked \`FALSE\` are assigned \`min_ll\`.
 
-- trial_weights:
+- sum:
 
-  Optional integer weights for compact prepared trials. If \`NULL\`, the
-  \`trial_weights\` attribute from \`data\` is used when present;
-  otherwise each prepared trial has weight one.
+  If \`TRUE\`, return the summed log-likelihood. If \`FALSE\`, return
+  trial-wise log-likelihood values.
 
 - min_ll:
 
@@ -66,7 +65,8 @@ log_likelihood(context, ...)
 
 ## Value
 
-A numeric vector of log-likelihood values.
+A summed log-likelihood by default, or a numeric vector of trial-wise
+log-likelihood values when \`sum = FALSE\`.
 
 ## Examples
 
@@ -77,7 +77,7 @@ spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
 params_df <- build_param_matrix(
   spec,
-  c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0),
+  c(m = 0, s = 0.1),
   n_trials = 2
 )
 data_df <- simulate(structure, params_df, seed = 1)

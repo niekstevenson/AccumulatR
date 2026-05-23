@@ -45,9 +45,8 @@ simulate(structure, ...)
 - trial_df:
 
   Optional data frame used to condition the simulation. When it includes
-  an \`accumulator\` column, \`onset\` and \`component\` values are
-  matched by trial and accumulator. Otherwise, values apply at the trial
-  level.
+  a \`racer\` column, \`onset\` and \`component\` values are matched by
+  \`trials\` and racer. Otherwise, values apply at the trial level.
 
 - seed:
 
@@ -66,8 +65,8 @@ simulate(structure, ...)
 - layout:
 
   Parameter layout. \`"rectangular"\` expects rows ordered by trial and
-  accumulator. \`"long"\` expects rows aligned to \`trial_df\` or
-  inferable from \`component\`. \`"auto"\` chooses automatically.
+  racer. \`"long"\` expects rows aligned to \`trial_df\` or inferable
+  from \`component\`. \`"auto"\` chooses automatically.
 
 - ...:
 
@@ -76,7 +75,7 @@ simulate(structure, ...)
 ## Value
 
 A data frame of simulated behavioral data. For standard models this
-includes \`trial\`, \`R\`, and \`rt\`. If \`n_outcomes \> 1\`,
+includes \`trials\`, \`R\`, and \`rt\`. If \`n_outcomes \> 1\`,
 additional ordered response columns such as \`R2\`/\`rt2\` are included.
 
 ## Examples
@@ -86,11 +85,11 @@ spec <- race_spec()
 spec <- add_accumulator(spec, "A", "lognormal")
 spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
-params <- c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0)
+params <- c(m = 0, s = 0.1)
 df <- build_param_matrix(spec, params, n_trials = 3)
 simulate(structure, df, seed = 123)
-#>   trial     R       rt
-#> 1     1 A_win 1.083347
-#> 2     2 A_win 1.168675
-#> 3     3 A_win 1.131959
+#>   trials     R       rt
+#> 1      1 A_win 1.083347
+#> 2      2 A_win 1.168675
+#> 3      3 A_win 1.131959
 ```

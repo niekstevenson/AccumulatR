@@ -31,10 +31,10 @@ Most workflows in `AccumulatR` follow the same four steps:
 
 ## Core ideas
 
-### Trial
+### `trials`
 
-A `trial` is a single behavioral observation. In the simplest case, each
-row of your data corresponds to one trial.
+`trials` identifies the behavioral observation. In the simplest case,
+each row of your data corresponds to one trial.
 
 ### `R`
 
@@ -82,6 +82,7 @@ model <- race_spec() |>
   add_accumulator("right", "lognormal") |>
   add_outcome("left", "left") |>
   add_outcome("right", "right") |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
   finalize_model()
 ```
 
@@ -105,13 +106,13 @@ sim <- simulate(model, param_df, seed = 123)
 head(sim)
 ```
 
-    ##   trial     R        rt
-    ## 1     1  left 0.3182631
-    ## 2     2  left 0.3414185
-    ## 3     3  left 0.2883234
-    ## 4     4  left 0.3669476
-    ## 5     5  left 0.3057125
-    ## 6     6 right 0.2456584
+    ##   trials     R        rt
+    ## 1      1  left 0.3182631
+    ## 2      2  left 0.3414185
+    ## 3      3  left 0.2883234
+    ## 4      4  left 0.3669476
+    ## 5      5  left 0.3057125
+    ## 6      6 right 0.2456584
 
 Each row is one trial, `R` is the observed response, and `rt` is the
 response time.
@@ -122,7 +123,7 @@ To fit a model, the usual pattern is:
 
 ``` r
 
-prepared <- prepare_data(model, sim[c("trial", "R", "rt")])
+prepared <- prepare_data(model, sim[c("trials", "R", "rt")])
 ctx <- make_context(model)
 log_likelihood(ctx, prepared, param_df)
 ```

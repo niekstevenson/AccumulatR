@@ -1,13 +1,13 @@
-# Add a shared trigger or gate
+# Add a shared absence trigger
 
-Triggers let several accumulators share the same stochastic gating
-event, which can be useful in stop-signal or contingent-processing
-models.
+A trigger is a named absence-probability parameter. All members in one
+trigger call share the same absence draw. Use separate trigger calls for
+independent absence draws.
 
 ## Usage
 
 ``` r
-add_trigger(spec, id, members, q = NULL, draw = c("shared", "independent"))
+add_trigger(spec, name, members)
 ```
 
 ## Arguments
@@ -16,23 +16,13 @@ add_trigger(spec, id, members, q = NULL, draw = c("shared", "independent"))
 
   A \`race_spec\` object.
 
-- id:
+- name:
 
-  Trigger label. If \`NULL\`, the first member label is used.
+  Trigger parameter name.
 
 - members:
 
-  Accumulator labels controlled by the trigger.
-
-- q:
-
-  Failure probability for the trigger. The trigger \`id\` is the
-  parameter name for this quantity.
-
-- draw:
-
-  Whether trigger failures are shared across members or drawn
-  independently.
+  Accumulator labels controlled by the shared absence draw.
 
 ## Value
 

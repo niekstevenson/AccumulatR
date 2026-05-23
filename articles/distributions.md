@@ -52,9 +52,10 @@ data.frame(
 - `LBA`: `v`, `B`, `A`, and `sv`.
 - `RDM`: `v`, `B`, `A`, and `s`.
 
-Outside of these all accumulators can have a non-decision time `t0` and
-a trigger probability `q`. For the `exgauss` `t0` and `mu` are redundant
-(they both constitute a shift in rt) and one must be fixed.
+Outside of these, all accumulators have a non-decision time `t0`.
+Absence probabilities are added with named triggers, not per-accumulator
+distribution parameters. For the `exgauss`, `t0` and `mu` are redundant
+because both shift RT, so one should be fixed.
 
 ## Example
 
@@ -68,6 +69,7 @@ model <- race_spec() |>
   add_accumulator("stop", "exgauss") |>
   add_outcome("go", "go") |>
   add_outcome("stop", "stop") |>
+  set_parameters(separate = list(m = TRUE, s = TRUE, mu = TRUE, sigma = TRUE, tau = TRUE)) |>
   finalize_model()
 
 params <- c(

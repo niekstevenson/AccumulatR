@@ -12,8 +12,8 @@
 <link rel="icon" sizes="any" href="../favicon.ico">
 <link rel="manifest" href="../site.webmanifest">
 <script src="../deps/jquery-3.6.0/jquery-3.6.0.min.js"></script><meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-<link href="../deps/bootstrap-5.3.1/bootstrap.min.css" rel="stylesheet">
-<script src="../deps/bootstrap-5.3.1/bootstrap.bundle.min.js"></script><link href="../deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
+<link href="../deps/bootstrap-5.3.8/bootstrap.min.css" rel="stylesheet">
+<script src="../deps/bootstrap-5.3.8/bootstrap.bundle.min.js"></script><link href="../deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
 <link href="../deps/font-awesome-6.5.2/css/v4-shims.min.css" rel="stylesheet">
 <script src="../deps/headroom-0.11.0/headroom.min.js"></script><script src="../deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="../deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="../deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="../deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="../deps/search-1.0.0/fuse.min.js"></script><script src="../deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="../pkgdown.js"></script><meta property="og:title" content="Supported Distributions">
 </head>
@@ -45,7 +45,7 @@
     <li><a class="dropdown-item" href="../articles/simple_model.html">A Simple Race Model</a></li>
     <li><a class="dropdown-item" href="../articles/pool_model.html">Pooling Accumulators</a></li>
     <li><a class="dropdown-item" href="../articles/logical_rules.html">Logical Rules</a></li>
-    <li><a class="dropdown-item" href="../articles/trigger_model.html">Trigger Types</a></li>
+    <li><a class="dropdown-item" href="../articles/trigger_model.html">Shared Absence Triggers</a></li>
     <li><a class="dropdown-item" href="../articles/mixtures.html">Working with Mixtures</a></li>
     <li><a class="dropdown-item" href="../articles/multi_outcome.html">Multiple Outcomes</a></li>
     <li><a class="dropdown-item" href="../articles/chained_onset.html">Chained Onsets</a></li>
@@ -133,10 +133,11 @@ and <code>sv</code>.</li>
 <code>RDM</code>: <code>v</code>, <code>B</code>, <code>A</code>,
 and <code>s</code>.</li>
 </ul>
-<p>Outside of these all accumulators can have a non-decision time
-<code>t0</code> and a trigger probability <code>q</code>. For the
-<code>exgauss</code> <code>t0</code> and <code>mu</code> are redundant
-(they both constitute a shift in rt) and one must be fixed.</p>
+<p>Outside of these, all accumulators have a non-decision time
+<code>t0</code>. Absence probabilities are added with named triggers,
+not per-accumulator distribution parameters. For the
+<code>exgauss</code>, <code>t0</code> and <code>mu</code> are redundant
+because both shift RT, so one should be fixed.</p>
 </div>
 <div class="section level2">
 <h2 id="example">Example<a class="anchor" aria-label="anchor" href="#example"></a>
@@ -150,6 +151,7 @@ vector.</p>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"stop"</span>, <span class="st">"exgauss"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"go"</span>, <span class="st">"go"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"stop"</span>, <span class="st">"stop"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="../reference/set_parameters.html">set_parameters</a></span><span class="op">(</span>separate <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>m <span class="op">=</span> <span class="cn">TRUE</span>, s <span class="op">=</span> <span class="cn">TRUE</span>, mu <span class="op">=</span> <span class="cn">TRUE</span>, sigma <span class="op">=</span> <span class="cn">TRUE</span>, tau <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">params</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>

@@ -17,10 +17,11 @@ library(AccumulatR)
     ##     simulate
 
 **Define the model** We use three accumulators. `R1_A` and `R1_B` both
-feed response `R1`, while `R2` feeds response `R2`. The
+feed response `R1`, while `R2` feeds response `R2`. Parameters are
+grouped by default; the
 [`set_parameters()`](https://niekstevenson.github.io/AccumulatR/reference/set_parameters.md)
-call shares `A`, `B`, and a variability parameter across the LBA and RDM
-accumulators, and shares `t0` across all three accumulators.
+call splits the two drift parameters and shares the cross-distribution
+response-boundary and variability terms.
 
 ``` r
 
@@ -31,12 +32,15 @@ model <- race_spec() |>
   add_pool("R1", c("R1_A", "R1_B")) |>
   add_outcome("R1", "R1") |>
   add_outcome("R2", "R2") |>
-  set_parameters(list(
-    B_shared = c("R1_A.B", "R1_B.B"),
-    A_shared = c("R1_A.A", "R1_B.A"),
-    noise_shared = c("R1_A.sv", "R1_B.s"),
-    t0_shared = c("R1_A.t0", "R1_B.t0", "R2.t0")
-  )) |>
+  set_parameters(
+    separate = list(v = c("R1_A", "R1_B"), m = TRUE, lognormal.s = TRUE),
+    share = list(
+      B_shared = c("R1_A.B", "R1_B.B"),
+      A_shared = c("R1_A.A", "R1_B.A"),
+      noise_shared = c("R1_A.sv", "R1_B.s")
+    ),
+    rename = c(t0 = "t0_shared")
+  ) |>
   finalize_model()
 
 true_params <- c(
@@ -64,7 +68,7 @@ params_df <- build_param_matrix(model, true_params, n_trials = n_trials)
 sim <- simulate(model, params_df)
 
 data_df <- data.frame(
-  trial = sim$trial,
+  trials = sim$trials,
   R = factor(sim$R),
   rt = sim$rt,
   stringsAsFactors = FALSE

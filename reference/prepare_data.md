@@ -18,15 +18,15 @@ prepare_data(structure, data_df, compress = FALSE, prep = NULL)
 
 - data_df:
 
-  Behavioral data. In the simplest case this contains \`trial\`, \`R\`,
+  Behavioral data. In the simplest case this contains \`trials\`, \`R\`,
   and \`rt\`; for multi-outcome models it can also contain \`R2\`,
   \`rt2\`, and so on.
 
 - compress:
 
-  If \`TRUE\`, collapse repeated prepared trials and attach
-  compact-trial weights for \`log_likelihood()\` to reuse automatically.
-  Defaults to \`FALSE\`.
+  If \`TRUE\`, collapse repeated prepared trials and attach an
+  \`expand\` index so \`log_likelihood()\` can return trial-level values
+  on the original trial scale. Defaults to \`FALSE\`.
 
 - prep:
 
@@ -45,12 +45,12 @@ spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
 params_df <- build_param_matrix(
   spec,
-  c(A.m = 0, A.s = 0.1, A.q = 0, A.t0 = 0),
+  c(m = 0, s = 0.1),
   n_trials = 2
 )
 data_df <- simulate(structure, params_df, seed = 1)
 prepare_data(structure, data_df)
-#>   trial     R        rt accumulator onset   component
-#> 1     1 A_win 0.9679031           A     0 __default__
-#> 2     2 A_win 0.9198333           A     0 __default__
+#>   trials     R        rt racer onset   component
+#> 1      1 A_win 0.9679031     A     0 __default__
+#> 2      2 A_win 0.9198333     A     0 __default__
 ```

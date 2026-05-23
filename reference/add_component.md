@@ -1,20 +1,14 @@
 # Define a mixture component
 
 Components are useful when trials can come from qualitatively different
-processing modes, such as fast versus slow processing.
+processing modes, such as fast versus slow processing. Component
+declarations define membership only; component probabilities are
+configured with \`set_mixture()\`.
 
 ## Usage
 
 ``` r
-add_component(
-  spec,
-  id,
-  members,
-  weight = NULL,
-  weight_param = NULL,
-  n_outcomes = NULL,
-  attrs = list()
-)
+add_component(spec, id, members, n_outcomes = NULL, attrs = list())
 ```
 
 ## Arguments
@@ -30,14 +24,6 @@ add_component(
 - members:
 
   Accumulator labels that belong to this component.
-
-- weight:
-
-  Optional fixed mixture weight.
-
-- weight_param:
-
-  Optional parameter name for a fitted mixture weight.
 
 - n_outcomes:
 

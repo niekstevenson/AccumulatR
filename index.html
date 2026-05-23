@@ -12,8 +12,8 @@
 <link rel="icon" sizes="any" href="favicon.ico">
 <link rel="manifest" href="site.webmanifest">
 <script src="deps/jquery-3.6.0/jquery-3.6.0.min.js"></script><meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-<link href="deps/bootstrap-5.3.1/bootstrap.min.css" rel="stylesheet">
-<script src="deps/bootstrap-5.3.1/bootstrap.bundle.min.js"></script><link href="deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
+<link href="deps/bootstrap-5.3.8/bootstrap.min.css" rel="stylesheet">
+<script src="deps/bootstrap-5.3.8/bootstrap.bundle.min.js"></script><link href="deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
 <link href="deps/font-awesome-6.5.2/css/v4-shims.min.css" rel="stylesheet">
 <script src="deps/headroom-0.11.0/headroom.min.js"></script><script src="deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="deps/search-1.0.0/fuse.min.js"></script><script src="deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="pkgdown.js"></script><meta property="og:title" content="Simulation and Likelihood Tools for Evidence-Accumulation Models">
 <meta name="description" content="Toolbox for designing, simulating and fitting custom evidence-accumulation models to behavioral data. Users define a model in terms of accumulators, pooled channels, logical response rules, and timing dependencies. This allows more direct embedding of psychological hypotheses into the model. With that model you can simulate decision-making data and evaluate the likelihood of observed responses under alternative parameter values. The user-facing interface stays in R, while the likelihood calculations are handled in C++ for speed.">
@@ -48,7 +48,7 @@
     <li><a class="dropdown-item" href="articles/simple_model.html">A Simple Race Model</a></li>
     <li><a class="dropdown-item" href="articles/pool_model.html">Pooling Accumulators</a></li>
     <li><a class="dropdown-item" href="articles/logical_rules.html">Logical Rules</a></li>
-    <li><a class="dropdown-item" href="articles/trigger_model.html">Trigger Types</a></li>
+    <li><a class="dropdown-item" href="articles/trigger_model.html">Shared Absence Triggers</a></li>
     <li><a class="dropdown-item" href="articles/mixtures.html">Working with Mixtures</a></li>
     <li><a class="dropdown-item" href="articles/multi_outcome.html">Multiple Outcomes</a></li>
     <li><a class="dropdown-item" href="articles/chained_onset.html">Chained Onsets</a></li>
@@ -116,9 +116,9 @@
 <span></span>
 <span><span class="va">param_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span><span class="va">spec</span>, <span class="va">pars</span>, n_trials <span class="op">=</span> <span class="fl">8</span><span class="op">)</span></span>
 <span><span class="va">sim</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/simulate.html">simulate</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">param_df</span>, seed <span class="op">=</span> <span class="fl">123</span><span class="op">)</span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/utils/head.html" class="external-link">head</a></span><span class="op">(</span><span class="va">sim</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"trial"</span>, <span class="st">"R"</span>, <span class="st">"rt"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
+<span><span class="fu"><a href="https://rdrr.io/r/utils/head.html" class="external-link">head</a></span><span class="op">(</span><span class="va">sim</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"trials"</span>, <span class="st">"R"</span>, <span class="st">"rt"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">prepared</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/prepare_data.html">prepare_data</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">sim</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"trial"</span>, <span class="st">"R"</span>, <span class="st">"rt"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
+<span><span class="va">prepared</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/prepare_data.html">prepare_data</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">sim</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"trials"</span>, <span class="st">"R"</span>, <span class="st">"rt"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="va">ctx</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/make_context.html">make_context</a></span><span class="op">(</span><span class="va">model</span><span class="op">)</span></span>
 <span><span class="fu"><a href="reference/log_likelihood.html">log_likelihood</a></span><span class="op">(</span><span class="va">ctx</span>, <span class="va">prepared</span>, <span class="va">param_df</span><span class="op">)</span></span></code></pre></div>
 <p><code><a href="reference/simulate.html">simulate()</a></code> returns behavioral data with one row per trial. In the simplest case that means a response column (<code>R</code>) and a response-time column (<code>rt</code>). <code><a href="reference/log_likelihood.html">log_likelihood()</a></code> then evaluates how probable those data are under a set of model parameters.</p>

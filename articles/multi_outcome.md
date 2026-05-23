@@ -28,6 +28,7 @@ model <- race_spec(n_outcomes = 2L) |>
   add_accumulator("B", "lognormal") |>
   add_outcome("A", "A") |>
   add_outcome("B", "B") |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
   finalize_model()
 
 true_params <- c(
@@ -51,7 +52,7 @@ params_df <- build_param_matrix(model, true_params, n_trials = n_trials)
 sim <- simulate(model, params_df)
 
 data_df <- data.frame(
-  trial = sim$trial,
+  trials = sim$trials,
   R = factor(sim$R),
   rt = sim$rt,
   R2 = factor(sim$R2),
@@ -62,13 +63,13 @@ data_df <- data.frame(
 head(data_df)
 ```
 
-    ##   trial R        rt R2       rt2
-    ## 1     1 A 0.3394130  B 0.3514512
-    ## 2     2 A 0.2373401  B 0.4565748
-    ## 3     3 A 0.3709420  B 0.4913625
-    ## 4     4 B 0.2974072  A 0.3441526
-    ## 5     5 A 0.3297834  B 0.4790856
-    ## 6     6 A 0.3671582  B 0.4663272
+    ##   trials R        rt R2       rt2
+    ## 1      1 A 0.3394130  B 0.3514512
+    ## 2      2 A 0.2373401  B 0.4565748
+    ## 3      3 A 0.3709420  B 0.4913625
+    ## 4      4 B 0.2974072  A 0.3441526
+    ## 5      5 A 0.3297834  B 0.4790856
+    ## 6      6 A 0.3671582  B 0.4663272
 
 **Estimate parameters with
 [`optim()`](https://rdrr.io/r/stats/optim.html)** We estimate `A.m`,

@@ -37,7 +37,15 @@ race_spec()
 #> list()
 #> 
 #> $parameters
+#> $parameters$separate
 #> list()
+#> 
+#> $parameters$share
+#> list()
+#> 
+#> $parameters$rename
+#> character(0)
+#> 
 #> 
 #> $components
 #> list()

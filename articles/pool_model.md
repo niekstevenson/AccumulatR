@@ -31,6 +31,7 @@ model <- race_spec() |>
   add_pool("A_pool", c("A1", "A2", "A3"), k = 2L) |>
   add_outcome("A", "A_pool") |>
   add_outcome("B", "B") |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
   finalize_model()
 
 true_params <- c(
@@ -58,7 +59,7 @@ params_df <- build_param_matrix(model, true_params, n_trials = n_trials)
 sim <- simulate(model, params_df)
 
 data_df <- data.frame(
-  trial = sim$trial,
+  trials = sim$trials,
   R = factor(sim$R),
   rt = sim$rt,
   stringsAsFactors = FALSE

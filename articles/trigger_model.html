@@ -5,17 +5,17 @@
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-<title>Trigger Types • AccumulatR</title>
+<title>Shared Absence Triggers • AccumulatR</title>
 <!-- favicons --><link rel="icon" type="image/png" sizes="96x96" href="../favicon-96x96.png">
 <link rel="icon" type="”image/svg+xml”" href="../favicon.svg">
 <link rel="apple-touch-icon" sizes="180x180" href="../apple-touch-icon.png">
 <link rel="icon" sizes="any" href="../favicon.ico">
 <link rel="manifest" href="../site.webmanifest">
 <script src="../deps/jquery-3.6.0/jquery-3.6.0.min.js"></script><meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-<link href="../deps/bootstrap-5.3.1/bootstrap.min.css" rel="stylesheet">
-<script src="../deps/bootstrap-5.3.1/bootstrap.bundle.min.js"></script><link href="../deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
+<link href="../deps/bootstrap-5.3.8/bootstrap.min.css" rel="stylesheet">
+<script src="../deps/bootstrap-5.3.8/bootstrap.bundle.min.js"></script><link href="../deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
 <link href="../deps/font-awesome-6.5.2/css/v4-shims.min.css" rel="stylesheet">
-<script src="../deps/headroom-0.11.0/headroom.min.js"></script><script src="../deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="../deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="../deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="../deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="../deps/search-1.0.0/fuse.min.js"></script><script src="../deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="../pkgdown.js"></script><meta property="og:title" content="Trigger Types">
+<script src="../deps/headroom-0.11.0/headroom.min.js"></script><script src="../deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="../deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="../deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="../deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="../deps/search-1.0.0/fuse.min.js"></script><script src="../deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="../pkgdown.js"></script><meta property="og:title" content="Shared Absence Triggers">
 </head>
 <body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
@@ -45,7 +45,7 @@
     <li><a class="dropdown-item" href="../articles/simple_model.html">A Simple Race Model</a></li>
     <li><a class="dropdown-item" href="../articles/pool_model.html">Pooling Accumulators</a></li>
     <li><a class="dropdown-item" href="../articles/logical_rules.html">Logical Rules</a></li>
-    <li><a class="dropdown-item" href="../articles/trigger_model.html">Trigger Types</a></li>
+    <li><a class="dropdown-item" href="../articles/trigger_model.html">Shared Absence Triggers</a></li>
     <li><a class="dropdown-item" href="../articles/mixtures.html">Working with Mixtures</a></li>
     <li><a class="dropdown-item" href="../articles/multi_outcome.html">Multiple Outcomes</a></li>
     <li><a class="dropdown-item" href="../articles/chained_onset.html">Chained Onsets</a></li>
@@ -70,7 +70,7 @@
 
 <div class="row">
   <main id="main" class="col-md-9"><div class="page-header">
-      <img src="../logo.png" class="logo" alt=""><h1>Trigger Types</h1>
+      <img src="../logo.png" class="logo" alt=""><h1>Shared Absence Triggers</h1>
             
       
       <small class="dont-index">Source: <a href="https://github.com/niekstevenson/AccumulatR/blob/main/vignettes/trigger_model.Rmd" class="external-link"><code>vignettes/trigger_model.Rmd</code></a></small>
@@ -79,15 +79,10 @@
 
     
     
-<p>This vignette shows how to add triggers to a model. Here
-<code>go1</code> and <code>go2</code> produce responses <code>R1</code>
-and <code>R2</code>, but both accumulators are controlled by the same
-trigger. On some trials that trigger fails, so no response is
-observed.</p>
-<p>With <code>draw = "shared"</code>, the trigger failure is joint: both
-accumulators either start together or fail together. With
-<code>draw = "independent"</code>, the same failure probability is
-applied separately to each accumulator.</p>
+<p>This vignette shows how to add triggers to a model. A trigger is a
+named absence-probability parameter. All members in one trigger call
+share the same absence draw. Separate trigger calls create independent
+absence draws.</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://github.com/niekstevenson/AccumulatR" class="external-link">AccumulatR</a></span><span class="op">)</span></span></code></pre></div>
 <pre><code><span><span class="co">## </span></span>
@@ -96,30 +91,27 @@ applied separately to each accumulator.</p>
 <span><span class="co">## </span></span>
 <span><span class="co">##     simulate</span></span></code></pre>
 <p><strong>Define the model</strong> We use two lognormal accumulators
-and one shared trigger with failure probability
-<code>q = 0.15</code>.</p>
+and one shared trigger. The trigger parameter is named
+<code>shared_trigger</code>.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">model</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/race_spec.html">race_spec</a></span><span class="op">(</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"go1"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"go2"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"R1"</span>, <span class="st">"go1"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"R2"</span>, <span class="st">"go2"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
-<span>  <span class="fu"><a href="../reference/add_trigger.html">add_trigger</a></span><span class="op">(</span><span class="st">"shared_trigger"</span>,</span>
-<span>    members <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"go1"</span>, <span class="st">"go2"</span><span class="op">)</span>,</span>
-<span>    q <span class="op">=</span> <span class="fl">0.15</span>,</span>
-<span>    draw <span class="op">=</span> <span class="st">"shared"</span></span>
-<span>  <span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="../reference/add_trigger.html">add_trigger</a></span><span class="op">(</span><span class="st">"shared_trigger"</span>, members <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"go1"</span>, <span class="st">"go2"</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="../reference/set_parameters.html">set_parameters</a></span><span class="op">(</span>separate <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>m <span class="op">=</span> <span class="cn">TRUE</span>, s <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">true_params</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
 <span>  go1.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.30</span><span class="op">)</span>,</span>
 <span>  go1.s <span class="op">=</span> <span class="fl">0.18</span>,</span>
 <span>  go2.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.35</span><span class="op">)</span>,</span>
-<span>  go2.s <span class="op">=</span> <span class="fl">0.18</span></span>
+<span>  go2.s <span class="op">=</span> <span class="fl">0.18</span>,</span>
+<span>  shared_trigger <span class="op">=</span> <span class="fl">0.15</span></span>
 <span><span class="op">)</span></span></code></pre></div>
-<p>The trigger probability is fixed in the model definition here, so the
-fitted parameter vector only contains the accumulator timing
-parameters.</p>
+<p>The trigger probability is supplied in the same parameter vector as
+the timing parameters.</p>
 <p><strong>Simulate data</strong> Failed trigger trials appear as
 missing responses and missing response times.</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
@@ -131,7 +123,7 @@ missing responses and missing response times.</p>
 <span><span class="va">sim</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/simulate.html">simulate</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">params_df</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">data_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span>
-<span>  trial <span class="op">=</span> <span class="va">sim</span><span class="op">$</span><span class="va">trial</span>,</span>
+<span>  trials <span class="op">=</span> <span class="va">sim</span><span class="op">$</span><span class="va">trials</span>,</span>
 <span>  R <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/factor.html" class="external-link">factor</a></span><span class="op">(</span><span class="va">sim</span><span class="op">$</span><span class="va">R</span><span class="op">)</span>,</span>
 <span>  rt <span class="op">=</span> <span class="va">sim</span><span class="op">$</span><span class="va">rt</span>,</span>
 <span>  stringsAsFactors <span class="op">=</span> <span class="cn">FALSE</span></span>
@@ -157,18 +149,20 @@ parameter values.</p>
 <span><span class="va">ll_true</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">as.numeric</a></span><span class="op">(</span><span class="fu"><a href="../reference/log_likelihood.html">log_likelihood</a></span><span class="op">(</span><span class="va">ctx</span>, <span class="va">prepared</span>, <span class="va">params_df_true</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="va">ll_true</span></span></code></pre></div>
 <pre><code><span><span class="co">## [1] 785.4287</span></span></code></pre>
-<p>To see why the trigger type matters, compare that with the same model
-under independent trigger failures instead of joint failures.</p>
+<p>To see why trigger grouping matters, compare that with independent
+trigger absence draws. This uses two separate trigger calls, one for
+each accumulator.</p>
 <div class="sourceCode" id="cb9"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">model_independent</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/race_spec.html">race_spec</a></span><span class="op">(</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"go1"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"go2"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"R1"</span>, <span class="st">"go1"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"R2"</span>, <span class="st">"go2"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
-<span>  <span class="fu"><a href="../reference/add_trigger.html">add_trigger</a></span><span class="op">(</span><span class="st">"shared_trigger"</span>,</span>
-<span>    members <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"go1"</span>, <span class="st">"go2"</span><span class="op">)</span>,</span>
-<span>    q <span class="op">=</span> <span class="fl">0.15</span>,</span>
-<span>    draw <span class="op">=</span> <span class="st">"independent"</span></span>
+<span>  <span class="fu"><a href="../reference/add_trigger.html">add_trigger</a></span><span class="op">(</span><span class="st">"go1_trigger"</span>, members <span class="op">=</span> <span class="st">"go1"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="../reference/add_trigger.html">add_trigger</a></span><span class="op">(</span><span class="st">"go2_trigger"</span>, members <span class="op">=</span> <span class="st">"go2"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="../reference/set_parameters.html">set_parameters</a></span><span class="op">(</span></span>
+<span>    separate <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>m <span class="op">=</span> <span class="cn">TRUE</span>, s <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span>,</span>
+<span>    share <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>shared_trigger <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"go1_trigger"</span>, <span class="st">"go2_trigger"</span><span class="op">)</span><span class="op">)</span></span>
 <span>  <span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
@@ -196,15 +190,12 @@ trigger.</p>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"go2"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"R1"</span>, <span class="st">"go1"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"R2"</span>, <span class="st">"go2"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
-<span>  <span class="fu"><a href="../reference/add_trigger.html">add_trigger</a></span><span class="op">(</span><span class="st">"go1_trigger"</span>,</span>
-<span>    members <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"go1"</span><span class="op">)</span>,</span>
-<span>    q <span class="op">=</span> <span class="fl">0.15</span></span>
-<span>  <span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="../reference/add_trigger.html">add_trigger</a></span><span class="op">(</span><span class="st">"go1_trigger"</span>, members <span class="op">=</span> <span class="st">"go1"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span></code></pre></div>
 <p><strong>Estimate parameters with <code><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim()</a></code></strong> We
 estimate <code>go1.m</code>, <code>go1.s</code>, <code>go2.m</code>, and
-<code>go2.s</code>, while keeping the trigger probability fixed at its
-generating value.</p>
+<code>go2.s</code>, while keeping the trigger probability fixed in the
+parameter vector passed to the likelihood.</p>
 <div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">neg_loglik</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">theta</span><span class="op">)</span> <span class="op">{</span></span>
 <span>  <span class="va">est</span> <span class="op">&lt;-</span> <span class="va">true_params</span></span>
@@ -250,9 +241,10 @@ generating value.</p>
 <span><span class="co">## go1.s  0.180000  0.1877828 0.0077827916</span></span>
 <span><span class="co">## go2.m -1.049822 -1.0535251 0.0037029662</span></span>
 <span><span class="co">## go2.s  0.180000  0.1781906 0.0018094007</span></span></code></pre>
-<p>Use shared triggers when several accumulators are governed by the
-same gating event. Use independent triggers when the same failure
-probability should apply separately to each accumulator.</p>
+<p>Use one trigger call when several accumulators share an absence
+event. Use separate trigger calls when absence draws are independent;
+group those trigger parameters with <code><a href="../reference/set_parameters.html">set_parameters()</a></code> if
+they should have the same probability.</p>
   </main>
 </div>
 

@@ -1,13 +1,9 @@
-# Trigger Types
+# Shared Absence Triggers
 
-This vignette shows how to add triggers to a model. Here `go1` and `go2`
-produce responses `R1` and `R2`, but both accumulators are controlled by
-the same trigger. On some trials that trigger fails, so no response is
-observed.
-
-With `draw = "shared"`, the trigger failure is joint: both accumulators
-either start together or fail together. With `draw = "independent"`, the
-same failure probability is applied separately to each accumulator.
+This vignette shows how to add triggers to a model. A trigger is a named
+absence-probability parameter. All members in one trigger call share the
+same absence draw. Separate trigger calls create independent absence
+draws.
 
 ``` r
 
@@ -22,7 +18,7 @@ library(AccumulatR)
     ##     simulate
 
 **Define the model** We use two lognormal accumulators and one shared
-trigger with failure probability `q = 0.15`.
+trigger. The trigger parameter is named `shared_trigger`.
 
 ``` r
 
@@ -31,23 +27,21 @@ model <- race_spec() |>
   add_accumulator("go2", "lognormal") |>
   add_outcome("R1", "go1") |>
   add_outcome("R2", "go2") |>
-  add_trigger("shared_trigger",
-    members = c("go1", "go2"),
-    q = 0.15,
-    draw = "shared"
-  ) |>
+  add_trigger("shared_trigger", members = c("go1", "go2")) |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
   finalize_model()
 
 true_params <- c(
   go1.m = log(0.30),
   go1.s = 0.18,
   go2.m = log(0.35),
-  go2.s = 0.18
+  go2.s = 0.18,
+  shared_trigger = 0.15
 )
 ```
 
-The trigger probability is fixed in the model definition here, so the
-fitted parameter vector only contains the accumulator timing parameters.
+The trigger probability is supplied in the same parameter vector as the
+timing parameters.
 
 **Simulate data** Failed trigger trials appear as missing responses and
 missing response times.
@@ -62,7 +56,7 @@ params_df <- build_param_matrix(model, true_params, n_trials = n_trials)
 sim <- simulate(model, params_df)
 
 data_df <- data.frame(
-  trial = sim$trial,
+  trials = sim$trials,
   R = factor(sim$R),
   rt = sim$rt,
   stringsAsFactors = FALSE
@@ -95,8 +89,9 @@ ll_true
 
     ## [1] 785.4287
 
-To see why the trigger type matters, compare that with the same model
-under independent trigger failures instead of joint failures.
+To see why trigger grouping matters, compare that with independent
+trigger absence draws. This uses two separate trigger calls, one for
+each accumulator.
 
 ``` r
 
@@ -105,10 +100,11 @@ model_independent <- race_spec() |>
   add_accumulator("go2", "lognormal") |>
   add_outcome("R1", "go1") |>
   add_outcome("R2", "go2") |>
-  add_trigger("shared_trigger",
-    members = c("go1", "go2"),
-    q = 0.15,
-    draw = "independent"
+  add_trigger("go1_trigger", members = "go1") |>
+  add_trigger("go2_trigger", members = "go2") |>
+  set_parameters(
+    separate = list(m = TRUE, s = TRUE),
+    share = list(shared_trigger = c("go1_trigger", "go2_trigger"))
   ) |>
   finalize_model()
 
@@ -141,17 +137,14 @@ model_single_q <- race_spec() |>
   add_accumulator("go2", "lognormal") |>
   add_outcome("R1", "go1") |>
   add_outcome("R2", "go2") |>
-  add_trigger("go1_trigger",
-    members = c("go1"),
-    q = 0.15
-  ) |>
+  add_trigger("go1_trigger", members = "go1") |>
   finalize_model()
 ```
 
 **Estimate parameters with
 [`optim()`](https://rdrr.io/r/stats/optim.html)** We estimate `go1.m`,
 `go1.s`, `go2.m`, and `go2.s`, while keeping the trigger probability
-fixed at its generating value.
+fixed in the parameter vector passed to the likelihood.
 
 ``` r
 
@@ -205,6 +198,8 @@ data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params
     ## go2.m -1.049822 -1.0535251 0.0037029662
     ## go2.s  0.180000  0.1781906 0.0018094007
 
-Use shared triggers when several accumulators are governed by the same
-gating event. Use independent triggers when the same failure probability
-should apply separately to each accumulator.
+Use one trigger call when several accumulators share an absence event.
+Use separate trigger calls when absence draws are independent; group
+those trigger parameters with
+[`set_parameters()`](https://niekstevenson.github.io/AccumulatR/reference/set_parameters.md)
+if they should have the same probability.

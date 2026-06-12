@@ -2,8 +2,9 @@
 
 \newcommand{\pkgname}{\pkg{AccumulatR}}
 \newcommand{\fct}[1]{\code{#1()}}
+\newcommand{\class}[1]{\code{#1}}
 
-\author{Niek Stevenson\\Affiliation to be added}
+\author{Niek Stevenson\\Independent researcher}
 \Plainauthor{Niek Stevenson}
 
 \title{\pkgname: Simulation and Likelihood Tools for Evidence-Accumulation Models in \proglang{R}}
@@ -11,29 +12,31 @@
 \Shorttitle{\pkgname{} in \proglang{R}}
 
 \Abstract{
-  Evidence-accumulation models are widely used in mathematical psychology to
-  explain response choices and response times. In practice, however, applied
-  work often requires more than fitting a single named model family. Researchers
-  may need architectures with multiple competing routes, pooled channels,
-  stopping or gating processes, staged onsets, latent mixtures, or response
-  rules that are not direct readouts of a single accumulator. \pkgname{} is an
-  \proglang{R}/\proglang{C++} package designed around that modeling problem. It
-  provides a declarative \proglang{R} interface for specifying accumulators,
-  pools, triggers, timing dependencies, and observed outcome rules; it then
-  supports simulation and likelihood evaluation for the resulting model. The
-  user-facing workflow stays in \proglang{R}, while repeated numerical work is
-  delegated to compiled \proglang{C++} code. This paper gives a first
-  software-focused overview of the package, describes its model-building
-  vocabulary, and illustrates the basic simulation-and-fitting workflow.
+  Evidence-accumulation models explain response choices and response times by
+  treating behavior as the result of latent processes that race, combine, or
+  inhibit one another. Applied work often requires more than a single named
+  model family: researchers may want pooled channels, staged onsets, shared
+  absence processes, latent mixtures, or observed responses defined by logical
+  rules. \pkgname{} is an \proglang{R}/\proglang{C++} package for specifying,
+  simulating, and evaluating likelihoods for such structured
+  evidence-accumulation models. Model structure is declared in \proglang{R}
+  using accumulators, pools, outcome rules, components, triggers, and mixture
+  settings. The same finalized model object is then used for simulation, data
+  preparation, response-probability calculation, and likelihood evaluation.
+  Repeated numerical work is delegated to compiled code via \pkg{Rcpp}. This
+  paper describes the software design, the mathematical representation used by
+  the likelihood evaluator, and a set of reproducible examples covering basic
+  races, pooled outcomes, guarded rules, mixtures, and ranked responses.
 }
 
-\Keywords{evidence accumulation, race models, response times, mathematical psychology, \proglang{R}}
-\Plainkeywords{evidence accumulation, race models, response times, mathematical psychology, R}
+\Keywords{evidence accumulation, response times, race models, mathematical psychology, \proglang{R}}
+\Plainkeywords{evidence accumulation, response times, race models, mathematical psychology, R}
 
 \Address{
   Niek Stevenson\\
-  Affiliation to be added\\
-  E-mail: \email{niek.stevenson@gmail.com}
+  Independent researcher\\
+  E-mail: \email{niek.stevenson@gmail.com}\\
+  URL: \url{https://github.com/niekstevenson/AccumulatR/}
 }
 
 \begin{document}
@@ -41,218 +44,698 @@
 \section[Introduction: Evidence-accumulation modeling in R]{Introduction: Evidence-accumulation modeling in \proglang{R}}
 \label{sec:introduction}
 
-Evidence-accumulation models play a central role in mathematical psychology
- because they provide process accounts of both response choice and response
- time data \citep{ratcliffDiffusionDecision2016, brownSimplestComplete2008,
- heathcoteWinnerTakes2022}. In many applications the practical modeling problem
- is not merely to estimate one standard model, but to express a psychologically
- motivated architecture: multiple routes can race toward the same response,
- some processes may be gated or inhibited, stages may begin only after earlier
- events, and the observed response may be defined by a logical rule rather than
- by the first finisher alone.
+Evidence-accumulation models are a central tool for the analysis of choices and
+response times in cognitive psychology, neuroscience, and related fields. They
+replace a purely descriptive account of accuracy and latency with a process
+account: latent evidence streams evolve over time, an observed response is
+recorded when one or more streams satisfy a decision rule, and the response time
+is the finishing time of the relevant process. Diffusion models, linear
+ballistic accumulator models, lognormal race models, and related dynamic choice
+models all instantiate this general idea \citep{ratcliffDiffusionDecision2016,
+brownSimplestComplete2008, heathcoteWinnerTakes2022, rouderLognormalRace2015}.
 
-Several software tools already support important parts of this landscape. Some
- focus on specific model families or distributions, such as Wiener diffusion
- tools \citep{wabersichRWienerPackage2014} or recent \proglang{Stan}-based
- implementations of diffusion models \citep{henrichSevenparameterDiffusion2024}.
- Other packages provide highly flexible estimation frameworks, including
- multilevel or Bayesian modeling interfaces \citep{batesFittingLinear2015,
- burknerBrmsPackage2017, vandekerckhoveHierarchicalDiffusion2011}. However,
- those interfaces do not primarily target direct specification of race-model
- architectures with pooled channels, shared absence triggers, chained onsets, and
- logical response rules as first-class model components.
+The software problem is not exhausted by fitting one standard model family.
+Many substantive hypotheses are architectural. A task may require multiple
+routes to a response, a response that depends on a pool of channels, a stop or
+blocker process, a second stage that can start only after an earlier stage has
+finished, a mixture of latent processing modes, or data in which the first two
+responses on a trial are both observed. These requirements are common enough
+that forcing them into a single winner-takes-all template obscures the model
+being tested.
 
-\pkgname{} was written to target that gap. The package provides a model-focused
- interface in \proglang{R} for specifying evidence-accumulation systems in terms
- that are close to how mathematical psychologists often describe their models:
- accumulators, pools, outcomes, timing relations, and mixtures. These model
- definitions can then be used for simulation and for likelihood evaluation
- against observed behavioral data. Computationally intensive repeated work is
- handled in \proglang{C++}, while the user-facing workflow remains in
- \proglang{R} \citep{R}.
+Existing software covers important parts of this landscape. Packages such as
+\pkg{RWiener} provide focused implementations for Wiener diffusion models
+\citep{wabersichRWienerPackage2014}. Recent \proglang{Stan}-based diffusion
+model tools support flexible Bayesian estimation for particular diffusion
+parameterizations \citep{henrichSevenparameterDiffusion2024}, while broader
+estimation frameworks such as \pkg{lme4} and \pkg{brms} provide mature
+interfaces for hierarchical statistical modeling \citep{batesFittingLinear2015,
+burknerBrmsPackage2017}. Other work has emphasized hierarchical cognitive
+models, approximate likelihoods, and joint neural-behavioral models
+\citep{vandekerckhoveHierarchicalDiffusion2011, fenglerLikelihoodApproximation2021,
+palestroTutorialJoint2018}. \pkgname{} is complementary to these tools. Its
+main contribution is a direct software representation of structured
+race-model architectures, coupled to simulation and exact likelihood evaluation.
 
-This draft paper is intentionally modest. Its goals are to describe the current
- package vocabulary, show the core workflow, and mark the sections that would
- need deeper development for a full \emph{Journal of Statistical Software}
- submission.
+\pkgname{} follows a compact workflow. The user declares the model structure in
+\proglang{R}, finalizes it, expands a named parameter vector into a trial-wise
+parameter matrix, and then uses the same finalized model for simulation or
+likelihood evaluation. The package is implemented as an \proglang{R} package
+\citep{R} with computational kernels in \proglang{C++}, exposed through
+\pkg{Rcpp} \citep{Eddelbuettel+Francois:2011}. This paper describes both the
+user interface and the model class it implements. Section~\ref{sec:design}
+introduces the package objects and current public API. Section~\ref{sec:model}
+summarizes the mathematical layer. Section~\ref{sec:workflow} gives the basic
+\proglang{R} workflow. Section~\ref{sec:examples} presents structured model
+examples. Sections~\ref{sec:likelihood} and~\ref{sec:implementation} describe
+likelihood evaluation and implementation details, followed by a comparison to
+related software and a discussion.
 
-\section{Package overview}
-\label{sec:overview}
+\section{Software design}
+\label{sec:design}
 
-The basic object in \pkgname{} is a model specification created with
-\fct{race\_spec}. A specification is built incrementally and then finalized for
- simulation or fitting using \fct{finalize\_model}. The resulting workflow is
- centered on four stages:
-\begin{enumerate}
-  \item define a model architecture,
-  \item generate trial-wise parameters,
-  \item simulate or prepare behavioral data,
-  \item evaluate the likelihood of the observed data under candidate
-    parameters.
-\end{enumerate}
+\subsection{Objects and workflow}
 
-At present, the package supports several accumulator distributions, including
- lognormal, gamma, ex-Gaussian, linear ballistic accumulator (LBA), and race
- diffusion model (RDM) parameterizations. In addition to accumulator-level
- timing parameters, the package supports several structural operators that are
- especially useful in mathematical psychology:
+The package distinguishes model structure from numerical parameter values. A
+\class{race\_spec} object describes the architecture: accumulators, pools,
+observed outcome rules, components, triggers, mixture settings, and parameter
+naming rules. A finalized \class{model\_structure} object is produced for
+simulation, data preparation, response probabilities, and likelihood contexts.
+The compiled likelihood context is built once and then reused across many
+parameter evaluations.
 
 \begin{table}[t!]
 \centering
-\begin{tabular}{ll}
+\begin{tabular}{@{}p{2.0cm}p{5.2cm}p{6.1cm}@{}}
 \hline
-Model component & Main interface \\ \hline
-Accumulator definition & \fct{add\_accumulator} \\
-Pooled channels & \fct{add\_pool} \\
-Observed response labels & \fct{add\_outcome} \\
-Logical response rules & \fct{first\_of}, \fct{all\_of}, \fct{none\_of}, \fct{inhibit} \\
-Triggered or gated starts & \fct{add\_trigger} \\
-Staged onsets & \fct{after} \\
-Latent or observed mixtures & \fct{add\_component}, \fct{set\_mixture\_options} \\
-Multiple ranked responses & \fct{race\_spec(n\_outcomes = ...)} \\ \hline
+Stage & Main functions & Role \\ \hline
+Spec. &
+\fct{race\_spec}, \fct{add\_accumulator},\newline \fct{add\_pool},
+\fct{add\_outcome} &
+Declare the latent accumulators, pooled sources, and observed response labels. \\
+Rules &
+\fct{first\_of}, \fct{all\_of}, \fct{none\_of},\newline
+\fct{inhibit}, \fct{after}, \fct{add\_trigger} &
+Express logical outcome rules, blocking rules, staged onsets, and shared
+absence events. \\
+Params &
+\fct{set\_parameters}, \fct{par\_names},\newline
+\fct{build\_param\_matrix} &
+Control public parameter names and expand named values to trial-wise parameter
+rows. \\
+Mixing &
+\fct{add\_component}, \fct{set\_mixture} &
+Define component membership and specify whether mixture weights are fixed or
+estimated as sampled-mixture parameters. \\
+Runtime &
+\fct{finalize\_model}, \fct{simulate},\newline
+\fct{prepare\_data}, \fct{make\_context},\newline
+\fct{log\_likelihood} &
+Finalize a specification, simulate data, prepare observations, and evaluate the
+likelihood. \\
+Inspect &
+\fct{processing\_tree},\newline \fct{response\_probabilities},
+\fct{complexity\_metrics} &
+Inspect response logic, marginal response probabilities, and compiled
+complexity diagnostics. \\ \hline
 \end{tabular}
-\caption{Core building blocks currently exposed by \pkgname{}.}
-\label{tab:components}
+\caption{\label{tab:api} Main public functions in \pkgname{}.}
 \end{table}
 
-This feature set means that \pkgname{} is not limited to a single ``winner
- takes all'' architecture. It can also represent models in which a response is
- produced by one of several routes, by a $k$-of-$n$ pool, by the joint
- satisfaction of several events, or by a route that is itself vulnerable to a
- stop-like blocker. Likewise, mixtures can be handled either as observed trial
- types or as latent components marginalized in the likelihood.
+The workflow in Table~\ref{tab:api} is deliberately explicit. Model-building
+functions return modified specifications, so they can be chained with the base
+\proglang{R} pipe. Parameter values are not stored in the model object. Instead
+\fct{build\_param\_matrix} expands a named vector into the rectangular or long
+parameter layout expected by the simulator and likelihood evaluator. This
+separation lets the same model architecture be evaluated under many trial-wise
+parameter sets.
 
-\section{Core workflow}
+\subsection{Parameter naming}
+
+Parameter names are public interface, not an implementation detail. By default,
+compatible accumulator parameters are grouped. For example, a two-accumulator
+lognormal race has public parameters \code{m}, \code{s}, and \code{t0}; both
+accumulators share those values unless the specification requests otherwise.
+The function \fct{set\_parameters} changes this mapping. Its
+\code{separate} argument splits grouped parameters, \code{share} intentionally
+maps several internal parameters to one new public name, and \code{rename}
+changes a public name without merging distinct parameters. The result can be
+inspected with \fct{par\_names}.
+
+This design avoids the common ambiguity between an accumulator-level parameter
+and a public parameter. The name \code{left.m} is valid only if the
+specification has separated \code{m} for the accumulator \code{left}. Without
+that declaration, the valid name is \code{m}. The same mechanism is used for
+models that combine distribution families. If the same suffix has incompatible
+meanings across distributions, the default public name is qualified by
+distribution, for example \code{lognormal.s} and \code{RDM.s}.
+
+\subsection{Components and mixtures}
+
+Components represent qualitatively different process variants within one model.
+A component declaration defines membership only: it says which accumulators are
+active in a component, and optionally how many ordered responses that component
+records. Mixture probabilities are configured separately with
+\fct{set\_mixture}. In \code{mode = "fixed"}, component weights are supplied as
+known probabilities. In \code{mode = "sample"}, non-reference components expose
+probability parameters such as \code{p.fast}; the reference receives the
+residual probability.
+
+The data determine whether a component is observed on a trial. If a
+\code{component} column is present, likelihood evaluation conditions on that
+component. If the column is absent or contains missing component labels, the
+likelihood marginalizes over components using the model's mixture
+specification. The same convention is used by \fct{response\_probabilities}.
+
+\section{Model representation}
+\label{sec:model}
+
+\subsection{Leaves, sources, and response rules}
+
+The basic latent object is a finishing time. For a leaf accumulator $a$, let
+$T_a$ denote its finishing time, with distribution function $F_a$, density
+$f_a$, and survival function $S_a$:
+%
+\begin{equation}
+  F_a(t) = \Pr(T_a \leq t), \qquad
+  f_a(t) = F_a'(t), \qquad
+  S_a(t) = 1 - F_a(t).
+  \label{eq:leaf}
+\end{equation}
+%
+A source is either a leaf or a pool. An outcome rule defines when an observed
+response becomes available. The simplest outcome rule is a direct readout from
+one source. More complex rules use first-of, all-of, absence, and inhibition
+operators.
+
+\begin{table}[t!]
+\centering
+\begin{tabular}{lll}
+\hline
+Distribution & Public parameters & Notes \\ \hline
+\code{lognormal} & \code{m}, \code{s} & Log-scale location and spread. \\
+\code{gamma} & \code{shape}, \code{rate} & Gamma finishing-time distribution. \\
+\code{exgauss} & \code{mu}, \code{sigma}, \code{tau} & Gaussian plus exponential finishing time. \\
+\code{LBA} & \code{v}, \code{B}, \code{A}, \code{sv} & Linear ballistic accumulator. \\
+\code{RDM} & \code{v}, \code{B}, \code{A}, \code{s} & Race diffusion model parameterization. \\ \hline
+\end{tabular}
+\caption{\label{tab:distributions} Accumulator distributions currently
+available in \pkgname{}. All accumulators also have the non-decision-time
+parameter \code{t0}, which defaults to zero if omitted.}
+\end{table}
+
+For a simple independent race in which response $r$ is observed at time $t$,
+the familiar density is
+%
+\begin{equation}
+  \ell_r(t) = f_r(t) \prod_{j \neq r} S_j(t).
+  \label{eq:simple-race}
+\end{equation}
+%
+\pkgname{} treats Equation~\ref{eq:simple-race} as a special case of a more
+general order-region representation. A target outcome may become true through
+several transition scenarios, and each scenario is combined with the condition
+that no competing observed outcome has occurred earlier. For direct,
+independent races this lowers immediately to products of densities and
+survival functions. For shared, nested, or guarded rules the evaluator keeps
+the joint order constraints until they can be projected correctly.
+
+\subsection{Pools and logical rules}
+
+A pool combines several sources into one source. If pool $P$ has members
+$T_1,\ldots,T_n$ and finishes when the $k$th member finishes, then
+%
+\begin{equation}
+  F_P(t) =
+  \Pr\left(\sum_{j=1}^{n} 1\{T_j \leq t\} \geq k\right).
+  \label{eq:pool}
+\end{equation}
+%
+For independent exchangeable members with common $F$ and $S = 1 - F$, this
+reduces to
+%
+\begin{equation}
+  F_P(t) = \sum_{m=k}^{n} {n \choose m} F(t)^m S(t)^{n-m}.
+  \label{eq:pool-iid}
+\end{equation}
+%
+The software does not require exchangeability; the pool is compiled as order
+constraints over its members.
+
+The helpers \fct{first\_of} and \fct{all\_of} define disjunction and
+conjunction over response rules. With independent children, \fct{first\_of}
+becomes true when the earliest child becomes true, and \fct{all\_of} becomes
+true when the last required child becomes true:
+%
+\begin{equation}
+  f_{\mathrm{first}}(t)
+  =
+  \sum_{r=1}^{m} f_r(t) \prod_{q \neq r} S_q(t),
+  \qquad
+  f_{\mathrm{all}}(t)
+  =
+  \sum_{r=1}^{m} f_r(t) \prod_{q \neq r} F_q(t).
+  \label{eq:first-all}
+\end{equation}
+%
+The helper \fct{none\_of} is an absence condition. The helper \fct{inhibit}
+defines a response-generating rule and a blocker. For independent direct
+sources,
+%
+\begin{equation}
+  f_{\mathrm{inhibit}(A,B)}(t) = f_A(t) S_B(t),
+  \label{eq:inhibit}
+\end{equation}
+%
+but the implemented representation also handles composite blockers and shared
+sources.
+
+\subsection{Onsets, triggers, mixtures, and ranks}
+
+An accumulator can have an absolute onset or a chained onset. With an absolute
+delay $d_a$, the observed finishing time is $T_a = d_a + T_a^\star$. With
+\fct{after}, the accumulator begins only after another source has finished. If
+accumulator $a$ starts after source $U$ with lag $\delta$, then
+%
+\begin{equation}
+  T_a = T_U + \delta + T_a^\star.
+  \label{eq:after}
+\end{equation}
+%
+The delayed accumulator then participates in the same outcome rules as any
+other accumulator.
+
+Triggers control whether accumulators are present on a trial. A trigger is a
+named absence-probability parameter. All members in one \fct{add\_trigger}
+call share the same absence draw; separate calls create independent absence
+draws. If a shared trigger has absence probability $q_g$, the trial likelihood
+is a mixture over the trigger-on and trigger-off states:
+%
+\begin{equation}
+  L = (1 - q_g) L^{\mathrm{on}} + q_g L^{\mathrm{off}}.
+  \label{eq:trigger}
+\end{equation}
+%
+Mixture components use the same likelihood principle. If a component is
+observed, the trial likelihood conditions on that component. If it is latent,
+the likelihood averages over components:
+%
+\begin{equation}
+  L_i = \sum_c \pi_{ic} L_{ic}.
+  \label{eq:mixture}
+\end{equation}
+%
+For ranked-response data, the model can retain more than one ordered response
+per trial by setting \code{n\_outcomes} in \fct{race\_spec}. The likelihood is
+then evaluated sequentially over the observed response-time pairs
+$(r_1,t_1),\ldots,(r_K,t_K)$.
+
+\section[Using AccumulatR]{Using \pkgname{}}
 \label{sec:workflow}
 
-The package API is deliberately compact. A minimal model is first described in
- terms of accumulators and outcomes, and is then turned into a finalized model
- object. Trial-wise parameters are generated with \fct{build\_param\_matrix},
- data are either simulated with \fct{simulate} or supplied by the user, and
- likelihood evaluation then uses \fct{prepare\_data}, \fct{make\_context}, and
- \fct{log\_likelihood}.
+\subsection{A two-choice race}
+
+The following example defines a two-choice lognormal race. Before parameter
+separation, both accumulators share the default public parameters:
+
+\begin{CodeChunk}
+\begin{CodeInput}
+R> library("AccumulatR")
+R> spec <- race_spec() |>
++   add_accumulator("left", "lognormal") |>
++   add_accumulator("right", "lognormal") |>
++   add_outcome("left", "left") |>
++   add_outcome("right", "right")
+R> par_names(spec)
+\end{CodeInput}
+\begin{CodeOutput}
+[1] "m"  "s"  "t0"
+\end{CodeOutput}
+\end{CodeChunk}
+
+To give the two accumulators separate lognormal locations and spreads, the
+specification uses \fct{set\_parameters}. The non-decision time \code{t0}
+remains shared and is not supplied below, so it defaults to zero.
+
+\begin{CodeChunk}
+\begin{CodeInput}
+R> model <- spec |>
++   set_parameters(separate = list(m = TRUE, s = TRUE)) |>
++   finalize_model()
+R> pars <- c(
++   left.m = log(0.28), left.s = 0.16,
++   right.m = log(0.35), right.s = 0.18
++ )
+R> param_df <- build_param_matrix(model, pars, n_trials = 120)
+R> sim <- simulate(model, param_df, seed = 20260612)
+R> head(sim, 4)
+\end{CodeInput}
+\begin{CodeOutput}
+  trials     R        rt
+1      1 right 0.3167664
+2      2  left 0.2847782
+3      3  left 0.3259237
+4      4  left 0.2515444
+\end{CodeOutput}
+\end{CodeChunk}
+
+The simulated data use the same columns expected for real behavioral data:
+\code{trials}, \code{R}, and \code{rt}. The likelihood workflow prepares the
+data once, builds a compiled context once, and evaluates parameter matrices as
+needed.
+
+\begin{CodeChunk}
+\begin{CodeInput}
+R> prepared <- prepare_data(model, sim[c("trials", "R", "rt")])
+R> ctx <- make_context(model)
+R> log_likelihood(ctx, prepared,
++   build_param_matrix(model, pars, trial_df = prepared))
+\end{CodeInput}
+\begin{CodeOutput}
+[1] 157.0651
+\end{CodeOutput}
+\end{CodeChunk}
+
+Response probabilities can be computed without simulation:
+
+\begin{CodeChunk}
+\begin{CodeInput}
+R> one_trial <- build_param_matrix(model, pars, n_trials = 1)
+R> round(response_probabilities(model, one_trial), 3)
+\end{CodeInput}
+\begin{CodeOutput}
+ left right
+0.823 0.177
+\end{CodeOutput}
+\end{CodeChunk}
+
+The value returned by \fct{log\_likelihood} is a density-based log-likelihood,
+so it need not be negative. With continuous response-time models, densities can
+be greater than one.
+
+\subsection{Trial-wise parameters}
+
+The parameter matrix is trial-wise by construction. A typical fitting function
+therefore takes a low-dimensional vector of free parameters, maps it to the
+public parameter names of the model, and then calls \fct{build\_param\_matrix}
+with the prepared data. For example, a minimal negative log-likelihood
+function for the two-choice race is:
 
 \begin{Code}
-library("AccumulatR")
-
-spec <- race_spec() |>
-  add_accumulator("left", "lognormal") |>
-  add_accumulator("right", "lognormal") |>
-  add_outcome("left", "left") |>
-  add_outcome("right", "right")
-
-model <- finalize_model(spec)
-
-pars <- c(
-  left.m = log(0.28), left.s = 0.16,
-  right.m = log(0.35), right.s = 0.18
-)
-
-param_df <- build_param_matrix(model, pars, n_trials = 500)
-sim <- simulate(model, param_df, seed = 123)
-
-prepared <- prepare_data(model, sim[c("trials", "R", "rt")])
-ctx <- make_context(model)
-log_likelihood(ctx, prepared, param_df)
+neg_loglik <- function(theta) {
+  est <- c(
+    left.m = theta[["left.m"]],
+    left.s = exp(theta[["log_left.s"]]),
+    right.m = theta[["right.m"]],
+    right.s = exp(theta[["log_right.s"]])
+  )
+  params <- build_param_matrix(model, est, trial_df = prepared)
+  -as.numeric(log_likelihood(ctx, prepared, params))
+}
 \end{Code}
 
-This example deliberately uses a simple two-choice lognormal race so that the
- main workflow is clear. The same sequence of calls is used for more structured
- models. The package vignettes extend this pattern to pooled channels, trigger
- failures, chained onsets, latent mixtures, and trials with multiple observed
- response ranks.
+The package does not impose an optimizer or sampler. The likelihood can be
+used with \fct{optim}, custom maximum-likelihood routines, or external
+Bayesian engines that call back into \proglang{R}.
 
-One design choice worth emphasizing is the separation between structural
- specification and trial-wise parameters. The model object defines the
- architecture, while the parameter matrix defines the per-trial numerical values
- to be used in simulation or likelihood evaluation. This makes it straightforward
- to represent designs in which some parameters vary by condition or by observed
- trial type without changing the model architecture itself.
+\section{Structured model examples}
+\label{sec:examples}
 
-\section{Illustrative structural extensions}
-\label{sec:extensions}
+\subsection{Pooled evidence}
 
-The main contribution of \pkgname{} is not the minimal race model above, but
- the way it generalizes beyond it. Three extensions are especially important.
+Pools represent responses generated by a threshold number of latent channels.
+In the following specification, response \code{A} is observed when any two of
+three \code{A} channels have finished, while response \code{B} is generated by
+a single competing accumulator.
 
-First, pools allow an observed response to depend on multiple underlying
- accumulators. For example, a response may occur when any two of three channels
- have completed. This is useful when the model posits converging routes rather
- than a single unitary evidence stream.
+\begin{Code}
+pool_model <- race_spec() |>
+  add_accumulator("A1", "lognormal") |>
+  add_accumulator("A2", "lognormal") |>
+  add_accumulator("A3", "lognormal") |>
+  add_accumulator("B", "lognormal") |>
+  add_pool("A_pool", c("A1", "A2", "A3"), k = 2L) |>
+  add_outcome("A", "A_pool") |>
+  add_outcome("B", "B") |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
+  finalize_model()
+\end{Code}
 
-Second, outcome rules can be expressed logically. A response can be generated by
- one of several routes, require the conjunction of several events, require the
- absence of another event, or be blocked by an inhibitory process. This feature
- is intended for models in which the observed response is a structured readout
- from latent events rather than a simple label attached to a single accumulator.
+When \code{A} is observed, its response time is the finishing time of the
+second finisher in \code{A_pool}. The likelihood uses that pooled completion
+rule directly; the user does not need to derive a separate density for the
+order statistic.
 
-Third, timing dependencies can be structural rather than purely parametric.
- With \fct{after}, an accumulator can begin only when another accumulator or
- pool has completed. Through triggers, one can specify shared or independent
- failures of a gating process. These mechanisms are useful for staged-processing
- and stop-like architectures that are common in mathematical psychology
- \citep{heathcoteDynamicModels2019}.
+\subsection{Logical response rules}
 
-The package also exposes utilities that support inspection rather than only
- estimation. For example, \fct{processing\_tree} provides a compact visual
- representation of the response logic encoded in a model, and
- \fct{response\_probabilities} evaluates response probabilities implied by a
- model and parameter set. These tools are helpful when debugging more complex
- architectures.
+Observed responses can be defined by logical rules rather than by single
+accumulators. The next model says that a response occurs only if an encoding
+stage has finished, either choice route has finished, and the stop process has
+not occurred.
+
+\begin{Code}
+logical_model <- race_spec() |>
+  add_accumulator("encoding", "lognormal") |>
+  add_accumulator("left_route", "lognormal") |>
+  add_accumulator("right_route", "lognormal") |>
+  add_accumulator("stop", "lognormal") |>
+  add_outcome(
+    "choice",
+    all_of(
+      "encoding",
+      first_of("left_route", "right_route"),
+      none_of("stop")
+    )
+  ) |>
+  finalize_model()
+\end{Code}
+
+For stop-like architectures where one process generates a response and another
+can block it, \fct{inhibit} gives a more direct expression:
+
+\begin{Code}
+stop_model <- race_spec() |>
+  add_accumulator("go", "lognormal") |>
+  add_accumulator("stop", "lognormal") |>
+  add_outcome("respond", inhibit("go", "stop")) |>
+  finalize_model()
+\end{Code}
+
+Both examples use string labels directly. The helper
+\fct{build\_outcome\_expr} is available for programmatic builders that need
+quoted \proglang{R} expressions.
+
+\subsection{Chained onsets and shared triggers}
+
+Chained onsets express staged processing. Here accumulator \code{C} starts
+only after latent accumulator \code{B} has finished:
+
+\begin{Code}
+onset_model <- race_spec() |>
+  add_accumulator("A", "lognormal") |>
+  add_accumulator("B", "lognormal") |>
+  add_accumulator("C", "lognormal", onset = after("B")) |>
+  add_outcome("A", "A") |>
+  add_outcome("C", "C") |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
+  finalize_model()
+\end{Code}
+
+Triggers express shared absence events. In the next model, the two \code{go}
+accumulators share one absence draw and one absence-probability parameter:
+
+\begin{Code}
+trigger_model <- race_spec() |>
+  add_accumulator("go1", "lognormal") |>
+  add_accumulator("go2", "lognormal") |>
+  add_outcome("R1", "go1") |>
+  add_outcome("R2", "go2") |>
+  add_trigger("shared_trigger", members = c("go1", "go2")) |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
+  finalize_model()
+\end{Code}
+
+If separate \fct{add\_trigger} calls are used instead, the absence draws are
+independent. Their probabilities can still be given a shared public parameter
+through \fct{set\_parameters}; that changes parameter naming but not the
+independence of the trigger draws.
+
+\subsection{Latent mixtures}
+
+Components are useful when trials may come from qualitatively different
+processing modes. The following model has a fast and a slow target route, with
+one competitor. The component declarations define which accumulators are active
+in each component, and \fct{set\_mixture} declares the component weights to be
+sampled parameters.
+
+\begin{Code}
+mix_model <- race_spec() |>
+  add_accumulator("target_fast", "lognormal") |>
+  add_accumulator("target_slow", "lognormal") |>
+  add_accumulator("competitor", "lognormal") |>
+  add_pool("target", c("target_fast", "target_slow")) |>
+  add_outcome("R1", "target") |>
+  add_outcome("R2", "competitor") |>
+  add_component("fast", members = c("target_fast", "competitor")) |>
+  add_component("slow", members = c("target_slow", "competitor")) |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
+  set_mixture(mode = "sample", reference = "slow") |>
+  finalize_model()
+\end{Code}
+
+For this model, the public parameter \code{p.fast} is the probability of the
+fast component and the slow component receives the residual mass. If the data
+include a \code{component} column, the likelihood conditions on the observed
+component. Without that column, \code{fast} and \code{slow} are treated as
+latent processing modes and marginalized.
+
+\subsection{Ranked responses}
+
+Some experiments record more than one ordered response on a trial. Setting
+\code{n\_outcomes = 2L} asks the simulator and likelihood evaluator to retain
+the first and second finishing responses:
+
+\begin{Code}
+rank_model <- race_spec(n_outcomes = 2L) |>
+  add_accumulator("A", "lognormal") |>
+  add_accumulator("B", "lognormal") |>
+  add_outcome("A", "A") |>
+  add_outcome("B", "B") |>
+  set_parameters(separate = list(m = TRUE, s = TRUE)) |>
+  finalize_model()
+\end{Code}
+
+The corresponding data columns are \code{R}, \code{rt}, \code{R2}, and
+\code{rt2}. Higher ranks follow the same naming pattern.
+
+\section{Likelihood evaluation and fitting}
+\label{sec:likelihood}
+
+The likelihood interface is intentionally narrow. \fct{prepare\_data} checks
+and reshapes behavioral observations. \fct{make\_context} compiles the
+model-side runtime state. The likelihood call combines a context, prepared
+data, and a parameter matrix. This separation matters for estimation because
+model compilation is usually more expensive than evaluating one new parameter
+matrix.
+
+\begin{Code}
+prepared <- prepare_data(model, data_df)
+ctx <- make_context(model)
+
+objective <- function(theta) {
+  values <- transform_theta_to_named_parameters(theta)
+  params <- build_param_matrix(model, values, trial_df = prepared)
+  -as.numeric(log_likelihood(ctx, prepared, params))
+}
+
+fit <- optim(start, objective, method = "Nelder-Mead")
+\end{Code}
+
+The transformation placeholder in this example is user code: it maps
+unconstrained optimization variables to the public parameter names of the
+model. For example, positive spread, boundary, and non-decision-time parameters
+are commonly optimized on the log scale and exponentiated before calling
+\fct{build\_param\_matrix}. This keeps the package focused on model evaluation
+while leaving estimation strategy to the analysis.
+
+The parameter matrix may be rectangular, with one row per accumulator per
+trial, or long, with rows aligned to prepared data for component-specific
+architectures. The \code{layout = "auto"} default selects the appropriate
+layout for most uses. Prepared data can also be compressed when repeated
+observations share the same prepared representation; in that case the
+likelihood sums weighted compact rows and expands trial-wise values when
+requested.
+
+\section{Implementation}
+\label{sec:implementation}
+
+The implementation has three layers. The first layer is the \proglang{R}
+specification interface. It validates names, stores accumulator definitions,
+records outcome expressions, normalizes parameter mappings, and finalizes a
+model into a runtime-oriented structure. The second layer prepares data and
+parameters for repeated evaluation. The third layer is the compiled evaluator,
+which receives the finalized model plan and performs simulation or likelihood
+calculations.
+
+The exact likelihood evaluator lowers outcome rules into transition scenarios.
+A scenario records which latent source releases a target rule at the observed
+time, which other sources must already be available, and which blockers or
+competitors must not have occurred earlier. These statements are represented as
+order constraints over latent finishing times. The compiler simplifies
+contradictory or redundant cells, projects simple constraints to density,
+distribution, or survival factors, and retains numerical integration only where
+the order structure cannot be reduced further.
+
+This representation is important for models with shared sources. If two
+observed outcomes both depend on a common latent stage, they can tie with
+positive density because the same latent finishing time releases both rules.
+Treating every tie as a zero-probability boundary would be incorrect. By
+keeping shared latent identity in the region representation, \pkgname{} can
+distinguish ordinary zero-measure equality from model-induced equality.
+
+Most computational cost that depends only on model structure is paid when the
+context is built. Repeated likelihood calls reuse the compiled plan and mostly
+pay the cost of evaluating densities, probabilities, and remaining integrals
+under new parameter values. For complicated architectures the number of
+symbolic cells can grow quickly. When a context is built with
+\code{diagnostics = TRUE}, \fct{complexity\_metrics} reports the compiled
+complexity so the user can inspect whether a specification is becoming
+computationally expensive.
 
 \section{Relation to existing software}
 \label{sec:comparison}
 
-At its current stage, \pkgname{} should be viewed as complementary to existing
- software rather than as a replacement for it. Packages such as \pkg{RWiener}
- \citep{wabersichRWienerPackage2014} and recent diffusion implementations in
- \proglang{Stan} \citep{henrichSevenparameterDiffusion2024} provide tools that
- are tightly tied to particular sequential-sampling model families. More
- general-purpose modeling interfaces such as \pkg{lme4} \citep{batesFittingLinear2015}
- or \pkg{brms} \citep{burknerBrmsPackage2017} offer powerful estimation
- environments, but they do not natively present race-model architecture itself
- as the central software object.
+\pkgname{} is not a replacement for specialized diffusion-model packages or
+for full estimation systems. Its role is narrower and more structural. A
+package such as \pkg{RWiener} provides direct density, distribution, and random
+generation functions for the Wiener first-passage-time model
+\citep{wabersichRWienerPackage2014}. \proglang{Stan}-based tools provide
+Bayesian fitting workflows for particular diffusion parameterizations
+\citep{henrichSevenparameterDiffusion2024}. General modeling systems such as
+\pkg{lme4} and \pkg{brms} focus on regression and hierarchical estimation
+interfaces \citep{batesFittingLinear2015, burknerBrmsPackage2017}. Cognitive
+modeling frameworks such as those discussed by
+\citet{vandekerckhoveHierarchicalDiffusion2011} address hierarchical
+sequential-sampling models from an estimation perspective.
 
-The contribution of \pkgname{} is therefore primarily representational. It lets
- users describe an evidence-accumulation architecture directly, then reuse that
- same object for simulation, data preparation, and likelihood evaluation. For
- mathematical psychologists, that can be an advantage when the main scientific
- problem is the architecture of the process model rather than only the fitting
- of a standard named model.
+The distinguishing feature of \pkgname{} is that the race architecture itself
+is the central software object. The same object is used for simulation,
+inspection, response-probability calculation, and likelihood evaluation. This
+is useful when the scientific question is whether a response is generated by a
+pool, a staged route, a latent mixture, or a guarded process, rather than only
+which parameter values best fit a fixed named model.
 
-This section is still incomplete for a full JSS submission. A stronger version
- should add a broader comparison to other cognitive-model software in
- \proglang{R} and beyond, including estimation-focused tools and packages aimed
- at hierarchical cognitive modeling (CITE).
+There are corresponding limitations. The package currently assumes that leaf
+accumulators are conditionally independent given parameters, components, and
+trigger states. It supplies likelihood evaluation but not a complete
+hierarchical modeling language. Users who need group-level priors, posterior
+sampling diagnostics, or formula-based regression over parameters must supply
+that estimation layer separately. In exchange, they obtain a model object whose
+architecture can be manipulated directly in \proglang{R}.
+
+\section{Replication material}
+\label{sec:replication}
+
+The manuscript directory contains executable \proglang{R} scripts under
+\code{dev/LatexFiles/examples}. The script \code{01-basic-workflow.R}
+reproduces the two-choice race in Section~\ref{sec:workflow}, including the
+reported response probabilities. The script \code{02-structured-models.R}
+constructs pooled, logical, trigger, onset, and ranked-response examples. The
+script \code{03-mixtures-and-fitting.R} constructs the sampled-mixture example
+and runs a small likelihood-based estimate of the mixture weight. The top-level
+\code{code.R} script sources the examples and prints \fct{sessionInfo}, which
+is the form expected for JSS replication material.
 
 \section{Discussion}
 \label{sec:discussion}
 
-\pkgname{} is an attempt to make evidence-accumulation modeling more modular on
- the software side. The package is built around a simple idea: model structure
- should be declared explicitly in \proglang{R}, while repeated numerical work
- should be delegated to compiled code. This is useful when the scientific target
- is a psychologically interpretable architecture involving multiple latent
- channels, dependencies, and response rules.
+\pkgname{} provides a declarative interface for a class of structured
+evidence-accumulation models. Its core design choice is to make architecture
+explicit: accumulators, pools, outcome rules, triggers, components, and ranked
+readouts are part of the model object rather than ad hoc code around a fixed
+density. The same object then supports simulation, response-probability
+calculation, data preparation, and likelihood evaluation.
 
-The current draft is intentionally only a starting point. A full
- \emph{Journal of Statistical Software} article should add at least three things.
- First, it should include a more systematic comparison to related software.
- Second, it should contain one or more worked examples that are closer to the
- kinds of tasks for which mathematical psychologists would actually use the
- package. Third, it should include benchmark and replication material that makes
- the software claims more concrete.
+This architecture-first design is most useful for analyses where the main
+scientific hypothesis concerns process structure. It also keeps the package
+honest about what it does not do. \pkgname{} evaluates models; it does not
+attempt to be a universal optimizer, sampler, or hierarchical modeling system.
+That boundary keeps the interface small and makes it easier to combine the
+package with external estimation tools.
 
-Even so, the present draft already captures the package's actual center of
- gravity: \pkgname{} is not mainly a package for one fixed diffusion or race
- model, but a package for expressing and evaluating structured
- evidence-accumulation systems.
+The most important future work is broader empirical demonstration and a richer
+estimation interface around the existing likelihood engine. Additional
+finishing-time families, more diagnostic summaries, and tighter integration
+with hierarchical workflows would also be natural extensions. The present
+software already supplies the central machinery needed for those extensions: a
+compact model language for structured accumulator architectures and a reusable
+compiled evaluator for the likelihoods implied by those architectures.
 
 \section*{Acknowledgments}
 
-This is a first draft prepared from the current package state, local JSS
- guidance, and the package vignettes. Author affiliations, a fuller software
- comparison, and a worked empirical example remain to be completed.
+The package and manuscript benefited from the published literature on
+sequential-sampling models and from the \emph{Journal of Statistical Software}
+style and replication guidelines.
 
 \bibliography{../refs,accumulatr-jss-draft}
 

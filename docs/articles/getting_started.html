@@ -108,9 +108,10 @@ parameter values.</li>
 <h2 id="core-ideas">Core ideas<a class="anchor" aria-label="anchor" href="#core-ideas"></a>
 </h2>
 <div class="section level3">
-<h3 id="trial">Trial<a class="anchor" aria-label="anchor" href="#trial"></a>
+<h3 id="trials">
+<code>trials</code><a class="anchor" aria-label="anchor" href="#trials"></a>
 </h3>
-<p>A <code>trial</code> is a single behavioral observation. In the
+<p><code>trials</code> identifies the behavioral observation. In the
 simplest case, each row of your data corresponds to one trial.</p>
 </div>
 <div class="section level3">
@@ -169,6 +170,7 @@ lognormal accumulators.</p>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"right"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"left"</span>, <span class="st">"left"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"right"</span>, <span class="st">"right"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="../reference/set_parameters.html">set_parameters</a></span><span class="op">(</span>separate <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>m <span class="op">=</span> <span class="cn">TRUE</span>, s <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span></code></pre></div>
 </div>
 <div class="section level2">
@@ -188,13 +190,13 @@ example using a design matrix specification.</p>
 <span><span class="va">sim</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/simulate.html">simulate</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">param_df</span>, seed <span class="op">=</span> <span class="fl">123</span><span class="op">)</span></span>
 <span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/utils/head.html" class="external-link">head</a></span><span class="op">(</span><span class="va">sim</span><span class="op">)</span></span></code></pre></div>
-<pre><code><span><span class="co">##   trial     R        rt</span></span>
-<span><span class="co">## 1     1  left 0.3182631</span></span>
-<span><span class="co">## 2     2  left 0.3414185</span></span>
-<span><span class="co">## 3     3  left 0.2883234</span></span>
-<span><span class="co">## 4     4  left 0.3669476</span></span>
-<span><span class="co">## 5     5  left 0.3057125</span></span>
-<span><span class="co">## 6     6 right 0.2456584</span></span></code></pre>
+<pre><code><span><span class="co">##   trials     R        rt</span></span>
+<span><span class="co">## 1      1  left 0.3182631</span></span>
+<span><span class="co">## 2      2  left 0.3414185</span></span>
+<span><span class="co">## 3      3  left 0.2883234</span></span>
+<span><span class="co">## 4      4  left 0.3669476</span></span>
+<span><span class="co">## 5      5  left 0.3057125</span></span>
+<span><span class="co">## 6      6 right 0.2456584</span></span></code></pre>
 <p>Each row is one trial, <code>R</code> is the observed response, and
 <code>rt</code> is the response time.</p>
 </div>
@@ -203,7 +205,7 @@ example using a design matrix specification.</p>
 </h2>
 <p>To fit a model, the usual pattern is:</p>
 <div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">prepared</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/prepare_data.html">prepare_data</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">sim</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"trial"</span>, <span class="st">"R"</span>, <span class="st">"rt"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
+<code class="sourceCode R"><span><span class="va">prepared</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/prepare_data.html">prepare_data</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">sim</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"trials"</span>, <span class="st">"R"</span>, <span class="st">"rt"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="va">ctx</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/make_context.html">make_context</a></span><span class="op">(</span><span class="va">model</span><span class="op">)</span></span>
 <span><span class="fu"><a href="../reference/log_likelihood.html">log_likelihood</a></span><span class="op">(</span><span class="va">ctx</span>, <span class="va">prepared</span>, <span class="va">param_df</span><span class="op">)</span></span></code></pre></div>
 <pre><code><span><span class="co">## [1] 5.291506</span></span></code></pre>

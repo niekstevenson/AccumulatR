@@ -38,13 +38,32 @@ jobs:
           needs: website
 
       - name: Build site
-        run: pkgdown::build_site_github_pages(new_process = FALSE, install = FALSE)
+        run: |
+          pkgdown::build_site_github_pages(new_process = FALSE, install = FALSE)
+          unlink(file.path("docs", "AGENTS.html"))
+
+          sitemap_path <- file.path("docs", "sitemap.xml")
+          if (file.exists(sitemap_path)) {
+            sitemap <- readLines(sitemap_path, warn = FALSE)
+            sitemap <- sitemap[!grepl("/AGENTS\\.html", sitemap)]
+            writeLines(sitemap, sitemap_path)
+          }
+
+          search_path <- file.path("docs", "search.json")
+          if (file.exists(search_path)) {
+            search <- jsonlite::fromJSON(search_path, simplifyVector = FALSE)
+            search <- Filter(function(entry) {
+              path <- entry[["path"]]
+              !(is.character(path) && length(path) == 1L && grepl("/AGENTS\\.html$", path))
+            }, search)
+            jsonlite::write_json(search, search_path, auto_unbox = TRUE, null = "null")
+          }
         shell: Rscript {0}
 
       - name: Deploy to GitHub pages 🚀
         if: github.event_name != 'pull_request'
         uses: JamesIves/github-pages-deploy-action@v4.5.0
         with:
-          clean: false
+          clean: true
           branch: gh-pages
           folder: docs

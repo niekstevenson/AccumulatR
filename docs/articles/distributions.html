@@ -91,10 +91,10 @@ in <code>AccumulatR</code> and the parameter names they use.</p>
 <div class="section level2">
 <h2 id="naming-convention">Naming convention<a class="anchor" aria-label="anchor" href="#naming-convention"></a>
 </h2>
-<p>Parameter names are built as <code>accumulator.parameter</code>. For
-example, <code>go.m</code>, <code>stop.shape</code>, and
-<code>choice.v</code> refer to parameters for the accumulators
-<code>go</code>, <code>stop</code>, and <code>choice</code>.</p>
+<p>By default, parameters are grouped by parameter name across
+compatible accumulators. Use <code><a href="../reference/set_parameters.html">set_parameters()</a></code> when an
+accumulator should have its own parameter, such as <code>go.m</code>,
+<code>stop.shape</code>, or <code>choice.v</code>.</p>
 </div>
 <div class="section level2">
 <h2 id="available-distributions">Available distributions<a class="anchor" aria-label="anchor" href="#available-distributions"></a>
@@ -133,10 +133,11 @@ and <code>sv</code>.</li>
 <code>RDM</code>: <code>v</code>, <code>B</code>, <code>A</code>,
 and <code>s</code>.</li>
 </ul>
-<p>Outside of these all accumulators can have a non-decision time
-<code>t0</code> and a trigger probability <code>q</code>. For the
-<code>exgauss</code> <code>t0</code> and <code>mu</code> are redundant
-(they both constitute a shift in rt) and one must be fixed.</p>
+<p>Outside of these, all accumulators have a non-decision time
+<code>t0</code>. Absence probabilities are added with named triggers,
+not per-accumulator distribution parameters. For the
+<code>exgauss</code>, <code>t0</code> and <code>mu</code> are redundant
+because both shift RT, so one should be fixed.</p>
 </div>
 <div class="section level2">
 <h2 id="example">Example<a class="anchor" aria-label="anchor" href="#example"></a>
@@ -150,6 +151,7 @@ vector.</p>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"stop"</span>, <span class="st">"exgauss"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"go"</span>, <span class="st">"go"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"stop"</span>, <span class="st">"stop"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="../reference/set_parameters.html">set_parameters</a></span><span class="op">(</span>separate <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>m <span class="op">=</span> <span class="cn">TRUE</span>, s <span class="op">=</span> <span class="cn">TRUE</span>, mu <span class="op">=</span> <span class="cn">TRUE</span>, sigma <span class="op">=</span> <span class="cn">TRUE</span>, tau <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">params</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>

@@ -101,6 +101,7 @@ second finishing responses.</p>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"B"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"A"</span>, <span class="st">"A"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"B"</span>, <span class="st">"B"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="../reference/set_parameters.html">set_parameters</a></span><span class="op">(</span>separate <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>m <span class="op">=</span> <span class="cn">TRUE</span>, s <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">true_params</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
@@ -120,7 +121,7 @@ responses for each trial.</p>
 <span><span class="va">sim</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/simulate.html">simulate</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">params_df</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">data_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span>
-<span>  trial <span class="op">=</span> <span class="va">sim</span><span class="op">$</span><span class="va">trial</span>,</span>
+<span>  trials <span class="op">=</span> <span class="va">sim</span><span class="op">$</span><span class="va">trials</span>,</span>
 <span>  R <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/factor.html" class="external-link">factor</a></span><span class="op">(</span><span class="va">sim</span><span class="op">$</span><span class="va">R</span><span class="op">)</span>,</span>
 <span>  rt <span class="op">=</span> <span class="va">sim</span><span class="op">$</span><span class="va">rt</span>,</span>
 <span>  R2 <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/factor.html" class="external-link">factor</a></span><span class="op">(</span><span class="va">sim</span><span class="op">$</span><span class="va">R2</span><span class="op">)</span>,</span>
@@ -129,13 +130,13 @@ responses for each trial.</p>
 <span><span class="op">)</span></span>
 <span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/utils/head.html" class="external-link">head</a></span><span class="op">(</span><span class="va">data_df</span><span class="op">)</span></span></code></pre></div>
-<pre><code><span><span class="co">##   trial R        rt R2       rt2</span></span>
-<span><span class="co">## 1     1 A 0.3394130  B 0.3514512</span></span>
-<span><span class="co">## 2     2 A 0.2373401  B 0.4565748</span></span>
-<span><span class="co">## 3     3 A 0.3709420  B 0.4913625</span></span>
-<span><span class="co">## 4     4 B 0.2974072  A 0.3441526</span></span>
-<span><span class="co">## 5     5 A 0.3297834  B 0.4790856</span></span>
-<span><span class="co">## 6     6 A 0.3671582  B 0.4663272</span></span></code></pre>
+<pre><code><span><span class="co">##   trials R        rt R2       rt2</span></span>
+<span><span class="co">## 1      1 A 0.3394130  B 0.3514512</span></span>
+<span><span class="co">## 2      2 A 0.2373401  B 0.4565748</span></span>
+<span><span class="co">## 3      3 A 0.3709420  B 0.4913625</span></span>
+<span><span class="co">## 4      4 B 0.2974072  A 0.3441526</span></span>
+<span><span class="co">## 5      5 A 0.3297834  B 0.4790856</span></span>
+<span><span class="co">## 6      6 A 0.3671582  B 0.4663272</span></span></code></pre>
 <p><strong>Estimate parameters with <code><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim()</a></code></strong> We
 estimate <code>A.m</code>, <code>A.s</code>, <code>B.m</code>, and
 <code>B.s</code>. The variance parameters are optimized on the log scale

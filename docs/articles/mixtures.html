@@ -122,6 +122,7 @@ component label is observed on each trial.</p>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"R2"</span>, <span class="st">"competitor"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_component.html">add_component</a></span><span class="op">(</span><span class="st">"fast"</span>, members <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"target_fast"</span>, <span class="st">"competitor"</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_component.html">add_component</a></span><span class="op">(</span><span class="st">"slow"</span>, members <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"target_slow"</span>, <span class="st">"competitor"</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="../reference/set_parameters.html">set_parameters</a></span><span class="op">(</span>separate <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>m <span class="op">=</span> <span class="cn">TRUE</span>, s <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/set_mixture.html">set_mixture</a></span><span class="op">(</span>mode <span class="op">=</span> <span class="st">"fixed"</span>, weights <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span>fast <span class="op">=</span> <span class="fl">0.4</span>, slow <span class="op">=</span> <span class="fl">0.6</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
@@ -140,7 +141,7 @@ belongs to.</p>
 <span></span>
 <span><span class="va">n_trials_fixed</span> <span class="op">&lt;-</span> <span class="fl">1200</span></span>
 <span><span class="va">trial_types</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span>
-<span>  trial <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/seq.html" class="external-link">seq_len</a></span><span class="op">(</span><span class="va">n_trials_fixed</span><span class="op">)</span>,</span>
+<span>  trials <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/seq.html" class="external-link">seq_len</a></span><span class="op">(</span><span class="va">n_trials_fixed</span><span class="op">)</span>,</span>
 <span>  component <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/sample.html" class="external-link">sample</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"fast"</span>, <span class="st">"slow"</span><span class="op">)</span>, <span class="va">n_trials_fixed</span>, replace <span class="op">=</span> <span class="cn">TRUE</span>, prob <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="fl">0.4</span>, <span class="fl">0.6</span><span class="op">)</span><span class="op">)</span>,</span>
 <span>  stringsAsFactors <span class="op">=</span> <span class="cn">FALSE</span></span>
 <span><span class="op">)</span></span>
@@ -158,7 +159,7 @@ belongs to.</p>
 <span>  layout <span class="op">=</span> <span class="st">"long"</span></span>
 <span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">data_fixed</span> <span class="op">&lt;-</span> <span class="va">sim_fixed</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"trial"</span>, <span class="st">"R"</span>, <span class="st">"rt"</span>, <span class="st">"component"</span><span class="op">)</span><span class="op">]</span></span>
+<span><span class="va">data_fixed</span> <span class="op">&lt;-</span> <span class="va">sim_fixed</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"trials"</span>, <span class="st">"R"</span>, <span class="st">"rt"</span>, <span class="st">"component"</span><span class="op">)</span><span class="op">]</span></span>
 <span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/table.html" class="external-link">table</a></span><span class="op">(</span><span class="va">data_fixed</span><span class="op">$</span><span class="va">component</span>, <span class="va">data_fixed</span><span class="op">$</span><span class="va">R</span><span class="op">)</span></span></code></pre></div>
 <pre><code><span><span class="co">##       </span></span>
@@ -199,6 +200,7 @@ fast trials.</p>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"R2"</span>, <span class="st">"competitor"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_component.html">add_component</a></span><span class="op">(</span><span class="st">"fast"</span>, members <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"target_fast"</span>, <span class="st">"competitor"</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_component.html">add_component</a></span><span class="op">(</span><span class="st">"slow"</span>, members <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"target_slow"</span>, <span class="st">"competitor"</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
+<span>  <span class="fu"><a href="../reference/set_parameters.html">set_parameters</a></span><span class="op">(</span>separate <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>m <span class="op">=</span> <span class="cn">TRUE</span>, s <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/set_mixture.html">set_mixture</a></span><span class="op">(</span>mode <span class="op">=</span> <span class="st">"sample"</span>, reference <span class="op">=</span> <span class="st">"slow"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
@@ -225,7 +227,7 @@ output, because that label is latent.</p>
 <span></span>
 <span><span class="va">sim_sampled</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/simulate.html">simulate</a></span><span class="op">(</span><span class="va">model_sampled</span>, <span class="va">params_df_sampled</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/names.html" class="external-link">names</a></span><span class="op">(</span><span class="va">sim_sampled</span><span class="op">)</span></span></code></pre></div>
-<pre><code><span><span class="co">## [1] "trial" "R"     "rt"</span></span></code></pre>
+<pre><code><span><span class="co">## [1] "trials" "R"      "rt"</span></span></code></pre>
 <p>If you want to inspect the hidden generating component, you can ask
 for it explicitly.</p>
 <div class="sourceCode" id="cb12"><pre class="downlit sourceCode r">
@@ -246,7 +248,7 @@ same form as real latent-mixture data: only the observed response
 the possible components. If you do supply a <code>component</code>
 column, that component is treated as observed on those trials.</p>
 <div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">data_sampled</span> <span class="op">&lt;-</span> <span class="va">sim_sampled</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"trial"</span>, <span class="st">"R"</span>, <span class="st">"rt"</span><span class="op">)</span><span class="op">]</span></span>
+<code class="sourceCode R"><span><span class="va">data_sampled</span> <span class="op">&lt;-</span> <span class="va">sim_sampled</span><span class="op">[</span>, <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"trials"</span>, <span class="st">"R"</span>, <span class="st">"rt"</span><span class="op">)</span><span class="op">]</span></span>
 <span></span>
 <span><span class="va">prepared_sampled</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/prepare_data.html">prepare_data</a></span><span class="op">(</span><span class="va">model_sampled</span>, <span class="va">data_sampled</span><span class="op">)</span></span>
 <span><span class="va">ctx_sampled</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/make_context.html">make_context</a></span><span class="op">(</span><span class="va">model_sampled</span><span class="op">)</span></span>

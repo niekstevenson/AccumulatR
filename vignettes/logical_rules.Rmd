@@ -48,7 +48,7 @@ model_first <- race_spec() |>
   add_outcome("target_detected", first_of("word_route", "picture_route")) |>
   finalize_model()
 
-model_first$outcomes[[1]]$label
+names(model_first$prep$outcomes)
 ```
 
 ## `all_of()`: several things must all be true
@@ -62,7 +62,7 @@ model_all <- race_spec() |>
   add_outcome("confirmed_response", all_of("encoding", "verification")) |>
   finalize_model()
 
-model_all$outcomes[[1]]$label
+names(model_all$prep$outcomes)
 ```
 
 ## `none_of()`: the response requires the competing event to be absent
@@ -76,7 +76,7 @@ model_none <- race_spec() |>
   add_outcome("respond", all_of("go", none_of("stop"))) |>
   finalize_model()
 
-model_none$outcomes[[1]]$label
+names(model_none$prep$outcomes)
 ```
 
 Here the absence of `stop` is part of the response definition.
@@ -93,7 +93,7 @@ model_inhibit <- race_spec() |>
   add_outcome("respond", inhibit("go", "stop")) |>
   finalize_model()
 
-model_inhibit$outcomes[[1]]$label
+names(model_inhibit$prep$outcomes)
 ```
 
 Here `go` is the response-generating process and `stop` blocks it.
@@ -106,8 +106,7 @@ These two rules look similar:
 rule_none <- all_of("go", none_of("stop"))
 rule_inhibit <- inhibit("go", "stop")
 
-rule_none
-rule_inhibit
+c(absence_rule = rule_none$kind, inhibit_rule = rule_inhibit$kind)
 ```
 
 But they are not the same model statement.
@@ -152,7 +151,7 @@ model_combo <- race_spec() |>
   ) |>
   finalize_model()
 
-model_combo$outcomes[[1]]$label
+names(model_combo$prep$outcomes)
 ```
 
 Use combined rules when the observed response reflects a structured decision

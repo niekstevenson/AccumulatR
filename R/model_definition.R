@@ -792,28 +792,14 @@ add_outcome <- function(spec, label, expr, options = list()) {
 #' @param members Accumulator labels that belong to this component.
 #' @param n_outcomes Optional component-specific override for the number of
 #'   observed ordered responses.
-#' @param attrs Additional component attributes.
 #' @return The updated `race_spec`.
 #' @export
-add_component <- function(spec, id, members, n_outcomes = NULL, attrs = list()) {
+add_component <- function(spec, id, members, n_outcomes = NULL) {
   spec <- .validate_race_spec_input(spec, "add_component")
   if (missing(members) || is.null(members) || length(members) == 0) {
     stop("Component must specify members")
   }
-  comp_attrs <- attrs %||% list()
-  if (!is.list(comp_attrs)) {
-    stop("Component attrs must be a list")
-  }
-  unknown_attrs <- setdiff(names(comp_attrs), c("component", "shared_params", "n_outcomes"))
-  if (length(unknown_attrs) > 0L) {
-    stop(
-      sprintf("Unknown component attr(s): %s", paste(unknown_attrs, collapse = ", ")),
-      call. = FALSE
-    )
-  }
-  if (!is.null(comp_attrs$n_outcomes)) {
-    comp_attrs$n_outcomes <- .validate_n_outcomes(comp_attrs$n_outcomes)
-  }
+  comp_attrs <- list()
   if (!is.null(n_outcomes)) {
     comp_attrs$n_outcomes <- .validate_n_outcomes(n_outcomes)
   }
@@ -950,23 +936,6 @@ set_metadata <- function(spec, ...) {
     spec$metadata[[nm]] <- updates[[nm]]
   }
   spec
-}
-
-
-
-#' Build a blocking rule explicitly
-#'
-#' Most users will prefer `inhibit()`, but `expr_guard()` is available when you
-#' want to construct the guarded expression directly.
-#'
-#' @param blocker Blocking expression or accumulator label.
-#' @param reference Target expression or accumulator label.
-#' @return A guarded expression object.
-#' @examples
-#' expr_guard("B", "A")
-#' @export
-expr_guard <- function(blocker, reference) {
-  list(kind = "guard", blocker = blocker, reference = reference)
 }
 
 clone_obj <- function(x) {
@@ -1179,6 +1148,17 @@ race_model <- function(accumulators, pools = list(), outcomes, triggers = list()
     attrs_cmp <- comps[[i]]$attrs %||% list()
     if (!is.list(attrs_cmp)) {
       stop(sprintf("Component '%s' attrs must be a list", cmp_id))
+    }
+    unknown_attrs <- setdiff(names(attrs_cmp), "n_outcomes")
+    if (length(unknown_attrs) > 0L) {
+      stop(
+        sprintf(
+          "Component '%s' has unknown attr(s): %s",
+          cmp_id,
+          paste(unknown_attrs, collapse = ", ")
+        ),
+        call. = FALSE
+      )
     }
     n_out <- attrs_cmp$n_outcomes %||% NULL
     if (!is.null(n_out)) {

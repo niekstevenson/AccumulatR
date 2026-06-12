@@ -24,16 +24,12 @@
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/build_outcome_expr.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/complexity_metrics.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/reference/exclude.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/reference/expr_guard.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/finalize_model.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/first_of.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/index.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/inhibit.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/log_likelihood.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/reference/log_likelihood.likelihood_context.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/make_context.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/reference/nest_accumulators.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/none_of.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/par_names.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/plot_accumulators.html</loc></url>
@@ -45,5 +41,5 @@
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/set_mixture.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/set_parameters.html</loc></url>
 <url><loc>https://niekstevenson.github.io/AccumulatR/reference/simulate.html</loc></url>
-<url><loc>https://niekstevenson.github.io/AccumulatR/tie.html</loc></url>
 </urlset>
+

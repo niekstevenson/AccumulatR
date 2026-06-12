@@ -86,8 +86,8 @@ by `simulate()` and `log_likelihood()`.</p>
 
 
 <dt id="arg-trial-df">trial_df<a class="anchor" aria-label="anchor" href="#arg-trial-df"></a></dt>
-<dd><p>Optional trial/prepared data object. If it includes an
-`accumulator` column, parameter rows are built in that exact row order.</p></dd>
+<dd><p>Optional trials/prepared data object. If it includes a
+`racer` column, parameter rows are built in that exact row order.</p></dd>
 
 
 <dt id="arg-layout">layout<a class="anchor" aria-label="anchor" href="#arg-layout"></a></dt>
@@ -104,7 +104,7 @@ by `simulate()` and `log_likelihood()`.</p>
     <div class="sourceCode"><pre class="sourceCode r"><code><span class="r-in"><span><span class="va">spec</span> <span class="op">&lt;-</span> <span class="fu"><a href="race_spec.html">race_spec</a></span><span class="op">(</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="va">spec</span> <span class="op">&lt;-</span> <span class="fu"><a href="add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="va">spec</span>, <span class="st">"A"</span>, <span class="st">"lognormal"</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="va">spec</span> <span class="op">&lt;-</span> <span class="fu"><a href="add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="va">spec</span>, <span class="st">"A_win"</span>, <span class="st">"A"</span><span class="op">)</span></span></span>
-<span class="r-in"><span><span class="va">vals</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span>A.m <span class="op">=</span> <span class="fl">0</span>, A.s <span class="op">=</span> <span class="fl">0.1</span>, A.q <span class="op">=</span> <span class="fl">0</span>, A.t0 <span class="op">=</span> <span class="fl">0</span><span class="op">)</span></span></span>
+<span class="r-in"><span><span class="va">vals</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span>m <span class="op">=</span> <span class="fl">0</span>, s <span class="op">=</span> <span class="fl">0.1</span><span class="op">)</span></span></span>
 <span class="r-in"><span><span class="fu">build_param_matrix</span><span class="op">(</span><span class="va">spec</span>, <span class="va">vals</span>, n_trials <span class="op">=</span> <span class="fl">2</span><span class="op">)</span></span></span>
 <span class="r-out co"><span class="r-pr">#&gt;</span>      q t0 p1  p2 p3 w</span>
 <span class="r-out co"><span class="r-pr">#&gt;</span> [1,] 0  0  0 0.1  0 1</span>

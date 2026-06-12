@@ -4,7 +4,7 @@
 \alias{add_component}
 \title{Define a mixture component}
 \usage{
-add_component(spec, id, members, n_outcomes = NULL, attrs = list())
+add_component(spec, id, members, n_outcomes = NULL)
 }
 \arguments{
 \item{spec}{A `race_spec` object.}
@@ -15,8 +15,6 @@ add_component(spec, id, members, n_outcomes = NULL, attrs = list())
 
 \item{n_outcomes}{Optional component-specific override for the number of
 observed ordered responses.}
-
-\item{attrs}{Additional component attributes.}
 }
 \value{
 The updated `race_spec`.

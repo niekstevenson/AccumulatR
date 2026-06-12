@@ -46,7 +46,6 @@ reference:
       - first_of
       - none_of
       - inhibit
-      - expr_guard
       - after
 
   - title: "Model Preparation"

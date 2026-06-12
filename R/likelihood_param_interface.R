@@ -1089,10 +1089,36 @@ complexity_metrics <- function(context) {
 
 #' Evaluate marginal response probabilities
 #'
+#' `response_probabilities()` evaluates the model-implied marginal probability
+#' of each observed response label for a finalized model and parameter set.
+#' Component labels in row-form parameters condition the calculation on those
+#' observed components; latent or `NA` components are marginalized according to
+#' the model's mixture specification.
+#'
 #' @param structure Finalized model structure.
 #' @param params_df A parameter data frame or rectangular parameter matrix.
 #' @param include_na If `TRUE`, include residual mass as `"NA"`.
 #' @param ... Unused; for S3 compatibility.
+#' @return A named numeric vector of marginal response probabilities. Names are
+#'   observed outcome labels. When `include_na = TRUE`, a residual `"NA"` entry
+#'   is included if the model assigns probability mass to unobserved or
+#'   `NA`-mapped outcomes.
+#' @examples
+#' spec <- race_spec() |>
+#'   add_accumulator("left", "lognormal") |>
+#'   add_accumulator("right", "lognormal") |>
+#'   add_outcome("left", "left") |>
+#'   add_outcome("right", "right") |>
+#'   set_parameters(separate = list(m = TRUE))
+#'
+#' model <- finalize_model(spec)
+#' params <- build_param_matrix(
+#'   spec,
+#'   c(left.m = log(0.25), right.m = log(0.40), s = 0.20),
+#'   n_trials = 1
+#' )
+#'
+#' response_probabilities(model, params)
 #' @export
 response_probabilities <- function(structure, params_df, include_na = TRUE, ...) {
   UseMethod("response_probabilities")

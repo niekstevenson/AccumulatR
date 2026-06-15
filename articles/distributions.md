@@ -17,9 +17,11 @@ library(AccumulatR)
 
 ## Naming convention
 
-Parameter names are built as `accumulator.parameter`. For example,
-`go.m`, `stop.shape`, and `choice.v` refer to parameters for the
-accumulators `go`, `stop`, and `choice`.
+By default, parameters are grouped by parameter name across compatible
+accumulators. Use
+[`set_parameters()`](https://niekstevenson.github.io/AccumulatR/reference/set_parameters.md)
+when an accumulator should have its own parameter, such as `go.m`,
+`stop.shape`, or `choice.v`.
 
 ## Available distributions
 

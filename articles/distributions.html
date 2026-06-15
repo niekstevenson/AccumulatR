@@ -91,10 +91,10 @@ in <code>AccumulatR</code> and the parameter names they use.</p>
 <div class="section level2">
 <h2 id="naming-convention">Naming convention<a class="anchor" aria-label="anchor" href="#naming-convention"></a>
 </h2>
-<p>Parameter names are built as <code>accumulator.parameter</code>. For
-example, <code>go.m</code>, <code>stop.shape</code>, and
-<code>choice.v</code> refer to parameters for the accumulators
-<code>go</code>, <code>stop</code>, and <code>choice</code>.</p>
+<p>By default, parameters are grouped by parameter name across
+compatible accumulators. Use <code><a href="../reference/set_parameters.html">set_parameters()</a></code> when an
+accumulator should have its own parameter, such as <code>go.m</code>,
+<code>stop.shape</code>, or <code>choice.v</code>.</p>
 </div>
 <div class="section level2">
 <h2 id="available-distributions">Available distributions<a class="anchor" aria-label="anchor" href="#available-distributions"></a>

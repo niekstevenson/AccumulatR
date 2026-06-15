@@ -110,8 +110,9 @@
 <span><span class="va">model</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="va">spec</span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">pars</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
-<span>  left.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.28</span><span class="op">)</span>, left.s <span class="op">=</span> <span class="fl">0.16</span>, left.q <span class="op">=</span> <span class="fl">0</span>, left.t0 <span class="op">=</span> <span class="fl">0</span>,</span>
-<span>  right.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.35</span><span class="op">)</span>, right.s <span class="op">=</span> <span class="fl">0.18</span>, right.q <span class="op">=</span> <span class="fl">0</span>, right.t0 <span class="op">=</span> <span class="fl">0</span></span>
+<span>  m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.30</span><span class="op">)</span>,</span>
+<span>  s <span class="op">=</span> <span class="fl">0.17</span>,</span>
+<span>  t0 <span class="op">=</span> <span class="fl">0</span></span>
 <span><span class="op">)</span></span>
 <span></span>
 <span><span class="va">param_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span><span class="va">spec</span>, <span class="va">pars</span>, n_trials <span class="op">=</span> <span class="fl">8</span><span class="op">)</span></span>

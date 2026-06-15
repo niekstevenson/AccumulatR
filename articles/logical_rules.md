@@ -58,10 +58,10 @@ model_first <- race_spec() |>
   add_outcome("target_detected", first_of("word_route", "picture_route")) |>
   finalize_model()
 
-model_first$outcomes[[1]]$label
+names(model_first$prep$outcomes)
 ```
 
-    ## NULL
+    ## [1] "target_detected"
 
 ## `all_of()`: several things must all be true
 
@@ -77,10 +77,10 @@ model_all <- race_spec() |>
   add_outcome("confirmed_response", all_of("encoding", "verification")) |>
   finalize_model()
 
-model_all$outcomes[[1]]$label
+names(model_all$prep$outcomes)
 ```
 
-    ## NULL
+    ## [1] "confirmed_response"
 
 ## `none_of()`: the response requires the competing event to be absent
 
@@ -96,10 +96,10 @@ model_none <- race_spec() |>
   add_outcome("respond", all_of("go", none_of("stop"))) |>
   finalize_model()
 
-model_none$outcomes[[1]]$label
+names(model_none$prep$outcomes)
 ```
 
-    ## NULL
+    ## [1] "respond"
 
 Here the absence of `stop` is part of the response definition.
 
@@ -117,10 +117,10 @@ model_inhibit <- race_spec() |>
   add_outcome("respond", inhibit("go", "stop")) |>
   finalize_model()
 
-model_inhibit$outcomes[[1]]$label
+names(model_inhibit$prep$outcomes)
 ```
 
-    ## NULL
+    ## [1] "respond"
 
 Here `go` is the response-generating process and `stop` blocks it.
 
@@ -133,66 +133,11 @@ These two rules look similar:
 rule_none <- all_of("go", none_of("stop"))
 rule_inhibit <- inhibit("go", "stop")
 
-rule_none
+c(absence_rule = rule_none$kind, inhibit_rule = rule_inhibit$kind)
 ```
 
-    ## $kind
-    ## [1] "and"
-    ## 
-    ## $args
-    ## $args[[1]]
-    ## $args[[1]]$kind
-    ## [1] "event"
-    ## 
-    ## $args[[1]]$source
-    ## [1] "go"
-    ## 
-    ## $args[[1]]$k
-    ## NULL
-    ## 
-    ## 
-    ## $args[[2]]
-    ## $args[[2]]$kind
-    ## [1] "not"
-    ## 
-    ## $args[[2]]$arg
-    ## $args[[2]]$arg$kind
-    ## [1] "event"
-    ## 
-    ## $args[[2]]$arg$source
-    ## [1] "stop"
-    ## 
-    ## $args[[2]]$arg$k
-    ## NULL
-
-``` r
-
-rule_inhibit
-```
-
-    ## $kind
-    ## [1] "guard"
-    ## 
-    ## $blocker
-    ## $blocker$kind
-    ## [1] "event"
-    ## 
-    ## $blocker$source
-    ## [1] "stop"
-    ## 
-    ## $blocker$k
-    ## NULL
-    ## 
-    ## 
-    ## $reference
-    ## $reference$kind
-    ## [1] "event"
-    ## 
-    ## $reference$source
-    ## [1] "go"
-    ## 
-    ## $reference$k
-    ## NULL
+    ## absence_rule inhibit_rule 
+    ##        "and"      "guard"
 
 But they are not the same model statement.
 
@@ -239,10 +184,10 @@ model_combo <- race_spec() |>
   ) |>
   finalize_model()
 
-model_combo$outcomes[[1]]$label
+names(model_combo$prep$outcomes)
 ```
 
-    ## NULL
+    ## [1] "choice"
 
 Use combined rules when the observed response reflects a structured
 decision rule rather than a single winning accumulator.

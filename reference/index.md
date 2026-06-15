@@ -50,8 +50,6 @@ Compose outcome rules and onset dependencies.
   : Define the absence of an event
 - [`inhibit()`](https://niekstevenson.github.io/AccumulatR/reference/inhibit.md)
   : Define a response that is blocked by another process
-- [`expr_guard()`](https://niekstevenson.github.io/AccumulatR/reference/expr_guard.md)
-  : Build a blocking rule explicitly
 - [`after()`](https://niekstevenson.github.io/AccumulatR/reference/after.md)
   : Start one accumulator after another process finishes
 

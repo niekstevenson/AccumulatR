@@ -8,7 +8,7 @@ configured with \`set_mixture()\`.
 ## Usage
 
 ``` r
-add_component(spec, id, members, n_outcomes = NULL, attrs = list())
+add_component(spec, id, members, n_outcomes = NULL)
 ```
 
 ## Arguments
@@ -29,10 +29,6 @@ add_component(spec, id, members, n_outcomes = NULL, attrs = list())
 
   Optional component-specific override for the number of observed
   ordered responses.
-
-- attrs:
-
-  Additional component attributes.
 
 ## Value
 

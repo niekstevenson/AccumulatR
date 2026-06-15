@@ -139,8 +139,8 @@ the same response.</p>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"target_detected"</span>, <span class="fu"><a href="../reference/first_of.html">first_of</a></span><span class="op">(</span><span class="st">"word_route"</span>, <span class="st">"picture_route"</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">model_first</span><span class="op">$</span><span class="va">outcomes</span><span class="op">[[</span><span class="fl">1</span><span class="op">]</span><span class="op">]</span><span class="op">$</span><span class="va">label</span></span></code></pre></div>
-<pre><code><span><span class="co">## NULL</span></span></code></pre>
+<span><span class="fu"><a href="https://rdrr.io/r/base/names.html" class="external-link">names</a></span><span class="op">(</span><span class="va">model_first</span><span class="op">$</span><span class="va">prep</span><span class="op">$</span><span class="va">outcomes</span><span class="op">)</span></span></code></pre></div>
+<pre><code><span><span class="co">## [1] "target_detected"</span></span></code></pre>
 </div>
 <div class="section level2">
 <h2 id="all_of-several-things-must-all-be-true">
@@ -155,8 +155,8 @@ processes all being complete.</p>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"confirmed_response"</span>, <span class="fu"><a href="../reference/all_of.html">all_of</a></span><span class="op">(</span><span class="st">"encoding"</span>, <span class="st">"verification"</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">model_all</span><span class="op">$</span><span class="va">outcomes</span><span class="op">[[</span><span class="fl">1</span><span class="op">]</span><span class="op">]</span><span class="op">$</span><span class="va">label</span></span></code></pre></div>
-<pre><code><span><span class="co">## NULL</span></span></code></pre>
+<span><span class="fu"><a href="https://rdrr.io/r/base/names.html" class="external-link">names</a></span><span class="op">(</span><span class="va">model_all</span><span class="op">$</span><span class="va">prep</span><span class="op">$</span><span class="va">outcomes</span><span class="op">)</span></span></code></pre></div>
+<pre><code><span><span class="co">## [1] "confirmed_response"</span></span></code></pre>
 </div>
 <div class="section level2">
 <h2 id="none_of-the-response-requires-the-competing-event-to-be-absent">
@@ -172,8 +172,8 @@ to happen.</p>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"respond"</span>, <span class="fu"><a href="../reference/all_of.html">all_of</a></span><span class="op">(</span><span class="st">"go"</span>, <span class="fu"><a href="../reference/none_of.html">none_of</a></span><span class="op">(</span><span class="st">"stop"</span><span class="op">)</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">model_none</span><span class="op">$</span><span class="va">outcomes</span><span class="op">[[</span><span class="fl">1</span><span class="op">]</span><span class="op">]</span><span class="op">$</span><span class="va">label</span></span></code></pre></div>
-<pre><code><span><span class="co">## NULL</span></span></code></pre>
+<span><span class="fu"><a href="https://rdrr.io/r/base/names.html" class="external-link">names</a></span><span class="op">(</span><span class="va">model_none</span><span class="op">$</span><span class="va">prep</span><span class="op">$</span><span class="va">outcomes</span><span class="op">)</span></span></code></pre></div>
+<pre><code><span><span class="co">## [1] "respond"</span></span></code></pre>
 <p>Here the absence of <code>stop</code> is part of the response
 definition.</p>
 </div>
@@ -191,8 +191,8 @@ response and another can block it.</p>
 <span>  <span class="fu"><a href="../reference/add_outcome.html">add_outcome</a></span><span class="op">(</span><span class="st">"respond"</span>, <span class="fu"><a href="../reference/inhibit.html">inhibit</a></span><span class="op">(</span><span class="st">"go"</span>, <span class="st">"stop"</span><span class="op">)</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">model_inhibit</span><span class="op">$</span><span class="va">outcomes</span><span class="op">[[</span><span class="fl">1</span><span class="op">]</span><span class="op">]</span><span class="op">$</span><span class="va">label</span></span></code></pre></div>
-<pre><code><span><span class="co">## NULL</span></span></code></pre>
+<span><span class="fu"><a href="https://rdrr.io/r/base/names.html" class="external-link">names</a></span><span class="op">(</span><span class="va">model_inhibit</span><span class="op">$</span><span class="va">prep</span><span class="op">$</span><span class="va">outcomes</span><span class="op">)</span></span></code></pre></div>
+<pre><code><span><span class="co">## [1] "respond"</span></span></code></pre>
 <p>Here <code>go</code> is the response-generating process and
 <code>stop</code> blocks it.</p>
 </div>
@@ -205,60 +205,9 @@ response and another can block it.</p>
 <code class="sourceCode R"><span><span class="va">rule_none</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/all_of.html">all_of</a></span><span class="op">(</span><span class="st">"go"</span>, <span class="fu"><a href="../reference/none_of.html">none_of</a></span><span class="op">(</span><span class="st">"stop"</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="va">rule_inhibit</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/inhibit.html">inhibit</a></span><span class="op">(</span><span class="st">"go"</span>, <span class="st">"stop"</span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">rule_none</span></span></code></pre></div>
-<pre><code><span><span class="co">## $kind</span></span>
-<span><span class="co">## [1] "and"</span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## $args</span></span>
-<span><span class="co">## $args[[1]]</span></span>
-<span><span class="co">## $args[[1]]$kind</span></span>
-<span><span class="co">## [1] "event"</span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## $args[[1]]$source</span></span>
-<span><span class="co">## [1] "go"</span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## $args[[1]]$k</span></span>
-<span><span class="co">## NULL</span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## $args[[2]]</span></span>
-<span><span class="co">## $args[[2]]$kind</span></span>
-<span><span class="co">## [1] "not"</span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## $args[[2]]$arg</span></span>
-<span><span class="co">## $args[[2]]$arg$kind</span></span>
-<span><span class="co">## [1] "event"</span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## $args[[2]]$arg$source</span></span>
-<span><span class="co">## [1] "stop"</span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## $args[[2]]$arg$k</span></span>
-<span><span class="co">## NULL</span></span></code></pre>
-<div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">rule_inhibit</span></span></code></pre></div>
-<pre><code><span><span class="co">## $kind</span></span>
-<span><span class="co">## [1] "guard"</span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## $blocker</span></span>
-<span><span class="co">## $blocker$kind</span></span>
-<span><span class="co">## [1] "event"</span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## $blocker$source</span></span>
-<span><span class="co">## [1] "stop"</span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## $blocker$k</span></span>
-<span><span class="co">## NULL</span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## $reference</span></span>
-<span><span class="co">## $reference$kind</span></span>
-<span><span class="co">## [1] "event"</span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## $reference$source</span></span>
-<span><span class="co">## [1] "go"</span></span>
-<span><span class="co">## </span></span>
-<span><span class="co">## $reference$k</span></span>
-<span><span class="co">## NULL</span></span></code></pre>
+<span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span>absence_rule <span class="op">=</span> <span class="va">rule_none</span><span class="op">$</span><span class="va">kind</span>, inhibit_rule <span class="op">=</span> <span class="va">rule_inhibit</span><span class="op">$</span><span class="va">kind</span><span class="op">)</span></span></code></pre></div>
+<pre><code><span><span class="co">## absence_rule inhibit_rule </span></span>
+<span><span class="co">##        "and"      "guard"</span></span></code></pre>
 <p>But they are not the same model statement.</p>
 <div class="section level3">
 <h3 id="all_ofgo-none_ofstop">
@@ -294,7 +243,7 @@ of logic at once. For example, suppose a response requires:</p>
 <li>either a left route or a right route to generate the choice</li>
 <li>no stop event</li>
 </ul>
-<div class="sourceCode" id="cb16"><pre class="downlit sourceCode r">
+<div class="sourceCode" id="cb14"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">model_combo</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/race_spec.html">race_spec</a></span><span class="op">(</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"encoding"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"left_route"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
@@ -310,8 +259,8 @@ of logic at once. For example, suppose a response requires:</p>
 <span>  <span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/finalize_model.html">finalize_model</a></span><span class="op">(</span><span class="op">)</span></span>
 <span></span>
-<span><span class="va">model_combo</span><span class="op">$</span><span class="va">outcomes</span><span class="op">[[</span><span class="fl">1</span><span class="op">]</span><span class="op">]</span><span class="op">$</span><span class="va">label</span></span></code></pre></div>
-<pre><code><span><span class="co">## NULL</span></span></code></pre>
+<span><span class="fu"><a href="https://rdrr.io/r/base/names.html" class="external-link">names</a></span><span class="op">(</span><span class="va">model_combo</span><span class="op">$</span><span class="va">prep</span><span class="op">$</span><span class="va">outcomes</span><span class="op">)</span></span></code></pre></div>
+<pre><code><span><span class="co">## [1] "choice"</span></span></code></pre>
 <p>Use combined rules when the observed response reflects a structured
 decision rule rather than a single winning accumulator.</p>
 </div>

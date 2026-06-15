@@ -50,8 +50,9 @@ spec <- race_spec() |>
 model <- finalize_model(spec)
 
 pars <- c(
-  left.m = log(0.28), left.s = 0.16, left.q = 0, left.t0 = 0,
-  right.m = log(0.35), right.s = 0.18, right.q = 0, right.t0 = 0
+  m = log(0.30),
+  s = 0.17,
+  t0 = 0
 )
 
 param_df <- build_param_matrix(spec, pars, n_trials = 8)
@@ -125,8 +126,6 @@ Compose outcome rules and onset dependencies.
   : Define the absence of an event
 - [`inhibit()`](https://niekstevenson.github.io/AccumulatR/reference/inhibit.md)
   : Define a response that is blocked by another process
-- [`expr_guard()`](https://niekstevenson.github.io/AccumulatR/reference/expr_guard.md)
-  : Build a blocking rule explicitly
 - [`after()`](https://niekstevenson.github.io/AccumulatR/reference/after.md)
   : Start one accumulator after another process finishes
 

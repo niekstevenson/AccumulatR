@@ -39,6 +39,179 @@ validation_cases <- function(include_adversarial = FALSE) {
       do.call(rbind, rows)
     },
 
+    censor_trunc_independent_two_way = function() {
+      structure <- race_spec() |>
+        add_accumulator("a", "lognormal") |>
+        add_accumulator("b", "lognormal") |>
+        add_outcome("A", "a") |>
+        add_outcome("B", "b") |>
+        finalize_model()
+      params <- c(
+        a.m = log(0.30), a.s = 0.16, a.t0 = 0.00,
+        b.m = log(0.42), b.s = 0.20, b.t0 = 0.00
+      )
+      a <- acc_parts("a", params)
+      b <- acc_parts("b", params)
+
+      race_mass <- function(lower, upper) {
+        acc_survival_scalar(lower, a) * acc_survival_scalar(lower, b) -
+          acc_survival_scalar(upper, a) * acc_survival_scalar(upper, b)
+      }
+      label_density <- function(label, t) {
+        target <- if (identical(label, "A")) a else b
+        competitor <- if (identical(label, "A")) b else a
+        acc_pdf_scalar(t, target) * acc_survival_scalar(t, competitor)
+      }
+      label_mass <- function(label, lower, upper) {
+        integrate_scalar(function(u) label_density(label, u), lower, upper)
+      }
+      eval_row <- function(data_df) engine_density_or_mass(structure, params, data_df)
+
+      rows <- list()
+      rows[[1L]] <- {
+        rt <- 0.35
+        lower <- 0.20
+        upper <- 0.70
+        engine <- eval_row(data.frame(
+          trials = 1L,
+          R = "A",
+          rt = rt,
+          LT = lower,
+          UT = upper,
+          stringsAsFactors = FALSE
+        ))
+        check_row(
+          "censor_trunc_independent_two_way",
+          "A_rt_0.35_LT_0.20_UT_0.70",
+          engine,
+          label_density("A", rt) / race_mass(lower, upper),
+          2e-3,
+          "Exact RT density normalized by race truncation mass"
+        )
+      }
+      rows[[2L]] <- {
+        cutoff <- 0.50
+        engine <- eval_row(data.frame(
+          trials = 1L,
+          R = NA_character_,
+          rt = NA_real_,
+          UC = cutoff,
+          stringsAsFactors = FALSE
+        ))
+        check_row(
+          "censor_trunc_independent_two_way",
+          "unknown_UC_0.50",
+          engine,
+          race_mass(cutoff, Inf),
+          2e-3,
+          "Unknown-label upper censoring integrates race tail"
+        )
+      }
+      rows[[3L]] <- {
+        cutoff <- 0.25
+        engine <- eval_row(data.frame(
+          trials = 1L,
+          R = NA_character_,
+          rt = NA_real_,
+          LC = cutoff,
+          stringsAsFactors = FALSE
+        ))
+        check_row(
+          "censor_trunc_independent_two_way",
+          "unknown_LC_0.25",
+          engine,
+          race_mass(0.0, cutoff),
+          2e-3,
+          "Unknown-label lower censoring integrates early race mass"
+        )
+      }
+      rows[[4L]] <- {
+        lower <- 0.20
+        upper <- 0.60
+        engine <- eval_row(data.frame(
+          trials = 1L,
+          R = "A",
+          rt = NA_real_,
+          UC = lower,
+          LC = upper,
+          stringsAsFactors = FALSE
+        ))
+        check_row(
+          "censor_trunc_independent_two_way",
+          "A_UC_0.20_LC_0.60",
+          engine,
+          label_mass("A", lower, upper),
+          2e-3,
+          "Label-specific interval censoring integrates outcome density"
+        )
+      }
+      rows[[5L]] <- {
+        lower <- 0.20
+        upper <- 0.60
+        engine <- eval_row(data.frame(
+          trials = 1L,
+          R = "A",
+          rt = NA_real_,
+          LT = lower,
+          UT = upper,
+          stringsAsFactors = FALSE
+        ))
+        check_row(
+          "censor_trunc_independent_two_way",
+          "A_missing_rt_LT_0.20_UT_0.60",
+          engine,
+          label_mass("A", lower, upper) / race_mass(lower, upper),
+          2e-3,
+          "Missing RT with truncation only is a bounded interval observation"
+        )
+      }
+      do.call(rbind, rows)
+    },
+
+    truncated_latent_mixture_ratio = function() {
+      structure <- race_spec() |>
+        add_accumulator("a", "lognormal") |>
+        add_accumulator("b", "lognormal") |>
+        add_outcome("A", "a") |>
+        add_outcome("B", "b") |>
+        add_component("a_only", members = "a") |>
+        add_component("b_only", members = "b") |>
+        set_mixture(mode = "fixed", weights = c(a_only = 0.25, b_only = 0.75)) |>
+        finalize_model()
+      params <- c(
+        a.m = log(0.30), a.s = 0.16, a.t0 = 0.00,
+        b.m = log(0.42), b.s = 0.20, b.t0 = 0.00
+      )
+      a <- acc_parts("a", params)
+      b <- acc_parts("b", params)
+      rt <- 0.32
+      lower <- 0.20
+      upper <- 0.70
+      engine <- engine_density_or_mass(
+        structure,
+        params,
+        data.frame(
+          trials = 1L,
+          R = "A",
+          rt = rt,
+          LT = lower,
+          UT = upper,
+          stringsAsFactors = FALSE
+        )
+      )
+      mass_a <- acc_cdf_scalar(upper, a) - acc_cdf_scalar(lower, a)
+      mass_b <- acc_cdf_scalar(upper, b) - acc_cdf_scalar(lower, b)
+      manual <- 0.25 * acc_pdf_scalar(rt, a) / (0.25 * mass_a + 0.75 * mass_b)
+      check_row(
+        "truncated_latent_mixture_ratio",
+        "A_rt_0.32_LT_0.20_UT_0.70",
+        engine,
+        manual,
+        2e-3,
+        "Latent fixed mixture truncation uses ratio of weighted sums"
+      )
+    },
+
     pool_vs_competitor = function() {
       structure <- race_spec() |>
         add_accumulator("a1", "lognormal") |>

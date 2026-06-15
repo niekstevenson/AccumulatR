@@ -1,0 +1,139 @@
+\documentclass[12pt,a4paper,one side]{article}
+\usepackage{amsmath}
+\usepackage[style=apa, natbib=true, backend=biber]{biblatex}
+\usepackage[hang,flushmargin]{footmisc}
+\usepackage[a4paper,left=3cm,right=2cm,top=2.5cm,bottom=2.5cm]{geometry}
+\usepackage{indentfirst}
+\addbibresource{references.bib}
+\author{Zachary L. Howard}
+\title{Analytic Derivation of Normalization Constant and Censoring Likelihoods in Independent Race Models}
+\begin{document}
+\maketitle
+%\section*{}
+
+Consider a race model with $N$ independent accumulators. Let $f_k(t)$ and $S_k(t)$ denote the probability density function (PDF) and survivor function, respectively, for the $k$-th accumulator. The survivor function represents the probability that the accumulator has not reached its threshold by time $t$, such that $S_k(t) = Pr(T_k \geq t) = 1 - \int_{0}^{t} f_k(u) du$.
+
+% the below is basic probability theory - could cite something like Luce (1986) Theorem 1.3. NB in Eq 1 I factored out the denominator, in Luce it is f_k(t)/(1-F_k(t)) and the product goes from 1 to N. Each time i=k the denominator can cancel hence the i != k .
+For an independent race, the probability of a response occurring at time $t$ from accumulator $k$ is the product of that accumulator finishing at $t$ and all other accumulators $i \neq k$ not having finished, therefore the total probability of instantaneous race completion is the sum of these individual probabilities:\footnote{For clarity, throughout we use $G(t)$ to represent the cumulative density of the \textit{Race}, $g(t)$ to represent the density function of the \textit{Race} and $f_k(t)$ to represent the density function of a \textit{single accumulator}. Survivor functions will be expressed as $S_{subscript}(t)$ where the subscript indicates which process is referred to.}
+\begin{equation}
+    g(t) = \sum_{k=1}^{N} \left( f_k(t) \prod_{i \neq k} S_i(t) \right)
+    \label{eq:race_density}
+\end{equation}
+Let $S_{Race}(t)$ be the survivor function of the race process (i.e., the probability that \textit{no} accumulator has finished by time $t$). Due to independence, this is the product of the individual survivor functions (\nptextcite[see e.g.,][, specifically Theorem 1.3 in Chapter 1]{luce1986response}):
+\begin{equation}
+    S_{\text{Race}}(t) = \prod_{k=1}^{N} S_k(t)
+    \label{eq:race_survivor}
+\end{equation}
+
+\subsection*{1. Normalisation for Truncated Data}
+
+When data are truncated, we restrict our observation window to the interval $[LT, UT]$. The likelihood of observing any response within this window must be normalised by the total probability mass contained within the bounds. This normalisation constant, $Z$, is the probability that the first passage time $T$ falls between $LT$ and $UT$:
+\begin{equation}
+    Z = P(LT \leq T \leq UT) = \int_{LT}^{UT} g(t) \, dt
+    \label{eq:truncZ_integral}
+\end{equation}
+We observe from the following relationships that the race likelihood $g(t)$ can be expressed as the negative derivative of the race survivor function with respect to time:
+\begin{subequations}
+    \begin{align}
+        G(t) &= 1 - S_{\text{Race}}(t) \label{eq:cdf} \\
+        &= \int_{0}^{t} g(t) dt \nonumber \\
+        g(t) &= \frac{d}{dt} G(t). \nonumber \\
+        &= - \frac{d}{dt} S_{\text{Race}}(t) \label{eq:derivative}
+    \end{align}
+\end{subequations}
+Substituting Equation \ref{eq:derivative} into Equation \ref{eq:truncZ_integral} and applying the Fundamental Theorem of Calculus:
+\begin{align}
+    Z &= \int_{LT}^{UT} - \frac{d}{dt} S_{\text{Race}}(t) \, dt \nonumber \\
+    &= - \int_{LT}^{UT} \frac{d}{dt} S_{\text{Race}}(t) \, dt \nonumber \\
+    &= - (S_{\text{Race}}(UT) - S_{\text{Race}}(LT)) \nonumber \\
+    &= S_{\text{Race}}(LT) - S_{\text{Race}}(UT)
+    \label{eq:truncZ}
+\end{align}
+Substituting Equation \ref{eq:truncZ} into Equation \ref{eq:race_survivor} allows for the efficient calculation of the normalisation constant using only the survivor functions evaluated at the bounds, which as noted above, can be computed analytically as the product of survivor functions per accumulator in independent race models with closed-form solutions: 
+\begin{align}
+    Z &= S_{\text{Race}}(LT) - S_{\text{Race}}(UT) \nonumber \\
+    & = \prod_{k=1}^{N} S_k(LT) - \prod_{k=1}^{N} S_k(UT)
+    \label{eq:truncZ_identity}
+\end{align}
+The total likelihood of an observed response $k$ at time $t$ given truncation on the interval [LT, UT] is then the value of the race density evaluated at time $t$ (Equation \ref{eq:race_density}) divided by the value of Z:
+\begin{align}
+    g_{\text{trunc}}(t) = \frac{f_k(t)\prod_{i\neq k}^{N} S_i(t)}{Z}
+    \label{eq:race_density_truncated}
+\end{align}
+
+\subsection*{2. Likelihood of Censored Data}
+
+Censoring here is operationalised as a data-record where a response was not observed within a specific observable window but is known to exist. For example, most experiments include a trial time-out and record ``misses'' if a response is not entered by the time-out. This can be considered a form of right censoring (NB this is often termed interval censoring as we assume a response is known to fall within an interval, e.g. $UC \leq T \leq \infty $).
+% Sanity check combination of censoring and truncation e.g. how can wqe realistically assume truncation (discarded data) AND censoring? We can't attribute an upper bound to an unobserved process... If we post-hoc clean data we can *either* assume we discard data outside the bounds (truncation) or we keep the proportion of them without attributing the RTs (censoring) -- but the logical combination of both seems difficult to justify.
+
+\subsubsection*{Upper Censoring (Right Censoring)}
+If a trial times out or is otherwise censored at some upper bound, we assume the response time was at least $UC$ (Upper Cutoff)\footnote{\noindent NB: In the special case of a deterministic model such as an LBA that allows negative drift rates, a slight adjustment to these derivations is required. This is provided in the next section.}, bounded by the theoretical or methodological maximum $UT$. The likelihood of this observation is the probability mass integrated over the interval $[UC, UT]$, which reduces to an analytic result\footnote{NB:The result is only analytically tractable on the condition that the winning accumulator is treated as unknown. In the event that the data recorded the response but only a censored interval for RT, the likelihood requires evaluation of the defective cumulative density for a single accumulator $k$, which typically requires numerical integration \parencite{brown2008simplest}.} analogous to the above:
+\begin{align}
+    P(UC \leq T \leq UT) &= \int_{UC}^{UT} g(t) \, dt \nonumber \\
+    &= \int_{UC}^{UT} - \frac{d}{dt} S_{\text{Race}}(t) \, dt \nonumber \\
+    &= S_{\text{Race}}(UC) - S_{\text{Race}}(UT)
+    \label{Eq:survivor_difference}
+\end{align}
+In cases where the response-time distribution is proper, $S_{\text{Race}}(\infty) = 0$ and the upper-censor integral simplifies to $S_{\text{Race}}(UC)$ when $UT=\infty$.
+
+\subsubsection*{Lower Censoring (Left Censoring)}
+If a response is known to be at most $LC$ (Lower Cutoff), but bounded by the minimum possible time $LT \geq 0$, the likelihood is:
+\begin{align}
+    P(LT \leq T \leq LC) &= \int_{LT}^{LC} g(t) \, dt \nonumber \\
+    &= S_{\text{Race}}(LT) - S_{\text{Race}}(LC)
+\end{align}
+In cases where there is no lower truncation, the likelihood of the integral simplifies to $1-S_{\text{Race}}(LC) = G(LC)$ (where $G(t)$ is the \textit{unconditional} CDF), because $S_{\text{Race}}(0) = 1$. 
+
+\subsubsection*{Censoring With Intrinsic Omissions}
+
+The Linear Ballistic Accumulator (LBA) model \parencite{brown2008simplest} is a special-case of a race model where drift within a trial is deterministic, but is distributed according to a distribution (most commonly a Normal distribution). Such models can have a defective $g(t)$ due to the potential for ``intrinsic omissions'' that arise when all drifts are sampled negative, formally: 
+\begin{equation}
+    P_{\text{intrinsic}} = \prod_{k=1}^{N} P(v_k \leq 0) = \prod_{k=1}^{N} \Phi\left( -\frac{\nu_k}{s_k} \right)
+\end{equation}
+where $v$ and $s$ are the mean and standard deviation of the normally-distributed drift-rate for accumulator $k$. \textcite{damaso2022cognitive} distinguished the probability of ``intrinsic omission'' from ``design omission'' (e.g. trial timeout), which is the integral of race finishes from UC to $\infty$ described above. The likelihood of a ``task-related omission'' (i.e., a data point with no associated response time but assuming Omissions are treated as upper-censored) in the LBA with Intrinsic Omissions model was expressed in \textcite{damaso2022cognitive} as: 
+\begin{subequations}
+\begin{align}
+    P_{\text{D|finish}} &= P(T > UC|T <\infty) \nonumber  \\ 
+    &= \int_{UC}^{\infty} g(t) \, dt \label{Eq:PrD}  \\
+    P_{\text{Intrinsic}} &= P(T = \infty) \nonumber  \\
+    &= \prod_{k=1}^{N} \Phi\left( -\frac{\nu_k}{s_k} \right) \label{Eq:PrIO} \\
+    P_{\text{Task}} &= P_{\text{Intrinsic}} + (1-P_{\text{Intrinsic}})P_{\text{D|finish}} \label{Eq:PrTO}
+\end{align}
+\end{subequations}
+where $g(t)$ is the density of the race, conditional on eventual termination. \textcite{damaso2022cognitive} implemented this likelihood by computing the term in Equation \ref{Eq:PrD} through numerical integration of $g(t)$, then adjusting for the analytically-derived Equation \ref{Eq:PrIO}. However, Equation \ref{Eq:PrTO} can be more simply expressed and obtained entirely through analytic methods. Let $T$ denote the race finishing time, with $T=\infty$ on intrinsic-omission trials (i.e., when the race never finishes). The \textit{unconditional} CDF $G(t) = P(T \leq t)$ has density $g^*(t) = G'(t)$ on $(0, \infty)$. Because $T$ may equal $\infty$, $G(\infty) = \int_{0}^{\infty} g^*(t) \, dt = P(T < \infty)$ is defective. The events ${T < \infty}$ and ${T = \infty}$ are disjoint and exhaustive, so $1=P(T <\infty) +P(T = \infty) = G(\infty) +P_{\text{Intrinsic}}$, therefore $S_{Race}(\infty) = 1 - G(\infty) = P_{\text{Intrinsic}}$. We can expand Equation \ref{Eq:PrTO} by first substituting $P_{\text{Design}} = (1-P_{\text{Intrinsic}})P_{\text{D|finish}}$ as the integral of the \textit{defective} race using Equation \ref{Eq:survivor_difference} (ensuring it captures only ``slow but eventually finishing'' cases and thus removing the $[1-P_{\text{Intrinsic}}]$ correction), and by the identity derived in this paragraph show that:
+\begin{align}
+    g^*(t) &= (1-P_{\text{Intrinsic}}) g(t) \nonumber \\
+    P_{\text{Design}} &= (1-P_{\text{intrinsic}})P_{\text{D|finish}} \nonumber  \\
+    &= P_{\text{Intrinsic}}\int_{UC}^{\infty} g(t)\, dt \nonumber  \\
+    &= \int_{UC}^{\infty} g^*(t)
+\end{align}
+hence:
+\begin{align}
+    P_{\text{Task}} &= P_{\text{Design}} + P_{\text{Intrinsic}} \nonumber  \\
+    &= \int_{UC}^{\infty} g^*(t) \, dt + P_{\text{Intrinsic}} \nonumber \\
+    &= (S_{\text{Race}}(UC) - S_{\text{Race}}(\infty)) + P_{\text{Intrinsic}} \nonumber \\
+    &= S_{\text{Race}}(UC) - P_{\text{Intrinsic}} + P_{\text{Intrinsic}} \nonumber \\
+    &= S_{\text{Race}}(UC) \nonumber 
+\end{align}
+
+% Andrew this section is a bit rough can you tidy it up as needed? I think I'm halfway between just writing the math, and writing snippets of a proper manuscript.
+\subsection*{Go No-Go Race}
+In a Go No-Go (GNG) task, participants are asked to withhold a response on ``no-go'' trials. In this task a correct no-go response will therefore appear as an omission (for convenience we assume all no-go responses are coded equivalent to an experiment timeout, i.e. with an unknown race winner and an unobserved response-time). The GNG task has been modeled in a Diffusion model framework where the bounded accumulation allows parameter estimation on ``no-go'' trials using the CDF of accumulation to the ``go'' boundary with reasonable fits to empirical data. 
+
+To model the GNG task in an independent race-model structure (which has many benefits, including e.g. tasks that include more than one ``go'' response) we would construct a race between a no-go and $n$ go accumulators. This introduces an additional complexity over the DDM GNG model. On trials with an observed response time and response, the likelihood is simply the same as any ordinary race model with the no-go accumulator treated as one of the losers. However, an observed ``no-go'' in a race could arise either from the no-go accumulator winning the race \textit{before} the experimental timeout (equivalent to UC in the above derviations) \textit{or} the case where all accumulators were below the boundary at time $T=UC$. Therefore, the likelihood of observing a no-go response in a race model is the defective probability of the No-Go Accumulator winning before UC added to the integral of the race pdf from $UC \leq T \leq \infty$. Assuming no truncation (which is incompatible with a paradigm with known upper censoring) and a proper race distribution (i.e., no intrinsic omissions), the latter component reduces to the survivor of the full race at UC (i.e. that no accumulator finished by UC) as shown above.
+
+% Really not sure what the best notation to use here is. It gets a bit confusing because at this point I've used g(t) for the conditional-on-responding race density, g*(t) for a defective (unconditional)density, and f_subscript(t)for the individual accumulator densities. But this is now g(t| no time OBSERVED) -- but that doesn't mean the race itself actually took > UC so I think the way I have framed it is inaccurate...
+\begin{align}
+    P_{nogo}(t|0 < T < UC)  &= f_{nogo}(t) \prod_{i \neq nogo} S_i(t) \\
+    g(t|T \geq UC) &= f_{nogo}(t) \prod_{i \neq nogo} S_i(t) + S_{Race}(UC)
+    \label{eq:gng_race_density}
+\end{align}
+
+The first term in Equation \ref{eq:gng_race_density} must be evaluated through numerical integration \parencite[see e.g.,][]{brown2008simplest} as there is no known closed-form solution. However, as the integral is the same for all ``no go'' trials that share parameters it is computationally efficient to estimate. The latter component is the same analytically solvable integral as in the previous sections. As such, the Go NoGo Race model is a viable extension of existing model frameworks, leveraging the developments of modeling censored RT data provided in this manuscript.
+% The last bit is a bit waffly but hinting towards a paper on the GNG race.
+
+
+\printbibliography
+\clearpage
+
+\end{document}

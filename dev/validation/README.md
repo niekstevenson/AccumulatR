@@ -8,36 +8,38 @@ Run it from the repo root with:
 Rscript dev/validation/run_validation.R
 ```
 
-The default runner compares engine likelihoods against explicit manual references for 28 model shapes:
+The default runner compares engine likelihoods against explicit manual references for 30 model shapes:
 
 1. `independent_trigger_two_way`
-2. `pool_vs_competitor`
-3. `all_of_three_way`
-4. `first_of_three_way`
-5. `chained_onset_single_outcome`
-6. `ranked_independent`
-7. `ranked_chained_onset`
-8. `shared_trigger_conditioning`
-9. `shared_gate_pair`
-10. `guarded_positive_mass_tie`
-11. `shared_gate_three_way_tie`
-12. `nested_guard_pair`
-13. `deep_guard_chain`
-14. `pooled_shared_gate_tie`
-15. `pooled_guarded_shared_gate_tie`
-16. `overlapping_composite_competitors`
-17. `guarded_overlapping_competitors`
-18. `shared_gate_four_way_tie`
-19. `none_of_conjunction`
-20. `stop_change_shared_trigger`
-21. `stim_selective_stop`
-22. `stim_selective_stop2`
-23. `density_lift_competitor_subset`
-24. `partial_overlap_composite_gates`
-25. `nested_choice_guard_absence`
+2. `censor_trunc_independent_two_way`
+3. `truncated_latent_mixture_ratio`
+4. `pool_vs_competitor`
+5. `all_of_three_way`
+6. `first_of_three_way`
+7. `chained_onset_single_outcome`
+8. `ranked_independent`
+9. `ranked_chained_onset`
+10. `shared_trigger_conditioning`
+11. `stop_change_shared_trigger`
+12. `stim_selective_stop`
+13. `stim_selective_stop2`
+14. `shared_gate_pair`
+15. `guarded_positive_mass_tie`
+16. `shared_gate_three_way_tie`
+17. `nested_guard_pair`
+18. `deep_guard_chain`
+19. `pooled_shared_gate_tie`
+20. `pooled_guarded_shared_gate_tie`
+21. `density_lift_competitor_subset`
+22. `overlapping_composite_competitors`
+23. `guarded_overlapping_competitors`
+24. `shared_gate_four_way_tie`
+25. `none_of_conjunction`
 26. `first_of_absence_choice`
 27. `guarded_composite_vs_guarded_competitor`
 28. `composite_blocker_guard`
+29. `partial_overlap_composite_gates`
+30. `nested_choice_guard_absence`
 
 There is also a heavier adversarial runner:
 

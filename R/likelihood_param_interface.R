@@ -137,6 +137,127 @@
   }, logical(1)))
 }
 
+.observation_bound_columns <- c("LT", "UT", "LC", "UC")
+
+.coerce_observation_bounds <- function(data_df) {
+  bound_cols <- intersect(.observation_bound_columns, names(data_df))
+  for (col in bound_cols) {
+    x <- data_df[[col]]
+    if (!(is.numeric(x) || is.integer(x))) {
+      stop(sprintf("Observation bound column '%s' must be numeric", col), call. = FALSE)
+    }
+    data_df[[col]] <- as.numeric(x)
+  }
+  data_df
+}
+
+.observation_bound_values <- function(data_df) {
+  n <- nrow(data_df)
+  column_or_default <- function(name, default) {
+    if (name %in% names(data_df)) {
+      x <- as.numeric(data_df[[name]])
+      x[is.na(x)] <- default
+      x
+    } else {
+      rep.int(default, n)
+    }
+  }
+  list(
+    LT = column_or_default("LT", 0),
+    UT = column_or_default("UT", Inf),
+    LC = if ("LC" %in% names(data_df)) as.numeric(data_df$LC) else rep.int(NA_real_, n),
+    UC = if ("UC" %in% names(data_df)) as.numeric(data_df$UC) else rep.int(NA_real_, n)
+  )
+}
+
+.validate_observation_bounds <- function(data_df, max_rank) {
+  bound_cols <- intersect(.observation_bound_columns, names(data_df))
+  if (length(bound_cols) == 0L) {
+    return(invisible(NULL))
+  }
+  if (max_rank > 1L) {
+    stop("ranked observations do not support censoring or truncation columns", call. = FALSE)
+  }
+  bounds <- .observation_bound_values(data_df)
+  for (col in bound_cols) {
+    x <- as.numeric(data_df[[col]])
+    bad <- !is.na(x) & x < 0
+    if (any(bad)) {
+      stop(sprintf("Observation bound column '%s' must be non-negative", col), call. = FALSE)
+    }
+  }
+
+  finite_window <- is.finite(bounds$LT) & is.finite(bounds$UT)
+  bad_window <- finite_window & bounds$UT <= bounds$LT
+  if (any(bad_window)) {
+    stop("Observation truncation bounds require UT > LT", call. = FALSE)
+  }
+
+  rt <- as.numeric(data_df$rt)
+  both_censor <- is.na(rt) & is.finite(bounds$LC) & is.finite(bounds$UC)
+  bad_censor <- both_censor & bounds$LC <= bounds$UC
+  if (any(bad_censor)) {
+    stop("Observation censoring bounds require LC > UC when both are present", call. = FALSE)
+  }
+
+  exact <- !is.na(rt)
+  if (any(exact & (rt < bounds$LT | rt > bounds$UT))) {
+    stop("Exact RT values must lie inside the truncation window [LT, UT]", call. = FALSE)
+  }
+  if (any(exact & is.finite(bounds$LC) & rt <= bounds$LC)) {
+    stop("Exact RT values must be greater than finite lower-censoring cutoffs", call. = FALSE)
+  }
+  if (any(exact & is.finite(bounds$UC) & rt >= bounds$UC)) {
+    stop("Exact RT values must be less than finite upper-censoring cutoffs", call. = FALSE)
+  }
+
+  interval_observation <- is.na(rt) &
+    (!is.na(bounds$LC) | !is.na(bounds$UC) | bounds$LT > 0 | is.finite(bounds$UT))
+  if (any(interval_observation)) {
+    lower <- ifelse(!is.na(bounds$UC), pmax(bounds$LT, bounds$UC), bounds$LT)
+    upper <- ifelse(!is.na(bounds$LC), pmin(bounds$UT, bounds$LC), bounds$UT)
+    if (any(interval_observation & upper <= lower)) {
+      stop("Interval observations must have a non-empty interval after truncation bounds", call. = FALSE)
+    }
+    label_missing <- is.na(as.character(data_df$R))
+    truncation_active <- bounds$LT > 0 | is.finite(bounds$UT)
+    ambiguous_terminal <- interval_observation &
+      label_missing &
+      !is.na(bounds$UC) &
+      is.infinite(upper) &
+      truncation_active
+    if (any(ambiguous_terminal)) {
+      stop(
+        "Unknown-label upper censoring to infinity with active truncation is not supported",
+        call. = FALSE
+      )
+    }
+  }
+
+  invisible(NULL)
+}
+
+.row_has_observation_interval <- function(data_df, row) {
+  rt <- data_df$rt[[row]]
+  if (!is.na(rt)) {
+    return(FALSE)
+  }
+  value_or_default <- function(name, default) {
+    if (name %in% names(data_df)) {
+      value <- data_df[[name]][[row]]
+      if (!is.na(value)) {
+        return(as.numeric(value))
+      }
+    }
+    default
+  }
+  has_lc <- "LC" %in% names(data_df) && !is.na(data_df$LC[[row]])
+  has_uc <- "UC" %in% names(data_df) && !is.na(data_df$UC[[row]])
+  lt <- value_or_default("LT", 0)
+  ut <- value_or_default("UT", Inf)
+  has_lc || has_uc || lt > 0 || is.finite(ut)
+}
+
 .validate_trial_level_columns <- function(data_df, columns) {
   columns <- intersect(columns, names(data_df))
   if (length(columns) == 0L || nrow(data_df) <= 1L) {
@@ -232,7 +353,8 @@
 
 .validate_first_rank_trials <- function(data_df,
                                         allow_missing_all = FALSE,
-                                        allow_missing_rt = FALSE) {
+                                        allow_missing_rt = FALSE,
+                                        allow_censored_rt = FALSE) {
   if (nrow(data_df) == 0L) {
     return(invisible(NULL))
   }
@@ -242,11 +364,12 @@
     label_missing <- is.na(as.character(data_df$R[[start]]))
     rt <- data_df$rt[[start]]
     time_missing <- is.na(rt)
+    row_censored <- allow_censored_rt && .row_has_observation_interval(data_df, start)
     if (label_missing && !time_missing) {
       stop("finite RT with missing response label is not supported", call. = FALSE)
     }
     if (label_missing && time_missing) {
-      if (!allow_missing_all) {
+      if (!allow_missing_all && !row_censored) {
         stop(
           "Identity observations require a finite first-rank R/rt pair for every trial",
           call. = FALSE
@@ -254,7 +377,7 @@
       }
       next
     }
-    if (time_missing && !allow_missing_rt) {
+    if (time_missing && !allow_missing_rt && !row_censored) {
       stop(
         "Identity observations require a finite first-rank R/rt pair for every trial",
         call. = FALSE
@@ -312,8 +435,8 @@
 
   attr(data_df, "trials_start_rows") <- as.integer(trial_starts)
   attr(data_df, "layout_cols") <- setNames(
-    as.integer(match(c("component", "onset"), names(data_df))),
-    c("component", "onset")
+    as.integer(match(c("component", "onset", .observation_bound_columns), names(data_df))),
+    c("component", "onset", .observation_bound_columns)
   )
   attr(data_df, "label_cols") <- as.integer(match(rank_names, names(data_df)))
   attr(data_df, "time_cols") <- as.integer(match(time_names, names(data_df)))
@@ -347,6 +470,8 @@
     data_df$trials <- seq_len(nrow(data_df))
   }
   rank_info <- .validate_ranked_observation_columns(data_df)
+  data_df <- .coerce_observation_bounds(data_df)
+  .validate_observation_bounds(data_df, rank_info$max_rank)
   if (!"racer" %in% names(data_df)) {
     data_df <- .expand_accumulator_rows(structure, data_df)
   }
@@ -441,13 +566,15 @@
     "component",
     "R",
     "rt",
+    .observation_bound_columns,
     unlist(lapply(seq.int(2L, rank_info$max_rank), function(rank) c(paste0("R", rank), paste0("rt", rank))), use.names = FALSE)
   )
   .validate_trial_level_columns(data_df, trial_level_columns)
   .validate_first_rank_trials(
     data_df,
     allow_missing_all = rank_info$max_rank == 1L,
-    allow_missing_rt = rank_info$max_rank == 1L && .has_observation_wrappers(prep_eval_base)
+    allow_missing_rt = rank_info$max_rank == 1L && .has_observation_wrappers(prep_eval_base),
+    allow_censored_rt = length(intersect(.observation_bound_columns, names(data_df))) > 0L
   )
   .validate_ranked_trials(data_df, rank_info$max_rank)
   class(data_df) <- unique(c("accumulatr_data", class(data_df)))

@@ -6,6 +6,7 @@
 
 #include "eval_query.hpp"
 #include "exact_step_distribution.hpp"
+#include "quadrature.hpp"
 #include "trial_data.hpp"
 #include "../compile/exact_evaluation_program_lowering.hpp"
 
@@ -166,27 +167,102 @@ inline double exact_unranked_target_density(
   return std::isfinite(total) && total > 0.0 ? total : 0.0;
 }
 
+inline double exact_outcome_probability_between(
+    const ExactVariantPlan &plan,
+    const ParamView &params,
+    int first_param_row,
+    semantic::Index target_idx,
+    double lower,
+    double upper,
+    ExactStepWorkspace *workspace);
+
 inline double exact_finite_outcome_probability(
     const ExactVariantPlan &plan,
     const ParamView &params,
     const int first_param_row,
     const semantic::Index target_idx,
     ExactStepWorkspace *workspace) {
+  return exact_outcome_probability_between(
+      plan,
+      params,
+      first_param_row,
+      target_idx,
+      0.0,
+      R_PosInf,
+      workspace);
+}
+
+inline double exact_outcome_probability_between(
+    const ExactVariantPlan &plan,
+    const ParamView &params,
+    const int first_param_row,
+    const semantic::Index target_idx,
+    double lower,
+    const double upper,
+    ExactStepWorkspace *workspace) {
   if (target_idx == semantic::kInvalidIndex) {
     return 0.0;
   }
-  const double probability =
-      integrate_to_infinity(
-          [&](const double rt) {
-            return exact_unranked_target_density(
-                plan,
-                params,
-                first_param_row,
-                target_idx,
-                rt,
-                workspace);
-          });
+  if (!std::isfinite(lower)) {
+    return 0.0;
+  }
+  lower = std::max(0.0, lower);
+  if (std::isfinite(upper) && !(upper > lower)) {
+    return 0.0;
+  }
+  const double probability = std::isfinite(upper)
+      ? quadrature::integrate_finite_default(
+            lower,
+            upper,
+            [&](const double rt) {
+              return exact_unranked_target_density(
+                  plan,
+                  params,
+                  first_param_row,
+                  target_idx,
+                  rt,
+                  workspace);
+            })
+      : integrate_to_infinity(
+            [&](const double offset) {
+              return exact_unranked_target_density(
+                  plan,
+                  params,
+                  first_param_row,
+                  target_idx,
+                  lower + offset,
+                  workspace);
+            });
   return std::isfinite(probability) ? clamp_probability(probability) : 0.0;
+}
+
+inline double exact_all_outcome_probability_between(
+    const ExactVariantPlan &plan,
+    const ParamView &params,
+    const int first_param_row,
+    const std::vector<semantic::Index> &outcome_codes,
+    const double lower,
+    const double upper,
+    ExactStepWorkspace *workspace) {
+  double total = 0.0;
+  for (const auto outcome_code : outcome_codes) {
+    if (outcome_code == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(outcome_code) >=
+            plan.outcome_index_by_code.size()) {
+      continue;
+    }
+    const auto target_idx =
+        plan.outcome_index_by_code[static_cast<std::size_t>(outcome_code)];
+    total += exact_outcome_probability_between(
+        plan,
+        params,
+        first_param_row,
+        target_idx,
+        lower,
+        upper,
+        workspace);
+  }
+  return std::isfinite(total) ? clamp_probability(total) : 0.0;
 }
 
 inline double exact_terminal_no_response_probability(

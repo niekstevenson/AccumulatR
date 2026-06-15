@@ -74,6 +74,8 @@ struct ComponentObservationPlan {
   semantic::Index missing_rt_state_offset{semantic::kInvalidIndex};
   std::vector<std::vector<ObservedBranch>> keep_by_code;
   std::vector<std::vector<ObservedBranch>> missing_rt_by_code;
+  std::vector<std::vector<ObservedBranch>> interval_by_code;
+  std::vector<semantic::Index> finite_outcome_codes;
   std::vector<ObservedBranch> finite_observed_branches;
   std::vector<ObservedBranch> missing_all_branches;
   std::vector<ObservationProbabilityPlan> log_plans_by_state_code;
@@ -301,6 +303,7 @@ inline void compile_component_observation_probability_plans(
     return;
   }
   const auto n_codes = component_plan->keep_by_code.size();
+  component_plan->interval_by_code.assign(n_codes, {});
   component_plan->missing_rt_state_offset =
       static_cast<semantic::Index>(n_codes);
   const auto n_state_codes = 2U * n_codes;
@@ -311,6 +314,14 @@ inline void compile_component_observation_probability_plans(
       n_state_codes,
       make_zero_observation_plan(ObservationPlanValueKind::Probability));
   for (std::size_t observed_code = 1; observed_code < n_codes; ++observed_code) {
+    component_plan->interval_by_code[observed_code].insert(
+        component_plan->interval_by_code[observed_code].end(),
+        component_plan->keep_by_code[observed_code].begin(),
+        component_plan->keep_by_code[observed_code].end());
+    component_plan->interval_by_code[observed_code].insert(
+        component_plan->interval_by_code[observed_code].end(),
+        component_plan->missing_rt_by_code[observed_code].begin(),
+        component_plan->missing_rt_by_code[observed_code].end());
     const auto finite_state =
         finite_observation_state_code(static_cast<semantic::Index>(observed_code));
     const auto missing_rt_state =
@@ -543,6 +554,12 @@ inline std::vector<ComponentObservationPlan> build_component_observation_plans(
         throw std::runtime_error(
             "observation plan found no prepared outcome code for '" +
             semantic_label + "'");
+      }
+      if (std::find(
+              plan.finite_outcome_codes.begin(),
+              plan.finite_outcome_codes.end(),
+              semantic_code_it->second) == plan.finite_outcome_codes.end()) {
+        plan.finite_outcome_codes.push_back(semantic_code_it->second);
       }
 
       const Rcpp::List outcome(outcomes[static_cast<R_xlen_t>(outcome_idx)]);

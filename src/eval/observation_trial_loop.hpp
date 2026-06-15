@@ -70,6 +70,27 @@ inline bool identity_trials_are_all_finite(
   return true;
 }
 
+inline bool trials_have_no_truncation_bounds(
+    const PreparedTrialLayout &layout,
+    const PreparedBoundDataView &bounds,
+    const int *ok = nullptr) {
+  if (!layout.bounds.present) {
+    return true;
+  }
+  for (std::size_t trial_index = 0; trial_index < layout.trials.size(); ++trial_index) {
+    if (!trial_is_selected(ok, trial_index)) {
+      continue;
+    }
+    const auto row = static_cast<R_xlen_t>(layout.trials[trial_index].start_row);
+    const double lt = bound_cell_or_default(bounds.lt, row, 0.0);
+    const double ut = bound_cell_or_default(bounds.ut, row, R_PosInf);
+    if (lt > 0.0 || std::isfinite(ut)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 inline Rcpp::NumericVector evaluate_response_probabilities_cached(
     const ComponentMixturePlan &component_mixture,
     const std::vector<ComponentObservationPlan> &component_plans_by_code,
@@ -253,6 +274,7 @@ inline void evaluate_observation_likelihood_trials_cached(
       layout.onset_col >= 0
           ? REAL(trusted_data_column(dataSEXP, layout.onset_col))
           : nullptr;
+  const auto bound_table = read_prepared_bound_data_view(dataSEXP, layout);
   const TrustedParamMatrix trusted_params(
       paramsSEXP,
       component_mixture.weight_param_count);
@@ -276,6 +298,13 @@ inline void evaluate_observation_likelihood_trials_cached(
               ? semantic::kInvalidIndex
               : static_cast<semantic::Index>(label[row]);
       const double observed_rt = rt[row];
+      const ObservationBounds bounds =
+          layout.bounds.present
+              ? observation_bounds_for_row(bound_table, row, observed_rt)
+              : ObservationBounds{};
+      const bool use_probability_scale_bounds = bounds.active;
+      double weighted_numerator = 0.0;
+      double weighted_denominator = 0.0;
 
       const auto components = resolve_trial_components(
           component_mixture,
@@ -302,20 +331,6 @@ inline void evaluate_observation_likelihood_trials_cached(
           continue;
         }
 
-        const auto state_code = observation_state_code(
-            component_plan,
-            observed_label_code,
-            observed_rt);
-        if (state_code == semantic::kInvalidIndex) {
-          continue;
-        }
-        const auto &plan =
-            observation_log_plan_for_state(component_plan, state_code);
-        const double plan_rt =
-            observation_state_uses_rt(component_plan, state_code)
-                ? observed_rt
-                : NA_REAL;
-
         const int *row_map_ptr = nullptr;
         int row_offset = 0;
         const auto &exact_plan =
@@ -329,9 +344,121 @@ inline void evaluate_observation_likelihood_trials_cached(
           row_map_ptr = leaf_offsets.data();
           row_offset = static_cast<int>(trial_row.start_row);
         }
+        const int first_param_row = static_cast<int>(trial_row.start_row);
+
+        if (use_probability_scale_bounds) {
+          double numerator = 0.0;
+          if (bounds.interval) {
+            const ObservationInterval interval{
+                bounds.event_lower,
+                bounds.event_upper,
+                observed_label_code == semantic::kInvalidIndex &&
+                    bounds.right_censored &&
+                    !std::isfinite(bounds.event_upper) &&
+                    !bounds.truncation_active};
+            numerator =
+                observed_label_code == semantic::kInvalidIndex
+                    ? evaluate_unknown_label_interval_probability(
+                          exact_plans,
+                          paramsSEXP,
+                          onset,
+                          component_plan,
+                          variant_index,
+                          interval,
+                          row_map_ptr,
+                          row_offset,
+                          first_param_row,
+                          &workspace_pool)
+                    : evaluate_observed_label_interval_probability(
+                          exact_plans,
+                          paramsSEXP,
+                          onset,
+                          component_plan,
+                          observed_label_code,
+                          variant_index,
+                          interval,
+                          row_map_ptr,
+                          row_offset,
+                          first_param_row,
+                          &workspace_pool);
+          } else {
+            const auto state_code = observation_state_code(
+                component_plan,
+                observed_label_code,
+                observed_rt);
+            if (state_code == semantic::kInvalidIndex) {
+              continue;
+            }
+            const auto &plan =
+                observation_log_plan_for_state(component_plan, state_code);
+            const double plan_rt =
+                observation_state_uses_rt(component_plan, state_code)
+                    ? observed_rt
+                    : NA_REAL;
+            const double log_numerator = evaluate_observation_plan_direct(
+                exact_plans,
+                layout,
+                onset,
+                paramsSEXP,
+                plan,
+                static_cast<semantic::Index>(trial_index),
+                variant_index,
+                plan_rt,
+                min_ll,
+                row_map_ptr,
+                row_offset,
+                &workspace_pool,
+                &plan_values);
+            numerator =
+                std::isfinite(log_numerator) && log_numerator != min_ll
+                    ? std::exp(log_numerator)
+                    : 0.0;
+          }
+
+          double denominator = 1.0;
+          if (bounds.truncation_active) {
+            denominator = evaluate_unknown_label_interval_probability(
+                exact_plans,
+                paramsSEXP,
+                onset,
+                component_plan,
+                variant_index,
+                ObservationInterval{
+                    bounds.trunc_lower,
+                    bounds.trunc_upper,
+                    false},
+                row_map_ptr,
+                row_offset,
+                first_param_row,
+                &workspace_pool);
+          }
+          if (std::isfinite(numerator) && numerator > 0.0 &&
+              std::isfinite(denominator) && denominator > 0.0 &&
+              choice.weight > 0.0) {
+            weighted_numerator += choice.weight * numerator;
+            weighted_denominator += choice.weight * denominator;
+          } else if (std::isfinite(denominator) && denominator > 0.0 &&
+                     choice.weight > 0.0) {
+            weighted_denominator += choice.weight * denominator;
+          }
+          continue;
+        }
+
+        const auto state_code = observation_state_code(
+            component_plan,
+            observed_label_code,
+            observed_rt);
+        if (state_code == semantic::kInvalidIndex) {
+          continue;
+        }
+        const auto &plan =
+            observation_log_plan_for_state(component_plan, state_code);
+        const double plan_rt =
+            observation_state_uses_rt(component_plan, state_code)
+                ? observed_rt
+                : NA_REAL;
         const bool cacheable_rt_free_plan =
             row_map_ptr == nullptr && !std::isfinite(plan_rt);
-        const int first_param_row = static_cast<int>(trial_row.start_row);
         const auto cache_key = RtFreeObservationPlanCacheKey{
             choice.component_code,
             variant_index,
@@ -379,7 +506,13 @@ inline void evaluate_observation_likelihood_trials_cached(
           trial_values.push_back(std::log(choice.weight) + value);
         }
       }
-      const auto value = logsumexp_records(trial_values);
+      const auto value =
+          use_probability_scale_bounds
+              ? (weighted_numerator > 0.0 && weighted_denominator > 0.0
+                     ? std::log(weighted_numerator) -
+                           std::log(weighted_denominator)
+                     : R_NegInf)
+              : logsumexp_records(trial_values);
       if (std::isfinite(value)) {
         trial_loglik = value;
       }
@@ -409,7 +542,9 @@ inline void evaluate_observation_likelihood_trial_values_cached(
         INTEGER(trusted_data_column(dataSEXP, layout.label_cols[1]));
     const double *rt =
         REAL(trusted_data_column(dataSEXP, layout.time_cols[1]));
-    if (trials_have_observed_components(layout, table.component, ok) &&
+    const auto bound_table = read_prepared_bound_data_view(dataSEXP, layout);
+    if (trials_have_no_truncation_bounds(layout, bound_table, ok) &&
+        trials_have_observed_components(layout, table.component, ok) &&
         identity_trials_are_all_finite(layout, label, rt, ok)) {
       evaluate_exact_trials_cached(
           exact_variant_index_by_component_code,

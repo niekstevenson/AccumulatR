@@ -16,6 +16,12 @@
 namespace accumulatr::eval {
 namespace detail {
 
+struct ObservationInterval {
+  double lower{0.0};
+  double upper{R_PosInf};
+  bool include_terminal_no_response{false};
+};
+
 inline bool param_leaf_blocks_equal(SEXP paramsSEXP,
                                     const double *onset,
                                     const int lhs_first_row,
@@ -170,6 +176,90 @@ inline bool rt_free_observation_cache_lookup(
     return true;
   }
   return false;
+}
+
+inline double evaluate_observed_label_interval_probability(
+    const std::vector<ExactVariantPlan> &exact_plans,
+    SEXP paramsSEXP,
+    const double *onset,
+    const ComponentObservationPlan &component_plan,
+    const semantic::Index observed_code,
+    const semantic::Index variant_index,
+    const ObservationInterval &interval,
+    const int *row_map,
+    const int row_offset,
+    const int first_param_row,
+    ExactStepWorkspacePool *workspace_pool) {
+  if (workspace_pool == nullptr ||
+      observed_code == semantic::kInvalidIndex ||
+      static_cast<std::size_t>(observed_code) >=
+          component_plan.interval_by_code.size()) {
+    return 0.0;
+  }
+  const auto &branches =
+      component_plan.interval_by_code[static_cast<std::size_t>(observed_code)];
+  if (branches.empty()) {
+    return 0.0;
+  }
+  const auto &exact_plan = exact_plans[static_cast<std::size_t>(variant_index)];
+  ParamView params(paramsSEXP, onset, row_map, row_offset);
+  auto &workspace = workspace_pool->get(exact_plans, variant_index);
+  double total = 0.0;
+  for (const auto &branch : branches) {
+    if (!(branch.weight > 0.0) ||
+        branch.semantic_code == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(branch.semantic_code) >=
+            exact_plan.outcome_index_by_code.size()) {
+      continue;
+    }
+    const auto target_idx =
+        exact_plan.outcome_index_by_code[
+            static_cast<std::size_t>(branch.semantic_code)];
+    total += branch.weight *
+             exact_outcome_probability_between(
+                 exact_plan,
+                 params,
+                 first_param_row,
+                 target_idx,
+                 interval.lower,
+                 interval.upper,
+                 &workspace);
+  }
+  return std::isfinite(total) ? clamp_probability(total) : 0.0;
+}
+
+inline double evaluate_unknown_label_interval_probability(
+    const std::vector<ExactVariantPlan> &exact_plans,
+    SEXP paramsSEXP,
+    const double *onset,
+    const ComponentObservationPlan &component_plan,
+    const semantic::Index variant_index,
+    const ObservationInterval &interval,
+    const int *row_map,
+    const int row_offset,
+    const int first_param_row,
+    ExactStepWorkspacePool *workspace_pool) {
+  if (workspace_pool == nullptr) {
+    return 0.0;
+  }
+  const auto &exact_plan = exact_plans[static_cast<std::size_t>(variant_index)];
+  ParamView params(paramsSEXP, onset, row_map, row_offset);
+  auto &workspace = workspace_pool->get(exact_plans, variant_index);
+  double total = exact_all_outcome_probability_between(
+      exact_plan,
+      params,
+      first_param_row,
+      component_plan.finite_outcome_codes,
+      interval.lower,
+      interval.upper,
+      &workspace);
+  if (interval.include_terminal_no_response) {
+    total += exact_terminal_no_response_probability(
+        exact_plan,
+        params,
+        first_param_row);
+  }
+  return std::isfinite(total) ? clamp_probability(total) : 0.0;
 }
 
 inline double evaluate_observation_plan_at_row(

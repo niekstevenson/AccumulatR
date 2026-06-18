@@ -1,0 +1,202 @@
+\begin{thebibliography}{32}
+\newcommand{\enquote}[1]{``#1''}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\providecommand{\urlprefix}{URL }
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi:\discretionary{}{}{}#1}\else
+  \providecommand{\doi}{doi:\discretionary{}{}{}\begingroup \urlstyle{rm}\Url}\fi
+\providecommand{\eprint}[2][]{\url{#2}}
+
+\bibitem[{B{\"u}rkner(2017)}]{burknerBrmsPackage2017}
+B{\"u}rkner PC (2017).
+\newblock \enquote{Brms: {{An R Package}} for {{Bayesian Multilevel Models Using Stan}}.}
+\newblock \emph{Journal of Statistical Software}, \textbf{80}, 1--28.
+\newblock ISSN 1548-7660.
+\newblock \doi{10.18637/jss.v080.i01}.
+
+\bibitem[{Cooper \emph{et~al.}(2024)Cooper, Innes, Kuhne, Cavallaro, Gunawan, Hawkins, Brown, and Stevenson}]{cooperPmwgPackage2024}
+Cooper G, Innes R, Kuhne C, Cavallaro JP, Gunawan D, Hawkins G, Brown S, Stevenson N (2024).
+\newblock \emph{\pkg{pmwg}: Particle Metropolis Within Gibbs}.
+\newblock \doi{10.32614/CRAN.package.pmwg}.
+\newblock \proglang{R} package version 0.2.7, \urlprefix\url{https://CRAN.R-project.org/package=pmwg}.
+
+\bibitem[{Eddelbuettel and Francois(2011)}]{Eddelbuettel+Francois:2011}
+Eddelbuettel D, Francois R (2011).
+\newblock \enquote{\pkg{Rcpp}: Seamless \proglang{R} and \proglang{C++} Integration.}
+\newblock \emph{Journal of Statistical Software}, \textbf{40}(8), 1--18.
+\newblock \doi{10.18637/jss.v040.i08}.
+
+\bibitem[{Fengler \emph{et~al.}(2021)Fengler, Govindarajan, Chen, and Frank}]{fenglerLikelihoodApproximation2021}
+Fengler A, Govindarajan LN, Chen T, Frank MJ (2021).
+\newblock \enquote{Likelihood Approximation Networks ({{LANs}}) for Fast Inference of Simulation Models in Cognitive Neuroscience.}
+\newblock \emph{eLife}, \textbf{10}, e65074.
+\newblock ISSN 2050-084X.
+\newblock \doi{10.7554/eLife.65074}.
+
+\bibitem[{Fengler \emph{et~al.}(2026)Fengler, Xu, Bera, Omar, and Frank}]{fenglerHssmPackage2026}
+Fengler A, Xu Y, Bera K, Omar A, Frank MJ (2026).
+\newblock \emph{\pkg{HSSM}: Hierarchical Sequential Sampling Modeling}.
+\newblock \proglang{Python} package documentation, \urlprefix\url{https://lnccbrown.github.io/HSSM/}.
+
+\bibitem[{Fernandez \emph{et~al.}(2024)Fernandez, Makowski, and Fisher}]{fernandezSequentialSamplingModels2024}
+Fernandez K, Makowski D, Fisher C (2024).
+\newblock \enquote{\pkg{SequentialSamplingModels.jl}: Simulating and Evaluating Cognitive Models of Response Times in \proglang{Julia}.}
+\newblock ArXiv:2411.06631, \urlprefix\url{https://arxiv.org/abs/2411.06631}.
+
+\bibitem[{Foster \emph{et~al.}(2024)Foster, Singmann, and Zeileis}]{fosterFddmPackage2024}
+Foster KB, Singmann H, Zeileis A (2024).
+\newblock \emph{\pkg{fddm}: Fast Implementation of the Diffusion Decision Model}.
+\newblock \doi{10.32614/CRAN.package.fddm}.
+\newblock \proglang{R} package version 1.0-2, \urlprefix\url{https://CRAN.R-project.org/package=fddm}.
+
+\bibitem[{Hartmann and Murrow(2025)}]{hartmannReamPackage2025}
+Hartmann R, Murrow M (2025).
+\newblock \emph{\pkg{ream}: Density, Distribution, and Sampling Functions for Evidence Accumulation Models}.
+\newblock \doi{10.32614/CRAN.package.ream}.
+\newblock \proglang{R} package version 1.0-10, \urlprefix\url{https://CRAN.R-project.org/package=ream}.
+
+\bibitem[{Heathcote \emph{et~al.}(2019)Heathcote, Lin, Reynolds, Strickland, Gretton, and Matzke}]{heathcoteDynamicModels2019}
+Heathcote A, Lin YS, Reynolds A, Strickland L, Gretton M, Matzke D (2019).
+\newblock \enquote{Dynamic Models of Choice.}
+\newblock \emph{Behavior Research Methods}, \textbf{51}(2), 961--985.
+\newblock ISSN 1554-3528.
+\newblock \doi{10.3758/s13428-018-1067-y}.
+
+\bibitem[{Heathcote and Matzke(2022)}]{heathcoteWinnerTakes2022}
+Heathcote A, Matzke D (2022).
+\newblock \enquote{Winner {{Takes All}}! {{What Are Race Models}}, and {{Why}} and {{How Should Psychologists Use Them}}?}
+\newblock \emph{Current Directions in Psychological Science}, \textbf{31}(5), 383--394.
+\newblock ISSN 0963-7214.
+\newblock \doi{10.1177/09637214221095852}.
+
+\bibitem[{Hellmann and Rausch(2025)}]{hellmannDynconfirPackage2025}
+Hellmann S, Rausch M (2025).
+\newblock \emph{\pkg{dynConfiR}: Dynamic Models for Confidence and Response Time Distributions}.
+\newblock \doi{10.32614/CRAN.package.dynConfiR}.
+\newblock \proglang{R} package version 1.1.1, \urlprefix\url{https://CRAN.R-project.org/package=dynConfiR}.
+
+\bibitem[{Jin(2025)}]{jinRegddmPackage2025}
+Jin Z (2025).
+\newblock \emph{\pkg{RegDDM}: Generalized Linear Regression with DDM}.
+\newblock \doi{10.32614/CRAN.package.RegDDM}.
+\newblock \proglang{R} package version 1.1, \urlprefix\url{https://CRAN.R-project.org/package=RegDDM}.
+
+\bibitem[{Koob \emph{et~al.}(2026)Koob, Richter, and Janczyk}]{koobDriftdmPackage2026}
+Koob V, Richter T, Janczyk M (2026).
+\newblock \emph{\pkg{dRiftDM}: Estimating Time-Dependent Drift Diffusion Models}.
+\newblock \doi{10.32614/CRAN.package.dRiftDM}.
+\newblock \proglang{R} package version 0.3.2, \urlprefix\url{https://CRAN.R-project.org/package=dRiftDM}.
+
+\bibitem[{Lin(2025{\natexlab{a}})}]{linDdmodelPackage2025}
+Lin YS (2025{\natexlab{a}}).
+\newblock \emph{\pkg{ddModel}: The Decision Diffusion Model}.
+\newblock \doi{10.32614/CRAN.package.ddModel}.
+\newblock \proglang{R} package version 0.2.9.0, \urlprefix\url{https://CRAN.R-project.org/package=ddModel}.
+
+\bibitem[{Lin(2025{\natexlab{b}})}]{linLbaModelPackage2025}
+Lin YS (2025{\natexlab{b}}).
+\newblock \emph{\pkg{lbaModel}: The Linear Ballistic Accumulation Model}.
+\newblock \doi{10.32614/CRAN.package.lbaModel}.
+\newblock \proglang{R} package version 0.2.9.2, \urlprefix\url{https://CRAN.R-project.org/package=lbaModel}.
+
+\bibitem[{Lin and Heathcote(2025)}]{linGgdmcPackage2025}
+Lin YS, Heathcote A (2025).
+\newblock \emph{\pkg{ggdmc}: Cognitive Models}.
+\newblock \doi{10.32614/CRAN.package.ggdmc}.
+\newblock \proglang{R} package version 0.2.6.2, \urlprefix\url{https://CRAN.R-project.org/package=ggdmc}.
+
+\bibitem[{Lin \emph{et~al.}(2018)Lin, Heathcote, and Kvam}]{linCircularDDMPackage2018}
+Lin YS, Heathcote A, Kvam P (2018).
+\newblock \emph{\pkg{CircularDDM}: Circular Drift-Diffusion Model}.
+\newblock \doi{10.32614/CRAN.package.CircularDDM}.
+\newblock \proglang{R} package version 0.1.0, \urlprefix\url{https://CRAN.R-project.org/package=CircularDDM}.
+
+\bibitem[{Liu(2007)}]{liuQueueingNetwork2007}
+Liu Y (2007).
+\newblock \enquote{Queueing Network Modeling of Mental Architecture, Response Time, and Response Accuracy: Reflected Multidimensional Diffusions.}
+\newblock In \emph{Proceedings of ICCM 2007: Eighth International Conference on Cognitive Modeling}, pp. 285--290. Taylor \& Francis/Psychology Press, Oxford, UK.
+
+\bibitem[{Mackenzie and Dudschig(2024)}]{mackenzieDmcfunPackage2024}
+Mackenzie IG, Dudschig C (2024).
+\newblock \emph{\pkg{DMCfun}: Diffusion Model of Conflict in Reaction Time Tasks}.
+\newblock \doi{10.32614/CRAN.package.DMCfun}.
+\newblock \proglang{R} package version 4.0.1, \urlprefix\url{https://CRAN.R-project.org/package=DMCfun}.
+
+\bibitem[{Molenaar \emph{et~al.}(2015)Molenaar, Tuerlinckx, and {van der Maas}}]{molenaarDiffIRT2015}
+Molenaar D, Tuerlinckx F, {van der Maas} HLJ (2015).
+\newblock \enquote{Fitting Diffusion Item Response Theory Models for Responses and Response Times Using the \proglang{R} Package \pkg{diffIRT}.}
+\newblock \emph{Journal of Statistical Software}, \textbf{66}(4), 1--34.
+\newblock \doi{10.18637/jss.v066.i04}.
+
+\bibitem[{Murrow and Holmes(2024)}]{murrowPyBEAM2023}
+Murrow M, Holmes WR (2024).
+\newblock \enquote{\pkg{PyBEAM}: A Bayesian Approach to Parameter Inference for a Wide Class of Binary Evidence Accumulation Models.}
+\newblock \emph{Behavior Research Methods}, \textbf{56}(3), 2636--2656.
+\newblock \doi{10.3758/s13428-023-02162-w}.
+
+\bibitem[{Popov \emph{et~al.}(2026)Popov, Frischkorn, Li, and Buerkner}]{popovBmmPackage2026}
+Popov V, Frischkorn GT, Li C, Buerkner PC (2026).
+\newblock \emph{\pkg{bmm}: Easy and Accessible Bayesian Measurement Models Using \pkg{brms}}.
+\newblock \doi{10.32614/CRAN.package.bmm}.
+\newblock \proglang{R} package version 1.3.1, \urlprefix\url{https://CRAN.R-project.org/package=bmm}.
+
+\bibitem[{{\proglang{R} Core Team}(2025)}]{R}
+{\proglang{R} Core Team} (2025).
+\newblock \emph{\proglang{R}: A Language and Environment for Statistical Computing}.
+\newblock \proglang{R} Foundation for Statistical Computing, Vienna, Austria.
+\newblock \urlprefix\url{https://www.R-project.org/}.
+
+\bibitem[{Schweickert(1978)}]{schweickertCriticalPath1978}
+Schweickert R (1978).
+\newblock \enquote{A Critical Path Generalization of the Additive Factor Method: Analysis of a Stroop Task.}
+\newblock \emph{Journal of Mathematical Psychology}, \textbf{18}, 105--139.
+
+\bibitem[{Shinn \emph{et~al.}(2020)Shinn, Lam, and Murray}]{shinnPyDDM2020}
+Shinn M, Lam NH, Murray JD (2020).
+\newblock \enquote{A Flexible Framework for Simulating and Fitting Generalized Drift-Diffusion Models.}
+\newblock \emph{eLife}, \textbf{9}, e56938.
+\newblock \doi{10.7554/eLife.56938}.
+
+\bibitem[{Singmann \emph{et~al.}(2026)Singmann, Brown, Gretton, Heathcote, Voss, Voss, and Terry}]{singmannRtdistsPackage2026}
+Singmann H, Brown S, Gretton M, Heathcote A, Voss A, Voss J, Terry A (2026).
+\newblock \emph{\pkg{rtdists}: Response Time Distributions}.
+\newblock \doi{10.32614/CRAN.package.rtdists}.
+\newblock \proglang{R} package version 0.11-6, \urlprefix\url{https://CRAN.R-project.org/package=rtdists}.
+
+\bibitem[{Stevenson \emph{et~al.}(2024)Stevenson, Donzallaz, Innes, Forstmann, Matzke, and Heathcote}]{stevensonEMC2Package2024}
+Stevenson N, Donzallaz MC, Innes R, Forstmann B, Matzke D, Heathcote A (2024).
+\newblock \enquote{{{EMC2}}: {{An R Package}} for Cognitive Models of Choice.}
+\newblock \doi{10.31234/osf.io/2e4dq}.
+
+\bibitem[{Townsend and Wenger(2004)}]{townsendSerialparallelDilemma2004}
+Townsend JT, Wenger MJ (2004).
+\newblock \enquote{The Serial--Parallel Dilemma: A Case Study in a Linkage of Theory and Method.}
+\newblock \emph{Psychonomic Bulletin \& Review}, \textbf{11}(3), 391--418.
+\newblock \doi{10.3758/BF03196588}.
+
+\bibitem[{Voss and Voss(2007)}]{vossFastdmFree2007}
+Voss A, Voss J (2007).
+\newblock \enquote{\pkg{fast-dm}: A Free Program for Efficient Diffusion Model Analysis.}
+\newblock \emph{Behavior Research Methods}, \textbf{39}(4), 767--775.
+\newblock \doi{10.3758/BF03192967}.
+
+\bibitem[{Wabersich and Vandekerckhove(2014)}]{wabersichRWienerPackage2014}
+Wabersich D, Vandekerckhove J (2014).
+\newblock \enquote{The {{RWiener Package}}: An {{R Package Providing Distribution Functions}} for the {{Wiener Diffusion Model}}.}
+\newblock \emph{The R Journal}, \textbf{6}(1), 49--56.
+\newblock ISSN 2073-4859.
+
+\bibitem[{Wiecki \emph{et~al.}(2013)Wiecki, Sofer, and Frank}]{wieckiHDDM2013}
+Wiecki TV, Sofer I, Frank MJ (2013).
+\newblock \enquote{\pkg{HDDM}: Hierarchical Bayesian Estimation of the Drift-Diffusion Model in \proglang{Python}.}
+\newblock \emph{Frontiers in Neuroinformatics}, \textbf{7}, 14.
+\newblock \doi{10.3389/fninf.2013.00014}.
+
+\bibitem[{Zhu and Yang(2026)}]{zhuEamPackage2026}
+Zhu G, Yang G (2026).
+\newblock \emph{\pkg{eam}: Evidence Accumulation Models}.
+\newblock \doi{10.32614/CRAN.package.eam}.
+\newblock \proglang{R} package version 1.2.2, \urlprefix\url{https://CRAN.R-project.org/package=eam}.
+
+\end{thebibliography}

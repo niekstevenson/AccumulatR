@@ -1,0 +1,48 @@
+This is BibTeX, Version 0.99d (TeX Live 2025)
+Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
+The top-level auxiliary file: accumulatr-jss-draft.aux
+The style file: jss.bst
+Database file #1: ../refs.bib
+Database file #2: accumulatr-jss-draft.bib
+Reallocated wiz_functions (elt_size=4) to 6000 items from 3000.
+You've used 32 entries,
+            3215 wiz_defined-function locations,
+            888 strings with 13092 characters,
+and the built_in function-call counts, 31533 in all, are:
+= -- 3167
+> -- 811
+< -- 19
++ -- 311
+- -- 271
+* -- 2329
+:= -- 3835
+add.period$ -- 144
+call.type$ -- 32
+change.case$ -- 236
+chr.to.int$ -- 33
+cite$ -- 32
+duplicate$ -- 3243
+empty$ -- 2416
+format.name$ -- 374
+if$ -- 6358
+int.to.chr$ -- 2
+int.to.str$ -- 1
+missing$ -- 322
+newline$ -- 202
+num.names$ -- 128
+pop$ -- 1557
+preamble$ -- 1
+purify$ -- 218
+quote$ -- 0
+skip$ -- 587
+stack$ -- 0
+substring$ -- 3137
+swap$ -- 778
+text.length$ -- 1
+text.prefix$ -- 0
+top$ -- 0
+type$ -- 288
+warning$ -- 0
+while$ -- 212
+width$ -- 0
+write$ -- 488

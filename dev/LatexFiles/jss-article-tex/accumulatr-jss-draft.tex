@@ -7,30 +7,32 @@
 \author{Niek Stevenson\\Independent researcher}
 \Plainauthor{Niek Stevenson}
 
-\title{\pkgname: Simulation and Likelihood Tools for Evidence-Accumulation Models in \proglang{R}}
-\Plaintitle{AccumulatR: Simulation and Likelihood Tools for Evidence-Accumulation Models in R}
+\title{\pkgname: Structured Evidence-Accumulation Models for Choice and Response-Time Data in \proglang{R}}
+\Plaintitle{AccumulatR: Structured Evidence-Accumulation Models for Choice and Response-Time Data in R}
 \Shorttitle{\pkgname{} in \proglang{R}}
 
 \Abstract{
-  Evidence-accumulation models explain response choices and response times by
-  treating behavior as the result of latent processes that race, combine, or
-  inhibit one another. Applied work often requires more than a single named
-  model family: researchers may want pooled channels, staged onsets, shared
-  absence processes, latent mixtures, or observed responses defined by logical
-  rules. \pkgname{} is an \proglang{R}/\proglang{C++} package for specifying,
-  simulating, and evaluating likelihoods for such structured
-  evidence-accumulation models. Model structure is declared in \proglang{R}
-  using accumulators, pools, outcome rules, components, triggers, and mixture
-  settings. The same finalized model object is then used for simulation, data
-  preparation, response-probability calculation, and likelihood evaluation.
-  Repeated numerical work is delegated to compiled code via \pkg{Rcpp}. This
-  paper describes the software design, the mathematical representation used by
-  the likelihood evaluator, and a set of reproducible examples covering basic
-  races, pooled outcomes, guarded rules, mixtures, and ranked responses.
+  Choice and response-time data are often modeled with evidence-accumulation
+  models in which latent finishing times determine both the selected response
+  and its latency. Many applications require structured variants of this idea:
+  responses may depend on pooled channels, ordered stages, inhibitory processes,
+  latent components, shared absence events, or logical combinations of several
+  latent completions. \pkgname{} is an \proglang{R}/\proglang{C++} package for
+  specifying, simulating, and evaluating likelihoods for structured
+  evidence-accumulation models. Its central object is a race architecture rather
+  than a single named response-time distribution or estimation routine. Users
+  declare accumulators, pools, outcome rules, components, triggers, and mixture
+  settings in \proglang{R}; the finalized model object is then used for
+  simulation, data preparation, response-probability calculation, and likelihood
+  evaluation. Repeated numerical work is delegated to compiled code via
+  \pkg{Rcpp}. This paper describes the software design, the mathematical
+  representation used by the likelihood evaluator, and reproducible examples
+  covering basic races, pooled outcomes, guarded rules, mixtures, and ranked
+  responses.
 }
 
-\Keywords{evidence accumulation, response times, race models, mathematical psychology, \proglang{R}}
-\Plainkeywords{evidence accumulation, response times, race models, mathematical psychology, R}
+\Keywords{evidence accumulation, response times, race models, choice models, \proglang{R}}
+\Plainkeywords{evidence accumulation, response times, race models, choice models, R}
 
 \Address{
   Niek Stevenson\\
@@ -41,55 +43,99 @@
 
 \begin{document}
 
-\section[Introduction: Evidence-accumulation modeling in R]{Introduction: Evidence-accumulation modeling in \proglang{R}}
+\section{Introduction}
 \label{sec:introduction}
 
-Evidence-accumulation models are a central tool for the analysis of choices and
-response times in cognitive psychology, neuroscience, and related fields. They
-replace a purely descriptive account of accuracy and latency with a process
-account: latent evidence streams evolve over time, an observed response is
-recorded when one or more streams satisfy a decision rule, and the response time
-is the finishing time of the relevant process. Diffusion models, linear
-ballistic accumulator models, lognormal race models, and related dynamic choice
-models all instantiate this general idea \citep{ratcliffDiffusionDecision2016,
-brownSimplestComplete2008, heathcoteWinnerTakes2022, rouderLognormalRace2015}.
+Psychologists study decision-making using choice outcomes and the time at which
+that choice was made. A model for such data must therefore explain
+two things at once: which response occurred and when it occurred.
+Evidence-accumulation models (EAMs) do this by introducing latent processes that evolve
+over time until a finishing condition is met. The observed response is a label
+attached to that finishing event, and the response time is its latency. 
 
-The software problem is not exhausted by fitting one standard model family.
-Many substantive hypotheses are architectural. A task may require multiple
-routes to a response, a response that depends on a pool of channels, a stop or
-blocker process, a second stage that can start only after an earlier stage has
-finished, a mixture of latent processing modes, or data in which the first two
-responses on a trial are both observed. These requirements are common enough
-that forcing them into a single winner-takes-all template obscures the model
-being tested.
+% start changing here
+% Diffusion decision models (DDMs), linear ballistic accumulator models, racing diffusion
+%models, and lognormal race models differ in their latent dynamics, but share
+%this joint modeling strategy \citep{ratcliffDiffusionDecision2016,
+% brownSimplestComplete2008, tillmanSequentialSampling2020,
+% rouderLognormalRace2015}.
 
-Existing software covers important parts of this landscape. Packages such as
-\pkg{RWiener} provide focused implementations for Wiener diffusion models
-\citep{wabersichRWienerPackage2014}. Recent \proglang{Stan}-based diffusion
-model tools support flexible Bayesian estimation for particular diffusion
-parameterizations \citep{henrichSevenparameterDiffusion2024}, while broader
-estimation frameworks such as \pkg{lme4} and \pkg{brms} provide mature
-interfaces for hierarchical statistical modeling \citep{batesFittingLinear2015,
-burknerBrmsPackage2017}. Other work has emphasized hierarchical cognitive
-models, approximate likelihoods, and joint neural-behavioral models
-\citep{vandekerckhoveHierarchicalDiffusion2011, fenglerLikelihoodApproximation2021,
-palestroTutorialJoint2018}. \pkgname{} is complementary to these tools. Its
-main contribution is a direct software representation of structured
-race-model architectures, coupled to simulation and exact likelihood evaluation.
+For many data sets, a standard readout is sufficient: one process reaches one
+of two boundaries, or the first accumulator to finish determines the response.
+Other experiments make the readout part of the hypothesis. A response may be
+produced by the first member of a pool, by the completion of several processes,
+by a target process that must finish before an inhibiting process, by a later
+stage that can start only after an earlier one, or by a latent processing
+component selected on that trial. These are substantive claims about cognitive
+architecture, but they are also statistical claims. Changing the readout changes
+the event whose probability is evaluated and therefore changes the likelihood of
+the observed choice and response time.
 
-\pkgname{} follows a compact workflow. The user declares the model structure in
-\proglang{R}, finalizes it, expands a named parameter vector into a trial-wise
-parameter matrix, and then uses the same finalized model for simulation or
-likelihood evaluation. The package is implemented as an \proglang{R} package
-\citep{R} with computational kernels in \proglang{C++}, exposed through
-\pkg{Rcpp} \citep{Eddelbuettel+Francois:2011}. This paper describes both the
-user interface and the model class it implements. Section~\ref{sec:design}
-introduces the package objects and current public API. Section~\ref{sec:model}
-summarizes the mathematical layer. Section~\ref{sec:workflow} gives the basic
-\proglang{R} workflow. Section~\ref{sec:examples} presents structured model
-examples. Sections~\ref{sec:likelihood} and~\ref{sec:implementation} describe
-likelihood evaluation and implementation details, followed by a comparison to
-related software and a discussion.
+The current software ecosystem is organized mainly around named distributions
+and fitting workflows. Packages such as \pkg{RWiener}, \pkg{fddm},
+\pkg{ddModel}, and \pkg{ream} provide distributional calculations for DDM or
+two-threshold models \citep{wabersichRWienerPackage2014,
+fosterFddmPackage2024, linDdmodelPackage2025, hartmannReamPackage2025}.
+Packages such as \pkg{rtdists}, \pkg{lbaModel}, \pkg{CircularDDM},
+\pkg{dynConfiR}, \pkg{eam}, \pkg{ssms}, and
+\pkg{SequentialSamplingModels.jl} provide density, simulation, likelihood, or
+prediction functions for accumulator, race, continuous-response, confidence, or
+broader sequential-sampling model families \citep{singmannRtdistsPackage2026,
+linLbaModelPackage2025, linCircularDDMPackage2018,
+hellmannDynconfirPackage2025, zhuEamPackage2026,
+fenglerLikelihoodApproximation2021, fernandezSequentialSamplingModels2024}.
+Estimation systems such as \pkg{fast-dm}, \pkg{PyDDM}, \pkg{PyBEAM},
+\pkg{dRiftDM}, \pkg{DMCfun}, \pkg{diffIRT}, \pkg{RegDDM},
+\pkg{DMC}/\pkg{ggdmc}, \pkg{EMC2}, \pkg{pmwg}, \pkg{brms}, \pkg{bmm},
+\pkg{HDDM}, and \pkg{HSSM} provide optimization, Bayesian, hierarchical,
+regression, simulator-based, or amortized-likelihood workflows
+\citep{vossFastdmFree2007, shinnPyDDM2020, murrowPyBEAM2023,
+koobDriftdmPackage2026, mackenzieDmcfunPackage2024, molenaarDiffIRT2015,
+jinRegddmPackage2025, heathcoteDynamicModels2019, linGgdmcPackage2025,
+stevensonEMC2Package2024, cooperPmwgPackage2024, burknerBrmsPackage2017,
+popovBmmPackage2026, wieckiHDDM2013, fenglerHssmPackage2026}.
+The resulting ecosystem is valuable, but its reusable objects are usually
+distributions, simulators, fitted models, or sampling workflows. The readout
+architecture is typically fixed by the named model family. When that
+architecture is the object to be varied, the user often has to force the
+hypothesis into an existing readout or write a custom simulator and likelihood.
+
+This distinction has a long history in reaction-time theory. Serial--parallel
+systems, critical-path models, and queueing-network accounts all treat process
+architecture as part of the model rather than as verbal interpretation after
+fitting \citep{schweickertCriticalPath1978, townsendSerialparallelDilemma2004,
+liuQueueingNetwork2007}. Race models are a useful way to bring that idea into
+evidence accumulation because they represent a trial by several latent finishing
+times \citep{heathcoteWinnerTakes2022}. The usual winner-takes-all race is then
+only the simplest order constraint. Pooled, staged, inhibited, delayed, mixed,
+or ranked responses can be represented by different constraints on the same
+kind of latent objects.
+
+
+\pkgname{} addresses this gap by making the race architecture a reusable
+software object. A model specification contains the latent accumulators and the
+rules that map their finishing times to observed responses: pools, logical
+outcome rules, triggers, components, mixtures, onsets, and ranked readouts. The
+same finalized object is used for simulation, response-probability calculation,
+data preparation, and likelihood evaluation. Internally, the evaluator lowers
+outcome rules to order constraints over latent finishing times and reuses
+compiled model state across parameter evaluations. The package therefore
+provides a model-evaluation layer for structured evidence-accumulation models;
+it does not try to replace optimizers, samplers, or hierarchical modeling
+systems.
+
+The examples in this paper are drawn from cognitive tasks because such tasks
+motivate structured response architectures. The software contribution, however,
+is statistical: \pkgname{} gives users a compact \proglang{R} interface for
+declaring those architectures and an \proglang{R}/\proglang{C++} evaluator for
+the probabilities they imply \citep{R, Eddelbuettel+Francois:2011}.
+Section~\ref{sec:design} introduces the package objects and public API.
+Section~\ref{sec:model} summarizes the mathematical representation.
+Section~\ref{sec:workflow} gives the basic \proglang{R} workflow.
+Section~\ref{sec:examples} presents structured model examples.
+Sections~\ref{sec:likelihood} and~\ref{sec:implementation} describe likelihood
+evaluation and implementation details, followed by a comparison to related
+software and a discussion.
 
 \section{Software design}
 \label{sec:design}
@@ -104,7 +150,7 @@ simulation, data preparation, response probabilities, and likelihood contexts.
 The compiled likelihood context is built once and then reused across many
 parameter evaluations.
 
-\begin{table}[t!]
+\begin{table}[ht!]
 \centering
 \begin{tabular}{@{}p{2.0cm}p{5.2cm}p{6.1cm}@{}}
 \hline
@@ -665,25 +711,24 @@ computationally expensive.
 \section{Relation to existing software}
 \label{sec:comparison}
 
-\pkgname{} is not a replacement for specialized diffusion-model packages or
-for full estimation systems. Its role is narrower and more structural. A
-package such as \pkg{RWiener} provides direct density, distribution, and random
-generation functions for the Wiener first-passage-time model
-\citep{wabersichRWienerPackage2014}. \proglang{Stan}-based tools provide
-Bayesian fitting workflows for particular diffusion parameterizations
-\citep{henrichSevenparameterDiffusion2024}. General modeling systems such as
-\pkg{lme4} and \pkg{brms} focus on regression and hierarchical estimation
-interfaces \citep{batesFittingLinear2015, burknerBrmsPackage2017}. Cognitive
-modeling frameworks such as those discussed by
-\citet{vandekerckhoveHierarchicalDiffusion2011} address hierarchical
-sequential-sampling models from an estimation perspective.
+\pkgname{} is not a replacement for specialized diffusion-model packages,
+model-specific fitters, or full hierarchical estimation systems. The relevant
+software landscape is broad, and several packages span more than one role. For
+the present comparison the useful distinction is between the statistical object
+handled by a package and the level of workflow it exposes.
 
-The distinguishing feature of \pkgname{} is that the race architecture itself
-is the central software object. The same object is used for simulation,
-inspection, response-probability calculation, and likelihood evaluation. This
-is useful when the scientific question is whether a response is generated by a
-pool, a staged route, a latent mixture, or a guarded process, rather than only
-which parameter values best fit a fixed named model.
+The distinguishing feature of \pkgname{} is not that it is more general than
+all of these systems. It is more specific. Standard race models already provide
+a flexible alternative to two-threshold diffusion models because they represent
+several latent finishing times rather than a single relative-evidence process.
+However, most software for race models still treats the mapping from latent
+finishing times to observed responses as part of the named model: for example,
+the first accumulator to finish wins, or a fixed LBA/RDM/lognormal-race
+readout is assumed. \pkgname{} makes that readout architecture explicit. The
+same object can represent ordinary races, pooled accumulators, staged routes,
+latent mixtures, guarded responses, shared absence events, and ranked
+responses, and the same object is used for simulation, inspection,
+response-probability calculation, and likelihood evaluation.
 
 There are corresponding limitations. The package currently assumes that leaf
 accumulators are conditionally independent given parameters, components, and
@@ -692,6 +737,49 @@ hierarchical modeling language. Users who need group-level priors, posterior
 sampling diagnostics, or formula-based regression over parameters must supply
 that estimation layer separately. In exchange, they obtain a model object whose
 architecture can be manipulated directly in \proglang{R}.
+
+Table~\ref{tab:software-comparison} summarizes this classification. The rows
+classify packages by their most relevant role for the present comparison, not
+by every feature they expose. Some packages span categories; for example,
+\pkg{HSSM} supports DDMs and broader SSMs, but is listed with broad EAM
+estimation because its current user-facing role is hierarchical estimation with
+simulator and amortized-likelihood infrastructure.
+
+\begin{table}[ht!]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}p{2.8cm}p{4.7cm}p{6.1cm}@{}}
+\hline
+Category & Examples & Relation to \pkgname{} \\ \hline
+DDM/two-threshold evaluation &
+\pkg{RWiener}, \pkg{fddm}, \pkg{ddModel}, \pkg{ream}, \pkg{PyDDM} &
+Evaluate or simulate named DDM, generalized DDM, or two-threshold accumulation
+processes. The response mapping is usually fixed by the two-boundary process. \\
+Race/broader evaluation &
+\pkg{rtdists}, \pkg{lbaModel}, \pkg{CircularDDM}, \pkg{dynConfiR},
+\pkg{eam}, \pkg{ssms}, \pkg{SequentialSamplingModels.jl} &
+Provide densities, simulators, or prediction functions for LBA, race,
+continuous-response, confidence, or broader SSM families. The response rule is
+usually the one built into the named model. \\
+DDM/two-threshold estimation &
+\pkg{fast-dm}, \pkg{dRiftDM}, \pkg{DMCfun}, \pkg{diffIRT}, \pkg{RegDDM},
+\pkg{brms}, \pkg{bmm}, \pkg{HDDM}, \pkg{PyBEAM}, \pkg{PyDDM} &
+Estimate DDMs, two-threshold models, task-specific DDM extensions, or
+hierarchical regressions. \\
+Race/broad EAM estimation &
+\pkg{glba}, \pkg{DMC}/\pkg{ggdmc}, \pkg{EMC2}, \pkg{pmwg}, \pkg{eam},
+\pkg{HSSM} &
+Estimate LBA, RDM, lognormal-race, and other SSM families, often using
+hierarchical, simulator-based, or amortized-likelihood workflows. \pkgname{}
+supplies the architecture-specific likelihood object that such workflows
+otherwise need to hand-code. \\
+\hline
+\end{tabular}
+\caption{\label{tab:software-comparison} Related software for evidence
+accumulation and sequential-sampling models, grouped by model family and
+workflow role.}
+\end{table}
 
 \section{Replication material}
 \label{sec:replication}

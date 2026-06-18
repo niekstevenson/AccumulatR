@@ -89,13 +89,12 @@ compiled_math_source_product_exgauss_leaf_fill(
     const double x,
     const std::uint8_t fill_mask) {
   const bool need_pdf = (fill_mask & kLeafChannelPdf) != 0U;
-  const bool need_cdf =
-      (fill_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
+  const bool need_cdf = (fill_mask & kLeafChannelCdf) != 0U;
+  const bool need_survival = (fill_mask & kLeafChannelSurvival) != 0U;
   const double mu = loaded.params[0];
   const double sigma = loaded.params[1];
   const double tau = loaded.params[2];
-  const double lower_cdf = exgauss_raw_cdf(0.0, mu, sigma, tau);
-  const double lower_survival = 1.0 - lower_cdf;
+  const double lower_survival = exgauss_raw_survival(0.0, mu, sigma, tau);
   if (!(lower_survival > 0.0)) {
     ExactSourceChannels::SourceProductScalarFill fill;
     fill.mask = fill_mask;
@@ -104,14 +103,29 @@ compiled_math_source_product_exgauss_leaf_fill(
     }
     return fill;
   }
-  return compiled_math_source_product_finish_base_fill(
-      need_pdf ? exgauss_raw_pdf(x, mu, sigma, tau) / lower_survival : 0.0,
-      need_cdf
-          ? (exgauss_raw_cdf(x, mu, sigma, tau) - lower_cdf) /
-                lower_survival
-          : 0.0,
-      loaded.q,
-      fill_mask);
+  const double start_prob = 1.0 - loaded.q;
+  ExactSourceChannels::SourceProductScalarFill fill;
+  fill.mask = fill_mask;
+  if (need_pdf) {
+    fill.pdf = start_prob *
+               safe_density(exgauss_raw_pdf(x, mu, sigma, tau) /
+                            lower_survival);
+  }
+  if (need_cdf) {
+    const double lower_cdf = exgauss_raw_cdf(0.0, mu, sigma, tau);
+    const double raw_cdf = exgauss_raw_cdf(x, mu, sigma, tau);
+    fill.cdf = clamp_probability(
+        start_prob * clamp_probability((raw_cdf - lower_cdf) /
+                                       lower_survival));
+  }
+  if (need_survival) {
+    fill.survival = clamp_probability(
+        loaded.q + start_prob *
+                       clamp_probability(exgauss_raw_survival(x, mu, sigma,
+                                                              tau) /
+                                         lower_survival));
+  }
+  return fill;
 }
 
 inline ExactSourceChannels::SourceProductScalarFill
@@ -255,19 +269,31 @@ inline double compiled_math_source_product_direct_leaf_scalar(
     const double mu = loaded.params[0];
     const double sigma = loaded.params[1];
     const double tau = loaded.params[2];
-    const double lower_cdf = exgauss_raw_cdf(0.0, mu, sigma, tau);
-    const double lower_survival = 1.0 - lower_cdf;
+    const double lower_survival = exgauss_raw_survival(0.0, mu, sigma, tau);
     if (!(lower_survival > 0.0)) {
       return channel_mask == kLeafChannelSurvival ? 1.0 : 0.0;
     }
-    return compiled_math_source_product_finish_base_scalar(
-        need_pdf ? exgauss_raw_pdf(x, mu, sigma, tau) / lower_survival : 0.0,
-        need_pdf
-            ? 0.0
-            : (exgauss_raw_cdf(x, mu, sigma, tau) - lower_cdf) /
-                  lower_survival,
-        loaded.q,
-        channel_mask);
+    const double start_prob = 1.0 - loaded.q;
+    if (channel_mask == kLeafChannelPdf) {
+      return start_prob *
+             safe_density(exgauss_raw_pdf(x, mu, sigma, tau) /
+                          lower_survival);
+    }
+    if (channel_mask == kLeafChannelCdf) {
+      const double lower_cdf = exgauss_raw_cdf(0.0, mu, sigma, tau);
+      const double raw_cdf = exgauss_raw_cdf(x, mu, sigma, tau);
+      return clamp_probability(
+          start_prob * clamp_probability((raw_cdf - lower_cdf) /
+                                         lower_survival));
+    }
+    return channel_mask == kLeafChannelSurvival
+               ? clamp_probability(
+                     loaded.q + start_prob *
+                                    clamp_probability(
+                                        exgauss_raw_survival(x, mu, sigma,
+                                                             tau) /
+                                        lower_survival))
+               : 0.0;
   }
   case leaf::DistKind::LBA:
     return compiled_math_source_product_finish_base_scalar(

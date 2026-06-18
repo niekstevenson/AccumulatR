@@ -27,9 +27,54 @@ inline double safe_density(double value) noexcept {
   return std::isfinite(value) && value > 0.0 ? value : 0.0;
 }
 
-inline double normal_cdf_fast(double z) noexcept {
-  const double arg = -z * 0.7071067811865475244;
-  return clamp_probability(0.5 * std::erfc(arg));
+inline double log_diff_exp(double log_a, double log_b) noexcept {
+  if (!std::isfinite(log_a)) {
+    return R_NegInf;
+  }
+  if (!std::isfinite(log_b)) {
+    return log_a;
+  }
+  if (!(log_a > log_b)) {
+    return R_NegInf;
+  }
+  return log_a + std::log1p(-std::exp(log_b - log_a));
+}
+
+inline double log1m_exp(double log_x) noexcept {
+  if (!(log_x < 0.0)) {
+    return R_NegInf;
+  }
+  return log_x < -0.69314718055994530942
+             ? std::log1p(-std::exp(log_x))
+             : std::log(-std::expm1(log_x));
+}
+
+inline double exgauss_raw_log_pdf_stable(double x, double mu, double sigma,
+                                         double tau) noexcept {
+  const double tau_p = std::max(tau, 1e-12);
+  const double sigma_p = std::max(sigma, 1e-12);
+  const double y = (x - mu) / sigma_p;
+  const double sigma_over_tau = sigma_p / tau_p;
+  const double z = y - sigma_over_tau;
+  return -std::log(tau_p) + (mu - x) / tau_p +
+         (sigma_p * sigma_p) / (2.0 * tau_p * tau_p) +
+         R::pnorm(z, 0.0, 1.0, 1, 1);
+}
+
+inline double exgauss_raw_log_cdf_stable(double x, double mu, double sigma,
+                                         double tau) noexcept {
+  const double tau_p = std::max(tau, 1e-12);
+  const double sigma_p = std::max(sigma, 1e-12);
+  const double y = (x - mu) / sigma_p;
+  const double sigma_over_tau = sigma_p / tau_p;
+  const double log_phi_1 = R::pnorm(y, 0.0, 1.0, 1, 1);
+  const double log_phi_2 =
+      R::pnorm(y - sigma_over_tau, 0.0, 1.0, 1, 1);
+  const double log_second =
+      (mu - x) / tau_p + (sigma_p * sigma_p) /
+                              (2.0 * tau_p * tau_p) +
+      log_phi_2;
+  return log_diff_exp(log_phi_1, log_second);
 }
 
 inline double exgauss_raw_pdf(double x, double mu, double sigma,
@@ -38,14 +83,7 @@ inline double exgauss_raw_pdf(double x, double mu, double sigma,
       sigma <= 0.0 || !std::isfinite(tau) || tau <= 0.0) {
     return 0.0;
   }
-  const double inv_tau = 1.0 / tau;
-  const double sigma_sq = sigma * sigma;
-  const double tau_sq = tau * tau;
-  const double sigma_over_tau = sigma * inv_tau;
-  const double z = (x - mu) / sigma;
-  const double exponent = sigma_sq / (2.0 * tau_sq) - (x - mu) * inv_tau;
-  const double tail = normal_cdf_fast(z - sigma_over_tau);
-  return safe_density(inv_tau * std::exp(exponent) * tail);
+  return safe_density(std::exp(exgauss_raw_log_pdf_stable(x, mu, sigma, tau)));
 }
 
 inline double exgauss_raw_cdf(double x, double mu, double sigma,
@@ -54,16 +92,21 @@ inline double exgauss_raw_cdf(double x, double mu, double sigma,
       sigma <= 0.0 || !std::isfinite(tau) || tau <= 0.0) {
     return 0.0;
   }
-  const double inv_tau = 1.0 / tau;
-  const double sigma_sq = sigma * sigma;
-  const double tau_sq = tau * tau;
-  const double sigma_over_tau = sigma * inv_tau;
-  const double z = (x - mu) / sigma;
-  const double exponent = sigma_sq / (2.0 * tau_sq) - (x - mu) * inv_tau;
-  const double tail = normal_cdf_fast(z - sigma_over_tau);
-  const double base = normal_cdf_fast(z);
-  const double exp_term = std::exp(exponent);
-  return clamp_probability(base - exp_term * tail);
+  return clamp_probability(
+      std::exp(exgauss_raw_log_cdf_stable(x, mu, sigma, tau)));
+}
+
+inline double exgauss_raw_survival(double x, double mu, double sigma,
+                                   double tau) noexcept {
+  if (!std::isfinite(x) || !std::isfinite(mu) || !std::isfinite(sigma) ||
+      sigma <= 0.0 || !std::isfinite(tau) || tau <= 0.0) {
+    return 1.0;
+  }
+  const double log_cdf = exgauss_raw_log_cdf_stable(x, mu, sigma, tau);
+  if (log_cdf == R_NegInf) {
+    return 1.0;
+  }
+  return clamp_probability(std::exp(log1m_exp(log_cdf)));
 }
 
 constexpr double kLogPi = 1.1447298858494001741434;

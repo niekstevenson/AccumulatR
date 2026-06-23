@@ -4,7 +4,6 @@
 #include <cmath>
 #include <cstdint>
 
-#include "../leaf/dist_kind.hpp"
 #include "exact_eval_workspace.hpp"
 #include "leaf_kernel.hpp"
 #include "quadrature.hpp"
@@ -25,187 +24,63 @@ inline double compiled_math_source_product_channel_time(
       workspace.time_values[static_cast<std::size_t>(channel.time_cap_id)]);
 }
 
-inline ExactSourceChannels::SourceProductScalarFill
-compiled_math_source_product_finish_base_fill(
-    const double base_pdf,
-    const double base_cdf,
+[[gnu::always_inline]] inline ExactSourceChannels::SourceProductScalarFill
+compiled_math_source_product_apply_leaf_start(
+    const LeafChannelFill &leaf,
     const double q,
     const std::uint8_t fill_mask) {
   const double start_prob = 1.0 - q;
   ExactSourceChannels::SourceProductScalarFill fill;
   fill.mask = fill_mask;
   if ((fill_mask & kLeafChannelPdf) != 0U) {
-    fill.pdf = start_prob * safe_density(base_pdf);
+    fill.pdf = start_prob * safe_density(leaf.pdf);
   }
-  if ((fill_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U) {
-    const double cdf = clamp_probability(start_prob * clamp_probability(base_cdf));
-    if ((fill_mask & kLeafChannelCdf) != 0U) {
-      fill.cdf = cdf;
-    }
-    if ((fill_mask & kLeafChannelSurvival) != 0U) {
-      fill.survival = clamp_probability(1.0 - cdf);
-    }
+  if ((fill_mask & kLeafChannelCdf) != 0U) {
+    fill.cdf = clamp_probability(start_prob * clamp_probability(leaf.cdf));
   }
-  return fill;
-}
-
-inline ExactSourceChannels::SourceProductScalarFill
-compiled_math_source_product_lognormal_leaf_fill(
-    const ExactLoadedLeafInput &loaded,
-    const double x,
-    const std::uint8_t fill_mask) {
-  const bool need_pdf = (fill_mask & kLeafChannelPdf) != 0U;
-  const bool need_cdf =
-      (fill_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
-  const double m = loaded.params[0];
-  const double s = loaded.params[1];
-  return compiled_math_source_product_finish_base_fill(
-      need_pdf ? R::dlnorm(x, m, s, 0) : 0.0,
-      need_cdf ? R::plnorm(x, m, s, 1, 0) : 0.0,
-      loaded.q,
-      fill_mask);
-}
-
-inline ExactSourceChannels::SourceProductScalarFill
-compiled_math_source_product_gamma_leaf_fill(
-    const ExactLoadedLeafInput &loaded,
-    const double x,
-    const std::uint8_t fill_mask) {
-  const bool need_pdf = (fill_mask & kLeafChannelPdf) != 0U;
-  const bool need_cdf =
-      (fill_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
-  const double shape = loaded.params[0];
-  const double scale = 1.0 / loaded.params[1];
-  return compiled_math_source_product_finish_base_fill(
-      need_pdf ? R::dgamma(x, shape, scale, 0) : 0.0,
-      need_cdf ? R::pgamma(x, shape, scale, 1, 0) : 0.0,
-      loaded.q,
-      fill_mask);
-}
-
-inline ExactSourceChannels::SourceProductScalarFill
-compiled_math_source_product_exgauss_leaf_fill(
-    const ExactLoadedLeafInput &loaded,
-    const double x,
-    const std::uint8_t fill_mask) {
-  const bool need_pdf = (fill_mask & kLeafChannelPdf) != 0U;
-  const bool need_cdf = (fill_mask & kLeafChannelCdf) != 0U;
-  const bool need_survival = (fill_mask & kLeafChannelSurvival) != 0U;
-  const double mu = loaded.params[0];
-  const double sigma = loaded.params[1];
-  const double tau = loaded.params[2];
-  const double lower_survival = exgauss_raw_survival(0.0, mu, sigma, tau);
-  if (!(lower_survival > 0.0)) {
-    ExactSourceChannels::SourceProductScalarFill fill;
-    fill.mask = fill_mask;
-    if ((fill_mask & kLeafChannelSurvival) != 0U) {
-      fill.survival = 1.0;
-    }
-    return fill;
-  }
-  const double start_prob = 1.0 - loaded.q;
-  ExactSourceChannels::SourceProductScalarFill fill;
-  fill.mask = fill_mask;
-  if (need_pdf) {
-    fill.pdf = start_prob *
-               safe_density(exgauss_raw_pdf(x, mu, sigma, tau) /
-                            lower_survival);
-  }
-  if (need_cdf) {
-    const double lower_cdf = exgauss_raw_cdf(0.0, mu, sigma, tau);
-    const double raw_cdf = exgauss_raw_cdf(x, mu, sigma, tau);
-    fill.cdf = clamp_probability(
-        start_prob * clamp_probability((raw_cdf - lower_cdf) /
-                                       lower_survival));
-  }
-  if (need_survival) {
+  if ((fill_mask & kLeafChannelSurvival) != 0U) {
     fill.survival = clamp_probability(
-        loaded.q + start_prob *
-                       clamp_probability(exgauss_raw_survival(x, mu, sigma,
-                                                              tau) /
-                                         lower_survival));
+        q + start_prob * clamp_probability(leaf.survival));
   }
   return fill;
 }
 
-inline ExactSourceChannels::SourceProductScalarFill
-compiled_math_source_product_lba_leaf_fill(
-    const ExactLoadedLeafInput &loaded,
-    const double x,
-    const std::uint8_t fill_mask) {
-  const bool need_pdf = (fill_mask & kLeafChannelPdf) != 0U;
-  const bool need_cdf =
-      (fill_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
-  return compiled_math_source_product_finish_base_fill(
-      need_pdf
-          ? lba_pdf_fast(x, loaded.params[0], loaded.params[1],
-                         loaded.params[2], loaded.params[3])
-          : 0.0,
-      need_cdf
-          ? lba_cdf_fast(x, loaded.params[0], loaded.params[1],
-                         loaded.params[2], loaded.params[3])
-          : 0.0,
-      loaded.q,
-      fill_mask);
+[[gnu::always_inline]] inline double compiled_math_source_product_apply_leaf_start_value(
+    const double leaf_value,
+    const double q,
+    const std::uint8_t channel_mask) noexcept {
+  const double start_prob = 1.0 - q;
+  if (channel_mask == kLeafChannelPdf) {
+    return start_prob * safe_density(leaf_value);
+  }
+  if (channel_mask == kLeafChannelCdf) {
+    return clamp_probability(start_prob * clamp_probability(leaf_value));
+  }
+  return channel_mask == kLeafChannelSurvival
+             ? clamp_probability(
+                   q + start_prob * clamp_probability(leaf_value))
+             : 0.0;
 }
 
-inline ExactSourceChannels::SourceProductScalarFill
-compiled_math_source_product_rdm_leaf_fill(
-    const ExactLoadedLeafInput &loaded,
-    const double x,
-    const std::uint8_t fill_mask) {
-  const bool need_pdf = (fill_mask & kLeafChannelPdf) != 0U;
-  const bool need_cdf =
-      (fill_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
-  return compiled_math_source_product_finish_base_fill(
-      need_pdf
-          ? rdm_pdf_fast(x, loaded.params[0], loaded.params[1],
-                         loaded.params[2], loaded.params[3])
-          : 0.0,
-      need_cdf
-          ? rdm_cdf_fast(x, loaded.params[0], loaded.params[1],
-                         loaded.params[2], loaded.params[3])
-          : 0.0,
-      loaded.q,
-      fill_mask);
-}
-
-inline ExactSourceChannels::SourceProductScalarFill
+[[gnu::always_inline]] inline ExactSourceChannels::SourceProductScalarFill
 compiled_math_source_product_direct_leaf_fill(
     const std::uint8_t leaf_dist_kind,
     const ExactLoadedLeafInput &loaded,
     const double time_since_onset,
     const std::uint8_t fill_mask) {
   const double x = time_since_onset - loaded.t0;
-  if (!(x > 0.0)) {
-    ExactSourceChannels::SourceProductScalarFill fill;
-    fill.mask = fill_mask;
-    if ((fill_mask & kLeafChannelSurvival) != 0U) {
-      fill.survival = 1.0;
-    }
-    return fill;
-  }
-  switch (static_cast<leaf::DistKind>(leaf_dist_kind)) {
-  case leaf::DistKind::Lognormal:
-    return compiled_math_source_product_lognormal_leaf_fill(
-        loaded, x, fill_mask);
-  case leaf::DistKind::Gamma:
-    return compiled_math_source_product_gamma_leaf_fill(
-        loaded, x, fill_mask);
-  case leaf::DistKind::Exgauss:
-    return compiled_math_source_product_exgauss_leaf_fill(
-        loaded, x, fill_mask);
-  case leaf::DistKind::LBA:
-    return compiled_math_source_product_lba_leaf_fill(
-        loaded, x, fill_mask);
-  case leaf::DistKind::RDM:
-    return compiled_math_source_product_rdm_leaf_fill(
-        loaded, x, fill_mask);
-  }
-  return ExactSourceChannels::SourceProductScalarFill{};
+  const auto leaf = leaf_kernel_fill(
+      leaf_dist_kind,
+      loaded.params.data(),
+      x,
+      fill_mask);
+  return compiled_math_source_product_apply_leaf_start(
+      leaf,
+      loaded.q,
+      fill_mask);
 }
 
-inline ExactSourceChannels::SourceProductScalarFill
+[[gnu::always_inline]] inline ExactSourceChannels::SourceProductScalarFill
 compiled_math_source_product_direct_leaf_fill(
     const CompiledMathSourceProductChannel &channel,
     const ExactLoadedLeafInput &loaded,
@@ -218,109 +93,21 @@ compiled_math_source_product_direct_leaf_fill(
       fill_mask);
 }
 
-inline double compiled_math_source_product_finish_base_scalar(
-    const double base_pdf,
-    const double base_cdf,
-    const double q,
-    const std::uint8_t channel_mask) {
-  const double start_prob = 1.0 - q;
-  if (channel_mask == kLeafChannelPdf) {
-    return start_prob * safe_density(base_pdf);
-  }
-  const double cdf = clamp_probability(start_prob * clamp_probability(base_cdf));
-  if (channel_mask == kLeafChannelCdf) {
-    return cdf;
-  }
-  return channel_mask == kLeafChannelSurvival
-             ? clamp_probability(1.0 - cdf)
-             : 0.0;
-}
-
-inline double compiled_math_source_product_direct_leaf_scalar(
+[[gnu::always_inline]] inline double compiled_math_source_product_direct_leaf_scalar(
     const CompiledMathSourceProductChannel &channel,
     const ExactLoadedLeafInput &loaded,
     const double time,
     const std::uint8_t channel_mask) {
   const double x = time - loaded.onset_abs - loaded.t0;
-  if (!(x > 0.0)) {
-    return channel_mask == kLeafChannelSurvival ? 1.0 : 0.0;
-  }
-  const bool need_pdf = channel_mask == kLeafChannelPdf;
-  switch (static_cast<leaf::DistKind>(channel.leaf_dist_kind)) {
-  case leaf::DistKind::Lognormal: {
-    const double m = loaded.params[0];
-    const double s = loaded.params[1];
-    return compiled_math_source_product_finish_base_scalar(
-        need_pdf ? R::dlnorm(x, m, s, 0) : 0.0,
-        need_pdf ? 0.0 : R::plnorm(x, m, s, 1, 0),
-        loaded.q,
-        channel_mask);
-  }
-  case leaf::DistKind::Gamma: {
-    const double shape = loaded.params[0];
-    const double scale = 1.0 / loaded.params[1];
-    return compiled_math_source_product_finish_base_scalar(
-        need_pdf ? R::dgamma(x, shape, scale, 0) : 0.0,
-        need_pdf ? 0.0 : R::pgamma(x, shape, scale, 1, 0),
-        loaded.q,
-        channel_mask);
-  }
-  case leaf::DistKind::Exgauss: {
-    const double mu = loaded.params[0];
-    const double sigma = loaded.params[1];
-    const double tau = loaded.params[2];
-    const double lower_survival = exgauss_raw_survival(0.0, mu, sigma, tau);
-    if (!(lower_survival > 0.0)) {
-      return channel_mask == kLeafChannelSurvival ? 1.0 : 0.0;
-    }
-    const double start_prob = 1.0 - loaded.q;
-    if (channel_mask == kLeafChannelPdf) {
-      return start_prob *
-             safe_density(exgauss_raw_pdf(x, mu, sigma, tau) /
-                          lower_survival);
-    }
-    if (channel_mask == kLeafChannelCdf) {
-      const double lower_cdf = exgauss_raw_cdf(0.0, mu, sigma, tau);
-      const double raw_cdf = exgauss_raw_cdf(x, mu, sigma, tau);
-      return clamp_probability(
-          start_prob * clamp_probability((raw_cdf - lower_cdf) /
-                                         lower_survival));
-    }
-    return channel_mask == kLeafChannelSurvival
-               ? clamp_probability(
-                     loaded.q + start_prob *
-                                    clamp_probability(
-                                        exgauss_raw_survival(x, mu, sigma,
-                                                             tau) /
-                                        lower_survival))
-               : 0.0;
-  }
-  case leaf::DistKind::LBA:
-    return compiled_math_source_product_finish_base_scalar(
-        need_pdf
-            ? lba_pdf_fast(x, loaded.params[0], loaded.params[1],
-                           loaded.params[2], loaded.params[3])
-            : 0.0,
-        need_pdf
-            ? 0.0
-            : lba_cdf_fast(x, loaded.params[0], loaded.params[1],
-                           loaded.params[2], loaded.params[3]),
-        loaded.q,
-        channel_mask);
-  case leaf::DistKind::RDM:
-    return compiled_math_source_product_finish_base_scalar(
-        need_pdf
-            ? rdm_pdf_fast(x, loaded.params[0], loaded.params[1],
-                           loaded.params[2], loaded.params[3])
-            : 0.0,
-        need_pdf
-            ? 0.0
-            : rdm_cdf_fast(x, loaded.params[0], loaded.params[1],
-                           loaded.params[2], loaded.params[3]),
-        loaded.q,
-        channel_mask);
-  }
-  return 0.0;
+  const double leaf_value = leaf_kernel_value(
+      channel.leaf_dist_kind,
+      loaded.params.data(),
+      x,
+      channel_mask);
+  return compiled_math_source_product_apply_leaf_start_value(
+      leaf_value,
+      loaded.q,
+      channel_mask);
 }
 
 inline ExactSourceChannels::SourceProductScalarFill
@@ -603,11 +390,12 @@ compiled_math_source_product_program_onset_fill(
   }
 
   const bool need_pdf = (fill_mask & kLeafChannelPdf) != 0U;
-  const bool need_cdf =
-      (fill_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
+  const bool need_cdf = (fill_mask & kLeafChannelCdf) != 0U;
+  const bool need_survival = (fill_mask & kLeafChannelSurvival) != 0U;
   const std::uint8_t shifted_mask =
       (need_pdf ? kLeafChannelPdf : 0U) |
-      (need_cdf ? kLeafChannelCdf : 0U);
+      (need_cdf ? kLeafChannelCdf : 0U) |
+      (need_survival ? kLeafChannelSurvival : 0U);
   const auto &loaded =
       source_channels->source_product_leaf_input(source_program.leaf_index);
   auto shifted_fill = [&](const double source_time) {
@@ -638,7 +426,7 @@ compiled_math_source_product_program_onset_fill(
       out.cdf = shifted.cdf;
     }
     if ((fill_mask & kLeafChannelSurvival) != 0U) {
-      out.survival = clamp_probability(1.0 - shifted.cdf);
+      out.survival = shifted.survival;
     }
     return out;
   }
@@ -646,6 +434,7 @@ compiled_math_source_product_program_onset_fill(
   const auto batch = quadrature::build_finite_batch(0.0, upper);
   double pdf = 0.0;
   double cdf = 0.0;
+  double survival = 0.0;
   for (std::size_t i = 0; i < batch.nodes.nodes.size(); ++i) {
     const double u = batch.nodes.nodes[i];
     const auto source =
@@ -667,6 +456,9 @@ compiled_math_source_product_program_onset_fill(
     if (need_cdf) {
       cdf += weight * shifted.cdf;
     }
+    if (need_survival) {
+      survival += weight * shifted.survival;
+    }
   }
 
   ExactSourceChannels::SourceProductScalarFill out;
@@ -675,13 +467,18 @@ compiled_math_source_product_program_onset_fill(
     out.pdf = safe_density(pdf);
   }
   if (need_cdf) {
-    const double clamped = clamp_probability(cdf);
-    if ((fill_mask & kLeafChannelCdf) != 0U) {
-      out.cdf = clamped;
-    }
-    if ((fill_mask & kLeafChannelSurvival) != 0U) {
-      out.survival = clamp_probability(1.0 - clamped);
-    }
+    out.cdf = clamp_probability(cdf);
+  }
+  if (need_survival) {
+    const auto source_tail =
+        compiled_math_source_product_program_fill(
+            program,
+            source_program.onset_source_program_id,
+            workspace,
+            source_channels,
+            upper,
+            kLeafChannelSurvival);
+    out.survival = clamp_probability(source_tail.survival + survival);
   }
   return out;
 }
@@ -899,11 +696,7 @@ inline double compiled_math_source_product_fill_value(
 
 inline std::uint8_t compiled_math_source_node_fill_mask(
     const CompiledMathNodeKind kind) noexcept {
-  const auto value_mask = compiled_math_source_factor_channel_mask(kind);
-  if ((value_mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U) {
-    return kLeafChannelCdf | kLeafChannelSurvival;
-  }
-  return value_mask;
+  return compiled_math_source_factor_channel_mask(kind);
 }
 
 inline double compiled_math_source_node_value(

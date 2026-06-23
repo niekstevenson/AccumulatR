@@ -4,7 +4,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
+#include "../leaf/dist_kind.hpp"
 #include "quadrature.hpp"
 
 namespace accumulatr::eval {
@@ -25,6 +27,11 @@ inline double clamp_probability(double x) noexcept {
 
 inline double safe_density(double value) noexcept {
   return std::isfinite(value) && value > 0.0 ? value : 0.0;
+}
+
+[[gnu::always_inline]] inline double normal_cdf_fast(double z) noexcept {
+  const double arg = -z * 0.7071067811865475244;
+  return clamp_probability(0.5 * std::erfc(arg));
 }
 
 inline double log_diff_exp(double log_a, double log_b) noexcept {
@@ -77,30 +84,101 @@ inline double exgauss_raw_log_cdf_stable(double x, double mu, double sigma,
   return log_diff_exp(log_phi_1, log_second);
 }
 
-inline double exgauss_raw_pdf(double x, double mu, double sigma,
-                              double tau) noexcept {
+[[gnu::always_inline]] inline bool exgauss_raw_pdf_direct(double x, double mu,
+                                                     double sigma, double tau,
+                                                     double *out) noexcept {
+  const double inv_tau = 1.0 / tau;
+  const double sigma_sq = sigma * sigma;
+  const double tau_sq = tau * tau;
+  const double sigma_over_tau = sigma * inv_tau;
+  const double y = (x - mu) / sigma;
+  const double z = y - sigma_over_tau;
+  const double exponent = sigma_sq / (2.0 * tau_sq) - (x - mu) * inv_tau;
+  if (!(z > -8.0) || !(exponent > -745.0 && exponent < 700.0)) {
+    return false;
+  }
+  const double value = inv_tau * std::exp(exponent) * normal_cdf_fast(z);
+  if (!std::isfinite(value) || !(value > 0.0)) {
+    return false;
+  }
+  *out = value;
+  return true;
+}
+
+[[gnu::always_inline]] inline bool exgauss_raw_cdf_direct(double x, double mu,
+                                                     double sigma, double tau,
+                                                     double *out) noexcept {
+  const double inv_tau = 1.0 / tau;
+  const double sigma_sq = sigma * sigma;
+  const double tau_sq = tau * tau;
+  const double sigma_over_tau = sigma * inv_tau;
+  const double y = (x - mu) / sigma;
+  const double z = y - sigma_over_tau;
+  const double exponent = sigma_sq / (2.0 * tau_sq) - (x - mu) * inv_tau;
+  if (!(z > -8.0) || !(exponent > -745.0 && exponent < 700.0)) {
+    return false;
+  }
+  const double base = normal_cdf_fast(y);
+  const double second = std::exp(exponent) * normal_cdf_fast(z);
+  const double value = base - second;
+  if (!std::isfinite(value) || value < 1e-12 || value > 1.0 - 1e-12) {
+    return false;
+  }
+  *out = clamp_probability(value);
+  return true;
+}
+
+[[gnu::always_inline]] inline bool exgauss_raw_survival_direct(double x, double mu,
+                                                         double sigma,
+                                                         double tau,
+                                                         double *out) noexcept {
+  double cdf = 0.0;
+  if (!exgauss_raw_cdf_direct(x, mu, sigma, tau, &cdf)) {
+    return false;
+  }
+  *out = clamp_probability(1.0 - cdf);
+  return true;
+}
+
+[[gnu::always_inline]] inline double exgauss_raw_pdf(double x, double mu,
+                                                double sigma,
+                                                double tau) noexcept {
   if (!std::isfinite(x) || !std::isfinite(mu) || !std::isfinite(sigma) ||
       sigma <= 0.0 || !std::isfinite(tau) || tau <= 0.0) {
     return 0.0;
   }
+  double direct = 0.0;
+  if (exgauss_raw_pdf_direct(x, mu, sigma, tau, &direct)) {
+    return direct;
+  }
   return safe_density(std::exp(exgauss_raw_log_pdf_stable(x, mu, sigma, tau)));
 }
 
-inline double exgauss_raw_cdf(double x, double mu, double sigma,
-                              double tau) noexcept {
+[[gnu::always_inline]] inline double exgauss_raw_cdf(double x, double mu,
+                                                double sigma,
+                                                double tau) noexcept {
   if (!std::isfinite(x) || !std::isfinite(mu) || !std::isfinite(sigma) ||
       sigma <= 0.0 || !std::isfinite(tau) || tau <= 0.0) {
     return 0.0;
+  }
+  double direct = 0.0;
+  if (exgauss_raw_cdf_direct(x, mu, sigma, tau, &direct)) {
+    return direct;
   }
   return clamp_probability(
       std::exp(exgauss_raw_log_cdf_stable(x, mu, sigma, tau)));
 }
 
-inline double exgauss_raw_survival(double x, double mu, double sigma,
-                                   double tau) noexcept {
+[[gnu::always_inline]] inline double exgauss_raw_survival(double x, double mu,
+                                                     double sigma,
+                                                     double tau) noexcept {
   if (!std::isfinite(x) || !std::isfinite(mu) || !std::isfinite(sigma) ||
       sigma <= 0.0 || !std::isfinite(tau) || tau <= 0.0) {
     return 1.0;
+  }
+  double direct = 0.0;
+  if (exgauss_raw_survival_direct(x, mu, sigma, tau, &direct)) {
+    return direct;
   }
   const double log_cdf = exgauss_raw_log_cdf_stable(x, mu, sigma, tau);
   if (log_cdf == R_NegInf) {
@@ -337,6 +415,259 @@ constexpr std::uint8_t kLeafChannelCdf = 2U;
 constexpr std::uint8_t kLeafChannelSurvival = 4U;
 constexpr std::uint8_t kLeafChannelAll =
     kLeafChannelPdf | kLeafChannelCdf | kLeafChannelSurvival;
+
+struct LeafChannelFill {
+  std::uint8_t mask{0U};
+  double pdf{0.0};
+  double cdf{0.0};
+  double survival{1.0};
+};
+
+inline LeafChannelFill leaf_channel_zero_fill(
+    const std::uint8_t mask) noexcept {
+  LeafChannelFill fill;
+  fill.mask = mask;
+  return fill;
+}
+
+[[gnu::always_inline]] inline LeafChannelFill leaf_channel_from_pdf_cdf(
+    const double pdf,
+    const double cdf,
+    const std::uint8_t mask) noexcept {
+  LeafChannelFill fill;
+  fill.mask = mask;
+  if ((mask & kLeafChannelPdf) != 0U) {
+    fill.pdf = safe_density(pdf);
+  }
+  if ((mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U) {
+    const double clamped = clamp_probability(cdf);
+    if ((mask & kLeafChannelCdf) != 0U) {
+      fill.cdf = clamped;
+    }
+    if ((mask & kLeafChannelSurvival) != 0U) {
+      fill.survival = clamp_probability(1.0 - clamped);
+    }
+  }
+  return fill;
+}
+
+[[gnu::always_inline]] inline LeafChannelFill lognormal_leaf_kernel_fill(
+    const double *params,
+    const double x,
+    const std::uint8_t mask) noexcept {
+  const bool need_pdf = (mask & kLeafChannelPdf) != 0U;
+  const bool need_cdf = (mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
+  return leaf_channel_from_pdf_cdf(
+      need_pdf ? R::dlnorm(x, params[0], params[1], 0) : 0.0,
+      need_cdf ? R::plnorm(x, params[0], params[1], 1, 0) : 0.0,
+      mask);
+}
+
+[[gnu::always_inline]] inline LeafChannelFill gamma_leaf_kernel_fill(
+    const double *params,
+    const double x,
+    const std::uint8_t mask) noexcept {
+  const bool need_pdf = (mask & kLeafChannelPdf) != 0U;
+  const bool need_cdf = (mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
+  const double shape = params[0];
+  const double scale = 1.0 / params[1];
+  return leaf_channel_from_pdf_cdf(
+      need_pdf ? R::dgamma(x, shape, scale, 0) : 0.0,
+      need_cdf ? R::pgamma(x, shape, scale, 1, 0) : 0.0,
+      mask);
+}
+
+[[gnu::always_inline]] inline LeafChannelFill exgauss_leaf_kernel_fill(
+    const double *params,
+    const double x,
+    const std::uint8_t mask) noexcept {
+  const bool need_pdf = (mask & kLeafChannelPdf) != 0U;
+  const bool need_cdf = (mask & kLeafChannelCdf) != 0U;
+  const bool need_survival = (mask & kLeafChannelSurvival) != 0U;
+  const double mu = params[0];
+  const double sigma = params[1];
+  const double tau = params[2];
+  const double lower_survival = exgauss_raw_survival(0.0, mu, sigma, tau);
+  if (!(lower_survival > 0.0)) {
+    return leaf_channel_zero_fill(mask);
+  }
+
+  LeafChannelFill fill;
+  fill.mask = mask;
+  if (need_pdf) {
+    fill.pdf = safe_density(
+        exgauss_raw_pdf(x, mu, sigma, tau) / lower_survival);
+  }
+  if (need_cdf && need_survival) {
+    double raw_cdf = 0.0;
+    if (exgauss_raw_cdf_direct(x, mu, sigma, tau, &raw_cdf)) {
+      const double cdf = clamp_probability(
+          (raw_cdf + lower_survival - 1.0) / lower_survival);
+      fill.cdf = cdf;
+      fill.survival = clamp_probability(1.0 - cdf);
+    } else if (x >= mu) {
+      const double survival = clamp_probability(
+          exgauss_raw_survival(x, mu, sigma, tau) / lower_survival);
+      fill.survival = survival;
+      fill.cdf = clamp_probability(1.0 - survival);
+    } else {
+      const double cdf = clamp_probability(
+          (exgauss_raw_cdf(x, mu, sigma, tau) + lower_survival - 1.0) /
+          lower_survival);
+      fill.cdf = cdf;
+      fill.survival = clamp_probability(1.0 - cdf);
+    }
+    return fill;
+  }
+  if (need_cdf) {
+    const double raw_cdf = exgauss_raw_cdf(x, mu, sigma, tau);
+    fill.cdf = clamp_probability(
+        (raw_cdf + lower_survival - 1.0) / lower_survival);
+  }
+  if (need_survival) {
+    fill.survival = clamp_probability(
+        exgauss_raw_survival(x, mu, sigma, tau) / lower_survival);
+  }
+  return fill;
+}
+
+[[gnu::always_inline]] inline LeafChannelFill lba_leaf_kernel_fill(
+    const double *params,
+    const double x,
+    const std::uint8_t mask) noexcept {
+  const bool need_pdf = (mask & kLeafChannelPdf) != 0U;
+  const bool need_cdf = (mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
+  return leaf_channel_from_pdf_cdf(
+      need_pdf ? lba_pdf_fast(x, params[0], params[1], params[2], params[3])
+               : 0.0,
+      need_cdf ? lba_cdf_fast(x, params[0], params[1], params[2], params[3])
+               : 0.0,
+      mask);
+}
+
+[[gnu::always_inline]] inline LeafChannelFill rdm_leaf_kernel_fill(
+    const double *params,
+    const double x,
+    const std::uint8_t mask) noexcept {
+  const bool need_pdf = (mask & kLeafChannelPdf) != 0U;
+  const bool need_cdf = (mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
+  return leaf_channel_from_pdf_cdf(
+      need_pdf ? rdm_pdf_fast(x, params[0], params[1], params[2], params[3])
+               : 0.0,
+      need_cdf ? rdm_cdf_fast(x, params[0], params[1], params[2], params[3])
+               : 0.0,
+      mask);
+}
+
+[[gnu::always_inline]] inline LeafChannelFill leaf_kernel_fill(
+    const std::uint8_t leaf_dist_kind,
+    const double *params,
+    const double x,
+    const std::uint8_t mask) noexcept {
+  if (!(x > 0.0)) {
+    return leaf_channel_zero_fill(mask);
+  }
+  switch (static_cast<leaf::DistKind>(leaf_dist_kind)) {
+  case leaf::DistKind::Lognormal:
+    return lognormal_leaf_kernel_fill(params, x, mask);
+  case leaf::DistKind::Gamma:
+    return gamma_leaf_kernel_fill(params, x, mask);
+  case leaf::DistKind::Exgauss:
+    return exgauss_leaf_kernel_fill(params, x, mask);
+  case leaf::DistKind::LBA:
+    return lba_leaf_kernel_fill(params, x, mask);
+  case leaf::DistKind::RDM:
+    return rdm_leaf_kernel_fill(params, x, mask);
+  }
+  return LeafChannelFill{};
+}
+
+[[gnu::always_inline]] inline double leaf_kernel_value(
+    const std::uint8_t leaf_dist_kind,
+    const double *params,
+    const double x,
+    const std::uint8_t channel_mask) noexcept {
+  if (!(x > 0.0)) {
+    return channel_mask == kLeafChannelSurvival ? 1.0 : 0.0;
+  }
+  switch (static_cast<leaf::DistKind>(leaf_dist_kind)) {
+  case leaf::DistKind::Lognormal:
+    if (channel_mask == kLeafChannelPdf) {
+      return safe_density(R::dlnorm(x, params[0], params[1], 0));
+    }
+    if (channel_mask == kLeafChannelCdf) {
+      return clamp_probability(R::plnorm(x, params[0], params[1], 1, 0));
+    }
+    return channel_mask == kLeafChannelSurvival
+               ? clamp_probability(
+                     1.0 - R::plnorm(x, params[0], params[1], 1, 0))
+               : 0.0;
+  case leaf::DistKind::Gamma: {
+    const double shape = params[0];
+    const double scale = 1.0 / params[1];
+    if (channel_mask == kLeafChannelPdf) {
+      return safe_density(R::dgamma(x, shape, scale, 0));
+    }
+    if (channel_mask == kLeafChannelCdf) {
+      return clamp_probability(R::pgamma(x, shape, scale, 1, 0));
+    }
+    return channel_mask == kLeafChannelSurvival
+               ? clamp_probability(1.0 - R::pgamma(x, shape, scale, 1, 0))
+               : 0.0;
+  }
+  case leaf::DistKind::Exgauss: {
+    const double mu = params[0];
+    const double sigma = params[1];
+    const double tau = params[2];
+    const double lower_survival = exgauss_raw_survival(0.0, mu, sigma, tau);
+    if (!(lower_survival > 0.0)) {
+      return channel_mask == kLeafChannelSurvival ? 1.0 : 0.0;
+    }
+    if (channel_mask == kLeafChannelPdf) {
+      return safe_density(
+          exgauss_raw_pdf(x, mu, sigma, tau) / lower_survival);
+    }
+    if (channel_mask == kLeafChannelCdf) {
+      return clamp_probability(
+          (exgauss_raw_cdf(x, mu, sigma, tau) + lower_survival - 1.0) /
+          lower_survival);
+    }
+    return channel_mask == kLeafChannelSurvival
+               ? clamp_probability(
+                     exgauss_raw_survival(x, mu, sigma, tau) / lower_survival)
+               : 0.0;
+  }
+  case leaf::DistKind::LBA:
+    if (channel_mask == kLeafChannelPdf) {
+      return safe_density(
+          lba_pdf_fast(x, params[0], params[1], params[2], params[3]));
+    }
+    if (channel_mask == kLeafChannelCdf) {
+      return lba_cdf_fast(x, params[0], params[1], params[2], params[3]);
+    }
+    return channel_mask == kLeafChannelSurvival
+               ? clamp_probability(
+                     1.0 -
+                     lba_cdf_fast(x, params[0], params[1], params[2],
+                                  params[3]))
+               : 0.0;
+  case leaf::DistKind::RDM:
+    if (channel_mask == kLeafChannelPdf) {
+      return safe_density(
+          rdm_pdf_fast(x, params[0], params[1], params[2], params[3]));
+    }
+    if (channel_mask == kLeafChannelCdf) {
+      return rdm_cdf_fast(x, params[0], params[1], params[2], params[3]);
+    }
+    return channel_mask == kLeafChannelSurvival
+               ? clamp_probability(
+                     1.0 -
+                     rdm_cdf_fast(x, params[0], params[1], params[2],
+                                  params[3]))
+               : 0.0;
+  }
+  return 0.0;
+}
 
 template <typename Fn>
 double integrate_to_infinity(Fn &&density_fn) {

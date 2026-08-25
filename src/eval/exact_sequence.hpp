@@ -210,10 +210,9 @@ inline double exact_terminal_no_response_probability(
       product *= clamp_probability(
           exact_leaf_q_for_trigger_state(
               plan.program,
-              params,
-              first_param_row + static_cast<int>(leaf_index),
               trigger_state,
-              leaf_index));
+              leaf_index,
+              params.q(first_param_row + static_cast<int>(leaf_index))));
       if (!(product > 0.0)) {
         break;
       }
@@ -247,6 +246,7 @@ inline void advance_exact_sequence_state(
   if (state == nullptr) {
     return;
   }
+  state->has_history = true;
   state->lower_bound = observed_time;
   if (transition.release_source_id != semantic::kInvalidIndex &&
       static_cast<std::size_t>(transition.release_source_id) <
@@ -293,7 +293,8 @@ inline void advance_exact_sequence_state(
 
 inline bool exact_sequence_states_equal(const ExactSequenceState &lhs,
                                         const ExactSequenceState &rhs) {
-  if (lhs.lower_bound != rhs.lower_bound ||
+  if (lhs.has_history != rhs.has_history ||
+      lhs.lower_bound != rhs.lower_bound ||
       lhs.exact_times.size() != rhs.exact_times.size() ||
       lhs.upper_bounds.size() != rhs.upper_bounds.size()) {
     return false;

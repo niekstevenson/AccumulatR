@@ -37,8 +37,6 @@ struct CompiledEvalWorkspace {
     compiled_math.reset_cache();
   }
 
-  void reset_planned_caches() {}
-
   CompiledSourceView *source_view_evaluator(
       const semantic::Index source_view_id,
       CompiledSourceView *parent) {
@@ -156,26 +154,8 @@ inline bool compiled_math_load_node_cache(
     const CompiledSourceView *evaluator,
     const CompiledMathWorkspace &workspace,
     double *value) {
-  if (evaluator == nullptr ||
-      !compiled_math_node_cacheable(program, node)) {
-    return false;
-  }
-  return compiled_math_load_node_cache_entry(
-      program, node, evaluator, workspace, value);
-}
-
-inline bool compiled_math_load_node_cache_entry(
-    const CompiledMathProgram &program,
-    const CompiledMathNode &node,
-    const CompiledSourceView *evaluator,
-    const CompiledMathWorkspace &workspace,
-    double *value) {
-  if (evaluator == nullptr) {
-    return false;
-  }
   const auto slot = static_cast<std::size_t>(node.cache_slot);
-  if (slot >= workspace.cache_valid.size() ||
-      workspace.cache_valid[slot] == 0U ||
+  if (workspace.cache_epoch[slot] != workspace.cache_current_epoch ||
       workspace.cache_evaluators[slot] != evaluator ||
       workspace.cache_condition_ids[slot] !=
           compiled_math_node_cache_dependency_id(
@@ -209,28 +189,8 @@ inline void compiled_math_store_node_cache(
     const CompiledSourceView *evaluator,
     CompiledMathWorkspace *workspace,
     const double value) {
-  if (evaluator == nullptr ||
-      !compiled_math_node_cacheable(program, node)) {
-    return;
-  }
-  compiled_math_store_node_cache_entry(
-      program, node, evaluator, workspace, value);
-}
-
-inline void compiled_math_store_node_cache_entry(
-    const CompiledMathProgram &program,
-    const CompiledMathNode &node,
-    const CompiledSourceView *evaluator,
-    CompiledMathWorkspace *workspace,
-    const double value) {
-  if (evaluator == nullptr) {
-    return;
-  }
   const auto slot = static_cast<std::size_t>(node.cache_slot);
-  if (slot >= workspace->cache_valid.size()) {
-    return;
-  }
-  workspace->cache_valid[slot] = 1U;
+  workspace->cache_epoch[slot] = workspace->cache_current_epoch;
   workspace->cache_evaluators[slot] = evaluator;
   workspace->cache_condition_ids[slot] =
       compiled_math_node_cache_dependency_id(

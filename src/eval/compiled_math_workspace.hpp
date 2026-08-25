@@ -19,7 +19,7 @@ struct CompiledMathWorkspace {
 
   void resize(const CompiledMathProgram &program) {
     values.assign(program.nodes.size(), 0.0);
-    cache_valid.assign(program.nodes.size(), 0U);
+    cache_epoch.assign(program.nodes.size(), 0U);
     cache_condition_ids.assign(program.nodes.size(), 0);
     cache_times.assign(program.nodes.size(), 0.0);
     cache_evaluators.assign(program.nodes.size(), nullptr);
@@ -45,7 +45,7 @@ struct CompiledMathWorkspace {
     if (values.size() < program.nodes.size()) {
       const auto size = program.nodes.size();
       values.resize(size, 0.0);
-      cache_valid.resize(size, 0U);
+      cache_epoch.resize(size, 0U);
       cache_condition_ids.resize(size, 0);
       cache_times.resize(size, 0.0);
       cache_evaluators.resize(size, nullptr);
@@ -71,7 +71,11 @@ struct CompiledMathWorkspace {
   }
 
   void reset_cache() {
-    std::fill(cache_valid.begin(), cache_valid.end(), 0U);
+    ++cache_current_epoch;
+    if (cache_current_epoch == 0U) {
+      cache_current_epoch = 1U;
+      std::fill(cache_epoch.begin(), cache_epoch.end(), 0U);
+    }
     reset_source_product_program_cache();
   }
 
@@ -98,6 +102,17 @@ struct CompiledMathWorkspace {
     }
     time_values[pos] = value;
     time_valid[pos] = 1U;
+  }
+
+  void set_step_time(const double value) noexcept {
+    const auto observed =
+        static_cast<std::size_t>(CompiledMathTimeSlot::Observed);
+    const auto readiness =
+        static_cast<std::size_t>(CompiledMathTimeSlot::Readiness);
+    time_values[observed] = value;
+    time_values[readiness] = value;
+    time_valid[observed] = 1U;
+    time_valid[readiness] = 1U;
   }
 
   bool has_time(const semantic::Index time_id) const {
@@ -226,11 +241,12 @@ struct CompiledMathWorkspace {
   }
 
   std::vector<double> values;
-  std::vector<std::uint8_t> cache_valid;
+  std::vector<std::uint32_t> cache_epoch;
   std::vector<std::size_t> cache_condition_ids;
   std::vector<double> cache_times;
   std::vector<const void *> cache_evaluators;
   std::vector<double> cache_values;
+  std::uint32_t cache_current_epoch{1U};
   std::vector<std::uint32_t> source_product_program_epoch;
   std::vector<std::uint8_t> source_product_program_valid_mask;
   std::vector<double> source_product_program_pdf;

@@ -30,16 +30,7 @@ struct ExactStepWorkspace {
         params, first_param_row, trigger_state, sequence_state, observed_time);
     target_evaluator.reset(&source_channels, 0);
     target_workspace.reset(&source_channels, 0);
-    target_workspace.compiled_math.set_time(
-        static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
-        observed_time);
-    target_workspace.compiled_math.set_time(
-        static_cast<semantic::Index>(CompiledMathTimeSlot::Readiness),
-        observed_time);
-    target_workspace.compiled_math.set_time(
-        static_cast<semantic::Index>(CompiledMathTimeSlot::Zero),
-        0.0);
-    target_workspace.reset_planned_caches();
+    target_workspace.compiled_math.set_step_time(observed_time);
   }
 
   ExactSourceChannels source_channels;

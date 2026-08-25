@@ -12,12 +12,13 @@
 #include "exact_planner.hpp"
 #include "leaf_kernel.hpp"
 #include "quadrature.hpp"
+#include "../leaf/dist_kind.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
 
 struct ExactLoadedLeafInput {
-  std::array<double, 8> params{};
+  std::array<double, leaf::kMaxDistParamCount> params{};
   double q{0.0};
   double t0{0.0};
   double onset_abs{0.0};
@@ -25,10 +26,9 @@ struct ExactLoadedLeafInput {
 
 inline double exact_leaf_q_for_trigger_state(
     const runtime::ExactEvaluationProgram &program,
-    const ParamView &params,
-    const int row,
     const ExactTriggerState &trigger_state,
-    const semantic::Index leaf_index) {
+    const semantic::Index leaf_index,
+    const double fallback) {
   const auto trigger_index =
       program.leaf_trigger_index[static_cast<std::size_t>(leaf_index)];
   if (trigger_index != semantic::kInvalidIndex &&
@@ -39,7 +39,7 @@ inline double exact_leaf_q_for_trigger_state(
       return started == 1U ? 0.0 : 1.0;
     }
   }
-  return params.q(row);
+  return fallback;
 }
 
 class CompiledSourceChannels {
@@ -71,35 +71,29 @@ public:
              const ExactTriggerState &trigger_state,
              const ExactSequenceState &sequence_state,
              const double top_time) {
-    params_ = &params;
-    first_param_row_ = first_param_row;
-    trigger_state_ = &trigger_state;
     sequence_state_ = &sequence_state;
+    sequence_bounds_active_ = sequence_state.has_history;
     conditional_time_ = top_time;
     for (int i = 0; i < program_.layout.n_leaves; ++i) {
       const auto pos = static_cast<std::size_t>(i);
       const auto &desc = program_.leaf_descriptors[pos];
-      const int row = first_param_row_ + i;
+      const int physical_row = params.physical_row(first_param_row + i);
       auto &loaded = leaf_inputs_[pos];
-      const int n_local = std::min<int>(desc.param_count, 8);
-      for (int j = 0; j < n_local; ++j) {
-        loaded.params[static_cast<std::size_t>(j)] = params_->p(row, j);
+      for (int j = 0; j < desc.param_count; ++j) {
+        loaded.params[static_cast<std::size_t>(j)] =
+            params.p_physical(physical_row, j);
       }
-      for (int j = n_local; j < 8; ++j) {
-        loaded.params[static_cast<std::size_t>(j)] = 0.0;
-      }
-      loaded.q = leaf_q(i, row);
-      loaded.t0 = params_->t0(row);
-      loaded.onset_abs = params_->onset_abs(row, desc.onset_abs_value);
+      loaded.q = exact_leaf_q_for_trigger_state(
+          program_,
+          trigger_state,
+          i,
+          params.q_physical(physical_row));
+      loaded.t0 = params.t0_physical(physical_row);
+      loaded.onset_abs =
+          params.onset_abs_physical(physical_row, desc.onset_abs_value);
     }
     const auto &source_product_channels =
         plan_.compiled_math.integral_kernel_source_product_channels;
-    if (source_product_direct_available_.size() <
-        source_product_channels.size()) {
-      source_product_direct_available_.resize(
-          source_product_channels.size(),
-          0U);
-    }
     for (std::size_t i = 0; i < source_product_channels.size(); ++i) {
       const auto &channel = source_product_channels[i];
       source_product_direct_available_[i] =
@@ -174,13 +168,17 @@ public:
     return compiled_source_bounds(source_id, bounds, workspace);
   }
 
+  bool source_product_sequence_bounds_inactive(
+      const semantic::Index source_id,
+      const CompiledSourceBoundPlan &bounds) const {
+    return sequence_bounds_inactive_for(source_id, bounds);
+  }
+
 private:
   const ExactVariantPlan &plan_;
   const runtime::ExactEvaluationProgram &program_;
-  const ParamView *params_{nullptr};
-  int first_param_row_;
-  const ExactTriggerState *trigger_state_{nullptr};
   const ExactSequenceState *sequence_state_{nullptr};
+  bool sequence_bounds_active_{true};
   double conditional_time_;
   std::vector<ExactLoadedLeafInput> leaf_inputs_;
   std::vector<std::uint8_t> source_product_direct_available_;
@@ -192,7 +190,7 @@ private:
   bool sequence_bounds_inactive_for(
       const semantic::Index source_id,
       const CompiledSourceBoundPlan &bounds) const {
-    if (sequence_state_ == nullptr) {
+    if (!sequence_bounds_active_ || sequence_state_ == nullptr) {
       return true;
     }
     if (bounds.use_sequence_lower && sequence_state_->lower_bound > 0.0) {
@@ -225,15 +223,6 @@ private:
         static_cast<std::size_t>(slot)];
   }
 
-  double leaf_q(const semantic::Index leaf_index, const int row) const {
-    return exact_leaf_q_for_trigger_state(
-        program_,
-        *params_,
-        row,
-        *trigger_state_,
-        leaf_index);
-  }
-
   double compiled_bound_term_time(
       const CompiledMathWorkspace *workspace,
       const CompiledSourceBoundTerm &term) const {
@@ -259,7 +248,8 @@ private:
       const CompiledSourceBoundPlan &bounds,
       const CompiledMathWorkspace *workspace) const {
     ResolvedSourceBounds resolved;
-    if (bounds.use_sequence_lower && sequence_state_ != nullptr) {
+    if (sequence_bounds_active_ && bounds.use_sequence_lower &&
+        sequence_state_ != nullptr) {
       resolved.lower = sequence_state_->lower_bound;
     }
     if (source_id == semantic::kInvalidIndex) {
@@ -267,12 +257,12 @@ private:
     }
     const auto source_pos = static_cast<std::size_t>(source_id);
     const bool sequence_exact =
-        bounds.use_sequence_exact &&
+        sequence_bounds_active_ && bounds.use_sequence_exact &&
         sequence_state_ != nullptr &&
         source_pos < sequence_state_->exact_times.size() &&
         std::isfinite(sequence_state_->exact_times[source_pos]);
     const bool sequence_upper =
-        bounds.use_sequence_upper &&
+        sequence_bounds_active_ && bounds.use_sequence_upper &&
         sequence_state_ != nullptr &&
         source_pos < sequence_state_->upper_bounds.size() &&
         std::isfinite(sequence_state_->upper_bounds[source_pos]);

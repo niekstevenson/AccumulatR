@@ -432,10 +432,7 @@ inline semantic::Index compile_source_product_leaf_program(
     source_program.leaf_dist_kind = leaf.dist_kind;
     source_program.leaf_onset_abs_value = leaf.onset_abs_value;
   }
-  const auto leaf_program_id =
-      push_source_product_program(&plan->compiled_math, source_program);
-  return compile_source_product_exact_gate_program(
-      plan, kernel.source_id, condition_id, source_view_id, leaf_program_id);
+  return push_source_product_program(&plan->compiled_math, source_program);
 }
 
 inline semantic::Index compile_source_product_onset_program(
@@ -464,10 +461,7 @@ inline semantic::Index compile_source_product_onset_program(
     source_program.leaf_dist_kind = leaf.dist_kind;
     source_program.leaf_onset_lag = leaf.onset_lag;
   }
-  const auto onset_program_id =
-      push_source_product_program(&plan->compiled_math, source_program);
-  return compile_source_product_exact_gate_program(
-      plan, kernel.source_id, condition_id, source_view_id, onset_program_id);
+  return push_source_product_program(&plan->compiled_math, source_program);
 }
 
 inline semantic::Index compile_source_product_pool_program(
@@ -506,13 +500,10 @@ inline semantic::Index compile_source_product_pool_program(
       3 * member_count + 2 * table_size;
   program.integral_kernel_source_product_scratch_size +=
       source_program.source_product_scratch_size;
-  const auto pool_program_id =
-      push_source_product_program(&program, source_program);
-  return compile_source_product_exact_gate_program(
-      plan, kernel.source_id, condition_id, source_view_id, pool_program_id);
+  return push_source_product_program(&program, source_program);
 }
 
-inline semantic::Index compile_source_product_base_program(
+inline semantic::Index compile_source_product_kernel_program(
     ExactVariantBuildState *plan,
     const semantic::Index source_id,
     const semantic::Index condition_id,
@@ -543,6 +534,24 @@ inline semantic::Index compile_source_product_base_program(
   return push_source_product_program(&plan->compiled_math, source_program);
 }
 
+inline semantic::Index compile_source_product_base_program(
+    ExactVariantBuildState *plan,
+    const semantic::Index source_id,
+    const semantic::Index condition_id,
+    const semantic::Index source_view_id) {
+  const auto kernel_program_id = compile_source_product_kernel_program(
+      plan, source_id, condition_id, source_view_id);
+  if (source_id == semantic::kInvalidIndex) {
+    return kernel_program_id;
+  }
+  return compile_source_product_exact_gate_program(
+      plan,
+      source_id,
+      condition_id,
+      source_view_id,
+      kernel_program_id);
+}
+
 inline semantic::Index compile_source_product_channel_program(
     ExactVariantBuildState *plan,
     CompiledMathSourceProductChannel *channel) {
@@ -550,7 +559,7 @@ inline semantic::Index compile_source_product_channel_program(
     return channel->source_product_program_id;
   }
   const auto child_program_id =
-      compile_source_product_base_program(
+      compile_source_product_kernel_program(
           plan,
           channel->source_id,
           channel->condition_id,

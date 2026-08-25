@@ -63,13 +63,6 @@ inline bool compiled_math_outcome_gate_open_for_node(
     const CompiledMathWorkspace &workspace,
     const CompiledSourceView *parent);
 
-inline bool compiled_math_node_cacheable(
-    const CompiledMathProgram &,
-    const CompiledMathNode &node) noexcept {
-  return node.kind == CompiledMathNodeKind::IntegralZeroToCurrent ||
-         node.kind == CompiledMathNodeKind::IntegralZeroToCurrentRaw;
-}
-
 inline bool compiled_math_cache_time_excluded(
     const semantic::Index time_id,
     const std::vector<semantic::Index> &excluded_time_ids) noexcept {
@@ -242,14 +235,14 @@ inline std::size_t compiled_math_node_cache_dependency_id(
   return seed;
 }
 
-inline bool compiled_math_load_node_cache_entry(
+inline bool compiled_math_load_node_cache(
     const CompiledMathProgram &program,
     const CompiledMathNode &node,
     const CompiledSourceView *evaluator,
     const CompiledMathWorkspace &workspace,
     double *value);
 
-inline void compiled_math_store_node_cache_entry(
+inline void compiled_math_store_node_cache(
     const CompiledMathProgram &program,
     const CompiledMathNode &node,
     const CompiledSourceView *evaluator,

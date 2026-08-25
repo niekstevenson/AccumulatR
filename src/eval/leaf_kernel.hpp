@@ -10,6 +10,14 @@
 namespace accumulatr::eval {
 namespace detail {
 
+#ifndef ACCUMULATR_PNORM_MODE
+#define ACCUMULATR_PNORM_MODE 0
+#endif
+
+#if ACCUMULATR_PNORM_MODE != 0 && ACCUMULATR_PNORM_MODE != 1
+#error "ACCUMULATR_PNORM_MODE must be 0 (R pnorm) or 1 (Hart)"
+#endif
+
 inline double clamp_probability(double x) noexcept {
   if (!std::isfinite(x)) {
     return 0.0;
@@ -27,9 +35,122 @@ inline double safe_density(double value) noexcept {
   return std::isfinite(value) && value > 0.0 ? value : 0.0;
 }
 
-inline double normal_cdf_fast(double z) noexcept {
-  const double arg = -z * 0.7071067811865475244;
-  return clamp_probability(0.5 * std::erfc(arg));
+#if ACCUMULATR_PNORM_MODE == 1
+constexpr double kNormalHartSplit = 7.07106781186547;
+constexpr double kSqrtTwoPi = 2.5066282746310005024;
+
+inline double normal_hart_ratio(const double z) noexcept {
+  const double numerator =
+      (((((3.52624965998911e-02 * z + 0.700383064443688) * z +
+          6.37396220353165) * z + 33.912866078383) * z +
+        112.079291497871) * z + 221.213596169931) * z +
+      220.206867912376;
+  const double denominator =
+      ((((((8.83883476483184e-02 * z + 1.75566716318264) * z +
+           16.064177579207) * z + 86.7807322029461) * z +
+         296.564248779674) * z + 637.333633378831) * z +
+       793.826512519948) * z + 440.413735824752;
+  return numerator / denominator;
+}
+
+inline double normal_hart_fraction(const double z) noexcept {
+  return z +
+         1.0 / (z + 2.0 / (z + 3.0 / (z + 4.0 / (z + 13.0 / 20.0))));
+}
+
+inline double normal_hart_tail(const double z) noexcept {
+  if (z > 37.0) {
+    return 0.0;
+  }
+  const double factor = z < kNormalHartSplit
+                            ? normal_hart_ratio(z)
+                            : 1.0 / (kSqrtTwoPi * normal_hart_fraction(z));
+  return std::exp(-0.5 * z * z) * factor;
+}
+
+inline double normal_hart_log_tail(const double z) noexcept {
+  if (!std::isfinite(z)) {
+    return R_NegInf;
+  }
+  const double log_factor =
+      z < kNormalHartSplit
+          ? std::log(normal_hart_ratio(z))
+          : -std::log(kSqrtTwoPi * normal_hart_fraction(z));
+  return -0.5 * z * z + log_factor;
+}
+#endif
+
+// Hart's near-double rational approximation is opt-in; mode 0 uses R's
+// normal-distribution primitives.
+inline double normal_cdf_fast(const double x) noexcept {
+#if ACCUMULATR_PNORM_MODE == 0
+  return R::pnorm(x, 0.0, 1.0, 1, 0);
+#else
+  if (std::isnan(x)) {
+    return x;
+  }
+  const double z = std::fabs(x);
+  const double tail = normal_hart_tail(z);
+  return x <= 0.0 ? tail : 1.0 - tail;
+#endif
+}
+
+inline double normal_survival_fast(const double x) noexcept {
+#if ACCUMULATR_PNORM_MODE == 0
+  return R::pnorm(x, 0.0, 1.0, 0, 0);
+#else
+  return normal_cdf_fast(-x);
+#endif
+}
+
+inline double normal_log_cdf_fast(const double x) noexcept {
+#if ACCUMULATR_PNORM_MODE == 0
+  return R::pnorm(x, 0.0, 1.0, 1, 1);
+#else
+  if (std::isnan(x)) {
+    return x;
+  }
+  return x <= 0.0 ? normal_hart_log_tail(-x)
+                  : std::log1p(-normal_hart_tail(x));
+#endif
+}
+
+inline double normal_pdf_fast(const double x) noexcept {
+#if ACCUMULATR_PNORM_MODE == 0
+  return R::dnorm(x, 0.0, 1.0, 0);
+#else
+  constexpr double inverse_sqrt_two_pi = 0.39894228040143267794;
+  return inverse_sqrt_two_pi * std::exp(-0.5 * x * x);
+#endif
+}
+
+inline double lognormal_pdf_fast(const double x,
+                                 const double meanlog,
+                                 const double sdlog) noexcept {
+#if ACCUMULATR_PNORM_MODE == 0
+  return R::dlnorm(x, meanlog, sdlog, 0);
+#else
+  if (!(x > 0.0) || !std::isfinite(meanlog) ||
+      !std::isfinite(sdlog) || !(sdlog > 0.0)) {
+    return 0.0;
+  }
+  const double z = (std::log(x) - meanlog) / sdlog;
+  return safe_density(normal_pdf_fast(z) / (x * sdlog));
+#endif
+}
+
+inline double lognormal_cdf_fast(const double x,
+                                 const double meanlog,
+                                 const double sdlog) noexcept {
+#if ACCUMULATR_PNORM_MODE == 0
+  return R::plnorm(x, meanlog, sdlog, 1, 0);
+#else
+  if (!(x > 0.0) || !std::isfinite(meanlog) ||
+      !std::isfinite(sdlog) || !(sdlog > 0.0)) {
+    return 0.0;
+  }
+  return normal_cdf_fast((std::log(x) - meanlog) / sdlog);
+#endif
 }
 
 inline double exgauss_raw_pdf(double x, double mu, double sigma,
@@ -72,7 +193,7 @@ inline double lba_denom(double v, double sv) noexcept {
   if (!std::isfinite(sv) || sv <= 0.0) {
     return 0.0;
   }
-  double denom = R::pnorm(v / sv, 0.0, 1.0, 1, 0);
+  double denom = normal_cdf_fast(v / sv);
   if (!std::isfinite(denom) || denom < 1e-10) {
     denom = 1e-10;
   }
@@ -99,13 +220,12 @@ inline double lba_pdf_fast(double x, double v, double B, double A,
     const double cmz = B - x * v;
     const double cz = cmz / zs;
     const double cz_max = (cmz - A) / zs;
-    pdf = (v * (R::pnorm(cz, 0.0, 1.0, 1, 0) -
-                R::pnorm(cz_max, 0.0, 1.0, 1, 0)) +
-           sv * (R::dnorm(cz_max, 0.0, 1.0, 0) -
-                 R::dnorm(cz, 0.0, 1.0, 0))) /
+    pdf = (v * (normal_cdf_fast(cz) - normal_cdf_fast(cz_max)) +
+           sv * (normal_pdf_fast(cz_max) - normal_pdf_fast(cz))) /
           (A * denom);
   } else {
-    pdf = R::dnorm(B / x, v, sv, 0) * B / (x * x * denom);
+    pdf = normal_pdf_fast((B / x - v) / sv) * B /
+          (sv * x * x * denom);
   }
   return safe_density(pdf);
 }
@@ -131,14 +251,14 @@ inline double lba_cdf_fast(double x, double v, double B, double A,
     const double xx = cmz - A;
     const double cz = cmz / zs;
     const double cz_max = xx / zs;
-    cdf = (1.0 + (zs * (R::dnorm(cz_max, 0.0, 1.0, 0) -
-                        R::dnorm(cz, 0.0, 1.0, 0)) +
-                  xx * R::pnorm(cz_max, 0.0, 1.0, 1, 0) -
-                  cmz * R::pnorm(cz, 0.0, 1.0, 1, 0)) /
+    cdf = (1.0 + (zs * (normal_pdf_fast(cz_max) -
+                        normal_pdf_fast(cz)) +
+                  xx * normal_cdf_fast(cz_max) -
+                  cmz * normal_cdf_fast(cz)) /
                      A) /
           denom;
   } else {
-    cdf = R::pnorm(B / x, v, sv, 0, 0) / denom;
+    cdf = normal_survival_fast((B / x - v) / sv) / denom;
   }
   return clamp_probability(cdf);
 }
@@ -150,14 +270,14 @@ inline double rdm_pigt0(double x, double k, double l) noexcept {
   }
   if (std::fabs(l) < 1e-12) {
     const double z = k / std::sqrt(x);
-    return clamp_probability(2.0 * (1.0 - R::pnorm(z, 0.0, 1.0, 1, 0)));
+    return clamp_probability(2.0 * normal_survival_fast(z));
   }
   const double mu = k / l;
   const double lambda = k * k;
-  const double p1 = 1.0 - R::pnorm(std::sqrt(lambda / x) * (1.0 + x / mu),
-                                   0.0, 1.0, 1, 0);
-  const double p2 = 1.0 - R::pnorm(std::sqrt(lambda / x) * (1.0 - x / mu),
-                                   0.0, 1.0, 1, 0);
+  const double p1 = normal_survival_fast(
+      std::sqrt(lambda / x) * (1.0 + x / mu));
+  const double p2 = normal_survival_fast(
+      std::sqrt(lambda / x) * (1.0 - x / mu));
   const double part =
       std::exp(std::exp(std::log(2.0 * lambda) - std::log(mu)) +
                std::log(std::max(1e-300, p1)));
@@ -195,8 +315,8 @@ inline double rdm_pigt(double x, double k, double l, double a,
   const double lgt = std::log(x);
   double cdf = 0.0;
   if (l < threshold) {
-    const double t5a = 2.0 * R::pnorm((k + a) / sqt, 0.0, 1.0, 1, 0) - 1.0;
-    const double t5b = 2.0 * R::pnorm((-k - a) / sqt, 0.0, 1.0, 1, 0) - 1.0;
+    const double t5a = 2.0 * normal_cdf_fast((k + a) / sqt) - 1.0;
+    const double t5b = 2.0 * normal_cdf_fast((-k - a) / sqt) - 1.0;
     const double t6a =
         -0.5 * ((k + a) * (k + a) / x - M_LN2 - kLogPi + lgt) - std::log(a);
     const double t6b =
@@ -210,15 +330,15 @@ inline double rdm_pigt(double x, double k, double l, double a,
         std::exp(0.5 * (lgt - M_LN2 - kLogPi)) * (t1a - t1b);
     const double t2a =
         std::exp(2.0 * l * (k - a) +
-                 R::pnorm(-(k - a + x * l) / sqt, 0.0, 1.0, 1, 1));
+                 normal_log_cdf_fast(-(k - a + x * l) / sqt));
     const double t2b =
         std::exp(2.0 * l * (k + a) +
-                 R::pnorm(-(k + a + x * l) / sqt, 0.0, 1.0, 1, 1));
+                 normal_log_cdf_fast(-(k + a + x * l) / sqt));
     const double t2 = a + (t2b - t2a) / (2.0 * l);
     const double t4a =
-        2.0 * R::pnorm((k + a) / sqt - sqt * l, 0.0, 1.0, 1, 0) - 1.0;
+        2.0 * normal_cdf_fast((k + a) / sqt - sqt * l) - 1.0;
     const double t4b =
-        2.0 * R::pnorm((k - a) / sqt - sqt * l, 0.0, 1.0, 1, 0) - 1.0;
+        2.0 * normal_cdf_fast((k - a) / sqt - sqt * l) - 1.0;
     const double t4 = 0.5 * (x * l - a - k + 0.5 / l) * t4a +
                       0.5 * (k - a - x * l - 0.5 / l) * t4b;
     cdf = 0.5 * (t4 + t2 + t1) / a;
@@ -252,9 +372,9 @@ inline double rdm_digt(double x, double k, double l, double a,
         0.7071067811865475244 *
         (std::exp(t1a) - std::exp(t1b)) / (std::sqrt(M_PI) * sqt);
     const double t2a =
-        2.0 * R::pnorm((-k + a) / sqt + sqt * l, 0.0, 1.0, 1, 0) - 1.0;
+        2.0 * normal_cdf_fast((-k + a) / sqt + sqt * l) - 1.0;
     const double t2b =
-        2.0 * R::pnorm((k + a) / sqt - sqt * l, 0.0, 1.0, 1, 0) - 1.0;
+        2.0 * normal_cdf_fast((k + a) / sqt - sqt * l) - 1.0;
     const double t2 = std::exp(std::log(0.5) + std::log(l)) * (t2a + t2b);
     pdf = std::exp(std::log(std::max(1e-300, t1 + t2)) - M_LN2 - std::log(a));
   }

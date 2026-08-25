@@ -14,6 +14,8 @@ enum class DistKind : std::uint8_t {
   RDM = 4
 };
 
+constexpr int kMaxDistParamCount = 4;
+
 constexpr std::string_view to_string(DistKind kind) noexcept {
   switch (kind) {
   case DistKind::Lognormal:

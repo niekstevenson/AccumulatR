@@ -44,19 +44,36 @@ struct ParamView {
   }
 
   inline double q(const int row) const {
-    return base[physical_row(row)];
+    return q_physical(physical_row(row));
   }
 
   inline double t0(const int row) const {
-    return base[nrow + physical_row(row)];
+    return t0_physical(physical_row(row));
   }
 
   inline double p(const int row, const int slot) const {
-    return base[(slot + 2) * nrow + physical_row(row)];
+    return p_physical(physical_row(row), slot);
   }
 
   inline double onset_abs(const int row, const double fallback) const {
-    return onset == nullptr ? fallback : onset[physical_row(row)];
+    return onset_abs_physical(physical_row(row), fallback);
+  }
+
+  inline double q_physical(const int row) const {
+    return base[row];
+  }
+
+  inline double t0_physical(const int row) const {
+    return base[nrow + row];
+  }
+
+  inline double p_physical(const int row, const int slot) const {
+    return base[(slot + 2) * nrow + row];
+  }
+
+  inline double onset_abs_physical(const int row,
+                                   const double fallback) const {
+    return onset == nullptr ? fallback : onset[row];
   }
 };
 

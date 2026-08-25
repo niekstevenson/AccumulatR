@@ -38,6 +38,7 @@ struct ExactCompiledTriggerStateTable {
 };
 
 struct ExactSequenceState {
+  bool has_history{false};
   double lower_bound{0.0};
   std::vector<double> exact_times;
   std::vector<double> upper_bounds;

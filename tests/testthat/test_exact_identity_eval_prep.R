@@ -434,3 +434,23 @@ testthat::test_that("identity likelihood supports independent-trigger no-respons
 
   testthat::expect_equal(out, log(0.01), tolerance = 1e-4)
 })
+
+testthat::test_that("ranked history is retained when the first event occurs at zero", {
+  spec <- race_spec(n_outcomes = 2L) |>
+    add_accumulator("a", "lognormal", onset = -1) |>
+    add_accumulator("b", "lognormal", onset = after("a")) |>
+    add_outcome("A", "a") |>
+    add_outcome("B", "b")
+  trial_df <- data.frame(
+    trials = 1L,
+    R = "A",
+    rt = 0,
+    R2 = "B",
+    rt2 = 0.5
+  )
+
+  out <- run_public_loglik(spec, trial_df, c(m = 0, s = 0.5, t0 = 0))
+  expected <- log(dlnorm(1, 0, 0.5)) + log(dlnorm(0.5, 0, 0.5))
+
+  testthat::expect_equal(out, expected, tolerance = 1e-12)
+})

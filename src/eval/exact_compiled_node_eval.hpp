@@ -19,7 +19,6 @@ inline double evaluate_compiled_node_span(
     CompiledEvalWorkspace *eval_workspace,
     const std::vector<semantic::Index> *schedule_nodes,
     const bool workspace_prepared) {
-  (void)scenario;
   if (result_node_id == semantic::kInvalidIndex) {
     return 0.0;
   }
@@ -33,36 +32,20 @@ inline double evaluate_compiled_node_span(
     const auto node_id = nodes[
         static_cast<std::size_t>(schedule.offset + schedule_idx)];
     const auto &node = program.nodes[static_cast<std::size_t>(node_id)];
-    auto *condition_evaluator = parent;
-    if (node.source_view_id != 0 &&
-        node.source_view_id != semantic::kInvalidIndex) {
-      if (eval_workspace == nullptr) {
-        throw std::runtime_error(
-            "compiled node requires a planned source view but no workspace was supplied");
-      }
-      condition_evaluator =
-          eval_workspace->source_view_evaluator(node.source_view_id, parent);
-    }
-    const bool cacheable = compiled_math_node_cacheable(program, node);
     double value = 0.0;
-    if (condition_evaluator != nullptr &&
-        cacheable &&
-        compiled_math_load_node_cache_entry(
-            program,
-            node, condition_evaluator, *workspace, &value)) {
-      workspace->values[static_cast<std::size_t>(node.cache_slot)] = value;
-      continue;
-    }
     switch (node.kind) {
     case CompiledMathNodeKind::Constant:
       value = node.constant;
       break;
     case CompiledMathNodeKind::SourcePdf:
     case CompiledMathNodeKind::SourceCdf:
-    case CompiledMathNodeKind::SourceSurvival:
+    case CompiledMathNodeKind::SourceSurvival: {
+      auto *condition_evaluator = compiled_math_node_evaluator(
+          node, parent, eval_workspace);
       value = compiled_math_source_node_value(
           program, node, condition_evaluator, workspace);
       break;
+    }
     case CompiledMathNodeKind::TimeGate:
     case CompiledMathNodeKind::StrictTimeGate: {
       const auto child_id =
@@ -112,14 +95,16 @@ inline double evaluate_compiled_node_span(
       break;
     }
     case CompiledMathNodeKind::IntegralZeroToCurrent: {
+      auto *condition_evaluator = compiled_math_node_evaluator(
+          node, parent, eval_workspace);
       if (condition_evaluator == nullptr ||
           node.integral_kernel_slot == semantic::kInvalidIndex) {
-        value = 0.0;
         break;
       }
       const double current_time = compiled_math_node_time(node, *workspace);
-      if (!(current_time > 0.0)) {
-        value = 0.0;
+      if (!(current_time > 0.0) ||
+          compiled_math_load_node_cache(
+              program, node, condition_evaluator, *workspace, &value)) {
         break;
       }
       value = clamp_probability(
@@ -132,17 +117,21 @@ inline double evaluate_compiled_node_span(
               eval_workspace,
               0.0,
               current_time));
+      compiled_math_store_node_cache(
+          program, node, condition_evaluator, workspace, value);
       break;
     }
     case CompiledMathNodeKind::IntegralZeroToCurrentRaw: {
+      auto *condition_evaluator = compiled_math_node_evaluator(
+          node, parent, eval_workspace);
       if (condition_evaluator == nullptr ||
           node.integral_kernel_slot == semantic::kInvalidIndex) {
-        value = 0.0;
         break;
       }
       const double current_time = compiled_math_node_time(node, *workspace);
-      if (!(current_time > 0.0)) {
-        value = 0.0;
+      if (!(current_time > 0.0) ||
+          compiled_math_load_node_cache(
+              program, node, condition_evaluator, *workspace, &value)) {
         break;
       }
       value = evaluate_compiled_integral_kernel(
@@ -155,6 +144,8 @@ inline double evaluate_compiled_node_span(
           0.0,
           current_time);
       value = std::isfinite(value) ? clean_signed_value(value) : 0.0;
+      compiled_math_store_node_cache(
+          program, node, condition_evaluator, workspace, value);
       break;
     }
     case CompiledMathNodeKind::ExprUpperBoundDensity:
@@ -163,6 +154,8 @@ inline double evaluate_compiled_node_span(
           program.child_nodes[static_cast<std::size_t>(node.children.offset)];
       const double raw =
           workspace->values[static_cast<std::size_t>(child_id)];
+      auto *condition_evaluator = compiled_math_node_evaluator(
+          node, parent, eval_workspace);
       const auto best_upper =
           compiled_math_expr_upper_bound_for_node(
               program,
@@ -239,14 +232,6 @@ inline double evaluate_compiled_node_span(
           -workspace->values[static_cast<std::size_t>(child_id)]);
       break;
     }
-    }
-    if (condition_evaluator != nullptr && cacheable) {
-      compiled_math_store_node_cache_entry(
-          program,
-          node,
-          condition_evaluator,
-          workspace,
-          value);
     }
     workspace->values[static_cast<std::size_t>(node.cache_slot)] = value;
   }

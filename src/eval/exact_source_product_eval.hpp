@@ -60,8 +60,8 @@ compiled_math_source_product_lognormal_leaf_fill(
   const double m = loaded.params[0];
   const double s = loaded.params[1];
   return compiled_math_source_product_finish_base_fill(
-      need_pdf ? R::dlnorm(x, m, s, 0) : 0.0,
-      need_cdf ? R::plnorm(x, m, s, 1, 0) : 0.0,
+      need_pdf ? lognormal_pdf_fast(x, m, s) : 0.0,
+      need_cdf ? lognormal_cdf_fast(x, m, s) : 0.0,
       loaded.q,
       fill_mask);
 }
@@ -237,8 +237,8 @@ inline double compiled_math_source_product_direct_leaf_scalar(
     const double m = loaded.params[0];
     const double s = loaded.params[1];
     return compiled_math_source_product_finish_base_scalar(
-        need_pdf ? R::dlnorm(x, m, s, 0) : 0.0,
-        need_pdf ? 0.0 : R::plnorm(x, m, s, 1, 0),
+        need_pdf ? lognormal_pdf_fast(x, m, s) : 0.0,
+        need_pdf ? 0.0 : lognormal_cdf_fast(x, m, s),
         loaded.q,
         channel_mask);
   }
@@ -437,13 +437,6 @@ compiled_math_source_product_program_exact_gate_fill(
     ExactSourceChannels *source_channels,
     const double current_time,
     const std::uint8_t fill_mask) {
-  const auto relation =
-      compiled_math_source_product_program_relation(source_program);
-  if (compiled_math_source_product_relation_forces_fill(relation, fill_mask) &&
-      !compiled_math_source_product_bounds_have_overlay(
-          source_program.bounds)) {
-    return compiled_math_source_product_forced_fill(relation, fill_mask);
-  }
   const auto bounds =
       source_channels->source_product_resolved_bounds(
           source_program.source_id,
@@ -477,10 +470,20 @@ compiled_math_source_product_program_conditioned_fill(
   const bool has_condition_overlay =
       compiled_math_source_product_bounds_have_overlay(
           source_program.bounds);
-  if (compiled_math_source_product_relation_forces_fill(relation, fill_mask) &&
-      !has_condition_overlay) {
-    return compiled_math_source_product_forced_fill(relation, fill_mask);
-  }
+  const auto evaluate_child = [&](const double time,
+                                  const std::uint8_t mask) {
+    if (compiled_math_source_product_relation_forces_fill(relation, mask) &&
+        !has_condition_overlay) {
+      return compiled_math_source_product_forced_fill(relation, mask);
+    }
+    return compiled_math_source_product_program_fill(
+        program,
+        source_program.child_program_id,
+        workspace,
+        source_channels,
+        time,
+        mask);
+  };
 
   const auto bounds =
       source_channels->source_product_resolved_bounds(
@@ -510,14 +513,7 @@ compiled_math_source_product_program_conditioned_fill(
       (fill_mask & kLeafChannelSurvival) != 0U) {
     uncond_mask |= kLeafChannelCdf;
   }
-  const auto uncond =
-      compiled_math_source_product_program_fill(
-          program,
-          source_program.child_program_id,
-          workspace,
-          source_channels,
-          current_time,
-          uncond_mask);
+  const auto uncond = evaluate_child(current_time, uncond_mask);
   if (!(lower_bound > 0.0) && !std::isfinite(upper_bound)) {
     return uncond;
   }
@@ -528,27 +524,13 @@ compiled_math_source_product_program_conditioned_fill(
   }
   auto lower = compiled_math_source_product_impossible_fill(lower_mask);
   if (lower_bound > 0.0) {
-    lower =
-        compiled_math_source_product_program_fill(
-            program,
-            source_program.child_program_id,
-            workspace,
-            source_channels,
-            lower_bound,
-            lower_mask);
+    lower = evaluate_child(lower_bound, lower_mask);
   }
   if (!std::isfinite(upper_bound)) {
     return compiled_math_source_product_conditionalize(
         uncond, lower, fill_mask);
   }
-  const auto upper =
-      compiled_math_source_product_program_fill(
-          program,
-          source_program.child_program_id,
-          workspace,
-          source_channels,
-          upper_bound,
-          kLeafChannelCdf);
+  const auto upper = evaluate_child(upper_bound, kLeafChannelCdf);
   if (!std::isfinite(upper.cdf - lower.cdf) ||
       !(upper.cdf - lower.cdf > 0.0)) {
     return compiled_math_source_product_impossible_fill(fill_mask);
@@ -787,9 +769,34 @@ compiled_math_source_product_program_fill(
   if (source_product_program_id == semantic::kInvalidIndex) {
     return compiled_math_source_product_impossible_fill(fill_mask);
   }
+  semantic::Index active_program_id = source_product_program_id;
+  while (true) {
+    const auto &candidate =
+        program.integral_kernel_source_product_programs[
+            static_cast<std::size_t>(active_program_id)];
+    if (candidate.kind != CompiledMathSourceProductProgramKind::ExactGate &&
+        candidate.kind != CompiledMathSourceProductProgramKind::Conditioned) {
+      break;
+    }
+    const bool has_condition_overlay =
+        compiled_math_source_product_bounds_have_overlay(candidate.bounds);
+    const auto relation =
+        compiled_math_source_product_program_relation(candidate);
+    if (!has_condition_overlay &&
+        compiled_math_source_product_relation_forces_fill(
+            relation, fill_mask)) {
+      return compiled_math_source_product_forced_fill(relation, fill_mask);
+    }
+    if (has_condition_overlay ||
+        !source_channels->source_product_sequence_bounds_inactive(
+            candidate.source_id, candidate.bounds)) {
+      break;
+    }
+    active_program_id = candidate.child_program_id;
+  }
   const auto &source_program =
       program.integral_kernel_source_product_programs[
-          static_cast<std::size_t>(source_product_program_id)];
+          static_cast<std::size_t>(active_program_id)];
   switch (source_program.kind) {
   case CompiledMathSourceProductProgramKind::ConstantZero:
     return compiled_math_source_product_impossible_fill(fill_mask);

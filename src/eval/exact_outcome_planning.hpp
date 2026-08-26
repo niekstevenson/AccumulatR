@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include "exact_types.hpp"
 #include "exact_compiled_math_lowering.hpp"
 #include "exact_expr_distribution.hpp"
@@ -218,6 +220,8 @@ inline std::vector<ExactCompiledOutcomePlan> compile_exact_outcome_plans(
     compiled_outcome.total_probability_root_id =
         compile_outcome_probability_root(plan, compile_context);
     compiled_outcome.transitions.reserve(compile_context.scenarios.size());
+    compiled_outcome.transition_readiness_slots.reserve(
+        compile_context.scenarios.size());
     for (std::size_t scenario_idx = 0;
          scenario_idx < compile_context.scenarios.size();
          ++scenario_idx) {
@@ -227,6 +231,8 @@ inline std::vector<ExactCompiledOutcomePlan> compile_exact_outcome_plans(
       transition.release_source_id =
           exact_symbolic_transition_release_source_id(
               compile_context.scenarios[scenario_idx].transition);
+      const auto readiness_offset = static_cast<semantic::Index>(
+          compiled_outcome.readiness_root_slot_by_item.size());
       for (const auto &guard :
            compile_context.scenarios[scenario_idx]
                .transition.readiness_time_expr.requirements.guards) {
@@ -234,8 +240,34 @@ inline std::vector<ExactCompiledOutcomePlan> compile_exact_outcome_plans(
           transition.readiness_source_ids.push_back(guard.subject_id);
         } else if (guard.kind == ExactTransitionGuardKind::ExprBefore) {
           transition.readiness_expr_ids.push_back(guard.subject_id);
+          const auto root_id =
+              guard.subject_id == semantic::kInvalidIndex ||
+                      static_cast<std::size_t>(guard.subject_id) >=
+                          plan->sequence.expr_cdf_roots.size()
+                  ? semantic::kInvalidIndex
+                  : plan->sequence.expr_cdf_roots[
+                        static_cast<std::size_t>(guard.subject_id)];
+          semantic::Index root_slot = semantic::kInvalidIndex;
+          if (root_id != semantic::kInvalidIndex) {
+            const auto existing = std::find(
+                compiled_outcome.readiness_root_ids.begin(),
+                compiled_outcome.readiness_root_ids.end(),
+                root_id);
+            if (existing == compiled_outcome.readiness_root_ids.end()) {
+              root_slot = static_cast<semantic::Index>(
+                  compiled_outcome.readiness_root_ids.size());
+              compiled_outcome.readiness_root_ids.push_back(root_id);
+            } else {
+              root_slot = static_cast<semantic::Index>(std::distance(
+                  compiled_outcome.readiness_root_ids.begin(), existing));
+            }
+          }
+          compiled_outcome.readiness_root_slot_by_item.push_back(root_slot);
         }
       }
+      compiled_outcome.transition_readiness_slots.push_back(ExactIndexSpan{
+          readiness_offset,
+          static_cast<semantic::Index>(transition.readiness_expr_ids.size())});
       compiled_outcome.transitions.push_back(std::move(transition));
     }
 

@@ -190,139 +190,6 @@ inline semantic::Index compile_guard_unless_density_node(
       CompiledMathValueKind::Density);
 }
 
-inline bool compiled_condition_has_source_order(
-    const CompiledMathProgram &program,
-    const semantic::Index condition_id,
-    const semantic::Index before_source_id,
-    const semantic::Index after_source_id) {
-  if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
-      before_source_id == semantic::kInvalidIndex ||
-      after_source_id == semantic::kInvalidIndex) {
-    return false;
-  }
-  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
-  if (condition_pos >= program.conditions.size()) {
-    return false;
-  }
-  const auto &condition = program.conditions[condition_pos];
-  for (std::size_t i = 0; i < condition.fact_kinds.size(); ++i) {
-    const auto kind =
-        static_cast<CompiledMathConditionFactKind>(condition.fact_kinds[i]);
-    if (kind == CompiledMathConditionFactKind::SourceOrder &&
-        condition.fact_subject_ids[i] == before_source_id &&
-        condition.fact_aux_ids[i] == after_source_id) {
-      return true;
-    }
-  }
-  return false;
-}
-
-inline semantic::Index compiled_condition_source_exact_time_id(
-    const CompiledMathProgram &program,
-    const semantic::Index condition_id,
-    const semantic::Index source_id) {
-  if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
-      source_id == semantic::kInvalidIndex) {
-    return semantic::kInvalidIndex;
-  }
-  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
-  if (condition_pos >= program.conditions.size()) {
-    return semantic::kInvalidIndex;
-  }
-  const auto &condition = program.conditions[condition_pos];
-  for (std::size_t i = 0; i < condition.fact_kinds.size(); ++i) {
-    if (static_cast<CompiledMathConditionFactKind>(condition.fact_kinds[i]) ==
-            CompiledMathConditionFactKind::SourceExact &&
-        condition.fact_subject_ids[i] == source_id) {
-      return condition.fact_time_ids[i];
-    }
-  }
-  return semantic::kInvalidIndex;
-}
-
-inline bool compiled_condition_has_expr_upper_bound(
-    const CompiledMathProgram &program,
-    const semantic::Index condition_id,
-    const semantic::Index expr_id) {
-  if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
-      expr_id == semantic::kInvalidIndex) {
-    return false;
-  }
-  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
-  if (condition_pos >= program.conditions.size()) {
-    return false;
-  }
-  const auto &condition = program.conditions[condition_pos];
-  for (std::size_t i = 0; i < condition.fact_kinds.size(); ++i) {
-    const auto kind =
-        static_cast<CompiledMathConditionFactKind>(condition.fact_kinds[i]);
-    if (kind == CompiledMathConditionFactKind::ExprUpperBound &&
-        condition.fact_subject_ids[i] == expr_id) {
-      return true;
-    }
-  }
-  return false;
-}
-
-inline CompiledMathIndexSpan compiled_condition_expr_upper_bound_fact_span(
-    const CompiledMathProgram &program,
-    const semantic::Index condition_id,
-    const semantic::Index expr_id) {
-  if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
-      expr_id == semantic::kInvalidIndex) {
-    return {};
-  }
-  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
-  if (condition_pos >= program.conditions.size()) {
-    return {};
-  }
-  const auto &condition = program.conditions[condition_pos];
-  const auto expr_pos = static_cast<std::size_t>(expr_id);
-  if (expr_pos >= condition.expr_upper_fact_spans.size()) {
-    return {};
-  }
-  return condition.expr_upper_fact_spans[expr_pos];
-}
-
-inline CompiledMathIndexSpan compile_timed_upper_bound_terms(
-    CompiledMathProgram *program,
-    const semantic::Index condition_id,
-    const std::vector<semantic::Index> &fact_indices,
-    const CompiledMathIndexSpan fact_span) {
-  if (condition_id == 0 ||
-      condition_id == semantic::kInvalidIndex ||
-      fact_span.empty()) {
-    return {};
-  }
-  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
-  if (condition_pos >= program->conditions.size()) {
-    return {};
-  }
-  const auto &condition = program->conditions[condition_pos];
-  const auto offset =
-      static_cast<semantic::Index>(
-          program->timed_upper_bound_terms.size());
-  for (semantic::Index i = 0; i < fact_span.size; ++i) {
-    const auto fact_pos = static_cast<std::size_t>(
-        fact_indices[static_cast<std::size_t>(fact_span.offset + i)]);
-    const auto time_id =
-        fact_pos < condition.fact_time_ids.size()
-            ? condition.fact_time_ids[fact_pos]
-            : semantic::kInvalidIndex;
-    const auto normalizer_node_id =
-        fact_pos < condition.fact_normalizer_node_ids.size()
-            ? condition.fact_normalizer_node_ids[fact_pos]
-            : semantic::kInvalidIndex;
-    program->timed_upper_bound_terms.push_back(
-        CompiledMathTimedUpperBoundTerm{time_id, normalizer_node_id});
-  }
-  return CompiledMathIndexSpan{
-      offset,
-      static_cast<semantic::Index>(
-          program->timed_upper_bound_terms.size() -
-          static_cast<std::size_t>(offset))};
-}
-
 inline bool compiled_condition_has_source_relation(
     const CompiledMathProgram &program,
     const semantic::Index condition_id,
@@ -384,71 +251,17 @@ inline bool compiled_guard_order_blocks(
     const semantic::Index source_view_id,
     const semantic::Index blocker_source_id,
     const semantic::Index ref_source_id) {
-  return compiled_condition_has_source_order(
-             plan.compiled_math,
-             condition_id,
-             blocker_source_id,
-             ref_source_id) ||
-         compiled_source_view_knows_before(
-             plan,
-             source_view_id,
-             blocker_source_id,
-             ref_source_id);
-}
-
-inline bool compiled_condition_has_source_fact(
-    const CompiledMathProgram &program,
-    const semantic::Index condition_id,
-    const CompiledMathConditionFactKind fact_kind,
-    const semantic::Index source_id,
-    const CompiledMathTimeSlot time_slot) {
-  if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
-      source_id == semantic::kInvalidIndex) {
-    return false;
-  }
-  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
-  if (condition_pos >= program.conditions.size()) {
-    return false;
-  }
-  const auto &condition = program.conditions[condition_pos];
-  const auto target_time = static_cast<semantic::Index>(time_slot);
-  for (std::size_t i = 0; i < condition.fact_kinds.size(); ++i) {
-    if (static_cast<CompiledMathConditionFactKind>(condition.fact_kinds[i]) ==
-            fact_kind &&
-        condition.fact_subject_ids[i] == source_id &&
-        condition.fact_time_ids[i] == target_time) {
-      return true;
-    }
-  }
-  return false;
+  (void)condition_id;
+  return compiled_source_view_knows_before(
+      plan, source_view_id, blocker_source_id, ref_source_id);
 }
 
 inline bool compiled_condition_forces_source_after_observed(
     const CompiledMathProgram &program,
     const semantic::Index condition_id,
     const semantic::Index source_id) {
-  if (compiled_condition_has_source_relation(
-          program, condition_id, source_id, ExactRelation::After)) {
-    return true;
-  }
-  return compiled_condition_has_source_fact(
-             program,
-             condition_id,
-             CompiledMathConditionFactKind::SourceLowerBound,
-             source_id,
-             CompiledMathTimeSlot::Observed) ||
-         compiled_condition_has_source_fact(
-             program,
-             condition_id,
-             CompiledMathConditionFactKind::SourceLowerBound,
-             source_id,
-             CompiledMathTimeSlot::Readiness) ||
-         compiled_condition_has_source_fact(
-             program,
-             condition_id,
-             CompiledMathConditionFactKind::SourceLowerBound,
-             source_id,
-             CompiledMathTimeSlot::Active);
+  return compiled_condition_has_source_relation(
+      program, condition_id, source_id, ExactRelation::After);
 }
 
 inline bool compiled_condition_forces_source_certain(
@@ -703,7 +516,6 @@ inline semantic::Index compile_expr_upper_bound_node(
     const semantic::Index expr_id,
     const semantic::Index child_node,
     const CompiledMathNodeKind value_kind,
-    const semantic::Index condition_id,
     const semantic::Index time_id,
     const semantic::Index source_view_id = 0) {
   CompiledMathNodeKey key;
@@ -714,27 +526,8 @@ inline semantic::Index compile_expr_upper_bound_node(
                        ? CompiledMathValueKind::Density
                        : CompiledMathValueKind::Cdf;
   key.subject_id = expr_id;
-  key.condition_id = condition_id;
   key.time_id = time_id;
   key.source_view_id = source_view_id;
-  const auto upper_span =
-      compiled_condition_expr_upper_bound_fact_span(
-          plan->compiled_math, condition_id, expr_id);
-  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
-  const auto term_span =
-      condition_id == 0 ||
-              condition_id == semantic::kInvalidIndex ||
-              condition_pos >= plan->compiled_math.conditions.size()
-          ? CompiledMathIndexSpan{}
-          : compile_timed_upper_bound_terms(
-                &plan->compiled_math,
-                condition_id,
-                plan->compiled_math.conditions[condition_pos]
-                    .expr_upper_fact_indices,
-                upper_span);
-  key.aux_id =
-      term_span.empty() ? semantic::kInvalidIndex : term_span.offset;
-  key.aux2_id = term_span.size;
   key.children.push_back(child_node);
   return compiled_math_intern_node(&plan->compiled_math, std::move(key));
 }
@@ -756,11 +549,7 @@ inline semantic::Index compile_expr_value_node(
     const semantic::Index condition_id,
     const semantic::Index time_id,
     const semantic::Index source_view_id) {
-  if (compiled_condition_has_expr_upper_bound(
-          plan->compiled_math,
-          condition_id,
-          expr_id) ||
-      sequence_expr_upper_bound_used(*plan, expr_id)) {
+  if (sequence_expr_upper_bound_used(*plan, expr_id)) {
     if (value_kind == CompiledMathNodeKind::ExprSurvival) {
       return compiled_math_unary_node(
           &plan->compiled_math,
@@ -784,7 +573,6 @@ inline semantic::Index compile_expr_value_node(
           expr_id,
           raw_node,
           value_kind,
-          condition_id,
           time_id,
           source_view_id);
     }

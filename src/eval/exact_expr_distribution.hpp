@@ -71,22 +71,9 @@ struct ExactExprDistributionLowering {
 };
 
 inline ExactOrderRegionBuilder exact_expr_distribution_seed_builder(
-    const ExactVariantBuildState &plan,
-    const semantic::Index condition_id,
     const semantic::Index time_id) {
   ExactOrderRegionBuilder builder;
   exact_order_region_reserve_time(&builder, time_id);
-  if (condition_id != 0 &&
-      condition_id != semantic::kInvalidIndex) {
-    const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
-    if (condition_pos < plan.compiled_math.conditions.size()) {
-      const auto &condition =
-          plan.compiled_math.conditions[condition_pos];
-      for (const auto fact_time_id : condition.fact_time_ids) {
-        exact_order_region_reserve_time(&builder, fact_time_id);
-      }
-    }
-  }
   return builder;
 }
 
@@ -95,7 +82,7 @@ inline bool exact_expr_distribution_prepare_region(
     const ExactExprDistributionKey &key,
     ExactExprDistributionLowering *out) {
   auto builder =
-      exact_expr_distribution_seed_builder(plan, key.condition_id, key.time_id);
+      exact_expr_distribution_seed_builder(key.time_id);
   ExactOrderRegionExpr region;
   if (!exact_expr_distribution_region(
           plan,
@@ -688,7 +675,7 @@ inline bool exact_expr_distribution_prepare_independent(
   out->cost =
       exact_virtual_expr_distribution_cost(virtual_expr, key.value_kind);
   out->builder =
-      exact_expr_distribution_seed_builder(plan, key.condition_id, key.time_id);
+      exact_expr_distribution_seed_builder(key.time_id);
   out->virtual_expr = std::move(virtual_expr);
   out->integrate_density = false;
   out->complement_result = false;

@@ -10,6 +10,9 @@
 namespace accumulatr::eval {
 namespace detail {
 
+constexpr double kInverseSqrtTwoPi = 0.39894228040143267794;
+constexpr double kSqrtTwoPi = 2.5066282746310005024;
+
 #ifndef ACCUMULATR_PNORM_MODE
 #define ACCUMULATR_PNORM_MODE 0
 #endif
@@ -37,7 +40,6 @@ inline double safe_density(double value) noexcept {
 
 #if ACCUMULATR_PNORM_MODE == 1
 constexpr double kNormalHartSplit = 7.07106781186547;
-constexpr double kSqrtTwoPi = 2.5066282746310005024;
 
 inline double normal_hart_ratio(const double z) noexcept {
   const double numerator =
@@ -80,9 +82,10 @@ inline double normal_hart_log_tail(const double z) noexcept {
 }
 #endif
 
-// Hart's near-double rational approximation is opt-in; mode 0 uses R's
-// normal-distribution primitives.
-inline double normal_cdf_fast(const double x) noexcept {
+// Hart's near-double rational CDF approximation is opt-in. Densities use
+// their exact closed forms in both modes.
+[[gnu::always_inline]] inline double normal_cdf_fast(
+    const double x) noexcept {
 #if ACCUMULATR_PNORM_MODE == 0
   return R::pnorm(x, 0.0, 1.0, 1, 0);
 #else
@@ -95,7 +98,8 @@ inline double normal_cdf_fast(const double x) noexcept {
 #endif
 }
 
-inline double normal_survival_fast(const double x) noexcept {
+[[gnu::always_inline]] inline double normal_survival_fast(
+    const double x) noexcept {
 #if ACCUMULATR_PNORM_MODE == 0
   return R::pnorm(x, 0.0, 1.0, 0, 0);
 #else
@@ -103,7 +107,8 @@ inline double normal_survival_fast(const double x) noexcept {
 #endif
 }
 
-inline double normal_log_cdf_fast(const double x) noexcept {
+[[gnu::always_inline]] inline double normal_log_cdf_fast(
+    const double x) noexcept {
 #if ACCUMULATR_PNORM_MODE == 0
   return R::pnorm(x, 0.0, 1.0, 1, 1);
 #else
@@ -115,42 +120,9 @@ inline double normal_log_cdf_fast(const double x) noexcept {
 #endif
 }
 
-inline double normal_pdf_fast(const double x) noexcept {
-#if ACCUMULATR_PNORM_MODE == 0
-  return R::dnorm(x, 0.0, 1.0, 0);
-#else
-  constexpr double inverse_sqrt_two_pi = 0.39894228040143267794;
-  return inverse_sqrt_two_pi * std::exp(-0.5 * x * x);
-#endif
-}
-
-inline double lognormal_pdf_fast(const double x,
-                                 const double meanlog,
-                                 const double sdlog) noexcept {
-#if ACCUMULATR_PNORM_MODE == 0
-  return R::dlnorm(x, meanlog, sdlog, 0);
-#else
-  if (!(x > 0.0) || !std::isfinite(meanlog) ||
-      !std::isfinite(sdlog) || !(sdlog > 0.0)) {
-    return 0.0;
-  }
-  const double z = (std::log(x) - meanlog) / sdlog;
-  return safe_density(normal_pdf_fast(z) / (x * sdlog));
-#endif
-}
-
-inline double lognormal_cdf_fast(const double x,
-                                 const double meanlog,
-                                 const double sdlog) noexcept {
-#if ACCUMULATR_PNORM_MODE == 0
-  return R::plnorm(x, meanlog, sdlog, 1, 0);
-#else
-  if (!(x > 0.0) || !std::isfinite(meanlog) ||
-      !std::isfinite(sdlog) || !(sdlog > 0.0)) {
-    return 0.0;
-  }
-  return normal_cdf_fast((std::log(x) - meanlog) / sdlog);
-#endif
+[[gnu::always_inline]] inline double normal_pdf_fast(
+    const double x) noexcept {
+  return kInverseSqrtTwoPi * std::exp(-0.5 * x * x);
 }
 
 inline double exgauss_raw_pdf(double x, double mu, double sigma,
@@ -166,7 +138,7 @@ inline double exgauss_raw_pdf(double x, double mu, double sigma,
   const double z = (x - mu) / sigma;
   const double exponent = sigma_sq / (2.0 * tau_sq) - (x - mu) * inv_tau;
   const double tail = normal_cdf_fast(z - sigma_over_tau);
-  return safe_density(inv_tau * std::exp(exponent) * tail);
+  return inv_tau * std::exp(exponent) * tail;
 }
 
 inline double exgauss_raw_cdf(double x, double mu, double sigma,
@@ -187,12 +159,7 @@ inline double exgauss_raw_cdf(double x, double mu, double sigma,
   return clamp_probability(base - exp_term * tail);
 }
 
-constexpr double kLogPi = 1.1447298858494001741434;
-
 inline double lba_denom(double v, double sv) noexcept {
-  if (!std::isfinite(sv) || sv <= 0.0) {
-    return 0.0;
-  }
   double denom = normal_cdf_fast(v / sv);
   if (!std::isfinite(denom) || denom < 1e-10) {
     denom = 1e-10;
@@ -200,8 +167,8 @@ inline double lba_denom(double v, double sv) noexcept {
   return denom;
 }
 
-inline double lba_pdf_fast(double x, double v, double B, double A,
-                           double sv) noexcept {
+[[gnu::always_inline]] inline double lba_pdf_fast(
+    double x, double v, double B, double A, double sv) noexcept {
   if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(v) ||
       !std::isfinite(sv) || sv <= 0.0 || !std::isfinite(B) ||
       !std::isfinite(A)) {
@@ -227,11 +194,11 @@ inline double lba_pdf_fast(double x, double v, double B, double A,
     pdf = normal_pdf_fast((B / x - v) / sv) * B /
           (sv * x * x * denom);
   }
-  return safe_density(pdf);
+  return pdf;
 }
 
-inline double lba_cdf_fast(double x, double v, double B, double A,
-                           double sv) noexcept {
+[[gnu::always_inline]] inline double lba_cdf_fast(
+    double x, double v, double B, double A, double sv) noexcept {
   if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(v) ||
       !std::isfinite(sv) || sv <= 0.0 || !std::isfinite(B) ||
       !std::isfinite(A)) {
@@ -272,15 +239,16 @@ inline double rdm_pigt0(double x, double k, double l) noexcept {
     const double z = k / std::sqrt(x);
     return clamp_probability(2.0 * normal_survival_fast(z));
   }
-  const double mu = k / l;
-  const double lambda = k * k;
-  const double p1 = normal_survival_fast(
-      std::sqrt(lambda / x) * (1.0 + x / mu));
-  const double p2 = normal_survival_fast(
-      std::sqrt(lambda / x) * (1.0 - x / mu));
+  if (k == 0.0) {
+    return 0.0;
+  }
+  const double sqt = std::sqrt(x);
+  const double scaled_k = std::fabs(k) / sqt;
+  const double scaled_l = std::copysign(l * sqt, k);
+  const double p1 = normal_survival_fast(scaled_k + scaled_l);
+  const double p2 = normal_survival_fast(scaled_k - scaled_l);
   const double part =
-      std::exp(std::exp(std::log(2.0 * lambda) - std::log(mu)) +
-               std::log(std::max(1e-300, p1)));
+      std::exp(2.0 * k * l + std::log(std::max(1e-300, p1)));
   return clamp_probability(part + p2);
 }
 
@@ -289,17 +257,9 @@ inline double rdm_digt0(double x, double k, double l) noexcept {
       !std::isfinite(l)) {
     return 0.0;
   }
-  const double lambda = k * k;
-  double exponent = 0.0;
-  if (l == 0.0) {
-    exponent = -0.5 * lambda / x;
-  } else {
-    const double mu = k / l;
-    exponent = -(lambda / (2.0 * x)) *
-               ((x * x) / (mu * mu) - 2.0 * x / mu + 1.0);
-  }
-  return std::exp(exponent + 0.5 * std::log(lambda) -
-                  0.5 * std::log(2.0 * x * x * x * M_PI));
+  const double delta = x * l - k;
+  return std::exp(-0.5 * delta * delta / x) *
+         (std::fabs(k) * kInverseSqrtTwoPi) / x / std::sqrt(x);
 }
 
 inline double rdm_pigt(double x, double k, double l, double a,
@@ -312,39 +272,39 @@ inline double rdm_pigt(double x, double k, double l, double a,
     return rdm_pigt0(x, k, l);
   }
   const double sqt = std::sqrt(x);
-  const double lgt = std::log(x);
+  const double inv_sqt = 1.0 / sqt;
+  const double inv_x = 1.0 / x;
   double cdf = 0.0;
   if (l < threshold) {
-    const double t5a = 2.0 * normal_cdf_fast((k + a) / sqt) - 1.0;
-    const double t5b = 2.0 * normal_cdf_fast((-k - a) / sqt) - 1.0;
-    const double t6a =
-        -0.5 * ((k + a) * (k + a) / x - M_LN2 - kLogPi + lgt) - std::log(a);
-    const double t6b =
-        -0.5 * ((k - a) * (k - a) / x - M_LN2 - kLogPi + lgt) - std::log(a);
-    cdf = 1.0 + std::exp(t6a) - std::exp(t6b) +
+    const double plus = k + a;
+    const double minus = k - a;
+    const double t5a = 2.0 * normal_cdf_fast(plus * inv_sqt) - 1.0;
+    const double t5b = 2.0 * normal_cdf_fast(-plus * inv_sqt) - 1.0;
+    const double scale = kSqrtTwoPi * inv_sqt / a;
+    const double t6a = scale * std::exp(-0.5 * plus * plus * inv_x);
+    const double t6b = scale * std::exp(-0.5 * minus * minus * inv_x);
+    cdf = 1.0 + t6a - t6b +
           ((-k + a) * t5a - (k - a) * t5b) / (2.0 * a);
   } else {
-    const double t1a = std::exp(-0.5 * std::pow(k - a - x * l, 2.0) / x);
-    const double t1b = std::exp(-0.5 * std::pow(a + k - x * l, 2.0) / x);
-    const double t1 =
-        std::exp(0.5 * (lgt - M_LN2 - kLogPi)) * (t1a - t1b);
+    const double delta_a = k - a - x * l;
+    const double delta_b = a + k - x * l;
+    const double t1a = std::exp(-0.5 * delta_a * delta_a * inv_x);
+    const double t1b = std::exp(-0.5 * delta_b * delta_b * inv_x);
+    const double t1 = sqt * kInverseSqrtTwoPi * (t1a - t1b);
     const double t2a =
         std::exp(2.0 * l * (k - a) +
-                 normal_log_cdf_fast(-(k - a + x * l) / sqt));
+                 normal_log_cdf_fast(-(k - a + x * l) * inv_sqt));
     const double t2b =
         std::exp(2.0 * l * (k + a) +
-                 normal_log_cdf_fast(-(k + a + x * l) / sqt));
+                 normal_log_cdf_fast(-(k + a + x * l) * inv_sqt));
     const double t2 = a + (t2b - t2a) / (2.0 * l);
     const double t4a =
-        2.0 * normal_cdf_fast((k + a) / sqt - sqt * l) - 1.0;
+        2.0 * normal_cdf_fast((k + a) * inv_sqt - sqt * l) - 1.0;
     const double t4b =
-        2.0 * normal_cdf_fast((k - a) / sqt - sqt * l) - 1.0;
+        2.0 * normal_cdf_fast((k - a) * inv_sqt - sqt * l) - 1.0;
     const double t4 = 0.5 * (x * l - a - k + 0.5 / l) * t4a +
                       0.5 * (k - a - x * l - 0.5 / l) * t4b;
     cdf = 0.5 * (t4 + t2 + t1) / a;
-  }
-  if (!std::isfinite(cdf) || cdf < 0.0) {
-    return 0.0;
   }
   return clamp_probability(cdf);
 }
@@ -356,29 +316,32 @@ inline double rdm_digt(double x, double k, double l, double a,
     return 0.0;
   }
   if (a < threshold) {
-    return safe_density(rdm_digt0(x, k, l));
+    return rdm_digt0(x, k, l);
   }
   double pdf = 0.0;
   if (l < threshold) {
     const double term = std::exp(-(k - a) * (k - a) / (2.0 * x)) -
                         std::exp(-(k + a) * (k + a) / (2.0 * x));
-    pdf = std::exp(-0.5 * (M_LN2 + kLogPi + std::log(x)) +
-                   std::log(std::max(1e-300, term)) - M_LN2 - std::log(a));
+    pdf = std::max(1e-300, term) * kInverseSqrtTwoPi /
+          (2.0 * a * std::sqrt(x));
   } else {
     const double sqt = std::sqrt(x);
-    const double t1a = -std::pow(a - k + x * l, 2.0) / (2.0 * x);
-    const double t1b = -std::pow(a + k - x * l, 2.0) / (2.0 * x);
-    const double t1 =
-        0.7071067811865475244 *
-        (std::exp(t1a) - std::exp(t1b)) / (std::sqrt(M_PI) * sqt);
+    const double inv_sqt = 1.0 / sqt;
+    const double inv_x = 1.0 / x;
+    const double delta_a = a - k + x * l;
+    const double delta_b = a + k - x * l;
+    const double t1a = -0.5 * delta_a * delta_a * inv_x;
+    const double t1b = -0.5 * delta_b * delta_b * inv_x;
+    const double t1 = kInverseSqrtTwoPi *
+                      (std::exp(t1a) - std::exp(t1b)) * inv_sqt;
     const double t2a =
-        2.0 * normal_cdf_fast((-k + a) / sqt + sqt * l) - 1.0;
+        2.0 * normal_cdf_fast((-k + a) * inv_sqt + sqt * l) - 1.0;
     const double t2b =
-        2.0 * normal_cdf_fast((k + a) / sqt - sqt * l) - 1.0;
-    const double t2 = std::exp(std::log(0.5) + std::log(l)) * (t2a + t2b);
-    pdf = std::exp(std::log(std::max(1e-300, t1 + t2)) - M_LN2 - std::log(a));
+        2.0 * normal_cdf_fast((k + a) * inv_sqt - sqt * l) - 1.0;
+    const double t2 = 0.5 * l * (t2a + t2b);
+    pdf = std::max(1e-300, t1 + t2) / (2.0 * a);
   }
-  return safe_density(pdf);
+  return pdf;
 }
 
 inline double rdm_pdf_fast(double x, double v, double B, double A,
@@ -386,12 +349,13 @@ inline double rdm_pdf_fast(double x, double v, double B, double A,
   if (!std::isfinite(s) || s <= 0.0) {
     return 0.0;
   }
-  const double v_sc = v / s;
+  const double inv_s = 1.0 / s;
+  const double v_sc = v * inv_s;
   if (!std::isfinite(v_sc) || v_sc < 0.0) {
     return 0.0;
   }
-  const double B_sc = B / s;
-  const double A_sc = A / s;
+  const double B_sc = B * inv_s;
+  const double A_sc = A * inv_s;
   return rdm_digt(x, B_sc + 0.5 * A_sc, v_sc, 0.5 * A_sc);
 }
 
@@ -400,12 +364,13 @@ inline double rdm_cdf_fast(double x, double v, double B, double A,
   if (!std::isfinite(s) || s <= 0.0) {
     return 0.0;
   }
-  const double v_sc = v / s;
+  const double inv_s = 1.0 / s;
+  const double v_sc = v * inv_s;
   if (!std::isfinite(v_sc) || v_sc < 0.0) {
     return 0.0;
   }
-  const double B_sc = B / s;
-  const double A_sc = A / s;
+  const double B_sc = B * inv_s;
+  const double A_sc = A * inv_s;
   return rdm_pigt(x, B_sc + 0.5 * A_sc, v_sc, 0.5 * A_sc);
 }
 

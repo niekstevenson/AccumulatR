@@ -40,6 +40,9 @@ struct ExactOutcomeRegionCompileContext {
 struct ExactCompiledOutcomePlan {
   std::vector<ExactCompiledTransitionPlan> transitions;
   semantic::Index total_probability_root_id{semantic::kInvalidIndex};
+  std::vector<semantic::Index> readiness_root_ids;
+  std::vector<ExactIndexSpan> transition_readiness_slots;
+  std::vector<semantic::Index> readiness_root_slot_by_item;
 };
 
 struct ExactSequencePlan {
@@ -67,6 +70,64 @@ struct ExactExprDistributionPlan {
   bool compiling{false};
 };
 
+struct ExactSourceProgramCompileKey {
+  semantic::Index source_id{semantic::kInvalidIndex};
+  semantic::Index condition_id{0};
+  semantic::Index source_view_id{0};
+
+  bool operator==(const ExactSourceProgramCompileKey &other) const noexcept {
+    return source_id == other.source_id &&
+           condition_id == other.condition_id &&
+           source_view_id == other.source_view_id;
+  }
+};
+
+struct ExactSourceProgramCompileKeyHash {
+  std::size_t operator()(
+      const ExactSourceProgramCompileKey &key) const noexcept {
+    std::size_t seed = static_cast<std::size_t>(key.source_id);
+    seed ^= static_cast<std::size_t>(key.condition_id) +
+            0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
+    seed ^= static_cast<std::size_t>(key.source_view_id) +
+            0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
+    return seed;
+  }
+};
+
+struct ExactConditionedSourceProgramCompileKey {
+  semantic::Index source_id{semantic::kInvalidIndex};
+  semantic::Index condition_id{0};
+  semantic::Index source_view_id{0};
+  semantic::Index time_id{0};
+  semantic::Index time_cap_id{semantic::kInvalidIndex};
+
+  bool operator==(
+      const ExactConditionedSourceProgramCompileKey &other) const noexcept {
+    return source_id == other.source_id &&
+           condition_id == other.condition_id &&
+           source_view_id == other.source_view_id &&
+           time_id == other.time_id &&
+           time_cap_id == other.time_cap_id;
+  }
+};
+
+struct ExactConditionedSourceProgramCompileKeyHash {
+  std::size_t operator()(
+      const ExactConditionedSourceProgramCompileKey &key) const noexcept {
+    std::size_t seed = static_cast<std::size_t>(key.source_id);
+    hash_combine(&seed, static_cast<std::size_t>(key.condition_id));
+    hash_combine(&seed, static_cast<std::size_t>(key.source_view_id));
+    hash_combine(&seed, static_cast<std::size_t>(key.time_id));
+    hash_combine(&seed, static_cast<std::size_t>(key.time_cap_id));
+    return seed;
+  }
+
+private:
+  static void hash_combine(std::size_t *seed, const std::size_t value) noexcept {
+    *seed ^= value + 0x9e3779b97f4a7c15ULL + (*seed << 6U) + (*seed >> 2U);
+  }
+};
+
 struct ExactVariantBuildState {
   runtime::ExactEvaluationProgram program;
   std::vector<semantic::Index> outcome_index_by_code;
@@ -91,43 +152,51 @@ struct ExactVariantBuildState {
   ExactCompiledTriggerStateTable trigger_state_table;
   std::vector<std::uint8_t> compiled_source_view_relations;
   semantic::Index compiled_source_view_source_count{0};
-  semantic::Index next_compiled_time_id{
-      static_cast<semantic::Index>(CompiledMathTimeSlot::Zero) + 1U};
+  std::unordered_map<
+      ExactSourceProgramCompileKey,
+      semantic::Index,
+      ExactSourceProgramCompileKeyHash>
+      source_kernel_program_index;
+  std::unordered_map<
+      ExactSourceProgramCompileKey,
+      semantic::Index,
+      ExactSourceProgramCompileKeyHash>
+      source_base_program_index;
+  std::unordered_map<
+      ExactConditionedSourceProgramCompileKey,
+      semantic::Index,
+      ExactConditionedSourceProgramCompileKeyHash>
+      source_conditioned_program_index;
 };
 
 struct ExactVariantPlan {
-  runtime::ExactEvaluationProgram program;
+  std::vector<runtime::LeafRuntimeDescriptor> leaf_descriptors;
+  std::vector<semantic::Index> leaf_trigger_index;
+  semantic::Index expr_count{0};
   std::vector<semantic::Index> outcome_index_by_code;
   std::vector<ExactCompiledOutcomePlan> compiled_outcomes;
-  ExactSequencePlan sequence;
   ExactTerminalNoResponsePlan no_response;
   CompiledMathProgram compiled_math;
-  std::vector<ExactRelationTemplate> compiled_source_views;
   std::vector<semantic::Index> compiled_outcome_gate_indices;
   semantic::Index source_count{0};
   ExactCompiledTriggerStateTable trigger_state_table;
-  std::vector<std::uint8_t> compiled_source_view_relations;
-  semantic::Index compiled_source_view_source_count{0};
 };
 
 inline ExactVariantPlan finalize_exact_variant_plan(
     ExactVariantBuildState &&build) {
   ExactVariantPlan plan;
-  plan.program = std::move(build.program);
+  plan.leaf_descriptors = std::move(build.program.leaf_descriptors);
+  plan.leaf_trigger_index = std::move(build.program.leaf_trigger_index);
+  plan.expr_count =
+      static_cast<semantic::Index>(build.program.expr_kind.size());
   plan.outcome_index_by_code = std::move(build.outcome_index_by_code);
   plan.compiled_outcomes = std::move(build.compiled_outcomes);
-  plan.sequence = std::move(build.sequence);
   plan.no_response = std::move(build.no_response);
   plan.compiled_math = std::move(build.compiled_math);
-  plan.compiled_source_views = std::move(build.compiled_source_views);
   plan.compiled_outcome_gate_indices =
       std::move(build.compiled_outcome_gate_indices);
   plan.source_count = build.source_count;
   plan.trigger_state_table = std::move(build.trigger_state_table);
-  plan.compiled_source_view_relations =
-      std::move(build.compiled_source_view_relations);
-  plan.compiled_source_view_source_count =
-      build.compiled_source_view_source_count;
   return plan;
 }
 
@@ -140,17 +209,16 @@ inline ExactSequenceState make_exact_sequence_state(const ExactVariantPlan &plan
       static_cast<std::size_t>(plan.source_count),
       std::numeric_limits<double>::infinity());
   state.expr_upper_bounds.assign(
-      plan.program.expr_kind.size(),
+      static_cast<std::size_t>(plan.expr_count),
       std::numeric_limits<double>::infinity());
   state.expr_upper_normalizers.assign(
-      plan.program.expr_kind.size(),
+      static_cast<std::size_t>(plan.expr_count),
       0.0);
   return state;
 }
 
-template <typename PlanLike>
 inline ExactRelation exact_compiled_source_view_relation(
-    const PlanLike &plan,
+    const ExactVariantBuildState &plan,
     const semantic::Index source_view_id,
     const semantic::Index source_id) noexcept {
   if (source_view_id == 0 ||
@@ -198,10 +266,12 @@ inline bool expr_supports_overlap(const ExactVariantBuildState &plan,
 inline semantic::Index source_ordinal(const ExactVariantBuildState &plan,
                                       const semantic::SourceKind kind,
                                       const semantic::Index index) {
-  if (kind == semantic::SourceKind::Leaf) {
+  if (kind == semantic::SourceKind::Leaf && index >= 0 &&
+      static_cast<std::size_t>(index) < plan.leaf_source_ids.size()) {
     return plan.leaf_source_ids[static_cast<std::size_t>(index)];
   }
-  if (kind == semantic::SourceKind::Pool) {
+  if (kind == semantic::SourceKind::Pool && index >= 0 &&
+      static_cast<std::size_t>(index) < plan.pool_source_ids.size()) {
     return plan.pool_source_ids[static_cast<std::size_t>(index)];
   }
   return semantic::kInvalidIndex;

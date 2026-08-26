@@ -191,6 +191,10 @@ inline ObservationProbabilityPlan make_weighted_log_density_plan(
   if (children.empty()) {
     return make_zero_observation_plan(ObservationPlanValueKind::Log);
   }
+  if (children.size() == 1U) {
+    plan.root = children.front();
+    return plan;
+  }
   ObservationPlanOp root;
   root.kind = ObservationPlanOpKind::WeightedSum;
   root.value_kind = ObservationPlanValueKind::Log;
@@ -217,6 +221,10 @@ inline ObservationProbabilityPlan make_weighted_probability_plan(
   }
   if (children.empty()) {
     return make_zero_observation_plan(ObservationPlanValueKind::Probability);
+  }
+  if (children.size() == 1U) {
+    plan.root = children.front();
+    return plan;
   }
   ObservationPlanOp root;
   root.kind = ObservationPlanOpKind::WeightedSum;
@@ -255,6 +263,17 @@ inline ObservationProbabilityPlan wrap_observation_plan_log(
     const ObservationProbabilityPlan &inner) {
   if (inner.empty()) {
     return make_zero_observation_plan(ObservationPlanValueKind::Log);
+  }
+  if (inner.value_kind == ObservationPlanValueKind::Log) {
+    return inner;
+  }
+  const auto &inner_root = inner.ops[static_cast<std::size_t>(inner.root)];
+  if (inner_root.kind == ObservationPlanOpKind::Constant) {
+    return make_constant_observation_plan(
+        ObservationPlanValueKind::Log,
+        std::isfinite(inner_root.constant) && inner_root.constant > 0.0
+            ? std::log(inner_root.constant)
+            : R_NegInf);
   }
   ObservationProbabilityPlan plan = inner;
   plan.value_kind = ObservationPlanValueKind::Log;

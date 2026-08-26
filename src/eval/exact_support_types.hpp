@@ -46,16 +46,6 @@ struct ExactSequenceState {
   std::vector<double> expr_upper_normalizers;
 };
 
-struct ExactRankedFrontierEntry {
-  double probability{0.0};
-  semantic::Index state_index{semantic::kInvalidIndex};
-};
-
-struct ExactStepDistributionView {
-  double total_probability{0.0};
-  const std::vector<double> *transition_probabilities{nullptr};
-};
-
 struct ExactExprKernel {
   semantic::ExprKind kind{semantic::ExprKind::Impossible};
   ExactIndexSpan children;

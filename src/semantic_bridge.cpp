@@ -2,10 +2,39 @@
 #include <Rcpp.h>
 #include <R_ext/Rdynload.h>
 
+#include <algorithm>
+#include <cstdint>
+#include <exception>
+#include <optional>
+#include <utility>
+
 #include "eval/likelihood_context.hpp"
-#include "eval/observation_likelihood.hpp"
+#include "eval/observation_trial_loop.hpp"
 
 namespace {
+
+struct ThreadEvaluatorWorkspace {
+  accumulatr::eval::detail::ObservationLikelihoodLaneWorkspace &get(
+      const accumulatr::eval::detail::NativeLikelihoodContext &ctx) {
+    if (!workspace || context_id != ctx.id) {
+      workspace.emplace(ctx.exact_plans.size());
+      context_id = ctx.id;
+    }
+    return *workspace;
+  }
+
+  std::uint64_t context_id{0U};
+  std::optional<
+      accumulatr::eval::detail::ObservationLikelihoodLaneWorkspace>
+      workspace;
+};
+
+accumulatr::eval::detail::ObservationLikelihoodLaneWorkspace &
+evaluator_workspace(
+    const accumulatr::eval::detail::NativeLikelihoodContext &ctx) {
+  static thread_local ThreadEvaluatorWorkspace evaluator;
+  return evaluator.get(ctx);
+}
 
 Rcpp::List complexity_metrics_list(
     const accumulatr::eval::detail::NativeLikelihoodContext &ctx) {
@@ -138,21 +167,20 @@ void loglik_trials_context(SEXP contextSEXP,
                            double *out) {
   const auto &ctx =
       accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
-  const auto layout =
-      accumulatr::eval::detail::read_prepared_trial_layout(dataSEXP);
+  auto &workspace = evaluator_workspace(ctx);
   const int *ok = Rf_isNull(okSEXP) ? nullptr : LOGICAL(okSEXP);
-  accumulatr::eval::detail::evaluate_observation_likelihood_trial_values_cached(
+  accumulatr::eval::detail::evaluate_observation_likelihood_trial_values_lanes(
       ctx.observation_plans_by_component_code,
       ctx.observation_is_identity,
       ctx.component_mixture,
       ctx.exact_variant_index_by_component_code,
       ctx.exact_plans,
       ctx.exact_leaf_row_offsets_by_variant,
-      layout,
       paramsSEXP,
       dataSEXP,
       min_ll,
       ok,
+      &workspace,
       out);
 }
 
@@ -161,9 +189,10 @@ Rcpp::NumericVector loglik_context(SEXP contextSEXP,
                                    SEXP dataSEXP,
                                    SEXP okSEXP,
                                    const double min_ll) {
-  const auto layout =
-      accumulatr::eval::detail::read_prepared_trial_layout(dataSEXP);
-  Rcpp::NumericVector compact(static_cast<R_xlen_t>(layout.trials.size()));
+  const SEXP startsSEXP =
+      accumulatr::eval::detail::trusted_data_attr(
+          dataSEXP, "trials_start_rows");
+  Rcpp::NumericVector compact(XLENGTH(startsSEXP));
   loglik_trials_context(
       contextSEXP,
       paramsSEXP,
@@ -266,6 +295,7 @@ SEXP semantic_response_probabilities_context_cpp(SEXP contextSEXP,
                                                  SEXP layoutSEXP) {
   const auto &ctx =
       accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
+  auto &workspace = evaluator_workspace(ctx);
   return accumulatr::eval::detail::evaluate_response_probabilities_cached(
       ctx.component_mixture,
       ctx.observation_plans_by_component_code,
@@ -274,5 +304,6 @@ SEXP semantic_response_probabilities_context_cpp(SEXP contextSEXP,
       ctx.exact_leaf_row_offsets_by_variant,
       ctx.outcome_count,
       paramsSEXP,
-      layoutSEXP);
+      layoutSEXP,
+      &workspace.observation);
 }

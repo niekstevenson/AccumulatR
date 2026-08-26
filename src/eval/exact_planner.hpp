@@ -32,11 +32,14 @@ inline ExactVariantPlan make_exact_variant_plan(
   compile_sequence_plan(&build, competitor_plans);
   build.compiled_outcomes =
       compile_exact_outcome_plans(&build, competitor_plans);
-  compile_source_arithmetic_dependencies(&build);
+  compiled_math_plan_root_executions(&build.compiled_math);
   compile_source_view_relation_tables(&build);
   compile_source_product_channel_programs(&build);
-  compile_source_product_scalar_ops(&build);
+  compile_source_product_execution_programs(&build);
   compile_source_node_programs(&build);
+  finalize_source_program_initial_resolutions(&build.compiled_math);
+  compile_source_program_cache_slots(&build.compiled_math);
+  finalize_compiled_math_time_slots(&build.compiled_math);
   validate_source_product_relations_materialized(build.compiled_math);
   validate_compiled_math_has_no_interpreter_expr_nodes(build.compiled_math);
   exact_complexity_finalize(&build);

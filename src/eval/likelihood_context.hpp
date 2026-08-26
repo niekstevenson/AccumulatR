@@ -3,7 +3,9 @@
 #include <Rcpp.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -20,7 +22,19 @@
 namespace accumulatr::eval {
 namespace detail {
 
+inline std::uint64_t next_native_likelihood_context_id() noexcept {
+  static std::atomic<std::uint64_t> next_id{1U};
+  return next_id.fetch_add(1U, std::memory_order_relaxed);
+}
+
 struct NativeLikelihoodContext {
+  NativeLikelihoodContext() = default;
+  NativeLikelihoodContext(const NativeLikelihoodContext &) = delete;
+  NativeLikelihoodContext &operator=(const NativeLikelihoodContext &) = delete;
+  NativeLikelihoodContext(NativeLikelihoodContext &&) = default;
+  NativeLikelihoodContext &operator=(NativeLikelihoodContext &&) = delete;
+
+  std::uint64_t id{next_native_likelihood_context_id()};
   ComponentMixturePlan component_mixture;
   std::vector<ComponentObservationPlan> observation_plans_by_component_code;
   bool observation_is_identity{false};

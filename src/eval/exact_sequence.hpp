@@ -1,7 +1,6 @@
 #pragma once
 
 #include <limits>
-#include <optional>
 #include <utility>
 
 #include "eval_query.hpp"
@@ -18,7 +17,6 @@ struct ExactTrialColumns {
 };
 
 struct ExactTrialView {
-  semantic::Index variant_index{semantic::kInvalidIndex};
   R_xlen_t row{0};
   int rank_count{0};
   const ExactTrialColumns *columns{nullptr};
@@ -52,32 +50,6 @@ inline semantic::Index exact_trial_view_outcome_code(const ExactTrialView &view,
 inline double exact_trial_view_rt(const ExactTrialView &view,
                                   const std::size_t rank_idx) {
   return view.columns->times[rank_idx + 1U][view.row];
-}
-
-inline ExactTrialView read_exact_observation_view(
-    const PreparedDataView &table,
-    const std::vector<semantic::Index> &variant_index_by_component_code,
-    const PreparedTrialLayout &layout,
-    const std::size_t trial_index,
-    const ExactTrialColumns &columns) {
-  const auto &trial_row = layout.trials[trial_index];
-  const auto row = static_cast<R_xlen_t>(trial_row.start_row);
-  const int component_code = table.component[row];
-  ExactTrialView obs;
-  obs.variant_index =
-      variant_index_by_component_code[static_cast<std::size_t>(component_code)];
-  obs.row = row;
-  obs.columns = &columns;
-  for (int rank = 1; rank <= layout.max_rank; ++rank) {
-    const auto *rank_labels = columns.labels[static_cast<std::size_t>(rank)];
-    const auto *rank_times = columns.times[static_cast<std::size_t>(rank)];
-    if (integer_cell_is_na(rank_labels, row) &&
-        Rcpp::NumericVector::is_na(rank_times[row])) {
-      break;
-    }
-    ++obs.rank_count;
-  }
-  return obs;
 }
 
 inline void build_exact_plan_cache(
@@ -124,123 +96,250 @@ inline void build_exact_plan_cache(
   }
 }
 
-inline double exact_unranked_target_density(
-    const ExactVariantPlan &plan,
-    const ParamView &params,
-    const int first_param_row,
-    const semantic::Index target_idx,
-    const double rt,
-    ExactStepWorkspace *workspace = nullptr) {
-  if (target_idx == semantic::kInvalidIndex ||
-      !std::isfinite(rt) ||
-      !(rt > 0.0)) {
-    return 0.0;
-  }
-  std::optional<ExactStepWorkspace> local_workspace;
-  if (workspace == nullptr) {
-    local_workspace.emplace(plan);
-    workspace = &*local_workspace;
-  }
-  double total = 0.0;
-  for (const auto &compiled_state : plan.trigger_state_table.states) {
-    const auto trigger_state =
-        exact_compiled_trigger_state_view(
-            plan, params, first_param_row, compiled_state);
-    if (!(trigger_state.weight > 0.0)) {
-      continue;
-    }
-    const auto step =
-        evaluate_exact_step_distribution(
-            plan,
-            params,
-            first_param_row,
-            trigger_state,
-            workspace->initial_state,
-            target_idx,
-            rt,
-            nullptr,
-            false,
-            workspace);
-    total += trigger_state.weight * step.total_probability;
-  }
-  return std::isfinite(total) && total > 0.0 ? total : 0.0;
+inline bool exact_has_single_unweighted_trigger_state(
+    const ExactVariantPlan &plan) noexcept {
+  const auto &states = plan.trigger_state_table.states;
+  return states.size() == 1U && states.front().weight_terms.empty() &&
+         states.front().fixed_weight == 1.0;
 }
 
-inline double exact_finite_outcome_probability(
+inline void exact_unranked_target_density_lanes(
     const ExactVariantPlan &plan,
-    const ParamView &params,
-    const int first_param_row,
+    const ObservationLaneBatchView lanes,
     const semantic::Index target_idx,
-    ExactStepWorkspace *workspace) {
-  if (target_idx == semantic::kInvalidIndex) {
-    return 0.0;
-  }
-  const double probability =
-      integrate_to_infinity(
-          [&](const double rt) {
-            return exact_unranked_target_density(
-                plan,
-                params,
-                first_param_row,
-                target_idx,
-                rt,
-                workspace);
-          });
-  return std::isfinite(probability) ? clamp_probability(probability) : 0.0;
-}
-
-inline double exact_terminal_no_response_probability(
-    const ExactVariantPlan &plan,
-    const ParamView &params,
-    const int first_param_row) {
-  if (!plan.no_response.direct_leaf_failure_product ||
-      plan.no_response.leaf_indices.empty()) {
-    return 0.0;
-  }
-  double total = 0.0;
-  for (const auto &compiled_state : plan.trigger_state_table.states) {
-    const auto trigger_state =
-        exact_compiled_trigger_state_view(
-            plan, params, first_param_row, compiled_state);
-    if (!(trigger_state.weight > 0.0)) {
-      continue;
+    ExactStepLaneWorkspace *workspace,
+    std::vector<double> *out) {
+  const auto lane_count = lanes.size;
+  const auto &trigger_states = plan.trigger_state_table.states;
+  out->resize(lane_count);
+  if (target_idx == semantic::kInvalidIndex || lane_count == 0U) {
+    if (target_idx == semantic::kInvalidIndex) {
+      std::fill(out->begin(), out->end(), 0.0);
     }
-    double product = trigger_state.weight;
-    for (const auto leaf_index : plan.no_response.leaf_indices) {
-      product *= clamp_probability(
-          exact_leaf_q_for_trigger_state(
-              plan.program,
-              trigger_state,
-              leaf_index,
-              params.q(first_param_row + static_cast<int>(leaf_index))));
-      if (!(product > 0.0)) {
-        break;
+    return;
+  }
+  auto &values = workspace->input_values;
+  if (exact_has_single_unweighted_trigger_state(plan)) {
+    const auto &compiled_state = trigger_states.front();
+    const auto *shared_started =
+        exact_compiled_trigger_shared_started(plan, compiled_state);
+    auto &frame = workspace->prepare_initial(
+        lanes,
+        shared_started);
+    evaluate_exact_step_distribution_prepared_lanes(
+        plan,
+        &frame,
+        lane_count,
+        target_idx,
+        false,
+        workspace,
+        out);
+    return;
+  }
+
+  for (std::size_t state_index = 0U;
+       state_index < trigger_states.size();
+       ++state_index) {
+    const auto &compiled_state = trigger_states[state_index];
+    const bool fixed_weight = compiled_state.weight_terms.empty();
+    if (!fixed_weight) {
+      exact_compiled_trigger_state_weights_lanes(
+          plan,
+          lanes,
+          lane_count,
+          compiled_state,
+          &workspace->trigger_weights);
+    }
+    const auto *shared_started =
+        exact_compiled_trigger_shared_started(plan, compiled_state);
+    auto &frame = workspace->prepare_initial(
+        lanes,
+        shared_started);
+    evaluate_exact_step_distribution_prepared_lanes(
+        plan,
+        &frame,
+        lane_count,
+        target_idx,
+        false,
+        workspace,
+        &values);
+    for (std::size_t lane = 0U; lane < lane_count; ++lane) {
+      const double value = values[lane];
+      const double weight = fixed_weight
+                                ? compiled_state.fixed_weight
+                                : workspace->trigger_weights[lane];
+      double &total = (*out)[lane];
+      if (state_index == 0U) {
+        total = weight > 0.0 ? weight * value : 0.0;
+      } else if (weight > 0.0) {
+        total += weight * value;
+      }
+      if (state_index + 1U == trigger_states.size() &&
+          (!std::isfinite(total) || !(total > 0.0))) {
+        total = 0.0;
       }
     }
-    total += product;
   }
-  return std::isfinite(total) ? clamp_probability(total) : 0.0;
 }
 
-inline double exact_loglik_for_trial(const ExactVariantPlan &plan,
-                                     const ParamView &params,
-                                     const int first_param_row,
-                                     const semantic::Index outcome_code,
-                                     const double rt,
-                                     const double min_ll,
-                                     ExactStepWorkspace *workspace = nullptr) {
-  const auto target_idx =
-      plan.outcome_index_by_code[static_cast<std::size_t>(outcome_code)];
-  const double total =
-      exact_unranked_target_density(
-          plan, params, first_param_row, target_idx, rt, workspace);
-  return total > 0.0 ? std::log(total) : min_ll;
+inline void exact_finite_outcome_probability_lanes(
+    const ExactVariantPlan &plan,
+    const ObservationLaneBatchView lanes,
+    const semantic::Index target_idx,
+    ExactStepLaneWorkspace *workspace,
+    std::vector<double> *out) {
+  const auto lane_count = lanes.size;
+  out->assign(lane_count, 0.0);
+  if (target_idx == semantic::kInvalidIndex || lane_count == 0U) {
+    return;
+  }
+  const auto &tail = quadrature::canonical_tail_batch().nodes;
+  auto &step_lanes = workspace->step_inputs;
+  auto &input_params = workspace->input_params;
+  auto &positions = workspace->input_positions;
+  auto &weights = workspace->input_weights;
+  auto &values = workspace->expanded_values;
+  auto &density_totals = workspace->finite_density_totals;
+
+  for (std::size_t tile_start = 0U;
+       tile_start < lane_count;
+       tile_start += kExactLaneTileSize) {
+    const auto tile_count =
+        std::min(kExactLaneTileSize, lane_count - tile_start);
+    density_totals.assign(
+        quadrature::kDefaultTailOrder * tile_count, 0.0);
+    for (const auto &compiled_state : plan.trigger_state_table.states) {
+      const bool fixed_weight = compiled_state.weight_terms.empty();
+      if (!fixed_weight) {
+        exact_compiled_trigger_state_weights_lanes(
+            plan,
+            lanes + tile_start,
+            tile_count,
+            compiled_state,
+            &workspace->trigger_weights);
+      }
+      const auto *shared_started =
+          exact_compiled_trigger_shared_started(plan, compiled_state);
+      step_lanes.clear();
+      input_params.clear();
+      positions.clear();
+      weights.clear();
+      for (std::size_t tile_lane = 0U;
+           tile_lane < tile_count;
+           ++tile_lane) {
+        const auto &lane = lanes[tile_start + tile_lane];
+        const ExactTriggerState trigger{
+            fixed_weight ? compiled_state.fixed_weight
+                         : workspace->trigger_weights[tile_lane],
+            shared_started};
+        if (!(trigger.weight > 0.0)) {
+          continue;
+        }
+        input_params.push_back(lane.params);
+        step_lanes.push_back(ExactStepLaneInput{
+            &input_params.back(),
+            trigger.shared_started,
+            &workspace->initial_state,
+            lane.observed_time,
+            nullptr});
+        positions.push_back(tile_lane);
+        weights.push_back(trigger.weight);
+      }
+      const auto active_count = step_lanes.size();
+      if (active_count == 0U) {
+        continue;
+      }
+      workspace->bind_sources(step_lanes.data(), active_count);
+      const auto times_per_block = std::max<std::size_t>(
+          1U, kExactExpandedLaneTileSize / active_count);
+      for (std::size_t q_start = 0U;
+           q_start < quadrature::kDefaultTailOrder;
+           q_start += times_per_block) {
+        const auto q_count = std::min(
+            times_per_block,
+            quadrature::kDefaultTailOrder - q_start);
+        auto &frame = workspace->prepare_repeated_times(
+            active_count,
+            tail.nodes.data() + q_start,
+            q_count);
+        const auto expanded_count = active_count * q_count;
+        evaluate_exact_step_distribution_prepared_lanes(
+            plan,
+            &frame,
+            expanded_count,
+            target_idx,
+            false,
+            workspace,
+            &values);
+        for (std::size_t q = 0; q < q_count; ++q) {
+          const auto total_offset = (q_start + q) * tile_count;
+          const auto value_offset = q * active_count;
+          for (std::size_t lane = 0; lane < active_count; ++lane) {
+            const double value = values[value_offset + lane];
+            if (std::isfinite(value) && value > 0.0) {
+              density_totals[total_offset + positions[lane]] +=
+                  weights[lane] * value;
+            }
+          }
+        }
+      }
+    }
+    for (std::size_t q = 0; q < quadrature::kDefaultTailOrder; ++q) {
+      const auto total_offset = q * tile_count;
+      for (std::size_t lane = 0; lane < tile_count; ++lane) {
+        const double value = density_totals[total_offset + lane];
+        if (std::isfinite(value) && value > 0.0) {
+          (*out)[tile_start + lane] += tail.weights[q] * value;
+        }
+      }
+    }
+  }
+  for (auto &value : *out) {
+    value = std::isfinite(value) ? clamp_probability(value) : 0.0;
+  }
+}
+
+inline void exact_terminal_no_response_probability_lanes(
+    const ExactVariantPlan &plan,
+    const ObservationLaneBatchView lanes,
+    ExactStepLaneWorkspace *workspace,
+    std::vector<double> *out) {
+  const auto lane_count = lanes.size;
+  out->assign(lane_count, 0.0);
+  if (!plan.no_response.direct_leaf_failure_product ||
+      plan.no_response.leaf_indices.empty()) {
+    return;
+  }
+  auto &products = workspace->input_weights;
+  for (const auto &compiled_state : plan.trigger_state_table.states) {
+    exact_compiled_trigger_state_weights_lanes(
+        plan, lanes, lane_count, compiled_state, &products);
+    const auto *shared_started =
+        exact_compiled_trigger_shared_started(plan, compiled_state);
+    for (const auto leaf_index : plan.no_response.leaf_indices) {
+      for (std::size_t lane_index = 0; lane_index < lane_count; ++lane_index) {
+        if (!(products[lane_index] > 0.0)) {
+          continue;
+        }
+        products[lane_index] *= clamp_probability(exact_leaf_q_for_trigger_state(
+            plan.leaf_trigger_index,
+            shared_started,
+            leaf_index,
+            lanes.q(leaf_index, lane_index)));
+      }
+    }
+    for (std::size_t lane_index = 0; lane_index < lane_count; ++lane_index) {
+      (*out)[lane_index] += products[lane_index];
+    }
+  }
+  for (auto &value : *out) {
+    value = std::isfinite(value) ? clamp_probability(value) : 0.0;
+  }
 }
 
 inline void advance_exact_sequence_state(
     ExactSequenceState *state,
     const ExactCompiledTransitionPlan &transition,
-    const ExactVariantPlan &plan,
     const double observed_time,
     const std::vector<double> *ready_expr_normalizers = nullptr) {
   if (state == nullptr) {
@@ -335,26 +434,6 @@ inline bool exact_sequence_states_equal(const ExactSequenceState &lhs,
   return true;
 }
 
-inline void append_ranked_frontier_entry(
-    std::vector<ExactRankedFrontierEntry> *frontier,
-    const std::vector<ExactSequenceState> &states,
-    const semantic::Index state_index,
-    const double probability) {
-  if (!(probability > 0.0)) {
-    return;
-  }
-  const auto state_pos = static_cast<std::size_t>(state_index);
-  for (auto &existing : *frontier) {
-    if (exact_sequence_states_equal(
-            states[static_cast<std::size_t>(existing.state_index)],
-            states[state_pos])) {
-      existing.probability += probability;
-      return;
-    }
-  }
-  frontier->push_back(ExactRankedFrontierEntry{probability, state_index});
-}
-
 inline ExactSequenceState &ranked_sequence_state_slot(
     std::vector<ExactSequenceState> *states,
     const ExactVariantPlan &plan,
@@ -365,226 +444,455 @@ inline ExactSequenceState &ranked_sequence_state_slot(
   return (*states)[index];
 }
 
-inline void exact_sequence_ready_expr_normalizers(
-    const ExactVariantPlan &plan,
-    const ExactCompiledTransitionPlan &transition,
-    ExactStepWorkspace *workspace,
-    std::vector<double> *normalizers) {
-  normalizers->clear();
-  normalizers->reserve(transition.readiness_expr_ids.size());
-  for (const auto expr_id : transition.readiness_expr_ids) {
-    double normalizer = 0.0;
-    if (expr_id != semantic::kInvalidIndex &&
-        static_cast<std::size_t>(expr_id) <
-            plan.sequence.expr_cdf_roots.size()) {
-      const auto root_id =
-          plan.sequence.expr_cdf_roots[static_cast<std::size_t>(expr_id)];
-      if (root_id != semantic::kInvalidIndex) {
-        normalizer =
-            evaluate_compiled_math_root(
-                plan.compiled_math,
-                root_id,
-                &workspace->target_workspace.compiled_math,
-                &workspace->target_evaluator,
-                nullptr,
-                &workspace->target_workspace);
-      }
+struct ExactRankedLane {
+  ExactRankedLane(const ParamMatrixView &parameter_matrix,
+                  const int *row_map,
+                  const int row_offset,
+                  const ExactTrialView &observation_)
+      : params(parameter_matrix, row_map, row_offset),
+        observation(observation_) {}
+
+  ParamView params;
+  ExactTrialView observation;
+};
+
+struct ExactRankedLaneState {
+  ExactTriggerState trigger;
+  std::vector<std::uint8_t> used_outcomes;
+  semantic::Index pending_target{semantic::kInvalidIndex};
+  double pending_time{0.0};
+  bool trigger_active{false};
+  bool rank_pending{false};
+};
+
+struct ExactRankedLaneFrontierEntry {
+  std::size_t trial_index{0U};
+  double probability{0.0};
+  semantic::Index state_index{semantic::kInvalidIndex};
+};
+
+struct ExactRankedWorkItem {
+  std::size_t trial_index{0U};
+  semantic::Index state_index{semantic::kInvalidIndex};
+  double frontier_probability{0.0};
+};
+
+constexpr std::size_t kExactRankedTrialTileSize = 256U;
+
+struct ExactRankedLaneWorkspace {
+  explicit ExactRankedLaneWorkspace(const ExactVariantPlan &plan)
+      : candidate_state(make_exact_sequence_state(plan)),
+        trial_states(kExactRankedTrialTileSize),
+        work_by_outcome(plan.compiled_outcomes.size()) {
+    totals.reserve(kExactRankedTrialTileSize);
+    next_frontier_head_by_trial.resize(
+        kExactRankedTrialTileSize, std::numeric_limits<std::size_t>::max());
+    conditional_totals.resize(kExactRankedTrialTileSize, 0.0);
+  }
+
+  void ensure_trials(const std::size_t lane_count) {
+    if (lane_count > kExactRankedTrialTileSize) {
+      throw std::runtime_error("ranked lane tile exceeds its fixed capacity");
     }
-    normalizers->push_back(
-        std::isfinite(normalizer) ? clamp_probability(normalizer) : 0.0);
+    totals.assign(lane_count, 0.0);
+  }
+
+  ExactSequenceState candidate_state;
+  std::vector<ExactRankedLaneState> trial_states;
+  std::vector<ExactRankedLaneFrontierEntry> frontier;
+  std::vector<ExactRankedLaneFrontierEntry> next_frontier;
+  std::vector<ExactSequenceState> states;
+  std::vector<ExactSequenceState> next_states;
+  std::size_t next_state_count{0U};
+  std::vector<std::size_t> next_frontier_head_by_trial;
+  std::vector<std::size_t> next_frontier_links;
+  std::vector<double> conditional_totals;
+  std::vector<ExactRankedWorkItem> work;
+  std::vector<std::vector<std::size_t>> work_by_outcome;
+  std::vector<double> totals;
+  std::vector<double> step_totals;
+  std::vector<double> transition_values;
+  std::vector<double> readiness_values;
+  std::vector<double> transition_normalizers;
+  std::vector<double> trigger_weights;
+};
+
+struct ExactRankedLaneWorkspacePool {
+  explicit ExactRankedLaneWorkspacePool(const std::size_t plan_count)
+      : workspaces(plan_count) {}
+
+  ExactRankedLaneWorkspace &get(
+      const std::vector<ExactVariantPlan> &plans,
+      const semantic::Index variant_index) {
+    const auto position = static_cast<std::size_t>(variant_index);
+    if (!workspaces[position]) {
+      workspaces[position] =
+          std::make_unique<ExactRankedLaneWorkspace>(plans[position]);
+    }
+    return *workspaces[position];
+  }
+
+  std::vector<std::unique_ptr<ExactRankedLaneWorkspace>> workspaces;
+};
+
+inline void reset_exact_ranked_tile(
+    const ExactVariantPlan &plan,
+    const ExactRankedLane *lanes,
+    const std::size_t lane_count,
+    const ExactCompiledTriggerState &compiled_trigger,
+    const ExactSequenceState &initial_state,
+    ExactRankedLaneWorkspace *workspace) {
+  workspace->frontier.clear();
+  workspace->next_frontier.clear();
+  workspace->next_state_count = 0U;
+  const bool fixed_weight = compiled_trigger.weight_terms.empty();
+  if (!fixed_weight) {
+    exact_compiled_trigger_state_weights_lanes(
+        plan,
+        lanes,
+        lane_count,
+        compiled_trigger,
+        &workspace->trigger_weights);
+  }
+  const auto *shared_started =
+      exact_compiled_trigger_shared_started(plan, compiled_trigger);
+  for (std::size_t lane_index = 0U;
+       lane_index < lane_count;
+       ++lane_index) {
+    auto &state = workspace->trial_states[lane_index];
+    state.trigger = ExactTriggerState{
+        fixed_weight ? compiled_trigger.fixed_weight
+                     : workspace->trigger_weights[lane_index],
+        shared_started};
+    state.trigger_active = state.trigger.weight > 0.0;
+    state.rank_pending = false;
+    state.pending_target = semantic::kInvalidIndex;
+    state.used_outcomes.assign(plan.compiled_outcomes.size(), 0U);
+    if (!state.trigger_active) {
+      continue;
+    }
+    const auto state_index = workspace->frontier.size();
+    ranked_sequence_state_slot(
+        &workspace->states, plan, state_index) = initial_state;
+    workspace->frontier.push_back(ExactRankedLaneFrontierEntry{
+        lane_index,
+        1.0,
+        static_cast<semantic::Index>(state_index)});
   }
 }
 
-inline double exact_ranked_trigger_probability(
+inline void build_exact_ranked_work(
     const ExactVariantPlan &plan,
-    const ParamView &params,
-    const int first_param_row,
-    const ExactTriggerState &trigger_state,
-    const ExactTrialView &obs,
-    ExactStepWorkspace *step_workspace) {
-  auto &used_outcomes = step_workspace->ranked_used_outcomes;
-  auto &frontier = step_workspace->ranked_frontier;
-  auto &next_frontier = step_workspace->ranked_next_frontier;
-  auto &states = step_workspace->ranked_states;
-  auto &next_states = step_workspace->ranked_next_states;
-  used_outcomes.assign(plan.compiled_outcomes.size(), 0U);
-  frontier.clear();
-  next_frontier.clear();
-  ranked_sequence_state_slot(&states, plan, 0) = step_workspace->initial_state;
-  frontier.push_back(ExactRankedFrontierEntry{1.0, 0});
-
-  for (std::size_t rank_idx = 0;
-       rank_idx < static_cast<std::size_t>(obs.rank_count);
-       ++rank_idx) {
-    const auto outcome_code = exact_trial_view_outcome_code(obs, rank_idx);
-    const auto target_outcome_index =
-        plan.outcome_index_by_code[static_cast<std::size_t>(outcome_code)];
-    const auto target_idx = static_cast<std::size_t>(target_outcome_index);
-    if (used_outcomes[target_idx] != 0U) {
-      return 0.0;
+    const ExactRankedLane *lanes,
+    const std::size_t lane_count,
+    const std::size_t rank_index,
+    ExactRankedLaneWorkspace *workspace) {
+  workspace->work.clear();
+  workspace->next_frontier.clear();
+  workspace->next_frontier_links.clear();
+  workspace->next_state_count = 0U;
+  std::fill_n(
+      workspace->next_frontier_head_by_trial.begin(),
+      lane_count,
+      std::numeric_limits<std::size_t>::max());
+  std::fill_n(
+      workspace->conditional_totals.begin(), lane_count, 0.0);
+  for (auto &group : workspace->work_by_outcome) {
+    group.clear();
+  }
+  for (const auto &entry : workspace->frontier) {
+    if (entry.trial_index < lane_count && entry.probability > 0.0) {
+      workspace->conditional_totals[entry.trial_index] += entry.probability;
     }
+  }
+  for (std::size_t lane_index = 0; lane_index < lane_count; ++lane_index) {
+    auto &state = workspace->trial_states[lane_index];
+    state.rank_pending = false;
+    if (!state.trigger_active) {
+      continue;
+    }
+    if (rank_index >=
+        static_cast<std::size_t>(
+            lanes[lane_index].observation.rank_count)) {
+      workspace->totals[lane_index] +=
+          state.trigger.weight * workspace->conditional_totals[lane_index];
+      state.trigger_active = false;
+      continue;
+    }
+    const auto outcome_code = exact_trial_view_outcome_code(
+        lanes[lane_index].observation, rank_index);
+    if (outcome_code == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(outcome_code) >=
+            plan.outcome_index_by_code.size()) {
+      state.trigger_active = false;
+      continue;
+    }
+    const auto target = plan.outcome_index_by_code[
+        static_cast<std::size_t>(outcome_code)];
+    if (target == semantic::kInvalidIndex ||
+        static_cast<std::size_t>(target) >= plan.compiled_outcomes.size()) {
+      state.trigger_active = false;
+      continue;
+    }
+    const auto target_position = static_cast<std::size_t>(target);
+    if (state.used_outcomes[target_position] != 0U) {
+      state.trigger_active = false;
+      continue;
+    }
+    state.rank_pending = true;
+    state.pending_target = target;
+    state.pending_time = exact_trial_view_rt(
+        lanes[lane_index].observation, rank_index);
+  }
+  for (const auto &entry : workspace->frontier) {
+    const auto lane_index = entry.trial_index;
+    if (lane_index >= lane_count || !(entry.probability > 0.0)) {
+      continue;
+    }
+    const auto &state = workspace->trial_states[lane_index];
+    if (!state.trigger_active || !state.rank_pending) {
+      continue;
+    }
+    const auto work_index = workspace->work.size();
+    workspace->work.push_back(ExactRankedWorkItem{
+        lane_index, entry.state_index, entry.probability});
+    workspace->work_by_outcome[
+        static_cast<std::size_t>(state.pending_target)].push_back(work_index);
+  }
+}
 
-    const auto &compiled_outcome = plan.compiled_outcomes[target_idx];
-    next_frontier.clear();
-    std::size_t next_state_count = 0;
-    for (const auto &entry : frontier) {
-      if (!(entry.probability > 0.0)) {
-        continue;
-      }
-      const auto entry_state_index =
-          static_cast<std::size_t>(entry.state_index);
-      const ExactStepDistributionView step =
-          evaluate_exact_step_distribution(
-              plan,
-              params,
-              first_param_row,
-              trigger_state,
-              states[entry_state_index],
-              target_outcome_index,
-              exact_trial_view_rt(obs, rank_idx),
-              &used_outcomes,
-              true,
-              step_workspace);
-      if (step.transition_probabilities == nullptr) {
-        continue;
-      }
-      for (std::size_t transition_idx = 0;
-           transition_idx < step.transition_probabilities->size();
-           ++transition_idx) {
+inline void evaluate_exact_ranked_work_group(
+    const ExactVariantPlan &plan,
+    const ExactRankedLane *lanes,
+    const semantic::Index target,
+    const std::vector<std::size_t> &group,
+    ExactStepLaneWorkspace *step,
+    ExactRankedLaneWorkspace *workspace) {
+  const auto target_position = static_cast<std::size_t>(target);
+  const auto &outcome = plan.compiled_outcomes[target_position];
+  auto &step_inputs = step->step_inputs;
+  for (std::size_t tile_start = 0U;
+       tile_start < group.size();
+       tile_start += kExactLaneTileSize) {
+    const auto tile_count =
+        std::min(kExactLaneTileSize, group.size() - tile_start);
+    step_inputs.clear();
+    for (std::size_t tile_lane = 0U;
+         tile_lane < tile_count;
+         ++tile_lane) {
+      const auto &work = workspace->work[group[tile_start + tile_lane]];
+      auto &trial_state = workspace->trial_states[work.trial_index];
+      step_inputs.push_back(ExactStepLaneInput{
+          &lanes[work.trial_index].params,
+          trial_state.trigger.shared_started,
+          &workspace->states[static_cast<std::size_t>(work.state_index)],
+          trial_state.pending_time,
+          &trial_state.used_outcomes});
+    }
+    evaluate_exact_step_distribution_lanes(
+        plan,
+        step_inputs.data(),
+        tile_count,
+        target,
+        true,
+        step,
+        &workspace->step_totals,
+        &workspace->transition_values,
+        &outcome.readiness_root_ids,
+        &workspace->readiness_values);
+
+    for (std::size_t transition_index = 0U;
+         transition_index < outcome.transitions.size();
+         ++transition_index) {
+      const auto &transition = outcome.transitions[transition_index];
+      const auto readiness_span =
+          outcome.transition_readiness_slots[transition_index];
+      for (std::size_t tile_lane = 0U;
+           tile_lane < tile_count;
+           ++tile_lane) {
+        const auto &work = workspace->work[group[tile_start + tile_lane]];
+        auto &trial_state = workspace->trial_states[work.trial_index];
         const double transition_probability =
-            (*step.transition_probabilities)[transition_idx];
+            workspace->transition_values[
+                transition_index * tile_count + tile_lane];
         if (!(transition_probability > 0.0)) {
           continue;
         }
-        const auto candidate_index = next_state_count++;
-        auto &candidate_state =
-            ranked_sequence_state_slot(&next_states, plan, candidate_index);
-        candidate_state = states[entry_state_index];
-        const auto &transition = compiled_outcome.transitions[transition_idx];
-        exact_sequence_ready_expr_normalizers(
-            plan,
-            transition,
-            step_workspace,
-            &step_workspace->ready_expr_normalizers);
+        const double probability =
+            work.frontier_probability * transition_probability;
+        if (!(probability > 0.0)) {
+          continue;
+        }
+        const auto &current_state = workspace->states[
+            static_cast<std::size_t>(work.state_index)];
+        workspace->candidate_state = current_state;
+
+        workspace->transition_normalizers.clear();
+        workspace->transition_normalizers.reserve(
+            static_cast<std::size_t>(readiness_span.size));
+        for (semantic::Index i = 0; i < readiness_span.size; ++i) {
+          const auto root_slot = outcome.readiness_root_slot_by_item[
+              static_cast<std::size_t>(readiness_span.offset + i)];
+          workspace->transition_normalizers.push_back(
+              root_slot == semantic::kInvalidIndex
+                  ? 0.0
+                  : workspace->readiness_values[
+                        static_cast<std::size_t>(root_slot) * tile_count +
+                        tile_lane]);
+        }
         advance_exact_sequence_state(
-            &candidate_state,
+            &workspace->candidate_state,
             transition,
-            plan,
-            exact_trial_view_rt(obs, rank_idx),
-            &step_workspace->ready_expr_normalizers);
-        append_ranked_frontier_entry(
-            &next_frontier,
-            next_states,
-            static_cast<semantic::Index>(candidate_index),
-            entry.probability * transition_probability);
+            trial_state.pending_time,
+            &workspace->transition_normalizers);
+        bool merged = false;
+        auto existing_index =
+            workspace->next_frontier_head_by_trial[work.trial_index];
+        while (existing_index != std::numeric_limits<std::size_t>::max()) {
+          auto &existing = workspace->next_frontier[existing_index];
+          if (exact_sequence_states_equal(
+                  workspace->next_states[
+                      static_cast<std::size_t>(existing.state_index)],
+                  workspace->candidate_state)) {
+            existing.probability += probability;
+            merged = true;
+            break;
+          }
+          existing_index = workspace->next_frontier_links[existing_index];
+        }
+        if (!merged) {
+          const auto candidate_index = workspace->next_state_count;
+          auto &candidate_state = ranked_sequence_state_slot(
+              &workspace->next_states, plan, candidate_index);
+          std::swap(candidate_state, workspace->candidate_state);
+          ++workspace->next_state_count;
+          const auto new_index = workspace->next_frontier.size();
+          workspace->next_frontier.push_back(
+              ExactRankedLaneFrontierEntry{
+                  work.trial_index,
+                  probability,
+                  static_cast<semantic::Index>(candidate_index)});
+          workspace->next_frontier_links.push_back(
+              workspace->next_frontier_head_by_trial[work.trial_index]);
+          workspace->next_frontier_head_by_trial[work.trial_index] = new_index;
+        }
       }
     }
-    if (next_frontier.empty()) {
-      return 0.0;
-    }
-    used_outcomes[target_idx] = 1U;
-    frontier.swap(next_frontier);
-    states.swap(next_states);
   }
-
-  double total = 0.0;
-  for (const auto &entry : frontier) {
-    total += entry.probability;
-  }
-  return total;
 }
 
-inline double exact_ranked_loglik_for_trial(const ExactVariantPlan &plan,
-                                            const ParamView &params,
-                                            const int first_param_row,
-                                            const ExactTrialView &obs,
-                                            const double min_ll,
-                                            ExactStepWorkspace *workspace = nullptr) {
-  std::optional<ExactStepWorkspace> local_workspace;
-  if (workspace == nullptr) {
-    local_workspace.emplace(plan);
-    workspace = &*local_workspace;
-  }
-  double total = 0.0;
-  for (const auto &compiled_state : plan.trigger_state_table.states) {
-    const auto trigger_state =
-        exact_compiled_trigger_state_view(
-            plan, params, first_param_row, compiled_state);
-    if (!(trigger_state.weight > 0.0)) {
+inline void finish_exact_ranked_rank(
+    const std::size_t lane_count,
+    ExactRankedLaneWorkspace *workspace) {
+  for (std::size_t lane_index = 0U;
+       lane_index < lane_count;
+       ++lane_index) {
+    auto &state = workspace->trial_states[lane_index];
+    if (!state.trigger_active || !state.rank_pending) {
       continue;
     }
-    total += trigger_state.weight *
-             exact_ranked_trigger_probability(
-                 plan,
-                 params,
-                 first_param_row,
-                 trigger_state,
-                 obs,
-                 workspace);
+    if (workspace->next_frontier_head_by_trial[lane_index] ==
+        std::numeric_limits<std::size_t>::max()) {
+      state.trigger_active = false;
+      continue;
+    }
+    state.used_outcomes[
+        static_cast<std::size_t>(state.pending_target)] = 1U;
   }
-  if (!std::isfinite(total) || !(total > 0.0)) {
-    return min_ll;
-  }
-  return std::log(total);
+  workspace->frontier.swap(workspace->next_frontier);
+  workspace->states.swap(workspace->next_states);
+  workspace->next_state_count = 0U;
 }
 
-template <typename TrialSink>
-inline void evaluate_exact_trials_cached(
-    const std::vector<semantic::Index> &variant_index_by_component_code,
-    const std::vector<ExactVariantPlan> &plans,
-    const PreparedTrialLayout &layout,
-    SEXP paramsSEXP,
-    SEXP dataSEXP,
+inline void exact_ranked_loglik_lanes(
+    const ExactVariantPlan &plan,
+    const ExactRankedLane *lanes,
+    const std::size_t lane_count,
     const double min_ll,
-    const int *ok,
-    TrialSink &&sink) {
-  const double *onset =
-      layout.onset_col >= 0
-          ? REAL(trusted_data_column(dataSEXP, layout.onset_col))
-          : nullptr;
-  ParamView params(paramsSEXP, onset);
-  const auto table = read_prepared_data_view(dataSEXP, layout);
-  const auto columns = make_exact_trial_columns(dataSEXP, layout);
-  ExactStepWorkspacePool workspace_pool(plans.size());
-  std::size_t param_row = 0;
-  for (std::size_t trial_index = 0; trial_index < layout.trials.size(); ++trial_index) {
-    const auto row = static_cast<R_xlen_t>(layout.trials[trial_index].start_row);
-    const auto variant_index =
-        variant_index_by_component_code[
-            static_cast<std::size_t>(table.component[row])];
-
-    const auto &plan = plans[static_cast<std::size_t>(variant_index)];
-    const auto leaf_count =
-        static_cast<std::size_t>(plan.program.layout.n_leaves);
-    double value = min_ll;
-    if (trial_is_selected(ok, trial_index)) {
-      const auto obs = read_exact_observation_view(
-          table,
-          variant_index_by_component_code,
-          layout,
-          trial_index,
-          columns);
-      auto &workspace = workspace_pool.get(plans, variant_index);
-      value =
-          obs.rank_count == 1
-              ? exact_loglik_for_trial(
-                    plan,
-                    params,
-                    static_cast<int>(param_row),
-                    exact_trial_view_outcome_code(obs, 0U),
-                    exact_trial_view_rt(obs, 0U),
-                    min_ll,
-                    &workspace)
-              : exact_ranked_loglik_for_trial(
-                    plan,
-                    params,
-                    static_cast<int>(param_row),
-                    obs,
-                    min_ll,
-                    &workspace);
+    ExactStepLaneWorkspace *step,
+    ExactRankedLaneWorkspace *workspace,
+    std::vector<double> *out) {
+  out->assign(lane_count, min_ll);
+  if (lane_count == 0U) {
+    return;
+  }
+  for (std::size_t tile_start = 0U;
+       tile_start < lane_count;
+       tile_start += kExactRankedTrialTileSize) {
+    const auto tile_count =
+        std::min(kExactRankedTrialTileSize, lane_count - tile_start);
+    const auto *tile_lanes = lanes + tile_start;
+    workspace->ensure_trials(tile_count);
+    std::size_t max_rank = 0U;
+    for (std::size_t lane_index = 0U;
+         lane_index < tile_count;
+         ++lane_index) {
+      max_rank = std::max(
+          max_rank,
+          static_cast<std::size_t>(
+              tile_lanes[lane_index].observation.rank_count));
     }
-    sink(trial_index, value);
-    param_row += leaf_count;
+
+    for (const auto &compiled_trigger : plan.trigger_state_table.states) {
+      reset_exact_ranked_tile(
+          plan,
+          tile_lanes,
+          tile_count,
+          compiled_trigger,
+          step->initial_state,
+          workspace);
+
+      for (std::size_t rank_index = 0U;
+           rank_index < max_rank;
+           ++rank_index) {
+        build_exact_ranked_work(
+            plan, tile_lanes, tile_count, rank_index, workspace);
+        for (std::size_t target_position = 0U;
+             target_position < workspace->work_by_outcome.size();
+             ++target_position) {
+          const auto &group = workspace->work_by_outcome[target_position];
+          if (group.empty()) {
+            continue;
+          }
+          evaluate_exact_ranked_work_group(
+              plan,
+              tile_lanes,
+              static_cast<semantic::Index>(target_position),
+              group,
+              step,
+              workspace);
+        }
+        finish_exact_ranked_rank(tile_count, workspace);
+      }
+
+      std::fill_n(
+          workspace->conditional_totals.begin(), tile_count, 0.0);
+      for (const auto &entry : workspace->frontier) {
+        if (entry.trial_index < tile_count && entry.probability > 0.0) {
+          workspace->conditional_totals[entry.trial_index] +=
+              entry.probability;
+        }
+      }
+      for (std::size_t lane_index = 0U;
+           lane_index < tile_count;
+           ++lane_index) {
+        const auto &state = workspace->trial_states[lane_index];
+        if (state.trigger_active) {
+          workspace->totals[lane_index] +=
+              state.trigger.weight *
+              workspace->conditional_totals[lane_index];
+        }
+      }
+    }
+
+    for (std::size_t lane_index = 0U;
+         lane_index < tile_count;
+         ++lane_index) {
+      const double total = workspace->totals[lane_index];
+      if (std::isfinite(total) && total > 0.0) {
+        (*out)[tile_start + lane_index] = std::log(total);
+      }
+    }
   }
 }
 

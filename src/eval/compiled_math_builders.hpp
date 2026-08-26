@@ -5,7 +5,6 @@
 #include <vector>
 
 #include "compiled_math_kernel_planning.hpp"
-#include "compiled_math_workspace.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
@@ -26,7 +25,6 @@ inline semantic::Index compiled_math_intern_node(
 
   CompiledMathNode node;
   node.kind = key.kind;
-  node.value_kind = key.value_kind;
   node.subject_id = key.subject_id;
   node.condition_id = key.condition_id;
   node.time_id = key.time_id;
@@ -36,177 +34,11 @@ inline semantic::Index compiled_math_intern_node(
   node.children = CompiledMathIndexSpan{
       child_offset,
       static_cast<semantic::Index>(key.children.size())};
-  node.cache_slot = node_id;
   node.integral_kernel_slot = compiled_math_integral_kernel_slot(program, node);
   node.constant = key.constant;
   program->nodes.push_back(node);
   program->node_index.emplace(std::move(key), node_id);
   return node_id;
-}
-
-inline void compiled_math_append_fact_index(
-    std::vector<std::vector<semantic::Index>> *by_key,
-    const semantic::Index key,
-    const semantic::Index fact_index) {
-  if (key == semantic::kInvalidIndex) {
-    return;
-  }
-  const auto pos = static_cast<std::size_t>(key);
-  if (by_key->size() <= pos) {
-    by_key->resize(pos + 1U);
-  }
-  (*by_key)[pos].push_back(fact_index);
-}
-
-inline void compiled_math_finish_fact_spans(
-    const std::vector<std::vector<semantic::Index>> &by_key,
-    std::vector<CompiledMathIndexSpan> *spans,
-    std::vector<semantic::Index> *indices) {
-  spans->assign(by_key.size(), CompiledMathIndexSpan{});
-  indices->clear();
-  for (std::size_t i = 0; i < by_key.size(); ++i) {
-    const auto offset = static_cast<semantic::Index>(indices->size());
-    indices->insert(indices->end(), by_key[i].begin(), by_key[i].end());
-    (*spans)[i] = CompiledMathIndexSpan{
-        offset,
-        static_cast<semantic::Index>(by_key[i].size())};
-  }
-}
-
-inline void compiled_math_append_pair_fact_index(
-    std::vector<CompiledMathPairFactEntry> *entries,
-    std::vector<semantic::Index> *indices,
-    const semantic::Index first,
-    const semantic::Index second,
-    const semantic::Index fact_index) {
-  if (first == semantic::kInvalidIndex ||
-      second == semantic::kInvalidIndex) {
-    return;
-  }
-  entries->push_back(CompiledMathPairFactEntry{
-      first,
-      second,
-      CompiledMathIndexSpan{
-          static_cast<semantic::Index>(indices->size()),
-          1}});
-  indices->push_back(fact_index);
-}
-
-inline void compiled_math_finish_pair_lookup(
-    CompiledMathPairFactLookup *lookup) {
-  if (lookup->entries.empty()) {
-    return;
-  }
-  std::vector<CompiledMathPairFactEntry> old_entries =
-      std::move(lookup->entries);
-  std::vector<semantic::Index> old_indices = std::move(lookup->fact_indices);
-  std::vector<std::size_t> order(old_entries.size());
-  for (std::size_t i = 0; i < order.size(); ++i) {
-    order[i] = i;
-  }
-  std::sort(
-      order.begin(),
-      order.end(),
-      [&](const auto lhs, const auto rhs) {
-        const auto &a = old_entries[lhs];
-        const auto &b = old_entries[rhs];
-        return a.first < b.first ||
-               (a.first == b.first && a.second < b.second);
-      });
-  lookup->entries.clear();
-  lookup->fact_indices.clear();
-  std::size_t order_pos = 0;
-  while (order_pos < order.size()) {
-    const auto first = old_entries[order[order_pos]].first;
-    const auto second = old_entries[order[order_pos]].second;
-    const auto offset =
-        static_cast<semantic::Index>(lookup->fact_indices.size());
-    while (order_pos < order.size() &&
-           old_entries[order[order_pos]].first == first &&
-           old_entries[order[order_pos]].second == second) {
-      const auto old_offset = static_cast<std::size_t>(
-          old_entries[order[order_pos]].facts.offset);
-      lookup->fact_indices.push_back(old_indices[old_offset]);
-      ++order_pos;
-    }
-    lookup->entries.push_back(CompiledMathPairFactEntry{
-        first,
-        second,
-        CompiledMathIndexSpan{
-            offset,
-            static_cast<semantic::Index>(
-                lookup->fact_indices.size() -
-                static_cast<std::size_t>(offset))}});
-  }
-}
-
-inline void compiled_math_build_condition_access(
-    CompiledMathCondition *condition) {
-  std::vector<std::vector<semantic::Index>> source_exact;
-  std::vector<std::vector<semantic::Index>> source_lower;
-  std::vector<std::vector<semantic::Index>> source_upper;
-  std::vector<std::vector<semantic::Index>> expr_upper;
-  condition->time_dependency_ids.clear();
-  condition->source_order_fact_lookup.entries.clear();
-  condition->source_order_fact_lookup.fact_indices.clear();
-
-  for (std::size_t i = 0; i < condition->fact_kinds.size(); ++i) {
-    const auto time_id = condition->fact_time_ids[i];
-    if (time_id != semantic::kInvalidIndex &&
-        std::find(
-            condition->time_dependency_ids.begin(),
-            condition->time_dependency_ids.end(),
-            time_id) == condition->time_dependency_ids.end()) {
-      condition->time_dependency_ids.push_back(time_id);
-    }
-    const auto kind =
-        static_cast<CompiledMathConditionFactKind>(condition->fact_kinds[i]);
-    const auto fact_index = static_cast<semantic::Index>(i);
-    switch (kind) {
-    case CompiledMathConditionFactKind::SourceExact:
-      compiled_math_append_fact_index(
-          &source_exact, condition->fact_subject_ids[i], fact_index);
-      break;
-    case CompiledMathConditionFactKind::SourceLowerBound:
-      compiled_math_append_fact_index(
-          &source_lower, condition->fact_subject_ids[i], fact_index);
-      break;
-    case CompiledMathConditionFactKind::SourceUpperBound:
-      compiled_math_append_fact_index(
-          &source_upper, condition->fact_subject_ids[i], fact_index);
-      break;
-    case CompiledMathConditionFactKind::ExprUpperBound:
-      compiled_math_append_fact_index(
-          &expr_upper, condition->fact_subject_ids[i], fact_index);
-      break;
-    case CompiledMathConditionFactKind::SourceOrder:
-      compiled_math_append_pair_fact_index(
-          &condition->source_order_fact_lookup.entries,
-          &condition->source_order_fact_lookup.fact_indices,
-          condition->fact_subject_ids[i],
-          condition->fact_aux_ids[i],
-          fact_index);
-      break;
-    }
-  }
-
-  compiled_math_finish_fact_spans(
-      source_exact,
-      &condition->source_exact_fact_spans,
-      &condition->source_exact_fact_indices);
-  compiled_math_finish_fact_spans(
-      source_lower,
-      &condition->source_lower_fact_spans,
-      &condition->source_lower_fact_indices);
-  compiled_math_finish_fact_spans(
-      source_upper,
-      &condition->source_upper_fact_spans,
-      &condition->source_upper_fact_indices);
-  compiled_math_finish_fact_spans(
-      expr_upper,
-      &condition->expr_upper_fact_spans,
-      &condition->expr_upper_fact_indices);
-  compiled_math_finish_pair_lookup(&condition->source_order_fact_lookup);
 }
 
 inline semantic::Index compiled_math_constant(CompiledMathProgram *program,
@@ -221,7 +53,7 @@ inline semantic::Index compiled_math_constant(CompiledMathProgram *program,
 inline semantic::Index compiled_math_intern_condition(
     CompiledMathProgram *program,
     CompiledMathConditionKey key) {
-  if (key.source_ids.empty() && key.fact_kinds.empty()) {
+  if (!key.impossible && key.source_ids.empty()) {
     return 0;
   }
   const auto found = program->condition_index.find(key);
@@ -234,15 +66,7 @@ inline semantic::Index compiled_math_intern_condition(
       CompiledMathCondition{
           key.impossible,
           key.source_ids,
-          key.relations,
-          key.fact_kinds,
-          key.fact_subject_ids,
-          key.fact_aux_ids,
-          key.fact_aux2_ids,
-          key.fact_time_ids,
-          key.fact_normalizer_node_ids,
-          key.fact_normalizer_root_ids});
-  compiled_math_build_condition_access(&program->conditions.back());
+          key.relations});
   program->condition_index.emplace(std::move(key), condition_id);
   return condition_id;
 }
@@ -279,34 +103,6 @@ inline void compiled_math_append_condition_to_key(
       key->relations.end(),
       condition.relations.begin(),
       condition.relations.end());
-  key->fact_kinds.insert(
-      key->fact_kinds.end(),
-      condition.fact_kinds.begin(),
-      condition.fact_kinds.end());
-  key->fact_subject_ids.insert(
-      key->fact_subject_ids.end(),
-      condition.fact_subject_ids.begin(),
-      condition.fact_subject_ids.end());
-  key->fact_aux_ids.insert(
-      key->fact_aux_ids.end(),
-      condition.fact_aux_ids.begin(),
-      condition.fact_aux_ids.end());
-  key->fact_aux2_ids.insert(
-      key->fact_aux2_ids.end(),
-      condition.fact_aux2_ids.begin(),
-      condition.fact_aux2_ids.end());
-  key->fact_time_ids.insert(
-      key->fact_time_ids.end(),
-      condition.fact_time_ids.begin(),
-      condition.fact_time_ids.end());
-  key->fact_normalizer_node_ids.insert(
-      key->fact_normalizer_node_ids.end(),
-      condition.fact_normalizer_node_ids.begin(),
-      condition.fact_normalizer_node_ids.end());
-  key->fact_normalizer_root_ids.insert(
-      key->fact_normalizer_root_ids.end(),
-      condition.fact_normalizer_root_ids.begin(),
-      condition.fact_normalizer_root_ids.end());
 }
 
 inline semantic::Index compiled_math_merge_conditions(
@@ -461,20 +257,6 @@ inline void compiled_math_append_schedule_node(
   }
   (*visited)[pos] = 1U;
   const auto &node = program.nodes[pos];
-  if (node.condition_id != 0 &&
-      node.condition_id != semantic::kInvalidIndex) {
-    const auto condition_pos = static_cast<std::size_t>(node.condition_id - 1U);
-    if (condition_pos < program.conditions.size()) {
-      const auto &condition = program.conditions[condition_pos];
-      for (const auto normalizer_node_id :
-           condition.fact_normalizer_node_ids) {
-        if (normalizer_node_id != semantic::kInvalidIndex) {
-          compiled_math_append_schedule_node(
-              program, normalizer_node_id, visited, schedule);
-        }
-      }
-    }
-  }
   for (semantic::Index i = 0; i < node.children.size; ++i) {
     const auto child_id = program.child_nodes[
         static_cast<std::size_t>(node.children.offset + i)];
@@ -512,6 +294,22 @@ inline semantic::Index compiled_math_make_root(CompiledMathProgram *program,
 
 inline void compiled_math_release_planning_fields(
     CompiledMathProgram *program) {
+  for (auto &kernel : program->integral_kernels) {
+    kernel.execution.source_value_factors = CompiledMathIndexSpan{};
+    kernel.initial_execution.source_value_factors = CompiledMathIndexSpan{};
+  }
+  for (auto &root : program->roots) {
+    root.execution.source_value_factors = CompiledMathIndexSpan{};
+    root.initial_execution.source_value_factors = CompiledMathIndexSpan{};
+  }
+  for (auto &term : program->source_product_terms) {
+    term.source_value_factors = CompiledMathIndexSpan{};
+  }
+  decltype(program->conditions)().swap(program->conditions);
+  decltype(program->source_value_factors)().swap(
+      program->source_value_factors);
+  decltype(program->source_product_channels)().swap(
+      program->source_product_channels);
   decltype(program->node_index)().swap(program->node_index);
   decltype(program->condition_index)().swap(program->condition_index);
 }

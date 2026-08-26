@@ -160,13 +160,19 @@ for (n_trials in sizes) {
     ll_emc <- benchmark$EMC2(particles$EMC2[rows, , drop = FALSE])
     ll_acc <- benchmark$AccumulatR(particles$AccumulatR[rows, , drop = FALSE])
     stopifnot(max(abs(ll_emc - ll_acc)) < 1e-7)
+    for (package in c("EMC2", "AccumulatR")) {
+      for (warmup in 1:2) {
+        benchmark[[package]](particles[[package]])
+      }
+    }
 
     for (sample in seq_len(n_samples)) {
       order <- if (sample %% 2L) c("EMC2", "AccumulatR") else c("AccumulatR", "EMC2")
       for (package in order) {
-        elapsed <- system.time(
+        timing <- system.time(
           benchmark[[package]](particles[[package]])
-        )[["elapsed"]]
+        )
+        elapsed <- timing[["elapsed"]]
         k <- k + 1L
         timings[[k]] <- data.frame(
           model = model_name,
@@ -174,6 +180,8 @@ for (n_trials in sizes) {
           package = package,
           sample = sample,
           n_particles = n,
+          user = timing[["user.self"]],
+          system = timing[["sys.self"]],
           elapsed = elapsed,
           us_per_particle = elapsed * 1e6 / n
         )

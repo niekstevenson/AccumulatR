@@ -135,6 +135,10 @@ struct ExactVariantBuildState {
   std::vector<ExactCompiledOutcomePlan> compiled_outcomes;
   ExactSequencePlan sequence;
   ExactTerminalNoResponsePlan no_response;
+  semantic::Index finite_response_density_root_id{
+      semantic::kInvalidIndex};
+  semantic::Index finite_response_survival_root_id{
+      semantic::kInvalidIndex};
   std::vector<ExactExprDistributionPlan> expr_distributions;
   ExactComplexityMetrics *complexity_metrics{nullptr};
   CompiledMathProgram compiled_math;
@@ -176,6 +180,10 @@ struct ExactVariantPlan {
   std::vector<semantic::Index> outcome_index_by_code;
   std::vector<ExactCompiledOutcomePlan> compiled_outcomes;
   ExactTerminalNoResponsePlan no_response;
+  semantic::Index finite_response_density_root_id{
+      semantic::kInvalidIndex};
+  semantic::Index finite_response_survival_root_id{
+      semantic::kInvalidIndex};
   CompiledMathProgram compiled_math;
   std::vector<semantic::Index> compiled_outcome_gate_indices;
   semantic::Index source_count{0};
@@ -192,6 +200,10 @@ inline ExactVariantPlan finalize_exact_variant_plan(
   plan.outcome_index_by_code = std::move(build.outcome_index_by_code);
   plan.compiled_outcomes = std::move(build.compiled_outcomes);
   plan.no_response = std::move(build.no_response);
+  plan.finite_response_density_root_id =
+      build.finite_response_density_root_id;
+  plan.finite_response_survival_root_id =
+      build.finite_response_survival_root_id;
   plan.compiled_math = std::move(build.compiled_math);
   plan.compiled_outcome_gate_indices =
       std::move(build.compiled_outcome_gate_indices);

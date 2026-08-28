@@ -102,6 +102,40 @@ struct ExactStepLaneWorkspace {
     return frame;
   }
 
+  void bind_initial_sources(
+      const ObservationLaneBatchView lanes,
+      const std::uint8_t *shared_started) {
+    ensure_lanes(lanes.size);
+    if (lanes.size > 0U) {
+      source_state.bind_initial_batch(lanes, shared_started);
+    }
+  }
+
+  template <typename LaneIndex>
+  CompiledLaneFrame &prepare_mapped_times(
+      const double *times,
+      const LaneIndex *source_lanes,
+      const std::size_t lane_count) {
+    ensure_lanes(lane_count);
+    auto &frame = executor.lanes.top(lane_count);
+    frame.has_sequence_history = false;
+    frame.source_lanes_identity = true;
+    const auto observed = static_cast<std::size_t>(
+        CompiledMathTimeSlot::Observed) * frame.stride;
+    std::copy_n(times, lane_count, frame.time_values.data() + observed);
+    for (std::size_t lane = 0U; lane < lane_count; ++lane) {
+      const auto source =
+          static_cast<semantic::Index>(source_lanes[lane]);
+      frame.source_lanes[lane] = source;
+      frame.source_lanes_identity =
+          frame.source_lanes_identity &&
+          source == static_cast<semantic::Index>(lane);
+    }
+    frame.time_valid[static_cast<std::size_t>(
+        CompiledMathTimeSlot::Observed)] = 1U;
+    return frame;
+  }
+
   CompiledLaneFrame &prepare_repeated_times(
       const std::size_t lane_count,
       const double *times,

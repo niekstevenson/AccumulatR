@@ -5,21 +5,11 @@
 #include <algorithm>
 #include <cmath>
 
-#include "quadrature.hpp"
-
 namespace accumulatr::eval {
 namespace detail {
 
 constexpr double kInverseSqrtTwoPi = 0.39894228040143267794;
 constexpr double kSqrtTwoPi = 2.5066282746310005024;
-
-#ifndef ACCUMULATR_PNORM_MODE
-#define ACCUMULATR_PNORM_MODE 0
-#endif
-
-#if ACCUMULATR_PNORM_MODE != 0 && ACCUMULATR_PNORM_MODE != 1
-#error "ACCUMULATR_PNORM_MODE must be 0 (R pnorm) or 1 (Hart)"
-#endif
 
 inline double clamp_probability(double x) noexcept {
   if (!std::isfinite(x)) {
@@ -38,7 +28,6 @@ inline double safe_density(double value) noexcept {
   return std::isfinite(value) && value > 0.0 ? value : 0.0;
 }
 
-#if ACCUMULATR_PNORM_MODE == 1
 constexpr double kNormalHartSplit = 7.07106781186547;
 
 inline double normal_hart_ratio(const double z) noexcept {
@@ -70,54 +59,26 @@ inline double normal_hart_tail(const double z) noexcept {
   return std::exp(-0.5 * z * z) * factor;
 }
 
-inline double normal_hart_log_tail(const double z) noexcept {
-  if (!std::isfinite(z)) {
-    return R_NegInf;
-  }
-  const double log_factor =
-      z < kNormalHartSplit
-          ? std::log(normal_hart_ratio(z))
-          : -std::log(kSqrtTwoPi * normal_hart_fraction(z));
-  return -0.5 * z * z + log_factor;
-}
-#endif
-
-// Hart's near-double rational CDF approximation is opt-in. Densities use
-// their exact closed forms in both modes.
+// Hart's near-double rational CDF approximation, matching EMC2.
 [[gnu::always_inline]] inline double normal_cdf_fast(
     const double x) noexcept {
-#if ACCUMULATR_PNORM_MODE == 0
-  return R::pnorm(x, 0.0, 1.0, 1, 0);
-#else
   if (std::isnan(x)) {
     return x;
   }
   const double z = std::fabs(x);
   const double tail = normal_hart_tail(z);
   return x <= 0.0 ? tail : 1.0 - tail;
-#endif
 }
 
 [[gnu::always_inline]] inline double normal_survival_fast(
     const double x) noexcept {
-#if ACCUMULATR_PNORM_MODE == 0
-  return R::pnorm(x, 0.0, 1.0, 0, 0);
-#else
   return normal_cdf_fast(-x);
-#endif
 }
 
 [[gnu::always_inline]] inline double normal_log_cdf_fast(
     const double x) noexcept {
-#if ACCUMULATR_PNORM_MODE == 0
-  return R::pnorm(x, 0.0, 1.0, 1, 1);
-#else
-  if (std::isnan(x)) {
-    return x;
-  }
-  return x <= 0.0 ? normal_hart_log_tail(-x)
-                  : std::log1p(-normal_hart_tail(x));
-#endif
+  const double cdf = normal_cdf_fast(x);
+  return cdf > 0.0 ? std::log(cdf) : -1e30;
 }
 
 [[gnu::always_inline]] inline double normal_pdf_fast(
@@ -225,7 +186,7 @@ inline double lba_denom(double v, double sv) noexcept {
                      A) /
           denom;
   } else {
-    cdf = normal_survival_fast((B / x - v) / sv) / denom;
+    cdf = (1.0 - normal_cdf_fast((B / x - v) / sv)) / denom;
   }
   return clamp_probability(cdf);
 }
@@ -242,14 +203,15 @@ inline double rdm_pigt0(double x, double k, double l) noexcept {
   if (k == 0.0) {
     return 0.0;
   }
-  const double sqt = std::sqrt(x);
-  const double scaled_k = std::fabs(k) / sqt;
-  const double scaled_l = std::copysign(l * sqt, k);
-  const double p1 = normal_survival_fast(scaled_k + scaled_l);
-  const double p2 = normal_survival_fast(scaled_k - scaled_l);
-  const double part =
-      std::exp(2.0 * k * l + std::log(std::max(1e-300, p1)));
-  return clamp_probability(part + p2);
+  const double lambda = k * k;
+  const double mu = k / l;
+  const double scale = std::sqrt(lambda / x);
+  const double time_ratio = x / mu;
+  const double z1 = scale * (1.0 + time_ratio);
+  const double z2 = scale * (1.0 - time_ratio);
+  return clamp_probability(
+      normal_survival_fast(z1) * std::exp(2.0 * lambda / mu) +
+      (1.0 - normal_cdf_fast(z2)));
 }
 
 inline double rdm_digt0(double x, double k, double l) noexcept {
@@ -263,7 +225,7 @@ inline double rdm_digt0(double x, double k, double l) noexcept {
 }
 
 inline double rdm_pigt(double x, double k, double l, double a,
-                       double threshold = 1e-10) noexcept {
+                       double threshold = 1e-4) noexcept {
   if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(k) ||
       !std::isfinite(l) || !std::isfinite(a)) {
     return 0.0;
@@ -310,7 +272,7 @@ inline double rdm_pigt(double x, double k, double l, double a,
 }
 
 inline double rdm_digt(double x, double k, double l, double a,
-                       double threshold = 1e-10) noexcept {
+                       double threshold = 1e-4) noexcept {
   if (!std::isfinite(x) || x <= 0.0 || !std::isfinite(k) ||
       !std::isfinite(l) || !std::isfinite(a)) {
     return 0.0;
@@ -322,8 +284,7 @@ inline double rdm_digt(double x, double k, double l, double a,
   if (l < threshold) {
     const double term = std::exp(-(k - a) * (k - a) / (2.0 * x)) -
                         std::exp(-(k + a) * (k + a) / (2.0 * x));
-    pdf = std::max(1e-300, term) * kInverseSqrtTwoPi /
-          (2.0 * a * std::sqrt(x));
+    pdf = term * kInverseSqrtTwoPi / (2.0 * a * std::sqrt(x));
   } else {
     const double sqt = std::sqrt(x);
     const double inv_sqt = 1.0 / sqt;
@@ -339,9 +300,19 @@ inline double rdm_digt(double x, double k, double l, double a,
     const double t2b =
         2.0 * normal_cdf_fast((k + a) * inv_sqt - sqt * l) - 1.0;
     const double t2 = 0.5 * l * (t2a + t2b);
-    pdf = std::max(1e-300, t1 + t2) / (2.0 * a);
+    pdf = (t1 + t2) / (2.0 * a);
   }
-  return pdf;
+  return safe_density(pdf);
+}
+
+constexpr double kRdmAEpsilon = 1e-4;
+constexpr double kRdmLEpsilon = 1e-4;
+constexpr double kRdmKMaximum = 1e6;
+
+inline double rdm_clamp_drift(const double value) noexcept {
+  return value > -kRdmLEpsilon && value < kRdmLEpsilon
+             ? (value >= 0.0 ? kRdmLEpsilon : -kRdmLEpsilon)
+             : value;
 }
 
 inline double rdm_pdf_fast(double x, double v, double B, double A,
@@ -350,13 +321,18 @@ inline double rdm_pdf_fast(double x, double v, double B, double A,
     return 0.0;
   }
   const double inv_s = 1.0 / s;
-  const double v_sc = v * inv_s;
+  const double v_sc = rdm_clamp_drift(v * inv_s);
   if (!std::isfinite(v_sc) || v_sc < 0.0) {
     return 0.0;
   }
   const double B_sc = B * inv_s;
-  const double A_sc = A * inv_s;
-  return rdm_digt(x, B_sc + 0.5 * A_sc, v_sc, 0.5 * A_sc);
+  if (A < kRdmAEpsilon) {
+    return B_sc < 0.0 || B_sc > kRdmKMaximum
+               ? 0.0
+               : safe_density(rdm_digt0(x, B_sc, v_sc));
+  }
+  const double a = std::max(kRdmAEpsilon, 0.5 * A * inv_s);
+  return rdm_digt(x, B_sc + a, v_sc, a);
 }
 
 inline double rdm_cdf_fast(double x, double v, double B, double A,
@@ -365,13 +341,18 @@ inline double rdm_cdf_fast(double x, double v, double B, double A,
     return 0.0;
   }
   const double inv_s = 1.0 / s;
-  const double v_sc = v * inv_s;
+  const double v_sc = rdm_clamp_drift(v * inv_s);
   if (!std::isfinite(v_sc) || v_sc < 0.0) {
     return 0.0;
   }
   const double B_sc = B * inv_s;
-  const double A_sc = A * inv_s;
-  return rdm_pigt(x, B_sc + 0.5 * A_sc, v_sc, 0.5 * A_sc);
+  if (A < kRdmAEpsilon) {
+    return B_sc < 0.0 || B_sc > kRdmKMaximum
+               ? 0.0
+               : clamp_probability(rdm_pigt0(x, B_sc, v_sc));
+  }
+  const double a = std::max(kRdmAEpsilon, 0.5 * A * inv_s);
+  return rdm_pigt(x, B_sc + a, v_sc, a);
 }
 
 constexpr std::uint8_t kLeafChannelPdf = 1U;
@@ -379,15 +360,6 @@ constexpr std::uint8_t kLeafChannelCdf = 2U;
 constexpr std::uint8_t kLeafChannelSurvival = 4U;
 constexpr std::uint8_t kLeafChannelAll =
     kLeafChannelPdf | kLeafChannelCdf | kLeafChannelSurvival;
-
-template <typename Fn>
-double integrate_to_infinity(Fn &&density_fn) {
-  return quadrature::integrate_tail_default(
-      [&](const double t) {
-        const double density = density_fn(t);
-        return std::isfinite(density) && density > 0.0 ? density : 0.0;
-      });
-}
 
 } // namespace detail
 } // namespace accumulatr::eval

@@ -11,7 +11,13 @@ prepare_data(structure, data_df, compress = FALSE, prep = NULL)
 
 \item{data_df}{Behavioral data. In the simplest case this contains `trials`,
 `R`, and `rt`; for multi-outcome models it can also contain `R2`, `rt2`,
-and so on.}
+and so on. Optional `LT`/`UT` columns define a truncation window. For a
+censored trial, set `rt = NA` and use `missingness = 1` for `[LT, LC)`,
+`2` for `(UC, UT]`, or `3` for their union; `R` may retain the known
+response or be `NA`. Uncensored trials use `missingness = NA`. Missing
+bounds default to `LT = LC = 0` and `UC = UT = Inf`. Codes 1--3 apply to
+the response observation, not to individual accumulators. Censoring and
+truncation are not supported for ranked observations.}
 
 \item{compress}{If `TRUE`, collapse repeated prepared trials and attach
 an `expand` index so `log_likelihood()` can return trial-level values on
@@ -27,6 +33,11 @@ An `accumulatr_data` object.
 `prepare_data()` expands trial-level observations to the accumulator layout
 expected by the compiled likelihood code and tags the result as trusted
 likelihood input.
+}
+\details{
+The likelihood for an active truncation window is conditioned on a
+  observable response in `[LT, UT]`. Censoring comparisons are strict, so
+  observations exactly at `LC` or `UC` remain uncensored.
 }
 \examples{
 spec <- race_spec()

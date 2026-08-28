@@ -32,6 +32,7 @@ inline ExactVariantPlan make_exact_variant_plan(
   compile_sequence_plan(&build, competitor_plans);
   build.compiled_outcomes =
       compile_exact_outcome_plans(&build, competitor_plans);
+  compile_finite_response_distribution_roots(&build);
   compiled_math_plan_root_executions(&build.compiled_math);
   compile_source_view_relation_tables(&build);
   compile_source_product_channel_programs(&build);

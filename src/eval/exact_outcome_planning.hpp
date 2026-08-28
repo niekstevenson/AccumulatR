@@ -185,6 +185,48 @@ inline void compile_sequence_plan(
   }
 }
 
+inline void compile_finite_response_distribution_roots(
+    ExactVariantBuildState *plan) {
+  if (plan->compiled_outcomes.empty()) {
+    return;
+  }
+  if (plan->no_response.direct_leaf_failure_product) {
+    std::vector<semantic::Index> survival_nodes;
+    survival_nodes.reserve(plan->no_response.leaf_indices.size());
+    for (const auto leaf : plan->no_response.leaf_indices) {
+      survival_nodes.push_back(compile_expr_source_node(
+          plan,
+          CompiledMathNodeKind::SourceSurvival,
+          leaf,
+          0));
+    }
+    plan->finite_response_survival_root_id = compiled_math_make_root(
+        &plan->compiled_math,
+        compiled_math_algebra_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::Product,
+            std::move(survival_nodes),
+            CompiledMathValueKind::Survival));
+    return;
+  }
+  std::vector<semantic::Index> outcome_density_nodes;
+  outcome_density_nodes.reserve(plan->compiled_outcomes.size());
+  for (const auto &outcome : plan->compiled_outcomes) {
+    const auto node_id = compiled_math_root_node_id(
+        plan->compiled_math, outcome.total_probability_root_id);
+    if (node_id != semantic::kInvalidIndex) {
+      outcome_density_nodes.push_back(node_id);
+    }
+  }
+  plan->finite_response_density_root_id = compiled_math_make_root(
+      &plan->compiled_math,
+      compiled_math_algebra_node(
+          &plan->compiled_math,
+          CompiledMathNodeKind::CleanSignedSum,
+          std::move(outcome_density_nodes),
+          CompiledMathValueKind::Density));
+}
+
 inline std::vector<ExactCompiledOutcomePlan> compile_exact_outcome_plans(
     ExactVariantBuildState *plan,
     const std::vector<ExactTargetCompetitorPlan> &competitor_plans) {

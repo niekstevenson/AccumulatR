@@ -137,6 +137,83 @@
   }, logical(1)))
 }
 
+.observation_bound_columns <- c("LT", "UT", "LC", "UC")
+
+.prepare_observation_bounds <- function(data_df, max_rank) {
+  columns <- intersect(c(.observation_bound_columns, "missingness"), names(data_df))
+  if (length(columns) == 0L) {
+    return(data_df)
+  }
+  for (column in intersect(.observation_bound_columns, columns)) {
+    value <- data_df[[column]]
+    if ((!is.numeric(value) && !(is.logical(value) && all(is.na(value)))) ||
+        any(is.nan(value))) {
+      stop(sprintf("Observation bound column '%s' must contain numbers or NA", column), call. = FALSE)
+    }
+    data_df[[column]] <- as.numeric(value)
+  }
+  if ("missingness" %in% columns) {
+    missingness <- data_df$missingness
+    if ((!is.numeric(missingness) &&
+         !(is.logical(missingness) && all(is.na(missingness)))) ||
+        any(is.nan(missingness)) ||
+        any(!is.na(missingness) & !missingness %in% 1:3)) {
+      stop("Observation column 'missingness' must contain 1, 2, 3, or NA", call. = FALSE)
+    }
+    missingness <- as.integer(missingness)
+  } else {
+    missingness <- rep.int(NA_integer_, nrow(data_df))
+  }
+
+  bound <- function(column, default) {
+    if (!column %in% names(data_df)) {
+      return(rep.int(default, nrow(data_df)))
+    }
+    out <- data_df[[column]]
+    out[is.na(out)] <- default
+    out
+  }
+  LT <- bound("LT", 0)
+  UT <- bound("UT", Inf)
+  LC <- bound("LC", 0)
+  UC <- bound("UC", Inf)
+  if (any(LT < 0 | UT < 0 | LC < 0 | UC < 0)) {
+    stop("Observation bounds must be non-negative numbers", call. = FALSE)
+  }
+  if (any(!is.finite(LT)) || any(UT <= LT)) {
+    stop("Truncation bounds require finite LT and UT > LT", call. = FALSE)
+  }
+  active_bounds <- !is.na(missingness) | LT > 0 | is.finite(UT)
+  if (max_rank > 1L && any(active_bounds)) {
+    stop("ranked observations do not support censoring or truncation", call. = FALSE)
+  }
+
+  rt <- data_df$rt
+  censored <- !is.na(missingness)
+  if (any(censored & !is.na(rt))) {
+    stop("Censored observations must have rt = NA", call. = FALSE)
+  }
+  lower <- missingness %in% c(1L, 3L)
+  upper <- missingness %in% c(2L, 3L)
+  if (any(lower & (LC < LT | LC > UT))) {
+    stop("Lower-censored observations require LT <= LC <= UT", call. = FALSE)
+  }
+  if (any(upper & (UC < LT | UC > UT))) {
+    stop("Upper-censored observations require LT <= UC <= UT", call. = FALSE)
+  }
+  if (any(missingness == 3L & LC > UC, na.rm = TRUE)) {
+    stop("Both-censored observations require LC <= UC", call. = FALSE)
+  }
+
+  exact <- !censored & !is.na(rt)
+  if (any(exact & (rt < LT | rt > UT))) {
+    stop("Exact RT values must lie inside the truncation window [LT, UT]", call. = FALSE)
+  }
+  data_df[.observation_bound_columns] <- list(LT, UT, LC, UC)
+  data_df$missingness <- missingness
+  data_df
+}
+
 .validate_trial_level_columns <- function(data_df, columns) {
   columns <- intersect(columns, names(data_df))
   if (length(columns) == 0L || nrow(data_df) <= 1L) {
@@ -242,6 +319,8 @@
     label_missing <- is.na(as.character(data_df$R[[start]]))
     rt <- data_df$rt[[start]]
     time_missing <- is.na(rt)
+    censored <- "missingness" %in% names(data_df) &&
+      !is.na(data_df$missingness[[start]])
     if (label_missing && !time_missing) {
       stop("finite RT with missing response label is not supported", call. = FALSE)
     }
@@ -254,7 +333,7 @@
       }
       next
     }
-    if (time_missing && !allow_missing_rt) {
+    if (time_missing && !allow_missing_rt && !censored) {
       stop(
         "Identity observations require a finite first-rank R/rt pair for every trial",
         call. = FALSE
@@ -312,8 +391,8 @@
 
   attr(data_df, "trials_start_rows") <- as.integer(trial_starts)
   attr(data_df, "layout_cols") <- setNames(
-    as.integer(match(c("component", "onset"), names(data_df))),
-    c("component", "onset")
+    as.integer(match(c("component", "onset", .observation_bound_columns, "missingness"), names(data_df))),
+    c("component", "onset", .observation_bound_columns, "missingness")
   )
   attr(data_df, "label_cols") <- as.integer(match(rank_names, names(data_df)))
   attr(data_df, "time_cols") <- as.integer(match(time_names, names(data_df)))
@@ -346,7 +425,9 @@
     }
     data_df$trials <- seq_len(nrow(data_df))
   }
+  data_df$rt <- as.numeric(data_df$rt)
   rank_info <- .validate_ranked_observation_columns(data_df)
+  data_df <- .prepare_observation_bounds(data_df, rank_info$max_rank)
   if (!"racer" %in% names(data_df)) {
     data_df <- .expand_accumulator_rows(structure, data_df)
   }
@@ -373,7 +454,6 @@
     }
     trial_out
   }
-  data_df$rt <- as.numeric(data_df$rt)
   outcome_levels <- unique(names(prep_eval_base$outcomes %||% list()))
   if (length(outcome_levels) == 0L) {
     stop("Model must define outcomes", call. = FALSE)
@@ -441,6 +521,8 @@
     "component",
     "R",
     "rt",
+    .observation_bound_columns,
+    "missingness",
     unlist(lapply(seq.int(2L, rank_info$max_rank), function(rank) c(paste0("R", rank), paste0("rt", rank))), use.names = FALSE)
   )
   .validate_trial_level_columns(data_df, trial_level_columns)
@@ -466,13 +548,22 @@
 #' @param structure Finalized model structure.
 #' @param data_df Behavioral data. In the simplest case this contains `trials`,
 #'   `R`, and `rt`; for multi-outcome models it can also contain `R2`, `rt2`,
-#'   and so on.
+#'   and so on. Optional `LT`/`UT` columns define a truncation window. For a
+#'   censored trial, set `rt = NA` and use `missingness = 1` for `[LT, LC)`,
+#'   `2` for `(UC, UT]`, or `3` for their union; `R` may retain the known
+#'   response or be `NA`. Uncensored trials use `missingness = NA`. Missing
+#'   bounds default to `LT = LC = 0` and `UC = UT = Inf`. Codes 1--3 apply to
+#'   the response observation, not to individual accumulators. Censoring and
+#'   truncation are not supported for ranked observations.
 #' @param compress If `TRUE`, collapse repeated prepared trials and attach
 #'   an `expand` index so `log_likelihood()` can return trial-level values on
 #'   the original trial scale.
 #'   Defaults to `FALSE`.
 #' @param prep Optional preprocessed model bundle.
 #' @return An `accumulatr_data` object.
+#' @details The likelihood for an active truncation window is conditioned on a
+#'   observable response in `[LT, UT]`. Censoring comparisons are strict, so
+#'   observations exactly at `LC` or `UC` remain uncensored.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")

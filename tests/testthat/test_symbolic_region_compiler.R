@@ -157,32 +157,32 @@ testthat::test_that("first_of expression distributions preserve cheap union case
   cases <- list(
     independent_child_union = list(
       expr = first_of("a", "b"),
-      max_roots = 11L,
-      max_nodes = 23L,
+      max_roots = 12L,
+      max_nodes = 24L,
       max_cells = 6L
     ),
     overlapping_child_union = list(
       expr = first_of(all_of("a", "g"), all_of("b", "g")),
-      max_roots = 15L,
-      max_nodes = 34L,
+      max_roots = 16L,
+      max_nodes = 35L,
       max_cells = 8L
     ),
     absorbed_union = list(
       expr = first_of(all_of("a", "g"), "g"),
-      max_roots = 6L,
-      max_nodes = 14L,
+      max_roots = 7L,
+      max_nodes = 15L,
       max_cells = 4L
     ),
     multi_child_union = list(
       expr = first_of("a", "b", "c"),
-      max_roots = 14L,
-      max_nodes = 30L,
+      max_roots = 15L,
+      max_nodes = 31L,
       max_cells = 8L
     ),
     nested_first_of = list(
       expr = first_of("a", first_of("b", "c")),
-      max_roots = 14L,
-      max_nodes = 30L,
+      max_roots = 15L,
+      max_nodes = 31L,
       max_cells = 8L
     )
   )
@@ -227,24 +227,24 @@ testthat::test_that("all_of and simple guard expression distributions stay compa
   cases <- list(
     all_of_pair = list(
       expr = all_of("a", "b"),
-      max_roots = 11L,
-      max_nodes = 24L,
+      max_roots = 12L,
+      max_nodes = 25L,
       max_integrals = 0L,
       max_depth = 0L,
       max_cells = 6L
     ),
     all_of_three = list(
       expr = all_of("a", "b", "c"),
-      max_roots = 14L,
-      max_nodes = 31L,
+      max_roots = 15L,
+      max_nodes = 32L,
       max_integrals = 0L,
       max_depth = 0L,
       max_cells = 8L
     ),
     simple_guard = list(
       expr = inhibit("a", by = "g"),
-      max_roots = 8L,
-      max_nodes = 19L,
+      max_roots = 9L,
+      max_nodes = 20L,
       max_integrals = 1L,
       max_depth = 1L,
       max_cells = 5L

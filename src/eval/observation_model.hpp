@@ -76,6 +76,7 @@ struct ComponentObservationPlan {
   std::vector<std::vector<ObservedBranch>> missing_rt_by_code;
   std::vector<ObservedBranch> finite_observed_branches;
   std::vector<ObservedBranch> missing_all_branches;
+  ObservationProbabilityPlan finite_response_plan;
   std::vector<ObservationProbabilityPlan> log_plans_by_state_code;
   std::vector<ObservationProbabilityPlan> probability_plans_by_state_code;
 };
@@ -310,8 +311,7 @@ inline ObservationProbabilityPlan make_missing_all_probability_plan(
     return make_no_response_probability_plan();
   }
   return make_complement_probability_plan(
-      make_weighted_probability_plan(
-          component_plan.finite_observed_branches));
+      component_plan.finite_response_plan);
 }
 
 inline void compile_component_observation_probability_plans(
@@ -329,6 +329,9 @@ inline void compile_component_observation_probability_plans(
   component_plan->probability_plans_by_state_code.assign(
       n_state_codes,
       make_zero_observation_plan(ObservationPlanValueKind::Probability));
+  component_plan->finite_response_plan =
+      make_weighted_probability_plan(
+          component_plan->finite_observed_branches);
   for (std::size_t observed_code = 1; observed_code < n_codes; ++observed_code) {
     const auto finite_state =
         finite_observation_state_code(static_cast<semantic::Index>(observed_code));

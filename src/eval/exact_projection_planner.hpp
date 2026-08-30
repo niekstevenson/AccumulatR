@@ -1,5 +1,8 @@
 #pragma once
 
+#include <memory>
+#include <unordered_map>
+
 #include "exact_types.hpp"
 #include "exact_region.hpp"
 #include "exact_compiled_math_lowering.hpp"
@@ -565,13 +568,110 @@ struct ExactProjectionFactor {
   ExactOrderRegionProjectionCandidate candidate;
 };
 
+struct ExactProjectionPlan;
+using ExactProjectionPlanPtr = std::shared_ptr<const ExactProjectionPlan>;
+
 struct ExactProjectionPlan {
   ExactProjectionPlanKind kind{ExactProjectionPlanKind::Terminal};
   ExactProjectionCost cost;
   ExactOrderRegionBuilder builder_after;
   std::vector<ExactProjectionFactor> factors;
-  std::vector<ExactProjectionPlan> children;
+  std::vector<ExactProjectionPlanPtr> children;
   ExactRegionCell residual;
+};
+
+struct ExactProjectionMemoKey {
+  ExactRegionCell term;
+  std::vector<semantic::Index> blocked_time_ids;
+  std::vector<semantic::Index> projected_latent_time_ids;
+  semantic::Index builder_time_id{semantic::kInvalidIndex};
+  semantic::Index relation_ops_id{0};
+
+  bool operator==(const ExactProjectionMemoKey &other) const noexcept {
+    if (term.sign != other.term.sign ||
+        term.impossible != other.term.impossible ||
+        term.atoms.size() != other.term.atoms.size() ||
+        term.equalities.size() != other.term.equalities.size() ||
+        blocked_time_ids != other.blocked_time_ids ||
+        projected_latent_time_ids != other.projected_latent_time_ids ||
+        builder_time_id != other.builder_time_id ||
+        relation_ops_id != other.relation_ops_id) {
+      return false;
+    }
+    for (std::size_t i = 0; i < term.atoms.size(); ++i) {
+      if (!exact_region_atom_equal(term.atoms[i], other.term.atoms[i])) {
+        return false;
+      }
+    }
+    for (std::size_t i = 0; i < term.equalities.size(); ++i) {
+      const auto &lhs = term.equalities[i];
+      const auto &rhs = other.term.equalities[i];
+      if (lhs.lhs_time_id != rhs.lhs_time_id ||
+          lhs.rhs_time_id != rhs.rhs_time_id ||
+          lhs.mass != rhs.mass || lhs.origin != rhs.origin) {
+        return false;
+      }
+    }
+    return true;
+  }
+};
+
+struct ExactProjectionMemoKeyHash {
+  std::size_t operator()(const ExactProjectionMemoKey &key) const noexcept {
+    std::size_t seed = std::hash<double>{}(key.term.sign);
+    combine(&seed, static_cast<std::size_t>(key.term.impossible));
+    for (const auto &atom : key.term.atoms) {
+      combine(&seed, static_cast<std::size_t>(atom.kind));
+      combine(&seed, static_cast<std::size_t>(atom.lhs.kind));
+      combine(&seed, static_cast<std::size_t>(atom.lhs.id));
+      combine(&seed, static_cast<std::size_t>(atom.rhs.kind));
+      combine(&seed, static_cast<std::size_t>(atom.rhs.id));
+      for (const auto outcome_id : atom.outcome_indices) {
+        combine(&seed, static_cast<std::size_t>(outcome_id));
+      }
+      combine(&seed, atom.outcome_indices.size());
+      combine(&seed, static_cast<std::size_t>(atom.inclusive));
+      combine(&seed, static_cast<std::size_t>(atom.strict));
+    }
+    combine(&seed, key.term.atoms.size());
+    for (const auto &equality : key.term.equalities) {
+      combine(&seed, static_cast<std::size_t>(equality.lhs_time_id));
+      combine(&seed, static_cast<std::size_t>(equality.rhs_time_id));
+      combine(&seed, static_cast<std::size_t>(equality.mass));
+      combine(&seed, static_cast<std::size_t>(equality.origin));
+    }
+    combine(&seed, key.term.equalities.size());
+    for (const auto time_id : key.blocked_time_ids) {
+      combine(&seed, static_cast<std::size_t>(time_id));
+    }
+    combine(&seed, key.blocked_time_ids.size());
+    for (const auto time_id : key.projected_latent_time_ids) {
+      combine(&seed, static_cast<std::size_t>(time_id));
+    }
+    combine(&seed, key.projected_latent_time_ids.size());
+    combine(&seed, static_cast<std::size_t>(key.builder_time_id));
+    combine(&seed, static_cast<std::size_t>(key.relation_ops_id));
+    return seed;
+  }
+
+private:
+  static void combine(std::size_t *seed, const std::size_t value) noexcept {
+    *seed ^= value + 0x9e3779b97f4a7c15ULL + (*seed << 6U) + (*seed >> 2U);
+  }
+};
+
+struct ExactProjectionMemoEntry {
+  ExactProjectionPlanPtr plan;
+  bool complete{false};
+};
+
+struct ExactProjectionPlannerState {
+  std::vector<ExactProjectionRelationOps> relation_ops;
+  std::unordered_map<
+      ExactProjectionMemoKey,
+      ExactProjectionMemoEntry,
+      ExactProjectionMemoKeyHash>
+      plans;
 };
 
 inline bool exact_order_region_contains_time_id(
@@ -1117,67 +1217,62 @@ inline ExactProjectionCost exact_projection_factor_cost(
       latent_count};
 }
 
-inline bool exact_projection_plan_cell(
+inline bool exact_projection_plan_cell_memoized(
     const ExactVariantBuildState &plan,
     ExactRegionCell term,
     std::vector<semantic::Index> blocked_time_ids,
     std::vector<semantic::Index> projected_latent_time_ids,
     const ExactProjectionRelationOps *ops,
     ExactOrderRegionBuilder builder,
-    ExactProjectionPlan *out);
+    ExactProjectionPlanPtr *out);
 
 inline bool exact_projection_candidate_better(
-    const bool have_best,
-    const ExactProjectionPlan &candidate,
-    const ExactProjectionPlan &best) {
-  return !have_best || exact_projection_cost_less(candidate.cost, best.cost);
+    const ExactProjectionPlanPtr &candidate,
+    const ExactProjectionPlanPtr &best) {
+  return candidate != nullptr &&
+         (best == nullptr ||
+          exact_projection_cost_less(candidate->cost, best->cost));
 }
 
-inline bool exact_projection_make_terminal_plan(
+inline ExactProjectionPlanPtr exact_projection_make_terminal_plan(
     ExactRegionCell term,
     const std::vector<semantic::Index> &projected_latent_time_ids,
-    ExactOrderRegionBuilder builder,
-    ExactProjectionPlan *out) {
+    const ExactOrderRegionBuilder builder) {
   exact_order_region_canonicalize_term(&term);
   if (term.impossible || term.sign == 0.0) {
-    return false;
+    return nullptr;
   }
+  auto out = std::make_shared<ExactProjectionPlan>();
   out->kind = ExactProjectionPlanKind::Terminal;
   out->residual = std::move(term);
-  out->children.clear();
-  out->factors.clear();
   out->builder_after = builder;
   out->cost =
       exact_projection_terminal_cost(
           out->residual, projected_latent_time_ids);
-  return true;
+  return out;
 }
 
-inline void exact_projection_make_zero_plan(
-    ExactOrderRegionBuilder builder,
-    ExactProjectionPlan *out) {
+inline ExactProjectionPlanPtr exact_projection_make_zero_plan(
+    const ExactOrderRegionBuilder builder) {
+  auto out = std::make_shared<ExactProjectionPlan>();
   out->kind = ExactProjectionPlanKind::Sum;
-  out->cost = ExactProjectionCost{};
   out->builder_after = builder;
-  out->factors.clear();
-  out->children.clear();
-  out->residual = ExactRegionCell{};
+  return out;
 }
 
-inline bool exact_projection_make_project_plan(
+inline ExactProjectionPlanPtr exact_projection_make_project_plan(
     const ExactVariantBuildState &plan,
     const ExactRegionCell &term,
     const ExactOrderRegionProjectionCandidate &candidate,
     const std::vector<semantic::Index> &blocked_time_ids,
     const std::vector<semantic::Index> &projected_latent_time_ids,
     const ExactProjectionRelationOps *ops,
-    ExactOrderRegionBuilder builder,
-    ExactProjectionPlan *out) {
+    const ExactOrderRegionBuilder builder) {
   auto next_term = term;
   auto next_blocked_time_ids = blocked_time_ids;
   if (!exact_projection_apply_density_projection(
           &next_term, candidate, &next_blocked_time_ids)) {
-    return false;
+    return nullptr;
   }
   auto next_projected_latent_time_ids = projected_latent_time_ids;
   exact_projection_append_latent_times(
@@ -1185,8 +1280,8 @@ inline bool exact_projection_make_project_plan(
   exact_projection_append_latent_times(
       &next_projected_latent_time_ids, candidate.bounds.upper_time_ids);
 
-  ExactProjectionPlan child;
-  if (!exact_projection_plan_cell(
+  ExactProjectionPlanPtr child;
+  if (!exact_projection_plan_cell_memoized(
           plan,
           std::move(next_term),
           std::move(next_blocked_time_ids),
@@ -1194,24 +1289,22 @@ inline bool exact_projection_make_project_plan(
           ops,
           builder,
           &child)) {
-    return false;
+    return nullptr;
   }
-  ExactProjectionFactor factor{candidate};
+  const ExactProjectionFactor factor{candidate};
+  auto out = std::make_shared<ExactProjectionPlan>();
   out->kind = ExactProjectionPlanKind::Product;
-  out->factors.clear();
   out->factors.push_back(factor);
-  out->children.clear();
   out->children.push_back(std::move(child));
-  out->residual = ExactRegionCell{};
-  out->builder_after = out->children.front().builder_after;
+  out->builder_after = out->children.front()->builder_after;
   out->cost =
       exact_projection_cost_sum(
           exact_projection_factor_cost(factor),
-          out->children.front().cost);
-  return true;
+          out->children.front()->cost);
+  return out;
 }
 
-inline bool exact_projection_make_materialized_plan(
+inline ExactProjectionPlanPtr exact_projection_make_materialized_plan(
     const ExactVariantBuildState &plan,
     const ExactRegionCell &term,
     const ExactOrderRegionExprValueFactor &factor,
@@ -1219,30 +1312,29 @@ inline bool exact_projection_make_materialized_plan(
     const std::vector<semantic::Index> &projected_latent_time_ids,
     const ExactProjectionRelationOps &ops,
     ExactOrderRegionBuilder builder,
-    ExactProjectionPlan *out) {
+    const ExactProjectionCost *upper_bound) {
   ExactOrderRegionExpr materialized;
   if (!exact_projection_materialize_relation_factor(
           plan, term, factor, ops, &builder, &materialized)) {
-    return false;
+    return nullptr;
   }
   materialized = exact_order_region_simplify(std::move(materialized));
   if (materialized.terms.empty()) {
-    exact_projection_make_zero_plan(builder, out);
-    return true;
+    return exact_projection_make_zero_plan(builder);
   }
 
+  auto out = std::make_shared<ExactProjectionPlan>();
   out->kind = ExactProjectionPlanKind::Sum;
-  out->factors.clear();
-  out->children.clear();
-  out->residual = ExactRegionCell{};
-  out->cost = ExactProjectionCost{};
   out->cost.symbolic_cells =
       static_cast<semantic::Index>(materialized.terms.size());
+  if (upper_bound != nullptr &&
+      !exact_projection_cost_less(out->cost, *upper_bound)) {
+    return nullptr;
+  }
 
-  bool have_child = false;
   for (auto child_term : materialized.terms) {
-    ExactProjectionPlan child;
-    if (!exact_projection_plan_cell(
+    ExactProjectionPlanPtr child;
+    if (!exact_projection_plan_cell_memoized(
             plan,
             std::move(child_term),
             blocked_time_ids,
@@ -1252,15 +1344,160 @@ inline bool exact_projection_make_materialized_plan(
             &child)) {
       continue;
     }
-    builder = child.builder_after;
-    out->cost = exact_projection_cost_sum(out->cost, child.cost);
+    builder = child->builder_after;
+    out->cost = exact_projection_cost_sum(out->cost, child->cost);
     out->children.push_back(std::move(child));
-    have_child = true;
+    if (upper_bound != nullptr &&
+        !exact_projection_cost_less(out->cost, *upper_bound)) {
+      return nullptr;
+    }
   }
-  if (!have_child) {
-    return false;
+  if (out->children.empty()) {
+    return nullptr;
   }
   out->builder_after = builder;
+  return out;
+}
+
+inline bool exact_projection_relation_ops_equal(
+    const ExactProjectionRelationOps &lhs,
+    const ExactProjectionRelationOps &rhs) noexcept {
+  return lhs.context_overlaps_expr == rhs.context_overlaps_expr &&
+         lhs.relation_can_collapse == rhs.relation_can_collapse &&
+         lhs.expand_relation == rhs.expand_relation;
+}
+
+inline semantic::Index exact_projection_relation_ops_id(
+    ExactProjectionPlannerState *state,
+    const ExactProjectionRelationOps *ops) {
+  if (ops == nullptr) {
+    return 0;
+  }
+  for (std::size_t i = 0; i < state->relation_ops.size(); ++i) {
+    if (exact_projection_relation_ops_equal(state->relation_ops[i], *ops)) {
+      return static_cast<semantic::Index>(i + 1U);
+    }
+  }
+  state->relation_ops.push_back(*ops);
+  return static_cast<semantic::Index>(state->relation_ops.size());
+}
+
+inline bool exact_projection_plan_cell_memoized(
+    const ExactVariantBuildState &plan,
+    ExactRegionCell term,
+    std::vector<semantic::Index> blocked_time_ids,
+    std::vector<semantic::Index> projected_latent_time_ids,
+    const ExactProjectionRelationOps *ops,
+    const ExactOrderRegionBuilder builder,
+    ExactProjectionPlanPtr *out) {
+  exact_order_region_canonicalize_term(&term);
+  std::sort(blocked_time_ids.begin(), blocked_time_ids.end());
+  blocked_time_ids.erase(
+      std::unique(blocked_time_ids.begin(), blocked_time_ids.end()),
+      blocked_time_ids.end());
+  std::sort(
+      projected_latent_time_ids.begin(), projected_latent_time_ids.end());
+  projected_latent_time_ids.erase(
+      std::unique(
+          projected_latent_time_ids.begin(),
+          projected_latent_time_ids.end()),
+      projected_latent_time_ids.end());
+
+  if (plan.projection_planner == nullptr) {
+    plan.projection_planner = std::make_shared<ExactProjectionPlannerState>();
+  }
+  auto &state = *plan.projection_planner;
+  const auto materializable_relations =
+      ops != nullptr && ops->expand_relation != nullptr
+          ? exact_projection_materializable_relation_factors(term)
+          : std::vector<ExactOrderRegionExprValueFactor>{};
+  const bool builder_neutral = materializable_relations.empty();
+  ExactProjectionMemoKey key{
+      term,
+      blocked_time_ids,
+      projected_latent_time_ids,
+      builder_neutral ? semantic::kInvalidIndex : builder.next_time_id,
+      exact_projection_relation_ops_id(&state, ops)};
+
+  const auto found = state.plans.find(key);
+  if (found != state.plans.end()) {
+    if (!found->second.complete || found->second.plan == nullptr) {
+      return false;
+    }
+    if (builder_neutral &&
+        found->second.plan->builder_after.next_time_id !=
+            builder.next_time_id) {
+      auto adapted = std::make_shared<ExactProjectionPlan>(*found->second.plan);
+      adapted->builder_after = builder;
+      *out = std::move(adapted);
+    } else {
+      *out = found->second.plan;
+    }
+    return true;
+  }
+  state.plans.emplace(key, ExactProjectionMemoEntry{});
+
+  ExactProjectionPlanPtr best;
+  if (term.impossible || term.sign == 0.0) {
+    best = exact_projection_make_zero_plan(builder);
+  } else {
+    const auto coupled_relations =
+        exact_projection_coupled_relation_factors(plan, term, ops);
+    const auto projection_candidates =
+        exact_order_region_projection_candidates(
+            plan, term, blocked_time_ids);
+    if (coupled_relations.empty()) {
+      best = exact_projection_make_terminal_plan(
+          term, projected_latent_time_ids, builder);
+    }
+
+    for (const auto &candidate : projection_candidates) {
+      const ExactProjectionFactor factor{candidate};
+      const auto lower_bound = exact_projection_factor_cost(factor);
+      if (best != nullptr &&
+          !exact_projection_cost_less(lower_bound, best->cost)) {
+        continue;
+      }
+      auto projected =
+          exact_projection_make_project_plan(
+              plan,
+              term,
+              candidate,
+              blocked_time_ids,
+              projected_latent_time_ids,
+              ops,
+              builder);
+      if (exact_projection_candidate_better(projected, best)) {
+        best = std::move(projected);
+      }
+    }
+
+    if (ops != nullptr && ops->expand_relation != nullptr) {
+      for (const auto &factor : materializable_relations) {
+        auto materialized =
+            exact_projection_make_materialized_plan(
+                plan,
+                term,
+                factor,
+                blocked_time_ids,
+                projected_latent_time_ids,
+                *ops,
+                builder,
+                best == nullptr ? nullptr : &best->cost);
+        if (exact_projection_candidate_better(materialized, best)) {
+          best = std::move(materialized);
+        }
+      }
+    }
+  }
+
+  auto stored = state.plans.find(key);
+  stored->second.plan = best;
+  stored->second.complete = true;
+  if (best == nullptr) {
+    return false;
+  }
+  *out = std::move(best);
   return true;
 }
 
@@ -1270,77 +1507,20 @@ inline bool exact_projection_plan_cell(
     std::vector<semantic::Index> blocked_time_ids,
     std::vector<semantic::Index> projected_latent_time_ids,
     const ExactProjectionRelationOps *ops,
-    ExactOrderRegionBuilder builder,
+    const ExactOrderRegionBuilder builder,
     ExactProjectionPlan *out) {
-  exact_order_region_canonicalize_term(&term);
-  if (term.impossible || term.sign == 0.0) {
-    exact_projection_make_zero_plan(builder, out);
-    return true;
-  }
-
-  ExactProjectionPlan best;
-  bool have_best = false;
-  const auto coupled_relations =
-      exact_projection_coupled_relation_factors(plan, term, ops);
-  const auto projection_candidates =
-      exact_order_region_projection_candidates(
-          plan, term, blocked_time_ids);
-  if (coupled_relations.empty()) {
-    ExactProjectionPlan terminal;
-    if (exact_projection_make_terminal_plan(
-            term, projected_latent_time_ids, builder, &terminal)) {
-      best = std::move(terminal);
-      have_best = true;
-    }
-  }
-
-  for (const auto &candidate : projection_candidates) {
-    ExactProjectionPlan projected;
-    if (!exact_projection_make_project_plan(
-            plan,
-            term,
-            candidate,
-            blocked_time_ids,
-            projected_latent_time_ids,
-            ops,
-            builder,
-            &projected)) {
-      continue;
-    }
-    if (exact_projection_candidate_better(have_best, projected, best)) {
-      best = std::move(projected);
-      have_best = true;
-    }
-  }
-
-  if (ops != nullptr && ops->expand_relation != nullptr) {
-    const auto materializable_relations =
-        exact_projection_materializable_relation_factors(term);
-    for (const auto &factor : materializable_relations) {
-      ExactProjectionPlan materialized;
-      if (!exact_projection_make_materialized_plan(
-              plan,
-              term,
-              factor,
-              blocked_time_ids,
-              projected_latent_time_ids,
-              *ops,
-              builder,
-              &materialized)) {
-        continue;
-      }
-      if (exact_projection_candidate_better(
-              have_best, materialized, best)) {
-        best = std::move(materialized);
-        have_best = true;
-      }
-    }
-  }
-
-  if (!have_best) {
+  ExactProjectionPlanPtr shared;
+  if (!exact_projection_plan_cell_memoized(
+          plan,
+          std::move(term),
+          std::move(blocked_time_ids),
+          std::move(projected_latent_time_ids),
+          ops,
+          builder,
+          &shared)) {
     return false;
   }
-  *out = std::move(best);
+  *out = *shared;
   return true;
 }
 
@@ -1631,7 +1811,7 @@ inline bool exact_projection_emit_plan_root(
     }
     return exact_projection_emit_plan_root(
         plan,
-        projection_plan.children.front(),
+        *projection_plan.children.front(),
         source_view_id,
         condition_id,
         std::move(inherited_factors),
@@ -1645,7 +1825,7 @@ inline bool exact_projection_emit_plan_root(
       semantic::Index child_root{semantic::kInvalidIndex};
       if (!exact_projection_emit_plan_root(
               plan,
-              child,
+              *child,
               source_view_id,
               condition_id,
               inherited_factors,
@@ -1787,7 +1967,7 @@ inline void exact_projection_collect_metric_cells_impl(
   }
   for (const auto &child : projection_plan.children) {
     exact_projection_collect_metric_cells_impl(
-        child, inherited_factors, out);
+        *child, inherited_factors, out);
   }
 }
 

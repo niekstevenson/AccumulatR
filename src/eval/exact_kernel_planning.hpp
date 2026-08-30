@@ -54,6 +54,52 @@ inline void compile_program_source_runtime_fields(ExactVariantBuildState *plan) 
   }
 }
 
+inline void analyze_aggregate_pool_transition_safety(
+    ExactVariantBuildState *plan) {
+  const auto &program = plan->program;
+  std::vector<std::uint8_t> used_event_sources(
+      static_cast<std::size_t>(plan->source_count), 0U);
+  for (std::size_t i = 0; i < program.expr_kind.size(); ++i) {
+    if (static_cast<semantic::ExprKind>(program.expr_kind[i]) !=
+        semantic::ExprKind::Event) {
+      continue;
+    }
+    const auto source_id = program.expr_source_ids[i];
+    if (source_id >= 0 && source_id < plan->source_count) {
+      used_event_sources[static_cast<std::size_t>(source_id)] = 1U;
+    }
+  }
+
+  const auto leaf_count = plan->program.layout.n_leaves;
+  plan->pool_transition_can_stay_aggregate.assign(
+      static_cast<std::size_t>(program.layout.n_pools), 1U);
+  for (semantic::Index pool_index = 0;
+       pool_index < program.layout.n_pools;
+       ++pool_index) {
+    const auto pool_source_id = leaf_count + pool_index;
+    const auto &pool_support =
+        plan->pool_supports[static_cast<std::size_t>(pool_index)];
+    for (semantic::Index other_source_id = 0;
+         other_source_id < plan->source_count;
+         ++other_source_id) {
+      if (other_source_id == pool_source_id ||
+          used_event_sources[static_cast<std::size_t>(other_source_id)] == 0U) {
+        continue;
+      }
+      const auto &other_support =
+          other_source_id < leaf_count
+              ? plan->leaf_supports[static_cast<std::size_t>(other_source_id)]
+              : plan->pool_supports[
+                    static_cast<std::size_t>(other_source_id - leaf_count)];
+      if (supports_overlap(pool_support, other_support)) {
+        plan->pool_transition_can_stay_aggregate[
+            static_cast<std::size_t>(pool_index)] = 0U;
+        break;
+      }
+    }
+  }
+}
+
 inline void compile_source_kernels(ExactVariantBuildState *plan) {
   const auto &program = plan->program;
   plan->source_kernels.assign(

@@ -23,6 +23,7 @@ inline ExactVariantPlan make_exact_variant_plan(
   canonicalize_exact_evaluation_program_expressions(&build.program);
   compile_exact_support_context(&build);
   compile_program_source_runtime_fields(&build);
+  analyze_aggregate_pool_transition_safety(&build);
   compile_source_kernels(&build);
   compile_exact_expr_kernels(&build);
   compile_shared_trigger_state_table(&build);

@@ -1618,31 +1618,55 @@ validation_cases <- function(include_adversarial = FALSE) {
         h.m = log(0.37), h.s = 0.17, h.t0 = 0.00,
         d.m = log(0.50), d.s = 0.18, d.t0 = 0.00
       )
-      outcomes <- list(
-        R = oracle_all(
-          oracle_inhibit(
-            oracle_first(
-              oracle_source("a"),
-              oracle_all(oracle_source("b"), oracle_source("g1"))
-            ),
-            oracle_all(oracle_source("s1"), oracle_source("g2"))
-          ),
-          oracle_source("h")
-        ),
-        D = oracle_source("d")
+      a <- acc_parts("a", params)
+      b <- acc_parts("b", params)
+      g1 <- acc_parts("g1", params)
+      s1 <- acc_parts("s1", params)
+      g2 <- acc_parts("g2", params)
+      h <- acc_parts("h", params)
+      d <- acc_parts("d", params)
+
+      reference_density <- function(t) {
+        all_cdf <- acc_cdf_scalar(t, b) * acc_cdf_scalar(t, g1)
+        all_density <-
+          acc_pdf_scalar(t, b) * acc_cdf_scalar(t, g1) +
+          acc_cdf_scalar(t, b) * acc_pdf_scalar(t, g1)
+        acc_pdf_scalar(t, a) * (1.0 - all_cdf) +
+          acc_survival_scalar(t, a) * all_density
+      }
+      inhibited_density <- function(t) {
+        blocker_cdf <- acc_cdf_scalar(t, s1) * acc_cdf_scalar(t, g2)
+        reference_density(t) * (1.0 - blocker_cdf)
+      }
+      inhibited_cdf <- function(t) {
+        integrate_scalar(inhibited_density, 0.0, t)
+      }
+
+      rt <- c(0.36, 0.50)
+      data <- data.frame(
+        trials = seq_along(rt),
+        R = rep("R", length(rt)),
+        rt = rt,
+        stringsAsFactors = FALSE
       )
-      oracle_density_rows(
-        "oracle_deep_composite_blocker",
-        structure,
-        params,
-        outcomes,
-        c("a", "b", "g1", "s1", "g2", "h", "d"),
-        "R",
-        c(0.36, 0.50),
-        1.2e-2,
-        "Deep first_of inside inhibit inside all_of checked by slow source-time oracle",
-        nodes = 6L
-      )
+      engine <- engine_density_or_mass(structure, params, data, sum = FALSE)
+
+      rows <- lapply(seq_along(rt), function(i) {
+        t <- rt[[i]]
+        manual <- acc_survival_scalar(t, d) * (
+          inhibited_density(t) * acc_cdf_scalar(t, h) +
+            inhibited_cdf(t) * acc_pdf_scalar(t, h)
+        )
+        check_row(
+          "oracle_deep_composite_blocker",
+          paste0("R_rt_", format(t, nsmall = 2)),
+          engine[[i]],
+          manual,
+          1e-6,
+          "Deep composite checked by its independent one-dimensional density formula"
+        )
+      })
+      do.call(rbind, rows)
     },
 
     oracle_pool_k2_shared_gate_guard = function() {
@@ -1668,41 +1692,73 @@ validation_cases <- function(include_adversarial = FALSE) {
         b.m = log(0.40), b.s = 0.18, b.t0 = 0.00,
         d.m = log(0.52), d.s = 0.19, d.t0 = 0.00
       )
-      outcomes <- list(
-        A = oracle_inhibit(
-          oracle_all(
-            oracle_pool(c("p1", "p2", "p3"), k = 2L),
-            oracle_source("gate")
-          ),
-          oracle_source("stop")
-        ),
-        B = oracle_all(oracle_source("b"), oracle_source("gate")),
-        D = oracle_source("d")
+      pool_parts <- lapply(c("p1", "p2", "p3"), acc_parts, params = params)
+      gate <- acc_parts("gate", params)
+      stop <- acc_parts("stop", params)
+      b <- acc_parts("b", params)
+      d <- acc_parts("d", params)
+
+      pool_cdf <- function(t) {
+        f <- vapply(pool_parts, function(p) acc_cdf_scalar(t, p), numeric(1))
+        f[[1L]] * f[[2L]] + f[[1L]] * f[[3L]] + f[[2L]] * f[[3L]] -
+          2.0 * prod(f)
+      }
+      pool_density <- function(t) {
+        f <- vapply(pool_parts, function(p) acc_cdf_scalar(t, p), numeric(1))
+        density <- vapply(pool_parts, function(p) acc_pdf_scalar(t, p), numeric(1))
+        density[[1L]] * (f[[2L]] * (1.0 - f[[3L]]) + (1.0 - f[[2L]]) * f[[3L]]) +
+          density[[2L]] * (f[[1L]] * (1.0 - f[[3L]]) + (1.0 - f[[1L]]) * f[[3L]]) +
+          density[[3L]] * (f[[1L]] * (1.0 - f[[2L]]) + (1.0 - f[[1L]]) * f[[2L]])
+      }
+
+      data <- data.frame(
+        trials = 1:2,
+        R = c("A", "D"),
+        rt = c(0.36, 0.50),
+        stringsAsFactors = FALSE
       )
+      engine <- engine_density_or_mass(structure, params, data, sum = FALSE)
+
+      rt_a <- data$rt[[1L]]
+      manual_a <- acc_survival_scalar(rt_a, stop) * acc_survival_scalar(rt_a, d) * (
+        pool_density(rt_a) * acc_cdf_scalar(rt_a, gate) * acc_survival_scalar(rt_a, b) +
+          acc_pdf_scalar(rt_a, gate) * integrate_scalar(
+            function(u) pool_density(u) * acc_survival_scalar(u, b),
+            0.0,
+            rt_a
+          )
+      )
+
+      rt_d <- data$rt[[2L]]
+      a_cdf <- integrate_scalar(
+        function(u) {
+          acc_pdf_scalar(u, stop) * pool_cdf(u) * acc_cdf_scalar(u, gate)
+        },
+        0.0,
+        rt_d
+      ) + acc_survival_scalar(rt_d, stop) *
+        pool_cdf(rt_d) * acc_cdf_scalar(rt_d, gate)
+      manual_d <- acc_pdf_scalar(rt_d, d) * (
+        acc_survival_scalar(rt_d, gate) +
+          acc_survival_scalar(rt_d, b) * (acc_cdf_scalar(rt_d, gate) - a_cdf)
+      )
+
       rbind(
-        oracle_density_rows(
+        check_row(
           "oracle_pool_k2_shared_gate_guard",
-          structure,
-          params,
-          outcomes,
-          c("p1", "p2", "p3", "gate", "stop", "b", "d"),
-          "A",
-          c(0.36),
-          1.2e-2,
-          "Top-2 pool plus shared gate and guard checked by slow source-time oracle",
-          nodes = 6L
+          "A_rt_0.36",
+          engine[[1L]],
+          manual_a,
+          1e-6,
+          "Top-2 pool target checked by order-statistic and shared-gate formulas"
         ),
-        oracle_density_rows(
+        check_row(
           "oracle_pool_k2_shared_gate_guard",
-          structure,
-          params,
-          outcomes,
-          c("p1", "p2", "p3", "gate", "stop", "b", "d"),
-          "D",
-          c(0.50),
-          1.2e-2,
-          "Top-2 pool competitor survival checked by slow source-time oracle",
-          nodes = 6L
+          "D_rt_0.50",
+          engine[[2L]],
+          manual_d,
+          5e-5,
+          "Top-2 pool competitor survival checked by a one-dimensional formula"
         )
       )
     }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <limits>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -14,6 +15,8 @@
 
 namespace accumulatr::eval {
 namespace detail {
+
+struct ExactProjectionPlannerState;
 
 struct ExactOutcomePlan {
   std::vector<ExactSymbolicTransitionScenario> scenarios;
@@ -140,6 +143,7 @@ struct ExactVariantBuildState {
   semantic::Index finite_response_survival_root_id{
       semantic::kInvalidIndex};
   std::vector<ExactExprDistributionPlan> expr_distributions;
+  mutable std::shared_ptr<ExactProjectionPlannerState> projection_planner;
   ExactComplexityMetrics *complexity_metrics{nullptr};
   CompiledMathProgram compiled_math;
   std::vector<ExactRelationTemplate> compiled_source_views;
@@ -148,6 +152,7 @@ struct ExactVariantBuildState {
   std::vector<std::vector<semantic::Index>> leaf_supports;
   std::vector<std::vector<semantic::Index>> pool_supports;
   std::vector<std::vector<semantic::Index>> expr_supports;
+  std::vector<std::uint8_t> pool_transition_can_stay_aggregate;
   std::vector<semantic::Index> compiled_outcome_gate_indices;
   semantic::Index source_count{0};
   std::vector<semantic::Index> leaf_source_ids;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Rcpp.h>
+
 #include <cmath>
 #include <cstdint>
 
@@ -23,121 +25,44 @@ inline std::uint8_t exact_source_node_fill_mask(
              : value_mask;
 }
 
-inline ExactSourceFill exact_source_finish_base_fill(
+template <std::uint8_t Mask>
+[[gnu::always_inline]] inline ExactSourceFill exact_source_finish_base_fill(
     const double base_pdf,
     const double base_cdf,
-    const double q,
-    const std::uint8_t mask) {
+    const double q) {
   const double start_probability = 1.0 - q;
   ExactSourceFill fill;
-  if ((mask & kLeafChannelPdf) != 0U) {
+  if constexpr ((Mask & kLeafChannelPdf) != 0U) {
     fill.pdf = safe_density(start_probability * base_pdf);
   }
-  if ((mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U) {
+  if constexpr ((Mask &
+                 (kLeafChannelCdf | kLeafChannelSurvival)) != 0U) {
     const double cdf = clamp_probability(start_probability * base_cdf);
-    if ((mask & kLeafChannelCdf) != 0U) {
+    if constexpr ((Mask & kLeafChannelCdf) != 0U) {
       fill.cdf = cdf;
     }
-    if ((mask & kLeafChannelSurvival) != 0U) {
+    if constexpr ((Mask & kLeafChannelSurvival) != 0U) {
       fill.survival = 1.0 - cdf;
     }
   }
   return fill;
 }
 
-inline ExactSourceFill exact_source_lognormal_leaf_fill(
-    const double meanlog,
-    const double sdlog,
-    const double q,
-    const double x,
-    const std::uint8_t mask) {
-  if (!std::isfinite(meanlog) || !std::isfinite(sdlog) ||
-      !(sdlog > 0.0)) {
-    return {};
-  }
-  const bool pdf = (mask & kLeafChannelPdf) != 0U;
-  const bool cdf = (mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
-  const double z = (std::log(x) - meanlog) / sdlog;
-  return exact_source_finish_base_fill(
-      pdf ? normal_pdf_fast(z) / (x * sdlog) : 0.0,
-      cdf ? normal_cdf_fast(z) : 0.0,
-      q,
-      mask);
-}
-
-inline ExactSourceFill exact_source_gamma_leaf_fill(
+template <std::uint8_t Mask>
+[[gnu::always_inline]] inline ExactSourceFill exact_source_gamma_leaf_fill(
     const double shape,
     const double rate,
     const double q,
-    const double x,
-    const std::uint8_t mask) {
-  const bool pdf = (mask & kLeafChannelPdf) != 0U;
-  const bool cdf = (mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
+    const double x) {
   const double scale = 1.0 / rate;
-  return exact_source_finish_base_fill(
-      pdf ? R::dgamma(x, shape, scale, 0) : 0.0,
-      cdf ? R::pgamma(x, shape, scale, 1, 0) : 0.0,
-      q,
-      mask);
-}
-
-inline ExactSourceFill exact_source_exgauss_leaf_fill(
-    const double mu,
-    const double sigma,
-    const double tau,
-    const double q,
-    const double x,
-    const std::uint8_t mask) {
-  const bool pdf = (mask & kLeafChannelPdf) != 0U;
-  const bool cdf = (mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
-  const double lower_cdf = exgauss_raw_cdf(0.0, mu, sigma, tau);
-  const double lower_survival = 1.0 - lower_cdf;
-  if (!(lower_survival > 0.0)) {
-    ExactSourceFill fill;
-    return fill;
-  }
-  return exact_source_finish_base_fill(
-      pdf ? exgauss_raw_pdf(x, mu, sigma, tau) / lower_survival : 0.0,
-      cdf ? clamp_probability(
-                (exgauss_raw_cdf(x, mu, sigma, tau) - lower_cdf) /
-                lower_survival)
+  return exact_source_finish_base_fill<Mask>(
+      (Mask & kLeafChannelPdf) != 0U
+          ? R::dgamma(x, shape, scale, 0)
           : 0.0,
-      q,
-      mask);
-}
-
-inline ExactSourceFill exact_source_lba_leaf_fill(
-    const double v,
-    const double B,
-    const double A,
-    const double sv,
-    const double q,
-    const double x,
-    const std::uint8_t mask) {
-  const bool pdf = (mask & kLeafChannelPdf) != 0U;
-  const bool cdf = (mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
-  return exact_source_finish_base_fill(
-      pdf ? lba_pdf_fast(x, v, B, A, sv) : 0.0,
-      cdf ? lba_cdf_fast(x, v, B, A, sv) : 0.0,
-      q,
-      mask);
-}
-
-inline ExactSourceFill exact_source_rdm_leaf_fill(
-    const double v,
-    const double B,
-    const double A,
-    const double s,
-    const double q,
-    const double x,
-    const std::uint8_t mask) {
-  const bool pdf = (mask & kLeafChannelPdf) != 0U;
-  const bool cdf = (mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
-  return exact_source_finish_base_fill(
-      pdf ? rdm_pdf_fast(x, v, B, A, s) : 0.0,
-      cdf ? rdm_cdf_fast(x, v, B, A, s) : 0.0,
-      q,
-      mask);
+      (Mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U
+          ? R::pgamma(x, shape, scale, 1, 0)
+          : 0.0,
+      q);
 }
 
 inline ExactSourceFill exact_source_impossible_fill(

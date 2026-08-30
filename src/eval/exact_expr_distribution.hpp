@@ -41,7 +41,8 @@ inline bool exact_expr_distribution_region(
 
 enum class ExactExprDistributionLoweringKind : std::uint8_t {
   Region = 0,
-  Independent = 1
+  Independent = 1,
+  IndependentGuard = 2
 };
 
 enum class ExactVirtualExprKind : std::uint8_t {
@@ -233,6 +234,35 @@ inline bool exact_expr_distribution_children_independent(
     }
   }
   return true;
+}
+
+inline bool exact_expr_distribution_contains_unless(
+    const ExactVariantBuildState &plan,
+    const semantic::Index expr_id) {
+  if (expr_id == semantic::kInvalidIndex ||
+      static_cast<std::size_t>(expr_id) >= plan.expr_kernels.size()) {
+    return true;
+  }
+  const auto &kernel =
+      plan.expr_kernels[static_cast<std::size_t>(expr_id)];
+  if (kernel.kind == semantic::ExprKind::Guard) {
+    if (kernel.has_unless ||
+        exact_expr_distribution_contains_unless(
+            plan, kernel.guard_ref_expr_id) ||
+        exact_expr_distribution_contains_unless(
+            plan, kernel.guard_blocker_expr_id)) {
+      return true;
+    }
+  }
+  for (semantic::Index i = 0; i < kernel.children.size; ++i) {
+    if (exact_expr_distribution_contains_unless(
+            plan,
+            plan.program.expr_args[
+                static_cast<std::size_t>(kernel.children.offset + i)])) {
+      return true;
+    }
+  }
+  return false;
 }
 
 inline ExactVirtualExpr exact_virtual_expr_true() {
@@ -563,75 +593,6 @@ inline bool exact_virtual_expr_distribution_node(
   return false;
 }
 
-inline ExactProjectionCost exact_virtual_expr_distribution_cost(
-    const ExactVirtualExpr &node,
-    const CompiledMathNodeKind value_kind) {
-  ExactProjectionCost cost;
-  if (node.kind == ExactVirtualExprKind::True ||
-      node.kind == ExactVirtualExprKind::Expr) {
-    cost.compiled_nodes = 1;
-    return cost;
-  }
-
-  const auto product_cost =
-      [&](const CompiledMathNodeKind child_value_kind,
-          const semantic::Index extra_nodes) {
-        ExactProjectionCost out;
-        out.compiled_nodes = extra_nodes;
-        for (const auto &child : node.children) {
-          out = exact_projection_cost_sum(
-              out,
-              exact_virtual_expr_distribution_cost(child, child_value_kind));
-        }
-        return out;
-      };
-
-  if (node.kind == ExactVirtualExprKind::And) {
-    if (value_kind == CompiledMathNodeKind::ExprCdf) {
-      return product_cost(CompiledMathNodeKind::ExprCdf, 1);
-    }
-    if (value_kind == CompiledMathNodeKind::ExprSurvival) {
-      return product_cost(CompiledMathNodeKind::ExprCdf, 2);
-    }
-  }
-
-  if (node.kind == ExactVirtualExprKind::Or) {
-    if (value_kind == CompiledMathNodeKind::ExprSurvival) {
-      return product_cost(CompiledMathNodeKind::ExprSurvival, 1);
-    }
-    if (value_kind == CompiledMathNodeKind::ExprCdf) {
-      return product_cost(CompiledMathNodeKind::ExprSurvival, 2);
-    }
-  }
-
-  if (value_kind == CompiledMathNodeKind::ExprDensity) {
-    const auto other_value_kind =
-        node.kind == ExactVirtualExprKind::And
-            ? CompiledMathNodeKind::ExprCdf
-            : CompiledMathNodeKind::ExprSurvival;
-    cost.compiled_nodes =
-        static_cast<semantic::Index>(1 + node.children.size());
-    for (std::size_t i = 0; i < node.children.size(); ++i) {
-      cost = exact_projection_cost_sum(
-          cost,
-          exact_virtual_expr_distribution_cost(
-              node.children[i],
-              CompiledMathNodeKind::ExprDensity));
-      for (std::size_t j = 0; j < node.children.size(); ++j) {
-        if (i == j) {
-          continue;
-        }
-        cost = exact_projection_cost_sum(
-            cost,
-            exact_virtual_expr_distribution_cost(
-                node.children[j],
-                other_value_kind));
-      }
-    }
-  }
-  return cost;
-}
-
 inline bool exact_expr_distribution_prepare_independent(
     const ExactVariantBuildState &plan,
     const ExactExprDistributionKey &key,
@@ -652,7 +613,14 @@ inline bool exact_expr_distribution_prepare_independent(
   exact_expr_distribution_collect_same_kind_children(
       plan, key.expr_id, kernel.kind, &children);
   if (children.empty() ||
-      !exact_expr_distribution_children_independent(plan, children)) {
+      !exact_expr_distribution_children_independent(plan, children) ||
+      !std::all_of(
+          children.begin(),
+          children.end(),
+          [&](const semantic::Index child) {
+            return exact_order_region_expr_relation_can_collapse(plan, child) &&
+                   !exact_expr_distribution_contains_unless(plan, child);
+          })) {
     return false;
   }
 
@@ -671,15 +639,42 @@ inline bool exact_expr_distribution_prepare_independent(
   }
   out->kind = ExactExprDistributionLoweringKind::Independent;
   out->key = key;
-  out->region = ExactOrderRegionExpr{};
-  out->cost =
-      exact_virtual_expr_distribution_cost(virtual_expr, key.value_kind);
-  out->builder =
-      exact_expr_distribution_seed_builder(key.time_id);
   out->virtual_expr = std::move(virtual_expr);
-  out->integrate_density = false;
-  out->complement_result = false;
-  out->integral_upper_time_id = semantic::kInvalidIndex;
+  return true;
+}
+
+inline bool exact_expr_distribution_prepare_independent_guard(
+    const ExactVariantBuildState &plan,
+    const ExactExprDistributionKey &key,
+    ExactExprDistributionLowering *out) {
+  if (key.condition_id != 0 || key.source_view_id != 0 ||
+      key.expr_id == semantic::kInvalidIndex ||
+      static_cast<std::size_t>(key.expr_id) >= plan.expr_kernels.size()) {
+    return false;
+  }
+  const auto &kernel =
+      plan.expr_kernels[static_cast<std::size_t>(key.expr_id)];
+  if (kernel.kind != semantic::ExprKind::Guard || kernel.has_unless) {
+    return false;
+  }
+  if (!exact_order_region_expr_relation_can_collapse(
+          plan, kernel.guard_ref_expr_id) ||
+      !exact_order_region_expr_relation_can_collapse(
+          plan, kernel.guard_blocker_expr_id) ||
+      exact_expr_distribution_contains_unless(
+          plan, kernel.guard_ref_expr_id) ||
+      exact_expr_distribution_contains_unless(
+          plan, kernel.guard_blocker_expr_id) ||
+      !exact_expr_distribution_children_independent(
+          plan,
+          std::vector<semantic::Index>{
+              kernel.guard_ref_expr_id,
+              kernel.guard_blocker_expr_id})) {
+    return false;
+  }
+
+  out->kind = ExactExprDistributionLoweringKind::IndependentGuard;
+  out->key = key;
   return true;
 }
 
@@ -698,6 +693,57 @@ inline semantic::Index compile_expr_distribution_lowering_root(
             &node)) {
       throw std::runtime_error(
           "exact independent expression distribution lowering failed");
+    }
+  } else if (lowering.kind ==
+             ExactExprDistributionLoweringKind::IndependentGuard) {
+    const auto &kernel =
+        plan->expr_kernels[static_cast<std::size_t>(lowering.key.expr_id)];
+    const auto guard_density = [&](const semantic::Index time_id) {
+      const auto ref_density =
+          compile_expr_value_node(
+              plan,
+              kernel.guard_ref_expr_id,
+              CompiledMathNodeKind::ExprDensity,
+              lowering.key.condition_id,
+              time_id,
+              lowering.key.source_view_id);
+      const auto blocker_survival =
+          compile_expr_value_node(
+              plan,
+              kernel.guard_blocker_expr_id,
+              CompiledMathNodeKind::ExprSurvival,
+              lowering.key.condition_id,
+              time_id,
+              lowering.key.source_view_id);
+      return compiled_math_algebra_node(
+          &plan->compiled_math,
+          CompiledMathNodeKind::Product,
+          std::vector<semantic::Index>{ref_density, blocker_survival},
+          CompiledMathValueKind::Density);
+    };
+    if (lowering.key.value_kind == CompiledMathNodeKind::ExprDensity) {
+      node = guard_density(lowering.key.time_id);
+    } else {
+      const auto bind_time_id =
+          lowering.key.time_id ==
+                  static_cast<semantic::Index>(CompiledMathTimeSlot::Active)
+              ? lowering.key.time_id
+              : static_cast<semantic::Index>(CompiledMathTimeSlot::Active);
+      const auto density_node = guard_density(bind_time_id);
+      node = compile_integral_zero_to_current_node(
+          plan,
+          density_node,
+          lowering.key.condition_id,
+          lowering.key.time_id,
+          lowering.key.source_view_id,
+          bind_time_id);
+      if (lowering.key.value_kind == CompiledMathNodeKind::ExprSurvival) {
+        node = compiled_math_unary_node(
+            &plan->compiled_math,
+            CompiledMathNodeKind::Complement,
+            node,
+            CompiledMathValueKind::Survival);
+      }
     }
   } else if (lowering.integrate_density) {
     const auto density_node =
@@ -772,16 +818,15 @@ inline semantic::Index compile_expr_distribution_lowering_root(
 inline semantic::Index compile_expr_distribution_root_uncached(
     ExactVariantBuildState *plan,
     const ExactExprDistributionKey &key) {
+  ExactExprDistributionLowering direct;
+  if (exact_expr_distribution_prepare_independent(*plan, key, &direct) ||
+      exact_expr_distribution_prepare_independent_guard(*plan, key, &direct)) {
+    return compile_expr_distribution_lowering_root(plan, std::move(direct));
+  }
+
   ExactExprDistributionLowering best;
   if (!exact_expr_distribution_prepare_region(*plan, key, &best)) {
     throw std::runtime_error("exact expression distribution lowering failed");
-  }
-
-  ExactExprDistributionLowering independent;
-  if (exact_expr_distribution_prepare_independent(
-          *plan, key, &independent) &&
-      exact_expr_distribution_lowering_less(independent, best)) {
-    best = std::move(independent);
   }
 
   ExactExprDistributionLowering complement_survival;

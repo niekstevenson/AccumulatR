@@ -1254,14 +1254,6 @@ inline bool exact_order_region_expr_has_positive_measure(
   return false;
 }
 
-inline bool exact_order_region_expr_is_tautology(
-    ExactOrderRegionExpr region) {
-  return !exact_order_region_expr_has_positive_measure(
-      exact_order_region_subtract_region(
-          exact_order_region_one(),
-          exact_order_region_simplify(std::move(region))));
-}
-
 inline bool exact_order_region_materialize_relation_factors(
     const ExactVariantBuildState &plan,
     ExactOrderRegionExpr region,
@@ -1635,6 +1627,17 @@ inline bool exact_order_region_transition_support_overlaps_expr(
   return false;
 }
 
+inline bool exact_order_region_competitor_can_factor(
+    const ExactVariantBuildState &plan,
+    const ExactSymbolicTransitionScenario &target,
+    const ExactCompetitorRegionPlan &competitor) {
+  return competitor.expr_root != semantic::kInvalidIndex &&
+         exact_order_region_expr_relation_can_collapse(
+             plan, competitor.expr_root) &&
+         !exact_order_region_transition_support_overlaps_expr(
+             plan, target.transition, competitor.expr_root);
+}
+
 inline bool exact_order_region_competitor_plan_non_win(
     const ExactVariantBuildState &plan,
     const ExactSymbolicTransitionScenario &target,
@@ -1643,17 +1646,17 @@ inline bool exact_order_region_competitor_plan_non_win(
     const semantic::Index target_readiness_time_id,
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
-  if (competitor.expr_root != semantic::kInvalidIndex &&
-      exact_order_region_expr_relation_can_collapse(
-          plan, competitor.expr_root) &&
-      !exact_order_region_transition_support_overlaps_expr(
-          plan, target.transition, competitor.expr_root)) {
+  if (exact_order_region_competitor_can_factor(
+          plan, target, competitor)) {
     const auto observed_time_id =
         static_cast<semantic::Index>(CompiledMathTimeSlot::Observed);
     return exact_order_region_expr_relation_factor(
-        competitor.expr_root, observed_time_id, false, true, out);
+        competitor.expr_root,
+        observed_time_id,
+        false,
+        true,
+        out);
   }
-
   ExactOrderRegionExpr non_win = exact_order_region_one();
   for (const auto &scenario : competitor.scenarios) {
     bool can_win = true;
@@ -1690,16 +1693,55 @@ inline ExactOrderRegionExpr exact_order_region_gate_non_win(
     ExactOrderRegionExpr non_win,
     const std::vector<semantic::Index> &outcome_indices) {
   if (outcome_indices.empty() ||
-      exact_order_region_expr_is_tautology(non_win)) {
+      (non_win.terms.size() == 1U &&
+       non_win.terms.front().sign == 1.0 &&
+       non_win.terms.front().atoms.empty() &&
+       non_win.terms.front().equalities.empty() &&
+       !non_win.terms.front().impossible)) {
     return non_win;
   }
-  return exact_order_region_union(
-      exact_order_region_with_outcome_used_gate(
-          exact_order_region_one(),
-          outcome_indices),
+  auto gated = exact_order_region_with_outcome_used_gate(
+      exact_order_region_one(), outcome_indices);
+  exact_order_region_append_expr(
+      &gated,
       exact_order_region_with_outcome_gate(
-          std::move(non_win),
-          outcome_indices));
+          std::move(non_win), outcome_indices));
+  return gated;
+}
+
+inline bool exact_order_region_factored_competitor_non_win(
+    const ExactVariantBuildState &plan,
+    const ExactOutcomeRegionCompileContext &outcome_context,
+    const ExactSymbolicTransitionScenario &target,
+    bool *has_factor,
+    ExactOrderRegionExpr *out) {
+  const auto observed_time_id =
+      static_cast<semantic::Index>(CompiledMathTimeSlot::Observed);
+  ExactOrderRegionExpr non_win = exact_order_region_one();
+  *has_factor = false;
+  for (const auto &competitor : outcome_context.competitors) {
+    if (!exact_order_region_competitor_can_factor(
+            plan, target, competitor)) {
+      continue;
+    }
+    ExactOrderRegionExpr competitor_non_win;
+    if (!exact_order_region_expr_relation_factor(
+            competitor.expr_root,
+            observed_time_id,
+            false,
+            true,
+            &competitor_non_win)) {
+      return false;
+    }
+    non_win = exact_order_region_conjoin(
+        std::move(non_win),
+        exact_order_region_gate_non_win(
+            std::move(competitor_non_win),
+            competitor.outcome_indices));
+    *has_factor = true;
+  }
+  *out = std::move(non_win);
+  return true;
 }
 
 inline bool exact_order_region_competitor_non_win(
@@ -1708,10 +1750,16 @@ inline bool exact_order_region_competitor_non_win(
     const ExactSymbolicTransitionScenario &target,
     const ExactOrderRegionExpr &target_branch,
     const semantic::Index target_readiness_time_id,
+    const bool factor_competitors_outside,
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
   ExactOrderRegionExpr non_win = exact_order_region_one();
   for (const auto &competitor : outcome_context.competitors) {
+    if (factor_competitors_outside &&
+        exact_order_region_competitor_can_factor(
+            plan, target, competitor)) {
+      continue;
+    }
     ExactOrderRegionExpr competitor_non_win;
     if (!exact_order_region_competitor_plan_non_win(
             plan,
@@ -2050,27 +2098,15 @@ inline bool exact_order_region_probability_root(
           &target_branches)) {
     throw std::runtime_error("exact order-region target branch lowering failed");
   }
-  std::vector<semantic::Index> terms;
-  for (const auto &branch : target_branches) {
-    ExactOrderRegionExpr non_win;
-    if (!exact_order_region_competitor_non_win(
-            *plan,
-            outcome_context,
-            formula,
-            branch.expr,
-            branch.readiness_time_id,
-            &builder,
-            &non_win)) {
-      throw std::runtime_error("exact order-region competitor non-win lowering failed");
-    }
-    auto region =
-        exact_order_region_simplify(
-            exact_order_region_conjoin(branch.expr, non_win));
-    region = exact_order_region_minimize_positive_union(std::move(region));
-    const ExactProjectionRelationOps projection_ops{
-        exact_order_region_factor_context_overlaps_expr,
-        exact_order_region_expr_relation_can_collapse,
-        exact_order_region_expand_relation_factor};
+  const ExactProjectionRelationOps projection_ops{
+      exact_order_region_factor_context_overlaps_expr,
+      exact_order_region_expr_relation_can_collapse,
+      exact_order_region_expand_relation_factor};
+  const auto append_region_nodes =
+      [&](ExactOrderRegionExpr region,
+          std::vector<semantic::Index> *nodes) -> bool {
+    region = exact_order_region_minimize_positive_union(
+        exact_order_region_simplify(std::move(region)));
     ExactOrderRegionExpr planned_metric_region;
     for (const auto &term : region.terms) {
       ExactProjectionPlan projection_plan;
@@ -2082,7 +2118,7 @@ inline bool exact_order_region_probability_root(
               &projection_ops,
               builder,
               &projection_plan)) {
-        throw std::runtime_error("exact order-region projection planning failed");
+        return false;
       }
       builder = projection_plan.builder_after;
       exact_projection_collect_metric_cells(
@@ -2096,13 +2132,66 @@ inline bool exact_order_region_probability_root(
       semantic::Index term_root{semantic::kInvalidIndex};
       if (!exact_order_region_lower_term_root(
               plan, term, 0, 0, &builder, &projection_ops, &term_root)) {
-        throw std::runtime_error("exact order-region term lowering failed");
+        return false;
       }
-      terms.push_back(
+      nodes->push_back(
           compiled_math_root_node_id(plan->compiled_math, term_root));
     }
+    return true;
+  };
+
+  const bool factor_competitors_outside = target_branches.size() > 1U;
+  bool has_factored_competitors = false;
+  semantic::Index factored_node{semantic::kInvalidIndex};
+  if (factor_competitors_outside) {
+    ExactOrderRegionExpr factored_non_win;
+    if (!exact_order_region_factored_competitor_non_win(
+            *plan,
+            outcome_context,
+            formula,
+            &has_factored_competitors,
+            &factored_non_win)) {
+      throw std::runtime_error(
+          "exact order-region factored competitor lowering failed");
+    }
+    if (has_factored_competitors) {
+      std::vector<semantic::Index> factored_terms;
+      if (!append_region_nodes(std::move(factored_non_win), &factored_terms)) {
+        throw std::runtime_error(
+            "exact order-region factored competitor planning failed");
+      }
+      factored_node =
+          factored_terms.empty()
+              ? compiled_math_constant(&plan->compiled_math, 0.0)
+              : compiled_math_algebra_node(
+                    &plan->compiled_math,
+                    CompiledMathNodeKind::CleanSignedSum,
+                    std::move(factored_terms),
+                    CompiledMathValueKind::Scalar);
+    }
   }
-  const auto node =
+
+  std::vector<semantic::Index> terms;
+  for (const auto &branch : target_branches) {
+    ExactOrderRegionExpr non_win;
+    if (!exact_order_region_competitor_non_win(
+            *plan,
+            outcome_context,
+            formula,
+            branch.expr,
+            branch.readiness_time_id,
+            factor_competitors_outside,
+            &builder,
+            &non_win)) {
+      throw std::runtime_error("exact order-region competitor non-win lowering failed");
+    }
+    if (!append_region_nodes(
+            exact_order_region_conjoin(branch.expr, non_win),
+            &terms)) {
+      throw std::runtime_error("exact order-region target planning failed");
+    }
+  }
+  auto node =
       terms.empty()
           ? compiled_math_constant(&plan->compiled_math, 0.0)
           : compiled_math_algebra_node(
@@ -2110,6 +2199,13 @@ inline bool exact_order_region_probability_root(
                 CompiledMathNodeKind::CleanSignedSum,
                 std::move(terms),
                 CompiledMathValueKind::Scalar);
+  if (has_factored_competitors) {
+    node = compiled_math_algebra_node(
+        &plan->compiled_math,
+        CompiledMathNodeKind::Product,
+        std::vector<semantic::Index>{node, factored_node},
+        CompiledMathValueKind::Scalar);
+  }
   *out_root_id = compiled_math_make_root(&plan->compiled_math, node);
   return true;
 }

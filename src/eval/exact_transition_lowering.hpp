@@ -541,14 +541,23 @@ inline std::vector<ExactSymbolicTransitionScenario> build_source_transition_scen
   const auto begin = plan.program.pool_member_offsets[pool_idx];
   const auto end = plan.program.pool_member_offsets[pool_idx + 1U];
   const auto k = plan.program.pool_k[pool_idx];
+  if (k < 1 || k > static_cast<int>(end - begin)) {
+    return out;
+  }
+  if (plan.pool_transition_can_stay_aggregate[pool_idx] != 0U) {
+    auto scenario = make_source_release_transition_scenario(source_id);
+    if (append_source_truth_constraints(
+            plan, source_id, ExactRelation::At, &scenario) &&
+        scenario_sources_supported(plan, scenario)) {
+      out.push_back(std::move(scenario));
+    }
+    return out;
+  }
   std::vector<semantic::Index> members;
   members.reserve(static_cast<std::size_t>(end - begin));
   for (semantic::Index i = begin; i < end; ++i) {
     members.push_back(
         plan.program.pool_member_source_ids[static_cast<std::size_t>(i)]);
-  }
-  if (k < 1 || k > static_cast<int>(members.size())) {
-    return out;
   }
 
   for (int active_idx = 0; active_idx < static_cast<int>(members.size()); ++active_idx) {

@@ -51,10 +51,12 @@ To run one adversarial case:
 Rscript dev/validation/run_adversarial_validation.R --case=oracle_deep_composite_blocker
 ```
 
-That runner includes intentionally expensive or currently suspicious compositions:
+That runner checks complex compositions against independent, low-dimensional formulas:
 
 1. `oracle_repeated_shared_gate_six_way`
 2. `oracle_deep_composite_blocker`
 3. `oracle_pool_k2_shared_gate_guard`
 
-The runner exits nonzero if any check fails. That is intentional. This folder is meant to expose correctness gaps, not hide them.
+The references use derived density, order-statistic, and shared-gate formulas. Fixed
+low-node tensor quadrature is not used for discontinuous event indicators. The runner
+exits nonzero if any check fails.

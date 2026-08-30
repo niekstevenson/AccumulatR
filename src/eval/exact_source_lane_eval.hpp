@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -9,43 +10,10 @@
 #include <vector>
 
 #include "compiled_lane_workspace.hpp"
-#include "exact_source_math.hpp"
+#include "exact_source_leaf_batch.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
-
-struct SourceLaneFill {
-  void resize(const std::size_t count, const std::uint8_t requested_mask) {
-    mask = requested_mask;
-    if ((mask & kLeafChannelPdf) != 0U) {
-      pdf.resize(count);
-    }
-    if ((mask & kLeafChannelCdf) != 0U) {
-      cdf.resize(count);
-    }
-    if ((mask & kLeafChannelSurvival) != 0U) {
-      survival.resize(count);
-    }
-  }
-
-  void assign(const std::size_t count, const std::uint8_t requested_mask) {
-    resize(count, requested_mask);
-    if ((mask & kLeafChannelPdf) != 0U) {
-      std::fill(pdf.begin(), pdf.end(), 0.0);
-    }
-    if ((mask & kLeafChannelCdf) != 0U) {
-      std::fill(cdf.begin(), cdf.end(), 0.0);
-    }
-    if ((mask & kLeafChannelSurvival) != 0U) {
-      std::fill(survival.begin(), survival.end(), 1.0);
-    }
-  }
-
-  std::uint8_t mask{0U};
-  std::vector<double> pdf;
-  std::vector<double> cdf;
-  std::vector<double> survival;
-};
 
 struct SourceLaneScratch {
   void ensure_items(const std::size_t count) {
@@ -98,6 +66,7 @@ struct SourceLaneScratch {
   std::vector<double> upper_bounds;
   std::vector<std::uint8_t> exact_flags;
   std::vector<double> cdf_totals;
+  PreparedSourceLeafBatch leaf_batch;
   SourceLaneFill out;
   SourceLaneFill unconditioned;
   SourceLaneFill lower;
@@ -121,37 +90,6 @@ struct SourceLaneWorkspace {
   std::vector<std::unique_ptr<SourceLaneScratch>> layers;
 };
 
-inline void source_lane_store_fill(
-    SourceLaneFill *out,
-    const std::size_t position,
-    const ExactSourceFill &fill) {
-  if ((out->mask & kLeafChannelPdf) != 0U) {
-    out->pdf[position] = fill.pdf;
-  }
-  if ((out->mask & kLeafChannelCdf) != 0U) {
-    out->cdf[position] = fill.cdf;
-  }
-  if ((out->mask & kLeafChannelSurvival) != 0U) {
-    out->survival[position] = fill.survival;
-  }
-}
-
-template <std::uint8_t Mask>
-inline void source_lane_store_fill_masked(
-    SourceLaneFill *out,
-    const std::size_t position,
-    const ExactSourceFill &fill) {
-  if constexpr ((Mask & kLeafChannelPdf) != 0U) {
-    out->pdf[position] = fill.pdf;
-  }
-  if constexpr ((Mask & kLeafChannelCdf) != 0U) {
-    out->cdf[position] = fill.cdf;
-  }
-  if constexpr ((Mask & kLeafChannelSurvival) != 0U) {
-    out->survival[position] = fill.survival;
-  }
-}
-
 inline void source_lane_fill_forced(
     SourceLaneFill *out,
     const std::size_t position,
@@ -162,23 +100,29 @@ inline void source_lane_fill_forced(
       exact_source_forced_fill(relation, out->mask));
 }
 
-template <std::uint8_t Mask,
+template <leaf::DistKind Kind,
           bool IdentitySourceLanes,
-          typename ElapsedTime,
-          typename PositiveFill>
-inline void source_lane_leaf_program_masked(
+          typename ElapsedTime>
+inline void prepare_source_leaf_batch(
     const CompiledMathSourceProductProgram &source_program,
     CompiledLaneWorkspace *workspace,
     const CompiledLaneFrame &frame,
     const semantic::Index *lanes,
     const std::size_t count,
     ElapsedTime &elapsed_time,
-    PositiveFill &positive_fill,
-    SourceLaneFill *out) {
-  const auto leaf_index = source_program.leaf_index;
-  const auto &source_state = workspace->source_state();
-  const auto leaves = source_state.leaf_batch(leaf_index);
-  for (std::size_t i = 0; i < count; ++i) {
+    PreparedSourceLeafBatch *out) {
+  constexpr auto parameter_count = static_cast<std::size_t>(
+      leaf::dist_param_count(Kind));
+  out->ensure_lanes(count);
+  const auto leaves = workspace->source_state().leaf_batch(
+      source_program.leaf_index);
+  auto *elapsed = out->elapsed();
+  auto *q = out->q();
+  std::array<double *, leaf::kMaxDistParamCount> parameters{};
+  for (std::size_t slot = 0U; slot < parameter_count; ++slot) {
+    parameters[slot] = out->parameter(slot);
+  }
+  for (std::size_t i = 0U; i < count; ++i) {
     std::size_t source_lane = i;
     if constexpr (!IdentitySourceLanes) {
       const auto frame_lane = static_cast<std::size_t>(
@@ -186,49 +130,34 @@ inline void source_lane_leaf_program_masked(
       source_lane = workspace->source_lane(frame, frame_lane);
     }
     const int physical_row = leaves.physical_row(source_lane);
-    const double x = elapsed_time(i, leaves, physical_row);
-    auto fill = exact_source_impossible_fill(Mask);
-    if (x > 0.0) {
-      fill = positive_fill(
-          leaves, source_lane, physical_row, x, Mask);
+    elapsed[i] = elapsed_time(i, leaves, physical_row);
+    q[i] = leaves.q(source_lane, physical_row);
+    for (std::size_t slot = 0U; slot < parameter_count; ++slot) {
+      parameters[slot][i] = leaves.param(slot, physical_row);
     }
-    source_lane_store_fill_masked<Mask>(out, i, fill);
   }
 }
 
-template <std::uint8_t Mask,
-          typename ElapsedTime,
-          typename PositiveFill>
-inline void source_lane_leaf_program_mapping(
+template <leaf::DistKind Kind, typename ElapsedTime>
+inline void source_lane_leaf_program_kind(
     const CompiledMathSourceProductProgram &source_program,
     CompiledLaneWorkspace *workspace,
     const CompiledLaneFrame &frame,
     const semantic::Index *lanes,
     const std::size_t count,
     ElapsedTime &elapsed_time,
-    PositiveFill &positive_fill,
+    PreparedSourceLeafBatch *leaf_batch,
     SourceLaneFill *out) {
   if (lanes == nullptr && frame.source_lanes_identity) {
-    source_lane_leaf_program_masked<Mask, true>(
-        source_program,
-        workspace,
-        frame,
-        lanes,
-        count,
-        elapsed_time,
-        positive_fill,
-        out);
+    prepare_source_leaf_batch<Kind, true>(
+        source_program, workspace, frame, lanes, count,
+        elapsed_time, leaf_batch);
   } else {
-    source_lane_leaf_program_masked<Mask, false>(
-        source_program,
-        workspace,
-        frame,
-        lanes,
-        count,
-        elapsed_time,
-        positive_fill,
-        out);
+    prepare_source_leaf_batch<Kind, false>(
+        source_program, workspace, frame, lanes, count,
+        elapsed_time, leaf_batch);
   }
+  evaluate_prepared_source_leaf_batch<Kind>(*leaf_batch, out);
 }
 
 template <typename ElapsedTime>
@@ -239,127 +168,33 @@ inline void source_lane_leaf_program(
     const semantic::Index *lanes,
     const std::size_t count,
     ElapsedTime &&elapsed_time,
+    PreparedSourceLeafBatch *leaf_batch,
     SourceLaneFill *out) {
-  const auto kind = static_cast<leaf::DistKind>(source_program.leaf_dist_kind);
-  const auto evaluate = [&](auto &&positive_fill) {
-    switch (out->mask) {
-    case kLeafChannelPdf:
-      source_lane_leaf_program_mapping<kLeafChannelPdf>(
-          source_program, workspace, frame, lanes, count,
-          elapsed_time, positive_fill, out);
-      break;
-    case kLeafChannelCdf:
-      source_lane_leaf_program_mapping<kLeafChannelCdf>(
-          source_program, workspace, frame, lanes, count,
-          elapsed_time, positive_fill, out);
-      break;
-    case kLeafChannelSurvival:
-      source_lane_leaf_program_mapping<kLeafChannelSurvival>(
-          source_program, workspace, frame, lanes, count,
-          elapsed_time, positive_fill, out);
-      break;
-    case kLeafChannelPdf | kLeafChannelCdf:
-      source_lane_leaf_program_mapping<
-          kLeafChannelPdf | kLeafChannelCdf>(
-          source_program, workspace, frame, lanes, count,
-          elapsed_time, positive_fill, out);
-      break;
-    case kLeafChannelPdf | kLeafChannelSurvival:
-      source_lane_leaf_program_mapping<
-          kLeafChannelPdf | kLeafChannelSurvival>(
-          source_program, workspace, frame, lanes, count,
-          elapsed_time, positive_fill, out);
-      break;
-    case kLeafChannelCdf | kLeafChannelSurvival:
-      source_lane_leaf_program_mapping<
-          kLeafChannelCdf | kLeafChannelSurvival>(
-          source_program, workspace, frame, lanes, count,
-          elapsed_time, positive_fill, out);
-      break;
-    case kLeafChannelAll:
-      source_lane_leaf_program_mapping<kLeafChannelAll>(
-          source_program, workspace, frame, lanes, count,
-          elapsed_time, positive_fill, out);
-      break;
-    default:
-      break;
-    }
-  };
-  switch (kind) {
+  switch (static_cast<leaf::DistKind>(source_program.leaf_dist_kind)) {
   case leaf::DistKind::Lognormal:
-    evaluate([](const ExactLaneLeafBatchView &leaf,
-                const std::size_t lane,
-                const int row,
-                const double x,
-                const std::uint8_t mask) {
-      return exact_source_lognormal_leaf_fill(
-          leaf.param(0U, row),
-          leaf.param(1U, row),
-          leaf.q(lane, row),
-          x,
-          mask);
-    });
+    source_lane_leaf_program_kind<leaf::DistKind::Lognormal>(
+        source_program, workspace, frame, lanes, count,
+        elapsed_time, leaf_batch, out);
     break;
   case leaf::DistKind::Gamma:
-    evaluate([](const ExactLaneLeafBatchView &leaf,
-                const std::size_t lane,
-                const int row,
-                const double x,
-                const std::uint8_t mask) {
-      return exact_source_gamma_leaf_fill(
-          leaf.param(0U, row),
-          leaf.param(1U, row),
-          leaf.q(lane, row),
-          x,
-          mask);
-    });
+    source_lane_leaf_program_kind<leaf::DistKind::Gamma>(
+        source_program, workspace, frame, lanes, count,
+        elapsed_time, leaf_batch, out);
     break;
   case leaf::DistKind::Exgauss:
-    evaluate([](const ExactLaneLeafBatchView &leaf,
-                const std::size_t lane,
-                const int row,
-                const double x,
-                const std::uint8_t mask) {
-      return exact_source_exgauss_leaf_fill(
-          leaf.param(0U, row),
-          leaf.param(1U, row),
-          leaf.param(2U, row),
-          leaf.q(lane, row),
-          x,
-          mask);
-    });
+    source_lane_leaf_program_kind<leaf::DistKind::Exgauss>(
+        source_program, workspace, frame, lanes, count,
+        elapsed_time, leaf_batch, out);
     break;
   case leaf::DistKind::LBA:
-    evaluate([](const ExactLaneLeafBatchView &leaf,
-                const std::size_t lane,
-                const int row,
-                const double x,
-                const std::uint8_t mask) {
-      return exact_source_lba_leaf_fill(
-          leaf.param(0U, row),
-          leaf.param(1U, row),
-          leaf.param(2U, row),
-          leaf.param(3U, row),
-          leaf.q(lane, row),
-          x,
-          mask);
-    });
+    source_lane_leaf_program_kind<leaf::DistKind::LBA>(
+        source_program, workspace, frame, lanes, count,
+        elapsed_time, leaf_batch, out);
     break;
   case leaf::DistKind::RDM:
-    evaluate([](const ExactLaneLeafBatchView &leaf,
-                const std::size_t lane,
-                const int row,
-                const double x,
-                const std::uint8_t mask) {
-      return exact_source_rdm_leaf_fill(
-          leaf.param(0U, row),
-          leaf.param(1U, row),
-          leaf.param(2U, row),
-          leaf.param(3U, row),
-          leaf.q(lane, row),
-          x,
-          mask);
-    });
+    source_lane_leaf_program_kind<leaf::DistKind::RDM>(
+        source_program, workspace, frame, lanes, count,
+        elapsed_time, leaf_batch, out);
     break;
   }
 }
@@ -674,6 +509,7 @@ inline SourceLaneFill &evaluate_onset_source_program_lanes(
                  source_program.leaf_onset_lag -
                  leaf.t0(row);
         },
+        &scratch.leaf_batch,
         &scratch.shifted);
     for (std::size_t child = 0; child < child_count; ++child) {
       const double onset_density = scratch.exact_flags[child] != 0U
@@ -1002,6 +838,7 @@ inline SourceLaneFill &evaluate_source_program_lanes(
             const int row) {
           return times[i] - leaf.onset(row) - leaf.t0(row);
         },
+        &scratch.leaf_batch,
         &scratch.out);
     return scratch.out;
   case CompiledMathSourceProductProgramKind::ExactGate: {

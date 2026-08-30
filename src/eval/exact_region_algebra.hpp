@@ -54,6 +54,10 @@ struct ExactOrderRegionAxisSegment {
   bool upper_inclusive{false};
 };
 
+inline bool exact_order_region_same_canonical_constraints(
+    const ExactRegionCell &lhs,
+    const ExactRegionCell &rhs);
+
 inline bool exact_order_region_single_adjacent_interval_for_time(
     const ExactRegionCell &term,
     const semantic::Index exact_time_id,
@@ -564,7 +568,7 @@ inline bool exact_order_region_try_merge_axis_partition_step(
         exact_order_region_axis_segment_rest(*lhs, lhs_segment);
     auto rhs_rest =
         exact_order_region_axis_segment_rest(*rhs, rhs_segment);
-    if (!exact_order_region_same_constraints(lhs_rest, rhs_rest)) {
+    if (!exact_order_region_same_canonical_constraints(lhs_rest, rhs_rest)) {
       continue;
     }
     ExactOrderRegionAxisSegment merged;
@@ -603,15 +607,56 @@ inline std::vector<ExactRegionEquality> exact_region_constraint_equalities(
   return out;
 }
 
-inline bool exact_order_region_same_constraints(
+inline bool exact_order_region_same_canonical_constraints(
     const ExactRegionCell &lhs,
     const ExactRegionCell &rhs) {
-  auto lhs_term = lhs;
-  auto rhs_term = rhs;
-  exact_order_region_canonicalize_term(&lhs_term);
-  exact_order_region_canonicalize_term(&rhs_term);
-  const auto lhs_closure = exact_order_region_build_time_closure(lhs_term);
-  const auto rhs_closure = exact_order_region_build_time_closure(rhs_term);
+  if (lhs.impossible != rhs.impossible) {
+    return false;
+  }
+  auto lhs_atom = lhs.atoms.begin();
+  auto rhs_atom = rhs.atoms.begin();
+  const auto skip_orders = [](auto *it, const auto end) {
+    while (*it != end &&
+           (**it).kind == ExactRegionAtomKind::TimeOrder) {
+      ++(*it);
+    }
+  };
+  while (true) {
+    skip_orders(&lhs_atom, lhs.atoms.end());
+    skip_orders(&rhs_atom, rhs.atoms.end());
+    const bool lhs_done = lhs_atom == lhs.atoms.end();
+    const bool rhs_done = rhs_atom == rhs.atoms.end();
+    if (lhs_done || rhs_done) {
+      if (lhs_done != rhs_done) {
+        return false;
+      }
+      break;
+    }
+    if (!exact_region_atom_equal(*lhs_atom, *rhs_atom)) {
+      return false;
+    }
+    ++lhs_atom;
+    ++rhs_atom;
+  }
+
+  const auto lhs_equalities = exact_region_constraint_equalities(lhs);
+  const auto rhs_equalities = exact_region_constraint_equalities(rhs);
+  if (lhs_equalities.size() != rhs_equalities.size() ||
+      !std::equal(
+          lhs_equalities.begin(),
+          lhs_equalities.end(),
+          rhs_equalities.begin(),
+          [](const auto &a, const auto &b) {
+            return a.lhs_time_id == b.lhs_time_id &&
+                   a.rhs_time_id == b.rhs_time_id &&
+                   a.mass == b.mass &&
+                   a.origin == b.origin;
+          })) {
+    return false;
+  }
+
+  const auto lhs_closure = exact_order_region_build_time_closure(lhs);
+  const auto rhs_closure = exact_order_region_build_time_closure(rhs);
   const auto lhs_orders =
       lhs_closure.impossible
           ? std::vector<ExactOrderRegionTimeOrder>{}
@@ -620,47 +665,7 @@ inline bool exact_order_region_same_constraints(
       rhs_closure.impossible
           ? std::vector<ExactOrderRegionTimeOrder>{}
           : exact_order_region_canonical_time_orders(rhs_closure);
-  auto lhs_atoms = lhs_term.atoms;
-  auto rhs_atoms = rhs_term.atoms;
-  const auto lhs_equalities =
-      exact_region_constraint_equalities(lhs_term);
-  const auto rhs_equalities =
-      exact_region_constraint_equalities(rhs_term);
-  lhs_atoms.erase(
-      std::remove_if(
-          lhs_atoms.begin(),
-          lhs_atoms.end(),
-          [](const ExactRegionAtom &atom) {
-            return atom.kind == ExactRegionAtomKind::TimeOrder;
-          }),
-      lhs_atoms.end());
-  rhs_atoms.erase(
-      std::remove_if(
-          rhs_atoms.begin(),
-          rhs_atoms.end(),
-          [](const ExactRegionAtom &atom) {
-            return atom.kind == ExactRegionAtomKind::TimeOrder;
-          }),
-      rhs_atoms.end());
-  return lhs_term.impossible == rhs_term.impossible &&
-         lhs_atoms.size() == rhs_atoms.size() &&
-         lhs_orders.size() == rhs_orders.size() &&
-         lhs_equalities.size() == rhs_equalities.size() &&
-         std::equal(
-             lhs_atoms.begin(),
-             lhs_atoms.end(),
-             rhs_atoms.begin(),
-             exact_region_atom_equal) &&
-         std::equal(
-             lhs_equalities.begin(),
-             lhs_equalities.end(),
-             rhs_equalities.begin(),
-             [](const auto &a, const auto &b) {
-               return a.lhs_time_id == b.lhs_time_id &&
-                      a.rhs_time_id == b.rhs_time_id &&
-                      a.mass == b.mass &&
-                      a.origin == b.origin;
-             }) &&
+  return lhs_orders.size() == rhs_orders.size() &&
          std::equal(
              lhs_orders.begin(), lhs_orders.end(),
              rhs_orders.begin(),
@@ -669,6 +674,16 @@ inline bool exact_order_region_same_constraints(
                       a.after_time_id == b.after_time_id &&
                       a.strict == b.strict;
              });
+}
+
+inline bool exact_order_region_same_constraints(
+    const ExactRegionCell &lhs,
+    const ExactRegionCell &rhs) {
+  auto lhs_term = lhs;
+  auto rhs_term = rhs;
+  exact_order_region_canonicalize_term(&lhs_term);
+  exact_order_region_canonicalize_term(&rhs_term);
+  return exact_order_region_same_canonical_constraints(lhs_term, rhs_term);
 }
 
 inline ExactOrderRegionExpr exact_order_region_simplify(
@@ -716,6 +731,32 @@ inline std::vector<ExactRegionAtom> exact_order_region_density_atoms(
       std::unique(atoms.begin(), atoms.end(), exact_region_atom_equal),
       atoms.end());
   return atoms;
+}
+
+inline bool exact_order_region_same_density_atoms(
+    const ExactRegionCell &lhs,
+    const ExactRegionCell &rhs) {
+  auto lhs_atom = lhs.atoms.begin();
+  auto rhs_atom = rhs.atoms.begin();
+  const auto advance = [](auto *it, const auto end) {
+    while (*it != end && exact_region_atom_boolean(**it)) {
+      ++(*it);
+    }
+  };
+  while (true) {
+    advance(&lhs_atom, lhs.atoms.end());
+    advance(&rhs_atom, rhs.atoms.end());
+    const bool lhs_done = lhs_atom == lhs.atoms.end();
+    const bool rhs_done = rhs_atom == rhs.atoms.end();
+    if (lhs_done || rhs_done) {
+      return lhs_done && rhs_done;
+    }
+    if (!exact_region_atom_equal(*lhs_atom, *rhs_atom)) {
+      return false;
+    }
+    ++lhs_atom;
+    ++rhs_atom;
+  }
 }
 
 inline void exact_order_region_append_atom(
@@ -827,7 +868,7 @@ inline bool exact_order_region_try_merge_boolean_partition_side(
     exact_order_region_append_atom_complement(&complement, atom);
     exact_order_region_canonicalize_term(&complement);
     if (complement.impossible ||
-        !exact_order_region_same_constraints(complement, *rhs)) {
+        !exact_order_region_same_canonical_constraints(complement, *rhs)) {
       continue;
     }
 
@@ -842,31 +883,16 @@ inline bool exact_order_region_try_merge_boolean_partition_side(
 inline bool exact_order_region_try_merge_boolean_partition_step(
     ExactRegionCell *lhs,
     ExactRegionCell *rhs) {
-  if (lhs->sign != rhs->sign || lhs->impossible || rhs->impossible) {
+  if (lhs->sign != rhs->sign || lhs->impossible || rhs->impossible ||
+      !exact_order_region_same_density_atoms(*lhs, *rhs)) {
     return false;
   }
-  return exact_order_region_try_merge_boolean_partition_side(lhs, rhs) ||
-         exact_order_region_try_merge_boolean_partition_side(rhs, lhs);
-}
-
-inline bool exact_order_region_try_minimize_union_step(
-    std::vector<ExactRegionCell> *terms,
-    const bool allow_density_segments) {
-  for (std::size_t i = 0; i < terms->size(); ++i) {
-    if ((*terms)[i].sign == 0.0) {
-      continue;
-    }
-    for (std::size_t j = 0; j < terms->size(); ++j) {
-      if (i == j || (*terms)[j].sign == 0.0) {
-        continue;
-      }
-      if (exact_order_region_try_merge_boolean_partition_step(
-              &(*terms)[i], &(*terms)[j]) ||
-          exact_order_region_try_merge_axis_partition_step(
-              &(*terms)[i], &(*terms)[j], allow_density_segments)) {
-        return true;
-      }
-    }
+  if (exact_order_region_try_merge_boolean_partition_side(lhs, rhs)) {
+    return true;
+  }
+  if (exact_order_region_try_merge_boolean_partition_side(rhs, lhs)) {
+    std::swap(*lhs, *rhs);
+    return true;
   }
   return false;
 }
@@ -874,8 +900,25 @@ inline bool exact_order_region_try_minimize_union_step(
 inline void exact_order_region_minimize_union_cells(
     std::vector<ExactRegionCell> *terms,
     const bool allow_density_segments) {
-  while (exact_order_region_try_minimize_union_step(
-      terms, allow_density_segments)) {
+  for (std::size_t i = 0; i < terms->size(); ++i) {
+    if ((*terms)[i].sign == 0.0) {
+      continue;
+    }
+    std::size_t j = 0;
+    while (j < i) {
+      if ((*terms)[j].sign == 0.0) {
+        ++j;
+        continue;
+      }
+      if (exact_order_region_try_merge_boolean_partition_step(
+              &(*terms)[i], &(*terms)[j]) ||
+          exact_order_region_try_merge_axis_partition_step(
+              &(*terms)[i], &(*terms)[j], allow_density_segments)) {
+        j = 0;
+      } else {
+        ++j;
+      }
+    }
   }
 }
 
@@ -943,7 +986,7 @@ inline bool exact_order_region_term_subset_of(
           exact_order_region_intersect_terms(lhs_term, rhs));
   return !lhs_term.impossible &&
          !intersection.impossible &&
-         exact_order_region_same_constraints(lhs_term, intersection);
+         exact_order_region_same_canonical_constraints(lhs_term, intersection);
 }
 
 inline void exact_order_region_append_live_term(
@@ -1246,7 +1289,7 @@ inline ExactOrderRegionExpr exact_order_region_simplify(
     exact_order_region_canonicalize_term(&term);
     bool merged = false;
     for (auto &existing : simplified) {
-      if (exact_order_region_same_constraints(existing, term)) {
+      if (exact_order_region_same_canonical_constraints(existing, term)) {
         existing.sign += term.sign;
         merged = true;
         break;
@@ -1265,7 +1308,8 @@ inline ExactOrderRegionExpr exact_order_region_simplify(
       if (simplified[j].sign == 0.0) {
         continue;
       }
-      if (exact_order_region_same_constraints(simplified[i], simplified[j])) {
+      if (exact_order_region_same_canonical_constraints(
+              simplified[i], simplified[j])) {
         simplified[i].sign += simplified[j].sign;
         simplified[j].sign = 0.0;
       }

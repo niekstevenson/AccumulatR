@@ -1,20 +1,15 @@
 args <- commandArgs(trailingOnly = FALSE)
 file_arg <- grep("^--file=", args, value = TRUE)
-script_path <- if (length(file_arg) > 0L) {
-  normalizePath(sub("^--file=", "", file_arg[[1L]]), mustWork = TRUE)
-} else {
-  normalizePath("dev/validation/compiler_architecture_acceptance.R", mustWork = TRUE)
-}
-repo_root <- normalizePath(file.path(dirname(script_path), "..", ".."), mustWork = TRUE)
+script_path <- normalizePath(
+  if (length(file_arg)) sub("^--file=", "", file_arg[[1L]]) else
+    "dev/validation/compiler_architecture_acceptance.R",
+  mustWork = TRUE
+)
+repo_root <- normalizePath(file.path(dirname(script_path), "..", ".."))
 
-old_wd <- getwd()
+old_wd <- setwd(repo_root)
 on.exit(setwd(old_wd), add = TRUE)
-setwd(repo_root)
-
-suppressPackageStartupMessages({
-  library(pkgload)
-})
-pkgload::load_all(repo_root, quiet = TRUE, helpers = FALSE)
+suppressPackageStartupMessages(pkgload::load_all(repo_root, quiet = TRUE, helpers = FALSE))
 
 model_simple_first_of <- function() {
   race_spec() |>
@@ -166,15 +161,7 @@ results <- do.call(rbind, lapply(names(acceptance_cases), function(model_name) {
     check_equal(model_name, metrics, "generic_integral_kernels", 0L),
     check_at_most(model_name, metrics, "max_integral_depth", spec$max_integral_depth),
     check_at_most(model_name, metrics, "integral_nodes", spec$max_integral_nodes),
-    check_at_most(model_name, metrics, "symbolic_cells", spec$max_symbolic_cells),
-    make_check(
-      model_name,
-      "expr_relation_atoms_diagnostic",
-      metrics[["expr_relation_atoms"]],
-      "reported",
-      NA_real_,
-      TRUE
-    )
+    check_at_most(model_name, metrics, "symbolic_cells", spec$max_symbolic_cells)
   )
   do.call(rbind, checks)
 }))
@@ -182,34 +169,19 @@ results <- do.call(rbind, lapply(names(acceptance_cases), function(model_name) {
 row.names(results) <- NULL
 print(results, row.names = FALSE)
 
-summary_df <- aggregate(
-  passed ~ model_name,
-  data = results[results$relation != "reported", , drop = FALSE],
-  FUN = all
-)
-summary_df$n_checks <- as.integer(table(
-  results$model_name[results$relation != "reported"]
-)[summary_df$model_name])
-summary_df$n_failed <- as.integer(tapply(
-  !results$passed[results$relation != "reported"],
-  results$model_name[results$relation != "reported"],
-  sum
-)[summary_df$model_name])
+summary_df <- aggregate(passed ~ model_name, data = results, FUN = all)
+summary_df$n_checks <- as.integer(table(results$model_name)[summary_df$model_name])
+summary_df$n_failed <- as.integer(tapply(!results$passed, results$model_name, sum)[summary_df$model_name])
 
 cat("\nArchitecture acceptance summary\n")
 print(summary_df, row.names = FALSE)
-
-checked <- results$relation != "reported"
-all_passed <- all(results$passed[checked])
 cat(sprintf(
   "\nOverall: %d/%d structural checks passed across %d models\n",
-  sum(results$passed[checked]),
-  sum(checked),
-  nrow(summary_df)
+  sum(results$passed), nrow(results), nrow(summary_df)
 ))
 
-if (!all_passed) {
+if (!all(results$passed)) {
   cat("\nFailing structural checks\n")
-  print(results[checked & !results$passed, , drop = FALSE], row.names = FALSE)
+  print(results[!results$passed, , drop = FALSE], row.names = FALSE)
   quit(status = 1L)
 }

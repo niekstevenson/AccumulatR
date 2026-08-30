@@ -1,5 +1,2 @@
 CXX_STD = CXX17
-
-ifeq ($(shell uname),Darwin)
 PKG_LIBS = -framework Accelerate
-endif

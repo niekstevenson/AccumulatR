@@ -2,8 +2,6 @@
 % Please edit documentation in R/generator.R
 \name{simulate}
 \alias{simulate}
-\alias{simulate.model_structure}
-\alias{simulate.default}
 \title{Simulate behavioral data from a model}
 \usage{
 simulate(
@@ -13,22 +11,8 @@ simulate(
   seed = NULL,
   keep_detail = FALSE,
   keep_component = NULL,
-  layout = c("auto", "rectangular", "long"),
-  ...
+  layout = c("auto", "rectangular", "long")
 )
-
-\method{simulate}{model_structure}(
-  structure,
-  params_df,
-  trial_df = NULL,
-  seed = NULL,
-  keep_detail = FALSE,
-  keep_component = NULL,
-  layout = c("auto", "rectangular", "long"),
-  ...
-)
-
-\method{simulate}{default}(structure, ...)
 }
 \arguments{
 \item{structure}{Finalized model structure.}
@@ -50,8 +34,6 @@ keep the component label and sampled mixtures drop it.}
 \item{layout}{Parameter layout. `"rectangular"` expects rows ordered by trial
 and racer. `"long"` expects rows aligned to `trial_df` or inferable
 from `component`. `"auto"` chooses automatically.}
-
-\item{...}{Unused; for S3 compatibility.}
 }
 \value{
 A data frame of simulated behavioral data. For standard models this
@@ -67,6 +49,6 @@ spec <- add_accumulator(spec, "A", "lognormal")
 spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
 params <- c(m = 0, s = 0.1)
-df <- build_param_matrix(spec, params, n_trials = 3)
+df <- build_param_matrix(structure, params, n_trials = 3)
 simulate(structure, df, seed = 123)
 }

@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "../compile/prep_to_semantic.hpp"
@@ -83,12 +84,8 @@ inline ComponentMixturePlan build_component_mixture_plan(
     }
   };
 
-  if (model.components.empty()) {
-    add_component("__default__", 1.0, "");
-  } else {
-    for (const auto &component : model.components) {
-      add_component(component.id, component.weight, component.weight_name);
-    }
+  for (const auto &component : model.components) {
+    add_component(component.id, component.weight, component.weight_name);
   }
 
   plan.weight_param_count = static_cast<int>(index_by_name.size());
@@ -175,34 +172,27 @@ inline std::vector<std::string> prepared_outcome_labels(const Rcpp::List &prep) 
   }
   const Rcpp::CharacterVector outcome_names(names_sexp);
   std::vector<std::string> labels;
+  std::unordered_set<std::string> seen;
   labels.reserve(outcome_names.size());
+  seen.reserve(outcome_names.size());
   for (R_xlen_t i = 0; i < outcome_names.size(); ++i) {
     if (STRING_ELT(outcome_names, i) == NA_STRING) {
       throw std::runtime_error("prep outcomes must not have missing names");
     }
-    labels.push_back(Rcpp::as<std::string>(outcome_names[i]));
+    auto label = Rcpp::as<std::string>(outcome_names[i]);
+    if (seen.insert(label).second) {
+      labels.push_back(std::move(label));
+    }
   }
   return labels;
 }
 
 inline std::vector<std::string> prepared_component_ids(const Rcpp::List &prep) {
-  if (!prep.containsElementNamed("components") || Rf_isNull(prep["components"])) {
-    return {"__default__"};
-  }
   const Rcpp::List components(prep["components"]);
-  if (!components.containsElementNamed("ids") || Rf_isNull(components["ids"])) {
-    return {"__default__"};
-  }
   const Rcpp::CharacterVector ids(components["ids"]);
-  if (ids.size() == 0) {
-    return {"__default__"};
-  }
   std::vector<std::string> out;
   out.reserve(ids.size());
   for (R_xlen_t i = 0; i < ids.size(); ++i) {
-    if (STRING_ELT(ids, i) == NA_STRING) {
-      throw std::runtime_error("prep component ids must not be missing");
-    }
     out.push_back(Rcpp::as<std::string>(ids[i]));
   }
   return out;

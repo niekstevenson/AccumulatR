@@ -69,19 +69,9 @@ inline void resolve_component_weights(
               .fixed_weight;
     }
   } else {
-    const auto reference_it =
-        std::find(
-            component_codes.begin(),
-            component_codes.end(),
-            mixture.reference_component_code);
-    const bool reference_available = reference_it != component_codes.end();
-    const auto reference_code =
-        reference_available ? mixture.reference_component_code
-                            : semantic::kInvalidIndex;
     double sum_nonref = 0.0;
-    for (std::size_t i = 0; i < component_codes.size(); ++i) {
-      const auto code = component_codes[i];
-      if (reference_available && code == reference_code) {
+    for (const auto code : mixture.present_component_codes) {
+      if (code == mixture.reference_component_code) {
         continue;
       }
       const auto &component =
@@ -90,29 +80,39 @@ inline void resolve_component_weights(
       if (component.weight_param_index >= 0) {
         weight = params.component_weight(row, component.weight_param_index);
       }
-      (*weights)[i] = weight;
+      if (!std::isfinite(weight) || weight < 0.0) {
+        return;
+      }
       sum_nonref += weight;
     }
-    if (reference_available) {
-      for (std::size_t i = 0; i < component_codes.size(); ++i) {
-        if (component_codes[i] != reference_code) {
-          continue;
-        }
+    if (!std::isfinite(sum_nonref) || sum_nonref > 1.0) {
+      return;
+    }
+    for (std::size_t i = 0; i < component_codes.size(); ++i) {
+      const auto code = component_codes[i];
+      if (code == mixture.reference_component_code) {
         (*weights)[i] = 1.0 - sum_nonref;
-        break;
+      } else {
+        const auto &component =
+            mixture.component_by_code[static_cast<std::size_t>(code)];
+        (*weights)[i] = component.weight_param_index >= 0
+                            ? params.component_weight(
+                                  row, component.weight_param_index)
+                            : component.fixed_weight;
       }
     }
   }
 
   double total = 0.0;
   for (const auto weight : *weights) {
+    if (!std::isfinite(weight) || weight < 0.0) {
+      weights->assign(component_codes.size(), 0.0);
+      return;
+    }
     total += weight;
   }
-  if (!(std::isfinite(total) && total > 0.0)) {
-    const double uniform = 1.0 / static_cast<double>(weights->size());
-    for (auto &weight : *weights) {
-      weight = uniform;
-    }
+  if (!(total > 0.0)) {
+    weights->assign(component_codes.size(), 0.0);
     return;
   }
   const double inv_total = 1.0 / total;

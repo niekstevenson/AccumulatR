@@ -30,39 +30,6 @@
   character(0)
 }
 
-.pae_collect_and_source_sets <- function(expr) {
-  sets <- list()
-  walk <- function(node) {
-    if (is.null(node)) return(invisible(NULL))
-    kind <- node$kind %||% "event"
-    if (identical(kind, "and")) {
-      sets[[length(sets) + 1L]] <<- unique(.pae_extract_sources(node))
-      args <- node$args %||% list()
-      if (length(args) > 0L) lapply(args, walk)
-      return(invisible(NULL))
-    }
-    if (identical(kind, "guard")) {
-      walk(node$reference)
-      walk(node$blocker)
-      unless_list <- node$unless %||% list()
-      if (length(unless_list) > 0L) lapply(unless_list, walk)
-      return(invisible(NULL))
-    }
-    if (identical(kind, "or")) {
-      args <- node$args %||% list()
-      if (length(args) > 0L) lapply(args, walk)
-      return(invisible(NULL))
-    }
-    if (identical(kind, "not")) {
-      walk(node$arg)
-      return(invisible(NULL))
-    }
-    invisible(NULL)
-  }
-  walk(expr)
-  sets
-}
-
 .pae_collect_guard_source_links <- function(expr) {
   out <- list()
   walk <- function(node) {
@@ -93,11 +60,6 @@
   }
   walk(expr)
   out
-}
-
-.pae_pair_key <- function(a, b) {
-  parts <- sort(c(a, b))
-  paste(parts[[1]], parts[[2]], sep = "||")
 }
 
 .pae_directed_key <- function(from, to) {
@@ -241,10 +203,7 @@ plot_accumulators <- function(model,
     rec
   })
 
-  onset_raw <- setNames(
-    lapply(accumulators, .model_view_accumulator_onset),
-    acc_ids
-  )
+  onset_specs <- lapply(accumulators, `[[`, "onset_spec")
 
   onset_value <- local({
     cache <- new.env(parent = emptyenv())
@@ -253,16 +212,15 @@ plot_accumulators <- function(model,
         return(get(acc_id, envir = cache, inherits = FALSE))
       }
       if (acc_id %in% stack) return(0)
-      raw <- onset_raw[[acc_id]] %||% 0
-      if (is.numeric(raw) && length(raw) > 0L && is.finite(raw[[1]])) {
-        val <- as.numeric(raw[[1]])
+      spec <- onset_specs[[acc_id]]
+      if (identical(spec$kind, "absolute")) {
+        val <- spec$value
         assign(acc_id, val, envir = cache)
         return(val)
       }
-      if (is.list(raw) && identical(raw$kind %||% "", "after")) {
-        src <- as.character(raw$source %||% "")
-        lag <- suppressWarnings(as.numeric(raw$lag %||% 0)[1])
-        if (!is.finite(lag)) lag <- 0
+      if (identical(spec$kind, "after")) {
+        src <- spec$source
+        lag <- spec$lag
         src_accs <- expand_to_accumulators(src)
         if (length(src_accs) == 0L) {
           val <- lag

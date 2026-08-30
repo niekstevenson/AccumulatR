@@ -5,18 +5,6 @@
 namespace accumulatr::eval {
 namespace detail {
 
-inline semantic::Index compile_relation_condition_id(
-    ExactVariantBuildState *plan,
-    const ExactRelationTemplate &relation_template) {
-  CompiledMathConditionKey key;
-  key.source_ids = relation_template.source_ids;
-  key.relations.reserve(relation_template.relations.size());
-  for (const auto relation : relation_template.relations) {
-    key.relations.push_back(static_cast<std::uint8_t>(relation));
-  }
-  return compiled_math_intern_condition(&plan->compiled_math, std::move(key));
-}
-
 inline bool relation_template_equal(const ExactRelationTemplate &lhs,
                                     const ExactRelationTemplate &rhs) {
   return lhs.source_ids == rhs.source_ids && lhs.relations == rhs.relations;
@@ -70,25 +58,6 @@ inline semantic::Index compile_expr_source_node(
       &plan->compiled_math,
       kind,
       source_id,
-      condition_id,
-      time_id,
-      source_view_id);
-}
-
-inline semantic::Index compile_expr_child_value_node(
-    ExactVariantBuildState *plan,
-    const ExactIndexSpan children,
-    const semantic::Index index,
-    const CompiledMathNodeKind value_kind,
-    const semantic::Index condition_id,
-    const semantic::Index time_id =
-        static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
-    const semantic::Index source_view_id = 0) {
-  const auto &program = plan->program;
-  return compile_expr_value_node(
-      plan,
-      program.expr_args[static_cast<std::size_t>(children.offset + index)],
-      value_kind,
       condition_id,
       time_id,
       source_view_id);
@@ -190,90 +159,6 @@ inline semantic::Index compile_guard_unless_density_node(
       CompiledMathValueKind::Density);
 }
 
-inline bool compiled_condition_has_source_relation(
-    const CompiledMathProgram &program,
-    const semantic::Index condition_id,
-    const semantic::Index source_id,
-    const ExactRelation relation) {
-  if (condition_id == 0 || condition_id == semantic::kInvalidIndex ||
-      source_id == semantic::kInvalidIndex) {
-    return false;
-  }
-  const auto condition_pos = static_cast<std::size_t>(condition_id - 1U);
-  if (condition_pos >= program.conditions.size()) {
-    return false;
-  }
-  const auto &condition = program.conditions[condition_pos];
-  for (std::size_t i = 0; i < condition.source_ids.size(); ++i) {
-    if (condition.source_ids[i] == source_id &&
-        static_cast<ExactRelation>(condition.relations[i]) == relation) {
-      return true;
-    }
-  }
-  return false;
-}
-
-inline bool compiled_source_view_knows_before(
-    const ExactVariantBuildState &plan,
-    const semantic::Index source_view_id,
-    const semantic::Index before_source_id,
-    const semantic::Index after_source_id) {
-  if (source_view_id == 0 ||
-      source_view_id == semantic::kInvalidIndex ||
-      before_source_id == semantic::kInvalidIndex ||
-      after_source_id == semantic::kInvalidIndex ||
-      before_source_id == after_source_id) {
-    return false;
-  }
-  const auto pos = static_cast<std::size_t>(source_view_id - 1U);
-  if (pos >= plan.compiled_source_views.size()) {
-    return false;
-  }
-  const auto &source_view = plan.compiled_source_views[pos];
-  auto relation_for = [&](const semantic::Index source_id) {
-    for (std::size_t i = 0; i < source_view.source_ids.size(); ++i) {
-      if (source_view.source_ids[i] == source_id) {
-        return source_view.relations[i];
-      }
-    }
-    return ExactRelation::Unknown;
-  };
-  const auto before_relation = relation_for(before_source_id);
-  const auto after_relation = relation_for(after_source_id);
-  return before_relation != ExactRelation::Unknown &&
-         after_relation != ExactRelation::Unknown &&
-         before_relation < after_relation;
-}
-
-inline bool compiled_guard_order_blocks(
-    const ExactVariantBuildState &plan,
-    const semantic::Index condition_id,
-    const semantic::Index source_view_id,
-    const semantic::Index blocker_source_id,
-    const semantic::Index ref_source_id) {
-  (void)condition_id;
-  return compiled_source_view_knows_before(
-      plan, source_view_id, blocker_source_id, ref_source_id);
-}
-
-inline bool compiled_condition_forces_source_after_observed(
-    const CompiledMathProgram &program,
-    const semantic::Index condition_id,
-    const semantic::Index source_id) {
-  return compiled_condition_has_source_relation(
-      program, condition_id, source_id, ExactRelation::After);
-}
-
-inline bool compiled_condition_forces_source_certain(
-    const CompiledMathProgram &program,
-    const semantic::Index condition_id,
-    const semantic::Index source_id) {
-  return compiled_condition_has_source_relation(
-             program, condition_id, source_id, ExactRelation::Before) ||
-         compiled_condition_has_source_relation(
-             program, condition_id, source_id, ExactRelation::At);
-}
-
 inline semantic::Index compile_integral_zero_to_current_node(
     ExactVariantBuildState *plan,
     const semantic::Index integrand_node,
@@ -291,19 +176,6 @@ inline semantic::Index compile_integral_zero_to_current_node(
       time_id,
       source_view_id,
       bind_time_id);
-}
-
-inline semantic::Index compile_signed_term_node(
-    ExactVariantBuildState *plan,
-    const semantic::Index node_id,
-    const int sign) {
-  if (sign >= 0) {
-    return node_id;
-  }
-  return compiled_math_unary_node(
-      &plan->compiled_math,
-      CompiledMathNodeKind::Negate,
-      node_id);
 }
 
 inline semantic::Index compile_outcome_subset_unused_node(
@@ -400,7 +272,8 @@ inline semantic::Index compile_expr_value_node_raw(
         time_id,
         source_view_id);
 
-  case semantic::ExprKind::And: {
+  case semantic::ExprKind::And:
+  case semantic::ExprKind::Or:
     return compile_expr_distribution_node(
         plan,
         expr_id,
@@ -408,16 +281,6 @@ inline semantic::Index compile_expr_value_node_raw(
         condition_id,
         time_id,
         source_view_id);
-  }
-  case semantic::ExprKind::Or: {
-    return compile_expr_distribution_node(
-        plan,
-        expr_id,
-        value_kind,
-        condition_id,
-        time_id,
-        source_view_id);
-  }
 
   case semantic::ExprKind::Not: {
     const auto child =
@@ -455,7 +318,7 @@ inline semantic::Index compile_expr_value_node_raw(
   }
 
   case semantic::ExprKind::Guard:
-    if (kernel.has_unless) {
+    if (!kernel.children.empty()) {
       if (value_kind == CompiledMathNodeKind::ExprDensity) {
         return compile_guard_unless_density_node(
             plan,
@@ -464,10 +327,8 @@ inline semantic::Index compile_expr_value_node_raw(
             time_id,
             source_view_id);
       } else if (value_kind == CompiledMathNodeKind::ExprCdf) {
-        const auto bind_time_id =
-            time_id == static_cast<semantic::Index>(CompiledMathTimeSlot::Active)
-                ? time_id
-                : static_cast<semantic::Index>(CompiledMathTimeSlot::Active);
+        const auto bind_time_id = static_cast<semantic::Index>(
+            CompiledMathTimeSlot::Active);
         const auto density_node =
             compile_guard_unless_density_node(
                 plan,
@@ -496,16 +357,13 @@ inline semantic::Index compile_expr_value_node_raw(
             CompiledMathValueKind::Survival);
       }
     }
-    if (!kernel.has_unless) {
-      return compile_expr_distribution_node(
-          plan,
-          expr_id,
-          value_kind,
-          condition_id,
-          time_id,
-          source_view_id);
-    }
-    return unsupported();
+    return compile_expr_distribution_node(
+        plan,
+        expr_id,
+        value_kind,
+        condition_id,
+        time_id,
+        source_view_id);
   }
 
   return unsupported();

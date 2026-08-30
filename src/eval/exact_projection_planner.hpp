@@ -11,7 +11,7 @@ namespace accumulatr::eval {
 namespace detail {
 
 inline void exact_order_region_reduce_bounds(
-    const ExactRegionCell &term,
+    const ExactOrderRegionTimeClosure &closure,
     std::vector<semantic::Index> *times,
     const bool keep_latest) {
   std::vector<semantic::Index> reduced;
@@ -22,14 +22,14 @@ inline void exact_order_region_reduce_bounds(
         continue;
       }
       if (keep_latest) {
-        if (exact_order_region_time_known_before_or_equal(
-                term, time_id, other_time_id)) {
+        if (exact_order_region_canonical_relation(
+                closure, time_id, other_time_id) != 0U) {
           dominated = true;
           break;
         }
       } else {
-        if (exact_order_region_time_known_before_or_equal(
-                term, other_time_id, time_id)) {
+        if (exact_order_region_canonical_relation(
+                closure, other_time_id, time_id) != 0U) {
           dominated = true;
           break;
         }
@@ -41,6 +41,14 @@ inline void exact_order_region_reduce_bounds(
     }
   }
   *times = std::move(reduced);
+}
+
+inline void exact_order_region_reduce_bounds(
+    const ExactRegionCell &term,
+    std::vector<semantic::Index> *times,
+    const bool keep_latest) {
+  exact_order_region_reduce_bounds(
+      exact_order_region_build_time_closure(term), times, keep_latest);
 }
 
 inline semantic::Index exact_order_region_source_interval_node(
@@ -660,16 +668,11 @@ private:
   }
 };
 
-struct ExactProjectionMemoEntry {
-  ExactProjectionPlanPtr plan;
-  bool complete{false};
-};
-
 struct ExactProjectionPlannerState {
   std::vector<ExactProjectionRelationOps> relation_ops;
   std::unordered_map<
       ExactProjectionMemoKey,
-      ExactProjectionMemoEntry,
+      ExactProjectionPlanPtr,
       ExactProjectionMemoKeyHash>
       plans;
 };
@@ -777,8 +780,8 @@ inline bool exact_order_region_projection_bounds(
     }
   }
   exact_order_region_append_time_id(&out->upper_time_ids, observed_time_id);
-  exact_order_region_reduce_bounds(term, &out->lower_time_ids, true);
-  exact_order_region_reduce_bounds(term, &out->upper_time_ids, false);
+  exact_order_region_reduce_bounds(closure, &out->lower_time_ids, true);
+  exact_order_region_reduce_bounds(closure, &out->upper_time_ids, false);
   return true;
 }
 
@@ -800,8 +803,7 @@ inline bool exact_order_region_density_binder_projectable(
     const ExactRegionCell &term,
     const ExactOrderRegionDensityBinder &binder,
     const std::vector<semantic::Index> &blocked_time_ids,
-    ExactOrderRegionProjectionBounds *bounds,
-    std::size_t *latent_dependency_count) {
+    ExactOrderRegionProjectionBounds *bounds) {
   if (!exact_region_time_is_latent_variable(binder.time_id) ||
       exact_order_region_contains_time_id(blocked_time_ids, binder.time_id) ||
       exact_order_region_density_time_used_outside_orders(term, binder)) {
@@ -810,8 +812,6 @@ inline bool exact_order_region_density_binder_projectable(
   if (!exact_order_region_projection_bounds(term, binder.time_id, bounds)) {
     return false;
   }
-  *latent_dependency_count =
-      exact_order_region_projection_latent_dependency_count(*bounds);
   return true;
 }
 
@@ -971,9 +971,8 @@ exact_order_region_projection_candidates(
   const auto consider =
       [&](const ExactOrderRegionDensityBinder &binder) {
         ExactOrderRegionProjectionBounds bounds;
-        std::size_t score = 0U;
         if (!exact_order_region_density_binder_projectable(
-                term, binder, blocked_time_ids, &bounds, &score)) {
+                term, binder, blocked_time_ids, &bounds)) {
           return;
         }
         out.push_back(
@@ -1421,21 +1420,21 @@ inline bool exact_projection_plan_cell_memoized(
 
   const auto found = state.plans.find(key);
   if (found != state.plans.end()) {
-    if (!found->second.complete || found->second.plan == nullptr) {
+    if (found->second == nullptr) {
       return false;
     }
     if (builder_neutral &&
-        found->second.plan->builder_after.next_time_id !=
+        found->second->builder_after.next_time_id !=
             builder.next_time_id) {
-      auto adapted = std::make_shared<ExactProjectionPlan>(*found->second.plan);
+      auto adapted = std::make_shared<ExactProjectionPlan>(*found->second);
       adapted->builder_after = builder;
       *out = std::move(adapted);
     } else {
-      *out = found->second.plan;
+      *out = found->second;
     }
     return true;
   }
-  state.plans.emplace(key, ExactProjectionMemoEntry{});
+  state.plans.emplace(key, nullptr);
 
   ExactProjectionPlanPtr best;
   if (term.impossible || term.sign == 0.0) {
@@ -1492,35 +1491,11 @@ inline bool exact_projection_plan_cell_memoized(
   }
 
   auto stored = state.plans.find(key);
-  stored->second.plan = best;
-  stored->second.complete = true;
+  stored->second = best;
   if (best == nullptr) {
     return false;
   }
   *out = std::move(best);
-  return true;
-}
-
-inline bool exact_projection_plan_cell(
-    const ExactVariantBuildState &plan,
-    ExactRegionCell term,
-    std::vector<semantic::Index> blocked_time_ids,
-    std::vector<semantic::Index> projected_latent_time_ids,
-    const ExactProjectionRelationOps *ops,
-    const ExactOrderRegionBuilder builder,
-    ExactProjectionPlan *out) {
-  ExactProjectionPlanPtr shared;
-  if (!exact_projection_plan_cell_memoized(
-          plan,
-          std::move(term),
-          std::move(blocked_time_ids),
-          std::move(projected_latent_time_ids),
-          ops,
-          builder,
-          &shared)) {
-    return false;
-  }
-  *out = *shared;
   return true;
 }
 
@@ -1629,12 +1604,13 @@ inline bool exact_projection_emit_terminal_node(
       return false;
     }
   }
+  const auto closure = exact_order_region_build_time_closure(residual);
   for (semantic::Index source_id = 0;
        source_id < static_cast<semantic::Index>(bounds.size());
        ++source_id) {
     auto &source = bounds[static_cast<std::size_t>(source_id)];
-    exact_order_region_reduce_bounds(residual, &source.lower_time_ids, true);
-    exact_order_region_reduce_bounds(residual, &source.upper_time_ids, false);
+    exact_order_region_reduce_bounds(closure, &source.lower_time_ids, true);
+    exact_order_region_reduce_bounds(closure, &source.upper_time_ids, false);
     if (source.exact_time_id != semantic::kInvalidIndex) {
       factors.push_back(
           compiled_math_source_node(
@@ -1703,8 +1679,8 @@ inline bool exact_projection_emit_terminal_node(
        expr_id < static_cast<semantic::Index>(expr_bounds.size());
        ++expr_id) {
     auto &expr = expr_bounds[static_cast<std::size_t>(expr_id)];
-    exact_order_region_reduce_bounds(residual, &expr.lower_time_ids, true);
-    exact_order_region_reduce_bounds(residual, &expr.upper_time_ids, false);
+    exact_order_region_reduce_bounds(closure, &expr.lower_time_ids, true);
+    exact_order_region_reduce_bounds(closure, &expr.upper_time_ids, false);
     if (expr.density_time_id != semantic::kInvalidIndex) {
       factors.push_back(
           exact_order_region_expr_value_node(
@@ -1985,8 +1961,8 @@ inline bool exact_order_region_lower_term_root(
     ExactOrderRegionBuilder *builder,
     const ExactProjectionRelationOps *ops,
     semantic::Index *out_root_id) {
-  ExactProjectionPlan projection_plan;
-  if (!exact_projection_plan_cell(
+  ExactProjectionPlanPtr projection_plan;
+  if (!exact_projection_plan_cell_memoized(
           *plan,
           term,
           {},
@@ -1996,10 +1972,10 @@ inline bool exact_order_region_lower_term_root(
           &projection_plan)) {
     return false;
   }
-  *builder = projection_plan.builder_after;
+  *builder = projection_plan->builder_after;
   return exact_projection_emit_plan_root(
       plan,
-      projection_plan,
+      *projection_plan,
       source_view_id,
       condition_id,
       {},

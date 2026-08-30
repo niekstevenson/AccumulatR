@@ -52,18 +52,6 @@
   list(max_rank = max_rank)
 }
 
-.prepare_likelihood_prep <- function(structure, prep = NULL) {
-  structure <- .as_model_structure(structure)
-  if (is.null(structure$model_spec)) {
-    stop("model structure must include model_spec; rebuild with finalize_model")
-  }
-  prep_eval_base <- prep %||% structure$prep %||% NULL
-  if (is.null(prep_eval_base)) {
-    prep_eval_base <- prepare_model(structure$model_spec)
-  }
-  list(structure = structure, prep = prep_eval_base)
-}
-
 .required_p_slots_from_prep <- function(prep) {
   acc_defs <- prep$accumulators %||% list()
   if (length(acc_defs) == 0L) {
@@ -82,8 +70,9 @@
   for (cid in component_ids) {
     out[[cid]] <- character(0)
   }
-  for (label in outcome_labels) {
-    options <- outcome_defs[[label]]$options %||% list()
+  for (i in seq_along(outcome_defs)) {
+    label <- outcome_labels[[i]]
+    options <- outcome_defs[[i]]$options %||% list()
     allowed <- options$component %||% component_ids
     if (length(allowed) == 0L) {
       allowed <- component_ids
@@ -102,8 +91,10 @@
   for (cid in component_ids) {
     out[[cid]] <- character(0)
   }
-  for (label in names(outcome_defs)) {
-    options <- outcome_defs[[label]]$options %||% list()
+  outcome_labels <- names(outcome_defs)
+  for (i in seq_along(outcome_defs)) {
+    label <- outcome_labels[[i]]
+    options <- outcome_defs[[i]]$options %||% list()
     allowed <- options$component %||% component_ids
     if (length(allowed) == 0L) {
       allowed <- component_ids
@@ -400,19 +391,11 @@
   data_df
 }
 
-.prepare_data_structure <- function(structure, data_df, prep = NULL, compress = FALSE) {
-  if (inherits(data_df, "accumulatr_data")) {
-    if (is.null(attr(data_df, "max_rank", exact = TRUE))) {
-      attr(data_df, "max_rank") <- .validate_ranked_observation_columns(data_df)$max_rank
-    }
-    return(.attach_prepared_layout_attrs(data_df, attr(data_df, "max_rank", exact = TRUE)))
-  }
+.prepare_data_structure <- function(structure, data_df, compress = FALSE) {
   if (is.null(data_df) || nrow(data_df) == 0L) {
     stop("Data frame must contain R/rt per trial", call. = FALSE)
   }
-  prep_info <- .prepare_likelihood_prep(structure, prep = prep)
-  structure <- prep_info$structure
-  prep_eval_base <- prep_info$prep
+  prep_eval_base <- structure$prep
   data_df <- as.data.frame(data_df)
   required_cols <- c("R", "rt")
   missing_cols <- setdiff(required_cols, names(data_df))
@@ -559,7 +542,6 @@
 #'   an `expand` index so `log_likelihood()` can return trial-level values on
 #'   the original trial scale.
 #'   Defaults to `FALSE`.
-#' @param prep Optional preprocessed model bundle.
 #' @return An `accumulatr_data` object.
 #' @details The likelihood for an active truncation window is conditioned on a
 #'   observable response in `[LT, UT]`. Censoring comparisons are strict, so
@@ -570,7 +552,7 @@
 #' spec <- add_outcome(spec, "A_win", "A")
 #' structure <- finalize_model(spec)
 #' params_df <- build_param_matrix(
-#'   spec,
+#'   structure,
 #'   c(m = 0, s = 0.1),
 #'   n_trials = 2
 #' )
@@ -579,23 +561,12 @@
 #' @export
 prepare_data <- function(structure,
                          data_df,
-                         compress = FALSE,
-                         prep = NULL) {
+                         compress = FALSE) {
   .prepare_data_structure(
     structure = structure,
     data_df = data_df,
-    compress = compress,
-    prep = prep
+    compress = compress
   )
-}
-
-.make_context_structure <- function(structure, prep = NULL, diagnostics = FALSE) {
-  prep_info <- .prepare_likelihood_prep(structure, prep = prep)
-  prep_eval_base <- prep_info$prep
-  structure(list(
-    cpp = .make_likelihood_context_prep(prep_eval_base, diagnostics = diagnostics),
-    required_p_slots = .required_p_slots_from_prep(prep_eval_base)
-  ), class = "accumulatr_context")
 }
 
 #' Build a compiled likelihood context from a model
@@ -605,7 +576,6 @@ prepare_data <- function(structure,
 #' `log_likelihood()`.
 #'
 #' @param structure Finalized model structure.
-#' @param prep Optional preprocessed model bundle.
 #' @param diagnostics If `TRUE`, collect symbolic/compiled complexity metrics.
 #' @return An `accumulatr_context` object.
 #' @examples
@@ -615,12 +585,12 @@ prepare_data <- function(structure,
 #' structure <- finalize_model(spec)
 #' make_context(structure)
 #' @export
-make_context <- function(structure, prep = NULL, diagnostics = FALSE) {
-  .make_context_structure(
-    structure = structure,
-    prep = prep,
-    diagnostics = diagnostics
-  )
+make_context <- function(structure, diagnostics = FALSE) {
+  prep <- structure$prep
+  structure(list(
+    cpp = semantic_make_likelihood_context_prep_cpp(prep, isTRUE(diagnostics)),
+    required_p_slots = .required_p_slots_from_prep(prep)
+  ), class = "accumulatr_context")
 }
 
 #' Return compiled exact complexity metrics
@@ -629,42 +599,17 @@ make_context <- function(structure, prep = NULL, diagnostics = FALSE) {
 #' @return A list with per-variant and total symbolic/compiled metrics.
 #' @export
 complexity_metrics <- function(context) {
-  context <- .validate_context(context)
   if (!isTRUE(context$cpp$has_complexity_metrics)) {
     stop(
       "complexity metrics were not collected; create the context with diagnostics = TRUE",
       call. = FALSE
     )
   }
-  .complexity_metrics_context(context$cpp$native)
+  semantic_complexity_metrics_context_cpp(context$cpp$native)
 }
 
-.validate_context <- function(context) {
-  if (inherits(context, "accumulatr_context")) {
-    return(context)
-  }
-  stop("context must be created via make_context()", call. = FALSE)
-}
-
-.validate_prepared_data <- function(data) {
-  if (inherits(data, "accumulatr_data")) {
-    required_attrs <- c("trials_start_rows", "layout_cols", "label_cols", "time_cols", "max_rank")
-    missing_attrs <- required_attrs[vapply(required_attrs, function(attr_name) {
-      is.null(attr(data, attr_name, exact = TRUE))
-    }, logical(1))]
-    if (length(missing_attrs) > 0L) {
-      stop("prepared data are missing native layout metadata; rebuild with prepare_data()", call. = FALSE)
-    }
-    return(data)
-  }
-  stop("data must be created via prepare_data()", call. = FALSE)
-}
-
-.normalize_prepared_index_column <- function(x, levels, column_name, allow_empty = FALSE) {
+.normalize_prepared_index_column <- function(x, levels, column_name) {
   if (length(levels) == 0L) {
-    if (allow_empty) {
-      return(x)
-    }
     stop(sprintf("Prepared data column '%s' has no valid levels in the model", column_name), call. = FALSE)
   }
   if (is.factor(x)) {
@@ -951,16 +896,6 @@ complexity_metrics <- function(context) {
   split(params_df, as.character(trials))
 }
 
-.coerce_loglik_param_matrix <- function(parameters) {
-  if (inherits(parameters, "param_matrix") || is.matrix(parameters)) {
-    return(parameters)
-  }
-  if (is.data.frame(parameters)) {
-    return(.params_df_to_matrix(parameters))
-  }
-  stop("parameters must be a param_matrix, matrix, or data frame", call. = FALSE)
-}
-
 .canonicalize_loglik_param_matrix <- function(param_mat, required_p_slots) {
   cn <- colnames(param_mat)
   if (is.null(cn) || anyNA(cn) || any(!nzchar(cn))) {
@@ -1189,7 +1124,6 @@ complexity_metrics <- function(context) {
 #' @param structure Finalized model structure.
 #' @param params_df A parameter data frame or rectangular parameter matrix.
 #' @param include_na If `TRUE`, include residual mass as `"NA"`.
-#' @param ... Unused; for S3 compatibility.
 #' @return A named numeric vector of marginal response probabilities. Names are
 #'   observed outcome labels. When `include_na = TRUE`, a residual `"NA"` entry
 #'   is included if the model assigns probability mass to unobserved or
@@ -1204,55 +1138,37 @@ complexity_metrics <- function(context) {
 #'
 #' model <- finalize_model(spec)
 #' params <- build_param_matrix(
-#'   spec,
+#'   model,
 #'   c(left.m = log(0.25), right.m = log(0.40), s = 0.20),
 #'   n_trials = 1
 #' )
 #'
 #' response_probabilities(model, params)
 #' @export
-response_probabilities <- function(structure, params_df, include_na = TRUE, ...) {
-  UseMethod("response_probabilities")
-}
-
-#' @rdname response_probabilities
-#' @export
-response_probabilities.model_structure <- function(structure,
-                                                   params_df,
-                                                   include_na = TRUE,
-                                                   ...) {
+response_probabilities <- function(structure, params_df, include_na = TRUE) {
   if (is.null(params_df) || NROW(params_df) == 0L) {
     stop("Parameter data frame must contain at least one row", call. = FALSE)
   }
 
-  prep_info <- .prepare_likelihood_prep(structure)
-  structure <- prep_info$structure
+  prep <- structure$prep
   params_rows <- .coerce_response_probability_params(structure, params_df)
-  context <- .make_context_structure(structure, prep = prep_info$prep)
+  context <- make_context(structure)
   query <- .response_probability_param_layout(
     structure,
     params_rows,
     context$required_p_slots
   )
-  labels <- names(prep_info$prep$outcomes %||% list())
-  probability <- as.numeric(.response_probabilities_context(
+  labels <- unique(names(prep$outcomes %||% list()))
+  probability <- as.numeric(semantic_response_probabilities_context_cpp(
     context$cpp$native,
     query$params,
     query$layout
   ))
-  if (length(probability) < length(labels)) {
-    probability <- c(probability, numeric(length(labels) - length(probability)))
-  } else if (length(probability) > length(labels)) {
-    probability <- probability[seq_along(labels)]
-  }
   result <- stats::setNames(probability, labels)
-  observed_by_component <- .observed_outcome_allowed_components(prep_info$prep)
+  observed_by_component <- .observed_outcome_allowed_components(prep)
   observed_labels <- Reduce(union, observed_by_component, init = character(0))
   result <- result[intersect(names(result), observed_labels)]
   residual <- 1.0 - sum(result)
-  if (!is.finite(residual) || residual < 0) {
-    residual <- 0.0
-  }
   if (include_na && residual > .Machine$double.eps) {
     result["NA"] <- residual
   }
@@ -1262,18 +1178,6 @@ response_probabilities.model_structure <- function(structure,
   result
 }
 
-#' @rdname response_probabilities
-#' @export
-response_probabilities.default <- function(structure,
-                                           params_df,
-                                           include_na = TRUE,
-                                           ...) {
-  stop(
-    "response_probabilities() expects a finalized model structure",
-    call. = FALSE
-  )
-}
-
 #' Evaluate log-likelihoods of behavioral data
 #'
 #' Compute the summed log-likelihood by default, or trial-wise log-likelihoods
@@ -1281,14 +1185,14 @@ response_probabilities.default <- function(structure,
 #'
 #' @param context Context created with `make_context()`.
 #' @param data Prepared data created with `prepare_data()`.
-#' @param parameters A parameter data frame, or a list of parameter data frames.
+#' @param parameters A canonical numeric parameter matrix created by
+#'   `build_param_matrix()`.
 #' @param ok Logical vector marking which trials should contribute to the
 #'   likelihood. Trials marked `FALSE` are assigned `min_ll`.
 #' @param sum If `TRUE`, return the summed log-likelihood. If `FALSE`, return
 #'   trial-wise log-likelihood values.
 #' @param min_ll Minimum log-likelihood value used for excluded or impossible
 #'   trials.
-#' @param ... Unused; for S3 compatibility.
 #' @return A summed log-likelihood by default, or a numeric vector of
 #'   trial-wise log-likelihood values when `sum = FALSE`.
 #' @examples
@@ -1297,7 +1201,7 @@ response_probabilities.default <- function(structure,
 #' spec <- add_outcome(spec, "A_win", "A")
 #' structure <- finalize_model(spec)
 #' params_df <- build_param_matrix(
-#'   spec,
+#'   structure,
 #'   c(m = 0, s = 0.1),
 #'   n_trials = 2
 #' )
@@ -1306,40 +1210,23 @@ response_probabilities.default <- function(structure,
 #' ctx <- make_context(structure)
 #' log_likelihood(ctx, prepared, params_df)
 #' @export
-log_likelihood <- function(context, data, parameters, ok = NULL, sum = TRUE, min_ll = log(1e-10), ...) {
-  UseMethod("log_likelihood")
-}
-
-#' @rdname log_likelihood
-#' @export
-log_likelihood.accumulatr_context <- function(context,
-                                              data,
-                                              parameters,
-                                              ok = NULL,
-                                              sum = TRUE,
-                                              min_ll = log(1e-10),
-                                              ...) {
-  if (is.null(ok) || length(ok) == 0L) {
-    ok <- NULL
-  }
-
+log_likelihood <- function(context,
+                           data,
+                           parameters,
+                           ok = NULL,
+                           sum = TRUE,
+                           min_ll = log(1e-10)) {
   cpp_ctx <- context$cpp
-  value <- .loglik_context(
+  value <- semantic_loglik_context_cpp(
     cpp_ctx$native,
     parameters,
     data,
-    ok = ok,
-    min_ll = min_ll
+    ok,
+    min_ll
   )
-  if (isTRUE(sum)) {
+  if (sum) {
     base::sum(value)
   } else {
     value
   }
-}
-
-#' @rdname log_likelihood
-#' @export
-log_likelihood.default <- function(context, ...) {
-  stop("log_likelihood() expects a context created with make_context()", call. = FALSE)
 }

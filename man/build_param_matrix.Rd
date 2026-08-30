@@ -9,12 +9,11 @@ build_param_matrix(
   param_values,
   n_trials = 1L,
   component = NULL,
-  trial_df = NULL,
-  layout = NULL
+  trial_df = NULL
 )
 }
 \arguments{
-\item{model}{Model definition.}
+\item{model}{Finalized model structure.}
 
 \item{param_values}{Named numeric vector of parameter values.}
 
@@ -24,11 +23,9 @@ build_param_matrix(
 
 \item{trial_df}{Optional trials/prepared data object. If it includes a
 `racer` column, parameter rows are built in that exact row order.}
-
-\item{layout}{Optional storage layout.}
 }
 \value{
-A data frame or matrix of parameter values by trial.
+A numeric parameter matrix with one row per trial/accumulator pair.
 }
 \description{
 This expands a named parameter vector into the trial-by-trial format expected
@@ -39,5 +36,5 @@ spec <- race_spec()
 spec <- add_accumulator(spec, "A", "lognormal")
 spec <- add_outcome(spec, "A_win", "A")
 vals <- c(m = 0, s = 0.1)
-build_param_matrix(spec, vals, n_trials = 2)
+build_param_matrix(finalize_model(spec), vals, n_trials = 2)
 }

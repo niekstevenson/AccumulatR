@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <initializer_list>
 #include <vector>
 
 #include "compiled_math_kernel_planning.hpp"
@@ -69,50 +68,6 @@ inline semantic::Index compiled_math_intern_condition(
           key.relations});
   program->condition_index.emplace(std::move(key), condition_id);
   return condition_id;
-}
-
-inline bool compiled_condition_impossible(
-    const CompiledMathProgram &program,
-    const semantic::Index condition_id) {
-  if (condition_id == 0 || condition_id == semantic::kInvalidIndex) {
-    return false;
-  }
-  const auto pos = static_cast<std::size_t>(condition_id - 1U);
-  return pos >= program.conditions.size() || program.conditions[pos].impossible;
-}
-
-inline void compiled_math_append_condition_to_key(
-    const CompiledMathProgram &program,
-    const semantic::Index condition_id,
-    CompiledMathConditionKey *key) {
-  if (condition_id == 0 || condition_id == semantic::kInvalidIndex) {
-    return;
-  }
-  const auto pos = static_cast<std::size_t>(condition_id - 1U);
-  if (pos >= program.conditions.size()) {
-    key->impossible = true;
-    return;
-  }
-  const auto &condition = program.conditions[pos];
-  key->impossible = key->impossible || condition.impossible;
-  key->source_ids.insert(
-      key->source_ids.end(),
-      condition.source_ids.begin(),
-      condition.source_ids.end());
-  key->relations.insert(
-      key->relations.end(),
-      condition.relations.begin(),
-      condition.relations.end());
-}
-
-inline semantic::Index compiled_math_merge_conditions(
-    CompiledMathProgram *program,
-    const std::initializer_list<semantic::Index> condition_ids) {
-  CompiledMathConditionKey key;
-  for (const auto condition_id : condition_ids) {
-    compiled_math_append_condition_to_key(*program, condition_id, &key);
-  }
-  return compiled_math_intern_condition(program, std::move(key));
 }
 
 inline semantic::Index compiled_math_source_node(

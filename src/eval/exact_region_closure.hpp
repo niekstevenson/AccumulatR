@@ -26,9 +26,9 @@ inline void exact_order_region_append_time_id(
 inline std::size_t exact_order_region_time_pos(
     const ExactOrderRegionTimeClosure &closure,
     const semantic::Index time_id) {
-  const auto it =
-      std::find(closure.time_ids.begin(), closure.time_ids.end(), time_id);
-  return it == closure.time_ids.end()
+  const auto it = std::lower_bound(
+      closure.time_ids.begin(), closure.time_ids.end(), time_id);
+  return it == closure.time_ids.end() || *it != time_id
              ? closure.time_ids.size()
              : static_cast<std::size_t>(it - closure.time_ids.begin());
 }
@@ -76,21 +76,13 @@ inline ExactOrderRegionTimeClosure exact_order_region_build_time_closure(
   exact_order_region_append_time_id(
       &closure.time_ids,
       static_cast<semantic::Index>(CompiledMathTimeSlot::Zero));
-  for (const auto &item : exact_region_exact_source_atoms(term)) {
-    exact_order_region_append_time_id(&closure.time_ids, item.time_id);
-  }
-  for (const auto &item : exact_region_lower_source_atoms(term)) {
-    exact_order_region_append_time_id(&closure.time_ids, item.time_id);
-  }
-  for (const auto &item : exact_region_upper_source_atoms(term)) {
-    exact_order_region_append_time_id(&closure.time_ids, item.time_id);
-  }
-  for (const auto &factor : exact_region_expr_atoms(term)) {
-    exact_order_region_append_time_id(&closure.time_ids, factor.time_id);
-  }
-  for (const auto &order : exact_region_time_order_atoms(term)) {
-    exact_order_region_append_time_id(&closure.time_ids, order.before_time_id);
-    exact_order_region_append_time_id(&closure.time_ids, order.after_time_id);
+  for (const auto &atom : term.atoms) {
+    if (atom.lhs.kind == ExactRegionVarKind::Time) {
+      exact_order_region_append_time_id(&closure.time_ids, atom.lhs.id);
+    }
+    if (atom.rhs.kind == ExactRegionVarKind::Time) {
+      exact_order_region_append_time_id(&closure.time_ids, atom.rhs.id);
+    }
   }
   for (const auto &equality : term.equalities) {
     exact_order_region_append_time_id(&closure.time_ids, equality.lhs_time_id);
@@ -120,15 +112,18 @@ inline ExactOrderRegionTimeClosure exact_order_region_build_time_closure(
     exact_order_region_set_time_relation(
         &closure, equality.rhs_time_id, equality.lhs_time_id, false);
   }
-  for (const auto &order : exact_region_time_order_atoms(term)) {
-    if (order.before_time_id == order.after_time_id) {
-      if (order.strict) {
+  for (const auto &atom : term.atoms) {
+    if (atom.kind != ExactRegionAtomKind::TimeOrder) {
+      continue;
+    }
+    if (atom.lhs.id == atom.rhs.id) {
+      if (atom.strict) {
         closure.impossible = true;
       }
       continue;
     }
     exact_order_region_set_time_relation(
-        &closure, order.before_time_id, order.after_time_id, order.strict);
+        &closure, atom.lhs.id, atom.rhs.id, atom.strict);
   }
   for (std::size_t k = 0; k < n; ++k) {
     for (std::size_t i = 0; i < n; ++i) {
@@ -234,14 +229,13 @@ inline semantic::Index exact_order_region_canonical_time(
 }
 
 inline int exact_order_region_time_relation(
-    const ExactRegionCell &term,
+    const ExactOrderRegionTimeClosure &closure,
     const semantic::Index before_time_id,
     const semantic::Index after_time_id) {
   if (before_time_id == semantic::kInvalidIndex ||
       after_time_id == semantic::kInvalidIndex) {
     return 0;
   }
-  const auto closure = exact_order_region_build_time_closure(term);
   const auto before_pos =
       exact_order_region_time_pos(closure, before_time_id);
   const auto after_pos =
@@ -252,6 +246,23 @@ inline int exact_order_region_time_relation(
   }
   return static_cast<int>(
       exact_order_region_time_relation_at(closure, before_pos, after_pos));
+}
+
+inline int exact_order_region_time_relation(
+    const ExactRegionCell &term,
+    const semantic::Index before_time_id,
+    const semantic::Index after_time_id) {
+  const auto closure = exact_order_region_build_time_closure(term);
+  return exact_order_region_time_relation(
+      closure, before_time_id, after_time_id);
+}
+
+inline bool exact_order_region_time_known_before_or_equal(
+    const ExactOrderRegionTimeClosure &closure,
+    const semantic::Index before_time_id,
+    const semantic::Index after_time_id) {
+  return exact_order_region_time_relation(
+             closure, before_time_id, after_time_id) != 0;
 }
 
 inline bool exact_order_region_time_known_before_or_equal(
@@ -278,13 +289,18 @@ inline void exact_order_region_append_time_order(
     }
     return;
   }
-  const auto forward =
-      exact_order_region_time_relation(*term, before_time_id, after_time_id);
+  const auto closure = exact_order_region_build_time_closure(*term);
+  if (closure.impossible) {
+    term->impossible = true;
+    return;
+  }
+  const auto forward = exact_order_region_time_relation(
+      closure, before_time_id, after_time_id);
   if (forward == 2 || (forward == 1 && !strict)) {
     return;
   }
-  const auto reverse =
-      exact_order_region_time_relation(*term, after_time_id, before_time_id);
+  const auto reverse = exact_order_region_time_relation(
+      closure, after_time_id, before_time_id);
   if (reverse != 0) {
     if (!strict && reverse == 1) {
       exact_region_append_equality(
@@ -828,23 +844,6 @@ inline bool exact_order_region_time_order_less(
   return lhs.strict < rhs.strict;
 }
 
-inline void exact_order_region_unique_source_times(
-    std::vector<ExactOrderRegionSourceTime> *items) {
-  std::sort(items->begin(), items->end(), exact_order_region_source_time_less);
-  std::vector<ExactOrderRegionSourceTime> out;
-  out.reserve(items->size());
-  for (const auto &item : *items) {
-    if (!out.empty() &&
-        out.back().source_id == item.source_id &&
-        out.back().time_id == item.time_id) {
-      out.back().inclusive = out.back().inclusive && item.inclusive;
-      continue;
-    }
-    out.push_back(item);
-  }
-  *items = std::move(out);
-}
-
 inline void exact_order_region_rewrite_term_times(
     ExactRegionCell *term,
     const ExactOrderRegionTimeClosure &closure) {
@@ -869,21 +868,12 @@ inline std::uint8_t exact_order_region_canonical_relation(
     const ExactOrderRegionTimeClosure &closure,
     const semantic::Index before_time_id,
     const semantic::Index after_time_id) {
-  std::uint8_t relation = 0U;
-  for (std::size_t i = 0; i < closure.time_ids.size(); ++i) {
-    if (closure.representative[i] != before_time_id) {
-      continue;
-    }
-    for (std::size_t j = 0; j < closure.time_ids.size(); ++j) {
-      if (closure.representative[j] != after_time_id) {
-        continue;
-      }
-      relation = std::max(
-          relation,
-          exact_order_region_time_relation_at(closure, i, j));
-    }
-  }
-  return relation;
+  const auto before = exact_order_region_canonical_time(
+      closure, before_time_id);
+  const auto after = exact_order_region_canonical_time(
+      closure, after_time_id);
+  return static_cast<std::uint8_t>(
+      exact_order_region_time_relation(closure, before, after));
 }
 
 inline std::vector<semantic::Index> exact_order_region_canonical_time_ids(
@@ -1004,7 +994,8 @@ inline bool exact_order_region_has_independent_source_density_tie(
 }
 
 inline bool exact_order_region_source_bounds_consistent(
-    const ExactRegionCell &term) {
+    const ExactRegionCell &term,
+    const ExactOrderRegionTimeClosure &closure) {
   const auto lower_bounds = exact_region_lower_source_atoms(term);
   const auto upper_bounds = exact_region_upper_source_atoms(term);
   for (const auto &lower : lower_bounds) {
@@ -1012,8 +1003,8 @@ inline bool exact_order_region_source_bounds_consistent(
       if (lower.source_id != upper.source_id) {
         continue;
       }
-      if (exact_order_region_time_known_before_or_equal(
-              term, upper.time_id, lower.time_id)) {
+      if (exact_order_region_canonical_relation(
+              closure, upper.time_id, lower.time_id) != 0U) {
         return false;
       }
     }
@@ -1029,10 +1020,8 @@ inline void exact_order_region_canonicalize_term(ExactRegionCell *term) {
     return;
   }
   exact_order_region_rewrite_term_times(term, closure);
-  closure = exact_order_region_build_time_closure(*term);
-  if (closure.impossible ||
-      !exact_order_region_exact_sources_consistent(*term) ||
-      !exact_order_region_source_bounds_consistent(*term) ||
+  if (!exact_order_region_exact_sources_consistent(*term) ||
+      !exact_order_region_source_bounds_consistent(*term, closure) ||
       exact_order_region_has_independent_source_density_tie(*term)) {
     term->impossible = true;
     return;
@@ -1055,15 +1044,16 @@ inline void exact_order_region_canonicalize_term(ExactRegionCell *term) {
             term->atoms.end());
       };
 
-  for (const auto &source : exact_region_lower_source_atoms(*term)) {
+  const auto lower_bounds = exact_region_lower_source_atoms(*term);
+  for (const auto &source : lower_bounds) {
     bool dominated = false;
-    for (const auto &other : exact_region_lower_source_atoms(*term)) {
+    for (const auto &other : lower_bounds) {
       if (source.source_id != other.source_id ||
           source.time_id == other.time_id) {
         continue;
       }
-      if (exact_order_region_time_known_before_or_equal(
-              *term, source.time_id, other.time_id)) {
+      if (exact_order_region_canonical_relation(
+              closure, source.time_id, other.time_id) != 0U) {
         dominated = true;
         break;
       }
@@ -1073,15 +1063,16 @@ inline void exact_order_region_canonicalize_term(ExactRegionCell *term) {
           ExactRegionAtomKind::SourceLower, source.source_id, source.time_id);
     }
   }
-  for (const auto &source : exact_region_upper_source_atoms(*term)) {
+  const auto upper_bounds = exact_region_upper_source_atoms(*term);
+  for (const auto &source : upper_bounds) {
     bool dominated = false;
-    for (const auto &other : exact_region_upper_source_atoms(*term)) {
+    for (const auto &other : upper_bounds) {
       if (source.source_id != other.source_id ||
           source.time_id == other.time_id) {
         continue;
       }
-      if (exact_order_region_time_known_before_or_equal(
-              *term, other.time_id, source.time_id)) {
+      if (exact_order_region_canonical_relation(
+              closure, other.time_id, source.time_id) != 0U) {
         dominated = true;
         break;
       }

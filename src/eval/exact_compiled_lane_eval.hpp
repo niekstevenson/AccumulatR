@@ -4,8 +4,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <memory>
-#include <stdexcept>
 #include <vector>
 
 #include "exact_source_lane_eval.hpp"
@@ -52,16 +52,6 @@ struct CompiledLaneExecutor {
   std::vector<std::unique_ptr<CompiledLaneScratch>> scratch_layers;
 };
 
-inline void require_compiled_lane_time(
-    const CompiledLaneFrame &frame,
-    const semantic::Index time_id,
-    const std::size_t lane) {
-  if (time_id == semantic::kInvalidIndex || !frame.has_time(time_id, lane)) {
-    throw std::runtime_error(
-        "compiled lane schedule reads an unbound time slot");
-  }
-}
-
 inline double compiled_lane_node_time(const CompiledMathNode &node,
                                       const CompiledLaneFrame &frame,
                                       const std::size_t lane) {
@@ -91,15 +81,9 @@ inline bool compiled_lane_outcome_gate_open(
   if (used != nullptr) {
     const auto offset = static_cast<std::size_t>(node.subject_id);
     const auto size = static_cast<std::size_t>(node.aux_id);
-    if (offset + size > plan.compiled_outcome_gate_indices.size()) {
-      throw std::runtime_error(
-          "compiled outcome-used gate points outside the plan");
-    }
     for (std::size_t i = 0; i < size; ++i) {
       const auto outcome = plan.compiled_outcome_gate_indices[offset + i];
-      if (outcome != semantic::kInvalidIndex &&
-          static_cast<std::size_t>(outcome) < used->size() &&
-          (*used)[static_cast<std::size_t>(outcome)] != 0U) {
+      if ((*used)[static_cast<std::size_t>(outcome)] != 0U) {
         any_used = true;
         break;
       }
@@ -182,12 +166,6 @@ inline void evaluate_source_product_ops_lanes(
     if (op.value_channel_mask == 0U) {
       out->assign(lane_count, 0.0);
       return;
-    }
-    const auto first_lane = static_cast<std::size_t>(
-        compiled_frame_lane(lanes, 0U));
-    require_compiled_lane_time(*frame, op.time_id, first_lane);
-    if (op.time_cap_id != semantic::kInvalidIndex) {
-      require_compiled_lane_time(*frame, op.time_cap_id, first_lane);
     }
     const double *times = nullptr;
     if (lanes == nullptr && op.time_cap_id == semantic::kInvalidIndex) {
@@ -434,11 +412,8 @@ inline void evaluate_compiled_lane_integral_node(
     const semantic::Index *lanes,
     const std::size_t lane_count,
     std::vector<double> *out,
-    const std::size_t integral_depth) {
+  const std::size_t integral_depth) {
   const auto &program = plan.compiled_math;
-  if (node.integral_kernel_slot == semantic::kInvalidIndex) {
-    throw std::runtime_error("compiled integral node has no planned kernel");
-  }
   const auto &kernel = program.integral_kernels[
       static_cast<std::size_t>(node.integral_kernel_slot)];
   auto &scratch = executor->scratch(integral_depth * 4U);
@@ -592,11 +567,6 @@ inline void evaluate_compiled_lane_schedule(
     case CompiledMathNodeKind::SourcePdf:
     case CompiledMathNodeKind::SourceCdf:
     case CompiledMathNodeKind::SourceSurvival: {
-      require_compiled_lane_time(
-          *frame, node.time_id, 0U);
-      if (node.aux_id != semantic::kInvalidIndex) {
-        require_compiled_lane_time(*frame, node.aux_id, 0U);
-      }
       for (std::size_t i = 0; i < lane_count; ++i) {
         scratch.times[i] = compiled_lane_source_node_time(node, *frame, i);
       }
@@ -619,10 +589,12 @@ inline void evaluate_compiled_lane_schedule(
       std::copy_n(values, lane_count, node_out);
       break;
     }
+    case CompiledMathNodeKind::ExprDensity:
+    case CompiledMathNodeKind::ExprCdf:
+    case CompiledMathNodeKind::ExprSurvival:
+      std::terminate();
     case CompiledMathNodeKind::TimeGate:
     case CompiledMathNodeKind::StrictTimeGate: {
-      require_compiled_lane_time(*frame, node.time_id, 0U);
-      require_compiled_lane_time(*frame, node.aux_id, 0U);
       const auto child_id = program.child_nodes[
           static_cast<std::size_t>(node.children.offset)];
       const double *child = frame->values_for(child_id);
@@ -636,11 +608,6 @@ inline void evaluate_compiled_lane_schedule(
       }
       break;
     }
-    case CompiledMathNodeKind::ExprDensity:
-    case CompiledMathNodeKind::ExprCdf:
-    case CompiledMathNodeKind::ExprSurvival:
-      throw std::runtime_error(
-          "compiled lane root contains an interpreter expression node");
     case CompiledMathNodeKind::OutcomeSubsetUnused:
     case CompiledMathNodeKind::OutcomeSubsetUsed:
       for (std::size_t i = 0; i < lane_count; ++i) {
@@ -652,7 +619,6 @@ inline void evaluate_compiled_lane_schedule(
       break;
     case CompiledMathNodeKind::IntegralZeroToCurrent:
     case CompiledMathNodeKind::IntegralZeroToCurrentRaw:
-      require_compiled_lane_time(*frame, node.time_id, 0U);
       evaluate_compiled_lane_integral_node(
           plan,
           node,
@@ -666,7 +632,6 @@ inline void evaluate_compiled_lane_schedule(
       break;
     case CompiledMathNodeKind::ExprUpperBoundDensity:
     case CompiledMathNodeKind::ExprUpperBoundCdf: {
-      require_compiled_lane_time(*frame, node.time_id, 0U);
       const auto child_id = program.child_nodes[
           static_cast<std::size_t>(node.children.offset)];
       const double *child = frame->values_for(child_id);

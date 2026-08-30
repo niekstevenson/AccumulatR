@@ -27,9 +27,7 @@ Reason:
   event-producing branches, which the current exact transition planner does not
   do cleanly.
 
-Boundary:
-
-- [src/eval/exact_kernel.hpp](/Users/nstevenson/Documents/2025/AccumulatR/src/eval/exact_kernel.hpp:687)
+Boundary: `src/eval/exact_transition_lowering.hpp`.
 
 ## 2. Ranked (`n_outcomes > 1`) models that are not direct event outcomes
 
@@ -69,53 +67,9 @@ Reason:
 - Keeping ranked outcomes direct-only avoids reintroducing ad hoc ranked
   evaluator branches.
 
-Boundary:
+Boundary: `.validate_multi_outcome_dsl()` in `R/model_definition.R`.
 
-- [R/model_definition.R](/Users/nstevenson/Documents/2025/AccumulatR/R/model_definition.R:347)
-- [src/eval/exact_kernel.hpp](/Users/nstevenson/Documents/2025/AccumulatR/src/eval/exact_kernel.hpp:2409)
-- [src/eval/exact_kernel.hpp](/Users/nstevenson/Documents/2025/AccumulatR/src/eval/exact_kernel.hpp:2482)
-
-## 3. Exact conditioning on overlapping forced pool states
-
-Example models:
-
-```r
-race_spec() |>
-  add_accumulator("a", "lognormal") |>
-  add_accumulator("b", "lognormal") |>
-  add_pool("P", c("a", "b")) |>
-  add_outcome("X", all_of("a", "P"))
-```
-
-```r
-race_spec() |>
-  add_accumulator("a", "lognormal") |>
-  add_accumulator("b", "lognormal") |>
-  add_accumulator("c", "lognormal") |>
-  add_pool("P1", c("a", "b")) |>
-  add_pool("P2", c("b", "c")) |>
-  add_outcome("X", all_of("P1", "P2"))
-```
-
-Status:
-
-- not supported
-
-Reason:
-
-- In these shapes, the exact kernel would have to condition simultaneously on a
-  pool state and an overlapping substate built from the same members.
-- The current forced-state representation is set-based and does not encode a
-  coherent joint state for overlapping pools and members.
-- Allowing this would mix incompatible constraints instead of computing a
-  clean exact conditioning law.
-
-Boundary:
-
-- [src/eval/exact_kernel.hpp](/Users/nstevenson/Documents/2025/AccumulatR/src/eval/exact_kernel.hpp:1832)
-- [src/eval/exact_kernel.hpp](/Users/nstevenson/Documents/2025/AccumulatR/src/eval/exact_kernel.hpp:1838)
-
-## 4. Finite RT with missing response label
+## 3. Finite RT with missing response label
 
 Example:
 
@@ -128,6 +82,4 @@ Status:
 
 - not supported
 
-Boundary:
-
-- [src/eval/observed_kernel.hpp](/Users/nstevenson/Documents/2025/AccumulatR/src/eval/observed_kernel.hpp:456)
+Boundary: `.validate_observation_rows()` in `R/likelihood_param_interface.R`.

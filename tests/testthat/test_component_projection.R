@@ -68,12 +68,12 @@ testthat::test_that("go-component likelihood matches the simple A/B race", {
   ctx_guarded <- make_context(guarded)
   ctx_simple <- make_context(simple)
   params_df_guarded <- build_param_matrix(
-    guarded$model_spec,
+    guarded,
     params_guarded,
     trial_df = prepared_guarded
   )
   params_df_simple <- build_param_matrix(
-    simple$model_spec,
+    simple,
     params_simple,
     trial_df = prepared_simple
   )

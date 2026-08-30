@@ -1,0 +1,8 @@
+#!/bin/sh
+
+accelerate_libs=
+case "$(uname -s)" in
+  Darwin) accelerate_libs="-framework Accelerate" ;;
+esac
+
+sed "s|@ACCELERATE_LIBS@|$accelerate_libs|" src/Makevars.in > src/Makevars

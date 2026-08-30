@@ -2,9 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <iterator>
 #include <stdexcept>
-#include <string>
 #include <vector>
 
 #include "compiled_math_types.hpp"
@@ -52,7 +50,6 @@ struct ExactExprKernel {
   semantic::Index event_source_id{semantic::kInvalidIndex};
   semantic::Index guard_ref_expr_id{semantic::kInvalidIndex};
   semantic::Index guard_blocker_expr_id{semantic::kInvalidIndex};
-  bool has_unless{false};
 };
 
 struct ExactSourceKernel {
@@ -70,36 +67,30 @@ struct ExactSourceKernel {
 inline std::vector<semantic::Index> merge_sorted_support(
     std::vector<semantic::Index> merged,
     const std::vector<semantic::Index> &rhs) {
-  for (const auto idx : rhs) {
-    if (std::find(merged.begin(), merged.end(), idx) == merged.end()) {
-      merged.push_back(idx);
-    }
-  }
-  std::sort(merged.begin(), merged.end());
+  const auto split = merged.size();
+  merged.insert(merged.end(), rhs.begin(), rhs.end());
+  std::inplace_merge(merged.begin(), merged.begin() + split, merged.end());
+  merged.erase(std::unique(merged.begin(), merged.end()), merged.end());
   return merged;
 }
 
 inline bool supports_overlap(const std::vector<semantic::Index> &lhs,
                              const std::vector<semantic::Index> &rhs) {
-  std::vector<semantic::Index> overlap;
-  std::set_intersection(lhs.begin(),
-                        lhs.end(),
-                        rhs.begin(),
-                        rhs.end(),
-                        std::back_inserter(overlap));
-  return !overlap.empty();
+  auto left = lhs.begin();
+  auto right = rhs.begin();
+  while (left != lhs.end() && right != rhs.end()) {
+    if (*left == *right) {
+      return true;
+    }
+    *left < *right ? ++left : ++right;
+  }
+  return false;
 }
 
 inline bool support_contains_source(const std::vector<semantic::Index> &support,
                                     const semantic::Index source_id) {
   return source_id != semantic::kInvalidIndex &&
          std::binary_search(support.begin(), support.end(), source_id);
-}
-
-
-inline bool has_reason(const std::vector<std::string> &reasons,
-                       const std::string &needle) {
-  return std::find(reasons.begin(), reasons.end(), needle) != reasons.end();
 }
 
 class ExactSupportBuilder {
@@ -261,18 +252,6 @@ private:
     return {};
   }
 };
-
-inline semantic::Index child_event_source_index(const runtime::ExactEvaluationProgram &program,
-                                                const semantic::Index expr_idx) {
-  return program.expr_source_index[static_cast<std::size_t>(expr_idx)];
-}
-
-inline semantic::SourceKind child_event_source_kind(
-    const runtime::ExactEvaluationProgram &program,
-    const semantic::Index expr_idx) {
-  return static_cast<semantic::SourceKind>(
-      program.expr_source_kind[static_cast<std::size_t>(expr_idx)]);
-}
 
 inline void validate_exact_expr(const runtime::ExactEvaluationProgram &program,
                                 const semantic::Index expr_idx) {

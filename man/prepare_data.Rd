@@ -4,7 +4,7 @@
 \alias{prepare_data}
 \title{Prepare behavioral data for likelihood evaluation}
 \usage{
-prepare_data(structure, data_df, compress = FALSE, prep = NULL)
+prepare_data(structure, data_df, compress = FALSE)
 }
 \arguments{
 \item{structure}{Finalized model structure.}
@@ -23,8 +23,6 @@ truncation are not supported for ranked observations.}
 an `expand` index so `log_likelihood()` can return trial-level values on
 the original trial scale.
 Defaults to `FALSE`.}
-
-\item{prep}{Optional preprocessed model bundle.}
 }
 \value{
 An `accumulatr_data` object.
@@ -45,7 +43,7 @@ spec <- add_accumulator(spec, "A", "lognormal")
 spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
 params_df <- build_param_matrix(
-  spec,
+  structure,
   c(m = 0, s = 0.1),
   n_trials = 2
 )

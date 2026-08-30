@@ -1,11 +1,3 @@
-run_public_loglik <- function(spec, trial_df, params, min_ll = log(1e-10)) {
-  structure <- finalize_model(spec)
-  context <- make_context(structure)
-  prepared <- prepare_data(structure, trial_df)
-  params_mat <- build_param_matrix(spec, params, trial_df = prepared)
-  as.numeric(log_likelihood(context, prepared, params_mat, min_ll = min_ll))
-}
-
 testthat::test_that("compressed prepared trials expand after compact ok filtering", {
   spec <- race_spec() |>
     add_accumulator("A", "lognormal") |>
@@ -21,8 +13,8 @@ testthat::test_that("compressed prepared trials expand after compact ok filterin
   full <- prepare_data(structure, data_df)
   compressed <- prepare_data(structure, data_df, compress = TRUE)
   params <- c(m = 0, s = 0.1, t0 = 0)
-  full_params <- build_param_matrix(spec, params, n_trials = 5)
-  compressed_params <- build_param_matrix(spec, params, n_trials = 2)
+  full_params <- build_param_matrix(structure, params, n_trials = 5)
+  compressed_params <- build_param_matrix(structure, params, n_trials = 2)
 
   testthat::expect_identical(
     attr(compressed, "expand", exact = TRUE),

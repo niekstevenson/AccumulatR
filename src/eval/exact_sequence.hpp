@@ -338,54 +338,34 @@ inline void exact_terminal_no_response_probability_lanes(
 }
 
 inline void advance_exact_sequence_state(
-    ExactSequenceState *state,
+    ExactSequenceState &state,
     const ExactCompiledTransitionPlan &transition,
     const double observed_time,
-    const std::vector<double> *ready_expr_normalizers = nullptr) {
-  if (state == nullptr) {
-    return;
-  }
-  state->has_history = true;
-  state->lower_bound = observed_time;
-  if (transition.release_source_id != semantic::kInvalidIndex &&
-      static_cast<std::size_t>(transition.release_source_id) <
-          state->exact_times.size()) {
-    state->exact_times[static_cast<std::size_t>(transition.release_source_id)] =
+    const std::vector<double> &ready_expr_normalizers) {
+  state.has_history = true;
+  state.lower_bound = observed_time;
+  if (transition.release_source_id != semantic::kInvalidIndex) {
+    state.exact_times[static_cast<std::size_t>(transition.release_source_id)] =
         observed_time;
   }
   for (const auto source_id : transition.readiness_source_ids) {
-    if (source_id == semantic::kInvalidIndex ||
-        static_cast<std::size_t>(source_id) >= state->upper_bounds.size()) {
-      continue;
-    }
-    auto &upper = state->upper_bounds[static_cast<std::size_t>(source_id)];
+    auto &upper = state.upper_bounds[static_cast<std::size_t>(source_id)];
     upper = std::isfinite(upper) ? std::min(upper, observed_time)
                                  : observed_time;
   }
   for (std::size_t i = 0; i < transition.readiness_expr_ids.size(); ++i) {
     const auto expr_id = transition.readiness_expr_ids[i];
-    if (expr_id == semantic::kInvalidIndex ||
-        static_cast<std::size_t>(expr_id) >=
-            state->expr_upper_bounds.size() ||
-        static_cast<std::size_t>(expr_id) >=
-            state->expr_upper_normalizers.size()) {
-      continue;
-    }
-    if (ready_expr_normalizers == nullptr ||
-        i >= ready_expr_normalizers->size()) {
-      continue;
-    }
-    const double normalizer = (*ready_expr_normalizers)[i];
+    const double normalizer = ready_expr_normalizers[i];
     if (!(normalizer > 0.0) || !std::isfinite(normalizer)) {
       continue;
     }
     auto &upper =
-        state->expr_upper_bounds[static_cast<std::size_t>(expr_id)];
+        state.expr_upper_bounds[static_cast<std::size_t>(expr_id)];
     if (std::isfinite(upper) && upper <= observed_time) {
       continue;
     }
     upper = observed_time;
-    state->expr_upper_normalizers[static_cast<std::size_t>(expr_id)] =
+    state.expr_upper_normalizers[static_cast<std::size_t>(expr_id)] =
         normalizer;
   }
 }
@@ -393,14 +373,7 @@ inline void advance_exact_sequence_state(
 inline bool exact_sequence_states_equal(const ExactSequenceState &lhs,
                                         const ExactSequenceState &rhs) {
   if (lhs.has_history != rhs.has_history ||
-      lhs.lower_bound != rhs.lower_bound ||
-      lhs.exact_times.size() != rhs.exact_times.size() ||
-      lhs.upper_bounds.size() != rhs.upper_bounds.size()) {
-    return false;
-  }
-  if (lhs.expr_upper_bounds.size() != rhs.expr_upper_bounds.size() ||
-      lhs.expr_upper_normalizers.size() !=
-          rhs.expr_upper_normalizers.size()) {
+      lhs.lower_bound != rhs.lower_bound) {
     return false;
   }
   for (std::size_t i = 0; i < lhs.exact_times.size(); ++i) {
@@ -491,9 +464,6 @@ struct ExactRankedLaneWorkspace {
   }
 
   void ensure_trials(const std::size_t lane_count) {
-    if (lane_count > kExactRankedTrialTileSize) {
-      throw std::runtime_error("ranked lane tile exceeds its fixed capacity");
-    }
     totals.assign(lane_count, 0.0);
   }
 
@@ -601,7 +571,7 @@ inline void build_exact_ranked_work(
     group.clear();
   }
   for (const auto &entry : workspace->frontier) {
-    if (entry.trial_index < lane_count && entry.probability > 0.0) {
+    if (entry.probability > 0.0) {
       workspace->conditional_totals[entry.trial_index] += entry.probability;
     }
   }
@@ -621,21 +591,9 @@ inline void build_exact_ranked_work(
     }
     const auto outcome_code = exact_trial_view_outcome_code(
         lanes[lane_index].observation, rank_index);
-    if (outcome_code == semantic::kInvalidIndex ||
-        static_cast<std::size_t>(outcome_code) >=
-            plan.outcome_index_by_code.size()) {
-      state.trigger_active = false;
-      continue;
-    }
     const auto target = plan.outcome_index_by_code[
         static_cast<std::size_t>(outcome_code)];
-    if (target == semantic::kInvalidIndex ||
-        static_cast<std::size_t>(target) >= plan.compiled_outcomes.size()) {
-      state.trigger_active = false;
-      continue;
-    }
-    const auto target_position = static_cast<std::size_t>(target);
-    if (state.used_outcomes[target_position] != 0U) {
+    if (target == semantic::kInvalidIndex) {
       state.trigger_active = false;
       continue;
     }
@@ -646,7 +604,7 @@ inline void build_exact_ranked_work(
   }
   for (const auto &entry : workspace->frontier) {
     const auto lane_index = entry.trial_index;
-    if (lane_index >= lane_count || !(entry.probability > 0.0)) {
+    if (!(entry.probability > 0.0)) {
       continue;
     }
     const auto &state = workspace->trial_states[lane_index];
@@ -741,10 +699,10 @@ inline void evaluate_exact_ranked_work_group(
                         tile_lane]);
         }
         advance_exact_sequence_state(
-            &workspace->candidate_state,
+            workspace->candidate_state,
             transition,
             trial_state.pending_time,
-            &workspace->transition_normalizers);
+            workspace->transition_normalizers);
         bool merged = false;
         auto existing_index =
             workspace->next_frontier_head_by_trial[work.trial_index];
@@ -868,7 +826,7 @@ inline void exact_ranked_loglik_lanes(
       std::fill_n(
           workspace->conditional_totals.begin(), tile_count, 0.0);
       for (const auto &entry : workspace->frontier) {
-        if (entry.trial_index < tile_count && entry.probability > 0.0) {
+        if (entry.probability > 0.0) {
           workspace->conditional_totals[entry.trial_index] +=
               entry.probability;
         }

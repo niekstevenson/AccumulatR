@@ -28,7 +28,7 @@ testthat::test_that("response censor codes condition race regions on truncation"
   observed <- as.numeric(log_likelihood(
     make_context(model),
     prepared,
-    build_param_matrix(model$model_spec, pars, trial_df = prepared),
+    build_param_matrix(model, pars, trial_df = prepared),
     sum = FALSE
   ))
 
@@ -88,7 +88,7 @@ testthat::test_that("known censored responses combine every mapped outcome", {
   observed <- as.numeric(log_likelihood(
     make_context(model),
     data,
-    build_param_matrix(model$model_spec, pars, trial_df = data)
+    build_param_matrix(model, pars, trial_df = data)
   ))
   winner_density <- function(t, winner) {
     names <- c("left", "right", "timeout")
@@ -142,7 +142,7 @@ testthat::test_that("unknown censoring and truncation use observable responses",
   observed <- as.numeric(log_likelihood(
     make_context(model),
     data,
-    build_param_matrix(model$model_spec, pars, trial_df = data),
+    build_param_matrix(model, pars, trial_df = data),
     sum = FALSE
   ))
   observable_density <- function(t) {
@@ -187,7 +187,7 @@ testthat::test_that("only selected-outcome integration uses the EMC time limit",
   observed <- as.numeric(log_likelihood(
     make_context(model),
     data,
-    build_param_matrix(model$model_spec, pars, trial_df = data),
+    build_param_matrix(model, pars, trial_df = data),
     sum = FALSE
   ))
   expected <- c(
@@ -232,7 +232,7 @@ testthat::test_that("unknown-response tails retain completed guarded outcomes", 
   observed <- as.numeric(log_likelihood(
     make_context(model),
     data,
-    build_param_matrix(model$model_spec, pars, trial_df = data),
+    build_param_matrix(model, pars, trial_df = data),
     sum = FALSE
   ))
   a_completed <- integrate(

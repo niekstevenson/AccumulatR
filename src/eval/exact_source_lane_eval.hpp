@@ -90,16 +90,6 @@ struct SourceLaneWorkspace {
   std::vector<std::unique_ptr<SourceLaneScratch>> layers;
 };
 
-inline void source_lane_fill_forced(
-    SourceLaneFill *out,
-    const std::size_t position,
-    const ExactRelation relation) {
-  source_lane_store_fill(
-      out,
-      position,
-      exact_source_forced_fill(relation, out->mask));
-}
-
 template <leaf::DistKind Kind,
           bool IdentitySourceLanes,
           typename ElapsedTime>
@@ -797,8 +787,9 @@ inline SourceLaneFill &evaluate_source_program_lanes(
         return scratch.out;
       }
       if (exact_source_relation_forces_fill(relation, fill_mask)) {
+        const auto fill = exact_source_forced_fill(relation, fill_mask);
         for (std::size_t i = 0; i < count; ++i) {
-          source_lane_fill_forced(&scratch.out, i, relation);
+          source_lane_store_fill(&scratch.out, i, fill);
         }
         return scratch.out;
       }

@@ -134,9 +134,6 @@ inline semantic::Index append_observation_plan_op(
     ObservationProbabilityPlan *plan,
     ObservationPlanOp op,
     const std::vector<semantic::Index> &children = {}) {
-  if (plan == nullptr) {
-    return semantic::kInvalidIndex;
-  }
   op.children.offset =
       static_cast<semantic::Index>(plan->child_ops.size());
   op.children.size = static_cast<semantic::Index>(children.size());

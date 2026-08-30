@@ -35,16 +35,9 @@ struct ExactStepLaneWorkspace {
   ExactStepLaneWorkspace(ExactStepLaneWorkspace &&) = delete;
   ExactStepLaneWorkspace &operator=(ExactStepLaneWorkspace &&) = delete;
 
-  void ensure_lanes(const std::size_t lane_count) const {
-    if (lane_count > kExactLaneTileSize) {
-      throw std::runtime_error("exact lane tile exceeds its fixed capacity");
-    }
-  }
-
   bool bind_sources(
       const ExactStepLaneInput *lanes,
       const std::size_t lane_count) {
-    ensure_lanes(lane_count);
     bool has_sequence_history = false;
     if (lane_count > 0U) {
       source_state.bind_matrix(*lanes[0].params->matrix, lane_count);
@@ -82,10 +75,9 @@ struct ExactStepLaneWorkspace {
   }
 
   CompiledLaneFrame &prepare_initial(
-      const ObservationLaneBatchView lanes,
-      const std::uint8_t *shared_started) {
+    const ObservationLaneBatchView lanes,
+    const std::uint8_t *shared_started) {
     const auto lane_count = lanes.size;
-    ensure_lanes(lane_count);
     if (lane_count > 0U) {
       source_state.bind_initial_batch(
           lanes, shared_started);
@@ -105,7 +97,6 @@ struct ExactStepLaneWorkspace {
   void bind_initial_sources(
       const ObservationLaneBatchView lanes,
       const std::uint8_t *shared_started) {
-    ensure_lanes(lanes.size);
     if (lanes.size > 0U) {
       source_state.bind_initial_batch(lanes, shared_started);
     }
@@ -116,7 +107,6 @@ struct ExactStepLaneWorkspace {
       const double *times,
       const LaneIndex *source_lanes,
       const std::size_t lane_count) {
-    ensure_lanes(lane_count);
     auto &frame = executor.lanes.top(lane_count);
     frame.has_sequence_history = false;
     frame.source_lanes_identity = true;
@@ -184,11 +174,8 @@ struct ExactStepLaneWorkspacePool {
 
   ExactStepLaneWorkspace &get(
       const std::vector<ExactVariantPlan> &plans,
-      const semantic::Index variant_index) {
+    const semantic::Index variant_index) {
     const auto position = static_cast<std::size_t>(variant_index);
-    if (position >= workspaces.size()) {
-      throw std::runtime_error("exact lane workspace variant is out of range");
-    }
     if (!workspaces[position]) {
       workspaces[position] =
           std::make_unique<ExactStepLaneWorkspace>(plans[position]);

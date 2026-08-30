@@ -11,7 +11,7 @@ testthat::test_that("response_probabilities respects mixture weights and compone
 
   structure <- finalize_model(spec)
   params <- build_param_matrix(
-    spec,
+    structure,
     c(
       A.m = 0, A.s = 0.1, A.t0 = 0,
       B.m = 0, B.s = 0.1, B.t0 = 0
@@ -47,7 +47,7 @@ testthat::test_that("response_probabilities returns residual NA mass for mapped 
 
   structure <- finalize_model(spec)
   params <- build_param_matrix(
-    spec,
+    structure,
     c(
       A.m = 0, A.s = 0.1, A.t0 = 0,
       B.m = 0, B.s = 0.1, B.t0 = 0
@@ -66,64 +66,11 @@ testthat::test_that("response_probabilities returns residual NA mass for mapped 
   testthat::expect_equal(probs_no_na, c(Seen = 0.7), tolerance = 1e-4)
 })
 
-latent_sampled_response_spec <- function() {
-  race_spec() |>
-    add_accumulator("target_fast", "lognormal") |>
-    add_accumulator("target_slow", "lognormal") |>
-    add_accumulator("competitor", "lognormal") |>
-    add_pool("Target", c("target_fast", "target_slow")) |>
-    add_outcome("Target", "Target") |>
-    add_outcome("Competitor", "competitor") |>
-    add_component("fast", members = c("target_fast", "competitor")) |>
-    add_component("slow", members = c("target_slow", "competitor")) |>
-    set_mixture(mode = "sample", reference = "slow") |>
-    test_separate_all_parameters() |>
-    finalize_model()
-}
-
-latent_sampled_response_params <- function(p.fast) {
-  c(
-    target_fast.m = log(0.25),
-    target_fast.s = 0.15,
-    target_slow.m = log(0.45),
-    target_slow.s = 0.20,
-    competitor.m = log(0.35),
-    competitor.s = 0.18,
-    p.fast = p.fast
-  )
-}
-
-testthat::test_that("response_probabilities marginalizes sampled mixtures when component is latent", {
-  structure <- latent_sampled_response_spec()
-
-  probs_lo <- response_probabilities(
-    structure,
-    build_param_matrix(
-      structure$model_spec,
-      latent_sampled_response_params(0.2),
-      n_trials = 1L
-    )
-  )
-  probs_hi <- response_probabilities(
-    structure,
-    build_param_matrix(
-      structure$model_spec,
-      latent_sampled_response_params(0.8),
-      n_trials = 1L
-    )
-  )
-
-  testthat::expect_gt(
-    abs(unname(probs_hi["Target"]) - unname(probs_lo["Target"])),
-    1e-6
-  )
-})
-
-testthat::test_that("response_probabilities treats explicit NA component like latent and explicit labels like observed", {
-  structure <- latent_sampled_response_spec()
+testthat::test_that("response_probabilities marginalizes latent sampled mixtures", {
+  structure <- latent_sampled_mixture_spec()
   params <- build_param_matrix(
-    structure$model_spec,
-    latent_sampled_response_params(0.2),
+    structure,
+    latent_sampled_mixture_params(0.2),
     n_trials = 1L
   )
 
@@ -136,10 +83,14 @@ testthat::test_that("response_probabilities treats explicit NA component like la
   rows_fast <- AccumulatR:::.param_matrix_to_rows(structure, params)
   rows_fast$component <- "fast"
   probs_fast <- response_probabilities(structure, rows_fast)
+  rows_slow <- AccumulatR:::.param_matrix_to_rows(structure, params)
+  rows_slow$component <- "slow"
+  probs_slow <- response_probabilities(structure, rows_slow)
 
   testthat::expect_equal(probs_explicit_na, probs_latent, tolerance = 1e-8)
-  testthat::expect_gt(
-    abs(unname(probs_fast["Target"]) - unname(probs_latent["Target"])),
-    1e-6
+  testthat::expect_equal(
+    probs_latent,
+    0.2 * probs_fast + 0.8 * probs_slow,
+    tolerance = 1e-8
   )
 })

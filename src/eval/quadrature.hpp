@@ -161,9 +161,4 @@ inline double integrate_finite_default(Fn &&fn,
   return integrate_finite_default(lower, upper, std::forward<Fn>(fn));
 }
 
-template <typename Fn>
-inline double integrate_tail_default(Fn &&fn) {
-  return integrate_rule(canonical_tail_batch().nodes, std::forward<Fn>(fn));
-}
-
 } // namespace accumulatr::eval::quadrature

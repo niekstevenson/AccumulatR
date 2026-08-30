@@ -13,17 +13,6 @@ inline void compile_exact_support_context(ExactVariantBuildState *plan) {
   plan->source_count = static_cast<semantic::Index>(
       plan->program.layout.n_leaves +
       plan->program.layout.n_pools);
-  plan->leaf_source_ids.resize(
-      static_cast<std::size_t>(plan->program.layout.n_leaves));
-  plan->pool_source_ids.resize(
-      static_cast<std::size_t>(plan->program.layout.n_pools));
-  for (semantic::Index i = 0; i < plan->program.layout.n_leaves; ++i) {
-    plan->leaf_source_ids[static_cast<std::size_t>(i)] = i;
-  }
-  for (semantic::Index i = 0; i < plan->program.layout.n_pools; ++i) {
-    plan->pool_source_ids[static_cast<std::size_t>(i)] =
-        static_cast<semantic::Index>(plan->program.layout.n_leaves + i);
-  }
 }
 
 inline void compile_program_source_runtime_fields(ExactVariantBuildState *plan) {
@@ -162,7 +151,6 @@ inline void compile_exact_expr_kernels(ExactVariantBuildState *plan) {
 
     kernel.guard_ref_expr_id = program.expr_ref_child[pos];
     kernel.guard_blocker_expr_id = program.expr_blocker_child[pos];
-    kernel.has_unless = !kernel.children.empty();
   }
 }
 inline void compile_trigger_state_table(ExactVariantBuildState *plan) {

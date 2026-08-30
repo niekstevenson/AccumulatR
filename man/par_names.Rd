@@ -7,7 +7,7 @@
 par_names(model)
 }
 \arguments{
-\item{model}{A `race_spec` or related model object.}
+\item{model}{A `race_spec` object.}
 }
 \value{
 A character vector of parameter names.

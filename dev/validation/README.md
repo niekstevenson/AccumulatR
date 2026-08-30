@@ -18,45 +18,50 @@ The default runner compares engine likelihoods against explicit manual reference
 6. `ranked_independent`
 7. `ranked_chained_onset`
 8. `shared_trigger_conditioning`
-9. `shared_gate_pair`
-10. `guarded_positive_mass_tie`
-11. `shared_gate_three_way_tie`
-12. `nested_guard_pair`
-13. `deep_guard_chain`
-14. `pooled_shared_gate_tie`
-15. `pooled_guarded_shared_gate_tie`
-16. `overlapping_composite_competitors`
-17. `guarded_overlapping_competitors`
-18. `shared_gate_four_way_tie`
-19. `none_of_conjunction`
-20. `stop_change_shared_trigger`
-21. `stim_selective_stop`
-22. `stim_selective_stop2`
-23. `density_lift_competitor_subset`
-24. `partial_overlap_composite_gates`
-25. `nested_choice_guard_absence`
-26. `first_of_absence_choice`
-27. `guarded_composite_vs_guarded_competitor`
-28. `composite_blocker_guard`
+9. `stop_change_shared_trigger`
+10. `stim_selective_stop`
+11. `stim_selective_stop2`
+12. `shared_gate_pair`
+13. `guarded_positive_mass_tie`
+14. `shared_gate_three_way_tie`
+15. `nested_guard_pair`
+16. `deep_guard_chain`
+17. `pooled_shared_gate_tie`
+18. `pooled_guarded_shared_gate_tie`
+19. `density_lift_competitor_subset`
+20. `overlapping_composite_competitors`
+21. `guarded_overlapping_competitors`
+22. `shared_gate_four_way_tie`
+23. `none_of_conjunction`
+24. `first_of_absence_choice`
+25. `guarded_composite_vs_guarded_competitor`
+26. `composite_blocker_guard`
+27. `partial_overlap_composite_gates`
+28. `nested_choice_guard_absence`
 
 There is also a heavier adversarial runner:
 
 ```sh
-Rscript dev/validation/run_adversarial_validation.R
+Rscript dev/validation/run_validation.R --adversarial
 ```
 
 To run one adversarial case:
 
 ```sh
-Rscript dev/validation/run_adversarial_validation.R --case=oracle_deep_composite_blocker
+Rscript dev/validation/run_validation.R --adversarial --case=oracle_deep_composite_blocker
 ```
 
-That runner checks complex compositions against independent, low-dimensional formulas:
+That runner checks complex compositions against independent density,
+order-statistic, and shared-gate formulas:
 
 1. `oracle_repeated_shared_gate_six_way`
 2. `oracle_deep_composite_blocker`
 3. `oracle_pool_k2_shared_gate_guard`
 
-The references use derived density, order-statistic, and shared-gate formulas. Fixed
-low-node tensor quadrature is not used for discontinuous event indicators. The runner
-exits nonzero if any check fails.
+It exits nonzero if any check fails.
+
+Compiler structure and complexity budgets are checked separately with:
+
+```sh
+Rscript dev/validation/compiler_architecture_acceptance.R
+```

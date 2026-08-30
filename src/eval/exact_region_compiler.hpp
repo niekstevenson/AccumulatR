@@ -2109,8 +2109,8 @@ inline bool exact_order_region_probability_root(
         exact_order_region_simplify(std::move(region)));
     ExactOrderRegionExpr planned_metric_region;
     for (const auto &term : region.terms) {
-      ExactProjectionPlan projection_plan;
-      if (!exact_projection_plan_cell(
+      ExactProjectionPlanPtr projection_plan;
+      if (!exact_projection_plan_cell_memoized(
               *plan,
               term,
               {},
@@ -2120,9 +2120,9 @@ inline bool exact_order_region_probability_root(
               &projection_plan)) {
         return false;
       }
-      builder = projection_plan.builder_after;
+      builder = projection_plan->builder_after;
       exact_projection_collect_metric_cells(
-          projection_plan, &planned_metric_region);
+          *projection_plan, &planned_metric_region);
     }
     region =
         exact_order_region_minimize_positive_union(

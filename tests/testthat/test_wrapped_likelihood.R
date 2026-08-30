@@ -25,7 +25,7 @@ testthat::test_that("guess outcomes are aggregated in observed finite-label like
   )
 
   prepared <- prepare_data(structure, data_df)
-  params_df <- build_param_matrix(spec, params, trial_df = prepared)
+  params_df <- build_param_matrix(structure, params, trial_df = prepared)
   ctx <- make_context(structure)
   ll <- as.numeric(log_likelihood(ctx, prepared, params_df))
 

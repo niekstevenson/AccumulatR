@@ -106,8 +106,8 @@ inline bool exact_expr_distribution_prepare_region(
   ExactOrderRegionExpr planned_metric_region;
   ExactProjectionCost cost;
   for (const auto &term : region.terms) {
-    ExactProjectionPlan projection_plan;
-    if (!exact_projection_plan_cell(
+    ExactProjectionPlanPtr projection_plan;
+    if (!exact_projection_plan_cell_memoized(
             plan,
             term,
             {},
@@ -117,10 +117,10 @@ inline bool exact_expr_distribution_prepare_region(
             &projection_plan)) {
       return false;
     }
-    builder = projection_plan.builder_after;
-    cost = exact_projection_cost_sum(cost, projection_plan.cost);
+    builder = projection_plan->builder_after;
+    cost = exact_projection_cost_sum(cost, projection_plan->cost);
     exact_projection_collect_metric_cells(
-        projection_plan, &planned_metric_region);
+        *projection_plan, &planned_metric_region);
   }
   region =
       exact_order_region_minimize_positive_union(
@@ -148,7 +148,6 @@ inline bool exact_expr_distribution_prepare_complement_survival(
   if (!exact_expr_distribution_prepare_region(plan, survival_key, &candidate)) {
     return false;
   }
-  candidate.key = survival_key;
   candidate.complement_result = true;
   candidate.cost.compiled_nodes += 1;
   *out = std::move(candidate);
@@ -172,7 +171,6 @@ inline bool exact_expr_distribution_prepare_integrated_density(
   if (!exact_expr_distribution_prepare_region(plan, density_key, &candidate)) {
     return false;
   }
-  candidate.key = density_key;
   candidate.integrate_density = true;
   candidate.integral_upper_time_id = key.time_id;
   candidate.cost.integral_nodes += 1;
@@ -246,7 +244,7 @@ inline bool exact_expr_distribution_contains_unless(
   const auto &kernel =
       plan.expr_kernels[static_cast<std::size_t>(expr_id)];
   if (kernel.kind == semantic::ExprKind::Guard) {
-    if (kernel.has_unless ||
+    if (!kernel.children.empty() ||
         exact_expr_distribution_contains_unless(
             plan, kernel.guard_ref_expr_id) ||
         exact_expr_distribution_contains_unless(
@@ -654,7 +652,7 @@ inline bool exact_expr_distribution_prepare_independent_guard(
   }
   const auto &kernel =
       plan.expr_kernels[static_cast<std::size_t>(key.expr_id)];
-  if (kernel.kind != semantic::ExprKind::Guard || kernel.has_unless) {
+  if (kernel.kind != semantic::ExprKind::Guard || !kernel.children.empty()) {
     return false;
   }
   if (!exact_order_region_expr_relation_can_collapse(
@@ -724,11 +722,8 @@ inline semantic::Index compile_expr_distribution_lowering_root(
     if (lowering.key.value_kind == CompiledMathNodeKind::ExprDensity) {
       node = guard_density(lowering.key.time_id);
     } else {
-      const auto bind_time_id =
-          lowering.key.time_id ==
-                  static_cast<semantic::Index>(CompiledMathTimeSlot::Active)
-              ? lowering.key.time_id
-              : static_cast<semantic::Index>(CompiledMathTimeSlot::Active);
+      const auto bind_time_id = static_cast<semantic::Index>(
+          CompiledMathTimeSlot::Active);
       const auto density_node = guard_density(bind_time_id);
       node = compile_integral_zero_to_current_node(
           plan,

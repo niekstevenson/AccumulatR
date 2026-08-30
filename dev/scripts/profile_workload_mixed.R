@@ -27,7 +27,7 @@ load_accumulatr <- function() {
 }
 
 load_accumulatr()
-source(file.path("dev", "examples", "new_API.R"))
+source(file.path("dev", "examples", "benchmark_models.R"))
 
 parse_int_env <- function(name, default, min_value = 1L) {
   value <- suppressWarnings(as.integer(Sys.getenv(name, as.character(default))))
@@ -45,149 +45,7 @@ parse_num_env <- function(name, default, min_value = 0) {
   value
 }
 
-stop_change_model <- function() {
-  structure <- race_spec() |>
-    add_accumulator("S", "lognormal") |>
-    add_accumulator("stop", "lognormal") |>
-    add_accumulator("change", "lognormal") |>
-    add_outcome("S", inhibit("S", by = "stop")) |>
-    add_outcome("X", all_of("change", "stop")) |>
-    add_component("go_only", members = "S") |>
-    add_component("go_stop", members = c("S", "stop", "change")) |>
-    add_trigger("stop_trigger", members = c("stop", "change")) |>
-    set_mixture(mode = "fixed", weights = c(go_only = .75, go_stop = .25)) |>
-    set_parameters(
-      separate = list(
-        m = c("S", "stop", "change"),
-        s = c("S", "stop", "change"),
-        t0 = c("S", "change")
-      ),
-      rename = c(
-        S.m = "m_go",
-        stop.m = "m_stop",
-        change.m = "m_change",
-        S.s = "s_go",
-        stop.s = "s_stop",
-        change.s = "s_change",
-        S.t0 = "t0_go",
-        change.t0 = "t0_change",
-        stop_trigger = "q"
-      )
-    ) |>
-    finalize_model()
-  pars <- c(
-    m_go = log(0.30), s_go = 0.18, t0_go = 0.00,
-    m_stop = log(0.22), s_stop = 0.18,
-    m_change = log(0.40), s_change = 0.18, t0_change = 0.00,
-    q = 0.05
-  )
-  list(structure = structure, pars = pars)
-}
-
-stim_selective_model <- function() {
-  structure <- race_spec() |>
-    add_accumulator("A", "lognormal") |>
-    add_accumulator("B", "lognormal") |>
-    add_accumulator("S1", "lognormal") |>
-    add_accumulator("IS", "lognormal") |>
-    add_accumulator("S2", "lognormal") |>
-    add_outcome(
-      "A",
-      first_of(
-        inhibit("A", by = "S1"),
-        all_of("A", "S1", inhibit("IS", by = "S2"))
-      )
-    ) |>
-    add_outcome(
-      "B",
-      first_of(
-        inhibit("B", by = "S1"),
-        all_of("B", "S1", inhibit("IS", by = "S2"))
-      )
-    ) |>
-    add_outcome(
-      "STOP",
-      all_of("S1", inhibit("S2", by = "IS")),
-      options = list(map_outcome_to = NA_character_)
-    ) |>
-    add_component("go", members = c("A", "B")) |>
-    add_component("stop", members = c("A", "B", "S1", "IS", "S2")) |>
-    set_parameters(
-      separate = list(
-        m = c("S1", "IS", "S2"),
-        s = c("S1", "IS", "S2"),
-        t0 = c("S1", "IS", "S2")
-      ),
-      share = list(
-        m_go = c("A.m", "B.m"),
-        s_go = c("A.s", "B.s"),
-        t0_go = c("A.t0", "B.t0")
-      )
-    ) |>
-    finalize_model()
-  pars <- c(
-    m_go = log(0.30), s_go = 0.18, t0_go = 0.05,
-    S1.m = log(0.26), S1.s = 0.18, S1.t0 = 0.00,
-    IS.m = log(0.35), IS.s = 0.18, IS.t0 = 0.00,
-    S2.m = log(0.32), S2.s = 0.18, S2.t0 = 0.00
-  )
-  list(structure = structure, pars = pars)
-}
-
-models <- list(
-  example_1_simple = list(
-    structure = new_api_examples[["example_1_simple"]],
-    pars = new_api_example_params[["example_1_simple"]]
-  ),
-  example_2_stop_mixture = list(
-    structure = new_api_examples[["example_2_stop_mixture"]],
-    pars = new_api_example_params[["example_2_stop_mixture"]]
-  ),
-  example_3_stop_na = list(
-    structure = new_api_examples[["example_3_stop_na"]],
-    pars = new_api_example_params[["example_3_stop_na"]]
-  ),
-  example_5_timeout_guess = list(
-    structure = new_api_examples[["example_5_timeout_guess"]],
-    pars = new_api_example_params[["example_5_timeout_guess"]]
-  ),
-  example_6_dual_path = list(
-    structure = new_api_examples[["example_6_dual_path"]],
-    pars = new_api_example_params[["example_6_dual_path"]]
-  ),
-  example_7_mixture = list(
-    structure = new_api_examples[["example_7_mixture"]],
-    pars = new_api_example_params[["example_7_mixture"]]
-  ),
-  example_10_exclusion = list(
-    structure = new_api_examples[["example_10_exclusion"]],
-    pars = new_api_example_params[["example_10_exclusion"]]
-  ),
-  example_16_guard_tie_simple = list(
-    structure = new_api_examples[["example_15_guard_tie_simple"]],
-    pars = new_api_example_params[["example_15_guard_tie_simple"]]
-  ),
-  example_21_simple_q = list(
-    structure = new_api_examples[["example_21_simple_q"]],
-    pars = new_api_example_params[["example_21_simple_q"]]
-  ),
-  example_22_shared_q = list(
-    structure = new_api_examples[["example_22_shared_q"]],
-    pars = new_api_example_params[["example_22_shared_q"]]
-  ),
-  example_23_ranked_chain = local({
-    structure <- race_spec(n_outcomes = 2L) |>
-      add_accumulator("a", "lognormal") |>
-      add_accumulator("b", "lognormal", onset = after("a")) |>
-      add_outcome("A", "a") |>
-      add_outcome("B", "b") |>
-      finalize_model()
-    pars <- c(a.m = log(0.30), a.s = 0.16, b.m = log(0.22), b.s = 0.16)
-    list(structure = structure, pars = pars)
-  }),
-  stop_change_shared_trigger = stop_change_model(),
-  stim_selective_stop = stim_selective_model()
-)
+models <- benchmark_models
 
 balanced_labels <- c(
   "example_1_simple",

@@ -106,7 +106,7 @@ save_pool_model <- function() {
   )
 
   set.seed(123456)
-  params_df <- build_param_matrix(model_spec, true_params, n_trials = 1500)
+  params_df <- build_param_matrix(structure, true_params, n_trials = 1500)
   sim <- simulate(structure, params_df)
   data_df <- data.frame(
     trials = sim$trials,
@@ -124,7 +124,7 @@ save_pool_model <- function() {
     est["B.m"] <- theta[["B.m"]]
     est["B.s"] <- exp(theta[["log_B.s"]])
     params_df <- build_param_matrix(
-      model_spec,
+      structure,
       est,
       trial_df = prepared
     )
@@ -168,7 +168,7 @@ save_trigger_model <- function() {
   )
 
   set.seed(123456)
-  params_df <- build_param_matrix(model_spec, true_params, n_trials = 1500)
+  params_df <- build_param_matrix(structure, true_params, n_trials = 1500)
   sim <- simulate(structure, params_df)
   data_df <- data.frame(
     trials = sim$trials,
@@ -186,7 +186,7 @@ save_trigger_model <- function() {
     est["go2.m"] <- theta[["go2.m"]]
     est["go2.s"] <- exp(theta[["log_go2.s"]])
     params_df <- build_param_matrix(
-      model_spec,
+      structure,
       est,
       trial_df = prepared
     )
@@ -237,7 +237,7 @@ save_mixtures <- function() {
 
   set.seed(123456)
   params_df_sampled <- build_param_matrix(
-    sampled_spec,
+    sampled_structure,
     true_params_sampled,
     n_trials = 1500
   )
@@ -251,7 +251,7 @@ save_mixtures <- function() {
     est <- true_params_sampled
     est["p.fast"] <- plogis(theta[["logit_p_fast"]])
     params_df <- build_param_matrix(
-      sampled_spec,
+      sampled_structure,
       est,
       trial_df = prepared_sampled
     )
@@ -283,7 +283,7 @@ save_multi_outcome <- function() {
   )
 
   set.seed(123456)
-  params_df <- build_param_matrix(model_spec, true_params, n_trials = 500)
+  params_df <- build_param_matrix(structure, true_params, n_trials = 500)
   sim <- simulate(structure, params_df)
   data_df <- data.frame(
     trials = sim$trials,
@@ -301,7 +301,7 @@ save_multi_outcome <- function() {
     est[c("A.m", "A.s", "B.m", "B.s")] <- theta[c("A.m", "A.s", "B.m", "B.s")]
     est[c("A.s", "B.s")] <- exp(est[c("A.s", "B.s")])
     params_df <- build_param_matrix(
-      model_spec,
+      structure,
       est,
       trial_df = prepared
     )
@@ -341,7 +341,7 @@ save_chained_onset <- function() {
   )
 
   set.seed(123456)
-  params_df <- build_param_matrix(model_spec, true_params, n_trials = 2000)
+  params_df <- build_param_matrix(structure, true_params, n_trials = 2000)
   sim <- simulate(structure, params_df)
   data_df <- data.frame(
     trials = sim$trials,
@@ -357,7 +357,7 @@ save_chained_onset <- function() {
     est[c("A.m", "A.s", "B.m", "B.s", "C.m", "C.s")] <- theta[c("A.m", "A.s", "B.m", "B.s", "C.m", "C.s")]
     est[c("A.s", "B.s", "C.s")] <- exp(est[c("A.s", "B.s", "C.s")])
     params_df <- build_param_matrix(
-      model_spec,
+      structure,
       est,
       trial_df = prepared
     )

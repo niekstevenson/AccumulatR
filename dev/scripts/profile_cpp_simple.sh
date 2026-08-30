@@ -15,7 +15,7 @@ fi
 SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" && pwd -P)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../.." && pwd -P)
 
-PROFILE_R_SCRIPT=${ACCUMULATR_PROFILE_R_SCRIPT:-"${REPO_ROOT}/dev/scripts/profile_workload_nested.R"}
+PROFILE_R_SCRIPT=${ACCUMULATR_PROFILE_R_SCRIPT:-"${REPO_ROOT}/dev/scripts/profile_workload_mixed.R"}
 if [[ ! -f "$PROFILE_R_SCRIPT" ]]; then
   echo "Error: profiling workload script not found at $PROFILE_R_SCRIPT" >&2
   exit 1

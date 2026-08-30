@@ -94,13 +94,8 @@ inline void evaluate_observation_lanes(
     const ObservationProbabilityPlan &observation,
     const ObservationLaneBatchView lanes,
     ObservationLaneWorkspace *workspace,
-    std::vector<double> *out) {
+  std::vector<double> *out) {
   const auto lane_count = lanes.size;
-  if (observation.empty() || variant_index == semantic::kInvalidIndex ||
-      lane_count == 0U) {
-    out->assign(lane_count, min_ll);
-    return;
-  }
   out->resize(lane_count);
   const auto &exact_plan =
       exact_plans[static_cast<std::size_t>(variant_index)];
@@ -178,9 +173,6 @@ inline void evaluate_observation_lanes(
         for (semantic::Index i = 0; i < op.children.size; ++i) {
           const auto child = observation.child_ops[
               static_cast<std::size_t>(op.children.offset + i)];
-          if (child == semantic::kInvalidIndex) {
-            continue;
-          }
           const double *child_values =
               op_values(static_cast<std::size_t>(child));
           for (std::size_t lane = 0; lane < lane_count; ++lane) {
@@ -194,9 +186,6 @@ inline void evaluate_observation_lanes(
         for (semantic::Index i = 0; i < op.children.size; ++i) {
           const auto child = observation.child_ops[
               static_cast<std::size_t>(op.children.offset + i)];
-          if (child == semantic::kInvalidIndex) {
-            continue;
-          }
           const double *child_values =
               op_values(static_cast<std::size_t>(child));
           for (std::size_t lane = 0; lane < lane_count; ++lane) {
@@ -218,9 +207,6 @@ inline void evaluate_observation_lanes(
         for (semantic::Index i = 0; i < op.children.size; ++i) {
           const auto child = observation.child_ops[
               static_cast<std::size_t>(op.children.offset + i)];
-          if (child == semantic::kInvalidIndex) {
-            continue;
-          }
           const double *child_values =
               op_values(static_cast<std::size_t>(child));
           for (std::size_t lane = 0; lane < lane_count; ++lane) {
@@ -237,9 +223,6 @@ inline void evaluate_observation_lanes(
       for (semantic::Index i = 0; i < op.children.size; ++i) {
         const auto child = observation.child_ops[
             static_cast<std::size_t>(op.children.offset + i)];
-        if (child == semantic::kInvalidIndex) {
-          continue;
-        }
         const double *child_values =
             op_values(static_cast<std::size_t>(child));
         for (std::size_t lane = 0; lane < lane_count; ++lane) {
@@ -253,18 +236,9 @@ inline void evaluate_observation_lanes(
       }
       break;
     case ObservationPlanOpKind::Log: {
-      const double *probability = nullptr;
-      if (op.children.size > 0) {
-        const auto child = observation.child_ops[
-            static_cast<std::size_t>(op.children.offset)];
-        if (child != semantic::kInvalidIndex) {
-          probability = op_values(static_cast<std::size_t>(child));
-        }
-      }
-      if (probability == nullptr) {
-        std::fill_n(values, lane_count, min_ll);
-        break;
-      }
+      const auto child = observation.child_ops[
+          static_cast<std::size_t>(op.children.offset)];
+      const double *probability = op_values(static_cast<std::size_t>(child));
       log_lanes(probability, values, lane_count);
       for (std::size_t lane = 0; lane < lane_count; ++lane) {
         values[lane] = std::isfinite(values[lane])
@@ -284,10 +258,6 @@ inline void evaluate_observation_lane_group(
     const ParamMatrixView &parameter_matrix,
     ObservationLaneWorkspace *workspace,
     std::vector<double> *out) {
-  if (group.plan == nullptr) {
-    out->assign(group.lanes.size(), min_ll);
-    return;
-  }
   evaluate_observation_lanes(
       exact_plans,
       min_ll,

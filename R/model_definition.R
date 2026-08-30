@@ -344,7 +344,7 @@
   source %in% c(acc_ids, pool_ids)
 }
 
-# v1 validator for multi-outcome readout declarations.
+# Validator for multi-outcome readout declarations.
 .validate_multi_outcome_dsl <- function(model_or_prep) {
   obs <- .extract_observation_spec(model_or_prep)
   n_outcomes <- obs$n_outcomes
@@ -674,17 +674,6 @@ race_spec <- function(n_outcomes = 1L) {
   ), class = "race_spec")
 }
 
-.collect_params <- function(params, dots) {
-  if (!is.null(params) && length(dots) > 0) {
-    stop("Provide either params=list(...) or named arguments, not both")
-  }
-  if (!is.null(params)) {
-    if (!is.list(params)) stop("params must be a list")
-    return(params)
-  }
-  dots
-}
-
 .validate_race_spec_input <- function(spec, fn_name) {
   if (inherits(spec, "race_spec")) {
     return(spec)
@@ -938,87 +927,130 @@ set_metadata <- function(spec, ...) {
   spec
 }
 
-clone_obj <- function(x) {
-  if (is.environment(x)) stop("Cannot clone environments for race models")
-  if (is.list(x)) {
-    out <- lapply(x, clone_obj)
-    attrs <- attributes(x)
-    if (!is.null(attrs)) attributes(out) <- lapply(attrs, clone_obj)
-    return(out)
-  }
-  x
-}
-
-outcome_def <- function(label, expr, options = list()) {
-  list(
-    label = label,
-    expr = build_outcome_expr(expr),
-    options = options %||% list()
-  )
-}
-
-
-
-race_model <- function(accumulators, pools = list(), outcomes, triggers = list(), parameters = NULL, components = list(), mixture_options = list(), metadata = list()) {
-  if (inherits(accumulators, "race_spec")) {
-    if (!missing(pools) || !missing(outcomes) || !missing(triggers) || !missing(parameters) || !missing(components) || !missing(mixture_options) || !missing(metadata)) {
-      stop("When passing a race_spec, provide it alone and call race_model(spec)")
-    }
-    finalized <- finalize_model(accumulators)
-    return(finalized$model_spec)
-  }
-  if (inherits(accumulators, "model_structure") || inherits(accumulators, "generator_structure")) {
-    spec <- accumulators$model_spec %||% NULL
-    if (is.null(spec)) stop("model_structure is missing model_spec")
-    return(spec)
-  }
-  if (inherits(accumulators, "race_model_spec")) {
-    accumulators$metadata <- .normalize_observation_metadata(accumulators$metadata %||% list())
-    return(accumulators)
-  }
-  if (missing(accumulators) || missing(outcomes)) {
-    stop("accumulators and outcomes must be supplied")
-  }
-  parameter_spec <- if (is.null(parameters)) .normalize_parameter_spec() else parameters
-  structure(list(
-    accumulators = lapply(accumulators, clone_obj),
-    pools = lapply(pools %||% list(), clone_obj),
-    outcomes = lapply(outcomes, function(out) {
-      out$expr <- build_outcome_expr(out$expr)
-      out$options <- out$options %||% list()
-      out
-    }),
-    triggers = lapply(triggers %||% list(), clone_obj),
-    parameters = lapply(parameter_spec, clone_obj),
-    components = lapply(components %||% list(), clone_obj),
-    mixture_options = mixture_options %||% list(),
-    metadata = .normalize_observation_metadata(metadata %||% list())
-  ), class = "race_model_spec")
-}
-
 # ----------------------------------------------------------------------
 # Model normalization/finalization (shared by simulation and likelihood)
 # ----------------------------------------------------------------------
 
-.normalize_model <- function(model) {
-  if (inherits(model, "race_spec")) {
-    metadata <- .normalize_observation_metadata(model$metadata %||% list())
-    return(structure(list(
-      accumulators = unname(model$accumulators),
-      pools = unname(model$pools),
-      outcomes = unname(model$outcomes),
-      triggers = unname(model$triggers),
-      parameters = clone_obj(model$parameters),
-      components = unname(model$components),
-      mixture_options = model$mixture_options %||% list(),
-      metadata = metadata
-    ), class = "race_model_spec"))
+.model_ids <- function(items, field, type) {
+  ids <- vapply(items, function(item) item[[field]] %||% "", character(1))
+  if (any(!nzchar(ids))) {
+    stop(type, " ids must be non-empty", call. = FALSE)
   }
-  if (inherits(model, "race_model_spec")) {
-    model$metadata <- .normalize_observation_metadata(model$metadata %||% list())
-    return(model)
+  if (anyDuplicated(ids)) {
+    stop(type, " ids must be unique", call. = FALSE)
   }
-  model
+  ids
+}
+
+.expression_sources <- function(expr) {
+  switch(
+    expr$kind,
+    event = expr$source,
+    and = ,
+    or = unlist(lapply(expr$args, .expression_sources), use.names = FALSE),
+    not = .expression_sources(expr$arg),
+    guard = c(
+      .expression_sources(expr$reference),
+      .expression_sources(expr$blocker),
+      unlist(lapply(expr$unless, .expression_sources), use.names = FALSE)
+    ),
+    impossible = ,
+    true = character(0),
+    stop("Unsupported expression kind '", expr$kind, "'", call. = FALSE)
+  )
+}
+
+.validate_model_spec <- function(model) {
+  acc_ids <- .model_ids(model$accumulators, "id", "Accumulator")
+  pool_ids <- .model_ids(model$pools, "id", "Pool")
+  component_ids <- .model_ids(model$components, "id", "Component")
+  .model_ids(model$triggers, "id", "Trigger")
+  if (length(intersect(acc_ids, pool_ids))) {
+    stop("Accumulator and pool ids must be distinct", call. = FALSE)
+  }
+  invisible(lapply(model$accumulators, function(acc) dist_registry(acc$dist)))
+
+  pool_defs <- .as_named_pool_defs(model$pools)
+  for (pool in model$pools) {
+    members <- as.character(pool$members)
+    if (any(!members %in% c(acc_ids, pool_ids))) {
+      stop("Pool '", pool$id, "' references an unknown member", call. = FALSE)
+    }
+    k <- pool$rule$k
+    if (length(k) != 1L || !is.numeric(k) || !is.finite(k) ||
+        k != as.integer(k) || k < 1L || k > length(members)) {
+      stop("Pool '", pool$id, "' requires an integer k between 1 and its member count", call. = FALSE)
+    }
+    .expand_pool_accumulator_dependencies(pool$id, pool_defs, acc_ids)
+  }
+
+  for (component in model$components) {
+    if (any(!component$members %in% acc_ids)) {
+      stop("Component '", component$id, "' references an unknown accumulator", call. = FALSE)
+    }
+  }
+  trigger_members <- unlist(lapply(model$triggers, `[[`, "members"), use.names = FALSE)
+  if (any(!trigger_members %in% acc_ids)) {
+    stop("Triggers may reference only declared accumulators", call. = FALSE)
+  }
+  if (anyDuplicated(trigger_members)) {
+    stop("An accumulator may belong to only one trigger", call. = FALSE)
+  }
+
+  known_components <- if (length(component_ids)) component_ids else "__default__"
+  outcome_labels <- vapply(
+    model$outcomes, function(outcome) outcome$label %||% "", character(1)
+  )
+  if (any(!nzchar(outcome_labels))) {
+    stop("Outcome labels must be non-empty", call. = FALSE)
+  }
+  for (label in unique(outcome_labels[duplicated(outcome_labels)])) {
+    used_components <- character(0)
+    for (index in which(outcome_labels == label)) {
+      components <- model$outcomes[[index]]$options$component %||% known_components
+      if (length(intersect(used_components, components))) {
+        stop(
+          "Outcome '", label,
+          "' has multiple definitions active in the same component",
+          call. = FALSE
+        )
+      }
+      used_components <- c(used_components, components)
+    }
+  }
+  for (outcome in model$outcomes) {
+    unknown_sources <- setdiff(
+      unique(.expression_sources(outcome$expr)), c(acc_ids, pool_ids)
+    )
+    if (length(unknown_sources)) {
+      stop("Outcome '", outcome$label, "' references unknown source(s): ",
+           paste(unknown_sources, collapse = ", "), call. = FALSE)
+    }
+    options <- outcome$options
+    if (!is.null(options$component) &&
+        any(!options$component %in% known_components)) {
+      stop("Outcome '", outcome$label, "' references an unknown component", call. = FALSE)
+    }
+    if (!is.null(options$map_outcome_to) &&
+        !is.na(options$map_outcome_to) &&
+        !options$map_outcome_to %in% outcome_labels) {
+      stop("Outcome '", outcome$label, "' maps to an unknown label", call. = FALSE)
+    }
+    if (!is.null(options$guess)) {
+      guess <- options$guess
+      valid <- is.character(guess$labels) && is.numeric(guess$weights) &&
+        length(guess$labels) == length(guess$weights) &&
+        length(guess$labels) > 0L &&
+        all(guess$labels %in% outcome_labels) &&
+        all(is.finite(guess$weights) & guess$weights >= 0) &&
+        isTRUE(all.equal(sum(guess$weights), 1, tolerance = 1e-8)) &&
+        (guess$rt_policy %||% "keep") %in% c("keep", "na")
+      if (!valid) {
+        stop("Outcome '", outcome$label, "' has an invalid guess policy", call. = FALSE)
+      }
+    }
+  }
+  invisible(model)
 }
 
 .prepare_acc_defs <- function(model) {
@@ -1212,7 +1244,7 @@ race_model <- function(accumulators, pools = list(), outcomes, triggers = list()
 }
 
 prepare_model <- function(model) {
-  model <- .normalize_model(model)
+  .validate_model_spec(model)
   acc_prep <- .prepare_acc_defs(model)
   acc_defs <- acc_prep$acc
   pool_defs <- .prepare_pool_defs(model)
@@ -1307,55 +1339,17 @@ prepare_model <- function(model) {
 #' finalize_model(spec)
 #' @export
 finalize_model <- function(model) {
-  unwrap_model_spec <- function(x) {
-    seen <- 0L
-    repeat {
-      if (inherits(x, "generator_structure")) {
-        x <- x$model_spec %||% stop("generator_structure missing model_spec")
-      } else if (!inherits(x, "race_model_spec") && !is.null(x$model_spec)) {
-        x <- x$model_spec
-      } else {
-        break
-      }
-      seen <- seen + 1L
-      if (seen > 20L) stop("generator_structure nesting too deep")
-    }
-    x
-  }
-
-  model_norm <- unwrap_model_spec(model)
-  model_norm <- .normalize_model(model_norm)
-  model_norm <- unwrap_model_spec(model_norm)
-  if (!inherits(model_norm, "race_model_spec")) {
-    stop("finalize_model requires a race_model_spec")
-  }
-
-  model_norm <- unserialize(serialize(model_norm, NULL))
-  model_norm <- .normalize_model(model_norm)
-  prep <- prepare_model(model_norm)
+  model <- .validate_race_spec_input(model, "finalize_model")
+  prep <- prepare_model(model)
   structure <- list(
-    model_spec = model_norm,
+    model_spec = model,
     prep = prep,
     accumulators = .build_accumulator_template(prep$accumulators),
     components = .build_component_table(prep$components),
     shared_triggers = prep$shared_triggers %||% list()
   )
-  class(structure) <- c("model_structure", "generator_structure", class(structure))
+  class(structure) <- c("model_structure", class(structure))
   structure
-}
-
-.as_model_structure <- function(x) {
-  if (inherits(x, "generator_structure")) {
-    return(x)
-  }
-  if (inherits(x, "model_structure")) {
-    return(x)
-  }
-  if (is.list(x) && !is.null(x$prep) && !is.null(x$accumulators) && !is.null(x$components)) {
-    class(x) <- unique(c("model_structure", "generator_structure", class(x)))
-    return(x)
-  }
-  finalize_model(x)
 }
 
 # ------------------------------------------------------------------------------
@@ -1471,11 +1465,11 @@ dist_param_names <- function(dist) {
 }
 
 .mixture_weight_parameter_names <- function(spec) {
-  comps <- spec$components %||% spec$metadata$mixture$components %||% list()
+  comps <- spec$components
   if (length(comps) == 0L) {
     return(character(0))
   }
-  mix <- spec$mixture_options %||% spec$metadata$mixture %||% list()
+  mix <- spec$mixture_options
   if (!identical(mix$mode %||% "fixed", "sample")) {
     return(character(0))
   }
@@ -1762,7 +1756,7 @@ dist_param_names <- function(dist) {
 
 #' List the free parameters implied by a model
 #'
-#' @param model A `race_spec` or related model object.
+#' @param model A `race_spec` object.
 #' @return A character vector of parameter names.
 #' @examples
 #' spec <- race_spec()
@@ -1771,7 +1765,7 @@ dist_param_names <- function(dist) {
 #' par_names(spec)
 #' @export
 par_names <- function(model) {
-  spec <- race_model(model)
+  spec <- .validate_race_spec_input(model, "par_names")
   params <- unname(.parameter_name_lookup(spec))
   params[!duplicated(params)]
 }
@@ -1781,28 +1775,29 @@ par_names <- function(model) {
 #' This expands a named parameter vector into the trial-by-trial format expected
 #' by `simulate()` and `log_likelihood()`.
 #'
-#' @param model Model definition.
+#' @param model Finalized model structure.
 #' @param param_values Named numeric vector of parameter values.
 #' @param n_trials Number of trials to generate.
 #' @param component Optional component label or labels.
 #' @param trial_df Optional trials/prepared data object. If it includes a
 #'   `racer` column, parameter rows are built in that exact row order.
-#' @param layout Optional storage layout.
-#' @return A data frame or matrix of parameter values by trial.
+#' @return A numeric parameter matrix with one row per trial/accumulator pair.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
 #' spec <- add_outcome(spec, "A_win", "A")
 #' vals <- c(m = 0, s = 0.1)
-#' build_param_matrix(spec, vals, n_trials = 2)
+#' build_param_matrix(finalize_model(spec), vals, n_trials = 2)
 #' @export
 build_param_matrix <- function(model,
                                param_values,
                                n_trials = 1L,
                                component = NULL,
-                               trial_df = NULL,
-                               layout = NULL) {
-  spec <- race_model(model)
+                               trial_df = NULL) {
+  if (!inherits(model, "model_structure")) {
+    stop("build_param_matrix() expects a finalized model.", call. = FALSE)
+  }
+  spec <- model$model_spec
   accs <- spec$accumulators %||% list()
   if (length(accs) == 0L) {
     stop("Model must define accumulators before building parameter matrices")
@@ -1850,8 +1845,8 @@ build_param_matrix <- function(model,
   }
 
   # Mixture component weights (mapped to components, then to member rows)
-  mix <- spec$mixture_options %||% spec$metadata$mixture %||% list()
-  comp_defs <- spec$components %||% mix$components %||% list()
+  mix <- spec$mixture_options
+  comp_defs <- spec$components
   comp_ids <- vapply(comp_defs, `[[`, character(1), "id")
   acc_component_membership <- setNames(vector("list", length(acc_ids)), acc_ids)
   if (length(comp_defs) > 0L) {
@@ -1878,25 +1873,14 @@ build_param_matrix <- function(model,
   comp_index <- setNames(seq_along(comp_ids), comp_ids)
   if (length(comp_defs) > 0) {
     if (identical(comp_mode, "sample")) {
-      if (!comp_ref %in% comp_ids) {
-        comp_ref <- comp_ids[[length(comp_ids)]]
-      }
       non_ref_ids <- setdiff(comp_ids, comp_ref)
-      for (cid in non_ref_ids) {
-        wp <- paste0("p.", cid)
-        if (wp %in% names(param_values)) {
-          comp_weights[[cid]] <- as.numeric(param_values[[wp]])
-        }
+      non_ref_weights <- unname(param_values[paste0("p.", non_ref_ids)])
+      if (any(!is.finite(non_ref_weights) | non_ref_weights < 0) ||
+          sum(non_ref_weights) > 1) {
+        stop("Sampled mixture weights must define a probability simplex", call. = FALSE)
       }
-      non_ref_sum <- sum(comp_weights[non_ref_ids], na.rm = TRUE)
-      if (is.na(comp_weights[[comp_ref]])) {
-        ref_val <- 1 - non_ref_sum
-        if (!is.finite(ref_val) || ref_val < 0) ref_val <- 0
-        comp_weights[[comp_ref]] <- ref_val
-      }
-      if (any(is.na(comp_weights[non_ref_ids]))) {
-        comp_weights[is.na(comp_weights)] <- 0
-      }
+      comp_weights[non_ref_ids] <- non_ref_weights
+      comp_weights[[comp_ref]] <- 1 - sum(non_ref_weights)
     } else {
       fixed_weights <- mix$weights %||% NULL
       if (is.null(fixed_weights)) {
@@ -2034,32 +2018,7 @@ build_param_matrix <- function(model,
     }
   }
 
-  # If a pre-built layout is provided (static mapping stored in context), honor it.
-  if (!is.null(layout)) {
-    row_trial <- layout$row_trial
-    row_racer <- layout$row_racer
-    if (is.null(row_trial) || is.null(row_racer)) {
-      stop("layout must include row_trial and row_racer")
-    }
-    if (length(row_trial) != length(row_racer)) {
-      stop("layout row_trial/row_racer lengths must match")
-    }
-    rows <- lapply(seq_along(row_trial), function(idx) {
-      t <- as.integer(row_trial[[idx]])
-      a <- as.integer(row_racer[[idx]])
-      if (is.na(t) || is.na(a) || a < 1L || a > length(accs)) {
-        stop("layout indices out of range")
-      }
-      base_mat[a, , drop = FALSE]
-    })
-    params_mat <- do.call(rbind, rows)
-    colnames(params_mat) <- col_names
-    return(params_mat)
-  }
-
-  # If component labels are provided per trial, build only the rows for accumulators
-  # that participate in that component; otherwise, fall back to the full rectangular
-  # layout (all accumulators per trial).
+  # Component labels select the active accumulator rows for each trial.
   if (!is.null(component)) {
     if (length(component) != n_trials) {
       stop("component vector must have length n_trials when provided")
@@ -2095,8 +2054,7 @@ build_param_matrix <- function(model,
   }
 }
 
-.expand_accumulator_rows <- function(model_spec, data) {
-  structure <- .as_model_structure(model_spec)
+.expand_accumulator_rows <- function(structure, data) {
   acc_defs <- structure$prep$accumulators %||% list()
   acc_ids <- names(acc_defs)
   if (length(acc_ids) == 0L) {

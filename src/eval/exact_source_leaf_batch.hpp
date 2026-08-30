@@ -62,23 +62,11 @@ struct PreparedSourceLeafBatch {
     return values.data();
   }
 
-  const double *elapsed() const noexcept {
-    return values.data();
-  }
-
   double *q() noexcept {
     return values.data() + count;
   }
 
-  const double *q() const noexcept {
-    return values.data() + count;
-  }
-
   double *parameter(const std::size_t slot) noexcept {
-    return values.data() + (slot + 2U) * count;
-  }
-
-  const double *parameter(const std::size_t slot) const noexcept {
     return values.data() + (slot + 2U) * count;
   }
 

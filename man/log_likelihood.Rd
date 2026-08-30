@@ -2,8 +2,6 @@
 % Please edit documentation in R/likelihood_param_interface.R
 \name{log_likelihood}
 \alias{log_likelihood}
-\alias{log_likelihood.accumulatr_context}
-\alias{log_likelihood.default}
 \title{Evaluate log-likelihoods of behavioral data}
 \usage{
 log_likelihood(
@@ -12,28 +10,16 @@ log_likelihood(
   parameters,
   ok = NULL,
   sum = TRUE,
-  min_ll = log(1e-10),
-  ...
+  min_ll = log(1e-10)
 )
-
-\method{log_likelihood}{accumulatr_context}(
-  context,
-  data,
-  parameters,
-  ok = NULL,
-  sum = TRUE,
-  min_ll = log(1e-10),
-  ...
-)
-
-\method{log_likelihood}{default}(context, ...)
 }
 \arguments{
 \item{context}{Context created with `make_context()`.}
 
 \item{data}{Prepared data created with `prepare_data()`.}
 
-\item{parameters}{A parameter data frame, or a list of parameter data frames.}
+\item{parameters}{A canonical numeric parameter matrix created by
+`build_param_matrix()`.}
 
 \item{ok}{Logical vector marking which trials should contribute to the
 likelihood. Trials marked `FALSE` are assigned `min_ll`.}
@@ -43,8 +29,6 @@ trial-wise log-likelihood values.}
 
 \item{min_ll}{Minimum log-likelihood value used for excluded or impossible
 trials.}
-
-\item{...}{Unused; for S3 compatibility.}
 }
 \value{
 A summed log-likelihood by default, or a numeric vector of
@@ -60,7 +44,7 @@ spec <- add_accumulator(spec, "A", "lognormal")
 spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
 params_df <- build_param_matrix(
-  spec,
+  structure,
   c(m = 0, s = 0.1),
   n_trials = 2
 )

@@ -60,7 +60,7 @@ cpp_likelihood <- function(data, model) {
     EMC2:::calc_ll(
       particles, data, constants, designs, model$c_name,
       model$bound, model$transform, model$pre_transform,
-      names(model$p_types), min_ll, model$trend, FALSE
+      names(model$p_types), min_ll, model$trend
     )
   }
 }
@@ -147,7 +147,8 @@ make_case <- function(definition, n_trials, scenario) {
   attr(acc_data, "expand") <- seq_along(attr(acc_data, "trials_start_rows"))
   attr(acc_data, "AccumulatR_context") <- list(
     native = AccumulatR::make_context(acc_model_spec)$cpp$native,
-    bridge = list(defaults = template, source_names = source_names)
+    bridge = list(defaults = template, source_names = source_names),
+    trial_counts = rep.int(1L, length(attr(acc_data, "trials_start_rows")))
   )
   acc_model <- emc_model
   acc_model$c_name <- "AccumulatR"

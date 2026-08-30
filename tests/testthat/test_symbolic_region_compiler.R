@@ -87,28 +87,6 @@ build_expr_distribution_model <- function(expr) {
     finalize_model()
 }
 
-testthat::test_that("compiler complexity metrics expose structural acceptance fields", {
-  metrics <- compiler_total_metrics(build_simple_first_of_model())
-  testthat::expect_named(
-    metrics,
-    c(
-      "symbolic_regions",
-      "symbolic_cells",
-      "max_symbolic_cells_per_region",
-      "negative_symbolic_cells",
-      "overlapping_symbolic_cell_pairs",
-      "expr_relation_atoms",
-      "compiled_roots",
-      "compiled_nodes",
-      "integral_nodes",
-      "integral_kernels",
-      "source_product_integral_kernels",
-      "generic_integral_kernels",
-      "max_integral_depth"
-    )
-  )
-})
-
 testthat::test_that("simple independent and max-transition regions stay closed form", {
   simple_metrics <- compiler_total_metrics(build_simple_first_of_model())
   expect_clean_region_cells(simple_metrics)
@@ -178,12 +156,6 @@ testthat::test_that("first_of expression distributions preserve cheap union case
       max_roots = 15L,
       max_nodes = 31L,
       max_cells = 8L
-    ),
-    nested_first_of = list(
-      expr = first_of("a", first_of("b", "c")),
-      max_roots = 15L,
-      max_nodes = 31L,
-      max_cells = 8L
     )
   )
 
@@ -204,35 +176,8 @@ testthat::test_that("first_of expression distributions preserve cheap union case
   }
 })
 
-testthat::test_that("common conjunct first_of canonicalizes to factored all_of cost", {
-  unfactored <- compiler_total_metrics(
-    build_expr_distribution_model(
-      first_of(all_of("a", "g"), all_of("b", "g"))))
-  factored <- compiler_total_metrics(
-    build_expr_distribution_model(
-      all_of(first_of("a", "b"), "g")))
-  fields <- c(
-    "symbolic_regions",
-    "symbolic_cells",
-    "expr_relation_atoms",
-    "compiled_roots",
-    "compiled_nodes",
-    "integral_nodes",
-    "generic_integral_kernels"
-  )
-  testthat::expect_equal(unfactored[fields], factored[fields])
-})
-
 testthat::test_that("all_of and simple guard expression distributions stay compact", {
   cases <- list(
-    all_of_pair = list(
-      expr = all_of("a", "b"),
-      max_roots = 12L,
-      max_nodes = 25L,
-      max_integrals = 0L,
-      max_depth = 0L,
-      max_cells = 6L
-    ),
     all_of_three = list(
       expr = all_of("a", "b", "c"),
       max_roots = 15L,

@@ -36,12 +36,10 @@ struct ExactLaneLeafBatchView {
     const auto *started_values =
         shared_started == nullptr ? uniform_shared_started
                                   : shared_started[lane];
-    if (started_values != nullptr) {
-      const auto started =
-          started_values[static_cast<std::size_t>(trigger_index)];
-      if (started <= 1U) {
-        return started == 1U ? 0.0 : 1.0;
-      }
+    const auto started =
+        started_values[static_cast<std::size_t>(trigger_index)];
+    if (started <= 1U) {
+      return started == 1U ? 0.0 : 1.0;
     }
     return base[row];
   }
@@ -73,8 +71,7 @@ inline double exact_leaf_q_for_trigger_state(
     const double fallback) {
   const auto trigger_index =
       leaf_trigger_index[static_cast<std::size_t>(leaf_index)];
-  if (trigger_index != semantic::kInvalidIndex &&
-      shared_started != nullptr) {
+  if (trigger_index != semantic::kInvalidIndex) {
     const auto started =
         shared_started[static_cast<std::size_t>(trigger_index)];
     if (started <= 1U) {
@@ -339,10 +336,10 @@ inline const std::uint8_t *exact_compiled_trigger_shared_started(
     const ExactCompiledTriggerState &compiled_state) {
   const auto shared_offset =
       static_cast<std::size_t>(compiled_state.shared_started_offset);
-  return shared_offset < plan.trigger_state_table.shared_started_values.size()
-             ? plan.trigger_state_table.shared_started_values.data() +
-                   shared_offset
-             : nullptr;
+  return plan.trigger_state_table.trigger_count == 0
+             ? nullptr
+             : plan.trigger_state_table.shared_started_values.data() +
+                   shared_offset;
 }
 
 } // namespace detail

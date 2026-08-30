@@ -50,7 +50,7 @@ pars <- c(
   t0 = 0
 )
 
-param_df <- build_param_matrix(spec, pars, n_trials = 8)
+param_df <- build_param_matrix(model, pars, n_trials = 8)
 sim <- simulate(model, param_df, seed = 123)
 head(sim[c("trials", "R", "rt")])
 

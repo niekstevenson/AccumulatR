@@ -2,15 +2,9 @@
 % Please edit documentation in R/likelihood_param_interface.R
 \name{response_probabilities}
 \alias{response_probabilities}
-\alias{response_probabilities.model_structure}
-\alias{response_probabilities.default}
 \title{Evaluate marginal response probabilities}
 \usage{
-response_probabilities(structure, params_df, include_na = TRUE, ...)
-
-\method{response_probabilities}{model_structure}(structure, params_df, include_na = TRUE, ...)
-
-\method{response_probabilities}{default}(structure, params_df, include_na = TRUE, ...)
+response_probabilities(structure, params_df, include_na = TRUE)
 }
 \arguments{
 \item{structure}{Finalized model structure.}
@@ -18,8 +12,6 @@ response_probabilities(structure, params_df, include_na = TRUE, ...)
 \item{params_df}{A parameter data frame or rectangular parameter matrix.}
 
 \item{include_na}{If `TRUE`, include residual mass as `"NA"`.}
-
-\item{...}{Unused; for S3 compatibility.}
 }
 \value{
 A named numeric vector of marginal response probabilities. Names are
@@ -44,7 +36,7 @@ spec <- race_spec() |>
 
 model <- finalize_model(spec)
 params <- build_param_matrix(
-  spec,
+  model,
   c(left.m = log(0.25), right.m = log(0.40), s = 0.20),
   n_trials = 1
 )

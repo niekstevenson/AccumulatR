@@ -155,8 +155,6 @@ struct ExactVariantBuildState {
   std::vector<std::uint8_t> pool_transition_can_stay_aggregate;
   std::vector<semantic::Index> compiled_outcome_gate_indices;
   semantic::Index source_count{0};
-  std::vector<semantic::Index> leaf_source_ids;
-  std::vector<semantic::Index> pool_source_ids;
   std::vector<semantic::Index> shared_trigger_indices;
   ExactCompiledTriggerStateTable trigger_state_table;
   std::vector<std::uint8_t> compiled_source_view_relations;
@@ -257,17 +255,6 @@ inline ExactRelation exact_compiled_source_view_relation(
       plan.compiled_source_view_relations[offset]);
 }
 
-inline bool expr_support_contains_source(const ExactVariantBuildState &plan,
-                                         const semantic::Index expr_idx,
-                                         const semantic::Index source_id) {
-  if (expr_idx == semantic::kInvalidIndex ||
-      source_id == semantic::kInvalidIndex) {
-    return false;
-  }
-  return support_contains_source(
-      plan.expr_supports[static_cast<std::size_t>(expr_idx)], source_id);
-}
-
 inline bool expr_supports_overlap(const ExactVariantBuildState &plan,
                                   const semantic::Index lhs_expr_idx,
                                   const semantic::Index rhs_expr_idx) {
@@ -284,12 +271,12 @@ inline semantic::Index source_ordinal(const ExactVariantBuildState &plan,
                                       const semantic::SourceKind kind,
                                       const semantic::Index index) {
   if (kind == semantic::SourceKind::Leaf && index >= 0 &&
-      static_cast<std::size_t>(index) < plan.leaf_source_ids.size()) {
-    return plan.leaf_source_ids[static_cast<std::size_t>(index)];
+      index < plan.program.layout.n_leaves) {
+    return index;
   }
   if (kind == semantic::SourceKind::Pool && index >= 0 &&
-      static_cast<std::size_t>(index) < plan.pool_source_ids.size()) {
-    return plan.pool_source_ids[static_cast<std::size_t>(index)];
+      index < plan.program.layout.n_pools) {
+    return plan.program.layout.n_leaves + index;
   }
   return semantic::kInvalidIndex;
 }

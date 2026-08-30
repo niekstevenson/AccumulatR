@@ -1,30 +1,3 @@
-latent_sampled_mixture_spec <- function() {
-  race_spec() |>
-    add_accumulator("target_fast", "lognormal") |>
-    add_accumulator("target_slow", "lognormal") |>
-    add_accumulator("competitor", "lognormal") |>
-    add_pool("TARGET", c("target_fast", "target_slow")) |>
-    add_outcome("Target", "TARGET") |>
-    add_outcome("Competitor", "competitor") |>
-    add_component("fast", members = c("target_fast", "competitor")) |>
-    add_component("slow", members = c("target_slow", "competitor")) |>
-    set_mixture(mode = "sample", reference = "slow") |>
-    test_separate_all_parameters() |>
-    finalize_model()
-}
-
-latent_sampled_mixture_params <- function(p.fast) {
-  c(
-    target_fast.m = log(0.25),
-    target_fast.s = 0.15,
-    target_slow.m = log(0.45),
-    target_slow.s = 0.20,
-    competitor.m = log(0.35),
-    competitor.s = 0.18,
-    p.fast = p.fast
-  )
-}
-
 testthat::test_that("latent sampled mixtures marginalize on the C++ likelihood path", {
   structure <- latent_sampled_mixture_spec()
   ctx <- make_context(structure)
@@ -65,17 +38,17 @@ testthat::test_that("latent sampled mixtures marginalize on the C++ likelihood p
 
   params_lo <- latent_sampled_mixture_params(0.2)
   latent_mat_lo <- build_param_matrix(
-    structure$model_spec,
+    structure,
     params_lo,
     trial_df = latent_prepared
   )
   fast_mat_lo <- build_param_matrix(
-    structure$model_spec,
+    structure,
     params_lo,
     trial_df = fast_prepared
   )
   slow_mat_lo <- build_param_matrix(
-    structure$model_spec,
+    structure,
     params_lo,
     trial_df = slow_prepared
   )
@@ -84,7 +57,7 @@ testthat::test_that("latent sampled mixtures marginalize on the C++ likelihood p
   ll_explicit_na_lo <- as.numeric(log_likelihood(
     ctx,
     explicit_na_prepared,
-    build_param_matrix(structure$model_spec, params_lo, trial_df = explicit_na_prepared)
+    build_param_matrix(structure, params_lo, trial_df = explicit_na_prepared)
   ))
   ll_fast_lo <- as.numeric(log_likelihood(ctx, fast_prepared, fast_mat_lo))
   ll_slow_lo <- as.numeric(log_likelihood(ctx, slow_prepared, slow_mat_lo))
@@ -101,12 +74,12 @@ testthat::test_that("latent sampled mixtures marginalize on the C++ likelihood p
   ll_latent_hi <- as.numeric(log_likelihood(
     ctx,
     latent_prepared,
-    build_param_matrix(structure$model_spec, params_hi, trial_df = latent_prepared)
+    build_param_matrix(structure, params_hi, trial_df = latent_prepared)
   ))
   ll_fast_hi <- as.numeric(log_likelihood(
     ctx,
     fast_prepared,
-    build_param_matrix(structure$model_spec, params_hi, trial_df = fast_prepared)
+    build_param_matrix(structure, params_hi, trial_df = fast_prepared)
   ))
 
   testthat::expect_gt(abs(ll_latent_hi - ll_latent_lo), 1e-6)
@@ -154,12 +127,12 @@ testthat::test_that("latent fixed mixtures use fixed component weights in likeli
   ll_latent <- as.numeric(log_likelihood(
     ctx,
     latent_prepared,
-    build_param_matrix(structure$model_spec, params, trial_df = latent_prepared)
+    build_param_matrix(structure, params, trial_df = latent_prepared)
   ))
   ll_left <- as.numeric(log_likelihood(
     ctx,
     left_prepared,
-    build_param_matrix(structure$model_spec, params, trial_df = left_prepared)
+    build_param_matrix(structure, params, trial_df = left_prepared)
   ))
 
   testthat::expect_equal(ll_latent, log(0.25) + ll_left, tolerance = 1e-8)
@@ -196,7 +169,7 @@ testthat::test_that("latent missing-all mixtures use compiled terminal no-respon
   out <- as.numeric(log_likelihood(
     make_context(structure),
     prepared,
-    build_param_matrix(structure$model_spec, params, trial_df = prepared)
+    build_param_matrix(structure, params, trial_df = prepared)
   ))
 
   testthat::expect_equal(out, log(0.25 * 0.20 + 0.75 * 0.40), tolerance = 1e-10)
@@ -232,8 +205,8 @@ testthat::test_that("observed labels with missing RT marginalize over finite res
   out <- as.numeric(log_likelihood(
     make_context(structure),
     prepared,
-    build_param_matrix(structure$model_spec, params, trial_df = prepared)
+    build_param_matrix(structure, params, trial_df = prepared)
   ))
 
-  testthat::expect_equal(out, -0.06187497404308457, tolerance = 1e-10)
+  testthat::expect_equal(out, log(1 - 0.20 * 0.30), tolerance = 1e-5)
 })

@@ -178,14 +178,6 @@ exgauss_trunc_cdf_ref <- function(x, mu, sigma, tau) {
   min(max((exgauss_raw_cdf_ref(x, mu, sigma, tau) - lower_cdf) / lower_survival, 0), 1)
 }
 
-run_public_loglik <- function(spec, trial_df, params, min_ll = log(1e-10)) {
-  structure <- finalize_model(spec)
-  context <- make_context(structure)
-  prepared <- prepare_data(structure, trial_df)
-  params_mat <- build_param_matrix(spec, params, trial_df = prepared)
-  as.numeric(log_likelihood(context, prepared, params_mat, min_ll = min_ll))
-}
-
 testthat::test_that("exact identity likelihood matches simple two-leaf top-1 formula", {
   spec <- race_spec() |>
     add_accumulator("a", "lognormal") |>

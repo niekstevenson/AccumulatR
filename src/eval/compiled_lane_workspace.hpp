@@ -31,29 +31,24 @@ constexpr std::size_t exact_expanded_parent_lane_tile_size() noexcept {
 class ExactLaneSourceState;
 
 struct CompiledLaneFrame {
-  void ensure(const CompiledMathProgram &program,
-              const std::size_t required_lanes) {
-    const auto required_times =
-        static_cast<std::size_t>(program.time_slot_count);
-    const auto required_source_programs =
-        static_cast<std::size_t>(program.source_program_cache_count);
-    const auto required_integral_caches = program.integral_kernels.size();
-    if (required_lanes <= stride && node_count == program.nodes.size() &&
-        time_count == required_times &&
-        source_program_count == required_source_programs &&
-        integral_cache_count == required_integral_caches) {
+  explicit CompiledLaneFrame(const CompiledMathProgram &program)
+      : node_count(program.nodes.size()),
+        integral_cache_count(program.integral_kernels.size()),
+        time_count(static_cast<std::size_t>(program.time_slot_count)),
+        source_program_count(static_cast<std::size_t>(
+            program.source_program_cache_count)),
+        time_valid(time_count, 0U) {}
+
+  void ensure(const std::size_t required_lanes) {
+    if (required_lanes <= stride) {
       lane_count = required_lanes;
       return;
     }
 
-    stride = std::max(required_lanes, stride);
+    stride = required_lanes;
     lane_count = required_lanes;
-    node_count = program.nodes.size();
-    time_count = required_times;
-    source_program_count = required_source_programs;
 
     node_values.resize(node_count * stride, 0.0);
-    integral_cache_count = required_integral_caches;
     cache_epoch.resize(integral_cache_count * stride, 0U);
     cache_values.resize(integral_cache_count * stride, 0.0);
 
@@ -64,7 +59,6 @@ struct CompiledLaneFrame {
     source_program_survival.resize(source_program_count * stride, 1.0);
 
     time_values.resize(time_count * stride, 0.0);
-    time_valid.resize(time_count, 0U);
     const auto zero =
         static_cast<std::size_t>(CompiledMathTimeSlot::Zero);
     std::fill_n(time_values.data() + zero * stride, stride, 0.0);
@@ -72,9 +66,8 @@ struct CompiledLaneFrame {
     used_outcomes.resize(stride, nullptr);
   }
 
-  void begin(const CompiledMathProgram &program,
-             const std::size_t required_lanes) {
-    ensure(program, required_lanes);
+  void begin(const std::size_t required_lanes) {
+    ensure(required_lanes);
     has_sequence_history = false;
     source_lanes_identity = true;
     advance_epoch(&cache_current_epoch, &cache_epoch);
@@ -217,20 +210,21 @@ private:
 
 struct CompiledLaneWorkspace {
   explicit CompiledLaneWorkspace(const CompiledMathProgram &program)
-      : program_(&program) {}
+      : program_(&program), top_(program) {}
 
   CompiledLaneFrame &top(const std::size_t lane_count) {
-    top_.begin(*program_, lane_count);
+    top_.begin(lane_count);
     return top_;
   }
 
   CompiledLaneFrame &integral_frame(const std::size_t depth,
                                     const std::size_t lane_count) {
     while (integral_frames_.size() <= depth) {
-      integral_frames_.push_back(std::make_unique<CompiledLaneFrame>());
+      integral_frames_.push_back(
+          std::make_unique<CompiledLaneFrame>(*program_));
     }
     auto &frame = *integral_frames_[depth];
-    frame.begin(*program_, lane_count);
+    frame.begin(lane_count);
     return frame;
   }
 

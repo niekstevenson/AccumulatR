@@ -16,7 +16,7 @@ namespace {
 struct ThreadEvaluatorWorkspace {
   accumulatr::eval::detail::ObservationLikelihoodLaneWorkspace &get(
       const accumulatr::eval::detail::NativeLikelihoodContext &ctx) {
-    if (!workspace || context_id != ctx.id) {
+    if (context_id != ctx.id) {
       workspace.emplace(ctx.exact_plans.size());
       context_id = ctx.id;
     }

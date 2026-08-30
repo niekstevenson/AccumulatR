@@ -2,13 +2,6 @@
   if (is.null(x)) y else x
 }
 
-validation_source_rebuild <- function(repo_root) {
-  source(file.path(repo_root, "R", "helpers.R"))
-  source(file.path(repo_root, "R", "model_definition.R"))
-  source(file.path(repo_root, "R", "semantic_bridge.R"))
-  source(file.path(repo_root, "R", "likelihood_param_interface.R"))
-}
-
 acc_parts <- function(prefix, params) {
   t0_name <- paste0(prefix, ".t0")
   list(
@@ -111,8 +104,11 @@ inhibit_cdf_scalar <- function(ref_pdf,
 engine_loglik <- function(structure, params, data_df, min_ll = -1e12, sum = TRUE) {
   prepared <- prepare_data(structure, data_df)
   ctx <- make_context(structure)
+  parameter_structure <- finalize_model(
+    validation_spec_for_params(structure$model_spec, params)
+  )
   params_df <- build_param_matrix(
-    validation_spec_for_params(structure$model_spec, params),
+    parameter_structure,
     params,
     trial_df = prepared
   )

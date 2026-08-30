@@ -51,7 +51,7 @@ models <- list(
   )
 )
 
-cpp_likelihood <- function(data, model) {
+cpp_likelihood <- function(data, model, accumulatr_context = NULL) {
   designs <- EMC2:::get_designs_expanded(data, model)
   constants <- attr(data, "constants")
   if (is.null(constants)) constants <- NA_real_
@@ -60,7 +60,8 @@ cpp_likelihood <- function(data, model) {
     EMC2:::calc_ll(
       particles, data, constants, designs, model$c_name,
       model$bound, model$transform, model$pre_transform,
-      names(model$p_types), min_ll, model$trend
+      names(model$p_types), min_ll, model$trend,
+      accumulatr_context = accumulatr_context
     )
   }
 }
@@ -145,7 +146,7 @@ make_case <- function(definition, n_trials, scenario) {
   attr(acc_data, "designs") <- attr(emc_data, "designs")
   attr(acc_data, "constants") <- attr(emc_data, "constants")
   attr(acc_data, "expand") <- seq_len(n_trials)
-  attr(acc_data, "AccumulatR_context") <- list(
+  acc_context <- list(
     native = AccumulatR::make_context(acc_model_spec)$cpp$native,
     bridge = list(defaults = template, source_names = source_names),
     trial_counts = rep.int(1L, n_trials)
@@ -155,7 +156,7 @@ make_case <- function(definition, n_trials, scenario) {
 
   list(
     EMC2 = cpp_likelihood(emc_data, emc_model),
-    AccumulatR = cpp_likelihood(acc_data, acc_model),
+    AccumulatR = cpp_likelihood(acc_data, acc_model, acc_context),
     theta = theta
   )
 }

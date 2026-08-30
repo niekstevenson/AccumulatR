@@ -15,9 +15,6 @@ make_case <- function(model) {
     model$structure, parameters, seed = 123L, keep_component = TRUE
   )
   data <- prepare_data(model$structure, data)
-  parameters <- build_param_matrix(
-    model$structure, model$pars, trial_df = data
-  )
   list(
     context = make_context(model$structure),
     data = data,

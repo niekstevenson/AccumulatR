@@ -380,8 +380,7 @@ inline semantic::Index exact_order_region_new_time(
 inline void exact_order_region_reserve_time(
     ExactOrderRegionBuilder *builder,
     const semantic::Index time_id) {
-  if (builder == nullptr ||
-      time_id == semantic::kInvalidIndex ||
+  if (time_id == semantic::kInvalidIndex ||
       !exact_region_time_is_latent_variable(time_id)) {
     return;
   }

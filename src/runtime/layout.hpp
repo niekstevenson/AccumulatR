@@ -10,7 +10,6 @@ namespace accumulatr::runtime {
 struct RuntimeLayout {
   int n_leaves{0};
   int n_pools{0};
-  int n_outcomes{0};
   int n_triggers{0};
 };
 
@@ -23,7 +22,6 @@ struct LeafRuntimeDescriptor {
   double onset_lag{0.0};
   double onset_abs_value{0.0};
   semantic::Index trigger_index{semantic::kInvalidIndex};
-  int param_count{0};
 };
 
 } // namespace accumulatr::runtime

@@ -1,4 +1,4 @@
-testthat::test_that("guess outcomes are aggregated in observed finite-label likelihood", {
+testthat::test_that("guess outcomes contribute to observed finite-label likelihood", {
   spec <- race_spec() |>
     add_accumulator("go_left", "lognormal") |>
     add_accumulator("go_right", "lognormal") |>
@@ -25,7 +25,7 @@ testthat::test_that("guess outcomes are aggregated in observed finite-label like
   )
 
   prepared <- prepare_data(structure, data_df)
-  params_df <- build_param_matrix(structure, params, trial_df = prepared)
+  params_df <- build_param_matrix(structure, params, n_trials = length(unique(prepared$trials)))
   ctx <- make_context(structure)
   ll <- as.numeric(log_likelihood(ctx, prepared, params_df))
 

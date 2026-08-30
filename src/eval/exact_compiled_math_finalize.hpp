@@ -122,9 +122,6 @@ inline void exact_complexity_finalize(ExactVariantBuildState *plan) {
 inline void compile_source_product_channel_fields(
     ExactVariantBuildState *plan,
     CompiledMathSourceProductChannel *channel) {
-  if (channel == nullptr) {
-    return;
-  }
   if (channel->source_id != semantic::kInvalidIndex) {
     channel->static_source_view_relation = static_cast<std::uint8_t>(
         exact_compiled_source_view_relation(

@@ -10,12 +10,6 @@
       .pae_extract_sources(expr$reference),
       .pae_extract_sources(expr$blocker)
     )
-    unless_list <- expr$unless %||% list()
-    if (length(unless_list) > 0L) {
-      for (i in seq_along(unless_list)) {
-        out <- c(out, .pae_extract_sources(unless_list[[i]]))
-      }
-    }
     return(unique(out))
   }
   if (identical(kind, "and") || identical(kind, "or")) {
@@ -43,8 +37,6 @@
       }
       walk(node$reference)
       walk(node$blocker)
-      unless_list <- node$unless %||% list()
-      if (length(unless_list) > 0L) lapply(unless_list, walk)
       return(invisible(NULL))
     }
     if (identical(kind, "and") || identical(kind, "or")) {
@@ -118,7 +110,7 @@
 #' blocking relations are overlaid so you can inspect the qualitative structure
 #' of the model before fitting.
 #'
-#' @param model A race model or finalized model structure.
+#' @param model A finalized model structure.
 #' @param xlim Optional x-axis limits. If `NULL`, they are chosen from the model.
 #' @param ylim Y-axis limits.
 #' @param line_length Length of each accumulator trajectory in plot units.
@@ -166,10 +158,10 @@ plot_accumulators <- function(model,
                               xlab = "Time",
                               ylab = "Evidence",
                               ...) {
-  view <- .model_view(model)
-  accumulators <- view$accumulators
-  pools <- view$pools
-  outcomes <- view$outcomes
+  prep <- model$prep
+  accumulators <- prep$accumulators
+  pools <- prep$pools
+  outcomes <- prep$outcomes
   if (length(accumulators) == 0L) {
     stop("Model contains no accumulators", call. = FALSE)
   }

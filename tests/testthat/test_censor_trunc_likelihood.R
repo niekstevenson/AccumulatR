@@ -28,7 +28,7 @@ testthat::test_that("response censor codes condition race regions on truncation"
   observed <- as.numeric(log_likelihood(
     make_context(model),
     prepared,
-    build_param_matrix(model, pars, trial_df = prepared),
+    build_param_matrix(model, pars, n_trials = length(unique(prepared$trials))),
     sum = FALSE
   ))
 
@@ -53,7 +53,6 @@ testthat::test_that("response censor codes condition race regions on truncation"
     race_mass(0.2, 0.3) + race_mass(0.6, 0.8)
   ) / normalizer)
 
-  testthat::expect_identical(unique(prepared$missingness), c(NA_integer_, 1:3))
   testthat::expect_equal(observed, expected, tolerance = 5e-7)
 })
 
@@ -88,7 +87,7 @@ testthat::test_that("known censored responses combine every mapped outcome", {
   observed <- as.numeric(log_likelihood(
     make_context(model),
     data,
-    build_param_matrix(model, pars, trial_df = data)
+    build_param_matrix(model, pars, n_trials = length(unique(data$trials)))
   ))
   winner_density <- function(t, winner) {
     names <- c("left", "right", "timeout")
@@ -142,7 +141,7 @@ testthat::test_that("unknown censoring and truncation use observable responses",
   observed <- as.numeric(log_likelihood(
     make_context(model),
     data,
-    build_param_matrix(model, pars, trial_df = data),
+    build_param_matrix(model, pars, n_trials = length(unique(data$trials))),
     sum = FALSE
   ))
   observable_density <- function(t) {
@@ -187,21 +186,21 @@ testthat::test_that("only selected-outcome integration uses the EMC time limit",
   observed <- as.numeric(log_likelihood(
     make_context(model),
     data,
-    build_param_matrix(model, pars, trial_df = data),
+    build_param_matrix(model, pars, n_trials = length(unique(data$trials))),
     sum = FALSE
   ))
   expected <- c(
     integrate(
       function(t) {
-        AccumulatR:::dist_lba_pdf(t, 2, 1, 0.5, 1) *
-          (1 - AccumulatR:::dist_lba_cdf(t, 1.5, 1, 0.4, 1))
+        lba_pdf_ref(t, 2, 1, 0.5, 1) *
+          (1 - lba_cdf_ref(t, 1.5, 1, 0.4, 1))
       },
       0.5,
       30,
       rel.tol = 1e-11
     )$value,
-    (1 - AccumulatR:::dist_lba_cdf(0.5, 2, 1, 0.5, 1)) *
-      (1 - AccumulatR:::dist_lba_cdf(0.5, 1.5, 1, 0.4, 1))
+    (1 - lba_cdf_ref(0.5, 2, 1, 0.5, 1)) *
+      (1 - lba_cdf_ref(0.5, 1.5, 1, 0.4, 1))
   )
 
   testthat::expect_equal(observed, log(expected), tolerance = 1e-9)
@@ -232,7 +231,7 @@ testthat::test_that("unknown-response tails retain completed guarded outcomes", 
   observed <- as.numeric(log_likelihood(
     make_context(model),
     data,
-    build_param_matrix(model, pars, trial_df = data),
+    build_param_matrix(model, pars, n_trials = length(unique(data$trials))),
     sum = FALSE
   ))
   a_completed <- integrate(

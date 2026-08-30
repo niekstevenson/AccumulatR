@@ -29,7 +29,7 @@ inline bool append_transition_guard(
     ExactTransitionGuardSet *guards,
     const ExactTransitionGuardKind kind,
     const semantic::Index subject_id) {
-  if (guards == nullptr || subject_id == semantic::kInvalidIndex) {
+  if (subject_id == semantic::kInvalidIndex) {
     return false;
   }
   for (const auto &guard : guards->guards) {
@@ -333,8 +333,7 @@ inline bool append_transition_relation(
     ExactSymbolicTransitionScenario *scenario,
     const semantic::Index source_id,
     const ExactRelation relation) {
-  if (scenario == nullptr ||
-      source_id == semantic::kInvalidIndex ||
+  if (source_id == semantic::kInvalidIndex ||
       relation == ExactRelation::Unknown) {
     return false;
   }
@@ -365,14 +364,15 @@ inline bool append_source_truth_constraints(
     return true;
   }
   const auto pos = static_cast<std::size_t>(source_id);
+  const auto &leaf = plan.program.leaf_descriptors[pos];
   const auto onset_kind = static_cast<semantic::OnsetKind>(
-      plan.program.onset_kind[pos]);
+      leaf.onset_kind);
   if (onset_kind == semantic::OnsetKind::Absolute) {
     return true;
   }
   return append_source_truth_constraints(
       plan,
-      plan.program.onset_source_ids[pos],
+      leaf.onset_source_id,
       ExactRelation::Before,
       scenario);
 }
@@ -758,90 +758,21 @@ inline std::vector<ExactSymbolicTransitionScenario> build_expr_transition_scenar
     const auto ref = program.expr_ref_child[static_cast<std::size_t>(expr_idx)];
     const auto blocker =
         program.expr_blocker_child[static_cast<std::size_t>(expr_idx)];
-    const auto blocker_kind = static_cast<semantic::ExprKind>(
-        program.expr_kind[static_cast<std::size_t>(blocker)]);
-    const bool blocker_impossible = blocker_kind == semantic::ExprKind::Impossible;
-    const bool blocker_true = blocker_kind == semantic::ExprKind::TrueExpr;
-    bool any_unless_true = false;
-    std::vector<semantic::Index> unless_events;
-    for (semantic::Index i = program.expr_arg_offsets[static_cast<std::size_t>(expr_idx)];
-         i < program.expr_arg_offsets[static_cast<std::size_t>(expr_idx + 1)];
-         ++i) {
-      const auto child = program.expr_args[static_cast<std::size_t>(i)];
-      const auto child_kind = static_cast<semantic::ExprKind>(
-          program.expr_kind[static_cast<std::size_t>(child)]);
-      if (child_kind == semantic::ExprKind::TrueExpr) {
-        any_unless_true = true;
-        continue;
-      }
-      if (child_kind == semantic::ExprKind::Impossible) {
-        continue;
-      }
-      unless_events.push_back(child);
-    }
-    if (any_unless_true || blocker_impossible) {
-      return build_expr_transition_scenarios(plan, ref);
-    }
-    if (blocker_true && unless_events.empty()) {
-      return {};
-    }
-
     const auto ref_scenarios = build_expr_transition_scenarios(plan, ref);
     std::vector<ExactSymbolicTransitionScenario> out;
-
+    out.reserve(ref_scenarios.size());
     for (const auto &ref_scenario : ref_scenarios) {
-      if (!blocker_true) {
-        auto scenario = ref_scenario;
-        bool ok = append_tail_requirement(&scenario, plan, blocker);
-        if (ok && expr_is_simple_event(program, blocker)) {
-          ok = append_source_truth_constraints(
-              plan,
-              program.expr_source_ids[static_cast<std::size_t>(blocker)],
-              ExactRelation::After,
-              &scenario);
-        }
-        for (const auto child : unless_events) {
-          ok = ok && append_tail_requirement(&scenario, plan, child);
-          if (ok && expr_is_simple_event(program, child)) {
-            ok = append_source_truth_constraints(
-                plan,
-                program.expr_source_ids[static_cast<std::size_t>(child)],
-                ExactRelation::After,
-                &scenario);
-          }
-        }
-        if (ok && scenario_sources_supported(plan, scenario)) {
-          out.push_back(std::move(scenario));
-        }
+      auto scenario = ref_scenario;
+      bool supported = append_tail_requirement(&scenario, plan, blocker);
+      if (supported && expr_is_simple_event(program, blocker)) {
+        supported = append_source_truth_constraints(
+            plan,
+            program.expr_source_ids[static_cast<std::size_t>(blocker)],
+            ExactRelation::After,
+            &scenario);
       }
-
-      const int n_unless = static_cast<int>(unless_events.size());
-      if (n_unless == 0) {
-        continue;
-      }
-      const int max_mask = 1 << n_unless;
-      for (int mask = 1; mask < max_mask; ++mask) {
-        auto scenario = ref_scenario;
-        bool ok = true;
-        for (int bit = 0; bit < n_unless; ++bit) {
-          const auto child = unless_events[static_cast<std::size_t>(bit)];
-          const bool active = (mask & (1 << bit)) != 0;
-          ok = active ? append_ready_requirement(&scenario, plan, child)
-                      : append_tail_requirement(&scenario, plan, child);
-          if (ok && expr_is_simple_event(program, child)) {
-            ok = append_source_truth_constraints(
-                plan,
-                program.expr_source_ids[static_cast<std::size_t>(child)],
-                active ? ExactRelation::Before : ExactRelation::After,
-                &scenario);
-          }
-          if (!ok) {
-            break;
-          }
-        }
-        if (ok && scenario_sources_supported(plan, scenario)) {
-          out.push_back(std::move(scenario));
-        }
+      if (supported && scenario_sources_supported(plan, scenario)) {
+        out.push_back(std::move(scenario));
       }
     }
     return out;
@@ -1017,7 +948,6 @@ inline void compile_exact_outcome_transition_scenarios(
   plan->outcomes.reserve(program.outcome_expr_root.size());
   for (std::size_t i = 0; i < program.outcome_expr_root.size(); ++i) {
     const auto expr_root = program.outcome_expr_root[i];
-    validate_exact_expr(program, expr_root);
     ExactOutcomePlan outcome;
     outcome.scenarios = finalize_symbolic_transition_scenarios(
         plan,

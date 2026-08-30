@@ -1,15 +1,4 @@
-args <- commandArgs(trailingOnly = FALSE)
-file_arg <- grep("^--file=", args, value = TRUE)
-script_path <- normalizePath(
-  if (length(file_arg)) sub("^--file=", "", file_arg[[1L]]) else
-    "dev/validation/compiler_architecture_acceptance.R",
-  mustWork = TRUE
-)
-repo_root <- normalizePath(file.path(dirname(script_path), "..", ".."))
-
-old_wd <- setwd(repo_root)
-on.exit(setwd(old_wd), add = TRUE)
-suppressPackageStartupMessages(pkgload::load_all(repo_root, quiet = TRUE, helpers = FALSE))
+pkgload::load_all(".", quiet = TRUE, helpers = FALSE)
 
 model_simple_first_of <- function() {
   race_spec() |>

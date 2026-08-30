@@ -380,7 +380,6 @@ inline bool exact_order_region_guard_allowed_at_time(
     const semantic::Index time_id,
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
-  const auto &program = plan.program;
   ExactOrderRegionExpr allowed;
   if (!exact_order_region_expr_after(
           plan,
@@ -389,20 +388,6 @@ inline bool exact_order_region_guard_allowed_at_time(
           builder,
           &allowed)) {
     return false;
-  }
-  for (semantic::Index i = 0; i < kernel.children.size; ++i) {
-    const auto child =
-        program.expr_args[
-            static_cast<std::size_t>(kernel.children.offset + i)];
-    ExactOrderRegionExpr unless_before;
-    if (!exact_order_region_expr_before(
-            plan, child, time_id, builder, &unless_before)) {
-      return false;
-    }
-    allowed =
-        allowed.terms.empty()
-            ? std::move(unless_before)
-            : exact_order_region_union(allowed, unless_before);
   }
   *out = std::move(allowed);
   return true;
@@ -449,21 +434,6 @@ inline bool exact_order_region_guard_blocked_at_time(
           builder,
           &blocked)) {
     return false;
-  }
-  const auto &program = plan.program;
-  for (semantic::Index i = 0; i < kernel.children.size; ++i) {
-    const auto child =
-        program.expr_args[
-            static_cast<std::size_t>(kernel.children.offset + i)];
-    ExactOrderRegionExpr unless_not_before;
-    if (!exact_order_region_expr_not_before(
-            plan, child, time_id, builder, &unless_not_before)) {
-      return false;
-    }
-    blocked =
-        exact_order_region_conjoin(
-            std::move(blocked),
-            std::move(unless_not_before));
   }
   *out = std::move(blocked);
   return true;
@@ -1844,21 +1814,10 @@ inline bool exact_order_region_expr_relation_can_collapse(
     }
     return true;
   case semantic::ExprKind::Guard:
-    if (!exact_order_region_expr_relation_can_collapse(
-            plan, kernel.guard_ref_expr_id) ||
-        !exact_order_region_expr_relation_can_collapse(
-            plan, kernel.guard_blocker_expr_id)) {
-      return false;
-    }
-    for (semantic::Index i = 0; i < kernel.children.size; ++i) {
-      const auto child =
-          program.expr_args[
-              static_cast<std::size_t>(kernel.children.offset + i)];
-      if (!exact_order_region_expr_relation_can_collapse(plan, child)) {
-        return false;
-      }
-    }
-    return true;
+    return exact_order_region_expr_relation_can_collapse(
+               plan, kernel.guard_ref_expr_id) &&
+           exact_order_region_expr_relation_can_collapse(
+               plan, kernel.guard_blocker_expr_id);
   }
   return false;
 }

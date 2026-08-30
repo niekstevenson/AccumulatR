@@ -7,7 +7,7 @@ metamorphic_loglik <- function(structure, params, response, rt) {
   )
   prepared <- prepare_data(structure, data)
   params_df <- build_param_matrix(
-    structure, params, trial_df = prepared)
+    structure, params, n_trials = length(unique(prepared$trials)))
   as.numeric(log_likelihood(make_context(structure), prepared, params_df))
 }
 

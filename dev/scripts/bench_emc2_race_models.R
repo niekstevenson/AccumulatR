@@ -134,7 +134,7 @@ make_case <- function(definition, n_trials, scenario) {
     compress = FALSE
   )
   template <- AccumulatR::build_param_matrix(
-    acc_model_spec, definition$acc_pars, trial_df = acc_data
+    acc_model_spec, definition$acc_pars, n_trials = n_trials
   )
   source_names <- matrix(
     NA_character_, nrow(template), ncol(template), dimnames = dimnames(template)
@@ -144,11 +144,11 @@ make_case <- function(definition, n_trials, scenario) {
   }
   attr(acc_data, "designs") <- attr(emc_data, "designs")
   attr(acc_data, "constants") <- attr(emc_data, "constants")
-  attr(acc_data, "expand") <- seq_along(attr(acc_data, "trials_start_rows"))
+  attr(acc_data, "expand") <- seq_len(n_trials)
   attr(acc_data, "AccumulatR_context") <- list(
     native = AccumulatR::make_context(acc_model_spec)$cpp$native,
     bridge = list(defaults = template, source_names = source_names),
-    trial_counts = rep.int(1L, length(attr(acc_data, "trials_start_rows")))
+    trial_counts = rep.int(1L, n_trials)
   )
   acc_model <- emc_model
   acc_model$c_name <- "AccumulatR"

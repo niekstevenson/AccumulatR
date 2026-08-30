@@ -10,21 +10,20 @@
 namespace accumulatr::eval {
 namespace detail {
 
-inline bool exact_scenario_is_terminal_leaf_release(
+inline semantic::Index exact_terminal_leaf_release(
     const ExactVariantBuildState &plan,
-    const ExactSymbolicTransitionScenario &scenario,
-    semantic::Index *leaf_index) {
+    const ExactSymbolicTransitionScenario &scenario) {
   const auto source_id =
       exact_symbolic_transition_release_source_id(scenario.transition);
   if (source_id == semantic::kInvalidIndex ||
       source_id >= plan.program.layout.n_leaves ||
       plan.source_count != plan.program.layout.n_leaves) {
-    return false;
+    return semantic::kInvalidIndex;
   }
   if (!scenario.transition.readiness_time_expr.requirements.empty() ||
       !scenario.transition.guards.empty() ||
       !scenario.transition.order_region.source_order_facts.empty()) {
-    return false;
+    return semantic::kInvalidIndex;
   }
   const auto &relations = scenario.transition.relation_template;
   if (!relations.empty() &&
@@ -32,17 +31,14 @@ inline bool exact_scenario_is_terminal_leaf_release(
         relations.relations.size() == 1U &&
         relations.source_ids.front() == source_id &&
         relations.relations.front() == ExactRelation::At)) {
-    return false;
+    return semantic::kInvalidIndex;
   }
   if (!scenario.transition.active_sources.empty() &&
       (scenario.transition.active_sources.size() != 1U ||
        scenario.transition.active_sources.front() != source_id)) {
-    return false;
+    return semantic::kInvalidIndex;
   }
-  if (leaf_index != nullptr) {
-    *leaf_index = source_id;
-  }
-  return true;
+  return source_id;
 }
 
 inline ExactTerminalNoResponsePlan compile_terminal_no_response_plan(
@@ -60,13 +56,13 @@ inline ExactTerminalNoResponsePlan compile_terminal_no_response_plan(
     if (outcome.scenarios.size() != 1U) {
       return ExactTerminalNoResponsePlan{};
     }
-    semantic::Index leaf_index{semantic::kInvalidIndex};
-    if (!exact_scenario_is_terminal_leaf_release(
-            plan, outcome.scenarios.front(), &leaf_index)) {
+    const auto leaf_index =
+        exact_terminal_leaf_release(plan, outcome.scenarios.front());
+    if (leaf_index == semantic::kInvalidIndex) {
       return ExactTerminalNoResponsePlan{};
     }
     const auto pos = static_cast<std::size_t>(leaf_index);
-    if (pos >= covered.size() || covered[pos] != 0U) {
+    if (covered[pos] != 0U) {
       return ExactTerminalNoResponsePlan{};
     }
     covered[pos] = 1U;

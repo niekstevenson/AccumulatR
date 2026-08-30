@@ -13,8 +13,7 @@ inline constexpr Index kInvalidIndex = -1;
 
 enum class SourceKind : std::uint8_t {
   Leaf = 0,
-  Pool = 1,
-  Special = 2
+  Pool = 1
 };
 
 enum class OnsetKind : std::uint8_t {
@@ -33,27 +32,9 @@ enum class ExprKind : std::uint8_t {
   TrueExpr = 6
 };
 
-enum class ObservationMode : std::uint8_t {
-  TopK = 0
-};
-
 struct SourceRef {
   SourceKind kind{SourceKind::Leaf};
   Index index{kInvalidIndex};
-  std::string special_id;
-
-  bool valid() const noexcept {
-    return kind == SourceKind::Special ? !special_id.empty() : index != kInvalidIndex;
-  }
-};
-
-struct ParamBinding {
-  std::vector<std::string> dist_param_names;
-  std::string t0_name;
-
-  bool empty() const noexcept {
-    return dist_param_names.empty() && t0_name.empty();
-  }
 };
 
 struct OnsetSpec {
@@ -67,7 +48,6 @@ struct LeafSpec {
   std::string id;
   leaf::DistKind dist{leaf::DistKind::Lognormal};
   OnsetSpec onset{};
-  ParamBinding params{};
   Index trigger_index{kInvalidIndex};
 };
 
@@ -89,7 +69,6 @@ struct ExprNode {
   std::vector<Index> children;
   Index reference_child{kInvalidIndex};
   Index blocker_child{kInvalidIndex};
-  std::vector<Index> unless_children;
 };
 
 struct OutcomeMapping {
@@ -104,7 +83,6 @@ struct OutcomeSpec {
   std::vector<Index> competitor_expr_roots;
   std::vector<Index> competitor_outcome_indices;
   std::vector<std::string> component_ids;
-  bool has_guess{false};
 };
 
 struct ComponentSpec {
@@ -112,13 +90,6 @@ struct ComponentSpec {
   std::vector<Index> active_leaf_indices;
   double weight{1.0};
   std::string weight_name;
-  int n_outcomes_override{0};
-};
-
-struct ObservationSpec {
-  ObservationMode mode{ObservationMode::TopK};
-  int n_outcomes{1};
-  int global_n_outcomes{1};
 };
 
 struct SemanticModel {
@@ -128,7 +99,6 @@ struct SemanticModel {
   std::vector<ExprNode> expr_nodes;
   std::vector<OutcomeSpec> outcomes;
   std::vector<ComponentSpec> components;
-  ObservationSpec observation{};
   std::string component_mode{"fixed"};
   std::string component_reference;
 };

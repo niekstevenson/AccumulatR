@@ -33,7 +33,6 @@ reference:
       - add_component
       - set_parameters
       - add_trigger
-      - set_metadata
       - set_mixture
       - finalize_model
       - complexity_metrics

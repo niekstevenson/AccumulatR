@@ -26,7 +26,7 @@ mix_params <- c(
 )
 
 mix_one_trial <- build_param_matrix(mix_model, mix_params, n_trials = 1)
-print(round(response_probabilities(mix_model, mix_one_trial), 3))
+print(round(response_probabilities(make_context(mix_model), mix_one_trial), 3))
 
 mix_param_df <- build_param_matrix(
   mix_model,
@@ -42,6 +42,7 @@ mix_data <- mix_sim[c("trials", "R", "rt")]
 
 mix_prepared <- prepare_data(mix_model, mix_data)
 mix_ctx <- make_context(mix_model)
+mix_n_trials <- length(unique(mix_prepared$trials))
 
 neg_loglik_p <- function(theta) {
   est <- mix_params
@@ -49,7 +50,7 @@ neg_loglik_p <- function(theta) {
   params <- build_param_matrix(
     mix_model,
     est,
-    trial_df = mix_prepared
+    n_trials = mix_n_trials
   )
   -as.numeric(log_likelihood(mix_ctx, mix_prepared, params))
 }

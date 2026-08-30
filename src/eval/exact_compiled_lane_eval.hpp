@@ -105,18 +105,14 @@ inline CompiledLaneUpperBound compiled_lane_expr_upper_bound(
     CompiledLaneExecutor *executor,
     const CompiledLaneFrame &frame,
     const std::size_t lane) {
-  CompiledLaneUpperBound best;
   ExactTimedExprUpperBound sequence_upper;
   const auto source_lane = executor->lanes.source_lane(frame, lane);
   if (executor->lanes.source_state().expr_upper_bound(
-          source_lane, node.subject_id, &sequence_upper) &&
-      std::isfinite(sequence_upper.time) &&
-      sequence_upper.normalizer > 0.0 &&
-      (!best.found || sequence_upper.time < best.time)) {
-    best = CompiledLaneUpperBound{
+          source_lane, node.subject_id, &sequence_upper)) {
+    return CompiledLaneUpperBound{
         true, sequence_upper.time, sequence_upper.normalizer};
   }
-  return best;
+  return {};
 }
 
 inline void evaluate_compiled_lane_schedule(
@@ -351,7 +347,7 @@ inline void evaluate_source_product_terms(
         double product = scratch.products[j];
         const auto upper = compiled_lane_expr_upper_bound(
             factor_node, executor, *frame, lane);
-        const bool has_upper = upper.found && upper.normalizer > 0.0;
+        const bool has_upper = upper.found;
         const double time = compiled_lane_node_time(
             factor_node, *frame, lane);
         if (factor.mode == CompiledMathIntegralExprUpperMode::AfterOne) {
@@ -646,14 +642,12 @@ inline void evaluate_compiled_lane_schedule(
         const double time = compiled_lane_node_time(node, *frame, i);
         if (node.kind == CompiledMathNodeKind::ExprUpperBoundCdf) {
           node_out[i] =
-              !(upper.normalizer > 0.0)
-                  ? 0.0
-                  : (time >= upper.time
-                         ? 1.0
-                         : clamp_probability(raw / upper.normalizer));
+              time >= upper.time
+                  ? 1.0
+                  : clamp_probability(raw / upper.normalizer);
         } else {
           node_out[i] =
-              !(upper.normalizer > 0.0) || time >= upper.time
+              time >= upper.time
                   ? 0.0
                   : safe_density(raw / upper.normalizer);
         }

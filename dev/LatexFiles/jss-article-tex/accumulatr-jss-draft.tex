@@ -191,8 +191,9 @@ complexity diagnostics. \\ \hline
 The workflow in Table~\ref{tab:api} is deliberately explicit. Model-building
 functions return modified specifications, so they can be chained with the base
 \proglang{R} pipe. Parameter values are not stored in the model object. Instead
-\fct{build\_param\_matrix} expands a named vector into the rectangular or long
-parameter layout expected by the simulator and likelihood evaluator. This
+\fct{build\_param\_matrix} expands a named vector into the canonical
+trial-by-accumulator parameter matrix used by simulation and likelihood
+evaluation. This
 separation lets the same model architecture be evaluated under many trial-wise
 parameter sets.
 
@@ -434,8 +435,7 @@ needed.
 \begin{CodeInput}
 R> prepared <- prepare_data(model, sim[c("trials", "R", "rt")])
 R> ctx <- make_context(model)
-R> log_likelihood(ctx, prepared,
-+   build_param_matrix(model, pars, trial_df = prepared))
+R> log_likelihood(ctx, prepared, param_df)
 \end{CodeInput}
 \begin{CodeOutput}
 [1] 157.0651
@@ -447,7 +447,7 @@ Response probabilities can be computed without simulation:
 \begin{CodeChunk}
 \begin{CodeInput}
 R> one_trial <- build_param_matrix(model, pars, n_trials = 1)
-R> round(response_probabilities(model, one_trial), 3)
+R> round(response_probabilities(ctx, one_trial), 3)
 \end{CodeInput}
 \begin{CodeOutput}
  left right
@@ -463,11 +463,13 @@ be greater than one.
 
 The parameter matrix is trial-wise by construction. A typical fitting function
 therefore takes a low-dimensional vector of free parameters, maps it to the
-public parameter names of the model, and then calls \fct{build\_param\_matrix}
-with the prepared data. For example, a minimal negative log-likelihood
+public parameter names of the model, and expands it to the observed trial
+count. For example, a minimal negative log-likelihood
 function for the two-choice race is:
 
 \begin{Code}
+n_trials <- length(unique(prepared$trials))
+
 neg_loglik <- function(theta) {
   est <- c(
     left.m = theta[["left.m"]],
@@ -475,7 +477,9 @@ neg_loglik <- function(theta) {
     right.m = theta[["right.m"]],
     right.s = exp(theta[["log_right.s"]])
   )
-  params <- build_param_matrix(model, est, trial_df = prepared)
+  params <- build_param_matrix(
+    model, est, n_trials = n_trials
+  )
   -as.numeric(log_likelihood(ctx, prepared, params))
 }
 \end{Code}
@@ -647,10 +651,13 @@ matrix.
 \begin{Code}
 prepared <- prepare_data(model, data_df)
 ctx <- make_context(model)
+n_trials <- length(unique(prepared$trials))
 
 objective <- function(theta) {
   values <- transform_theta_to_named_parameters(theta)
-  params <- build_param_matrix(model, values, trial_df = prepared)
+  params <- build_param_matrix(
+    model, values, n_trials = n_trials
+  )
   -as.numeric(log_likelihood(ctx, prepared, params))
 }
 
@@ -664,11 +671,9 @@ are commonly optimized on the log scale and exponentiated before calling
 \fct{build\_param\_matrix}. This keeps the package focused on model evaluation
 while leaving estimation strategy to the analysis.
 
-The parameter matrix may be rectangular, with one row per accumulator per
-trial, or long, with rows aligned to prepared data for component-specific
-architectures. The \code{layout = "auto"} default selects the appropriate
-layout for most uses. Prepared data can also be compressed when repeated
-observations share the same prepared representation; in that case the
+The parameter matrix contains one row per accumulator per trial in model order.
+Prepared data can also be compressed when repeated observations share the same
+prepared representation; in that case the
 likelihood sums weighted compact rows and expands trial-wise values when
 requested.
 

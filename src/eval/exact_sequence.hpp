@@ -112,10 +112,7 @@ inline void exact_unranked_target_density_lanes(
   const auto lane_count = lanes.size;
   const auto &trigger_states = plan.trigger_state_table.states;
   out->resize(lane_count);
-  if (target_idx == semantic::kInvalidIndex || lane_count == 0U) {
-    if (target_idx == semantic::kInvalidIndex) {
-      std::fill(out->begin(), out->end(), 0.0);
-    }
+  if (lane_count == 0U) {
     return;
   }
   auto &values = workspace->input_values;
@@ -190,7 +187,7 @@ inline void exact_finite_outcome_probability_lanes(
     std::vector<double> *out) {
   const auto lane_count = lanes.size;
   out->assign(lane_count, 0.0);
-  if (target_idx == semantic::kInvalidIndex || lane_count == 0U) {
+  if (lane_count == 0U) {
     return;
   }
   const auto &tail = quadrature::canonical_tail_batch().nodes;
@@ -302,14 +299,10 @@ inline void exact_finite_outcome_probability_lanes(
 inline void exact_terminal_no_response_probability_lanes(
     const ExactVariantPlan &plan,
     const ObservationLaneBatchView lanes,
-    ExactStepLaneWorkspace *workspace,
-    std::vector<double> *out) {
+  ExactStepLaneWorkspace *workspace,
+  std::vector<double> *out) {
   const auto lane_count = lanes.size;
   out->assign(lane_count, 0.0);
-  if (!plan.no_response.direct_leaf_failure_product ||
-      plan.no_response.leaf_indices.empty()) {
-    return;
-  }
   auto &products = workspace->input_weights;
   for (const auto &compiled_state : plan.trigger_state_table.states) {
     exact_compiled_trigger_state_weights_lanes(

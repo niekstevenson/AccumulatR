@@ -115,23 +115,9 @@ private:
 
   semantic::Index canonical_guard(const semantic::Index expr_id) {
     const auto pos = static_cast<std::size_t>(expr_id);
-    std::vector<semantic::Index> unless_children;
-    unless_children.reserve(static_cast<std::size_t>(
-        input_.expr_arg_offsets[pos + 1U] - input_.expr_arg_offsets[pos]));
-    for (semantic::Index i = input_.expr_arg_offsets[pos];
-         i < input_.expr_arg_offsets[pos + 1U];
-         ++i) {
-      const auto child =
-          canonicalize(input_.expr_args[static_cast<std::size_t>(i)]);
-      if (child != semantic::kInvalidIndex) {
-        unless_children.push_back(child);
-      }
-    }
-    normalize_child_set(&unless_children);
     return intern_guard(
         canonicalize(input_.expr_ref_child[pos]),
-        canonicalize(input_.expr_blocker_child[pos]),
-        unless_children);
+        canonicalize(input_.expr_blocker_child[pos]));
   }
 
   std::vector<semantic::Index> canonical_children(
@@ -310,7 +296,7 @@ private:
         {},
         semantic::kInvalidIndex,
         semantic::kInvalidIndex,
-        semantic::SourceKind::Special,
+        semantic::SourceKind::Leaf,
         semantic::kInvalidIndex,
         0);
   }
@@ -346,7 +332,7 @@ private:
         children,
         semantic::kInvalidIndex,
         semantic::kInvalidIndex,
-        semantic::SourceKind::Special,
+        semantic::SourceKind::Leaf,
         semantic::kInvalidIndex,
         0);
   }
@@ -361,27 +347,24 @@ private:
         std::vector<semantic::Index>{child},
         semantic::kInvalidIndex,
         semantic::kInvalidIndex,
-        semantic::SourceKind::Special,
+        semantic::SourceKind::Leaf,
         semantic::kInvalidIndex,
         0);
   }
 
   semantic::Index intern_guard(const semantic::Index ref,
-                               const semantic::Index blocker,
-                               const std::vector<semantic::Index> &unless_children) {
+                               const semantic::Index blocker) {
     std::vector<semantic::Index> key;
     append_key_header(&key, semantic::ExprKind::Guard);
     key.push_back(ref);
     key.push_back(blocker);
-    key.push_back(static_cast<semantic::Index>(unless_children.size()));
-    key.insert(key.end(), unless_children.begin(), unless_children.end());
     return intern_node(
         std::move(key),
         semantic::ExprKind::Guard,
-        unless_children,
+        {},
         ref,
         blocker,
-        semantic::SourceKind::Special,
+        semantic::SourceKind::Leaf,
         semantic::kInvalidIndex,
         0);
   }
@@ -420,9 +403,6 @@ private:
 
 inline void canonicalize_exact_evaluation_program_expressions(
     runtime::ExactEvaluationProgram *program) {
-  if (program == nullptr) {
-    return;
-  }
   *program = ExactExprCanonicalizer(*program).run();
 }
 

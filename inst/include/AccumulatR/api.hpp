@@ -9,15 +9,8 @@ using loglik_trials_ccallable_t =
     void (*)(SEXP, SEXP, SEXP, SEXP, double, double *);
 
 inline loglik_trials_ccallable_t loglik_trials_ccallable() {
-  static loglik_trials_ccallable_t fn = nullptr;
-  if (!fn) {
-    fn = reinterpret_cast<loglik_trials_ccallable_t>(
-        R_GetCCallable("AccumulatR", "loglik_trials"));
-    if (!fn) {
-      Rcpp::stop(
-          "AccumulatR C-callable 'loglik_trials' not found (is AccumulatR loaded?)");
-    }
-  }
+  static const auto fn = reinterpret_cast<loglik_trials_ccallable_t>(
+      R_GetCCallable("AccumulatR", "loglik_trials"));
   return fn;
 }
 

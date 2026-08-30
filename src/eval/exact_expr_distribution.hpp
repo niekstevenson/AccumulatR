@@ -234,35 +234,6 @@ inline bool exact_expr_distribution_children_independent(
   return true;
 }
 
-inline bool exact_expr_distribution_contains_unless(
-    const ExactVariantBuildState &plan,
-    const semantic::Index expr_id) {
-  if (expr_id == semantic::kInvalidIndex ||
-      static_cast<std::size_t>(expr_id) >= plan.expr_kernels.size()) {
-    return true;
-  }
-  const auto &kernel =
-      plan.expr_kernels[static_cast<std::size_t>(expr_id)];
-  if (kernel.kind == semantic::ExprKind::Guard) {
-    if (!kernel.children.empty() ||
-        exact_expr_distribution_contains_unless(
-            plan, kernel.guard_ref_expr_id) ||
-        exact_expr_distribution_contains_unless(
-            plan, kernel.guard_blocker_expr_id)) {
-      return true;
-    }
-  }
-  for (semantic::Index i = 0; i < kernel.children.size; ++i) {
-    if (exact_expr_distribution_contains_unless(
-            plan,
-            plan.program.expr_args[
-                static_cast<std::size_t>(kernel.children.offset + i)])) {
-      return true;
-    }
-  }
-  return false;
-}
-
 inline ExactVirtualExpr exact_virtual_expr_true() {
   return ExactVirtualExpr{};
 }
@@ -616,8 +587,7 @@ inline bool exact_expr_distribution_prepare_independent(
           children.begin(),
           children.end(),
           [&](const semantic::Index child) {
-            return exact_order_region_expr_relation_can_collapse(plan, child) &&
-                   !exact_expr_distribution_contains_unless(plan, child);
+            return exact_order_region_expr_relation_can_collapse(plan, child);
           })) {
     return false;
   }
@@ -652,16 +622,12 @@ inline bool exact_expr_distribution_prepare_independent_guard(
   }
   const auto &kernel =
       plan.expr_kernels[static_cast<std::size_t>(key.expr_id)];
-  if (kernel.kind != semantic::ExprKind::Guard || !kernel.children.empty()) {
+  if (kernel.kind != semantic::ExprKind::Guard) {
     return false;
   }
   if (!exact_order_region_expr_relation_can_collapse(
           plan, kernel.guard_ref_expr_id) ||
       !exact_order_region_expr_relation_can_collapse(
-          plan, kernel.guard_blocker_expr_id) ||
-      exact_expr_distribution_contains_unless(
-          plan, kernel.guard_ref_expr_id) ||
-      exact_expr_distribution_contains_unless(
           plan, kernel.guard_blocker_expr_id) ||
       !exact_expr_distribution_children_independent(
           plan,

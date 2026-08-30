@@ -146,14 +146,15 @@ private:
     }
     leaf_ready_[pos] = 1U;
     std::vector<semantic::Index> support{idx};
+    const auto &leaf = program_.leaf_descriptors[pos];
     const auto onset_kind =
-        static_cast<semantic::OnsetKind>(program_.onset_kind[pos]);
+        static_cast<semantic::OnsetKind>(leaf.onset_kind);
     if (onset_kind != semantic::OnsetKind::Absolute) {
       support = merge_sorted_support(
           std::move(support),
           source_support(
-              static_cast<semantic::SourceKind>(program_.onset_source_kind[pos]),
-              program_.onset_source_index[pos]));
+              static_cast<semantic::SourceKind>(leaf.onset_source_kind),
+              leaf.onset_source_index));
     }
     leaf_supports_[pos] = std::move(support);
     leaf_ready_[pos] = 2U;
@@ -246,52 +247,10 @@ private:
       return leaf_support(index);
     case semantic::SourceKind::Pool:
       return pool_support(index);
-    case semantic::SourceKind::Special:
-      break;
     }
     return {};
   }
 };
-
-inline void validate_exact_expr(const runtime::ExactEvaluationProgram &program,
-                                const semantic::Index expr_idx) {
-  const auto kind = static_cast<semantic::ExprKind>(
-      program.expr_kind[static_cast<std::size_t>(expr_idx)]);
-  if (kind == semantic::ExprKind::Event) {
-    return;
-  }
-  if (kind == semantic::ExprKind::Impossible || kind == semantic::ExprKind::TrueExpr) {
-    return;
-  }
-  if (kind == semantic::ExprKind::Not) {
-    validate_exact_expr(
-        program,
-        program.expr_args[static_cast<std::size_t>(
-            program.expr_arg_offsets[static_cast<std::size_t>(expr_idx)])]);
-    return;
-  }
-  if (kind == semantic::ExprKind::And || kind == semantic::ExprKind::Or) {
-    for (semantic::Index i = program.expr_arg_offsets[static_cast<std::size_t>(expr_idx)];
-         i < program.expr_arg_offsets[static_cast<std::size_t>(expr_idx + 1)];
-         ++i) {
-      validate_exact_expr(program, program.expr_args[static_cast<std::size_t>(i)]);
-    }
-    return;
-  }
-  if (kind == semantic::ExprKind::Guard) {
-    validate_exact_expr(
-        program,
-        program.expr_ref_child[static_cast<std::size_t>(expr_idx)]);
-    validate_exact_expr(
-        program,
-        program.expr_blocker_child[static_cast<std::size_t>(expr_idx)]);
-    for (semantic::Index i = program.expr_arg_offsets[static_cast<std::size_t>(expr_idx)];
-         i < program.expr_arg_offsets[static_cast<std::size_t>(expr_idx + 1)];
-         ++i) {
-      validate_exact_expr(program, program.expr_args[static_cast<std::size_t>(i)]);
-    }
-  }
-}
 
 } // namespace detail
 } // namespace accumulatr::eval

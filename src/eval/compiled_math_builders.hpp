@@ -49,27 +49,6 @@ inline semantic::Index compiled_math_constant(CompiledMathProgram *program,
   return compiled_math_intern_node(program, std::move(key));
 }
 
-inline semantic::Index compiled_math_intern_condition(
-    CompiledMathProgram *program,
-    CompiledMathConditionKey key) {
-  if (!key.impossible && key.source_ids.empty()) {
-    return 0;
-  }
-  const auto found = program->condition_index.find(key);
-  if (found != program->condition_index.end()) {
-    return found->second;
-  }
-  const auto condition_id =
-      static_cast<semantic::Index>(program->conditions.size() + 1U);
-  program->conditions.push_back(
-      CompiledMathCondition{
-          key.impossible,
-          key.source_ids,
-          key.relations});
-  program->condition_index.emplace(std::move(key), condition_id);
-  return condition_id;
-}
-
 inline semantic::Index compiled_math_source_node(
     CompiledMathProgram *program,
     const CompiledMathNodeKind kind,
@@ -260,13 +239,11 @@ inline void compiled_math_release_planning_fields(
   for (auto &term : program->source_product_terms) {
     term.source_value_factors = CompiledMathIndexSpan{};
   }
-  decltype(program->conditions)().swap(program->conditions);
   decltype(program->source_value_factors)().swap(
       program->source_value_factors);
   decltype(program->source_product_channels)().swap(
       program->source_product_channels);
   decltype(program->node_index)().swap(program->node_index);
-  decltype(program->condition_index)().swap(program->condition_index);
 }
 
 } // namespace detail

@@ -77,7 +77,7 @@ neg_loglik <- function(theta) {
   params_df <- build_param_matrix(
     model,
     est,
-    trial_df = prepared
+    n_trials = n_trials
   )
   ll <- log_likelihood(ctx, prepared, params_df)
   -as.numeric(ll)
@@ -90,21 +90,16 @@ start <- c(
   B.s = log(0.12)
 )
 
-set.seed(123456)
 fit <- optim(start, neg_loglik, method = "Nelder-Mead")
 ```
 
 ```{r include=FALSE}
-load_vignette_result <- function(name) {
-  candidates <- c(
-    file.path("vignettes", "data", paste0(name, ".RData")),
-    file.path("data", paste0(name, ".RData"))
-  )
-  path <- candidates[file.exists(candidates)][1]
-  load(path, envir = knitr::knit_global())
-}
-
-load_vignette_result("multi_outcome")
+fit <- list(par = c(
+  A.m = -1.20977628221611,
+  A.s = -1.73107710731947,
+  B.m = -0.958549026089506,
+  B.s = -1.53776044280998
+))
 ```
 
 ```{r}

@@ -78,8 +78,7 @@ without a profile is not evidence about its cause. The retained tools are:
 ```sh
 Rscript dev/scripts/benchmark_speed.R
 
-ACCUMULATR_PROFILE_R_SCRIPT=$PWD/dev/scripts/profile_workload_mixed.R \
-  bash dev/scripts/profile_cpp_simple.sh
+bash dev/scripts/profile_cpp_simple.sh
 ```
 
 Benchmark and profile output belongs in the ignored

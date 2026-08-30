@@ -1,135 +1,40 @@
-lba_denom_ref <- function(v, sv) {
-  denom <- pnorm(v / sv)
-  if (!is.finite(denom) || denom < 1e-10) denom <- 1e-10
-  denom
-}
-
-lba_pdf_ref <- function(x, v, B, A, sv) {
-  if (!is.finite(x) || x <= 0 || !is.finite(v) || !is.finite(B) || !is.finite(A) ||
-      !is.finite(sv) || sv <= 0) {
-    return(0)
-  }
-  denom <- lba_denom_ref(v, sv)
-  if (A > 1e-10) {
-    zs <- x * sv
-    cmz <- B - x * v
-    cz <- cmz / zs
-    cz_max <- (cmz - A) / zs
-    pdf <- (v * (pnorm(cz) - pnorm(cz_max)) +
-      sv * (dnorm(cz_max) - dnorm(cz))) / (A * denom)
-  } else {
-    pdf <- dnorm(B / x, mean = v, sd = sv) * B / (x * x * denom)
-  }
-  if (!is.finite(pdf) || pdf <= 0) 0 else pdf
-}
-
-lba_cdf_ref <- function(x, v, B, A, sv) {
-  if (!is.finite(x) || x <= 0 || !is.finite(v) || !is.finite(B) || !is.finite(A) ||
-      !is.finite(sv) || sv <= 0) {
-    return(0)
-  }
-  denom <- lba_denom_ref(v, sv)
-  if (A > 1e-10) {
-    zs <- x * sv
-    cmz <- B - x * v
-    xx <- cmz - A
-    cz <- cmz / zs
-    cz_max <- xx / zs
-    cdf <- (1 +
-      (zs * (dnorm(cz_max) - dnorm(cz)) +
-         xx * pnorm(cz_max) -
-         cmz * pnorm(cz)) / A) / denom
-  } else {
-    cdf <- pnorm(B / x, mean = v, sd = sv, lower.tail = FALSE) / denom
-  }
-  min(max(cdf, 0), 1)
-}
-
-rdm_pigt0_ref <- function(x, k, l) {
-  if (!is.finite(x) || x <= 0 || !is.finite(k) || !is.finite(l)) return(0)
-  if (abs(l) < 1e-12) {
-    z <- k / sqrt(x)
-    return(min(max(2 * (1 - pnorm(z)), 0), 1))
-  }
-  mu <- k / l
-  lambda <- k * k
-  p1 <- 1 - pnorm(sqrt(lambda / x) * (1 + x / mu))
-  p2 <- 1 - pnorm(sqrt(lambda / x) * (1 - x / mu))
-  part <- exp(exp(log(2 * lambda) - log(mu)) + log(max(1e-300, p1)))
-  min(max(part + p2, 0), 1)
-}
-
-rdm_digt0_ref <- function(x, k, l) {
-  if (!is.finite(x) || x <= 0 || !is.finite(k) || !is.finite(l)) return(0)
-  lambda <- k * k
-  exponent <- if (l == 0) {
-    -0.5 * lambda / x
-  } else {
-    mu <- k / l
-    -(lambda / (2 * x)) * ((x * x) / (mu * mu) - 2 * x / mu + 1)
-  }
-  exp(exponent + 0.5 * log(lambda) - 0.5 * log(2 * x * x * x * pi))
-}
-
-rdm_pigt_ref <- function(x, k, l, a, threshold = 1e-10) {
-  if (!is.finite(x) || x <= 0 || !is.finite(k) || !is.finite(l) || !is.finite(a)) return(0)
-  if (a < threshold) return(rdm_pigt0_ref(x, k, l))
+rdm_cdf_ref <- function(x, v, B, A, s) {
+  k <- B / s + 0.5 * A / s
+  l <- v / s
+  a <- 0.5 * A / s
   sqt <- sqrt(x)
   lgt <- log(x)
-  if (l < threshold) {
-    t5a <- 2 * pnorm((k + a) / sqt) - 1
-    t5b <- 2 * pnorm((-k - a) / sqt) - 1
-    t6a <- -0.5 * ((k + a) * (k + a) / x - log(2) - log(pi) + lgt) - log(a)
-    t6b <- -0.5 * ((k - a) * (k - a) / x - log(2) - log(pi) + lgt) - log(a)
-    cdf <- 1 + exp(t6a) - exp(t6b) + ((-k + a) * t5a - (k - a) * t5b) / (2 * a)
-  } else {
-    t1a <- exp(-0.5 * (k - a - x * l)^2 / x)
-    t1b <- exp(-0.5 * (a + k - x * l)^2 / x)
-    t1 <- exp(0.5 * (lgt - log(2) - log(pi))) * (t1a - t1b)
-    t2a <- exp(2 * l * (k - a) + pnorm(-(k - a + x * l) / sqt, log.p = TRUE))
-    t2b <- exp(2 * l * (k + a) + pnorm(-(k + a + x * l) / sqt, log.p = TRUE))
-    t2 <- a + (t2b - t2a) / (2 * l)
-    t4a <- 2 * pnorm((k + a) / sqt - sqt * l) - 1
-    t4b <- 2 * pnorm((k - a) / sqt - sqt * l) - 1
-    t4 <- 0.5 * (x * l - a - k + 0.5 / l) * t4a +
-      0.5 * (k - a - x * l - 0.5 / l) * t4b
-    cdf <- 0.5 * (t4 + t2 + t1) / a
-  }
-  if (!is.finite(cdf) || cdf < 0) return(0)
+  t1 <- exp(0.5 * (lgt - log(2 * pi))) * (
+    exp(-0.5 * (k - a - x * l)^2 / x) -
+      exp(-0.5 * (a + k - x * l)^2 / x)
+  )
+  t2 <- a + (
+    exp(2 * l * (k + a) + pnorm(-(k + a + x * l) / sqt, log.p = TRUE)) -
+      exp(2 * l * (k - a) + pnorm(-(k - a + x * l) / sqt, log.p = TRUE))
+  ) / (2 * l)
+  t4 <- 0.5 * (x * l - a - k + 0.5 / l) *
+    (2 * pnorm((k + a) / sqt - sqt * l) - 1) +
+    0.5 * (k - a - x * l - 0.5 / l) *
+    (2 * pnorm((k - a) / sqt - sqt * l) - 1)
+  cdf <- 0.5 * (t4 + t2 + t1) / a
   min(max(cdf, 0), 1)
-}
-
-rdm_digt_ref <- function(x, k, l, a, threshold = 1e-10) {
-  if (!is.finite(x) || x <= 0 || !is.finite(k) || !is.finite(l) || !is.finite(a)) return(0)
-  if (a < threshold) {
-    pdf <- rdm_digt0_ref(x, k, l)
-    return(if (!is.finite(pdf) || pdf <= 0) 0 else pdf)
-  }
-  if (l < threshold) {
-    term <- exp(-(k - a)^2 / (2 * x)) - exp(-(k + a)^2 / (2 * x))
-    pdf <- exp(-0.5 * (log(2) + log(pi) + log(x)) +
-      log(max(1e-300, term)) - log(2) - log(a))
-  } else {
-    sqt <- sqrt(x)
-    t1a <- -(a - k + x * l)^2 / (2 * x)
-    t1b <- -(a + k - x * l)^2 / (2 * x)
-    t1 <- (1 / sqrt(2)) * (exp(t1a) - exp(t1b)) / (sqrt(pi) * sqt)
-    t2a <- 2 * pnorm((-k + a) / sqt + sqt * l) - 1
-    t2b <- 2 * pnorm((k + a) / sqt - sqt * l) - 1
-    t2 <- exp(log(0.5) + log(l)) * (t2a + t2b)
-    pdf <- exp(log(max(1e-300, t1 + t2)) - log(2) - log(a))
-  }
-  if (!is.finite(pdf) || pdf <= 0) 0 else pdf
 }
 
 rdm_pdf_ref <- function(x, v, B, A, s) {
-  if (!is.finite(s) || s <= 0) return(0)
-  rdm_digt_ref(x, B / s + 0.5 * A / s, v / s, 0.5 * A / s)
-}
-
-rdm_cdf_ref <- function(x, v, B, A, s) {
-  if (!is.finite(s) || s <= 0) return(0)
-  rdm_pigt_ref(x, B / s + 0.5 * A / s, v / s, 0.5 * A / s)
+  k <- B / s + 0.5 * A / s
+  l <- v / s
+  a <- 0.5 * A / s
+  sqt <- sqrt(x)
+  t1 <- (
+    exp(-(a - k + x * l)^2 / (2 * x)) -
+      exp(-(a + k - x * l)^2 / (2 * x))
+  ) / sqrt(2 * pi * x)
+  t2 <- 0.5 * l * (
+    2 * pnorm((-k + a) / sqt + sqt * l) - 1 +
+      2 * pnorm((k + a) / sqt - sqt * l) - 1
+  )
+  pdf <- (t1 + t2) / (2 * a)
+  if (!is.finite(pdf) || pdf <= 0) 0 else pdf
 }
 
 exgauss_raw_pdf_ref <- function(x, mu, sigma, tau) {

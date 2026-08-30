@@ -13,7 +13,7 @@ semantic_loglik_context_cpp <- function(contextSEXP, paramsSEXP, dataSEXP, okSEX
     .Call(`_AccumulatR_semantic_loglik_context_cpp`, contextSEXP, paramsSEXP, dataSEXP, okSEXP, minLLSEXP)
 }
 
-semantic_response_probabilities_context_cpp <- function(contextSEXP, paramsSEXP, layoutSEXP) {
-    .Call(`_AccumulatR_semantic_response_probabilities_context_cpp`, contextSEXP, paramsSEXP, layoutSEXP)
+semantic_response_probabilities_context_cpp <- function(contextSEXP, paramsSEXP) {
+    .Call(`_AccumulatR_semantic_response_probabilities_context_cpp`, contextSEXP, paramsSEXP)
 }
 

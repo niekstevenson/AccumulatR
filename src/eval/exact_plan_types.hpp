@@ -197,7 +197,10 @@ inline ExactVariantPlan finalize_exact_variant_plan(
     ExactVariantBuildState &&build) {
   ExactVariantPlan plan;
   plan.leaf_descriptors = std::move(build.program.leaf_descriptors);
-  plan.leaf_trigger_index = std::move(build.program.leaf_trigger_index);
+  plan.leaf_trigger_index.reserve(plan.leaf_descriptors.size());
+  for (const auto &leaf : plan.leaf_descriptors) {
+    plan.leaf_trigger_index.push_back(leaf.trigger_index);
+  }
   plan.expr_count =
       static_cast<semantic::Index>(build.program.expr_kind.size());
   plan.outcome_index_by_code = std::move(build.outcome_index_by_code);

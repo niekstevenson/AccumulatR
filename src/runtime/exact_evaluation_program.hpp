@@ -11,16 +11,6 @@ struct ExactEvaluationProgram {
   RuntimeLayout layout{};
 
   std::vector<LeafRuntimeDescriptor> leaf_descriptors;
-  std::vector<std::uint8_t> leaf_dist_kind;
-
-  std::vector<std::uint8_t> onset_kind;
-  std::vector<std::uint8_t> onset_source_kind;
-  std::vector<semantic::Index> onset_source_index;
-  std::vector<semantic::Index> onset_source_ids;
-  std::vector<double> onset_lag;
-  std::vector<double> onset_abs_value;
-
-  std::vector<semantic::Index> leaf_trigger_index;
 
   std::vector<semantic::Index> trigger_member_offsets;
   std::vector<semantic::Index> trigger_member_indices;

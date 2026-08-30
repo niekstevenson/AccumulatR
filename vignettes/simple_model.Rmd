@@ -86,7 +86,7 @@ ctx <- make_context(model)
 params_df_true <- build_param_matrix(
   model,
   true_params,
-  trial_df = prepared
+  n_trials = n_trials
 )
 
 ll_true <- as.numeric(log_likelihood(ctx, prepared, params_df_true))
@@ -102,7 +102,7 @@ wrong_params["t0_shared"] <- 0.08
 params_df_wrong <- build_param_matrix(
   model,
   wrong_params,
-  trial_df = prepared
+  n_trials = n_trials
 )
 
 ll_wrong <- as.numeric(log_likelihood(ctx, prepared, params_df_wrong))
@@ -126,7 +126,7 @@ neg_loglik <- function(theta) {
   params_df <- build_param_matrix(
     model,
     est,
-    trial_df = prepared
+    n_trials = n_trials
   )
   ll <- log_likelihood(ctx, prepared, params_df)
   -as.numeric(ll)
@@ -141,21 +141,18 @@ start <- c(
   log_t0_shared = log(0.03)
 )
 
-set.seed(123456)
 fit <- optim(start, neg_loglik, method = "Nelder-Mead", control = list(maxit = 4000, reltol = 1e-9))
 ```
 
 ```{r include=FALSE}
-load_vignette_result <- function(name) {
-  candidates <- c(
-    file.path("vignettes", "data", paste0(name, ".RData")),
-    file.path("data", paste0(name, ".RData"))
-  )
-  path <- candidates[file.exists(candidates)][1]
-  load(path, envir = knitr::knit_global())
-}
-
-load_vignette_result("simple_model")
+fit <- list(par = c(
+  R1_A.v = 1.77020919960065,
+  R1_B.v = 2.80726563925688,
+  log_B_shared = -0.121622410500702,
+  R2.m = -0.947474480378425,
+  log_R2.s = -1.63358273998883,
+  log_t0_shared = -2.74727792055455
+))
 ```
 
 ```{r}

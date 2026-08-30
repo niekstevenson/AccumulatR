@@ -61,33 +61,6 @@ inline int expr_likelihood_id(const Rcpp::RObject &expr_obj) {
   return 0;
 }
 
-inline std::vector<std::string> internal_param_keys(const std::string &leaf_id,
-                                                    leaf::DistKind dist) {
-  std::vector<std::string> suffixes;
-  switch (dist) {
-  case leaf::DistKind::Lognormal:
-    suffixes = {"m", "s"};
-    break;
-  case leaf::DistKind::Gamma:
-    suffixes = {"shape", "rate"};
-    break;
-  case leaf::DistKind::Exgauss:
-    suffixes = {"mu", "sigma", "tau"};
-    break;
-  case leaf::DistKind::LBA:
-    suffixes = {"v", "B", "A", "sv"};
-    break;
-  case leaf::DistKind::RDM:
-    suffixes = {"v", "B", "A", "s"};
-    break;
-  }
-
-  for (auto &suffix : suffixes) {
-    suffix = leaf_id + "." + suffix;
-  }
-  return suffixes;
-}
-
 inline semantic::SourceRef source_ref_from_name(
     std::string_view name,
     const std::unordered_map<std::string, semantic::Index> &leaf_index,
@@ -95,12 +68,12 @@ inline semantic::SourceRef source_ref_from_name(
   auto leaf_it = leaf_index.find(std::string(name));
   if (leaf_it != leaf_index.end()) {
     return semantic::SourceRef{
-        semantic::SourceKind::Leaf, leaf_it->second, std::string()};
+        semantic::SourceKind::Leaf, leaf_it->second};
   }
   auto pool_it = pool_index.find(std::string(name));
   if (pool_it != pool_index.end()) {
     return semantic::SourceRef{
-        semantic::SourceKind::Pool, pool_it->second, std::string()};
+        semantic::SourceKind::Pool, pool_it->second};
   }
   throw std::runtime_error("unknown event source '" + std::string(name) + "'");
 }
@@ -193,14 +166,6 @@ inline semantic::Index compile_expr(
         compile_expr(expr["reference"], model, leaf_index, pool_index, expr_id_index);
     node.blocker_child =
         compile_expr(expr["blocker"], model, leaf_index, pool_index, expr_id_index);
-    if (expr.containsElementNamed("unless") && !Rf_isNull(expr["unless"])) {
-      Rcpp::List unless_list(expr["unless"]);
-      node.unless_children.reserve(unless_list.size());
-      for (R_xlen_t i = 0; i < unless_list.size(); ++i) {
-        node.unless_children.push_back(
-            compile_expr(unless_list[i], model, leaf_index, pool_index, expr_id_index));
-      }
-    }
     break;
   }
   case semantic::ExprKind::Impossible:
@@ -241,8 +206,6 @@ inline semantic::SemanticModel compile_prep(const Rcpp::List &prep) {
     semantic::LeafSpec leaf_spec;
     leaf_spec.id = leaf_id;
     leaf_spec.dist = dist;
-    leaf_spec.params.dist_param_names = detail::internal_param_keys(leaf_id, dist);
-    leaf_spec.params.t0_name = leaf_id + ".t0";
     model.leaves.push_back(std::move(leaf_spec));
   }
 
@@ -345,9 +308,6 @@ inline semantic::SemanticModel compile_prep(const Rcpp::List &prep) {
         outcome_spec.mapping.observed_label = Rcpp::as<std::string>(target[0]);
       }
     }
-    outcome_spec.has_guess =
-        options.containsElementNamed("guess") &&
-        !Rf_isNull(options["guess"]);
     model.outcomes.push_back(std::move(outcome_spec));
   }
 
@@ -386,18 +346,8 @@ inline semantic::SemanticModel compile_prep(const Rcpp::List &prep) {
     if (attr.containsElementNamed("weight_param")) {
       component.weight_name = detail::as_string(attr["weight_param"]);
     }
-    if (attr.containsElementNamed("n_outcomes") &&
-        !Rf_isNull(attr["n_outcomes"])) {
-      component.n_outcomes_override = detail::as_int(attr["n_outcomes"]);
-    }
     model.components.push_back(std::move(component));
   }
-
-  Rcpp::List observation(prep["observation"]);
-  model.observation.mode = semantic::ObservationMode::TopK;
-  model.observation.n_outcomes = detail::as_int(observation["n_outcomes"]);
-  model.observation.global_n_outcomes =
-      detail::as_int(observation["global_n_outcomes"]);
 
   return model;
 }

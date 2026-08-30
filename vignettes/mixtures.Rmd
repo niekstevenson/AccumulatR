@@ -64,23 +64,29 @@ We now create a trial table that says which component each trial belongs to.
 set.seed(123456)
 
 n_trials_fixed <- 1200
-trial_types <- data.frame(
-  trials = seq_len(n_trials_fixed),
-  component = sample(c("fast", "slow"), n_trials_fixed, replace = TRUE, prob = c(0.4, 0.6)),
+trial_component <- sample(
+  c("fast", "slow"),
+  n_trials_fixed,
+  replace = TRUE,
+  prob = c(0.4, 0.6)
+)
+trial_conditions <- data.frame(
+  trials = rep(seq_len(n_trials_fixed), each = 3L),
+  racer = rep(c("target_fast", "target_slow", "competitor"), n_trials_fixed),
+  component = rep(trial_component, each = 3L),
   stringsAsFactors = FALSE
 )
 
 params_df_fixed <- build_param_matrix(
   model_fixed,
   true_params_fixed,
-  trial_df = trial_types
+  n_trials = n_trials_fixed
 )
 
 sim_fixed <- simulate(
   model_fixed,
   params_df_fixed,
-  trial_df = trial_types,
-  layout = "long"
+  trial_df = trial_conditions
 )
 
 data_fixed <- sim_fixed[, c("trials", "R", "rt", "component")]
@@ -99,7 +105,7 @@ ctx_fixed <- make_context(model_fixed)
 params_df_fixed_true <- build_param_matrix(
   model_fixed,
   true_params_fixed,
-  trial_df = prepared_fixed
+  n_trials = n_trials_fixed
 )
 
 ll_fixed <- as.numeric(log_likelihood(ctx_fixed, prepared_fixed, params_df_fixed_true))
@@ -182,7 +188,7 @@ ctx_sampled <- make_context(model_sampled)
 params_df_sampled_true <- build_param_matrix(
   model_sampled,
   true_params_sampled,
-  trial_df = prepared_sampled
+  n_trials = n_trials_sampled
 )
 
 ll_sampled_true <- as.numeric(log_likelihood(ctx_sampled, prepared_sampled, params_df_sampled_true))
@@ -201,7 +207,7 @@ neg_loglik <- function(theta) {
   params_df <- build_param_matrix(
     model_sampled,
     est,
-    trial_df = prepared_sampled
+    n_trials = n_trials_sampled
   )
   ll <- log_likelihood(ctx_sampled, prepared_sampled, params_df)
   -as.numeric(ll)
@@ -209,21 +215,11 @@ neg_loglik <- function(theta) {
 
 start <- c(logit_p_fast = qlogis(0.60))
 
-set.seed(123456)
 fit <- optim(start, neg_loglik, method = "BFGS")
 ```
 
 ```{r include=FALSE}
-load_vignette_result <- function(name) {
-  candidates <- c(
-    file.path("vignettes", "data", paste0(name, ".RData")),
-    file.path("data", paste0(name, ".RData"))
-  )
-  path <- candidates[file.exists(candidates)][1]
-  load(path, envir = knitr::knit_global())
-}
-
-load_vignette_result("mixtures")
+fit <- list(par = c(logit_p_fast = -0.531016185916325))
 ```
 
 ```{r}

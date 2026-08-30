@@ -13,3 +13,4 @@
 ^AccumulatR_logo\.png$
 ^src/.*\.o$
 ^src/.*\.(so|dll|dylib)$
+^src/Makevars$

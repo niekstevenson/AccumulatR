@@ -49,15 +49,14 @@ BEGIN_RCPP
 END_RCPP
 }
 // semantic_response_probabilities_context_cpp
-SEXP semantic_response_probabilities_context_cpp(SEXP contextSEXP, SEXP paramsSEXP, SEXP layoutSEXP);
-RcppExport SEXP _AccumulatR_semantic_response_probabilities_context_cpp(SEXP contextSEXPSEXP, SEXP paramsSEXPSEXP, SEXP layoutSEXPSEXP) {
+SEXP semantic_response_probabilities_context_cpp(SEXP contextSEXP, SEXP paramsSEXP);
+RcppExport SEXP _AccumulatR_semantic_response_probabilities_context_cpp(SEXP contextSEXPSEXP, SEXP paramsSEXPSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
     Rcpp::traits::input_parameter< SEXP >::type contextSEXP(contextSEXPSEXP);
     Rcpp::traits::input_parameter< SEXP >::type paramsSEXP(paramsSEXPSEXP);
-    Rcpp::traits::input_parameter< SEXP >::type layoutSEXP(layoutSEXPSEXP);
-    rcpp_result_gen = Rcpp::wrap(semantic_response_probabilities_context_cpp(contextSEXP, paramsSEXP, layoutSEXP));
+    rcpp_result_gen = Rcpp::wrap(semantic_response_probabilities_context_cpp(contextSEXP, paramsSEXP));
     return rcpp_result_gen;
 END_RCPP
 }
@@ -66,7 +65,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_semantic_make_likelihood_context_prep_cpp", (DL_FUNC) &_AccumulatR_semantic_make_likelihood_context_prep_cpp, 2},
     {"_AccumulatR_semantic_complexity_metrics_context_cpp", (DL_FUNC) &_AccumulatR_semantic_complexity_metrics_context_cpp, 1},
     {"_AccumulatR_semantic_loglik_context_cpp", (DL_FUNC) &_AccumulatR_semantic_loglik_context_cpp, 5},
-    {"_AccumulatR_semantic_response_probabilities_context_cpp", (DL_FUNC) &_AccumulatR_semantic_response_probabilities_context_cpp, 3},
+    {"_AccumulatR_semantic_response_probabilities_context_cpp", (DL_FUNC) &_AccumulatR_semantic_response_probabilities_context_cpp, 2},
     {NULL, NULL, 0}
 };
 

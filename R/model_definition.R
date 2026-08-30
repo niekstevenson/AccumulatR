@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------------------
-# Observation metadata helpers
+# Observation helpers
 # ------------------------------------------------------------------------------
 
 .validate_n_outcomes <- function(n_outcomes) {
@@ -19,170 +19,48 @@
   out
 }
 
-.normalize_observation_metadata <- function(metadata = list(), n_outcomes = NULL) {
-  metadata <- metadata %||% list()
-  obs <- metadata$observation %||% list()
-  if (!is.list(obs)) {
-    stop("metadata$observation must be a list")
-  }
-  if (!is.null(obs$mode) && !identical(obs$mode, "top_k")) {
-    stop("Only metadata$observation$mode = 'top_k' is currently supported")
-  }
-  if (!is.null(n_outcomes)) {
-    obs$n_outcomes <- n_outcomes
-  }
-  n_out <- .validate_n_outcomes(obs$n_outcomes %||% 1L)
-  metadata$observation <- list(mode = "top_k", n_outcomes = n_out)
-  metadata
-}
-
-.extract_observation_spec <- function(x) {
-  obs <- NULL
-  if (is.list(x) && !is.null(x$observation)) {
-    obs <- x$observation
-  }
-  if (is.null(obs) && is.list(x) && !is.null(x$metadata)) {
-    obs <- x$metadata$observation
-  }
-  if (is.null(obs)) {
-    return(list(mode = "top_k", n_outcomes = 1L))
-  }
-  if (!is.list(obs)) {
-    stop("observation specification must be a list")
-  }
-  mode <- obs$mode %||% "top_k"
-  if (!identical(mode, "top_k")) {
-    stop("Only observation mode 'top_k' is currently supported")
-  }
-  list(
-    mode = "top_k",
-    n_outcomes = .validate_n_outcomes(obs$n_outcomes %||% 1L)
-  )
-}
-
-.is_after_onset <- function(x) {
-  is.list(x) && identical(x$kind %||% NULL, "after")
-}
-
-.validate_after_literal <- function(x) {
-  if (!.is_after_onset(x)) {
-    stop("after() onset must be a list with kind = 'after'")
-  }
-  source <- x$source %||% NULL
-  if (!is.character(source) || length(source) != 1L || !nzchar(source)) {
-    stop("after(source, ...) requires a single non-empty character source id")
-  }
-  lag <- x$lag %||% 0
-  if (!is.numeric(lag) || length(lag) != 1L || !is.finite(lag) || lag < 0) {
-    stop("after(..., lag =) must be a single finite numeric value >= 0")
-  }
-  list(kind = "after", source = as.character(source), lag = as.numeric(lag))
-}
-
-.normalize_onset_literal <- function(onset) {
-  if (is.numeric(onset) && length(onset) == 1L && is.finite(onset)) {
-    return(as.numeric(onset))
-  }
-  if (is.character(onset)) {
-    stop("Character onset shorthand is not supported; use after(\"id\", lag = ...)")
-  }
-  if (.is_after_onset(onset)) {
-    after_spec <- .validate_after_literal(onset)
-    return(structure(after_spec, class = c("race_onset_after", "list")))
-  }
-  stop("onset must be a single finite numeric value or after(source, lag = ...)")
-}
-
-.as_named_pool_defs <- function(pools) {
-  pools <- pools %||% list()
-  if (length(pools) == 0L) {
-    return(list())
-  }
-  nms <- names(pools)
-  if (!is.null(nms) && length(nms) == length(pools) && all(nzchar(nms))) {
-    return(pools)
-  }
-  ids <- vapply(pools, function(pool) pool$id %||% "", character(1))
-  if (any(!nzchar(ids))) {
-    stop("All pools must define non-empty ids")
-  }
-  setNames(pools, ids)
-}
-
-.pool_threshold <- function(pool_def) {
-  members <- pool_def$members %||% character(0)
-  k <- pool_def$k %||% pool_def$rule$k %||% length(members)
-  if (is.infinite(k)) {
-    k <- length(members)
-  }
-  as.integer(k)
-}
-
-.resolve_onset_source_kind <- function(source, acc_ids, pool_ids, outcome_labels) {
-  if (source %in% acc_ids) {
-    return("accumulator")
-  }
-  if (source %in% pool_ids) {
-    return("pool")
-  }
-  if (source %in% outcome_labels) {
-    stop(sprintf(
-      "Onset source '%s' references an outcome label; onset sources must be accumulator or pool ids",
-      source
-    ))
-  }
-  stop(sprintf(
-    "Unknown onset source '%s'; onset sources must be declared accumulators or pools",
-    source
-  ))
-}
-
 .normalize_onset_spec <- function(onset, acc_ids, pool_ids, outcome_labels) {
   if (is.numeric(onset) && length(onset) == 1L && is.finite(onset)) {
     return(list(kind = "absolute", value = as.numeric(onset)))
   }
-  if (is.character(onset)) {
-    stop("Character onset shorthand is not supported; use after(\"id\", lag = ...)")
+  if (!is.list(onset) || !identical(onset$kind, "after")) {
+    stop("onset must be a finite number or after(source, lag)")
   }
-  if (.is_after_onset(onset)) {
-    after_spec <- .validate_after_literal(onset)
-    source_kind <- .resolve_onset_source_kind(
-      source = after_spec$source,
-      acc_ids = acc_ids,
-      pool_ids = pool_ids,
-      outcome_labels = outcome_labels
-    )
-    return(list(
-      kind = "after",
-      source = after_spec$source,
-      source_kind = source_kind,
-      lag = after_spec$lag
-    ))
+  source <- onset$source
+  lag <- onset$lag
+  if (!is.character(source) || length(source) != 1L || !nzchar(source)) {
+    stop("after() requires one non-empty source id")
   }
-  stop("onset must be a single finite numeric value or after(source, lag = ...)")
+  if (!is.numeric(lag) || length(lag) != 1L || !is.finite(lag) || lag < 0) {
+    stop("after() lag must be one finite non-negative number")
+  }
+  source_kind <- if (source %in% acc_ids) {
+    "accumulator"
+  } else if (source %in% pool_ids) {
+    "pool"
+  } else if (source %in% outcome_labels) {
+    stop("Onset sources must be accumulator or pool ids, not outcome labels")
+  } else {
+    stop("Onset source '", source, "' is not a declared accumulator or pool")
+  }
+  list(kind = "after", source = source, source_kind = source_kind, lag = lag)
 }
 
 .expand_pool_accumulator_dependencies <- function(pool_id, pool_defs, acc_ids, stack = character(0)) {
-  if (!pool_id %in% names(pool_defs)) {
-    stop(sprintf("Unknown pool '%s' while resolving onset dependencies", pool_id))
-  }
   if (pool_id %in% stack) {
     cycle <- c(stack, pool_id)
     stop("Pool dependency cycle detected while resolving onsets: ", paste(cycle, collapse = " -> "))
   }
-  pool <- pool_defs[[pool_id]]
-  members <- as.character(pool$members %||% character(0))
+  members <- pool_defs[[pool_id]]$members
   deps <- character(0)
   for (member in members) {
     if (member %in% acc_ids) {
       deps <- c(deps, member)
-    } else if (member %in% names(pool_defs)) {
+    } else {
       deps <- c(
         deps,
         .expand_pool_accumulator_dependencies(member, pool_defs, acc_ids, c(stack, pool_id))
       )
-    } else {
-      stop(sprintf("Pool '%s' references unknown member '%s'", pool_id, member))
     }
   }
   unique(deps)
@@ -209,7 +87,7 @@
     }
     state[[node]] <<- 1L
     stack <<- c(stack, node)
-    children <- unique(adjacency[[node]] %||% character(0))
+    children <- adjacency[[node]]
     for (child in children) {
       if (visit(child)) {
         return(TRUE)
@@ -228,134 +106,53 @@
   found
 }
 
-.build_onset_dependency_metadata <- function(acc_defs, pool_defs) {
-  acc_ids <- names(acc_defs %||% list())
-  pool_defs <- .as_named_pool_defs(pool_defs %||% list())
-  onset_specs <- setNames(vector("list", length(acc_ids)), acc_ids)
+.validate_onset_dependencies <- function(acc_defs, pool_defs) {
+  acc_ids <- names(acc_defs)
   dependencies <- setNames(vector("list", length(acc_ids)), acc_ids)
-  onset_sources <- setNames(vector("list", length(acc_ids)), acc_ids)
-
   for (acc_id in acc_ids) {
-    acc_def <- acc_defs[[acc_id]] %||% list()
-    spec <- acc_def$onset_spec %||% list(kind = "absolute", value = acc_def$onset %||% 0)
-    onset_specs[[acc_id]] <- spec
-    if (identical(spec$kind, "after")) {
-      src_kind <- spec$source_kind %||% NULL
-      src <- spec$source %||% NULL
-      if (identical(src_kind, "accumulator")) {
-        preds <- src
-      } else if (identical(src_kind, "pool")) {
-        preds <- .expand_pool_accumulator_dependencies(src, pool_defs, acc_ids)
-      } else {
-        stop(sprintf("Unsupported onset source kind '%s' for accumulator '%s'", src_kind, acc_id))
-      }
-      dependencies[[acc_id]] <- unique(as.character(preds))
-      onset_sources[[acc_id]] <- list(
-        source = src,
-        source_kind = src_kind,
-        lag = spec$lag %||% 0
-      )
-      if (acc_id %in% dependencies[[acc_id]]) {
-        stop("Chained onset dependency cycle detected: ", acc_id, " -> ", acc_id)
-      }
+    spec <- acc_defs[[acc_id]]$onset_spec
+    dependencies[[acc_id]] <- if (!identical(spec$kind, "after")) {
+      character(0)
+    } else if (identical(spec$source_kind, "accumulator")) {
+      spec$source
     } else {
-      dependencies[[acc_id]] <- character(0)
-      onset_sources[[acc_id]] <- NULL
+      .expand_pool_accumulator_dependencies(spec$source, pool_defs, acc_ids)
     }
   }
-
-  adjacency <- setNames(vector("list", length(acc_ids)), acc_ids)
-  incoming <- setNames(integer(length(acc_ids)), acc_ids)
-  for (target in acc_ids) {
-    preds <- dependencies[[target]] %||% character(0)
-    if (length(preds) == 0L) {
-      next
-    }
-    for (pred in preds) {
-      if (!pred %in% acc_ids) {
-        stop(sprintf("Unknown accumulator dependency '%s' for onset of '%s'", pred, target))
-      }
-      adjacency[[pred]] <- c(adjacency[[pred]], target)
-      incoming[[target]] <- incoming[[target]] + 1L
-    }
+  cycle <- .find_onset_cycle_path(acc_ids, dependencies)
+  if (length(cycle)) {
+    stop("Chained onset dependency cycle detected: ", paste(cycle, collapse = " -> "))
   }
-  for (node in acc_ids) {
-    adjacency[[node]] <- unique(adjacency[[node]] %||% character(0))
-  }
-
-  queue <- acc_ids[incoming == 0L]
-  topo <- character(0)
-  while (length(queue) > 0L) {
-    node <- queue[[1L]]
-    queue <- queue[-1L]
-    topo <- c(topo, node)
-    children <- adjacency[[node]] %||% character(0)
-    for (child in children) {
-      incoming[[child]] <- incoming[[child]] - 1L
-      if (incoming[[child]] == 0L) {
-        queue <- c(queue, child)
-      }
-    }
-  }
-  if (length(topo) != length(acc_ids)) {
-    cycle <- .find_onset_cycle_path(acc_ids, adjacency)
-    cycle_text <- if (length(cycle) > 0L) paste(cycle, collapse = " -> ") else "unknown cycle"
-    stop("Chained onset dependency cycle detected: ", cycle_text)
-  }
-
-  has_dependencies <- any(vapply(onset_specs, function(spec) identical(spec$kind, "after"), logical(1)))
-  list(
-    onset_specs = onset_specs,
-    onset_dependencies = dependencies,
-    onset_sources = onset_sources,
-    onset_topology = topo,
-    onset_has_dependencies = has_dependencies
-  )
+  invisible(NULL)
 }
 
-.deterministic_source_signature <- function(source, acc_ids, pool_defs, stack = character(0)) {
+.deterministic_source_signature <- function(source, acc_ids, pool_defs) {
   if (source %in% acc_ids) {
     return(paste0("acc:", source))
   }
-  if (!source %in% names(pool_defs)) {
-    return(paste0("id:", source))
-  }
-  if (source %in% stack) {
-    return(paste0("pool_cycle:", paste(c(stack, source), collapse = "->")))
-  }
   pool <- pool_defs[[source]]
-  members <- as.character(pool$members %||% character(0))
-  k <- .pool_threshold(pool)
+  members <- pool$members
+  k <- pool$k
   if (k == 1L && length(members) == 1L) {
-    return(.deterministic_source_signature(members[[1L]], acc_ids, pool_defs, c(stack, source)))
+    return(.deterministic_source_signature(members[[1L]], acc_ids, pool_defs))
   }
   paste0("pool:", source)
 }
 
 .outcome_is_direct_event <- function(outcome_def, acc_ids, pool_ids) {
-  expr <- outcome_def$expr %||% list()
-  if (!is.list(expr) || !identical(expr$kind, "event")) {
-    return(FALSE)
-  }
-  source <- expr$source %||% NULL
-  if (!is.character(source) || length(source) != 1L || !nzchar(source)) {
-    return(FALSE)
-  }
-  source %in% c(acc_ids, pool_ids)
+  identical(outcome_def$expr$kind, "event") &&
+    outcome_def$expr$source %in% c(acc_ids, pool_ids)
 }
 
 # Validator for multi-outcome readout declarations.
 .validate_multi_outcome_dsl <- function(model_or_prep) {
-  obs <- .extract_observation_spec(model_or_prep)
+  obs <- model_or_prep$observation
   n_outcomes <- obs$n_outcomes
   if (n_outcomes <= 1L) {
     return(invisible(NULL))
   }
-  outcomes <- model_or_prep$outcomes %||% list()
+  outcomes <- model_or_prep$outcomes
   n_defined <- length(outcomes)
-  if (n_defined == 0L) {
-    stop("n_outcomes > 1 requires declared outcomes")
-  }
   if (n_outcomes > n_defined) {
     stop(sprintf(
       "n_outcomes (%d) cannot exceed number of declared outcomes (%d)",
@@ -363,20 +160,20 @@
     ))
   }
 
-  acc_ids <- names(model_or_prep$accumulators %||% list())
-  pool_ids <- names(model_or_prep$pools %||% list())
+  acc_ids <- names(model_or_prep$accumulators)
+  pool_ids <- names(model_or_prep$pools)
   issues <- character(0)
   direct_sources <- character(0)
   direct_labels <- character(0)
   for (i in seq_along(outcomes)) {
-    out <- outcomes[[i]] %||% list()
-    label <- out$label %||% names(outcomes)[i] %||% sprintf("outcome_%d", i)
-    opts <- out$options %||% list()
+    out <- outcomes[[i]]
+    label <- out$label
+    opts <- out$options
     is_direct <- .outcome_is_direct_event(out, acc_ids, pool_ids)
     if (!is_direct) {
       issues <- c(issues, sprintf("%s (must be a direct event outcome)", label))
     } else {
-      direct_sources <- c(direct_sources, out$expr$source %||% "")
+      direct_sources <- c(direct_sources, out$expr$source)
       direct_labels <- c(direct_labels, label)
     }
     if (!is.null(opts$guess)) {
@@ -394,7 +191,7 @@
     )
   }
 
-  pool_defs <- .as_named_pool_defs(model_or_prep$pools %||% list())
+  pool_defs <- model_or_prep$pools
   signatures <- vapply(direct_sources, function(source) {
     .deterministic_source_signature(source, acc_ids, pool_defs)
   }, character(1))
@@ -412,94 +209,54 @@
   invisible(NULL)
 }
 
+.build_outcome_component_maps <- function(outcomes, component_ids) {
+  allowed <- observed <- setNames(
+    rep(list(character(0)), length(component_ids)),
+    component_ids
+  )
+  labels <- names(outcomes)
+  for (i in seq_along(outcomes)) {
+    options <- outcomes[[i]]$options
+    components <- options$component %||% component_ids
+    observed_labels <- labels[[i]]
+    if (!is.null(options$guess)) {
+      observed_labels <- options$guess$labels
+    }
+    if (!is.null(options$map_outcome_to)) {
+      observed_labels <- options$map_outcome_to
+    }
+    observed_labels <- as.character(observed_labels[!is.na(observed_labels)])
+    for (component in components) {
+      allowed[[component]] <- c(allowed[[component]], labels[[i]])
+      observed[[component]] <- c(observed[[component]], observed_labels)
+    }
+  }
+  list(
+    allowed = lapply(allowed, unique),
+    observed = lapply(observed, unique)
+  )
+}
+
 # ------------------------------------------------------------------------------
 # Expression parsing utilities
 # ------------------------------------------------------------------------------
 
 .is_expr_node <- function(x) is.list(x) && length(x) > 0 && !is.null(x$kind)
 
-.expr_from_symbol <- function(sym) {
-  list(kind = "event", source = as.character(sym), k = NULL)
-}
-
-.expr_label <- function(node) {
-  if (is.symbol(node)) {
-    return(as.character(node))
-  }
-  if (is.character(node) && length(node) == 1L) {
-    return(node)
-  }
-  stop("Unable to convert expression label of type '", typeof(node), "'")
-}
-
 .expr_from_value <- function(val) {
   if (.is_expr_node(val)) {
     return(val)
   }
-  if (inherits(val, "formula")) {
-    return(.build_expr(val[[length(val)]]))
-  }
   if (is.character(val) && length(val) == 1L) {
-    token <- trimws(val)
-    has_logic <- grepl("[&|!()]", token)
-    looks_call <- grepl("\\w+\\s*\\(", token)
-    if (!has_logic && !looks_call) {
-      return(list(kind = "event", source = token, k = NULL))
-    }
-    parsed <- tryCatch(str2lang(token), error = function(e) NULL)
-    if (is.null(parsed)) {
-      return(list(kind = "event", source = token, k = NULL))
-    }
-    return(.build_expr(parsed))
+    return(list(kind = "event", source = val))
   }
   if (is.symbol(val)) {
-    return(.expr_from_symbol(val))
+    return(list(kind = "event", source = as.character(val)))
   }
   if (is.call(val)) {
     return(.parse_expr_call(val))
   }
   stop("Cannot interpret expression component of type '", typeof(val), "'")
-}
-
-.parse_event_call <- function(call) {
-  args <- as.list(call)[-1]
-  nm <- names(call)[-1]
-  id_arg <- NULL
-  named_args <- nm[!is.na(nm) & nzchar(nm)]
-  if (length(args) >= 1L) {
-    arg_name <- if (length(nm) >= 1L) nm[[1L]] else ""
-    if (is.null(arg_name) || arg_name == "" || identical(arg_name, "id")) {
-      id_arg <- args[[1L]]
-    }
-  }
-  if ("id" %in% nm) id_arg <- args[[which(nm == "id")[1L]]]
-
-  if (is.null(id_arg)) stop("event() requires an id argument")
-  if (length(args) >= 2L || any(!named_args %in% "id")) {
-    stop("event() accepts only a single id argument", call. = FALSE)
-  }
-  list(kind = "event", source = .expr_label(id_arg), k = NULL)
-}
-
-
-
-.parse_guard_call <- function(call) {
-  args <- as.list(call)[-1]
-  nm <- names(call)[-1]
-
-  blocker <- reference <- NULL
-  if (length(args) >= 1L && (is.null(nm[[1L]]) || nm[[1L]] == "")) blocker <- args[[1L]]
-  if (length(args) >= 2L && (is.null(nm[[2L]]) || nm[[2L]] == "")) reference <- args[[2L]]
-  if ("blocker" %in% nm) blocker <- args[[which(nm == "blocker")[1L]]]
-  if ("reference" %in% nm) reference <- args[[which(nm == "reference")[1L]]]
-  if (is.null(blocker) || is.null(reference)) {
-    stop("guard() requires both blocker and reference arguments")
-  }
-  list(
-    kind = "guard",
-    blocker = .expr_from_value(blocker),
-    reference = .expr_from_value(reference)
-  )
 }
 
 .parse_expr_call <- function(call) {
@@ -515,14 +272,8 @@
     parts <- lapply(as.list(call)[-1], .expr_from_value)
     return(list(kind = "or", args = parts))
   }
-  if (op %in% c("!", "~")) {
+  if (identical(op, "!")) {
     return(list(kind = "not", arg = .expr_from_value(call[[2]])))
-  }
-  if (identical(op, "event")) {
-    return(.parse_event_call(call))
-  }
-  if (identical(op, "guard")) {
-    return(.parse_guard_call(call))
   }
   stop(sprintf("Unsupported token '%s' in expression", op))
 }
@@ -561,17 +312,11 @@ build_outcome_expr <- function(expr) {
 #' inhibit("A", "B")
 #' @export
 inhibit <- function(reference, by) {
-  ref_expr <- if (is.character(reference) && length(reference) == 1L) {
-    list(kind = "event", source = reference, k = NULL)
-  } else {
-    .build_expr(reference)
-  }
-  blocker_expr <- if (is.character(by) && length(by) == 1L) {
-    list(kind = "event", source = by, k = NULL)
-  } else {
-    .build_expr(by)
-  }
-  list(kind = "guard", blocker = blocker_expr, reference = ref_expr)
+  list(
+    kind = "guard",
+    blocker = .build_expr(by),
+    reference = .build_expr(reference)
+  )
 }
 
 #' Define a response that occurs when the first listed process finishes
@@ -584,9 +329,6 @@ inhibit <- function(reference, by) {
 first_of <- function(...) {
   args <- list(...)
   if (length(args) == 0) stop("first_of() requires at least one argument")
-  if (length(args) == 1 && is.list(args[[1]]) && !.is_expr_node(args[[1]])) {
-    args <- args[[1]]
-  }
   list(kind = "or", args = lapply(args, .expr_from_value))
 }
 
@@ -600,9 +342,6 @@ first_of <- function(...) {
 all_of <- function(...) {
   args <- list(...)
   if (length(args) == 0) stop("all_of() requires at least one argument")
-  if (length(args) == 1 && is.list(args[[1]]) && !.is_expr_node(args[[1]])) {
-    args <- args[[1]]
-  }
   list(kind = "and", args = lapply(args, .expr_from_value))
 }
 
@@ -614,12 +353,7 @@ all_of <- function(...) {
 #' @examples
 #' none_of("A")
 none_of <- function(expr) {
-  inner <- if (is.character(expr) && length(expr) == 1L) {
-    list(kind = "event", source = expr, k = NULL)
-  } else {
-    .build_expr(expr)
-  }
-  list(kind = "not", arg = inner)
+  list(kind = "not", arg = .build_expr(expr))
 }
 
 #' Start one accumulator after another process finishes
@@ -635,16 +369,7 @@ none_of <- function(expr) {
 #' after("pool1", lag = 0.05)
 #' @export
 after <- function(source, lag = 0) {
-  if (!is.character(source) || length(source) != 1L || !nzchar(source)) {
-    stop("after(source, ...) requires a single non-empty character source id")
-  }
-  if (!is.numeric(lag) || length(lag) != 1L || !is.finite(lag) || lag < 0) {
-    stop("after(..., lag =) must be a single finite numeric value >= 0")
-  }
-  structure(
-    list(kind = "after", source = as.character(source), lag = as.numeric(lag)),
-    class = c("race_onset_after", "list")
-  )
+  list(kind = "after", source = source, lag = lag)
 }
 
 # ------------------------------------------------------------------------------
@@ -661,7 +386,6 @@ after <- function(source, lag = 0) {
 #' race_spec()
 #' @export
 race_spec <- function(n_outcomes = 1L) {
-  metadata <- .normalize_observation_metadata(list(), n_outcomes = n_outcomes)
   structure(list(
     accumulators = list(),
     pools = list(),
@@ -670,7 +394,7 @@ race_spec <- function(n_outcomes = 1L) {
     parameters = .normalize_parameter_spec(),
     components = list(),
     mixture_options = list(),
-    metadata = metadata
+    observation = list(n_outcomes = .validate_n_outcomes(n_outcomes))
   ), class = "race_spec")
 }
 
@@ -701,7 +425,6 @@ race_spec <- function(n_outcomes = 1L) {
 #' @export
 add_accumulator <- function(spec, id, dist, onset = 0) {
   spec <- .validate_race_spec_input(spec, "add_accumulator")
-  onset <- .normalize_onset_literal(onset)
   spec$accumulators[[length(spec$accumulators) + 1L]] <- list(
     id = id,
     dist = dist,
@@ -901,32 +624,6 @@ set_mixture <- function(spec, mode = c("fixed", "sample"), weights = NULL, refer
   spec
 }
 
-#' Store model-level metadata
-#'
-#' `set_metadata()` stores additional metadata on a model specification.
-#' At present, these values are carried through model finalization but do not
-#' directly change simulation or likelihood evaluation.
-#'
-#' @param spec A `race_spec` object.
-#' @param ... Named metadata entries.
-#' @return The updated `race_spec`.
-#' @examples
-#' spec <- race_spec() |>
-#'   add_accumulator("go", "lognormal") |>
-#'   add_outcome("go", "go")
-#'
-#' spec <- set_metadata(spec, note = "example")
-#' finalize_model(spec)$model_spec$metadata$note
-#' @export
-set_metadata <- function(spec, ...) {
-  spec <- .validate_race_spec_input(spec, "set_metadata")
-  updates <- list(...)
-  for (nm in names(updates)) {
-    spec$metadata[[nm]] <- updates[[nm]]
-  }
-  spec
-}
-
 # ----------------------------------------------------------------------
 # Model normalization/finalization (shared by simulation and likelihood)
 # ----------------------------------------------------------------------
@@ -951,26 +648,27 @@ set_metadata <- function(spec, ...) {
     not = .expression_sources(expr$arg),
     guard = c(
       .expression_sources(expr$reference),
-      .expression_sources(expr$blocker),
-      unlist(lapply(expr$unless, .expression_sources), use.names = FALSE)
+      .expression_sources(expr$blocker)
     ),
-    impossible = ,
-    true = character(0),
     stop("Unsupported expression kind '", expr$kind, "'", call. = FALSE)
   )
 }
 
 .validate_model_spec <- function(model) {
+  if (!length(model$accumulators) || !length(model$outcomes)) {
+    stop("Model must define accumulators and outcomes", call. = FALSE)
+  }
   acc_ids <- .model_ids(model$accumulators, "id", "Accumulator")
   pool_ids <- .model_ids(model$pools, "id", "Pool")
   component_ids <- .model_ids(model$components, "id", "Component")
   .model_ids(model$triggers, "id", "Trigger")
+  .validate_n_outcomes(model$observation$n_outcomes)
   if (length(intersect(acc_ids, pool_ids))) {
     stop("Accumulator and pool ids must be distinct", call. = FALSE)
   }
   invisible(lapply(model$accumulators, function(acc) dist_registry(acc$dist)))
 
-  pool_defs <- .as_named_pool_defs(model$pools)
+  pool_defs <- setNames(model$pools, pool_ids)
   for (pool in model$pools) {
     members <- as.character(pool$members)
     if (any(!members %in% c(acc_ids, pool_ids))) {
@@ -1027,9 +725,16 @@ set_metadata <- function(spec, ...) {
            paste(unknown_sources, collapse = ", "), call. = FALSE)
     }
     options <- outcome$options
-    if (!is.null(options$component) &&
-        any(!options$component %in% known_components)) {
-      stop("Outcome '", outcome$label, "' references an unknown component", call. = FALSE)
+    components <- options$component
+    if (!is.null(components) &&
+        (!is.character(components) || !length(components) || anyNA(components) ||
+         any(!nzchar(components)) || anyDuplicated(components) ||
+         any(!components %in% known_components))) {
+      stop(
+        "Outcome '", outcome$label,
+        "' must name one or more unique declared components",
+        call. = FALSE
+      )
     }
     if (!is.null(options$map_outcome_to) &&
         !is.na(options$map_outcome_to) &&
@@ -1055,18 +760,14 @@ set_metadata <- function(spec, ...) {
 
 .prepare_acc_defs <- function(model) {
   accs <- model$accumulators
-  if (length(accs) == 0) stop("Model must define at least one accumulator")
-
   acc_ids <- vapply(accs, `[[`, character(1), "id")
-  pool_ids <- vapply(model$pools %||% list(), function(pool) pool$id %||% "", character(1))
-  pool_ids <- pool_ids[nzchar(pool_ids)]
-  outcome_labels <- vapply(model$outcomes %||% list(), function(out) out$label %||% "", character(1))
-  outcome_labels <- outcome_labels[nzchar(outcome_labels)]
+  pool_ids <- vapply(model$pools, `[[`, character(1), "id")
+  outcome_labels <- vapply(model$outcomes, `[[`, character(1), "label")
 
   defs <- setNames(vector("list", length(accs)), acc_ids)
   for (acc in accs) {
     onset_spec <- .normalize_onset_spec(
-      onset = acc$onset %||% 0,
+      onset = acc$onset,
       acc_ids = acc_ids,
       pool_ids = pool_ids,
       outcome_labels = outcome_labels
@@ -1077,59 +778,32 @@ set_metadata <- function(spec, ...) {
       dist = acc$dist,
       onset = onset_value,
       onset_spec = onset_spec,
-      q = acc$q %||% 0,
-      params = .ensure_acc_param_t0(acc$params %||% list()),
       components = character(0),
-      shared_trigger_id = NULL,
-      shared_trigger_q = NULL
+      shared_trigger_id = NULL
     )
   }
 
-  # Process components (membership)
-  if (length(model$components) > 0) {
-    for (cmp in model$components) {
-      comp_id <- cmp$id
-      members <- cmp$members
-      if (length(members) == 0) next
-      for (m in members) {
-        if (!is.null(defs[[m]])) {
-          defs[[m]]$components <- unique(c(defs[[m]]$components, comp_id))
-        }
-      }
+  for (component in model$components) {
+    for (member in component$members) {
+      defs[[member]]$components <- c(defs[[member]]$components, component$id)
     }
   }
 
-  # Process triggers
-  shared_triggers <- list()
-  if (length(model$triggers) > 0) {
-    for (trig in model$triggers) {
-      members <- trig$members
-      if (length(members) == 0) next
-      trig_id <- trig$id
-      shared_triggers[[trig_id]] <- list(
-        id = trig_id,
-        members = members,
-        q = 0
-      )
-      for (m in members) {
-        if (!is.null(defs[[m]])) {
-          defs[[m]]$shared_trigger_id <- trig_id
-          defs[[m]]$shared_trigger_q <- 0
-          defs[[m]]$q <- 0
-        }
-      }
+  shared_triggers <- setNames(
+    model$triggers,
+    vapply(model$triggers, `[[`, character(1), "id")
+  )
+  for (trigger in model$triggers) {
+    for (member in trigger$members) {
+      defs[[member]]$shared_trigger_id <- trigger$id
     }
-  }
-
-  for (acc_id in names(defs)) {
-    defs[[acc_id]]$params <- .ensure_acc_param_t0(defs[[acc_id]]$params)
   }
   list(acc = defs, shared_triggers = shared_triggers)
 }
 
-.extract_components <- function(model) {
-  comps <- model$components %||% list()
-  mix_opts <- model$mixture_options %||% list()
+.prepare_components <- function(model) {
+  comps <- model$components
+  mix_opts <- model$mixture_options
   mode <- mix_opts$mode %||% "fixed"
   reference <- mix_opts$reference %||% NA_character_
   if (length(comps) == 0) {
@@ -1137,19 +811,13 @@ set_metadata <- function(spec, ...) {
       ids = "__default__",
       weights = 1,
       attrs = list(`__default__` = list()),
-      has_weight_param = FALSE,
       mode = "fixed",
       reference = "__default__"
     ))
   }
 
   ids <- vapply(comps, `[[`, character(1), "id")
-  if (anyDuplicated(ids)) {
-    stop("Component ids must be unique", call. = FALSE)
-  }
-
   attrs <- setNames(vector("list", length(ids)), ids)
-  has_wparam <- logical(length(ids))
 
   if (identical(mode, "sample")) {
     if (is.na(reference) || !nzchar(reference)) {
@@ -1177,29 +845,9 @@ set_metadata <- function(spec, ...) {
 
   for (i in seq_along(ids)) {
     cmp_id <- ids[[i]]
-    attrs_cmp <- comps[[i]]$attrs %||% list()
-    if (!is.list(attrs_cmp)) {
-      stop(sprintf("Component '%s' attrs must be a list", cmp_id))
-    }
-    unknown_attrs <- setdiff(names(attrs_cmp), "n_outcomes")
-    if (length(unknown_attrs) > 0L) {
-      stop(
-        sprintf(
-          "Component '%s' has unknown attr(s): %s",
-          cmp_id,
-          paste(unknown_attrs, collapse = ", ")
-        ),
-        call. = FALSE
-      )
-    }
-    n_out <- attrs_cmp$n_outcomes %||% NULL
-    if (!is.null(n_out)) {
-      n_out <- .validate_n_outcomes(n_out)
-    }
-    attrs_cmp$n_outcomes <- n_out
+    attrs_cmp <- comps[[i]]$attrs
     if (identical(mode, "sample") && !identical(cmp_id, reference)) {
       attrs_cmp$weight_param <- paste0("p.", cmp_id)
-      has_wparam[[i]] <- TRUE
     }
     attrs[[cmp_id]] <- attrs_cmp
   }
@@ -1208,7 +856,6 @@ set_metadata <- function(spec, ...) {
     ids = ids,
     weights = as.numeric(weights),
     attrs = attrs,
-    has_weight_param = has_wparam,
     mode = mode,
     reference = reference
   )
@@ -1216,56 +863,29 @@ set_metadata <- function(spec, ...) {
 
 .prepare_pool_defs <- function(model) {
   pools <- model$pools
-  if (is.null(pools)) pools <- list()
-  defs <- setNames(vector("list", length(pools)), vapply(pools, `[[`, character(1), "id"))
-  for (pl in pools) {
-    rule <- pl$rule
-    k <- rule$k
-    if (is.infinite(k)) k <- length(pl$members)
-    defs[[pl$id]] <- list(
-      id = pl$id,
-      members = pl$members,
-      k = k
-    )
-  }
-  defs
+  setNames(lapply(pools, function(pool) {
+    list(id = pool$id, members = pool$members, k = pool$rule$k)
+  }), vapply(pools, `[[`, character(1), "id"))
 }
 
-.prepare_outcomes <- function(model) {
-  outs <- model$outcomes
-  if (is.null(outs) || length(outs) == 0) stop("Model must define outcomes")
-  outs <- lapply(outs, function(out) {
-    if (is.null(out$label)) stop("Outcome missing label")
-    if (is.null(out$expr)) stop(sprintf("Outcome '%s' missing expr", out$label))
-    out$options <- out$options %||% list()
-    out
-  })
-  setNames(outs, vapply(outs, `[[`, character(1), "label"))
-}
-
-prepare_model <- function(model) {
+.prepare_model <- function(model) {
   .validate_model_spec(model)
   acc_prep <- .prepare_acc_defs(model)
   acc_defs <- acc_prep$acc
   pool_defs <- .prepare_pool_defs(model)
-  outcome_defs <- .prepare_outcomes(model)
-  component_defs <- .extract_components(model)
-  observation <- .extract_observation_spec(model)
-  component_attrs <- component_defs$attrs %||% list()
-  component_overrides <- integer(0)
-  if (length(component_attrs) > 0L) {
-    component_overrides <- vapply(component_attrs, function(attr) {
-      if (!is.list(attr) || is.null(attr$n_outcomes)) {
-        return(NA_integer_)
-      }
-      .validate_n_outcomes(attr$n_outcomes)
-    }, integer(1))
-  }
-  max_component_outcomes <- 1L
-  if (length(component_overrides) > 0L && any(!is.na(component_overrides))) {
-    max_component_outcomes <- max(component_overrides, na.rm = TRUE)
-  }
-  onset_metadata <- .build_onset_dependency_metadata(acc_defs, pool_defs)
+  outcome_defs <- setNames(
+    model$outcomes,
+    vapply(model$outcomes, `[[`, character(1), "label")
+  )
+  component_defs <- .prepare_components(model)
+  observation <- model$observation
+  component_overrides <- vapply(
+    component_defs$attrs,
+    function(attributes) attributes$n_outcomes %||% NA_integer_,
+    integer(1)
+  )
+  max_component_outcomes <- max(c(1L, component_overrides), na.rm = TRUE)
+  .validate_onset_dependencies(acc_defs, pool_defs)
   observation$global_n_outcomes <- observation$n_outcomes
   observation$component_n_outcomes <- as.list(component_overrides[!is.na(component_overrides)])
   observation$n_outcomes <- max(observation$n_outcomes, max_component_outcomes)
@@ -1275,54 +895,17 @@ prepare_model <- function(model) {
     outcomes = outcome_defs,
     components = component_defs,
     observation = observation,
-    shared_triggers = acc_prep$shared_triggers %||% list(),
-    onset_specs = onset_metadata$onset_specs,
-    onset_dependencies = onset_metadata$onset_dependencies,
-    onset_sources = onset_metadata$onset_sources,
-    onset_topology = onset_metadata$onset_topology,
-    onset_has_dependencies = onset_metadata$onset_has_dependencies
+    shared_triggers = acc_prep$shared_triggers,
+    parameter_lookup = .parameter_name_lookup(model)
   )
+  outcome_maps <- .build_outcome_component_maps(
+    outcome_defs,
+    component_defs$ids
+  )
+  prep$outcomes_by_component <- outcome_maps$allowed
+  prep$observed_outcomes_by_component <- outcome_maps$observed
   .validate_multi_outcome_dsl(prep)
   prep
-}
-
-.build_component_table <- function(comp_defs) {
-  comp_ids <- comp_defs$ids
-  comp_tbl <- data.frame(
-    component_id = comp_ids,
-    weight = comp_defs$weights,
-    stringsAsFactors = FALSE
-  )
-  comp_tbl$has_weight_param <- comp_defs$has_weight_param
-  comp_tbl$attrs <- I(comp_defs$attrs[match(comp_ids, names(comp_defs$attrs))])
-  comp_tbl$mode <- comp_defs$mode %||% "fixed"
-  comp_tbl$reference <- comp_defs$reference %||% comp_ids[[1]]
-  comp_tbl
-}
-
-.build_accumulator_template <- function(acc_defs) {
-  acc_ids <- names(acc_defs)
-  if (length(acc_ids) == 0L) {
-    return(data.frame(
-      dist = character(0),
-      onset = numeric(0),
-      q = numeric(0),
-      shared_trigger_id = character(0),
-      shared_trigger_q = numeric(0),
-      stringsAsFactors = FALSE
-    ))
-  }
-  acc_df <- data.frame(
-    dist = vapply(acc_defs, function(acc) acc$dist %||% NA_character_, character(1)),
-    onset = vapply(acc_defs, function(acc) acc$onset %||% 0, numeric(1)),
-    q = vapply(acc_defs, function(acc) acc$q %||% 0, numeric(1)),
-    shared_trigger_id = vapply(acc_defs, function(acc) acc$shared_trigger_id %||% NA_character_, character(1)),
-    shared_trigger_q = vapply(acc_defs, function(acc) acc$shared_trigger_q %||% NA_real_, numeric(1)),
-    stringsAsFactors = FALSE
-  )
-  acc_df$params <- I(lapply(acc_defs, function(acc) .ensure_acc_param_t0(acc$params %||% list())))
-  acc_df$components <- I(lapply(acc_defs, function(acc) acc$components %||% character(0)))
-  acc_df
 }
 
 #' Compile a model for simulation and fitting
@@ -1340,13 +923,9 @@ prepare_model <- function(model) {
 #' @export
 finalize_model <- function(model) {
   model <- .validate_race_spec_input(model, "finalize_model")
-  prep <- prepare_model(model)
   structure <- list(
     model_spec = model,
-    prep = prep,
-    accumulators = .build_accumulator_template(prep$accumulators),
-    components = .build_component_table(prep$components),
-    shared_triggers = prep$shared_triggers %||% list()
+    prep = .prepare_model(model)
   )
   class(structure) <- c("model_structure", class(structure))
   structure
@@ -1357,23 +936,7 @@ finalize_model <- function(model) {
 # ------------------------------------------------------------------------------
 
 dist_param_names <- function(dist) {
-  dist <- tolower(dist)
-  if (dist == "lognormal") {
-    return(c("m", "s"))
-  }
-  if (dist == "gamma") {
-    return(c("shape", "rate"))
-  }
-  if (dist == "exgauss") {
-    return(c("mu", "sigma", "tau"))
-  }
-  if (dist == "lba") {
-    return(c("v", "B", "A", "sv"))
-  }
-  if (dist == "rdm") {
-    return(c("v", "B", "A", "s"))
-  }
-  character(0)
+  dist_registry(dist)$params
 }
 
 .parameter_character <- function(value, what) {
@@ -1524,16 +1087,6 @@ dist_param_names <- function(dist) {
     trig$id %||% NA_character_
   }, character(1))
   trigger_ids <- trigger_ids[!is.na(trigger_ids) & nzchar(trigger_ids)]
-  if (anyDuplicated(trigger_ids)) {
-    dupes <- unique(trigger_ids[duplicated(trigger_ids)])
-    stop(
-      sprintf(
-        "Trigger ids must be unique in the parameter namespace: %s",
-        paste(dupes, collapse = ", ")
-      ),
-      call. = FALSE
-    )
-  }
   for (trigger_id in trigger_ids) {
     append_row(
       internal = trigger_id,
@@ -1716,26 +1269,21 @@ dist_param_names <- function(dist) {
   lookup
 }
 
-.expand_parameter_values <- function(spec, param_values) {
-  lookup <- .parameter_name_lookup(spec)
+.expand_parameter_values <- function(lookup, param_values) {
   required <- unique(unname(lookup))
   expanded <- setNames(numeric(length(lookup)), names(lookup))
-  imputed <- character(0)
   missing <- character(0)
-  used_names <- character(0)
 
   for (external_name in required) {
     targets <- names(lookup)[lookup == external_name]
     if (external_name %in% names(param_values)) {
       expanded[targets] <- as.numeric(param_values[[external_name]])[1]
-      used_names <- c(used_names, external_name)
       next
     }
     suffixes <- sub("^.*\\.", "", targets)
     defaultable <- length(suffixes) > 0L && all(suffixes %in% "t0")
     if (defaultable) {
       expanded[targets] <- 0
-      imputed <- c(imputed, targets)
       next
     }
     missing <- c(missing, external_name)
@@ -1744,10 +1292,7 @@ dist_param_names <- function(dist) {
   if (length(missing) > 0L) {
     stop("Missing parameter values for: ", paste(missing, collapse = ", "), call. = FALSE)
   }
-  if (length(imputed) > 0L) {
-    attr(expanded, "imputed_internal") <- unique(imputed)
-  }
-  unknown <- setdiff(names(param_values), unique(used_names))
+  unknown <- setdiff(names(param_values), required)
   if (length(unknown) > 0L) {
     stop("Unknown parameter values: ", paste(unknown, collapse = ", "), call. = FALSE)
   }
@@ -1778,9 +1323,6 @@ par_names <- function(model) {
 #' @param model Finalized model structure.
 #' @param param_values Named numeric vector of parameter values.
 #' @param n_trials Number of trials to generate.
-#' @param component Optional component label or labels.
-#' @param trial_df Optional trials/prepared data object. If it includes a
-#'   `racer` column, parameter rows are built in that exact row order.
 #' @return A numeric parameter matrix with one row per trial/accumulator pair.
 #' @examples
 #' spec <- race_spec()
@@ -1791,361 +1333,88 @@ par_names <- function(model) {
 #' @export
 build_param_matrix <- function(model,
                                param_values,
-                               n_trials = 1L,
-                               component = NULL,
-                               trial_df = NULL) {
+                               n_trials = 1L) {
   if (!inherits(model, "model_structure")) {
     stop("build_param_matrix() expects a finalized model.", call. = FALSE)
   }
-  spec <- model$model_spec
-  accs <- spec$accumulators %||% list()
-  if (length(accs) == 0L) {
-    stop("Model must define accumulators before building parameter matrices")
-  }
+  prep <- model$prep
+  accs <- prep$accumulators
   if (is.null(param_values) || length(param_values) == 0L) {
     stop("Named parameter values are required")
   }
   if (is.null(names(param_values)) || any(!nzchar(names(param_values)))) {
     stop("Parameter values must be a named vector")
   }
-  if (!is.numeric(n_trials) || length(n_trials) != 1L || n_trials < 1) {
-    stop("n_trials must be a positive integer")
-  }
-  n_trials <- as.integer(n_trials)
-
   raw_names <- names(param_values)
   param_values <- as.numeric(param_values)
   names(param_values) <- raw_names
-  param_values <- .expand_parameter_values(spec, param_values)
-  imputed_internal <- attr(param_values, "imputed_internal") %||% character(0)
+  param_values <- .expand_parameter_values(prep$parameter_lookup, param_values)
 
-  acc_ids <- vapply(accs, `[[`, character(1), "id")
-  acc_dists <- vapply(accs, `[[`, character(1), "dist")
-  dist_param_list <- lapply(acc_dists, dist_param_names)
-  max_needed <- max(vapply(dist_param_list, length, integer(1)), 0L)
-  if (max_needed > 8L) {
-    stop(sprintf("Distribution parameter slots currently support up to p8 (requested %d)", max_needed))
-  }
-  max_p <- max_needed
-  max_p <- max(3L, max_p)
+  acc_ids <- names(accs)
+  dist_param_list <- lapply(accs, function(acc) dist_param_names(acc$dist))
+  max_p <- max(vapply(dist_param_list, length, integer(1)))
   p_col_names <- paste0("p", seq_len(max_p))
-  col_names <- c("q", "t0", p_col_names, "w")
-
-  weight_params <- .mixture_weight_parameter_names(spec)
-  col_names <- c(col_names, weight_params)
-
-  # Map accumulators to components from component declarations.
-  comp_attr <- list()
-  for (cmp in spec$components %||% list()) {
-    cid <- cmp$id
-    members <- cmp$members %||% character(0)
-    for (m in members) {
-      comp_attr[[m]] <- cid
+  weight_params <- vapply(
+    prep$components$attrs,
+    function(attributes) attributes$weight_param %||% NA_character_,
+    character(1)
+  )
+  weight_params <- unname(weight_params[!is.na(weight_params)])
+  col_names <- c("q", "t0", p_col_names, weight_params)
+  if (length(weight_params)) {
+    weights <- unname(param_values[weight_params])
+    if (any(!is.finite(weights) | weights < 0) || sum(weights) > 1) {
+      stop("Sampled mixture weights must define a probability simplex", call. = FALSE)
+    }
+  }
+  trigger_params <- names(prep$shared_triggers)
+  if (length(trigger_params)) {
+    triggers <- unname(param_values[trigger_params])
+    if (any(!is.finite(triggers) | triggers < 0 | triggers > 1)) {
+      stop("Trigger probabilities must lie in [0, 1]", call. = FALSE)
     }
   }
 
-  # Mixture component weights (mapped to components, then to member rows)
-  mix <- spec$mixture_options
-  comp_defs <- spec$components
-  comp_ids <- vapply(comp_defs, `[[`, character(1), "id")
-  acc_component_membership <- setNames(vector("list", length(acc_ids)), acc_ids)
-  if (length(comp_defs) > 0L) {
-    for (comp in comp_defs) {
-      comp_id <- comp$id %||% NA_character_
-      members <- comp$members %||% character(0)
-      if (!is.character(comp_id) || length(comp_id) != 1L || !nzchar(comp_id)) {
-        next
-      }
-      for (member in members) {
-        if (!member %in% acc_ids) {
-          next
-        }
-        acc_component_membership[[member]] <- unique(c(
-          acc_component_membership[[member]],
-          comp_id
-        ))
-      }
-    }
-  }
-  comp_weights <- setNames(rep(NA_real_, length(comp_defs)), comp_ids)
-  comp_mode <- mix$mode %||% "fixed"
-  comp_ref <- mix$reference %||% if (length(comp_ids) > 0) comp_ids[[length(comp_ids)]] else NA_character_
-  comp_index <- setNames(seq_along(comp_ids), comp_ids)
-  if (length(comp_defs) > 0) {
-    if (identical(comp_mode, "sample")) {
-      non_ref_ids <- setdiff(comp_ids, comp_ref)
-      non_ref_weights <- unname(param_values[paste0("p.", non_ref_ids)])
-      if (any(!is.finite(non_ref_weights) | non_ref_weights < 0) ||
-          sum(non_ref_weights) > 1) {
-        stop("Sampled mixture weights must define a probability simplex", call. = FALSE)
-      }
-      comp_weights[non_ref_ids] <- non_ref_weights
-      comp_weights[[comp_ref]] <- 1 - sum(non_ref_weights)
-    } else {
-      fixed_weights <- mix$weights %||% NULL
-      if (is.null(fixed_weights)) {
-        comp_weights[] <- 1 / length(comp_weights)
-      } else {
-        extra <- setdiff(names(fixed_weights), comp_ids)
-        missing <- setdiff(comp_ids, names(fixed_weights))
-        if (length(extra) > 0L || length(missing) > 0L) {
-          stop("Fixed mixture weights must be named for every component and no unknown components", call. = FALSE)
-        }
-        comp_weights[] <- fixed_weights[comp_ids]
-      }
-    }
-  }
-
-  # Shared trigger groups.
-  acc_trigger_map <- setNames(vector("list", length(acc_ids)), acc_ids)
-  all_trigger_defs <- lapply(spec$triggers %||% list(), function(t) {
-    list(
-      id = t$id,
-      members = t$members
-    )
-  })
-  all_trigger_defs <- Filter(Negate(is.null), all_trigger_defs)
-
-  for (trig in all_trigger_defs) {
-    trig_id <- trig$id %||% NA_character_
-    if (is.null(trig_id) || !nzchar(trig_id)) next
-    q_val <- NA_real_
-    if (trig_id %in% names(param_values)) {
-      q_val <- as.numeric(param_values[[trig_id]])
-    }
-    if (!is.finite(q_val) || is.na(q_val)) q_val <- 0
-
-    members <- trig$members %||% character(0)
-    if (length(members) == 0L) next
-    for (m in members) {
-      if (!m %in% acc_ids) next
-      existing <- acc_trigger_map[[m]]
-      if (!is.null(existing)) {
-        stop(sprintf(
-          "Accumulator '%s' is assigned to multiple trigger groups ('%s' and '%s')",
-          m, existing$id %||% "<unknown>", trig_id
-        ))
-      }
-      acc_trigger_map[[m]] <- list(
-        id = trig_id,
-        q = q_val
-      )
-    }
-  }
-
-  # Build one row per accumulator
   base_mat <- matrix(NA_real_, nrow = length(accs), ncol = length(col_names))
   colnames(base_mat) <- col_names
   for (i in seq_along(accs)) {
-    acc <- accs[[i]]
     acc_id <- acc_ids[[i]]
-    dist <- acc$dist
-    dist_params <- dist_param_names(dist)
-    needed <- length(dist_params)
-    if (needed > max_p) stop("Unexpected dist param count > max_p")
-    # Distribution parameters
+    dist_params <- dist_param_list[[i]]
     p_vals <- numeric(max_p)
     for (j in seq_along(dist_params)) {
-      nm <- paste0(acc_id, ".", dist_params[[j]])
-      if (nm %in% names(param_values)) {
-        p_vals[[j]] <- as.numeric(param_values[[nm]])
-      } else if (!is.null(acc$params[[dist_params[[j]]]])) {
-        p_vals[[j]] <- as.numeric(acc$params[[dist_params[[j]]]])
-      } else {
-        stop(sprintf("Missing required parameter '%s' for accumulator '%s'", dist_params[[j]], acc_id))
-      }
+      p_vals[[j]] <- param_values[[paste0(acc_id, ".", dist_params[[j]])]]
     }
-    # q is an evaluation column. Public absence probabilities come from triggers.
-    q_val <- if (!is.null(acc$q)) as.numeric(acc$q) else NA_real_
-    trig_info <- acc_trigger_map[[acc_id]] %||% NULL
-    if (!is.null(trig_info)) {
-      q_val <- trig_info$q
-    }
-    if (!is.finite(q_val) || is.na(q_val)) q_val <- 0
-    # t0
-    t0_nm <- paste0(acc_id, ".t0")
-    has_explicit_t0 <- t0_nm %in% names(param_values) && !(t0_nm %in% imputed_internal)
-    t0_val <- if (has_explicit_t0) {
-      as.numeric(param_values[[t0_nm]])
-    } else if (!is.null(acc$params$t0)) {
-      as.numeric(acc$params$t0)
-    } else {
+    trigger <- accs[[i]]$shared_trigger_id
+    q <- if (is.null(trigger)) {
       0
-    }
-    # w
-    w_nm <- paste0(acc_id, ".w")
-    w_val <- if (w_nm %in% names(param_values)) {
-      as.numeric(param_values[[w_nm]])
     } else {
-      comp_id <- comp_attr[[acc_id]] %||% NA_character_
-      if (!is.null(comp_id) && !is.na(comp_id) && comp_id %in% names(comp_weights)) {
-        as.numeric(comp_weights[[comp_id]])
-      } else {
-        1
-      }
+      param_values[[trigger]]
     }
-    row_vals <- c(q_val, t0_val, p_vals, w_val)
-    for (wp in weight_params) {
-      val <- if (wp %in% names(param_values)) as.numeric(param_values[[wp]]) else NA_real_
-      row_vals <- c(row_vals, val)
-    }
-    base_mat[i, ] <- row_vals
+    base_mat[i, ] <- c(
+      q,
+      param_values[[paste0(acc_id, ".t0")]],
+      p_vals,
+      unname(param_values[weight_params])
+    )
   }
 
-  if (!is.null(trial_df)) {
-    trial_df <- as.data.frame(trial_df)
-    if (nrow(trial_df) == 0L) {
-      stop("trial_df must contain at least one row")
-    }
-    if ("racer" %in% names(trial_df)) {
-      acc_idx <- match(as.character(trial_df$racer), acc_ids)
-      if (anyNA(acc_idx)) {
-        stop("trial_df$racer values must match model racers")
-      }
-      params_mat <- base_mat[acc_idx, , drop = FALSE]
-      colnames(params_mat) <- col_names
-      return(params_mat)
-    }
-    trial_col <- if ("trials" %in% names(trial_df)) {
-      as.integer(trial_df$trials)
-    } else {
-      seq_len(nrow(trial_df))
-    }
-    trial_first <- c(TRUE, trial_col[-1L] != trial_col[-length(trial_col)])
-    n_trials <- sum(trial_first)
-    if (is.null(component) && "component" %in% names(trial_df)) {
-      component <- as.character(trial_df$component[trial_first])
-    }
+  if (length(n_trials) != 1L || !is.numeric(n_trials) ||
+      !is.finite(n_trials) || n_trials < 1L || n_trials != as.integer(n_trials)) {
+    stop("n_trials must be a positive integer", call. = FALSE)
   }
+  n_trials <- as.integer(n_trials)
 
-  # Component labels select the active accumulator rows for each trial.
-  if (!is.null(component)) {
-    if (length(component) != n_trials) {
-      stop("component vector must have length n_trials when provided")
-    }
-    rows <- list()
-    for (t in seq_len(n_trials)) {
-      comp_lbl <- as.character(component[[t]])
-      if (is.na(comp_lbl) || !nzchar(comp_lbl)) {
-        for (i in seq_along(accs)) {
-          rows[[length(rows) + 1L]] <- base_mat[i, , drop = FALSE]
-        }
-        next
-      }
-      for (i in seq_along(accs)) {
-        acc_comp <- acc_component_membership[[acc_ids[[i]]]] %||% character(0)
-        if (length(acc_comp) > 0 && !comp_lbl %in% acc_comp) {
-          next
-        }
-        rows[[length(rows) + 1L]] <- base_mat[i, , drop = FALSE]
-      }
-    }
-    if (length(rows) == 0L) {
-      stop("No accumulator rows matched the provided component labels")
-    }
-    params_mat <- do.call(rbind, rows)
-    colnames(params_mat) <- col_names
-    params_mat
-  } else {
-    # Replicate for n_trials (pure positional, all accumulators)
-    params_mat <- base_mat[rep(seq_len(nrow(base_mat)), times = n_trials), , drop = FALSE]
-    colnames(params_mat) <- col_names
-    params_mat
-  }
+  params <- base_mat[rep(seq_along(accs), times = n_trials), , drop = FALSE]
+  class(params) <- c("accumulatr_parameters", "matrix", "array")
+  params
 }
 
 .expand_accumulator_rows <- function(structure, data) {
-  acc_defs <- structure$prep$accumulators %||% list()
-  acc_ids <- names(acc_defs)
-  if (length(acc_ids) == 0L) {
-    stop("Model must define accumulators")
-  }
+  acc_ids <- names(structure$prep$accumulators)
   df <- as.data.frame(data)
-  if (!"trials" %in% names(df)) {
-    df$trials <- seq_len(nrow(df))
-  }
-
-  use_component <- "component" %in% names(df)
-  comp_ids <- structure$components$component_id %||% character(0)
-  acc_by_comp <- NULL
-  if (use_component) {
-    comp_col <- df$component
-    comp_levels <- if (is.factor(comp_col)) levels(comp_col) else NULL
-    data_comps <- unique(as.character(stats::na.omit(comp_col)))
-    if (length(data_comps) > 0L && !all(data_comps %in% comp_ids)) {
-      stop("component column values must match model components")
-    }
-    acc_by_comp <- lapply(comp_ids, function(cmp) {
-      keep <- vapply(acc_defs, function(a) {
-        comps <- a$components %||% character(0)
-        length(comps) == 0L || cmp %in% comps
-      }, logical(1))
-      acc_ids[keep]
-    })
-    names(acc_by_comp) <- comp_ids
-  }
-
-  n_trials <- nrow(df)
-  accs_per_trial <- vector("list", n_trials)
-  if (use_component) {
-    for (t in seq_len(n_trials)) {
-      comp_val <- comp_col[t]
-      if (is.na(comp_val) || !nzchar(as.character(comp_val))) {
-        accs_per_trial[[t]] <- acc_ids
-      } else {
-        accs_per_trial[[t]] <- acc_by_comp[[as.character(comp_val)]] %||% acc_ids
-      }
-    }
-  } else {
-    for (t in seq_len(n_trials)) accs_per_trial[[t]] <- acc_ids
-  }
-
-  total_rows <- sum(vapply(accs_per_trial, length, integer(1)))
-  out <- vector("list", length(df) + 1L)
-  names(out) <- c(names(df), "racer")
-  idx <- 1L
-  for (nm in names(df)) {
-    col <- df[[nm]]
-    if (is.factor(col)) {
-      out[[nm]] <- character(total_rows)
-    } else if (is.logical(col)) {
-      out[[nm]] <- logical(total_rows)
-    } else if (is.integer(col)) {
-      out[[nm]] <- integer(total_rows)
-    } else if (is.numeric(col)) {
-      out[[nm]] <- numeric(total_rows)
-    } else {
-      out[[nm]] <- vector(mode(col), total_rows)
-    }
-  }
-  out$racer <- character(total_rows)
-
-  for (t in seq_len(n_trials)) {
-    accs_t <- accs_per_trial[[t]]
-    len <- length(accs_t)
-    if (len == 0L) next
-    rng <- idx:(idx + len - 1L)
-    for (nm in names(df)) {
-      col <- df[[nm]]
-      val <- col[t]
-      if (is.factor(col)) {
-        out[[nm]][rng] <- as.character(val)
-      } else {
-        out[[nm]][rng] <- val
-      }
-    }
-    out$racer[rng] <- accs_t
-    idx <- idx + len
-  }
-  out_df <- as.data.frame(out, stringsAsFactors = FALSE)
-  for (nm in names(df)) {
-    col <- df[[nm]]
-    if (is.factor(col)) {
-      out_df[[nm]] <- factor(out_df[[nm]], levels = levels(col), ordered = is.ordered(col))
-    }
-  }
-  if (use_component && is.factor(df$component)) {
-    out_df$component <- factor(out_df$component, levels = levels(df$component), ordered = is.ordered(df$component))
-  }
-  out_df
+  df$trials <- seq_len(nrow(df))
+  out <- df[rep(seq_len(nrow(df)), each = length(acc_ids)), , drop = FALSE]
+  out$racer <- rep(acc_ids, times = nrow(df))
+  rownames(out) <- NULL
+  out
 }

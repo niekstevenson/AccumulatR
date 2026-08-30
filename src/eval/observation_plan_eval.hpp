@@ -54,7 +54,6 @@ struct ObservationLaneWorkspace {
   std::vector<double> reduction_values;
   std::vector<ObservationLaneGroup> groups;
   std::vector<double> group_values;
-  std::vector<semantic::Index> component_codes;
   std::vector<double> component_weights;
 };
 

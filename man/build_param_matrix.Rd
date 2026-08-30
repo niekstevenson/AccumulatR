@@ -4,13 +4,7 @@
 \alias{build_param_matrix}
 \title{Create trial-level parameter values}
 \usage{
-build_param_matrix(
-  model,
-  param_values,
-  n_trials = 1L,
-  component = NULL,
-  trial_df = NULL
-)
+build_param_matrix(model, param_values, n_trials = 1L)
 }
 \arguments{
 \item{model}{Finalized model structure.}
@@ -18,11 +12,6 @@ build_param_matrix(
 \item{param_values}{Named numeric vector of parameter values.}
 
 \item{n_trials}{Number of trials to generate.}
-
-\item{component}{Optional component label or labels.}
-
-\item{trial_df}{Optional trials/prepared data object. If it includes a
-`racer` column, parameter rows are built in that exact row order.}
 }
 \value{
 A numeric parameter matrix with one row per trial/accumulator pair.

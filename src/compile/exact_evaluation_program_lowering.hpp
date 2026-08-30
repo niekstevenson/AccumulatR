@@ -19,30 +19,11 @@ inline runtime::ExactEvaluationProgram lower_exact_evaluation_program(
 
   program.layout.n_leaves = static_cast<int>(model.leaves.size());
   program.layout.n_pools = static_cast<int>(model.pools.size());
-  program.layout.n_outcomes = static_cast<int>(model.outcomes.size());
   program.layout.n_triggers = static_cast<int>(model.triggers.size());
 
-  program.leaf_dist_kind.reserve(model.leaves.size());
   program.leaf_descriptors.reserve(model.leaves.size());
-  program.onset_kind.reserve(model.leaves.size());
-  program.onset_source_kind.reserve(model.leaves.size());
-  program.onset_source_index.reserve(model.leaves.size());
-  program.onset_source_ids.reserve(model.leaves.size());
-  program.onset_lag.reserve(model.leaves.size());
-  program.onset_abs_value.reserve(model.leaves.size());
-  program.leaf_trigger_index.reserve(model.leaves.size());
 
   for (const auto &leaf : model.leaves) {
-    program.leaf_dist_kind.push_back(static_cast<std::uint8_t>(leaf.dist));
-    program.onset_kind.push_back(static_cast<std::uint8_t>(leaf.onset.kind));
-    program.onset_source_kind.push_back(
-        static_cast<std::uint8_t>(leaf.onset.source.kind));
-    program.onset_source_index.push_back(leaf.onset.source.index);
-    program.onset_source_ids.push_back(semantic::kInvalidIndex);
-    program.onset_lag.push_back(leaf.onset.lag);
-    program.onset_abs_value.push_back(leaf.onset.absolute_value);
-    program.leaf_trigger_index.push_back(leaf.trigger_index);
-
     program.leaf_descriptors.push_back(runtime::LeafRuntimeDescriptor{
         static_cast<std::uint8_t>(leaf.dist),
         static_cast<std::uint8_t>(leaf.onset.kind),
@@ -51,8 +32,7 @@ inline runtime::ExactEvaluationProgram lower_exact_evaluation_program(
         semantic::kInvalidIndex,
         leaf.onset.lag,
         leaf.onset.absolute_value,
-        leaf.trigger_index,
-        static_cast<int>(leaf.params.dist_param_names.size())});
+        leaf.trigger_index});
   }
 
   program.trigger_member_offsets.reserve(model.triggers.size() + 1U);
@@ -93,9 +73,6 @@ inline runtime::ExactEvaluationProgram lower_exact_evaluation_program(
   for (const auto &expr : model.expr_nodes) {
     program.expr_kind.push_back(static_cast<std::uint8_t>(expr.kind));
     for (const auto child : expr.children) {
-      program.expr_args.push_back(child);
-    }
-    for (const auto child : expr.unless_children) {
       program.expr_args.push_back(child);
     }
     program.expr_arg_offsets.push_back(

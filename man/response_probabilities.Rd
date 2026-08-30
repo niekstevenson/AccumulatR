@@ -4,12 +4,13 @@
 \alias{response_probabilities}
 \title{Evaluate marginal response probabilities}
 \usage{
-response_probabilities(structure, params_df, include_na = TRUE)
+response_probabilities(context, parameters, include_na = TRUE)
 }
 \arguments{
-\item{structure}{Finalized model structure.}
+\item{context}{Context created with `make_context()`.}
 
-\item{params_df}{A parameter data frame or rectangular parameter matrix.}
+\item{parameters}{A canonical parameter matrix created by
+`build_param_matrix()`.}
 
 \item{include_na}{If `TRUE`, include residual mass as `"NA"`.}
 }
@@ -21,10 +22,8 @@ A named numeric vector of marginal response probabilities. Names are
 }
 \description{
 `response_probabilities()` evaluates the model-implied marginal probability
-of each observed response label for a finalized model and parameter set.
-Component labels in row-form parameters condition the calculation on those
-observed components; latent or `NA` components are marginalized according to
-the model's mixture specification.
+of each observed response label for a compiled context and canonical
+parameter matrix. Mixture components are marginalized according to the model.
 }
 \examples{
 spec <- race_spec() |>
@@ -41,5 +40,5 @@ params <- build_param_matrix(
   n_trials = 1
 )
 
-response_probabilities(model, params)
+response_probabilities(make_context(model), params)
 }

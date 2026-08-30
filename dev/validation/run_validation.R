@@ -1,17 +1,6 @@
-args <- commandArgs(trailingOnly = FALSE)
-file_arg <- grep("^--file=", args, value = TRUE)
-script_path <- normalizePath(
-  if (length(file_arg)) sub("^--file=", "", file_arg[[1L]]) else
-    "dev/validation/run_validation.R",
-  mustWork = TRUE
-)
-repo_root <- normalizePath(file.path(dirname(script_path), "..", ".."))
-
-old_wd <- setwd(repo_root)
-on.exit(setwd(old_wd), add = TRUE)
-suppressPackageStartupMessages(pkgload::load_all(repo_root, quiet = TRUE, helpers = FALSE))
-source(file.path(repo_root, "dev", "validation", "helpers.R"))
-source(file.path(repo_root, "dev", "validation", "cases.R"))
+pkgload::load_all(".", quiet = TRUE, helpers = FALSE)
+source("dev/validation/helpers.R")
+source("dev/validation/cases.R")
 
 arguments <- commandArgs(trailingOnly = TRUE)
 adversarial <- "--adversarial" %in% arguments

@@ -2,7 +2,6 @@
 
 #include <Rcpp.h>
 
-#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -10,6 +9,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "../compile/prep_to_semantic.hpp"
@@ -18,7 +18,6 @@
 #include "exact_sequence.hpp"
 #include "observation_component_mixture.hpp"
 #include "observation_model.hpp"
-#include "trial_data.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
@@ -39,6 +38,7 @@ struct NativeLikelihoodContext {
   ComponentMixturePlan component_mixture;
   std::vector<ComponentObservationPlan> observation_plans_by_component_code;
   bool observation_is_identity{false};
+  std::size_t global_leaf_count{0U};
   std::size_t outcome_count{0U};
   std::vector<semantic::Index> exact_variant_index_by_component_code;
   std::vector<ExactVariantPlan> exact_plans;
@@ -104,6 +104,17 @@ inline ComponentMixturePlan build_component_mixture_plan(
   if (plan.reference_component_code == semantic::kInvalidIndex &&
       !plan.present_component_codes.empty()) {
     plan.reference_component_code = plan.present_component_codes.front();
+  }
+  if (plan.mode == ComponentMixtureMode::Fixed) {
+    double total = 0.0;
+    for (const auto code : plan.present_component_codes) {
+      total += plan.component_by_code[static_cast<std::size_t>(code)]
+                   .fixed_weight;
+    }
+    for (const auto code : plan.present_component_codes) {
+      plan.component_by_code[static_cast<std::size_t>(code)].fixed_weight /=
+          total;
+    }
   }
   return plan;
 }
@@ -217,6 +228,7 @@ inline NativeLikelihoodContext build_native_likelihood_context(
 
   const auto outcome_labels = prepared_outcome_labels(prep);
   const auto component_ids = prepared_component_ids(prep);
+  ctx.global_leaf_count = model.leaves.size();
   ctx.outcome_count = outcome_labels.size();
   const auto outcome_code_by_label = make_code_map(outcome_labels);
   const auto component_code_by_id = make_code_map(component_ids);
@@ -228,6 +240,8 @@ inline NativeLikelihoodContext build_native_likelihood_context(
       outcome_code_by_label,
       component_ids.size(),
       outcome_labels.size());
+  ctx.observation_is_identity = observation_plans_are_identity(
+      ctx.observation_plans_by_component_code);
   build_exact_plan_cache(
       compiled,
       component_code_by_id,
@@ -252,36 +266,18 @@ inline NativeLikelihoodContext build_native_likelihood_context(
         static_cast<std::size_t>(variant_index) >= ctx.exact_plans.size()) {
       continue;
     }
-    ctx.observation_plans_by_component_code[component_code]
-        .direct_no_response =
+    compile_component_observation_probability_plans(
+        &ctx.observation_plans_by_component_code[component_code],
         ctx.exact_plans[static_cast<std::size_t>(variant_index)]
-            .no_response.direct_leaf_failure_product &&
-        !ctx.exact_plans[static_cast<std::size_t>(variant_index)]
-             .no_response.leaf_indices.empty();
+            .no_response.direct_leaf_failure_product);
   }
   ctx.exact_leaf_row_offsets_by_variant =
       make_exact_leaf_row_offsets_by_variant(model, compiled);
-  compile_observation_probability_plans(&ctx.observation_plans_by_component_code);
-  ctx.observation_is_identity = observation_plans_are_identity(
-      ctx.observation_plans_by_component_code);
-  prune_observation_planning_state(&ctx.observation_plans_by_component_code);
   return ctx;
 }
 
-template <typename T>
-inline Rcpp::XPtr<T> checked_xptr(SEXP value, const char *what) {
-  if (TYPEOF(value) != EXTPTRSXP) {
-    throw std::runtime_error(std::string(what) + " must be an external pointer");
-  }
-  Rcpp::XPtr<T> ptr(value);
-  if (ptr.get() == nullptr) {
-    throw std::runtime_error(std::string(what) + " is null");
-  }
-  return ptr;
-}
-
 inline const NativeLikelihoodContext &likelihood_context_from_xptr(SEXP value) {
-  return *checked_xptr<NativeLikelihoodContext>(value, "likelihood context");
+  return *static_cast<const NativeLikelihoodContext *>(R_ExternalPtrAddr(value));
 }
 
 } // namespace detail

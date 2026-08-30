@@ -13,34 +13,19 @@
 
 namespace accumulatr::compile {
 
-struct VariantCapabilities {
-  bool no_surviving_outcomes{false};
-  bool ranked_observation{false};
-  bool chained_onset{false};
-  bool shared_trigger{false};
-  bool outcome_remapping{false};
-  bool guess_outcome{false};
-  bool non_event_outcome{false};
-};
-
 struct CompiledVariant {
   std::string component_id;
-  double weight{1.0};
-  std::string weight_name;
   semantic::SemanticModel model{};
-  VariantCapabilities capabilities{};
 };
 
 struct CompiledModel {
-  std::string component_mode{"fixed"};
-  std::string component_reference;
   std::vector<CompiledVariant> variants;
 };
 
 namespace detail {
 
 inline bool source_is_dead(const semantic::SourceRef &ref) {
-  return !ref.valid();
+  return ref.index == semantic::kInvalidIndex;
 }
 
 inline bool source_in_component(const semantic::OutcomeSpec &outcome,
@@ -182,18 +167,6 @@ public:
 
     CompiledVariant variant;
     variant.component_id = component_.id;
-    variant.weight = component_.weight;
-    variant.weight_name = component_.weight_name;
-    variant.model.component_mode = "projected";
-    variant.model.component_reference = component_.id;
-    variant.model.observation.mode = model_.observation.mode;
-    variant.model.observation.n_outcomes =
-        component_.n_outcomes_override > 0
-            ? component_.n_outcomes_override
-            : model_.observation.global_n_outcomes;
-    variant.model.observation.global_n_outcomes =
-        variant.model.observation.n_outcomes;
-    variant.model.components.clear();
 
     std::vector<semantic::Index> leaf_map(
         model_.leaves.size(), semantic::kInvalidIndex);
@@ -282,7 +255,6 @@ public:
       }
     }
 
-    classify_variant_capabilities(&variant);
     return variant;
   }
 
@@ -393,8 +365,6 @@ private:
       }
       break;
     }
-    case semantic::SourceKind::Special:
-      return ref;
     }
     return semantic::SourceRef{};
   }
@@ -515,20 +485,7 @@ private:
         return reference;
       }
 
-      std::vector<semantic::Index> unless_children;
-      unless_children.reserve(node.unless_children.size());
-      for (const auto child_index : node.unless_children) {
-        const auto child = simplify_expr(child_index, expr_nodes);
-        if (child.kind == ExprResultKind::TrueExpr) {
-          return reference;
-        }
-        if (child.kind == ExprResultKind::Impossible) {
-          continue;
-        }
-        unless_children.push_back(child.node_index);
-      }
-
-      if (blocker.kind == ExprResultKind::TrueExpr && unless_children.empty()) {
+      if (blocker.kind == ExprResultKind::TrueExpr) {
         return ExprResult{
             ExprResultKind::Impossible, semantic::kInvalidIndex};
       }
@@ -536,7 +493,6 @@ private:
       semantic::ExprNode out = node;
       out.reference_child = materialize_expr(reference, expr_nodes);
       out.blocker_child = materialize_expr(blocker, expr_nodes);
-      out.unless_children = std::move(unless_children);
       return ExprResult{
           ExprResultKind::Node,
           add_expr_node(expr_nodes, std::move(out))};
@@ -576,9 +532,6 @@ private:
     case semantic::ExprKind::Guard:
       mark_expr_node(node.reference_child, expr_nodes, reachable_exprs);
       mark_expr_node(node.blocker_child, expr_nodes, reachable_exprs);
-      for (const auto child_index : node.unless_children) {
-        mark_expr_node(child_index, expr_nodes, reachable_exprs);
-      }
       break;
     }
   }
@@ -614,8 +567,6 @@ private:
       }
       break;
     }
-    case semantic::SourceKind::Special:
-      break;
     }
   }
 
@@ -650,13 +601,6 @@ private:
           expr_nodes,
           reachable_leaves,
           reachable_pools);
-      for (const auto child_index : node.unless_children) {
-        mark_expr_sources(
-            child_index,
-            expr_nodes,
-            reachable_leaves,
-            reachable_pools);
-      }
       break;
     case semantic::ExprKind::Impossible:
     case semantic::ExprKind::TrueExpr:
@@ -685,9 +629,6 @@ private:
     }
     node->reference_child = remap_expr_index(node->reference_child, expr_map);
     node->blocker_child = remap_expr_index(node->blocker_child, expr_map);
-    for (auto &child : node->unless_children) {
-      child = remap_expr_index(child, expr_map);
-    }
   }
 
   std::vector<semantic::ExprNode> compact_expr_nodes(
@@ -725,15 +666,11 @@ private:
     case semantic::SourceKind::Leaf:
       return semantic::SourceRef{
           semantic::SourceKind::Leaf,
-          leaf_map[static_cast<std::size_t>(source.index)],
-          std::string()};
+          leaf_map[static_cast<std::size_t>(source.index)]};
     case semantic::SourceKind::Pool:
       return semantic::SourceRef{
           semantic::SourceKind::Pool,
-          pool_map[static_cast<std::size_t>(source.index)],
-          std::string()};
-    case semantic::SourceKind::Special:
-      return source;
+          pool_map[static_cast<std::size_t>(source.index)]};
     }
     return semantic::SourceRef{};
   }
@@ -758,61 +695,12 @@ private:
     return rewritten;
   }
 
-  void classify_variant_capabilities(CompiledVariant *variant) {
-    if (variant->model.outcomes.empty()) {
-      variant->capabilities.no_surviving_outcomes = true;
-    }
-    if (variant->model.observation.n_outcomes > 1) {
-      variant->capabilities.ranked_observation = true;
-    }
-    for (const auto &leaf : variant->model.leaves) {
-      if (leaf.onset.kind != semantic::OnsetKind::Absolute) {
-        variant->capabilities.chained_onset = true;
-      }
-    }
-    for (const auto &trigger : variant->model.triggers) {
-      if (trigger.leaf_indices.size() > 1U) {
-        variant->capabilities.shared_trigger = true;
-      }
-    }
-
-    for (const auto &outcome : variant->model.outcomes) {
-      if (outcome.mapping.maps_to_missing ||
-          !outcome.mapping.observed_label.empty()) {
-        variant->capabilities.outcome_remapping = true;
-      }
-      if (outcome.has_guess) {
-        variant->capabilities.guess_outcome = true;
-      }
-
-      const auto &root =
-          variant->model.expr_nodes[static_cast<std::size_t>(outcome.expr_root)];
-      if (root.kind != semantic::ExprKind::Event) {
-        variant->capabilities.non_event_outcome = true;
-      }
-    }
-  }
 };
 
 } // namespace detail
 
 inline CompiledModel project_semantic_model(const semantic::SemanticModel &model) {
   CompiledModel compiled;
-  compiled.component_mode = model.component_mode;
-  compiled.component_reference = model.component_reference;
-
-  if (model.components.empty()) {
-    semantic::ComponentSpec component;
-    component.id = "__default__";
-    component.weight = 1.0;
-    component.active_leaf_indices.resize(model.leaves.size());
-    for (std::size_t i = 0; i < model.leaves.size(); ++i) {
-      component.active_leaf_indices[i] = static_cast<semantic::Index>(i);
-    }
-    compiled.variants.push_back(detail::VariantProjector(model, component).project());
-    return compiled;
-  }
-
   compiled.variants.reserve(model.components.size());
   for (const auto &component : model.components) {
     compiled.variants.push_back(detail::VariantProjector(model, component).project());

@@ -116,12 +116,6 @@ struct CompiledLaneFrame {
     return node_values.data() + static_cast<std::size_t>(node_id) * stride;
   }
 
-  bool has_time(const semantic::Index time_id,
-                const std::size_t lane) const noexcept {
-    (void)lane;
-    return time_valid[static_cast<std::size_t>(time_id)] != 0U;
-  }
-
   double time(const semantic::Index time_id,
               const std::size_t lane) const noexcept {
     return time_values[time_pos(time_id, lane)];

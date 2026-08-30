@@ -1,7 +1,6 @@
 # Not Supported
 
-This file lists model and data shapes that one could try to construct, but that
-are not supported.
+This file lists unsupported model and data shapes.
 
 ## 1. `none_of(...)` as a branch inside `first_of(...)` / `or`
 
@@ -13,10 +12,6 @@ race_spec() |>
   add_accumulator("stop", "lognormal") |>
   add_outcome("X", first_of("go", none_of("stop")))
 ```
-
-Status:
-
-- not supported
 
 Reason:
 
@@ -52,10 +47,6 @@ race_spec(n_outcomes = 2L) |>
   add_outcome("R2", "b")
 ```
 
-Status:
-
-- not supported
-
 Reason:
 
 - Ranked likelihood is currently restricted to direct event outcomes so that
@@ -78,8 +69,4 @@ R = NA
 rt = 0.43
 ```
 
-Status:
-
-- not supported
-
-Boundary: `.validate_observation_rows()` in `R/likelihood_param_interface.R`.
+Boundary: `.validate_first_rank_trials()` in `R/likelihood_param_interface.R`.

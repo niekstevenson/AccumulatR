@@ -77,88 +77,6 @@ inline semantic::Index compile_expr_unsupported_node(
       "; runtime expression interpretation is disabled");
 }
 
-inline semantic::Index compile_guard_unless_allowed_node(
-    ExactVariantBuildState *plan,
-    const ExactExprKernel &kernel,
-    const semantic::Index condition_id,
-    const semantic::Index time_id,
-    const semantic::Index source_view_id) {
-  const auto &program = plan->program;
-  std::vector<semantic::Index> blocked_factors;
-  blocked_factors.push_back(
-      compile_expr_value_node(
-          plan,
-          kernel.guard_blocker_expr_id,
-          CompiledMathNodeKind::ExprCdf,
-          condition_id,
-          time_id,
-          source_view_id));
-  bool any_unless_true = false;
-  for (semantic::Index i = 0; i < kernel.children.size; ++i) {
-    const auto child = program.expr_args[
-        static_cast<std::size_t>(kernel.children.offset + i)];
-    const auto child_kind = static_cast<semantic::ExprKind>(
-        program.expr_kind[static_cast<std::size_t>(child)]);
-    if (child_kind == semantic::ExprKind::TrueExpr) {
-      any_unless_true = true;
-      continue;
-    }
-    if (child_kind == semantic::ExprKind::Impossible) {
-      continue;
-    }
-    blocked_factors.push_back(
-        compile_expr_value_node(
-            plan,
-            child,
-            CompiledMathNodeKind::ExprSurvival,
-            condition_id,
-            time_id,
-            source_view_id));
-  }
-  if (any_unless_true) {
-    return compiled_math_constant(&plan->compiled_math, 1.0);
-  }
-  const auto blocked_node =
-      compiled_math_algebra_node(
-          &plan->compiled_math,
-          CompiledMathNodeKind::Product,
-          std::move(blocked_factors),
-          CompiledMathValueKind::Cdf);
-  return compiled_math_unary_node(
-      &plan->compiled_math,
-      CompiledMathNodeKind::Complement,
-      blocked_node,
-      CompiledMathValueKind::Cdf);
-}
-
-inline semantic::Index compile_guard_unless_density_node(
-    ExactVariantBuildState *plan,
-    const ExactExprKernel &kernel,
-    const semantic::Index condition_id,
-    const semantic::Index time_id,
-    const semantic::Index source_view_id) {
-  const auto allowed_node =
-      compile_guard_unless_allowed_node(
-          plan,
-          kernel,
-          condition_id,
-          time_id,
-          source_view_id);
-  const auto ref_density =
-      compile_expr_value_node(
-          plan,
-          kernel.guard_ref_expr_id,
-          CompiledMathNodeKind::ExprDensity,
-          condition_id,
-          time_id,
-          source_view_id);
-  return compiled_math_algebra_node(
-      &plan->compiled_math,
-      CompiledMathNodeKind::Product,
-      std::vector<semantic::Index>{ref_density, allowed_node},
-      CompiledMathValueKind::Density);
-}
-
 inline semantic::Index compile_integral_zero_to_current_node(
     ExactVariantBuildState *plan,
     const semantic::Index integrand_node,
@@ -318,45 +236,6 @@ inline semantic::Index compile_expr_value_node_raw(
   }
 
   case semantic::ExprKind::Guard:
-    if (!kernel.children.empty()) {
-      if (value_kind == CompiledMathNodeKind::ExprDensity) {
-        return compile_guard_unless_density_node(
-            plan,
-            kernel,
-            condition_id,
-            time_id,
-            source_view_id);
-      } else if (value_kind == CompiledMathNodeKind::ExprCdf) {
-        const auto bind_time_id = static_cast<semantic::Index>(
-            CompiledMathTimeSlot::Active);
-        const auto density_node =
-            compile_guard_unless_density_node(
-                plan,
-                kernel,
-                condition_id,
-                bind_time_id,
-                source_view_id);
-        return compile_integral_zero_to_current_node(
-            plan,
-            density_node,
-            condition_id,
-            time_id,
-            source_view_id,
-            bind_time_id);
-      } else {
-        return compiled_math_unary_node(
-            &plan->compiled_math,
-            CompiledMathNodeKind::Complement,
-            compile_expr_value_node_raw(
-                plan,
-                expr_id,
-                CompiledMathNodeKind::ExprCdf,
-                condition_id,
-                time_id,
-                source_view_id),
-            CompiledMathValueKind::Survival);
-      }
-    }
     return compile_expr_distribution_node(
         plan,
         expr_id,

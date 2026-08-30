@@ -190,7 +190,7 @@ inline void evaluate_lognormal_leaf_batch(
   }
   const auto *q = input->q();
   for (std::size_t i = 0U; i < input->count; ++i) {
-    auto fill = exact_source_impossible_fill(Mask);
+    auto fill = exact_source_impossible_fill();
     const double x = input->elapsed()[i];
     if (x > 0.0 && std::isfinite(meanlog[i]) &&
         std::isfinite(sdlog[i]) && sdlog[i] > 0.0) {
@@ -310,7 +310,7 @@ template <std::uint8_t Mask>
 inline void evaluate_lba_leaf_batch(
     PreparedSourceLeafBatch *input,
     SourceLaneFill *out) {
-  const auto impossible = exact_source_impossible_fill(Mask);
+  const auto impossible = exact_source_impossible_fill();
   const auto *x = input->elapsed();
   const auto *v = input->parameter(0U);
   const auto *B = input->parameter(1U);
@@ -357,7 +357,7 @@ inline void evaluate_exgauss_leaf_batch(
       (Mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
   constexpr std::size_t normal_count = need_cdf ? 4U : 3U;
   constexpr std::size_t exponent_count = normal_count + 2U;
-  const auto impossible = exact_source_impossible_fill(Mask);
+  const auto impossible = exact_source_impossible_fill();
   const auto *x = input->elapsed();
   const auto *mu = input->parameter(0U);
   const auto *sigma = input->parameter(1U);
@@ -712,7 +712,7 @@ template <std::uint8_t Mask>
 inline void evaluate_rdm_leaf_batch(
     PreparedSourceLeafBatch *input,
     SourceLaneFill *out) {
-  const auto impossible = exact_source_impossible_fill(Mask);
+  const auto impossible = exact_source_impossible_fill();
   const auto *x = input->elapsed();
   const auto *v = input->parameter(0U);
   const auto *B = input->parameter(1U);
@@ -786,7 +786,7 @@ template <leaf::DistKind Kind, std::uint8_t Mask>
   const auto *p1 = input.parameter(1U);
   if constexpr (Kind == leaf::DistKind::Gamma) {
     for (std::size_t i = 0U; i < input.count; ++i) {
-      auto fill = exact_source_impossible_fill(Mask);
+      auto fill = exact_source_impossible_fill();
       const double x = elapsed[i];
       if (x > 0.0) {
         fill = exact_source_gamma_leaf_fill<Mask>(

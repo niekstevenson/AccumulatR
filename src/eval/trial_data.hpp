@@ -5,28 +5,8 @@
 #include <cmath>
 #include <cstring>
 
-#include "../runtime/layout.hpp"
-
 namespace accumulatr::eval {
 namespace detail {
-
-struct PreparedTrialRow {
-  semantic::Index start_row{0};
-};
-
-struct PreparedTrialRowsView {
-  const int *start_rows{nullptr};
-  R_xlen_t n{0};
-
-  std::size_t size() const {
-    return static_cast<std::size_t>(n);
-  }
-
-  PreparedTrialRow operator[](const std::size_t index) const {
-    return PreparedTrialRow{
-        static_cast<semantic::Index>(start_rows[index] - 1)};
-  }
-};
 
 struct PreparedRankColumnView {
   const int *cols{nullptr};
@@ -49,18 +29,12 @@ struct PreparedObservationColumnView {
 };
 
 struct PreparedTrialLayout {
-  PreparedTrialRowsView trials;
   int max_rank{1};
   int component_col{-1};
   int onset_col{-1};
   PreparedRankColumnView label_cols;
   PreparedRankColumnView time_cols;
   PreparedObservationColumnView observation;
-};
-
-struct PreparedDataView {
-  const int *component{nullptr};
-  R_xlen_t n_rows{0};
 };
 
 struct PreparedObservationDataView {
@@ -121,10 +95,6 @@ inline PreparedTrialLayout read_prepared_trial_layout(
     SEXP dataSEXP) {
   PreparedTrialLayout layout;
 
-  const SEXP startsSEXP = trusted_data_attr(dataSEXP, "trials_start_rows");
-  layout.trials.start_rows = INTEGER(startsSEXP);
-  layout.trials.n = XLENGTH(startsSEXP);
-
   const SEXP layoutColsSEXP = trusted_data_attr(dataSEXP, "layout_cols");
   layout.component_col = trusted_named_column(layoutColsSEXP, "component");
   layout.onset_col = trusted_named_column(layoutColsSEXP, "onset");
@@ -163,15 +133,6 @@ inline ObservationBounds observation_bounds_for_row(
       view.lc[row],
       view.uc[row],
       view.missingness[row]};
-}
-
-inline PreparedDataView read_prepared_data_view(
-    SEXP dataSEXP,
-    const PreparedTrialLayout &layout) {
-  const SEXP component = trusted_data_column(dataSEXP, layout.component_col);
-  return PreparedDataView{
-      INTEGER(component),
-      XLENGTH(component)};
 }
 
 inline bool integer_cell_is_na(const int *column,

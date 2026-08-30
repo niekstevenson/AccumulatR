@@ -24,7 +24,7 @@ plot_accumulators(
 )
 }
 \arguments{
-\item{model}{A race model or finalized model structure.}
+\item{model}{A finalized model structure.}
 
 \item{xlim}{Optional x-axis limits. If `NULL`, they are chosen from the model.}
 

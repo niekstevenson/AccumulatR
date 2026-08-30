@@ -44,7 +44,7 @@ basic_ctx <- make_context(basic_model)
 basic_loglik <- log_likelihood(
   basic_ctx,
   basic_prepared,
-  build_param_matrix(basic_model, basic_params, trial_df = basic_prepared)
+  basic_param_df
 )
 print(basic_loglik)
 
@@ -53,4 +53,4 @@ basic_one_trial <- build_param_matrix(
   basic_params,
   n_trials = 1
 )
-print(round(response_probabilities(basic_model, basic_one_trial), 3))
+print(round(response_probabilities(basic_ctx, basic_one_trial), 3))

@@ -7,14 +7,13 @@ testthat::test_that("compatible accumulator parameters are shared by default", {
 
   testthat::expect_equal(par_names(spec), c("m", "s", "t0"))
 
-  params <- build_param_matrix(
+  parameters <- build_param_matrix(
     finalize_model(spec),
     c(m = log(0.30), s = 0.17, t0 = 0.02),
     n_trials = 2L
   )
-
-  testthat::expect_equal(nrow(params), 4L)
-  testthat::expect_equal(unique(params[, "p1"]), log(0.30))
-  testthat::expect_equal(unique(params[, "p2"]), 0.17)
-  testthat::expect_equal(unique(params[, "t0"]), 0.02)
+  testthat::expect_equal(dim(parameters), c(4L, 4L))
+  testthat::expect_equal(unique(parameters[, "p1"]), log(0.30))
+  testthat::expect_equal(unique(parameters[, "p2"]), 0.17)
+  testthat::expect_equal(unique(parameters[, "t0"]), 0.02)
 })

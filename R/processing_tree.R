@@ -1,14 +1,14 @@
-.pt_node_definition <- function(source_id, model_view) {
+.pt_node_definition <- function(source_id, prep) {
   source_id <- as.character(source_id %||% "")
   if (length(source_id) != 1L || is.na(source_id) || !nzchar(source_id)) {
     source_id <- "?"
   }
-  if (!is.null(model_view$accumulators[[source_id]])) {
+  if (!is.null(prep$accumulators[[source_id]])) {
     lines <- c(source_id, "accumulator")
     return(list(type = "accumulator", label = paste(lines, collapse = "\\n")))
   }
 
-  pool <- model_view$pools[[source_id]]
+  pool <- prep$pools[[source_id]]
   if (!is.null(pool)) {
     members <- pool$members %||% character(0)
     k <- suppressWarnings(as.integer(pool$k %||% NA_integer_)[1])
@@ -48,7 +48,6 @@
       contributes = list(style = "solid", penwidth = "1.3", dir = "back"),
       reference = list(style = "solid", penwidth = "1.8", dir = "back"),
       blocker = list(style = "bold", color = "#B42318", fontcolor = "#8A1C13", penwidth = "2.0", dir = "back"),
-      unless = list(style = "dotted", color = "#B54708", fontcolor = "#8A3A06", dir = "back"),
       member = list(style = "dashed", color = "#4B5563", fontcolor = "#374151", dir = "back"),
       list(style = "solid", dir = "back")
     )
@@ -119,7 +118,7 @@
 #' equations and instead shows the observed responses, the accumulators or pools
 #' that feed them, and any blocking relationships.
 #'
-#' @param model A race model or finalized model structure.
+#' @param model A finalized model structure.
 #' @param outcome_label Optional response label. If supplied, only that response
 #'   is shown.
 #' @param return_dot If `TRUE`, return the Graphviz DOT string instead of a plot.
@@ -128,8 +127,8 @@
 #'   `DiagrammeR` graph. Otherwise, a list with `dot`, `nodes`, and `edges`.
 #' @export
 processing_tree <- function(model, outcome_label = NULL, return_dot = FALSE) {
-  view <- .model_view(model)
-  outcomes <- view$outcomes
+  prep <- model$prep
+  outcomes <- prep$outcomes
   if (length(outcomes) == 0L) stop("No outcomes found in model", call. = FALSE)
 
   labels <- vapply(outcomes, function(out) out$label %||% "", character(1))
@@ -183,7 +182,7 @@ processing_tree <- function(model, outcome_label = NULL, return_dot = FALSE) {
     existing <- event_nodes[[key]] %||% NA_character_
     if (!is.na(existing) && nzchar(existing)) return(existing)
     node_id <- next_id("e")
-    def <- .pt_node_definition(source_id, view)
+    def <- .pt_node_definition(source_id, prep)
     add_node(node_id, def$label, def$type)
     event_nodes[[key]] <<- node_id
     node_id
@@ -194,7 +193,7 @@ processing_tree <- function(model, outcome_label = NULL, return_dot = FALSE) {
     if (length(source_id) != 1L || is.na(source_id) || !nzchar(source_id)) {
       return(invisible(NULL))
     }
-    pool <- view$pools[[source_id]]
+    pool <- prep$pools[[source_id]]
     if (is.null(pool)) return(invisible(NULL))
     key <- sprintf("pool:%s", source_id)
     if (isTRUE(pool_expanded[[key]])) return(invisible(NULL))
@@ -230,15 +229,6 @@ processing_tree <- function(model, outcome_label = NULL, return_dot = FALSE) {
       block_id <- build_expr(expr$blocker, parent_id = NULL, edge_label = "")
       if (!is.na(block_id) && !is.na(ref_id)) {
         add_edge(ref_id, block_id, "blocks", role = "blocker")
-      }
-      unless_list <- expr$unless %||% list()
-      if (length(unless_list) > 0) {
-        for (i in seq_along(unless_list)) {
-          unless_id <- build_expr(unless_list[[i]], parent_id = NULL, edge_label = "")
-          if (!is.na(unless_id) && !is.na(block_id)) {
-            add_edge(block_id, unless_id, sprintf("unless %d", i), role = "unless")
-          }
-        }
       }
       return(ref_id)
     }

@@ -37,30 +37,16 @@ testthat::test_that("latent sampled mixtures marginalize on the C++ likelihood p
   slow_prepared <- prepare_data(structure, slow_df)
 
   params_lo <- latent_sampled_mixture_params(0.2)
-  latent_mat_lo <- build_param_matrix(
-    structure,
-    params_lo,
-    trial_df = latent_prepared
-  )
-  fast_mat_lo <- build_param_matrix(
-    structure,
-    params_lo,
-    trial_df = fast_prepared
-  )
-  slow_mat_lo <- build_param_matrix(
-    structure,
-    params_lo,
-    trial_df = slow_prepared
-  )
+  matrix_lo <- build_param_matrix(structure, params_lo)
 
-  ll_latent_lo <- as.numeric(log_likelihood(ctx, latent_prepared, latent_mat_lo))
+  ll_latent_lo <- as.numeric(log_likelihood(ctx, latent_prepared, matrix_lo))
   ll_explicit_na_lo <- as.numeric(log_likelihood(
     ctx,
     explicit_na_prepared,
-    build_param_matrix(structure, params_lo, trial_df = explicit_na_prepared)
+    matrix_lo
   ))
-  ll_fast_lo <- as.numeric(log_likelihood(ctx, fast_prepared, fast_mat_lo))
-  ll_slow_lo <- as.numeric(log_likelihood(ctx, slow_prepared, slow_mat_lo))
+  ll_fast_lo <- as.numeric(log_likelihood(ctx, fast_prepared, matrix_lo))
+  ll_slow_lo <- as.numeric(log_likelihood(ctx, slow_prepared, matrix_lo))
 
   expected_lo <- log(
     0.2 * exp(ll_fast_lo) +
@@ -71,18 +57,20 @@ testthat::test_that("latent sampled mixtures marginalize on the C++ likelihood p
   testthat::expect_equal(ll_explicit_na_lo, ll_latent_lo, tolerance = 1e-8)
 
   params_hi <- latent_sampled_mixture_params(0.8)
+  matrix_hi <- build_param_matrix(structure, params_hi)
   ll_latent_hi <- as.numeric(log_likelihood(
     ctx,
     latent_prepared,
-    build_param_matrix(structure, params_hi, trial_df = latent_prepared)
+    matrix_hi
   ))
   ll_fast_hi <- as.numeric(log_likelihood(
     ctx,
     fast_prepared,
-    build_param_matrix(structure, params_hi, trial_df = fast_prepared)
+    matrix_hi
   ))
+  expected_hi <- log(0.8 * exp(ll_fast_lo) + 0.2 * exp(ll_slow_lo))
 
-  testthat::expect_gt(abs(ll_latent_hi - ll_latent_lo), 1e-6)
+  testthat::expect_equal(ll_latent_hi, expected_hi, tolerance = 1e-8)
   testthat::expect_equal(ll_fast_hi, ll_fast_lo, tolerance = 1e-10)
 })
 
@@ -123,16 +111,17 @@ testthat::test_that("latent fixed mixtures use fixed component weights in likeli
       stringsAsFactors = FALSE
     )
   )
+  parameter_matrix <- build_param_matrix(structure, params)
 
   ll_latent <- as.numeric(log_likelihood(
     ctx,
     latent_prepared,
-    build_param_matrix(structure, params, trial_df = latent_prepared)
+    parameter_matrix
   ))
   ll_left <- as.numeric(log_likelihood(
     ctx,
     left_prepared,
-    build_param_matrix(structure, params, trial_df = left_prepared)
+    parameter_matrix
   ))
 
   testthat::expect_equal(ll_latent, log(0.25) + ll_left, tolerance = 1e-8)
@@ -169,7 +158,7 @@ testthat::test_that("latent missing-all mixtures use compiled terminal no-respon
   out <- as.numeric(log_likelihood(
     make_context(structure),
     prepared,
-    build_param_matrix(structure, params, trial_df = prepared)
+    build_param_matrix(structure, params)
   ))
 
   testthat::expect_equal(out, log(0.25 * 0.20 + 0.75 * 0.40), tolerance = 1e-10)
@@ -205,7 +194,7 @@ testthat::test_that("observed labels with missing RT marginalize over finite res
   out <- as.numeric(log_likelihood(
     make_context(structure),
     prepared,
-    build_param_matrix(structure, params, trial_df = prepared)
+    build_param_matrix(structure, params)
   ))
 
   testthat::expect_equal(out, log(1 - 0.20 * 0.30), tolerance = 1e-5)

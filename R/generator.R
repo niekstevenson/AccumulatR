@@ -2,23 +2,17 @@
 
 .acc_active_in_component <- function(acc_def, component) {
   comps <- acc_def$components
-  if (length(comps) == 0 || is.null(component) || identical(component, "__default__")) return(TRUE)
-  component %in% comps
+  !length(comps) || component %in% comps
 }
 
 .outcome_allowed_in_component <- function(options, component) {
-  comps <- options$component %||% NULL
-  if (is.null(comps) || length(comps) == 0L) return(TRUE)
-  comp_label <- component %||% "__default__"
-  if (is.na(comp_label) || !nzchar(comp_label)) return(FALSE)
-  comp_label %in% as.character(comps)
+  is.null(options$component) || component %in% options$component
 }
 
 .component_readout_count <- function(prep, component) {
   obs <- prep$observation
   base_readout <- obs$global_n_outcomes
-  comp_label <- component %||% "__default__"
-  comp_override <- obs$component_n_outcomes[[comp_label]]
+  comp_override <- obs$component_n_outcomes[[component]]
   if (!is.null(comp_override)) {
     base_readout <- comp_override[[1L]]
   }
@@ -28,20 +22,10 @@
 # ---- Sampling primitives ------------------------------------------------------
 
 .shared_trigger_fail <- function(ctx, trigger_id) {
-  if (is.null(trigger_id) || is.na(trigger_id) || trigger_id == "") return(FALSE)
   cached <- ctx$shared_trigger_state[[trigger_id]]
-  if (!is.null(cached)) return(isTRUE(cached$fail))
-  base_info <- ctx$model[["shared_triggers"]][[trigger_id]] %||% list()
-  prob <- base_info$q %||% 0
-  override <- ctx$trial_shared_triggers[[trigger_id]] %||% list()
-  if (!is.null(override$prob) && !is.na(override$prob)) {
-    prob <- as.numeric(override$prob)
-  }
-  if (!is.numeric(prob) || length(prob) != 1L || prob < 0 || prob > 1) {
-    stop(sprintf("Shared trigger '%s' requires a probability between 0 and 1", trigger_id))
-  }
-  fail <- stats::runif(1) < prob
-  ctx$shared_trigger_state[[trigger_id]] <- list(fail = fail, prob = prob)
+  if (!is.null(cached)) return(cached)
+  fail <- stats::runif(1) < ctx$trial_shared_triggers[[trigger_id]]
+  ctx$shared_trigger_state[[trigger_id]] <- fail
   fail
 }
 
@@ -71,8 +55,8 @@
   if (!is.finite(onset)) {
     return(Inf)
   }
-  shared_id <- acc_def$shared_trigger_id %||% NULL
-  if (!is.null(shared_id) && !is.na(shared_id) && shared_id != "") {
+  shared_id <- acc_def$shared_trigger_id
+  if (!is.null(shared_id)) {
     if (.shared_trigger_fail(ctx, shared_id)) {
       return(Inf)
     }
@@ -218,18 +202,7 @@
     ref <- .eval_expr(expr$reference, ctx)
     if (!is.finite(ref$time)) return(list(time = Inf, core = ref$core))
     blocker <- .eval_expr(expr$blocker, ctx)
-    unless_list <- expr$unless %||% list()
-    guard_blocked <- FALSE
-    if (length(unless_list) > 0) {
-      for (unl in unless_list) {
-        unl_eval <- .eval_expr(unl, ctx)
-        if (is.finite(unl_eval$time) && unl_eval$time <= blocker$time) {
-          guard_blocked <- TRUE
-          break
-        }
-      }
-    }
-    if (!guard_blocked && is.finite(blocker$time) && blocker$time < ref$time) {
+    if (is.finite(blocker$time) && blocker$time < ref$time) {
       return(list(time = Inf, core = ref$core))
     } else {
       return(list(time = ref$time, core = ref$core))
@@ -244,8 +217,8 @@
   labels <- names(outs)
   names(res) <- labels
   for (i in seq_along(outs)) {
-    def <- outs[[i]] %||% list()
-    options <- def[["options"]] %||% list()
+    def <- outs[[i]]
+    options <- def$options
     if (!.outcome_allowed_in_component(options, ctx$component)) {
       res[[i]] <- list(time = Inf, core = numeric(0), options = options)
       next
@@ -390,83 +363,58 @@
 
 # ---- Simulation helpers ------------------------------------------------------
 
-.normalize_trial_df <- function(trial_df, acc_ids, comp_ids) {
+.normalize_trial_df <- function(trial_df, n_trials, acc_ids, comp_ids) {
   if (is.null(trial_df)) {
     return(list(
-      trial_df = NULL,
-      trial_has_acc = FALSE,
-      trial_has_component = FALSE,
-      trial_has_onset = FALSE
+      component = rep.int(NA_character_, n_trials),
+      onset = NULL
     ))
   }
 
   trial_df <- as.data.frame(trial_df)
-  trial_has_acc <- "racer" %in% names(trial_df)
-  if (!"trials" %in% names(trial_df)) {
-    if (trial_has_acc) stop("trial_df with racer must include a trials column")
-    trial_df$trials <- seq_len(nrow(trial_df))
+  if (!all(c("trials", "racer") %in% names(trial_df))) {
+    stop("trial_df must contain trials and racer columns", call. = FALSE)
   }
-  if (is.factor(trial_df$trials)) trial_df$trials <- as.character(trial_df$trials)
-  trial_df$trials <- suppressWarnings(as.integer(trial_df$trials))
-  if (any(is.na(trial_df$trials)) || any(trial_df$trials < 1L)) {
-    stop("trial_df$trials must contain positive integers")
-  }
-
-  if (trial_has_acc) {
-    acc_raw <- trial_df$racer
-    if (is.factor(acc_raw)) acc_raw <- as.character(acc_raw)
-    if (is.numeric(acc_raw)) {
-      acc_idx <- suppressWarnings(as.integer(acc_raw))
-      if (any(is.na(acc_idx)) || any(acc_idx < 1L | acc_idx > length(acc_ids))) {
-        stop("trial_df$racer numeric values must be 1..n_acc")
-      }
-      trial_df$racer <- acc_ids[acc_idx]
-    } else {
-      acc_ids_vec <- as.character(acc_raw)
-      acc_ids_vec[!is.na(acc_ids_vec) & !nzchar(acc_ids_vec)] <- NA_character_
-      if (any(is.na(acc_ids_vec))) stop("trial_df$racer must include valid racer ids")
-      bad_vals <- unique(acc_ids_vec[!acc_ids_vec %in% acc_ids])
-      if (length(bad_vals) > 0L) stop("trial_df racer values must match model racers: ",
-                                      paste(bad_vals, collapse = ", "))
-      trial_df$racer <- acc_ids_vec
-    }
-    pair_key <- paste(trial_df$trials, trial_df$racer, sep = "::")
-    if (any(duplicated(pair_key))) {
-      stop("trial_df with racer must have at most one row per trials/racer")
-    }
+  n_acc <- length(acc_ids)
+  expected_trials <- rep.int(seq_len(n_trials), rep.int(n_acc, n_trials))
+  if (!is.numeric(trial_df$trials) ||
+      length(trial_df$trials) != length(expected_trials) ||
+      any(!is.finite(trial_df$trials)) ||
+      any(trial_df$trials != expected_trials) ||
+      !identical(as.character(trial_df$racer), rep(acc_ids, times = n_trials))) {
+    stop(
+      "trial_df must contain one complete trials-by-accumulator block in model order",
+      call. = FALSE
+    )
   }
 
-  trial_has_component <- FALSE
+  component <- rep.int(NA_character_, n_trials)
   if ("component" %in% names(trial_df)) {
-    comp_col <- trial_df$component
-    if (is.factor(comp_col)) comp_col <- as.character(comp_col)
-    comp_col <- as.character(comp_col)
-    comp_col[!is.na(comp_col) & !nzchar(comp_col)] <- NA_character_
-    bad_vals <- unique(comp_col[!is.na(comp_col) & !comp_col %in% comp_ids])
-    if (length(bad_vals) > 0L) stop("component values must match model components: ", paste(bad_vals, collapse = ", "))
-    trial_df$component <- comp_col
-    trial_has_component <- TRUE
-  }
-
-  trial_has_onset <- FALSE
-  if ("onset" %in% names(trial_df)) {
-    onset_col <- trial_df$onset
-    if (is.factor(onset_col)) onset_col <- as.character(onset_col)
-    if (!is.numeric(onset_col)) {
-      coerced <- suppressWarnings(as.numeric(onset_col))
-      if (any(!is.na(onset_col) & is.na(coerced))) stop("trial_df$onset must be numeric")
-      onset_col <- coerced
+    values <- as.character(trial_df$component)
+    component <- values[seq.int(1L, length(values), by = n_acc)]
+    if (!identical(values, rep.int(component, rep.int(n_acc, n_trials)))) {
+      stop("trial_df$component must be constant within each trial", call. = FALSE)
     }
-    trial_df$onset <- as.numeric(onset_col)
-    trial_has_onset <- TRUE
+    unknown <- unique(component[!is.na(component) & !component %in% comp_ids])
+    if (length(unknown)) {
+      stop("Unknown trial_df component: ", paste(unknown, collapse = ", "), call. = FALSE)
+    }
   }
 
-  list(
-    trial_df = trial_df,
-    trial_has_acc = trial_has_acc,
-    trial_has_component = trial_has_component,
-    trial_has_onset = trial_has_onset
-  )
+  onset <- NULL
+  if ("onset" %in% names(trial_df)) {
+    if (!is.numeric(trial_df$onset) || any(!is.na(trial_df$onset) & !is.finite(trial_df$onset))) {
+      stop("trial_df$onset must be numeric", call. = FALSE)
+    }
+    onset <- matrix(
+      trial_df$onset,
+      nrow = n_trials,
+      byrow = TRUE,
+      dimnames = list(NULL, acc_ids)
+    )
+  }
+
+  list(component = component, onset = onset)
 }
 
 # ---- Public API ----------------------------------------------------------------
@@ -475,17 +423,14 @@
 #'
 #' @param structure Finalized model structure.
 #' @param params_df Trial-level parameter values.
-#' @param trial_df Optional data frame used to condition the simulation. When it
-#'   includes a `racer` column, `onset` and `component` values are matched
-#'   by `trials` and racer. Otherwise, values apply at the trial level.
+#' @param trial_df Optional trial-by-accumulator conditioning table containing
+#'   complete `trials`/`racer` blocks in model order. It may supply per-trial
+#'   `component` and per-accumulator `onset` values.
 #' @param seed Optional random-number seed.
 #' @param keep_detail If `TRUE`, keep additional simulation detail.
 #' @param keep_component Whether to keep the chosen mixture component in the
 #'   output when the model has multiple components. If `NULL`, fixed mixtures
 #'   keep the component label and sampled mixtures drop it.
-#' @param layout Parameter layout. `"rectangular"` expects rows ordered by trial
-#'   and racer. `"long"` expects rows aligned to `trial_df` or inferable
-#'   from `component`. `"auto"` chooses automatically.
 #' @return A data frame of simulated behavioral data. For standard models this
 #'   includes `trials`, `R`, and `rt`. If `n_outcomes > 1`, additional ordered
 #'   response columns such as `R2`/`rt2` are included.
@@ -503,179 +448,30 @@ simulate <- function(structure,
                      trial_df = NULL,
                      seed = NULL,
                      keep_detail = FALSE,
-                     keep_component = NULL,
-                     layout = c("auto", "rectangular", "long")) {
-  layout <- match.arg(layout)
-
-  if (is.null(params_df)) stop("Parameter matrix must be provided")
+                     keep_component = NULL) {
   prep <- structure$prep
-  acc_defs <- prep$accumulators %||% list()
+  acc_defs <- prep$accumulators
   acc_ids <- names(acc_defs)
   n_acc <- length(acc_ids)
-  if (n_acc == 0L) stop("No accumulators defined in model structure")
-
-  params_mat <- if (is.matrix(params_df)) params_df else as.matrix(params_df)
-  if (!is.numeric(params_mat)) stop("Parameter matrix must be numeric")
-  if (nrow(params_mat) == 0L) stop("Parameter matrix must have rows")
-  if (is.null(colnames(params_mat))) stop("Parameter matrix must have column names")
-  required_cols <- c("q", "w", "t0")
-  missing_cols <- setdiff(required_cols, colnames(params_mat))
-  if (length(missing_cols) > 0L) stop("Parameter matrix missing columns: ", paste(missing_cols, collapse = ", "))
+  params_mat <- params_df
+  n_trials <- nrow(params_mat) %/% n_acc
   p_cols <- grep("^p[0-9]+$", colnames(params_mat), value = TRUE)
-  if (length(p_cols) == 0L) stop("Parameter matrix must include at least p1")
-  p_cols <- p_cols[order(suppressWarnings(as.integer(sub("^p", "", p_cols))))]
-  p_cols <- p_cols[seq_len(min(length(p_cols), 8L))]
+  p_cols <- p_cols[order(as.integer(sub("^p", "", p_cols)))]
 
-  comp_table <- structure$components
-  comp_ids <- comp_table$component_id %||% "__default__"
-  mix_mode <- comp_table$mode[[1]] %||% "fixed"
+  components <- prep$components
+  comp_ids <- components$ids
+  mix_mode <- components$mode
+  component_weight_names <- vapply(comp_ids, function(component) {
+    components$attrs[[component]]$weight_param %||% NA_character_
+  }, character(1))
 
-  trial_info <- .normalize_trial_df(trial_df, acc_ids, comp_ids)
-  trial_df <- trial_info$trial_df
-  trial_has_acc <- trial_info$trial_has_acc
-  trial_has_component <- trial_info$trial_has_component
-  trial_has_onset <- trial_info$trial_has_onset
-  trial_ids <- if (!is.null(trial_df)) sort(unique(trial_df$trials)) else integer(0)
+  trial_info <- .normalize_trial_df(trial_df, n_trials, acc_ids, comp_ids)
+  component_vec <- trial_info$component
+  onset_mat <- trial_info$onset
 
-  layout_mode <- layout
-  if (identical(layout, "auto")) {
-    if (nrow(params_mat) %% n_acc != 0L) {
-      layout_mode <- "long"
-    } else if (trial_has_component) {
-      comp_levels <- unique(trial_df$component)
-      comp_levels <- comp_levels[!is.na(comp_levels)]
-      if (length(comp_levels) > 0L) {
-        acc_counts <- vapply(comp_levels, function(comp_label) {
-          sum(vapply(acc_defs, function(acc_def) {
-            .acc_active_in_component(acc_def, comp_label)
-          }, logical(1)))
-        }, integer(1))
-        if (any(acc_counts != n_acc)) layout_mode <- "long"
-      }
-    }
-    if (identical(layout_mode, "auto")) layout_mode <- "rectangular"
-  }
-
-  mapping_mode <- "implicit"
-  if (identical(layout_mode, "long") && identical(layout, "long") &&
-      trial_has_acc && !is.null(trial_df) && nrow(params_mat) == nrow(trial_df)) {
-    mapping_mode <- "explicit"
-  }
-
-  if (identical(layout_mode, "rectangular")) {
-    n_trials <- nrow(params_mat) / n_acc
-    if (!is.finite(n_trials) || n_trials != floor(n_trials)) {
-      stop(sprintf("Parameter rows (%d) not divisible by number of accumulators (%d); ",
-                   nrow(params_mat), n_acc),
-           "use layout = \"long\" for non-rectangular matrices")
-    }
-    n_trials <- as.integer(n_trials)
-    if (!is.null(trial_df)) {
-      if (any(trial_df$trials > n_trials)) {
-        stop("trial_df$trials values must be between 1 and n_trials")
-      }
-    }
-  } else if (identical(mapping_mode, "explicit")) {
-    if (is.null(trial_df) || !trial_has_acc) {
-      stop("layout = \"long\" with explicit mapping requires trial_df with racer")
-    }
-    if (nrow(params_mat) != nrow(trial_df)) stop("For explicit long layout, params_df rows must match trial_df rows")
-    if (length(trial_ids) == 0L) stop("trial_df must include trial rows")
-    n_trials <- max(trial_ids)
-  } else {
-    if (is.null(trial_df) || !trial_has_component) stop("Non-rectangular layout requires trial_df with component when racer mapping is absent")
-    n_trials <- length(trial_ids)
-    if (n_trials == 0L) stop("trial_df must include trial rows")
-  }
-
-  component_vec <- NULL
-  if (!is.null(trial_df) && trial_has_component) {
-    component_vec <- rep(NA_character_, n_trials)
-    comp_by_trial <- split(trial_df$component, trial_df$trials)
-    for (tid in names(comp_by_trial)) {
-      vals <- unique(comp_by_trial[[tid]])
-      vals <- vals[!is.na(vals)]
-      if (length(vals) > 1L) stop(sprintf("Multiple component values for trial %s", tid))
-      if (length(vals) == 1L) component_vec[[as.integer(tid)]] <- vals[[1]]
-    }
-    if (identical(layout_mode, "long") && identical(mapping_mode, "implicit") &&
-        any(is.na(component_vec))) {
-      stop("component values must be provided for each trial when racer mapping is absent")
-    }
-  }
-
-  comp_active_map <- NULL
-  if (identical(layout_mode, "long") && identical(mapping_mode, "implicit")) {
-    comp_levels <- unique(component_vec)
-    comp_active_map <- lapply(comp_levels, function(comp_label) {
-      vapply(acc_defs, function(acc_def) {
-        .acc_active_in_component(acc_def, comp_label)
-      }, logical(1))
-    })
-    names(comp_active_map) <- comp_levels
-  }
-
-  onset_mat <- NULL
-  if (!is.null(trial_df) && trial_has_onset) {
-    onset_mat <- matrix(NA_real_, nrow = n_trials, ncol = n_acc, dimnames = list(NULL, acc_ids))
-    if (trial_has_acc) {
-      acc_idx <- match(trial_df$racer, acc_ids)
-      for (i in seq_len(nrow(trial_df))) {
-        t <- trial_df$trials[[i]]
-        a <- acc_idx[[i]]
-        onset_val <- trial_df$onset[[i]]
-        if (!is.finite(onset_val)) next
-        onset_mat[t, a] <- onset_val
-      }
-    } else {
-      for (i in seq_len(nrow(trial_df))) {
-        t <- trial_df$trials[[i]]
-        onset_val <- trial_df$onset[[i]]
-        if (!is.finite(onset_val)) next
-        onset_mat[t, ] <- onset_val
-      }
-    }
-  }
-
-  comp_leader_acc <- setNames(rep(NA_character_, length(comp_ids)), comp_ids)
-  for (acc_id in acc_ids) {
-    comps <- acc_defs[[acc_id]]$components %||% character(0)
-    for (c_id in comps) {
-      if (is.na(comp_leader_acc[[c_id]])) comp_leader_acc[[c_id]] <- acc_id
-    }
-  }
-
-  row_map <- vector("list", n_trials)
-  if (identical(layout_mode, "rectangular")) {
-    for (i in seq_len(n_trials)) {
-      start <- (i - 1L) * n_acc
-      row_map[[i]] <- setNames(start + seq_len(n_acc), acc_ids)
-    }
-  } else if (identical(mapping_mode, "explicit")) {
-    rows_by_trial <- split(seq_len(nrow(trial_df)), trial_df$trials)
-    for (i in seq_len(n_trials)) {
-      rows <- rows_by_trial[[as.character(i)]]
-      if (is.null(rows) || length(rows) == 0L) stop(sprintf("No parameter rows mapped to trial %d", i))
-      accs <- trial_df$racer[rows]
-      mapped <- setNames(rows, accs)
-      mapped <- mapped[acc_ids[acc_ids %in% names(mapped)]]
-      row_map[[i]] <- mapped
-    }
-  } else {
-    row_cursor <- 1L
-    for (i in seq_len(n_trials)) {
-      active_mask <- comp_active_map[[component_vec[[i]]]]
-      accs <- acc_ids[active_mask]
-      if (length(accs) == 0L) stop("No accumulator rows matched the provided component labels")
-      rows <- row_cursor + seq_len(length(accs)) - 1L
-      row_map[[i]] <- setNames(rows, accs)
-      row_cursor <- row_cursor + length(accs)
-    }
-    if (row_cursor != (nrow(params_mat) + 1L)) {
-      stop("Parameter rows did not align with component assignments")
-    }
-  }
-
+  row_map <- lapply(seq_len(n_trials), function(trial) {
+    setNames((trial - 1L) * n_acc + seq_len(n_acc), acc_ids)
+  })
   if (!is.null(seed)) set.seed(seed)
   trial_ids <- seq_len(n_trials)
   n_readout <- prep$observation$n_outcomes
@@ -687,18 +483,20 @@ simulate <- function(structure,
   acc_idx_map <- setNames(seq_along(acc_ids), acc_ids)
 
   for (i in seq_along(trial_ids)) {
-    forced_component <- if (!is.null(component_vec)) component_vec[[i]] else NA_character_
+    forced_component <- component_vec[[i]]
     if (!is.na(forced_component)) {
       chosen_component <- forced_component
     } else if (length(comp_ids) == 1L) {
       chosen_component <- comp_ids[[1]]
     } else {
-      comp_weights <- numeric(length(comp_ids))
-      trial_rows <- row_map[[i]]
-      for (ci in seq_along(comp_ids)) {
-        leader_acc <- comp_leader_acc[[comp_ids[[ci]]]]
-        row_idx <- trial_rows[[leader_acc]]
-        comp_weights[[ci]] <- params_mat[row_idx, "w"]
+      comp_weights <- components$weights
+      if (identical(mix_mode, "sample")) {
+        sampled <- !is.na(component_weight_names)
+        comp_weights[sampled] <- params_mat[
+          row_map[[i]][[1L]],
+          component_weight_names[sampled]
+        ]
+        comp_weights[!sampled] <- 1 - sum(comp_weights[sampled])
       }
       chosen_component <- sample(comp_ids, size = 1L, prob = comp_weights)
     }
@@ -707,10 +505,6 @@ simulate <- function(structure,
     trial_accs <- list()
     shared_map <- list()
     trial_rows <- row_map[[i]]
-    if (length(trial_rows) == 0L) stop(sprintf("No parameter rows mapped to trial %d", i))
-
-    # preserve accumulator order where possible
-    trial_rows <- trial_rows[acc_ids[acc_ids %in% names(trial_rows)]]
 
     for (acc_id in names(trial_rows)) {
       row_idx <- trial_rows[[acc_id]]
@@ -723,13 +517,12 @@ simulate <- function(structure,
         onset_override <- as.numeric(onset_mat[i, acc_idx_map[[acc_id]]])
       }
       onset_spec <- acc_defs[[acc_id]]$onset_spec
-      onset_val <- acc_defs[[acc_id]]$onset
       if (identical(onset_spec$kind, "absolute")) {
-        onset_val <- onset_spec$value
-        if (is.finite(onset_override)) {
-          onset_val <- onset_override
+        onset_spec$value <- if (is.finite(onset_override)) {
+          onset_override
+        } else {
+          onset_spec$value
         }
-        onset_spec <- list(kind = "absolute", value = onset_val)
       } else {
         lag_val <- onset_spec$lag
         if (is.finite(onset_override)) {
@@ -741,22 +534,19 @@ simulate <- function(structure,
           source_kind = onset_spec$source_kind,
           lag = lag_val
         )
-        onset_val <- 0
       }
       acc_entry <- list(
         dist = acc_defs[[acc_id]]$dist,
         params = dist_list,
-        onset = onset_val,
         onset_spec = onset_spec,
         q = row_vals[["q"]],
-        shared_trigger_id = acc_defs[[acc_id]]$shared_trigger_id %||% NA_character_,
-        components = acc_defs[[acc_id]]$components %||% character(0)
+        shared_trigger_id = acc_defs[[acc_id]]$shared_trigger_id
       )
       trial_accs[[acc_id]] <- acc_entry
       stid <- acc_entry$shared_trigger_id
-      if (!is.null(stid) && !is.na(stid) && nzchar(stid)) {
+      if (!is.null(stid)) {
         if (is.null(shared_map[[stid]])) {
-          shared_map[[stid]] <- list(prob = row_vals[["q"]])
+          shared_map[[stid]] <- row_vals[["q"]]
         }
       }
     }

@@ -7,7 +7,7 @@
 processing_tree(model, outcome_label = NULL, return_dot = FALSE)
 }
 \arguments{
-\item{model}{A race model or finalized model structure.}
+\item{model}{A finalized model structure.}
 
 \item{outcome_label}{Optional response label. If supplied, only that response
 is shown.}

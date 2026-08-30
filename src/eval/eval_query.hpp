@@ -2,7 +2,6 @@
 
 #include <Rcpp.h>
 
-#include <algorithm>
 #include <cstddef>
 #include <vector>
 
@@ -17,12 +16,9 @@ struct ParamMatrixView {
   const double *onset{nullptr};
   int nrow{0};
 
-  explicit ParamMatrixView(SEXP paramsSEXP)
-      : base(REAL(paramsSEXP)), nrow(Rf_nrows(paramsSEXP)) {}
-
-  ParamMatrixView(SEXP paramsSEXP, const double *onset_)
+  explicit ParamMatrixView(SEXP paramsSEXP,
+                           const double *onset_ = nullptr)
       : base(REAL(paramsSEXP)), onset(onset_), nrow(Rf_nrows(paramsSEXP)) {}
-
 };
 
 struct ParamView {
@@ -40,7 +36,7 @@ struct ParamView {
         row_offset(row_offset_) {}
 
   inline int physical_row(const int row) const {
-    return row_offset + (row_map == nullptr ? row : row_map[row]);
+    return row_offset + row_map[row];
   }
 
   inline double q(const int row) const {
@@ -60,9 +56,7 @@ struct ObservationLaneBatchView {
       return physical_rows[
           static_cast<std::size_t>(leaf) * physical_row_stride + lane];
     }
-    const auto *row_map = row_maps[lane];
-    return row_offsets[lane] +
-           (row_map == nullptr ? leaf : row_map[leaf]);
+    return row_offsets[lane] + row_maps[lane][leaf];
   }
 
   double q(const semantic::Index leaf,
@@ -130,11 +124,7 @@ struct ObservationLaneBatch {
     for (std::size_t leaf = 0U; leaf < leaf_count; ++leaf) {
       auto *rows = physical_rows.data() + leaf * lane_count;
       for (std::size_t lane = 0U; lane < lane_count; ++lane) {
-        const auto *row_map = row_maps[lane];
-        rows[lane] = row_offsets[lane] +
-                     (row_map == nullptr
-                          ? static_cast<int>(leaf)
-                          : row_map[leaf]);
+        rows[lane] = row_offsets[lane] + row_maps[lane][leaf];
       }
     }
   }
@@ -163,7 +153,7 @@ struct ObservationLaneBatch {
         observed_times.data() + begin,
         physical_rows.empty() ? nullptr : physical_rows.data() + begin,
         physical_row_stride,
-        std::min(size() - begin, count)};
+        count};
   }
 
   std::vector<const int *> row_maps;

@@ -20,12 +20,12 @@ inline void compile_program_source_runtime_fields(ExactVariantBuildState *plan) 
 
   for (semantic::Index i = 0; i < program.layout.n_leaves; ++i) {
     const auto pos = static_cast<std::size_t>(i);
+    auto &leaf = program.leaf_descriptors[pos];
     const auto source_id = source_ordinal(
         *plan,
-        static_cast<semantic::SourceKind>(program.onset_source_kind[pos]),
-        program.onset_source_index[pos]);
-    program.onset_source_ids[pos] = source_id;
-    program.leaf_descriptors[pos].onset_source_id = source_id;
+        static_cast<semantic::SourceKind>(leaf.onset_source_kind),
+        leaf.onset_source_index);
+    leaf.onset_source_id = source_id;
   }
 
   for (std::size_t i = 0; i < program.pool_member_indices.size(); ++i) {
@@ -96,12 +96,12 @@ inline void compile_source_kernels(ExactVariantBuildState *plan) {
 
   for (semantic::Index i = 0; i < program.layout.n_leaves; ++i) {
     const auto pos = static_cast<std::size_t>(i);
+    const auto &leaf = program.leaf_descriptors[pos];
     auto &kernel = plan->source_kernels[pos];
     kernel.source_id = i;
     kernel.leaf_index = i;
-    kernel.onset_source_id = program.onset_source_ids[pos];
-    kernel.kind = static_cast<semantic::OnsetKind>(
-                      program.onset_kind[pos]) ==
+    kernel.onset_source_id = leaf.onset_source_id;
+    kernel.kind = static_cast<semantic::OnsetKind>(leaf.onset_kind) ==
                           semantic::OnsetKind::Absolute
                       ? CompiledSourceChannelKernelKind::LeafAbsolute
                       : CompiledSourceChannelKernelKind::LeafOnsetConvolution;

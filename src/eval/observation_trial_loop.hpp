@@ -19,8 +19,6 @@ namespace detail {
 
 struct ObservationScheduleEntry {
   std::size_t trial_index{0U};
-  R_xlen_t row{0};
-  const int *row_map{nullptr};
   int row_offset{0};
   double observed_time{NA_REAL};
   semantic::Index component_weight_index{semantic::kInvalidIndex};
@@ -28,6 +26,11 @@ struct ObservationScheduleEntry {
 };
 
 struct ObservationScheduleGroup {
+  ObservationScheduleGroup(
+      const semantic::Index variant_index_,
+      const ObservationProbabilityPlan *plan_)
+      : variant_index(variant_index_), plan(plan_) {}
+
   semantic::Index variant_index{semantic::kInvalidIndex};
   const ObservationProbabilityPlan *plan{nullptr};
   std::vector<ObservationScheduleEntry> entries;
@@ -42,6 +45,18 @@ struct ExactResponseScheduleEntry {
 };
 
 struct ExactResponseScheduleGroup {
+  ExactResponseScheduleGroup(
+      const semantic::Index variant_index_,
+      const ExactResponseMeasure measure_,
+      const ObservationProbabilityPlan *plan_,
+      std::vector<ExactOutcomeTerm> terms_,
+      const bool complete_outcome_partition_)
+      : variant_index(variant_index_),
+        measure(measure_),
+        plan(plan_),
+        terms(std::move(terms_)),
+        complete_outcome_partition(complete_outcome_partition_) {}
+
   semantic::Index variant_index{semantic::kInvalidIndex};
   ExactResponseMeasure measure{ExactResponseMeasure::ObservableResponses};
   const ObservationProbabilityPlan *plan{nullptr};
@@ -53,23 +68,16 @@ struct ExactResponseScheduleGroup {
   std::vector<double> upper;
 };
 
-struct LatentTrialScheduleEntry {
-  std::size_t trial_index{0U};
-  int parameter_row{0};
-};
-
 struct ObservationLikelihoodSchedule {
   bool matches(SEXP dataSEXP) const {
-    return data != R_NilValue && data == dataSEXP;
+    return data != R_NilValue && static_cast<SEXP>(data) == dataSEXP;
   }
 
   void identify(SEXP dataSEXP) {
-    data_owner = dataSEXP;
     data = dataSEXP;
   }
 
-  Rcpp::RObject data_owner;
-  SEXP data{R_NilValue};
+  Rcpp::RObject data;
   std::size_t trial_count{0U};
   std::size_t component_count{0U};
   bool direct_trial_values{false};
@@ -79,7 +87,7 @@ struct ObservationLikelihoodSchedule {
   std::vector<ExactResponseScheduleGroup> response_groups;
   std::vector<std::uint8_t> truncated_trials;
   std::vector<std::vector<ObservationScheduleEntry>> ranked_by_variant;
-  std::vector<LatentTrialScheduleEntry> latent_trials;
+  std::vector<std::size_t> latent_trials;
 };
 
 struct ObservationLikelihoodLaneWorkspace {
@@ -180,7 +188,7 @@ inline ObservationScheduleGroup &observation_schedule_group(
       return group;
     }
   }
-  groups->push_back(ObservationScheduleGroup{variant_index, &plan, {}});
+  groups->emplace_back(variant_index, &plan);
   return groups->back();
 }
 
@@ -199,8 +207,8 @@ inline ExactResponseScheduleGroup &exact_response_schedule_group(
   auto terms = exact_terms_from_observation_plan(exact_plan, plan);
   const bool complete =
       exact_terms_form_complete_outcome_partition(exact_plan, terms);
-  groups->push_back(ExactResponseScheduleGroup{
-      variant_index, measure, &plan, std::move(terms), complete});
+  groups->emplace_back(
+      variant_index, measure, &plan, std::move(terms), complete);
   return groups->back();
 }
 
@@ -211,13 +219,11 @@ inline Rcpp::NumericVector evaluate_response_probabilities_cached(
     const std::vector<ExactVariantPlan> &exact_plans,
     const std::vector<std::vector<int>> &exact_leaf_row_offsets_by_variant,
     const std::size_t n_outcomes,
+    const std::size_t global_leaf_count,
     SEXP paramsSEXP,
-    SEXP layoutSEXP,
     ObservationLaneWorkspace *workspace) {
-  const Rcpp::List layout(layoutSEXP);
-  const Rcpp::IntegerVector full_start_rows(layout["full_start_rows"]);
-  const Rcpp::IntegerMatrix component_start_rows(layout["component_start_rows"]);
-  const auto n_trials = static_cast<std::size_t>(full_start_rows.size());
+  const auto n_trials =
+      static_cast<std::size_t>(Rf_nrows(paramsSEXP)) / global_leaf_count;
 
   Rcpp::NumericVector probability(static_cast<R_xlen_t>(n_outcomes));
   if (n_trials == 0U || n_outcomes == 0U) {
@@ -231,7 +237,6 @@ inline Rcpp::NumericVector evaluate_response_probabilities_cached(
   workspace->begin();
   auto &groups = workspace->groups;
   auto &values = workspace->group_values;
-  auto &available_component_codes = workspace->component_codes;
   auto &weights = workspace->component_weights;
 
   const auto flush_group = [&](ObservationLaneGroup *group) {
@@ -258,95 +263,28 @@ inline Rcpp::NumericVector evaluate_response_probabilities_cached(
     group->clear();
   };
 
-  const auto component_start =
-      [&](const std::size_t trial_index,
-          const semantic::Index component_code) -> int {
-    const auto col = static_cast<int>(component_code - 1);
-    if (col < 0 || col >= component_start_rows.ncol()) {
-      return NA_INTEGER;
-    }
-    return component_start_rows(
-        static_cast<int>(trial_index),
-        col);
-  };
-
   for (std::size_t trial_index = 0; trial_index < n_trials; ++trial_index) {
-    available_component_codes.clear();
-    const int full_start_row = full_start_rows[static_cast<R_xlen_t>(trial_index)];
-    const bool has_full_trial = full_start_row != NA_INTEGER;
-    int weight_row = NA_INTEGER;
-
-    if (has_full_trial) {
-      available_component_codes = component_mixture.present_component_codes;
-      weight_row = full_start_row - 1;
-    } else {
-      for (std::size_t component_code = 1;
-           component_code < component_plans_by_code.size() &&
-           component_code < exact_variant_index_by_component_code.size();
-           ++component_code) {
-        const int start_row =
-            component_start(
-                trial_index,
-                static_cast<semantic::Index>(component_code));
-        if (start_row == NA_INTEGER ||
-            !component_plans_by_code[component_code].present ||
-            exact_variant_index_by_component_code[component_code] ==
-                semantic::kInvalidIndex) {
-          continue;
-        }
-        if (weight_row == NA_INTEGER) {
-          weight_row = start_row - 1;
-        }
-        available_component_codes.push_back(
-            static_cast<semantic::Index>(component_code));
-      }
-    }
-
-    if (available_component_codes.empty() || weight_row == NA_INTEGER) {
-      continue;
-    }
-
+    const auto full_start_row =
+        static_cast<int>(trial_index * global_leaf_count);
     resolve_component_weights(
         component_mixture,
-        available_component_codes,
         trusted_params,
-        weight_row,
+        full_start_row,
         &weights);
     for (std::size_t choice_index = 0;
-         choice_index < available_component_codes.size();
+         choice_index < component_mixture.present_component_codes.size();
          ++choice_index) {
-      const auto component_code = available_component_codes[choice_index];
+      const auto component_code =
+          component_mixture.present_component_codes[choice_index];
       if (!(weights[choice_index] > 0.0)) {
         continue;
       }
-      const auto variant_index = resolve_variant_index_by_component_code(
-          component_code,
-          exact_variant_index_by_component_code);
-      if (variant_index == semantic::kInvalidIndex ||
-          static_cast<std::size_t>(variant_index) >= exact_plans.size()) {
-        continue;
-      }
+      const auto variant_index = exact_variant_index_by_component_code[
+          static_cast<std::size_t>(component_code)];
       const auto &component_plan =
           component_plans_by_code[static_cast<std::size_t>(component_code)];
-      if (!component_plan.present) {
-        continue;
-      }
-
-      const int *row_map = nullptr;
-      int row_offset = 0;
-      if (has_full_trial) {
-        const auto &leaf_offsets =
-            exact_leaf_row_offsets_by_variant[
-                static_cast<std::size_t>(variant_index)];
-        row_map = leaf_offsets.data();
-        row_offset = full_start_row - 1;
-      } else {
-        const int start_row = component_start(trial_index, component_code);
-        if (start_row == NA_INTEGER) {
-          continue;
-        }
-        row_offset = start_row - 1;
-      }
+      const auto &leaf_offsets = exact_leaf_row_offsets_by_variant[
+          static_cast<std::size_t>(variant_index)];
 
       for (std::size_t observed_pos = 1U;
            observed_pos <= n_outcomes;
@@ -355,19 +293,12 @@ inline Rcpp::NumericVector evaluate_response_probabilities_cached(
             static_cast<semantic::Index>(observed_pos);
         const auto state_code =
             missing_rt_observation_state_code(component_plan, observed_code);
-        if (state_code == semantic::kInvalidIndex ||
-            static_cast<std::size_t>(state_code) >=
-                component_plan.probability_plans_by_state_code.size()) {
-          continue;
-        }
         const auto &plan =
             observation_probability_plan_for_state(component_plan, state_code);
-        if (plan.empty()) {
-          continue;
-        }
         auto &group = find_observation_lane_group(
             &groups, variant_index, plan);
-        group.lanes.emplace_back(row_map, row_offset, NA_REAL);
+        group.lanes.emplace_back(
+            leaf_offsets.data(), full_start_row, NA_REAL);
         group.destination_indices.push_back(observed_pos - 1U);
         group.component_weights.push_back(weights[choice_index]);
         if (group.lanes.size() == kExactLaneTileSize) {
@@ -395,10 +326,13 @@ inline void build_observation_likelihood_schedule(
     const std::vector<semantic::Index> &exact_variant_index_by_component_code,
     const std::vector<ExactVariantPlan> &exact_plans,
     const std::vector<std::vector<int>> &exact_leaf_row_offsets_by_variant,
+    const std::size_t global_leaf_count,
     SEXP dataSEXP,
-    ObservationLikelihoodSchedule *schedule) {
+  ObservationLikelihoodSchedule *schedule) {
   const auto layout = read_prepared_trial_layout(dataSEXP);
-  const auto table = read_prepared_data_view(dataSEXP, layout);
+  const SEXP component_column =
+      trusted_data_column(dataSEXP, layout.component_col);
+  const int *component = INTEGER(component_column);
   const bool has_observation_bounds = layout.observation.present();
   const auto observation_data =
       has_observation_bounds
@@ -409,35 +343,29 @@ inline void build_observation_likelihood_schedule(
   const double *rt =
       REAL(trusted_data_column(dataSEXP, layout.time_cols[1]));
 
-  schedule->trial_count = layout.trials.size();
+  schedule->trial_count =
+      static_cast<std::size_t>(XLENGTH(component_column)) /
+      global_leaf_count;
   schedule->component_count = component_mixture.present_component_codes.size();
   schedule->onset = layout.onset_col >= 0
                         ? REAL(trusted_data_column(
                               dataSEXP, layout.onset_col))
                         : nullptr;
-  schedule->groups.clear();
-  schedule->response_groups.clear();
-  schedule->truncated_trials.clear();
   schedule->ranked_by_variant.assign(exact_plans.size(), {});
-  schedule->latent_trials.clear();
-  schedule->ranked_columns = {};
   std::vector<std::size_t> contribution_count(
       schedule->trial_count, 0U);
   bool unit_contributions = true;
 
   const int *second_rank_labels = nullptr;
-  const double *second_rank_times = nullptr;
   if (observation_is_identity && layout.max_rank > 1) {
     schedule->ranked_columns = make_exact_trial_columns(dataSEXP, layout);
     second_rank_labels = schedule->ranked_columns.labels[2U];
-    second_rank_times = schedule->ranked_columns.times[2U];
   }
 
   for (std::size_t trial_index = 0U;
        trial_index < schedule->trial_count;
        ++trial_index) {
-    const auto trial_row = layout.trials[trial_index];
-    const auto row = static_cast<R_xlen_t>(trial_row.start_row);
+    const auto row = static_cast<R_xlen_t>(trial_index * global_leaf_count);
     const auto observed_label =
         integer_cell_is_na(label, row)
             ? semantic::kInvalidIndex
@@ -452,19 +380,15 @@ inline void build_observation_likelihood_schedule(
       }
       schedule->truncated_trials[trial_index] = 1U;
     }
-    const bool latent_trial = integer_cell_is_na(table.component, row);
+    const bool latent_trial = integer_cell_is_na(component, row);
 
     int rank_count = 0;
     if (second_rank_labels != nullptr &&
-        (!integer_cell_is_na(second_rank_labels, row) ||
-         !Rcpp::NumericVector::is_na(second_rank_times[row]))) {
+        !integer_cell_is_na(second_rank_labels, row)) {
       for (int rank = 1; rank <= layout.max_rank; ++rank) {
         const auto *rank_labels =
             schedule->ranked_columns.labels[static_cast<std::size_t>(rank)];
-        const auto *rank_times =
-            schedule->ranked_columns.times[static_cast<std::size_t>(rank)];
-        if (integer_cell_is_na(rank_labels, row) &&
-            Rcpp::NumericVector::is_na(rank_times[row])) {
+        if (integer_cell_is_na(rank_labels, row)) {
           break;
         }
         ++rank_count;
@@ -472,8 +396,7 @@ inline void build_observation_likelihood_schedule(
     }
 
     if (latent_trial && schedule->component_count > 1U) {
-      schedule->latent_trials.push_back(
-          LatentTrialScheduleEntry{trial_index, static_cast<int>(row)});
+      schedule->latent_trials.push_back(trial_index);
     }
     const std::size_t choice_count =
         latent_trial ? component_mixture.present_component_codes.size() : 1U;
@@ -483,35 +406,17 @@ inline void build_observation_likelihood_schedule(
       const auto component_code =
           latent_trial
               ? component_mixture.present_component_codes[choice_index]
-              : static_cast<semantic::Index>(table.component[row]);
-      if (component_code <= 0 ||
-          component_code >= static_cast<semantic::Index>(
-                                component_plans_by_code.size())) {
-        continue;
-      }
+              : static_cast<semantic::Index>(component[row]);
       const auto &component_plan =
           component_plans_by_code[static_cast<std::size_t>(component_code)];
-      if (!component_plan.present) {
-        continue;
-      }
-      const auto variant_index = resolve_variant_index_by_component_code(
-          component_code, exact_variant_index_by_component_code);
-      if (variant_index == semantic::kInvalidIndex ||
-          static_cast<std::size_t>(variant_index) >= exact_plans.size()) {
-        continue;
-      }
+      const auto variant_index = exact_variant_index_by_component_code[
+          static_cast<std::size_t>(component_code)];
 
-      const int *row_map = nullptr;
-      if (latent_trial) {
-        row_map = exact_leaf_row_offsets_by_variant[
-                      static_cast<std::size_t>(variant_index)]
-                      .data();
-      }
+      const auto parameter_row = static_cast<int>(
+          trial_index * global_leaf_count);
       ObservationScheduleEntry entry{
           trial_index,
-          row,
-          row_map,
-          static_cast<int>(trial_row.start_row),
+          parameter_row,
           observed_rt,
           latent_trial && schedule->component_count > 1U
               ? static_cast<semantic::Index>(choice_index)
@@ -548,11 +453,6 @@ inline void build_observation_likelihood_schedule(
         if (known_response) {
           const auto state_code = missing_rt_observation_state_code(
               component_plan, observed_label);
-          if (state_code == semantic::kInvalidIndex ||
-              static_cast<std::size_t>(state_code) >=
-                  component_plan.probability_plans_by_state_code.size()) {
-            continue;
-          }
           selected_plan = &observation_probability_plan_for_state(
               component_plan, state_code);
         }
@@ -582,9 +482,6 @@ inline void build_observation_likelihood_schedule(
       } else {
         const auto state_code = observation_state_code(
             component_plan, observed_label, observed_rt);
-        if (state_code == semantic::kInvalidIndex) {
-          continue;
-        }
         const auto &plan =
             observation_log_plan_for_state(component_plan, state_code);
         entry.observed_time =
@@ -621,7 +518,10 @@ inline void build_observation_likelihood_schedule(
     group.lanes.reserve(group.entries.size());
     for (const auto &entry : group.entries) {
       group.lanes.emplace_back(
-          entry.row_map, entry.row_offset, entry.observed_time);
+          exact_leaf_row_offsets_by_variant[
+              static_cast<std::size_t>(group.variant_index)].data(),
+          entry.row_offset,
+          entry.observed_time);
     }
     group.lanes.materialize_physical_rows(
         exact_plans[static_cast<std::size_t>(group.variant_index)]
@@ -643,7 +543,8 @@ inline void build_observation_likelihood_schedule(
     group.upper.reserve(group.entries.size());
     for (const auto &entry : group.entries) {
       group.lanes.emplace_back(
-          entry.observation.row_map,
+          exact_leaf_row_offsets_by_variant[
+              static_cast<std::size_t>(group.variant_index)].data(),
           entry.observation.row_offset,
           NA_REAL);
       group.lower.push_back(entry.lower);
@@ -663,6 +564,7 @@ inline void evaluate_observation_likelihood_trial_values_lanes(
     const std::vector<semantic::Index> &exact_variant_index_by_component_code,
     const std::vector<ExactVariantPlan> &exact_plans,
     const std::vector<std::vector<int>> &exact_leaf_row_offsets_by_variant,
+    const std::size_t global_leaf_count,
     SEXP paramsSEXP,
     SEXP dataSEXP,
     const double min_ll,
@@ -679,6 +581,7 @@ inline void evaluate_observation_likelihood_trial_values_lanes(
         exact_variant_index_by_component_code,
         exact_plans,
         exact_leaf_row_offsets_by_variant,
+        global_leaf_count,
         dataSEXP,
         &replacement);
     schedule = std::move(replacement);
@@ -726,22 +629,21 @@ inline void evaluate_observation_likelihood_trial_values_lanes(
             ? 0U
             : trial_count * schedule.component_count,
         0.0);
-    for (const auto &latent : schedule.latent_trials) {
-      if (!trial_is_selected(ok, latent.trial_index)) {
+    for (const auto trial_index : schedule.latent_trials) {
+      if (!trial_is_selected(ok, trial_index)) {
         continue;
       }
       resolve_component_weights(
           component_mixture,
-          component_mixture.present_component_codes,
           trusted_params,
-          latent.parameter_row,
+          static_cast<int>(trial_index * global_leaf_count),
           &component_weights);
       std::copy_n(
           component_weights.begin(),
           schedule.component_count,
           latent_weights.begin() +
               static_cast<std::ptrdiff_t>(
-                  latent.trial_index * schedule.component_count));
+                  trial_index * schedule.component_count));
     }
   }
 
@@ -931,7 +833,10 @@ inline void evaluate_observation_likelihood_trial_values_lanes(
         continue;
       }
       observation_lanes.emplace_back(
-          entry.row_map, entry.row_offset, entry.observed_time);
+          exact_leaf_row_offsets_by_variant[
+              static_cast<std::size_t>(group.variant_index)].data(),
+          entry.row_offset,
+          entry.observed_time);
       active_entries.push_back(&entry);
       ++lane_count;
       if (lane_count == kExactLaneTileSize) {
@@ -975,7 +880,8 @@ inline void evaluate_observation_likelihood_trial_values_lanes(
         continue;
       }
       observation_lanes.emplace_back(
-          observation.row_map,
+          exact_leaf_row_offsets_by_variant[
+              static_cast<std::size_t>(group.variant_index)].data(),
           observation.row_offset,
           NA_REAL);
       active_response_entries.push_back(&entry);
@@ -1023,10 +929,12 @@ inline void evaluate_observation_likelihood_trial_values_lanes(
       }
       ranked_lanes.emplace_back(
           parameter_matrix,
-          entry.row_map,
+          exact_leaf_row_offsets_by_variant[variant].data(),
           entry.row_offset,
           ExactTrialView{
-              entry.row, entry.rank_count, &schedule.ranked_columns});
+              static_cast<R_xlen_t>(entry.row_offset),
+              entry.rank_count,
+              &schedule.ranked_columns});
       if (!overwrite_unmasked) {
         active_entries.push_back(&entry);
       }
@@ -1054,8 +962,7 @@ inline void evaluate_observation_likelihood_trial_values_lanes(
       if (!schedule.truncated_trials.empty() &&
           schedule.truncated_trials[trial] != 0U) {
         const double denominator =
-            trial < denominator_loglik.size() &&
-                    std::isfinite(denominator_loglik[trial]) &&
+            std::isfinite(denominator_loglik[trial]) &&
                     denominator_scaled_sums[trial] > 0.0
                 ? (denominator_scaled_sums[trial] == 1.0
                        ? denominator_loglik[trial]

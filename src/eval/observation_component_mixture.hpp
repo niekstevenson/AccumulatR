@@ -2,13 +2,11 @@
 
 #include <Rcpp.h>
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
 
 #include "observation_model.hpp"
-#include "trial_data.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
@@ -53,14 +51,11 @@ struct ComponentMixturePlan {
 
 inline void resolve_component_weights(
     const ComponentMixturePlan &mixture,
-    const std::vector<semantic::Index> &component_codes,
     const TrustedParamMatrix &params,
     const int row,
     std::vector<double> *weights) {
-  weights->assign(component_codes.size(), 0.0);
-  if (component_codes.empty()) {
-    return;
-  }
+  const auto &component_codes = mixture.present_component_codes;
+  weights->resize(component_codes.size());
 
   if (mixture.mode != ComponentMixtureMode::Sample) {
     for (std::size_t i = 0; i < component_codes.size(); ++i) {
@@ -68,64 +63,38 @@ inline void resolve_component_weights(
           mixture.component_by_code[static_cast<std::size_t>(component_codes[i])]
               .fixed_weight;
     }
-  } else {
-    double sum_nonref = 0.0;
-    for (const auto code : mixture.present_component_codes) {
-      if (code == mixture.reference_component_code) {
-        continue;
-      }
-      const auto &component =
-          mixture.component_by_code[static_cast<std::size_t>(code)];
-      double weight = component.fixed_weight;
-      if (component.weight_param_index >= 0) {
-        weight = params.component_weight(row, component.weight_param_index);
-      }
-      if (!std::isfinite(weight) || weight < 0.0) {
-        return;
-      }
-      sum_nonref += weight;
-    }
-    if (!std::isfinite(sum_nonref) || sum_nonref > 1.0) {
-      return;
-    }
-    for (std::size_t i = 0; i < component_codes.size(); ++i) {
-      const auto code = component_codes[i];
-      if (code == mixture.reference_component_code) {
-        (*weights)[i] = 1.0 - sum_nonref;
-      } else {
-        const auto &component =
-            mixture.component_by_code[static_cast<std::size_t>(code)];
-        (*weights)[i] = component.weight_param_index >= 0
-                            ? params.component_weight(
-                                  row, component.weight_param_index)
-                            : component.fixed_weight;
-      }
-    }
+    return;
   }
 
-  double total = 0.0;
-  for (const auto weight : *weights) {
+  double sum_nonref = 0.0;
+  for (std::size_t i = 0; i < component_codes.size(); ++i) {
+    const auto code = component_codes[i];
+    if (code == mixture.reference_component_code) {
+      continue;
+    }
+    const auto &component =
+        mixture.component_by_code[static_cast<std::size_t>(code)];
+    const double weight = component.weight_param_index >= 0
+                              ? params.component_weight(
+                                    row, component.weight_param_index)
+                              : component.fixed_weight;
     if (!std::isfinite(weight) || weight < 0.0) {
       weights->assign(component_codes.size(), 0.0);
       return;
     }
-    total += weight;
+    (*weights)[i] = weight;
+    sum_nonref += weight;
   }
-  if (!(total > 0.0)) {
+  if (!std::isfinite(sum_nonref) || sum_nonref > 1.0) {
     weights->assign(component_codes.size(), 0.0);
     return;
   }
-  const double inv_total = 1.0 / total;
-  for (auto &weight : *weights) {
-    weight *= inv_total;
+  for (std::size_t i = 0; i < component_codes.size(); ++i) {
+    if (component_codes[i] == mixture.reference_component_code) {
+      (*weights)[i] = 1.0 - sum_nonref;
+      break;
+    }
   }
-}
-
-inline semantic::Index resolve_variant_index_by_component_code(
-    const semantic::Index component_code,
-    const std::vector<semantic::Index> &exact_variant_index_by_component_code) {
-  const auto idx = static_cast<std::size_t>(component_code);
-  return exact_variant_index_by_component_code[idx];
 }
 
 } // namespace detail

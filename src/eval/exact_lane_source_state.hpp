@@ -171,10 +171,7 @@ public:
       if (physical_row_epoch_[leaf] != physical_row_current_epoch_) {
         for (std::size_t lane = 0U; lane < active_lane_count_; ++lane) {
           const auto *row_map = active_row_maps_[lane];
-          resolved[lane] = active_row_offsets_[lane] +
-                           (row_map == nullptr
-                                ? static_cast<int>(leaf)
-                                : row_map[leaf]);
+          resolved[lane] = active_row_offsets_[lane] + row_map[leaf];
         }
         physical_row_epoch_[leaf] = physical_row_current_epoch_;
       }
@@ -205,10 +202,8 @@ public:
       return true;
     }
     const auto source = static_cast<std::size_t>(source_id);
-    return !(source < sequence->exact_times.size() &&
-             std::isfinite(sequence->exact_times[source])) &&
-           !(source < sequence->upper_bounds.size() &&
-             std::isfinite(sequence->upper_bounds[source]));
+    return !std::isfinite(sequence->exact_times[source]) &&
+           !std::isfinite(sequence->upper_bounds[source]);
   }
 
   double sequence_lower_bound(const std::size_t lane) const noexcept {
@@ -227,9 +222,7 @@ public:
       return std::numeric_limits<double>::quiet_NaN();
     }
     const auto source = static_cast<std::size_t>(source_id);
-    return source < sequence->exact_times.size()
-               ? sequence->exact_times[source]
-               : std::numeric_limits<double>::quiet_NaN();
+    return sequence->exact_times[source];
   }
 
   double sequence_upper_bound(
@@ -241,9 +234,7 @@ public:
       return std::numeric_limits<double>::infinity();
     }
     const auto source = static_cast<std::size_t>(source_id);
-    return source < sequence->upper_bounds.size()
-               ? sequence->upper_bounds[source]
-               : std::numeric_limits<double>::infinity();
+    return sequence->upper_bounds[source];
   }
 
   bool expr_upper_bound(const std::size_t lane,
@@ -254,10 +245,6 @@ public:
       return false;
     }
     const auto expr = static_cast<std::size_t>(expr_id);
-    if (expr >= sequence->expr_upper_bounds.size() ||
-        expr >= sequence->expr_upper_normalizers.size()) {
-      return false;
-    }
     const double time = sequence->expr_upper_bounds[expr];
     const double normalizer = sequence->expr_upper_normalizers[expr];
     if (!std::isfinite(time) || !(normalizer > 0.0)) {

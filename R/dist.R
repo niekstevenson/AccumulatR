@@ -31,9 +31,6 @@
 
 .dist_param_values <- function(par, dist) {
   param_names <- dist_param_names(dist)
-  if (length(param_names) == 0L) {
-    stop(sprintf("Unknown distribution '%s'", dist), call. = FALSE)
-  }
   values <- lapply(param_names, function(name) .dist_param_scalar(par, name))
   names(values) <- param_names
   values
@@ -419,19 +416,22 @@ dist_rdm_rng <- function(n, v, B, A, s) {
   out + t0
 }
 
-.dist_make_entry <- function(dist, pdf_fun, cdf_fun, rng_fun) {
+.dist_make_entry <- function(dist, params, pdf_fun, cdf_fun, rng_fun) {
   force(dist)
+  force(params)
   force(pdf_fun)
   force(cdf_fun)
   force(rng_fun)
   if (identical(dist, "exgauss")) {
     return(list(
+      params = params,
       r = function(n, par) .dist_exgauss_shifted_rng(n, par),
       d = function(x, par) .dist_exgauss_shifted_pdf(x, par),
       p = function(x, par) .dist_exgauss_shifted_cdf(x, par)
     ))
   }
   list(
+    params = params,
     r = function(n, par) .dist_shifted_rng(rng_fun, n, par, dist),
     d = function(x, par) .dist_shifted_eval(pdf_fun, x, par, dist),
     p = function(x, par) .dist_shifted_eval(cdf_fun, x, par, dist)
@@ -441,17 +441,18 @@ dist_rdm_rng <- function(n, v, B, A, s) {
 dist_registry <- local({
   reg <- new.env(parent = emptyenv())
   families <- list(
-    lognormal = list(pdf = dist_lognormal_pdf, cdf = dist_lognormal_cdf, rng = dist_lognormal_rng),
-    gamma = list(pdf = dist_gamma_pdf, cdf = dist_gamma_cdf, rng = dist_gamma_rng),
-    exgauss = list(pdf = dist_exgauss_pdf, cdf = dist_exgauss_cdf, rng = dist_exgauss_rng),
-    lba = list(pdf = dist_lba_pdf, cdf = dist_lba_cdf, rng = dist_lba_rng),
-    rdm = list(pdf = dist_rdm_pdf, cdf = dist_rdm_cdf, rng = dist_rdm_rng)
+    lognormal = list(params = c("m", "s"), pdf = dist_lognormal_pdf, cdf = dist_lognormal_cdf, rng = dist_lognormal_rng),
+    gamma = list(params = c("shape", "rate"), pdf = dist_gamma_pdf, cdf = dist_gamma_cdf, rng = dist_gamma_rng),
+    exgauss = list(params = c("mu", "sigma", "tau"), pdf = dist_exgauss_pdf, cdf = dist_exgauss_cdf, rng = dist_exgauss_rng),
+    lba = list(params = c("v", "B", "A", "sv"), pdf = dist_lba_pdf, cdf = dist_lba_cdf, rng = dist_lba_rng),
+    rdm = list(params = c("v", "B", "A", "s"), pdf = dist_rdm_pdf, cdf = dist_rdm_cdf, rng = dist_rdm_rng)
   )
 
   for (dist in names(families)) {
     family_fns <- families[[dist]]
     reg[[dist]] <- .dist_make_entry(
       dist = dist,
+      params = family_fns$params,
       pdf_fun = family_fns$pdf,
       cdf_fun = family_fns$cdf,
       rng_fun = family_fns$rng

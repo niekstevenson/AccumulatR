@@ -110,7 +110,7 @@ engine_loglik <- function(structure, params, data_df, min_ll = -1e12, sum = TRUE
   params_df <- build_param_matrix(
     parameter_structure,
     params,
-    trial_df = prepared
+    n_trials = length(unique(prepared$trials))
   )
   as.numeric(log_likelihood(ctx, prepared, params_df, min_ll = min_ll, sum = sum))
 }

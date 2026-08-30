@@ -73,7 +73,7 @@ ctx <- make_context(model)
 params_df_true <- build_param_matrix(
   model,
   true_params,
-  trial_df = prepared
+  n_trials = n_trials
 )
 
 ll_true <- as.numeric(log_likelihood(ctx, prepared, params_df_true))
@@ -103,7 +103,7 @@ independent_ctx <- make_context(model_independent)
 params_df_independent <- build_param_matrix(
   model_independent,
   true_params,
-  trial_df = independent_prepared
+  n_trials = n_trials
 )
 
 ll_independent <- as.numeric(log_likelihood(
@@ -140,7 +140,7 @@ neg_loglik <- function(theta) {
   params_df <- build_param_matrix(
     model,
     est,
-    trial_df = prepared
+    n_trials = n_trials
   )
   ll <- log_likelihood(ctx, prepared, params_df)
   -as.numeric(ll)
@@ -153,7 +153,6 @@ start <- c(
   log_go2.s = log(0.12)
 )
 
-set.seed(123456)
 fit <- optim(
   start,
   neg_loglik,
@@ -163,16 +162,12 @@ fit <- optim(
 ```
 
 ```{r include=FALSE}
-load_vignette_result <- function(name) {
-  candidates <- c(
-    file.path("vignettes", "data", paste0(name, ".RData")),
-    file.path("data", paste0(name, ".RData"))
-  )
-  path <- candidates[file.exists(candidates)][1]
-  load(path, envir = knitr::knit_global())
-}
-
-load_vignette_result("trigger_model")
+fit <- list(par = c(
+  go1.m = -1.2032386501665,
+  log_go1.s = -1.67246934766387,
+  go2.m = -1.05352509067962,
+  log_go2.s = -1.72490151888658
+))
 ```
 
 ```{r}

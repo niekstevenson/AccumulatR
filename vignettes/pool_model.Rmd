@@ -86,7 +86,7 @@ neg_loglik <- function(theta) {
   params_df <- build_param_matrix(
     model,
     est,
-    trial_df = prepared
+    n_trials = n_trials
   )
   ll <- log_likelihood(ctx, prepared, params_df)
   -as.numeric(ll)
@@ -99,7 +99,6 @@ start <- c(
   log_B.s = log(0.12)
 )
 
-set.seed(123456)
 fit <- optim(
   start,
   neg_loglik,
@@ -109,16 +108,12 @@ fit <- optim(
 ```
 
 ```{r include=FALSE}
-load_vignette_result <- function(name) {
-  candidates <- c(
-    file.path("vignettes", "data", paste0(name, ".RData")),
-    file.path("data", paste0(name, ".RData"))
-  )
-  path <- candidates[file.exists(candidates)][1]
-  load(path, envir = knitr::knit_global())
-}
-
-load_vignette_result("pool_model")
+fit <- list(par = c(
+  A_pool.m = -1.27492271041843,
+  log_A_pool.s = -1.82886689693142,
+  B.m = -1.27316533219117,
+  log_B.s = -1.73226146113574
+))
 ```
 
 ```{r}

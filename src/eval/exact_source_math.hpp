@@ -65,10 +65,8 @@ template <std::uint8_t Mask>
       q);
 }
 
-inline ExactSourceFill exact_source_impossible_fill(
-    const std::uint8_t mask) {
-  ExactSourceFill fill;
-  return fill;
+inline ExactSourceFill exact_source_impossible_fill() {
+  return {};
 }
 
 inline ExactSourceFill exact_source_certain_fill(const std::uint8_t mask) {
@@ -88,7 +86,7 @@ inline ExactSourceFill exact_source_forced_fill(
   if (relation == ExactRelation::Before || relation == ExactRelation::At) {
     return exact_source_certain_fill(mask);
   }
-  return exact_source_impossible_fill(mask);
+  return exact_source_impossible_fill();
 }
 
 inline bool exact_source_relation_forces_fill(
@@ -111,7 +109,7 @@ inline ExactSourceFill exact_source_conditionalize(
     const ExactSourceFill lower,
     const std::uint8_t mask) {
   if (!std::isfinite(lower.survival) || !(lower.survival > 0.0)) {
-    return exact_source_impossible_fill(mask);
+    return exact_source_impossible_fill();
   }
   ExactSourceFill out;
   if ((mask & kLeafChannelPdf) != 0U) {
@@ -135,7 +133,7 @@ inline ExactSourceFill exact_source_conditionalize_between(
     const std::uint8_t mask) {
   const double mass = upper.cdf - lower.cdf;
   if (!std::isfinite(mass) || !(mass > 0.0)) {
-    return exact_source_impossible_fill(mask);
+    return exact_source_impossible_fill();
   }
   ExactSourceFill out;
   if ((mask & kLeafChannelPdf) != 0U) {

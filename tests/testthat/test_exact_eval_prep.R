@@ -16,10 +16,6 @@ testthat::test_that("compressed prepared trials expand after compact ok filterin
   full_params <- build_param_matrix(structure, params, n_trials = 5)
   compressed_params <- build_param_matrix(structure, params, n_trials = 2)
 
-  testthat::expect_identical(
-    attr(compressed, "expand", exact = TRUE),
-    c(1L, 1L, 2L, 1L, 2L)
-  )
   testthat::expect_equal(
     log_likelihood(ctx, compressed, compressed_params),
     log_likelihood(ctx, full, full_params),

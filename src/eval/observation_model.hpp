@@ -70,12 +70,11 @@ struct ObservedBranch {
 
 struct ComponentObservationPlan {
   bool present{false};
-  bool direct_no_response{false};
   semantic::Index missing_rt_state_offset{semantic::kInvalidIndex};
   std::vector<std::vector<ObservedBranch>> keep_by_code;
   std::vector<std::vector<ObservedBranch>> missing_rt_by_code;
   std::vector<ObservedBranch> finite_observed_branches;
-  std::vector<ObservedBranch> missing_all_branches;
+  bool has_missing_outcomes{false};
   ObservationProbabilityPlan finite_response_plan;
   std::vector<ObservationProbabilityPlan> log_plans_by_state_code;
   std::vector<ObservationProbabilityPlan> probability_plans_by_state_code;
@@ -101,9 +100,7 @@ inline semantic::Index observation_state_code(
     const semantic::Index observed_code,
     const double observed_rt) {
   if (observed_code == semantic::kInvalidIndex) {
-    return Rcpp::NumericVector::is_na(observed_rt)
-               ? missing_all_observation_state_code()
-               : semantic::kInvalidIndex;
+    return missing_all_observation_state_code();
   }
   return Rcpp::NumericVector::is_na(observed_rt)
              ? missing_rt_observation_state_code(component_plan, observed_code)
@@ -286,25 +283,18 @@ inline ObservationProbabilityPlan make_missing_rt_probability_plan(
     const ComponentObservationPlan &component_plan,
     const std::size_t observed_code) {
   std::vector<ObservedBranch> branches;
-  if (observed_code < component_plan.keep_by_code.size()) {
-    branches.insert(
-        branches.end(),
-        component_plan.keep_by_code[observed_code].begin(),
-        component_plan.keep_by_code[observed_code].end());
-  }
-  if (observed_code < component_plan.missing_rt_by_code.size()) {
-    branches.insert(
-        branches.end(),
-        component_plan.missing_rt_by_code[observed_code].begin(),
-        component_plan.missing_rt_by_code[observed_code].end());
-  }
+  const auto &keep = component_plan.keep_by_code[observed_code];
+  const auto &missing = component_plan.missing_rt_by_code[observed_code];
+  branches.reserve(keep.size() + missing.size());
+  branches.insert(branches.end(), keep.begin(), keep.end());
+  branches.insert(branches.end(), missing.begin(), missing.end());
   return make_weighted_probability_plan(branches);
 }
 
 inline ObservationProbabilityPlan make_missing_all_probability_plan(
-    const ComponentObservationPlan &component_plan) {
-  if (component_plan.direct_no_response &&
-      component_plan.missing_all_branches.empty()) {
+    const ComponentObservationPlan &component_plan,
+    const bool direct_no_response) {
+  if (direct_no_response && !component_plan.has_missing_outcomes) {
     return make_no_response_probability_plan();
   }
   return make_complement_probability_plan(
@@ -312,10 +302,8 @@ inline ObservationProbabilityPlan make_missing_all_probability_plan(
 }
 
 inline void compile_component_observation_probability_plans(
-    ComponentObservationPlan *component_plan) {
-  if (component_plan == nullptr) {
-    return;
-  }
+    ComponentObservationPlan *component_plan,
+    const bool direct_no_response) {
   const auto n_codes = component_plan->keep_by_code.size();
   component_plan->missing_rt_state_offset =
       static_cast<semantic::Index>(n_codes);
@@ -355,47 +343,19 @@ inline void compile_component_observation_probability_plans(
   }
   component_plan->probability_plans_by_state_code[
       static_cast<std::size_t>(missing_all_observation_state_code())] =
-          make_missing_all_probability_plan(*component_plan);
+          make_missing_all_probability_plan(
+              *component_plan, direct_no_response);
   component_plan->log_plans_by_state_code[
       static_cast<std::size_t>(missing_all_observation_state_code())] =
           wrap_observation_plan_log(
               component_plan->probability_plans_by_state_code[
                   static_cast<std::size_t>(
                       missing_all_observation_state_code())]);
-}
-
-inline void compile_observation_probability_plans(
-    std::vector<ComponentObservationPlan> *plans) {
-  if (plans == nullptr) {
-    return;
-  }
-  for (auto &plan : *plans) {
-    if (plan.present) {
-      compile_component_observation_probability_plans(&plan);
-    }
-  }
-}
-
-inline void prune_component_observation_planning_state(
-    ComponentObservationPlan *component_plan) {
-  if (component_plan == nullptr) {
-    return;
-  }
   std::vector<std::vector<ObservedBranch>>().swap(component_plan->keep_by_code);
   std::vector<std::vector<ObservedBranch>>().swap(
       component_plan->missing_rt_by_code);
   std::vector<ObservedBranch>().swap(component_plan->finite_observed_branches);
-  std::vector<ObservedBranch>().swap(component_plan->missing_all_branches);
-}
-
-inline void prune_observation_planning_state(
-    std::vector<ComponentObservationPlan> *plans) {
-  if (plans == nullptr) {
-    return;
-  }
-  for (auto &plan : *plans) {
-    prune_component_observation_planning_state(&plan);
-  }
+  component_plan->has_missing_outcomes = false;
 }
 
 inline bool string_cell_is_na(const Rcpp::CharacterVector &column,
@@ -647,7 +607,7 @@ inline std::vector<ComponentObservationPlan> build_component_observation_plans(
 
         semantic::Index observed_code = branch.first;
         if (map_missing) {
-          plan.missing_all_branches.push_back(branch.second);
+          plan.has_missing_outcomes = true;
           observed_code = semantic::kInvalidIndex;
           branch.second.rt_kind = ObservedRtKind::Missing;
         } else if (mapped_code != semantic::kInvalidIndex) {

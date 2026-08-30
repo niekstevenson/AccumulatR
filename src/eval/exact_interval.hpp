@@ -145,8 +145,7 @@ inline void exact_add_response_endpoint(
        request > 0U;
        --request) {
     const auto previous_lane = workspace->endpoint_lanes[request - 1U];
-    if (lanes.row_maps[previous_lane] != lanes.row_maps[lane] ||
-        lanes.row_offsets[previous_lane] != lanes.row_offsets[lane]) {
+    if (lanes.row_offsets[previous_lane] != lanes.row_offsets[lane]) {
       break;
     }
     if (workspace->endpoint_times[request - 1U] == time) {
@@ -314,9 +313,7 @@ inline void exact_any_response_probability_between_lanes(
     ExactIntervalLaneWorkspace *workspace,
     std::vector<double> *out) {
   const bool direct_terminal =
-      plan.no_response.direct_leaf_failure_product &&
-      !plan.no_response.leaf_indices.empty() &&
-      plan.finite_response_survival_root_id != semantic::kInvalidIndex;
+      plan.no_response.direct_leaf_failure_product;
   if (!direct_terminal) {
     exact_finite_response_probability_between_lanes(
         plan, lanes, lower, upper, exact_workspace, workspace, out);

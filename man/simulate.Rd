@@ -10,8 +10,7 @@ simulate(
   trial_df = NULL,
   seed = NULL,
   keep_detail = FALSE,
-  keep_component = NULL,
-  layout = c("auto", "rectangular", "long")
+  keep_component = NULL
 )
 }
 \arguments{
@@ -19,9 +18,9 @@ simulate(
 
 \item{params_df}{Trial-level parameter values.}
 
-\item{trial_df}{Optional data frame used to condition the simulation. When it
-includes a `racer` column, `onset` and `component` values are matched
-by `trials` and racer. Otherwise, values apply at the trial level.}
+\item{trial_df}{Optional trial-by-accumulator conditioning table containing
+complete `trials`/`racer` blocks in model order. It may supply per-trial
+`component` and per-accumulator `onset` values.}
 
 \item{seed}{Optional random-number seed.}
 
@@ -30,10 +29,6 @@ by `trials` and racer. Otherwise, values apply at the trial level.}
 \item{keep_component}{Whether to keep the chosen mixture component in the
 output when the model has multiple components. If `NULL`, fixed mixtures
 keep the component label and sampled mixtures drop it.}
-
-\item{layout}{Parameter layout. `"rectangular"` expects rows ordered by trial
-and racer. `"long"` expects rows aligned to `trial_df` or inferable
-from `component`. `"auto"` chooses automatically.}
 }
 \value{
 A data frame of simulated behavioral data. For standard models this

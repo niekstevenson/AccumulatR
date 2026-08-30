@@ -70,16 +70,27 @@ testthat::test_that("go-component likelihood matches the simple A/B race", {
   params_df_guarded <- build_param_matrix(
     guarded,
     params_guarded,
-    trial_df = prepared_guarded
+    n_trials = length(unique(prepared_guarded$trials))
   )
   params_df_simple <- build_param_matrix(
     simple,
     params_simple,
-    trial_df = prepared_simple
+    n_trials = length(unique(prepared_simple$trials))
   )
 
   ll_guarded <- as.numeric(log_likelihood(ctx_guarded, prepared_guarded, params_df_guarded))
   ll_simple <- as.numeric(log_likelihood(ctx_simple, prepared_simple, params_df_simple))
 
   testthat::expect_equal(ll_guarded, ll_simple, tolerance = 1e-8)
+})
+
+testthat::test_that("outcome component restrictions are non-empty", {
+  spec <- race_spec() |>
+    add_accumulator("A", "lognormal") |>
+    add_outcome("A", "A", options = list(component = character()))
+
+  testthat::expect_error(
+    finalize_model(spec),
+    "one or more unique declared components"
+  )
 })

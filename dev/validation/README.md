@@ -1,6 +1,6 @@
 # Validation
 
-This folder contains a hand-derived validation harness for the rebuild likelihood engine.
+This folder contains hand-derived checks for the compiled likelihood engine.
 
 Run it from the repo root with:
 

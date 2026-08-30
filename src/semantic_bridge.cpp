@@ -159,14 +159,13 @@ Rcpp::List complexity_metrics_list(
               aggregate_max_integral_depth));
 }
 
-void loglik_trials_context(SEXP contextSEXP,
-                           SEXP paramsSEXP,
-                           SEXP dataSEXP,
-                           SEXP okSEXP,
-                           const double min_ll,
-                           double *out) {
-  const auto &ctx =
-      accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
+void loglik_trials_context(
+    const accumulatr::eval::detail::NativeLikelihoodContext &ctx,
+    SEXP paramsSEXP,
+    SEXP dataSEXP,
+    SEXP okSEXP,
+    const double min_ll,
+    double *out) {
   auto &workspace = evaluator_workspace(ctx);
   const int *ok = Rf_isNull(okSEXP) ? nullptr : LOGICAL(okSEXP);
   accumulatr::eval::detail::evaluate_observation_likelihood_trial_values_lanes(
@@ -176,6 +175,7 @@ void loglik_trials_context(SEXP contextSEXP,
       ctx.exact_variant_index_by_component_code,
       ctx.exact_plans,
       ctx.exact_leaf_row_offsets_by_variant,
+      ctx.global_leaf_count,
       paramsSEXP,
       dataSEXP,
       min_ll,
@@ -189,12 +189,13 @@ Rcpp::NumericVector loglik_context(SEXP contextSEXP,
                                    SEXP dataSEXP,
                                    SEXP okSEXP,
                                    const double min_ll) {
-  const SEXP startsSEXP =
-      accumulatr::eval::detail::trusted_data_attr(
-          dataSEXP, "trials_start_rows");
-  Rcpp::NumericVector compact(XLENGTH(startsSEXP));
+  const auto &ctx =
+      accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
+  Rcpp::NumericVector compact(
+      XLENGTH(VECTOR_ELT(dataSEXP, 0)) /
+      static_cast<R_xlen_t>(ctx.global_leaf_count));
   loglik_trials_context(
-      contextSEXP,
+      ctx,
       paramsSEXP,
       dataSEXP,
       okSEXP,
@@ -263,8 +264,10 @@ void accumulatr_loglik_trials_ccallable(SEXP contextSEXP,
                                         double min_ll,
                                         double *out) {
   try {
+    const auto &ctx =
+        accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
     loglik_trials_context(
-        contextSEXP,
+        ctx,
         paramsSEXP,
         dataSEXP,
         okSEXP,
@@ -291,8 +294,7 @@ void accumulatr_register_ccallables(DllInfo *dll) {
 
 // [[Rcpp::export]]
 SEXP semantic_response_probabilities_context_cpp(SEXP contextSEXP,
-                                                 SEXP paramsSEXP,
-                                                 SEXP layoutSEXP) {
+                                                 SEXP paramsSEXP) {
   const auto &ctx =
       accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
   auto &workspace = evaluator_workspace(ctx);
@@ -303,7 +305,7 @@ SEXP semantic_response_probabilities_context_cpp(SEXP contextSEXP,
       ctx.exact_plans,
       ctx.exact_leaf_row_offsets_by_variant,
       ctx.outcome_count,
+      ctx.global_leaf_count,
       paramsSEXP,
-      layoutSEXP,
       &workspace.observation);
 }

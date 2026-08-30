@@ -240,47 +240,10 @@ private:
   }
 };
 
-struct CompiledMathConditionKey {
-  bool impossible{false};
-  std::vector<semantic::Index> source_ids;
-  std::vector<std::uint8_t> relations;
-
-  bool operator==(const CompiledMathConditionKey &other) const noexcept {
-    return impossible == other.impossible &&
-           source_ids == other.source_ids &&
-           relations == other.relations;
-  }
-};
-
-struct CompiledMathConditionKeyHash {
-  std::size_t operator()(const CompiledMathConditionKey &key) const noexcept {
-    std::size_t seed = 0;
-    hash_combine(&seed, key.impossible ? 1U : 0U);
-    for (const auto source_id : key.source_ids) {
-      hash_combine(&seed, static_cast<std::size_t>(source_id));
-    }
-    for (const auto relation : key.relations) {
-      hash_combine(&seed, static_cast<std::size_t>(relation));
-    }
-    return seed;
-  }
-
-private:
-  static void hash_combine(std::size_t *seed, const std::size_t value) noexcept {
-    *seed ^= value + 0x9e3779b97f4a7c15ULL + (*seed << 6U) + (*seed >> 2U);
-  }
-};
-
 enum class CompiledMathTimeSlot : semantic::Index {
   Observed = 0,
   Active = 1,
   Zero = 2
-};
-
-struct CompiledMathCondition {
-  bool impossible{false};
-  std::vector<semantic::Index> source_ids;
-  std::vector<std::uint8_t> relations;
 };
 
 struct CompiledMathProgram {
@@ -288,7 +251,6 @@ struct CompiledMathProgram {
   std::vector<semantic::Index> child_nodes;
   std::vector<CompiledMathRoot> roots;
   std::vector<semantic::Index> root_schedule_nodes;
-  std::vector<CompiledMathCondition> conditions;
   std::vector<CompiledMathIntegralKernel> integral_kernels;
   std::vector<CompiledMathSourceProductTerm> source_product_terms;
   std::vector<CompiledMathSourceValueFactor>
@@ -314,11 +276,6 @@ struct CompiledMathProgram {
       semantic::Index,
       CompiledMathNodeKeyHash>
       node_index;
-  std::unordered_map<
-      CompiledMathConditionKey,
-      semantic::Index,
-      CompiledMathConditionKeyHash>
-      condition_index;
 };
 
 } // namespace detail

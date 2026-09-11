@@ -1301,7 +1301,7 @@ dist_param_names <- function(dist) {
 
 #' List the free parameters implied by a model
 #'
-#' @param model A `race_spec` object.
+#' @param model A `race_spec` or finalized `model_structure` object.
 #' @return A character vector of parameter names.
 #' @examples
 #' spec <- race_spec()
@@ -1310,9 +1310,12 @@ dist_param_names <- function(dist) {
 #' par_names(spec)
 #' @export
 par_names <- function(model) {
-  spec <- .validate_race_spec_input(model, "par_names")
-  params <- unname(.parameter_name_lookup(spec))
-  params[!duplicated(params)]
+  lookup <- if (inherits(model, "model_structure")) {
+    model$prep$parameter_lookup
+  } else {
+    .parameter_name_lookup(.validate_race_spec_input(model, "par_names"))
+  }
+  unique(unname(lookup))
 }
 
 #' Create trial-level parameter values

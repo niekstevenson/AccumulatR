@@ -298,7 +298,7 @@ inline void exact_finite_response_probability_between_lanes(
       workspace->upper.data(),
       evaluate,
       &workspace->adaptive,
-      out);
+      out, 1e-8, 1e-6);
   for (double &value : *out) {
     value = clamp_probability(value);
   }
@@ -536,7 +536,7 @@ inline void exact_integrated_outcome_probability_between_lanes(
       workspace->upper.data(),
       evaluate,
       &workspace->adaptive,
-      out);
+      out, 1e-8, 1e-6);
   for (double &value : *out) {
     value = clamp_probability(value);
   }

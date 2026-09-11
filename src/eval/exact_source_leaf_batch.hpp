@@ -131,22 +131,10 @@ inline void prepare_normal_lanes(
     const double value = z[i];
     const double abs_z = std::fabs(value);
     if constexpr (NeedCdf) {
-      double factor = abs_z > 37.0
-                          ? 0.0
-                          : (abs_z < kNormalHartSplit
-                                 ? normal_hart_ratio(abs_z)
-                                 : 1.0 / (kSqrtTwoPi *
-                                          normal_hart_fraction(abs_z)));
-      factors[i] = std::copysign(factor, value <= 0.0 ? 1.0 : -1.0);
+      factors[i] = prepare_normal_cdf(value);
     }
     exponent_arguments[i] = -0.5 * abs_z * abs_z;
   }
-}
-
-inline double finish_normal_cdf(const double factor,
-                                const double exponential) noexcept {
-  const double tail = std::fabs(factor) * exponential;
-  return std::signbit(factor) ? 1.0 - tail : tail;
 }
 
 inline void finish_normal_cdf_lanes(
@@ -386,21 +374,23 @@ inline void evaluate_exgauss_leaf_batch(
   for (std::size_t lane = 0U; lane < count; ++lane) {
     const auto i = input->positions[lane];
     const double inv_tau = 1.0 / tau[i];
-    const double sigma_sq = sigma[i] * sigma[i];
-    const double tau_sq = tau[i] * tau[i];
     const double sigma_over_tau = sigma[i] * inv_tau;
     const double lower_z = -mu[i] / sigma[i];
     const double z = (x[i] - mu[i]) / sigma[i];
-    exponent_arguments[lane] = lower_z;
+    exponent_arguments[lane] = -lower_z;
     exponent_arguments[count + lane] = lower_z - sigma_over_tau;
     exponent_arguments[2U * count + lane] = z - sigma_over_tau;
     if constexpr (need_cdf) {
-      exponent_arguments[3U * count + lane] = z;
+      exponent_arguments[3U * count + lane] = -z;
     }
-    exponent_arguments[normal_count * count + lane] =
-        sigma_sq / (2.0 * tau_sq) - (0.0 - mu[i]) * inv_tau;
-    exponent_arguments[(normal_count + 1U) * count + lane] =
-        sigma_sq / (2.0 * tau_sq) - (x[i] - mu[i]) * inv_tau;
+    const auto tail_exponent = [sigma_over_tau](const double z) {
+      const double w = z - sigma_over_tau;
+      const double scale = sigma_over_tau * (0.5 * sigma_over_tau - z);
+      // Combine the exponential with the normal tail before exponentiating.
+      return w <= 0.0 ? -0.5 * z * z : scale;
+    };
+    exponent_arguments[normal_count * count + lane] = tail_exponent(lower_z);
+    exponent_arguments[(normal_count + 1U) * count + lane] = tail_exponent(z);
   }
   prepare_normal_lanes<true>(
       exponent_arguments, normal_count * count,
@@ -413,15 +403,20 @@ inline void evaluate_exgauss_leaf_batch(
   const auto *q = input->q();
   for (std::size_t lane = 0U; lane < count; ++lane) {
     const auto i = input->positions[lane];
-    const double lower_cdf = clamp_probability(
-        normal_cdf[lane] -
+    const auto tail_factor = [&](const std::size_t slot, const double z) {
+      const double w = z - sigma[i] / tau[i];
+      if (w < -37.0) return normal_tail_factor(-w);
+      return w <= 0.0 ? factors[slot * count + lane]
+                      : normal_cdf[slot * count + lane];
+    };
+    const double lower_survival =
+        normal_cdf[lane] +
         exponentials[normal_count * count + lane] *
-            normal_cdf[count + lane]);
-    const double lower_survival = 1.0 - lower_cdf;
-    if (!(lower_survival > 0.0)) {
+            tail_factor(1U, -mu[i] / sigma[i]);
+    if (!(lower_survival > 0.0) || !std::isfinite(lower_survival)) {
       continue;
     }
-    const double x_tail = normal_cdf[2U * count + lane];
+    const double x_tail = tail_factor(2U, (x[i] - mu[i]) / sigma[i]);
     const double x_exponential =
         exponentials[(normal_count + 1U) * count + lane];
     double base_pdf = 0.0;
@@ -431,10 +426,10 @@ inline void evaluate_exgauss_leaf_batch(
                  lower_survival;
     }
     if constexpr (need_cdf) {
-      const double raw_cdf = clamp_probability(
-          normal_cdf[3U * count + lane] - x_exponential * x_tail);
+      const double survival =
+          normal_cdf[3U * count + lane] + x_exponential * x_tail;
       base_cdf = clamp_probability(
-          (raw_cdf - lower_cdf) / lower_survival);
+          1.0 - survival / lower_survival);
     }
     source_lane_store_fill_masked<Mask>(
         out, i,

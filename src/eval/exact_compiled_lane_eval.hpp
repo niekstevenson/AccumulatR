@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "exact_source_lane_eval.hpp"
+#include "exact_adaptive.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
@@ -19,7 +20,6 @@ struct CompiledLaneScratch {
     positions.resize(count);
     parents.resize(count);
     times.resize(count);
-    weights.resize(count);
     values.resize(count);
     child_values.resize(count);
     products.resize(count);
@@ -29,7 +29,9 @@ struct CompiledLaneScratch {
   std::vector<std::size_t> positions;
   std::vector<std::size_t> parents;
   std::vector<double> times;
-  std::vector<double> weights;
+  std::vector<double> integral_lower;
+  std::vector<double> integral_upper;
+  AdaptiveLaneWorkspace adaptive;
   std::vector<double> values;
   std::vector<double> child_values;
   std::vector<double> products;
@@ -413,52 +415,24 @@ inline void evaluate_compiled_lane_integral_node(
   const auto &kernel = program.integral_kernels[
       static_cast<std::size_t>(node.integral_kernel_slot)];
   auto &scratch = executor->scratch(integral_depth * 4U);
-  constexpr auto parent_tile =
-      exact_expanded_parent_lane_tile_size<
-          quadrature::kGenericFiniteOrder>();
-  scratch.ensure(kExactExpandedLaneTileSize);
-  out->assign(lane_count, 0.0);
-  bool any_children = false;
-  for (std::size_t request_begin = 0U;
-       request_begin < lane_count;
-       request_begin += parent_tile) {
-    const auto request_end =
-        std::min(lane_count, request_begin + parent_tile);
-    std::size_t child_count = 0U;
-    for (std::size_t request = request_begin;
-         request < request_end;
-         ++request) {
-      const auto lane = static_cast<std::size_t>(
-          compiled_frame_lane(lanes, request));
-      const double upper = compiled_lane_node_time(node, *parent, lane);
-      if (!(upper > 0.0)) {
-        continue;
-      }
-      const auto cache_pos = parent->integral_cache_pos(
-          node.integral_kernel_slot, lane);
-      if (parent->cache_epoch[cache_pos] == parent->cache_current_epoch) {
-        (*out)[request] = parent->cache_values[cache_pos];
-        continue;
-      }
-      const auto nodes = quadrature::map_rule_to_finite_interval<
-          quadrature::kGenericFiniteOrder>(0.0, upper);
-      for (std::size_t q = 0; q < quadrature::kGenericFiniteOrder; ++q) {
-        scratch.parents[child_count] = lane;
-        scratch.positions[child_count] = request;
-        scratch.times[child_count] = nodes.nodes[q];
-        scratch.weights[child_count] = nodes.weights[q];
-        ++child_count;
-      }
+  scratch.ensure(kAdaptiveNodeBatchSize);
+  scratch.integral_lower.assign(lane_count, 0.0);
+  scratch.integral_upper.resize(lane_count);
+  for (std::size_t request = 0U; request < lane_count; ++request) {
+    const auto lane = static_cast<std::size_t>(compiled_frame_lane(lanes, request));
+    const auto cache_pos = parent->integral_cache_pos(node.integral_kernel_slot, lane);
+    scratch.integral_upper[request] =
+        parent->cache_epoch[cache_pos] == parent->cache_current_epoch
+            ? 0.0 : compiled_lane_node_time(node, *parent, lane);
+  }
+  auto evaluate = [&](const double *times, const std::size_t *requests,
+                      const std::size_t child_count, double *values) {
+    for (std::size_t i = 0U; i < child_count; ++i) {
+      scratch.parents[i] = compiled_frame_lane(lanes, requests[i]);
     }
-    if (child_count == 0U) {
-      continue;
-    }
-    any_children = true;
-
     auto &child = executor->lanes.integral_frame(integral_depth, child_count);
     child.copy_lanes_from(*parent, scratch.parents.data(), child_count);
-    child.set_time_plane(
-        kernel.bind_time_id, scratch.times.data(), child_count);
+    child.set_time_plane(kernel.bind_time_id, times, child_count);
     auto &child_values = scratch.child_values;
     const auto &execution = child.has_sequence_history
                                 ? kernel.execution
@@ -501,22 +475,21 @@ inline void evaluate_compiled_lane_integral_node(
           integral_depth + 1U);
     }
 
-    for (std::size_t child_index = 0;
-         child_index < child_count;
-         ++child_index) {
-      const auto request = scratch.positions[child_index];
-      const double value = child_values[child_index];
-      if (std::isfinite(value) && value != 0.0) {
-        (*out)[request] += scratch.weights[child_index] * value;
-      }
+    for (std::size_t i = 0U; i < child_count; ++i) {
+      values[i] = std::isfinite(child_values[i]) ? child_values[i] : 0.0;
     }
-  }
-  if (!any_children) {
-    return;
-  }
+  };
+  adaptive_integrate_lane_batch(
+      lane_count, scratch.integral_lower.data(), scratch.integral_upper.data(),
+      evaluate, &scratch.adaptive, out);
   for (std::size_t request = 0; request < lane_count; ++request) {
     const auto lane = static_cast<std::size_t>(
         compiled_frame_lane(lanes, request));
+    const auto cache_pos = parent->integral_cache_pos(node.integral_kernel_slot, lane);
+    if (parent->cache_epoch[cache_pos] == parent->cache_current_epoch) {
+      (*out)[request] = parent->cache_values[cache_pos];
+      continue;
+    }
     if (!(compiled_lane_node_time(node, *parent, lane) > 0.0)) {
       continue;
     }
@@ -525,8 +498,6 @@ inline void evaluate_compiled_lane_integral_node(
                 ? clamp_probability(value)
                 : (std::isfinite(value) ? clean_signed_value(value) : 0.0);
     (*out)[request] = value;
-    const auto cache_pos = parent->integral_cache_pos(
-        node.integral_kernel_slot, lane);
     parent->cache_epoch[cache_pos] = parent->cache_current_epoch;
     parent->cache_values[cache_pos] = value;
   }

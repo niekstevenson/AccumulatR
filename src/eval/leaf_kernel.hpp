@@ -47,6 +47,24 @@ inline double normal_hart_fraction(const double z) noexcept {
          1.0 / (z + 2.0 / (z + 3.0 / (z + 4.0 / (z + 13.0 / 20.0))));
 }
 
+inline double normal_tail_factor(const double z) noexcept {
+  return z < kNormalHartSplit
+             ? normal_hart_ratio(z)
+             : 1.0 / (kSqrtTwoPi * normal_hart_fraction(z));
+}
+
+inline double prepare_normal_cdf(const double value) noexcept {
+  const double z = std::fabs(value);
+  const double factor = z > 37.0 ? 0.0 : normal_tail_factor(z);
+  return std::copysign(factor, value <= 0.0 ? 1.0 : -1.0);
+}
+
+inline double finish_normal_cdf(const double prepared,
+                                const double exponential) noexcept {
+  const double tail = std::fabs(prepared) * exponential;
+  return std::signbit(prepared) ? 1.0 - tail : tail;
+}
+
 constexpr double kRdmAEpsilon = 1e-4;
 constexpr double kRdmLEpsilon = 1e-4;
 constexpr double kRdmKMaximum = 1e6;

@@ -55,13 +55,15 @@ cpp_likelihood <- function(data, model, accumulatr_context = NULL) {
   designs <- EMC2:::get_designs_expanded(data, model)
   constants <- attr(data, "constants")
   if (is.null(constants)) constants <- NA_real_
+  if (!is.null(accumulatr_context)) {
+    attr(data, "AccumulatR_context") <- accumulatr_context
+  }
 
   function(particles) {
     EMC2:::calc_ll(
       particles, data, constants, designs, model$c_name,
       model$bound, model$transform, model$pre_transform,
-      names(model$p_types), min_ll, model$trend,
-      accumulatr_context = accumulatr_context
+      names(model$p_types), min_ll, model$trend
     )
   }
 }
@@ -77,14 +79,13 @@ trial_data <- function(n_trials, scenario) {
   if (scenario == "ordinary") return(data)
 
   data$rt <- 1
-  EMC2::make_missing(
+  EMC2:::make_missing(
     data,
     LT = 0.2,
     LC = 0,
     UC = 0.75,
     UT = 1.5,
-    UCresponse = scenario == "censored_known",
-    rt_resolution = NULL
+    UCresponse = scenario == "censored_known"
   )
 }
 
@@ -242,6 +243,7 @@ summary <- merge(
 summary$accumulatr_over_emc2 <-
   summary$us_per_particle_accumulatr / summary$us_per_particle_emc2
 
+dir.create("dev/scripts/scratch_outputs", showWarnings = FALSE)
 write.csv(
   timings,
   "dev/scripts/scratch_outputs/benchmark_emc2_race_models.csv",

@@ -8,7 +8,6 @@
 namespace accumulatr::eval::quadrature {
 
 constexpr std::size_t kDefaultFiniteOrder = 31;
-constexpr std::size_t kGenericFiniteOrder = 31;
 constexpr std::size_t kDefaultTailOrder = 47;
 
 template <std::size_t N>

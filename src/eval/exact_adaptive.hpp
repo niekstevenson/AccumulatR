@@ -11,8 +11,8 @@ namespace detail {
 
 inline constexpr std::size_t kAdaptiveNodeBatchSize = 512U;
 inline constexpr std::size_t kKronrod15NodeCount = 15U;
-inline constexpr double kAdaptiveAbsoluteTolerance = 1e-8;
-inline constexpr double kAdaptiveRelativeTolerance = 1e-6;
+inline constexpr double kAdaptiveAbsoluteTolerance = 1e-12;
+inline constexpr double kAdaptiveRelativeTolerance = 1e-3;
 inline constexpr std::size_t kAdaptiveMaximumEvaluations = 6000U;
 
 struct AdaptiveLanePanel {
@@ -64,11 +64,13 @@ inline AdaptiveLanePanel adaptive_heap_pop(AdaptiveLaneState *state) {
 }
 
 inline bool adaptive_lane_converged(
-    const AdaptiveLaneState &state) noexcept {
+    const AdaptiveLaneState &state,
+    const double absolute_tolerance,
+    const double relative_tolerance) noexcept {
   return state.error <=
          std::max(
-             kAdaptiveRelativeTolerance * std::fabs(state.value),
-             kAdaptiveAbsoluteTolerance);
+             relative_tolerance * std::fabs(state.value),
+             absolute_tolerance);
 }
 
 inline void adaptive_map_kronrod15_panel(
@@ -181,7 +183,9 @@ inline void adaptive_integrate_lane_batch(
     const double *upper,
     Evaluate &&evaluate,
     AdaptiveLaneWorkspace *workspace,
-    std::vector<double> *out) {
+    std::vector<double> *out,
+    const double absolute_tolerance = kAdaptiveAbsoluteTolerance,
+    const double relative_tolerance = kAdaptiveRelativeTolerance) {
   if (workspace->lanes.size() < lane_count) {
     workspace->lanes.resize(lane_count);
   }
@@ -212,7 +216,7 @@ inline void adaptive_integrate_lane_batch(
     adaptive_heap_push(&state, panel);
     const bool at_limit =
         state.evaluations >= kAdaptiveMaximumEvaluations;
-    if (!adaptive_lane_converged(state) && !at_limit) {
+    if (!adaptive_lane_converged(state, absolute_tolerance, relative_tolerance) && !at_limit) {
       workspace->active.push_back(panel.lane);
     }
   }
@@ -259,7 +263,7 @@ inline void adaptive_integrate_lane_batch(
       state.evaluations += 2U * kKronrod15NodeCount;
       const bool at_limit =
           state.evaluations >= kAdaptiveMaximumEvaluations;
-      if (!adaptive_lane_converged(state) &&
+      if (!adaptive_lane_converged(state, absolute_tolerance, relative_tolerance) &&
           !at_limit &&
           std::isfinite(state.value)) {
         workspace->next_active.push_back(lane);

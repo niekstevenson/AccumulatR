@@ -120,8 +120,8 @@ dist_exgauss_pdf <- function(x, mu, sigma, tau) {
     if (!is.finite(xi)) return(0)
     z <- (xi - mu) / sigma
     exponent <- sigma_sq / (2 * tau_sq) - (xi - mu) * inv_tau
-    tail <- stats::pnorm(z - sigma * inv_tau)
-    out <- inv_tau * exp(exponent) * tail
+    log_tail <- stats::pnorm(z - sigma * inv_tau, log.p = TRUE)
+    out <- inv_tau * exp(exponent + log_tail)
     if (!is.finite(out) || out <= 0) 0 else out
   })
 }
@@ -138,9 +138,9 @@ dist_exgauss_cdf <- function(x, mu, sigma, tau) {
     if (!is.finite(xi)) return(if (xi < 0) 0 else 1)
     z <- (xi - mu) / sigma
     exponent <- sigma_sq / (2 * tau_sq) - (xi - mu) * inv_tau
-    tail <- stats::pnorm(z - sigma * inv_tau)
+    log_tail <- stats::pnorm(z - sigma * inv_tau, log.p = TRUE)
     base <- stats::pnorm(z)
-    min(max(base - exp(exponent) * tail, 0), 1)
+    min(max(base - exp(exponent + log_tail), 0), 1)
   })
 }
 
@@ -361,8 +361,7 @@ dist_rdm_rng <- function(n, v, B, A, s) {
   t0 <- .dist_param_t0(par)
   shifted <- x - t0
   args <- .dist_param_values(par, "exgauss")
-  lower_cdf <- do.call(dist_exgauss_cdf, c(list(0), args))
-  lower_survival <- 1 - lower_cdf
+  lower_survival <- do.call(.dist_exgauss_survival, c(list(0), args))
   out <- rep(0, length(shifted))
   ok <- !is.na(shifted) & shifted > 0 & is.finite(lower_survival) & lower_survival > 0
   if (any(ok)) {
@@ -377,43 +376,40 @@ dist_rdm_rng <- function(n, v, B, A, s) {
   t0 <- .dist_param_t0(par)
   shifted <- x - t0
   args <- .dist_param_values(par, "exgauss")
-  lower_cdf <- do.call(dist_exgauss_cdf, c(list(0), args))
-  lower_survival <- 1 - lower_cdf
+  lower_survival <- do.call(.dist_exgauss_survival, c(list(0), args))
   out <- rep(0, length(shifted))
   ok <- !is.na(shifted) & shifted > 0 & is.finite(lower_survival) & lower_survival > 0
   if (any(ok)) {
-    raw <- do.call(dist_exgauss_cdf, c(list(shifted[ok]), args))
-    out[ok] <- (raw - lower_cdf) / lower_survival
+    survival <- do.call(.dist_exgauss_survival, c(list(shifted[ok]), args))
+    out[ok] <- 1 - survival / lower_survival
   }
   out[!is.finite(out)] <- 0
   pmin(pmax(out, 0), 1)
 }
 
+.dist_exgauss_survival <- function(x, mu, sigma, tau) {
+  z <- (x - mu) / sigma
+  stats::pnorm(-z) + exp((mu - x) / tau + .5 * (sigma / tau)^2 +
+    stats::pnorm(z - sigma / tau, log.p = TRUE))
+}
+
 .dist_exgauss_shifted_rng <- function(n, par) {
-  n_int <- .dist_as_count(n)
-  if (n_int == 0L) {
-    return(numeric(0))
-  }
-  t0 <- .dist_param_t0(par)
-  args <- .dist_param_values(par, "exgauss")
-  out <- numeric(n_int)
-  filled <- 0L
-  attempts <- 0L
-  while (filled < n_int) {
-    attempts <- attempts + 1L
-    if (attempts > 10000L) {
-      stop("exgauss truncation sampler could not draw support above onset + t0", call. = FALSE)
-    }
-    draw <- do.call(dist_exgauss_rng, c(list(n_int - filled), args))
-    keep <- draw[is.finite(draw) & draw > 0]
-    if (length(keep) == 0L) {
-      next
-    }
-    take <- min(length(keep), n_int - filled)
-    out[seq.int(filled + 1L, length.out = take)] <- keep[seq_len(take)]
-    filled <- filled + take
-  }
-  out + t0
+  n <- .dist_as_count(n)
+  mu <- par[["mu"]]
+  sigma <- par[["sigma"]]
+  tau <- par[["tau"]]
+  log_positive <- stats::pnorm(mu / sigma, log.p = TRUE)
+  log_negative <- mu / tau + .5 * (sigma / tau)^2 +
+    stats::pnorm(-mu / sigma - sigma / tau, log.p = TRUE)
+  # For N <= 0, conditioning N + Exp > 0 leaves an exponential residual.
+  # Otherwise draw N conditional on N > 0, then add the exponential.
+  positive <- stats::runif(n) < stats::plogis(log_positive - log_negative)
+  out <- stats::rexp(n, rate = 1 / tau)
+  out[positive] <- out[positive] + mu + sigma * stats::qnorm(
+    log(stats::runif(sum(positive))) + log_positive,
+    lower.tail = FALSE, log.p = TRUE
+  )
+  out + .dist_param_t0(par)
 }
 
 .dist_make_entry <- function(dist, params, pdf_fun, cdf_fun, rng_fun) {

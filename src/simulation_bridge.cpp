@@ -2,20 +2,24 @@
 
 #include "simulation.hpp"
 
+// [[Rcpp::export(rng = false)]]
+SEXP make_simulation_context_cpp() {
+  return R_MakeExternalPtr(nullptr, R_NilValue, R_NilValue);
+}
+
 // [[Rcpp::export]]
-SEXP simulate_cpp(SEXP prep, SEXP cache,
+SEXP simulate_cpp(SEXP prep, SEXP context,
                   SEXP parameters, SEXP component, SEXP onset,
                   const bool keep_detail, const bool keep_component) {
   using namespace accumulatr::simulation;
-  const SEXP native_symbol = Rf_install("native");
-  SEXP native = Rf_findVarInFrame(cache, native_symbol);
-  // Serialization clears external pointers; rebuild once in each receiving worker.
-  if (native == R_UnboundValue || R_ExternalPtrAddr(native) == nullptr) {
-    Rcpp::XPtr<Program> compiled(new Program(Rcpp::List(prep)), true);
-    Rf_defineVar(native_symbol, compiled, cache);
-    native = compiled;
+  auto *native = static_cast<Program *>(R_ExternalPtrAddr(context));
+  // Serialization drops the native address and finalizer; initialize both together.
+  if (native == nullptr) {
+    native = new Program(Rcpp::List(prep));
+    R_SetExternalPtrAddr(context, native);
+    Rcpp::XPtr<Program>(context).setDeleteFinalizer();
   }
-  const auto &program = *static_cast<const Program *>(R_ExternalPtrAddr(native));
+  const auto &program = *native;
   const auto &model = program.model;
   const int n_leaves = model.leaves.size();
   const int stride = Rf_nrows(parameters);

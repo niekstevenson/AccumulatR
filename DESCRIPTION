@@ -19,7 +19,7 @@ BugReports: https://github.com/niekstevenson/AccumulatR/issues
 Encoding: UTF-8
 Depends: R (>= 4.1)
 Imports: 
-    Rcpp,
+    Rcpp (>= 1.1.2),
     stats,
     utils
 Suggests:
@@ -28,7 +28,7 @@ Suggests:
     testthat (>= 3.0.0),
     DiagrammeR
 VignetteBuilder: knitr
-LinkingTo: Rcpp
+LinkingTo: Rcpp (>= 1.1.2)
 SystemRequirements: C++17
 NeedsCompilation: yes
 RoxygenNote: 7.3.3

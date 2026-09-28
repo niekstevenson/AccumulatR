@@ -977,7 +977,7 @@ finalize_model <- function(model) {
   structure <- list(
     model_spec = model,
     prep = .prepare_model(model),
-    simulation = new.env(parent = emptyenv())
+    simulation = make_simulation_context_cpp()
   )
   class(structure) <- c("model_structure", class(structure))
   structure

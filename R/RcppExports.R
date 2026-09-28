@@ -17,7 +17,11 @@ semantic_response_probabilities_context_cpp <- function(contextSEXP, paramsSEXP)
     .Call(`_AccumulatR_semantic_response_probabilities_context_cpp`, contextSEXP, paramsSEXP)
 }
 
-simulate_cpp <- function(prep, cache, parameters, component, onset, keep_detail, keep_component) {
-    .Call(`_AccumulatR_simulate_cpp`, prep, cache, parameters, component, onset, keep_detail, keep_component)
+make_simulation_context_cpp <- function() {
+    .Call(`_AccumulatR_make_simulation_context_cpp`)
+}
+
+simulate_cpp <- function(prep, context, parameters, component, onset, keep_detail, keep_component) {
+    .Call(`_AccumulatR_simulate_cpp`, prep, context, parameters, component, onset, keep_detail, keep_component)
 }
 

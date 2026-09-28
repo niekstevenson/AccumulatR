@@ -1,7 +1,7 @@
 Package: AccumulatR
 Type: Package
 Title: Simulation and Likelihood Tools for Evidence-Accumulation Models
-Version: 0.1.0
+Version: 1.0.0
 Authors@R: c(
     person("Niek", "Stevenson", email = "niek.stevenson@gmail.com", role = c("aut", "cre"))
   )

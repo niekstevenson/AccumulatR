@@ -1,5 +1,5 @@
 pandoc: 3.8.3
-pkgdown: 2.2.0
+pkgdown: 2.2.1
 pkgdown_sha: ~
 articles:
   chained_onset: chained_onset.html
@@ -11,7 +11,7 @@ articles:
   pool_model: pool_model.html
   simple_model: simple_model.html
   trigger_model: trigger_model.html
-last_built: 2026-06-15T11:24Z
+last_built: 2026-09-28T10:21Z
 urls:
   reference: https://niekstevenson.github.io/AccumulatR/reference
   article: https://niekstevenson.github.io/AccumulatR/articles

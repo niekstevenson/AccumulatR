@@ -30,6 +30,7 @@ struct Component {
   std::vector<Index> expressions;
   std::vector<Index> outcomes;
   int readouts{1};
+  int weight_param_index{-1};
 };
 
 struct Program {
@@ -56,6 +57,7 @@ struct Program {
     }
     for (const auto &definition : model.components) {
       Component component;
+      if (!definition.weight_name.empty()) component.weight_param_index = weight_param_count++;
       component.readouts = overrides.containsElementNamed(definition.id.c_str())
           ? Rcpp::as<int>(overrides[definition.id]) : global_readouts;
       std::vector<bool> active(model.leaves.size(), false);
@@ -113,6 +115,7 @@ struct Program {
   std::vector<Index> trigger_rows;
   std::size_t max_pool_members{0};
   int readouts{1};
+  int weight_param_count{0};
 };
 
 // Readiness is the completion of the prerequisites before the releasing event.
@@ -163,8 +166,6 @@ struct Trial {
         const auto trigger = leaf.trigger_index;
         const auto q_row = trigger < 0 ? i : program.trigger_rows[trigger];
         const double q = parameters[q_row];
-        if (!std::isfinite(q) || q < 0.0 || q > 1.0)
-          Rcpp::stop("Trigger failure probabilities q must lie in [0, 1]");
         bool failed;
         if (trigger < 0) {
           failed = R::runif(0.0, 1.0) < q;
@@ -174,9 +175,6 @@ struct Trial {
         }
         if (failed) continue;
         const double t0 = parameters[i + stride];
-        if (!std::isfinite(t0) || t0 < 0.0)
-          Rcpp::stop("Nondecision times t0 must be finite and non-negative");
-        leaf::validate_time_parameters(leaf.dist, parameters + i + 2 * stride, stride);
         value.time = start + t0 + leaf::sample_time(leaf.dist, parameters + i + 2 * stride, stride);
       } else {
         const auto &pool = model.pools[i - model.leaves.size()];
@@ -269,13 +267,17 @@ struct Trial {
       labels[i] = model.outcomes[candidates[i]].label;
       times[i] = result(candidates[i]).time;
     }
+    Rcpp::List outcome_candidates = Rcpp::List::create(
+        Rcpp::Named("label") = labels, Rcpp::Named("time") = times);
+    outcome_candidates.attr("class") = "data.frame";
+    outcome_candidates.attr("row.names") = Rcpp::IntegerVector::create(
+        NA_INTEGER, -static_cast<int>(candidates.size()));
     return Rcpp::List::create(
         Rcpp::Named("component") = model.components[component].id,
         Rcpp::Named("acc_times") = acc_times,
         Rcpp::Named("pool_times") = pool_times,
         Rcpp::Named("event_times") = event_times,
-        Rcpp::Named("outcome_candidates") = Rcpp::DataFrame::create(
-            Rcpp::Named("label") = labels, Rcpp::Named("time") = times));
+        Rcpp::Named("outcome_candidates") = outcome_candidates);
   }
 
   const Program &program;

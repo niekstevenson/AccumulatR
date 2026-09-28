@@ -542,6 +542,8 @@ response_probabilities <- function(context, parameters, include_na = TRUE) {
 #'
 #' Compute the summed log-likelihood by default, or trial-wise log-likelihoods
 #' when `sum = FALSE`.
+#' Inputs must be prepared for the same model; execution does not validate
+#' data layout or parameter domains.
 #'
 #' @param context Context created with `make_context()`.
 #' @param data Prepared data created with `prepare_data()`.

@@ -67,7 +67,6 @@ inline double finish_normal_cdf(const double prepared,
 
 constexpr double kRdmAEpsilon = 1e-4;
 constexpr double kRdmLEpsilon = 1e-4;
-constexpr double kRdmKMaximum = 1e6;
 
 inline double rdm_clamp_drift(const double value) noexcept {
   return value > -kRdmLEpsilon && value < kRdmLEpsilon

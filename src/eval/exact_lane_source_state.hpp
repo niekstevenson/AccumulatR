@@ -303,17 +303,9 @@ inline void exact_compiled_trigger_state_weights_lanes(
                 compiled_state.weight_terms.offset + i)];
     for (std::size_t lane = 0; lane < lane_count; ++lane) {
       double &weight = (*weights)[lane];
-      if (!(weight > 0.0)) {
-        weight = 0.0;
-        continue;
-      }
-      const double q =
-          clamp_probability(
-              exact_trigger_lane_q(lanes, lane, term.leaf_index));
+      if (weight == 0.0) continue;
+      const double q = exact_trigger_lane_q(lanes, lane, term.leaf_index);
       weight *= term.shared_started == 0U ? q : (1.0 - q);
-      if (!(weight > 0.0)) {
-        weight = 0.0;
-      }
     }
   }
 }

@@ -166,10 +166,7 @@ inline void evaluate_lognormal_leaf_batch(
   const auto *meanlog = input->parameter(0U);
   const auto *sdlog = input->parameter(1U);
   for (std::size_t i = 0U; i < input->count; ++i) {
-    const bool valid = input->elapsed()[i] > 0.0 &&
-                       std::isfinite(meanlog[i]) &&
-                       std::isfinite(sdlog[i]) && sdlog[i] > 0.0;
-    z[i] = valid ? (z[i] - meanlog[i]) / sdlog[i] : 0.0;
+    z[i] = input->elapsed()[i] > 0.0 ? (z[i] - meanlog[i]) / sdlog[i] : 0.0;
   }
   prepare_normal_lanes<need_cdf>(
       z, input->count, factors, exponent_arguments);
@@ -182,8 +179,7 @@ inline void evaluate_lognormal_leaf_batch(
   for (std::size_t i = 0U; i < input->count; ++i) {
     auto fill = exact_source_impossible_fill();
     const double x = input->elapsed()[i];
-    if (x > 0.0 && std::isfinite(meanlog[i]) &&
-        std::isfinite(sdlog[i]) && sdlog[i] > 0.0) {
+    if (x > 0.0) {
       fill = exact_source_finish_base_fill<Mask>(
           need_pdf ? kInverseSqrtTwoPi * exponentials[i] /
                          (x * sdlog[i])
@@ -220,9 +216,9 @@ inline void evaluate_lba_leaf_group(
     z[lane] = v[i] / sv[i];
     if constexpr (WideStart) {
       const double zs = x[i] * sv[i];
-      const double cmz = B[i] - x[i] * v[i];
-      z[count + lane] = cmz / zs;
-      z[2U * count + lane] = (cmz - A[i]) / zs;
+      const double lower = B[i] - x[i] * v[i];
+      z[count + lane] = (lower + A[i]) / zs;
+      z[2U * count + lane] = lower / zs;
     } else {
       z[count + lane] = (B[i] / x[i] - v[i]) / sv[i];
     }
@@ -257,8 +253,8 @@ inline void evaluate_lba_leaf_group(
     double base_cdf = 0.0;
     if constexpr (WideStart) {
       const double zs = x[i] * sv[i];
-      const double cmz = B[i] - x[i] * v[i];
-      const double xx = cmz - A[i];
+      const double xx = B[i] - x[i] * v[i];
+      const double cmz = xx + A[i];
       const double cdf_z = cdf[count + lane];
       const double cdf_z_max = cdf[2U * count + lane];
       const double pdf_z =
@@ -302,26 +298,15 @@ inline void evaluate_lba_leaf_batch(
     SourceLaneFill *out) {
   const auto impossible = exact_source_impossible_fill();
   const auto *x = input->elapsed();
-  const auto *v = input->parameter(0U);
-  const auto *B = input->parameter(1U);
   const auto *A = input->parameter(2U);
-  const auto *sv = input->parameter(3U);
   std::size_t wide_count = 0U;
   std::size_t point_begin = input->count;
   for (std::size_t i = 0U; i < input->count; ++i) {
-    source_lane_store_fill_masked<Mask>(out, i, impossible);
-    const bool valid = std::isfinite(x[i]) && x[i] > 0.0 &&
-                       std::isfinite(v[i]) && std::isfinite(B[i]) &&
-                       std::isfinite(A[i]) && std::isfinite(sv[i]) &&
-                       sv[i] > 0.0;
-    if (!valid) {
+    if (!std::isfinite(x[i]) || x[i] <= 0.0) {
+      source_lane_store_fill_masked<Mask>(out, i, impossible);
       continue;
     }
     if (A[i] > 1e-10) {
-      const double zs = x[i] * sv[i];
-      if (!(std::isfinite(zs) && zs > 0.0)) {
-        continue;
-      }
       input->positions[wide_count++] = i;
     } else {
       input->positions[--point_begin] = i;
@@ -352,11 +337,10 @@ inline void evaluate_exgauss_leaf_batch(
   const auto *tau = input->parameter(2U);
   std::size_t count = 0U;
   for (std::size_t i = 0U; i < input->count; ++i) {
-    source_lane_store_fill_masked<Mask>(out, i, impossible);
-    if (std::isfinite(x[i]) && x[i] > 0.0 &&
-        std::isfinite(mu[i]) && std::isfinite(sigma[i]) &&
-        sigma[i] > 0.0 && std::isfinite(tau[i]) && tau[i] > 0.0) {
+    if (std::isfinite(x[i]) && x[i] > 0.0) {
       input->positions[count++] = i;
+    } else {
+      source_lane_store_fill_masked<Mask>(out, i, impossible);
     }
   }
   if (count == 0U) {
@@ -409,6 +393,7 @@ inline void evaluate_exgauss_leaf_batch(
     const double lower_survival =
         finish_normal_cdf(factors[lane], exponentials[lane]) + lower_tail;
     if (!(lower_survival > 0.0) || !std::isfinite(lower_survival)) {
+      source_lane_store_fill_masked<Mask>(out, i, impossible);
       continue;
     }
     double base_pdf = 0.0;
@@ -629,38 +614,17 @@ inline void evaluate_rdm_leaf_batch(
     SourceLaneFill *out) {
   const auto impossible = exact_source_impossible_fill();
   const auto *x = input->elapsed();
-  const auto *v = input->parameter(0U);
-  const auto *B = input->parameter(1U);
   const auto *A = input->parameter(2U);
-  const auto *s = input->parameter(3U);
   std::size_t regular_count = 0U;
   std::size_t degenerate_begin = input->count;
   for (std::size_t i = 0U; i < input->count; ++i) {
-    source_lane_store_fill_masked<Mask>(out, i, impossible);
-    if (!std::isfinite(x[i]) || x[i] <= 0.0 ||
-        !std::isfinite(s[i]) || s[i] <= 0.0) {
-      continue;
-    }
-    const double inv_s = 1.0 / s[i];
-    const double l = rdm_clamp_drift(v[i] * inv_s);
-    if (!std::isfinite(l) || l < 0.0) {
+    if (!std::isfinite(x[i]) || x[i] <= 0.0) {
+      source_lane_store_fill_masked<Mask>(out, i, impossible);
       continue;
     }
     if (A[i] < kRdmAEpsilon) {
-      const double k = B[i] * inv_s;
-      if (!std::isfinite(k) || k <= 0.0 || k > kRdmKMaximum) {
-        continue;
-      }
       input->positions[--degenerate_begin] = i;
     } else {
-      if (!std::isfinite(B[i]) || !std::isfinite(A[i])) {
-        continue;
-      }
-      const double a = std::max(kRdmAEpsilon, 0.5 * A[i] * inv_s);
-      const double k = B[i] * inv_s + a;
-      if (!std::isfinite(a) || !std::isfinite(k)) {
-        continue;
-      }
       input->positions[regular_count++] = i;
     }
   }

@@ -196,7 +196,7 @@ testthat::test_that("exact identity likelihood matches LBA top-1 formula", {
     stringsAsFactors = FALSE
   )
   params <- c(
-    a.v = 2.0, a.B = 1.2, a.A = 0.4, a.sv = 0.6, a.t0 = 0.05,
+    a.v = 2.0, a.B = 0.2, a.A = 0.4, a.sv = 0.6, a.t0 = 0.05,
     b.m = log(0.60), b.s = 0.18, b.t0 = 0.02
   )
   out <- run_public_loglik(spec, trial_df, params)

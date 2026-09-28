@@ -19,6 +19,7 @@ A numeric parameter matrix with one row per trial/accumulator pair.
 \description{
 This expands a named parameter vector into the trial-by-trial format expected
 by `simulate()` and `log_likelihood()`.
+Parameter domains are validated before expansion across trials.
 }
 \examples{
 spec <- race_spec()

@@ -277,7 +277,7 @@ inline void exact_finite_outcome_probability_lanes(
     }
   }
   for (auto &value : *out) {
-    value = std::isfinite(value) ? clamp_probability(value) : 0.0;
+    value = clamp_probability(value);
   }
 }
 
@@ -296,14 +296,14 @@ inline void exact_terminal_no_response_probability_lanes(
         exact_compiled_trigger_shared_started(plan, compiled_state);
     for (const auto leaf_index : plan.no_response.leaf_indices) {
       for (std::size_t lane_index = 0; lane_index < lane_count; ++lane_index) {
-        if (!(products[lane_index] > 0.0)) {
+        if (products[lane_index] == 0.0) {
           continue;
         }
-        products[lane_index] *= clamp_probability(exact_leaf_q_for_trigger_state(
+        products[lane_index] *= exact_leaf_q_for_trigger_state(
             plan.leaf_trigger_index,
             shared_started,
             leaf_index,
-            lanes.q(leaf_index, lane_index)));
+            lanes.q(leaf_index, lane_index));
       }
     }
     for (std::size_t lane_index = 0; lane_index < lane_count; ++lane_index) {
@@ -311,7 +311,7 @@ inline void exact_terminal_no_response_probability_lanes(
     }
   }
   for (auto &value : *out) {
-    value = std::isfinite(value) ? clamp_probability(value) : 0.0;
+    value = clamp_probability(value);
   }
 }
 

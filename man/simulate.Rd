@@ -41,9 +41,11 @@ Simulate behavioral data from a model
 }
 \details{
 Simulation uses R's random-number generator from C++. Its compiled
-plan is cached on the finalized model and rebuilt after serialization.
-Seeds are reproducible within this implementation, but do not reproduce
-the former R simulator's random-number sequence.
+  plan is cached on the finalized model and rebuilt after serialization.
+  Execution trusts the canonical parameter matrix and complete conditioning
+  table supplied by the caller; it does not validate them.
+  Seeds are reproducible within this implementation, but do not reproduce
+  the former R simulator's random-number sequence.
 }
 \examples{
 spec <- race_spec()

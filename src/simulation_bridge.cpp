@@ -3,34 +3,27 @@
 #include "simulation.hpp"
 
 // [[Rcpp::export]]
-Rcpp::DataFrame simulate_cpp(const Rcpp::List &prep, Rcpp::Environment cache,
-                            const Rcpp::NumericMatrix &parameters,
-                            const Rcpp::IntegerVector &component,
-                            Rcpp::Nullable<Rcpp::NumericVector> onset,
-                            const bool keep_detail, const bool keep_component) {
+SEXP simulate_cpp(SEXP prep, SEXP cache,
+                  SEXP parameters, SEXP component, SEXP onset,
+                  const bool keep_detail, const bool keep_component) {
   using namespace accumulatr::simulation;
-  SEXP native = cache.exists("native") ? static_cast<SEXP>(cache["native"]) : R_NilValue;
+  const SEXP native_symbol = Rf_install("native");
+  SEXP native = Rf_findVarInFrame(cache, native_symbol);
   // Serialization clears external pointers; rebuild once in each receiving worker.
-  if (native == R_NilValue || R_ExternalPtrAddr(native) == nullptr) {
-    Rcpp::XPtr<Program> compiled(new Program(prep), true);
-    cache["native"] = compiled;
+  if (native == R_UnboundValue || R_ExternalPtrAddr(native) == nullptr) {
+    Rcpp::XPtr<Program> compiled(new Program(Rcpp::List(prep)), true);
+    Rf_defineVar(native_symbol, compiled, cache);
     native = compiled;
   }
-  const auto &program = *Rcpp::XPtr<Program>(native);
+  const auto &program = *static_cast<const Program *>(R_ExternalPtrAddr(native));
   const auto &model = program.model;
   const int n_leaves = model.leaves.size();
-  const int n_trials = parameters.nrow() / n_leaves;
-  const int stride = parameters.nrow();
-  const auto column_names = Rcpp::as<std::vector<std::string>>(
-      Rcpp::colnames(parameters));
-  std::vector<int> weight_columns;
-  for (const auto &definition : model.components) {
-    const auto found = std::find(column_names.begin(), column_names.end(), definition.weight_name);
-    if (!definition.weight_name.empty() && found == column_names.end())
-      Rcpp::stop("Missing mixture parameter '%s'", definition.weight_name);
-    weight_columns.push_back(definition.weight_name.empty() ? -1 : found - column_names.begin());
-  }
-  const double *onsets = onset.isNotNull() ? REAL(onset.get()) : nullptr;
+  const int stride = Rf_nrows(parameters);
+  const int n_trials = stride / n_leaves;
+  const int weight_start = Rf_ncols(parameters) - program.weight_param_count;
+  const double *parameter_values = REAL(parameters);
+  const int *component_codes = component == R_NilValue ? nullptr : INTEGER(component);
+  const double *onsets = onset == R_NilValue ? nullptr : REAL(onset);
   Rcpp::List output;
   Rcpp::IntegerVector trials(n_trials);
   std::iota(trials.begin(), trials.end(), 1);
@@ -48,27 +41,25 @@ Rcpp::DataFrame simulate_cpp(const Rcpp::List &prep, Rcpp::Environment cache,
   Rcpp::List details(keep_detail ? n_trials : 0);
   Trial trial(program);
   for (int i = 0; i < n_trials; ++i) {
-    if (i % 4096 == 0) Rcpp::checkUserInterrupt();
-    const double *params = parameters.begin() + i * n_leaves;
+    const double *params = parameter_values + i * n_leaves;
     int chosen = 0;
-    if (component[i] == NA_INTEGER) {
+    if (component_codes == nullptr || component_codes[i] == NA_INTEGER) {
       if (model.components.size() > 1) {
         double sampled_total = 0.0;
         for (std::size_t c = 0; c < model.components.size(); ++c) {
-          trial.weights[c] = weight_columns[c] < 0 ? model.components[c].weight
-              : params[weight_columns[c] * stride];
-          if (weight_columns[c] >= 0) sampled_total += trial.weights[c];
+          const int weight_index = program.components[c].weight_param_index;
+          trial.weights[c] = weight_index < 0 ? model.components[c].weight
+              : params[(weight_start + weight_index) * stride];
+          if (weight_index >= 0) sampled_total += trial.weights[c];
         }
         for (std::size_t c = 0; c < model.components.size(); ++c) {
-          if (model.component_mode == "sample" && weight_columns[c] < 0)
+          if (model.component_mode == "sample" && program.components[c].weight_param_index < 0)
             trial.weights[c] = 1.0 - sampled_total;
-          if (!std::isfinite(trial.weights[c]) || trial.weights[c] < 0.0)
-            Rcpp::stop("Mixture weights must be finite, non-negative, and sum to at most one");
         }
         chosen = choose(trial.weights);
       }
     } else {
-      chosen = component[i] - 1;
+      chosen = component_codes[i] - 1;
     }
     const auto &plan = program.components[chosen];
     trial.run(plan, params, stride, onsets == nullptr ? nullptr : onsets + i * n_leaves);
@@ -111,14 +102,18 @@ Rcpp::DataFrame simulate_cpp(const Rcpp::List &prep, Rcpp::Environment cache,
         values[rank] = times[rank][i];
       }
       Rcpp::List detail(details[i]);
-      detail["ranked_outcomes"] = Rcpp::DataFrame::create(
+      Rcpp::List ranked = Rcpp::List::create(
           Rcpp::Named("rank") = ranks, Rcpp::Named("label") = labels,
           Rcpp::Named("time") = values);
+      ranked.attr("class") = "data.frame";
+      ranked.attr("row.names") = Rcpp::IntegerVector::create(NA_INTEGER, -plan.readouts);
+      detail["ranked_outcomes"] = ranked;
       details[i] = detail;
     }
   }
   if (keep_component) output.push_back(components, "component");
-  Rcpp::DataFrame result(output);
-  if (keep_detail) result.attr("details") = details;
-  return result;
+  output.attr("class") = "data.frame";
+  output.attr("row.names") = Rcpp::IntegerVector::create(NA_INTEGER, -n_trials);
+  if (keep_detail) output.attr("details") = details;
+  return output;
 }

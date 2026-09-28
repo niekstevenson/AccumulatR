@@ -1330,6 +1330,7 @@ par_names <- function(model) {
 #'
 #' This expands a named parameter vector into the trial-by-trial format expected
 #' by `simulate()` and `log_likelihood()`.
+#' Parameter domains are validated before expansion across trials.
 #'
 #' @param model Finalized model structure.
 #' @param param_values Named numeric vector of parameter values.
@@ -1395,6 +1396,23 @@ build_param_matrix <- function(model,
     for (j in seq_along(dist_params)) {
       p_vals[[j]] <- param_values[[paste0(acc_id, ".", dist_params[[j]])]]
     }
+    t0 <- param_values[[paste0(acc_id, ".t0")]]
+    valid <- all(is.finite(c(t0, p_vals))) && t0 >= 0 &&
+      switch(tolower(accs[[i]]$dist),
+        lognormal = p_vals[[2]] > 0,
+        gamma = p_vals[[1]] > 0 && p_vals[[2]] > 0,
+        exgauss = p_vals[[2]] > 0 && p_vals[[3]] > 0 &&
+          all(is.finite(c(p_vals[[1]] / p_vals[[2]], p_vals[[2]] / p_vals[[3]]))),
+        lba = p_vals[[2]] >= 0 && p_vals[[3]] >= 0 &&
+          p_vals[[2]] + p_vals[[3]] > 0 && p_vals[[4]] > 0 &&
+          is.finite(p_vals[[1]] / p_vals[[4]]),
+        rdm = all(p_vals[1:3] >= 0) && p_vals[[4]] > 0 &&
+          p_vals[[2]] + p_vals[[3]] > 0 &&
+          all(is.finite(c(p_vals[[1]], p_vals[[2]] + p_vals[[3]]) / p_vals[[4]]))
+      )
+    if (!valid) {
+      stop("Invalid ", accs[[i]]$dist, " parameters for accumulator '", acc_id, "'", call. = FALSE)
+    }
     trigger <- accs[[i]]$shared_trigger_id
     q <- if (is.null(trigger)) {
       0
@@ -1403,7 +1421,7 @@ build_param_matrix <- function(model,
     }
     base_mat[i, ] <- c(
       q,
-      param_values[[paste0(acc_id, ".t0")]],
+      t0,
       p_vals,
       unname(param_values[weight_params])
     )

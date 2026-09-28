@@ -46,6 +46,13 @@ data.frame(
 - `LBA`: `v`, `B`, `A`, and `sv`.
 - `RDM`: `v`, `B`, `A`, and `s`.
 
+For both `LBA` and `RDM`, `A` is the full width of the uniform starting-point
+distribution on `[0, A]`, and `B` is the gap from its upper end to the
+threshold. The absolute threshold is `B + A`, giving a uniform initial
+distance to threshold on `[B, B + A]`. This matches EMC2's convention.
+Both `A` and `B` must be non-negative, with `B + A > 0`; `A = 0` gives a
+fixed starting point.
+
 Outside of these, all accumulators have a non-decision time `t0`. Absence
 probabilities are added with named triggers, not per-accumulator distribution
 parameters. For the `exgauss`, `t0` and `mu` are redundant because both shift

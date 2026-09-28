@@ -2,7 +2,6 @@
 
 #include <Rcpp.h>
 
-#include <cmath>
 #include <cstdint>
 #include <vector>
 
@@ -78,16 +77,8 @@ inline void resolve_component_weights(
                               ? params.component_weight(
                                     row, component.weight_param_index)
                               : component.fixed_weight;
-    if (!std::isfinite(weight) || weight < 0.0) {
-      weights->assign(component_codes.size(), 0.0);
-      return;
-    }
     (*weights)[i] = weight;
     sum_nonref += weight;
-  }
-  if (!std::isfinite(sum_nonref) || sum_nonref > 1.0) {
-    weights->assign(component_codes.size(), 0.0);
-    return;
   }
   for (std::size_t i = 0; i < component_codes.size(); ++i) {
     if (component_codes[i] == mixture.reference_component_code) {

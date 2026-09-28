@@ -15,12 +15,10 @@ models <- list(
     acc_dist = "lba",
     distinct = "v",
     source = c(t0 = "t0", p1 = "v", p2 = "B", p3 = "A", p4 = "sv"),
-    acc_pars = c(A.v = 2.2, B.v = 2.6, B = 1.1, A = 0.3,
+    acc_pars = c(A.v = 2.2, B.v = 2.6, B = 0.8, A = 0.3,
                  sv = 1, t0 = 0.15),
-    emc_theta = c(v_lRA = 2.2, v_lRB = 2.6, sv = log(1),
-                  B = log(0.8), A = log(0.3), t0 = log(0.15)),
-    acc_theta = c(v_lRA = 2.2, v_lRB = 2.6, sv = log(1),
-                  B = log(1.1), A = log(0.3), t0 = log(0.15))
+    theta = c(v_lRA = 2.2, v_lRB = 2.6, sv = log(1),
+                  B = log(0.8), A = log(0.3), t0 = log(0.15))
   ),
   RDM = list(
     emc_model = EMC2::RDM,
@@ -29,9 +27,7 @@ models <- list(
     source = c(t0 = "t0", p1 = "v", p2 = "B", p3 = "A", p4 = "s"),
     acc_pars = c(A.v = 1.8, B.v = 2.2, B = 0.7, A = 0.2,
                  s = 1, t0 = 0.15),
-    emc_theta = c(v_lRA = log(1.8), v_lRB = log(2.2), B = log(0.7),
-                  A = log(0.2), t0 = log(0.15), s = log(1)),
-    acc_theta = c(v_lRA = log(1.8), v_lRB = log(2.2), B = log(0.7),
+    theta = c(v_lRA = log(1.8), v_lRB = log(2.2), B = log(0.7),
                   A = log(0.2), t0 = log(0.15), s = log(1))
   ),
   LNR = list(
@@ -40,9 +36,7 @@ models <- list(
     distinct = "m",
     source = c(t0 = "t0", p1 = "m", p2 = "s"),
     acc_pars = c(A.m = -0.55, B.m = -0.35, s = 0.35, t0 = 0.15),
-    emc_theta = c(m_lRA = -0.55, m_lRB = -0.35,
-                  s = log(0.35), t0 = log(0.15)),
-    acc_theta = c(m_lRA = -0.55, m_lRB = -0.35,
+    theta = c(m_lRA = -0.55, m_lRB = -0.35,
                   s = log(0.35), t0 = log(0.15))
   )
 )
@@ -94,12 +88,8 @@ make_case <- function(definition, n_trials) {
   emc_data <- emc[[1]]$data[[1]]
   emc_model <- emc[[1]]$model()
   theta_names <- attr(emc_data, "p_names")
-  theta <- list(
-    EMC2 = matrix(definition$emc_theta[theta_names], 1L,
-                  dimnames = list(NULL, theta_names)),
-    AccumulatR = matrix(definition$acc_theta[theta_names], 1L,
-                        dimnames = list(NULL, theta_names))
-  )
+  theta <- matrix(definition$theta[theta_names], 1L,
+                  dimnames = list(NULL, theta_names))
 
   acc_model_spec <- AccumulatR::race_spec() |>
     AccumulatR::add_accumulator("A", definition$acc_dist) |>
@@ -160,26 +150,21 @@ for (n_trials in sizes) {
     definition <- models[[model_name]]
     benchmark <- make_case(definition, n_trials)
     n <- particle_counts[[as.character(n_trials)]]
-    particles <- lapply(
-      benchmark$theta,
-      make_particles,
-      n = n,
-      parameter = definition$distinct
-    )
+    particles <- make_particles(benchmark$theta, n, definition$distinct)
 
     check_rows <- seq_len(min(16L, n))
     ll_emc <- drop(benchmark$EMC2(
-      particles$EMC2[check_rows, , drop = FALSE]
+      particles[check_rows, , drop = FALSE]
     ))
     ll_acc <- drop(benchmark$AccumulatR(
-      particles$AccumulatR[check_rows, , drop = FALSE]
+      particles[check_rows, , drop = FALSE]
     ))
     difference <- max(abs(ll_emc - ll_acc)) / n_trials
     max_difference <- max(max_difference, difference)
     stopifnot(difference < 1e-6)
 
     for (package in c("EMC2", "AccumulatR")) {
-      for (warmup in 1:2) benchmark[[package]](particles[[package]])
+      for (warmup in 1:2) benchmark[[package]](particles)
     }
     for (sample in seq_len(samples)) {
       order <- if (sample %% 2L) {
@@ -189,7 +174,7 @@ for (n_trials in sizes) {
       }
       for (package in order) {
         elapsed <- system.time(
-          benchmark[[package]](particles[[package]])
+          benchmark[[package]](particles)
         )[["elapsed"]]
         timings[[length(timings) + 1L]] <- data.frame(
           scenario = "ordinary",

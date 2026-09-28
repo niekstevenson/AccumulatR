@@ -61,16 +61,16 @@ BEGIN_RCPP
 END_RCPP
 }
 // simulate_cpp
-Rcpp::DataFrame simulate_cpp(const Rcpp::List& prep, Rcpp::Environment cache, const Rcpp::NumericMatrix& parameters, const Rcpp::IntegerVector& component, Rcpp::Nullable<Rcpp::NumericVector> onset, const bool keep_detail, const bool keep_component);
+SEXP simulate_cpp(SEXP prep, SEXP cache, SEXP parameters, SEXP component, SEXP onset, const bool keep_detail, const bool keep_component);
 RcppExport SEXP _AccumulatR_simulate_cpp(SEXP prepSEXP, SEXP cacheSEXP, SEXP parametersSEXP, SEXP componentSEXP, SEXP onsetSEXP, SEXP keep_detailSEXP, SEXP keep_componentSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< const Rcpp::List& >::type prep(prepSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Environment >::type cache(cacheSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type parameters(parametersSEXP);
-    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type component(componentSEXP);
-    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type onset(onsetSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type prep(prepSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type cache(cacheSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type parameters(parametersSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type component(componentSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type onset(onsetSEXP);
     Rcpp::traits::input_parameter< const bool >::type keep_detail(keep_detailSEXP);
     Rcpp::traits::input_parameter< const bool >::type keep_component(keep_componentSEXP);
     rcpp_result_gen = Rcpp::wrap(simulate_cpp(prep, cache, parameters, component, onset, keep_detail, keep_component));

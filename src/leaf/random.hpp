@@ -8,44 +8,6 @@
 
 namespace accumulatr::leaf {
 
-inline void validate_time_parameters(const DistKind kind, const double *row,
-                                     const std::ptrdiff_t stride) {
-  for (int i = 0; i < dist_param_count(kind); ++i) {
-    if (!std::isfinite(row[i * stride])) {
-      Rcpp::stop("Simulation parameters must be finite");
-    }
-  }
-  const double p1 = row[0], p2 = row[stride];
-  bool valid = p2 > 0.0;
-  switch (kind) {
-  case DistKind::Lognormal:
-    break;
-  case DistKind::Gamma:
-    valid = valid && p1 > 0.0;
-    break;
-  case DistKind::Exgauss:
-    valid = valid && row[2 * stride] > 0.0 &&
-            std::isfinite(p1 / p2) &&
-            std::isfinite(p2 / row[2 * stride]);
-    break;
-  case DistKind::LBA:
-    valid = valid && row[2 * stride] >= 0.0 &&
-            p2 >= row[2 * stride] && row[3 * stride] > 0.0 &&
-            std::isfinite(p1 / row[3 * stride]);
-    break;
-  case DistKind::RDM:
-    valid = p1 >= 0.0 && p2 >= 0.0 && row[2 * stride] >= 0.0 &&
-            row[3 * stride] > 0.0 &&
-            (p2 + row[2 * stride]) / row[3 * stride] > 0.0 &&
-            std::isfinite(p1 / row[3 * stride]) &&
-            std::isfinite((p2 + row[2 * stride]) / row[3 * stride]);
-    break;
-  }
-  if (!valid) {
-    Rcpp::stop("Invalid simulation parameters for %s", to_string(kind).data());
-  }
-}
-
 inline double positive_normal(const double mean, const double sd) {
   if (mean > 0.0) {
     double value;
@@ -80,16 +42,13 @@ inline double sample_time(const DistKind kind, const double *row,
     const double ratio = p2 / tau;
     const double log_negative = p1 / tau + 0.5 * ratio * ratio +
         R::pnorm(-p1 / p2 - ratio, 0.0, 1.0, true, true);
-    if (std::isnan(log_negative)) {
-      Rcpp::stop("Ex-Gaussian parameters exceed the numerical range for simulation");
-    }
     const bool positive = R::runif(0.0, 1.0) <
         R::plogis(log_positive - log_negative, 0.0, 1.0, true, false);
     // When N <= 0, conditioning N + Exp > 0 leaves an exponential residual.
     return R::rexp(tau) + (positive ? positive_normal(p1, p2) : 0.0);
   }
   case DistKind::LBA: {
-    const double distance = p2 - row[2 * stride] * R::runif(0.0, 1.0);
+    const double distance = p2 + row[2 * stride] * R::runif(0.0, 1.0);
     return distance / positive_normal(p1, row[3 * stride]);
   }
   case DistKind::RDM: {

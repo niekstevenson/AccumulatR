@@ -15,7 +15,7 @@ lba_pdf_ref <- function(x, v, B, A, sv) {
     return(dnorm(B / x, mean = v, sd = sv) * B / (x * x * denom))
   }
   zs <- x * sv
-  cmz <- B - x * v
+  cmz <- B + A - x * v
   cz <- cmz / zs
   cz_max <- (cmz - A) / zs
   pdf <- (v * (pnorm(cz) - pnorm(cz_max)) +
@@ -36,7 +36,7 @@ lba_cdf_ref <- function(x, v, B, A, sv) {
     return(pnorm(B / x, mean = v, sd = sv, lower.tail = FALSE) / denom)
   }
   zs <- x * sv
-  cmz <- B - x * v
+  cmz <- B + A - x * v
   xx <- cmz - A
   cz <- cmz / zs
   cz_max <- xx / zs

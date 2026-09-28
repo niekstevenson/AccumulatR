@@ -616,24 +616,6 @@ inline void exact_order_region_append_expr_factor(
           inclusive));
 }
 
-inline void exact_order_region_append_outcome_gate(
-    ExactRegionCell *term,
-    const std::vector<semantic::Index> &outcome_indices) {
-  exact_region_append_atom(
-      term,
-      exact_region_outcome_atom(
-          ExactRegionAtomKind::OutcomeUnused, outcome_indices));
-}
-
-inline void exact_order_region_append_outcome_used_gate(
-    ExactRegionCell *term,
-    const std::vector<semantic::Index> &outcome_indices) {
-  exact_region_append_atom(
-      term,
-      exact_region_outcome_atom(
-          ExactRegionAtomKind::OutcomeUsed, outcome_indices));
-}
-
 inline void exact_order_region_replace_time(
     ExactRegionCell *term,
     const semantic::Index from_time_id,
@@ -739,14 +721,6 @@ inline ExactRegionCell exact_order_region_intersect_terms(
 	        factor.density,
 	        factor.inclusive);
 	  }
-  for (const auto &outcome_indices :
-       exact_region_outcome_atoms(rhs_term, ExactRegionAtomKind::OutcomeUnused)) {
-    exact_order_region_append_outcome_gate(&out, outcome_indices);
-  }
-  for (const auto &outcome_indices :
-       exact_region_outcome_atoms(rhs_term, ExactRegionAtomKind::OutcomeUsed)) {
-    exact_order_region_append_outcome_used_gate(&out, outcome_indices);
-  }
   return out;
 }
 
@@ -772,30 +746,6 @@ inline void exact_order_region_append_expr(ExactOrderRegionExpr *dst,
       dst->terms.end(),
       std::make_move_iterator(src.terms.begin()),
       std::make_move_iterator(src.terms.end()));
-}
-
-inline ExactOrderRegionExpr exact_order_region_with_outcome_gate(
-    ExactOrderRegionExpr expr,
-    const std::vector<semantic::Index> &outcome_indices) {
-  if (outcome_indices.empty()) {
-    return expr;
-  }
-  for (auto &term : expr.terms) {
-    exact_order_region_append_outcome_gate(&term, outcome_indices);
-  }
-  return expr;
-}
-
-inline ExactOrderRegionExpr exact_order_region_with_outcome_used_gate(
-    ExactOrderRegionExpr expr,
-    const std::vector<semantic::Index> &outcome_indices) {
-  if (outcome_indices.empty()) {
-    return expr;
-  }
-  for (auto &term : expr.terms) {
-    exact_order_region_append_outcome_used_gate(&term, outcome_indices);
-  }
-  return expr;
 }
 
 inline ExactOrderRegionExpr exact_order_region_union(
@@ -1090,8 +1040,7 @@ inline void exact_order_region_canonicalize_term(ExactRegionCell *term) {
     if (!unique_atoms.empty() &&
         atom.kind == unique_atoms.back().kind &&
         exact_region_var_equal(atom.lhs, unique_atoms.back().lhs) &&
-        exact_region_var_equal(atom.rhs, unique_atoms.back().rhs) &&
-        atom.outcome_indices == unique_atoms.back().outcome_indices) {
+        exact_region_var_equal(atom.rhs, unique_atoms.back().rhs)) {
       auto &back = unique_atoms.back();
       if (atom.kind == ExactRegionAtomKind::SourceLower ||
           atom.kind == ExactRegionAtomKind::SourceUpper) {
@@ -1104,52 +1053,7 @@ inline void exact_order_region_canonicalize_term(ExactRegionCell *term) {
     unique_atoms.push_back(atom);
   }
 
-  std::vector<semantic::Index> unused_outcomes;
-  std::vector<ExactRegionAtom> normalized_atoms;
-  normalized_atoms.reserve(unique_atoms.size());
-  for (const auto &atom : unique_atoms) {
-    if (atom.kind == ExactRegionAtomKind::OutcomeUnused) {
-      unused_outcomes.insert(
-          unused_outcomes.end(),
-          atom.outcome_indices.begin(),
-          atom.outcome_indices.end());
-      continue;
-    }
-    normalized_atoms.push_back(atom);
-  }
-  std::sort(unused_outcomes.begin(), unused_outcomes.end());
-  unused_outcomes.erase(
-      std::unique(unused_outcomes.begin(), unused_outcomes.end()),
-      unused_outcomes.end());
-  if (!unused_outcomes.empty()) {
-    normalized_atoms.push_back(
-        exact_region_outcome_atom(
-            ExactRegionAtomKind::OutcomeUnused, unused_outcomes));
-  }
-  for (const auto &atom : normalized_atoms) {
-    if (atom.kind != ExactRegionAtomKind::OutcomeUsed) {
-      continue;
-    }
-    const bool fully_blocked =
-        std::all_of(
-            atom.outcome_indices.begin(),
-            atom.outcome_indices.end(),
-            [&](const semantic::Index outcome_id) {
-              return std::binary_search(
-                  unused_outcomes.begin(),
-                  unused_outcomes.end(),
-                  outcome_id);
-            });
-    if (fully_blocked) {
-      term->impossible = true;
-      return;
-    }
-  }
-  std::sort(
-      normalized_atoms.begin(),
-      normalized_atoms.end(),
-      exact_region_atom_less);
-  term->atoms = std::move(normalized_atoms);
+  term->atoms = std::move(unique_atoms);
 }
 
 inline bool exact_order_region_remove_exact_source_time(

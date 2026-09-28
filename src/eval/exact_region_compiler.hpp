@@ -128,7 +128,7 @@ inline bool exact_order_region_symbolic_transition_at_time(
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
   const auto release_source_id =
-      exact_symbolic_transition_release_source_id(transition);
+      transition.release_source_id;
   if (release_source_id == semantic::kInvalidIndex) {
     return false;
   }
@@ -139,7 +139,7 @@ inline bool exact_order_region_symbolic_transition_at_time(
   ExactOrderRegionExpr readiness;
   if (!exact_order_region_truth_at_time(
           plan,
-          transition.readiness_time_expr.requirements,
+          transition.readiness,
           time_id,
           builder,
           &readiness)) {
@@ -160,7 +160,7 @@ inline bool exact_order_region_symbolic_transition_at_time(
 
   if (!exact_order_region_apply_source_order_facts(
           &region,
-          transition.order_region.source_order_facts,
+          transition.source_order_facts,
           builder)) {
     return false;
   }
@@ -234,7 +234,7 @@ inline bool exact_order_region_expr_transition_not_before_or_after(
   auto scenarios = build_expr_transition_scenarios(plan, expr_id);
   for (const auto &scenario : scenarios) {
     const auto release_source_id =
-        exact_symbolic_transition_release_source_id(scenario.transition);
+        scenario.transition.release_source_id;
     if (release_source_id == semantic::kInvalidIndex) {
       return false;
     }
@@ -759,7 +759,7 @@ inline bool exact_order_region_transition_requirements_at_times(
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
   const auto release_source_id =
-      exact_symbolic_transition_release_source_id(transition);
+      transition.release_source_id;
   ExactOrderRegionExpr region = exact_order_region_one();
   exact_order_region_append_exact(
       &region.terms.back(), release_source_id, release_time_id);
@@ -767,7 +767,7 @@ inline bool exact_order_region_transition_requirements_at_times(
   ExactOrderRegionExpr readiness;
   if (!exact_order_region_truth_at_time(
           plan,
-          transition.readiness_time_expr.requirements,
+          transition.readiness,
           readiness_time_id,
           builder,
           &readiness)) {
@@ -910,10 +910,7 @@ inline bool exact_order_region_truth_at_time(
     const semantic::Index time_id,
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
-  ExactOrderRegionExpr region =
-      guards.empty_value == 0.0
-          ? exact_order_region_zero()
-          : exact_order_region_one();
+  ExactOrderRegionExpr region = exact_order_region_one();
   for (const auto &guard : guards.guards) {
     ExactOrderRegionExpr guard_region;
     if (!exact_order_region_guard_at_time(
@@ -958,7 +955,7 @@ inline bool exact_order_region_target_branches(
     ExactOrderRegionBuilder *builder,
     std::vector<ExactOrderRegionTargetBranch> *out) {
   if (!expose_readiness_time ||
-      !exact_symbolic_transition_has_readiness(transition)) {
+      transition.readiness.empty()) {
     ExactOrderRegionExpr target;
     if (!exact_order_region_target_scenario(
             plan, transition, builder, &target)) {
@@ -976,7 +973,7 @@ inline bool exact_order_region_target_branches(
   const auto zero_time_id =
       static_cast<semantic::Index>(CompiledMathTimeSlot::Zero);
   const auto release_source_id =
-      exact_symbolic_transition_release_source_id(transition);
+      transition.release_source_id;
 
   ExactOrderRegionExpr base = exact_order_region_one();
   exact_order_region_append_exact(
@@ -993,7 +990,7 @@ inline bool exact_order_region_target_branches(
       const semantic::Index readiness_time_id) -> bool {
         if (!exact_order_region_apply_source_order_facts(
                 &branch,
-                transition.order_region.source_order_facts,
+                transition.source_order_facts,
                 builder)) {
           return false;
         }
@@ -1005,7 +1002,7 @@ inline bool exact_order_region_target_branches(
   ExactOrderRegionExpr initial_ready;
   if (!exact_order_region_truth_at_time(
           plan,
-          transition.readiness_time_expr.requirements,
+          transition.readiness,
           zero_time_id,
           builder,
           &initial_ready)) {
@@ -1023,7 +1020,7 @@ inline bool exact_order_region_target_branches(
   ExactOrderRegionExpr readiness;
   if (!exact_order_region_readiness_transition_at_time(
           plan,
-          transition.readiness_time_expr.requirements,
+          transition.readiness,
           readiness_time_id,
           builder,
           &readiness)) {
@@ -1044,7 +1041,7 @@ inline bool exact_order_region_target_branches(
 inline bool exact_order_region_needs_target_readiness_time(
     const ExactOutcomeRegionCompileContext &outcome_context,
     const ExactSymbolicTransitionTime &transition) {
-  if (!exact_symbolic_transition_has_readiness(transition)) {
+  if (transition.readiness.empty()) {
     return false;
   }
   for (const auto &competitor : outcome_context.competitors) {
@@ -1142,12 +1139,6 @@ inline bool exact_order_region_truth_not_at_time(
     const semantic::Index time_id,
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
-  if (guards.guards.empty()) {
-    *out = guards.empty_value == 0.0
-               ? exact_order_region_one()
-               : exact_order_region_zero();
-    return true;
-  }
   ExactOrderRegionExpr combined = exact_order_region_zero();
   for (const auto &guard : guards.guards) {
     ExactOrderRegionExpr failure;
@@ -1170,11 +1161,11 @@ inline bool exact_order_region_transition_requirements_fail_at_times(
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
   ExactOrderRegionExpr failure = exact_order_region_zero();
-  if (exact_symbolic_transition_has_readiness(transition)) {
+  if (!transition.readiness.empty()) {
     ExactOrderRegionExpr readiness_fail;
     if (!exact_order_region_truth_not_at_time(
             plan,
-            transition.readiness_time_expr.requirements,
+            transition.readiness,
             readiness_time_id,
             builder,
             &readiness_fail)) {
@@ -1277,7 +1268,7 @@ inline bool exact_order_region_apply_transition_order_facts(
     ExactOrderRegionBuilder *builder) {
   return exact_order_region_apply_source_order_facts(
       region,
-      transition.order_region.source_order_facts,
+      transition.source_order_facts,
       builder);
 }
 
@@ -1428,7 +1419,7 @@ inline bool exact_order_region_transition_no_strict_precedence(
   const auto observed_time_id =
       static_cast<semantic::Index>(CompiledMathTimeSlot::Observed);
   const auto competitor_source_id =
-      exact_symbolic_transition_release_source_id(competitor);
+      competitor.release_source_id;
   ExactOrderRegionExpr release_not_before = exact_order_region_one();
   exact_order_region_append_lower(
       &release_not_before.terms.back(),
@@ -1567,13 +1558,8 @@ inline bool exact_order_region_transition_support_overlaps_expr(
                planned_source_support_for_id(plan, source_id),
                expr_support);
   };
-  if (source_overlaps(exact_symbolic_transition_release_source_id(transition))) {
+  if (source_overlaps(transition.release_source_id)) {
     return true;
-  }
-  for (const auto source_id : transition.active_sources) {
-    if (source_overlaps(source_id)) {
-      return true;
-    }
   }
   const auto guard_overlaps =
       [&](const ExactTransitionGuard &guard) {
@@ -1584,7 +1570,7 @@ inline bool exact_order_region_transition_support_overlaps_expr(
         return expr_supports_overlap(plan, guard.subject_id, expr_id);
       };
   for (const auto &guard :
-       transition.readiness_time_expr.requirements.guards) {
+       transition.readiness.guards) {
     if (guard_overlaps(guard)) {
       return true;
     }
@@ -1654,99 +1640,6 @@ inline bool exact_order_region_competitor_plan_non_win(
       return false;
     }
     non_win = exact_order_region_conjoin(non_win, scenario_non_win);
-  }
-  *out = std::move(non_win);
-  return true;
-}
-
-inline ExactOrderRegionExpr exact_order_region_gate_non_win(
-    ExactOrderRegionExpr non_win,
-    const std::vector<semantic::Index> &outcome_indices) {
-  if (outcome_indices.empty() ||
-      (non_win.terms.size() == 1U &&
-       non_win.terms.front().sign == 1.0 &&
-       non_win.terms.front().atoms.empty() &&
-       non_win.terms.front().equalities.empty() &&
-       !non_win.terms.front().impossible)) {
-    return non_win;
-  }
-  auto gated = exact_order_region_with_outcome_used_gate(
-      exact_order_region_one(), outcome_indices);
-  exact_order_region_append_expr(
-      &gated,
-      exact_order_region_with_outcome_gate(
-          std::move(non_win), outcome_indices));
-  return gated;
-}
-
-inline bool exact_order_region_factored_competitor_non_win(
-    const ExactVariantBuildState &plan,
-    const ExactOutcomeRegionCompileContext &outcome_context,
-    const ExactSymbolicTransitionScenario &target,
-    bool *has_factor,
-    ExactOrderRegionExpr *out) {
-  const auto observed_time_id =
-      static_cast<semantic::Index>(CompiledMathTimeSlot::Observed);
-  ExactOrderRegionExpr non_win = exact_order_region_one();
-  *has_factor = false;
-  for (const auto &competitor : outcome_context.competitors) {
-    if (!exact_order_region_competitor_can_factor(
-            plan, target, competitor)) {
-      continue;
-    }
-    ExactOrderRegionExpr competitor_non_win;
-    if (!exact_order_region_expr_relation_factor(
-            competitor.expr_root,
-            observed_time_id,
-            false,
-            true,
-            &competitor_non_win)) {
-      return false;
-    }
-    non_win = exact_order_region_conjoin(
-        std::move(non_win),
-        exact_order_region_gate_non_win(
-            std::move(competitor_non_win),
-            competitor.outcome_indices));
-    *has_factor = true;
-  }
-  *out = std::move(non_win);
-  return true;
-}
-
-inline bool exact_order_region_competitor_non_win(
-    const ExactVariantBuildState &plan,
-    const ExactOutcomeRegionCompileContext &outcome_context,
-    const ExactSymbolicTransitionScenario &target,
-    const ExactOrderRegionExpr &target_branch,
-    const semantic::Index target_readiness_time_id,
-    const bool factor_competitors_outside,
-    ExactOrderRegionBuilder *builder,
-    ExactOrderRegionExpr *out) {
-  ExactOrderRegionExpr non_win = exact_order_region_one();
-  for (const auto &competitor : outcome_context.competitors) {
-    if (factor_competitors_outside &&
-        exact_order_region_competitor_can_factor(
-            plan, target, competitor)) {
-      continue;
-    }
-    ExactOrderRegionExpr competitor_non_win;
-    if (!exact_order_region_competitor_plan_non_win(
-            plan,
-            target,
-            competitor,
-            target_branch,
-            target_readiness_time_id,
-            builder,
-            &competitor_non_win)) {
-      return false;
-    }
-    non_win =
-        exact_order_region_conjoin(
-            non_win,
-            exact_order_region_gate_non_win(
-                std::move(competitor_non_win),
-                competitor.outcome_indices));
   }
   *out = std::move(non_win);
   return true;
@@ -2041,132 +1934,211 @@ inline void exact_complexity_observe_region(
   }
 }
 
-inline bool exact_order_region_probability_root(
+// A conjunction of geometric factors with optional history conditions. History
+// conditions are fixed during a likelihood evaluation; they are not regions in
+// the space of completion times.
+class ExactConditionalRegionCompiler {
+  struct Factor {
+    ExactOrderRegionExpr region;
+    std::vector<semantic::Index> outcomes;
+    std::vector<std::pair<ExactRegionVarKind, semantic::Index>> dependencies;
+  };
+  // The boolean records whether the factor is still conditional.
+  using Ref = std::pair<std::size_t, bool>;
+  using Refs = std::vector<Ref>;
+
+public:
+  ExactConditionalRegionCompiler(
+      ExactVariantBuildState *plan, ExactOrderRegionBuilder builder,
+      const ExactProjectionRelationOps &ops)
+      : plan_(plan), builder_(builder), ops_(ops) {}
+
+  void append(ExactOrderRegionExpr region,
+              std::vector<semantic::Index> outcomes = {}) {
+    Factor factor{std::move(region), std::move(outcomes), {}};
+    const auto add_var = [&](const ExactRegionVar var) {
+      if (var.kind == ExactRegionVarKind::Time) {
+        if (exact_region_time_is_latent_variable(var.id)) {
+          factor.dependencies.emplace_back(var.kind, var.id);
+        }
+        return;
+      }
+      const auto &support = var.kind == ExactRegionVarKind::ExprTime
+          ? plan_->expr_supports[var.id]
+          : (var.id < plan_->program.layout.n_leaves
+              ? plan_->leaf_supports[var.id]
+              : plan_->pool_supports[var.id - plan_->program.layout.n_leaves]);
+      for (const auto leaf : support) {
+        factor.dependencies.emplace_back(ExactRegionVarKind::SourceTime, leaf);
+      }
+    };
+    for (const auto &term : factor.region.terms) {
+      for (const auto &atom : term.atoms) {
+        add_var(atom.lhs);
+        add_var(atom.rhs);
+      }
+      for (const auto &equality : term.equalities) {
+        add_var(exact_region_time_var(equality.lhs_time_id));
+        add_var(exact_region_time_var(equality.rhs_time_id));
+      }
+    }
+    std::sort(factor.dependencies.begin(), factor.dependencies.end());
+    factor.dependencies.erase(
+        std::unique(factor.dependencies.begin(), factor.dependencies.end()),
+        factor.dependencies.end());
+    factors_.push_back(std::move(factor));
+  }
+
+  semantic::Index compile() {
+    Refs refs;
+    for (std::size_t i = 0; i < factors_.size(); ++i) {
+      refs.emplace_back(i, !factors_[i].outcomes.empty());
+    }
+    return compile(refs);
+  }
+
+private:
+  semantic::Index project(ExactOrderRegionExpr region) {
+    region = exact_order_region_minimize_positive_union(
+        exact_order_region_simplify(std::move(region)));
+    ExactOrderRegionExpr projected;
+    for (const auto &term : region.terms) {
+      ExactProjectionPlanPtr projection;
+      if (!exact_projection_plan_cell_memoized(
+              *plan_, term, {}, {}, &ops_, builder_, &projection)) {
+        throw std::runtime_error("conditional region projection failed");
+      }
+      builder_ = projection->builder_after;
+      exact_projection_collect_metric_cells(*projection, &projected);
+    }
+    projected = exact_order_region_minimize_positive_union(
+        exact_order_region_simplify(std::move(projected)));
+    exact_complexity_observe_region(plan_, projected);
+    std::vector<semantic::Index> nodes;
+    for (const auto &term : projected.terms) {
+      semantic::Index root;
+      if (!exact_order_region_lower_term_root(
+              plan_, term, 0, &builder_, &ops_, &root)) {
+        throw std::runtime_error("conditional region lowering failed");
+      }
+      nodes.push_back(compiled_math_root_node_id(plan_->compiled_math, root));
+    }
+    return compiled_math_algebra_node(
+        &plan_->compiled_math, CompiledMathNodeKind::CleanSignedSum,
+        std::move(nodes));
+  }
+
+  semantic::Index compile(const Refs &refs) {
+    const auto found = memo_.find(refs);
+    if (found != memo_.end()) return found->second;
+    auto &math = plan_->compiled_math;
+    if (refs.empty()) return compiled_math_constant(&math, 1.0);
+
+    // Partition by random-source support AND free latent times. A fixed
+    // observation time or history predicate does not couple random variables.
+    std::vector<std::size_t> parent(refs.size());
+    for (std::size_t i = 0; i < parent.size(); ++i) parent[i] = i;
+    const auto find = [&](std::size_t i) {
+      while (parent[i] != i) {
+        parent[i] = parent[parent[i]];
+        i = parent[i];
+      }
+      return i;
+    };
+    std::map<std::pair<ExactRegionVarKind, semantic::Index>, std::size_t> owners;
+    for (std::size_t i = 0; i < refs.size(); ++i) {
+      for (const auto &dependency : factors_[refs[i].first].dependencies) {
+        const auto owner = owners.emplace(dependency, i);
+        if (!owner.second) parent[find(i)] = find(owner.first->second);
+      }
+    }
+    std::map<std::size_t, Refs> components;
+    for (std::size_t i = 0; i < refs.size(); ++i) {
+      components[find(i)].push_back(refs[i]);
+    }
+
+    semantic::Index node;
+    if (components.size() > 1U) {
+      std::vector<semantic::Index> nodes;
+      for (const auto &component : components) nodes.push_back(compile(component.second));
+      node = compiled_math_algebra_node(
+          &math, CompiledMathNodeKind::Product, std::move(nodes));
+    } else {
+      const auto conditional = std::find_if(refs.begin(), refs.end(),
+          [](const Ref &ref) { return ref.second; });
+      if (conditional != refs.end()) {
+        // Branch only inside a dependent component, and repartition after
+        // removing a constraint. Memoization shares identical conjunctions.
+        const auto offset = static_cast<std::size_t>(conditional - refs.begin());
+        auto used = refs;
+        used.erase(used.begin() + offset);
+        auto unused = refs;
+        unused[offset].second = false;
+        const auto used_node = compile(used);
+        const auto unused_node = compile(unused);
+        node = compile_outcome_select_node(
+            plan_, factors_[conditional->first].outcomes, unused_node, used_node);
+      } else {
+        auto region = exact_order_region_one();
+        for (const auto &ref : refs) {
+          region = exact_order_region_conjoin(region, factors_[ref.first].region);
+        }
+        node = project(std::move(region));
+      }
+    }
+    memo_.emplace(refs, node);
+    return node;
+  }
+
+  ExactVariantBuildState *plan_;
+  ExactOrderRegionBuilder builder_;
+  ExactProjectionRelationOps ops_;
+  std::vector<Factor> factors_;
+  std::map<Refs, semantic::Index> memo_;
+};
+
+inline semantic::Index exact_order_region_probability_root(
     ExactVariantBuildState *plan,
     const ExactOutcomeRegionCompileContext &outcome_context,
-    const ExactSymbolicTransitionScenario &formula,
-    semantic::Index *out_root_id) {
+    const ExactSymbolicTransitionScenario &formula) {
   ExactOrderRegionBuilder builder;
   std::vector<ExactOrderRegionTargetBranch> target_branches;
   if (!exact_order_region_target_branches(
-          *plan,
-          formula.transition,
+          *plan, formula.transition,
           exact_order_region_needs_target_readiness_time(
               outcome_context, formula.transition),
-          &builder,
-          &target_branches)) {
+          &builder, &target_branches)) {
     throw std::runtime_error("exact order-region target branch lowering failed");
   }
-  const ExactProjectionRelationOps projection_ops{
+  const ExactProjectionRelationOps ops{
       exact_order_region_factor_context_overlaps_expr,
       exact_order_region_expr_relation_can_collapse,
       exact_order_region_expand_relation_factor};
-  const auto append_region_nodes =
-      [&](ExactOrderRegionExpr region,
-          std::vector<semantic::Index> *nodes) -> bool {
-    region = exact_order_region_minimize_positive_union(
-        exact_order_region_simplify(std::move(region)));
-    ExactOrderRegionExpr planned_metric_region;
-    for (const auto &term : region.terms) {
-      ExactProjectionPlanPtr projection_plan;
-      if (!exact_projection_plan_cell_memoized(
-              *plan,
-              term,
-              {},
-              {},
-              &projection_ops,
-              builder,
-              &projection_plan)) {
-        return false;
-      }
-      builder = projection_plan->builder_after;
-      exact_projection_collect_metric_cells(
-          *projection_plan, &planned_metric_region);
-    }
-    region =
-        exact_order_region_minimize_positive_union(
-            exact_order_region_simplify(std::move(planned_metric_region)));
-    exact_complexity_observe_region(plan, region);
-    for (const auto &term : region.terms) {
-      semantic::Index term_root{semantic::kInvalidIndex};
-      if (!exact_order_region_lower_term_root(
-              plan, term, 0, 0, &builder, &projection_ops, &term_root)) {
-        return false;
-      }
-      nodes->push_back(
-          compiled_math_root_node_id(plan->compiled_math, term_root));
-    }
-    return true;
-  };
-
-  const bool factor_competitors_outside = target_branches.size() > 1U;
-  bool has_factored_competitors = false;
-  semantic::Index factored_node{semantic::kInvalidIndex};
-  if (factor_competitors_outside) {
-    ExactOrderRegionExpr factored_non_win;
-    if (!exact_order_region_factored_competitor_non_win(
-            *plan,
-            outcome_context,
-            formula,
-            &has_factored_competitors,
-            &factored_non_win)) {
-      throw std::runtime_error(
-          "exact order-region factored competitor lowering failed");
-    }
-    if (has_factored_competitors) {
-      std::vector<semantic::Index> factored_terms;
-      if (!append_region_nodes(std::move(factored_non_win), &factored_terms)) {
-        throw std::runtime_error(
-            "exact order-region factored competitor planning failed");
-      }
-      factored_node =
-          factored_terms.empty()
-              ? compiled_math_constant(&plan->compiled_math, 0.0)
-              : compiled_math_algebra_node(
-                    &plan->compiled_math,
-                    CompiledMathNodeKind::CleanSignedSum,
-                    std::move(factored_terms),
-                    CompiledMathValueKind::Scalar);
-    }
-  }
-
-  std::vector<semantic::Index> terms;
+  std::vector<semantic::Index> nodes;
   for (const auto &branch : target_branches) {
-    ExactOrderRegionExpr non_win;
-    if (!exact_order_region_competitor_non_win(
-            *plan,
-            outcome_context,
-            formula,
-            branch.expr,
-            branch.readiness_time_id,
-            factor_competitors_outside,
-            &builder,
-            &non_win)) {
-      throw std::runtime_error("exact order-region competitor non-win lowering failed");
+    // Build the complete geometry first so all generated latent times precede
+    // the projection planner's fresh time ids.
+    std::vector<ExactOrderRegionExpr> competitors;
+    for (const auto &competitor : outcome_context.competitors) {
+      ExactOrderRegionExpr non_win;
+      if (!exact_order_region_competitor_plan_non_win(
+              *plan, formula, competitor, branch.expr,
+              branch.readiness_time_id, &builder, &non_win)) {
+        throw std::runtime_error("exact order-region competitor lowering failed");
+      }
+      competitors.push_back(std::move(non_win));
     }
-    if (!append_region_nodes(
-            exact_order_region_conjoin(branch.expr, non_win),
-            &terms)) {
-      throw std::runtime_error("exact order-region target planning failed");
+    ExactConditionalRegionCompiler compiler(plan, builder, ops);
+    compiler.append(branch.expr);
+    for (std::size_t i = 0; i < competitors.size(); ++i) {
+      compiler.append(std::move(competitors[i]),
+                      outcome_context.competitors[i].outcome_indices);
     }
+    nodes.push_back(compiler.compile());
   }
-  auto node =
-      terms.empty()
-          ? compiled_math_constant(&plan->compiled_math, 0.0)
-          : compiled_math_algebra_node(
-                &plan->compiled_math,
-                CompiledMathNodeKind::CleanSignedSum,
-                std::move(terms),
-                CompiledMathValueKind::Scalar);
-  if (has_factored_competitors) {
-    node = compiled_math_algebra_node(
-        &plan->compiled_math,
-        CompiledMathNodeKind::Product,
-        std::vector<semantic::Index>{node, factored_node},
-        CompiledMathValueKind::Scalar);
-  }
-  *out_root_id = compiled_math_make_root(&plan->compiled_math, node);
-  return true;
+  return compiled_math_make_root(&plan->compiled_math,
+      compiled_math_algebra_node(&plan->compiled_math,
+          CompiledMathNodeKind::CleanSignedSum, std::move(nodes)));
 }
 
 } // namespace detail

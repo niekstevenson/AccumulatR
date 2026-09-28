@@ -34,21 +34,11 @@ struct SourceLaneScratch {
   }
 
   void ensure_pool(const std::size_t count,
-                   const std::size_t members,
+                   const std::size_t k,
                    const bool need_pdf) {
-    weights.resize(count);
-    const auto member_values = count * members;
-    if (need_pdf) {
-      member_pdf.resize(member_values);
-    }
-    member_cdf.resize(member_values);
-    member_survival.resize(member_values);
-    const auto width = members + 1U;
-    const auto table_values = count * width * width;
-    prefix.resize(table_values);
-    if (need_pdf) {
-      suffix.resize(table_values);
-    }
+    pool_mass.assign(count * k, 0.0);
+    std::fill_n(pool_mass.begin(), count, 1.0);
+    if (need_pdf) pool_density.assign(count * k, 0.0);
   }
 
   std::vector<semantic::Index> lanes;
@@ -72,11 +62,8 @@ struct SourceLaneScratch {
   SourceLaneFill lower;
   SourceLaneFill upper;
   SourceLaneFill shifted;
-  std::vector<double> member_pdf;
-  std::vector<double> member_cdf;
-  std::vector<double> member_survival;
-  std::vector<double> prefix;
-  std::vector<double> suffix;
+  std::vector<double> pool_mass;
+  std::vector<double> pool_density;
 };
 
 struct SourceLaneWorkspace {
@@ -556,7 +543,7 @@ inline SourceLaneFill &evaluate_pool_source_program_lanes(
   const auto member_mask = static_cast<std::uint8_t>(
       kLeafChannelCdf | kLeafChannelSurvival |
       (need_pdf ? kLeafChannelPdf : 0U));
-  scratch.ensure_pool(count, members, need_pdf);
+  scratch.ensure_pool(count, k, need_pdf);
 
   for (std::size_t member = 0; member < members; ++member) {
     const auto member_id =
@@ -574,94 +561,37 @@ inline SourceLaneFill &evaluate_pool_source_program_lanes(
         member_mask,
         source_workspace,
         depth + 1U);
-    for (std::size_t lane = 0; lane < count; ++lane) {
-      const auto pos = member * count + lane;
-      if (need_pdf) {
-        scratch.member_pdf[pos] = values.pdf[lane];
-      }
-      scratch.member_cdf[pos] = values.cdf[lane];
-      scratch.member_survival[pos] = values.survival[lane];
-    }
-  }
-
-  const auto width = members + 1U;
-  const auto table_size = width * width;
-  std::fill(
-      scratch.prefix.begin(), scratch.prefix.begin() + count * table_size, 0.0);
-  if (need_pdf) {
-    std::fill(
-        scratch.suffix.begin(), scratch.suffix.begin() + count * table_size, 0.0);
-  }
-  const auto cell = [width, count](const std::size_t row,
-                                   const std::size_t col,
-                                   const std::size_t lane) {
-    return (row * width + col) * count + lane;
-  };
-  for (std::size_t lane = 0; lane < count; ++lane) {
-    scratch.prefix[cell(0U, 0U, lane)] = 1.0;
-    if (need_pdf) {
-      scratch.suffix[cell(members, 0U, lane)] = 1.0;
-    }
-  }
-  for (std::size_t member = 0; member < members; ++member) {
-    for (std::size_t successes = 0; successes <= member; ++successes) {
+    // P[j] is the probability of exactly j finishes; D[j] is the density
+    // of finish j+1. Descending updates retain only the k required orders.
+    // All terms are positive, including for defective member distributions.
+    for (std::size_t order = std::min(k, member + 2U); order-- > 0U;) {
+      const auto offset = order * count;
       for (std::size_t lane = 0; lane < count; ++lane) {
-        const auto value_pos = member * count + lane;
-        const double value =
-            scratch.prefix[cell(member, successes, lane)];
-        scratch.prefix[cell(member + 1U, successes, lane)] +=
-            value * scratch.member_survival[value_pos];
-        scratch.prefix[cell(member + 1U, successes + 1U, lane)] +=
-            value * scratch.member_cdf[value_pos];
+        const auto pos = offset + lane;
+        const double cdf = values.cdf[lane];
+        const double survival = values.survival[lane];
+        if (need_pdf) {
+          scratch.pool_density[pos] =
+              survival * scratch.pool_density[pos] +
+              values.pdf[lane] * scratch.pool_mass[pos] +
+              (order == 0U ? 0.0 : cdf * scratch.pool_density[pos - count]);
+        }
+        scratch.pool_mass[pos] = survival * scratch.pool_mass[pos] +
+            (order == 0U ? 0.0 : cdf * scratch.pool_mass[pos - count]);
       }
     }
   }
   if (need_pdf) {
-    for (std::size_t member = members; member-- > 0U;) {
-      const auto remaining = members - member - 1U;
-      for (std::size_t successes = 0; successes <= remaining; ++successes) {
-        for (std::size_t lane = 0; lane < count; ++lane) {
-          const auto value_pos = member * count + lane;
-          const double value =
-              scratch.suffix[cell(member + 1U, successes, lane)];
-          scratch.suffix[cell(member, successes, lane)] +=
-              value * scratch.member_survival[value_pos];
-          scratch.suffix[cell(member, successes + 1U, lane)] +=
-              value * scratch.member_cdf[value_pos];
-        }
-      }
-    }
-  }
-  if (need_pdf) {
-    for (std::size_t member = 0; member < members; ++member) {
-      std::fill(scratch.weights.begin(), scratch.weights.end(), 0.0);
-      for (std::size_t left = 0; left < k; ++left) {
-        const auto right = k - 1U - left;
-        if (right > members - member - 1U) {
-          continue;
-        }
-        for (std::size_t lane = 0; lane < count; ++lane) {
-          scratch.weights[lane] +=
-              scratch.prefix[cell(member, left, lane)] *
-              scratch.suffix[cell(member + 1U, right, lane)];
-        }
-      }
-      for (std::size_t lane = 0; lane < count; ++lane) {
-        scratch.out.pdf[lane] +=
-            scratch.member_pdf[member * count + lane] *
-            scratch.weights[lane];
-      }
-    }
     for (std::size_t lane = 0; lane < count; ++lane) {
-      scratch.out.pdf[lane] = safe_density(scratch.out.pdf[lane]);
+      scratch.out.pdf[lane] = safe_density(
+          scratch.pool_density[(k - 1U) * count + lane]);
     }
   }
   if (need_cdf) {
-    std::fill(scratch.weights.begin(), scratch.weights.end(), 0.0);
+    scratch.weights.assign(count, 0.0);
     for (std::size_t successes = 0; successes < k; ++successes) {
       for (std::size_t lane = 0; lane < count; ++lane) {
-        scratch.weights[lane] +=
-            scratch.prefix[cell(members, successes, lane)];
+        scratch.weights[lane] += scratch.pool_mass[successes * count + lane];
       }
     }
     for (std::size_t lane = 0; lane < count; ++lane) {

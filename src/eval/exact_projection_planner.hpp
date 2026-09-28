@@ -56,14 +56,12 @@ inline semantic::Index exact_order_region_source_interval_node(
     const semantic::Index source_id,
     const semantic::Index lower_time_id,
     const semantic::Index upper_time_id,
-    const semantic::Index source_view_id,
-    const semantic::Index condition_id = 0) {
+    const semantic::Index source_view_id) {
   const auto upper_cdf =
       compiled_math_source_node(
           &plan->compiled_math,
           CompiledMathNodeKind::SourceCdf,
           source_id,
-          condition_id,
           upper_time_id,
           source_view_id);
   const auto lower_cdf =
@@ -71,7 +69,6 @@ inline semantic::Index exact_order_region_source_interval_node(
           &plan->compiled_math,
           CompiledMathNodeKind::SourceCdf,
           source_id,
-          condition_id,
           lower_time_id,
           source_view_id);
   const auto interval =
@@ -97,8 +94,7 @@ inline semantic::Index exact_order_region_source_cdf_min_node(
     ExactVariantBuildState *plan,
     const semantic::Index source_id,
     const std::vector<semantic::Index> &upper_time_ids,
-    const semantic::Index source_view_id,
-    const semantic::Index condition_id = 0) {
+    const semantic::Index source_view_id) {
   if (upper_time_ids.empty()) {
     return compiled_math_constant(&plan->compiled_math, 1.0);
   }
@@ -107,7 +103,6 @@ inline semantic::Index exact_order_region_source_cdf_min_node(
         &plan->compiled_math,
         CompiledMathNodeKind::SourceCdf,
         source_id,
-        condition_id,
         upper_time_ids.front(),
         source_view_id);
   }
@@ -119,7 +114,6 @@ inline semantic::Index exact_order_region_source_cdf_min_node(
             &plan->compiled_math,
             CompiledMathNodeKind::SourceCdf,
             source_id,
-            condition_id,
             upper_time_ids[i],
             source_view_id);
     for (std::size_t j = 0; j < upper_time_ids.size(); ++j) {
@@ -148,8 +142,7 @@ inline semantic::Index exact_order_region_source_survival_max_node(
     ExactVariantBuildState *plan,
     const semantic::Index source_id,
     const std::vector<semantic::Index> &lower_time_ids,
-    const semantic::Index source_view_id,
-    const semantic::Index condition_id = 0) {
+    const semantic::Index source_view_id) {
   if (lower_time_ids.empty()) {
     return compiled_math_constant(&plan->compiled_math, 1.0);
   }
@@ -158,7 +151,6 @@ inline semantic::Index exact_order_region_source_survival_max_node(
         &plan->compiled_math,
         CompiledMathNodeKind::SourceSurvival,
         source_id,
-        condition_id,
         lower_time_ids.front(),
         source_view_id);
   }
@@ -170,7 +162,6 @@ inline semantic::Index exact_order_region_source_survival_max_node(
             &plan->compiled_math,
             CompiledMathNodeKind::SourceSurvival,
             source_id,
-            condition_id,
             lower_time_ids[i],
             source_view_id);
     for (std::size_t j = 0; j < lower_time_ids.size(); ++j) {
@@ -200,15 +191,14 @@ inline semantic::Index exact_order_region_source_interval_partition_node(
     const semantic::Index source_id,
     const std::vector<semantic::Index> &lower_time_ids,
     const std::vector<semantic::Index> &upper_time_ids,
-    const semantic::Index source_view_id,
-    const semantic::Index condition_id = 0) {
+    const semantic::Index source_view_id) {
   if (lower_time_ids.empty()) {
     return exact_order_region_source_cdf_min_node(
-        plan, source_id, upper_time_ids, source_view_id, condition_id);
+        plan, source_id, upper_time_ids, source_view_id);
   }
   if (upper_time_ids.empty()) {
     return exact_order_region_source_survival_max_node(
-        plan, source_id, lower_time_ids, source_view_id, condition_id);
+        plan, source_id, lower_time_ids, source_view_id);
   }
 
   std::vector<semantic::Index> candidates;
@@ -225,8 +215,7 @@ inline semantic::Index exact_order_region_source_interval_partition_node(
               source_id,
               lower_time_id,
               upper_time_id,
-              source_view_id,
-              condition_id);
+              source_view_id);
       for (std::size_t other = 0; other < lower_time_ids.size(); ++other) {
         if (other == lower_idx) {
           continue;
@@ -263,45 +252,27 @@ inline semantic::Index exact_order_region_source_interval_partition_node(
       CompiledMathValueKind::Scalar);
 }
 
-inline semantic::Index exact_order_region_expr_value_node(
-    ExactVariantBuildState *plan,
-    const semantic::Index expr_id,
-    const CompiledMathNodeKind kind,
-    const semantic::Index time_id,
-    const semantic::Index source_view_id,
-    const semantic::Index condition_id = 0) {
-  return compile_expr_value_node(
-      plan,
-      expr_id,
-      kind,
-      condition_id,
-      time_id,
-      source_view_id);
-}
 
 inline semantic::Index exact_order_region_expr_interval_node(
     ExactVariantBuildState *plan,
     const semantic::Index expr_id,
     const semantic::Index lower_time_id,
     const semantic::Index upper_time_id,
-    const semantic::Index source_view_id,
-    const semantic::Index condition_id = 0) {
+    const semantic::Index source_view_id) {
   const auto upper_cdf =
-      exact_order_region_expr_value_node(
+      compile_expr_value_node(
           plan,
           expr_id,
-          CompiledMathNodeKind::ExprCdf,
+          CompiledMathValueKind::Cdf,
           upper_time_id,
-          source_view_id,
-          condition_id);
+          source_view_id);
   const auto lower_cdf =
-      exact_order_region_expr_value_node(
+      compile_expr_value_node(
           plan,
           expr_id,
-          CompiledMathNodeKind::ExprCdf,
+          CompiledMathValueKind::Cdf,
           lower_time_id,
-          source_view_id,
-          condition_id);
+          source_view_id);
   const auto interval =
       compiled_math_algebra_node(
           &plan->compiled_math,
@@ -325,31 +296,28 @@ inline semantic::Index exact_order_region_expr_cdf_min_node(
     ExactVariantBuildState *plan,
     const semantic::Index expr_id,
     const std::vector<semantic::Index> &upper_time_ids,
-    const semantic::Index source_view_id,
-    const semantic::Index condition_id = 0) {
+    const semantic::Index source_view_id) {
   if (upper_time_ids.empty()) {
     return compiled_math_constant(&plan->compiled_math, 1.0);
   }
   if (upper_time_ids.size() == 1U) {
-    return exact_order_region_expr_value_node(
+    return compile_expr_value_node(
         plan,
         expr_id,
-        CompiledMathNodeKind::ExprCdf,
+        CompiledMathValueKind::Cdf,
         upper_time_ids.front(),
-        source_view_id,
-        condition_id);
+        source_view_id);
   }
   std::vector<semantic::Index> candidates;
   candidates.reserve(upper_time_ids.size());
   for (std::size_t i = 0; i < upper_time_ids.size(); ++i) {
     auto node =
-        exact_order_region_expr_value_node(
+        compile_expr_value_node(
             plan,
             expr_id,
-            CompiledMathNodeKind::ExprCdf,
+            CompiledMathValueKind::Cdf,
             upper_time_ids[i],
-            source_view_id,
-            condition_id);
+            source_view_id);
     for (std::size_t j = 0; j < upper_time_ids.size(); ++j) {
       if (i == j) {
         continue;
@@ -376,31 +344,28 @@ inline semantic::Index exact_order_region_expr_survival_max_node(
     ExactVariantBuildState *plan,
     const semantic::Index expr_id,
     const std::vector<semantic::Index> &lower_time_ids,
-    const semantic::Index source_view_id,
-    const semantic::Index condition_id = 0) {
+    const semantic::Index source_view_id) {
   if (lower_time_ids.empty()) {
     return compiled_math_constant(&plan->compiled_math, 1.0);
   }
   if (lower_time_ids.size() == 1U) {
-    return exact_order_region_expr_value_node(
+    return compile_expr_value_node(
         plan,
         expr_id,
-        CompiledMathNodeKind::ExprSurvival,
+        CompiledMathValueKind::Survival,
         lower_time_ids.front(),
-        source_view_id,
-        condition_id);
+        source_view_id);
   }
   std::vector<semantic::Index> candidates;
   candidates.reserve(lower_time_ids.size());
   for (std::size_t i = 0; i < lower_time_ids.size(); ++i) {
     auto node =
-        exact_order_region_expr_value_node(
+        compile_expr_value_node(
             plan,
             expr_id,
-            CompiledMathNodeKind::ExprSurvival,
+            CompiledMathValueKind::Survival,
             lower_time_ids[i],
-            source_view_id,
-            condition_id);
+            source_view_id);
     for (std::size_t j = 0; j < lower_time_ids.size(); ++j) {
       if (i == j) {
         continue;
@@ -428,15 +393,14 @@ inline semantic::Index exact_order_region_expr_interval_partition_node(
     const semantic::Index expr_id,
     const std::vector<semantic::Index> &lower_time_ids,
     const std::vector<semantic::Index> &upper_time_ids,
-    const semantic::Index source_view_id,
-    const semantic::Index condition_id = 0) {
+    const semantic::Index source_view_id) {
   if (lower_time_ids.empty()) {
     return exact_order_region_expr_cdf_min_node(
-        plan, expr_id, upper_time_ids, source_view_id, condition_id);
+        plan, expr_id, upper_time_ids, source_view_id);
   }
   if (upper_time_ids.empty()) {
     return exact_order_region_expr_survival_max_node(
-        plan, expr_id, lower_time_ids, source_view_id, condition_id);
+        plan, expr_id, lower_time_ids, source_view_id);
   }
 
   std::vector<semantic::Index> candidates;
@@ -453,8 +417,7 @@ inline semantic::Index exact_order_region_expr_interval_partition_node(
               expr_id,
               lower_time_id,
               upper_time_id,
-              source_view_id,
-              condition_id);
+              source_view_id);
       for (std::size_t other = 0; other < lower_time_ids.size(); ++other) {
         if (other == lower_idx) {
           continue;
@@ -634,10 +597,6 @@ struct ExactProjectionMemoKeyHash {
       combine(&seed, static_cast<std::size_t>(atom.lhs.id));
       combine(&seed, static_cast<std::size_t>(atom.rhs.kind));
       combine(&seed, static_cast<std::size_t>(atom.rhs.id));
-      for (const auto outcome_id : atom.outcome_indices) {
-        combine(&seed, static_cast<std::size_t>(outcome_id));
-      }
-      combine(&seed, atom.outcome_indices.size());
       combine(&seed, static_cast<std::size_t>(atom.inclusive));
       combine(&seed, static_cast<std::size_t>(atom.strict));
     }
@@ -1029,33 +988,29 @@ exact_order_region_projection_candidates(
 inline semantic::Index exact_order_region_projection_node(
     ExactVariantBuildState *plan,
     const ExactOrderRegionProjectionCandidate &candidate,
-    const semantic::Index source_view_id,
-    const semantic::Index condition_id) {
+    const semantic::Index source_view_id) {
   if (candidate.binder.kind == ExactOrderRegionDensityBinderKind::Source) {
     return exact_order_region_source_interval_partition_node(
         plan,
         candidate.binder.subject_id,
         candidate.bounds.lower_time_ids,
         candidate.bounds.upper_time_ids,
-        source_view_id,
-        condition_id);
+        source_view_id);
   }
   return exact_order_region_expr_interval_partition_node(
       plan,
       candidate.binder.subject_id,
       candidate.bounds.lower_time_ids,
       candidate.bounds.upper_time_ids,
-      source_view_id,
-      condition_id);
+      source_view_id);
 }
 
 inline semantic::Index exact_projection_factor_node(
     ExactVariantBuildState *plan,
     const ExactProjectionFactor &factor,
-    const semantic::Index source_view_id,
-    const semantic::Index condition_id) {
+    const semantic::Index source_view_id) {
   return exact_order_region_projection_node(
-      plan, factor.candidate, source_view_id, condition_id);
+      plan, factor.candidate, source_view_id);
 }
 
 inline bool exact_projection_apply_density_projection(
@@ -1503,7 +1458,6 @@ inline bool exact_projection_emit_terminal_node(
     ExactVariantBuildState *plan,
     const ExactRegionCell &term,
     const semantic::Index source_view_id,
-    const semantic::Index condition_id,
     const std::vector<ExactProjectionFactor> &projected_factors,
     semantic::Index *out_node_id,
     ExactRegionCell *out_residual,
@@ -1539,7 +1493,7 @@ inline bool exact_projection_emit_terminal_node(
   factors.reserve(projected_factors.size());
   for (const auto &factor : projected_factors) {
     factors.push_back(
-        exact_projection_factor_node(plan, factor, source_view_id, condition_id));
+        exact_projection_factor_node(plan, factor, source_view_id));
     exact_projection_append_factor_latent_times(
         &factor_latent_time_ids, factor);
   }
@@ -1617,7 +1571,6 @@ inline bool exact_projection_emit_terminal_node(
               &plan->compiled_math,
               CompiledMathNodeKind::SourcePdf,
               source_id,
-              condition_id,
               source.exact_time_id,
               source_view_id));
       continue;
@@ -1631,8 +1584,7 @@ inline bool exact_projection_emit_terminal_node(
               source_id,
               source.lower_time_ids,
               source.upper_time_ids,
-              source_view_id,
-              condition_id));
+              source_view_id));
       continue;
     }
     if (!has_lower && source.upper_time_ids.size() > 1U) {
@@ -1641,8 +1593,7 @@ inline bool exact_projection_emit_terminal_node(
               plan,
               source_id,
               source.upper_time_ids,
-              source_view_id,
-              condition_id));
+              source_view_id));
       continue;
     }
     if (!has_upper && source.lower_time_ids.size() > 1U) {
@@ -1651,8 +1602,7 @@ inline bool exact_projection_emit_terminal_node(
               plan,
               source_id,
               source.lower_time_ids,
-              source_view_id,
-              condition_id));
+              source_view_id));
       continue;
     }
     if (has_lower) {
@@ -1661,7 +1611,6 @@ inline bool exact_projection_emit_terminal_node(
               &plan->compiled_math,
               CompiledMathNodeKind::SourceSurvival,
               source_id,
-              condition_id,
               source.lower_time_ids.front(),
               source_view_id));
     } else if (has_upper) {
@@ -1670,7 +1619,6 @@ inline bool exact_projection_emit_terminal_node(
               &plan->compiled_math,
               CompiledMathNodeKind::SourceCdf,
               source_id,
-              condition_id,
               source.upper_time_ids.front(),
               source_view_id));
     }
@@ -1683,13 +1631,12 @@ inline bool exact_projection_emit_terminal_node(
     exact_order_region_reduce_bounds(closure, &expr.upper_time_ids, false);
     if (expr.density_time_id != semantic::kInvalidIndex) {
       factors.push_back(
-          exact_order_region_expr_value_node(
+          compile_expr_value_node(
               plan,
               expr_id,
-              CompiledMathNodeKind::ExprDensity,
+              CompiledMathValueKind::Density,
               expr.density_time_id,
-              source_view_id,
-              condition_id));
+              source_view_id));
       continue;
     }
     if (!expr.lower_time_ids.empty() || !expr.upper_time_ids.empty()) {
@@ -1699,21 +1646,8 @@ inline bool exact_projection_emit_terminal_node(
               expr_id,
               expr.lower_time_ids,
               expr.upper_time_ids,
-              source_view_id,
-              condition_id));
+              source_view_id));
     }
-  }
-  for (const auto &outcome_indices :
-       exact_region_outcome_atoms(residual, ExactRegionAtomKind::OutcomeUnused)) {
-    factors.push_back(
-        compile_outcome_subset_unused_node(
-            plan, outcome_indices, false));
-  }
-  for (const auto &outcome_indices :
-       exact_region_outcome_atoms(residual, ExactRegionAtomKind::OutcomeUsed)) {
-    factors.push_back(
-        compile_outcome_subset_unused_node(
-            plan, outcome_indices, true));
   }
   semantic::Index node =
       factors.empty()
@@ -1774,7 +1708,6 @@ inline bool exact_projection_emit_plan_root(
     ExactVariantBuildState *plan,
     const ExactProjectionPlan &projection_plan,
     const semantic::Index source_view_id,
-    const semantic::Index condition_id,
     std::vector<ExactProjectionFactor> inherited_factors,
     semantic::Index *out_root_id) {
   if (projection_plan.kind == ExactProjectionPlanKind::Product) {
@@ -1789,7 +1722,6 @@ inline bool exact_projection_emit_plan_root(
         plan,
         *projection_plan.children.front(),
         source_view_id,
-        condition_id,
         std::move(inherited_factors),
         out_root_id);
   }
@@ -1803,7 +1735,6 @@ inline bool exact_projection_emit_plan_root(
               plan,
               *child,
               source_view_id,
-              condition_id,
               inherited_factors,
               &child_root)) {
         return false;
@@ -1837,7 +1768,6 @@ inline bool exact_projection_emit_plan_root(
           plan,
           term,
           source_view_id,
-          condition_id,
           inherited_factors,
           &node,
           &residual,
@@ -1881,10 +1811,10 @@ inline bool exact_projection_emit_plan_root(
     const auto integrand_root =
         compiled_math_make_root(&plan->compiled_math, node);
     node =
-        compiled_math_raw_integral_zero_to_current_node(
+        compiled_math_integral_node(
             &plan->compiled_math,
+            CompiledMathNodeKind::IntegralZeroToCurrentRaw,
             integrand_root,
-            0,
             upper_time_id,
             0,
             *it);
@@ -1957,7 +1887,6 @@ inline bool exact_order_region_lower_term_root(
     ExactVariantBuildState *plan,
     const ExactRegionCell &term,
     const semantic::Index source_view_id,
-    const semantic::Index condition_id,
     ExactOrderRegionBuilder *builder,
     const ExactProjectionRelationOps *ops,
     semantic::Index *out_root_id) {
@@ -1977,7 +1906,6 @@ inline bool exact_order_region_lower_term_root(
       plan,
       *projection_plan,
       source_view_id,
-      condition_id,
       {},
       out_root_id);
 }

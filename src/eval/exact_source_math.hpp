@@ -1,7 +1,5 @@
 #pragma once
 
-#include <Rcpp.h>
-
 #include <cmath>
 #include <cstdint>
 
@@ -48,23 +46,6 @@ template <std::uint8_t Mask>
   return fill;
 }
 
-template <std::uint8_t Mask>
-[[gnu::always_inline]] inline ExactSourceFill exact_source_gamma_leaf_fill(
-    const double shape,
-    const double rate,
-    const double q,
-    const double x) {
-  const double scale = 1.0 / rate;
-  return exact_source_finish_base_fill<Mask>(
-      (Mask & kLeafChannelPdf) != 0U
-          ? R::dgamma(x, shape, scale, 0)
-          : 0.0,
-      (Mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U
-          ? R::pgamma(x, shape, scale, 1, 0)
-          : 0.0,
-      q);
-}
-
 inline ExactSourceFill exact_source_impossible_fill() {
   return {};
 }
@@ -99,9 +80,7 @@ inline bool exact_source_relation_forces_fill(
 
 inline ExactRelation exact_source_program_relation(
     const CompiledMathSourceProductProgram &program) noexcept {
-  return program.has_static_source_view_relation
-             ? static_cast<ExactRelation>(program.static_source_view_relation)
-             : ExactRelation::Unknown;
+  return static_cast<ExactRelation>(program.static_source_view_relation);
 }
 
 inline ExactSourceFill exact_source_conditionalize(

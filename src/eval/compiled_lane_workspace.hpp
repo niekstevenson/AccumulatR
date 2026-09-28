@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <vector>
 
@@ -30,6 +29,11 @@ constexpr std::size_t exact_expanded_parent_lane_tile_size() noexcept {
 
 class ExactLaneSourceState;
 
+struct CompiledIntegralEstimate {
+  double value{0.0};
+  double error{0.0};
+};
+
 struct CompiledLaneFrame {
   explicit CompiledLaneFrame(const CompiledMathProgram &program)
       : node_count(program.nodes.size()),
@@ -41,16 +45,14 @@ struct CompiledLaneFrame {
 
   void ensure(const std::size_t required_lanes) {
     if (required_lanes <= stride) {
-      lane_count = required_lanes;
       return;
     }
 
     stride = required_lanes;
-    lane_count = required_lanes;
 
     node_values.resize(node_count * stride, 0.0);
     cache_epoch.resize(integral_cache_count * stride, 0U);
-    cache_values.resize(integral_cache_count * stride, 0.0);
+    cache_estimates.resize(integral_cache_count * stride);
 
     source_program_epoch.resize(source_program_count * stride, 0U);
     source_program_valid_mask.resize(source_program_count * stride, 0U);
@@ -78,11 +80,6 @@ struct CompiledLaneFrame {
     time_valid[zero] = 1U;
   }
 
-  std::size_t node_pos(const semantic::Index node_id,
-                       const std::size_t lane) const noexcept {
-    return static_cast<std::size_t>(node_id) * stride + lane;
-  }
-
   std::size_t source_program_pos(const semantic::Index program_id,
                                  const std::size_t lane) const noexcept {
     return static_cast<std::size_t>(program_id) * stride + lane;
@@ -91,21 +88,6 @@ struct CompiledLaneFrame {
   std::size_t integral_cache_pos(const semantic::Index cache_id,
                                  const std::size_t lane) const noexcept {
     return static_cast<std::size_t>(cache_id) * stride + lane;
-  }
-
-  std::size_t time_pos(const semantic::Index time_id,
-                       const std::size_t lane) const noexcept {
-    return static_cast<std::size_t>(time_id) * stride + lane;
-  }
-
-  double value(const semantic::Index node_id,
-               const std::size_t lane) const noexcept {
-    return node_values[node_pos(node_id, lane)];
-  }
-
-  double &value(const semantic::Index node_id,
-                const std::size_t lane) noexcept {
-    return node_values[node_pos(node_id, lane)];
   }
 
   const double *values_for(const semantic::Index node_id) const noexcept {
@@ -118,7 +100,7 @@ struct CompiledLaneFrame {
 
   double time(const semantic::Index time_id,
               const std::size_t lane) const noexcept {
-    return time_values[time_pos(time_id, lane)];
+    return time_values[static_cast<std::size_t>(time_id) * stride + lane];
   }
 
   void copy_lanes_from(const CompiledLaneFrame &parent,
@@ -164,7 +146,6 @@ struct CompiledLaneFrame {
     time_valid[static_cast<std::size_t>(time_id)] = 1U;
   }
 
-  std::size_t lane_count{0U};
   std::size_t stride{0U};
   std::size_t node_count{0U};
   std::size_t integral_cache_count{0U};
@@ -175,7 +156,7 @@ struct CompiledLaneFrame {
 
   std::vector<double> node_values;
   std::vector<std::uint32_t> cache_epoch;
-  std::vector<double> cache_values;
+  std::vector<CompiledIntegralEstimate> cache_estimates;
   std::uint32_t cache_current_epoch{1U};
 
   std::vector<std::uint32_t> source_program_epoch;

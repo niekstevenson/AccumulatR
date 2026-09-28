@@ -25,7 +25,6 @@ inline semantic::Index compiled_math_intern_node(
   CompiledMathNode node;
   node.kind = key.kind;
   node.subject_id = key.subject_id;
-  node.condition_id = key.condition_id;
   node.time_id = key.time_id;
   node.aux_id = key.aux_id;
   node.aux2_id = key.aux2_id;
@@ -53,14 +52,12 @@ inline semantic::Index compiled_math_source_node(
     CompiledMathProgram *program,
     const CompiledMathNodeKind kind,
     const semantic::Index source_id,
-    const semantic::Index condition_id = 0,
     const semantic::Index time_id = 0,
     const semantic::Index source_view_id = 0,
     const semantic::Index time_cap_id = semantic::kInvalidIndex) {
   CompiledMathNodeKey key;
   key.kind = kind;
   key.subject_id = source_id;
-  key.condition_id = condition_id;
   key.time_id = time_id;
   key.aux_id = time_cap_id;
   key.source_view_id = source_view_id;
@@ -144,40 +141,97 @@ inline semantic::Index compiled_math_strict_time_gate_node(
   return compiled_math_intern_node(program, std::move(key));
 }
 
-inline semantic::Index compiled_math_integral_zero_to_current_node(
-    CompiledMathProgram *program,
-    const semantic::Index integrand_root_id,
-    const semantic::Index condition_id = 0,
-    const semantic::Index time_id = 0,
-    const semantic::Index source_view_id = 0,
-    const semantic::Index bind_time_id = semantic::kInvalidIndex) {
-  CompiledMathNodeKey key;
-  key.kind = CompiledMathNodeKind::IntegralZeroToCurrent;
-  key.value_kind = CompiledMathValueKind::Cdf;
-  key.subject_id = integrand_root_id;
-  key.condition_id = condition_id;
-  key.time_id = time_id;
-  key.aux2_id = bind_time_id;
-  key.source_view_id = source_view_id;
-  return compiled_math_intern_node(program, std::move(key));
+inline semantic::Index compiled_math_make_root(CompiledMathProgram *program,
+                                              semantic::Index node_id);
+
+// Free-time dependence respects the binding scope of nested integrals.
+inline bool compiled_math_depends_on_integral_scope(
+    const CompiledMathProgram &program, const semantic::Index node_id,
+    const semantic::Index time_id, const semantic::Index source_view_id = 0) {
+  const auto &node = program.nodes[node_id];
+  if (compiled_math_is_integral_node(node.kind)) {
+    return node.time_id == time_id ||
+        (compiled_math_integral_bind_time_id(node) != time_id &&
+         compiled_math_depends_on_integral_scope(program,
+             program.roots[node.subject_id].node_id, time_id));
+  }
+  if (compiled_math_is_source_value_node(node.kind) &&
+      source_view_id != 0 && node.source_view_id == 0) return true;
+  if (compiled_math_is_source_value_node(node.kind) ||
+      node.kind == CompiledMathNodeKind::TimeGate ||
+      node.kind == CompiledMathNodeKind::StrictTimeGate ||
+      node.kind == CompiledMathNodeKind::ExprUpperBoundDensity ||
+      node.kind == CompiledMathNodeKind::ExprUpperBoundCdf) {
+    if (node.time_id == time_id || node.aux_id == time_id) return true;
+  }
+  for (semantic::Index i = 0; i < node.children.size; ++i) {
+    if (compiled_math_depends_on_integral_scope(program,
+            program.child_nodes[node.children.offset + i], time_id, source_view_id)) return true;
+  }
+  return false;
 }
 
-inline semantic::Index compiled_math_raw_integral_zero_to_current_node(
+inline void compiled_math_partition_integrand(
+    const CompiledMathProgram &program, const semantic::Index node_id,
+    const semantic::Index upper_time, const semantic::Index bind_time,
+    std::vector<semantic::Index> *inside,
+    std::vector<semantic::Index> *outside, bool *stripped_gate,
+    const semantic::Index source_view_id) {
+  const auto &node = program.nodes[node_id];
+  // The quadrature domain already enforces 0 < s < upper.
+  if ((node.kind == CompiledMathNodeKind::TimeGate ||
+       node.kind == CompiledMathNodeKind::StrictTimeGate) &&
+      upper_time != bind_time &&
+      node.time_id == upper_time && node.aux_id == bind_time) {
+    *stripped_gate = true;
+    compiled_math_partition_integrand(program,
+        program.child_nodes[node.children.offset], upper_time, bind_time,
+        inside, outside, stripped_gate, source_view_id);
+  } else if (node.kind == CompiledMathNodeKind::Product) {
+    for (semantic::Index i = 0; i < node.children.size; ++i) {
+      compiled_math_partition_integrand(program,
+          program.child_nodes[node.children.offset + i], upper_time, bind_time,
+          inside, outside, stripped_gate, source_view_id);
+    }
+  } else {
+    (compiled_math_depends_on_integral_scope(program, node_id, bind_time, source_view_id)
+         ? inside : outside)->push_back(node_id);
+  }
+}
+
+inline semantic::Index compiled_math_integral_node(
     CompiledMathProgram *program,
+    const CompiledMathNodeKind kind,
     const semantic::Index integrand_root_id,
-    const semantic::Index condition_id = 0,
     const semantic::Index time_id = 0,
     const semantic::Index source_view_id = 0,
     const semantic::Index bind_time_id = semantic::kInvalidIndex) {
+  const auto bind = bind_time_id == semantic::kInvalidIndex ? time_id : bind_time_id;
+  std::vector<semantic::Index> inside, outside;
+  bool stripped_gate = false;
+  compiled_math_partition_integrand(*program,
+      program->roots[integrand_root_id].node_id, time_id, bind, &inside, &outside,
+      &stripped_gate, source_view_id);
+  const auto root = outside.empty() && !stripped_gate ? integrand_root_id
+      : compiled_math_make_root(program, compiled_math_algebra_node(
+            program, CompiledMathNodeKind::Product, std::move(inside)));
   CompiledMathNodeKey key;
-  key.kind = CompiledMathNodeKind::IntegralZeroToCurrentRaw;
-  key.value_kind = CompiledMathValueKind::Scalar;
-  key.subject_id = integrand_root_id;
-  key.condition_id = condition_id;
+  key.kind = outside.empty() ? kind : CompiledMathNodeKind::IntegralZeroToCurrentRaw;
+  key.value_kind = key.kind == CompiledMathNodeKind::IntegralZeroToCurrent
+      ? CompiledMathValueKind::Cdf : CompiledMathValueKind::Scalar;
+  key.subject_id = root;
   key.time_id = time_id;
   key.aux2_id = bind_time_id;
   key.source_view_id = source_view_id;
-  return compiled_math_intern_node(program, std::move(key));
+  const auto integral = compiled_math_intern_node(program, std::move(key));
+  if (outside.empty()) return integral;
+  outside.push_back(integral);
+  const auto product = compiled_math_algebra_node(
+      program, CompiledMathNodeKind::Product, std::move(outside));
+  return kind == CompiledMathNodeKind::IntegralZeroToCurrent
+      ? compiled_math_unary_node(program, CompiledMathNodeKind::ClampProbability,
+                                product, CompiledMathValueKind::Cdf)
+      : product;
 }
 
 inline void compiled_math_append_schedule_node(
@@ -191,10 +245,11 @@ inline void compiled_math_append_schedule_node(
   }
   (*visited)[pos] = 1U;
   const auto &node = program.nodes[pos];
-  for (semantic::Index i = 0; i < node.children.size; ++i) {
-    const auto child_id = program.child_nodes[
-        static_cast<std::size_t>(node.children.offset + i)];
-    compiled_math_append_schedule_node(program, child_id, visited, schedule);
+  if (node.kind != CompiledMathNodeKind::OutcomeSelect) {
+    for (semantic::Index i = 0; i < node.children.size; ++i) {
+      const auto child_id = program.child_nodes[node.children.offset + i];
+      compiled_math_append_schedule_node(program, child_id, visited, schedule);
+    }
   }
   schedule->push_back(node_id);
 }

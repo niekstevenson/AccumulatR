@@ -1,6 +1,7 @@
 #pragma once
 
 #include <limits>
+#include <map>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -60,8 +61,7 @@ struct ExactTerminalNoResponsePlan {
 
 struct ExactExprDistributionKey {
   semantic::Index expr_id{semantic::kInvalidIndex};
-  CompiledMathNodeKind value_kind{CompiledMathNodeKind::ExprCdf};
-  semantic::Index condition_id{0};
+  CompiledMathValueKind value_kind{CompiledMathValueKind::Cdf};
   semantic::Index time_id{
       static_cast<semantic::Index>(CompiledMathTimeSlot::Observed)};
   semantic::Index source_view_id{0};
@@ -75,12 +75,10 @@ struct ExactExprDistributionPlan {
 
 struct ExactSourceProgramCompileKey {
   semantic::Index source_id{semantic::kInvalidIndex};
-  semantic::Index condition_id{0};
   semantic::Index source_view_id{0};
 
   bool operator==(const ExactSourceProgramCompileKey &other) const noexcept {
     return source_id == other.source_id &&
-           condition_id == other.condition_id &&
            source_view_id == other.source_view_id;
   }
 };
@@ -89,8 +87,6 @@ struct ExactSourceProgramCompileKeyHash {
   std::size_t operator()(
       const ExactSourceProgramCompileKey &key) const noexcept {
     std::size_t seed = static_cast<std::size_t>(key.source_id);
-    seed ^= static_cast<std::size_t>(key.condition_id) +
-            0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
     seed ^= static_cast<std::size_t>(key.source_view_id) +
             0x9e3779b97f4a7c15ULL + (seed << 6U) + (seed >> 2U);
     return seed;
@@ -99,7 +95,6 @@ struct ExactSourceProgramCompileKeyHash {
 
 struct ExactConditionedSourceProgramCompileKey {
   semantic::Index source_id{semantic::kInvalidIndex};
-  semantic::Index condition_id{0};
   semantic::Index source_view_id{0};
   semantic::Index time_id{0};
   semantic::Index time_cap_id{semantic::kInvalidIndex};
@@ -107,7 +102,6 @@ struct ExactConditionedSourceProgramCompileKey {
   bool operator==(
       const ExactConditionedSourceProgramCompileKey &other) const noexcept {
     return source_id == other.source_id &&
-           condition_id == other.condition_id &&
            source_view_id == other.source_view_id &&
            time_id == other.time_id &&
            time_cap_id == other.time_cap_id;
@@ -118,7 +112,6 @@ struct ExactConditionedSourceProgramCompileKeyHash {
   std::size_t operator()(
       const ExactConditionedSourceProgramCompileKey &key) const noexcept {
     std::size_t seed = static_cast<std::size_t>(key.source_id);
-    hash_combine(&seed, static_cast<std::size_t>(key.condition_id));
     hash_combine(&seed, static_cast<std::size_t>(key.source_view_id));
     hash_combine(&seed, static_cast<std::size_t>(key.time_id));
     hash_combine(&seed, static_cast<std::size_t>(key.time_cap_id));
@@ -154,8 +147,8 @@ struct ExactVariantBuildState {
   std::vector<std::vector<semantic::Index>> expr_supports;
   std::vector<std::uint8_t> pool_transition_can_stay_aggregate;
   std::vector<semantic::Index> compiled_outcome_gate_indices;
+  std::map<std::vector<semantic::Index>, semantic::Index> outcome_predicates;
   semantic::Index source_count{0};
-  std::vector<semantic::Index> shared_trigger_indices;
   ExactCompiledTriggerStateTable trigger_state_table;
   std::vector<std::uint8_t> compiled_source_view_relations;
   semantic::Index compiled_source_view_source_count{0};

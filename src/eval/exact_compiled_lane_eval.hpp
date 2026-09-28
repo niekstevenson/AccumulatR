@@ -4,12 +4,13 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
+#include <limits>
 #include <memory>
 #include <vector>
 
 #include "exact_source_lane_eval.hpp"
 #include "exact_adaptive.hpp"
+#include "cumulative_lane.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
@@ -36,6 +37,9 @@ struct CompiledLaneScratch {
   std::vector<double> child_values;
   std::vector<double> products;
   SourceLaneFill source_values;
+  std::vector<double> integral_scales;
+  std::vector<double> factor_scales;
+  CumulativeLaneWorkspace cumulative;
 };
 
 struct CompiledLaneExecutor {
@@ -70,13 +74,13 @@ inline double compiled_lane_source_node_time(
              : std::min(time, frame.time(node.aux_id, lane));
 }
 
-inline bool compiled_lane_outcome_gate_open(
+inline bool compiled_lane_outcome_used(
     const CompiledMathNode &node,
     const ExactVariantPlan &plan,
     const CompiledLaneFrame &frame,
     const std::size_t lane) {
   if (!frame.has_sequence_history) {
-    return node.kind == CompiledMathNodeKind::OutcomeSubsetUnused;
+    return false;
   }
   const auto *used = frame.used_outcomes[lane];
   bool any_used = false;
@@ -91,9 +95,7 @@ inline bool compiled_lane_outcome_gate_open(
       }
     }
   }
-  return node.kind == CompiledMathNodeKind::OutcomeSubsetUsed
-             ? any_used
-             : !any_used;
+  return any_used;
 }
 
 struct CompiledLaneUpperBound {
@@ -117,6 +119,12 @@ inline CompiledLaneUpperBound compiled_lane_expr_upper_bound(
   return {};
 }
 
+inline void evaluate_compiled_lane_root(
+    const ExactVariantPlan &plan, semantic::Index root_id,
+    CompiledLaneExecutor *executor, CompiledLaneFrame *frame,
+    std::size_t lane_count, std::vector<double> *out,
+    std::size_t integral_depth);
+
 inline void evaluate_compiled_lane_schedule(
     const ExactVariantPlan &plan,
     const CompiledMathIndexSpan schedule,
@@ -135,7 +143,18 @@ inline void evaluate_compiled_lane_integral_node(
     const semantic::Index *lanes,
     const std::size_t lane_count,
     std::vector<double> *out,
-    const std::size_t integral_depth);
+    const std::size_t integral_depth,
+    const double *absolute_scales = nullptr);
+
+inline void evaluate_compiled_lane_execution(
+    const ExactVariantPlan &plan,
+    const CompiledMathRoot &root,
+    const CompiledMathExecutionPlan &execution,
+    CompiledLaneExecutor *executor,
+    CompiledLaneFrame *frame,
+    std::size_t lane_count,
+    std::vector<double> *out,
+    std::size_t integral_depth);
 
 inline void evaluate_source_product_ops_lanes(
     const ExactVariantPlan &plan,
@@ -257,27 +276,6 @@ inline void evaluate_source_product_terms(
       scratch.positions[lane] = lane;
     }
     for (semantic::Index i = 0;
-         i < term.outcome_gate_nodes.size && active_count > 0U;
-         ++i) {
-      const auto node_id = program.outcome_gate_nodes[
-          static_cast<std::size_t>(term.outcome_gate_nodes.offset + i)];
-      const auto &gate = program.nodes[static_cast<std::size_t>(node_id)];
-      if (!frame->has_sequence_history) {
-        if (gate.kind == CompiledMathNodeKind::OutcomeSubsetUsed) {
-          active_count = 0U;
-        }
-        continue;
-      }
-      std::size_t next_count = 0U;
-      for (std::size_t j = 0; j < active_count; ++j) {
-        const auto lane = scratch.positions[j];
-        if (compiled_lane_outcome_gate_open(gate, plan, *frame, lane)) {
-          scratch.positions[next_count++] = lane;
-        }
-      }
-      active_count = next_count;
-    }
-    for (semantic::Index i = 0;
          i < term.time_gate_nodes.size && active_count > 0U;
          ++i) {
       const auto node_id = program.time_gate_nodes[
@@ -300,11 +298,26 @@ inline void evaluate_source_product_terms(
     for (std::size_t j = 0; j < active_count; ++j) {
       scratch.lanes[j] =
           static_cast<semantic::Index>(scratch.positions[j]);
-      scratch.products[j] = term.sign;
     }
     if (active_count == 0U) {
       continue;
     }
+
+    evaluate_source_product_ops_lanes(
+        plan, term.source_product_ops, executor, frame, scratch.lanes.data(),
+        active_count, &scratch.values, integral_depth * 4U + 2U);
+    std::size_t nonzero_count = 0U;
+    for (std::size_t j = 0; j < active_count; ++j) {
+      const auto lane = scratch.positions[j];
+      const double product = term.sign * scratch.values[j];
+      if (product != 0.0 && std::isfinite(product) &&
+          (!has_common_sources || scratch.child_values[lane] != 0.0)) {
+        scratch.products[nonzero_count] = product;
+        scratch.lanes[nonzero_count] = scratch.lanes[j];
+        scratch.positions[nonzero_count++] = lane;
+      }
+    }
+    active_count = nonzero_count;
 
     for (semantic::Index factor_index = 0;
          factor_index < term.integral_factor_nodes.size && active_count > 0U;
@@ -314,6 +327,11 @@ inline void evaluate_source_product_terms(
                                    factor_index)];
       const auto &factor_node =
           program.nodes[static_cast<std::size_t>(node_id)];
+      scratch.factor_scales.resize(active_count);
+      for (std::size_t j = 0; j < active_count; ++j) {
+        scratch.factor_scales[j] = std::fabs(scratch.products[j] *
+            (has_common_sources ? scratch.child_values[scratch.positions[j]] : 1.0));
+      }
       evaluate_compiled_lane_integral_node(
           plan,
           factor_node,
@@ -322,7 +340,7 @@ inline void evaluate_source_product_terms(
           scratch.lanes.data(),
           active_count,
           &scratch.values,
-          integral_depth + 1U);
+          integral_depth + 1U, scratch.factor_scales.data());
       std::size_t next_count = 0U;
       for (std::size_t j = 0; j < active_count; ++j) {
         const double product = scratch.products[j] * scratch.values[j];
@@ -374,30 +392,14 @@ inline void evaluate_source_product_terms(
     if (active_count == 0U) {
       continue;
     }
-    evaluate_source_product_ops_lanes(
-        plan,
-        term.source_product_ops,
-        executor,
-        frame,
-        scratch.lanes.data(),
-        active_count,
-        &scratch.values,
-        integral_depth * 4U + 2U);
     for (std::size_t j = 0; j < active_count; ++j) {
-      (*out)[scratch.positions[j]] +=
-          scratch.products[j] * scratch.values[j];
+      (*out)[scratch.positions[j]] += scratch.products[j];
     }
   }
   if (has_common_sources) {
     for (std::size_t lane = 0; lane < lane_count; ++lane) {
       const double value = (*out)[lane] * scratch.child_values[lane];
-      (*out)[lane] =
-          std::isfinite(value) && value != 0.0 ? value : 0.0;
-    }
-  }
-  if (execution.clean_signed_source_sum) {
-    for (auto &value : *out) {
-      value = clean_signed_value(value);
+      (*out)[lane] = std::isfinite(value) ? value : 0.0;
     }
   }
 }
@@ -410,7 +412,8 @@ inline void evaluate_compiled_lane_integral_node(
     const semantic::Index *lanes,
     const std::size_t lane_count,
     std::vector<double> *out,
-  const std::size_t integral_depth) {
+    const std::size_t integral_depth,
+    const double *absolute_scales) {
   const auto &program = plan.compiled_math;
   const auto &kernel = program.integral_kernels[
       static_cast<std::size_t>(node.integral_kernel_slot)];
@@ -418,12 +421,32 @@ inline void evaluate_compiled_lane_integral_node(
   scratch.ensure(kAdaptiveNodeBatchSize);
   scratch.integral_lower.assign(lane_count, 0.0);
   scratch.integral_upper.resize(lane_count);
+  const auto cached = [&](std::size_t request, std::size_t pos) {
+    const double scale = absolute_scales == nullptr ? 1.0 : absolute_scales[request];
+    const auto &estimate = parent->cache_estimates[pos];
+    return parent->cache_epoch[pos] == parent->cache_current_epoch &&
+        adaptive_integral_converged(estimate.value, estimate.error,
+            kAdaptiveAbsoluteTolerance / scale, kAdaptiveRelativeTolerance);
+  };
   for (std::size_t request = 0U; request < lane_count; ++request) {
     const auto lane = static_cast<std::size_t>(compiled_frame_lane(lanes, request));
     const auto cache_pos = parent->integral_cache_pos(node.integral_kernel_slot, lane);
     scratch.integral_upper[request] =
-        parent->cache_epoch[cache_pos] == parent->cache_current_epoch
+        cached(request, cache_pos)
             ? 0.0 : compiled_lane_node_time(node, *parent, lane);
+  }
+  // PDF/CDF factors are exactly zero before their source's support begins.
+  if (!parent->has_sequence_history) {
+    for (const auto leaf : kernel.support_leaves) {
+      const auto input = executor->lanes.source_state().leaf_batch(leaf);
+      for (std::size_t i = 0; i < lane_count; ++i) {
+        const auto lane = static_cast<std::size_t>(compiled_frame_lane(lanes, i));
+        const auto source = executor->lanes.source_lane(*parent, lane);
+        const auto row = input.physical_row(source);
+        scratch.integral_lower[i] = std::max(scratch.integral_lower[i],
+            input.onset(row) + input.t0(row));
+      }
+    }
   }
   auto evaluate = [&](const double *times, const std::size_t *requests,
                       const std::size_t child_count, double *values) {
@@ -437,69 +460,59 @@ inline void evaluate_compiled_lane_integral_node(
     const auto &execution = child.has_sequence_history
                                 ? kernel.execution
                                 : kernel.initial_execution;
-    if (execution.kind == CompiledMathExecutionKind::Schedule) {
-      const auto &root =
-          program.roots[static_cast<std::size_t>(kernel.root_id)];
-      evaluate_compiled_lane_schedule(
-          plan,
-          root.schedule,
-          root.node_id,
-          executor,
-          &child,
-          child_count,
-          &child_values,
-          integral_depth + 1U);
-    } else if (execution.kind == CompiledMathExecutionKind::SourceProduct) {
-      evaluate_source_product_ops_lanes(
-          plan,
-          execution.source_product_ops,
-          executor,
-          &child,
-          nullptr,
-          child_count,
-          &child_values,
-          integral_depth * 4U + 3U);
-      if (execution.clean_signed_source_sum) {
-        for (auto &value : child_values) {
-          value = clean_signed_value(value);
-        }
-      }
-    } else {
-      evaluate_source_product_terms(
-          plan,
-          execution,
-          executor,
-          &child,
-          child_count,
-          &child_values,
-          integral_depth + 1U);
-    }
+    evaluate_compiled_lane_execution(plan, program.roots[kernel.root_id], execution,
+        executor, &child, child_count, &child_values, integral_depth + 1U);
 
     for (std::size_t i = 0U; i < child_count; ++i) {
       values[i] = std::isfinite(child_values[i]) ? child_values[i] : 0.0;
     }
   };
+  const bool shared = !parent->has_sequence_history &&
+          lane_count >= kCumulativeMinimumRequests &&
+          !kernel.cumulative_leaves.empty()
+      ? prepare_cumulative_lanes(plan, kernel, executor->lanes.source_state(),
+          *parent, lanes, lane_count, scratch.integral_lower.data(),
+          scratch.integral_upper.data(), &scratch.cumulative)
+      : false;
+  const double *scales = absolute_scales;
+  if (shared && absolute_scales != nullptr) {
+    scratch.integral_scales.assign(absolute_scales, absolute_scales + lane_count);
+    for (auto i = scratch.cumulative.order.rbegin(); i != scratch.cumulative.order.rend(); ++i) {
+      const auto previous = scratch.cumulative.previous[*i];
+      if (previous != lane_count) scratch.integral_scales[previous] = std::max(
+          scratch.integral_scales[previous], scratch.integral_scales[*i]);
+    }
+    scales = scratch.integral_scales.data();
+  }
   adaptive_integrate_lane_batch(
       lane_count, scratch.integral_lower.data(), scratch.integral_upper.data(),
-      evaluate, &scratch.adaptive, out);
+      evaluate, &scratch.adaptive, out, kAdaptiveAbsoluteTolerance,
+      kAdaptiveRelativeTolerance, scales,
+      shared ? scratch.cumulative.tolerance_divisors.data() : nullptr);
+  if (shared) {
+    finish_cumulative_lanes(lane_count, scratch.integral_upper.data(), evaluate, &scratch.adaptive,
+        &scratch.cumulative, out, absolute_scales);
+  }
   for (std::size_t request = 0; request < lane_count; ++request) {
     const auto lane = static_cast<std::size_t>(
         compiled_frame_lane(lanes, request));
     const auto cache_pos = parent->integral_cache_pos(node.integral_kernel_slot, lane);
-    if (parent->cache_epoch[cache_pos] == parent->cache_current_epoch) {
-      (*out)[request] = parent->cache_values[cache_pos];
+    if (scratch.integral_upper[request] == 0.0 && cached(request, cache_pos)) {
+      (*out)[request] = parent->cache_estimates[cache_pos].value;
       continue;
     }
     if (!(compiled_lane_node_time(node, *parent, lane) > 0.0)) {
       continue;
     }
     double value = (*out)[request];
+    // A raw integral may still be multiplied by a large external density.
     value = node.kind == CompiledMathNodeKind::IntegralZeroToCurrent
                 ? clamp_probability(value)
-                : (std::isfinite(value) ? clean_signed_value(value) : 0.0);
+                : (std::isfinite(value) ? value : 0.0);
     (*out)[request] = value;
     parent->cache_epoch[cache_pos] = parent->cache_current_epoch;
-    parent->cache_values[cache_pos] = value;
+    parent->cache_estimates[cache_pos] = {value, shared
+        ? scratch.cumulative.errors[request] : scratch.adaptive.lanes[request].error};
   }
 }
 
@@ -556,10 +569,6 @@ inline void evaluate_compiled_lane_schedule(
       std::copy_n(values, lane_count, node_out);
       break;
     }
-    case CompiledMathNodeKind::ExprDensity:
-    case CompiledMathNodeKind::ExprCdf:
-    case CompiledMathNodeKind::ExprSurvival:
-      std::terminate();
     case CompiledMathNodeKind::TimeGate:
     case CompiledMathNodeKind::StrictTimeGate: {
       const auto child_id = program.child_nodes[
@@ -575,15 +584,34 @@ inline void evaluate_compiled_lane_schedule(
       }
       break;
     }
-    case CompiledMathNodeKind::OutcomeSubsetUnused:
-    case CompiledMathNodeKind::OutcomeSubsetUsed:
-      for (std::size_t i = 0; i < lane_count; ++i) {
-        node_out[i] = compiled_lane_outcome_gate_open(
-                             node, plan, *frame, i)
-                             ? 1.0
-                             : 0.0;
+    case CompiledMathNodeKind::OutcomeSelect: {
+      // Branch roots have their own schedules; evaluate only selected lanes.
+      for (std::size_t branch = 0; branch < 2U; ++branch) {
+        std::size_t count = 0;
+        for (std::size_t lane = 0; lane < lane_count; ++lane) {
+          if (compiled_lane_outcome_used(node, plan, *frame, lane) == (branch == 1U)) {
+            scratch.positions[count++] = lane;
+          }
+        }
+        if (count == 0U) continue;
+        const auto &branch_node = program.nodes[
+            program.child_nodes[node.children.offset + branch]];
+        if (branch_node.kind == CompiledMathNodeKind::Constant) {
+          for (std::size_t i = 0; i < count; ++i) {
+            node_out[scratch.positions[i]] = branch_node.constant;
+          }
+          continue;
+        }
+        auto &child = executor->lanes.integral_frame(integral_depth, count);
+        child.copy_lanes_from(*frame, scratch.positions.data(), count);
+        evaluate_compiled_lane_root(plan, node.branch_roots[branch], executor,
+            &child, count, &scratch.values, integral_depth + 1U);
+        for (std::size_t i = 0; i < count; ++i) {
+          node_out[scratch.positions[i]] = scratch.values[i];
+        }
       }
       break;
+    }
     case CompiledMathNodeKind::IntegralZeroToCurrent:
     case CompiledMathNodeKind::IntegralZeroToCurrentRaw:
       evaluate_compiled_lane_integral_node(
@@ -635,8 +663,7 @@ inline void evaluate_compiled_lane_schedule(
         const double *child = frame->values_for(child_id);
         for (std::size_t i = 0; i < lane_count; ++i) {
           const double value = node_out[i] * child[i];
-          node_out[i] =
-              std::isfinite(value) && value != 0.0 ? value : 0.0;
+          node_out[i] = std::isfinite(value) ? value : 0.0;
         }
       }
       break;
@@ -680,23 +707,15 @@ inline void evaluate_compiled_lane_schedule(
   std::copy_n(frame->values_for(result_node_id), lane_count, out->begin());
 }
 
-inline void evaluate_compiled_lane_root(
+inline void evaluate_compiled_lane_execution(
     const ExactVariantPlan &plan,
-    const semantic::Index root_id,
+    const CompiledMathRoot &root,
+    const CompiledMathExecutionPlan &execution,
     CompiledLaneExecutor *executor,
     CompiledLaneFrame *frame,
     const std::size_t lane_count,
     std::vector<double> *out,
-    const std::size_t integral_depth = 0U) {
-  if (root_id == semantic::kInvalidIndex || lane_count == 0U) {
-    out->assign(lane_count, 0.0);
-    return;
-  }
-  const auto &root =
-      plan.compiled_math.roots[static_cast<std::size_t>(root_id)];
-  const auto &execution = frame->has_sequence_history
-                              ? root.execution
-                              : root.initial_execution;
+    const std::size_t integral_depth) {
   if (execution.kind == CompiledMathExecutionKind::SourceProduct) {
     evaluate_source_product_ops_lanes(
         plan,
@@ -707,11 +726,6 @@ inline void evaluate_compiled_lane_root(
         lane_count,
         out,
         integral_depth * 4U);
-    if (execution.clean_signed_source_sum) {
-      for (auto &value : *out) {
-        value = clean_signed_value(value);
-      }
-    }
   } else if (execution.kind == CompiledMathExecutionKind::SourceProductSum) {
     evaluate_source_product_terms(
         plan,
@@ -732,6 +746,27 @@ inline void evaluate_compiled_lane_root(
         out,
         integral_depth);
   }
+  if (execution.clean_signed_source_sum) {
+    for (auto &value : *out) value = clean_signed_value(value);
+  }
+}
+
+inline void evaluate_compiled_lane_root(
+    const ExactVariantPlan &plan,
+    const semantic::Index root_id,
+    CompiledLaneExecutor *executor,
+    CompiledLaneFrame *frame,
+    const std::size_t lane_count,
+    std::vector<double> *out,
+    const std::size_t integral_depth = 0U) {
+  if (root_id == semantic::kInvalidIndex || lane_count == 0U) {
+    out->assign(lane_count, 0.0);
+    return;
+  }
+  const auto &root = plan.compiled_math.roots[root_id];
+  evaluate_compiled_lane_execution(plan, root,
+      frame->has_sequence_history ? root.execution : root.initial_execution,
+      executor, frame, lane_count, out, integral_depth);
 }
 
 } // namespace detail

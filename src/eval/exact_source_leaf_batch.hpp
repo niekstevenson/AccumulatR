@@ -1,5 +1,7 @@
 #pragma once
 
+#include <Rcpp.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -343,8 +345,6 @@ inline void evaluate_exgauss_leaf_batch(
   constexpr bool need_pdf = (Mask & kLeafChannelPdf) != 0U;
   constexpr bool need_cdf =
       (Mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
-  constexpr std::size_t normal_count = need_cdf ? 4U : 3U;
-  constexpr std::size_t exponent_count = normal_count + 2U;
   const auto impossible = exact_source_impossible_fill();
   const auto *x = input->elapsed();
   const auto *mu = input->parameter(0U);
@@ -363,71 +363,63 @@ inline void evaluate_exgauss_leaf_batch(
     return;
   }
 
-  input->ensure_work(count, 2U * exponent_count +
-                                2U * normal_count);
+  input->ensure_work(count, 12U);
   auto *exponent_arguments = input->work_plane(0U);
-  auto *factors = input->work_plane(exponent_count);
-  auto *exponentials =
-      input->work_plane(exponent_count + normal_count);
-  auto *normal_cdf = input->work_plane(
-      2U * exponent_count + normal_count);
+  auto *factors = input->work_plane(4U);
+  auto *tail_factors = input->work_plane(6U);
+  auto *exponentials = input->work_plane(8U);
+  std::size_t exponent_count = 2U * count;
   for (std::size_t lane = 0U; lane < count; ++lane) {
     const auto i = input->positions[lane];
-    const double inv_tau = 1.0 / tau[i];
-    const double sigma_over_tau = sigma[i] * inv_tau;
-    const double lower_z = -mu[i] / sigma[i];
-    const double z = (x[i] - mu[i]) / sigma[i];
-    exponent_arguments[lane] = -lower_z;
-    exponent_arguments[count + lane] = lower_z - sigma_over_tau;
-    exponent_arguments[2U * count + lane] = z - sigma_over_tau;
-    if constexpr (need_cdf) {
-      exponent_arguments[3U * count + lane] = -z;
-    }
-    const auto tail_exponent = [sigma_over_tau](const double z) {
-      const double w = z - sigma_over_tau;
-      const double scale = sigma_over_tau * (0.5 * sigma_over_tau - z);
-      // Combine the exponential with the normal tail before exponentiating.
-      return w <= 0.0 ? -0.5 * z * z : scale;
+    const double ratio = sigma[i] / tau[i];
+    const auto prepare_endpoint = [&](const std::size_t slot, const double z) {
+      const auto position = slot * count + lane;
+      const double w = z - ratio;
+      exponent_arguments[position] = -0.5 * z * z;
+      if (slot == 0U || need_cdf) {
+        factors[position] = prepare_normal_cdf(-z);
+      }
+      const double factor = normal_tail_factor(std::fabs(w));
+      tail_factors[position] = std::copysign(factor, w > 0.0 ? -1.0 : 1.0);
+      // exp(r*(r/2-z)) * Phi(w) shares exp(-z*z/2) with Phi(-z).
+      // For w > 0, normal symmetry also needs the unweighted exponential.
+      if (w > 0.0) {
+        exponent_arguments[exponent_count++] = ratio * (0.5 * ratio - z);
+      }
     };
-    exponent_arguments[normal_count * count + lane] = tail_exponent(lower_z);
-    exponent_arguments[(normal_count + 1U) * count + lane] = tail_exponent(z);
+    prepare_endpoint(0U, -mu[i] / sigma[i]);
+    prepare_endpoint(1U, (x[i] - mu[i]) / sigma[i]);
   }
-  prepare_normal_lanes<true>(
-      exponent_arguments, normal_count * count,
-      factors, exponent_arguments);
-  exp_lanes(
-      exponent_arguments, exponentials, exponent_count * count);
-  finish_normal_cdf_lanes(
-      normal_count * count, factors, exponentials, normal_cdf);
+  exp_lanes(exponent_arguments, exponentials, exponent_count);
 
   const auto *q = input->q();
+  std::size_t extra_exponential = 2U * count;
   for (std::size_t lane = 0U; lane < count; ++lane) {
     const auto i = input->positions[lane];
-    const auto tail_factor = [&](const std::size_t slot, const double z) {
-      const double w = z - sigma[i] / tau[i];
-      if (w < -37.0) return normal_tail_factor(-w);
-      return w <= 0.0 ? factors[slot * count + lane]
-                      : normal_cdf[slot * count + lane];
+    const auto weighted_tail = [&](const std::size_t slot) {
+      const auto position = slot * count + lane;
+      double value = tail_factors[position] * exponentials[position];
+      if (std::signbit(tail_factors[position])) {
+        value += exponentials[extra_exponential++];
+      }
+      return value;
     };
+    const double lower_tail = weighted_tail(0U);
+    const double x_tail = weighted_tail(1U);
     const double lower_survival =
-        normal_cdf[lane] +
-        exponentials[normal_count * count + lane] *
-            tail_factor(1U, -mu[i] / sigma[i]);
+        finish_normal_cdf(factors[lane], exponentials[lane]) + lower_tail;
     if (!(lower_survival > 0.0) || !std::isfinite(lower_survival)) {
       continue;
     }
-    const double x_tail = tail_factor(2U, (x[i] - mu[i]) / sigma[i]);
-    const double x_exponential =
-        exponentials[(normal_count + 1U) * count + lane];
     double base_pdf = 0.0;
     double base_cdf = 0.0;
     if constexpr (need_pdf) {
-      base_pdf = (1.0 / tau[i]) * x_exponential * x_tail /
-                 lower_survival;
+      base_pdf = (1.0 / tau[i]) * x_tail / lower_survival;
     }
     if constexpr (need_cdf) {
       const double survival =
-          normal_cdf[3U * count + lane] + x_exponential * x_tail;
+          finish_normal_cdf(factors[count + lane], exponentials[count + lane]) +
+          x_tail;
       base_cdf = clamp_probability(
           1.0 - survival / lower_survival);
     }
@@ -540,36 +532,15 @@ inline void evaluate_rdm_regular_group(
   constexpr bool need_pdf = (Mask & kLeafChannelPdf) != 0U;
   constexpr bool need_cdf =
       (Mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U;
-  constexpr bool combined = need_pdf && need_cdf;
-  constexpr std::size_t normal_count = combined ? 5U
-      : (need_pdf ? 2U : 4U);
-  constexpr std::size_t exponent_count = normal_count + 2U;
-  constexpr std::size_t second_stage_planes = need_cdf ? 4U : 0U;
-  constexpr std::size_t operand_count = 2U +
-      (need_cdf ? 2U : 0U) + (need_pdf ? 1U : 0U);
-  input->ensure_work(
-      count, 2U * exponent_count + 2U * normal_count +
-                 second_stage_planes + operand_count);
+  input->ensure_work(count, need_cdf ? 12U : 9U);
   auto *exponent_arguments = input->work_plane(0U);
-  auto *factors = input->work_plane(exponent_count);
-  auto *exponentials =
-      input->work_plane(exponent_count + normal_count);
-  auto *normal_cdf = input->work_plane(
-      2U * exponent_count + normal_count);
-  auto *outer_arguments = input->work_plane(
-      2U * exponent_count + 2U * normal_count);
-  auto *outer_exponentials = need_cdf
-      ? input->work_plane(
-            2U * exponent_count + 2U * normal_count + 2U)
-      : nullptr;
-  auto *l_values = input->work_plane(
-      2U * exponent_count + 2U * normal_count + second_stage_planes);
-  auto *a_values = l_values + count;
-  auto *k_values = need_cdf ? a_values + count : nullptr;
-  auto *sqrt_x = need_cdf ? k_values + count : nullptr;
-  auto *inv_sqrt_x = need_pdf
-      ? a_values + (need_cdf ? 3U : 1U) * count
-      : nullptr;
+  auto *factors = input->work_plane(2U);
+  auto *exponentials = input->work_plane(4U);
+  auto *l_values = input->work_plane(6U);
+  auto *a_values = input->work_plane(7U);
+  auto *sqrt_x = input->work_plane(8U);
+  auto *k_values = need_cdf ? input->work_plane(9U) : nullptr;
+  auto *tail_factors = need_cdf ? input->work_plane(10U) : nullptr;
   const auto *x = input->elapsed();
   const auto *v = input->parameter(0U);
   const auto *B = input->parameter(1U);
@@ -583,119 +554,68 @@ inline void evaluate_rdm_regular_group(
     const double k = B[i] * inv_s + a;
     const double sqt = std::sqrt(x[i]);
     const double inv_sqt = 1.0 / sqt;
-    const double inverse_x = 1.0 / x[i];
+    const double drift_time = sqt * l;
+    const double z_a = (k - a) * inv_sqt - drift_time;
+    const double z_b = (k + a) * inv_sqt - drift_time;
+    exponent_arguments[lane] = -0.5 * z_a * z_a;
+    exponent_arguments[count + lane] = -0.5 * z_b * z_b;
+    factors[lane] = prepare_normal_cdf(z_a);
+    factors[count + lane] = prepare_normal_cdf(z_b);
     l_values[lane] = l;
     a_values[lane] = a;
+    sqrt_x[lane] = sqt;
     if constexpr (need_cdf) {
       k_values[lane] = k;
-      sqrt_x[lane] = sqt;
-    }
-    if constexpr (need_pdf) {
-      inv_sqrt_x[lane] = inv_sqt;
-    }
-    if constexpr (need_pdf) {
-      exponent_arguments[lane] =
-          (-k + a) * inv_sqt + sqt * l;
-      exponent_arguments[count + lane] =
-          (k + a) * inv_sqt - sqt * l;
-    }
-    if constexpr (need_cdf) {
-      constexpr std::size_t z_offset = combined ? 2U : 0U;
-      exponent_arguments[z_offset * count + lane] =
-          -(k - a + x[i] * l) * inv_sqt;
-      exponent_arguments[(z_offset + 1U) * count + lane] =
-          -(k + a + x[i] * l) * inv_sqt;
-      if constexpr (combined) {
-        exponent_arguments[4U * count + lane] =
-            (k - a) * inv_sqt - sqt * l;
-      } else {
-        exponent_arguments[2U * count + lane] =
-            (k + a) * inv_sqt - sqt * l;
-        exponent_arguments[3U * count + lane] =
-            (k - a) * inv_sqt - sqt * l;
-      }
-    }
-    if constexpr (need_pdf) {
-      const double delta_a = a - k + x[i] * l;
-      const double delta_b = a + k - x[i] * l;
-      exponent_arguments[normal_count * count + lane] =
-          -0.5 * delta_a * delta_a * inverse_x;
-      exponent_arguments[(normal_count + 1U) * count + lane] =
-          -0.5 * delta_b * delta_b * inverse_x;
-    } else {
-      const double delta_a = k - a - x[i] * l;
-      const double delta_b = a + k - x[i] * l;
-      exponent_arguments[normal_count * count + lane] =
-          -0.5 * delta_a * delta_a * inverse_x;
-      exponent_arguments[(normal_count + 1U) * count + lane] =
-          -0.5 * delta_b * delta_b * inverse_x;
+      // For w = (d + x*l)/sqrt(x) >= 0, with d = k +/- a:
+      // exp(2*l*d) * Phi(-w) = tail_factor(w) * exp(-z*z/2),
+      // where z = (d - x*l)/sqrt(x). Reuse the two Gaussians;
+      // the weighted tails need neither logarithms nor extra exponentials.
+      const double w_a = (k - a) * inv_sqt + drift_time;
+      const double w_b = (k + a) * inv_sqt + drift_time;
+      tail_factors[lane] =
+          std::copysign(normal_tail_factor(std::fabs(w_a)), w_a);
+      tail_factors[count + lane] =
+          std::copysign(normal_tail_factor(std::fabs(w_b)), w_b);
     }
   }
-  prepare_normal_lanes<true>(
-      exponent_arguments, normal_count * count,
-      factors, exponent_arguments);
-  exp_lanes(exponent_arguments, exponentials, exponent_count * count);
-  finish_normal_cdf_lanes(
-      normal_count * count, factors, exponentials, normal_cdf);
-
-  if constexpr (need_cdf) {
-    auto *log_cdf = outer_arguments;
-    constexpr std::size_t log_cdf_offset = combined ? 2U : 0U;
-    const auto *log_cdf_input = normal_cdf + log_cdf_offset * count;
-    log_lanes(log_cdf_input, log_cdf, 2U * count);
-    for (std::size_t lane = 0U; lane < count; ++lane) {
-      const double log_a = log_cdf_input[lane] > 0.0
-                               ? log_cdf[lane]
-                               : -1e30;
-      const double log_b = log_cdf_input[count + lane] > 0.0
-                               ? log_cdf[count + lane]
-                               : -1e30;
-      outer_arguments[lane] =
-          2.0 * l_values[lane] * (k_values[lane] - a_values[lane]) +
-          log_a;
-      outer_arguments[count + lane] =
-          2.0 * l_values[lane] * (k_values[lane] + a_values[lane]) +
-          log_b;
-    }
-    exp_lanes(
-        outer_arguments, outer_exponentials, 2U * count);
-  }
+  exp_lanes(exponent_arguments, exponentials, 2U * count);
 
   const auto *q = input->q();
   for (std::size_t lane = 0U; lane < count; ++lane) {
     const auto i = positions[lane];
     const double l = l_values[lane];
     const double a = a_values[lane];
+    const double normal_a = finish_normal_cdf(factors[lane], exponentials[lane]);
+    const double normal_b = finish_normal_cdf(
+        factors[count + lane], exponentials[count + lane]);
+    const double normal_difference = normal_b - normal_a;
+    const double gaussian_difference = kInverseSqrtTwoPi *
+        (exponentials[lane] - exponentials[count + lane]);
     double base_pdf = 0.0;
     double base_cdf = 0.0;
     if constexpr (need_pdf) {
-      const double t1 = kInverseSqrtTwoPi *
-                        (exponentials[normal_count * count + lane] -
-                         exponentials[(normal_count + 1U) * count + lane]) *
-                        inv_sqrt_x[lane];
-      const double t2a = 2.0 * normal_cdf[lane] - 1.0;
-      const double t2b = 2.0 * normal_cdf[count + lane] - 1.0;
-      const double t2 = 0.5 * l * (t2a + t2b);
-      base_pdf = safe_density((t1 + t2) / (2.0 * a));
+      base_pdf = safe_density(
+          (gaussian_difference / sqrt_x[lane] + l * normal_difference) /
+          (2.0 * a));
     }
     if constexpr (need_cdf) {
       const double k = k_values[lane];
-      constexpr std::size_t t4a_index = combined ? 1U : 2U;
-      constexpr std::size_t t4b_index = combined ? 4U : 3U;
-      const double t1 = sqrt_x[lane] * kInverseSqrtTwoPi *
-                        (exponentials[normal_count * count + lane] -
-                         exponentials[(normal_count + 1U) * count + lane]);
-      const double t2 = a +
-          (outer_exponentials[count + lane] - outer_exponentials[lane]) /
-              (2.0 * l);
-      const double t4a =
-          2.0 * normal_cdf[t4a_index * count + lane] - 1.0;
-      const double t4b =
-          2.0 * normal_cdf[t4b_index * count + lane] - 1.0;
-      const double t4 =
-          0.5 * (x[i] * l - a - k + 0.5 / l) * t4a +
-          0.5 * (k - a - x[i] * l - 0.5 / l) * t4b;
-      base_cdf = clamp_probability(0.5 * (t4 + t2 + t1) / a);
+      double tail_a = tail_factors[lane] * exponentials[lane];
+      double tail_b = tail_factors[count + lane] * exponentials[count + lane];
+      // Normal symmetry covers negative w without taking a logarithm.
+      if (std::signbit(tail_factors[lane])) {
+        tail_a += std::exp(2.0 * l * (k - a));
+      }
+      if (std::signbit(tail_factors[count + lane])) {
+        tail_b += std::exp(2.0 * l * (k + a));
+      }
+      const double t1 = sqrt_x[lane] * gaussian_difference;
+      const double t2 = (tail_b - tail_a) / (2.0 * l);
+      // Combine the normal terms before multiplying by time, so the far
+      // tail does not subtract two large, nearly equal time coefficients.
+      const double t4 = (x[i] * l - k + 0.5 / l) * normal_difference;
+      base_cdf = clamp_probability(
+          1.0 - 0.5 * (normal_a + normal_b) + (t1 + t2 + t4) / (2.0 * a));
     }
     source_lane_store_fill_masked<Mask>(
         out, i,
@@ -784,8 +704,13 @@ template <leaf::DistKind Kind, std::uint8_t Mask>
       auto fill = exact_source_impossible_fill();
       const double x = elapsed[i];
       if (x > 0.0) {
-        fill = exact_source_gamma_leaf_fill<Mask>(
-            p0[i], p1[i], q[i], x);
+        const double scale = 1.0 / p1[i];
+        fill = exact_source_finish_base_fill<Mask>(
+            (Mask & kLeafChannelPdf) != 0U
+                ? R::dgamma(x, p0[i], scale, 0) : 0.0,
+            (Mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U
+                ? R::pgamma(x, p0[i], scale, 1, 0) : 0.0,
+            q[i]);
       }
       source_lane_store_fill_masked<Mask>(out, i, fill);
     }

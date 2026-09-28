@@ -9,6 +9,7 @@
 
 #include "exact_adaptive.hpp"
 #include "exact_sequence.hpp"
+#include "probability_lane_groups.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
@@ -26,6 +27,7 @@ enum class ExactResponseMeasure : std::uint8_t {
 };
 
 struct ExactIntervalLaneWorkspace {
+  ProbabilityLaneGroups probability_groups;
   AdaptiveLaneWorkspace adaptive;
   std::vector<double> lower;
   std::vector<double> upper;
@@ -51,7 +53,7 @@ inline void exact_interval_trigger_weights(
     const auto &compiled = plan.trigger_state_table.states[state];
     auto *destination = workspace->trigger_weights.data() + state * lanes.size;
     if (compiled.weight_terms.empty()) {
-      std::fill_n(destination, lanes.size, compiled.fixed_weight);
+      std::fill_n(destination, lanes.size, 1.0);
       continue;
     }
     exact_compiled_trigger_state_weights_lanes(
@@ -394,12 +396,11 @@ inline void exact_weighted_outcome_density_mapped_lanes(
         times, source_lanes, count);
     std::fill_n(out, count, 0.0);
     for (const auto &term : terms) {
-      evaluate_exact_step_distribution_prepared_lanes(
+      evaluate_exact_outcome_density_lanes(
           plan,
           &frame,
           count,
           term.target,
-          false,
           exact_workspace,
           &workspace->term_values);
       for (std::size_t position = 0U; position < count; ++position) {
@@ -422,12 +423,11 @@ inline void exact_weighted_outcome_density_mapped_lanes(
         times, source_lanes, count);
     workspace->state_values.assign(count, 0.0);
     for (const auto &term : terms) {
-      evaluate_exact_step_distribution_prepared_lanes(
+      evaluate_exact_outcome_density_lanes(
           plan,
           &frame,
           count,
           term.target,
-          false,
           exact_workspace,
           &workspace->term_values);
       for (std::size_t position = 0U; position < count; ++position) {
@@ -553,22 +553,36 @@ inline void exact_response_probability_between_lanes(
     ExactStepLaneWorkspace *exact_workspace,
     ExactIntervalLaneWorkspace *workspace,
     std::vector<double> *out) {
-  if (measure == ExactResponseMeasure::ObservableResponses &&
-      complete_outcome_partition) {
+  const bool all_responses = measure == ExactResponseMeasure::ObservableResponses &&
+                            complete_outcome_partition;
+  // Direct survival endpoints are already cheap batched operations. Group only
+  // requests that otherwise repeat a numerical probability integral.
+  if (all_responses && plan.no_response.direct_leaf_failure_product) {
     exact_any_response_probability_between_lanes(
         plan, lanes, lower, upper, exact_workspace, workspace, out);
     return;
   }
-  exact_integrated_outcome_probability_between_lanes(
-      plan,
-      lanes,
-      terms,
-      lower,
-      upper,
-      measure == ExactResponseMeasure::ObservableResponses,
-      exact_workspace,
-      workspace,
-      out);
+  const auto unique = workspace->probability_groups.prepare(plan, lanes, lower, upper);
+  if (workspace->probability_groups.grouped) {
+    lower = workspace->probability_groups.lower_bounds.data();
+    upper = workspace->probability_groups.upper_bounds.data();
+  }
+  if (all_responses) {
+    exact_finite_response_probability_between_lanes(
+        plan, unique, lower, upper, exact_workspace, workspace, out);
+  } else {
+    exact_integrated_outcome_probability_between_lanes(
+        plan,
+        unique,
+        terms,
+        lower,
+        upper,
+        measure == ExactResponseMeasure::ObservableResponses,
+        exact_workspace,
+        workspace,
+        out);
+  }
+  workspace->probability_groups.expand(out);
 }
 
 } // namespace detail

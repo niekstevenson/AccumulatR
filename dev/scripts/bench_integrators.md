@@ -1,16 +1,8 @@
-# Composite quadrature benchmark
+# Historical composite quadrature comparison
 
-Run `source('dev/scripts/bench_integrators.R')` from the repository root.
-Edit the fit directory, subjects, draw count and tolerances at the top.
-Requires installed AccumulatR, EMC2 and Rcpp. Nothing is installed by the script.
-Results are written to `dev/scripts/scratch_outputs/`.
-
-The benchmark compiles a temporary copy of the real executor. Parameters are
-prepared outside the C++ timer; workspaces are reused across particles.
-It compares fixed GL31 with lane-batched adaptive GK15 at different tolerances.
-Hart and the likelihood floor (`1e-10`) are identical for every method.
-This isolates quadrature, not end-to-end package performance. Each timed case
-has a two-minute limit, checked between particles.
+The old benchmark was removed because its executor replacement no longer matches
+the compiled-integral interface. The measurements below predate cumulative reuse.
+See `cumulative_integrals.md` and `bench_cumulative.R` for the current comparison.
 
 ## Selected defaults and historical results
 
@@ -32,8 +24,7 @@ The reference was GK15 with `abs=1e-12, rel=1e-10`, not an analytic error bound.
 Parameter-mean shifts came from importance reweighting saved draws, not refits.
 The selected setting's worst total log-likelihood error was 1.16, and worst
 individual-trial relative error was 68.4%. These results are not a uniform
-accuracy guarantee. The default script runs a smaller, evenly spaced screen;
-it does not reproduce the full-draw reweighting analysis above.
+accuracy guarantee.
 
 ## Discarded experiments
 

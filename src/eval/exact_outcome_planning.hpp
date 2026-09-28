@@ -14,15 +14,15 @@ inline semantic::Index exact_terminal_leaf_release(
     const ExactVariantBuildState &plan,
     const ExactSymbolicTransitionScenario &scenario) {
   const auto source_id =
-      exact_symbolic_transition_release_source_id(scenario.transition);
+      scenario.transition.release_source_id;
   if (source_id == semantic::kInvalidIndex ||
       source_id >= plan.program.layout.n_leaves ||
       plan.source_count != plan.program.layout.n_leaves) {
     return semantic::kInvalidIndex;
   }
-  if (!scenario.transition.readiness_time_expr.requirements.empty() ||
+  if (!scenario.transition.readiness.empty() ||
       !scenario.transition.guards.empty() ||
-      !scenario.transition.order_region.source_order_facts.empty()) {
+      !scenario.transition.source_order_facts.empty()) {
     return semantic::kInvalidIndex;
   }
   const auto &relations = scenario.transition.relation_template;
@@ -31,11 +31,6 @@ inline semantic::Index exact_terminal_leaf_release(
         relations.relations.size() == 1U &&
         relations.source_ids.front() == source_id &&
         relations.relations.front() == ExactRelation::At)) {
-    return semantic::kInvalidIndex;
-  }
-  if (!scenario.transition.active_sources.empty() &&
-      (scenario.transition.active_sources.size() != 1U ||
-       scenario.transition.active_sources.front() != source_id)) {
     return semantic::kInvalidIndex;
   }
   return source_id;
@@ -79,19 +74,6 @@ inline ExactTerminalNoResponsePlan compile_terminal_no_response_plan(
   return no_response;
 }
 
-inline semantic::Index compile_scenario_probability_root(
-    ExactVariantBuildState *plan,
-    const ExactOutcomeRegionCompileContext &outcome_context,
-    ExactSymbolicTransitionScenario *formula) {
-  semantic::Index region_root{semantic::kInvalidIndex};
-  if (exact_order_region_probability_root(
-          plan, outcome_context, *formula, &region_root)) {
-    return region_root;
-  }
-  throw std::runtime_error(
-      "exact order-region compiler could not lower scenario probability");
-}
-
 inline semantic::Index compile_outcome_probability_root(
     ExactVariantBuildState *plan,
     const ExactOutcomeRegionCompileContext &outcome_context) {
@@ -103,16 +85,10 @@ inline semantic::Index compile_outcome_probability_root(
   std::vector<semantic::Index> scenario_nodes;
   scenario_nodes.reserve(outcome_context.scenarios.size());
   for (const auto &scenario : outcome_context.scenarios) {
-    if (scenario.probability_root_id == semantic::kInvalidIndex) {
-      continue;
-    }
-    const auto node_id =
+    scenario_nodes.push_back(
         compiled_math_root_node_id(
             plan->compiled_math,
-            scenario.probability_root_id);
-    if (node_id != semantic::kInvalidIndex) {
-      scenario_nodes.push_back(node_id);
-    }
+            scenario.probability_root_id));
   }
   return compiled_math_make_root(
       &plan->compiled_math,
@@ -127,7 +103,7 @@ inline void mark_sequence_expr_upper_bounds_for_scenario(
     ExactVariantBuildState *plan,
     const ExactSymbolicTransitionScenario &scenario) {
   for (const auto &guard :
-       scenario.transition.readiness_time_expr.requirements.guards) {
+       scenario.transition.readiness.guards) {
     if (guard.kind != ExactTransitionGuardKind::ExprBefore) {
       continue;
     }
@@ -172,8 +148,7 @@ inline void compile_sequence_plan(
         compile_expr_value_node_raw(
             plan,
             expr_id,
-            CompiledMathNodeKind::ExprCdf,
-            0,
+            CompiledMathValueKind::Cdf,
             static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
             0);
     plan->sequence.expr_cdf_roots[static_cast<std::size_t>(expr_id)] =
@@ -193,8 +168,7 @@ inline void compile_finite_response_distribution_roots(
       survival_nodes.push_back(compile_expr_source_node(
           plan,
           CompiledMathNodeKind::SourceSurvival,
-          leaf,
-          0));
+          leaf));
     }
     plan->finite_response_survival_root_id = compiled_math_make_root(
         &plan->compiled_math,
@@ -208,11 +182,8 @@ inline void compile_finite_response_distribution_roots(
   std::vector<semantic::Index> outcome_density_nodes;
   outcome_density_nodes.reserve(plan->compiled_outcomes.size());
   for (const auto &outcome : plan->compiled_outcomes) {
-    const auto node_id = compiled_math_root_node_id(
-        plan->compiled_math, outcome.total_probability_root_id);
-    if (node_id != semantic::kInvalidIndex) {
-      outcome_density_nodes.push_back(node_id);
-    }
+    outcome_density_nodes.push_back(compiled_math_root_node_id(
+        plan->compiled_math, outcome.total_probability_root_id));
   }
   plan->finite_response_density_root_id = compiled_math_make_root(
       &plan->compiled_math,
@@ -238,21 +209,12 @@ inline std::vector<ExactCompiledOutcomePlan> compile_exact_outcome_plans(
     const auto &competitor_plan = competitor_plans[target_pos];
 
     ExactOutcomeRegionCompileContext compile_context;
-    compile_context.scenarios.reserve(outcome.scenarios.size());
-    for (const auto &scenario : outcome.scenarios) {
-      compile_context.scenarios.push_back(scenario);
-    }
-
+    compile_context.scenarios = outcome.scenarios;
     compile_context.competitors = competitor_plan.competitors;
 
-    for (std::size_t scenario_idx = 0;
-         scenario_idx < compile_context.scenarios.size();
-         ++scenario_idx) {
-      compile_context.scenarios[scenario_idx].probability_root_id =
-          compile_scenario_probability_root(
-              plan,
-              compile_context,
-              &compile_context.scenarios[scenario_idx]);
+    for (auto &scenario : compile_context.scenarios) {
+      scenario.probability_root_id =
+          exact_order_region_probability_root(plan, compile_context, scenario);
     }
     ExactCompiledOutcomePlan compiled_outcome;
     compiled_outcome.total_probability_root_id =
@@ -267,13 +229,12 @@ inline std::vector<ExactCompiledOutcomePlan> compile_exact_outcome_plans(
       transition.probability_root_id =
           compile_context.scenarios[scenario_idx].probability_root_id;
       transition.release_source_id =
-          exact_symbolic_transition_release_source_id(
-              compile_context.scenarios[scenario_idx].transition);
+          compile_context.scenarios[scenario_idx].transition.release_source_id;
       const auto readiness_offset = static_cast<semantic::Index>(
           compiled_outcome.readiness_root_slot_by_item.size());
       for (const auto &guard :
            compile_context.scenarios[scenario_idx]
-               .transition.readiness_time_expr.requirements.guards) {
+               .transition.readiness.guards) {
         if (guard.kind == ExactTransitionGuardKind::SourceBefore) {
           transition.readiness_source_ids.push_back(guard.subject_id);
         } else if (guard.kind == ExactTransitionGuardKind::ExprBefore) {

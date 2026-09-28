@@ -16,7 +16,7 @@ simulate(
 \arguments{
 \item{structure}{Finalized model structure.}
 
-\item{params_df}{Trial-level parameter values.}
+\item{params_df}{Canonical parameter matrix from `build_param_matrix()`.}
 
 \item{trial_df}{Optional trial-by-accumulator conditioning table containing
 complete `trials`/`racer` blocks in model order. It may supply per-trial
@@ -24,7 +24,8 @@ complete `trials`/`racer` blocks in model order. It may supply per-trial
 
 \item{seed}{Optional random-number seed.}
 
-\item{keep_detail}{If `TRUE`, keep additional simulation detail.}
+\item{keep_detail}{If `TRUE`, include latent source times and outcome candidates.
+Inactive or unreachable sources have infinite completion times.}
 
 \item{keep_component}{Whether to keep the chosen mixture component in the
 output when the model has multiple components. If `NULL`, fixed mixtures
@@ -37,6 +38,12 @@ A data frame of simulated behavioral data. For standard models this
 }
 \description{
 Simulate behavioral data from a model
+}
+\details{
+Simulation uses R's random-number generator from C++. Its compiled
+plan is cached on the finalized model and rebuilt after serialization.
+Seeds are reproducible within this implementation, but do not reproduce
+the former R simulator's random-number sequence.
 }
 \examples{
 spec <- race_spec()

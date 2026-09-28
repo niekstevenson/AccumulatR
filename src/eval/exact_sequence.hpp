@@ -31,11 +31,11 @@ inline ExactTrialColumns make_exact_trial_columns(
   columns.times.assign(static_cast<std::size_t>(max_rank + 1), nullptr);
   for (int rank = 1; rank <= max_rank; ++rank) {
     columns.labels[static_cast<std::size_t>(rank)] =
-        INTEGER(trusted_data_column(
+        INTEGER(VECTOR_ELT(
             dataSEXP,
             layout.label_cols[static_cast<std::size_t>(rank)]));
     columns.times[static_cast<std::size_t>(rank)] =
-        REAL(trusted_data_column(
+        REAL(VECTOR_ELT(
             dataSEXP,
             layout.time_cols[static_cast<std::size_t>(rank)]));
   }
@@ -99,8 +99,7 @@ inline void build_exact_plan_cache(
 inline bool exact_has_single_unweighted_trigger_state(
     const ExactVariantPlan &plan) noexcept {
   const auto &states = plan.trigger_state_table.states;
-  return states.size() == 1U && states.front().weight_terms.empty() &&
-         states.front().fixed_weight == 1.0;
+  return states.size() == 1U && states.front().weight_terms.empty();
 }
 
 inline void exact_unranked_target_density_lanes(
@@ -123,12 +122,11 @@ inline void exact_unranked_target_density_lanes(
     auto &frame = workspace->prepare_initial(
         lanes,
         shared_started);
-    evaluate_exact_step_distribution_prepared_lanes(
+    evaluate_exact_outcome_density_lanes(
         plan,
         &frame,
         lane_count,
         target_idx,
-        false,
         workspace,
         out);
     return;
@@ -152,18 +150,17 @@ inline void exact_unranked_target_density_lanes(
     auto &frame = workspace->prepare_initial(
         lanes,
         shared_started);
-    evaluate_exact_step_distribution_prepared_lanes(
+    evaluate_exact_outcome_density_lanes(
         plan,
         &frame,
         lane_count,
         target_idx,
-        false,
         workspace,
         &values);
     for (std::size_t lane = 0U; lane < lane_count; ++lane) {
       const double value = values[lane];
       const double weight = fixed_weight
-                                ? compiled_state.fixed_weight
+                                ? 1.0
                                 : workspace->trigger_weights[lane];
       double &total = (*out)[lane];
       if (state_index == 0U) {
@@ -191,8 +188,7 @@ inline void exact_finite_outcome_probability_lanes(
     return;
   }
   const auto &tail = quadrature::canonical_tail_batch().nodes;
-  auto &step_lanes = workspace->step_inputs;
-  auto &input_params = workspace->input_params;
+  auto &input_lanes = workspace->input_lanes;
   auto &positions = workspace->input_positions;
   auto &weights = workspace->input_weights;
   auto &values = workspace->expanded_values;
@@ -217,36 +213,26 @@ inline void exact_finite_outcome_probability_lanes(
       }
       const auto *shared_started =
           exact_compiled_trigger_shared_started(plan, compiled_state);
-      step_lanes.clear();
-      input_params.clear();
+      input_lanes.clear();
       positions.clear();
       weights.clear();
       for (std::size_t tile_lane = 0U;
            tile_lane < tile_count;
            ++tile_lane) {
-        const auto &lane = lanes[tile_start + tile_lane];
-        const ExactTriggerState trigger{
-            fixed_weight ? compiled_state.fixed_weight
-                         : workspace->trigger_weights[tile_lane],
-            shared_started};
-        if (!(trigger.weight > 0.0)) {
+        const auto lane = tile_start + tile_lane;
+        const double weight = fixed_weight ? 1.0 : workspace->trigger_weights[tile_lane];
+        if (!(weight > 0.0)) {
           continue;
         }
-        input_params.push_back(lane.params);
-        step_lanes.push_back(ExactStepLaneInput{
-            &input_params.back(),
-            trigger.shared_started,
-            &workspace->initial_state,
-            lane.observed_time,
-            nullptr});
+        input_lanes.emplace_back(lanes.row_maps[lane], lanes.row_offsets[lane], NA_REAL);
         positions.push_back(tile_lane);
-        weights.push_back(trigger.weight);
+        weights.push_back(weight);
       }
-      const auto active_count = step_lanes.size();
+      const auto active_count = input_lanes.size();
       if (active_count == 0U) {
         continue;
       }
-      workspace->bind_sources(step_lanes.data(), active_count);
+      workspace->bind_initial_sources(input_lanes.view(*lanes.matrix), shared_started);
       const auto times_per_block = std::max<std::size_t>(
           1U, kExactExpandedLaneTileSize / active_count);
       for (std::size_t q_start = 0U;
@@ -260,12 +246,11 @@ inline void exact_finite_outcome_probability_lanes(
             tail.nodes.data() + q_start,
             q_count);
         const auto expanded_count = active_count * q_count;
-        evaluate_exact_step_distribution_prepared_lanes(
+        evaluate_exact_outcome_density_lanes(
             plan,
             &frame,
             expanded_count,
             target_idx,
-            false,
             workspace,
             &values);
         for (std::size_t q = 0; q < q_count; ++q) {
@@ -473,7 +458,6 @@ struct ExactRankedLaneWorkspace {
   std::vector<ExactRankedWorkItem> work;
   std::vector<std::vector<std::size_t>> work_by_outcome;
   std::vector<double> totals;
-  std::vector<double> step_totals;
   std::vector<double> transition_values;
   std::vector<double> readiness_values;
   std::vector<double> transition_normalizers;
@@ -524,7 +508,7 @@ inline void reset_exact_ranked_tile(
        ++lane_index) {
     auto &state = workspace->trial_states[lane_index];
     state.trigger = ExactTriggerState{
-        fixed_weight ? compiled_trigger.fixed_weight
+        fixed_weight ? 1.0
                      : workspace->trigger_weights[lane_index],
         shared_started};
     state.trigger_active = state.trigger.weight > 0.0;
@@ -640,16 +624,13 @@ inline void evaluate_exact_ranked_work_group(
           trial_state.pending_time,
           &trial_state.used_outcomes});
     }
-    evaluate_exact_step_distribution_lanes(
+    evaluate_exact_ranked_step_lanes(
         plan,
         step_inputs.data(),
         tile_count,
         target,
-        true,
         step,
-        &workspace->step_totals,
         &workspace->transition_values,
-        &outcome.readiness_root_ids,
         &workspace->readiness_values);
 
     for (std::size_t transition_index = 0U;

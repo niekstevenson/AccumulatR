@@ -47,9 +47,7 @@ enum class ExactRegionAtomKind : std::uint8_t {
   ExprBefore = 3,
   ExprNotBefore = 4,
   ExprDensity = 5,
-  TimeOrder = 6,
-  OutcomeUnused = 7,
-  OutcomeUsed = 8
+  TimeOrder = 6
 };
 
 enum class ExactRegionEqualityMass : std::uint8_t {
@@ -67,7 +65,6 @@ struct ExactRegionAtom {
   ExactRegionAtomKind kind{ExactRegionAtomKind::SourceLower};
   ExactRegionVar lhs{};
   ExactRegionVar rhs{};
-  std::vector<semantic::Index> outcome_indices;
   bool inclusive{false};
   bool strict{true};
 };

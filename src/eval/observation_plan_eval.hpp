@@ -9,6 +9,7 @@
 #include "exact_sequence.hpp"
 #include "lane_math.hpp"
 #include "observation_model.hpp"
+#include "probability_lane_groups.hpp"
 #include "trial_data.hpp"
 
 namespace accumulatr::eval {
@@ -55,6 +56,7 @@ struct ObservationLaneWorkspace {
   std::vector<ObservationLaneGroup> groups;
   std::vector<double> group_values;
   std::vector<double> component_weights;
+  ProbabilityLaneGroups probability_groups;
 };
 
 inline ObservationLaneGroup &find_observation_lane_group(
@@ -141,12 +143,14 @@ inline void evaluate_observation_lanes(
     case ObservationPlanOpKind::FiniteOutcomeProbability: {
       const auto target = exact_plan.outcome_index_by_code[
           static_cast<std::size_t>(op.semantic_code)];
+      const auto unique = workspace->probability_groups.prepare(exact_plan, lanes);
       exact_finite_outcome_probability_lanes(
           exact_plan,
-          lanes,
+          unique,
           target,
           &exact_workspace,
           &workspace->exact_values);
+      workspace->probability_groups.expand(&workspace->exact_values);
       for (std::size_t lane = 0; lane < lane_count; ++lane) {
         const double probability = workspace->exact_values[lane];
         values[lane] = std::isfinite(probability) && probability > 0.0

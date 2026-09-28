@@ -109,22 +109,16 @@ rule_inhibit <- inhibit("go", "stop")
 c(absence_rule = rule_none$kind, inhibit_rule = rule_inhibit$kind)
 ```
 
-But they are not the same model statement.
+For these two distinct accumulators, they give the same response rule: `go`
+completes before `stop`. The absence condition is evaluated when the enclosing
+conjunction completes, not over the entire trial.
 
-### `all_of("go", none_of("stop"))`
+Nesting matters. `all_of("a", "b", none_of("stop"))` checks absence when both
+`a` and `b` have completed. In `all_of(inhibit("a", "stop"), "b")`, inhibition
+is decided when `a` completes; a later stop does not undo that event.
 
-This defines the response in terms of two conditions: `go` happened and `stop`
-did not happen.
-
-### `inhibit("go", "stop")`
-
-This defines `go` as the response-generating event and `stop` as a blocker of
-that event.
-
-In short:
-
-- `inhibit()` means "stop can block go if it gets there in time"
-- `none_of()` means "the response requires stop not to occur"
+Bare negation does not generate a response transition in the likelihood. Use
+`none_of()` as a condition inside a conjunction with a response-generating event.
 
 ## A combined example
 

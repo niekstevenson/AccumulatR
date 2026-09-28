@@ -23,7 +23,6 @@ struct ExactCompiledTriggerWeightTerm {
 };
 
 struct ExactCompiledTriggerState {
-  double fixed_weight{1.0};
   ExactIndexSpan weight_terms{};
   semantic::Index shared_started_offset{0};
 };
@@ -57,7 +56,6 @@ struct ExactSourceKernel {
       CompiledSourceChannelKernelKind::Invalid};
   semantic::Index source_id{semantic::kInvalidIndex};
   semantic::Index leaf_index{semantic::kInvalidIndex};
-  semantic::Index pool_index{semantic::kInvalidIndex};
   semantic::Index onset_source_id{semantic::kInvalidIndex};
   semantic::Index pool_member_offset{0};
   semantic::Index pool_member_count{0};

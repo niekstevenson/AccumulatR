@@ -294,7 +294,7 @@ inline void exact_compiled_trigger_state_weights_lanes(
     const std::size_t lane_count,
     const ExactCompiledTriggerState &compiled_state,
     std::vector<double> *weights) {
-  weights->assign(lane_count, compiled_state.fixed_weight);
+  weights->assign(lane_count, 1.0);
   const auto &table = plan.trigger_state_table;
   for (semantic::Index i = 0; i < compiled_state.weight_terms.size; ++i) {
     const auto &term =

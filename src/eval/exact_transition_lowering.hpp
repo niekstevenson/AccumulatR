@@ -77,12 +77,12 @@ inline bool append_ready_requirement(ExactSymbolicTransitionScenario *scenario,
   }
   if (expr_is_simple_event(program, expr_idx)) {
     return append_transition_guard(
-        &scenario->transition.readiness_time_expr.requirements,
+        &scenario->transition.readiness,
         ExactTransitionGuardKind::SourceBefore,
         program.expr_source_ids[static_cast<std::size_t>(expr_idx)]);
   }
   return append_transition_guard(
-      &scenario->transition.readiness_time_expr.requirements,
+      &scenario->transition.readiness,
       ExactTransitionGuardKind::ExprBefore,
       expr_idx);
 }
@@ -109,12 +109,12 @@ inline bool append_tail_requirement(ExactSymbolicTransitionScenario *scenario,
 inline bool scenario_source_happens_by_transition(
     const ExactSymbolicTransitionScenario &scenario,
     const semantic::Index source_id) {
-  if (exact_symbolic_transition_release_source_id(scenario.transition) ==
+  if (scenario.transition.release_source_id ==
       source_id) {
     return true;
   }
   return transition_has_source_guard(
-      scenario.transition.readiness_time_expr.requirements,
+      scenario.transition.readiness,
       ExactTransitionGuardKind::SourceBefore,
       source_id);
 }
@@ -123,7 +123,7 @@ inline bool scenario_source_known_before_active(
     const ExactSymbolicTransitionScenario &scenario,
     const semantic::Index source_id) {
   return transition_has_source_guard(
-      scenario.transition.readiness_time_expr.requirements,
+      scenario.transition.readiness,
       ExactTransitionGuardKind::SourceBefore,
       source_id);
 }
@@ -151,7 +151,7 @@ inline void append_scenario_source_order_fact(
     const semantic::Index before_source_id,
     const semantic::Index after_source_id) {
   append_source_order_fact(
-      &scenario->transition.order_region.source_order_facts,
+      &scenario->transition.source_order_facts,
       before_source_id,
       after_source_id);
 }
@@ -182,13 +182,13 @@ inline bool append_tail_order_requirement(ExactSymbolicTransitionScenario *scena
       !scenario_source_happens_by_transition(*scenario, blocker_source_id)) {
     return true;
   }
-  if (exact_symbolic_transition_release_source_id(scenario->transition) ==
+  if (scenario->transition.release_source_id ==
           blocker_source_id &&
       scenario_source_known_before_active(*scenario, ref_source_id)) {
     return false;
   }
   for (const auto &fact :
-       scenario->transition.order_region.source_order_facts) {
+       scenario->transition.source_order_facts) {
     if (fact.before_source_id == blocker_source_id &&
         fact.after_source_id == ref_source_id) {
       *handled = true;
@@ -217,7 +217,7 @@ inline bool scenario_source_known_before_source(
     return false;
   }
   const auto active_source_id =
-      exact_symbolic_transition_release_source_id(scenario.transition);
+      scenario.transition.release_source_id;
   if (active_source_id == after_source_id &&
       scenario_source_known_before_active(scenario, before_source_id)) {
     return true;
@@ -227,7 +227,7 @@ inline bool scenario_source_known_before_source(
     return true;
   }
   for (const auto &fact :
-       scenario.transition.order_region.source_order_facts) {
+       scenario.transition.source_order_facts) {
     if (fact.before_source_id == before_source_id &&
         fact.after_source_id == after_source_id) {
       return true;
@@ -393,13 +393,13 @@ inline bool scenario_sources_supported(
   std::vector<semantic::Index> referenced_sources;
   referenced_sources.reserve(
       1U +
-      scenario.transition.readiness_time_expr.requirements.guards.size() +
+      scenario.transition.readiness.guards.size() +
       scenario.transition.guards.guards.size());
   append_unique_source_id(
       &referenced_sources,
-      exact_symbolic_transition_release_source_id(scenario.transition));
+      scenario.transition.release_source_id);
   for (const auto &guard :
-       scenario.transition.readiness_time_expr.requirements.guards) {
+       scenario.transition.readiness.guards) {
     if (guard.kind == ExactTransitionGuardKind::SourceBefore) {
       append_unique_source_id(&referenced_sources, guard.subject_id);
     }
@@ -454,7 +454,7 @@ inline bool scenario_sources_supported(
       }
     }
     for (const auto &guard :
-         scenario.transition.readiness_time_expr.requirements.guards) {
+         scenario.transition.readiness.guards) {
       if (guard.kind == ExactTransitionGuardKind::ExprBefore &&
           supports_overlap(
               forced_support,
@@ -510,13 +510,7 @@ inline bool expand_member_subsets(
 inline ExactSymbolicTransitionScenario make_source_release_transition_scenario(
     const semantic::Index source_id) {
   ExactSymbolicTransitionScenario scenario;
-  scenario.transition.transition_time_expr =
-      ExactSymbolicTransitionTimeExpr{
-          ExactSymbolicTransitionTimeKind::SourceRelease,
-          source_id};
-  scenario.transition.active_sources.push_back(source_id);
-  scenario.transition.readiness_time_expr.requirements.empty_value = 1.0;
-  scenario.transition.guards.empty_value = 1.0;
+  scenario.transition.release_source_id = source_id;
   return scenario;
 }
 
@@ -587,7 +581,7 @@ inline std::vector<ExactSymbolicTransitionScenario> build_source_transition_scen
         const auto member_source_id = members[static_cast<std::size_t>(member_idx)];
         ok = append_transition_guard(
                  is_before
-                     ? &scenario.transition.readiness_time_expr.requirements
+                     ? &scenario.transition.readiness
                      : &scenario.transition.guards,
                  is_before ? ExactTransitionGuardKind::SourceBefore
                            : ExactTransitionGuardKind::SourceAfter,
@@ -823,24 +817,15 @@ inline void canonicalize_transition_relation_template(
   }
 }
 
-inline void finalize_symbolic_transition_scenario(
-    ExactVariantBuildState *plan,
-    ExactSymbolicTransitionScenario *scenario,
-    const semantic::Index visible_outcome) {
-  scenario->visible_outcome = visible_outcome;
-  canonicalize_transition_relation_template(
-      &scenario->transition.relation_template);
-  scenario->transition.source_view_id =
-      compile_source_view_id(plan, scenario->transition.relation_template);
-}
-
 inline std::vector<ExactSymbolicTransitionScenario>
 finalize_symbolic_transition_scenarios(
     ExactVariantBuildState *plan,
-    std::vector<ExactSymbolicTransitionScenario> scenarios,
-    const semantic::Index visible_outcome = semantic::kInvalidIndex) {
+    std::vector<ExactSymbolicTransitionScenario> scenarios) {
   for (auto &scenario : scenarios) {
-    finalize_symbolic_transition_scenario(plan, &scenario, visible_outcome);
+    canonicalize_transition_relation_template(
+        &scenario.transition.relation_template);
+    scenario.transition.source_view_id =
+        compile_source_view_id(plan, scenario.transition.relation_template);
   }
   return scenarios;
 }
@@ -914,8 +899,7 @@ inline ExactTargetCompetitorPlan build_target_competitor_plan(
       competitor_plan.scenarios =
           finalize_symbolic_transition_scenarios(
               plan,
-              build_expr_transition_scenarios(*plan, competitor.expr_root),
-              competitor.outcome_index);
+              build_expr_transition_scenarios(*plan, competitor.expr_root));
     }
     if (!competitor_plan.scenarios.empty()) {
       target_plan.competitors.push_back(std::move(competitor_plan));
@@ -951,8 +935,7 @@ inline void compile_exact_outcome_transition_scenarios(
     ExactOutcomePlan outcome;
     outcome.scenarios = finalize_symbolic_transition_scenarios(
         plan,
-        build_expr_transition_scenarios(*plan, expr_root),
-        static_cast<semantic::Index>(i));
+        build_expr_transition_scenarios(*plan, expr_root));
     const auto outcome_code = program.outcome_codes[i];
     if (outcome_code == semantic::kInvalidIndex ||
         static_cast<std::size_t>(outcome_code) >=

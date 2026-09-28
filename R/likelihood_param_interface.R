@@ -17,45 +17,23 @@
     rank <- rank + 1L
   }
 
-  rank_r <- grep("^R[0-9]+$", nm, value = TRUE)
-  if (length(rank_r) > 0L) {
-    idx_r <- suppressWarnings(as.integer(sub("^R", "", rank_r)))
-    idx_r <- idx_r[is.finite(idx_r)]
-    if (length(idx_r) > 0L) {
-      bad <- sort(unique(idx_r[idx_r > max_rank]))
-      if (length(bad) > 0L) {
-        stop(
-          "Ranked observation columns must be contiguous from R2/rt2 with no gaps. Unexpected columns detected at ranks: ",
-          paste(bad, collapse = ", "),
-          call. = FALSE
-        )
-      }
-    }
-  }
-
-  rank_rt <- grep("^rt[0-9]+$", nm, value = TRUE)
-  if (length(rank_rt) > 0L) {
-    idx_rt <- suppressWarnings(as.integer(sub("^rt", "", rank_rt)))
-    idx_rt <- idx_rt[is.finite(idx_rt)]
-    if (length(idx_rt) > 0L) {
-      bad <- sort(unique(idx_rt[idx_rt > max_rank]))
-      if (length(bad) > 0L) {
-        stop(
-          "Ranked observation columns must be contiguous from R2/rt2 with no gaps. Unexpected rt columns detected at ranks: ",
-          paste(bad, collapse = ", "),
-          call. = FALSE
-        )
-      }
-    }
+  ranked_columns <- grep("^(R|rt)[0-9]+$", nm, value = TRUE)
+  indices <- suppressWarnings(as.integer(sub("^(R|rt)", "", ranked_columns)))
+  bad <- sort(unique(indices[is.finite(indices) & indices > max_rank]))
+  if (length(bad)) {
+    stop(
+      "Ranked observation columns must be contiguous from R2/rt2 with no gaps. Unexpected columns detected at ranks: ",
+      paste(bad, collapse = ", "),
+      call. = FALSE
+    )
   }
 
   list(max_rank = max_rank)
 }
 
 .has_observation_wrappers <- function(prep) {
-  outcome_defs <- prep$outcomes %||% list()
-  any(vapply(outcome_defs, function(outcome) {
-    options <- outcome$options %||% list()
+  any(vapply(prep$outcomes, function(outcome) {
+    options <- outcome$options
     !is.null(options$guess) || !is.null(options$map_outcome_to)
   }, logical(1)))
 }
@@ -158,20 +136,12 @@
 }
 
 .validate_ranked_trials <- function(data_df, max_rank) {
-  if (max_rank <= 1L || nrow(data_df) == 0L) {
+  if (max_rank <= 1L) {
     return(invisible(NULL))
   }
-  trial <- as.integer(data_df$trials)
-  starts <- c(1L, which(trial[-1L] != trial[-nrow(data_df)]) + 1L)
-  for (start in starts) {
+  for (start in seq_len(nrow(data_df))) {
     label1 <- as.character(data_df$R[[start]])
     rt1 <- data_df$rt[[start]]
-    if (is.na(label1) || is.na(rt1) || !is.finite(rt1)) {
-      stop(
-        "Ranked observations must provide a finite first-rank R/rt pair for every trial",
-        call. = FALSE
-      )
-    }
     seen_labels <- label1
     prev_rt <- rt1
     terminated <- FALSE
@@ -217,38 +187,25 @@
 .validate_first_rank_trials <- function(data_df,
                                         allow_missing_all = FALSE,
                                         allow_missing_rt = FALSE) {
-  if (nrow(data_df) == 0L) {
-    return(invisible(NULL))
+  label_missing <- is.na(data_df$R)
+  time_missing <- is.na(data_df$rt)
+  censored <- if ("missingness" %in% names(data_df)) {
+    !is.na(data_df$missingness)
+  } else {
+    FALSE
   }
-  trial <- as.integer(data_df$trials)
-  starts <- c(1L, which(trial[-1L] != trial[-nrow(data_df)]) + 1L)
-  for (start in starts) {
-    label_missing <- is.na(as.character(data_df$R[[start]]))
-    rt <- data_df$rt[[start]]
-    time_missing <- is.na(rt)
-    censored <- "missingness" %in% names(data_df) &&
-      !is.na(data_df$missingness[[start]])
-    if (label_missing && !time_missing) {
-      stop("finite RT with missing response label is not supported", call. = FALSE)
-    }
-    if (label_missing && time_missing) {
-      if (!allow_missing_all) {
-        stop(
-          "Identity observations require a finite first-rank R/rt pair for every trial",
-          call. = FALSE
-        )
-      }
-      next
-    }
-    if (time_missing && !allow_missing_rt && !censored) {
-      stop(
-        "Identity observations require a finite first-rank R/rt pair for every trial",
-        call. = FALSE
-      )
-    }
-    if (!time_missing && !is.finite(rt)) {
-      stop("Observed RT values must be finite", call. = FALSE)
-    }
+  if (any(label_missing & !time_missing)) {
+    stop("finite RT with missing response label is not supported", call. = FALSE)
+  }
+  if ((!allow_missing_all && any(label_missing)) ||
+      (!allow_missing_rt && any(!label_missing & time_missing & !censored))) {
+    stop(
+      "Identity observations require a finite first-rank R/rt pair for every trial",
+      call. = FALSE
+    )
+  }
+  if (any(!time_missing & !is.finite(data_df$rt))) {
+    stop("Observed RT values must be finite", call. = FALSE)
   }
   invisible(NULL)
 }
@@ -298,157 +255,6 @@
   data_df
 }
 
-.prepare_data_structure <- function(structure, data_df, compress = FALSE) {
-  if (is.null(data_df) || nrow(data_df) == 0L) {
-    stop("Data frame must contain R/rt per trial", call. = FALSE)
-  }
-  prep_eval_base <- structure$prep
-  data_df <- as.data.frame(data_df)
-  required_cols <- c("R", "rt")
-  missing_cols <- setdiff(required_cols, names(data_df))
-  if (length(missing_cols) > 0L) {
-    stop(sprintf("Data frame must include columns: %s", paste(missing_cols, collapse = ", ")), call. = FALSE)
-  }
-  if (!"trials" %in% names(data_df)) {
-    if ("racer" %in% names(data_df)) {
-      stop("Racer-level data must include a 'trials' column", call. = FALSE)
-    }
-    data_df$trials <- seq_len(nrow(data_df))
-  }
-  if (!is.numeric(data_df$rt)) {
-    stop("Data column 'rt' must be numeric", call. = FALSE)
-  }
-  data_df$rt <- as.numeric(data_df$rt)
-  rank_info <- .validate_ranked_observation_columns(data_df)
-  data_df <- .prepare_observation_bounds(data_df, rank_info$max_rank)
-  if (!"racer" %in% names(data_df)) {
-    data_df <- .expand_accumulator_rows(structure, data_df)
-  } else {
-    acc_ids <- names(prep_eval_base$accumulators)
-    n_accumulators <- length(acc_ids)
-    if (nrow(data_df) %% n_accumulators != 0L) {
-      stop(
-        "Racer-level data must contain one complete accumulator block per trial in model order",
-        call. = FALSE
-      )
-    }
-    n_trials <- nrow(data_df) %/% n_accumulators
-    starts <- 1L + seq.int(0L, n_trials - 1L) * n_accumulators
-    trial_ids <- as.character(data_df$trials)
-    block_ids <- trial_ids[starts]
-    if (anyNA(block_ids) || anyDuplicated(block_ids) ||
-        !identical(trial_ids, rep(block_ids, each = n_accumulators)) ||
-        !identical(as.character(data_df$racer), rep(acc_ids, times = n_trials))) {
-      stop(
-        "Racer-level data must contain one complete accumulator block per trial in model order",
-        call. = FALSE
-      )
-    }
-    data_df$trials <- rep.int(seq_len(n_trials), rep.int(n_accumulators, n_trials))
-  }
-  if (!"onset" %in% names(data_df)) {
-    acc_defs <- prep_eval_base$accumulators %||% list()
-    acc_onset <- vapply(acc_defs, function(a) a$onset %||% 0, numeric(1))
-    acc_ids <- names(acc_defs)
-    onset_map <- setNames(acc_onset, acc_ids)
-    data_df$onset <- vapply(as.character(data_df$racer), function(acc) {
-      onset_map[[acc]] %||% 0
-    }, numeric(1))
-  } else if (!is.numeric(data_df$onset) || any(!is.finite(data_df$onset))) {
-    stop("Data column 'onset' must contain finite numbers", call. = FALSE)
-  }
-  outcome_levels <- unique(names(prep_eval_base$outcomes %||% list()))
-  if (length(outcome_levels) == 0L) {
-    stop("Model must define outcomes", call. = FALSE)
-  }
-  for (rank in seq_len(rank_info$max_rank)) {
-    r_col <- if (rank == 1L) "R" else paste0("R", rank)
-    if (!r_col %in% names(data_df)) {
-      next
-    }
-    data_df[[r_col]] <- .normalize_prepared_index_column(
-      data_df[[r_col]],
-      outcome_levels,
-      r_col
-    )
-  }
-  if (rank_info$max_rank > 1L) {
-    for (rank in 2:rank_info$max_rank) {
-      column <- paste0("rt", rank)
-      if (!is.numeric(data_df[[column]])) {
-        stop("Data column '", column, "' must be numeric", call. = FALSE)
-      }
-      data_df[[column]] <- as.numeric(data_df[[column]])
-    }
-  }
-  component_levels <- prep_eval_base$components$ids
-  if (!"component" %in% names(data_df)) {
-    data_df$component <- if (length(component_levels) <= 1L) {
-      "__default__"
-    } else {
-      NA_character_
-    }
-  }
-  data_df$component <- .normalize_prepared_index_column(
-    data_df$component,
-    component_levels,
-    "component"
-  )
-  if (rank_info$max_rank > 1L && .has_observation_wrappers(prep_eval_base)) {
-    stop("ranked observations do not support observation wrappers", call. = FALSE)
-  }
-  allowed_by_component <- prep_eval_base$outcomes_by_component
-  component_chr <- as.character(data_df$component)
-  for (rank in seq_len(rank_info$max_rank)) {
-    r_col <- if (rank == 1L) "R" else paste0("R", rank)
-    if (!r_col %in% names(data_df)) {
-      next
-    }
-    label_chr <- as.character(data_df[[r_col]])
-    bad <- !is.na(label_chr) & !is.na(component_chr) & !mapply(
-      function(lbl, cid) lbl %in% (allowed_by_component[[cid]] %||% character(0)),
-      label_chr,
-      component_chr,
-      USE.NAMES = FALSE
-    )
-    if (any(bad)) {
-      bad_idx <- which(bad)[1L]
-      stop(
-        sprintf(
-          "Outcome '%s' is not allowed for component '%s' in column '%s'",
-          label_chr[[bad_idx]],
-          component_chr[[bad_idx]],
-          r_col
-        ),
-        call. = FALSE
-      )
-    }
-  }
-  trial_level_columns <- c(
-    "component",
-    "R",
-    "rt",
-    .observation_bound_columns,
-    "missingness",
-    unlist(lapply(seq.int(2L, rank_info$max_rank), function(rank) c(paste0("R", rank), paste0("rt", rank))), use.names = FALSE)
-  )
-  .validate_trial_level_columns(data_df, trial_level_columns)
-  .validate_first_rank_trials(
-    data_df,
-    allow_missing_all = rank_info$max_rank == 1L,
-    allow_missing_rt = rank_info$max_rank == 1L && .has_observation_wrappers(prep_eval_base)
-  )
-  .validate_ranked_trials(data_df, rank_info$max_rank)
-  class(data_df) <- unique(c("accumulatr_data", class(data_df)))
-  if (isTRUE(compress)) {
-    data_df <- .compress_prepared_trials(
-      data_df,
-      length(prep_eval_base$accumulators)
-    )
-  }
-  .attach_prepared_layout_attrs(data_df, rank_info$max_rank)
-}
-
 #' Prepare behavioral data for likelihood evaluation
 #'
 #' `prepare_data()` expands trial-level observations to the accumulator layout
@@ -486,14 +292,151 @@
 #' data_df <- simulate(structure, params_df, seed = 1)
 #' prepare_data(structure, data_df)
 #' @export
-prepare_data <- function(structure,
-                         data_df,
-                         compress = FALSE) {
-  .prepare_data_structure(
-    structure = structure,
-    data_df = data_df,
-    compress = compress
+prepare_data <- function(structure, data_df, compress = FALSE) {
+  if (is.null(data_df) || nrow(data_df) == 0L) {
+    stop("Data frame must contain R/rt per trial", call. = FALSE)
+  }
+  prep_eval_base <- structure$prep
+  data_df <- as.data.frame(data_df)
+  racer_level <- "racer" %in% names(data_df)
+  required_cols <- c("R", "rt")
+  missing_cols <- setdiff(required_cols, names(data_df))
+  if (length(missing_cols) > 0L) {
+    stop(sprintf("Data frame must include columns: %s", paste(missing_cols, collapse = ", ")), call. = FALSE)
+  }
+  if (!"trials" %in% names(data_df)) {
+    if (racer_level) {
+      stop("Racer-level data must include a 'trials' column", call. = FALSE)
+    }
+    data_df$trials <- seq_len(nrow(data_df))
+  }
+  if (!is.numeric(data_df$rt)) {
+    stop("Data column 'rt' must be numeric", call. = FALSE)
+  }
+  data_df$rt <- as.numeric(data_df$rt)
+  rank_info <- .validate_ranked_observation_columns(data_df)
+  data_df <- .prepare_observation_bounds(data_df, rank_info$max_rank)
+  acc_ids <- names(prep_eval_base$accumulators)
+  n_accumulators <- length(acc_ids)
+  if (!racer_level) {
+    n_trials <- nrow(data_df)
+    data_df$trials <- seq_len(n_trials)
+    data_df <- data_df[rep(seq_len(n_trials), each = n_accumulators), , drop = FALSE]
+    data_df$racer <- rep(acc_ids, times = n_trials)
+    rownames(data_df) <- NULL
+  } else {
+    if (nrow(data_df) %% n_accumulators != 0L) {
+      stop(
+        "Racer-level data must contain one complete accumulator block per trial in model order",
+        call. = FALSE
+      )
+    }
+    n_trials <- nrow(data_df) %/% n_accumulators
+    starts <- 1L + seq.int(0L, n_trials - 1L) * n_accumulators
+    trial_ids <- as.character(data_df$trials)
+    block_ids <- trial_ids[starts]
+    if (anyNA(block_ids) || anyDuplicated(block_ids) ||
+        !identical(trial_ids, rep(block_ids, each = n_accumulators)) ||
+        !identical(as.character(data_df$racer), rep(acc_ids, times = n_trials))) {
+      stop(
+        "Racer-level data must contain one complete accumulator block per trial in model order",
+        call. = FALSE
+      )
+    }
+    data_df$trials <- rep.int(seq_len(n_trials), rep.int(n_accumulators, n_trials))
+  }
+  if (!"onset" %in% names(data_df)) {
+    acc_onset <- vapply(prep_eval_base$accumulators, `[[`, numeric(1), "onset")
+    data_df$onset <- rep(unname(acc_onset), times = n_trials)
+  } else if (!is.numeric(data_df$onset) || any(!is.finite(data_df$onset))) {
+    stop("Data column 'onset' must contain finite numbers", call. = FALSE)
+  }
+  outcome_levels <- unique(names(prep_eval_base$outcomes))
+  for (rank in seq_len(rank_info$max_rank)) {
+    r_col <- if (rank == 1L) "R" else paste0("R", rank)
+    data_df[[r_col]] <- .normalize_prepared_index_column(
+      data_df[[r_col]],
+      outcome_levels,
+      r_col
+    )
+  }
+  if (rank_info$max_rank > 1L) {
+    for (rank in 2:rank_info$max_rank) {
+      column <- paste0("rt", rank)
+      if (!is.numeric(data_df[[column]])) {
+        stop("Data column '", column, "' must be numeric", call. = FALSE)
+      }
+      data_df[[column]] <- as.numeric(data_df[[column]])
+    }
+  }
+  component_levels <- prep_eval_base$components$ids
+  if (!"component" %in% names(data_df)) {
+    data_df$component <- if (length(component_levels) <= 1L) {
+      component_levels[[1L]]
+    } else {
+      NA_character_
+    }
+  }
+  data_df$component <- .normalize_prepared_index_column(
+    data_df$component,
+    component_levels,
+    "component"
   )
+  has_wrappers <- .has_observation_wrappers(prep_eval_base)
+  if (rank_info$max_rank > 1L && has_wrappers) {
+    stop("ranked observations do not support observation wrappers", call. = FALSE)
+  }
+  trial_level_columns <- c(
+    "component", "R", "rt", .observation_bound_columns, "missingness",
+    if (rank_info$max_rank > 1L) {
+      c(paste0("R", 2:rank_info$max_rank), paste0("rt", 2:rank_info$max_rank))
+    }
+  )
+  if (racer_level) {
+    .validate_trial_level_columns(data_df, trial_level_columns)
+  }
+  trial_data <- data_df[
+    seq.int(1L, nrow(data_df), by = n_accumulators),
+    intersect(trial_level_columns, names(data_df)), drop = FALSE
+  ]
+  allowed_by_component <- prep_eval_base$outcomes_by_component
+  component_chr <- as.character(trial_data$component)
+  for (rank in seq_len(rank_info$max_rank)) {
+    r_col <- if (rank == 1L) "R" else paste0("R", rank)
+    label_chr <- as.character(trial_data[[r_col]])
+    bad <- !is.na(label_chr) & !is.na(component_chr) & !mapply(
+      function(lbl, cid) lbl %in% (allowed_by_component[[cid]] %||% character(0)),
+      label_chr,
+      component_chr,
+      USE.NAMES = FALSE
+    )
+    if (any(bad)) {
+      bad_idx <- which(bad)[1L]
+      stop(
+        sprintf(
+          "Outcome '%s' is not allowed for component '%s' in column '%s'",
+          label_chr[[bad_idx]],
+          component_chr[[bad_idx]],
+          r_col
+        ),
+        call. = FALSE
+      )
+    }
+  }
+  .validate_first_rank_trials(
+    trial_data,
+    allow_missing_all = rank_info$max_rank == 1L,
+    allow_missing_rt = rank_info$max_rank == 1L && has_wrappers
+  )
+  .validate_ranked_trials(trial_data, rank_info$max_rank)
+  class(data_df) <- unique(c("accumulatr_data", class(data_df)))
+  if (isTRUE(compress)) {
+    data_df <- .compress_prepared_trials(
+      data_df,
+      n_accumulators
+    )
+  }
+  .attach_prepared_layout_attrs(data_df, rank_info$max_rank)
 }
 
 #' Build a compiled likelihood context from a model
@@ -516,7 +459,6 @@ make_context <- function(structure, diagnostics = FALSE) {
   prep <- structure$prep
   structure(list(
     cpp = semantic_make_likelihood_context_prep_cpp(prep, isTRUE(diagnostics)),
-    n_accumulators = length(prep$accumulators),
     outcome_labels = unique(names(prep$outcomes)),
     observed_outcome_labels = Reduce(
       union,
@@ -532,13 +474,7 @@ make_context <- function(structure, diagnostics = FALSE) {
 #' @return A list with per-variant and total symbolic/compiled metrics.
 #' @export
 complexity_metrics <- function(context) {
-  if (!isTRUE(context$cpp$has_complexity_metrics)) {
-    stop(
-      "complexity metrics were not collected; create the context with diagnostics = TRUE",
-      call. = FALSE
-    )
-  }
-  semantic_complexity_metrics_context_cpp(context$cpp$native)
+  semantic_complexity_metrics_context_cpp(context$cpp)
 }
 
 .normalize_prepared_index_column <- function(x, levels, column_name) {
@@ -590,7 +526,7 @@ complexity_metrics <- function(context) {
 #' @export
 response_probabilities <- function(context, parameters, include_na = TRUE) {
   probability <- as.numeric(semantic_response_probabilities_context_cpp(
-    context$cpp$native,
+    context$cpp,
     parameters
   ))
   result <- stats::setNames(probability, context$outcome_labels)
@@ -640,9 +576,8 @@ log_likelihood <- function(context,
                            ok = NULL,
                            sum = TRUE,
                            min_ll = log(1e-10)) {
-  cpp_ctx <- context$cpp
   value <- semantic_loglik_context_cpp(
-    cpp_ctx$native,
+    context$cpp,
     parameters,
     data,
     ok,

@@ -666,7 +666,7 @@ set_mixture <- function(spec, mode = c("fixed", "sample"), weights = NULL, refer
   if (length(intersect(acc_ids, pool_ids))) {
     stop("Accumulator and pool ids must be distinct", call. = FALSE)
   }
-  invisible(lapply(model$accumulators, function(acc) dist_registry(acc$dist)))
+  invisible(lapply(model$accumulators, function(acc) dist_param_names(acc$dist)))
 
   pool_defs <- setNames(model$pools, pool_ids)
   for (pool in model$pools) {
@@ -925,7 +925,8 @@ finalize_model <- function(model) {
   model <- .validate_race_spec_input(model, "finalize_model")
   structure <- list(
     model_spec = model,
-    prep = .prepare_model(model)
+    prep = .prepare_model(model),
+    simulation = new.env(parent = emptyenv())
   )
   class(structure) <- c("model_structure", class(structure))
   structure
@@ -936,7 +937,14 @@ finalize_model <- function(model) {
 # ------------------------------------------------------------------------------
 
 dist_param_names <- function(dist) {
-  dist_registry(dist)$params
+  switch(tolower(dist),
+    lognormal = c("m", "s"),
+    gamma = c("shape", "rate"),
+    exgauss = c("mu", "sigma", "tau"),
+    lba = c("v", "B", "A", "sv"),
+    rdm = c("v", "B", "A", "s"),
+    stop(sprintf("Unknown distribution '%s'", dist), call. = FALSE)
+  )
 }
 
 .parameter_character <- function(value, what) {
@@ -1277,7 +1285,7 @@ dist_param_names <- function(dist) {
   for (external_name in required) {
     targets <- names(lookup)[lookup == external_name]
     if (external_name %in% names(param_values)) {
-      expanded[targets] <- as.numeric(param_values[[external_name]])[1]
+      expanded[targets] <- param_values[[external_name]]
       next
     }
     suffixes <- sub("^.*\\.", "", targets)
@@ -1410,14 +1418,4 @@ build_param_matrix <- function(model,
   params <- base_mat[rep(seq_along(accs), times = n_trials), , drop = FALSE]
   class(params) <- c("accumulatr_parameters", "matrix", "array")
   params
-}
-
-.expand_accumulator_rows <- function(structure, data) {
-  acc_ids <- names(structure$prep$accumulators)
-  df <- as.data.frame(data)
-  df$trials <- seq_len(nrow(df))
-  out <- df[rep(seq_len(nrow(df)), each = length(acc_ids)), , drop = FALSE]
-  out$racer <- rep(acc_ids, times = nrow(df))
-  rownames(out) <- NULL
-  out
 }

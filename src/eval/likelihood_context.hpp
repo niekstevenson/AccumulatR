@@ -2,9 +2,9 @@
 
 #include <Rcpp.h>
 
-#include <atomic>
 #include <cmath>
-#include <cstdint>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -18,14 +18,57 @@
 #include "exact_sequence.hpp"
 #include "observation_component_mixture.hpp"
 #include "observation_model.hpp"
+#include "observation_trial_loop.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
 
-inline std::uint64_t next_native_likelihood_context_id() noexcept {
-  static std::atomic<std::uint64_t> next_id{1U};
-  return next_id.fetch_add(1U, std::memory_order_relaxed);
-}
+// Scratch belongs to the compiled context, not whichever context ran last.
+// Borrowers do not share mutable buffers; the lock covers ownership only.
+struct LikelihoodWorkspacePool {
+  explicit LikelihoodWorkspacePool(const std::size_t plans) : plan_count(plans) {}
+
+  struct Slot {
+    explicit Slot(const std::size_t plans) : workspace(plans) {}
+    ObservationLikelihoodLaneWorkspace workspace;
+    SEXP data_anchor{R_NilValue};
+    std::unique_ptr<Slot> next;
+  };
+
+  struct Lease {
+    explicit Lease(LikelihoodWorkspacePool &owner) : pool(owner) {
+      {
+        std::lock_guard<std::mutex> lock(pool.mutex);
+        slot = std::move(pool.available);
+        if (slot) pool.available = std::move(slot->next);
+      }
+      if (!slot) {
+        slot = std::make_unique<Slot>(pool.plan_count);
+        Rcpp::Shield<SEXP> anchor(Rf_cons(R_NilValue, R_NilValue));
+        SETCDR(anchor, R_ExternalPtrProtected(pool.owner));
+        R_SetExternalPtrProtected(pool.owner, anchor);
+        slot->data_anchor = anchor;
+      }
+    }
+    Lease(const Lease &) = delete;
+    Lease &operator=(const Lease &) = delete;
+    ~Lease() {
+      std::lock_guard<std::mutex> lock(pool.mutex);
+      slot->next = std::move(pool.available);
+      pool.available = std::move(slot);
+    }
+    ObservationLikelihoodLaneWorkspace &get() { return slot->workspace; }
+    void retain_data(SEXP data) { SETCAR(slot->data_anchor, data); }
+
+    LikelihoodWorkspacePool &pool;
+    std::unique_ptr<Slot> slot;
+  };
+
+  std::size_t plan_count;
+  SEXP owner{R_NilValue}; // Weak self-reference; its protected field traces data roots.
+  std::mutex mutex;
+  std::unique_ptr<Slot> available;
+};
 
 struct NativeLikelihoodContext {
   NativeLikelihoodContext() = default;
@@ -34,7 +77,6 @@ struct NativeLikelihoodContext {
   NativeLikelihoodContext(NativeLikelihoodContext &&) = default;
   NativeLikelihoodContext &operator=(NativeLikelihoodContext &&) = delete;
 
-  std::uint64_t id{next_native_likelihood_context_id()};
   ComponentMixturePlan component_mixture;
   std::vector<ComponentObservationPlan> observation_plans_by_component_code;
   bool observation_is_identity{false};
@@ -44,6 +86,7 @@ struct NativeLikelihoodContext {
   std::vector<ExactVariantPlan> exact_plans;
   std::vector<ExactComplexityMetrics> exact_complexity_metrics;
   std::vector<std::vector<int>> exact_leaf_row_offsets_by_variant;
+  std::unique_ptr<LikelihoodWorkspacePool> workspace_pool;
 };
 
 inline ComponentMixturePlan build_component_mixture_plan(
@@ -273,6 +316,7 @@ inline NativeLikelihoodContext build_native_likelihood_context(
   }
   ctx.exact_leaf_row_offsets_by_variant =
       make_exact_leaf_row_offsets_by_variant(model, compiled);
+  ctx.workspace_pool = std::make_unique<LikelihoodWorkspacePool>(ctx.exact_plans.size());
   return ctx;
 }
 

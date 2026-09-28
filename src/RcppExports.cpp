@@ -60,12 +60,30 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// simulate_cpp
+Rcpp::DataFrame simulate_cpp(const Rcpp::List& prep, Rcpp::Environment cache, const Rcpp::NumericMatrix& parameters, const Rcpp::IntegerVector& component, Rcpp::Nullable<Rcpp::NumericVector> onset, const bool keep_detail, const bool keep_component);
+RcppExport SEXP _AccumulatR_simulate_cpp(SEXP prepSEXP, SEXP cacheSEXP, SEXP parametersSEXP, SEXP componentSEXP, SEXP onsetSEXP, SEXP keep_detailSEXP, SEXP keep_componentSEXP) {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< const Rcpp::List& >::type prep(prepSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Environment >::type cache(cacheSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::NumericMatrix& >::type parameters(parametersSEXP);
+    Rcpp::traits::input_parameter< const Rcpp::IntegerVector& >::type component(componentSEXP);
+    Rcpp::traits::input_parameter< Rcpp::Nullable<Rcpp::NumericVector> >::type onset(onsetSEXP);
+    Rcpp::traits::input_parameter< const bool >::type keep_detail(keep_detailSEXP);
+    Rcpp::traits::input_parameter< const bool >::type keep_component(keep_componentSEXP);
+    rcpp_result_gen = Rcpp::wrap(simulate_cpp(prep, cache, parameters, component, onset, keep_detail, keep_component));
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_AccumulatR_semantic_make_likelihood_context_prep_cpp", (DL_FUNC) &_AccumulatR_semantic_make_likelihood_context_prep_cpp, 2},
     {"_AccumulatR_semantic_complexity_metrics_context_cpp", (DL_FUNC) &_AccumulatR_semantic_complexity_metrics_context_cpp, 1},
     {"_AccumulatR_semantic_loglik_context_cpp", (DL_FUNC) &_AccumulatR_semantic_loglik_context_cpp, 5},
     {"_AccumulatR_semantic_response_probabilities_context_cpp", (DL_FUNC) &_AccumulatR_semantic_response_probabilities_context_cpp, 2},
+    {"_AccumulatR_simulate_cpp", (DL_FUNC) &_AccumulatR_simulate_cpp, 7},
     {NULL, NULL, 0}
 };
 

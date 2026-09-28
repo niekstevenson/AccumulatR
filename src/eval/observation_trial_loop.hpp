@@ -69,15 +69,7 @@ struct ExactResponseScheduleGroup {
 };
 
 struct ObservationLikelihoodSchedule {
-  bool matches(SEXP dataSEXP) const {
-    return data != R_NilValue && static_cast<SEXP>(data) == dataSEXP;
-  }
-
-  void identify(SEXP dataSEXP) {
-    data = dataSEXP;
-  }
-
-  Rcpp::RObject data;
+  SEXP data{R_NilValue}; // Rooted by the owning context workspace's data anchor.
   std::size_t trial_count{0U};
   std::size_t component_count{0U};
   bool direct_trial_values{false};
@@ -331,7 +323,7 @@ inline void build_observation_likelihood_schedule(
   ObservationLikelihoodSchedule *schedule) {
   const auto layout = read_prepared_trial_layout(dataSEXP);
   const SEXP component_column =
-      trusted_data_column(dataSEXP, layout.component_col);
+      VECTOR_ELT(dataSEXP, layout.component_col);
   const int *component = INTEGER(component_column);
   const bool has_observation_bounds = layout.observation.present();
   const auto observation_data =
@@ -339,16 +331,16 @@ inline void build_observation_likelihood_schedule(
           ? read_prepared_observation_data_view(dataSEXP, layout)
           : PreparedObservationDataView{};
   const int *label =
-      INTEGER(trusted_data_column(dataSEXP, layout.label_cols[1]));
+      INTEGER(VECTOR_ELT(dataSEXP, layout.label_cols[1]));
   const double *rt =
-      REAL(trusted_data_column(dataSEXP, layout.time_cols[1]));
+      REAL(VECTOR_ELT(dataSEXP, layout.time_cols[1]));
 
   schedule->trial_count =
       static_cast<std::size_t>(XLENGTH(component_column)) /
       global_leaf_count;
   schedule->component_count = component_mixture.present_component_codes.size();
   schedule->onset = layout.onset_col >= 0
-                        ? REAL(trusted_data_column(
+                        ? REAL(VECTOR_ELT(
                               dataSEXP, layout.onset_col))
                         : nullptr;
   schedule->ranked_by_variant.assign(exact_plans.size(), {});
@@ -367,7 +359,7 @@ inline void build_observation_likelihood_schedule(
        ++trial_index) {
     const auto row = static_cast<R_xlen_t>(trial_index * global_leaf_count);
     const auto observed_label =
-        integer_cell_is_na(label, row)
+        label[row] == NA_INTEGER
             ? semantic::kInvalidIndex
             : static_cast<semantic::Index>(label[row]);
     const double observed_rt = rt[row];
@@ -380,15 +372,15 @@ inline void build_observation_likelihood_schedule(
       }
       schedule->truncated_trials[trial_index] = 1U;
     }
-    const bool latent_trial = integer_cell_is_na(component, row);
+    const bool latent_trial = component[row] == NA_INTEGER;
 
     int rank_count = 0;
     if (second_rank_labels != nullptr &&
-        !integer_cell_is_na(second_rank_labels, row)) {
+        second_rank_labels[row] != NA_INTEGER) {
       for (int rank = 1; rank <= layout.max_rank; ++rank) {
         const auto *rank_labels =
             schedule->ranked_columns.labels[static_cast<std::size_t>(rank)];
-        if (integer_cell_is_na(rank_labels, row)) {
+        if (rank_labels[row] == NA_INTEGER) {
           break;
         }
         ++rank_count;
@@ -554,7 +546,7 @@ inline void build_observation_likelihood_schedule(
         exact_plans[static_cast<std::size_t>(group.variant_index)]
             .leaf_descriptors.size());
   }
-  schedule->identify(dataSEXP);
+  schedule->data = dataSEXP;
 }
 
 inline void evaluate_observation_likelihood_trial_values_lanes(
@@ -572,7 +564,8 @@ inline void evaluate_observation_likelihood_trial_values_lanes(
     ObservationLikelihoodLaneWorkspace *lane_workspace,
     double *trial_loglik) {
   auto &schedule = lane_workspace->schedule;
-  if (!schedule.matches(dataSEXP)) {
+  if (schedule.data != dataSEXP) {
+    schedule.data = R_NilValue;
     ObservationLikelihoodSchedule replacement;
     build_observation_likelihood_schedule(
         component_plans_by_code,

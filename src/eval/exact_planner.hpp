@@ -9,6 +9,7 @@
 #include "exact_expr_canonicalization.hpp"
 #include "exact_kernel_planning.hpp"
 #include "exact_compiled_math_finalize.hpp"
+#include "compiled_integral_planning.hpp"
 
 namespace accumulatr::eval {
 namespace detail {
@@ -40,10 +41,10 @@ inline ExactVariantPlan make_exact_variant_plan(
   compile_source_product_execution_programs(&build);
   compile_source_node_programs(&build);
   finalize_source_program_initial_resolutions(&build.compiled_math);
+  compile_cumulative_integral_dependencies(&build.compiled_math);
   compile_source_program_cache_slots(&build.compiled_math);
   finalize_compiled_math_time_slots(&build.compiled_math);
-  validate_source_product_relations_materialized(build.compiled_math);
-  validate_compiled_math_has_no_interpreter_expr_nodes(build.compiled_math);
+  validate_compiled_source_program_references(build.compiled_math);
   exact_complexity_finalize(&build);
   compiled_math_release_planning_fields(&build.compiled_math);
 

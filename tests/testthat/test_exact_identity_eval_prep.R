@@ -140,7 +140,6 @@ testthat::test_that("exact identity likelihood matches pooled top-1 formula", {
   t <- trial_df$rt[[1]]
   fa <- dlnorm(t, params[["a.m"]], params[["a.s"]])
   fb <- dlnorm(t, params[["b.m"]], params[["b.s"]])
-  fc <- dlnorm(t, params[["c.m"]], params[["c.s"]])
   sa <- 1 - plnorm(t, params[["a.m"]], params[["a.s"]])
   sb <- 1 - plnorm(t, params[["b.m"]], params[["b.s"]])
   sc <- 1 - plnorm(t, params[["c.m"]], params[["c.s"]])

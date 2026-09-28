@@ -75,7 +75,6 @@ testthat::test_that("exact kernel carries positive-mass tie terms for the guarde
 
   f_fast <- function(x) dlnorm(x, params[["go_fast.m"]], params[["go_fast.s"]])
   F_fast <- function(x) plnorm(x, params[["go_fast.m"]], params[["go_fast.s"]])
-  f_slow <- function(x) dlnorm(x, params[["go_slow.m"]], params[["go_slow.s"]])
   F_slow <- function(x) plnorm(x, params[["go_slow.m"]], params[["go_slow.s"]])
   f_gate <- function(x) dlnorm(x, params[["gate_shared.m"]], params[["gate_shared.s"]])
   F_gate <- function(x) plnorm(x, params[["gate_shared.m"]], params[["gate_shared.s"]])
@@ -169,21 +168,10 @@ testthat::test_that("exact kernel rejects logical-not branches inside first_of/o
   spec <- race_spec() |>
     add_accumulator("go", "lognormal") |>
     add_accumulator("stop", "lognormal") |>
-    add_outcome("RESPOND", first_of("go", none_of("stop"))) |>
-    test_separate_all_parameters()
+    add_outcome("RESPOND", first_of("go", none_of("stop")))
 
-  trial_df <- data.frame(
-    trials = 1L,
-    R = "RESPOND",
-    rt = 0.30,
-    stringsAsFactors = FALSE
-  )
-  params <- c(
-    go.m = log(0.31), go.s = 0.15, go.t0 = 0.00,
-    stop.m = log(0.27), stop.s = 0.13, stop.t0 = 0.00
-  )
   testthat::expect_error(
-    run_public_loglik(spec, trial_df, params),
+    make_context(finalize_model(spec)),
     "logical-not branches inside first_of\\(\\)/or outcomes"
   )
 })

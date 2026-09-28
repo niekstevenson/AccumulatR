@@ -115,7 +115,6 @@ inline void compile_source_kernels(ExactVariantBuildState *plan) {
         plan->source_kernels[static_cast<std::size_t>(source_id)];
     kernel.kind = CompiledSourceChannelKernelKind::PoolKOfN;
     kernel.source_id = source_id;
-    kernel.pool_index = i;
     kernel.pool_member_offset = program.pool_member_offsets[pos];
     kernel.pool_member_count =
         program.pool_member_offsets[pos + 1U] -
@@ -153,9 +152,8 @@ inline void compile_exact_expr_kernels(ExactVariantBuildState *plan) {
     kernel.guard_blocker_expr_id = program.expr_blocker_child[pos];
   }
 }
-inline void compile_trigger_state_table(ExactVariantBuildState *plan) {
+inline void compile_shared_trigger_state_table(ExactVariantBuildState *plan) {
   struct TriggerStateBuilder {
-    double fixed_weight{1.0};
     std::vector<ExactCompiledTriggerWeightTerm> weight_terms;
     std::vector<std::uint8_t> shared_started;
   };
@@ -172,16 +170,13 @@ inline void compile_trigger_state_table(ExactVariantBuildState *plan) {
       static_cast<std::size_t>(table.trigger_count), 2U);
 
   const auto &program = plan->program;
-  for (const auto trigger_index : plan->shared_trigger_indices) {
+  for (semantic::Index trigger_index = 0;
+       trigger_index < program.layout.n_triggers; ++trigger_index) {
     const auto trigger_pos = static_cast<std::size_t>(trigger_index);
-    semantic::Index q_leaf_index{semantic::kInvalidIndex};
     const auto member_begin = program.trigger_member_offsets[trigger_pos];
     const auto member_end = program.trigger_member_offsets[trigger_pos + 1U];
-    if (member_begin != member_end) {
-      q_leaf_index =
-          program.trigger_member_indices[
-              static_cast<std::size_t>(member_begin)];
-    }
+    if (member_end - member_begin <= 1) continue;
+    const auto q_leaf_index = program.trigger_member_indices[member_begin];
 
     std::vector<TriggerStateBuilder> next;
     next.reserve(builders.size() * 2U);
@@ -220,7 +215,6 @@ inline void compile_trigger_state_table(ExactVariantBuildState *plan) {
         builder.weight_terms.end());
     table.states.push_back(
         ExactCompiledTriggerState{
-            builder.fixed_weight,
             ExactIndexSpan{
                 weight_offset,
                 static_cast<semantic::Index>(
@@ -228,20 +222,6 @@ inline void compile_trigger_state_table(ExactVariantBuildState *plan) {
                     static_cast<std::size_t>(weight_offset))},
             shared_offset});
   }
-}
-
-inline void compile_shared_trigger_state_table(ExactVariantBuildState *plan) {
-  plan->shared_trigger_indices.clear();
-  const auto &program = plan->program;
-  for (int i = 0; i < program.layout.n_triggers; ++i) {
-    const auto trigger_pos = static_cast<std::size_t>(i);
-    if (program.trigger_member_offsets[trigger_pos + 1U] -
-                program.trigger_member_offsets[trigger_pos] >
-            1) {
-      plan->shared_trigger_indices.push_back(i);
-    }
-  }
-  compile_trigger_state_table(plan);
 }
 
 } // namespace detail

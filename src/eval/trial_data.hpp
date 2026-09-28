@@ -66,10 +66,6 @@ inline bool trial_is_selected(const int *ok,
   return ok == nullptr || ok[static_cast<R_xlen_t>(trial_index)] == TRUE;
 }
 
-inline SEXP trusted_data_column(SEXP dataSEXP, const int column_index) {
-  return VECTOR_ELT(dataSEXP, column_index);
-}
-
 inline SEXP trusted_data_attr(SEXP dataSEXP, const char *name) {
   return Rf_getAttrib(dataSEXP, Rf_install(name));
 }
@@ -116,11 +112,11 @@ inline PreparedObservationDataView read_prepared_observation_data_view(
     SEXP dataSEXP,
     const PreparedTrialLayout &layout) {
   return PreparedObservationDataView{
-      REAL(trusted_data_column(dataSEXP, layout.observation.lt)),
-      REAL(trusted_data_column(dataSEXP, layout.observation.ut)),
-      REAL(trusted_data_column(dataSEXP, layout.observation.lc)),
-      REAL(trusted_data_column(dataSEXP, layout.observation.uc)),
-      INTEGER(trusted_data_column(
+      REAL(VECTOR_ELT(dataSEXP, layout.observation.lt)),
+      REAL(VECTOR_ELT(dataSEXP, layout.observation.ut)),
+      REAL(VECTOR_ELT(dataSEXP, layout.observation.lc)),
+      REAL(VECTOR_ELT(dataSEXP, layout.observation.uc)),
+      INTEGER(VECTOR_ELT(
           dataSEXP, layout.observation.missingness))};
 }
 
@@ -133,11 +129,6 @@ inline ObservationBounds observation_bounds_for_row(
       view.lc[row],
       view.uc[row],
       view.missingness[row]};
-}
-
-inline bool integer_cell_is_na(const int *column,
-                               const R_xlen_t row) {
-  return column[row] == NA_INTEGER;
 }
 
 } // namespace detail

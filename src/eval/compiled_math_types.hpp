@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <functional>
 #include <unordered_map>
 #include <vector>
@@ -19,27 +20,23 @@ enum class CompiledMathValueKind : std::uint8_t {
 };
 
 enum class CompiledMathNodeKind : std::uint8_t {
-  Constant = 0,
-  SourcePdf = 1,
-  SourceCdf = 2,
-  SourceSurvival = 3,
-  ExprDensity = 4,
-  ExprCdf = 5,
-  ExprSurvival = 6,
-  Product = 7,
-  Sum = 8,
-  CleanSignedSum = 9,
-  ClampProbability = 10,
-  Complement = 11,
-  Negate = 12,
-  IntegralZeroToCurrent = 17,
-  ExprUpperBoundDensity = 18,
-  ExprUpperBoundCdf = 19,
-  OutcomeSubsetUnused = 20,
-  OutcomeSubsetUsed = 21,
-  IntegralZeroToCurrentRaw = 22,
-  TimeGate = 29,
-  StrictTimeGate = 30
+  Constant,
+  SourcePdf,
+  SourceCdf,
+  SourceSurvival,
+  Product,
+  Sum,
+  CleanSignedSum,
+  ClampProbability,
+  Complement,
+  Negate,
+  IntegralZeroToCurrent,
+  ExprUpperBoundDensity,
+  ExprUpperBoundCdf,
+  OutcomeSelect,
+  IntegralZeroToCurrentRaw,
+  TimeGate,
+  StrictTimeGate
 };
 
 enum class CompiledMathExecutionKind : std::uint8_t {
@@ -86,12 +83,13 @@ struct CompiledMathSourceProductOps {
 struct CompiledMathNode {
   CompiledMathNodeKind kind{CompiledMathNodeKind::Constant};
   semantic::Index subject_id{semantic::kInvalidIndex};
-  semantic::Index condition_id{0};
   semantic::Index time_id{0};
   semantic::Index aux_id{semantic::kInvalidIndex};
   semantic::Index aux2_id{semantic::kInvalidIndex};
   semantic::Index source_view_id{0};
   CompiledMathIndexSpan children{};
+  std::array<semantic::Index, 2> branch_roots{
+      semantic::kInvalidIndex, semantic::kInvalidIndex};
   semantic::Index source_program_id{semantic::kInvalidIndex};
   semantic::Index integral_kernel_slot{semantic::kInvalidIndex};
   bool cache_source_program{false};
@@ -100,7 +98,6 @@ struct CompiledMathNode {
 
 struct CompiledMathSourceProductTerm {
   CompiledMathIndexSpan source_value_factors{};
-  CompiledMathIndexSpan outcome_gate_nodes{};
   CompiledMathIndexSpan time_gate_nodes{};
   CompiledMathIndexSpan integral_factor_nodes{};
   CompiledMathIndexSpan expr_upper_factors{};
@@ -110,14 +107,12 @@ struct CompiledMathSourceProductTerm {
 
 struct CompiledMathSourceProductChannel {
   semantic::Index source_id{semantic::kInvalidIndex};
-  semantic::Index condition_id{0};
   semantic::Index source_view_id{0};
   semantic::Index time_id{0};
   semantic::Index time_cap_id{semantic::kInvalidIndex};
   std::uint8_t required_channels{0U};
   semantic::Index source_product_program_id{semantic::kInvalidIndex};
   std::uint8_t static_source_view_relation{0U};
-  bool has_static_source_view_relation{false};
 };
 
 constexpr semantic::Index kInitialCertainSourceProgramId{-2};
@@ -134,7 +129,6 @@ struct CompiledMathSourceProductProgram {
   double leaf_onset_lag{0.0};
   semantic::Index pool_k{0};
   std::uint8_t static_source_view_relation{0U};
-  bool has_static_source_view_relation{false};
   semantic::Index initial_without_pdf_program_id{semantic::kInvalidIndex};
   semantic::Index initial_with_pdf_program_id{semantic::kInvalidIndex};
 };
@@ -170,11 +164,13 @@ struct CompiledMathIntegralKernel {
   semantic::Index bind_time_id{semantic::kInvalidIndex};
   CompiledMathExecutionPlan execution{};
   CompiledMathExecutionPlan initial_execution{};
+  // Leaves determining a univariate cumulative integrand (empty if ineligible).
+  std::vector<semantic::Index> cumulative_leaves;
+  std::vector<semantic::Index> support_leaves;
 };
 
 struct CompiledMathSourceValueFactor {
   semantic::Index source_id{semantic::kInvalidIndex};
-  semantic::Index condition_id{0};
   semantic::Index source_view_id{0};
   semantic::Index time_id{0};
   semantic::Index time_cap_id{semantic::kInvalidIndex};
@@ -195,7 +191,6 @@ struct CompiledMathNodeKey {
   CompiledMathNodeKind kind{CompiledMathNodeKind::Constant};
   CompiledMathValueKind value_kind{CompiledMathValueKind::Scalar};
   semantic::Index subject_id{semantic::kInvalidIndex};
-  semantic::Index condition_id{0};
   semantic::Index time_id{0};
   semantic::Index aux_id{semantic::kInvalidIndex};
   semantic::Index aux2_id{semantic::kInvalidIndex};
@@ -207,7 +202,6 @@ struct CompiledMathNodeKey {
     return kind == other.kind &&
            value_kind == other.value_kind &&
            subject_id == other.subject_id &&
-           condition_id == other.condition_id &&
            time_id == other.time_id &&
            aux_id == other.aux_id &&
            aux2_id == other.aux2_id &&
@@ -222,7 +216,6 @@ struct CompiledMathNodeKeyHash {
     std::size_t seed = static_cast<std::size_t>(key.kind);
     hash_combine(&seed, static_cast<std::size_t>(key.value_kind));
     hash_combine(&seed, static_cast<std::size_t>(key.subject_id));
-    hash_combine(&seed, static_cast<std::size_t>(key.condition_id));
     hash_combine(&seed, static_cast<std::size_t>(key.time_id));
     hash_combine(&seed, static_cast<std::size_t>(key.aux_id));
     hash_combine(&seed, static_cast<std::size_t>(key.aux2_id));
@@ -265,7 +258,6 @@ struct CompiledMathProgram {
       source_program_members;
   std::vector<semantic::Index> source_program_cache_slots;
   semantic::Index source_program_cache_count{0};
-  std::vector<semantic::Index> outcome_gate_nodes;
   std::vector<semantic::Index> time_gate_nodes;
   std::vector<semantic::Index> integral_factor_nodes;
   std::vector<CompiledMathExprUpperFactor> expr_upper_factors;

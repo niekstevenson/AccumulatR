@@ -32,8 +32,7 @@ inline semantic::Index compile_source_view_id(
 inline semantic::Index compile_expr_value_node(
     ExactVariantBuildState *plan,
     semantic::Index expr_id,
-    CompiledMathNodeKind value_kind,
-    semantic::Index condition_id,
+    CompiledMathValueKind value_kind,
     semantic::Index time_id =
         static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
     semantic::Index source_view_id = 0);
@@ -41,8 +40,7 @@ inline semantic::Index compile_expr_value_node(
 inline semantic::Index compile_expr_distribution_node(
     ExactVariantBuildState *plan,
     semantic::Index expr_id,
-    CompiledMathNodeKind value_kind,
-    semantic::Index condition_id,
+    CompiledMathValueKind value_kind,
     semantic::Index time_id,
     semantic::Index source_view_id);
 
@@ -50,7 +48,6 @@ inline semantic::Index compile_expr_source_node(
     ExactVariantBuildState *plan,
     const CompiledMathNodeKind kind,
     const semantic::Index source_id,
-    const semantic::Index condition_id,
     const semantic::Index time_id =
         static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
     const semantic::Index source_view_id = 0) {
@@ -58,80 +55,63 @@ inline semantic::Index compile_expr_source_node(
       &plan->compiled_math,
       kind,
       source_id,
-      condition_id,
       time_id,
       source_view_id);
-}
-
-inline semantic::Index compile_expr_unsupported_node(
-    ExactVariantBuildState *plan,
-    const CompiledMathNodeKind kind,
-    const semantic::Index expr_id,
-    const semantic::Index condition_id) {
-  (void)plan;
-  (void)kind;
-  (void)condition_id;
-  throw std::runtime_error(
-      "exact expression compilation reached unsupported expression " +
-      std::to_string(expr_id) +
-      "; runtime expression interpretation is disabled");
 }
 
 inline semantic::Index compile_integral_zero_to_current_node(
     ExactVariantBuildState *plan,
     const semantic::Index integrand_node,
-    const semantic::Index condition_id,
     const semantic::Index time_id =
         static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
     const semantic::Index source_view_id = 0,
     const semantic::Index bind_time_id = semantic::kInvalidIndex) {
   const auto integrand_root =
       compiled_math_make_root(&plan->compiled_math, integrand_node);
-  return compiled_math_integral_zero_to_current_node(
+  return compiled_math_integral_node(
       &plan->compiled_math,
+      CompiledMathNodeKind::IntegralZeroToCurrent,
       integrand_root,
-      condition_id,
       time_id,
       source_view_id,
       bind_time_id);
 }
 
-inline semantic::Index compile_outcome_subset_unused_node(
+inline semantic::Index compile_outcome_select_node(
     ExactVariantBuildState *plan,
     const std::vector<semantic::Index> &outcome_indices,
-    const bool used = false) {
-  if (outcome_indices.empty()) {
-    return compiled_math_constant(&plan->compiled_math, used ? 0.0 : 1.0);
+    const semantic::Index unused_node,
+    const semantic::Index used_node) {
+  if (outcome_indices.empty() || unused_node == used_node) return unused_node;
+  auto inserted = plan->outcome_predicates.emplace(
+      outcome_indices, static_cast<semantic::Index>(
+          plan->compiled_outcome_gate_indices.size()));
+  if (inserted.second) {
+    plan->compiled_outcome_gate_indices.insert(
+        plan->compiled_outcome_gate_indices.end(),
+        outcome_indices.begin(), outcome_indices.end());
   }
-  const auto offset =
-      static_cast<semantic::Index>(
-          plan->compiled_outcome_gate_indices.size());
-  plan->compiled_outcome_gate_indices.insert(
-      plan->compiled_outcome_gate_indices.end(),
-      outcome_indices.begin(),
-      outcome_indices.end());
   CompiledMathNodeKey key;
-  key.kind = used ? CompiledMathNodeKind::OutcomeSubsetUsed
-                  : CompiledMathNodeKind::OutcomeSubsetUnused;
-  key.value_kind = CompiledMathValueKind::Scalar;
-  key.subject_id = offset;
+  key.kind = CompiledMathNodeKind::OutcomeSelect;
+  key.subject_id = inserted.first->second;
   key.aux_id = static_cast<semantic::Index>(outcome_indices.size());
-  return compiled_math_intern_node(&plan->compiled_math, std::move(key));
+  key.children = {unused_node, used_node};
+  const auto branch_root = [&](const semantic::Index child) {
+    return plan->compiled_math.nodes[child].kind == CompiledMathNodeKind::Constant
+        ? semantic::kInvalidIndex
+        : compiled_math_make_root(&plan->compiled_math, child);
+  };
+  const auto unused_root = branch_root(unused_node);
+  const auto used_root = branch_root(used_node);
+  const auto node = compiled_math_intern_node(&plan->compiled_math, std::move(key));
+  plan->compiled_math.nodes[node].branch_roots = {unused_root, used_root};
+  return node;
 }
-
-inline semantic::Index compile_expr_value_node(
-    ExactVariantBuildState *plan,
-    const semantic::Index expr_id,
-    const CompiledMathNodeKind value_kind,
-    const semantic::Index condition_id,
-    const semantic::Index time_id,
-    const semantic::Index source_view_id);
 
 inline semantic::Index compile_expr_value_node_raw(
     ExactVariantBuildState *plan,
     const semantic::Index expr_id,
-    const CompiledMathNodeKind value_kind,
-    const semantic::Index condition_id,
+    const CompiledMathValueKind value_kind,
     const semantic::Index time_id,
     const semantic::Index source_view_id = 0) {
   const auto &program = plan->program;
@@ -146,39 +126,33 @@ inline semantic::Index compile_expr_value_node_raw(
         child,
         CompiledMathValueKind::Cdf);
   };
-  const auto unsupported = [&]() {
-    return compile_expr_unsupported_node(plan, value_kind, expr_id, condition_id);
-  };
-
   switch (kernel.kind) {
   case semantic::ExprKind::Impossible:
-    if (value_kind == CompiledMathNodeKind::ExprSurvival) {
+    if (value_kind == CompiledMathValueKind::Survival) {
       return constant(1.0);
     }
     return constant(0.0);
 
   case semantic::ExprKind::TrueExpr:
-    if (value_kind == CompiledMathNodeKind::ExprDensity) {
+    if (value_kind == CompiledMathValueKind::Density) {
       return constant(0.0);
     }
     return constant(1.0);
 
   case semantic::ExprKind::Event:
-    if (value_kind == CompiledMathNodeKind::ExprDensity) {
+    if (value_kind == CompiledMathValueKind::Density) {
       return compile_expr_source_node(
           plan,
           CompiledMathNodeKind::SourcePdf,
           kernel.event_source_id,
-          condition_id,
           time_id,
           source_view_id);
     }
-    if (value_kind == CompiledMathNodeKind::ExprCdf) {
+    if (value_kind == CompiledMathValueKind::Cdf) {
       return compile_expr_source_node(
           plan,
           CompiledMathNodeKind::SourceCdf,
           kernel.event_source_id,
-          condition_id,
           time_id,
           source_view_id);
     }
@@ -186,7 +160,6 @@ inline semantic::Index compile_expr_value_node_raw(
         plan,
         CompiledMathNodeKind::SourceSurvival,
         kernel.event_source_id,
-        condition_id,
         time_id,
         source_view_id);
 
@@ -196,29 +169,26 @@ inline semantic::Index compile_expr_value_node_raw(
         plan,
         expr_id,
         value_kind,
-        condition_id,
         time_id,
         source_view_id);
 
   case semantic::ExprKind::Not: {
     const auto child =
         program.expr_args[static_cast<std::size_t>(kernel.children.offset)];
-    if (value_kind == CompiledMathNodeKind::ExprCdf) {
+    if (value_kind == CompiledMathValueKind::Cdf) {
       return complement(
           compile_expr_value_node(
               plan,
               child,
-              CompiledMathNodeKind::ExprCdf,
-              condition_id,
+              CompiledMathValueKind::Cdf,
               time_id,
               source_view_id));
     }
-    if (value_kind == CompiledMathNodeKind::ExprSurvival) {
+    if (value_kind == CompiledMathValueKind::Survival) {
       return compile_expr_value_node(
           plan,
           child,
-          CompiledMathNodeKind::ExprCdf,
-          condition_id,
+          CompiledMathValueKind::Cdf,
           time_id,
           source_view_id);
     }
@@ -228,8 +198,7 @@ inline semantic::Index compile_expr_value_node_raw(
         compile_expr_value_node(
             plan,
             child,
-            CompiledMathNodeKind::ExprDensity,
-            condition_id,
+            CompiledMathValueKind::Density,
             time_id,
             source_view_id),
         CompiledMathValueKind::Density);
@@ -240,28 +209,27 @@ inline semantic::Index compile_expr_value_node_raw(
         plan,
         expr_id,
         value_kind,
-        condition_id,
         time_id,
         source_view_id);
   }
 
-  return unsupported();
+  throw std::runtime_error(
+      "exact expression compilation reached unsupported expression " +
+      std::to_string(expr_id));
 }
 
 inline semantic::Index compile_expr_upper_bound_node(
     ExactVariantBuildState *plan,
     const semantic::Index expr_id,
     const semantic::Index child_node,
-    const CompiledMathNodeKind value_kind,
+    const CompiledMathValueKind value_kind,
     const semantic::Index time_id,
     const semantic::Index source_view_id = 0) {
   CompiledMathNodeKey key;
-  key.kind = value_kind == CompiledMathNodeKind::ExprDensity
+  key.kind = value_kind == CompiledMathValueKind::Density
                  ? CompiledMathNodeKind::ExprUpperBoundDensity
                  : CompiledMathNodeKind::ExprUpperBoundCdf;
-  key.value_kind = value_kind == CompiledMathNodeKind::ExprDensity
-                       ? CompiledMathValueKind::Density
-                       : CompiledMathValueKind::Cdf;
+  key.value_kind = value_kind;
   key.subject_id = expr_id;
   key.time_id = time_id;
   key.source_view_id = source_view_id;
@@ -282,41 +250,35 @@ inline bool sequence_expr_upper_bound_used(
 inline semantic::Index compile_expr_value_node(
     ExactVariantBuildState *plan,
     const semantic::Index expr_id,
-    const CompiledMathNodeKind value_kind,
-    const semantic::Index condition_id,
+    const CompiledMathValueKind value_kind,
     const semantic::Index time_id,
     const semantic::Index source_view_id) {
   if (sequence_expr_upper_bound_used(*plan, expr_id)) {
-    if (value_kind == CompiledMathNodeKind::ExprSurvival) {
+    if (value_kind == CompiledMathValueKind::Survival) {
       return compiled_math_unary_node(
           &plan->compiled_math,
           CompiledMathNodeKind::Complement,
           compile_expr_value_node(
               plan,
               expr_id,
-              CompiledMathNodeKind::ExprCdf,
-              condition_id,
+              CompiledMathValueKind::Cdf,
               time_id,
               source_view_id),
           CompiledMathValueKind::Survival);
     }
     const auto raw_node =
         compile_expr_value_node_raw(
-            plan, expr_id, value_kind, condition_id, time_id, source_view_id);
-    if (value_kind == CompiledMathNodeKind::ExprDensity ||
-        value_kind == CompiledMathNodeKind::ExprCdf) {
-      return compile_expr_upper_bound_node(
-          plan,
-          expr_id,
-          raw_node,
-          value_kind,
-          time_id,
-          source_view_id);
-    }
-    return raw_node;
+            plan, expr_id, value_kind, time_id, source_view_id);
+    return compile_expr_upper_bound_node(
+        plan,
+        expr_id,
+        raw_node,
+        value_kind,
+        time_id,
+        source_view_id);
   }
   return compile_expr_value_node_raw(
-      plan, expr_id, value_kind, condition_id, time_id, source_view_id);
+      plan, expr_id, value_kind, time_id, source_view_id);
 }
 
 inline semantic::Index compiled_math_root_node_id(

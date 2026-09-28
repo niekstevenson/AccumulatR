@@ -11,7 +11,7 @@ Description: Toolbox for designing, simulating and fitting custom evidence-accum
     embedding of psychological hypotheses into the model. With that model you can
     simulate decision-making data and evaluate the likelihood of observed responses 
     under alternative parameter values. The user-facing interface stays in R, while the
-    likelihood calculations are handled in C++ for speed.
+    simulation and likelihood calculations are handled in C++ for speed.
 License: GPL-3
 URL: https://github.com/niekstevenson/AccumulatR,
     https://niekstevenson.github.io/AccumulatR/

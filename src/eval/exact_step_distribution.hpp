@@ -24,7 +24,7 @@ struct ExactStepLaneWorkspace {
         initial_state(make_exact_sequence_state(plan)),
         source_state(plan, kExactLaneTileSize) {
     step_inputs.reserve(kExactLaneTileSize);
-    input_params.reserve(kExactLaneTileSize);
+    input_lanes.reserve(kExactLaneTileSize);
     input_positions.reserve(kExactLaneTileSize);
     input_weights.reserve(kExactLaneTileSize);
     executor.lanes.set_source_state(&source_state);
@@ -35,39 +35,19 @@ struct ExactStepLaneWorkspace {
   ExactStepLaneWorkspace(ExactStepLaneWorkspace &&) = delete;
   ExactStepLaneWorkspace &operator=(ExactStepLaneWorkspace &&) = delete;
 
-  bool bind_sources(
-      const ExactStepLaneInput *lanes,
-      const std::size_t lane_count) {
-    bool has_sequence_history = false;
-    if (lane_count > 0U) {
-      source_state.bind_matrix(*lanes[0].params->matrix, lane_count);
-    }
-    for (std::size_t lane = 0; lane < lane_count; ++lane) {
-      const auto &input = lanes[lane];
-      const auto &sequence =
-          input.sequence_state == nullptr ? initial_state
-                                          : *input.sequence_state;
-      has_sequence_history = has_sequence_history || sequence.has_history;
-      source_state.bind_lane(
-          lane,
-          sequence,
-          *input.params,
-          input.shared_started);
-    }
-    return has_sequence_history;
-  }
-
   CompiledLaneFrame &prepare(
       const ExactStepLaneInput *lanes,
       const std::size_t lane_count) {
-    const bool has_sequence_history = bind_sources(lanes, lane_count);
+    source_state.bind_matrix(*lanes[0].params->matrix, lane_count);
     auto &frame = executor.lanes.top(lane_count);
-    frame.has_sequence_history = has_sequence_history;
     const auto observed = static_cast<std::size_t>(
         CompiledMathTimeSlot::Observed) * frame.stride;
     for (std::size_t lane = 0; lane < lane_count; ++lane) {
-      frame.time_values[observed + lane] = lanes[lane].observed_time;
-      frame.used_outcomes[lane] = lanes[lane].used_outcomes;
+      const auto &input = lanes[lane];
+      frame.has_sequence_history |= input.sequence_state->has_history;
+      source_state.bind_lane(lane, *input.sequence_state, *input.params, input.shared_started);
+      frame.time_values[observed + lane] = input.observed_time;
+      frame.used_outcomes[lane] = input.used_outcomes;
     }
     frame.time_valid[static_cast<std::size_t>(
         CompiledMathTimeSlot::Observed)] = 1U;
@@ -78,10 +58,7 @@ struct ExactStepLaneWorkspace {
     const ObservationLaneBatchView lanes,
     const std::uint8_t *shared_started) {
     const auto lane_count = lanes.size;
-    if (lane_count > 0U) {
-      source_state.bind_initial_batch(
-          lanes, shared_started);
-    }
+    source_state.bind_initial_batch(lanes, shared_started);
     auto &frame = executor.lanes.top(lane_count);
     const auto observed = static_cast<std::size_t>(
         CompiledMathTimeSlot::Observed) * frame.stride;
@@ -97,9 +74,7 @@ struct ExactStepLaneWorkspace {
   void bind_initial_sources(
       const ObservationLaneBatchView lanes,
       const std::uint8_t *shared_started) {
-    if (lanes.size > 0U) {
-      source_state.bind_initial_batch(lanes, shared_started);
-    }
+    source_state.bind_initial_batch(lanes, shared_started);
   }
 
   template <typename LaneIndex>
@@ -108,8 +83,6 @@ struct ExactStepLaneWorkspace {
       const LaneIndex *source_lanes,
       const std::size_t lane_count) {
     auto &frame = executor.lanes.top(lane_count);
-    frame.has_sequence_history = false;
-    frame.source_lanes_identity = true;
     const auto observed = static_cast<std::size_t>(
         CompiledMathTimeSlot::Observed) * frame.stride;
     std::copy_n(times, lane_count, frame.time_values.data() + observed);
@@ -132,7 +105,6 @@ struct ExactStepLaneWorkspace {
       const std::size_t time_count) {
     const auto expanded_count = lane_count * time_count;
     auto &frame = executor.lanes.top(expanded_count);
-    frame.has_sequence_history = false;
     frame.source_lanes_identity = time_count == 1U;
     const auto observed = static_cast<std::size_t>(
         CompiledMathTimeSlot::Observed) * frame.stride;
@@ -159,7 +131,7 @@ struct ExactStepLaneWorkspace {
   ExactLaneSourceState source_state;
   std::vector<double> root_values;
   std::vector<ExactStepLaneInput> step_inputs;
-  std::vector<ParamView> input_params;
+  ObservationLaneBatch input_lanes;
   std::vector<std::size_t> input_positions;
   std::vector<double> input_weights;
   std::vector<double> trigger_weights;
@@ -186,165 +158,55 @@ struct ExactStepLaneWorkspacePool {
   std::vector<std::unique_ptr<ExactStepLaneWorkspace>> workspaces;
 };
 
-inline void evaluate_exact_step_distribution_prepared_lanes(
+inline void evaluate_exact_outcome_density_lanes(
     const ExactVariantPlan &plan,
     CompiledLaneFrame *frame,
     const std::size_t lane_count,
     const semantic::Index target_idx,
-    const bool collect_successors,
     ExactStepLaneWorkspace *workspace,
-    std::vector<double> *total_probability,
-    std::vector<double> *transition_probability = nullptr,
-    const std::vector<semantic::Index> *additional_root_ids = nullptr,
-    std::vector<double> *additional_root_values = nullptr) {
-  if (lane_count == 0U || target_idx == semantic::kInvalidIndex) {
-    total_probability->assign(lane_count, 0.0);
-    if (transition_probability != nullptr) {
-      transition_probability->clear();
-    }
-    if (additional_root_values != nullptr) {
-      additional_root_values->clear();
-    }
-    return;
-  }
-  const auto &outcome =
-      plan.compiled_outcomes[static_cast<std::size_t>(target_idx)];
-  const bool collect_transition_values =
-      collect_successors && transition_probability != nullptr;
-  bool total_probability_is_clean = false;
-  if (collect_transition_values) {
-    total_probability->assign(lane_count, 0.0);
-    transition_probability->assign(
-        outcome.transitions.size() * lane_count, 0.0);
-    for (std::size_t transition_index = 0;
-         transition_index < outcome.transitions.size();
-         ++transition_index) {
-      const auto root_id =
-          outcome.transitions[transition_index].probability_root_id;
-      if (root_id == semantic::kInvalidIndex) {
-        continue;
-      }
-      evaluate_compiled_lane_root(
-          plan,
-          root_id,
-          &workspace->executor,
-          frame,
-          lane_count,
-          &workspace->root_values);
-      for (std::size_t lane = 0; lane < lane_count; ++lane) {
-        const double value = workspace->root_values[lane];
-        (*total_probability)[lane] += value;
-        (*transition_probability)[transition_index * lane_count + lane] =
-            std::isfinite(value) && value > 0.0 ? value : 0.0;
-      }
-    }
-    for (auto &value : *total_probability) {
-      value = clean_signed_value(value);
-      if (!(value > 0.0)) {
-        value = 0.0;
-      }
-    }
-    total_probability_is_clean = true;
-  } else if (outcome.total_probability_root_id != semantic::kInvalidIndex) {
-    const auto &root = plan.compiled_math.roots[static_cast<std::size_t>(
-        outcome.total_probability_root_id)];
-    const auto &execution = frame->has_sequence_history
-                                ? root.execution
-                                : root.initial_execution;
-    evaluate_compiled_lane_root(
-        plan,
-        outcome.total_probability_root_id,
-        &workspace->executor,
-        frame,
-        lane_count,
-        total_probability);
-    total_probability_is_clean =
-        execution.kind == CompiledMathExecutionKind::SourceProduct;
-  } else {
-    total_probability->assign(lane_count, 0.0);
-    for (const auto &transition : outcome.transitions) {
-      if (transition.probability_root_id == semantic::kInvalidIndex) {
-        continue;
-      }
-      evaluate_compiled_lane_root(
-          plan,
-          transition.probability_root_id,
-          &workspace->executor,
-          frame,
-          lane_count,
-          &workspace->root_values);
-      for (std::size_t lane = 0; lane < lane_count; ++lane) {
-        (*total_probability)[lane] += workspace->root_values[lane];
-      }
-    }
-  }
-  if (!total_probability_is_clean) {
-    for (auto &value : *total_probability) {
-      if (!std::isfinite(value) || !(value > 0.0)) {
-        value = 0.0;
-      }
-    }
-  }
-  if (additional_root_ids != nullptr &&
-      additional_root_values != nullptr) {
-    additional_root_values->assign(
-        additional_root_ids->size() * lane_count, 0.0);
-    for (std::size_t root_index = 0;
-         root_index < additional_root_ids->size();
-         ++root_index) {
-      const auto root_id = (*additional_root_ids)[root_index];
-      if (root_id == semantic::kInvalidIndex) {
-        continue;
-      }
-      evaluate_compiled_lane_root(
-          plan,
-          root_id,
-          &workspace->executor,
-          frame,
-          lane_count,
-          &workspace->root_values);
-      for (std::size_t lane = 0; lane < lane_count; ++lane) {
-        const double value = workspace->root_values[lane];
-        (*additional_root_values)[root_index * lane_count + lane] =
-            std::isfinite(value) ? clamp_probability(value) : 0.0;
-      }
-    }
+    std::vector<double> *out) {
+  const auto root_id = plan.compiled_outcomes[
+      static_cast<std::size_t>(target_idx)].total_probability_root_id;
+  const auto &root = plan.compiled_math.roots[static_cast<std::size_t>(root_id)];
+  const auto &execution = frame->has_sequence_history
+                              ? root.execution : root.initial_execution;
+  evaluate_compiled_lane_root(
+      plan, root_id, &workspace->executor, frame, lane_count, out);
+  if (execution.kind != CompiledMathExecutionKind::SourceProduct) {
+    for (auto &value : *out) value = safe_density(value);
   }
 }
 
-inline void evaluate_exact_step_distribution_lanes(
+inline void evaluate_exact_ranked_step_lanes(
     const ExactVariantPlan &plan,
     const ExactStepLaneInput *lanes,
     const std::size_t lane_count,
     const semantic::Index target_idx,
-    const bool collect_successors,
     ExactStepLaneWorkspace *workspace,
-    std::vector<double> *total_probability,
-    std::vector<double> *transition_probability = nullptr,
-    const std::vector<semantic::Index> *additional_root_ids = nullptr,
-    std::vector<double> *additional_root_values = nullptr) {
-  if (lane_count == 0U || target_idx == semantic::kInvalidIndex) {
-    total_probability->assign(lane_count, 0.0);
-    if (transition_probability != nullptr) {
-      transition_probability->clear();
-    }
-    if (additional_root_values != nullptr) {
-      additional_root_values->clear();
-    }
-    return;
-  }
+    std::vector<double> *transition_values,
+    std::vector<double> *readiness_values) {
   auto &frame = workspace->prepare(lanes, lane_count);
-  evaluate_exact_step_distribution_prepared_lanes(
-      plan,
-      &frame,
-      lane_count,
-      target_idx,
-      collect_successors,
-      workspace,
-      total_probability,
-      transition_probability,
-      additional_root_ids,
-      additional_root_values);
+  const auto &outcome = plan.compiled_outcomes[static_cast<std::size_t>(target_idx)];
+  transition_values->resize(outcome.transitions.size() * lane_count);
+  for (std::size_t i = 0; i < outcome.transitions.size(); ++i) {
+    evaluate_compiled_lane_root(
+        plan, outcome.transitions[i].probability_root_id,
+        &workspace->executor, &frame, lane_count, &workspace->root_values);
+    for (std::size_t lane = 0; lane < lane_count; ++lane) {
+      (*transition_values)[i * lane_count + lane] =
+          safe_density(workspace->root_values[lane]);
+    }
+  }
+  readiness_values->resize(outcome.readiness_root_ids.size() * lane_count);
+  for (std::size_t i = 0; i < outcome.readiness_root_ids.size(); ++i) {
+    evaluate_compiled_lane_root(
+        plan, outcome.readiness_root_ids[i],
+        &workspace->executor, &frame, lane_count, &workspace->root_values);
+    for (std::size_t lane = 0; lane < lane_count; ++lane) {
+      (*readiness_values)[i * lane_count + lane] =
+          clamp_probability(workspace->root_values[lane]);
+    }
+  }
 }
 
 } // namespace detail

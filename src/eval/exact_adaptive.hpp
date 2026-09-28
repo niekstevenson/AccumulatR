@@ -63,14 +63,12 @@ inline AdaptiveLanePanel adaptive_heap_pop(AdaptiveLaneState *state) {
   return panel;
 }
 
-inline bool adaptive_lane_converged(
-    const AdaptiveLaneState &state,
+inline bool adaptive_integral_converged(
+    const double value,
+    const double error,
     const double absolute_tolerance,
     const double relative_tolerance) noexcept {
-  return state.error <=
-         std::max(
-             relative_tolerance * std::fabs(state.value),
-             absolute_tolerance);
+  return error <= std::max(relative_tolerance * std::fabs(value), absolute_tolerance);
 }
 
 inline void adaptive_map_kronrod15_panel(
@@ -168,14 +166,6 @@ inline void adaptive_evaluate_kronrod15_panels(
   }
 }
 
-inline double adaptive_drain_lane(AdaptiveLaneState *state) {
-  double value = 0.0;
-  while (!state->heap.empty()) {
-    value += adaptive_heap_pop(state).value;
-  }
-  return value;
-}
-
 template <typename Evaluate>
 inline void adaptive_integrate_lane_batch(
     const std::size_t lane_count,
@@ -185,7 +175,17 @@ inline void adaptive_integrate_lane_batch(
     AdaptiveLaneWorkspace *workspace,
     std::vector<double> *out,
     const double absolute_tolerance = kAdaptiveAbsoluteTolerance,
-    const double relative_tolerance = kAdaptiveRelativeTolerance) {
+    const double relative_tolerance = kAdaptiveRelativeTolerance,
+    const double *absolute_scales = nullptr,
+    const double *tolerance_divisors = nullptr) {
+  const auto converged = [&](std::size_t lane) {
+    const auto &state = workspace->lanes[lane];
+    const double absolute = absolute_scales == nullptr ? absolute_tolerance
+        : absolute_tolerance / absolute_scales[lane];
+    const double divisor = tolerance_divisors == nullptr ? 1.0 : tolerance_divisors[lane];
+    return adaptive_integral_converged(state.value, state.error,
+        absolute / divisor, relative_tolerance / divisor);
+  };
   if (workspace->lanes.size() < lane_count) {
     workspace->lanes.resize(lane_count);
   }
@@ -214,9 +214,7 @@ inline void adaptive_integrate_lane_batch(
     state.error = panel.error;
     state.evaluations = kKronrod15NodeCount;
     adaptive_heap_push(&state, panel);
-    const bool at_limit =
-        state.evaluations >= kAdaptiveMaximumEvaluations;
-    if (!adaptive_lane_converged(state, absolute_tolerance, relative_tolerance) && !at_limit) {
+    if (!converged(panel.lane)) {
       workspace->active.push_back(panel.lane);
     }
   }
@@ -263,7 +261,7 @@ inline void adaptive_integrate_lane_batch(
       state.evaluations += 2U * kKronrod15NodeCount;
       const bool at_limit =
           state.evaluations >= kAdaptiveMaximumEvaluations;
-      if (!adaptive_lane_converged(state, absolute_tolerance, relative_tolerance) &&
+      if (!converged(lane) &&
           !at_limit &&
           std::isfinite(state.value)) {
         workspace->next_active.push_back(lane);
@@ -273,7 +271,7 @@ inline void adaptive_integrate_lane_batch(
   }
 
   for (std::size_t lane = 0U; lane < lane_count; ++lane) {
-    (*out)[lane] = adaptive_drain_lane(&workspace->lanes[lane]);
+    for (const auto &panel : workspace->lanes[lane].heap) (*out)[lane] += panel.value;
   }
 }
 

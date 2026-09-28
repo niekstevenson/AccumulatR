@@ -10,7 +10,6 @@ inline bool exact_expr_distribution_key_equal(
     const ExactExprDistributionKey &rhs) noexcept {
   return lhs.expr_id == rhs.expr_id &&
          lhs.value_kind == rhs.value_kind &&
-         lhs.condition_id == rhs.condition_id &&
          lhs.time_id == rhs.time_id &&
          lhs.source_view_id == rhs.source_view_id;
 }
@@ -18,18 +17,18 @@ inline bool exact_expr_distribution_key_equal(
 inline bool exact_expr_distribution_region(
     const ExactVariantBuildState &plan,
     const semantic::Index expr_id,
-    const CompiledMathNodeKind value_kind,
+    const CompiledMathValueKind value_kind,
     const semantic::Index time_id,
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
-  if (value_kind == CompiledMathNodeKind::ExprDensity) {
+  if (value_kind == CompiledMathValueKind::Density) {
     return exact_order_region_expr_at_time(plan, expr_id, time_id, builder, out);
   }
-  if (value_kind == CompiledMathNodeKind::ExprCdf) {
+  if (value_kind == CompiledMathValueKind::Cdf) {
     return exact_order_region_expr_satisfied_at_time(
         plan, expr_id, time_id, builder, out);
   }
-  if (value_kind == CompiledMathNodeKind::ExprSurvival) {
+  if (value_kind == CompiledMathValueKind::Survival) {
     if (!exact_expr_completion_monotone(plan, expr_id)) {
       return false;
     }
@@ -139,11 +138,11 @@ inline bool exact_expr_distribution_prepare_complement_survival(
     const ExactVariantBuildState &plan,
     const ExactExprDistributionKey &key,
     ExactExprDistributionLowering *out) {
-  if (key.value_kind != CompiledMathNodeKind::ExprCdf) {
+  if (key.value_kind != CompiledMathValueKind::Cdf) {
     return false;
   }
   auto survival_key = key;
-  survival_key.value_kind = CompiledMathNodeKind::ExprSurvival;
+  survival_key.value_kind = CompiledMathValueKind::Survival;
   ExactExprDistributionLowering candidate;
   if (!exact_expr_distribution_prepare_region(plan, survival_key, &candidate)) {
     return false;
@@ -158,11 +157,11 @@ inline bool exact_expr_distribution_prepare_integrated_density(
     const ExactVariantBuildState &plan,
     const ExactExprDistributionKey &key,
     ExactExprDistributionLowering *out) {
-  if (key.value_kind != CompiledMathNodeKind::ExprCdf) {
+  if (key.value_kind != CompiledMathValueKind::Cdf) {
     return false;
   }
   auto density_key = key;
-  density_key.value_kind = CompiledMathNodeKind::ExprDensity;
+  density_key.value_kind = CompiledMathValueKind::Density;
   density_key.time_id =
       key.time_id == static_cast<semantic::Index>(CompiledMathTimeSlot::Active)
           ? key.time_id
@@ -335,8 +334,7 @@ inline bool exact_virtual_expr_children_independent(
 inline bool exact_virtual_expr_distribution_node(
     ExactVariantBuildState *plan,
     const ExactVirtualExpr &node,
-    CompiledMathNodeKind value_kind,
-    semantic::Index condition_id,
+    CompiledMathValueKind value_kind,
     semantic::Index time_id,
     semantic::Index source_view_id,
     semantic::Index *out_node_id);
@@ -344,9 +342,7 @@ inline bool exact_virtual_expr_distribution_node(
 inline bool exact_virtual_expr_product_node(
     ExactVariantBuildState *plan,
     const std::vector<ExactVirtualExpr> &children,
-    const CompiledMathNodeKind child_value_kind,
-    const CompiledMathValueKind product_value_kind,
-    const semantic::Index condition_id,
+    const CompiledMathValueKind value_kind,
     const semantic::Index time_id,
     const semantic::Index source_view_id,
     semantic::Index *out_node_id) {
@@ -357,8 +353,7 @@ inline bool exact_virtual_expr_product_node(
     if (!exact_virtual_expr_distribution_node(
             plan,
             child,
-            child_value_kind,
-            condition_id,
+            value_kind,
             time_id,
             source_view_id,
             &child_node)) {
@@ -371,7 +366,7 @@ inline bool exact_virtual_expr_product_node(
           &plan->compiled_math,
           CompiledMathNodeKind::Product,
           std::move(factors),
-          product_value_kind);
+          value_kind);
   return true;
 }
 
@@ -379,14 +374,13 @@ inline bool exact_virtual_expr_density_node(
     ExactVariantBuildState *plan,
     const ExactVirtualExprKind kind,
     const std::vector<ExactVirtualExpr> &children,
-    const semantic::Index condition_id,
     const semantic::Index time_id,
     const semantic::Index source_view_id,
     semantic::Index *out_node_id) {
   const auto other_value_kind =
       kind == ExactVirtualExprKind::And
-          ? CompiledMathNodeKind::ExprCdf
-          : CompiledMathNodeKind::ExprSurvival;
+          ? CompiledMathValueKind::Cdf
+          : CompiledMathValueKind::Survival;
   std::vector<semantic::Index> terms;
   terms.reserve(children.size());
   for (std::size_t i = 0; i < children.size(); ++i) {
@@ -396,8 +390,7 @@ inline bool exact_virtual_expr_density_node(
     if (!exact_virtual_expr_distribution_node(
             plan,
             children[i],
-            CompiledMathNodeKind::ExprDensity,
-            condition_id,
+            CompiledMathValueKind::Density,
             time_id,
             source_view_id,
             &active_density)) {
@@ -413,7 +406,6 @@ inline bool exact_virtual_expr_density_node(
               plan,
               children[j],
               other_value_kind,
-              condition_id,
               time_id,
               source_view_id,
               &sibling_node)) {
@@ -440,8 +432,7 @@ inline bool exact_virtual_expr_density_node(
 inline bool exact_virtual_expr_distribution_node(
     ExactVariantBuildState *plan,
     const ExactVirtualExpr &node,
-    const CompiledMathNodeKind value_kind,
-    const semantic::Index condition_id,
+    const CompiledMathValueKind value_kind,
     const semantic::Index time_id,
     const semantic::Index source_view_id,
     semantic::Index *out_node_id) {
@@ -449,8 +440,8 @@ inline bool exact_virtual_expr_distribution_node(
     *out_node_id =
         compiled_math_constant(
             &plan->compiled_math,
-            value_kind == CompiledMathNodeKind::ExprSurvival ||
-                    value_kind == CompiledMathNodeKind::ExprDensity
+            value_kind == CompiledMathValueKind::Survival ||
+                    value_kind == CompiledMathValueKind::Density
                 ? 0.0
                 : 1.0);
     return true;
@@ -461,7 +452,6 @@ inline bool exact_virtual_expr_distribution_node(
             plan,
             node.expr_id,
             value_kind,
-            condition_id,
             time_id,
             source_view_id);
     return true;
@@ -471,25 +461,21 @@ inline bool exact_virtual_expr_distribution_node(
   }
 
   if (node.kind == ExactVirtualExprKind::And) {
-    if (value_kind == CompiledMathNodeKind::ExprCdf) {
+    if (value_kind == CompiledMathValueKind::Cdf) {
       return exact_virtual_expr_product_node(
           plan,
           node.children,
-          CompiledMathNodeKind::ExprCdf,
           CompiledMathValueKind::Cdf,
-          condition_id,
           time_id,
           source_view_id,
           out_node_id);
     }
-    if (value_kind == CompiledMathNodeKind::ExprSurvival) {
+    if (value_kind == CompiledMathValueKind::Survival) {
       semantic::Index cdf_product{semantic::kInvalidIndex};
       if (!exact_virtual_expr_product_node(
               plan,
               node.children,
-              CompiledMathNodeKind::ExprCdf,
               CompiledMathValueKind::Cdf,
-              condition_id,
               time_id,
               source_view_id,
               &cdf_product)) {
@@ -503,12 +489,11 @@ inline bool exact_virtual_expr_distribution_node(
               CompiledMathValueKind::Survival);
       return true;
     }
-    if (value_kind == CompiledMathNodeKind::ExprDensity) {
+    if (value_kind == CompiledMathValueKind::Density) {
       return exact_virtual_expr_density_node(
           plan,
           node.kind,
           node.children,
-          condition_id,
           time_id,
           source_view_id,
           out_node_id);
@@ -516,25 +501,21 @@ inline bool exact_virtual_expr_distribution_node(
   }
 
   if (node.kind == ExactVirtualExprKind::Or) {
-    if (value_kind == CompiledMathNodeKind::ExprSurvival) {
+    if (value_kind == CompiledMathValueKind::Survival) {
       return exact_virtual_expr_product_node(
           plan,
           node.children,
-          CompiledMathNodeKind::ExprSurvival,
           CompiledMathValueKind::Survival,
-          condition_id,
           time_id,
           source_view_id,
           out_node_id);
     }
-    if (value_kind == CompiledMathNodeKind::ExprCdf) {
+    if (value_kind == CompiledMathValueKind::Cdf) {
       semantic::Index survival_product{semantic::kInvalidIndex};
       if (!exact_virtual_expr_product_node(
               plan,
               node.children,
-              CompiledMathNodeKind::ExprSurvival,
               CompiledMathValueKind::Survival,
-              condition_id,
               time_id,
               source_view_id,
               &survival_product)) {
@@ -548,12 +529,11 @@ inline bool exact_virtual_expr_distribution_node(
               CompiledMathValueKind::Cdf);
       return true;
     }
-    if (value_kind == CompiledMathNodeKind::ExprDensity) {
+    if (value_kind == CompiledMathValueKind::Density) {
       return exact_virtual_expr_density_node(
           plan,
           node.kind,
           node.children,
-          condition_id,
           time_id,
           source_view_id,
           out_node_id);
@@ -566,7 +546,7 @@ inline bool exact_expr_distribution_prepare_independent(
     const ExactVariantBuildState &plan,
     const ExactExprDistributionKey &key,
     ExactExprDistributionLowering *out) {
-  if (key.condition_id != 0 || key.source_view_id != 0 ||
+  if (key.source_view_id != 0 ||
       key.expr_id == semantic::kInvalidIndex ||
       static_cast<std::size_t>(key.expr_id) >= plan.expr_kernels.size()) {
     return false;
@@ -615,7 +595,7 @@ inline bool exact_expr_distribution_prepare_independent_guard(
     const ExactVariantBuildState &plan,
     const ExactExprDistributionKey &key,
     ExactExprDistributionLowering *out) {
-  if (key.condition_id != 0 || key.source_view_id != 0 ||
+  if (key.source_view_id != 0 ||
       key.expr_id == semantic::kInvalidIndex ||
       static_cast<std::size_t>(key.expr_id) >= plan.expr_kernels.size()) {
     return false;
@@ -651,7 +631,6 @@ inline semantic::Index compile_expr_distribution_lowering_root(
             plan,
             lowering.virtual_expr,
             lowering.key.value_kind,
-            lowering.key.condition_id,
             lowering.key.time_id,
             lowering.key.source_view_id,
             &node)) {
@@ -667,16 +646,14 @@ inline semantic::Index compile_expr_distribution_lowering_root(
           compile_expr_value_node(
               plan,
               kernel.guard_ref_expr_id,
-              CompiledMathNodeKind::ExprDensity,
-              lowering.key.condition_id,
+              CompiledMathValueKind::Density,
               time_id,
               lowering.key.source_view_id);
       const auto blocker_survival =
           compile_expr_value_node(
               plan,
               kernel.guard_blocker_expr_id,
-              CompiledMathNodeKind::ExprSurvival,
-              lowering.key.condition_id,
+              CompiledMathValueKind::Survival,
               time_id,
               lowering.key.source_view_id);
       return compiled_math_algebra_node(
@@ -685,7 +662,7 @@ inline semantic::Index compile_expr_distribution_lowering_root(
           std::vector<semantic::Index>{ref_density, blocker_survival},
           CompiledMathValueKind::Density);
     };
-    if (lowering.key.value_kind == CompiledMathNodeKind::ExprDensity) {
+    if (lowering.key.value_kind == CompiledMathValueKind::Density) {
       node = guard_density(lowering.key.time_id);
     } else {
       const auto bind_time_id = static_cast<semantic::Index>(
@@ -694,11 +671,10 @@ inline semantic::Index compile_expr_distribution_lowering_root(
       node = compile_integral_zero_to_current_node(
           plan,
           density_node,
-          lowering.key.condition_id,
           lowering.key.time_id,
           lowering.key.source_view_id,
           bind_time_id);
-      if (lowering.key.value_kind == CompiledMathNodeKind::ExprSurvival) {
+      if (lowering.key.value_kind == CompiledMathValueKind::Survival) {
         node = compiled_math_unary_node(
             &plan->compiled_math,
             CompiledMathNodeKind::Complement,
@@ -711,15 +687,13 @@ inline semantic::Index compile_expr_distribution_lowering_root(
         compile_expr_distribution_node(
             plan,
             lowering.key.expr_id,
-            CompiledMathNodeKind::ExprDensity,
-            lowering.key.condition_id,
+            CompiledMathValueKind::Density,
             lowering.key.time_id,
             lowering.key.source_view_id);
     const auto integral_node =
         compile_integral_zero_to_current_node(
             plan,
             density_node,
-            lowering.key.condition_id,
             lowering.integral_upper_time_id,
             lowering.key.source_view_id,
             lowering.key.time_id);
@@ -740,7 +714,6 @@ inline semantic::Index compile_expr_distribution_lowering_root(
               plan,
               term,
               lowering.key.source_view_id,
-              lowering.key.condition_id,
               &builder,
               &projection_ops,
               &term_root)) {
@@ -749,12 +722,6 @@ inline semantic::Index compile_expr_distribution_lowering_root(
       terms.push_back(compiled_math_root_node_id(plan->compiled_math, term_root));
     }
 
-    const auto value_kind =
-        lowering.key.value_kind == CompiledMathNodeKind::ExprDensity
-            ? CompiledMathValueKind::Density
-            : lowering.key.value_kind == CompiledMathNodeKind::ExprSurvival
-                  ? CompiledMathValueKind::Survival
-                  : CompiledMathValueKind::Cdf;
     node =
         terms.empty()
             ? compiled_math_constant(&plan->compiled_math, 0.0)
@@ -762,7 +729,7 @@ inline semantic::Index compile_expr_distribution_lowering_root(
                   &plan->compiled_math,
                   CompiledMathNodeKind::CleanSignedSum,
                   std::move(terms),
-                  value_kind);
+                  lowering.key.value_kind);
   }
 
   if (lowering.complement_result) {
@@ -810,11 +777,10 @@ inline semantic::Index compile_expr_distribution_root_uncached(
 inline semantic::Index compile_expr_distribution_node(
     ExactVariantBuildState *plan,
     const semantic::Index expr_id,
-    const CompiledMathNodeKind value_kind,
-    const semantic::Index condition_id,
+    const CompiledMathValueKind value_kind,
     const semantic::Index time_id,
     const semantic::Index source_view_id) {
-  if (value_kind == CompiledMathNodeKind::ExprSurvival &&
+  if (value_kind == CompiledMathValueKind::Survival &&
       !exact_expr_completion_monotone(*plan, expr_id)) {
     return compiled_math_unary_node(
         &plan->compiled_math,
@@ -822,8 +788,7 @@ inline semantic::Index compile_expr_distribution_node(
         compile_expr_distribution_node(
             plan,
             expr_id,
-            CompiledMathNodeKind::ExprCdf,
-            condition_id,
+            CompiledMathValueKind::Cdf,
             time_id,
             source_view_id),
         CompiledMathValueKind::Survival);
@@ -832,8 +797,6 @@ inline semantic::Index compile_expr_distribution_node(
   ExactExprDistributionKey key;
   key.expr_id = expr_id;
   key.value_kind = value_kind;
-  key.condition_id =
-      condition_id == semantic::kInvalidIndex ? 0 : condition_id;
   key.time_id = time_id;
   key.source_view_id =
       source_view_id == semantic::kInvalidIndex ? 0 : source_view_id;

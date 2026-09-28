@@ -38,7 +38,6 @@ inline std::uint8_t compiled_math_source_factor_channel_mask(
 
 struct CompiledMathSourceProductTermBuild {
   std::vector<semantic::Index> source_value_nodes;
-  std::vector<semantic::Index> outcome_gate_nodes;
   std::vector<semantic::Index> time_gate_nodes;
   std::vector<semantic::Index> integral_factor_nodes;
   std::vector<CompiledMathExprUpperFactor> expr_upper_factors;
@@ -58,36 +57,29 @@ inline bool compiled_math_expand_source_product_terms(
   const auto &node = program.nodes[static_cast<std::size_t>(node_id)];
   if (compiled_math_is_source_value_node(node.kind)) {
     terms->push_back(
-        CompiledMathSourceProductTermBuild{{node_id}, {}, {}, {}, {}, sign});
+        CompiledMathSourceProductTermBuild{{node_id}, {}, {}, {}, sign});
     return true;
   }
   if (node.kind == CompiledMathNodeKind::Constant) {
     const double term_sign = sign * node.constant;
     if (term_sign != 0.0) {
       terms->push_back(
-          CompiledMathSourceProductTermBuild{{}, {}, {}, {}, {}, term_sign});
+          CompiledMathSourceProductTermBuild{{}, {}, {}, {}, term_sign});
     }
     return true;
   }
-  if (node.kind == CompiledMathNodeKind::OutcomeSubsetUnused ||
-      node.kind == CompiledMathNodeKind::OutcomeSubsetUsed) {
-    if (initial_state) {
-      if (node.kind == CompiledMathNodeKind::OutcomeSubsetUnused) {
-        terms->push_back(
-            CompiledMathSourceProductTermBuild{{}, {}, {}, {}, {}, sign});
-      }
-      return true;
-    }
-    terms->push_back(
-        CompiledMathSourceProductTermBuild{{}, {node_id}, {}, {}, {}, sign});
-    return true;
+  if (node.kind == CompiledMathNodeKind::OutcomeSelect) {
+    if (!initial_state) return false;
+    return compiled_math_expand_source_product_terms(
+        program, program.child_nodes[node.children.offset], sign,
+        true, terms, clean_signed);
   }
   if (compiled_math_is_integral_node(node.kind)) {
     if (node.integral_kernel_slot == semantic::kInvalidIndex) {
       return false;
     }
     terms->push_back(
-        CompiledMathSourceProductTermBuild{{}, {}, {}, {node_id}, {}, sign});
+        CompiledMathSourceProductTermBuild{{}, {}, {node_id}, {}, sign});
     return true;
   }
   if ((node.kind == CompiledMathNodeKind::ExprUpperBoundDensity ||
@@ -118,7 +110,6 @@ inline bool compiled_math_expand_source_product_terms(
     if (node.kind == CompiledMathNodeKind::ExprUpperBoundCdf) {
       terms->push_back(
           CompiledMathSourceProductTermBuild{
-              {},
               {},
               {},
               {},
@@ -197,7 +188,7 @@ inline bool compiled_math_expand_source_product_terms(
       node.children.size == 1U) {
     const auto child_id = program.child_nodes[
         static_cast<std::size_t>(node.children.offset)];
-    terms->push_back(CompiledMathSourceProductTermBuild{{}, {}, {}, {}, {}, sign});
+    terms->push_back(CompiledMathSourceProductTermBuild{{}, {}, {}, {}, sign});
     return compiled_math_expand_source_product_terms(
         program, child_id, -sign, initial_state, terms, clean_signed);
   }
@@ -220,6 +211,9 @@ inline bool compiled_math_expand_source_product_terms(
             clean_signed)) {
       return false;
     }
+    // Fuse a sum with non-branching factors, but retain products of sums
+    // in the execution graph instead of forming their Cartesian product.
+    if (product_terms.size() > 1U && child_terms.size() > 1U) return false;
     std::vector<CompiledMathSourceProductTermBuild> next_terms;
     next_terms.reserve(product_terms.size() * child_terms.size());
     for (const auto &lhs : product_terms) {
@@ -236,16 +230,6 @@ inline bool compiled_math_expand_source_product_terms(
             combined.source_value_nodes.end(),
             rhs.source_value_nodes.begin(),
             rhs.source_value_nodes.end());
-        combined.outcome_gate_nodes.reserve(
-            lhs.outcome_gate_nodes.size() + rhs.outcome_gate_nodes.size());
-        combined.outcome_gate_nodes.insert(
-            combined.outcome_gate_nodes.end(),
-            lhs.outcome_gate_nodes.begin(),
-            lhs.outcome_gate_nodes.end());
-        combined.outcome_gate_nodes.insert(
-            combined.outcome_gate_nodes.end(),
-            rhs.outcome_gate_nodes.begin(),
-            rhs.outcome_gate_nodes.end());
         combined.time_gate_nodes.reserve(
             lhs.time_gate_nodes.size() + rhs.time_gate_nodes.size());
         combined.time_gate_nodes.insert(
@@ -324,18 +308,11 @@ inline bool compiled_math_collect_source_product_terms(
       program->source_value_factors.push_back(
           CompiledMathSourceValueFactor{
               source_node.subject_id,
-              source_node.condition_id,
               source_node.source_view_id,
               source_node.time_id,
               source_node.aux_id,
               source_node.kind});
     }
-    const auto gate_offset = static_cast<semantic::Index>(
-        program->outcome_gate_nodes.size());
-    program->outcome_gate_nodes.insert(
-        program->outcome_gate_nodes.end(),
-        built.outcome_gate_nodes.begin(),
-        built.outcome_gate_nodes.end());
     const auto time_gate_offset = static_cast<semantic::Index>(
         program->time_gate_nodes.size());
     program->time_gate_nodes.insert(
@@ -358,9 +335,6 @@ inline bool compiled_math_collect_source_product_terms(
     term.source_value_factors = CompiledMathIndexSpan{
         factor_offset,
         static_cast<semantic::Index>(built.source_value_nodes.size())};
-    term.outcome_gate_nodes = CompiledMathIndexSpan{
-        gate_offset,
-        static_cast<semantic::Index>(built.outcome_gate_nodes.size())};
     term.time_gate_nodes = CompiledMathIndexSpan{
         time_gate_offset,
         static_cast<semantic::Index>(built.time_gate_nodes.size())};
@@ -381,7 +355,6 @@ inline bool compiled_math_same_source_product_channel(
     const CompiledMathSourceValueFactor &factor,
     const semantic::Index effective_source_view_id) noexcept {
   return channel.source_id == factor.source_id &&
-         channel.condition_id == factor.condition_id &&
          channel.source_view_id == effective_source_view_id &&
          channel.time_id == factor.time_id &&
          channel.time_cap_id == factor.time_cap_id;
@@ -436,7 +409,6 @@ inline void compiled_math_compile_source_product_channels(
       program->source_product_channels.push_back(
           CompiledMathSourceProductChannel{
               factor.source_id,
-              factor.condition_id,
               effective_source_view_id,
               factor.time_id,
               factor.time_cap_id,
@@ -454,7 +426,6 @@ inline bool compiled_math_same_source_factor(
     const CompiledMathSourceValueFactor &lhs,
     const CompiledMathSourceValueFactor &rhs) noexcept {
   return lhs.source_id == rhs.source_id &&
-         lhs.condition_id == rhs.condition_id &&
          lhs.source_view_id == rhs.source_view_id &&
          lhs.time_id == rhs.time_id &&
          lhs.time_cap_id == rhs.time_cap_id &&
@@ -551,8 +522,6 @@ inline bool compiled_math_plan_execution(
       program->source_value_factors.size();
   const auto source_product_channel_mark =
       program->source_product_channels.size();
-  const auto outcome_gate_node_mark =
-      program->outcome_gate_nodes.size();
   const auto time_gate_node_mark =
       program->time_gate_nodes.size();
   const auto integral_factor_node_mark =
@@ -568,7 +537,6 @@ inline bool compiled_math_plan_execution(
           &clean_signed_source_sum)) {
     if (source_product_terms.size() == 1U &&
         source_product_terms.front().sign == 1.0 &&
-        source_product_terms.front().outcome_gate_nodes.empty() &&
         source_product_terms.front().time_gate_nodes.empty() &&
         source_product_terms.front().integral_factor_nodes.empty() &&
         source_product_terms.front().expr_upper_factors.empty()) {
@@ -601,7 +569,6 @@ inline bool compiled_math_plan_execution(
   }
   program->source_value_factors.resize(source_value_factor_mark);
   program->source_product_channels.resize(source_product_channel_mark);
-  program->outcome_gate_nodes.resize(outcome_gate_node_mark);
   program->time_gate_nodes.resize(time_gate_node_mark);
   program->integral_factor_nodes.resize(integral_factor_node_mark);
   program->expr_upper_factors.resize(expr_upper_factor_mark);

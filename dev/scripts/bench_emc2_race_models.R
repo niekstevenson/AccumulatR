@@ -7,11 +7,7 @@ sizes <- c(100L, 1000L)
 samples <- 7L
 min_ll <- log(1e-10)
 particle_offsets <- seq(-0.08, 0.08, length.out = 16L)
-particle_counts <- list(
-  ordinary = c(`100` = 20000L, `1000` = 2000L),
-  censored_unknown = c(`100` = 20000L, `1000` = 2000L),
-  censored_known = c(`100` = 4000L, `1000` = 400L)
-)
+particle_counts <- c(`100` = 20000L, `1000` = 2000L)
 
 models <- list(
   LBA = list(
@@ -55,43 +51,27 @@ cpp_likelihood <- function(data, model, accumulatr_context = NULL) {
   designs <- EMC2:::get_designs_expanded(data, model)
   constants <- attr(data, "constants")
   if (is.null(constants)) constants <- NA_real_
-  if (!is.null(accumulatr_context)) {
-    attr(data, "AccumulatR_context") <- accumulatr_context
-  }
-
   function(particles) {
     EMC2:::calc_ll(
       particles, data, constants, designs, model$c_name,
       model$bound, model$transform, model$pre_transform,
-      names(model$p_types), min_ll, model$trend
+      names(model$p_types), min_ll, model$trend, accumulatr_context
     )
   }
 }
 
-trial_data <- function(n_trials, scenario) {
-  data <- data.frame(
+trial_data <- function(n_trials) {
+  data.frame(
     subjects = factor(rep(1L, n_trials)),
     trials = seq_len(n_trials),
     R = factor(rep(c("A", "B"), length.out = n_trials),
                levels = c("A", "B")),
     rt = seq(0.35, 1.35, length.out = n_trials)
   )
-  if (scenario == "ordinary") return(data)
-
-  data$rt <- 1
-  EMC2:::make_missing(
-    data,
-    LT = 0.2,
-    LC = 0,
-    UC = 0.75,
-    UT = 1.5,
-    UCresponse = scenario == "censored_known"
-  )
 }
 
-make_case <- function(definition, n_trials, scenario) {
-  design_data <- trial_data(n_trials, "ordinary")
-  data <- trial_data(n_trials, scenario)
+make_case <- function(definition, n_trials) {
+  data <- trial_data(n_trials)
   emc_model <- definition$emc_model()
   formulas <- setNames(
     lapply(names(emc_model$p_types), function(parameter) {
@@ -103,7 +83,7 @@ make_case <- function(definition, n_trials, scenario) {
     "lR", response = definition$distinct, intercept = FALSE
   )
   design <- EMC2::design(
-    data = design_data,
+    data = data,
     model = definition$emc_model,
     formula = formulas,
     report_p_vector = FALSE
@@ -148,7 +128,7 @@ make_case <- function(definition, n_trials, scenario) {
   attr(acc_data, "constants") <- attr(emc_data, "constants")
   attr(acc_data, "expand") <- seq_len(n_trials)
   acc_context <- list(
-    native = AccumulatR::make_context(acc_model_spec)$cpp$native,
+    native = AccumulatR::make_context(acc_model_spec)$cpp,
     bridge = list(defaults = template, source_names = source_names),
     trial_counts = rep.int(1L, n_trials)
   )
@@ -174,53 +154,52 @@ make_particles <- function(theta, n, parameter) {
 
 timings <- list()
 max_difference <- 0
-for (scenario in names(particle_counts)) {
-  for (n_trials in sizes) {
-    for (model_name in names(models)) {
-      definition <- models[[model_name]]
-      benchmark <- make_case(definition, n_trials, scenario)
-      n <- particle_counts[[scenario]][[as.character(n_trials)]]
-      particles <- lapply(
-        benchmark$theta,
-        make_particles,
-        n = n,
-        parameter = definition$distinct
-      )
+# EMC2's AccumulatR branch has no native cens/trunc race likelihood.
+for (n_trials in sizes) {
+  for (model_name in names(models)) {
+    definition <- models[[model_name]]
+    benchmark <- make_case(definition, n_trials)
+    n <- particle_counts[[as.character(n_trials)]]
+    particles <- lapply(
+      benchmark$theta,
+      make_particles,
+      n = n,
+      parameter = definition$distinct
+    )
 
-      check_rows <- seq_len(min(16L, n))
-      ll_emc <- drop(benchmark$EMC2(
-        particles$EMC2[check_rows, , drop = FALSE]
-      ))
-      ll_acc <- drop(benchmark$AccumulatR(
-        particles$AccumulatR[check_rows, , drop = FALSE]
-      ))
-      difference <- max(abs(ll_emc - ll_acc)) / n_trials
-      max_difference <- max(max_difference, difference)
-      stopifnot(difference < 1e-6)
+    check_rows <- seq_len(min(16L, n))
+    ll_emc <- drop(benchmark$EMC2(
+      particles$EMC2[check_rows, , drop = FALSE]
+    ))
+    ll_acc <- drop(benchmark$AccumulatR(
+      particles$AccumulatR[check_rows, , drop = FALSE]
+    ))
+    difference <- max(abs(ll_emc - ll_acc)) / n_trials
+    max_difference <- max(max_difference, difference)
+    stopifnot(difference < 1e-6)
 
-      for (package in c("EMC2", "AccumulatR")) {
-        for (warmup in 1:2) benchmark[[package]](particles[[package]])
+    for (package in c("EMC2", "AccumulatR")) {
+      for (warmup in 1:2) benchmark[[package]](particles[[package]])
+    }
+    for (sample in seq_len(samples)) {
+      order <- if (sample %% 2L) {
+        c("EMC2", "AccumulatR")
+      } else {
+        c("AccumulatR", "EMC2")
       }
-      for (sample in seq_len(samples)) {
-        order <- if (sample %% 2L) {
-          c("EMC2", "AccumulatR")
-        } else {
-          c("AccumulatR", "EMC2")
-        }
-        for (package in order) {
-          elapsed <- system.time(
-            benchmark[[package]](particles[[package]])
-          )[["elapsed"]]
-          timings[[length(timings) + 1L]] <- data.frame(
-            scenario = scenario,
-            model = model_name,
-            n_trials = n_trials,
-            package = package,
-            sample = sample,
-            n_particles = n,
-            us_per_particle = elapsed * 1e6 / n
-          )
-        }
+      for (package in order) {
+        elapsed <- system.time(
+          benchmark[[package]](particles[[package]])
+        )[["elapsed"]]
+        timings[[length(timings) + 1L]] <- data.frame(
+          scenario = "ordinary",
+          model = model_name,
+          n_trials = n_trials,
+          package = package,
+          sample = sample,
+          n_particles = n,
+          us_per_particle = elapsed * 1e6 / n
+        )
       }
     }
   }

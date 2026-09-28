@@ -1,47 +1,17 @@
-.pae_extract_sources <- function(expr) {
-  if (is.null(expr)) return(character(0))
-  kind <- expr$kind %||% "event"
-  if (identical(kind, "event")) {
-    src <- expr$source %||% NA_character_
-    return(if (!is.na(src) && nzchar(src)) src else character(0))
-  }
-  if (identical(kind, "guard")) {
-    out <- c(
-      .pae_extract_sources(expr$reference),
-      .pae_extract_sources(expr$blocker)
-    )
-    return(unique(out))
-  }
-  if (identical(kind, "and") || identical(kind, "or")) {
-    args <- expr$args %||% list()
-    if (length(args) == 0L) return(character(0))
-    out <- unlist(lapply(args, .pae_extract_sources), use.names = FALSE)
-    return(unique(out))
-  }
-  if (identical(kind, "not")) {
-    return(.pae_extract_sources(expr$arg))
-  }
-  character(0)
-}
-
 .pae_collect_guard_source_links <- function(expr) {
   out <- list()
   walk <- function(node) {
-    if (is.null(node)) return(invisible(NULL))
-    kind <- node$kind %||% "event"
+    kind <- node$kind
     if (identical(kind, "guard")) {
-      refs <- unique(.pae_extract_sources(node$reference))
-      blks <- unique(.pae_extract_sources(node$blocker))
-      if (length(refs) > 0L && length(blks) > 0L) {
-        out[[length(out) + 1L]] <<- list(blockers = blks, references = refs)
-      }
+      refs <- unique(.expression_sources(node$reference))
+      blks <- unique(.expression_sources(node$blocker))
+      out[[length(out) + 1L]] <<- list(blockers = blks, references = refs)
       walk(node$reference)
       walk(node$blocker)
       return(invisible(NULL))
     }
     if (identical(kind, "and") || identical(kind, "or")) {
-      args <- node$args %||% list()
-      if (length(args) > 0L) lapply(args, walk)
+      lapply(node$args, walk)
       return(invisible(NULL))
     }
     if (identical(kind, "not")) {
@@ -52,10 +22,6 @@
   }
   walk(expr)
   out
-}
-
-.pae_directed_key <- function(from, to) {
-  paste(from, to, sep = "->")
 }
 
 .pae_draw_curved_arrow <- function(x0, y0, x1, y1,
@@ -162,33 +128,20 @@ plot_accumulators <- function(model,
   accumulators <- prep$accumulators
   pools <- prep$pools
   outcomes <- prep$outcomes
-  if (length(accumulators) == 0L) {
-    stop("Model contains no accumulators", call. = FALSE)
-  }
 
   acc_ids <- names(accumulators)
-  pool_members <- setNames(
-    lapply(pools, function(pool) as.character(pool$members %||% character(0))),
-    names(pools)
-  )
 
   expand_to_accumulators <- local({
     cache <- new.env(parent = emptyenv())
-    rec <- function(source, stack = character(0)) {
-      source <- as.character(source %||% "")
-      if (length(source) != 1L || is.na(source)) return(character(0))
-      if (!nzchar(source)) return(character(0))
+    rec <- function(source) {
       if (exists(source, envir = cache, inherits = FALSE)) {
         return(get(source, envir = cache, inherits = FALSE))
       }
-      if (source %in% stack) return(character(0))
       if (source %in% acc_ids) {
         assign(source, source, envir = cache)
         return(source)
       }
-      members <- pool_members[[source]] %||% character(0)
-      if (length(members) == 0L) return(character(0))
-      out <- unique(unlist(lapply(members, rec, stack = c(stack, source)), use.names = FALSE))
+      out <- unique(unlist(lapply(pools[[source]]$members, rec), use.names = FALSE))
       assign(source, out, envir = cache)
       out
     }
@@ -199,33 +152,19 @@ plot_accumulators <- function(model,
 
   onset_value <- local({
     cache <- new.env(parent = emptyenv())
-    rec <- function(acc_id, stack = character(0)) {
+    rec <- function(acc_id) {
       if (exists(acc_id, envir = cache, inherits = FALSE)) {
         return(get(acc_id, envir = cache, inherits = FALSE))
       }
-      if (acc_id %in% stack) return(0)
       spec <- onset_specs[[acc_id]]
-      if (identical(spec$kind, "absolute")) {
-        val <- spec$value
-        assign(acc_id, val, envir = cache)
-        return(val)
+      val <- if (identical(spec$kind, "absolute")) {
+        spec$value
+      } else {
+        src_accs <- expand_to_accumulators(spec$source)
+        max(vapply(src_accs, rec, numeric(1))) + spec$lag
       }
-      if (identical(spec$kind, "after")) {
-        src <- spec$source
-        lag <- spec$lag
-        src_accs <- expand_to_accumulators(src)
-        if (length(src_accs) == 0L) {
-          val <- lag
-          assign(acc_id, val, envir = cache)
-          return(val)
-        }
-        src_vals <- vapply(src_accs, rec, numeric(1), stack = c(stack, acc_id))
-        val <- max(src_vals, na.rm = TRUE) + lag
-        assign(acc_id, val, envir = cache)
-        return(val)
-      }
-      assign(acc_id, 0, envir = cache)
-      0
+      assign(acc_id, val, envir = cache)
+      val
     }
     function(ids) setNames(vapply(ids, rec, numeric(1)), ids)
   })(acc_ids)
@@ -336,19 +275,15 @@ plot_accumulators <- function(model,
   idx_map <- setNames(seq_along(acc_ids), acc_ids)
 
   guard_links <- list()
-  if (length(outcomes) > 0L) {
-    for (outcome in outcomes) {
-      expr <- outcome$expr
-      if (is.null(expr)) next
-      guard_links <- c(guard_links, .pae_collect_guard_source_links(expr))
-    }
+  for (outcome in outcomes) {
+    guard_links <- c(guard_links, .pae_collect_guard_source_links(outcome$expr))
   }
 
   blocker_keys <- character(0)
   blocker_pairs <- matrix(character(0), ncol = 2L)
   add_block_pair <- function(from, to) {
     if (identical(from, to)) return(invisible(NULL))
-    key <- .pae_directed_key(from, to)
+    key <- paste(from, to, sep = "->")
     if (key %in% blocker_keys) return(invisible(NULL))
     blocker_keys <<- c(blocker_keys, key)
     blocker_pairs <<- rbind(blocker_pairs, c(from, to))
@@ -359,9 +294,6 @@ plot_accumulators <- function(model,
     for (lnk in guard_links) {
       blk_acc <- unique(unlist(lapply(lnk$blockers, expand_to_accumulators), use.names = FALSE))
       ref_acc <- unique(unlist(lapply(lnk$references, expand_to_accumulators), use.names = FALSE))
-      blk_acc <- intersect(blk_acc, acc_ids)
-      ref_acc <- intersect(ref_acc, acc_ids)
-      if (length(blk_acc) == 0L || length(ref_acc) == 0L) next
       for (b in blk_acc) {
         for (r in ref_acc) add_block_pair(b, r)
       }
@@ -390,7 +322,6 @@ plot_accumulators <- function(model,
       to <- blocker_pairs[[k, 2]]
       i_from <- idx_map[[from]]
       i_to <- idx_map[[to]]
-      if (is.null(i_from) || is.null(i_to)) next
       pair_frac <- pair_anchor_fracs[[k]]
       p_from <- point_on_line(i_from, pair_frac)
       p_to <- point_on_line(i_to, pair_frac)

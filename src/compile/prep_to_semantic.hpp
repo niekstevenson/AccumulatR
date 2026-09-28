@@ -42,25 +42,6 @@ inline std::vector<std::string> as_string_vector(SEXP x) {
   return out;
 }
 
-inline int expr_likelihood_id(const Rcpp::RObject &expr_obj) {
-  SEXP id_attr = Rf_getAttrib(expr_obj, Rf_install(".lik_id"));
-  if (Rf_isNull(id_attr) || Rf_length(id_attr) == 0) {
-    return 0;
-  }
-  if (TYPEOF(id_attr) == INTSXP) {
-    const int value = INTEGER(id_attr)[0];
-    return value == NA_INTEGER ? 0 : value;
-  }
-  if (TYPEOF(id_attr) == REALSXP) {
-    const double value = REAL(id_attr)[0];
-    if (!std::isfinite(value) || value <= 0.0) {
-      return 0;
-    }
-    return static_cast<int>(value);
-  }
-  return 0;
-}
-
 inline semantic::SourceRef source_ref_from_name(
     std::string_view name,
     const std::unordered_map<std::string, semantic::Index> &leaf_index,
@@ -122,18 +103,9 @@ inline semantic::ExprKind expr_kind_from_string(std::string_view kind) {
 inline semantic::Index compile_expr(
     const Rcpp::RObject &expr_obj, semantic::SemanticModel *model,
     const std::unordered_map<std::string, semantic::Index> &leaf_index,
-    const std::unordered_map<std::string, semantic::Index> &pool_index,
-    std::unordered_map<int, semantic::Index> *expr_id_index = nullptr) {
+    const std::unordered_map<std::string, semantic::Index> &pool_index) {
   if (expr_obj.isNULL()) {
     throw std::runtime_error("expression node must not be NULL");
-  }
-
-  const int likelihood_id = expr_likelihood_id(expr_obj);
-  if (likelihood_id > 0 && expr_id_index != nullptr) {
-    const auto found = expr_id_index->find(likelihood_id);
-    if (found != expr_id_index->end()) {
-      return found->second;
-    }
   }
 
   Rcpp::List expr(expr_obj);
@@ -152,20 +124,20 @@ inline semantic::Index compile_expr(
     node.children.reserve(args.size());
     for (R_xlen_t i = 0; i < args.size(); ++i) {
       node.children.push_back(
-          compile_expr(args[i], model, leaf_index, pool_index, expr_id_index));
+          compile_expr(args[i], model, leaf_index, pool_index));
     }
     break;
   }
   case semantic::ExprKind::Not: {
     node.children.push_back(
-        compile_expr(expr["arg"], model, leaf_index, pool_index, expr_id_index));
+        compile_expr(expr["arg"], model, leaf_index, pool_index));
     break;
   }
   case semantic::ExprKind::Guard: {
     node.reference_child =
-        compile_expr(expr["reference"], model, leaf_index, pool_index, expr_id_index);
+        compile_expr(expr["reference"], model, leaf_index, pool_index);
     node.blocker_child =
-        compile_expr(expr["blocker"], model, leaf_index, pool_index, expr_id_index);
+        compile_expr(expr["blocker"], model, leaf_index, pool_index);
     break;
   }
   case semantic::ExprKind::Impossible:
@@ -175,9 +147,6 @@ inline semantic::Index compile_expr(
 
   model->expr_nodes.push_back(std::move(node));
   const auto index = static_cast<semantic::Index>(model->expr_nodes.size() - 1);
-  if (likelihood_id > 0 && expr_id_index != nullptr) {
-    (*expr_id_index)[likelihood_id] = index;
-  }
   return index;
 }
 
@@ -285,14 +254,13 @@ inline semantic::SemanticModel compile_prep(const Rcpp::List &prep) {
 
   Rcpp::List outcomes(prep["outcomes"]);
   model.outcomes.reserve(outcomes.size());
-  std::unordered_map<int, semantic::Index> expr_id_index;
   Rcpp::CharacterVector outcome_names(outcomes.names());
   for (R_xlen_t i = 0; i < outcomes.size(); ++i) {
     Rcpp::List outcome(outcomes[i]);
     semantic::OutcomeSpec outcome_spec;
     outcome_spec.label = Rcpp::as<std::string>(outcome_names[i]);
     outcome_spec.expr_root = detail::compile_expr(
-        outcome["expr"], &model, leaf_index, pool_index, &expr_id_index);
+        outcome["expr"], &model, leaf_index, pool_index);
     Rcpp::List options(outcome["options"]);
     if (options.containsElementNamed("component") &&
         !Rf_isNull(options["component"])) {

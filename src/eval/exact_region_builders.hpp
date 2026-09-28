@@ -59,7 +59,6 @@ inline ExactRegionAtom exact_region_source_atom(
       kind,
       exact_region_source_time_var(source_id),
       exact_region_time_var(time_id),
-      {},
       inclusive,
       true};
 }
@@ -73,7 +72,6 @@ inline ExactRegionAtom exact_region_expr_atom(
       kind,
       exact_region_expr_time_var(expr_id),
       exact_region_time_var(time_id),
-      {},
       inclusive,
       true};
 }
@@ -86,30 +84,8 @@ inline ExactRegionAtom exact_region_time_order_atom(
       ExactRegionAtomKind::TimeOrder,
       exact_region_time_var(before_time_id),
       exact_region_time_var(after_time_id),
-      {},
       false,
       strict};
-}
-
-inline ExactRegionAtom exact_region_outcome_atom(
-    const ExactRegionAtomKind kind,
-    std::vector<semantic::Index> outcome_indices) {
-  outcome_indices.erase(
-      std::remove(outcome_indices.begin(),
-                  outcome_indices.end(),
-                  semantic::kInvalidIndex),
-      outcome_indices.end());
-  std::sort(outcome_indices.begin(), outcome_indices.end());
-  outcome_indices.erase(
-      std::unique(outcome_indices.begin(), outcome_indices.end()),
-      outcome_indices.end());
-  return ExactRegionAtom{
-      kind,
-      ExactRegionVar{},
-      ExactRegionVar{},
-      std::move(outcome_indices),
-      false,
-      true};
 }
 
 inline bool exact_region_atom_less(
@@ -124,9 +100,6 @@ inline bool exact_region_atom_less(
   if (!exact_region_var_equal(lhs.rhs, rhs.rhs)) {
     return exact_region_var_less(lhs.rhs, rhs.rhs);
   }
-  if (lhs.outcome_indices != rhs.outcome_indices) {
-    return lhs.outcome_indices < rhs.outcome_indices;
-  }
   if (lhs.inclusive != rhs.inclusive) {
     return lhs.inclusive < rhs.inclusive;
   }
@@ -139,7 +112,6 @@ inline bool exact_region_atom_equal(
   return lhs.kind == rhs.kind &&
          exact_region_var_equal(lhs.lhs, rhs.lhs) &&
          exact_region_var_equal(lhs.rhs, rhs.rhs) &&
-         lhs.outcome_indices == rhs.outcome_indices &&
          lhs.inclusive == rhs.inclusive &&
          lhs.strict == rhs.strict;
 }
@@ -338,29 +310,11 @@ exact_region_time_order_atoms(const ExactRegionCell &cell) {
   return out;
 }
 
-inline std::vector<std::vector<semantic::Index>>
-exact_region_outcome_atoms(
-    const ExactRegionCell &cell,
-    const ExactRegionAtomKind kind) {
-  std::vector<std::vector<semantic::Index>> out;
-  for (const auto &atom : cell.atoms) {
-    if (atom.kind == kind && !atom.outcome_indices.empty()) {
-      out.push_back(atom.outcome_indices);
-    }
-  }
-  return out;
-}
-
 inline void exact_region_append_atom(
     ExactRegionCell *cell,
     ExactRegionAtom atom) {
-  if (atom.kind == ExactRegionAtomKind::OutcomeUnused ||
-      atom.kind == ExactRegionAtomKind::OutcomeUsed) {
-    if (atom.outcome_indices.empty()) {
-      return;
-    }
-  } else if (atom.lhs.id == semantic::kInvalidIndex ||
-             atom.rhs.id == semantic::kInvalidIndex) {
+  if (atom.lhs.id == semantic::kInvalidIndex ||
+      atom.rhs.id == semantic::kInvalidIndex) {
     return;
   }
   cell->atoms.push_back(std::move(atom));

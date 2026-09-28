@@ -44,11 +44,6 @@ struct ParamView {
   }
 };
 
-struct ObservationLaneView {
-  ParamView params;
-  double observed_time{NA_REAL};
-};
-
 struct ObservationLaneBatchView {
   int physical_row(const semantic::Index leaf,
                    const std::size_t lane) const noexcept {
@@ -62,13 +57,6 @@ struct ObservationLaneBatchView {
   double q(const semantic::Index leaf,
            const std::size_t lane) const noexcept {
     return matrix->base[physical_row(leaf, lane)];
-  }
-
-  ObservationLaneView operator[](
-      const std::size_t lane) const noexcept {
-    return ObservationLaneView{
-        ParamView(*matrix, row_maps[lane], row_offsets[lane]),
-        observed_times[lane]};
   }
 
   ObservationLaneBatchView operator+(

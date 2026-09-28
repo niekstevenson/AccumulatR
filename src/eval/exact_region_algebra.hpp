@@ -695,9 +695,7 @@ inline bool exact_region_atom_boolean(
          atom.kind == ExactRegionAtomKind::SourceUpper ||
          atom.kind == ExactRegionAtomKind::ExprBefore ||
          atom.kind == ExactRegionAtomKind::ExprNotBefore ||
-         atom.kind == ExactRegionAtomKind::TimeOrder ||
-         atom.kind == ExactRegionAtomKind::OutcomeUnused ||
-         atom.kind == ExactRegionAtomKind::OutcomeUsed;
+         atom.kind == ExactRegionAtomKind::TimeOrder;
 }
 
 inline std::vector<ExactRegionAtom> exact_order_region_boolean_atoms(
@@ -790,12 +788,7 @@ inline void exact_order_region_append_atom(
     exact_order_region_append_time_order(
         term, atom.lhs.id, atom.rhs.id, atom.strict);
     break;
-  case ExactRegionAtomKind::OutcomeUnused:
-    exact_order_region_append_outcome_gate(term, atom.outcome_indices);
-    break;
-  case ExactRegionAtomKind::OutcomeUsed:
-    exact_order_region_append_outcome_used_gate(term, atom.outcome_indices);
-    break;
+
   }
 }
 
@@ -827,12 +820,7 @@ inline void exact_order_region_append_atom_complement(
     exact_order_region_append_time_order(
         term, atom.rhs.id, atom.lhs.id, !atom.strict);
     break;
-  case ExactRegionAtomKind::OutcomeUnused:
-    exact_order_region_append_outcome_used_gate(term, atom.outcome_indices);
-    break;
-  case ExactRegionAtomKind::OutcomeUsed:
-    exact_order_region_append_outcome_gate(term, atom.outcome_indices);
-    break;
+
   }
 }
 

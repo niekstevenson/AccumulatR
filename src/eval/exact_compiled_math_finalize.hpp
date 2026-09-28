@@ -6,20 +6,6 @@
 namespace accumulatr::eval {
 namespace detail {
 
-inline void validate_compiled_math_has_no_interpreter_expr_nodes(
-    const CompiledMathProgram &program) {
-  for (std::size_t i = 0; i < program.nodes.size(); ++i) {
-    const auto kind = program.nodes[i].kind;
-    if (kind == CompiledMathNodeKind::ExprDensity ||
-        kind == CompiledMathNodeKind::ExprCdf ||
-        kind == CompiledMathNodeKind::ExprSurvival) {
-      throw std::runtime_error(
-          "exact compiled math contains an unlowered semantic node at " +
-          std::to_string(i));
-    }
-  }
-}
-
 inline semantic::Index exact_complexity_integral_depth_for_node(
     const CompiledMathProgram &program,
     const semantic::Index node_id,
@@ -126,7 +112,6 @@ inline void compile_source_product_channel_fields(
     channel->static_source_view_relation = static_cast<std::uint8_t>(
         exact_compiled_source_view_relation(
             *plan, channel->source_view_id, channel->source_id));
-    channel->has_static_source_view_relation = true;
   }
 }
 
@@ -150,7 +135,6 @@ inline semantic::Index push_source_product_program(
 inline semantic::Index compile_source_product_base_program(
     ExactVariantBuildState *plan,
     const semantic::Index source_id,
-    const semantic::Index condition_id,
     const semantic::Index source_view_id);
 
 inline semantic::Index compile_source_product_exact_gate_program(
@@ -168,7 +152,6 @@ inline semantic::Index compile_source_product_exact_gate_program(
             *plan,
             source_view_id == semantic::kInvalidIndex ? 0 : source_view_id,
             source_id));
-    source_program.has_static_source_view_relation = true;
   }
   return push_source_product_program(&plan->compiled_math, source_program);
 }
@@ -194,7 +177,6 @@ inline semantic::Index compile_source_product_leaf_program(
 inline semantic::Index compile_source_product_onset_program(
     ExactVariantBuildState *plan,
     const ExactSourceKernel &kernel,
-    const semantic::Index condition_id,
     const semantic::Index source_view_id) {
   CompiledMathSourceProductProgram source_program;
   source_program.kind = CompiledMathSourceProductProgramKind::OnsetConvolution;
@@ -202,7 +184,7 @@ inline semantic::Index compile_source_product_onset_program(
   source_program.leaf_index = kernel.leaf_index;
   source_program.onset_source_program_id =
       compile_source_product_base_program(
-          plan, kernel.onset_source_id, condition_id, source_view_id);
+          plan, kernel.onset_source_id, source_view_id);
   if (kernel.leaf_index != semantic::kInvalidIndex &&
       static_cast<std::size_t>(kernel.leaf_index) <
           plan->program.leaf_descriptors.size()) {
@@ -218,7 +200,6 @@ inline semantic::Index compile_source_product_onset_program(
 inline semantic::Index compile_source_product_pool_program(
     ExactVariantBuildState *plan,
     const ExactSourceKernel &kernel,
-    const semantic::Index condition_id,
     const semantic::Index source_view_id) {
   auto &program = plan->compiled_math;
   CompiledMathSourceProductProgram source_program;
@@ -235,7 +216,7 @@ inline semantic::Index compile_source_product_pool_program(
             static_cast<std::size_t>(i)];
     member_programs.push_back(
         compile_source_product_base_program(
-            plan, member_source, condition_id, source_view_id));
+            plan, member_source, source_view_id));
   }
   const auto member_offset = static_cast<semantic::Index>(
       program.source_program_members.size());
@@ -252,11 +233,9 @@ inline semantic::Index compile_source_product_pool_program(
 inline semantic::Index compile_source_product_kernel_program(
     ExactVariantBuildState *plan,
     const semantic::Index source_id,
-    const semantic::Index condition_id,
     const semantic::Index source_view_id) {
   const ExactSourceProgramCompileKey key{
       source_id,
-      condition_id,
       source_view_id == semantic::kInvalidIndex ? 0 : source_view_id};
   const auto existing = plan->source_kernel_program_index.find(key);
   if (existing != plan->source_kernel_program_index.end()) {
@@ -279,11 +258,11 @@ inline semantic::Index compile_source_product_kernel_program(
       break;
     case CompiledSourceChannelKernelKind::LeafOnsetConvolution:
       program_id = compile_source_product_onset_program(
-          plan, kernel, condition_id, key.source_view_id);
+          plan, kernel, key.source_view_id);
       break;
     case CompiledSourceChannelKernelKind::PoolKOfN:
       program_id = compile_source_product_pool_program(
-          plan, kernel, condition_id, key.source_view_id);
+          plan, kernel, key.source_view_id);
       break;
     case CompiledSourceChannelKernelKind::Invalid:
       break;
@@ -302,18 +281,16 @@ inline semantic::Index compile_source_product_kernel_program(
 inline semantic::Index compile_source_product_base_program(
     ExactVariantBuildState *plan,
     const semantic::Index source_id,
-    const semantic::Index condition_id,
     const semantic::Index source_view_id) {
   const ExactSourceProgramCompileKey key{
       source_id,
-      condition_id,
       source_view_id == semantic::kInvalidIndex ? 0 : source_view_id};
   const auto existing = plan->source_base_program_index.find(key);
   if (existing != plan->source_base_program_index.end()) {
     return existing->second;
   }
   const auto kernel_program_id = compile_source_product_kernel_program(
-      plan, source_id, condition_id, key.source_view_id);
+      plan, source_id, key.source_view_id);
   semantic::Index program_id = kernel_program_id;
   if (source_id == semantic::kInvalidIndex) {
     plan->source_base_program_index.emplace(key, program_id);
@@ -336,7 +313,6 @@ inline semantic::Index compile_source_product_channel_program(
   }
   const ExactConditionedSourceProgramCompileKey key{
       channel->source_id,
-      channel->condition_id,
       channel->source_view_id == semantic::kInvalidIndex
           ? 0
           : channel->source_view_id,
@@ -351,7 +327,6 @@ inline semantic::Index compile_source_product_channel_program(
       compile_source_product_kernel_program(
           plan,
           key.source_id,
-          key.condition_id,
           key.source_view_id);
   CompiledMathSourceProductProgram source_program;
   source_program.kind = CompiledMathSourceProductProgramKind::Conditioned;
@@ -359,8 +334,6 @@ inline semantic::Index compile_source_product_channel_program(
   source_program.child_program_id = child_program_id;
   source_program.static_source_view_relation =
       channel->static_source_view_relation;
-  source_program.has_static_source_view_relation =
-      channel->has_static_source_view_relation;
   channel->source_product_program_id =
       push_source_product_program(&plan->compiled_math, source_program);
   plan->source_conditioned_program_index.emplace(
@@ -371,9 +344,6 @@ inline semantic::Index compile_source_product_channel_program(
 inline int source_product_forced_value(
     const CompiledMathSourceProductChannel &channel,
     const std::uint8_t value_mask) noexcept {
-  if (!channel.has_static_source_view_relation) {
-    return -1;
-  }
   const auto relation =
       static_cast<ExactRelation>(channel.static_source_view_relation);
   if (relation == ExactRelation::Unknown ||
@@ -492,7 +462,6 @@ inline semantic::Index compile_source_node_program(
     const CompiledMathNode &node) {
   CompiledMathSourceProductChannel channel;
   channel.source_id = node.subject_id;
-  channel.condition_id = node.condition_id;
   channel.source_view_id =
       node.source_view_id == semantic::kInvalidIndex ? 0 : node.source_view_id;
   channel.time_id = node.time_id;
@@ -534,10 +503,8 @@ inline void finalize_source_program_initial_resolutions(
     if (!wrapper) {
       continue;
     }
-    const auto relation = source_program.has_static_source_view_relation
-                              ? static_cast<ExactRelation>(
-                                    source_program.static_source_view_relation)
-                              : ExactRelation::Unknown;
+    const auto relation = static_cast<ExactRelation>(
+        source_program.static_source_view_relation);
     const auto &child = program->source_programs[
         static_cast<std::size_t>(source_program.child_program_id)];
     if (relation == ExactRelation::Unknown) {
@@ -685,37 +652,8 @@ inline void compile_source_program_cache_slots(CompiledMathProgram *program) {
   program->source_program_cache_count = next_slot;
 }
 
-inline void validate_source_product_relations_materialized(
+inline void validate_compiled_source_program_references(
     const CompiledMathProgram &program) {
-  for (std::size_t i = 0;
-       i < program.source_product_channels.size();
-       ++i) {
-    const auto &channel = program.source_product_channels[i];
-    if (channel.source_id != semantic::kInvalidIndex &&
-        !channel.has_static_source_view_relation) {
-      throw std::runtime_error(
-          "source-product channel " + std::to_string(i) +
-          " has no compiled source-view relation");
-    }
-  }
-  for (std::size_t i = 0;
-       i < program.source_programs.size();
-       ++i) {
-    const auto &source_program =
-        program.source_programs[i];
-    const bool relation_sensitive =
-        source_program.kind ==
-            CompiledMathSourceProductProgramKind::Conditioned ||
-        source_program.kind ==
-            CompiledMathSourceProductProgramKind::ExactGate;
-    if (relation_sensitive &&
-        source_program.source_id != semantic::kInvalidIndex &&
-        !source_program.has_static_source_view_relation) {
-      throw std::runtime_error(
-          "source-product program " + std::to_string(i) +
-          " has no compiled source-view relation");
-    }
-  }
   for (std::size_t i = 0;
        i < program.source_product_ops.size();
        ++i) {

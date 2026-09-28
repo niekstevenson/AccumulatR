@@ -1,8 +1,13 @@
-# Compile a model for simulation and fitting
+# Finalize a model for simulation and fitting
 
-This converts a human-readable model specification into the finalized
-object used by \`simulate()\`, \`prepare_data()\`, \`make_context()\`,
-and related functions.
+Check source references, timing dependencies, response rules, and
+parameter grouping, and create the model object used by
+[`simulate()`](https://niekstevenson.github.io/AccumulatR/reference/simulate.md),
+[`prepare_data()`](https://niekstevenson.github.io/AccumulatR/reference/prepare_data.md),
+and
+[`build_param_matrix()`](https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.md).
+Build its likelihood context with
+[`make_context()`](https://niekstevenson.github.io/AccumulatR/reference/make_context.md).
 
 ## Usage
 
@@ -18,7 +23,7 @@ finalize_model(model)
 
 ## Value
 
-A \`model_structure\` object.
+A `model_structure` object.
 
 ## Examples
 
@@ -56,9 +61,6 @@ finalize_model(spec)
 #> $outcomes[[1]]$expr$source
 #> [1] "A"
 #> 
-#> $outcomes[[1]]$expr$k
-#> NULL
-#> 
 #> 
 #> $outcomes[[1]]$options
 #> list()
@@ -85,18 +87,13 @@ finalize_model(spec)
 #> $mixture_options
 #> list()
 #> 
-#> $metadata
-#> $metadata$observation
-#> $metadata$observation$mode
-#> [1] "top_k"
-#> 
-#> $metadata$observation$n_outcomes
+#> $observation
+#> $observation$n_outcomes
 #> [1] 1
 #> 
 #> 
-#> 
 #> attr(,"class")
-#> [1] "race_model_spec"
+#> [1] "race_spec"
 #> 
 #> $prep
 #> $prep$accumulators
@@ -118,21 +115,10 @@ finalize_model(spec)
 #> [1] 0
 #> 
 #> 
-#> $prep$accumulators$A$q
-#> [1] 0
-#> 
-#> $prep$accumulators$A$params
-#> $prep$accumulators$A$params$t0
-#> [1] 0
-#> 
-#> 
 #> $prep$accumulators$A$components
 #> character(0)
 #> 
 #> $prep$accumulators$A$shared_trigger_id
-#> NULL
-#> 
-#> $prep$accumulators$A$shared_trigger_q
 #> NULL
 #> 
 #> 
@@ -152,9 +138,6 @@ finalize_model(spec)
 #> $prep$outcomes$A_win$expr$source
 #> [1] "A"
 #> 
-#> $prep$outcomes$A_win$expr$k
-#> NULL
-#> 
 #> 
 #> $prep$outcomes$A_win$options
 #> list()
@@ -173,9 +156,6 @@ finalize_model(spec)
 #> list()
 #> 
 #> 
-#> $prep$components$has_weight_param
-#> [1] FALSE
-#> 
 #> $prep$components$mode
 #> [1] "fixed"
 #> 
@@ -184,9 +164,6 @@ finalize_model(spec)
 #> 
 #> 
 #> $prep$observation
-#> $prep$observation$mode
-#> [1] "top_k"
-#> 
 #> $prep$observation$n_outcomes
 #> [1] 1
 #> 
@@ -198,44 +175,26 @@ finalize_model(spec)
 #> 
 #> 
 #> $prep$shared_triggers
-#> list()
-#> 
-#> $prep$onset_specs
-#> $prep$onset_specs$A
-#> $prep$onset_specs$A$kind
-#> [1] "absolute"
-#> 
-#> $prep$onset_specs$A$value
-#> [1] 0
-#> 
-#> 
-#> 
-#> $prep$onset_dependencies
-#> $prep$onset_dependencies$A
-#> character(0)
-#> 
-#> 
-#> $prep$onset_sources
 #> named list()
 #> 
-#> $prep$onset_topology
-#> [1] "A"
+#> $prep$parameter_lookup
+#>  A.m  A.s A.t0 
+#>  "m"  "s" "t0" 
 #> 
-#> $prep$onset_has_dependencies
-#> [1] FALSE
+#> $prep$outcomes_by_component
+#> $prep$outcomes_by_component$`__default__`
+#> [1] "A_win"
 #> 
 #> 
-#> $accumulators
-#>        dist onset q shared_trigger_id shared_trigger_q params components
-#> A lognormal     0 0              <NA>               NA      0           
+#> $prep$observed_outcomes_by_component
+#> $prep$observed_outcomes_by_component$`__default__`
+#> [1] "A_win"
 #> 
-#> $components
-#>   component_id weight has_weight_param attrs  mode   reference
-#> 1  __default__      1            FALSE       fixed __default__
 #> 
-#> $shared_triggers
-#> list()
+#> 
+#> $simulation
+#> <pointer: (nil)>
 #> 
 #> attr(,"class")
-#> [1] "model_structure"     "generator_structure" "list"               
+#> [1] "model_structure" "list"           
 ```

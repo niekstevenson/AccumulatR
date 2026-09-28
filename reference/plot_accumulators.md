@@ -32,11 +32,11 @@ plot_accumulators(
 
 - model:
 
-  A race model or finalized model structure.
+  A finalized model structure.
 
 - xlim:
 
-  Optional x-axis limits. If \`NULL\`, they are chosen from the model.
+  Optional x-axis limits. If `NULL`, they are chosen from the model.
 
 - ylim:
 
@@ -49,9 +49,9 @@ plot_accumulators(
 - angle_dodge:
 
   Target angular spacing in degrees between neighbouring accumulators.
-  Angles are centered at 45 degrees and constrained to the interval
-  \[10, 80\]. If there are too many accumulators sharing the same onset,
-  spacing is reduced uniformly within that onset group.
+  Angles are centered at 45 degrees and constrained to 10 to 80 degrees.
+  If there are too many accumulators sharing the same onset, spacing is
+  reduced uniformly within that onset group.
 
 - accumulator_order:
 
@@ -80,7 +80,7 @@ plot_accumulators(
 
 - show_labels:
 
-  If \`TRUE\`, add accumulator labels near the line endpoints.
+  If `TRUE`, add accumulator labels near the line endpoints.
 
 - main:
 
@@ -96,7 +96,8 @@ plot_accumulators(
 
 - ...:
 
-  Additional arguments passed to \`graphics::plot\`.
+  Additional arguments passed to
+  [`graphics::plot`](https://rdrr.io/r/graphics/plot.default.html).
 
 ## Value
 

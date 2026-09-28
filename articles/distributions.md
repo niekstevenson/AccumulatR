@@ -1,7 +1,9 @@
 # Supported Distributions
 
-This vignette lists the accumulator distributions currently available in
-`AccumulatR` and the parameter names they use.
+Each accumulator defines a distribution of finishing times after its
+onset. This guide describes the available families, their parameter
+names, and the values accepted by
+[`build_param_matrix()`](https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.md).
 
 ``` r
 
@@ -25,44 +27,41 @@ when an accumulator should have its own parameter, such as `go.m`,
 
 ## Available distributions
 
-``` r
+| Family | Parameters, in matrix-slot order | Meaning and constraints |
+|----|----|----|
+| `lognormal` | `m`, `s` | Mean and standard deviation of log finishing time; `s > 0`. |
+| `gamma` | `shape`, `rate` | Gamma shape and rate; both positive. The mean is `shape / rate`. |
+| `exgauss` | `mu`, `sigma`, `tau` | Mean and standard deviation of a Gaussian component, and mean of an exponential component; `sigma > 0`, `tau > 0`. Their sum is conditioned to be positive. |
+| `LBA` | `v`, `B`, `A`, `sv` | Mean drift, threshold gap, start range, and drift standard deviation; `sv > 0`. Drift is drawn from a normal distribution conditioned to be positive. |
+| `RDM` | `v`, `B`, `A`, `s` | Drift, threshold gap, start range, and diffusion noise scale; `v >= 0`, `s > 0`. |
 
-data.frame(
-  distribution = c("lognormal", "gamma", "exgauss", "LBA", "RDM"),
-  parameters = c(
-    "m, s",
-    "shape, rate",
-    "mu, sigma, tau",
-    "v, B, A, sv",
-    "v, B, A, s"
-  ),
-  stringsAsFactors = FALSE
-)
-```
+For both `LBA` and `RDM`, `A` is the full width of the uniform
+starting-point distribution on `[0, A]`, and `B` is the gap from its
+upper end to the threshold. The absolute threshold is `B + A`, giving a
+uniform initial distance to threshold on `[B, B + A]`. Both `A` and `B`
+must be non-negative, with `B + A > 0`; `A = 0` gives a fixed starting
+point.
 
-    ##   distribution     parameters
-    ## 1    lognormal           m, s
-    ## 2        gamma    shape, rate
-    ## 3      exgauss mu, sigma, tau
-    ## 4          LBA    v, B, A, sv
-    ## 5          RDM     v, B, A, s
+All distribution parameters must be finite. The builder also requires
+finite ratios `mu / sigma` and `sigma / tau` for exgauss, `v / sv` for
+LBA, and `v / s` and `(B + A) / s` for RDM.
 
-- `lognormal`: `m` and `s`, the usual log-scale location and spread
-  parameters.
-- `gamma`: `shape` and `rate`.
-- `exgauss`: `mu`, `sigma`, and `tau`.
-- `LBA`: `v`, `B`, `A`, and `sv`.
-- `RDM`: `v`, `B`, `A`, and `s`.
+Every accumulator has a nonnegative nondecision time `t0`, added to its
+finishing time after onset. It defaults to zero when omitted. For
+exgauss, `mu` belongs to the Gaussian component before conditioning on a
+positive sum; `t0` shifts the resulting positive finishing time.
 
-Outside of these, all accumulators have a non-decision time `t0`.
-Absence probabilities are added with named triggers, not per-accumulator
-distribution parameters. For the `exgauss`, `t0` and `mu` are redundant
-because both shift RT, so one should be fixed.
+Use
+[`add_trigger()`](https://niekstevenson.github.io/AccumulatR/reference/add_trigger.md)
+to assign probability to an accumulator being absent on a trial. A
+trigger probability lies in `[0, 1]`.
 
 ## Example
 
-The same model can combine different accumulator distributions. The only
-thing that changes is the parameter suffix used in the parameter vector.
+A model can combine different distributions. Use the parameter names
+appropriate to each family;
+[`par_names()`](https://niekstevenson.github.io/AccumulatR/reference/par_names.md)
+shows the names required by the model’s parameter grouping.
 
 ``` r
 
@@ -85,14 +84,10 @@ params <- c(
 build_param_matrix(model, params, n_trials = 2)
 ```
 
-    ##      q t0        p1   p2   p3 w
-    ## [1,] 0  0 -1.203973 0.18 0.00 1
-    ## [2,] 0  0  0.100000 0.04 0.08 1
-    ## [3,] 0  0 -1.203973 0.18 0.00 1
-    ## [4,] 0  0  0.100000 0.04 0.08 1
-
-Choose the distribution that matches the accumulator you want to
-specify, then use its parameter names consistently in
-[`build_param_matrix()`](https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.md),
-[`simulate()`](https://niekstevenson.github.io/AccumulatR/reference/simulate.md),
-and likelihood evaluation.
+    ##      q t0        p1   p2   p3
+    ## [1,] 0  0 -1.203973 0.18 0.00
+    ## [2,] 0  0  0.100000 0.04 0.08
+    ## [3,] 0  0 -1.203973 0.18 0.00
+    ## [4,] 0  0  0.100000 0.04 0.08
+    ## attr(,"class")
+    ## [1] "accumulatr_parameters" "matrix"                "array"

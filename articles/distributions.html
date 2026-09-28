@@ -79,8 +79,9 @@
 
     
     
-<p>This vignette lists the accumulator distributions currently available
-in <code>AccumulatR</code> and the parameter names they use.</p>
+<p>Each accumulator defines a distribution of finishing times after its
+onset. This guide describes the available families, their parameter
+names, and the values accepted by <code><a href="../reference/build_param_matrix.html">build_param_matrix()</a></code>.</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://github.com/niekstevenson/AccumulatR" class="external-link">AccumulatR</a></span><span class="op">)</span></span></code></pre></div>
 <pre><code><span><span class="co">## </span></span>
@@ -99,53 +100,90 @@ accumulator should have its own parameter, such as <code>go.m</code>,
 <div class="section level2">
 <h2 id="available-distributions">Available distributions<a class="anchor" aria-label="anchor" href="#available-distributions"></a>
 </h2>
-<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span></span>
-<span>  distribution <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"lognormal"</span>, <span class="st">"gamma"</span>, <span class="st">"exgauss"</span>, <span class="st">"LBA"</span>, <span class="st">"RDM"</span><span class="op">)</span>,</span>
-<span>  parameters <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
-<span>    <span class="st">"m, s"</span>,</span>
-<span>    <span class="st">"shape, rate"</span>,</span>
-<span>    <span class="st">"mu, sigma, tau"</span>,</span>
-<span>    <span class="st">"v, B, A, sv"</span>,</span>
-<span>    <span class="st">"v, B, A, s"</span></span>
-<span>  <span class="op">)</span>,</span>
-<span>  stringsAsFactors <span class="op">=</span> <span class="cn">FALSE</span></span>
-<span><span class="op">)</span></span></code></pre></div>
-<pre><code><span><span class="co">##   distribution     parameters</span></span>
-<span><span class="co">## 1    lognormal           m, s</span></span>
-<span><span class="co">## 2        gamma    shape, rate</span></span>
-<span><span class="co">## 3      exgauss mu, sigma, tau</span></span>
-<span><span class="co">## 4          LBA    v, B, A, sv</span></span>
-<span><span class="co">## 5          RDM     v, B, A, s</span></span></code></pre>
-<ul>
-<li>
-<code>lognormal</code>: <code>m</code> and <code>s</code>, the usual
-log-scale location and spread parameters.</li>
-<li>
-<code>gamma</code>: <code>shape</code> and <code>rate</code>.</li>
-<li>
-<code>exgauss</code>: <code>mu</code>, <code>sigma</code>, and
-<code>tau</code>.</li>
-<li>
-<code>LBA</code>: <code>v</code>, <code>B</code>, <code>A</code>,
-and <code>sv</code>.</li>
-<li>
-<code>RDM</code>: <code>v</code>, <code>B</code>, <code>A</code>,
-and <code>s</code>.</li>
-</ul>
-<p>Outside of these, all accumulators have a non-decision time
-<code>t0</code>. Absence probabilities are added with named triggers,
-not per-accumulator distribution parameters. For the
-<code>exgauss</code>, <code>t0</code> and <code>mu</code> are redundant
-because both shift RT, so one should be fixed.</p>
+<table class="table">
+<colgroup>
+<col width="33%">
+<col width="33%">
+<col width="33%">
+</colgroup>
+<thead><tr class="header">
+<th>Family</th>
+<th>Parameters, in matrix-slot order</th>
+<th>Meaning and constraints</th>
+</tr></thead>
+<tbody>
+<tr class="odd">
+<td><code>lognormal</code></td>
+<td>
+<code>m</code>, <code>s</code>
+</td>
+<td>Mean and standard deviation of log finishing time;
+<code>s &gt; 0</code>.</td>
+</tr>
+<tr class="even">
+<td><code>gamma</code></td>
+<td>
+<code>shape</code>, <code>rate</code>
+</td>
+<td>Gamma shape and rate; both positive. The mean is
+<code>shape / rate</code>.</td>
+</tr>
+<tr class="odd">
+<td><code>exgauss</code></td>
+<td>
+<code>mu</code>, <code>sigma</code>, <code>tau</code>
+</td>
+<td>Mean and standard deviation of a Gaussian component, and mean of an
+exponential component; <code>sigma &gt; 0</code>,
+<code>tau &gt; 0</code>. Their sum is conditioned to be positive.</td>
+</tr>
+<tr class="even">
+<td><code>LBA</code></td>
+<td>
+<code>v</code>, <code>B</code>, <code>A</code>, <code>sv</code>
+</td>
+<td>Mean drift, threshold gap, start range, and drift standard
+deviation; <code>sv &gt; 0</code>. Drift is drawn from a normal
+distribution conditioned to be positive.</td>
+</tr>
+<tr class="odd">
+<td><code>RDM</code></td>
+<td>
+<code>v</code>, <code>B</code>, <code>A</code>, <code>s</code>
+</td>
+<td>Drift, threshold gap, start range, and diffusion noise scale;
+<code>v &gt;= 0</code>, <code>s &gt; 0</code>.</td>
+</tr>
+</tbody>
+</table>
+<p>For both <code>LBA</code> and <code>RDM</code>, <code>A</code> is the
+full width of the uniform starting-point distribution on
+<code>[0, A]</code>, and <code>B</code> is the gap from its upper end to
+the threshold. The absolute threshold is <code>B + A</code>, giving a
+uniform initial distance to threshold on <code>[B, B + A]</code>. Both
+<code>A</code> and <code>B</code> must be non-negative, with
+<code>B + A &gt; 0</code>; <code>A = 0</code> gives a fixed starting
+point.</p>
+<p>All distribution parameters must be finite. The builder also requires
+finite ratios <code>mu / sigma</code> and <code>sigma / tau</code> for
+exgauss, <code>v / sv</code> for LBA, and <code>v / s</code> and
+<code>(B + A) / s</code> for RDM.</p>
+<p>Every accumulator has a nonnegative nondecision time <code>t0</code>,
+added to its finishing time after onset. It defaults to zero when
+omitted. For exgauss, <code>mu</code> belongs to the Gaussian component
+before conditioning on a positive sum; <code>t0</code> shifts the
+resulting positive finishing time.</p>
+<p>Use <code><a href="../reference/add_trigger.html">add_trigger()</a></code> to assign probability to an
+accumulator being absent on a trial. A trigger probability lies in
+<code>[0, 1]</code>.</p>
 </div>
 <div class="section level2">
 <h2 id="example">Example<a class="anchor" aria-label="anchor" href="#example"></a>
 </h2>
-<p>The same model can combine different accumulator distributions. The
-only thing that changes is the parameter suffix used in the parameter
-vector.</p>
-<div class="sourceCode" id="cb6"><pre class="downlit sourceCode r">
+<p>A model can combine different distributions. Use the parameter names
+appropriate to each family; <code><a href="../reference/par_names.html">par_names()</a></code> shows the names
+required by the model’s parameter grouping.</p>
+<div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">model</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/race_spec.html">race_spec</a></span><span class="op">(</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"go"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"stop"</span>, <span class="st">"exgauss"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
@@ -163,15 +201,13 @@ vector.</p>
 <span><span class="op">)</span></span>
 <span></span>
 <span><span class="fu"><a href="../reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">params</span>, n_trials <span class="op">=</span> <span class="fl">2</span><span class="op">)</span></span></code></pre></div>
-<pre><code><span><span class="co">##      q t0        p1   p2   p3 w</span></span>
-<span><span class="co">## [1,] 0  0 -1.203973 0.18 0.00 1</span></span>
-<span><span class="co">## [2,] 0  0  0.100000 0.04 0.08 1</span></span>
-<span><span class="co">## [3,] 0  0 -1.203973 0.18 0.00 1</span></span>
-<span><span class="co">## [4,] 0  0  0.100000 0.04 0.08 1</span></span></code></pre>
-<p>Choose the distribution that matches the accumulator you want to
-specify, then use its parameter names consistently in
-<code><a href="../reference/build_param_matrix.html">build_param_matrix()</a></code>, <code><a href="../reference/simulate.html">simulate()</a></code>, and
-likelihood evaluation.</p>
+<pre><code><span><span class="co">##      q t0        p1   p2   p3</span></span>
+<span><span class="co">## [1,] 0  0 -1.203973 0.18 0.00</span></span>
+<span><span class="co">## [2,] 0  0  0.100000 0.04 0.08</span></span>
+<span><span class="co">## [3,] 0  0 -1.203973 0.18 0.00</span></span>
+<span><span class="co">## [4,] 0  0  0.100000 0.04 0.08</span></span>
+<span><span class="co">## attr(,"class")</span></span>
+<span><span class="co">## [1] "accumulatr_parameters" "matrix"                "array"</span></span></code></pre>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside>

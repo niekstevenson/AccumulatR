@@ -17,11 +17,11 @@ after(source, lag = 0)
 
 - lag:
 
-  Optional non-negative delay added after \`source\` finishes.
+  Optional non-negative delay added after `source` finishes.
 
 ## Value
 
-A chained-onset specification for \`add_accumulator(onset = ...)\`.
+A chained-onset specification for `add_accumulator(onset = ...)`.
 
 ## Examples
 
@@ -36,8 +36,6 @@ after("A")
 #> $lag
 #> [1] 0
 #> 
-#> attr(,"class")
-#> [1] "race_onset_after" "list"            
 after("pool1", lag = 0.05)
 #> $kind
 #> [1] "after"
@@ -48,6 +46,4 @@ after("pool1", lag = 0.05)
 #> $lag
 #> [1] 0.05
 #> 
-#> attr(,"class")
-#> [1] "race_onset_after" "list"            
 ```

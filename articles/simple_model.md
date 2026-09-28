@@ -16,12 +16,14 @@ library(AccumulatR)
     ## 
     ##     simulate
 
-**Define the model** We use three accumulators. `R1_A` and `R1_B` both
-feed response `R1`, while `R2` feeds response `R2`. Parameters are
-grouped by default; the
+## Define the model
+
+We use three accumulators. `R1_A` and `R1_B` both feed response `R1`,
+while `R2` feeds response `R2`. Parameters are grouped by default; the
 [`set_parameters()`](https://niekstevenson.github.io/AccumulatR/reference/set_parameters.md)
-call splits the two drift parameters and shares the cross-distribution
-response-boundary and variability terms.
+call gives the two drift parameters separate values and shares the
+threshold gaps, starting-point ranges, and numerical values of the LBA
+drift spread and RDM diffusion scale.
 
 ``` r
 
@@ -55,8 +57,9 @@ true_params <- c(
 )
 ```
 
-**Simulate data** We generate response outcomes and response times for
-each trial.
+## Simulate data
+
+We generate response outcomes and response times for each trial.
 
 ``` r
 
@@ -79,10 +82,12 @@ table(data_df$R)
 
     ## 
     ##   R1   R2 
-    ## 1572  428
+    ## 1370  630
 
-**Evaluate the likelihood** We prepare the data, build a model context,
-and evaluate the log-likelihood at the true parameter values.
+## Evaluate the likelihood
+
+We prepare the data, build a model context, and evaluate the
+log-likelihood at the true parameter values.
 
 ``` r
 
@@ -92,14 +97,14 @@ ctx <- make_context(model)
 params_df_true <- build_param_matrix(
   model,
   true_params,
-  trial_df = prepared
+  n_trials = n_trials
 )
 
 ll_true <- as.numeric(log_likelihood(ctx, prepared, params_df_true))
 ll_true
 ```
 
-    ## [1] 1281.428
+    ## [1] 1029.368
 
 For comparison, we can evaluate a clearly misspecified parameter set.
 
@@ -111,27 +116,28 @@ wrong_params["t0_shared"] <- 0.08
 params_df_wrong <- build_param_matrix(
   model,
   wrong_params,
-  trial_df = prepared
+  n_trials = n_trials
 )
 
 ll_wrong <- as.numeric(log_likelihood(ctx, prepared, params_df_wrong))
 ll_wrong
 ```
 
-    ## [1] 1045.375
+    ## [1] 813.7108
 
-**Estimate parameters with
-[`optim()`](https://rdrr.io/r/stats/optim.html)** We estimate six
-parameters: `R1_A.v`, `R1_B.v`, shared `B`, `R2.m`, `R2.s`, and shared
-`t0`. `B`, `R2.s`, and `t0` are estimated on the log scale. The shared
-`A` and variability parameters are held fixed for scaling constraints.
+## Estimate parameters with `optim()`
+
+We estimate six parameters: `R1_A.v`, `R1_B.v`, shared `B`, `R2.m`,
+`R2.s`, and shared `t0`. The RDM drift, `B`, `R2.s`, and `t0` are
+estimated on the log scale to keep them positive. The shared `A` and
+variability parameters are held fixed in this example.
 
 ``` r
 
 neg_loglik <- function(theta) {
   est <- true_params
   est["R1_A.v"] <- theta[["R1_A.v"]]
-  est["R1_B.v"] <- theta[["R1_B.v"]]
+  est["R1_B.v"] <- exp(theta[["log_R1_B.v"]])
   est["B_shared"] <- exp(theta[["log_B_shared"]])
   est["R2.m"] <- theta[["R2.m"]]
   est["R2.s"] <- exp(theta[["log_R2.s"]])
@@ -139,7 +145,7 @@ neg_loglik <- function(theta) {
   params_df <- build_param_matrix(
     model,
     est,
-    trial_df = prepared
+    n_trials = n_trials
   )
   ll <- log_likelihood(ctx, prepared, params_df)
   -as.numeric(ll)
@@ -147,22 +153,18 @@ neg_loglik <- function(theta) {
 
 start <- c(
   R1_A.v = 1.5,
-  R1_B.v = 1.5,
+  log_R1_B.v = log(1.5),
   log_B_shared = log(1.0),
   R2.m = log(0.32),
   log_R2.s = log(0.15),
   log_t0_shared = log(0.03)
 )
 
-set.seed(123456)
 fit <- optim(start, neg_loglik, method = "Nelder-Mead", control = list(maxit = 4000, reltol = 1e-9))
-```
-
-``` r
 
 fit_params <- c(
   R1_A.v = fit$par[["R1_A.v"]],
-  R1_B.v = fit$par[["R1_B.v"]],
+  R1_B.v = exp(fit$par[["log_R1_B.v"]]),
   B_shared = exp(fit$par[["log_B_shared"]]),
   R2.m = fit$par[["R2.m"]],
   R2.s = exp(fit$par[["log_R2.s"]]),
@@ -178,15 +180,3 @@ target <- c(
 )
 data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params))
 ```
-
-    ##                 true   recovered       miss
-    ## R1_A.v     2.0000000  1.77020920 0.22979080
-    ## R1_B.v     3.0000000  2.80726564 0.19273436
-    ## B_shared   1.0000000  0.88548265 0.11451735
-    ## R2.m      -0.9162907 -0.94747448 0.03118375
-    ## R2.s       0.1800000  0.19522887 0.01522887
-    ## t0_shared  0.0500000  0.06410211 0.01410211
-
-This is the core usage pattern of the package: define a model, simulate
-or prepare data, evaluate the likelihood, and fit the parameters of
-interest.

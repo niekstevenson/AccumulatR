@@ -1,6 +1,8 @@
 # Define a response that is blocked by another process
 
-Define a response that is blocked by another process
+The response occurs when `reference` finishes, provided `by` has not
+finished strictly earlier. A blocker that finishes later does not cancel
+a response that has already occurred.
 
 ## Usage
 
@@ -12,7 +14,7 @@ inhibit(reference, by)
 
 - reference:
 
-  Response rule or accumulator label to be blocked.
+  Response rule, accumulator label, or pool label to be blocked.
 
 - by:
 
@@ -36,9 +38,6 @@ inhibit("A", "B")
 #> $blocker$source
 #> [1] "B"
 #> 
-#> $blocker$k
-#> NULL
-#> 
 #> 
 #> $reference
 #> $reference$kind
@@ -46,9 +45,6 @@ inhibit("A", "B")
 #> 
 #> $reference$source
 #> [1] "A"
-#> 
-#> $reference$k
-#> NULL
 #> 
 #> 
 ```

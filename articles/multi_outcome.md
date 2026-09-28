@@ -17,9 +17,11 @@ library(AccumulatR)
     ## 
     ##     simulate
 
-**Define the model** We use a simple two-accumulator race with direct
-responses `A` and `B`. Setting `n_outcomes = 2` tells the model to
-retain the first and second finishing responses.
+## Define the model
+
+We use a simple two-accumulator race with direct responses `A` and `B`.
+Setting `n_outcomes = 2` tells the model to retain the first and second
+finishing responses.
 
 ``` r
 
@@ -39,8 +41,9 @@ true_params <- c(
 )
 ```
 
-**Simulate data** We generate data and keep both ordered responses for
-each trial.
+## Simulate data
+
+We generate data and keep both ordered responses for each trial.
 
 ``` r
 
@@ -71,10 +74,11 @@ head(data_df)
     ## 5      5 A 0.3297834  B 0.4790856
     ## 6      6 A 0.3671582  B 0.4663272
 
-**Estimate parameters with
-[`optim()`](https://rdrr.io/r/stats/optim.html)** We estimate `A.m`,
-`A.s`, `B.m`, and `B.s`. The variance parameters are optimized on the
-log scale and transformed back inside the function.
+## Estimate parameters with `optim()`
+
+We estimate `A.m`, `A.s`, `B.m`, and `B.s`. The lognormal standard
+deviations are optimized on the log scale and transformed back inside
+the function.
 
 ``` r
 
@@ -87,7 +91,7 @@ neg_loglik <- function(theta) {
   params_df <- build_param_matrix(
     model,
     est,
-    trial_df = prepared
+    n_trials = n_trials
   )
   ll <- log_likelihood(ctx, prepared, params_df)
   -as.numeric(ll)
@@ -100,11 +104,7 @@ start <- c(
   B.s = log(0.12)
 )
 
-set.seed(123456)
 fit <- optim(start, neg_loglik, method = "Nelder-Mead")
-```
-
-``` r
 
 fit_params <- fit$par
 fit_params[c("A.s", "B.s")] <- exp(fit_params[c("A.s", "B.s")])
@@ -117,12 +117,9 @@ data.frame(
 )
 ```
 
-    ##          true  recovered        miss
-    ## A.m -1.203973 -1.2097763 0.005803478
-    ## A.s  0.180000  0.1770936 0.002906442
-    ## B.m -0.967584 -0.9585490 0.009035000
-    ## B.s  0.220000  0.2148618 0.005138242
-
-The workflow is the same as in the single-response case, but the
-likelihood now uses the second ranked response as additional
-information.
+Ranked observations require direct accumulator or pool outcomes. Chained
+onsets are supported, but logical outcome expressions, guessing,
+remapping, censoring, and truncation are not. Observed response times
+must increase strictly and response labels must be distinct. Later
+unobserved ranks use `NA` in both columns; the first response must be
+observed.

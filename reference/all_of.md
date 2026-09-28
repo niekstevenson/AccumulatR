@@ -1,6 +1,8 @@
 # Define a response that requires several processes to finish
 
-Define a response that requires several processes to finish
+Return a rule that finishes when all required events have completed. Any
+[`none_of()`](https://niekstevenson.github.io/AccumulatR/reference/none_of.md)
+conditions are checked at that finishing time.
 
 ## Usage
 
@@ -12,7 +14,7 @@ all_of(...)
 
 - ...:
 
-  Accumulator labels or expression objects to combine with AND.
+  Accumulator labels, pool labels, or response expressions.
 
 ## Value
 
@@ -33,9 +35,6 @@ all_of("A", "B")
 #> $args[[1]]$source
 #> [1] "A"
 #> 
-#> $args[[1]]$k
-#> NULL
-#> 
 #> 
 #> $args[[2]]
 #> $args[[2]]$kind
@@ -43,9 +42,6 @@ all_of("A", "B")
 #> 
 #> $args[[2]]$source
 #> [1] "B"
-#> 
-#> $args[[2]]$k
-#> NULL
 #> 
 #> 
 #> 

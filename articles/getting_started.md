@@ -1,8 +1,8 @@
 # Getting Started with AccumulatR
 
-This vignette defines the main workflow used throughout `AccumulatR`.
-Read it first if you want the package vocabulary before moving to the
-task-specific examples.
+`AccumulatR` describes responses as races between latent processes. This
+guide introduces the model objects, data columns, and steps needed to
+simulate observations and evaluate their likelihood.
 
 ``` r
 
@@ -44,16 +44,19 @@ typical values might be `"left"` and `"right"`, or `"red"` and
 
 ### `rt`
 
-`rt` is the observed response time for `R`.
+`rt` is the observed response time for `R`. The examples use seconds;
+onsets and time parameters use the same units. In a single-response
+model, `R = NA` and `rt = NA` record a trial with no observed response.
 
 ### Component
 
-A `component` serves two purposes. It can be used to account for
-different trial types in your data, for example when a subset of your
-data requires different accumulator structures. It can also be used to
-allow for latent mixtures *within* trial. If your model has only one
-trial type, you usually do not need this column. See also the **Working
-with Mixtures** vignette.
+A component specifies which accumulators are active on a trial. It can
+represent an observed trial type or an unobserved processing mode. A
+`component` column in the data conditions on the named component;
+omitting it or using `NA` averages over components. Each trial belongs
+to one component. See [Working with
+Mixtures](https://niekstevenson.github.io/AccumulatR/articles/mixtures.md)
+for examples.
 
 ### Onset
 
@@ -67,8 +70,9 @@ appears during the trial. In `AccumulatR`, an onset can be:
   finished
 
 Both onset and non-decision time (`t0`) shift response times. The
-difference in `AccumulatR` is that `t0` is an estimated parameter,
-whereas onset is part of the model structure.
+difference is where they are supplied: `t0` belongs to the parameter
+vector, while onset is declared in the model or supplied with trial
+conditions. Omitted `t0` values default to zero.
 
 ## A minimal model
 
@@ -88,10 +92,13 @@ model <- race_spec() |>
 
 ## Simulated behavioral data
 
-We can generate a small behavioral dataset from this model. Here
-`build_param_matrix` makes one row of parameters per trial. This allows
-you to trial-wise manipulate the specific parameters, for example using
-a design matrix specification.
+[`build_param_matrix()`](https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.md)
+repeats a named parameter vector across trials. It creates one row per
+accumulator per trial, with each trial’s accumulators in model order.
+Here six trials and two accumulators give twelve parameter rows.
+`par_names(model)` lists the accepted parameter names;
+[`set_parameters()`](https://niekstevenson.github.io/AccumulatR/reference/set_parameters.md)
+determines which values are shared or separate.
 
 ``` r
 
@@ -131,8 +138,16 @@ log_likelihood(ctx, prepared, param_df)
     ## [1] 5.291506
 
 [`prepare_data()`](https://niekstevenson.github.io/AccumulatR/reference/prepare_data.md)
-reshapes the behavioral data for likelihood evaluation, and
+checks and arranges the observations, and
 [`make_context()`](https://niekstevenson.github.io/AccumulatR/reference/make_context.md)
-builds the model-side runtime state.
+compiles the model’s response rules. Reuse these objects while varying
+parameters for the same model. Supply one parameter block per prepared
+trial, in matching order.
+
 [`log_likelihood()`](https://niekstevenson.github.io/AccumulatR/reference/log_likelihood.md)
-returns the fit of a parameter set to those observed data.
+returns the summed log-likelihood; use `sum = FALSE` for one value per
+trial. Response-time observations contribute densities, so the result
+can be positive. See [A Simple Race
+Model](https://niekstevenson.github.io/AccumulatR/articles/simple_model.md)
+for an example using [`optim()`](https://rdrr.io/r/stats/optim.html) to
+estimate parameters.

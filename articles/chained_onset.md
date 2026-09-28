@@ -16,8 +16,10 @@ library(AccumulatR)
     ## 
     ##     simulate
 
-**Define the model** `A` is directly observed. `B` is latent. `C` is
-observed and starts only after `B` has finished.
+## Define the model
+
+`A` is directly observed. `B` is latent. `C` is observed and starts only
+after `B` has finished.
 
 ``` r
 
@@ -40,8 +42,9 @@ true_params <- c(
 )
 ```
 
-**Simulate data** Each trial contributes an observed response label and
-response time.
+## Simulate data
+
+Each trial contributes an observed response label and response time.
 
 ``` r
 
@@ -66,10 +69,10 @@ table(data_df$R)
     ##    A    C 
     ##  446 1554
 
-**Estimate parameters with
-[`optim()`](https://rdrr.io/r/stats/optim.html)** We estimate `A.m`,
-`A.s`, `B.m`, `B.s`, `C.m`, and `C.s`. The spread parameters are
-optimized on the log scale.
+## Estimate parameters with `optim()`
+
+We estimate `A.m`, `A.s`, `B.m`, `B.s`, `C.m`, and `C.s`. The spread
+parameters are optimized on the log scale.
 
 ``` r
 
@@ -83,7 +86,7 @@ neg_loglik <- function(theta) {
   params_df <- build_param_matrix(
     model,
     est,
-    trial_df = prepared
+    n_trials = n_trials
   )
   ll <- log_likelihood(ctx, prepared, params_df)
   -as.numeric(ll)
@@ -98,11 +101,7 @@ start <- c(
   C.s = log(0.10)
 )
 
-set.seed(123456)
 fit <- optim(start, neg_loglik, method = "Nelder-Mead")
-```
-
-``` r
 
 fit_params <- fit$par
 fit_params[c("A.s", "B.s", "C.s")] <- exp(fit_params[c("A.s", "B.s", "C.s")])
@@ -115,14 +114,7 @@ data.frame(
 )
 ```
 
-    ##          true   recovered        miss
-    ## A.m -1.272966 -1.25003011 0.022935562
-    ## A.s  0.140000  0.09451568 0.045484321
-    ## B.m -2.302585 -2.84037595 0.537790857
-    ## B.s  0.100000  0.02842790 0.071572096
-    ## C.m -1.897120 -1.64098410 0.256135882
-    ## C.s  0.100000  0.10959761 0.009597612
-
-Use chained onsets when the model requires a staged dependency between
-processes. We do note that these models can suffer from weak
-identifiability. So use with care!
+Only the combined finishing time of `B` and `C` is observed through
+response `C`. Separating their timing parameters can therefore be
+difficult. Additional observations of the stages or constraints on their
+parameters can help identify the individual contributions.

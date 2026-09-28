@@ -1,8 +1,7 @@
 # Working with Mixtures
 
-Here we show how mixtures work in `AccumulatR`.
-
-Mixtures have two separate pieces:
+Mixture components describe different sets of active accumulators. Two
+choices determine how a mixture is used:
 
 - The model controls how mixture weights are defined. Use
   `set_mixture(mode = "fixed")` when the weights are known in advance,
@@ -11,9 +10,10 @@ Mixtures have two separate pieces:
 - The data control whether the component is observed on a trial. If a
   `component` column is present, likelihood evaluation conditions on
   that component. If `component` is omitted or set to `NA`, the
-  likelihood and
+  likelihood marginalizes over components.
   [`response_probabilities()`](https://niekstevenson.github.io/AccumulatR/reference/response_probabilities.md)
-  marginalize over components.
+  always averages over components using their probabilities; it takes no
+  trial data.
 
 ``` r
 
@@ -72,23 +72,29 @@ to.
 set.seed(123456)
 
 n_trials_fixed <- 1200
-trial_types <- data.frame(
-  trials = seq_len(n_trials_fixed),
-  component = sample(c("fast", "slow"), n_trials_fixed, replace = TRUE, prob = c(0.4, 0.6)),
+trial_component <- sample(
+  c("fast", "slow"),
+  n_trials_fixed,
+  replace = TRUE,
+  prob = c(0.4, 0.6)
+)
+trial_conditions <- data.frame(
+  trials = rep(seq_len(n_trials_fixed), each = 3L),
+  racer = rep(c("target_fast", "target_slow", "competitor"), n_trials_fixed),
+  component = rep(trial_component, each = 3L),
   stringsAsFactors = FALSE
 )
 
 params_df_fixed <- build_param_matrix(
   model_fixed,
   true_params_fixed,
-  trial_df = trial_types
+  n_trials = n_trials_fixed
 )
 
 sim_fixed <- simulate(
   model_fixed,
   params_df_fixed,
-  trial_df = trial_types,
-  layout = "long"
+  trial_df = trial_conditions
 )
 
 data_fixed <- sim_fixed[, c("trials", "R", "rt", "component")]
@@ -101,9 +107,9 @@ table(data_fixed$component, data_fixed$R)
     ##   fast 452  30
     ##   slow 131 587
 
-Because the component is known here, the simulated data keep that label.
-The same pattern applies to real data: if trial type is observed, keep
-it in a `component` column.
+Fixed mixtures include the selected component label in simulation output
+by default. For real data, retain a `component` column when trial type
+is observed. Omit it to evaluate the data as a latent mixture.
 
 ``` r
 
@@ -113,7 +119,7 @@ ctx_fixed <- make_context(model_fixed)
 params_df_fixed_true <- build_param_matrix(
   model_fixed,
   true_params_fixed,
-  trial_df = prepared_fixed
+  n_trials = n_trials_fixed
 )
 
 ll_fixed <- as.numeric(log_likelihood(ctx_fixed, prepared_fixed, params_df_fixed_true))
@@ -190,7 +196,7 @@ table(sim_sampled_with_component$component)
 
     ## 
     ## fast slow 
-    ##  541  959
+    ##  523  977
 
 For likelihood evaluation, we keep the sampled-mixture data in the same
 form as real latent-mixture data: only the observed response `R` and
@@ -209,14 +215,14 @@ ctx_sampled <- make_context(model_sampled)
 params_df_sampled_true <- build_param_matrix(
   model_sampled,
   true_params_sampled,
-  trial_df = prepared_sampled
+  n_trials = n_trials_sampled
 )
 
 ll_sampled_true <- as.numeric(log_likelihood(ctx_sampled, prepared_sampled, params_df_sampled_true))
 ll_sampled_true
 ```
 
-    ## [1] 1169.475
+    ## [1] 1177.892
 
 ## Estimate a sampled-mixture weight
 
@@ -232,7 +238,7 @@ neg_loglik <- function(theta) {
   params_df <- build_param_matrix(
     model_sampled,
     est,
-    trial_df = prepared_sampled
+    n_trials = n_trials_sampled
   )
   ll <- log_likelihood(ctx_sampled, prepared_sampled, params_df)
   -as.numeric(ll)
@@ -240,20 +246,13 @@ neg_loglik <- function(theta) {
 
 start <- c(logit_p_fast = qlogis(0.60))
 
-set.seed(123456)
 fit <- optim(start, neg_loglik, method = "BFGS")
-```
-
-``` r
 
 fit_params <- c(p.fast = plogis(fit$par[["logit_p_fast"]]))
 target <- c(p.fast = true_params_sampled[["p.fast"]])
 
 data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params))
 ```
-
-    ##        true recovered       miss
-    ## p.fast 0.35 0.3702799 0.02027991
 
 Use `mode = "fixed"` when mixture weights are known and
 `mode = "sample"` when mixture weights should be estimated.

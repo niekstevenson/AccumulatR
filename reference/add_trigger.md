@@ -1,8 +1,10 @@
 # Add a shared absence trigger
 
-A trigger is a named absence-probability parameter. All members in one
-trigger call share the same absence draw. Use separate trigger calls for
-independent absence draws.
+With probability given by `name`, all member accumulators are absent on
+a trial. Otherwise they follow their specified onsets and finishing-time
+distributions. Use separate triggers for independent absence events;
+[`set_parameters()`](https://niekstevenson.github.io/AccumulatR/reference/set_parameters.md)
+can give those events a common probability.
 
 ## Usage
 
@@ -14,11 +16,12 @@ add_trigger(spec, name, members)
 
 - spec:
 
-  A \`race_spec\` object.
+  A `race_spec` object.
 
 - name:
 
-  Trigger parameter name.
+  Trigger parameter name. Supply its probability in `[0, 1]` to
+  [`build_param_matrix()`](https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.md).
 
 - members:
 
@@ -26,4 +29,4 @@ add_trigger(spec, name, members)
 
 ## Value
 
-The updated \`race_spec\`.
+The updated `race_spec`.

@@ -1,7 +1,14 @@
-# Turn a response rule into an internal expression
+# Build a response rule from a quoted expression
 
-Use this when you want to write a response rule programmatically rather
-than through the helper functions such as \`all_of()\` or \`inhibit()\`.
+Convert a source label or quoted R expression into a response rule for
+[`add_outcome()`](https://niekstevenson.github.io/AccumulatR/reference/add_outcome.md).
+Within a quoted expression, `&` combines requirements, `|` allows
+alternative routes, and `!` specifies an absence condition. These
+correspond to
+[`all_of()`](https://niekstevenson.github.io/AccumulatR/reference/all_of.md),
+[`first_of()`](https://niekstevenson.github.io/AccumulatR/reference/first_of.md),
+and
+[`none_of()`](https://niekstevenson.github.io/AccumulatR/reference/none_of.md).
 
 ## Usage
 
@@ -13,7 +20,8 @@ build_outcome_expr(expr)
 
 - expr:
 
-  Expression or symbol describing an event or blocking rule.
+  Accumulator or pool label, symbol, quoted logical expression, or an
+  expression object returned by an outcome helper.
 
 ## Value
 
@@ -34,9 +42,6 @@ build_outcome_expr(quote(A & !B))
 #> $args[[1]]$source
 #> [1] "A"
 #> 
-#> $args[[1]]$k
-#> NULL
-#> 
 #> 
 #> $args[[2]]
 #> $args[[2]]$kind
@@ -48,9 +53,6 @@ build_outcome_expr(quote(A & !B))
 #> 
 #> $args[[2]]$arg$source
 #> [1] "B"
-#> 
-#> $args[[2]]$arg$k
-#> NULL
 #> 
 #> 
 #> 

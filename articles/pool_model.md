@@ -17,9 +17,10 @@ library(AccumulatR)
     ## 
     ##     simulate
 
-**Define the model** We use three lognormal accumulators feeding a
-pooled response `A`, plus one lognormal accumulator feeding response
-`B`.
+## Define the model
+
+We use three lognormal accumulators feeding a pooled response `A`, plus
+one lognormal accumulator feeding response `B`.
 
 ``` r
 
@@ -46,8 +47,9 @@ true_params <- c(
 )
 ```
 
-**Simulate data** We simulate a response and response time for each
-trial.
+## Simulate data
+
+We simulate a response and response time for each trial.
 
 ``` r
 
@@ -75,11 +77,11 @@ table(data_df$R)
 When response `A` is observed, its response time is the finishing time
 of the second finisher of the pool.
 
-**Estimate parameters with
-[`optim()`](https://rdrr.io/r/stats/optim.html)** We estimate a shared
-location and spread for the three pool members, plus the location and
-spread of accumulator `B`. The spread parameters are optimized on the
-log scale.
+## Estimate parameters with `optim()`
+
+We estimate a shared location and spread for the three pool members,
+plus the location and spread of accumulator `B`. The spread parameters
+are optimized on the log scale.
 
 ``` r
 
@@ -94,7 +96,7 @@ neg_loglik <- function(theta) {
   params_df <- build_param_matrix(
     model,
     est,
-    trial_df = prepared
+    n_trials = n_trials
   )
   ll <- log_likelihood(ctx, prepared, params_df)
   -as.numeric(ll)
@@ -107,16 +109,12 @@ start <- c(
   log_B.s = log(0.12)
 )
 
-set.seed(123456)
 fit <- optim(
   start,
   neg_loglik,
   method = "Nelder-Mead",
   control = list(maxit = 4000, reltol = 1e-9)
 )
-```
-
-``` r
 
 fit_params <- c(
   A_pool.m = fit$par[["A_pool.m"]],
@@ -133,13 +131,3 @@ target <- c(
 
 data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params))
 ```
-
-    ##               true  recovered         miss
-    ## A_pool.m -1.272966 -1.2749227 0.0019570346
-    ## A_pool.s  0.160000  0.1605954 0.0005954359
-    ## B.m      -1.272966 -1.2731653 0.0001996564
-    ## B.s       0.180000  0.1768839 0.0031160588
-
-The code path is the same as in a basic race model. The difference is
-that the observed response `A` now depends on a pooled completion rule
-rather than a single accumulator.

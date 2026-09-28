@@ -1,7 +1,9 @@
 # Evaluate log-likelihoods of behavioral data
 
 Compute the summed log-likelihood by default, or trial-wise
-log-likelihoods when \`sum = FALSE\`.
+log-likelihoods when `sum = FALSE`. Build the context and prepare the
+observations once, then reuse them when evaluating candidate parameter
+matrices for the same model.
 
 ## Usage
 
@@ -12,61 +14,61 @@ log_likelihood(
   parameters,
   ok = NULL,
   sum = TRUE,
-  min_ll = log(1e-10),
-  ...
+  min_ll = log(1e-10)
 )
-
-# S3 method for class 'accumulatr_context'
-log_likelihood(
-  context,
-  data,
-  parameters,
-  ok = NULL,
-  sum = TRUE,
-  min_ll = log(1e-10),
-  ...
-)
-
-# Default S3 method
-log_likelihood(context, ...)
 ```
 
 ## Arguments
 
 - context:
 
-  Context created with \`make_context()\`.
+  Context created with
+  [`make_context()`](https://niekstevenson.github.io/AccumulatR/reference/make_context.md).
 
 - data:
 
-  Prepared data created with \`prepare_data()\`.
+  Prepared data created with
+  [`prepare_data()`](https://niekstevenson.github.io/AccumulatR/reference/prepare_data.md).
 
 - parameters:
 
-  A parameter data frame, or a list of parameter data frames.
+  Numeric matrix from
+  [`build_param_matrix()`](https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.md),
+  with one accumulator block per prepared trial in matching order.
 
 - ok:
 
-  Logical vector marking which trials should contribute to the
-  likelihood. Trials marked \`FALSE\` are assigned \`min_ll\`.
+  Optional logical vector with one value per prepared trial. `TRUE`
+  evaluates that trial; `FALSE` assigns `min_ll`. These assigned values
+  are included in the sum. For compressed data, use the retained trial
+  order.
 
 - sum:
 
-  If \`TRUE\`, return the summed log-likelihood. If \`FALSE\`, return
+  If `TRUE`, return the summed log-likelihood. If `FALSE`, return
   trial-wise log-likelihood values.
 
 - min_ll:
 
   Minimum log-likelihood value used for excluded or impossible trials.
 
-- ...:
-
-  Unused; for S3 compatibility.
-
 ## Value
 
 A summed log-likelihood by default, or a numeric vector of trial-wise
-log-likelihood values when \`sum = FALSE\`.
+log-likelihood values when `sum = FALSE`.
+
+## Details
+
+Response-time observations contribute densities, so a log-likelihood can
+be positive. Missing responses and censoring contribute probability
+masses according to the observation rules.
+
+Use
+[`prepare_data()`](https://niekstevenson.github.io/AccumulatR/reference/prepare_data.md)
+and
+[`build_param_matrix()`](https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.md)
+for the same model. Evaluation assumes matching layouts and valid
+parameters and does not repeat preparation checks.
 
 ## Examples
 
@@ -76,7 +78,7 @@ spec <- add_accumulator(spec, "A", "lognormal")
 spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
 params_df <- build_param_matrix(
-  spec,
+  structure,
   c(m = 0, s = 0.1),
   n_trials = 2
 )

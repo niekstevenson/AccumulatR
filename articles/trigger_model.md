@@ -17,8 +17,10 @@ library(AccumulatR)
     ## 
     ##     simulate
 
-**Define the model** We use two lognormal accumulators and one shared
-trigger. The trigger parameter is named `shared_trigger`.
+## Define the model
+
+We use two lognormal accumulators and one shared trigger. The trigger
+parameter is named `shared_trigger`.
 
 ``` r
 
@@ -43,8 +45,10 @@ true_params <- c(
 The trigger probability is supplied in the same parameter vector as the
 timing parameters.
 
-**Simulate data** Failed trigger trials appear as missing responses and
-missing response times.
+## Simulate data
+
+Failed trigger trials appear as missing responses and missing response
+times.
 
 ``` r
 
@@ -69,8 +73,10 @@ table(data_df$R, useNA = "ifany")
     ##   R1   R2 <NA> 
     ##  924  361  215
 
-**Evaluate the likelihood** We prepare the data, build a model context,
-and evaluate the shared-trigger model under the true parameter values.
+## Evaluate the likelihood
+
+We prepare the data, build a model context, and evaluate the
+shared-trigger model under the true parameter values.
 
 ``` r
 
@@ -80,7 +86,7 @@ ctx <- make_context(model)
 params_df_true <- build_param_matrix(
   model,
   true_params,
-  trial_df = prepared
+  n_trials = n_trials
 )
 
 ll_true <- as.numeric(log_likelihood(ctx, prepared, params_df_true))
@@ -114,7 +120,7 @@ independent_ctx <- make_context(model_independent)
 params_df_independent <- build_param_matrix(
   model_independent,
   true_params,
-  trial_df = independent_prepared
+  n_trials = n_trials
 )
 
 ll_independent <- as.numeric(log_likelihood(
@@ -141,10 +147,11 @@ model_single_q <- race_spec() |>
   finalize_model()
 ```
 
-**Estimate parameters with
-[`optim()`](https://rdrr.io/r/stats/optim.html)** We estimate `go1.m`,
-`go1.s`, `go2.m`, and `go2.s`, while keeping the trigger probability
-fixed in the parameter vector passed to the likelihood.
+## Estimate parameters with `optim()`
+
+We estimate `go1.m`, `go1.s`, `go2.m`, and `go2.s`, while keeping the
+trigger probability fixed in the parameter vector passed to the
+likelihood.
 
 ``` r
 
@@ -157,7 +164,7 @@ neg_loglik <- function(theta) {
   params_df <- build_param_matrix(
     model,
     est,
-    trial_df = prepared
+    n_trials = n_trials
   )
   ll <- log_likelihood(ctx, prepared, params_df)
   -as.numeric(ll)
@@ -170,16 +177,12 @@ start <- c(
   log_go2.s = log(0.12)
 )
 
-set.seed(123456)
 fit <- optim(
   start,
   neg_loglik,
   method = "Nelder-Mead",
   control = list(maxit = 4000, reltol = 1e-9)
 )
-```
-
-``` r
 
 fit_params <- c(
   go1.m = fit$par[["go1.m"]],
@@ -191,12 +194,6 @@ target <- true_params[c("go1.m", "go1.s", "go2.m", "go2.s")]
 
 data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params))
 ```
-
-    ##            true  recovered         miss
-    ## go1.m -1.203973 -1.2032387 0.0007341542
-    ## go1.s  0.180000  0.1877828 0.0077827916
-    ## go2.m -1.049822 -1.0535251 0.0037029662
-    ## go2.s  0.180000  0.1781906 0.0018094007
 
 Use one trigger call when several accumulators share an absence event.
 Use separate trigger calls when absence draws are independent; group

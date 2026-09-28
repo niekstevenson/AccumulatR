@@ -1,6 +1,13 @@
-# List the free parameters implied by a model
+# List the parameter names used by a model
 
-List the free parameters implied by a model
+Return the names accepted by
+[`build_param_matrix()`](https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.md),
+after applying any grouping or renaming in
+[`set_parameters()`](https://niekstevenson.github.io/AccumulatR/reference/set_parameters.md).
+The list includes nondecision times, trigger probabilities, and sampled
+mixture weights where applicable. These names do not determine which
+parameters an optimizer must estimate; parameters can be held fixed by
+supplying constant values.
 
 ## Usage
 
@@ -12,7 +19,7 @@ par_names(model)
 
 - model:
 
-  A \`race_spec\` or related model object.
+  A `race_spec` or finalized `model_structure` object.
 
 ## Value
 

@@ -1,47 +1,40 @@
 # Evaluate marginal response probabilities
 
-\`response_probabilities()\` evaluates the model-implied marginal
-probability of each observed response label for a finalized model and
-parameter set. Component labels in row-form parameters condition the
-calculation on those observed components; latent or \`NA\` components
-are marginalized according to the model's mixture specification.
+Calculate the probability of each first response, integrated over
+response time and averaged over mixture components. With multiple trial
+blocks in `parameters`, return the mean probabilities across those
+blocks.
 
 ## Usage
 
 ``` r
-response_probabilities(structure, params_df, include_na = TRUE, ...)
-
-# S3 method for class 'model_structure'
-response_probabilities(structure, params_df, include_na = TRUE, ...)
-
-# Default S3 method
-response_probabilities(structure, params_df, include_na = TRUE, ...)
+response_probabilities(context, parameters, include_na = TRUE)
 ```
 
 ## Arguments
 
-- structure:
+- context:
 
-  Finalized model structure.
+  Context created with
+  [`make_context()`](https://niekstevenson.github.io/AccumulatR/reference/make_context.md).
 
-- params_df:
+- parameters:
 
-  A parameter data frame or rectangular parameter matrix.
+  Parameter matrix from
+  [`build_param_matrix()`](https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.md).
+  Use `n_trials = 1` for one set of response probabilities.
 
 - include_na:
 
-  If \`TRUE\`, include residual mass as \`"NA"\`.
-
-- ...:
-
-  Unused; for S3 compatibility.
+  If `TRUE`, include a `"NA"` entry when there is residual probability
+  of no observed response.
 
 ## Value
 
 A named numeric vector of marginal response probabilities. Names are
-observed outcome labels. When \`include_na = TRUE\`, a residual \`"NA"\`
+observed outcome labels. When `include_na = TRUE`, a residual `"NA"`
 entry is included if the model assigns probability mass to unobserved or
-\`NA\`-mapped outcomes.
+`NA`-mapped outcomes.
 
 ## Examples
 
@@ -55,12 +48,12 @@ spec <- race_spec() |>
 
 model <- finalize_model(spec)
 params <- build_param_matrix(
-  spec,
+  model,
   c(left.m = log(0.25), right.m = log(0.40), s = 0.20),
   n_trials = 1
 )
 
-response_probabilities(model, params)
+response_probabilities(make_context(model), params)
 #>       left      right 
 #> 0.95171491 0.04828509 
 ```

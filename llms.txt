@@ -31,7 +31,7 @@ remotes::install_github("niekstevenson/AccumulatR")
 4.  Evaluate the log-likelihood of observed data under candidate
     parameters.
 
-## Small Example
+## A two-choice race
 
 The example below defines a two-choice race model, simulates
 response-time data, and then evaluates the likelihood of those same data
@@ -55,7 +55,7 @@ pars <- c(
   t0 = 0
 )
 
-param_df <- build_param_matrix(spec, pars, n_trials = 8)
+param_df <- build_param_matrix(model, pars, n_trials = 8)
 sim <- simulate(model, param_df, seed = 123)
 head(sim[c("trials", "R", "rt")])
 
@@ -71,8 +71,24 @@ that means a response column (`R`) and a response-time column (`rt`).
 then evaluates how probable those data are under a set of model
 parameters.
 
-For longer worked examples, see the package articles on the pkgdown
-site.
+Parameters with the same name are shared by default. Use
+[`set_parameters()`](https://niekstevenson.github.io/AccumulatR/reference/set_parameters.md)
+to give accumulators separate values, and `par_names(model)` to see the
+names accepted by
+[`build_param_matrix()`](https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.md).
+The parameter matrix has one row per accumulator per trial; the
+simulated data have one row per trial.
+
+Prepare the observations and build the context once, then reuse them
+while evaluating candidate parameter matrices for the same model.
+
+Start with [Getting
+Started](https://niekstevenson.github.io/AccumulatR/articles/getting_started.html)
+for the data conventions, or [Supported
+Distributions](https://niekstevenson.github.io/AccumulatR/articles/distributions.html)
+for parameter definitions. The [function
+reference](https://niekstevenson.github.io/AccumulatR/reference/index.html)
+describes each argument and return value.
 
 # Package index
 
@@ -103,21 +119,19 @@ model.
   : Control parameter grouping and names
 - [`add_trigger()`](https://niekstevenson.github.io/AccumulatR/reference/add_trigger.md)
   : Add a shared absence trigger
-- [`set_metadata()`](https://niekstevenson.github.io/AccumulatR/reference/set_metadata.md)
-  : Store model-level metadata
 - [`set_mixture()`](https://niekstevenson.github.io/AccumulatR/reference/set_mixture.md)
   : Control how mixture components are combined
 - [`finalize_model()`](https://niekstevenson.github.io/AccumulatR/reference/finalize_model.md)
-  : Compile a model for simulation and fitting
+  : Finalize a model for simulation and fitting
 - [`complexity_metrics()`](https://niekstevenson.github.io/AccumulatR/reference/complexity_metrics.md)
-  : Return compiled exact complexity metrics
+  : Inspect the size of a compiled likelihood plan
 
 ## Outcome Expressions and Timing
 
 Compose outcome rules and onset dependencies.
 
 - [`build_outcome_expr()`](https://niekstevenson.github.io/AccumulatR/reference/build_outcome_expr.md)
-  : Turn a response rule into an internal expression
+  : Build a response rule from a quoted expression
 - [`all_of()`](https://niekstevenson.github.io/AccumulatR/reference/all_of.md)
   : Define a response that requires several processes to finish
 - [`first_of()`](https://niekstevenson.github.io/AccumulatR/reference/first_of.md)
@@ -136,7 +150,7 @@ Inspect model parameters and prepare trial-level parameter matrices.
 - [`prepare_data()`](https://niekstevenson.github.io/AccumulatR/reference/prepare_data.md)
   : Prepare behavioral data for likelihood evaluation
 - [`par_names()`](https://niekstevenson.github.io/AccumulatR/reference/par_names.md)
-  : List the free parameters implied by a model
+  : List the parameter names used by a model
 - [`build_param_matrix()`](https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.md)
   : Create trial-level parameter values
 

@@ -79,9 +79,9 @@
 
     
     
-<p>This vignette defines the main workflow used throughout
-<code>AccumulatR</code>. Read it first if you want the package
-vocabulary before moving to the task-specific examples.</p>
+<p><code>AccumulatR</code> describes responses as races between latent
+processes. This guide introduces the model objects, data columns, and
+steps needed to simulate observations and evaluate their likelihood.</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://github.com/niekstevenson/AccumulatR" class="external-link">AccumulatR</a></span><span class="op">)</span></span></code></pre></div>
 <pre><code><span><span class="co">## </span></span>
@@ -127,17 +127,19 @@ etc.</p>
 <h3 id="rt">
 <code>rt</code><a class="anchor" aria-label="anchor" href="#rt"></a>
 </h3>
-<p><code>rt</code> is the observed response time for <code>R</code>.</p>
+<p><code>rt</code> is the observed response time for <code>R</code>. The
+examples use seconds; onsets and time parameters use the same units. In
+a single-response model, <code>R = NA</code> and <code>rt = NA</code>
+record a trial with no observed response.</p>
 </div>
 <div class="section level3">
 <h3 id="component">Component<a class="anchor" aria-label="anchor" href="#component"></a>
 </h3>
-<p>A <code>component</code> serves two purposes. It can be used to
-account for different trial types in your data, for example when a
-subset of your data requires different accumulator structures. It can
-also be used to allow for latent mixtures <em>within</em> trial. If your
-model has only one trial type, you usually do not need this column. See
-also the <strong>Working with Mixtures</strong> vignette.</p>
+<p>A component specifies which accumulators are active on a trial. It
+can represent an observed trial type or an unobserved processing mode. A
+<code>component</code> column in the data conditions on the named
+component; omitting it or using <code>NA</code> averages over
+components. Each trial belongs to one component. See <a href="mixtures.html">Working with Mixtures</a> for examples.</p>
 </div>
 <div class="section level3">
 <h3 id="onset">Onset<a class="anchor" aria-label="anchor" href="#onset"></a>
@@ -154,9 +156,10 @@ the process starts only after another accumulator (in this case
 <code>A</code>) or pool has finished</li>
 </ul>
 <p>Both onset and non-decision time (<code>t0</code>) shift response
-times. The difference in <code>AccumulatR</code> is that <code>t0</code>
-is an estimated parameter, whereas onset is part of the model
-structure.</p>
+times. The difference is where they are supplied: <code>t0</code>
+belongs to the parameter vector, while onset is declared in the model or
+supplied with trial conditions. Omitted <code>t0</code> values default
+to zero.</p>
 </div>
 </div>
 <div class="section level2">
@@ -176,10 +179,12 @@ lognormal accumulators.</p>
 <div class="section level2">
 <h2 id="simulated-behavioral-data">Simulated behavioral data<a class="anchor" aria-label="anchor" href="#simulated-behavioral-data"></a>
 </h2>
-<p>We can generate a small behavioral dataset from this model. Here
-<code>build_param_matrix</code> makes one row of parameters per trial.
-This allows you to trial-wise manipulate the specific parameters, for
-example using a design matrix specification.</p>
+<p><code><a href="../reference/build_param_matrix.html">build_param_matrix()</a></code> repeats a named parameter vector
+across trials. It creates one row per accumulator per trial, with each
+trial’s accumulators in model order. Here six trials and two
+accumulators give twelve parameter rows. <code>par_names(model)</code>
+lists the accepted parameter names; <code><a href="../reference/set_parameters.html">set_parameters()</a></code>
+determines which values are shared or separate.</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">pars</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
 <span>  left.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.28</span><span class="op">)</span>, left.s <span class="op">=</span> <span class="fl">0.16</span>,</span>
@@ -209,10 +214,14 @@ example using a design matrix specification.</p>
 <span><span class="va">ctx</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/make_context.html">make_context</a></span><span class="op">(</span><span class="va">model</span><span class="op">)</span></span>
 <span><span class="fu"><a href="../reference/log_likelihood.html">log_likelihood</a></span><span class="op">(</span><span class="va">ctx</span>, <span class="va">prepared</span>, <span class="va">param_df</span><span class="op">)</span></span></code></pre></div>
 <pre><code><span><span class="co">## [1] 5.291506</span></span></code></pre>
-<p><code><a href="../reference/prepare_data.html">prepare_data()</a></code> reshapes the behavioral data for
-likelihood evaluation, and <code><a href="../reference/make_context.html">make_context()</a></code> builds the
-model-side runtime state. <code><a href="../reference/log_likelihood.html">log_likelihood()</a></code> returns the fit
-of a parameter set to those observed data.</p>
+<p><code><a href="../reference/prepare_data.html">prepare_data()</a></code> checks and arranges the observations, and
+<code><a href="../reference/make_context.html">make_context()</a></code> compiles the model’s response rules. Reuse
+these objects while varying parameters for the same model. Supply one
+parameter block per prepared trial, in matching order.</p>
+<p><code><a href="../reference/log_likelihood.html">log_likelihood()</a></code> returns the summed log-likelihood; use
+<code>sum = FALSE</code> for one value per trial. Response-time
+observations contribute densities, so the result can be positive. See <a href="simple_model.html">A Simple Race Model</a> for an example using
+<code><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim()</a></code> to estimate parameters.</p>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside>

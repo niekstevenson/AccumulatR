@@ -1,13 +1,14 @@
 # Build a compiled likelihood context from a model
 
-A context stores compiled model/runtime state only. Behavioral data are
-prepared separately with \`prepare_data()\` and supplied to
-\`log_likelihood()\`.
+Compile the model's response rules and dependencies for likelihood
+evaluation. Reuse the context across candidate parameter values and
+datasets for the same model. Prepare each dataset with
+[`prepare_data()`](https://niekstevenson.github.io/AccumulatR/reference/prepare_data.md).
 
 ## Usage
 
 ``` r
-make_context(structure, prep = NULL, diagnostics = FALSE)
+make_context(structure, diagnostics = FALSE)
 ```
 
 ## Arguments
@@ -16,17 +17,14 @@ make_context(structure, prep = NULL, diagnostics = FALSE)
 
   Finalized model structure.
 
-- prep:
-
-  Optional preprocessed model bundle.
-
 - diagnostics:
 
-  If \`TRUE\`, collect symbolic/compiled complexity metrics.
+  If `TRUE`, collect model compilation statistics for
+  [`complexity_metrics()`](https://niekstevenson.github.io/AccumulatR/reference/complexity_metrics.md).
 
 ## Value
 
-An \`accumulatr_context\` object.
+An `accumulatr_context` object.
 
 ## Examples
 
@@ -37,15 +35,13 @@ spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
 make_context(structure)
 #> $cpp
-#> $cpp$native
-#> <pointer: 0x55fe8febd820>
+#> <pointer: 0x55a36a2f6140>
 #> 
-#> $cpp$has_complexity_metrics
-#> [1] FALSE
+#> $outcome_labels
+#> [1] "A_win"
 #> 
-#> 
-#> $required_p_slots
-#> [1] 2
+#> $observed_outcome_labels
+#> [1] "A_win"
 #> 
 #> attr(,"class")
 #> [1] "accumulatr_context"

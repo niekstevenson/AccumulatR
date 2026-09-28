@@ -86,11 +86,11 @@ of the model before fitting.</p>
 
 
 <dl><dt id="arg-model">model<a class="anchor" aria-label="anchor" href="#arg-model"></a></dt>
-<dd><p>A race model or finalized model structure.</p></dd>
+<dd><p>A finalized model structure.</p></dd>
 
 
 <dt id="arg-xlim">xlim<a class="anchor" aria-label="anchor" href="#arg-xlim"></a></dt>
-<dd><p>Optional x-axis limits. If `NULL`, they are chosen from the model.</p></dd>
+<dd><p>Optional x-axis limits. If <code>NULL</code>, they are chosen from the model.</p></dd>
 
 
 <dt id="arg-ylim">ylim<a class="anchor" aria-label="anchor" href="#arg-ylim"></a></dt>
@@ -103,7 +103,7 @@ of the model before fitting.</p>
 
 <dt id="arg-angle-dodge">angle_dodge<a class="anchor" aria-label="anchor" href="#arg-angle-dodge"></a></dt>
 <dd><p>Target angular spacing in degrees between neighbouring accumulators.
-Angles are centered at 45 degrees and constrained to the interval [10, 80].
+Angles are centered at 45 degrees and constrained to 10 to 80 degrees.
 If there are too many accumulators sharing the same onset, spacing is reduced
 uniformly within that onset group.</p></dd>
 
@@ -134,7 +134,7 @@ from top-to-bottom. This only affects accumulators sharing the same onset.</p></
 
 
 <dt id="arg-show-labels">show_labels<a class="anchor" aria-label="anchor" href="#arg-show-labels"></a></dt>
-<dd><p>If `TRUE`, add accumulator labels near the line endpoints.</p></dd>
+<dd><p>If <code>TRUE</code>, add accumulator labels near the line endpoints.</p></dd>
 
 
 <dt id="arg-main">main<a class="anchor" aria-label="anchor" href="#arg-main"></a></dt>
@@ -150,13 +150,13 @@ from top-to-bottom. This only affects accumulators sharing the same onset.</p></
 
 
 <dt id="arg--">...<a class="anchor" aria-label="anchor" href="#arg--"></a></dt>
-<dd><p>Additional arguments passed to `graphics::plot`.</p></dd>
+<dd><p>Additional arguments passed to <code><a href="https://rdrr.io/r/graphics/plot.default.html" class="external-link">graphics::plot</a></code>.</p></dd>
 
 </dl></div>
     <div class="section level2">
     <h2 id="value">Value<a class="anchor" aria-label="anchor" href="#value"></a></h2>
     <p>Invisibly returns a list with plotting coordinates and inferred
-  structural links.</p>
+structural links.</p>
     </div>
 
     <div class="section level2">

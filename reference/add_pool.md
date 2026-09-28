@@ -1,7 +1,9 @@
 # Pool several accumulators under a shared label
 
-Pools let you talk about several accumulators as one source when
-defining observed responses.
+A pool finishes when its `k`th member finishes. Use the pool label in
+[`add_outcome()`](https://niekstevenson.github.io/AccumulatR/reference/add_outcome.md),
+another pool, or
+[`after()`](https://niekstevenson.github.io/AccumulatR/reference/after.md).
 
 ## Usage
 
@@ -13,7 +15,7 @@ add_pool(spec, id, members, k = 1L)
 
 - spec:
 
-  A \`race_spec\` object.
+  A `race_spec` object.
 
 - id:
 
@@ -21,19 +23,22 @@ add_pool(spec, id, members, k = 1L)
 
 - members:
 
-  Accumulator labels included in the pool.
+  Accumulator or pool labels included in the pool.
 
 - k:
 
-  Threshold for a \`k\`-of-\`n\` pool rule.
+  Number of members that must finish, from `1` to `length(members)`. The
+  default `1` gives the first member's finishing time.
 
 ## Value
 
-The updated \`race_spec\`.
+The updated `race_spec`.
 
 ## Examples
 
 ``` r
 spec <- race_spec()
+spec <- add_accumulator(spec, "A", "lognormal")
+spec <- add_accumulator(spec, "B", "lognormal")
 spec <- add_pool(spec, "P1", members = c("A", "B"), k = 1L)
 ```

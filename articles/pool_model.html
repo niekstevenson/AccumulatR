@@ -92,9 +92,12 @@ accumulator.</p>
 <pre><code><span><span class="co">## The following object is masked from 'package:stats':</span></span>
 <span><span class="co">## </span></span>
 <span><span class="co">##     simulate</span></span></code></pre>
-<p><strong>Define the model</strong> We use three lognormal accumulators
-feeding a pooled response <code>A</code>, plus one lognormal accumulator
-feeding response <code>B</code>.</p>
+<div class="section level2">
+<h2 id="define-the-model">Define the model<a class="anchor" aria-label="anchor" href="#define-the-model"></a>
+</h2>
+<p>We use three lognormal accumulators feeding a pooled response
+<code>A</code>, plus one lognormal accumulator feeding response
+<code>B</code>.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">model</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/race_spec.html">race_spec</a></span><span class="op">(</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"A1"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
@@ -117,8 +120,11 @@ feeding response <code>B</code>.</p>
 <span>  B.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.28</span><span class="op">)</span>,</span>
 <span>  B.s <span class="op">=</span> <span class="fl">0.18</span></span>
 <span><span class="op">)</span></span></code></pre></div>
-<p><strong>Simulate data</strong> We simulate a response and response
-time for each trial.</p>
+</div>
+<div class="section level2">
+<h2 id="simulate-data">Simulate data<a class="anchor" aria-label="anchor" href="#simulate-data"></a>
+</h2>
+<p>We simulate a response and response time for each trial.</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">123456</span><span class="op">)</span></span>
 <span></span>
@@ -140,9 +146,12 @@ time for each trial.</p>
 <span><span class="co">## 751 749</span></span></code></pre>
 <p>When response <code>A</code> is observed, its response time is the
 finishing time of the second finisher of the pool.</p>
-<p><strong>Estimate parameters with <code><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim()</a></code></strong> We
-estimate a shared location and spread for the three pool members, plus
-the location and spread of accumulator <code>B</code>. The spread
+</div>
+<div class="section level2">
+<h2 id="estimate-parameters-with-optim">Estimate parameters with <code>optim()</code><a class="anchor" aria-label="anchor" href="#estimate-parameters-with-optim"></a>
+</h2>
+<p>We estimate a shared location and spread for the three pool members,
+plus the location and spread of accumulator <code>B</code>. The spread
 parameters are optimized on the log scale.</p>
 <div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">prepared</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/prepare_data.html">prepare_data</a></span><span class="op">(</span><span class="va">model</span>, <span class="va">data_df</span><span class="op">)</span></span>
@@ -156,7 +165,7 @@ parameters are optimized on the log scale.</p>
 <span>  <span class="va">params_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span></span>
 <span>    <span class="va">model</span>,</span>
 <span>    <span class="va">est</span>,</span>
-<span>    trial_df <span class="op">=</span> <span class="va">prepared</span></span>
+<span>    n_trials <span class="op">=</span> <span class="va">n_trials</span></span>
 <span>  <span class="op">)</span></span>
 <span>  <span class="va">ll</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/log_likelihood.html">log_likelihood</a></span><span class="op">(</span><span class="va">ctx</span>, <span class="va">prepared</span>, <span class="va">params_df</span><span class="op">)</span></span>
 <span>  <span class="op">-</span><span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">as.numeric</a></span><span class="op">(</span><span class="va">ll</span><span class="op">)</span></span>
@@ -169,15 +178,14 @@ parameters are optimized on the log scale.</p>
 <span>  log_B.s <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.12</span><span class="op">)</span></span>
 <span><span class="op">)</span></span>
 <span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">123456</span><span class="op">)</span></span>
 <span><span class="va">fit</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim</a></span><span class="op">(</span></span>
 <span>  <span class="va">start</span>,</span>
 <span>  <span class="va">neg_loglik</span>,</span>
 <span>  method <span class="op">=</span> <span class="st">"Nelder-Mead"</span>,</span>
 <span>  control <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>maxit <span class="op">=</span> <span class="fl">4000</span>, reltol <span class="op">=</span> <span class="fl">1e-9</span><span class="op">)</span></span>
-<span><span class="op">)</span></span></code></pre></div>
-<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">fit_params</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
+<span><span class="op">)</span></span>
+<span></span>
+<span><span class="va">fit_params</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span></span>
 <span>  A_pool.m <span class="op">=</span> <span class="va">fit</span><span class="op">$</span><span class="va">par</span><span class="op">[[</span><span class="st">"A_pool.m"</span><span class="op">]</span><span class="op">]</span>,</span>
 <span>  A_pool.s <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">fit</span><span class="op">$</span><span class="va">par</span><span class="op">[[</span><span class="st">"log_A_pool.s"</span><span class="op">]</span><span class="op">]</span><span class="op">)</span>,</span>
 <span>  B.m <span class="op">=</span> <span class="va">fit</span><span class="op">$</span><span class="va">par</span><span class="op">[[</span><span class="st">"B.m"</span><span class="op">]</span><span class="op">]</span>,</span>
@@ -191,15 +199,9 @@ parameters are optimized on the log scale.</p>
 <span><span class="op">)</span></span>
 <span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span>true <span class="op">=</span> <span class="va">target</span>, recovered <span class="op">=</span> <span class="va">fit_params</span>, miss <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">target</span> <span class="op">-</span> <span class="va">fit_params</span><span class="op">)</span><span class="op">)</span></span></code></pre></div>
-<pre><code><span><span class="co">##               true  recovered         miss</span></span>
-<span><span class="co">## A_pool.m -1.272966 -1.2749227 0.0019570346</span></span>
-<span><span class="co">## A_pool.s  0.160000  0.1605954 0.0005954359</span></span>
-<span><span class="co">## B.m      -1.272966 -1.2731653 0.0001996564</span></span>
-<span><span class="co">## B.s       0.180000  0.1768839 0.0031160588</span></span></code></pre>
-<p>The code path is the same as in a basic race model. The difference is
-that the observed response <code>A</code> now depends on a pooled
-completion rule rather than a single accumulator.</p>
-  </main>
+</div>
+  </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
+    </nav></aside>
 </div>
 
 

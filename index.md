@@ -31,7 +31,7 @@ remotes::install_github("niekstevenson/AccumulatR")
 4.  Evaluate the log-likelihood of observed data under candidate
     parameters.
 
-## Small Example
+## A two-choice race
 
 The example below defines a two-choice race model, simulates
 response-time data, and then evaluates the likelihood of those same data
@@ -55,7 +55,7 @@ pars <- c(
   t0 = 0
 )
 
-param_df <- build_param_matrix(spec, pars, n_trials = 8)
+param_df <- build_param_matrix(model, pars, n_trials = 8)
 sim <- simulate(model, param_df, seed = 123)
 head(sim[c("trials", "R", "rt")])
 
@@ -71,5 +71,21 @@ that means a response column (`R`) and a response-time column (`rt`).
 then evaluates how probable those data are under a set of model
 parameters.
 
-For longer worked examples, see the package articles on the pkgdown
-site.
+Parameters with the same name are shared by default. Use
+[`set_parameters()`](https://niekstevenson.github.io/AccumulatR/reference/set_parameters.md)
+to give accumulators separate values, and `par_names(model)` to see the
+names accepted by
+[`build_param_matrix()`](https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.md).
+The parameter matrix has one row per accumulator per trial; the
+simulated data have one row per trial.
+
+Prepare the observations and build the context once, then reuse them
+while evaluating candidate parameter matrices for the same model.
+
+Start with [Getting
+Started](https://niekstevenson.github.io/AccumulatR/articles/getting_started.html)
+for the data conventions, or [Supported
+Distributions](https://niekstevenson.github.io/AccumulatR/articles/distributions.html)
+for parameter definitions. The [function
+reference](https://niekstevenson.github.io/AccumulatR/reference/index.html)
+describes each argument and return value.

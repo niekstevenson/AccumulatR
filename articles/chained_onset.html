@@ -89,9 +89,12 @@ accumulator <code>B</code> has finished.</p>
 <pre><code><span><span class="co">## The following object is masked from 'package:stats':</span></span>
 <span><span class="co">## </span></span>
 <span><span class="co">##     simulate</span></span></code></pre>
-<p><strong>Define the model</strong> <code>A</code> is directly
-observed. <code>B</code> is latent. <code>C</code> is observed and
-starts only after <code>B</code> has finished.</p>
+<div class="section level2">
+<h2 id="define-the-model">Define the model<a class="anchor" aria-label="anchor" href="#define-the-model"></a>
+</h2>
+<p><code>A</code> is directly observed. <code>B</code> is latent.
+<code>C</code> is observed and starts only after <code>B</code> has
+finished.</p>
 <div class="sourceCode" id="cb4"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">model</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/race_spec.html">race_spec</a></span><span class="op">(</span><span class="op">)</span> <span class="op">|&gt;</span></span>
 <span>  <span class="fu"><a href="../reference/add_accumulator.html">add_accumulator</a></span><span class="op">(</span><span class="st">"A"</span>, <span class="st">"lognormal"</span><span class="op">)</span> <span class="op">|&gt;</span></span>
@@ -110,8 +113,12 @@ starts only after <code>B</code> has finished.</p>
 <span>  C.m <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.15</span><span class="op">)</span>,</span>
 <span>  C.s <span class="op">=</span> <span class="fl">0.1</span></span>
 <span><span class="op">)</span></span></code></pre></div>
-<p><strong>Simulate data</strong> Each trial contributes an observed
-response label and response time.</p>
+</div>
+<div class="section level2">
+<h2 id="simulate-data">Simulate data<a class="anchor" aria-label="anchor" href="#simulate-data"></a>
+</h2>
+<p>Each trial contributes an observed response label and response
+time.</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">123456</span><span class="op">)</span></span>
 <span></span>
@@ -131,8 +138,11 @@ response label and response time.</p>
 <pre><code><span><span class="co">## </span></span>
 <span><span class="co">##    A    C </span></span>
 <span><span class="co">##  446 1554</span></span></code></pre>
-<p><strong>Estimate parameters with <code><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim()</a></code></strong> We
-estimate <code>A.m</code>, <code>A.s</code>, <code>B.m</code>,
+</div>
+<div class="section level2">
+<h2 id="estimate-parameters-with-optim">Estimate parameters with <code>optim()</code><a class="anchor" aria-label="anchor" href="#estimate-parameters-with-optim"></a>
+</h2>
+<p>We estimate <code>A.m</code>, <code>A.s</code>, <code>B.m</code>,
 <code>B.s</code>, <code>C.m</code>, and <code>C.s</code>. The spread
 parameters are optimized on the log scale.</p>
 <div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
@@ -146,7 +156,7 @@ parameters are optimized on the log scale.</p>
 <span>  <span class="va">params_df</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/build_param_matrix.html">build_param_matrix</a></span><span class="op">(</span></span>
 <span>    <span class="va">model</span>,</span>
 <span>    <span class="va">est</span>,</span>
-<span>    trial_df <span class="op">=</span> <span class="va">prepared</span></span>
+<span>    n_trials <span class="op">=</span> <span class="va">n_trials</span></span>
 <span>  <span class="op">)</span></span>
 <span>  <span class="va">ll</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/log_likelihood.html">log_likelihood</a></span><span class="op">(</span><span class="va">ctx</span>, <span class="va">prepared</span>, <span class="va">params_df</span><span class="op">)</span></span>
 <span>  <span class="op">-</span><span class="fu"><a href="https://rdrr.io/r/base/numeric.html" class="external-link">as.numeric</a></span><span class="op">(</span><span class="va">ll</span><span class="op">)</span></span>
@@ -161,10 +171,9 @@ parameters are optimized on the log scale.</p>
 <span>  C.s <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">log</a></span><span class="op">(</span><span class="fl">0.10</span><span class="op">)</span></span>
 <span><span class="op">)</span></span>
 <span></span>
-<span><span class="fu"><a href="https://rdrr.io/r/base/Random.html" class="external-link">set.seed</a></span><span class="op">(</span><span class="fl">123456</span><span class="op">)</span></span>
-<span><span class="va">fit</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim</a></span><span class="op">(</span><span class="va">start</span>, <span class="va">neg_loglik</span>, method <span class="op">=</span> <span class="st">"Nelder-Mead"</span><span class="op">)</span></span></code></pre></div>
-<div class="sourceCode" id="cb8"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="va">fit_params</span> <span class="op">&lt;-</span> <span class="va">fit</span><span class="op">$</span><span class="va">par</span></span>
+<span><span class="va">fit</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/stats/optim.html" class="external-link">optim</a></span><span class="op">(</span><span class="va">start</span>, <span class="va">neg_loglik</span>, method <span class="op">=</span> <span class="st">"Nelder-Mead"</span><span class="op">)</span></span>
+<span></span>
+<span><span class="va">fit_params</span> <span class="op">&lt;-</span> <span class="va">fit</span><span class="op">$</span><span class="va">par</span></span>
 <span><span class="va">fit_params</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="va">fit_params</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.s"</span>, <span class="st">"B.s"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span></span>
 <span><span class="va">target</span> <span class="op">&lt;-</span> <span class="va">true_params</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"A.m"</span>, <span class="st">"A.s"</span>, <span class="st">"B.m"</span>, <span class="st">"B.s"</span>, <span class="st">"C.m"</span>, <span class="st">"C.s"</span><span class="op">)</span><span class="op">]</span></span>
 <span></span>
@@ -173,17 +182,14 @@ parameters are optimized on the log scale.</p>
 <span>  recovered <span class="op">=</span> <span class="va">fit_params</span>,</span>
 <span>  miss <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">target</span> <span class="op">-</span> <span class="va">fit_params</span><span class="op">)</span></span>
 <span><span class="op">)</span></span></code></pre></div>
-<pre><code><span><span class="co">##          true   recovered        miss</span></span>
-<span><span class="co">## A.m -1.272966 -1.25003011 0.022935562</span></span>
-<span><span class="co">## A.s  0.140000  0.09451568 0.045484321</span></span>
-<span><span class="co">## B.m -2.302585 -2.84037595 0.537790857</span></span>
-<span><span class="co">## B.s  0.100000  0.02842790 0.071572096</span></span>
-<span><span class="co">## C.m -1.897120 -1.64098410 0.256135882</span></span>
-<span><span class="co">## C.s  0.100000  0.10959761 0.009597612</span></span></code></pre>
-<p>Use chained onsets when the model requires a staged dependency
-between processes. We do note that these models can suffer from weak
-identifiability. So use with care!</p>
-  </main>
+<p>Only the combined finishing time of <code>B</code> and <code>C</code>
+is observed through response <code>C</code>. Separating their timing
+parameters can therefore be difficult. Additional observations of the
+stages or constraints on their parameters can help identify the
+individual contributions.</p>
+</div>
+  </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
+    </nav></aside>
 </div>
 
 

@@ -1,6 +1,8 @@
 # Define a response that occurs when the first listed process finishes
 
-Define a response that occurs when the first listed process finishes
+Return a rule whose finishing time is the earliest completion among its
+arguments. Each argument must contain an event that can generate a
+response.
 
 ## Usage
 
@@ -12,7 +14,7 @@ first_of(...)
 
 - ...:
 
-  Accumulator labels or expression objects to combine with OR.
+  Accumulator labels, pool labels, or response expressions.
 
 ## Value
 
@@ -33,9 +35,6 @@ first_of("A", "B")
 #> $args[[1]]$source
 #> [1] "A"
 #> 
-#> $args[[1]]$k
-#> NULL
-#> 
 #> 
 #> $args[[2]]
 #> $args[[2]]$kind
@@ -43,9 +42,6 @@ first_of("A", "B")
 #> 
 #> $args[[2]]$source
 #> [1] "B"
-#> 
-#> $args[[2]]$k
-#> NULL
 #> 
 #> 
 #> 

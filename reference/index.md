@@ -27,21 +27,19 @@ model.
   : Control parameter grouping and names
 - [`add_trigger()`](https://niekstevenson.github.io/AccumulatR/reference/add_trigger.md)
   : Add a shared absence trigger
-- [`set_metadata()`](https://niekstevenson.github.io/AccumulatR/reference/set_metadata.md)
-  : Store model-level metadata
 - [`set_mixture()`](https://niekstevenson.github.io/AccumulatR/reference/set_mixture.md)
   : Control how mixture components are combined
 - [`finalize_model()`](https://niekstevenson.github.io/AccumulatR/reference/finalize_model.md)
-  : Compile a model for simulation and fitting
+  : Finalize a model for simulation and fitting
 - [`complexity_metrics()`](https://niekstevenson.github.io/AccumulatR/reference/complexity_metrics.md)
-  : Return compiled exact complexity metrics
+  : Inspect the size of a compiled likelihood plan
 
 ## Outcome Expressions and Timing
 
 Compose outcome rules and onset dependencies.
 
 - [`build_outcome_expr()`](https://niekstevenson.github.io/AccumulatR/reference/build_outcome_expr.md)
-  : Turn a response rule into an internal expression
+  : Build a response rule from a quoted expression
 - [`all_of()`](https://niekstevenson.github.io/AccumulatR/reference/all_of.md)
   : Define a response that requires several processes to finish
 - [`first_of()`](https://niekstevenson.github.io/AccumulatR/reference/first_of.md)
@@ -60,7 +58,7 @@ Inspect model parameters and prepare trial-level parameter matrices.
 - [`prepare_data()`](https://niekstevenson.github.io/AccumulatR/reference/prepare_data.md)
   : Prepare behavioral data for likelihood evaluation
 - [`par_names()`](https://niekstevenson.github.io/AccumulatR/reference/par_names.md)
-  : List the free parameters implied by a model
+  : List the parameter names used by a model
 - [`build_param_matrix()`](https://niekstevenson.github.io/AccumulatR/reference/build_param_matrix.md)
   : Create trial-level parameter values
 

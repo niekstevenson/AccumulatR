@@ -3,7 +3,8 @@
 Components are useful when trials can come from qualitatively different
 processing modes, such as fast versus slow processing. Component
 declarations define membership only; component probabilities are
-configured with \`set_mixture()\`.
+configured with
+[`set_mixture()`](https://niekstevenson.github.io/AccumulatR/reference/set_mixture.md).
 
 ## Usage
 
@@ -15,7 +16,7 @@ add_component(spec, id, members, n_outcomes = NULL)
 
 - spec:
 
-  A \`race_spec\` object.
+  A `race_spec` object.
 
 - id:
 
@@ -32,4 +33,4 @@ add_component(spec, id, members, n_outcomes = NULL)
 
 ## Value
 
-The updated \`race_spec\`.
+The updated `race_spec`.

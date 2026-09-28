@@ -13,9 +13,8 @@
 \texttt{AccumulatR} is built around one simple idea: each latent process has a
 random finishing time, and responses are defined by rules about the relative
 order of those finishing times. This note gives a compact mathematical
-description of that framework. The aim is not maximal generality. The aim is a
-notation that is simple enough to read from start to finish and precise enough
-to match the package.
+description of the finishing-time distributions, response rules, and observation
+probabilities implemented by the package.
 \end{abstract}
 
 \section{Overview}
@@ -56,7 +55,7 @@ Outcome rules are slightly more general: they may become true in several
 different ways, and those ways may share latent sources with other rules.
 
 Different leaves may have different finishing-time distributions. The package
-currently supplies the families
+supplies the families
 \[
 \texttt{lognormal}, \qquad \texttt{gamma}, \qquad \texttt{exgauss}, \qquad
 \texttt{LBA}, \qquad \texttt{RDM}.
@@ -83,7 +82,8 @@ F_P(t)
 That is the cleanest way to think about a pool: by time $t$, the pool has
 finished exactly when enough of its members have finished.
 
-If the pool members are exchangeable, with common CDF $F$ and density $f$, then
+If the pool members are independent and identically distributed, with common
+CDF $F$ and density $f$, then
 \begin{equation}
 F_P(t) = \sum_{m=k}^n \binom{n}{m} F(t)^m S(t)^{n-m},
 \label{eq:pool-cdf-iid}
@@ -98,11 +98,10 @@ f(t)\,F(t)^{k-1}S(t)^{n-k}.
 \end{equation}
 These are the usual formulas for the $k$th finisher.
 
-The package also allows pools with non-identical members and nested pools. In
-those cases the product formulas are no longer the main definition. The pool is
-compiled as order constraints over its members. If a pool shares a member with
-another source or rule, that shared latent time remains shared in the compiled
-region.
+The package also allows pools with non-identical members and nested pools.
+Their distributions follow from the order constraints over their members.
+If a pool shares a member with another source or rule, that shared latent time
+remains shared in the compiled region.
 
 \section{Outcome Rules}
 
@@ -506,7 +505,8 @@ S_a(t) = q_a + (1-q_a)S_a^\dagger(t).
 
 \paragraph{Shared trigger.}
 If several leaves share one trigger with absence probability $q_g$, then they
-either all start together or all fail together. The trial likelihood is a
+are either all available to start at their specified onsets or all absent.
+The trial likelihood is a
 mixture over trigger states:
 \begin{equation}
 L = (1-q_g)L^{(\mathrm{on})} + q_g L^{(\mathrm{off})}.
@@ -588,7 +588,7 @@ L_{\mathrm{rank}}
 where $H_{m-1}$ is the history and latent sequence state after the first
 $m-1$ observed responses.
 
-For direct, disjoint outcomes this reduces to the familiar simple formula
+For direct outcomes with independent finishing times, this reduces to
 \begin{equation}
 L_{\mathrm{rank}}
 =
@@ -596,9 +596,10 @@ L_{\mathrm{rank}}
 \left[\prod_{j \notin \{r_1,\dots,r_K\}} S_j(t_K)\right].
 \label{eq:rank-simple}
 \end{equation}
-The exact implementation uses the more general sequential step distribution,
-so structured outcomes can still be represented through the same compiled
-transition machinery.
+Ranked readouts support direct accumulator and pool outcomes, including chained
+onsets. Logical outcome expressions, guessing, remapping, censoring, and
+truncation are unsupported for ranked data. Dependence between supported
+outcomes is handled by the sequential step distribution.
 
 \section{Compiled Evaluation}
 

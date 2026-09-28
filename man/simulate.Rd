@@ -16,36 +16,41 @@ simulate(
 \arguments{
 \item{structure}{Finalized model structure.}
 
-\item{params_df}{Canonical parameter matrix from `build_param_matrix()`.}
+\item{params_df}{Parameter matrix from \code{\link[=build_param_matrix]{build_param_matrix()}}, with one row
+per accumulator per trial, in the order accumulators were added to the model.}
 
 \item{trial_df}{Optional trial-by-accumulator conditioning table containing
-complete `trials`/`racer` blocks in model order. It may supply per-trial
-`component` and per-accumulator `onset` values.}
+complete \code{trials}/\code{racer} blocks in model order. It may supply per-trial
+\code{component} and per-accumulator \code{onset} values. Repeat a component label
+across all rows of its trial; \code{NA} draws a component from the mixture.
+An onset value replaces a fixed onset or adds a delay to a chained onset;
+\code{NA} uses the onset specified in the model.}
 
-\item{seed}{Optional random-number seed.}
+\item{seed}{Optional seed passed to \code{\link[=set.seed]{set.seed()}}. If \code{NULL}, use the current
+state of R's random-number generator.}
 
-\item{keep_detail}{If `TRUE`, include latent source times and outcome candidates.
-Inactive or unreachable sources have infinite completion times.}
+\item{keep_detail}{If \code{TRUE}, attach a \code{details} list containing latent
+source times and outcome candidates for each trial. Inactive or unreachable
+sources have infinite completion times.}
 
 \item{keep_component}{Whether to keep the chosen mixture component in the
-output when the model has multiple components. If `NULL`, fixed mixtures
+output when the model has multiple components. If \code{NULL}, fixed mixtures
 keep the component label and sampled mixtures drop it.}
 }
 \value{
-A data frame of simulated behavioral data. For standard models this
-  includes `trials`, `R`, and `rt`. If `n_outcomes > 1`, additional ordered
-  response columns such as `R2`/`rt2` are included.
+A data frame with one row per trial and columns \code{trials}, \code{R}, and
+\code{rt}. A trial with no observed response has \code{R = NA} and \code{rt = NA}.
+If \code{n_outcomes > 1}, additional ordered response pairs such as \code{R2}/\code{rt2}
+are included; unobserved later ranks are \code{NA}.
 }
 \description{
-Simulate behavioral data from a model
+Generate one trial for each accumulator block in \code{params_df}, using the
+model's response rules, timing dependencies, triggers, and mixture weights.
 }
 \details{
-Simulation uses R's random-number generator from C++. Its compiled
-  plan is cached on the finalized model and rebuilt after serialization.
-  Execution trusts the canonical parameter matrix and complete conditioning
-  table supplied by the caller; it does not validate them.
-  Seeds are reproducible within this implementation, but do not reproduce
-  the former R simulator's random-number sequence.
+Use the same model to build \code{params_df} and simulate the data.
+Supply valid parameter values and keep the matrix and conditioning table
+in matching row order; simulation does not check their layout or domains.
 }
 \examples{
 spec <- race_spec()
@@ -55,4 +60,7 @@ structure <- finalize_model(spec)
 params <- c(m = 0, s = 0.1)
 df <- build_param_matrix(structure, params, n_trials = 3)
 simulate(structure, df, seed = 123)
+}
+\seealso{
+\code{\link[=prepare_data]{prepare_data()}}, \code{\link[=log_likelihood]{log_likelihood()}}, \code{\link[=set_mixture]{set_mixture()}}
 }

@@ -7,22 +7,25 @@
 add_pool(spec, id, members, k = 1L)
 }
 \arguments{
-\item{spec}{A `race_spec` object.}
+\item{spec}{A \code{race_spec} object.}
 
 \item{id}{Label for the pool.}
 
-\item{members}{Accumulator labels included in the pool.}
+\item{members}{Accumulator or pool labels included in the pool.}
 
-\item{k}{Threshold for a `k`-of-`n` pool rule.}
+\item{k}{Number of members that must finish, from \code{1} to \code{length(members)}.
+The default \code{1} gives the first member's finishing time.}
 }
 \value{
-The updated `race_spec`.
+The updated \code{race_spec}.
 }
 \description{
-Pools let you talk about several accumulators as one source when defining
-observed responses.
+A pool finishes when its \code{k}th member finishes. Use the pool label in
+\code{\link[=add_outcome]{add_outcome()}}, another pool, or \code{\link[=after]{after()}}.
 }
 \examples{
 spec <- race_spec()
+spec <- add_accumulator(spec, "A", "lognormal")
+spec <- add_accumulator(spec, "B", "lognormal")
 spec <- add_pool(spec, "P1", members = c("A", "B"), k = 1L)
 }

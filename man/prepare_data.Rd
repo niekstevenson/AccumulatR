@@ -9,33 +9,62 @@ prepare_data(structure, data_df, compress = FALSE)
 \arguments{
 \item{structure}{Finalized model structure.}
 
-\item{data_df}{Behavioral data. In the simplest case this contains `trials`,
-`R`, and `rt`; for multi-outcome models it can also contain `R2`, `rt2`,
-and so on. Optional `LT`/`UT` columns define a truncation window. For a
-censored trial, set `rt = NA` and use `missingness = 1` for `[LT, LC)`,
-`2` for `(UC, UT]`, or `3` for their union; `R` may retain the known
-response or be `NA`. Uncensored trials use `missingness = NA`. Missing
-bounds default to `LT = LC = 0` and `UC = UT = Inf`. Codes 1--3 apply to
-the response observation, not to individual accumulators. Censoring and
-truncation are not supported for ranked observations.}
+\item{data_df}{Data frame with response labels \code{R} and numeric response times
+\code{rt}, usually one row per trial. Labels must match the model's outcomes.
+Optional columns specify \code{component}, \code{onset}, ranked responses (\code{R2},
+\code{rt2}, and so on), or censoring and truncation; see Details.}
 
-\item{compress}{If `TRUE`, collapse repeated prepared trials and attach
-an `expand` index so `log_likelihood()` can return trial-level values on
-the original trial scale.
-Defaults to `FALSE`.}
+\item{compress}{If \code{TRUE}, collapse repeated prepared trials and attach
+an \code{expand} index mapping original trials to retained trials. Use only
+when repeated observations also share parameter values. Supply parameters
+and \code{ok} for the retained trials; \code{\link[=log_likelihood]{log_likelihood()}} expands the returned
+values to the original trial order.}
 }
 \value{
-An `accumulatr_data` object.
+A data frame of class \code{accumulatr_data}, with accumulator rows grouped
+by trial and ordered as in the model. Response and component labels are
+factors with model-defined levels; attributes store the likelihood layout.
 }
 \description{
-`prepare_data()` expands trial-level observations to the accumulator layout
-expected by the compiled likelihood code and tags the result as trusted
-likelihood input.
+Check response labels, times, and observation conditions, and arrange the
+data into one row per accumulator per trial for \code{\link[=log_likelihood]{log_likelihood()}}.
 }
 \details{
-The likelihood for an active truncation window is conditioned on a
-  observable response in `[LT, UT]`. Censoring comparisons are strict, so
-  observations exactly at `LC` or `UC` remain uncensored.
+\strong{Trial layout.} Without a \code{racer} column, each row is one trial. Trials
+are numbered consecutively in input order. To supply accumulator-specific
+onsets, include \code{trials} and \code{racer} columns with one complete accumulator
+block per trial in model order. Repeat each trial's response and component
+values across its block. An \code{onset} replaces a fixed onset or adds an offset
+to a chained onset. Omit it to use model defaults.
+
+\strong{Mixtures.} A nonmissing \code{component} label conditions on that component.
+An omitted or \code{NA} label averages over the model's mixture probabilities.
+
+\strong{Missing observations.} For single-response models, \code{R = NA} and \code{rt = NA}
+denote no observed response. A finite \code{rt} requires a response label.
+A known response with \code{rt = NA} requires a censoring code or a model with
+an observation rule such as \code{guess} or \code{map_outcome_to}.
+
+\strong{Ranked responses.} Supply paired columns \code{R2}/\code{rt2}, \code{R3}/\code{rt3}, and so
+on. The first pair must be observed. Labels cannot repeat, and observed
+times must increase strictly. Later pairs may both be \code{NA}; all subsequent
+ranks must then also be missing. Ranked observations support neither
+censoring/truncation nor guessing/remapping rules.
+
+\strong{Censoring and truncation.} \code{LT} and \code{UT} define the observation window.
+An active truncation window conditions the likelihood on an observable
+response with \eqn{LT \le rt \le UT}. For a censored trial set \code{rt = NA}
+and use:
+\itemize{
+\item \code{missingness = 1} for \eqn{LT \le rt < LC};
+\item \code{missingness = 2} for \eqn{UC < rt \le UT};
+\item \code{missingness = 3} for the union of those intervals.
+}
+
+\code{R} may retain a known response or be \code{NA}. Uncensored trials use
+\code{missingness = NA}. Missing bounds default to \code{LT = LC = 0} and
+\code{UC = UT = Inf}. These bounds describe the recorded response time.
+Times exactly at \code{LC} or \code{UC} remain uncensored.
 }
 \examples{
 spec <- race_spec()

@@ -7,14 +7,16 @@
 none_of(expr)
 }
 \arguments{
-\item{expr}{Accumulator label or expression to negate.}
+\item{expr}{Accumulator label, pool label, or expression to negate.}
 }
 \value{
 An expression object.
 }
 \description{
-Define the absence of an event
+Use inside \code{\link[=all_of]{all_of()}} to require that \code{expr} has not finished before the
+conjunction completes. Absence supplies a condition, not a response time,
+so it cannot be an outcome on its own or a standalone \code{\link[=first_of]{first_of()}} branch.
 }
 \examples{
-none_of("A")
+all_of("go", none_of("stop"))
 }

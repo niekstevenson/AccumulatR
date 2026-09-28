@@ -9,10 +9,10 @@ after(source, lag = 0)
 \arguments{
 \item{source}{Accumulator or pool label that must finish first.}
 
-\item{lag}{Optional non-negative delay added after `source` finishes.}
+\item{lag}{Optional non-negative delay added after \code{source} finishes.}
 }
 \value{
-A chained-onset specification for `add_accumulator(onset = ...)`.
+A chained-onset specification for \code{add_accumulator(onset = ...)}.
 }
 \description{
 This is useful for staged or contingent architectures, where one process can

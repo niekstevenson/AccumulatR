@@ -15,7 +15,8 @@ absence draw. Separate trigger calls create independent absence draws.
 library(AccumulatR)
 ```
 
-**Define the model**
+## Define the model
+
 We use two lognormal accumulators and one shared trigger. The trigger parameter
 is named `shared_trigger`.
 
@@ -41,7 +42,8 @@ true_params <- c(
 The trigger probability is supplied in the same parameter vector as the timing
 parameters.
 
-**Simulate data**
+## Simulate data
+
 Failed trigger trials appear as missing responses and missing response times.
 
 ```{r}
@@ -62,7 +64,8 @@ data_df <- data.frame(
 table(data_df$R, useNA = "ifany")
 ```
 
-**Evaluate the likelihood**
+## Evaluate the likelihood
+
 We prepare the data, build a model context, and evaluate the shared-trigger
 model under the true parameter values.
 
@@ -126,7 +129,8 @@ model_single_q <- race_spec() |>
   finalize_model()
 ```
 
-**Estimate parameters with `optim()`**
+## Estimate parameters with `optim()`
+
 We estimate `go1.m`, `go1.s`, `go2.m`, and `go2.s`, while keeping the trigger
 probability fixed in the parameter vector passed to the likelihood.
 
@@ -159,18 +163,7 @@ fit <- optim(
   method = "Nelder-Mead",
   control = list(maxit = 4000, reltol = 1e-9)
 )
-```
 
-```{r include=FALSE}
-fit <- list(par = c(
-  go1.m = -1.2032386501665,
-  log_go1.s = -1.67246934766387,
-  go2.m = -1.05352509067962,
-  log_go2.s = -1.72490151888658
-))
-```
-
-```{r}
 fit_params <- c(
   go1.m = fit$par[["go1.m"]],
   go1.s = exp(fit$par[["log_go1.s"]]),

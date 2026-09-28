@@ -81,7 +81,7 @@
 #' @param ylim Y-axis limits.
 #' @param line_length Length of each accumulator trajectory in plot units.
 #' @param angle_dodge Target angular spacing in degrees between neighbouring accumulators.
-#'   Angles are centered at 45 degrees and constrained to the interval [10, 80].
+#'   Angles are centered at 45 degrees and constrained to 10 to 80 degrees.
 #'   If there are too many accumulators sharing the same onset, spacing is reduced
 #'   uniformly within that onset group.
 #' @param accumulator_order Optional character vector of accumulator labels, ordered

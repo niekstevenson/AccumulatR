@@ -2,16 +2,21 @@
 % Please edit documentation in R/likelihood_param_interface.R
 \name{complexity_metrics}
 \alias{complexity_metrics}
-\title{Return compiled exact complexity metrics}
+\title{Inspect the size of a compiled likelihood plan}
 \usage{
 complexity_metrics(context)
 }
 \arguments{
-\item{context}{Context created with `make_context(diagnostics = TRUE)`.}
+\item{context}{Context created with \code{make_context(diagnostics = TRUE)}.}
 }
 \value{
-A list with per-variant and total symbolic/compiled metrics.
+A list containing a \code{variants} data frame and a \code{total} list.
+Each variant is a compiled component plan. Columns count symbolic regions
+and cells, compiled roots and nodes, and integral kernels. Fields beginning
+with \code{max_} report maxima; other total fields sum across variants.
 }
 \description{
-Return compiled exact complexity metrics
+Report how many symbolic regions, numerical operations, and integration
+kernels the model requires. Use these counts to investigate models whose
+context construction or likelihood evaluation is expensive.
 }

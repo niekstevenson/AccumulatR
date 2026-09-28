@@ -19,9 +19,9 @@ The hot path must not reconstruct data frames or matrices, inspect names or
 classes, resolve string ids, infer model shape, or repair malformed compiled
 state. Invalid compiled state is a construction bug, not an evaluation case.
 
-Checks that define model semantics remain numeric runtime work. These include
-empty integration domains, impossible events, distribution domains, finite
-observations, censoring, truncation, and numerical convergence.
+Runtime branches define mathematical support, empty integration domains,
+impossible events, censoring, truncation, and numerical convergence.
+Parameter-domain validation belongs to parameter preparation.
 
 ## Compilation owns structure
 
@@ -46,8 +46,7 @@ plan contains fewer operations. A complex model adds the operations required by
 its declared structure. Generality must not be implemented as a second generic
 runtime engine or model-specific likelihood formulas.
 
-New functionality belongs in semantic lowering or the generic numerical kernel
-layer. Once a compiled path replaces an old path, the old path is deleted.
+New functionality belongs in semantic lowering or the numerical kernel layer.
 
 ## Workspace and lane execution
 
@@ -86,17 +85,9 @@ Benchmark and profile output belongs in the ignored
 
 ## Verification
 
-Evaluator changes must preserve the mathematical model, not merely reproduce an
-older engine. Relevant analytic and adversarial validation cases must pass.
-Benchmarks must cover both simple and complex compiled plans so complexity does
-not leak into ordinary models.
-
-Before accepting evaluator work, answer:
-
-1. What structure moved into compilation?
-2. What runtime discovery, check, allocation, or old path was deleted?
-3. Does the change apply through a general lowering or numerical kernel?
-4. Which benchmark rows changed?
-5. What did the matching profile identify before and after?
-6. Which validation cases establish semantic equivalence?
-7. Is there still exactly one semantic execution framework?
+Validate evaluator changes against independent analytic and adversarial
+references. Benchmark simple and complex compiled plans, including small races
+where call overhead matters. A performance report should state the workloads,
+timing boundaries, numerical differences, and profile evidence for the measured
+costs. See [validation](validation/README.md) for the available checks and
+[integral evaluation](scripts/cumulative_integrals.md) for benchmark usage.

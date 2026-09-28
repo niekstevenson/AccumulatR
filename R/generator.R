@@ -2,26 +2,34 @@
 
 #' Simulate behavioral data from a model
 #'
+#' Generate one trial for each accumulator block in `params_df`, using the
+#' model's response rules, timing dependencies, triggers, and mixture weights.
+#'
 #' @param structure Finalized model structure.
-#' @param params_df Canonical parameter matrix from `build_param_matrix()`.
+#' @param params_df Parameter matrix from [build_param_matrix()], with one row
+#'   per accumulator per trial, in the order accumulators were added to the model.
 #' @param trial_df Optional trial-by-accumulator conditioning table containing
 #'   complete `trials`/`racer` blocks in model order. It may supply per-trial
-#'   `component` and per-accumulator `onset` values.
-#' @param seed Optional random-number seed.
-#' @param keep_detail If `TRUE`, include latent source times and outcome candidates.
-#'   Inactive or unreachable sources have infinite completion times.
+#'   `component` and per-accumulator `onset` values. Repeat a component label
+#'   across all rows of its trial; `NA` draws a component from the mixture.
+#'   An onset value replaces a fixed onset or adds a delay to a chained onset;
+#'   `NA` uses the onset specified in the model.
+#' @param seed Optional seed passed to [set.seed()]. If `NULL`, use the current
+#'   state of R's random-number generator.
+#' @param keep_detail If `TRUE`, attach a `details` list containing latent
+#'   source times and outcome candidates for each trial. Inactive or unreachable
+#'   sources have infinite completion times.
 #' @param keep_component Whether to keep the chosen mixture component in the
 #'   output when the model has multiple components. If `NULL`, fixed mixtures
 #'   keep the component label and sampled mixtures drop it.
-#' @return A data frame of simulated behavioral data. For standard models this
-#'   includes `trials`, `R`, and `rt`. If `n_outcomes > 1`, additional ordered
-#'   response columns such as `R2`/`rt2` are included.
-#' @details Simulation uses R's random-number generator from C++. Its compiled
-#'   plan is cached on the finalized model and rebuilt after serialization.
-#'   Execution trusts the canonical parameter matrix and complete conditioning
-#'   table supplied by the caller; it does not validate them.
-#'   Seeds are reproducible within this implementation, but do not reproduce
-#'   the former R simulator's random-number sequence.
+#' @return A data frame with one row per trial and columns `trials`, `R`, and
+#'   `rt`. A trial with no observed response has `R = NA` and `rt = NA`.
+#'   If `n_outcomes > 1`, additional ordered response pairs such as `R2`/`rt2`
+#'   are included; unobserved later ranks are `NA`.
+#' @details Use the same model to build `params_df` and simulate the data.
+#'   Supply valid parameter values and keep the matrix and conditioning table
+#'   in matching row order; simulation does not check their layout or domains.
+#' @seealso [prepare_data()], [log_likelihood()], [set_mixture()]
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")

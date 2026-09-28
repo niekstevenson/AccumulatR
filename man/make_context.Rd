@@ -9,15 +9,16 @@ make_context(structure, diagnostics = FALSE)
 \arguments{
 \item{structure}{Finalized model structure.}
 
-\item{diagnostics}{If `TRUE`, collect symbolic/compiled complexity metrics.}
+\item{diagnostics}{If \code{TRUE}, collect model compilation statistics for
+\code{\link[=complexity_metrics]{complexity_metrics()}}.}
 }
 \value{
-An `accumulatr_context` object.
+An \code{accumulatr_context} object.
 }
 \description{
-A context stores compiled model/runtime state only. Behavioral data are
-prepared separately with `prepare_data()` and supplied to
-`log_likelihood()`.
+Compile the model's response rules and dependencies for likelihood
+evaluation. Reuse the context across candidate parameter values and datasets
+for the same model. Prepare each dataset with \code{\link[=prepare_data]{prepare_data()}}.
 }
 \examples{
 spec <- race_spec()

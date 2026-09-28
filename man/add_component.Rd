@@ -7,7 +7,7 @@
 add_component(spec, id, members, n_outcomes = NULL)
 }
 \arguments{
-\item{spec}{A `race_spec` object.}
+\item{spec}{A \code{race_spec} object.}
 
 \item{id}{Component label.}
 
@@ -17,11 +17,11 @@ add_component(spec, id, members, n_outcomes = NULL)
 observed ordered responses.}
 }
 \value{
-The updated `race_spec`.
+The updated \code{race_spec}.
 }
 \description{
 Components are useful when trials can come from qualitatively different
 processing modes, such as fast versus slow processing. Component declarations
 define membership only; component probabilities are configured with
-`set_mixture()`.
+\code{set_mixture()}.
 }

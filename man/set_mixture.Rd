@@ -12,22 +12,26 @@ set_mixture(
 )
 }
 \arguments{
-\item{spec}{A `race_spec` object.}
+\item{spec}{A \code{race_spec} object.}
 
-\item{mode}{Mixture mode. Fixed mixtures use known component probabilities;
-sampled mixtures estimate probabilities for all non-reference components.}
+\item{mode}{\code{"fixed"} stores probabilities in the model. \code{"sample"} makes
+probabilities parameters supplied to \code{\link[=build_param_matrix]{build_param_matrix()}}.}
 
 \item{weights}{Named numeric component probabilities for fixed mixtures. If
-`NULL`, fixed mixtures use uniform component probabilities.}
+\code{NULL}, fixed mixtures use uniform component probabilities.}
 
 \item{reference}{Reference component for sampled mixtures. Its probability is
-the residual probability after non-reference component probabilities.}
+one minus the sum of non-reference probabilities. Defaults to the last
+component added to the model.}
 }
 \value{
-The updated `race_spec`.
+The updated \code{race_spec}.
 }
 \description{
 Fixed mixtures use known component probabilities. Sampled mixtures expose
-automatic `p.<component>` parameters for every non-reference component; the
+automatic \verb{p.<component>} parameters for every non-reference component; the
 reference component receives the residual probability.
+Both modes draw a component during simulation. In likelihood evaluation,
+a supplied component label conditions on that component; an absent or \code{NA}
+label averages over components using their probabilities.
 }

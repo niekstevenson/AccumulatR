@@ -1,72 +1,46 @@
-# Not Supported
+# Model and observation limits
 
-This file lists unsupported model and data shapes.
+This page describes the restrictions enforced by model finalization, context
+construction, and data preparation. See the [logical-rule vignette](../vignettes/logical_rules.Rmd)
+and [ranked-response vignette](../vignettes/multi_outcome.Rmd) for supported usage.
 
-## 1. `none_of(...)` as a branch inside `first_of(...)` / `or`
+## Absence conditions need an event
 
-Example model:
+`none_of()` is a condition evaluated when another rule finishes. It cannot
+produce an outcome by itself or serve as a standalone `first_of()` branch.
+For example, `first_of("go", none_of("stop"))` has no response time for its
+absence branch and is rejected during likelihood context construction.
 
-```r
-race_spec() |>
-  add_accumulator("go", "lognormal") |>
-  add_accumulator("stop", "lognormal") |>
-  add_outcome("X", first_of("go", none_of("stop")))
-```
+Use `all_of("go", none_of("stop"))` for a response that requires `go` to
+finish before `stop`. A complete guarded rule can appear inside `first_of()`,
+as in `first_of(all_of("go", none_of("stop")), "alternative")`.
 
-Reason:
+## Ranked responses
 
-- `none_of(stop)` is a passive truth condition, not an event-time arrival.
-- `first_of(...)` / `or` requires a branch to become true first at a specific
-  event time.
-- Mixing those semantics would require treating absence conditions as
-  event-producing branches, which the current exact transition planner does not
-  do cleanly.
+With `n_outcomes > 1`, each outcome must directly name an accumulator or pool.
+Chained onsets are supported. The following are unsupported:
 
-Boundary: `src/eval/exact_transition_lowering.hpp`.
+- logical outcome expressions such as `all_of()`, `first_of()`, or `inhibit()`;
+- `guess` and `map_outcome_to` observation options;
+- multiple labels for the same deterministic event source, including a
+  singleton pool that aliases an accumulator;
+- censoring or truncation of ranked observations.
 
-## 2. Ranked (`n_outcomes > 1`) models that are not direct event outcomes
+The requested rank count cannot exceed the number of declared outcomes.
+Data must contain a first response/time pair. Subsequent pairs may be jointly
+missing, but observed ranks must be consecutive, have distinct labels, and
+have strictly increasing times. Simultaneous ranked observations are unsupported.
 
-Example models:
+## Missing observations
 
-```r
-race_spec(n_outcomes = 2L) |>
-  add_accumulator("a", "lognormal") |>
-  add_accumulator("b", "lognormal") |>
-  add_accumulator("stop", "lognormal") |>
-  add_outcome("A", "a") |>
-  add_outcome("B_guard", inhibit("b", by = "stop"))
-```
+A finite response time requires a response label. In a single-response model,
+`R = NA` and `rt = NA` represent no observed response. A known label with a
+missing response time requires a censoring code or a model with an observation
+rule such as guessing or remapping. A censored trial can retain its known
+response label or use `NA` when the label is unknown.
 
-```r
-race_spec(n_outcomes = 2L) |>
-  add_accumulator("a1", "lognormal") |>
-  add_accumulator("a2", "lognormal") |>
-  add_pool("A", c("a1", "a2")) |>
-  add_accumulator("b", "lognormal") |>
-  add_outcome("R1", "A") |>
-  add_outcome("R2", "b")
-```
+## Timing dependencies
 
-Reason:
-
-- Ranked likelihood is currently restricted to direct event outcomes so that
-  each rank corresponds to one realized event source.
-- Guarded or onset-dependent ranked outcomes would require carrying latent
-  prerequisite-time distributions across later ranks.
-- Pooled, overlapping, or wrapper-based ranked outcomes add extra latent
-  structure or ambiguous observation semantics.
-- Keeping ranked outcomes direct-only avoids reintroducing ad hoc ranked
-  evaluator branches.
-
-Boundary: `.validate_multi_outcome_dsl()` in `R/model_definition.R`.
-
-## 3. Finite RT with missing response label
-
-Example:
-
-```r
-R = NA
-rt = 0.43
-```
-
-Boundary: `.validate_first_rank_trials()` in `R/likelihood_param_interface.R`.
+`after()` can refer to an accumulator or pool. Outcome labels cannot be onset
+sources, and onset dependencies must be acyclic. Its additional lag must be
+finite and nonnegative.

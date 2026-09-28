@@ -7,13 +7,14 @@
 all_of(...)
 }
 \arguments{
-\item{...}{Accumulator labels or expression objects to combine with AND.}
+\item{...}{Accumulator labels, pool labels, or response expressions.}
 }
 \value{
 An expression object.
 }
 \description{
-Define a response that requires several processes to finish
+Return a rule that finishes when all required events have completed.
+Any \code{\link[=none_of]{none_of()}} conditions are checked at that finishing time.
 }
 \examples{
 all_of("A", "B")

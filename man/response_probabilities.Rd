@@ -7,23 +7,24 @@
 response_probabilities(context, parameters, include_na = TRUE)
 }
 \arguments{
-\item{context}{Context created with `make_context()`.}
+\item{context}{Context created with \code{make_context()}.}
 
-\item{parameters}{A canonical parameter matrix created by
-`build_param_matrix()`.}
+\item{parameters}{Parameter matrix from \code{\link[=build_param_matrix]{build_param_matrix()}}. Use
+\code{n_trials = 1} for one set of response probabilities.}
 
-\item{include_na}{If `TRUE`, include residual mass as `"NA"`.}
+\item{include_na}{If \code{TRUE}, include a \code{"NA"} entry when there is residual
+probability of no observed response.}
 }
 \value{
 A named numeric vector of marginal response probabilities. Names are
-  observed outcome labels. When `include_na = TRUE`, a residual `"NA"` entry
-  is included if the model assigns probability mass to unobserved or
-  `NA`-mapped outcomes.
+observed outcome labels. When \code{include_na = TRUE}, a residual \code{"NA"} entry
+is included if the model assigns probability mass to unobserved or
+\code{NA}-mapped outcomes.
 }
 \description{
-`response_probabilities()` evaluates the model-implied marginal probability
-of each observed response label for a compiled context and canonical
-parameter matrix. Mixture components are marginalized according to the model.
+Calculate the probability of each first response, integrated over response
+time and averaged over mixture components. With multiple trial blocks in
+\code{parameters}, return the mean probabilities across those blocks.
 }
 \examples{
 spec <- race_spec() |>

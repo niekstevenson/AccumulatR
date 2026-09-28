@@ -7,17 +7,17 @@ vignette: >
   %\VignetteEncoding{UTF-8}
 ---
 
-Here we show how mixtures work in `AccumulatR`.
-
-Mixtures have two separate pieces:
+Mixture components describe different sets of active accumulators. Two
+choices determine how a mixture is used:
 
 - The model controls how mixture weights are defined. Use
   `set_mixture(mode = "fixed")` when the weights are known in advance, and
   `set_mixture(mode = "sample")` when mixture weights should be estimated.
 - The data control whether the component is observed on a trial. If a
   `component` column is present, likelihood evaluation conditions on that
-  component. If `component` is omitted or set to `NA`, the likelihood and
-  `response_probabilities()` marginalize over components.
+  component. If `component` is omitted or set to `NA`, the likelihood
+  marginalizes over components. `response_probabilities()` always averages
+  over components using their probabilities; it takes no trial data.
 
 ```{r}
 library(AccumulatR)
@@ -94,9 +94,9 @@ data_fixed <- sim_fixed[, c("trials", "R", "rt", "component")]
 table(data_fixed$component, data_fixed$R)
 ```
 
-Because the component is known here, the simulated data keep that label. The
-same pattern applies to real data: if trial type is observed, keep it in a
-`component` column.
+Fixed mixtures include the selected component label in simulation output
+by default. For real data, retain a `component` column when trial type is
+observed. Omit it to evaluate the data as a latent mixture.
 
 ```{r}
 prepared_fixed <- prepare_data(model_fixed, data_fixed)
@@ -216,13 +216,7 @@ neg_loglik <- function(theta) {
 start <- c(logit_p_fast = qlogis(0.60))
 
 fit <- optim(start, neg_loglik, method = "BFGS")
-```
 
-```{r include=FALSE}
-fit <- list(par = c(logit_p_fast = -0.531016185916325))
-```
-
-```{r}
 fit_params <- c(p.fast = plogis(fit$par[["logit_p_fast"]]))
 target <- c(p.fast = true_params_sampled[["p.fast"]])
 

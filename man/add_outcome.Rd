@@ -7,21 +7,36 @@
 add_outcome(spec, label, expr, options = list())
 }
 \arguments{
-\item{spec}{A `race_spec` object.}
+\item{spec}{A \code{race_spec} object.}
 
 \item{label}{Response label that should appear in the behavioral data.}
 
-\item{expr}{Rule describing when that response is observed.}
+\item{expr}{Accumulator or pool label, or a rule built with \code{\link[=first_of]{first_of()}},
+\code{\link[=all_of]{all_of()}}, \code{\link[=none_of]{none_of()}}, \code{\link[=inhibit]{inhibit()}}, or \code{\link[=build_outcome_expr]{build_outcome_expr()}}.}
 
-\item{options}{Optional response settings.}
+\item{options}{Named list of response settings:
+\itemize{
+\item \code{component}: component labels in which this outcome is active. Omit to
+use it in every component.
+\item \code{map_outcome_to}: another declared outcome label, or \code{NA_character_}
+to record no response when this outcome wins.
+\item \code{guess}: a list with declared outcome \code{labels}, their probability
+\code{weights} (summing to one), and \code{rt_policy = "keep"} or \code{"na"}.
+When this outcome wins, draw its recorded label using these weights;
+\code{"na"} discards the response time. The default policy is \code{"keep"}.
+}
+
+Guessing and remapping require \code{n_outcomes = 1}.}
 }
 \value{
-The updated `race_spec`.
+The updated \code{race_spec}.
 }
 \description{
-Define an observed response
+Attach a response label to a finishing rule. In a single-response model,
+the first available outcome determines the observed response and time.
 }
 \examples{
 spec <- race_spec()
+spec <- add_accumulator(spec, "A", "lognormal")
 spec <- add_outcome(spec, "A_win", "A")
 }

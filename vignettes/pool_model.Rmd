@@ -16,7 +16,8 @@ by a single competing accumulator.
 library(AccumulatR)
 ```
 
-**Define the model**
+## Define the model
+
 We use three lognormal accumulators feeding a pooled response `A`, plus one
 lognormal accumulator feeding response `B`.
 
@@ -45,7 +46,8 @@ true_params <- c(
 ```
 
 
-**Simulate data**
+## Simulate data
+
 We simulate a response and response time for each trial.
 
 ```{r}
@@ -69,7 +71,8 @@ table(data_df$R)
 When response `A` is observed, its response time is the finishing time of the
 second finisher of the pool.
 
-**Estimate parameters with `optim()`**
+## Estimate parameters with `optim()`
+
 We estimate a shared location and spread for the three pool members, plus the
 location and spread of accumulator `B`. The spread parameters are optimized on
 the log scale.
@@ -105,18 +108,7 @@ fit <- optim(
   method = "Nelder-Mead",
   control = list(maxit = 4000, reltol = 1e-9)
 )
-```
 
-```{r include=FALSE}
-fit <- list(par = c(
-  A_pool.m = -1.27492271041843,
-  log_A_pool.s = -1.82886689693142,
-  B.m = -1.27316533219117,
-  log_B.s = -1.73226146113574
-))
-```
-
-```{r}
 fit_params <- c(
   A_pool.m = fit$par[["A_pool.m"]],
   A_pool.s = exp(fit$par[["log_A_pool.s"]]),
@@ -132,7 +124,3 @@ target <- c(
 
 data.frame(true = target, recovered = fit_params, miss = abs(target - fit_params))
 ```
-
-The code path is the same as in a basic race model. The difference is that the
-observed response `A` now depends on a pooled completion rule rather than a
-single accumulator.

@@ -12,14 +12,14 @@ processing_tree(model, outcome_label = NULL, return_dot = FALSE)
 \item{outcome_label}{Optional response label. If supplied, only that response
 is shown.}
 
-\item{return_dot}{If `TRUE`, return the Graphviz DOT string instead of a plot.}
+\item{return_dot}{If \code{TRUE}, return the graph description as a list instead
+of rendering it with DiagrammeR.}
 }
 \value{
-If `DiagrammeR` is available and `return_dot = FALSE`, a
-  `DiagrammeR` graph. Otherwise, a list with `dot`, `nodes`, and `edges`.
+If \code{DiagrammeR} is available and \code{return_dot = FALSE}, a
+\code{DiagrammeR} graph. Otherwise, a list with \code{dot}, \code{nodes}, and \code{edges}.
 }
 \description{
-This is a compact visual summary of the response rules in a model. It avoids
-equations and instead shows the observed responses, the accumulators or pools
-that feed them, and any blocking relationships.
+Show the observed responses, the accumulators or pools that feed them,
+and any blocking relationships as a directed graph.
 }

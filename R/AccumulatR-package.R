@@ -8,13 +8,15 @@
 #' behavioral data, and evaluate likelihoods for fitting.
 #'
 #' The main workflow is:
-#' 1. Start with `race_spec()`.
-#' 2. Add accumulators, pools, outcomes, and timing relations.
-#' 3. Call `finalize_model()` to prepare the model for simulation and fitting.
-#' 4. Use `simulate()`, `prepare_data()`, `make_context()`, and `log_likelihood()`.
 #'
-#' The R interface is intended to stay readable and model-focused, while the
-#' repeated numerical work happens in C++.
+#' 1. Start with [race_spec()].
+#' 2. Add accumulators, pools, outcomes, and timing relations.
+#' 3. Call [finalize_model()] and supply values with [build_param_matrix()].
+#' 4. Generate observations with [simulate()], or use experimental data.
+#' 5. Call [prepare_data()] and [make_context()], then evaluate candidate
+#'    parameters with [log_likelihood()].
+#'
+#' See `vignette("getting_started", package = "AccumulatR")` for a worked example.
 #'
 #' @keywords package
 "_PACKAGE"

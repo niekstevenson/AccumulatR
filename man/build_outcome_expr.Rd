@@ -2,19 +2,22 @@
 % Please edit documentation in R/model_definition.R
 \name{build_outcome_expr}
 \alias{build_outcome_expr}
-\title{Turn a response rule into an internal expression}
+\title{Build a response rule from a quoted expression}
 \usage{
 build_outcome_expr(expr)
 }
 \arguments{
-\item{expr}{Expression or symbol describing an event or blocking rule.}
+\item{expr}{Accumulator or pool label, symbol, quoted logical expression,
+or an expression object returned by an outcome helper.}
 }
 \value{
 An expression object used inside model specifications.
 }
 \description{
-Use this when you want to write a response rule programmatically rather than
-through the helper functions such as `all_of()` or `inhibit()`.
+Convert a source label or quoted R expression into a response rule for
+\code{\link[=add_outcome]{add_outcome()}}. Within a quoted expression, \code{&} combines requirements,
+\code{|} allows alternative routes, and \code{!} specifies an absence condition.
+These correspond to \code{\link[=all_of]{all_of()}}, \code{\link[=first_of]{first_of()}}, and \code{\link[=none_of]{none_of()}}.
 }
 \examples{
 build_outcome_expr(quote(A & !B))

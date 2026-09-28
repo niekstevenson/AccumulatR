@@ -215,7 +215,7 @@ specification has separated \code{m} for the accumulator \code{left}. Without
 that declaration, the valid name is \code{m}. The same mechanism is used for
 models that combine distribution families. If the same suffix has incompatible
 meanings across distributions, the default public name is qualified by
-distribution, for example \code{lognormal.s} and \code{RDM.s}.
+distribution, for example \code{lognormal.s} and \code{rdm.s}.
 
 \subsection{Components and mixtures}
 
@@ -232,7 +232,8 @@ The data determine whether a component is observed on a trial. If a
 \code{component} column is present, likelihood evaluation conditions on that
 component. If the column is absent or contains missing component labels, the
 likelihood marginalizes over components using the model's mixture
-specification. The same convention is used by \fct{response\_probabilities}.
+specification. The function \fct{response\_probabilities} always averages over
+components; it does not take a dataset with component labels.
 
 \section{Model representation}
 \label{sec:model}
@@ -262,14 +263,21 @@ operators.
 Distribution & Public parameters & Notes \\ \hline
 \code{lognormal} & \code{m}, \code{s} & Log-scale location and spread. \\
 \code{gamma} & \code{shape}, \code{rate} & Gamma finishing-time distribution. \\
-\code{exgauss} & \code{mu}, \code{sigma}, \code{tau} & Gaussian plus exponential finishing time. \\
+\code{exgauss} & \code{mu}, \code{sigma}, \code{tau} & Gaussian plus exponential, conditioned positive. \\
 \code{LBA} & \code{v}, \code{B}, \code{A}, \code{sv} & Linear ballistic accumulator. \\
 \code{RDM} & \code{v}, \code{B}, \code{A}, \code{s} & Race diffusion model parameterization. \\ \hline
 \end{tabular}
-\caption{\label{tab:distributions} Accumulator distributions currently
+\caption{\label{tab:distributions} Accumulator distributions
 available in \pkgname{}. All accumulators also have the non-decision-time
 parameter \code{t0}, which defaults to zero if omitted.}
 \end{table}
+
+For both LBA and RDM, \code{A} is the full width of a uniform starting-point
+distribution on $[0,A]$. The threshold is $B+A$, so the initial distance to
+threshold is uniform on $[B,B+A]$. Both parameters are nonnegative and
+$B+A>0$. LBA drift is normally distributed with mean \code{v} and standard
+deviation \code{sv}, conditioned to be positive. RDM uses nonnegative drift
+\code{v} and positive diffusion scale \code{s}.
 
 For a simple independent race in which response $r$ is observed at time $t$,
 the familiar density is
@@ -636,7 +644,10 @@ rank_model <- race_spec(n_outcomes = 2L) |>
 \end{Code}
 
 The corresponding data columns are \code{R}, \code{rt}, \code{R2}, and
-\code{rt2}. Higher ranks follow the same naming pattern.
+\code{rt2}. Higher ranks follow the same naming pattern. Ranked outcomes must
+directly name accumulators or pools; chained onsets are supported. Ranked data
+require distinct labels and strictly increasing observed times, and support
+neither censoring/truncation nor guessing/remapping rules.
 
 \section{Likelihood evaluation and fitting}
 \label{sec:likelihood}
@@ -649,33 +660,24 @@ model compilation is usually more expensive than evaluating one new parameter
 matrix.
 
 \begin{Code}
-prepared <- prepare_data(model, data_df)
-ctx <- make_context(model)
-n_trials <- length(unique(prepared$trials))
-
-objective <- function(theta) {
-  values <- transform_theta_to_named_parameters(theta)
-  params <- build_param_matrix(
-    model, values, n_trials = n_trials
-  )
-  -as.numeric(log_likelihood(ctx, prepared, params))
-}
-
-fit <- optim(start, objective, method = "Nelder-Mead")
+start <- c(
+  left.m = log(0.25), log_left.s = log(0.15),
+  right.m = log(0.40), log_right.s = log(0.20)
+)
+fit <- optim(start, neg_loglik, method = "Nelder-Mead")
 \end{Code}
 
-The transformation placeholder in this example is user code: it maps
-unconstrained optimization variables to the public parameter names of the
-model. For example, positive spread, boundary, and non-decision-time parameters
-are commonly optimized on the log scale and exponentiated before calling
-\fct{build\_param\_matrix}. This keeps the package focused on model evaluation
-while leaving estimation strategy to the analysis.
+This uses the \code{neg\_loglik} function defined in
+Section~\ref{sec:workflow}. It maps optimization variables to the model's
+public parameter names and exponentiates the log-scale spread parameters.
+Positive boundary and non-decision-time parameters can be transformed in the
+same way before calling \fct{build\_param\_matrix}.
 
 The parameter matrix contains one row per accumulator per trial in model order.
-Prepared data can also be compressed when repeated observations share the same
-prepared representation; in that case the
-likelihood sums weighted compact rows and expands trial-wise values when
-requested.
+Prepared data can also be compressed when repeated observations share both
+their prepared representation and their parameter values. Supply parameters
+for the retained trials. The likelihood returns values in the original trial
+order and includes each repeated observation in the sum.
 
 \section{Implementation}
 \label{sec:implementation}
@@ -735,7 +737,7 @@ latent mixtures, guarded responses, shared absence events, and ranked
 responses, and the same object is used for simulation, inspection,
 response-probability calculation, and likelihood evaluation.
 
-There are corresponding limitations. The package currently assumes that leaf
+There are corresponding limitations. The package assumes that leaf
 accumulators are conditionally independent given parameters, components, and
 trigger states. It supplies likelihood evaluation but not a complete
 hierarchical modeling language. Users who need group-level priors, posterior

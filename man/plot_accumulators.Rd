@@ -26,14 +26,14 @@ plot_accumulators(
 \arguments{
 \item{model}{A finalized model structure.}
 
-\item{xlim}{Optional x-axis limits. If `NULL`, they are chosen from the model.}
+\item{xlim}{Optional x-axis limits. If \code{NULL}, they are chosen from the model.}
 
 \item{ylim}{Y-axis limits.}
 
 \item{line_length}{Length of each accumulator trajectory in plot units.}
 
 \item{angle_dodge}{Target angular spacing in degrees between neighbouring accumulators.
-Angles are centered at 45 degrees and constrained to the interval [10, 80].
+Angles are centered at 45 degrees and constrained to 10 to 80 degrees.
 If there are too many accumulators sharing the same onset, spacing is reduced
 uniformly within that onset group.}
 
@@ -50,7 +50,7 @@ from top-to-bottom. This only affects accumulators sharing the same onset.}
 
 \item{blocker_lwd}{Line width for blocker arrows.}
 
-\item{show_labels}{If `TRUE`, add accumulator labels near the line endpoints.}
+\item{show_labels}{If \code{TRUE}, add accumulator labels near the line endpoints.}
 
 \item{main}{Main title.}
 
@@ -58,11 +58,11 @@ from top-to-bottom. This only affects accumulators sharing the same onset.}
 
 \item{ylab}{Y-axis label.}
 
-\item{...}{Additional arguments passed to `graphics::plot`.}
+\item{...}{Additional arguments passed to \code{graphics::plot}.}
 }
 \value{
 Invisibly returns a list with plotting coordinates and inferred
-  structural links.
+structural links.
 }
 \description{
 Draw a schematic view of the model with time on the x-axis and evidence on

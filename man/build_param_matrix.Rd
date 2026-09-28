@@ -9,17 +9,35 @@ build_param_matrix(model, param_values, n_trials = 1L)
 \arguments{
 \item{model}{Finalized model structure.}
 
-\item{param_values}{Named numeric vector of parameter values.}
+\item{param_values}{Named numeric vector using the names from \code{\link[=par_names]{par_names()}}.
+Omitted nondecision-time parameters (\code{t0}) default to zero. Supply all
+other parameters on their natural scale, after any fitting transformations.}
 
-\item{n_trials}{Number of trials to generate.}
+\item{n_trials}{Positive integer number of trial blocks to create.}
 }
 \value{
-A numeric parameter matrix with one row per trial/accumulator pair.
+A numeric matrix with one row per trial/accumulator pair. Columns
+contain trigger absence probability \code{q}, nondecision time \code{t0}, distribution
+parameters \code{p1}, \code{p2}, and so on, followed by sampled mixture weights.
+Distribution slots follow the order listed in the Supported Distributions
+vignette. Accumulators without a trigger have \code{q = 0}.
 }
 \description{
-This expands a named parameter vector into the trial-by-trial format expected
-by `simulate()` and `log_likelihood()`.
-Parameter domains are validated before expansion across trials.
+Expand a named parameter vector into the matrix used by \code{\link[=simulate]{simulate()}} and
+\code{\link[=log_likelihood]{log_likelihood()}}. Each trial receives the same parameter values; rows are
+grouped by trial, with accumulators in their model declaration order.
+}
+\details{
+Parameter domains are checked before expansion. All values must be
+finite, \code{t0} must be nonnegative, and distribution scales must be positive.
+Trigger probabilities must lie in \verb{[0, 1]}; sampled mixture weights must be
+nonnegative and sum to at most one. See
+\code{vignette("distributions", package = "AccumulatR")} for distribution-specific
+constraints.
+
+For trial-specific parameters, modify the relevant matrix rows while
+preserving their order and column layout. Likelihood and simulation calls
+use those values directly, so modified values must satisfy the same domains.
 }
 \examples{
 spec <- race_spec()

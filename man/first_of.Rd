@@ -7,13 +7,14 @@
 first_of(...)
 }
 \arguments{
-\item{...}{Accumulator labels or expression objects to combine with OR.}
+\item{...}{Accumulator labels, pool labels, or response expressions.}
 }
 \value{
 An expression object.
 }
 \description{
-Define a response that occurs when the first listed process finishes
+Return a rule whose finishing time is the earliest completion among its
+arguments. Each argument must contain an event that can generate a response.
 }
 \examples{
 first_of("A", "B")

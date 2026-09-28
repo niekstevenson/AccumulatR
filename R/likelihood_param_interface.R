@@ -257,28 +257,56 @@
 
 #' Prepare behavioral data for likelihood evaluation
 #'
-#' `prepare_data()` expands trial-level observations to the accumulator layout
-#' expected by the compiled likelihood code and tags the result as trusted
-#' likelihood input.
+#' Check response labels, times, and observation conditions, and arrange the
+#' data into one row per accumulator per trial for [log_likelihood()].
 #'
 #' @param structure Finalized model structure.
-#' @param data_df Behavioral data. In the simplest case this contains `trials`,
-#'   `R`, and `rt`; for multi-outcome models it can also contain `R2`, `rt2`,
-#'   and so on. Optional `LT`/`UT` columns define a truncation window. For a
-#'   censored trial, set `rt = NA` and use `missingness = 1` for `[LT, LC)`,
-#'   `2` for `(UC, UT]`, or `3` for their union; `R` may retain the known
-#'   response or be `NA`. Uncensored trials use `missingness = NA`. Missing
-#'   bounds default to `LT = LC = 0` and `UC = UT = Inf`. Codes 1--3 apply to
-#'   the response observation, not to individual accumulators. Censoring and
-#'   truncation are not supported for ranked observations.
+#' @param data_df Data frame with response labels `R` and numeric response times
+#'   `rt`, usually one row per trial. Labels must match the model's outcomes.
+#'   Optional columns specify `component`, `onset`, ranked responses (`R2`,
+#'   `rt2`, and so on), or censoring and truncation; see Details.
 #' @param compress If `TRUE`, collapse repeated prepared trials and attach
-#'   an `expand` index so `log_likelihood()` can return trial-level values on
-#'   the original trial scale.
-#'   Defaults to `FALSE`.
-#' @return An `accumulatr_data` object.
-#' @details The likelihood for an active truncation window is conditioned on a
-#'   observable response in `[LT, UT]`. Censoring comparisons are strict, so
-#'   observations exactly at `LC` or `UC` remain uncensored.
+#'   an `expand` index mapping original trials to retained trials. Use only
+#'   when repeated observations also share parameter values. Supply parameters
+#'   and `ok` for the retained trials; [log_likelihood()] expands the returned
+#'   values to the original trial order.
+#' @return A data frame of class `accumulatr_data`, with accumulator rows grouped
+#'   by trial and ordered as in the model. Response and component labels are
+#'   factors with model-defined levels; attributes store the likelihood layout.
+#' @details
+#' **Trial layout.** Without a `racer` column, each row is one trial. Trials
+#' are numbered consecutively in input order. To supply accumulator-specific
+#' onsets, include `trials` and `racer` columns with one complete accumulator
+#' block per trial in model order. Repeat each trial's response and component
+#' values across its block. An `onset` replaces a fixed onset or adds an offset
+#' to a chained onset. Omit it to use model defaults.
+#'
+#' **Mixtures.** A nonmissing `component` label conditions on that component.
+#' An omitted or `NA` label averages over the model's mixture probabilities.
+#'
+#' **Missing observations.** For single-response models, `R = NA` and `rt = NA`
+#' denote no observed response. A finite `rt` requires a response label.
+#' A known response with `rt = NA` requires a censoring code or a model with
+#' an observation rule such as `guess` or `map_outcome_to`.
+#'
+#' **Ranked responses.** Supply paired columns `R2`/`rt2`, `R3`/`rt3`, and so
+#' on. The first pair must be observed. Labels cannot repeat, and observed
+#' times must increase strictly. Later pairs may both be `NA`; all subsequent
+#' ranks must then also be missing. Ranked observations support neither
+#' censoring/truncation nor guessing/remapping rules.
+#'
+#' **Censoring and truncation.** `LT` and `UT` define the observation window.
+#' An active truncation window conditions the likelihood on an observable
+#' response with \eqn{LT \le rt \le UT}. For a censored trial set `rt = NA`
+#' and use:
+#' - `missingness = 1` for \eqn{LT \le rt < LC};
+#' - `missingness = 2` for \eqn{UC < rt \le UT};
+#' - `missingness = 3` for the union of those intervals.
+#'
+#' `R` may retain a known response or be `NA`. Uncensored trials use
+#' `missingness = NA`. Missing bounds default to `LT = LC = 0` and
+#' `UC = UT = Inf`. These bounds describe the recorded response time.
+#' Times exactly at `LC` or `UC` remain uncensored.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
@@ -441,12 +469,13 @@ prepare_data <- function(structure, data_df, compress = FALSE) {
 
 #' Build a compiled likelihood context from a model
 #'
-#' A context stores compiled model/runtime state only. Behavioral data are
-#' prepared separately with `prepare_data()` and supplied to
-#' `log_likelihood()`.
+#' Compile the model's response rules and dependencies for likelihood
+#' evaluation. Reuse the context across candidate parameter values and datasets
+#' for the same model. Prepare each dataset with [prepare_data()].
 #'
 #' @param structure Finalized model structure.
-#' @param diagnostics If `TRUE`, collect symbolic/compiled complexity metrics.
+#' @param diagnostics If `TRUE`, collect model compilation statistics for
+#'   [complexity_metrics()].
 #' @return An `accumulatr_context` object.
 #' @examples
 #' spec <- race_spec()
@@ -468,10 +497,17 @@ make_context <- function(structure, diagnostics = FALSE) {
   ), class = "accumulatr_context")
 }
 
-#' Return compiled exact complexity metrics
+#' Inspect the size of a compiled likelihood plan
+#'
+#' Report how many symbolic regions, numerical operations, and integration
+#' kernels the model requires. Use these counts to investigate models whose
+#' context construction or likelihood evaluation is expensive.
 #'
 #' @param context Context created with `make_context(diagnostics = TRUE)`.
-#' @return A list with per-variant and total symbolic/compiled metrics.
+#' @return A list containing a `variants` data frame and a `total` list.
+#'   Each variant is a compiled component plan. Columns count symbolic regions
+#'   and cells, compiled roots and nodes, and integral kernels. Fields beginning
+#'   with `max_` report maxima; other total fields sum across variants.
 #' @export
 complexity_metrics <- function(context) {
   semantic_complexity_metrics_context_cpp(context$cpp)
@@ -495,14 +531,15 @@ complexity_metrics <- function(context) {
 
 #' Evaluate marginal response probabilities
 #'
-#' `response_probabilities()` evaluates the model-implied marginal probability
-#' of each observed response label for a compiled context and canonical
-#' parameter matrix. Mixture components are marginalized according to the model.
+#' Calculate the probability of each first response, integrated over response
+#' time and averaged over mixture components. With multiple trial blocks in
+#' `parameters`, return the mean probabilities across those blocks.
 #'
 #' @param context Context created with `make_context()`.
-#' @param parameters A canonical parameter matrix created by
-#'   `build_param_matrix()`.
-#' @param include_na If `TRUE`, include residual mass as `"NA"`.
+#' @param parameters Parameter matrix from [build_param_matrix()]. Use
+#'   `n_trials = 1` for one set of response probabilities.
+#' @param include_na If `TRUE`, include a `"NA"` entry when there is residual
+#'   probability of no observed response.
 #' @return A named numeric vector of marginal response probabilities. Names are
 #'   observed outcome labels. When `include_na = TRUE`, a residual `"NA"` entry
 #'   is included if the model assigns probability mass to unobserved or
@@ -542,21 +579,30 @@ response_probabilities <- function(context, parameters, include_na = TRUE) {
 #'
 #' Compute the summed log-likelihood by default, or trial-wise log-likelihoods
 #' when `sum = FALSE`.
-#' Inputs must be prepared for the same model; execution does not validate
-#' data layout or parameter domains.
+#' Build the context and prepare the observations once, then reuse them when
+#' evaluating candidate parameter matrices for the same model.
 #'
 #' @param context Context created with `make_context()`.
 #' @param data Prepared data created with `prepare_data()`.
-#' @param parameters A canonical numeric parameter matrix created by
-#'   `build_param_matrix()`.
-#' @param ok Logical vector marking which trials should contribute to the
-#'   likelihood. Trials marked `FALSE` are assigned `min_ll`.
+#' @param parameters Numeric matrix from [build_param_matrix()], with one
+#'   accumulator block per prepared trial in matching order.
+#' @param ok Optional logical vector with one value per prepared trial.
+#'   `TRUE` evaluates that trial; `FALSE` assigns `min_ll`. These assigned
+#'   values are included in the sum. For compressed data, use the retained
+#'   trial order.
 #' @param sum If `TRUE`, return the summed log-likelihood. If `FALSE`, return
 #'   trial-wise log-likelihood values.
 #' @param min_ll Minimum log-likelihood value used for excluded or impossible
 #'   trials.
 #' @return A summed log-likelihood by default, or a numeric vector of
 #'   trial-wise log-likelihood values when `sum = FALSE`.
+#' @details Response-time observations contribute densities, so a
+#'   log-likelihood can be positive. Missing responses and censoring contribute
+#'   probability masses according to the observation rules.
+#'
+#'   Use [prepare_data()] and [build_param_matrix()] for the same model.
+#'   Evaluation assumes matching layouts and valid parameters and does not
+#'   repeat preparation checks.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")

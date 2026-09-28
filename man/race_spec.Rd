@@ -8,14 +8,15 @@ race_spec(n_outcomes = 1L)
 }
 \arguments{
 \item{n_outcomes}{Number of ordered observed responses to retain per trial.
-Use `1` for standard choice/RT data, `2` when you also observe the second
+Use \code{1} for standard choice/RT data, \code{2} when you also observe the second
 finishing response, and so on.}
 }
 \value{
-A `race_spec` object.
+A \code{race_spec} object.
 }
 \description{
-Start a race-model specification
+Create an empty specification. Add accumulators and response rules, then
+call \code{\link[=finalize_model]{finalize_model()}} before simulation or likelihood evaluation.
 }
 \examples{
 race_spec()

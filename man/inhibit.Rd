@@ -7,7 +7,7 @@
 inhibit(reference, by)
 }
 \arguments{
-\item{reference}{Response rule or accumulator label to be blocked.}
+\item{reference}{Response rule, accumulator label, or pool label to be blocked.}
 
 \item{by}{Blocking process or expression.}
 }
@@ -15,7 +15,9 @@ inhibit(reference, by)
 A guarded expression object.
 }
 \description{
-Define a response that is blocked by another process
+The response occurs when \code{reference} finishes, provided \code{by} has not
+finished strictly earlier. A blocker that finishes later does not cancel
+a response that has already occurred.
 }
 \examples{
 inhibit("A", "B")

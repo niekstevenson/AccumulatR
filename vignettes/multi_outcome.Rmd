@@ -19,7 +19,9 @@ for any number of responses (`R3`, `rt3` etc.).
 library(AccumulatR)
 ```
 
-**Define the model** We use a simple two-accumulator race with direct
+## Define the model
+
+We use a simple two-accumulator race with direct
 responses `A` and `B`. Setting `n_outcomes = 2` tells the model to
 retain the first and second finishing responses.
 
@@ -40,7 +42,9 @@ true_params <- c(
 )
 ```
 
-**Simulate data** We generate data and keep both ordered responses for
+## Simulate data
+
+We generate data and keep both ordered responses for
 each trial.
 
 ```{r}
@@ -63,8 +67,10 @@ data_df <- data.frame(
 head(data_df)
 ```
 
-**Estimate parameters with `optim()`** We estimate `A.m`, `A.s`, `B.m`,
-and `B.s`. The variance parameters are optimized on the log scale and
+## Estimate parameters with `optim()`
+
+We estimate `A.m`, `A.s`, `B.m`,
+and `B.s`. The lognormal standard deviations are optimized on the log scale and
 transformed back inside the function.
 
 ```{r eval=FALSE}
@@ -91,18 +97,7 @@ start <- c(
 )
 
 fit <- optim(start, neg_loglik, method = "Nelder-Mead")
-```
 
-```{r include=FALSE}
-fit <- list(par = c(
-  A.m = -1.20977628221611,
-  A.s = -1.73107710731947,
-  B.m = -0.958549026089506,
-  B.s = -1.53776044280998
-))
-```
-
-```{r}
 fit_params <- fit$par
 fit_params[c("A.s", "B.s")] <- exp(fit_params[c("A.s", "B.s")])
 target <- true_params[c("A.m", "A.s", "B.m", "B.s")]
@@ -114,6 +109,8 @@ data.frame(
 )
 ```
 
-The workflow is the same as in the single-response case, but the
-likelihood now uses the second ranked response as additional
-information.
+Ranked observations require direct accumulator or pool outcomes. Chained
+onsets are supported, but logical outcome expressions, guessing, remapping,
+censoring, and truncation are not. Observed response times must increase
+strictly and response labels must be distinct. Later unobserved ranks use
+`NA` in both columns; the first response must be observed.

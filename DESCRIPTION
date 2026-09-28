@@ -32,4 +32,5 @@ LinkingTo: Rcpp
 SystemRequirements: C++17
 NeedsCompilation: yes
 RoxygenNote: 7.3.3
+Roxygen: list(markdown = TRUE)
 Config/testthat/edition: 3

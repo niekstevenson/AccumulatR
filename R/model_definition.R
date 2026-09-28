@@ -285,12 +285,15 @@
   .expr_from_value(expr)
 }
 
-#' Turn a response rule into an internal expression
+#' Build a response rule from a quoted expression
 #'
-#' Use this when you want to write a response rule programmatically rather than
-#' through the helper functions such as `all_of()` or `inhibit()`.
+#' Convert a source label or quoted R expression into a response rule for
+#' [add_outcome()]. Within a quoted expression, `&` combines requirements,
+#' `|` allows alternative routes, and `!` specifies an absence condition.
+#' These correspond to [all_of()], [first_of()], and [none_of()].
 #'
-#' @param expr Expression or symbol describing an event or blocking rule.
+#' @param expr Accumulator or pool label, symbol, quoted logical expression,
+#'   or an expression object returned by an outcome helper.
 #' @return An expression object used inside model specifications.
 #' @examples
 #' build_outcome_expr(quote(A & !B))
@@ -305,7 +308,11 @@ build_outcome_expr <- function(expr) {
 
 #' Define a response that is blocked by another process
 #'
-#' @param reference Response rule or accumulator label to be blocked.
+#' The response occurs when `reference` finishes, provided `by` has not
+#' finished strictly earlier. A blocker that finishes later does not cancel
+#' a response that has already occurred.
+#'
+#' @param reference Response rule, accumulator label, or pool label to be blocked.
 #' @param by Blocking process or expression.
 #' @return A guarded expression object.
 #' @examples
@@ -321,7 +328,10 @@ inhibit <- function(reference, by) {
 
 #' Define a response that occurs when the first listed process finishes
 #'
-#' @param ... Accumulator labels or expression objects to combine with OR.
+#' Return a rule whose finishing time is the earliest completion among its
+#' arguments. Each argument must contain an event that can generate a response.
+#'
+#' @param ... Accumulator labels, pool labels, or response expressions.
 #' @return An expression object.
 #' @examples
 #' first_of("A", "B")
@@ -334,7 +344,10 @@ first_of <- function(...) {
 
 #' Define a response that requires several processes to finish
 #'
-#' @param ... Accumulator labels or expression objects to combine with AND.
+#' Return a rule that finishes when all required events have completed.
+#' Any [none_of()] conditions are checked at that finishing time.
+#'
+#' @param ... Accumulator labels, pool labels, or response expressions.
 #' @return An expression object.
 #' @examples
 #' all_of("A", "B")
@@ -347,11 +360,15 @@ all_of <- function(...) {
 
 #' Define the absence of an event
 #'
-#' @param expr Accumulator label or expression to negate.
+#' Use inside [all_of()] to require that `expr` has not finished before the
+#' conjunction completes. Absence supplies a condition, not a response time,
+#' so it cannot be an outcome on its own or a standalone [first_of()] branch.
+#'
+#' @param expr Accumulator label, pool label, or expression to negate.
 #' @return An expression object.
 #' @export
 #' @examples
-#' none_of("A")
+#' all_of("go", none_of("stop"))
 none_of <- function(expr) {
   list(kind = "not", arg = .build_expr(expr))
 }
@@ -377,6 +394,9 @@ after <- function(source, lag = 0) {
 # ------------------------------------------------------------------------------
 
 #' Start a race-model specification
+#'
+#' Create an empty specification. Add accumulators and response rules, then
+#' call [finalize_model()] before simulation or likelihood evaluation.
 #'
 #' @param n_outcomes Number of ordered observed responses to retain per trial.
 #'   Use `1` for standard choice/RT data, `2` when you also observe the second
@@ -413,12 +433,18 @@ race_spec <- function(n_outcomes = 1L) {
 
 #' Add an accumulator to a model
 #'
+#' An accumulator has a random finishing time drawn from `dist`, shifted by
+#' its onset and nondecision time `t0`. Use [add_outcome()] to connect its
+#' completion to an observed response.
+#'
 #' @param spec A `race_spec` object.
 #' @param id Label for the accumulator.
-#' @param dist Distribution family used for that accumulator.
+#' @param dist Distribution family: `"lognormal"`, `"gamma"`, `"exgauss"`,
+#'   `"LBA"`, or `"RDM"`. Names are case-insensitive.
 #' @param onset Start time for the accumulator. This can be a fixed numeric
 #'   onset or a chained onset created with `after()`.
 #' @return The updated `race_spec`.
+#' @seealso [set_parameters()], [build_param_matrix()], [after()]
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")
@@ -435,16 +461,19 @@ add_accumulator <- function(spec, id, dist, onset = 0) {
 
 #' Pool several accumulators under a shared label
 #'
-#' Pools let you talk about several accumulators as one source when defining
-#' observed responses.
+#' A pool finishes when its `k`th member finishes. Use the pool label in
+#' [add_outcome()], another pool, or [after()].
 #'
 #' @param spec A `race_spec` object.
 #' @param id Label for the pool.
-#' @param members Accumulator labels included in the pool.
-#' @param k Threshold for a `k`-of-`n` pool rule.
+#' @param members Accumulator or pool labels included in the pool.
+#' @param k Number of members that must finish, from `1` to `length(members)`.
+#'   The default `1` gives the first member's finishing time.
 #' @return The updated `race_spec`.
 #' @examples
 #' spec <- race_spec()
+#' spec <- add_accumulator(spec, "A", "lognormal")
+#' spec <- add_accumulator(spec, "B", "lognormal")
 #' spec <- add_pool(spec, "P1", members = c("A", "B"), k = 1L)
 #' @export
 add_pool <- function(spec, id, members, k = 1L) {
@@ -462,13 +491,28 @@ add_pool <- function(spec, id, members, k = 1L) {
 
 #' Define an observed response
 #'
+#' Attach a response label to a finishing rule. In a single-response model,
+#' the first available outcome determines the observed response and time.
+#'
 #' @param spec A `race_spec` object.
 #' @param label Response label that should appear in the behavioral data.
-#' @param expr Rule describing when that response is observed.
-#' @param options Optional response settings.
+#' @param expr Accumulator or pool label, or a rule built with [first_of()],
+#'   [all_of()], [none_of()], [inhibit()], or [build_outcome_expr()].
+#' @param options Named list of response settings:
+#'   - `component`: component labels in which this outcome is active. Omit to
+#'     use it in every component.
+#'   - `map_outcome_to`: another declared outcome label, or `NA_character_`
+#'     to record no response when this outcome wins.
+#'   - `guess`: a list with declared outcome `labels`, their probability
+#'     `weights` (summing to one), and `rt_policy = "keep"` or `"na"`.
+#'     When this outcome wins, draw its recorded label using these weights;
+#'     `"na"` discards the response time. The default policy is `"keep"`.
+#'
+#'   Guessing and remapping require `n_outcomes = 1`.
 #' @return The updated `race_spec`.
 #' @examples
 #' spec <- race_spec()
+#' spec <- add_accumulator(spec, "A", "lognormal")
 #' spec <- add_outcome(spec, "A_win", "A")
 #' @export
 add_outcome <- function(spec, label, expr, options = list()) {
@@ -525,12 +569,14 @@ add_component <- function(spec, id, members, n_outcomes = NULL) {
 
 #' Add a shared absence trigger
 #'
-#' A trigger is a named absence-probability parameter. All members in one
-#' trigger call share the same absence draw. Use separate trigger calls for
-#' independent absence draws.
+#' With probability given by `name`, all member accumulators are absent on a
+#' trial. Otherwise they follow their specified onsets and finishing-time
+#' distributions. Use separate triggers for independent absence events;
+#' [set_parameters()] can give those events a common probability.
 #'
 #' @param spec A `race_spec` object.
-#' @param name Trigger parameter name.
+#' @param name Trigger parameter name. Supply its probability in `[0, 1]`
+#'   to [build_param_matrix()].
 #' @param members Accumulator labels controlled by the shared absence draw.
 #' @return The updated `race_spec`.
 #' @export
@@ -573,7 +619,7 @@ add_trigger <- function(spec, name, members) {
 #'   add_outcome("stop", "stop") |>
 #'   set_parameters(
 #'     separate = list(m = c("go", "stop")),
-#'     rename = c(s = "spread", t0 = "onset")
+#'     rename = c(s = "spread", t0 = "nondecision")
 #'   )
 #'
 #' par_names(spec)
@@ -589,14 +635,18 @@ set_parameters <- function(spec, separate = NULL, share = NULL, rename = NULL) {
 #' Fixed mixtures use known component probabilities. Sampled mixtures expose
 #' automatic `p.<component>` parameters for every non-reference component; the
 #' reference component receives the residual probability.
+#' Both modes draw a component during simulation. In likelihood evaluation,
+#' a supplied component label conditions on that component; an absent or `NA`
+#' label averages over components using their probabilities.
 #'
 #' @param spec A `race_spec` object.
-#' @param mode Mixture mode. Fixed mixtures use known component probabilities;
-#'   sampled mixtures estimate probabilities for all non-reference components.
+#' @param mode `"fixed"` stores probabilities in the model. `"sample"` makes
+#'   probabilities parameters supplied to [build_param_matrix()].
 #' @param weights Named numeric component probabilities for fixed mixtures. If
 #'   `NULL`, fixed mixtures use uniform component probabilities.
 #' @param reference Reference component for sampled mixtures. Its probability is
-#'   the residual probability after non-reference component probabilities.
+#'   one minus the sum of non-reference probabilities. Defaults to the last
+#'   component added to the model.
 #' @return The updated `race_spec`.
 #' @export
 set_mixture <- function(spec, mode = c("fixed", "sample"), weights = NULL, reference = NULL) {
@@ -908,10 +958,11 @@ set_mixture <- function(spec, mode = c("fixed", "sample"), weights = NULL, refer
   prep
 }
 
-#' Compile a model for simulation and fitting
+#' Finalize a model for simulation and fitting
 #'
-#' This converts a human-readable model specification into the finalized object
-#' used by `simulate()`, `prepare_data()`, `make_context()`, and related functions.
+#' Check source references, timing dependencies, response rules, and parameter
+#' grouping, and create the model object used by [simulate()], [prepare_data()],
+#' and [build_param_matrix()]. Build its likelihood context with [make_context()].
 #'
 #' @param model Model specification.
 #' @return A `model_structure` object.
@@ -1307,7 +1358,13 @@ dist_param_names <- function(dist) {
   expanded
 }
 
-#' List the free parameters implied by a model
+#' List the parameter names used by a model
+#'
+#' Return the names accepted by [build_param_matrix()], after applying any
+#' grouping or renaming in [set_parameters()]. The list includes nondecision
+#' times, trigger probabilities, and sampled mixture weights where applicable.
+#' These names do not determine which parameters an optimizer must estimate;
+#' parameters can be held fixed by supplying constant values.
 #'
 #' @param model A `race_spec` or finalized `model_structure` object.
 #' @return A character vector of parameter names.
@@ -1328,14 +1385,30 @@ par_names <- function(model) {
 
 #' Create trial-level parameter values
 #'
-#' This expands a named parameter vector into the trial-by-trial format expected
-#' by `simulate()` and `log_likelihood()`.
-#' Parameter domains are validated before expansion across trials.
+#' Expand a named parameter vector into the matrix used by [simulate()] and
+#' [log_likelihood()]. Each trial receives the same parameter values; rows are
+#' grouped by trial, with accumulators in their model declaration order.
 #'
 #' @param model Finalized model structure.
-#' @param param_values Named numeric vector of parameter values.
-#' @param n_trials Number of trials to generate.
-#' @return A numeric parameter matrix with one row per trial/accumulator pair.
+#' @param param_values Named numeric vector using the names from [par_names()].
+#'   Omitted nondecision-time parameters (`t0`) default to zero. Supply all
+#'   other parameters on their natural scale, after any fitting transformations.
+#' @param n_trials Positive integer number of trial blocks to create.
+#' @return A numeric matrix with one row per trial/accumulator pair. Columns
+#'   contain trigger absence probability `q`, nondecision time `t0`, distribution
+#'   parameters `p1`, `p2`, and so on, followed by sampled mixture weights.
+#'   Distribution slots follow the order listed in the Supported Distributions
+#'   vignette. Accumulators without a trigger have `q = 0`.
+#' @details Parameter domains are checked before expansion. All values must be
+#'   finite, `t0` must be nonnegative, and distribution scales must be positive.
+#'   Trigger probabilities must lie in `[0, 1]`; sampled mixture weights must be
+#'   nonnegative and sum to at most one. See
+#'   `vignette("distributions", package = "AccumulatR")` for distribution-specific
+#'   constraints.
+#'
+#'   For trial-specific parameters, modify the relevant matrix rows while
+#'   preserving their order and column layout. Likelihood and simulation calls
+#'   use those values directly, so modified values must satisfy the same domains.
 #' @examples
 #' spec <- race_spec()
 #' spec <- add_accumulator(spec, "A", "lognormal")

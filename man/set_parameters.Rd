@@ -7,10 +7,10 @@
 set_parameters(spec, separate = NULL, share = NULL, rename = NULL)
 }
 \arguments{
-\item{spec}{A `race_spec` object.}
+\item{spec}{A \code{race_spec} object.}
 
 \item{separate}{Named list. Each name is a grouped public parameter, and each
-value is one or more accumulator ids to split from that group. Use `TRUE`
+value is one or more accumulator ids to split from that group. Use \code{TRUE}
 to split every member of a group.}
 
 \item{share}{Named list mapping a new public name to default public names or
@@ -20,13 +20,13 @@ internal parameter names that should share one value.}
 public names.}
 }
 \value{
-The updated `race_spec`.
+The updated \code{race_spec}.
 }
 \description{
 Parameters are grouped by compatible type by default. For example, two
-lognormal accumulators expose one `m`, one `s`, and one `t0` parameter unless
+lognormal accumulators expose one \code{m}, one \code{s}, and one \code{t0} parameter unless
 you ask for specific parameters to be separate. Triggers expose their trigger name
-directly, and sampled mixtures expose automatic `p.<component>` parameters.
+directly, and sampled mixtures expose automatic \verb{p.<component>} parameters.
 }
 \examples{
 spec <- race_spec() |>
@@ -36,7 +36,7 @@ spec <- race_spec() |>
   add_outcome("stop", "stop") |>
   set_parameters(
     separate = list(m = c("go", "stop")),
-    rename = c(s = "spread", t0 = "onset")
+    rename = c(s = "spread", t0 = "nondecision")
   )
 
 par_names(spec)

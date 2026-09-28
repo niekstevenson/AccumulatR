@@ -7,17 +7,19 @@
 add_trigger(spec, name, members)
 }
 \arguments{
-\item{spec}{A `race_spec` object.}
+\item{spec}{A \code{race_spec} object.}
 
-\item{name}{Trigger parameter name.}
+\item{name}{Trigger parameter name. Supply its probability in \verb{[0, 1]}
+to \code{\link[=build_param_matrix]{build_param_matrix()}}.}
 
 \item{members}{Accumulator labels controlled by the shared absence draw.}
 }
 \value{
-The updated `race_spec`.
+The updated \code{race_spec}.
 }
 \description{
-A trigger is a named absence-probability parameter. All members in one
-trigger call share the same absence draw. Use separate trigger calls for
-independent absence draws.
+With probability given by \code{name}, all member accumulators are absent on a
+trial. Otherwise they follow their specified onsets and finishing-time
+distributions. Use separate triggers for independent absence events;
+\code{\link[=set_parameters]{set_parameters()}} can give those events a common probability.
 }

@@ -7,22 +7,28 @@
 add_accumulator(spec, id, dist, onset = 0)
 }
 \arguments{
-\item{spec}{A `race_spec` object.}
+\item{spec}{A \code{race_spec} object.}
 
 \item{id}{Label for the accumulator.}
 
-\item{dist}{Distribution family used for that accumulator.}
+\item{dist}{Distribution family: \code{"lognormal"}, \code{"gamma"}, \code{"exgauss"},
+\code{"LBA"}, or \code{"RDM"}. Names are case-insensitive.}
 
 \item{onset}{Start time for the accumulator. This can be a fixed numeric
-onset or a chained onset created with `after()`.}
+onset or a chained onset created with \code{after()}.}
 }
 \value{
-The updated `race_spec`.
+The updated \code{race_spec}.
 }
 \description{
-Add an accumulator to a model
+An accumulator has a random finishing time drawn from \code{dist}, shifted by
+its onset and nondecision time \code{t0}. Use \code{\link[=add_outcome]{add_outcome()}} to connect its
+completion to an observed response.
 }
 \examples{
 spec <- race_spec()
 spec <- add_accumulator(spec, "A", "lognormal")
+}
+\seealso{
+\code{\link[=set_parameters]{set_parameters()}}, \code{\link[=build_param_matrix]{build_param_matrix()}}, \code{\link[=after]{after()}}
 }

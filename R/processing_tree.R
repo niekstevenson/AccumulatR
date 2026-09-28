@@ -92,14 +92,14 @@
 
 #' Draw a processing tree for the responses in a model
 #'
-#' This is a compact visual summary of the response rules in a model. It avoids
-#' equations and instead shows the observed responses, the accumulators or pools
-#' that feed them, and any blocking relationships.
+#' Show the observed responses, the accumulators or pools that feed them,
+#' and any blocking relationships as a directed graph.
 #'
 #' @param model A finalized model structure.
 #' @param outcome_label Optional response label. If supplied, only that response
 #'   is shown.
-#' @param return_dot If `TRUE`, return the Graphviz DOT string instead of a plot.
+#' @param return_dot If `TRUE`, return the graph description as a list instead
+#'   of rendering it with DiagrammeR.
 #'
 #' @return If `DiagrammeR` is available and `return_dot = FALSE`, a
 #'   `DiagrammeR` graph. Otherwise, a list with `dot`, `nodes`, and `edges`.

@@ -2,18 +2,22 @@
 % Please edit documentation in R/model_definition.R
 \name{par_names}
 \alias{par_names}
-\title{List the free parameters implied by a model}
+\title{List the parameter names used by a model}
 \usage{
 par_names(model)
 }
 \arguments{
-\item{model}{A `race_spec` or finalized `model_structure` object.}
+\item{model}{A \code{race_spec} or finalized \code{model_structure} object.}
 }
 \value{
 A character vector of parameter names.
 }
 \description{
-List the free parameters implied by a model
+Return the names accepted by \code{\link[=build_param_matrix]{build_param_matrix()}}, after applying any
+grouping or renaming in \code{\link[=set_parameters]{set_parameters()}}. The list includes nondecision
+times, trigger probabilities, and sampled mixture weights where applicable.
+These names do not determine which parameters an optimizer must estimate;
+parameters can be held fixed by supplying constant values.
 }
 \examples{
 spec <- race_spec()

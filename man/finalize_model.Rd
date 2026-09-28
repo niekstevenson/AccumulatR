@@ -2,7 +2,7 @@
 % Please edit documentation in R/model_definition.R
 \name{finalize_model}
 \alias{finalize_model}
-\title{Compile a model for simulation and fitting}
+\title{Finalize a model for simulation and fitting}
 \usage{
 finalize_model(model)
 }
@@ -10,11 +10,12 @@ finalize_model(model)
 \item{model}{Model specification.}
 }
 \value{
-A `model_structure` object.
+A \code{model_structure} object.
 }
 \description{
-This converts a human-readable model specification into the finalized object
-used by `simulate()`, `prepare_data()`, `make_context()`, and related functions.
+Check source references, timing dependencies, response rules, and parameter
+grouping, and create the model object used by \code{\link[=simulate]{simulate()}}, \code{\link[=prepare_data]{prepare_data()}},
+and \code{\link[=build_param_matrix]{build_param_matrix()}}. Build its likelihood context with \code{\link[=make_context]{make_context()}}.
 }
 \examples{
 spec <- race_spec()

@@ -14,7 +14,8 @@ accumulator `C` starts only after accumulator `B` has finished.
 library(AccumulatR)
 ```
 
-**Define the model**
+## Define the model
+
 `A` is directly observed. `B` is latent. `C` is observed and starts only after
 `B` has finished.
 
@@ -38,7 +39,8 @@ true_params <- c(
 )
 ```
 
-**Simulate data**
+## Simulate data
+
 Each trial contributes an observed response label and response time.
 
 ```{r}
@@ -60,7 +62,8 @@ table(data_df$R)
 ```
 
 
-**Estimate parameters with `optim()`**
+## Estimate parameters with `optim()`
+
 We estimate `A.m`, `A.s`, `B.m`, `B.s`, `C.m`, and `C.s`. The spread
 parameters are optimized on the log scale.
 
@@ -91,20 +94,7 @@ start <- c(
 )
 
 fit <- optim(start, neg_loglik, method = "Nelder-Mead")
-```
 
-```{r include=FALSE}
-fit <- list(par = c(
-  A.m = -1.25003011343083,
-  A.s = -2.35898953895842,
-  B.m = -2.84037595032418,
-  B.s = -3.56038409795944,
-  C.m = -1.64098410257594,
-  C.s = -2.2109396897871
-))
-```
-
-```{r}
 fit_params <- fit$par
 fit_params[c("A.s", "B.s", "C.s")] <- exp(fit_params[c("A.s", "B.s", "C.s")])
 target <- true_params[c("A.m", "A.s", "B.m", "B.s", "C.m", "C.s")]
@@ -116,6 +106,7 @@ data.frame(
 )
 ```
 
-Use chained onsets when the model requires a staged dependency between
-processes. We do note that these models can suffer from weak identifiability.
-So use with care!
+Only the combined finishing time of `B` and `C` is observed through response
+`C`. Separating their timing parameters can therefore be difficult. Additional
+observations of the stages or constraints on their parameters can help identify
+the individual contributions.

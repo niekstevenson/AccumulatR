@@ -1040,9 +1040,13 @@ inline bool exact_order_region_target_branches(
 
 inline bool exact_order_region_needs_target_readiness_time(
     const ExactOutcomeRegionCompileContext &outcome_context,
-    const ExactSymbolicTransitionTime &transition) {
+    const ExactSymbolicTransitionTime &transition,
+    const bool has_overlapping_release) {
   if (transition.readiness.empty()) {
     return false;
+  }
+  if (has_overlapping_release) {
+    return true;
   }
   for (const auto &competitor : outcome_context.competitors) {
     for (const auto &scenario : competitor.scenarios) {
@@ -1108,7 +1112,7 @@ inline bool exact_order_region_guard_not_at_time(
   ExactOrderRegionExpr failure = exact_order_region_one();
   if (guard.kind == ExactTransitionGuardKind::SourceBefore) {
     exact_order_region_append_lower(
-        &failure.terms.back(), guard.subject_id, time_id, true);
+        &failure.terms.back(), guard.subject_id, time_id);
   } else if (guard.kind == ExactTransitionGuardKind::SourceAfter) {
     exact_order_region_append_upper(
         &failure.terms.back(), guard.subject_id, time_id, true);
@@ -1116,7 +1120,7 @@ inline bool exact_order_region_guard_not_at_time(
     if (exact_order_region_expr_relation_can_collapse(
             plan, guard.subject_id)) {
       return exact_order_region_expr_relation_factor(
-          guard.subject_id, time_id, false, true, out);
+          guard.subject_id, time_id, false, false, out);
     }
     return exact_order_region_expr_not_satisfied_at_time(
         plan, guard.subject_id, time_id, builder, out);
@@ -1124,7 +1128,7 @@ inline bool exact_order_region_guard_not_at_time(
     if (exact_order_region_expr_relation_can_collapse(
             plan, guard.subject_id)) {
       return exact_order_region_expr_relation_factor(
-          guard.subject_id, time_id, true, true, out);
+          guard.subject_id, time_id, true, false, out);
     }
     return exact_order_region_expr_before_or_at(
         plan, guard.subject_id, time_id, builder, out);
@@ -1270,6 +1274,29 @@ inline bool exact_order_region_apply_transition_order_facts(
       region,
       transition.source_order_facts,
       builder);
+}
+
+inline bool exact_order_region_transitions_can_coincide(
+    const ExactVariantBuildState &plan,
+    const ExactSymbolicTransitionTime &target,
+    const ExactSymbolicTransitionTime &other) {
+  ExactOrderRegionBuilder builder;
+  const auto time_id =
+      static_cast<semantic::Index>(CompiledMathTimeSlot::Observed);
+  ExactOrderRegionExpr target_region;
+  ExactOrderRegionExpr other_region;
+  if (!exact_order_region_symbolic_transition_at_time(
+          plan, target, time_id, &builder, &target_region) ||
+      !exact_order_region_symbolic_transition_at_time(
+          plan, other, time_id, &builder, &other_region)) {
+    throw std::runtime_error("coincident transition lowering failed");
+  }
+  auto overlap = exact_order_region_conjoin(target_region, other_region);
+  if (!exact_order_region_materialize_relation_factors(
+          plan, std::move(overlap), &builder, &overlap)) {
+    throw std::runtime_error("coincident transition expansion failed");
+  }
+  return exact_order_region_expr_has_positive_measure(std::move(overlap));
 }
 
 inline bool exact_order_region_transition_strict_precedence(
@@ -1656,7 +1683,10 @@ inline bool exact_order_region_factor_context_overlaps_expr(
   const auto &support = plan.expr_supports[static_cast<std::size_t>(expr_id)];
   const auto source_overlaps =
       [&](const ExactOrderRegionSourceTime &source) {
-        return support_contains_source(support, source.source_id);
+        return source.source_id != semantic::kInvalidIndex &&
+               supports_overlap(
+                   support,
+                   planned_source_support_for_id(plan, source.source_id));
       };
   const auto exact_sources = exact_region_exact_source_atoms(term);
   if (std::any_of(exact_sources.begin(), exact_sources.end(), source_overlaps)) {
@@ -1670,9 +1700,11 @@ inline bool exact_order_region_factor_context_overlaps_expr(
   if (std::any_of(upper_sources.begin(), upper_sources.end(), source_overlaps)) {
     return true;
   }
+  std::size_t same_expr = 0;
   for (const auto &factor : exact_region_expr_atoms(term)) {
-    if (factor.expr_id != expr_id &&
-        expr_supports_overlap(plan, expr_id, factor.expr_id)) {
+    if ((factor.expr_id == expr_id && ++same_expr > 1U) ||
+        (factor.expr_id != expr_id &&
+         expr_supports_overlap(plan, expr_id, factor.expr_id))) {
       return true;
     }
   }
@@ -2100,13 +2132,26 @@ private:
 inline semantic::Index exact_order_region_probability_root(
     ExactVariantBuildState *plan,
     const ExactOutcomeRegionCompileContext &outcome_context,
-    const ExactSymbolicTransitionScenario &formula) {
+    const std::size_t scenario_index) {
+  const auto &formula = outcome_context.scenarios[scenario_index];
+  // Prove disjointness before introducing a latent readiness time. Sharing a
+  // release source alone does not imply that both routes can actually occur.
+  std::vector<std::size_t> overlapping_releases;
+  for (std::size_t i = 0; i < outcome_context.scenarios.size(); ++i) {
+    const auto &sibling = outcome_context.scenarios[i].transition;
+    if (i != scenario_index &&
+        sibling.release_source_id == formula.transition.release_source_id &&
+        exact_order_region_transitions_can_coincide(
+            *plan, formula.transition, sibling)) {
+      overlapping_releases.push_back(i);
+    }
+  }
   ExactOrderRegionBuilder builder;
   std::vector<ExactOrderRegionTargetBranch> target_branches;
   if (!exact_order_region_target_branches(
           *plan, formula.transition,
           exact_order_region_needs_target_readiness_time(
-              outcome_context, formula.transition),
+              outcome_context, formula.transition, !overlapping_releases.empty()),
           &builder, &target_branches)) {
     throw std::runtime_error("exact order-region target branch lowering failed");
   }
@@ -2115,7 +2160,45 @@ inline semantic::Index exact_order_region_probability_root(
       exact_order_region_expr_relation_can_collapse,
       exact_order_region_expand_relation_factor};
   std::vector<semantic::Index> nodes;
-  for (const auto &branch : target_branches) {
+  for (auto &branch : target_branches) {
+    // Shared-release routes describe one event. Retain the route with earliest
+    // readiness, using scenario order only when readiness itself is tied.
+    for (const auto i : overlapping_releases) {
+      const auto &sibling = outcome_context.scenarios[i].transition;
+      if (formula.transition.readiness.empty() &&
+          (!sibling.readiness.empty() || i > scenario_index)) {
+        continue;
+      }
+      ExactOrderRegionExpr precedes;
+      if (!exact_order_region_symbolic_transition_at_time(
+              *plan, sibling,
+              static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
+              &builder, &precedes)) {
+        throw std::runtime_error("same-outcome route lowering failed");
+      }
+      for (const auto &guard : sibling.readiness.guards) {
+        ExactOrderRegionExpr ready = exact_order_region_one();
+        if (guard.kind == ExactTransitionGuardKind::SourceBefore) {
+          exact_order_region_append_upper(
+              &ready.terms.back(), guard.subject_id,
+              branch.readiness_time_id, i < scenario_index);
+        } else if (guard.kind == ExactTransitionGuardKind::ExprBefore) {
+          const bool ok = i < scenario_index
+              ? exact_order_region_expr_before_or_at(
+                    *plan, guard.subject_id, branch.readiness_time_id,
+                    &builder, &ready)
+              : exact_order_region_expr_before(
+                    *plan, guard.subject_id, branch.readiness_time_id,
+                    &builder, &ready);
+          if (!ok) {
+            throw std::runtime_error("same-outcome readiness lowering failed");
+          }
+        }
+        precedes = exact_order_region_conjoin(std::move(precedes), std::move(ready));
+      }
+      branch.expr = exact_order_region_subtract_region(
+          std::move(branch.expr), precedes);
+    }
     // Build the complete geometry first so all generated latent times precede
     // the projection planner's fresh time ids.
     std::vector<ExactOrderRegionExpr> competitors;

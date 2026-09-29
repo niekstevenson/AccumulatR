@@ -37,6 +37,14 @@ testthat::test_that("first_of distributions retain compact closed-form programs"
       c(integral_nodes = 0L, integral_kernels = 0L,
         compiled_roots = 7L, compiled_nodes = 15L, symbolic_cells = 4L)
     ),
+    disjoint_shared_release = list(
+      first_of(inhibit("g", by = "a"), all_of("g", "a", "b")),
+      c(integral_kernels = 3L)
+    ),
+    disjoint_shared_release_reversed = list(
+      first_of(all_of("g", "a", "b"), inhibit("g", by = "a")),
+      c(integral_kernels = 3L)
+    ),
     multi_child = list(
       first_of("a", "b", "c"),
       c(integral_nodes = 0L, integral_kernels = 0L,

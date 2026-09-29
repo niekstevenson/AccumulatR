@@ -166,6 +166,28 @@ inline ExactOrderRegionTimeClosure exact_order_region_build_time_closure(
     }
     closure.representative[i] = rep;
   }
+  // A repeated source can identify a latent completion with the observation
+  // time. Preserve that identity without admitting independent boundary ties
+  // or equating two different fixed time slots.
+  for (const auto &equality : term.equalities) {
+    if (equality.origin != ExactRegionEqualityOrigin::SharedLatentIdentity) {
+      continue;
+    }
+    const auto lhs = closure.representative[
+        exact_order_region_time_pos(closure, equality.lhs_time_id)];
+    const auto rhs = closure.representative[
+        exact_order_region_time_pos(closure, equality.rhs_time_id)];
+    const bool lhs_special = exact_order_region_time_is_special(lhs);
+    const bool rhs_special = exact_order_region_time_is_special(rhs);
+    if (lhs_special == rhs_special) {
+      continue;
+    }
+    const auto latent = lhs_special ? rhs : lhs;
+    const auto fixed = lhs_special ? lhs : rhs;
+    for (auto &rep : closure.representative) {
+      if (rep == latent) rep = fixed;
+    }
+  }
   bool changed = true;
   while (changed) {
     changed = false;

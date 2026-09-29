@@ -212,9 +212,9 @@ inline std::vector<ExactCompiledOutcomePlan> compile_exact_outcome_plans(
     compile_context.scenarios = outcome.scenarios;
     compile_context.competitors = competitor_plan.competitors;
 
-    for (auto &scenario : compile_context.scenarios) {
-      scenario.probability_root_id =
-          exact_order_region_probability_root(plan, compile_context, scenario);
+    for (std::size_t i = 0; i < compile_context.scenarios.size(); ++i) {
+      compile_context.scenarios[i].probability_root_id =
+          exact_order_region_probability_root(plan, compile_context, i);
     }
     ExactCompiledOutcomePlan compiled_outcome;
     compiled_outcome.total_probability_root_id =

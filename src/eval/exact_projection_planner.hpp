@@ -934,6 +934,40 @@ exact_order_region_projection_candidates(
                 term, binder, blocked_time_ids, &bounds)) {
           return;
         }
+        const auto source_support = [&](const semantic::Index source_id)
+            -> const std::vector<semantic::Index> & {
+          const auto leaf_count = plan.program.layout.n_leaves;
+          return source_id < leaf_count
+              ? plan.leaf_supports[static_cast<std::size_t>(source_id)]
+              : plan.pool_supports[static_cast<std::size_t>(source_id - leaf_count)];
+        };
+        const auto &support =
+            binder.kind == ExactOrderRegionDensityBinderKind::Source
+                ? source_support(binder.subject_id)
+                : plan.expr_supports[static_cast<std::size_t>(binder.subject_id)];
+        // A different time slot does not make a repeated random source
+        // independent. Expand overlapping expressions before integrating out
+        // their source; otherwise its probability is multiplied in twice.
+        for (const auto &factor : exact_region_expr_atoms(term)) {
+          if (binder.kind == ExactOrderRegionDensityBinderKind::Expr &&
+              factor.density && factor.expr_id == binder.subject_id &&
+              factor.time_id == binder.time_id) {
+            continue;
+          }
+          if (supports_overlap(
+                  support,
+                  plan.expr_supports[static_cast<std::size_t>(factor.expr_id)])) {
+            return;
+          }
+        }
+        if (binder.kind == ExactOrderRegionDensityBinderKind::Expr) {
+          for (const auto &atom : term.atoms) {
+            if (atom.lhs.kind == ExactRegionVarKind::SourceTime &&
+                supports_overlap(support, source_support(atom.lhs.id))) {
+              return;
+            }
+          }
+        }
         out.push_back(
             ExactOrderRegionProjectionCandidate{
                 binder, std::move(bounds)});
@@ -1692,7 +1726,8 @@ inline semantic::Index exact_projection_raw_integral_upper_time(
       static_cast<semantic::Index>(CompiledMathTimeSlot::Observed);
   std::vector<semantic::Index> upper_time_ids;
   for (const auto &order : exact_region_time_order_atoms(residual)) {
-    if (order.before_time_id == latent_time_id) {
+    if (order.before_time_id == latent_time_id &&
+        order.after_time_id != latent_time_id) {
       exact_order_region_append_time_id(&upper_time_ids, order.after_time_id);
     }
   }
@@ -1803,8 +1838,25 @@ inline bool exact_projection_emit_plan_root(
     append_latent_time(order.before_time_id);
     append_latent_time(order.after_time_id);
   }
-  for (auto it = latent_time_ids.rbegin();
-       it != latent_time_ids.rend();
+  // Bind each latent upper limit outside the integral that uses it. Factor
+  // projection can change insertion order, which is not a nesting order.
+  std::vector<semantic::Index> integration_order;
+  const auto order_integral = [&](auto &&self, const semantic::Index time_id) -> void {
+    if (std::find(integration_order.begin(), integration_order.end(), time_id) !=
+        integration_order.end()) {
+      return;
+    }
+    const auto upper = exact_projection_raw_integral_upper_time(residual, time_id);
+    if (exact_region_time_is_latent_variable(upper)) {
+      self(self, upper);
+    }
+    integration_order.push_back(time_id);
+  };
+  for (const auto time_id : latent_time_ids) {
+    order_integral(order_integral, time_id);
+  }
+  for (auto it = integration_order.rbegin();
+       it != integration_order.rend();
        ++it) {
     const auto upper_time_id =
         exact_projection_raw_integral_upper_time(residual, *it);

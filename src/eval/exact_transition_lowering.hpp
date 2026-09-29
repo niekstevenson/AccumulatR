@@ -453,6 +453,14 @@ inline bool scenario_sources_supported(
         return false;
       }
     }
+    // An aggregate-safe pool is one atomic event everywhere in the model.
+    // Expressions may reuse that same event; the region compiler retains
+    // their shared source bounds rather than treating them as independent.
+    const auto pool_idx = static_cast<std::size_t>(
+        source_id - plan.program.layout.n_leaves);
+    if (plan.pool_transition_can_stay_aggregate[pool_idx] != 0U) {
+      continue;
+    }
     for (const auto &guard :
          scenario.transition.readiness.guards) {
       if (guard.kind == ExactTransitionGuardKind::ExprBefore &&
@@ -611,6 +619,35 @@ inline std::vector<ExactSymbolicTransitionScenario> build_expr_transition_scenar
     const ExactVariantBuildState &plan,
     const semantic::Index expr_idx);
 
+inline bool merge_coincident_transition_requirements(
+    ExactSymbolicTransitionScenario *scenario,
+    const ExactSymbolicTransitionScenario &other) {
+  if (scenario->transition.release_source_id !=
+      other.transition.release_source_id) {
+    return false;
+  }
+  for (const auto &guard : other.transition.readiness.guards) {
+    append_transition_guard(
+        &scenario->transition.readiness, guard.kind, guard.subject_id);
+  }
+  for (const auto &guard : other.transition.guards.guards) {
+    append_transition_guard(
+        &scenario->transition.guards, guard.kind, guard.subject_id);
+  }
+  for (const auto &fact : other.transition.source_order_facts) {
+    append_scenario_source_order_fact(
+        scenario, fact.before_source_id, fact.after_source_id);
+  }
+  const auto &relations = other.transition.relation_template;
+  for (std::size_t i = 0; i < relations.source_ids.size(); ++i) {
+    if (!append_transition_relation(
+            scenario, relations.source_ids[i], relations.relations[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 inline std::vector<ExactSymbolicTransitionScenario> build_logical_transition_scenarios(
     const ExactVariantBuildState &plan,
     const std::vector<semantic::Index> &children,
@@ -645,54 +682,72 @@ inline std::vector<ExactSymbolicTransitionScenario> build_logical_transition_sce
       continue;
     }
     for (const auto &child_scenario : child_scenarios[active]) {
-      auto scenario = child_scenario;
-      bool ok = true;
+      std::vector<ExactSymbolicTransitionScenario> branches{child_scenario};
       for (std::size_t other = 0; other < normalized_children.size(); ++other) {
         if (other == active) {
           continue;
         }
         const auto child = normalized_children[other];
-        if (kind == semantic::ExprKind::And) {
-          ok = append_ready_requirement(&scenario, plan, child);
-          if (ok && expr_is_simple_event(plan.program, child)) {
-            ok = append_source_truth_constraints(
-                plan,
-                plan.program.expr_source_ids[
-                    static_cast<std::size_t>(child)],
-                ExactRelation::Before,
-                &scenario);
-          }
-        } else {
-          if (expr_certainly_not_completed_by_active(
+        std::vector<ExactSymbolicTransitionScenario> next;
+        for (const auto &branch : branches) {
+          auto scenario = branch;
+          bool ok = true;
+          if (kind == semantic::ExprKind::And) {
+            // A child sharing the releasing source contributes its own
+            // prerequisites, not a requirement that the release happened earlier.
+            for (const auto &tied : child_scenarios[other]) {
+              auto coincident = branch;
+              if (merge_coincident_transition_requirements(&coincident, tied) &&
+                  scenario_sources_supported(plan, coincident)) {
+                next.push_back(std::move(coincident));
+              }
+            }
+            // If every child scenario requires this source, the child cannot
+            // finish earlier; its coincident cases above exhaust the paths.
+            if (!child_scenarios[other].empty() &&
+                std::all_of(
+                    child_scenarios[other].begin(),
+                    child_scenarios[other].end(),
+                    [&](const ExactSymbolicTransitionScenario &candidate) {
+                      return scenario_source_happens_by_transition(
+                          candidate, branch.transition.release_source_id);
+                    })) {
+              continue;
+            }
+            ok = append_ready_requirement(&scenario, plan, child);
+            if (ok && expr_is_simple_event(plan.program, child)) {
+              ok = append_source_truth_constraints(
                   plan,
-                  scenario,
-                  child)) {
-            continue;
+                  plan.program.expr_source_ids[
+                      static_cast<std::size_t>(child)],
+                  ExactRelation::Before,
+                  &scenario);
+            }
+          } else if (!expr_certainly_not_completed_by_active(
+                         plan, scenario, child)) {
+            bool tail_order_handled = false;
+            ok = append_tail_order_requirement(
+                &scenario, plan, child, &tail_order_handled);
+            if (ok && !tail_order_handled) {
+              ok = append_tail_requirement(&scenario, plan, child);
+            }
+            if (ok && expr_is_simple_event(plan.program, child)) {
+              ok = append_source_truth_constraints(
+                  plan,
+                  plan.program.expr_source_ids[
+                      static_cast<std::size_t>(child)],
+                  ExactRelation::After,
+                  &scenario);
+            }
           }
-          bool tail_order_handled = false;
-          ok = append_tail_order_requirement(
-              &scenario, plan, child, &tail_order_handled);
-          if (ok && !tail_order_handled) {
-            ok = append_tail_requirement(&scenario, plan, child);
-          }
-          if (ok && expr_is_simple_event(plan.program, child)) {
-            ok = append_source_truth_constraints(
-                plan,
-                plan.program.expr_source_ids[
-                    static_cast<std::size_t>(child)],
-                ExactRelation::After,
-                &scenario);
+          if (ok && scenario_sources_supported(plan, scenario)) {
+            next.push_back(std::move(scenario));
           }
         }
-        if (!ok) {
-          break;
-        }
+        branches = std::move(next);
       }
-      if (!ok) {
-        continue;
-      }
-      if (scenario_sources_supported(plan, scenario)) {
-        out.push_back(std::move(scenario));
+      for (auto &branch : branches) {
+        out.push_back(std::move(branch));
       }
     }
   }

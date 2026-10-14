@@ -5,7 +5,7 @@ Version: 1.0.0
 Authors@R: c(
     person("Niek", "Stevenson", email = "niek.stevenson@gmail.com", role = c("aut", "cre"))
   )
-Description: Toolbox for designing, simulating and fitting custom evidence-accumulation
+Description: Toolbox for designing, simulating and fitting custom racing evidence-accumulation
     models to behavioral data. Users define a model in terms of accumulators, pooled
     channels, logical response rules, and timing dependencies. This allows more direct
     embedding of psychological hypotheses into the model. With that model you can

@@ -15,11 +15,10 @@ struct TrustedParamMatrix {
   int nrow{0};
   int component_weight_start{0};
 
-  TrustedParamMatrix(SEXP paramsSEXP, const int weight_param_count)
-      : base(REAL(paramsSEXP)),
-        nrow(Rf_nrows(paramsSEXP)),
-        component_weight_start(
-            Rf_ncols(paramsSEXP) - weight_param_count) {}
+  TrustedParamMatrix(const double *values, const int rows,
+                     const int columns, const int weight_param_count)
+      : base(values), nrow(rows),
+        component_weight_start(columns - weight_param_count) {}
 
   inline double component_weight(const int row,
                                  const int weight_param_index) const {

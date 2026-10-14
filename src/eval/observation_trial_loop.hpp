@@ -69,7 +69,6 @@ struct ExactResponseScheduleGroup {
 };
 
 struct ObservationLikelihoodSchedule {
-  SEXP data{R_NilValue}; // Rooted by the owning context workspace's data anchor.
   std::size_t trial_count{0U};
   std::size_t component_count{0U};
   bool direct_trial_values{false};
@@ -96,7 +95,6 @@ struct ObservationLikelihoodLaneWorkspace {
   ObservationLaneWorkspace observation;
   ExactIntervalLaneWorkspace response_interval;
   ExactRankedLaneWorkspacePool ranked;
-  ObservationLikelihoodSchedule schedule;
   ObservationLaneBatch observation_lanes;
   std::vector<ExactRankedLane> ranked_lanes;
   std::vector<const ObservationScheduleEntry *> active_entries;
@@ -223,9 +221,9 @@ inline Rcpp::NumericVector evaluate_response_probabilities_cached(
   }
 
   const TrustedParamMatrix trusted_params(
-      paramsSEXP,
+      REAL(paramsSEXP), Rf_nrows(paramsSEXP), Rf_ncols(paramsSEXP),
       component_mixture.weight_param_count);
-  const ParamMatrixView parameter_matrix(paramsSEXP);
+  const ParamMatrixView parameter_matrix(REAL(paramsSEXP), Rf_nrows(paramsSEXP));
   workspace->begin();
   auto &groups = workspace->groups;
   auto &values = workspace->group_values;
@@ -546,40 +544,20 @@ inline void build_observation_likelihood_schedule(
         exact_plans[static_cast<std::size_t>(group.variant_index)]
             .leaf_descriptors.size());
   }
-  schedule->data = dataSEXP;
 }
 
 inline void evaluate_observation_likelihood_trial_values_lanes(
-    const std::vector<ComponentObservationPlan> &component_plans_by_code,
-    const bool observation_is_identity,
     const ComponentMixturePlan &component_mixture,
-    const std::vector<semantic::Index> &exact_variant_index_by_component_code,
     const std::vector<ExactVariantPlan> &exact_plans,
     const std::vector<std::vector<int>> &exact_leaf_row_offsets_by_variant,
     const std::size_t global_leaf_count,
-    SEXP paramsSEXP,
-    SEXP dataSEXP,
+    const ObservationLikelihoodSchedule &schedule,
+    const ParamMatrixView &parameter_matrix,
+    const TrustedParamMatrix &trusted_params,
     const double min_ll,
     const int *ok,
     ObservationLikelihoodLaneWorkspace *lane_workspace,
     double *trial_loglik) {
-  auto &schedule = lane_workspace->schedule;
-  if (schedule.data != dataSEXP) {
-    schedule.data = R_NilValue;
-    ObservationLikelihoodSchedule replacement;
-    build_observation_likelihood_schedule(
-        component_plans_by_code,
-        observation_is_identity,
-        component_mixture,
-        exact_variant_index_by_component_code,
-        exact_plans,
-        exact_leaf_row_offsets_by_variant,
-        global_leaf_count,
-        dataSEXP,
-        &replacement);
-    schedule = std::move(replacement);
-  }
-  const ParamMatrixView parameter_matrix(paramsSEXP, schedule.onset);
   const auto trial_count = schedule.trial_count;
   auto &scaled_sums = lane_workspace->scaled_sums;
   auto &denominator_loglik = lane_workspace->denominator_loglik;
@@ -615,8 +593,6 @@ inline void evaluate_observation_likelihood_trial_values_lanes(
   auto &latent_weights = lane_workspace->latent_weights;
   auto &component_weights = lane_workspace->component_weights;
   if (!direct_trial_values) {
-    const TrustedParamMatrix trusted_params(
-        paramsSEXP, component_mixture.weight_param_count);
     latent_weights.assign(
         schedule.latent_trials.empty()
             ? 0U

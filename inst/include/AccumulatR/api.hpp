@@ -1,31 +1,33 @@
 #pragma once
 
-#include <Rcpp.h>
+#include <Rinternals.h>
 #include <R_ext/Rdynload.h>
 
 namespace accumulatr {
 
-using loglik_trials_ccallable_t =
-    void (*)(SEXP, SEXP, SEXP, SEXP, double, double *);
+struct PreparedLikelihood;
+struct LikelihoodWorkspace;
 
-inline loglik_trials_ccallable_t loglik_trials_ccallable() {
-  static const auto fn = reinterpret_cast<loglik_trials_ccallable_t>(
-      R_GetCCallable("AccumulatR", "loglik_trials"));
-  return fn;
-}
+// Prepare and destroy on the R thread. A prepared likelihood owns its context
+// and data; independent workspaces may evaluate it concurrently without R calls.
+struct LikelihoodAPI {
+  PreparedLikelihood *(*prepare)(SEXP context, SEXP data, int parameter_rows,
+                                int parameter_columns, double min_ll);
+  void (*destroy)(PreparedLikelihood *);
+  LikelihoodWorkspace *(*workspace)(const PreparedLikelihood *);
+  void (*destroy_workspace)(LikelihoodWorkspace *);
+  // Column-major parameters; a null mask includes every compact trial.
+  // C++ exceptions propagate to the caller; evaluation never invokes R.
+  void (*evaluate)(const PreparedLikelihood *, LikelihoodWorkspace *,
+                   const double *parameters, const int *valid_trials,
+                   double *trial_loglik);
+};
 
-inline void loglik_trials(SEXP ctx_ptr,
-                          SEXP param_matrix,
-                          SEXP data_df,
-                          SEXP ok,
-                          double min_ll,
-                          double *out) {
-  loglik_trials_ccallable()(ctx_ptr,
-                            param_matrix,
-                            data_df,
-                            ok,
-                            min_ll,
-                            out);
+inline const LikelihoodAPI &likelihood_api() {
+  using Getter = const LikelihoodAPI *(*)();
+  static const auto get = reinterpret_cast<Getter>(
+      R_GetCCallable("AccumulatR", "likelihood_api"));
+  return *get();
 }
 
 } // namespace accumulatr

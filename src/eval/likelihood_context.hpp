@@ -31,6 +31,8 @@ struct LikelihoodWorkspacePool {
   struct Slot {
     explicit Slot(const std::size_t plans) : workspace(plans) {}
     ObservationLikelihoodLaneWorkspace workspace;
+    ObservationLikelihoodSchedule schedule;
+    SEXP data{R_NilValue};
     SEXP data_anchor{R_NilValue};
     std::unique_ptr<Slot> next;
   };

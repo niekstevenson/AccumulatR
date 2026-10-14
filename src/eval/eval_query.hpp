@@ -16,9 +16,9 @@ struct ParamMatrixView {
   const double *onset{nullptr};
   int nrow{0};
 
-  explicit ParamMatrixView(SEXP paramsSEXP,
-                           const double *onset_ = nullptr)
-      : base(REAL(paramsSEXP)), onset(onset_), nrow(Rf_nrows(paramsSEXP)) {}
+  ParamMatrixView(const double *values, const int rows,
+                  const double *onset_ = nullptr)
+      : base(values), onset(onset_), nrow(rows) {}
 };
 
 struct ParamView {

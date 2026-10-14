@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Rcpp.h>
+#include <boost/math/special_functions/gamma.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -13,6 +13,13 @@
 
 namespace accumulatr::eval {
 namespace detail {
+
+using GammaPolicy = boost::math::policies::policy<
+    boost::math::policies::domain_error<boost::math::policies::ignore_error>,
+    boost::math::policies::overflow_error<boost::math::policies::ignore_error>,
+    boost::math::policies::underflow_error<boost::math::policies::ignore_error>,
+    boost::math::policies::evaluation_error<boost::math::policies::ignore_error>,
+    boost::math::policies::promote_double<false>>;
 
 struct SourceLaneFill {
   void resize(const std::size_t count, const std::uint8_t requested_mask) {
@@ -669,11 +676,16 @@ template <leaf::DistKind Kind, std::uint8_t Mask>
       const double x = elapsed[i];
       if (x > 0.0) {
         const double scale = 1.0 / p1[i];
+        const double scaled = x / scale;
         fill = exact_source_finish_base_fill<Mask>(
             (Mask & kLeafChannelPdf) != 0U
-                ? R::dgamma(x, p0[i], scale, 0) : 0.0,
+                ? boost::math::gamma_p_derivative(p0[i], scaled, GammaPolicy{}) / scale : 0.0,
             (Mask & (kLeafChannelCdf | kLeafChannelSurvival)) != 0U
-                ? R::pgamma(x, p0[i], scale, 1, 0) : 0.0,
+                ? (scale > 0.0
+                       ? (p0[i] == 0.0 ? double(scaled > 0.0)
+                                      : boost::math::gamma_p(p0[i], scaled, GammaPolicy{}))
+                       : 0.0)
+                : 0.0,
             q[i]);
       }
       source_lane_store_fill_masked<Mask>(out, i, fill);

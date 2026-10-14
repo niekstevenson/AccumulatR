@@ -3,11 +3,41 @@
 #include <R_ext/Rdynload.h>
 
 #include <algorithm>
-#include <exception>
 #include <utility>
 
+#include "../inst/include/AccumulatR/api.hpp"
 #include "eval/likelihood_context.hpp"
 #include "eval/observation_trial_loop.hpp"
+
+namespace accumulatr {
+
+struct PreparedLikelihood {
+  PreparedLikelihood(SEXP context_, SEXP data_, int rows, int columns, double floor)
+      : context_owner(context_), data_owner(data_),
+        context(eval::detail::likelihood_context_from_xptr(context_)),
+        parameter_rows(rows), parameter_columns(columns), min_ll(floor) {
+    eval::detail::build_observation_likelihood_schedule(
+        context.observation_plans_by_component_code,
+        context.observation_is_identity, context.component_mixture,
+        context.exact_variant_index_by_component_code, context.exact_plans,
+        context.exact_leaf_row_offsets_by_variant, context.global_leaf_count,
+        data_, &schedule);
+  }
+
+  Rcpp::RObject context_owner, data_owner;
+  const eval::detail::NativeLikelihoodContext &context;
+  eval::detail::ObservationLikelihoodSchedule schedule;
+  int parameter_rows, parameter_columns;
+  double min_ll;
+};
+
+struct LikelihoodWorkspace {
+  explicit LikelihoodWorkspace(const PreparedLikelihood &likelihood)
+      : lanes(likelihood.context.exact_plans.size()) {}
+  eval::detail::ObservationLikelihoodLaneWorkspace lanes;
+};
+
+} // namespace accumulatr
 
 namespace {
 
@@ -68,21 +98,64 @@ void loglik_trials_context(
   accumulatr::eval::detail::LikelihoodWorkspacePool::Lease lease(*ctx.workspace_pool);
   lease.retain_data(dataSEXP);
   auto &workspace = lease.get();
+  auto &schedule = lease.slot->schedule;
+  if (lease.slot->data != dataSEXP) {
+    lease.slot->data = R_NilValue;
+    accumulatr::eval::detail::ObservationLikelihoodSchedule replacement;
+    accumulatr::eval::detail::build_observation_likelihood_schedule(
+        ctx.observation_plans_by_component_code, ctx.observation_is_identity,
+        ctx.component_mixture, ctx.exact_variant_index_by_component_code,
+        ctx.exact_plans, ctx.exact_leaf_row_offsets_by_variant,
+        ctx.global_leaf_count, dataSEXP, &replacement);
+    schedule = std::move(replacement);
+    lease.slot->data = dataSEXP;
+  }
   const int *ok = Rf_isNull(okSEXP) ? nullptr : LOGICAL(okSEXP);
+  const accumulatr::eval::detail::ParamMatrixView parameters(
+      REAL(paramsSEXP), Rf_nrows(paramsSEXP), schedule.onset);
+  const accumulatr::eval::detail::TrustedParamMatrix weights(
+      parameters.base, parameters.nrow, Rf_ncols(paramsSEXP),
+      ctx.component_mixture.weight_param_count);
   accumulatr::eval::detail::evaluate_observation_likelihood_trial_values_lanes(
-      ctx.observation_plans_by_component_code,
-      ctx.observation_is_identity,
       ctx.component_mixture,
-      ctx.exact_variant_index_by_component_code,
       ctx.exact_plans,
       ctx.exact_leaf_row_offsets_by_variant,
       ctx.global_leaf_count,
-      paramsSEXP,
-      dataSEXP,
+      schedule,
+      parameters,
+      weights,
       min_ll,
       ok,
       &workspace,
       out);
+}
+
+const accumulatr::LikelihoodAPI *prepared_likelihood_api() {
+  static const accumulatr::LikelihoodAPI api{
+      [](SEXP context, SEXP data, int rows, int columns, double min_ll) {
+        return new accumulatr::PreparedLikelihood(context, data, rows, columns, min_ll);
+      },
+      [](accumulatr::PreparedLikelihood *likelihood) { delete likelihood; },
+      [](const accumulatr::PreparedLikelihood *likelihood) {
+        return new accumulatr::LikelihoodWorkspace(*likelihood);
+      },
+      [](accumulatr::LikelihoodWorkspace *workspace) { delete workspace; },
+      [](const accumulatr::PreparedLikelihood *likelihood,
+         accumulatr::LikelihoodWorkspace *workspace, const double *values,
+         const int *ok, double *out) {
+        const auto &ctx = likelihood->context;
+        const accumulatr::eval::detail::ParamMatrixView parameters(
+            values, likelihood->parameter_rows, likelihood->schedule.onset);
+        const accumulatr::eval::detail::TrustedParamMatrix weights(
+            values, likelihood->parameter_rows, likelihood->parameter_columns,
+            ctx.component_mixture.weight_param_count);
+        accumulatr::eval::detail::evaluate_observation_likelihood_trial_values_lanes(
+            ctx.component_mixture, ctx.exact_plans,
+            ctx.exact_leaf_row_offsets_by_variant, ctx.global_leaf_count,
+            likelihood->schedule, parameters, weights, likelihood->min_ll,
+            ok, &workspace->lanes, out);
+      }};
+  return &api;
 }
 
 Rcpp::NumericVector loglik_context(SEXP contextSEXP,
@@ -155,41 +228,12 @@ SEXP semantic_loglik_context_cpp(SEXP contextSEXP,
       REAL(minLLSEXP)[0]);
 }
 
-extern "C" {
-
-void accumulatr_loglik_trials_ccallable(SEXP contextSEXP,
-                                        SEXP paramsSEXP,
-                                        SEXP dataSEXP,
-                                        SEXP okSEXP,
-                                        double min_ll,
-                                        double *out) {
-  try {
-    const auto &ctx =
-        accumulatr::eval::detail::likelihood_context_from_xptr(contextSEXP);
-    loglik_trials_context(
-        ctx,
-        paramsSEXP,
-        dataSEXP,
-        okSEXP,
-        min_ll,
-        out);
-    return;
-  } catch (const std::exception &e) {
-    ::Rf_error("%s", e.what());
-  } catch (...) {
-    ::Rf_error("Unknown C++ exception in AccumulatR::loglik_trials");
-  }
-}
-
-} // extern "C"
-
 // [[Rcpp::init]]
 void accumulatr_register_ccallables(DllInfo *dll) {
   (void)dll;
   R_RegisterCCallable(
-      "AccumulatR",
-      "loglik_trials",
-      reinterpret_cast<DL_FUNC>(accumulatr_loglik_trials_ccallable));
+      "AccumulatR", "likelihood_api",
+      reinterpret_cast<DL_FUNC>(prepared_likelihood_api));
 }
 
 // [[Rcpp::export]]

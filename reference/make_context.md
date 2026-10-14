@@ -35,7 +35,7 @@ spec <- add_outcome(spec, "A_win", "A")
 structure <- finalize_model(spec)
 make_context(structure)
 #> $cpp
-#> <pointer: 0x555f2ef38af0>
+#> <pointer: 0x5580decf95b0>
 #> 
 #> $outcome_labels
 #> [1] "A_win"

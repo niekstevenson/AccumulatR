@@ -1,4 +1,4 @@
-# AccumulatR 0.1.0
+# AccumulatR 1.0.0
 
 - First public release.
 - Added tools for defining evidence-accumulation models with accumulators,

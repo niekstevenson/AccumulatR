@@ -471,6 +471,39 @@ inline void evaluate_compiled_lane_integral_node(
     }
   }
   const bool measured = has_infinite_upper && !parent->has_sequence_history && kernel.density_measure >= 0;
+  if (measured) {
+    // A monotone probability factor that is zero at its maximum makes the
+    // entire integral zero, regardless of how narrow the PDF is.
+    for (std::size_t begin = 0; begin < lane_count; begin += kAdaptiveNodeBatchSize) {
+      const auto count = std::min(kAdaptiveNodeBatchSize, lane_count - begin);
+      for (std::size_t i = 0; i < count; ++i)
+        scratch.parents[i] = compiled_frame_lane(lanes, begin + i);
+      auto &child = executor->lanes.integral_frame(integral_depth, count);
+      child.copy_lanes_from(*parent, scratch.parents.data(), count);
+      for (semantic::Index k = 0; k < kernel.density_factors.size; ++k) {
+        const auto &op = program.source_product_ops[kernel.density_factors.offset + k];
+        for (std::size_t i = 0; i < count; ++i)
+          scratch.times[i] = op.value_channel_mask == kLeafChannelCdf
+              ? (scratch.infinite_integrals[begin + i] ? std::numeric_limits<double>::infinity()
+                  : scratch.integral_upper[begin + i]) : scratch.integral_origins[begin + i];
+        child.set_time_plane(kernel.bind_time_id, scratch.times.data(), count);
+        for (std::size_t i = 0; i < count; ++i) {
+          const double t = child.time(op.time_id, i);
+          scratch.times[i] = op.time_cap_id < 0 ? t : std::min(t, child.time(op.time_cap_id, i));
+        }
+        const auto &fill = evaluate_source_program_lanes(program, op.source_product_program_id,
+            &executor->lanes, child, nullptr, scratch.times.data(), count,
+            op.value_channel_mask, &executor->sources, 0);
+        const auto values = source_lane_fill_values(fill, op.value_channel_mask);
+        bool active = false;
+        for (std::size_t i = 0; i < count; ++i) {
+          if (values[i] == 0.0) scratch.integral_upper[begin + i] = scratch.integral_lower[begin + i];
+          active = active || scratch.integral_upper[begin + i] > scratch.integral_lower[begin + i];
+        }
+        if (!active) break;
+      }
+    }
+  }
   auto evaluate = [&](const double *times, const std::size_t *requests,
                       const std::size_t child_count, double *values) {
     for (std::size_t i = 0U; i < child_count; ++i) {

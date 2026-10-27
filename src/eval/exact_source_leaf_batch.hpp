@@ -79,6 +79,8 @@ struct PreparedSourceLeafBatch {
     return values.data() + (slot + 2U) * count;
   }
 
+  double *normalizer() noexcept { return normalizers.data(); }
+
   void ensure_work(const std::size_t lane_count,
                    const std::size_t plane_count) {
     work_stride = lane_count;
@@ -95,6 +97,7 @@ struct PreparedSourceLeafBatch {
   std::size_t count{0U};
   std::size_t work_stride{0U};
   std::vector<double> values;
+  std::vector<double> normalizers;
   std::vector<double> work;
   std::vector<std::size_t> positions;
 };
@@ -356,51 +359,30 @@ inline void evaluate_exgauss_leaf_batch(
     return;
   }
 
-  input->ensure_work(count, 12U);
+  input->ensure_work(count, 6U);
   auto *exponent_arguments = input->work_plane(0U);
-  auto *factors = input->work_plane(4U);
-  auto *tail_factors = input->work_plane(6U);
-  auto *exponentials = input->work_plane(8U);
-  std::size_t exponent_count = 2U * count;
+  auto *factors = input->work_plane(2U);
+  auto *tail_factors = input->work_plane(3U);
+  auto *exponentials = input->work_plane(4U);
+  std::size_t exponent_count = count;
   for (std::size_t lane = 0U; lane < count; ++lane) {
     const auto i = input->positions[lane];
     const double ratio = sigma[i] / tau[i];
-    const auto prepare_endpoint = [&](const std::size_t slot, const double z) {
-      const auto position = slot * count + lane;
-      const double w = z - ratio;
-      exponent_arguments[position] = -0.5 * z * z;
-      if (slot == 0U || need_cdf) {
-        factors[position] = prepare_normal_cdf(-z);
-      }
-      const double factor = normal_tail_factor(std::fabs(w));
-      tail_factors[position] = std::copysign(factor, w > 0.0 ? -1.0 : 1.0);
-      // exp(r*(r/2-z)) * Phi(w) shares exp(-z*z/2) with Phi(-z).
-      // For w > 0, normal symmetry also needs the unweighted exponential.
-      if (w > 0.0) {
-        exponent_arguments[exponent_count++] = ratio * (0.5 * ratio - z);
-      }
-    };
-    prepare_endpoint(0U, -mu[i] / sigma[i]);
-    prepare_endpoint(1U, (x[i] - mu[i]) / sigma[i]);
+    const double z = (x[i] - mu[i]) / sigma[i];
+    const double w = z - ratio;
+    exponent_arguments[lane] = -0.5 * z * z;
+    if constexpr (need_cdf) factors[lane] = prepare_normal_cdf(-z);
+    tail_factors[lane] = std::copysign(normal_tail_factor(std::fabs(w)), w > 0.0 ? -1.0 : 1.0);
+    if (w > 0.0) exponent_arguments[exponent_count++] = ratio * (0.5 * ratio - z);
   }
   exp_lanes(exponent_arguments, exponentials, exponent_count);
-
   const auto *q = input->q();
-  std::size_t extra_exponential = 2U * count;
+  std::size_t extra_exponential = count;
   for (std::size_t lane = 0U; lane < count; ++lane) {
     const auto i = input->positions[lane];
-    const auto weighted_tail = [&](const std::size_t slot) {
-      const auto position = slot * count + lane;
-      double value = tail_factors[position] * exponentials[position];
-      if (std::signbit(tail_factors[position])) {
-        value += exponentials[extra_exponential++];
-      }
-      return value;
-    };
-    const double lower_tail = weighted_tail(0U);
-    const double x_tail = weighted_tail(1U);
-    const double lower_survival =
-        finish_normal_cdf(factors[lane], exponentials[lane]) + lower_tail;
+    double x_tail = tail_factors[lane] * exponentials[lane];
+    if (std::signbit(tail_factors[lane])) x_tail += exponentials[extra_exponential++];
+    const double lower_survival = input->normalizer()[i];
     if (!(lower_survival > 0.0) || !std::isfinite(lower_survival)) {
       source_lane_store_fill_masked<Mask>(out, i, impossible);
       continue;
@@ -412,7 +394,7 @@ inline void evaluate_exgauss_leaf_batch(
     }
     if constexpr (need_cdf) {
       const double survival =
-          finish_normal_cdf(factors[count + lane], exponentials[count + lane]) +
+          finish_normal_cdf(factors[lane], exponentials[lane]) +
           x_tail;
       base_cdf = clamp_probability(
           1.0 - survival / lower_survival);

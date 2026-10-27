@@ -119,6 +119,7 @@ public:
     base_ = matrix.base;
     onset_ = matrix.onset;
     nrow_ = matrix.nrow;
+    reset_normalizers(lane_count);
     active_physical_rows_ = nullptr;
     active_row_maps_ = row_maps_.data();
     active_row_offsets_ = row_offsets_.data();
@@ -135,6 +136,7 @@ public:
     base_ = lanes.matrix->base;
     onset_ = lanes.matrix->onset;
     nrow_ = lanes.matrix->nrow;
+    reset_normalizers(lanes.size);
     if (lanes.physical_rows != nullptr) {
       active_physical_rows_ = lanes.physical_rows;
       active_physical_row_stride_ = lanes.physical_row_stride;
@@ -254,7 +256,32 @@ public:
     return true;
   }
 
+  void prepare_normalizers() const {
+    const auto size = plan_.leaf_descriptors.size() * normalizer_stride_;
+    if (normalizers_.size() < size) {
+      normalizers_.resize(size);
+      normalizer_epochs_.resize(size, 0U);
+    }
+  }
+
+  template <typename Compute>
+  double cached_normalizer(const semantic::Index leaf,
+                           const std::size_t lane, Compute &&compute) const {
+    const auto key = static_cast<std::size_t>(leaf) * normalizer_stride_ + lane;
+    if (normalizer_epochs_[key] == normalizer_epoch_) return normalizers_[key];
+    normalizer_epochs_[key] = normalizer_epoch_;
+    return normalizers_[key] = compute();
+  }
+
 private:
+  void reset_normalizers(const std::size_t count) noexcept {
+    normalizer_stride_ = count;
+    if (++normalizer_epoch_ == 0U) {
+      std::fill(normalizer_epochs_.begin(), normalizer_epochs_.end(), 0U);
+      normalizer_epoch_ = 1U;
+    }
+  }
+
   void advance_physical_row_epoch() noexcept {
     ++physical_row_current_epoch_;
     if (physical_row_current_epoch_ == 0U) {
@@ -269,6 +296,10 @@ private:
   const double *base_{nullptr};
   const double *onset_{nullptr};
   int nrow_{0};
+  std::size_t normalizer_stride_{0U};
+  mutable std::vector<double> normalizers_;
+  mutable std::vector<std::uint32_t> normalizer_epochs_;
+  std::uint32_t normalizer_epoch_{0U};
   const std::uint8_t *uniform_shared_started_{nullptr};
   mutable std::vector<int> physical_rows_;
   mutable std::vector<std::uint32_t> physical_row_epoch_;

@@ -65,6 +65,17 @@ inline double finish_normal_cdf(const double prepared,
   return std::signbit(prepared) ? 1.0 - tail : tail;
 }
 
+inline double exgauss_lower_survival(
+    const double mu, const double sigma, const double tau) noexcept {
+  const double ratio = sigma / tau;
+  const double z = -mu / sigma;
+  const double w = z - ratio;
+  const double gaussian = std::exp(-0.5 * z * z);
+  double tail = std::copysign(normal_tail_factor(std::fabs(w)), w > 0.0 ? -1.0 : 1.0) * gaussian;
+  if (w > 0.0) tail += std::exp(ratio * (0.5 * ratio - z));
+  return finish_normal_cdf(prepare_normal_cdf(-z), gaussian) + tail;
+}
+
 constexpr double kRdmAEpsilon = 1e-4;
 constexpr double kRdmLEpsilon = 1e-4;
 

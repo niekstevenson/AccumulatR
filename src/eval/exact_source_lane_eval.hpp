@@ -91,6 +91,10 @@ inline void prepare_source_leaf_batch(
   constexpr auto parameter_count = static_cast<std::size_t>(
       leaf::dist_param_count(Kind));
   out->ensure_lanes(count);
+  if constexpr (Kind == leaf::DistKind::Exgauss) {
+    workspace->source_state().prepare_normalizers();
+    if (out->normalizers.size() < count) out->normalizers.resize(count);
+  }
   const auto leaves = workspace->source_state().leaf_batch(
       source_program.leaf_index);
   auto *elapsed = out->elapsed();
@@ -109,6 +113,13 @@ inline void prepare_source_leaf_batch(
     const int physical_row = leaves.physical_row(source_lane);
     elapsed[i] = elapsed_time(i, leaves, physical_row);
     q[i] = leaves.q(source_lane, physical_row);
+    if constexpr (Kind == leaf::DistKind::Exgauss) {
+      out->normalizer()[i] = workspace->source_state().cached_normalizer(
+          source_program.leaf_index, source_lane, [&] {
+            return exgauss_lower_survival(leaves.param(0, physical_row),
+                leaves.param(1, physical_row), leaves.param(2, physical_row));
+          });
+    }
     for (std::size_t slot = 0U; slot < parameter_count; ++slot) {
       parameters[slot][i] = leaves.param(slot, physical_row);
     }

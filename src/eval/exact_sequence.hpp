@@ -177,108 +177,29 @@ inline void exact_unranked_target_density_lanes(
 }
 
 inline void exact_finite_outcome_probability_lanes(
-    const ExactVariantPlan &plan,
-    const ObservationLaneBatchView lanes,
-    const semantic::Index target_idx,
-    ExactStepLaneWorkspace *workspace,
-    std::vector<double> *out) {
-  const auto lane_count = lanes.size;
-  out->assign(lane_count, 0.0);
-  if (lane_count == 0U) {
-    return;
+    const ExactVariantPlan &plan, const ObservationLaneBatchView lanes,
+    const semantic::Index target, ExactStepLaneWorkspace *workspace,
+    std::vector<double> *out, const bool complement = false) {
+  out->assign(lanes.size, 0.0);
+  workspace->terminal_times.assign(lanes.size, std::numeric_limits<double>::infinity());
+  workspace->executor.terminal_relative_tolerance =
+      plan.compiled_outcomes[target].terminal_relative_tolerance[complement];
+  for (const auto &state : plan.trigger_state_table.states) {
+    exact_compiled_trigger_state_weights_lanes(plan, lanes, lanes.size,
+        state, &workspace->trigger_weights);
+    auto &frame = workspace->prepare_initial(lanes,
+        exact_compiled_trigger_shared_started(plan, state));
+    frame.set_time_plane(static_cast<semantic::Index>(CompiledMathTimeSlot::Observed),
+        workspace->terminal_times.data(), lanes.size);
+    evaluate_compiled_lane_root(plan,
+        complement ? plan.compiled_outcomes[target].terminal_survival_root_id
+                   : plan.compiled_outcomes[target].terminal_probability_root_id,
+        &workspace->executor, &frame, lanes.size, &workspace->input_values);
+    for (std::size_t i = 0; i < lanes.size; ++i)
+      (*out)[i] += workspace->trigger_weights[i] *
+          workspace->input_values[i];
   }
-  const auto &tail = quadrature::canonical_tail_batch().nodes;
-  auto &input_lanes = workspace->input_lanes;
-  auto &positions = workspace->input_positions;
-  auto &weights = workspace->input_weights;
-  auto &values = workspace->expanded_values;
-  auto &density_totals = workspace->finite_density_totals;
-
-  for (std::size_t tile_start = 0U;
-       tile_start < lane_count;
-       tile_start += kExactLaneTileSize) {
-    const auto tile_count =
-        std::min(kExactLaneTileSize, lane_count - tile_start);
-    density_totals.assign(
-        quadrature::kDefaultTailOrder * tile_count, 0.0);
-    for (const auto &compiled_state : plan.trigger_state_table.states) {
-      const bool fixed_weight = compiled_state.weight_terms.empty();
-      if (!fixed_weight) {
-        exact_compiled_trigger_state_weights_lanes(
-            plan,
-            lanes + tile_start,
-            tile_count,
-            compiled_state,
-            &workspace->trigger_weights);
-      }
-      const auto *shared_started =
-          exact_compiled_trigger_shared_started(plan, compiled_state);
-      input_lanes.clear();
-      positions.clear();
-      weights.clear();
-      for (std::size_t tile_lane = 0U;
-           tile_lane < tile_count;
-           ++tile_lane) {
-        const auto lane = tile_start + tile_lane;
-        const double weight = fixed_weight ? 1.0 : workspace->trigger_weights[tile_lane];
-        if (!(weight > 0.0)) {
-          continue;
-        }
-        input_lanes.emplace_back(lanes.row_maps[lane], lanes.row_offsets[lane], NA_REAL);
-        positions.push_back(tile_lane);
-        weights.push_back(weight);
-      }
-      const auto active_count = input_lanes.size();
-      if (active_count == 0U) {
-        continue;
-      }
-      workspace->bind_initial_sources(input_lanes.view(*lanes.matrix), shared_started);
-      const auto times_per_block = std::max<std::size_t>(
-          1U, kExactExpandedLaneTileSize / active_count);
-      for (std::size_t q_start = 0U;
-           q_start < quadrature::kDefaultTailOrder;
-           q_start += times_per_block) {
-        const auto q_count = std::min(
-            times_per_block,
-            quadrature::kDefaultTailOrder - q_start);
-        auto &frame = workspace->prepare_repeated_times(
-            active_count,
-            tail.nodes.data() + q_start,
-            q_count);
-        const auto expanded_count = active_count * q_count;
-        evaluate_exact_outcome_density_lanes(
-            plan,
-            &frame,
-            expanded_count,
-            target_idx,
-            workspace,
-            &values);
-        for (std::size_t q = 0; q < q_count; ++q) {
-          const auto total_offset = (q_start + q) * tile_count;
-          const auto value_offset = q * active_count;
-          for (std::size_t lane = 0; lane < active_count; ++lane) {
-            const double value = values[value_offset + lane];
-            if (std::isfinite(value) && value > 0.0) {
-              density_totals[total_offset + positions[lane]] +=
-                  weights[lane] * value;
-            }
-          }
-        }
-      }
-    }
-    for (std::size_t q = 0; q < quadrature::kDefaultTailOrder; ++q) {
-      const auto total_offset = q * tile_count;
-      for (std::size_t lane = 0; lane < tile_count; ++lane) {
-        const double value = density_totals[total_offset + lane];
-        if (std::isfinite(value) && value > 0.0) {
-          (*out)[tile_start + lane] += tail.weights[q] * value;
-        }
-      }
-    }
-  }
-  for (auto &value : *out) {
-    value = clamp_probability(value);
-  }
+  for (auto &value : *out) value = clamp_probability(value);
 }
 
 inline void exact_terminal_no_response_probability_lanes(

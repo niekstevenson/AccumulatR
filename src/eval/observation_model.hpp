@@ -34,7 +34,8 @@ enum class ObservationPlanOpKind : std::uint8_t {
   NoResponseProbability = 3,
   Complement = 4,
   WeightedSum = 5,
-  Log = 6
+  Log = 6,
+  FiniteOutcomeComplement = 7
 };
 
 struct ObservationIndexSpan {
@@ -74,7 +75,7 @@ struct ComponentObservationPlan {
   std::vector<std::vector<ObservedBranch>> keep_by_code;
   std::vector<std::vector<ObservedBranch>> missing_rt_by_code;
   std::vector<ObservedBranch> finite_observed_branches;
-  bool has_missing_outcomes{false};
+  std::vector<ObservedBranch> missing_branches;
   ObservationProbabilityPlan finite_response_plan;
   std::vector<ObservationProbabilityPlan> log_plans_by_state_code;
   std::vector<ObservationProbabilityPlan> probability_plans_by_state_code;
@@ -246,6 +247,12 @@ inline ObservationProbabilityPlan make_complement_probability_plan(
         1.0);
   }
   ObservationProbabilityPlan plan = inner;
+  if (plan.ops.size() == 1U &&
+      plan.ops[0].kind == ObservationPlanOpKind::FiniteOutcomeProbability &&
+      plan.ops[0].weight == 1.0) {
+    plan.ops[0].kind = ObservationPlanOpKind::FiniteOutcomeComplement;
+    return plan;
+  }
   plan.value_kind = ObservationPlanValueKind::Probability;
   ObservationPlanOp root;
   root.kind = ObservationPlanOpKind::Complement;
@@ -294,8 +301,18 @@ inline ObservationProbabilityPlan make_missing_rt_probability_plan(
 inline ObservationProbabilityPlan make_missing_all_probability_plan(
     const ComponentObservationPlan &component_plan,
     const bool direct_no_response) {
-  if (direct_no_response && !component_plan.has_missing_outcomes) {
-    return make_no_response_probability_plan();
+  if (direct_no_response) {
+    if (component_plan.missing_branches.empty()) return make_no_response_probability_plan();
+    auto plan = make_weighted_probability_plan(component_plan.missing_branches);
+    ObservationPlanOp no_response;
+    no_response.kind = ObservationPlanOpKind::NoResponseProbability;
+    no_response.value_kind = ObservationPlanValueKind::Probability;
+    const auto none = append_observation_plan_op(&plan, no_response);
+    ObservationPlanOp sum;
+    sum.kind = ObservationPlanOpKind::WeightedSum;
+    sum.value_kind = ObservationPlanValueKind::Probability;
+    plan.root = append_observation_plan_op(&plan, sum, {plan.root, none});
+    return plan;
   }
   return make_complement_probability_plan(
       component_plan.finite_response_plan);
@@ -355,7 +372,7 @@ inline void compile_component_observation_probability_plans(
   std::vector<std::vector<ObservedBranch>>().swap(
       component_plan->missing_rt_by_code);
   std::vector<ObservedBranch>().swap(component_plan->finite_observed_branches);
-  component_plan->has_missing_outcomes = false;
+  std::vector<ObservedBranch>().swap(component_plan->missing_branches);
 }
 
 inline bool string_cell_is_na(const Rcpp::CharacterVector &column,
@@ -607,7 +624,7 @@ inline std::vector<ComponentObservationPlan> build_component_observation_plans(
 
         semantic::Index observed_code = branch.first;
         if (map_missing) {
-          plan.has_missing_outcomes = true;
+          plan.missing_branches.push_back(branch.second);
           observed_code = semantic::kInvalidIndex;
           branch.second.rt_kind = ObservedRtKind::Missing;
         } else if (mapped_code != semantic::kInvalidIndex) {

@@ -25,6 +25,7 @@ struct ExactOutcomePlan {
 
 struct ExactCompetitorRegionPlan {
   semantic::Index expr_root{semantic::kInvalidIndex};
+  bool wins_readiness_ties{false};
   std::vector<semantic::Index> outcome_indices;
   std::vector<ExactSymbolicTransitionScenario> scenarios;
 };
@@ -42,6 +43,9 @@ struct ExactOutcomeRegionCompileContext {
 };
 
 struct ExactCompiledOutcomePlan {
+  semantic::Index terminal_probability_root_id{semantic::kInvalidIndex};
+  semantic::Index terminal_survival_root_id{semantic::kInvalidIndex};
+  double terminal_relative_tolerance[2]{1e-9, 1e-9};
   std::vector<ExactCompiledTransitionPlan> transitions;
   semantic::Index total_probability_root_id{semantic::kInvalidIndex};
   std::vector<semantic::Index> readiness_root_ids;

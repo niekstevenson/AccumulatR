@@ -310,7 +310,8 @@ inline void evaluate_lba_leaf_batch(
   std::size_t point_begin = input->count;
   for (std::size_t i = 0U; i < input->count; ++i) {
     if (!std::isfinite(x[i]) || x[i] <= 0.0) {
-      source_lane_store_fill_masked<Mask>(out, i, impossible);
+      source_lane_store_fill_masked<Mask>(out, i, x[i] == std::numeric_limits<double>::infinity()
+          ? exact_source_finish_base_fill<Mask>(0.0, 1.0, input->q()[i]) : impossible);
       continue;
     }
     if (A[i] > 1e-10) {
@@ -347,7 +348,8 @@ inline void evaluate_exgauss_leaf_batch(
     if (std::isfinite(x[i]) && x[i] > 0.0) {
       input->positions[count++] = i;
     } else {
-      source_lane_store_fill_masked<Mask>(out, i, impossible);
+      source_lane_store_fill_masked<Mask>(out, i, x[i] == std::numeric_limits<double>::infinity()
+          ? exact_source_finish_base_fill<Mask>(0.0, 1.0, input->q()[i]) : impossible);
     }
   }
   if (count == 0U) {
@@ -626,7 +628,8 @@ inline void evaluate_rdm_leaf_batch(
   std::size_t degenerate_begin = input->count;
   for (std::size_t i = 0U; i < input->count; ++i) {
     if (!std::isfinite(x[i]) || x[i] <= 0.0) {
-      source_lane_store_fill_masked<Mask>(out, i, impossible);
+      source_lane_store_fill_masked<Mask>(out, i, x[i] == std::numeric_limits<double>::infinity()
+          ? exact_source_finish_base_fill<Mask>(0.0, 1.0, input->q()[i]) : impossible);
       continue;
     }
     if (A[i] < kRdmAEpsilon) {

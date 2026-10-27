@@ -32,6 +32,9 @@ struct CompiledLaneScratch {
   std::vector<double> times;
   std::vector<double> integral_lower;
   std::vector<double> integral_upper;
+  std::vector<double> integral_origins;
+  std::vector<double> density_values;
+  std::vector<std::uint8_t> infinite_integrals;
   AdaptiveLaneWorkspace adaptive;
   std::vector<double> values;
   std::vector<double> child_values;
@@ -53,6 +56,7 @@ struct CompiledLaneExecutor {
     return *scratch_layers[depth];
   }
 
+  double terminal_relative_tolerance{1e-9};
   CompiledLaneWorkspace lanes;
   SourceLaneWorkspace sources;
   std::vector<std::unique_ptr<CompiledLaneScratch>> scratch_layers;
@@ -422,18 +426,25 @@ inline void evaluate_compiled_lane_integral_node(
   scratch.integral_lower.assign(lane_count, 0.0);
   scratch.integral_upper.resize(lane_count);
   const auto cached = [&](std::size_t request, std::size_t pos) {
+    if (parent->cache_epoch[pos] != parent->cache_current_epoch) return false;
     const double scale = absolute_scales == nullptr ? 1.0 : absolute_scales[request];
     const auto &estimate = parent->cache_estimates[pos];
-    return parent->cache_epoch[pos] == parent->cache_current_epoch &&
-        adaptive_integral_converged(estimate.value, estimate.error,
-            kAdaptiveAbsoluteTolerance / scale, kAdaptiveRelativeTolerance);
+    const auto lane = static_cast<std::size_t>(compiled_frame_lane(lanes, request));
+    const double relative = compiled_lane_node_time(node, *parent, lane) ==
+            std::numeric_limits<double>::infinity()
+        ? executor->terminal_relative_tolerance : kAdaptiveRelativeTolerance;
+    return adaptive_integral_converged(estimate.value, estimate.error,
+        kAdaptiveAbsoluteTolerance / scale, relative);
   };
+  bool has_infinite_upper = false;
   for (std::size_t request = 0U; request < lane_count; ++request) {
     const auto lane = static_cast<std::size_t>(compiled_frame_lane(lanes, request));
     const auto cache_pos = parent->integral_cache_pos(node.integral_kernel_slot, lane);
     scratch.integral_upper[request] =
         cached(request, cache_pos)
             ? 0.0 : compiled_lane_node_time(node, *parent, lane);
+    has_infinite_upper = has_infinite_upper || scratch.integral_upper[request] ==
+        std::numeric_limits<double>::infinity();
   }
   // PDF/CDF factors are exactly zero before their source's support begins.
   if (!parent->has_sequence_history) {
@@ -448,15 +459,50 @@ inline void evaluate_compiled_lane_integral_node(
       }
     }
   }
+  if (has_infinite_upper) {
+    scratch.infinite_integrals.assign(lane_count, 0U);
+    scratch.integral_origins = scratch.integral_lower;
+    for (std::size_t i = 0; i < lane_count; ++i) {
+      if (scratch.integral_upper[i] == std::numeric_limits<double>::infinity()) {
+        scratch.infinite_integrals[i] = 1U;
+        scratch.integral_lower[i] = 0.0;
+        scratch.integral_upper[i] = 1.0;
+      }
+    }
+  }
+  const bool measured = has_infinite_upper && !parent->has_sequence_history && kernel.density_measure >= 0;
   auto evaluate = [&](const double *times, const std::size_t *requests,
                       const std::size_t child_count, double *values) {
     for (std::size_t i = 0U; i < child_count; ++i) {
       scratch.parents[i] = compiled_frame_lane(lanes, requests[i]);
     }
+    if (has_infinite_upper) {
+      for (std::size_t i = 0; i < child_count; ++i) {
+        scratch.times[i] = scratch.infinite_integrals[requests[i]]
+            ? scratch.integral_origins[requests[i]] + times[i] / (1.0-times[i]) : times[i];
+      }
+    }
     auto &child = executor->lanes.integral_frame(integral_depth, child_count);
     child.copy_lanes_from(*parent, scratch.parents.data(), child_count);
-    child.set_time_plane(kernel.bind_time_id, times, child_count);
+    child.set_time_plane(kernel.bind_time_id,
+        has_infinite_upper ? scratch.times.data() : times, child_count);
     auto &child_values = scratch.child_values;
+    if (measured) {
+      evaluate_source_product_ops_lanes(plan, kernel.density_factors, executor, &child,
+          nullptr, child_count, &child_values, (integral_depth + 1U) * 4U);
+      const auto &density = evaluate_source_program_lanes(program, kernel.density_measure,
+          &executor->lanes, child, nullptr, scratch.times.data(), child_count,
+          kLeafChannelPdf, &executor->sources, 0);
+      scratch.density_values.resize(scratch.adaptive.values.size());
+      const auto offset = values - scratch.adaptive.values.data();
+      for (std::size_t i = 0; i < child_count; ++i) {
+        const double v = 1.0 - times[i];
+        const double mass = density.pdf[i] / (scratch.infinite_integrals[requests[i]] ? v * v : 1.0);
+        scratch.density_values[offset + i] = mass;
+        values[i] = mass * child_values[i];
+      }
+      return;
+    }
     const auto &execution = child.has_sequence_history
                                 ? kernel.execution
                                 : kernel.initial_execution;
@@ -466,8 +512,14 @@ inline void evaluate_compiled_lane_integral_node(
     for (std::size_t i = 0U; i < child_count; ++i) {
       values[i] = std::isfinite(child_values[i]) ? child_values[i] : 0.0;
     }
+    if (has_infinite_upper) {
+      for (std::size_t i = 0; i < child_count; ++i) {
+        if (scratch.infinite_integrals[requests[i]]) values[i] /= (1.0-times[i])*(1.0-times[i]);
+      }
+    }
   };
   const bool shared = !parent->has_sequence_history &&
+      !has_infinite_upper &&
           lane_count >= kCumulativeMinimumRequests &&
           !kernel.cumulative_leaves.empty()
       ? prepare_cumulative_lanes(plan, kernel, executor->lanes.source_state(),
@@ -484,11 +536,46 @@ inline void evaluate_compiled_lane_integral_node(
     }
     scales = scratch.integral_scales.data();
   }
-  adaptive_integrate_lane_batch(
-      lane_count, scratch.integral_lower.data(), scratch.integral_upper.data(),
-      evaluate, &scratch.adaptive, out, kAdaptiveAbsoluteTolerance,
-      kAdaptiveRelativeTolerance, scales,
-      shared ? scratch.cumulative.tolerance_divisors.data() : nullptr);
+  if (has_infinite_upper) {
+    const auto refine = [&](AdaptiveLaneWorkspace *work) {
+      if (!measured) return;
+      // The embedded rules can both miss a narrow PDF. Compare its quadrature
+      // mass with the CDF over each panel, using the same distribution interface.
+      const auto map_time = [&](double u, std::size_t request) {
+        return scratch.infinite_integrals[request]
+            ? scratch.integral_origins[request] + u / (1.0 - u) : u;
+      };
+      for (std::size_t begin = 0; begin < work->panels.size(); begin += kAdaptiveNodeBatchSize / 2) {
+        const auto count = std::min(kAdaptiveNodeBatchSize / 2, work->panels.size() - begin);
+        for (std::size_t i = 0; i < count; ++i) {
+          const auto &panel = work->panels[begin + i];
+          scratch.lanes[2*i] = scratch.lanes[2*i+1] = compiled_frame_lane(lanes, panel.lane);
+          scratch.times[2*i] = map_time(panel.lower, panel.lane);
+          scratch.times[2*i+1] = map_time(panel.upper, panel.lane);
+        }
+        const auto &bounds = evaluate_source_program_lanes(program, kernel.density_measure,
+            &executor->lanes, *parent, scratch.lanes.data(), scratch.times.data(), 2 * count,
+            kLeafChannelCdf | kLeafChannelSurvival, &executor->sources, 0);
+        for (std::size_t i = 0; i < count; ++i) {
+          auto &panel = work->panels[begin + i];
+          auto mass = panel;
+          adaptive_finish_panel<21>(&mass, scratch.density_values.data() + 21 * (begin + i));
+          const double exact = bounds.cdf[2*i] < 0.5
+              ? bounds.cdf[2*i+1] - bounds.cdf[2*i]
+              : bounds.survival[2*i] - bounds.survival[2*i+1];
+          panel.error = std::max(panel.error, std::fabs(mass.value - exact));
+        }
+      }
+    };
+    adaptive_integrate_lane_batch<21, 2>(lane_count, scratch.integral_lower.data(),
+        scratch.integral_upper.data(), evaluate, &scratch.adaptive, out,
+        kAdaptiveAbsoluteTolerance, executor->terminal_relative_tolerance, scales, nullptr, refine);
+  } else {
+    adaptive_integrate_lane_batch(lane_count, scratch.integral_lower.data(),
+        scratch.integral_upper.data(), evaluate, &scratch.adaptive, out,
+        kAdaptiveAbsoluteTolerance, kAdaptiveRelativeTolerance, scales,
+        shared ? scratch.cumulative.tolerance_divisors.data() : nullptr);
+  }
   if (shared) {
     finish_cumulative_lanes(lane_count, scratch.integral_upper.data(), evaluate, &scratch.adaptive,
         &scratch.cumulative, out, absolute_scales);

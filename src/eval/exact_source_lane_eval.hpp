@@ -418,6 +418,7 @@ inline SourceLaneFill &evaluate_onset_source_program_lanes(
        parent_begin += parent_tile) {
     const auto parent_end = std::min(count, parent_begin + parent_tile);
     std::size_t child_count = 0U;
+    bool has_terminal = false;
     for (std::size_t i = parent_begin; i < parent_end; ++i) {
       const double upper = times[i] - source_program.leaf_onset_lag;
       if (!(upper > 0.0)) {
@@ -425,6 +426,17 @@ inline SourceLaneFill &evaluate_onset_source_program_lanes(
       }
       if (need_cdf) {
         scratch.cdf_totals[i] = 0.0;
+      }
+      if (upper == std::numeric_limits<double>::infinity()) {
+        if (!need_cdf) continue;
+        has_terminal = true;
+        scratch.lanes[child_count] = compiled_frame_lane(lanes, i);
+        scratch.positions[child_count] = i;
+        scratch.times[child_count] = upper;
+        scratch.parent_times[child_count] = upper;
+        scratch.weights[child_count] = 1.0;
+        scratch.exact_flags[child_count++] = 2U;
+        continue;
       }
       const auto lane = static_cast<std::size_t>(
           compiled_frame_lane(lanes, i));
@@ -469,7 +481,7 @@ inline SourceLaneFill &evaluate_onset_source_program_lanes(
         scratch.lanes.data(),
         scratch.times.data(),
         child_count,
-        kLeafChannelPdf,
+        has_terminal ? kLeafChannelPdf | kLeafChannelCdf : kLeafChannelPdf,
         source_workspace,
         depth + 1U);
     scratch.shifted.resize(child_count, shifted_mask);
@@ -482,6 +494,7 @@ inline SourceLaneFill &evaluate_onset_source_program_lanes(
         [&](const std::size_t child,
             const ExactLaneLeafBatchView &leaf,
             const int row) {
+          if (scratch.exact_flags[child] == 2U) return std::numeric_limits<double>::infinity();
           return scratch.parent_times[child] - scratch.times[child] -
                  source_program.leaf_onset_lag -
                  leaf.t0(row);
@@ -489,6 +502,10 @@ inline SourceLaneFill &evaluate_onset_source_program_lanes(
         &scratch.leaf_batch,
         &scratch.shifted);
     for (std::size_t child = 0; child < child_count; ++child) {
+      if (scratch.exact_flags[child] == 2U) {
+        scratch.cdf_totals[scratch.positions[child]] = onset.cdf[child] * scratch.shifted.cdf[child];
+        continue;
+      }
       const double onset_density = scratch.exact_flags[child] != 0U
                                        ? 1.0
                                        : onset.pdf[child];

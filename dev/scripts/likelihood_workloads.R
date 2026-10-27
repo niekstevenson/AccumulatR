@@ -76,3 +76,39 @@ for (n in c(8L, 24L)) for (k in c(1L, 2L, n - 1L, n)) {
 # Same amount of numerical work, but interleaved contexts expose setup eviction.
 likelihood_cases$alternating_contexts <- list(interleave = likelihood_cases[c(
   'example_1_simple', 'example_16_guard_tie_simple', 'example_23_ranked_chain')])
+
+# The same race structures across every supported distribution.
+distribution_parameters <- list(
+  lognormal = c(m = log(.3), s = .2),
+  gamma = c(shape = 9, rate = 30),
+  exgauss = c(mu = .2, sigma = .05, tau = .1),
+  lba = c(v = 2.5, B = .6, A = .3, sv = .5),
+  rdm = c(v = 2.5, B = .6, A = .3, s = 1)
+)
+for (dist in names(distribution_parameters)) {
+  for (kind in c('observed_rt', 'missing_rt', 'mapped_na', 'mapped_na_triggers', 'shared_gate')) {
+    members <- switch(kind, mapped_na = c('a', 'b', 'c'),
+                      mapped_na_triggers = c('a', 'b', 'c', 'd'),
+                      shared_gate = c('a', 'b', 'g'), c('a', 'b'))
+    spec <- race_spec()
+    for (id in members) spec <- add_accumulator(spec, id, dist)
+    pars <- distribution_parameters[[dist]]
+    for (id in if (kind == 'shared_gate') c('a', 'b') else members) {
+      rule <- if (kind == 'shared_gate') all_of(id, 'g') else id
+      options <- if (kind %in% c('mapped_na', 'mapped_na_triggers')) {
+        if (id %in% c('c', 'd')) list(map_outcome_to = NA_character_) else list()
+      } else if (kind == 'observed_rt') list() else
+        list(guess = list(labels = toupper(id), weights = 1, rt_policy = 'na'))
+      spec <- add_outcome(spec, toupper(id), rule, options = options)
+      if (kind == 'mapped_na_triggers') {
+        spec <- add_trigger(spec, paste0('q_', id), members = id)
+        pars[paste0('q_', id)] <- .1
+      }
+    }
+    data <- data.frame(trials = 1:100,
+      R = if (kind %in% c('mapped_na', 'mapped_na_triggers')) NA_character_ else rep(c('A', 'B'), 50),
+      rt = if (kind == 'observed_rt') seq(.2, .7, length.out = 100) else NA_real_)
+    model <- list(structure = finalize_model(spec), pars = pars)
+    likelihood_cases[[paste(dist, kind, sep = '_')]] <- likelihood_case(model, data)
+  }
+}

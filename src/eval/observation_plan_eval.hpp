@@ -140,7 +140,8 @@ inline void evaluate_observation_lanes(
           values);
       break;
     }
-    case ObservationPlanOpKind::FiniteOutcomeProbability: {
+    case ObservationPlanOpKind::FiniteOutcomeProbability:
+    case ObservationPlanOpKind::FiniteOutcomeComplement: {
       const auto target = exact_plan.outcome_index_by_code[
           static_cast<std::size_t>(op.semantic_code)];
       const auto unique = workspace->probability_groups.prepare(exact_plan, lanes);
@@ -149,7 +150,8 @@ inline void evaluate_observation_lanes(
           unique,
           target,
           &exact_workspace,
-          &workspace->exact_values);
+          &workspace->exact_values,
+          op.kind == ObservationPlanOpKind::FiniteOutcomeComplement);
       workspace->probability_groups.expand(&workspace->exact_values);
       for (std::size_t lane = 0; lane < lane_count; ++lane) {
         const double probability = workspace->exact_values[lane];

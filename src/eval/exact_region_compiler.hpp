@@ -81,7 +81,8 @@ inline bool exact_order_region_truth_at_time(
     const ExactTransitionGuardSet &guards,
     semantic::Index time_id,
     ExactOrderRegionBuilder *builder,
-    ExactOrderRegionExpr *out);
+    ExactOrderRegionExpr *out,
+    bool before_inclusive = true);
 
 inline bool exact_order_region_guard_before_or_at(
     const ExactVariantBuildState &plan,
@@ -97,7 +98,8 @@ inline bool exact_order_region_transition_requirements_fail_at_times(
     semantic::Index readiness_time_id,
     semantic::Index guard_time_id,
     ExactOrderRegionBuilder *builder,
-    ExactOrderRegionExpr *out);
+    ExactOrderRegionExpr *out,
+    bool readiness_inclusive = true);
 
 inline bool exact_order_region_apply_source_order_facts(
     ExactOrderRegionExpr *region,
@@ -757,7 +759,8 @@ inline bool exact_order_region_transition_requirements_at_times(
     const semantic::Index readiness_time_id,
     const semantic::Index guard_time_id,
     ExactOrderRegionBuilder *builder,
-    ExactOrderRegionExpr *out) {
+    ExactOrderRegionExpr *out,
+    const bool readiness_inclusive = true) {
   const auto release_source_id =
       transition.release_source_id;
   ExactOrderRegionExpr region = exact_order_region_one();
@@ -770,7 +773,8 @@ inline bool exact_order_region_transition_requirements_at_times(
           transition.readiness,
           readiness_time_id,
           builder,
-          &readiness)) {
+          &readiness,
+          readiness_inclusive)) {
     return false;
   }
   region = exact_order_region_conjoin(region, readiness);
@@ -875,11 +879,12 @@ inline bool exact_order_region_guard_at_time(
     const ExactTransitionGuard &guard,
     const semantic::Index time_id,
     ExactOrderRegionBuilder *builder,
-    ExactOrderRegionExpr *out) {
+    ExactOrderRegionExpr *out,
+    const bool before_inclusive) {
   ExactOrderRegionExpr region = exact_order_region_one();
   if (guard.kind == ExactTransitionGuardKind::SourceBefore) {
     exact_order_region_append_upper(
-        &region.terms.back(), guard.subject_id, time_id, true);
+        &region.terms.back(), guard.subject_id, time_id, before_inclusive);
   } else if (guard.kind == ExactTransitionGuardKind::SourceAfter) {
     exact_order_region_append_lower(
         &region.terms.back(), guard.subject_id, time_id);
@@ -887,7 +892,11 @@ inline bool exact_order_region_guard_at_time(
     if (exact_order_region_expr_relation_can_collapse(
             plan, guard.subject_id)) {
       return exact_order_region_expr_relation_factor(
-          guard.subject_id, time_id, true, true, out);
+          guard.subject_id, time_id, true, before_inclusive, out);
+    }
+    if (!before_inclusive) {
+      return exact_order_region_expr_before(
+          plan, guard.subject_id, time_id, builder, out);
     }
     return exact_order_region_expr_satisfied_at_time(
         plan, guard.subject_id, time_id, builder, out);
@@ -909,12 +918,13 @@ inline bool exact_order_region_truth_at_time(
     const ExactTransitionGuardSet &guards,
     const semantic::Index time_id,
     ExactOrderRegionBuilder *builder,
-    ExactOrderRegionExpr *out) {
+    ExactOrderRegionExpr *out,
+    const bool before_inclusive) {
   ExactOrderRegionExpr region = exact_order_region_one();
   for (const auto &guard : guards.guards) {
     ExactOrderRegionExpr guard_region;
     if (!exact_order_region_guard_at_time(
-            plan, guard, time_id, builder, &guard_region)) {
+            plan, guard, time_id, builder, &guard_region, before_inclusive)) {
       return false;
     }
     region = exact_order_region_conjoin(region, guard_region);
@@ -1108,11 +1118,12 @@ inline bool exact_order_region_guard_not_at_time(
     const ExactTransitionGuard &guard,
     const semantic::Index time_id,
     ExactOrderRegionBuilder *builder,
-    ExactOrderRegionExpr *out) {
+    ExactOrderRegionExpr *out,
+    const bool before_inclusive) {
   ExactOrderRegionExpr failure = exact_order_region_one();
   if (guard.kind == ExactTransitionGuardKind::SourceBefore) {
     exact_order_region_append_lower(
-        &failure.terms.back(), guard.subject_id, time_id);
+        &failure.terms.back(), guard.subject_id, time_id, !before_inclusive);
   } else if (guard.kind == ExactTransitionGuardKind::SourceAfter) {
     exact_order_region_append_upper(
         &failure.terms.back(), guard.subject_id, time_id, true);
@@ -1120,7 +1131,11 @@ inline bool exact_order_region_guard_not_at_time(
     if (exact_order_region_expr_relation_can_collapse(
             plan, guard.subject_id)) {
       return exact_order_region_expr_relation_factor(
-          guard.subject_id, time_id, false, false, out);
+          guard.subject_id, time_id, false, !before_inclusive, out);
+    }
+    if (!before_inclusive) {
+      return exact_order_region_expr_not_before(
+          plan, guard.subject_id, time_id, builder, out);
     }
     return exact_order_region_expr_not_satisfied_at_time(
         plan, guard.subject_id, time_id, builder, out);
@@ -1142,12 +1157,13 @@ inline bool exact_order_region_truth_not_at_time(
     const ExactTransitionGuardSet &guards,
     const semantic::Index time_id,
     ExactOrderRegionBuilder *builder,
-    ExactOrderRegionExpr *out) {
+    ExactOrderRegionExpr *out,
+    const bool before_inclusive = true) {
   ExactOrderRegionExpr combined = exact_order_region_zero();
   for (const auto &guard : guards.guards) {
     ExactOrderRegionExpr failure;
     if (!exact_order_region_guard_not_at_time(
-            plan, guard, time_id, builder, &failure)) {
+            plan, guard, time_id, builder, &failure, before_inclusive)) {
       return false;
     }
     exact_order_region_append_union(&combined, std::move(failure));
@@ -1163,7 +1179,8 @@ inline bool exact_order_region_transition_requirements_fail_at_times(
     const semantic::Index readiness_time_id,
     const semantic::Index guard_time_id,
     ExactOrderRegionBuilder *builder,
-    ExactOrderRegionExpr *out) {
+    ExactOrderRegionExpr *out,
+    const bool readiness_inclusive) {
   ExactOrderRegionExpr failure = exact_order_region_zero();
   if (!transition.readiness.empty()) {
     ExactOrderRegionExpr readiness_fail;
@@ -1172,7 +1189,8 @@ inline bool exact_order_region_transition_requirements_fail_at_times(
             transition.readiness,
             readiness_time_id,
             builder,
-            &readiness_fail)) {
+            &readiness_fail,
+            readiness_inclusive)) {
       return false;
     }
     exact_order_region_append_union(&failure, std::move(readiness_fail));
@@ -1328,10 +1346,17 @@ inline bool exact_order_region_transition_strict_precedence(
 
 inline bool exact_order_region_transition_coincident_precedence(
     const ExactVariantBuildState &plan,
+    const ExactSymbolicTransitionTime &target,
     const ExactSymbolicTransitionTime &competitor,
     const semantic::Index target_readiness_time_id,
+    const bool wins_readiness_ties,
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
+  if (target.readiness.empty() &&
+      (!competitor.readiness.empty() || !wins_readiness_ties)) {
+    *out = exact_order_region_zero();
+    return true;
+  }
   const auto observed_time_id =
       static_cast<semantic::Index>(CompiledMathTimeSlot::Observed);
   const auto readiness_time_id =
@@ -1347,7 +1372,8 @@ inline bool exact_order_region_transition_coincident_precedence(
           readiness_time_id,
           observed_time_id,
           builder,
-          &wins)) {
+          &wins,
+          wins_readiness_ties)) {
     return false;
   }
   if (!exact_order_region_apply_transition_order_facts(
@@ -1365,6 +1391,7 @@ inline bool exact_order_region_transition_precedence(
     const ExactSymbolicTransitionTime &target,
     const ExactSymbolicTransitionTime &competitor,
     const semantic::Index target_readiness_time_id,
+    const bool wins_readiness_ties,
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
   const auto relation =
@@ -1385,8 +1412,10 @@ inline bool exact_order_region_transition_precedence(
     ExactOrderRegionExpr coincident_wins;
     if (!exact_order_region_transition_coincident_precedence(
             plan,
+            target,
             competitor,
             target_readiness_time_id,
+            wins_readiness_ties,
             builder,
             &coincident_wins)) {
       return false;
@@ -1408,6 +1437,7 @@ inline bool exact_order_region_competitor_scenario_can_win_on_branch(
     const ExactSymbolicTransitionScenario &competitor,
     const ExactOrderRegionExpr &target_branch,
     const semantic::Index target_readiness_time_id,
+    const bool wins_readiness_ties,
     ExactOrderRegionBuilder builder,
     bool *can_win) {
   ExactOrderRegionExpr wins;
@@ -1416,6 +1446,7 @@ inline bool exact_order_region_competitor_scenario_can_win_on_branch(
           target.transition,
           competitor.transition,
           target_readiness_time_id,
+          wins_readiness_ties,
           &builder,
           &wins)) {
     return false;
@@ -1493,9 +1524,12 @@ inline bool exact_order_region_transition_no_coincident_precedence(
     const ExactSymbolicTransitionRelation &relation,
     const ExactSymbolicTransitionTime &competitor,
     const semantic::Index target_readiness_time_id,
+    const bool wins_readiness_ties,
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
-  if (!relation.competitor_can_positively_coincide) {
+  if (!relation.competitor_can_positively_coincide ||
+      (target.readiness.empty() &&
+       (!competitor.readiness.empty() || !wins_readiness_ties))) {
     *out = exact_order_region_one();
     return true;
   }
@@ -1516,7 +1550,8 @@ inline bool exact_order_region_transition_no_coincident_precedence(
       readiness_time_id,
       observed_time_id,
       builder,
-      out);
+      out,
+      wins_readiness_ties);
 }
 
 inline bool exact_order_region_transition_not_before_target(
@@ -1524,6 +1559,7 @@ inline bool exact_order_region_transition_not_before_target(
     const ExactSymbolicTransitionTime &target,
     const ExactSymbolicTransitionTime &competitor,
     const semantic::Index target_readiness_time_id,
+    const bool wins_readiness_ties,
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
   const auto relation =
@@ -1544,6 +1580,7 @@ inline bool exact_order_region_transition_not_before_target(
           relation,
           competitor,
           target_readiness_time_id,
+          wins_readiness_ties,
           builder,
           &no_coincident_precedence)) {
     return false;
@@ -1558,6 +1595,7 @@ inline bool exact_order_region_competitor_scenario_non_win(
     const ExactSymbolicTransitionScenario &target,
     const ExactSymbolicTransitionScenario &competitor,
     const semantic::Index target_readiness_time_id,
+    const bool wins_readiness_ties,
     ExactOrderRegionBuilder *builder,
     ExactOrderRegionExpr *out) {
   return exact_order_region_transition_not_before_target(
@@ -1565,6 +1603,7 @@ inline bool exact_order_region_competitor_scenario_non_win(
       target.transition,
       competitor.transition,
       target_readiness_time_id,
+      wins_readiness_ties,
       builder,
       out);
 }
@@ -1649,6 +1688,7 @@ inline bool exact_order_region_competitor_plan_non_win(
             scenario,
             target_branch,
             target_readiness_time_id,
+            competitor.wins_readiness_ties,
             *builder,
             &can_win)) {
       return false;
@@ -1662,6 +1702,7 @@ inline bool exact_order_region_competitor_plan_non_win(
             target,
             scenario,
             target_readiness_time_id,
+            competitor.wins_readiness_ties,
             builder,
             &scenario_non_win)) {
       return false;
@@ -2176,26 +2217,13 @@ inline semantic::Index exact_order_region_probability_root(
               &builder, &precedes)) {
         throw std::runtime_error("same-outcome route lowering failed");
       }
-      for (const auto &guard : sibling.readiness.guards) {
-        ExactOrderRegionExpr ready = exact_order_region_one();
-        if (guard.kind == ExactTransitionGuardKind::SourceBefore) {
-          exact_order_region_append_upper(
-              &ready.terms.back(), guard.subject_id,
-              branch.readiness_time_id, i < scenario_index);
-        } else if (guard.kind == ExactTransitionGuardKind::ExprBefore) {
-          const bool ok = i < scenario_index
-              ? exact_order_region_expr_before_or_at(
-                    *plan, guard.subject_id, branch.readiness_time_id,
-                    &builder, &ready)
-              : exact_order_region_expr_before(
-                    *plan, guard.subject_id, branch.readiness_time_id,
-                    &builder, &ready);
-          if (!ok) {
-            throw std::runtime_error("same-outcome readiness lowering failed");
-          }
-        }
-        precedes = exact_order_region_conjoin(std::move(precedes), std::move(ready));
+      ExactOrderRegionExpr ready;
+      if (!exact_order_region_truth_at_time(
+              *plan, sibling.readiness, branch.readiness_time_id,
+              &builder, &ready, i < scenario_index)) {
+        throw std::runtime_error("same-outcome readiness lowering failed");
       }
+      precedes = exact_order_region_conjoin(std::move(precedes), std::move(ready));
       branch.expr = exact_order_region_subtract_region(
           std::move(branch.expr), precedes);
     }

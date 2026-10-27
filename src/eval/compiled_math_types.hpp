@@ -167,6 +167,8 @@ struct CompiledMathIntegralKernel {
   // Leaves determining a univariate cumulative integrand (empty if ineligible).
   std::vector<semantic::Index> cumulative_leaves;
   std::vector<semantic::Index> support_leaves;
+  semantic::Index density_measure{semantic::kInvalidIndex};
+  CompiledMathSourceProductOps density_factors{};
 };
 
 struct CompiledMathSourceValueFactor {

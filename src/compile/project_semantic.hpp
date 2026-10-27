@@ -39,16 +39,6 @@ inline bool source_in_component(const semantic::OutcomeSpec &outcome,
              component_id) != outcome.component_ids.end();
 }
 
-inline std::string observed_target_key(const semantic::OutcomeSpec &outcome) {
-  if (outcome.mapping.maps_to_missing) {
-    return std::string("\x1fmissing");
-  }
-  if (!outcome.mapping.observed_label.empty()) {
-    return outcome.mapping.observed_label;
-  }
-  return outcome.label;
-}
-
 enum class PoolProjectionKind : std::uint8_t {
   Dead = 0,
   Alias = 1,
@@ -125,7 +115,6 @@ public:
          target_index < static_cast<semantic::Index>(projected_outcomes.size());
          ++target_index) {
       auto &target = projected_outcomes[static_cast<std::size_t>(target_index)];
-      const auto target_observed = observed_target_key(target);
       for (semantic::Index competitor_index = 0;
            competitor_index <
                static_cast<semantic::Index>(projected_outcomes.size());
@@ -135,9 +124,6 @@ public:
         }
         const auto &competitor =
             projected_outcomes[static_cast<std::size_t>(competitor_index)];
-        if (observed_target_key(competitor) == target_observed) {
-          continue;
-        }
         target.competitor_expr_roots.push_back(competitor.expr_root);
         target.competitor_outcome_indices.push_back(competitor_index);
       }

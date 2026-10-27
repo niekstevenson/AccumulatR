@@ -108,23 +108,24 @@ check_at_most <- function(model_name, metrics, metric, expected) {
   make_check(model_name, metric, observed, "<=", expected, observed <= expected)
 }
 
+# Probability integration is now included in the compiled graph.
 acceptance_cases <- list(
   simple_first_of = list(
     build = model_simple_first_of,
-    max_integral_depth = 0L,
-    max_integral_nodes = 0L,
+    max_integral_depth = 1L,
+    max_integral_nodes = 2L,
     max_symbolic_cells = 4L
   ),
   all_of_competitor = list(
     build = model_all_of_competitor,
-    max_integral_depth = 0L,
-    max_integral_nodes = 0L,
+    max_integral_depth = 1L,
+    max_integral_nodes = 3L,
     max_symbolic_cells = 7L
   ),
   shared_gate_competitors = list(
     build = model_shared_gate_competitors,
-    max_integral_depth = 1L,
-    max_integral_nodes = 4L,
+    max_integral_depth = 2L,
+    max_integral_nodes = 10L,
     max_symbolic_cells = 31L
   ),
   guarded_overlap = list(

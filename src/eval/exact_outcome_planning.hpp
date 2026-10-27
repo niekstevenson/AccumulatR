@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "exact_types.hpp"
+#include "compiled_probability.hpp"
 #include "exact_compiled_math_lowering.hpp"
 #include "exact_expr_distribution.hpp"
 #include "exact_transition_lowering.hpp"
@@ -270,6 +271,16 @@ inline std::vector<ExactCompiledOutcomePlan> compile_exact_outcome_plans(
       compiled_outcome.transitions.push_back(std::move(transition));
     }
 
+    compile_outcome_terminal_roots(&plan->compiled_math,
+        compiled_outcome.total_probability_root_id, &compiled_outcome.terminal_probability_root_id,
+        &compiled_outcome.terminal_survival_root_id);
+    const semantic::Index terminal_roots[]{compiled_outcome.terminal_probability_root_id,
+                                         compiled_outcome.terminal_survival_root_id};
+    for (std::size_t i = 0; i < 2; ++i) {
+      if (probability_expression_sign(plan->compiled_math,
+              plan->compiled_math.roots[terminal_roots[i]].node_id) > 0)
+        compiled_outcome.terminal_relative_tolerance[i] = 1e-5;
+    }
     compiled_outcomes.push_back(std::move(compiled_outcome));
   }
 

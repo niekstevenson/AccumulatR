@@ -87,6 +87,8 @@ inline bool compiled_math_expand_source_product_terms(
       node.children.size == 1U) {
     const auto child_id = program.child_nodes[
         static_cast<std::size_t>(node.children.offset)];
+    if (initial_state) return compiled_math_expand_source_product_terms(
+        program, child_id, sign, true, terms, clean_signed);
     std::vector<CompiledMathSourceProductTermBuild> bounded_terms;
     if (!compiled_math_expand_source_product_terms(
             program,

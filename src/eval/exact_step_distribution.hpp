@@ -24,8 +24,6 @@ struct ExactStepLaneWorkspace {
         initial_state(make_exact_sequence_state(plan)),
         source_state(plan, kExactLaneTileSize) {
     step_inputs.reserve(kExactLaneTileSize);
-    input_lanes.reserve(kExactLaneTileSize);
-    input_positions.reserve(kExactLaneTileSize);
     input_weights.reserve(kExactLaneTileSize);
     executor.lanes.set_source_state(&source_state);
   }
@@ -99,45 +97,15 @@ struct ExactStepLaneWorkspace {
     return frame;
   }
 
-  CompiledLaneFrame &prepare_repeated_times(
-      const std::size_t lane_count,
-      const double *times,
-      const std::size_t time_count) {
-    const auto expanded_count = lane_count * time_count;
-    auto &frame = executor.lanes.top(expanded_count);
-    frame.source_lanes_identity = time_count == 1U;
-    const auto observed = static_cast<std::size_t>(
-        CompiledMathTimeSlot::Observed) * frame.stride;
-    for (std::size_t time = 0; time < time_count; ++time) {
-      std::fill_n(
-          frame.time_values.data() + observed + time * lane_count,
-          lane_count,
-          times[time]);
-      for (std::size_t lane = 0; lane < lane_count; ++lane) {
-        const auto expanded_lane = time * lane_count + lane;
-        if (!frame.source_lanes_identity) {
-          frame.source_lanes[expanded_lane] =
-              static_cast<semantic::Index>(lane);
-        }
-      }
-    }
-    frame.time_valid[static_cast<std::size_t>(
-        CompiledMathTimeSlot::Observed)] = 1U;
-    return frame;
-  }
-
   CompiledLaneExecutor executor;
   ExactSequenceState initial_state;
   ExactLaneSourceState source_state;
   std::vector<double> root_values;
   std::vector<ExactStepLaneInput> step_inputs;
-  ObservationLaneBatch input_lanes;
-  std::vector<std::size_t> input_positions;
   std::vector<double> input_weights;
   std::vector<double> trigger_weights;
   std::vector<double> input_values;
-  std::vector<double> expanded_values;
-  std::vector<double> finite_density_totals;
+  std::vector<double> terminal_times;
 };
 
 struct ExactStepLaneWorkspacePool {

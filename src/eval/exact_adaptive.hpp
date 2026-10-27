@@ -1,16 +1,15 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstddef>
 #include <vector>
+#include <boost/math/quadrature/gauss_kronrod.hpp>
 
 namespace accumulatr::eval {
 namespace detail {
 
 inline constexpr std::size_t kAdaptiveNodeBatchSize = 512U;
-inline constexpr std::size_t kKronrod15NodeCount = 15U;
 inline constexpr double kAdaptiveAbsoluteTolerance = 1e-12;
 inline constexpr double kAdaptiveRelativeTolerance = 1e-3;
 inline constexpr std::size_t kAdaptiveMaximumEvaluations = 6000U;
@@ -71,59 +70,38 @@ inline bool adaptive_integral_converged(
   return error <= std::max(relative_tolerance * std::fabs(value), absolute_tolerance);
 }
 
-inline void adaptive_map_kronrod15_panel(
+template <std::size_t Order>
+inline void adaptive_map_panel(
     const AdaptiveLanePanel &panel,
     const std::size_t panel_index,
     AdaptiveLaneWorkspace *workspace) noexcept {
-  static constexpr std::array<double, 7> nodes{
-      -0.99145537112081263920685469752598,
-      -0.94910791234275852452618968404809,
-      -0.86486442335976907278971278864098,
-      -0.74153118559939443986386477328079,
-      -0.58608723546769113029414483825842,
-      -0.40584515137739716690660641207696,
-      -0.20778495500789846760068940377324};
+  constexpr auto half = (Order - 1U) / 2U;
+  const auto &nodes = boost::math::quadrature::gauss_kronrod<double, Order>::abscissa();
   const double center = 0.5 * (panel.lower + panel.upper);
   const double delta = 0.5 * (panel.upper - panel.lower);
-  const auto offset = panel_index * kKronrod15NodeCount;
-  for (std::size_t node = 0U; node < 7U; ++node) {
-    const double distance = delta * nodes[node];
-    workspace->mapped_times[offset + 2U * node] = center + distance;
-    workspace->mapped_times[offset + 2U * node + 1U] =
-        center - distance;
+  const auto offset = panel_index * Order;
+  for (std::size_t node = 0U; node < half; ++node) {
+    const double distance = delta * nodes[half - node];
+    workspace->mapped_times[offset + 2U * node] = center - distance;
+    workspace->mapped_times[offset + 2U * node + 1U] = center + distance;
     workspace->mapped_lanes[offset + 2U * node] = panel.lane;
     workspace->mapped_lanes[offset + 2U * node + 1U] = panel.lane;
   }
-  workspace->mapped_times[offset + 14U] = center;
-  workspace->mapped_lanes[offset + 14U] = panel.lane;
+  workspace->mapped_times[offset + Order - 1U] = center;
+  workspace->mapped_lanes[offset + Order - 1U] = panel.lane;
 }
 
-inline void adaptive_finish_kronrod15_panel(
-    AdaptiveLanePanel *panel,
-    const double *values) noexcept {
-  static constexpr std::array<double, 8> kronrod_weights{
-      0.022935322010529224963732008059913,
-      0.063092092629978553290700663189093,
-      0.10479001032225018383987632254189,
-      0.14065325971552591874518959051021,
-      0.16900472663926790282619833697952,
-      0.19035057806478540991325640242055,
-      0.20443294007529889241416199923466,
-      0.20948214108472782801299917489173};
-  static constexpr std::array<double, 4> gauss_weights{
-      0.12948496616886969327061143267787,
-      0.27970539148927666790146777142378,
-      0.38183005050511894495036977548818,
-      0.41795918367346938775510204081633};
-
-  double kronrod = values[14U] * kronrod_weights[7U];
-  double gauss = values[14U] * gauss_weights[3U];
-  for (std::size_t node = 0U; node < 7U; ++node) {
+template <std::size_t Order>
+inline void adaptive_finish_panel(AdaptiveLanePanel *panel, const double *values) noexcept {
+  constexpr auto half = (Order - 1U) / 2U;
+  const auto &kronrod_weights = boost::math::quadrature::gauss_kronrod<double, Order>::weights();
+  const auto &gauss_weights = boost::math::quadrature::gauss<double, half>::weights();
+  double kronrod = values[Order - 1U] * kronrod_weights[0];
+  double gauss = half % 2U ? values[Order - 1U] * gauss_weights[0] : 0.0;
+  for (std::size_t node = 0U; node < half; ++node) {
     const double pair = values[2U * node] + values[2U * node + 1U];
-    kronrod += pair * kronrod_weights[node];
-    if ((node & 1U) != 0U) {
-      gauss += pair * gauss_weights[node / 2U];
-    }
+    kronrod += pair * kronrod_weights[half - node];
+    if ((node & 1U) != 0U) gauss += pair * gauss_weights[(half - node) / 2U];
   }
   const double scale = std::fabs(0.5 * (panel->upper - panel->lower));
   kronrod *= scale;
@@ -131,19 +109,19 @@ inline void adaptive_finish_kronrod15_panel(
   panel->error = std::fabs(kronrod - gauss * scale);
 }
 
-template <typename Evaluate>
-inline void adaptive_evaluate_kronrod15_panels(
+template <std::size_t Order, typename Evaluate>
+inline void adaptive_evaluate_panels(
     Evaluate &evaluate,
     AdaptiveLaneWorkspace *workspace) {
   const auto node_count =
-      workspace->panels.size() * kKronrod15NodeCount;
+      workspace->panels.size() * Order;
   workspace->mapped_times.resize(node_count);
   workspace->mapped_lanes.resize(node_count);
   workspace->values.resize(node_count);
   for (std::size_t panel = 0U;
        panel < workspace->panels.size();
        ++panel) {
-    adaptive_map_kronrod15_panel(
+    adaptive_map_panel<Order>(
         workspace->panels[panel], panel, workspace);
   }
   for (std::size_t begin = 0U;
@@ -160,13 +138,18 @@ inline void adaptive_evaluate_kronrod15_panels(
   for (std::size_t panel = 0U;
        panel < workspace->panels.size();
        ++panel) {
-    adaptive_finish_kronrod15_panel(
+    adaptive_finish_panel<Order>(
         &workspace->panels[panel],
-        workspace->values.data() + panel * kKronrod15NodeCount);
+        workspace->values.data() + panel * Order);
   }
 }
 
-template <typename Evaluate>
+struct AdaptiveNoRefinement {
+  void operator()(AdaptiveLaneWorkspace *) const noexcept {}
+};
+
+template <std::size_t Order = 15U, std::size_t InitialPanels = 1U,
+          typename Evaluate, typename Refine = AdaptiveNoRefinement>
 inline void adaptive_integrate_lane_batch(
     const std::size_t lane_count,
     const double *lower,
@@ -177,7 +160,8 @@ inline void adaptive_integrate_lane_batch(
     const double absolute_tolerance = kAdaptiveAbsoluteTolerance,
     const double relative_tolerance = kAdaptiveRelativeTolerance,
     const double *absolute_scales = nullptr,
-    const double *tolerance_divisors = nullptr) {
+    const double *tolerance_divisors = nullptr,
+    Refine refine = {}) {
   const auto converged = [&](std::size_t lane) {
     const auto &state = workspace->lanes[lane];
     const double absolute = absolute_scales == nullptr ? absolute_tolerance
@@ -202,22 +186,25 @@ inline void adaptive_integrate_lane_batch(
     if (std::isfinite(lower[lane]) &&
         std::isfinite(upper[lane]) &&
         upper[lane] > lower[lane]) {
-      workspace->panels.push_back(
-          AdaptiveLanePanel{lane, lower[lane], upper[lane], 0.0, 0.0});
+      const double width = (upper[lane] - lower[lane]) / InitialPanels;
+      for (std::size_t i = 0; i < InitialPanels; ++i)
+        workspace->panels.push_back(AdaptiveLanePanel{lane,
+            lower[lane] + i * width, i + 1U == InitialPanels ? upper[lane]
+                : lower[lane] + (i + 1U) * width, 0.0, 0.0});
     }
   }
 
-  adaptive_evaluate_kronrod15_panels(evaluate, workspace);
+  adaptive_evaluate_panels<Order>(evaluate, workspace);
+  refine(workspace);
   for (const auto &panel : workspace->panels) {
     auto &state = workspace->lanes[panel.lane];
-    state.value = panel.value;
-    state.error = panel.error;
-    state.evaluations = kKronrod15NodeCount;
+    state.value += panel.value;
+    state.error += panel.error;
+    state.evaluations += Order;
     adaptive_heap_push(&state, panel);
-    if (!converged(panel.lane)) {
-      workspace->active.push_back(panel.lane);
-    }
   }
+  for (std::size_t lane = 0; lane < lane_count; ++lane)
+    if (!converged(lane)) workspace->active.push_back(lane);
 
   while (!workspace->active.empty()) {
     const auto active_count = workspace->active.size();
@@ -244,7 +231,8 @@ inline void adaptive_integrate_lane_batch(
           0.0};
     }
 
-    adaptive_evaluate_kronrod15_panels(evaluate, workspace);
+    adaptive_evaluate_panels<Order>(evaluate, workspace);
+    refine(workspace);
     workspace->next_active.clear();
     for (std::size_t position = 0U;
          position < active_count;
@@ -258,7 +246,7 @@ inline void adaptive_integrate_lane_batch(
       adaptive_heap_push(&state, left);
       state.value += right.value + left.value - parent.value;
       state.error += right.error + left.error - parent.error;
-      state.evaluations += 2U * kKronrod15NodeCount;
+      state.evaluations += 2U * Order;
       const bool at_limit =
           state.evaluations >= kAdaptiveMaximumEvaluations;
       if (!converged(lane) &&

@@ -20,35 +20,36 @@ expect_compiler_budget <- function(metrics, budget, case) {
   }
 }
 
-testthat::test_that("first_of distributions retain compact closed-form programs", {
+# Budgets include direct and complementary probability roots.
+testthat::test_that("first_of distributions and outcome probabilities retain compact programs", {
   cases <- list(
     independent = list(
       first_of("a", "b"),
-      c(integral_nodes = 0L, integral_kernels = 0L,
-        compiled_roots = 12L, compiled_nodes = 24L, symbolic_cells = 6L)
+      c(integral_nodes = 3L, integral_kernels = 3L,
+        compiled_roots = 17L, compiled_nodes = 26L, symbolic_cells = 6L)
     ),
     overlapping = list(
       first_of(all_of("a", "g"), all_of("b", "g")),
-      c(integral_nodes = 0L, integral_kernels = 0L,
-        compiled_roots = 16L, compiled_nodes = 35L, symbolic_cells = 8L)
+      c(integral_nodes = 6L, integral_kernels = 6L,
+        compiled_roots = 23L, compiled_nodes = 45L, symbolic_cells = 8L)
     ),
     absorbed = list(
       first_of(all_of("a", "g"), "g"),
-      c(integral_nodes = 0L, integral_kernels = 0L,
-        compiled_roots = 7L, compiled_nodes = 15L, symbolic_cells = 4L)
+      c(integral_nodes = 2L, integral_kernels = 2L,
+        compiled_roots = 13L, compiled_nodes = 17L, symbolic_cells = 4L)
     ),
     disjoint_shared_release = list(
       first_of(inhibit("g", by = "a"), all_of("g", "a", "b")),
-      c(integral_kernels = 3L)
+      c(integral_kernels = 7L)
     ),
     disjoint_shared_release_reversed = list(
       first_of(all_of("g", "a", "b"), inhibit("g", by = "a")),
-      c(integral_kernels = 3L)
+      c(integral_kernels = 8L)
     ),
     multi_child = list(
       first_of("a", "b", "c"),
-      c(integral_nodes = 0L, integral_kernels = 0L,
-        compiled_roots = 15L, compiled_nodes = 31L, symbolic_cells = 8L)
+      c(integral_nodes = 4L, integral_kernels = 4L,
+        compiled_roots = 20L, compiled_nodes = 32L, symbolic_cells = 8L)
     )
   )
   for (case in names(cases)) {
@@ -60,13 +61,13 @@ testthat::test_that("all_of and guard distributions retain compact programs", {
   cases <- list(
     all_of_three = list(
       all_of("a", "b", "c"),
-      c(compiled_roots = 15L, compiled_nodes = 32L, integral_nodes = 0L,
-        max_integral_depth = 0L, symbolic_cells = 8L)
+      c(compiled_roots = 20L, compiled_nodes = 37L, integral_nodes = 4L,
+        max_integral_depth = 1L, symbolic_cells = 8L)
     ),
     simple_guard = list(
       inhibit("a", by = "g"),
-      c(compiled_roots = 9L, compiled_nodes = 20L, integral_nodes = 1L,
-        max_integral_depth = 1L, symbolic_cells = 5L)
+      c(compiled_roots = 15L, compiled_nodes = 26L, integral_nodes = 3L,
+        max_integral_depth = 2L, symbolic_cells = 5L)
     )
   )
   for (case in names(cases)) {

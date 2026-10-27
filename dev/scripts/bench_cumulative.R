@@ -9,14 +9,14 @@ benchmark_cumulative <- function(cases, baseline, repetitions = 5, candidate = '
   dir.create(build)
   dir.create(file.path(build,'baseline'))
   if (dir.exists(baseline)) {
-    file.copy(file.path(baseline,'src'),file.path(build,'baseline'),recursive=TRUE)
+    file.copy(file.path(baseline,c('src','inst')),file.path(build,'baseline'),recursive=TRUE)
   } else {
     archive <- file.path(build,'baseline.tar')
-    system2('git',c('archive','-o',shQuote(archive),baseline,'src'))
+    system2('git',c('archive','-o',shQuote(archive),baseline,'src','inst'))
     untar(archive,exdir=file.path(build,'baseline'))
   }
   dir.create(file.path(build,'current'))
-  file.copy(file.path(candidate,'src'),file.path(build,'current'),recursive=TRUE)
+  file.copy(file.path(candidate,c('src','inst')),file.path(build,'current'),recursive=TRUE)
   flags <- Sys.getenv('PKG_LIBS')
   on.exit(Sys.setenv(PKG_LIBS=flags))
   evaluators <- lapply(c('baseline','current'),function(version) {

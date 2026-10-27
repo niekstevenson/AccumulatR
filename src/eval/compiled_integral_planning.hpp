@@ -85,6 +85,44 @@ inline void compile_cumulative_integral_dependencies(CompiledMathProgram *progra
     auto &bounds = kernel.support_leaves;
     std::sort(bounds.begin(), bounds.end());
     bounds.erase(std::unique(bounds.begin(), bounds.end()), bounds.end());
+
+    // For f(t) times probability factors, the CDF checks mass missed by quadrature.
+    const auto &execution = kernel.initial_execution;
+    int densities = 0;
+    std::vector<CompiledMathSourceProductOp> factors;
+    const auto measure = [&](const CompiledMathSourceProductOps ops) {
+      for (semantic::Index i = 0; i < ops.size; ++i) {
+        auto op = program->source_product_ops[ops.offset + i];
+        if (op.value_channel_mask & 1U) {
+          ++densities;
+          const auto &source = program->source_programs[op.source_product_program_id];
+          const auto initial = source.initial_with_pdf_program_id;
+          if (op.time_id == kernel.bind_time_id && op.time_cap_id < 0 && initial >= 0 &&
+              program->source_programs[initial].kind == CompiledMathSourceProductProgramKind::LeafAbsolute)
+            kernel.density_measure = initial;
+          op.value_channel_mask &= ~1U;
+          op.fill_channel_mask &= ~1U;
+        }
+        if (op.value_channel_mask) factors.push_back(op);
+      }
+    };
+    if (execution.kind == CompiledMathExecutionKind::SourceProduct) {
+      measure(execution.source_product_ops);
+    } else if (execution.kind == CompiledMathExecutionKind::SourceProductSum &&
+               execution.source_product_terms.size == 1) {
+      const auto &term = program->source_product_terms[execution.source_product_terms.offset];
+      if (term.sign == 1.0 && term.integral_factor_nodes.empty() &&
+          term.expr_upper_factors.empty() && term.time_gate_nodes.empty()) {
+        measure(execution.source_product_ops);
+        measure(term.source_product_ops);
+      }
+    }
+    if (densities != 1) kernel.density_measure = semantic::kInvalidIndex;
+    if (kernel.density_measure >= 0) {
+      kernel.density_factors.offset = program->source_product_ops.size();
+      kernel.density_factors.size = factors.size();
+      program->source_product_ops.insert(program->source_product_ops.end(), factors.begin(), factors.end());
+    }
   }
 }
 

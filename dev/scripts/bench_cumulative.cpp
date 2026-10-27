@@ -1,4 +1,5 @@
 // [[Rcpp::plugins(cpp17)]]
+// [[Rcpp::depends(BH)]]
 #include <chrono>
 #include "src/semantic_bridge.hpp"
 

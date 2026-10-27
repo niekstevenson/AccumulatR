@@ -938,6 +938,8 @@ inline ExactTargetCompetitorPlan build_target_competitor_plan(
   for (const auto &competitor : competitors) {
     ExactCompetitorRegionPlan competitor_plan;
     competitor_plan.expr_root = competitor.expr_root;
+    competitor_plan.wins_readiness_ties =
+        competitor.outcome_index < target_outcome_idx;
     if (competitor.outcome_index != semantic::kInvalidIndex) {
       competitor_plan.outcome_indices.push_back(competitor.outcome_index);
     }

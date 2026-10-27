@@ -1,6 +1,7 @@
 #include <Rcpp.h>
 
 #include "simulation.hpp"
+#include "../inst/include/AccumulatR/api.hpp"
 
 // [[Rcpp::export(rng = false)]]
 SEXP make_simulation_context_cpp() {
@@ -46,55 +47,14 @@ SEXP simulate_cpp(SEXP prep, SEXP context,
   Trial trial(program);
   for (int i = 0; i < n_trials; ++i) {
     const double *params = parameter_values + i * n_leaves;
-    int chosen = 0;
-    if (component_codes == nullptr || component_codes[i] == NA_INTEGER) {
-      if (model.components.size() > 1) {
-        double sampled_total = 0.0;
-        for (std::size_t c = 0; c < model.components.size(); ++c) {
-          const int weight_index = program.components[c].weight_param_index;
-          trial.weights[c] = weight_index < 0 ? model.components[c].weight
-              : params[(weight_start + weight_index) * stride];
-          if (weight_index >= 0) sampled_total += trial.weights[c];
-        }
-        for (std::size_t c = 0; c < model.components.size(); ++c) {
-          if (model.component_mode == "sample" && program.components[c].weight_param_index < 0)
-            trial.weights[c] = 1.0 - sampled_total;
-        }
-        chosen = choose(trial.weights);
-      }
-    } else {
-      chosen = component_codes[i] - 1;
-    }
-    const auto &plan = program.components[chosen];
-    trial.run(plan, params, stride, onsets == nullptr ? nullptr : onsets + i * n_leaves);
+    int chosen = trial.sample(params, stride, weight_start,
+      component_codes ? component_codes[i] : NA_INTEGER, onsets ? onsets + i*n_leaves : nullptr);
+    const auto& plan = program.components[chosen];
     if (keep_component) components[i] = model.components[chosen].id;
     if (keep_detail) details[i] = trial.detail(chosen);
-    if (trial.candidates.empty()) continue;
-    const auto candidate_less = [&](const int a, const int b) {
-      return plan.readouts == 1 ? earlier(trial.result(a), trial.result(b))
-          : trial.result(a).time < trial.result(b).time ||
-              (trial.result(a).time == trial.result(b).time && a < b);
-    };
-    const int count = std::min<int>(plan.readouts, trial.candidates.size());
-    if (count == 1) {
-      const auto winner = std::min_element(trial.candidates.begin(), trial.candidates.end(), candidate_less);
-      std::iter_swap(trial.candidates.begin(), winner);
-    } else {
-      std::partial_sort(trial.candidates.begin(), trial.candidates.begin() + count,
-                        trial.candidates.end(), candidate_less);
-    }
-    for (int rank = 0; rank < count; ++rank) {
-      const auto winner = trial.candidates[rank];
-      const auto &outcome = model.outcomes[winner];
-      const auto &policy = program.readout[winner];
-      std::string label = outcome.label;
-      double time = trial.result(winner).time;
-      if (!policy.weights.empty()) label = policy.labels[choose(policy.weights)];
-      if (policy.missing_rt) time = NA_REAL;
-      if (outcome.mapping.maps_to_missing) continue;
-      if (!outcome.mapping.observed_label.empty()) label = outcome.mapping.observed_label;
-      responses[rank][i] = label;
-      times[rank][i] = time;
+    for (int rank = 0; rank < program.readouts; ++rank) {
+      if (!trial.labels[rank].empty()) responses[rank][i] = trial.labels[rank];
+      times[rank][i] = trial.times[rank];
     }
     if (keep_detail && plan.readouts > 1) {
       Rcpp::IntegerVector ranks(plan.readouts);
@@ -120,4 +80,35 @@ SEXP simulate_cpp(SEXP prep, SEXP context,
   output.attr("row.names") = Rcpp::IntegerVector::create(NA_INTEGER, -n_trials);
   if (keep_detail) output.attr("details") = details;
   return output;
+}
+
+namespace {
+const accumulatr::SimulationAPI* native_simulation_api() {
+  using namespace accumulatr::simulation;
+  static const accumulatr::SimulationAPI api{
+    [](SEXP prep) -> void* { return new Program(Rcpp::List(prep)); },
+    [](void* p) { delete static_cast<Program*>(p); },
+    [](const void* p) -> void* { return new Trial(*static_cast<const Program*>(p)); },
+    [](void* w) { delete static_cast<Trial*>(w); },
+    [](const void* p, void* w, const double* parameters, int stride, int columns,
+       int component, const double* onsets, const char** labels, double* times) {
+      const auto& program = *static_cast<const Program*>(p);
+      auto& trial = *static_cast<Trial*>(w);
+      int chosen = trial.sample(parameters,stride,columns-program.weight_param_count,component,onsets);
+      for (int rank = 0; rank < program.readouts; ++rank) {
+        labels[rank] = trial.labels[rank].empty() ? nullptr : trial.labels[rank].c_str();
+        times[rank] = trial.times[rank];
+      }
+      return chosen;
+    },
+    [](int distribution, const double* row, int stride) {
+      return accumulatr::leaf::sample_time(static_cast<accumulatr::leaf::DistKind>(distribution),row,stride);
+    }
+  };
+  return &api;
+}
+}
+// [[Rcpp::init]]
+void register_simulation_api(DllInfo* dll) {
+  R_RegisterCCallable("AccumulatR", "simulation_api_1", reinterpret_cast<DL_FUNC>(&native_simulation_api));
 }

@@ -98,8 +98,10 @@ static const R_CallMethodDef CallEntries[] = {
 };
 
 void accumulatr_register_ccallables(DllInfo *dll);
+void register_simulation_api(DllInfo* dll);
 RcppExport void R_init_AccumulatR(DllInfo *dll) {
     R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
     R_useDynamicSymbols(dll, FALSE);
     accumulatr_register_ccallables(dll);
+    register_simulation_api(dll);
 }

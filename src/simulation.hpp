@@ -141,10 +141,66 @@ inline int choose(const std::vector<double> &weights) {
 
 struct Trial {
   explicit Trial(const Program &program)
-      : program(program), sources(program.source_count()),
+      : labels(program.readouts), times(program.readouts),
+        program(program), sources(program.source_count()),
         expressions(program.model.expr_nodes.size()), triggers(program.model.triggers.size()),
         pool_times(program.max_pool_members), weights(program.components.size()) {
     candidates.reserve(program.model.outcomes.size());
+  }
+
+  int sample(const double* params, int stride, int weight_start, int component, const double* onsets) {
+    const auto& model = program.model;
+    std::fill(labels.begin(), labels.end(), std::string());
+    std::fill(times.begin(), times.end(), NA_REAL);
+    int chosen = 0;
+    if (component == NA_INTEGER) {
+      if (model.components.size() > 1) {
+        double sampled_total = 0.0;
+        for (std::size_t c = 0; c < model.components.size(); ++c) {
+          const int weight_index = program.components[c].weight_param_index;
+          weights[c] = weight_index < 0 ? model.components[c].weight
+              : params[(weight_start + weight_index) * stride];
+          if (weight_index >= 0) sampled_total += weights[c];
+        }
+        for (std::size_t c = 0; c < model.components.size(); ++c) {
+          if (model.component_mode == "sample" && program.components[c].weight_param_index < 0)
+            weights[c] = 1.0 - sampled_total;
+        }
+        chosen = choose(weights);
+      }
+    } else {
+      chosen = component - 1;
+    }
+    const auto &plan = program.components[chosen];
+    run(plan, params, stride, onsets);
+    if (candidates.empty()) return chosen;
+    const auto candidate_less = [&](const int a, const int b) {
+      return plan.readouts == 1 ? earlier(result(a), result(b))
+          : result(a).time < result(b).time ||
+              (result(a).time == result(b).time && a < b);
+    };
+    const int count = std::min<int>(plan.readouts, candidates.size());
+    if (count == 1) {
+      const auto winner = std::min_element(candidates.begin(), candidates.end(), candidate_less);
+      std::iter_swap(candidates.begin(), winner);
+    } else {
+      std::partial_sort(candidates.begin(), candidates.begin() + count,
+                        candidates.end(), candidate_less);
+    }
+    for (int rank = 0; rank < count; ++rank) {
+      const auto winner = candidates[rank];
+      const auto &outcome = model.outcomes[winner];
+      const auto &policy = program.readout[winner];
+      std::string label = outcome.label;
+      double time = result(winner).time;
+      if (!policy.weights.empty()) label = policy.labels[choose(policy.weights)];
+      if (policy.missing_rt) time = NA_REAL;
+      if (outcome.mapping.maps_to_missing) continue;
+      if (!outcome.mapping.observed_label.empty()) label = outcome.mapping.observed_label;
+      labels[rank] = std::move(label);
+      times[rank] = time;
+    }
+    return chosen;
   }
 
   void run(const Component &component, const double *parameters, const int stride,
@@ -263,9 +319,11 @@ struct Trial {
     }
     Rcpp::CharacterVector labels(candidates.size());
     Rcpp::NumericVector times(candidates.size());
-    for (std::size_t i = 0; i < candidates.size(); ++i) {
-      labels[i] = model.outcomes[candidates[i]].label;
-      times[i] = result(candidates[i]).time;
+    int row = 0;
+    for (const auto outcome : program.components[component].outcomes) {
+      if (!std::isfinite(result(outcome).time)) continue;
+      labels[row] = model.outcomes[outcome].label;
+      times[row++] = result(outcome).time;
     }
     Rcpp::List outcome_candidates = Rcpp::List::create(
         Rcpp::Named("label") = labels, Rcpp::Named("time") = times);
@@ -280,6 +338,8 @@ struct Trial {
         Rcpp::Named("outcome_candidates") = outcome_candidates);
   }
 
+  std::vector<std::string> labels;
+  std::vector<double> times;
   const Program &program;
   std::vector<Completion> sources, expressions;
   std::vector<int> triggers;

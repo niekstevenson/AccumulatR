@@ -54,6 +54,6 @@ params <- build_param_matrix(
 )
 
 response_probabilities(make_context(model), params)
-#>       left      right 
-#> 0.95171491 0.04828509 
+#>         left        right           NA 
+#> 9.517149e-01 4.828509e-02 1.554312e-15 
 ```

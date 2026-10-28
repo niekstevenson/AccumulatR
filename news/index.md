@@ -2,6 +2,8 @@
 
 ## AccumulatR 1.0.0
 
+CRAN release: 2026-10-22
+
 - First public release.
 - Added tools for defining evidence-accumulation models with
   accumulators, pools, response rules, mixture components, and chained
